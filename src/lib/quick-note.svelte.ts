@@ -1,6 +1,6 @@
 // Quick-note: create a timestamped markdown file in the vault's inbox and open
 // it for editing. Triggered from the tray "New Markdown" item and the
-// system-wide Cmd+Ctrl+N hotkey (both emit the `quick-note` event, wired in
+// system-wide Cmd+Ctrl+M hotkey (both emit the `quick-note` event, wired in
 // App.svelte). The inbox sub-directory is a vault-scoped setting
 // (`{vault}/.notemd/settings.json`, key `inboxDir`, default `inbox`).
 

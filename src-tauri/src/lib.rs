@@ -924,15 +924,20 @@ pub fn run() {
             b.build()
         })
         .plugin(tauri_plugin_process::init());
-    // System-wide quick-note hotkey. Only one shortcut is registered (in
-    // `.setup()`), so the handler fires quick-note on any Pressed event without
-    // needing to match which accelerator it was.
+    // System-wide tray action hotkeys. Keep these in sync with the tray menu's
+    // display-only accelerator strings in `build_tray_menu`.
     #[cfg(not(target_os = "ios"))]
     let app = app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(|app, _shortcut, event| {
+            .with_handler(|app, shortcut, event| {
                 if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    trigger_quick_note(app);
+                    use tauri_plugin_global_shortcut::{Code, Modifiers};
+                    let cmd_ctrl = Modifiers::SUPER | Modifiers::CONTROL;
+                    if shortcut.matches(cmd_ctrl, Code::KeyM) {
+                        trigger_quick_note(app);
+                    } else if shortcut.matches(cmd_ctrl, Code::KeyN) {
+                        show_daily_notes_window(app);
+                    }
                 }
             })
             .build(),
@@ -1056,14 +1061,17 @@ pub fn run() {
         .setup(|app| {
             log_bus::init(app.handle().clone());
 
-            // Register the system-wide quick-note hotkey (Cmd+Ctrl+N). A failure
-            // (e.g. the combo is already claimed by another app) is non-fatal:
-            // the tray "New Markdown" item still works.
+            // Register the system-wide tray action hotkeys. A failure (e.g. a
+            // combo is already claimed by another app) is non-fatal: the tray
+            // menu items still work.
             #[cfg(not(target_os = "ios"))]
             {
                 use tauri_plugin_global_shortcut::GlobalShortcutExt;
-                if let Err(e) = app.global_shortcut().register("Cmd+Ctrl+N") {
-                    dlog(&format!("global-shortcut register Cmd+Ctrl+N failed: {e}"));
+                if let Err(e) = app
+                    .global_shortcut()
+                    .register_multiple(["Cmd+Ctrl+M", "Cmd+Ctrl+N"])
+                {
+                    dlog(&format!("global-shortcut register tray actions failed: {e}"));
                 }
             }
             // Dev builds: drop the webview HTTP cache on every launch. Vite's
@@ -1519,7 +1527,13 @@ fn build_tray_menu<R: tauri::Runtime>(
     // accelerator string is display-only here (the real system-wide hotkey is
     // registered via tauri-plugin-global-shortcut in `run()`); both funnel into
     // the same `quick-note` event on the frontend.
-    let new_quick_item = MenuItem::with_id(app, "tray-new-quick", menu_label(locale, "tray.newQuick"), true, Some("Cmd+Ctrl+N"))?;
+    let new_quick_item = MenuItem::with_id(
+        app,
+        "tray-new-quick",
+        menu_label(locale, "tray.newQuick"),
+        true,
+        Some("Cmd+Ctrl+M"),
+    )?;
     let show_item = MenuItem::with_id(app, "tray-show", menu_label(locale, "tray.show"), true, None::<&str>)?;
     // Tray "socket": every enabled plugin that declares `contributes.tray` gets a
     // launch item here, directly below the "Daily Notes" item (when enabled). The
@@ -1615,13 +1629,20 @@ fn build_tray_menu<R: tauri::Runtime>(
     let daily_enabled = app.try_state::<DailyNotesEnabled>()
         .map(|st| *st.0.lock().unwrap())
         .unwrap_or(false);
-    let daily_notes_item = MenuItem::with_id(app, "tray-daily-notes-open", menu_label(locale, "tray.dailyNotes"), true, None::<&str>)?;
-    let mut b0 = MenuBuilder::new(app).item(&new_quick_item).separator().item(&show_item);
+    let daily_notes_item = MenuItem::with_id(
+        app,
+        "tray-daily-notes-open",
+        menu_label(locale, "tray.dailyNotes"),
+        true,
+        Some("Cmd+Ctrl+N"),
+    )?;
+    let mut b0 = MenuBuilder::new(app).item(&new_quick_item);
     // Daily Notes window item only when the feature is enabled; there is no
     // built-in "today's note" tray item anymore (removed by product decision).
     if daily_enabled {
         b0 = b0.item(&daily_notes_item);
     }
+    b0 = b0.separator().item(&show_item);
     for it in &plugin_tray_items {
         b0 = b0.item(it);
     }
