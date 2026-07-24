@@ -1187,15 +1187,6 @@ pub fn run() {
                             "tray-sync-now" => { let _ = vault_sync::vault_sync_now(app.clone()); }
                             "tray-sync-log" => { open_logs_window(app, Some("git-sync")); }
                             "tray-edit-agents" => agents_sync::edit_agents_md(app),
-                            "tray-open-books" => {
-                                let _ = std::process::Command::new("open")
-                                    .arg("-b")
-                                    .arg("com.laobu.exlibris")
-                                    .status();
-                            }
-                            "tray-open-raw-sync" => {
-                                // Disabled in v1; placeholder for upcoming rawvault sync feature
-                            }
                             "tray-quit" => app.exit(0),
                             id if id.starts_with("tray-large-file:") => {
                                 if let Some(idx) = id.strip_prefix("tray-large-file:")
@@ -1449,8 +1440,6 @@ fn menu_label(locale: &str, key: &str) -> String {
         "tray.largeFiles.title" => ("⚠️ {n} file(s) too large", "⚠️ {n} 个文件过大", "⚠️ {n} 件のファイルが大きすぎます", "⚠️ {n} Datei(en) zu groß"),
         "tray.largeFiles.header" => ("Over the limit — not synced. Move out of the vault:", "超过上限,未同步。请移出 vault:", "上限超過 —— 未同期。vault から移動してください:", "Über dem Limit — nicht synchronisiert. Aus dem Vault verschieben:"),
         "tray.viewLog" => ("View Log…", "查看日志…", "ログを表示…", "Protokoll anzeigen…"),
-        "tray.openBooks" => ("Open Books", "打开 Books", "Books を開く", "Books öffnen"),
-        "tray.openRawSync" => ("Open Raw Vault Sync", "打开原始 Vault 同步", "Raw Vault Sync を開く", "Raw Vault Sync öffnen"),
         "tray.editAgents" => ("Edit AGENTS.md…", "编辑 AGENTS.md…", "AGENTS.md を編集…", "AGENTS.md bearbeiten…"),
         // Sync status line / tooltip
         "sync.label" => ("Sync", "同步", "同期", "Sync"),
@@ -1622,8 +1611,6 @@ fn build_tray_menu<R: tauri::Runtime>(
     let sync_now_item = MenuItem::with_id(app, "tray-sync-now", menu_label(locale, "tray.syncNow"), true, None::<&str>)?;
     let sync_log_item = MenuItem::with_id(app, "tray-sync-log", menu_label(locale, "tray.viewLog"), true, None::<&str>)?;
     let edit_agents_item = MenuItem::with_id(app, "tray-edit-agents", menu_label(locale, "tray.editAgents"), true, None::<&str>)?;
-    let open_books_item = MenuItem::with_id(app, "tray-open-books", menu_label(locale, "tray.openBooks"), true, None::<&str>)?;
-    let open_raw_sync_item = MenuItem::with_id(app, "tray-open-raw-sync", menu_label(locale, "tray.openRawSync"), /*enabled=*/ false, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "tray-quit", menu_label(locale, "sys.quit"), true, None::<&str>)?;
     let daily_enabled = app.try_state::<DailyNotesEnabled>()
         .map(|st| *st.0.lock().unwrap())
@@ -1649,9 +1636,6 @@ fn build_tray_menu<R: tauri::Runtime>(
         .item(&sync_now_item)
         .item(&sync_log_item)
         .item(&edit_agents_item)
-        .separator()
-        .item(&open_books_item)
-        .item(&open_raw_sync_item)
         .separator()
         .item(&quit_item)
         .build()?;
