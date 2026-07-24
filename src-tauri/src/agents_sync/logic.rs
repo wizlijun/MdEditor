@@ -1,129 +1,117 @@
-//! Pure decision logic for the AGENTS.md → CLAUDE.md mirror.
-//! Hashes are SHA-256 hex of file contents; `None` means the file is missing.
+//! Pure decision logic for the CLAUDE.md → AGENTS.md symlink.
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct PairState {
-    pub agents_hash: Option<String>,
-    pub claude_hash: Option<String>,
+/// What `CLAUDE.md` currently is on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaudeKind {
+    Missing,
+    /// Symlink whose target is exactly `AGENTS.md` (same-dir, relative).
+    CorrectSymlink,
+    /// Symlink to anything else (absolute, or a different file).
+    WrongSymlink,
+    /// A regular file (or any non-symlink entry).
+    RegularFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncAction {
-    /// Nothing to do.
     None,
-    /// Copy AGENTS.md over CLAUDE.md, then record the baseline.
-    MirrorToClaude,
-    /// Files already identical; just record the baseline.
-    RefreshBaseline,
-    /// CLAUDE.md diverged on its own (or state is ambiguous); ask the user.
-    PromptConflict,
+    CreateSymlink,
+    BackupThenSymlink,
+    RepointSymlink,
+    RemoveDangling,
 }
 
-pub fn decide(current: &PairState, baseline: &PairState) -> SyncAction {
-    let agents = match &current.agents_hash {
-        Some(h) => h,
-        None => return SyncAction::None, // never reverse-generate from CLAUDE.md
-    };
-    match &current.claude_hash {
-        None => SyncAction::MirrorToClaude,
-        Some(claude) if claude == agents => {
-            if current == baseline {
-                SyncAction::None
-            } else {
-                SyncAction::RefreshBaseline
-            }
+pub fn decide(agents_exists: bool, claude: ClaudeKind) -> SyncAction {
+    use ClaudeKind::*;
+    use SyncAction::*;
+    if agents_exists {
+        match claude {
+            Missing => CreateSymlink,
+            CorrectSymlink => None,
+            WrongSymlink => RepointSymlink,
+            RegularFile => BackupThenSymlink,
         }
-        Some(_) => {
-            let agents_changed = current.agents_hash != baseline.agents_hash;
-            let claude_changed = current.claude_hash != baseline.claude_hash;
-            match (agents_changed, claude_changed) {
-                (true, false) => SyncAction::MirrorToClaude,
-                // CLAUDE.md 单独变、两者都变、或基线状态存疑：一律弹窗，不静默覆盖
-                _ => SyncAction::PromptConflict,
-            }
+    } else {
+        match claude {
+            // A relative link to a now-missing AGENTS.md is dangling; sync owns it.
+            CorrectSymlink => RemoveDangling,
+            Missing | WrongSymlink | RegularFile => None,
         }
+    }
+}
+
+/// Civil date (year, month, day) from a Unix timestamp in seconds, UTC.
+/// Howard Hinnant's `civil_from_days`.
+pub fn ymd_from_unix_secs(secs: i64) -> (i64, u32, u32) {
+    let days = secs.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
+    (y + if m <= 2 { 1 } else { 0 }, m, d)
+}
+
+/// Pick a non-colliding backup filename for a given `YYYYMMDD` stamp.
+/// `exists` reports whether a candidate name is already taken.
+pub fn pick_backup_name(stamp: &str, exists: impl Fn(&str) -> bool) -> String {
+    let base = format!("CLAUDE.{stamp}.md");
+    if !exists(&base) {
+        return base;
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("CLAUDE.{stamp}-{n}.md");
+        if !exists(&candidate) {
+            return candidate;
+        }
+        n += 1;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ClaudeKind::*;
+    use SyncAction::*;
 
-    fn pair(agents: Option<&str>, claude: Option<&str>) -> PairState {
-        PairState {
-            agents_hash: agents.map(String::from),
-            claude_hash: claude.map(String::from),
-        }
+    #[test]
+    fn agents_present_actions() {
+        assert_eq!(decide(true, Missing), CreateSymlink);
+        assert_eq!(decide(true, CorrectSymlink), None);
+        assert_eq!(decide(true, WrongSymlink), RepointSymlink);
+        assert_eq!(decide(true, RegularFile), BackupThenSymlink);
     }
 
     #[test]
-    fn agents_missing_does_nothing_even_if_claude_exists() {
-        // 不从 CLAUDE.md 反向生成（spec「不做的事」）
-        assert_eq!(decide(&pair(None, Some("c1")), &PairState::default()), SyncAction::None);
-        assert_eq!(decide(&pair(None, None), &PairState::default()), SyncAction::None);
+    fn agents_absent_actions() {
+        assert_eq!(decide(false, CorrectSymlink), RemoveDangling);
+        assert_eq!(decide(false, WrongSymlink), None);
+        assert_eq!(decide(false, RegularFile), None);
+        assert_eq!(decide(false, Missing), None);
     }
 
     #[test]
-    fn claude_missing_mirrors() {
-        assert_eq!(decide(&pair(Some("a1"), None), &PairState::default()), SyncAction::MirrorToClaude);
+    fn ymd_epoch_and_known_dates() {
+        assert_eq!(ymd_from_unix_secs(0), (1970, 1, 1));
+        // 2026-07-25T00:00:00Z == 1784937600
+        assert_eq!(ymd_from_unix_secs(1_784_937_600), (2026, 7, 25));
+        // last second of 1999
+        assert_eq!(ymd_from_unix_secs(946_684_799), (1999, 12, 31));
     }
 
     #[test]
-    fn identical_and_matching_baseline_is_noop() {
-        let cur = pair(Some("a1"), Some("a1"));
-        assert_eq!(decide(&cur, &cur.clone()), SyncAction::None);
+    fn backup_name_no_collision() {
+        assert_eq!(pick_backup_name("20260725", |_| false), "CLAUDE.20260725.md");
     }
 
     #[test]
-    fn identical_but_stale_baseline_refreshes() {
-        // 如 git pull 拉下已同步好的两份
-        let cur = pair(Some("a2"), Some("a2"));
-        let base = pair(Some("a1"), Some("a1"));
-        assert_eq!(decide(&cur, &base), SyncAction::RefreshBaseline);
-    }
-
-    #[test]
-    fn only_agents_changed_mirrors() {
-        let cur = pair(Some("a2"), Some("a1"));
-        let base = pair(Some("a1"), Some("a1"));
-        assert_eq!(decide(&cur, &base), SyncAction::MirrorToClaude);
-    }
-
-    #[test]
-    fn only_claude_changed_prompts() {
-        let cur = pair(Some("a1"), Some("c2"));
-        let base = pair(Some("a1"), Some("a1"));
-        assert_eq!(decide(&cur, &base), SyncAction::PromptConflict);
-    }
-
-    #[test]
-    fn both_changed_and_divergent_prompts() {
-        // 不静默覆盖，防丢外部写入内容
-        let cur = pair(Some("a2"), Some("c2"));
-        let base = pair(Some("a1"), Some("a1"));
-        assert_eq!(decide(&cur, &base), SyncAction::PromptConflict);
-    }
-
-    #[test]
-    fn first_run_with_divergent_pair_prompts() {
-        // baseline 文件不存在 → 默认空基线
-        let cur = pair(Some("a1"), Some("c1"));
-        assert_eq!(decide(&cur, &PairState::default()), SyncAction::PromptConflict);
-    }
-
-    #[test]
-    fn divergent_but_baseline_unchanged_prompts() {
-        // 理论上不该出现（基线只在一致时写入），保险起见也弹窗
-        let cur = pair(Some("a1"), Some("c1"));
-        assert_eq!(decide(&cur, &cur.clone()), SyncAction::PromptConflict);
-    }
-
-    #[test]
-    fn self_write_suppression_via_baseline() {
-        // 镜像写入后基线即等于当前 → watcher 回环事件判为 None
-        let cur = pair(Some("a2"), Some("a2"));
-        assert_eq!(decide(&cur, &cur.clone()), SyncAction::None);
+    fn backup_name_suffixes_on_collision() {
+        let taken = |n: &str| n == "CLAUDE.20260725.md" || n == "CLAUDE.20260725-2.md";
+        assert_eq!(pick_backup_name("20260725", taken), "CLAUDE.20260725-3.md");
     }
 }

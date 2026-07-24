@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Guidance for AI agents working in this vault. This file is the source of
-truth; CLAUDE.md is an auto-generated copy — edit AGENTS.md only.
+truth; CLAUDE.md is a symlink to this file — edit AGENTS.md only.
 
 ## Vault layout
 
