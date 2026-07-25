@@ -1407,7 +1407,7 @@ fn menu_label(locale: &str, key: &str) -> String {
         "file.unshare" => ("Unshare Current File…", "取消分享当前文件…", "現在のファイルの共有を解除…", "Freigabe der aktuellen Datei aufheben…"),
         "file.copyShareLink" => ("Copy Share Link", "复制分享链接", "共有リンクをコピー", "Freigabe-Link kopieren"),
         "view.folderView" => ("Folder View", "文件夹视图", "フォルダビュー", "Ordneransicht"),
-        "view.sidecarNotes" => ("Sidecar Notes View", "伴生笔记视图", "サイドカーノートビュー", "Begleitnotizen-Ansicht"),
+        "view.sidecarNotes" => ("Sidecar Notes View", "手记视图", "サイドノートビュー", "Randnotizen-Ansicht"),
         "view.history" => ("History View", "历史视图", "履歴ビュー", "Verlaufsansicht"),
         "window.zoomIn" => ("Zoom In", "放大", "拡大", "Vergrößern"),
         "window.zoomOut" => ("Zoom Out", "缩小", "縮小", "Verkleinern"),
