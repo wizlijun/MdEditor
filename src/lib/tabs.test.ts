@@ -56,9 +56,17 @@ vi.mock('./i18n/store.svelte', () => ({
   t: (k: string) => k,
 }))
 
+const fsRename = vi.fn(async (_from: string, _to: string) => {})
+const fsExists = vi.fn(async (_path: string) => false)
+vi.mock('@tauri-apps/plugin-fs', () => ({
+  rename: (from: string, to: string) => fsRename(from, to),
+  exists: (path: string) => fsExists(path),
+}))
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.resetModules()
+  fsExists.mockResolvedValue(false)
 })
 
 describe('tabs', () => {
@@ -359,6 +367,82 @@ describe('tabs', () => {
     const m = await import('./tabs.svelte')
     await m.openFile('/tmp/foo.md')
     expect(m.tabs[0].mode).toBe('rich')
+  })
+
+  it('openPathBackedMarkdownDraft uses the stored mode for the extension', async () => {
+    const settings = await import('./settings.svelte')
+    ;(settings.getRecentMode as unknown as ReturnType<typeof vi.fn>).mockReturnValueOnce('source')
+    const m = await import('./tabs.svelte')
+    await m.openPathBackedMarkdownDraft('/tmp/quick.md', '', { skipEmptySave: true })
+    expect(m.tabs[0].mode).toBe('source')
+  })
+
+  it('openPathBackedMarkdownDraft honours an explicit mode over the stored one', async () => {
+    const settings = await import('./settings.svelte')
+    const stored = settings.getRecentMode as unknown as ReturnType<typeof vi.fn>
+    // Not `mockReturnValueOnce`: an explicit mode short-circuits the lookup, so a
+    // queued value would go unconsumed and leak into the next test.
+    stored.mockReturnValue('source')
+    try {
+      const m = await import('./tabs.svelte')
+      await m.openPathBackedMarkdownDraft('/tmp/note.md', '', { mode: 'rich' })
+      expect(m.tabs[0].mode).toBe('rich')
+    } finally {
+      stored.mockReturnValue(null)
+    }
+  })
+
+  it('saveActive renames a titled quick note after its H1', async () => {
+    const m = await import('./tabs.svelte')
+    await m.openPathBackedMarkdownDraft('/vault/inbox/2026-07-25-193045-quick.md', '', {
+      skipEmptySave: true,
+    })
+    m.setContent(m.tabs[0].id, '# 产品思考\n\nbody')
+    await m.saveActive()
+    expect(fsRename).toHaveBeenCalledWith(
+      '/vault/inbox/2026-07-25-193045-quick.md',
+      '/vault/inbox/2026-07-25-产品思考.md',
+    )
+    expect(m.tabs[0].filePath).toBe('/vault/inbox/2026-07-25-产品思考.md')
+    expect(m.tabs[0].title).toBe('2026-07-25-产品思考.md')
+  })
+
+  it('saveActive leaves an untitled quick note under its generated name', async () => {
+    const m = await import('./tabs.svelte')
+    await m.openPathBackedMarkdownDraft('/vault/inbox/2026-07-25-193045-quick.md', '', {
+      skipEmptySave: true,
+    })
+    m.setContent(m.tabs[0].id, 'no heading, just text')
+    await m.saveActive()
+    expect(fsRename).not.toHaveBeenCalled()
+    expect(m.tabs[0].filePath).toBe('/vault/inbox/2026-07-25-193045-quick.md')
+  })
+
+  it('quick-note rename sidesteps an existing file instead of clobbering it', async () => {
+    fsExists.mockImplementation(
+      async (p: unknown) => p === '/vault/inbox/2026-07-25-产品思考.md',
+    )
+    const m = await import('./tabs.svelte')
+    await m.openPathBackedMarkdownDraft('/vault/inbox/2026-07-25-193045-quick.md', '', {
+      skipEmptySave: true,
+    })
+    m.setContent(m.tabs[0].id, '# 产品思考')
+    await m.saveActive()
+    expect(fsRename).toHaveBeenCalledWith(
+      '/vault/inbox/2026-07-25-193045-quick.md',
+      '/vault/inbox/2026-07-25-产品思考-2.md',
+    )
+  })
+
+  it('a failed quick-note rename leaves the saved file in place', async () => {
+    fsRename.mockRejectedValueOnce(new Error('EPERM'))
+    const m = await import('./tabs.svelte')
+    await m.openPathBackedMarkdownDraft('/vault/inbox/2026-07-25-193045-quick.md', '', {
+      skipEmptySave: true,
+    })
+    m.setContent(m.tabs[0].id, '# 产品思考')
+    await expect(m.saveActive()).resolves.toBeUndefined()
+    expect(m.tabs[0].filePath).toBe('/vault/inbox/2026-07-25-193045-quick.md')
   })
 
   it('setMode persists choice keyed by extension', async () => {

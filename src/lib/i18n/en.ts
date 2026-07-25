@@ -421,6 +421,7 @@ export const en = {
   'quickNote.inboxDir': 'Quick note inbox folder',
   'quickNote.noVault': 'Set up a vault first to create quick notes.',
   'quickNote.createFailed': 'Could not create the quick note.',
+  'editor.emptyPlaceholder': 'Start writing…',
   'vaultSync.title': 'Sync folder',
   'vaultSync.desc': 'Files outside the vault are copied into this folder inside the vault when you share or sync them.',
   'vaultSync.vaultPath': 'Current vault',

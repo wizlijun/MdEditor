@@ -10,6 +10,9 @@ import { openFile, openPathBackedMarkdownDraft } from './tabs.svelte'
 import { requestEditorFocus } from './editor-focus.svelte'
 import { pushToast } from './toast.svelte'
 import { t } from './i18n/store.svelte'
+import { quickNoteFileName } from './quick-note-name'
+
+export { quickNoteFileName }
 
 export const DEFAULT_INBOX_DIR = 'inbox'
 
@@ -38,17 +41,11 @@ export async function setInboxDir(raw: string): Promise<void> {
   inboxDir.value = merged?.inboxDir || DEFAULT_INBOX_DIR
 }
 
-/** `YYYY-MM-DD-HH-mm-Quick.md` for the given moment. */
-export function quickNoteFileName(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}-${p(d.getMinutes())}-Quick.md`
-}
-
 /**
  * Open a path-backed quick note for "now", focusing the editor in edit state.
  * The file is created lazily on first non-empty save/autosave, so dismissing an
- * untouched quick note never leaves a 0-byte file. Reusing an existing same-
- * minute file is intentional (a second trigger within the same minute reopens it).
+ * untouched quick note never leaves a 0-byte file. Once the note grows an H1
+ * title, the first save renames it after that title (see `quick-note-name`).
  */
 export async function createQuickNote(now: Date = new Date()): Promise<void> {
   let dir: string
@@ -66,7 +63,9 @@ export async function createQuickNote(now: Date = new Date()): Promise<void> {
     if (await exists(fullPath).catch(() => false)) {
       await openFile(fullPath)
     } else {
-      await openPathBackedMarkdownDraft(fullPath, '', { mode: 'rich', skipEmptySave: true })
+      // No explicit mode: the draft opens in the editor's remembered mode for
+      // `.md`, the same one openFile uses and the mode toggle persists.
+      await openPathBackedMarkdownDraft(fullPath, '', { skipEmptySave: true })
     }
   } catch (e) {
     pushToast({ level: 'error', message: t('quickNote.createFailed'), detail: String(e) })

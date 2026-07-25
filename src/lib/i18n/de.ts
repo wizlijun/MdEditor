@@ -414,6 +414,7 @@ export const de: Record<keyof Messages, string> = {
   'quickNote.inboxDir': 'Schnellnotiz-Eingangsordner',
   'quickNote.noVault': 'Richte zuerst einen Tresor ein, um Schnellnotizen zu erstellen.',
   'quickNote.createFailed': 'Schnellnotiz konnte nicht erstellt werden.',
+  'editor.emptyPlaceholder': 'Schreiben beginnen…',
   'vaultSync.title': 'Sync-Ordner',
   'vaultSync.desc': 'Dateien außerhalb des Tresors werden beim Teilen oder Synchronisieren in diesen Ordner im Tresor kopiert.',
   'vaultSync.vaultPath': 'Aktueller Tresor',

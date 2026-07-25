@@ -41,12 +41,12 @@ describe('createQuickNote', () => {
     const { createQuickNote } = await import('./quick-note.svelte')
     await createQuickNote(new Date(2026, 6, 25, 9, 8))
 
-    const path = '/vault/inbox/2026-07-25-09-08-Quick.md'
+    const path = '/vault/inbox/2026-07-25-090800-quick.md'
     expect(invoke).toHaveBeenCalledWith('notemd_quick_note_dir')
     expect(mkdir).toHaveBeenCalledWith('/vault/inbox', { recursive: true })
     expect(requestEditorFocus).toHaveBeenCalledWith(path)
+    // No `mode`: the draft inherits the editor's remembered mode for `.md`.
     expect(openPathBackedMarkdownDraft).toHaveBeenCalledWith(path, '', {
-      mode: 'rich',
       skipEmptySave: true,
     })
     expect(openFile).not.toHaveBeenCalled()
@@ -57,7 +57,7 @@ describe('createQuickNote', () => {
     const { createQuickNote } = await import('./quick-note.svelte')
     await createQuickNote(new Date(2026, 6, 25, 9, 8))
 
-    const path = '/vault/inbox/2026-07-25-09-08-Quick.md'
+    const path = '/vault/inbox/2026-07-25-090800-quick.md'
     expect(openFile).toHaveBeenCalledWith(path)
     expect(openPathBackedMarkdownDraft).not.toHaveBeenCalled()
   })

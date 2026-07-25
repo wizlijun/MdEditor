@@ -447,6 +447,7 @@ export const zh: Record<keyof Messages, string> = {
   'quickNote.inboxDir': '速记 inbox 目录',
   'quickNote.noVault': '请先设置 vault 才能创建速记。',
   'quickNote.createFailed': '无法创建速记。',
+  'editor.emptyPlaceholder': '开始输入…',
   'vaultSync.title': 'Sync 目录',
   'vaultSync.desc': 'vault 外的文件在分享或同步时，副本会归位到 vault 内的这个目录。',
   'vaultSync.vaultPath': '当前 Vault',

@@ -416,6 +416,7 @@ export const ja: Record<keyof Messages, string> = {
   'quickNote.inboxDir': 'クイックノート inbox フォルダ',
   'quickNote.noVault': 'クイックノートを作成するには、まず vault を設定してください。',
   'quickNote.createFailed': 'クイックノートを作成できませんでした。',
+  'editor.emptyPlaceholder': '入力を開始…',
   'vaultSync.title': 'Sync フォルダ',
   'vaultSync.desc': 'vault 外のファイルは、共有・同期時にこの vault 内フォルダへコピーされます。',
   'vaultSync.vaultPath': '現在の Vault',

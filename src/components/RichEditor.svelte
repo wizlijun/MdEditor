@@ -14,6 +14,7 @@
     isHoverActive,
   } from '../lib/mdblock-hover/hover-store.svelte'
   import { settings } from '../lib/settings.svelte'
+  import { t } from '../lib/i18n/store.svelte'
   import '../lib/styles/attachment.css'
   import ImageToolbar from '../lib/image-toolbar/ImageToolbar.svelte'
   import { saveClipboardResource, isAttachmentUrl, isImageExt, isAttachmentExt } from '../lib/paste-resources'
@@ -87,16 +88,29 @@
   let status = $state<'mounting' | 'mounted' | 'error'>('mounting')
   let errorMsg = $state<string | null>(null)
 
-  function focusRichEditorAtEnd(view: any) {
-    void getPmState().then(({ TextSelection }) => {
+  function focusRichEditorAtEnd(view: any, delayMs = 60) {
+    void getPmState().then(({ Selection }) => {
       setTimeout(() => {
         try {
           const doc = view.state.doc
-          view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, doc.content.size)))
+          // Selection.atEnd finds the nearest valid text position; a raw
+          // TextSelection at doc.content.size throws on a doc with no inline
+          // content (e.g. an empty doc).
+          view.dispatch(view.state.tr.setSelection(Selection.atEnd(doc)))
           view.focus()
         } catch { /* ignore */ }
-      }, 60)
+      }, delayMs)
     })
+  }
+
+  /** Clicking the blank area below the document puts the caret at the end
+   *  instead of doing nothing — the whole pane behaves as writing surface. */
+  function onScrollMouseDown(e: MouseEvent) {
+    if (!editor || status !== 'mounted') return
+    const target = e.target as HTMLElement | null
+    if (target !== e.currentTarget && target !== host) return
+    e.preventDefault()
+    focusRichEditorAtEnd(editor.view as any, 0)
   }
 
   // ── Search / Replace state ──
@@ -961,9 +975,14 @@
           const view = inst.view as unknown as EditorView
           const { wikilinkPlugin } = await import('../lib/wikilink-plugin')
           const { noteBadgePlugin } = await import('../lib/note-anno/note-plugin')
+          const { placeholderPlugin } = await import('../lib/placeholder-plugin')
           view.updateState(
             view.state.reconfigure({
-              plugins: view.state.plugins.concat(wikilinkPlugin(), noteBadgePlugin()),
+              plugins: view.state.plugins.concat(
+                wikilinkPlugin(),
+                noteBadgePlugin(),
+                placeholderPlugin(t('editor.emptyPlaceholder')),
+              ),
             }),
           )
         } catch (e) {
@@ -1079,7 +1098,7 @@
                   source={tab.currentContent}
                   pageBasename={(activeTab()?.filePath ?? '').replace(/^.*[\\/]/, '')} />
     {/if}
-    <div class="scroll">
+    <div class="scroll" onmousedown={onScrollMouseDown} role="presentation">
       <div class="host" data-theme={activeThemeId} bind:this={host}></div>
       {#if backlinkPage}
         <LinkedReferences page={backlinkPage} excludeFile={tab.filePath ?? null} />
@@ -1156,10 +1175,30 @@
     padding: 16px 0;
     box-sizing: border-box;
     min-height: 200px;
+    /* Flex column so the editor can stretch to the host's full height. A
+       percentage min-height on the editor resolves against an auto-height
+       parent as 0, which left a short/empty doc only one line tall — clicks
+       below that line missed the editor entirely and placed no caret. */
+    display: flex;
+    flex-direction: column;
   }
   .host :global(.ProseMirror),
   .host :global(.moraya-editor) {
     outline: none;
-    min-height: 100%;
+    flex: 1 0 auto;
+  }
+  /* Blank space below the editor still reads (and behaves) as writing surface. */
+  .scroll,
+  .host {
+    cursor: text;
+  }
+  /* Hint inside an otherwise blank document so the caret's home is visible.
+     `float` keeps it out of layout flow without needing a positioned parent. */
+  .host :global(.ProseMirror .is-empty)::before {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+    color: color-mix(in srgb, CanvasText 40%, Canvas 60%);
   }
 </style>

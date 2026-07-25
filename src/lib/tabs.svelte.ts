@@ -9,6 +9,7 @@ import { sha256Hex } from './hash'
 import { pushRecentFile, getRecentMode, setRecentMode } from './settings.svelte'
 import { startWatchingTab, stopWatchingTab, rebindTabPath } from './file-watcher.svelte'
 import { maybeAutoRefresh } from './mdblock/auto-refresh'
+import { quickNoteRenameTarget } from './quick-note-name'
 
 export type Mode = 'source' | 'rich'
 
@@ -142,7 +143,9 @@ export async function openPathBackedMarkdownDraft(
     title: basename(path),
     initialContent: '',
     currentContent: content,
-    mode: options.mode ?? 'rich',
+    // Same remembered-mode source as openFile, so a lazily-created draft opens
+    // in whichever mode the user last chose for this file type.
+    mode: options.mode ?? getRecentMode(modeKeyFor(path)) ?? 'rich',
     kind: 'markdown',
     language: undefined,
     externalState: 'fresh',
@@ -385,6 +388,44 @@ export function setMode(id: string, mode: Mode): void {
   setRecentMode(modeKeyFor(t.filePath), mode).catch((e) => console.warn(e))
 }
 
+/**
+ * A quick note keeps its generated `…-quick.md` name only until it has a title:
+ * the first save after an H1 appears renames the file after that title. It
+ * renames once — a note already carrying a title-based name is left alone, so
+ * later title edits never move the path out from under existing links.
+ *
+ * Failures are non-fatal: the note stays under its generated name rather than
+ * the save appearing to fail.
+ */
+export async function renameAutoQuickNoteIfTitled(t: Tab): Promise<void> {
+  if (!t.filePath) return
+  const name = basename(t.filePath)
+  const target = quickNoteRenameTarget(name, t.currentContent)
+  if (!target) return
+
+  const dir = t.filePath.slice(0, t.filePath.length - name.length)
+  const { rename, exists } = await import('@tauri-apps/plugin-fs')
+  // Never clobber a file that is already there — fall back to `-2`, `-3`, …
+  let candidate = target
+  for (let n = 2; await exists(dir + candidate).catch(() => false); n++) {
+    if (n > 99) return
+    candidate = target.replace(/\.md$/i, `-${n}.md`)
+  }
+
+  const from = t.filePath
+  const to = dir + candidate
+  try {
+    await rename(from, to)
+  } catch (e) {
+    console.warn('[quick-note] rename failed:', from, '→', to, e)
+    return
+  }
+  await updateTabPath(from, to)
+  // Re-baseline under the new path so the rename does not surface as an
+  // external change.
+  await recordOurWrite(t)
+}
+
 export async function saveActive(): Promise<void> {
   const t = activeTab()
   if (!t) return
@@ -405,6 +446,7 @@ export async function saveActive(): Promise<void> {
   t.initialContent = t.currentContent
   await recordOurWrite(t)
   await startWatchingTab(t)   // 幂等：惰性 tab 首存后补挂推送监听（建 tab 时文件尚不存在）
+  await renameAutoQuickNoteIfTitled(t)   // 可能改写 t.filePath，须在 vault 推送前
   setRecentMode(modeKeyFor(t.filePath), t.mode).catch((e) => console.warn(e))
   if (t.filePath.endsWith('.md')) {
     void maybeAutoRefresh(t.filePath)
@@ -425,6 +467,7 @@ export async function saveTab(id: string): Promise<void> {
   t.initialContent = t.currentContent
   await recordOurWrite(t)
   await startWatchingTab(t)
+  await renameAutoQuickNoteIfTitled(t)   // 可能改写 t.filePath，须在 vault 推送前
   if (t.filePath.endsWith('.md')) {
     const { pushSourceToVaultIfTracked } = await import('./sotvault.svelte')
     await pushSourceToVaultIfTracked(t.filePath)   // await:关闭/退出时保存流程须等 vault 同步完再放行
