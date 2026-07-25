@@ -26,4 +26,9 @@ describe('placeholderPlugin', () => {
   it('does not hint blank lines inside a non-empty document', () => {
     expect(decorationsFor('# title\n\n\n\nbody')).toHaveLength(0)
   })
+
+  it('drops the hint once `# ` has turned the block into a heading', () => {
+    // The floated hint at heading font size pushed the caret to the next line.
+    expect(decorationsFor('# ')).toHaveLength(0)
+  })
 })

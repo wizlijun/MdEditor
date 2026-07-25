@@ -13,6 +13,11 @@ const placeholderKey = new PluginKey<DecorationSet>('placeholder')
  *
  * Only the "whole document is empty" case is decorated; empty paragraphs inside
  * a non-empty document are ordinary blank lines and get no hint.
+ *
+ * Restricted to a `paragraph` on purpose: typing `# ` turns the block into an
+ * empty *heading*, and leaving the floated hint on it pushed the caret onto the
+ * next line at heading font size. Starting a heading is already "writing", so
+ * the hint has served its purpose by then.
  */
 export function placeholderPlugin(text: string): Plugin {
   return new Plugin({
@@ -22,7 +27,7 @@ export function placeholderPlugin(text: string): Plugin {
         const doc = state.doc
         if (doc.childCount !== 1) return null
         const first = doc.firstChild
-        if (!first || !first.isTextblock || first.content.size > 0) return null
+        if (!first || first.type.name !== 'paragraph' || first.content.size > 0) return null
         return DecorationSet.create(doc, [
           Decoration.node(0, first.nodeSize, {
             class: 'is-empty',

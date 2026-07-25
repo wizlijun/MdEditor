@@ -46,7 +46,8 @@ export function startAutoSaveWatcher(): () => void {
               // spurious external-change banner ~1 s later.
               await recordOurWrite(cur)
               // 首次出现 H1 标题时给速记改名(可能改写 cur.filePath),须在推送前。
-              await renameAutoQuickNoteIfTitled(cur)
+              // true = 等标题行敲完回车再改名,否则 800ms 的 autosave 会拿半截标题定名。
+              await renameAutoQuickNoteIfTitled(cur, true)
               // 自动保存也要同步到 vault 影子——否则 autosave 的静默写会绕过 save-push,
               // 且它让 tab 保持非脏,导致关闭/退出走 discard 而永不同步(见 tabs.saveActive)。
               const savedPath = cur.filePath

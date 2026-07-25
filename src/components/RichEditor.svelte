@@ -1166,10 +1166,11 @@
     min-height: 0;
     padding: 0 24px;
     box-sizing: border-box;
-    /* GPU compositing hints — promote scroll container to its own layer */
-    will-change: transform;
-    transform: translateZ(0);
-    contain: layout paint;
+    /* No GPU compositing hints here. `will-change: transform` + translateZ(0) +
+       `contain: paint` promoted this to its own composited, paint-clipped layer,
+       and WebKit then never drew the caret inside a block with no text — an
+       empty paragraph or a just-typed `# ` heading showed no cursor even though
+       caret-color was opaque and the line box had full height. */
   }
   .host {
     padding: 16px 0;

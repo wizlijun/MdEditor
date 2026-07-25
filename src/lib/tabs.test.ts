@@ -407,6 +407,25 @@ describe('tabs', () => {
     expect(m.tabs[0].title).toBe('2026-07-25-产品思考.md')
   })
 
+  it('the auto-save path holds off until the title line is finished', async () => {
+    const m = await import('./tabs.svelte')
+    await m.openPathBackedMarkdownDraft('/vault/inbox/2026-07-25-193045-quick.md', '', {
+      skipEmptySave: true,
+    })
+    const t = m.tabs[0]
+    // Mid-typing: an 800 ms auto-save must not freeze a partial heading.
+    m.setContent(t.id, '# 产品')
+    await m.renameAutoQuickNoteIfTitled(t, true)
+    expect(fsRename).not.toHaveBeenCalled()
+    // Enter pressed → the title is settled and the rename lands.
+    m.setContent(t.id, '# 产品思考\n')
+    await m.renameAutoQuickNoteIfTitled(t, true)
+    expect(fsRename).toHaveBeenCalledWith(
+      '/vault/inbox/2026-07-25-193045-quick.md',
+      '/vault/inbox/2026-07-25-产品思考.md',
+    )
+  })
+
   it('saveActive leaves an untitled quick note under its generated name', async () => {
     const m = await import('./tabs.svelte')
     await m.openPathBackedMarkdownDraft('/vault/inbox/2026-07-25-193045-quick.md', '', {

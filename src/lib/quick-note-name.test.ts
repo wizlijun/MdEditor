@@ -3,6 +3,7 @@ import {
   quickNoteFileName,
   isAutoQuickNoteName,
   titleSlug,
+  isTitleFinished,
   quickNoteRenameTarget,
 } from './quick-note-name'
 
@@ -56,6 +57,25 @@ describe('titleSlug', () => {
   })
 })
 
+describe('isTitleFinished', () => {
+  it('is false while the caret is still on the title line', () => {
+    expect(isTitleFinished('# 产品思')).toBe(false)
+    expect(isTitleFinished('# Title')).toBe(false)
+    expect(isTitleFinished('# Title  ')).toBe(false)
+  })
+
+  it('is true once the title line ends', () => {
+    expect(isTitleFinished('# Title\n')).toBe(true)
+    expect(isTitleFinished('# Title\nbody')).toBe(true)
+    expect(isTitleFinished('# Title  \n\nbody')).toBe(true)
+  })
+
+  it('ignores an empty heading marker', () => {
+    expect(isTitleFinished('# \n')).toBe(false)
+    expect(isTitleFinished('#\n')).toBe(false)
+  })
+})
+
 describe('quickNoteRenameTarget', () => {
   it('renames an auto-named note to date + H1 slug, dropping the time', () => {
     expect(quickNoteRenameTarget('2026-07-25-193045-quick.md', '# 产品思考\n\nbody'))
@@ -77,6 +97,21 @@ describe('quickNoteRenameTarget', () => {
 
   it('renames only once — an already-renamed note is left alone', () => {
     expect(quickNoteRenameTarget('2026-07-25-产品思考.md', '# 改了标题')).toBeNull()
+  })
+
+  it('waits for a terminated title line when asked to (auto-save)', () => {
+    const name = '2026-07-25-193045-quick.md'
+    // Still on the title line: a rename now would freeze a half-typed heading.
+    expect(quickNoteRenameTarget(name, '# 产品', true)).toBeNull()
+    expect(quickNoteRenameTarget(name, '# 产品思考', true)).toBeNull()
+    // Enter pressed → the title is settled.
+    expect(quickNoteRenameTarget(name, '# 产品思考\n', true)).toBe('2026-07-25-产品思考.md')
+    expect(quickNoteRenameTarget(name, '# 产品思考\n\nbody', true)).toBe('2026-07-25-产品思考.md')
+  })
+
+  it('takes an unterminated title on an explicit save', () => {
+    expect(quickNoteRenameTarget('2026-07-25-193045-quick.md', '# 产品思考'))
+      .toBe('2026-07-25-产品思考.md')
   })
 
   it('leaves non-quick-note files alone', () => {

@@ -97,6 +97,9 @@
   pointer-events: none;
 }
 
+/* An empty block emits no prefix widget at all (see cursor-syntax.ts): one      */
+/* inside an empty textblock pushed the caret a line below the marker.           */
+
 /* highlight mark rendered as <mark> in the editor */
 .moraya-editor mark {
   background: #fff176;

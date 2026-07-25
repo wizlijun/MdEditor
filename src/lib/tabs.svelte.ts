@@ -396,11 +396,17 @@ export function setMode(id: string, mode: Mode): void {
  *
  * Failures are non-fatal: the note stays under its generated name rather than
  * the save appearing to fail.
+ *
+ * `requireFinishedTitle` is set by auto-save so a heading that is still being
+ * typed does not name the file; an explicit save takes the title as it stands.
  */
-export async function renameAutoQuickNoteIfTitled(t: Tab): Promise<void> {
+export async function renameAutoQuickNoteIfTitled(
+  t: Tab,
+  requireFinishedTitle = false,
+): Promise<void> {
   if (!t.filePath) return
   const name = basename(t.filePath)
-  const target = quickNoteRenameTarget(name, t.currentContent)
+  const target = quickNoteRenameTarget(name, t.currentContent, requireFinishedTitle)
   if (!target) return
 
   const dir = t.filePath.slice(0, t.filePath.length - name.length)
