@@ -1,4 +1,4 @@
-import { tabs, isDirty, recordOurWrite } from './tabs.svelte'
+import { tabs, isDirty, recordOurWrite, shouldSkipEmptySave } from './tabs.svelte'
 import { writeMd } from './fs'
 import { settings } from './settings.svelte'
 
@@ -30,10 +30,12 @@ export function startAutoSaveWatcher(): () => void {
         const existing = timers.get(id)
         if (existing) clearTimeout(existing)
         if (!dirty) continue
+        if (shouldSkipEmptySave(tab)) continue
         const timer = setTimeout(async () => {
           try {
-            await writeMd(path, content)
             const cur = tabs.find((x) => x.id === id)
+            if (cur && shouldSkipEmptySave(cur)) return
+            await writeMd(path, content)
             if (cur && cur.currentContent === content) {
               cur.initialContent = content
               // Suppress the imminent watcher echo: capture post-write

@@ -36,6 +36,8 @@ export interface Tab {
   lastKnownHash: string
   /** Cached new-content snapshot when externalState === 'changed'. */
   pendingExternal?: { mtime: number; hash: string; content: string }
+  /** Path-backed drafts such as quick notes should not create 0-byte files. */
+  skipEmptySave?: boolean
 }
 
 export const tabs = $state<Tab[]>([])
@@ -124,6 +126,14 @@ export function newFile(): void {
  * 文件此刻不存在，startWatchingTab 会静默降级（focus-poll 兜底），保存后补挂。
  */
 export async function openNewOutlineTab(path: string, content: string): Promise<void> {
+  await openPathBackedMarkdownDraft(path, content, { mode: 'rich' })
+}
+
+export async function openPathBackedMarkdownDraft(
+  path: string,
+  content = '',
+  options: { mode?: Mode; skipEmptySave?: boolean } = {},
+): Promise<void> {
   const existing = tabs.find((t) => t.filePath === path)
   if (existing) { activeId.value = existing.id; notifyInsights('onActiveDocChanged'); return }
   const tab: Tab = {
@@ -132,7 +142,7 @@ export async function openNewOutlineTab(path: string, content: string): Promise<
     title: basename(path),
     initialContent: '',
     currentContent: content,
-    mode: 'rich',
+    mode: options.mode ?? 'rich',
     kind: 'markdown',
     language: undefined,
     externalState: 'fresh',
@@ -140,6 +150,7 @@ export async function openNewOutlineTab(path: string, content: string): Promise<
     lastKnownMtime: 0,
     lastKnownHash: '',
     pendingExternal: undefined,
+    skipEmptySave: options.skipEmptySave,
   }
   tabs.push(tab)
   activeId.value = tab.id
@@ -389,6 +400,7 @@ export async function saveActive(): Promise<void> {
       `"${t.title}" was modified externally. Use the banner to Reload, Overwrite, or Save as…`,
     )
   }
+  if (shouldSkipEmptySave(t)) return
   await writeMd(t.filePath, t.currentContent)
   t.initialContent = t.currentContent
   await recordOurWrite(t)
@@ -408,6 +420,7 @@ export async function saveTab(id: string): Promise<void> {
   if (t.externalState === 'changed') {
     throw new Error(`"${t.title}" was modified externally. Use the banner to Reload, Overwrite, or Save as…`)
   }
+  if (shouldSkipEmptySave(t)) return
   await writeMd(t.filePath, t.currentContent)
   t.initialContent = t.currentContent
   await recordOurWrite(t)
@@ -434,6 +447,7 @@ export async function updateTabPath(oldPath: string, newPath: string): Promise<v
 export async function saveAs(id: string, newPath: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
   if (!t) return
+  if (shouldSkipEmptySave(t)) return
   await writeMd(newPath, t.currentContent)
   t.filePath = newPath
   t.title = basename(newPath)
@@ -553,9 +567,14 @@ export async function reloadFromDisk(id: string): Promise<void> {
 export async function overwriteOnDisk(id: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
   if (!t) return
+  if (shouldSkipEmptySave(t)) return
   await writeMd(t.filePath, t.currentContent)
   t.initialContent = t.currentContent
   await recordOurWrite(t)
+}
+
+export function shouldSkipEmptySave(t: Tab): boolean {
+  return t.skipEmptySave === true && t.currentContent.length === 0
 }
 
 /**

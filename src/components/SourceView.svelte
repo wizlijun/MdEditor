@@ -511,6 +511,23 @@
     }
   })
 
+  $effect(() => {
+    function onFocusEditor(ev: Event) {
+      const d = (ev as CustomEvent<{ path: string }>).detail
+      const t = activeTab()
+      if (!textareaEl || !t || t.filePath !== d.path) return
+      setTimeout(() => {
+        try {
+          const end = textareaEl!.value.length
+          textareaEl!.focus()
+          textareaEl!.setSelectionRange(end, end)
+        } catch { /* ignore */ }
+      }, 60)
+    }
+    window.addEventListener('mdeditor:focus-editor', onFocusEditor)
+    return () => window.removeEventListener('mdeditor:focus-editor', onFocusEditor)
+  })
+
   function onContextMenu(event: MouseEvent) {
     if (!textareaEl || !tabId) return
     event.preventDefault()

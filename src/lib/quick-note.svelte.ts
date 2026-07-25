@@ -6,8 +6,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { mkdir, exists } from '@tauri-apps/plugin-fs'
-import { writeMd } from './fs'
-import { openFile } from './tabs.svelte'
+import { openFile, openPathBackedMarkdownDraft } from './tabs.svelte'
 import { requestEditorFocus } from './editor-focus.svelte'
 import { pushToast } from './toast.svelte'
 import { t } from './i18n/store.svelte'
@@ -46,10 +45,10 @@ export function quickNoteFileName(d: Date): string {
 }
 
 /**
- * Create (if absent) and open the quick note for "now", focusing the editor in
- * edit state. No configured vault → a toast asking the user to set one up; the
- * file is never written outside a vault. Reusing an existing same-minute file is
- * intentional (a second trigger within the same minute reopens it).
+ * Open a path-backed quick note for "now", focusing the editor in edit state.
+ * The file is created lazily on first non-empty save/autosave, so dismissing an
+ * untouched quick note never leaves a 0-byte file. Reusing an existing same-
+ * minute file is intentional (a second trigger within the same minute reopens it).
  */
 export async function createQuickNote(now: Date = new Date()): Promise<void> {
   let dir: string
@@ -62,12 +61,13 @@ export async function createQuickNote(now: Date = new Date()): Promise<void> {
   const fullPath = `${dir.replace(/\/+$/, '')}/${quickNoteFileName(now)}`
   try {
     await mkdir(dir, { recursive: true })
-    if (!(await exists(fullPath).catch(() => false))) {
-      await writeMd(fullPath, '')
-    }
     // Set the focus request BEFORE openFile so the editor consumes it on mount.
     requestEditorFocus(fullPath)
-    await openFile(fullPath)
+    if (await exists(fullPath).catch(() => false)) {
+      await openFile(fullPath)
+    } else {
+      await openPathBackedMarkdownDraft(fullPath, '', { mode: 'rich', skipEmptySave: true })
+    }
   } catch (e) {
     pushToast({ level: 'error', message: t('quickNote.createFailed'), detail: String(e) })
   }

@@ -12,6 +12,9 @@ const pending = new Set<string>()
  *  as soon as it mounts. Call before/around openFile(path). */
 export function requestEditorFocus(path: string): void {
   if (path) pending.add(path)
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('mdeditor:focus-editor', { detail: { path } }))
+  }
 }
 
 /** Editors call this on mount with their own file path. Returns true exactly

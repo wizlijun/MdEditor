@@ -87,6 +87,18 @@
   let status = $state<'mounting' | 'mounted' | 'error'>('mounting')
   let errorMsg = $state<string | null>(null)
 
+  function focusRichEditorAtEnd(view: any) {
+    void getPmState().then(({ TextSelection }) => {
+      setTimeout(() => {
+        try {
+          const doc = view.state.doc
+          view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, doc.content.size)))
+          view.focus()
+        } catch { /* ignore */ }
+      }, 60)
+    })
+  }
+
   // ── Search / Replace state ──
   interface MatchPos { from: number; to: number }
   let searchMatches: MatchPos[] = []
@@ -938,16 +950,7 @@
         // for focus, grab it now that the view exists — cursor at the doc end,
         // in edit state.
         if (consumeEditorFocus(tab.filePath)) {
-          const view = inst.view as any
-          void getPmState().then(({ TextSelection }) => {
-            setTimeout(() => {
-              try {
-                const doc = view.state.doc
-                view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, doc.content.size)))
-                view.focus()
-              } catch { /* ignore */ }
-            }, 60)
-          })
+          focusRichEditorAtEnd(inst.view as any)
         }
 
         // Append the wikilink decoration plugin. moraya's setContent only
@@ -1024,6 +1027,15 @@
     })
   })
 
+  $effect(() => {
+    function onFocusEditor(ev: Event) {
+      const d = (ev as CustomEvent<{ path: string }>).detail
+      if (status !== 'mounted' || !editor || tab.filePath !== d.path) return
+      focusRichEditorAtEnd(editor.view as any)
+    }
+    window.addEventListener('mdeditor:focus-editor', onFocusEditor)
+    return () => window.removeEventListener('mdeditor:focus-editor', onFocusEditor)
+  })
 
   onDestroy(() => {
     _pmEl?.removeEventListener('paste', handlePaste, true)

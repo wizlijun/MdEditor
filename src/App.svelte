@@ -136,10 +136,16 @@
       } catch (err) { console.warn('[App] open-file:', err); showError(String(err)) }
     })
 
-    // Quick note: tray "New Markdown" item + system-wide Cmd+Ctrl+N both emit
+    // Quick note: tray "New Markdown" item + system-wide Cmd+Ctrl+M both emit
     // `quick-note`. Create + open + focus a timestamped inbox file.
     const unlistenQuickNote = listen('quick-note', async () => {
       try {
+        // Show + focus the window BEFORE creating the note: the editor mounts
+        // and grabs focus on mount, which is dropped if the webview is still
+        // hidden (app living in the tray). A visible window makes the mount-time
+        // focus stick, so the note opens straight into edit state.
+        await win.show()
+        await win.setFocus()
         const { createQuickNote } = await import('./lib/quick-note.svelte')
         await createQuickNote()
       } catch (err) { console.warn('[App] quick-note:', err); showError(String(err)) }

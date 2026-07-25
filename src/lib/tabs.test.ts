@@ -543,6 +543,39 @@ describe('tabs', () => {
     expect(m.tabs[0].mode).toBe('source')
   })
 
+  it('path-backed markdown draft skips empty saves but writes non-empty content', async () => {
+    const fs = await import('./fs')
+    const m = await import('./tabs.svelte')
+    await m.openPathBackedMarkdownDraft('/tmp/inbox/quick.md', '', { skipEmptySave: true })
+    const t = m.tabs[0]
+    expect(t.filePath).toBe('/tmp/inbox/quick.md')
+    expect(t.currentContent).toBe('')
+    expect(m.isDirty(t.id)).toBe(false)
+
+    await m.saveActive()
+    expect(fs.writeMd).not.toHaveBeenCalled()
+
+    m.setContent(t.id, 'hello')
+    await m.saveActive()
+    expect(fs.writeMd).toHaveBeenCalledWith('/tmp/inbox/quick.md', 'hello')
+    expect(m.isDirty(t.id)).toBe(false)
+  })
+
+  it('path-backed markdown draft does not save over an existing file with empty content', async () => {
+    const fs = await import('./fs')
+    const m = await import('./tabs.svelte')
+    await m.openPathBackedMarkdownDraft('/tmp/inbox/quick.md', '', { skipEmptySave: true })
+    const t = m.tabs[0]
+    m.setContent(t.id, 'hello')
+    await m.saveActive()
+    ;(fs.writeMd as ReturnType<typeof vi.fn>).mockClear()
+
+    m.setContent(t.id, '')
+    await m.saveActive()
+    expect(fs.writeMd).not.toHaveBeenCalled()
+    expect(m.isDirty(t.id)).toBe(true)
+  })
+
   it('newFile dispatches mdeditor:new-file-select when window is available', async () => {
     const dispatched: CustomEvent[] = []
     ;(globalThis as Record<string, unknown>).window = {
