@@ -45,7 +45,7 @@ v4.8.0 之前以 **M↓** 为名发布。
    同步，你的笔记永不丢失宿主。
 5. **一个 vault，多个 agent——你是编排者。** 你的 vault 是一个给 agent 用的
    git 仓库：Claude Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、
-   Hermes——它们通过公共约定（`AGENTS.md`、块引用、伴生笔记）读写同一批
+   Hermes——它们通过公共约定（`AGENTS.md`、块引用、手记）读写同一批
    markdown 文件。谁擅长什么、用哪个模型，你按活儿来派：一个 agent 夜里起草，
    另一个审阅修订，第三个批量配图，而你阅读、判断、下笔定稿。没有哪个 agent
    拥有这个 vault，note.md 也不拥有——工人可替换，握笔的是你。

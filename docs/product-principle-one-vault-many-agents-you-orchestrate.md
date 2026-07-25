@@ -1,7 +1,7 @@
 # 产品原则:一个 vault,多个 agent,你是编排者
 
 > 状态:产品原则 / 外宣素材
-> 适用:note.md 的 agent 协作模型(AGENTS.md 约定 / 块引用 / 伴生笔记 / vault-as-workspace)
+> 适用:note.md 的 agent 协作模型(AGENTS.md 约定 / 块引用 / 手记 / vault-as-workspace)
 
 ## 一句话
 
@@ -67,6 +67,6 @@
 
 ## 工程落点(实现锚点)
 
-- **公共协议**:`AGENTS.md`(vault 根,house rules)+ `((file#b-xxxxxx))` 块引用 + `.note.md` 伴生笔记 + `[[wikilink]]` 命名空间——任何 agent 免适配读写。
+- **公共协议**:`AGENTS.md`(vault 根,house rules)+ `((file#b-xxxxxx))` 块引用 + `.note.md` 手记 + `[[wikilink]]` 命名空间——任何 agent 免适配读写。
 - **交接介质**:git 仓库(见 `docs/` 官网 guides/vault-on-github),每个 agent 的写入都可 diff、可归属、可 `git revert`。
 - **外宣锚点**:官网 `/integrations/{openclaw,cowork,codex,hermes,chatgpt-work}/` 各讲一个 harness 如何接入同一 vault;llms.txt / llms-full.txt 暴露公共约定给所有 agent。

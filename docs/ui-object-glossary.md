@@ -97,7 +97,7 @@ Roam / Workflowy / Obsidian / Logseq 等成熟产品的通行叫法。
 | 英文名 | 中文 | 说明 | 落点 |
 | --- | --- | --- | --- |
 | **vault** | 库 | 一批 `.md` 的中立公共仓库(类 git repo)。 | `sotvaultStore.vaultRoot` |
-| **companion note / sidecar note** | 伴生笔记 | 与源文件配对的批注/大纲 `.note.md`。用户可见名"伴生笔记"。 | `.note.md`, `companionPathFor` |
+| **companion note / sidecar note** | 手记 | 与源文件配对的批注/大纲 `.note.md`。用户可见名"手记"(en: Sidecar Notes / ja: サイドノート / de: Randnotizen);内部 id/目录/后缀仍为 outline-notes/.note.md。 | `.note.md`, `companionPathFor` |
 | **mirror-hosted marks** | 镜像宿主批注 | 批注属于 vault、不属于路径:源文件镜像进 vault 作批注宿主。 | `note-home`, `.notemd/mirrors` |
 | **front-matter** | 前置元数据 | 文件头部的 YAML 元信息块。 | `frontmatter` |
 | **anchor line** | 锚定行 | auto 节点指向源文档的 1-based 行号。 | `anchorLine`, `onJump` |
