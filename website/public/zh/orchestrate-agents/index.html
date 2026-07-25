@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "不同的 AI agent 真的能共享一个 vault 吗？", "acceptedAnswer": {"@type": "Answer", "text": "能——这就是设计。vault 是纯 markdown 加一个描述约定的 AGENTS.md。Claude Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes 都读写这些文件，所以你能把每项任务路由给最合适的 agent（和模型）。把 vault 放进 git，每次写入都可 diff、可回滚。"}}, {"@type": "Question", "name": "agent 之间怎么把活儿交接给彼此？", "acceptedAnswer": {"@type": "Answer", "text": "通过文件。一个 agent 把 markdown 写进 vault；下一个把它当输入读。你的批注住在伴生的 .note.md 文件里，充当转向信号——agent 在下一轮之前先读你的批注。不需要共享内存或私有协议。"}}, {"@type": "Question", "name": "这需要专门的编排工具或 MCP server 吗？", "acceptedAnswer": {"@type": "Answer", "text": "不需要。编排者是你，介质是文件系统。没有中枢数据库、没有隐藏状态——规则在 AGENTS.md，产出在 .md，判断在 .note.md。给偏好工具接口的 agent 准备的 Vault MCP server 在路线图上，但纯文件今天就能用。"}}, {"@type": "Question", "name": "为什么不干脆用一个 AI 包办一切？", "acceptedAnswer": {"@type": "Answer", "text": "因为没有一个 agent 什么都最强。夜间自动化、仔细审阅、快速生图、私密的本地工作、最终判断，是各有最佳工具的不同活儿。把它们分给各路专家——在你自己拥有的文件之上——胜过一个通才一把梭，还让你随时能换掉任何一个工人。"}}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "不同的 AI agent 真的能共享一个 vault 吗？", "acceptedAnswer": {"@type": "Answer", "text": "能——这就是设计。vault 是纯 markdown 加一个描述约定的 AGENTS.md。Claude Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes 都读写这些文件，所以你能把每项任务路由给最合适的 agent（和模型）。把 vault 放进 git，每次写入都可 diff、可回滚。"}}, {"@type": "Question", "name": "agent 之间怎么把活儿交接给彼此？", "acceptedAnswer": {"@type": "Answer", "text": "通过文件。一个 agent 把 markdown 写进 vault；下一个把它当输入读。你的批注住在sidecar 的 .note.md 文件里，充当转向信号——agent 在下一轮之前先读你的批注。不需要共享内存或私有协议。"}}, {"@type": "Question", "name": "这需要专门的编排工具或 MCP server 吗？", "acceptedAnswer": {"@type": "Answer", "text": "不需要。编排者是你，介质是文件系统。没有中枢数据库、没有隐藏状态——规则在 AGENTS.md，产出在 .md，判断在 .note.md。给偏好工具接口的 agent 准备的 Vault MCP server 在路线图上，但纯文件今天就能用。"}}, {"@type": "Question", "name": "为什么不干脆用一个 AI 包办一切？", "acceptedAnswer": {"@type": "Answer", "text": "因为没有一个 agent 什么都最强。夜间自动化、仔细审阅、快速生图、私密的本地工作、最终判断，是各有最佳工具的不同活儿。把它们分给各路专家——在你自己拥有的文件之上——胜过一个通才一把梭，还让你随时能换掉任何一个工人。"}}]}</script>
 <style>
 :root{--ink:#17181C;--paper:#FAFAF7;--amber:#F59E0B;--gray:#9CA3AF;--line:#E7E5E0;
 --serif:"Playfair Display",Georgia,serif;--body:"EB Garamond",Georgia,serif;
@@ -104,7 +104,7 @@ pre{font-size:12.5px;padding:14px 15px}
 <main><div class="wrap">
 
 <h2>vault 是中立地带</h2><p>大多数 AI 工具想成为你思考的家：知识进它的数据库，批注进它的格式，agent 是它自带的那一个，模型是它锁定你的那一款。于是“用哪个 AI？”变成了“要不要把一切都搬走？”——你被圈进单一供应商的路线图里。</p>
-<p>note.md 的 vault 把它翻了过来。vault 是一个带公共约定的纯 markdown 文件夹——一个讲 house rules 的 <code>AGENTS.md</code>、用来精确引用的 <code>((file#b-xxxxxx))</code> 块引用、装着<em>你的</em>判断的伴生 <code>.note.md</code>、以及构成单一命名空间的 <code>[[wikilinks]]</code>。这些约定是一套<b>公共协议</b>：任何 agent 都读得懂，不需要适配器。agent 和模型成了可替换的工人；唯一不变的是 vault。它是个 git 仓库，它们都往里 commit。</p><h2>谁擅长什么，就派谁</h2><p>没有一个 agent 什么都最强。所以别让一个 agent 干所有事——搭一条流水线，把每个工具放到它最强的工位上：</p>
+<p>note.md 的 vault 把它翻了过来。vault 是一个带公共约定的纯 markdown 文件夹——一个讲 house rules 的 <code>AGENTS.md</code>、用来精确引用的 <code>((file#b-xxxxxx))</code> 块引用、装着<em>你的</em>判断的sidecar <code>.note.md</code>、以及构成单一命名空间的 <code>[[wikilinks]]</code>。这些约定是一套<b>公共协议</b>：任何 agent 都读得懂，不需要适配器。agent 和模型成了可替换的工人；唯一不变的是 vault。它是个 git 仓库，它们都往里 commit。</p><h2>谁擅长什么，就派谁</h2><p>没有一个 agent 什么都最强。所以别让一个 agent 干所有事——搭一条流水线，把每个工具放到它最强的工位上：</p>
 <table><thead><tr><th>环节</th><th>合适的人选</th><th>为什么</th></tr></thead><tbody>
 <tr><td>夜间自动化</td><td>OpenClaw / Hermes</td><td>长跑、基于文件、自托管记忆</td></tr>
 <tr><td>仔细审阅与修订</td><td>Claude Cowork / Code</td><td>推理强；动笔前先读你的批注</td></tr>
@@ -119,18 +119,18 @@ pre{font-size:12.5px;padding:14px 15px}
 <li><b>ChatGPT</b> 批量生成主图，放进每篇文档的 <code>_files/</code> 文件夹。</li>
 <li>成稿落进 note.md，在那里<b>你</b>阅读它们，砍掉夸大的部分，高亮要紧的地方，留下只有你写得出的批注。</li>
 </ol>
-<p>四个工具、三种模型、一个 vault、一个编排者。没人需要共享记忆或说某家的私有协议——它们在磁盘上传递 <code>.md</code> 文件，而你的伴生 <code>.note.md</code> 批注，就是给下一位的转向信号。</p><h2>为什么靠文件才行得通</h2><ul>
+<p>四个工具、三种模型、一个 vault、一个编排者。没人需要共享记忆或说某家的私有协议——它们在磁盘上传递 <code>.md</code> 文件，而你的sidecar <code>.note.md</code> 批注，就是给下一位的转向信号。</p><h2>为什么靠文件才行得通</h2><ul>
 <li><b>反锁定，再深一层。</b>file-over-app 把你从应用里解放出来；这一条把你从 agent 和模型里解放出来。今天最强的模型下个月就被换掉——你的知识不该跟着它走。</li>
 <li><b>不靠平台的协作。</b>agent 在磁盘上传递 <code>.md</code>——没有共享内存，没有私有 API，没有插件商店。一个 agent 的产出就是下一个的输入。</li>
 <li><b>你始终在环内,守在检查点。</b>它不是一头跑到尾的黑箱;而是一条有人守在质检口的多工位流水线。agent 写、审、配图——拍板发布的是你。</li>
 <li><b>仍然只是文件。</b>没有编排数据库，没有隐藏状态。规则在 <code>AGENTS.md</code>，产出在 <code>.md</code>，判断在 <code>.note.md</code>——Obsidian、CLI、任何 agent 都能读。换掉 note.md，这个 vault 照样是所有人的公共工作区。</li>
 </ul>
 <p>把 vault 放进 <a href="/guides/vault-on-github/">git</a>，每一次 agent 写入都可 diff、可归属、可回滚——agent 的糟糕一天，是一次 <code>git revert</code>，而不是一场事故。</p><h2>动手搭起来</h2><ol>
-<li>在 vault 根放一个 <code>AGENTS.md</code>——从 <a href="/llms-full.txt">llms-full.txt</a> 取来约定，再加上 house rules（最硬的一条：agent 绝不写进 <code>*.note.md</code> 伴生文件）。</li>
+<li>在 vault 根放一个 <code>AGENTS.md</code>——从 <a href="/llms-full.txt">llms-full.txt</a> 取来约定，再加上 house rules（最硬的一条：agent 绝不写进 <code>*.note.md</code> sidecar 文件）。</li>
 <li>把每个 agent 都接到同一个文件夹上:<a href="/integrations/openclaw/">OpenClaw</a>、<a href="/integrations/cowork/">Cowork</a>、<a href="/integrations/codex/">Codex</a>、<a href="/integrations/chatgpt-work/">ChatGPT</a>、<a href="/integrations/hermes/">Hermes</a>。</li>
-<li>在 note.md 里阅读并批注结果；让下一个 agent 先读伴生文件。循环在你的磁盘上闭合。</li>
+<li>在 note.md 里阅读并批注结果；让下一个 agent 先读sidecar 文件。循环在你的磁盘上闭合。</li>
 </ol>
-<section class="faq"><h2>FAQ</h2><h3>不同的 AI agent 真的能共享一个 vault 吗？</h3><p>能——这就是设计。vault 是纯 markdown 加一个描述约定的 AGENTS.md。Claude Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes 都读写这些文件，所以你能把每项任务路由给最合适的 agent（和模型）。把 vault 放进 git，每次写入都可 diff、可回滚。</p><h3>agent 之间怎么把活儿交接给彼此？</h3><p>通过文件。一个 agent 把 markdown 写进 vault；下一个把它当输入读。你的批注住在伴生的 .note.md 文件里，充当转向信号——agent 在下一轮之前先读你的批注。不需要共享内存或私有协议。</p><h3>这需要专门的编排工具或 MCP server 吗？</h3><p>不需要。编排者是你，介质是文件系统。没有中枢数据库、没有隐藏状态——规则在 AGENTS.md，产出在 .md，判断在 .note.md。给偏好工具接口的 agent 准备的 Vault MCP server 在路线图上，但纯文件今天就能用。</p><h3>为什么不干脆用一个 AI 包办一切？</h3><p>因为没有一个 agent 什么都最强。夜间自动化、仔细审阅、快速生图、私密的本地工作、最终判断，是各有最佳工具的不同活儿。把它们分给各路专家——在你自己拥有的文件之上——胜过一个通才一把梭，还让你随时能换掉任何一个工人。</p></section>
+<section class="faq"><h2>FAQ</h2><h3>不同的 AI agent 真的能共享一个 vault 吗？</h3><p>能——这就是设计。vault 是纯 markdown 加一个描述约定的 AGENTS.md。Claude Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes 都读写这些文件，所以你能把每项任务路由给最合适的 agent（和模型）。把 vault 放进 git，每次写入都可 diff、可回滚。</p><h3>agent 之间怎么把活儿交接给彼此？</h3><p>通过文件。一个 agent 把 markdown 写进 vault；下一个把它当输入读。你的批注住在sidecar 的 .note.md 文件里，充当转向信号——agent 在下一轮之前先读你的批注。不需要共享内存或私有协议。</p><h3>这需要专门的编排工具或 MCP server 吗？</h3><p>不需要。编排者是你，介质是文件系统。没有中枢数据库、没有隐藏状态——规则在 AGENTS.md，产出在 .md，判断在 .note.md。给偏好工具接口的 agent 准备的 Vault MCP server 在路线图上，但纯文件今天就能用。</p><h3>为什么不干脆用一个 AI 包办一切？</h3><p>因为没有一个 agent 什么都最强。夜间自动化、仔细审阅、快速生图、私密的本地工作、最终判断，是各有最佳工具的不同活儿。把它们分给各路专家——在你自己拥有的文件之上——胜过一个通才一把梭，还让你随时能换掉任何一个工人。</p></section>
 </div></main>
 <section class="cta"><div class="wrap">
 <h2>拥有你的思考。</h2>

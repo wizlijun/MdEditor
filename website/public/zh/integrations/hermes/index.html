@@ -108,7 +108,7 @@ pre{font-size:12.5px;padding:14px 15px}
 <li>老规矩，vault 根目录放 <code>AGENTS.md</code>——约定取自 <a href="/llms-full.txt">llms-full.txt</a>，再加你的家规。</li>
 <li>把 Hermes 的记忆/工作区目录配置到 vault 里面（例如 <code>agents/hermes/</code>），或让它把产出写进你的 vault 目录。</li>
 <li>让它干活。在 note.md 里读它写的东西；批注。</li>
-<li>叮嘱 Hermes 重访一个主题前先查 <code>*.note.md</code> 伴生文件（sidecar）——你的纠正成了它的辅助轮。</li>
+<li>叮嘱 Hermes 重访一个主题前先查 <code>*.note.md</code> sidecar 文件——你的纠正成了它的辅助轮。</li>
 </ol>
 <section class="faq"><h2>FAQ</h2><h3>Hermes 和 OpenClaw 是一回事吗？</h3><p>不是——Hermes 是 Nous Research 的开放 agent，主打持久记忆和自托管运行；OpenClaw 是另一个爆火的开源个人 agent。两者都说 markdown 和 AGENTS.md，所以和 note.md 的搭配方式完全一样。</p><h3>多个 agent 能共用一个 vault 吗？</h3><p>能——这就是设计意图。纯文件加一份 AGENTS.md，OpenClaw、Codex、Hermes 和 Claude 可以在同一个 vault 里干活。放进 git，每次写入都可追溯、可回滚。</p></section>
 </div></main>

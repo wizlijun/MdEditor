@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Codex 需要 MCP 服务器才能用 vault 吗？", "acceptedAnswer": {"@type": "Answer", "text": "不需要。vault 就是工作目录里的纯文件——Codex 的主场。MCP 端点是给分享 worker 用的（发布页面），基本的 vault 工作用不上。"}}, {"@type": "Question", "name": "AGENTS.md 里该禁止什么？", "acceptedAnswer": {"@type": "Answer", "text": "唯一的硬规矩：agent 不写你的 .note.md 伴生文件——那里存的是人的判断。其余（命名、目录、链接风格）都是各家的偏好。"}}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Codex 需要 MCP 服务器才能用 vault 吗？", "acceptedAnswer": {"@type": "Answer", "text": "不需要。vault 就是工作目录里的纯文件——Codex 的主场。MCP 端点是给分享 worker 用的（发布页面），基本的 vault 工作用不上。"}}, {"@type": "Question", "name": "AGENTS.md 里该禁止什么？", "acceptedAnswer": {"@type": "Answer", "text": "唯一的硬规矩：agent 不写你的 .note.md sidecar 文件——那里存的是人的判断。其余（命名、目录、链接风格）都是各家的偏好。"}}]}</script>
 <style>
 :root{--ink:#17181C;--paper:#FAFAF7;--amber:#F59E0B;--gray:#9CA3AF;--line:#E7E5E0;
 --serif:"Playfair Display",Georgia,serif;--body:"EB Garamond",Georgia,serif;
@@ -103,14 +103,14 @@ pre{font-size:12.5px;padding:14px 15px}
 </div></header>
 <main><div class="wrap">
 
-<h2>为什么这对组合成立</h2><p>Codex 从运行目录读取 <code>AGENTS.md</code>——这是它的原生惯例，零配置。note.md 的 vault 把文件规则（伴生文件（sidecar）配对、大纲格式、日期链接、块级引用）恰好发布在这个文件里。所以集成就是：<code>cd vault &amp;&amp; codex</code>。完事。</p>
+<h2>为什么这对组合成立</h2><p>Codex 从运行目录读取 <code>AGENTS.md</code>——这是它的原生惯例，零配置。note.md 的 vault 把文件规则（sidecar 文件配对、大纲格式、日期链接、块级引用）恰好发布在这个文件里。所以集成就是：<code>cd vault &amp;&amp; codex</code>。完事。</p>
 <p>Codex 最强的角色是干活的 agent：让它起草、重构文档、批量处理笔记，或者写 vault 里日积月累的小脚本（导入器、链接检查器、报告生成器）。它写的一切都是 vault 里的 markdown，也就意味着它写的一切都会流进你的阅读-批注循环。</p><h2>配置</h2><ol>
 <li>把 <a href="/llms-full.txt">llms-full.txt</a> 里的约定摘要复制进 vault 根目录的 <code>AGENTS.md</code>。</li>
 <li>加上 vault 专属规则——例如“绝不修改 <code>*.note.md</code>”、“新调研放 <code>research/</code> 下，文件名带日期前缀”。</li>
 <li>在 vault 目录运行 <code>codex</code>。它会自动捡起这些规则。</li>
-<li>在 note.md 里审读它的产出；批注；告诉下一次运行去读伴生文件。</li>
+<li>在 note.md 里审读它的产出；批注；告诉下一次运行去读sidecar 文件。</li>
 </ol>
-<section class="faq"><h2>FAQ</h2><h3>Codex 需要 MCP 服务器才能用 vault 吗？</h3><p>不需要。vault 就是工作目录里的纯文件——Codex 的主场。MCP 端点是给分享 worker 用的（发布页面），基本的 vault 工作用不上。</p><h3>AGENTS.md 里该禁止什么？</h3><p>唯一的硬规矩：agent 不写你的 .note.md 伴生文件——那里存的是人的判断。其余（命名、目录、链接风格）都是各家的偏好。</p></section>
+<section class="faq"><h2>FAQ</h2><h3>Codex 需要 MCP 服务器才能用 vault 吗？</h3><p>不需要。vault 就是工作目录里的纯文件——Codex 的主场。MCP 端点是给分享 worker 用的（发布页面），基本的 vault 工作用不上。</p><h3>AGENTS.md 里该禁止什么？</h3><p>唯一的硬规矩：agent 不写你的 .note.md sidecar 文件——那里存的是人的判断。其余（命名、目录、链接风格）都是各家的偏好。</p></section>
 </div></main>
 <section class="cta"><div class="wrap">
 <h2>拥有你的思考。</h2>
