@@ -430,6 +430,7 @@ export const de: Record<keyof Messages, string> = {
   'outline.dailyNeedsVault': 'Richten Sie zuerst einen Synchronisierungstresor ein (Taskleiste → Tresor), um Tagesnotizen zu verwenden.',
   'outline.vaultRequiredForNote': 'Vault required',
   'outline.vaultRequiredForNoteBody': 'Writing a note stores it in your Vault. Configure a Vault in Settings to continue?',
+  'outline.questionChip': 'Fragestatus — Klick zum Schließen/Wiedereröffnen',
 
   // Git history view
   'history.title': 'Verlauf',

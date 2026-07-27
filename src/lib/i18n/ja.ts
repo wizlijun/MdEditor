@@ -432,6 +432,7 @@ export const ja: Record<keyof Messages, string> = {
   'outline.dailyNeedsVault': 'デイリーノートを使うには、まずトレイメニューで Vault を設定してください。',
   'outline.vaultRequiredForNote': 'Vault required',
   'outline.vaultRequiredForNoteBody': 'Writing a note stores it in your Vault. Configure a Vault in Settings to continue?',
+  'outline.questionChip': '質問ステータス——クリックでクローズ/再オープン',
 
   // Git history view
   'history.title': '履歴',

@@ -437,6 +437,7 @@ export const en = {
   'outline.dailyNeedsVault': 'Set up a sync vault first (tray → Vault) to use daily notes.',
   'outline.vaultRequiredForNote': 'Vault required',
   'outline.vaultRequiredForNoteBody': 'Writing a note stores it in your Vault. Configure a Vault in Settings to continue?',
+  'outline.questionChip': 'Question status — click to close / reopen',
 
   // Git history view
   'history.title': 'History',

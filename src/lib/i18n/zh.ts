@@ -463,6 +463,7 @@ export const zh: Record<keyof Messages, string> = {
   'outline.dailyNeedsVault': '请先在托盘菜单设置同步 Vault,才能使用每日笔记。',
   'outline.vaultRequiredForNote': '需要 Vault',
   'outline.vaultRequiredForNoteBody': '写笔记会把它存进 Vault。现在去设置里配置 Vault 吗？',
+  'outline.questionChip': '问题状态——点击关闭/重开',
 
   // Git history view
   'history.title': '历史',
