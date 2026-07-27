@@ -35,6 +35,17 @@ describe('scheduleQuestionCapture — retraction cancels pending timer', () => {
     expect(() => vi.advanceTimersByTime(2000)).not.toThrow()
   })
 
+  it('does not fire stale capture when last annotation is deleted (no {>> in md)', () => {
+    vi.useFakeTimers()
+    const path = '/tmp/a.md'
+    // First call: a question annotation is present — schedules a timer
+    expect(() => scheduleQuestionCapture(path, '文 {>>为什么?<<}')).not.toThrow()
+    // Second call: annotation was entirely removed — must cancel the pending timer
+    expect(() => scheduleQuestionCapture(path, '批注被整体删掉了')).not.toThrow()
+    // Advance past debounce: no stale captureQuestions call should fire
+    expect(() => vi.advanceTimersByTime(2000)).not.toThrow()
+  })
+
   it('skips scheduling for non-.md paths', () => {
     vi.useFakeTimers()
     expect(() => scheduleQuestionCapture('/tmp/test.txt', '{>>问题?<<}')).not.toThrow()

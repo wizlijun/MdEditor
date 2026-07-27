@@ -354,13 +354,22 @@ export async function reloadTabFromDisk(path: string): Promise<void> {
   }
 }
 
+let questionCapture: typeof import('./outline/question-capture') | null = null
+
 export function setContent(id: string, md: string): void {
   const t = tabs.find((x) => x.id === id)
   if (!t) return
   t.currentContent = md
-  // 提问捕获:含 {>> 才动态加载(键入热路径,先做廉价字面判断)
-  if (t.filePath && md.includes('{>>')) {
-    void import('./outline/question-capture').then((m) => m.scheduleQuestionCapture(t.filePath, md))
+  if (!t.filePath) return
+  // 提问捕获:模块加载后无条件调用(schedule 自带在途取消,批注整体删除也能撤回);
+  // 首次加载仍由 {>> 门卫触发——加载前不存在在途 timer
+  if (questionCapture) {
+    questionCapture.scheduleQuestionCapture(t.filePath, md)
+  } else if (md.includes('{>>')) {
+    void import('./outline/question-capture').then((m) => {
+      questionCapture = m
+      m.scheduleQuestionCapture(t.filePath, md)
+    })
   }
 }
 
