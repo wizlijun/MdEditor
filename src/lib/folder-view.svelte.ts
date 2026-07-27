@@ -97,9 +97,9 @@ export function computeFilterVisibility(
 
 const NOTE_SUFFIX_RE = /\.notes?\.md$/i
 
-/** 伴生笔记文本里 agent 已作答、待人裁决的问题数。属性行 = 缩进 + status:: answered 独占一行 */
+/** 伴生笔记文本里 agent 已作答、待人裁决的问题数。属性行 = 行内缩进 + status:: answered 独占一行(容忍 CRLF) */
 export function countAnsweredQuestions(noteText: string): number {
-  return (noteText.match(/^\s+status:: answered$/gm) ?? []).length
+  return (noteText.match(/^[ \t]+status:: answered\r?$/gm) ?? []).length
 }
 
 /** 同目录配对:xxx.note.md 有同名 xxx.md → 隐藏该行并给主行打 hasNote;

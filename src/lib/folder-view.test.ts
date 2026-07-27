@@ -455,4 +455,11 @@ describe('countAnsweredQuestions', () => {
   it('returns 0 for notes without answers', () => {
     expect(countAnsweredQuestions('- 手写\n- 内容 status:: answered 不是属性行')).toBe(0)
   })
+  it('tolerates CRLF line endings', () => {
+    const note = '- q?\r\n  type:: question\r\n  status:: answered\r\n'
+    expect(countAnsweredQuestions(note)).toBe(1)
+  })
+  it('does not count unindented lines even with CRLF junk before them', () => {
+    expect(countAnsweredQuestions('foo\r\nstatus:: answered\r\nbar')).toBe(0)
+  })
 })
