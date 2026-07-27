@@ -13,6 +13,7 @@
   import { visibleNodes } from '../../lib/outline/model'
   import { matchCommand, type OutlineCommandId } from '../../lib/outline/shortcuts'
   import { writeBackNoteEdit } from '../../lib/outline/note-writeback-io'
+  import { t } from '../../lib/i18n/store.svelte'
 
   let {
     node, depth, resolved = {} as Record<OutlineCommandId, string>,
@@ -53,6 +54,9 @@
     forceExpand?: boolean
   } = $props()
 
+  /** note/question 同族:annotation 的批注文本子节点(question=含问号升格) */
+  const noteLike = (s: NodeT['source']) => s === 'note' || s === 'question'
+
   const srcTree = $derived(tree ?? outline.tree)
   let kids = $derived.by(() => {
     if (!readonly) void outline.version
@@ -76,14 +80,14 @@
   })
   let textareaEl: HTMLTextAreaElement | undefined = $state()
   let selected = $derived(!readonly && outline.selectedIds.has(node.id))
-  // note 子节点可编辑（其余 auto 只读）；编辑起点内容留作回写定位的"旧批注"
-  let editable = $derived(node.source === 'manual' || node.source === 'note')
+  // note/question 子节点可编辑（其余 auto 只读）；编辑起点内容留作回写定位的"旧批注"
+  let editable = $derived(node.source === 'manual' || noteLike(node.source))
   // 批注行（被批注的原文/※ 占位符）：样式如高亮（金色下划线）
   let markLike = $derived(node.source === 'annotation')
   let noteBaseline: string | null = null
 
   $effect(() => {
-    if (editing && node.source === 'note') noteBaseline = node.content
+    if (editing && noteLike(node.source)) noteBaseline = node.content
   })
 
   $effect(() => {
@@ -118,8 +122,34 @@
     clearSelection()
     startEdit()
   }
+  // status 是普通属性,变更经 bump() 重读(同 content/collapsed 的处理)
+  let qStatus = $derived.by(() => { if (!readonly) void outline.version; return node.status })
+
+  /** chip 单击:open/answered → closed(裁决/误判清理);closed → open(重开) */
+  function onChipClick() {
+    node.status = node.status === 'closed' ? 'open' : 'closed'
+    bump(); markDirty()
+  }
+
+  /** 追问自动重开:在 answered 问题下追加/修改 ● 手写内容 = 把问题拨回 open(spec §4)。
+   *  覆盖三条提交路径:blur→commitEdit / Enter 键 / ArrowUp|Down 键。 */
+  function reopenAnsweredAncestor() {
+    const seen = new Set<string>()   // 环保护:坏树的 parentId 环不得死循环冻结 UI
+    let pid = node.parentId
+    while (pid && !seen.has(pid)) {
+      seen.add(pid)
+      const p = outline.tree.nodes.get(pid)
+      if (!p) break
+      if (p.source === 'question') {
+        if (p.status === 'answered') p.status = 'open'
+        break
+      }
+      pid = p.parentId
+    }
+  }
+
   function commitEdit(value: string) {
-    if (node.source === 'note') {
+    if (noteLike(node.source)) {
       // 批注子节点：改动写回 .note.md 树 + 主文档的 {>>…<<}
       const old = noteBaseline ?? node.content
       outline.editingId = null
@@ -137,7 +167,7 @@
     setNodeContent(node, value)
     outline.editingId = null
     bump()
-    if (changed) markDirty()
+    if (changed) { reopenAnsweredAncestor(); markDirty() }
   }
   function onBulletClick() {
     // Roam/hulunote 语义：bullet 点击 = zoom-in 到该节点(折叠归 tri 三角)。
@@ -160,7 +190,7 @@
 
     if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault()
-      if (node.source === 'note') {
+      if (noteLike(node.source)) {
         // 批注子节点：回车 = 提交并退出编辑
         commitEdit(el.value)
         return
@@ -171,6 +201,7 @@
         bump(); markDirty(); focusNode(id)
         return
       }
+      if (el.value !== node.content) reopenAnsweredAncestor()
       setNodeContent(node, el.value)
       // 行首 Enter → 上方建兄弟（render.cljs handle-key-down 语义）
       const id = atStart && el.value.length > 0
@@ -180,7 +211,7 @@
       return
     }
     if (e.key === 'Backspace' && atStart) {
-      if (node.source === 'note') return   // 批注子节点不参与合并
+      if (noteLike(node.source)) return   // 批注子节点不参与合并
       const res = mergeWithPrevious(outline.tree, node.id)
       if (res) { e.preventDefault(); bump(); markDirty(); focusNode(res.mergedInto) }
       return
@@ -191,15 +222,15 @@
       const nb = e.key === 'ArrowUp' ? (atStart ? vis[idx - 1] : null) : (atEnd ? vis[idx + 1] : null)
       if (nb) {
         e.preventDefault()
-        if (node.source === 'note') commitEdit(el.value)
-        else { setNodeContent(node, el.value); bump(); markDirty() }
-        focusNode(nb.source === 'manual' || nb.source === 'note' ? nb.id : null)
+        if (noteLike(node.source)) commitEdit(el.value)
+        else { if (el.value !== node.content) reopenAnsweredAncestor(); setNodeContent(node, el.value); bump(); markDirty() }
+        focusNode(nb.source === 'manual' || noteLike(nb.source) ? nb.id : null)
       }
       return
     }
     const cmd = matchCommand(e, resolved)
     if (!cmd) return
-    if (node.source === 'note') { e.preventDefault(); return }  // 结构命令对批注子节点无效
+    if (noteLike(node.source)) { e.preventDefault(); return }  // 结构命令对批注子节点无效
     e.preventDefault()
     setNodeContent(node, el.value)
     if (cmd === 'outline.indent') indentNode(outline.tree, node.id)
@@ -290,7 +321,7 @@
       class:src-hl={node.source === 'highlight'}
       class:src-wl={node.source === 'wikilink'}
       class:src-anno={node.source === 'annotation'}
-      class:src-note={node.source === 'note'}
+      class:src-note={noteLike(node.source)}
       class:jumpable={node.anchorLine != null}
       draggable={!readonly && node.source === 'manual'}
       ondragstart={onDragStart}
@@ -323,6 +354,14 @@
         <!-- 空内容：塞零宽空格保证有行盒，鼠标可命中进入编辑 -->
         {#if content === ''}{'​'}{:else}<InlineRender {content} onPageClick={onPageClick} />{/if}
       </span>
+    {/if}
+    {#if !readonly && node.source === 'question'}
+      <button class="qchip"
+        class:st-answered={qStatus === 'answered'}
+        class:st-closed={qStatus === 'closed'}
+        title={t('outline.questionChip')}
+        onclick={(e) => { e.stopPropagation(); onChipClick() }}
+      >{qStatus ?? 'open'}</button>
     {/if}
   </div>
   {#if showChildren}
@@ -449,5 +488,21 @@
   textarea.edit {
     resize: none; overflow: hidden; border: none; outline: none;
     border-radius: 3px; background: transparent; color: inherit; font: inherit; padding: 0;
+  }
+  .qchip {
+    align-self: center;
+    margin-left: 6px;
+    padding: 0 7px;
+    border: none; border-radius: 8px; cursor: pointer;
+    font-family: inherit;
+    font-size: calc(var(--outline-font-size, 13px) * 0.72);
+    line-height: 1.7;
+    color: #fff;
+    background: var(--accent-color, #4a80d4);   /* open */
+  }
+  .qchip.st-answered { background: #2da44e; }
+  .qchip.st-closed {
+    color: color-mix(in srgb, currentColor 55%, transparent);
+    background: color-mix(in srgb, currentColor 12%, transparent);
   }
 </style>

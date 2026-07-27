@@ -1,5 +1,5 @@
 // src/lib/outline/store.svelte.ts
-import { createTree, childrenOf, type OutlineTree, type OutlineNode } from './model'
+import { createTree, childrenOf, treeHasQuestion, type OutlineTree, type OutlineNode } from './model'
 import { serializeOutline, parseOutline } from './markdown'
 import { deriveAutoItems } from './derive'
 import { syncAutoItems, regenerate as regenerateTree } from './sync'
@@ -136,6 +136,8 @@ export async function attachDoc(docPath: string, text: string, mainContent: stri
   outline.dirty = false
   outline.externalConflict = null
   if (mainContent != null) syncAutoItems(outline.tree, deriveAutoItems(mainContent))
+  // 提问视为明确保存意图:树中出现 question 节点即激活落盘(spec §2)
+  if (treeHasQuestion(outline.tree)) outline.armed = true
   bump()
 }
 

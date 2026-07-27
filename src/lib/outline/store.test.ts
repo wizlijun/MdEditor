@@ -102,6 +102,18 @@ describe('noteTextHasContent', () => {
   })
 })
 
+describe('question arming', () => {
+  it('arms auto-save when the main doc carries a question annotation', async () => {
+    await attachDoc('/tmp/q.note.md', '', '正文 {==原文==}{>>这是为什么?<<}\n')
+    expect(outline.armed).toBe(true)
+  })
+
+  it('does not arm for a plain annotation', async () => {
+    await attachDoc('/tmp/p.note.md', '', '正文 {==原文==}{>>只是备注<<}\n')
+    expect(outline.armed).toBe(false)
+  })
+})
+
 describe('dirty / armed 保存门控', () => {
   it('attachDoc: 有内容则 armed，空则不 armed，均非 dirty', async () => {
     await attachDoc('/v/a.note.md', '- hello\n', null)

@@ -16,6 +16,8 @@ export interface FolderEntry {
   /** 同目录存在配对 xxx.note.md:行尾角标,点击打开笔记 */
   hasNote?: boolean
   notePath?: string
+  /** 伴生笔记中 agent 已作答、待人裁决的问题数(status:: answered 计数) */
+  answeredCount?: number
   /** 最后修改(ms)，stat 失败为 0 */
   mtime?: number
   /** 创建(ms)，stat 失败为 0 */
@@ -94,6 +96,11 @@ export function computeFilterVisibility(
 }
 
 const NOTE_SUFFIX_RE = /\.notes?\.md$/i
+
+/** 伴生笔记文本里 agent 已作答、待人裁决的问题数。属性行 = 行内缩进 + status:: answered 独占一行(容忍 CRLF) */
+export function countAnsweredQuestions(noteText: string): number {
+  return (noteText.match(/^[ \t]+status:: answered\r?$/gm) ?? []).length
+}
 
 /** 同目录配对:xxx.note.md 有同名 xxx.md → 隐藏该行并给主行打 hasNote;
  *  无主文档的 .note.md 保留行并标 isOutlineNote。 */
@@ -311,6 +318,14 @@ export async function readFolder(dir: string): Promise<FolderEntry[]> {
   const pinnedSet = new Set(pinned)
   const { sotvaultStore } = await import('./sotvault.svelte')
   const withVaultNotes = augmentVaultNotes(pairNoteEntries(base), sotvaultStore.records)
+  await Promise.all(withVaultNotes.map(async (e) => {
+    if (!e.hasNote || !e.notePath) return
+    const txt = await readTextFile(e.notePath!).catch(() => null)
+    if (txt) {
+      const c = countAnsweredQuestions(txt)
+      if (c > 0) e.answeredCount = c
+    }
+  }))
   const paired = withVaultNotes.map((e) => (pinnedSet.has(e.name) ? { ...e, pinned: true } : e))
   const sorted = sortEntries(paired, folderView.sort, pinned)
   folderView.entriesCache.set(dir, sorted)

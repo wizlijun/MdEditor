@@ -1,5 +1,6 @@
 // src/lib/outline/model.ts
-export type NodeSource = 'toc' | 'highlight' | 'wikilink' | 'annotation' | 'note' | 'manual'
+export type NodeSource = 'toc' | 'highlight' | 'wikilink' | 'annotation' | 'note' | 'question' | 'manual'
+export type QuestionStatus = 'open' | 'answered' | 'closed'
 
 export interface OutlineNode {
   id: string
@@ -15,6 +16,12 @@ export interface OutlineNode {
   createdAt?: string
   /** ISO 8601 最近内容修改时间；仅 highlight/manual 节点记录 */
   updatedAt?: string
+  /** 仅 source==='question':问答状态机(spec 2026-07-27-annotation-qa-loop)。缺省视为 open */
+  status?: QuestionStatus
+  /** ✦ 作答节点:作答时间(ISO8601),由外部 agent 写入,须原样 roundtrip */
+  answeredAt?: string
+  /** ✦ 作答节点:作答者标识(如 claude-code),由外部 agent 写入,须原样 roundtrip */
+  answeredBy?: string
 }
 
 export function nowIso(): string {
@@ -108,4 +115,15 @@ export function removeSubtree(tree: OutlineTree, id: string): void {
 
 export function newId(): string {
   return crypto.randomUUID()
+}
+
+/** 批注文本含半角/全角问号即视为「向 agent 提问」(spec:自然书写即协议) */
+export function isQuestionText(s: string): boolean {
+  return /[?？]/.test(s)
+}
+
+/** 树中存在任何 question 节点(用于:含提问即激活伴生笔记落盘) */
+export function treeHasQuestion(tree: OutlineTree): boolean {
+  for (const n of tree.nodes.values()) if (n.source === 'question') return true
+  return false
 }

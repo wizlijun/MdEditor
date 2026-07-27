@@ -3,7 +3,8 @@ import { describe, it, expect } from 'vitest'
 import {
   createTree, addNode, childrenOf, calculateOrderBetween,
   normalizeSiblingOrders, collectDescendantIds, isValidDropTarget,
-  visibleNodes, removeSubtree, setNodeContent, ancestorsOf, type OutlineTree,
+  visibleNodes, removeSubtree, setNodeContent, ancestorsOf, newId,
+  isQuestionText, treeHasQuestion, type OutlineTree, type OutlineNode,
 } from './model'
 
 function sampleTree(): OutlineTree {
@@ -106,5 +107,26 @@ describe('setNodeContent timestamps', () => {
     setNodeContent(n, 'changed')
     expect(n.content).toBe('changed')
     expect(n.updatedAt).toBeUndefined()
+  })
+})
+
+describe('question helpers', () => {
+  it('isQuestionText matches half/full-width question marks', () => {
+    expect(isQuestionText('这是为什么?')).toBe(true)
+    expect(isQuestionText('为什么？')).toBe(true)
+    expect(isQuestionText('mid?dle')).toBe(true)
+    expect(isQuestionText('只是备注')).toBe(false)
+    expect(isQuestionText('')).toBe(false)
+  })
+
+  it('treeHasQuestion finds question nodes', () => {
+    const tree = createTree()
+    expect(treeHasQuestion(tree)).toBe(false)
+    const n: OutlineNode = {
+      id: newId(), parentId: null, order: 0, content: '为什么?',
+      collapsed: false, source: 'question', status: 'open',
+    }
+    addNode(tree, n)
+    expect(treeHasQuestion(tree)).toBe(true)
   })
 })

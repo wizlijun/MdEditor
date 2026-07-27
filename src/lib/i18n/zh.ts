@@ -142,8 +142,10 @@ export const zh: Record<keyof Messages, string> = {
   'slash.highlight.desc': '插入 ==高亮== 文本',
   'slash.wikilink.label': 'WikiLink',
   'slash.wikilink.desc': '插入 [[双链]]',
-  'noteedit.placeholder': '输入批注…',
+  'noteedit.placeholder': '输入批注……以 ? 结尾即向 agent 提问',
   'noteedit.delete': '删除批注',
+  'noteedit.ask': '提问',
+  'noteedit.askHint': '标记为向 agent 提问(补全问号并保存)',
   'slash.h1.label': '标题 1',
   'slash.h1.desc': '一级大标题',
   'slash.h2.label': '标题 2',
@@ -461,6 +463,7 @@ export const zh: Record<keyof Messages, string> = {
   'outline.dailyNeedsVault': '请先在托盘菜单设置同步 Vault,才能使用每日笔记。',
   'outline.vaultRequiredForNote': '需要 Vault',
   'outline.vaultRequiredForNoteBody': '写笔记会把它存进 Vault。现在去设置里配置 Vault 吗？',
+  'outline.questionChip': '问题状态——点击关闭/重开',
 
   // Git history view
   'history.title': '历史',
@@ -495,6 +498,7 @@ export const zh: Record<keyof Messages, string> = {
   'folderView.noFolder': '无文件夹',
   'folderView.reveal': '在访达中显示',
   'folderView.openNote': '打开笔记',
+  'folderView.newAnswers': '来自 agent 的新回答',
   'folderView.rename': '重命名',
   'folderView.sortBy': '排序方式',
   'folderView.sortEdited': '最后编辑时间',

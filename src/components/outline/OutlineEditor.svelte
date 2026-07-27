@@ -17,7 +17,7 @@
   import { decideCompanionWrite } from '../../lib/outline/companion-write'
   import { deriveAutoItems } from '../../lib/outline/derive'
   import { syncAutoItems } from '../../lib/outline/sync'
-  import { childrenOf, newId, calculateOrderBetween, setNodeContent, type OutlineNode as NodeT } from '../../lib/outline/model'
+  import { childrenOf, newId, calculateOrderBetween, setNodeContent, treeHasQuestion, type OutlineNode as NodeT } from '../../lib/outline/model'
   import OutlineBreadcrumb from './OutlineBreadcrumb.svelte'
   import {
     moveNodeAfter, moveNodeToChild, deleteNode, subtreeToMarkdown,
@@ -269,6 +269,7 @@
           lastDerivedMain = mc
           const before = serializeDoc(false)
           syncAutoItems(outline.tree, deriveAutoItems(mc))
+          if (treeHasQuestion(outline.tree)) outline.armed = true
           // 同步只置脏、进内存；未激活自动保存时不落盘（浏览/主文档编辑不自动生成笔记）
           if (serializeDoc(false) !== before) { bump(); markSynced() }
         })

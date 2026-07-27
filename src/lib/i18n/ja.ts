@@ -142,8 +142,10 @@ export const ja: Record<keyof Messages, string> = {
   'slash.highlight.desc': '==ハイライト== を挿入',
   'slash.wikilink.label': 'WikiLink',
   'slash.wikilink.desc': '[[リンク]] を挿入',
-  'noteedit.placeholder': '注釈を入力…',
+  'noteedit.placeholder': '注釈を入力…「？」で終えるとエージェントへの質問に',
   'noteedit.delete': '注釈を削除',
+  'noteedit.ask': '質問',
+  'noteedit.askHint': 'エージェントへの質問にする(？を補って保存)',
   'slash.h1.label': '見出し 1',
   'slash.h1.desc': '最上位の見出し',
   'slash.h2.label': '見出し 2',
@@ -430,6 +432,7 @@ export const ja: Record<keyof Messages, string> = {
   'outline.dailyNeedsVault': 'デイリーノートを使うには、まずトレイメニューで Vault を設定してください。',
   'outline.vaultRequiredForNote': 'Vault required',
   'outline.vaultRequiredForNoteBody': 'Writing a note stores it in your Vault. Configure a Vault in Settings to continue?',
+  'outline.questionChip': '質問ステータス——クリックでクローズ/再オープン',
 
   // Git history view
   'history.title': '履歴',
@@ -464,6 +467,7 @@ export const ja: Record<keyof Messages, string> = {
   'folderView.noFolder': 'フォルダなし',
   'folderView.reveal': 'Finder で表示',
   'folderView.openNote': 'ノートを開く',
+  'folderView.newAnswers': 'エージェントからの新しい回答',
   'folderView.rename': '名前を変更',
   'folderView.sortBy': '並び替え',
   'folderView.sortEdited': '最終編集日時',

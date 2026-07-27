@@ -13,13 +13,16 @@ Key facts: macOS app (Tauri, system WebView, signed & notarized). Free. Repo: ht
 
 ## Core conventions (summary)
 
-- `xxx.note.md` beside `xxx.md` = human annotations of that document. `.note.md` without a sibling source = standalone outline note. Never write into a human's `.note.md` unless asked.
+- `xxx.note.md` beside `xxx.md` = human annotations of that document. `.note.md` without a sibling source = standalone outline note. Never write into a human's `.note.md` unless asked — the one sanctioned exception is the Q&A answer-writeback below.
 - Consent-based linking: an agent may *suggest* a `[[link]]`, but only the human confirms what actually connects. Do not auto-link documents or backfill a graph the human didn't ask for.
 - `.note.md` body = nested markdown bullet list (an outline), with YAML frontmatter (`title`, `created`, `updated`).
 - Daily notes: `dailynote/{yyyy}/{yyyy-MM-dd}.note.md`; monthly `{yyyy-MM}.note.md`; yearly `{yyyy}.note.md`. Canonical date link: `[[yyyy-MM-dd]]`.
 - Wiki notes: `wikipage/{title-slug}.note.md`. One global `[[title]]` namespace across the vault.
 - Block citation: `((path/to/file.md#b-xxxxxx))` cites one block of a document.
 - Multi-agent handoff: several agents may share one vault. They collaborate by passing `.md` files on disk (one agent's output is the next one's input); the human's `.note.md` annotations are the steering signal. Keep the vault in git so every agent write is diffable and revertible.
+- Q&A loop: an annotation containing `?` becomes a `type:: question` node
+  (`status:: open`) in the companion `.note.md`; agents answer with a `✦`
+  child bullet and set `status:: answered`; only the human sets `closed`.
 - Files are the single source of truth; indexes are derived and rebuildable.
 
 ## Optional

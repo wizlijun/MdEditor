@@ -140,8 +140,10 @@ export const de: Record<keyof Messages, string> = {
   'slash.highlight.desc': '==Hervorgehobenen== Text einfügen',
   'slash.wikilink.label': 'WikiLink',
   'slash.wikilink.desc': '[[WikiLink]] einfügen',
-  'noteedit.placeholder': 'Notiz schreiben…',
+  'noteedit.placeholder': 'Notiz schreiben… mit ? beenden, um den Agenten zu fragen',
   'noteedit.delete': 'Notiz löschen',
+  'noteedit.ask': 'Fragen',
+  'noteedit.askHint': 'Als Frage an den Agenten markieren (ergänzt ? und speichert)',
   'slash.h1.label': 'Überschrift 1',
   'slash.h1.desc': 'Überschrift der obersten Ebene',
   'slash.h2.label': 'Überschrift 2',
@@ -428,6 +430,7 @@ export const de: Record<keyof Messages, string> = {
   'outline.dailyNeedsVault': 'Richten Sie zuerst einen Synchronisierungstresor ein (Taskleiste → Tresor), um Tagesnotizen zu verwenden.',
   'outline.vaultRequiredForNote': 'Vault required',
   'outline.vaultRequiredForNoteBody': 'Writing a note stores it in your Vault. Configure a Vault in Settings to continue?',
+  'outline.questionChip': 'Fragestatus — Klick zum Schließen/Wiedereröffnen',
 
   // Git history view
   'history.title': 'Verlauf',
@@ -462,6 +465,7 @@ export const de: Record<keyof Messages, string> = {
   'folderView.noFolder': 'Kein Ordner',
   'folderView.reveal': 'Im Finder anzeigen',
   'folderView.openNote': 'Notiz öffnen',
+  'folderView.newAnswers': 'Neue Antworten deines Agenten',
   'folderView.rename': 'Umbenennen',
   'folderView.sortBy': 'Sortieren nach',
   'folderView.sortEdited': 'Zuletzt bearbeitet',

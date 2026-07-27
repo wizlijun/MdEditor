@@ -147,8 +147,10 @@ export const en = {
   'slash.highlight.desc': 'Insert ==highlighted== text',
   'slash.wikilink.label': 'WikiLink',
   'slash.wikilink.desc': 'Insert a [[wikilink]]',
-  'noteedit.placeholder': 'Write a note…',
+  'noteedit.placeholder': 'Write a note… end with ? to ask your agent',
   'noteedit.delete': 'Delete note',
+  'noteedit.ask': 'Ask',
+  'noteedit.askHint': 'Mark as a question for your agent (appends ? and saves)',
   'slash.h1.label': 'Heading 1',
   'slash.h1.desc': 'Top-level heading',
   'slash.h2.label': 'Heading 2',
@@ -435,6 +437,7 @@ export const en = {
   'outline.dailyNeedsVault': 'Set up a sync vault first (tray → Vault) to use daily notes.',
   'outline.vaultRequiredForNote': 'Vault required',
   'outline.vaultRequiredForNoteBody': 'Writing a note stores it in your Vault. Configure a Vault in Settings to continue?',
+  'outline.questionChip': 'Question status — click to close / reopen',
 
   // Git history view
   'history.title': 'History',
@@ -469,6 +472,7 @@ export const en = {
   'folderView.noFolder': 'No folder',
   'folderView.reveal': 'Reveal in Finder',
   'folderView.openNote': 'Open note',
+  'folderView.newAnswers': 'New answers from your agent',
   'folderView.rename': 'Rename',
   'folderView.sortBy': 'Sort by',
   'folderView.sortEdited': 'Last edited',
