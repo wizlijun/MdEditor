@@ -34,6 +34,11 @@
     noteUi.edit = null
     editState.remove()
   }
+  /** ⁇ 提问:尾部无问号则补全角 ？,保存并关闭。问题身份由文本中的问号承载,按钮只是糖 */
+  function onAsk() {
+    if (!/[?？]\s*$/.test(text)) text = text.trimEnd() + '？'
+    close(true)
+  }
   function onWindowMousedown(e: MouseEvent) {
     if (root && !root.contains(e.target as Node)) close(true)
   }
@@ -63,6 +68,7 @@
     placeholder={t('noteedit.placeholder')}
   ></textarea>
   <div class="row">
+    <button class="ask" onclick={onAsk} title={t('noteedit.askHint')}>⁇ {t('noteedit.ask')}</button>
     <button
       class="del"
       onclick={onDelete}
@@ -114,7 +120,16 @@
   textarea::placeholder {
     color: color-mix(in srgb, var(--note-fg, CanvasText) 45%, transparent);
   }
-  .row { display: flex; justify-content: flex-end; margin-top: 4px; }
+  .row { display: flex; justify-content: space-between; margin-top: 4px; }
+  .ask {
+    display: flex; align-items: center; gap: 4px;
+    padding: 3px 10px;
+    border: none; border-radius: 5px; cursor: pointer;
+    font-family: inherit; font-size: 12px; font-weight: 600;
+    color: #fff;
+    background: var(--accent-color, #4a80d4);
+  }
+  .ask:hover { filter: brightness(1.1); }
   .del {
     display: flex;
     align-items: center;
