@@ -20,9 +20,10 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>()
 
 export function scheduleQuestionCapture(mainPath: string | null | undefined, md: string): void {
   if (!mainPath || !/\.md$/i.test(mainPath) || /\.notes?\.md$/i.test(mainPath)) return
-  if (!mdHasQuestionAnnotation(md)) return
+  // 先取消在途防抖:1.5s 内「输入?又删掉」时,陈旧捕获不得照写
   const prev = timers.get(mainPath)
-  if (prev) clearTimeout(prev)
+  if (prev) { clearTimeout(prev); timers.delete(mainPath) }
+  if (!mdHasQuestionAnnotation(md)) return
   timers.set(mainPath, setTimeout(() => {
     timers.delete(mainPath)
     void captureQuestions(mainPath, md)
