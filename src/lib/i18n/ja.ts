@@ -467,6 +467,7 @@ export const ja: Record<keyof Messages, string> = {
   'folderView.noFolder': 'フォルダなし',
   'folderView.reveal': 'Finder で表示',
   'folderView.openNote': 'ノートを開く',
+  'folderView.newAnswers': 'エージェントからの新しい回答',
   'folderView.rename': '名前を変更',
   'folderView.sortBy': '並び替え',
   'folderView.sortEdited': '最終編集日時',

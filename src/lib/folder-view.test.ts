@@ -4,6 +4,7 @@ import {
   makeFilterMatcher, computeFilterVisibility, type FolderEntry,
   pairNoteEntries, parsePinned, augmentVaultNotes,
   filterByViewMode, applyHideFolders, displayNameFor, parseFirstH1, stripExt, stripNoteSuffix,
+  countAnsweredQuestions,
 } from './folder-view.svelte'
 import type { SotRecord } from './sotvault-logic'
 import { vi, beforeEach } from 'vitest'
@@ -437,5 +438,21 @@ describe('pairNoteEntries', () => {
   it('directories and non-md untouched', () => {
     const out = pairNoteEntries([f('sub', true), f('x.png')])
     expect(out).toHaveLength(2)
+  })
+})
+
+describe('countAnsweredQuestions', () => {
+  it('counts status:: answered lines', () => {
+    const note = [
+      '- 原文', '  type:: annotation',
+      '  - q1?', '    type:: question', '    status:: answered',
+      '  - q2?', '    type:: question', '    status:: open',
+      '- 原文2', '  type:: annotation',
+      '  - q3?', '    type:: question', '    status:: answered',
+    ].join('\n')
+    expect(countAnsweredQuestions(note)).toBe(2)
+  })
+  it('returns 0 for notes without answers', () => {
+    expect(countAnsweredQuestions('- 手写\n- 内容 status:: answered 不是属性行')).toBe(0)
   })
 })

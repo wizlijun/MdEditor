@@ -136,6 +136,9 @@
           d="M 185.49318,76.468676 C 202.86539,165.0158 220.23759,183.99019 301.30788,202.96457 220.23759,221.93895 202.86539,240.91333 185.49318,329.46046 168.12097,240.91333 150.74877,221.93895 69.67847,202.96457 150.74877,183.99019 168.12097,165.0158 185.49318,76.468676 Z"
           fill="#f59e0b" />
       </svg>
+      {#if entry.answeredCount}
+        <span class="answer-count" title={t('folderView.newAnswers')}>{entry.answeredCount}</span>
+      {/if}
     </span>
   {/if}
 </button>
@@ -176,8 +179,13 @@
     border-radius: 3px; background: Canvas; color: CanvasText; outline: none;
   }
   .pin-badge { flex: 0 0 auto; display: inline-flex; opacity: 0.55; }
-  .note-badge { flex: 0 0 auto; display: inline-flex; opacity: 0.9; padding: 1px; border-radius: 3px; }
+  .note-badge { flex: 0 0 auto; display: inline-flex; align-items: center; opacity: 0.9; padding: 1px; border-radius: 3px; }
   .note-badge:hover { opacity: 1; background: rgba(0,0,0,0.08); }
+  .answer-count {
+    font-size: 9px; font-weight: 700; line-height: 13px;
+    color: #fff; background: #2da44e;
+    border-radius: 7px; padding: 0 4px; margin-left: 2px;
+  }
   @media (prefers-color-scheme: dark) {
     .node:hover { background: rgba(255,255,255,0.07); }
     .node.active { background: rgba(255,255,255,0.13); }

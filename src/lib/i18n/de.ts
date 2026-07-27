@@ -465,6 +465,7 @@ export const de: Record<keyof Messages, string> = {
   'folderView.noFolder': 'Kein Ordner',
   'folderView.reveal': 'Im Finder anzeigen',
   'folderView.openNote': 'Notiz öffnen',
+  'folderView.newAnswers': 'Neue Antworten deines Agenten',
   'folderView.rename': 'Umbenennen',
   'folderView.sortBy': 'Sortieren nach',
   'folderView.sortEdited': 'Zuletzt bearbeitet',

@@ -472,6 +472,7 @@ export const en = {
   'folderView.noFolder': 'No folder',
   'folderView.reveal': 'Reveal in Finder',
   'folderView.openNote': 'Open note',
+  'folderView.newAnswers': 'New answers from your agent',
   'folderView.rename': 'Rename',
   'folderView.sortBy': 'Sort by',
   'folderView.sortEdited': 'Last edited',

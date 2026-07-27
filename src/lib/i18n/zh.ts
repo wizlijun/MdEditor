@@ -498,6 +498,7 @@ export const zh: Record<keyof Messages, string> = {
   'folderView.noFolder': '无文件夹',
   'folderView.reveal': '在访达中显示',
   'folderView.openNote': '打开笔记',
+  'folderView.newAnswers': '来自 agent 的新回答',
   'folderView.rename': '重命名',
   'folderView.sortBy': '排序方式',
   'folderView.sortEdited': '最后编辑时间',
