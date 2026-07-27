@@ -126,3 +126,50 @@ describe('front-matter', () => {
     expect(t.frontmatter).toBeNull()
   })
 })
+
+describe('question / answer properties', () => {
+  const sample = [
+    '- 被批注的原文',
+    '  type:: annotation',
+    '  line:: 142',
+    '  - 这里为什么能到 90%?',
+    '    type:: question',
+    '    status:: answered',
+    '    - ✦ 因为前缀高度重复',
+    '      answered:: 2026-07-27T14:22:00.000Z',
+    '      by:: claude-code',
+    '',
+  ].join('\n')
+
+  it('parses type:: question with status', () => {
+    const t = parseOutline(sample)
+    const q = [...t.nodes.values()].find(n => n.source === 'question')!
+    expect(q).toBeDefined()
+    expect(q.status).toBe('answered')
+    expect(q.content).toBe('这里为什么能到 90%?')
+  })
+
+  it('parses answered::/by:: on the ✦ answer node instead of swallowing them into content', () => {
+    const t = parseOutline(sample)
+    const a = [...t.nodes.values()].find(n => n.content.startsWith('✦'))!
+    expect(a.answeredAt).toBe('2026-07-27T14:22:00.000Z')
+    expect(a.answeredBy).toBe('claude-code')
+    expect(a.content).toBe('✦ 因为前缀高度重复')
+  })
+
+  it('roundtrips question and answer properties', () => {
+    const t = parseOutline(sample)
+    expect(serializeOutline(t)).toBe(sample)
+  })
+
+  it('question without status serializes status:: open', () => {
+    const t = parseOutline('- 为什么?\n  type:: question\n')
+    expect(serializeOutline(t)).toContain('status:: open')
+  })
+
+  it('ignores invalid status values', () => {
+    const t = parseOutline('- q?\n  type:: question\n  status:: banana\n')
+    const q = [...t.nodes.values()][0]
+    expect(q.status).toBeUndefined()
+  })
+})

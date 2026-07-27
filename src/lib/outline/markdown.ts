@@ -1,7 +1,7 @@
 // src/lib/outline/markdown.ts
 import { createTree, addNode, childrenOf, newId, type OutlineTree, type OutlineNode, type NodeSource } from './model'
 
-const PROP_RE = /^(type|line|id|collapsed|created|updated):: (.*)$/
+const PROP_RE = /^(type|line|id|collapsed|created|updated|status|answered|by):: (.*)$/
 
 /** 文件头部 YAML front-matter 块。必须从第 0 字符开始,--- 独占一行。 */
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/
@@ -29,9 +29,12 @@ export function serializeOutline(tree: OutlineTree, persistIds: Set<string> = ne
       if (n.source !== 'manual') {
         lines.push(`${indent}  type:: ${n.source}`)
         if (n.anchorLine != null) lines.push(`${indent}  line:: ${n.anchorLine}`)
+        if (n.source === 'question') lines.push(`${indent}  status:: ${n.status ?? 'open'}`)
       }
       if (n.createdAt) lines.push(`${indent}  created:: ${n.createdAt}`)
       if (n.updatedAt) lines.push(`${indent}  updated:: ${n.updatedAt}`)
+      if (n.answeredAt) lines.push(`${indent}  answered:: ${n.answeredAt}`)
+      if (n.answeredBy) lines.push(`${indent}  by:: ${n.answeredBy}`)
       if (n.persistId === true || persistIds.has(n.id)) {
         lines.push(`${indent}  id:: ${n.id}`)
       }
@@ -92,11 +95,16 @@ export function parseOutline(text: string): OutlineTree {
         const prop = body.match(PROP_RE)
         if (prop) {
           const [, key, value] = prop
-          if (key === 'type' && ['toc', 'highlight', 'wikilink', 'annotation', 'note'].includes(value)) current.source = value as NodeSource
+          if (key === 'type' && ['toc', 'highlight', 'wikilink', 'annotation', 'note', 'question'].includes(value)) current.source = value as NodeSource
           else if (key === 'line') current.anchorLine = parseInt(value, 10)
           else if (key === 'collapsed') current.collapsed = value === 'true'
           else if (key === 'created') current.createdAt = value
           else if (key === 'updated') current.updatedAt = value
+          else if (key === 'status') {
+            if (value === 'open' || value === 'answered' || value === 'closed') current.status = value
+          }
+          else if (key === 'answered') current.answeredAt = value
+          else if (key === 'by') current.answeredBy = value
           else if (key === 'id') {
             // 重键：换 id 需迁移 map（此时尚无子节点，直接迁移 map）
             // Invariant: id:: precedes any children of this node.
