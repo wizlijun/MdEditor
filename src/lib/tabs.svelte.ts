@@ -356,7 +356,12 @@ export async function reloadTabFromDisk(path: string): Promise<void> {
 
 export function setContent(id: string, md: string): void {
   const t = tabs.find((x) => x.id === id)
-  if (t) t.currentContent = md
+  if (!t) return
+  t.currentContent = md
+  // 提问捕获:含 {>> 才动态加载(键入热路径,先做廉价字面判断)
+  if (t.filePath && md.includes('{>>')) {
+    void import('./outline/question-capture').then((m) => m.scheduleQuestionCapture(t.filePath, md))
+  }
 }
 
 /**
