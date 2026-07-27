@@ -57,6 +57,13 @@
 .moraya-editor .moraya-note-anchor::before {
   content: '※';
 }
+/* 提问批注({>>…<<} 内含 ?/？):徽标换 ⁇(U+2047),一眼区分「我的备注」与「抛给 agent 的问题」 */
+.moraya-editor .note-badge[data-note*='?']::before,
+.moraya-editor .note-badge[data-note*='？']::before,
+.moraya-editor .moraya-note-anchor[data-note*='?']::before,
+.moraya-editor .moraya-note-anchor[data-note*='？']::before {
+  content: '⁇';
+}
 .moraya-editor .note-badge:hover,
 .moraya-editor .moraya-note-anchor:hover {
   color: #8a6508;
