@@ -213,3 +213,63 @@ describe('syncAutoItems — annotation note children', () => {
     expect(kids.find(k => k.source === 'note')!.content).toBe('n2')
   })
 })
+
+describe('question lifecycle', () => {
+  const qMd = '正文 {==原文==}{>>这里为什么能到 90%?<<}\n'
+  const plainMd = '正文 {==原文==}{>>只是个备注<<}\n'
+  const noteChild = (tree: ReturnType<typeof createTree>) => {
+    const anno = [...tree.nodes.values()].find(n => n.source === 'annotation')!
+    return childrenOf(tree, anno.id).find(c => c.source === 'note' || c.source === 'question')!
+  }
+
+  it('annotation with ? derives a question child with status open', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    const c = noteChild(tree)
+    expect(c.source).toBe('question')
+    expect(c.status).toBe('open')
+  })
+
+  it('annotation without ? stays a plain note child', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(plainMd))
+    const c = noteChild(tree)
+    expect(c.source).toBe('note')
+    expect(c.status).toBeUndefined()
+  })
+
+  it('re-sync preserves agent-set answered status', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    noteChild(tree).status = 'answered'          // 模拟 agent 作答后从盘上读回
+    syncAutoItems(tree, deriveAutoItems(qMd))    // 主文档重派生
+    expect(noteChild(tree).status).toBe('answered')
+  })
+
+  it('editing the note to add ? upgrades it to an open question', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(plainMd))
+    syncAutoItems(tree, deriveAutoItems('正文 {==原文==}{>>只是个备注,对吗?<<}\n'))
+    const c = noteChild(tree)
+    expect(c.source).toBe('question')
+    expect(c.status).toBe('open')
+  })
+
+  it('removing the ? demotes question back to note and drops status', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    noteChild(tree).status = 'answered'
+    syncAutoItems(tree, deriveAutoItems('正文 {==原文==}{>>结论已明<<}\n'))
+    const c = noteChild(tree)
+    expect(c.source).toBe('note')
+    expect(c.status).toBeUndefined()
+  })
+
+  it('annotation deleted from md demotes question child to manual, keeping text', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    syncAutoItems(tree, deriveAutoItems('正文没有批注了\n'))
+    const kept = [...tree.nodes.values()].find(n => n.content === '这里为什么能到 90%?')!
+    expect(kept.source).toBe('manual')
+  })
+})
