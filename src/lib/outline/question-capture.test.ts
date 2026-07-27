@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mdHasQuestionAnnotation, scheduleQuestionCapture } from './question-capture'
+import { mdHasQuestionAnnotation, mdDerivesQuestion, scheduleQuestionCapture } from './question-capture'
 
 describe('mdHasQuestionAnnotation', () => {
   it('detects a question inside wrapped annotation', () => {
@@ -11,6 +11,24 @@ describe('mdHasQuestionAnnotation', () => {
   it('ignores plain annotations and bare question marks', () => {
     expect(mdHasQuestionAnnotation('x {>>备注<<} 正文里的问号?')).toBe(false)
     expect(mdHasQuestionAnnotation('没有批注')).toBe(false)
+  })
+})
+
+describe('mdDerivesQuestion — fence-aware real-question gate', () => {
+  it('true when an annotation carries a question', () => {
+    expect(mdDerivesQuestion('文 {==x==}{>>为什么?<<}')).toBe(true)
+  })
+  it('true for a point annotation question (full-width)', () => {
+    expect(mdDerivesQuestion('末尾{>>这个对吗？<<}')).toBe(true)
+  })
+  it('false for a plain annotation', () => {
+    expect(mdDerivesQuestion('文 {>>备注<<}')).toBe(false)
+  })
+  it('false when the only question annotation sits inside a code fence', () => {
+    // The cheap gate would false-positive here; the derive-based gate must not —
+    // otherwise the source file gets mirrored into the vault for nothing.
+    expect(mdHasQuestionAnnotation('```\n{>>为什么?<<}\n```\n')).toBe(true)
+    expect(mdDerivesQuestion('```\n{>>为什么?<<}\n```\n')).toBe(false)
   })
 })
 

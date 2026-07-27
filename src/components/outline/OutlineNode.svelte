@@ -134,8 +134,10 @@
   /** 追问自动重开:在 answered 问题下追加/修改 ● 手写内容 = 把问题拨回 open(spec §4)。
    *  覆盖三条提交路径:blur→commitEdit / Enter 键 / ArrowUp|Down 键。 */
   function reopenAnsweredAncestor() {
+    const seen = new Set<string>()   // 环保护:坏树的 parentId 环不得死循环冻结 UI
     let pid = node.parentId
-    while (pid) {
+    while (pid && !seen.has(pid)) {
+      seen.add(pid)
       const p = outline.tree.nodes.get(pid)
       if (!p) break
       if (p.source === 'question') {

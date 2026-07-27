@@ -272,4 +272,14 @@ describe('question lifecycle', () => {
     const kept = [...tree.nodes.values()].find(n => n.content === '这里为什么能到 90%?')!
     expect(kept.source).toBe('manual')
   })
+
+  it('clears question status when the annotation is deleted (no stale answered on the demoted node)', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    noteChild(tree).status = 'answered'
+    syncAutoItems(tree, deriveAutoItems('正文没有批注了\n'))
+    const kept = [...tree.nodes.values()].find(n => n.content === '这里为什么能到 90%?')!
+    expect(kept.source).toBe('manual')
+    expect(kept.status).toBeUndefined()
+  })
 })
