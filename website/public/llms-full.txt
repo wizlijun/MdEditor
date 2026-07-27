@@ -123,8 +123,8 @@ Sweep protocol — how to answer:
 5. Set the question's `status::` to `answered`.
 
 Hard rules: never set `status:: closed` (only the human closes a
-question), never edit the main `.md`, never modify human-written (`●`)
-bullets, never touch any other part of the outline.
+question), never edit the main `.md`, never modify any existing bullet
+that is not your own `✦` answer, never touch any other part of the outline.
 
 ### Vault conventions file
 
