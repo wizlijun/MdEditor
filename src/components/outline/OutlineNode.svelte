@@ -131,7 +131,8 @@
     bump(); markDirty()
   }
 
-  /** 追问自动重开:在 answered 问题下追加/修改 ● 手写内容 = 把问题拨回 open(spec §4) */
+  /** 追问自动重开:在 answered 问题下追加/修改 ● 手写内容 = 把问题拨回 open(spec §4)。
+   *  覆盖三条提交路径:blur→commitEdit / Enter 键 / ArrowUp|Down 键。 */
   function reopenAnsweredAncestor() {
     let pid = node.parentId
     while (pid) {
@@ -198,6 +199,7 @@
         bump(); markDirty(); focusNode(id)
         return
       }
+      if (el.value !== node.content) reopenAnsweredAncestor()
       setNodeContent(node, el.value)
       // 行首 Enter → 上方建兄弟（render.cljs handle-key-down 语义）
       const id = atStart && el.value.length > 0
@@ -219,7 +221,7 @@
       if (nb) {
         e.preventDefault()
         if (noteLike(node.source)) commitEdit(el.value)
-        else { setNodeContent(node, el.value); bump(); markDirty() }
+        else { if (el.value !== node.content) reopenAnsweredAncestor(); setNodeContent(node, el.value); bump(); markDirty() }
         focusNode(nb.source === 'manual' || noteLike(nb.source) ? nb.id : null)
       }
       return
