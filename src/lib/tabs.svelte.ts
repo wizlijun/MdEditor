@@ -614,6 +614,7 @@ export async function reloadFromDisk(id: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
   if (!t || !t.pendingExternal) return
   const p = t.pendingExternal
+  const oldContent = t.currentContent
   t.initialContent = p.content
   t.currentContent = p.content
   t.lastKnownMtime = p.mtime
@@ -621,6 +622,14 @@ export async function reloadFromDisk(id: string): Promise<void> {
   t.externalState = 'fresh'
   t.externalBannerDismissed = false
   t.pendingExternal = undefined
+  // 与 reloadTabFromDisk 一致地广播:OutlineEditor 只在这个事件上重建大纲树,
+  // 少了它,横幅上点「重新加载」大纲不会刷新(RichEditor 另有 currentContent
+  // 入站 effect 兜底,所以此前只有大纲这条链是断的)。
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('mdeditor:auto-reloaded', {
+      detail: { tabId: t.id, oldContent, newContent: p.content },
+    }))
+  }
 }
 
 /**

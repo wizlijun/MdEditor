@@ -6,6 +6,10 @@ import { decide, type ExternalEvent } from './external-state'
 import * as self from './file-watcher.svelte'
 import { isIOS } from './platform.svelte'
 
+/** `.note.md` / `.notes.md` —— 与 outline gate 同一套后缀判定。刻意不 import
+ *  gate 模块:它在模块加载期就读平台信息,会把这个纯逻辑文件拖进 DOM 依赖。 */
+const OUTLINE_SUFFIX_RE = /\.notes?\.md$/i
+
 /**
  * Visit every open tab, compare its known state to disk, and apply the
  * resulting decision. Called on window-focus and as a fallback when the
@@ -50,7 +54,12 @@ async function checkTab(tab: Tab): Promise<void> {
     const hash = await sha256Hex(content)
     event = { type: 'modified', snapshot: { mtime: stat.mtime, hash, content } }
   }
-  const decision = decide(tab, event)
+  // 大纲笔记 tab 由 OutlineEditor 渲染,树可随时从文本重建 → 干净时可静默重载。
+  // iOS 上没有大纲编辑器,.note.md 就是普通 rich tab,必须仍走横幅。
+  const isOutlineNote = tab.kind === 'markdown'
+    && OUTLINE_SUFFIX_RE.test(tab.filePath)
+    && !(await isIOS().catch(() => false))
+  const decision = decide({ ...tab, isOutlineNote }, event)
   applyDecision(tab, decision)
 }
 

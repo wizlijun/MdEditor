@@ -33,6 +33,12 @@ export interface TabSnapshot {
    * cleanly.
    */
   mode: 'source' | 'rich'
+  /**
+   * 该 tab 是大纲笔记(`.note.md`)。它由 OutlineEditor 渲染,用的是可随时从文本
+   * 重建的 outline store —— 没有 ProseMirror 那种「内部状态会把旧内容反向写回磁盘」
+   * 的顾虑,所以内容干净时允许走 autoReload 快路径(mode 名义上仍是 rich)。
+   */
+  isOutlineNote?: boolean
 }
 
 export type Decision =
@@ -60,7 +66,7 @@ export function decide(tab: TabSnapshot, event: ExternalEvent): Decision {
   // show the pre-change content, and the next keystroke or destroy-flush
   // would silently overwrite the disk's new version. Force the banner so
   // the user explicitly chooses Reload vs. Overwrite.
-  if (dirty || tab.mode === 'rich') {
+  if (dirty || (tab.mode === 'rich' && !tab.isOutlineNote)) {
     return { kind: 'showChanged', snapshot: event.snapshot }
   }
   return { kind: 'autoReload', snapshot: event.snapshot }

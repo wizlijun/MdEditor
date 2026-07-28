@@ -15,10 +15,14 @@
   import MirrorSiblingsBanner from './MirrorSiblingsBanner.svelte'
   import SyncToVaultBanner from './SyncToVaultBanner.svelte'
   import { offsetToLineCol, lineColToOffset } from '../lib/cursor-preserve'
+  import { captureScroll } from '../lib/scroll-keep'
   import { convertFileSrc } from '@tauri-apps/api/core'
   import { migrateTempResources, getTempDir } from '../lib/paste-resources'
 
   let { tab }: { tab: Tab } = $props()
+
+  /** 编辑器栈根元素:重载时在其内部找滚动容器做保位,避免跨面板误伤 */
+  let stackEl: HTMLDivElement | undefined = $state()
 
   // ── Clipboard resource migration ──
   // When an untitled doc is first saved, move pasted temp resources to
@@ -62,22 +66,30 @@
         | { tabId: string; oldContent: string; newContent: string }
         | undefined
       if (!detail || detail.tabId !== tab.id) return
-      if (tab.mode !== 'source') return
       const ta = document.querySelector<HTMLTextAreaElement>(
         `textarea.src-textarea[data-tab-id="${tab.id}"]`,
       )
-      if (!ta) return
-      const lc = offsetToLineCol(detail.oldContent, ta.selectionStart)
-      const off = lineColToOffset(detail.newContent, lc.line, lc.col)
-      // Wait one tick for the bound textarea value to refresh
-      queueMicrotask(() => { ta.selectionStart = ta.selectionEnd = off })
+      // 滚动保位:重载把内容整体换掉,浏览器会把滚动清零。source 滚的是 textarea 本身,
+      // rich 滚的是 .scroll 容器。在 stack 内查询,避免跨面板误伤。
+      const scroller = tab.mode === 'source'
+        ? ta
+        : stackEl?.querySelector<HTMLElement>('.rich-pane .scroll') ?? null
+      const restoreScroll = captureScroll(scroller)
+
+      if (tab.mode === 'source' && ta) {
+        const lc = offsetToLineCol(detail.oldContent, ta.selectionStart)
+        const off = lineColToOffset(detail.newContent, lc.line, lc.col)
+        // Wait one tick for the bound textarea value to refresh
+        queueMicrotask(() => { ta.selectionStart = ta.selectionEnd = off })
+      }
+      restoreScroll()
     }
     window.addEventListener('mdeditor:auto-reloaded', handler)
     return () => window.removeEventListener('mdeditor:auto-reloaded', handler)
   })
 </script>
 
-<div class="editor-stack">
+<div class="editor-stack" bind:this={stackEl}>
   <ExternalChangeBanner {tab} />
   <SyncOriginBanner {tab} />
   <MirrorSiblingsBanner {tab} />

@@ -55,6 +55,10 @@ async function watchCompanion(notePath: string, mainPath: string): Promise<void>
   try {
     const { watchImmediate } = await import('@tauri-apps/plugin-fs')
     const stop = await watchImmediate(notePath, () => {
+      // 大纲编辑器挂着同一份笔记时,由它负责重载(重载后会顺手调 setAnswersFromText
+      // 刷新本索引)。这里再插一脚会走 loadAnswersFor 的「用内存树」分支,反而拿旧树
+      // 遮蔽掉盘上的新内容 —— 单一归属,不重叠。
+      if (outline.docPath === notePath) return
       // 合并抖动;自己写盘引发的回调也会走到这里,重载是幂等的,无害。
       if (reloadTimer) clearTimeout(reloadTimer)
       reloadTimer = setTimeout(() => { void loadAnswersFor(mainPath) }, 300)
