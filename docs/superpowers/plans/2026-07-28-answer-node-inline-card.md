@@ -141,7 +141,8 @@ describe('fenced answer nodes', () => {
     '  - 为什么?',
     '    type:: question',
     '    status:: answered',
-    '    - ```markdown',
+    // 正文含 ```python,故外围栏必须更长(4 反引号)——这正是 wrapAnswerBody 的算法
+    '    - ````markdown',
     '      第一段。',
     '',
     '      - 列表项',
@@ -150,7 +151,7 @@ describe('fenced answer nodes', () => {
     '      ```python',
     '      x = 1',
     '      ```',
-    '      ```',
+    '      ````',
     '      type:: answer',
     '      by:: claude-code',
     '      answered:: 2026-07-28T14:22:00Z',
@@ -188,6 +189,15 @@ describe('fenced answer nodes', () => {
     const t = parseOutline('- ```markdown\n  未闭合\n')
     const n = [...t.nodes.values()][0]
     expect(n.content).toBe('```markdown\n未闭合')
+  })
+
+  it('a shorter nested fence does not close the outer fence', () => {
+    // 外围栏 4 反引号、正文里的 ``` 只有 3 → 不构成闭合
+    const md = '- ````markdown\n  a\n  ```\n  b\n  ```\n  c\n  ````\n  type:: answer\n'
+    const t = parseOutline(md)
+    const a = [...t.nodes.values()].find(n => n.source === 'answer')!
+    expect(answerBodyOf(a)).toBe('a\n```\nb\n```\nc')
+    expect(serializeOutline(t)).toBe(md)
   })
 
   it('parses status:: adopted', () => {
