@@ -38,19 +38,22 @@
 }
 .moraya-editor .note-badge,
 .moraya-editor .moraya-note-anchor {
-  display: inline-block;
+  /* 必须是 inline,不能是 inline-block —— 这是标题/表格里行高变大的真正原因。
+     非替换 inline 盒对行框高度的贡献恰好等于它的 line-height(这里是 0),字形
+     照常绘制但完全不参与布局。inline-block 则按 margin 盒高度参与,且其基线取自
+     内部行框:line-height:0 时那条基线落在盒顶之上,与父级基线对齐后整个盒子被推到
+     基线以下,凭空给行框加出下伸部 —— 字号越大越明显(大标题),行距越紧越明显(表格)。
+     只加 line-height:0(596b1c9)治不了这一点,因为病根在 display。
+     抬升靠相对偏移,不用 vertical-align:super(那个会实打实撑高行框)。 */
+  display: inline;
+  line-height: 0;
   cursor: pointer;
   user-select: none;
   color: #b8860b;
   font-size: 0.72em;
-  /* Raise like a superscript WITHOUT growing the line box: `vertical-align:
-     super` on an inline-block enlarges the line height (badly visible on large
-     headings). Relative offset shifts it visually and leaves line metrics
-     untouched. line-height:0 keeps the badge from contributing its own leading. */
   vertical-align: baseline;
   position: relative;
   top: -0.4em;
-  line-height: 0;
   margin: 0 1px;
 }
 .moraya-editor .note-badge::before,
