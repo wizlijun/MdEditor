@@ -107,24 +107,41 @@ Sweep protocol — how to answer:
 2. Read the source context: the parent annotation node's `line::`
    points at the annotated line in the companion main document
    (`xxx.md` beside `xxx.note.md`).
-3. Write a short answer as an indented child bullet of the question
-   node, prefixed with `✦ ` and followed by two property lines:
+3. Write the answer as a single child bullet of the question node, with
+   the whole answer body wrapped in a markdown code fence. The fence
+   makes arbitrary markdown (lists, `key::`-looking lines, blank lines,
+   nested code blocks) opaque to the outline parser, so an answer can be
+   as long and as richly formatted as it needs to be:
 
        - why is this claim true?
          type:: question
          status:: answered
-         - ✦ because …
-           answered:: 2026-07-27T14:22:00Z
+         - ````markdown
+           Because …
+
+           - a list item is fine
+
+           ```python
+           nested_code = "is fine too"
+           ```
+           ````
+           type:: answer
+           answered:: 2026-07-28T14:22:00Z
            by:: your-agent-name
 
-4. A long answer goes to its own file under `answers/`
-   (`answers/yyyy-MM-dd-<slug>.md`); keep only a one-line `✦` summary
-   plus a link under the question node.
-5. Set the question's `status::` to `answered`.
+   The opening fence must be longer than the longest run of backticks
+   inside the answer (four here, because the body contains a three-tick
+   block). Write exactly one answer node per question — answering again
+   replaces it. Keep the property lines in the order shown.
+4. Set the question's `status::` to `answered`.
 
-Hard rules: never set `status:: closed` (only the human closes a
-question), never edit the main `.md`, never modify any existing bullet
-that is not your own `✦` answer, never touch any other part of the outline.
+The human reads the answer inline under the annotated paragraph and may
+insert it into the document; doing so sets `status:: adopted`.
+
+Hard rules: never set `status:: closed` or `status:: adopted` (only the
+human closes or adopts), never edit the main `.md`, never modify any
+existing bullet that is not your own answer node, never touch any other
+part of the outline.
 
 ### Vault conventions file
 
