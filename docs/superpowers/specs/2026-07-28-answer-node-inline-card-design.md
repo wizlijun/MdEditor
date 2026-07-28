@@ -137,8 +137,8 @@ interface AnswerEntry {
 
 点「采纳入正文」:
 
-1. 用 moraya-core 的 `parseMarkdown(body)` 把答复解析成 PM 文档,取其内容作为 slice,**插入到该块之后**——一次 transaction、一次撤销(⌘Z)即回退。
-2. 插入的是**干净 markdown**:无 `✦`、无出处、无 HTML 注释标记。你确认过,它就是你的正文(信念 3)。
+1. 用 moraya-core 的 `parseMarkdown(body)` 把答复解析成 PM 文档,内容包进 **blockquote 节点**,**插入到该块之后**——一次 transaction、一次撤销(⌘Z)即回退。用 schema 节点包裹而非给每行加 `> `,嵌套列表/代码块才能正确成块。
+2. 插入的是**引用块形式的干净 markdown**:仍无 `✦`、无出处、无 HTML 注释标记,但用 `>` 让「后续补充进来的内容」与你原本的正文一眼可辨。(初版为无格式插入,实测看不出是补充,故改为引用块。)
 3. 同步把 `.note.md` 里该 question 置 `status:: adopted`:
    - 大纲已挂载该 note → 改内存树 + `markDirty()`(走既有 intent-save 落盘);
    - 未挂载 → 读盘 → 解析 → 改 status → 序列化 → 写回(复用 `question-capture` 的写盘防线:hash 比对幂等、绝不用空内容盖非空)。
