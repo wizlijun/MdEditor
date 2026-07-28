@@ -35,6 +35,9 @@
   import { noteHomeForRead, planNoteHome } from '../../lib/outline/note-home'
   import { sotvaultStore, syncSourceToVaultAsHome, refreshSotvault } from '../../lib/sotvault.svelte'
   import { openSettings } from '../../lib/ui-state.svelte'
+  import { decideCompanionReload } from '../../lib/outline/companion-reload'
+  import { captureScroll } from '../../lib/scroll-keep'
+  import { setAnswersFromText } from '../../lib/note-anno/answers-store.svelte'
 
   let { tab = null, mainTab = null, embedded = false, onWikilink = null, onCollapse = null, linkedRefs = null, focusRootId = undefined, onFocusChange = null }: {
     /** tab 模式：单独打开的 .note.md tab —— 纯大纲编辑器 */
@@ -283,7 +286,16 @@
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { tabId: string; newContent: string } | undefined
       if (!detail || !tab || detail.tabId !== tab.id) return
-      untrack(() => { void attachDoc(tab.filePath, detail.newContent, null) })
+      untrack(() => {
+        const restore = captureScroll(bodyEl)   // 重建整棵树会把滚动清零
+        void attachDoc(tab.filePath, detail.newContent, null).then(async () => {
+          // 把基线推进到刚载入的内容:伴生监听同样会收到这次变更,基线对得上才会
+          // 判成「自写回声」而忽略,否则会紧跟着再重载一次(白闪一下)。
+          noteDiskHash = await sha256Hex(detail.newContent).catch(() => null)
+          setAnswersFromText(tab.filePath, detail.newContent)
+          restore()
+        })
+      })
     }
     window.addEventListener('mdeditor:auto-reloaded', handler)
     return () => window.removeEventListener('mdeditor:auto-reloaded', handler)
@@ -597,14 +609,75 @@
       await flushDisk()
     }
   }
+  /** 主文档当前文本(用于重建时的 auto 派生) */
+  function currentMainContent(): string | null {
+    return mainTab ? mainTab.currentContent
+      : tabs.find(x => x.filePath === mainPath)?.currentContent ?? null
+  }
+
   async function reloadRemote() {
     const diskText = outline.externalConflict?.diskText ?? ''
     outline.externalConflict = null
     noteDiskHash = await sha256Hex(diskText).catch(() => null)
-    const mc = mainTab ? mainTab.currentContent
-      : tabs.find(x => x.filePath === mainPath)?.currentContent ?? null
-    await attachDoc(notePath, diskText, mc)   // 重置 dirty=false、armed 随内容
+    const restore = captureScroll(bodyEl)
+    await attachDoc(notePath, diskText, currentMainContent())   // 重置 dirty=false、armed 随内容
+    setAnswersFromText(notePath, diskText)   // 正文答复卡片吃同一份文本,不会与大纲不一致
+    restore()
   }
+
+  /**
+   * 伴生 .note.md 被外部改动(别的 agent、或别的设备经 git 同步)后的处理。
+   * 既有 file-watcher 只盯 tab.filePath,覆盖不到 panel 模式下的伴生笔记。
+   * 干净就静默重载、脏则交冲突横幅 —— 与主文档的策略一致,绝不静默盖掉未保存内容。
+   */
+  async function onCompanionChanged(path: string) {
+    if (outline.docPath !== path) return       // 期间切走了文档
+    if (outline.externalConflict) return       // 已有未解决冲突,别再叠加
+    try {
+      const fs = await import('@tauri-apps/plugin-fs')
+      const diskText = await fs.readTextFile(path).catch(() => null)
+      if (diskText == null) return
+      const diskHash = await sha256Hex(diskText).catch(() => null)
+      if (diskHash == null) return
+      const decision = decideCompanionReload({ diskHash, lastHash: noteDiskHash, dirty: outline.dirty })
+      if (decision === 'ignore') return        // 自写回声
+      if (decision === 'conflict') { outline.externalConflict = { diskText }; return }
+      if (outline.docPath !== path) return     // 读盘期间切走了
+      const restore = captureScroll(bodyEl)
+      noteDiskHash = diskHash
+      await attachDoc(path, diskText, currentMainContent())
+      setAnswersFromText(path, diskText)       // 一次读盘,大纲树与答复卡片同源
+      restore()
+    } catch (e) {
+      console.warn('[outline] companion reload failed:', e)
+    }
+  }
+
+  // 装伴生笔记监听:notePath 变则重装,组件卸载则拆除
+  $effect(() => {
+    const path = notePath
+    if (!path) return
+    let stop: (() => void) | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let disposed = false
+    void (async () => {
+      try {
+        const { watchImmediate } = await import('@tauri-apps/plugin-fs')
+        const s = await watchImmediate(path, () => {
+          if (timer) clearTimeout(timer)
+          timer = setTimeout(() => { void onCompanionChanged(path) }, 300)   // 合并抖动
+        })
+        if (disposed) { try { s() } catch { /* 已卸载 */ } } else stop = s
+      } catch {
+        // 文件尚不存在 / 文件系统不支持监听 → 静默降级,切换文档时仍会重新加载
+      }
+    })()
+    return () => {
+      disposed = true
+      if (timer) clearTimeout(timer)
+      if (stop) { try { stop() } catch { /* watcher 已失效 */ } }
+    }
+  })
   async function overwriteLocal() {
     outline.externalConflict = null
     const text = serializeDoc()
