@@ -16,10 +16,17 @@ export function markAdoptedInText(noteText: string, questionContent: string): st
   return serializeOutline(tree)
 }
 
-/** 把答复 markdown 作为干净正文插入到锚点块之后:一次 transaction,⌘Z 即回退。 */
+/**
+ * 把答复插入到锚点块之后,包成引用块(`>`)——采纳进来的内容要一眼看出是后续补充,
+ * 与你原本的正文区分开。仍是干净 markdown:没有 ✦、没有出处标记,只是引用格式。
+ * 一次 transaction,⌘Z 即回退。
+ */
 export function insertAnswerIntoDoc(view: EditorView, entry: AnswerEntry, pos: number): void {
   const parsed = parseMarkdown(entry.body, view.state.schema)
-  view.dispatch(view.state.tr.insert(pos, parsed.content).scrollIntoView())
+  const quote = view.state.schema.nodes.blockquote
+  // 用 schema 节点包裹而不是给每行加 "> ":嵌套列表/代码块也能正确成块
+  const content = quote ? quote.create(null, parsed.content) : parsed.content
+  view.dispatch(view.state.tr.insert(pos, content).scrollIntoView())
 }
 
 /** 回写 .note.md 的 status:: adopted。大纲挂载着同一 note 时改内存树,否则读改写盘。 */
