@@ -21,8 +21,11 @@ Key facts: macOS app (Tauri, system WebView, signed & notarized). Free. Repo: ht
 - Block citation: `((path/to/file.md#b-xxxxxx))` cites one block of a document.
 - Multi-agent handoff: several agents may share one vault. They collaborate by passing `.md` files on disk (one agent's output is the next one's input); the human's `.note.md` annotations are the steering signal. Keep the vault in git so every agent write is diffable and revertible.
 - Q&A loop: an annotation containing `?` becomes a `type:: question` node
-  (`status:: open`) in the companion `.note.md`; agents answer with a `✦`
-  child bullet and set `status:: answered`; only the human sets `closed`.
+  (`status:: open`) in the companion `.note.md`; agents answer with a
+  `type:: answer` child whose body is wrapped in a markdown code fence, and
+  set `status:: answered`. The human reads the answer inline under the
+  annotated paragraph and may insert it into the document. Only the human
+  sets `closed` / `adopted`; agents never edit the main `.md`.
 - Files are the single source of truth; indexes are derived and rebuildable.
 
 ## Optional

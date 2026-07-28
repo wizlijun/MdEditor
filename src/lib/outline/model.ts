@@ -1,6 +1,6 @@
 // src/lib/outline/model.ts
-export type NodeSource = 'toc' | 'highlight' | 'wikilink' | 'annotation' | 'note' | 'question' | 'manual'
-export type QuestionStatus = 'open' | 'answered' | 'closed'
+export type NodeSource = 'toc' | 'highlight' | 'wikilink' | 'annotation' | 'note' | 'question' | 'answer' | 'manual'
+export type QuestionStatus = 'open' | 'answered' | 'closed' | 'adopted'
 
 export interface OutlineNode {
   id: string
@@ -126,4 +126,31 @@ export function isQuestionText(s: string): boolean {
 export function treeHasQuestion(tree: OutlineTree): boolean {
   for (const n of tree.nodes.values()) if (n.source === 'question') return true
   return false
+}
+
+/** 开/闭代码围栏行(≥3 反引号)。答复正文整体被围栏包住,使任意 markdown
+ *  (列表、`key::` 样式的行、嵌套代码块)对大纲解析器完全不透明。 */
+const FENCE_OPEN_RE = /^(`{3,})/
+const FENCE_CLOSE_RE = /^(`{3,})\s*$/
+
+/**
+ * 把答复正文包进自定界围栏。围栏长度 = 正文内最长反引号串 + 1(不少于 3),
+ * 依 CommonMark 规则保证嵌套代码块不会提前闭合。
+ */
+export function wrapAnswerBody(body: string): string {
+  let longest = 0
+  for (const m of body.matchAll(/`+/g)) longest = Math.max(longest, m[0].length)
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  return `${fence}markdown\n${body}\n${fence}`
+}
+
+/** 取答复节点的正文(剥掉首尾围栏行)。无围栏时原样返回(fail open)。 */
+export function answerBodyOf(node: Pick<OutlineNode, 'content'>): string {
+  const lines = node.content.split('\n')
+  const open = lines[0]?.match(FENCE_OPEN_RE)
+  if (!open) return node.content
+  const last = lines.length - 1
+  const close = lines[last]?.match(FENCE_CLOSE_RE)
+  const end = close && close[1].length >= open[1].length ? last : lines.length
+  return lines.slice(1, end).join('\n')
 }

@@ -4,7 +4,8 @@ import {
   createTree, addNode, childrenOf, calculateOrderBetween,
   normalizeSiblingOrders, collectDescendantIds, isValidDropTarget,
   visibleNodes, removeSubtree, setNodeContent, ancestorsOf, newId,
-  isQuestionText, treeHasQuestion, type OutlineTree, type OutlineNode,
+  isQuestionText, treeHasQuestion, wrapAnswerBody, answerBodyOf,
+  type OutlineTree, type OutlineNode,
 } from './model'
 
 function sampleTree(): OutlineTree {
@@ -128,5 +129,35 @@ describe('question helpers', () => {
     }
     addNode(tree, n)
     expect(treeHasQuestion(tree)).toBe(true)
+  })
+})
+
+describe('answer node helpers', () => {
+  it('wrapAnswerBody fences a plain body', () => {
+    expect(wrapAnswerBody('hello\nworld')).toBe('```markdown\nhello\nworld\n```')
+  })
+
+  it('wrapAnswerBody grows the fence past any nested backtick run', () => {
+    const out = wrapAnswerBody('see:\n```python\nx = 1\n```\ndone')
+    expect(out.startsWith('````markdown\n')).toBe(true)
+    expect(out.endsWith('\n````')).toBe(true)
+    // 嵌套的三反引号原样保留
+    expect(out).toContain('```python')
+  })
+
+  it('answerBodyOf strips the fence lines', () => {
+    const node = { content: '```markdown\nhello\n\nworld\n```' } as OutlineNode
+    expect(answerBodyOf(node)).toBe('hello\n\nworld')
+  })
+
+  it('answerBodyOf round-trips wrapAnswerBody', () => {
+    const body = 'a\n\n- x\n- y\n\n```js\nz\n```'
+    const node = { content: wrapAnswerBody(body) } as OutlineNode
+    expect(answerBodyOf(node)).toBe(body)
+  })
+
+  it('answerBodyOf returns content unchanged when there is no fence (fail open)', () => {
+    const node = { content: 'no fence here' } as OutlineNode
+    expect(answerBodyOf(node)).toBe('no fence here')
   })
 })

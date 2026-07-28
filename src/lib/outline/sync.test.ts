@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { syncAutoItems, regenerate } from './sync'
 import { deriveAutoItems } from './derive'
-import { createTree, addNode, childrenOf } from './model'
+import { createTree, addNode, childrenOf, wrapAnswerBody, answerBodyOf } from './model'
 
 const md1 = '# A\n## B\n^^hl^^\n'
 
@@ -281,5 +281,67 @@ describe('question lifecycle', () => {
     const kept = [...tree.nodes.values()].find(n => n.content === '这里为什么能到 90%?')!
     expect(kept.source).toBe('manual')
     expect(kept.status).toBeUndefined()
+  })
+})
+
+describe('answer nodes survive re-derive', () => {
+  const qMd = '正文 {==原文==}{>>为什么?<<}\n'
+  const seedAnswer = (tree: ReturnType<typeof createTree>) => {
+    const q = [...tree.nodes.values()].find(n => n.source === 'question')!
+    const a = {
+      id: 'ans-1', parentId: q.id, order: 100,
+      content: wrapAnswerBody('因为前缀高度重复。\n\n- 要点一'),
+      collapsed: false, source: 'answer' as const,
+      answeredBy: 'claude-code', answeredAt: '2026-07-28T14:22:00Z',
+    }
+    tree.nodes.set(a.id, a)
+    q.status = 'answered'
+    return a
+  }
+
+  it('keeps the answer node and its props across a re-derive', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    seedAnswer(tree)
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    const a = tree.nodes.get('ans-1')!
+    expect(a.source).toBe('answer')
+    expect(a.answeredBy).toBe('claude-code')
+    expect(answerBodyOf(a)).toContain('因为前缀高度重复')
+  })
+
+  it('keeps the answer node even when the annotation is deleted from the main doc', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    seedAnswer(tree)
+    syncAutoItems(tree, deriveAutoItems('正文没有批注了\n'))
+    const a = tree.nodes.get('ans-1')!
+    expect(a.source).toBe('answer')
+  })
+})
+
+describe('regenerate keeps agent answers and question state', () => {
+  const qMd = '正文 {==原文==}{>>为什么?<<}\n'
+
+  it('survives 重新从原文提取: answer kept, re-attached, status restored', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    const q0 = [...tree.nodes.values()].find(n => n.source === 'question')!
+    q0.status = 'answered'
+    tree.nodes.set('ans-r', {
+      id: 'ans-r', parentId: q0.id, order: 100,
+      content: wrapAnswerBody('答复正文'), collapsed: false,
+      source: 'answer', answeredBy: 'claude-code',
+    })
+
+    regenerate(tree, deriveAutoItems(qMd))
+
+    const a = tree.nodes.get('ans-r')
+    expect(a).toBeDefined()                       // 绝不能被全量重建抹掉
+    expect(a!.source).toBe('answer')
+    expect(a!.answeredBy).toBe('claude-code')
+    const q1 = [...tree.nodes.values()].find(n => n.source === 'question')!
+    expect(q1.status).toBe('answered')            // 状态还原,不回落 open
+    expect(a!.parentId).toBe(q1.id)               // 重新挂回同一问题
   })
 })
