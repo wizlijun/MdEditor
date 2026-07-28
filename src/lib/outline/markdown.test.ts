@@ -1,7 +1,7 @@
 // src/lib/outline/markdown.test.ts
 import { describe, it, expect } from 'vitest'
 import { serializeOutline, parseOutline } from './markdown'
-import { createTree, addNode, type OutlineTree } from './model'
+import { createTree, addNode, answerBodyOf, type OutlineTree } from './model'
 
 function roundTrip(md: string): string {
   return serializeOutline(parseOutline(md))
@@ -199,5 +199,78 @@ describe('property value robustness (file-over-app: tolerate trailing whitespace
   it('does not promote a plain note/manual node without a valid status', () => {
     const t = parseOutline('- 判断力吗？\n  type:: note\n')
     expect([...t.nodes.values()][0].source).toBe('note')
+  })
+})
+
+describe('fenced answer nodes', () => {
+  const sample = [
+    '- 原文',
+    '  type:: annotation',
+    '  line:: 12',
+    '  - 为什么?',
+    '    type:: question',
+    '    status:: answered',
+    // 正文含 ```python,故外围栏必须更长(4 反引号)——这正是 wrapAnswerBody 的算法
+    '    - ````markdown',
+    '      第一段。',
+    '',
+    '      - 列表项',
+    '      key:: 看着像属性但不是',
+    '',
+    '      ```python',
+    '      x = 1',
+    '      ```',
+    '      ````',
+    '      type:: answer',
+    '      answered:: 2026-07-28T14:22:00Z',
+    '      by:: claude-code',
+    '',
+  ].join('\n')
+
+  it('parses the fenced block as one answer node', () => {
+    const t = parseOutline(sample)
+    const a = [...t.nodes.values()].find(n => n.source === 'answer')!
+    expect(a).toBeDefined()
+    expect(a.answeredBy).toBe('claude-code')
+    expect(a.answeredAt).toBe('2026-07-28T14:22:00Z')
+  })
+
+  it('keeps list items, key:: lines, blank lines and nested fences inside the body', () => {
+    const t = parseOutline(sample)
+    const a = [...t.nodes.values()].find(n => n.source === 'answer')!
+    const body = answerBodyOf(a)
+    expect(body).toBe('第一段。\n\n- 列表项\nkey:: 看着像属性但不是\n\n```python\nx = 1\n```')
+    // 围栏内的内容绝不产出额外节点
+    expect([...t.nodes.values()].some(n => n.content === '列表项')).toBe(false)
+  })
+
+  it('round-trips the fenced answer byte-for-byte', () => {
+    expect(serializeOutline(parseOutline(sample))).toBe(sample)
+  })
+
+  it('resumes normal parsing after the closing fence', () => {
+    const t = parseOutline(sample)
+    const q = [...t.nodes.values()].find(n => n.source === 'question')!
+    expect(q.status).toBe('answered')      // 闭合围栏后的属性行仍被识别
+  })
+
+  it('fails open on an unclosed fence (content kept, no crash)', () => {
+    const t = parseOutline('- ```markdown\n  未闭合\n')
+    const n = [...t.nodes.values()][0]
+    expect(n.content).toBe('```markdown\n未闭合')
+  })
+
+  it('a shorter nested fence does not close the outer fence', () => {
+    // 外围栏 4 反引号、正文里的 ``` 只有 3 → 不构成闭合
+    const md = '- ````markdown\n  a\n  ```\n  b\n  ```\n  c\n  ````\n  type:: answer\n'
+    const t = parseOutline(md)
+    const a = [...t.nodes.values()].find(n => n.source === 'answer')!
+    expect(answerBodyOf(a)).toBe('a\n```\nb\n```\nc')
+    expect(serializeOutline(t)).toBe(md)
+  })
+
+  it('parses status:: adopted', () => {
+    const t = parseOutline('- q?\n  type:: question\n  status:: adopted\n')
+    expect([...t.nodes.values()][0].status).toBe('adopted')
   })
 })
