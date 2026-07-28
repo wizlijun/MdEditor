@@ -319,3 +319,29 @@ describe('answer nodes survive re-derive', () => {
     expect(a.source).toBe('answer')
   })
 })
+
+describe('regenerate keeps agent answers and question state', () => {
+  const qMd = '正文 {==原文==}{>>为什么?<<}\n'
+
+  it('survives 重新从原文提取: answer kept, re-attached, status restored', () => {
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(qMd))
+    const q0 = [...tree.nodes.values()].find(n => n.source === 'question')!
+    q0.status = 'answered'
+    tree.nodes.set('ans-r', {
+      id: 'ans-r', parentId: q0.id, order: 100,
+      content: wrapAnswerBody('答复正文'), collapsed: false,
+      source: 'answer', answeredBy: 'claude-code',
+    })
+
+    regenerate(tree, deriveAutoItems(qMd))
+
+    const a = tree.nodes.get('ans-r')
+    expect(a).toBeDefined()                       // 绝不能被全量重建抹掉
+    expect(a!.source).toBe('answer')
+    expect(a!.answeredBy).toBe('claude-code')
+    const q1 = [...tree.nodes.values()].find(n => n.source === 'question')!
+    expect(q1.status).toBe('answered')            // 状态还原,不回落 open
+    expect(a!.parentId).toBe(q1.id)               // 重新挂回同一问题
+  })
+})
