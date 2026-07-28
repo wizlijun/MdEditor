@@ -117,7 +117,11 @@ const criticAnnotationExtension: TokenizerAndRendererExtension = {
     return undefined
   },
   renderer(token: any) {
-    const badge = `<sup class="crit-badge" title="${htmlEscape(String(token.note))}">※</sup>`
+    const note = String(token.note)
+    // 批注含半角/全角问号 = 向 agent 提问,徽标用 ⁇(U+2047),与编辑器一致
+    // (isQuestionText 约定,spec 2026-07-27-annotation-qa-loop)。
+    const glyph = /[?？]/.test(note) ? '⁇' : '※'
+    const badge = `<sup class="crit-badge" title="${htmlEscape(note)}">${glyph}</sup>`
     if (!token.tokens?.length) return badge
     return `<mark class="crit-anno">${this.parser.parseInline(token.tokens)}</mark>${badge}`
   },

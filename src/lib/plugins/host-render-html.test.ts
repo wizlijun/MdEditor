@@ -172,4 +172,18 @@ describe('CriticMarkup annotations in exported HTML', () => {
     const html = renderMarkdownInline('x {>>never closed')
     expect(html).not.toContain('crit-badge')
   })
+
+  it('renders a question annotation (note contains ?) with the ⁇ badge', () => {
+    const half = renderMarkdownInline('a {==bc==}{>>why though?<<} d')
+    expect(half).toContain('>⁇</sup>')
+    expect(half).not.toContain('>※</sup>')
+    const full = renderMarkdownInline('end{>>这样对吗？<<}')
+    expect(full).toContain('>⁇</sup>')
+  })
+
+  it('keeps the ※ badge for a plain (non-question) note', () => {
+    const html = renderMarkdownInline('a {==bc==}{>>just a note<<} d')
+    expect(html).toContain('>※</sup>')
+    expect(html).not.toContain('>⁇</sup>')
+  })
 })
