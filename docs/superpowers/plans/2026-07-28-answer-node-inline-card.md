@@ -634,9 +634,24 @@ git commit -m "feat(note-anno): lazy answer index store for the active document"
 
 ```typescript
 import { describe, it, expect } from 'vitest'
-import { schema } from '@moraya/core'
+import { Schema } from 'prosemirror-model'
 import { collectCardSites } from './answer-sites'
 import type { AnswerEntry } from '../outline/answers'
+
+// 最小测试 schema:collectCardSites 只关心「文本上的 annotation mark」与「note_anchor 节点」。
+// @moraya/core 的 createSchema 需要 MediaResolver,对纯函数单测过重,故本地造一个。
+const schema = new Schema({
+  nodes: {
+    doc: { content: 'block+' },
+    paragraph: { group: 'block', content: 'inline*' },
+    text: { group: 'inline' },
+    note_anchor: { group: 'inline', inline: true, atom: true, attrs: { note: { default: '' } } },
+  },
+  marks: {
+    annotation: { attrs: { note: { default: '' } } },
+    strong: {},
+  },
+})
 
 const entry = (noteText: string): AnswerEntry => ({
   noteText, status: 'answered', body: 'body', questionId: 'q1',
@@ -743,7 +758,7 @@ export function collectCardSites(doc: PMNode, entries: Map<string, AnswerEntry>)
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `pnpm test -- src/lib/note-anno/answer-sites.test.ts` → PASS。若 `schema` 不是 `@moraya/core` 的导出名,按实际导出调整测试(实现不变)。
+Run: `pnpm test -- src/lib/note-anno/answer-sites.test.ts` → PASS。
 
 - [ ] **Step 5: Commit**
 
@@ -812,6 +827,7 @@ Expected: FAIL — 模块不存在。
 // 「采纳入正文」——本特性里唯一会改源 .md 的动作,且只由人点击触发。
 // 插入的是干净 markdown(无 ✦、无出处、无隐形标记):你确认过,它就是你的正文。
 import type { EditorView } from 'prosemirror-view'
+import { parseMarkdown } from '@moraya/core'
 import { parseOutline, serializeOutline } from '../outline/markdown'
 import type { AnswerEntry } from '../outline/answers'
 import { answersStore, loadAnswersFor } from './answers-store.svelte'
@@ -827,7 +843,6 @@ export function markAdoptedInText(noteText: string, questionContent: string): st
 
 /** 把答复 markdown 作为干净正文插入到锚点块之后:一次 transaction,⌘Z 即回退。 */
 export function insertAnswerIntoDoc(view: EditorView, entry: AnswerEntry, pos: number): void {
-  const { parseMarkdown } = require('@moraya/core') as typeof import('@moraya/core')
   const parsed = parseMarkdown(entry.body, view.state.schema)
   view.dispatch(view.state.tr.insert(pos, parsed.content).scrollIntoView())
 }
@@ -865,7 +880,7 @@ export async function adoptAnswer(
 }
 ```
 
-注意:`insertAnswerIntoDoc` 里的 `require` 在 ESM 下不可用——实现时改为在模块顶部 `import { parseMarkdown } from '@moraya/core'`(其它 note-anno 模块已如此静态引用 moraya-core;若引入环路再退回动态 `await import`,并把该函数改成 async)。以真实构建结果为准,`pnpm check` 必须干净。
+注意:测试只覆盖 `markAdoptedInText` 这个纯函数(其余两个要 EditorView / Tauri fs,留给 GUI 验证)。`parseMarkdown` 静态引入自 `@moraya/core`(外部包,无环路风险);`pnpm check` 必须干净。
 
 - [ ] **Step 4: 跑测试确认通过**
 
