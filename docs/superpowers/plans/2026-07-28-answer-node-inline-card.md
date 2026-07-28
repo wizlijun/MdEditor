@@ -909,7 +909,7 @@ git commit -m "feat(note-anno): adopt answer into the document and flip status t
 
 **Files:**
 - Create: `src/lib/note-anno/answer-card.ts`
-- Create: `src/styles/answer-card.css`(或并入既有样式文件——先查 `src/styles/` 现有组织再定,不要新建重复用途的文件)
+- Modify: `src/styles/editor-base.css`(**追加到批注家族样式之后**——该文件已放 `.moraya-annotation` / `.note-badge` / `.moraya-note-anchor`,且被 `App.svelte` 与 `daily-notes-app.svelte` 引入;不要新建样式文件)
 - Modify: `src/lib/i18n/en.ts`、`zh.ts`、`ja.ts`、`de.ts`
 
 无单测(纯 DOM/插件装配,逻辑已在 Task 6/7 测过),靠 `pnpm check` + GUI 验证。
@@ -1059,7 +1059,7 @@ export function answerCardPlugin(deps: CardDeps): Plugin<DecorationSet> {
 }
 ```
 
-- [ ] **Step 3: 样式**(卡片视觉;放进 `src/styles/` 里合适的既有文件或新建后在入口引入——按现有组织办)
+- [ ] **Step 3: 样式** — 追加到 `src/styles/editor-base.css` 的批注家族样式之后
 
 ```css
 /* 正文内联答复卡片:✦ = AI 写的,与手写内容视觉上要分得开 */
@@ -1102,7 +1102,7 @@ Run: `pnpm check`(0 errors)+ `pnpm test`(全量绿)。
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/lib/note-anno/answer-card.ts src/styles/<改动的样式文件> src/lib/i18n/en.ts src/lib/i18n/zh.ts src/lib/i18n/ja.ts src/lib/i18n/de.ts
+git add src/lib/note-anno/answer-card.ts src/styles/editor-base.css src/lib/i18n/en.ts src/lib/i18n/zh.ts src/lib/i18n/ja.ts src/lib/i18n/de.ts
 git commit -m "feat(note-anno): inline answer card widget with lazy markdown rendering"
 ```
 
