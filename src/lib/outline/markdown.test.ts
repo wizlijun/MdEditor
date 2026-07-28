@@ -173,3 +173,31 @@ describe('question / answer properties', () => {
     expect(q.status).toBeUndefined()
   })
 })
+
+describe('property value robustness (file-over-app: tolerate trailing whitespace)', () => {
+  it('parses type:: question even with trailing whitespace on the line', () => {
+    const t = parseOutline('- q?\n  type:: question  \n')
+    expect([...t.nodes.values()][0].source).toBe('question')
+  })
+  it('parses a status value that carries trailing whitespace', () => {
+    const t = parseOutline('- q?\n  type:: question\n  status:: answered  \n')
+    expect([...t.nodes.values()][0].status).toBe('answered')
+  })
+  it('trims trailing whitespace off created/updated timestamps', () => {
+    const t = parseOutline('- q?\n  type:: question\n  created:: 2026-07-28T03:01:01.041Z  \n')
+    expect([...t.nodes.values()][0].createdAt).toBe('2026-07-28T03:01:01.041Z')
+  })
+  it('self-heals a node that has status:: but lost its type:: line — it is a question', () => {
+    // Corrupted-in-the-wild shape: status lingers, type was stripped by external tooling.
+    const t = parseOutline('- 判断力吗？\n  status:: open\n')
+    const n = [...t.nodes.values()][0]
+    expect(n.source).toBe('question')
+    expect(n.status).toBe('open')
+    // and it re-serializes WITH type:: question (status never travels without type)
+    expect(serializeOutline(t)).toContain('type:: question')
+  })
+  it('does not promote a plain note/manual node without a valid status', () => {
+    const t = parseOutline('- 判断力吗？\n  type:: note\n')
+    expect([...t.nodes.values()][0].source).toBe('note')
+  })
+})

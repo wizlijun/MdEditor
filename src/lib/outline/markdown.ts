@@ -94,14 +94,23 @@ export function parseOutline(text: string): OutlineTree {
         const body = raw.slice(contIndent.length)
         const prop = body.match(PROP_RE)
         if (prop) {
-          const [, key, value] = prop
+          const key = prop[1]
+          // 属性值容错:外部工具/编辑器可能在属性行尾留空白(如 markdown 硬换行的两个空格)。
+          // 去尾空白再解析,避免 `type:: question  ` / `status:: open  ` 因值不匹配白名单被静默丢弃
+          // (file-over-app:vault 常被 Obsidian/格式化器/git-sync 改动,解析须稳健)。
+          const value = prop[2].trimEnd()
           if (key === 'type' && ['toc', 'highlight', 'wikilink', 'annotation', 'note', 'question'].includes(value)) current.source = value as NodeSource
           else if (key === 'line') current.anchorLine = parseInt(value, 10)
           else if (key === 'collapsed') current.collapsed = value === 'true'
           else if (key === 'created') current.createdAt = value
           else if (key === 'updated') current.updatedAt = value
           else if (key === 'status') {
-            if (value === 'open' || value === 'answered' || value === 'closed') current.status = value
+            if (value === 'open' || value === 'answered' || value === 'closed') {
+              current.status = value
+              // status:: 是 question 专属属性:即便 type:: 行缺失/损坏,合法 status 即认定为 question,
+              // 保证 type/status 始终成对写回——自愈历史上 type 丢失只剩 status 的脏节点。
+              if (current.source === 'manual' || current.source === 'note') current.source = 'question'
+            }
           }
           else if (key === 'answered') current.answeredAt = value
           else if (key === 'by') current.answeredBy = value
