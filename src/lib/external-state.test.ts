@@ -82,3 +82,30 @@ describe('decide', () => {
     expect(d).toEqual({ kind: 'showChanged', snapshot: { mtime: 2000, hash: 'h-A', content: 'A' } })
   })
 })
+
+describe('decide — outline note tabs (.note.md)', () => {
+  it('clean outline-note tab auto-reloads even though its mode is rich', () => {
+    // 大纲笔记由 OutlineEditor 渲染,树可随时从文本重建,没有 ProseMirror
+    // "内部状态反向覆盖磁盘"的顾虑 → 干净时应走静默重载
+    const d = decide(fresh({ mode: 'rich', isOutlineNote: true }), modifiedEvent(2000, 'h-B', 'B'))
+    expect(d.kind).toBe('autoReload')
+  })
+
+  it('dirty outline-note tab still shows the banner (never silently overwrite)', () => {
+    const d = decide(
+      fresh({ mode: 'rich', isOutlineNote: true, currentContent: 'A-edited' }),
+      modifiedEvent(2000, 'h-B', 'B'),
+    )
+    expect(d.kind).toBe('showChanged')
+  })
+
+  it('an ordinary rich tab is unaffected — still banner-only', () => {
+    const d = decide(fresh({ mode: 'rich' }), modifiedEvent(2000, 'h-B', 'B'))
+    expect(d.kind).toBe('showChanged')
+  })
+
+  it('self-write echo is still ignored for outline notes', () => {
+    const d = decide(fresh({ mode: 'rich', isOutlineNote: true }), modifiedEvent(2000, 'h-A', 'A'))
+    expect(d.kind).toBe('ignore')
+  })
+})
