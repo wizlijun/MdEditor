@@ -37,8 +37,14 @@ dist-plugins/
 # Claude Code local project dir (ignore all except shared project skills)
 .claude/*
 !.claude/skills/
+# Other agent tools' local scratch dirs (same class as .claude/)
+.claire/
+tasks/
 __pycache__/
 *.pyc
+
+# Wrangler local state for the plugin registry (build/dev artifact)
+plugins-registry/.wrangler/
 
 # location helper sidecar (built by scripts/build-location-helper.sh)
 src-tauri/binaries/

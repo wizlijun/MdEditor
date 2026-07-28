@@ -1,0 +1,25 @@
+[package]
+name = "notemd-location"
+version = "1.0.0"
+edition = "2021"
+description = "Standalone macOS location helper for note.md — a faithful port of fulldecent/CoreLocationCLI. Runs a clean main run loop so CoreLocation's authorization prompt and delegate callbacks are reliably delivered, then prints one JSON object and exits."
+
+# Standalone binary bundled inside note.md.app as a Tauri sidecar (externalBin).
+# It is launched by note.md.app on demand; macOS attributes the location request
+# to the responsible (parent) process — the signed, notarized note.md.app — so
+# the TCC prompt reads "note.md wants to use your location".
+[[bin]]
+name = "notemd-location"
+path = "src/main.rs"
+
+[dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSError", "NSRunLoop"] }
+objc2-core-location = { version = "0.3", features = ["CLLocationManager", "CLLocationManagerDelegate", "CLLocation", "CLGeocoder", "CLPlacemark", "CLError"] }
+block2 = "0.6"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

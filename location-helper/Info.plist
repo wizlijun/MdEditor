@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>net.notemd.app.location</string>
+    <key>CFBundleName</key>
+    <string>note.md Location Helper</string>
+    <key>CFBundleExecutable</key>
+    <string>notemd-location</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>NSLocationUsageDescription</key>
+    <string>note.md records your location to your vault.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>note.md records your location to your vault.</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>note.md records your location to your vault.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>note.md records your location to your vault.</string>
+</dict>
+</plist>
