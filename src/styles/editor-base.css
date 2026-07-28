@@ -96,13 +96,26 @@
   /* button 不继承 font-family/size,须显式挂上,否则卡片头与正文字体脱节 */
   font-family: inherit; font-size: 0.95em; color: inherit;
 }
+.answer-card-chevron {
+  display: inline-block; width: 0.8em;
+  transition: transform 0.12s; opacity: 0.6;
+}
+.answer-card.open .answer-card-chevron { transform: rotate(90deg); }
+.answer-card.open .answer-card-summary { display: none; }
 .answer-card-sigil { color: #b8860b; }
 .answer-card-title { font-weight: 600; white-space: nowrap; }
 .answer-card-summary { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .answer-card-body { padding: 0 10px 8px 10px; }
 .answer-card-md > :first-child { margin-top: 0; }
 .answer-card-md > :last-child { margin-bottom: 0; }
-.answer-card-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.answer-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.answer-card-collapse {
+  padding: 3px 10px; border: none; border-radius: 5px; cursor: pointer;
+  font-family: inherit; font-size: 12px;
+  color: inherit; background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.answer-card-collapse:hover { background: color-mix(in srgb, currentColor 16%, transparent); }
+.answer-card-adopt:disabled { opacity: 0.5; cursor: default; filter: none; }
 .answer-card-adopt {
   padding: 3px 10px; border: none; border-radius: 5px; cursor: pointer;
   font-family: inherit; font-size: 12px; font-weight: 600;

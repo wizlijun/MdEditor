@@ -37,6 +37,13 @@ export async function markAdoptedOnDisk(entry: AnswerEntry): Promise<void> {
     const fs = await import('@tauri-apps/plugin-fs')
     const disk = await fs.readTextFile(notePath).catch(() => null)
     if (disk == null) return
+    // 保真防线:采纳会把整份 .note.md 重新解析+序列化写回。若解析器读不「懂」这份文件
+    // (最常见是 agent 把答复围栏写短了,嵌套 ``` 提前闭合),重写会重塑文件结构、
+    // 毁掉 type:: answer 标记。读不懂就不写——绝不重塑一份我们没完全理解的文件。
+    if (serializeOutline(parseOutline(disk)) !== disk) {
+      console.warn('[adopt] companion note does not round-trip; skipping status writeback')
+      return
+    }
     const next = markAdoptedInText(disk, entry.noteText)
     if (next == null || next === disk) return
     await fs.writeTextFile(notePath, next)

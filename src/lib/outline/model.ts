@@ -154,8 +154,3 @@ export function answerBodyOf(node: Pick<OutlineNode, 'content'>): string {
   const end = close && close[1].length >= open[1].length ? last : lines.length
   return lines.slice(1, end).join('\n')
 }
-
-/** 树中该 question 节点下的答复节点(至多一个) */
-export function answerNodeOf(tree: OutlineTree, questionId: string): OutlineNode | undefined {
-  return childrenOf(tree, questionId).find(c => c.source === 'answer')
-}

@@ -29,9 +29,42 @@ export function setAnswersFromText(notePath: string, text: string): void {
 }
 
 export function clearAnswers(): void {
+  stopWatching()
   answersStore.notePath = null
   answersStore.entries = []
   answersStore.version++
+}
+
+// ---- 配套 .note.md 的变更监听 ----------------------------------------------
+// 既有的 file-watcher 只盯 tab.filePath(主文档),不看伴生笔记。没有这一段,
+// 「你正读着文档、agent 在后台写进答复」不会有任何反应,要切走再切回才出卡片。
+let unwatch: (() => void) | null = null
+let watched: string | null = null
+let reloadTimer: ReturnType<typeof setTimeout> | null = null
+
+function stopWatching(): void {
+  if (reloadTimer) { clearTimeout(reloadTimer); reloadTimer = null }
+  if (unwatch) { try { unwatch() } catch { /* watcher 已失效,忽略 */ } unwatch = null }
+  watched = null
+}
+
+async function watchCompanion(notePath: string, mainPath: string): Promise<void> {
+  if (watched === notePath) return
+  stopWatching()
+  watched = notePath
+  try {
+    const { watchImmediate } = await import('@tauri-apps/plugin-fs')
+    const stop = await watchImmediate(notePath, () => {
+      // 合并抖动;自己写盘引发的回调也会走到这里,重载是幂等的,无害。
+      if (reloadTimer) clearTimeout(reloadTimer)
+      reloadTimer = setTimeout(() => { void loadAnswersFor(mainPath) }, 300)
+    })
+    if (watched === notePath) unwatch = stop
+    else { try { stop() } catch { /* 期间已切换文档 */ } }
+  } catch {
+    // 文件不存在 / 文件系统不支持监听 → 静默降级,切换文档时仍会重新加载
+    watched = null
+  }
 }
 
 /**
@@ -47,12 +80,17 @@ export async function loadAnswersFor(mainPath: string | null | undefined): Promi
       records: sotvaultStore.records,
     })
     if (!notePath) { clearAnswers(); return }
-    if (outline.docPath === notePath) { setAnswersFromText(notePath, serializeDoc(false)); return }
+    if (outline.docPath === notePath) {
+      setAnswersFromText(notePath, serializeDoc(false))
+      void watchCompanion(notePath, mainPath)
+      return
+    }
     const fs = await import('@tauri-apps/plugin-fs')
     if (!(await fs.exists(notePath).catch(() => false))) { clearAnswers(); return }
     const text = await fs.readTextFile(notePath).catch(() => null)
     if (text == null) { clearAnswers(); return }
     setAnswersFromText(notePath, text)
+    void watchCompanion(notePath, mainPath)
   } catch (e) {
     console.warn('[answers] load failed:', e)
     clearAnswers()
