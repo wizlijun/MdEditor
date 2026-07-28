@@ -15,6 +15,7 @@
   } from '../lib/mdblock-hover/hover-store.svelte'
   import { settings } from '../lib/settings.svelte'
   import { t } from '../lib/i18n/store.svelte'
+  import { answersStore, loadAnswersFor } from '../lib/note-anno/answers-store.svelte'
   import '../lib/styles/attachment.css'
   import ImageToolbar from '../lib/image-toolbar/ImageToolbar.svelte'
   import { saveClipboardResource, isAttachmentUrl, isImageExt, isAttachmentExt } from '../lib/paste-resources'
@@ -976,11 +977,19 @@
           const { wikilinkPlugin } = await import('../lib/wikilink-plugin')
           const { noteBadgePlugin } = await import('../lib/note-anno/note-plugin')
           const { placeholderPlugin } = await import('../lib/placeholder-plugin')
+          const { answerCardPlugin } = await import('../lib/note-anno/answer-card')
+          const { answeredMap } = await import('../lib/note-anno/answers-store.svelte')
+          const { adoptAnswer } = await import('../lib/note-anno/adopt-answer')
           view.updateState(
             view.state.reconfigure({
               plugins: view.state.plugins.concat(
                 wikilinkPlugin(),
                 noteBadgePlugin(),
+                // 已作答问题 → 被批注段落之后的可展开 ✦ 卡片(采纳才写源文件)
+                answerCardPlugin({
+                  getEntries: () => answeredMap(),
+                  onAdopt: (entry, pos, v) => { void adoptAnswer(v, entry, pos, tab.filePath ?? null) },
+                }),
                 placeholderPlugin(t('editor.emptyPlaceholder')),
               ),
             }),
@@ -1043,6 +1052,27 @@
     if (status !== 'mounted') return
     import('../lib/editor-bridge').then(({ updateDocumentBaseDir }) => {
       updateDocumentBaseDir(fp)
+    })
+  })
+
+  // 答复卡片(一):切换文档时按需加载该文档配套 .note.md 的答复索引。
+  // 只加载当前文档,不预扫 vault;写 answersStore 的动作包在 untrack 里,
+  // 避免「effect 内读+写 $state」自失效(见 v4.2.4 冻结 UI 教训)。
+  $effect(() => {
+    const fp = tab.filePath
+    if (status !== 'mounted') return
+    untrack(() => { void loadAnswersFor(fp) })
+  })
+
+  // 答复卡片(二):索引变化(加载完成 / 采纳后失效重建)→ 让插件重建 decoration。
+  $effect(() => {
+    void answersStore.version
+    if (status !== 'mounted' || !editor) return
+    untrack(() => {
+      const view = editor!.view as unknown as EditorView
+      void import('../lib/note-anno/answer-card').then(({ ANSWER_CARDS_REFRESH }) => {
+        view.dispatch(view.state.tr.setMeta(ANSWER_CARDS_REFRESH, true))
+      })
     })
   })
 

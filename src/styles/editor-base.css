@@ -79,6 +79,45 @@
   .moraya-editor .moraya-note-anchor:hover { color: #f5cd60; }
 }
 
+/* 正文内联答复卡片:agent 的答复贴在被批注段落之后。✦ = AI 写的,与手写内容视觉上分得开。
+   卡片是 decoration —— 不进文档、不影响序列化,源文件字节不变。 */
+.answer-card {
+  margin: 0.6em 0;
+  border: 1px solid color-mix(in srgb, #b8860b 35%, transparent);
+  border-left: 3px solid #b8860b;
+  border-radius: 6px;
+  background: color-mix(in srgb, #fff3bf 40%, transparent);
+  font-size: 0.92em;
+}
+.answer-card-head {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 6px 10px;
+  background: none; border: none; cursor: pointer; text-align: left;
+  /* button 不继承 font-family/size,须显式挂上,否则卡片头与正文字体脱节 */
+  font-family: inherit; font-size: 0.95em; color: inherit;
+}
+.answer-card-sigil { color: #b8860b; }
+.answer-card-title { font-weight: 600; white-space: nowrap; }
+.answer-card-summary { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.answer-card-body { padding: 0 10px 8px 10px; }
+.answer-card-md > :first-child { margin-top: 0; }
+.answer-card-md > :last-child { margin-bottom: 0; }
+.answer-card-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.answer-card-adopt {
+  padding: 3px 10px; border: none; border-radius: 5px; cursor: pointer;
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  color: #fff; background: var(--accent-color, #4a80d4);
+}
+.answer-card-adopt:hover { filter: brightness(1.1); }
+@media (prefers-color-scheme: dark) {
+  .answer-card {
+    background: color-mix(in srgb, #4d3f00 45%, transparent);
+    border-color: color-mix(in srgb, #e3b341 35%, transparent);
+    border-left-color: #e3b341;
+  }
+  .answer-card-sigil { color: #e3b341; }
+}
+
 /* Bare `http(s)://` URLs: decorated in place so they read (and click) as links
    while the underlying text stays literal. Matches anchor link affordances. */
 .moraya-editor .url-autolink {
