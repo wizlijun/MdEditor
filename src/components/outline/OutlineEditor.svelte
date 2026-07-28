@@ -37,7 +37,7 @@
   import { openSettings } from '../../lib/ui-state.svelte'
   import { decideCompanionReload } from '../../lib/outline/companion-reload'
   import { captureScroll } from '../../lib/scroll-keep'
-  import { setAnswersFromText } from '../../lib/note-anno/answers-store.svelte'
+  import { setAnswersFromText, answersStore } from '../../lib/note-anno/answers-store.svelte'
 
   let { tab = null, mainTab = null, embedded = false, onWikilink = null, onCollapse = null, linkedRefs = null, focusRootId = undefined, onFocusChange = null }: {
     /** tab 模式：单独打开的 .note.md tab —— 纯大纲编辑器 */
@@ -285,16 +285,21 @@
   $effect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { tabId: string; newContent: string } | undefined
-      if (!detail || !tab || detail.tabId !== tab.id) return
+      // tab 模式匹配自己这个 tab;panel 模式下伴生笔记也可能同时被开成 tab,
+      // 那时 file-watcher 重载的是它 —— 两种都要接,否则大纲树会停在旧内容。
+      if (!detail || !noteTab || detail.tabId !== noteTab.id) return
+      const path = notePath
+      const mc = tab ? null : currentMainContent()
       untrack(() => {
         const restore = captureScroll(bodyEl)   // 重建整棵树会把滚动清零
-        void attachDoc(tab.filePath, detail.newContent, null).then(async () => {
-          // 把基线推进到刚载入的内容:伴生监听同样会收到这次变更,基线对得上才会
-          // 判成「自写回声」而忽略,否则会紧跟着再重载一次(白闪一下)。
-          noteDiskHash = await sha256Hex(detail.newContent).catch(() => null)
-          setAnswersFromText(tab.filePath, detail.newContent)
-          restore()
-        })
+        void attachDoc(path, detail.newContent, mc)
+          .then(async () => {
+            // 把基线推进到刚载入的内容,免得伴生监听把同一次变更再判成新变更
+            noteDiskHash = await sha256Hex(detail.newContent).catch(() => null)
+            if (answersStore.notePath === path) setAnswersFromText(path, detail.newContent)
+            restore()
+          })
+          .catch((err) => console.warn('[outline] rebuild after reload failed:', err))
       })
     }
     window.addEventListener('mdeditor:auto-reloaded', handler)
@@ -639,37 +644,61 @@
       if (diskText == null) return
       const diskHash = await sha256Hex(diskText).catch(() => null)
       if (diskHash == null) return
-      const decision = decideCompanionReload({ diskHash, lastHash: noteDiskHash, dirty: outline.dirty })
+      // 用「内存树序列化后的 hash」判定本地有没有会被覆盖的东西,而不是 outline.dirty ——
+      // 后者会被派生同步(markSynced)置真,主文档随便敲几个字就会把正常重载误判成冲突。
+      const ourHash = await sha256Hex(serializeDoc(false)).catch(() => null)
+      if (ourHash != null && ourHash === diskHash) { noteDiskHash = diskHash; return } // 已与磁盘一致
+      const dirty = ourHash != null && noteDiskHash != null ? ourHash !== noteDiskHash : outline.dirty
+      const decision = decideCompanionReload({ diskHash, lastHash: noteDiskHash, dirty })
       if (decision === 'ignore') return        // 自写回声
       if (decision === 'conflict') { outline.externalConflict = { diskText }; return }
       if (outline.docPath !== path) return     // 读盘期间切走了
       const restore = captureScroll(bodyEl)
       noteDiskHash = diskHash
       await attachDoc(path, diskText, currentMainContent())
-      setAnswersFromText(path, diskText)       // 一次读盘,大纲树与答复卡片同源
+      // 只在这份笔记正是当前正文所对应的那份时才刷新索引,避免串台
+      if (answersStore.notePath === path) setAnswersFromText(path, diskText)
       restore()
     } catch (e) {
       console.warn('[outline] companion reload failed:', e)
     }
   }
 
-  // 装伴生笔记监听:notePath 变则重装,组件卸载则拆除
+  /**
+   * 装伴生笔记监听 —— **仅 panel-disk 模式**(伴生笔记没有被开成 tab)。
+   *
+   * 笔记一旦有 tab 撑着,外部变更就归既有 file-watcher 管:它有正确的
+   * `lastKnownHash` 基线与 `recordOurWrite` 配套,而本组件的 `noteDiskHash`
+   * 只在 panel-disk 写盘路径上维护。两边都插手会把自己的保存误判成外部冲突。
+   * tab 那条路重载后派发 `mdeditor:auto-reloaded`,上面的监听器负责重建树。
+   *
+   * 监听的是**父目录**而非文件本身:笔记可能尚未存在(agent 稍后才创建)、
+   * 也可能被 git 同步以「删除+重建」或改名的方式替换 —— 盯文件会一装就失败、
+   * 或在替换后失效。
+   */
   $effect(() => {
     const path = notePath
-    if (!path) return
+    if (!path || noteTab) return
+    const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+    if (slash <= 0) return
+    const dir = path.slice(0, slash)
+    const base = path.slice(slash + 1)
     let stop: (() => void) | null = null
     let timer: ReturnType<typeof setTimeout> | null = null
     let disposed = false
     void (async () => {
       try {
         const { watchImmediate } = await import('@tauri-apps/plugin-fs')
-        const s = await watchImmediate(path, () => {
+        const s = await watchImmediate(dir, (event) => {
+          const paths = (event as { paths?: string[] }).paths
+          // 事件形状异常时不过滤,交给 onCompanionChanged 的 hash 比对兜底(幂等)
+          if (Array.isArray(paths) && paths.length && !paths.some(p => p.endsWith(base))) return
           if (timer) clearTimeout(timer)
           timer = setTimeout(() => { void onCompanionChanged(path) }, 300)   // 合并抖动
-        })
+        }, { recursive: false })
         if (disposed) { try { s() } catch { /* 已卸载 */ } } else stop = s
       } catch {
-        // 文件尚不存在 / 文件系统不支持监听 → 静默降级,切换文档时仍会重新加载
+        // 目录不可监听(网络盘/沙盒)→ 静默降级,切换文档时仍会重新加载
       }
     })()
     return () => {
