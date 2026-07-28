@@ -95,6 +95,17 @@
   let diskPending: string | null = null
   /** 冲突校验基线：我们上次加载/写入 .note.md 时的 sha256（null=当时磁盘无此文件） */
   let noteDiskHash: string | null = null
+  /**
+   * 同一时刻内存树序列化后的 sha256 —— 与 `noteDiskHash`(磁盘原始字节)不同坐标系。
+   * 手写笔记(4 空格缩进、条目间空行、无 front-matter……)经「解析→序列化」必然与
+   * 原始字节不同,拿它跟 noteDiskHash 比会永远判脏、永远等不到静默重载。判断本地
+   * 有没有未落盘内容时必须用这条规范形基线。
+   */
+  let noteCanonicalHash: string | null = null
+  /** 把规范形基线推进到当前内存树 */
+  async function markCanonicalBaseline(): Promise<void> {
+    noteCanonicalHash = await sha256Hex(serializeDoc(false)).catch(() => null)
+  }
   /** In-flight first-write sync, keyed by source path — coalesces concurrent/rapid
    *  debounced flushes into a SINGLE sotvault sync so we never create a duplicate
    *  vault copy (the Rust side dedups filenames, so a 2nd sync would make `<stem>-2.md`). */
@@ -135,10 +146,12 @@
 
   async function flushDisk() {
     if (diskTimer) { clearTimeout(diskTimer); diskTimer = null }
+    // 冲突未解决前不写 —— 且**不消费** diskPending:原先先取后判,横幅挂着期间的
+    // 每一次编辑都被序列化后直接丢弃,切换文档时随 detach() 一并蒸发。
+    if (outline.externalConflict) return
     const text = diskPending
     diskPending = null
     if (text == null) return
-    if (outline.externalConflict) return               // 冲突未解决前不写
     try {
       const fs = await import('@tauri-apps/plugin-fs')
       // 空大纲不触发建家/同步(浏览/空树不得污染,也不得把源拷进 vault)
@@ -163,9 +176,10 @@
         fileExists: diskText != null, diskHash, lastHash: noteDiskHash, ourHash,
       })
       if (decision === 'conflict') { outline.externalConflict = { diskText: diskText ?? '' }; return }
-      if (decision === 'noop') { noteDiskHash = diskHash; markSaved(); return }
+      if (decision === 'noop') { noteDiskHash = diskHash; void markCanonicalBaseline(); markSaved(); return }
       await fs.writeTextFile(target, text)
       noteDiskHash = ourHash
+      await markCanonicalBaseline()
       markSaved()
       // 刚建家:笔记已写进 vault 副本旁,刷新 records → 响应式 notePath 翻转到 vault 路径。
       // noteDiskHash 保持 ourHash——它正是 vault target 的磁盘内容哈希,翻转后依然是有效基线
@@ -241,6 +255,7 @@
           const fsMod = await import('@tauri-apps/plugin-fs')
           const existed0 = await fsMod.exists(path).catch(() => false)
           if (cancelled) return
+          await markCanonicalBaseline()
           noteDiskHash = existed0
             ? await sha256Hex(await fsMod.readTextFile(path).catch(() => '')).catch(() => null)
             : null
@@ -296,6 +311,7 @@
           .then(async () => {
             // 把基线推进到刚载入的内容,免得伴生监听把同一次变更再判成新变更
             noteDiskHash = await sha256Hex(detail.newContent).catch(() => null)
+            await markCanonicalBaseline()
             if (answersStore.notePath === path) setAnswersFromText(path, detail.newContent)
             restore()
           })
@@ -644,18 +660,18 @@
       if (diskText == null) return
       const diskHash = await sha256Hex(diskText).catch(() => null)
       if (diskHash == null) return
-      // 用「内存树序列化后的 hash」判定本地有没有会被覆盖的东西,而不是 outline.dirty ——
-      // 后者会被派生同步(markSynced)置真,主文档随便敲几个字就会把正常重载误判成冲突。
       const ourHash = await sha256Hex(serializeDoc(false)).catch(() => null)
-      if (ourHash != null && ourHash === diskHash) { noteDiskHash = diskHash; return } // 已与磁盘一致
-      const dirty = ourHash != null && noteDiskHash != null ? ourHash !== noteDiskHash : outline.dirty
-      const decision = decideCompanionReload({ diskHash, lastHash: noteDiskHash, dirty })
-      if (decision === 'ignore') return        // 自写回声
+      if (outline.docPath !== path) return      // 读盘/求 hash 期间切走了文档
+      const decision = decideCompanionReload({
+        diskHash, lastHash: noteDiskHash, ourHash,
+        canonicalHash: noteCanonicalHash, armed: outline.armed, dirtyFlag: outline.dirty,
+      })
+      if (decision === 'ignore') { noteDiskHash = diskHash; return }
       if (decision === 'conflict') { outline.externalConflict = { diskText }; return }
-      if (outline.docPath !== path) return     // 读盘期间切走了
       const restore = captureScroll(bodyEl)
       noteDiskHash = diskHash
       await attachDoc(path, diskText, currentMainContent())
+      await markCanonicalBaseline()
       // 只在这份笔记正是当前正文所对应的那份时才刷新索引,避免串台
       if (answersStore.notePath === path) setAnswersFromText(path, diskText)
       restore()
@@ -684,18 +700,20 @@
     const dir = path.slice(0, slash)
     const base = path.slice(slash + 1)
     let stop: (() => void) | null = null
-    let timer: ReturnType<typeof setTimeout> | null = null
     let disposed = false
     void (async () => {
       try {
-        const { watchImmediate } = await import('@tauri-apps/plugin-fs')
-        const s = await watchImmediate(dir, (event) => {
+        const { watch } = await import('@tauri-apps/plugin-fs')
+        // 用 watch(有 delayMs)而非 watchImmediate:抖动在 Rust 侧合并,一次 git 同步
+        // 触碰上千文件时不会把上千条 IPC 回调打进 webview。
+        const s = await watch(dir, (event) => {
           const paths = (event as { paths?: string[] }).paths
-          // 事件形状异常时不过滤,交给 onCompanionChanged 的 hash 比对兜底(幂等)
-          if (Array.isArray(paths) && paths.length && !paths.some(p => p.endsWith(base))) return
-          if (timer) clearTimeout(timer)
-          timer = setTimeout(() => { void onCompanionChanged(path) }, 300)   // 合并抖动
-        }, { recursive: false })
+          // 事件形状异常时不过滤,交给 onCompanionChanged 的 hash 比对兜底(幂等)。
+          // 按分隔符+basename 匹配,免得 `data.note.md` 这类同后缀兄弟误命中。
+          if (Array.isArray(paths) && paths.length
+            && !paths.some(p => p === path || p.endsWith('/' + base) || p.endsWith('\\' + base))) return
+          void onCompanionChanged(path)
+        }, { recursive: false, delayMs: 300 })
         if (disposed) { try { s() } catch { /* 已卸载 */ } } else stop = s
       } catch {
         // 目录不可监听(网络盘/沙盒)→ 静默降级,切换文档时仍会重新加载
@@ -703,7 +721,6 @@
     })()
     return () => {
       disposed = true
-      if (timer) clearTimeout(timer)
       if (stop) { try { stop() } catch { /* watcher 已失效 */ } }
     }
   })
@@ -713,6 +730,7 @@
     const fs = await import('@tauri-apps/plugin-fs')
     await fs.writeTextFile(notePath, text)
     noteDiskHash = await sha256Hex(text).catch(() => null)
+    await markCanonicalBaseline()
     outline.armed = true
     markSaved()
   }
