@@ -3,7 +3,7 @@
   import InlineRender from './InlineRender.svelte'
   import { outline, bump, markDirty, setSelection, clearSelection } from '../../lib/outline/store.svelte'
   import { rangeBetween, selectionRoots } from '../../lib/outline/select'
-  import { childrenOf, setNodeContent, type OutlineNode as NodeT, type OutlineTree } from '../../lib/outline/model'
+  import { childrenOf, setNodeContent, answerBodyOf, type OutlineNode as NodeT, type OutlineTree } from '../../lib/outline/model'
   import {
     createSiblingBelow, createSiblingAbove, mergeWithPrevious,
     indentNode, outdentNode, moveNodeUp, moveNodeDown, applyInlineWrap,
@@ -56,6 +56,14 @@
 
   /** note/question 同族:annotation 的批注文本子节点(question=含问号升格) */
   const noteLike = (s: NodeT['source']) => s === 'note' || s === 'question'
+
+  /** answer 节点:大纲里显示 ✦ + 答复首个非空行(围栏原文没有展示价值) */
+  const answerSummary = $derived.by(() => {
+    if (node.source !== 'answer') return null
+    if (!readonly) void outline.version
+    const line = answerBodyOf(node).split('\n').find(l => l.trim() !== '') ?? ''
+    return '✦ ' + (line.length > 80 ? line.slice(0, 80) + '…' : line)
+  })
 
   const srcTree = $derived(tree ?? outline.tree)
   let kids = $derived.by(() => {
@@ -322,6 +330,7 @@
       class:src-wl={node.source === 'wikilink'}
       class:src-anno={node.source === 'annotation'}
       class:src-note={noteLike(node.source)}
+      class:src-answer={node.source === 'answer'}
       class:jumpable={node.anchorLine != null}
       draggable={!readonly && node.source === 'manual'}
       ondragstart={onDragStart}
@@ -348,11 +357,12 @@
       ></textarea>
     {:else}
       <span class="content" class:hl={node.source === 'highlight' || markLike} class:src-toc={node.source === 'toc'}
+        class:answer-summary={answerSummary != null}
         class:jump-src={!readonly && !editable && node.anchorLine != null}
         onclick={readonly ? () => onActivate?.(node) : onContentClick} role="button" tabindex="0"
         onkeydown={(e) => { if (e.key === 'Enter') { if (readonly) onActivate?.(node); else if (!editable) { if (node.anchorLine != null) onJump(node) } else startEdit() } }}>
         <!-- 空内容：塞零宽空格保证有行盒，鼠标可命中进入编辑 -->
-        {#if content === ''}{'​'}{:else}<InlineRender {content} onPageClick={onPageClick} />{/if}
+        {#if answerSummary != null}{answerSummary}{:else if content === ''}{'​'}{:else}<InlineRender {content} onPageClick={onPageClick} />{/if}
       </span>
     {/if}
     {#if !readonly && node.source === 'question'}
@@ -466,6 +476,9 @@
   .bullet.src-wl { color: #3aa99f; }
   .bullet.src-anno { color: #b8860b; }
   .bullet.src-note { color: color-mix(in srgb, #b8860b 55%, transparent); }
+  .bullet.src-answer { color: #b8860b; }
+  /* answer 节点只读:显示 ✦ 摘要而非围栏原文 */
+  .content.answer-summary { opacity: 0.85; font-style: italic; }
   .content {
     flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; cursor: text;
     /* 面板整体 user-select:none；节点文字本身保留可选（跨行拖动由多选接管） */
