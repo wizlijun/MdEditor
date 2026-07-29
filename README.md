@@ -18,8 +18,8 @@ Rich view and source view, one keystroke apart. Import any Notion- or
 Typora-style theme. Mermaid, Graphviz, and KaTeX all tuned and lazily loaded.
 No bundled Chromium — the whole app is 11 MB.
 
-Reading is not passive here. Highlight a claim, leave a question in the
-margin, fix the sentence right where it's wrong.
+Highlight a claim, leave a question in the margin, fix the sentence right
+where it's wrong.
 
 Claude, Codex, OpenClaw each have their own chat window. None of them is a
 place to *read*. This is.
@@ -35,7 +35,7 @@ directly.
 
 ## 3. No AI inside. Fully AI-native.
 
-note.md calls no model and sends no request. It does the other job.
+note.md calls no model and sends no request.
 
 Your vault is designed to be the shared, version-controlled context that many
 agents and many harnesses work in — Claude Cowork, Claude Code, Codex,

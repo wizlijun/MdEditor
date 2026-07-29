@@ -16,7 +16,7 @@
 富文本与源码双模，一个快捷键之隔。任意导入 Notion、Typora 主题。Mermaid、Graphviz、  
 KaTeX 都专门调过，按需加载。没有捆绑 Chromium——整个应用 11 MB。
 
-在这里，阅读不是被动的。高亮一句断言，在旁边留下你的疑问，就地把写错的句子改对。
+高亮一句断言，在旁边留下你的疑问，就地把写错的句子改对。
 
 Claude、Codex、OpenClaw 各有各的对话窗口，但没有一个是**读**的地方。这里是。
 
@@ -30,7 +30,7 @@ local-first、git sync、大纲、`[[双链]]`与反向链接、wiki 页面、�
 
 ## 3. 它自己不带 AI。它仍然是 AI-native。
 
-note.md 不调模型、不发一个请求。它做的是另一件事。
+note.md 不调模型、不发一个请求。
 
 你的 vault 被设计成多 agent、多 harness 共用的、受版本控制的上下文环境——  
 Claude Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes——它们通过  
