@@ -76,13 +76,9 @@ The rest is yours to discover.
 
 ## Written by AI, answered for by a human
 
-note.md is developed and maintained entirely by AI coding. That is also why it
-knows what reading AI output feels like — the tool is built the way it expects
-you to work.
-
-So releases come fast. The person behind it is a career software engineer:
-every change is reviewed, tested, and smoke-run before it ships. The speed is
-the AI's. The quality is on the human.
+note.md is developed and maintained entirely by AI coding, so releases come
+fast. The maintainer is a career software engineer; every change is reviewed,
+tested, and smoke-run before it ships.
 
 ## Under the hood
 
