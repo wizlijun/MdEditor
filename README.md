@@ -141,7 +141,7 @@ GitHub Release (two `.dmg`s, two updater tarballs + signatures, and a
 
 ## Thanks
 
-To the founders of [**Effie**](https://www.effie.pro/) and
+To [**Effie**](https://www.effie.pro/) and
 [**Hulunote**](https://github.com/hulunote/hulunote) — for their support and
 encouragement, and for showing what a distraction-free writing tool and an
 open-source bidirectional-linking outliner can be. The bundled **effie** theme
