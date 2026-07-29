@@ -5,7 +5,7 @@
 <!-- Hello, agent. The plain-text version of this site is at /llms.txt -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>note.md — The markdown editor for humans and agents</title>
-<meta name="description" content="note.md is a markdown reader and editor for the AI-native era. Agents write, you read and annotate. Your knowledge lives in plain files you own forever.">
+<meta name="description" content="note.md is a markdown reader, editor and bidirectional-linking notes tool for the AI-native era. Read what your agents write, annotate it, keep it in plain files you own forever.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -116,6 +116,23 @@
 
   .orn{font-family:var(--mono); text-align:center; color:#B8B4AA; letter-spacing:1.2em; padding:0 0 0 1.2em; user-select:none;}
 
+  /* ---------- four claims ---------- */
+  .claims{list-style:none; margin-top:40px;}
+  .claims li{display:grid; grid-template-columns:1fr 1.15fr; gap:56px; padding:46px 0; border-top:1px solid var(--line);}
+  .claims li:first-child{border-top:none; padding-top:6px;}
+  .claims .n{font-family:var(--mono); font-size:12px; font-weight:700; letter-spacing:.24em; color:var(--gray); display:block; margin-bottom:16px;}
+  .claims h2{font-size:31px; margin-bottom:0;}
+  .claims p{font-size:17.5px; color:#565B66; margin-bottom:15px;}
+  .claims p:last-child{margin-bottom:0;}
+  .claims .beat{font-family:var(--serif); font-style:italic; font-size:20px; color:var(--ink);}
+  .claims .mono-s{font-family:var(--mono); font-size:13.5px; color:#8A8F9B;}
+  .claims a{border-bottom:1px dotted var(--gray);}
+  @media(max-width:860px){
+    .claims li{grid-template-columns:1fr; gap:16px; padding:34px 0;}
+    .claims h2{font-size:24px;}
+    .claims h2 br{display:none;}
+  }
+
   .grid4{display:grid; grid-template-columns:repeat(2,1fr); gap:22px; margin-top:46px;}
   .card{background:#fff; border:1px solid var(--line); border-radius:4px; padding:30px 28px; position:relative;}
   .card::before{content:""; position:absolute; inset:6px; border:1px solid #F0EEE8; border-radius:2px; pointer-events:none;}
@@ -137,9 +154,10 @@
   .sidecar .why{margin-top:38px; font-size:17.5px; color:#C3C7CF; max-width:660px;}
   .sidecar .why b{color:var(--paper); font-weight:600;}
 
-  /* agents */
-  .agents .grid4{grid-template-columns:repeat(3,1fr);}
+  /* legend */
   .legend{display:flex; gap:28px; margin-top:34px; font-size:16px; font-style:italic; color:#565B66;}
+  .sidecar .legend{color:#9CA3AF;}
+  .sidecar .legend .pt{background:#C3C7CF;}
   .legend span{display:flex; align-items:center; gap:9px;}
   .legend .star{color:var(--amber); font-size:18px; font-style:normal;}
   .legend .pt{width:11px; height:11px; border-radius:50%; background:var(--ink); display:inline-block;}
@@ -199,7 +217,7 @@
     <div class="nav-links">
       <a href="#features">features</a>
       <a href="#sidecar">sidecar notes</a>
-      <a href="#agents">for agents</a>
+      <a href="/orchestrate-agents/">for agents</a>
       <a href="https://plugins.notemd.net">plugins</a>
       <a href="https://github.com/wizlijun/note.md">github</a>
     </div>
@@ -255,31 +273,39 @@
 
 <section id="features">
   <div class="wrap">
-    <div class="sec-k">The pitch</div>
-    <h2>One folder for everything<br>you and your agents write</h2>
-    <p class="lead">A reader, an outliner, and a place for your marginalia — sitting on top of plain files, staying out of your way.</p>
-    <div class="grid4">
-      <div class="card">
-        <span class="ic">✦</span>
-        <h3>Read like it matters</h3>
-        <p>The agent's still running. Don't reach for your phone — what it wrote is only worth as much as you are awake to judge it.</p>
-      </div>
-      <div class="card">
-        <span class="ic">●</span>
-        <h3>Marginalia is data</h3>
-        <p>Your marks live in a partner file — <span class="mono-s">file.note.md</span>. The AI's text stays clean; your judgment stays yours.</p>
-      </div>
-      <div class="card">
-        <span class="ic">≡</span>
-        <h3>Think in outlines</h3>
-        <p>Daily notes, <span class="mono-s">[[links]]</span> you draw by hand, search that answers as you type. The graph grows only where you confirm it — never filled with agent slop.</p>
-      </div>
-      <div class="card">
-        <span class="ic">▤</span>
-        <h3>It's just files</h3>
-        <p>No database. No cloud. No walled garden. A folder of markdown that outlives every app on your dock — including this one.</p>
-      </div>
-    </div>
+    <div class="sec-k">Four things</div>
+    <ol class="claims">
+      <li>
+        <div><span class="n">01</span><h2>The best place to read what your agents wrote</h2></div>
+        <div>
+          <p>Rich view and source view, one keystroke apart. Any Notion- or Typora-style theme. Mermaid, Graphviz and KaTeX, tuned and lazily loaded. 11 MB, no bundled Chromium.</p>
+          <p>Highlight a claim, leave a question in the margin, fix the sentence right where it's wrong.</p>
+          <p class="beat">Claude, Codex and OpenClaw each have a chat window. None of them is a place to read.</p>
+        </div>
+      </li>
+      <li>
+        <div><span class="n">02</span><h2>Everything the last generation<br>got right, built in</h2></div>
+        <div>
+          <p class="mono-s">local-first · git sync · outliner · [[wikilinks]] · backlinks · wiki pages · daily notes · plugins</p>
+          <p>Roam Research and Obsidian figured these out. note.md ships them on files: one plugin imports your whole Roam graph, and an Obsidian vault opens directly.</p>
+        </div>
+      </li>
+      <li>
+        <div><span class="n">03</span><h2>No AI inside.<br>Fully AI-native.</h2></div>
+        <div>
+          <p>note.md calls no model and sends no request.</p>
+          <p>Your vault is the shared, version-controlled context that many agents and harnesses work in — Cowork, Claude Code, Codex, ChatGPT Work, OpenClaw, Hermes — through public conventions any of them can read. <a href="/orchestrate-agents/">See how</a>.</p>
+          <p class="beat">Switch AI tools whenever you like. The asset stays yours.</p>
+        </div>
+      </li>
+      <li>
+        <div><span class="n">04</span><h2>Whatever else you need,<br>grow it yourself</h2></div>
+        <div>
+          <p>Write a plugin. Wire an OpenClaw cron job. Hang skills off it.</p>
+          <p>Put a <span class="mono-s">?</span> in an annotation and an agent picks it up: it revises the document asynchronously, fills in the context you asked for, and hands it back for you to accept — or not.</p>
+        </div>
+      </li>
+    </ol>
   </div>
 </section>
 
@@ -302,32 +328,6 @@
       </div>
     </div>
     <p class="why">Anyone can generate ten thousand words. No one can generate your opinion of them — <b>the rarest dataset in the world, and it's sitting on your disk.</b></p>
-  </div>
-</section>
-
-<section class="agents" id="agents">
-  <div class="wrap">
-    <div class="sec-k">For agents</div>
-    <h2>Agents are welcome here</h2>
-    <p class="lead">Plain files, simple rules. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes — one vault they all work, and you decide who does what.</p>
-    <div class="grid4">
-      <div class="card">
-        <h3 class="mono" style="font-size:16px">AGENTS.md</h3>
-        <p>The rules live in the folder, in a file any agent reads. Point Claude Code — or next year's agent — at it. No plugins, no adapters.</p>
-      </div>
-      <div class="card">
-        <h3>Memory that compounds</h3>
-        <p>Your daily notes are your agent's memory — years of your thinking, searchable, quoted back to you with receipts.</p>
-      </div>
-      <div class="card">
-        <h3>Write → read → learn</h3>
-        <p>Agents write and can suggest links. You mark what matters and confirm what connects. They read your marks and write better — the whole loop runs on your disk.</p>
-      </div>
-      <div class="card">
-        <h3>One vault, you orchestrate</h3>
-        <p>No agent owns your knowledge. Route each job to whoever's best — Cowork drafts, Codex refactors, ChatGPT generates — on whatever model. They hand off through files; you hold the pen. <a href="/orchestrate-agents/" style="border-bottom:1px dotted currentColor">See how</a>.</p>
-      </div>
-    </div>
     <div class="legend">
       <span><span class="star">✦</span> what AI writes</span>
       <span><span class="pt"></span> what you think</span>
@@ -346,6 +346,7 @@
       </a>
     </div>
     <p class="fine">macOS 13 or later · Apple Silicon &amp; <a href="/download?arch=x86_64">Intel</a> · from GitHub Releases</p>
+    <p class="fine">Developed and maintained entirely by AI coding — reviewed, tested and smoke-run by a human before every release.</p>
   </div>
 </section>
 

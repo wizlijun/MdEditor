@@ -6,8 +6,10 @@ https://notemd.net/. Last updated: 2026-07.
 
 ## What note.md is
 
-note.md is a markdown reader & editor for the AI-native era, made by an
-independent developer. Its premise: agents now write more than any human can
+note.md is a markdown reader, editor and bidirectional-linking notes tool for
+the AI-native era, made by an independent developer and written entirely by AI
+coding. It ships no AI features of its own — it calls no model and sends no
+request; it is the substrate agents work on. Its premise: agents now write more than any human can
 read, so the human's highest-value act is reading, judging, and keeping the
 residue no model can generate — judgment, intent, private facts, decisions.
 That residue is the rarest data in the loop. note.md captures it as plain

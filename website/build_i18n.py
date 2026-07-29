@@ -12,24 +12,24 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<title>note.md — 人与 agent 共用的 markdown 编辑器</title>',
   '<title>note.md — Der Markdown-Editor für Menschen und Agents</title>',
   '<title>note.md — 人間とエージェントのための markdown エディタ</title>'),
- ('content="note.md is a markdown reader and editor for the AI-native era. Agents write, you read and annotate. Your '
-  'knowledge lives in plain files you own forever."',
-  'content="note.md 是为 AI-native 时代打造的 markdown 阅读器与编辑器。agent 写，你读并批注。你的知识存在永远属于你的纯文本文件里。"',
-  'content="note.md ist ein Markdown-Reader und -Editor für das KI-Zeitalter. Agents schreiben, du liest und '
-  'annotierst. Dein Wissen lebt in einfachen Dateien, die dir für immer gehören."',
-  'content="note.md は AI ネイティブ時代のための markdown リーダー＆エディタ。エージェントが書き、あなたが読んで書き込む。知識は、永遠にあなたのものであるプレーンなファイルに宿る。"'),
+ ('content="note.md is a markdown reader, editor and bidirectional-linking notes tool for the AI-native era. Read what '
+  'your agents write, annotate it, keep it in plain files you own forever."',
+  'content="note.md 是为 AI-native 时代打造的 markdown 阅读器、编辑器与双链笔记工具。读 agent 写的东西，就地批注，存在永远属于你的纯文本文件里。"',
+  'content="note.md ist ein Markdown-Reader, -Editor und Notiz-Tool mit bidirektionalen Links für das KI-Zeitalter. '
+  'Lies, was deine Agents schreiben, annotiere es, behalte es in einfachen Dateien, die dir für immer gehören."',
+  'content="note.md は AI ネイティブ時代の markdown リーダー、エディタ、双方向リンクのノートツール。エージェントが書いたものを読み、その場で書き込み、永遠にあなたのものであるプレーンなファイルに残す。"'),
  ('<a href="#features">features</a>',
   '<a href="#features">功能</a>',
   '<a href="#features">funktionen</a>',
   '<a href="#features">機能</a>'),
  ('<a href="#sidecar">sidecar notes</a>',
-  '<a href="#sidecar">伴生笔记</a>',
-  '<a href="#sidecar">sidecar-notizen</a>',
-  '<a href="#sidecar">サイドカーノート</a>'),
- ('<a href="#agents">for agents</a>',
-  '<a href="#agents">给 agent</a>',
-  '<a href="#agents">für agents</a>',
-  '<a href="#agents">エージェント向け</a>'),
+  '<a href="#sidecar">手记</a>',
+  '<a href="#sidecar">randnotizen</a>',
+  '<a href="#sidecar">サイドノート</a>'),
+ ('<a href="/orchestrate-agents/">for agents</a>',
+  '<a href="/orchestrate-agents/">给 agent</a>',
+  '<a href="/orchestrate-agents/">für agents</a>',
+  '<a href="/orchestrate-agents/">エージェント向け</a>'),
  ('<a href="https://plugins.notemd.net">plugins</a>',
   '<a href="https://plugins.notemd.net">插件</a>',
   '<a href="https://plugins.notemd.net">plugins</a>',
@@ -65,46 +65,82 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   'macOS 13+ · 免费开源 · 文件只在你的磁盘上 · <a href="/download?arch=x86_64">Intel 芯片 Mac？</a>',
   'macOS 13+ · frei &amp; offen · deine Dateien bleiben auf deiner Platte · <a href="/download?arch=x86_64">Intel-Mac?</a>',
   'macOS 13+ · 無料＆オープン · ファイルはあなたのディスクに · <a href="/download?arch=x86_64">Intel Mac は？</a>'),
- ('<div class="sec-k">The pitch</div>',
-  '<div class="sec-k">主张</div>',
-  '<div class="sec-k">Der Pitch</div>',
-  '<div class="sec-k">ピッチ</div>'),
- ('<h2>One folder for everything<br>you and your agents write</h2>',
-  '<h2>你和 agent 写下的一切<br>都在一个文件夹里</h2>',
-  '<h2>Ein Ordner für alles, was du<br>und deine Agents schreiben</h2>',
-  '<h2>あなたとエージェントが書くすべてを<br>ひとつのフォルダに</h2>'),
- ('A reader, an outliner, and a place for your marginalia — sitting on top of plain files, staying out of your way.',
-  '一个阅读器、一个大纲本、一处放批注的地方——架在纯文件之上，绝不碍事。',
-  'Ein Reader, ein Outliner und ein Platz für deine Randnotizen — auf einfachen Dateien, ohne dir im Weg zu stehen.',
-  'リーダー、アウトライナー、そして書き込みの置き場所——プレーンなファイルの上で、邪魔にならない。'),
- ('<h3>Read like it matters</h3>', '<h3>认真地读</h3>', '<h3>Lesen, als ob es zählt</h3>', '<h3>読むに値する読み方</h3>'),
- ("The agent's still running. Don't reach for your phone — what it wrote is only worth as much as you are awake to "
-  'judge it.',
-  'agent 还在跑。别去摸手机——它写的东西，值多少全看你读它时有多清醒。',
-  'Der Agent läuft noch. Greif nicht zum Handy — was er schrieb, ist nur so viel wert, wie du wach genug bist, es zu '
-  'beurteilen.',
-  'エージェントはまだ動いている。スマホに手を伸ばすな——書かれたものの価値は、あなたが判断するときにどれだけ冴えているかで決まる。'),
- ('<h3>Marginalia is data</h3>', '<h3>批注即数据</h3>', '<h3>Randnotizen sind Daten</h3>', '<h3>余白のメモはデータだ</h3>'),
- ('Your marks live in a partner file — <span class="mono-s">file.note.md</span>. The AI\'s text stays clean; your '
-  'judgment stays yours.',
-  '你的标记存放在伴生文件（sidecar）中——<span class="mono-s">file.note.md</span>。AI 的文本保持干净，你的判断归你所有。',
-  'Deine Markierungen leben in einer Partnerdatei — <span class="mono-s">file.note.md</span>. Der KI-Text bleibt '
-  'sauber; dein Urteil bleibt deins.',
-  '印は相棒のサイドカーファイル <span class="mono-s">file.note.md</span> に入る。AI のテキストはクリーンなまま、あなたの判断はあなたのもの。'),
- ('<h3>Think in outlines</h3>', '<h3>用大纲思考</h3>', '<h3>In Outlines denken</h3>', '<h3>アウトラインで考える</h3>'),
- ('Daily notes, <span class="mono-s">[[links]]</span> you draw by hand, search that answers as you type. The graph '
-  'grows only where you confirm it — never filled with agent slop.',
-  '每日笔记随手记，<span class="mono-s">[[链接]]</span> 由你亲手连，搜索边打边答。图谱只在你确认处生长——绝不被 agent 的洪水灌满。',
-  'Tagesnotizen, <span class="mono-s">[[Links]]</span>, die du selbst ziehst, Suche, die schon beim Tippen antwortet. '
-  'Der Graph wächst nur dort, wo du es bestätigst — nie mit Agent-Slop geflutet.',
-  'デイリーノート、あなたが自分で引く <span class="mono-s">[[リンク]]</span>、打ちながら答える検索。グラフはあなたが確認した場所にだけ育つ——エージェントの洪水で埋まることはない。'),
- ("<h3>It's just files</h3>", '<h3>就是文件而已</h3>', '<h3>Es sind nur Dateien</h3>', '<h3>ただのファイル</h3>'),
- ('No database. No cloud. No walled garden. A folder of markdown that outlives every app on your dock — including this '
-  'one.',
-  '没有数据库，没有云端，没有围墙花园。一个 markdown 文件夹，比你 Dock 上的每个应用都活得久——包括这一个。',
-  'Keine Datenbank. Keine Cloud. Kein Walled Garden. Ein Ordner voller Markdown, der jede App in deinem Dock überlebt '
-  '— diese hier eingeschlossen.',
-  'データベースなし。クラウドなし。壁に囲われた庭もなし。Dock のどのアプリより長生きする markdown のフォルダ——このアプリも含めて。'),
+ ('<div class="sec-k">Four things</div>',
+  '<div class="sec-k">四件事</div>',
+  '<div class="sec-k">Vier Dinge</div>',
+  '<div class="sec-k">四つのこと</div>'),
+ # ---- claim 01 ----
+ ('<h2>The best place to read what your agents wrote</h2>',
+  '<h2>读 agent 写的东西，<br>这里体验最好</h2>',
+  '<h2>Der beste Ort, um zu lesen,<br>was deine Agents geschrieben haben</h2>',
+  '<h2>エージェントが書いたものを<br>読むなら、ここが一番いい</h2>'),
+ ('Rich view and source view, one keystroke apart. Any Notion- or Typora-style theme. Mermaid, Graphviz and KaTeX, '
+  'tuned and lazily loaded. 11 MB, no bundled Chromium.',
+  '富文本与源码双模，一个快捷键之隔。任意导入 Notion、Typora 风格主题。Mermaid、Graphviz、KaTeX 都专门调过，按需加载。11 MB，没有捆绑 Chromium。',
+  'Rich-View und Quelltext, einen Tastendruck auseinander. Jedes Theme im Notion- oder Typora-Stil. Mermaid, Graphviz '
+  'und KaTeX — abgestimmt und bei Bedarf geladen. 11 MB, kein gebündeltes Chromium.',
+  'リッチ表示とソース表示は、キー一つ隣。Notion 風・Typora 風のテーマを自由に読み込める。Mermaid、Graphviz、KaTeX はすべて調整済みで、必要なときだけ読み込む。11 MB、Chromium は同梱しない。'),
+ ("Highlight a claim, leave a question in the margin, fix the sentence right where it's wrong.",
+  '高亮一句断言，在旁边留下你的疑问，就地把写错的句子改对。',
+  'Markiere eine Behauptung, lass eine Frage am Rand, korrigiere den Satz genau dort, wo er falsch ist.',
+  '主張をハイライトし、余白に疑問を残し、間違っている文をその場で直す。'),
+ ('Claude, Codex and OpenClaw each have a chat window. None of them is a place to read.',
+  'Claude、Codex、OpenClaw 各有各的对话窗口，但没有一个是「读」的地方。',
+  'Claude, Codex und OpenClaw haben je ein Chatfenster. Keines davon ist ein Ort zum Lesen.',
+  'Claude も Codex も OpenClaw もチャット窓を持っている。だが、どれも「読む」ための場所ではない。'),
+ # ---- claim 02 ----
+ ('<h2>Everything the last generation<br>got right, built in</h2>',
+  '<h2>上一代笔记工具做对的事，<br>全都内置</h2>',
+  '<h2>Alles, was die letzte Generation<br>richtig machte — eingebaut</h2>',
+  '<h2>前の世代が正しかったことは、<br>すべて内蔵した</h2>'),
+ ('local-first · git sync · outliner · [[wikilinks]] · backlinks · wiki pages · daily notes · plugins',
+  'local-first · git 同步 · 大纲 · [[双链]] · 反向链接 · wiki 页面 · 每日笔记 · 插件',
+  'local-first · Git-Sync · Outliner · [[Wikilinks]] · Backlinks · Wiki-Seiten · Tagesnotizen · Plugins',
+  'local-first · git 同期 · アウトライナー · [[ウィキリンク]] · バックリンク · wiki ページ · デイリーノート · プラグイン'),
+ ('Roam Research and Obsidian figured these out. note.md ships them on files: one plugin imports your whole Roam '
+  'graph, and an Obsidian vault opens directly.',
+  '这些是 Roam Research 和 Obsidian 想明白的事，note.md 把它们落在文件上：一个插件导入你整份 Roam 数据，Obsidian 的 vault 直接打开。',
+  'Roam Research und Obsidian haben das herausgefunden. note.md liefert es auf Dateien: ein Plugin importiert deinen '
+  'gesamten Roam-Graphen, und ein Obsidian-Vault öffnet sich direkt.',
+  'Roam Research と Obsidian が見つけ出したこと。note.md はそれをファイルの上で提供する：プラグイン一つで Roam のグラフを丸ごと取り込み、Obsidian の vault はそのまま開く。'),
+ # ---- claim 03 ----
+ ('<h2>No AI inside.<br>Fully AI-native.</h2>',
+  '<h2>它自己不带 AI。<br>它仍然是 AI-native。</h2>',
+  '<h2>Keine KI eingebaut.<br>Trotzdem KI-nativ.</h2>',
+  '<h2>AI は入っていない。<br>それでも AI ネイティブ。</h2>'),
+ ('note.md calls no model and sends no request.',
+  'note.md 不调模型、不发一个请求。',
+  'note.md ruft kein Modell auf und sendet keine Anfrage.',
+  'note.md はモデルを呼ばない。リクエストも送らない。'),
+ ('Your vault is the shared, version-controlled context that many agents and harnesses work in — Cowork, Claude Code, '
+  'Codex, ChatGPT Work, OpenClaw, Hermes — through public conventions any of them can read. '
+  '<a href="/orchestrate-agents/">See how</a>.',
+  '你的 vault 是多 agent、多 harness 共用的、受版本控制的上下文环境——Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes'
+  '——它们通过公共约定读写同一批文件。<a href="/orchestrate-agents/">看怎么做</a>。',
+  'Dein Vault ist der geteilte, versionierte Kontext, in dem viele Agents und Harnesses arbeiten — Cowork, Claude '
+  'Code, Codex, ChatGPT Work, OpenClaw, Hermes — über öffentliche Konventionen, die jeder von ihnen lesen kann. '
+  '<a href="/orchestrate-agents/">So geht\'s</a>.',
+  'あなたの vault は、多くのエージェントとハーネスが共有する、バージョン管理されたコンテキスト——Cowork、Claude Code、Codex、'
+  'ChatGPT Work、OpenClaw、Hermes——どれもが読める公開の約束事を通して。<a href="/orchestrate-agents/">やり方を見る</a>。'),
+ ('Switch AI tools whenever you like. The asset stays yours.',
+  '你随时可以换 AI 工具。资产始终在你手里。',
+  'Wechsle die KI-Tools, wann du willst. Das Asset bleibt deins.',
+  'AI ツールはいつ乗り換えてもいい。資産はあなたの手に残る。'),
+ # ---- claim 04 ----
+ ('<h2>Whatever else you need,<br>grow it yourself</h2>',
+  '<h2>剩下的，<br>你自己长出来</h2>',
+  '<h2>Was du sonst brauchst,<br>lässt du selbst wachsen</h2>',
+  '<h2>ほかに必要なものは、<br>自分で生やせばいい</h2>'),
+ ('Write a plugin. Wire an OpenClaw cron job. Hang skills off it.',
+  '写个插件。配一条 OpenClaw 定时任务。挂上 skills。',
+  'Schreib ein Plugin. Häng einen OpenClaw-Cronjob dran. Setz Skills obendrauf.',
+  'プラグインを書く。OpenClaw の定期実行をつなぐ。skills をぶら下げる。'),
+ ('Put a <span class="mono-s">?</span> in an annotation and an agent picks it up: it revises the document '
+  'asynchronously, fills in the context you asked for, and hands it back for you to accept — or not.',
+  '在批注里打一个 <span class="mono-s">?</span>，agent 就会接走：异步改这篇文档、补上你要的上下文，再交回来等你决定采不采纳。',
+  'Setz ein <span class="mono-s">?</span> in eine Anmerkung, und ein Agent nimmt sie auf: Er überarbeitet das Dokument '
+  'asynchron, ergänzt den gewünschten Kontext und gibt es dir zurück — annehmen oder nicht, entscheidest du.',
+  '注釈に <span class="mono-s">?</span> を一つ置けば、エージェントが引き取る：非同期で文書を直し、頼んだ文脈を補い、採用するかどうかをあなたに委ねて返してくる。'),
  ('<div class="sec-k">The trick</div>',
   '<div class="sec-k">戏法</div>',
   '<div class="sec-k">Der Trick</div>',
@@ -135,56 +171,6 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   'Zehntausend Wörter kann jeder generieren. Deine Meinung dazu kann niemand generieren — <b>der seltenste Datensatz '
   'der Welt, und er liegt auf deiner Platte.</b>',
   '一万語なら誰でも生成できる。だが、それについてのあなたの意見は誰にも生成できない——<b>世界で最も希少なデータセットが、あなたのディスクに眠っている。</b>'),
- ('<div class="sec-k">For agents</div>',
-  '<div class="sec-k">给 agent</div>',
-  '<div class="sec-k">Für Agents</div>',
-  '<div class="sec-k">エージェントたちへ</div>'),
- ('<h2>Agents are welcome here</h2>',
-  '<h2>欢迎 agent 光临</h2>',
-  '<h2>Agents sind hier willkommen</h2>',
-  '<h2>エージェント、歓迎。</h2>'),
- ('Plain files, simple rules. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes — one vault they all work, and '
-  'you decide who does what.',
-  '纯文件，简单规则。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同一个 vault 上它们都能干活，谁做什么由你定。',
-  'Einfache Dateien, einfache Regeln. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes — ein Vault, an dem sie '
-  'alle arbeiten, und du entscheidest, wer was macht.',
-  'プレーンなファイル、シンプルなルール。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——ひとつの Vault で全員が働き、誰が何をやるかはあなたが決める。'),
- ("The rules live in the folder, in a file any agent reads. Point Claude Code — or next year's agent — at it. No "
-  'plugins, no adapters.',
-  '规则就住在文件夹里，写成任何 agent 都能读的文件。把 Claude Code——或者明年的新 agent——指过来就行。不要插件，不要适配器。',
-  'Die Regeln leben im Ordner, in einer Datei, die jeder Agent liest. Zeig Claude Code — oder den Agent von nächstem '
-  'Jahr — darauf. Keine Plugins, keine Adapter.',
-  'ルールはフォルダの中、どのエージェントでも読めるファイルにある。Claude Code——来年の新顔でも——を向けるだけ。プラグインもアダプタも不要。'),
- ('<h3>Memory that compounds</h3>', '<h3>会复利的记忆</h3>', '<h3>Gedächtnis mit Zinseszins</h3>', '<h3>複利で増える記憶</h3>'),
- ("Your daily notes are your agent's memory — years of your thinking, searchable, quoted back to you with receipts.",
-  '你的每日笔记就是 agent 的记忆——多年的思考，可搜索，还带出处引用给你听。',
-  'Deine Tagesnotizen sind das Gedächtnis deines Agents — Jahre deines Denkens, durchsuchbar, mit Beleg an dich '
-  'zurückzitiert.',
-  'デイリーノートはエージェントの記憶——何年分もの思考が検索でき、出典つきであなたに引用し返される。'),
- ('<h3>Write → read → learn</h3>',
-  '<h3>写 → 读 → 学</h3>',
-  '<h3>Schreiben → Lesen → Lernen</h3>',
-  '<h3>書く → 読む → 学ぶ</h3>'),
- ('Agents write and can suggest links. You mark what matters and confirm what connects. They read your marks and '
-  'write better — the whole loop runs on your disk.',
-  'agent 写，还能提议链接。你标出重要的、确认哪些该连起来。它读你的标记然后写得更好——整个循环都跑在你的磁盘上。',
-  'Agents schreiben und können Links vorschlagen. Du markierst, was zählt, und bestätigst, was sich verbindet. Sie '
-  'lesen deine Markierungen und schreiben besser — die ganze Schleife läuft auf deiner Platte.',
-  'エージェントが書き、リンクを提案もする。あなたが大事な箇所に印をつけ、つながるものを確認する。エージェントが印を読み、もっとうまく書く——ループ全体があなたのディスクの上で回る。'),
- ('<h3>One vault, you orchestrate</h3>',
-  '<h3>一个 vault，你来编排</h3>',
-  '<h3>Ein Vault, du orchestrierst</h3>',
-  '<h3>ひとつの Vault、指揮するのはあなた</h3>'),
- ('No agent owns your knowledge. Route each job to whoever\'s best — Cowork drafts, Codex refactors, ChatGPT '
-  'generates — on whatever model. They hand off through files; you hold the pen. '
-  '<a href="/orchestrate-agents/" style="border-bottom:1px dotted currentColor">See how</a>.',
-  '没有 agent 拥有你的知识。谁擅长就派谁——Cowork 起草、Codex 重构、ChatGPT 生成——用哪个模型都行。它们通过文件交接，握笔的是你。'
-  '<a href="/orchestrate-agents/" style="border-bottom:1px dotted currentColor">看怎么做</a>。',
-  'Kein Agent besitzt dein Wissen. Route jeden Job an den, der ihn am besten kann — Cowork entwirft, Codex '
-  'refactored, ChatGPT generiert — auf welchem Modell auch immer. Sie reichen über Dateien weiter; du hältst den '
-  'Stift. <a href="/orchestrate-agents/" style="border-bottom:1px dotted currentColor">So geht\'s</a>.',
-  'どの agent もあなたの知識を所有しない。各仕事をいちばん得意な相手に振る——Cowork が下書き、Codex がリファクタ、ChatGPT が生成——モデルは何でもいい。彼らはファイルで受け渡し、ペンを握るのはあなた。'
-  '<a href="/orchestrate-agents/" style="border-bottom:1px dotted currentColor">やり方を見る</a>。'),
  ('<span class="star">✦</span> what AI writes',
   '<span class="star">✦</span> AI 写的',
   '<span class="star">✦</span> was die KI schreibt',
@@ -202,6 +188,11 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   'macOS 13 或更高 · Apple Silicon 与 <a href="/download?arch=x86_64">Intel</a> · 从 GitHub Releases 获取',
   'macOS 13 oder neuer · Apple Silicon &amp; <a href="/download?arch=x86_64">Intel</a> · von GitHub Releases',
   'macOS 13 以降 · Apple Silicon &amp; <a href="/download?arch=x86_64">Intel</a> · GitHub Releases から'),
+ ('Developed and maintained entirely by AI coding — reviewed, tested and smoke-run by a human before every release.',
+  '完全由 AI Coding 开发和维护——每次发布前都由人审阅、测试并实机验证。',
+  'Vollständig per AI-Coding entwickelt und gepflegt — vor jedem Release von einem Menschen geprüft, getestet und '
+  'live verifiziert.',
+  '開発も保守も、すべて AI コーディングによる——リリースのたびに人がレビューし、テストし、実機で確認している。'),
  ("Text is cheap now. What you thought about it isn't.",
   '文字如今很廉价。你对它的看法不是。',
   'Text ist jetzt billig. Was du darüber dachtest, nicht.',

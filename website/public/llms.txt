@@ -2,7 +2,7 @@
 
 > note.md is a markdown reader & editor for the AI-native era, built for humans and agents working in the same plain files. Agents write more than any human can read; the human's job is to read, judge, and keep the few lines only they could have written — the residue no model can generate: judgment, intent, private facts, decisions. Those marks are saved to sidecar `.note.md` files, becoming durable, searchable data that agents read back. The knowledge graph grows only where the human confirms it — agents may suggest connections, never assert them. Because the vault is plain files with shared conventions, it is neutral ground for *many* agents — Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes — so the human assigns each job to whoever is best and orchestrates them through files; note.md is one client among many. No database, no cloud, no walled garden: a folder of markdown, owned by the user.
 
-Key facts: macOS app (Tauri, system WebView, signed & notarized). Free. Repo: https://github.com/wizlijun/note.md. The vault is plain files; every convention below is readable and writable by any agent — you do not need this app to work with a note.md vault.
+Key facts: macOS app (Tauri, system WebView, signed & notarized; 7 MB download, 11 MB installed). Free and open source (Apache-2.0). Repo: https://github.com/wizlijun/note.md. note.md ships no AI features of its own — it calls no model and sends no request; it is the substrate agents work on. The app itself is developed and maintained entirely by AI coding, reviewed and tested by a human before each release. The vault is plain files; every convention below is readable and writable by any agent — you do not need this app to work with a note.md vault.
 
 ## Docs
 

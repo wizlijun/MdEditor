@@ -5,7 +5,7 @@
 <!-- Hello, agent. The plain-text version of this site is at /llms.txt -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>note.md — 人与 agent 共用的 markdown 编辑器</title>
-<meta name="description" content="note.md 是为 AI-native 时代打造的 markdown 阅读器与编辑器。agent 写，你读并批注。你的知识存在永远属于你的纯文本文件里。">
+<meta name="description" content="note.md 是为 AI-native 时代打造的 markdown 阅读器、编辑器与双链笔记工具。读 agent 写的东西，就地批注，存在永远属于你的纯文本文件里。">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -116,6 +116,23 @@
 
   .orn{font-family:var(--mono); text-align:center; color:#B8B4AA; letter-spacing:1.2em; padding:0 0 0 1.2em; user-select:none;}
 
+  /* ---------- four claims ---------- */
+  .claims{list-style:none; margin-top:40px;}
+  .claims li{display:grid; grid-template-columns:1fr 1.15fr; gap:56px; padding:46px 0; border-top:1px solid var(--line);}
+  .claims li:first-child{border-top:none; padding-top:6px;}
+  .claims .n{font-family:var(--mono); font-size:12px; font-weight:700; letter-spacing:.24em; color:var(--gray); display:block; margin-bottom:16px;}
+  .claims h2{font-size:31px; margin-bottom:0;}
+  .claims p{font-size:17.5px; color:#565B66; margin-bottom:15px;}
+  .claims p:last-child{margin-bottom:0;}
+  .claims .beat{font-family:var(--serif); font-style:italic; font-size:20px; color:var(--ink);}
+  .claims .mono-s{font-family:var(--mono); font-size:13.5px; color:#8A8F9B;}
+  .claims a{border-bottom:1px dotted var(--gray);}
+  @media(max-width:860px){
+    .claims li{grid-template-columns:1fr; gap:16px; padding:34px 0;}
+    .claims h2{font-size:24px;}
+    .claims h2 br{display:none;}
+  }
+
   .grid4{display:grid; grid-template-columns:repeat(2,1fr); gap:22px; margin-top:46px;}
   .card{background:#fff; border:1px solid var(--line); border-radius:4px; padding:30px 28px; position:relative;}
   .card::before{content:""; position:absolute; inset:6px; border:1px solid #F0EEE8; border-radius:2px; pointer-events:none;}
@@ -137,9 +154,10 @@
   .sidecar .why{margin-top:38px; font-size:17.5px; color:#C3C7CF; max-width:660px;}
   .sidecar .why b{color:var(--paper); font-weight:600;}
 
-  /* agents */
-  .agents .grid4{grid-template-columns:repeat(3,1fr);}
+  /* legend */
   .legend{display:flex; gap:28px; margin-top:34px; font-size:16px; font-style:italic; color:#565B66;}
+  .sidecar .legend{color:#9CA3AF;}
+  .sidecar .legend .pt{background:#C3C7CF;}
   .legend span{display:flex; align-items:center; gap:9px;}
   .legend .star{color:var(--amber); font-size:18px; font-style:normal;}
   .legend .pt{width:11px; height:11px; border-radius:50%; background:var(--ink); display:inline-block;}
@@ -199,7 +217,7 @@
     <div class="nav-links">
       <a href="#features">功能</a>
       <a href="#sidecar">手记</a>
-      <a href="#agents">给 agent</a>
+      <a href="/zh/orchestrate-agents/">给 agent</a>
       <a href="https://plugins.notemd.net">插件</a>
       <a href="https://github.com/wizlijun/note.md">github</a>
     </div>
@@ -255,31 +273,39 @@
 
 <section id="features">
   <div class="wrap">
-    <div class="sec-k">主张</div>
-    <h2>你和 agent 写下的一切<br>都在一个文件夹里</h2>
-    <p class="lead">一个阅读器、一个大纲本、一处放批注的地方——架在纯文件之上，绝不碍事。</p>
-    <div class="grid4">
-      <div class="card">
-        <span class="ic">✦</span>
-        <h3>认真地读</h3>
-        <p>agent 还在跑。别去摸手机——它写的东西，值多少全看你读它时有多清醒。</p>
-      </div>
-      <div class="card">
-        <span class="ic">●</span>
-        <h3>批注即数据</h3>
-        <p>你的标记存放在sidecar 文件中——<span class="mono-s">file.note.md</span>。AI 的文本保持干净，你的判断归你所有。</p>
-      </div>
-      <div class="card">
-        <span class="ic">≡</span>
-        <h3>用大纲思考</h3>
-        <p>每日笔记随手记，<span class="mono-s">[[链接]]</span> 由你亲手连，搜索边打边答。图谱只在你确认处生长——绝不被 agent 的洪水灌满。</p>
-      </div>
-      <div class="card">
-        <span class="ic">▤</span>
-        <h3>就是文件而已</h3>
-        <p>没有数据库，没有云端，没有围墙花园。一个 markdown 文件夹，比你 Dock 上的每个应用都活得久——包括这一个。</p>
-      </div>
-    </div>
+    <div class="sec-k">四件事</div>
+    <ol class="claims">
+      <li>
+        <div><span class="n">01</span><h2>读 agent 写的东西，<br>这里体验最好</h2></div>
+        <div>
+          <p>富文本与源码双模，一个快捷键之隔。任意导入 Notion、Typora 风格主题。Mermaid、Graphviz、KaTeX 都专门调过，按需加载。11 MB，没有捆绑 Chromium。</p>
+          <p>高亮一句断言，在旁边留下你的疑问，就地把写错的句子改对。</p>
+          <p class="beat">Claude、Codex、OpenClaw 各有各的对话窗口，但没有一个是「读」的地方。</p>
+        </div>
+      </li>
+      <li>
+        <div><span class="n">02</span><h2>上一代笔记工具做对的事，<br>全都内置</h2></div>
+        <div>
+          <p class="mono-s">local-first · git 同步 · 大纲 · [[双链]] · 反向链接 · wiki 页面 · 每日笔记 · 插件</p>
+          <p>这些是 Roam Research 和 Obsidian 想明白的事，note.md 把它们落在文件上：一个插件导入你整份 Roam 数据，Obsidian 的 vault 直接打开。</p>
+        </div>
+      </li>
+      <li>
+        <div><span class="n">03</span><h2>它自己不带 AI。<br>它仍然是 AI-native。</h2></div>
+        <div>
+          <p>note.md 不调模型、不发一个请求。</p>
+          <p>你的 vault 是多 agent、多 harness 共用的、受版本控制的上下文环境——Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes——它们通过公共约定读写同一批文件。<a href="/zh/orchestrate-agents/">看怎么做</a>。</p>
+          <p class="beat">你随时可以换 AI 工具。资产始终在你手里。</p>
+        </div>
+      </li>
+      <li>
+        <div><span class="n">04</span><h2>剩下的，<br>你自己长出来</h2></div>
+        <div>
+          <p>写个插件。配一条 OpenClaw 定时任务。挂上 skills。</p>
+          <p>在批注里打一个 <span class="mono-s">?</span>，agent 就会接走：异步改这篇文档、补上你要的上下文，再交回来等你决定采不采纳。</p>
+        </div>
+      </li>
+    </ol>
   </div>
 </section>
 
@@ -302,32 +328,6 @@
       </div>
     </div>
     <p class="why">现在谁都能生成一万字，但没人能生成你对这一万字的看法——<b>世界上最稀有的数据集，就躺在你的磁盘上。</b></p>
-  </div>
-</section>
-
-<section class="agents" id="agents">
-  <div class="wrap">
-    <div class="sec-k">给 agent</div>
-    <h2>欢迎 agent 光临</h2>
-    <p class="lead">纯文件，简单规则。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同一个 vault 上它们都能干活，谁做什么由你定。</p>
-    <div class="grid4">
-      <div class="card">
-        <h3 class="mono" style="font-size:16px">AGENTS.md</h3>
-        <p>规则就住在文件夹里，写成任何 agent 都能读的文件。把 Claude Code——或者明年的新 agent——指过来就行。不要插件，不要适配器。</p>
-      </div>
-      <div class="card">
-        <h3>会复利的记忆</h3>
-        <p>你的每日笔记就是 agent 的记忆——多年的思考，可搜索，还带出处引用给你听。</p>
-      </div>
-      <div class="card">
-        <h3>写 → 读 → 学</h3>
-        <p>agent 写，还能提议链接。你标出重要的、确认哪些该连起来。它读你的标记然后写得更好——整个循环都跑在你的磁盘上。</p>
-      </div>
-      <div class="card">
-        <h3>一个 vault，你来编排</h3>
-        <p>没有 agent 拥有你的知识。谁擅长就派谁——Cowork 起草、Codex 重构、ChatGPT 生成——用哪个模型都行。它们通过文件交接，握笔的是你。<a href="/zh/orchestrate-agents/" style="border-bottom:1px dotted currentColor">看怎么做</a>。</p>
-      </div>
-    </div>
     <div class="legend">
       <span><span class="star">✦</span> AI 写的</span>
       <span><span class="pt"></span> 你想的</span>
@@ -346,6 +346,7 @@
       </a>
     </div>
     <p class="fine">macOS 13 或更高 · Apple Silicon 与 <a href="/download?arch=x86_64">Intel</a> · 从 GitHub Releases 获取</p>
+    <p class="fine">完全由 AI Coding 开发和维护——每次发布前都由人审阅、测试并实机验证。</p>
   </div>
 </section>
 
