@@ -16,7 +16,7 @@
 <link rel="alternate" hreflang="x-default" href="https://notemd.net/compare/roam-research/">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700&family=Noto+Serif+SC:wght@700&display=swap" rel="stylesheet">
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "我能把 Roam Research 的图谱导入 note.md 吗？", "acceptedAnswer": {"@type": "Answer", "text": "能——在 Roam 里把图谱导出为 JSON，然后把页面转成 wiki 笔记、每日笔记转成带日期的大纲文件。日期链接会被改写成规范的 [[yyyy-MM-dd]] 形式，失效链接会被报告。"}}, {"@type": "Question", "name": "note.md 有 Roam 那样的块引用吗？", "acceptedAnswer": {"@type": "Answer", "text": "note.md 有稳定的块 ID：每个顶层块都有一个 b-xxxxxx id，可以在任何地方以 ((file#b-xxxxxx)) 引用。它覆盖引用和跳转；Roam 式的转写嵌入（transclusion/embeds）不是目标。"}}, {"@type": "Question", "name": "note.md 免费吗？", "acceptedAnswer": {"@type": "Answer", "text": "免费。note.md 免费且开源（Apache-2.0）。Roam Research 每月 $15 起。"}}]}</script>
 <style>
 :root{--ink:#17181C;--paper:#FAFAF7;--amber:#F59E0B;--gray:#9CA3AF;--line:#E7E5E0;
@@ -61,8 +61,8 @@ footer{background:var(--ink);color:#7C8290;font-size:13.5px;padding:34px 0 44px}
 .flinks a{display:block;color:#B9BDC7;text-decoration:none;margin-bottom:5px}
 .flinks a:hover{color:#fff}
 .fbase{border-top:1px solid #26282F;padding-top:18px;font-family:var(--mono);font-size:12.5px}
-html[lang="zh"]{--serif:"Playfair Display","Songti SC","Noto Serif SC",STSong,serif;--body:"EB Garamond","Songti SC","Noto Serif SC",STSong,serif}
-html[lang="zh"] .lead{font-style:normal}
+html[lang="zh"]{--serif:"Playfair Display","Noto Serif SC","Source Han Serif SC","Songti SC",serif;--body:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif}
+html[lang="zh"] .lead,html[lang="zh"] .cta h2{font-style:normal}
 html[lang="ja"]{--serif:"Playfair Display","Hiragino Mincho ProN","Noto Serif JP",serif;--body:"EB Garamond","Hiragino Mincho ProN","Noto Serif JP",serif}
 html[lang="ja"] .lead{font-style:normal}
 .lang-sw{margin-left:auto;display:flex;gap:12px;font-family:var(--mono);font-size:12px;color:#7C8290}

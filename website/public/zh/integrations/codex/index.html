@@ -16,7 +16,7 @@
 <link rel="alternate" hreflang="x-default" href="https://notemd.net/integrations/codex/">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700&family=Noto+Serif+SC:wght@700&display=swap" rel="stylesheet">
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Codex 需要 MCP 服务器才能用 vault 吗？", "acceptedAnswer": {"@type": "Answer", "text": "不需要。vault 就是工作目录里的纯文件——Codex 的主场。MCP 端点是给分享 worker 用的（发布页面），基本的 vault 工作用不上。"}}, {"@type": "Question", "name": "AGENTS.md 里该禁止什么？", "acceptedAnswer": {"@type": "Answer", "text": "唯一的硬规矩：agent 不写你的 .note.md sidecar 文件——那里存的是人的判断。其余（命名、目录、链接风格）都是各家的偏好。"}}]}</script>
 <style>
 :root{--ink:#17181C;--paper:#FAFAF7;--amber:#F59E0B;--gray:#9CA3AF;--line:#E7E5E0;
@@ -61,8 +61,8 @@ footer{background:var(--ink);color:#7C8290;font-size:13.5px;padding:34px 0 44px}
 .flinks a{display:block;color:#B9BDC7;text-decoration:none;margin-bottom:5px}
 .flinks a:hover{color:#fff}
 .fbase{border-top:1px solid #26282F;padding-top:18px;font-family:var(--mono);font-size:12.5px}
-html[lang="zh"]{--serif:"Playfair Display","Songti SC","Noto Serif SC",STSong,serif;--body:"EB Garamond","Songti SC","Noto Serif SC",STSong,serif}
-html[lang="zh"] .lead{font-style:normal}
+html[lang="zh"]{--serif:"Playfair Display","Noto Serif SC","Source Han Serif SC","Songti SC",serif;--body:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif}
+html[lang="zh"] .lead,html[lang="zh"] .cta h2{font-style:normal}
 html[lang="ja"]{--serif:"Playfair Display","Hiragino Mincho ProN","Noto Serif JP",serif;--body:"EB Garamond","Hiragino Mincho ProN","Noto Serif JP",serif}
 html[lang="ja"] .lead{font-style:normal}
 .lang-sw{margin-left:auto;display:flex;gap:12px;font-family:var(--mono);font-size:12px;color:#7C8290}

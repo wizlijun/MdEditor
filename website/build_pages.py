@@ -53,8 +53,8 @@ footer{background:var(--ink);color:#7C8290;font-size:13.5px;padding:34px 0 44px}
 .flinks a{display:block;color:#B9BDC7;text-decoration:none;margin-bottom:5px}
 .flinks a:hover{color:#fff}
 .fbase{border-top:1px solid #26282F;padding-top:18px;font-family:var(--mono);font-size:12.5px}
-html[lang="zh"]{--serif:"Playfair Display","Songti SC","Noto Serif SC",STSong,serif;--body:"EB Garamond","Songti SC","Noto Serif SC",STSong,serif}
-html[lang="zh"] .lead{font-style:normal}
+html[lang="zh"]{--serif:"Playfair Display","Noto Serif SC","Source Han Serif SC","Songti SC",serif;--body:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif}
+html[lang="zh"] .lead,html[lang="zh"] .cta h2{font-style:normal}
 html[lang="ja"]{--serif:"Playfair Display","Hiragino Mincho ProN","Noto Serif JP",serif;--body:"EB Garamond","Hiragino Mincho ProN","Noto Serif JP",serif}
 html[lang="ja"] .lead{font-style:normal}
 .lang-sw{margin-left:auto;display:flex;gap:12px;font-family:var(--mono);font-size:12px;color:#7C8290}
@@ -111,6 +111,14 @@ CHROME = {
 
 def lp(lang, path):
     return path if lang == "en" else "/" + lang + path
+
+FONTS = ("https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900"
+         "&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700")
+
+def font_link(lang):
+    # zh headings are set in Source Han Serif; only the zh pages pay for the webfont.
+    extra = "&family=Noto+Serif+SC:wght@700" if lang == "zh" else ""
+    return f'<link href="{FONTS}{extra}&display=swap" rel="stylesheet">'
 
 def switcher(lang, path):
     links = "".join(
@@ -181,7 +189,7 @@ def render(p, lang):
 {hreflangs(p['path'])}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+{font_link(lang)}
 {jsonld}
 <style>{CSS}</style>
 </head>

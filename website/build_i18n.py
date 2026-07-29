@@ -219,6 +219,12 @@ SWITCH = {
            ('<a href="/zh/">中文</a>', '<a href="/zh/" class="on">中文</a>')],
 }
 
+# zh headings are set in Source Han Serif; only the zh page pays for the webfont.
+FONTS = {
+    "zh": [('&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap',
+            '&family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Noto+Serif+SC:wght@700&display=swap')],
+}
+
 def build(lang):
     idx = COL[lang]
     src = open("public/index.html", encoding="utf-8").read()
@@ -230,7 +236,7 @@ def build(lang):
         src = src.replace(en, target)
     src = src.replace('<html lang="en">', f'<html lang="{lang}">')
     src = src.replace(f'<link rel="canonical" href="{BASE}/">', f'<link rel="canonical" href="{BASE}/{lang}/">')
-    for old, new in SWITCH[lang]:
+    for old, new in SWITCH[lang] + FONTS.get(lang, []):
         if old not in src:
             missing.append(old[:60]); continue
         src = src.replace(old, new)

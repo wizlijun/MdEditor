@@ -51,10 +51,11 @@
   .lang-sw a:hover{color:#fff;}
   .lang-sw a.on{color:var(--amber); border-bottom-color:var(--amber);}
   /* CJK / DE typography adjustments */
-  html[lang="zh"]{--serif:"Playfair Display","Songti SC","Noto Serif SC",STSong,serif;
-                  --body:"EB Garamond","Songti SC","Noto Serif SC",STSong,serif;
+  html[lang="zh"]{--serif:"Playfair Display","Noto Serif SC","Source Han Serif SC","Songti SC",serif;
+                  --body:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
                   --mono:"Courier Prime","PingFang SC","Courier New",monospace;}
   html[lang="zh"] .lead, html[lang="zh"] .hero p.sub{font-style:normal;}
+  html[lang="zh"] h1 em{font-style:normal;}  /* CJK has no italic — leave it to the amber */
   html[lang="de"] h1{white-space:normal; font-size:40px;}
   html[lang="ja"]{--serif:"Playfair Display","Hiragino Mincho ProN","Noto Serif JP",serif;
                   --body:"EB Garamond","Hiragino Mincho ProN","Noto Serif JP",serif;

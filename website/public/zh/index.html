@@ -17,7 +17,7 @@
 <link rel="alternate" hreflang="x-default" href="https://notemd.net/">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Noto+Serif+SC:wght@700&display=swap" rel="stylesheet">
 <style>
   :root{
     --ink:#17181C; --ink2:#22242B; --paper:#FAFAF7; --amber:#F59E0B;
@@ -51,10 +51,11 @@
   .lang-sw a:hover{color:#fff;}
   .lang-sw a.on{color:var(--amber); border-bottom-color:var(--amber);}
   /* CJK / DE typography adjustments */
-  html[lang="zh"]{--serif:"Playfair Display","Songti SC","Noto Serif SC",STSong,serif;
-                  --body:"EB Garamond","Songti SC","Noto Serif SC",STSong,serif;
+  html[lang="zh"]{--serif:"Playfair Display","Noto Serif SC","Source Han Serif SC","Songti SC",serif;
+                  --body:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
                   --mono:"Courier Prime","PingFang SC","Courier New",monospace;}
   html[lang="zh"] .lead, html[lang="zh"] .hero p.sub{font-style:normal;}
+  html[lang="zh"] h1 em{font-style:normal;}  /* CJK has no italic — leave it to the amber */
   html[lang="de"] h1{white-space:normal; font-size:40px;}
   html[lang="ja"]{--serif:"Playfair Display","Hiragino Mincho ProN","Noto Serif JP",serif;
                   --body:"EB Garamond","Hiragino Mincho ProN","Noto Serif JP",serif;
