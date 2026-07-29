@@ -4,9 +4,9 @@
 
 > **Read what AI writes. Keep what you think. Keep what only *you* can write.**
 
-A markdown reader & editor for the AI-native era. Native macOS app, 7 MB to
-download, 11 MB installed. Your notes are a folder of plain `.md` files on your
-disk — forever.
+A markdown reader, editor, and bidirectional-linking notes tool for the
+AI-native era. Native macOS app, 7 MB to download, 11 MB installed. Your notes
+are a folder of plain `.md` files on your disk — forever.
 
 [Download](https://notemd.net/download) · [Plugins](https://plugins.notemd.net) · [Full feature list](docs/FEATURES.md)
 
@@ -14,9 +14,9 @@ disk — forever.
 
 ## 1. The best place to read what your agents wrote
 
-Rich view and source view, one keystroke apart. Import any Typora theme.
-Mermaid, Graphviz, and KaTeX all tuned and lazily loaded. No bundled
-Chromium — the whole app is 11 MB.
+Rich view and source view, one keystroke apart. Import any Notion- or
+Typora-style theme. Mermaid, Graphviz, and KaTeX all tuned and lazily loaded.
+No bundled Chromium — the whole app is 11 MB.
 
 Reading is not passive here. Highlight a claim, leave a question in the
 margin, fix the sentence right where it's wrong.
