@@ -39,6 +39,7 @@
       "dmg"
     ],
     "icon": [
+      "icons/icon.icns",
       "icons/icon.png"
     ],
     "resources": [
