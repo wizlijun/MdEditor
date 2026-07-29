@@ -42,16 +42,16 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<span class="kicker">无限文本的时代</span>',
   '<span class="kicker">Für das Zeitalter des unendlichen Texts</span>',
   '<span class="kicker">無限のテキストの時代に</span>'),
- ('<h1>Read what AI writes.<br>Keep what you think.<br>Keep what only <em>you</em> can write.<span class="cursor"></span></h1>',
-  '<h1>读 AI 写的。<br>留下你想的。<br>留下只有<em>你</em>写得出的。<span class="cursor"></span></h1>',
-  '<h1>Lies, was die KI schreibt.<br>Behalte, was du denkst.<br>Behalte, was nur <em>du</em> schreiben kannst.<span class="cursor"></span></h1>',
-  '<h1>読むのは AI の文章。<br>残すのはあなたの考え。<br>残すのは、<em>あなた</em>にしか書けないもの。<span class="cursor"></span></h1>'),
- ("Your agents write more in a night than you'll read all year. note.md is where you read it and mark it up. "
-  'Everything it saves is a plain file, on your own Mac.',
-  '你的 agent 一晚写的，你一年也读不完。note.md 就是你读它、标它的地方。存下来的都是普通 markdown 文件，就在你自己电脑上。',
-  'Deine Agents schreiben in einer Nacht mehr, als du in einem Jahr liest. In note.md liest du es und schreibst dazu. '
-  'Alles, was dabei gespeichert wird, ist eine einfache Datei auf deinem eigenen Mac.',
-  'エージェントが一晩で書く量は、一年かけても読み切れない。note.md は、それを読んで書き込む場所。残るのはすべて、あなたの Mac の中のただのファイル。'),
+ ('<h1>One night of AI.<br>A <em>year</em> of reading.<span class="cursor"></span></h1>',
+  '<h1>AI 一晚写的，<br>你<em>一年</em>也读不完。<span class="cursor"></span></h1>',
+  '<h1>Eine Nacht KI.<br>Ein <em>Jahr</em> Lesestoff.<span class="cursor"></span></h1>',
+  '<h1>AI が一晩で書く量は、<br><em>一年</em>でも読み切れない。<span class="cursor"></span></h1>'),
+ ('note.md is where you get through it: highlight, question, fix it on the spot. What you save is a plain markdown '
+  'file, on your own Mac.',
+  'note.md 让你读得进去：划重点、写疑问、直接改。存下来的都是普通 markdown 文件，在你自己电脑上。',
+  'In note.md kommst du wirklich durch: markieren, nachfragen, direkt korrigieren. Was du behältst, ist eine '
+  'einfache Markdown-Datei auf deinem eigenen Mac.',
+  'note.md なら、読み進められる。ハイライトして、疑問を書いて、その場で直す。残るのは、あなたの Mac の中のただの markdown ファイル。'),
  ('<span class="bl">Download for macOS</span>',
   '<span class="bl">下载 macOS 版</span>',
   '<span class="bl">Für macOS laden</span>',
