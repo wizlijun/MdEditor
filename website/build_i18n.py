@@ -52,6 +52,13 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   'In note.md kommst du wirklich durch: markieren, nachfragen, direkt korrigieren. Was du behältst, ist eine '
   'einfache Markdown-Datei auf deinem eigenen Mac.',
   'note.md なら、読み進められる。ハイライトして、疑問を書いて、その場で直す。残るのは、あなたの Mac の中のただの markdown ファイル。'),
+ ('11 MB<i>·</i>any Typora theme<i>·</i>Mermaid &amp; Graphviz<i>·</i>outliner, [[links]], daily notes'
+  '<i>·</i>one folder every agent shares',
+  '11 MB<i>·</i>主题随你换<i>·</i>Mermaid、Graphviz<i>·</i>大纲、[[双链]]、每日笔记<i>·</i>所有 agent 共用一个文件夹',
+  '11 MB<i>·</i>jedes Typora-Theme<i>·</i>Mermaid &amp; Graphviz<i>·</i>Outliner, [[Links]], Tagesnotizen'
+  '<i>·</i>ein Ordner für alle Agents',
+  '11 MB<i>·</i>Typora テーマ対応<i>·</i>Mermaid、Graphviz<i>·</i>アウトライン、[[リンク]]、デイリーノート'
+  '<i>·</i>すべての agent が同じフォルダ'),
  ('<span class="bl">Download for macOS</span>',
   '<span class="bl">下载 macOS 版</span>',
   '<span class="bl">Für macOS laden</span>',
