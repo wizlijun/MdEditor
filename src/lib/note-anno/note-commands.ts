@@ -56,8 +56,10 @@ export function findAnnotationRange(
   return result
 }
 
-/** Open the edit bubble for the wrapped annotation containing `pos`. */
-export function openEditForMark(view: EditorView, pos: number, anchor: DOMRect) {
+/** Open the edit bubble for the wrapped annotation containing `pos`.
+ *  `caret` (when given) collapses the popup's selection at that offset instead
+ *  of selecting all — used by Ask so the seeded `?` survives the first keypress. */
+export function openEditForMark(view: EditorView, pos: number, anchor: DOMRect, caret?: number) {
   const range = findAnnotationRange(view.state.doc, pos)
   if (!range) return
   noteUi.hover = null
@@ -65,6 +67,7 @@ export function openEditForMark(view: EditorView, pos: number, anchor: DOMRect) 
     x: anchor.left,
     y: anchor.bottom + 4,
     note: range.note,
+    caret,
     style: readThemeStyle(view.dom),
     save(next) {
       const r = findAnnotationRange(view.state.doc, pos)
@@ -88,8 +91,8 @@ export function openEditForMark(view: EditorView, pos: number, anchor: DOMRect) 
   }
 }
 
-/** Open the edit bubble for the note_anchor node at `pos`. */
-export function openEditForAnchor(view: EditorView, pos: number, anchor: DOMRect) {
+/** Open the edit bubble for the note_anchor node at `pos`. (`caret`: see openEditForMark.) */
+export function openEditForAnchor(view: EditorView, pos: number, anchor: DOMRect, caret?: number) {
   const node = view.state.doc.nodeAt(pos)
   if (!node || node.type.name !== 'note_anchor') return
   noteUi.hover = null
@@ -97,6 +100,7 @@ export function openEditForAnchor(view: EditorView, pos: number, anchor: DOMRect
     x: anchor.left,
     y: anchor.bottom + 4,
     note: node.attrs.note as string,
+    caret,
     style: readThemeStyle(view.dom),
     save(next) {
       const n = view.state.doc.nodeAt(pos)
@@ -119,24 +123,29 @@ export function openEditForAnchor(view: EditorView, pos: number, anchor: DOMRect
  * Insert-annotation command (rich mode): wraps a non-empty selection with the
  * annotation mark, or inserts a note_anchor at the caret; then opens the edit
  * bubble so the user can type the note immediately.
+ *
+ * `seed` pre-fills the note — Ask passes `'?'`, which makes the annotation a
+ * question from the start; the popup caret then sits before it (offset 0) so
+ * typing prepends the question and keeps the `?` as the suffix.
  */
-export function insertNoteRich(view: EditorView) {
+export function insertNoteRich(view: EditorView, seed = '') {
   const { state } = view
   const { from, to, empty } = state.selection
   const coords = view.coordsAtPos(to)
   const rect = new DOMRect(coords.left, coords.top, 0, coords.bottom - coords.top)
+  const caret = seed ? 0 : undefined
   if (empty) {
     const type = state.schema.nodes.note_anchor
     if (!type) return
-    view.dispatch(state.tr.replaceSelectionWith(type.create({ note: '' })))
+    view.dispatch(state.tr.replaceSelectionWith(type.create({ note: seed })))
     requestDocFlush()
-    openEditForAnchor(view, from, rect)
+    openEditForAnchor(view, from, rect, caret)
   } else {
     const type = state.schema.marks.annotation
     if (!type) return
-    view.dispatch(state.tr.addMark(from, to, type.create({ note: '' })))
+    view.dispatch(state.tr.addMark(from, to, type.create({ note: seed })))
     requestDocFlush()
-    openEditForMark(view, from + 1, rect)
+    openEditForMark(view, from + 1, rect, caret)
   }
   view.focus()
 }

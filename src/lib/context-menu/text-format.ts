@@ -56,13 +56,20 @@ export function expandToWord(value: string, cursor: number): { start: number; en
 
 /**
  * Insert a CriticMarkup annotation at [start,end): wraps a non-empty selection
- * as `{==sel==}{>><<}`, or inserts a bare `{>><<}` on a collapsed selection.
- * The caret lands between `>>` and `<<` so the user can type the note directly.
+ * as `{==sel==}{>>seed<<}`, or inserts a bare `{>>seed<<}` on a collapsed
+ * selection. The caret lands right before `seed` (i.e. between `>>` and the
+ * note text) so the user can type the note directly.
+ *
+ * `seed` is what "Ask" pre-fills: `'?'` makes the annotation a question the
+ * moment it exists, so what you then type reads as a question mark-suffixed
+ * sentence without the user having to remember the `?`.
  */
-export function insertNoteMarkup(value: string, start: number, end: number): WrapResult {
+export function insertNoteMarkup(
+  value: string, start: number, end: number, seed = '',
+): WrapResult {
   const sel = value.slice(start, end)
-  const insert = sel ? `{==${sel}==}{>><<}` : '{>><<}'
-  const caret = start + insert.length - 3
+  const insert = sel ? `{==${sel}==}{>>${seed}<<}` : `{>>${seed}<<}`
+  const caret = start + insert.length - 3 - seed.length
   return {
     value: value.slice(0, start) + insert + value.slice(end),
     selStart: caret,

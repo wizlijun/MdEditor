@@ -650,6 +650,7 @@ export const ja: Record<keyof Messages, string> = {
   'ctxmenu.highlight': 'ハイライト',
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': '注釈',
+  'ctxmenu.question': '質問',
   'ctxmenu.bold': '太字',
   'ctxmenu.italic': 'イタリック',
   'ctxmenu.strike': '取り消し線',

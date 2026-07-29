@@ -63,4 +63,18 @@ describe('insertNoteMarkup', () => {
     expect(r.value).toBe('ab{>><<}cd')
     expect(r.selStart).toBe('ab{>>'.length)
   })
+
+  it('seeds the note and leaves the caret before the seed (collapsed)', () => {
+    const r = insertNoteMarkup('hello', 5, 5, '?')
+    expect(r.value).toBe('hello{>>?<<}')
+    expect(r.selStart).toBe('hello{>>'.length)
+    expect(r.selEnd).toBe(r.selStart)
+  })
+
+  it('seeds the note when wrapping a selection', () => {
+    const r = insertNoteMarkup('hello world', 6, 11, '?')
+    expect(r.value).toBe('hello {==world==}{>>?<<}')
+    expect(r.selStart).toBe('hello {==world==}{>>'.length)
+    expect(r.selEnd).toBe(r.selStart)
+  })
 })

@@ -546,6 +546,15 @@
       return
     }
 
+    // ── Ask (annotation seeded with `?`): Cmd+? ──
+    // Matched on `key`, not `code`: `?` is Shift+/ on US layouts but sits
+    // elsewhere on others — the printed character is what the user aims for.
+    if (mod && !alt && event.key === '?') {
+      event.preventDefault()
+      insertNoteRich(view, '?')
+      return
+    }
+
     // ── Math block: Cmd+Shift+M ──
     if (mod && shift && !alt && key === 'm') {
       event.preventDefault()

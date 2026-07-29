@@ -9,7 +9,13 @@
   let root: HTMLDivElement | undefined = $state()
   let ta: HTMLTextAreaElement | undefined = $state()
 
-  $effect(() => { ta?.focus(); ta?.select() })
+  // 默认全选(编辑已有批注:直接改写);带 caret 时收起选区停在该位置
+  // (提问:预填的 ? 不能被首个按键吃掉)
+  $effect(() => {
+    ta?.focus()
+    if (editState.caret == null) ta?.select()
+    else ta?.setSelectionRange(editState.caret, editState.caret)
+  })
 
   // 输入即保存（防抖）：大纲/徽标从文档派生，等到关闭弹窗才写入会显得"不更新"。
   // save() 自带 no-op 判断，重复提交同文本无副作用。

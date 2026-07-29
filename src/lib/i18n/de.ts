@@ -648,6 +648,7 @@ export const de: Record<keyof Messages, string> = {
   'ctxmenu.highlight': 'Hervorheben',
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': 'Notiz',
+  'ctxmenu.question': 'Frage',
   'ctxmenu.bold': 'Fett',
   'ctxmenu.italic': 'Kursiv',
   'ctxmenu.strike': 'Durchgestrichen',

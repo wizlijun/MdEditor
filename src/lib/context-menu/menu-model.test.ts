@@ -10,12 +10,18 @@ describe('getMenuModel', () => {
     expect(ids).toContain('wikilink')
   })
 
-  it('marks note/highlight/wikilink as emphasis, note first, before other marks', () => {
+  it('marks question/note/highlight/wikilink as emphasis, question first, before other marks', () => {
     const groups = getMenuModel({ hasSelection: true })
     const emphasis = groups.find(g => g.id === 'emphasis')!
-    expect(emphasis.items.map(i => i.id)).toEqual(['note', 'highlight', 'wikilink'])
+    expect(emphasis.items.map(i => i.id)).toEqual(['question', 'note', 'highlight', 'wikilink'])
     expect(emphasis.items.every(i => i.emphasis)).toBe(true)
-    expect(emphasis.items.map(i => i.icon)).toEqual(['sparkle', 'highlight', 'wikilink'])
+    expect(emphasis.items.map(i => i.icon)).toEqual(['question', 'sparkle', 'highlight', 'wikilink'])
+  })
+
+  it('question works with or without a selection, like note', () => {
+    const groups = getMenuModel({ hasSelection: false })
+    const q = groups.flatMap(g => g.items).find(i => i.id === 'question')!
+    expect(q.needsSelection).toBeUndefined()
   })
 
   it('note works with or without a selection', () => {

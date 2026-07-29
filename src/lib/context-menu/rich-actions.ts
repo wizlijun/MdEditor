@@ -97,6 +97,12 @@ export function createRichActions(view: EditorView): EditorActions {
           const { insertNoteRich } = await import('../note-anno/note-commands')
           return insertNoteRich(view)
         }
+        case 'question': {
+          // Same annotation, seeded with `?` — that's what makes it a question
+          // to the agent (isQuestionText); the popup caret lands before it.
+          const { insertNoteRich } = await import('../note-anno/note-commands')
+          return insertNoteRich(view, '?')
+        }
         case 'link':      return toggleLink(view)
         case 'h1':        return setBlock(view, 'heading', { level: 1 })
         case 'h2':        return setBlock(view, 'heading', { level: 2 })

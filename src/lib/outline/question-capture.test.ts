@@ -12,6 +12,12 @@ describe('mdHasQuestionAnnotation', () => {
     expect(mdHasQuestionAnnotation('x {>>备注<<} 正文里的问号?')).toBe(false)
     expect(mdHasQuestionAnnotation('没有批注')).toBe(false)
   })
+
+  it('ignores a note that is nothing but question marks (Ask seed, not yet typed)', () => {
+    expect(mdHasQuestionAnnotation('正文{>>?<<}')).toBe(false)
+    expect(mdHasQuestionAnnotation('正文{==x==}{>>？ <<}')).toBe(false)
+    expect(mdHasQuestionAnnotation('正文{>>??<<}')).toBe(false)
+  })
 })
 
 describe('mdDerivesQuestion — fence-aware real-question gate', () => {
@@ -23,6 +29,9 @@ describe('mdDerivesQuestion — fence-aware real-question gate', () => {
   })
   it('false for a plain annotation', () => {
     expect(mdDerivesQuestion('文 {>>备注<<}')).toBe(false)
+  })
+  it('false for a seed-only note — an unwritten question must not hit the disk', () => {
+    expect(mdDerivesQuestion('文 {==x==}{>>?<<}')).toBe(false)
   })
   it('false when the only question annotation sits inside a code fence', () => {
     // The cheap gate would false-positive here; the derive-based gate must not —

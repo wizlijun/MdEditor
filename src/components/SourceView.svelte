@@ -69,12 +69,16 @@
   async function onTextareaKeydown(ev: KeyboardEvent) {
     // Inline formatting shortcuts — independent of mdblock setting
     if (ev.metaKey || ev.ctrlKey) {
-      // ── Insert annotation: Cmd+Shift+N (mirrors rich mode) ──
-      if (ev.shiftKey && ev.key.toLowerCase() === 'n' && tabId && textareaEl) {
+      // ── Insert annotation: Cmd+Shift+N / Ask: Cmd+? (both mirror rich mode) ──
+      // Cmd+? is matched on `key` (the printed character), not `code`, so it
+      // works on layouts where `?` isn't Shift+/.
+      const isNote = ev.shiftKey && ev.key.toLowerCase() === 'n'
+      const isAsk  = ev.key === '?'
+      if ((isNote || isAsk) && tabId && textareaEl) {
         ev.preventDefault()
         ev.stopPropagation()
         const el = textareaEl
-        const r = insertNoteMarkup(el.value, el.selectionStart ?? 0, el.selectionEnd ?? 0)
+        const r = insertNoteMarkup(el.value, el.selectionStart ?? 0, el.selectionEnd ?? 0, isAsk ? '?' : '')
         setContent(tabId, r.value)
         requestAnimationFrame(() => el.setSelectionRange(r.selStart, r.selEnd))
         return

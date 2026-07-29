@@ -10,16 +10,23 @@ import { treeHasQuestion, isQuestionText } from './model'
 import { outline, companionPathFor, noteTextHasContent } from './store.svelte'
 import { planNoteHome } from './note-home'
 
+/** 只有问号、没有实质内容的批注不算问题——「提问」菜单预填的 `{>>?<<}` 在用户
+ *  打字之前就长这样,防抖一到就落盘会往 .note.md 里塞一条空问题。
+ *  只把这道守卫加在落盘链路上:isQuestionText 的大纲升格语义保持不变。 */
+function isSubstantiveQuestion(s: string): boolean {
+  return isQuestionText(s) && s.replace(/[?？\s]/g, '') !== ''
+}
+
 /** 主文档文本里是否存在「提问批注」。廉价门卫,避免每次输入都走重逻辑。
  *  正则不识别代码围栏,可能对围栏内的 `{>>?<<}` 误报——真问题由 mdDerivesQuestion 二次确认。 */
 export function mdHasQuestionAnnotation(md: string): boolean {
-  for (const m of md.matchAll(/\{>>(.*?)<<\}/g)) if (isQuestionText(m[1])) return true
+  for (const m of md.matchAll(/\{>>(.*?)<<\}/g)) if (isSubstantiveQuestion(m[1])) return true
   return false
 }
 
 /** 派生条目里含提问批注的谓词(deriveAutoItems 已跳过代码围栏,故据此判定为准) */
 const isQuestionAnnotation = (it: AutoItem): boolean =>
-  it.source === 'annotation' && isQuestionText(it.note ?? '')
+  it.source === 'annotation' && isSubstantiveQuestion(it.note ?? '')
 
 /** 主文档派生后确有「提问批注」。用于在触碰 vault(复制源文件)之前排除代码块内的假阳性。 */
 export function mdDerivesQuestion(md: string): boolean {

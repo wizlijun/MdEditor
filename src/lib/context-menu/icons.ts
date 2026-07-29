@@ -10,8 +10,14 @@ export const SPARKLE_PATH =
   '150.74877,221.93895 69.67847,202.96457 150.74877,183.99019 168.12097,165.0158 ' +
   '185.49318,76.468676 Z" fill="#f59e0b" stroke="none"/>'
 
+// `??` — two stroked question marks side by side, echoing the ⁇ on the note
+// popup's Ask button. Each glyph is the Feather help-circle hook + dot, shifted
+// left/right so the pair reads as one mark at 16 px.
+const QUESTION_GLYPH = '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+
 const PATHS: Record<string, string> = {
   sparkle:    SPARKLE_PATH,
+  question:   `<g transform="translate(-4.5 0)">${QUESTION_GLYPH}</g><g transform="translate(3.5 0)">${QUESTION_GLYPH}</g>`,
   highlight:  '<rect x="9" y="4" width="6" height="16" rx="1.5" fill="#facc15" stroke="none"/>',
   wikilink:   '<path d="M5.5 5H3v14h2.5"/><path d="M10.5 5H8v14h2.5"/><path d="M18.5 5H21v14h-2.5"/><path d="M13.5 5H16v14h-2.5"/>',
   note:       '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="12" y2="12"/>',

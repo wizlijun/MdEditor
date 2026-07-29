@@ -80,6 +80,9 @@ export interface NoteEditState {
   x: number
   y: number
   note: string
+  /** Collapse the popup's caret here instead of selecting the whole note.
+   *  Ask uses 0 so the pre-filled `?` isn't wiped by the first keystroke. */
+  caret?: number
   style?: ThemeStyle | null
   save: (note: string) => void
   remove: () => void

@@ -655,6 +655,7 @@ export const en = {
   'ctxmenu.highlight': 'Highlight',
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': 'Note',
+  'ctxmenu.question': 'Ask',
   'ctxmenu.bold': 'Bold',
   'ctxmenu.italic': 'Italic',
   'ctxmenu.strike': 'Strikethrough',

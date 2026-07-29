@@ -94,10 +94,13 @@ export function createSourceActions(h: SourceHandle): EditorActions {
         case 'paste':     return pasteText(h)
         case 'selectAll': h.el.focus(); h.el.select(); return
         case 'wikilink':  return wikilink(h)
-        case 'note': {
+        case 'note':
+        case 'question': {
           const start = h.el.selectionStart ?? 0
           const end = h.el.selectionEnd ?? 0
-          const r = insertNoteMarkup(h.value(), start, end)
+          // 'question' seeds the note with `?` so it reads as a question the
+          // moment it exists; the caret lands before it.
+          const r = insertNoteMarkup(h.value(), start, end, id === 'question' ? '?' : '')
           setContent(h.tabId, r.value)
           requestAnimationFrame(() => { h.el.focus(); h.el.setSelectionRange(r.selStart, r.selEnd) })
           return
