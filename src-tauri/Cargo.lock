@@ -2846,7 +2846,7 @@ dependencies = [
 
 [[package]]
 name = "notemd"
-version = "6.729.1"
+version = "6.729.2"
 dependencies = [
  "block2",
  "clap",
