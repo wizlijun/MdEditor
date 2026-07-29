@@ -42,23 +42,24 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<span class="kicker">无限文本的时代</span>',
   '<span class="kicker">Für das Zeitalter des unendlichen Texts</span>',
   '<span class="kicker">無限のテキストの時代に</span>'),
- ('<h1>One night of AI.<br>A <em>year</em> of reading.<span class="cursor"></span></h1>',
-  '<h1>AI 一晚写的，<br>你<em>一年</em>也读不完。<span class="cursor"></span></h1>',
-  '<h1>Eine Nacht KI.<br>Ein <em>Jahr</em> Lesestoff.<span class="cursor"></span></h1>',
-  '<h1>AI が一晩で書く量は、<br><em>一年</em>でも読み切れない。<span class="cursor"></span></h1>'),
- ('note.md is where you get through it: highlight, question, fix it on the spot. What you save is a plain markdown '
-  'file, on your own Mac.',
-  'note.md 让你读得进去：划重点、写疑问、直接改。存下来的都是普通 markdown 文件，在你自己电脑上。',
-  'In note.md kommst du wirklich durch: markieren, nachfragen, direkt korrigieren. Was du behältst, ist eine '
-  'einfache Markdown-Datei auf deinem eigenen Mac.',
-  'note.md なら、読み進められる。ハイライトして、疑問を書いて、その場で直す。残るのは、あなたの Mac の中のただの markdown ファイル。'),
- ('11 MB<i>·</i>any Typora theme<i>·</i>Mermaid &amp; Graphviz<i>·</i>outliner, [[links]], daily notes'
-  '<i>·</i>one folder every agent shares',
-  '11 MB<i>·</i>主题随你换<i>·</i>Mermaid、Graphviz<i>·</i>大纲、[[双链]]、每日笔记<i>·</i>所有 agent 共用一个文件夹',
-  '11 MB<i>·</i>jedes Typora-Theme<i>·</i>Mermaid &amp; Graphviz<i>·</i>Outliner, [[Links]], Tagesnotizen'
-  '<i>·</i>ein Ordner für alle Agents',
-  '11 MB<i>·</i>Typora テーマ対応<i>·</i>Mermaid、Graphviz<i>·</i>アウトライン、[[リンク]]、デイリーノート'
-  '<i>·</i>すべての agent が同じフォルダ'),
+ ('<h1>Read what AI writes.<br>Keep what <em>you</em> think.<span class="cursor"></span></h1>',
+  '<h1>读 AI 写的，<br>留下<em>你想的</em>。<span class="cursor"></span></h1>',
+  '<h1>Lies, was KI schreibt.<br>Behalte, was <em>du</em> denkst.<span class="cursor"></span></h1>',
+  '<h1>読むのは AI の文。<br>残すのは<em>あなたの考え</em>。<span class="cursor"></span></h1>'),
+ ('AI writes more than you can read. note.md is where you get through it: highlight, question, fix it on the spot. '
+  'It all lands in the vault your agents share — plain markdown, and the more you leave, the better they know you.',
+  'AI 写的，读不完。note.md 让你读得进去：划重点、写疑问、直接改。全部存进你和 agent 共享的 vault，纯 markdown——留得越多，agent 越懂你。',
+  'KI schreibt mehr, als du lesen kannst. In note.md kommst du durch: markieren, nachfragen, direkt korrigieren. '
+  'Alles landet im Vault, den deine Agents teilen — pures Markdown. Je mehr du hinterlässt, desto besser kennen sie dich.',
+  'AI が書く量は、読み切れない。note.md なら読み進められる。ハイライトして、疑問を書いて、その場で直す。'
+  'すべては agent と共有する vault に、ただの markdown として残る——残すほど、agent はあなたを理解していく。'),
+ ('11 MB<i>·</i>any Typora theme<i>·</i>Mermaid &amp; Graphviz, tuned<i>·</i>outliner, [[links]], daily notes'
+  '<i>·</i>one vault every agent shares',
+  '11 MB<i>·</i>主题随你换<i>·</i>Mermaid、Graphviz 都调过<i>·</i>大纲、[[双链]]、每日笔记<i>·</i>一个 vault，所有 agent 共用',
+  '11 MB<i>·</i>jedes Typora-Theme<i>·</i>Mermaid &amp; Graphviz, abgestimmt<i>·</i>Outliner, [[Links]], Tagesnotizen'
+  '<i>·</i>ein Vault für alle Agents',
+  '11 MB<i>·</i>Typora テーマ対応<i>·</i>Mermaid、Graphviz 調整済み<i>·</i>アウトライン、[[リンク]]、デイリーノート'
+  '<i>·</i>一つの vault をすべての agent と'),
  ('<span class="bl">Download for macOS</span>',
   '<span class="bl">下载 macOS 版</span>',
   '<span class="bl">Für macOS laden</span>',
@@ -76,77 +77,77 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<div class="sec-k">Vier Dinge</div>',
   '<div class="sec-k">四つのこと</div>'),
  # ---- claim 01 ----
- ('<h2>AI wrote it.<br>This is where you read it.</h2>',
-  '<h2>AI 写的东西，<br>在这儿读最舒服。</h2>',
-  '<h2>Die KI hat es geschrieben.<br>Hier liest du es.</h2>',
-  '<h2>書いたのは AI。<br>読むのは、ここで。</h2>'),
+ ('<h2>AI handles the writing.<br>This handles the reading.</h2>',
+  '<h2>写，交给 AI。<br>读，交给这里。</h2>',
+  '<h2>Die KI schreibt.<br>Hier liest du.</h2>',
+  '<h2>書くのは AI。<br>読むのは、ここ。</h2>'),
  ('Preview and source, one key apart. Notion and Typora themes work as they are. Mermaid, Graphviz and math, all '
   'tuned. The whole app is 11 MB, with no browser engine inside.',
-  '预览和源码，一键切换。Notion、Typora 的主题，拿来就能用。Mermaid、Graphviz、公式，都调过。整个应用 11 MB，不带浏览器内核。',
+  '预览与源码，一键之隔。Notion、Typora 的主题，拿来就用。Mermaid、Graphviz、公式，都调过。整个应用 11 MB，没有浏览器内核。',
   'Vorschau und Quelltext, eine Taste auseinander. Themes von Notion und Typora laufen, wie sie sind. Mermaid, '
   'Graphviz und Formeln — alles abgestimmt. Die ganze App wiegt 11 MB, ohne Browser-Engine im Bauch.',
   'プレビューとソースは、キー一つ隣。Notion や Typora のテーマは、そのまま使える。Mermaid も Graphviz も数式も、調整済み。アプリ全体で 11 MB、ブラウザエンジンは入っていない。'),
- ("See a shaky line? Highlight it. Have a doubt? Write it in the margin. Something's wrong? Fix it right there.",
-  '看到可疑的一句，划出来。有疑问，写在旁边。写错了，直接改。',
-  'Eine wacklige Zeile? Markieren. Ein Zweifel? An den Rand schreiben. Etwas falsch? Direkt korrigieren.',
-  '怪しい一文は、ハイライト。疑問は、余白に。間違いは、その場で直す。'),
+ ('A shaky line? Highlight it. A doubt? In the margin. Wrong? Fix it on the spot.',
+  '可疑的句子，划出来。疑问，写在旁边。错了，当场改。',
+  'Eine wacklige Zeile? Markieren. Ein Zweifel? An den Rand. Falsch? Sofort korrigieren.',
+  '怪しい一文は、ハイライト。疑問は、余白に。間違いは、その場で。'),
  ('Claude, Codex and OpenClaw all have a chat window. None of them is made for reading.',
-  'Claude、Codex、OpenClaw 都有自己的聊天窗口。但没有一个是用来读的。',
+  'Claude、Codex、OpenClaw 都有聊天窗口。没有一个是为读而做的。',
   'Claude, Codex und OpenClaw haben alle ein Chatfenster. Keines davon ist zum Lesen gemacht.',
   'Claude も Codex も OpenClaw も、チャット窓は持っている。でも、読むためのものではない。'),
  # ---- claim 02 ----
- ('<h2>The good parts of the last<br>generation. All here.</h2>',
-  '<h2>上一代笔记工具的好东西，<br>这里都有。</h2>',
-  '<h2>Das Beste der letzten<br>Generation. Alles hier.</h2>',
-  '<h2>前の世代の良かったところは、<br>全部ここに。</h2>'),
+ ('<h2>The best of the last<br>generation. Built in.</h2>',
+  '<h2>上一代的精华，<br>全都内置。</h2>',
+  '<h2>Das Beste der letzten<br>Generation. Eingebaut.</h2>',
+  '<h2>前世代の良いところは、<br>全部内蔵。</h2>'),
  ('local-first · git sync · outliner · [[wikilinks]] · backlinks · wiki pages · daily notes · plugins',
   '本地优先 · git 同步 · 大纲 · [[双链]] · 反向链接 · wiki 页面 · 每日笔记 · 插件',
   'local-first · Git-Sync · Outliner · [[Wikilinks]] · Backlinks · Wiki-Seiten · Tagesnotizen · Plugins',
   'ローカル優先 · git 同期 · アウトライナー · [[ウィキリンク]] · バックリンク · wiki ページ · デイリーノート · プラグイン'),
- ('Roam Research and Obsidian worked this out years ago. note.md puts it back into files. One plugin brings your '
-  'whole Roam graph over. An Obsidian folder just opens.',
-  '这些事，Roam Research 和 Obsidian 早就想明白了。note.md 把它们放回文件里。装个插件，Roam 的笔记全搬过来。Obsidian 的文件夹，打开就能用。',
-  'Roam Research und Obsidian hatten das vor Jahren heraus. note.md legt es zurück in Dateien. Ein Plugin holt deinen '
-  'ganzen Roam-Graphen herüber. Ein Obsidian-Ordner geht einfach auf.',
-  'Roam Research と Obsidian は、とっくに答えを出していた。note.md はそれをファイルに戻す。プラグイン一つで、Roam のノートは丸ごと移せる。Obsidian のフォルダは、そのまま開く。'),
+ ('Roam and Obsidian worked this out years ago. note.md puts it back into files. One plugin brings your '
+  'whole Roam graph over. An Obsidian vault just opens.',
+  '这些事，Roam 和 Obsidian 早就想明白了。note.md 把它们放回文件里。一个插件，搬来整个 Roam 图谱；Obsidian 的 vault，直接打开。',
+  'Roam und Obsidian hatten das vor Jahren heraus. note.md legt es zurück in Dateien. Ein Plugin holt deinen '
+  'ganzen Roam-Graphen herüber. Ein Obsidian-Vault geht einfach auf.',
+  'Roam と Obsidian は、とっくに答えを出していた。note.md はそれをファイルに戻す。プラグイン一つで Roam のグラフを丸ごと移せる。Obsidian の vault は、そのまま開く。'),
  # ---- claim 03 ----
  ('<h2>No AI inside.<br>Made for AI.</h2>',
-  '<h2>它自己不带 AI。<br>但它为 AI 而生。</h2>',
+  '<h2>不带 AI。<br>为 AI 而生。</h2>',
   '<h2>Keine KI eingebaut.<br>Für KI gemacht.</h2>',
   '<h2>AI は入っていない。<br>AI のために作られている。</h2>'),
- ('It calls no model. It sends no request. Not one.',
-  '它不连模型，也不往外发一个请求。',
-  'Es ruft kein Modell auf. Es sendet keine Anfrage. Keine einzige.',
+ ('Calls no model. Sends no request. Not one.',
+  '不连模型，不发请求。一个都没有。',
+  'Ruft kein Modell auf. Sendet keine Anfrage. Keine einzige.',
   'モデルを呼ばない。リクエストも送らない。一つも。'),
  ('Your folder is the workspace every AI tool shares. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes — same '
-  'files, same house rules. It all lives in git, so you can see what changed. '
+  'files, same house rules, all in git. '
   '<a href="/orchestrate-agents/">See how</a>.',
-  '你的文件夹，就是所有 AI 工具共用的工作台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes，读的是同一批文件，守的是同一套规矩。'
-  '全都在 git 里，谁改了什么，一看就知道。<a href="/orchestrate-agents/">看怎么做</a>。',
+  '你的文件夹，就是所有 AI 工具共用的工作台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同一批文件，同一套规矩，'
+  '全在 git 里。<a href="/orchestrate-agents/">看怎么做</a>。',
   'Dein Ordner ist der Arbeitsplatz, den alle KI-Tools teilen. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes '
-  '— dieselben Dateien, dieselben Hausregeln. Alles liegt in Git, du siehst jede Änderung. '
+  '— dieselben Dateien, dieselben Hausregeln, alles in Git. '
   '<a href="/orchestrate-agents/">So geht\'s</a>.',
-  'あなたのフォルダは、どの AI ツールも共有する作業台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同じファイルを読み、'
-  '同じルールを守る。すべて git の中だから、何が変わったかすぐわかる。<a href="/orchestrate-agents/">やり方を見る</a>。'),
- ('Change AI tools whenever you want. Your work stays put, and stays yours.',
-  '换 AI 工具，随时。东西还在原地，还是你的。',
-  'Wechsle das KI-Tool, wann du willst. Deine Arbeit bleibt, wo sie ist — und bleibt deine.',
-  'AI ツールは、いつ変えてもいい。中身はそのまま、あなたのもの。'),
+  'あなたのフォルダは、どの AI ツールも共有する作業台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同じファイル、'
+  '同じルール、すべて git の中。<a href="/orchestrate-agents/">やり方を見る</a>。'),
+ ("Change AI tools whenever you want. What's yours stays yours.",
+  '换 AI 工具，随时。你的东西，永远是你的。',
+  'Wechsle das KI-Tool, wann du willst. Was deins ist, bleibt deins.',
+  'AI ツールは、いつ変えてもいい。あなたのものは、あなたのまま。'),
  # ---- claim 04 ----
  ('<h2>Need something else?<br>Add it.</h2>',
-  '<h2>还想要什么，<br>自己加。</h2>',
+  '<h2>还要什么，<br>自己加。</h2>',
   '<h2>Brauchst du mehr?<br>Bau es dazu.</h2>',
   '<h2>ほかに欲しいものは、<br>自分で足す。</h2>'),
  ('Write a plugin. Add a scheduled job. Hang your skills off it.',
   '写个插件。加个定时任务。挂上你的 skills。',
   'Schreib ein Plugin. Häng einen Cronjob dran. Setz deine Skills obendrauf.',
   'プラグインを書く。定期実行を足す。skills をぶら下げる。'),
- ('Put a <span class="mono-s">?</span> in a note and the AI takes it from there. It edits the document, fills in what '
-  'you asked for, and hands it back. Whether you use it is up to you.',
-  '在批注里打个 <span class="mono-s">?</span>，AI 就接手了。它去改文档、补上你要的资料，改完交回来。用不用，你说了算。',
-  'Setz ein <span class="mono-s">?</span> in eine Notiz, und die KI übernimmt. Sie überarbeitet das Dokument, ergänzt, '
-  'worum du gebeten hast, und gibt es zurück. Ob du es nimmst, entscheidest du.',
-  '注釈に <span class="mono-s">?</span> を置けば、あとは AI が引き取る。文書を直し、頼んだことを補い、返してくる。使うかどうかは、あなたが決める。'),
+ ('Put a <span class="mono-s">?</span> in a note and an agent takes it from there: edits the document, fills in '
+  'the context, hands it back — async. Whether you keep it is up to you.',
+  '在批注里打个 <span class="mono-s">?</span>，agent 就接手：改文档、补上下文，异步交回来。用不用，你说了算。',
+  'Setz ein <span class="mono-s">?</span> in eine Notiz, und ein Agent übernimmt: überarbeitet das Dokument, ergänzt '
+  'den Kontext, gibt es zurück — asynchron. Ob du es nimmst, entscheidest du.',
+  '注釈に <span class="mono-s">?</span> を置けば、agent が引き取る。文書を直し、文脈を補い、非同期で返してくる。使うかどうかは、あなたが決める。'),
  ('<div class="sec-k">The trick</div>',
   '<div class="sec-k">关键</div>',
   '<div class="sec-k">Der Trick</div>',
@@ -156,7 +157,7 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<h2>KI-Text ist unendlich.<br>Deine Aufmerksamkeit nicht.</h2>',
   '<h2>AI のテキストは無限。<br>あなたの注意力は違う。</h2>'),
  ('Every document gets a note file of its own. What the AI wrote stays on one side. What you think stays on the other.',
-  '每篇文档都配一个笔记文件。AI 写的归 AI，你想的归你，各存各的。',
+  '每篇文档，配一个笔记文件。AI 写的归一边，你想的归另一边。',
   'Jedes Dokument bekommt seine eigene Notizdatei. Was die KI schrieb, bleibt auf der einen Seite. Was du denkst, auf '
   'der anderen.',
   'どの文書にも、専用のノートファイルがつく。AI が書いたものはこちら。あなたが考えたことはあちら。'),
@@ -168,11 +169,11 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<span class="ft">你的高亮、疑问和判断。这部分，AI 写不出来。</span>',
   '<span class="ft">Deine Markierungen, Zweifel und Fragen. Diesen Teil kann kein Modell schreiben.</span>',
   '<span class="ft">あなたのハイライト、疑問、問い。ここだけは、どのモデルにも書けない。</span>'),
- ('Ten thousand words? Anyone can generate those. What you think of them, nobody can. <b>And it\'s sitting on your '
+ ('Ten thousand words? Anyone can generate those. Your take, nobody can. <b>And it\'s sitting on your '
   'Mac.</b>',
-  '一万字，谁都能生成。你对这一万字的看法，谁也生成不了。<b>而它就在你自己电脑里。</b>',
-  'Zehntausend Wörter? Kann jeder generieren. Was du davon hältst, niemand. <b>Und es liegt auf deinem Mac.</b>',
-  '一万語なら、誰でも生成できる。それをどう思うかは、誰にも生成できない。<b>そしてそれは、あなたの Mac の中にある。</b>'),
+  '一万字，谁都能生成。你的看法，谁也生成不了。<b>而它就在你自己的 Mac 里。</b>',
+  'Zehntausend Wörter? Kann jeder generieren. Deine Sicht, niemand. <b>Und sie liegt auf deinem Mac.</b>',
+  '一万語なら、誰でも生成できる。あなたの見方は、誰にも。<b>そしてそれは、あなたの Mac の中に。</b>'),
  ('<span class="star">✦</span> what AI writes',
   '<span class="star">✦</span> AI 写的',
   '<span class="star">✦</span> was die KI schreibt',
