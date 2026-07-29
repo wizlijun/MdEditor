@@ -13,8 +13,10 @@ request; it is the substrate agents work on. Its premise: agents now write more 
 read, so the human's highest-value act is reading, judging, and keeping the
 residue no model can generate — judgment, intent, private facts, decisions.
 That residue is the rarest data in the loop. note.md captures it as plain
-files that agents can read back, and grows the knowledge graph only where the
-human confirms a connection — agents suggest links, they never assert them.
+files that agents read back — the more the human leaves in the vault, the
+better every agent comes to know them. The knowledge graph grows only where
+the human confirms a connection — agents suggest links, they never assert
+them.
 
 - Platform: macOS 13+ (Apple Silicon & Intel), a Tauri app rendering in the
   system WebView. Code-signed and notarized.

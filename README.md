@@ -41,6 +41,7 @@ Your vault is designed to be the shared, version-controlled context that many
 agents and many harnesses work in — Claude Cowork, Claude Code, Codex,
 ChatGPT Work, OpenClaw, Hermes — through public conventions (`AGENTS.md`,
 block citations, sidecar `.note.md`). A memory system is on the roadmap.
+The more you leave in the vault, the better every agent knows you.
 
 Switch AI tools whenever you like. The asset stays yours.
 

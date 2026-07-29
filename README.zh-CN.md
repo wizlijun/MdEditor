@@ -34,7 +34,8 @@ note.md 不调模型、不发一个请求。
 
 你的 vault 被设计成多 agent、多 harness 共用的、受版本控制的上下文环境——  
 Claude Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes——它们通过  
-公共约定（`AGENTS.md`、块引用、手记 `.note.md`）读写同一批文件。记忆系统在路上。
+公共约定（`AGENTS.md`、块引用、手记 `.note.md`）读写同一批文件。记忆系统在路上。  
+留得越多，agent 越懂你。
 
 你随时可以换 AI 工具。资产始终在你手里。
 
