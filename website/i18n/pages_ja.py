@@ -47,7 +47,7 @@ PAGES = [
 {
  "path": "/compare/obsidian/",
  "title": "note.md vs Obsidian（2026年）— ファイル・オーバー・アプリの二つのエディタ、片方はエージェントのために",
- "desc": "note.md も Obsidian もノートをローカルの markdown として保持する。違いはここだ。note.md は AI の出力を読み、注釈するために作られている — サイドカーノートとエージェント規約が最初から入っている。",
+ "desc": "note.md も Obsidian もノートをローカルの markdown として保持する。違いはここだ。note.md は AI の出力を読み、注釈するために作られている — サイドノートとエージェント規約が最初から入っている。",
  "crumb": "比較",
  "h1": "note.md vs Obsidian",
  "lead": "いちばん近い親戚。どちらもアプリよりファイルを信じている。Obsidian は何でも入りの道具箱、note.md は AI リーディングループのために研がれた刃。Vault は両方で開く — 設計どおりに。",

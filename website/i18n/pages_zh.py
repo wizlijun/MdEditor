@@ -20,7 +20,7 @@ PAGES = [
    ["[[Wikilinks]] &amp; 反向链接", "有，全 vault 一个命名空间", "有，外加块引用和查询"],
    ["块级引用", "有 —— <code>((file#b-xxxxxx))</code>，编辑后依然有效", "有 —— 块引用，走得更深（嵌入、查询）"],
    ["AI agent", "一等公民：纯文件 + <code>AGENTS.md</code>，agent 会读你的批注", "没有内置"],
-   ["阅读并批注 AI 文档", "核心工作流 —— 伴生文件（sidecar）<code>.note.md</code>", "不是重点"],
+   ["阅读并批注 AI 文档", "核心工作流 —— sidecar 文件<code>.note.md</code>", "不是重点"],
    ["开发节奏", "活跃", "自 2021 年前后出了名地安静"],
    ["离线 / 长久性", "任何编辑器都能读，永远", "得先导出；读图谱离不开它的应用"],
   ]},
@@ -46,7 +46,7 @@ PAGES = [
 {
  "path": "/compare/obsidian/",
  "title": "note.md vs Obsidian（2026）— 两个信奉“文件重于应用”的编辑器，一个为 agent 而生",
- "desc": "note.md 和 Obsidian 都把笔记存成本地 markdown。区别在于：note.md 为阅读和批注 AI 产出而生，伴生笔记（sidecar）和 agent 约定开箱即用。",
+ "desc": "note.md 和 Obsidian 都把笔记存成本地 markdown。区别在于：note.md 为阅读和批注 AI 产出而生，手记（sidecar）和 agent 约定开箱即用。",
  "crumb": "对比",
  "h1": "note.md vs Obsidian",
  "lead": "最近的表亲。都信“文件重于应用”。Obsidian 是万能工具箱；note.md 是为 AI 阅读循环磨快的一把刀。你的 vault 在两边都能打开——这是故意的。",
@@ -56,7 +56,7 @@ PAGES = [
    ["存储", "纯 markdown 文件，本地", "纯 markdown 文件，本地"],
    ["价格", "免费，开源", "免费（闭源）；Sync/Publish 付费"],
    ["阅读 AI 文档", "核心工作流：干净的阅读视图，批注保留", "通用编辑器；折腾一番也能做到"],
-   ["批注", "伴生文件（sidecar）<code>.note.md</code> —— 原文保持干净", "直接改原文，或装社区插件"],
+   ["批注", "sidecar 文件<code>.note.md</code> —— 原文保持干净", "直接改原文，或装社区插件"],
    ["agent 支持", "内置：<code>AGENTS.md</code> 约定、块级引用、批注即 agent 输入", "靠插件和自己动手（一个流行玩法）"],
    ["大纲编辑", "原生 <code>.note.md</code> 大纲视图", "靠插件；Obsidian 以页面为中心"],
    ["插件生态", "小而克制，进程外，按能力授权", "庞大 —— 数千个社区插件"],
@@ -65,8 +65,8 @@ PAGES = [
   ]},
  "sections": [
   ("实话实说", """<p>如果你爱 Obsidian，留着它——认真的。它是史上最成功的“文件重于应用”编辑器，插件生态无人能敌，把 Claude Code 指向一个 Obsidian vault 是这十年最棒的 DIY 玩法之一。note.md 的 vault 格式刻意保持 Obsidian 兼容，因为我们信的是同一件事：你的文件应该在任何地方都打得开。</p>
-<p>区别在于开箱之后发生什么。Obsidian 是一个要自己组装的通用工具箱：想跑通 AI 阅读循环，你得接插件、定约定、配 agent，然后祈祷这些零件一直兼容。note.md 把这个循环当产品交付：agent 写文档，你在一个为判断而造的视图里读，你的高亮落进伴生 <code>.note.md</code>，永远不污染原文，而每个造访你 vault 的 agent 都会先读你的页边批注。不用组装。</p>
-<p>伴生文件才是真正的岔路口。Obsidian 的批注住在文档内部——你自己写的笔记没问题，agent 生成、还可能重新生成的文档就尴尬了。note.md 把可再生的（AI 的文本）和不可替代的（你的判断）分开，一个文件一个文件地分。</p>"""),
+<p>区别在于开箱之后发生什么。Obsidian 是一个要自己组装的通用工具箱：想跑通 AI 阅读循环，你得接插件、定约定、配 agent，然后祈祷这些零件一直兼容。note.md 把这个循环当产品交付：agent 写文档，你在一个为判断而造的视图里读，你的高亮落进sidecar <code>.note.md</code>，永远不污染原文，而每个造访你 vault 的 agent 都会先读你的页边批注。不用组装。</p>
+<p>sidecar 文件才是真正的岔路口。Obsidian 的批注住在文档内部——你自己写的笔记没问题，agent 生成、还可能重新生成的文档就尴尬了。note.md 把可再生的（AI 的文本）和不可替代的（你的判断）分开，一个文件一个文件地分。</p>"""),
   ("两个都用", """<p>这不是离婚。note.md 的 vault 就是一个 markdown 文件夹：用 Obsidian 打开它看图谱、在手机上速记；用 note.md 打开它跑阅读-批注循环和 agent 工作流。两个客户端，一个事实来源。这就是文件的全部意义。</p>"""),
   ("怎么选（或者不选）", """<ul>
 <li><b>选 Obsidian</b>：如果你要最多的插件、移动应用和图谱视图——而且享受亲手组装自己的 AI 工作流。</li>
@@ -76,11 +76,11 @@ PAGES = [
  ],
  "faq": [
   ("我能在 Obsidian 里打开 note.md 的 vault 吗？",
-   "能。note.md 的 vault 就是纯 markdown，[[wikilinks]] 按文件名解析，并刻意保持 Obsidian 兼容。伴生 .note.md 文件在那边显示为普通笔记。"),
+   "能。note.md 的 vault 就是纯 markdown，[[wikilinks]] 按文件名解析，并刻意保持 Obsidian 兼容。sidecar .note.md 文件在那边显示为普通笔记。"),
   ("用 note.md 必须离开 Obsidian 吗？",
    "不用。两个应用指向同一个文件夹即可。很多人留着 Obsidian 做移动速记和图谱视图，用 note.md 阅读 AI 文档、写批注。"),
-  ("什么是伴生批注？",
-   "在 note.md 里对 xxx.md 高亮或评论时，你的批注会存进一个伴生文件 xxx.note.md。原文档保持干净、可再生；你的判断成为独立、可搜索的数据。"),
+  ("什么是sidecar 批注？",
+   "在 note.md 里对 xxx.md 高亮或评论时，你的批注会存进一个sidecar 文件 xxx.note.md。原文档保持干净、可再生；你的判断成为独立、可搜索的数据。"),
  ],
 },
 {
@@ -133,11 +133,11 @@ PAGES = [
   ("为什么这对组合成立", """<p>OpenClaw 把记忆存成纯 markdown——长期事实放 <code>MEMORY.md</code>，每日工作笔记放 <code>memory/YYYY-MM-DD.md</code>。这和 note.md vault 的 <code>wikipage/</code> 加 <code>dailynote/</code> 约定在结构上一模一样：带日期的大纲，加上精心维护的页面。同一个想法，各自独立进化出来。</p>
 <p>配成一对，双方各补所缺：OpenClaw 得到一个真的会阅读、会整理它记忆的人，外加一个为此而造的视图；你得到一个昼夜干活、并且把一切写在你看得见的地方的 agent。</p>"""),
   ("配置", """<ol>
-<li>在 vault 根目录放一份 <code>AGENTS.md</code>，写明约定（伴生文件（sidecar）配对、每日笔记路径、<code>[[yyyy-MM-dd]]</code> 日期链接）。摘要可从 <a href="/llms-full.txt">llms-full.txt</a> 取。</li>
+<li>在 vault 根目录放一份 <code>AGENTS.md</code>，写明约定（sidecar 文件配对、每日笔记路径、<code>[[yyyy-MM-dd]]</code> 日期链接）。摘要可从 <a href="/llms-full.txt">llms-full.txt</a> 取。</li>
 <li>把 OpenClaw 的工作区指向你的 vault（或把它的 <code>memory/</code> 软链到 <code>dailynote/</code>——带日期的文件就是带日期的文件）。</li>
 <li>让 OpenClaw 把报告和调研写成 <code>.md</code> 文档，放进 vault。</li>
-<li>在 note.md 里打开、阅读、高亮、提问——你的批注落进伴生 <code>.note.md</code> 文件。</li>
-<li>告诉 OpenClaw 做后续工作前先读伴生文件。你的判断成了它的方向盘。</li>
+<li>在 note.md 里打开、阅读、高亮、提问——你的批注落进sidecar <code>.note.md</code> 文件。</li>
+<li>告诉 OpenClaw 做后续工作前先读sidecar 文件。你的判断成了它的方向盘。</li>
 </ol>"""),
   ("循环实战", """<p>晚上：OpenClaw 调研一个主题，把 <code>research/topic.md</code> 丢进 vault。早上：你端着咖啡在 note.md 里读，高亮两个论断，写下一个疑问。下午：OpenClaw 捡起 <code>research/topic.note.md</code>，看清哪些论断赢得了你的注意，在你起疑的地方接着深挖。没有提示词工程——只有文件。</p>"""),
  ],
@@ -145,7 +145,7 @@ PAGES = [
   ("OpenClaw 需要插件才能和 note.md 配合吗？",
    "不需要。两边说的都是纯 markdown 文件。在 vault 根目录放一份写明约定的 AGENTS.md，全部的“集成”就这么多。"),
   ("让 OpenClaw 写进我的 vault 安全吗？",
-   "把 vault 放进 git（见 GitHub 指南），agent 的每次写入都可 diff、可回滚。按约定，agent 不应写你的 .note.md 伴生文件——把这条规矩写进 AGENTS.md。"),
+   "把 vault 放进 git（见 GitHub 指南），agent 的每次写入都可 diff、可回滚。按约定，agent 不应写你的 .note.md sidecar 文件——把这条规矩写进 AGENTS.md。"),
  ],
 },
 {
@@ -156,13 +156,13 @@ PAGES = [
  "h1": "note.md + Claude Cowork",
  "lead": "Cowork 在云端跑 Claude，连接你 Mac 上的文件夹。连上你的 vault，Claude 产出的一切都变成你能阅读、能标记、能留存的东西。",
  "sections": [
-  ("为什么这对组合成立", """<p>Cowork 的交付物绝大多数是 markdown：调研报告、计划、规格、草稿。默认情况下它们四处散落——这里一个下载，那里一个会话附件。把 Cowork 指向你的 note.md vault，它的产出就落在你阅读循环所在的地方：每份报告有个家，每次通读留下一份写满判断的伴生文件（sidecar），而你的下一个 Cowork 会话可以被要求先读这些伴生文件。</p>"""),
+  ("为什么这对组合成立", """<p>Cowork 的交付物绝大多数是 markdown：调研报告、计划、规格、草稿。默认情况下它们四处散落——这里一个下载，那里一个会话附件。把 Cowork 指向你的 note.md vault，它的产出就落在你阅读循环所在的地方：每份报告有个家，每次通读留下一份写满判断的sidecar 文件，而你的下一个 Cowork 会话可以被要求先读这些sidecar 文件。</p>"""),
   ("配置", """<ol>
 <li>在 Claude 桌面应用里，把 vault 文件夹连进 Cowork 会话（“Add folder”）。</li>
 <li>在 vault 根目录加一份 <code>AGENTS.md</code>（约定摘要见 <a href="/llms-full.txt">llms-full.txt</a>）——Claude 会自动读取并遵守家规。</li>
 <li>让 Claude 把交付物存进 vault，例如 <code>research/2026-07-11-competitor-scan.md</code>。</li>
-<li>在 note.md 里读；你的高亮和笔记存进伴生 <code>.note.md</code> 文件。</li>
-<li>下个会话，一句话：“读你上周写的报告对应的 .note.md 伴生文件，回应我的页边批注。”循环闭合。</li>
+<li>在 note.md 里读；你的高亮和笔记存进sidecar <code>.note.md</code> 文件。</li>
+<li>下个会话，一句话：“读你上周写的报告对应的 .note.md sidecar 文件，回应我的页边批注。”循环闭合。</li>
 </ol>"""),
   ("小技巧", """<ul>
 <li>让 Claude 使用 <code>[[wikilinks]]</code> 和 <code>[[yyyy-MM-dd]]</code> 日期格式，它的文档就会汇入你 vault 的链接图谱，而不是漂在外面。</li>
@@ -173,7 +173,7 @@ PAGES = [
   ("Claude 会遵守 vault 的约定吗？",
    "会，只要你把约定写进文件夹根目录的 AGENTS.md——读取 agent 指令文件是 Claude Code 和 Cowork 的标准做法。"),
   ("Claude 能读我的批注吗？",
-   "这正是重点。伴生 .note.md 文件就是纯 markdown；让任何会话去读，它就能看到你到底高亮了什么、质疑了什么。"),
+   "这正是重点。sidecar .note.md 文件就是纯 markdown；让任何会话去读，它就能看到你到底高亮了什么、质疑了什么。"),
  ],
 },
 {
@@ -184,20 +184,20 @@ PAGES = [
  "h1": "note.md + Codex",
  "lead": "Codex 让 AGENTS.md 流行起来——一个纯文本文件，告诉 agent 这个文件夹怎么运转。note.md 的 vault 正是一个规则写在 AGENTS.md 里的文件夹。你能猜到接下来的剧情。",
  "sections": [
-  ("为什么这对组合成立", """<p>Codex 从运行目录读取 <code>AGENTS.md</code>——这是它的原生惯例，零配置。note.md 的 vault 把文件规则（伴生文件（sidecar）配对、大纲格式、日期链接、块级引用）恰好发布在这个文件里。所以集成就是：<code>cd vault &amp;&amp; codex</code>。完事。</p>
+  ("为什么这对组合成立", """<p>Codex 从运行目录读取 <code>AGENTS.md</code>——这是它的原生惯例，零配置。note.md 的 vault 把文件规则（sidecar 文件配对、大纲格式、日期链接、块级引用）恰好发布在这个文件里。所以集成就是：<code>cd vault &amp;&amp; codex</code>。完事。</p>
 <p>Codex 最强的角色是干活的 agent：让它起草、重构文档、批量处理笔记，或者写 vault 里日积月累的小脚本（导入器、链接检查器、报告生成器）。它写的一切都是 vault 里的 markdown，也就意味着它写的一切都会流进你的阅读-批注循环。</p>"""),
   ("配置", """<ol>
 <li>把 <a href="/llms-full.txt">llms-full.txt</a> 里的约定摘要复制进 vault 根目录的 <code>AGENTS.md</code>。</li>
 <li>加上 vault 专属规则——例如“绝不修改 <code>*.note.md</code>”、“新调研放 <code>research/</code> 下，文件名带日期前缀”。</li>
 <li>在 vault 目录运行 <code>codex</code>。它会自动捡起这些规则。</li>
-<li>在 note.md 里审读它的产出；批注；告诉下一次运行去读伴生文件。</li>
+<li>在 note.md 里审读它的产出；批注；告诉下一次运行去读sidecar 文件。</li>
 </ol>"""),
  ],
  "faq": [
   ("Codex 需要 MCP 服务器才能用 vault 吗？",
    "不需要。vault 就是工作目录里的纯文件——Codex 的主场。MCP 端点是给分享 worker 用的（发布页面），基本的 vault 工作用不上。"),
   ("AGENTS.md 里该禁止什么？",
-   "唯一的硬规矩：agent 不写你的 .note.md 伴生文件——那里存的是人的判断。其余（命名、目录、链接风格）都是各家的偏好。"),
+   "唯一的硬规矩：agent 不写你的 .note.md sidecar 文件——那里存的是人的判断。其余（命名、目录、链接风格）都是各家的偏好。"),
  ],
 },
 {
@@ -214,7 +214,7 @@ PAGES = [
 <li>老规矩，vault 根目录放 <code>AGENTS.md</code>——约定取自 <a href="/llms-full.txt">llms-full.txt</a>，再加你的家规。</li>
 <li>把 Hermes 的记忆/工作区目录配置到 vault 里面（例如 <code>agents/hermes/</code>），或让它把产出写进你的 vault 目录。</li>
 <li>让它干活。在 note.md 里读它写的东西；批注。</li>
-<li>叮嘱 Hermes 重访一个主题前先查 <code>*.note.md</code> 伴生文件（sidecar）——你的纠正成了它的辅助轮。</li>
+<li>叮嘱 Hermes 重访一个主题前先查 <code>*.note.md</code> sidecar 文件——你的纠正成了它的辅助轮。</li>
 </ol>"""),
  ],
  "faq": [
@@ -300,13 +300,13 @@ gh repo create my-vault --private --source=. --push</code></pre>
 <li>把 vault 放在 ChatGPT 够得着的文件夹里——一个 OpenAI 连接的文件夹，或一个它能读写的云 / git 同步目录。</li>
 <li>在 vault 根放一个 <code>AGENTS.md</code>（约定摘要见 <a href="/llms-full.txt">llms-full.txt</a>），并把同样的 house rules 贴进 ChatGPT 的项目指令——它不像 CLI agent 那样自动读文件，所以要主动告诉它。</li>
 <li>让它把成果按日期存成 markdown，例如 <code>drafts/2026-07-23-launch-post.md</code>，生成的图片用相对链接放进 <code>{docname}_files/</code>。</li>
-<li>在 note.md 里打开结果；阅读、高亮、发问——你的标记落进伴生的 <code>.note.md</code>，原文保持干净、可再生成。</li>
+<li>在 note.md 里打开结果；阅读、高亮、发问——你的标记落进sidecar 的 <code>.note.md</code>，原文保持干净、可再生成。</li>
 </ol>"""),
   ("循环跑起来是什么样", """<p>你让 ChatGPT 起草一篇发布稿并生成三张主图；它写出 <code>drafts/launch-post.md</code>，填满一个 <code>_files/</code> 文件夹。你在 note.md 里读它，删掉两张图，把一段夸大的话高亮，留一句批注。接着把 <code>launch-post.note.md</code> 交给一个更谨慎的审阅 agent——“照我的批注改”。ChatGPT 生成得快；vault 留住了它；你做了判断。这就是分工。</p>"""),
  ],
  "faq": [
   ("ChatGPT 会自动读 AGENTS.md 吗？",
-   "不像 CLI agent（Codex、Claude Code）那样自动读。把 vault 约定贴进 ChatGPT 的项目或自定义指令，并把它指向 AGENTS.md 文件，它就会遵守同一套 house rules——伴生文件不许碰，新活儿写成带日期的 markdown。"),
+   "不像 CLI agent（Codex、Claude Code）那样自动读。把 vault 约定贴进 ChatGPT 的项目或自定义指令，并把它指向 AGENTS.md 文件，它就会遵守同一套 house rules——sidecar 文件不许碰，新活儿写成带日期的 markdown。"),
   ("ChatGPT 生成的图片能住进我的 vault 吗？",
    "能。把它们和文档并排放进 {docname}_files/ 文件夹、用相对链接——和 note.md 处理粘贴截图是同一套约定。它们会在阅读视图里渲染，并随 vault 一起进 git。"),
   ("我必须只选一个 agent 吗？",
@@ -322,7 +322,7 @@ gh repo create my-vault --private --source=. --push</code></pre>
  "lead": "没人提醒你的那种锁定，不是应用——是 agent。把知识放在纯文件里，就没有哪个 AI 拥有它。Cowork 起草，Codex 重构，ChatGPT 生成，本地 agent 看守你的秘密——而握笔的是你。",
  "sections": [
   ("vault 是中立地带", """<p>大多数 AI 工具想成为你思考的家：知识进它的数据库，批注进它的格式，agent 是它自带的那一个，模型是它锁定你的那一款。于是“用哪个 AI？”变成了“要不要把一切都搬走？”——你被圈进单一供应商的路线图里。</p>
-<p>note.md 的 vault 把它翻了过来。vault 是一个带公共约定的纯 markdown 文件夹——一个讲 house rules 的 <code>AGENTS.md</code>、用来精确引用的 <code>((file#b-xxxxxx))</code> 块引用、装着<em>你的</em>判断的伴生 <code>.note.md</code>、以及构成单一命名空间的 <code>[[wikilinks]]</code>。这些约定是一套<b>公共协议</b>：任何 agent 都读得懂，不需要适配器。agent 和模型成了可替换的工人；唯一不变的是 vault。它是个 git 仓库，它们都往里 commit。</p>"""),
+<p>note.md 的 vault 把它翻了过来。vault 是一个带公共约定的纯 markdown 文件夹——一个讲 house rules 的 <code>AGENTS.md</code>、用来精确引用的 <code>((file#b-xxxxxx))</code> 块引用、装着<em>你的</em>判断的sidecar <code>.note.md</code>、以及构成单一命名空间的 <code>[[wikilinks]]</code>。这些约定是一套<b>公共协议</b>：任何 agent 都读得懂，不需要适配器。agent 和模型成了可替换的工人；唯一不变的是 vault。它是个 git 仓库，它们都往里 commit。</p>"""),
   ("谁擅长什么，就派谁", """<p>没有一个 agent 什么都最强。所以别让一个 agent 干所有事——搭一条流水线，把每个工具放到它最强的工位上：</p>
 <table><thead><tr><th>环节</th><th>合适的人选</th><th>为什么</th></tr></thead><tbody>
 <tr><td>夜间自动化</td><td>OpenClaw / Hermes</td><td>长跑、基于文件、自托管记忆</td></tr>
@@ -339,7 +339,7 @@ gh repo create my-vault --private --source=. --push</code></pre>
 <li><b>ChatGPT</b> 批量生成主图，放进每篇文档的 <code>_files/</code> 文件夹。</li>
 <li>成稿落进 note.md，在那里<b>你</b>阅读它们，砍掉夸大的部分，高亮要紧的地方，留下只有你写得出的批注。</li>
 </ol>
-<p>四个工具、三种模型、一个 vault、一个编排者。没人需要共享记忆或说某家的私有协议——它们在磁盘上传递 <code>.md</code> 文件，而你的伴生 <code>.note.md</code> 批注，就是给下一位的转向信号。</p>"""),
+<p>四个工具、三种模型、一个 vault、一个编排者。没人需要共享记忆或说某家的私有协议——它们在磁盘上传递 <code>.md</code> 文件，而你的sidecar <code>.note.md</code> 批注，就是给下一位的转向信号。</p>"""),
   ("为什么靠文件才行得通", """<ul>
 <li><b>反锁定，再深一层。</b>file-over-app 把你从应用里解放出来；这一条把你从 agent 和模型里解放出来。今天最强的模型下个月就被换掉——你的知识不该跟着它走。</li>
 <li><b>不靠平台的协作。</b>agent 在磁盘上传递 <code>.md</code>——没有共享内存，没有私有 API，没有插件商店。一个 agent 的产出就是下一个的输入。</li>
@@ -348,16 +348,16 @@ gh repo create my-vault --private --source=. --push</code></pre>
 </ul>
 <p>把 vault 放进 <a href="/guides/vault-on-github/">git</a>，每一次 agent 写入都可 diff、可归属、可回滚——agent 的糟糕一天，是一次 <code>git revert</code>，而不是一场事故。</p>"""),
   ("动手搭起来", """<ol>
-<li>在 vault 根放一个 <code>AGENTS.md</code>——从 <a href="/llms-full.txt">llms-full.txt</a> 取来约定，再加上 house rules（最硬的一条：agent 绝不写进 <code>*.note.md</code> 伴生文件）。</li>
+<li>在 vault 根放一个 <code>AGENTS.md</code>——从 <a href="/llms-full.txt">llms-full.txt</a> 取来约定，再加上 house rules（最硬的一条：agent 绝不写进 <code>*.note.md</code> sidecar 文件）。</li>
 <li>把每个 agent 都接到同一个文件夹上:<a href="/integrations/openclaw/">OpenClaw</a>、<a href="/integrations/cowork/">Cowork</a>、<a href="/integrations/codex/">Codex</a>、<a href="/integrations/chatgpt-work/">ChatGPT</a>、<a href="/integrations/hermes/">Hermes</a>。</li>
-<li>在 note.md 里阅读并批注结果；让下一个 agent 先读伴生文件。循环在你的磁盘上闭合。</li>
+<li>在 note.md 里阅读并批注结果；让下一个 agent 先读sidecar 文件。循环在你的磁盘上闭合。</li>
 </ol>"""),
  ],
  "faq": [
   ("不同的 AI agent 真的能共享一个 vault 吗？",
    "能——这就是设计。vault 是纯 markdown 加一个描述约定的 AGENTS.md。Claude Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes 都读写这些文件，所以你能把每项任务路由给最合适的 agent（和模型）。把 vault 放进 git，每次写入都可 diff、可回滚。"),
   ("agent 之间怎么把活儿交接给彼此？",
-   "通过文件。一个 agent 把 markdown 写进 vault；下一个把它当输入读。你的批注住在伴生的 .note.md 文件里，充当转向信号——agent 在下一轮之前先读你的批注。不需要共享内存或私有协议。"),
+   "通过文件。一个 agent 把 markdown 写进 vault；下一个把它当输入读。你的批注住在sidecar 的 .note.md 文件里，充当转向信号——agent 在下一轮之前先读你的批注。不需要共享内存或私有协议。"),
   ("这需要专门的编排工具或 MCP server 吗？",
    "不需要。编排者是你，介质是文件系统。没有中枢数据库、没有隐藏状态——规则在 AGENTS.md，产出在 .md，判断在 .note.md。给偏好工具接口的 agent 准备的 Vault MCP server 在路线图上，但纯文件今天就能用。"),
   ("为什么不干脆用一个 AI 包办一切？",

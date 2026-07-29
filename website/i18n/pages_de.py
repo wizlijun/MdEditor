@@ -45,7 +45,7 @@ PAGES = [
 {
  "path": "/compare/obsidian/",
  "title": "note.md vs Obsidian (2026) — zwei File-over-App-Editoren, einer für Agents gebaut",
- "desc": "note.md und Obsidian speichern deine Notizen beide als lokales Markdown. Der Unterschied: note.md ist fürs Lesen und Annotieren von AI-Output gebaut — mit Sidecar-Notizen und Agent-Konventionen out of the box.",
+ "desc": "note.md und Obsidian speichern deine Notizen beide als lokales Markdown. Der Unterschied: note.md ist fürs Lesen und Annotieren von AI-Output gebaut — mit Randnotizen und Agent-Konventionen out of the box.",
  "crumb": "Vergleich",
  "h1": "note.md vs Obsidian",
  "lead": "Engste Verwandte. Beide glauben an Dateien statt Apps. Obsidian ist der Alles-Werkzeugkasten; note.md ist eine geschärfte Klinge für den AI-Lese-Loop. Dein Vault öffnet sich in beiden — mit Absicht.",
