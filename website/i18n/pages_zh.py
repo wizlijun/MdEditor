@@ -7,7 +7,7 @@ PAGES = [
 {
  "path": "/compare/roam-research/",
  "title": "note.md vs Roam Research（2026）— 文件、agent，以及 Roam 后来怎么了",
- "desc": "一份诚实的对比：note.md 与 Roam Research——大纲笔记、每日笔记和 [[链接]]，一边是带 AI agent 支持的本地纯文本文件，一边是 Roam 的浏览器内图谱。附迁移路径。",
+ "desc": "一份诚实的对比：note.md 与 Roam Research——大纲笔记、每日笔记和 [[双链]]，一边是带 AI agent 支持的本地纯文本文件，一边是 Roam 的浏览器内图谱。附迁移路径。",
  "crumb": "对比",
  "h1": "note.md vs Roam Research",
  "lead": "两者都爱大纲、每日笔记和 [[双方括号]]。一个把你十年的思考放在某家公司的浏览器标签页里。另一个放在一个属于你的文件夹里。",

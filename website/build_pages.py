@@ -221,7 +221,7 @@ PAGES = [
 {
  "path": "/compare/roam-research/",
  "title": "note.md vs Roam Research (2026) — files, agents, and what happened to Roam",
- "desc": "An honest comparison of note.md and Roam Research: outliner notes, daily notes and [[links]] — as plain local files with AI-agent support, versus Roam's in-browser graph. Including a migration path.",
+ "desc": "An honest comparison of note.md and Roam Research: outliner notes, daily notes and [[wikilinks]] — as plain local files with AI-agent support, versus Roam's in-browser graph. Including a migration path.",
  "crumb": "Compare",
  "h1": "note.md vs Roam Research",
  "lead": "Both love outlines, daily notes, and [[double brackets]]. One keeps your ten years of thinking in a company's browser tab. The other keeps it in a folder you own.",

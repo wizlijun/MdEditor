@@ -53,12 +53,12 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   'Alles landet im Vault, den deine Agents teilen — pures Markdown. Je mehr du hinterlässt, desto besser kennen sie dich.',
   'AI が書く量は、読み切れない。note.md なら読み進められる。ハイライトして、疑問を書いて、その場で直す。'
   'すべては agent と共有する vault に、ただの markdown として残る——残すほど、agent はあなたを理解していく。'),
- ('11 MB<i>·</i>any Typora theme<i>·</i>Mermaid &amp; Graphviz, tuned<i>·</i>outliner, [[links]], daily notes'
+ ('11 MB<i>·</i>any Typora theme<i>·</i>Mermaid &amp; Graphviz, tuned<i>·</i>outliner, [[wikilinks]], daily notes'
   '<i>·</i>one vault every agent shares',
   '11 MB<i>·</i>主题随你换<i>·</i>Mermaid、Graphviz 都调过<i>·</i>大纲、[[双链]]、每日笔记<i>·</i>一个 vault，所有 agent 共用',
-  '11 MB<i>·</i>jedes Typora-Theme<i>·</i>Mermaid &amp; Graphviz, abgestimmt<i>·</i>Outliner, [[Links]], Tagesnotizen'
+  '11 MB<i>·</i>jedes Typora-Theme<i>·</i>Mermaid &amp; Graphviz, abgestimmt<i>·</i>Outliner, [[Wikilinks]], Tagesnotizen'
   '<i>·</i>ein Vault für alle Agents',
-  '11 MB<i>·</i>Typora テーマ対応<i>·</i>Mermaid、Graphviz 調整済み<i>·</i>アウトライン、[[リンク]]、デイリーノート'
+  '11 MB<i>·</i>Typora テーマ対応<i>·</i>Mermaid、Graphviz 調整済み<i>·</i>アウトライン、[[ウィキリンク]]、デイリーノート'
   '<i>·</i>一つの vault をすべての agent と'),
  ('<span class="bl">Download for macOS</span>',
   '<span class="bl">下载 macOS 版</span>',

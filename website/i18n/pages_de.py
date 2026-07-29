@@ -6,7 +6,7 @@ PAGES = [
 {
  "path": "/compare/roam-research/",
  "title": "note.md vs Roam Research (2026) — Dateien, Agents und was aus Roam wurde",
- "desc": "Ein ehrlicher Vergleich von note.md und Roam Research: Outliner-Notizen, Daily Notes und [[Links]] — als lokale Markdown-Dateien mit AI-Agent-Support, gegen Roams Graph im Browser-Tab. Inklusive Migrationspfad.",
+ "desc": "Ein ehrlicher Vergleich von note.md und Roam Research: Outliner-Notizen, Daily Notes und [[Wikilinks]] — als lokale Markdown-Dateien mit AI-Agent-Support, gegen Roams Graph im Browser-Tab. Inklusive Migrationspfad.",
  "crumb": "Vergleich",
  "h1": "note.md vs Roam Research",
  "lead": "Beide lieben Outlines, Daily Notes und [[doppelte Klammern]]. Das eine hält deine zehn Jahre Denkarbeit im Browser-Tab einer Firma. Das andere in einem Ordner, der dir gehört.",
