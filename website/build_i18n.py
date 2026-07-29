@@ -46,10 +46,12 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<h1>读 AI 写的。<br>留下你想的。<br>留下只有<em>你</em>写得出的。<span class="cursor"></span></h1>',
   '<h1>Lies, was die KI schreibt.<br>Behalte, was du denkst.<br>Behalte, was nur <em>du</em> schreiben kannst.<span class="cursor"></span></h1>',
   '<h1>読むのは AI の文章。<br>残すのはあなたの考え。<br>残すのは、<em>あなた</em>にしか書けないもの。<span class="cursor"></span></h1>'),
- ("Your agents write more in a night than you'll read all year. Just files. On your Mac. Yours.",
-  '你的 agent 一晚写的，你一年也读不完。就是一堆文件，在你自己电脑上，随时拿得走。',
-  'Deine Agents schreiben in einer Nacht mehr, als du in einem Jahr liest. Nur Dateien. Auf deinem Mac. Deine.',
-  'エージェントが一晩で書く量は、一年かけても読み切れない。ただのファイル。あなたの Mac の中に。'),
+ ("Your agents write more in a night than you'll read all year. note.md is where you read it and mark it up. "
+  'Everything it saves is a plain file, on your own Mac.',
+  '你的 agent 一晚写的，你一年也读不完。note.md 就是你读它、标它的地方。存下来的都是普通 markdown 文件，就在你自己电脑上。',
+  'Deine Agents schreiben in einer Nacht mehr, als du in einem Jahr liest. In note.md liest du es und schreibst dazu. '
+  'Alles, was dabei gespeichert wird, ist eine einfache Datei auf deinem eigenen Mac.',
+  'エージェントが一晩で書く量は、一年かけても読み切れない。note.md は、それを読んで書き込む場所。残るのはすべて、あなたの Mac の中のただのファイル。'),
  ('<span class="bl">Download for macOS</span>',
   '<span class="bl">下载 macOS 版</span>',
   '<span class="bl">Für macOS laden</span>',
