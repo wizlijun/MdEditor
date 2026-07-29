@@ -74,6 +74,16 @@ The rest is yours to discover.
 5. **[One vault, many agents — you orchestrate.](docs/product-principle-one-vault-many-agents-you-orchestrate.md)**
    The workers are interchangeable. You hold the pen.
 
+## Written by AI, answered for by a human
+
+note.md is developed and maintained entirely by AI coding. That is also why it
+knows what reading AI output feels like — the tool is built the way it expects
+you to work.
+
+So releases come fast. The person behind it is a career software engineer:
+every change is reviewed, tested, and smoke-run before it ships. The speed is
+the AI's. The quality is on the human.
+
 ## Under the hood
 
 Built with [Tauri](https://tauri.app) on
