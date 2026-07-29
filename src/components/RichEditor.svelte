@@ -744,19 +744,24 @@
     const { TextSelection } = await getPmState()
     const match = searchMatches[idx]
     const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, match.from, match.to))
-    tr.scrollIntoView()
     view.dispatch(tr)
 
+    // Scroll the pane ourselves instead of relying on tr.scrollIntoView().
+    // ProseMirror walks up from the *DOM selection's* node to find something
+    // scrollable; while the find bar holds focus that node is the find input,
+    // so PM climbs the find bar's ancestors and the editor never moves. The
+    // scroll container is `.scroll` — `host` inside it never scrolls.
     requestAnimationFrame(() => {
       try {
+        const scroller = (host as HTMLElement | null)?.closest('.scroll') as HTMLElement | null
+        if (!scroller) return
         const coords = view.coordsAtPos(match.from)
-        const wrapper = host as HTMLElement | null
-        if (!wrapper) return
-        const rect = wrapper.getBoundingClientRect()
-        if (coords.top < rect.top || coords.bottom > rect.bottom) {
-          wrapper.scrollTop += coords.top - rect.top - rect.height / 3
+        const rect = scroller.getBoundingClientRect()
+        const margin = rect.height / 4
+        if (coords.top < rect.top + margin || coords.bottom > rect.bottom - margin) {
+          scroller.scrollTop += coords.top - rect.top - rect.height / 3
         }
-      } catch { /* ignore */ }
+      } catch { /* coordsAtPos can throw on a detached//re-rendering view */ }
     })
   }
 
@@ -905,6 +910,25 @@
     findState.currentMatch = 0
     void applySearchDecorations([], -1)
   }
+
+  // Re-run an open find against a freshly mounted editor. Switching rich/source
+  // (or tabs) mounts a new component, and the find bar only dispatches when the
+  // query itself changes — so the query sitting in the box would otherwise
+  // apply to nothing here, leaving a stale count and no highlights.
+  // Tracks `status` only: reading findState here (and writing matchCount
+  // through onFindSearch) would re-invalidate this effect from inside itself.
+  $effect(() => {
+    const ready = status === 'mounted'
+    untrack(() => {
+      if (!ready || !findState.open || !findState.query) return
+      onFindSearch(new CustomEvent('', { detail: {
+        query: findState.query,
+        caseSensitive: findState.caseSensitive,
+        wholeWord: findState.wholeWord,
+        useRegex: findState.useRegex,
+      } }))
+    })
+  })
 
   $effect(() => {
     window.addEventListener('mdeditor:find-search', onFindSearch)

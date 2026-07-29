@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { findState, closeFind } from '../lib/find-replace.svelte'
   import { t } from '../lib/i18n/store.svelte'
 
@@ -16,9 +17,16 @@
     const cs = findState.caseSensitive
     const ww = findState.wholeWord
     const re = findState.useRegex
-    window.dispatchEvent(new CustomEvent('mdeditor:find-search', {
-      detail: { query: q, caseSensitive: cs, wholeWord: ww, useRegex: re },
-    }))
+    // The editors answer this event *synchronously* and write back into
+    // findState (matchCount / currentMatch). Without untrack, any state they
+    // touch that this effect also reads would re-invalidate the effect from
+    // inside its own run — a self-feeding loop that Svelte kills after ~1000
+    // iterations, leaving search-as-you-type permanently dead.
+    untrack(() => {
+      window.dispatchEvent(new CustomEvent('mdeditor:find-search', {
+        detail: { query: q, caseSensitive: cs, wholeWord: ww, useRegex: re },
+      }))
+    })
   })
 
   function next() {

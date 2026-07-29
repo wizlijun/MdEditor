@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import {
     hoverStore,
     getHoverState,
@@ -14,6 +15,7 @@
   import { saveClipboardResource, isAttachmentUrl, basenameOf } from '../lib/paste-resources'
   import { isVideoUrl, fetchVideoInfo } from '../lib/video-links'
   import { autoPairInsert } from '../lib/autopair'
+  import { renderSourceHtml, type HitRange } from '../lib/source-highlight'
 
   let {
     value,
@@ -28,6 +30,15 @@
   let textareaEl: HTMLTextAreaElement | undefined = $state()
   let highlightEl: HTMLPreElement | undefined = $state()
   let gutterEl: HTMLDivElement | undefined = $state()
+
+  // Find/replace hits. Reactive because the overlay (`highlighted`) paints
+  // them — the transparent textarea's own selection is invisible while focus
+  // sits in the find bar.
+  //
+  // `$state.raw`: the list is only ever replaced wholesale, so there is no
+  // reason to pay for a deep proxy over thousands of hit objects.
+  let searchMatches = $state.raw<HitRange[]>([])
+  let searchIndex = $state(-1)
 
   // Subscribe to hover-store version so this component re-derives when yaml updates.
   // Prefer the live preview (computed from current editor content) over the
@@ -128,36 +139,10 @@
     }
   }
 
-  function escapeHtml(s: string): string {
-    return s
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-  }
-
-  function highlight(src: string): string {
-    const lines = src.split('\n').map((line) => {
-      const m = line.match(/^(#{1,6})(\s.*)?$/)
-      if (m) {
-        const level = m[1].length
-        return `<span class="h h${level}">${escapeHtml(line)}</span>`
-      }
-      let out = escapeHtml(line) || ' '
-      // CriticMarkup annotations: tint {==…==} and {>>…<<} spans. Text is
-      // already HTML-escaped, so match the escaped forms in one pass.
-      out = out.replace(
-        /(\{==.+?==\})?(\{&gt;&gt;.*?&lt;&lt;\})/g,
-        (_all, hl: string | undefined, note: string) =>
-          (hl ? `<span class="crit-hl">${hl}</span>` : '') +
-          `<span class="crit-note">${note}</span>`,
-      )
-      return out
-    })
-    // Trailing space ensures pre matches textarea height when value ends with newline
-    return lines.join('\n') + '\n'
-  }
-
-  let highlighted = $derived(highlight(value))
+  // The overlay carries the search marks too — the textarea underneath is
+  // transparent and unfocused during a find, so its native selection paints
+  // nothing. See src/lib/source-highlight.ts.
+  let highlighted = $derived(renderSourceHtml(value, searchMatches, searchIndex))
   let lineCount = $derived(value === '' ? 1 : (value.match(/\n/g)?.length ?? 0) + 1)
 
   // Debounced live recompute: when the user types, schedule a chunker +
@@ -358,9 +343,6 @@
     }
   }
 
-  interface TextMatch { start: number; end: number }
-  let searchMatches: TextMatch[] = []
-  let searchIndex = -1
   let lastSearchRegex = false
   let lastSearchPattern = ''
   let lastSearchCS = false
@@ -369,7 +351,7 @@
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
 
-  function findMatches(query: string, cs: boolean, wholeWord: boolean, useRegex: boolean): TextMatch[] {
+  function findMatches(query: string, cs: boolean, wholeWord: boolean, useRegex: boolean): HitRange[] {
     if (!query) return []
     let pattern = useRegex ? query : escapeRegexStr(query)
     if (wholeWord) pattern = `\\b${pattern}\\b`
@@ -377,7 +359,7 @@
     try { regex = new RegExp(pattern, cs ? 'g' : 'gi') }
     catch { return [] }
 
-    const matches: TextMatch[] = []
+    const matches: HitRange[] = []
     let m: RegExpExecArray | null
     while ((m = regex.exec(value)) !== null) {
       if (m[0].length === 0) { regex.lastIndex++; continue }
@@ -389,12 +371,21 @@
 
   function scrollToTextMatch(idx: number) {
     if (!textareaEl || idx < 0 || idx >= searchMatches.length) return
+    const el = textareaEl
     const match = searchMatches[idx]
-    textareaEl.setSelectionRange(match.start, match.end)
-    const lh = parseFloat(getComputedStyle(textareaEl).lineHeight) || 20
-    const linesBefore = value.slice(0, match.start).split('\n').length
-    const scrollTarget = (linesBefore - 3) * lh
-    textareaEl.scrollTop = Math.max(0, scrollTarget)
+    // Keep the caret on the hit so leaving the find bar drops the user there.
+    // (It stays invisible until the textarea is focused — the overlay's
+    // .search-hit-current is what the user actually sees.)
+    el.setSelectionRange(match.start, match.end)
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || 20
+    const lineTop = (value.slice(0, match.start).split('\n').length - 1) * lh
+    const viewTop = el.scrollTop
+    const viewBottom = viewTop + el.clientHeight
+    // Only scroll when the hit is off-screen: re-centring on every step would
+    // yank the page around for matches the user can already see.
+    if (lineTop < viewTop || lineTop > viewBottom - lh * 2) {
+      el.scrollTop = Math.max(0, lineTop - el.clientHeight / 3)
+    }
     syncScroll()
   }
 
@@ -478,6 +469,30 @@
     findState.matchCount = 0
     findState.currentMatch = 0
   }
+
+  /** Detail payload matching what the find bar dispatches. */
+  function currentFindDetail() {
+    return {
+      query: findState.query,
+      caseSensitive: findState.caseSensitive,
+      wholeWord: findState.wholeWord,
+      useRegex: findState.useRegex,
+    }
+  }
+
+  // Re-run an open find against a freshly mounted editor. Switching rich/source
+  // (or tabs) mounts a new component, and the find bar only dispatches when the
+  // query itself changes — so the query sitting in the box would otherwise
+  // apply to nothing here, leaving a stale count and no marks.
+  // Tracks `textareaEl` only: reading findState here (and writing matchCount
+  // through onFindSearch) would re-invalidate this effect from inside itself.
+  $effect(() => {
+    const el = textareaEl
+    untrack(() => {
+      if (!el || !findState.open || !findState.query) return
+      onFindSearch(new CustomEvent('', { detail: currentFindDetail() }))
+    })
+  })
 
   $effect(() => {
     window.addEventListener('mdeditor:find-search', onFindSearch)
@@ -697,6 +712,18 @@
   @media (prefers-color-scheme: dark) {
     .hl :global(.crit-hl) { background: rgba(217, 164, 0, 0.22); }
     .hl :global(.crit-note) { color: #e3b341; background: rgba(227, 179, 65, 0.12); }
+  }
+  /* Find hits. Declared after .crit-* so an annotation that contains a hit
+     shows the hit colour (equal specificity → later rule wins).
+     Same palette as rich mode's .search-highlight decorations. */
+  .hl :global(.search-hit) {
+    background: rgba(255, 213, 0, 0.35);
+    border-radius: 2px;
+  }
+  .hl :global(.search-hit-current) {
+    background: rgba(255, 150, 0, 0.6);
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px rgba(255, 150, 0, 0.9);
   }
   .host textarea {
     background: transparent;
