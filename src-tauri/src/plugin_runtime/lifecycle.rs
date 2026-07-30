@@ -234,8 +234,8 @@ impl PluginLifecycle {
                 drop(phase);
                 self.touch();
                 self.spawn_crash_watcher(proc.clone());
-                if let Some(n) = self.manifest.idle_shutdown_seconds {
-                    self.spawn_idle_watcher(proc.clone(), Duration::from_secs(n));
+                if let Some(d) = Self::idle_watch_after(self.manifest.idle_shutdown_seconds) {
+                    self.spawn_idle_watcher(proc.clone(), d);
                 }
                 Ok(proc)
             }
@@ -405,6 +405,18 @@ impl PluginLifecycle {
         });
     }
 
+    /// How long a process may sit idle before deactivation, or `None` for
+    /// never. `Some(0)` reads as "never" rather than "immediately": a plugin
+    /// author writing 0 means it should stay resident, and the literal reading
+    /// makes `idle_for >= 0` true at the first poll — the process gets reaped
+    /// seconds after every activation, which presents as a plugin that half
+    /// works and then forgets its own state.
+    /// Omitting the field entirely (what pos-log does) is still the clearest
+    /// way to say resident.
+    fn idle_watch_after(secs: Option<u64>) -> Option<Duration> {
+        secs.filter(|n| *n > 0).map(Duration::from_secs)
+    }
+
     /// Idle shutdown (spec §4.2): with `idle_shutdown_seconds = Some(n)`,
     /// deactivate after n seconds without activity; the next trigger
     /// re-activates lazily via [`ensure_active`].
@@ -522,6 +534,18 @@ mod tests {
 
     fn ev(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// `0` means resident, not "reap on the first poll" — the literal reading
+    /// kills a plugin seconds after every activation.
+    #[test]
+    fn idle_shutdown_of_zero_means_never() {
+        assert_eq!(PluginLifecycle::idle_watch_after(None), None);
+        assert_eq!(PluginLifecycle::idle_watch_after(Some(0)), None);
+        assert_eq!(
+            PluginLifecycle::idle_watch_after(Some(120)),
+            Some(Duration::from_secs(120))
+        );
     }
 
     #[test]

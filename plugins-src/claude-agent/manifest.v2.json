@@ -80,6 +80,5 @@
     }
   },
   "capabilities": ["ui", "toast", "vault.read"],
-  "request_timeout_seconds": 300,
-  "idle_shutdown_seconds": 0
+  "request_timeout_seconds": 300
 }

@@ -70,11 +70,61 @@ fn overview(vault: &std::path::Path) -> Vec<TaskOverview> {
         .collect()
 }
 
-/// The vault root has to come from the host (`host.vault.info`); everything
-/// after that is plain filesystem work in our own process.
-async fn vault_root(host: &sdk::Host) -> Option<PathBuf> {
-    let v = host.request("host.vault.info", json!({})).await.ok()?;
-    v.get("root")?.as_str().map(PathBuf::from)
+/// The vault root. The host is authoritative (`host.vault.info`), but it can
+/// answer with nothing — during startup before vault_sync has initialised, for
+/// one — so retry, and then fall back to the very config file the host itself
+/// falls back to (`sotvault/mod.rs:215-232`). Every failure is logged: a
+/// swallowed error here reads to the user as "no vault configured" with no way
+/// to tell why.
+async fn resolve_vault(host: &sdk::Host) -> Option<PathBuf> {
+    for attempt in 1..=3 {
+        match host.request("host.vault.info", json!({})).await {
+            Ok(v) => {
+                if let Some(root) = v
+                    .get("root")
+                    .and_then(|r| r.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    return Some(PathBuf::from(root));
+                }
+                host.log_warn(&format!("host.vault.info has no root (try {attempt}): {v}"));
+            }
+            Err(e) => host.log_warn(&format!("host.vault.info failed (try {attempt}): {e}")),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    }
+    match shared_config_vault() {
+        Some(p) => {
+            host.log_info(&format!("vault taken from the shared config: {}", p.display()));
+            Some(p)
+        }
+        None => None,
+    }
+}
+
+fn shared_config_path() -> Option<PathBuf> {
+    // Overridable so a test never reads — and then seeds templates into — the
+    // real vault of whoever is running the suite.
+    if let Ok(p) = std::env::var("NOTEMD_SHARED_CONFIG") {
+        return Some(PathBuf::from(p));
+    }
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join("Library/Application Support/com.laobu.mdeditor-shared/config.json"),
+    )
+}
+
+fn shared_config_vault() -> Option<PathBuf> {
+    shared_config_vault_at(&shared_config_path()?)
+}
+
+/// `{"sotvault": "/path"}` out of the shared config — the same key and file the
+/// host reads.
+fn shared_config_vault_at(path: &std::path::Path) -> Option<PathBuf> {
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let s = v.get("sotvault")?.as_str()?;
+    (!s.is_empty()).then(|| PathBuf::from(s))
 }
 
 impl sdk::NotemdPlugin for ClaudeAgentPlugin {
@@ -87,7 +137,7 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
         // deadlocks the plugin until the host's request timeout, which looks
         // like an empty task list and a dead Run button.
         tokio::spawn(async move {
-            let root = vault_root(&host).await;
+            let root = resolve_vault(&host).await;
             if let Some(root) = &root {
                 let wrote = task::seed_builtin_templates(root);
                 if !wrote.is_empty() {
@@ -365,6 +415,11 @@ mod tests {
     /// `tasks.list` must still come back.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn activate_never_blocks_the_protocol_loop() {
+        // This drives the REAL plugin, whose vault fallback would otherwise
+        // read the developer's own shared config and seed templates into their
+        // live vault.
+        std::env::set_var("NOTEMD_SHARED_CONFIG", "/nonexistent/claude-agent-test.json");
+
         let (mut to_plugin, plugin_stdin) = tokio::io::duplex(16 * 1024);
         let (plugin_stdout, from_plugin) = tokio::io::duplex(16 * 1024);
         // The plugin gets its OWN runtime on its OWN thread: a regression here
@@ -490,6 +545,40 @@ mod tests {
         assert_eq!(first["id"], "annotation-sweep");
         assert!(first["name"].is_string());
         assert_eq!(first["running"], false);
+    }
+
+    #[test]
+    fn reads_the_vault_out_of_the_shared_config() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.json");
+        std::fs::write(
+            &p,
+            r#"{"version":1,"sotvault":"/Users/x/git/sotvault","rawvault":"/Users/x/git/rawvault"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            shared_config_vault_at(&p),
+            Some(PathBuf::from("/Users/x/git/sotvault"))
+        );
+    }
+
+    #[test]
+    fn shared_config_without_a_usable_vault_reads_as_none() {
+        let d = tempfile::tempdir().unwrap();
+        let missing = d.path().join("nope.json");
+        assert_eq!(shared_config_vault_at(&missing), None);
+
+        let empty = d.path().join("empty.json");
+        std::fs::write(&empty, r#"{"version":1,"sotvault":""}"#).unwrap();
+        assert_eq!(shared_config_vault_at(&empty), None);
+
+        let absent = d.path().join("absent.json");
+        std::fs::write(&absent, r#"{"version":1}"#).unwrap();
+        assert_eq!(shared_config_vault_at(&absent), None);
+
+        let broken = d.path().join("broken.json");
+        std::fs::write(&broken, "{not json").unwrap();
+        assert_eq!(shared_config_vault_at(&broken), None);
     }
 
     #[test]
