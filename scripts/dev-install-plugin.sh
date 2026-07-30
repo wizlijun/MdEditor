@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dev-install a v2 plugin into the local app-data plugins root.
 #
-# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|exlibris|pos-log|decision-log|weekly-review]
+# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|exlibris|pos-log|decision-log|weekly-review|claude-agent]
 #   default plugin = md2pdf (preserves the original behavior).
 #   --release      = build the native plugin binary in release mode (md2pdf +
 #                    openclaw + exlibris; ignored for the pure-UI plugins).
@@ -23,6 +23,10 @@
 # pos-log     → builds the CURRENT-arch native backend crate
 #               (plugins-src/pos-log/backend → notemd-pos-log; resident 30-min
 #               location logger, no UI) and installs bin/ + manifest.
+# claude-agent→ builds BOTH the CURRENT-arch native backend crate
+#               (plugins-src/claude-agent/backend → notemd-claude-agent; the
+#               headless runner plus its detached --runner mode) AND the
+#               standalone Vite UI bundle, then installs bin/ + ui/ + manifest.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -31,8 +35,8 @@ PLUGIN=md2pdf
 for arg in "$@"; do
   case "$arg" in
     --release) PROFILE=release ;;
-    md2pdf|roam-import|openclaw|cef|exlibris|pos-log|decision-log|weekly-review) PLUGIN="$arg" ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | exlibris | pos-log | decision-log | weekly-review)" >&2; exit 2 ;;
+    md2pdf|roam-import|openclaw|cef|exlibris|pos-log|decision-log|weekly-review|claude-agent) PLUGIN="$arg" ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | exlibris | pos-log | decision-log | weekly-review | claude-agent)" >&2; exit 2 ;;
   esac
 done
 
@@ -186,6 +190,28 @@ elif [[ "$PLUGIN" == "weekly-review" ]]; then
   mark_installed "notemd.weekly-review" "$VERSION"
   echo "✓ installed notemd.weekly-review@$VERSION (ui-only) → $DEST"
   echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
+
+elif [[ "$PLUGIN" == "claude-agent" ]]; then
+  SRC="plugins-src/claude-agent"
+  # 1) CURRENT-arch native backend (headless runner: task discovery, task lock,
+  #    claude child process + stream-json parsing, run records, --runner mode).
+  cargo build $([ "$PROFILE" = release ] && echo --release) \
+    --manifest-path "$SRC/backend/Cargo.toml" --bin notemd-claude-agent
+  # 2) Standalone UI bundle (dist/).
+  pnpm --filter claude-agent build
+  VERSION=$(node -e "console.log(require('./$SRC/manifest.v2.json').version)")
+  DEST="$ROOT/notemd.claude-agent/$VERSION"
+  rm -rf "$DEST"
+  mkdir -p "$DEST/bin" "$DEST/ui"
+  cp "$SRC/backend/target/$PROFILE/notemd-claude-agent" "$DEST/bin/notemd-claude-agent"
+  cp -R "$SRC/dist/." "$DEST/ui/"
+  cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
+  ln -sfn "$VERSION" "$ROOT/notemd.claude-agent/current"
+  mark_installed "notemd.claude-agent" "$VERSION"
+  echo "✓ installed notemd.claude-agent@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
+  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
+  echo "  open it:                Window menu ▸ \"Claude Agent…\""
+  echo "  needs:                  Claude Code installed and logged in (claude --version)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -257,4 +283,25 @@ fi
 #      Verify all run against the same in-process backend.
 #   Drag-drop is deferred (plugin windows have no Tauri IPC); the "Add books…"
 #   file picker is the primary import path.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Manual E2E walkthrough — claude-agent:
+#   1. scripts/dev-install-plugin.sh claude-agent
+#   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev   (with a Vault configured)
+#   3. Window ▸ "Claude Agent…" → the window opens with two tasks in the left
+#      column (selfcheck / annotation-sweep), seeded on first activation into
+#      <vault>/.notemd/agent-tasks/. The vault's .gitignore gains
+#      .notemd/agent-runs/ and the settings.local.json line.
+#   4. Pick selfcheck → Run → tool calls and text stream in live; the footer
+#      turns terminal. A record appears at
+#      <vault>/.notemd/agent-runs/selfcheck/runs/*.json and in "Recent runs".
+#   5. Pick annotation-sweep → Run → hit Stop mid-run → status reads "Stopped";
+#      `pgrep -f 'claude -p'` confirms the child process group was reaped.
+#   6. CLI: `notemd agent selfcheck` → returns a run_id immediately (detached);
+#      a trigger:"cli" record shows up in runs/ once it finishes.
+#   7. CLI: `notemd agent selfcheck --wait` → blocks, then returns the result.
+#   8. Run two DIFFERENT tasks at once → both proceed. Run the SAME task twice →
+#      the second is refused with an "already running" toast.
+#   If claude isn't on PATH: the window shows "claude executable not found";
+#   point NOTEMD_CLAUDE_BIN at it and retry.
 # ---------------------------------------------------------------------------
