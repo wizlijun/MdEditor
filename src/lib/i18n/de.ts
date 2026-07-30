@@ -383,7 +383,6 @@ export const de: Record<keyof Messages, string> = {
   'agent.doneSkipped': 'Nichts zu tun',
   'agent.doneSuccess': 'Fertig',
   'agent.doneError': 'Fehlgeschlagen',
-  'agent.dismiss': 'Schließen',
   'agent.noNote': 'Dieses Dokument hat keine Randnotiz.',
   'agent.elapsed': '{s}s',
   'outline.title': 'Randnotizen',

@@ -385,7 +385,6 @@ export const ja: Record<keyof Messages, string> = {
   'agent.doneSkipped': '実行の必要なし',
   'agent.doneSuccess': '完了',
   'agent.doneError': '失敗',
-  'agent.dismiss': '閉じる',
   'agent.noNote': 'この文書にはサイドノートがありません。',
   'agent.elapsed': '{s} 秒',
   'outline.title': 'サイドノート',

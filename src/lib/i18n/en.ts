@@ -390,7 +390,6 @@ export const en = {
   'agent.doneSkipped': 'Nothing to do',
   'agent.doneSuccess': 'Done',
   'agent.doneError': 'Failed',
-  'agent.dismiss': 'Dismiss',
   'agent.noNote': 'This document has no sidecar note.',
   'agent.elapsed': '{s}s',
   'outline.title': 'Sidecar Notes',

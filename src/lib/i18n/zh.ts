@@ -417,7 +417,6 @@ export const zh: Record<keyof Messages, string> = {
   'agent.doneSkipped': '无需运行',
   'agent.doneSuccess': '完成',
   'agent.doneError': '失败',
-  'agent.dismiss': '知道了',
   'agent.noNote': '当前文档没有手记。',
   'agent.elapsed': '{s} 秒',
   'outline.title': '手记',
