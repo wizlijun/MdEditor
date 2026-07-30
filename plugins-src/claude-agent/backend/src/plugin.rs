@@ -16,10 +16,14 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 const WINDOW: &str = "main";
+const NO_VAULT: &str = "no vault configured";
 
 #[derive(Default)]
 struct Inner {
     vault: Option<PathBuf>,
+    /// Whether the vault lookup has finished. `vault: None` means "still
+    /// resolving" before this flips, and "no vault configured" after.
+    vault_checked: bool,
     /// run_id → cancel channel
     running: HashMap<String, mpsc::Sender<()>>,
 }
@@ -76,20 +80,27 @@ async fn vault_root(host: &sdk::Host) -> Option<PathBuf> {
 impl sdk::NotemdPlugin for ClaudeAgentPlugin {
     fn activate(&mut self, host: &sdk::Host, _p: &proto::ActivateParams) -> Result<(), String> {
         let inner = self.inner.clone();
-        let host2 = host.clone();
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                if let Some(root) = vault_root(&host2).await {
-                    let wrote = task::seed_builtin_templates(&root);
-                    if !wrote.is_empty() {
-                        host2.log_info(&format!("seeded task templates: {}", wrote.join(", ")));
-                    }
-                    task::ensure_gitignore(&root);
-                    inner.lock().unwrap().vault = Some(root);
-                } else {
-                    host2.log_warn("no vault configured; claude-agent needs one");
+        let host = host.clone();
+        // MUST be spawned, never awaited inline. The SDK runs activate
+        // synchronously ON the protocol read loop, and the response to
+        // `host.vault.info` can only be routed BY that loop — awaiting it here
+        // deadlocks the plugin until the host's request timeout, which looks
+        // like an empty task list and a dead Run button.
+        tokio::spawn(async move {
+            let root = vault_root(&host).await;
+            if let Some(root) = &root {
+                let wrote = task::seed_builtin_templates(root);
+                if !wrote.is_empty() {
+                    host.log_info(&format!("seeded task templates: {}", wrote.join(", ")));
                 }
-            })
+                task::ensure_gitignore(root);
+                host.log_info(&format!("claude-agent ready (vault={})", root.display()));
+            } else {
+                host.log_warn("no vault configured; claude-agent needs one");
+            }
+            let mut g = inner.lock().unwrap();
+            g.vault = root;
+            g.vault_checked = true;
         });
         Ok(())
     }
@@ -131,9 +142,18 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
         params: Value,
     ) -> Result<Value, String> {
         match method {
+            // `ready: false` means the vault lookup is still in flight — the
+            // window retries rather than reporting "no tasks".
             "tasks.list" => {
-                let vault = self.vault()?;
-                Ok(json!({ "tasks": overview(&vault) }))
+                let (vault, checked) = {
+                    let g = self.inner.lock().unwrap();
+                    (g.vault.clone(), g.vault_checked)
+                };
+                match vault {
+                    Some(v) => Ok(json!({ "tasks": overview(&v), "ready": true })),
+                    None if !checked => Ok(json!({ "tasks": [], "ready": false })),
+                    None => Err(NO_VAULT.to_string()),
+                }
             }
             "context.get" => Ok(json!({ "tab": self.tab_context })),
             "run.start" => self.start(host, params, "window"),
@@ -173,7 +193,7 @@ impl ClaudeAgentPlugin {
             .unwrap()
             .vault
             .clone()
-            .ok_or_else(|| "no vault configured".to_string())
+            .ok_or_else(|| NO_VAULT.to_string())
     }
 
     /// Assemble a RunSpec, start the background task, return the run id.
@@ -334,6 +354,63 @@ fn cli_flag(context: &Value, key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    /// The protocol loop must stay responsive while the vault lookup is in
+    /// flight. The SDK dispatches `$activate` synchronously ON the read loop,
+    /// and a `host.*` response can only be routed BY that loop — so awaiting
+    /// one inside activate deadlocks the plugin for the host's whole request
+    /// timeout, which the user sees as an empty task list and a dead Run
+    /// button. Here the host deliberately NEVER answers `host.vault.info`;
+    /// `tasks.list` must still come back.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn activate_never_blocks_the_protocol_loop() {
+        let (mut to_plugin, plugin_stdin) = tokio::io::duplex(16 * 1024);
+        let (plugin_stdout, from_plugin) = tokio::io::duplex(16 * 1024);
+        // The plugin gets its OWN runtime on its OWN thread: a regression here
+        // wedges that runtime entirely, and we still want this test to fail in
+        // seconds rather than hang CI.
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(sdk::serve_io(
+                    ClaudeAgentPlugin::new(),
+                    plugin_stdin,
+                    plugin_stdout,
+                ));
+        });
+
+        to_plugin
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:open\"}}\n\
+                  {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ui.request\",\"params\":{\"method\":\"tasks.list\",\"params\":{}}}\n",
+            )
+            .await
+            .unwrap();
+
+        let mut lines = BufReader::new(from_plugin).lines();
+        let answered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                let v: Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if v.get("id").and_then(|i| i.as_u64()) == Some(2) && v.get("result").is_some() {
+                    return v;
+                }
+            }
+            panic!("the plugin closed its stdout without answering tasks.list");
+        })
+        .await
+        .expect("tasks.list went unanswered — activate blocked the read loop");
+
+        // Vault unresolved (we never answered), so: no tasks, and not ready.
+        assert_eq!(answered["result"]["ready"], false);
+        assert_eq!(answered["result"]["tasks"].as_array().unwrap().len(), 0);
+    }
 
     #[test]
     fn reads_cli_args_from_the_nested_shape() {

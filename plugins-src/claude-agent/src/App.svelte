@@ -34,9 +34,15 @@
     if (m.kind === 'done' || m.kind === 'busy') void refresh()
   })
 
+  // The backend resolves the vault root asynchronously (asking the host for it
+  // from inside activate would deadlock its protocol loop), so the first
+  // tasks.list can legitimately answer "not ready yet". Retry briefly instead
+  // of showing an empty list.
   async function load() {
     try {
-      await loadTasks()
+      for (let i = 0; i < 20 && !(await loadTasks()); i++) {
+        await new Promise((r) => setTimeout(r, 250))
+      }
       if (!selected && tasks.length) selected = tasks[0].id
       const c = await request('context.get')
       ctx = c.tab?.path ? { path: c.tab.path, selection: c.tab.selection ?? '' } : null
@@ -45,8 +51,11 @@
     }
   }
 
-  async function loadTasks() {
-    tasks = (await request('tasks.list')).tasks
+  /** Returns whether the vault was resolved (i.e. the list is trustworthy). */
+  async function loadTasks(): Promise<boolean> {
+    const r = await request('tasks.list')
+    tasks = r.tasks
+    return r.ready !== false
   }
 
   async function loadHistory() {
