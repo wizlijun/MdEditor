@@ -78,7 +78,13 @@ pub async fn run(
         return Ok(());
     }
 
-    let _ = settings::materialize(&spec.task_dir, &spec.vault);
+    // A run aimed at one note gets a policy that only lets it touch that note —
+    // the prompt asked nicely and the model grepped the vault anyway.
+    let scope = spec
+        .target
+        .as_deref()
+        .map(|t| settings::Scope::for_note(std::path::Path::new(t)));
+    let _ = settings::materialize(&spec.task_dir, &spec.vault, scope.as_ref());
     let argv = prompt::build_argv(&spec.task, &spec.prompt);
 
     let mut cmd = tokio::process::Command::new(&spec.claude);
@@ -434,6 +440,40 @@ mod tests {
 
         let (_e, rec) = drive(s).await;
         assert_eq!(rec.status, record::Status::Success);
+    }
+
+    /// Scope has to be enforced where the model cannot argue with it. This
+    /// pins that a note-scoped run gets the narrow policy written out before
+    /// claude starts.
+    #[tokio::test]
+    async fn a_note_scoped_run_gets_a_policy_confined_to_that_note() {
+        let d = tempfile::tempdir().unwrap();
+        let c = fake_claude(
+            d.path(),
+            "fake-scoped",
+            r#"echo '{"type":"result","result":"done","is_error":false}'"#,
+        );
+        let mut s = spec(d.path(), c, 30);
+        std::fs::create_dir_all(s.task_dir.join(".claude")).unwrap();
+        std::fs::write(
+            s.task_dir.join(".claude/settings.json"),
+            r#"{"permissions":{"allow":["Read(${VAULT}/**)"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            s.task_dir.join(".claude/settings.scoped.json"),
+            r#"{"permissions":{"allow":["Read(${NOTE})","Read(${SOURCE})"],"deny":["Grep","Bash"]}}"#,
+        )
+        .unwrap();
+        s.target = Some(format!("{}/docs/a.note.md", d.path().display()));
+        let local = s.task_dir.join(".claude/settings.local.json");
+
+        drive(s).await;
+        let got = std::fs::read_to_string(&local).unwrap();
+        assert!(got.contains("docs/a.note.md"), "note not in policy: {got}");
+        assert!(got.contains("docs/a.md"), "source not in policy: {got}");
+        assert!(got.contains("Grep") && got.contains("Bash"), "no deny list: {got}");
+        assert!(!got.contains("Read(" ) || !got.contains("/**)"), "still vault-wide: {got}");
     }
 
     #[tokio::test]

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(${NOTE})",
+      "Read(${SOURCE})",
+      "Edit(${NOTE})",
+      "Write(${NOTE})",
+      "Read(${VAULT}/answers/**)",
+      "Write(${VAULT}/answers/**)",
+      "Edit(${VAULT}/answers/**)"
+    ],
+    "deny": [
+      "Bash",
+      "Grep",
+      "Glob",
+      "Task",
+      "WebSearch",
+      "WebFetch"
+    ]
+  }
+}

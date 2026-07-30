@@ -98,6 +98,10 @@ const BUILTIN: &[(&str, &[(&str, &str)])] = &[
                 include_str!("../templates/answer-note-question/settings.json"),
             ),
             (
+                ".claude/settings.scoped.json",
+                include_str!("../templates/answer-note-question/settings.scoped.json"),
+            ),
+            (
                 "precheck.sh",
                 include_str!("../templates/answer-note-question/precheck.sh"),
             ),
@@ -257,7 +261,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         let wrote = seed_builtin_templates(v.path());
         // 3 files each, plus answer-note-question's precheck script.
-        assert_eq!(wrote.len(), 7, "seeded: {wrote:?}");
+        assert_eq!(wrote.len(), 8, "seeded: {wrote:?}");
         assert!(task_dir(v.path(), "selfcheck").join("CLAUDE.md").exists());
         assert!(task_dir(v.path(), "answer-note-question")
             .join(".claude/settings.json")
