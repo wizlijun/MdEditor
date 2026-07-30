@@ -139,6 +139,36 @@ fn shared_config_vault_at(path: &std::path::Path) -> Option<PathBuf> {
     (!s.is_empty()).then(|| PathBuf::from(s))
 }
 
+/// Everything a vault needs before a run: the rename migration, the built-in
+/// templates, the gitignore lines. All pure filesystem work, so it is safe to
+/// call synchronously on the protocol read loop — and it has to be, because a
+/// command can arrive the instant activation returns.
+fn prepare_vault(host: &sdk::Host, root: &std::path::Path) {
+    // Rename before seeding, or the old and new names would both end up in the
+    // task list.
+    let moved = task::migrate_renamed_tasks(root);
+    if !moved.is_empty() {
+        host.log_info(&format!("migrated renamed tasks: {}", moved.join(", ")));
+    }
+    let wrote = task::seed_builtin_templates(root);
+    if !wrote.is_empty() {
+        host.log_info(&format!("seeded task templates: {}", wrote.join(", ")));
+    }
+    task::ensure_gitignore(root);
+}
+
+/// Load a task, rebuilding a built-in whose directory has gone missing. Someone
+/// deleting `.notemd/agent-tasks/answer-note-question/` should not turn the
+/// workspace button into a permanent error.
+fn load_task(vault: &std::path::Path, id: &str) -> Option<task::TaskDef> {
+    let dir = task::task_dir(vault, id);
+    if let Some(t) = task::read_task(&dir) {
+        return Some(t);
+    }
+    task::seed_builtin_templates(vault);
+    task::read_task(&dir)
+}
+
 impl sdk::NotemdPlugin for ClaudeAgentPlugin {
     fn activate(&mut self, host: &sdk::Host, _p: &proto::ActivateParams) -> Result<(), String> {
         let inner = self.inner.clone();
@@ -152,6 +182,10 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
         let seeded = shared_config_vault();
         if let Some(root) = &seeded {
             inner.lock().unwrap().vault = Some(root.clone());
+            // Templates are pure filesystem work — do them NOW, not in the
+            // spawned task. A command arriving in between would otherwise find
+            // the vault but no task and fail with "unknown task".
+            prepare_vault(&host, root);
         }
 
         // MUST be spawned, never awaited inline. The SDK runs activate
@@ -164,17 +198,9 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
             // answers. If it answers with nothing, the seed stands.
             let root = vault_from_host(&host).await.or(seeded);
             if let Some(root) = &root {
-                // Rename before seeding, or the old and new names would both
-                // end up in the task list.
-                let moved = task::migrate_renamed_tasks(root);
-                if !moved.is_empty() {
-                    host.log_info(&format!("migrated renamed tasks: {}", moved.join(", ")));
-                }
-                let wrote = task::seed_builtin_templates(root);
-                if !wrote.is_empty() {
-                    host.log_info(&format!("seeded task templates: {}", wrote.join(", ")));
-                }
-                task::ensure_gitignore(root);
+                // Idempotent: only writes what the sync pass didn't, and covers
+                // the case where the host names a different vault than the seed.
+                prepare_vault(&host, root);
                 host.log_info(&format!("claude-agent ready (vault={})", root.display()));
             } else {
                 host.log_warn("no vault configured; claude-agent needs one");
@@ -303,7 +329,7 @@ impl ClaudeAgentPlugin {
             .unwrap_or(false);
 
         let task_dir = task::task_dir(&vault, &task_id);
-        let mut def = task::read_task(&task_dir).ok_or(format!("unknown task '{task_id}'"))?;
+        let mut def = load_task(&vault, &task_id).ok_or(format!("unknown task '{task_id}'"))?;
         def.id = task_id.clone();
 
         let claude = discover::discover(std::env::var("NOTEMD_CLAUDE_BIN").ok().as_deref())
@@ -571,24 +597,56 @@ mod tests {
         to_plugin
             .write_all(
                 b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:run-status\"}}\n\
-                  {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"command.execute\",\"params\":{\"command\":\"run-status\",\"context\":{\"run_id\":\"R1\"}}}\n",
+                  {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"command.execute\",\"params\":{\"command\":\"run-status\",\"context\":{\"run_id\":\"R1\"}}}\n\
+                  {\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ui.request\",\"params\":{\"method\":\"tasks.list\",\"params\":{}}}\n",
             )
             .await
             .unwrap();
 
         let answered = await_response(
             from_plugin,
-            |v| v.get("id").and_then(|i| i.as_u64()) == Some(2),
-            "run-status",
+            |v| {
+                let id = v.get("id").and_then(|i| i.as_u64());
+                id == Some(2) || id == Some(3)
+            },
+            "the first command",
         )
         .await;
         assert!(
             answered.get("error").is_none(),
-            "run-status failed right after activation: {answered}"
+            "a command right after activation failed: {answered}"
         );
-        // No such run yet — but the vault resolved, which is the point.
-        assert_eq!(answered["result"]["state"], "lost");
+        if answered["id"] == 2 {
+            // No such run yet — but the vault resolved, which is the point.
+            assert_eq!(answered["result"]["state"], "lost");
+        }
+
+        // The templates are on disk already, not queued behind the host's
+        // answer — otherwise `run-note` fails with "unknown task".
+        let ids: Vec<String> = task::discover(vault.path())
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, vec![NOTE_TASK, "selfcheck"]);
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
+    }
+
+    #[test]
+    fn a_deleted_builtin_task_rebuilds_itself_on_demand() {
+        let v = tempfile::tempdir().unwrap();
+        task::seed_builtin_templates(v.path());
+        std::fs::remove_dir_all(task::task_dir(v.path(), NOTE_TASK)).unwrap();
+        assert!(task::read_task(&task::task_dir(v.path(), NOTE_TASK)).is_none());
+
+        let got = load_task(v.path(), NOTE_TASK).expect("a built-in rebuilds itself");
+        assert!(!got.prompt.is_empty());
+        assert!(task::task_dir(v.path(), NOTE_TASK).join("CLAUDE.md").exists());
+    }
+
+    #[test]
+    fn load_task_still_reports_a_task_that_was_never_built_in() {
+        let v = tempfile::tempdir().unwrap();
+        assert_eq!(load_task(v.path(), "no-such-task"), None);
     }
 
     /// The protocol loop must stay responsive while the vault lookup is in

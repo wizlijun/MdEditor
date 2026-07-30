@@ -382,7 +382,7 @@ export const en = {
   // Outline Notes
   'agent.title': 'Agent workspace',
   'agent.answerQuestions': 'Answer open questions',
-  'agent.hint': 'Hands this note to Claude Agent, which answers the questions still open in it.',
+  'agent.hint': 'Let the Claude headless CLI answer them.',
   'agent.starting': 'Starting…',
   'agent.running': 'Working…',
   'agent.steps': '{n} steps',

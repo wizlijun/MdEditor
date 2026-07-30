@@ -375,7 +375,7 @@ export const de: Record<keyof Messages, string> = {
   // Outline Notes
   'agent.title': 'Agent-Arbeitsbereich',
   'agent.answerQuestions': 'Offene Fragen beantworten',
-  'agent.hint': 'Übergibt diese Randnotiz an Claude Agent, der die offenen Fragen darin beantwortet.',
+  'agent.hint': 'Vom Claude headless CLI beantworten lassen.',
   'agent.starting': 'Startet…',
   'agent.running': 'Arbeitet…',
   'agent.steps': '{n} Schritte',
