@@ -12,6 +12,7 @@ import { i18n, t, setLocale, loadLocale, availableLocales } from './store.svelte
 import { en } from './en'
 import { zh } from './zh'
 import { ja } from './ja'
+import { de } from './de'
 
 const placeholders = (s: string) => (s.match(/\{(\w+)\}/g) ?? []).sort()
 
@@ -43,9 +44,12 @@ describe('availableLocales', () => {
   })
 })
 
+// Every catalog in `availableLocales` belongs here — German was shipping as a
+// selectable language while nothing checked it for gaps.
 describe.each([
   ['zh', zh],
   ['ja', ja],
+  ['de', de],
 ])('%s catalog', (_name, catalog) => {
   const enKeys = Object.keys(en) as (keyof typeof en)[]
 

@@ -1,6 +1,7 @@
 // src/lib/outline/store.svelte.ts
 import { createTree, childrenOf, treeHasQuestion, type OutlineTree, type OutlineNode } from './model'
 import { serializeOutline, parseOutline } from './markdown'
+import { collapseAnsweredOnLoad } from './auto-collapse'
 import { deriveAutoItems } from './derive'
 import { syncAutoItems, regenerate as regenerateTree } from './sync'
 import { parseInline, eachInline } from './parser'
@@ -29,6 +30,8 @@ export interface OutlineState {
   /** 折叠状态外置(每日笔记窗口):serializeDoc 省略 collapsed::,折叠只存 KV,
    *  不写进 .note.md。默认 false,主窗口行为不变。 */
   omitCollapsed: boolean
+  /** 仅视图态的折叠(答复已到的问题默认折叠);序列化时跳过,绝不写回文件 */
+  autoCollapsed: Set<string>
   /** 允许把非空 note 主动删空并写回(每日笔记窗口):关闭 change-sink 的
    *  "空树不覆盖非空"守卫的空树分支(仍保留 docPath!==path 竞态保护)。
    *  默认 false,主窗口保留原防误抹行为。 */
@@ -48,6 +51,7 @@ export const outline = $state<OutlineState>({
   externalConflict: null,
   omitCollapsed: false,
   allowEmptyWrite: false,
+  autoCollapsed: new Set(),
 })
 
 export function bump(): void { outline.version++ }
@@ -118,6 +122,8 @@ export function setChangeSink(fn: (() => void) | null): void { changeSink = fn }
 export async function attachDoc(docPath: string, text: string, mainContent: string | null): Promise<void> {
   outline.docPath = docPath
   outline.tree = parseOutline(text)
+  // 答复已到的问题默认折叠:刚跑完 agent 的笔记否则全是 ✦ 正文,扫不动。
+  outline.autoCollapsed = collapseAnsweredOnLoad(outline.tree)
   outline.editingId = null
   outline.selectedIds = new Set()
   outline.selectionAnchor = null
@@ -153,7 +159,12 @@ export function serializeDoc(touch = true): string {
       title: pageNameOf(outline.docPath),
     })
   }
-  return serializeOutline(outline.tree, new Set([...persistIdsFor(outline.tree), ...pinnedIds]), outline.omitCollapsed)
+  return serializeOutline(
+    outline.tree,
+    new Set([...persistIdsFor(outline.tree), ...pinnedIds]),
+    outline.omitCollapsed,
+    outline.autoCollapsed,
+  )
 }
 
 /** 卸载当前文档:清 docPath/树/选区。全屏大纲 tab 关闭时由编辑器调用。 */

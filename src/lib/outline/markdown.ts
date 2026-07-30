@@ -17,7 +17,17 @@ export function splitFrontmatterBlock(text: string): { frontmatter: string | nul
  * Nodes with `persistId === true` (set by parseOutline when `id::` was
  * explicitly present) are always written regardless of `persistIds`.
  */
-export function serializeOutline(tree: OutlineTree, persistIds: Set<string> = new Set(), omitCollapsed = false): string {
+/**
+ * `viewOnlyCollapsed` holds ids collapsed as a VIEW default (answered questions
+ * arrive folded). Their `collapsed::` is deliberately not written: opening a
+ * note must not modify it.
+ */
+export function serializeOutline(
+  tree: OutlineTree,
+  persistIds: Set<string> = new Set(),
+  omitCollapsed = false,
+  viewOnlyCollapsed: ReadonlySet<string> = new Set(),
+): string {
   const lines: string[] = []
   if (tree.frontmatter != null) lines.push('---', tree.frontmatter, '---')
   const walk = (parentId: string | null, depth: number) => {
@@ -39,7 +49,9 @@ export function serializeOutline(tree: OutlineTree, persistIds: Set<string> = ne
       if (n.persistId === true || persistIds.has(n.id)) {
         lines.push(`${indent}  id:: ${n.id}`)
       }
-      if (n.collapsed && !omitCollapsed) lines.push(`${indent}  collapsed:: true`)
+      if (n.collapsed && !omitCollapsed && !viewOnlyCollapsed.has(n.id)) {
+        lines.push(`${indent}  collapsed:: true`)
+      }
       walk(n.id, depth + 1)
     }
   }

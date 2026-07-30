@@ -317,6 +317,9 @@
       <button class="tri" class:closed={isCollapsed}
         onclick={() => {
           node.collapsed = !node.collapsed
+          // Touching the fold makes it the user's decision, not the view's
+          // default — from here on it belongs in the file.
+          outline.autoCollapsed.delete(node.id)
           if (onCollapse) { if (!readonly) bump(); onCollapse(node) }
           else { bump(); markDirty() }
         }}>▾</button>

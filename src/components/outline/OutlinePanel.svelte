@@ -81,6 +81,17 @@
     resetTick++
     const path = tab?.filePath
     if (!path) return
+    // The ✦ cards in the main editor read the sidecar note. `loadAnswersFor`
+    // would serialize the outline's IN-MEMORY tree while it holds this note —
+    // the very copy the agent just superseded — so feed it the text from disk.
+    if (companionPath) {
+      const fs = await import('@tauri-apps/plugin-fs')
+      const text = await fs.readTextFile(companionPath).catch(() => null)
+      if (text != null) {
+        const { setAnswersFromText } = await import('../../lib/note-anno/answers-store.svelte')
+        setAnswersFromText(companionPath, text)
+      }
+    }
     const dirty = tab != null && tab.currentContent !== tab.initialContent
     if (dirty) return
     const { reloadTabFromDisk } = await import('../../lib/tabs.svelte')

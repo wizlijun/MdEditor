@@ -15,7 +15,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # devtools is automatic in debug builds; do not include for release
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"] }
-tauri-plugin-fs = "2"
+# `watch` is a cargo feature: without it the watch/unwatch commands are never
+# registered and every watcher in the app fails with "Command watch not found"
+# — which is why a sidecar note rewritten on disk never refreshed itself.
+tauri-plugin-fs = { version = "2", features = ["watch"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-store = "2"

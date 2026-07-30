@@ -94,11 +94,20 @@ const de: Dict = {
   'turns': '{n} Runden',
 }
 
-const TABLES: Record<string, Dict> = { en, zh, ja, de }
+/** Every locale this window ships. English is the source of truth. */
+export const LOCALES = ['en', 'zh', 'ja', 'de'] as const
+export type Locale = (typeof LOCALES)[number]
+
+export const CATALOGS: Record<Locale, Dict> = { en, zh, ja, de }
+
+function catalogFor(locale: string): Dict {
+  // The host hands us codes like 'zh' or 'zh-CN'; match on the language part.
+  const lang = (locale ?? '').slice(0, 2) as Locale
+  return CATALOGS[lang] ?? en
+}
 
 export function t(locale: string, key: string, vars?: Record<string, string | number>): string {
-  const table = TABLES[locale?.slice(0, 2)] ?? en
-  let s = table[key] ?? en[key] ?? key
+  let s = catalogFor(locale)[key] ?? en[key] ?? key
   if (vars) for (const [k, v] of Object.entries(vars)) s = s.replace(`{${k}}`, String(v))
   return s
 }

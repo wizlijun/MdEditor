@@ -376,7 +376,7 @@ export const ja: Record<keyof Messages, string> = {
 
   // Outline Notes
   'agent.title': 'Agent ワークスペース',
-  'agent.answerQuestions': '未回答の質問に答える',
+  'agent.answerQuestions': '回答',
   'agent.hint': 'Claude headless CLI に回答させます。',
   'agent.starting': '起動中…',
   'agent.running': '作業中…',

@@ -408,7 +408,7 @@ export const zh: Record<keyof Messages, string> = {
 
   // Outline Notes
   'agent.title': 'Agent 工作区',
-  'agent.answerQuestions': '回答待答问题',
+  'agent.answerQuestions': '回答',
   'agent.hint': '交给 Claude headless CLI 回答问题。',
   'agent.starting': '正在启动…',
   'agent.running': '工作中…',
