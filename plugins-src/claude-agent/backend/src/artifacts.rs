@@ -5,7 +5,7 @@
 //!
 //! Two sources, because tasks split into two kinds:
 //!  - files under the task's `output/` written during this run (selfcheck)
-//!  - `.md` paths named in the final answer (annotation-sweep writes straight
+//!  - `.md` paths named in the final answer (answer-note-question writes straight
 //!    into `answers/` and never touches `output/`)
 use std::collections::BTreeSet;
 use std::path::Path;

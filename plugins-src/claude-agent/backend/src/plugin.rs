@@ -139,6 +139,12 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
         tokio::spawn(async move {
             let root = resolve_vault(&host).await;
             if let Some(root) = &root {
+                // Rename before seeding, or the old and new names would both
+                // end up in the task list.
+                let moved = task::migrate_renamed_tasks(root);
+                if !moved.is_empty() {
+                    host.log_info(&format!("migrated renamed tasks: {}", moved.join(", ")));
+                }
                 let wrote = task::seed_builtin_templates(root);
                 if !wrote.is_empty() {
                     host.log_info(&format!("seeded task templates: {}", wrote.join(", ")));
@@ -494,14 +500,14 @@ mod tests {
     fn overview_reports_status_from_disk_not_from_memory() {
         let v = tempfile::tempdir().unwrap();
         task::seed_builtin_templates(v.path());
-        let sweep_runs = task::runs_root(v.path()).join("annotation-sweep");
+        let sweep_runs = task::runs_root(v.path()).join("answer-note-question");
 
         // A run recorded by SOME process (a detached CLI runner, say).
         record::write(
             &sweep_runs,
             &record::RunRecord {
                 run_id: "20260730T000001Z-a".into(),
-                task: "annotation-sweep".into(),
+                task: "answer-note-question".into(),
                 trigger: "cli".into(),
                 started_at: "s".into(),
                 ended_at: "e".into(),
@@ -527,7 +533,7 @@ mod tests {
         .unwrap();
 
         let got = overview(v.path());
-        let sweep = got.iter().find(|t| t.def.id == "annotation-sweep").unwrap();
+        let sweep = got.iter().find(|t| t.def.id == "answer-note-question").unwrap();
         assert!(sweep.running);
         assert_eq!(sweep.running_since.as_deref(), Some("2026-07-30T00:00:02Z"));
         assert_eq!(sweep.last_run.as_ref().unwrap().result, "ok");
@@ -543,7 +549,7 @@ mod tests {
         task::seed_builtin_templates(v.path());
         let json = serde_json::to_value(overview(v.path())).unwrap();
         let first = &json[0];
-        assert_eq!(first["id"], "annotation-sweep");
+        assert_eq!(first["id"], "answer-note-question");
         assert!(first["name"].is_string());
         assert_eq!(first["running"], false);
     }

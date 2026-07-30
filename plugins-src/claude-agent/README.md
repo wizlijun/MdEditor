@@ -87,7 +87,7 @@ Before each run the plugin substitutes the real vault root into
 template is never rewritten, so it survives moving between machines.
 
 Headless runs have nobody to click "approve", so anything not on the allowlist
-silently doesn't happen. Grant deliberately: the built-in `annotation-sweep`
+silently doesn't happen. Grant deliberately: the built-in `answer-note-question`
 template withholds write access to source `.md` files, so its "never modify the
 source" rule is enforced by permissions rather than by the prompt alone.
 
@@ -96,7 +96,7 @@ source" rule is enforced by permissions rather than by the prompt alone.
 - **`selfcheck`** — reports which CLAUDE.md files loaded, which skills are
   visible, the cwd and vault root, and the granted permissions. Run this first;
   it's the acceptance test for the whole setup.
-- **`annotation-sweep`** — answers the open questions captured in sidecar
+- **`answer-note-question`** — answers the open questions captured in sidecar
   `.note.md` files (`type:: question`, `status:: open`), following the protocol
   in `docs/superpowers/specs/2026-07-27-annotation-qa-loop-design.md`: reply as
   a `✦` child node, flip `status::` to `answered`, and **never** to `closed` —
@@ -114,7 +114,7 @@ notemd agent <task> [-p "extra prompt"] [--wait]
 Detached by default: it returns a run id immediately and the work continues in
 a separate process. That's not a preference — the host runs CLI subcommands in a
 throwaway headless instance capped at 300 seconds that would kill the child at
-exit, and a sweep routinely runs longer. Detaching is what makes `notemd agent`
+exit, and answering a batch of questions routinely runs longer. Detaching is what makes `notemd agent`
 usable from cron.
 
 `--wait` blocks and returns the result instead, subject to that 300-second cap.

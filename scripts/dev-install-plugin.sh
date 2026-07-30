@@ -289,7 +289,7 @@ fi
 #   1. scripts/dev-install-plugin.sh claude-agent
 #   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev   (with a Vault configured)
 #   3. Plugins ▸ "Claude Agent…" → the window opens with two tasks in the left
-#      column (selfcheck / annotation-sweep), seeded on first activation into
+#      column (selfcheck / answer-note-question), seeded on first activation into
 #      <vault>/.notemd/agent-tasks/. The vault's .gitignore gains
 #      .notemd/agent-runs/ and the settings.local.json line.
 #      NOTE the menu is built at startup and the manifest is read then, so an
@@ -297,7 +297,7 @@ fi
 #   4. Pick selfcheck → Run → tool calls and text stream in live; the footer
 #      turns terminal. A record appears at
 #      <vault>/.notemd/agent-runs/selfcheck/runs/*.json and in "Recent runs".
-#   5. Pick annotation-sweep → Run → hit Stop mid-run → status reads "Stopped";
+#   5. Pick answer-note-question → Run → hit Stop mid-run → status reads "Stopped";
 #      `pgrep -f 'claude -p'` confirms the child process group was reaped.
 #   6. CLI: `notemd agent selfcheck` → returns a run_id immediately (detached).
 #      With the window OPEN, the selfcheck row turns "Running" with a pulsing

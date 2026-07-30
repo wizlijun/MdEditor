@@ -1,4 +1,4 @@
-# 任务:批注问答 sweep
+# 任务:回答手记里的问题
 
 你在 note.md 的 Claude Agent 插件里以 headless 模式运行,vault 根在 `${VAULT}`。
 

@@ -79,23 +79,69 @@ const BUILTIN: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
-        "annotation-sweep",
+        "answer-note-question",
         &[
             (
                 "task.json",
-                include_str!("../templates/annotation-sweep/task.json"),
+                include_str!("../templates/answer-note-question/task.json"),
             ),
             (
                 "CLAUDE.md",
-                include_str!("../templates/annotation-sweep/CLAUDE.md"),
+                include_str!("../templates/answer-note-question/CLAUDE.md"),
             ),
             (
                 ".claude/settings.json",
-                include_str!("../templates/annotation-sweep/settings.json"),
+                include_str!("../templates/answer-note-question/settings.json"),
             ),
         ],
     ),
 ];
+
+/// Built-in tasks that have been renamed, oldest name first. Without a
+/// migration a vault that already has the old directory shows BOTH tasks in the
+/// list and splits its run history across the two names.
+const RENAMES: &[(&str, &str)] = &[("annotation-sweep", "answer-note-question")];
+
+/// Move a renamed built-in task — template AND run history — to its new id.
+/// Skipped whenever the new name already exists: what the user has now wins,
+/// and nothing they wrote gets clobbered.
+pub fn migrate_renamed_tasks(vault: &Path) -> Vec<String> {
+    let mut moved = Vec::new();
+    for (old, new) in RENAMES {
+        for root in [tasks_root(vault), runs_root(vault)] {
+            let (from, to) = (root.join(old), root.join(new));
+            if from.is_dir() && !to.exists() && std::fs::rename(&from, &to).is_ok() {
+                moved.push(format!("{old} → {new}"));
+            }
+        }
+        // The records carry the task id too; leaving it stale would label
+        // history rows with a name that no longer exists.
+        retag_records(&runs_root(vault).join(new), old, new);
+    }
+    moved
+}
+
+fn retag_records(task_run_dir: &Path, old: &str, new: &str) {
+    let Ok(rd) = std::fs::read_dir(task_run_dir.join("runs")) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        let Ok(body) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&body) else {
+            continue;
+        };
+        if v.get("task").and_then(|t| t.as_str()) != Some(old) {
+            continue;
+        }
+        v["task"] = serde_json::Value::String(new.to_string());
+        if let Ok(s) = serde_json::to_string_pretty(&v) {
+            let _ = std::fs::write(&p, s + "\n");
+        }
+    }
+}
 
 /// Idempotent: fill in what's missing, never overwrite. A template the user
 /// edited is theirs. Returns the relative paths actually written, for logging.
@@ -198,11 +244,61 @@ mod tests {
         let wrote = seed_builtin_templates(v.path());
         assert_eq!(wrote.len(), 6);
         assert!(task_dir(v.path(), "selfcheck").join("CLAUDE.md").exists());
-        assert!(task_dir(v.path(), "annotation-sweep")
+        assert!(task_dir(v.path(), "answer-note-question")
             .join(".claude/settings.json")
             .exists());
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec!["annotation-sweep", "selfcheck"]);
+        assert_eq!(ids, vec!["answer-note-question", "selfcheck"]);
+    }
+
+    #[test]
+    fn migrates_a_renamed_task_with_its_history() {
+        let v = tempfile::tempdir().unwrap();
+        write_task(v.path(), "annotation-sweep", r#"{"name":"Old","prompt":"mine"}"#);
+        let old_runs = runs_root(v.path()).join("annotation-sweep/runs");
+        std::fs::create_dir_all(&old_runs).unwrap();
+        std::fs::write(
+            old_runs.join("20260730T000001Z-a.json"),
+            r#"{"run_id":"20260730T000001Z-a","task":"annotation-sweep","trigger":"window",
+                "started_at":"a","ended_at":"b","status":"success","exit_code":0,
+                "num_turns":1,"session_id":null,"result":"ok","stderr_tail":""}"#,
+        )
+        .unwrap();
+
+        let moved = migrate_renamed_tasks(v.path());
+        assert_eq!(moved.len(), 2, "template and run history both move");
+
+        // The user's own edit rode along.
+        let t = read_task(&task_dir(v.path(), "answer-note-question")).unwrap();
+        assert_eq!(t.prompt, "mine");
+        assert!(!task_dir(v.path(), "annotation-sweep").exists());
+
+        // History followed, and is labelled with the new id.
+        let recs = crate::record::recent(&runs_root(v.path()).join("answer-note-question"), 5);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].task, "answer-note-question");
+    }
+
+    #[test]
+    fn migration_leaves_an_existing_new_task_alone() {
+        let v = tempfile::tempdir().unwrap();
+        write_task(v.path(), "annotation-sweep", r#"{"name":"Old"}"#);
+        write_task(v.path(), "answer-note-question", r#"{"name":"Current"}"#);
+        assert!(migrate_renamed_tasks(v.path()).is_empty());
+        assert_eq!(
+            read_task(&task_dir(v.path(), "answer-note-question")).unwrap().name,
+            "Current"
+        );
+        assert!(task_dir(v.path(), "annotation-sweep").exists());
+    }
+
+    #[test]
+    fn migration_is_a_no_op_on_a_vault_that_never_had_the_old_name() {
+        let v = tempfile::tempdir().unwrap();
+        seed_builtin_templates(v.path());
+        assert!(migrate_renamed_tasks(v.path()).is_empty());
+        let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec!["answer-note-question", "selfcheck"]);
     }
 
     #[test]

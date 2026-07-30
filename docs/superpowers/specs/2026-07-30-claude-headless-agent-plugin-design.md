@@ -14,7 +14,7 @@
 
 1. 通用 headless 运行器:插件只管"起 claude、喂 prompt、收流、写运行记录",具体用途以**任务模板**的形式挂上去。
 2. 两个触发面:窗口手动触发(实时流 + 可中断)、CLI 子命令触发(可 detach,供 cron/脚本)。
-3. 首发自带两个模板:`selfcheck`(环境自检)与 `annotation-sweep`(批注问答闭环的 sweep 执行体)。
+3. 首发自带两个模板:`selfcheck`(环境自检)与 `answer-note-question`(批注问答闭环的 sweep 执行体)。
 
 **非目标(本期不做)**
 
@@ -87,7 +87,7 @@ sweep 这类任务超 5 分钟很正常,所以 **CLI 默认 detach**:
 │   │   ├── task.json
 │   │   ├── CLAUDE.md
 │   │   └── .claude/settings.json
-│   └── annotation-sweep/
+│   └── answer-note-question/
 │       ├── task.json
 │       ├── CLAUDE.md
 │       └── .claude/settings.json
@@ -101,7 +101,7 @@ sweep 这类任务超 5 分钟很正常,所以 **CLI 默认 detach**:
 
 ```jsonc
 {
-  "name": "Annotation sweep",          // 显示名
+  "name": "Answer note questions",     // 显示名
   "description": "扫描 open 问题并作答",
   "prompt": "……模板固定 prompt……",     // 拼接第 1 段
   "max_turns": 50,
@@ -115,7 +115,7 @@ sweep 这类任务超 5 分钟很正常,所以 **CLI 默认 detach**:
 ```jsonc
 {
   "run_id": "20260730T104233Z-a1b2c3",
-  "task": "annotation-sweep",
+  "task": "answer-note-question",
   "trigger": "window" | "cli",
   "started_at": "…", "ended_at": "…",
   "status": "success" | "error" | "timeout" | "cancelled",
@@ -203,7 +203,7 @@ i18n 走插件自带字符串表(`docs/plugin-v2-development.md` §8),zh/en/ja/d
 
 **`selfcheck`** —— 环境自检。prompt 让 claude 报告:能读到哪几份 CLAUDE.md、可用 skills、vault 根路径、当前权限白名单,并往 `output/` 写一个 `selfcheck.md`。它同时就是来源方案 §7 验收清单第 1-3 条的执行体。
 
-**`annotation-sweep`** —— 批注问答闭环的 sweep 执行体,严格遵循 `docs/superpowers/specs/2026-07-27-annotation-qa-loop-design.md` §3 的协议:
+**`answer-note-question`** —— 批注问答闭环的 sweep 执行体,严格遵循 `docs/superpowers/specs/2026-07-27-annotation-qa-loop-design.md` §3 的协议:
 
 > 扫 vault 中 `type:: question` 且 `status:: open` 的 `.note.md` 节点 → 结合 `line::` 定位源文上下文作答 → 短答案以 `✦` 前缀子节点回填(附 `answered::`/`by::`),长答案写 `answers/` 并在节点下留摘要 + 链接 → 置 `status:: answered`;**绝不置 closed,绝不改源 `.md`,绝不动 ● 内容**。
 
