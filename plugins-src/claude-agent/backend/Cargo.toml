@@ -1,0 +1,31 @@
+[package]
+name = "notemd-claude-agent"
+version = "1.0.0"
+edition = "2021"
+
+# claude-agent v2 backend: a general headless runner. Task templates live in the
+# vault at .notemd/agent-tasks/<id>/; a run spawns `claude -p` with cwd set to
+# the template dir (so BOTH the vault's CLAUDE.md and the task's are loaded) and
+# pumps its stream-json into the plugin window. The same binary doubles as a
+# detached `--runner` process for CLI-triggered long runs.
+[[bin]]
+name = "notemd-claude-agent"
+path = "src/main.rs"
+
+[dependencies]
+notemd-plugin-sdk = { path = "../../../notemd-plugin-sdk" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "process", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# No `panic = "abort"` here (unlike pos-log): the test harness needs unwind.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

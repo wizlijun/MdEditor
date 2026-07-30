@@ -1,0 +1,68 @@
+{
+  "manifest_version": 2,
+  "id": "notemd.claude-agent",
+  "name": "Claude Agent",
+  "version": "1.0.0",
+  "kind": "native",
+  "engines": {
+    "notemd": ">=6.729.2"
+  },
+  "description": "Run Claude Code headless against your vault: task templates live in .notemd/agent-tasks, stream live in a window, or fire detached from the CLI.",
+  "binary": {
+    "aarch64-apple-darwin": "bin/notemd-claude-agent",
+    "x86_64-apple-darwin": "bin/notemd-claude-agent"
+  },
+  "ui": "ui/",
+  "activation": {
+    "events": ["onCommand:open", "onCommand:run", "onCli:agent"]
+  },
+  "contributes": {
+    "menus": [
+      {
+        "location": "window",
+        "label": "Claude Agent…",
+        "command": "open"
+      }
+    ],
+    "windows": [
+      {
+        "id": "main",
+        "entry": "index.html",
+        "title": "Claude Agent",
+        "width": 900,
+        "height": 640,
+        "min_width": 640,
+        "min_height": 420,
+        "open_command": "open"
+      }
+    ],
+    "cli": [
+      {
+        "subcommand": "agent",
+        "command": "run",
+        "args": [{ "name": "task", "ty": "string", "required": true }],
+        "flags": [
+          { "long": "--prompt", "short": "-p" },
+          { "long": "--wait" }
+        ]
+      }
+    ]
+  },
+  "i18n": {
+    "zh": {
+      "name": "Claude 智能体",
+      "menus": { "open": "Claude 智能体…" }
+    },
+    "ja": {
+      "name": "Claude エージェント",
+      "menus": { "open": "Claude エージェント…" }
+    },
+    "de": {
+      "name": "Claude Agent",
+      "menus": { "open": "Claude Agent…" }
+    }
+  },
+  "capabilities": ["ui", "toast", "vault.read"],
+  "request_timeout_seconds": 300,
+  "idle_shutdown_seconds": 0
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Annotation sweep",
+  "description": "Answer the open questions captured in sidecar .note.md files.",
+  "prompt": "执行一次批注问答 sweep,严格按 CLAUDE.md 的协议作答。若没有 status:: open 的问题,直接报告「无待答问题」并结束。",
+  "max_turns": 60,
+  "timeout_seconds": 1800
+}

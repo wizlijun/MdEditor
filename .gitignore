@@ -9,6 +9,7 @@ notemd-plugin-sdk/target/
 plugins-src/openclaw/backend/target/
 plugins-src/exlibris/backend/target/
 plugins-src/pos-log/backend/target/
+plugins-src/claude-agent/backend/target/
 vaultgitsync/target/
 exlibris/src-tauri/target/
 exlibris/src-tauri/gen/

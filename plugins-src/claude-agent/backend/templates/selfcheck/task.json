@@ -1,0 +1,7 @@
+{
+  "name": "Self-check",
+  "description": "Report the environment: which CLAUDE.md files loaded, which skills are available, and the vault root.",
+  "prompt": "报告你当前的运行环境,逐项列出:\n1. 你加载了哪几份 CLAUDE.md(给出完整路径)\n2. 你能发现哪些 skills\n3. 你的工作目录与 vault 根路径\n4. 你当前被授予的工具权限\n把这份报告同时写入 output/selfcheck.md,然后用一段话总结环境是否就绪。",
+  "max_turns": 10,
+  "timeout_seconds": 300
+}

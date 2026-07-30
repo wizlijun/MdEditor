@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(${VAULT}/**)",
+      "Write(${VAULT}/**/*.note.md)",
+      "Edit(${VAULT}/**/*.note.md)",
+      "Write(${VAULT}/answers/**)",
+      "Edit(${VAULT}/answers/**)"
+    ]
+  }
+}
