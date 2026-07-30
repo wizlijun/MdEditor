@@ -78,6 +78,23 @@ pub fn recent(task_run_dir: &Path, n: usize) -> Vec<RunRecord> {
         .collect()
 }
 
+/// The most recent N across EVERY task under `runs_root`, newest first. Each
+/// record carries its own `task`, so the caller can label the rows.
+pub fn recent_all(runs_root: &std::path::Path, n: usize) -> Vec<RunRecord> {
+    let Ok(rd) = std::fs::read_dir(runs_root) else {
+        return Vec::new();
+    };
+    let mut all: Vec<RunRecord> = rd
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .flat_map(|e| recent(&e.path(), n))
+        .collect();
+    // run_id starts with a UTC timestamp, so this is a chronological sort.
+    all.sort_by(|a, b| b.run_id.cmp(&a.run_id));
+    all.truncate(n);
+    all
+}
+
 /// `20260730T104233Z-<low 24 bits of the pid, hex>`: lexical order is time
 /// order, and two processes in the same second don't collide.
 pub fn new_run_id(now: chrono::DateTime<chrono::Utc>, pid: u32) -> String {
@@ -154,6 +171,44 @@ mod tests {
     fn recent_is_empty_when_nothing_ran_yet() {
         let d = tempfile::tempdir().unwrap();
         assert!(recent(d.path(), 5).is_empty());
+    }
+
+    #[test]
+    fn recent_all_merges_every_task_newest_first() {
+        let root = tempfile::tempdir().unwrap();
+        let mut a = rec("20260730T000001Z-a");
+        a.task = "alpha".into();
+        let mut b = rec("20260730T000003Z-b");
+        b.task = "beta".into();
+        let mut c = rec("20260730T000002Z-c");
+        c.task = "alpha".into();
+        write(&root.path().join("alpha"), &a).unwrap();
+        write(&root.path().join("beta"), &b).unwrap();
+        write(&root.path().join("alpha"), &c).unwrap();
+
+        let got = recent_all(root.path(), 10);
+        assert_eq!(
+            got.iter().map(|r| r.task.as_str()).collect::<Vec<_>>(),
+            vec!["beta", "alpha", "alpha"]
+        );
+    }
+
+    #[test]
+    fn recent_all_respects_the_limit_across_tasks() {
+        let root = tempfile::tempdir().unwrap();
+        for (i, task) in ["alpha", "beta", "gamma"].iter().enumerate() {
+            let mut r = rec(&format!("20260730T00000{i}Z-x"));
+            r.task = (*task).into();
+            write(&root.path().join(task), &r).unwrap();
+        }
+        assert_eq!(recent_all(root.path(), 2).len(), 2);
+    }
+
+    #[test]
+    fn recent_all_is_empty_when_no_task_has_ever_run() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(recent_all(root.path(), 5).is_empty());
+        assert!(recent_all(&root.path().join("nope"), 5).is_empty());
     }
 
     #[test]

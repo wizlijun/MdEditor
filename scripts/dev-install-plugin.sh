@@ -210,7 +210,7 @@ elif [[ "$PLUGIN" == "claude-agent" ]]; then
   mark_installed "notemd.claude-agent" "$VERSION"
   echo "✓ installed notemd.claude-agent@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
   echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
-  echo "  open it:                Window menu ▸ \"Claude Agent…\""
+  echo "  open it:                Plugins menu (or Window menu) ▸ \"Claude Agent…\""
   echo "  needs:                  Claude Code installed and logged in (claude --version)"
 fi
 
@@ -288,17 +288,20 @@ fi
 # Manual E2E walkthrough — claude-agent:
 #   1. scripts/dev-install-plugin.sh claude-agent
 #   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev   (with a Vault configured)
-#   3. Window ▸ "Claude Agent…" → the window opens with two tasks in the left
-#      column (selfcheck / annotation-sweep), seeded on first activation into
-#      <vault>/.notemd/agent-tasks/. The vault's .gitignore gains
-#      .notemd/agent-runs/ and the settings.local.json line.
+#   3. Plugins ▸ "Claude Agent…" (also on the Window menu) → the window opens
+#      with two tasks in the left column (selfcheck / annotation-sweep), seeded
+#      on first activation into <vault>/.notemd/agent-tasks/. The vault's
+#      .gitignore gains .notemd/agent-runs/ and the settings.local.json line.
 #   4. Pick selfcheck → Run → tool calls and text stream in live; the footer
 #      turns terminal. A record appears at
 #      <vault>/.notemd/agent-runs/selfcheck/runs/*.json and in "Recent runs".
 #   5. Pick annotation-sweep → Run → hit Stop mid-run → status reads "Stopped";
 #      `pgrep -f 'claude -p'` confirms the child process group was reaped.
-#   6. CLI: `notemd agent selfcheck` → returns a run_id immediately (detached);
-#      a trigger:"cli" record shows up in runs/ once it finishes.
+#   6. CLI: `notemd agent selfcheck` → returns a run_id immediately (detached).
+#      With the window OPEN, the selfcheck row turns "Running" with a pulsing
+#      dot within ~5s (polled off the lock file, since that run is in another
+#      process), then flips to its result; a trigger:"cli" row tagged CLI shows
+#      up under "Recent runs" in the All-tasks scope.
 #   7. CLI: `notemd agent selfcheck --wait` → blocks, then returns the result.
 #   8. Run two DIFFERENT tasks at once → both proceed. Run the SAME task twice →
 #      the second is refused with an "already running" toast.

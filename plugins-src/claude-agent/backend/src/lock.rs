@@ -54,6 +54,19 @@ pub fn acquire(task_run_dir: &Path, info: LockInfo) -> Result<Guard, Busy> {
     acquire_with(task_run_dir, info, pid_alive)
 }
 
+/// Who currently holds this task's lock, if anyone. Reading the lock file
+/// rather than an in-memory map is what lets the window see runs started by a
+/// DETACHED CLI process — those live in a different process entirely.
+pub fn current(task_run_dir: &Path) -> Option<LockInfo> {
+    current_with(task_run_dir, pid_alive)
+}
+
+pub fn current_with(task_run_dir: &Path, alive: impl Fn(i32) -> bool) -> Option<LockInfo> {
+    let s = std::fs::read_to_string(lock_path(task_run_dir)).ok()?;
+    let info: LockInfo = serde_json::from_str(&s).ok()?;
+    alive(info.pid).then_some(info)
+}
+
 /// `kill(pid, 0)` is the POSIX liveness probe: sends nothing, just checks that
 /// the process exists and is signalable.
 pub fn pid_alive(pid: i32) -> bool {
@@ -119,6 +132,21 @@ mod tests {
         let nested = d.path().join("a/b/c");
         let _g = acquire_with(&nested, info(1), |_| true).unwrap();
         assert!(lock_path(&nested).exists());
+    }
+
+    #[test]
+    fn current_reports_the_live_holder() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(current_with(d.path(), |_| true).is_none());
+        let _g = acquire_with(d.path(), info(4242), |_| true).unwrap();
+        assert_eq!(current_with(d.path(), |_| true).unwrap().pid, 4242);
+    }
+
+    #[test]
+    fn current_reads_a_stale_lock_as_free() {
+        let d = tempfile::tempdir().unwrap();
+        let _g = acquire_with(d.path(), info(4242), |_| true).unwrap();
+        assert!(current_with(d.path(), |_| false).is_none());
     }
 
     #[test]

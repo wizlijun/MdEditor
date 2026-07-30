@@ -19,6 +19,11 @@
   "contributes": {
     "menus": [
       {
+        "location": "plugins",
+        "label": "Claude Agent…",
+        "command": "open"
+      },
+      {
         "location": "window",
         "label": "Claude Agent…",
         "command": "open"

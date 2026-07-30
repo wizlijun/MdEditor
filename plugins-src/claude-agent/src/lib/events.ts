@@ -25,6 +25,30 @@ export function emptyView(): RunView {
   return { runId: null, status: 'idle', items: [] }
 }
 
+/** One row of `runs/<runId>.json`, as the backend serializes it. */
+export interface RunRecord {
+  run_id: string
+  task: string
+  trigger: 'window' | 'cli'
+  started_at: string
+  ended_at: string
+  status: Status
+  num_turns?: number | null
+  result: string
+  stderr_tail: string
+}
+
+/** A task template plus its live state (`tasks.list`). */
+export interface Task {
+  id: string
+  name: string
+  description: string
+  /** Read off the lock file, so a detached CLI run shows up here too. */
+  running: boolean
+  running_since?: string | null
+  last_run?: RunRecord | null
+}
+
 type BackendEvent =
   | { kind: 'text'; text: string }
   | { kind: 'tool_use'; name: string; brief: string }

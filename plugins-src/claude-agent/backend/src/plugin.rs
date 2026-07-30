@@ -5,9 +5,10 @@
 //! `run.start` only spawns a tokio task and returns the run id immediately —
 //! blocking here would wedge the whole plugin. Events reach the window from
 //! that task via `host.ui_post`.
-use crate::{discover, engine, prompt, record, runner, task};
+use crate::{discover, engine, lock, prompt, record, runner, task};
 use notemd_plugin_sdk as sdk;
 use sdk::plugin_protocol as proto;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -35,6 +36,34 @@ impl ClaudeAgentPlugin {
             tab_context: None,
         }
     }
+}
+
+/// A task plus its live state, for the window's task list.
+#[derive(Serialize)]
+struct TaskOverview {
+    #[serde(flatten)]
+    def: task::TaskDef,
+    /// Derived from the lock file, not from an in-memory map — that's the only
+    /// way a run started by a DETACHED CLI process shows up here.
+    running: bool,
+    running_since: Option<String>,
+    last_run: Option<record::RunRecord>,
+}
+
+fn overview(vault: &std::path::Path) -> Vec<TaskOverview> {
+    task::discover(vault)
+        .into_iter()
+        .map(|def| {
+            let run_dir = task::runs_root(vault).join(&def.id);
+            let held = lock::current(&run_dir);
+            TaskOverview {
+                def,
+                running: held.is_some(),
+                running_since: held.map(|h| h.started_at),
+                last_run: record::recent(&run_dir, 1).into_iter().next(),
+            }
+        })
+        .collect()
 }
 
 /// The vault root has to come from the host (`host.vault.info`); everything
@@ -104,7 +133,7 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
         match method {
             "tasks.list" => {
                 let vault = self.vault()?;
-                Ok(json!({ "tasks": task::discover(&vault) }))
+                Ok(json!({ "tasks": overview(&vault) }))
             }
             "context.get" => Ok(json!({ "tab": self.tab_context })),
             "run.start" => self.start(host, params, "window"),
@@ -122,10 +151,15 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
                     None => Err(format!("run '{id}' is not running")),
                 }
             }
+            // No `task` (or an empty one) means every task, merged.
             "history.list" => {
                 let vault = self.vault()?;
-                let t = params.get("task").and_then(|v| v.as_str()).unwrap_or_default();
-                Ok(json!({ "runs": record::recent(&task::runs_root(&vault).join(t), 20) }))
+                let root = task::runs_root(&vault);
+                let runs = match params.get("task").and_then(|v| v.as_str()) {
+                    Some(t) if !t.is_empty() => record::recent(&root.join(t), 30),
+                    _ => record::recent_all(&root, 30),
+                };
+                Ok(json!({ "runs": runs }))
             }
             other => Err(format!("unknown ui method '{other}'")),
         }
@@ -322,6 +356,63 @@ mod tests {
         let c = json!({ "cli": { "args": { "task": "" } } });
         assert_eq!(cli_str(&c, "task"), None);
         assert!(!cli_flag(&c, "wait"));
+    }
+
+    #[test]
+    fn overview_reports_status_from_disk_not_from_memory() {
+        let v = tempfile::tempdir().unwrap();
+        task::seed_builtin_templates(v.path());
+        let sweep_runs = task::runs_root(v.path()).join("annotation-sweep");
+
+        // A run recorded by SOME process (a detached CLI runner, say).
+        record::write(
+            &sweep_runs,
+            &record::RunRecord {
+                run_id: "20260730T000001Z-a".into(),
+                task: "annotation-sweep".into(),
+                trigger: "cli".into(),
+                started_at: "s".into(),
+                ended_at: "e".into(),
+                status: record::Status::Success,
+                exit_code: Some(0),
+                num_turns: Some(1),
+                session_id: None,
+                result: "ok".into(),
+                stderr_tail: String::new(),
+            },
+        )
+        .unwrap();
+        // …and a live lock held by a process that really exists (us).
+        let _held = lock::acquire(
+            &sweep_runs,
+            lock::LockInfo {
+                pid: std::process::id() as i32,
+                run_id: "20260730T000002Z-b".into(),
+                started_at: "2026-07-30T00:00:02Z".into(),
+            },
+        )
+        .unwrap();
+
+        let got = overview(v.path());
+        let sweep = got.iter().find(|t| t.def.id == "annotation-sweep").unwrap();
+        assert!(sweep.running);
+        assert_eq!(sweep.running_since.as_deref(), Some("2026-07-30T00:00:02Z"));
+        assert_eq!(sweep.last_run.as_ref().unwrap().result, "ok");
+
+        let idle = got.iter().find(|t| t.def.id == "selfcheck").unwrap();
+        assert!(!idle.running);
+        assert!(idle.last_run.is_none());
+    }
+
+    #[test]
+    fn overview_serializes_the_task_fields_flat() {
+        let v = tempfile::tempdir().unwrap();
+        task::seed_builtin_templates(v.path());
+        let json = serde_json::to_value(overview(v.path())).unwrap();
+        let first = &json[0];
+        assert_eq!(first["id"], "annotation-sweep");
+        assert!(first["name"].is_string());
+        assert_eq!(first["running"], false);
     }
 
     #[test]
