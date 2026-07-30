@@ -34,6 +34,7 @@
   let selectedLog = $state('')
 
   const running = $derived(view.status === 'running')
+  const current = $derived(tasks.find((t) => t.id === selectedTask) ?? null)
 
   onMessage((m: HostMessage) => {
     view = reduce(view, m)
@@ -167,7 +168,17 @@
     {#if tasks.length === 0}
       <p class="empty">{tr('tasks.empty')}</p>
     {/if}
-    <TaskList {tasks} selected={selectedTask} onselect={(id) => (selectedTask = id)} label={tr} />
+    <!-- Picking a task is also how you leave a past run's log: there is only
+         one thing you could mean by clicking it. -->
+    <TaskList
+      {tasks}
+      selected={selectedTask}
+      onselect={(id) => {
+        selectedTask = id
+        selectedRun = null
+      }}
+      label={tr}
+    />
 
     <h2>
       {tr('history.title')}
@@ -196,10 +207,22 @@
 
   <section>
     {#if selectedRun}
-      <RunLog run={selectedRun} log={selectedLog} label={tr} onback={() => (selectedRun = null)} />
+      <RunLog run={selectedRun} log={selectedLog} label={tr} />
     {:else}
       <header>
-        <textarea bind:value={userPrompt} placeholder={tr('run.prompt.placeholder')}></textarea>
+        {#if current}
+          <p class="will-run">
+            <span class="lead">{tr('run.willRun')}</span>
+            <span class="name">{current.name}</span>
+            {#if current.description}<span class="desc">{current.description}</span>{/if}
+          </p>
+        {/if}
+        <label class="addendum" for="addendum">{tr('run.addendum')}</label>
+        <textarea
+          id="addendum"
+          bind:value={userPrompt}
+          placeholder={tr('run.addendum.placeholder')}
+        ></textarea>
         {#if ctx}
           <label class="ctx">
             <input type="checkbox" bind:checked={useCtx} />
@@ -298,6 +321,16 @@
     color: inherit;
   }
   .ctx { display: block; margin-top: 6px; font-size: 11px; opacity: 0.8; }
+  .will-run { margin: 0 0 8px; font-size: 12px; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+  .will-run .lead { opacity: 0.5; flex: none; }
+  .will-run .name { font-weight: 600; flex: none; }
+  .will-run .desc {
+    opacity: 0.55;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .addendum { display: block; margin-bottom: 4px; font-size: 11px; opacity: 0.55; }
   footer {
     display: flex;
     align-items: center;

@@ -2,12 +2,11 @@
   import type { RunRecord } from '../lib/events'
   import ArtifactLinks from './ArtifactLinks.svelte'
 
-  let { run, log, label, onback }:
+  let { run, log, label }:
     {
       run: RunRecord
       log: string
       label: (k: string, v?: Record<string, string | number>) => string
-      onback: () => void
     } = $props()
 
   const lines = $derived(log.split('\n').filter((l) => l.length > 0))
@@ -18,7 +17,6 @@
     <span class="status s-{run.status}">{label('status.' + run.status)}</span>
     <span class="task">{run.task}</span>
     <span class="when">{run.started_at.slice(0, 19).replace('T', ' ')}</span>
-    <button class="back" onclick={onback}>{label('log.back')}</button>
   </header>
 
   <div class="body">
@@ -56,20 +54,7 @@
   .s-error, .s-timeout { color: #d9534f; }
   .s-skipped { opacity: 0.65; }
   .task { opacity: 0.8; }
-  .when { opacity: 0.5; font-variant-numeric: tabular-nums; }
-  /* A button inherits no font — say so. */
-  .back {
-    font: inherit;
-    font-size: 11px;
-    margin-left: auto;
-    padding: 2px 8px;
-    border-radius: 5px;
-    border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-  }
-  .back:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+  .when { opacity: 0.5; margin-left: auto; font-variant-numeric: tabular-nums; }
   .body { flex: 1; overflow: auto; padding: 10px 12px; }
   .result { margin: 0 0 10px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
   .stderr {

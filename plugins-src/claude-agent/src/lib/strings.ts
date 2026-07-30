@@ -3,9 +3,11 @@
 type Dict = Record<string, string>
 
 const en: Dict = {
+  'run.addendum': 'Add to this run (optional)',
+  'run.addendum.placeholder': 'e.g. only the questions about performance',
+  'run.willRun': 'Will run',
   'history.delete': 'Delete this run',
   'history.clearAll': 'Clear all runs',
-  'log.back': 'Back to live',
   'log.empty': 'This run left no log.',
   'status.skipped': 'Skipped',
   'artifacts.label': 'Opens:',
@@ -16,7 +18,6 @@ const en: Dict = {
   'tasks.empty': 'No task templates yet.',
   'run.start': 'Run',
   'run.stop': 'Stop',
-  'run.prompt.placeholder': 'What should Claude do this run? (optional)',
   'ctx.label': 'Context',
   'ctx.selection': '{n} chars selected',
   'history.title': 'Recent runs',
@@ -31,9 +32,11 @@ const en: Dict = {
 }
 
 const zh: Dict = {
+  'run.addendum': '本次补充要求(可选)',
+  'run.addendum.placeholder': '例:只回答与性能有关的问题',
+  'run.willRun': '将运行',
   'history.delete': '删除这条运行',
   'history.clearAll': '清空全部运行',
-  'log.back': '回到实时',
   'log.empty': '这次运行没有日志。',
   'status.skipped': '已跳过',
   'artifacts.label': '产物:',
@@ -44,7 +47,6 @@ const zh: Dict = {
   'tasks.empty': '还没有任务模板。',
   'run.start': '运行',
   'run.stop': '停止',
-  'run.prompt.placeholder': '这次要 Claude 做什么?(可留空)',
   'ctx.label': '上下文',
   'ctx.selection': '选中 {n} 字',
   'history.title': '最近运行',
@@ -59,9 +61,11 @@ const zh: Dict = {
 }
 
 const ja: Dict = {
+  'run.addendum': '今回の追加指示(任意)',
+  'run.addendum.placeholder': '例:性能に関する質問だけ',
+  'run.willRun': '実行内容',
   'history.delete': 'この実行を削除',
   'history.clearAll': '実行履歴をすべて消去',
-  'log.back': 'ライブに戻る',
   'log.empty': 'この実行にログはありません。',
   'status.skipped': 'スキップ',
   'artifacts.label': '成果物:',
@@ -72,7 +76,6 @@ const ja: Dict = {
   'tasks.empty': 'タスクテンプレートがまだありません。',
   'run.start': '実行',
   'run.stop': '停止',
-  'run.prompt.placeholder': '今回 Claude に何をさせますか?(任意)',
   'ctx.label': 'コンテキスト',
   'ctx.selection': '{n} 文字選択中',
   'history.title': '最近の実行',
@@ -87,9 +90,11 @@ const ja: Dict = {
 }
 
 const de: Dict = {
+  'run.addendum': 'Für diesen Lauf ergänzen (optional)',
+  'run.addendum.placeholder': 'z. B. nur die Fragen zur Performance',
+  'run.willRun': 'Läuft',
   'history.delete': 'Diesen Lauf löschen',
   'history.clearAll': 'Alle Läufe löschen',
-  'log.back': 'Zurück zum Live-Lauf',
   'log.empty': 'Dieser Lauf hat kein Protokoll.',
   'status.skipped': 'Übersprungen',
   'artifacts.label': 'Ergebnis:',
@@ -100,7 +105,6 @@ const de: Dict = {
   'tasks.empty': 'Noch keine Aufgabenvorlagen.',
   'run.start': 'Ausführen',
   'run.stop': 'Stoppen',
-  'run.prompt.placeholder': 'Was soll Claude diesmal tun? (optional)',
   'ctx.label': 'Kontext',
   'ctx.selection': '{n} Zeichen ausgewählt',
   'history.title': 'Letzte Läufe',
