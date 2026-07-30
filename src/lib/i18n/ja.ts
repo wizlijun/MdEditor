@@ -382,6 +382,7 @@ export const ja: Record<keyof Messages, string> = {
   'agent.running': '作業中…',
   'agent.steps': '{n} ステップ',
   'agent.locked': 'エージェントの作業中、サイドノートは編集できません。',
+  'agent.doneSkipped': '実行の必要なし',
   'agent.doneSuccess': '完了',
   'agent.doneError': '失敗',
   'agent.dismiss': '閉じる',

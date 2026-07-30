@@ -11,6 +11,7 @@
   } from './lib/events'
   import TaskList from './components/TaskList.svelte'
   import RunStream from './components/RunStream.svelte'
+  import RunLog from './components/RunLog.svelte'
   import HistoryList from './components/HistoryList.svelte'
   import ArtifactLinks from './components/ArtifactLinks.svelte'
 
@@ -18,7 +19,8 @@
   const tr = (k: string, v?: Record<string, string | number>) => t(locale, k, v)
 
   let tasks: Task[] = $state([])
-  let selected: string | null = $state(null)
+  /** Which task the Run button will start. */
+  let selectedTask: string | null = $state(null)
   let userPrompt = $state('')
   let ctx: { path: string; selection: string } | null = $state(null)
   let useCtx = $state(true)
@@ -26,6 +28,10 @@
   let history: RunRecord[] = $state([])
   let allTasks = $state(true)
   let error = $state('')
+  /** A past run picked from the list: the centre pane shows ITS log instead of
+   *  the live stream, until you go back or start a new run. */
+  let selectedRun: RunRecord | null = $state(null)
+  let selectedLog = $state('')
 
   const running = $derived(view.status === 'running')
 
@@ -44,7 +50,7 @@
       for (let i = 0; i < 20 && !(await loadTasks()); i++) {
         await new Promise((r) => setTimeout(r, 250))
       }
-      if (!selected && tasks.length) selected = tasks[0].id
+      if (!selectedTask && tasks.length) selectedTask = tasks[0].id
       const c = await request('context.get')
       ctx = c.tab?.path ? { path: c.tab.path, selection: c.tab.selection ?? '' } : null
     } catch (e) {
@@ -61,7 +67,7 @@
 
   async function loadHistory() {
     try {
-      const task = allTasks ? null : selected
+      const task = allTasks ? null : selectedTask
       if (!allTasks && !task) {
         history = []
         return
@@ -83,13 +89,45 @@
     return () => clearInterval(id)
   })
 
+  async function selectRun(run: RunRecord) {
+    selectedRun = run
+    selectedLog = ''
+    try {
+      selectedLog = (await request('history.log', { task: run.task, run_id: run.run_id })).log ?? ''
+    } catch (e) {
+      error = message(e)
+    }
+  }
+
+  async function deleteRun(run: RunRecord) {
+    if (selectedRun?.run_id === run.run_id) selectedRun = null
+    try {
+      await request('history.delete', { task: run.task, run_id: run.run_id })
+    } catch (e) {
+      error = message(e)
+    }
+    await loadHistory()
+  }
+
+  async function clearRuns() {
+    selectedRun = null
+    try {
+      // Scope follows what's on screen: the all-tasks view clears everything.
+      await request('history.clear', allTasks ? {} : { task: selectedTask })
+    } catch (e) {
+      error = message(e)
+    }
+    await refresh()
+  }
+
   async function start() {
-    if (!selected) return
+    if (!selectedTask) return
     error = ''
+    selectedRun = null // a new run takes the pane back to live
     view = { ...emptyView(), status: 'running' }
     try {
       const r = await request('run.start', {
-        task: selected,
+        task: selectedTask,
         prompt: userPrompt,
         use_context: useCtx && !!ctx,
       })
@@ -115,7 +153,7 @@
 
   // Switching task, or switching scope, reloads the history list.
   $effect(() => {
-    void selected
+    void selectedTask
     void allTasks
     void loadHistory()
   })
@@ -129,7 +167,7 @@
     {#if tasks.length === 0}
       <p class="empty">{tr('tasks.empty')}</p>
     {/if}
-    <TaskList {tasks} {selected} onselect={(id) => (selected = id)} label={tr} />
+    <TaskList {tasks} selected={selectedTask} onselect={(id) => (selectedTask = id)} label={tr} />
 
     <h2>
       {tr('history.title')}
@@ -141,47 +179,58 @@
         {allTasks ? tr('history.all') : tr('history.thisTask')}
       </button>
     </h2>
-    <HistoryList
-      runs={history}
-      label={tr}
-      showTask={allTasks}
-      empty={allTasks ? tr('history.emptyAll') : tr('history.empty')}
-    />
+    <!-- Scrolls on its own so a long history never pushes the task list away. -->
+    <div class="runs">
+      <HistoryList
+        runs={history}
+        label={tr}
+        showTask={allTasks}
+        empty={allTasks ? tr('history.emptyAll') : tr('history.empty')}
+        selectedId={selectedRun?.run_id ?? null}
+        onselect={selectRun}
+        ondelete={deleteRun}
+        onclear={clearRuns}
+      />
+    </div>
   </aside>
 
   <section>
-    <header>
-      <textarea bind:value={userPrompt} placeholder={tr('run.prompt.placeholder')}></textarea>
-      {#if ctx}
-        <label class="ctx">
-          <input type="checkbox" bind:checked={useCtx} />
-          {tr('ctx.label')}: {fileName(ctx.path)}
-          {#if ctx.selection}
-            ({tr('ctx.selection', { n: ctx.selection.length })})
-          {/if}
-        </label>
-      {/if}
-    </header>
+    {#if selectedRun}
+      <RunLog run={selectedRun} log={selectedLog} label={tr} onback={() => (selectedRun = null)} />
+    {:else}
+      <header>
+        <textarea bind:value={userPrompt} placeholder={tr('run.prompt.placeholder')}></textarea>
+        {#if ctx}
+          <label class="ctx">
+            <input type="checkbox" bind:checked={useCtx} />
+            {tr('ctx.label')}: {fileName(ctx.path)}
+            {#if ctx.selection}
+              ({tr('ctx.selection', { n: ctx.selection.length })})
+            {/if}
+          </label>
+        {/if}
+      </header>
 
-    <RunStream items={view.items} />
+      <RunStream items={view.items} />
 
-    <ArtifactLinks paths={view.artifacts} label={tr} />
+      <ArtifactLinks paths={view.artifacts} label={tr} />
 
-    <footer>
-      {#if error}
-        <span class="err">{error}</span>
-      {:else if view.status !== 'idle'}
-        <span class="st">{tr('status.' + view.status)}</span>
-      {/if}
-      {#if view.turns != null}
-        <span class="turns">{tr('turns', { n: view.turns })}</span>
-      {/if}
-      {#if running}
-        <button onclick={stop}>{tr('run.stop')}</button>
-      {:else}
-        <button class="primary" onclick={start} disabled={!selected}>{tr('run.start')}</button>
-      {/if}
-    </footer>
+      <footer>
+        {#if error}
+          <span class="err">{error}</span>
+        {:else if view.status !== 'idle'}
+          <span class="st">{tr('status.' + view.status)}</span>
+        {/if}
+        {#if view.turns != null}
+          <span class="turns">{tr('turns', { n: view.turns })}</span>
+        {/if}
+        {#if running}
+          <button onclick={stop}>{tr('run.stop')}</button>
+        {:else}
+          <button class="primary" onclick={start} disabled={!selectedTask}>{tr('run.start')}</button>
+        {/if}
+      </footer>
+    {/if}
   </section>
 </main>
 
@@ -195,10 +244,13 @@
     width: 236px;
     flex: none;
     padding: 12px;
-    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     box-sizing: border-box;
     border-right: 1px solid color-mix(in srgb, currentColor 15%, transparent);
   }
+  .runs { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -5px; padding: 0 5px; }
   h2 {
     display: flex;
     align-items: baseline;
@@ -208,6 +260,7 @@
     text-transform: uppercase;
     opacity: 0.5;
     margin: 14px 0 6px;
+    flex: none;
   }
   h2:first-child { margin-top: 0; }
   /* A button inherits no font — say so explicitly. */

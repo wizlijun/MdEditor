@@ -65,6 +65,7 @@ mod tests {
             max_turns: Some(50),
             timeout_seconds: 1800,
             model: None,
+            precheck: None,
         }
     }
 

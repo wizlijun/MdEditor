@@ -126,7 +126,9 @@ async function poll(onFinished: () => void | Promise<void>) {
       case 'done': {
         const rec = s.record ?? {}
         agentRun.outcome = rec.status ?? 'success'
-        agentRun.phase = rec.status === 'success' ? 'done' : 'error'
+        // A skipped run is a fine outcome: the precheck found nothing to do
+        // and spent no tokens saying so.
+        agentRun.phase = rec.status === 'success' || rec.status === 'skipped' ? 'done' : 'error'
         agentRun.message = rec.result || rec.stderr_tail || ''
         agentRun.artifacts = rec.artifacts ?? []
         stopPolling()

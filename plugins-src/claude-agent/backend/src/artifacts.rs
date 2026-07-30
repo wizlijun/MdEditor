@@ -1,39 +1,40 @@
-//! Which markdown files did this run produce? The window turns them into links
-//! that open in an editor tab, so the answer has to be vault-RELATIVE paths
-//! (`host.editor.open` rejects anything else) and it has to be honest: a stale
-//! file from last week's run is worse than no link at all.
+//! What did this run actually deliver? The window turns the answer into links
+//! that open in an editor tab, so it must be vault-RELATIVE paths and it must
+//! be strict: a file the run merely READ or mentioned is not a result, and
+//! offering it as one makes the list useless.
 //!
-//! Two sources, because tasks split into two kinds:
-//!  - files under the task's `output/` written during this run (selfcheck)
-//!  - `.md` paths named in the final answer (answer-note-question writes straight
-//!    into `answers/` and never touches `output/`)
+//! So: markdown WRITTEN during this run, under the two places a task delivers
+//! to — the task's own `output/`, and the vault's `answers/`. Sidecar notes are
+//! excluded; they're the note itself, already one click away in the panel.
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Cap what a runaway task can push into the window.
 pub const MAX: usize = 20;
 
-/// Collect this run's markdown, newest-first-ish (sorted, deduped).
-pub fn collect(vault: &Path, task_dir: &Path, result_text: &str, since: SystemTime) -> Vec<String> {
+/// Where a task is allowed to leave a deliverable, relative to the vault.
+pub const VAULT_OUTPUT_DIR: &str = "answers";
+
+/// This run's markdown deliverables, sorted and deduped.
+pub fn collect(vault: &Path, task_dir: &Path, since: SystemTime) -> Vec<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
-    for p in output_markdown(task_dir, since) {
-        if let Some(rel) = vault_relative(vault, &p) {
-            out.insert(rel);
+    for root in [task_dir.join("output"), vault.join(VAULT_OUTPUT_DIR)] {
+        for p in written_markdown(&root, since) {
+            if let Some(rel) = vault_relative(vault, &p) {
+                out.insert(rel);
+            }
         }
-    }
-    for rel in mentioned_markdown(vault, result_text) {
-        out.insert(rel);
     }
     out.into_iter().take(MAX).collect()
 }
 
-/// `<task_dir>/output/**/*.md` touched at or after `since`. The mtime filter is
-/// what keeps a previous run's leftovers from being presented as this one's.
-fn output_markdown(task_dir: &Path, since: SystemTime) -> Vec<std::path::PathBuf> {
+/// `*.md` under `root` touched at or after `since`. The mtime gate is what
+/// keeps a previous run's leftovers from being presented as this one's.
+fn written_markdown(root: &Path, since: SystemTime) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    walk(&task_dir.join("output"), 0, &mut |p| {
-        if !is_markdown(p) {
+    walk(root, 0, &mut |p| {
+        if !is_deliverable(p) {
             return;
         }
         let fresh = std::fs::metadata(p)
@@ -62,39 +63,15 @@ fn walk(dir: &Path, depth: usize, f: &mut impl FnMut(&Path)) {
     }
 }
 
-/// `.md` paths named in the answer text — absolute, vault-relative, or
-/// wiki-style — kept only when the file actually exists inside the vault.
-fn mentioned_markdown(vault: &Path, text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for token in text.split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | '`' | ',' | ';')) {
-        let t = token.trim_end_matches(['.', ':', '!', '?', '。', ',']);
-        if !t.to_ascii_lowercase().ends_with(".md") {
-            continue;
-        }
-        let candidate = Path::new(t);
-        let abs = if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else {
-            vault.join(candidate)
-        };
-        if abs.is_file() {
-            if let Some(rel) = vault_relative(vault, &abs) {
-                out.push(rel);
-            }
-        }
-    }
-    out
-}
-
-fn is_markdown(p: &Path) -> bool {
-    p.extension()
-        .map(|e| e.eq_ignore_ascii_case("md"))
-        .unwrap_or(false)
+fn is_deliverable(p: &Path) -> bool {
+    let name = p.file_name().map(|n| n.to_string_lossy().to_lowercase());
+    let Some(name) = name else { return false };
+    // A sidecar note is where the answers live, not a deliverable to link.
+    name.ends_with(".md") && !name.ends_with(".note.md") && !name.ends_with(".notes.md")
 }
 
 /// Strip the vault prefix, canonicalizing both sides so a symlinked vault
-/// (or `/tmp` → `/private/tmp` on macOS) still matches. Anything outside the
-/// vault is dropped: `host.editor.open` would only reject it later.
+/// (or `/tmp` → `/private/tmp` on macOS) still matches.
 fn vault_relative(vault: &Path, path: &Path) -> Option<String> {
     let root = vault.canonicalize().ok()?;
     let abs = path.canonicalize().ok()?;
@@ -113,16 +90,18 @@ mod tests {
         std::fs::write(p, body).unwrap();
     }
 
+    fn just_before() -> SystemTime {
+        SystemTime::now() - Duration::from_secs(5)
+    }
+
     #[test]
     fn picks_up_markdown_the_run_wrote_to_output() {
         let v = tempfile::tempdir().unwrap();
         let task = v.path().join(".notemd/agent-tasks/t");
-        let since = SystemTime::now() - Duration::from_secs(5);
         touch(&task.join("output/selfcheck.md"), "# hi");
         touch(&task.join("output/nested/more.md"), "# hi");
-        let got = collect(v.path(), &task, "", since);
         assert_eq!(
-            got,
+            collect(v.path(), &task, just_before()),
             vec![
                 ".notemd/agent-tasks/t/output/nested/more.md",
                 ".notemd/agent-tasks/t/output/selfcheck.md",
@@ -131,13 +110,45 @@ mod tests {
     }
 
     #[test]
+    fn picks_up_a_long_answer_written_into_the_vault() {
+        let v = tempfile::tempdir().unwrap();
+        let task = v.path().join(".notemd/agent-tasks/t");
+        touch(&v.path().join("answers/2026-07-31-kv-cache.md"), "# a");
+        assert_eq!(
+            collect(v.path(), &task, just_before()),
+            vec!["answers/2026-07-31-kv-cache.md"]
+        );
+    }
+
+    #[test]
+    fn ignores_files_the_run_only_read_or_mentioned() {
+        let v = tempfile::tempdir().unwrap();
+        let task = v.path().join(".notemd/agent-tasks/t");
+        // Written during the run, but nowhere a task delivers to: the source
+        // document, and a note elsewhere in the vault.
+        touch(&v.path().join("docs/source.md"), "# read me");
+        touch(&v.path().join("inbox/scratch.md"), "# touched");
+        assert!(collect(v.path(), &task, just_before()).is_empty());
+    }
+
+    #[test]
+    fn ignores_the_sidecar_note_itself() {
+        let v = tempfile::tempdir().unwrap();
+        let task = v.path().join(".notemd/agent-tasks/t");
+        touch(&v.path().join("answers/a.note.md"), "- x");
+        touch(&task.join("output/b.notes.md"), "- x");
+        assert!(collect(v.path(), &task, just_before()).is_empty());
+    }
+
+    #[test]
     fn ignores_output_left_over_from_an_earlier_run() {
         let v = tempfile::tempdir().unwrap();
         let task = v.path().join(".notemd/agent-tasks/t");
         touch(&task.join("output/old.md"), "# old");
-        // This run started after that file was written.
+        touch(&v.path().join("answers/old.md"), "# old");
+        // This run started after those were written.
         let since = SystemTime::now() + Duration::from_secs(5);
-        assert!(collect(v.path(), &task, "", since).is_empty());
+        assert!(collect(v.path(), &task, since).is_empty());
     }
 
     #[test]
@@ -146,80 +157,13 @@ mod tests {
         let task = v.path().join(".notemd/agent-tasks/t");
         touch(&task.join("output/data.json"), "{}");
         touch(&task.join("output/notes.txt"), "x");
-        let since = SystemTime::now() - Duration::from_secs(5);
-        assert!(collect(v.path(), &task, "", since).is_empty());
+        assert!(collect(v.path(), &task, just_before()).is_empty());
     }
 
     #[test]
-    fn picks_up_markdown_named_in_the_answer() {
+    fn is_empty_when_the_run_delivered_nothing() {
         let v = tempfile::tempdir().unwrap();
         let task = v.path().join(".notemd/agent-tasks/t");
-        touch(&v.path().join("answers/2026-07-30-kv-cache.md"), "# a");
-        let since = SystemTime::now();
-        let text = "答案写进了 answers/2026-07-30-kv-cache.md,请查收。";
-        assert_eq!(
-            collect(v.path(), &task, text, since),
-            vec!["answers/2026-07-30-kv-cache.md"]
-        );
-    }
-
-    #[test]
-    fn accepts_an_absolute_path_inside_the_vault() {
-        let v = tempfile::tempdir().unwrap();
-        let task = v.path().join(".notemd/agent-tasks/t");
-        let abs = v.path().join("answers/deep.md");
-        touch(&abs, "# a");
-        let text = format!("wrote {}", abs.display());
-        assert_eq!(
-            collect(v.path(), &task, &text, SystemTime::now()),
-            vec!["answers/deep.md"]
-        );
-    }
-
-    #[test]
-    fn drops_paths_that_do_not_exist_or_sit_outside_the_vault() {
-        let v = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let task = v.path().join(".notemd/agent-tasks/t");
-        touch(&outside.path().join("secret.md"), "# nope");
-        let text = format!(
-            "imagined.md and answers/ghost.md and {}",
-            outside.path().join("secret.md").display()
-        );
-        assert!(collect(v.path(), &task, &text, SystemTime::now()).is_empty());
-    }
-
-    #[test]
-    fn strips_markdown_link_punctuation_around_a_path() {
-        let v = tempfile::tempdir().unwrap();
-        let task = v.path().join(".notemd/agent-tasks/t");
-        touch(&v.path().join("answers/a.md"), "# a");
-        for text in [
-            "see [the answer](answers/a.md)",
-            "see `answers/a.md`",
-            "see answers/a.md.",
-            "see <answers/a.md>",
-        ] {
-            assert_eq!(
-                collect(v.path(), &task, text, SystemTime::now()),
-                vec!["answers/a.md"],
-                "failed for {text}"
-            );
-        }
-    }
-
-    #[test]
-    fn deduplicates_a_file_that_is_both_written_and_mentioned() {
-        let v = tempfile::tempdir().unwrap();
-        let task = v.path().join(".notemd/agent-tasks/t");
-        touch(&task.join("output/selfcheck.md"), "# hi");
-        let since = SystemTime::now() - Duration::from_secs(5);
-        let got = collect(
-            v.path(),
-            &task,
-            "报告写入 .notemd/agent-tasks/t/output/selfcheck.md",
-            since,
-        );
-        assert_eq!(got.len(), 1);
+        assert!(collect(v.path(), &task, just_before()).is_empty());
     }
 }

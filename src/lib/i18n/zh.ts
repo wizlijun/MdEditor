@@ -414,6 +414,7 @@ export const zh: Record<keyof Messages, string> = {
   'agent.running': '工作中…',
   'agent.steps': '{n} 步',
   'agent.locked': 'agent 工作期间,手记暂不可编辑。',
+  'agent.doneSkipped': '无需运行',
   'agent.doneSuccess': '完成',
   'agent.doneError': '失败',
   'agent.dismiss': '知道了',

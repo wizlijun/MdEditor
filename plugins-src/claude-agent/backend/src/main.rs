@@ -8,6 +8,7 @@ mod discover;
 mod engine;
 mod lock;
 mod plugin;
+mod precheck;
 mod prompt;
 mod record;
 mod runner;

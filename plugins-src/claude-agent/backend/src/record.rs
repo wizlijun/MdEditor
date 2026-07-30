@@ -11,6 +11,8 @@ pub const STDERR_LIMIT: usize = 2 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Success,
+    /// The precheck said there was nothing to do; no model ran.
+    Skipped,
     Error,
     Timeout,
     Cancelled,
@@ -70,6 +72,57 @@ pub fn read_progress(task_run_dir: &Path) -> Option<Progress> {
 
 pub fn clear_progress(task_run_dir: &Path) {
     let _ = std::fs::remove_file(progress_path(task_run_dir));
+}
+
+/// Cap a single run's log. Enough to read what happened, small enough that a
+/// runaway task can't fill the vault.
+pub const LOG_LIMIT: usize = 256 * 1024;
+
+pub fn log_path(task_run_dir: &Path, run_id: &str) -> PathBuf {
+    runs_dir(task_run_dir).join(format!("{run_id}.log"))
+}
+
+/// Append one line to a run's log, stopping once it hits the cap.
+pub fn append_log(task_run_dir: &Path, run_id: &str, line: &str) {
+    let p = log_path(task_run_dir, run_id);
+    if std::fs::metadata(&p).map(|m| m.len() as usize).unwrap_or(0) >= LOG_LIMIT {
+        return;
+    }
+    let _ = std::fs::create_dir_all(runs_dir(task_run_dir));
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+pub fn read_log(task_run_dir: &Path, run_id: &str) -> Option<String> {
+    std::fs::read_to_string(log_path(task_run_dir, run_id)).ok()
+}
+
+/// Forget one run entirely: its record and its log.
+pub fn delete(task_run_dir: &Path, run_id: &str) -> bool {
+    let rec = runs_dir(task_run_dir).join(format!("{run_id}.json"));
+    let gone = std::fs::remove_file(&rec).is_ok();
+    let _ = std::fs::remove_file(log_path(task_run_dir, run_id));
+    gone
+}
+
+/// Forget every run of a task. Returns how many records were removed.
+pub fn clear(task_run_dir: &Path) -> usize {
+    let Ok(rd) = std::fs::read_dir(runs_dir(task_run_dir)) else {
+        return 0;
+    };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let p = e.path();
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext == "json" || ext == "log" {
+            if std::fs::remove_file(&p).is_ok() && ext == "json" {
+                n += 1;
+            }
+        }
+    }
+    n
 }
 
 /// Find one run's record by id, whichever task it belongs to.
@@ -214,6 +267,52 @@ mod tests {
     fn recent_is_empty_when_nothing_ran_yet() {
         let d = tempfile::tempdir().unwrap();
         assert!(recent(d.path(), 5).is_empty());
+    }
+
+    #[test]
+    fn a_run_log_appends_and_reads_back() {
+        let d = tempfile::tempdir().unwrap();
+        append_log(d.path(), "R1", "Read a.md");
+        append_log(d.path(), "R1", "Write answers/a.md");
+        assert_eq!(read_log(d.path(), "R1").unwrap(), "Read a.md\nWrite answers/a.md\n");
+        assert_eq!(read_log(d.path(), "R2"), None);
+    }
+
+    #[test]
+    fn a_run_log_stops_growing_at_the_cap() {
+        let d = tempfile::tempdir().unwrap();
+        let chunk = "x".repeat(8 * 1024);
+        for _ in 0..64 {
+            append_log(d.path(), "R1", &chunk);
+        }
+        let len = read_log(d.path(), "R1").unwrap().len();
+        assert!(len >= LOG_LIMIT, "should fill up to the cap, got {len}");
+        assert!(len < LOG_LIMIT + 9 * 1024, "should stop just past it, got {len}");
+    }
+
+    #[test]
+    fn deleting_a_run_takes_its_log_with_it() {
+        let d = tempfile::tempdir().unwrap();
+        write(d.path(), &rec("R1")).unwrap();
+        append_log(d.path(), "R1", "Read a.md");
+        assert!(delete(d.path(), "R1"));
+        assert!(recent(d.path(), 5).is_empty());
+        assert_eq!(read_log(d.path(), "R1"), None);
+        // Deleting what isn't there is a no-op, not an error.
+        assert!(!delete(d.path(), "R1"));
+    }
+
+    #[test]
+    fn clearing_removes_every_run_of_a_task() {
+        let d = tempfile::tempdir().unwrap();
+        for id in ["R1", "R2", "R3"] {
+            write(d.path(), &rec(id)).unwrap();
+            append_log(d.path(), id, "line");
+        }
+        assert_eq!(clear(d.path()), 3);
+        assert!(recent(d.path(), 10).is_empty());
+        assert_eq!(read_log(d.path(), "R1"), None);
+        assert_eq!(clear(d.path()), 0);
     }
 
     #[test]

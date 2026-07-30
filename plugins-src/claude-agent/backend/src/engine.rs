@@ -18,6 +18,9 @@ pub struct RunSpec {
     pub trigger: String,
     pub run_id: String,
     pub oauth_token: Option<String>,
+    /// The one file this run is about, if any — handed to the precheck script
+    /// as NOTEMD_NOTE so it can answer "is there anything to do?" locally.
+    pub target: Option<String>,
 }
 
 /// Every step the engine emits. The window path turns these into
@@ -49,6 +52,31 @@ pub async fn run(
             started_at: started.to_rfc3339(),
         },
     )?;
+
+    // Ask the task, locally, whether this is worth starting at all.
+    if let crate::precheck::Outcome::Skip(reason) = crate::precheck::run(
+        &spec.task_dir,
+        spec.task.precheck.as_deref(),
+        &spec.vault,
+        spec.target.as_deref(),
+    )
+    .await
+    {
+        let rec = finish(
+            &spec,
+            started,
+            record::Status::Skipped,
+            None,
+            None,
+            reason,
+            String::new(),
+            Vec::new(),
+        );
+        let _ = record::write(&spec.task_run_dir, &rec);
+        record::clear_progress(&spec.task_run_dir);
+        let _ = tx.send(Step::Done(rec));
+        return Ok(());
+    }
 
     let _ = settings::materialize(&spec.task_dir, &spec.vault);
     let argv = prompt::build_argv(&spec.task, &spec.prompt);
@@ -140,12 +168,18 @@ pub async fn run(
                                 } else {
                                     format!("{name} {brief}")
                                 };
+                                record::append_log(
+                                    &spec.task_run_dir,
+                                    &spec.run_id,
+                                    &progress.last,
+                                );
                                 progress.updated_at = chrono::Utc::now().to_rfc3339();
                                 record::write_progress(&spec.task_run_dir, &progress);
                             }
                             stream::Event::Text { text } => {
                                 progress.steps += 1;
                                 progress.last = text.chars().take(80).collect();
+                                record::append_log(&spec.task_run_dir, &spec.run_id, text);
                                 progress.updated_at = chrono::Utc::now().to_rfc3339();
                                 record::write_progress(&spec.task_run_dir, &progress);
                             }
@@ -170,8 +204,7 @@ pub async fn run(
         (_, Some(0)) => record::Status::Success,
         _ => record::Status::Error,
     });
-    let result_text = final_result.as_ref().map(|r| r.result.clone()).unwrap_or_default();
-    let found = artifacts::collect(&spec.vault, &spec.task_dir, &result_text, started_at);
+    let found = artifacts::collect(&spec.vault, &spec.task_dir, started_at);
     let rec = finish(
         &spec,
         started,
@@ -262,6 +295,7 @@ mod tests {
                 max_turns: None,
                 timeout_seconds: timeout,
                 model: None,
+                precheck: None,
             },
             task_dir,
             task_run_dir: dir.join("runs-t"),
@@ -270,6 +304,7 @@ mod tests {
             trigger: "window".into(),
             run_id: "20260730T000000Z-000001".into(),
             oauth_token: None,
+            target: None,
         }
     }
 
@@ -322,17 +357,23 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         // The fake writes a report into output/ and names another file in its
         // answer — both are things the window should be able to open.
+        let d2 = d.path().to_path_buf();
         let c = fake_claude(
             d.path(),
             "fake-artifacts",
-            concat!(
-                "mkdir -p output && echo '# report' > output/report.md\n",
-                r#"echo '{"type":"result","result":"wrote output/report.md and answers/deep.md","is_error":false}'"#
+            &format!(
+                concat!(
+                    "mkdir -p output && echo '# report' > output/report.md\n",
+                    "mkdir -p {v}/answers && echo '# long' > {v}/answers/long.md\n",
+                    r#"echo '{{"type":"result","result":"see docs/prior.md too","is_error":false}}'"#
+                ),
+                v = d2.display()
             ),
         );
         let s = spec(d.path(), c, 30);
-        std::fs::create_dir_all(d.path().join("answers")).unwrap();
-        std::fs::write(d.path().join("answers/deep.md"), "# deep").unwrap();
+        // Written before the run and merely NAMED in the answer: not a result.
+        std::fs::create_dir_all(d.path().join("docs")).unwrap();
+        std::fs::write(d.path().join("docs/prior.md"), "# prior").unwrap();
         let task_rel = s
             .task_dir
             .strip_prefix(d.path())
@@ -345,10 +386,75 @@ mod tests {
         assert_eq!(
             rec.artifacts,
             vec![
-                "answers/deep.md".to_string(),
+                "answers/long.md".to_string(),
                 format!("{task_rel}/output/report.md"),
             ]
         );
+    }
+
+    /// The whole point of a precheck is spending no tokens. If claude still
+    /// starts, the feature is decorative.
+    #[tokio::test]
+    async fn a_failing_precheck_skips_the_run_without_starting_claude() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let ran = d.path().join("claude-ran");
+        let c = fake_claude(
+            d.path(),
+            "fake-should-not-run",
+            &format!("touch {}\nexit 0", ran.display()),
+        );
+        let mut s = spec(d.path(), c, 30);
+
+        let check = s.task_dir.join("precheck.sh");
+        std::fs::write(&check, "#!/bin/sh\necho '这篇手记里没有待答的问题'\nexit 1\n").unwrap();
+        std::fs::set_permissions(&check, std::fs::Permissions::from_mode(0o755)).unwrap();
+        s.task.precheck = Some("precheck.sh".into());
+
+        let (_e, rec) = drive(s).await;
+        assert_eq!(rec.status, record::Status::Skipped);
+        assert_eq!(rec.result, "这篇手记里没有待答的问题");
+        assert!(!ran.exists(), "claude must not have been started");
+    }
+
+    #[tokio::test]
+    async fn a_passing_precheck_lets_the_run_through() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let c = fake_claude(
+            d.path(),
+            "fake-after-check",
+            r#"echo '{"type":"result","result":"done","is_error":false}'"#,
+        );
+        let mut s = spec(d.path(), c, 30);
+        let check = s.task_dir.join("precheck.sh");
+        std::fs::write(&check, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&check, std::fs::Permissions::from_mode(0o755)).unwrap();
+        s.task.precheck = Some("precheck.sh".into());
+
+        let (_e, rec) = drive(s).await;
+        assert_eq!(rec.status, record::Status::Success);
+    }
+
+    #[tokio::test]
+    async fn a_run_keeps_a_log_of_what_it_did() {
+        let d = tempfile::tempdir().unwrap();
+        let c = fake_claude(
+            d.path(),
+            "fake-log",
+            concat!(
+                r#"echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.note.md"}}]}}'"#,
+                "\n",
+                r#"echo '{"type":"assistant","message":{"content":[{"type":"text","text":"answered it"}]}}'"#,
+                "\n",
+                r#"echo '{"type":"result","result":"done","is_error":false}'"#
+            ),
+        );
+        let s = spec(d.path(), c, 30);
+        let (run_dir, run_id) = (s.task_run_dir.clone(), s.run_id.clone());
+        drive(s).await;
+        let log = record::read_log(&run_dir, &run_id).expect("the run left a log");
+        assert_eq!(log, "Read a.note.md\nanswered it\n");
     }
 
     #[tokio::test]

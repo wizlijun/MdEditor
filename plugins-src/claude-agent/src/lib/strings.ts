@@ -3,6 +3,11 @@
 type Dict = Record<string, string>
 
 const en: Dict = {
+  'history.delete': 'Delete this run',
+  'history.clearAll': 'Clear all runs',
+  'log.back': 'Back to live',
+  'log.empty': 'This run left no log.',
+  'status.skipped': 'Skipped',
   'artifacts.label': 'Opens:',
   'history.all': 'All tasks',
   'history.thisTask': 'This task',
@@ -26,6 +31,11 @@ const en: Dict = {
 }
 
 const zh: Dict = {
+  'history.delete': '删除这条运行',
+  'history.clearAll': '清空全部运行',
+  'log.back': '回到实时',
+  'log.empty': '这次运行没有日志。',
+  'status.skipped': '已跳过',
   'artifacts.label': '产物:',
   'history.all': '全部任务',
   'history.thisTask': '当前任务',
@@ -49,6 +59,11 @@ const zh: Dict = {
 }
 
 const ja: Dict = {
+  'history.delete': 'この実行を削除',
+  'history.clearAll': '実行履歴をすべて消去',
+  'log.back': 'ライブに戻る',
+  'log.empty': 'この実行にログはありません。',
+  'status.skipped': 'スキップ',
   'artifacts.label': '成果物:',
   'history.all': 'すべてのタスク',
   'history.thisTask': 'このタスク',
@@ -72,6 +87,11 @@ const ja: Dict = {
 }
 
 const de: Dict = {
+  'history.delete': 'Diesen Lauf löschen',
+  'history.clearAll': 'Alle Läufe löschen',
+  'log.back': 'Zurück zum Live-Lauf',
+  'log.empty': 'Dieser Lauf hat kein Protokoll.',
+  'status.skipped': 'Übersprungen',
   'artifacts.label': 'Ergebnis:',
   'history.all': 'Alle Aufgaben',
   'history.thisTask': 'Diese Aufgabe',

@@ -380,6 +380,7 @@ export const de: Record<keyof Messages, string> = {
   'agent.running': 'Arbeitet…',
   'agent.steps': '{n} Schritte',
   'agent.locked': 'Während der Agent arbeitet, ist die Randnotiz schreibgeschützt.',
+  'agent.doneSkipped': 'Nichts zu tun',
   'agent.doneSuccess': 'Fertig',
   'agent.doneError': 'Fehlgeschlagen',
   'agent.dismiss': 'Schließen',

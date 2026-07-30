@@ -56,7 +56,11 @@
     {:else if agentRun.phase === 'done' || agentRun.phase === 'error'}
       <p class="result" class:bad={agentRun.phase === 'error'}>
         <span class="outcome">
-          {agentRun.phase === 'done' ? t('agent.doneSuccess') : t('agent.doneError')}
+          {agentRun.phase === 'error'
+            ? t('agent.doneError')
+            : agentRun.outcome === 'skipped'
+              ? t('agent.doneSkipped')
+              : t('agent.doneSuccess')}
         </span>
         {#if agentRun.message}<span class="msg" title={agentRun.message}>{agentRun.message}</span>{/if}
       </p>

@@ -1,19 +1,42 @@
 <script lang="ts">
   import type { RunRecord } from '../lib/events'
-  import ArtifactLinks from './ArtifactLinks.svelte'
 
-  let { runs, label, empty, showTask = false }:
+  let { runs, label, empty, showTask = false, selectedId = null, onselect, ondelete, onclear }:
     {
       runs: RunRecord[]
       label: (k: string, v?: Record<string, string | number>) => string
       empty: string
       /** In the all-tasks view each row needs to say WHICH task it was. */
       showTask?: boolean
+      selectedId?: string | null
+      onselect: (run: RunRecord) => void
+      ondelete: (run: RunRecord) => void
+      onclear: () => void
     } = $props()
 
-  // "2026-07-30T10:42:33+00:00" → "07-30 10:42"
+  // Right-click target + where to draw the menu.
+  let menu: { run: RunRecord; x: number; y: number } | null = $state(null)
+
+  function openMenu(e: MouseEvent, run: RunRecord) {
+    e.preventDefault()
+    menu = { run, x: e.clientX, y: e.clientY }
+  }
+  function closeMenu() {
+    menu = null
+  }
+
+  // "2026-07-31T00:42:33+00:00" → "07-31 00:42"
   const when = (iso: string) => iso.slice(5, 16).replace('T', ' ')
 </script>
+
+<svelte:window
+  onmousedown={(e) => {
+    if (menu && !(e.target as HTMLElement | null)?.closest('.ctx')) closeMenu()
+  }}
+  onkeydown={(e) => {
+    if (menu && e.key === 'Escape') closeMenu()
+  }}
+/>
 
 {#if runs.length === 0}
   <p class="empty">{empty}</p>
@@ -21,26 +44,72 @@
   <ul class="history">
     {#each runs as run (run.run_id)}
       <li>
-        <div class="row" title={run.result || run.stderr_tail}>
+        <button
+          class="row"
+          class:active={run.run_id === selectedId}
+          title={run.result || run.stderr_tail}
+          onclick={() => onselect(run)}
+          oncontextmenu={(e) => openMenu(e, run)}
+        >
           <span class="status s-{run.status}">{label('status.' + run.status)}</span>
           {#if showTask}<span class="task">{run.task}</span>{/if}
           <span class="when">{when(run.started_at)}</span>
           {#if run.trigger === 'cli'}<span class="cli">CLI</span>{/if}
-        </div>
-        <!-- A past run's markdown stays one click away, including runs the CLI
-             started while this window wasn't even open. -->
-        <ArtifactLinks paths={run.artifacts ?? []} {label} oncompact />
+        </button>
       </li>
     {/each}
   </ul>
 {/if}
 
+{#if menu}
+  <div class="ctx" style="left: {menu.x}px; top: {menu.y}px" role="menu" tabindex="-1">
+    <button
+      role="menuitem"
+      onclick={() => {
+        const r = menu!.run
+        closeMenu()
+        ondelete(r)
+      }}>{label('history.delete')}</button
+    >
+    <button
+      role="menuitem"
+      class="danger"
+      onclick={() => {
+        closeMenu()
+        onclear()
+      }}>{label('history.clearAll')}</button
+    >
+  </div>
+{/if}
+
 <style>
-  .history { list-style: none; margin: 0; padding: 0; font-size: 11px; }
-  li { padding: 3px 0; }
-  .row { display: flex; gap: 6px; align-items: baseline; }
+  .history {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 11px;
+  }
+  /* Buttons inherit neither font-size nor family — say both, or rows drift. */
+  .row {
+    font: inherit;
+    font-size: 11px;
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    width: 100%;
+    padding: 3px 5px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .row:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+  .row.active { background: color-mix(in srgb, currentColor 15%, transparent); }
   .status { font-weight: 600; flex: none; }
   .s-error, .s-timeout { color: #d9534f; }
+  .s-skipped { opacity: 0.65; }
   .task {
     opacity: 0.75;
     min-width: 0;
@@ -58,4 +127,29 @@
     padding: 0 3px;
   }
   .empty { font-size: 11px; opacity: 0.55; margin: 4px 0; }
+  .ctx {
+    position: fixed;
+    z-index: 50;
+    min-width: 140px;
+    padding: 4px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    background: Canvas;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 0.22);
+  }
+  .ctx button {
+    font: inherit;
+    font-size: 12px;
+    display: block;
+    width: 100%;
+    padding: 5px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ctx button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+  .ctx .danger { color: #d24b4b; }
 </style>

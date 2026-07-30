@@ -295,12 +295,57 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
                 };
                 Ok(json!({ "runs": runs }))
             }
+            // What one past run actually did, line by line.
+            "history.log" => {
+                let (root, task_id) = self.runs_root_and_task(&params)?;
+                let run_id = params
+                    .get("run_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or("history.log needs a 'run_id'")?;
+                Ok(json!({
+                    "log": record::read_log(&root.join(task_id), run_id).unwrap_or_default(),
+                }))
+            }
+            "history.delete" => {
+                let (root, task_id) = self.runs_root_and_task(&params)?;
+                let run_id = params
+                    .get("run_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or("history.delete needs a 'run_id'")?;
+                Ok(json!({ "deleted": record::delete(&root.join(task_id), run_id) }))
+            }
+            // No task named: clear every task's history.
+            "history.clear" => {
+                let vault = self.vault()?;
+                let root = task::runs_root(&vault);
+                let n = match params.get("task").and_then(|v| v.as_str()) {
+                    Some(t) if !t.is_empty() => record::clear(&root.join(t)),
+                    _ => task::discover(&vault)
+                        .iter()
+                        .map(|t| record::clear(&root.join(&t.id)))
+                        .sum(),
+                };
+                Ok(json!({ "cleared": n }))
+            }
             other => Err(format!("unknown ui method '{other}'")),
         }
     }
 }
 
 impl ClaudeAgentPlugin {
+    /// A record names its own task, so the window can act on a row from the
+    /// all-tasks view without tracking which task it came from.
+    fn runs_root_and_task(&self, params: &Value) -> Result<(PathBuf, String), String> {
+        let vault = self.vault()?;
+        let task_id = params
+            .get("task")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or("this call needs a 'task'")?
+            .to_string();
+        Ok((task::runs_root(&vault), task_id))
+    }
+
     fn vault(&self) -> Result<PathBuf, String> {
         self.inner
             .lock()
@@ -335,6 +380,13 @@ impl ClaudeAgentPlugin {
         let claude = discover::discover(std::env::var("NOTEMD_CLAUDE_BIN").ok().as_deref())
             .ok_or("claude executable not found — install Claude Code, or point NOTEMD_CLAUDE_BIN at it")?;
 
+        // The one file this run is about, if the caller named one. The precheck
+        // script reads it as NOTEMD_NOTE.
+        let target = params
+            .get("note_path")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         let ctx = if use_ctx { self.tab_ctx() } else { None };
         let full = prompt::compose(&def.prompt, &user_prompt, ctx.as_ref());
         let run_id = record::new_run_id(chrono::Utc::now(), std::process::id());
@@ -349,6 +401,7 @@ impl ClaudeAgentPlugin {
             trigger: trigger.to_string(),
             run_id: run_id.clone(),
             oauth_token: std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok(),
+            target,
         };
 
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -440,7 +493,12 @@ impl ClaudeAgentPlugin {
         host.log_info(&format!("run-note {task_id} on {rel}"));
         self.start(
             host,
-            json!({ "task": task_id, "prompt": prompt, "use_context": false }),
+            json!({
+                "task": task_id,
+                "prompt": prompt,
+                "use_context": false,
+                "note_path": note_path,
+            }),
             "note",
         )
     }

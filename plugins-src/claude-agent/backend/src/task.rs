@@ -20,6 +20,10 @@ pub struct TaskDef {
     pub timeout_seconds: u64,
     #[serde(default)]
     pub model: Option<String>,
+    /// Script in the task directory that decides whether the run is worth
+    /// starting at all. Exit 0 = run; anything else skips with its output.
+    #[serde(default)]
+    pub precheck: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -93,6 +97,10 @@ const BUILTIN: &[(&str, &[(&str, &str)])] = &[
                 ".claude/settings.json",
                 include_str!("../templates/answer-note-question/settings.json"),
             ),
+            (
+                "precheck.sh",
+                include_str!("../templates/answer-note-question/precheck.sh"),
+            ),
         ],
     ),
 ];
@@ -157,6 +165,12 @@ pub fn seed_builtin_templates(vault: &Path) -> Vec<String> {
                 let _ = std::fs::create_dir_all(parent);
             }
             if std::fs::write(&p, body).is_ok() {
+                // A precheck that isn't executable is a precheck that silently
+                // never runs.
+                if rel.ends_with(".sh") {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755));
+                }
                 wrote.push(format!("{id}/{rel}"));
             }
         }
@@ -242,7 +256,8 @@ mod tests {
     fn seeds_both_builtin_templates_on_a_fresh_vault() {
         let v = tempfile::tempdir().unwrap();
         let wrote = seed_builtin_templates(v.path());
-        assert_eq!(wrote.len(), 6);
+        // 3 files each, plus answer-note-question's precheck script.
+        assert_eq!(wrote.len(), 7, "seeded: {wrote:?}");
         assert!(task_dir(v.path(), "selfcheck").join("CLAUDE.md").exists());
         assert!(task_dir(v.path(), "answer-note-question")
             .join(".claude/settings.json")
@@ -299,6 +314,23 @@ mod tests {
         assert!(migrate_renamed_tasks(v.path()).is_empty());
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
         assert_eq!(ids, vec!["answer-note-question", "selfcheck"]);
+    }
+
+    #[test]
+    fn a_seeded_precheck_script_is_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let v = tempfile::tempdir().unwrap();
+        seed_builtin_templates(v.path());
+        let sh = task_dir(v.path(), "answer-note-question").join("precheck.sh");
+        let mode = std::fs::metadata(&sh).unwrap().permissions().mode();
+        assert!(mode & 0o111 != 0, "precheck.sh must be executable, got {mode:o}");
+        assert_eq!(
+            read_task(&task_dir(v.path(), "answer-note-question"))
+                .unwrap()
+                .precheck
+                .as_deref(),
+            Some("precheck.sh")
+        );
     }
 
     #[test]

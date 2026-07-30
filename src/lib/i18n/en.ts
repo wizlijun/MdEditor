@@ -387,6 +387,7 @@ export const en = {
   'agent.running': 'Working…',
   'agent.steps': '{n} steps',
   'agent.locked': 'The note is read-only while the agent works.',
+  'agent.doneSkipped': 'Nothing to do',
   'agent.doneSuccess': 'Done',
   'agent.doneError': 'Failed',
   'agent.dismiss': 'Dismiss',
