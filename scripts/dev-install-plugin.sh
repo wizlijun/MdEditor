@@ -210,7 +210,7 @@ elif [[ "$PLUGIN" == "claude-agent" ]]; then
   mark_installed "notemd.claude-agent" "$VERSION"
   echo "✓ installed notemd.claude-agent@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
   echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
-  echo "  open it:                Plugins menu (or Window menu) ▸ \"Claude Agent…\""
+  echo "  open it:                Plugins menu ▸ \"Claude Agent…\" (restart the app first)"
   echo "  needs:                  Claude Code installed and logged in (claude --version)"
 fi
 
@@ -288,10 +288,12 @@ fi
 # Manual E2E walkthrough — claude-agent:
 #   1. scripts/dev-install-plugin.sh claude-agent
 #   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev   (with a Vault configured)
-#   3. Plugins ▸ "Claude Agent…" (also on the Window menu) → the window opens
-#      with two tasks in the left column (selfcheck / annotation-sweep), seeded
-#      on first activation into <vault>/.notemd/agent-tasks/. The vault's
-#      .gitignore gains .notemd/agent-runs/ and the settings.local.json line.
+#   3. Plugins ▸ "Claude Agent…" → the window opens with two tasks in the left
+#      column (selfcheck / annotation-sweep), seeded on first activation into
+#      <vault>/.notemd/agent-tasks/. The vault's .gitignore gains
+#      .notemd/agent-runs/ and the settings.local.json line.
+#      NOTE the menu is built at startup and the manifest is read then, so an
+#      already-running app shows nothing — restart after installing.
 #   4. Pick selfcheck → Run → tool calls and text stream in live; the footer
 #      turns terminal. A record appears at
 #      <vault>/.notemd/agent-runs/selfcheck/runs/*.json and in "Recent runs".

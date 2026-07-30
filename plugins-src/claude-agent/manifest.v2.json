@@ -22,11 +22,6 @@
         "location": "plugins",
         "label": "Claude Agent…",
         "command": "open"
-      },
-      {
-        "location": "window",
-        "label": "Claude Agent…",
-        "command": "open"
       }
     ],
     "windows": [
@@ -45,10 +40,27 @@
       {
         "subcommand": "agent",
         "command": "run",
-        "args": [{ "name": "task", "ty": "string", "required": true }],
+        "summary": "Run a Claude Agent task headlessly",
+        "args": [
+          {
+            "name": "task",
+            "type": "string",
+            "required": true,
+            "help": "Task id — a directory under .notemd/agent-tasks/"
+          }
+        ],
         "flags": [
-          { "long": "--prompt", "short": "-p" },
-          { "long": "--wait" }
+          {
+            "long": "--prompt",
+            "short": "-p",
+            "type": "string",
+            "help": "Extra prompt appended to the task's own"
+          },
+          {
+            "long": "--wait",
+            "type": "boolean",
+            "help": "Run inline and wait for the result (max 300s) instead of detaching"
+          }
         ]
       }
     ]

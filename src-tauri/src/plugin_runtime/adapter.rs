@@ -63,6 +63,54 @@ mod tests {
     use super::*;
     use crate::plugin_host::PluginKind;
 
+    /// Every shipped manifest must survive v1 adaptation. When one doesn't,
+    /// `adapted_v2_manifests` drops that plugin with nothing but an eprintln —
+    /// so the whole plugin, menus and windows included, silently vanishes. A
+    /// missing `summary`, or `"ty"` where the v1 shape renames it to `"type"`,
+    /// is enough to do it. Catch that here instead of in the running app.
+    #[test]
+    fn shipped_plugin_manifests_survive_v1_adaptation() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins-src");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&root).expect("plugins-src is readable") {
+            let path = entry.unwrap().path().join("manifest.v2.json");
+            if !path.exists() {
+                continue;
+            }
+            let body = std::fs::read_to_string(&path).unwrap();
+            let m: plugin_protocol::ManifestV2 = serde_json::from_str(&body)
+                .unwrap_or_else(|e| panic!("{}: does not parse as a v2 manifest: {e}", path.display()));
+            to_v1(&m).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            checked += 1;
+        }
+        assert!(checked >= 4, "expected several plugin manifests, found {checked}");
+    }
+
+    /// Two menu entries sharing a command collapse to ONE native menu id
+    /// (`plugin:<id>:<command>`, menu-registry.ts), so a plugin must not
+    /// contribute the same command twice.
+    #[test]
+    fn shipped_plugins_do_not_contribute_a_command_twice() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins-src");
+        for entry in std::fs::read_dir(&root).expect("plugins-src is readable") {
+            let path = entry.unwrap().path().join("manifest.v2.json");
+            if !path.exists() {
+                continue;
+            }
+            let m: plugin_protocol::ManifestV2 =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let mut seen = std::collections::HashSet::new();
+            for menu in &m.contributes.menus {
+                let cmd = menu.get("command").and_then(|c| c.as_str()).unwrap_or("");
+                assert!(
+                    seen.insert(cmd.to_string()),
+                    "{}: command '{cmd}' is contributed by two menu entries",
+                    path.display()
+                );
+            }
+        }
+    }
+
     /// Full-featured sample in the md2pdf shape (plan Task 11 Step 3) plus
     /// context_menus / settings / i18n to exercise every passthrough.
     fn sample() -> plugin_protocol::ManifestV2 {
