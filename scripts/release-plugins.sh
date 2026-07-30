@@ -2,7 +2,8 @@
 # Package + sign v2 plugins for the marketplace (子项目③ Task 5).
 #
 #   scripts/release-plugins.sh [--release] <plugin...>
-#     plugin ∈ { md2pdf, roam-import, openclaw, exlibris, pos-log }   (extensible: add a case below)
+#     plugin ∈ { md2pdf, roam-import, openclaw, exlibris, pos-log,
+#                decision-log, weekly-review, claude-agent }   (add a case below)
 #     --release  currently a no-op flag reserved for build-profile parity with
 #                dev-install-plugin.sh; the release builds below are always
 #                release-profile.
@@ -40,14 +41,14 @@ PLUGINS=()
 for arg in "$@"; do
   case "$arg" in
     --release) : ;; # reserved; release builds are always release-profile
-    md2pdf|roam-import|openclaw|exlibris|pos-log|decision-log|weekly-review) PLUGINS+=("$arg") ;;
+    md2pdf|roam-import|openclaw|exlibris|pos-log|decision-log|weekly-review|claude-agent) PLUGINS+=("$arg") ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | exlibris | pos-log | decision-log | weekly-review)" >&2; exit 2 ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | exlibris | pos-log | decision-log | weekly-review | claude-agent)" >&2; exit 2 ;;
   esac
 done
 if [[ ${#PLUGINS[@]} -eq 0 ]]; then
-  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|exlibris|pos-log|decision-log|weekly-review>..." >&2
+  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|exlibris|pos-log|decision-log|weekly-review|claude-agent>..." >&2
   exit 2
 fi
 
@@ -282,6 +283,11 @@ release_openclaw() {
     "notemd-openclaw" "openclaw-plugin"
 }
 
+release_claude_agent() {
+  release_native_ui "notemd.claude-agent" "$REPO_ROOT/plugins-src/claude-agent" \
+    "notemd-claude-agent" "claude-agent"
+}
+
 release_exlibris() {
   release_native_ui "notemd.exlibris" "$REPO_ROOT/plugins-src/exlibris" \
     "notemd-exlibris" "exlibris-plugin"
@@ -349,6 +355,7 @@ for plugin in "${PLUGINS[@]}"; do
     pos-log)     release_pos_log ;;
     decision-log) release_decision_log ;;
     weekly-review) release_weekly_review ;;
+    claude-agent) release_claude_agent ;;
   esac
 done
 
