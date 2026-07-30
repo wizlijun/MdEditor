@@ -71,40 +71,54 @@
 </script>
 
 {#if available}
-  <section class="agent" aria-label={t('agent.title')}>
-    <span class="title">{t('agent.title')}</span>
+  <section class="agents" aria-label={t('agent.title')}>
+    <!-- A heading of its own, because this becomes a list: one row per task
+         the enabled agent plugins offer for the current note. -->
+    <h3>{t('agent.title')}</h3>
 
-    <span class="line" class:bad={agentRun.phase === 'error'} title={tip}>
-      {#if busy && mine}<span class="spinner" aria-hidden="true"></span>{/if}
-      {line}
-    </span>
+    <div class="row">
+      <span class="line" class:bad={agentRun.phase === 'error'} title={tip}>
+        {#if busy && mine}<span class="spinner" aria-hidden="true"></span>{/if}
+        {line}
+      </span>
 
-    {#if busy}
-      <span class="elapsed">{t('agent.elapsed', { s: elapsed })}</span>
-    {:else}
-      <button
-        class="run"
-        disabled={!notePath}
-        title={notePath ?? t('agent.noNote')}
-        onclick={() => notePath && void startNoteRun(notePath, onfinished)}
-      >
-        {t('agent.answerQuestions')}
-      </button>
-    {/if}
+      {#if busy}
+        <span class="elapsed">{t('agent.elapsed', { s: elapsed })}</span>
+      {:else}
+        <button
+          class="run"
+          disabled={!notePath}
+          title={notePath ?? t('agent.noNote')}
+          onclick={() => notePath && void startNoteRun(notePath, onfinished)}
+        >
+          {t('agent.answerQuestions')}
+        </button>
+      {/if}
+    </div>
   </section>
 {/if}
 
 <style>
-  .agent {
+  .agents {
     flex: none;
+    padding: 5px 12px 7px;
+    border-top: 1px solid var(--border-color, #3333);
+  }
+  h3 {
+    margin: 0 0 3px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.45;
+  }
+  .row {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 12px;
     font-size: 12px;
-    border-top: 1px solid var(--border-color, #3333);
+    min-height: 22px;
   }
-  .title { flex: none; font-weight: 600; opacity: 0.7; }
   .line {
     flex: 1;
     min-width: 0;

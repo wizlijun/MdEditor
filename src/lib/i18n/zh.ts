@@ -407,7 +407,7 @@ export const zh: Record<keyof Messages, string> = {
   'time.daysAgo': '{n} 天前',
 
   // Outline Notes
-  'agent.title': 'Agent 工作区',
+  'agent.title': 'Agents',
   'agent.answerQuestions': '回答',
   'agent.hint': '交给 Claude headless CLI 回答问题。',
   'agent.starting': '正在启动…',

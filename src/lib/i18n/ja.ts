@@ -375,7 +375,7 @@ export const ja: Record<keyof Messages, string> = {
   'time.daysAgo': '{n} 日前',
 
   // Outline Notes
-  'agent.title': 'Agent ワークスペース',
+  'agent.title': 'Agents',
   'agent.answerQuestions': '回答',
   'agent.hint': 'Claude headless CLI に回答させます。',
   'agent.starting': '起動中…',

@@ -373,7 +373,7 @@ export const de: Record<keyof Messages, string> = {
   'time.daysAgo': 'Vor {n} Tagen',
 
   // Outline Notes
-  'agent.title': 'Agent-Arbeitsbereich',
+  'agent.title': 'Agents',
   'agent.answerQuestions': 'Antworten',
   'agent.hint': 'Vom Claude headless CLI beantworten lassen.',
   'agent.starting': 'Startet…',

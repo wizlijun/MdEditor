@@ -380,7 +380,7 @@ export const en = {
   'time.daysAgo': '{n} d ago',
 
   // Outline Notes
-  'agent.title': 'Agent workspace',
+  'agent.title': 'Agents',
   'agent.answerQuestions': 'Answer',
   'agent.hint': 'Let the Claude headless CLI answer them.',
   'agent.starting': 'Starting…',
