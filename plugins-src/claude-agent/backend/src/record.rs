@@ -30,6 +30,10 @@ pub struct RunRecord {
     pub session_id: Option<String>,
     pub result: String,
     pub stderr_tail: String,
+    /// Vault-relative markdown a run produced, for `host.editor.open`. Default
+    /// keeps records written before this field readable.
+    #[serde(default)]
+    pub artifacts: Vec<String>,
 }
 
 pub fn runs_dir(task_run_dir: &Path) -> PathBuf {
@@ -118,6 +122,7 @@ mod tests {
             session_id: None,
             result: "ok".into(),
             stderr_tail: String::new(),
+            artifacts: Vec::new(),
         }
     }
 

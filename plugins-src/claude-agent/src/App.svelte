@@ -12,6 +12,7 @@
   import TaskList from './components/TaskList.svelte'
   import RunStream from './components/RunStream.svelte'
   import HistoryList from './components/HistoryList.svelte'
+  import ArtifactLinks from './components/ArtifactLinks.svelte'
 
   const locale = bridge().locale
   const tr = (k: string, v?: Record<string, string | number>) => t(locale, k, v)
@@ -163,6 +164,8 @@
     </header>
 
     <RunStream items={view.items} />
+
+    <ArtifactLinks paths={view.artifacts} label={tr} />
 
     <footer>
       {#if error}

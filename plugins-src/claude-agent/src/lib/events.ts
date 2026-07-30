@@ -19,10 +19,12 @@ export interface RunView {
   items: Item[]
   turns?: number
   result?: string
+  /** Vault-relative markdown the finished run produced. */
+  artifacts: string[]
 }
 
 export function emptyView(): RunView {
-  return { runId: null, status: 'idle', items: [] }
+  return { runId: null, status: 'idle', items: [], artifacts: [] }
 }
 
 /** One row of `runs/<runId>.json`, as the backend serializes it. */
@@ -36,6 +38,8 @@ export interface RunRecord {
   num_turns?: number | null
   result: string
   stderr_tail: string
+  /** Vault-relative markdown this run produced; opens in an editor tab. */
+  artifacts?: string[]
 }
 
 /** A task template plus its live state (`tasks.list`). */
@@ -61,7 +65,7 @@ export type HostMessage =
   | {
       kind: 'done'
       run_id: string
-      record: { status: Status; num_turns?: number; result?: string }
+      record: { status: Status; num_turns?: number; result?: string; artifacts?: string[] }
     }
   | { kind: 'busy'; run_id: string; holder: unknown }
 
@@ -78,6 +82,7 @@ export function reduce(view: RunView, msg: HostMessage): RunView {
       status: msg.record.status,
       turns: msg.record.num_turns,
       result: msg.record.result,
+      artifacts: msg.record.artifacts ?? [],
     }
   }
 

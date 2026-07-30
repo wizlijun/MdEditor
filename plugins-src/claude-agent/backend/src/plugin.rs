@@ -511,6 +511,7 @@ mod tests {
                 session_id: None,
                 result: "ok".into(),
                 stderr_tail: String::new(),
+                artifacts: Vec::new(),
             },
         )
         .unwrap();

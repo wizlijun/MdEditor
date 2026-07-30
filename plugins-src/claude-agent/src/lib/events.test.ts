@@ -46,6 +46,24 @@ describe('run view reducer', () => {
     expect(v.result).toBe('done')
   })
 
+  it('surfaces the markdown a run produced', () => {
+    const v = reduce(running(), {
+      kind: 'done',
+      run_id: 'r1',
+      record: { status: 'success', result: 'ok', artifacts: ['answers/a.md'] },
+    })
+    expect(v.artifacts).toEqual(['answers/a.md'])
+  })
+
+  it('has no artifacts when the run produced none', () => {
+    const v = reduce(running(), {
+      kind: 'done',
+      run_id: 'r1',
+      record: { status: 'success', result: 'ok' },
+    })
+    expect(v.artifacts).toEqual([])
+  })
+
   it('carries a failure through to the view', () => {
     const v = reduce(running(), {
       kind: 'done',

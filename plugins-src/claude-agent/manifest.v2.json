@@ -79,6 +79,6 @@
       "menus": { "open": "Claude Agent…" }
     }
   },
-  "capabilities": ["ui", "toast", "vault.read"],
+  "capabilities": ["ui", "toast", "vault.read", "editor.open"],
   "request_timeout_seconds": 300
 }

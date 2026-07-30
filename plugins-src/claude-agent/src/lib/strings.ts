@@ -3,6 +3,7 @@
 type Dict = Record<string, string>
 
 const en: Dict = {
+  'artifacts.label': 'Opens:',
   'history.all': 'All tasks',
   'history.thisTask': 'This task',
   'history.emptyAll': 'No task has run yet.',
@@ -25,6 +26,7 @@ const en: Dict = {
 }
 
 const zh: Dict = {
+  'artifacts.label': '产物:',
   'history.all': '全部任务',
   'history.thisTask': '当前任务',
   'history.emptyAll': '还没有任何任务跑过。',
@@ -47,6 +49,7 @@ const zh: Dict = {
 }
 
 const ja: Dict = {
+  'artifacts.label': '成果物:',
   'history.all': 'すべてのタスク',
   'history.thisTask': 'このタスク',
   'history.emptyAll': 'まだどのタスクも実行されていません。',
@@ -69,6 +72,7 @@ const ja: Dict = {
 }
 
 const de: Dict = {
+  'artifacts.label': 'Ergebnis:',
   'history.all': 'Alle Aufgaben',
   'history.thisTask': 'Diese Aufgabe',
   'history.emptyAll': 'Noch keine Aufgabe gelaufen.',

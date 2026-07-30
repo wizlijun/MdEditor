@@ -1,9 +1,10 @@
 //! The run engine: start claude, pump its stream-json into events, handle
 //! timeout and cancellation. The window path and the detached runner share it —
 //! the only difference is who holds the child process.
-use crate::{lock, prompt, record, settings, stream, task::TaskDef};
+use crate::{artifacts, lock, prompt, record, settings, stream, task::TaskDef};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::SystemTime;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -36,6 +37,10 @@ pub async fn run(
     mut cancel: mpsc::Receiver<()>,
 ) -> Result<(), lock::Busy> {
     let started = chrono::Utc::now();
+    // Wall-clock start, for telling this run's output/ files from an older
+    // run's. Taken before the lock so a file written the instant claude starts
+    // still counts.
+    let started_at = SystemTime::now();
     let _guard = lock::acquire(
         &spec.task_run_dir,
         lock::LockInfo {
@@ -81,6 +86,7 @@ pub async fn run(
                 None,
                 format!("spawn failed: {e}"),
                 String::new(),
+                Vec::new(),
             );
             let _ = record::write(&spec.task_run_dir, &rec);
             let _ = tx.send(Step::Done(rec));
@@ -138,6 +144,8 @@ pub async fn run(
         (_, Some(0)) => record::Status::Success,
         _ => record::Status::Error,
     });
+    let result_text = final_result.as_ref().map(|r| r.result.clone()).unwrap_or_default();
+    let found = artifacts::collect(&spec.vault, &spec.task_dir, &result_text, started_at);
     let rec = finish(
         &spec,
         started,
@@ -146,6 +154,7 @@ pub async fn run(
         final_result,
         String::new(),
         stderr_tail,
+        found,
     );
     let _ = record::write(&spec.task_run_dir, &rec);
     let _ = tx.send(Step::Done(rec));
@@ -168,6 +177,7 @@ fn finish(
     result: Option<stream::RunResult>,
     fallback_err: String,
     stderr_tail: String,
+    artifacts: Vec<String>,
 ) -> record::RunRecord {
     // A spawn failure has no stream and no stderr — carry its message in both
     // fields so neither the window nor the record comes up blank.
@@ -191,6 +201,7 @@ fn finish(
             record::RESULT_LIMIT,
         ),
         stderr_tail,
+        artifacts,
     }
 }
 
@@ -275,6 +286,40 @@ mod tests {
         let run_dir = s.task_run_dir.clone();
         drive(s).await;
         assert_eq!(record::recent(&run_dir, 5).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_run_reports_the_markdown_it_produced() {
+        let d = tempfile::tempdir().unwrap();
+        // The fake writes a report into output/ and names another file in its
+        // answer — both are things the window should be able to open.
+        let c = fake_claude(
+            d.path(),
+            "fake-artifacts",
+            concat!(
+                "mkdir -p output && echo '# report' > output/report.md\n",
+                r#"echo '{"type":"result","result":"wrote output/report.md and answers/deep.md","is_error":false}'"#
+            ),
+        );
+        let s = spec(d.path(), c, 30);
+        std::fs::create_dir_all(d.path().join("answers")).unwrap();
+        std::fs::write(d.path().join("answers/deep.md"), "# deep").unwrap();
+        let task_rel = s
+            .task_dir
+            .strip_prefix(d.path())
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        let (_e, rec) = drive(s).await;
+        assert_eq!(rec.status, record::Status::Success);
+        assert_eq!(
+            rec.artifacts,
+            vec![
+                "answers/deep.md".to_string(),
+                format!("{task_rel}/output/report.md"),
+            ]
+        );
     }
 
     #[tokio::test]

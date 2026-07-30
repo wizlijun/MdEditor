@@ -41,6 +41,16 @@ export function request(method: string, params?: unknown): Promise<any> {
   return bridge().request('plugin.' + method, params)
 }
 
+/**
+ * `host.editor.open` — open a vault-relative file in the main editor window.
+ * Note the missing `plugin.` prefix: `host.*` methods are answered by the host
+ * bridge itself. The backend process CANNOT do this — editor.open isn't on the
+ * process channel's dispatch table (host_api.rs:176-183), only the window's.
+ */
+export function openInEditor(path: string): Promise<unknown> {
+  return bridge().request('host.editor.open', { path })
+}
+
 /** Subscribe to every backend push (the `host.ui.post` payloads). */
 export function onMessage(cb: (m: any) => void): void {
   bridge().onMessage((payload) => cb(payload))

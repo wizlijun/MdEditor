@@ -3,6 +3,7 @@
 //!    (the host's CLI path runs in a throwaway headless app instance that would
 //!    otherwise kill the child at exit — see runner.rs).
 //!  - no args: the SDK serve loop, as a host-managed resident plugin process.
+mod artifacts;
 mod discover;
 mod engine;
 mod lock;

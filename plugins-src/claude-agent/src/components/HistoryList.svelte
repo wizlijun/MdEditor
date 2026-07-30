@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { RunRecord } from '../lib/events'
+  import ArtifactLinks from './ArtifactLinks.svelte'
 
   let { runs, label, empty, showTask = false }:
     {
@@ -19,11 +20,16 @@
 {:else}
   <ul class="history">
     {#each runs as run (run.run_id)}
-      <li title={run.result || run.stderr_tail}>
-        <span class="status s-{run.status}">{label('status.' + run.status)}</span>
-        {#if showTask}<span class="task">{run.task}</span>{/if}
-        <span class="when">{when(run.started_at)}</span>
-        {#if run.trigger === 'cli'}<span class="cli">CLI</span>{/if}
+      <li>
+        <div class="row" title={run.result || run.stderr_tail}>
+          <span class="status s-{run.status}">{label('status.' + run.status)}</span>
+          {#if showTask}<span class="task">{run.task}</span>{/if}
+          <span class="when">{when(run.started_at)}</span>
+          {#if run.trigger === 'cli'}<span class="cli">CLI</span>{/if}
+        </div>
+        <!-- A past run's markdown stays one click away, including runs the CLI
+             started while this window wasn't even open. -->
+        <ArtifactLinks paths={run.artifacts ?? []} {label} oncompact />
       </li>
     {/each}
   </ul>
@@ -31,7 +37,8 @@
 
 <style>
   .history { list-style: none; margin: 0; padding: 0; font-size: 11px; }
-  li { display: flex; gap: 6px; padding: 3px 0; align-items: baseline; }
+  li { padding: 3px 0; }
+  .row { display: flex; gap: 6px; align-items: baseline; }
   .status { font-weight: 600; flex: none; }
   .s-error, .s-timeout { color: #d9534f; }
   .task {
