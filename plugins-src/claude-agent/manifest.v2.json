@@ -14,7 +14,13 @@
   },
   "ui": "ui/",
   "activation": {
-    "events": ["onCommand:open", "onCommand:run", "onCli:agent"]
+    "events": [
+      "onCommand:open",
+      "onCommand:run",
+      "onCommand:run-note",
+      "onCommand:run-status",
+      "onCli:agent"
+    ]
   },
   "contributes": {
     "menus": [
@@ -68,17 +74,28 @@
   "i18n": {
     "zh": {
       "name": "Claude 智能体",
-      "menus": { "open": "Claude 智能体…" }
+      "menus": {
+        "open": "Claude 智能体…"
+      }
     },
     "ja": {
       "name": "Claude エージェント",
-      "menus": { "open": "Claude エージェント…" }
+      "menus": {
+        "open": "Claude エージェント…"
+      }
     },
     "de": {
       "name": "Claude Agent",
-      "menus": { "open": "Claude Agent…" }
+      "menus": {
+        "open": "Claude Agent…"
+      }
     }
   },
-  "capabilities": ["ui", "toast", "vault.read", "editor.open"],
+  "capabilities": [
+    "ui",
+    "toast",
+    "vault.read",
+    "editor.open"
+  ],
   "request_timeout_seconds": 300
 }

@@ -40,6 +40,44 @@ pub fn runs_dir(task_run_dir: &Path) -> PathBuf {
     task_run_dir.join("runs")
 }
 
+/// A live snapshot, rewritten as the run progresses. It exists because progress
+/// has to be visible ACROSS processes: the main window polls it, and the run it
+/// is watching may belong to a detached CLI runner it has no channel to.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Progress {
+    pub run_id: String,
+    /// Assistant turns seen so far — what the run has actually done.
+    pub steps: u64,
+    /// Newest activity, e.g. "Read a.note.md".
+    pub last: String,
+    pub updated_at: String,
+}
+
+pub fn progress_path(task_run_dir: &Path) -> PathBuf {
+    task_run_dir.join("progress.json")
+}
+
+pub fn write_progress(task_run_dir: &Path, p: &Progress) {
+    let _ = std::fs::create_dir_all(task_run_dir);
+    if let Ok(s) = serde_json::to_string(p) {
+        let _ = std::fs::write(progress_path(task_run_dir), s);
+    }
+}
+
+pub fn read_progress(task_run_dir: &Path) -> Option<Progress> {
+    serde_json::from_str(&std::fs::read_to_string(progress_path(task_run_dir)).ok()?).ok()
+}
+
+pub fn clear_progress(task_run_dir: &Path) {
+    let _ = std::fs::remove_file(progress_path(task_run_dir));
+}
+
+/// Find one run's record by id, whichever task it belongs to.
+pub fn find(task_run_dir: &Path, run_id: &str) -> Option<RunRecord> {
+    let p = runs_dir(task_run_dir).join(format!("{run_id}.json"));
+    serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
+}
+
 /// Keep the END of the string — that's where the failure reason lives. Snaps
 /// forward to a char boundary so multi-byte characters never get sliced apart.
 pub fn tail(s: &str, limit: usize) -> String {

@@ -17,6 +17,24 @@ use tokio::sync::mpsc;
 
 const WINDOW: &str = "main";
 const NO_VAULT: &str = "no vault configured";
+/// The task the main window's Agent workspace runs.
+const NOTE_TASK: &str = "answer-note-question";
+
+/// A note's path relative to the vault, for naming it in a prompt. Absolute
+/// paths outside the vault (and traversal) return None — a task must not be
+/// pointed at a file the vault doesn't own.
+fn note_relative_to_vault(vault: &std::path::Path, note_path: &str) -> Option<String> {
+    let root = vault.canonicalize().ok()?;
+    let p = std::path::Path::new(note_path);
+    let abs = if p.is_absolute() {
+        p.canonicalize().ok()?
+    } else {
+        root.join(p).canonicalize().ok()?
+    };
+    let rel = abs.strip_prefix(&root).ok()?;
+    let s = rel.to_string_lossy().to_string();
+    (!s.is_empty()).then_some(s)
+}
 
 #[derive(Default)]
 struct Inner {
@@ -76,7 +94,7 @@ fn overview(vault: &std::path::Path) -> Vec<TaskOverview> {
 /// falls back to (`sotvault/mod.rs:215-232`). Every failure is logged: a
 /// swallowed error here reads to the user as "no vault configured" with no way
 /// to tell why.
-async fn resolve_vault(host: &sdk::Host) -> Option<PathBuf> {
+async fn vault_from_host(host: &sdk::Host) -> Option<PathBuf> {
     for attempt in 1..=3 {
         match host.request("host.vault.info", json!({})).await {
             Ok(v) => {
@@ -93,13 +111,7 @@ async fn resolve_vault(host: &sdk::Host) -> Option<PathBuf> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(700)).await;
     }
-    match shared_config_vault() {
-        Some(p) => {
-            host.log_info(&format!("vault taken from the shared config: {}", p.display()));
-            Some(p)
-        }
-        None => None,
-    }
+    None
 }
 
 fn shared_config_path() -> Option<PathBuf> {
@@ -131,13 +143,26 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
     fn activate(&mut self, host: &sdk::Host, _p: &proto::ActivateParams) -> Result<(), String> {
         let inner = self.inner.clone();
         let host = host.clone();
+
+        // Seed the vault SYNCHRONOUSLY from the shared config — a plain file
+        // read, no host round-trip. `plugin_v2_execute` activates the plugin
+        // and runs the command immediately afterwards, so anything that waits
+        // for the host's answer would have the first command race it and fail
+        // with "no vault configured".
+        let seeded = shared_config_vault();
+        if let Some(root) = &seeded {
+            inner.lock().unwrap().vault = Some(root.clone());
+        }
+
         // MUST be spawned, never awaited inline. The SDK runs activate
         // synchronously ON the protocol read loop, and the response to
         // `host.vault.info` can only be routed BY that loop — awaiting it here
         // deadlocks the plugin until the host's request timeout, which looks
         // like an empty task list and a dead Run button.
         tokio::spawn(async move {
-            let root = resolve_vault(&host).await;
+            // The host is authoritative; the seed only has to hold until it
+            // answers. If it answers with nothing, the seed stands.
+            let root = vault_from_host(&host).await.or(seeded);
             if let Some(root) = &root {
                 // Rename before seeding, or the old and new names would both
                 // end up in the task list.
@@ -155,7 +180,10 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
                 host.log_warn("no vault configured; claude-agent needs one");
             }
             let mut g = inner.lock().unwrap();
-            g.vault = root;
+            // Never clobber a working seed with None.
+            if root.is_some() {
+                g.vault = root;
+            }
             g.vault_checked = true;
         });
         Ok(())
@@ -187,6 +215,10 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
                 host.log_info(&format!("cli context: {}", params.context));
                 self.cli_run(host, &params.context)
             }
+            // The main window's Agent workspace: answer the open questions in
+            // ONE note, rather than sweeping the whole vault.
+            "run-note" => self.run_note(host, &params.context),
+            "run-status" => self.run_status(&params.context),
             other => Err(format!("unknown command '{other}'")),
         }
     }
@@ -356,6 +388,69 @@ impl ClaudeAgentPlugin {
         })
     }
 
+    /// Answer the open questions in ONE sidecar note. The main window hands us
+    /// the note's path; we scope the task to it with an extra prompt paragraph
+    /// rather than a second template, so the protocol stays in one place.
+    fn run_note(&mut self, host: &sdk::Host, context: &Value) -> Result<Value, String> {
+        let vault = self.vault()?;
+        let note_path = context
+            .get("note_path")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or("run-note needs a 'note_path'")?;
+        let task_id = context
+            .get("task")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(NOTE_TASK);
+
+        let rel = note_relative_to_vault(&vault, note_path)
+            .ok_or_else(|| format!("note is outside the vault: {note_path}"))?;
+        let prompt = format!(
+            "本次只处理这一个文件:`{rel}`。\n\
+             只回答该文件里 `status:: open` 的问题,不要扫描 vault 中的其它文件。\n\
+             该文件里没有待答问题时,直接报告「无待答问题」并结束。"
+        );
+        host.log_info(&format!("run-note {task_id} on {rel}"));
+        self.start(
+            host,
+            json!({ "task": task_id, "prompt": prompt, "use_context": false }),
+            "note",
+        )
+    }
+
+    /// Where a run stands, for the window's progress display. Reads the lock,
+    /// the progress snapshot and the record — all on disk, so a run started by
+    /// another process reports just as accurately as one we started.
+    fn run_status(&self, context: &Value) -> Result<Value, String> {
+        let vault = self.vault()?;
+        let task_id = context
+            .get("task")
+            .and_then(|v| v.as_str())
+            .unwrap_or(NOTE_TASK);
+        let run_id = context
+            .get("run_id")
+            .and_then(|v| v.as_str())
+            .ok_or("run-status needs a 'run_id'")?;
+        let run_dir = task::runs_root(&vault).join(task_id);
+
+        if let Some(rec) = record::find(&run_dir, run_id) {
+            return Ok(json!({ "state": "done", "record": rec }));
+        }
+        let held = lock::current(&run_dir).filter(|h| h.run_id == run_id);
+        if let Some(h) = held {
+            let p = record::read_progress(&run_dir).filter(|p| p.run_id == run_id);
+            return Ok(json!({
+                "state": "running",
+                "started_at": h.started_at,
+                "steps": p.as_ref().map(|p| p.steps).unwrap_or(0),
+                "last": p.map(|p| p.last).unwrap_or_default(),
+            }));
+        }
+        // No record and no live lock: the process died without writing one.
+        Ok(json!({ "state": "lost" }))
+    }
+
     /// The CLI entry point. Detached by default; `--wait` runs inline.
     fn cli_run(&mut self, host: &sdk::Host, context: &Value) -> Result<Value, String> {
         let task_id = cli_str(context, "task")
@@ -412,6 +507,90 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+    /// NOTEMD_SHARED_CONFIG is process-global, so the tests that set it have to
+    /// take turns.
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Read a line from the plugin until one satisfies `want`, or time out.
+    async fn await_response(
+        from_plugin: tokio::io::DuplexStream,
+        want: impl Fn(&Value) -> bool,
+        whose: &str,
+    ) -> Value {
+        let mut lines = BufReader::new(from_plugin).lines();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                    if want(&v) {
+                        return v;
+                    }
+                }
+            }
+            panic!("the plugin closed its stdout without answering {whose}");
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{whose} went unanswered"))
+    }
+
+    /// `plugin_v2_execute` activates the plugin and runs the command right
+    /// after, so a command must NOT have to wait for the host's vault answer.
+    /// Here the host never answers `host.vault.info`; `run-status` must still
+    /// resolve the vault (from the shared config) instead of failing with
+    /// "no vault configured".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_command_right_after_activation_already_has_a_vault() {
+        let _env = env_guard();
+        let vault = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap().path().join("config.json");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cfg,
+            format!(r#"{{"version":1,"sotvault":"{}"}}"#, vault.path().display()),
+        )
+        .unwrap();
+        std::env::set_var("NOTEMD_SHARED_CONFIG", &cfg);
+
+        let (mut to_plugin, plugin_stdin) = tokio::io::duplex(16 * 1024);
+        let (plugin_stdout, from_plugin) = tokio::io::duplex(16 * 1024);
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(sdk::serve_io(
+                    ClaudeAgentPlugin::new(),
+                    plugin_stdin,
+                    plugin_stdout,
+                ));
+        });
+
+        to_plugin
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:run-status\"}}\n\
+                  {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"command.execute\",\"params\":{\"command\":\"run-status\",\"context\":{\"run_id\":\"R1\"}}}\n",
+            )
+            .await
+            .unwrap();
+
+        let answered = await_response(
+            from_plugin,
+            |v| v.get("id").and_then(|i| i.as_u64()) == Some(2),
+            "run-status",
+        )
+        .await;
+        assert!(
+            answered.get("error").is_none(),
+            "run-status failed right after activation: {answered}"
+        );
+        // No such run yet — but the vault resolved, which is the point.
+        assert_eq!(answered["result"]["state"], "lost");
+        std::env::remove_var("NOTEMD_SHARED_CONFIG");
+    }
+
     /// The protocol loop must stay responsive while the vault lookup is in
     /// flight. The SDK dispatches `$activate` synchronously ON the read loop,
     /// and a `host.*` response can only be routed BY that loop — so awaiting
@@ -421,9 +600,10 @@ mod tests {
     /// `tasks.list` must still come back.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn activate_never_blocks_the_protocol_loop() {
-        // This drives the REAL plugin, whose vault fallback would otherwise
-        // read the developer's own shared config and seed templates into their
-        // live vault.
+        // This drives the REAL plugin, whose shared-config seed would otherwise
+        // read the developer's own config and seed templates into their live
+        // vault. `_env` serializes the tests that set this global.
+        let _env = env_guard();
         std::env::set_var("NOTEMD_SHARED_CONFIG", "/nonexistent/claude-agent-test.json");
 
         let (mut to_plugin, plugin_stdin) = tokio::io::duplex(16 * 1024);
@@ -552,6 +732,101 @@ mod tests {
         assert_eq!(first["id"], "answer-note-question");
         assert!(first["name"].is_string());
         assert_eq!(first["running"], false);
+    }
+
+    #[test]
+    fn a_note_inside_the_vault_resolves_to_a_relative_path() {
+        let v = tempfile::tempdir().unwrap();
+        let note = v.path().join("docs/a.note.md");
+        std::fs::create_dir_all(note.parent().unwrap()).unwrap();
+        std::fs::write(&note, "x").unwrap();
+        assert_eq!(
+            note_relative_to_vault(v.path(), note.to_str().unwrap()).as_deref(),
+            Some("docs/a.note.md")
+        );
+        assert_eq!(
+            note_relative_to_vault(v.path(), "docs/a.note.md").as_deref(),
+            Some("docs/a.note.md")
+        );
+    }
+
+    #[test]
+    fn a_note_outside_the_vault_is_refused() {
+        let v = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let note = outside.path().join("secret.note.md");
+        std::fs::write(&note, "x").unwrap();
+        assert_eq!(note_relative_to_vault(v.path(), note.to_str().unwrap()), None);
+        assert_eq!(note_relative_to_vault(v.path(), "../escape.note.md"), None);
+        assert_eq!(note_relative_to_vault(v.path(), "gone.note.md"), None);
+    }
+
+    #[test]
+    fn run_status_reports_running_then_done() {
+        let v = tempfile::tempdir().unwrap();
+        let p = ClaudeAgentPlugin::new();
+        p.inner.lock().unwrap().vault = Some(v.path().to_path_buf());
+        let run_dir = task::runs_root(v.path()).join(NOTE_TASK);
+        let ctx = json!({ "task": NOTE_TASK, "run_id": "R1" });
+
+        // Nothing on disk yet: the run is unaccounted for, not "running".
+        assert_eq!(p.run_status(&ctx).unwrap()["state"], "lost");
+
+        // A live lock plus a snapshot: running, with what it's doing.
+        let _held = lock::acquire(
+            &run_dir,
+            lock::LockInfo {
+                pid: std::process::id() as i32,
+                run_id: "R1".into(),
+                started_at: "2026-07-31T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        record::write_progress(
+            &run_dir,
+            &record::Progress {
+                run_id: "R1".into(),
+                steps: 3,
+                last: "Read a.note.md".into(),
+                updated_at: "2026-07-31T00:00:03Z".into(),
+            },
+        );
+        let running = p.run_status(&ctx).unwrap();
+        assert_eq!(running["state"], "running");
+        assert_eq!(running["steps"], 3);
+        assert_eq!(running["last"], "Read a.note.md");
+
+        // Once the record lands it wins, lock or no lock.
+        record::write(
+            &run_dir,
+            &record::RunRecord {
+                run_id: "R1".into(),
+                task: NOTE_TASK.into(),
+                trigger: "note".into(),
+                started_at: "s".into(),
+                ended_at: "e".into(),
+                status: record::Status::Success,
+                exit_code: Some(0),
+                num_turns: Some(4),
+                session_id: None,
+                result: "answered 2".into(),
+                stderr_tail: String::new(),
+                artifacts: vec!["answers/a.md".into()],
+            },
+        )
+        .unwrap();
+        let done = p.run_status(&ctx).unwrap();
+        assert_eq!(done["state"], "done");
+        assert_eq!(done["record"]["result"], "answered 2");
+        assert_eq!(done["record"]["artifacts"][0], "answers/a.md");
+    }
+
+    #[test]
+    fn run_status_needs_a_run_id() {
+        let v = tempfile::tempdir().unwrap();
+        let p = ClaudeAgentPlugin::new();
+        p.inner.lock().unwrap().vault = Some(v.path().to_path_buf());
+        assert!(p.run_status(&json!({ "task": NOTE_TASK })).is_err());
     }
 
     #[test]

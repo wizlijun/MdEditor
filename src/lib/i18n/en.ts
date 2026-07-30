@@ -380,6 +380,18 @@ export const en = {
   'time.daysAgo': '{n} d ago',
 
   // Outline Notes
+  'agent.title': 'Agent workspace',
+  'agent.answerQuestions': 'Answer open questions',
+  'agent.hint': 'Hands this note to Claude Agent, which answers the questions still open in it.',
+  'agent.starting': 'Starting…',
+  'agent.running': 'Working…',
+  'agent.steps': '{n} steps',
+  'agent.locked': 'The note is read-only while the agent works.',
+  'agent.doneSuccess': 'Done',
+  'agent.doneError': 'Failed',
+  'agent.dismiss': 'Dismiss',
+  'agent.noNote': 'This document has no sidecar note.',
+  'agent.elapsed': '{s}s',
   'outline.title': 'Sidecar Notes',
   'outline.editNote': 'Edit note',
   'outline.openMarkdown': 'Open as Markdown',

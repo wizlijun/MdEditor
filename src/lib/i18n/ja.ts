@@ -375,6 +375,18 @@ export const ja: Record<keyof Messages, string> = {
   'time.daysAgo': '{n} 日前',
 
   // Outline Notes
+  'agent.title': 'Agent ワークスペース',
+  'agent.answerQuestions': '未回答の質問に答える',
+  'agent.hint': 'このサイドノートを Claude Agent に渡し、open の質問に回答させます。',
+  'agent.starting': '起動中…',
+  'agent.running': '作業中…',
+  'agent.steps': '{n} ステップ',
+  'agent.locked': 'エージェントの作業中、サイドノートは編集できません。',
+  'agent.doneSuccess': '完了',
+  'agent.doneError': '失敗',
+  'agent.dismiss': '閉じる',
+  'agent.noNote': 'この文書にはサイドノートがありません。',
+  'agent.elapsed': '{s} 秒',
   'outline.title': 'サイドノート',
   'outline.editNote': 'ノートを編集',
   'outline.openMarkdown': 'Markdown で開く',

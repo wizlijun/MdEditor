@@ -7,6 +7,8 @@
   import { openFile, setMode, closeTab, tabs } from '../../lib/tabs.svelte'
   import OutlineEditor from './OutlineEditor.svelte'
   import SideViewSwitcher from '../side-panel/SideViewSwitcher.svelte'
+  import AgentWorkspace from './AgentWorkspace.svelte'
+  import { isAgentBusy } from '../../lib/agent-workspace/store.svelte'
 
   let { tab }: { tab: Tab | null } = $props()
 
@@ -66,6 +68,27 @@
     resetTick++
   }
 
+  // While the agent rewrites this note, the outline must not be edited — its
+  // in-memory tree would be written back over the agent's work.
+  const agentBusy = $derived(isAgentBusy())
+
+  /**
+   * After a run: re-read the note from disk (remounting OutlineEditor re-reads
+   * it) and, when the tab has no unsaved edits of its own, the source document
+   * too. A dirty tab is left alone — the user's typing outranks a refresh.
+   */
+  async function refreshAfterAgent() {
+    resetTick++
+    const path = tab?.filePath
+    if (!path) return
+    const dirty = tab != null && tab.currentContent !== tab.initialContent
+    if (dirty) return
+    const { reloadTabFromDisk } = await import('../../lib/tabs.svelte')
+    await reloadTabFromDisk(path).catch((e) =>
+      console.warn('[agent] reloading the source document failed:', e),
+    )
+  }
+
   function onWindowMouseDown(e: MouseEvent) {
     if (!menu.open) return
     const target = e.target as HTMLElement | null
@@ -100,11 +123,16 @@
       <p class="empty">{tab == null ? t('outline.noDocument') : t('outline.notApplicable')}</p>
     </div>
   {:else}
-    <!-- 全功能大纲编辑器：与主编辑器双向同步（keyed 换文档/删除后整体重挂） -->
-    {#key `${tab!.id}:${resetTick}`}
-      <OutlineEditor mainTab={tab} />
-    {/key}
+    <!-- 全功能大纲编辑器：与主编辑器双向同步（keyed 换文档/删除后整体重挂）。
+         agent 工作期间整块 inert：焦点、点击、键盘一律进不来，不必逐个审查
+         编辑器内部的交互入口。 -->
+    <div class="editor-host" inert={agentBusy}>
+      {#key `${tab!.id}:${resetTick}`}
+        <OutlineEditor mainTab={tab} />
+      {/key}
+    </div>
   {/if}
+  <AgentWorkspace notePath={companionPath} onfinished={refreshAfterAgent} />
 </div>
 
 {#if menu.open}
@@ -139,6 +167,9 @@
   .hbtn:hover:not(:disabled) { background: rgba(0,0,0,0.08); opacity: 1; }
   .hbtn:disabled { opacity: 0.25; cursor: default; }
   .body { flex: 1; overflow-y: auto; padding: 8px; }
+  /* Holds the editor's flex share so the agent workspace sits under it. */
+  .editor-host { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .editor-host[inert] { opacity: 0.55; }
   .empty { opacity: 0.5; font-size: 12px; }
   /* Chrome + accent hover 来自全局 .menu-panel / .menu-row(见 app.css);
      这里只保留定位、button 复位、以及 delete 行的红色 hover 覆盖。 */

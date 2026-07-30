@@ -115,6 +115,13 @@ pub async fn run(
     });
 
     let mut final_result: Option<stream::RunResult> = None;
+    let mut progress = record::Progress {
+        run_id: spec.run_id.clone(),
+        steps: 0,
+        last: String::new(),
+        updated_at: started.to_rfc3339(),
+    };
+    record::write_progress(&spec.task_run_dir, &progress);
     let deadline = tokio::time::sleep(std::time::Duration::from_secs(spec.task.timeout_seconds));
     tokio::pin!(deadline);
     let forced = loop {
@@ -122,8 +129,27 @@ pub async fn run(
             line = lines.next_line() => match line {
                 Ok(Some(l)) => {
                     if let Some(ev) = stream::parse_line(&l) {
-                        if let stream::Event::Result(r) = &ev {
-                            final_result = Some(r.clone());
+                        match &ev {
+                            stream::Event::Result(r) => final_result = Some(r.clone()),
+                            // Anyone polling from another process learns what
+                            // this run is doing only through this file.
+                            stream::Event::ToolUse { name, brief } => {
+                                progress.steps += 1;
+                                progress.last = if brief.is_empty() {
+                                    name.clone()
+                                } else {
+                                    format!("{name} {brief}")
+                                };
+                                progress.updated_at = chrono::Utc::now().to_rfc3339();
+                                record::write_progress(&spec.task_run_dir, &progress);
+                            }
+                            stream::Event::Text { text } => {
+                                progress.steps += 1;
+                                progress.last = text.chars().take(80).collect();
+                                progress.updated_at = chrono::Utc::now().to_rfc3339();
+                                record::write_progress(&spec.task_run_dir, &progress);
+                            }
+                            stream::Event::System { .. } => {}
                         }
                         let _ = tx.send(Step::Event(ev));
                     }
@@ -157,6 +183,9 @@ pub async fn run(
         found,
     );
     let _ = record::write(&spec.task_run_dir, &rec);
+    // The record is the answer from here on; a leftover snapshot would read as
+    // a run still in flight.
+    record::clear_progress(&spec.task_run_dir);
     let _ = tx.send(Step::Done(rec));
     Ok(())
 }

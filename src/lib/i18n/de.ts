@@ -373,6 +373,18 @@ export const de: Record<keyof Messages, string> = {
   'time.daysAgo': 'Vor {n} Tagen',
 
   // Outline Notes
+  'agent.title': 'Agent-Arbeitsbereich',
+  'agent.answerQuestions': 'Offene Fragen beantworten',
+  'agent.hint': 'Übergibt diese Randnotiz an Claude Agent, der die offenen Fragen darin beantwortet.',
+  'agent.starting': 'Startet…',
+  'agent.running': 'Arbeitet…',
+  'agent.steps': '{n} Schritte',
+  'agent.locked': 'Während der Agent arbeitet, ist die Randnotiz schreibgeschützt.',
+  'agent.doneSuccess': 'Fertig',
+  'agent.doneError': 'Fehlgeschlagen',
+  'agent.dismiss': 'Schließen',
+  'agent.noNote': 'Dieses Dokument hat keine Randnotiz.',
+  'agent.elapsed': '{s}s',
   'outline.title': 'Randnotizen',
   'outline.editNote': 'Notiz bearbeiten',
   'outline.openMarkdown': 'Als Markdown öffnen',

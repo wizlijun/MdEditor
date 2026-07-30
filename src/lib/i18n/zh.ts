@@ -407,6 +407,18 @@ export const zh: Record<keyof Messages, string> = {
   'time.daysAgo': '{n} 天前',
 
   // Outline Notes
+  'agent.title': 'Agent 工作区',
+  'agent.answerQuestions': '回答待答问题',
+  'agent.hint': '把这篇手记交给 Claude Agent,回答其中 open 状态的问题。',
+  'agent.starting': '正在启动…',
+  'agent.running': '工作中…',
+  'agent.steps': '{n} 步',
+  'agent.locked': 'agent 工作期间,手记暂不可编辑。',
+  'agent.doneSuccess': '完成',
+  'agent.doneError': '失败',
+  'agent.dismiss': '知道了',
+  'agent.noNote': '当前文档没有手记。',
+  'agent.elapsed': '{s} 秒',
   'outline.title': '手记',
   'outline.editNote': '编辑笔记',
   'outline.openMarkdown': '使用 Markdown 打开',
