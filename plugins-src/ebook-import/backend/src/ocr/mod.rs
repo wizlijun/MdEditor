@@ -9,6 +9,7 @@
 //! pdfium FFI binding (which needs a real dylib on disk and is only
 //! exercised on-device).
 
+pub mod baidu;
 pub mod pdfium;
 pub mod wechat;
 
