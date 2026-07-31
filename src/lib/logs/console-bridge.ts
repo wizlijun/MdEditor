@@ -14,6 +14,21 @@ function stringifyArg(a: unknown): string {
   try { return JSON.stringify(a) } catch { return String(a) }
 }
 
+/** Tauri runtime's own IPC-transport chatter. These are emitted by
+ *  tauri's core.js, not by app code. Forwarding them into the log bus is what
+ *  turns a single orphaned-callback condition — after an IPC custom-protocol →
+ *  postMessage fallback ("Load failed") strands a long-lived callback — into a
+ *  tens-of-thousands-of-lines app.log flood: Rust keeps delivering to the dead
+ *  callback id, tauri logs "Couldn't find callback id" for each, and the bridge
+ *  would persist + re-broadcast every one. Still printed to the native console
+ *  (original() runs first); we just don't persist/re-broadcast them. */
+function isTauriTransportNoise(message: string): boolean {
+  return (
+    message.startsWith("[TAURI] Couldn't find callback id") ||
+    message.includes('IPC custom protocol failed')
+  )
+}
+
 let patched = false
 
 /** Idempotent. Patches console.* to also forward into the backend log bus.
@@ -34,6 +49,7 @@ export function installConsoleBridge(): void {
     console[method] = (...args: unknown[]) => {
       original(...args)
       const message = args.map(stringifyArg).join(' ')
+      if (isTauriTransportNoise(message)) return
       void invoke('logs_append_frontend', { level, message }).catch(() => {})
     }
   }

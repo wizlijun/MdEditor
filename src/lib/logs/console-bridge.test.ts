@@ -30,4 +30,19 @@ describe('installConsoleBridge', () => {
     installConsoleBridge()
     expect(() => console.error('kaboom')).not.toThrow()
   })
+
+  it('does not forward tauri IPC-transport noise into the log bus', async () => {
+    vi.resetModules() // fresh module so the idempotent guard lets us re-patch
+    const { installConsoleBridge } = await import('./console-bridge')
+    const original = console.warn
+    installConsoleBridge()
+    // The exact strings tauri's core.js emits; these once flooded app.log.
+    console.warn("[TAURI] Couldn't find callback id 163384778. This might happen when the app is reloaded while Rust is running an asynchronous operation.")
+    console.warn('IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Load failed')
+    expect(invokeMock).not.toHaveBeenCalled()
+    // A normal warn still gets through.
+    console.warn('real app warning')
+    expect(invokeMock).toHaveBeenCalledWith('logs_append_frontend', { level: 'warn', message: 'real app warning' })
+    console.warn = original
+  })
 })
