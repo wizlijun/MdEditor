@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { RunRecord } from '../lib/events'
+  import { fmtShort } from '../lib/datetime'
 
   let { runs, label, empty, showTask = false, selectedId = null, onselect, ondelete, onclear }:
     {
@@ -25,8 +26,8 @@
     menu = null
   }
 
-  // "2026-07-31T00:42:33+00:00" → "07-31 00:42"
-  const when = (iso: string) => iso.slice(5, 16).replace('T', ' ')
+  // "2026-07-31T00:42:33Z" (UTC) → "07-31 08:42" in the user's local timezone
+  const when = fmtShort
 </script>
 
 <svelte:window

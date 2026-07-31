@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { RunRecord } from '../lib/events'
   import ArtifactLinks from './ArtifactLinks.svelte'
+  import { fmtFull } from '../lib/datetime'
 
   let { run, log, label }:
     {
@@ -16,7 +17,7 @@
   <header>
     <span class="status s-{run.status}">{label('status.' + run.status)}</span>
     <span class="task">{run.task}</span>
-    <span class="when">{run.started_at.slice(0, 19).replace('T', ' ')}</span>
+    <span class="when">{fmtFull(run.started_at)}</span>
   </header>
 
   <div class="body">

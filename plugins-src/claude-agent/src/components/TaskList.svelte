@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Task } from '../lib/events'
+  import { fmtShort } from '../lib/datetime'
 
   let { tasks, selected, onselect, label }:
     {
@@ -9,8 +10,8 @@
       label: (k: string, v?: Record<string, string | number>) => string
     } = $props()
 
-  // "2026-07-30T10:42:33+00:00" → "07-30 10:42"
-  const when = (iso: string) => iso.slice(5, 16).replace('T', ' ')
+  // "2026-07-30T10:42:33Z" (UTC) → "07-30 18:42" in the user's local timezone
+  const when = fmtShort
 
   function status(task: Task): { text: string; kind: string } | null {
     if (task.running) return { kind: 'running', text: label('status.running') }
