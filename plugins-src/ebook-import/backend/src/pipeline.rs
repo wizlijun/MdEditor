@@ -13,6 +13,7 @@ use crate::bookconf::{self, BookMeta};
 use crate::calibre;
 use crate::htmlz;
 use crate::ocr::{OcrEngine, OcrProgress};
+use crate::settings::validate_ebooks_root;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -72,6 +73,14 @@ pub fn run_import(
     engine: Option<Box<dyn OcrEngine>>,
     calibre_bin: Option<&str>,
 ) -> Result<PathBuf, String> {
+    // Defense in depth (Finding 4): `apply_vault_patch` already rejects a
+    // bad `ebooks_root` at save time, but `ctx.ebooks_root` here is whatever
+    // `.notemd/ebook-import.json` currently holds on disk -- reachable by a
+    // hand edit, an external agent, or a file written before this guard
+    // existed. An absolute path or a `..` component would otherwise escape
+    // the vault once joined onto `ctx.vault_root` below.
+    validate_ebooks_root(ctx.ebooks_root)?;
+
     std::fs::create_dir_all(ctx.work)
         .map_err(|e| format!("create work dir {}: {e}", ctx.work.display()))?;
     check_cancelled(ctx.cancelled)?;
@@ -375,6 +384,29 @@ mod tests {
             std::fs::read_to_string(dest.join("book.md")).unwrap(),
             std::fs::read_to_string(work.join("input.md")).unwrap()
         );
+    }
+
+    #[test]
+    fn run_import_rejects_an_ebooks_root_that_could_escape_the_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let input = tmp.path().join("book.epub");
+        std::fs::write(&input, "not really an epub").unwrap();
+
+        let mut log = |_: String| {};
+        let mut progress = |_: &str, _: Option<(usize, usize)>| {};
+        let cancelled = AtomicBool::new(false);
+        let mut ctx = PipelineCtx {
+            vault_root: &vault,
+            ebooks_root: "../escape",
+            work: &tmp.path().join("work"),
+            log: &mut log,
+            progress: &mut progress,
+            cancelled: &cancelled,
+        };
+        let err = run_import(&mut ctx, &input, false, None, None).unwrap_err();
+        assert!(err.contains("ebooks_root"), "got: {err}");
     }
 
     #[test]

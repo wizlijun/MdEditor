@@ -840,6 +840,7 @@ dependencies = [
  "chrono",
  "htmd",
  "image",
+ "libc",
  "notemd-plugin-sdk",
  "pdfium-render",
  "quick-xml",

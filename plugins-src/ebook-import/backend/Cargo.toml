@@ -21,6 +21,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 base64 = "0.22"
 pdfium-render = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

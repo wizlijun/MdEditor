@@ -151,10 +151,18 @@ fn cli_flag(context: &Value, key: &str) -> bool {
 /// key, `null`, empty string) leaves the existing value alone — vault
 /// settings have no "clear to empty" semantics, unlike the device secrets
 /// below.
-fn apply_vault_patch(existing: &VaultSettings, patch: &Value) -> VaultSettings {
+///
+/// `ebooks_root` additionally goes through [`settings::validate_ebooks_root`]
+/// (Finding 4): an absolute path, a path containing a `..` component, or an
+/// empty string can escape the vault once `pipeline::run_import` joins it
+/// onto `vault_root`, so a bad value here must be rejected before it's ever
+/// persisted to `.notemd/ebook-import.json` rather than silently written and
+/// only caught later.
+fn apply_vault_patch(existing: &VaultSettings, patch: &Value) -> Result<VaultSettings, String> {
     let mut out = existing.clone();
     if let Some(s) = patch.get("ebooks_root").and_then(|v| v.as_str()) {
         if !s.is_empty() {
+            settings::validate_ebooks_root(s)?;
             out.ebooks_root = s.to_string();
         }
     }
@@ -168,7 +176,7 @@ fn apply_vault_patch(existing: &VaultSettings, patch: &Value) -> VaultSettings {
             out.wechat_url = s.to_string();
         }
     }
-    out
+    Ok(out)
 }
 
 /// A secret-like field's patch value: empty string = leave unchanged,
@@ -496,7 +504,7 @@ impl EbookImportPlugin {
         if let Some(vpatch) = params.get("vault") {
             let vault = self.vault()?;
             let existing = settings::load_vault(&vault);
-            let merged = apply_vault_patch(&existing, vpatch);
+            let merged = apply_vault_patch(&existing, vpatch)?;
             settings::save_vault(&vault, &merged).map_err(|e| e.to_string())?;
         }
         if let Some(dpatch) = params.get("device") {
@@ -662,7 +670,7 @@ mod tests {
             wechat_url: "http://old".into(),
         };
         let patch = json!({ "provider": "baidu" });
-        let merged = apply_vault_patch(&existing, &patch);
+        let merged = apply_vault_patch(&existing, &patch).expect("valid patch must not error");
         assert_eq!(merged.provider, "baidu");
         assert_eq!(merged.ebooks_root, "ssot/ebooks");
         assert_eq!(merged.wechat_url, "http://old");
@@ -672,7 +680,32 @@ mod tests {
     fn vault_patch_empty_string_leaves_field_unchanged() {
         let existing = VaultSettings::default();
         let patch = json!({ "wechat_url": "" });
-        assert_eq!(apply_vault_patch(&existing, &patch).wechat_url, existing.wechat_url);
+        let merged = apply_vault_patch(&existing, &patch).expect("valid patch must not error");
+        assert_eq!(merged.wechat_url, existing.wechat_url);
+    }
+
+    // ── Finding 4: ebooks_root patches that could escape the vault ─────────
+
+    #[test]
+    fn vault_patch_rejects_an_absolute_ebooks_root() {
+        let existing = VaultSettings::default();
+        let patch = json!({ "ebooks_root": "/etc" });
+        assert!(apply_vault_patch(&existing, &patch).is_err());
+    }
+
+    #[test]
+    fn vault_patch_rejects_an_ebooks_root_with_a_parent_dir_component() {
+        let existing = VaultSettings::default();
+        let patch = json!({ "ebooks_root": "../escape" });
+        assert!(apply_vault_patch(&existing, &patch).is_err());
+    }
+
+    #[test]
+    fn vault_patch_accepts_a_vault_relative_ebooks_root() {
+        let existing = VaultSettings::default();
+        let patch = json!({ "ebooks_root": "books/sub" });
+        let merged = apply_vault_patch(&existing, &patch).expect("vault-relative path must be accepted");
+        assert_eq!(merged.ebooks_root, "books/sub");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Component, Path};
 
 fn default_ebooks_root() -> String {
     "ssot/ebooks".to_string()
@@ -73,6 +73,34 @@ pub fn save_vault(vault_root: &Path, settings: &VaultSettings) -> std::io::Resul
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, serde_json::to_string_pretty(settings)?)
+}
+
+/// Rejects an `ebooks_root` that could escape the vault. `pipeline.rs`'s
+/// `run_import` joins it straight onto the vault root
+/// (`vault_root.join(ebooks_root)`); `Path::join` replaces the base
+/// entirely when the joined path is absolute, and a leading `..` component
+/// climbs out of it -- either way the book would land outside the vault
+/// instead of archived inside it. An empty string is also rejected: joined
+/// as-is it resolves to the vault root itself, silently dumping every
+/// import loose into the vault root rather than under a books subfolder.
+///
+/// Called both where `save_settings` merges a fresh value in (`plugin.rs`'s
+/// `apply_vault_patch`, so a bad value from the UI or an external agent is
+/// rejected before it's ever persisted) and again by `run_import` itself
+/// (defense in depth against a bad value that reached
+/// `.notemd/ebook-import.json` some other way, e.g. hand-edited).
+pub fn validate_ebooks_root(root: &str) -> Result<(), String> {
+    if root.is_empty() {
+        return Err("ebooks_root must be a vault-relative path".to_string());
+    }
+    let path = Path::new(root);
+    if path.is_absolute() {
+        return Err("ebooks_root must be a vault-relative path".to_string());
+    }
+    if path.components().any(|c| c == Component::ParentDir) {
+        return Err("ebooks_root must be a vault-relative path".to_string());
+    }
+    Ok(())
 }
 
 pub fn load_device(data_dir: &Path) -> DeviceSettings {
@@ -161,6 +189,31 @@ mod tests {
         assert_eq!(loaded.calibre_path, Some("/usr/bin/ebook-convert".into()));
         assert_eq!(loaded.baidu_api_key, "key");
         assert_eq!(loaded.baidu_secret_key, "secret");
+    }
+
+    // ── validate_ebooks_root (Finding 4: keep imports inside the vault) ────
+
+    #[test]
+    fn validate_ebooks_root_rejects_absolute_paths() {
+        assert!(validate_ebooks_root("/etc").is_err());
+        assert!(validate_ebooks_root("/ssot/ebooks").is_err());
+    }
+
+    #[test]
+    fn validate_ebooks_root_rejects_parent_dir_components() {
+        assert!(validate_ebooks_root("../x").is_err());
+        assert!(validate_ebooks_root("a/../..").is_err());
+    }
+
+    #[test]
+    fn validate_ebooks_root_rejects_empty() {
+        assert!(validate_ebooks_root("").is_err());
+    }
+
+    #[test]
+    fn validate_ebooks_root_accepts_vault_relative_paths() {
+        assert!(validate_ebooks_root("ssot/ebooks").is_ok());
+        assert!(validate_ebooks_root("books/sub").is_ok());
     }
 
     #[test]

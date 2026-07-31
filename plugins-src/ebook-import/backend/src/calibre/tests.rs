@@ -99,6 +99,37 @@ fn convert_to_htmlz_ok_fixture_produces_output_file() {
     assert!(out.exists(), "ok fixture should have produced the output file");
 }
 
+/// Finding 3 (final review): a child writing more than a pipe's OS buffer
+/// (~64KB) to stderr before exiting must not deadlock run_with_timeout,
+/// which used to read stdout/stderr only *after* `try_wait` observed the
+/// exit -- the child would block writing into the full pipe while this
+/// function sat waiting for an exit that could never come, all the way out
+/// to the (600s in production) timeout. `run_with_timeout` now drains both
+/// pipes concurrently on their own threads, so this must return promptly
+/// (well under the test's own generous timeout) with success, instead of
+/// blocking for the timeout duration.
+#[test]
+fn convert_to_htmlz_drains_a_large_stderr_without_deadlocking() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("book.epub");
+    std::fs::write(&input, b"fake epub bytes").unwrap();
+    let out = tmp.path().join("book.htmlz");
+
+    let start = Instant::now();
+    let result = convert_to_htmlz(
+        fixture("ebook-convert-noisy.sh").to_str().unwrap(),
+        &input,
+        &out,
+    );
+
+    assert!(result.is_ok(), "unexpected error: {:?}", result.err());
+    assert!(out.exists(), "noisy fixture should have produced the output file");
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "a ~200KB stderr write must not stall run_with_timeout until its (600s) timeout"
+    );
+}
+
 #[test]
 fn convert_to_htmlz_reports_err_on_process_failure() {
     let tmp = tempfile::tempdir().unwrap();

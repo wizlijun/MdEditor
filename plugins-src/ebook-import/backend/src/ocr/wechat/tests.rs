@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Instant;
 
 /// Fake [`PageRenderer`] used in place of [`crate::ocr::pdfium::PdfiumRenderer`]:
 /// writes `count` tiny 1x1 PNGs (via the `image` crate, so they're real,
@@ -221,6 +222,48 @@ fn a_precancelled_run_returns_err_without_making_any_request() {
         counter.load(Ordering::SeqCst),
         0,
         "a pre-cancelled run must not make any OCR request"
+    );
+}
+
+/// Finding 2 (final review): off-network, the default (intranet) OCR URL
+/// would otherwise hang for the full per-page timeout on every single page.
+/// A bound-then-dropped listener gives us a port nothing is listening on, so
+/// connecting fails immediately with "connection refused" -- fast to test,
+/// and enough to prove the circuit breaker aborts after 3 consecutive
+/// transport failures rather than ploughing through all 10 pages.
+#[test]
+fn three_consecutive_transport_failures_abort_the_whole_book() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+
+    let addr = {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        listener.local_addr().unwrap()
+        // listener drops here, freeing the port with nothing accepting on it
+    };
+    let url = format!("http://{addr}");
+
+    let mut pages_seen = Vec::new();
+    let start = Instant::now();
+    let result = engine(url, 10).ocr_pdf(Path::new("fake.pdf"), &work, &mut |p| {
+        if let OcrProgress::Page { done, .. } = p {
+            pages_seen.push(done);
+        }
+    });
+
+    let err = result.expect_err("an unreachable OCR service must abort with Err");
+    assert!(
+        err.contains("ocr service unreachable"),
+        "expected the circuit-breaker error, got: {err}"
+    );
+    assert!(
+        pages_seen.len() <= 3,
+        "must abort after at most 3 pages (consecutive transport failures), got {pages_seen:?}"
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "connection-refused must fail fast, not wait out connect_timeout/timeout"
     );
 }
 

@@ -177,32 +177,59 @@ enum RunOutcome {
 /// workspace, so this is hand-rolled: spawn, then poll `try_wait` every
 /// 100ms (fine-grained enough for a 10s probe / 600s conversion budget
 /// without busy-looping) until the child exits or the deadline passes, at
-/// which point we `kill` + `wait` to avoid leaving a zombie.
+/// which point we kill + `wait` to avoid leaving a zombie.
 ///
-/// stdout/stderr are read only *after* the child has exited. That's safe
-/// here because both the `--version` probe and an `ebook-convert` HTMLZ
-/// conversion produce modest output that fits well within the OS pipe
-/// buffer — there's no risk of the classic "child blocks writing to a full
-/// pipe while we block waiting for it to exit" deadlock. A production
-/// Calibre invocation that dumped megabytes to stderr would need
-/// concurrent draining on separate threads instead; not needed for this
-/// CLI's actual output volume.
+/// stdout/stderr are drained *concurrently* on their own threads while the
+/// main loop polls `try_wait`, not read after the child exits. A pipe's OS
+/// buffer is small (~64KB on macOS/Linux) — a child that writes more than
+/// that before exiting (a noisy Calibre conversion dumping progress/
+/// warnings to stderr, say) would block on the full pipe forever while this
+/// function sat in `try_wait`/`sleep` waiting for an exit that can now never
+/// come, deadlocking until `timeout` (up to 600s for a real conversion). The
+/// drain threads are joined after the child exits or is killed, so their
+/// buffers are complete and this function never returns before both have
+/// finished.
+///
+/// The child is spawned into its own process group (`process_group(0)`) so
+/// a timeout kill can `kill(-pgid, SIGKILL)` the whole group rather than
+/// just the immediate child: a wedged `cmd` that forked its own children
+/// (e.g. a shell script whose command isn't the last/only one, so the
+/// shell doesn't exec-replace itself) would otherwise leave those
+/// descendants running after `child.kill()`, still holding the stdout/
+/// stderr pipes open and blocking the drain threads above until *they*
+/// exit on their own instead of promptly here.
 fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<RunOutcome> {
+    use std::os::unix::process::CommandExt;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .process_group(0);
     let mut child = cmd.spawn()?;
+    let pid = child.id() as i32;
     let start = Instant::now();
+
+    let stdout_thread = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = out.read_to_string(&mut buf);
+            buf
+        })
+    });
+    let stderr_thread = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = err.read_to_string(&mut buf);
+            buf
+        })
+    });
+    let join_drain = |t: Option<std::thread::JoinHandle<String>>| {
+        t.and_then(|h| h.join().ok()).unwrap_or_default()
+    };
+
     loop {
         if let Some(status) = child.try_wait()? {
-            let mut stdout = String::new();
-            let mut stderr = String::new();
-            if let Some(mut out) = child.stdout.take() {
-                let _ = out.read_to_string(&mut stdout);
-            }
-            if let Some(mut err) = child.stderr.take() {
-                let _ = err.read_to_string(&mut stderr);
-            }
+            let stdout = join_drain(stdout_thread);
+            let stderr = join_drain(stderr_thread);
             return Ok(RunOutcome::Exited {
                 success: status.success(),
                 code: status.code(),
@@ -211,8 +238,18 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<RunO
             });
         }
         if start.elapsed() >= timeout {
-            let _ = child.kill();
+            // SIGKILL the whole process group (negative pid), not just the
+            // immediate child -- see the doc comment above.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
             let _ = child.wait();
+            // The group kill closes every descendant's copy of the pipes,
+            // so the drain threads' blocking reads finish promptly too —
+            // join them so no thread outlives this function, even though a
+            // timed-out run discards the output.
+            join_drain(stdout_thread);
+            join_drain(stderr_thread);
             return Ok(RunOutcome::TimedOut);
         }
         std::thread::sleep(Duration::from_millis(100));
