@@ -53,7 +53,7 @@
   import { loadOutlineDirs } from './lib/outline/dirs.svelte'
   import { platform, isIOS } from './lib/platform.svelte'
   import { vaultStore, refreshStatus, syncNow, attachStatusListener } from './lib/vault.svelte'
-  import { canSyncActive, isTrackedVaultFile, refreshSotvault, sotvaultStore, setVaultRootChangedHandler, initSotvaultNoteConflictToast } from './lib/sotvault.svelte'
+  import { canSyncActive, isTrackedVaultFile, isMirrorPath, deviceSourceForVaultPath, refreshSotvault, sotvaultStore, setVaultRootChangedHandler, initSotvaultNoteConflictToast } from './lib/sotvault.svelte'
   import { installRecentsSync, refreshRecentMenu, mergedRecents } from './lib/recent-sync.svelte'
   import { maybeInstallTracker, shutdownTracker } from './lib/insights/tracker.svelte'
   import { ensureWikilinkBlocklist } from './lib/wikilink/blocklist-io.svelte'
@@ -719,6 +719,7 @@
           isUntitled: !tab.filePath,
           canSyncToVault: canSyncActive(tab.filePath || null),
           isTrackedVaultFile: isTrackedVaultFile(tab.filePath || null),
+          hasSyncSource: isMirrorPath(tab.filePath || null) && !!deviceSourceForVaultPath(tab.filePath || null),
           isInVault: historyAppliesTo(tab, sotvaultStore.vaultRoot),
         }
       : null

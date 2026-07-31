@@ -66,6 +66,7 @@ export function collectMenuItems(manifests: PluginManifest[]): CollectedItems {
  *  始终可用的核心项（三个 view toggle 中除 git-history 外）不需要出现在这里。 */
 export const CORE_MENU_ENABLED_ITEMS: CollectedItem[] = [
   { id: 'sync-to-vault', pluginId: 'sotvault', command: 'sync-to-vault', label: '', enabledWhen: 'currentTab.canSyncToVault' },
+  { id: 'view-sync-source', pluginId: 'sotvault', command: 'view-sync-source', label: '', enabledWhen: 'currentTab.hasSyncSource' },
   { id: 'share', pluginId: 'share', command: 'share', label: '', enabledWhen: 'currentTab.hasContent' },
   { id: 'unshare', pluginId: 'share', command: 'unshare', label: '', enabledWhen: 'settings["share.records"][currentTab.path]' },
   { id: 'copy-share-link', pluginId: 'share', command: 'copy-share-link', label: '', enabledWhen: 'settings["share.records"][currentTab.path]' },

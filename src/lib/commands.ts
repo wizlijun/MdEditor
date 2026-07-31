@@ -2,7 +2,7 @@ import { activeTab, saveActive, saveAs, openFile, closeTab, toggleMode } from '.
 import { confirmDirtyClose, pickOpenFile, pickSaveFile, showError } from './dialogs'
 import { sharePublishCurrent, shareUnpublishCurrent, shareCopyLinkCurrent } from './share'
 import { printActiveTab } from './print'
-import { syncCurrentToVault } from './sotvault.svelte'
+import { syncCurrentToVault, deviceSourceForVaultPath, revealVaultSource } from './sotvault.svelte'
 import { toggleSideView } from './side-panel/registry.svelte'
 
 export async function cmdOpen(): Promise<void> {
@@ -42,6 +42,14 @@ export function cmdToggleMode(): void {
   if (t && t.kind !== 'image') toggleMode(t.id)
 }
 
+/** Reveal the Sync source of the current vault mirror in the OS file browser.
+ *  No-op unless this device has a recorded source (menu item is gated the same
+ *  way, so this guard only matters for keyboard/programmatic dispatch). */
+export async function cmdViewSyncSource(): Promise<void> {
+  const src = deviceSourceForVaultPath(activeTab()?.filePath ?? null)
+  if (src) await revealVaultSource(src)
+}
+
 import { openSettings } from './ui-state.svelte'
 
 export type CommandId =
@@ -57,6 +65,7 @@ export type CommandId =
   | 'copy-share-link'
   | 'docs'
   | 'sync-to-vault'
+  | 'view-sync-source'
   | 'toggle-folder-view'
   | 'toggle-sidecar-notes'
   | 'toggle-git-history'
@@ -78,6 +87,7 @@ const handlers: Record<CommandId, () => void | Promise<void>> = {
       .catch(() => {})
   },
   'sync-to-vault': syncCurrentToVault,
+  'view-sync-source': cmdViewSyncSource,
   'toggle-folder-view': () => toggleSideView('folder-view'),
   'toggle-sidecar-notes': () => toggleSideView('outline-notes'),
   'toggle-git-history': () => toggleSideView('git-history'),

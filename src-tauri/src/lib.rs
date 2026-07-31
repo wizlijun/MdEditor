@@ -1153,6 +1153,14 @@ pub fn run() {
                         show_plugin_market_window(app);
                         return;
                     }
+                    // Tray-menu clicks also reach this global app-menu handler in
+                    // this Tauri version. `tray-*` ids are handled entirely by the
+                    // tray's own on_menu_event; forwarding them to the frontend just
+                    // produces a harmless "unknown command id" WARN (e.g. the
+                    // tray-sync-log click surfacing it right into the log window).
+                    if event.id().0.as_str().starts_with("tray-") {
+                        return;
+                    }
                     let _ = app.emit("menu-event", event.id().0.as_str());
                 });
 
@@ -1403,6 +1411,7 @@ fn menu_label(locale: &str, key: &str) -> String {
         "view.logs" => ("View Logs…", "查看日志…", "ログを表示…", "Protokolle anzeigen…"),
         "plugins.market" => ("Plugin Market…", "插件市场…", "プラグインマーケット…", "Plugin-Markt…"),
         "file.syncToVault" => ("Sync to Vault…", "同步到 Vault…", "Vault に同期…", "Mit Vault synchronisieren…"),
+        "file.viewSyncSource" => ("Reveal Sync Source…", "查看 Sync 的源文件…", "Sync 元ファイルを表示…", "Sync-Quelldatei anzeigen…"),
         "file.share" => ("Share Current File…", "分享当前文件…", "現在のファイルを共有…", "Aktuelle Datei teilen…"),
         "file.unshare" => ("Unshare Current File…", "取消分享当前文件…", "現在のファイルの共有を解除…", "Freigabe der aktuellen Datei aufheben…"),
         "file.copyShareLink" => ("Copy Share Link", "复制分享链接", "共有リンクをコピー", "Freigabe-Link kopieren"),
@@ -1793,6 +1802,7 @@ fn build_menu<R: tauri::Runtime>(
         )
         .separator()
         .item(&MenuItemBuilder::with_id("sync-to-vault", menu_label(locale, "file.syncToVault")).build(app)?)
+        .item(&MenuItemBuilder::with_id("view-sync-source", menu_label(locale, "file.viewSyncSource")).build(app)?)
         .item(
             &MenuItemBuilder::with_id("share", menu_label(locale, "file.share"))
                 .accelerator("Cmd+Shift+L")

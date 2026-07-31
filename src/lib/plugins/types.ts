@@ -174,6 +174,9 @@ export interface EnabledWhenContext {
     isUntitled: boolean
     canSyncToVault?: boolean
     isTrackedVaultFile?: boolean
+    /** True when the current file is a vault mirror AND this device has a
+     *  recorded source path (drives the "Reveal Sync Source" menu item). */
+    hasSyncSource?: boolean
     /** True when the current file lives inside the configured vault git repo
      *  (drives the git-history menu item's enabled state). */
     isInVault?: boolean
