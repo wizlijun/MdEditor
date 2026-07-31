@@ -83,6 +83,15 @@ pub fn dispatch_eval(payload: &Value) -> String {
     format!("window.__notemd_dispatch({json})")
 }
 
+/// Payload pushed into a plugin window for OS drag-drop (spec §8).
+pub(crate) fn drag_drop_payload(phase: &str, paths: &[std::path::PathBuf]) -> Value {
+    serde_json::json!({
+        "type": "drag-drop",
+        "phase": phase,
+        "paths": paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
+    })
+}
+
 /// Open (or focus, if a singleton is already up) the window contributed under
 /// `window_id` by `plugin_id`. `locale`/`theme` are read from the app to seed
 /// the bridge. The window loads `plugin://<id>/<entry>` and gets NO capability
@@ -151,9 +160,29 @@ pub fn open_plugin_window<R: Runtime>(
     // stay readable for the whole app lifetime. Only the freshly-built window
     // gets the handler (the singleton-focus path above returns early, and its
     // window already has one). `Destroyed` fires after the webview is gone.
+    //
+    // Also forwards OS drag-drop into the window: Tauri's OS-level drag-drop
+    // handler eats HTML5 drag-drop inside these isolated webviews, so the host
+    // must relay `WindowEvent::DragDrop` as a push payload instead (spec §8).
+    // The closure can't hold `window` itself (it's moved into the handler
+    // below via `window.on_window_event`), so it re-fetches the window by
+    // label off a cloned `AppHandle` on each drag-drop event.
     let pid = plugin_id.to_string();
-    window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Destroyed) {
+    let app2 = app.clone();
+    let label2 = label.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::DragDrop(dd) => {
+            let payload = match dd {
+                tauri::DragDropEvent::Enter { paths, .. } => drag_drop_payload("enter", paths),
+                tauri::DragDropEvent::Drop { paths, .. } => drag_drop_payload("drop", paths),
+                tauri::DragDropEvent::Leave => drag_drop_payload("leave", &[]),
+                _ => return, // Over: high-frequency, not forwarded.
+            };
+            if let Some(w) = app2.get_webview_window(&label2) {
+                let _ = w.eval(dispatch_eval(&payload));
+            }
+        }
+        WindowEvent::Destroyed => {
             super::ui_rpc::clear_grants(&pid);
             // Tear down the plugin process when its window closes so long-lived
             // reader tasks / network connections (e.g. openclaw's UDS+relay and
@@ -166,6 +195,7 @@ pub fn open_plugin_window<R: Runtime>(
                 tauri::async_runtime::spawn(async move { lc.deactivate().await });
             }
         }
+        _ => {}
     });
 
     let _ = window.show();
@@ -303,5 +333,16 @@ mod tests {
         let back: Value = serde_json::from_str(inner).unwrap();
         assert_eq!(back["type"], "progress");
         assert_eq!(back["value"], 42);
+    }
+
+    #[test]
+    fn drag_drop_payload_shapes() {
+        let p = drag_drop_payload("drop", &[std::path::PathBuf::from("/a/b.epub")]);
+        assert_eq!(p["type"], "drag-drop");
+        assert_eq!(p["phase"], "drop");
+        assert_eq!(p["paths"][0], "/a/b.epub");
+        let e = drag_drop_payload("leave", &[]);
+        assert_eq!(e["phase"], "leave");
+        assert!(e["paths"].as_array().unwrap().is_empty());
     }
 }
