@@ -1,7 +1,7 @@
 {
   "name": "Answer note questions",
   "description": "Answer the open questions captured in sidecar .note.md files.",
-  "prompt": "回答手记里待答的问题,严格按 CLAUDE.md 的协议作答。若没有 status:: open 的问题,直接报告「无待答问题」并结束。",
+  "prompt": "回答手记里待答的问题,严格按 CLAUDE.md 的协议作答:先通读源文原文作为上下文再作答,并用与问题相同的语言回答(语言不明时跟随源文语言)。若没有 status:: open 的问题,直接报告「无待答问题」并结束。",
   "max_turns": 60,
   "timeout_seconds": 1800,
   "precheck": "precheck.sh"
