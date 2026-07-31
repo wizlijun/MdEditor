@@ -44,7 +44,8 @@ tasks/
 __pycache__/
 *.pyc
 
-# Wrangler local state for the plugin registry (build/dev artifact)
+# Wrangler local state (build/dev artifact)
+/.wrangler/
 plugins-registry/.wrangler/
 
 # location helper sidecar (built by scripts/build-location-helper.sh)
