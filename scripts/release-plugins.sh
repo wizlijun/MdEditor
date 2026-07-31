@@ -3,7 +3,7 @@
 #
 #   scripts/release-plugins.sh [--release] <plugin...>
 #     plugin ∈ { md2pdf, roam-import, openclaw, pos-log,
-#                decision-log, weekly-review, claude-agent }   (add a case below)
+#                decision-log, weekly-review, claude-agent, ebook-import }   (add a case below)
 #     --release  currently a no-op flag reserved for build-profile parity with
 #                dev-install-plugin.sh; the release builds below are always
 #                release-profile.
@@ -41,14 +41,14 @@ PLUGINS=()
 for arg in "$@"; do
   case "$arg" in
     --release) : ;; # reserved; release builds are always release-profile
-    md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent) PLUGINS+=("$arg") ;;
+    md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|ebook-import) PLUGINS+=("$arg") ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | pos-log | decision-log | weekly-review | claude-agent)" >&2; exit 2 ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | pos-log | decision-log | weekly-review | claude-agent | ebook-import)" >&2; exit 2 ;;
   esac
 done
 if [[ ${#PLUGINS[@]} -eq 0 ]]; then
-  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent>..." >&2
+  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|ebook-import>..." >&2
   exit 2
 fi
 
@@ -228,6 +228,7 @@ release_weekly_review() {
 # then one zip per triple containing manifest.json + bin/<name> + ui/.
 release_native_ui() {
   local id="$1" src="$2" bin_name="$3" pnpm_filter="$4"
+  local extra_lib_vendor="${5:-}"
   local manifest="$src/manifest.v2.json"
   local version; version="$(manifest_field "$manifest" version)"
   echo "== $id @ $version =="
@@ -248,6 +249,10 @@ release_native_ui() {
     for triple in aarch64-apple-darwin x86_64-apple-darwin; do
       codesign --force --options runtime --timestamp --sign "$identity" \
         "$src/backend/target/$triple/release/$bin_name"
+      if [[ -n "$extra_lib_vendor" ]]; then
+        codesign --force --options runtime --timestamp --sign "$identity" \
+          "$src/backend/$extra_lib_vendor/$triple/libpdfium.dylib"
+      fi
     done
   else
     echo "[$id] WARNING: no Developer ID Application identity — binaries left unsigned"
@@ -267,6 +272,9 @@ release_native_ui() {
     cp "$manifest" "$stage/manifest.json"
     cp "$src/backend/target/$triple/release/$bin_name" "$stage/bin/$bin_name"
     chmod +x "$stage/bin/$bin_name"
+    if [[ -n "$extra_lib_vendor" ]]; then
+      cp "$src/backend/$extra_lib_vendor/$triple/libpdfium.dylib" "$stage/bin/libpdfium.dylib"
+    fi
     cp -R "$src/dist/." "$stage/ui/"
 
     local pkg="$out_dir/$triple.notemdpkg"
@@ -286,6 +294,16 @@ release_openclaw() {
 release_claude_agent() {
   release_native_ui "notemd.claude-agent" "$REPO_ROOT/plugins-src/claude-agent" \
     "notemd-claude-agent" "claude-agent"
+}
+
+# ── ebook-import: native backend + ui, per-arch packages, plus vendored
+# libpdfium.dylib fetched from bblanchon/pdfium-binaries and bundled into
+# bin/ (release_native_ui's extra_lib_vendor param handles the copy +
+# codesign) ────────────────────────────────────────────────────────────────
+release_ebook_import() {
+  bash "$REPO_ROOT/scripts/fetch-pdfium.sh"
+  release_native_ui "notemd.ebook-import" "$REPO_ROOT/plugins-src/ebook-import" \
+    "notemd-ebook-import" "ebook-import-plugin" "vendor"
 }
 
 # ── pos-log: native backend only, per-arch packages (no ui/) ─────────────────
@@ -350,6 +368,7 @@ for plugin in "${PLUGINS[@]}"; do
     decision-log) release_decision_log ;;
     weekly-review) release_weekly_review ;;
     claude-agent) release_claude_agent ;;
+    ebook-import) release_ebook_import ;;
   esac
 done
 

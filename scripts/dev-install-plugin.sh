@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dev-install a v2 plugin into the local app-data plugins root.
 #
-# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent]
+# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import]
 #   default plugin = md2pdf (preserves the original behavior).
 #   --release      = build the native plugin binary in release mode (md2pdf +
 #                    openclaw; ignored for the pure-UI plugins).
@@ -22,6 +22,13 @@
 #               (plugins-src/claude-agent/backend → notemd-claude-agent; the
 #               headless runner plus its detached --runner mode) AND the
 #               standalone Vite UI bundle, then installs bin/ + ui/ + manifest.
+# ebook-import→ fetches the prebuilt libpdfium.dylib for the current arch
+#               (scripts/fetch-pdfium.sh, cached under
+#               plugins-src/ebook-import/backend/vendor/), builds the
+#               CURRENT-arch native backend crate (plugins-src/ebook-import/backend
+#               → notemd-ebook-import; Calibre/HTMLZ/OCR pipeline + CLI) AND
+#               the standalone Vite UI bundle, then installs bin/ (binary +
+#               libpdfium.dylib) + ui/ + manifest.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,8 +37,8 @@ PLUGIN=md2pdf
 for arg in "$@"; do
   case "$arg" in
     --release) PROFILE=release ;;
-    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent) PLUGIN="$arg" ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent)" >&2; exit 2 ;;
+    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import) PLUGIN="$arg" ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | ebook-import)" >&2; exit 2 ;;
   esac
 done
 
@@ -184,6 +191,27 @@ elif [[ "$PLUGIN" == "claude-agent" ]]; then
   echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  open it:                Plugins menu ▸ \"Claude Agent…\" (restart the app first)"
   echo "  needs:                  Claude Code installed and logged in (claude --version)"
+
+elif [[ "$PLUGIN" == "ebook-import" ]]; then
+  SRC="plugins-src/ebook-import"
+  bash scripts/fetch-pdfium.sh
+  cargo build $([ "$PROFILE" = release ] && echo --release) \
+    --manifest-path "$SRC/backend/Cargo.toml" --bin notemd-ebook-import
+  pnpm --filter ebook-import-plugin build
+  VERSION=$(node -e "console.log(require('./$SRC/manifest.v2.json').version)")
+  DEST="$ROOT/notemd.ebook-import/$VERSION"
+  rm -rf "$DEST"; mkdir -p "$DEST/bin" "$DEST/ui"
+  cp "$SRC/backend/target/$PROFILE/notemd-ebook-import" "$DEST/bin/"
+  ARCH_TRIPLE="$(uname -m | sed 's/arm64/aarch64/')-apple-darwin"
+  cp "$SRC/backend/vendor/$ARCH_TRIPLE/libpdfium.dylib" "$DEST/bin/"
+  cp -R "$SRC/dist/." "$DEST/ui/"
+  cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
+  ln -sfn "$VERSION" "$ROOT/notemd.ebook-import/current"
+  mark_installed "notemd.ebook-import" "$VERSION"
+  echo "✓ installed notemd.ebook-import@$VERSION ($PROFILE, $(uname -m), backend + ui + libpdfium) → $DEST"
+  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
+  echo "  open it:                Plugins menu ▸ \"导入电子书(epub、pdf、docx)…\""
+  echo "  CLI:                    notemd ebook import <file.epub|.pdf|.docx> [--ocr] [--ocr-provider wechat|baidu] [--root <vault-relative>]"
 fi
 
 # ---------------------------------------------------------------------------
