@@ -92,6 +92,55 @@ fn extract_falls_back_without_opf_or_images_dir() {
     assert!(extracted.meta.language.is_none());
 }
 
+/// Recursively checks whether any file under `root` has the given file
+/// name, anywhere in the tree.
+fn tree_contains_file_named(root: &Path, name: &str) -> bool {
+    let Ok(entries) = fs::read_dir(root) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if tree_contains_file_named(&path, name) {
+                return true;
+            }
+        } else if path.file_name().and_then(|n| n.to_str()) == Some(name) {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn extract_rejects_zip_slip_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let htmlz_path = tmp.path().join("book.htmlz");
+    write_htmlz(
+        &htmlz_path,
+        &[
+            ("index.html", b"<html><body><p>Hello</p></body></html>"),
+            // A `..`-escaping entry name: if extracted naively via
+            // `dest.join(name)`, this would land outside `work/htmlz/`
+            // entirely (zip-slip). `extract` must reject it via
+            // `enclosed_name()` rather than write it anywhere.
+            ("../../evil.txt", b"pwned"),
+        ],
+    );
+
+    let work = tmp.path().join("work");
+    let extracted = extract(&htmlz_path, &work).expect("extract should still succeed");
+
+    assert!(extracted.html.ends_with("index.html"));
+    // The malicious entry must not have been written anywhere: neither
+    // inside the intended extraction root nor anywhere it could have
+    // escaped to (the whole tempdir, which contains both `work/` and any
+    // `../`-escaped siblings of it).
+    assert!(
+        !tree_contains_file_named(tmp.path(), "evil.txt"),
+        "zip-slip entry should have been skipped, not written to disk"
+    );
+}
+
 #[test]
 fn html_to_markdown_strips_calibre_markers_and_skipped_tags() {
     let html = "<html><body>\
