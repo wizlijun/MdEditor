@@ -101,6 +101,31 @@ export function nextToStart(q: Queue): QueueItem | null {
 }
 
 /**
+ * Synchronously claims `itemId` as the active item: flips its status to
+ * "running" and sets `q.activeId` — `jobId` stays unset (the
+ * `plugin.import_start` RPC hasn't resolved yet; the caller fills it in once
+ * it does).
+ *
+ * MUST be called in the same synchronous step as `nextToStart()`, before
+ * awaiting the RPC it feeds. The scheduler in App.svelte has several
+ * re-entrant call sites (a drop, "Add files…", a job's done/failed push, and
+ * its own failure-retry path all call `schedule()`), and JS only yields to
+ * another of those at an `await`. If `activeId` were written only after the
+ * RPC resolves, two `schedule()` calls racing across that await would both
+ * read `nextToStart(q)` as the same pending item and both start it. Calling
+ * `reserve` right after `nextToStart` — with no `await` in between — closes
+ * that window: the second call sees the first's `reserve` synchronously and
+ * gets `null` from `nextToStart` instead.
+ */
+export function reserve(q: Queue, itemId: number): Queue {
+  return {
+    ...q,
+    activeId: itemId,
+    items: q.items.map((i) => (i.id === itemId ? { ...i, status: 'running' } : i)),
+  }
+}
+
+/**
  * Folds a `type:"job"` push into the queue: looks up the item by `jobId`
  * (not `activeId` — a late event for a job the UI has already moved past
  * should still land on the right row) and updates it in place. `done`/

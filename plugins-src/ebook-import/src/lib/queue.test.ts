@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { addPaths, nextToStart, onJobEvent, type Queue } from './queue'
+import { addPaths, nextToStart, onJobEvent, reserve, type Queue } from './queue'
 
 const empty: Queue = { items: [], activeId: null }
 
@@ -99,6 +99,41 @@ describe('nextToStart', () => {
     expect(q.activeId).toBeNull()
     const n = nextToStart(q)
     expect(n?.path).toBe('/b.epub')
+  })
+})
+
+describe('reserve', () => {
+  it('flips the item to running and sets activeId, without a jobId', () => {
+    const q = addPaths(empty, ['/a.epub'])
+    const r = reserve(q, q.items[0].id)
+    expect(r.activeId).toBe(q.items[0].id)
+    expect(r.items[0]).toMatchObject({ status: 'running' })
+    expect(r.items[0].jobId).toBeUndefined()
+  })
+
+  it('closes the double-schedule race: nextToStart is null immediately after reserve, before any RPC resolves', () => {
+    // Simulates two schedule() calls racing across the import_start await:
+    // the fix is that reserve() happens synchronously right after
+    // nextToStart(), so a second call (still holding the pre-reserve `q`
+    // conceptually, but in practice reading the shared state after the
+    // first call's synchronous reserve) never gets the same item twice.
+    let q = addPaths(empty, ['/a.epub', '/b.epub'])
+    const first = nextToStart(q)
+    expect(first?.path).toBe('/a.epub')
+    q = reserve(q, first!.id)
+
+    // A second, re-entrant schedule() call reads nextToStart on the SAME
+    // (already-reserved) queue — it must not see /a.epub again, and must
+    // not see /b.epub either (only one item may be active at a time).
+    expect(nextToStart(q)).toBeNull()
+  })
+
+  it('leaves other items and the rest of the reserved item untouched', () => {
+    let q = addPaths(empty, ['/a.epub', '/b.epub'])
+    const first = q.items[0]
+    q = reserve(q, first.id)
+    expect(q.items[1]).toMatchObject({ status: 'pending', path: '/b.epub' })
+    expect(q.items[0]).toMatchObject({ path: first.path, name: first.name, logs: [] })
   })
 })
 

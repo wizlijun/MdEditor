@@ -1,7 +1,7 @@
 <script lang="ts">
   import { bridge } from './lib/bridge'
   import { setLocale, t, type MessageKey } from './lib/strings'
-  import { addPaths, nextToStart, onJobEvent, type Queue, type QueueItem } from './lib/queue'
+  import { addPaths, nextToStart, onJobEvent, reserve, type Queue, type QueueItem } from './lib/queue'
 
   setLocale(bridge().locale)
 
@@ -70,27 +70,33 @@
     }
   }
 
-  /** Serial scheduler: starts the next pending item once nothing is active. */
+  /**
+   * Serial scheduler: starts the next pending item once nothing is active.
+   * Called re-entrantly from several places (a drop, "Add files…", a job's
+   * done/failed push, and this function's own failure-retry path) — `reserve`
+   * MUST run synchronously right after `nextToStart`, before the
+   * `import_start` await, or two overlapping calls could both see
+   * `activeId: null` and both start the same item (see reserve()'s doc in
+   * queue.ts).
+   */
   async function schedule() {
     const n = nextToStart(q)
     if (!n) return
+    q = reserve(q, n.id)
     try {
       const res = await bridge().request('plugin.import_start', {
         path: n.path,
         ocr,
         ...(ocr ? { provider } : {}),
       })
-      q = {
-        ...q,
-        activeId: n.id,
-        items: q.items.map((i) => (i.id === n.id ? { ...i, status: 'running', jobId: res.job_id } : i)),
-      }
+      q = { ...q, items: q.items.map((i) => (i.id === n.id ? { ...i, jobId: res.job_id } : i)) }
     } catch (e) {
       q = {
         ...q,
+        activeId: null,
         items: q.items.map((i) => (i.id === n.id ? { ...i, status: 'failed', error: message(e) } : i)),
       }
-      void schedule() // this item never got an activeId — try the next one
+      void schedule() // this item never got a jobId — try the next one
     }
   }
 
