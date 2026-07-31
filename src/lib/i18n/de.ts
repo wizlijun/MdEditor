@@ -655,6 +655,7 @@ export const de: Record<keyof Messages, string> = {
   // ── Editor context menu ──
   'ctxmenu.cut': 'Ausschneiden',
   'ctxmenu.copy': 'Kopieren',
+  'ctxmenu.copyImage': 'Bild kopieren',
   'ctxmenu.paste': 'Einfügen',
   'ctxmenu.selectAll': 'Alles auswählen',
   'ctxmenu.highlight': 'Hervorheben',

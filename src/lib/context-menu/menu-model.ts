@@ -17,6 +17,8 @@ export interface MenuGroup {
 
 export interface MenuContext {
   hasSelection: boolean
+  /** True when the right-click landed on an image — swaps in the image menu. */
+  image?: boolean
 }
 
 function item(id: string, key: keyof Messages, extra: Partial<MenuItemSpec> = {}): MenuItemSpec {
@@ -28,7 +30,14 @@ function item(id: string, key: keyof Messages, extra: Partial<MenuItemSpec> = {}
  * `ctx` currently only gates enablement of selection-dependent items; the
  * structure itself is identical for rich and source.
  */
-export function getMenuModel(_ctx: MenuContext): MenuGroup[] {
+export function getMenuModel(ctx: MenuContext): MenuGroup[] {
+  // Right-clicking an image shows a dedicated, minimal menu — the text-format
+  // items are meaningless on an image node.
+  if (ctx.image) {
+    return [
+      { id: 'image', items: [ item('copyImage', 'ctxmenu.copyImage') ] },
+    ]
+  }
   return [
     { id: 'clipboard', items: [
       item('cut', 'ctxmenu.cut'),

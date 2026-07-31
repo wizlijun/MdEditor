@@ -77,10 +77,14 @@ async function pasteText(view: EditorView) {
   } catch { /* clipboard permission denied */ }
 }
 
-export function createRichActions(view: EditorView): EditorActions {
+export function createRichActions(
+  view: EditorView,
+  opts: { imageEl?: HTMLImageElement } = {},
+): EditorActions {
   return {
     canRun(id) {
       if (id === 'link') return !view.state.selection.empty
+      if (id === 'copyImage') return !!opts.imageEl
       return true
     },
     async run(id) {
@@ -89,6 +93,13 @@ export function createRichActions(view: EditorView): EditorActions {
         case 'cut':       view.focus(); document.execCommand('cut'); return
         case 'copy':      view.focus(); document.execCommand('copy'); return
         case 'paste':     return pasteText(view)
+        case 'copyImage': {
+          if (!opts.imageEl) return
+          const { copyImageToClipboard } = await import('../copy-image')
+          try { await copyImageToClipboard(opts.imageEl) }
+          catch (e) { console.error('copy image failed', e) }
+          return
+        }
         case 'selectAll':
           view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)))
           view.focus(); return

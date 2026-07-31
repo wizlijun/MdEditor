@@ -657,6 +657,7 @@ export const ja: Record<keyof Messages, string> = {
   // Editor context menu
   'ctxmenu.cut': 'カット',
   'ctxmenu.copy': 'コピー',
+  'ctxmenu.copyImage': '画像をコピー',
   'ctxmenu.paste': 'ペースト',
   'ctxmenu.selectAll': 'すべて選択',
   'ctxmenu.highlight': 'ハイライト',

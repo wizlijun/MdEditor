@@ -14,14 +14,16 @@
     hasSelection,
     actions,
     onClose,
+    image = false,
   }: {
     position: { x: number; y: number }
     hasSelection: boolean
     actions: EditorActions
     onClose: () => void
+    image?: boolean
   } = $props()
 
-  const groups = getMenuModel({ hasSelection })
+  const groups = getMenuModel({ hasSelection, image })
 
   let menuEl: HTMLDivElement | undefined = $state()
   let top = $state(position.y)

@@ -67,6 +67,7 @@
     "store:default",
     "clipboard-manager:default",
     "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-write-image",
     {
       "identifier": "http:default",
       "allow": [

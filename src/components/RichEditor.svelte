@@ -187,6 +187,7 @@
   let showCtxMenu   = $state(false)
   let ctxMenuPos    = $state({ x: 0, y: 0 })
   let ctxHasSel     = $state(false)
+  let ctxImage      = $state(false)
   let ctxActions    = $state<EditorActions | null>(null)
 
   async function handlePaste(event: ClipboardEvent) {
@@ -429,8 +430,10 @@
     event.preventDefault()
     noteUi.hover = null
     const view = editor.view as unknown as EditorView
+    const imgEl = (event.target as HTMLElement).closest('img') as HTMLImageElement | null
     ctxHasSel   = !view.state.selection.empty
-    ctxActions  = createRichActions(view)
+    ctxImage    = !!imgEl
+    ctxActions  = createRichActions(view, imgEl ? { imageEl: imgEl } : {})
     ctxMenuPos  = { x: event.clientX, y: event.clientY }
     showCtxMenu = true
   }
@@ -1189,6 +1192,7 @@
     <EditorContextMenu
       position={ctxMenuPos}
       hasSelection={ctxHasSel}
+      image={ctxImage}
       actions={ctxActions}
       onClose={() => { showCtxMenu = false }}
     />

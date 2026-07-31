@@ -662,6 +662,7 @@ export const en = {
   // ── Editor context menu ──
   'ctxmenu.cut': 'Cut',
   'ctxmenu.copy': 'Copy',
+  'ctxmenu.copyImage': 'Copy Image',
   'ctxmenu.paste': 'Paste',
   'ctxmenu.selectAll': 'Select All',
   'ctxmenu.highlight': 'Highlight',
