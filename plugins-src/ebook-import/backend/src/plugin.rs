@@ -207,15 +207,19 @@ fn apply_device_patch(existing: &DeviceSettings, patch: &Value) -> DeviceSetting
     out
 }
 
-/// Builds the `OcrEngine` for `provider`. Baidu needs both keys set (an
-/// early, clear error beats a confusing failure deep in `ocr_pdf`); the
-/// WeChat path constructs a `PdfiumRenderer`, whose `new()` can fail on a
-/// machine without the pdfium dylib available — surfaced here as the same
-/// kind of `Result` error, which the caller turns into a `failed` job event.
+/// Builds the `OcrEngine` for `provider`, wired to `cancelled` so a job's
+/// cancel flag (or `deactivate`'s "cancel everything") actually reaches the
+/// engine's network loop — see `WeChatOcr`/`BaiduOcr`'s own `cancelled`
+/// field docs. Baidu needs both keys set (an early, clear error beats a
+/// confusing failure deep in `ocr_pdf`); the WeChat path constructs a
+/// `PdfiumRenderer`, whose `new()` can fail on a machine without the pdfium
+/// dylib available — surfaced here as the same kind of `Result` error,
+/// which the caller turns into a `failed` job event.
 fn build_engine(
     provider: &str,
     vault_settings: &VaultSettings,
     device: &DeviceSettings,
+    cancelled: &Arc<AtomicBool>,
 ) -> Result<Box<dyn OcrEngine>, String> {
     match provider {
         "baidu" => {
@@ -225,10 +229,10 @@ fn build_engine(
                         .to_string(),
                 );
             }
-            Ok(Box::new(BaiduOcr::new(
-                device.baidu_api_key.clone(),
-                device.baidu_secret_key.clone(),
-            )))
+            Ok(Box::new(
+                BaiduOcr::new(device.baidu_api_key.clone(), device.baidu_secret_key.clone())
+                    .with_cancel(cancelled.clone()),
+            ))
         }
         _ => {
             let renderer = PdfiumRenderer::new()?;
@@ -238,9 +242,54 @@ fn build_engine(
                 // Construction-time default per Task 6 review: the 120s
                 // timeout lives here, not inside WeChatOcr's own logic.
                 timeout: Duration::from_secs(120),
+                cancelled: cancelled.clone(),
             }))
         }
     }
+}
+
+/// Best-effort absolute form of `p`: canonicalized if it exists on disk,
+/// otherwise joined onto the current working directory (falling back to `p`
+/// itself if even that fails). Only used to key [`work_dir_name`]'s hash on
+/// something path-like rather than a bare relative string that could
+/// collide across different working directories.
+fn absolute_or_given(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(p))
+            .unwrap_or_else(|_| p.to_path_buf())
+    })
+}
+
+/// A stable, filesystem-safe scratch-dir name for `input_abs`: the file
+/// stem plus an 8-hex-char hash of the input's *absolute* path. Two
+/// different source files that happen to share a stem (e.g. two unrelated
+/// `chapter1.pdf`s from different imports) get isolated `work` dirs instead
+/// of silently contaminating each other's `images/`/`htmlz/`/`pageNNNN.md`;
+/// the *same* file re-imported (resuming an interrupted OCR run, or a CLI
+/// retry) maps to the same dir every time, on purpose — see
+/// `pipeline::PipelineCtx::work`'s doc comment on OCR resume.
+fn work_dir_name(input_abs: &Path) -> String {
+    let stem = input_abs
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("book");
+    format!(
+        "{stem}_{}_temp",
+        fnv1a_hex8(input_abs.to_string_lossy().as_bytes())
+    )
+}
+
+/// FNV-1a, 32-bit, formatted as 8 lowercase hex chars. Not cryptographic —
+/// this only needs to be a cheap, stable, low-collision fingerprint for a
+/// handful of concurrently-importing files, not a security boundary.
+fn fnv1a_hex8(bytes: &[u8]) -> String {
+    let mut hash: u32 = 0x811c_9dc5;
+    for &b in bytes {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    format!("{hash:08x}")
 }
 
 /// A destination path relative to the vault, POSIX-separated, for the
@@ -292,7 +341,7 @@ fn run_job(
     };
 
     let engine: Option<Box<dyn OcrEngine>> = if ocr {
-        match build_engine(&provider, &vault_settings, &device) {
+        match build_engine(&provider, &vault_settings, &device, &cancelled) {
             Ok(e) => Some(e),
             Err(e) => {
                 host.ui_post(
@@ -307,11 +356,8 @@ fn run_job(
     };
     let calibre_bin = calibre::detect(device.calibre_path.as_deref()).map(|d| d.path);
 
-    let stem = input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("book");
-    let work = data_dir.join("work").join(format!("{stem}_temp"));
+    let input_abs = absolute_or_given(&input);
+    let work = data_dir.join("work").join(work_dir_name(&input_abs));
 
     let mut ctx = PipelineCtx {
         vault_root: &vault,
@@ -522,8 +568,20 @@ impl EbookImportPlugin {
     }
 
     /// CLI entry point: `notemd ebook-import <file> [--ocr] [--ocr-provider p] [--root r]`.
-    /// Runs synchronously in-place (not spawned) — the host budgets 300s for
-    /// a CLI command, and a single-book import fits that.
+    /// Blocks until the import finishes (the host budgets 300s for a CLI
+    /// command, and a single-book import fits that) — but runs the actual
+    /// work on a plain `std::thread`, joined here, rather than inline.
+    ///
+    /// `command.execute` is dispatched synchronously ON the tokio protocol
+    /// read loop (see the module doc). Both OCR engines build a
+    /// `reqwest::blocking::Client` inside `ocr_pdf`, and `reqwest::blocking`
+    /// panics if constructed from within a tokio runtime under
+    /// `debug_assertions` — and even without that panic, running the
+    /// pipeline (which can take minutes, e.g. Calibre conversion or OCR)
+    /// inline here would block `$deactivate` and every other host↔plugin
+    /// message for the whole import. Spawning a `std::thread` and `join`ing
+    /// it keeps `cli_import`'s own contract ("blocks until done") while
+    /// keeping the actual blocking I/O off the async runtime.
     fn cli_import(&mut self, host: &sdk::Host, context: &Value) -> Result<Value, String> {
         let vault = self.vault()?;
         let file = cli_str(context, "file")
@@ -532,46 +590,53 @@ impl EbookImportPlugin {
         let provider_override = cli_str(context, "ocr-provider");
         let root_override = cli_str(context, "root");
 
-        let mut vault_settings = settings::load_vault(&vault);
-        if let Some(root) = root_override {
-            vault_settings.ebooks_root = root;
-        }
-        let device = settings::load_device(&self.data_dir);
-        let provider = provider_override.unwrap_or_else(|| vault_settings.provider.clone());
+        let host = host.clone();
+        let data_dir = self.data_dir.clone();
 
-        let engine: Option<Box<dyn OcrEngine>> = if ocr {
-            Some(build_engine(&provider, &vault_settings, &device)?)
-        } else {
-            None
-        };
-        let calibre_bin = calibre::detect(device.calibre_path.as_deref()).map(|d| d.path);
+        let handle = std::thread::spawn(move || -> Result<(PathBuf, Vec<String>), String> {
+            let mut vault_settings = settings::load_vault(&vault);
+            if let Some(root) = root_override {
+                vault_settings.ebooks_root = root;
+            }
+            let device = settings::load_device(&data_dir);
+            let provider = provider_override.unwrap_or_else(|| vault_settings.provider.clone());
+            let cancelled = Arc::new(AtomicBool::new(false));
 
-        let input = PathBuf::from(&file);
-        let stem = input
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("book");
-        let work = self.data_dir.join("work").join(format!("{stem}_temp"));
-        let cancelled = AtomicBool::new(false);
+            let engine: Option<Box<dyn OcrEngine>> = if ocr {
+                Some(build_engine(&provider, &vault_settings, &device, &cancelled)?)
+            } else {
+                None
+            };
+            let calibre_bin = calibre::detect(device.calibre_path.as_deref()).map(|d| d.path);
 
-        let mut lines: Vec<String> = Vec::new();
-        let h = host.clone();
-        let mut log = |line: String| {
-            h.log_info(&line);
-            lines.push(line);
-        };
-        let mut progress = |_: &str, _: Option<(usize, usize)>| {};
+            let input = PathBuf::from(&file);
+            let input_abs = absolute_or_given(&input);
+            let work = data_dir.join("work").join(work_dir_name(&input_abs));
 
-        let mut ctx = PipelineCtx {
-            vault_root: &vault,
-            ebooks_root: &vault_settings.ebooks_root,
-            work: &work,
-            log: &mut log,
-            progress: &mut progress,
-            cancelled: &cancelled,
-        };
+            let mut lines: Vec<String> = Vec::new();
+            let h = host.clone();
+            let mut log = |line: String| {
+                h.log_info(&line);
+                lines.push(line);
+            };
+            let mut progress = |_: &str, _: Option<(usize, usize)>| {};
 
-        let dest = pipeline::run_import(&mut ctx, &input, ocr, engine, calibre_bin.as_deref())?;
+            let mut ctx = PipelineCtx {
+                vault_root: &vault,
+                ebooks_root: &vault_settings.ebooks_root,
+                work: &work,
+                log: &mut log,
+                progress: &mut progress,
+                cancelled: &cancelled,
+            };
+
+            let dest = pipeline::run_import(&mut ctx, &input, ocr, engine, calibre_bin.as_deref())?;
+            Ok((dest, lines))
+        });
+
+        let (dest, lines) = handle
+            .join()
+            .map_err(|_| "ebook-import worker thread panicked".to_string())??;
         Ok(json!({ "dest": dest.to_string_lossy(), "log": lines }))
     }
 }
@@ -717,6 +782,25 @@ mod tests {
         assert_eq!(dest_relative(vault, dest), "ssot/ebooks/2026-08/Title");
     }
 
+    // ── work_dir_name ────────────────────────────────────────────────────
+
+    #[test]
+    fn work_dir_name_is_stable_for_the_same_path_and_differs_across_different_ones() {
+        let a1 = work_dir_name(Path::new("/tmp/x/chapter1.pdf"));
+        let a2 = work_dir_name(Path::new("/tmp/x/chapter1.pdf"));
+        let b = work_dir_name(Path::new("/tmp/y/chapter1.pdf"));
+        assert_eq!(
+            a1, a2,
+            "the same absolute path must always hash to the same work-dir name"
+        );
+        assert_ne!(
+            a1, b,
+            "two different files that happen to share a stem must NOT share a work dir"
+        );
+        assert!(a1.starts_with("chapter1_"));
+        assert!(a1.ends_with("_temp"));
+    }
+
     // ── serve_io integration: activation must not block the protocol loop ─
 
     /// Mirrors claude-agent's `activate_never_blocks_the_protocol_loop`: the
@@ -820,6 +904,94 @@ mod tests {
         .expect("import_cancel went unanswered");
 
         assert_eq!(answered["result"]["ok"], true);
+        std::env::remove_var("NOTEMD_SHARED_CONFIG");
+    }
+
+    /// Pins the exact `host.ui.post` job-event contract Task 9's UI depends
+    /// on: `{"window_id":"main","payload":{"type":"job","job_id":N,
+    /// "event":"failed","error":"…"}}`. Uses a path that doesn't exist (and
+    /// no Calibre override), so the run fails deterministically regardless
+    /// of whether this machine happens to have a real Calibre install —
+    /// either "calibre not found" or a conversion error, either way a
+    /// `failed` event with *some* string `error`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn import_start_pushes_a_failed_job_event_with_the_exact_contract_shape() {
+        let _env = env_guard();
+        let vault = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap().path().join("config.json");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cfg,
+            format!(r#"{{"version":1,"sotvault":"{}"}}"#, vault.path().display()),
+        )
+        .unwrap();
+        std::env::set_var("NOTEMD_SHARED_CONFIG", &cfg);
+
+        // A fresh, isolated data_dir via $initialize — the default
+        // `EbookImportPlugin::new()` data_dir is the process-wide temp dir,
+        // which must not leak a real device.json (e.g. a genuine
+        // calibre_path) into this test.
+        let data_dir = tempfile::tempdir().unwrap();
+
+        let (mut to_plugin, plugin_stdin) = tokio::io::duplex(16 * 1024);
+        let (plugin_stdout, from_plugin) = tokio::io::duplex(16 * 1024);
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(sdk::serve_io(EbookImportPlugin::new(), plugin_stdin, plugin_stdout));
+        });
+
+        let init = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "$initialize",
+            "params": {
+                "protocol_version": 2, "host_version": "1.0.0", "locale": "en",
+                "theme": "light", "plugin_root": "/tmp/plugin",
+                "data_dir": data_dir.path().to_string_lossy(),
+            }
+        });
+        to_plugin
+            .write_all(format!("{init}\n").as_bytes())
+            .await
+            .unwrap();
+        to_plugin
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:open\"}}\n\
+                  {\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ui.request\",\"params\":{\"method\":\"import_start\",\"params\":{\"path\":\"/nonexistent/should-not-exist.pdf\",\"ocr\":false}}}\n",
+            )
+            .await
+            .unwrap();
+
+        let mut lines = BufReader::new(from_plugin).lines();
+        let failed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                let v: Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if v.get("method").and_then(|m| m.as_str()) == Some("host.ui.post")
+                    && v["params"]["payload"]["event"] == "failed"
+                {
+                    return v;
+                }
+            }
+            panic!("no failed job event was ever pushed");
+        })
+        .await
+        .expect("timed out waiting for the failed job event");
+
+        assert_eq!(failed["params"]["window_id"], "main");
+        let payload = &failed["params"]["payload"];
+        assert_eq!(payload["type"], "job");
+        assert_eq!(payload["job_id"], 1);
+        assert_eq!(payload["event"], "failed");
+        assert!(
+            payload.get("error").and_then(|e| e.as_str()).is_some(),
+            "expected a string 'error', got: {payload}"
+        );
+
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
     }
 

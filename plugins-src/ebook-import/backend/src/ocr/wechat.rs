@@ -17,12 +17,21 @@ mod tests;
 
 use crate::ocr::{OcrEngine, OcrProgress, PageRenderer};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct WeChatOcr {
     pub url: String,
     pub renderer: Box<dyn PageRenderer>,
     pub timeout: Duration,
+    /// Checked at the top of `ocr_pdf` and again before every page. Wired to
+    /// a job's cancel flag by `plugin.rs::build_engine` (and to `deactivate`
+    /// cancelling every live job) -- without this, a cancelled/shutting-down
+    /// plugin process's job thread would keep POSTing pages to the OCR
+    /// endpoint indefinitely, holding its `Host` clone alive and blocking
+    /// `serve_io` from ever completing after `$deactivate`.
+    pub cancelled: Arc<AtomicBool>,
 }
 
 impl OcrEngine for WeChatOcr {
@@ -32,6 +41,10 @@ impl OcrEngine for WeChatOcr {
         work: &Path,
         on: &mut dyn FnMut(OcrProgress),
     ) -> Result<String, String> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+
         let images_dir = work.join("ocr_images");
         std::fs::create_dir_all(&images_dir)
             .map_err(|e| format!("create {}: {e}", images_dir.display()))?;
@@ -47,6 +60,10 @@ impl OcrEngine for WeChatOcr {
         let mut failed_pages: Vec<usize> = Vec::new();
 
         for (idx, image_path) in pages.iter().enumerate() {
+            if self.cancelled.load(Ordering::Relaxed) {
+                return Err("cancelled".to_string());
+            }
+
             let page_no = idx + 1;
             let page_md = work.join(format!("page{page_no:04}.md"));
 

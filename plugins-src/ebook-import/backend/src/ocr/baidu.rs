@@ -28,7 +28,8 @@ use crate::ocr::{OcrEngine, OcrProgress};
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Baidu rejects (or silently truncates) documents above this size; check it
@@ -39,9 +40,15 @@ use std::time::{Duration, Instant};
 /// for Baidu's own `error_code`/`error_msg` to report.
 const MAX_PDF_BYTES: u64 = 100 * 1024 * 1024;
 
+/// A submitted task with no result yet after an hour is not coming back --
+/// stop polling rather than spinning the OCR thread (and holding its `Host`
+/// clone, blocking `serve_io` shutdown) forever.
+const DEFAULT_MAX_POLL_TIME: Duration = Duration::from_secs(60 * 60);
+
 /// `OcrEngine` backed by Baidu's 文档解析 (Unlimited-OCR) task API. Construct
-/// production instances with [`BaiduOcr::new`]; tests build the struct
-/// literal directly (all fields but the token cache are `pub`) pointing
+/// production instances with [`BaiduOcr::new`] (optionally chained with
+/// [`BaiduOcr::with_cancel`]); tests build the struct literal directly (all
+/// fields but the token cache are `pub`) pointing
 /// `oauth_url`/`submit_url`/`query_url` at a mock server.
 pub struct BaiduOcr {
     pub api_key: String,
@@ -50,6 +57,14 @@ pub struct BaiduOcr {
     pub submit_url: String,
     pub query_url: String,
     pub poll_interval: Duration,
+    /// Hard ceiling on total time spent in the poll loop (from the first
+    /// poll, not from submission) -- see [`DEFAULT_MAX_POLL_TIME`].
+    pub max_poll_time: Duration,
+    /// Checked at the top of `ocr_pdf` and at the top of every poll
+    /// iteration. Wired to a job's cancel flag by
+    /// `plugin.rs::build_engine` (and to `deactivate` cancelling every live
+    /// job).
+    pub cancelled: Arc<AtomicBool>,
     /// `(token, expires_at)`, refreshed lazily by [`BaiduOcr::access_token`].
     /// Interior mutability because [`OcrEngine::ocr_pdf`] takes `&self`.
     token_cache: Mutex<Option<(String, Instant)>>,
@@ -70,8 +85,18 @@ impl BaiduOcr {
                 "https://aip.baidubce.com/rest/2.0/brain/online/v2/unlimited-ocr-parser/task/query"
                     .to_string(),
             poll_interval: Duration::from_secs(7),
+            max_poll_time: DEFAULT_MAX_POLL_TIME,
+            cancelled: Arc::new(AtomicBool::new(false)),
             token_cache: Mutex::new(None),
         }
+    }
+
+    /// Wires an external cancel flag into this engine (chain onto `new`).
+    /// `new`'s own signature is left untouched so existing callers/tests
+    /// that don't need cancellation are unaffected.
+    pub fn with_cancel(mut self, cancelled: Arc<AtomicBool>) -> Self {
+        self.cancelled = cancelled;
+        self
     }
 
     /// Returns a cached access token if it hasn't expired yet, otherwise
@@ -248,6 +273,10 @@ impl OcrEngine for BaiduOcr {
         work: &Path,
         on: &mut dyn FnMut(OcrProgress),
     ) -> Result<String, String> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+
         let metadata =
             std::fs::metadata(pdf).map_err(|e| format!("stat {}: {e}", pdf.display()))?;
         precheck_size(metadata.len())?;
@@ -272,7 +301,18 @@ impl OcrEngine for BaiduOcr {
         ));
         let task_id = self.submit_task(&client, &token, &pdf_bytes, &file_name)?;
 
+        let poll_deadline = Instant::now() + self.max_poll_time;
         let markdown_url = loop {
+            if self.cancelled.load(Ordering::Relaxed) {
+                return Err("cancelled".to_string());
+            }
+            if Instant::now() >= poll_deadline {
+                return Err(format!(
+                    "baidu ocr: polling timed out after {:?} (task {task_id})",
+                    self.max_poll_time
+                ));
+            }
+
             let q = self.query_task(&client, &token, &task_id)?;
             on(OcrProgress::Status(format!("baidu ocr: {}", q.status)));
             match q.status.as_str() {

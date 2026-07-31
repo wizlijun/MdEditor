@@ -3,7 +3,7 @@ use crate::ocr::OcrProgress;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -157,6 +157,8 @@ fn engine(base_url: &str, poll_interval: Duration) -> BaiduOcr {
         submit_url: format!("{base_url}/submit"),
         query_url: format!("{base_url}/query"),
         poll_interval,
+        max_poll_time: Duration::from_secs(60 * 60),
+        cancelled: Arc::new(AtomicBool::new(false)),
         token_cache: Mutex::new(None),
     }
 }
@@ -254,5 +256,98 @@ fn ocr_pdf_surfaces_baidu_error_code_and_message_on_submit_failure() {
     assert!(
         err.contains("daily quota exceeded"),
         "expected error_msg in the error, got: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// cancellation / poll deadline
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_precancelled_run_returns_err_without_making_any_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let pdf = write_fake_pdf(tmp.path());
+
+    // No responses queued -- the assertion on `counter` is what actually
+    // pins "no request", not the mock server accepting nothing.
+    let (base_url, counter) = start_mock_server(|_| vec![]);
+
+    let mut e = engine(&base_url, Duration::from_millis(10));
+    e.cancelled = Arc::new(AtomicBool::new(true));
+
+    let result = e.ocr_pdf(&pdf, &work, &mut |_| {});
+
+    assert_eq!(result, Err("cancelled".to_string()));
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        0,
+        "a pre-cancelled run must not make any request (not even oauth)"
+    );
+}
+
+#[test]
+fn a_cancel_flag_set_mid_poll_stops_before_the_next_query() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let pdf = write_fake_pdf(tmp.path());
+
+    let (base_url, counter) = start_mock_server(|_| {
+        vec![
+            r#"{"access_token":"T","expires_in":2592000}"#.to_string(),
+            r#"{"error_code":0,"result":{"task_id":"t1"}}"#.to_string(),
+            r#"{"error_code":0,"result":{"status":"running"}}"#.to_string(),
+        ]
+    });
+
+    let mut e = engine(&base_url, Duration::from_millis(10));
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    e.cancelled = cancel_flag.clone();
+
+    // Cancel as soon as the first poll reports "running" -- the loop must
+    // notice at the top of the *next* iteration, before a second query.
+    let result = e.ocr_pdf(&pdf, &work, &mut move |p| {
+        if let OcrProgress::Status(s) = p {
+            if s.contains("running") {
+                cancel_flag.store(true, Ordering::Relaxed);
+            }
+        }
+    });
+
+    assert_eq!(result, Err("cancelled".to_string()));
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        3,
+        "oauth + submit + exactly one query, no further poll request"
+    );
+}
+
+#[test]
+fn an_already_elapsed_poll_deadline_times_out_without_polling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let pdf = write_fake_pdf(tmp.path());
+
+    let (base_url, counter) = start_mock_server(|_| {
+        vec![
+            r#"{"access_token":"T","expires_in":2592000}"#.to_string(),
+            r#"{"error_code":0,"result":{"task_id":"t1"}}"#.to_string(),
+        ]
+    });
+
+    let mut e = engine(&base_url, Duration::from_millis(10));
+    e.max_poll_time = Duration::from_secs(0);
+
+    let result = e.ocr_pdf(&pdf, &work, &mut |_| {});
+
+    let err = result.expect_err("a zero poll budget must time out");
+    assert!(err.contains("timed out"), "got: {err}");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        2,
+        "oauth + submit only, the deadline check must run before the first query"
     );
 }

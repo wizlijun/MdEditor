@@ -3,7 +3,7 @@ use crate::ocr::OcrProgress;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -100,6 +100,7 @@ fn engine(url: String, page_count: usize) -> WeChatOcr {
         url,
         renderer: Box::new(FakeRenderer { count: page_count }),
         timeout: Duration::from_secs(5),
+        cancelled: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -197,4 +198,56 @@ fn every_page_failing_is_an_error() {
     let result = engine(url, 2).ocr_pdf(Path::new("fake.pdf"), &work, &mut |_| {});
 
     assert!(result.is_err(), "zero successful pages must be an Err");
+}
+
+#[test]
+fn a_precancelled_run_returns_err_without_making_any_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+
+    // No responses queued -- if `ocr_pdf` made even one request, `accept()`
+    // would hang until this thread's mock server loop exits, not panic; the
+    // `counter == 0` assertion below is what actually pins "no request".
+    let (url, counter) = start_mock_server(vec![]);
+
+    let mut e = engine(url, 3);
+    e.cancelled = Arc::new(AtomicBool::new(true));
+
+    let result = e.ocr_pdf(Path::new("fake.pdf"), &work, &mut |_| {});
+
+    assert_eq!(result, Err("cancelled".to_string()));
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        0,
+        "a pre-cancelled run must not make any OCR request"
+    );
+}
+
+#[test]
+fn a_cancel_flag_set_mid_run_stops_before_the_next_page() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+
+    let (url, counter) = start_mock_server(vec![ok_body("# p1"), ok_body("# p2"), ok_body("# p3")]);
+
+    let mut e = engine(url, 3);
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    e.cancelled = cancel_flag.clone();
+
+    // Cancel right after page 1 reports progress -- the loop must notice
+    // at the top of the *next* iteration, before page 2's request.
+    let result = e.ocr_pdf(Path::new("fake.pdf"), &work, &mut move |p| {
+        if let OcrProgress::Page { done: 1, .. } = p {
+            cancel_flag.store(true, Ordering::Relaxed);
+        }
+    });
+
+    assert_eq!(result, Err("cancelled".to_string()));
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "must stop after page 1's request, before page 2's"
+    );
 }

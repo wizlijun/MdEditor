@@ -269,6 +269,76 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// A stub [`OcrEngine`] that returns fixed markdown without touching a
+    /// real pdfium renderer or network -- exercises `run_import`'s full OCR
+    /// success path (previously untested end-to-end; only the pre-engine
+    /// rejection paths had coverage).
+    struct StubOcrEngine {
+        markdown: &'static str,
+    }
+
+    impl OcrEngine for StubOcrEngine {
+        fn ocr_pdf(
+            &self,
+            _pdf: &Path,
+            _work: &Path,
+            on: &mut dyn FnMut(OcrProgress),
+        ) -> Result<String, String> {
+            on(OcrProgress::Page { done: 1, total: 1 });
+            Ok(self.markdown.to_string())
+        }
+    }
+
+    #[test]
+    fn run_import_ocr_success_path_lands_in_vault_with_config_and_book_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let input = tmp.path().join("My Book.pdf");
+        std::fs::write(&input, b"%PDF-1.4 fake").unwrap();
+
+        let mut log_lines: Vec<String> = Vec::new();
+        let mut log = |line: String| log_lines.push(line);
+        let mut progress_calls: Vec<(String, Option<(usize, usize)>)> = Vec::new();
+        let mut progress =
+            |stage: &str, pt: Option<(usize, usize)>| progress_calls.push((stage.to_string(), pt));
+        let cancelled = AtomicBool::new(false);
+        let work = tmp.path().join("work");
+
+        let mut ctx = PipelineCtx {
+            vault_root: &vault,
+            ebooks_root: "ssot/ebooks",
+            work: &work,
+            log: &mut log,
+            progress: &mut progress,
+            cancelled: &cancelled,
+        };
+
+        let engine: Box<dyn OcrEngine> = Box::new(StubOcrEngine {
+            markdown: "# Stub Content",
+        });
+        let dest = run_import(&mut ctx, &input, true, Some(engine), None)
+            .expect("a stubbed OCR run must succeed");
+
+        let month = month_dir(chrono::Local::now().date_naive());
+        assert_eq!(
+            dest,
+            vault.join("ssot/ebooks").join(&month).join("My Book"),
+            "dest must be <vault>/<ebooks_root>/<YYYY-MM>/<Title>"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("book.md")).unwrap(),
+            "# Stub Content"
+        );
+        let cfg = std::fs::read_to_string(dest.join("config.txt")).unwrap();
+        assert!(cfg.contains("conversion_method=ocr"), "got: {cfg}");
+        assert!(cfg.contains("original_title=My Book"), "got: {cfg}");
+        assert!(
+            progress_calls.iter().any(|(stage, _)| stage == "finalize"),
+            "expected a finalize progress stage, got {progress_calls:?}"
+        );
+    }
+
     #[test]
     fn dest_dir_collision_appends_suffix() {
         let tmp = tempfile::tempdir().unwrap();
