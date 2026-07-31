@@ -25,13 +25,13 @@ describe('compareVersions', () => {
 describe('mergeIndexes', () => {
   it('keeps live entries absent from the local build (the clobber case)', () => {
     const local = [entry('notemd.decision-log', '1.0.1')]
-    const live = [entry('notemd.openclaw-chat', '1.0.0'), entry('notemd.exlibris', '1.0.0')]
+    const live = [entry('notemd.openclaw-chat', '1.0.0'), entry('notemd.pos-log', '1.0.0')]
     const r = mergeIndexes(local, live, [])
     const keys = r.plugins.map((p: { id: string; version: string }) => `${p.id}@${p.version}`)
     expect(keys).toContain('notemd.openclaw-chat@1.0.0')
-    expect(keys).toContain('notemd.exlibris@1.0.0')
+    expect(keys).toContain('notemd.pos-log@1.0.0')
     expect(keys).toContain('notemd.decision-log@1.0.1')
-    expect(r.kept).toEqual(['notemd.exlibris@1.0.0', 'notemd.openclaw-chat@1.0.0'])
+    expect(r.kept).toEqual(['notemd.openclaw-chat@1.0.0', 'notemd.pos-log@1.0.0'])
   })
 
   it('prefers the local entry when the same id@version exists on both sides', () => {

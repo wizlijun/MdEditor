@@ -65,9 +65,9 @@ impl PluginProcess {
         // signature, but inheriting the full app environment would needlessly
         // leak host secrets (API keys etc.) into every plugin subprocess —
         // pointless exposure, especially ahead of third-party plugins. Clear
-        // everything, then re-add a minimal safe allowlist. openclaw/exlibris
-        // need HOME/PATH to resolve calibre + UDS socket paths; these are
-        // covered. Do NOT add secret-bearing vars here.
+        // everything, then re-add a minimal safe allowlist. openclaw needs
+        // HOME/PATH to resolve its UDS socket path; these are covered.
+        // Do NOT add secret-bearing vars here.
         cmd.env_clear();
         for key in ["HOME", "PATH", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR"] {
             if let Ok(v) = std::env::var(key) {

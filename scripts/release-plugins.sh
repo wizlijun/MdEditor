@@ -2,7 +2,7 @@
 # Package + sign v2 plugins for the marketplace (子项目③ Task 5).
 #
 #   scripts/release-plugins.sh [--release] <plugin...>
-#     plugin ∈ { md2pdf, roam-import, openclaw, exlibris, pos-log,
+#     plugin ∈ { md2pdf, roam-import, openclaw, pos-log,
 #                decision-log, weekly-review, claude-agent }   (add a case below)
 #     --release  currently a no-op flag reserved for build-profile parity with
 #                dev-install-plugin.sh; the release builds below are always
@@ -41,14 +41,14 @@ PLUGINS=()
 for arg in "$@"; do
   case "$arg" in
     --release) : ;; # reserved; release builds are always release-profile
-    md2pdf|roam-import|openclaw|exlibris|pos-log|decision-log|weekly-review|claude-agent) PLUGINS+=("$arg") ;;
+    md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent) PLUGINS+=("$arg") ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | exlibris | pos-log | decision-log | weekly-review | claude-agent)" >&2; exit 2 ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | pos-log | decision-log | weekly-review | claude-agent)" >&2; exit 2 ;;
   esac
 done
 if [[ ${#PLUGINS[@]} -eq 0 ]]; then
-  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|exlibris|pos-log|decision-log|weekly-review|claude-agent>..." >&2
+  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent>..." >&2
   exit 2
 fi
 
@@ -221,7 +221,7 @@ release_weekly_review() {
   rm -rf "$stage"; trap - RETURN
 }
 
-# ── openclaw / exlibris: native backend + ui, per-arch packages ───────────────
+# ── openclaw etc.: native backend + ui, per-arch packages ─────────────────────
 # Shared shape (mirrors scripts/dev-install-plugin.sh, but dual-arch release):
 # backend crate built per triple (--manifest-path keeps cargo out of the
 # workspace root), bins codesigned like build-md2pdf-v2.sh, one Vite UI bundle,
@@ -288,11 +288,6 @@ release_claude_agent() {
     "notemd-claude-agent" "claude-agent"
 }
 
-release_exlibris() {
-  release_native_ui "notemd.exlibris" "$REPO_ROOT/plugins-src/exlibris" \
-    "notemd-exlibris" "exlibris-plugin"
-}
-
 # ── pos-log: native backend only, per-arch packages (no ui/) ─────────────────
 release_native_bin() {
   local id="$1" src="$2" bin_name="$3"
@@ -351,7 +346,6 @@ for plugin in "${PLUGINS[@]}"; do
     md2pdf)      release_md2pdf ;;
     roam-import) release_roam_import ;;
     openclaw)    release_openclaw ;;
-    exlibris)    release_exlibris ;;
     pos-log)     release_pos_log ;;
     decision-log) release_decision_log ;;
     weekly-review) release_weekly_review ;;

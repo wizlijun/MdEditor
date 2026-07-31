@@ -162,7 +162,6 @@ var ENTRY_MAP={
  'notemd.md2pdf':{en:'<b>File</b> menu → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>文件</b>」菜单 → Export to PDF…（也支持 CLI <code>notemd pdf</code>）'},
  'notemd.roam-import':{en:'<b>File</b> menu → Import from Roam Research…',zh:'「<b>文件</b>」菜单 → Import from Roam Research…'},
  'notemd.openclaw-chat':{en:'<b>Window</b> menu → OpenClaw',zh:'「<b>窗口</b>」菜单 → OpenClaw'},
- 'notemd.exlibris':{en:'<b>Window</b> menu → ExLibris',zh:'「<b>窗口</b>」菜单 → ExLibris'},
  'notemd.pos-log':{en:'<b>Plugins</b> menu → Save Location Now (auto-logs on startup once installed)',zh:'「<b>插件</b>」菜单 → Save Location Now（装好后随启动自动记录）'}
 };
 function pickLang(){

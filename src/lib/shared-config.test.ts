@@ -21,7 +21,7 @@ describe("shared-config", () => {
 
   it("writeSharedConfig delegates to shared_config_write command", async () => {
     const cfg: SharedConfig = {
-      version: 1, sotvault: "/x", rawvault: "/y", calibre_path: "/z", exlibris: null,
+      version: 1, sotvault: "/x", rawvault: "/y", calibre_path: "/z",
     };
     vi.mocked(invoke).mockResolvedValueOnce(undefined);
     await writeSharedConfig(cfg);

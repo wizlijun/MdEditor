@@ -5,7 +5,6 @@ export interface SharedConfig {
   sotvault: string | null;
   rawvault: string | null;
   calibre_path: string | null;
-  exlibris: unknown;
 }
 
 export async function readSharedConfig(): Promise<SharedConfig> {

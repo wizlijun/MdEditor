@@ -8,7 +8,7 @@
 | 形态 | 例子 | 有 `binary` | 有 `ui` | 典型用途 |
 |---|---|---|---|---|
 | **纯前端** | `roam-import` | ❌ | ✅ | 开一个独立窗口做交互,读写 vault |
-| **后端 + 前端** | `openclaw`、`exlibris` | ✅ | ✅ | 后台进程(网络/计算)+ 流式 UI |
+| **后端 + 前端** | `openclaw`、`claude-agent` | ✅ | ✅ | 后台进程(网络/计算)+ 流式 UI |
 | **纯后端** | `pos-log` | ✅ | ❌ | 常驻后台采集,无界面 |
 
 规则(`plugin-protocol/src/lib.rs:183-188`):
@@ -279,7 +279,7 @@ interface SideView {
 
 ### 本地 dev 安装(`scripts/dev-install-plugin.sh`)
 ```bash
-scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|exlibris|pos-log]
+scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent]
 ```
 它构建 UI(Vite → `dist/`)和/或后端二进制,拷进安装根,并把 `state.json` 里 `installed[<id>] = {version, enabled:true}` 打开。**新插件需在此脚本加一个分支。**
 

@@ -12,8 +12,8 @@
 //
 // It then MERGES those entries with the live index (GET /api/index.json):
 // dist-plugins/ is gitignored and per-worktree, so it only ever holds the
-// plugins built HERE — publishing it verbatim once wiped openclaw-chat and
-// exlibris from the market (they had been packaged in a different worktree).
+// plugins built HERE — publishing it verbatim once wiped live plugins from
+// the market (they had been packaged in a different worktree).
 // The union keeps every live entry we did not rebuild; a local entry replaces
 // the live one with the same id@version.
 //

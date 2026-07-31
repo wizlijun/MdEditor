@@ -11,8 +11,6 @@ pub struct SharedConfig {
     pub rawvault: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibre_path: Option<String>,
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub exlibris: serde_json::Value,
 }
 
 fn default_version() -> u32 { 1 }
@@ -105,7 +103,6 @@ mod tests {
             sotvault: Some("/tmp/sot".into()),
             rawvault: Some("/tmp/raw".into()),
             calibre_path: Some("/Applications/calibre.app/Contents/MacOS".into()),
-            exlibris: serde_json::Value::Null,
         };
         write(&p, &cfg).unwrap();
         let back = read(&p).unwrap();

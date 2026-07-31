@@ -127,61 +127,6 @@ importers:
         specifier: ^4
         version: 4.1.5(@types/node@25.6.2)(happy-dom@20.9.0)(jsdom@25.0.1)(vite@6.4.2(@types/node@25.6.2)(yaml@2.9.0))
 
-  exlibris:
-    dependencies:
-      '@tauri-apps/api':
-        specifier: ^2
-        version: 2.11.0
-      '@tauri-apps/plugin-dialog':
-        specifier: ^2
-        version: 2.7.1
-      '@tauri-apps/plugin-fs':
-        specifier: ^2
-        version: 2.5.1
-      '@tauri-apps/plugin-opener':
-        specifier: ^2
-        version: 2.5.4
-      '@tauri-apps/plugin-os':
-        specifier: ^2
-        version: 2.3.2
-      '@tauri-apps/plugin-process':
-        specifier: ^2
-        version: 2.3.1
-      '@tauri-apps/plugin-updater':
-        specifier: ^2
-        version: 2.10.1
-      svelte-sonner:
-        specifier: ^1.1.1
-        version: 1.1.1(svelte@5.55.5)
-      yaml:
-        specifier: ^2.8.4
-        version: 2.9.0
-    devDependencies:
-      '@sveltejs/vite-plugin-svelte':
-        specifier: ^5
-        version: 5.1.1(svelte@5.55.5)(vite@6.4.2(@types/node@25.6.2)(yaml@2.9.0))
-      '@tauri-apps/cli':
-        specifier: ^2
-        version: 2.11.1
-      happy-dom:
-        specifier: ^20.9.0
-        version: 20.9.0
-      svelte:
-        specifier: ^5
-        version: 5.55.5
-      svelte-check:
-        specifier: ^4
-        version: 4.4.8(picomatch@4.0.4)(svelte@5.55.5)(typescript@5.9.3)
-      typescript:
-        specifier: ^5
-        version: 5.9.3
-      vite:
-        specifier: ^6
-        version: 6.4.2(@types/node@25.6.2)(yaml@2.9.0)
-      vitest:
-        specifier: ^4
-        version: 4.1.5(@types/node@25.6.2)(happy-dom@20.9.0)(jsdom@25.0.1)(vite@6.4.2(@types/node@25.6.2)(yaml@2.9.0))
-
   plugins-src/claude-agent:
     devDependencies:
       '@sveltejs/vite-plugin-svelte':
@@ -235,30 +180,6 @@ importers:
       vitest:
         specifier: ^4.1.5
         version: 4.1.5(@types/node@25.6.2)(happy-dom@20.9.0)(jsdom@25.0.1)(vite@6.4.2(@types/node@25.6.2)(yaml@2.9.0))
-
-  plugins-src/exlibris:
-    devDependencies:
-      '@sveltejs/vite-plugin-svelte':
-        specifier: ^5
-        version: 5.1.1(svelte@5.55.5)(vite@6.4.2(@types/node@25.6.2)(yaml@2.9.0))
-      svelte:
-        specifier: ^5
-        version: 5.55.5
-      svelte-check:
-        specifier: ^4
-        version: 4.4.8(picomatch@4.0.4)(svelte@5.55.5)(typescript@5.9.3)
-      typescript:
-        specifier: ^5
-        version: 5.9.3
-      vite:
-        specifier: ^6
-        version: 6.4.2(@types/node@25.6.2)(yaml@2.9.0)
-      vitest:
-        specifier: ^4
-        version: 4.1.5(@types/node@25.6.2)(happy-dom@20.9.0)(jsdom@25.0.1)(vite@6.4.2(@types/node@25.6.2)(yaml@2.9.0))
-      yaml:
-        specifier: ^2.8.4
-        version: 2.9.0
 
   plugins-src/openclaw:
     devDependencies:

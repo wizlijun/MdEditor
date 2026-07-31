@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Dev-install a v2 plugin into the local app-data plugins root.
 #
-# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|exlibris|pos-log|decision-log|weekly-review|claude-agent]
+# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent]
 #   default plugin = md2pdf (preserves the original behavior).
 #   --release      = build the native plugin binary in release mode (md2pdf +
-#                    openclaw + exlibris; ignored for the pure-UI plugins).
+#                    openclaw; ignored for the pure-UI plugins).
 #
 # md2pdf      → builds the CURRENT-arch native binary (fast dev loop; use
 #               scripts/build-md2pdf-v2.sh for dual-arch release binaries) and
@@ -15,11 +15,6 @@
 #               (plugins-src/openclaw/backend → notemd-openclaw) AND the
 #               standalone Vite UI bundle (plugins-src/openclaw → dist/), then
 #               installs bin/ + ui/ + manifest (backend process + streaming UI).
-# exlibris    → builds BOTH the CURRENT-arch native backend crate
-#               (plugins-src/exlibris/backend → notemd-exlibris; import pipeline
-#               / calibre / hashing / shared config) AND the standalone Vite UI
-#               bundle (plugins-src/exlibris → dist/), then installs bin/ + ui/ +
-#               manifest (backend process + request-response UI).
 # pos-log     → builds the CURRENT-arch native backend crate
 #               (plugins-src/pos-log/backend → notemd-pos-log; resident 30-min
 #               location logger, no UI) and installs bin/ + manifest.
@@ -35,8 +30,8 @@ PLUGIN=md2pdf
 for arg in "$@"; do
   case "$arg" in
     --release) PROFILE=release ;;
-    md2pdf|roam-import|openclaw|cef|exlibris|pos-log|decision-log|weekly-review|claude-agent) PLUGIN="$arg" ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | exlibris | pos-log | decision-log | weekly-review | claude-agent)" >&2; exit 2 ;;
+    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent) PLUGIN="$arg" ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent)" >&2; exit 2 ;;
   esac
 done
 
@@ -120,29 +115,6 @@ elif [[ "$PLUGIN" == "openclaw" ]]; then
   echo "✓ installed notemd.openclaw-chat@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
   echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  open it:                Window menu ▸ \"OpenClaw (v2)\""
-
-elif [[ "$PLUGIN" == "exlibris" ]]; then
-  SRC="plugins-src/exlibris"
-  # 1) Build the CURRENT-arch native backend crate (import pipeline: calibre
-  #    subprocess, atomic fs copy/rename, sha256 hashing, sotvault/rawvault
-  #    listing, rules I/O, shared config). --manifest-path keeps cargo out of
-  #    the workspace root.
-  cargo build $([ "$PROFILE" = release ] && echo --release) \
-    --manifest-path "$SRC/backend/Cargo.toml" --bin notemd-exlibris
-  # 2) Build the standalone UI bundle (dist/).
-  pnpm --filter exlibris-plugin build
-  VERSION=$(node -e "console.log(require('./$SRC/manifest.v2.json').version)")
-  DEST="$ROOT/notemd.exlibris/$VERSION"
-  rm -rf "$DEST"
-  mkdir -p "$DEST/bin" "$DEST/ui"
-  cp "$SRC/backend/target/$PROFILE/notemd-exlibris" "$DEST/bin/notemd-exlibris"
-  cp -R "$SRC/dist/." "$DEST/ui/"
-  cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
-  ln -sfn "$VERSION" "$ROOT/notemd.exlibris/current"
-  mark_installed "notemd.exlibris" "$VERSION"
-  echo "✓ installed notemd.exlibris@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
-  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
-  echo "  open it:                Window menu ▸ \"ExLibris (v2)\""
 
 elif [[ "$PLUGIN" == "pos-log" ]]; then
   SRC="plugins-src/pos-log"
@@ -263,27 +235,6 @@ fi
 #   4. Follow the full probe checklist in plugins-src/custom-editor-fixture/PROBE.md.
 #   Pass: (a)-(e) all green → base can migrate as a custom-editor tab (Task 4).
 #   Fail: any blocker step fails → investigate iframe mechanism before migration.
-# ---------------------------------------------------------------------------
-# Manual E2E walkthrough — exlibris (plugin-custom-editor-exlibris plan ④, Task 4):
-#   1. scripts/dev-install-plugin.sh exlibris
-#   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev
-#   3. Window menu ▸ "ExLibris (v2)" → the ExLibris window opens (plugin://
-#      bridge; the backend process is activated on open).
-#   4. First run: onboarding → "Choose…" opens a native DIRECTORY picker via
-#      host.dialog.open for sotvault / rawvault; calibre auto-detects (or pick
-#      its binary dir). These land in the SHARED config at ~/Library/Application
-#      Support/com.laobu.mdeditor-shared/config.json (same path as the v1 app).
-#   5. Import tab → "Add books…" opens a native FILE picker (multiple, ebook
-#      extensions) via host.dialog.open → each pick is hashed (sha256), calibre
-#      extracts metadata, rules route it → the pending list fills.
-#   6. Select + Import → each book is copied to rawvault (atomic), converted to
-#      book.md via calibre, and filed under sotvault/<rule>/<name>/ with meta.yml.
-#      Progress advances per-row (frontend-tracked; backend is request-response).
-#   7. Library tab → browse imported books; Settings ▸ rules editor / Rebuild /
-#      Verify all run against the same in-process backend.
-#   Drag-drop is deferred (plugin windows have no Tauri IPC); the "Add books…"
-#   file picker is the primary import path.
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Manual E2E walkthrough — claude-agent:
 #   1. scripts/dev-install-plugin.sh claude-agent
