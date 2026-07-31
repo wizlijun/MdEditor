@@ -53,7 +53,7 @@
   import { loadOutlineDirs } from './lib/outline/dirs.svelte'
   import { platform, isIOS } from './lib/platform.svelte'
   import { vaultStore, refreshStatus, syncNow, attachStatusListener } from './lib/vault.svelte'
-  import { canSyncActive, isTrackedVaultFile, isMirrorPath, deviceSourceForVaultPath, refreshSotvault, sotvaultStore, setVaultRootChangedHandler, initSotvaultNoteConflictToast } from './lib/sotvault.svelte'
+  import { canSyncActive, isTrackedVaultFile, deviceSourceForVaultPath, refreshSotvault, sotvaultStore, setVaultRootChangedHandler, initSotvaultNoteConflictToast } from './lib/sotvault.svelte'
   import { installRecentsSync, refreshRecentMenu, mergedRecents } from './lib/recent-sync.svelte'
   import { maybeInstallTracker, shutdownTracker } from './lib/insights/tracker.svelte'
   import { ensureWikilinkBlocklist } from './lib/wikilink/blocklist-io.svelte'
@@ -702,6 +702,23 @@
 
   let current = $derived(activeTab())
 
+  // Whether the active mirror's this-device source file still exists on disk.
+  // The "Reveal Sync Source" menu item is enabled ONLY when it does — matching
+  // the SyncOriginBanner reveal affordance (revealing a missing file just
+  // fails). Stays false until confirmed present, so it never wrongly enables.
+  let syncSourceExists = $state(false)
+  $effect(() => {
+    const src = deviceSourceForVaultPath(current?.filePath || null)
+    void sotvaultStore.tick
+    syncSourceExists = false
+    if (!src) return
+    let cancelled = false
+    import('@tauri-apps/plugin-fs')
+      .then(({ exists }) => exists(src).catch(() => false))
+      .then((ok) => { if (!cancelled) syncSourceExists = ok })
+    return () => { cancelled = true }
+  })
+
   // Right-edge inset for the floating mode toggle: push it left by the right
   // panel width whenever that side is showing, so it stays over the editor.
   let rightPanelOffset = $derived(isSideVisible('right', current) ? sidePanels.right.width : 0)
@@ -741,7 +758,7 @@
           isUntitled: !tab.filePath,
           canSyncToVault: canSyncActive(tab.filePath || null),
           isTrackedVaultFile: isTrackedVaultFile(tab.filePath || null),
-          hasSyncSource: isMirrorPath(tab.filePath || null) && !!deviceSourceForVaultPath(tab.filePath || null),
+          hasSyncSource: !!deviceSourceForVaultPath(tab.filePath || null) && syncSourceExists,
           isInVault: historyAppliesTo(tab, sotvaultStore.vaultRoot),
         }
       : null
