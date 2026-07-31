@@ -289,3 +289,39 @@ fi
 #   If claude isn't on PATH: the window shows "claude executable not found";
 #   point NOTEMD_CLAUDE_BIN at it and retry.
 # ---------------------------------------------------------------------------
+# Manual E2E walkthrough — ebook-import:
+#   1. scripts/dev-install-plugin.sh ebook-import
+#   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev   (with a Vault configured)
+#   3. Plugins menu ▸ "导入电子书(epub、pdf、docx)…" → the import window opens
+#      (backend activates on open; the Calibre-detection settings row shows
+#      found/not-found + version, since HTMLZ conversion needs Calibre's
+#      `ebook-convert` on PATH or in the well-known app locations).
+#   4. Drag an .epub (or .pdf/.docx) onto the window — the host forwards the
+#      OS drag-drop event through to the plugin webview (Task 1's core
+#      windows.rs plumbing) — or click "Add files" and pick one/several.
+#   5. The queue runs jobs serially (one book converts at a time; the rest
+#      wait "queued"); each row's status flips
+#      queued → running → done/error live.
+#   6. Per book, check
+#      <vault>/ssot/ebooks/YYYY-MM/<书名>/ contains the three-piece set:
+#      config.txt (bookread-format config), book.md (HTML→MD from the
+#      Calibre HTMLZ), and images/ (localized image assets referenced from
+#      book.md).
+#   7. Click the row's editor button → book.md opens in a normal note.md tab.
+#   8. Tick the OCR checkbox on a SCANNED PDF (no extractable text layer) and
+#      pick a provider:
+#        - 微信/wechat  → needs the intranet WeChat OCR URL reachable (set in
+#          the plugin's device settings); progress advances page-by-page.
+#        - 百度/baidu   → needs an API key/secret configured in Settings
+#          first; submit/poll/download flow surfaces Baidu's error code +
+#          message inline on failure.
+#      Either way, book.md should contain the OCR'd text merged in page order.
+#   9. CLI: `notemd ebook <file.epub|.pdf|.docx>` (dev CLI) does the same
+#      import headless; add `--ocr` (+ `--ocr-provider wechat|baidu`) to
+#      exercise the OCR path from the command line, and `--root
+#      <vault-relative>` to override the default ssot/ebooks/ destination.
+#  10. First run on a fresh machine needs Calibre installed
+#      (https://calibre-ebook.com/) — until then the settings row reports
+#      "not found" and HTMLZ conversion jobs fail fast with that reason
+#      surfaced in the row's error text.
+# ---------------------------------------------------------------------------
