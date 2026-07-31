@@ -1,7 +1,16 @@
 <script lang="ts">
   import { bridge } from './lib/bridge'
   import { setLocale, t, type MessageKey } from './lib/strings'
-  import { addPaths, nextToStart, onJobEvent, reserve, type Queue, type QueueItem } from './lib/queue'
+  import {
+    addPaths,
+    nextToStart,
+    replayPending,
+    reserve,
+    stashOrApply,
+    type PendingJobEvent,
+    type Queue,
+    type QueueItem,
+  } from './lib/queue'
 
   setLocale(bridge().locale)
 
@@ -23,6 +32,12 @@
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
   let q: Queue = $state({ items: [], activeId: null })
+  // Job-push events that arrived for a jobId not yet folded into any item
+  // (see queue.ts's stashOrApply doc) — replayed by schedule() once
+  // import_start resolves and the jobId is known. Not `$state`: nothing in
+  // the template reads it, and App.svelte only ever mutates it from plain
+  // (non-reactive-context) functions below.
+  let pending: PendingJobEvent[] = []
   let ocr = $state(false)
   let provider: 'wechat' | 'baidu' = $state('wechat')
   let dragActive = $state(false)
@@ -78,6 +93,14 @@
    * `import_start` await, or two overlapping calls could both see
    * `activeId: null` and both start the same item (see reserve()'s doc in
    * queue.ts).
+   *
+   * The backend spawns the job thread before writing `import_start`'s RPC
+   * response, so a fast-failing job's push can arrive (and get stashed by
+   * `onMessage`, see queue.ts's `stashOrApply`) before this `await` resolves.
+   * Once the `job_id` is folded into the item below, replay whatever got
+   * stashed for it — if that includes a done/failed event, `activeId` clears
+   * right here and this function must re-invoke itself to pick up the next
+   * pending item (no `onMessage` push is coming to do it).
    */
   async function schedule() {
     const n = nextToStart(q)
@@ -90,6 +113,10 @@
         ...(ocr ? { provider } : {}),
       })
       q = { ...q, items: q.items.map((i) => (i.id === n.id ? { ...i, jobId: res.job_id } : i)) }
+      const replay = replayPending(q, pending, res.job_id)
+      q = replay.q
+      pending = replay.pending
+      if (q.activeId == null) void schedule()
     } catch (e) {
       q = {
         ...q,
@@ -113,7 +140,7 @@
       }
     } else if (m.type === 'job') {
       const j = m as JobPush
-      q = onJobEvent(q, j.job_id, {
+      const result = stashOrApply(q, pending, j.job_id, {
         event: j.event,
         line: j.line,
         stage: j.stage,
@@ -122,7 +149,9 @@
         dest_rel: j.dest_rel,
         error: j.error,
       })
-      if (j.event === 'done' || j.event === 'failed') void schedule()
+      q = result.q
+      pending = result.pending
+      if (result.applied && (j.event === 'done' || j.event === 'failed')) void schedule()
     }
   })
 
@@ -157,7 +186,7 @@
     globalError = ''
     try {
       await bridge().request('plugin.save_settings', {
-        vault: { ebooks_root: ebooksRoot, wechat_url: wechatUrl },
+        vault: { ebooks_root: ebooksRoot, wechat_url: wechatUrl, provider },
         device: {
           calibre_path: calibrePathOverride,
           baidu_api_key: baiduKeyInput,

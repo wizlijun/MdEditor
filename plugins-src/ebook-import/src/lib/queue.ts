@@ -166,3 +166,69 @@ export function onJobEvent(q: Queue, jobId: number, ev: JobEvent): Queue {
   const activeId = ev.event === 'done' || ev.event === 'failed' ? (q.activeId === item.id ? null : q.activeId) : q.activeId
   return { items, activeId }
 }
+
+/** One `type:"job"` push whose `job_id` couldn't yet be matched to an item. */
+export interface PendingJobEvent {
+  jobId: number
+  ev: JobEvent
+}
+
+/**
+ * Backend race (Task 9 review, Finding 1): `import_start` spawns the job
+ * thread BEFORE writing its RPC response, so a fast failure (calibre
+ * missing, OCR keys missing, pdfium missing) can push its `job_id`'s first
+ * event — sometimes `done`/`failed` itself — before the UI's `schedule()`
+ * has resolved `import_start` and folded that `job_id` into the item. At
+ * that instant `onJobEvent` would find no item with a matching `jobId` and
+ * silently no-op the event, permanently: the row stays "running", `activeId`
+ * never clears, and the queue stalls.
+ *
+ * `stashOrApply` is the receiving half of the fix: called from `onMessage`
+ * for every `type:"job"` push in place of a bare `onJobEvent`. If the
+ * `jobId` already matches an item, it applies immediately (the common
+ * case). Otherwise, only if there's an item that's `activeId` but whose
+ * `jobId` is still unset (i.e. `import_start` hasn't resolved yet) does it
+ * stash the event for later replay — that's the one case where "unknown
+ * jobId" plausibly means "ours, just not labeled yet" rather than "stale/
+ * already gone". Anything else (no active-unresolved item) is a genuinely
+ * unknown jobId and is dropped, same as `onJobEvent` always did.
+ */
+export function stashOrApply(
+  q: Queue,
+  pending: PendingJobEvent[],
+  jobId: number,
+  ev: JobEvent,
+): { q: Queue; pending: PendingJobEvent[]; applied: boolean } {
+  const known = q.items.some((i) => i.jobId === jobId)
+  if (known) {
+    return { q: onJobEvent(q, jobId, ev), pending, applied: true }
+  }
+  const activeUnresolved =
+    q.activeId != null && q.items.some((i) => i.id === q.activeId && i.jobId == null)
+  if (activeUnresolved) {
+    return { q, pending: [...pending, { jobId, ev }], applied: false }
+  }
+  return { q, pending, applied: false }
+}
+
+/**
+ * Replays every stashed event whose `jobId` matches, in arrival order,
+ * through `onJobEvent` — called right after `schedule()` folds a resolved
+ * `job_id` into an item, so events that raced ahead of the RPC response
+ * (see `stashOrApply`) land on the right row instead of being lost. Matching
+ * entries are consumed; anything left in `pending` (for a different,
+ * still-unresolved job) is returned untouched.
+ */
+export function replayPending(
+  q: Queue,
+  pending: PendingJobEvent[],
+  jobId: number,
+): { q: Queue; pending: PendingJobEvent[] } {
+  let next = q
+  const rest: PendingJobEvent[] = []
+  for (const p of pending) {
+    if (p.jobId === jobId) next = onJobEvent(next, jobId, p.ev)
+    else rest.push(p)
+  }
+  return { q: next, pending: rest }
+}

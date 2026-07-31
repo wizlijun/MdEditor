@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { addPaths, nextToStart, onJobEvent, reserve, type Queue } from './queue'
+import {
+  addPaths,
+  nextToStart,
+  onJobEvent,
+  replayPending,
+  reserve,
+  stashOrApply,
+  type PendingJobEvent,
+  type Queue,
+} from './queue'
 
 const empty: Queue = { items: [], activeId: null }
 
@@ -190,5 +199,64 @@ describe('onJobEvent', () => {
     const q = running()
     const q2 = onJobEvent(q, 999, { event: 'log', line: 'nope' })
     expect(q2).toEqual(q)
+  })
+})
+
+// Finding 1 (final review): the backend spawns a job's thread before
+// answering import_start's RPC, so a fast failure's job push can arrive
+// before the UI has folded that job_id into its item. stashOrApply/
+// replayPending are the fix: stash such events instead of dropping them,
+// then replay once schedule() learns the jobId.
+describe('stashOrApply / replayPending', () => {
+  function reservedButUnresolved(): Queue {
+    // Mirrors reserve()'s output: activeId set, item running, jobId unset.
+    const q = addPaths({ items: [], activeId: null }, ['/a.epub'])
+    return reserve(q, q.items[0].id)
+  }
+
+  it('applies immediately when the job_id already matches an item', () => {
+    const q: Queue = {
+      items: [{ id: 1, path: '/a.epub', name: 'a.epub', status: 'running', jobId: 7, logs: [] }],
+      activeId: 1,
+    }
+    const pending: PendingJobEvent[] = []
+    const result = stashOrApply(q, pending, 7, { event: 'log', line: 'hi' })
+    expect(result.applied).toBe(true)
+    expect(result.pending).toEqual([])
+    expect(result.q.items[0].logs).toEqual(['hi'])
+  })
+
+  it('stashes a failed event that arrives before the active item has a jobId, then replay marks it failed and clears activeId', () => {
+    let q = reservedButUnresolved()
+    let pending: PendingJobEvent[] = []
+
+    // The fast-failure push races ahead of import_start's RPC response.
+    const stashResult = stashOrApply(q, pending, 99, { event: 'failed', error: 'calibre not found' })
+    expect(stashResult.applied).toBe(false)
+    q = stashResult.q
+    pending = stashResult.pending
+    expect(pending).toEqual([{ jobId: 99, ev: { event: 'failed', error: 'calibre not found' } }])
+    // Nothing applied yet — the item is still "running", activeId still set.
+    expect(q.items[0].status).toBe('running')
+    expect(q.activeId).not.toBeNull()
+
+    // import_start resolves: schedule() folds job_id=99 into the item, then replays.
+    const withJobId = { ...q, items: q.items.map((i) => ({ ...i, jobId: 99 })) }
+    const replay = replayPending(withJobId, pending, 99)
+
+    expect(replay.pending).toEqual([])
+    expect(replay.q.items[0]).toMatchObject({ status: 'failed', error: 'calibre not found' })
+    expect(replay.q.activeId).toBeNull()
+  })
+
+  it('drops events for a genuinely unknown job id (no active-unresolved item)', () => {
+    const q: Queue = {
+      items: [{ id: 1, path: '/a.epub', name: 'a.epub', status: 'done', jobId: 7, logs: [] }],
+      activeId: null,
+    }
+    const result = stashOrApply(q, [], 999, { event: 'log', line: 'stale' })
+    expect(result.applied).toBe(false)
+    expect(result.pending).toEqual([])
+    expect(result.q).toEqual(q)
   })
 })
