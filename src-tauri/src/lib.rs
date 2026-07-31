@@ -1702,6 +1702,12 @@ fn apply_menu_locale(app: &tauri::AppHandle, locale: &str) -> Result<(), String>
     *app.state::<RecentMenu>().0.lock().unwrap() = Some(recent_submenu);
     app.set_menu(menu).map_err(|e| e.to_string())?;
 
+    // set_menu resets every item to its build-time enabled default. Runtime
+    // enabled state (canSyncToVault / hasSyncSource / share records / …) is
+    // pushed from the frontend and deduped there, so it would NOT be re-applied
+    // after a rebuild. Signal the frontend to drop its dedup cache and re-push.
+    let _ = app.emit("menu-rebuilt", ());
+
     // Rebuild the tray dropdown too (event handling lives on the TrayIcon).
     if let Some(tray) = app.tray_by_id("main") {
         let (tray_menu, sync_repo_item, status_item, sync_now_item) =

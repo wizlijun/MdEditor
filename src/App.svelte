@@ -104,6 +104,15 @@
   // Tracks last applied enabled state per menu-item id, so we only invoke the
   // Tauri command when something actually changes.
   const lastEnabledState = new Map<string, boolean>()
+  // Bumped whenever the native menu is rebuilt (locale switch, plugin toggle,
+  // daily-notes toggle). A rebuild resets every item to its build-time default,
+  // so the enabled-sync effect must forget what it thinks it applied and
+  // re-push. The effect reads this so bumping it forces a re-run.
+  let menuRebuildTick = $state(0)
+  function resyncMenuEnabled() {
+    lastEnabledState.clear()
+    menuRebuildTick++
+  }
 
   // Keep the native menu bar in the user's language. Runs on mount (after the
   // locale hydrates) and on every switch; re-pushes recent files since the menu
@@ -116,6 +125,9 @@
         await invoke('set_menu_locale', { locale })
         const { refreshRecentMenu } = await import('./lib/recent-sync.svelte')
         await refreshRecentMenu()
+        // set_menu_locale rebuilt the menu → enabled states were reset to
+        // build-time defaults. Drop the dedup cache so they get re-pushed.
+        resyncMenuEnabled()
       } catch { /* no native menu on this platform */ }
     })()
   })
@@ -190,6 +202,11 @@
         pluginRuntime.manifests = await invoke<PluginManifest[]>('get_plugin_manifests')
       } catch (e) { console.warn('[App] plugins-changed refresh:', e) }
     })
+
+    // A native menu rebuild (plugin install/toggle, daily-notes toggle, locale
+    // switch) resets every item to its build-time enabled default. Drop the
+    // enabled-sync dedup cache so the effect re-pushes the real runtime state.
+    const unlistenMenuRebuilt = listen('menu-rebuilt', () => resyncMenuEnabled())
 
     invoke<string[]>('drain_pending_files').then(async (paths) => {
       for (const p of paths) {
@@ -657,6 +674,7 @@
       unlistenOpenRemoteBuffer.then((fn) => fn())
       unlistenPluginToast.then((fn) => fn())
       unlistenPluginsChanged.then((fn) => fn())
+      unlistenMenuRebuilt.then((fn) => fn())
       unlistenDeepLink.then((fn) => fn())
       cleanupRecents?.()
       setVaultRootChangedHandler(null)
@@ -707,6 +725,10 @@
     void _tabCount; void _settingsTick
     const _sotvaultTick = sotvaultStore.tick
     void _sotvaultTick
+    // Re-run (and re-push, since resyncMenuEnabled() cleared the cache) after a
+    // native menu rebuild reset every item to its build-time enabled default.
+    const _menuRebuildTick = menuRebuildTick
+    void _menuRebuildTick
 
     const ewTab: EnabledWhenContext['currentTab'] = tab
       ? {
