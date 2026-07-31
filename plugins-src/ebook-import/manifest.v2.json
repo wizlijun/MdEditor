@@ -1,0 +1,44 @@
+{
+  "manifest_version": 2,
+  "id": "notemd.ebook-import",
+  "name": "Ebook Import",
+  "version": "1.0.0",
+  "kind": "native",
+  "engines": { "notemd": ">=6.801.1" },
+  "description": "Import ebooks (epub/pdf/docx) into the vault as markdown: Calibre conversion, OCR for scanned PDFs (WeChat OCR / Baidu Unlimited-OCR), archived to ssot/ebooks/YYYY-MM/<title>/ with config.txt + book.md + images.",
+  "binary": {
+    "aarch64-apple-darwin": "bin/notemd-ebook-import",
+    "x86_64-apple-darwin": "bin/notemd-ebook-import"
+  },
+  "ui": "ui/",
+  "activation": { "events": ["onCommand:open", "onCli:ebook"] },
+  "contributes": {
+    "menus": [
+      { "location": "plugins", "label": "Import Ebooks (epub/pdf/docx)…", "command": "open" }
+    ],
+    "windows": [
+      { "id": "main", "entry": "index.html", "title": "Ebook Import",
+        "width": 900, "height": 640, "min_width": 640, "min_height": 480,
+        "open_command": "open" }
+    ],
+    "cli": [
+      { "subcommand": "ebook", "command": "import",
+        "summary": "Import an ebook into the vault as markdown",
+        "args": [
+          { "name": "file", "type": "string", "required": true, "help": "Path to .epub/.pdf/.docx" }
+        ],
+        "flags": [
+          { "long": "--ocr", "type": "boolean", "help": "OCR mode for scanned PDFs" },
+          { "long": "--ocr-provider", "type": "string", "help": "wechat | baidu (default: settings)" },
+          { "long": "--root", "type": "string", "help": "Vault-relative ebooks root (default: settings)" }
+        ] }
+    ]
+  },
+  "capabilities": ["ui", "toast", "dialog", "vault.read", "vault.write", "editor.open"],
+  "request_timeout_seconds": 300,
+  "i18n": {
+    "zh": { "name": "导入电子书", "menus": { "open": "导入电子书(epub、pdf、docx)…" } },
+    "ja": { "name": "電子書籍を取り込む", "menus": { "open": "電子書籍を取り込む(epub・pdf・docx)…" } },
+    "de": { "name": "E-Books importieren", "menus": { "open": "E-Books importieren (epub/pdf/docx)…" } }
+  }
+}
