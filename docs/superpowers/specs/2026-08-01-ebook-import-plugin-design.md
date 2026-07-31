@@ -92,7 +92,9 @@ pub trait OcrEngine {
 3. `/Applications/calibre.app/Contents/MacOS/ebook-convert`
 4. `/usr/local/bin/ebook-convert`、`/opt/homebrew/bin/ebook-convert`、`/usr/bin/ebook-convert`、PATH
 
-每个候选跑 `--version`(10s 超时)验证。UI 设置区显示:`✓ Calibre @ <路径>(<版本>)` 或 `✗ 未找到 — [安装引导 calibre-ebook.com] [手动选择…]`;手动选择走 host.dialog.open,存设备本地配置。未找到时普通路径导入置灰(OCR-百度路径不依赖 Calibre,仍可用;OCR-微信路径也不依赖)。
+每个候选跑 `--version`(10s 超时)验证。UI 设置区显示:`✓ Calibre @ <路径>(<版本>)` 或 `✗ 未找到 — [安装引导 calibre-ebook.com] [手动选择…]`;手动选择走 host.dialog.open,存设备本地配置。
+
+> **实现记事(2026-08-01 终审):** "未找到时普通路径导入置灰" 未照此实现——实际是快速失败(fail-fast):普通路径导入照样可发起,`run_job`/`cli_import` 在 Calibre 未探测到时立刻返回 `Err("calibre not found")`,UI 队列行内联展示该错误,而不是禁用按钮。OCR-百度/OCR-微信两条路径均不依赖 Calibre,不受影响。
 
 ## 6. 设置与密钥(两层,按语义分家)
 
@@ -100,8 +102,11 @@ pub trait OcrEngine {
 
 ```json
 { "ebooks_root": "ssot/ebooks",
-  "ocr": { "provider": "wechat", "wechat": { "url": "http://10.17.0.123:8092/ocr" } } }
+  "provider": "wechat",
+  "wechat_url": "http://10.17.0.123:8092/ocr" }
 ```
+
+> **实现记事(2026-08-01 终审):** 实际落地是**扁平** `VaultSettings`(`settings.rs`),而非上面草稿设想的嵌套 `ocr.{provider,wechat.url}`;字段名也是 `provider`/`wechat_url` 直挂顶层。这份文件是 agent 可读的契约,以上例为准。`ebooks_root` 必须是 vault 相对路径(不能是绝对路径,不能含 `..` 分量,不能为空)——`save_settings` 与 `run_import` 都会校验并拒绝(见 `settings::validate_ebooks_root`),防止归档逃出 vault。
 
 **设备本地** `<插件数据目录>/device.json`(不进 vault):
 

@@ -211,7 +211,7 @@ elif [[ "$PLUGIN" == "ebook-import" ]]; then
   echo "✓ installed notemd.ebook-import@$VERSION ($PROFILE, $(uname -m), backend + ui + libpdfium) → $DEST"
   echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  open it:                Plugins menu ▸ \"导入电子书(epub、pdf、docx)…\""
-  echo "  CLI:                    notemd ebook import <file.epub|.pdf|.docx> [--ocr] [--ocr-provider wechat|baidu] [--root <vault-relative>]"
+  echo "  CLI:                    notemd ebook <file.epub|.pdf|.docx> [--ocr] [--ocr-provider wechat|baidu] [--root <vault-relative>]"
 fi
 
 # ---------------------------------------------------------------------------
