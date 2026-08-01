@@ -1,4 +1,11 @@
-import { bridge } from './bridge'
+// src/lib/strings.ts — self-contained i18n for the weekly-review plugin.
+//
+// A plugin window can't import the host's i18n store, so this mirrors its
+// shape (src/lib/i18n/store.svelte.ts) in miniature: a MessageKey union, one
+// catalog per locale, and a `t()` that falls back to English. Language is
+// chosen from `notemd.locale` at startup via `setLocale`; see App.svelte.
+
+export type Locale = 'en' | 'zh' | 'ja' | 'de'
 
 export type MessageKey =
   | 'title'
@@ -20,6 +27,13 @@ export type MessageKey =
   | 'month.suffix'
   | 'nav.prevYear'
   | 'nav.nextYear'
+  | 'dow.mon'
+  | 'dow.tue'
+  | 'dow.wed'
+  | 'dow.thu'
+  | 'dow.fri'
+  | 'dow.sat'
+  | 'dow.sun'
 
 type Catalog = Record<MessageKey, string>
 
@@ -43,6 +57,13 @@ const en: Catalog = {
   'month.suffix': '',
   'nav.prevYear': 'previous year',
   'nav.nextYear': 'next year',
+  'dow.mon': 'M',
+  'dow.tue': 'T',
+  'dow.wed': 'W',
+  'dow.thu': 'T',
+  'dow.fri': 'F',
+  'dow.sat': 'S',
+  'dow.sun': 'S',
 }
 
 const zh: Catalog = {
@@ -65,6 +86,13 @@ const zh: Catalog = {
   'month.suffix': '月',
   'nav.prevYear': '上一年',
   'nav.nextYear': '下一年',
+  'dow.mon': '一',
+  'dow.tue': '二',
+  'dow.wed': '三',
+  'dow.thu': '四',
+  'dow.fri': '五',
+  'dow.sat': '六',
+  'dow.sun': '日',
 }
 
 const ja: Catalog = {
@@ -87,6 +115,13 @@ const ja: Catalog = {
   'month.suffix': '月',
   'nav.prevYear': '前年',
   'nav.nextYear': '翌年',
+  'dow.mon': '月',
+  'dow.tue': '火',
+  'dow.wed': '水',
+  'dow.thu': '木',
+  'dow.fri': '金',
+  'dow.sat': '土',
+  'dow.sun': '日',
 }
 
 const de: Catalog = {
@@ -109,18 +144,38 @@ const de: Catalog = {
   'month.suffix': '',
   'nav.prevYear': 'Vorheriges Jahr',
   'nav.nextYear': 'Nächstes Jahr',
+  'dow.mon': 'M',
+  'dow.tue': 'D',
+  'dow.wed': 'M',
+  'dow.thu': 'D',
+  'dow.fri': 'F',
+  'dow.sat': 'S',
+  'dow.sun': 'S',
 }
 
-const catalogs: Record<string, Catalog> = { en, zh, ja, de }
+const registry: Record<Locale, Catalog> = { en, zh, ja, de }
 
+let active: Locale = 'en'
+
+function isLocale(v: unknown): v is Locale {
+  return v === 'en' || v === 'zh' || v === 'ja' || v === 'de'
+}
+
+/**
+ * Sets the active locale from `notemd.locale`. Accepts a region suffix
+ * (`zh-CN` → `zh`); unknown/absent falls back to English.
+ */
+export function setLocale(code: string | undefined): void {
+  const base = code?.split('-')[0]
+  active = isLocale(base) ? base : 'en'
+}
+
+/** Translates `key` for the active locale, falling back to English then the raw key. */
 export function t(key: MessageKey): string {
-  const loc = (() => {
-    try {
-      return bridge().locale
-    } catch {
-      return 'en'
-    }
-  })()
-  const cat = catalogs[loc] ?? en
-  return cat[key] ?? en[key]
+  const catalog = registry[active] ?? en
+  return catalog[key] ?? en[key] ?? key
 }
+
+// Exported for tests only (catalog completeness / placeholder parity checks).
+export const CATALOGS: Record<Locale, Catalog> = registry
+export const LOCALES: Locale[] = ['en', 'zh', 'ja', 'de']

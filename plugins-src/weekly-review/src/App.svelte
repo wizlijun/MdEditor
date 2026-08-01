@@ -1,12 +1,14 @@
 <script lang="ts">
-  import { vaultInfo, vaultList, vaultExists, openInEditor, toast } from './lib/bridge'
+  import { bridge, vaultInfo, vaultList, vaultExists, openInEditor, toast } from './lib/bridge'
   import {
     buildIndex, buildDayIndex, parseDiaryName, parseDailyNoteName,
     WEEKLY_DIR, DIARY_DIR, DAILYNOTE_DIR, type ReviewIndex,
   } from './lib/scan'
   import { mondayOf } from './lib/isoweek'
-  import { t } from './lib/strings'
+  import { setLocale, t } from './lib/strings'
   import YearCalendar from './lib/components/YearCalendar.svelte'
+
+  setLocale(bridge().locale)
 
   let reviewIndex = $state<ReviewIndex>({ byYear: new Map(), years: [] })
   let diaryIndex = $state<Map<string, string>>(new Map())

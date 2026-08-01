@@ -14,7 +14,7 @@
   }
   let { year, month0, weeks, diaryIndex, noteIndex, todayMondayMs, onOpen }: Props = $props()
 
-  const DOW = ['一', '二', '三', '四', '五', '六', '日']
+  const DOW = [t('dow.mon'), t('dow.tue'), t('dow.wed'), t('dow.thu'), t('dow.fri'), t('dow.sat'), t('dow.sun')]
   const rows = $derived(buildMonthRows(year, month0))
 </script>
 
