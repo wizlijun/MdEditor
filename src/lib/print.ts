@@ -1,4 +1,4 @@
-import pdfCss from '../../md2pdf/assets/pdf.css?raw'
+import pdfCss from '../../plugins-src/md2pdf/assets/pdf.css?raw'
 import { activeTab } from './tabs.svelte'
 import { renderTabAsInlineBody, buildPdfTitle, htmlEscape, CRITIC_CSS } from './plugins/host-render-html'
 import { pushToast } from './toast.svelte'
