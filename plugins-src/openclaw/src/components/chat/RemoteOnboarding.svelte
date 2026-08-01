@@ -2,6 +2,7 @@
 <script lang="ts">
   import { pairClaim } from '../../lib/openclaw/pair'
   import { t } from '../../lib/strings'
+  import { describeError } from '../../lib/errors'
 
   let { onComplete }: { onComplete: () => void } = $props()
   let code = $state('')
@@ -17,7 +18,7 @@
       await pairClaim(trimmed, hostname || undefined)
       onComplete()
     } catch (e) {
-      err = String(e)
+      err = describeError(String(e))
     } finally { busy = false }
   }
 </script>

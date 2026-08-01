@@ -2,6 +2,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { t } from './lib/strings'
+  import { describeError } from './lib/errors'
   import { start, stop } from './lib/openclaw/client.svelte'
   import SessionPicker from './components/chat/SessionPicker.svelte'
   import MessageList from './components/chat/MessageList.svelte'
@@ -23,7 +24,7 @@
       if (msg.includes('not paired')) {
         mode = 'needs-pairing'
       } else {
-        initError = msg
+        initError = describeError(msg)
         mode = 'remote'
       }
     }

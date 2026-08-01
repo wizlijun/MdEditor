@@ -3,6 +3,7 @@
   import type { Message } from '../../lib/openclaw/protocol'
   import { openVaultLink } from '../../lib/openclaw/links'
   import { state } from '../../lib/openclaw/client.svelte'
+  import { t, type MessageKey } from '../../lib/strings'
 
   let { message }: { message: Message } = $props()
 
@@ -37,7 +38,7 @@
 </script>
 
 <div class="bubble" class:user={message.role === 'user'} class:agent={message.role === 'agent'} onclick={onClick}>
-  <div class="role">{message.role}</div>
+  <div class="role">{t(('chat.role.' + message.role) as MessageKey)}</div>
   <div class="text">{@html renderText(message.text).html}{#if message.streaming}<span class="cursor">▍</span>{/if}</div>
 </div>
 

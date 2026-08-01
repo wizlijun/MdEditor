@@ -2,6 +2,7 @@
 <script lang="ts">
   import { pairCreate, type PairCreateOut } from '../../lib/openclaw/pair'
   import { t } from '../../lib/strings'
+  import { describeError } from '../../lib/errors'
 
   let { onClose }: { onClose: () => void } = $props()
   let data: PairCreateOut | null = $state(null)
@@ -18,7 +19,7 @@
         remaining = Math.max(0, remaining - 1)
         if (remaining === 0 && timer) clearInterval(timer)
       }, 1000)
-    } catch (e) { err = String(e) }
+    } catch (e) { err = describeError(String(e)) }
   }
 
   $effect(() => { create(); return () => { if (timer) clearInterval(timer) } })

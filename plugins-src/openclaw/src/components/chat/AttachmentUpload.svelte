@@ -2,6 +2,7 @@
 <script lang="ts">
   import { request } from '../../lib/bridge'
   import { state as clientState } from '../../lib/openclaw/client.svelte'
+  import { t } from '../../lib/strings'
 
   let busy = $state(false)
 
@@ -22,7 +23,7 @@
   }
 </script>
 
-<label class="attach" class:busy>
+<label class="attach" class:busy title={t('chat.attach')} aria-label={t('chat.attach')}>
   <input type="file" onchange={onChange} disabled={busy} hidden />
   📎
 </label>

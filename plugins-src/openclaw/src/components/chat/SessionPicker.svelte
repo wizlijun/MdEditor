@@ -1,6 +1,6 @@
 <!-- src/components/chat/SessionPicker.svelte -->
 <script lang="ts">
-  import { t } from '../../lib/strings'
+  import { t, type MessageKey } from '../../lib/strings'
   import { state, newSession, openSession } from '../../lib/openclaw/client.svelte'
 </script>
 
@@ -14,7 +14,7 @@
     {/each}
   </select>
   <button onclick={() => newSession()}>{t('chat.newSession')}</button>
-  <span class="status" data-status={state.status}>{state.status}</span>
+  <span class="status" data-status={state.status}>{t(('chat.status.' + state.status) as MessageKey)}</span>
 </header>
 
 <style>
