@@ -148,19 +148,25 @@
       <input type="date" bind:value={checkDate} min={today} />
     </label>
 
+    <!-- The three optional fields each carry a `why` line: on their own the
+         labels read as jargon, and a user who can't see what the field buys
+         them at review time just leaves it blank. -->
     <label class="field">
       <span class="lbl">{t('sign.premortem')}</span>
+      <span class="why">{t('sign.premortemWhy')}</span>
       <textarea bind:value={premortem} rows="2" placeholder={t('sign.premortemHint')}></textarea>
     </label>
 
     <label class="field">
       <span class="lbl">{t('sign.alternatives')}</span>
-      <textarea bind:value={alternativesText} rows="2" placeholder={t('sign.alternativesHint')}></textarea>
+      <span class="why">{t('sign.alternativesWhy')}</span>
+      <textarea bind:value={alternativesText} rows="4" placeholder={t('sign.alternativesHint')}></textarea>
     </label>
 
     <label class="field">
       <span class="lbl">{t('sign.triggers')}</span>
-      <textarea bind:value={triggerText} rows="2" placeholder={t('sign.triggersHint')}></textarea>
+      <span class="why">{t('sign.triggersWhy')}</span>
+      <textarea bind:value={triggerText} rows="4" placeholder={t('sign.triggersHint')}></textarea>
     </label>
 
     {#if error}<p class="err">{error}</p>{/if}
@@ -187,6 +193,10 @@
   h2 { margin: 0 0 1rem; font-size: 1.1rem; }
   .field { display: block; margin-bottom: 0.9rem; }
   .lbl { display: block; font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.35rem; }
+  .why {
+    display: block; font-size: 0.72rem; line-height: 1.45;
+    opacity: 0.5; margin: -0.15rem 0 0.35rem;
+  }
   .req { color: #dc2626; }
   input, textarea {
     width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid var(--line, #d1d5db);

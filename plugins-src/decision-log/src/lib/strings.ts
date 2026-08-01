@@ -4,7 +4,9 @@ export type MessageKey =
   | 'sign.title' | 'sign.prediction'
   | 'conf.s1' | 'conf.s2' | 'conf.s3' | 'conf.s4' | 'conf.s5'
   | 'sign.checkDate' | 'sign.submit'
-  | 'sign.premortem' | 'sign.premortemHint' | 'sign.alternatives' | 'sign.alternativesHint'
+  | 'sign.premortem' | 'sign.premortemHint' | 'sign.premortemWhy'
+  | 'sign.alternatives' | 'sign.alternativesHint' | 'sign.alternativesWhy'
+  | 'sign.triggersWhy'
   | 'verdict.q1' | 'verdict.hit' | 'verdict.partial' | 'verdict.miss'
   | 'verdict.q2' | 'verdict.endorseYes' | 'verdict.endorseNo' | 'verdict.submit'
   | 'verdict.q3' | 'verdict.q3Hint'
@@ -36,9 +38,14 @@ const en: Catalog = {
   'sign.title': 'Sign this bet', 'sign.prediction': 'Prediction',
   'conf.s1': 'Just over even', 'conf.s2': 'Leaning yes', 'conf.s3': 'Fairly sure', 'conf.s4': 'Very sure', 'conf.s5': 'Near certain',
   'sign.checkDate': 'Check on', 'sign.submit': 'Sign the bet',
-  'sign.premortem': 'Premortem (optional)',
-  'sign.premortemHint': "It's the check date and this decision has failed. What's the most likely reason?",
-  'sign.alternatives': 'Alternatives considered (optional)', 'sign.alternativesHint': 'One per line — what else did you weigh?',
+  'sign.premortem': 'If this fails, why will it have failed? (optional)',
+  'sign.premortemWhy':
+    'Naming the failure now gives the review something to check against: did it fail the way you saw coming, or in a way you never considered?',
+  'sign.premortemHint': 'e.g. we underestimate the migration and nobody has time to finish it',
+  'sign.alternatives': 'What else could you have done? (optional)',
+  'sign.alternativesWhy':
+    "Recorded now, the options can't quietly shrink to one by review time — you'll be able to tell whether a better path was actually on the table.",
+  'sign.alternativesHint': 'One per line, e.g.\npilot with one team first\nbuy instead of build\nchange nothing',
   'verdict.q1': 'Did it happen?', 'verdict.hit': 'Hit', 'verdict.partial': 'Partial', 'verdict.miss': 'Missed',
   'verdict.q2': 'Ignoring the result — would you decide this way again?', 'verdict.endorseYes': 'Yes', 'verdict.endorseNo': 'No',
   'verdict.q3': 'What was the weakest link?', 'verdict.q3Hint': 'Optional — skip if unsure.',
@@ -47,7 +54,11 @@ const en: Catalog = {
   'verdict.submit': 'Close & archive',
   'score.samples': 'samples collected', 'score.calibration': 'Calibration', 'score.points': 'decision points', 'card.new': 'New Decision',
   'downgrade.toast': 'Set aside for you — reopen anytime.',
-  'sign.confidenceLabel': 'How sure are you?', 'sign.triggers': 'Reconsider if…', 'sign.triggersHint': 'e.g. a competitor ships first',
+  'sign.confidenceLabel': 'How sure are you?',
+  'sign.triggers': "What would make you revisit this before the check date? (optional)",
+  'sign.triggersWhy':
+    'These are your early-exit signals. The card shows ⚡ so a decision whose ground has shifted gets looked at again instead of coasting to its check date.',
+  'sign.triggersHint': 'One per line, e.g.\nthe lead engineer leaves\na competitor ships the same thing\nthe budget is cut',
   'sign.predictionRequired': 'Write a falsifiable prediction to sign.',
   'sign.quotedLead': 'You said', 'sign.nominatedLead': 'A prediction to lock in — your words',
   'sign.title.new': 'New decision', 'sign.titleLabel': 'Decision',
@@ -78,9 +89,14 @@ const zh: Partial<Catalog> = {
   'sign.title': '签字下注', 'sign.prediction': '预测',
   'conf.s1': '勉强过半', 'conf.s2': '六成把握', 'conf.s3': '挺有把握', 'conf.s4': '很有把握', 'conf.s5': '几乎确定',
   'sign.checkDate': '检查日期', 'sign.submit': '签字下注',
-  'sign.premortem': '失败预想(可选)',
-  'sign.premortemHint': '假设现在是检查日,这个决策已经失败了。最可能的原因是什么?',
-  'sign.alternatives': '落选的备选项(可选)', 'sign.alternativesHint': '每行一条 —— 你还权衡过什么?',
+  'sign.premortem': '如果这件事没成,会是因为什么?(可选)',
+  'sign.premortemWhy':
+    '现在把失败原因写下来,到检查日就有得对照:是败在你早看到的地方,还是败在你压根没想到的地方?',
+  'sign.premortemHint': '例如:低估了迁移工作量,后面没人抽得出时间收尾',
+  'sign.alternatives': '你还可以怎么做?(可选)',
+  'sign.alternativesWhy':
+    '现在记下来,选项就不会到复盘时缩水成"当时只有这一条路"——你能看清当初是否真有更好的选择。',
+  'sign.alternativesHint': '每行一条,例如:\n先找一个团队试点\n买现成的而不是自己做\n维持现状不动',
   'verdict.q1': '发生了吗?', 'verdict.hit': '命中', 'verdict.partial': '部分', 'verdict.miss': '未命中',
   'verdict.q2': '抛开结果 —— 还会这么决定吗?', 'verdict.endorseYes': '会', 'verdict.endorseNo': '不会',
   'verdict.q3': '哪一环最弱?', 'verdict.q3Hint': '可选 —— 说不准就跳过。',
@@ -89,7 +105,11 @@ const zh: Partial<Catalog> = {
   'verdict.submit': '关闭并归档',
   'score.samples': '个决策样本', 'score.calibration': '校准', 'score.points': '决策分', 'card.new': '新建决策',
   'downgrade.toast': '帮你清理了 —— 随时可捞回。',
-  'sign.confidenceLabel': '你有多大把握?', 'sign.triggers': '若发生就复议…', 'sign.triggersHint': '例如:竞品先发布',
+  'sign.confidenceLabel': '你有多大把握?',
+  'sign.triggers': '出现什么情况,你会提前重新考虑?(可选)',
+  'sign.triggersWhy':
+    '这是你给自己留的提前撤退信号。卡片上会标 ⚡,免得形势已经变了,这个决定还一路滑到检查日才被想起来。',
+  'sign.triggersHint': '每行一条,例如:\n主力工程师离职\n竞品先做出同样的东西\n预算被砍',
   'sign.predictionRequired': '写下一个可证伪的预测才能签字。',
   'sign.quotedLead': '你说过', 'sign.nominatedLead': '要锁定的预测 —— 用你自己的话',
   'sign.title.new': '新建决策', 'sign.titleLabel': '决策',
@@ -120,9 +140,14 @@ const ja: Partial<Catalog> = {
   'sign.title': 'この賭けにサインする', 'sign.prediction': '予測',
   'conf.s1': 'かろうじて五分以上', 'conf.s2': 'やや確か', 'conf.s3': 'かなり確か', 'conf.s4': 'とても確か', 'conf.s5': 'ほぼ確実',
   'sign.checkDate': '確認日', 'sign.submit': '賭けにサインする',
-  'sign.premortem': 'プレモーテム(任意)',
-  'sign.premortemHint': '今日が確認日で、この決定はすでに失敗しました。最も可能性の高い理由は?',
-  'sign.alternatives': '見送った選択肢(任意)', 'sign.alternativesHint': '1 行につき 1 つ —— 他に何を検討しましたか?',
+  'sign.premortem': 'もし失敗するなら、原因は何でしょう?(任意)',
+  'sign.premortemWhy':
+    '今のうちに失敗の理由を書いておくと、確認日に照らし合わせられます——予見していた通りに失敗したのか、まったく想定外の形だったのか。',
+  'sign.premortemHint': '例:移行の工数を甘く見て、誰も仕上げる時間が取れない',
+  'sign.alternatives': '他にどんなやり方がありましたか?(任意)',
+  'sign.alternativesWhy':
+    '今記録しておけば、振り返りのときに選択肢が「あの時はこれしかなかった」に縮まりません。本当により良い道があったかを確かめられます。',
+  'sign.alternativesHint': '1 行につき 1 つ、例:\nまず 1 チームで試す\n自作せず購入する\n現状のまま何もしない',
   'verdict.q1': '起きましたか?', 'verdict.hit': '的中', 'verdict.partial': '一部', 'verdict.miss': '外れ',
   'verdict.q2': '結果は抜きにして —— また同じ決定をしますか?', 'verdict.endorseYes': 'する', 'verdict.endorseNo': 'しない',
   'verdict.q3': '最も弱かった環は?', 'verdict.q3Hint': '任意 —— 不明ならスキップ。',
@@ -131,7 +156,11 @@ const ja: Partial<Catalog> = {
   'verdict.submit': '確定してアーカイブ',
   'score.samples': '件のサンプルを収集', 'score.calibration': 'キャリブレーション', 'score.points': '決定ポイント', 'card.new': '新しい決定',
   'downgrade.toast': '脇に片付けておきました —— いつでも戻せます。',
-  'sign.confidenceLabel': 'どのくらい確かですか?', 'sign.triggers': '次の場合は再検討…', 'sign.triggersHint': '例:競合が先にリリースしたら',
+  'sign.confidenceLabel': 'どのくらい確かですか?',
+  'sign.triggers': '何が起きたら確認日を待たず考え直しますか?(任意)',
+  'sign.triggersWhy':
+    '早期撤退のサインです。カードに ⚡ が付くので、前提が変わった決定が確認日まで放置されずに済みます。',
+  'sign.triggersHint': '1 行につき 1 つ、例:\n主力エンジニアが辞める\n競合が同じものを先に出す\n予算が削られる',
   'sign.predictionRequired': 'サインするには反証可能な予測を書いてください。',
   'sign.quotedLead': 'あなたの言葉', 'sign.nominatedLead': '固定する予測 —— あなた自身の言葉で',
   'sign.title.new': '新しい決定', 'sign.titleLabel': '決定',
@@ -162,9 +191,14 @@ const de: Partial<Catalog> = {
   'sign.title': 'Diese Wette unterschreiben', 'sign.prediction': 'Vorhersage',
   'conf.s1': 'Knapp über 50/50', 'conf.s2': 'Eher ja', 'conf.s3': 'Ziemlich sicher', 'conf.s4': 'Sehr sicher', 'conf.s5': 'Fast sicher',
   'sign.checkDate': 'Prüfen am', 'sign.submit': 'Wette unterschreiben',
-  'sign.premortem': 'Premortem (optional)',
-  'sign.premortemHint': 'Es ist der Prüftag und diese Entscheidung ist gescheitert. Was ist der wahrscheinlichste Grund?',
-  'sign.alternatives': 'Verworfene Alternativen (optional)', 'sign.alternativesHint': 'Eine pro Zeile — was hast du noch abgewogen?',
+  'sign.premortem': 'Wenn das scheitert — woran lag es? (optional)',
+  'sign.premortemWhy':
+    'Jetzt notiert, hat die Prüfung einen Vergleichspunkt: Ist es so gescheitert, wie du es kommen sahst, oder auf eine Art, an die du nie gedacht hast?',
+  'sign.premortemHint': 'z. B. wir unterschätzen die Migration und niemand hat Zeit, sie zu Ende zu bringen',
+  'sign.alternatives': 'Was hättest du sonst tun können? (optional)',
+  'sign.alternativesWhy':
+    'Jetzt festgehalten, schrumpfen die Optionen bis zur Prüfung nicht still auf eine einzige — du erkennst, ob es wirklich einen besseren Weg gab.',
+  'sign.alternativesHint': 'Eine pro Zeile, z. B.\nerst mit einem Team testen\nkaufen statt bauen\nalles so lassen',
   'verdict.q1': 'Ist es eingetreten?', 'verdict.hit': 'Treffer', 'verdict.partial': 'Teilweise', 'verdict.miss': 'Verfehlt',
   'verdict.q2': 'Unabhängig vom Ergebnis — würdest du wieder so entscheiden?', 'verdict.endorseYes': 'Ja', 'verdict.endorseNo': 'Nein',
   'verdict.q3': 'Was war das schwächste Glied?', 'verdict.q3Hint': 'Optional — im Zweifel überspringen.',
@@ -173,7 +207,11 @@ const de: Partial<Catalog> = {
   'verdict.submit': 'Schließen & archivieren',
   'score.samples': 'Stichproben gesammelt', 'score.calibration': 'Kalibrierung', 'score.points': 'Entscheidungspunkte', 'card.new': 'Neue Entscheidung',
   'downgrade.toast': 'Für dich beiseitegelegt — jederzeit wieder öffnen.',
-  'sign.confidenceLabel': 'Wie sicher bist du?', 'sign.triggers': 'Überdenken, wenn…', 'sign.triggersHint': 'z. B. ein Wettbewerber liefert zuerst',
+  'sign.confidenceLabel': 'Wie sicher bist du?',
+  'sign.triggers': 'Was würde dich vor dem Prüftag umdenken lassen? (optional)',
+  'sign.triggersWhy':
+    'Deine Ausstiegssignale. Die Karte zeigt ⚡, damit eine Entscheidung, deren Grundlage sich verschoben hat, nicht einfach bis zum Prüftag weiterläuft.',
+  'sign.triggersHint': 'Eine pro Zeile, z. B.\ndie leitende Entwicklerin geht\nein Wettbewerber liefert dasselbe\ndas Budget wird gekürzt',
   'sign.predictionRequired': 'Schreibe eine widerlegbare Vorhersage, um zu unterschreiben.',
   'sign.quotedLead': 'Du sagtest', 'sign.nominatedLead': 'Eine Vorhersage zum Festhalten — in deinen Worten',
   'sign.title.new': 'Neue Entscheidung', 'sign.titleLabel': 'Entscheidung',
