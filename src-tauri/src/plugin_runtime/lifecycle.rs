@@ -21,7 +21,7 @@
 
 use plugin_protocol as proto;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
@@ -493,7 +493,7 @@ pub async fn reconcile<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(
 /// scanned id→(manifest, install_dir) map, deactivate + drop every RUNNING
 /// lifecycle that vanished from it, then swap `STATE.plugins` to the new map.
 pub(crate) async fn reconcile_with_map(
-    new_map: HashMap<String, (proto::ManifestV2, PathBuf)>,
+    new_map: BTreeMap<String, (proto::ManifestV2, PathBuf)>,
 ) {
     // Which live lifecycles vanished from the install tree? Collect them under
     // a read lock, then release it before doing any async teardown.
@@ -684,7 +684,7 @@ mod tests {
         }
 
         // New scan map: only `keep` survives (drop was uninstalled/disabled).
-        let mut new_map: HashMap<String, (proto::ManifestV2, PathBuf)> = HashMap::new();
+        let mut new_map: BTreeMap<String, (proto::ManifestV2, PathBuf)> = BTreeMap::new();
         new_map.insert(
             keep.to_string(),
             (reconcile_manifest(keep), PathBuf::from("/tmp").join(keep)),

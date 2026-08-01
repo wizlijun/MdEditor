@@ -4,7 +4,7 @@
 //! affecting the others (spec §3).
 
 use plugin_protocol::ManifestV2;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::state;
@@ -22,8 +22,8 @@ pub(crate) fn current_arch_triple() -> Option<&'static str> {
 
 /// Pure scan against an explicit plugins root (testable without an AppHandle).
 /// Returns id → (manifest, absolute path of the plugin's `current/` dir).
-pub fn scan_root(root: &Path, host_version: &str) -> HashMap<String, (ManifestV2, PathBuf)> {
-    let mut out = HashMap::new();
+pub fn scan_root(root: &Path, host_version: &str) -> BTreeMap<String, (ManifestV2, PathBuf)> {
+    let mut out = BTreeMap::new();
     let install = state::load(root);
     for (id, entry) in &install.installed {
         if !entry.enabled {
@@ -44,7 +44,7 @@ pub fn scan_root(root: &Path, host_version: &str) -> HashMap<String, (ManifestV2
 pub fn scan<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     host_version: &str,
-) -> Result<HashMap<String, (ManifestV2, PathBuf)>, String> {
+) -> Result<BTreeMap<String, (ManifestV2, PathBuf)>, String> {
     let root = state::plugins_root(app).ok_or("cannot resolve app data dir")?;
     Ok(scan_root(&root, host_version))
 }

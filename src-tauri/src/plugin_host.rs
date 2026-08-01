@@ -5,7 +5,7 @@
 //! triggers an invocation.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{LazyLock, RwLock};
@@ -174,7 +174,11 @@ pub struct SettingsBlock {
 struct State {
     /// Manifests the host considers active (passed plugins.enabled filter).
     /// Drives menu registration, settings tabs, invocation lookups.
-    enabled: HashMap<String, (PluginManifest, PathBuf)>,
+    ///
+    /// Ordered by id: this map's iteration order reaches the user as the order
+    /// of the Plugins menu, and a HashMap's is randomized per process — the
+    /// menu would reshuffle on every launch.
+    enabled: BTreeMap<String, (PluginManifest, PathBuf)>,
     /// Every manifest discovered on disk (including disabled). Used only
     /// by the Preferences "Plugins" tab to render the on/off list.
     all: Vec<PluginManifest>,
@@ -315,6 +319,10 @@ fn merge_dedup_v1_v2(v1: Vec<PluginManifest>, v2: Vec<PluginManifest>) -> Vec<Pl
     let mut out: Vec<PluginManifest> =
         v1.into_iter().filter(|m| !suppressed.contains(m.id.as_str())).collect();
     out.extend(v2);
+    // By id, across both generations: each side arrives sorted on its own, but
+    // appending would still group all v1 ahead of all v2, so the menu order
+    // would shift as plugins migrate rather than staying put.
+    out.sort_by(|a, b| a.id.cmp(&b.id));
     out
 }
 
@@ -326,9 +334,17 @@ pub fn get_plugin_manifests() -> Vec<PluginManifest> {
 /// Returns *every* manifest discovered on disk, including disabled ones.
 /// Only the Preferences "Plugins" tab uses this — runtime menus / dispatch
 /// must use `get_plugin_manifests` so disabled plugins remain inert.
+/// The discovery order of `all` follows the filesystem, so anything user-facing
+/// sorts by id first — a list that reorders itself between launches reads as a
+/// glitch.
+fn by_id(mut v: Vec<PluginManifest>) -> Vec<PluginManifest> {
+    v.sort_by(|a, b| a.id.cmp(&b.id));
+    v
+}
+
 #[tauri::command]
 pub fn get_all_plugin_manifests() -> Vec<PluginManifest> {
-    STATE.read().unwrap().all.clone()
+    by_id(STATE.read().unwrap().all.clone())
 }
 
 /// Whether the given plugin id is currently registered as enabled.
@@ -601,7 +617,7 @@ pub fn enabled_manifests_with_paths() -> Vec<(PluginManifest, PathBuf)> {
 }
 
 pub fn all_manifests() -> Vec<PluginManifest> {
-    STATE.read().unwrap().all.clone()
+    by_id(STATE.read().unwrap().all.clone())
 }
 
 /// Decide whether a given manifest should be active given the persisted
@@ -883,6 +899,18 @@ mod cli_helpers_tests {
         assert_eq!(md2pdf[0].manifest_version, Some(2));
         // Unrelated v1 plugin (share) is untouched.
         assert!(merged.iter().any(|m| m.id == "share"));
+    }
+
+    /// The Plugins menu is built from this list, so its order must not depend
+    /// on which generation a plugin belongs to or on map iteration order —
+    /// otherwise entries move around between launches and as plugins migrate.
+    #[test]
+    fn merge_dedup_orders_the_result_by_id_across_both_generations() {
+        let v1 = vec![bare_manifest("zeta", None), bare_manifest("alpha", None)];
+        let v2 = vec![bare_manifest("notemd.beta", Some(2)), bare_manifest("notemd.aardvark", Some(2))];
+        let ids: Vec<String> =
+            merge_dedup_v1_v2(v1, v2).into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec!["alpha", "notemd.aardvark", "notemd.beta", "zeta"]);
     }
 
     /// With the flag off, `adapted_v2_manifests()` is empty → the merge is a

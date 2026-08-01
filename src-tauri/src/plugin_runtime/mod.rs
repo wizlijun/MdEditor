@@ -16,18 +16,21 @@ pub mod state;
 pub mod ui_rpc;
 pub mod windows;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{LazyLock, RwLock};
 
 pub struct RuntimeState {
     pub enabled_flag: bool,
     /// id → (manifest, install_dir<current/>)
-    pub plugins: HashMap<String, (plugin_protocol::ManifestV2, std::path::PathBuf)>,
+    /// Ordered by id — iteration order surfaces as the Plugins menu order,
+    /// and a HashMap's is randomized per process (the menu would reshuffle on
+    /// every launch).
+    pub plugins: BTreeMap<String, (plugin_protocol::ManifestV2, std::path::PathBuf)>,
 }
 
 pub static STATE: LazyLock<RwLock<RuntimeState>> =
-    LazyLock::new(|| RwLock::new(RuntimeState { enabled_flag: false, plugins: HashMap::new() }));
+    LazyLock::new(|| RwLock::new(RuntimeState { enabled_flag: false, plugins: BTreeMap::new() }));
 
 /// Pure(ish) flag check against an explicit config dir: env var override first,
 /// then `settings.json` in `config_dir`. The CLI (no AppHandle) calls this

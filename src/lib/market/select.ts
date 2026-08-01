@@ -69,7 +69,9 @@ export function pickAvailable(
     const e = newest(group, host, true) ?? newest(group, host, false)
     if (e) picked.push(e)
   }
-  return picked.sort((a, b) => a.name.localeCompare(b.name))
+  // By id, not display name: names are localized, so sorting on them makes the
+  // catalogue reorder itself when the app language changes.
+  return picked.sort((a, b) => a.id.localeCompare(b.id))
 }
 
 /**

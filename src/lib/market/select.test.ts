@@ -64,12 +64,18 @@ describe('pickAvailable', () => {
     expect(pickAvailable(posLog, new Set(['notemd.pos-log']), '6.722.1')).toEqual([])
   })
 
-  it('sorts the result by display name', () => {
+  it('sorts by id, not by the localized display name', () => {
+    // Display names are translated, so ordering on them would reshuffle the
+    // catalogue whenever the app language changes. Here the name order is the
+    // reverse of the id order, which pins which one wins.
     const mixed = [
-      entry('notemd.b', '1.0.0', '>=0.0.0', 'Zeta'),
-      entry('notemd.a', '1.0.0', '>=0.0.0', 'Alpha'),
+      entry('notemd.b', '1.0.0', '>=0.0.0', 'Alpha'),
+      entry('notemd.a', '1.0.0', '>=0.0.0', 'Zeta'),
     ]
-    expect(pickAvailable(mixed, new Set(), null).map((e) => e.name)).toEqual(['Alpha', 'Zeta'])
+    expect(pickAvailable(mixed, new Set(), null).map((e) => e.id)).toEqual([
+      'notemd.a',
+      'notemd.b',
+    ])
   })
 })
 
