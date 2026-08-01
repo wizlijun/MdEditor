@@ -1,4 +1,12 @@
-import { bridge } from './bridge'
+// src/lib/strings.ts — self-contained i18n for the decision-log plugin.
+//
+// A plugin window can't import the host's i18n store, so this mirrors its
+// shape (src/lib/i18n/store.svelte.ts) in miniature: a MessageKey union, one
+// catalog per locale, and a `t()` that falls back to English. Language is
+// chosen from `notemd.locale` at startup via `setLocale`; see App.svelte.
+
+export type Locale = 'en' | 'zh' | 'ja' | 'de'
+
 export type MessageKey =
   | 'panel.title' | 'value.line' | 'col.candidates' | 'col.open' | 'col.archive'
   | 'sign.title' | 'sign.prediction'
@@ -82,7 +90,7 @@ const en: Catalog = {
   'reject': 'Mark inaccurate', 'reject.hint': 'Not accurate — remove and let the AI avoid this next time.',
   'refresh': 'Refresh', 'refresh.hint': 'Force refresh',
 }
-const zh: Partial<Catalog> = {
+const zh: Catalog = {
   'panel.title': '决策日志',
   'value.line': '把决定变成可检验的下注:时间会告诉你,你的判断哪里可信、哪里高估。',
   'col.candidates': '候选', 'col.open': '未决', 'col.archive': '归档',
@@ -133,7 +141,7 @@ const zh: Partial<Catalog> = {
   'reject': '不准', 'reject.hint': '标为不准 —— 删除并让 AI 以后避免。',
   'refresh': '刷新', 'refresh.hint': '强制刷新',
 }
-const ja: Partial<Catalog> = {
+const ja: Catalog = {
   'panel.title': '意思決定ログ',
   'value.line': '決定を検証可能な賭けに変える —— どこで判断が信頼でき、どこで過信しがちか、時間が教えてくれます。',
   'col.candidates': '候補', 'col.open': '未決', 'col.archive': 'アーカイブ',
@@ -184,7 +192,7 @@ const ja: Partial<Catalog> = {
   'reject': '不正確とマーク', 'reject.hint': '不正確 —— 削除し、次回 AI が避けるようにします。',
   'refresh': '更新', 'refresh.hint': '強制更新',
 }
-const de: Partial<Catalog> = {
+const de: Catalog = {
   'panel.title': 'Entscheidungsprotokoll',
   'value.line': 'Mach Entscheidungen zu überprüfbaren Wetten — die Zeit zeigt dir, wo dein Urteil verlässlich ist und wo es sich überschätzt.',
   'col.candidates': 'Kandidaten', 'col.open': 'Offen', 'col.archive': 'Archiv',
@@ -235,13 +243,34 @@ const de: Partial<Catalog> = {
   'reject': 'Als ungenau markieren', 'reject.hint': 'Nicht genau — entfernen und die KI dies künftig meiden lassen.',
   'refresh': 'Aktualisieren', 'refresh.hint': 'Aktualisierung erzwingen',
 }
-const registry: Record<string, Partial<Catalog>> = { en, zh, ja, de }
-export function t(key: MessageKey): string {
-  let locale = 'en'
-  try { locale = bridge().locale } catch { /* dev */ }
-  return registry[locale]?.[key] ?? en[key] ?? key
+const registry: Record<Locale, Catalog> = { en, zh, ja, de }
+
+let active: Locale = 'en'
+
+function isLocale(v: unknown): v is Locale {
+  return v === 'en' || v === 'zh' || v === 'ja' || v === 'de'
 }
+
+/**
+ * Sets the active locale from `notemd.locale`. Accepts a region suffix
+ * (`zh-CN` → `zh`); unknown/absent falls back to English.
+ */
+export function setLocale(code: string | undefined): void {
+  const base = code?.split('-')[0]
+  active = isLocale(base) ? base : 'en'
+}
+
+/** Translates `key` for the active locale, falling back to English then the raw key. */
+export function t(key: MessageKey): string {
+  const catalog = registry[active] ?? en
+  return catalog[key] ?? en[key] ?? key
+}
+
 /** Star-level label (1..5) — shared by sign sheet, cards, scoreboard. */
 export function starLabel(star: number): string {
   return t(`conf.s${Math.min(5, Math.max(1, star))}` as MessageKey)
 }
+
+// Exported for tests only (catalog completeness / placeholder parity checks).
+export const CATALOGS: Record<Locale, Catalog> = registry
+export const LOCALES: Locale[] = ['en', 'zh', 'ja', 'de']

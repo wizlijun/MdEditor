@@ -9,7 +9,10 @@
   import { state as store, refresh } from './lib/store.svelte'
   import Board from './components/Board.svelte'
   import Scoreboard from './components/Scoreboard.svelte'
-  import { t } from './lib/strings'
+  import { bridge } from './lib/bridge'
+  import { setLocale, t } from './lib/strings'
+
+  setLocale(bridge().locale)
 
   onMount(async () => {
     try {
