@@ -35,6 +35,25 @@ export type MessageKey =
   | 'action.cancel'
   | 'action.clear'
   | 'log.toggle'
+  | 'stage.convert'
+  | 'stage.extract'
+  | 'stage.markdown'
+  | 'stage.ocr'
+  | 'stage.finalize'
+  | 'dialog.ebooksFilter'
+  | 'dialog.pickBooks'
+  | 'dialog.pickCalibre'
+  | 'err.noVault'
+  | 'err.calibreMissing'
+  | 'err.calibreTimeout'
+  | 'err.calibreFailed'
+  | 'err.badRoot'
+  | 'err.noTitle'
+  | 'err.ocrOnlyPdf'
+  | 'err.ocrEmpty'
+  | 'err.ocrUnreachable'
+  | 'err.baiduFailed'
+  | 'err.unsupportedType'
 
 type Catalog = Record<MessageKey, string>
 
@@ -66,6 +85,25 @@ const en: Catalog = {
   'action.cancel': 'Cancel',
   'action.clear': 'Clear finished',
   'log.toggle': 'Log',
+  'stage.convert': 'Converting',
+  'stage.extract': 'Extracting',
+  'stage.markdown': 'Converting to Markdown',
+  'stage.ocr': 'Running OCR',
+  'stage.finalize': 'Finalizing',
+  'dialog.ebooksFilter': 'Ebooks',
+  'dialog.pickBooks': 'Choose ebook files',
+  'dialog.pickCalibre': 'Choose the ebook-convert binary',
+  'err.noVault': 'No vault configured — open or create a vault first.',
+  'err.calibreMissing': 'Calibre not found — install it or pick its path in Settings.',
+  'err.calibreTimeout': 'Calibre conversion timed out — try a smaller file or check Settings.',
+  'err.calibreFailed': 'Calibre conversion failed — see the log for details.',
+  'err.badRoot': 'The ebooks root must be a path inside the vault — check Settings.',
+  'err.noTitle': "Couldn't determine a title for this book.",
+  'err.ocrOnlyPdf': 'OCR only works on PDF files.',
+  'err.ocrEmpty': 'OCR produced no text — the scan may be blank or unreadable.',
+  'err.ocrUnreachable': "Couldn't reach the OCR service — check your network or Settings.",
+  'err.baiduFailed': 'Baidu OCR failed — see the log for details.',
+  'err.unsupportedType': 'Unsupported file type — only epub, pdf, and docx are supported.',
 }
 
 const zh: Catalog = {
@@ -96,6 +134,25 @@ const zh: Catalog = {
   'action.cancel': '取消',
   'action.clear': '清除已完成',
   'log.toggle': '日志',
+  'stage.convert': '转换中',
+  'stage.extract': '解包中',
+  'stage.markdown': '生成 Markdown 中',
+  'stage.ocr': 'OCR 识别中',
+  'stage.finalize': '整理中',
+  'dialog.ebooksFilter': '电子书',
+  'dialog.pickBooks': '选择电子书文件',
+  'dialog.pickCalibre': '选择 ebook-convert 可执行文件',
+  'err.noVault': '未配置 vault——请先打开或创建一个 vault。',
+  'err.calibreMissing': '未找到 Calibre——请安装,或在设置中指定路径。',
+  'err.calibreTimeout': 'Calibre 转换超时——请尝试更小的文件,或检查设置。',
+  'err.calibreFailed': 'Calibre 转换失败——详情见日志。',
+  'err.badRoot': '电子书根目录必须是 vault 内的路径——请检查设置。',
+  'err.noTitle': '无法确定这本书的标题。',
+  'err.ocrOnlyPdf': 'OCR 仅支持 PDF 文件。',
+  'err.ocrEmpty': 'OCR 未识别出任何文字——扫描件可能是空白或无法识别。',
+  'err.ocrUnreachable': '无法连接 OCR 服务——请检查网络或设置。',
+  'err.baiduFailed': '百度 OCR 失败——详情见日志。',
+  'err.unsupportedType': '不支持的文件类型——仅支持 epub、pdf、docx。',
 }
 
 const ja: Catalog = {
@@ -126,6 +183,25 @@ const ja: Catalog = {
   'action.cancel': 'キャンセル',
   'action.clear': '完了分を消去',
   'log.toggle': 'ログ',
+  'stage.convert': '変換中',
+  'stage.extract': '展開中',
+  'stage.markdown': 'Markdown に変換中',
+  'stage.ocr': 'OCR 実行中',
+  'stage.finalize': '仕上げ中',
+  'dialog.ebooksFilter': '電子書籍',
+  'dialog.pickBooks': '電子書籍ファイルを選択',
+  'dialog.pickCalibre': 'ebook-convert 実行ファイルを選択',
+  'err.noVault': 'vault が未設定です。まず vault を開くか作成してください。',
+  'err.calibreMissing': 'Calibre が見つかりません。インストールするか、設定でパスを指定してください。',
+  'err.calibreTimeout': 'Calibre の変換がタイムアウトしました。ファイルサイズを小さくするか、設定を確認してください。',
+  'err.calibreFailed': 'Calibre の変換に失敗しました。詳細はログを確認してください。',
+  'err.badRoot': '電子書籍のルートは vault 内のパスである必要があります。設定を確認してください。',
+  'err.noTitle': 'この書籍のタイトルを特定できませんでした。',
+  'err.ocrOnlyPdf': 'OCR は PDF ファイルにのみ対応しています。',
+  'err.ocrEmpty': 'OCR でテキストを認識できませんでした。スキャンが空白か読み取れない可能性があります。',
+  'err.ocrUnreachable': 'OCR サービスに接続できません。ネットワークまたは設定を確認してください。',
+  'err.baiduFailed': 'Baidu OCR が失敗しました。詳細はログを確認してください。',
+  'err.unsupportedType': 'サポートされていないファイル形式です。epub、pdf、docx のみ対応しています。',
 }
 
 const de: Catalog = {
@@ -156,6 +232,25 @@ const de: Catalog = {
   'action.cancel': 'Abbrechen',
   'action.clear': 'Fertige entfernen',
   'log.toggle': 'Protokoll',
+  'stage.convert': 'Wird konvertiert',
+  'stage.extract': 'Wird entpackt',
+  'stage.markdown': 'Wird in Markdown umgewandelt',
+  'stage.ocr': 'OCR läuft',
+  'stage.finalize': 'Wird abgeschlossen',
+  'dialog.ebooksFilter': 'E-Books',
+  'dialog.pickBooks': 'E-Book-Dateien auswählen',
+  'dialog.pickCalibre': 'Wählen Sie die ebook-convert-Binärdatei',
+  'err.noVault': 'Kein Vault konfiguriert — bitte zuerst einen Vault öffnen oder erstellen.',
+  'err.calibreMissing': 'Calibre nicht gefunden — installieren oder den Pfad in den Einstellungen angeben.',
+  'err.calibreTimeout': 'Zeitüberschreitung bei der Calibre-Konvertierung — kleinere Datei versuchen oder Einstellungen prüfen.',
+  'err.calibreFailed': 'Calibre-Konvertierung fehlgeschlagen — Details im Protokoll.',
+  'err.badRoot': 'Das E-Book-Stammverzeichnis muss ein Pfad innerhalb des Vaults sein — Einstellungen prüfen.',
+  'err.noTitle': 'Für dieses Buch konnte kein Titel ermittelt werden.',
+  'err.ocrOnlyPdf': 'OCR funktioniert nur mit PDF-Dateien.',
+  'err.ocrEmpty': 'OCR hat keinen Text erkannt — der Scan ist möglicherweise leer oder unlesbar.',
+  'err.ocrUnreachable': 'OCR-Dienst nicht erreichbar — Netzwerk oder Einstellungen prüfen.',
+  'err.baiduFailed': 'Baidu-OCR fehlgeschlagen — Details im Protokoll.',
+  'err.unsupportedType': 'Nicht unterstützter Dateityp — nur epub, pdf und docx werden unterstützt.',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }

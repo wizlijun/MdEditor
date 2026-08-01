@@ -1,6 +1,7 @@
 <script lang="ts">
   import { bridge } from './lib/bridge'
   import { setLocale, t, type MessageKey } from './lib/strings'
+  import { describeError } from './lib/errors'
   import {
     addPaths,
     nextToStart,
@@ -158,8 +159,9 @@
   async function pickFiles() {
     try {
       const res = await bridge().request('host.dialog.open', {
+        title: t('dialog.pickBooks'),
         multiple: true,
-        filters: [{ name: 'Ebooks', extensions: ['epub', 'pdf', 'docx'] }],
+        filters: [{ name: t('dialog.ebooksFilter'), extensions: ['epub', 'pdf', 'docx'] }],
       })
       const paths: string[] = res?.paths ?? []
       if (paths.length) {
@@ -173,7 +175,11 @@
 
   async function pickCalibre() {
     try {
-      const res = await bridge().request('host.dialog.open', { multiple: false, filters: [] })
+      const res = await bridge().request('host.dialog.open', {
+        title: t('dialog.pickCalibre'),
+        multiple: false,
+        filters: [],
+      })
       const p = res?.paths?.[0]
       if (p) calibrePathOverride = p
     } catch (e) {
@@ -240,6 +246,15 @@
     return `status.${item.status}` as MessageKey
   }
 
+  /** Localized label for the pipeline stage backing a running item, or '' for
+   * an unset/unrecognized stage token (never shows the raw English token). */
+  function stageLabel(item: QueueItem): string {
+    if (!item.stage) return ''
+    const key = `stage.${item.stage}` as MessageKey
+    const known = ['stage.convert', 'stage.extract', 'stage.markdown', 'stage.ocr', 'stage.finalize']
+    return known.includes(key) ? t(key) : ''
+  }
+
   void loadEnv()
 </script>
 
@@ -256,7 +271,11 @@
   </header>
 
   {#if globalError}
-    <p class="error banner">{globalError}</p>
+    {@const desc = describeError(globalError)}
+    <p class="error banner">
+      {desc.text}
+      {#if desc.detail}<span class="detail">{desc.detail}</span>{/if}
+    </p>
   {/if}
 
   {#if settingsOpen}
@@ -344,6 +363,9 @@
                 {' '}{item.page ?? 0}/{item.total}
               {/if}
             </span>
+            {#if item.status === 'running' && stageLabel(item)}
+              <span class="stage">{stageLabel(item)}</span>
+            {/if}
             {#if item.status === 'running'}
               <button class="secondary" onclick={() => cancelItem(item)}>{t('action.cancel')}</button>
             {/if}
@@ -355,7 +377,11 @@
             <p class="dest">{item.destRel}</p>
           {/if}
           {#if item.status === 'failed' && !item.cancelled && item.error}
-            <p class="error">{item.error}</p>
+            {@const desc = describeError(item.error)}
+            <p class="error">
+              {desc.text}
+              {#if desc.detail}<span class="detail">{desc.detail}</span>{/if}
+            </p>
           {/if}
           {#if expanded[item.id]}
             <pre class="log">{item.logs.join('\n')}</pre>
@@ -573,6 +599,11 @@
   .badge.running {
     color: #1565c0;
   }
+  .stage {
+    font-size: 10px;
+    opacity: 0.55;
+    flex: none;
+  }
   .dest {
     margin: 2px 0 0 22px;
     font-size: 11px;
@@ -588,6 +619,12 @@
     padding: 6px 10px;
     border-radius: 6px;
     background: color-mix(in srgb, #c62828 12%, transparent);
+  }
+  .detail {
+    display: block;
+    margin-top: 2px;
+    font-size: 10px;
+    opacity: 0.65;
   }
   .log {
     margin: 4px 0 0 22px;
