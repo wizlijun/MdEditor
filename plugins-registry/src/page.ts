@@ -158,11 +158,18 @@ zh:{
  fallback:'安装后在 note.md 的「插件」菜单中启用。'
 }};
 // Per-plugin entry, from each manifest's contributes.menus.location.
+// Every plugin command lands in the Plugins menu regardless of the `location`
+// its manifest declares (src-tauri/src/lib.rs builds it that way), so these all
+// name that one menu. Labels are the plugin's own localized menu text.
 var ENTRY_MAP={
- 'notemd.md2pdf':{en:'<b>File</b> menu → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>文件</b>」菜单 → Export to PDF…（也支持 CLI <code>notemd pdf</code>）'},
- 'notemd.roam-import':{en:'<b>File</b> menu → Import from Roam Research…',zh:'「<b>文件</b>」菜单 → Import from Roam Research…'},
- 'notemd.openclaw-chat':{en:'<b>Window</b> menu → OpenClaw',zh:'「<b>窗口</b>」菜单 → OpenClaw'},
- 'notemd.pos-log':{en:'<b>Plugins</b> menu → Save Location Now (auto-logs on startup once installed)',zh:'「<b>插件</b>」菜单 → Save Location Now（装好后随启动自动记录）'}
+ 'notemd.md2pdf':{en:'<b>Plugins</b> menu → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」菜单 → Export to PDF…（也支持 CLI <code>notemd pdf</code>）'},
+ 'notemd.roam-import':{en:'<b>Plugins</b> menu → Import from Roam Research…',zh:'「<b>插件</b>」菜单 → 从 Roam Research 导入…'},
+ 'notemd.openclaw-chat':{en:'<b>Plugins</b> menu → OpenClaw',zh:'「<b>插件</b>」菜单 → OpenClaw'},
+ 'notemd.pos-log':{en:'<b>Plugins</b> menu → Save Location Now (auto-logs on startup once installed)',zh:'「<b>插件</b>」菜单 → 立即记录位置（装好后随启动自动记录）'},
+ 'notemd.ebook-import':{en:'<b>Plugins</b> menu → Import Ebooks (epub/pdf/docx)… (also CLI <code>notemd ebook</code>)',zh:'「<b>插件</b>」菜单 → 导入电子书（epub、pdf、docx）…（也支持 CLI <code>notemd ebook</code>）'},
+ 'notemd.claude-agent':{en:'<b>Plugins</b> menu → Claude Agent… (also CLI <code>notemd agent</code>)',zh:'「<b>插件</b>」菜单 → Claude 智能体…（也支持 CLI <code>notemd agent</code>）'},
+ 'notemd.decision-log':{en:'<b>Plugins</b> menu → Decision Log, or the menu-bar tray',zh:'「<b>插件</b>」菜单 → 决策日志，或从菜单栏托盘打开'},
+ 'notemd.weekly-review':{en:'<b>Plugins</b> menu → Weekly Review, or the menu-bar tray',zh:'「<b>插件</b>」菜单 → 周检视，或从菜单栏托盘打开'}
 };
 function pickLang(){
  var q=new URLSearchParams(location.search).get('lang');
