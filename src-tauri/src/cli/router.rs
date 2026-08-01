@@ -172,13 +172,12 @@ fn match_against_manifests(
 }
 
 fn current_scan() -> (Vec<(PluginManifest, PathBuf)>, HashMap<String, bool>) {
-    let config_dir = super::resolve_config_dir();
     let mut manifests = Vec::new();
     let mut enabled = HashMap::new();
     // core 化的 share / reading-insights 无磁盘 manifest，注入 stub 参与匹配。
     super::runner::append_core_cli_stubs(&mut manifests, &mut enabled);
-    // 安装的 v2 插件（adapter 转成前端/CLI 视图模型形状），泛型匹配直接吃 cli 条目。
-    super::runner::append_v2_manifests(&mut manifests, &mut enabled, &config_dir);
+    // 安装的插件（adapter 转成前端/CLI 视图模型形状），泛型匹配直接吃 cli 条目。
+    super::runner::append_v2_manifests(&mut manifests, &mut enabled);
     (manifests, enabled)
 }
 
@@ -399,13 +398,13 @@ mod tests {
         assert!(matches!(r, Route::Plugin(_)), "core-ized: enabled map must be ignored");
     }
 
-    /// Composition test for the v2 CLI merge (plan Task 10): a v2 install tree
-    /// scanned by `discovery::scan_root`, adapted via `adapter::to_v1`, must
-    /// route its cli subcommand exactly like a v1 manifest. Uses a fixture id
-    /// so it stays independent of the real md2pdf plugin, and exercises the
-    /// scan→adapt→route pipeline without touching current_scan's real dirs.
+    /// Composition test for the CLI merge: an install tree scanned by
+    /// `discovery::scan_root` and adapted via `adapter::to_v1` must route its
+    /// cli subcommand. Uses a fixture id so it stays independent of any real
+    /// plugin, and exercises the scan→adapt→route pipeline without touching
+    /// current_scan's real dirs.
     #[test]
-    fn v2_adapted_manifest_routes_subcommand() {
+    fn adapted_manifest_routes_subcommand() {
         use crate::plugin_runtime::state::{InstallState, InstalledPlugin};
         use crate::plugin_runtime::{adapter, discovery, state};
 
@@ -449,7 +448,7 @@ mod tests {
             .filter_map(|(id, (m, install_dir))| match adapter::to_v1(&m) {
                 Ok(v1) => Some((v1, install_dir)),
                 Err(e) => {
-                    eprintln!("[test] {id}: contributes not v1-shaped: {e}");
+                    eprintln!("[test] {id}: contributes could not be adapted: {e}");
                     None
                 }
             })

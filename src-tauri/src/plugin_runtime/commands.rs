@@ -41,20 +41,9 @@ pub fn plugin_v2_open_window(
 
 // ── Marketplace commands (子项目③ Task 2) ────────────────────────────────
 //
-// All six are gated on the v2 flag: with the runtime disabled they refuse
-// rather than touch the network or the install tree. The frontend market
-// window (Task 6) drives these; the capability-consent modal calls
-// `plugin_market_preview` first so the user consents to the *actually
-// verified* package's capabilities before `plugin_market_install`.
-
-/// Reject when the v2 runtime is disabled (flag off). One place so every market
-/// command fails the same way.
-fn ensure_v2_enabled() -> Result<(), String> {
-    if !STATE.read().unwrap().enabled_flag {
-        return Err("plugin runtime v2 is disabled".into());
-    }
-    Ok(())
-}
+// The frontend market window (Task 6) drives these; the capability-consent
+// modal calls `plugin_market_preview` first so the user consents to the
+// *actually verified* package's capabilities before `plugin_market_install`.
 
 /// A plugin has a backing process (and thus a lifecycle) iff it declares a
 /// `binary`. UI-only plugins (roam-import, base, custom-editor fixtures) have an
@@ -151,7 +140,6 @@ async fn find_entry(
 /// Fetch + return the full registry index as JSON (the "available" list).
 #[tauri::command]
 pub async fn plugin_market_index(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    ensure_v2_enabled()?;
     let base = market::registry_base_url(&app);
     let index = market::fetch_index(&base).await?;
     serde_json::to_value(index).map_err(|e| e.to_string())
@@ -167,7 +155,6 @@ pub async fn plugin_market_preview(
     id: String,
     version: String,
 ) -> Result<serde_json::Value, String> {
-    ensure_v2_enabled()?;
     let entry = find_entry(&app, &id, &version).await?;
     let (url, sha) = resolve_download(&entry)?;
     let sig_url = format!("{url}.minisig");
@@ -208,7 +195,6 @@ pub async fn plugin_market_install(
     id: String,
     version: String,
 ) -> Result<(), String> {
-    ensure_v2_enabled()?;
     let entry = find_entry(&app, &id, &version).await?;
     let (url, sha) = resolve_download(&entry)?;
     let sig_url = format!("{url}.minisig");
@@ -272,7 +258,6 @@ pub async fn plugin_market_uninstall(
     id: String,
     keep_data: bool,
 ) -> Result<(), String> {
-    ensure_v2_enabled()?;
     let root = state::plugins_root(&app).ok_or("cannot resolve app data dir")?;
     let app_data = app
         .path()
@@ -299,7 +284,6 @@ pub async fn plugin_market_set_enabled(
     id: String,
     enabled: bool,
 ) -> Result<(), String> {
-    ensure_v2_enabled()?;
     let root = state::plugins_root(&app).ok_or("cannot resolve app data dir")?;
 
     let mut install = state::load(&root);
@@ -321,7 +305,6 @@ pub async fn plugin_market_set_enabled(
 /// null name/empty capabilities) so the UI can offer to uninstall it.
 #[tauri::command]
 pub fn plugin_market_installed(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
-    ensure_v2_enabled()?;
     let root = state::plugins_root(&app).ok_or("cannot resolve app data dir")?;
     let install = state::load(&root);
 
@@ -564,22 +547,6 @@ mod tests {
         assert!(err.contains("no download for arch"), "got {err}");
     }
 
-    /// The shared flag gate every market command runs first: Err with the v2
-    /// runtime disabled, Ok with it enabled. Restores the flag so it doesn't
-    /// leak into other tests (none of which read `enabled_flag`).
-    #[test]
-    fn ensure_v2_enabled_gates_on_flag() {
-        let prev = STATE.read().unwrap().enabled_flag;
-
-        STATE.write().unwrap().enabled_flag = false;
-        let err = ensure_v2_enabled().unwrap_err();
-        assert_eq!(err, "plugin runtime v2 is disabled");
-
-        STATE.write().unwrap().enabled_flag = true;
-        assert!(ensure_v2_enabled().is_ok());
-
-        STATE.write().unwrap().enabled_flag = prev;
-    }
 }
 
 /// Assemble everything the lifecycle needs to (re)spawn without an AppHandle.

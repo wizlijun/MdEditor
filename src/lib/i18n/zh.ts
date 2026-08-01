@@ -220,7 +220,6 @@ export const zh: Record<keyof Messages, string> = {
   'pluginMarket.installed': '已安装 {name}',
   'pluginMarket.uninstalled': '已移除 {name}',
   'pluginMarket.uninstallConfirm': '移除 {name}？除非另行删除，否则将保留其数据。',
-  'pluginMarket.flagOff': '插件运行时已禁用。启用后才能浏览和安装插件。',
   'pluginMarket.networkError': '无法连接插件注册表：{error}',
   'pluginMarket.consent.title': '安装 {name}？',
   'pluginMarket.consent.verifying': '正在校验安装包签名…',

@@ -218,7 +218,6 @@ export const de: Record<keyof Messages, string> = {
   'pluginMarket.installed': '{name} installiert',
   'pluginMarket.uninstalled': '{name} entfernt',
   'pluginMarket.uninstallConfirm': '{name} entfernen? Die Daten bleiben erhalten, sofern sie nicht separat entfernt werden.',
-  'pluginMarket.flagOff': 'Die Plugin-Laufzeit ist deaktiviert. Aktivieren Sie sie, um Plugins zu durchsuchen und zu installieren.',
   'pluginMarket.networkError': 'Die Plugin-Registry konnte nicht erreicht werden: {error}',
   'pluginMarket.consent.title': '{name} installieren?',
   'pluginMarket.consent.verifying': 'Paketsignatur wird überprüft…',

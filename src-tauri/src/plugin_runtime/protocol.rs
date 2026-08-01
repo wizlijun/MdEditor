@@ -254,9 +254,6 @@ struct StateView;
 impl PluginView for StateView {
     fn lookup(&self, plugin_id: &str) -> Option<(PathBuf, Vec<String>)> {
         let st = super::STATE.read().ok()?;
-        if !st.enabled_flag {
-            return None;
-        }
         let (manifest, install_dir) = st.plugins.get(plugin_id)?;
         let ui = manifest.ui.as_ref()?; // e.g. "ui/"; install_dir = <install>/current
         Some((install_dir.join(ui), manifest.capabilities.clone()))

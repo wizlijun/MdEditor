@@ -23,14 +23,11 @@ bash scripts/dev-install-plugin.sh cef
 This builds `plugins-src/custom-editor-fixture/dist/editor.html` and installs it
 under `~/Library/Application Support/net.notemd.app/plugins/notemd.cef-fixture/`.
 
-### Step 1 — Launch the app with v2 plugins enabled
+### Step 1 — Launch the app
 
 ```bash
-NOTEMD_PLUGINS_V2=1 pnpm tauri dev
+pnpm tauri dev
 ```
-
-Or add `"plugins_v2.enabled": true` to
-`~/Library/Application Support/net.notemd.app/settings.json` and start normally.
 
 ---
 

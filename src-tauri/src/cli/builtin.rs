@@ -420,10 +420,9 @@ pub fn render_plugin_info(
 /// them here would double-list `share` in `notemd help` (core row + PLUGIN
 /// COMMANDS row) and pollute `notemd plugin list` with pseudo-plugins.
 fn current_scan() -> (Vec<(PluginManifest, PathBuf)>, HashMap<String, bool>) {
-    let config_dir = super::resolve_config_dir();
     let mut manifests = Vec::new();
     let mut enabled = HashMap::new();
-    super::runner::append_v2_manifests(&mut manifests, &mut enabled, &config_dir);
+    super::runner::append_v2_manifests(&mut manifests, &mut enabled);
     (manifests, enabled)
 }
 

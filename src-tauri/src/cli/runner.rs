@@ -87,11 +87,10 @@ fn current_scan() -> (
     Vec<(PluginManifest, PathBuf)>,
     std::collections::HashMap<String, bool>,
 ) {
-    let config_dir = super::resolve_config_dir();
     let mut manifests = Vec::new();
     let mut enabled = std::collections::HashMap::new();
     append_core_cli_stubs(&mut manifests, &mut enabled);
-    append_v2_manifests(&mut manifests, &mut enabled, &config_dir);
+    append_v2_manifests(&mut manifests, &mut enabled);
     (manifests, enabled)
 }
 
@@ -102,7 +101,7 @@ fn v2_plugins_root() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join(crate::app_dirs::BUNDLE_ID).join("plugins"))
 }
 
-/// Merge the installed v2 plugins (adapted to the `PluginManifest` view-model
+/// Merge the installed plugins (adapted to the `PluginManifest` view-model
 /// shape) into the CLI scan so router/runner matching sees them alongside the
 /// core stubs. Skips ids already present (same de-dup guard as the core stubs);
 /// every plugin appended here is enabled — enable/disable lives in the runtime's
@@ -110,11 +109,7 @@ fn v2_plugins_root() -> Option<PathBuf> {
 pub(crate) fn append_v2_manifests(
     manifests: &mut Vec<(PluginManifest, PathBuf)>,
     enabled: &mut std::collections::HashMap<String, bool>,
-    config_dir: &std::path::Path,
 ) {
-    if !crate::plugin_runtime::v2_flag_enabled_at(config_dir) {
-        return;
-    }
     let Some(root) = v2_plugins_root() else { return };
     let host_version = env!("CARGO_PKG_VERSION");
     for (id, (m, install_dir)) in crate::plugin_runtime::discovery::scan_root(&root, host_version) {
@@ -127,7 +122,7 @@ pub(crate) fn append_v2_manifests(
                 manifests.push((v1, install_dir));
             }
             Err(e) => {
-                eprintln!("[plugin_runtime] {id}: contributes not v1-shaped: {e}");
+                eprintln!("[plugin_runtime] {id}: contributes could not be adapted: {e}");
             }
         }
     }
@@ -439,57 +434,6 @@ mod tests {
         let r = decide_plugin_command(&f, "publish");
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("mutually exclusive"));
-    }
-
-    /// When the v2 flag is off (settings.json = `{}`), append_v2_manifests
-    /// must leave both the manifests vec and the enabled map completely
-    /// unchanged — flag-off behavior is byte-identical to pre-① regardless
-    /// of what is on disk in the v2 plugins root.
-    #[test]
-    fn v2_flag_off_leaves_manifests_and_enabled_unchanged() {
-        // If NOTEMD_PLUGINS_V2=1 is set in the test environment the flag check
-        // bypasses settings.json and would give a false positive — skip to avoid
-        // a spurious failure.
-        if std::env::var("NOTEMD_PLUGINS_V2").map_or(false, |v| v == "1") {
-            eprintln!("[test] NOTEMD_PLUGINS_V2=1 is set — skipping flag-off invariant test");
-            return;
-        }
-
-        use crate::plugin_runtime;
-        use crate::plugin_runtime::state::{InstallState, InstalledPlugin};
-
-        // Build a v2 install tree in a tempdir with a valid (but unreachable)
-        // plugin entry so that if the flag were on, it would modify the vecs.
-        let v2_root = tempfile::tempdir().unwrap();
-        let v2_plugins = v2_root.path().join("plugins");
-        let mut state = InstallState::default();
-        state.installed.insert(
-            "notemd.md2pdf".into(),
-            InstalledPlugin { version: "1.0.0".into(), enabled: true },
-        );
-        crate::plugin_runtime::state::save(&v2_plugins, &state).unwrap();
-
-        // Config dir with an explicit opt-out — the only way to turn v2 off now
-        // that the flag defaults ON (6.718.2).
-        let config_dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            config_dir.path().join("settings.json"),
-            r#"{ "plugins_v2.enabled": false }"#,
-        )
-        .unwrap();
-
-        assert!(
-            !plugin_runtime::v2_flag_enabled_at(config_dir.path()),
-            "v2 flag must be off for this test to be meaningful"
-        );
-
-        let mut manifests: Vec<(crate::plugin_host::PluginManifest, std::path::PathBuf)> = vec![];
-        let mut enabled: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
-
-        append_v2_manifests(&mut manifests, &mut enabled, config_dir.path());
-
-        assert!(manifests.is_empty(), "manifests must stay empty when v2 flag is off");
-        assert!(enabled.is_empty(), "enabled map must stay empty when v2 flag is off");
     }
 
     /// Documents the v2_plugins_root assumption: the CLI has no AppHandle, so

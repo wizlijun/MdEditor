@@ -1,15 +1,14 @@
 <!-- src/plugin-market-app.svelte — standalone Plugin Market window (opened from
      View ▸ Plugin Market or the Settings ▸ Plugins entry button). Bootstraps its
-     own webview state, then drives the v2 market commands.
+     own webview state, then drives the market commands.
 
-     Installed section lists v2 plugins only (plugin_market_installed, toggled
-     via plugin_market_set_enabled; also uninstall + update). v1 built-ins (e.g.
-     base) are NOT shown here — the market is the v2 marketplace surface.
+     Installed section lists installed plugins (plugin_market_installed, toggled
+     via plugin_market_set_enabled; also uninstall + update).
 
      ── MANUAL E2E (do not run the GUI in CI) ──────────────────────────────────
-     1. Enable the v2 runtime flag (settings.json plugins_v2.enabled=true) and,
-        for a local registry, set plugins_v2.registry_url to your test server.
-     2. View ▸ Plugin Market → the window opens; Installed shows current v1/v2
+     1. For a local registry, set plugins_v2.registry_url in settings.json to
+        your test server.
+     2. View ▸ Plugin Market → the window opens; Installed shows the current
         plugins, Available lists registry entries not yet installed.
      3. Click Install on an available plugin → the consent modal runs
         plugin_market_preview (verifies the real package) and lists its
@@ -18,10 +17,8 @@
         restart. The main window receives `plugins-changed` and re-fetches
         manifests (enable/disable of existing menu items reflects immediately;
         a brand-new native menu item may still need a restart — known gap).
-     5. Toggle enabled on an installed v2 plugin → plugin_market_set_enabled;
-        Uninstall → confirm → plugin_market_uninstall; both re-fetch.
-     6. Flip the flag OFF → the commands Err "plugin runtime v2 is disabled";
-        the window shows the inline notice instead of crashing. -->
+     5. Toggle enabled on an installed plugin → plugin_market_set_enabled;
+        Uninstall → confirm → plugin_market_uninstall; both re-fetch. -->
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
@@ -133,7 +130,6 @@
   }
 
   function friendlyError(msg: string): string {
-    if (msg.includes('plugin runtime v2 is disabled')) return t('pluginMarket.flagOff')
     return t('pluginMarket.networkError', { error: msg })
   }
 

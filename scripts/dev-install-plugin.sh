@@ -64,7 +64,6 @@ if [[ "$PLUGIN" == "md2pdf" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.md2pdf/current"
   mark_installed "notemd.md2pdf" "$VERSION"
   echo "✓ installed notemd.md2pdf@$VERSION ($PROFILE, $(uname -m)) → $DEST"
-  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  disable the v1 plugin:  \"plugins.enabled.md2pdf\": false in settings.json (avoids double File-menu entries)"
 
 elif [[ "$PLUGIN" == "roam-import" ]]; then
@@ -81,7 +80,6 @@ elif [[ "$PLUGIN" == "roam-import" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.roam-import/current"
   mark_installed "notemd.roam-import" "$VERSION"
   echo "✓ installed notemd.roam-import@$VERSION (ui-only) → $DEST"
-  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  disable the v1 plugin:  \"plugins.enabled.roam-import\": false in settings.json (avoids double File▸Import entries)"
 
 elif [[ "$PLUGIN" == "cef" ]]; then
@@ -97,7 +95,6 @@ elif [[ "$PLUGIN" == "cef" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.cef-fixture/current"
   mark_installed "notemd.cef-fixture" "$VERSION"
   echo "✓ installed notemd.cef-fixture@$VERSION (ui-only) → $DEST"
-  echo "  enable the v2 runtime:  NOTEMD_PLUGINS_V2=1 pnpm tauri dev"
   echo "  probe:                  File ▸ 'New .cef fixture' → see plugins-src/custom-editor-fixture/PROBE.md"
 
 elif [[ "$PLUGIN" == "openclaw" ]]; then
@@ -118,7 +115,6 @@ elif [[ "$PLUGIN" == "openclaw" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.openclaw-chat/current"
   mark_installed "notemd.openclaw-chat" "$VERSION"
   echo "✓ installed notemd.openclaw-chat@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
-  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  open it:                Window menu ▸ \"OpenClaw (v2)\""
 
 elif [[ "$PLUGIN" == "pos-log" ]]; then
@@ -135,7 +131,6 @@ elif [[ "$PLUGIN" == "pos-log" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.pos-log/current"
   mark_installed "notemd.pos-log" "$VERSION"
   echo "✓ installed notemd.pos-log@$VERSION ($PROFILE, $(uname -m)) → $DEST"
-  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  it activates on next app startup and logs to <vault>/pos/YYYY-MM-DD-pos.md"
 
 elif [[ "$PLUGIN" == "decision-log" ]]; then
@@ -151,7 +146,6 @@ elif [[ "$PLUGIN" == "decision-log" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.decision-log/current"
   mark_installed "notemd.decision-log" "$VERSION"
   echo "✓ installed notemd.decision-log@$VERSION (ui-only) → $DEST"
-  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
 
 elif [[ "$PLUGIN" == "weekly-review" ]]; then
   SRC="plugins-src/weekly-review"
@@ -166,7 +160,6 @@ elif [[ "$PLUGIN" == "weekly-review" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.weekly-review/current"
   mark_installed "notemd.weekly-review" "$VERSION"
   echo "✓ installed notemd.weekly-review@$VERSION (ui-only) → $DEST"
-  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
 
 elif [[ "$PLUGIN" == "claude-agent" ]]; then
   SRC="plugins-src/claude-agent"
@@ -186,7 +179,6 @@ elif [[ "$PLUGIN" == "claude-agent" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.claude-agent/current"
   mark_installed "notemd.claude-agent" "$VERSION"
   echo "✓ installed notemd.claude-agent@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
-  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  open it:                Plugins menu ▸ \"Claude Agent…\" (restart the app first)"
   echo "  needs:                  Claude Code installed and logged in (claude --version)"
 
@@ -204,7 +196,6 @@ elif [[ "$PLUGIN" == "ebook-import" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.ebook-import/current"
   mark_installed "notemd.ebook-import" "$VERSION"
   echo "✓ installed notemd.ebook-import@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
-  echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  open it:                Plugins menu ▸ \"导入电子书(epub、pdf、docx)…\""
   echo "  CLI:                    notemd ebook <file.epub|.pdf|.docx> [--ocr] [--ocr-provider wechat|baidu] [--root <vault-relative>]"
 fi
@@ -212,7 +203,7 @@ fi
 # ---------------------------------------------------------------------------
 # Manual E2E walkthrough — md2pdf (plugin-runtime-v2 plan, Task 12 Step 3):
 #   1. scripts/dev-install-plugin.sh
-#   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev
+#   2. pnpm tauri dev
 #   3. File menu shows "Export to PDF (v2)…" → export an .md tab → PDF
 #      written + success toast (emitted by the plugin via plugin-toast).
 #   4. CLI: `notemd pdf2 x.md` (dev CLI, same flag) → PDF appears next to x.md.
@@ -223,7 +214,7 @@ fi
 # ---------------------------------------------------------------------------
 # Manual E2E walkthrough — roam-import (plugin-ui-mechanism plan ②, Task 6):
 #   1. scripts/dev-install-plugin.sh roam-import
-#   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev  (with a Vault configured)
+#   2. pnpm tauri dev  (with a Vault configured)
 #   3. File ▸ Import ▸ "Roam Research (v2)" appears → click it.
 #   4. A "Import from Roam Research" plugin window opens (plugin:// bridge).
 #   5. Click the picker → choose a Roam .json export → import runs; progress
@@ -238,7 +229,7 @@ fi
 # ---------------------------------------------------------------------------
 # Manual E2E walkthrough — openclaw (plugin-openclaw-migration plan ②b, Task 5):
 #   1. scripts/dev-install-plugin.sh openclaw
-#   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev
+#   2. pnpm tauri dev
 #   3. Window menu ▸ "OpenClaw (v2)" → the OpenClaw chat window opens
 #      (plugin:// bridge; the backend process is pre-activated on open so the
 #      reader can stream frames immediately).
@@ -252,7 +243,7 @@ fi
 # ---------------------------------------------------------------------------
 # Manual E2E probe — cef (custom-editor-fixture, 子项目④ Task 2):
 #   1. scripts/dev-install-plugin.sh cef
-#   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev
+#   2. pnpm tauri dev
 #   3. File ▸ "New .cef fixture" → save dialog → save to ~/Desktop/test.cef
 #      (or open any existing .cef file via File ▸ Open).
 #   4. Follow the full probe checklist in plugins-src/custom-editor-fixture/PROBE.md.
@@ -261,7 +252,7 @@ fi
 # ---------------------------------------------------------------------------
 # Manual E2E walkthrough — claude-agent:
 #   1. scripts/dev-install-plugin.sh claude-agent
-#   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev   (with a Vault configured)
+#   2. pnpm tauri dev   (with a Vault configured)
 #   3. Plugins ▸ "Claude Agent…" → the window opens with two tasks in the left
 #      column (selfcheck / answer-note-question), seeded on first activation into
 #      <vault>/.notemd/agent-tasks/. The vault's .gitignore gains
@@ -286,7 +277,7 @@ fi
 # ---------------------------------------------------------------------------
 # Manual E2E walkthrough — ebook-import:
 #   1. scripts/dev-install-plugin.sh ebook-import
-#   2. NOTEMD_PLUGINS_V2=1 pnpm tauri dev   (with a Vault configured)
+#   2. pnpm tauri dev   (with a Vault configured)
 #   3. Plugins menu ▸ "导入电子书(epub、pdf、docx)…" → the import window opens
 #      (backend activates on open; the Calibre-detection settings row shows
 #      found/not-found + version, since HTMLZ conversion needs Calibre's

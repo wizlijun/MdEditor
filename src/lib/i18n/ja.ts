@@ -220,7 +220,6 @@ export const ja: Record<keyof Messages, string> = {
   'pluginMarket.installed': '{name} をインストールしました',
   'pluginMarket.uninstalled': '{name} を削除しました',
   'pluginMarket.uninstallConfirm': '{name} を削除しますか？個別に削除しない限りデータは保持されます。',
-  'pluginMarket.flagOff': 'プラグインランタイムが無効です。有効にするとプラグインを閲覧・インストールできます。',
   'pluginMarket.networkError': 'プラグインレジストリに接続できませんでした：{error}',
   'pluginMarket.consent.title': '{name} をインストールしますか？',
   'pluginMarket.consent.verifying': 'パッケージの署名を検証中…',

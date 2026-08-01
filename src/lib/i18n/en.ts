@@ -225,7 +225,6 @@ export const en = {
   'pluginMarket.installed': 'Installed {name}',
   'pluginMarket.uninstalled': 'Removed {name}',
   'pluginMarket.uninstallConfirm': 'Remove {name}? Its data is kept unless removed separately.',
-  'pluginMarket.flagOff': 'The plugin runtime is disabled. Enable it to browse and install plugins.',
   'pluginMarket.networkError': 'Could not reach the plugin registry: {error}',
   'pluginMarket.consent.title': 'Install {name}?',
   'pluginMarket.consent.verifying': 'Verifying package signature…',

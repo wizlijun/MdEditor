@@ -214,8 +214,7 @@ pub async fn report_install(base_url: &str, id: &str, version: &str) {
 /// settings.json `plugins_v2.registry_url` override, else [`DEFAULT_REGISTRY`].
 /// Read exactly like `read_saved_locale` (fails closed to the default on any
 /// read/parse error). The CLI (no AppHandle) calls this with
-/// `cli::resolve_config_dir()`; the AppHandle version wraps it — mirrors the
-/// `v2_flag_enabled_at` / `v2_flag_enabled` split.
+/// `cli::resolve_config_dir()`; the AppHandle version wraps it.
 pub fn registry_base_url_at(config_dir: &std::path::Path) -> String {
     let Ok(text) = std::fs::read_to_string(config_dir.join("settings.json")) else {
         return DEFAULT_REGISTRY.to_string();

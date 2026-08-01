@@ -1,11 +1,13 @@
-//! Transitional adapter: expose v2 manifests through the v1 `PluginManifest`
-//! shape so ALL existing menu/CLI/settings collection machinery works
-//! unchanged. The frontend distinguishes v2 via `manifest_version: Some(2)`.
+//! Adapter: project a plugin's `ManifestV2` into the [`PluginManifest`] view
+//! model that the frontend and the CLI consume (menus, context menus, CLI
+//! entries, settings blocks, custom editors, windows). `to_v1` keeps its
+//! historical name — the shape it produces predates the v2 manifest format and
+//! outlived it as the host's presentation layer.
 
 use crate::plugin_host::PluginManifest;
 
 pub fn to_v1(m: &plugin_protocol::ManifestV2) -> Result<PluginManifest, String> {
-    // 经 serde_json 转换：v1 PluginManifest 派生 Deserialize，未知字段忽略。
+    // 经 serde_json 转换：PluginManifest 派生 Deserialize，未知字段忽略。
     let mut v = serde_json::json!({
         "id": m.id, "name": m.name, "version": m.version,
         "kind": "external", "binary": "",
@@ -14,7 +16,7 @@ pub fn to_v1(m: &plugin_protocol::ManifestV2) -> Result<PluginManifest, String> 
         "context_menus": m.contributes.context_menus,
         "cli": m.contributes.cli,
         // custom_editors (子项目④) rides through untouched so the frontend can
-        // build its ext→editor registry from the adapted (v1-shaped) manifest.
+        // build its ext→editor registry from the adapted manifest.
         "custom_editors": m.contributes.custom_editors,
         "manifest_version": 2,
     });
@@ -35,13 +37,12 @@ pub fn to_v1(m: &plugin_protocol::ManifestV2) -> Result<PluginManifest, String> 
         v["open_windows"] = serde_json::json!(open_windows);
     }
 
-    serde_json::from_value(v).map_err(|e| format!("contributes not v1-shaped: {e}"))
+    serde_json::from_value(v).map_err(|e| format!("contributes could not be adapted: {e}"))
 }
 
-/// Every discovered v2 plugin in v1 shape. Empty when the flag is off (STATE
-/// is never populated then), so v1 callers can merge unconditionally.
-/// Plugins whose contributes block fails v1 shape conversion are skipped with
-/// an eprintln — they do not crash the host.
+/// Every discovered plugin in view-model shape, in STATE's id order.
+/// Plugins whose contributes block fails the conversion are skipped with an
+/// eprintln — they do not crash the host.
 pub fn adapted_v2_manifests() -> Vec<PluginManifest> {
     super::STATE
         .read()
@@ -51,7 +52,7 @@ pub fn adapted_v2_manifests() -> Vec<PluginManifest> {
         .filter_map(|(m, _)| match to_v1(m) {
             Ok(v1) => Some(v1),
             Err(e) => {
-                eprintln!("[plugin_runtime] {}: contributes not v1-shaped: {e}", m.id);
+                eprintln!("[plugin_runtime] {}: contributes could not be adapted: {e}", m.id);
                 None
             }
         })
@@ -63,13 +64,13 @@ mod tests {
     use super::*;
     use crate::plugin_host::PluginKind;
 
-    /// Every shipped manifest must survive v1 adaptation. When one doesn't,
+    /// Every shipped manifest must survive adaptation. When one doesn't,
     /// `adapted_v2_manifests` drops that plugin with nothing but an eprintln —
     /// so the whole plugin, menus and windows included, silently vanishes. A
-    /// missing `summary`, or `"ty"` where the v1 shape renames it to `"type"`,
+    /// missing `summary`, or `"ty"` where the view model renames it to `"type"`,
     /// is enough to do it. Catch that here instead of in the running app.
     #[test]
-    fn shipped_plugin_manifests_survive_v1_adaptation() {
+    fn shipped_plugin_manifests_survive_adaptation() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins-src");
         let mut checked = 0;
         for entry in std::fs::read_dir(&root).expect("plugins-src is readable") {
@@ -197,14 +198,14 @@ mod tests {
         assert_eq!(settings.schema.len(), 1);
         assert_eq!(settings.schema[0]["key"], "paper");
 
-        // i18n rides through in the exact v1 PluginI18n shape, so the existing
+        // i18n rides through in the exact PluginI18n shape, so the existing
         // per-locale menu label resolution works on adapted manifests.
         let zh = v1.i18n.get("zh").expect("zh i18n passthrough");
         assert_eq!(zh.menus.get("export").map(String::as_str), Some("导出 PDF（v2）…"));
     }
 
     /// A ManifestV2 whose contributes.menus entry lacks both label AND command
-    /// should fail v1 shape conversion (MenuEntry requires label + command).
+    /// should fail the conversion (MenuEntry requires label + command).
     #[test]
     fn to_v1_returns_err_when_menu_entry_lacks_label_and_command() {
         let m: plugin_protocol::ManifestV2 = serde_json::from_value(serde_json::json!({
@@ -226,7 +227,7 @@ mod tests {
     }
 
     /// adapted_v2_manifests-style skip: a bad manifest is silently dropped,
-    /// while a good sibling still produces a valid v1 manifest.
+    /// while a good sibling still produces a valid manifest.
     #[test]
     fn to_v1_bad_skipped_good_survives() {
         let bad: plugin_protocol::ManifestV2 = serde_json::from_value(serde_json::json!({
@@ -258,7 +259,7 @@ mod tests {
             .filter_map(|m| match to_v1(m) {
                 Ok(v1) => Some(v1),
                 Err(e) => {
-                    eprintln!("[plugin_runtime] {}: contributes not v1-shaped: {e}", m.id);
+                    eprintln!("[plugin_runtime] {}: contributes could not be adapted: {e}", m.id);
                     None
                 }
             })
@@ -297,8 +298,7 @@ mod tests {
         assert_eq!(ow.len(), 1, "only the open-command window is exposed");
     }
 
-    /// No windows (or none with an open_command) → the field stays None so v1
-    /// manifests are byte-identical to before.
+    /// No windows (or none with an open_command) → the field stays None.
     #[test]
     fn open_windows_absent_when_no_open_command() {
         // sample() has no windows at all.
@@ -334,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn minimal_manifest_gets_v1_defaults() {
+    fn minimal_manifest_gets_view_model_defaults() {
         let m: plugin_protocol::ManifestV2 = serde_json::from_value(serde_json::json!({
             "manifest_version": 2,
             "id": "pub.min",
@@ -358,6 +358,6 @@ mod tests {
         assert!(v1.i18n.is_empty());
         assert!(v1.host_capabilities.is_empty());
         assert!(v1.open_windows.is_none());
-        assert_eq!(v1.timeout_seconds, 30, "v1 serde default applies");
+        assert_eq!(v1.timeout_seconds, 30, "serde default applies");
     }
 }

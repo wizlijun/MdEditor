@@ -1,7 +1,0 @@
-{
-  "id": "perf-c",
-  "name": "Perf C",
-  "version": "1.0.0",
-  "binary": "noexist",
-  "host_capabilities": ["toast"]
-}

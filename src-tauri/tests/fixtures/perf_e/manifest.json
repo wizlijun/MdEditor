@@ -1,7 +1,0 @@
-{
-  "id": "perf-e",
-  "name": "Perf E",
-  "version": "1.0.0",
-  "binary": "noexist",
-  "host_capabilities": ["toast"]
-}

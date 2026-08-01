@@ -22,9 +22,6 @@ pub mod shared_config;
 pub mod cli;
 #[cfg(not(target_os = "ios"))]
 pub mod plugin_host;
-#[cfg(target_os = "ios")]
-#[path = "plugin_host_ios.rs"]
-pub mod plugin_host;
 #[cfg(not(target_os = "ios"))]
 pub mod plugin_runtime;
 #[cfg(not(target_os = "ios"))]
@@ -967,9 +964,7 @@ pub fn run() {
                 set_default_app_for_extensions,
                 set_plugin_menu_item_enabled,
                 plugin_host::get_plugin_manifests,
-                plugin_host::get_all_plugin_manifests,
                 plugin_host::plugin_is_enabled,
-                plugin_host::invoke_plugin,
                 plugin_runtime::commands::plugin_v2_execute,
                 plugin_runtime::commands::plugin_v2_open_window,
                 plugin_runtime::commands::plugin_market_index,
@@ -1039,10 +1034,6 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             { tauri::generate_handler![
                 drain_pending_files,
-                plugin_host::get_plugin_manifests,
-                plugin_host::get_all_plugin_manifests,
-                plugin_host::plugin_is_enabled,
-                plugin_host::invoke_plugin,
                 vault_ios::vault_status,
                 vault_ios::list_dir::vault_list_dir,
                 vault_ios::vault_configure,
@@ -1106,8 +1097,8 @@ pub fn run() {
                 agents_sync::init(&app.handle());
             }
 
-            // plugin_host MUST run before any code that calls is_plugin_enabled.
-            plugin_host::init(&app.handle());
+            // The plugin runtime MUST be initialized before anything that reads
+            // the active plugin set (menu building, is_plugin_enabled).
             #[cfg(not(target_os = "ios"))]
             plugin_runtime::init(&app.handle());
             // Request location authorization at launch (macOS): the prompt then
@@ -1551,15 +1542,13 @@ fn build_tray_menu<R: tauri::Runtime>(
     let plugin_tray_items: Vec<MenuItem<R>> = {
         let mut entries: Vec<(String, String, String)> = Vec::new(); // (plugin_id, window, label)
         if let Ok(st) = crate::plugin_runtime::STATE.read() {
-            if st.enabled_flag {
-                for (id, (manifest, _dir)) in st.plugins.iter() {
-                    for tc in &manifest.contributes.tray {
-                        let label = tc
-                            .label
-                            .clone()
-                            .unwrap_or_else(|| plugin_display_name(manifest, locale));
-                        entries.push((id.clone(), tc.window.clone(), label));
-                    }
+            for (id, (manifest, _dir)) in st.plugins.iter() {
+                for tc in &manifest.contributes.tray {
+                    let label = tc
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| plugin_display_name(manifest, locale));
+                    entries.push((id.clone(), tc.window.clone(), label));
                 }
             }
         }
