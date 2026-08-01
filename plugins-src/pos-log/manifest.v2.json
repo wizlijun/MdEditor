@@ -2,21 +2,37 @@
   "manifest_version": 2,
   "id": "notemd.pos-log",
   "name": "Position Log",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "kind": "native",
-  "engines": { "notemd": ">=6.720.4" },
+  "engines": {
+    "notemd": ">=6.720.4"
+  },
   "description": "Log your location (macOS system Location Services) to the vault: appends country-province-city + POI (with latitude/longitude at line end) to pos/YYYY-MM-DD-pos.md whenever the address changes (every 30 min or on demand)",
   "binary": {
     "aarch64-apple-darwin": "bin/notemd-pos-log",
     "x86_64-apple-darwin": "bin/notemd-pos-log"
   },
-  "activation": { "events": ["onStartupFinished", "onCommand:save-now"] },
-  "contributes": {
-    "menus": [
-      { "location": "plugins", "label": "Save Location Now", "command": "save-now" }
+  "activation": {
+    "events": [
+      "onStartupFinished",
+      "onCommand:save-now"
     ]
   },
-  "capabilities": ["location", "vault.read", "vault.write", "toast"],
+  "contributes": {
+    "menus": [
+      {
+        "location": "plugins",
+        "label": "Save Location Now",
+        "command": "save-now"
+      }
+    ]
+  },
+  "capabilities": [
+    "location",
+    "vault.read",
+    "vault.write",
+    "toast"
+  ],
   "request_timeout_seconds": 30,
   "i18n": {
     "zh": {
