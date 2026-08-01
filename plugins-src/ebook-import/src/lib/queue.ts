@@ -176,7 +176,7 @@ export interface PendingJobEvent {
 /**
  * Backend race (Task 9 review, Finding 1): `import_start` spawns the job
  * thread BEFORE writing its RPC response, so a fast failure (calibre
- * missing, OCR keys missing, pdfium missing) can push its `job_id`'s first
+ * missing, OCR keys missing) can push its `job_id`'s first
  * event — sometimes `done`/`failed` itself — before the UI's `schedule()`
  * has resolved `import_start` and folded that `job_id` into the item. At
  * that instant `onJobEvent` would find no item with a matching `jobId` and

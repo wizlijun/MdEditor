@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-/// Fake [`PageRenderer`] used in place of [`crate::ocr::pdfium::PdfiumRenderer`]:
+/// Fake [`PageRenderer`] used in place of [`crate::ocr::quartz::QuartzRenderer`]:
 /// writes `count` tiny 1x1 PNGs (via the `image` crate, so they're real,
 /// decodable PNG files) into `out_dir` and returns them in page order,
-/// without touching a real PDF or the pdfium dylib.
+/// without touching a real PDF or CoreGraphics.
 struct FakeRenderer {
     count: usize,
 }

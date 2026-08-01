@@ -34,10 +34,10 @@ use std::time::{Duration, Instant};
 
 /// Baidu rejects (or silently truncates) documents above this size; check it
 /// ourselves before spending a network round-trip on a submission Baidu
-/// would refuse anyway. Page-count limits are *not* checked here (that would
-/// need pdfium to count pages, and the whole point of the Baidu path is to
-/// work on machines without the pdfium dylib) -- an over-length PDF is left
-/// for Baidu's own `error_code`/`error_msg` to report.
+/// would refuse anyway. Page-count limits are *not* checked here -- doing so
+/// would mean opening the PDF just to call it, which this path has no other
+/// reason to do -- an over-length PDF is left for Baidu's own
+/// `error_code`/`error_msg` to report.
 const MAX_PDF_BYTES: u64 = 100 * 1024 * 1024;
 
 /// A submitted task with no result yet after an hour is not coming back --

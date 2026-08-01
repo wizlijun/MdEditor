@@ -5,9 +5,9 @@
 //! Every dependency (Calibre binary path, OCR engine, log/progress sinks,
 //! the cancel flag) is injected through [`PipelineCtx`]/parameters rather
 //! than looked up globally, so [`run_import`] is fully testable without a
-//! real Calibre install, network access, or a real pdfium dylib -- the
-//! only paths exercised by `cargo test` are the ones that fail (or are
-//! cancelled) before touching either.
+//! real Calibre install or network access -- the only paths exercised by
+//! `cargo test` are the ones that fail (or are cancelled) before touching
+//! either.
 
 use crate::bookconf::{self, BookMeta};
 use crate::calibre;

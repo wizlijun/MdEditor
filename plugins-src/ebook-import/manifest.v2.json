@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.ebook-import",
   "name": "Ebook Import",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "kind": "native",
   "engines": { "notemd": ">=6.801.1" },
   "description": "Import ebooks (epub/pdf/docx) into the vault as markdown: Calibre conversion, OCR for scanned PDFs (WeChat OCR / Baidu Unlimited-OCR), archived to ssot/ebooks/YYYY-MM/<title>/ with config.txt + book.md + images.",

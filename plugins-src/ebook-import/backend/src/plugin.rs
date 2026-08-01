@@ -11,7 +11,7 @@
 //! inline, or the whole plugin wedges until the host's request timeout).
 
 use crate::ocr::baidu::BaiduOcr;
-use crate::ocr::pdfium::PdfiumRenderer;
+use crate::ocr::quartz::QuartzRenderer;
 use crate::ocr::wechat::WeChatOcr;
 use crate::ocr::OcrEngine;
 use crate::calibre;
@@ -220,9 +220,11 @@ fn apply_device_patch(existing: &DeviceSettings, patch: &Value) -> DeviceSetting
 /// engine's network loop — see `WeChatOcr`/`BaiduOcr`'s own `cancelled`
 /// field docs. Baidu needs both keys set (an early, clear error beats a
 /// confusing failure deep in `ocr_pdf`); the WeChat path constructs a
-/// `PdfiumRenderer`, whose `new()` can fail on a machine without the pdfium
-/// dylib available — surfaced here as the same kind of `Result` error,
-/// which the caller turns into a `failed` job event.
+/// `QuartzRenderer` (CoreGraphics is a system framework, so unlike the old
+/// pdfium-dylib renderer its `new()` can't practically fail on macOS -- the
+/// `Result` shape is kept anyway so this call site wouldn't need to change
+/// if that ever stopped being true) — surfaced here as the same kind of
+/// `Result` error, which the caller turns into a `failed` job event.
 fn build_engine(
     provider: &str,
     vault_settings: &VaultSettings,
@@ -243,7 +245,7 @@ fn build_engine(
             ))
         }
         _ => {
-            let renderer = PdfiumRenderer::new()?;
+            let renderer = QuartzRenderer::new()?;
             Ok(Box::new(WeChatOcr {
                 url: vault_settings.wechat_url.clone(),
                 renderer: Box::new(renderer),

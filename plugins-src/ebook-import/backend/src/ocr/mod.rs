@@ -2,15 +2,16 @@
 //! turns a PDF into per-page PNGs, an [`OcrEngine`] turns those PNGs into
 //! markdown. This module only defines the shapes (traits + progress enum);
 //! [`wechat`] provides the first concrete `OcrEngine` (ported from
-//! `01_ocr_to_md.py`) and [`pdfium`] the production `PageRenderer`.
+//! `01_ocr_to_md.py`) and [`quartz`] the production `PageRenderer`.
 //!
 //! Splitting engine from renderer keeps the network/resume logic (easy to
 //! unit-test with a mock HTTP server and a fake renderer) separate from the
-//! pdfium FFI binding (which needs a real dylib on disk and is only
-//! exercised on-device).
+//! CoreGraphics FFI binding (a system framework, so -- unlike the pdfium
+//! dylib this used to bind -- it's always present and is unit-tested for
+//! real; see `quartz`'s own tests).
 
 pub mod baidu;
-pub mod pdfium;
+pub mod quartz;
 pub mod wechat;
 
 use std::path::{Path, PathBuf};
@@ -41,8 +42,8 @@ pub trait OcrEngine {
 
 /// Renders every page of a PDF to a PNG file under `out_dir`, returning the
 /// produced file paths in page order. The production implementation is
-/// [`pdfium::PdfiumRenderer`]; tests use a fake that writes tiny placeholder
-/// PNGs instead of touching the real pdfium dylib.
+/// [`quartz::QuartzRenderer`]; the wechat engine's own tests use a fake that
+/// writes tiny placeholder PNGs instead of rasterizing a real PDF.
 pub trait PageRenderer {
     fn render_pages(&self, pdf: &Path, out_dir: &Path) -> Result<Vec<PathBuf>, String>;
 }

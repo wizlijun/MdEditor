@@ -19,7 +19,9 @@ quick-xml = "0.37"
 htmd = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls"] }
 base64 = "0.22"
-pdfium-render = "0.8"
+core-foundation = "0.10"
+core-graphics = "0.25"
+foreign-types-shared = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2"
 
