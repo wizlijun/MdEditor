@@ -6,7 +6,7 @@
 #
 # Nothing is copied into the app bundle — the package lives in app_data
 # (see scripts/dev-install-plugin.sh). Artifacts stay in
-# md2pdf/target/<triple>/release/.
+# plugins-src/md2pdf/target/<triple>/release/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -19,13 +19,13 @@ rustup target add aarch64-apple-darwin >/dev/null
 rustup target add x86_64-apple-darwin >/dev/null
 
 echo "[md2pdf-v2] cargo build --release --bins × 2…"
-( cd md2pdf && cargo build --release --bins --target aarch64-apple-darwin )
-( cd md2pdf && cargo build --release --bins --target x86_64-apple-darwin )
+( cd plugins-src/md2pdf && cargo build --release --bins --target aarch64-apple-darwin )
+( cd plugins-src/md2pdf && cargo build --release --bins --target x86_64-apple-darwin )
 
 BINS=()
 for triple in aarch64-apple-darwin x86_64-apple-darwin; do
   for bin in md2pdf md2pdf-v2; do
-    BINS+=("md2pdf/target/$triple/release/$bin")
+    BINS+=("plugins-src/md2pdf/target/$triple/release/$bin")
   done
 done
 

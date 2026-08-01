@@ -3,7 +3,7 @@ dist/
 .DS_Store
 src-tauri/target/
 mdshare/target/
-md2pdf/target/
+plugins-src/md2pdf/target/
 plugin-protocol/target/
 notemd-plugin-sdk/target/
 plugins-src/openclaw/backend/target/

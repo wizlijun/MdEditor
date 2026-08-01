@@ -54,13 +54,13 @@ fs.writeFileSync(p,JSON.stringify(s,null,2)+'\n');
 }
 
 if [[ "$PLUGIN" == "md2pdf" ]]; then
-  ( cd md2pdf && cargo build $([ "$PROFILE" = release ] && echo --release) --bins )
-  VERSION=$(node -e "console.log(require('./md2pdf/manifest.v2.json').version)")
+  ( cd plugins-src/md2pdf && cargo build $([ "$PROFILE" = release ] && echo --release) --bins )
+  VERSION=$(node -e "console.log(require('./plugins-src/md2pdf/manifest.v2.json').version)")
   DEST="$ROOT/notemd.md2pdf/$VERSION"
   mkdir -p "$DEST/bin"
-  cp md2pdf/target/$PROFILE/md2pdf "$DEST/bin/"
-  cp md2pdf/target/$PROFILE/md2pdf-v2 "$DEST/bin/"
-  cp md2pdf/manifest.v2.json "$DEST/manifest.json"
+  cp plugins-src/md2pdf/target/$PROFILE/md2pdf "$DEST/bin/"
+  cp plugins-src/md2pdf/target/$PROFILE/md2pdf-v2 "$DEST/bin/"
+  cp plugins-src/md2pdf/manifest.v2.json "$DEST/manifest.json"
   ln -sfn "$VERSION" "$ROOT/notemd.md2pdf/current"
   mark_installed "notemd.md2pdf" "$VERSION"
   echo "✓ installed notemd.md2pdf@$VERSION ($PROFILE, $(uname -m)) → $DEST"

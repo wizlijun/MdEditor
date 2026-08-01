@@ -1,0 +1,96 @@
+{
+  "manifest_version": 2,
+  "id": "notemd.md2pdf",
+  "name": "Export to PDF",
+  "version": "1.0.2",
+  "kind": "native",
+  "engines": {
+    "notemd": ">=6.716.7"
+  },
+  "description": "Export the current Markdown or HTML tab to a typographically-clean A4 PDF",
+  "binary": {
+    "aarch64-apple-darwin": "bin/md2pdf-v2",
+    "x86_64-apple-darwin": "bin/md2pdf-v2"
+  },
+  "activation": {
+    "events": [
+      "onCommand:export",
+      "onCli:pdf"
+    ]
+  },
+  "contributes": {
+    "menus": [
+      {
+        "location": "file",
+        "label": "Export to PDF…",
+        "command": "export",
+        "enabled_when": "currentTab.kind == 'markdown' || currentTab.kind == 'html'",
+        "prompt": {
+          "kind": "save-dialog",
+          "default_filename": "{stem}.pdf",
+          "filters": [
+            {
+              "name": "PDF",
+              "extensions": [
+                "pdf"
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "cli": [
+      {
+        "subcommand": "pdf",
+        "command": "export",
+        "summary": "Export Markdown or HTML file to PDF",
+        "args": [
+          {
+            "name": "file",
+            "type": "path",
+            "required": true,
+            "help": "File to export"
+          }
+        ],
+        "flags": [
+          {
+            "long": "--output",
+            "short": "-o",
+            "type": "string",
+            "help": "Output PDF path"
+          }
+        ],
+        "requires_tab_context": true
+      }
+    ]
+  },
+  "capabilities": [
+    "renderer.html",
+    "toast"
+  ],
+  "request_timeout_seconds": 60,
+  "idle_shutdown_seconds": 120,
+  "i18n": {
+    "zh": {
+      "name": "导出为 PDF",
+      "description": "把当前 Markdown 或 HTML 标签页导出为排版干净的 A4 PDF",
+      "menus": {
+        "export": "导出为 PDF…"
+      }
+    },
+    "ja": {
+      "name": "PDF に書き出す",
+      "description": "現在の Markdown / HTML タブを、組版の整った A4 の PDF に書き出します",
+      "menus": {
+        "export": "PDF に書き出す…"
+      }
+    },
+    "de": {
+      "name": "Als PDF exportieren",
+      "description": "Den aktuellen Markdown- oder HTML-Tab als sauber gesetztes A4-PDF exportieren",
+      "menus": {
+        "export": "Als PDF exportieren…"
+      }
+    }
+  }
+}

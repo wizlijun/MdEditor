@@ -105,7 +105,7 @@ zip_pkg() {
 # ── md2pdf: native, per-arch binaries ─────────────────────────────────────────
 release_md2pdf() {
   local id="notemd.md2pdf"
-  local manifest="$REPO_ROOT/md2pdf/manifest.v2.json"
+  local manifest="$REPO_ROOT/plugins-src/md2pdf/manifest.v2.json"
   local version; version="$(manifest_field "$manifest" version)"
   echo "== $id @ $version =="
 
@@ -121,8 +121,8 @@ release_md2pdf() {
     trap 'rm -rf "$stage"' RETURN
     mkdir -p "$stage/bin"
     cp "$manifest" "$stage/manifest.json"
-    cp "$REPO_ROOT/md2pdf/target/$triple/release/md2pdf"    "$stage/bin/md2pdf"
-    cp "$REPO_ROOT/md2pdf/target/$triple/release/md2pdf-v2" "$stage/bin/md2pdf-v2"
+    cp "$REPO_ROOT/plugins-src/md2pdf/target/$triple/release/md2pdf"    "$stage/bin/md2pdf"
+    cp "$REPO_ROOT/plugins-src/md2pdf/target/$triple/release/md2pdf-v2" "$stage/bin/md2pdf-v2"
     chmod +x "$stage/bin/md2pdf" "$stage/bin/md2pdf-v2"
 
     local pkg="$out_dir/$triple.notemdpkg"

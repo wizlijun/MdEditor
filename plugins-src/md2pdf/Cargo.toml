@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-notemd-plugin-sdk = { path = "../notemd-plugin-sdk" }
+notemd-plugin-sdk = { path = "../../notemd-plugin-sdk" }
 tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "sync", "time"] }
 
 # Declaring any [[bin]] disables cargo's auto-discovery of src/main.rs,
