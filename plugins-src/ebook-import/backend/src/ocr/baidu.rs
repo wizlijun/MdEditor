@@ -76,8 +76,11 @@ impl BaiduOcr {
     /// polling than that).
     pub fn new(api_key: String, secret_key: String) -> Self {
         Self {
-            api_key,
-            secret_key,
+            // Trimmed here too, not just where they're saved: a credential
+            // stored with a stray newline by an older build would otherwise
+            // keep failing with the provider's unhelpful "unknown client id".
+            api_key: api_key.trim().to_string(),
+            secret_key: secret_key.trim().to_string(),
             oauth_url: "https://aip.baidubce.com/oauth/2.0/token".to_string(),
             submit_url: "https://aip.baidubce.com/rest/2.0/brain/online/v2/unlimited-ocr-parser/task"
                 .to_string(),
@@ -125,7 +128,7 @@ impl BaiduOcr {
         let token = json
             .get("access_token")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| format!("oauth response missing access_token: {json}"))?
+            .ok_or_else(|| oauth_error(&json))?
             .to_string();
         // Trim a minute of safety margin off the advertised TTL so we never
         // hand out a token that expires mid-request.
@@ -253,6 +256,28 @@ fn precheck_size(len: u64) -> Result<(), String> {
 /// design (only `A-Z a-z 0-9 - _ . ~` pass through unescaped) so it's safe
 /// for arbitrary bytes, including base64 output (`+`, `/`, `=`) and UTF-8
 /// file names -- we don't pull in a urlencoding crate for this one helper.
+/// Turns a failed OAuth response into an actionable message. Baidu answers a
+/// bad credential with `invalid_client` / "unknown client id", which says
+/// nothing about the mistake people actually make: pasting the console's
+/// *Access Key* pair (Security Credentials) instead of an application's API
+/// Key / Secret Key, or swapping the two fields.
+fn oauth_error(json: &serde_json::Value) -> String {
+    let code = json.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    let desc = json
+        .get("error_description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    match code {
+        "invalid_client" => format!(
+            "baidu rejected the credentials ({desc}). Use an application's API Key and \
+             Secret Key from the OCR console — not an Access Key pair — and check the two \
+             fields aren't swapped."
+        ),
+        "" => format!("baidu oauth response has no access_token: {json}"),
+        other => format!("baidu oauth failed ({other}): {desc}"),
+    }
+}
+
 fn percent_encode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.bytes() {

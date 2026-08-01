@@ -55,6 +55,9 @@ export type MessageKey =
   | 'err.ocrEmpty'
   | 'err.ocrUnreachable'
   | 'err.baiduFailed'
+  | 'err.baiduCredentials'
+  | 'err.baiduAuth'
+  | 'settings.baiduHint'
   | 'err.unsupportedType'
   | 'log.ocrStart'
   | 'log.converting'
@@ -84,6 +87,8 @@ const en: Catalog = {
   'settings.root': 'Ebooks root',
   'settings.wechatUrl': 'WeChat OCR URL',
   'settings.baiduKey': 'Baidu API key',
+  'settings.baiduHint':
+    'Baidu Cloud console → AI → OCR / Document parsing → Applications → create one; its API Key and Secret Key go below.',
   'settings.baiduSecret': 'Baidu secret key',
   'settings.calibre.found': 'Calibre found: {path} ({version})',
   'settings.calibre.missing': 'Calibre not found',
@@ -120,6 +125,9 @@ const en: Catalog = {
   'err.ocrEmpty': 'OCR produced no text — the scan may be blank or unreadable.',
   'err.ocrUnreachable': "Couldn't reach the OCR service — check your network or Settings.",
   'err.baiduFailed': 'Baidu OCR failed — see the log for details.',
+  'err.baiduCredentials':
+    "Baidu didn't recognize the credentials. Use an application's API Key and Secret Key from the OCR console — not an Access Key pair — and check the two fields aren't swapped.",
+  'err.baiduAuth': 'Baidu sign-in failed — check the API key and secret key in Settings.',
   'err.unsupportedType': 'Unsupported file type — only epub, pdf, and docx are supported.',
   'log.ocrStart': 'OCR: {file}',
   'log.converting': 'Converting {file} with Calibre…',
@@ -148,6 +156,8 @@ const zh: Catalog = {
   'settings.root': '电子书根目录',
   'settings.wechatUrl': '微信 OCR 地址',
   'settings.baiduKey': '百度 API Key',
+  'settings.baiduHint':
+    '在百度智能云控制台 → 人工智能 → 文字识别/文档解析 → 应用列表 → 创建应用,把该应用的 API Key 和 Secret Key 填在下面。',
   'settings.baiduSecret': '百度 Secret Key',
   'settings.calibre.found': '已找到 Calibre：{path}（{version}）',
   'settings.calibre.missing': '未找到 Calibre',
@@ -184,6 +194,9 @@ const zh: Catalog = {
   'err.ocrEmpty': 'OCR 未识别出任何文字——扫描件可能是空白或无法识别。',
   'err.ocrUnreachable': '无法连接 OCR 服务——请检查网络或设置。',
   'err.baiduFailed': '百度 OCR 失败——详情见日志。',
+  'err.baiduCredentials':
+    '百度不认这组凭据。请填 OCR 控制台中「应用」的 API Key 和 Secret Key(不是「安全认证」里的 Access Key),并确认两栏没有填反。',
+  'err.baiduAuth': '百度鉴权失败——请检查设置里的 API Key 和 Secret Key。',
   'err.unsupportedType': '不支持的文件类型——仅支持 epub、pdf、docx。',
   'log.ocrStart': 'OCR:{file}',
   'log.converting': '正在用 Calibre 转换 {file}…',
@@ -212,6 +225,8 @@ const ja: Catalog = {
   'settings.root': '電子書籍のルート',
   'settings.wechatUrl': 'WeChat OCR の URL',
   'settings.baiduKey': 'Baidu API キー',
+  'settings.baiduHint':
+    'Baidu Cloud コンソール → 人工知能 → 文字認識/文書解析 → アプリケーション一覧 → アプリを作成し、その API Key と Secret Key を下に入力します。',
   'settings.baiduSecret': 'Baidu シークレットキー',
   'settings.calibre.found': 'Calibre が見つかりました：{path}（{version}）',
   'settings.calibre.missing': 'Calibre が見つかりません',
@@ -248,6 +263,9 @@ const ja: Catalog = {
   'err.ocrEmpty': 'OCR でテキストを認識できませんでした。スキャンが空白か読み取れない可能性があります。',
   'err.ocrUnreachable': 'OCR サービスに接続できません。ネットワークまたは設定を確認してください。',
   'err.baiduFailed': 'Baidu OCR が失敗しました。詳細はログを確認してください。',
+  'err.baiduCredentials':
+    'Baidu が認証情報を受け付けませんでした。OCR コンソールの「アプリケーション」の API Key と Secret Key(「セキュリティ認証」の Access Key ではありません)を入力し、2 つの欄が入れ替わっていないか確認してください。',
+  'err.baiduAuth': 'Baidu の認証に失敗しました。設定の API キーとシークレットキーを確認してください。',
   'err.unsupportedType': 'サポートされていないファイル形式です。epub、pdf、docx のみ対応しています。',
   'log.ocrStart': 'OCR:{file}',
   'log.converting': 'Calibre で {file} を変換中…',
@@ -276,6 +294,8 @@ const de: Catalog = {
   'settings.root': 'E-Book-Stammverzeichnis',
   'settings.wechatUrl': 'WeChat-OCR-URL',
   'settings.baiduKey': 'Baidu-API-Schlüssel',
+  'settings.baiduHint':
+    'Baidu-Cloud-Konsole → KI → Texterkennung/Dokumentanalyse → Anwendungen → eine anlegen; deren API Key und Secret Key gehören hier hinein.',
   'settings.baiduSecret': 'Baidu-Geheimschlüssel',
   'settings.calibre.found': 'Calibre gefunden: {path} ({version})',
   'settings.calibre.missing': 'Calibre nicht gefunden',
@@ -312,6 +332,9 @@ const de: Catalog = {
   'err.ocrEmpty': 'OCR hat keinen Text erkannt — der Scan ist möglicherweise leer oder unlesbar.',
   'err.ocrUnreachable': 'OCR-Dienst nicht erreichbar — Netzwerk oder Einstellungen prüfen.',
   'err.baiduFailed': 'Baidu-OCR fehlgeschlagen — Details im Protokoll.',
+  'err.baiduCredentials':
+    'Baidu hat die Zugangsdaten nicht erkannt. Verwende API Key und Secret Key einer Anwendung aus der OCR-Konsole — kein Access-Key-Paar — und prüfe, ob die beiden Felder vertauscht sind.',
+  'err.baiduAuth': 'Baidu-Anmeldung fehlgeschlagen — API-Key und Secret Key in den Einstellungen prüfen.',
   'err.unsupportedType': 'Nicht unterstützter Dateityp — nur epub, pdf und docx werden unterstützt.',
   'log.ocrStart': 'OCR läuft: {file}',
   'log.converting': 'Konvertiere {file} mit Calibre…',

@@ -187,7 +187,12 @@ fn apply_vault_patch(existing: &VaultSettings, patch: &Value) -> Result<VaultSet
 /// an input field (rather than intentionally typing something) would wipe
 /// a saved key by accident.
 fn apply_secret_patch(existing: &str, patch: &str) -> String {
-    match patch {
+    // Trimmed: these arrive by copy-paste from a console, which readily brings
+    // a trailing space or newline along. Whitespace inside a credential is
+    // never meaningful, but it survives into the request as %20 and the
+    // provider then rejects the whole key with an error that says nothing
+    // about whitespace ("unknown client id").
+    match patch.trim() {
         "" => existing.to_string(),
         "-" => String::new(),
         other => other.to_string(),

@@ -333,6 +333,9 @@
           <input type="text" bind:value={wechatUrl} />
         </label>
       {:else}
+        <!-- Baidu has two credential pairs and only one of them works here;
+             naming the console path is what stops the wrong one being pasted. -->
+        <p class="field-hint">{t('settings.baiduHint')}</p>
         <label>
           {t('settings.baiduKey')}
           <input
@@ -527,6 +530,12 @@
     border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
     background: transparent;
     color: inherit;
+  }
+  .field-hint {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.5;
+    opacity: 0.55;
   }
   .calibre-row {
     display: flex;

@@ -351,3 +351,32 @@ fn an_already_elapsed_poll_deadline_times_out_without_polling() {
         "oauth + submit only, the deadline check must run before the first query"
     );
 }
+
+#[test]
+fn credentials_are_trimmed_so_a_pasted_newline_cannot_break_the_client_id() {
+    let e = BaiduOcr::new("  key-123\n".to_string(), "\tsecret-abc ".to_string());
+    assert_eq!(e.api_key, "key-123");
+    assert_eq!(e.secret_key, "secret-abc");
+}
+
+#[test]
+fn invalid_client_explains_which_credentials_to_use() {
+    let json = serde_json::json!({
+        "error": "invalid_client",
+        "error_description": "unknown client id"
+    });
+    let msg = oauth_error(&json);
+    assert!(msg.contains("API Key"), "names the right credential: {msg}");
+    assert!(msg.contains("Access Key"), "names the wrong one people reach for: {msg}");
+    assert!(msg.contains("swapped"), "mentions the swap case: {msg}");
+    assert!(msg.contains("unknown client id"), "keeps the provider's own words: {msg}");
+}
+
+#[test]
+fn other_oauth_failures_keep_the_provider_detail() {
+    let msg = oauth_error(&serde_json::json!({ "error": "invalid_grant", "error_description": "expired" }));
+    assert!(msg.contains("invalid_grant") && msg.contains("expired"), "{msg}");
+    // No `error` key at all: fall back to the raw body rather than inventing one.
+    let msg = oauth_error(&serde_json::json!({ "weird": 1 }));
+    assert!(msg.contains("weird"), "{msg}");
+}
