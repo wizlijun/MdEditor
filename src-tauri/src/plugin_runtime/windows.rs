@@ -92,6 +92,57 @@ pub(crate) fn drag_drop_payload(phase: &str, paths: &[std::path::PathBuf]) -> Va
     })
 }
 
+/// Resolve a plugin window's title, in locale-resolution order (spec: a
+/// localized name always beats the manifest's English `title`, because every
+/// plugin today sets `title` to its English name):
+///
+/// 1. `i18n[locale].windows[window_id]` — new, optional per-window title convention.
+/// 2. `i18n[locale].name` — localized plugin display name.
+/// 3. `win_title` — the window contribution's own `title` field (English).
+/// 4. `plugin_name` — the manifest's top-level `name` (English).
+///
+/// Locale lookup also tries the base language when `locale` carries a region
+/// suffix (`zh-CN` → `zh`), since `i18n` is keyed by base language only. Empty
+/// strings at any level are treated as absent (fall through to the next
+/// level), guarding against manifests that set `i18n.<locale>.name: ""`.
+pub(crate) fn window_title(
+    i18n: Option<&Value>,
+    locale: &str,
+    window_id: &str,
+    win_title: Option<&str>,
+    plugin_name: &str,
+) -> String {
+    let non_empty = |v: Option<&Value>| -> Option<String> {
+        v.and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+
+    if let Some(i18n) = i18n {
+        // Try the exact locale, then its base language (`zh-CN` → `zh`).
+        let base = locale.split(['-', '_']).next().unwrap_or(locale);
+        for candidate in [locale, base] {
+            let Some(entry) = i18n.get(candidate) else { continue };
+            if let Some(t) = non_empty(entry.get("windows").and_then(|w| w.get(window_id))) {
+                return t;
+            }
+            if let Some(t) = non_empty(entry.get("name")) {
+                return t;
+            }
+            if candidate == base {
+                break;
+            }
+        }
+    }
+
+    win_title
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| plugin_name.to_string())
+}
+
 /// Open (or focus, if a singleton is already up) the window contributed under
 /// `window_id` by `plugin_id`. `locale`/`theme` are read from the app to seed
 /// the bridge. The window loads `plugin://<id>/<entry>` and gets NO capability
@@ -131,7 +182,13 @@ pub fn open_plugin_window<R: Runtime>(
 
     let locale = crate::read_saved_locale(app);
     let theme = read_saved_theme(app);
-    let title = win.title.clone().unwrap_or_else(|| manifest.name.clone());
+    let title = window_title(
+        manifest.i18n.as_ref(),
+        &locale,
+        window_id,
+        win.title.as_deref(),
+        &manifest.name,
+    );
 
     // `plugin://<id>/<entry>` is served by super::protocol. A custom scheme uses
     // WebviewUrl::CustomProtocol (External is documented http/https-only).
@@ -333,6 +390,86 @@ mod tests {
         let back: Value = serde_json::from_str(inner).unwrap();
         assert_eq!(back["type"], "progress");
         assert_eq!(back["value"], 42);
+    }
+
+    #[test]
+    fn window_title_prefers_per_window_i18n_title() {
+        let i18n = serde_json::json!({
+            "zh": { "name": "示例插件", "windows": { "main": "主窗口标题" } }
+        });
+        assert_eq!(
+            window_title(Some(&i18n), "zh", "main", Some("Example Plugin"), "Example Plugin"),
+            "主窗口标题"
+        );
+    }
+
+    #[test]
+    fn window_title_falls_back_to_i18n_name() {
+        let i18n = serde_json::json!({ "zh": { "name": "示例插件" } });
+        assert_eq!(
+            window_title(Some(&i18n), "zh", "main", Some("Example Plugin"), "Example Plugin"),
+            "示例插件"
+        );
+    }
+
+    #[test]
+    fn window_title_falls_back_to_win_title_when_no_i18n_match() {
+        // Locale not present in i18n at all.
+        let i18n = serde_json::json!({ "ja": { "name": "サンプル" } });
+        assert_eq!(
+            window_title(Some(&i18n), "zh", "main", Some("Win Title"), "Plugin Name"),
+            "Win Title"
+        );
+        // No i18n at all.
+        assert_eq!(
+            window_title(None, "zh", "main", Some("Win Title"), "Plugin Name"),
+            "Win Title"
+        );
+    }
+
+    #[test]
+    fn window_title_falls_back_to_plugin_name_as_last_resort() {
+        assert_eq!(window_title(None, "zh", "main", None, "Plugin Name"), "Plugin Name");
+        let i18n = serde_json::json!({ "zh": {} });
+        assert_eq!(
+            window_title(Some(&i18n), "zh", "main", None, "Plugin Name"),
+            "Plugin Name"
+        );
+    }
+
+    #[test]
+    fn window_title_region_suffix_falls_back_to_base_language() {
+        let i18n = serde_json::json!({ "zh": { "name": "示例插件" } });
+        assert_eq!(
+            window_title(Some(&i18n), "zh-CN", "main", Some("Example Plugin"), "Example Plugin"),
+            "示例插件"
+        );
+        // Per-window title also resolves through the base language.
+        let i18n2 = serde_json::json!({ "zh": { "windows": { "main": "主窗口" } } });
+        assert_eq!(
+            window_title(Some(&i18n2), "zh-Hans", "main", None, "Plugin Name"),
+            "主窗口"
+        );
+    }
+
+    #[test]
+    fn window_title_ignores_empty_strings_and_falls_through() {
+        // Empty per-window title falls through to i18n name.
+        let i18n = serde_json::json!({
+            "zh": { "name": "示例插件", "windows": { "main": "" } }
+        });
+        assert_eq!(
+            window_title(Some(&i18n), "zh", "main", Some("Example Plugin"), "Example Plugin"),
+            "示例插件"
+        );
+        // Empty i18n name falls through to win_title.
+        let i18n2 = serde_json::json!({ "zh": { "name": "" } });
+        assert_eq!(
+            window_title(Some(&i18n2), "zh", "main", Some("Win Title"), "Plugin Name"),
+            "Win Title"
+        );
+        // Empty win_title falls through to plugin_name.
+        assert_eq!(window_title(None, "zh", "main", Some(""), "Plugin Name"), "Plugin Name");
     }
 
     #[test]
