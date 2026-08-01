@@ -34,6 +34,8 @@ export type MessageKey =
   | 'action.openInEditor'
   | 'action.cancel'
   | 'action.clear'
+  | 'action.start'
+  | 'action.running'
   | 'log.toggle'
   | 'stage.convert'
   | 'stage.extract'
@@ -88,7 +90,7 @@ const en: Catalog = {
   'settings.calibre.pick': 'Choose…',
   'settings.calibre.install': 'Install Calibre',
   'settings.save': 'Save',
-  'queue.empty': 'No imports yet — drop a file to start.',
+  'queue.empty': 'Nothing queued yet — add files, choose whether to OCR, then press Start.',
   'status.pending': 'Pending',
   'status.running': 'Running',
   'status.done': 'Done',
@@ -97,6 +99,8 @@ const en: Catalog = {
   'action.openInEditor': 'Open in editor',
   'action.cancel': 'Cancel',
   'action.clear': 'Clear finished',
+  'action.start': 'Start import',
+  'action.running': 'Importing…',
   'log.toggle': 'Log',
   'stage.convert': 'Converting',
   'stage.extract': 'Extracting',
@@ -150,7 +154,7 @@ const zh: Catalog = {
   'settings.calibre.pick': '选择…',
   'settings.calibre.install': '安装 Calibre',
   'settings.save': '保存',
-  'queue.empty': '暂无导入任务——拖入文件开始。',
+  'queue.empty': '任务列表为空——先添加文件、选好是否 OCR,再点「开始导入」。',
   'status.pending': '等待中',
   'status.running': '进行中',
   'status.done': '已完成',
@@ -159,6 +163,8 @@ const zh: Catalog = {
   'action.openInEditor': '在编辑器打开',
   'action.cancel': '取消',
   'action.clear': '清除已完成',
+  'action.start': '开始导入',
+  'action.running': '导入中…',
   'log.toggle': '日志',
   'stage.convert': '转换中',
   'stage.extract': '解包中',
@@ -212,7 +218,7 @@ const ja: Catalog = {
   'settings.calibre.pick': '選択…',
   'settings.calibre.install': 'Calibre をインストール',
   'settings.save': '保存',
-  'queue.empty': 'インポートはまだありません。ファイルをドロップして開始してください。',
+  'queue.empty': 'まだ何もありません。ファイルを追加し、OCR の有無を選んでから「開始」を押してください。',
   'status.pending': '待機中',
   'status.running': '実行中',
   'status.done': '完了',
@@ -221,6 +227,8 @@ const ja: Catalog = {
   'action.openInEditor': 'エディタで開く',
   'action.cancel': 'キャンセル',
   'action.clear': '完了分を消去',
+  'action.start': '取り込みを開始',
+  'action.running': '取り込み中…',
   'log.toggle': 'ログ',
   'stage.convert': '変換中',
   'stage.extract': '展開中',
@@ -274,7 +282,7 @@ const de: Catalog = {
   'settings.calibre.pick': 'Auswählen…',
   'settings.calibre.install': 'Calibre installieren',
   'settings.save': 'Speichern',
-  'queue.empty': 'Noch keine Importe — Datei hierher ziehen, um zu beginnen.',
+  'queue.empty': 'Noch nichts in der Liste — Dateien hinzufügen, OCR wählen, dann auf Start drücken.',
   'status.pending': 'Ausstehend',
   'status.running': 'Läuft',
   'status.done': 'Fertig',
@@ -283,6 +291,8 @@ const de: Catalog = {
   'action.openInEditor': 'Im Editor öffnen',
   'action.cancel': 'Abbrechen',
   'action.clear': 'Fertige entfernen',
+  'action.start': 'Import starten',
+  'action.running': 'Importiert…',
   'log.toggle': 'Protokoll',
   'stage.convert': 'Wird konvertiert',
   'stage.extract': 'Wird entpackt',

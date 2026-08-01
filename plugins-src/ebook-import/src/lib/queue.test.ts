@@ -1,13 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import {
   addPaths,
+  hasPending,
+  isRunComplete,
   nextToStart,
   onJobEvent,
   replayPending,
   reserve,
   stashOrApply,
+  type ItemStatus,
   type PendingJobEvent,
   type Queue,
+  type QueueItem,
 } from './queue'
 
 const empty: Queue = { items: [], activeId: null }
@@ -258,5 +262,31 @@ describe('stashOrApply / replayPending', () => {
     expect(result.applied).toBe(false)
     expect(result.pending).toEqual([])
     expect(result.q).toEqual(q)
+  })
+})
+
+describe('run gating (Start button)', () => {
+  const item = (id: number, status: ItemStatus): QueueItem => ({
+    id,
+    path: `/b/${id}.epub`,
+    name: `${id}.epub`,
+    status,
+    logs: [],
+  })
+
+  it('hasPending is true only while something still waits to start', () => {
+    expect(hasPending({ items: [], activeId: null })).toBe(false)
+    expect(hasPending({ items: [item(1, 'pending')], activeId: null })).toBe(true)
+    expect(hasPending({ items: [item(1, 'running')], activeId: 1 })).toBe(false)
+    expect(hasPending({ items: [item(1, 'done'), item(2, 'failed')], activeId: null })).toBe(false)
+  })
+
+  it('a run is not complete while the last item is still in flight', () => {
+    // The case that would otherwise re-enable Start mid-run: no pending
+    // successors left, but the active item hasn't landed.
+    expect(isRunComplete({ items: [item(1, 'running')], activeId: 1 })).toBe(false)
+    expect(isRunComplete({ items: [item(1, 'pending')], activeId: null })).toBe(false)
+    expect(isRunComplete({ items: [item(1, 'done')], activeId: null })).toBe(true)
+    expect(isRunComplete({ items: [], activeId: null })).toBe(true)
   })
 })

@@ -232,3 +232,17 @@ export function replayPending(
   }
   return { q: next, pending: rest }
 }
+
+/** Whether anything is still waiting to be started. Gates the Start button. */
+export function hasPending(q: Queue): boolean {
+  return q.items.some((i) => i.status === 'pending')
+}
+
+/**
+ * Whether a run has finished: nothing left to start AND nothing in flight.
+ * The scheduler calls this when `nextToStart` comes up empty — an item can be
+ * running with no pending successors, and the run isn't over until it lands.
+ */
+export function isRunComplete(q: Queue): boolean {
+  return !hasPending(q) && q.activeId == null
+}

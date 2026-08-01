@@ -5,6 +5,8 @@
   import { describeError } from './lib/errors'
   import {
     addPaths,
+    hasPending as queueHasPending,
+    isRunComplete,
     nextToStart,
     replayPending,
     reserve,
@@ -42,6 +44,15 @@
   let pending: PendingJobEvent[] = []
   let ocr = $state(false)
   let provider: 'wechat' | 'baidu' = $state('wechat')
+  // A run is a batch: pressing Start locks in the OCR choice so every file in
+  // the queue is processed the same way, even if the controls are touched
+  // afterwards. `running` also gates the auto-advance — without it, queueing a
+  // file would start it, which is exactly what Start exists to prevent.
+  let running = $state(false)
+  let runOcr = false
+  let runProvider: 'wechat' | 'baidu' = 'wechat'
+
+  let hasPending = $derived(queueHasPending(q))
   let dragActive = $state(false)
   let expanded: Record<number, boolean> = $state({})
   let globalError = $state('')
@@ -106,13 +117,18 @@
    */
   async function schedule() {
     const n = nextToStart(q)
-    if (!n) return
+    if (!n) {
+      // Nothing left to start: once the last item lands too, the run is over
+      // and "Start" becomes available again.
+      if (isRunComplete(q)) running = false
+      return
+    }
     q = reserve(q, n.id)
     try {
       const res = await bridge().request('plugin.import_start', {
         path: n.path,
-        ocr,
-        ...(ocr ? { provider } : {}),
+        ocr: runOcr,
+        ...(runOcr ? { provider: runProvider } : {}),
       })
       q = { ...q, items: q.items.map((i) => (i.id === n.id ? { ...i, jobId: res.job_id } : i)) }
       const replay = replayPending(q, pending, res.job_id)
@@ -129,6 +145,15 @@
     }
   }
 
+  /** Begins a run over everything currently queued, freezing the OCR choice. */
+  function startRun() {
+    if (running || !hasPending) return
+    runOcr = ocr
+    runProvider = provider
+    running = true
+    void schedule()
+  }
+
   bridge().onMessage((raw: unknown) => {
     const m = raw as HostPush
     if (m.type === 'drag-drop') {
@@ -137,8 +162,11 @@
       else if (d.phase === 'leave') dragActive = false
       else if (d.phase === 'drop') {
         dragActive = false
+        // Dropping only queues: the OCR choice belongs to the user BEFORE the
+        // work starts, so nothing runs until "Start" is pressed. A drop during
+        // a run joins that run and inherits its locked-in OCR settings.
         q = addPaths(q, d.paths ?? [])
-        void schedule()
+        if (running) void schedule()
       }
     } else if (m.type === 'job') {
       const j = m as JobPush
@@ -167,7 +195,7 @@
       const paths: string[] = res?.paths ?? []
       if (paths.length) {
         q = addPaths(q, paths)
-        void schedule()
+        if (running) void schedule()
       }
     } catch (e) {
       globalError = message(e)
@@ -347,13 +375,15 @@
     <button class="primary" onclick={pickFiles}>{t('drop.pick')}</button>
   </section>
 
+  <!-- Disabled mid-run: the batch already locked these in, so leaving them
+       live would suggest a change applies to files that are queued behind. -->
   <section class="ocr">
     <label class="ocr-toggle">
-      <input type="checkbox" bind:checked={ocr} />
+      <input type="checkbox" bind:checked={ocr} disabled={running} />
       {t('ocr.label')}
     </label>
     {#if ocr}
-      <select bind:value={provider}>
+      <select bind:value={provider} disabled={running}>
         <option value="wechat">{t('ocr.provider.wechat')}</option>
         <option value="baidu">{t('ocr.provider.baidu')}</option>
       </select>
@@ -363,6 +393,10 @@
 
   <section class="queue">
     <div class="queue-head">
+      <button class="primary start" onclick={startRun} disabled={running || !hasPending}>
+        {running ? t('action.running') : t('action.start')}
+      </button>
+      <span class="spacer"></span>
       <button class="link" onclick={clearFinished}>{t('action.clear')}</button>
     </div>
     {#if q.items.length === 0}
@@ -563,8 +597,11 @@
   }
   .queue-head {
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
   }
+  .queue-head .spacer { flex: 1; }
+  .start { padding: 4px 16px; }
   .empty {
     opacity: 0.5;
     font-size: 12px;
