@@ -45,17 +45,6 @@ export function vaultInfo(): Promise<VaultInfo> {
 }
 
 /** `host.dialog.open` → `{ paths }` (null when the user cancelled). */
-export async function dialogOpenJson(title?: string): Promise<string | null> {
-  const res: { paths: string[] | null } = await bridge().request('host.dialog.open', {
-    title,
-    multiple: false,
-    // Roam's "Export All (JSON)" downloads a .zip; a manually-unzipped .json is
-    // also accepted. io.readRoamExport branches on the picked extension.
-    filters: [{ name: 'Roam export', extensions: ['json', 'zip'] }],
-  })
-  return res.paths?.[0] ?? null
-}
-
 /**
  * `host.fs.read_text` → file content. Only paths a prior `host.dialog.open`
  * returned this session are readable (fs.read:dialog grant).
