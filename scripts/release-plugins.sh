@@ -228,7 +228,6 @@ release_weekly_review() {
 # then one zip per triple containing manifest.json + bin/<name> + ui/.
 release_native_ui() {
   local id="$1" src="$2" bin_name="$3" pnpm_filter="$4"
-  local extra_lib_vendor="${5:-}"
   local manifest="$src/manifest.v2.json"
   local version; version="$(manifest_field "$manifest" version)"
   echo "== $id @ $version =="
@@ -249,10 +248,6 @@ release_native_ui() {
     for triple in aarch64-apple-darwin x86_64-apple-darwin; do
       codesign --force --options runtime --timestamp --sign "$identity" \
         "$src/backend/target/$triple/release/$bin_name"
-      if [[ -n "$extra_lib_vendor" ]]; then
-        codesign --force --options runtime --timestamp --sign "$identity" \
-          "$src/backend/$extra_lib_vendor/$triple/libpdfium.dylib"
-      fi
     done
   else
     echo "[$id] WARNING: no Developer ID Application identity — binaries left unsigned"
@@ -272,9 +267,6 @@ release_native_ui() {
     cp "$manifest" "$stage/manifest.json"
     cp "$src/backend/target/$triple/release/$bin_name" "$stage/bin/$bin_name"
     chmod +x "$stage/bin/$bin_name"
-    if [[ -n "$extra_lib_vendor" ]]; then
-      cp "$src/backend/$extra_lib_vendor/$triple/libpdfium.dylib" "$stage/bin/libpdfium.dylib"
-    fi
     cp -R "$src/dist/." "$stage/ui/"
 
     local pkg="$out_dir/$triple.notemdpkg"
@@ -296,14 +288,12 @@ release_claude_agent() {
     "notemd-claude-agent" "claude-agent"
 }
 
-# ── ebook-import: native backend + ui, per-arch packages, plus vendored
-# libpdfium.dylib fetched from bblanchon/pdfium-binaries and bundled into
-# bin/ (release_native_ui's extra_lib_vendor param handles the copy +
-# codesign) ────────────────────────────────────────────────────────────────
+# ── ebook-import: native backend + ui, per-arch packages. PDF rasterization
+# uses macOS CoreGraphics (a system framework) -- no vendored dylib to fetch
+# or bundle. ──────────────────────────────────────────────────────────────
 release_ebook_import() {
-  bash "$REPO_ROOT/scripts/fetch-pdfium.sh"
   release_native_ui "notemd.ebook-import" "$REPO_ROOT/plugins-src/ebook-import" \
-    "notemd-ebook-import" "ebook-import-plugin" "vendor"
+    "notemd-ebook-import" "ebook-import-plugin"
 }
 
 # ── pos-log: native backend only, per-arch packages (no ui/) ─────────────────

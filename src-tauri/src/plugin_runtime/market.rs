@@ -26,8 +26,20 @@ pub const DEFAULT_REGISTRY: &str = "https://plugins.notemd.net";
 /// an error rather than buffering unbounded bytes from an untrusted server.
 pub const MAX_PKG_BYTES: u64 = 50 * 1024 * 1024;
 
-/// Network timeout for both index fetch and package download.
+/// Whole-request timeout for the small JSON calls (index fetch, install ping).
 const NET_TIMEOUT_SECS: u64 = 10;
+
+/// Connect timeout for a package download — an unreachable registry still
+/// fails fast.
+const DOWNLOAD_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// Idle timeout *between body chunks* for a package download. A whole-request
+/// timeout must NOT be used here: it kills a healthy but slow transfer partway
+/// through the body, which reqwest surfaces as the opaque "error decoding
+/// response body". Multi-megabyte packages (a plugin bundling a native dylib
+/// runs to several MB) routinely take longer than any fixed request budget on
+/// a modest connection, so the bound is on *stalling*, not on total duration.
+const DOWNLOAD_IDLE_TIMEOUT_SECS: u64 = 30;
 
 /// Production plugin-registry pubkey (minisign key id 2BAFE555935FE0A9). This
 /// is the base64 line (no `untrusted comment:` prefix) of
@@ -96,11 +108,37 @@ pub async fn fetch_index(base_url: &str) -> Result<RegistryIndex, String> {
 /// Reads chunk-by-chunk via [`reqwest::Response::chunk`] so an oversized or
 /// `Content-Length`-lying server can't force us to buffer more than the cap
 /// (the check runs on each chunk, before appending it).
+///
+/// Bounded by connect + per-chunk idle timeouts rather than a whole-request
+/// one — see [`DOWNLOAD_IDLE_TIMEOUT_SECS`].
 pub async fn download(url: &str) -> Result<Vec<u8>, String> {
+    download_with(
+        url,
+        std::time::Duration::from_secs(DOWNLOAD_CONNECT_TIMEOUT_SECS),
+        std::time::Duration::from_secs(DOWNLOAD_IDLE_TIMEOUT_SECS),
+    )
+    .await
+}
+
+/// [`download`] with injectable timeouts, so the idle-vs-total semantics are
+/// testable in milliseconds instead of tens of seconds.
+pub async fn download_with(
+    url: &str,
+    connect_timeout: std::time::Duration,
+    idle_timeout: std::time::Duration,
+) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
+        .connect_timeout(connect_timeout)
+        .read_timeout(idle_timeout)
         .build()
         .map_err(|e| format!("http client: {e}"))?;
+    download_via(&client, url).await
+}
+
+/// The streaming read itself, with the client injected. Split out so tests can
+/// supply a client that bypasses the system proxy (reqwest honours it by
+/// default, which is right in production and fatal for a loopback test server).
+pub async fn download_via(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     let mut resp = client
         .get(url)
         .send()
@@ -300,5 +338,78 @@ mod tests {
         let v = serde_json::to_value(&idx).unwrap();
         assert_eq!(v["plugins"][0]["id"], "notemd.md2pdf");
         assert_eq!(v["plugins"][0]["download"]["aarch64-apple-darwin"].is_string(), true);
+    }
+
+    /// Serves one chunked response, sleeping `gap` before each chunk, then
+    /// returns the bound port. Chunked encoding is what lets the client see
+    /// (and time) the body arriving piecemeal, like a real registry download.
+    fn serve_chunked(chunks: usize, chunk_len: usize, gap: std::time::Duration) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf);
+            let _ = sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                  Transfer-Encoding: chunked\r\n\r\n",
+            );
+            for _ in 0..chunks {
+                std::thread::sleep(gap);
+                let body = vec![b'x'; chunk_len];
+                if sock
+                    .write_all(format!("{:x}\r\n", chunk_len).as_bytes())
+                    .is_err()
+                    || sock.write_all(&body).is_err()
+                    || sock.write_all(b"\r\n").is_err()
+                {
+                    return; // client hung up (an idle-timeout test)
+                }
+                let _ = sock.flush();
+            }
+            let _ = sock.write_all(b"0\r\n\r\n");
+        });
+        port
+    }
+
+    /// A client aimed at the loopback test server: same timeout shape as
+    /// production, minus the system proxy (which would otherwise swallow the
+    /// request — reqwest honours it by default).
+    fn loopback_client(idle: std::time::Duration) -> reqwest::Client {
+        reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .read_timeout(idle)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn download_survives_a_transfer_longer_than_the_idle_timeout() {
+        // The regression this guards: a whole-request timeout kills a healthy
+        // but slow multi-megabyte download partway through the body, which
+        // reqwest reports as the opaque "error decoding response body". Here
+        // the transfer takes ~4x the idle bound in total while never stalling
+        // for longer than it — that must succeed.
+        let port = serve_chunked(8, 64, std::time::Duration::from_millis(120));
+        let client = loopback_client(std::time::Duration::from_millis(250));
+        let out = download_via(&client, &format!("http://127.0.0.1:{port}/pkg"))
+            .await
+            .expect("slow-but-steady transfer must not time out");
+        assert_eq!(out.len(), 8 * 64);
+    }
+
+    #[tokio::test]
+    async fn download_gives_up_when_the_body_stalls() {
+        // The other half of the contract: a server that opens the response and
+        // then goes quiet is still bounded, so a wedged registry can't hang the
+        // install forever.
+        let port = serve_chunked(2, 64, std::time::Duration::from_millis(600));
+        let client = loopback_client(std::time::Duration::from_millis(150));
+        let err = download_via(&client, &format!("http://127.0.0.1:{port}/pkg"))
+            .await
+            .expect_err("a stalled body must abort");
+        assert!(err.starts_with("download"), "unexpected error: {err}");
     }
 }

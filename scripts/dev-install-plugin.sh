@@ -22,13 +22,11 @@
 #               (plugins-src/claude-agent/backend → notemd-claude-agent; the
 #               headless runner plus its detached --runner mode) AND the
 #               standalone Vite UI bundle, then installs bin/ + ui/ + manifest.
-# ebook-import→ fetches the prebuilt libpdfium.dylib for the current arch
-#               (scripts/fetch-pdfium.sh, cached under
-#               plugins-src/ebook-import/backend/vendor/), builds the
-#               CURRENT-arch native backend crate (plugins-src/ebook-import/backend
-#               → notemd-ebook-import; Calibre/HTMLZ/OCR pipeline + CLI) AND
-#               the standalone Vite UI bundle, then installs bin/ (binary +
-#               libpdfium.dylib) + ui/ + manifest.
+# ebook-import→ builds the CURRENT-arch native backend crate
+#               (plugins-src/ebook-import/backend → notemd-ebook-import;
+#               Calibre/HTMLZ/OCR pipeline + CLI, PDF rasterization via
+#               macOS CoreGraphics -- no bundled dylib) AND the standalone
+#               Vite UI bundle, then installs bin/ + ui/ + manifest.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -194,7 +192,6 @@ elif [[ "$PLUGIN" == "claude-agent" ]]; then
 
 elif [[ "$PLUGIN" == "ebook-import" ]]; then
   SRC="plugins-src/ebook-import"
-  bash scripts/fetch-pdfium.sh
   cargo build $([ "$PROFILE" = release ] && echo --release) \
     --manifest-path "$SRC/backend/Cargo.toml" --bin notemd-ebook-import
   pnpm --filter ebook-import-plugin build
@@ -202,13 +199,11 @@ elif [[ "$PLUGIN" == "ebook-import" ]]; then
   DEST="$ROOT/notemd.ebook-import/$VERSION"
   rm -rf "$DEST"; mkdir -p "$DEST/bin" "$DEST/ui"
   cp "$SRC/backend/target/$PROFILE/notemd-ebook-import" "$DEST/bin/"
-  ARCH_TRIPLE="$(uname -m | sed 's/arm64/aarch64/')-apple-darwin"
-  cp "$SRC/backend/vendor/$ARCH_TRIPLE/libpdfium.dylib" "$DEST/bin/"
   cp -R "$SRC/dist/." "$DEST/ui/"
   cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
   ln -sfn "$VERSION" "$ROOT/notemd.ebook-import/current"
   mark_installed "notemd.ebook-import" "$VERSION"
-  echo "✓ installed notemd.ebook-import@$VERSION ($PROFILE, $(uname -m), backend + ui + libpdfium) → $DEST"
+  echo "✓ installed notemd.ebook-import@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
   echo "  enable the v2 runtime:  \"plugins_v2.enabled\": true in settings.json, or NOTEMD_PLUGINS_V2=1"
   echo "  open it:                Plugins menu ▸ \"导入电子书(epub、pdf、docx)…\""
   echo "  CLI:                    notemd ebook <file.epub|.pdf|.docx> [--ocr] [--ocr-provider wechat|baidu] [--root <vault-relative>]"
