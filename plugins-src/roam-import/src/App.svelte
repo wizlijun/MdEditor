@@ -56,7 +56,7 @@
   const yieldUi = () => new Promise((r) => setTimeout(r))
 
   async function pickAndImport() {
-    const picked = await dialogOpenJson(t('title'))
+    const picked = await dialogOpenJson(t('title'), t('dialog.filter'))
     if (typeof picked !== 'string') return
     log = []; summary = null; conflicts = []; done = 0; total = 0; current = ''
     convertedByKey = new Map()

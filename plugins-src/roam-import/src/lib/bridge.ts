@@ -44,14 +44,19 @@ export function vaultInfo(): Promise<VaultInfo> {
   return bridge().request('host.vault.info')
 }
 
-/** `host.dialog.open` → `{ paths }` (null when the user cancelled). */
-export async function dialogOpenJson(title?: string): Promise<string | null> {
+/**
+ * `host.dialog.open` → `{ paths }` (null when the user cancelled). `filterName`
+ * is the localized label the native file picker shows for the extension group
+ * (e.g. macOS's file-type dropdown) — callers pass `t('dialog.filter')` so it
+ * isn't hardcoded English here (this module owns no UI text of its own).
+ */
+export async function dialogOpenJson(title: string | undefined, filterName: string): Promise<string | null> {
   const res: { paths: string[] | null } = await bridge().request('host.dialog.open', {
     title,
     multiple: false,
     // Roam's "Export All (JSON)" downloads a .zip; a manually-unzipped .json is
     // also accepted. io.readRoamExport branches on the picked extension.
-    filters: [{ name: 'Roam export', extensions: ['json', 'zip'] }],
+    filters: [{ name: filterName, extensions: ['json', 'zip'] }],
   })
   return res.paths?.[0] ?? null
 }
