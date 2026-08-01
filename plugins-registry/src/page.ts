@@ -158,9 +158,10 @@ zh:{
  fallback:'安装后在 note.md 的「插件」菜单中启用。'
 }};
 // Per-plugin entry, from each manifest's contributes.menus.location.
-// Every plugin command lands in the Plugins menu regardless of the `location`
-// its manifest declares (src-tauri/src/lib.rs builds it that way), so these all
-// name that one menu. Labels are the plugin's own localized menu text.
+// Every plugin command lands in the Plugins menu regardless of the location its
+// manifest declares (src-tauri/src/lib.rs builds it that way), so these all name
+// that one menu. Labels are the plugin's own localized menu text.
+// (No backticks in here: this block lives inside the PAGE_HTML template string.)
 var ENTRY_MAP={
  'notemd.md2pdf':{en:'<b>Plugins</b> menu → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」菜单 → Export to PDF…（也支持 CLI <code>notemd pdf</code>）'},
  'notemd.roam-import':{en:'<b>Plugins</b> menu → Import from Roam Research…',zh:'「<b>插件</b>」菜单 → 从 Roam Research 导入…'},
