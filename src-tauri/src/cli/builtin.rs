@@ -3,7 +3,7 @@
 //!
 //! These run entirely in Rust without spinning up a Tauri webview.
 
-use crate::plugin_host::{scan_disk, write_enabled_flag, PluginManifest};
+use crate::plugin_host::PluginManifest;
 use super::args::Parsed;
 use super::router::Builtin;
 use serde_json::json;
@@ -14,7 +14,7 @@ use std::process::ExitCode;
 const PLUGIN_API_VERSION: &str = "v1";
 
 pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
-    let (manifests, enabled) = current_scan(parsed);
+    let (manifests, enabled) = current_scan();
     let manifests_only: Vec<PluginManifest> =
         manifests.into_iter().map(|(m, _)| m).collect();
     match b {
@@ -30,8 +30,8 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
             println!("{}", render_plugin_list(parsed.globals.json, &manifests_only, &enabled));
             ExitCode::from(0)
         }
-        Builtin::PluginEnable(id) => plugin_set_enabled(&id, true, parsed, &manifests_only),
-        Builtin::PluginDisable(id) => plugin_set_enabled(&id, false, parsed, &manifests_only),
+        Builtin::PluginEnable(id) => plugin_set_enabled(&id, true, parsed),
+        Builtin::PluginDisable(id) => plugin_set_enabled(&id, false, parsed),
         Builtin::PluginInfo(id) => {
             let m = match manifests_only.iter().find(|m| m.id == id) {
                 Some(m) => m,
@@ -49,26 +49,18 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
     }
 }
 
-/// `plugin enable`/`plugin disable`. v2 plugins persist their enabled flag in
-/// state.json (not settings.json), so they are routed there first — this also
-/// covers re-enabling a *disabled* v2 plugin, which `current_scan` filters out
-/// of `manifests` (scan_root only returns enabled ones). A non-v2 id falls
-/// through to the v1 settings.json path, gated on the manifest scan.
-fn plugin_set_enabled(
-    id: &str,
-    enabled: bool,
-    parsed: &Parsed,
-    manifests: &[PluginManifest],
-) -> ExitCode {
-    if let Some(res) = market::set_v2_enabled(id, enabled) {
-        return report_toggle(id, enabled, res, parsed);
+/// `plugin enable`/`plugin disable`. The enabled flag lives in the runtime's
+/// state.json, which also covers re-enabling a *disabled* plugin — one that
+/// `current_scan` filters out of `manifests` entirely (discovery only returns
+/// enabled ones). An id absent from state.json is simply not installed.
+fn plugin_set_enabled(id: &str, enabled: bool, parsed: &Parsed) -> ExitCode {
+    match market::set_v2_enabled(id, enabled) {
+        Some(res) => report_toggle(id, enabled, res, parsed),
+        None => {
+            eprintln!("notemd: unknown plugin id '{id}'");
+            ExitCode::from(2)
+        }
     }
-    if !manifests.iter().any(|m| m.id == id) {
-        eprintln!("notemd: unknown plugin id '{id}'");
-        return ExitCode::from(2);
-    }
-    let cfg = super::resolve_config_dir();
-    report_toggle(id, enabled, write_enabled_flag(&cfg, id, enabled), parsed)
 }
 
 fn report_toggle(id: &str, enabled: bool, res: Result<(), String>, parsed: &Parsed) -> ExitCode {
@@ -115,7 +107,7 @@ pub fn render_help(
     out.push_str("USAGE:\n");
     out.push_str("  notemd [global options] <command> [args...]\n");
     for m in manifests {
-        let is_on = crate::plugin_host::resolve_enabled(m, enabled);
+        let is_on = super::is_enabled(m, enabled);
         if !is_on { continue }
         for entry in &m.cli {
             if let Some(short) = entry.aliases.iter().find(|a| a.starts_with('-') && a.len() == 2) {
@@ -138,7 +130,7 @@ pub fn render_help(
         // Core stubs are hardcoded in CORE COMMANDS above; never re-list them
         // as plugins, even if a caller passes the injected stub manifests.
         if crate::cli::runner::is_core_cli_stub(m) { continue }
-        let is_on = crate::plugin_host::resolve_enabled(m, enabled);
+        let is_on = super::is_enabled(m, enabled);
         if !is_on { continue }
         for entry in &m.cli {
             if !shown_header {
@@ -156,7 +148,7 @@ pub fn render_help(
         let mut shown = false;
         for m in manifests {
             if crate::cli::runner::is_core_cli_stub(m) { continue }
-            let is_on = crate::plugin_host::resolve_enabled(m, enabled);
+            let is_on = super::is_enabled(m, enabled);
             if is_on { continue }
             for entry in &m.cli {
                 if !shown {
@@ -176,7 +168,6 @@ pub fn render_help(
     out.push_str("  -q, --quiet         Suppress non-essential status output\n");
     out.push_str("  -y, --yes           Assume 'yes' for confirmation prompts\n");
     out.push_str("  --no-clipboard      Don't copy the result to the clipboard (default: copy)\n");
-    out.push_str("  --plugin-dir <dir>  Override the plugin discovery directory\n");
 
     out.push_str("\nEXIT CODES:\n");
     out.push_str("  0    Success\n");
@@ -202,7 +193,7 @@ fn render_help_topic(
     for m in manifests {
         for entry in &m.cli {
             if entry.subcommand == topic || entry.aliases.iter().any(|a| a == topic) {
-                let on = crate::plugin_host::resolve_enabled(m, enabled);
+                let on = super::is_enabled(m, enabled);
                 let mut out = String::new();
                 out.push_str(&format!(
                     "notemd {} — {}\n",
@@ -353,7 +344,7 @@ pub fn render_plugin_list(
 ) -> String {
     if as_json {
         let arr: Vec<_> = manifests.iter().map(|m| {
-            let is_on = crate::plugin_host::resolve_enabled(m, enabled);
+            let is_on = super::is_enabled(m, enabled);
             json!({
                 "id": m.id,
                 "name": m.name,
@@ -372,7 +363,7 @@ pub fn render_plugin_list(
     out.push_str(&format!("{:<10} {:<12} {:<8} {:<10} {}\n",
         "ID", "NAME", "VERSION", "STATUS", "CLI"));
     for m in manifests {
-        let is_on = crate::plugin_host::resolve_enabled(m, enabled);
+        let is_on = super::is_enabled(m, enabled);
         let cli = m.cli.iter().map(|c| {
             let aliases = if c.aliases.is_empty() {
                 String::new()
@@ -394,7 +385,7 @@ pub fn render_plugin_info(
     m: &PluginManifest,
     enabled: &HashMap<String, bool>,
 ) -> String {
-    let is_on = crate::plugin_host::resolve_enabled(m, enabled);
+    let is_on = super::is_enabled(m, enabled);
     let mut out = String::new();
     out.push_str(&format!("{} ({})  v{}\n", m.name, m.id, m.version));
     out.push_str(&format!("Status: {}\n", if is_on { "enabled" } else { "disabled" }));
@@ -419,19 +410,19 @@ pub fn render_plugin_info(
     out
 }
 
-/// Merges installed v2 plugins (adapted to the v1 shape) into the scan so they
-/// appear in `plugin list`, `plugin info`, and `help` alongside v1 disk
-/// plugins — the same merge router.rs/runner.rs do for routing.
+/// Collects the installed plugins (adapted to the `PluginManifest` view-model
+/// shape) so they appear in `plugin list`, `plugin info`, and `help` — the same
+/// scan router.rs/runner.rs use for routing.
 ///
 /// Deliberately does NOT inject the core CLI stubs (`runner::
 /// core_cli_stub_manifests()`), unlike runner.rs's current_scan: the stubs
 /// exist only so routing/arg-parsing can match core subcommands. Injecting
 /// them here would double-list `share` in `notemd help` (core row + PLUGIN
 /// COMMANDS row) and pollute `notemd plugin list` with pseudo-plugins.
-fn current_scan(parsed: &Parsed) -> (Vec<(PluginManifest, PathBuf)>, HashMap<String, bool>) {
-    let plugins_dir = super::resolve_plugins_dir(parsed.globals.plugin_dir_override.as_deref());
+fn current_scan() -> (Vec<(PluginManifest, PathBuf)>, HashMap<String, bool>) {
     let config_dir = super::resolve_config_dir();
-    let (mut manifests, mut enabled) = scan_disk(&plugins_dir, &config_dir);
+    let mut manifests = Vec::new();
+    let mut enabled = HashMap::new();
     super::runner::append_v2_manifests(&mut manifests, &mut enabled, &config_dir);
     (manifests, enabled)
 }
@@ -471,16 +462,11 @@ mod market {
         dirs::data_dir().map(|d| d.join(crate::app_dirs::BUNDLE_ID))
     }
 
-    /// `plugin enable`/`disable` for a v2 plugin: flip its `enabled` flag in
-    /// state.json (the single source of truth for v2 — settings.json's
-    /// `plugins.enabled` is v1-only). Returns `None` when the v2 flag is off
-    /// or `id` is not an installed v2 plugin, so the caller falls through to
-    /// the v1 path; `Some(result)` once handled. A running app reconciles on
-    /// its next launch (same as install/update).
+    /// `plugin enable`/`disable`: flip the plugin's `enabled` flag in state.json
+    /// (the single source of truth). Returns `None` when `id` is not an
+    /// installed plugin, `Some(result)` once handled. A running app reconciles
+    /// on its next launch (same as install/update).
     pub(super) fn set_v2_enabled(id: &str, enabled: bool) -> Option<Result<(), String>> {
-        if !crate::plugin_runtime::v2_flag_enabled_at(&super::super::resolve_config_dir()) {
-            return None;
-        }
         set_v2_enabled_at(&plugins_root()?, id, enabled)
     }
 
@@ -996,8 +982,8 @@ mod market {
             assert!(state::load(root).installed["notemd.md2pdf"].enabled);
         }
 
-        /// A non-installed id returns None so the caller falls through to the
-        /// v1 (settings.json) enable/disable path.
+        /// A non-installed id returns None, which the caller reports as an
+        /// unknown plugin id.
         #[test]
         fn set_v2_enabled_at_unknown_id_is_none() {
             let dir = tempfile::tempdir().unwrap();
@@ -1066,7 +1052,6 @@ mod tests {
         assert!(out.contains("-q, --quiet"));
         assert!(out.contains("-y, --yes"));
         assert!(out.contains("--no-clipboard"));
-        assert!(out.contains("--plugin-dir"));
     }
     #[test] fn help_topic_resolves_core_commands() {
         for topic in ["help", "version", "plugin", "share", "reading-insights"] {

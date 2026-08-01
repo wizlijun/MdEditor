@@ -9,7 +9,7 @@ export const BUILTIN_SUBCOMMANDS = ['help', 'version', 'plugin']
 const RESERVED_GLOBAL_FLAGS = [
   '-h', '--help', '-v', '--version',
   '-q', '--quiet', '--json',
-  '--no-clipboard', '--yes', '-y', '--plugin-dir',
+  '--no-clipboard', '--yes', '-y',
 ]
 const SUBCOMMAND_RE = /^[a-z][a-z0-9-]{1,31}$/
 const SHORT_FLAG_RE = /^-[a-zA-Z]$/

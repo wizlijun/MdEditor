@@ -17,34 +17,17 @@ pub mod state;
 
 use crate::app_dirs::BUNDLE_ID as APP_BUNDLE_ID;
 
-/// Resolve the plugins directory. Tries in order:
-/// 1. Explicit `--plugin-dir` override
-/// 2. `current_exe()` canonicalized → `../../Resources/plugins`
-/// 3. Well-known install paths `/Applications/note.md.app/Contents/Resources/plugins`
-///    (falling back to the legacy `/Applications/M↓.app/…` for pre-rename installs)
-/// 4. Compile-time `CARGO_MANIFEST_DIR/plugins` (dev only)
-pub fn resolve_plugins_dir(override_dir: Option<&str>) -> PathBuf {
-    if let Some(p) = override_dir {
-        return PathBuf::from(p);
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        let exe = exe.canonicalize().unwrap_or(exe);
-        if let Some(macos_dir) = exe.parent() {
-            if let Some(contents) = macos_dir.parent() {
-                let candidate = contents.join("Resources").join("plugins");
-                if candidate.exists() { return candidate; }
-            }
-        }
-    }
-    for well_known in [
-        "/Applications/note.md.app/Contents/Resources/plugins",
-        // Auto-updated installs keep the pre-rename bundle folder name.
-        "/Applications/M\u{2193}.app/Contents/Resources/plugins",
-    ] {
-        let well_known = PathBuf::from(well_known);
-        if well_known.exists() { return well_known; }
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins")
+/// Whether a manifest produced by the CLI scan is active.
+///
+/// Everything the scan yields is enabled by construction — the injected core
+/// stubs are always on, and v2 discovery only returns plugins that the runtime's
+/// `state.json` marks enabled — so the map is consulted purely as an explicit
+/// override and a missing entry means "on".
+pub fn is_enabled(
+    m: &crate::plugin_host::PluginManifest,
+    enabled: &std::collections::HashMap<String, bool>,
+) -> bool {
+    enabled.get(&m.id).copied().unwrap_or(true)
 }
 
 /// Resolve the app config directory (where settings.json lives).

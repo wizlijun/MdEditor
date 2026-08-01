@@ -4,13 +4,13 @@
 use crate::cli::args::Parsed;
 use crate::cli::router::PluginRoute;
 use crate::cli::state::{CliPayload, CliState, GlobalFlags};
-use crate::plugin_host::{scan_disk, PluginManifest};
+use crate::plugin_host::PluginManifest;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tokio::sync::oneshot;
 
 pub fn run(p: PluginRoute, parsed: Parsed) -> ExitCode {
-    let (manifests, _enabled) = current_scan(&parsed);
+    let (manifests, _enabled) = current_scan();
     let manifest = match manifests.iter().find(|(m, _)| m.id == p.plugin_id) {
         Some((m, _)) => m.clone(),
         None => {
@@ -83,15 +83,13 @@ pub fn run(p: PluginRoute, parsed: Parsed) -> ExitCode {
     ExitCode::from(exit_code as u8)
 }
 
-fn current_scan(
-    parsed: &Parsed,
-) -> (
+fn current_scan() -> (
     Vec<(PluginManifest, PathBuf)>,
     std::collections::HashMap<String, bool>,
 ) {
-    let plugins_dir = super::resolve_plugins_dir(parsed.globals.plugin_dir_override.as_deref());
     let config_dir = super::resolve_config_dir();
-    let (mut manifests, mut enabled) = scan_disk(&plugins_dir, &config_dir);
+    let mut manifests = Vec::new();
+    let mut enabled = std::collections::HashMap::new();
     append_core_cli_stubs(&mut manifests, &mut enabled);
     append_v2_manifests(&mut manifests, &mut enabled, &config_dir);
     (manifests, enabled)
@@ -104,11 +102,11 @@ fn v2_plugins_root() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join(crate::app_dirs::BUNDLE_ID).join("plugins"))
 }
 
-/// Behind the plugins_v2 flag, merge installed v2 plugins (adapted to the v1
-/// `PluginManifest` shape) into the CLI scan so router/runner matching works
-/// unchanged. Skips ids already present (same de-dup guard as the core stubs);
-/// v2 plugins are always enabled — enable/disable lives in v2's state.json,
-/// which discovery already honors.
+/// Merge the installed v2 plugins (adapted to the `PluginManifest` view-model
+/// shape) into the CLI scan so router/runner matching sees them alongside the
+/// core stubs. Skips ids already present (same de-dup guard as the core stubs);
+/// every plugin appended here is enabled — enable/disable lives in the runtime's
+/// state.json, which discovery already honors.
 pub(crate) fn append_v2_manifests(
     manifests: &mut Vec<(PluginManifest, PathBuf)>,
     enabled: &mut std::collections::HashMap<String, bool>,
@@ -181,9 +179,8 @@ pub fn is_core_cli_stub(m: &PluginManifest) -> bool {
     m.version == "core" && m.binary.as_deref() == Some("")
 }
 
-/// 把 core stub 追加进扫描结果。磁盘上已有同 id manifest（T7 删除前的过渡期）
-/// 则不追加，保持原插件行为；追加时强制 enabled=true —— core 命令不受
-/// plugins.enabled 遗留配置影响。
+/// 把 core stub 追加进扫描结果。同 id 已在扫描结果里（例如某插件占用了同名 id）
+/// 则不追加，保持该插件行为；追加时强制 enabled=true —— core 命令不可禁用。
 pub(crate) fn append_core_cli_stubs(
     manifests: &mut Vec<(PluginManifest, PathBuf)>,
     enabled: &mut std::collections::HashMap<String, bool>,
@@ -292,11 +289,10 @@ fn launch_tauri_headless(
         .invoke_handler(tauri::generate_handler![
             crate::cli::state::cli_payload,
             crate::cli::state::cli_finish,
-            crate::plugin_host::get_plugin_manifests,
-            crate::plugin_host::invoke_plugin,
-            // v2 runtime: get_plugin_manifests merges adapted v2 manifests from
+            // get_plugin_manifests serves the adapted v2 manifests from
             // plugin_runtime::STATE (populated by plugin_runtime::init below);
-            // CliRunner routes manifest_version==2 through plugin_v2_execute.
+            // CliRunner executes the matched command via plugin_v2_execute.
+            crate::plugin_host::get_plugin_manifests,
             crate::plugin_runtime::commands::plugin_v2_execute,
             crate::themes::commands::theme_load_compiled,
             // sotvault: needed by `notemd share` — refreshSotvault + prepareShareSrc
@@ -309,10 +305,9 @@ fn launch_tauri_headless(
             crate::sotvault::sotvault_sync_to_vault,
         ])
         .setup(move |app| {
-            crate::plugin_host::init(&app.handle());
-            // Populate plugin_runtime::STATE (no-op when the flag is off) so
-            // get_plugin_manifests / plugin_v2_execute see the v2 plugins the
-            // Rust-side scan (append_v2_manifests) routed here.
+            // Populate plugin_runtime::STATE so get_plugin_manifests /
+            // plugin_v2_execute see the plugins the Rust-side scan
+            // (append_v2_manifests) routed here.
             // NOTE: startup_activate_all (called inside plugin_runtime::init)
             // will spawn `*`/onStartupFinished plugins on every CLI invocation;
             // they die when the headless host exits via stdin EOF. This is

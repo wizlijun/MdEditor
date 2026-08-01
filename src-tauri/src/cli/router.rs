@@ -1,6 +1,6 @@
 //! Routing: argv → Route. Step order matches spec §3 exactly.
 
-use crate::plugin_host::{scan_disk, PluginManifest};
+use crate::plugin_host::PluginManifest;
 use super::args::Parsed;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -52,7 +52,7 @@ pub struct PluginRoute {
 
 /// Resolves against the live filesystem.
 pub fn resolve(parsed: &Parsed) -> Route {
-    let (manifests, enabled) = current_scan(parsed);
+    let (manifests, enabled) = current_scan();
     resolve_with(&parsed.rest, &manifests, &enabled)
 }
 
@@ -163,7 +163,7 @@ fn match_against_manifests(
     for (m, _dir) in manifests {
         for entry in &m.cli {
             if entry.subcommand == token || entry.aliases.iter().any(|a| a == token) {
-                let is_enabled = crate::plugin_host::resolve_enabled(m, enabled);
+                let is_enabled = super::is_enabled(m, enabled);
                 return Some((m.id.clone(), entry.subcommand.clone(), is_enabled));
             }
         }
@@ -171,13 +171,13 @@ fn match_against_manifests(
     None
 }
 
-fn current_scan(parsed: &Parsed) -> (Vec<(PluginManifest, PathBuf)>, HashMap<String, bool>) {
-    let plugins_dir = super::resolve_plugins_dir(parsed.globals.plugin_dir_override.as_deref());
+fn current_scan() -> (Vec<(PluginManifest, PathBuf)>, HashMap<String, bool>) {
     let config_dir = super::resolve_config_dir();
-    let (mut manifests, mut enabled) = scan_disk(&plugins_dir, &config_dir);
+    let mut manifests = Vec::new();
+    let mut enabled = HashMap::new();
     // core 化的 share / reading-insights 无磁盘 manifest，注入 stub 参与匹配。
     super::runner::append_core_cli_stubs(&mut manifests, &mut enabled);
-    // flag 开时并入 v2 插件（adapter 转 v1 形状），泛型匹配直接吃 cli 条目。
+    // 安装的 v2 插件（adapter 转成前端/CLI 视图模型形状），泛型匹配直接吃 cli 条目。
     super::runner::append_v2_manifests(&mut manifests, &mut enabled, &config_dir);
     (manifests, enabled)
 }

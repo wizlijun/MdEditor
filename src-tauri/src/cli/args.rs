@@ -8,7 +8,6 @@ pub struct Globals {
     pub quiet: bool,
     pub clipboard: bool,
     pub yes: bool,
-    pub plugin_dir_override: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -34,12 +33,6 @@ pub fn parse(argv: &[String]) -> Parsed {
             "-q" | "--quiet" => globals.quiet = true,
             "--no-clipboard" => globals.clipboard = false,
             "-y" | "--yes" => globals.yes = true,
-            "--plugin-dir" => {
-                if i + 1 < argv.len() {
-                    globals.plugin_dir_override = Some(argv[i + 1].clone());
-                    i += 1;
-                }
-            }
             _ => rest.push(a.clone()),
         }
         i += 1;
@@ -65,12 +58,6 @@ mod tests {
         let p = s(&["notemd", "-s", "x.md"]);
         assert_eq!(p.rest, vec!["-s".to_string(), "x.md".to_string()]);
         assert!(!p.globals.json);
-    }
-    #[test]
-    fn plugin_dir_override_consumes_next() {
-        let p = s(&["notemd", "--plugin-dir", "/tmp/p", "help"]);
-        assert_eq!(p.globals.plugin_dir_override.as_deref(), Some("/tmp/p"));
-        assert_eq!(p.rest, vec!["help".to_string()]);
     }
     #[test]
     fn clipboard_defaults_on() {
