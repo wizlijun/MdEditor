@@ -229,6 +229,8 @@ export const en = {
   'pluginMarket.networkError': 'Could not reach the plugin registry: {error}',
   'pluginMarket.consent.title': 'Install {name}?',
   'pluginMarket.consent.verifying': 'Verifying package signature…',
+  'pluginMarket.downloading': 'Downloading {done} of {total}',
+  'pluginMarket.downloadingUnknown': 'Downloading {done}',
   'pluginMarket.consent.intro': 'This plugin requests the following capabilities:',
   'pluginMarket.consent.none': 'This plugin requests no host capabilities.',
   'pluginMarket.consent.sensitive': 'Sensitive',

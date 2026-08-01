@@ -84,6 +84,56 @@ fn resolve_download(entry: &market::RegistryEntry) -> Result<(String, String), S
     Ok((url.clone(), sha.clone()))
 }
 
+/// The package + signature `plugin_market_preview` last verified, keyed by
+/// `id@version`. `plugin_market_install` reuses it instead of pulling the same
+/// multi-megabyte package a second time seconds later — the user consented to
+/// exactly these bytes, and install re-runs the FULL verify pipeline on them
+/// regardless, so reuse changes nothing about what is trusted. Holds one entry:
+/// a new preview replaces it, and installing clears it.
+static PREVIEWED_PKG: std::sync::Mutex<Option<(String, Vec<u8>, String)>> =
+    std::sync::Mutex::new(None);
+
+fn take_previewed(key: &str) -> Option<(Vec<u8>, String)> {
+    let mut g = PREVIEWED_PKG.lock().ok()?;
+    match g.as_ref() {
+        Some((k, _, _)) if k == key => g.take().map(|(_, pkg, sig)| (pkg, sig)),
+        _ => None,
+    }
+}
+
+/// Emit one `plugin-download-progress` event. `phase` distinguishes the
+/// consent-time verification download from the install one; the frontend shows
+/// a bar for both so a slow transfer never looks like a hang.
+fn emit_progress(
+    app: &tauri::AppHandle,
+    id: &str,
+    phase: &str,
+    received: u64,
+    total: Option<u64>,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "plugin-download-progress",
+        serde_json::json!({ "id": id, "phase": phase, "received": received, "total": total }),
+    );
+}
+
+/// Download `url`, streaming progress to the frontend as it goes.
+async fn download_with_progress(
+    app: &tauri::AppHandle,
+    id: &str,
+    phase: &str,
+    url: &str,
+) -> Result<Vec<u8>, String> {
+    let app = app.clone();
+    let id = id.to_string();
+    let phase = phase.to_string();
+    market::download_reporting(url, move |received, total| {
+        emit_progress(&app, &id, &phase, received, total);
+    })
+    .await
+}
+
 async fn find_entry(
     app: &tauri::AppHandle,
     id: &str,
@@ -123,8 +173,8 @@ pub async fn plugin_market_preview(
     let sig_url = format!("{url}.minisig");
     let host_version = app.package_info().version.to_string();
 
-    let pkg = market::download(&url).await?;
-    let sig = String::from_utf8(market::download(&sig_url).await?)
+    let pkg = download_with_progress(&app, &id, "preview", &url).await?;
+    let sig = String::from_utf8(download_with_progress(&app, &id, "preview", &sig_url).await?)
         .map_err(|e| format!("signature is not valid utf-8: {e}"))?;
 
     // Stage into a temp dir purely to run the full verify pipeline; discard it.
@@ -139,6 +189,11 @@ pub async fn plugin_market_preview(
         tmp.path(),
     )
     .map_err(|e| e.to_string())?;
+    // Hand the verified bytes to the install that usually follows, so the user
+    // doesn't wait through a second download of the same package.
+    if let Ok(mut g) = PREVIEWED_PKG.lock() {
+        *g = Some((format!("{id}@{version}"), pkg, sig));
+    }
     // tmp drops here — the staged copy is thrown away; only the manifest survives.
     serde_json::to_value(manifest).map_err(|e| e.to_string())
 }
@@ -160,9 +215,16 @@ pub async fn plugin_market_install(
     let host_version = app.package_info().version.to_string();
     let root = state::plugins_root(&app).ok_or("cannot resolve app data dir")?;
 
-    let pkg = market::download(&url).await?;
-    let sig = String::from_utf8(market::download(&sig_url).await?)
-        .map_err(|e| format!("signature is not valid utf-8: {e}"))?;
+    let (pkg, sig) = match take_previewed(&format!("{id}@{version}")) {
+        Some(cached) => cached,
+        None => {
+            let pkg = download_with_progress(&app, &id, "install", &url).await?;
+            let sig =
+                String::from_utf8(download_with_progress(&app, &id, "install", &sig_url).await?)
+                    .map_err(|e| format!("signature is not valid utf-8: {e}"))?;
+            (pkg, sig)
+        }
+    };
 
     // Verify + stage into a temp dir, then atomically commit into the tree.
     let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;

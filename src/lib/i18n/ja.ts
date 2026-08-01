@@ -224,6 +224,8 @@ export const ja: Record<keyof Messages, string> = {
   'pluginMarket.networkError': 'プラグインレジストリに接続できませんでした：{error}',
   'pluginMarket.consent.title': '{name} をインストールしますか？',
   'pluginMarket.consent.verifying': 'パッケージの署名を検証中…',
+  'pluginMarket.downloading': 'ダウンロード中 {done} / {total}',
+  'pluginMarket.downloadingUnknown': 'ダウンロード中 {done}',
   'pluginMarket.consent.intro': 'このプラグインは次の機能を要求しています：',
   'pluginMarket.consent.none': 'このプラグインはホスト機能を要求していません。',
   'pluginMarket.consent.sensitive': '重要',

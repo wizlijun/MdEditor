@@ -7,6 +7,7 @@
      `plugin_market_install`. -->
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
+  import { listen } from '@tauri-apps/api/event'
   import { t } from '../../lib/i18n/store.svelte'
   import { capabilityLabel, isSensitiveCapability } from '../../lib/market/types'
 
@@ -33,6 +34,43 @@
   let installing = $state(false)
   let error = $state<string | null>(null)
   let manifest = $state<PreviewManifest | null>(null)
+
+  // Live download progress for THIS plugin, pushed by the host as bytes land
+  // (`plugin-download-progress`). A multi-megabyte package over a slow link
+  // otherwise looks like a hang.
+  let received = $state(0)
+  let total = $state<number | null>(null)
+
+  function formatBytes(n: number): string {
+    if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+    if (n >= 1024) return `${Math.round(n / 1024)} KB`
+    return `${n} B`
+  }
+
+  let progressText = $derived(
+    total != null
+      ? t('pluginMarket.downloading', {
+          done: formatBytes(received),
+          total: formatBytes(total),
+        })
+      : t('pluginMarket.downloadingUnknown', { done: formatBytes(received) }),
+  )
+
+  $effect(() => {
+    // `listen` resolves to an unlisten fn; the cleanup awaits it so the
+    // subscription is dropped when the modal closes.
+    const pending = listen<{ id: string; received: number; total: number | null }>(
+      'plugin-download-progress',
+      (e) => {
+        if (e.payload.id !== id) return
+        received = e.payload.received
+        total = e.payload.total ?? null
+      },
+    )
+    return () => {
+      void pending.then((un) => un())
+    }
+  })
 
   // Capabilities sorted so sensitive ones surface first.
   let caps = $derived<string[]>(
@@ -80,6 +118,16 @@
 
     {#if loading}
       <p class="msg">{t('pluginMarket.consent.verifying')}</p>
+      {#if received > 0}
+        <div class="progress">
+          <div
+            class="bar"
+            class:indeterminate={total == null}
+            style={total != null ? `width:${Math.min(100, (received / total) * 100)}%` : ''}
+          ></div>
+        </div>
+        <p class="progress-text">{progressText}</p>
+      {/if}
     {:else if error}
       <p class="msg error">{error}</p>
     {:else}
@@ -102,6 +150,17 @@
           {/each}
         </ul>
       {/if}
+    {/if}
+
+    {#if installing && received > 0}
+      <div class="progress">
+        <div
+          class="bar"
+          class:indeterminate={total == null}
+          style={total != null ? `width:${Math.min(100, (received / total) * 100)}%` : ''}
+        ></div>
+      </div>
+      <p class="progress-text">{progressText}</p>
     {/if}
 
     <div class="actions">
@@ -134,6 +193,28 @@
     color: color-mix(in srgb, CanvasText 70%, transparent); }
   .msg { font-size: 13px; padding: 10px 0; }
   .msg.error { color: #d24; }
+  .progress {
+    height: 4px; border-radius: 2px; overflow: hidden;
+    background: color-mix(in srgb, CanvasText 12%, transparent);
+  }
+  .progress .bar {
+    height: 100%; border-radius: 2px;
+    background: color-mix(in srgb, AccentColor 85%, CanvasText);
+    transition: width 0.2s ease;
+  }
+  /* No Content-Length (chunked response): sweep instead of pretending to know. */
+  .progress .bar.indeterminate {
+    width: 35%;
+    animation: sweep 1.1s ease-in-out infinite;
+  }
+  @keyframes sweep {
+    0% { margin-left: -35%; }
+    100% { margin-left: 100%; }
+  }
+  .progress-text {
+    margin: 5px 0 0; font-size: 11px;
+    color: color-mix(in srgb, CanvasText 55%, transparent);
+  }
   .none { font-size: 12px; color: color-mix(in srgb, CanvasText 55%, transparent); }
   .caps { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   .caps li {

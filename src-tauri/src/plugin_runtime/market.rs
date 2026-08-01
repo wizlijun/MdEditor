@@ -36,10 +36,11 @@ const DOWNLOAD_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// Idle timeout *between body chunks* for a package download. A whole-request
 /// timeout must NOT be used here: it kills a healthy but slow transfer partway
 /// through the body, which reqwest surfaces as the opaque "error decoding
-/// response body". Multi-megabyte packages (a plugin bundling a native dylib
-/// runs to several MB) routinely take longer than any fixed request budget on
-/// a modest connection, so the bound is on *stalling*, not on total duration.
-const DOWNLOAD_IDLE_TIMEOUT_SECS: u64 = 30;
+/// response body". Multi-megabyte packages routinely take longer than any fixed
+/// request budget on a modest connection (or through a proxy), so the bound is
+/// on *stalling*, not on total duration: as long as bytes keep arriving the
+/// download runs to completion however long it takes.
+const DOWNLOAD_IDLE_TIMEOUT_SECS: u64 = 60;
 
 /// Production plugin-registry pubkey (minisign key id 2BAFE555935FE0A9). This
 /// is the base64 line (no `untrusted comment:` prefix) of
@@ -112,33 +113,50 @@ pub async fn fetch_index(base_url: &str) -> Result<RegistryIndex, String> {
 /// Bounded by connect + per-chunk idle timeouts rather than a whole-request
 /// one — see [`DOWNLOAD_IDLE_TIMEOUT_SECS`].
 pub async fn download(url: &str) -> Result<Vec<u8>, String> {
+    download_reporting(url, |_, _| {}).await
+}
+
+/// [`download`], calling `on_progress(received, total)` after every chunk so a
+/// caller can drive a progress bar. `total` is the advertised `Content-Length`
+/// and is `None` when the server doesn't send one (a chunked response), in
+/// which case only the running byte count is known.
+pub async fn download_reporting<F: FnMut(u64, Option<u64>)>(
+    url: &str,
+    on_progress: F,
+) -> Result<Vec<u8>, String> {
     download_with(
         url,
         std::time::Duration::from_secs(DOWNLOAD_CONNECT_TIMEOUT_SECS),
         std::time::Duration::from_secs(DOWNLOAD_IDLE_TIMEOUT_SECS),
+        on_progress,
     )
     .await
 }
 
 /// [`download`] with injectable timeouts, so the idle-vs-total semantics are
 /// testable in milliseconds instead of tens of seconds.
-pub async fn download_with(
+pub async fn download_with<F: FnMut(u64, Option<u64>)>(
     url: &str,
     connect_timeout: std::time::Duration,
     idle_timeout: std::time::Duration,
+    on_progress: F,
 ) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(connect_timeout)
         .read_timeout(idle_timeout)
         .build()
         .map_err(|e| format!("http client: {e}"))?;
-    download_via(&client, url).await
+    download_via(&client, url, on_progress).await
 }
 
 /// The streaming read itself, with the client injected. Split out so tests can
 /// supply a client that bypasses the system proxy (reqwest honours it by
 /// default, which is right in production and fatal for a loopback test server).
-pub async fn download_via(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+pub async fn download_via<F: FnMut(u64, Option<u64>)>(
+    client: &reqwest::Client,
+    url: &str,
+    mut on_progress: F,
+) -> Result<Vec<u8>, String> {
     let mut resp = client
         .get(url)
         .send()
@@ -155,7 +173,9 @@ pub async fn download_via(client: &reqwest::Client, url: &str) -> Result<Vec<u8>
             ));
         }
     }
+    let total = resp.content_length();
     let mut out: Vec<u8> = Vec::new();
+    on_progress(0, total);
     while let Some(chunk) = resp
         .chunk()
         .await
@@ -167,6 +187,7 @@ pub async fn download_via(client: &reqwest::Client, url: &str) -> Result<Vec<u8>
             ));
         }
         out.extend_from_slice(&chunk);
+        on_progress(out.len() as u64, total);
     }
     Ok(out)
 }
@@ -394,10 +415,37 @@ mod tests {
         // for longer than it — that must succeed.
         let port = serve_chunked(8, 64, std::time::Duration::from_millis(120));
         let client = loopback_client(std::time::Duration::from_millis(250));
-        let out = download_via(&client, &format!("http://127.0.0.1:{port}/pkg"))
+        let out = download_via(&client, &format!("http://127.0.0.1:{port}/pkg"), |_, _| {})
             .await
             .expect("slow-but-steady transfer must not time out");
         assert_eq!(out.len(), 8 * 64);
+    }
+
+    #[tokio::test]
+    async fn download_reports_progress_as_bytes_land() {
+        // The UI's progress bar is only useful if it advances DURING the
+        // transfer, not once at the end — assert one callback per chunk with a
+        // monotonically rising byte count.
+        let port = serve_chunked(4, 64, std::time::Duration::from_millis(10));
+        let client = loopback_client(std::time::Duration::from_secs(2));
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u64, Option<u64>)>::new()));
+        let sink = seen.clone();
+        let out = download_via(&client, &format!("http://127.0.0.1:{port}/pkg"), move |r, t| {
+            sink.lock().unwrap().push((r, t));
+        })
+        .await
+        .expect("download");
+        assert_eq!(out.len(), 4 * 64);
+
+        let seen = seen.lock().unwrap();
+        // One priming call at 0 plus one per chunk.
+        assert_eq!(seen.first().map(|(r, _)| *r), Some(0), "primes at zero: {seen:?}");
+        assert_eq!(seen.last().map(|(r, _)| *r), Some(256), "ends at the full size: {seen:?}");
+        assert!(seen.len() >= 3, "advances during the transfer: {seen:?}");
+        assert!(
+            seen.windows(2).all(|w| w[0].0 <= w[1].0),
+            "byte count never goes backwards: {seen:?}"
+        );
     }
 
     #[tokio::test]
@@ -407,7 +455,7 @@ mod tests {
         // install forever.
         let port = serve_chunked(2, 64, std::time::Duration::from_millis(600));
         let client = loopback_client(std::time::Duration::from_millis(150));
-        let err = download_via(&client, &format!("http://127.0.0.1:{port}/pkg"))
+        let err = download_via(&client, &format!("http://127.0.0.1:{port}/pkg"), |_, _| {})
             .await
             .expect_err("a stalled body must abort");
         assert!(err.starts_with("download"), "unexpected error: {err}");

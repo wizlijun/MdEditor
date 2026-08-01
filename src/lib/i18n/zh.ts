@@ -224,6 +224,8 @@ export const zh: Record<keyof Messages, string> = {
   'pluginMarket.networkError': '无法连接插件注册表：{error}',
   'pluginMarket.consent.title': '安装 {name}？',
   'pluginMarket.consent.verifying': '正在校验安装包签名…',
+  'pluginMarket.downloading': '正在下载 {done} / {total}',
+  'pluginMarket.downloadingUnknown': '正在下载 {done}',
   'pluginMarket.consent.intro': '此插件请求以下能力：',
   'pluginMarket.consent.none': '此插件不请求任何宿主能力。',
   'pluginMarket.consent.sensitive': '敏感',

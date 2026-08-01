@@ -222,6 +222,8 @@ export const de: Record<keyof Messages, string> = {
   'pluginMarket.networkError': 'Die Plugin-Registry konnte nicht erreicht werden: {error}',
   'pluginMarket.consent.title': '{name} installieren?',
   'pluginMarket.consent.verifying': 'Paketsignatur wird überprüft…',
+  'pluginMarket.downloading': 'Lädt {done} von {total}',
+  'pluginMarket.downloadingUnknown': 'Lädt {done}',
   'pluginMarket.consent.intro': 'Dieses Plugin fordert die folgenden Fähigkeiten an:',
   'pluginMarket.consent.none': 'Dieses Plugin fordert keine Host-Fähigkeiten an.',
   'pluginMarket.consent.sensitive': 'Sensibel',
