@@ -964,7 +964,6 @@ pub fn run() {
                 set_default_app_for_extensions,
                 set_plugin_menu_item_enabled,
                 plugin_host::get_plugin_manifests,
-                plugin_host::plugin_is_enabled,
                 plugin_runtime::commands::plugin_v2_execute,
                 plugin_runtime::commands::plugin_v2_open_window,
                 plugin_runtime::commands::plugin_market_index,
@@ -1098,7 +1097,7 @@ pub fn run() {
             }
 
             // The plugin runtime MUST be initialized before anything that reads
-            // the active plugin set (menu building, is_plugin_enabled).
+            // the active plugin set (menu building, manifest queries).
             #[cfg(not(target_os = "ios"))]
             plugin_runtime::init(&app.handle());
             // Request location authorization at launch (macOS): the prompt then
@@ -1389,6 +1388,9 @@ fn menu_label(locale: &str, key: &str) -> String {
         "file.openRecent" => ("Open Recent", "打开最近", "最近使ったファイルを開く", "Zuletzt geöffnet"),
         "file.noRecent" => ("No Recent Files", "无最近文件", "最近のファイルなし", "Keine letzten Dateien"),
         "file.new" => ("New", "新建", "新規", "Neu"),
+        // Core feature, formerly carried by the bundled `base` plugin manifest —
+        // wording preserved from its i18n block.
+        "file.newBase" => ("New Base", "新建 Base", "新規 Base", "Neue Base"),
         "file.open" => ("Open…", "打开…", "開く…", "Öffnen…"),
         "file.closeTab" => ("Close Tab", "关闭标签页", "タブを閉じる", "Tab schließen"),
         "file.save" => ("Save", "保存", "保存", "Speichern"),
@@ -1774,6 +1776,12 @@ fn build_menu<R: tauri::Runtime>(
 
     let file_b = SubmenuBuilder::new(app, menu_label(locale, "menu.file"))
         .item(&MenuItemBuilder::with_id("new", menu_label(locale, "file.new")).accelerator("Cmd+N").build(app)?)
+        // "New Base" creates a .base table file. It used to ride in on the
+        // bundled `base` plugin manifest; the feature (BaseView, .base parsing,
+        // lib/base/create.ts) has always been core, so the menu item is core now
+        // too — next to New, rather than under Plugins where plugin-contributed
+        // items land.
+        .item(&MenuItemBuilder::with_id("new-base", menu_label(locale, "file.newBase")).build(app)?)
         .item(&MenuItemBuilder::with_id("open", menu_label(locale, "file.open")).accelerator("Cmd+O").build(app)?)
         .item(&recent_menu)
         .separator()
@@ -1885,6 +1893,30 @@ fn build_menu<R: tauri::Runtime>(
         .items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &plugins_menu, &window_menu, &help_menu])
         .build()?;
     Ok((menu, recent_menu))
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+mod menu_label_tests {
+    use super::menu_label;
+
+    /// "New Base" used to arrive as a plugin menu item from the bundled `base`
+    /// manifest, which carried zh/ja/de labels. The item is core now, so the
+    /// wording has to live here — in every locale, not just English.
+    #[test]
+    fn new_base_is_localized_in_every_locale() {
+        assert_eq!(menu_label("en", "file.newBase"), "New Base");
+        assert_eq!(menu_label("zh", "file.newBase"), "新建 Base");
+        assert_eq!(menu_label("ja", "file.newBase"), "新規 Base");
+        assert_eq!(menu_label("de", "file.newBase"), "Neue Base");
+    }
+
+    /// An unknown key falls back to the key itself, so a missing catalog entry
+    /// shows up as a literal "file.whatever" in the menu bar. This is what the
+    /// test above is guarding against.
+    #[test]
+    fn unknown_key_falls_back_to_the_key() {
+        assert_eq!(menu_label("zh", "file.nosuchitem"), "file.nosuchitem");
+    }
 }
 
 #[cfg(all(test, not(target_os = "ios")))]

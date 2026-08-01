@@ -32,8 +32,8 @@ pub static STATE: LazyLock<RwLock<RuntimeState>> =
     LazyLock::new(|| RwLock::new(RuntimeState { plugins: BTreeMap::new() }));
 
 /// Called once during `setup`, before anything reads the active plugin set
-/// (menu building, `plugin_host::is_plugin_enabled`). Scans the install tree,
-/// then activates the plugins whose activation events fire at startup.
+/// (menu building, `plugin_host::get_plugin_manifests`). Scans the install
+/// tree, then activates the plugins whose activation events fire at startup.
 pub fn init<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     {
         let mut st = STATE.write().unwrap();

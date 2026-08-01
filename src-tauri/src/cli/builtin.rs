@@ -172,7 +172,6 @@ pub fn render_help(
     out.push_str("\nEXIT CODES:\n");
     out.push_str("  0    Success\n");
     out.push_str("  2    File or argument error\n");
-    out.push_str("  3    Plugin disabled\n");
     out.push_str("  4    Network or server error\n");
     out.push_str("  5    Plugin package failed verification (signature / hash)\n");
     out.push_str("  127  Unknown command\n");
@@ -231,7 +230,6 @@ fn render_help_topic(
                 out.push_str("\nEXIT CODES:\n");
                 out.push_str("  0    Success\n");
                 out.push_str("  2    File or argument error\n");
-                out.push_str("  3    Plugin disabled\n");
                 out.push_str("  4    Network or server error\n");
                 return out;
             }

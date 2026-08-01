@@ -191,19 +191,6 @@ pub fn get_plugin_manifests() -> Vec<PluginManifest> {
     by_id(crate::plugin_runtime::adapter::adapted_v2_manifests())
 }
 
-/// Whether the given plugin id is installed and enabled. The runtime's STATE is
-/// the single source of truth: discovery only admits plugins whose `state.json`
-/// entry is enabled and whose engine range matches this host.
-pub fn is_plugin_enabled(id: &str) -> bool {
-    crate::plugin_runtime::STATE
-        .read()
-        .map(|st| st.plugins.contains_key(id))
-        .unwrap_or(false)
-}
-
-#[tauri::command]
-pub fn plugin_is_enabled(id: String) -> bool { is_plugin_enabled(&id) }
-
 pub struct LocatedMenuItem {
     pub id: String,
     pub label: String,
@@ -297,12 +284,5 @@ mod tests {
         let m: PluginManifest = serde_json::from_str(json).unwrap();
         assert_eq!(m.kind, PluginKind::Builtin);
         assert!(m.binary.is_none());
-    }
-
-    /// An id the runtime never discovered is not enabled — the gate fails
-    /// closed rather than defaulting anything on.
-    #[test]
-    fn is_plugin_enabled_returns_false_for_unknown_id() {
-        assert_eq!(is_plugin_enabled("never-existed-plugin"), false);
     }
 }

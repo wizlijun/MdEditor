@@ -70,10 +70,10 @@
       return
     }
 
-    // Hydrate the in-memory settings store from disk BEFORE any plugin
-    // action emits `settings.merge`. Without this, the runner sees defaults
-    // for every key, and the first save (e.g., updating share.records) wipes
-    // the user's stored apiKey / baseUrl / plugins.enabled / recentFiles.
+    // Hydrate the in-memory settings store from disk BEFORE anything writes
+    // to it. Without this, the runner sees defaults for every key, and the
+    // first save (e.g., updating share.records) wipes the user's stored
+    // apiKey / baseUrl / recentFiles.
     try {
       await loadSettings()
     } catch (e) {

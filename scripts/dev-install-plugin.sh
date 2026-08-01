@@ -64,7 +64,6 @@ if [[ "$PLUGIN" == "md2pdf" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.md2pdf/current"
   mark_installed "notemd.md2pdf" "$VERSION"
   echo "✓ installed notemd.md2pdf@$VERSION ($PROFILE, $(uname -m)) → $DEST"
-  echo "  disable the v1 plugin:  \"plugins.enabled.md2pdf\": false in settings.json (avoids double File-menu entries)"
 
 elif [[ "$PLUGIN" == "roam-import" ]]; then
   SRC="plugins-src/roam-import"
@@ -80,7 +79,6 @@ elif [[ "$PLUGIN" == "roam-import" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.roam-import/current"
   mark_installed "notemd.roam-import" "$VERSION"
   echo "✓ installed notemd.roam-import@$VERSION (ui-only) → $DEST"
-  echo "  disable the v1 plugin:  \"plugins.enabled.roam-import\": false in settings.json (avoids double File▸Import entries)"
 
 elif [[ "$PLUGIN" == "cef" ]]; then
   SRC="plugins-src/custom-editor-fixture"

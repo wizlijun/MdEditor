@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build the md2pdf v2 plugin package binaries for both macOS architectures.
-# Produces BOTH bins per arch: `md2pdf` (the v1 main-thread renderer, spawned
-# as a sibling process per export) and `md2pdf-v2` (the long-running JSON-RPC
-# service that fronts it).
+# Build the md2pdf plugin package binaries for both macOS architectures.
+# Produces BOTH bins per arch: `md2pdf` (the main-thread renderer, spawned by
+# the plugin as a sibling process per export) and `md2pdf-v2` (the long-running
+# JSON-RPC service that fronts it).
 #
-# Unlike scripts/build-md2pdf.sh, nothing is copied into src-tauri/plugins —
-# the v2 package lives in app_data (see scripts/dev-install-plugin.sh).
-# Artifacts stay in md2pdf/target/<triple>/release/.
+# Nothing is copied into the app bundle — the package lives in app_data
+# (see scripts/dev-install-plugin.sh). Artifacts stay in
+# md2pdf/target/<triple>/release/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -9,6 +9,14 @@ use std::path::PathBuf;
 pub enum Route {
     Builtin(Builtin),
     Plugin(PluginRoute),
+    /// A subcommand whose owning plugin the scan reported as disabled.
+    ///
+    /// **Production cannot currently reach this**: `current_scan` only ever
+    /// inserts `true` (core stubs are always on, and discovery drops plugins
+    /// whose `state.json` entry is disabled — they arrive absent, not disabled).
+    /// The arm is kept because `resolve_with` is a pure function over a caller-
+    /// supplied enabled map, and honoring an explicit `false` is the behavior a
+    /// future "list installed-but-disabled plugins" scan would want.
     Disabled { plugin_id: String, subcommand: String },
     Unknown(String),
 }
@@ -121,8 +129,8 @@ pub fn resolve_with(
 
     // reading-insights uses the two-level `notemd reading-insights report` form
     // and is handled through the webview runner (reusing the in-app report logic,
-    // incl. online audience). Core-ized: no plugin binary, and the plugins.enabled
-    // map is deliberately ignored — core commands cannot be disabled.
+    // incl. online audience). Core-ized: no plugin process, and the enabled map
+    // is deliberately not consulted — core commands cannot be disabled.
     if first == "reading-insights" {
         let skip = match rest.get(1).map(|s| s.as_str()) {
             Some("report") => 2,

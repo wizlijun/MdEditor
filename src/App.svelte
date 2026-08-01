@@ -382,10 +382,6 @@
           await toggleSideView(pluginId)
           return
         }
-        if (pluginId === 'base') {
-          if (command === 'create') await createNewBase()
-          return
-        }
         // Custom-editor fixture: "New .cef fixture" → pick save path → create
         // empty file → openFile (routes via custom-editor registry → iframe tab).
         if (pluginId === 'notemd.cef-fixture') {
@@ -533,6 +529,7 @@
       }
       switch (id) {
         case 'new':         newFile(); break
+        case 'new-base':    await createNewBase(); break
         case 'open':        cmdOpen(); break
         case 'save':        cmdSave(); break
         case 'save-as':     cmdSaveAs(); break

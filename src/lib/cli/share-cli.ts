@@ -4,8 +4,8 @@
  * binary. Extracted from CliRunner.svelte so the CLI contract (envelope,
  * exit codes, clipboard gating) is unit-testable with injected deps.
  *
- * Output contract (mirrors the old plugin-binary behaviour consumed by
- * md2pdf interpretActions and `notemd help` EXIT CODES):
+ * Output contract (matches what plugin commands emit through CliRunner, and
+ * the exit codes `notemd help` documents):
  * - success --json: { ok: true, data: { ... } }, exit 0
  * - failure --json: { ok: false, error: { code, message } } on stdout + stderr, exit 4
  * - failure non-json: stderr only, exit 4
@@ -176,8 +176,7 @@ export async function runShareCli(payload: CliPayload, deps: ShareCliDeps): Prom
   try {
     if (payload.plugin_command === 'copy-link') {
       // copy-link needs no config: it reads the local record. Clipboard is
-      // gated exactly like interpretActions gated the old binary's
-      // clipboard.write action: skip under --json and --no-clipboard.
+      // gated the usual way: skip under --json and --no-clipboard.
       const rec = getRecord(file)
       const url = await copyShareLink(file, {
         clipboard: payload.global.clipboard && !payload.global.json,
