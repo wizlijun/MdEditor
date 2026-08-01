@@ -1,10 +1,11 @@
 <script lang="ts">
   import { openInEditor } from '../lib/bridge'
+  import type { MessageKey } from '../lib/strings'
 
   let { paths, label, oncompact = false }:
     {
       paths: string[]
-      label: (k: string, v?: Record<string, string | number>) => string
+      label: (k: MessageKey, v?: Record<string, string | number>) => string
       /** History rows are cramped: show a count, not the whole list. */
       oncompact?: boolean
     } = $props()

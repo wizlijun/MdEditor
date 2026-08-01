@@ -1,8 +1,41 @@
 // The plugin carries its own string table — a plugin window can't import the
 // host's i18n. Missing keys fall back to English.
-type Dict = Record<string, string>
 
-const en: Dict = {
+export type MessageKey =
+  | 'run.addendum'
+  | 'run.addendum.placeholder'
+  | 'run.willRun'
+  | 'history.delete'
+  | 'history.clearAll'
+  | 'log.empty'
+  | 'status.skipped'
+  | 'artifacts.label'
+  | 'history.all'
+  | 'history.thisTask'
+  | 'history.emptyAll'
+  | 'tasks.title'
+  | 'tasks.empty'
+  | 'run.start'
+  | 'run.stop'
+  | 'ctx.label'
+  | 'ctx.selection'
+  | 'history.title'
+  | 'history.empty'
+  | 'status.running'
+  | 'status.success'
+  | 'status.error'
+  | 'status.timeout'
+  | 'status.cancelled'
+  | 'status.busy'
+  | 'turns'
+  | 'err.noVault'
+  | 'err.claudeNotFound'
+  | 'err.unknownTask'
+  | 'err.notRunning'
+
+type Catalog = Record<MessageKey, string>
+
+const en: Catalog = {
   'run.addendum': 'Add to this run (optional)',
   'run.addendum.placeholder': 'e.g. only the questions about performance',
   'run.willRun': 'Will run',
@@ -28,10 +61,14 @@ const en: Dict = {
   'status.timeout': 'Timed out',
   'status.cancelled': 'Stopped',
   'status.busy': 'Already running',
-  'turns': '{n} turns',
+  turns: '{n} turns',
+  'err.noVault': 'No vault configured — open or create a vault first.',
+  'err.claudeNotFound': 'Claude Code CLI not found — install it, or point NOTEMD_CLAUDE_BIN at it.',
+  'err.unknownTask': 'This task no longer exists — pick another one.',
+  'err.notRunning': 'That run has already finished.',
 }
 
-const zh: Dict = {
+const zh: Catalog = {
   'run.addendum': '本次补充要求(可选)',
   'run.addendum.placeholder': '例:只回答与性能有关的问题',
   'run.willRun': '将运行',
@@ -57,10 +94,14 @@ const zh: Dict = {
   'status.timeout': '超时',
   'status.cancelled': '已停止',
   'status.busy': '已在运行',
-  'turns': '{n} 轮',
+  turns: '{n} 轮',
+  'err.noVault': '未配置 vault——请先打开或创建一个 vault。',
+  'err.claudeNotFound': '未找到 Claude Code CLI——请先安装,或用 NOTEMD_CLAUDE_BIN 指定其路径。',
+  'err.unknownTask': '这个任务已不存在——请换一个。',
+  'err.notRunning': '这次运行已经结束。',
 }
 
-const ja: Dict = {
+const ja: Catalog = {
   'run.addendum': '今回の追加指示(任意)',
   'run.addendum.placeholder': '例:性能に関する質問だけ',
   'run.willRun': '実行内容',
@@ -86,10 +127,14 @@ const ja: Dict = {
   'status.timeout': 'タイムアウト',
   'status.cancelled': '停止しました',
   'status.busy': '実行中です',
-  'turns': '{n} ターン',
+  turns: '{n} ターン',
+  'err.noVault': 'vault が未設定です。まず vault を開くか作成してください。',
+  'err.claudeNotFound': 'Claude Code CLI が見つかりません。インストールするか、NOTEMD_CLAUDE_BIN でパスを指定してください。',
+  'err.unknownTask': 'このタスクはもう存在しません。ほかのタスクを選んでください。',
+  'err.notRunning': 'この実行はすでに終了しています。',
 }
 
-const de: Dict = {
+const de: Catalog = {
   'run.addendum': 'Für diesen Lauf ergänzen (optional)',
   'run.addendum.placeholder': 'z. B. nur die Fragen zur Performance',
   'run.willRun': 'Läuft',
@@ -115,22 +160,27 @@ const de: Dict = {
   'status.timeout': 'Zeitüberschreitung',
   'status.cancelled': 'Gestoppt',
   'status.busy': 'Läuft bereits',
-  'turns': '{n} Runden',
+  turns: '{n} Runden',
+  'err.noVault': 'Kein Vault konfiguriert — bitte zuerst einen Vault öffnen oder erstellen.',
+  'err.claudeNotFound':
+    'Claude Code CLI nicht gefunden — bitte installieren oder den Pfad über NOTEMD_CLAUDE_BIN angeben.',
+  'err.unknownTask': 'Diese Aufgabe gibt es nicht mehr — bitte eine andere wählen.',
+  'err.notRunning': 'Dieser Lauf ist bereits beendet.',
 }
 
 /** Every locale this window ships. English is the source of truth. */
 export const LOCALES = ['en', 'zh', 'ja', 'de'] as const
 export type Locale = (typeof LOCALES)[number]
 
-export const CATALOGS: Record<Locale, Dict> = { en, zh, ja, de }
+export const CATALOGS: Record<Locale, Catalog> = { en, zh, ja, de }
 
-function catalogFor(locale: string): Dict {
+function catalogFor(locale: string): Catalog {
   // The host hands us codes like 'zh' or 'zh-CN'; match on the language part.
   const lang = (locale ?? '').slice(0, 2) as Locale
   return CATALOGS[lang] ?? en
 }
 
-export function t(locale: string, key: string, vars?: Record<string, string | number>): string {
+export function t(locale: string, key: MessageKey, vars?: Record<string, string | number>): string {
   let s = catalogFor(locale)[key] ?? en[key] ?? key
   if (vars) for (const [k, v] of Object.entries(vars)) s = s.replace(`{${k}}`, String(v))
   return s

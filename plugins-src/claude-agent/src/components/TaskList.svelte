@@ -1,13 +1,14 @@
 <script lang="ts">
   import type { Task } from '../lib/events'
   import { fmtShort } from '../lib/datetime'
+  import type { MessageKey } from '../lib/strings'
 
   let { tasks, selected, onselect, label }:
     {
       tasks: Task[]
       selected: string | null
       onselect: (id: string) => void
-      label: (k: string, v?: Record<string, string | number>) => string
+      label: (k: MessageKey, v?: Record<string, string | number>) => string
     } = $props()
 
   // "2026-07-30T10:42:33Z" (UTC) → "07-30 18:42" in the user's local timezone
@@ -18,7 +19,7 @@
     if (!task.last_run) return null
     return {
       kind: task.last_run.status,
-      text: `${label('status.' + task.last_run.status)} · ${when(task.last_run.started_at)}`,
+      text: `${label(('status.' + task.last_run.status) as MessageKey)} · ${when(task.last_run.started_at)}`,
     }
   }
 </script>

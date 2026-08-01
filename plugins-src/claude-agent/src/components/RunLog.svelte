@@ -2,12 +2,13 @@
   import type { RunRecord } from '../lib/events'
   import ArtifactLinks from './ArtifactLinks.svelte'
   import { fmtFull } from '../lib/datetime'
+  import type { MessageKey } from '../lib/strings'
 
   let { run, log, label }:
     {
       run: RunRecord
       log: string
-      label: (k: string, v?: Record<string, string | number>) => string
+      label: (k: MessageKey, v?: Record<string, string | number>) => string
     } = $props()
 
   const lines = $derived(log.split('\n').filter((l) => l.length > 0))
@@ -15,7 +16,7 @@
 
 <div class="pane">
   <header>
-    <span class="status s-{run.status}">{label('status.' + run.status)}</span>
+    <span class="status s-{run.status}">{label(('status.' + run.status) as MessageKey)}</span>
     <span class="task">{run.task}</span>
     <span class="when">{fmtFull(run.started_at)}</span>
   </header>

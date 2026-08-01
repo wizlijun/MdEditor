@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { RunRecord } from '../lib/events'
   import { fmtShort } from '../lib/datetime'
+  import type { MessageKey } from '../lib/strings'
 
   let { runs, label, empty, showTask = false, selectedId = null, onselect, ondelete, onclear }:
     {
       runs: RunRecord[]
-      label: (k: string, v?: Record<string, string | number>) => string
+      label: (k: MessageKey, v?: Record<string, string | number>) => string
       empty: string
       /** In the all-tasks view each row needs to say WHICH task it was. */
       showTask?: boolean
@@ -52,7 +53,7 @@
           onclick={() => onselect(run)}
           oncontextmenu={(e) => openMenu(e, run)}
         >
-          <span class="status s-{run.status}">{label('status.' + run.status)}</span>
+          <span class="status s-{run.status}">{label(('status.' + run.status) as MessageKey)}</span>
           {#if showTask}<span class="task">{run.task}</span>{/if}
           <span class="when">{when(run.started_at)}</span>
           {#if run.trigger === 'cli'}<span class="cli">CLI</span>{/if}

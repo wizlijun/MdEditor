@@ -1,6 +1,7 @@
 <script lang="ts">
   import { bridge, request, onMessage } from './lib/bridge'
-  import { t } from './lib/strings'
+  import { t, type MessageKey } from './lib/strings'
+  import { errorKey } from './lib/errors'
   import {
     emptyView,
     reduce,
@@ -16,7 +17,7 @@
   import ArtifactLinks from './components/ArtifactLinks.svelte'
 
   const locale = bridge().locale
-  const tr = (k: string, v?: Record<string, string | number>) => t(locale, k, v)
+  const tr = (k: MessageKey, v?: Record<string, string | number>) => t(locale, k, v)
 
   let tasks: Task[] = $state([])
   /** Which task the Run button will start. */
@@ -149,7 +150,15 @@
     }
   }
 
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
+  // The backend speaks its own English strings (plugin.rs); classify the ones
+  // that genuinely reach the user into a localized sentence. Anything the
+  // classifier doesn't recognize falls through to the raw message — never a
+  // wrong translation.
+  const message = (e: unknown) => {
+    const raw = e instanceof Error ? e.message : String(e)
+    const key = errorKey(raw)
+    return key ? tr(key) : raw
+  }
   const fileName = (p: string) => p.split('/').pop() ?? p
 
   // Switching task, or switching scope, reloads the history list.
@@ -242,7 +251,7 @@
         {#if error}
           <span class="err">{error}</span>
         {:else if view.status !== 'idle'}
-          <span class="st">{tr('status.' + view.status)}</span>
+          <span class="st">{tr(('status.' + view.status) as MessageKey)}</span>
         {/if}
         {#if view.turns != null}
           <span class="turns">{tr('turns', { n: view.turns })}</span>

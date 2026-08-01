@@ -31,7 +31,7 @@ describe('t', () => {
   })
 
   it('falls back to the raw key when the key is unknown', () => {
-    expect(t('en', 'no.such.key')).toBe('no.such.key')
+    expect(t('en', 'no.such.key' as never)).toBe('no.such.key')
   })
 })
 
@@ -43,7 +43,7 @@ describe.each(LOCALES.filter((l) => l !== 'en'))('%s catalog', (locale) => {
 
   it('translates every English key to a non-empty string', () => {
     for (const key of enKeys) {
-      expect(catalog[key], `missing key: ${key}`).toBeTruthy()
+      expect(catalog[key as keyof typeof catalog], `missing key: ${key}`).toBeTruthy()
     }
   })
 
@@ -53,17 +53,21 @@ describe.each(LOCALES.filter((l) => l !== 'en'))('%s catalog', (locale) => {
 
   it('preserves the same {placeholders} as English', () => {
     for (const key of enKeys) {
-      expect(placeholders(catalog[key] ?? ''), `placeholder mismatch: ${key}`).toEqual(
-        placeholders(en[key]),
-      )
+      expect(
+        placeholders(catalog[key as keyof typeof catalog] ?? ''),
+        `placeholder mismatch: ${key}`,
+      ).toEqual(placeholders(en[key as keyof typeof en]))
     }
   })
 
   it('leaves no string still in English', () => {
-    // Product names are the same in every language; everything else must差异.
+    // Product names are the same in every language; everything else must differ.
     const allowed = new Set(['artifacts.label'])
     const identical = enKeys.filter(
-      (k) => !allowed.has(k) && catalog[k] === en[k] && /[a-zA-Z]{4}/.test(en[k]),
+      (k) =>
+        !allowed.has(k) &&
+        catalog[k as keyof typeof catalog] === en[k as keyof typeof en] &&
+        /[a-zA-Z]{4}/.test(en[k as keyof typeof en]),
     )
     expect(identical, `untranslated in ${locale}`).toEqual([])
   })
