@@ -18,6 +18,61 @@ truth; CLAUDE.md is a symlink to this file — edit AGENTS.md only.
 - Any other folder — regular markdown documents (`xxx.md`), optionally
   with a companion outline note beside them (see below).
 
+## Naming a note
+
+A note's filename **is** its title: dated notes are
+`YYYY-MM-DD-<title>.md`, wikilink pages are `<title>.note.md`. The title
+is the only thing grep, semantic search and other agents see first, so
+write for that: a reader who sees nothing but the title decides whether
+to open the note — and, if they never open it, has still got the point.
+
+Write the title in the language of the note's own body. Length is one
+claim's worth: roughly 6–15 words, or 12–30 characters in Chinese and
+Japanese. Longer usually means two claims — split the note instead of
+abbreviating the title.
+
+1. **A claim, not a topic.** Subject, verb, assertion — something a
+   reader could disagree with. Not "On block references" but "Block
+   references exist to make a single assertion addressable".
+2. **Compress the content, not the genre.** Delete genre words (notes,
+   summary, analysis, thoughts, 笔记, 総まとめ, …) and spend the room on
+   the conclusion instead.
+3. **Self-contained.** Understandable without the folder, the date, the
+   parent note, or the conversation it came from. No back-references
+   ("it", "this approach", "the above").
+4. **Keep the searchable entities.** People, products, mechanisms and
+   parameters spelled out in full, not private abbreviations — grep
+   matches literals.
+5. **Carry the qualifier.** If the claim holds only under conditions,
+   say so: "under X, A beats B", never an unconditional slogan.
+   A dropped condition is the most common way a title lies.
+6. **No hype.** Ultimate, must-read, definitive, 震撼, 彻底搞懂 — cut.
+7. **Never invent certainty.** If you are not sure what the note's core
+   claim is, write a descriptive title and say it is descriptive. A
+   confident-sounding but wrong title is worse than a dull one.
+
+Three checks; a title ships only if it passes all three:
+
+- **Search** — two years from now, among fifty search results, would the
+  title alone make you open this one?
+- **Disagreement** — could someone who read the whole note say "I don't
+  agree with that title"? If nobody possibly could, it is a description,
+  not a claim. Rewrite.
+- **Deletion** — delete the body, keep the title: does the reader still
+  have the single most important conclusion?
+
+Two exceptions, to be declared rather than forced into a claim:
+
+- Two equally important claims that cannot be merged →
+  `Not one claim: <A> / <B>`, and let the human decide whether to split
+  the note.
+- Pure material (transcript, clipping, raw record) that makes no claim →
+  `Material: <source> · <scope>`. Do not invent a conclusion for it.
+
+Mechanics: the title goes into the filename verbatim — non-ASCII is kept
+as is, whitespace becomes `-`, and only `/ \ : * ? " < > |` are replaced
+with `-`. Keep the H1 in the file identical to the title in its name.
+
 ## The `.note.md` suffix
 
 - A file ending in `.note.md` is an **outline note**: a bullet-list
