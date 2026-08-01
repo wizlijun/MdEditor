@@ -2,6 +2,7 @@
 //! 主线程 CoreLocation，插件裸二进制拿不到定位授权）取位 → logbook 决策 →
 //! host.vault.exists/read/write。deactivate 撤销循环。
 use crate::logbook;
+use crate::strings::{self, Locale};
 use notemd_plugin_sdk::{self as sdk, plugin_protocol as proto};
 use serde_json::{json, Value};
 
@@ -9,11 +10,16 @@ const ROUND_SECS: u64 = 30 * 60;
 
 pub struct PosLogPlugin {
     stop_tx: Option<tokio::sync::watch::Sender<bool>>,
+    /// Set from `$initialize.locale` (host protocol guarantees `$initialize`
+    /// precedes `$activate`/`command.execute`, so this is populated before
+    /// either spawns a round). `Locale` is `Copy`, so it's captured by value
+    /// into each spawned task rather than shared behind a lock.
+    locale: Locale,
 }
 
 impl PosLogPlugin {
     pub fn new() -> Self {
-        Self { stop_tx: None }
+        Self { stop_tx: None, locale: Locale::En }
     }
 }
 
@@ -24,6 +30,10 @@ impl Default for PosLogPlugin {
 }
 
 impl sdk::NotemdPlugin for PosLogPlugin {
+    fn initialize(&mut self, _host: &sdk::Host, params: &proto::InitializeParams) {
+        self.locale = Locale::from_code(&params.locale);
+    }
+
     fn activate(&mut self, host: &sdk::Host, _params: &proto::ActivateParams) -> Result<(), String> {
         if self.stop_tx.is_some() {
             return Ok(()); // 幂等：重复 $activate 不叠循环
@@ -31,10 +41,11 @@ impl sdk::NotemdPlugin for PosLogPlugin {
         let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
         self.stop_tx = Some(stop_tx);
         let host = host.clone();
+        let locale = self.locale;
         tokio::spawn(async move {
             let mut warned_once = false;
             loop {
-                run_round(&host, &mut warned_once, false).await;
+                run_round(&host, locale, &mut warned_once, false).await;
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(ROUND_SECS)) => {}
                     _ = stop_rx.changed() => break,
@@ -61,9 +72,10 @@ impl sdk::NotemdPlugin for PosLogPlugin {
             // the outcome). Reuses the same round the 30-min loop runs.
             "save-now" => {
                 let host = host.clone();
+                let locale = self.locale;
                 tokio::spawn(async move {
                     let mut warned = false;
-                    run_round(&host, &mut warned, /*announce=*/ true).await;
+                    run_round(&host, locale, &mut warned, /*announce=*/ true).await;
                 });
                 Ok(json!({ "ok": true }))
             }
@@ -74,8 +86,9 @@ impl sdk::NotemdPlugin for PosLogPlugin {
 
 /// 一轮：取位（host.location.get）→ 组行 → 决策 → 写盘。所有失败仅告警跳过
 /// （spec §8 错误表）。`announce`=true（手动「Save Location Now」）总是弹 toast
-/// 反馈结果；=false（30 分钟循环）沿用 `warned_once` 抑制重复告警。
-async fn run_round(host: &sdk::Host, warned_once: &mut bool, announce: bool) {
+/// 反馈结果；=false（30 分钟循环）沿用 `warned_once` 抑制重复告警。`locale`
+/// selects the toast wording (captured from `$initialize` — see `PosLogPlugin`).
+async fn run_round(host: &sdk::Host, locale: Locale, warned_once: &mut bool, announce: bool) {
     let (place, coords) = match host.request("host.location.get", json!({})).await {
         Ok(v) => {
             let place = logbook::Place {
@@ -93,7 +106,7 @@ async fn run_round(host: &sdk::Host, warned_once: &mut bool, announce: bool) {
         }
         Err(e) => {
             if announce || !*warned_once {
-                host.toast("warning", "Position Log 无法获取位置", Some(&e));
+                host.toast("warning", strings::t(locale, strings::Key::LocationUnavailable), Some(&e));
                 *warned_once = true;
             }
             host.log_warn(&format!("pos-log: host.location.get failed: {e}"));
@@ -104,7 +117,11 @@ async fn run_round(host: &sdk::Host, warned_once: &mut bool, announce: bool) {
     if addr.is_empty() {
         host.log_warn("pos-log: empty geocode result, skipping round");
         if announce {
-            host.toast("warning", "Position Log", Some("empty geocode result"));
+            host.toast(
+                "warning",
+                strings::t(locale, strings::Key::EmptyGeocode),
+                Some("empty geocode result"),
+            );
         }
         return;
     }
@@ -122,7 +139,7 @@ async fn run_round(host: &sdk::Host, warned_once: &mut bool, announce: bool) {
                 Err(e) => {
                     host.log_warn(&format!("pos-log: vault.read failed: {e}"));
                     if announce {
-                        host.toast("warning", "Position Log", Some(&e));
+                        host.toast("warning", strings::t(locale, strings::Key::SaveFailed), Some(&e));
                     }
                     return;
                 }
@@ -132,7 +149,7 @@ async fn run_round(host: &sdk::Host, warned_once: &mut bool, announce: bool) {
         Err(e) => {
             // vault 未配置等；循环侧首次 toast，手动侧总是 toast
             if announce || !*warned_once {
-                host.toast("warning", "Position Log 需要已配置的 vault", Some(&e));
+                host.toast("warning", strings::t(locale, strings::Key::VaultRequired), Some(&e));
                 *warned_once = true;
             }
             host.log_warn(&format!("pos-log: vault.exists failed: {e}"));
@@ -147,18 +164,18 @@ async fn run_round(host: &sdk::Host, warned_once: &mut bool, announce: bool) {
             {
                 host.log_error(&format!("pos-log: vault.write failed: {e}"));
                 if announce {
-                    host.toast("warning", "Position Log", Some(&e));
+                    host.toast("warning", strings::t(locale, strings::Key::SaveFailed), Some(&e));
                 }
                 return;
             }
             if announce {
-                host.toast("info", "Position Log", Some(&format!("已记录 {addr}")));
+                host.toast("info", &strings::recorded(locale, &addr), None);
             }
         }
         None => {
             // 地址未变化：循环侧静默，手动侧仍反馈当前位置
             if announce {
-                host.toast("info", "Position Log", Some(&format!("位置未变化 {addr}")));
+                host.toast("info", &strings::unchanged(locale, &addr), None);
             }
         }
     }

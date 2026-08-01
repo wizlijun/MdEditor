@@ -17,5 +17,25 @@
     ]
   },
   "capabilities": ["location", "vault.read", "vault.write", "toast"],
-  "request_timeout_seconds": 30
+  "request_timeout_seconds": 30,
+  "i18n": {
+    "zh": {
+      "name": "位置日志",
+      "menus": {
+        "save-now": "立即保存位置"
+      }
+    },
+    "ja": {
+      "name": "位置ログ",
+      "menus": {
+        "save-now": "今すぐ位置を保存"
+      }
+    },
+    "de": {
+      "name": "Standortprotokoll",
+      "menus": {
+        "save-now": "Standort jetzt speichern"
+      }
+    }
+  }
 }

@@ -5,6 +5,7 @@
 //! just runs the SDK serve loop — no main-thread CoreLocation service anymore.
 mod logbook;
 mod plugin;
+mod strings;
 
 fn main() {
     tokio::runtime::Builder::new_multi_thread()
