@@ -27,8 +27,7 @@
   import Toast from './components/Toast.svelte'
   import FindReplace from './components/FindReplace.svelte'
   import { openFind, openFindReplace } from './lib/find-replace.svelte'
-  import { invokePlugin, buildContext, type TabSnapshot } from './lib/plugins/host'
-  import { applyActions, configureActionHandlers } from './lib/plugins/action-handlers'
+  import { buildContext, type TabSnapshot } from './lib/plugins/host'
   import { renderTabAsInlineBody, buildPdfTitle } from './lib/plugins/host-render-html'
   import { renderFilenameTemplate } from './lib/plugins/prompt'
   import {
@@ -441,29 +440,12 @@
           return renderTabAsInlineBody(t)
         }
 
-        if (m.manifest_version === 2) {
-          // A command that maps to a plugin window opens that window instead of
-          // executing on the process runtime (spec §7.2 — pure-UI plugins).
-          const openWin = m.open_windows?.[command]
-          if (openWin) {
-            try {
-              await invoke('plugin_v2_open_window', { pluginId: m.id, windowId: openWin })
-            } catch (e) {
-              pushToast({
-                level: 'error',
-                message: t('plugins.internalError', { name: m.name }),
-                detail: String(e),
-              })
-            }
-            return
-          }
-          // v2: same context shape v1 plugins see (rendered_html baked in when
-          // the manifest declares renderer.html, plus output_path), but the
-          // command executes on the resident runtime. v2 plugins do not return
-          // actions — toasts arrive through the plugin-toast event listener.
+        // A command that maps to a plugin window opens that window instead of
+        // executing on the process runtime (spec §7.2 — pure-UI plugins).
+        const openWin = m.open_windows?.[command]
+        if (openWin) {
           try {
-            const { context } = await buildContext(m, snap, { htmlBaker, outputPath })
-            await invoke('plugin_v2_execute', { pluginId: m.id, command, context })
+            await invoke('plugin_v2_open_window', { pluginId: m.id, windowId: openWin })
           } catch (e) {
             pushToast({
               level: 'error',
@@ -473,32 +455,21 @@
           }
           return
         }
-
-        let result
+        // The command executes on the plugin's resident runtime process, which
+        // reports back through the plugin-toast event listener rather than
+        // returning anything to render here.
         try {
-          result = await invokePlugin(m, command, snap, {
-            settingsReader: (id) => getPluginScopedAll(id),
-            htmlBaker,
-            outputPath,
-          })
+          const { context } = await buildContext(m, snap, { htmlBaker, outputPath })
+          await invoke('plugin_v2_execute', { pluginId: m.id, command, context })
         } catch (e) {
           pushToast({
             level: 'error',
             message: t('plugins.internalError', { name: m.name }),
-            detail: e instanceof Error ? e.message : String(e),
+            detail: String(e),
           })
-          return
-        }
-        if (result.ok && result.response) {
-          await applyActions(result.response.actions, m)
-        } else {
-          pushToast({ level: 'error', message: result.errorMessage ?? 'Plugin error', detail: result.errorDetail })
         }
       }
 
-      // Register the reinvoke handler so dialog.confirm action-flow can re-enter
-      // through the same plugin-dispatch path.
-      configureActionHandlers({ reinvokePlugin: dispatchPlugin })
       // Make dispatchPlugin reachable from other components (TabBar's right-click).
       setPluginDispatcher(dispatchPlugin)
       // Populate the Open Recent menu now that settings (recentFiles) and the

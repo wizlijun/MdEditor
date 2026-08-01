@@ -1,16 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import { invokePlugin, buildContext } from '../plugins/host'
+  import { buildContext } from '../plugins/host'
   import { renderTabAsInlineBody } from '../plugins/host-render-html'
   import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs'
-  import { writeText as clipWriteText } from '@tauri-apps/plugin-clipboard-manager'
-  import { mergePluginScoped, getPluginScopedAll, loadSettings } from '../settings.svelte'
+  import { getPluginScopedAll, loadSettings } from '../settings.svelte'
   import { generateInsightsReport } from '../insights/run'
   import { presetRange, type Preset } from '../insights/value'
   import { localTzOffsetMinutes } from '../insights/model'
   import { runShareCli, buildVirtualTab } from './share-cli'
-  import { interpretActions, type CliPayload } from './cli-runner'
+  import { type CliPayload } from './cli-runner'
   import type { PluginManifest, TabKind } from '../plugins/types'
   import type { FileKind } from '../fs'
 
@@ -142,8 +141,6 @@
 
     const pluginSettings = getPluginScopedAll(manifest.id)
 
-    // One tab snapshot + opts set for both runtimes: v1 feeds them through
-    // invokePlugin, v2 through the same buildContext invokePlugin uses.
     const snap = {
       path: virtualTab.filePath,
       filename: virtualTab.title,
@@ -160,62 +157,36 @@
       outputPath,
     }
 
-    if (manifest.manifest_version === 2) {
-      // v2: same context shape v1 plugins receive, but the command executes
-      // on the resident runtime via plugin_v2_execute, which returns a result
-      // value instead of an actions envelope (toasts are GUI-only events).
-      // Output/error conventions mirror interpretActions: --json wraps the
-      // result as {ok:true,data}, errors exit 4 with a plugin_failed envelope.
-      try {
-        const { context } = await buildContext(manifest, snap, invokeOpts)
-        const data = await invoke<unknown>('plugin_v2_execute', {
-          pluginId: manifest.id,
-          command: payload.plugin_command,
-          context,
-        })
-        const path = data != null && typeof data === 'object'
-          ? (data as Record<string, unknown>).path : undefined
-        await finish({
-          exit_code: 0,
-          stdout: payload.global.json
-            ? JSON.stringify({ ok: true, data: data ?? {} })
-            : typeof path === 'string' ? path : JSON.stringify(data ?? {}),
-          stderr: [],
-        })
-      } catch (e) {
-        const message = String(e)
-        await finish({
-          exit_code: 4,
-          stdout: payload.global.json
-            ? JSON.stringify({ ok: false, error: { code: 'plugin_failed', message } })
-            : undefined,
-          stderr: [`✗ ${manifest.name}: ${message}`],
-        })
-      }
-      return
-    }
-
-    const result = await invokePlugin(manifest, payload.plugin_command, snap, invokeOpts)
-
-    if (!result.ok || !result.response) {
-      await finish({
-        exit_code: 1,
-        stderr: [result.errorMessage ?? 'notemd: plugin invocation failed',
-                 result.errorDetail ?? ''].filter(Boolean),
+    // The command executes on the plugin's resident runtime via
+    // plugin_v2_execute, which returns a result value (toasts are GUI-only
+    // events). Output conventions: --json wraps the result as {ok:true,data},
+    // errors exit 4 with a plugin_failed envelope.
+    try {
+      const { context } = await buildContext(manifest, snap, invokeOpts)
+      const data = await invoke<unknown>('plugin_v2_execute', {
+        pluginId: manifest.id,
+        command: payload.plugin_command,
+        context,
       })
-      return
+      const path = data != null && typeof data === 'object'
+        ? (data as Record<string, unknown>).path : undefined
+      await finish({
+        exit_code: 0,
+        stdout: payload.global.json
+          ? JSON.stringify({ ok: true, data: data ?? {} })
+          : typeof path === 'string' ? path : JSON.stringify(data ?? {}),
+        stderr: [],
+      })
+    } catch (e) {
+      const message = String(e)
+      await finish({
+        exit_code: 4,
+        stdout: payload.global.json
+          ? JSON.stringify({ ok: false, error: { code: 'plugin_failed', message } })
+          : undefined,
+        stderr: [`✗ ${manifest.name}: ${message}`],
+      })
     }
-
-    const interp = interpretActions(
-      result.response.actions, manifest, payload,
-      { isTty: false, writeClipboard: clipWriteText, writeSettings: mergePluginScoped },
-    )
-
-    await finish({
-      exit_code: interp.exitCode,
-      stdout: interp.stdout ?? '',
-      stderr: interp.stderr,
-    })
   }
 
   async function finish(r: { exit_code: number; stdout?: string; stderr: string[] }): Promise<void> {

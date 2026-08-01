@@ -86,25 +86,33 @@ export interface PluginI18n {
   'settings.fields'?: Record<string, string>
 }
 
+/**
+ * The manifest shape the frontend consumes. It is a *view model*: the Rust host
+ * derives it from every installed v2 manifest (`plugin_runtime::adapter::to_v1`)
+ * and serves it through `get_plugin_manifests`. It is not a file format —
+ * plugins ship `manifest.v2.json`.
+ */
 export interface PluginManifest {
   id: string
   name: string
   version: string
-  /** How the host treats the plugin. Builtins ship in-app and honor
-   *  `default_enabled`; anything else (or unset) is treated as external. */
+  /** Always `'external'` on adapted manifests; carried for shape compatibility. */
   kind?: 'builtin' | 'external' | string
-  /** Boot-time default for builtin plugins when the user hasn't set an
-   *  explicit `plugins.enabled.<id>` value. Ignored for external plugins. */
+  /** Legacy field, carried for shape compatibility. Whether a plugin is enabled
+   *  lives in the runtime's `state.json` and is applied before a manifest ever
+   *  reaches the frontend. */
   default_enabled?: boolean
   description?: string
   i18n?: Record<string, PluginI18n>
+  /** Always `''` on adapted manifests — the runtime resolves the plugin's
+   *  binary itself from the install tree. */
   binary: string
   menus?: MenuEntry[]
   context_menus?: ContextMenuEntry[]
-  /** Custom-editor contributions (子项目④), passed through by the v2 adapter.
-   *  Each entry declares `{ id, file_extensions, entry }`. Absent for v1
-   *  plugins and v2 plugins with no custom editors. Consumed by
-   *  `buildCustomEditorRegistry` to map file extensions → editor iframes. */
+  /** Custom-editor contributions (子项目④), passed through by the adapter.
+   *  Each entry declares `{ id, file_extensions, entry }`. Absent for plugins
+   *  with no custom editors. Consumed by `buildCustomEditorRegistry` to map
+   *  file extensions → editor iframes. */
   custom_editors?: CustomEditorContribution[]
   settings?: { tab_label: string; schema: SettingsField[] }
   host_capabilities: Capability[]
@@ -113,8 +121,7 @@ export interface PluginManifest {
    *  When present and false, the plugin is not selectable in settings. */
   available_when?: string
   cli?: CliEntry[]              // new, optional
-  /** `2` when this manifest comes from the v2 runtime (adapter-shaped);
-   *  execution must go through `plugin_v2_execute`, not `invoke_plugin`. */
+  /** Always `2` — the adapter stamps the manifest generation it came from. */
   manifest_version?: number
   /** `open_command → window_id` for v2 plugins whose window contributions
    *  declare an `open_command`. When a dispatched command is a key here, route
@@ -132,6 +139,9 @@ export interface RequestContextTab {
   is_untitled: boolean
 }
 
+/** What a plugin command is invoked with. `buildContext` assembles `context`
+ *  (and `settings`, when the manifest declares `settings.read`); the caller
+ *  passes them to `plugin_v2_execute` alongside the command name. */
 export interface PluginRequest {
   command: string
   context: {
@@ -141,24 +151,10 @@ export interface PluginRequest {
     output_path?: string
   }
   settings?: Record<string, unknown>
-  host_version: string
-  plugin_api_version: 1
 }
 
+/** Level of a `plugin-toast` event emitted by the runtime on a plugin's behalf. */
 export type ToastLevel = 'success' | 'info' | 'warn' | 'error'
-
-export type PluginAction =
-  | { type: 'toast'; level: ToastLevel; message: string; detail?: string }
-  | { type: 'clipboard.write'; text: string }
-  | { type: 'settings.merge'; patch: Record<string, unknown> }
-  | { type: 'dialog.confirm'; title: string; message: string; if_confirm_invoke: string }
-  | { type: 'dialog.message'; title: string; message: string; level: 'info' | 'warn' | 'error' }
-  | { type: 'cli.result'; data: Record<string, unknown> }
-
-export interface PluginResponse {
-  success: boolean
-  actions: PluginAction[]
-}
 
 export type TabKind = 'markdown' | 'html' | 'code' | 'spreadsheet' | 'base' | 'custom'
 

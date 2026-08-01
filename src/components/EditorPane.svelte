@@ -5,7 +5,6 @@
   import CsvEditor from './CsvEditor.svelte'
   import BaseView from './BaseView.svelte'
   import CustomEditorIframe from './CustomEditorIframe.svelte'
-  import { isPluginEnabled } from '../lib/settings.svelte'
   import SourceView from './SourceView.svelte'
   import HtmlPreview from './HtmlPreview.svelte'
   import ExternalChangeBanner from './ExternalChangeBanner.svelte'
@@ -108,7 +107,7 @@
     {#key tab.id}
       <CsvEditor {tab} />
     {/key}
-  {:else if tab.kind === 'base' && tab.mode !== 'source' && isPluginEnabled('base')}
+  {:else if tab.kind === 'base' && tab.mode !== 'source'}
     {#key tab.id}
       <BaseView {tab} />
     {/key}

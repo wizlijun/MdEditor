@@ -69,7 +69,6 @@ let deviceId: string | null = null
 let recentsChangedHandler: (() => void) | null = null
 const TOMBSTONE_CAP = 200
 let pluginScoped: Record<string, Record<string, unknown>> = {}
-let pluginsEnabled: Record<string, boolean> = {}
 let settingsHydrated = false
 
 /**
@@ -173,7 +172,6 @@ export async function loadSettings(): Promise<void> {
     await s.save()
   }
   pluginScoped = (await s.get<Record<string, Record<string, unknown>>>('plugins')) ?? {}
-  pluginsEnabled = (await s.get<Record<string, boolean>>('plugins.enabled')) ?? {}
   const storedMdblock = await s.get<MdblockSettings>('mdblock')
   settings.mdblock = storedMdblock
     ? {
@@ -200,7 +198,6 @@ export async function saveSettings(): Promise<void> {
   await s.set('recentOpenedAt', recentOpenedAt)
   await s.set('recentTombstones', recentTombstones)
   await s.set('plugins', pluginScoped)
-  await s.set('plugins.enabled', pluginsEnabled)
   await s.set('mdblock', settings.mdblock)
   await s.set('dailyNotes', { enabled: settings.dailyNotes.enabled })
   await s.save()
@@ -389,45 +386,3 @@ export async function mergePluginScoped(patch: Record<string, unknown>): Promise
   if (needSaveSettings) await saveSettings()
 }
 
-// --- Plugin enable/disable ---
-
-/**
- * Whether the given plugin id is enabled. Default-on: a plugin not present
- * in the settings map is treated as enabled (so newly bundled plugins are
- * usable on first launch without migration).
- */
-export function isPluginEnabled(pluginId: string): boolean {
-  const v = pluginsEnabled[pluginId]
-  if (v === undefined) return true
-  return v === true
-}
-
-/**
- * Persist whether a plugin should be loaded at app startup. Honored by the
- * Rust plugin host; takes effect on the next launch (active manifests are
- * cached at boot).
- */
-export async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
-  pluginsEnabled[pluginId] = enabled
-  await saveSettings()
-}
-
-/**
- * Resolve a plugin's enabled state the way the Rust host does at boot: an
- * explicit stored value wins; otherwise external plugins default on and builtin
- * plugins fall back to their manifest `default_enabled` (missing → off). Use
- * this wherever a manifest is on hand (e.g. the Plugins settings tab) so the
- * shown state matches what the backend actually loaded. `isPluginEnabled`
- * (manifest-less, undefined → true) stays for runtime gates, whose callers are
- * all default-on builtins where the two agree.
- */
-export function resolvePluginEnabled(manifest: {
-  id: string
-  kind?: string
-  default_enabled?: boolean
-}): boolean {
-  const v = pluginsEnabled[manifest.id]
-  if (v !== undefined) return v === true
-  if (manifest.kind === 'builtin') return manifest.default_enabled === true
-  return true
-}
