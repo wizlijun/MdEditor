@@ -54,6 +54,19 @@ export type MessageKey =
   | 'err.ocrUnreachable'
   | 'err.baiduFailed'
   | 'err.unsupportedType'
+  | 'log.ocrStart'
+  | 'log.converting'
+  | 'log.pageFailed'
+  | 'log.failedPages'
+  | 'log.baiduToken'
+  | 'log.baiduSubmit'
+  | 'log.baiduDownload'
+  | 'log.baiduStatus'
+  | 'log.baiduStatus.pending'
+  | 'log.baiduStatus.running'
+  | 'log.baiduStatus.success'
+  | 'log.baiduStatus.failed'
+  | 'settings.ocrProvider'
 
 type Catalog = Record<MessageKey, string>
 
@@ -104,6 +117,19 @@ const en: Catalog = {
   'err.ocrUnreachable': "Couldn't reach the OCR service — check your network or Settings.",
   'err.baiduFailed': 'Baidu OCR failed — see the log for details.',
   'err.unsupportedType': 'Unsupported file type — only epub, pdf, and docx are supported.',
+  'log.ocrStart': 'OCR: {file}',
+  'log.converting': 'Converting {file} with Calibre…',
+  'log.pageFailed': 'Page {page} failed: {reason}',
+  'log.failedPages': 'Pages that failed OCR: {pages}',
+  'log.baiduToken': 'Baidu OCR: requesting an access token…',
+  'log.baiduSubmit': 'Baidu OCR: uploading the document…',
+  'log.baiduDownload': 'Baidu OCR: downloading the markdown…',
+  'log.baiduStatus': 'Baidu OCR: {status}',
+  'log.baiduStatus.pending': 'queued',
+  'log.baiduStatus.running': 'processing',
+  'log.baiduStatus.success': 'done',
+  'log.baiduStatus.failed': 'failed',
+  'settings.ocrProvider': 'OCR service',
 }
 
 const zh: Catalog = {
@@ -153,6 +179,19 @@ const zh: Catalog = {
   'err.ocrUnreachable': '无法连接 OCR 服务——请检查网络或设置。',
   'err.baiduFailed': '百度 OCR 失败——详情见日志。',
   'err.unsupportedType': '不支持的文件类型——仅支持 epub、pdf、docx。',
+  'log.ocrStart': 'OCR:{file}',
+  'log.converting': '正在用 Calibre 转换 {file}…',
+  'log.pageFailed': '第 {page} 页失败:{reason}',
+  'log.failedPages': 'OCR 失败的页码:{pages}',
+  'log.baiduToken': '百度 OCR:正在获取访问令牌…',
+  'log.baiduSubmit': '百度 OCR:正在上传文档…',
+  'log.baiduDownload': '百度 OCR:正在下载识别结果…',
+  'log.baiduStatus': '百度 OCR:{status}',
+  'log.baiduStatus.pending': '排队中',
+  'log.baiduStatus.running': '识别中',
+  'log.baiduStatus.success': '已完成',
+  'log.baiduStatus.failed': '失败',
+  'settings.ocrProvider': 'OCR 服务',
 }
 
 const ja: Catalog = {
@@ -202,6 +241,19 @@ const ja: Catalog = {
   'err.ocrUnreachable': 'OCR サービスに接続できません。ネットワークまたは設定を確認してください。',
   'err.baiduFailed': 'Baidu OCR が失敗しました。詳細はログを確認してください。',
   'err.unsupportedType': 'サポートされていないファイル形式です。epub、pdf、docx のみ対応しています。',
+  'log.ocrStart': 'OCR:{file}',
+  'log.converting': 'Calibre で {file} を変換中…',
+  'log.pageFailed': '{page} ページ目が失敗:{reason}',
+  'log.failedPages': 'OCR に失敗したページ:{pages}',
+  'log.baiduToken': 'Baidu OCR:アクセストークンを取得中…',
+  'log.baiduSubmit': 'Baidu OCR:ドキュメントをアップロード中…',
+  'log.baiduDownload': 'Baidu OCR:結果をダウンロード中…',
+  'log.baiduStatus': 'Baidu OCR:{status}',
+  'log.baiduStatus.pending': '待機中',
+  'log.baiduStatus.running': '処理中',
+  'log.baiduStatus.success': '完了',
+  'log.baiduStatus.failed': '失敗',
+  'settings.ocrProvider': 'OCR サービス',
 }
 
 const de: Catalog = {
@@ -251,6 +303,19 @@ const de: Catalog = {
   'err.ocrUnreachable': 'OCR-Dienst nicht erreichbar — Netzwerk oder Einstellungen prüfen.',
   'err.baiduFailed': 'Baidu-OCR fehlgeschlagen — Details im Protokoll.',
   'err.unsupportedType': 'Nicht unterstützter Dateityp — nur epub, pdf und docx werden unterstützt.',
+  'log.ocrStart': 'OCR läuft: {file}',
+  'log.converting': 'Konvertiere {file} mit Calibre…',
+  'log.pageFailed': 'Seite {page} fehlgeschlagen: {reason}',
+  'log.failedPages': 'Seiten mit OCR-Fehler: {pages}',
+  'log.baiduToken': 'Baidu OCR: Zugriffstoken wird angefordert…',
+  'log.baiduSubmit': 'Baidu OCR: Dokument wird hochgeladen…',
+  'log.baiduDownload': 'Baidu OCR: Markdown wird heruntergeladen…',
+  'log.baiduStatus': 'Baidu-OCR: {status}',
+  'log.baiduStatus.pending': 'in der Warteschlange',
+  'log.baiduStatus.running': 'wird verarbeitet',
+  'log.baiduStatus.success': 'fertig',
+  'log.baiduStatus.failed': 'fehlgeschlagen',
+  'settings.ocrProvider': 'OCR-Dienst',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }

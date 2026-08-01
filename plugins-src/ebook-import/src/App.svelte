@@ -1,5 +1,6 @@
 <script lang="ts">
   import { bridge } from './lib/bridge'
+  import { describeLog } from './lib/logs'
   import { setLocale, t, type MessageKey } from './lib/strings'
   import { describeError } from './lib/errors'
   import {
@@ -284,26 +285,43 @@
         {t('settings.root')}
         <input type="text" bind:value={ebooksRoot} />
       </label>
+
+      <!-- The two OCR services are alternatives, not a pair to fill in
+           together: showing both services' fields at once invited filling in
+           credentials for one while the other was selected. Pick the service,
+           configure only that one. `provider` is the same state the OCR
+           checkbox's selector binds to, so the two never disagree. -->
       <label>
-        {t('settings.wechatUrl')}
-        <input type="text" bind:value={wechatUrl} />
+        {t('settings.ocrProvider')}
+        <select bind:value={provider}>
+          <option value="wechat">{t('ocr.provider.wechat')}</option>
+          <option value="baidu">{t('ocr.provider.baidu')}</option>
+        </select>
       </label>
-      <label>
-        {t('settings.baiduKey')}
-        <input
-          type="password"
-          bind:value={baiduKeyInput}
-          placeholder={baiduKeySet ? '••••••••' : ''}
-        />
-      </label>
-      <label>
-        {t('settings.baiduSecret')}
-        <input
-          type="password"
-          bind:value={baiduSecretInput}
-          placeholder={baiduSecretSet ? '••••••••' : ''}
-        />
-      </label>
+
+      {#if provider === 'wechat'}
+        <label>
+          {t('settings.wechatUrl')}
+          <input type="text" bind:value={wechatUrl} />
+        </label>
+      {:else}
+        <label>
+          {t('settings.baiduKey')}
+          <input
+            type="password"
+            bind:value={baiduKeyInput}
+            placeholder={baiduKeySet ? '••••••••' : ''}
+          />
+        </label>
+        <label>
+          {t('settings.baiduSecret')}
+          <input
+            type="password"
+            bind:value={baiduSecretInput}
+            placeholder={baiduSecretSet ? '••••••••' : ''}
+          />
+        </label>
+      {/if}
 
       <div class="calibre-row">
         {#if calibreFound}
@@ -384,7 +402,7 @@
             </p>
           {/if}
           {#if expanded[item.id]}
-            <pre class="log">{item.logs.join('\n')}</pre>
+            <pre class="log">{item.logs.map(describeLog).join('\n')}</pre>
           {/if}
         </div>
       {/each}
@@ -466,7 +484,8 @@
     font-size: 11px;
     opacity: 0.8;
   }
-  .settings input {
+  .settings input,
+  .settings select {
     font: inherit;
     font-size: 13px;
     padding: 5px 7px;
