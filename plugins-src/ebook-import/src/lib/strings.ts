@@ -58,6 +58,7 @@ export type MessageKey =
   | 'err.baiduCredentials'
   | 'err.baiduAuth'
   | 'settings.baiduHint'
+  | 'ocr.baiduCost'
   | 'err.unsupportedType'
   | 'log.ocrStart'
   | 'log.converting'
@@ -88,7 +89,8 @@ const en: Catalog = {
   'settings.wechatUrl': 'WeChat OCR URL',
   'settings.baiduKey': 'Baidu API key',
   'settings.baiduHint':
-    'Baidu Cloud console → AI → OCR / Document parsing → Applications → create one; its API Key and Secret Key go below.',
+    'Baidu Cloud console → AI → OCR / Document parsing → Applications → create one; its API Key and Secret Key go below. Billed per page, roughly ¥0.1 (CNY) each.',
+  'ocr.baiduCost': 'Paid service — roughly ¥0.1 (CNY) per page',
   'settings.baiduSecret': 'Baidu secret key',
   'settings.calibre.found': 'Calibre found: {path} ({version})',
   'settings.calibre.missing': 'Calibre not found',
@@ -157,7 +159,8 @@ const zh: Catalog = {
   'settings.wechatUrl': '微信 OCR 地址',
   'settings.baiduKey': '百度 API Key',
   'settings.baiduHint':
-    '在百度智能云控制台 → 人工智能 → 文字识别/文档解析 → 应用列表 → 创建应用,把该应用的 API Key 和 Secret Key 填在下面。',
+    '在百度智能云控制台 → 人工智能 → 文字识别/文档解析 → 应用列表 → 创建应用,把该应用的 API Key 和 Secret Key 填在下面。按页计费,约 ¥0.1/页。',
+  'ocr.baiduCost': '按页付费,约 ¥0.1/页',
   'settings.baiduSecret': '百度 Secret Key',
   'settings.calibre.found': '已找到 Calibre：{path}（{version}）',
   'settings.calibre.missing': '未找到 Calibre',
@@ -226,7 +229,8 @@ const ja: Catalog = {
   'settings.wechatUrl': 'WeChat OCR の URL',
   'settings.baiduKey': 'Baidu API キー',
   'settings.baiduHint':
-    'Baidu Cloud コンソール → 人工知能 → 文字認識/文書解析 → アプリケーション一覧 → アプリを作成し、その API Key と Secret Key を下に入力します。',
+    'Baidu Cloud コンソール → 人工知能 → 文字認識/文書解析 → アプリケーション一覧 → アプリを作成し、その API Key と Secret Key を下に入力します。ページ単位の課金で、1 ページ約 0.1 元です。',
+  'ocr.baiduCost': '有料サービス — 1 ページ約 0.1 元',
   'settings.baiduSecret': 'Baidu シークレットキー',
   'settings.calibre.found': 'Calibre が見つかりました：{path}（{version}）',
   'settings.calibre.missing': 'Calibre が見つかりません',
@@ -295,7 +299,8 @@ const de: Catalog = {
   'settings.wechatUrl': 'WeChat-OCR-URL',
   'settings.baiduKey': 'Baidu-API-Schlüssel',
   'settings.baiduHint':
-    'Baidu-Cloud-Konsole → KI → Texterkennung/Dokumentanalyse → Anwendungen → eine anlegen; deren API Key und Secret Key gehören hier hinein.',
+    'Baidu-Cloud-Konsole → KI → Texterkennung/Dokumentanalyse → Anwendungen → eine anlegen; deren API Key und Secret Key gehören hier hinein. Abrechnung pro Seite, etwa ¥0,1 (CNY) je Seite.',
+  'ocr.baiduCost': 'Kostenpflichtig — etwa ¥0,1 (CNY) pro Seite',
   'settings.baiduSecret': 'Baidu-Geheimschlüssel',
   'settings.calibre.found': 'Calibre gefunden: {path} ({version})',
   'settings.calibre.missing': 'Calibre nicht gefunden',

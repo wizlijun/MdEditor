@@ -390,6 +390,12 @@
         <option value="wechat">{t('ocr.provider.wechat')}</option>
         <option value="baidu">{t('ocr.provider.baidu')}</option>
       </select>
+      <!-- Baidu bills per page, so a 300-page scan is real money. The settings
+           pane says so too, but it's collapsed — this is the spot where the
+           choice is actually made, right before Start. -->
+      {#if provider === 'baidu'}
+        <span class="cost">{t('ocr.baiduCost')}</span>
+      {/if}
     {/if}
     <span class="hint">{t('ocr.onlyPdf')}</span>
   </section>
@@ -595,6 +601,17 @@
   .ocr .hint {
     opacity: 0.5;
     font-size: 11px;
+  }
+  /* Warmer than .hint: spending money should register, without alarming. */
+  .ocr .cost {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 9px;
+    color: #8a5a00;
+    background: color-mix(in srgb, #e0a800 22%, transparent);
+  }
+  @media (prefers-color-scheme: dark) {
+    .ocr .cost { color: #f0c04a; }
   }
   .queue {
     flex: 1;
