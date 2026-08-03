@@ -1,7 +1,7 @@
 //! Thin wrapper over the `roam` CLI (@roam-research/roam-cli). Every argument
 //! is program-constructed — nothing is ever handed to a shell.
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -61,9 +61,17 @@ pub fn graphs_from_list(stdout: &str) -> Result<Vec<String>, String> {
 /// into the error so an authorization failure is visible to the user. The
 /// spawn/poll/kill mechanics live in `procutil::run_with_timeout`, shared
 /// with `discover::shell_lookup` so there's exactly one wait loop.
+///
+/// `roam` itself is a Node script behind `#!/usr/bin/env node` — a GUI-spawned
+/// process's lean PATH finds the executable (via `discover`) but not `node`,
+/// so `env` fails to resolve the interpreter. We spawn with an augmented PATH
+/// (login-shell PATH, or the well-known fallback dirs, prepended to whatever
+/// this process inherited) so `node` is reachable the same way `roam` was.
 pub fn run(exe: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut cmd = Command::new(exe);
     cmd.args(args);
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    cmd.env("PATH", crate::discover::augmented_path(&home));
     let out = crate::procutil::run_with_timeout(cmd, timeout)?;
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     if !out.status.success() {
