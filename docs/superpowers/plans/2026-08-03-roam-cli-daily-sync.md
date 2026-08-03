@@ -1216,7 +1216,7 @@ git commit -m "feat(roam-import): convert a Roam daily page into an outline tree
 1. `roam_uids` = roam 树全部节点 id 的集合;`local_by_id` = local 树按 id 索引。
 2. 从根层开始递归。某一层的输出列表:
    a. 先放该层全部 roam 子节点,按 roam 的 order。
-   b. 再按 local 原顺序处理该层「本地块」(id ∉ `roam_uids`):向前找最近的、**已经落在输出列表里**的同级前驱(可能是存活的 roam 块,也可能是刚插入的另一个本地块),插到它后面;找不到就插到列表**头部**(它原本就排在所有 roam 块之前)。
+   b. 再按 local 原顺序处理该层「本地块」(id ∉ `roam_uids`),三分支:向前找最近的、**已经落在输出列表里**的同级前驱(可能是存活的 roam 块,也可能是刚插入的另一个本地块)→ 插到它后面;没有前驱但有已落位的同级**后继** → 插到列表**头部**(它原本就排在所有 roam 块之前);两边都没有锚点 → 追加到**末尾**。(初稿只写了「找不到前驱就插头部」,与本任务的测试 `local_children_of_a_roam_block_survive` 冲突,已更正。)
 3. 同 uid 节点:`content`/`created_at`/`updated_at` 取 roam 版;`collapsed` 取 local 版(折叠是本地视图状态,不该被 Roam 覆盖);`persist_id` = true。
 4. 递归时 local 侧的父节点按 **id 全局查找**(块可能在 Roam 里被移到了别的父下)。
 5. 保留的本地子树整棵复制,但**丢弃其中 id ∈ `roam_uids` 的节点及其整棵子树** —— 那个块已经在 roam 结构里输出过了,它自己的本地子节点会在递归它时被捡回,不会丢也不会重。
