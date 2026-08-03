@@ -48,6 +48,35 @@ pub fn sanitize_dirname(input: &str) -> String {
     trimmed.chars().take(MAX_DIRNAME_CHARS).collect()
 }
 
+/// OKF v0.2 概念文档头(docs/okf-v0.2-format-constraints.md):`type` 是唯一
+/// 必填字段(§4.1),来源书文件按 §5.1 记进 `sources[].resource`。元数据缺失时
+/// 只降级为 type + sources —— 缺可选字段绝不影响合规(§11)。
+pub fn book_frontmatter(input_file: &str, meta: &BookMeta) -> String {
+    let mut out = String::from("---\ntype: Book\n");
+    if let Some(v) = &meta.title {
+        out.push_str(&format!("title: {}\n", yaml_quote(v)));
+    }
+    if let Some(v) = &meta.publisher {
+        out.push_str(&format!("publisher: {}\n", yaml_quote(v)));
+    }
+    if let Some(v) = &meta.language {
+        out.push_str(&format!("language: {}\n", yaml_quote(v)));
+    }
+    out.push_str("sources:\n");
+    out.push_str(&format!("  - resource: {}\n", yaml_quote(input_file)));
+    if let Some(v) = &meta.creator {
+        out.push_str(&format!("    author: {}\n", yaml_quote(v)));
+    }
+    out.push_str("---\n");
+    out
+}
+
+/// YAML 双引号标量:书名里的冒号/引号/反斜杠都必须转义,否则整份 frontmatter
+/// 不可解析(违反 §11 条件 1)。
+fn yaml_quote(v: &str) -> String {
+    format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 /// Writes config.txt in the exact key=value layout the downstream
 /// translation pipeline (ported from the original python script) parses.
 /// The `# Book Metadata` block and each key within it are emitted only
@@ -102,6 +131,49 @@ mod tests {
         assert_eq!(sanitize_dirname("x\u{0007}y"), "xy");
         assert_eq!(sanitize_dirname(&"字".repeat(300)).chars().count(), 200);
         assert_eq!(sanitize_dirname("   "), "");
+    }
+
+    #[test]
+    fn book_frontmatter_carries_type_title_and_source() {
+        let meta = BookMeta {
+            title: Some("7 Powers".into()),
+            creator: Some("Hamilton".into()),
+            publisher: None,
+            language: Some("en".into()),
+        };
+        let fm = book_frontmatter("/in/7powers.epub", &meta);
+        assert_eq!(
+            fm,
+            concat!(
+                "---\n",
+                "type: Book\n",
+                "title: \"7 Powers\"\n",
+                "language: \"en\"\n",
+                "sources:\n",
+                "  - resource: \"/in/7powers.epub\"\n",
+                "    author: \"Hamilton\"\n",
+                "---\n",
+            )
+        );
+    }
+
+    #[test]
+    fn book_frontmatter_degrades_to_type_and_source_only() {
+        let fm = book_frontmatter("/in/unknown.pdf", &BookMeta::default());
+        assert_eq!(
+            fm,
+            "---\ntype: Book\nsources:\n  - resource: \"/in/unknown.pdf\"\n---\n"
+        );
+    }
+
+    #[test]
+    fn book_frontmatter_escapes_quotes_and_backslashes() {
+        let meta = BookMeta {
+            title: Some("a \"quoted\" \\ title".into()),
+            ..Default::default()
+        };
+        let fm = book_frontmatter("/in/x.epub", &meta);
+        assert!(fm.contains("title: \"a \\\"quoted\\\" \\\\ title\"\n"));
     }
 
     #[test]

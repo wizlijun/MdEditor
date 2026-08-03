@@ -11,7 +11,8 @@ import { pushToast } from '../toast.svelte'
 import { sotvaultStore } from '../sotvault.svelte'
 import { isUnder } from '../recent-merge'
 import { joinPath } from '../fs'
-import { ensureOutlineFile } from './create'
+import { ensureOutlineFile, newPageFileText } from './create'
+import { CONCEPT_TYPE } from '../okf/concept'
 
 let unwatch: (() => void) | null = null
 let indexedRoot: string | null = null
@@ -105,7 +106,7 @@ export async function openPageOrCreate(target: string): Promise<void> {
       const dir = joinPath(vault, outlineDirs.wikipage)
       await mkdir(dir, { recursive: true }).catch(() => {})
       const path = joinPath(dir, `${safe}.note.md`)
-      await ensureOutlineFile(path, target)
+      await ensureOutlineFile(path, target, CONCEPT_TYPE.wikiPage)
       await openFile(path)
     } catch (e) {
       console.warn('[outline] create wiki page failed:', e)
@@ -120,7 +121,7 @@ export async function openPageOrCreate(target: string): Promise<void> {
   try {
     const { exists, writeTextFile } = await import('@tauri-apps/plugin-fs')
     if (!(await exists(path).catch(() => false))) {
-      await writeTextFile(path, `# ${safe}\n`)
+      await writeTextFile(path, newPageFileText(safe))
     }
     await openFile(path)
   } catch (e) {

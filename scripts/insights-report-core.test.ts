@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { mergeFiles, aggregate, renderOwnerDigest, resolvePreset, collectSessions, fmtInterval } from './insights-report-core.mjs'
+// @ts-expect-error - plain-JS lint core
+import { lintText } from './okf-lint-core.mjs'
 
 const files = [
   { name: '2026-07-08.DEV1.json', json: { deviceId: 'DEV1', deviceName: 'Mac', day: '2026-07-08', docs: { 'rel:a.md': { read_ms: 120000, edit_ms: 60000, edit_sessions: 2, mark_ops: 3, net_chars: 40, open_count: 1, first_seen_at: 0, last_active_at: 0 } } } },
@@ -70,5 +72,17 @@ describe('resolvePreset', () => {
   it('yesterday resolves to the prior day', () => {
     const now = Date.UTC(2026, 6, 8, 7, 0)
     expect(resolvePreset('yesterday', now, 480)).toEqual({ from: '2026-07-07', to: '2026-07-07' })
+  })
+})
+
+describe('renderOwnerDigest — OKF frontmatter', () => {
+  it('stamps a Reading Report concept head that passes the OKF hard constraints', () => {
+    const agg = aggregate(mergeFiles(files), '2026-07-08', '2026-07-08')
+    const md = renderOwnerDigest(agg, '2026-07-08', '2026-07-08')
+    expect(md.startsWith('---\ntype: Reading Report\ntitle: 阅读数据 · 2026-07-08\n---\n')).toBe(true)
+    expect(lintText('2026-07-08-daily-stat.md', md)).toEqual([])
+  })
+  it('stamps the empty-range digest too', () => {
+    expect(lintText('empty.md', renderOwnerDigest({}, '2026-07-08', '2026-07-08'))).toEqual([])
   })
 })

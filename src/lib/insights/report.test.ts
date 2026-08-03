@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { renderDailyReport, reportFilename } from './report'
 import type { InsightRow } from './dashboard.svelte'
+// @ts-expect-error - plain-JS lint core shared with scripts/okf-lint.mjs
+import { lintText } from '../../../scripts/okf-lint-core.mjs'
 
 function row(over: Partial<InsightRow>): InsightRow {
   return {
@@ -104,5 +106,18 @@ describe('fmtInterval', () => {
     const start = new Date(2026, 6, 8, 9, 0, 0).getTime()
     const end = start + 25 * 3_600_000 // +25h → a different calendar day
     expect(fmtInterval(start, end)).toMatch(/ → \d\d-\d\d \d\d:\d\d$/)
+  })
+})
+
+describe('renderDailyReport — OKF frontmatter', () => {
+  it('stamps a Reading Report concept head with the range as title', () => {
+    const { markdown } = renderDailyReport([row({ label: 'a.md', read_ms: 1000 })], '2026-07-08', '2026-07-08')
+    expect(markdown.startsWith('---\ntype: Reading Report\ntitle: 阅读数据 · 2026-07-08\n---\n')).toBe(true)
+    expect(lintText('2026-07-08-daily-stat.md', markdown)).toEqual([])
+  })
+  it('stamps the empty-range report too', () => {
+    const { markdown } = renderDailyReport([], '2026-07-01', '2026-07-07')
+    expect(lintText('2026-07-01_2026-07-07-stat.md', markdown)).toEqual([])
+    expect(markdown).toContain('title: 阅读数据 · 2026-07-01 → 2026-07-07')
   })
 })

@@ -264,14 +264,44 @@ interface SideView {
 
 ## 9. 从插件生成 / 编辑 .note.md
 
+> **写任何 `.md` 前先看 §9.1 的 OKF 硬约束**:frontmatter 必须有非空 `type`,否则产物不合规。
+
 `.note.md` = front-matter(YAML)+ bullet 大纲正文。主程序工具在 `src/lib/outline/`:
-- `frontmatter.ts` — `splitFrontmatterBlock()` 拆首部 YAML;`touchFrontmatter()` 补 `title`/`created`/`updated`。
+- `frontmatter.ts` — `splitFrontmatterBlock()` 拆首部 YAML;`touchFrontmatter()` 补 `type`/`title`/`created`/`updated`。
 - `markdown.ts` — `parseOutline()` ↔ `serializeOutline()` 往返(保留未知键)。
 - `model.ts` / `slug.ts` — 树模型与 slug。
 
 **插件用法**:把这几个文件**复制**进插件 `src/lib/outline/`(见 §2),在 UI 内组装文本,再 `host.vault.write({ path, content })` 落盘。`roam-import` 就是这么把 Roam 导出转成 `.note.md` 的。
 
 > 决策日志的 `open.decision.note.md` / `archive/*.note.md` 结构是 front-matter 里放 `decisions` 数组,正文是人类可读镜像——用复制过来的 `touchFrontmatter` + 自定义序列化即可,不必强套 outline 树。
+
+### 9.1 OKF 概念类型登记表(写 `.md` 必读)
+
+规范:`docs/okf-v0.2-format-constraints.md`;整改进度:`docs/okf-v0.2-conformance-audit.md`。
+
+**硬约束(插件产出的每一份 `.md` 都必须满足)**:
+
+1. 首部有可解析的 YAML frontmatter;
+2. frontmatter 有**非空 `type`**;
+3. 不要写名为 `index.md` / `log.md` 的概念文档(保留文件名)。
+
+**唯一生产入口**:主程序 `src/lib/okf/concept.ts` 的 `conceptFileText()` / `touchConceptFrontmatter()`(只补缺失键,已有键与顺序原样保留)。插件按 §2 复制该文件使用;后端(Rust)插件参考 `plugins-src/ebook-import/backend/src/bookconf.rs` 的 `book_frontmatter()`。
+
+**`type` 取值表**(OKF 不做中心注册,但项目内在 `src/lib/okf/concept.ts` 的 `CONCEPT_TYPE` 唯一登记;**新增写入点先在那里登记再用**):
+
+| type | 用于 |
+|------|------|
+| `Note` | 普通 markdown 笔记(⌘N 新建、vault 外建页) |
+| `Outline Note` | 伴生/大纲笔记 `.note.md` |
+| `Daily Note` | `dailynote/yyyy/yyyy-MM-dd.note.md` |
+| `Wiki Page` | `wikipage/<title>.note.md` |
+| `Book` | ebook-import 的 `book.md` |
+| `Reading Report` | Reading Insights 的阅读数据报告 |
+| `decision-board` / `decision-archive` | 决策日志(历史取值,保持不变) |
+
+**自检**:`pnpm okf:lint <目录>`(退出码非 0 即有违反);单测里可直接 `import { lintText } from 'scripts/okf-lint-core.mjs'` 断言产物合规。
+
+**读侧宽容义务(§11,MUST)**:缺可选字段、未知 `type`、未知附加键、断链一律不得拒绝文档;裸 `verified:` mapping 当单元素列表处理。
 
 ---
 

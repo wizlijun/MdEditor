@@ -6,6 +6,23 @@
 
 ---
 
+## 0. 整改进度
+
+**第 1 步(P0.1 + P0.2 + P2.3 的 lint)已完成**(2026-08-03):
+
+| 项 | 落点 |
+|----|------|
+| 唯一 frontmatter 生产入口 | `src/lib/okf/concept.ts`(`CONCEPT_TYPE` 登记表 + `touchConceptFrontmatter` / `conceptFileText`) |
+| 硬约束校验 | `scripts/okf-lint-core.mjs`(纯函数,单测与 CLI 共用)+ `scripts/okf-lint.mjs` + `pnpm okf:lint <目录>` |
+| 已接线的写入点 | ⌘N 新建(`src/lib/new-file.ts`)、`.note.md`/日记/wikipage(`src/lib/outline/frontmatter.ts` 的 `type` + `outlineConceptType`)、vault 外建页(`newPageFileText`)、insights 报告(前端 `report.ts` + CLI `insights-report-core.mjs`)、roam-import、ebook-import `book.md`(`bookconf::book_frontmatter`) |
+| 存量文件 | 不批量迁移;打开后**首次保存**时机会性补 `type`(只补缺失键,顺序不变) |
+| 开发规范 | `docs/plugin-v2-development.md` §9.1(类型登记表 + 硬约束 + 自检命令) |
+
+未做(按原计划排在后面):P0.3 迁移命令、P0.4 `index.md`/`log.md` 的读侧支持、P1 全部(actor / `verified` / `sources` / 分享元数据)、P2.1 导出插件、P2.2 Attested Computation。
+下文的发现明细保留审计当时的状态,便于对照。
+
+---
+
 ## 1. 审计范围与判定标准
 
 ### 1.1 什么算"受 OKF 约束"
@@ -13,7 +30,7 @@
 OKF 约束的是**知识包(Knowledge Bundle)的交换格式**,不是应用的全部磁盘产物。本审计按三条判定纳入范围:
 
 | 纳入 | 说明 |
-|------|------|
+| --- | --- |
 | A. vault 内的概念文档 | 用户/agent 读写的 `.md`、`.note.md`——vault 本身就是"可分发的知识集合",这正是 OKF 的分发单位 |
 | B. 程序/插件机器生成的文档 | roam-import、ebook-import、insights 报告、decision-log 看板、agent 答复——OKF v0.2 的全部新增字段族就是为"机器生成知识"设计的 |
 | C. 对外导出/分享产物 | share/publish 出去的 HTML、未来的导出包 |
@@ -33,7 +50,7 @@ OKF 约束的是**知识包(Knowledge Bundle)的交换格式**,不是应用的�
 ### 1.3 严重度分级
 
 | 级别 | 含义 |
-|------|------|
+| --- | --- |
 | **B(Blocking)** | 违反 OKF 硬约束(§11 三条)或消费者 MUST 规则——产物拿给任何 OKF 消费者都不合规 |
 | **S(Should)** | 违反 SHOULD/约定,或语义错位(字段名撞车、actor 格式不合) |
 | **O(Opportunity)** | 规范给了能力而我们完全没用(能力缺口,不是错误) |
@@ -42,8 +59,8 @@ OKF 约束的是**知识包(Knowledge Bundle)的交换格式**,不是应用的�
 
 ## 2. 结论总表
 
-| # | 写入点 | 证据 | frontmatter | `type` | 判定 |
-|---|--------|------|-------------|--------|------|
+| \# | 写入点 | 证据 | frontmatter | `type` | 判定 |
+| --- | --- | --- | --- | --- | --- |
 | 1 | 新建空白文档(⌘N) | `src/lib/tabs.svelte.ts:76-88` | ✗ 无 | ✗ | **B** |
 | 2 | `.note.md` 伴生/大纲笔记 | `src/lib/outline/create.ts:6-9`、`frontmatter.ts:24-34` | ✓ title/created/updated | ✗ | **B** |
 | 3 | wikipage 建页(vault 内) | `src/lib/outline/backlinks-io.svelte.ts:108` | ✓(同上) | ✗ | **B** |
@@ -178,10 +195,10 @@ export function touchConceptFrontmatter(raw: string | null, meta: ConceptMeta, n
 **P0.2 给每个写入点定 `type`**
 
 | 写入点 | 建议 `type` | 备注 |
-|--------|-------------|------|
+| --- | --- | --- |
 | `.note.md` 伴生/大纲笔记 | `Outline Note` | `title` 沿用现有值 |
-| wikipage 建页 | `Wiki Page` | |
-| 日记 | `Daily Note` | |
+| wikipage 建页 | `Wiki Page` |  |
+| 日记 | `Daily Note` |  |
 | 新建空白文档 | `Note` | 模板正文保持不变(那是产品调性) |
 | roam-import 导入页 | `Outline Note` | 另加 `sources`(见 P1.3) |
 | ebook-import `book.md` | `Book` | 元数据从 `config.txt` 迁入(见 P1.3) |
@@ -257,7 +274,7 @@ export const actor = {
 ## 5. 明确不改(取舍与理由)
 
 | 不改 | 理由 |
-|------|------|
+| --- | --- |
 | vault 内继续用 `[[wikilink]]` / `((block-ref))` | Obsidian 生态兼容 + 既有 file-over-app 硬原则;OKF 链接形态只在**导出时**转换(P2.1) |
 | 节点级 `::` 属性不迁进 frontmatter | Roam/Logseq 约定,是大纲笔记的核心数据结构;OKF 只管文档级 |
 | 不批量迁移历史文件 | 项目既有惯例 + git 历史保护 |
@@ -283,7 +300,7 @@ P1 的判据:`by::` 新写入全部匹配 `^(human:|process:|[^/]+/.+)`;人工�
 ## 7. 建议排期
 
 | 阶段 | 内容 | 规模 | 风险 |
-|------|------|------|------|
+| --- | --- | --- | --- |
 | 第 1 步 | P0.1 + P0.2 + P2.3 的 lint(先有尺子再改) | 中 | 低——只影响新写入 |
 | 第 2 步 | P0.3 迁移命令 + P0.4 保留文件名 | 小 | 低 |
 | 第 3 步 | P1.1 + P1.2(actor + verified) | 小 | 需同步改 AGENTS.md 模板与 llms-full.txt |

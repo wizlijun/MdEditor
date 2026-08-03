@@ -10,6 +10,7 @@ import { pushRecentFile, getRecentMode, setRecentMode } from './settings.svelte'
 import { startWatchingTab, stopWatchingTab, rebindTabPath } from './file-watcher.svelte'
 import { maybeAutoRefresh } from './mdblock/auto-refresh'
 import { quickNoteRenameTarget } from './quick-note-name'
+import { newFileText } from './new-file'
 
 export type Mode = 'source' | 'rich'
 
@@ -87,7 +88,7 @@ const newFileTemplates = [
 ]
 
 export function newFile(): void {
-  const content = newFileTemplates[Math.floor(Math.random() * newFileTemplates.length)]
+  const content = newFileText(newFileTemplates[Math.floor(Math.random() * newFileTemplates.length)])
   const currentTab = activeTab()
   const mode: Mode = currentTab && currentTab.kind !== 'image' ? currentTab.mode : 'source'
   const tab: Tab = {

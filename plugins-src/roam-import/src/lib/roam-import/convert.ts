@@ -40,10 +40,13 @@ export function convertPage(page: RoamPage, refUids: Set<string>, renames: Map<s
   // Daily notes must match note.md's native convention (src/lib/outline/daily.ts):
   // front-matter title is the `yyyy-MM-dd` date string itself, not Roam's English
   // "August 15th, 2022". Non-daily pages keep their original human title.
-  const displayTitle = dailyDateFromUid(page.uid) ?? page.title
+  const dailyDate = dailyDateFromUid(page.uid)
+  const displayTitle = dailyDate ?? page.title
   const tree = createTree()
   tree.frontmatter = touchFrontmatter(null, {
     title: displayTitle,
+    // 日记页与普通页的 OKF 类型不同(取值登记在宿主 src/lib/okf/concept.ts)
+    type: dailyDate ? 'Daily Note' : 'Outline Note',
     created: iso(page['create-time']),
     now: iso(page['edit-time']) ?? new Date().toISOString(),
   })

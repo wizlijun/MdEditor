@@ -1,6 +1,7 @@
 import type { InsightRow } from './dashboard.svelte'
 import { sessionMode } from './model'
 import type { AudienceSession } from './audience'
+import { CONCEPT_TYPE, conceptFileText } from '../okf/concept'
 
 const MODE_CN: Record<'read' | 'edit' | 'mixed', string> = { read: '读', edit: '编', mixed: '读+编' }
 
@@ -71,8 +72,11 @@ export function renderDailyReport(
   const filename = reportFilename(fromDay, toDay)
   const rangeLabel = fromDay === toDay ? fromDay : `${fromDay} → ${toDay}`
 
+  const head = (body: string): string =>
+    conceptFileText({ type: CONCEPT_TYPE.readingReport, title: `阅读数据 · ${rangeLabel}` }, body)
+
   if (rows.length === 0) {
-    return { filename, markdown: `# 阅读数据 · ${rangeLabel}\n\n此区间没有阅读或编辑记录。\n` }
+    return { filename, markdown: head(`# 阅读数据 · ${rangeLabel}\n\n此区间没有阅读或编辑记录。\n`) }
   }
 
   const totalEngage = rows.reduce((n, r) => n + r.read_ms + r.edit_ms, 0)
@@ -102,13 +106,13 @@ export function renderDailyReport(
     '',
   ]
 
-  const markdown = [
+  const markdown = head([
     `# 阅读数据 · ${rangeLabel}`, '', summary, '',
     header, divider, ...body, totals, '',
     ...intervalsSection(rows, audSessionsByDoc),
     ...links,
     '<sub>由 note.md Reading Insights 生成</sub>', '',
-  ].join('\n')
+  ].join('\n'))
 
   return { filename, markdown }
 }

@@ -7,7 +7,8 @@ import { syncAutoItems, regenerate as regenerateTree } from './sync'
 import { parseInline, eachInline } from './parser'
 import type { BacklinkIndex } from './backlinks'
 import { pageNameOf } from './backlinks'
-import { touchFrontmatter, fmHas } from './frontmatter'
+import { touchFrontmatter, fmHas, outlineConceptType } from './frontmatter'
+import { outlineDirs } from './dirs.svelte'
 
 export interface OutlineState {
   /** 全屏大纲 tab 模式:当前挂载的 .note.md 路径 */
@@ -135,6 +136,7 @@ export async function attachDoc(docPath: string, text: string, mainContent: stri
     if (info?.birthtime) {
       outline.tree.frontmatter = touchFrontmatter(outline.tree.frontmatter, {
         title: pageNameOf(docPath), created: new Date(info.birthtime).toISOString(),
+        type: outlineConceptType(docPath, outlineDirs),
       })
     }
   }
@@ -157,6 +159,7 @@ export function serializeDoc(touch = true): string {
   if (outline.docPath && touch) {
     outline.tree.frontmatter = touchFrontmatter(outline.tree.frontmatter, {
       title: pageNameOf(outline.docPath),
+      type: outlineConceptType(outline.docPath, outlineDirs),
     })
   }
   return serializeOutline(

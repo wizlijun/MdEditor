@@ -55,6 +55,7 @@ export async function ensureDailyNote(target: string): Promise<string | null> {
   const { mkdir } = await import('@tauri-apps/plugin-fs')
   await mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true }).catch(() => {})
   const { ensureOutlineFile } = await import('./create')
-  await ensureOutlineFile(path, target)
+  const { CONCEPT_TYPE } = await import('../okf/concept')
+  await ensureOutlineFile(path, target, CONCEPT_TYPE.dailyNote)
   return path
 }

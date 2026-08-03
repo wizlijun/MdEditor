@@ -86,9 +86,11 @@ export function collectSessions(files, fromDay, toDay) {
 
 export function renderOwnerDigest(agg, fromDay, toDay, sessionsByDoc = {}) {
   const rangeLabel = fromDay === toDay ? fromDay : `${fromDay} → ${toDay}`
+  // OKF 概念文档头(§4.1 必填 type);type 取值登记在 src/lib/okf/concept.ts
+  const head = (body) => `---\ntype: Reading Report\ntitle: 阅读数据 · ${rangeLabel}\n---\n${body}`
   const rows = Object.entries(agg).map(([docKey, c]) => ({ docKey, label: label(docKey), ...c }))
     .sort((a, b) => (b.read_ms + b.edit_ms) - (a.read_ms + a.edit_ms))
-  if (rows.length === 0) return `# 阅读数据 · ${rangeLabel}\n\n此区间没有阅读或编辑记录。\n`
+  if (rows.length === 0) return head(`# 阅读数据 · ${rangeLabel}\n\n此区间没有阅读或编辑记录。\n`)
   const totalEngage = rows.reduce((n, r) => n + r.read_ms + r.edit_ms, 0)
   const summary = `本区间你在 ${rows.length} 篇文档上共停留 ${fmtDuration(totalEngage)}，投入最多的是《${rows[0].label}》。`
   const header = '| 文档 | 阅读 | 编辑 | 编辑段 | 标注 |'
@@ -104,7 +106,7 @@ export function renderOwnerDigest(agg, fromDay, toDay, sessionsByDoc = {}) {
   })
   const intervals = blocks.length === 0 ? [] : ['## 时间段', '', ...blocks, '']
 
-  return [`# 阅读数据 · ${rangeLabel}`, '', summary, '', header, divider, ...body, totals, '', ...intervals, '<sub>由 note.md Reading Insights CLI 生成</sub>', ''].join('\n')
+  return head([`# 阅读数据 · ${rangeLabel}`, '', summary, '', header, divider, ...body, totals, '', ...intervals, '<sub>由 note.md Reading Insights CLI 生成</sub>', ''].join('\n'))
 }
 
 function dayKey(ms, tz) {

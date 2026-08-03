@@ -194,7 +194,7 @@ pub fn run_import(
     check_cancelled(ctx.cancelled)?;
 
     (ctx.progress)("finalize", None);
-    finalize(ctx.work, &dest)?;
+    finalize(ctx.work, &dest, &input.to_string_lossy(), &meta)?;
 
     Ok(dest)
 }
@@ -223,10 +223,17 @@ pub fn month_dir(d: chrono::NaiveDate) -> String {
 }
 
 /// Copies the finished work dir's outputs into `dest`: `config.txt` as-is,
-/// `input.md` renamed to `book.md` (the vault-facing name), and `images/`
-/// (if the run produced one -- Calibre HTMLZ extraction and Baidu's
-/// remote-image localization both write to `work/images/`) recursively.
-pub fn finalize(work: &Path, dest: &Path) -> Result<(), String> {
+/// `input.md` renamed to `book.md` (the vault-facing name) with an OKF
+/// concept head prepended (`type: Book` + the source book as `sources[]`,
+/// see bookconf::book_frontmatter), and `images/` (if the run produced one
+/// -- Calibre HTMLZ extraction and Baidu's remote-image localization both
+/// write to `work/images/`) recursively.
+pub fn finalize(
+    work: &Path,
+    dest: &Path,
+    input_file: &str,
+    meta: &bookconf::BookMeta,
+) -> Result<(), String> {
     std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
 
     let config_src = work.join("config.txt");
@@ -236,13 +243,14 @@ pub fn finalize(work: &Path, dest: &Path) -> Result<(), String> {
     }
 
     let input_md = work.join("input.md");
-    std::fs::copy(&input_md, dest.join("book.md")).map_err(|e| {
-        format!(
-            "copy {} -> {}: {e}",
-            input_md.display(),
-            dest.join("book.md").display()
-        )
-    })?;
+    let markdown = std::fs::read_to_string(&input_md)
+        .map_err(|e| format!("read {}: {e}", input_md.display()))?;
+    let book_md = dest.join("book.md");
+    std::fs::write(
+        &book_md,
+        format!("{}{markdown}", bookconf::book_frontmatter(input_file, meta)),
+    )
+    .map_err(|e| format!("write {}: {e}", book_md.display()))?;
 
     let images_src = work.join("images");
     if images_src.exists() {
@@ -335,10 +343,12 @@ mod tests {
             vault.join("ssot/ebooks").join(&month).join("My Book"),
             "dest must be <vault>/<ebooks_root>/<YYYY-MM>/<Title>"
         );
-        assert_eq!(
-            std::fs::read_to_string(dest.join("book.md")).unwrap(),
-            "# Stub Content"
+        let book_md = std::fs::read_to_string(dest.join("book.md")).unwrap();
+        assert!(
+            book_md.starts_with("---\ntype: Book\ntitle: \"My Book\"\n"),
+            "book.md must open with an OKF concept head, got: {book_md}"
         );
+        assert!(book_md.ends_with("---\n# Stub Content"), "got: {book_md}");
         let cfg = std::fs::read_to_string(dest.join("config.txt")).unwrap();
         assert!(cfg.contains("conversion_method=ocr"), "got: {cfg}");
         assert!(cfg.contains("original_title=My Book"), "got: {cfg}");
@@ -375,14 +385,23 @@ mod tests {
         std::fs::write(work.join("images/pic.png"), [1, 2, 3]).unwrap();
 
         let dest = tmp.path().join("dest/Some Book");
-        finalize(&work, &dest).unwrap();
+        let meta = crate::bookconf::BookMeta {
+            title: Some("Some Book".into()),
+            ..Default::default()
+        };
+        finalize(&work, &dest, "/in/some-book.epub", &meta).unwrap();
 
         assert!(dest.join("config.txt").exists());
         assert!(dest.join("book.md").exists());
         assert!(dest.join("images/pic.png").exists());
         assert_eq!(
             std::fs::read_to_string(dest.join("book.md")).unwrap(),
-            std::fs::read_to_string(work.join("input.md")).unwrap()
+            format!(
+                "{}{}",
+                crate::bookconf::book_frontmatter("/in/some-book.epub", &meta),
+                std::fs::read_to_string(work.join("input.md")).unwrap()
+            ),
+            "book.md is the converted markdown prefixed with its OKF concept head"
         );
     }
 
