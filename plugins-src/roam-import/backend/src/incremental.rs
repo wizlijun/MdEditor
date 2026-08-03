@@ -47,7 +47,7 @@ use crate::convert::iso_ms;
 use crate::ledger::Ledger;
 use crate::roam_page::RoamPage;
 use crate::route::route_page;
-use crate::sync::{is_safe_rel_dir, sync_page};
+use crate::sync::{is_safe_rel_dir, sync_page, TitlePolicy};
 use chrono::{Duration, Local, NaiveDate, TimeZone, Utc};
 use serde::Serialize;
 use std::path::Path;
@@ -237,7 +237,19 @@ fn sync_one(
         return Ok(true);
     }
 
-    let outcome = sync_page(vault, &target.rel, Some(page), &target.title, target.concept_type, now)?;
+    // The one case where a `title:` already on disk is not the user's to keep:
+    // Roam renamed the page, so the sync *knows* the old one is wrong. Without
+    // this the file name, the front-matter and the ledger disagree forever —
+    // `touch_frontmatter` only fills a *missing* title, and a post-rename sync
+    // usually has nothing else to write, so no later run repairs it. Scoped to
+    // exactly this branch: everywhere else, an existing title stays.
+    let title_policy = match target.rename_from {
+        Some(_) => TitlePolicy::Refresh,
+        None => TitlePolicy::KeepExisting,
+    };
+    let outcome = sync_page(
+        vault, &target.rel, Some(page), &target.title, target.concept_type, now, title_policy,
+    )?;
     ledger.claim(uid, &target.rel, &page.title);
     Ok(outcome.wrote || moved)
 }
@@ -499,6 +511,69 @@ mod tests {
         assert!(!dir.path().join("wikipage/旧名.note.md").exists(), "the old file must be moved, not left behind");
         let moved = std::fs::read_to_string(dir.path().join("wikipage/新名.note.md")).unwrap();
         assert!(moved.contains("我自己写的"), "a rename must not lose what the user wrote");
+        // I3. The file name says 新名, the ledger says 新名 — and the
+        // front-matter has to as well. `touch_frontmatter` only fills a
+        // *missing* title, and the sync after a rename usually has nothing
+        // else to write (`wrote == false`), so if this one does not fix it,
+        // nothing ever does.
+        assert!(moved.contains("title: 新名"), "the front-matter title is still stale:\n{moved}");
+        assert!(!moved.contains("旧名"), "the old title survived the rename:\n{moved}");
+        assert_eq!(crate::ledger::Ledger::load(dir.path()).ledger.path_of("u"),
+                   Some("wikipage/新名.note.md"));
+    }
+
+    /// The half of I3 that makes it worth doing at all: a rename whose *only*
+    /// change is the name. Roam sent byte-identical blocks, so the merge has
+    /// nothing to say and the note's body does not move — which is exactly
+    /// when the old code left the title stale forever. The file still has to
+    /// come out with the new title, and the run has to report it as synced
+    /// rather than skipped.
+    #[test]
+    fn a_rename_with_no_content_change_still_fixes_the_title() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("wikipage")).unwrap();
+        // Exactly what an earlier sync of this page would have left behind.
+        let before = "---\ntype: Wiki Page\ntitle: 旧名\ncreated: 2026-08-01T16:00:05.019Z\n\
+                      updated: 2026-08-02T10:00:00.000Z\n---\n- from roam\n  id:: u-b1\n";
+        std::fs::write(dir.path().join("wikipage/旧名.note.md"), before).unwrap();
+        let mut l = crate::ledger::Ledger::default();
+        l.claim("u", "wikipage/旧名.note.md", "旧名");
+        l.save(dir.path()).unwrap();
+
+        let r = sync_since(
+            dir.path(), DIRS, None, today(), NOW, false,
+            |_| Ok(vec![Changed { uid: "u".into(), edited: 1000 }]),
+            |_| Ok(Some(page("u", "新名", "from roam"))),
+        ).unwrap();
+
+        assert_eq!(r.synced, 1, "the file moved and its title changed — that is a sync");
+        let moved = std::fs::read_to_string(dir.path().join("wikipage/新名.note.md")).unwrap();
+        assert!(moved.contains("title: 新名"), "{moved}");
+        assert!(moved.contains("- from roam"), "{moved}");
+    }
+
+    /// The tension I3 has to respect: `touch_frontmatter` never overwriting a
+    /// title is a rule the shared fixture pins, and it stays true for every
+    /// sync that is not a rename — including one where the user retitled the
+    /// note themselves.
+    #[test]
+    fn a_sync_that_is_not_a_rename_leaves_a_hand_written_title_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("wikipage")).unwrap();
+        std::fs::write(dir.path().join("wikipage/回顾系统.note.md"),
+            "---\ntype: Wiki Page\ntitle: 我给它起的名字\n---\n- 我自己写的\n").unwrap();
+        let mut l = crate::ledger::Ledger::default();
+        l.claim("u", "wikipage/回顾系统.note.md", "回顾系统");
+        l.save(dir.path()).unwrap();
+
+        sync_since(
+            dir.path(), DIRS, None, today(), NOW, false,
+            |_| Ok(vec![Changed { uid: "u".into(), edited: 1000 }]),
+            |_| Ok(Some(page("u", "回顾系统", "from roam"))),
+        ).unwrap();
+
+        let text = std::fs::read_to_string(dir.path().join("wikipage/回顾系统.note.md")).unwrap();
+        assert!(text.contains("title: 我给它起的名字"), "the user's own title was overwritten:\n{text}");
     }
 
     #[test]
