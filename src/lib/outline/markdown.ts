@@ -114,11 +114,17 @@ export function parseOutline(text: string): OutlineTree {
       continue
     }
     if (raw.trim() === '') continue
-    const bullet = raw.match(/^((?:  )*)- (.*)$/)
+    // `-(?: (.*))?$`:空块被序列化成 `- `——破折号 + 空格 + 空内容,于是行尾空格承载了语义。
+    // 编辑器/格式化器/git 钩子例行删行尾空白,而 file-over-app 把「vault 被外部改过」当常态。
+    // 因此「只有缩进和一个 `-`」的行同样是空 bullet。写入端一个字节不改:修解析即修全部存量文件。
+    // 必须是「`-` 后紧跟行尾或一个空格」,不能写成 `- ?`——否则 `--`/`---`(front-matter 围栏、
+    // 分隔线)会被误认成 bullet。front-matter 在 bullet 扫描之前就已被 splitFrontmatterBlock 切走。
+    const bullet = raw.match(/^((?:  )*)-(?: (.*))?$/)
     if (bullet) {
-      current = push(bullet[1].length / 2, bullet[2])
+      const content = bullet[2] ?? ''
+      current = push(bullet[1].length / 2, content)
       currentDepth = bullet[1].length / 2
-      const open = bullet[2].match(/^(`{3,})/)
+      const open = content.match(/^(`{3,})/)
       if (open) fenceLen = open[1].length      // 进入 raw 模式
       continue
     }

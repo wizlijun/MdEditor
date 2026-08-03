@@ -69,9 +69,21 @@ pub fn split_frontmatter_block(text: &str) -> (Option<String>, String) {
     }
 }
 
+/// A bullet: two-space indent units, then `-`, then either the end of the line
+/// or a single space and the content. The "end of the line" half is what makes
+/// an *empty* bullet survive a round trip through the outside world: it is
+/// written as `- ` (dash, space, empty content), so the trailing space would
+/// otherwise be load-bearing — and editors, formatters and git hooks strip
+/// trailing whitespace routinely, while file-over-app treats an externally
+/// edited vault file as normal input. Mirrors markdown.ts.
+///
+/// The optional group must be `(?: (.*))?`, never `- ?`: the latter would read
+/// `--` and `---` (front-matter fence, horizontal rule) as bullets. The
+/// front-matter fence is in any case already split off `text` before any line
+/// reaches here.
 fn bullet_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^((?:  )*)- (.*)$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^((?:  )*)-(?: (.*))?$").unwrap())
 }
 
 fn prop_pattern() -> &'static Regex {
@@ -306,7 +318,10 @@ pub fn parse_outline(text: &str) -> Tree {
         }
         if let Some(caps) = bullet_pattern().captures(raw) {
             let depth = caps[1].len() / 2;
-            let rest = caps[2].to_string();
+            // Group 2 is absent for an empty bullet written without its
+            // trailing space (`-` alone) — that is an empty content, not a
+            // missing bullet.
+            let rest = caps.get(2).map_or(String::new(), |m| m.as_str().to_string());
             if let Some(open_len) = fence_open_len(&rest) {
                 fence_len = open_len;
             }
@@ -797,6 +812,129 @@ mod tests {
         // Comments are not content the keys may be appended *into*, but they
         // are kept — with the blank separator the host's serializer writes.
         assert_eq!(touch(Some("# a\n# b")), "# a\n# b\n\ntype: TY\ntitle: T\ncreated: C\nupdated: N");
+    }
+
+    /// An empty Roam block is serialized as `- ` — a dash, a space, and
+    /// nothing else — which makes the *trailing space* load-bearing. Editors,
+    /// formatters and git hooks strip trailing whitespace as a matter of
+    /// course, and file-over-app treats an externally edited vault file as
+    /// normal input. Once the space is gone, `-` used to fall through to the
+    /// "unclassifiable line" branch: flat, it degraded into a node whose
+    /// content is `-` (re-serialized as `- -`, one level worse every save);
+    /// nested, the child vanished entirely and its `created::`/`id::` lines
+    /// became literal text inside the *parent*. So a line of nothing but
+    /// indentation and `-` is an empty bullet, exactly as `- ` is. The
+    /// serializer is deliberately unchanged: fixing the parser repairs every
+    /// file already on disk without touching a byte of anyone's vault.
+    #[test]
+    fn a_bare_dash_is_an_empty_bullet() {
+        let t = parse_outline("-\n");
+        assert_eq!(t.nodes.len(), 1);
+        assert_eq!(t.nodes[0].content, "");
+    }
+
+    #[test]
+    fn properties_after_a_bare_dash_attach_to_it_not_to_the_previous_node() {
+        let t = parse_outline("- kept\n-\n  created:: 2026-08-03T14:11:47.891Z\n  id:: X\n");
+        assert_eq!(t.nodes.len(), 2);
+        assert_eq!(t.nodes[0].content, "kept");
+        assert_eq!(t.nodes[0].created_at, None);
+        assert_eq!(t.nodes[1].content, "");
+        assert_eq!(t.nodes[1].created_at.as_deref(), Some("2026-08-03T14:11:47.891Z"));
+        assert_eq!(t.nodes[1].id, "X");
+    }
+
+    /// The case that actually destroyed a user's data: the child disappeared
+    /// and `created:: …` showed up as a node's visible name.
+    #[test]
+    fn a_nested_bare_dash_stays_a_real_child() {
+        let t = parse_outline("- parent\n  -\n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n");
+        assert_eq!(t.nodes.len(), 2);
+        let parent = &t.nodes[0];
+        let child = &t.nodes[1];
+        assert_eq!(parent.content, "parent", "property lines must not leak into the parent");
+        assert_eq!(child.content, "");
+        assert_eq!(child.id, "x");
+        assert_eq!(child.parent.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(child.created_at.as_deref(), Some("2026-08-03T14:11:47.891Z"));
+    }
+
+    #[test]
+    fn a_file_that_still_has_the_trailing_space_parses_the_same_way() {
+        let with_space = parse_outline("- parent\n  - \n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n");
+        let stripped = parse_outline("- parent\n  -\n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n");
+        let shape = |t: &Tree| -> Vec<(String, Option<String>, Option<String>)> {
+            t.nodes.iter().map(|n| (n.content.clone(), n.parent.clone(), n.created_at.clone())).collect()
+        };
+        assert_eq!(shape(&stripped), shape(&with_space));
+    }
+
+    /// The serializer is untouched, so a healed file is written back *with*
+    /// the trailing space — and parsing that again is a fixed point. No
+    /// `- -` degradation, no oscillation between the two spellings.
+    #[test]
+    fn a_stripped_empty_bullet_heals_and_then_holds_still() {
+        let stripped = "- parent\n  -\n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n";
+        let healed = "- parent\n  - \n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n";
+        assert_eq!(serialize_outline(&parse_outline(stripped)), healed);
+        assert_eq!(serialize_outline(&parse_outline(healed)), healed);
+        assert_eq!(serialize_outline(&parse_outline("-\n")), "- \n");
+        assert_eq!(serialize_outline(&parse_outline("- \n")), "- \n");
+    }
+
+    /// The bullet rule must stay narrow: `-` counts only when the line ends
+    /// there or a single space follows. `- ?` would swallow `--` and `---`.
+    #[test]
+    fn dash_runs_and_a_dash_as_content_are_unaffected() {
+        // A `---` in the *body* is not front-matter (that split happens on the
+        // whole text, before any bullet is scanned) and not a bullet either.
+        let rule = parse_outline("- A\n---\n");
+        assert_eq!(rule.frontmatter, None);
+        assert_eq!(rule.nodes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>(), vec!["A", "---"]);
+        let dashes = parse_outline("- A\n--\n");
+        assert_eq!(dashes.nodes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>(), vec!["A", "--"]);
+        // Real front-matter still gets split off ahead of the bullet scan.
+        let fm = parse_outline("---\ntitle: x\n---\n- A\n");
+        assert_eq!(fm.frontmatter.as_deref(), Some("title: x"));
+        assert_eq!(fm.nodes.len(), 1);
+        assert_eq!(fm.nodes[0].content, "A");
+        // `- -` is still a bullet whose content is "-".
+        let dash_content = parse_outline("- -\n");
+        assert_eq!(dash_content.nodes.len(), 1);
+        assert_eq!(dash_content.nodes[0].content, "-");
+        assert_eq!(serialize_outline(&dash_content), "- -\n");
+    }
+
+    /// Indentation is still counted in two-space units: an odd-indent `-` must
+    /// do whatever an odd-indent `- x` does today (be absorbed as the previous
+    /// node's continuation line), not quietly become a bullet.
+    #[test]
+    fn an_odd_indent_bare_dash_behaves_like_an_odd_indent_bullet() {
+        assert_eq!(parse_outline("- A\n   - x\n").nodes[0].content, "A\n - x");
+        assert_eq!(parse_outline("- A\n   -\n").nodes[0].content, "A\n -");
+        // With no previous node to continue, both demote to a root node.
+        assert_eq!(parse_outline("   - x\n").nodes[0].content, "- x");
+        assert_eq!(parse_outline("   -\n").nodes[0].content, "-");
+    }
+
+    /// The two id guards must keep holding for empty bullets: a repeated
+    /// `id::` is refused, and a `local-N`-shaped one cannot steal the
+    /// placeholder a later node will be handed.
+    #[test]
+    fn the_id_guards_still_hold_for_empty_bullets() {
+        let t = parse_outline("- parent\n  id:: dup\n  -\n    id:: dup\n");
+        assert_eq!(t.nodes.len(), 2);
+        let child = &t.nodes[1];
+        assert_eq!(child.content, "");
+        assert_ne!(child.id, "dup");
+        assert!(!child.persist_id);
+        assert_eq!(child.parent.as_deref(), Some("dup"));
+        assert_eq!(serialize_outline(&t), "- parent\n  id:: dup\n  - \n");
+
+        let t = parse_outline("-\n  id:: local-2\n  - b\n");
+        let b = t.nodes.iter().find(|n| n.content == "b").unwrap();
+        assert_ne!(b.parent.as_deref(), Some(b.id.as_str()));
+        assert_eq!(serialize_outline(&t), "- \n  - b\n");
     }
 
     #[test]
