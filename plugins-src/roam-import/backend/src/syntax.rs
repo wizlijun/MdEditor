@@ -20,16 +20,49 @@ fn map_non_code(s: &str, f: impl Fn(&str) -> String) -> String {
     out
 }
 
-fn re(p: &str) -> Regex { Regex::new(p).unwrap() }
+fn embed_bracket_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\{\{\[\[embed\]\]:\s*\(\(([a-zA-Z0-9_-]+)\)\)\s*\}\}").unwrap())
+}
+
+fn embed_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\{\{embed:\s*\(\(([a-zA-Z0-9_-]+)\)\)\s*\}\}").unwrap())
+}
+
+fn underscore_italic_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"__([^_\n](?:[^\n]*?[^_\n])?)__").unwrap())
+}
+
+fn hashtag_link_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"#\[\[([^\]\n]+)\]\]").unwrap())
+}
+
+fn iso_date_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^([A-Za-z]+) (\d{1,2})(?:st|nd|rd|th), (\d{4})$").unwrap())
+}
+
+fn wikilink_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\[\[([^\]\n]+)\]\]").unwrap())
+}
+
+fn reserved_prop_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(type|line|id|collapsed|created|updated|status|answered|by):: ").unwrap())
+}
 
 pub fn convert_inline(s: &str) -> String {
     map_non_code(s, |seg| {
-        let seg = re(r"\{\{\[\[embed\]\]:\s*\(\(([a-zA-Z0-9_-]+)\)\)\s*\}\}").replace_all(seg, "(($1))");
-        let seg = re(r"\{\{embed:\s*\(\(([a-zA-Z0-9_-]+)\)\)\s*\}\}").replace_all(&seg, "(($1))");
+        let seg = embed_bracket_pattern().replace_all(seg, "(($1))");
+        let seg = embed_pattern().replace_all(&seg, "(($1))");
         let seg = seg.replace("{{[[TODO]]}}", "[ ]").replace("{{[[DONE]]}}", "[x]")
                      .replace("{{TODO}}", "[ ]").replace("{{DONE}}", "[x]");
-        let seg = re(r"__([^_\n](?:[^\n]*?[^_\n])?)__").replace_all(&seg, "*$1*");
-        re(r"#\[\[([^\]\n]+)\]\]").replace_all(&seg, "[[$1]]").into_owned()
+        let seg = underscore_italic_pattern().replace_all(&seg, "*$1*");
+        hashtag_link_pattern().replace_all(&seg, "[[$1]]").into_owned()
     })
 }
 
@@ -41,7 +74,7 @@ const MONTHS: [(&str, &str); 12] = [
 
 /// Roam's daily title ("August 15th, 2022") → "2022-08-15"; anything else None.
 pub fn to_iso_date(target: &str) -> Option<String> {
-    let caps = re(r"^([A-Za-z]+) (\d{1,2})(?:st|nd|rd|th), (\d{4})$").captures(target)?;
+    let caps = iso_date_pattern().captures(target)?;
     let mo = MONTHS.iter().find(|(n, _)| *n == caps[1].to_lowercase())?.1;
     let dd: u32 = caps[2].parse().ok()?;
     if !(1..=31).contains(&dd) { return None; }
@@ -52,7 +85,7 @@ pub fn to_iso_date(target: &str) -> Option<String> {
 /// titles must be rewritten or the link points at nothing.
 pub fn normalize_date_links(s: &str) -> String {
     map_non_code(s, |seg| {
-        re(r"\[\[([^\]\n]+)\]\]")
+        wikilink_pattern()
             .replace_all(seg, |c: &Captures| match to_iso_date(&c[1]) {
                 Some(iso) => format!("[[{iso}]]"),
                 None => c[0].to_string(),
@@ -64,7 +97,7 @@ pub fn normalize_date_links(s: &str) -> String {
 /// A continuation line shaped like a node property would be swallowed by
 /// parse_outline. One leading space keeps it content (renders the same).
 pub fn escape_reserved_props(s: &str) -> String {
-    let prop = re(r"^(type|line|id|collapsed|created|updated|status|answered|by):: ");
+    let prop = reserved_prop_pattern();
     s.split('\n')
         .enumerate()
         .map(|(i, ln)| if i > 0 && prop.is_match(ln) { format!(" {ln}") } else { ln.to_string() })
