@@ -57,7 +57,14 @@ pub fn iso_ms(ms: Option<i64>) -> Option<String> {
 /// Anyone teaching `parse_outline` a fourth structural shape has to teach it
 /// to this function in the same commit.
 fn block_content(b: &RoamBlock) -> String {
-    let s = normalize_date_links(&convert_inline(&b.string));
+    // `\r` first, before anything looks at lines: `parse_outline` strips it at
+    // its own entry (line-ending noise, never content), so a `\r` written here
+    // is by definition not what is read back — and this function's whole
+    // contract is "the exact form `parse_outline` will read it back". Doing it
+    // first also means the fence tracking below and the parser agree on where
+    // the lines are.
+    let s = b.string.replace('\r', "");
+    let s = normalize_date_links(&convert_inline(&s));
     // The heading prefix comes before both fence-aware steps on purpose: with
     // it, the first line no longer *starts* with backticks, so it opens no
     // fence at all — and `parse_outline` reads it back the same way. Prefixing
@@ -308,6 +315,17 @@ mod tests {
     fn an_empty_bullet_shaped_continuation_line_stays_content() {
         assert_eq!(survives_a_round_trip("shopping\n-\nmilk"), "shopping\n -\nmilk");
         assert_eq!(survives_a_round_trip("outline\n  -\n    -"), "outline\n   -\n     -");
+    }
+
+    /// A Roam block whose text carries a `\r` (Windows-authored, or a Roam
+    /// soft break): `parse_outline` strips `\r` at its entry now, so a block
+    /// written with one is NOT what is read back — the round-trip contract in
+    /// this function's doc comment ("the exact form `parse_outline` will read
+    /// it back") fails unless the conversion normalises it too.
+    #[test]
+    fn a_block_carrying_a_carriage_return_is_normalised_before_it_is_written() {
+        assert_eq!(survives_a_round_trip("a\r\nb"), "a\nb");
+        assert_eq!(survives_a_round_trip("lone\rcr"), "lonecr");
     }
 
     /// C3: a fence the block opens and never closes put `parse_outline` into a

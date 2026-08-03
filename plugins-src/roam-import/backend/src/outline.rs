@@ -5,6 +5,7 @@
 //! this must parse/serialize byte-identically to the TS side; the golden
 //! fixture in Task 7 is what catches drift, keep the two in step.
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// One outline bullet. `parent`/`order`/`content` mirror the TS `OutlineNode`
@@ -267,8 +268,30 @@ fn apply_prop(tree: &mut Tree, idx: usize, key: &str, value: &str) {
     }
 }
 
+/// `\r` is line-ending noise, never content.
+///
+/// A `.note.md` comes back from the outside world — a Windows editor, a
+/// `core.autocrlf` checkout, a synced file — which is the traffic
+/// file-over-app promises to survive. The host's parser is JavaScript, where
+/// `.` and `$` both treat `\r` as a line terminator: a bullet line ending
+/// `\r` fails its bullet regex outright and collapses into its parent, the
+/// same data loss an empty bullet suffered when its trailing space was
+/// stripped. Rust's `regex` crate matches `\r` with `.`, so the two ports
+/// disagreed about whether a CRLF file even has nodes — unacceptable when one
+/// vault is read by several agents.
+///
+/// Stripping once at the parser entry (rather than sprinkling `\r?` through
+/// every pattern) is one place per side, byte-identical between the ports,
+/// and needs no reasoning about JS-vs-Rust regex dialects. Stated plainly: a
+/// CRLF file that is read and rewritten comes back as LF. The serializer is
+/// untouched.
+fn strip_carriage_returns(text: &str) -> Cow<'_, str> {
+    if text.contains('\r') { Cow::Owned(text.replace('\r', "")) } else { Cow::Borrowed(text) }
+}
+
 pub fn parse_outline(text: &str) -> Tree {
-    let (frontmatter, body) = split_frontmatter_block(text);
+    let text = strip_carriage_returns(text);
+    let (frontmatter, body) = split_frontmatter_block(&text);
     let mut tree = Tree { frontmatter, nodes: Vec::new() };
 
     let mut stack: Vec<Option<usize>> = Vec::new();
@@ -703,6 +726,108 @@ mod tests {
         assert_eq!(t.nodes[0].id, "dup");
         assert_ne!(t.nodes[1].id, "dup");
         assert_eq!(serialize_outline(&t), "- first\n  id:: dup\n- second\n");
+    }
+
+    // Fix F. Same disease as the trailing space: one invisible byte decides
+    // whether a node exists. In JavaScript `.` and `$` treat `\r` as a line
+    // terminator, so a bullet line ending `\r` fails the host's bullet regex
+    // and collapses into its parent — child gone, properties leaked into the
+    // parent's text. Rust's regex crate matches it, so the two ports disagreed
+    // about whether a CRLF file even has nodes. CRLF arrives from outside (a
+    // Windows editor, a `core.autocrlf` checkout, a synced file), which is
+    // exactly the traffic file-over-app promises to survive.
+    //
+    // Both ports now strip every `\r` at the parser entry — line-ending noise,
+    // never content. One place per side, so the next person has nowhere to
+    // miss, and no reasoning about JS-vs-Rust regex dialects is needed.
+    //
+    // The inputs and expectations below are the same, byte for byte, as the
+    // host's `markdown.test.ts` CRLF suite: "both ports yield the same tree
+    // for the same input" is the actual product requirement here.
+
+    /// LF twin of the CRLF fixture, and what a CRLF file is rewritten as.
+    const CRLF_LF_TWIN: &str = "---\ntitle: x\ncreated: y\n---\n- parent\n  - child\n    created:: 2026-08-03T14:11:47.891Z\n    id:: c1\n- after\n";
+
+    #[test]
+    fn a_crlf_file_parses_to_the_same_tree_as_its_lf_twin() {
+        let crlf = CRLF_LF_TWIN.replace('\n', "\r\n");
+        assert_eq!(
+            serialize_outline(&parse_outline(&crlf)),
+            serialize_outline(&parse_outline(CRLF_LF_TWIN))
+        );
+        // …and that is the LF text itself: the serializer is untouched, so a
+        // CRLF file read and rewritten comes back as LF.
+        assert_eq!(serialize_outline(&parse_outline(&crlf)), CRLF_LF_TWIN);
+        assert_eq!(parse_outline(&crlf).frontmatter.as_deref(), Some("title: x\ncreated: y"));
+    }
+
+    /// The data-loss shape, with CRLF instead of a stripped trailing space.
+    #[test]
+    fn a_nested_child_survives_crlf() {
+        let t = parse_outline("- parent\r\n  - child\r\n    created:: 2026-08-03T14:11:47.891Z\r\n    id:: x\r\n");
+        assert_eq!(t.nodes.len(), 2);
+        let parent = &t.nodes[0];
+        let child = &t.nodes[1];
+        assert_eq!(parent.content, "parent", "property lines must not leak into the parent");
+        assert_eq!(child.content, "child");
+        assert_eq!(child.id, "x");
+        assert_eq!(child.parent.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(child.created_at.as_deref(), Some("2026-08-03T14:11:47.891Z"));
+    }
+
+    /// The shape actually found in the vault: an otherwise-LF file with one
+    /// stray `\r` at the end of a single bullet line
+    /// (`dailynote/2024/2024-05-16.note.md:115`).
+    #[test]
+    fn a_single_stray_cr_terminated_line_in_an_lf_file() {
+        let t = parse_outline("- p\n  - abc\r\n    x\n    id:: k\n");
+        assert_eq!(t.nodes.len(), 2);
+        assert_eq!(t.nodes[0].content, "p");
+        assert_eq!(t.nodes[1].id, "k");
+        assert_eq!(t.nodes[1].content, "abc\nx");
+    }
+
+    /// A lone mid-line `\r` is normalised away too — the same way on both
+    /// ports, which is the point. (Leaving it as content would mean relying on
+    /// `.` behaving identically in two different regex engines; it does not.)
+    #[test]
+    fn a_lone_mid_line_cr_is_normalised_the_same_way() {
+        let t = parse_outline("- a\rb\n");
+        assert_eq!(t.nodes.len(), 1);
+        assert_eq!(t.nodes[0].content, "ab");
+    }
+
+    #[test]
+    fn mixed_line_endings_in_one_file() {
+        let t = parse_outline("- a\r\n- b\n- c\r\n");
+        assert_eq!(t.nodes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>(), vec!["a", "b", "c"]);
+    }
+
+    /// Raw fence mode takes its lines verbatim, so it would otherwise carry the
+    /// `\r` straight into the answer body — and the two ports would then differ
+    /// on where the fence closes. Entry-level stripping covers it for free.
+    #[test]
+    fn cr_is_normalised_inside_a_raw_fence_too() {
+        let crlf = "- ```\r\n  type:: answer\r\n  x\r\n  ```\r\n";
+        let lf = crlf.replace("\r\n", "\n");
+        assert_eq!(serialize_outline(&parse_outline(crlf)), serialize_outline(&parse_outline(&lf)));
+        let t = parse_outline(crlf);
+        assert_eq!(t.nodes.len(), 1);
+        assert_eq!(t.nodes[0].content, "```\ntype:: answer\nx\n```");
+    }
+
+    #[test]
+    fn crlf_frontmatter_still_splits() {
+        let t = parse_outline("---\r\ntitle: x\r\ncreated: y\r\n---\r\n- A\r\n");
+        assert_eq!(t.frontmatter.as_deref(), Some("title: x\ncreated: y"));
+        assert_eq!(t.nodes.len(), 1);
+        assert_eq!(t.nodes[0].content, "A");
+        assert_eq!(serialize_outline(&t), "---\ntitle: x\ncreated: y\n---\n- A\n");
+    }
+
+    #[test]
+    fn a_file_without_any_cr_is_untouched() {
+        assert_eq!(serialize_outline(&parse_outline(CRLF_LF_TWIN)), CRLF_LF_TWIN);
     }
 
     #[test]

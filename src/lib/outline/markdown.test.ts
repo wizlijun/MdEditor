@@ -460,3 +460,78 @@ describe('a bare `-` is an empty bullet (trailing space must not be load-bearing
     expect([...parseOutline('   -\n').nodes.values()].map(n => n.content)).toEqual(['-'])
   })
 })
+
+// 修复 F。和「行尾空格」同病:一个看不见的字节决定节点存不存在。
+// JS 里 `.` 和 `$` 都把 `\r` 当行终止符,所以以 `\r` 结尾的 bullet 行匹配不上
+// bullet 正则,整行掉进兜底分支——子节点被父节点吞掉、属性行变成正文,和空格被删
+// 一模一样。而 Rust 的 regex crate 里 `.` 匹配 `\r`,于是两个移植版对同一个 CRLF
+// 文件解析出的树根本不同。CRLF 是从外面进来的(Windows 编辑器、core.autocrlf
+// 检出、同步过来的文件),正是 file-over-app 承诺要扛住的流量。
+//
+// 取法:在 parseOutline 入口把所有 `\r` 去掉——「行结束符噪音,不是内容」。
+// 一个地方、两边一模一样,不用去推 JS 与 Rust 的正则方言差异。
+// 代价明说:CRLF 文件读进来再写回去会变成 LF。
+//
+// 本 describe 里的输入与期望值与 Rust 侧 outline.rs 的 crlf 测试逐字对应——
+// 「两个移植版对同一输入给出同一棵树」才是这里真正的产品要求。
+describe('CRLF / 行尾 \\r 是行结束符噪音,不是内容(修复 F)', () => {
+  const LF = '---\ntitle: x\ncreated: y\n---\n- parent\n  - child\n    created:: 2026-08-03T14:11:47.891Z\n    id:: c1\n- after\n'
+  const CRLF = LF.replace(/\n/g, '\r\n')
+
+  it('a CRLF file parses to the same tree as its LF twin', () => {
+    expect(serializeOutline(parseOutline(CRLF))).toBe(serializeOutline(parseOutline(LF)))
+    // 而且就是 LF 原文——序列化端未动,写回即归一为 LF
+    expect(serializeOutline(parseOutline(CRLF))).toBe(LF)
+    expect(parseOutline(CRLF).frontmatter).toBe('title: x\ncreated: y')
+  })
+
+  it('CRLF 下嵌套子节点仍是真子节点(数据丢失形状)', () => {
+    const t = parseOutline('- parent\r\n  - child\r\n    created:: 2026-08-03T14:11:47.891Z\r\n    id:: x\r\n')
+    const nodes = [...t.nodes.values()]
+    expect(nodes).toHaveLength(2)
+    const parent = nodes.find(n => n.content === 'parent')!
+    const child = t.nodes.get('x')!
+    expect(child.content).toBe('child')
+    expect(child.parentId).toBe(parent.id)
+    expect(child.createdAt).toBe('2026-08-03T14:11:47.891Z')
+    expect(parent.content).toBe('parent')   // 属性行绝不许漏进父节点正文
+  })
+
+  it('LF 文件里一条落单的 \\r 结尾行(vault 里的真实形状)', () => {
+    // dailynote/2024/2024-05-16.note.md:115 就是这个:整篇 LF,唯独一行以 \r 收尾。
+    const t = parseOutline('- p\n  - abc\r\n    x\n    id:: k\n')
+    const nodes = [...t.nodes.values()]
+    expect(nodes).toHaveLength(2)
+    expect(t.nodes.get('k')!.content).toBe('abc\nx')
+    expect(nodes.find(n => n.content === 'p')!.content).toBe('p')
+  })
+
+  it('行中间的落单 \\r 一并归一(两侧同样处理)', () => {
+    expect([...parseOutline('- a\rb\n').nodes.values()].map(n => n.content)).toEqual(['ab'])
+  })
+
+  it('一份文件里混用行尾', () => {
+    expect([...parseOutline('- a\r\n- b\n- c\r\n').nodes.values()].map(n => n.content)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('围栏 raw 模式下的 \\r 同样归一', () => {
+    const crlf = '- ```\r\n  type:: answer\r\n  x\r\n  ```\r\n'
+    const lf = crlf.replace(/\r\n/g, '\n')
+    expect(serializeOutline(parseOutline(crlf))).toBe(serializeOutline(parseOutline(lf)))
+    const t = parseOutline(crlf)
+    const nodes = [...t.nodes.values()]
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].content).toBe('```\ntype:: answer\nx\n```')
+  })
+
+  it('CRLF 的 --- front-matter 仍正确切分', () => {
+    const t = parseOutline('---\r\ntitle: x\r\ncreated: y\r\n---\r\n- A\r\n')
+    expect(t.frontmatter).toBe('title: x\ncreated: y')
+    expect([...t.nodes.values()].map(n => n.content)).toEqual(['A'])
+    expect(serializeOutline(t)).toBe('---\ntitle: x\ncreated: y\n---\n- A\n')
+  })
+
+  it('没有 \\r 的文件行为完全不变', () => {
+    expect(serializeOutline(parseOutline(LF))).toBe(LF)
+  })
+})

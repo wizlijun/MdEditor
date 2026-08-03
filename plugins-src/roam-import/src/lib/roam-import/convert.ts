@@ -40,7 +40,11 @@ function iso(ms: number | undefined): string | undefined {
  * closeDanglingFence 跟解析器(以及彼此)保持一致。与 Rust 侧 convert.rs 同序。
  */
 function blockContent(b: RoamBlock, renames: Map<string, string>): string {
-  let s = normalizeDateLinks(rewriteLinks(convertInline(b.string ?? ''), renames))
+  // `\r` 先去掉,在任何按行看待文本的步骤之前:parseOutline 在自己的入口就把 `\r`
+  // 当行结束符噪音剥掉了,所以这里写出去的 `\r` 按定义就不是读回来的东西——而本函数
+  // 的全部契约就是「parseOutline 读回时的确切形态」。放在最前面也让下面的围栏跟踪
+  // 与解析器对「行在哪里」保持一致。
+  let s = normalizeDateLinks(rewriteLinks(convertInline((b.string ?? '').replace(/\r/g, '')), renames))
   if (b.heading != null && b.heading >= 1 && b.heading <= 3) s = `${'#'.repeat(b.heading)} ${s}`
   return closeDanglingFence(escapeStructuralLines(s))
 }
