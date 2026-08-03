@@ -17,8 +17,14 @@ use crate::convert::{convert_page, iso_ms};
 use crate::merge::merge;
 use crate::outline::{parse_outline, serialize_outline, touch_frontmatter};
 use crate::roam_page::RoamPage;
+use chrono::NaiveDate;
 use serde::Serialize;
+use std::io::Write;
 use std::path::Path;
+
+/// What the host calls its daily folder when it has not said otherwise —
+/// `outlineDirs.dailynote` on the TS side.
+const DEFAULT_DAILY_DIR: &str = "dailynote";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncOutcome {
@@ -44,6 +50,51 @@ pub fn daily_rel_path(daily_dir: &str, date: &str) -> String {
     format!("{daily_dir}/{year}/{date}.note.md")
 }
 
+/// A vault-relative folder and nothing else: not empty, not absolute, and
+/// with no `..` segment. `Path::join` *replaces* the base path when handed an
+/// absolute component, so an unchecked value here does not merely escape the
+/// daily folder — it escapes the vault.
+fn is_safe_rel_dir(dir: &str) -> bool {
+    !dir.is_empty()
+        && !Path::new(dir).is_absolute()
+        && !dir.starts_with('/')
+        && dir.split('/').all(|seg| seg != "..")
+}
+
+/// Write `text` to `path` without ever leaving it half-written: a temporary
+/// sibling first (dot-prefixed, so a vault watcher ignores the moment it
+/// exists), flushed to disk, then renamed into place — a same-directory
+/// rename is atomic on macOS and Linux, so any reader sees either the whole
+/// old file or the whole new one. `std::fs::write` truncates first, and this
+/// is a plugin process the host can kill on deactivate or quit; the file it
+/// truncates holds the only copy of the user's local-only blocks, which —
+/// unlike Roam's half — cannot be fetched again.
+fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("cannot write {}: not a file path", path.display()))?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(name);
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+
+    let write_temp = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()
+    };
+    // Every failure below removes the temporary: a `.tmp` left in the vault
+    // would sync/commit as a stray file and outlive the problem that made it.
+    if let Err(e) = write_temp() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("cannot write {}: {e}", path.display()));
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("cannot write {}: {e}", path.display())
+    })
+}
+
 /// Read the day's `.note.md` if it exists. A missing file is the normal
 /// first-sync case and reads as an empty outline; any other IO error is
 /// surfaced, because silently treating "permission denied" as "empty" would
@@ -66,12 +117,17 @@ pub fn sync_day(
     date: &str,
     now: &str,
 ) -> Result<SyncOutcome, String> {
-    // `date` is joined into a path below. Callers reach this through
-    // `dates::resolve_date`, which already refuses anything else — but this
-    // is the function that writes, and a `..` slipping through would put the
-    // write outside the daily folder (indeed outside the vault) entirely.
+    // Both halves of the path are checked here, at the function that writes,
+    // rather than trusted to have been validated upstream: `date` reaches
+    // callers from a CLI flag or a UI field, and `daily_dir` from the host
+    // (and, from Task 10, possibly not from the host at all).
     if !crate::dates::is_iso_date(date) {
         return Err(format!("invalid date '{date}': expected yyyy-MM-dd"));
+    }
+    if !is_safe_rel_dir(daily_dir) {
+        return Err(format!(
+            "invalid daily folder '{daily_dir}': expected a relative path inside the vault"
+        ));
     }
     let rel = daily_rel_path(daily_dir, date);
     let mut outcome = SyncOutcome {
@@ -103,14 +159,48 @@ pub fn sync_day(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    std::fs::write(&abs, serialize_outline(&merged))
-        .map_err(|e| format!("cannot write {}: {e}", abs.display()))?;
+    write_atomically(&abs, &serialize_outline(&merged))?;
 
     outcome.created = stats.created;
     outcome.updated = stats.updated;
     outcome.kept_local = stats.kept_local;
     outcome.roam_gone_kept = stats.roam_gone_kept;
     Ok(outcome)
+}
+
+/// The whole operation as the UI (and Task 10's CLI) asks for it: resolve the
+/// day, ask Roam for that day's page, merge it into the vault.
+///
+/// The two impure edges are injected — `today`, because "yesterday" is a
+/// question about the user's local calendar, and `fetch_page`, which in
+/// production discovers and runs the `roam` CLI. That keeps the orchestration
+/// itself (no vault, no daily folder, date → Roam's `MM-DD-YYYY` page uid, no
+/// page that day) testable without a clock or a subprocess; `plugin.rs` is
+/// left as a thin adapter that supplies the real ones. Same shape as
+/// `discover::discover_with` and `plugin::resolve_vault_info`.
+pub fn sync_requested_day<Fetch>(
+    vault: Option<&Path>,
+    daily_dir: &str,
+    date_input: Option<&str>,
+    today: NaiveDate,
+    now: &str,
+    fetch_page: Fetch,
+) -> Result<SyncOutcome, String>
+where
+    Fetch: FnOnce(&str) -> Result<Option<RoamPage>, String>,
+{
+    // First, and before anything is fetched: without a vault there is nowhere
+    // to put the answer, and writing a day's notes somewhere else would be
+    // worse than asking the user to try again.
+    let vault = vault.ok_or("no vault configured")?;
+    let daily_dir = if daily_dir.is_empty() { DEFAULT_DAILY_DIR } else { daily_dir };
+
+    let date = crate::dates::resolve_date(date_input, today)?;
+    let uid = crate::dates::to_roam_uid(&date)
+        .ok_or_else(|| format!("invalid date '{date}': expected yyyy-MM-dd"))?;
+
+    let page = fetch_page(&uid)?;
+    sync_day(vault, daily_dir, page.as_ref(), &date, now)
 }
 
 #[cfg(test)]
@@ -138,9 +228,171 @@ mod tests {
         }
     }
 
+    fn a_day(today: (i32, u32, u32)) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(today.0, today.1, today.2).unwrap()
+    }
+
     #[test]
     fn path_is_daily_dir_year_date() {
         assert_eq!(daily_rel_path("dailynote", "2026-08-02"), "dailynote/2026/2026-08-02.note.md");
+    }
+
+    /// The daily folder comes from the host's vault info today, but Task 10
+    /// adds a caller that need not go through it. It is joined into a path
+    /// exactly like `date` is — and `Path::join` *replaces* the base when the
+    /// component is absolute, so an unchecked value does not merely escape
+    /// the daily folder, it escapes the vault.
+    #[test]
+    fn a_daily_dir_that_could_escape_the_vault_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for bad in ["", "/etc", "../elsewhere", "daily/../..", ".."] {
+            let err = sync_day(dir.path(), bad, Some(&page()), "2026-08-02", NOW)
+                .unwrap_err();
+            assert!(err.contains("invalid daily folder"), "{bad:?} was accepted: {err}");
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "nothing was written");
+    }
+
+    /// The file being written holds the only copy of the user's local-only
+    /// blocks — Roam's half can always be fetched again, their margin notes
+    /// cannot. So the write must never truncate the old file until the new
+    /// one is complete on disk, and a write that cannot finish must not
+    /// litter the vault with the half-written temporary either.
+    #[test]
+    fn a_write_that_cannot_finish_leaves_the_old_note_and_no_debris() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("dailynote/2026");
+        let note = folder.join("2026-08-02.note.md");
+        std::fs::create_dir_all(&folder).unwrap();
+        let before = "---\ntitle: 2026-08-02\n---\n- the only copy of this\n";
+        std::fs::write(&note, before).unwrap();
+
+        // An unwritable *folder*: the note itself can still be opened for
+        // writing (file mode, not folder mode, governs that — so a truncating
+        // write would still destroy it), but no new file can be created
+        // beside it. That is the difference this test is here to hold.
+        let lock = |mode| std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(mode));
+        lock(0o500).unwrap();
+        if std::fs::File::create(folder.join(".probe")).is_ok() {
+            // Running as root, where permissions do not bind. Nothing to assert.
+            let _ = std::fs::remove_file(folder.join(".probe"));
+            lock(0o700).unwrap();
+            return;
+        }
+
+        let err = sync_day(dir.path(), "dailynote", Some(&page()), "2026-08-02", NOW).unwrap_err();
+        lock(0o700).unwrap();
+
+        assert!(err.contains("cannot write"), "unexpected error: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&note).unwrap(),
+            before,
+            "the user's only copy must survive a write that could not finish"
+        );
+        let left: Vec<String> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["2026-08-02.note.md".to_string()], "debris left behind: {left:?}");
+    }
+
+    #[test]
+    fn a_completed_write_leaves_no_temporary_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        sync_day(dir.path(), "dailynote", Some(&page()), "2026-08-02", NOW).unwrap();
+        let left: Vec<String> = std::fs::read_dir(dir.path().join("dailynote/2026"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["2026-08-02.note.md".to_string()]);
+    }
+
+    // `sync_requested_day` is the whole operation as the UI asks for it. It
+    // lives here, not in plugin.rs, precisely so these paths are testable:
+    // the bin crate cannot be reached from a test.
+
+    #[test]
+    fn without_a_vault_nothing_is_attempted() {
+        let err = sync_requested_day(None, "dailynote", None, a_day((2026, 8, 3)), NOW, |_| {
+            panic!("Roam must not be contacted before the vault is known")
+        })
+        .unwrap_err();
+        assert_eq!(err, "no vault configured");
+    }
+
+    /// The host answers with its configured daily folder; an empty string
+    /// means it has not told us one, and the default has to match the host's
+    /// own (`outlineDirs.dailynote`).
+    #[test]
+    fn an_empty_daily_dir_falls_back_to_the_hosts_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = sync_requested_day(
+            Some(dir.path()), "", Some("2026-08-02"), a_day((2026, 8, 3)), NOW,
+            |_| Ok(Some(page())),
+        )
+        .unwrap();
+        assert_eq!(out.path, "dailynote/2026/2026-08-02.note.md");
+        assert!(dir.path().join(&out.path).exists());
+    }
+
+    /// The date the user asked for (or, by default, yesterday) has to reach
+    /// Roam as *its* daily-page uid, `MM-DD-YYYY` — asking for the wrong uid
+    /// silently syncs the wrong day.
+    #[test]
+    fn roam_is_asked_for_the_resolved_dates_page_uid() {
+        let dir = tempfile::tempdir().unwrap();
+        let asked = std::cell::RefCell::new(String::new());
+        let out = sync_requested_day(
+            Some(dir.path()), "dailynote", None, a_day((2026, 8, 3)), NOW,
+            |uid| { asked.borrow_mut().push_str(uid); Ok(Some(page())) },
+        )
+        .unwrap();
+        assert_eq!(asked.into_inner(), "08-02-2026", "default is yesterday, as MM-DD-YYYY");
+        assert_eq!(out.date, "2026-08-02");
+    }
+
+    #[test]
+    fn a_day_roam_has_no_page_for_is_reported_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = sync_requested_day(
+            Some(dir.path()), "dailynote", Some("2026-08-02"), a_day((2026, 8, 3)), NOW,
+            |_| Ok(None),
+        )
+        .unwrap();
+        assert!(!out.found);
+        assert!(!dir.path().join(&out.path).exists());
+    }
+
+    #[test]
+    fn a_fetch_failure_is_reported_and_touches_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = sync_requested_day(
+            Some(dir.path()), "dailynote", Some("2026-08-02"), a_day((2026, 8, 3)), NOW,
+            |_| Err("roam: not authorized".to_string()),
+        )
+        .unwrap_err();
+        assert_eq!(err, "roam: not authorized");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_date_that_is_not_a_date_never_reaches_roam() {
+        let err = sync_requested_day(
+            None::<&std::path::Path>, "dailynote", Some("last tuesday"),
+            a_day((2026, 8, 3)), NOW, |_| panic!("must not be reached"),
+        )
+        .unwrap_err();
+        // The vault check comes first, so use a configured vault to reach the date check.
+        assert_eq!(err, "no vault configured");
+
+        let dir = tempfile::tempdir().unwrap();
+        let err = sync_requested_day(
+            Some(dir.path()), "dailynote", Some("last tuesday"),
+            a_day((2026, 8, 3)), NOW, |_| panic!("Roam must not be asked for a nonsense date"),
+        )
+        .unwrap_err();
+        assert!(err.contains("expected yyyy-MM-dd"), "unexpected error: {err}");
     }
 
     #[test]

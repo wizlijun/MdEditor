@@ -185,15 +185,26 @@ fn push_node(
 /// trailing spaces from editors/formatters without dropping the property).
 fn apply_prop(tree: &mut Tree, idx: usize, key: &str, value: &str) {
     let value = value.trim_end().to_string();
-    // A vault file is hand-editable, so a repeated `id::` (a copied bullet, a
-    // botched three-way merge) is expected input. Re-keying this node to an id
-    // some other node already holds would give a *nested* duplicate itself as
-    // its parent, and every walk over the tree — `serialize_outline` here,
-    // `merge`'s two — then recurses until the stack dies. Scanning is O(nodes)
-    // per `id::` line, which is nothing at daily-note sizes and is only paid
-    // by files that carry ids at all.
-    let id_already_taken =
-        key == "id" && tree.nodes.iter().enumerate().any(|(i, n)| i != idx && n.id == value);
+    // A vault file is hand-editable, so an `id::` that is not a usable
+    // identity — a repeated one (a copied bullet, a botched three-way merge),
+    // or one shaped like our own placeholder — is expected input. Taking it
+    // would let two nodes share an id string, and since parentage is by id
+    // string, the tree stops being a tree: a nested twin becomes its own
+    // parent and every walk (`serialize_outline` here, `merge`'s two)
+    // recurses until the stack dies, while a flat twin makes the walk emit
+    // some later subtree under both of them, duplicating the user's blocks
+    // into their own vault.
+    //
+    // Two directions, and both are needed. The scan catches an id that some
+    // *earlier* node already holds. The `local-N` shape catches the reverse:
+    // `id:: local-2` collides with nothing at the time it is applied, and
+    // then `push_node` hands the placeholder `local-2` to a node parsed
+    // later. (Not a hazard the TS host shares — its placeholders are UUIDs.)
+    // Scanning is O(nodes) per `id::` line, which is nothing at daily-note
+    // sizes and is only paid by files that carry ids at all.
+    let id_already_taken = key == "id"
+        && (value.strip_prefix("local-").is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
+            || tree.nodes.iter().enumerate().any(|(i, n)| i != idx && n.id == value));
     let node = &mut tree.nodes[idx];
     match key {
         "type" => {
@@ -515,6 +526,31 @@ mod tests {
         assert_eq!(child.parent.as_deref(), Some("dup"));
         assert!(!child.persist_id);
         assert_eq!(serialize_outline(&t), "- parent\n  id:: dup\n  - child\n");
+    }
+
+    /// The other half of the same hazard, and the one the "is this id already
+    /// in the tree?" check alone cannot see: a file may contain the
+    /// placeholder shape itself. `id:: local-2` is applied while node `b`
+    /// does not exist yet, so nothing collides — and then `b` is handed the
+    /// placeholder `local-2` and becomes its own parent.
+    #[test]
+    fn an_id_that_looks_like_a_placeholder_cannot_steal_a_later_nodes_id() {
+        let t = parse_outline("- a\n  id:: local-2\n  - b\n");
+        let b = t.nodes.iter().find(|n| n.content == "b").unwrap();
+        assert_ne!(b.parent.as_deref(), Some(b.id.as_str()), "a node must not parent itself");
+        assert_eq!(serialize_outline(&t), "- a\n  - b\n");
+    }
+
+    /// Same root cause, quieter symptom: `d`'s parent id string matches two
+    /// nodes, so every walk emits it under both — the user's block is
+    /// duplicated into their own vault (and `merge` copies the duplication
+    /// through, since it walks by the same parent-id string).
+    #[test]
+    fn an_id_that_looks_like_a_placeholder_cannot_duplicate_a_later_subtree() {
+        let text = "- a\n  id:: local-3\n- b\n- c\n  - d\n";
+        let out = serialize_outline(&parse_outline(text));
+        assert_eq!(out.matches("- d").count(), 1, "d must be emitted once:\n{out}");
+        assert_eq!(out, "- a\n- b\n- c\n  - d\n");
     }
 
     #[test]

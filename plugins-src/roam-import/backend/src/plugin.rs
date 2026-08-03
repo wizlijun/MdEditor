@@ -73,38 +73,38 @@ async fn vault_from_host(host: &sdk::Host) -> Option<Value> {
 }
 
 impl RoamImportPlugin {
-    /// One day, end to end: resolve the date against the *local* calendar
-    /// (a daily note is a human's day, not UTC's), ask Roam for that page,
-    /// and merge it into the vault. Runs synchronously on the protocol read
-    /// loop like `probe` does — `fetch_day` is bounded at 60s and the
-    /// manifest raises this plugin's request timeout to 120s to cover it.
+    /// Adapter only: supply `sync::sync_requested_day` with the two things it
+    /// refuses to reach for itself — the local calendar (a daily note is a
+    /// human's day, not UTC's) and a fetcher that discovers and runs the
+    /// `roam` CLI. All the decisions live in `sync.rs`, where they are
+    /// testable; nothing that can be tested belongs in this bin crate.
+    ///
+    /// Runs synchronously on the protocol read loop like `probe` does —
+    /// `fetch_day` is bounded at 60s and the manifest raises this plugin's
+    /// request timeout to 120s to cover it.
     fn sync_day(&self, params: &Value) -> Result<notemd_roam_import::sync::SyncOutcome, String> {
-        use notemd_roam_import::{dates, discover, roam_cli, roam_page, sync};
+        use notemd_roam_import::{discover, roam_cli, roam_page, sync};
 
         let (vault, daily_dir) = {
             let g = self.inner.lock().unwrap();
             (g.vault.clone(), g.daily_dir.clone())
         };
-        // Also the answer while `activate`'s vault lookup is still in flight:
-        // writing a day's notes somewhere other than the vault would be worse
-        // than asking the user to try again.
-        let vault = vault.ok_or("no vault configured")?;
-        let daily_dir = if daily_dir.is_empty() { "dailynote".to_string() } else { daily_dir };
+        let roam_path = params.get("roam_path").and_then(|s| s.as_str());
+        let graph = params.get("graph").and_then(|s| s.as_str());
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
-        let date = dates::resolve_date(
+        sync::sync_requested_day(
+            vault.as_deref(),
+            &daily_dir,
             params.get("date").and_then(|s| s.as_str()),
             chrono::Local::now().date_naive(),
-        )?;
-        let uid = dates::to_roam_uid(&date).ok_or_else(|| format!("invalid date '{date}'"))?;
-
-        let roam_path = params.get("roam_path").and_then(|s| s.as_str());
-        let exe = discover::discover(roam_path)
-            .ok_or("the roam CLI was not found — install @roam-research/roam-cli")?;
-        let raw = roam_cli::fetch_day(&exe, params.get("graph").and_then(|s| s.as_str()), &uid)?;
-        let page = roam_page::parse_day_result(&raw)?;
-
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        sync::sync_day(&vault, &daily_dir, page.as_ref(), &date, &now)
+            &now,
+            |uid| {
+                let exe = discover::discover(roam_path)
+                    .ok_or("the roam CLI was not found — install @roam-research/roam-cli")?;
+                roam_page::parse_day_result(&roam_cli::fetch_day(&exe, graph, uid)?)
+            },
+        )
     }
 }
 
