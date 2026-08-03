@@ -52,10 +52,21 @@ existing `.note.md`, block by block, identified by Roam's own block uid
   something is not this plugin's call to make.
 
 Re-running a sync for the same day with nothing changed on either side is a
-no-op: the file comes out byte-identical.
+true no-op: the file is not written at all — not even its `updated:` — so a
+scheduled sync does not dirty the note for vault git-sync or re-trigger
+note.md's file watcher on a day where nothing happened.
 
 A day Roam has no page for is not written at all — no empty file is created
 just because you asked to sync it.
+
+**Do not leave the day's note open in note.md during an unattended sync.** The
+sync reads the file, merges, and writes it back, while the app's outline pane
+holds its own in-memory copy of the same file — whichever saves last wins. The
+sync will not overwrite a change it did not see (it re-reads the file
+immediately before publishing and aborts with
+`… changed while this sync was reading it — nothing was written`), so nothing
+is lost either way; but a cron job that keeps aborting is a cron job that is
+not syncing.
 
 ## Known trade-off: `#.rm-hide`
 

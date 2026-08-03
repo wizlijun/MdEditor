@@ -392,6 +392,17 @@ pub fn serialize_outline(tree: &Tree) -> String {
     if lines.is_empty() { String::new() } else { lines.join("\n") + "\n" }
 }
 
+/// Read one top-level `key: value` out of a front-matter block. Line-based and
+/// deliberately as forgiving as `touch_frontmatter`'s own key check, so the two
+/// always agree on whether a key is there.
+pub fn frontmatter_value(raw: Option<&str>, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    raw?.lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with(&prefix))
+        .map(|l| l[prefix.len()..].trim().to_string())
+}
+
 /// Refresh a companion file's front-matter without a YAML crate: unknown
 /// keys and their order must survive untouched (round-tripping a
 /// hand-edited or third-party-tool-written file is a hard requirement, not
@@ -571,6 +582,14 @@ mod tests {
         assert!(fm.contains("title: 2026-08-02"));
         assert!(fm.contains("created: 2026-08-02T00:00:00.000Z"));
         assert!(fm.contains("updated: 2026-08-03T09:00:00.000Z"));
+    }
+
+    #[test]
+    fn frontmatter_value_reads_a_key_or_none() {
+        let raw = "title: 2026-08-02\nupdated: 2026-08-03T09:00:00.000Z";
+        assert_eq!(frontmatter_value(Some(raw), "updated").as_deref(), Some("2026-08-03T09:00:00.000Z"));
+        assert_eq!(frontmatter_value(Some(raw), "created"), None);
+        assert_eq!(frontmatter_value(None, "updated"), None);
     }
 
     #[test]

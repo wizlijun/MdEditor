@@ -15,7 +15,7 @@
 //! before it becomes a path.
 use crate::convert::{convert_page, iso_ms};
 use crate::merge::merge;
-use crate::outline::{parse_outline, serialize_outline, touch_frontmatter};
+use crate::outline::{frontmatter_value, parse_outline, serialize_outline, touch_frontmatter};
 use crate::roam_page::RoamPage;
 use chrono::NaiveDate;
 use serde::Serialize;
@@ -61,38 +61,57 @@ fn is_safe_rel_dir(dir: &str) -> bool {
         && dir.split('/').all(|seg| seg != "..")
 }
 
-/// Write `text` to `path` without ever leaving it half-written: a temporary
-/// sibling first (dot-prefixed, so a vault watcher ignores the moment it
-/// exists), flushed to disk, then renamed into place — a same-directory
-/// rename is atomic on macOS and Linux, so any reader sees either the whole
-/// old file or the whole new one. `std::fs::write` truncates first, and this
-/// is a plugin process the host can kill on deactivate or quit; the file it
-/// truncates holds the only copy of the user's local-only blocks, which —
-/// unlike Roam's half — cannot be fetched again.
-fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
-    let name = path
-        .file_name()
+/// Write `text` to `path` without ever leaving it half-written, and without
+/// ever publishing over an edit this sync did not see.
+///
+/// A temporary sibling first, flushed to disk, then renamed into place — a
+/// same-directory rename is atomic on macOS and Linux, so any reader sees
+/// either the whole old file or the whole new one. `std::fs::write` truncates
+/// first, and this is a plugin process the host can kill on deactivate or
+/// quit; the file it truncates holds the only copy of the user's local-only
+/// blocks, which — unlike Roam's half — cannot be fetched again.
+///
+/// The temporary's name is **unique**, not merely dot-prefixed. The window's
+/// sync button and a cron `notemd roam-day` run in *different processes*, and
+/// under a deterministic name writer B's `File::create` truncates the
+/// temporary writer A has already filled — after which A's rename publishes
+/// B's partial bytes. `NamedTempFile` also removes the temporary on every
+/// failure path, and that unconditional cleanup — not the leading dot — is
+/// what keeps a stray file out of the vault: git tracks dotfiles like any
+/// other file, so a leftover `.tmp` would be committed and synced, not
+/// ignored.
+///
+/// `expected` is the file's content as this sync read it. It is re-read as
+/// late as possible — a couple of syscalls before the rename — and a
+/// difference aborts: the host may have the same note open in its outline pane
+/// with its own in-memory tree, and this is a read-modify-write on that file.
+/// The repo's own `.note.md` write path hash-checks before writing for exactly
+/// this reason.
+fn write_atomically(path: &Path, text: &str, expected: &str) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = path
+        .parent()
         .ok_or_else(|| format!("cannot write {}: not a file path", path.display()))?;
-    let mut tmp_name = std::ffi::OsString::from(".");
-    tmp_name.push(name);
-    tmp_name.push(".tmp");
-    let tmp = path.with_file_name(tmp_name);
+    let fail = |e: std::io::Error| format!("cannot write {}: {e}", path.display());
 
-    let write_temp = || -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(text.as_bytes())?;
-        f.sync_all()
-    };
-    // Every failure below removes the temporary: a `.tmp` left in the vault
-    // would sync/commit as a stray file and outlive the problem that made it.
-    if let Err(e) = write_temp() {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("cannot write {}: {e}", path.display()));
+    let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(fail)?;
+    tmp.write_all(text.as_bytes()).and_then(|()| tmp.as_file().sync_all()).map_err(fail)?;
+    // A fresh temporary is 0600. Keep the mode the note already had (0644 for
+    // one this sync is creating), or the vault ends up with daily notes
+    // readable differently from every file beside them.
+    let mode = std::fs::metadata(path).map(|m| m.permissions().mode() & 0o7777).unwrap_or(0o644);
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode)).map_err(fail)?;
+
+    if read_existing(path)? != expected {
+        // `tmp` is dropped here, which deletes it.
+        return Err(format!(
+            "{} changed while this sync was reading it — nothing was written. \
+             Close the day's note (or let the other sync finish) and run it again.",
+            path.display()
+        ));
     }
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("cannot write {}: {e}", path.display())
-    })
+    tmp.persist(path).map_err(|e| fail(e.error))?;
+    Ok(())
 }
 
 /// Read the day's `.note.md` if it exists. A missing file is the normal
@@ -143,7 +162,8 @@ pub fn sync_day(
     outcome.found = true;
 
     let abs = vault.join(&rel);
-    let local = parse_outline(&read_existing(&abs)?);
+    let existing = read_existing(&abs)?;
+    let local = parse_outline(&existing);
     let roam = convert_page(page, date);
     let (mut merged, stats) = merge(&local, &roam);
 
@@ -152,14 +172,33 @@ pub fn sync_day(
     // Either way `touch_frontmatter` only uses it when the file has no
     // `created:` yet, so an existing note keeps the value it was born with.
     let created = iso_ms(page.create_time).unwrap_or_else(|| now.to_string());
-    merged.frontmatter =
-        Some(touch_frontmatter(merged.frontmatter.as_deref(), date, &created, now));
+    // `merge` passes the local front-matter through untouched (rule 8), so
+    // this is the file's own block — the base both serializations start from.
+    let base_fm = merged.frontmatter.clone();
+
+    // A no-op sync must not touch the file AT ALL. `updated:` is refreshed
+    // from a live clock, so serializing with `now` would rewrite the note on
+    // every cron run: dirtying it for vaultgitsync, re-triggering the host's
+    // file watcher, and re-opening the concurrency window above for nothing.
+    // So serialize once with the `updated:` the file already carries, and if
+    // that reproduces the file byte-for-byte, there is nothing to say.
+    if let Some(prev) = frontmatter_value(base_fm.as_deref(), "updated") {
+        merged.frontmatter = Some(touch_frontmatter(base_fm.as_deref(), date, &created, &prev));
+        if serialize_outline(&merged) == existing {
+            outcome.created = stats.created;
+            outcome.updated = stats.updated;
+            outcome.kept_local = stats.kept_local;
+            outcome.roam_gone_kept = stats.roam_gone_kept;
+            return Ok(outcome);
+        }
+    }
+    merged.frontmatter = Some(touch_frontmatter(base_fm.as_deref(), date, &created, now));
 
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    write_atomically(&abs, &serialize_outline(&merged))?;
+    write_atomically(&abs, &serialize_outline(&merged), &existing)?;
 
     outcome.created = stats.created;
     outcome.updated = stats.updated;
@@ -501,5 +540,114 @@ mod tests {
         let second =
             std::fs::read_to_string(dir.path().join("dailynote/2026/2026-08-02.note.md")).unwrap();
         assert_eq!(first, second);
+    }
+
+    /// The idempotence tests above all freeze `now`, so they prove the MERGE
+    /// is idempotent — not the file. In production `now` is a live clock, so a
+    /// serialization that always refreshes `updated:` rewrites the note on
+    /// every cron run: it dirties the file for vaultgitsync, re-triggers the
+    /// host's watcher, and re-opens the concurrency window for nothing. A
+    /// second sync with a *different* clock must not touch the file at all —
+    /// asserted on the mtime, because equal bytes alone would not prove that
+    /// no write happened.
+    #[test]
+    fn a_second_sync_with_a_different_clock_does_not_touch_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dailynote/2026/2026-08-02.note.md");
+        sync_day(dir.path(), "dailynote", Some(&page()), "2026-08-02", NOW).unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        // Coarse filesystem timestamps would hide a rewrite that lands in the
+        // same tick; make sure a real write could be seen.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let out = sync_day(
+            dir.path(), "dailynote", Some(&page()), "2026-08-02",
+            "2026-08-04T17:45:12.345Z", // a whole day later
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first, "the bytes moved");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            mtime,
+            "the file was rewritten even though nothing changed"
+        );
+        assert!(first.contains(&format!("updated: {NOW}")), "the first sync's updated: is kept");
+        assert_eq!((out.created, out.updated), (0, 0));
+    }
+
+    /// …and a sync that DOES have something to say still refreshes `updated:`.
+    /// (The skip above must not turn into "never touch the front-matter".)
+    #[test]
+    fn a_sync_that_changes_something_refreshes_updated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dailynote/2026/2026-08-02.note.md");
+        sync_day(dir.path(), "dailynote", Some(&page()), "2026-08-02", NOW).unwrap();
+
+        let mut edited = page();
+        edited.children[0].string = "from roam, edited".into();
+        let later = "2026-08-04T17:45:12.345Z";
+        let out = sync_day(dir.path(), "dailynote", Some(&edited), "2026-08-02", later).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(out.updated, 1);
+        assert!(text.contains("- from roam, edited"));
+        assert!(text.contains(&format!("updated: {later}")), "front-matter not refreshed:\n{text}");
+    }
+
+    /// A read-modify-write on a file the host may have open in its outline
+    /// pane with its own in-memory tree. If it changed under us between the
+    /// read and the rename, publishing would silently destroy whatever landed
+    /// there — abort with something the user can act on instead.
+    #[test]
+    fn a_file_that_changed_since_it_was_read_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "what the host just wrote\n").unwrap();
+
+        let err = write_atomically(&path, "our merge\n", "what this sync read\n").unwrap_err();
+        assert!(err.contains("changed while this sync was reading it"), "unexpected: {err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "what the host just wrote\n");
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["note.md".to_string()], "temporary left behind: {left:?}");
+    }
+
+    #[test]
+    fn a_file_that_did_not_change_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "before\n").unwrap();
+        write_atomically(&path, "after\n", "before\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\n");
+        // A file that does not exist yet reads as "" — the first-sync case.
+        let fresh = dir.path().join("fresh.md");
+        write_atomically(&fresh, "new\n", "").unwrap();
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "new\n");
+    }
+
+    /// `NamedTempFile` creates at 0600. A note must not come out of a sync
+    /// readable differently from every other file in the vault, and one the
+    /// user (or another tool) already chmod'd must keep the mode it had.
+    #[test]
+    fn the_notes_permissions_survive_the_temp_file_rename() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+
+        write_atomically(&path, "new\n", "").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "a note this sync created is 0{mode:o}, not the usual 0644");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_atomically(&path, "newer\n", "new\n").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "a mode the user set was reset by the rename"
+        );
     }
 }
