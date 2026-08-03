@@ -9,7 +9,7 @@
   import { presetRange, type Preset } from '../insights/value'
   import { localTzOffsetMinutes } from '../insights/model'
   import { runShareCli, buildVirtualTab } from './share-cli'
-  import { type CliPayload } from './cli-runner'
+  import { requiresFileArg, type CliPayload } from './cli-runner'
   import type { PluginManifest, TabKind } from '../plugins/types'
   import type { FileKind } from '../fs'
 
@@ -108,21 +108,23 @@
       ]})
       return
     }
-    if (!payload.file) {
+    const entry = (manifest.cli ?? []).find(c => c.subcommand === payload.subcommand)
+    if (requiresFileArg(entry) && !payload.file) {
       await finish({ exit_code: 2, stderr: ['notemd: missing file argument'] })
       return
     }
 
-    const built = await buildVirtualTab(payload.file, finish)
-    if (!built) return
-    const { tab: virtualTab, extension, fileKind } = built
+    // File-less subcommands (e.g. `notemd roam-day --date …`) skip the tab
+    // build entirely: there's no file to stat/read.
+    const built = payload.file ? await buildVirtualTab(payload.file, finish) : null
+    if (payload.file && !built) return
 
-    // For commands requiring rendered HTML, bake the content.
-    const entry = (manifest.cli ?? []).find(c => c.subcommand === payload.subcommand)
+    // For commands requiring rendered HTML, bake the content. Never runs
+    // without a tab — a file-less command cannot request tab context.
     let renderedHtml: string | undefined
-    if (entry?.requires_tab_context && manifest.host_capabilities.includes('renderer.html')) {
+    if (built && entry?.requires_tab_context && manifest.host_capabilities.includes('renderer.html')) {
       try {
-        renderedHtml = fileKind === 'image' ? '' : await renderTabAsInlineBody(virtualTab)
+        renderedHtml = built.fileKind === 'image' ? '' : await renderTabAsInlineBody(built.tab)
       } catch (e) {
         await finish({ exit_code: 1, stderr: [`notemd: render failed: ${e}`] })
         return
@@ -130,27 +132,43 @@
     }
 
     // Resolve output_path for plugins that need it (e.g. md2pdf export).
+    // Meaningless without a file to derive/anchor it to, so skip entirely.
     let outputPath: string | undefined
-    const outputFlag = payload.flags['output'] as string | undefined
-    if (outputFlag) {
-      outputPath = outputFlag.startsWith('/') ? outputFlag
-        : `${payload.file!.replace(/\/[^/]+$/, '')}/${outputFlag}`
-    } else if (manifest.id === 'md2pdf' || manifest.id === 'notemd.md2pdf') {
-      outputPath = payload.file!.replace(/\.[^.]+$/, '.pdf')
+    if (payload.file) {
+      const outputFlag = payload.flags['output'] as string | undefined
+      if (outputFlag) {
+        outputPath = outputFlag.startsWith('/') ? outputFlag
+          : `${payload.file.replace(/\/[^/]+$/, '')}/${outputFlag}`
+      } else if (manifest.id === 'md2pdf' || manifest.id === 'notemd.md2pdf') {
+        outputPath = payload.file.replace(/\.[^.]+$/, '.pdf')
+      }
     }
 
     const pluginSettings = getPluginScopedAll(manifest.id)
 
-    const snap = {
-      path: virtualTab.filePath,
-      filename: virtualTab.title,
-      extension,
-      kind: toTabKind(virtualTab.kind),
-      title: virtualTab.title,
-      isDirty: false,
-      isUntitled: false,
-      content: virtualTab.currentContent,
-    }
+    // Built tabs carry the real snapshot; file-less commands pass a coherent
+    // empty shell (the backend doesn't read tab fields when there's no file).
+    const snap = built
+      ? {
+          path: built.tab.filePath,
+          filename: built.tab.title,
+          extension: built.extension,
+          kind: toTabKind(built.tab.kind),
+          title: built.tab.title,
+          isDirty: false,
+          isUntitled: false,
+          content: built.tab.currentContent,
+        }
+      : {
+          path: '',
+          filename: null,
+          extension: null,
+          kind: 'markdown' as TabKind,
+          title: '',
+          isDirty: false,
+          isUntitled: true,
+          content: '',
+        }
     const invokeOpts = {
       htmlBaker: renderedHtml != null ? async () => renderedHtml! : undefined,
       settingsReader: () => pluginSettings,

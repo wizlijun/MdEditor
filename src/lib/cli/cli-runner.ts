@@ -16,6 +16,17 @@ export interface GlobalFlags {
   yes: boolean
 }
 
+/**
+ * Does this CLI entry actually need a file argument? A subcommand that
+ * declares no required `path` arg (e.g. `notemd roam-day --date …`) must not
+ * be rejected for missing one.
+ */
+export function requiresFileArg(
+  entry: { args?: Array<{ type?: string; required?: boolean }> } | undefined,
+): boolean {
+  return (entry?.args ?? []).some((a) => a.type === 'path' && a.required === true)
+}
+
 /** Extract filename from absolute path. */
 export function basenameOf(absPath: string): string {
   const slash = Math.max(absPath.lastIndexOf('/'), absPath.lastIndexOf('\\'))
