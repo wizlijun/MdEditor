@@ -46,12 +46,14 @@ type: Daily Note
 - deleted in roam since
   created:: 2026-08-01T17:00:00.000Z
   id:: gone-1
+- 
 - [[Hemory]] evening wrap
   created:: 2026-08-02T14:00:00.000Z
   updated:: 2026-08-02T14:05:00.000Z
   id:: Ju5kW0zAq
 - shopping
    - milk
+   -
    - eggs
   created:: 2026-08-02T14:13:20.000Z
   id:: RmQ2xL8vC
@@ -61,3 +63,7 @@ type: Daily Note
   created:: 2026-08-02T14:15:00.000Z
   updated:: 2026-08-02T14:16:40.000Z
   id:: Fp3nH6wDs
+- 
+  created:: 2026-08-02T14:20:00.000Z
+  updated:: 2026-08-02T14:21:00.000Z
+  id:: Ez6yV4rTn

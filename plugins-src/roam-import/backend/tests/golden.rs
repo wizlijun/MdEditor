@@ -40,14 +40,14 @@ fn merged_output_matches_the_golden_fixture() {
     assert_eq!(std::fs::read_to_string(dir.path().join(REL)).unwrap(), GOLDEN);
 
     // The stats the UI reports, pinned against the same fixture: Roam gained
-    // a grandchild, an evening block, a shopping list and a code block
-    // (created), edited the TODO's wording (updated), the user's question,
-    // their reply under the TODO and the whole annotation → question → answer
-    // subtree are untouched (kept_local), and the block Roam has since deleted
-    // is still there (roam_gone_kept).
+    // a grandchild, an evening block, a shopping list, a code block and an
+    // empty block (created), edited the TODO's wording (updated), the user's
+    // question, their reply under the TODO, their empty bullet and the whole
+    // annotation → question → answer subtree are untouched (kept_local), and
+    // the block Roam has since deleted is still there (roam_gone_kept).
     assert_eq!(
         (out.created, out.updated, out.kept_local, out.roam_gone_kept),
-        (4, 1, 5, 1)
+        (5, 1, 6, 1)
     );
     assert!(out.found);
     assert_eq!(out.path, REL);
@@ -80,6 +80,70 @@ fn syncing_the_same_day_again_does_not_touch_the_file() {
         );
         assert_eq!((out.created, out.updated), (0, 0), "run {run} thought something was new");
     }
+}
+
+/// The four line shapes `parse_outline` reads as structure, asserted from this
+/// side by reading the golden bytes back — not just by writing them. Byte
+/// equality above already pins what the plugin *emits*; this pins what the
+/// plugin's own parser then makes of those bytes, which is the half that has to
+/// agree with the host (`src/lib/outline/roam-golden.test.ts` asserts the same
+/// four against `parseOutline`).
+///
+/// Each shape, left unhandled, has cost a block the `id::` that is its
+/// identity — after which `merge` sees a brand-new Roam block and re-creates
+/// it on every single sync, multiplying the user's note without bound. All
+/// four have been real bugs in this plugin.
+#[test]
+fn the_structural_shapes_read_back_as_the_blocks_they_are() {
+    let tree = outline::parse_outline(GOLDEN);
+    let by_id = |id: &str| tree.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("no {id}"));
+
+    // 1. `key:: value` on a continuation line is text, not a property.
+    assert_eq!(by_id("Nb7sT1uEv").content, "meeting notes\n id:: not-a-property");
+
+    // 2. A Roam shift-enter list — `shopping\n- milk\n-\n- eggs` — is ONE
+    //    block, not a block with three child bullets. Its third line is the
+    //    *empty* bullet shape (a line of nothing but `-`), which the escaper
+    //    had to learn separately from `- milk`.
+    let shopping = by_id("RmQ2xL8vC");
+    assert_eq!(shopping.content, "shopping\n - milk\n -\n - eggs");
+    assert!(shopping.persist_id, "the block must keep the id:: that is its identity");
+    assert!(
+        tree.nodes.iter().all(|n| n.parent.as_deref() != Some("RmQ2xL8vC")),
+        "a shift-enter line was read back as a child bullet"
+    );
+
+    // 3. A fence the Roam block never closed is closed for it, so the blocks
+    //    after it survive as their own nodes instead of being eaten into the
+    //    fence body.
+    assert_eq!(by_id("Fp3nH6wDs").content, "```js\nconst x = 1\n```");
+    assert!(tree.nodes.iter().any(|n| n.id == "Ez6yV4rTn"), "the tail was swallowed by the fence");
+
+    // 4. An empty Roam block is written `- ` — dash, space, nothing — so the
+    //    trailing space would otherwise carry the whole meaning of "this
+    //    bullet exists". It is a node with empty content, and the property
+    //    lines under it belong to IT, not to the block above.
+    let empty = by_id("Ez6yV4rTn");
+    assert_eq!(empty.content, "");
+    assert_eq!(empty.created_at.as_deref(), Some("2026-08-02T14:20:00.000Z"));
+    assert_eq!(empty.updated_at.as_deref(), Some("2026-08-02T14:21:00.000Z"));
+    assert_eq!(
+        by_id("Fp3nH6wDs").updated_at.as_deref(),
+        Some("2026-08-02T14:16:40.000Z"),
+        "the empty bullet's properties leaked into the block above it"
+    );
+
+    // …and the user's own empty bullet: `local-before.note.md` carries it in
+    // the whitespace-stripped spelling (a bare `-`, which is what editors,
+    // formatters and git hooks leave behind), and the merge keeps it as a
+    // local block — with no `id::`, so it is theirs, not Roam's.
+    let mine: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter(|n| n.content.is_empty() && !n.persist_id)
+        .collect();
+    assert_eq!(mine.len(), 1, "the user's stripped empty bullet did not survive as a node");
+    assert_eq!(mine[0].parent, None);
 }
 
 /// Front-matter drift guard, Rust half. The golden `.note.md` above cannot

@@ -23,10 +23,10 @@ describe('roam-import golden daily note', () => {
     for (const n of persisted) expect(n.id).not.toMatch(/^local-/)
   })
 
-  /** The three shapes a Roam block can forge that `parseOutline` would
+  /** The four shapes a Roam block can forge that `parseOutline` would
    *  otherwise read as structure. Each one, left unescaped, costs the block the
    *  `id::` that is its identity — after which the merge re-creates it on every
-   *  sync and the user's note multiplies without bound. All three are asserted
+   *  sync and the user's note multiplies without bound. All four are asserted
    *  from this side too, because it is this parser they have to survive. */
   const nodeById = (id: string) => [...parseOutline(text).nodes.values()].find((n) => n.id === id)
 
@@ -35,9 +35,14 @@ describe('roam-import golden daily note', () => {
   })
 
   it('keeps an escaped bullet line as content, not a child node', () => {
-    // A Roam shift-enter list (`shopping\n- milk\n- eggs`).
+    // A Roam shift-enter list with an empty line in it
+    // (`shopping\n- milk\n-\n- eggs`). The bare `-` is the empty-bullet shape,
+    // which the escaper had to be taught separately from `- milk`: read back as
+    // a child, it would push the block's own `id::` out of its continuation
+    // indent and the block would be re-created on every sync, forever.
     const block = nodeById('RmQ2xL8vC')
-    expect(block?.content).toBe('shopping\n - milk\n - eggs')
+    expect(block?.content).toBe('shopping\n - milk\n -\n - eggs')
+    expect(block?.persistId).toBe(true)
     const tree = parseOutline(text)
     expect([...tree.nodes.values()].some((n) => n.content === 'milk')).toBe(false)
     expect([...tree.nodes.values()].filter((n) => n.parentId === 'RmQ2xL8vC')).toHaveLength(0)
@@ -49,6 +54,32 @@ describe('roam-import golden daily note', () => {
     // into the fence body.
     expect(nodeById('Fp3nH6wDs')?.createdAt).toBe('2026-08-02T14:15:00.000Z')
     expect(nodeById('Fp3nH6wDs')?.updatedAt).toBe('2026-08-02T14:16:40.000Z')
+    expect(nodeById('Ez6yV4rTn')).toBeDefined()
+  })
+
+  /** An empty Roam block is written `- ` — a dash, a space, and nothing else —
+   *  so the trailing space would otherwise carry the whole meaning of "this
+   *  bullet exists", and editors, formatters and git hooks strip trailing
+   *  whitespace as a matter of course. The fixture holds both halves: the
+   *  block Roam sent (written `- `, with its properties beneath it) and the
+   *  user's own empty bullet, which `local-before.note.md` carries in the
+   *  already-stripped spelling (a bare `-`) and which the merge has to keep. */
+  it('reads an empty Roam block as a node and keeps its properties on it', () => {
+    const empty = nodeById('Ez6yV4rTn')
+    expect(empty?.content).toBe('')
+    expect(empty?.createdAt).toBe('2026-08-02T14:20:00.000Z')
+    expect(empty?.updatedAt).toBe('2026-08-02T14:21:00.000Z')
+    // …and they did not leak up into the block above it, which is what happened
+    // when a bare `-` fell through to the "unclassifiable line" branch.
+    expect(nodeById('Fp3nH6wDs')?.updatedAt).toBe('2026-08-02T14:16:40.000Z')
+  })
+
+  it("keeps the user's own empty bullet as a local block", () => {
+    const mine = [...parseOutline(text).nodes.values()].filter(
+      (n) => n.content === '' && n.persistId !== true,
+    )
+    expect(mine).toHaveLength(1)
+    expect(mine[0].parentId).toBeNull()
   })
 
   it("keeps the user's own blocks free of any id", () => {
