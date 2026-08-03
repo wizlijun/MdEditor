@@ -6,7 +6,9 @@
 //! subsequent sync, so without an `id::` on each block the merge would have
 //! no way to tell "same block, edited" from "new block" and would degrade to
 //! whole-file overwrite.
-use crate::outline::{fence_close_len, fence_open_len, touch_frontmatter, Node, Tree};
+use crate::outline::{
+    fence_close_len, fence_open_len, touch_frontmatter, Node, Tree, CONCEPT_TYPE_DAILY_NOTE,
+};
 use crate::roam_page::{RoamBlock, RoamPage};
 use crate::syntax::{convert_inline, escape_structural_lines, normalize_date_links};
 use chrono::{SecondsFormat, TimeZone, Utc};
@@ -146,7 +148,10 @@ pub fn convert_page(page: &RoamPage, date: &str) -> Tree {
 
     let mut tree = Tree { frontmatter: None, nodes: Vec::new() };
     walk(&mut tree, &page.children, None, &[]);
-    tree.frontmatter = Some(touch_frontmatter(None, date, &created_for_touch, &now));
+    // A Roam daily page becomes a daily note and nothing else, so the OKF
+    // §4.1 `type` is settled here rather than left to the caller.
+    tree.frontmatter =
+        Some(touch_frontmatter(None, CONCEPT_TYPE_DAILY_NOTE, date, &created_for_touch, &now));
     tree
 }
 
@@ -204,6 +209,15 @@ mod tests {
         let t = convert_page(&page(vec![]), "2026-08-02");
         assert!(t.frontmatter.as_ref().unwrap().contains("title: 2026-08-02"));
         assert!(!t.frontmatter.as_ref().unwrap().contains("August"));
+    }
+
+    /// OKF v0.2 §4.1: the `type` is REQUIRED, and a Roam daily page is a
+    /// `Daily Note` — the type the host's `outlineConceptType` derives from the
+    /// daily folder this note is written into.
+    #[test]
+    fn frontmatter_carries_the_okf_daily_note_type() {
+        let t = convert_page(&page(vec![]), "2026-08-02");
+        assert!(t.frontmatter.as_ref().unwrap().starts_with("type: Daily Note\n"));
     }
 
     /// A uid-less block's fallback id is written to the file (`persist_id`),

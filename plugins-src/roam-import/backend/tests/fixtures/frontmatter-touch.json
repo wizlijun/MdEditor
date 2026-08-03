@@ -9,57 +9,108 @@
     "src/lib/outline/roam-golden.test.ts (host touchFrontmatter, which goes",
     "through the `yaml` package) — so the two implementations cannot drift.",
     "",
-    "The last four cases are the non-mapping boundary (R6). The plugin does not",
+    "`type` is OKF v0.2's one REQUIRED key (§4.1) and the host stamps it on",
+    "every document it writes. Every case carries it, as `Daily Note`: this",
+    "plugin only ever writes <daily_dir>/<yyyy>/<yyyy-MM-dd>.note.md, which is",
+    "what the host's outlineConceptType maps to CONCEPT_TYPE.dailyNote — not the",
+    "`Outline Note` default a caller that says nothing would get. Note the",
+    "asymmetry the host's own code produces and both sides must reproduce: a",
+    "missing key is APPENDED (type, then title, then created), so `type` lands",
+    "first only on a block that had no keys at all to append after.",
+    "",
+    "The three non-mapping cases are the boundary (R6). The plugin does not",
     "have to PRODUCE such a file to be handed one: it writes into whatever daily",
     "note is already on disk, and a .note.md is hand-edited and agent-edited",
-    "(file-over-app). Both sides now leave a block that is not a YAML mapping",
+    "(file-over-app). Both sides leave a block that is not a YAML mapping",
     "exactly as it was, rather than appending key: value lines to a scalar and",
     "leaving behind front-matter the host's own reader cannot parse as a map."
   ],
   "cases": [
     {
-      "name": "a note with no front-matter at all gets all three keys, in order",
+      "name": "a note with no front-matter at all gets all four keys, type first",
       "raw": null,
+      "type": "Daily Note",
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
-      "expected": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+      "expected": "type: Daily Note\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
     },
     {
-      "name": "the golden fixture's own block: updated replaced in place, unknown key and order untouched",
+      "name": "a pre-OKF note gets type appended at the end, keeping every key it had in place",
       "raw": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nroam-uid: 08-02-2026\nupdated: 2026-08-02T10:00:00.000Z",
+      "type": "Daily Note",
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
-      "expected": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nroam-uid: 08-02-2026\nupdated: 2026-08-03T09:00:00.000Z"
+      "expected": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nroam-uid: 08-02-2026\nupdated: 2026-08-03T09:00:00.000Z\ntype: Daily Note"
     },
     {
-      "name": "a missing created is appended before updated is replaced, so the order is stable",
+      "name": "the golden fixture's own block: only updated moves, unknown key and order untouched",
+      "raw": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nroam-uid: 08-02-2026\nupdated: 2026-08-02T10:00:00.000Z\ntype: Daily Note",
+      "type": "Daily Note",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nroam-uid: 08-02-2026\nupdated: 2026-08-03T09:00:00.000Z\ntype: Daily Note"
+    },
+    {
+      "name": "an existing type is never overwritten, even by a different one",
+      "raw": "type: Outline Note\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-01-01T00:00:00.000Z",
+      "type": "Daily Note",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Outline Note\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "a missing created is appended after type, so the order is stable",
       "raw": "title: 2026-08-02\nroam-uid: 08-02-2026\nupdated: 2026-01-01T00:00:00.000Z",
+      "type": "Daily Note",
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
-      "expected": "title: 2026-08-02\nroam-uid: 08-02-2026\nupdated: 2026-08-03T09:00:00.000Z\ncreated: 2026-08-01T16:00:05.019Z"
+      "expected": "title: 2026-08-02\nroam-uid: 08-02-2026\nupdated: 2026-08-03T09:00:00.000Z\ntype: Daily Note\ncreated: 2026-08-01T16:00:05.019Z"
     },
     {
-      "name": "a block with no updated key gets one appended at the end",
+      "name": "a block with no updated key gets one appended after type",
       "raw": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z",
+      "type": "Daily Note",
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
-      "expected": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+      "expected": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\ntype: Daily Note\nupdated: 2026-08-03T09:00:00.000Z"
     },
     {
       "name": "an existing title is never overwritten, even by a different one",
       "raw": "title: whatever the user called it\nupdated: 2026-01-01T00:00:00.000Z",
+      "type": "Daily Note",
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
-      "expected": "title: whatever the user called it\nupdated: 2026-08-03T09:00:00.000Z\ncreated: 2026-08-01T16:00:05.019Z"
+      "expected": "title: whatever the user called it\nupdated: 2026-08-03T09:00:00.000Z\ntype: Daily Note\ncreated: 2026-08-01T16:00:05.019Z"
+    },
+    {
+      "name": "a type nested under another key is not the top-level one, so the file still gets stamped",
+      "raw": "title: 2026-08-02\ngenerated:\n  by: claude-code\n  type: not-the-top-level-one\nupdated: 2026-01-01T00:00:00.000Z",
+      "type": "Daily Note",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "title: 2026-08-02\ngenerated:\n  by: claude-code\n  type: not-the-top-level-one\nupdated: 2026-08-03T09:00:00.000Z\ntype: Daily Note\ncreated: 2026-08-01T16:00:05.019Z"
+    },
+    {
+      "name": "the same, nested inside a sequence item (OKF sources), whose indentation survives verbatim",
+      "raw": "title: 2026-08-02\nsources:\n  - resource: file://x\n    title: nested\nupdated: 2026-01-01T00:00:00.000Z",
+      "type": "Daily Note",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "title: 2026-08-02\nsources:\n  - resource: file://x\n    title: nested\nupdated: 2026-08-03T09:00:00.000Z\ntype: Daily Note\ncreated: 2026-08-01T16:00:05.019Z"
     },
     {
       "name": "a front-matter block that is not a mapping is returned untouched, not appended to",
       "raw": "just a sentence",
+      "type": "Daily Note",
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
@@ -68,6 +119,7 @@
     {
       "name": "a front-matter block that is a sequence is not a mapping either",
       "raw": "- a\n- b",
+      "type": "Daily Note",
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
@@ -76,6 +128,7 @@
     {
       "name": "key:value without a space is a plain scalar to YAML, so it is left alone too",
       "raw": "title:value",
+      "type": "Daily Note",
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
@@ -84,10 +137,11 @@
     {
       "name": "a comment-only block has no keys to keep, so it gets a fresh mapping under the comments",
       "raw": "# written by hand\n# and not a mapping yet",
+      "type": "Daily Note",
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
-      "expected": "# written by hand\n# and not a mapping yet\n\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+      "expected": "# written by hand\n# and not a mapping yet\n\ntype: Daily Note\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
     }
   ]
 }

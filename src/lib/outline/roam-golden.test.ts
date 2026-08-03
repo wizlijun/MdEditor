@@ -98,6 +98,11 @@ describe('roam-import front-matter touch parity', () => {
   it.each(cases)('$name', (c) => {
     expect(
       touchFrontmatter(c.raw as string | null, {
+        // The fixture carries the OKF §4.1 type explicitly rather than letting
+        // either side default: what has to match is the value that lands on
+        // disk, and the plugin writes daily notes (`Daily Note`), not the
+        // `Outline Note` this host function falls back to.
+        type: c.type as string,
         title: c.title as string,
         created: c.created as string,
         now: c.now as string,

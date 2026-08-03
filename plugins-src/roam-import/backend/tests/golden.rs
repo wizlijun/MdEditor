@@ -97,6 +97,9 @@ fn frontmatter_touch_matches_the_shared_fixture() {
         let name = c["name"].as_str().unwrap();
         let got = outline::touch_frontmatter(
             c["raw"].as_str(),
+            // Explicit in the fixture, not defaulted on either side: the value
+            // that has to match is the one that lands on disk (OKF §4.1).
+            c["type"].as_str().unwrap(),
             c["title"].as_str().unwrap(),
             c["created"].as_str().unwrap(),
             c["now"].as_str().unwrap(),

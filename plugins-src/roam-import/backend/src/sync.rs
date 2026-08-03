@@ -15,7 +15,10 @@
 //! before it becomes a path.
 use crate::convert::{convert_page, iso_ms};
 use crate::merge::merge;
-use crate::outline::{frontmatter_value, parse_outline, serialize_outline, touch_frontmatter};
+use crate::outline::{
+    frontmatter_value, parse_outline, serialize_outline, touch_frontmatter,
+    CONCEPT_TYPE_DAILY_NOTE,
+};
 use crate::roam_page::RoamPage;
 use chrono::NaiveDate;
 use serde::Serialize;
@@ -196,6 +199,14 @@ pub fn sync_day(
     // this is the file's own block — the base both serializations start from.
     let base_fm = merged.frontmatter.clone();
 
+    // The only shape this function writes is `<daily_dir>/<yyyy>/<date>.note.md`
+    // (see `daily_rel_path`), which is what the host's `outlineConceptType`
+    // maps to `Daily Note` — so the OKF §4.1 `type` is decided here, at the
+    // layer that knows the path, not inside the front-matter writer.
+    let touch = |raw: Option<&str>, when: &str| {
+        touch_frontmatter(raw, CONCEPT_TYPE_DAILY_NOTE, date, &created, when)
+    };
+
     // A no-op sync must not touch the file AT ALL. `updated:` is refreshed
     // from a live clock, so serializing with `now` would rewrite the note on
     // every cron run: dirtying it for vaultgitsync, re-triggering the host's
@@ -203,12 +214,12 @@ pub fn sync_day(
     // So serialize once with the `updated:` the file already carries, and if
     // that reproduces the file byte-for-byte, there is nothing to say.
     if let Some(prev) = frontmatter_value(base_fm.as_deref(), "updated") {
-        merged.frontmatter = Some(touch_frontmatter(base_fm.as_deref(), date, &created, &prev));
+        merged.frontmatter = Some(touch(base_fm.as_deref(), &prev));
         if serialize_outline(&merged) == existing {
             return Ok(outcome);
         }
     }
-    merged.frontmatter = Some(touch_frontmatter(base_fm.as_deref(), date, &created, now));
+    merged.frontmatter = Some(touch(base_fm.as_deref(), now));
     let text = serialize_outline(&merged);
     // The same "say nothing when there is nothing to say" rule once more, for a
     // note whose front-matter carries no `updated:` for the branch above to
@@ -465,6 +476,9 @@ mod tests {
         assert!(text.contains("- from roam"));
         assert!(text.contains("id:: u1"));
         assert!(text.contains("title: 2026-08-02"));
+        // OKF v0.2 §4.1: every document this repo writes carries a `type`, and
+        // for `dailynote/<yyyy>/<date>.note.md` it is `Daily Note`.
+        assert!(text.starts_with("---\ntype: Daily Note\n"), "no OKF type:\n{text}");
     }
 
     /// `date` arrives from a CLI flag or a UI field and is joined straight

@@ -392,14 +392,16 @@ pub fn serialize_outline(tree: &Tree) -> String {
     if lines.is_empty() { String::new() } else { lines.join("\n") + "\n" }
 }
 
-/// Read one top-level `key: value` out of a front-matter block. Line-based and
-/// deliberately as forgiving as `touch_frontmatter`'s own key check, so the two
-/// always agree on whether a key is there.
+/// Read one **top-level** `key: value` out of a front-matter block. Line-based
+/// and deliberately using the same key test as `touch_frontmatter`, so the two
+/// always agree on whether a key is there: `frontmatter_value(.., "updated")`
+/// answering "yes" for an `updated:` nested under some other key, where
+/// `touch_frontmatter` would then append a *top-level* one, is the sync's
+/// no-op fast path reading a value that is not the one it is about to replace.
 pub fn frontmatter_value(raw: Option<&str>, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
     raw?.lines()
-        .map(str::trim_start)
-        .find(|l| l.starts_with(&prefix))
+        .find(|l| l.starts_with(&prefix) && is_top_level_key(l))
         .map(|l| l[prefix.len()..].trim().to_string())
 }
 
@@ -464,11 +466,22 @@ fn fm_shape(raw: &str) -> FmShape {
     }
 }
 
+/// The OKF v0.2 §4.1 `type` this plugin stamps. It only ever writes
+/// `<daily_dir>/<yyyy>/<yyyy-MM-dd>.note.md`, which is what the host's
+/// `outlineConceptType` (src/lib/outline/frontmatter.ts) maps to
+/// `CONCEPT_TYPE.dailyNote` — *not* `Outline Note`, the default a caller that
+/// says nothing would get. Registered here as a constant for the same reason
+/// `CONCEPT_TYPE` exists in src/lib/okf/concept.ts: one spelling, in one place.
+pub const CONCEPT_TYPE_DAILY_NOTE: &str = "Daily Note";
+
 /// Refresh a companion file's front-matter without a YAML crate: unknown
 /// keys and their order must survive untouched (round-tripping a
 /// hand-edited or third-party-tool-written file is a hard requirement, not
-/// a nicety). `title`/`created` are filled in only if absent (appended at
-/// the end); `updated` is replaced in place if present, appended otherwise.
+/// a nicety). `concept_type` (OKF §4.1 REQUIRED), `title` and `created` are
+/// filled in only if absent — appended at the end, in that order, which is the
+/// order `touchConceptFrontmatter` iterates its keys in; `updated` is replaced
+/// in place if present, appended otherwise. On a block with no keys at all the
+/// same rule reads as "`type` first", since there is nothing to append after.
 ///
 /// A block that is **not a mapping** comes back untouched. This function does
 /// not write the notes it edits — it writes into whatever daily note is
@@ -478,7 +491,13 @@ fn fm_shape(raw: &str) -> FmShape {
 /// reader then refuses as a map, i.e. this sync corrupting front-matter it did
 /// not write. `touchFrontmatter` bails out on exactly this case
 /// (`else if (!isMap(doc.contents)) return raw`); so does this.
-pub fn touch_frontmatter(raw: Option<&str>, title: &str, created: &str, now: &str) -> String {
+pub fn touch_frontmatter(
+    raw: Option<&str>,
+    concept_type: &str,
+    title: &str,
+    created: &str,
+    now: &str,
+) -> String {
     let raw = raw.unwrap_or("");
     let mut lines: Vec<String> = match fm_shape(raw) {
         FmShape::Other => return raw.to_string(),
@@ -496,11 +515,19 @@ pub fn touch_frontmatter(raw: Option<&str>, title: &str, created: &str, now: &st
         }
     };
 
+    // Top-level only, like the host's `doc.has(key)`. An indented `type:` or
+    // `title:` belongs to some other key's value — OKF's own `sources:` and
+    // `generated:` both nest exactly those names (§5.1/§5.2) — and reading it
+    // as "the key is already there" is how the required top-level `type:`
+    // would silently not get stamped on such a file.
     let has_key = |lines: &[String], key: &str| {
         let prefix = format!("{key}:");
-        lines.iter().any(|l| l.trim_start().starts_with(&prefix))
+        lines.iter().any(|l| l.starts_with(&prefix) && is_top_level_key(l))
     };
 
+    if !has_key(&lines, "type") {
+        lines.push(format!("type: {concept_type}"));
+    }
     if !has_key(&lines, "title") {
         lines.push(format!("title: {title}"));
     }
@@ -509,7 +536,7 @@ pub fn touch_frontmatter(raw: Option<&str>, title: &str, created: &str, now: &st
     }
 
     let updated_line = format!("updated: {now}");
-    match lines.iter().position(|l| l.trim_start().starts_with("updated:")) {
+    match lines.iter().position(|l| l.starts_with("updated:") && is_top_level_key(l)) {
         Some(pos) => lines[pos] = updated_line,
         None => lines.push(updated_line),
     }
@@ -660,10 +687,53 @@ mod tests {
 
     #[test]
     fn frontmatter_touch_fills_and_refreshes() {
-        let fm = touch_frontmatter(None, "2026-08-02", "2026-08-02T00:00:00.000Z", "2026-08-03T09:00:00.000Z");
+        let fm = touch_frontmatter(
+            None,
+            CONCEPT_TYPE_DAILY_NOTE,
+            "2026-08-02",
+            "2026-08-02T00:00:00.000Z",
+            "2026-08-03T09:00:00.000Z",
+        );
         assert!(fm.contains("title: 2026-08-02"));
         assert!(fm.contains("created: 2026-08-02T00:00:00.000Z"));
         assert!(fm.contains("updated: 2026-08-03T09:00:00.000Z"));
+    }
+
+    /// OKF v0.2 §4.1: `type` is REQUIRED on every concept document, so a note
+    /// this plugin writes must carry one — as `Daily Note`, the type the host
+    /// derives from the daily folder, not the `Outline Note` default.
+    #[test]
+    fn frontmatter_touch_stamps_the_okf_type_first_on_a_fresh_block() {
+        let fm = touch_frontmatter(None, CONCEPT_TYPE_DAILY_NOTE, "T", "C", "N");
+        assert_eq!(fm, "type: Daily Note\ntitle: T\ncreated: C\nupdated: N");
+    }
+
+    /// …and a type the file already declares is never rewritten (an existing
+    /// key's value is not ours to change), while an *existing* block gets the
+    /// missing key appended, not prepended — the host's key order survives.
+    #[test]
+    fn an_existing_type_is_kept_and_a_missing_one_is_appended() {
+        let kept = touch_frontmatter(Some("type: Outline Note\ntitle: T"), CONCEPT_TYPE_DAILY_NOTE, "T", "C", "N");
+        assert_eq!(kept, "type: Outline Note\ntitle: T\ncreated: C\nupdated: N");
+        let stamped = touch_frontmatter(Some("title: T\nupdated: old"), CONCEPT_TYPE_DAILY_NOTE, "T", "C", "N");
+        assert_eq!(stamped, "title: T\nupdated: N\ntype: Daily Note\ncreated: C");
+    }
+
+    /// A `type:`/`title:` nested under another key is that key's value, not the
+    /// top-level one the host's `doc.has(key)` asks about — OKF nests exactly
+    /// those names under `generated:`/`sources:` (§5.1/§5.2). Reading one as
+    /// "already present" would leave the file with no top-level `type` at all.
+    #[test]
+    fn a_nested_key_is_not_mistaken_for_the_top_level_one() {
+        let raw = "title: 2026-08-02\ngenerated:\n  by: claude-code\n  type: not-the-top-level-one\nupdated: old";
+        let fm = touch_frontmatter(Some(raw), CONCEPT_TYPE_DAILY_NOTE, "2026-08-02", "C", "N");
+        assert_eq!(
+            fm,
+            "title: 2026-08-02\ngenerated:\n  by: claude-code\n  type: not-the-top-level-one\nupdated: N\ntype: Daily Note\ncreated: C"
+        );
+        // The same rule, read back: a nested `updated:` is not the day's.
+        assert_eq!(frontmatter_value(Some(raw), "updated").as_deref(), Some("old"));
+        assert_eq!(frontmatter_value(Some("generated:\n  updated: x"), "updated"), None);
     }
 
     #[test]
@@ -683,7 +753,13 @@ mod tests {
     #[test]
     fn a_frontmatter_block_that_is_not_a_mapping_is_returned_untouched() {
         let touch = |raw: &str| {
-            touch_frontmatter(Some(raw), "2026-08-02", "2026-08-01T16:00:05.019Z", "2026-08-03T09:00:00.000Z")
+            touch_frontmatter(
+                Some(raw),
+                CONCEPT_TYPE_DAILY_NOTE,
+                "2026-08-02",
+                "2026-08-01T16:00:05.019Z",
+                "2026-08-03T09:00:00.000Z",
+            )
         };
         for raw in [
             "just a sentence",
@@ -701,27 +777,28 @@ mod tests {
     #[test]
     fn a_mapping_is_still_touched_whatever_shape_it_takes() {
         let touch = |raw: Option<&str>| {
-            touch_frontmatter(raw, "T", "C", "N")
+            touch_frontmatter(raw, "TY", "T", "C", "N")
         };
         // A key with an empty value is still a key.
-        assert_eq!(touch(Some("title:")), "title:\ncreated: C\nupdated: N");
+        assert_eq!(touch(Some("title:")), "title:\ntype: TY\ncreated: C\nupdated: N");
         // A nested sequence under a key: the `- a` line is not a top-level
         // key, but `tags:` above it is — the block is still a mapping.
-        assert_eq!(touch(Some("title: x\ntags:\n  - a")), "title: x\ntags:\n  - a\ncreated: C\nupdated: N");
+        assert_eq!(touch(Some("title: x\ntags:\n  - a")), "title: x\ntags:\n  - a\ntype: TY\ncreated: C\nupdated: N");
         // A value that contains a colon of its own.
-        assert_eq!(touch(Some("home: https://notemd.net")), "home: https://notemd.net\ntitle: T\ncreated: C\nupdated: N");
+        assert_eq!(touch(Some("home: https://notemd.net")), "home: https://notemd.net\ntype: TY\ntitle: T\ncreated: C\nupdated: N");
         // Empty / whitespace-only reads as "no front-matter at all".
         assert_eq!(touch(Some("")), touch(None));
         assert_eq!(touch(Some("\n   \n")), touch(None));
         // Comments are not content the keys may be appended *into*, but they
         // are kept — with the blank separator the host's serializer writes.
-        assert_eq!(touch(Some("# a\n# b")), "# a\n# b\n\ntitle: T\ncreated: C\nupdated: N");
+        assert_eq!(touch(Some("# a\n# b")), "# a\n# b\n\ntype: TY\ntitle: T\ncreated: C\nupdated: N");
     }
 
     #[test]
     fn frontmatter_touch_keeps_unknown_keys_and_only_moves_updated() {
         let raw = "title: 2026-08-02\nroam-uid: 08-02-2026\nupdated: 2026-01-01T00:00:00.000Z";
-        let fm = touch_frontmatter(Some(raw), "2026-08-02", "x", "2026-08-03T09:00:00.000Z");
+        let fm =
+            touch_frontmatter(Some(raw), CONCEPT_TYPE_DAILY_NOTE, "2026-08-02", "x", "2026-08-03T09:00:00.000Z");
         assert!(fm.contains("roam-uid: 08-02-2026"));
         assert!(fm.contains("updated: 2026-08-03T09:00:00.000Z"));
         assert!(!fm.contains("2026-01-01"));

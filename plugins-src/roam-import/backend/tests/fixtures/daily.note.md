@@ -3,6 +3,7 @@ title: 2026-08-02
 created: 2026-08-01T16:00:05.019Z
 roam-uid: 08-02-2026
 updated: 2026-08-03T09:00:00.000Z
+type: Daily Note
 ---
 - ## Morning review
   created:: 2026-08-02T00:12:00.000Z
