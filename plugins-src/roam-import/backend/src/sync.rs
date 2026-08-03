@@ -179,6 +179,13 @@ pub fn sync_day(
     let local = parse_outline(&existing);
     let roam = convert_page(page, date);
     let (mut merged, stats) = merge(&local, &roam);
+    // Filled in before the early returns below rather than at each of them:
+    // what the merge decided is the same story whether or not anything reached
+    // the disk.
+    outcome.created = stats.created;
+    outcome.updated = stats.updated;
+    outcome.kept_local = stats.kept_local;
+    outcome.roam_gone_kept = stats.roam_gone_kept;
 
     // The page's own creation time is the day's `created:`; a page Roam
     // reports without one falls back to now rather than inventing a date.
@@ -198,25 +205,26 @@ pub fn sync_day(
     if let Some(prev) = frontmatter_value(base_fm.as_deref(), "updated") {
         merged.frontmatter = Some(touch_frontmatter(base_fm.as_deref(), date, &created, &prev));
         if serialize_outline(&merged) == existing {
-            outcome.created = stats.created;
-            outcome.updated = stats.updated;
-            outcome.kept_local = stats.kept_local;
-            outcome.roam_gone_kept = stats.roam_gone_kept;
             return Ok(outcome);
         }
     }
     merged.frontmatter = Some(touch_frontmatter(base_fm.as_deref(), date, &created, now));
+    let text = serialize_outline(&merged);
+    // The same "say nothing when there is nothing to say" rule once more, for a
+    // note whose front-matter carries no `updated:` for the branch above to
+    // reuse. A block `touch_frontmatter` deliberately leaves alone (one that is
+    // not a YAML mapping — see its doc comment) never grows one, so without
+    // this it would be rewritten on every single run.
+    if text == existing {
+        return Ok(outcome);
+    }
 
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    write_atomically(&abs, &serialize_outline(&merged), &existing)?;
+    write_atomically(&abs, &text, &existing)?;
 
-    outcome.created = stats.created;
-    outcome.updated = stats.updated;
-    outcome.kept_local = stats.kept_local;
-    outcome.roam_gone_kept = stats.roam_gone_kept;
     Ok(outcome)
 }
 
@@ -497,6 +505,47 @@ mod tests {
 
         assert_eq!((out.created, out.kept_local), (0, 1));
         assert!(std::fs::read_to_string(&path).unwrap().contains("- what I actually thought"));
+    }
+
+    /// R6, at the file level. The plugin does not have to have *produced* a
+    /// note to be handed one: it writes into whatever daily note is already
+    /// there, and a `.note.md` is hand-edited and agent-edited. A front-matter
+    /// block that is not a YAML mapping must come through the sync verbatim —
+    /// appending `title:`/`created:`/`updated:` under the sentence leaves
+    /// behind a block the host's own `yaml`-backed reader then refuses as a
+    /// map, i.e. this sync corrupting front-matter it did not write.
+    #[test]
+    fn a_hand_written_non_mapping_frontmatter_is_not_corrupted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dailynote/2026/2026-08-02.note.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "---\njust a sentence\n---\n- what I actually thought\n").unwrap();
+
+        let out = sync_day(dir.path(), "dailynote", Some(&page()), "2026-08-02", NOW).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("---\njust a sentence\n---\n"),
+            "the front-matter was rewritten:\n{text}"
+        );
+        assert!(text.contains("- from roam"), "Roam's block still lands:\n{text}");
+        assert!(text.contains("- what I actually thought"), "the user's block survives:\n{text}");
+        assert_eq!((out.created, out.kept_local), (1, 1));
+
+        // …and, having no `updated:` for the fast path to reuse, a second sync
+        // must still be a no-op rather than rewriting the note on every run.
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let again =
+            sync_day(dir.path(), "dailynote", Some(&page()), "2026-08-02", "2026-08-04T17:45:12.345Z")
+                .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "the bytes moved");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            mtime,
+            "the file was rewritten even though nothing changed"
+        );
+        assert_eq!((again.created, again.updated), (0, 0));
     }
 
     /// Regression, C2/C3. `parse_outline` reads three shapes as structure and

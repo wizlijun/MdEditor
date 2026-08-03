@@ -403,15 +403,97 @@ pub fn frontmatter_value(raw: Option<&str>, key: &str) -> Option<String> {
         .map(|l| l[prefix.len()..].trim().to_string())
 }
 
+/// What the host's `yaml`-backed reader would make of a front-matter block.
+/// Decided line by line, like everything else in this file — no YAML crate —
+/// but the three outcomes are exactly the three branches of
+/// `touchFrontmatter` in `src/lib/outline/frontmatter.ts`.
+enum FmShape {
+    /// Nothing but blank lines (`doc.contents == null`): a fresh mapping.
+    Blank,
+    /// Nothing but comments (`doc.contents == null` too): a fresh mapping,
+    /// written *after* the comments.
+    CommentsOnly,
+    /// At least one top-level `key:` — a mapping, safe to edit.
+    Mapping,
+    /// Anything else: a scalar (`just a sentence`), a sequence, a flow
+    /// collection. `isMap` is false there and the host returns the block
+    /// untouched.
+    Other,
+}
+
+/// Is this line a top-level `key:`/`key: value` — the shape that makes a
+/// block-mapping? Deliberately conservative, and conservative in the same
+/// direction the host is: an indented line, a comment, a sequence item, a flow
+/// collection, or `key:value` with no space (a plain *scalar* to YAML, not a
+/// mapping) all read as "not a key", which leaves the block alone rather than
+/// appending to something that cannot take keys.
+fn is_top_level_key(line: &str) -> bool {
+    let Some(first) = line.chars().next() else { return false };
+    if first.is_whitespace() || first == '#' || first == '{' || first == '[' {
+        return false;
+    }
+    if line == "-" || line.starts_with("- ") {
+        return false;
+    }
+    match line.find(':') {
+        None | Some(0) => false,
+        Some(i) => line[i + 1..].chars().next().is_none_or(char::is_whitespace),
+    }
+}
+
+fn fm_shape(raw: &str) -> FmShape {
+    let mut any = false;
+    let mut only_comments = true;
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        any = true;
+        if is_top_level_key(line) {
+            return FmShape::Mapping;
+        }
+        if !trimmed.starts_with('#') {
+            only_comments = false;
+        }
+    }
+    match (any, only_comments) {
+        (false, _) => FmShape::Blank,
+        (true, true) => FmShape::CommentsOnly,
+        (true, false) => FmShape::Other,
+    }
+}
+
 /// Refresh a companion file's front-matter without a YAML crate: unknown
 /// keys and their order must survive untouched (round-tripping a
 /// hand-edited or third-party-tool-written file is a hard requirement, not
 /// a nicety). `title`/`created` are filled in only if absent (appended at
 /// the end); `updated` is replaced in place if present, appended otherwise.
+///
+/// A block that is **not a mapping** comes back untouched. This function does
+/// not write the notes it edits — it writes into whatever daily note is
+/// already on disk, and a `.note.md` is hand-edited and agent-edited
+/// (file-over-app). Appending `title:`/`created:`/`updated:` after
+/// `---\njust a sentence\n---` produces a block the host's own `yaml`-backed
+/// reader then refuses as a map, i.e. this sync corrupting front-matter it did
+/// not write. `touchFrontmatter` bails out on exactly this case
+/// (`else if (!isMap(doc.contents)) return raw`); so does this.
 pub fn touch_frontmatter(raw: Option<&str>, title: &str, created: &str, now: &str) -> String {
-    let mut lines: Vec<String> = match raw {
-        Some(r) => r.lines().map(|l| l.to_string()).collect(),
-        None => Vec::new(),
+    let raw = raw.unwrap_or("");
+    let mut lines: Vec<String> = match fm_shape(raw) {
+        FmShape::Other => return raw.to_string(),
+        // Whitespace-only reads as "no front-matter at all", as it does on the
+        // host — the blank lines are not content to preserve.
+        FmShape::Blank => Vec::new(),
+        FmShape::Mapping => raw.lines().map(|l| l.to_string()).collect(),
+        FmShape::CommentsOnly => {
+            let mut lines: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
+            // The host's serializer separates a leading comment from the
+            // mapping it creates beneath it with a blank line; match it, or
+            // the two sides drift on a comment-only block.
+            lines.push(String::new());
+            lines
+        }
     };
 
     let has_key = |lines: &[String], key: &str| {
@@ -590,6 +672,50 @@ mod tests {
         assert_eq!(frontmatter_value(Some(raw), "updated").as_deref(), Some("2026-08-03T09:00:00.000Z"));
         assert_eq!(frontmatter_value(Some(raw), "created"), None);
         assert_eq!(frontmatter_value(None, "updated"), None);
+    }
+
+    /// R6. This function writes into whatever note is already on disk, and a
+    /// `.note.md` is hand-edited and agent-edited — it does not have to have
+    /// *produced* a file to be handed one. Appending keys to a front-matter
+    /// block that is not a YAML mapping makes something the host's own reader
+    /// then refuses to parse as a map, so the block comes back untouched,
+    /// exactly as `touchFrontmatter` (frontmatter.ts) leaves it.
+    #[test]
+    fn a_frontmatter_block_that_is_not_a_mapping_is_returned_untouched() {
+        let touch = |raw: &str| {
+            touch_frontmatter(Some(raw), "2026-08-02", "2026-08-01T16:00:05.019Z", "2026-08-03T09:00:00.000Z")
+        };
+        for raw in [
+            "just a sentence",
+            "just a sentence\nsecond line",
+            "- a\n- b",       // a sequence
+            "title:value",    // no space: a plain scalar to YAML, not a mapping
+            ">-\n  folded",
+        ] {
+            assert_eq!(touch(raw), raw, "rewrote a non-mapping block: {raw:?}");
+        }
+    }
+
+    /// The other side of the same check: a real mapping must still be touched,
+    /// including the shapes the line-based test could get wrong.
+    #[test]
+    fn a_mapping_is_still_touched_whatever_shape_it_takes() {
+        let touch = |raw: Option<&str>| {
+            touch_frontmatter(raw, "T", "C", "N")
+        };
+        // A key with an empty value is still a key.
+        assert_eq!(touch(Some("title:")), "title:\ncreated: C\nupdated: N");
+        // A nested sequence under a key: the `- a` line is not a top-level
+        // key, but `tags:` above it is — the block is still a mapping.
+        assert_eq!(touch(Some("title: x\ntags:\n  - a")), "title: x\ntags:\n  - a\ncreated: C\nupdated: N");
+        // A value that contains a colon of its own.
+        assert_eq!(touch(Some("home: https://notemd.net")), "home: https://notemd.net\ntitle: T\ncreated: C\nupdated: N");
+        // Empty / whitespace-only reads as "no front-matter at all".
+        assert_eq!(touch(Some("")), touch(None));
+        assert_eq!(touch(Some("\n   \n")), touch(None));
+        // Comments are not content the keys may be appended *into*, but they
+        // are kept — with the blank separator the host's serializer writes.
+        assert_eq!(touch(Some("# a\n# b")), "# a\n# b\n\ntitle: T\ncreated: C\nupdated: N");
     }
 
     #[test]

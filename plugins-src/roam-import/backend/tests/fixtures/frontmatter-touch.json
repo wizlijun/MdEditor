@@ -9,11 +9,12 @@
     "src/lib/outline/roam-golden.test.ts (host touchFrontmatter, which goes",
     "through the `yaml` package) — so the two implementations cannot drift.",
     "",
-    "Known boundary, deliberately not asserted: a front-matter block that is not",
-    "a YAML mapping (`---\\njust a sentence\\n---`). The host returns it",
-    "untouched; the Rust side appends key: value lines to it. The plugin never",
-    "produces such a file (it only ever touches notes whose front-matter it or",
-    "the host wrote), so this is documented rather than fixed."
+    "The last four cases are the non-mapping boundary (R6). The plugin does not",
+    "have to PRODUCE such a file to be handed one: it writes into whatever daily",
+    "note is already on disk, and a .note.md is hand-edited and agent-edited",
+    "(file-over-app). Both sides now leave a block that is not a YAML mapping",
+    "exactly as it was, rather than appending key: value lines to a scalar and",
+    "leaving behind front-matter the host's own reader cannot parse as a map."
   ],
   "cases": [
     {
@@ -55,6 +56,38 @@
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
       "expected": "title: whatever the user called it\nupdated: 2026-08-03T09:00:00.000Z\ncreated: 2026-08-01T16:00:05.019Z"
+    },
+    {
+      "name": "a front-matter block that is not a mapping is returned untouched, not appended to",
+      "raw": "just a sentence",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "just a sentence"
+    },
+    {
+      "name": "a front-matter block that is a sequence is not a mapping either",
+      "raw": "- a\n- b",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "- a\n- b"
+    },
+    {
+      "name": "key:value without a space is a plain scalar to YAML, so it is left alone too",
+      "raw": "title:value",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "title:value"
+    },
+    {
+      "name": "a comment-only block has no keys to keep, so it gets a fresh mapping under the comments",
+      "raw": "# written by hand\n# and not a mapping yet",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "# written by hand\n# and not a mapping yet\n\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
     }
   ]
 }
