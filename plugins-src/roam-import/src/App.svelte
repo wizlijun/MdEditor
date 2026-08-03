@@ -10,6 +10,7 @@
     probe, syncDay, type RoamProbe, type SyncOutcome,
   } from './lib/bridge'
   import { sha256Hex } from './lib/hash'
+  import { reconcileGraphChoice } from './lib/graph-choice'
   import { parseRoamJson } from './lib/roam-import/parse'
   import { assignFiles, planActions, type PlannedPage } from './lib/roam-import/plan'
   import { convertPage, type ConvertedPage } from './lib/roam-import/convert'
@@ -90,16 +91,14 @@
     try { localStorage.setItem(CLI_GRAPH_KEY, cliGraph) } catch { /* best-effort */ }
   })
 
-  /** Keep the persisted graph honest against what the CLI can actually see:
-   *  a name that is no longer configured would fail every sync, and a stale
-   *  pick left over from a multi-graph setup must not be sent once the machine
-   *  is back to one graph (where the CLI auto-selects). */
+  /** Keep the persisted graph honest against what the CLI can actually see —
+   *  but only where the probe actually says something: a name that is no
+   *  longer configured would fail every sync, while a probe that reports no
+   *  graphs at all (Roam not running) is not evidence about anything and must
+   *  leave the pick where it is. The decision itself lives in
+   *  lib/graph-choice.ts, where it is tested. */
   function reconcileGraph(p: RoamProbe) {
-    if (p.graphs.length > 1) {
-      if (!p.graphs.includes(cliGraph)) cliGraph = p.graphs[0]
-    } else {
-      cliGraph = ''
-    }
+    cliGraph = reconcileGraphChoice(cliGraph, p.graphs)
   }
 
   async function refreshProbe() {
