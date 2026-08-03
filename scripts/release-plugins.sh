@@ -11,7 +11,8 @@
 # For each plugin this script:
 #   1. Builds its artifacts by REUSING the existing build scripts
 #      (md2pdf → scripts/build-md2pdf-v2.sh dual-arch bins;
-#       roam-import → pnpm --filter roam-import-plugin build → dist/).
+#       roam-import/openclaw/claude-agent/ebook-import → dual-arch backend
+#       crate + pnpm --filter <plugin> build → dist/).
 #   2. Assembles the install-layout tree (manifest.json at root + bin/ and/or
 #      ui/) in a temp staging dir, then ZIPs it into
 #        dist-plugins/<id>/<version>/<arch>.notemdpkg
@@ -93,11 +94,35 @@ manifest_field() {
   node -e "const m=require('$manifest');const v=m['$field'];process.stdout.write(v==null?'':String(v))"
 }
 
+# Number of entries in a manifest's `binary` map (0 for a ui-only plugin).
+manifest_binary_count() {
+  local manifest="$1"
+  node -e "const m=require('$manifest');process.stdout.write(String(Object.keys(m.binary||{}).length))"
+}
+
 # ZIP a staging dir into a .notemdpkg. Runs from inside the stage so paths are
 # stored relative (manifest.json / bin/… / ui/…), which is what the installer's
 # traversal guard expects. -X drops extra attrs; -r recurses.
+#
+# GUARD: a manifest declaring `binary` must never ship as `universal`.
+# `is_process_plugin()` (src-tauri/src/plugin_runtime/commands.rs) returns true
+# for ANY non-empty binary map, so such a plugin gets a process and a lifecycle
+# — and a universal package, which by construction carries no bin/, gives it a
+# process that does not exist. The window then fails to open too. roam-import
+# shipped exactly this shape until 2026-08-03; the mistake is silent at package
+# time and only surfaces on a user's machine, so it is caught here instead.
 zip_pkg() {
   local stage="$1" pkg="$2"
+  if [[ "$(basename "$pkg")" == "universal.notemdpkg" ]]; then
+    local bins; bins="$(manifest_binary_count "$stage/manifest.json")"
+    if [[ "$bins" != "0" ]]; then
+      echo "ERROR: $(basename "$(dirname "$(dirname "$pkg")")") declares $bins binary target(s)" >&2
+      echo "  but is being packaged as universal.notemdpkg, which carries no bin/." >&2
+      echo "  A manifest with a \`binary\` map is a PROCESS plugin — package it per" >&2
+      echo "  triple (see release_native_ui / release_native_bin), not universal." >&2
+      exit 4
+    fi
+  fi
   rm -f "$pkg"
   ( cd "$stage" && zip -q -X -r "$pkg" . )
 }
@@ -134,33 +159,14 @@ release_md2pdf() {
   done
 }
 
-# ── roam-import: ui-only, single universal package ────────────────────────────
+# ── roam-import: native backend + ui, per-arch packages. It was ui-only until
+# the Roam CLI daily sync (2026-08-03) gave it a backend; the manifest declares
+# a `binary` for both Darwin triples now, and `is_process_plugin()` keys off
+# exactly that — so a `universal` package here would install a process plugin
+# with no process. The guard in zip_pkg makes that unshippable. ─────────────
 release_roam_import() {
-  local id="notemd.roam-import"
-  local src="$REPO_ROOT/plugins-src/roam-import"
-  local manifest="$src/manifest.v2.json"
-  local version; version="$(manifest_field "$manifest" version)"
-  echo "== $id @ $version =="
-
-  echo "[$id] building UI bundle (pnpm --filter roam-import-plugin build)…"
-  pnpm --filter roam-import-plugin build
-
-  local out_dir="$OUT_ROOT/$id/$version"
-  mkdir -p "$out_dir"
-  cp "$manifest" "$out_dir/manifest.json"   # for gen-plugin-index.mjs
-
-  local stage; stage="$(mktemp -d)"
-  trap 'rm -rf "$stage"' RETURN
-  mkdir -p "$stage/ui"
-  cp "$manifest" "$stage/manifest.json"
-  cp -R "$src/dist/." "$stage/ui/"
-
-  local pkg="$out_dir/universal.notemdpkg"
-  zip_pkg "$stage" "$pkg"
-  sign_pkg "$pkg"
-  local sha; sha="$(shasum -a 256 "$pkg" | awk '{print $1}')"
-  echo "[$id] universal.notemdpkg  sha256=$sha  → $pkg"
-  rm -rf "$stage"; trap - RETURN
+  release_native_ui "notemd.roam-import" "$REPO_ROOT/plugins-src/roam-import" \
+    "notemd-roam-import" "roam-import-plugin"
 }
 
 # ── decision-log: ui-only, single universal package ───────────────────────────
