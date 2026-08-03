@@ -94,13 +94,26 @@ fn write_atomically(path: &Path, text: &str, expected: &str) -> Result<(), Strin
         .ok_or_else(|| format!("cannot write {}: not a file path", path.display()))?;
     let fail = |e: std::io::Error| format!("cannot write {}: {e}", path.display());
 
-    let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(fail)?;
+    // A fresh `NamedTempFile` is 0600, which is not what a note should be born
+    // as: every other file the host writes goes through `std::fs::write`, i.e.
+    // `0o666 & !umask`. Ask for 0666 and let the *kernel* apply the umask
+    // (tempfile documents `permissions & !umask` for files) — a hardcoded
+    // fallback mode cannot: 0644 hands a world-readable note to someone whose
+    // umask is 077, and 0600 hands an unreadable-by-anything-else one to
+    // everybody else.
+    let mut tmp = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o666))
+        .tempfile_in(parent)
+        .map_err(fail)?;
     tmp.write_all(text.as_bytes()).and_then(|()| tmp.as_file().sync_all()).map_err(fail)?;
-    // A fresh temporary is 0600. Keep the mode the note already had (0644 for
-    // one this sync is creating), or the vault ends up with daily notes
-    // readable differently from every file beside them.
-    let mode = std::fs::metadata(path).map(|m| m.permissions().mode() & 0o7777).unwrap_or(0o644);
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode)).map_err(fail)?;
+    // A note that already exists keeps exactly the mode it had — the user (or
+    // another tool) may have chmod'd it, and a rename must not quietly reset
+    // that. Only an existing file has a mode to preserve; for a new one the
+    // umask above is the whole answer.
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mode = meta.permissions().mode() & 0o7777;
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode)).map_err(fail)?;
+    }
 
     if read_existing(path)? != expected {
         // `tmp` is dropped here, which deletes it.
@@ -632,15 +645,30 @@ mod tests {
     /// `NamedTempFile` creates at 0600. A note must not come out of a sync
     /// readable differently from every other file in the vault, and one the
     /// user (or another tool) already chmod'd must keep the mode it had.
+    ///
+    /// "Like every other file in the vault" is asserted against an actual
+    /// `std::fs::write` — the call the host itself writes notes with — rather
+    /// than against a hardcoded 0644, because the answer depends on the
+    /// process umask: 0644 under the usual 022, but 0600 under 077, where a
+    /// literal 0644 would publish the user's day to every account on the
+    /// machine. Comparing to the reference file makes the assertion true under
+    /// any umask, including the reviewer's.
     #[test]
     fn the_notes_permissions_survive_the_temp_file_rename() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("note.md");
 
+        let reference = dir.path().join("reference.md");
+        std::fs::write(&reference, "what the host would have written\n").unwrap();
+        let expected = std::fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
+
         write_atomically(&path, "new\n", "").unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o644, "a note this sync created is 0{mode:o}, not the usual 0644");
+        assert_eq!(
+            mode, expected,
+            "a note this sync created is 0{mode:o}, not the 0{expected:o} the umask asks for"
+        );
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         write_atomically(&path, "newer\n", "new\n").unwrap();
