@@ -447,6 +447,50 @@ mod tests {
         assert!(std::fs::read_to_string(&path).unwrap().contains("- what I actually thought"));
     }
 
+    /// Regression, C2/C3. `parse_outline` reads three shapes as structure and
+    /// `convert::block_content` escapes all three; when it escaped only the
+    /// `key:: value` one, a Roam block containing a shift-enter list or an
+    /// unterminated fence was re-read as a *different tree* than the one just
+    /// written — the block lost the `id::` that is its identity, merge saw new
+    /// Roam material, and three syncs against an unchanged Roam page produced
+    /// three copies of the user's note (verified: 1 → 2 → 3 copies).
+    ///
+    /// Three runs, not two: the first sync writes, the second is where the
+    /// misparse first bites, and the third proves it compounds rather than
+    /// settling.
+    #[test]
+    fn a_block_that_looks_like_outline_structure_does_not_multiply() {
+        fn stable_across_three_syncs(label: &str, children: Vec<RoamBlock>) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("dailynote/2026/2026-08-02.note.md");
+            let mut p = page();
+            p.children = children;
+            sync_day(dir.path(), "dailynote", Some(&p), "2026-08-02", NOW).unwrap();
+            let first = std::fs::read_to_string(&path).unwrap();
+            for run in 2..=3 {
+                let out = sync_day(dir.path(), "dailynote", Some(&p), "2026-08-02", NOW).unwrap();
+                let text = std::fs::read_to_string(&path).unwrap();
+                assert_eq!(text, first, "{label}: sync {run} rewrote the file:\n{text}");
+                assert_eq!(
+                    (out.created, out.updated, out.kept_local, out.roam_gone_kept),
+                    (0, 0, 0, 0),
+                    "{label}: sync {run} thought something had changed"
+                );
+            }
+        }
+
+        let b = |uid: &str, s: &str| RoamBlock {
+            uid: Some(uid.into()), string: s.into(), order: 0, heading: None,
+            create_time: None, edit_time: None, children: vec![],
+        };
+        stable_across_three_syncs("shift-enter list", vec![b("u1", "shopping\n- milk\n- eggs")]);
+        stable_across_three_syncs(
+            "unterminated fence",
+            vec![b("u1", "```js\nconst x = 1"), b("u2", "the block after the fence")],
+        );
+        stable_across_three_syncs("property line", vec![b("u1", "meeting\nid:: not-a-property")]);
+    }
+
     #[test]
     fn a_second_sync_leaves_the_file_byte_identical() {
         let dir = tempfile::tempdir().unwrap();

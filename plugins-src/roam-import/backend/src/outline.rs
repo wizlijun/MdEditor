@@ -83,15 +83,18 @@ fn prop_pattern() -> &'static Regex {
 }
 
 /// Leading run of backticks, with no requirement on what follows — used to
-/// detect a bullet's first line *opening* a raw fence.
-fn fence_open_len(s: &str) -> Option<usize> {
+/// detect a bullet's first line *opening* a raw fence. `pub(crate)` so
+/// `convert::close_dangling_fence` asks the parser itself what counts as a
+/// fence rather than keeping a second, driftable copy of the rule.
+pub(crate) fn fence_open_len(s: &str) -> Option<usize> {
     let n = s.chars().take_while(|&c| c == '`').count();
     if n >= 3 { Some(n) } else { None }
 }
 
 /// A line that is *only* backticks (plus trailing whitespace) — closes a raw
-/// fence when its run is at least as long as the one that opened it.
-fn fence_close_len(s: &str) -> Option<usize> {
+/// fence when its run is at least as long as the one that opened it. See
+/// `fence_open_len` for why this is `pub(crate)`.
+pub(crate) fn fence_close_len(s: &str) -> Option<usize> {
     let n = s.chars().take_while(|&c| c == '`').count();
     if n < 3 {
         return None;

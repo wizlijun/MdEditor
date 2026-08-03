@@ -6,35 +6,84 @@
 //! subsequent sync, so without an `id::` on each block the merge would have
 //! no way to tell "same block, edited" from "new block" and would degrade to
 //! whole-file overwrite.
-use crate::outline::{touch_frontmatter, Node, Tree};
+use crate::outline::{fence_close_len, fence_open_len, touch_frontmatter, Node, Tree};
 use crate::roam_page::{RoamBlock, RoamPage};
-use crate::syntax::{convert_inline, escape_reserved_props, normalize_date_links};
+use crate::syntax::{convert_inline, escape_bullet_lines, escape_reserved_props, normalize_date_links};
 use chrono::{SecondsFormat, TimeZone, Utc};
 
 /// Roam epoch-millisecond timestamp → `new Date(ms).toISOString()`-compatible
 /// string (UTC, millisecond precision, `Z` suffix). `to_rfc3339()` alone
 /// would emit `+00:00` instead of `Z`; only the `Millis`-truncated
 /// `SecondsFormat` variant matches byte-for-byte.
+///
+/// A value chrono cannot represent reads as `None`, not a panic: these are
+/// plain `i64`s out of a subprocess's JSON, so a garbage/overflowing
+/// timestamp is untrusted input, and a panic here would take the whole plugin
+/// process down mid-session. A block without a usable `created::`/`updated::`
+/// is a cosmetic loss; a dead process loses the sync.
 pub fn iso_ms(ms: Option<i64>) -> Option<String> {
-    ms.map(|m| {
-        Utc.timestamp_millis_opt(m)
-            .single()
-            .expect("Roam timestamps are plain epoch millis, not ambiguous/gap-adjacent")
-            .to_rfc3339_opts(SecondsFormat::Millis, true)
-    })
+    Utc.timestamp_millis_opt(ms?)
+        .single()
+        .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
-/// One block's content: inline syntax conversion, date-link normalization,
-/// then escaping any continuation line that would otherwise be misread as a
-/// `key:: value` outline property — in that order, matching `blockContent`
-/// in convert.ts (minus `rewriteLinks`, which only applies to the full-graph
-/// import path's uid-rename map and has no equivalent here).
+/// One block's content, in the exact form `parse_outline` will read it back.
+/// Inline syntax conversion and date-link normalization first (matching
+/// `blockContent` in convert.ts, minus `rewriteLinks` — that only applies to
+/// the full-graph import path's uid-rename map and has no equivalent here),
+/// then the escaping this comment is really about.
+///
+/// **`parse_outline` treats THREE shapes as structure, and the escaping has to
+/// cover all three.** A Roam block whose own text contains one is otherwise
+/// re-read as something other than itself on the next sync — it loses the
+/// `id::` line that is its identity, so `merge` sees a brand-new Roam block
+/// and re-creates it, duplicating the user's note on every single run:
+///
+/// 1. `key:: value` on a continuation line → a node property.
+///    Neutralized by [`escape_reserved_props`].
+/// 2. `  - text` on a continuation line → a *child bullet*. Roam's
+///    shift-enter lists are exactly this. Neutralized by
+///    [`escape_bullet_lines`].
+/// 3. a fence opener on the block's FIRST line → raw mode, which runs until a
+///    matching closer and swallows every following block when the text never
+///    closes it. Neutralized by [`close_dangling_fence`].
+///
+/// 1 and 2 are fixed with one leading space (renders the same, no longer
+/// matches). 3 cannot be — the first line is the bullet's own text — so the
+/// missing closer is appended instead. All three are idempotent because the
+/// content is re-derived from Roam on every sync rather than re-read from the
+/// file.
+///
+/// Anyone teaching `parse_outline` a fourth structural shape has to teach it
+/// to this function in the same commit.
 fn block_content(b: &RoamBlock) -> String {
-    let s = escape_reserved_props(&normalize_date_links(&convert_inline(&b.string)));
-    match b.heading {
+    let s = escape_bullet_lines(&escape_reserved_props(&normalize_date_links(&convert_inline(
+        &b.string,
+    ))));
+    // The heading prefix comes before the fence check on purpose: with it, the
+    // first line no longer *starts* with backticks, so it opens no fence — and
+    // `parse_outline` reads it back the same way.
+    let s = match b.heading {
         Some(h) if (1..=3).contains(&h) => format!("{} {}", "#".repeat(h as usize), s),
         _ => s,
+    };
+    close_dangling_fence(s)
+}
+
+/// Shape 3 of [`block_content`]'s list. `parse_outline` enters raw mode when a
+/// bullet's first line opens a fence and leaves it only on a closing line at
+/// least as long — a closer this block never writes is then found somewhere in
+/// the *following* blocks, which the fence has already eaten by then. Hand the
+/// block back its own closer.
+fn close_dangling_fence(s: String) -> String {
+    let mut lines = s.split('\n');
+    let Some(open) = lines.next().and_then(fence_open_len) else { return s };
+    // Only the lines AFTER the opener can close it — the opener is not its own
+    // closer (`parse_outline` checks continuation lines only).
+    if lines.any(|l| fence_close_len(l).is_some_and(|close| close >= open)) {
+        return s;
     }
+    format!("{s}\n{}", "`".repeat(open))
 }
 
 /// Fallback id for a block Roam returned without a `uid`: its child-index
@@ -194,6 +243,80 @@ mod tests {
         assert_eq!(id_of(&a, "mine"), id_of(&b, "mine"));
         assert_eq!(id_of(&a, "mine"), "roam-1-0", "child index path from the page root");
         assert_eq!(id_of(&a, "other"), "roam-0");
+    }
+
+    /// The three shapes `block_content`'s doc comment names, each asserted at
+    /// the level that matters: the emitted content must survive a
+    /// `serialize → parse` round-trip as ONE node with the same text. Anything
+    /// less and the next sync sees a different tree than the one it wrote.
+    fn survives_a_round_trip(roam_text: &str) -> String {
+        use crate::outline::{parse_outline, serialize_outline};
+        let t = convert_page(&page(vec![block("u1", roam_text)]), "2026-08-02");
+        let text = serialize_outline(&t);
+        let back = parse_outline(&text);
+        assert_eq!(back.nodes.len(), 1, "must read back as exactly one node:\n{text}");
+        assert_eq!(back.nodes[0].id, "u1", "the block must keep its identity:\n{text}");
+        assert_eq!(back.nodes[0].content, t.nodes[0].content, "content drifted:\n{text}");
+        t.nodes[0].content.clone()
+    }
+
+    #[test]
+    fn a_property_shaped_continuation_line_stays_content() {
+        assert_eq!(survives_a_round_trip("meeting notes\nid:: not-a-property"),
+                   "meeting notes\n id:: not-a-property");
+    }
+
+    /// C2: an ordinary Roam shift-enter list. Before the escape, `- milk` was
+    /// re-read as a child bullet, which pushed the block's own `id:: u1` out of
+    /// its continuation indent and cost the block its identity — merge then
+    /// re-created it, once per sync, forever.
+    #[test]
+    fn a_bullet_shaped_continuation_line_stays_content() {
+        assert_eq!(survives_a_round_trip("shopping\n- milk\n- eggs"),
+                   "shopping\n - milk\n - eggs");
+        assert_eq!(survives_a_round_trip("outline\n  - nested\n    - deeper"),
+                   "outline\n   - nested\n     - deeper");
+    }
+
+    /// C3: a fence the block opens and never closes put `parse_outline` into a
+    /// raw mode that swallowed the following blocks whole.
+    #[test]
+    fn an_unterminated_fence_is_closed() {
+        assert_eq!(survives_a_round_trip("```js\nconst x = 1"), "```js\nconst x = 1\n```");
+        // A bare opener is not its own closer.
+        assert_eq!(survives_a_round_trip("```"), "```\n```");
+        // Longer fences get a closer of the same length.
+        assert_eq!(survives_a_round_trip("````\n```\nstill inside"),
+                   "````\n```\nstill inside\n````");
+    }
+
+    #[test]
+    fn a_closed_fence_is_left_exactly_as_roam_wrote_it() {
+        assert_eq!(survives_a_round_trip("```js\nconst x = 1\n```"), "```js\nconst x = 1\n```");
+        // Trailing prose after the closer is outside the fence and unaffected.
+        assert_eq!(survives_a_round_trip("```\nx\n```\nafter"), "```\nx\n```\nafter");
+    }
+
+    /// A heading turns the first line into `## …`, which opens no fence at all
+    /// — so nothing must be appended, or the block would grow a stray ``` line
+    /// on every sync.
+    #[test]
+    fn a_heading_block_starting_with_backticks_gets_no_closer() {
+        let mut b = block("u1", "```js");
+        b.heading = Some(2);
+        let t = convert_page(&page(vec![b]), "2026-08-02");
+        assert_eq!(t.nodes[0].content, "## ```js");
+    }
+
+    /// A timestamp chrono cannot represent arrives here as a plain i64 from a
+    /// subprocess's JSON. It must degrade to "no timestamp", never panic — a
+    /// panic takes the plugin process down and the sync with it.
+    #[test]
+    fn an_out_of_range_timestamp_reads_as_none_instead_of_panicking() {
+        assert_eq!(iso_ms(Some(i64::MAX)), None);
+        assert_eq!(iso_ms(Some(i64::MIN)), None);
+        assert_eq!(iso_ms(None), None);
+        assert_eq!(iso_ms(Some(0)).as_deref(), Some("1970-01-01T00:00:00.000Z"));
     }
 
     #[test]

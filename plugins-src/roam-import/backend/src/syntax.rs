@@ -55,6 +55,14 @@ fn reserved_prop_pattern() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^(type|line|id|collapsed|created|updated|status|answered|by):: ").unwrap())
 }
 
+/// The bullet shape `parse_outline` recognizes, anchored exactly as its own
+/// `bullet_pattern` is (`^((?:  )*)- `) — an even number of leading spaces,
+/// then `- `.
+fn bullet_line_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(?:  )*- ").unwrap())
+}
+
 pub fn convert_inline(s: &str) -> String {
     map_non_code(s, |seg| {
         let seg = embed_bracket_pattern().replace_all(seg, "(($1))");
@@ -101,6 +109,22 @@ pub fn escape_reserved_props(s: &str) -> String {
     s.split('\n')
         .enumerate()
         .map(|(i, ln)| if i > 0 && prop.is_match(ln) { format!(" {ln}") } else { ln.to_string() })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A continuation line shaped like an outline bullet is read back by
+/// `parse_outline` as a *child node*, not as this block's own text — and a
+/// Roam block containing a shift-enter list (`shopping\n- milk\n- eggs`) is
+/// exactly that shape. One leading space fixes it for the same reason it fixes
+/// a property line, and by the same mechanism: `^((?:  )*)- ` needs an EVEN
+/// number of leading spaces, so making the count odd stops it matching at any
+/// depth, while the line renders identically.
+pub fn escape_bullet_lines(s: &str) -> String {
+    let bullet = bullet_line_pattern();
+    s.split('\n')
+        .enumerate()
+        .map(|(i, ln)| if i > 0 && bullet.is_match(ln) { format!(" {ln}") } else { ln.to_string() })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -158,5 +182,30 @@ mod tests {
         // parse_outline; one leading space makes it content again.
         assert_eq!(escape_reserved_props("head\nid:: x"), "head\n id:: x");
         assert_eq!(escape_reserved_props("id:: x"), "id:: x");
+    }
+
+    #[test]
+    fn continuation_lines_that_look_like_bullets_get_escaped() {
+        // A Roam shift-enter list. Left alone, `- milk` is re-read as a CHILD
+        // of the block, which then loses its own `id::` line to the child's
+        // continuation indent — see convert::block_content.
+        assert_eq!(escape_bullet_lines("shopping\n- milk\n- eggs"), "shopping\n - milk\n - eggs");
+        // Nested list items match the same pattern at any even indent.
+        assert_eq!(escape_bullet_lines("a\n  - b"), "a\n   - b");
+        // The first line IS the bullet's text; it is never a child bullet.
+        assert_eq!(escape_bullet_lines("- milk"), "- milk");
+        // A dash that is not a bullet (odd indent, or no trailing space) is
+        // already unambiguous and must not be touched.
+        assert_eq!(escape_bullet_lines("a\n - b\n-dash\nx - y"), "a\n - b\n-dash\nx - y");
+    }
+
+    /// The escapes only ever ADD a leading space, so the escaped line no longer
+    /// matches the pattern that produced it — running the pair twice (a
+    /// hand-edited file fed back through, say) cannot pile spaces up.
+    #[test]
+    fn escaping_an_already_escaped_line_changes_nothing() {
+        let once = escape_bullet_lines(&escape_reserved_props("head\nid:: x\n- milk"));
+        assert_eq!(once, "head\n id:: x\n - milk");
+        assert_eq!(escape_bullet_lines(&escape_reserved_props(&once)), once);
     }
 }
