@@ -55,10 +55,15 @@ notemd roam-day --date 2026-08-02          插件窗口「同步当日」
                         ├─ discover roam 可执行
                         ├─ exec roam datalog-query  → 页面树 JSON
                         ├─ convert  → outline 节点(id = roam uid)
-                        ├─ host.vault.read 现有 .note.md → 解析
+                        ├─ std::fs 读现有 .note.md → 解析
                         ├─ merge(§4)
-                        └─ host.vault.write
+                        └─ std::fs 原子写(唯一名临时文件 + rename)
 ```
+
+**vault 文件读写用 `std::fs`,不走 `host.vault.read/write`**(计划的 Global
+Constraints 如此规定):后端已经知道 vault 绝对路径,`host.vault.*` 只用来问
+`host.vault.info`。写入前会重读一次目标文件,内容与本次读到的不一致就中止 ——
+宿主大纲面板可能开着同一篇笔记、持有自己的内存树。
 
 **代价与缓解**:`.note.md` 的解析/序列化要在 Rust 里再写一份(TS 侧约 500 行的等价物),
 与 TS 版有格式漂移风险 → 用 §7 的 golden fixture 双向钉死。
@@ -114,7 +119,7 @@ AI 读命令会跳过这些子树)。即当前设计会把标了隐藏的块也�
 4. **frontmatter**:保留本地的,只 touch `updated`;`title` 恒为 `yyyy-MM-dd`
    (与 `src/lib/outline/daily.ts` 的原生约定一致,不用 Roam 的 "August 2nd, 2026")。
 5. **本地文件不存在**:等价于空树,结果就是纯 Roam 内容。
-6. **幂等**:同一输入连跑两遍,输出逐字节相同。
+6. **幂等**:同一输入连跑两遍,输出逐字节相同 —— 且**根本不写盘**。`updated:` 取自实时时钟,所以每次都序列化一遍会让定时任务把笔记改脏(vaultgitsync 要提交、宿主 file watcher 要重触发)。做法:先用文件里已有的`updated:` 序列化一次,若与磁盘上的字节完全一致就直接返回,连临时文件都不建。
 
 **`id::` 强制落盘**:当日同步路径下**每一个** Roam 块都写 `id:: <uid>`。
 现有 JSON 导入只给被 `((ref))` 引用的块写 id,但没有 id 就没法下次按 uid 对位,
@@ -131,13 +136,22 @@ AI 读命令会跳过这些子树)。即当前设计会把标了隐藏的块也�
     ✅ roam 0.9.2 · graph bruce
     ⚠️ 已安装但未连接 → 运行 roam connect
     ❌ 未安装 → npm i -g @roam-research/roam-cli
-    [ 2026-08-02 ▾ ]   [ 同步当日 ]
+    [ 2026-08-02 ▾ ]  [ 图谱 bruce ▾ ]   [ 同步当日 ]
     ✓ 新增 3 块 · 更新 5 块 · 保留本地 2 块
 ```
 
-- checkbox 状态与可选的 `graph` / `roam` 路径覆盖存插件设置。
+- checkbox 状态、日期、graph 选择存 `localStorage`(纯 UI 偏好,不进后端)。
+- **graph 选择器只在 probe 报出 >1 个图谱时出现**:`roam datalog-query` 不带
+  `--graph` 只在恰好配置了一个图谱时才自动选,所以多图谱用户必须能选,单图谱
+  用户不该看见多余控件。每次 probe 都会校正已存的选择:CLI 不再认识的名字换成
+  第一个,回到单图谱时清空(交回 CLI 自动选)。
+- `roam` 可执行路径覆盖(`roam_path`)后端与 bridge 都支持,但**不在窗口里暴露**
+  ——三层发现(显式 → 登录 shell → 常见安装位置)覆盖了实际场景,YAGNI。
 - 状态三态由 backend 的 `probe` 命令给:未找到可执行 / 找到但 `list-graphs` 报
   `CONFIG_NOT_FOUND` / 就绪(带版本 + graph 名)。
+- **probe 不是免费的**:它会起一个交互式登录 shell(`$SHELL -l -i -c`,要 source
+  用户的 rc 文件)外加最多两个 `roam` 子进程。所以只在勾选开关时、以及开关本来
+  就是开着的情况下开窗时才探测;只用 JSON 导入的用户不该为它买单。
 - 外链用 `<a target="_blank" rel="noopener">`(`ebook-import` 已有先例)。
 - 日期选择器默认**昨天**。
 - 四语言(en/zh/ja/de)字符串 + `strings.test.ts` 键齐全断言(插件 i18n 通病见
@@ -180,6 +194,14 @@ notemd roam-day [--date yyyy-MM-dd|today|yesterday] [--graph <name>] [--json]
 - TS 侧:同一份 fixture 用主程序 `parseOutline` + `serializeOutline` 往返,断言不变。
 
 两侧共用一份文件 ⇒ 任一侧改了 `.note.md` 格式都会红。
+
+fixture 必须**覆盖 `parse_outline` 认作结构的全部三种形状**,否则它挡不住的正是最
+致命的一类 bug(块被读成别的东西 → 丢 `id::` → merge 每次重建 → 用户的笔记无限
+翻倍):属性行、bullet 行(Roam 的 shift-enter 列表)、首行开的围栏(含未闭合)。
+另外单靠 `daily.note.md` **结构上挡不住 front-matter 漂移** —— TS 侧只是把
+`tree.frontmatter` 原样往返,从不调用宿主的 `touchFrontmatter`。故另有一份
+`fixtures/frontmatter-touch.json`,Rust 的 `touch_frontmatter` 与宿主的
+`touchFrontmatter` 各自断言同一批用例的同一批期望字节。
 
 **前端**:`strings.test.ts` 四语言键齐全。
 

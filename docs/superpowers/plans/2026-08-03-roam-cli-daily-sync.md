@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - 插件 id `notemd.roam-import`;新增 backend crate 名与二进制名均为 `notemd-roam-import`。
-- `manifest.v2.json` 用 `#[serde(deny_unknown_fields)]` 解析,**多写一个字段就加载失败**;`engines.notemd` 保持 `">=6.716.7"`。
+- `manifest.v2.json` 用 `#[serde(deny_unknown_fields)]` 解析,**多写一个字段就加载失败**;~~`engines.notemd` 保持 `">=6.716.7"`~~。
+  > **事后更正(final review)**:这条 Global Constraint 是在还不知道要改宿主之前写下的,因此定错了。Task 10 发现 `CliRunner` 无条件要求 `payload.file`,`notemd roam-day` 没有文件参数 —— 于是宿主必须一起改(见 §6 的「唯一改动」)。任何**已发布**的宿主(截至 6.801.5)都跑不通这个子命令,所以 `engines.notemd` 必须是 `">=6.803.0"`,且**插件上架前宿主必须先发到该版本或更高**。
 - 后端与宿主的通道是 stdin/stdout 上的 NDJSON JSON-RPC;**任何 `println!` 到 stdout 都会污染协议**,调试输出一律走 `host.log_info/warn/error`。
 - `$activate` 在协议读循环上同步派发:在 `activate()` 里 `await` `host.request(...)` 会把插件卡死到宿主超时。异步查询必须 spawn(照抄 `ebook-import` 的 `vault_from_host`)。
 - vault 文件读写用 `std::fs`(后端已知 vault 绝对路径);`host.vault.*` 只用来问 `host.vault.info`。
