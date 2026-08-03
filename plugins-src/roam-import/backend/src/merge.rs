@@ -80,6 +80,12 @@ pub fn merge(local: &Tree, roam: &Tree) -> (Tree, MergeStats) {
 /// the root (`None`) or a Roam uid — the only levels where the two sides meet.
 /// Levels below a local-only node have no Roam side at all and are handled by
 /// `copy_local_subtree`.
+///
+/// Ordering within a level is Roam's order for Roam's blocks, and for a local
+/// block a two-way rule: it sits after the nearest sibling that is already in
+/// the output, and otherwise at the **head** of the level. Nothing appends a
+/// local block below Roam's material — a block the user wrote must not drift
+/// downwards every time Roam adds another child to the same parent.
 fn merge_level(ctx: &Ctx, out: &mut Tree, stats: &mut MergeStats, parent: Option<&str>) {
     let mut level: Vec<Placed> = Vec::new();
 
@@ -108,21 +114,11 @@ fn merge_level(ctx: &Ctx, out: &mut Tree, stats: &mut MergeStats, parent: Option
             // Nearest local sibling that is already in the output — a surviving
             // Roam block, or a local block inserted a moment ago. Sit after it.
             Some(pos) => pos + 1,
-            None => {
-                if local_siblings[i + 1..].iter().any(|s| slot_of(&level, &s.id).is_some()) {
-                    // Nothing placed before it, but a placed sibling follows:
-                    // it sat above every Roam block it knew, so it stays above
-                    // them — the head of the level, not merely above that one.
-                    0
-                } else {
-                    // No placed sibling in either direction (e.g. every Roam
-                    // block at this level is brand new, as in a note the user
-                    // hung under a Roam block Roam has only now given children
-                    // of its own). Nothing anchors it, so append rather than
-                    // invent a claim that it belongs above the new material.
-                    level.len()
-                }
-            }
+            // Nothing placed before it, so nothing anchors it: the head of the
+            // level. Either it already sat above every Roam block it knew, or
+            // the Roam blocks here are all brand new — and new Roam material
+            // arriving in a parent must not push the user's own writing down.
+            None => 0,
         };
         // Rule 7: an id that was persisted can only have come from an earlier
         // sync, so a local block carrying one is a Roam deletion, not the
@@ -258,11 +254,14 @@ mod tests {
         assert_eq!(st.kept_local, 0);
     }
 
+    /// The user's note was this block's only child; Roam has now given it one
+    /// of its own. The note survives, and — nothing anchoring it — stays above
+    /// the new arrival rather than being pushed under it.
     #[test]
     fn local_children_of_a_roam_block_survive() {
         let local = parse_outline("- a\n  id:: u1\n  - my note\n");
         let (out, _) = merge(&local, &roam("- a\n  id:: u1\n  - from roam\n    id:: u2\n"));
-        assert_eq!(serialize_outline(&out), "- a\n  id:: u1\n  - from roam\n    id:: u2\n  - my note\n");
+        assert_eq!(serialize_outline(&out), "- a\n  id:: u1\n  - my note\n  - from roam\n    id:: u2\n");
     }
 
     #[test]
@@ -315,6 +314,30 @@ mod tests {
         let (out, st) = merge(&local, &roam("- a\n  id:: u1\n- b\n  id:: u2\n"));
         assert_eq!(serialize_outline(&out), "- m1\n- m2\n- a\n  id:: u1\n- b\n  id:: u2\n");
         assert_eq!(st.kept_local, 2);
+    }
+
+    /// Nothing at this level anchors the user's blocks — every Roam block here
+    /// is brand new. They go to the head, and keep their own relative order:
+    /// the first has no anchor, each of the rest anchors on the one before it.
+    #[test]
+    fn an_unanchored_run_of_local_blocks_stays_in_order_at_the_head() {
+        let local = parse_outline("- p\n  id:: u1\n  - m1\n  - m2\n");
+        let r = roam("- p\n  id:: u1\n  - r1\n    id:: u2\n  - r2\n    id:: u3\n");
+        let (out, st) = merge(&local, &r);
+        assert_eq!(
+            serialize_outline(&out),
+            "- p\n  id:: u1\n  - m1\n  - m2\n  - r1\n    id:: u2\n  - r2\n    id:: u3\n"
+        );
+        assert_eq!((st.created, st.kept_local), (2, 2));
+    }
+
+    /// A level Roam has nothing to say about at all: the head rule must not
+    /// reverse the user's blocks on the way through.
+    #[test]
+    fn a_level_of_only_local_blocks_keeps_its_order() {
+        let local = parse_outline("- p\n  id:: u1\n  - m1\n  - m2\n  - m3\n");
+        let (out, _) = merge(&local, &roam("- p\n  id:: u1\n"));
+        assert_eq!(serialize_outline(&out), "- p\n  id:: u1\n  - m1\n  - m2\n  - m3\n");
     }
 
     /// A Roam block whose local counterpart has both Roam children and a local

@@ -12,9 +12,9 @@ updated: 2026-08-03T09:00:00.000Z
     created:: 2026-08-02T00:13:00.000Z
     updated:: 2026-08-02T13:30:00.000Z
     id:: Km2vQx8pL
+    - my own take on this one
     - carried over from [[2022-08-15]]
       id:: Za9dR4tYw
-    - my own take on this one
 - why did this take so long?
   type:: question
   status:: open
