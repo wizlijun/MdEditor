@@ -21,6 +21,25 @@ updated: 2026-08-02T10:00:00.000Z
    id:: not-a-property
   created:: 2026-08-02T00:20:00.000Z
   id:: Nb7sT1uEv
+  - the line I marked up
+    type:: annotation
+    line:: 12
+    - why this one and not the other?
+      type:: question
+      status:: answered
+      - ````markdown
+        Because the uid is the only stable identity.
+
+        - a list inside the fence is body, not an outline child
+        key:: and this looks like a property but is not
+
+        ```rust
+        let x = 1;
+        ```
+        ````
+        type:: answer
+        answered:: 2026-08-02T11:05:00.000Z
+        by:: claude-code
 - deleted in roam since
   created:: 2026-08-01T17:00:00.000Z
   id:: gone-1

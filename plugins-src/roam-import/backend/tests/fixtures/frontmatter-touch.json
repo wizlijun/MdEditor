@@ -1,0 +1,60 @@
+{
+  "_why": [
+    "The golden daily.note.md fixture pins the OUTLINE format on both sides, but",
+    "it structurally cannot pin the FRONT-MATTER: its TS half round-trips",
+    "tree.frontmatter verbatim and never calls the host's touchFrontmatter, so",
+    "outline.rs's hand-rolled line-based touch_frontmatter had no counterpart",
+    "assertion at all. These cases are asserted by BOTH sides —",
+    "backend/tests/golden.rs (Rust touch_frontmatter) and",
+    "src/lib/outline/roam-golden.test.ts (host touchFrontmatter, which goes",
+    "through the `yaml` package) — so the two implementations cannot drift.",
+    "",
+    "Known boundary, deliberately not asserted: a front-matter block that is not",
+    "a YAML mapping (`---\\njust a sentence\\n---`). The host returns it",
+    "untouched; the Rust side appends key: value lines to it. The plugin never",
+    "produces such a file (it only ever touches notes whose front-matter it or",
+    "the host wrote), so this is documented rather than fixed."
+  ],
+  "cases": [
+    {
+      "name": "a note with no front-matter at all gets all three keys, in order",
+      "raw": null,
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "the golden fixture's own block: updated replaced in place, unknown key and order untouched",
+      "raw": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nroam-uid: 08-02-2026\nupdated: 2026-08-02T10:00:00.000Z",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nroam-uid: 08-02-2026\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "a missing created is appended before updated is replaced, so the order is stable",
+      "raw": "title: 2026-08-02\nroam-uid: 08-02-2026\nupdated: 2026-01-01T00:00:00.000Z",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "title: 2026-08-02\nroam-uid: 08-02-2026\nupdated: 2026-08-03T09:00:00.000Z\ncreated: 2026-08-01T16:00:05.019Z"
+    },
+    {
+      "name": "a block with no updated key gets one appended at the end",
+      "raw": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "title: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "an existing title is never overwritten, even by a different one",
+      "raw": "title: whatever the user called it\nupdated: 2026-01-01T00:00:00.000Z",
+      "title": "2026-08-02",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "title: whatever the user called it\nupdated: 2026-08-03T09:00:00.000Z\ncreated: 2026-08-01T16:00:05.019Z"
+    }
+  ]
+}
