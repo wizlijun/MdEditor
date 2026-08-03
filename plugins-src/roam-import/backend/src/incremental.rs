@@ -290,6 +290,53 @@ fn sync_one(
     Ok(planned(outcome.wrote || moved))
 }
 
+/// Reconcile the graph this run reads with the one the ledger was built from,
+/// and record it.
+///
+/// **One vault tracks one graph.** `.notemd/roam-sync.json` holds a *single*
+/// watermark and a *single* uid → path map; Roam uids are only unique within a
+/// graph. So running against a second graph in the same vault does two silent
+/// kinds of damage: it resumes from the first graph's watermark, and because
+/// the watermark only ever moves forward, everything the second graph changed
+/// before that instant is **skipped permanently and without a word** — the
+/// exact failure this whole feature exists to prevent. And `pages` is shared,
+/// so a uid from one graph can claim the other's file path.
+///
+/// `Ledger.graph` was declared, documented, and in both the design and README
+/// samples from the start; nothing outside a unit test ever wrote it, so the
+/// real ledger says `"graph": null` and the check below could not have fired.
+///
+/// This refuses rather than degrading, which is the harsher of the two options
+/// the review offered, for two reasons. Treating a mismatch as "no watermark"
+/// would rescan from yesterday, which is *not* the safe direction for a graph
+/// that has never been synced here — it abandons everything older just as
+/// permanently. And the `pages` map would still be the other graph's, so the
+/// first rename would move a file belonging to a page this run has never seen.
+/// A message that says what to do costs one command; a silently interleaved
+/// vault cannot be untangled.
+///
+/// `None` — the `roam` CLI's own default graph, which the plugin has no way to
+/// name — is not a mismatch with anything: it adopts whatever the ledger says
+/// and leaves it alone. A ledger with no `graph` yet adopts this run's.
+fn check_graph(ledger: &mut Ledger, graph: Option<&str>) -> Result<(), String> {
+    let Some(current) = graph.map(str::trim).filter(|g| !g.is_empty()) else { return Ok(()) };
+    match ledger.graph.as_deref() {
+        Some(recorded) if recorded != current => Err(format!(
+            "this vault's Roam sync ledger belongs to graph '{recorded}', but this run asked \
+             for '{current}'. One vault tracks one graph: {} holds a single watermark and a \
+             single uid-to-path map, so resuming '{current}' from '{recorded}'s watermark \
+             would permanently skip everything '{current}' changed before it. Sync '{current}' \
+             into its own vault, or delete {} to start this one over from '{current}'.",
+            crate::ledger::LEDGER_REL,
+            crate::ledger::LEDGER_REL,
+        )),
+        _ => {
+            ledger.graph = Some(current.to_string());
+            Ok(())
+        }
+    }
+}
+
 /// Pull everything Roam changed since the watermark into the vault, then leave
 /// a watermark the next run resumes from.
 ///
@@ -298,6 +345,11 @@ fn sync_one(
 /// [`default_since`]. `dry_run` reports what a real run would do — the same
 /// routing, the same renames, computed against the same in-memory ledger — and
 /// writes nothing at all: no note, no move, no ledger, no watermark.
+///
+/// `graph` is the Roam graph this run reads (the CLI's `--graph`; `None` means
+/// "whichever one the `roam` CLI defaults to", which the plugin cannot name).
+/// It is checked against the ledger's own `graph` and recorded there — see
+/// [`check_graph`] for why a mismatch has to stop the run.
 ///
 /// The failure policy is "stop at the first one, keep what got done": errors
 /// here are overwhelmingly connectivity or a page the host has open, both of
@@ -310,6 +362,7 @@ pub fn sync_since<D, F>(
     vault: &Path,
     dirs: (&str, &str),
     since_override: Option<&str>,
+    graph: Option<&str>,
     today: NaiveDate,
     now: &str,
     dry_run: bool,
@@ -335,7 +388,18 @@ where
 
     let loaded = Ledger::load(vault);
     let mut ledger = loaded.ledger;
+    let graph_before = ledger.graph.clone();
+    check_graph(&mut ledger, graph)?;
     let mut errors: Vec<String> = Vec::new();
+    // Recorded up front, not left to the per-page save: a run that discovers
+    // nothing to sync never reaches one, and the binding of this vault to this
+    // graph is exactly what the *next* run's `check_graph` needs to see. A dry
+    // run writes nothing, here as everywhere.
+    if !dry_run && ledger.graph != graph_before {
+        if let Err(e) = ledger.save(vault) {
+            errors.push(format!("cannot record the graph name: {e}"));
+        }
+    }
     // A ledger that is there and unreadable is not a first sync, and the run
     // must not look clean: `since` is about to fall back to yesterday, which
     // abandons everything edited before that — permanently, because the
@@ -482,7 +546,7 @@ mod tests {
     fn syncs_a_daily_and_a_wiki_page_in_one_run() {
         let dir = tempfile::tempdir().unwrap();
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![
                 Changed { uid: "08-02-2026".into(), edited: 1000 },
                 Changed { uid: "8IFJWtnad".into(), edited: 2000 },
@@ -507,7 +571,7 @@ mod tests {
     fn the_watermark_stops_at_the_first_failure_so_nothing_is_skipped() {
         let dir = tempfile::tempdir().unwrap();
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![
                 Changed { uid: "a".into(), edited: 1000 },
                 Changed { uid: "b".into(), edited: 2000 },
@@ -525,7 +589,7 @@ mod tests {
     fn a_page_with_no_blocks_is_skipped_and_creates_no_file() {
         let dir = tempfile::tempdir().unwrap();
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![Changed { uid: "tag".into(), edited: 1000 }]),
             |_| Ok(Some(RoamPage { title: "PKM".into(), uid: Some("tag".into()),
                                    create_time: None, edit_time: None, children: vec![] })),
@@ -545,7 +609,7 @@ mod tests {
         l.save(dir.path()).unwrap();
 
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![Changed { uid: "u".into(), edited: 1000 }]),
             |_| Ok(Some(page("u", "新名", "from roam"))),
         ).unwrap();
@@ -586,7 +650,7 @@ mod tests {
         l.save(dir.path()).unwrap();
 
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![Changed { uid: "u".into(), edited: 1000 }]),
             |_| Ok(Some(page("u", "新名", "from roam"))),
         ).unwrap();
@@ -612,7 +676,7 @@ mod tests {
         l.save(dir.path()).unwrap();
 
         sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![Changed { uid: "u".into(), edited: 1000 }]),
             |_| Ok(Some(page("u", "回顾系统", "from roam"))),
         ).unwrap();
@@ -625,7 +689,7 @@ mod tests {
     fn a_dry_run_writes_nothing_and_leaves_the_watermark_alone() {
         let dir = tempfile::tempdir().unwrap();
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, true,
+            dir.path(), DIRS, None, None, today(), NOW, true,
             |_| Ok(vec![Changed { uid: "8IFJWtnad".into(), edited: 1000 }]),
             |_| Ok(Some(page("8IFJWtnad", "回顾系统", "x"))),
         ).unwrap();
@@ -643,7 +707,7 @@ mod tests {
     fn a_dry_run_names_every_page_it_would_sync_and_where() {
         let dir = tempfile::tempdir().unwrap();
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, true,
+            dir.path(), DIRS, None, None, today(), NOW, true,
             |_| Ok(vec![
                 Changed { uid: "08-02-2026".into(), edited: 1000 },
                 Changed { uid: "8IFJWtnad".into(), edited: 2000 },
@@ -679,7 +743,7 @@ mod tests {
         seeded(dir.path(), 0);
         let batch = vec![Changed { uid: "8IFJWtnad".into(), edited: 1000 }];
         let run = |b: Vec<Changed>| sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(b), |uid| Ok(Some(page(uid, "回顾系统", "概念内容"))),
         ).unwrap();
 
@@ -703,7 +767,7 @@ mod tests {
         let mut l = crate::ledger::Ledger::default();
         l.last_synced_at = Some("2026-08-01T00:00:00.000Z".into());
         l.save(dir.path()).unwrap();
-        let r = sync_since(dir.path(), DIRS, None, today(), NOW, false,
+        let r = sync_since(dir.path(), DIRS, None, None, today(), NOW, false,
                            |_| Ok(vec![]), |_| panic!("must not fetch anything")).unwrap();
         assert_eq!((r.scanned, r.synced), (0, 0));
         assert_eq!(crate::ledger::Ledger::load(dir.path()).ledger.last_synced_at.as_deref(),
@@ -717,7 +781,7 @@ mod tests {
         l.last_synced_at = Some("2026-08-01T00:00:00.000Z".into());
         l.save(dir.path()).unwrap();
         let seen = std::cell::Cell::new(0i64);
-        sync_since(dir.path(), DIRS, Some("2026-07-01"), today(), NOW, true,
+        sync_since(dir.path(), DIRS, Some("2026-07-01"), None, today(), NOW, true,
                    |since| { seen.set(since); Ok(vec![]) }, |_| unreachable!()).unwrap();
         // The user's own July 1st, not UTC's. Asserted against `default_since`
         // rather than a hard-coded epoch literal, because a literal is only
@@ -740,7 +804,7 @@ mod tests {
     fn since_is_read_in_the_users_own_timezone_not_utc() {
         let dir = tempfile::tempdir().unwrap();
         let seen = std::cell::Cell::new(0i64);
-        sync_since(dir.path(), DIRS, Some("2026-07-01"), today(), NOW, true,
+        sync_since(dir.path(), DIRS, Some("2026-07-01"), None, today(), NOW, true,
                    |since| { seen.set(since); Ok(vec![]) }, |_| unreachable!()).unwrap();
 
         let utc_midnight = 1_782_864_000_000i64; // 2026-07-01T00:00:00Z, `date -u … +%s` × 1000
@@ -758,7 +822,7 @@ mod tests {
     fn no_vault_and_no_ledger_starts_at_local_yesterday_midnight() {
         let dir = tempfile::tempdir().unwrap();
         let seen = std::cell::Cell::new(0i64);
-        sync_since(dir.path(), DIRS, None, today(), NOW, true,
+        sync_since(dir.path(), DIRS, None, None, today(), NOW, true,
                    |since| { seen.set(since); Ok(vec![]) }, |_| unreachable!()).unwrap();
         assert_eq!(seen.get(), default_since(today()));
     }
@@ -802,7 +866,7 @@ mod tests {
         ];
 
         let first = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             as_roam_would(batch.clone()),
             |uid| if uid == "c" { Err("network went away".into()) } else { Ok(Some(page(uid, uid, "x"))) },
         ).unwrap();
@@ -822,7 +886,7 @@ mod tests {
         // below it. Both members succeed, and only now does it move past 2000.
         let mut fetched: Vec<String> = vec![];
         let second = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             as_roam_would(batch),
             |uid| { fetched.push(uid.to_string()); Ok(Some(page(uid, uid, "x"))) },
         ).unwrap();
@@ -839,7 +903,7 @@ mod tests {
         seeded(dir.path(), 0);
         let mut fetched: Vec<String> = vec![];
         sync_since(
-            dir.path(), DIRS, None, today(), NOW, true,
+            dir.path(), DIRS, None, None, today(), NOW, true,
             |_| Ok(vec![
                 Changed { uid: "c".into(), edited: 2000 },
                 Changed { uid: "a".into(), edited: 2000 },
@@ -855,7 +919,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         seeded(dir.path(), 500);
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![
                 Changed { uid: "a".into(), edited: 1000 },
                 Changed { uid: "b".into(), edited: 2000 },
@@ -873,7 +937,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut attempts = 0usize;
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![
                 Changed { uid: "a".into(), edited: 1000 },
                 Changed { uid: "b".into(), edited: 2000 },
@@ -891,7 +955,7 @@ mod tests {
     fn a_blockless_page_still_moves_the_watermark_past_itself() {
         let dir = tempfile::tempdir().unwrap();
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![Changed { uid: "tag".into(), edited: 1000 }]),
             |_| Ok(Some(RoamPage { title: "PKM".into(), uid: Some("tag".into()),
                                    create_time: None, edit_time: None, children: vec![] })),
@@ -905,7 +969,7 @@ mod tests {
     fn a_page_roam_no_longer_has_is_skipped_rather_than_failing_the_run() {
         let dir = tempfile::tempdir().unwrap();
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![Changed { uid: "gone".into(), edited: 1000 }]),
             |_| Ok(None),
         ).unwrap();
@@ -921,7 +985,7 @@ mod tests {
         l.save(dir.path()).unwrap();
 
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![Changed { uid: "u".into(), edited: 1000 }]),
             |_| Ok(Some(page("u", "新名", "from roam"))),
         ).unwrap();
@@ -949,7 +1013,7 @@ mod tests {
         l.save(dir.path()).unwrap();
 
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(vec![Changed { uid: "u".into(), edited: 1000 }]),
             |_| Ok(Some(page("u", "新名", "from roam"))),
         ).unwrap();
@@ -982,7 +1046,7 @@ mod tests {
         l.save(dir.path()).unwrap();
 
         let r = sync_since(
-            dir.path(), DIRS, None, today(), NOW, true,
+            dir.path(), DIRS, None, None, today(), NOW, true,
             |_| Ok(vec![
                 Changed { uid: "u".into(), edited: 1000 },
                 Changed { uid: "8IFJWtnad".into(), edited: 2000 },
@@ -1014,7 +1078,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         for bad in ["", "/etc", "../elsewhere", "wiki/../..", ".."] {
             for dirs in [(bad, "dailynote"), ("wikipage", bad)] {
-                let err = sync_since(dir.path(), dirs, None, today(), NOW, false,
+                let err = sync_since(dir.path(), dirs, None, None, today(), NOW, false,
                                      |_| panic!("must not query"), |_| unreachable!()).unwrap_err();
                 assert!(err.contains("expected a relative path inside the vault"),
                         "{dirs:?} was accepted: {err}");
@@ -1032,7 +1096,7 @@ mod tests {
         };
         l.save(dir.path()).unwrap();
         let seen = std::cell::Cell::new(0i64);
-        let r = sync_since(dir.path(), DIRS, None, today(), NOW, false,
+        let r = sync_since(dir.path(), DIRS, None, None, today(), NOW, false,
                            |since| { seen.set(since); Ok(vec![]) }, |_| unreachable!()).unwrap();
         assert_eq!(seen.get(), default_since(today()));
         assert_eq!(r.failed, 0, "a mangled ledger is not a failed page");
@@ -1052,7 +1116,7 @@ mod tests {
         std::fs::write(dir.path().join(crate::ledger::LEDGER_REL),
                        "<<<<<<< HEAD\n{\"lastSyncedAt\":\"2026-07-01T00:00:00.000Z\"}").unwrap();
         let seen = std::cell::Cell::new(0i64);
-        let r = sync_since(dir.path(), DIRS, None, today(), NOW, false,
+        let r = sync_since(dir.path(), DIRS, None, None, today(), NOW, false,
                            |since| { seen.set(since); Ok(vec![]) }, |_| unreachable!()).unwrap();
 
         assert_eq!(seen.get(), default_since(today()), "there is nothing better to start from");
@@ -1070,7 +1134,7 @@ mod tests {
             ..Default::default()
         };
         l.save(dir.path()).unwrap();
-        let r = sync_since(dir.path(), DIRS, None, today(), NOW, false,
+        let r = sync_since(dir.path(), DIRS, None, None, today(), NOW, false,
                            |_| Ok(vec![]), |_| unreachable!()).unwrap();
         assert!(r.to.is_none(), "`to` is a timestamp or nothing — never a passed-through string");
     }
@@ -1080,7 +1144,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         seeded(dir.path(), 10_000);
         let r = sync_since(
-            dir.path(), DIRS, Some("1970-01-01"), today(), NOW, false,
+            dir.path(), DIRS, Some("1970-01-01"), None, today(), NOW, false,
             |since| { assert_eq!(since, default_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 2).unwrap()),
                                  "--since wins over the ledger for the query, as local midnight");
                       Ok(vec![Changed { uid: "old".into(), edited: 1000 }]) },
@@ -1098,7 +1162,7 @@ mod tests {
         seeded(dir.path(), 0);
         let batch = vec![Changed { uid: "8IFJWtnad".into(), edited: 1000 }];
         let run = |b: Vec<Changed>| sync_since(
-            dir.path(), DIRS, None, today(), NOW, false,
+            dir.path(), DIRS, None, None, today(), NOW, false,
             |_| Ok(b), |uid| Ok(Some(page(uid, "回顾系统", "概念内容"))),
         ).unwrap();
 
@@ -1111,11 +1175,102 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&note).unwrap(), first, "not one byte");
     }
 
+    // ── I2: one vault, one graph ────────────────────────────────────────
+
+    /// `Ledger.graph` was declared, documented and in both the design and
+    /// README samples from the start, and nothing outside a unit test ever
+    /// wrote it — the real ledger says `"graph": null`. A run has to record
+    /// it, or the mismatch check below can never fire.
+    #[test]
+    fn a_run_records_the_graph_it_read_from() {
+        let dir = tempfile::tempdir().unwrap();
+        sync_since(
+            dir.path(), DIRS, None, Some("work"), today(), NOW, false,
+            |_| Ok(vec![Changed { uid: "8IFJWtnad".into(), edited: 1000 }]),
+            |uid| Ok(Some(page(uid, "回顾系统", "x"))),
+        ).unwrap();
+        assert_eq!(Ledger::load(dir.path()).ledger.graph.as_deref(), Some("work"));
+    }
+
+    /// …including the run that finds nothing to do, which never reaches the
+    /// per-page save. Binding the vault to the graph is what the *next* run
+    /// needs, and a quiet first run is the likeliest kind.
+    #[test]
+    fn a_run_with_nothing_to_sync_still_records_the_graph() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = sync_since(dir.path(), DIRS, None, Some("work"), today(), NOW, false,
+                           |_| Ok(vec![]), |_| unreachable!()).unwrap();
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(Ledger::load(dir.path()).ledger.graph.as_deref(), Some("work"));
+    }
+
+    /// The failure this exists to prevent, and the reason it must be loud.
+    /// `.notemd/roam-sync.json` holds ONE watermark and ONE uid → path map,
+    /// and Roam uids are unique only within a graph. A second graph resuming
+    /// from the first's watermark skips everything it changed before that
+    /// instant — permanently, since the watermark only moves forward — and its
+    /// uids would claim the first graph's file paths on the way.
+    #[test]
+    fn a_run_against_a_different_graph_is_refused_before_anything_is_fetched() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger {
+            graph: Some("personal".into()),
+            last_synced_at: Some("2026-08-01T00:00:00.000Z".into()),
+            ..Default::default()
+        };
+        l.claim("8IFJWtnad", "wikipage/回顾系统.note.md", "回顾系统");
+        l.save(dir.path()).unwrap();
+        let before = std::fs::read_to_string(dir.path().join(crate::ledger::LEDGER_REL)).unwrap();
+
+        let err = sync_since(dir.path(), DIRS, None, Some("work"), today(), NOW, false,
+                             |_| panic!("must not query"), |_| unreachable!()).unwrap_err();
+        assert!(err.contains("personal") && err.contains("work"), "{err}");
+        assert!(err.contains(crate::ledger::LEDGER_REL), "the message must say which file: {err}");
+        assert_eq!(std::fs::read_to_string(dir.path().join(crate::ledger::LEDGER_REL)).unwrap(),
+                   before, "the other graph's ledger must not be touched, let alone rewritten");
+    }
+
+    /// A dry run is refused too — it would otherwise print a plan built from
+    /// the wrong graph's uid → path map, which is worse than no plan.
+    #[test]
+    fn a_dry_run_against_a_different_graph_is_refused_as_well() {
+        let dir = tempfile::tempdir().unwrap();
+        Ledger { graph: Some("personal".into()), ..Default::default() }.save(dir.path()).unwrap();
+        assert!(sync_since(dir.path(), DIRS, None, Some("work"), today(), NOW, true,
+                           |_| panic!("must not query"), |_| unreachable!()).is_err());
+    }
+
+    /// The `roam` CLI auto-selects when only one graph is configured, so the
+    /// plugin often has no name to check — and "I don't know" is not a
+    /// mismatch with anything. The recorded name survives such a run untouched.
+    #[test]
+    fn an_unnamed_graph_matches_whatever_the_ledger_already_says() {
+        let dir = tempfile::tempdir().unwrap();
+        Ledger { graph: Some("personal".into()), ..Default::default() }.save(dir.path()).unwrap();
+        for graph in [None, Some(""), Some("  ")] {
+            let r = sync_since(dir.path(), DIRS, None, graph, today(), NOW, false,
+                               |_| Ok(vec![]), |_| unreachable!()).unwrap();
+            assert!(r.errors.is_empty(), "{graph:?}: {:?}", r.errors);
+        }
+        assert_eq!(Ledger::load(dir.path()).ledger.graph.as_deref(), Some("personal"),
+                   "a run that cannot name its graph must not erase the one on record");
+    }
+
+    /// The same graph twice is the ordinary case and must be silent.
+    #[test]
+    fn re_running_against_the_same_graph_is_not_a_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        Ledger { graph: Some("work".into()), ..Default::default() }.save(dir.path()).unwrap();
+        let r = sync_since(dir.path(), DIRS, None, Some("work"), today(), NOW, false,
+                           |_| Ok(vec![]), |_| unreachable!()).unwrap();
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+    }
+
     #[test]
     fn an_invalid_since_is_refused_rather_than_silently_misread() {
         let dir = tempfile::tempdir().unwrap();
         for bad in ["2026-13-40", "07/01/2026", "yesterday", "2026-7-1"] {
-            let err = sync_since(dir.path(), DIRS, Some(bad), today(), NOW, true,
+            let err = sync_since(dir.path(), DIRS, Some(bad), None, today(), NOW, true,
                                  |_| panic!("must not query"), |_| unreachable!()).unwrap_err();
             assert!(err.contains("invalid --since"), "{bad} was accepted: {err}");
         }

@@ -310,6 +310,9 @@ impl RoamImportPlugin {
             &vault,
             (&wiki_dir, &daily_dir),
             since,
+            // The ledger records which graph this vault is bound to, and
+            // refuses a run against a different one — see `check_graph`.
+            graph,
             today,
             &now,
             dry_run,

@@ -111,7 +111,18 @@ own `.notemd/roam-import.json`:
 
 `lastSyncedAt` is the watermark; `pages` maps each Roam page uid to the file
 it landed in, which is what makes a rename in Roam a *move* here rather than
-a second file.
+a second file. `graph` records which Roam graph this vault is bound to.
+
+**One vault tracks one graph.** There is a single watermark and a single uid →
+path map in here, and a Roam uid is only unique *within* a graph — so a run
+against a second graph would resume from the first one's watermark and, since
+the watermark only ever moves forward, permanently skip everything the second
+graph changed before that instant, without a word. It would also let one
+graph's uid claim the other's file path. A run whose `--graph` disagrees with
+the recorded one is therefore **refused outright**, with a message naming both;
+sync the second graph into its own vault, or delete this file to re-bind. A run
+that cannot name its graph (the `roam` CLI auto-selects when only one is
+configured) is not a mismatch with anything and leaves the recorded name alone.
 
 It lives in the vault, not in the app's own data directory, **because it
 describes vault files and therefore has to travel with them through git**. A
@@ -242,7 +253,8 @@ notemd roam-sync [--since yyyy-MM-dd] [--graph GRAPH] [--dry-run] [--json]
   scan hours into the morning east of Greenwich and drop that morning's
   edits). It does not rewind the ledger.
 - `--graph` — which Roam graph, if the `roam` CLI is connected to more than
-  one.
+  one. The first run that names one binds the vault's ledger to it; a later
+  run naming a different graph is refused (see *The ledger* above).
 - `--dry-run` — list what a real run would sync — **every page and the exact
   path it would land at** (`pages`), plus the renames it would perform — and
   **write nothing at all**: no note, no file move, no ledger, no watermark.
