@@ -196,16 +196,27 @@ export interface SyncPlanned {
   wrote: boolean
 }
 
-/** `plugin.sync_since`'s result (backend `incremental::SyncReport`).
+/** `plugin.sync_since`'s result (backend `incremental::SyncReport`, plus the
+ * `ok` flag `sync_report_value` stamps on it).
  *
- * ONLY ever seen resolved when `errors` is empty — the backend's
- * errors-mean-not-clean contract (`sync_since_outcome` in `plugin.rs`) turns
- * a non-empty `errors` into a REJECTED promise instead, counts folded into
- * the message, so `failed` is always 0 here too. A caught error from
- * `syncSince` is where a non-clean run (including `failed === 0` but
- * `errors` non-empty, e.g. an unreadable ledger or a refused rename) must be
- * shown — never swallowed into a generic toast. */
+ * Resolved for BOTH a clean and a not-clean run. `ok` — not `failed === 0` —
+ * is what says the run was clean: `failed` counts only the one page that
+ * stopped the run outright, while an unreadable ledger or a rename the sync
+ * refused to perform report `failed === 0` with a non-empty `errors` on
+ * purpose. A report with `ok === false` must be shown as a problem, never as
+ * a success banner.
+ *
+ * It resolves rather than rejecting so the window can show what the run *did*
+ * next to what went wrong. The CLI is the one that turns a not-clean run into
+ * a rejection, because exit 4 is the only "not clean" the host's generic CLI
+ * layer can express (`cli_sync_outcome` in `plugin.rs`).
+ *
+ * A rejected `syncSince` therefore means the run never produced a report at
+ * all — no vault, no `roam` CLI, an unsafe folder name, or a `--graph` that
+ * disagrees with the ledger's. */
 export interface SyncReport {
+  /** `errors.length === 0`. See above: this, not `failed`, is "clean". */
+  ok: boolean
   from: string | null
   to: string | null
   scanned: number
@@ -220,8 +231,9 @@ export interface SyncReport {
 
 /** `plugin.sync_since` — sync everything changed since the ledger's
  *  watermark (or `since`, when given, which overrides it for one run without
- *  moving the watermark backwards). Rejects — does not resolve with a report
- *  carrying `errors` — when the run was not clean; see `SyncReport`. */
+ *  moving the watermark backwards). Resolves with a report whether or not the
+ *  run was clean; check `ok`. Rejects only when there is no report to give —
+ *  see `SyncReport`. */
 export function syncSince(opts?: {
   since?: string
   graph?: string

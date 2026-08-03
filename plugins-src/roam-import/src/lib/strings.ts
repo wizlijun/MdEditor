@@ -49,7 +49,6 @@ export type MessageKey =
   | 'inc.lastSynced'
   | 'inc.never'
   | 'inc.running'
-  | 'inc.result'
   | 'inc.nothing'
   | 'inc.renamed'
   | 'inc.failed'
@@ -101,7 +100,6 @@ const en: Catalog = {
   'inc.lastSynced': 'Last synced: {when}',
   'inc.never': 'Never synced',
   'inc.running': 'Scanning and syncing…',
-  'inc.result': 'Scanned {scanned} page(s) · synced {synced} · skipped {skipped}',
   'inc.nothing': 'Nothing to sync',
   'inc.renamed': 'Renamed: {from} → {to}',
   'inc.failed': 'Incremental sync did not finish cleanly: {error}',
@@ -152,7 +150,6 @@ const zh: Catalog = {
   'inc.lastSynced': '上次同步：{when}',
   'inc.never': '尚未同步过',
   'inc.running': '正在扫描并同步…',
-  'inc.result': '扫描 {scanned} 页 · 同步 {synced} · 跳过 {skipped}',
   'inc.nothing': '没有需要同步的变更',
   'inc.renamed': '已重命名：{from} → {to}',
   'inc.failed': '增量同步未能干净完成：{error}',
@@ -203,7 +200,6 @@ const ja: Catalog = {
   'inc.lastSynced': '前回の同期：{when}',
   'inc.never': 'まだ同期されていません',
   'inc.running': 'スキャンして同期中…',
-  'inc.result': '{scanned} ページをスキャン · {synced} 件同期 · {skipped} 件スキップ',
   'inc.nothing': '同期する変更はありません',
   'inc.renamed': '名称変更：{from} → {to}',
   'inc.failed': '増分同期が正常に完了しませんでした：{error}',
@@ -254,7 +250,6 @@ const de: Catalog = {
   'inc.lastSynced': 'Zuletzt synchronisiert: {when}',
   'inc.never': 'Noch nie synchronisiert',
   'inc.running': 'Wird gescannt und synchronisiert…',
-  'inc.result': '{scanned} Seite(n) gescannt · {synced} synchronisiert · {skipped} übersprungen',
   'inc.nothing': 'Nichts zu synchronisieren',
   'inc.renamed': 'Umbenannt: {from} → {to}',
   'inc.failed': 'Die inkrementelle Synchronisierung wurde nicht sauber abgeschlossen: {error}',

@@ -179,13 +179,16 @@
     incError = null
     incReport = null
     try {
+      // Resolves for a not-clean run too, carrying `ok: false` and `errors`
+      // (plugin.rs `sync_report_value`). That is deliberate: a run that
+      // synced 39 pages and then hit one problem has to show BOTH — the
+      // counts, the paths and the renames next to what went wrong — and the
+      // rename is the one thing the user cannot find out any other way.
       incReport = await syncSince(cliGraph ? { graph: cliGraph } : undefined)
       await refreshSyncStatus()
     } catch (e) {
-      // The backend's errors-mean-not-clean contract (plugin.rs
-      // sync_since_outcome) rejects instead of resolving with a report that
-      // carries `errors` — so this branch, not a success banner, is where a
-      // non-clean run (including failed === 0 but errors non-empty) surfaces.
+      // Only when there is no report at all: no vault, no `roam` CLI, an
+      // unsafe folder name, or a --graph the ledger disagrees with.
       incError = e instanceof Error ? e.message : String(e)
     } finally {
       incSyncing = false
@@ -399,11 +402,29 @@
             {#if incError}
               <p class="banner error-banner">{t('inc.failed', { error: incError })}</p>
             {:else if incReport}
+              <!-- A run that is not clean still did work, and the statistics
+                   below are how the user finds out what: which pages landed
+                   where, and above all which files were RENAMED — the
+                   [[wikilink]]s pointing at their old names are broken now,
+                   and this panel is the only place that is ever said. So the
+                   errors get their own banner and the report is rendered
+                   underneath either way; `ok`, not `failed`, picks the
+                   banner (see bridge.ts's SyncReport). -->
+              {#if !incReport.ok}
+                <p class="banner error-banner">
+                  {t('inc.failed', { error: incReport.errors.join(' | ') })}
+                </p>
+              {/if}
               {#if incReport.scanned === 0}
-                <p class="banner">{t('inc.nothing')}</p>
+                {#if incReport.ok}<p class="banner">{t('inc.nothing')}</p>{/if}
               {:else}
-                <p class="banner ok-banner">
-                  {t('inc.result', { scanned: incReport.scanned, synced: incReport.synced, skipped: incReport.skipped })}
+                <p class="banner" class:ok-banner={incReport.ok}>
+                  {t('inc.stats', {
+                    scanned: incReport.scanned,
+                    synced: incReport.synced,
+                    skipped: incReport.skipped,
+                    failed: incReport.failed,
+                  })}
                 </p>
                 {#if incReport.renamed.length > 0}
                   <ul class="renamed-list">

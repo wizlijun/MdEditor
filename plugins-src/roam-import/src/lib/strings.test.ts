@@ -46,7 +46,7 @@ describe('t', () => {
       'cli.graph', 'cli.sync',
       'cli.syncing', 'cli.result', 'cli.resultGoneKept', 'cli.noPage', 'cli.failed',
       'inc.button', 'inc.lastSynced', 'inc.never', 'inc.running',
-      'inc.result', 'inc.nothing', 'inc.renamed', 'inc.failed',
+      'inc.nothing', 'inc.renamed', 'inc.failed',
       'inc.pagesTitle', 'inc.pageSynced', 'inc.pageUnchanged', 'inc.pagePlanned',
       'inc.stats',
     ]

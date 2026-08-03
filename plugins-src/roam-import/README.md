@@ -299,8 +299,25 @@ destination, has `failed: 0` and a non-empty `errors` — and it is **not**
 clean, because it may be under-scanning. Such a run exits `4` with
 `{"ok":false,"error":{"code":"plugin_failed","message":"…"}}`, rather than
 reporting success. Everything the plugin itself rejects lands here too,
-including no vault configured, the `roam` CLI missing or not connected, and
-an invalid `--since` (the plugin validates it, not the argument parser).
+including no vault configured, the `roam` CLI missing or not connected, a
+`--graph` the ledger disagrees with, and an invalid `--since` (the plugin
+validates it, not the argument parser).
+
+**Exiting `4` does not throw the run away.** The `message` leads with the
+counts (including `renamed=`), names every file that moved on its own line —
+you need those, because the `[[wikilink]]`s pointing at the old names are
+broken now and nothing else will tell you — and ends with `report: {…}`, the
+complete JSON report. So a script can still read every count, path and rename
+out of a failed run:
+
+```sh
+notemd roam-sync --json | jq -r '.error.message // ""' | sed -n 's/^ *report: //p' | jq .pages
+```
+
+The **plugin window** does not go through this contract at all: it gets the
+report either way and shows the statistics, the page list and the renames
+next to the errors, rather than a bare red banner for a run that may have
+synced forty pages.
 
 **Builds up to and including 6.803.1 exited `0` from every plugin
 subcommand**, whatever happened: Tauri's exit path discarded the code the CLI

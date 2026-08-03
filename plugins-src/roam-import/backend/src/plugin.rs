@@ -163,39 +163,84 @@ fn dir_or_default(dir: &str, default: &str) -> String {
     if dir.is_empty() { default.to_string() } else { dir.to_string() }
 }
 
-/// The errors-mean-not-clean contract for one incremental run.
+/// The whole report as a JSON value, plus an explicit `ok` flag.
+///
+/// `ok` is `errors.is_empty()`, **not** `failed == 0`.
 /// [`incremental::SyncReport::errors`] is how `sync_since` says "this run was
 /// not clean" — an unreadable ledger, a rename it refused to perform, a page
-/// that failed — and `errors` is the authority here, independent of
-/// `failed`: `failed` counts only the one page that stopped the run outright,
-/// while a problem like the unreadable-ledger case reports `failed == 0` and
-/// a non-empty `errors` on purpose (see `incremental.rs`'s own doc comment
-/// and tests). So a non-empty `errors` must never be handed back as a plain
-/// `Ok` value — the window would render it as a success banner, and the
-/// CLI's `--json` envelope would print `{"ok":true,...}` and exit 0, which is
-/// exactly the "cron job reports success while silently under-scanning"
-/// failure this function exists to prevent.
+/// that failed — and `errors` is the authority, independent of `failed`:
+/// `failed` counts only the one page that stopped the run outright, while a
+/// problem like the unreadable-ledger case reports `failed == 0` and a
+/// non-empty `errors` on purpose (see `incremental.rs`'s own doc comment and
+/// tests). A run with problems is not a clean run and must never be presented
+/// as one.
+///
+/// This is what the **window** gets, in both cases. It used to get a rejected
+/// promise carrying a flattened summary string, which threw the whole report
+/// away: `renamed` was not even in it, so the case where a rename matters most
+/// — a page moved *and* something else went wrong — was exactly the case where
+/// the user was never told which file had moved, and the `[[wikilink]]`s now
+/// pointing at nothing went unmentioned. A run that synced forty pages and
+/// then hit one problem rendered as a red banner and no statistics at all.
+/// The window renders the counts, the page list and the renames *alongside*
+/// the errors now; `ok` is what tells it which banner to use.
+fn sync_report_value(
+    report: &notemd_roam_import::incremental::SyncReport,
+) -> Result<Value, String> {
+    let mut value = serde_json::to_value(report).map_err(|e| e.to_string())?;
+    if let Some(map) = value.as_object_mut() {
+        map.insert("ok".into(), Value::Bool(report.errors.is_empty()));
+    }
+    Ok(value)
+}
+
+/// The errors-mean-not-clean contract, for the **CLI**.
+///
+/// The host's CLI layer is generic (`src/lib/cli/CliRunner.svelte`): a
+/// resolved plugin command is exit 0 with `{"ok":true,…}`, a rejected one is
+/// exit 4 with a `plugin_failed` envelope, and there is no third answer to
+/// return. So "this run was not clean" has to be an `Err`, or a cron job
+/// reading the exit code reports success while the sync silently
+/// under-scans — the failure this contract exists to prevent.
+///
+/// What changed is that the `Err` no longer *discards* the run. The message
+/// leads with a human summary that now includes `renamed`, names each moved
+/// file on its own line, and ends with the complete serialized report — so
+/// nothing the run computed is lost to the error path, and `--json`'s
+/// `error.message` still carries every count, path and rename.
 ///
 /// Pure — takes the already-computed report, no `Host` — so this decision is
 /// exercised without a real vault, roam CLI or clock. The caller
-/// (`sync_changed_and_report`) additionally logs the report and every error
-/// through the `Host`; that side effect can't live here.
-fn sync_since_outcome(
+/// (`cli_sync_changed`) additionally logs the report and every error through
+/// the `Host`; that side effect can't live here.
+fn cli_sync_outcome(
     report: &notemd_roam_import::incremental::SyncReport,
 ) -> Result<Value, String> {
     if report.errors.is_empty() {
-        return serde_json::to_value(report).map_err(|e| e.to_string());
+        return sync_report_value(report);
     }
-    Err(format!(
+    let mut message = format!(
         "roam-sync finished with {} problem(s) and is NOT clean (scanned={}, synced={}, \
-         skipped={}, failed={}): {}",
+         skipped={}, failed={}, renamed={}): {}",
         report.errors.len(),
         report.scanned,
         report.synced,
         report.skipped,
         report.failed,
+        report.renamed.len(),
         report.errors.join(" | "),
-    ))
+    );
+    // Named one per line rather than folded into a count: a rename is the one
+    // thing this sync does that the user did not ask for file by file, and
+    // the `[[wikilink]]`s pointing at the old name are now broken.
+    for r in &report.renamed {
+        message.push_str(&format!("\n  moved {} -> {}", r.from, r.to));
+    }
+    // And the whole thing, machine-readable, so the error path loses nothing.
+    if let Ok(json) = serde_json::to_string(report) {
+        message.push_str(&format!("\n  report: {json}"));
+    }
+    Err(message)
 }
 
 impl RoamImportPlugin {
@@ -324,13 +369,21 @@ impl RoamImportPlugin {
         )
     }
 
-    /// Shared by the window's `sync_since` UI method and the CLI's
-    /// `sync-changed` command: run [`Self::sync_changed`], log the outcome —
-    /// a summary line always, and every entry of `errors` as its own warning,
-    /// so a problem this run hit is findable in the log even though it also
-    /// fails the call — then apply the errors-mean-not-clean contract
-    /// ([`sync_since_outcome`]) to decide what the caller sees.
-    fn sync_changed_and_report(&self, host: &sdk::Host, params: &Value) -> Result<Value, String> {
+    /// Run [`Self::sync_changed`] and log the outcome — a summary line always,
+    /// and every entry of `errors` as its own warning, so a problem this run
+    /// hit is findable in the log whatever the caller then does with it.
+    ///
+    /// Returns the report itself. The two callers differ *only* in how they
+    /// present a run that was not clean, which is the whole of I4: the window
+    /// ([`sync_report_value`]) gets the statistics, the page list and the
+    /// renames alongside an `ok: false`, while the CLI
+    /// ([`cli_sync_outcome`]) must turn it into an `Err` because exit 4 is the
+    /// only "not clean" the host's generic CLI layer can express.
+    fn sync_changed_and_log(
+        &self,
+        host: &sdk::Host,
+        params: &Value,
+    ) -> Result<notemd_roam_import::incremental::SyncReport, String> {
         let report = self.sync_changed(params)?;
         host.log_info(&format!(
             "roam-sync {}..{} scanned={} synced={} skipped={} failed={} renamed={} \
@@ -343,7 +396,7 @@ impl RoamImportPlugin {
         for e in &report.errors {
             host.log_warn(&format!("roam-sync: {e}"));
         }
-        sync_since_outcome(&report)
+        Ok(report)
     }
 
     /// UI method `sync_status`: ledger-only, no fetch — just what the last
@@ -355,12 +408,21 @@ impl RoamImportPlugin {
         Ok(json!({ "last_synced_at": ledger.last_synced_at }))
     }
 
+    /// UI method `sync_since`: the report, always — including when the run was
+    /// not clean, where `ok` is `false` and `errors` carries the reasons. The
+    /// window shows both halves; see [`sync_report_value`].
+    fn ui_sync_changed(&self, host: &sdk::Host, params: &Value) -> Result<Value, String> {
+        sync_report_value(&self.sync_changed_and_log(host, params)?)
+    }
+
     /// CLI entry point: `notemd roam-sync [--since …] [--graph …]
     /// [--dry-run]`. Reads flags out of `context` (the host parses argv, not
     /// the plugin) and reuses the exact same `sync_changed` →
-    /// `incremental::sync_since` path the window drives.
+    /// `incremental::sync_since` path the window drives — differing only in
+    /// [`cli_sync_outcome`]'s exit-code contract.
     fn cli_sync_changed(&self, host: &sdk::Host, context: &Value) -> Result<Value, String> {
-        self.sync_changed_and_report(host, &cli_sync_changed_params(context))
+        let report = self.sync_changed_and_log(host, &cli_sync_changed_params(context))?;
+        cli_sync_outcome(&report)
     }
 }
 
@@ -447,7 +509,7 @@ impl sdk::NotemdPlugin for RoamImportPlugin {
                     .map_err(|e| e.to_string())
             }
             "sync_day" => self.sync_day_and_report(host, &params),
-            "sync_since" => self.sync_changed_and_report(host, &params),
+            "sync_since" => self.ui_sync_changed(host, &params),
             "sync_status" => self.sync_status(),
             other => Err(format!("unknown ui method '{other}'")),
         }
@@ -637,9 +699,9 @@ mod tests {
         assert_eq!(dir_or_default("", "wikipage"), "wikipage");
     }
 
-    // ── sync_since_outcome: the errors-mean-not-clean contract ──────────
+    // ── the two presentations of one report ─────────────────────────────
 
-    use notemd_roam_import::incremental::SyncReport;
+    use notemd_roam_import::incremental::{Planned, Renamed, SyncReport};
 
     fn clean_report() -> SyncReport {
         SyncReport {
@@ -650,13 +712,32 @@ mod tests {
         }
     }
 
+    /// A report that did real work *and* hit a problem — the shape I4 is
+    /// about. Both are true at once, and neither may be dropped.
+    fn busy_but_not_clean() -> SyncReport {
+        let mut report = clean_report();
+        report.scanned = 40;
+        report.synced = 39;
+        report.pages = vec![Planned {
+            uid: "u".into(), title: "新名".into(),
+            rel: "wikipage/新名.note.md".into(), wrote: true,
+        }];
+        report.renamed = vec![Renamed {
+            uid: "u".into(),
+            from: "wikipage/旧名.note.md".into(),
+            to: "wikipage/新名.note.md".into(),
+        }];
+        report.errors = vec!["unreadable last sync time '<<<<<<< HEAD' in the ledger".into()];
+        report
+    }
+
     #[test]
     fn a_clean_report_becomes_ok_with_the_report_as_json() {
-        let report = clean_report();
-        let v = sync_since_outcome(&report).expect("a clean report must be Ok");
+        let v = cli_sync_outcome(&clean_report()).expect("a clean report must be Ok");
         assert_eq!(v["scanned"], json!(2));
         assert_eq!(v["synced"], json!(2));
         assert_eq!(v["errors"], json!([]));
+        assert_eq!(v["ok"], json!(true));
     }
 
     #[test]
@@ -664,7 +745,7 @@ mod tests {
         let mut report = clean_report();
         report.failed = 1;
         report.errors = vec!["u: network went away".into()];
-        let err = sync_since_outcome(&report).unwrap_err();
+        let err = cli_sync_outcome(&report).unwrap_err();
         assert!(err.contains("1 problem"), "{err}");
         assert!(err.contains("network went away"), "{err}");
     }
@@ -679,7 +760,7 @@ mod tests {
         let mut report = clean_report();
         report.failed = 0;
         report.errors = vec!["unreadable last sync time '<<<<<<< HEAD' in the ledger".into()];
-        let err = sync_since_outcome(&report).unwrap_err();
+        let err = cli_sync_outcome(&report).unwrap_err();
         assert!(err.contains("failed=0"), "{err}");
         assert!(err.contains("unreadable last sync time"), "{err}");
     }
@@ -688,9 +769,51 @@ mod tests {
     fn multiple_errors_are_all_visible_in_the_message() {
         let mut report = clean_report();
         report.errors = vec!["first problem".into(), "second problem".into()];
-        let err = sync_since_outcome(&report).unwrap_err();
+        let err = cli_sync_outcome(&report).unwrap_err();
         assert!(err.contains("first problem"), "{err}");
         assert!(err.contains("second problem"), "{err}");
         assert!(err.contains("2 problem"), "{err}");
+    }
+
+    /// I4, CLI half. The exit-4 contract stays, but the error must no longer
+    /// throw the run away: the summary counts `renamed`, every move is named
+    /// (those `[[wikilink]]`s are broken now, and this is the only place the
+    /// user hears about it), and the full report rides along so `--json`'s
+    /// `error.message` still carries every count, path and rename.
+    #[test]
+    fn a_not_clean_run_still_reports_everything_it_did() {
+        let report = busy_but_not_clean();
+        let err = cli_sync_outcome(&report).unwrap_err();
+        assert!(err.contains("scanned=40") && err.contains("synced=39"), "{err}");
+        assert!(err.contains("renamed=1"), "{err}");
+        assert!(err.contains("moved wikipage/旧名.note.md -> wikipage/新名.note.md"), "{err}");
+
+        let json = err.split("report: ").nth(1).unwrap_or_else(|| panic!("no report in: {err}"));
+        let back: Value = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(back["synced"], json!(39));
+        assert_eq!(back["pages"][0]["rel"], json!("wikipage/新名.note.md"));
+        assert_eq!(back["renamed"][0]["to"], json!("wikipage/新名.note.md"));
+    }
+
+    /// I4, window half. The window used to get nothing but a string here: a
+    /// red banner, no statistics, and no word of the file that moved — for a
+    /// run that synced 39 pages. It gets the whole report now, with `ok`
+    /// telling it the run was not clean.
+    #[test]
+    fn the_window_gets_the_statistics_alongside_the_errors() {
+        let v = sync_report_value(&busy_but_not_clean()).unwrap();
+        assert_eq!(v["ok"], json!(false), "a run with errors is not a clean run");
+        assert_eq!(v["scanned"], json!(40));
+        assert_eq!(v["synced"], json!(39));
+        assert_eq!(v["failed"], json!(0), "no page failed, and yet the run is not clean");
+        assert_eq!(v["renamed"][0]["from"], json!("wikipage/旧名.note.md"));
+        assert_eq!(v["pages"][0]["rel"], json!("wikipage/新名.note.md"));
+        assert_eq!(v["errors"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_clean_run_is_marked_ok_for_the_window_too() {
+        let v = sync_report_value(&clean_report()).unwrap();
+        assert_eq!(v["ok"], json!(true));
     }
 }
