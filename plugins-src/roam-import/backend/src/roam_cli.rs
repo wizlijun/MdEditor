@@ -58,26 +58,13 @@ pub fn graphs_from_list(stdout: &str) -> Result<Vec<String>, String> {
 }
 
 /// Run `roam <args>` with a hard timeout, returning stdout. stderr is folded
-/// into the error so an authorization failure is visible to the user.
+/// into the error so an authorization failure is visible to the user. The
+/// spawn/poll/kill mechanics live in `procutil::run_with_timeout`, shared
+/// with `discover::shell_lookup` so there's exactly one wait loop.
 pub fn run(exe: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
-    let mut child = Command::new(exe)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(_) => break,
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                return Err(format!("roam timed out after {}s", timeout.as_secs()));
-            }
-            None => std::thread::sleep(Duration::from_millis(50)),
-        }
-    }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(exe);
+    cmd.args(args);
+    let out = crate::procutil::run_with_timeout(cmd, timeout)?;
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -86,15 +73,20 @@ pub fn run(exe: &Path, args: &[&str], timeout: Duration) -> Result<String, Strin
     Ok(stdout)
 }
 
-/// Full status for the UI's three-state banner.
+/// Full status for the UI's three-state banner. `--version`/`list-graphs`
+/// are local operations, so 10s each is generous; both calls chained plus
+/// the (separately 5s-bounded) shell lookup inside `discover::discover`
+/// must stay comfortably under the host's default 30s `ui.request` timeout
+/// (`on_ui_request` runs this synchronously — see plugin.rs) and under this
+/// plugin's own `request_timeout_seconds: 120` manifest override.
 pub fn probe(explicit: Option<&str>) -> Probe {
     let Some(exe) = crate::discover::discover(explicit) else {
         return Probe { state: ProbeState::Missing, found: None, version: None, graphs: vec![] };
     };
-    let version = run(&exe, &["--version"], Duration::from_secs(20))
+    let version = run(&exe, &["--version"], Duration::from_secs(10))
         .ok()
         .and_then(|s| parse_version(&s));
-    let graphs = run(&exe, &["list-graphs"], Duration::from_secs(20))
+    let graphs = run(&exe, &["list-graphs"], Duration::from_secs(10))
         .ok()
         .and_then(|s| graphs_from_list(&s).ok())
         .unwrap_or_default();

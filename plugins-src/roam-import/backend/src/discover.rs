@@ -4,6 +4,7 @@
 //! explicit override → login-shell lookup → well-known install locations.
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 /// Well-known install locations, in priority order.
 pub fn candidates(home: &Path) -> Vec<PathBuf> {
@@ -44,9 +45,15 @@ pub fn discover(explicit: Option<&str>) -> Option<PathBuf> {
     discover_with(explicit, &home, shell_lookup, is_executable)
 }
 
+/// A wedged/slow login shell must not hang the caller — 5s is plenty for
+/// `command -v roam`. Bounded via `procutil::run_with_timeout`, the same
+/// spawn/poll/kill loop `roam_cli::run` uses, so there's exactly one
+/// implementation of "run a child process with a hard deadline" in the crate.
 fn shell_lookup() -> Option<PathBuf> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let out = Command::new(shell).args(["-l", "-i", "-c", "command -v roam"]).output().ok()?;
+    let mut cmd = Command::new(shell);
+    cmd.args(["-l", "-i", "-c", "command -v roam"]);
+    let out = crate::procutil::run_with_timeout(cmd, Duration::from_secs(5)).ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if s.is_empty() { None } else { Some(PathBuf::from(s)) }
 }

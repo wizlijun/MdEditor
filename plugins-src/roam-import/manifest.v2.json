@@ -48,6 +48,7 @@
     "toast",
     "ui"
   ],
+  "request_timeout_seconds": 120,
   "i18n": {
     "zh": {
       "name": "Roam Research 导入",
