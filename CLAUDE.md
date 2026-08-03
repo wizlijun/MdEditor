@@ -20,3 +20,17 @@ note.md —— 为 AI-native 时代打造的 markdown 阅读器与编辑器。
 - **一个 vault,多个 agent,你是编排者** — 见 `docs/product-principle-one-vault-many-agents-you-orchestrate.md`。
 
 外宣落点:README(中/英)的「产品理念」段;官网 notemd.net(`website/`);`website/public/llms.txt` / `llms-full.txt`(给 agent 的公共约定)。
+
+## 格式约束:OKF v0.2(知识文档格式,规范性)
+
+**`docs/okf-v0.2-format-constraints.md`** 是本项目的知识文档格式约束文档(Open Knowledge Format v0.2,Google Cloud 开放规范的中文整理版,SSOT 见文首链接)。凡产出/消费 OKF 知识包(Knowledge Bundle)——例如把 vault 内容导出为可分发的知识集合、或让 agent 按公共约定读写知识文档——**必须严格按该文档执行**,不要凭印象写字段;有疑问先读文档对应小节,再动手。
+
+要点(细节以文档为准,此处只是索引):
+
+- **生产者侧三条硬约束**:非保留 `.md` 必须有可解析的 YAML frontmatter;frontmatter 必须有非空 `type`;`index.md` / `log.md` 是保留文件名,不得当概念文档用且须遵循各自结构(§8/§9)。
+- **消费者侧宽容义务**:缺可选字段、未知 `type`、未知附加键、断链、缺 `index.md` 都 **MUST NOT** 拒绝;裸 `verified` mapping 必须当单元素列表处理(§11)。
+- **来源/信任/生命周期字段族**(`sources`、`generated`、`verified`、`status`、`stale_after`)全部可选,但缺失本身有含义;信任层级是派生值,不存储、也不是访问控制(§5)。
+- **actor 统一格式**:`<producer>/<version>` / `human:<id>` / `process:<id>`;人工撰写或人工确认必须用 `human:` 前缀(§7)——这与信念 3「`✦` AI 写的、`●` 你想的」同源:人机署名不能混。
+- **Attested Computation 红线**:agent 只能给声明的 `parameters` 提供*值*,**MUST NOT** 撰写或修改计算本身(§10.2)。
+
+与产品主张的关系:OKF 是「文件高于应用」和「一个 vault,多个 agent」的外部落点——纯 Markdown + YAML frontmatter、可 diff、可移植,正是 vault 对外交换知识时的公共约定。它约束的是知识包的交换格式,不改变 vault 内 `.md` / `.note.md` 的既有约定。
