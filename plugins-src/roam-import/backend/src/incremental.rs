@@ -69,9 +69,11 @@ pub struct Renamed {
 pub struct SyncReport {
     /// The watermark this run queried from, ISO-8601.
     pub from: Option<String>,
-    /// The watermark this run *persisted*, ISO-8601 — `None` when it did not
-    /// advance one (nothing changed, the first page failed, or a dry run, which
-    /// persists nothing at all).
+    /// The watermark on disk when this run finished, ISO-8601: the one it
+    /// persisted, or — when it advanced nothing — the one that was already
+    /// there. `None` only when there is none to report: no ledger, a recorded
+    /// value that is not a timestamp, a save that failed, or a dry run (which
+    /// persists nothing at all, so it has nothing to report here).
     pub to: Option<String>,
     /// Pages discovered as changed. It may exceed `synced + skipped + failed`:
     /// a failure stops the run, and the pages after it are left for next time.
@@ -86,7 +88,10 @@ pub struct SyncReport {
     pub failed: usize,
     pub renamed: Vec<Renamed>,
     /// Human-readable, one per problem. Not always the same count as `failed`:
-    /// an unreadable watermark is reported here without failing any page.
+    /// an unreadable ledger, and a rename this sync refused to make because a
+    /// file was already at the destination, are both reported here without any
+    /// page having failed. A run with `failed == 0` and a non-empty `errors` is
+    /// not a clean run and must not be shown as one.
     pub errors: Vec<String>,
     pub dry_run: bool,
 }
@@ -101,9 +106,19 @@ pub struct SyncReport {
 /// not drag the entire graph in (§8 acceptance 1) — a full import is the other
 /// feature's job.
 pub fn default_since(today: NaiveDate) -> i64 {
-    let midnight = (today - Duration::days(1))
-        .and_hms_opt(0, 0, 0)
-        .expect("00:00:00 is a valid time of day");
+    local_midnight_ms(today - Duration::days(1))
+}
+
+/// The instant a calendar day begins **where the user is**, in epoch
+/// milliseconds. Every other day boundary in this system is local — the daily
+/// note's own calendar, `dates::resolve_date`'s today/yesterday — and a
+/// watermark is compared against Roam's `:edit/time`, which records when the
+/// user typed. Reading a day as UTC instead would, east of Greenwich, start
+/// the scan hours into that morning and silently drop the edits before it:
+/// the under-scanning direction, i.e. exactly the failure this feature exists
+/// to prevent.
+fn local_midnight_ms(day: NaiveDate) -> i64 {
+    let midnight = day.and_hms_opt(0, 0, 0).expect("00:00:00 is a valid time of day");
     Local
         .from_local_datetime(&midnight)
         .earliest()
@@ -112,24 +127,22 @@ pub fn default_since(today: NaiveDate) -> i64 {
         // back to the earliest instant that midnight could carry anywhere on
         // earth (UTC+14): scanning too far back is idempotent, scanning from
         // too late silently skips edits.
-        .unwrap_or_else(|| {
-            Utc.from_utc_datetime(&midnight).timestamp_millis() - 14 * 3_600_000
-        })
+        .unwrap_or_else(|| Utc.from_utc_datetime(&midnight).timestamp_millis() - 14 * 3_600_000)
 }
 
-/// A `--since yyyy-MM-dd` backfill point → epoch milliseconds, read as UTC
-/// midnight. Strict about the format for the same reason `sync_day` is: this
-/// value is user input, and a silently-misread date backfills the wrong month.
+/// A `--since yyyy-MM-dd` backfill point → epoch milliseconds, read as **local**
+/// midnight: the user typing `--since 2026-07-01` means their own July 1st, the
+/// same day boundary [`default_since`] uses. Strict about the format for the
+/// same reason `sync_day` is: this value is user input, and a silently-misread
+/// date backfills the wrong month.
 fn since_from_override(raw: &str) -> Result<i64, String> {
     let raw = raw.trim();
     if !crate::dates::is_iso_date(raw) {
         return Err(format!("invalid --since '{raw}': expected yyyy-MM-dd"));
     }
-    let midnight = NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-        .map_err(|_| format!("invalid --since '{raw}': expected yyyy-MM-dd"))?
-        .and_hms_opt(0, 0, 0)
-        .expect("00:00:00 is a valid time of day");
-    Ok(Utc.from_utc_datetime(&midnight).timestamp_millis())
+    let day = NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+        .map_err(|_| format!("invalid --since '{raw}': expected yyyy-MM-dd"))?;
+    Ok(local_midnight_ms(day))
 }
 
 /// The ledger's ISO watermark → epoch milliseconds, or `None` if it is not a
@@ -168,6 +181,7 @@ fn sync_one(
     dry_run: bool,
     ledger: &mut Ledger,
     renamed: &mut Vec<Renamed>,
+    errors: &mut Vec<String>,
 ) -> Result<bool, String> {
     let target = route_page(uid, &page.title, dirs, ledger);
     let mut moved = false;
@@ -175,13 +189,28 @@ fn sync_one(
     if let Some(from_rel) = target.rename_from.clone() {
         let from_abs = vault.join(&from_rel);
         let to_abs = vault.join(&target.rel);
-        // Two conditions, both about not destroying anything. The old file may
-        // simply be gone (deleted or moved by hand) — then this is a fresh
-        // write, not a rename. And a file already sitting at the destination is
-        // NOT ours to overwrite: `fs::rename` would unlink it, and it may hold
-        // blocks the user wrote. Leaving it alone costs an orphan at the old
-        // path, which is recoverable; clobbering it is not.
-        if from_abs.exists() && !to_abs.exists() {
+        // Three shapes, and only the first is a move. The old file may simply
+        // be gone (deleted or moved by hand) — then this is a fresh write, not
+        // a rename. And a file already sitting at the destination is NOT ours
+        // to overwrite: `fs::rename` would unlink it, and it may hold blocks
+        // the user wrote. Leaving it alone costs an orphan at the old path,
+        // which is recoverable; clobbering it is not.
+        if !from_abs.exists() {
+            // Nothing to move. `sync_page` will write the new path from scratch.
+        } else if to_abs.exists() {
+            // Refusing to move is right; doing it silently is not. The user now
+            // has two files for one page: the destination, which this sync is
+            // about to merge Roam's half into, and an orphan at the old path
+            // holding local-only blocks — the half that cannot be fetched
+            // again. Design §8 acceptance 3 promises those blocks travel with
+            // the rename; here they do not, so the run has to say so.
+            errors.push(format!(
+                "{uid}: Roam renamed this page to '{}', but {} already exists — {from_rel} was \
+                 left where it is rather than overwriting it. Anything you wrote in {from_rel} \
+                 is still there; move it into {} by hand.",
+                page.title, target.rel, target.rel
+            ));
+        } else {
             if !dry_run {
                 if let Some(parent) = to_abs.parent() {
                     std::fs::create_dir_all(parent)
@@ -256,19 +285,27 @@ where
         }
     }
 
-    let mut ledger = Ledger::load(vault);
+    let loaded = Ledger::load(vault);
+    let mut ledger = loaded.ledger;
     let mut errors: Vec<String> = Vec::new();
+    // A ledger that is there and unreadable is not a first sync, and the run
+    // must not look clean: `since` is about to fall back to yesterday, which
+    // abandons everything edited before that — permanently, because the
+    // watermark only ever moves forward. Reported, not fatal, for the same
+    // reason `Ledger::load` degrades rather than erroring: refusing to sync
+    // until the user hand-repairs JSON is worse than syncing loudly.
+    errors.extend(loaded.problem);
 
     let recorded = ledger.last_synced_at.clone();
     let floor_ms = recorded.as_deref().and_then(watermark_ms);
     if let Some(iso) = &recorded {
         if floor_ms.is_none() {
-            // Reported, not fatal, and not counted as a failed page: same
-            // reasoning as `Ledger::load` degrading a corrupt file to an empty
-            // one. Re-syncing from yesterday is idempotent; refusing to run
-            // until the user hand-repairs JSON is not.
+            // Same story one level down: the file parsed, but its watermark is
+            // not a timestamp.
             errors.push(format!(
-                "unreadable last sync time '{iso}' in the ledger — starting from yesterday instead"
+                "unreadable last sync time '{iso}' in the ledger — this vault's sync history \
+                 is not available, so pages edited before the fallback start time will not \
+                 be fetched"
             ));
         }
     }
@@ -293,8 +330,8 @@ where
         dry_run,
     };
     // What is actually on disk, so `to` never claims a watermark a failed save
-    // never persisted.
-    let mut persisted = recorded;
+    // never persisted — and never echoes back a value that is not a timestamp.
+    let mut persisted = recorded.filter(|_| floor_ms.is_some());
 
     for i in 0..changed.len() {
         let uid = changed[i].uid.clone();
@@ -316,6 +353,7 @@ where
                 dry_run,
                 &mut ledger,
                 &mut report.renamed,
+                &mut report.errors,
             ),
         };
 
@@ -402,7 +440,7 @@ mod tests {
         assert!(daily.contains("type: Daily Note"));
         let wiki = std::fs::read_to_string(dir.path().join("wikipage/回顾系统.note.md")).unwrap();
         assert!(wiki.contains("type: Wiki Page"));
-        let l = crate::ledger::Ledger::load(dir.path());
+        let l = crate::ledger::Ledger::load(dir.path()).ledger;
         // The watermark is the later page's own `edited`, and `edited` is epoch
         // milliseconds: 2000 ms after the epoch is 1970-01-01T00:00:02.000Z.
         assert_eq!(l.last_synced_at.as_deref(), Some("1970-01-01T00:00:02.000Z"));
@@ -421,7 +459,7 @@ mod tests {
             |uid| if uid == "b" { Err("network went away".into()) } else { Ok(Some(page(uid, uid, "x"))) },
         ).unwrap();
         assert_eq!((r.synced, r.failed), (1, 1));
-        let l = crate::ledger::Ledger::load(dir.path());
+        let l = crate::ledger::Ledger::load(dir.path()).ledger;
         assert_eq!(l.last_synced_at.as_deref(), Some("1970-01-01T00:00:01.000Z"),
                    "the watermark must stay at `a`, so `b` and `c` are retried next run");
     }
@@ -473,7 +511,7 @@ mod tests {
         ).unwrap();
         assert!(r.dry_run && r.scanned == 1);
         assert!(!dir.path().join("wikipage/回顾系统.note.md").exists());
-        assert!(crate::ledger::Ledger::load(dir.path()).last_synced_at.is_none());
+        assert!(crate::ledger::Ledger::load(dir.path()).ledger.last_synced_at.is_none());
     }
 
     #[test]
@@ -485,7 +523,7 @@ mod tests {
         let r = sync_since(dir.path(), DIRS, None, today(), NOW, false,
                            |_| Ok(vec![]), |_| panic!("must not fetch anything")).unwrap();
         assert_eq!((r.scanned, r.synced), (0, 0));
-        assert_eq!(crate::ledger::Ledger::load(dir.path()).last_synced_at.as_deref(),
+        assert_eq!(crate::ledger::Ledger::load(dir.path()).ledger.last_synced_at.as_deref(),
                    Some("2026-08-01T00:00:00.000Z"));
     }
 
@@ -498,13 +536,39 @@ mod tests {
         let seen = std::cell::Cell::new(0i64);
         sync_since(dir.path(), DIRS, Some("2026-07-01"), today(), NOW, true,
                    |since| { seen.set(since); Ok(vec![]) }, |_| unreachable!()).unwrap();
-        // 2026-07-01T00:00:00Z in ms. 20635 days from the epoch (56 years =
-        // 20440 days + 14 leap days = 20454 to 2026-01-01, + 181 days to
-        // July 1st) × 86_400_000. `date -u -j -f '%Y-%m-%d %H:%M:%S'
-        // '2026-07-01 00:00:00' +%s` agrees: 1782864000. The plan's literal,
-        // 1782921600000, is 16h later — 2026-07-01T16:00:00Z, i.e. midnight
-        // on July 2nd in UTC+8, not the UTC midnight this parses to.
-        assert_eq!(seen.get(), 1782864000000, "2026-07-01T00:00:00Z in ms");
+        // The user's own July 1st, not UTC's. Asserted against `default_since`
+        // rather than a hard-coded epoch literal, because a literal is only
+        // right in one timezone — and because these two entry points reaching
+        // the same instant for the same day IS the property: a run on July 2nd
+        // defaults to the start of July 1st, and `--since 2026-07-01` must mean
+        // exactly that same moment.
+        let july_2nd = chrono::NaiveDate::from_ymd_opt(2026, 7, 2).unwrap();
+        assert_eq!(seen.get(), default_since(july_2nd),
+                   "--since is local midnight, the same day boundary the default uses");
+    }
+
+    /// East of Greenwich, reading `--since` as UTC midnight starts the scan
+    /// hours into the user's morning and drops the edits before it — the
+    /// under-scanning direction, i.e. the exact failure this feature exists to
+    /// prevent. This pins the direction without depending on the test machine's
+    /// zone: local midnight is never *later* than the same day's UTC midnight
+    /// anywhere east of UTC, and the two coincide only in UTC itself.
+    #[test]
+    fn since_is_read_in_the_users_own_timezone_not_utc() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = std::cell::Cell::new(0i64);
+        sync_since(dir.path(), DIRS, Some("2026-07-01"), today(), NOW, true,
+                   |since| { seen.set(since); Ok(vec![]) }, |_| unreachable!()).unwrap();
+
+        let utc_midnight = 1_782_864_000_000i64; // 2026-07-01T00:00:00Z, `date -u … +%s` × 1000
+        let offset_ms = Local.timestamp_millis_opt(utc_midnight).single().unwrap()
+            .offset().local_minus_utc() as i64 * 1000;
+        assert_eq!(seen.get(), utc_midnight - offset_ms,
+                   "local midnight is UTC midnight shifted back by the zone's offset");
+        if offset_ms > 0 {
+            assert!(seen.get() < utc_midnight,
+                    "east of UTC, reading it as UTC would skip that morning's edits");
+        }
     }
 
     #[test]
@@ -561,7 +625,7 @@ mod tests {
         ).unwrap();
 
         assert_eq!((first.synced, first.failed), (2, 1));
-        let l = crate::ledger::Ledger::load(dir.path());
+        let l = crate::ledger::Ledger::load(dir.path()).ledger;
         assert_eq!(
             l.last_synced_at.as_deref(), Some("1970-01-01T00:00:01.000Z"),
             "`a` is alone at 1000 so the watermark reaches it, but `b` succeeded at 2000 \
@@ -581,7 +645,7 @@ mod tests {
         ).unwrap();
         assert_eq!(fetched, vec!["b", "c"], "`c` — never synced — must be seen again, and so is `b`");
         assert_eq!(second.failed, 0);
-        assert_eq!(crate::ledger::Ledger::load(dir.path()).last_synced_at.as_deref(),
+        assert_eq!(crate::ledger::Ledger::load(dir.path()).ledger.last_synced_at.as_deref(),
                    Some("1970-01-01T00:00:02.000Z"),
                    "the whole group finished, so the watermark may finally cross it");
     }
@@ -617,7 +681,7 @@ mod tests {
         ).unwrap();
         assert_eq!((r.scanned, r.synced, r.failed), (2, 0, 1));
         assert_eq!(r.to.as_deref(), Some("1970-01-01T00:00:00.500Z"));
-        assert_eq!(crate::ledger::Ledger::load(dir.path()).last_synced_at.as_deref(),
+        assert_eq!(crate::ledger::Ledger::load(dir.path()).ledger.last_synced_at.as_deref(),
                    Some("1970-01-01T00:00:00.500Z"));
     }
 
@@ -637,7 +701,7 @@ mod tests {
         assert_eq!(attempts, 1, "a dead connection must not be retried once per page");
         assert_eq!((r.synced, r.failed, r.errors.len()), (0, 1, 1));
         assert!(r.to.is_none());
-        assert!(crate::ledger::Ledger::load(dir.path()).last_synced_at.is_none());
+        assert!(crate::ledger::Ledger::load(dir.path()).ledger.last_synced_at.is_none());
     }
 
     #[test]
@@ -683,7 +747,7 @@ mod tests {
         assert_eq!(r.synced, 1);
         let fresh = std::fs::read_to_string(dir.path().join("wikipage/新名.note.md")).unwrap();
         assert!(fresh.contains("from roam"));
-        assert_eq!(crate::ledger::Ledger::load(dir.path()).path_of("u"),
+        assert_eq!(crate::ledger::Ledger::load(dir.path()).ledger.path_of("u"),
                    Some("wikipage/新名.note.md"));
     }
 
@@ -707,11 +771,21 @@ mod tests {
             |_| Ok(Some(page("u", "新名", "from roam"))),
         ).unwrap();
 
-        assert!(r.renamed.is_empty(), "an unlinking rename over a live file is never worth reporting");
+        assert!(r.renamed.is_empty(), "nothing moved, so nothing to list as moved");
         assert!(dir.path().join("wikipage/旧名.note.md").exists(), "the old file is left, not deleted");
         let dest = std::fs::read_to_string(dir.path().join("wikipage/新名.note.md")).unwrap();
         assert!(dest.contains("我自己建的"), "the destination's own blocks must survive");
         assert!(dest.contains("from roam"), "and Roam's half merges into it as usual");
+
+        // Refusing to move is right, but doing it silently is not: the user now
+        // has two files for one page, and the local-only blocks — the half that
+        // cannot be re-fetched — are in the orphan, not in the file this sync
+        // just wrote. §8 acceptance 3 promises otherwise, so the run must say so.
+        assert_eq!(r.failed, 0, "not a failed page — the sync did its work");
+        let told = r.errors.iter().find(|e| e.contains("旧名")).unwrap_or_else(
+            || panic!("the blocked rename was never reported: {:?}", r.errors));
+        assert!(told.contains("wikipage/新名.note.md") && told.contains("already exists"),
+                "the message must name both files: {told}");
     }
 
     #[test]
@@ -743,7 +817,7 @@ mod tests {
         assert!(dir.path().join("wikipage/旧名.note.md").exists(), "not moved");
         assert!(!dir.path().join("wikipage/新名.note.md").exists(), "not written");
         assert!(!dir.path().join("wikipage/回顾系统.note.md").exists(), "not written");
-        let after = crate::ledger::Ledger::load(dir.path());
+        let after = crate::ledger::Ledger::load(dir.path()).ledger;
         assert_eq!(after.path_of("u"), Some("wikipage/旧名.note.md"), "the ledger on disk is untouched");
         assert!(after.last_synced_at.is_none());
     }
@@ -782,18 +856,55 @@ mod tests {
         assert!(r.errors[0].contains("unreadable last sync time"), "{:?}", r.errors);
     }
 
+    /// The whole no-skip guarantee rests on this one file. A ledger truncated
+    /// by a kill mid-save, or carrying conflict markers from a git merge across
+    /// two devices, reads back as an empty one — and if that were reported as a
+    /// clean first run, `since` would silently fall back to yesterday and every
+    /// page edited earlier would be abandoned, with no later run ever looking
+    /// that far back again.
+    #[test]
+    fn a_ledger_that_is_there_but_unreadable_makes_the_run_visibly_not_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".notemd")).unwrap();
+        std::fs::write(dir.path().join(crate::ledger::LEDGER_REL),
+                       "<<<<<<< HEAD\n{\"lastSyncedAt\":\"2026-07-01T00:00:00.000Z\"}").unwrap();
+        let seen = std::cell::Cell::new(0i64);
+        let r = sync_since(dir.path(), DIRS, None, today(), NOW, false,
+                           |since| { seen.set(since); Ok(vec![]) }, |_| unreachable!()).unwrap();
+
+        assert_eq!(seen.get(), default_since(today()), "there is nothing better to start from");
+        assert_eq!(r.failed, 0, "no page failed");
+        assert!(!r.errors.is_empty(), "but this run is NOT clean and must not look like one");
+        assert!(r.errors[0].contains("unreadable"), "{:?}", r.errors);
+        assert!(r.to.is_none(), "and there is no watermark to report, garbage least of all");
+    }
+
+    #[test]
+    fn an_unreadable_watermark_is_never_echoed_back_as_the_run_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = crate::ledger::Ledger {
+            last_synced_at: Some("<<<<<<< HEAD".into()),
+            ..Default::default()
+        };
+        l.save(dir.path()).unwrap();
+        let r = sync_since(dir.path(), DIRS, None, today(), NOW, false,
+                           |_| Ok(vec![]), |_| unreachable!()).unwrap();
+        assert!(r.to.is_none(), "`to` is a timestamp or nothing — never a passed-through string");
+    }
+
     #[test]
     fn a_backfill_does_not_rewind_the_watermark() {
         let dir = tempfile::tempdir().unwrap();
         seeded(dir.path(), 10_000);
         let r = sync_since(
             dir.path(), DIRS, Some("1970-01-01"), today(), NOW, false,
-            |since| { assert_eq!(since, 0, "--since wins over the ledger for the query");
+            |since| { assert_eq!(since, default_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 2).unwrap()),
+                                 "--since wins over the ledger for the query, as local midnight");
                       Ok(vec![Changed { uid: "old".into(), edited: 1000 }]) },
             |uid| Ok(Some(page(uid, uid, "x"))),
         ).unwrap();
         assert_eq!(r.synced, 1, "the old page is re-synced, which is the point of a backfill");
-        assert_eq!(crate::ledger::Ledger::load(dir.path()).last_synced_at.as_deref(),
+        assert_eq!(crate::ledger::Ledger::load(dir.path()).ledger.last_synced_at.as_deref(),
                    Some("1970-01-01T00:00:10.000Z"),
                    "but the frontier does not move back to 1000, or the next run rescans it all");
     }
