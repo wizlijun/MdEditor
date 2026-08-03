@@ -1,0 +1,48 @@
+[
+  [
+    {
+      "title": "August 2nd, 2026",
+      "uid": "08-02-2026",
+      "create-time": 1785600005019,
+      "edit-time": 1785679500000,
+      "children": [
+        {
+          "uid": "Ju5kW0zAq",
+          "string": "#[[Hemory]] evening wrap",
+          "order": 2,
+          "create-time": 1785679200000,
+          "edit-time": 1785679500000
+        },
+        {
+          "uid": "hCIv7Y63h",
+          "string": "Morning review",
+          "order": 0,
+          "heading": 2,
+          "create-time": 1785629520000,
+          "children": [
+            {
+              "uid": "Km2vQx8pL",
+              "string": "{{[[TODO]]}} ship the __daily sync__",
+              "order": 0,
+              "create-time": 1785629580000,
+              "edit-time": 1785677400000,
+              "children": [
+                {
+                  "uid": "Za9dR4tYw",
+                  "string": "carried over from [[August 15th, 2022]]",
+                  "order": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "uid": "Nb7sT1uEv",
+          "string": "meeting notes\nid:: not-a-property",
+          "order": 1,
+          "create-time": 1785630000000
+        }
+      ]
+    }
+  ]
+]

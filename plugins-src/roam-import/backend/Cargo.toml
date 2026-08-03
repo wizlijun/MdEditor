@@ -3,6 +3,10 @@ name = "notemd-roam-import"
 version = "1.1.0"
 edition = "2021"
 
+[lib]
+name = "notemd_roam_import"
+path = "src/lib.rs"
+
 [[bin]]
 name = "notemd-roam-import"
 path = "src/main.rs"

@@ -1,4 +1,7 @@
-mod convert; mod dates; mod discover; mod merge; mod outline; mod plugin; mod procutil; mod roam_cli; mod roam_page; mod syntax;
+//! Binary entry point. All the logic lives in the library crate
+//! (`notemd_roam_import`) so integration tests can reach it; this file and
+//! `plugin.rs` are the only parts the tests do not see.
+mod plugin;
 
 fn main() {
     let rt = tokio::runtime::Builder::new_multi_thread()

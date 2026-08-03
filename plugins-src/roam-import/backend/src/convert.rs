@@ -15,7 +15,7 @@ use chrono::{SecondsFormat, TimeZone, Utc};
 /// string (UTC, millisecond precision, `Z` suffix). `to_rfc3339()` alone
 /// would emit `+00:00` instead of `Z`; only the `Millis`-truncated
 /// `SecondsFormat` variant matches byte-for-byte.
-fn iso_ms(ms: Option<i64>) -> Option<String> {
+pub fn iso_ms(ms: Option<i64>) -> Option<String> {
     ms.map(|m| {
         Utc.timestamp_millis_opt(m)
             .single()
@@ -37,24 +37,32 @@ fn block_content(b: &RoamBlock) -> String {
     }
 }
 
+/// Fallback id for a block Roam returned without a `uid`: its child-index
+/// path from the page root, e.g. `roam-0-2-1`. Two different blocks can never
+/// share a path, and — unlike a running counter — a block's path does not
+/// move when something elsewhere on the page changes. That matters because
+/// this id IS written to the file (`persist_id` below) and the next sync's
+/// merge treats it as identity: an id that drifted to another block would
+/// overwrite that block's text and reparent the user's notes under it.
+fn fallback_id(path: &[usize]) -> String {
+    let mut id = String::from("roam");
+    for i in path {
+        id.push('-');
+        id.push_str(&i.to_string());
+    }
+    id
+}
+
 /// Depth-first walk of Roam's already order-sorted block tree, flattening it
-/// into `tree.nodes`. `fallback_counter` numbers blocks lacking a `uid`
-/// across the whole page (not per-sibling-group), so two placeholder ids
-/// never collide even if they land at different depths.
-fn walk(
-    tree: &mut Tree,
-    blocks: &[RoamBlock],
-    parent: Option<&str>,
-    fallback_counter: &mut usize,
-) {
+/// into `tree.nodes`. `path` is the child-index path of `blocks`' parent,
+/// used only to name blocks that arrive without a `uid`.
+fn walk(tree: &mut Tree, blocks: &[RoamBlock], parent: Option<&str>, path: &[usize]) {
     for (idx, b) in blocks.iter().enumerate() {
+        let mut here = path.to_vec();
+        here.push(idx);
         let id = match &b.uid {
             Some(uid) => uid.clone(),
-            None => {
-                let placeholder = format!("roam-{fallback_counter}");
-                *fallback_counter += 1;
-                placeholder
-            }
+            None => fallback_id(&here),
         };
         let node = Node {
             id: id.clone(),
@@ -72,7 +80,7 @@ fn walk(
             persist_id: true,
         };
         tree.nodes.push(node);
-        walk(tree, &b.children, Some(id.as_str()), fallback_counter);
+        walk(tree, &b.children, Some(id.as_str()), &here);
     }
 }
 
@@ -88,8 +96,7 @@ pub fn convert_page(page: &RoamPage, date: &str) -> Tree {
     let created_for_touch = created.unwrap_or_else(|| now.clone());
 
     let mut tree = Tree { frontmatter: None, nodes: Vec::new() };
-    let mut fallback_counter: usize = 0;
-    walk(&mut tree, &page.children, None, &mut fallback_counter);
+    walk(&mut tree, &page.children, None, &[]);
     tree.frontmatter = Some(touch_frontmatter(None, date, &created_for_touch, &now));
     tree
 }
@@ -148,6 +155,45 @@ mod tests {
         let t = convert_page(&page(vec![]), "2026-08-02");
         assert!(t.frontmatter.as_ref().unwrap().contains("title: 2026-08-02"));
         assert!(!t.frontmatter.as_ref().unwrap().contains("August"));
+    }
+
+    /// A uid-less block's fallback id is written to the file (`persist_id`),
+    /// and the next sync's merge treats an id it finds there as identity. A
+    /// running counter makes that id depend on how many *other* uid-less
+    /// blocks the walk happened to pass first, so an unrelated block
+    /// elsewhere on the page changing can hand this block's id to a different
+    /// block — merge would then overwrite that block's text and reparent the
+    /// user's children under it. The id must come from the block's own
+    /// position in the tree. (Roam always assigns uids and the pull asks for
+    /// `:block/uid`, so this is a landmine, not a live bug.)
+    #[test]
+    fn a_uid_less_block_is_identified_by_its_position_not_by_a_counter() {
+        let nameless = |s: &str| RoamBlock {
+            uid: None, string: s.into(), order: 0, heading: None,
+            create_time: None, edit_time: None, children: vec![],
+        };
+        let with_child = |head: RoamBlock, child: RoamBlock| {
+            let mut h = head;
+            h.children = vec![child];
+            h
+        };
+        let id_of = |t: &Tree, s: &str| {
+            t.nodes.iter().find(|n| n.content == s).unwrap().id.clone()
+        };
+
+        // Same shape, same position for "mine" — the only difference is that
+        // the block above it has a uid in one tree and not in the other.
+        let a = convert_page(
+            &page(vec![nameless("other"), with_child(block("p", "parent"), nameless("mine"))]),
+            "2026-08-02",
+        );
+        let b = convert_page(
+            &page(vec![block("o", "other"), with_child(block("p", "parent"), nameless("mine"))]),
+            "2026-08-02",
+        );
+        assert_eq!(id_of(&a, "mine"), id_of(&b, "mine"));
+        assert_eq!(id_of(&a, "mine"), "roam-1-0", "child index path from the page root");
+        assert_eq!(id_of(&a, "other"), "roam-0");
     }
 
     #[test]

@@ -185,6 +185,15 @@ fn push_node(
 /// trailing spaces from editors/formatters without dropping the property).
 fn apply_prop(tree: &mut Tree, idx: usize, key: &str, value: &str) {
     let value = value.trim_end().to_string();
+    // A vault file is hand-editable, so a repeated `id::` (a copied bullet, a
+    // botched three-way merge) is expected input. Re-keying this node to an id
+    // some other node already holds would give a *nested* duplicate itself as
+    // its parent, and every walk over the tree — `serialize_outline` here,
+    // `merge`'s two — then recurses until the stack dies. Scanning is O(nodes)
+    // per `id::` line, which is nothing at daily-note sizes and is only paid
+    // by files that carry ids at all.
+    let id_already_taken =
+        key == "id" && tree.nodes.iter().enumerate().any(|(i, n)| i != idx && n.id == value);
     let node = &mut tree.nodes[idx];
     match key {
         "type" => {
@@ -216,7 +225,12 @@ fn apply_prop(tree: &mut Tree, idx: usize, key: &str, value: &str) {
         }
         "answered" => node.answered_at = Some(value),
         "by" => node.answered_by = Some(value),
-        "id" => {
+        // A duplicate id is no identity at all, so the node keeps its
+        // placeholder and `persist_id` stays false: the `id::` line does not
+        // survive the round-trip, but the block and its children do, and the
+        // file stays walkable. (Dropping the *node* instead would lose the
+        // user's content, which is never the right trade.)
+        "id" if !id_already_taken => {
             // Invariant: id:: precedes any children of this node, so no
             // already-pushed node can reference the old id as its parent —
             // renaming in place (no id->index map needed) is safe.
@@ -484,6 +498,32 @@ mod tests {
         assert_eq!(a.parent, None);
 
         assert_eq!(serialize_outline(&t), "- a\n  - d\n- b\n  - c\n");
+    }
+
+    /// A vault file is allowed to be hand-edited (file-over-app), so a
+    /// repeated `id::` is expected, not exotic — a careless copy/paste of a
+    /// bullet is enough. Re-keying the second node to an id already in the
+    /// tree makes a node whose parent is itself, and `serialize_outline`'s
+    /// walk then recurses until the stack dies, taking the user's file with
+    /// it. The duplicate keeps its placeholder id instead: it loses the
+    /// `id::` line (it was never a valid identity), never its content.
+    #[test]
+    fn a_duplicate_id_under_its_own_twin_does_not_recurse_forever() {
+        let t = parse_outline("- parent\n  id:: dup\n  - child\n    id:: dup\n");
+        let child = t.nodes.iter().find(|n| n.content == "child").unwrap();
+        assert_ne!(child.id, "dup", "a second node must not claim an id already in the tree");
+        assert_eq!(child.parent.as_deref(), Some("dup"));
+        assert!(!child.persist_id);
+        assert_eq!(serialize_outline(&t), "- parent\n  id:: dup\n  - child\n");
+    }
+
+    #[test]
+    fn a_duplicate_id_between_siblings_keeps_both_blocks() {
+        let t = parse_outline("- first\n  id:: dup\n- second\n  id:: dup\n");
+        assert_eq!(t.nodes.len(), 2);
+        assert_eq!(t.nodes[0].id, "dup");
+        assert_ne!(t.nodes[1].id, "dup");
+        assert_eq!(serialize_outline(&t), "- first\n  id:: dup\n- second\n");
     }
 
     #[test]

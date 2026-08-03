@@ -72,6 +72,42 @@ async fn vault_from_host(host: &sdk::Host) -> Option<Value> {
     .await
 }
 
+impl RoamImportPlugin {
+    /// One day, end to end: resolve the date against the *local* calendar
+    /// (a daily note is a human's day, not UTC's), ask Roam for that page,
+    /// and merge it into the vault. Runs synchronously on the protocol read
+    /// loop like `probe` does — `fetch_day` is bounded at 60s and the
+    /// manifest raises this plugin's request timeout to 120s to cover it.
+    fn sync_day(&self, params: &Value) -> Result<notemd_roam_import::sync::SyncOutcome, String> {
+        use notemd_roam_import::{dates, discover, roam_cli, roam_page, sync};
+
+        let (vault, daily_dir) = {
+            let g = self.inner.lock().unwrap();
+            (g.vault.clone(), g.daily_dir.clone())
+        };
+        // Also the answer while `activate`'s vault lookup is still in flight:
+        // writing a day's notes somewhere other than the vault would be worse
+        // than asking the user to try again.
+        let vault = vault.ok_or("no vault configured")?;
+        let daily_dir = if daily_dir.is_empty() { "dailynote".to_string() } else { daily_dir };
+
+        let date = dates::resolve_date(
+            params.get("date").and_then(|s| s.as_str()),
+            chrono::Local::now().date_naive(),
+        )?;
+        let uid = dates::to_roam_uid(&date).ok_or_else(|| format!("invalid date '{date}'"))?;
+
+        let roam_path = params.get("roam_path").and_then(|s| s.as_str());
+        let exe = discover::discover(roam_path)
+            .ok_or("the roam CLI was not found — install @roam-research/roam-cli")?;
+        let raw = roam_cli::fetch_day(&exe, params.get("graph").and_then(|s| s.as_str()), &uid)?;
+        let page = roam_page::parse_day_result(&raw)?;
+
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        sync::sync_day(&vault, &daily_dir, page.as_ref(), &date, &now)
+    }
+}
+
 impl sdk::NotemdPlugin for RoamImportPlugin {
     fn initialize(&mut self, _host: &sdk::Host, params: &proto::InitializeParams) {
         self.data_dir = PathBuf::from(&params.data_dir);
@@ -101,12 +137,22 @@ impl sdk::NotemdPlugin for RoamImportPlugin {
         Err(format!("unknown command '{}'", params.command))
     }
 
-    fn on_ui_request(&mut self, _host: &sdk::Host, method: &str, params: Value)
+    fn on_ui_request(&mut self, host: &sdk::Host, method: &str, params: Value)
         -> Result<Value, String> {
         match method {
             "probe" => {
                 let explicit = params.get("roam_path").and_then(|s| s.as_str());
-                serde_json::to_value(crate::roam_cli::probe(explicit)).map_err(|e| e.to_string())
+                serde_json::to_value(notemd_roam_import::roam_cli::probe(explicit))
+                    .map_err(|e| e.to_string())
+            }
+            "sync_day" => {
+                let outcome = self.sync_day(&params)?;
+                host.log_info(&format!(
+                    "sync {} -> {} (found={} created={} updated={} kept_local={} roam_gone_kept={})",
+                    outcome.date, outcome.path, outcome.found, outcome.created,
+                    outcome.updated, outcome.kept_local, outcome.roam_gone_kept,
+                ));
+                serde_json::to_value(outcome).map_err(|e| e.to_string())
             }
             other => Err(format!("unknown ui method '{other}'")),
         }

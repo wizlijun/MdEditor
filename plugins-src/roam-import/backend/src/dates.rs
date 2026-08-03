@@ -16,12 +16,24 @@ pub fn resolve_date(input: Option<&str>, today: NaiveDate) -> Result<String, Str
     Ok(d.format("%Y-%m-%d").to_string())
 }
 
-/// `yyyy-MM-dd` → Roam's daily-note page uid `MM-DD-YYYY`. Shape-strict: a
-/// non-zero-padded input is rejected rather than silently reformatted.
-pub fn to_roam_uid(date: &str) -> Option<String> {
+/// Strict `yyyy-MM-dd`: a real calendar date, zero-padded, and nothing else —
+/// a non-zero-padded or otherwise reformatted input is rejected rather than
+/// silently accepted.
+fn parse_iso(date: &str) -> Option<NaiveDate> {
     let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
-    if d.format("%Y-%m-%d").to_string() != date { return None; }
-    Some(d.format("%m-%d-%Y").to_string())
+    (d.format("%Y-%m-%d").to_string() == date).then_some(d)
+}
+
+/// Is this exactly a `yyyy-MM-dd` calendar date? `sync` asks before joining a
+/// date into a vault path — that path is the only thing standing between a
+/// bad `--date` and a write outside the daily-note folder.
+pub fn is_iso_date(date: &str) -> bool {
+    parse_iso(date).is_some()
+}
+
+/// `yyyy-MM-dd` → Roam's daily-note page uid `MM-DD-YYYY`.
+pub fn to_roam_uid(date: &str) -> Option<String> {
+    Some(parse_iso(date)?.format("%m-%d-%Y").to_string())
 }
 
 #[cfg(test)]
@@ -51,6 +63,14 @@ mod tests {
     fn rejects_garbage_and_impossible_dates() {
         assert!(resolve_date(Some("08/02/2026"), today()).is_err());
         assert!(resolve_date(Some("2026-13-40"), today()).is_err());
+    }
+
+    #[test]
+    fn only_a_padded_calendar_date_is_an_iso_date() {
+        assert!(is_iso_date("2026-08-02"));
+        assert!(!is_iso_date("2026-8-2"));
+        assert!(!is_iso_date("2026-02-30"), "a date that does not exist");
+        assert!(!is_iso_date("../../etc/passwd"), "the case sync cares about");
     }
 
     #[test]
