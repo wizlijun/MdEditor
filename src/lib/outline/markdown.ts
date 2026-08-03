@@ -152,11 +152,24 @@ export function parseOutline(text: string): OutlineTree {
           else if (key === 'id') {
             // 重键：换 id 需迁移 map（此时尚无子节点，直接迁移 map）
             // Invariant: id:: precedes any children of this node.
-            tree.nodes.delete(current.id)
-            current.id = value
-            tree.nodes.set(value, current)
-            // Mark this id as explicitly set so it gets written back
-            current.persistId = true
+            // 冲突守卫：value 已被另一节点占用时，Map.set 会把那个节点从树里逐出
+            // （childrenOf 只按 map 遍历），其整棵子树随下一次 serialize 静默消失。
+            // vault 文件手改/多 agent 写入/git 合并都可能产生重复 id::，不是特例。
+            // 因此:仅当 value 未被占用、或恰是本节点自己已持有的 id 时才重键;
+            // 否则保留生成 id、不设 persistId——这条不可用的 id:: 行就不会被写回。
+            const holder = tree.nodes.get(value)
+            if (!holder || holder === current) {
+              tree.nodes.delete(current.id)
+              current.id = value
+              tree.nodes.set(value, current)
+              // Mark this id as explicitly set so it gets written back
+              current.persistId = true
+            } else {
+              // 冲突不是无声的:一个 ((id)) 块引用若指向这个撞车的 id,现在会解析到
+              // 先到者、而非本节点——内容不再丢失,但链接目标可能悄悄换了对象。
+              // 这属于「人可能需要事后解释」的数据完整性事件,须留痕(单条 warn,每次撞车一条)。
+              console.warn(`parseOutline: duplicate id:: "${value}" — keeping first holder, this node falls back to a generated id`)
+            }
           }
         } else {
           current.content += '\n' + body

@@ -1,5 +1,5 @@
 // src/lib/outline/markdown.test.ts
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { serializeOutline, parseOutline } from './markdown'
 import { createTree, addNode, answerBodyOf, type OutlineTree } from './model'
 
@@ -199,6 +199,105 @@ describe('property value robustness (file-over-app: tolerate trailing whitespace
   it('does not promote a plain note/manual node without a valid status', () => {
     const t = parseOutline('- 判断力吗？\n  type:: note\n')
     expect([...t.nodes.values()][0].source).toBe('note')
+  })
+})
+
+describe('duplicate id:: (content-loss guard)', () => {
+  // 内容清单:每个用例都断言输入里的每个 block 在 round trip 后原样存在、嵌套不变。
+  // 不满足时 Map 重键会把撞车的节点(及其整棵子树)逐出 tree.nodes,
+  // childrenOf 只按 map 遍历 —— 该节点静默从下一次 serialize 里消失。
+
+  it('parent + child sharing one id:: keeps both, child falls back to its generated id', () => {
+    const md = '- parent\n  id:: dup\n  - child\n    id:: dup\n'
+    const t = parseOutline(md)
+    const contents = [...t.nodes.values()].map(n => n.content)
+    expect(contents).toEqual(expect.arrayContaining(['parent', 'child']))
+    const parent = [...t.nodes.values()].find(n => n.content === 'parent')!
+    const child = [...t.nodes.values()].find(n => n.content === 'child')!
+    expect(child.parentId).toBe(parent.id)
+    expect(parent.id).toBe('dup')       // 先到先得
+    expect(child.id).not.toBe('dup')    // 撞车:保留自己的生成 id
+    expect(child.persistId).not.toBe(true)
+    const out = serializeOutline(t)
+    expect(out).toBe('- parent\n  id:: dup\n  - child\n')
+  })
+
+  it('parent + child + grandchild: duplicate id two levels up does not orphan the grandchild', () => {
+    const md = '- parent\n  id:: dup\n  - child\n    id:: dup\n    - grandchild\n'
+    const t = parseOutline(md)
+    const contents = [...t.nodes.values()].map(n => n.content)
+    expect(contents).toEqual(expect.arrayContaining(['parent', 'child', 'grandchild']))
+    const parent = [...t.nodes.values()].find(n => n.content === 'parent')!
+    const child = [...t.nodes.values()].find(n => n.content === 'child')!
+    const grandchild = [...t.nodes.values()].find(n => n.content === 'grandchild')!
+    expect(child.parentId).toBe(parent.id)
+    expect(grandchild.parentId).toBe(child.id)
+    const out = serializeOutline(t)
+    expect(out).toBe('- parent\n  id:: dup\n  - child\n    - grandchild\n')
+  })
+
+  it('two siblings sharing one id:: — first wins, second keeps its generated id', () => {
+    const md = '- first\n  id:: dup\n- second\n  id:: dup\n'
+    const t = parseOutline(md)
+    const contents = [...t.nodes.values()].map(n => n.content)
+    expect(contents).toEqual(expect.arrayContaining(['first', 'second']))
+    const out = serializeOutline(t)
+    expect(out).toBe('- first\n  id:: dup\n- second\n')
+  })
+
+  it('three levels deep: an unrelated ancestor id does not interfere; the deeper duplicate is still guarded', () => {
+    const md = '- top\n  id:: t\n  - parent\n    id:: dup\n    - child\n      id:: dup\n'
+    const t = parseOutline(md)
+    const contents = [...t.nodes.values()].map(n => n.content)
+    expect(contents).toEqual(expect.arrayContaining(['top', 'parent', 'child']))
+    const top = [...t.nodes.values()].find(n => n.content === 'top')!
+    const parent = [...t.nodes.values()].find(n => n.content === 'parent')!
+    const child = [...t.nodes.values()].find(n => n.content === 'child')!
+    expect(top.id).toBe('t')
+    expect(parent.id).toBe('dup')
+    expect(parent.parentId).toBe(top.id)
+    expect(child.parentId).toBe(parent.id)
+    const out = serializeOutline(t)
+    expect(out).toBe('- top\n  id:: t\n  - parent\n    id:: dup\n    - child\n')
+  })
+
+  // 注意:这条不是回归测试(对修复前的旧实现同样通过) —— 它是给新增
+  // holder === current 分支的护栏测试,防止未来把「同一节点重复声明同一个
+  // id::」误判成冲突。
+  it('a node re-declaring the same id:: twice is not a self-collision (still persists)', () => {
+    const md = '- note\n  id:: dup\n  id:: dup\n'
+    const t = parseOutline(md)
+    const n = [...t.nodes.values()][0]
+    expect(n.id).toBe('dup')
+    expect(n.persistId).toBe(true)
+    expect(serializeOutline(t)).toBe('- note\n  id:: dup\n')
+  })
+
+  it('three nodes sharing one id:: — only the first keeps it, the other two fall back and survive', () => {
+    const md = '- a\n  id:: dup\n- b\n  id:: dup\n- c\n  id:: dup\n'
+    const t = parseOutline(md)
+    const contents = [...t.nodes.values()].map(n => n.content)
+    expect(contents).toEqual(expect.arrayContaining(['a', 'b', 'c']))
+    const out = serializeOutline(t)
+    expect(out).toBe('- a\n  id:: dup\n- b\n- c\n')
+  })
+
+  describe('collision is logged, not silent', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it('warns exactly once per real collision (not once per line in the file)', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // 3 个节点共享一个 id:: → 2 次真实碰撞(b 撞 a、c 撞 a),不是 3 次(每行一次)
+      parseOutline('- a\n  id:: dup\n- b\n  id:: dup\n- c\n  id:: dup\n')
+      expect(warn).toHaveBeenCalledTimes(2)
+      expect(warn.mock.calls[0][0]).toContain('dup')
+    })
+
+    it('does not warn when a node re-declares its own id:: (not a collision)', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      parseOutline('- note\n  id:: dup\n  id:: dup\n')
+      expect(warn).not.toHaveBeenCalled()
+    })
   })
 })
 
