@@ -38,6 +38,7 @@ export type MessageKey =
   | 'cli.install'
   | 'cli.connect'
   | 'cli.date'
+  | 'cli.graph'
   | 'cli.sync'
   | 'cli.syncing'
   | 'cli.result'
@@ -76,6 +77,7 @@ const en: Catalog = {
   'cli.install': 'Install: npm i -g @roam-research/roam-cli',
   'cli.connect': 'Connect: run roam connect in a terminal',
   'cli.date': 'Date',
+  'cli.graph': 'Graph',
   'cli.sync': 'Sync this day',
   'cli.syncing': 'Syncing…',
   'cli.result': 'Added {created} blocks · updated {updated} blocks · kept {kept} local blocks unchanged',
@@ -113,6 +115,7 @@ const zh: Catalog = {
   'cli.install': '安装：npm i -g @roam-research/roam-cli',
   'cli.connect': '连接：在终端运行 roam connect',
   'cli.date': '日期',
+  'cli.graph': '图谱',
   'cli.sync': '同步当日',
   'cli.syncing': '正在同步…',
   'cli.result': '新增 {created} 块 · 更新 {updated} 块 · 保留本地 {kept} 块',
@@ -150,6 +153,7 @@ const ja: Catalog = {
   'cli.install': 'インストール：npm i -g @roam-research/roam-cli',
   'cli.connect': '接続：ターミナルで roam connect を実行してください',
   'cli.date': '日付',
+  'cli.graph': 'グラフ',
   'cli.sync': 'この日を同期',
   'cli.syncing': '同期中…',
   'cli.result': '{created} 件のブロックを追加 · {updated} 件を更新 · {kept} 件のローカルブロックを保持',
@@ -187,6 +191,7 @@ const de: Catalog = {
   'cli.install': 'Installieren: npm i -g @roam-research/roam-cli',
   'cli.connect': 'Verbinden: roam connect im Terminal ausführen',
   'cli.date': 'Datum',
+  'cli.graph': 'Graph',
   'cli.sync': 'Diesen Tag synchronisieren',
   'cli.syncing': 'Synchronisierung läuft…',
   'cli.result': '{created} Blöcke hinzugefügt · {updated} aktualisiert · {kept} lokale Blöcke beibehalten',

@@ -40,10 +40,12 @@
   let dailyDir = 'dailynote'
 
   // ── Roam CLI daily sync (separate flow from the JSON-export import above;
-  //    its state is kept apart on purpose, see Task 8 brief). useCli/cliDate
-  //    are UI preferences only — they live in localStorage, never the backend. ──
+  //    its state is kept apart on purpose, see Task 8 brief). useCli/cliDate/
+  //    cliGraph are UI preferences only — they live in localStorage, never the
+  //    backend. ──
   const CLI_TOGGLE_KEY = 'roam-import:cli:useCli'
   const CLI_DATE_KEY = 'roam-import:cli:date'
+  const CLI_GRAPH_KEY = 'roam-import:cli:graph'
 
   /** YYYY-MM-DD for yesterday in the machine's local calendar (a daily note
    *  is a human's day, not UTC's — mirrors the backend's own default day). */
@@ -62,9 +64,16 @@
   function loadCliDate(): string {
     try { return localStorage.getItem(CLI_DATE_KEY) || yesterdayLocal() } catch { return yesterdayLocal() }
   }
+  function loadCliGraph(): string {
+    try { return localStorage.getItem(CLI_GRAPH_KEY) ?? '' } catch { return '' }
+  }
 
   let useCli = $state(loadUseCli())
   let cliDate = $state(loadCliDate())
+  /** Which Roam graph to read from. Empty = let the CLI auto-select, which it
+   *  only does when exactly one graph is configured — so a two-graph user MUST
+   *  have picked one here or `roam datalog-query` fails. */
+  let cliGraph = $state(loadCliGraph())
   let probeResult = $state<RoamProbe | null>(null)
   let probeError = $state<string | null>(null)
   let syncing = $state(false)
@@ -77,16 +86,43 @@
   $effect(() => {
     try { localStorage.setItem(CLI_DATE_KEY, cliDate) } catch { /* best-effort */ }
   })
+  $effect(() => {
+    try { localStorage.setItem(CLI_GRAPH_KEY, cliGraph) } catch { /* best-effort */ }
+  })
+
+  /** Keep the persisted graph honest against what the CLI can actually see:
+   *  a name that is no longer configured would fail every sync, and a stale
+   *  pick left over from a multi-graph setup must not be sent once the machine
+   *  is back to one graph (where the CLI auto-selects). */
+  function reconcileGraph(p: RoamProbe) {
+    if (p.graphs.length > 1) {
+      if (!p.graphs.includes(cliGraph)) cliGraph = p.graphs[0]
+    } else {
+      cliGraph = ''
+    }
+  }
 
   async function refreshProbe() {
     probeError = null
     try {
-      probeResult = await probe()
+      const p = await probe()
+      reconcileGraph(p)
+      probeResult = p
     } catch (e) {
       console.error('[roam-import] probe failed:', e)
       probeResult = null
       probeError = e instanceof Error ? e.message : String(e)
     }
+  }
+
+  /** The probe is not free: it spawns a full interactive login shell
+   *  (`$SHELL -l -i -c 'command -v roam'`, which sources the user's rc files)
+   *  plus up to two `roam` subprocesses. Someone who only ever uses the JSON
+   *  import must not pay for that on every window open — so probe when the
+   *  toggle is switched on, and on mount only if it is already on. */
+  function setUseCli(on: boolean) {
+    useCli = on
+    if (on && probeResult === null) void refreshProbe()
   }
 
   async function runSync() {
@@ -95,7 +131,7 @@
     syncError = null
     syncResult = null
     try {
-      syncResult = await syncDay(cliDate)
+      syncResult = await syncDay(cliDate, cliGraph ? { graph: cliGraph } : undefined)
     } catch (e) {
       syncError = e instanceof Error ? e.message : String(e)
     } finally {
@@ -114,7 +150,8 @@
       console.error('[roam-import] init failed:', e)
     }
     ready = true
-    void refreshProbe()
+    // Only when the user has actually turned the CLI sync on — see setUseCli.
+    if (useCli) void refreshProbe()
   })
 
   const busy = $derived(stage === 'parse' || stage === 'plan' || stage === 'write')
@@ -225,7 +262,13 @@
       <section class="cli">
         <div class="cli-head">
           <label class="cli-toggle">
-            <input type="checkbox" bind:checked={useCli} />
+            <!-- deliberately not `bind:checked`: the probe must be kicked off
+                 *after* useCli has flipped, and only then (see setUseCli). -->
+            <input
+              type="checkbox"
+              checked={useCli}
+              onchange={(e) => setUseCli(e.currentTarget.checked)}
+            />
             {t('cli.toggle')}
           </label>
           <a class="link" href="https://github.com/Roam-Research/roam-tools" target="_blank" rel="noopener">
@@ -256,6 +299,18 @@
                 {t('cli.date')}
                 <input type="date" bind:value={cliDate} />
               </label>
+              <!-- Only when there is a choice to make: with one graph the roam
+                   CLI auto-selects, and a picker would be noise. -->
+              {#if probeResult && probeResult.graphs.length > 1}
+                <label class="date-label">
+                  {t('cli.graph')}
+                  <select bind:value={cliGraph}>
+                    {#each probeResult.graphs as g (g)}
+                      <option value={g}>{g}</option>
+                    {/each}
+                  </select>
+                </label>
+              {/if}
               <button class="sync" onclick={runSync} disabled={probeResult?.state !== 'ready' || syncing}>
                 {syncing ? t('cli.syncing') : t('cli.sync')}
               </button>

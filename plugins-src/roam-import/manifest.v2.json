@@ -9,7 +9,7 @@
     "x86_64-apple-darwin": "bin/notemd-roam-import"
   },
   "engines": {
-    "notemd": ">=6.716.7"
+    "notemd": ">=6.803.0"
   },
   "description": "Import a Roam Research JSON export into the vault as .note.md outline pages and daily notes",
   "ui": "ui/",

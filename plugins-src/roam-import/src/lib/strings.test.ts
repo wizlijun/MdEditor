@@ -42,7 +42,8 @@ describe('t', () => {
   it('has the Roam CLI sync strings in every locale', () => {
     const keys = [
       'cli.toggle', 'cli.link', 'cli.state.missing', 'cli.state.notConnected',
-      'cli.state.ready', 'cli.probeFailed', 'cli.install', 'cli.connect', 'cli.date', 'cli.sync',
+      'cli.state.ready', 'cli.probeFailed', 'cli.install', 'cli.connect', 'cli.date',
+      'cli.graph', 'cli.sync',
       'cli.syncing', 'cli.result', 'cli.resultGoneKept', 'cli.noPage', 'cli.failed',
     ]
     for (const loc of LOCALES) {
@@ -77,9 +78,12 @@ describe.each(LOCALES.filter((l) => l !== 'en'))('%s catalog', (locale) => {
   })
 
   it('leaves no string still in English', () => {
-    // Everything must differ from English, except bare product/link names
-    // that are the same in every language (mirrors ebook-import's strings.test.ts).
-    const allowed = new Set(['cli.link'])
+    // Everything must differ from English, except bare product/link names —
+    // and terms Roam itself uses that are the same word in the target language
+    // (mirrors ebook-import's strings.test.ts). `Graph` is Roam's own name for
+    // a database and is the German word too; the existing `cli.state.ready`
+    // string already renders it that way in de.
+    const allowed = new Set(['cli.link', ...(locale === 'de' ? ['cli.graph'] : [])])
     const identical = enKeys.filter(
       (k) =>
         !allowed.has(k) &&
