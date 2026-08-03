@@ -5,8 +5,13 @@ import { describe, it, expect } from 'vitest'
 // no Node type declarations are needed for `pnpm check`.
 import text from '../../../plugins-src/roam-import/backend/tests/fixtures/daily.note.md?raw'
 import fmCases from '../../../plugins-src/roam-import/backend/tests/fixtures/frontmatter-touch.json'
+import { parseDocument } from 'yaml'
 import { parseOutline, serializeOutline } from './markdown'
 import { touchFrontmatter } from './frontmatter'
+// The repo's own OKF v0.2 hard-constraint linter — the same implementation
+// `pnpm okf:lint` runs (see scripts/okf-lint.mjs).
+// @ts-expect-error - plain-JS lint core shared with scripts/okf-lint.mjs
+import { lintText } from '../../../scripts/okf-lint-core.mjs'
 
 /** Format-drift guard, TS half. The Rust backend writes this exact file
  *  (plugins-src/roam-import/backend/tests/golden.rs asserts it byte-for-byte);
@@ -124,6 +129,37 @@ describe('roam-import front-matter touch parity', () => {
 
   it('has cases to check', () => {
     expect(cases.length).toBeGreaterThan(0)
+  })
+
+  /** OKF v0.2 §11 conditions 1 and 2, on the bytes themselves. The parity
+   *  assertion below proves the two implementations agree; it cannot prove
+   *  they agree on something *valid* — a raw `title: Book: Thinking Fast and
+   *  Slow` would satisfy it perfectly if both sides wrote it. So every block
+   *  the plugin actually writes goes through the repo's own linter, the same
+   *  one `pnpm okf:lint` runs.
+   *
+   *  Cases where `expected === raw` are excluded: those are the non-mapping
+   *  blocks (`just a sentence`, a sequence, `title:value`) that both sides
+   *  deliberately hand back untouched — the plugin did not write them, it was
+   *  handed them, and refusing to corrupt them is the assertion. */
+  const written = cases.filter((c) => c.expected !== c.raw)
+
+  it.each(written)('$name — and the block it writes satisfies OKF §11', (c) => {
+    const block = touchFrontmatter(c.raw as string | null, {
+      type: c.type as string,
+      title: c.title as string,
+      created: c.created as string,
+      now: c.now as string,
+    })
+    expect(lintText('wikipage/x.note.md', `---\n${block}\n---\n- 第一条\n`)).toEqual([])
+    // Parsable is not enough: `PKM #2` written raw lints clean and reads back
+    // as `PKM`, and `2026` reads back as a number. Where the block carried no
+    // title of its own, what the reader gets has to be exactly what went in.
+    if (c.raw == null) {
+      const doc = parseDocument(block)
+      expect(doc.get('title')).toBe(c.title)
+      expect(doc.get('type')).toBe(c.type)
+    }
   })
 
   it.each(cases)('$name', (c) => {

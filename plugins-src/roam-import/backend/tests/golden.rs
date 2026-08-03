@@ -171,3 +171,93 @@ fn frontmatter_touch_matches_the_shared_fixture() {
         assert_eq!(got, c["expected"].as_str().unwrap(), "{name}");
     }
 }
+
+/// End-to-end, the check the branch's own end-to-end missed. That run only
+/// ever synced daily notes — the real ledger holds two entries, both
+/// `MM-DD-YYYY` — so the front-matter writer was never handed anything but a
+/// `yyyy-MM-dd` date, and a `title:` written raw looked perfectly safe.
+///
+/// This drives the real `incremental::sync_since` (routing, `sync_page`,
+/// `touch_frontmatter`, the atomic write) over the wiki-page titles that
+/// break raw YAML, and asserts the bytes that reach the vault. The
+/// TypeScript half runs the repo's own `pnpm okf:lint` implementation over
+/// the same blocks (`src/lib/outline/roam-golden.test.ts`); before the fix,
+/// `pnpm okf:lint` reported `frontmatter-unparsable` on four of these nine
+/// files.
+#[test]
+fn a_wiki_page_sync_writes_front_matter_a_yaml_reader_can_read() {
+    use notemd_roam_import::{changed::Changed, incremental, roam_page::{RoamBlock, RoamPage}};
+
+    // (uid, Roam title, the file it must land in, the `title:` line it must
+    // carry). Every title here is one raw YAML gets wrong: unparsable
+    // (`: `, a leading indicator), or — quieter and worse — parsable as
+    // something else (`PKM #2` truncates to `PKM`, `2026` becomes a number,
+    // `[[nested]]` becomes a nested list).
+    let cases: Vec<(&str, &str, &str, &str)> = vec![
+        ("u1", "Book: Thinking Fast and Slow",
+         "wikipage/Book- Thinking Fast and Slow.note.md",
+         "title: \"Book: Thinking Fast and Slow\""),
+        ("u2", "PKM #2", "wikipage/PKM #2.note.md", "title: \"PKM #2\""),
+        ("u3", "*star", "wikipage/star.note.md", "title: \"*star\""),
+        ("u4", "@home", "wikipage/@home.note.md", "title: \"@home\""),
+        ("u5", "[[nested]]", "wikipage/[[nested]].note.md", "title: \"[[nested]]\""),
+        ("u6", "Review: \"Dune\"", "wikipage/Review- -Dune.note.md",
+         "title: 'Review: \"Dune\"'"),
+        ("u7", "2026", "wikipage/2026.note.md", "title: \"2026\""),
+        // …and an ordinary one, which must NOT grow quotes it does not need.
+        ("u8", "回顾/系统", "wikipage/回顾-系统.note.md", "title: 回顾/系统"),
+        // The shape the branch's end-to-end covered, unchanged.
+        ("08-02-2026", "August 2nd, 2026", "dailynote/2026/2026-08-02.note.md",
+         "title: 2026-08-02"),
+    ];
+
+    let dir = tempfile::tempdir().unwrap();
+    let pages = cases.clone();
+    let batch: Vec<Changed> = cases
+        .iter()
+        .enumerate()
+        .map(|(i, (uid, ..))| Changed { uid: (*uid).into(), edited: 1000 + i as i64 })
+        .collect();
+
+    let report = incremental::sync_since(
+        dir.path(), ("wikipage", "dailynote"), None, Some("e2e"),
+        chrono::NaiveDate::from_ymd_opt(2026, 8, 3).unwrap(), NOW, false,
+        move |_| Ok(batch),
+        move |uid| Ok(pages.iter().find(|(u, ..)| *u == uid).map(|(u, title, ..)| RoamPage {
+            title: (*title).into(), uid: Some((*u).into()),
+            create_time: Some(1785600005019), edit_time: None,
+            children: vec![RoamBlock {
+                uid: Some(format!("{u}-b1")), string: "第一条".into(), order: 0,
+                heading: None, create_time: None, edit_time: None, children: vec![],
+            }],
+        })),
+    )
+    .unwrap();
+
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(report.synced, cases.len());
+
+    for (uid, roam_title, rel, title_line) in &cases {
+        let text = std::fs::read_to_string(dir.path().join(rel))
+            .unwrap_or_else(|e| panic!("{uid} ({roam_title}) is not at {rel}: {e}"));
+        let fm = text
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .unwrap_or_else(|| panic!("{rel} has no front-matter block:\n{text}"))
+            .0;
+        // OKF §4.1's one REQUIRED key, and the title, spelled the way the
+        // host's `yaml` package spells it.
+        assert!(
+            fm.lines().any(|l| l == "type: Wiki Page" || l == "type: Daily Note"),
+            "{rel} carries no OKF type:\n{fm}",
+        );
+        assert!(fm.lines().any(|l| l == *title_line), "{rel}:\nwant {title_line}\ngot:\n{fm}");
+    }
+
+    // …and the report names every one of them, which is what a `--dry-run`
+    // over the same graph would have printed.
+    let listed: Vec<&str> = report.pages.iter().map(|p| p.rel.as_str()).collect();
+    for (_, _, rel, _) in &cases {
+        assert!(listed.contains(rel), "{rel} was written but not reported: {listed:?}");
+    }
+}
