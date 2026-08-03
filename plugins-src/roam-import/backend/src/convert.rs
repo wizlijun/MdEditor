@@ -8,7 +8,7 @@
 //! whole-file overwrite.
 use crate::outline::{fence_close_len, fence_open_len, touch_frontmatter, Node, Tree};
 use crate::roam_page::{RoamBlock, RoamPage};
-use crate::syntax::{convert_inline, escape_bullet_lines, escape_reserved_props, normalize_date_links};
+use crate::syntax::{convert_inline, escape_structural_lines, normalize_date_links};
 use chrono::{SecondsFormat, TimeZone, Utc};
 
 /// Roam epoch-millisecond timestamp → `new Date(ms).toISOString()`-compatible
@@ -40,34 +40,34 @@ pub fn iso_ms(ms: Option<i64>) -> Option<String> {
 /// and re-creates it, duplicating the user's note on every single run:
 ///
 /// 1. `key:: value` on a continuation line → a node property.
-///    Neutralized by [`escape_reserved_props`].
 /// 2. `  - text` on a continuation line → a *child bullet*. Roam's
-///    shift-enter lists are exactly this. Neutralized by
-///    [`escape_bullet_lines`].
+///    shift-enter lists are exactly this.
 /// 3. a fence opener on the block's FIRST line → raw mode, which runs until a
 ///    matching closer and swallows every following block when the text never
 ///    closes it. Neutralized by [`close_dangling_fence`].
 ///
 /// 1 and 2 are fixed with one leading space (renders the same, no longer
-/// matches). 3 cannot be — the first line is the bullet's own text — so the
-/// missing closer is appended instead. All three are idempotent because the
-/// content is re-derived from Roam on every sync rather than re-read from the
-/// file.
+/// matches) by [`escape_structural_lines`], which skips the region 3 makes
+/// raw — the parser cannot misread code it takes verbatim, and escaping
+/// inside a fence would edit the sample the user pasted. 3 cannot be fixed
+/// with a space — the first line is the bullet's own text — so the missing
+/// closer is appended instead. All three are idempotent because the content is
+/// re-derived from Roam on every sync rather than re-read from the file.
 ///
 /// Anyone teaching `parse_outline` a fourth structural shape has to teach it
 /// to this function in the same commit.
 fn block_content(b: &RoamBlock) -> String {
-    let s = escape_bullet_lines(&escape_reserved_props(&normalize_date_links(&convert_inline(
-        &b.string,
-    ))));
-    // The heading prefix comes before the fence check on purpose: with it, the
-    // first line no longer *starts* with backticks, so it opens no fence — and
-    // `parse_outline` reads it back the same way.
+    let s = normalize_date_links(&convert_inline(&b.string));
+    // The heading prefix comes before both fence-aware steps on purpose: with
+    // it, the first line no longer *starts* with backticks, so it opens no
+    // fence at all — and `parse_outline` reads it back the same way. Prefixing
+    // first is what keeps the escape's raw-region tracking and
+    // `close_dangling_fence` agreeing with the parser (and with each other).
     let s = match b.heading {
         Some(h) if (1..=3).contains(&h) => format!("{} {}", "#".repeat(h as usize), s),
         _ => s,
     };
-    close_dangling_fence(s)
+    close_dangling_fence(escape_structural_lines(&s))
 }
 
 /// Shape 3 of [`block_content`]'s list. `parse_outline` enters raw mode when a
@@ -295,6 +295,45 @@ mod tests {
         assert_eq!(survives_a_round_trip("```js\nconst x = 1\n```"), "```js\nconst x = 1\n```");
         // Trailing prose after the closer is outside the fence and unaffected.
         assert_eq!(survives_a_round_trip("```\nx\n```\nafter"), "```\nx\n```\nafter");
+    }
+
+    /// R2: the escapes are for lines `parse_outline` would read as structure,
+    /// and inside the block's own fence it reads nothing as structure — it
+    /// takes the lines verbatim. A Roam block that is a fenced YAML sample must
+    /// therefore come out byte-identical, not with a space quietly inserted
+    /// into every `- foo` of the user's code.
+    #[test]
+    fn a_fenced_list_is_written_exactly_as_the_user_pasted_it() {
+        assert_eq!(
+            survives_a_round_trip("```yaml\n- foo\n- bar\n```"),
+            "```yaml\n- foo\n- bar\n```"
+        );
+        // Same for the other escaped shape: `key:: value` is code in there.
+        assert_eq!(
+            survives_a_round_trip("```\nid:: not-a-property\n```"),
+            "```\nid:: not-a-property\n```"
+        );
+        // An unterminated fenced list: the closer is still appended (C3), and
+        // the body is still untouched.
+        assert_eq!(survives_a_round_trip("```yaml\n- foo"), "```yaml\n- foo\n```");
+        // Once the fence closes the parser is reading structure again, so the
+        // tail is escaped as usual.
+        assert_eq!(
+            survives_a_round_trip("```\n- inside\n```\n- after"),
+            "```\n- inside\n```\n - after"
+        );
+    }
+
+    /// The other direction, and the reason the fence-awareness is deliberately
+    /// narrow: a fence opened on a *later* line never puts `parse_outline` into
+    /// raw mode, so those lines really are read as structure and really do have
+    /// to be escaped — round-trip fidelity over fence cosmetics.
+    #[test]
+    fn a_fence_opened_after_the_first_line_is_still_escaped() {
+        assert_eq!(
+            survives_a_round_trip("prose\n```yaml\n- foo\n```"),
+            "prose\n```yaml\n - foo\n```"
+        );
     }
 
     /// A heading turns the first line into `## …`, which opens no fence at all

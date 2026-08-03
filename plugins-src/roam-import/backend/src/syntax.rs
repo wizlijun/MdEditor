@@ -1,6 +1,7 @@
 //! Roam inline syntax → note.md markdown. Ported from
 //! `plugins-src/roam-import/src/lib/roam-import/syntax.ts`; keep the two in
 //! step — the shared golden fixture (Task 7) is what catches drift.
+use crate::outline::{fence_close_len, fence_open_len};
 use regex::{Captures, Regex};
 use std::sync::OnceLock;
 
@@ -102,31 +103,60 @@ pub fn normalize_date_links(s: &str) -> String {
     })
 }
 
-/// A continuation line shaped like a node property would be swallowed by
-/// parse_outline. One leading space keeps it content (renders the same).
-pub fn escape_reserved_props(s: &str) -> String {
+/// Neutralize the continuation lines `parse_outline` would read as structure
+/// rather than as this block's own text:
+///
+/// * `key:: value` — a node *property*, which would be swallowed off the
+///   block's content and (for `id::`) rewrite its identity.
+/// * `  - text` — a *child bullet*. A Roam block holding a shift-enter list
+///   (`shopping\n- milk\n- eggs`) is exactly this shape.
+///
+/// Both are fixed the same way, with one leading space: it renders
+/// identically, and it makes the line stop matching. For a bullet that is
+/// mechanical — `^((?:  )*)- ` needs an EVEN number of leading spaces, so an
+/// odd count cannot match at any depth. Adding a space also never produces a
+/// line either pattern matches, which is what makes the escape idempotent.
+///
+/// **Fence-aware, because the escape must not rewrite code the user pasted.**
+/// When the block's FIRST line opens a fence, `parse_outline` switches to raw
+/// mode and takes every following line verbatim until a closer at least as
+/// long — nothing in there can be misread as structure, so nothing in there
+/// may be touched. A Roam block that is a fenced YAML sample would otherwise
+/// come out of the sync with a space silently inserted into its `- foo` lines.
+/// Lines *after* that closer are read normally again, so they are escaped
+/// again.
+///
+/// A fence opened on a *later* line is not raw mode — `parse_outline` only
+/// ever enters it from a bullet's first line — so those lines stay escaped,
+/// even though they look like code. That is not a nicety: without the escape
+/// the block loses its `id::` to a phantom child and the merge re-creates it
+/// on every sync. Round-trip fidelity wins over fence cosmetics; the
+/// first-line case (the common one, and the one Roam's own code blocks
+/// produce) is exact.
+pub fn escape_structural_lines(s: &str) -> String {
     let prop = reserved_prop_pattern();
-    s.split('\n')
-        .enumerate()
-        .map(|(i, ln)| if i > 0 && prop.is_match(ln) { format!(" {ln}") } else { ln.to_string() })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// A continuation line shaped like an outline bullet is read back by
-/// `parse_outline` as a *child node*, not as this block's own text — and a
-/// Roam block containing a shift-enter list (`shopping\n- milk\n- eggs`) is
-/// exactly that shape. One leading space fixes it for the same reason it fixes
-/// a property line, and by the same mechanism: `^((?:  )*)- ` needs an EVEN
-/// number of leading spaces, so making the count odd stops it matching at any
-/// depth, while the line renders identically.
-pub fn escape_bullet_lines(s: &str) -> String {
     let bullet = bullet_line_pattern();
-    s.split('\n')
-        .enumerate()
-        .map(|(i, ln)| if i > 0 && bullet.is_match(ln) { format!(" {ln}") } else { ln.to_string() })
-        .collect::<Vec<_>>()
-        .join("\n")
+    // >0 = inside the raw fence the first line opened, exactly as
+    // `parse_outline` tracks it (same two helpers, so the rule cannot drift).
+    let mut fence = 0usize;
+    let mut out: Vec<String> = Vec::new();
+    for (i, ln) in s.split('\n').enumerate() {
+        if i == 0 {
+            // The first line IS the bullet's own text; it is never structure.
+            fence = fence_open_len(ln).unwrap_or(0);
+            out.push(ln.to_string());
+        } else if fence > 0 {
+            if fence_close_len(ln).is_some_and(|close| close >= fence) {
+                fence = 0;
+            }
+            out.push(ln.to_string());
+        } else if prop.is_match(ln) || bullet.is_match(ln) {
+            out.push(format!(" {ln}"));
+        } else {
+            out.push(ln.to_string());
+        }
+    }
+    out.join("\n")
 }
 
 #[cfg(test)]
@@ -180,8 +210,8 @@ mod tests {
     fn continuation_lines_that_look_like_props_get_escaped() {
         // A second line reading `id:: x` would be eaten as a node property by
         // parse_outline; one leading space makes it content again.
-        assert_eq!(escape_reserved_props("head\nid:: x"), "head\n id:: x");
-        assert_eq!(escape_reserved_props("id:: x"), "id:: x");
+        assert_eq!(escape_structural_lines("head\nid:: x"), "head\n id:: x");
+        assert_eq!(escape_structural_lines("id:: x"), "id:: x");
     }
 
     #[test]
@@ -189,23 +219,77 @@ mod tests {
         // A Roam shift-enter list. Left alone, `- milk` is re-read as a CHILD
         // of the block, which then loses its own `id::` line to the child's
         // continuation indent — see convert::block_content.
-        assert_eq!(escape_bullet_lines("shopping\n- milk\n- eggs"), "shopping\n - milk\n - eggs");
+        assert_eq!(escape_structural_lines("shopping\n- milk\n- eggs"), "shopping\n - milk\n - eggs");
         // Nested list items match the same pattern at any even indent.
-        assert_eq!(escape_bullet_lines("a\n  - b"), "a\n   - b");
+        assert_eq!(escape_structural_lines("a\n  - b"), "a\n   - b");
         // The first line IS the bullet's text; it is never a child bullet.
-        assert_eq!(escape_bullet_lines("- milk"), "- milk");
+        assert_eq!(escape_structural_lines("- milk"), "- milk");
         // A dash that is not a bullet (odd indent, or no trailing space) is
         // already unambiguous and must not be touched.
-        assert_eq!(escape_bullet_lines("a\n - b\n-dash\nx - y"), "a\n - b\n-dash\nx - y");
+        assert_eq!(escape_structural_lines("a\n - b\n-dash\nx - y"), "a\n - b\n-dash\nx - y");
     }
 
-    /// The escapes only ever ADD a leading space, so the escaped line no longer
-    /// matches the pattern that produced it — running the pair twice (a
-    /// hand-edited file fed back through, say) cannot pile spaces up.
+    /// The escape must not edit code. Inside the fence the block's own first
+    /// line opened, `parse_outline` takes every line verbatim, so there is
+    /// nothing to neutralize — and a space inserted into a YAML sample's
+    /// `- foo` is the user's pasted code, silently altered.
+    #[test]
+    fn lines_inside_the_blocks_own_fence_are_left_exactly_as_they_are() {
+        assert_eq!(
+            escape_structural_lines("```yaml\n- foo\n- bar\n```"),
+            "```yaml\n- foo\n- bar\n```"
+        );
+        // Property-shaped lines are code in there too.
+        assert_eq!(
+            escape_structural_lines("```\nid:: not-a-property\n```"),
+            "```\nid:: not-a-property\n```"
+        );
+        // Only a closer at least as long ends raw mode — a shorter run inside
+        // a longer fence is still code.
+        assert_eq!(
+            escape_structural_lines("````\n```\n- inner\n````"),
+            "````\n```\n- inner\n````"
+        );
+        // An unterminated fence runs to the end of the block.
+        assert_eq!(escape_structural_lines("```js\n- not a bullet"), "```js\n- not a bullet");
+    }
+
+    /// …and once the fence closes, `parse_outline` is reading structure again,
+    /// so the escape has to come back on.
+    #[test]
+    fn lines_after_the_fence_closes_are_escaped_again() {
+        assert_eq!(
+            escape_structural_lines("```\n- inside\n```\n- after\nid:: x"),
+            "```\n- inside\n```\n - after\n id:: x"
+        );
+    }
+
+    /// A fence opened on a LATER line is not raw mode — `parse_outline` only
+    /// enters it from a bullet's first line — so those lines are still read as
+    /// structure and must still be escaped, code-looking or not.
+    #[test]
+    fn a_fence_opened_mid_block_does_not_suspend_the_escape() {
+        assert_eq!(
+            escape_structural_lines("prose\n```yaml\n- foo\n```"),
+            "prose\n```yaml\n - foo\n```"
+        );
+    }
+
+    /// The escape only ever ADDS a leading space, so the escaped line no longer
+    /// matches the pattern that produced it — running it twice (a hand-edited
+    /// file fed back through, say) cannot pile spaces up. Neither can the
+    /// fence tracking: a leading space never turns a line into a fence
+    /// opener/closer, so the second pass sees the same raw regions.
     #[test]
     fn escaping_an_already_escaped_line_changes_nothing() {
-        let once = escape_bullet_lines(&escape_reserved_props("head\nid:: x\n- milk"));
-        assert_eq!(once, "head\n id:: x\n - milk");
-        assert_eq!(escape_bullet_lines(&escape_reserved_props(&once)), once);
+        for s in [
+            "head\nid:: x\n- milk",
+            "```yaml\n- foo\n```\n- after",
+            "prose\n```\n- foo\n```",
+        ] {
+            let once = escape_structural_lines(s);
+            assert_eq!(escape_structural_lines(&once), once, "not idempotent: {s:?}");
+        }
+        assert_eq!(escape_structural_lines("head\nid:: x\n- milk"), "head\n id:: x\n - milk");
     }
 }
