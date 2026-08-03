@@ -213,8 +213,18 @@ pub fn sync_page(
 
     let abs = vault.join(rel);
     let existing = read_existing(&abs)?;
-    let local = parse_outline(&existing);
+    let mut local = parse_outline(&existing);
     let roam = convert_page(page, title, concept_type);
+    // Before the merge, and the only thing standing between the two import
+    // paths: the TS full-graph importer persists an `id::` only for `((ref))`
+    // targets, so a page it wrote has nothing for `merge`'s id alignment to
+    // match on and every Roam block would read as new — doubling the page. This
+    // hands those blocks the uid they should have had (`content` + `created::`,
+    // both exact); `merge` itself is untouched. Its return value is a repair
+    // count, deliberately not reported in `PageOutcome`: it is not something
+    // that happened in Roam, and after the one sync that stamps the ids it is
+    // zero forever.
+    crate::adopt::adopt_ids(&mut local, &roam);
     let (mut merged, stats) = merge(&local, &roam);
     // Filled in before the early returns below rather than at each of them:
     // what the merge decided is the same story whether or not anything reached
@@ -677,6 +687,77 @@ mod tests {
             vec![b("u1", "```js\nconst x = 1"), b("u2", "the block after the fence")],
         );
         stable_across_three_syncs("property line", vec![b("u1", "meeting\nid:: not-a-property")]);
+    }
+
+    /// Fix B, end to end. The day's note was written by the TypeScript
+    /// full-graph JSON importer, which persists an `id::` only for `((ref))`
+    /// targets — so its blocks carry `created::` and nothing else. The CLI then
+    /// syncs the same day. Without the adoption pass the merge aligns on
+    /// nothing: every Roam block reads as `created`, every id-less copy as the
+    /// user's own writing, and the file doubles (observed in the vault:
+    /// `created=93 kept_local=93` for one day). Here the ids are stamped in
+    /// place instead — same blocks, same line count, each text exactly once.
+    #[test]
+    fn a_note_from_the_json_importer_gains_ids_instead_of_doubling() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dailynote/2026/2026-08-02.note.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Exactly what the JSON importer leaves behind: no `id::` anywhere, a
+        // `created::` on every block, and one margin note of the user's own.
+        let before = "---\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-02T10:00:00.000Z\n---\n\
+                      - morning review\n  created:: 2026-08-02T00:12:00.000Z\n\
+                      \x20 - ship the daily sync\n    created:: 2026-08-02T00:13:00.000Z\n\
+                      \x20   - my own take on this one\n\
+                      - meeting notes\n  created:: 2026-08-02T00:20:00.000Z\n";
+        std::fs::write(&path, before).unwrap();
+        let lines_before = before.lines().count();
+
+        let b = |uid: &str, s: &str, created: i64, children: Vec<RoamBlock>| RoamBlock {
+            uid: Some(uid.into()), string: s.into(), order: 0, heading: None,
+            create_time: Some(created), edit_time: None, children,
+        };
+        let mut p = page();
+        p.children = vec![
+            b("hCIv7Y63h", "morning review", 1785629520000, vec![
+                b("Km2vQx8pL", "ship the daily sync", 1785629580000, vec![]),
+            ]),
+            b("Nb7sT1uEv", "meeting notes", 1785630000000, vec![]),
+        ];
+
+        let out = sync_day(dir.path(), "dailynote", Some(&p), "2026-08-02", NOW).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+
+        assert_eq!(
+            (out.created, out.updated, out.kept_local, out.roam_gone_kept),
+            (0, 0, 1, 0),
+            "Roam's blocks were adopted, and only the user's own note is local:\n{text}"
+        );
+        for block in ["- morning review", "- ship the daily sync", "- meeting notes",
+                      "- my own take on this one"] {
+            assert_eq!(text.matches(block).count(), 1, "{block} doubled:\n{text}");
+        }
+        for uid in ["hCIv7Y63h", "Km2vQx8pL", "Nb7sT1uEv"] {
+            assert_eq!(text.matches(&format!("id:: {uid}")).count(), 1, "{uid}:\n{text}");
+        }
+        // The file grows by exactly four lines: one `id::` per adopted block,
+        // plus the OKF §4.1 `type:` this sync stamps on any note whose
+        // front-matter has none. The doubling bug added a whole second copy of
+        // every Roam block instead.
+        assert_eq!(text.lines().count(), lines_before + 4, "the file grew:\n{text}");
+        assert_eq!(text.lines().filter(|l| l.contains("id:: ")).count(), 3);
+        // …and now that the ids are on disk, the next sync is a no-op — the
+        // adoption pass is a one-off repair, not a rewrite on every run.
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let again = sync_day(dir.path(), "dailynote", Some(&p), "2026-08-02",
+                             "2026-08-04T17:45:12.345Z").unwrap();
+        assert_eq!((again.created, again.updated, again.kept_local), (0, 0, 1));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "the bytes moved");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            mtime,
+            "the file was rewritten even though nothing changed"
+        );
     }
 
     #[test]
