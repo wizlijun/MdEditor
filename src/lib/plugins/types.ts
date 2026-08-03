@@ -149,6 +149,14 @@ export interface PluginRequest {
     rendered_html?: string
     raw_content?: string
     output_path?: string
+    /** CLI invocation only: the subcommand's positional arg(s) and flags, at
+     *  the pointers a plugin's `cli_str`/`cli_flag` helper already probes
+     *  (`/cli/args/<name>`, `/cli/flags/<name>`) — see `buildContext`'s doc
+     *  comment. Absent for GUI-triggered commands. */
+    cli?: {
+      args?: Record<string, string>
+      flags?: Record<string, string | boolean>
+    }
   }
   settings?: Record<string, unknown>
 }

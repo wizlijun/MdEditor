@@ -38,6 +38,18 @@ describe('t', () => {
   it('falls back to the raw key when the key is unknown', () => {
     expect(t('no.such.key' as never)).toBe('no.such.key')
   })
+
+  it('has the Roam CLI sync strings in every locale', () => {
+    const keys = [
+      'cli.toggle', 'cli.link', 'cli.state.missing', 'cli.state.notConnected',
+      'cli.state.ready', 'cli.probeFailed', 'cli.install', 'cli.connect', 'cli.date',
+      'cli.graph', 'cli.sync',
+      'cli.syncing', 'cli.result', 'cli.resultGoneKept', 'cli.noPage', 'cli.failed',
+    ]
+    for (const loc of LOCALES) {
+      for (const k of keys) expect(CATALOGS[loc], `${loc}.${k}`).toHaveProperty(k)
+    }
+  })
 })
 
 // A plugin window can't import the host's i18n, so nothing but this test stops
@@ -66,10 +78,15 @@ describe.each(LOCALES.filter((l) => l !== 'en'))('%s catalog', (locale) => {
   })
 
   it('leaves no string still in English', () => {
-    // Nothing in this catalog is a bare product/provider name, so every key
-    // must differ from English.
+    // Everything must differ from English, except bare product/link names —
+    // and terms Roam itself uses that are the same word in the target language
+    // (mirrors ebook-import's strings.test.ts). `Graph` is Roam's own name for
+    // a database and is the German word too; the existing `cli.state.ready`
+    // string already renders it that way in de.
+    const allowed = new Set(['cli.link', ...(locale === 'de' ? ['cli.graph'] : [])])
     const identical = enKeys.filter(
       (k) =>
+        !allowed.has(k) &&
         catalog[k as keyof typeof catalog] === en[k as keyof typeof en] &&
         /[a-zA-Z]{4}/.test(en[k as keyof typeof en]),
     )

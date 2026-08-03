@@ -2,16 +2,21 @@
   "manifest_version": 2,
   "id": "notemd.roam-import",
   "name": "Roam Research Import",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "kind": "native",
+  "binary": {
+    "aarch64-apple-darwin": "bin/notemd-roam-import",
+    "x86_64-apple-darwin": "bin/notemd-roam-import"
+  },
   "engines": {
-    "notemd": ">=6.716.7"
+    "notemd": ">=6.803.0"
   },
   "description": "Import a Roam Research JSON export into the vault as .note.md outline pages and daily notes",
   "ui": "ui/",
   "activation": {
     "events": [
-      "onCommand:open"
+      "onCommand:open",
+      "onCli:roam-day"
     ]
   },
   "contributes": {
@@ -33,6 +38,19 @@
         "min_height": 420,
         "open_command": "open"
       }
+    ],
+    "cli": [
+      {
+        "subcommand": "roam-day",
+        "command": "sync-day",
+        "summary": "Sync one day's Roam daily note into the vault",
+        "args": [],
+        "flags": [
+          { "long": "--date", "type": "string", "help": "yyyy-MM-dd, today or yesterday (default: yesterday)" },
+          { "long": "--graph", "type": "string", "help": "Roam graph name (default: the CLI's own default)" }
+        ],
+        "requires_tab_context": false
+      }
     ]
   },
   "capabilities": [
@@ -41,8 +59,10 @@
     "vault.write",
     "fs.read:dialog",
     "clipboard.write",
-    "toast"
+    "toast",
+    "ui"
   ],
+  "request_timeout_seconds": 120,
   "i18n": {
     "zh": {
       "name": "Roam Research 导入",

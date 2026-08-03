@@ -1,0 +1,31 @@
+[package]
+name = "notemd-roam-import"
+version = "1.1.0"
+edition = "2021"
+
+[lib]
+name = "notemd_roam_import"
+path = "src/lib.rs"
+
+[[bin]]
+name = "notemd-roam-import"
+path = "src/main.rs"
+
+[dependencies]
+notemd-plugin-sdk = { path = "../../../notemd-plugin-sdk" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+regex = "1"
+# Not just a test helper: the vault write goes through NamedTempFile, whose
+# unique name is what keeps two concurrent syncs (the window's button and a
+# cron `notemd roam-day` are different processes) from publishing each other's
+# partial bytes. See sync::write_atomically.
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

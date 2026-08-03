@@ -46,15 +46,22 @@ pub fn plugin_v2_open_window(
 // *actually verified* package's capabilities before `plugin_market_install`.
 
 /// A plugin has a backing process (and thus a lifecycle) iff it declares a
-/// `binary`. UI-only plugins (roam-import, base, custom-editor fixtures) have an
-/// empty binary map — their window opens directly from STATE and their UI talks
-/// to the host over `host.*`, so they never get a process/lifecycle.
+/// `binary`. UI-only plugins (decision-log, weekly-review, base, custom-editor
+/// fixtures) have an empty binary map — their window opens directly from STATE
+/// and their UI talks to the host over `host.*`, so they never get a
+/// process/lifecycle.
+///
+/// The corollary that bit roam-import once it grew a backend (2026-08-03): a
+/// manifest declaring `binary` MUST be packaged per triple, because a
+/// `universal` package carries no `bin/` and this function would then hand it a
+/// lifecycle it cannot serve. `zip_pkg` in scripts/release-plugins.sh refuses
+/// that combination.
 fn is_process_plugin(m: &plugin_protocol::ManifestV2) -> bool {
     !m.binary.is_empty()
 }
 
 /// Find `id`@`version` in the registry index and resolve this host's arch
-/// download URL + sha256. UI-only plugins (roam-import etc.) publish under the
+/// download URL + sha256. UI-only plugins (decision-log etc.) publish under the
 /// `universal` key rather than a host triple, so we prefer the host triple then
 /// fall back to `universal`. Errors only if neither is present.
 fn resolve_download(entry: &market::RegistryEntry) -> Result<(String, String), String> {

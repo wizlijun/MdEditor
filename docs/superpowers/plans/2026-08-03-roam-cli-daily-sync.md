@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - 插件 id `notemd.roam-import`;新增 backend crate 名与二进制名均为 `notemd-roam-import`。
-- `manifest.v2.json` 用 `#[serde(deny_unknown_fields)]` 解析,**多写一个字段就加载失败**;`engines.notemd` 保持 `">=6.716.7"`。
+- `manifest.v2.json` 用 `#[serde(deny_unknown_fields)]` 解析,**多写一个字段就加载失败**;~~`engines.notemd` 保持 `">=6.716.7"`~~。
+  > **事后更正(final review)**:这条 Global Constraint 是在还不知道要改宿主之前写下的,因此定错了。Task 10 发现 `CliRunner` 无条件要求 `payload.file`,`notemd roam-day` 没有文件参数 —— 于是宿主必须一起改(见 §6 的「唯一改动」)。任何**已发布**的宿主(截至 6.801.5)都跑不通这个子命令,所以 `engines.notemd` 必须是 `">=6.803.0"`,且**插件上架前宿主必须先发到该版本或更高**。
 - 后端与宿主的通道是 stdin/stdout 上的 NDJSON JSON-RPC;**任何 `println!` 到 stdout 都会污染协议**,调试输出一律走 `host.log_info/warn/error`。
 - `$activate` 在协议读循环上同步派发:在 `activate()` 里 `await` `host.request(...)` 会把插件卡死到宿主超时。异步查询必须 spawn(照抄 `ebook-import` 的 `vault_from_host`)。
 - vault 文件读写用 `std::fs`(后端已知 vault 绝对路径);`host.vault.*` 只用来问 `host.vault.info`。
@@ -1216,7 +1217,7 @@ git commit -m "feat(roam-import): convert a Roam daily page into an outline tree
 1. `roam_uids` = roam 树全部节点 id 的集合;`local_by_id` = local 树按 id 索引。
 2. 从根层开始递归。某一层的输出列表:
    a. 先放该层全部 roam 子节点,按 roam 的 order。
-   b. 再按 local 原顺序处理该层「本地块」(id ∉ `roam_uids`):向前找最近的、**已经落在输出列表里**的同级前驱(可能是存活的 roam 块,也可能是刚插入的另一个本地块),插到它后面;找不到就插到列表**头部**(它原本就排在所有 roam 块之前)。
+   b. 再按 local 原顺序处理该层「本地块」(id ∉ `roam_uids`),两分支:向前找最近的、**已经落在输出列表里**的同级前驱(可能是存活的 roam 块,也可能是刚插入的另一个本地块)→ 插到它后面;否则一律插到列表**头部**。连续的一串本地块因此保持原相对顺序(第一块落头部,其余锚在前一块之后)。(产品负责人裁定:无锚点时落头部,不落末尾 —— 你写的块不该因为 roam 往同一父节点新增内容就被挤到下面;测试 `local_children_of_a_roam_block_survive` 按此断言。)
 3. 同 uid 节点:`content`/`created_at`/`updated_at` 取 roam 版;`collapsed` 取 local 版(折叠是本地视图状态,不该被 Roam 覆盖);`persist_id` = true。
 4. 递归时 local 侧的父节点按 **id 全局查找**(块可能在 Roam 里被移到了别的父下)。
 5. 保留的本地子树整棵复制,但**丢弃其中 id ∈ `roam_uids` 的节点及其整棵子树** —— 那个块已经在 roam 结构里输出过了,它自己的本地子节点会在递归它时被捡回,不会丢也不会重。
@@ -1280,7 +1281,7 @@ mod tests {
     fn local_children_of_a_roam_block_survive() {
         let local = parse_outline("- a\n  id:: u1\n  - my note\n");
         let (out, _) = merge(&local, &roam("- a\n  id:: u1\n  - from roam\n    id:: u2\n"));
-        assert_eq!(serialize_outline(&out), "- a\n  id:: u1\n  - from roam\n    id:: u2\n  - my note\n");
+        assert_eq!(serialize_outline(&out), "- a\n  id:: u1\n  - my note\n  - from roam\n    id:: u2\n");
     }
 
     #[test]
