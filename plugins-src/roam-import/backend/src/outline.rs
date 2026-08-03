@@ -517,6 +517,158 @@ pub const CONCEPT_TYPE_DAILY_NOTE: &str = "Daily Note";
 /// in `src/lib/okf/concept.ts`. Same reasoning: one spelling, in one place.
 pub const CONCEPT_TYPE_WIKI_PAGE: &str = "Wiki Page";
 
+/// The values a YAML 1.2 **core schema** reader resolves to something that is
+/// not a string — `null`/`true`/`123`/`0x1f`/`1e3`/`.inf`. The host's `yaml`
+/// package quotes exactly these when serializing a string (its
+/// `stringifyString` runs every default tag's `test` against the plain form
+/// and falls back to a quoted scalar on a hit), so `title: 123` never comes
+/// back as the number 123.
+fn non_string_scalar_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"^(?:~|[Nn]ull|NULL",
+            r"|[Tt]rue|TRUE|[Ff]alse|FALSE",
+            r"|0o[0-7]+|[-+]?[0-9]+|0x[0-9a-fA-F]+",
+            r"|[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+",
+            r"|[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)",
+            r"|[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$",
+        ))
+        .unwrap()
+    })
+}
+
+/// May `value` be written as a YAML **plain** (unquoted) scalar? A port of the
+/// host `yaml` package's `plainString` guard — the regex in
+/// `yaml/dist/stringify/stringifyString.js`:
+///
+/// ```text
+/// /^[\n\t ,[\]{}#&*!|>'"%@`]|^[?-]$|^[?-][ \t]|[\n:][ \t]|[ \t]\n|[\n\t ]#|[\n\t :]$/
+/// ```
+///
+/// plus the "would it round-trip as a string?" check
+/// ([`non_string_scalar_pattern`]). Kept as a predicate rather than folded
+/// into [`yaml_scalar`] so each clause is separately assertable.
+fn is_plain_safe(value: &str) -> bool {
+    let chars: Vec<char> = value.chars().collect();
+    let Some(&first) = chars.first() else { return false }; // the empty string
+    if matches!(
+        first,
+        '\n' | '\t' | ' ' | ',' | '[' | ']' | '{' | '}' | '#' | '&' | '*' | '!' | '|' | '>'
+            | '\'' | '"' | '%' | '@' | '`'
+    ) {
+        return false;
+    }
+    if value == "?" || value == "-" {
+        return false;
+    }
+    // Not from the regex: `plainString` has an earlier branch that sends ANY
+    // multi-line value to `blockString`, so a line break is never plain even
+    // when the regex would have allowed it. See `yaml_scalar`'s note on the
+    // one place the two implementations part ways.
+    if value.contains('\n') {
+        return false;
+    }
+    if matches!(first, '?' | '-') && matches!(chars.get(1), Some(' ' | '\t')) {
+        return false;
+    }
+    for pair in chars.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        // `: ` / `:\t` / a line break followed by indentation — all of which
+        // make the reader see a nested key or a continuation.
+        if matches!(a, '\n' | ':') && matches!(b, ' ' | '\t') {
+            return false;
+        }
+        if matches!(a, ' ' | '\t') && b == '\n' {
+            return false;
+        }
+        // A `#` preceded by whitespace opens a comment.
+        if matches!(a, '\n' | '\t' | ' ') && b == '#' {
+            return false;
+        }
+    }
+    if matches!(chars[chars.len() - 1], '\n' | '\t' | ' ' | ':') {
+        return false;
+    }
+    !non_string_scalar_pattern().is_match(value)
+}
+
+/// A string as a YAML scalar, quoted **exactly when and how the host's `yaml`
+/// package would quote it**. Both sides write this file — the plugin through
+/// [`touch_frontmatter`], the host through `touchFrontmatter`
+/// (`src/lib/outline/frontmatter.ts`, which goes through `yaml`) — so a
+/// disagreement here is a file one of them cannot read back.
+///
+/// Until incremental sync, the only `title` this ever saw was a `yyyy-MM-dd`
+/// date, and writing it raw was safe. It is now the writer for **arbitrary
+/// Roam page titles**, where raw is not safe at all: `title: Book: Thinking
+/// Fast and Slow` is unparsable YAML (`scripts/okf-lint-core.mjs` reports
+/// `frontmatter-unparsable`), and the host's `yaml` reader swallows the
+/// `type`/`created`/`updated` beneath it into a nested map — after which
+/// `fmHas(raw, 'type')` is false and the host appends a *second* `type`, so
+/// each write compounds the damage. `PKM #2` is worse still: it parses, so
+/// nothing complains, and the title silently becomes `PKM`.
+///
+/// Quote style follows `yaml`'s `quotedString`: single quotes when the value
+/// contains a `"` and no `'` (so the double quotes need no escaping),
+/// double quotes otherwise.
+///
+/// One deliberate divergence, documented rather than matched: `yaml` renders a
+/// value **containing a line break** as a block scalar (`|-` plus an indented
+/// body, folded or literal depending on `lineWidth`), which is a page of
+/// re-implementation for a case that cannot occur — a Roam page title is a
+/// single-line field, and a newline in one would already have produced a file
+/// name with a newline in it long before reaching here. This writes a
+/// double-quoted `\n` escape instead: different bytes, identical string on
+/// read-back, and the host normalises it to its own spelling the next time it
+/// touches the file.
+pub fn yaml_scalar(value: &str) -> String {
+    if is_plain_safe(value) {
+        return value.to_string();
+    }
+    if value.contains('"') && !value.contains('\'') {
+        return format!("'{}'", value.replace('\'', "''"));
+    }
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Replace the top-level `title:` of a front-matter block, in place, keeping
+/// every other key and its order. Returns the block untouched when it is not a
+/// mapping or has no top-level `title:` at all (in which case
+/// [`touch_frontmatter`] appends one).
+///
+/// The **only** caller is the rename case in [`crate::incremental`]: Roam
+/// renamed the page, the file moved, and without this the front-matter keeps
+/// the old title forever — `touch_frontmatter` fills a *missing* title and
+/// never overwrites one (the shared fixture pins that rule), and the sync that
+/// follows a rename usually has nothing else to write, so no later run repairs
+/// it. Scoped to the one case where the sync *knows* the title changed;
+/// everywhere else an existing title is still the user's to keep.
+pub fn refresh_frontmatter_title(raw: &str, title: &str) -> String {
+    if !matches!(fm_shape(raw), FmShape::Mapping) {
+        return raw.to_string();
+    }
+    let mut lines: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
+    if let Some(pos) = lines.iter().position(|l| l.starts_with("title:") && is_top_level_key(l)) {
+        lines[pos] = format!("title: {}", yaml_scalar(title));
+    }
+    lines.join("\n")
+}
+
 /// Refresh a companion file's front-matter without a YAML crate: unknown
 /// keys and their order must survive untouched (round-tripping a
 /// hand-edited or third-party-tool-written file is a hard requirement, not
@@ -568,17 +720,22 @@ pub fn touch_frontmatter(
         lines.iter().any(|l| l.starts_with(&prefix) && is_top_level_key(l))
     };
 
+    // Every value goes through `yaml_scalar`, not just `title`: the three
+    // others are machine-generated (an OKF type constant, two ISO-8601
+    // instants) and always come back unquoted today, but "this one happens to
+    // be safe" is exactly the reasoning that made `title` unsafe the moment
+    // it started carrying Roam page titles.
     if !has_key(&lines, "type") {
-        lines.push(format!("type: {concept_type}"));
+        lines.push(format!("type: {}", yaml_scalar(concept_type)));
     }
     if !has_key(&lines, "title") {
-        lines.push(format!("title: {title}"));
+        lines.push(format!("title: {}", yaml_scalar(title)));
     }
     if !has_key(&lines, "created") {
-        lines.push(format!("created: {created}"));
+        lines.push(format!("created: {}", yaml_scalar(created)));
     }
 
-    let updated_line = format!("updated: {now}");
+    let updated_line = format!("updated: {}", yaml_scalar(now));
     match lines.iter().position(|l| l.starts_with("updated:") && is_top_level_key(l)) {
         Some(pos) => lines[pos] = updated_line,
         None => lines.push(updated_line),
@@ -887,6 +1044,117 @@ mod tests {
         assert_eq!(frontmatter_value(Some(raw), "updated").as_deref(), Some("2026-08-03T09:00:00.000Z"));
         assert_eq!(frontmatter_value(Some(raw), "created"), None);
         assert_eq!(frontmatter_value(None, "updated"), None);
+    }
+
+    /// The plain/quoted decision, clause by clause. The cross-language fixture
+    /// (`tests/fixtures/frontmatter-touch.json`) pins the *titles this plugin
+    /// actually writes* against the host's `yaml` package; this pins the
+    /// predicate itself, including shapes a Roam title is unlikely to take but
+    /// which `yaml` still decides one way rather than the other.
+    #[test]
+    fn yaml_scalar_quotes_exactly_what_the_host_yaml_package_quotes() {
+        // Plain: nothing in these needs a quote, and adding one would churn
+        // every existing file in the vault.
+        for plain in [
+            "2026-08-02", "回顾系统", "回顾/系统", "Daily Note", "Wiki Page",
+            "2026-08-01T16:00:05.019Z",     // a `:` not followed by a space
+            "Foo:Bar", "a:b:c", ":leading", "x?", "~x", "a#b", "ok!", "x|y", "a>b",
+            "He said \"no\"",               // a quote that is not leading
+            "back\\slash", "it's", "a - b", "v1.2.3", "1_000",
+            "yes", "no", "on", "Off",       // YAML 1.2 core: not booleans
+        ] {
+            assert_eq!(yaml_scalar(plain), plain, "needlessly quoted {plain:?}");
+        }
+
+        // Double-quoted: an indicator, a structural sequence, or a value that
+        // would resolve as something other than a string.
+        for (raw, want) in [
+            ("Book: Thinking Fast and Slow", "\"Book: Thinking Fast and Slow\""),
+            ("PKM #2", "\"PKM #2\""),
+            ("*star", "\"*star\""),
+            ("@home", "\"@home\""),
+            ("[[nested]]", "\"[[nested]]\""),
+            ("", "\"\""),
+            ("- 待办", "\"- 待办\""),
+            ("-", "\"-\""),
+            ("?", "\"?\""),
+            ("trailing:", "\"trailing:\""),
+            ("trailing ", "\"trailing \""),
+            ("  padded  ", "\"  padded  \""),
+            ("#hash", "\"#hash\""),
+            ("&anchor", "\"&anchor\""),
+            ("!bang", "\"!bang\""),
+            ("|pipe", "\"|pipe\""),
+            (">gt", "\">gt\""),
+            ("%percent", "\"%percent\""),
+            ("`backtick", "\"`backtick\""),
+            ("'squote", "\"'squote\""),
+            (",comma", "\",comma\""),
+            ("{brace", "\"{brace\""),
+            ("2026", "\"2026\""),
+            ("+5", "\"+5\""),
+            ("1.5", "\"1.5\""),
+            ("1e3", "\"1e3\""),
+            ("0x1f", "\"0x1f\""),
+            ("0o17", "\"0o17\""),
+            (".inf", "\".inf\""),
+            (".nan", "\".nan\""),
+            ("true", "\"true\""),
+            ("FALSE", "\"FALSE\""),
+            ("null", "\"null\""),
+            ("~", "\"~\""),
+            // Both quote characters present: double-quoted, with escapes.
+            ("it's: \"both\"", "\"it's: \\\"both\\\"\""),
+            // A backslash only has to be escaped once quoting is on.
+            ("a: b\\c", "\"a: b\\\\c\""),
+        ] {
+            assert_eq!(yaml_scalar(raw), want, "for {raw:?}");
+        }
+
+        // Single-quoted: needs quoting, holds a `"` and no `'`, so `yaml`
+        // picks the style that leaves the double quotes alone.
+        assert_eq!(yaml_scalar("Review: \"Dune\""), "'Review: \"Dune\"'");
+        assert_eq!(yaml_scalar("\"leading quote\""), "'\"leading quote\"'");
+    }
+
+    /// The one place the two implementations deliberately differ, recorded so
+    /// the divergence is a decision rather than a discovery. `yaml` writes a
+    /// value containing a line break as a block scalar; this writes a
+    /// double-quoted `\n` escape. Different bytes, identical string on
+    /// read-back — and unreachable in practice, since a Roam page title is a
+    /// single-line field (a newline in one would have produced a file name
+    /// with a newline in it long before reaching here).
+    #[test]
+    fn a_line_break_is_escaped_rather_than_written_as_a_block_scalar() {
+        assert_eq!(yaml_scalar("line\nbreak"), "\"line\\nbreak\"");
+    }
+
+    /// I3. `touch_frontmatter` deliberately never overwrites an existing
+    /// title (the shared fixture pins that), so after a Roam rename the file
+    /// moves and its front-matter keeps the old name forever. This is the
+    /// narrow exception: only the rename case calls it.
+    #[test]
+    fn refresh_frontmatter_title_replaces_a_title_in_place() {
+        assert_eq!(
+            refresh_frontmatter_title("type: Wiki Page\ntitle: 旧名\ncreated: C", "新名"),
+            "type: Wiki Page\ntitle: 新名\ncreated: C",
+        );
+        // Quoted through the same encoder, or the rename writes the very file
+        // shape C1 exists to prevent.
+        assert_eq!(
+            refresh_frontmatter_title("title: 旧名", "Book: Thinking Fast and Slow"),
+            "title: \"Book: Thinking Fast and Slow\"",
+        );
+        // A nested `title:` belongs to some other key's value.
+        assert_eq!(
+            refresh_frontmatter_title("sources:\n  - title: nested\ntitle: 旧名", "新名"),
+            "sources:\n  - title: nested\ntitle: 新名",
+        );
+        // No top-level title to replace: left alone, `touch_frontmatter` adds one.
+        assert_eq!(refresh_frontmatter_title("type: Wiki Page", "新名"), "type: Wiki Page");
+        // Not a mapping: untouched, exactly like `touch_frontmatter`.
+        assert_eq!(refresh_frontmatter_title("just a sentence", "新名"), "just a sentence");
+        assert_eq!(refresh_frontmatter_title("", "新名"), "");
     }
 
     /// R6. This function writes into whatever note is already on disk, and a
