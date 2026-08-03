@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.roam-import",
   "name": "Roam Research Import",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "kind": "native",
   "binary": {
     "aarch64-apple-darwin": "bin/notemd-roam-import",
@@ -16,7 +16,8 @@
   "activation": {
     "events": [
       "onCommand:open",
-      "onCli:roam-day"
+      "onCli:roam-day",
+      "onCli:roam-sync"
     ]
   },
   "contributes": {
@@ -48,6 +49,18 @@
         "flags": [
           { "long": "--date", "type": "string", "help": "yyyy-MM-dd, today or yesterday (default: yesterday)" },
           { "long": "--graph", "type": "string", "help": "Roam graph name (default: the CLI's own default)" }
+        ],
+        "requires_tab_context": false
+      },
+      {
+        "subcommand": "roam-sync",
+        "command": "sync-changed",
+        "summary": "Sync every Roam page changed since the last sync",
+        "args": [],
+        "flags": [
+          { "long": "--since", "type": "string", "help": "Override the stored watermark (yyyy-MM-dd)" },
+          { "long": "--graph", "type": "string", "help": "Roam graph name (default: the CLI's own default)" },
+          { "long": "--dry-run", "type": "boolean", "help": "List what would be synced without writing" }
         ],
         "requires_tab_context": false
       }
