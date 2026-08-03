@@ -89,7 +89,13 @@ pub fn daily_rel_path(daily_dir: &str, date: &str) -> String {
 /// with no `..` segment. `Path::join` *replaces* the base path when handed an
 /// absolute component, so an unchecked value here does not merely escape the
 /// daily folder — it escapes the vault.
-fn is_safe_rel_dir(dir: &str) -> bool {
+///
+/// Shared with [`crate::incremental`] rather than duplicated there: incremental
+/// sync takes *two* host-supplied folder names (wiki and daily) and joins them
+/// into paths exactly the way `sync_day` joins its one, so both callers must
+/// answer this question the same way — a second, drifting copy of the rule is
+/// how one of them ends up accepting `..`.
+pub(crate) fn is_safe_rel_dir(dir: &str) -> bool {
     !dir.is_empty()
         && !Path::new(dir).is_absolute()
         && !dir.starts_with('/')

@@ -538,7 +538,8 @@ mod tests {
         let wiki = std::fs::read_to_string(dir.path().join("wikipage/回顾系统.note.md")).unwrap();
         assert!(wiki.contains("type: Wiki Page"));
         let l = crate::ledger::Ledger::load(dir.path());
-        assert_eq!(l.last_synced_at.as_deref(), Some("2026-08-02T00:00:20.000Z"));
+        // `edited` 是纪元毫秒:2000 ms → 1970-01-01T00:00:02.000Z(落地时已核算并改正)
+        assert_eq!(l.last_synced_at.as_deref(), Some("1970-01-01T00:00:02.000Z"));
     }
 
     #[test]
@@ -555,7 +556,7 @@ mod tests {
         ).unwrap();
         assert_eq!((r.synced, r.failed), (1, 1));
         let l = crate::ledger::Ledger::load(dir.path());
-        assert_eq!(l.last_synced_at.as_deref(), Some("2026-08-02T00:00:01.000Z"),
+        assert_eq!(l.last_synced_at.as_deref(), Some("1970-01-01T00:00:01.000Z"),
                    "the watermark must stay at `a`, so `b` and `c` are retried next run");
     }
 
@@ -631,7 +632,7 @@ mod tests {
         let seen = std::cell::Cell::new(0i64);
         sync_since(dir.path(), DIRS, Some("2026-07-01"), today(), NOW, true,
                    |since| { seen.set(since); Ok(vec![]) }, |_| unreachable!()).unwrap();
-        assert_eq!(seen.get(), 1782921600000, "2026-07-01T00:00:00Z in ms");
+        assert_eq!(seen.get(), 1782864000000, "2026-07-01T00:00:00Z in ms");
     }
 
     #[test]
@@ -645,7 +646,9 @@ mod tests {
 }
 ```
 
-`since_override` 断言里的 `1782921600000` 请在实现后用一次实际输出核对;若不符,**核算真值后改断言,不改实现**(实现只负责把 `yyyy-MM-dd` 当 UTC 零点转毫秒),并在报告里写出你的核算过程。
+`since_override` 断言里的毫秒数请在实现后用一次实际输出核对;若不符,**核算真值后改断言,不改实现**(实现只负责把 `yyyy-MM-dd` 当 UTC 零点转毫秒),并在报告里写出你的核算过程。
+
+> 落地结果:原稿的 `1782921600000` 是 `2026-07-01T16:00:00Z`(东八区 7 月 2 日零点),真值为 **1782864000000**(20635 天 × 86_400_000,`date -u -j -f '%Y-%m-%d %H:%M:%S' '2026-07-01 00:00:00' +%s` = 1782864000);两处水位断言原稿把 1000/2000 毫秒写成了 2026 年的时刻,真值是 `1970-01-01T00:00:01.000Z` / `...02.000Z`。上面三处已改正。此外按「水位按毫秒组推进」新增了同毫秒失败、首页失败、全失败、改名旧文件缺失、改名目标已存在、dry-run 改名、目录逃逸、水位不可读、补历史不回退等用例,总数由 8 增至 23。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -654,20 +657,31 @@ Expected: 编译失败,`cannot find function sync_since`
 
 - [ ] **Step 3: 实现 `incremental.rs`**
 
-顺序:载入台账 → 解析 since(override > 台账 > `default_since`)→ `discover(since_ms)` → 升序遍历:
-`route_page` → `fetch(uid)` → 页无块则 `skipped++` 并**仍推进水位**(它确实已经处理完了)→
-有块则:若 `rename_from` 存在且旧文件在,先 `std::fs::rename`(目标父目录先 `create_dir_all`)并记入 `renamed` →
+顺序:校验 `wiki_dir`/`daily_dir`(空/绝对/含 `..` 一律拒绝,同 `sync_day` 对 `daily_dir` 的做法;
+本函数是第一个用宿主给的目录名拼路径的调用方)→ 载入台账 → 解析 since(override > 台账 > `default_since`)→
+`discover(since_ms)` → 按 `(edited, uid)` 升序遍历:
+`fetch(uid)`(必须先 fetch:`route_page` 要 Roam 标题,而 `Changed` 里没有)→ 页不存在或无块则
+`skipped++` 并**仍推进水位**(它确实已经处理完了)→
+有块则 `route_page` → 若 `rename_from` 存在、旧文件在**且目标路径上没有文件**(绝不 `rename` 覆盖
+用户自己建的那一篇),先 `std::fs::rename`(目标父目录先 `create_dir_all`)并记入 `renamed` →
 `sync_page(vault, &t.rel, Some(&p), &t.title, t.concept_type, now)` → `ledger.claim(uid, &t.rel, roam_title)` →
-水位推到该页 `edited` → 每页成功后 `ledger.save`(中途被杀也不丢进度)。
-任一页 `Err` → `failed++`、错误进 `errors`、**立即 break**,保留当前水位。
-`dry_run` 为真时:照常 route 与 fetch(为了报出真实的目标路径与改名),但**不 rename、不 sync_page、不 claim、不 save**。
+**在组边界**推进水位(见下)→ 每页处理完 `ledger.save`(中途被杀也不丢进度)。
+任一页 `Err` → `failed++`、错误进 `errors`、**立即 break**,保留当前水位(改名已发生的话台账照样落盘)。
+`dry_run` 为真时:照常 route 与 fetch(为了报出真实的目标路径与改名),但**不 rename、不 sync_page、不 save**
+(内存台账照常 `claim`,这样同一批里的重名避让在预演里也是真的)。
+
+**水位规则(按毫秒组原子推进,不要按页推进)**:持久化的水位 = 「小于本批失败页最小 `edited`」
+的最大 `edited`,无失败时 = 本批最大 `edited`;实现为「仅当下一页的 `edited` 严格更大时才推进」。
+原因:`edited` 不唯一,两个 uid 常带同一毫秒 `T`;若成功一页就推到 `T`、同为 `T` 的另一页随后失败,
+下次 `> since` 严格查询就再也看不到它,**永久静默跳页**。水位另需只进不退,免得 `--since` 补历史把
+台账拨回过去。详见设计文档 §5。
 
 `default_since(today)`:`today - 1 天` 的本地 00:00 转毫秒。用 `chrono::Local` 的偏移;`today` 已由调用方按本地日历给出。
 
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cargo test --manifest-path plugins-src/roam-import/backend/Cargo.toml incremental`
-Expected: 8 passed
+Expected: 全绿(落地为 23 passed —— 见 Step 1 的补充用例)
 
 - [ ] **Step 5: 跑全量**
 
@@ -845,6 +859,6 @@ git commit -m "docs(roam-import): document the incremental sync"
 | §7 测试 | Task 1–5 单测、Task 5 集成、Task 7 文案 |
 | §8 验收 1–6 | Task 6 Step 3(dry-run)、Task 8 Step 2(幂等)、Step 4(GUI 清单) |
 
-**Placeholder scan**:无 TBD。唯一一处「先跑再定」是 Task 5 的 `1782921600000` 毫秒断言,给了明确判据(核算真值后改断言不改实现,并写出核算过程);Task 6 的 `"type": "boolean"` 要求先读 protocol 源码再填,理由是 `deny_unknown_fields`。
+**Placeholder scan**:无 TBD。唯一一处「先跑再定」是 Task 5 的 `--since` 毫秒断言,给了明确判据(核算真值后改断言不改实现,并写出核算过程);Task 6 的 `"type": "boolean"` 要求先读 protocol 源码再填,理由是 `deny_unknown_fields`。
 
 **Type consistency**:`PageOutcome`(Task 1)被 Task 5 消费;`Ledger` 的 `claim/path_of/uid_at`(Task 2)被 Task 3 与 Task 5 使用;`Target.rename_from`(Task 3)驱动 Task 5 的 `Renamed`;`Changed { uid, edited }`(Task 4)是 Task 5 `discover` 闭包的返回元素;`SyncReport`(Task 5)是 Task 6 两个入口与 Task 7 UI 的共同返回形状。名称在各任务间一致。

@@ -33,8 +33,12 @@ fn fold_rows(payload: &serde_json::Value, acc: &mut HashMap<String, i64>) -> Res
 }
 
 /// Union the block and page dimensions, taking the later timestamp per uid,
-/// ascending by `edited` — ascending because the watermark advances one
-/// successfully-synced page at a time (see the design doc §5).
+/// ascending by `edited` — ascending because that is what makes the watermark
+/// resumable: it advances from the front of this list as pages succeed. It
+/// advances a whole *timestamp* at a time rather than a page at a time,
+/// because `edited` is not unique; the rule and the reason live in
+/// [`crate::incremental`] (design doc §5), which re-sorts by `(edited, uid)`
+/// so a batch's order is reproducible down to ties.
 pub fn merge_changed(
     blocks: &serde_json::Value,
     pages: &serde_json::Value,
