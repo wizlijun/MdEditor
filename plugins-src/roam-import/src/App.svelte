@@ -176,7 +176,7 @@
       const entries: Array<{ key: string; relPath: string; editTime: number }> = []
       for (const f of assigned.files) {
         try {
-          const conv = convertPage(f.page, graph.referencedUids, assigned.renames)
+          const conv = convertPage(f.page, assigned.renames)
           const key = pageKey(f.page)
           convertedByKey.set(key, { relPath: f.relPath, page: conv })
           entries.push({ key, relPath: f.relPath, editTime: conv.editTime })

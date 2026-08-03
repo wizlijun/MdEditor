@@ -30,7 +30,11 @@ you already exported from Roam (Roam → graph menu → Export All → JSON).
 
 Every sync of a given day re-merges Roam's current daily page into that day's
 existing `.note.md`, block by block, identified by Roam's own block uid
-(`id::`). Three rules, in one sentence each:
+(`id::`). Both import paths therefore write `id::` on **every** Roam block, not
+just on `((ref))` targets: a page first written by the JSON import and later
+synced by the CLI has to align block-for-block, and a block without an `id::`
+matches nothing in that merge — it survives as a "local block" beside Roam's
+copy and the page doubles. Three rules, in one sentence each:
 
 - **Roam is authoritative for its own blocks.** If a block's `id::` still
   exists in Roam, the file's copy is refreshed to match Roam's current text
