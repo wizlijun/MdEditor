@@ -57,12 +57,81 @@ export function rewriteLinks(s: string, renames: Map<string, string>): string {
   )
 }
 
-/** 多行 block 里形如保留属性(parseOutline 的 PROP_RE)的续行会被当属性吃掉,
- *  前置一个空格转义(渲染等价)。首行在 `- ` 之后,天然安全。 */
-const RESERVED_PROP_RE = /^(type|line|id|collapsed|created|updated):: /
-export function escapeReservedProps(s: string): string {
+/** parseOutline 的 PROP_RE(宿主 src/lib/outline/markdown.ts):九个保留键。
+ *  少一个键就是一个转义漏洞——该续行会被当属性吃掉。 */
+const RESERVED_PROP_RE = /^(type|line|id|collapsed|created|updated|status|answered|by):: /
+
+/** parseOutline 认的 bullet 形状(`^((?:  )*)- `):偶数个前导空格 + `- `。 */
+const BULLET_LINE_RE = /^(?:  )*- /
+
+/** 围栏开启/闭合判定,与 parseOutline 的内联正则同源(bullet 首行 `^(`{3,})`
+ *  开启 raw 模式,续行 `^(`{3,})\s*$` 且不短于开启长度才闭合)。Rust 侧把同一对
+ *  规则提成了 outline.rs 的 fence_open_len / fence_close_len。 */
+function fenceOpenLen(s: string): number | null {
+  const m = s.match(/^(`{3,})/)
+  return m ? m[1].length : null
+}
+function fenceCloseLen(s: string): number | null {
+  const m = s.match(/^(`{3,})\s*$/)
+  return m ? m[1].length : null
+}
+
+/**
+ * 中和多行 block 里会被 parseOutline 读成「结构」而非「本块正文」的续行:
+ *
+ * * `key:: value` —— 节点*属性*行,会被从正文里摘走;若是 `id::` 更会改写本块身份。
+ * * `  - text` —— *子 bullet*。Roam 里 shift-enter 打的清单
+ *   (`shopping\n- milk\n- eggs`)正是这个形状。
+ *
+ * 两者都用前置一个空格修:渲染等价,且该行不再匹配。对 bullet 这是机械保证——
+ * `^((?:  )*)- ` 要求偶数个前导空格,加一个变奇数,任何深度都不再匹配;加空格也
+ * 永远不会造出新的匹配行,这就是幂等的来源。
+ *
+ * **围栏感知,因为转义绝不能改用户贴进来的代码。** 当本块*首行*开启围栏时,
+ * parseOutline 进入 raw 模式,逐行原样收到不短于开启长度的闭合行为止——那段里没有
+ * 任何东西会被误读成结构,故那段里也不许动一个字符。否则一段 fenced YAML 里的
+ * `- foo` 会被同步悄悄插进一个空格。闭合之后的行重新按结构解析,故重新转义。
+ *
+ * 而在*后续行*才开启的围栏不是 raw 模式(parseOutline 只从 bullet 首行进入),
+ * 那些行仍要转义,哪怕看起来像代码:不转义的代价是本块丢掉 `id::` 锚点、被合并
+ * 当新块反复重建。往返保真优先于围栏观感;首行情形(常见情形,也是 Roam 自己的
+ * code block 产出的情形)是精确的。
+ *
+ * 与 Rust 侧 backend/src/syntax.rs 的 escape_structural_lines 逐字对应。
+ */
+export function escapeStructuralLines(s: string): string {
+  // >0 = 处在首行开启的 raw 围栏内,与 parseOutline 用同一对判定跟踪
+  let fence = 0
+  const out: string[] = []
+  s.split('\n').forEach((ln, i) => {
+    if (i === 0) {
+      // 首行就是 bullet 自己的正文(写在 `- ` 之后),永远不是结构
+      fence = fenceOpenLen(ln) ?? 0
+      out.push(ln)
+      return
+    }
+    if (fence > 0) {
+      const close = fenceCloseLen(ln)
+      if (close != null && close >= fence) fence = 0
+      out.push(ln)
+      return
+    }
+    out.push(RESERVED_PROP_RE.test(ln) || BULLET_LINE_RE.test(ln) ? ` ${ln}` : ln)
+  })
+  return out.join('\n')
+}
+
+/** 首行开启却从未闭合的围栏:parseOutline 会一路 raw 吃到后面几个块里去(闭合行
+ *  在别的块上),下次读回时后续块整片消失。把闭合行补给它自己。
+ *  与 Rust 侧 backend/src/convert.rs 的 close_dangling_fence 对应。 */
+export function closeDanglingFence(s: string): string {
   const lines = s.split('\n')
-  return lines
-    .map((ln, i) => (i > 0 && RESERVED_PROP_RE.test(ln) ? ` ${ln}` : ln))
-    .join('\n')
+  const open = fenceOpenLen(lines[0] ?? '')
+  if (open == null) return s
+  // 只有开启行*之后*的行能闭合它(parseOutline 只检查续行)
+  for (const ln of lines.slice(1)) {
+    const close = fenceCloseLen(ln)
+    if (close != null && close >= open) return s
+  }
+  return `${s}\n${'`'.repeat(open)}`
 }

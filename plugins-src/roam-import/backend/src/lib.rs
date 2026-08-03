@@ -3,13 +3,16 @@
 //! because `tests/golden.rs` — the shared format-drift fixture asserted from
 //! both Rust and TypeScript — is an integration test, and an integration test
 //! can only reach a library crate.
+pub mod adopt;
 pub mod convert;
 pub mod dates;
 pub mod discover;
+pub mod ledger;
 pub mod merge;
 pub mod outline;
 mod procutil;
 pub mod roam_cli;
 pub mod roam_page;
+pub mod route;
 pub mod sync;
 pub mod syntax;

@@ -39,9 +39,41 @@ pub struct SyncOutcome {
     pub updated: usize,
     pub kept_local: usize,
     pub roam_gone_kept: usize,
+    /// Local blocks an earlier, id-less import wrote that this sync re-keyed to
+    /// their Roam uid (see `adopt`). Non-zero exactly once per note — the sync
+    /// that repairs it — and it is a repair count, not something Roam did.
+    pub adopted: usize,
     /// Roam had a daily page for this date. `false` means the file was left
     /// exactly as it was (or never created).
     pub found: bool,
+}
+
+/// The outcome of syncing one page — a day or a wikipage alike — to a single
+/// vault-relative path. `sync_day`'s [`SyncOutcome`] is this plus the `date`
+/// only a daily sync has.
+#[derive(Debug, Clone, Serialize)]
+pub struct PageOutcome {
+    /// Vault-relative, always filled in — even when nothing was written, so
+    /// the UI can say *which* note a "no page" answer refers to.
+    pub path: String,
+    pub created: usize,
+    pub updated: usize,
+    pub kept_local: usize,
+    pub roam_gone_kept: usize,
+    /// Local blocks an earlier, id-less import wrote that this sync re-keyed to
+    /// their Roam uid (see [`crate::adopt`]). Reported rather than dropped
+    /// because the first sync over a vault built by the JSON importer rewrites
+    /// tens of thousands of blocks across ~2000 notes, unattended, and a git-
+    /// synced vault changing that much must leave a trace the user can find.
+    pub adopted: usize,
+    /// Roam had a page at this uid. `false` means the file was left exactly
+    /// as it was (or never created).
+    pub found: bool,
+    /// `false` means this call changed nothing — not one byte reached disk.
+    /// A no-op sync (rules below) is common on every rerun where Roam has not
+    /// changed the page since; incremental sync's report needs to tell "synced
+    /// but nothing changed" apart from "actually wrote".
+    pub wrote: bool,
 }
 
 /// `<daily_dir>/<yyyy>/<date>.note.md` — the host's own daily-note layout
@@ -62,6 +94,18 @@ fn is_safe_rel_dir(dir: &str) -> bool {
         && !Path::new(dir).is_absolute()
         && !dir.starts_with('/')
         && dir.split('/').all(|seg| seg != "..")
+}
+
+/// A vault-relative *file* path, checked with the exact same three rules as
+/// [`is_safe_rel_dir`] above — not empty, not absolute, no `..` segment. Kept
+/// as its own function (rather than reused directly at the call site) because
+/// `sync_page` validates the whole path a caller hands it, including ones
+/// `daily_rel_path` never built: incremental sync's `route_page` derives a
+/// path from a Roam title, and that path has not gone through any of the
+/// checks a caller of `sync_day` already gets from `daily_rel_path` + this
+/// module's own date/dir validation.
+fn is_safe_rel_path(path: &str) -> bool {
+    is_safe_rel_dir(path)
 }
 
 /// Write `text` to `path` without ever leaving it half-written, and without
@@ -142,45 +186,56 @@ fn read_existing(path: &Path) -> Result<String, String> {
     }
 }
 
-/// Sync one day of Roam into the vault. `page` is `None` when Roam has no
-/// daily page for `date`; `now` is an ISO-8601 instant (injected, not read
-/// from the clock, so the write path is testable).
-pub fn sync_day(
+/// Write one page — a day's or a wikipage's, alike — into the vault at `rel`.
+/// `page` is `None` when Roam has no page at the uid this call was made for;
+/// `now` is an ISO-8601 instant (injected, not read from the clock, so the
+/// write path is testable). `title` and `concept_type` (OKF §4.1) are the
+/// caller's call — this function has no notion of "daily" left in it; that
+/// distinction lives one layer up, in `sync_day` and (from Task 5) in
+/// incremental sync's page router.
+pub fn sync_page(
     vault: &Path,
-    daily_dir: &str,
+    rel: &str,
     page: Option<&RoamPage>,
-    date: &str,
+    title: &str,
+    concept_type: &str,
     now: &str,
-) -> Result<SyncOutcome, String> {
-    // Both halves of the path are checked here, at the function that writes,
-    // rather than trusted to have been validated upstream: `date` reaches
-    // callers from a CLI flag or a UI field, and `daily_dir` from the host
-    // (and, from Task 10, possibly not from the host at all).
-    if !crate::dates::is_iso_date(date) {
-        return Err(format!("invalid date '{date}': expected yyyy-MM-dd"));
+) -> Result<PageOutcome, String> {
+    // Checked here, at the function that writes, rather than trusted to have
+    // been validated upstream. `sync_day` still hands this a path it built
+    // itself from an already-validated date and folder, but incremental
+    // sync's page router computes `rel` straight from a Roam title, and that
+    // value has never gone through any of `sync_day`'s own checks.
+    if !is_safe_rel_path(rel) {
+        return Err(format!("invalid path '{rel}': expected a relative path inside the vault"));
     }
-    if !is_safe_rel_dir(daily_dir) {
-        return Err(format!(
-            "invalid daily folder '{daily_dir}': expected a relative path inside the vault"
-        ));
-    }
-    let rel = daily_rel_path(daily_dir, date);
-    let mut outcome = SyncOutcome {
-        date: date.to_string(),
-        path: rel.clone(),
+    let mut outcome = PageOutcome {
+        path: rel.to_string(),
         created: 0,
         updated: 0,
         kept_local: 0,
         roam_gone_kept: 0,
+        adopted: 0,
         found: false,
+        wrote: false,
     };
     let Some(page) = page else { return Ok(outcome) };
     outcome.found = true;
 
-    let abs = vault.join(&rel);
+    let abs = vault.join(rel);
     let existing = read_existing(&abs)?;
-    let local = parse_outline(&existing);
-    let roam = convert_page(page, date);
+    let mut local = parse_outline(&existing);
+    let roam = convert_page(page, title, concept_type);
+    // Before the merge, and the only thing standing between the two import
+    // paths: the TS full-graph importer persists an `id::` only for `((ref))`
+    // targets, so a page it wrote has nothing for `merge`'s id alignment to
+    // match on and every Roam block would read as new — doubling the page. This
+    // hands those blocks the uid they should have had; `merge` itself is
+    // untouched. The count is a *repair* number, not something that happened in
+    // Roam, and it is zero forever after the one sync that stamps a note's ids
+    // — but it is reported rather than dropped, because that one sync rewrites
+    // every note the old importer wrote, unattended, in a git-synced vault.
+    outcome.adopted = crate::adopt::adopt_ids(&mut local, &roam);
     let (mut merged, stats) = merge(&local, &roam);
     // Filled in before the early returns below rather than at each of them:
     // what the merge decided is the same story whether or not anything reached
@@ -190,7 +245,7 @@ pub fn sync_day(
     outcome.kept_local = stats.kept_local;
     outcome.roam_gone_kept = stats.roam_gone_kept;
 
-    // The page's own creation time is the day's `created:`; a page Roam
+    // The page's own creation time is the file's `created:`; a page Roam
     // reports without one falls back to now rather than inventing a date.
     // Either way `touch_frontmatter` only uses it when the file has no
     // `created:` yet, so an existing note keeps the value it was born with.
@@ -199,12 +254,8 @@ pub fn sync_day(
     // this is the file's own block — the base both serializations start from.
     let base_fm = merged.frontmatter.clone();
 
-    // The only shape this function writes is `<daily_dir>/<yyyy>/<date>.note.md`
-    // (see `daily_rel_path`), which is what the host's `outlineConceptType`
-    // maps to `Daily Note` — so the OKF §4.1 `type` is decided here, at the
-    // layer that knows the path, not inside the front-matter writer.
     let touch = |raw: Option<&str>, when: &str| {
-        touch_frontmatter(raw, CONCEPT_TYPE_DAILY_NOTE, date, &created, when)
+        touch_frontmatter(raw, concept_type, title, &created, when)
     };
 
     // A no-op sync must not touch the file AT ALL. `updated:` is refreshed
@@ -235,8 +286,52 @@ pub fn sync_day(
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
     write_atomically(&abs, &text, &existing)?;
+    outcome.wrote = true;
 
     Ok(outcome)
+}
+
+/// Sync one day of Roam into the vault. `page` is `None` when Roam has no
+/// daily page for `date`; `now` is an ISO-8601 instant (injected, not read
+/// from the clock, so the write path is testable).
+///
+/// A thin caller of [`sync_page`]: everything about *writing* a page lives
+/// there now. What this function owns is what makes a day a day — the
+/// `<daily_dir>/<yyyy>/<date>.note.md` shape (`daily_rel_path`), the OKF
+/// §4.1 `type` a daily note gets (`Daily Note`, not left to the caller the
+/// way a wikipage's is), and the date validation a CLI flag or UI field needs
+/// before it becomes part of that path.
+pub fn sync_day(
+    vault: &Path,
+    daily_dir: &str,
+    page: Option<&RoamPage>,
+    date: &str,
+    now: &str,
+) -> Result<SyncOutcome, String> {
+    // Both halves of the path are checked here, at the function that writes,
+    // rather than trusted to have been validated upstream: `date` reaches
+    // callers from a CLI flag or a UI field, and `daily_dir` from the host
+    // (and, from Task 10, possibly not from the host at all).
+    if !crate::dates::is_iso_date(date) {
+        return Err(format!("invalid date '{date}': expected yyyy-MM-dd"));
+    }
+    if !is_safe_rel_dir(daily_dir) {
+        return Err(format!(
+            "invalid daily folder '{daily_dir}': expected a relative path inside the vault"
+        ));
+    }
+    let rel = daily_rel_path(daily_dir, date);
+    let page_outcome = sync_page(vault, &rel, page, date, CONCEPT_TYPE_DAILY_NOTE, now)?;
+    Ok(SyncOutcome {
+        date: date.to_string(),
+        path: page_outcome.path,
+        created: page_outcome.created,
+        updated: page_outcome.updated,
+        kept_local: page_outcome.kept_local,
+        roam_gone_kept: page_outcome.roam_gone_kept,
+        adopted: page_outcome.adopted,
+        found: page_outcome.found,
+    })
 }
 
 /// The whole operation as the UI (and Task 10's CLI) asks for it: resolve the
@@ -606,6 +701,81 @@ mod tests {
         stable_across_three_syncs("property line", vec![b("u1", "meeting\nid:: not-a-property")]);
     }
 
+    /// Fix B, end to end. The day's note was written by the TypeScript
+    /// full-graph JSON importer, which persists an `id::` only for `((ref))`
+    /// targets — so its blocks carry `created::` and nothing else. The CLI then
+    /// syncs the same day. Without the adoption pass the merge aligns on
+    /// nothing: every Roam block reads as `created`, every id-less copy as the
+    /// user's own writing, and the file doubles (observed in the vault:
+    /// `created=93 kept_local=93` for one day). Here the ids are stamped in
+    /// place instead — same blocks, same line count, each text exactly once.
+    #[test]
+    fn a_note_from_the_json_importer_gains_ids_instead_of_doubling() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dailynote/2026/2026-08-02.note.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Exactly what the JSON importer leaves behind: no `id::` anywhere, a
+        // `created::` on every block, and one margin note of the user's own.
+        let before = "---\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-02T10:00:00.000Z\n---\n\
+                      - morning review\n  created:: 2026-08-02T00:12:00.000Z\n\
+                      \x20 - ship the daily sync\n    created:: 2026-08-02T00:13:00.000Z\n\
+                      \x20   - my own take on this one\n\
+                      - meeting notes\n  created:: 2026-08-02T00:20:00.000Z\n";
+        std::fs::write(&path, before).unwrap();
+        let lines_before = before.lines().count();
+
+        let b = |uid: &str, s: &str, created: i64, children: Vec<RoamBlock>| RoamBlock {
+            uid: Some(uid.into()), string: s.into(), order: 0, heading: None,
+            create_time: Some(created), edit_time: None, children,
+        };
+        let mut p = page();
+        p.children = vec![
+            b("hCIv7Y63h", "morning review", 1785629520000, vec![
+                b("Km2vQx8pL", "ship the daily sync", 1785629580000, vec![]),
+            ]),
+            b("Nb7sT1uEv", "meeting notes", 1785630000000, vec![]),
+        ];
+
+        let out = sync_day(dir.path(), "dailynote", Some(&p), "2026-08-02", NOW).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+
+        assert_eq!(
+            (out.created, out.updated, out.kept_local, out.roam_gone_kept),
+            (0, 0, 1, 0),
+            "Roam's blocks were adopted, and only the user's own note is local:\n{text}"
+        );
+        // The repair count is reported, not swallowed: this run restructured a
+        // note an earlier import wrote, and the log/UI must be able to say so.
+        assert_eq!(out.adopted, 3);
+        for block in ["- morning review", "- ship the daily sync", "- meeting notes",
+                      "- my own take on this one"] {
+            assert_eq!(text.matches(block).count(), 1, "{block} doubled:\n{text}");
+        }
+        for uid in ["hCIv7Y63h", "Km2vQx8pL", "Nb7sT1uEv"] {
+            assert_eq!(text.matches(&format!("id:: {uid}")).count(), 1, "{uid}:\n{text}");
+        }
+        // The file grows by exactly four lines: one `id::` per adopted block,
+        // plus the OKF §4.1 `type:` this sync stamps on any note whose
+        // front-matter has none. The doubling bug added a whole second copy of
+        // every Roam block instead.
+        assert_eq!(text.lines().count(), lines_before + 4, "the file grew:\n{text}");
+        assert_eq!(text.lines().filter(|l| l.contains("id:: ")).count(), 3);
+        // …and now that the ids are on disk, the next sync is a no-op — the
+        // adoption pass is a one-off repair, not a rewrite on every run.
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let again = sync_day(dir.path(), "dailynote", Some(&p), "2026-08-02",
+                             "2026-08-04T17:45:12.345Z").unwrap();
+        assert_eq!((again.created, again.updated, again.kept_local), (0, 0, 1));
+        assert_eq!(again.adopted, 0, "the repair happens once, not on every run");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "the bytes moved");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            mtime,
+            "the file was rewritten even though nothing changed"
+        );
+    }
+
     #[test]
     fn a_second_sync_leaves_the_file_byte_identical() {
         let dir = tempfile::tempdir().unwrap();
@@ -716,6 +886,60 @@ mod tests {
     /// literal 0644 would publish the user's day to every account on the
     /// machine. Comparing to the reference file makes the assertion true under
     /// any umask, including the reviewer's.
+    #[test]
+    fn sync_page_writes_a_wiki_page_with_its_own_title_and_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let page = RoamPage {
+            title: "回顾系统".into(), uid: Some("8IFJWtnad".into()),
+            create_time: Some(1785600005019), edit_time: None,
+            children: vec![RoamBlock {
+                uid: Some("b1".into()), string: "第一条".into(), order: 0, heading: None,
+                create_time: None, edit_time: None, children: vec![],
+            }],
+        };
+        let out = sync_page(
+            dir.path(), "wikipage/回顾系统.note.md", Some(&page),
+            "回顾系统", crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW,
+        ).unwrap();
+        assert!(out.found && out.wrote);
+        assert_eq!(out.created, 1);
+        let text = std::fs::read_to_string(dir.path().join("wikipage/回顾系统.note.md")).unwrap();
+        assert!(text.contains("type: Wiki Page"), "got:\n{text}");
+        assert!(text.contains("title: 回顾系统"), "got:\n{text}");
+        assert!(text.contains("- 第一条"));
+        assert!(text.contains("id:: b1"));
+    }
+
+    #[test]
+    fn sync_page_reports_wrote_false_when_nothing_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let page = RoamPage {
+            title: "回顾系统".into(), uid: Some("u".into()),
+            create_time: Some(1785600005019), edit_time: None,
+            children: vec![RoamBlock {
+                uid: Some("b1".into()), string: "x".into(), order: 0, heading: None,
+                create_time: None, edit_time: None, children: vec![],
+            }],
+        };
+        let rel = "wikipage/回顾系统.note.md";
+        let first = sync_page(dir.path(), rel, Some(&page), "回顾系统",
+                              crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW).unwrap();
+        assert!(first.wrote);
+        let second = sync_page(dir.path(), rel, Some(&page), "回顾系统",
+                               crate::outline::CONCEPT_TYPE_WIKI_PAGE,
+                               "2026-09-09T09:09:09.000Z").unwrap();
+        assert!(!second.wrote, "a no-op sync must not write");
+    }
+
+    #[test]
+    fn sync_page_rejects_a_path_that_escapes_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        for bad in ["/etc/passwd", "../outside.note.md", "wikipage/../../x.note.md", ""] {
+            assert!(sync_page(dir.path(), bad, None, "t",
+                              crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn the_notes_permissions_survive_the_temp_file_rename() {
         use std::os::unix::fs::PermissionsExt;

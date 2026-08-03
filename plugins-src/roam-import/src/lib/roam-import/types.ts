@@ -20,8 +20,6 @@ export interface RoamPage {
 
 export interface RoamGraph {
   pages: RoamPage[]
-  /** 全图被 ((uid)) 引用到的 uid(含 embed 内),这些 block 落盘时必须写 id:: */
-  referencedUids: Set<string>
 }
 
 /** 增量清单,存 vault/.notemd/roam-import.json */

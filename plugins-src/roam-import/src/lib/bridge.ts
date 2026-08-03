@@ -147,6 +147,11 @@ export interface SyncOutcome {
   updated: number
   kept_local: number
   roam_gone_kept: number
+  /** Blocks an earlier, id-less import wrote that this sync re-keyed to their
+   *  Roam uid (backend `adopt.rs`). Non-zero only on the run that repairs a
+   *  note; carried here so the type matches what the backend sends, not to be
+   *  shown — the trace it exists for is the plugin log. */
+  adopted: number
 }
 
 /** `plugin.probe` — three-state read of the local `roam` CLI: not installed,

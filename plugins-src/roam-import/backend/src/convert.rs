@@ -6,9 +6,7 @@
 //! subsequent sync, so without an `id::` on each block the merge would have
 //! no way to tell "same block, edited" from "new block" and would degrade to
 //! whole-file overwrite.
-use crate::outline::{
-    fence_close_len, fence_open_len, touch_frontmatter, Node, Tree, CONCEPT_TYPE_DAILY_NOTE,
-};
+use crate::outline::{fence_close_len, fence_open_len, touch_frontmatter, Node, Tree};
 use crate::roam_page::{RoamBlock, RoamPage};
 use crate::syntax::{convert_inline, escape_structural_lines, normalize_date_links};
 use chrono::{SecondsFormat, TimeZone, Utc};
@@ -135,29 +133,32 @@ fn walk(tree: &mut Tree, blocks: &[RoamBlock], parent: Option<&str>, path: &[usi
     }
 }
 
-/// `RoamPage` → a fresh `.note.md` outline `Tree` for `date` (`yyyy-MM-dd`).
-/// Front-matter `title` is always `date`, never Roam's English daily title
-/// ("August 2nd, 2026") — daily notes must match note.md's own
-/// `yyyy-MM-dd` convention. An empty page produces empty `nodes`; unlike the
-/// TS full-graph importer, no placeholder empty node is inserted here —
-/// Task 6's merge owns deciding what an empty day looks like on disk.
-pub fn convert_page(page: &RoamPage, date: &str) -> Tree {
+/// `RoamPage` → a fresh `.note.md` outline `Tree` for `title` under
+/// `concept_type` (OKF §4.1). For a daily page `title` is always the
+/// `yyyy-MM-dd` date, never Roam's English daily title ("August 2nd, 2026")
+/// — daily notes must match note.md's own `yyyy-MM-dd` convention; for any
+/// other page it is Roam's own title. The OKF type is the caller's call, not
+/// this function's — it is `sync_page`'s caller that knows whether the page
+/// being written is a day or a wikipage. An empty page produces empty
+/// `nodes`; unlike the TS full-graph importer, no placeholder empty node is
+/// inserted here — the merge owns deciding what an empty page looks like on
+/// disk.
+pub fn convert_page(page: &RoamPage, title: &str, concept_type: &str) -> Tree {
     let created = iso_ms(page.create_time);
     let now = iso_ms(page.edit_time).unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
     let created_for_touch = created.unwrap_or_else(|| now.clone());
 
     let mut tree = Tree { frontmatter: None, nodes: Vec::new() };
     walk(&mut tree, &page.children, None, &[]);
-    // A Roam daily page becomes a daily note and nothing else, so the OKF
-    // §4.1 `type` is settled here rather than left to the caller.
     tree.frontmatter =
-        Some(touch_frontmatter(None, CONCEPT_TYPE_DAILY_NOTE, date, &created_for_touch, &now));
+        Some(touch_frontmatter(None, concept_type, title, &created_for_touch, &now));
     tree
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outline::CONCEPT_TYPE_DAILY_NOTE;
     use crate::roam_page::{RoamBlock, RoamPage};
 
     fn block(uid: &str, s: &str) -> RoamBlock {
@@ -172,14 +173,14 @@ mod tests {
 
     #[test]
     fn node_id_is_the_roam_uid_and_is_always_persisted() {
-        let t = convert_page(&page(vec![block("hCIv7Y63h", "hi")]), "2026-08-02");
+        let t = convert_page(&page(vec![block("hCIv7Y63h", "hi")]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
         assert_eq!(t.nodes[0].id, "hCIv7Y63h");
         assert!(t.nodes[0].persist_id, "every Roam block must carry id:: or the next merge cannot align");
     }
 
     #[test]
     fn inline_syntax_is_converted() {
-        let t = convert_page(&page(vec![block("a", "{{[[TODO]]}} __x__")]), "2026-08-02");
+        let t = convert_page(&page(vec![block("a", "{{[[TODO]]}} __x__")]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
         assert_eq!(t.nodes[0].content, "[ ] *x*");
     }
 
@@ -187,7 +188,7 @@ mod tests {
     fn heading_level_becomes_hashes() {
         let mut b = block("a", "Title");
         b.heading = Some(2);
-        let t = convert_page(&page(vec![b]), "2026-08-02");
+        let t = convert_page(&page(vec![b]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
         assert_eq!(t.nodes[0].content, "## Title");
     }
 
@@ -195,7 +196,7 @@ mod tests {
     fn timestamps_match_the_ts_iso_format() {
         let mut b = block("a", "x");
         b.create_time = Some(1785600005019);
-        let t = convert_page(&page(vec![b]), "2026-08-02");
+        let t = convert_page(&page(vec![b]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
         // 1785600005019ms verified independently against both Python
         // (datetime.utcfromtimestamp) and Node (`new Date(ms).toISOString()`):
         // both agree on 2026-08-01T16:00:05.019Z. The brief's placeholder
@@ -206,7 +207,7 @@ mod tests {
 
     #[test]
     fn frontmatter_title_is_the_iso_date_not_the_roam_title() {
-        let t = convert_page(&page(vec![]), "2026-08-02");
+        let t = convert_page(&page(vec![]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
         assert!(t.frontmatter.as_ref().unwrap().contains("title: 2026-08-02"));
         assert!(!t.frontmatter.as_ref().unwrap().contains("August"));
     }
@@ -216,7 +217,7 @@ mod tests {
     /// daily folder this note is written into.
     #[test]
     fn frontmatter_carries_the_okf_daily_note_type() {
-        let t = convert_page(&page(vec![]), "2026-08-02");
+        let t = convert_page(&page(vec![]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
         assert!(t.frontmatter.as_ref().unwrap().starts_with("type: Daily Note\n"));
     }
 
@@ -249,10 +250,12 @@ mod tests {
         let a = convert_page(
             &page(vec![nameless("other"), with_child(block("p", "parent"), nameless("mine"))]),
             "2026-08-02",
+            CONCEPT_TYPE_DAILY_NOTE,
         );
         let b = convert_page(
             &page(vec![block("o", "other"), with_child(block("p", "parent"), nameless("mine"))]),
             "2026-08-02",
+            CONCEPT_TYPE_DAILY_NOTE,
         );
         assert_eq!(id_of(&a, "mine"), id_of(&b, "mine"));
         assert_eq!(id_of(&a, "mine"), "roam-1-0", "child index path from the page root");
@@ -265,7 +268,7 @@ mod tests {
     /// less and the next sync sees a different tree than the one it wrote.
     fn survives_a_round_trip(roam_text: &str) -> String {
         use crate::outline::{parse_outline, serialize_outline};
-        let t = convert_page(&page(vec![block("u1", roam_text)]), "2026-08-02");
+        let t = convert_page(&page(vec![block("u1", roam_text)]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
         let text = serialize_outline(&t);
         let back = parse_outline(&text);
         assert_eq!(back.nodes.len(), 1, "must read back as exactly one node:\n{text}");
@@ -357,7 +360,7 @@ mod tests {
     fn a_heading_block_starting_with_backticks_gets_no_closer() {
         let mut b = block("u1", "```js");
         b.heading = Some(2);
-        let t = convert_page(&page(vec![b]), "2026-08-02");
+        let t = convert_page(&page(vec![b]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
         assert_eq!(t.nodes[0].content, "## ```js");
     }
 
@@ -376,7 +379,7 @@ mod tests {
     fn children_become_nested_nodes() {
         let mut parent = block("p", "parent");
         parent.children = vec![block("c", "child")];
-        let t = convert_page(&page(vec![parent]), "2026-08-02");
+        let t = convert_page(&page(vec![parent]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
         let child = t.nodes.iter().find(|n| n.id == "c").unwrap();
         assert_eq!(child.parent.as_deref(), Some("p"));
     }
