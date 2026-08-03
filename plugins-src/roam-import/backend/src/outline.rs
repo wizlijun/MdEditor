@@ -474,6 +474,11 @@ fn fm_shape(raw: &str) -> FmShape {
 /// `CONCEPT_TYPE` exists in src/lib/okf/concept.ts: one spelling, in one place.
 pub const CONCEPT_TYPE_DAILY_NOTE: &str = "Daily Note";
 
+/// The OKF v0.2 §4.1 `type` for a synced Roam wikipage — the non-daily
+/// counterpart to [`CONCEPT_TYPE_DAILY_NOTE`] above, and `CONCEPT_TYPE.wikiPage`
+/// in `src/lib/okf/concept.ts`. Same reasoning: one spelling, in one place.
+pub const CONCEPT_TYPE_WIKI_PAGE: &str = "Wiki Page";
+
 /// Refresh a companion file's front-matter without a YAML crate: unknown
 /// keys and their order must survive untouched (round-tripping a
 /// hand-edited or third-party-tool-written file is a hard requirement, not
