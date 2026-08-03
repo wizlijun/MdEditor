@@ -53,6 +53,11 @@ export type MessageKey =
   | 'inc.nothing'
   | 'inc.renamed'
   | 'inc.failed'
+  | 'inc.pagesTitle'
+  | 'inc.pageSynced'
+  | 'inc.pageUnchanged'
+  | 'inc.pagePlanned'
+  | 'inc.stats'
 
 type Catalog = Record<MessageKey, string>
 
@@ -100,6 +105,11 @@ const en: Catalog = {
   'inc.nothing': 'Nothing to sync',
   'inc.renamed': 'Renamed: {from} → {to}',
   'inc.failed': 'Incremental sync did not finish cleanly: {error}',
+  'inc.pagesTitle': 'Pages',
+  'inc.pageSynced': '{rel} · synced',
+  'inc.pageUnchanged': '{rel} · unchanged',
+  'inc.pagePlanned': '{rel} · would sync',
+  'inc.stats': 'Scanned {scanned} · synced {synced} · skipped {skipped} · failed {failed}',
 }
 
 const zh: Catalog = {
@@ -146,6 +156,11 @@ const zh: Catalog = {
   'inc.nothing': '没有需要同步的变更',
   'inc.renamed': '已重命名：{from} → {to}',
   'inc.failed': '增量同步未能干净完成：{error}',
+  'inc.pagesTitle': '页面',
+  'inc.pageSynced': '{rel} · 已同步',
+  'inc.pageUnchanged': '{rel} · 无变化',
+  'inc.pagePlanned': '{rel} · 将同步',
+  'inc.stats': '扫描 {scanned} · 同步 {synced} · 跳过 {skipped} · 失败 {failed}',
 }
 
 const ja: Catalog = {
@@ -192,6 +207,11 @@ const ja: Catalog = {
   'inc.nothing': '同期する変更はありません',
   'inc.renamed': '名称変更：{from} → {to}',
   'inc.failed': '増分同期が正常に完了しませんでした：{error}',
+  'inc.pagesTitle': 'ページ',
+  'inc.pageSynced': '{rel} · 同期済み',
+  'inc.pageUnchanged': '{rel} · 変更なし',
+  'inc.pagePlanned': '{rel} · 同期予定',
+  'inc.stats': 'スキャン {scanned} · 同期 {synced} · スキップ {skipped} · 失敗 {failed}',
 }
 
 const de: Catalog = {
@@ -238,6 +258,11 @@ const de: Catalog = {
   'inc.nothing': 'Nichts zu synchronisieren',
   'inc.renamed': 'Umbenannt: {from} → {to}',
   'inc.failed': 'Die inkrementelle Synchronisierung wurde nicht sauber abgeschlossen: {error}',
+  'inc.pagesTitle': 'Seiten',
+  'inc.pageSynced': '{rel} · synchronisiert',
+  'inc.pageUnchanged': '{rel} · unverändert',
+  'inc.pagePlanned': '{rel} · würde synchronisiert',
+  'inc.stats': 'Gescannt {scanned} · synchronisiert {synced} · übersprungen {skipped} · fehlgeschlagen {failed}',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }

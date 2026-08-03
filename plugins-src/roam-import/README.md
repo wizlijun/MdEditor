@@ -243,20 +243,29 @@ notemd roam-sync [--since yyyy-MM-dd] [--graph GRAPH] [--dry-run] [--json]
   edits). It does not rewind the ledger.
 - `--graph` — which Roam graph, if the `roam` CLI is connected to more than
   one.
-- `--dry-run` — list what a real run would sync, including the renames it
-  would perform, and **write nothing at all**: no note, no file move, no
-  ledger, no watermark. The report comes back with `"dry_run": true` and
-  `"to": null` (a dry run persists no watermark, so it has none to report).
+- `--dry-run` — list what a real run would sync — **every page and the exact
+  path it would land at** (`pages`), plus the renames it would perform — and
+  **write nothing at all**: no note, no file move, no ledger, no watermark.
+  The report comes back with `"dry_run": true` and `"to": null` (a dry run
+  persists no watermark, so it has none to report).
 - `--json` — a single JSON envelope on stdout instead of plain text.
 
 ```json
-{"ok":true,"data":{"from":"2026-08-03T11:58:41.185Z","to":"2026-08-04T09:12:00.000Z","scanned":12,"synced":9,"skipped":2,"failed":1,"renamed":[{"uid":"8IFJWtnad","from":"wikipage/旧名.note.md","to":"wikipage/新名.note.md"}],"errors":["…"],"dry_run":false}}
+{"ok":true,"data":{"from":"2026-08-03T11:58:41.185Z","to":"2026-08-04T09:12:00.000Z","scanned":12,"synced":9,"skipped":2,"failed":1,"pages":[{"uid":"8IFJWtnad","title":"新名","rel":"wikipage/新名.note.md","wrote":true}],"renamed":[{"uid":"8IFJWtnad","from":"wikipage/旧名.note.md","to":"wikipage/新名.note.md"}],"errors":["…"],"dry_run":false}}
 ```
 
 `scanned` may exceed `synced + skipped + failed`: a failure stops the run and
 the pages after it are left for the next one. `skipped` counts pages that
 needed no change — gone from Roam, blockless, or already byte-for-byte what
 Roam holds. `failed` is at most 1.
+
+`pages` names every page the run **routed** — its uid, its Roam title, the
+vault-relative path it landed at, and whether that file changed (`wrote`).
+On a dry run `wrote` is `true` for every entry: nothing was written or
+compared, so it says only "a real run would deal with this one" rather than
+guessing. Pages Roam no longer has, and blockless tag pages, have no target
+path and so are not listed — `pages` is deliberately not the same length as
+`scanned`.
 
 ### Exit codes
 

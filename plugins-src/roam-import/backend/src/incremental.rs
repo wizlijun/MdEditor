@@ -64,6 +64,32 @@ pub struct Renamed {
     pub to: String,
 }
 
+/// One page this run placed, and where. Design §6 asks a dry run to "list the
+/// pages it would sync and their target paths"; a count cannot answer that, and
+/// a dry run is the only pre-flight look the user gets before this is turned
+/// loose on a vault under cron. Filled in on **both** kinds of run — after a
+/// real one it is the record of which files moved and which were left alone.
+///
+/// Only pages that got as far as being routed appear here: a page Roam no
+/// longer has, and a blockless tag page, have no target path to name (they are
+/// counted in `skipped`), and a page that failed stopped the run before its
+/// outcome was known. So `pages.len()` is not `scanned`, deliberately.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Planned {
+    pub uid: String,
+    /// The Roam title, i.e. what the front-matter `title:` will say.
+    pub title: String,
+    /// Vault-relative target path.
+    pub rel: String,
+    /// A real run: this page changed on disk (written, moved, or both) — the
+    /// same fact `synced` counts. A dry run: nothing was written or compared,
+    /// so this is `true` for every routed page and says only "a real run would
+    /// deal with this one". That is why the path list matters more than the
+    /// count here: a dry run reporting `synced=2` where the real run reports
+    /// `synced=1` is not a discrepancy, it is the dry run declining to guess.
+    pub wrote: bool,
+}
+
 /// What one incremental run did. Shared by the window and the CLI's `--json`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncReport {
@@ -86,6 +112,8 @@ pub struct SyncReport {
     pub skipped: usize,
     /// Pages that failed. At most 1 — the run stops at the first one.
     pub failed: usize,
+    /// Every page this run routed, with its target path — see [`Planned`].
+    pub pages: Vec<Planned>,
     pub renamed: Vec<Renamed>,
     /// Human-readable, one per problem. Not always the same count as `failed`:
     /// an unreadable ledger, and a rename this sync refused to make because a
@@ -166,7 +194,8 @@ fn advance_watermark(ledger: &mut Ledger, floor_ms: Option<i64>, edited: i64) {
     }
 }
 
-/// Route, move and write one page. Returns whether anything on disk changed.
+/// Route, move and write one page. Returns where it landed and whether
+/// anything on disk changed ([`Planned`]).
 /// The ledger is claimed here (in memory; the caller persists it) so that the
 /// *next* page in the same run routes against where this one actually landed —
 /// that is what keeps two same-titled pages in one batch from fighting over
@@ -182,7 +211,7 @@ fn sync_one(
     ledger: &mut Ledger,
     renamed: &mut Vec<Renamed>,
     errors: &mut Vec<String>,
-) -> Result<bool, String> {
+) -> Result<Planned, String> {
     let target = route_page(uid, &page.title, dirs, ledger);
     let mut moved = false;
 
@@ -232,9 +261,16 @@ fn sync_one(
         }
     }
 
+    let planned = |wrote: bool| Planned {
+        uid: uid.to_string(),
+        title: page.title.clone(),
+        rel: target.rel.clone(),
+        wrote,
+    };
+
     if dry_run {
         ledger.claim(uid, &target.rel, &page.title);
-        return Ok(true);
+        return Ok(planned(true));
     }
 
     // The one case where a `title:` already on disk is not the user's to keep:
@@ -251,7 +287,7 @@ fn sync_one(
         vault, &target.rel, Some(page), &target.title, target.concept_type, now, title_policy,
     )?;
     ledger.claim(uid, &target.rel, &page.title);
-    Ok(outcome.wrote || moved)
+    Ok(planned(outcome.wrote || moved))
 }
 
 /// Pull everything Roam changed since the watermark into the vault, then leave
@@ -337,6 +373,7 @@ where
         synced: 0,
         skipped: 0,
         failed: 0,
+        pages: Vec::new(),
         renamed: Vec::new(),
         errors,
         dry_run,
@@ -354,8 +391,9 @@ where
             // No page at that uid (deleted between discovery and now), or a
             // page with no blocks at all: nothing to write, and the page is
             // nonetheless fully dealt with, so the watermark moves past it.
-            Ok(None) => Ok(false),
-            Ok(Some(page)) if page.children.is_empty() => Ok(false),
+            // Neither has a target path, so neither joins `report.pages`.
+            Ok(None) => Ok(None),
+            Ok(Some(page)) if page.children.is_empty() => Ok(None),
             Ok(Some(page)) => sync_one(
                 vault,
                 dirs,
@@ -366,16 +404,23 @@ where
                 &mut ledger,
                 &mut report.renamed,
                 &mut report.errors,
-            ),
+            )
+            .map(Some),
         };
 
         let failed = step.is_err();
         match step {
-            Ok(changed_on_disk) => {
-                if changed_on_disk {
-                    report.synced += 1;
-                } else {
-                    report.skipped += 1;
+            Ok(placed) => {
+                match placed {
+                    Some(p) if p.wrote => {
+                        report.synced += 1;
+                        report.pages.push(p);
+                    }
+                    Some(p) => {
+                        report.skipped += 1;
+                        report.pages.push(p);
+                    }
+                    None => report.skipped += 1,
                 }
                 // The group boundary: only once no later page shares this
                 // `edited` may the watermark move past it. See the header.
@@ -587,6 +632,69 @@ mod tests {
         assert!(r.dry_run && r.scanned == 1);
         assert!(!dir.path().join("wikipage/回顾系统.note.md").exists());
         assert!(crate::ledger::Ledger::load(dir.path()).ledger.last_synced_at.is_none());
+    }
+
+    /// I1 / design §6 / acceptance 6. A dry run is the only pre-flight look the
+    /// user gets before this runs unattended over a vault, and "2 pages" does
+    /// not answer the question it is asked — *which* pages, and where would
+    /// they land. Both modes fill `pages`, so the answer does not depend on
+    /// having guessed right about `--dry-run`.
+    #[test]
+    fn a_dry_run_names_every_page_it_would_sync_and_where() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = sync_since(
+            dir.path(), DIRS, None, today(), NOW, true,
+            |_| Ok(vec![
+                Changed { uid: "08-02-2026".into(), edited: 1000 },
+                Changed { uid: "8IFJWtnad".into(), edited: 2000 },
+                Changed { uid: "tag".into(), edited: 3000 },
+            ]),
+            |uid| Ok(match uid {
+                "08-02-2026" => Some(page("08-02-2026", "August 2nd, 2026", "日记内容")),
+                "8IFJWtnad" => Some(page("8IFJWtnad", "回顾系统", "概念内容")),
+                // A bare tag page: no blocks, so no file and no target path.
+                _ => Some(RoamPage { title: "PKM".into(), uid: Some("tag".into()),
+                                     create_time: None, edit_time: None, children: vec![] }),
+            }),
+        ).unwrap();
+
+        assert_eq!(
+            r.pages,
+            vec![
+                Planned { uid: "08-02-2026".into(), title: "August 2nd, 2026".into(),
+                          rel: "dailynote/2026/2026-08-02.note.md".into(), wrote: true },
+                Planned { uid: "8IFJWtnad".into(), title: "回顾系统".into(),
+                          rel: "wikipage/回顾系统.note.md".into(), wrote: true },
+            ],
+            "a dry run must name the pages and their target paths, not just count them",
+        );
+        assert_eq!(r.skipped, 1, "the blockless page is skipped, and has no path to list");
+    }
+
+    /// The same list after a *real* run, where `wrote` carries the fact the
+    /// count cannot: which of the pages this run actually changed.
+    #[test]
+    fn a_real_run_lists_the_pages_it_touched_and_which_ones_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        seeded(dir.path(), 0);
+        let batch = vec![Changed { uid: "8IFJWtnad".into(), edited: 1000 }];
+        let run = |b: Vec<Changed>| sync_since(
+            dir.path(), DIRS, None, today(), NOW, false,
+            |_| Ok(b), |uid| Ok(Some(page(uid, "回顾系统", "概念内容"))),
+        ).unwrap();
+
+        let first = run(batch.clone());
+        assert_eq!(first.pages, vec![Planned {
+            uid: "8IFJWtnad".into(), title: "回顾系统".into(),
+            rel: "wikipage/回顾系统.note.md".into(), wrote: true,
+        }]);
+
+        // Same batch again: still listed, because the user asked which pages
+        // this run looked at — but `wrote` says nothing changed.
+        let second = run(batch);
+        assert_eq!(second.pages.len(), 1);
+        assert!(!second.pages[0].wrote, "an unchanged page must not claim it was written");
+        assert_eq!((second.synced, second.skipped), (0, 1));
     }
 
     #[test]

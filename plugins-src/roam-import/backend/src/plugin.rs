@@ -643,7 +643,7 @@ mod tests {
             from: Some("2026-08-01T00:00:00.000Z".into()),
             to: Some("2026-08-02T00:00:00.000Z".into()),
             scanned: 2, synced: 2, skipped: 0, failed: 0,
-            renamed: vec![], errors: vec![], dry_run: false,
+            pages: vec![], renamed: vec![], errors: vec![], dry_run: false,
         }
     }
 

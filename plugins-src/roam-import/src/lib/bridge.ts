@@ -179,6 +179,23 @@ export interface SyncRenamed {
   to: string
 }
 
+/** One page the run placed, and where (backend `incremental::Planned`).
+ *
+ *  This is what makes `--dry-run` and the window's pre-flight answer the
+ *  question they are asked — *which* pages, at *which* paths — rather than
+ *  just how many. `wrote` is "this changed on disk" after a real run, and
+ *  "a real run would deal with this one" after a dry run (which writes and
+ *  compares nothing, so it declines to guess).
+ *
+ *  Pages Roam no longer has, and blockless tag pages, have no target path and
+ *  so are not listed — `pages.length` is deliberately not `scanned`. */
+export interface SyncPlanned {
+  uid: string
+  title: string
+  rel: string
+  wrote: boolean
+}
+
 /** `plugin.sync_since`'s result (backend `incremental::SyncReport`).
  *
  * ONLY ever seen resolved when `errors` is empty — the backend's
@@ -195,6 +212,7 @@ export interface SyncReport {
   synced: number
   skipped: number
   failed: number
+  pages: SyncPlanned[]
   renamed: SyncRenamed[]
   errors: string[]
   dry_run: boolean

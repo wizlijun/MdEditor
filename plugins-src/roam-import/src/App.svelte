@@ -412,6 +412,23 @@
                     {/each}
                   </ul>
                 {/if}
+                <!-- Which pages, and where they landed. A count cannot answer
+                     the question the panel is asked — least of all on a dry
+                     run, whose whole job is to say what a real one WOULD do. -->
+                {#if incReport.pages.length > 0}
+                  <p class="list-title">{t('inc.pagesTitle')}</p>
+                  <ul class="renamed-list">
+                    {#each incReport.pages as p (p.uid)}
+                      <li>
+                        {incReport.dry_run
+                          ? t('inc.pagePlanned', { rel: p.rel })
+                          : p.wrote
+                            ? t('inc.pageSynced', { rel: p.rel })
+                            : t('inc.pageUnchanged', { rel: p.rel })}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
               {/if}
             {/if}
           </div>
@@ -525,6 +542,7 @@
   .error-banner { background: color-mix(in srgb, #ff3b30 22%, transparent); }
   .renamed-list { margin: -4px 0 0; padding-left: 18px; font-size: 12px; opacity: 0.85; }
   .renamed-list li { margin: 2px 0; }
+  .list-title { margin: 8px 0 2px; font-size: 12px; font-weight: 600; opacity: 0.7; }
   .conflicts { margin-top: 12px; padding: 10px 12px; font-size: 13px;
     border: 1px solid color-mix(in srgb, #ff9500 55%, transparent); border-radius: 6px; }
   .conflicts label { display: block; font-size: 12px; padding: 2px 0; }
