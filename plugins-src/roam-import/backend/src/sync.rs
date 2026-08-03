@@ -39,6 +39,10 @@ pub struct SyncOutcome {
     pub updated: usize,
     pub kept_local: usize,
     pub roam_gone_kept: usize,
+    /// Local blocks an earlier, id-less import wrote that this sync re-keyed to
+    /// their Roam uid (see `adopt`). Non-zero exactly once per note — the sync
+    /// that repairs it — and it is a repair count, not something Roam did.
+    pub adopted: usize,
     /// Roam had a daily page for this date. `false` means the file was left
     /// exactly as it was (or never created).
     pub found: bool,
@@ -56,6 +60,12 @@ pub struct PageOutcome {
     pub updated: usize,
     pub kept_local: usize,
     pub roam_gone_kept: usize,
+    /// Local blocks an earlier, id-less import wrote that this sync re-keyed to
+    /// their Roam uid (see [`crate::adopt`]). Reported rather than dropped
+    /// because the first sync over a vault built by the JSON importer rewrites
+    /// tens of thousands of blocks across ~2000 notes, unattended, and a git-
+    /// synced vault changing that much must leave a trace the user can find.
+    pub adopted: usize,
     /// Roam had a page at this uid. `false` means the file was left exactly
     /// as it was (or never created).
     pub found: bool,
@@ -205,6 +215,7 @@ pub fn sync_page(
         updated: 0,
         kept_local: 0,
         roam_gone_kept: 0,
+        adopted: 0,
         found: false,
         wrote: false,
     };
@@ -219,12 +230,12 @@ pub fn sync_page(
     // paths: the TS full-graph importer persists an `id::` only for `((ref))`
     // targets, so a page it wrote has nothing for `merge`'s id alignment to
     // match on and every Roam block would read as new — doubling the page. This
-    // hands those blocks the uid they should have had (`content` + `created::`,
-    // both exact); `merge` itself is untouched. Its return value is a repair
-    // count, deliberately not reported in `PageOutcome`: it is not something
-    // that happened in Roam, and after the one sync that stamps the ids it is
-    // zero forever.
-    crate::adopt::adopt_ids(&mut local, &roam);
+    // hands those blocks the uid they should have had; `merge` itself is
+    // untouched. The count is a *repair* number, not something that happened in
+    // Roam, and it is zero forever after the one sync that stamps a note's ids
+    // — but it is reported rather than dropped, because that one sync rewrites
+    // every note the old importer wrote, unattended, in a git-synced vault.
+    outcome.adopted = crate::adopt::adopt_ids(&mut local, &roam);
     let (mut merged, stats) = merge(&local, &roam);
     // Filled in before the early returns below rather than at each of them:
     // what the merge decided is the same story whether or not anything reached
@@ -318,6 +329,7 @@ pub fn sync_day(
         updated: page_outcome.updated,
         kept_local: page_outcome.kept_local,
         roam_gone_kept: page_outcome.roam_gone_kept,
+        adopted: page_outcome.adopted,
         found: page_outcome.found,
     })
 }
@@ -732,6 +744,9 @@ mod tests {
             (0, 0, 1, 0),
             "Roam's blocks were adopted, and only the user's own note is local:\n{text}"
         );
+        // The repair count is reported, not swallowed: this run restructured a
+        // note an earlier import wrote, and the log/UI must be able to say so.
+        assert_eq!(out.adopted, 3);
         for block in ["- morning review", "- ship the daily sync", "- meeting notes",
                       "- my own take on this one"] {
             assert_eq!(text.matches(block).count(), 1, "{block} doubled:\n{text}");
@@ -752,6 +767,7 @@ mod tests {
         let again = sync_day(dir.path(), "dailynote", Some(&p), "2026-08-02",
                              "2026-08-04T17:45:12.345Z").unwrap();
         assert_eq!((again.created, again.updated, again.kept_local), (0, 0, 1));
+        assert_eq!(again.adopted, 0, "the repair happens once, not on every run");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "the bytes moved");
         assert_eq!(
             std::fs::metadata(&path).unwrap().modified().unwrap(),

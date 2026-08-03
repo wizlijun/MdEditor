@@ -170,6 +170,19 @@ impl RoamImportPlugin {
             outcome.date, outcome.path, outcome.found, outcome.created,
             outcome.updated, outcome.kept_local, outcome.roam_gone_kept,
         ));
+        // A separate line, and only when there is something to say: adopting is
+        // this sync *restructuring a note an earlier import wrote* — stamping
+        // `id::` onto blocks that had none — not a change Roam made. It happens
+        // once per note, but the first pass over a vault built by the JSON
+        // importer touches every daily note in it, so it must be findable in
+        // the log afterwards rather than inferred from a diff.
+        if outcome.adopted > 0 {
+            host.log_info(&format!(
+                "sync {} -> {}: adopted {} block(s) written by an earlier import \
+                 (stamped their Roam id:: in place; no content changed)",
+                outcome.date, outcome.path, outcome.adopted,
+            ));
+        }
         serde_json::to_value(outcome).map_err(|e| e.to_string())
     }
 

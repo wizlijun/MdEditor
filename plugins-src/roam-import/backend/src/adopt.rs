@@ -20,14 +20,53 @@
 //! plugin, and a rule that guesses which blocks are the same block does not
 //! belong inside them.
 //!
-//! **The key is `content` + `created_at`, both exact.** Both import paths
-//! derive the text from the same inline-syntax conversion and the timestamp
-//! from the same Roam `:create/time` field, in the same ISO-8601 UTC
-//! millisecond format — which is why the duplicated pairs in the vault are
-//! byte-identical on both. Content alone is not a key (`- [ ] follow up`
-//! appears on twenty days); a normalised or truncated timestamp is not a key
-//! either (it is the only thing making the text unique); and a local block with
-//! no `created::` has no key at all and is never adopted.
+//! **Tier 1: `content` + `created_at`, both exact, both required.** Content
+//! alone is not a key — `- [ ] follow up` appears on twenty days, and adopting
+//! on text alone would hand one day's block another day's uid, after which Roam
+//! overwrites the wrong block. A normalised or truncated timestamp is not a key
+//! either: the instant is the only thing making the text unique. A local block
+//! with no `created::` has no key at all and is never adopted.
+//!
+//! **What each half of that key is actually worth.** The timestamp half is
+//! byte-identical *by construction*: both producers read Roam's `:create/time`
+//! and format it the same way (`new Date(ms).toISOString()` on the TS side,
+//! `to_rfc3339_opts(SecondsFormat::Millis, true)` here). The content half is
+//! **not** — and the earlier claim in this comment that both paths "derive the
+//! text from the same inline-syntax conversion" was wrong. They share
+//! `convertInline`/`normalizeDateLinks`, and then diverge:
+//!
+//! * `syntax::escape_structural_lines` (Rust) escapes property-shaped
+//!   continuation lines **and** `- ` bullet lines, and skips the raw region a
+//!   first-line fence opens. `escapeReservedProps` (TS) escapes only
+//!   `^(type|line|id|collapsed|created|updated):: ` — no bullet escaping, no
+//!   fence awareness, and it misses `status::`, `answered::` and `by::`.
+//! * `convert::close_dangling_fence` (Rust) appends a missing fence closer; the
+//!   TS path has no equivalent.
+//! * The TS path applies `rewriteLinks(…, renames)` for the full-graph import's
+//!   uid-rename map; there is nothing like it here.
+//!
+//! So tier 1 holds exactly for blocks neither producer had to escape — the
+//! ordinary majority — and can *never* match a block containing a shift-enter
+//! list, a dangling fence, or a `status::`/`answered::`/`by::` continuation
+//! line. Two of the six blocks in `tests/fixtures/roam-day.json` have those
+//! shapes. Nobody should "simplify" this key on the belief that the two
+//! producers agree on text; they do not.
+//!
+//! **Tier 2, for exactly that gap: `created_at` alone, and only when it is
+//! unambiguous on both sides.** Applied only to what tier 1 left over, and only
+//! when exactly one still-unadopted local candidate carries that instant *and*
+//! exactly one still-unclaimed Roam block does. One candidate and one claimant
+//! is a pairing with nothing to get wrong, which is what makes dropping the
+//! text from the key safe — and it is the whole safety argument, so the
+//! uniqueness test must never be relaxed to "pick the nearest". Where either
+//! side is ambiguous the block is left alone and keeps doubling: a missed
+//! adoption is recoverable, a wrong one silently overwrites the user's text
+//! with another block's.
+//!
+//! Nodes already aligned by id (a local `id::`, or a Roam uid the file already
+//! holds) are counted on neither side: they are not candidates, not claimants,
+//! and letting them make an instant look "ambiguous" would block adoptions that
+//! are in fact unique.
 use crate::outline::Tree;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -72,7 +111,12 @@ pub fn adopt_ids(local: &mut Tree, roam: &Tree) -> usize {
     // below mutates — so decide everything first, then apply. It reads better
     // that way anyway: what to adopt is a pure function of the two trees.
     let mut plan: Vec<(usize, &str)> = Vec::new();
-    for rn in &roam.nodes {
+    // What each tier has spoken for, so tier 2 sees only the leftovers.
+    let mut used_local: HashSet<usize> = HashSet::new();
+    let mut used_roam: HashSet<usize> = HashSet::new();
+
+    // Tier 1: content + created, both exact.
+    for (ri, rn) in roam.nodes.iter().enumerate() {
         // Rule 1, as `merge` states it: only a *persisted* id is an identity.
         // A Roam-side node without one carries a `local-N` placeholder from its
         // own parse, and writing that into the file gives the block an `id::`
@@ -90,7 +134,47 @@ pub fn adopt_ids(local: &mut Tree, roam: &Tree) -> usize {
             continue;
         };
         taken.insert(rn.id.as_str());
+        used_local.insert(idx);
+        used_roam.insert(ri);
         plan.push((idx, rn.id.as_str()));
+    }
+
+    // Tier 2: created alone, and only where it identifies one block on each
+    // side. This is what reaches the blocks the two producers escape
+    // differently — see the module comment; without it those double forever.
+    let mut by_created: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, n) in local.nodes.iter().enumerate() {
+        if n.persist_id || used_local.contains(&i) {
+            continue;
+        }
+        if let Some(created) = &n.created_at {
+            by_created.entry(created.as_str()).or_default().push(i);
+        }
+    }
+    let mut claimants: HashMap<&str, usize> = HashMap::new();
+    for (ri, rn) in roam.nodes.iter().enumerate() {
+        if !rn.persist_id || used_roam.contains(&ri) || taken.contains(rn.id.as_str()) {
+            continue;
+        }
+        if let Some(created) = &rn.created_at {
+            *claimants.entry(created.as_str()).or_default() += 1;
+        }
+    }
+    // Walked in Roam's own order, not the maps', so the outcome does not depend
+    // on hash iteration order should a Roam page ever repeat a uid.
+    for (ri, rn) in roam.nodes.iter().enumerate() {
+        if !rn.persist_id || used_roam.contains(&ri) || taken.contains(rn.id.as_str()) {
+            continue;
+        }
+        let Some(created) = &rn.created_at else { continue };
+        if claimants.get(created.as_str()) != Some(&1) {
+            continue; // two Roam blocks born in the same millisecond: unknowable.
+        }
+        let Some([idx]) = by_created.get(created.as_str()).map(Vec::as_slice) else {
+            continue; // no candidate, or two of them: equally unknowable.
+        };
+        taken.insert(rn.id.as_str());
+        plan.push((*idx, rn.id.as_str()));
     }
 
     for (idx, new_id) in &plan {
@@ -270,7 +354,10 @@ mod tests {
     /// exactly that.
     #[test]
     fn the_count_is_the_number_adopted_and_zero_when_nothing_matches() {
-        let mut nothing = tree("- something else\n  created:: 2026-08-02T09:00:00.000Z\n");
+        // "Nothing in common" has to mean the timestamps too, now that tier 2
+        // pairs on a unique instant alone — a local block sharing an instant
+        // with a lone Roam block is a match, not a coincidence.
+        let mut nothing = tree("- something else\n  created:: 2026-08-05T09:00:00.000Z\n");
         let roam = tree("- a\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n- b\n  created:: 2026-08-02T09:30:00.000Z\n  id:: u2\n");
         assert_eq!(adopt_ids(&mut nothing, &roam), 0);
         assert_eq!(adopt_ids(&mut tree(""), &roam), 0);
@@ -319,19 +406,138 @@ mod tests {
         assert!(!local.nodes[0].persist_id);
     }
 
-    /// Multi-line content is compared whole. A shift-enter list or a fenced
-    /// code block is one Roam block, and both import paths escape it the same
-    /// way — comparing only the first line would collapse two different blocks
-    /// that happen to share an opening line.
+    /// Tier 1 compares multi-line content *whole*: a shift-enter list or a
+    /// fenced code block is one Roam block, and comparing only the first line
+    /// would collapse two different blocks that share an opening line.
+    ///
+    /// A second Roam block born in the same millisecond keeps tier 2 out of it,
+    /// which is what makes this a test of tier 1 alone — and it doubles as the
+    /// proof that tier 1 still matches under exactly the ambiguity that stops
+    /// tier 2.
     #[test]
-    fn the_whole_multi_line_content_is_the_key() {
+    fn the_whole_multi_line_content_is_tier_ones_key() {
+        let crowded = |list: &str| {
+            tree(&format!(
+                "- shopping\n   - {list}\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n- other\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u2\n"
+            ))
+        };
         let mut local = tree("- shopping\n   - milk\n  created:: 2026-08-02T09:00:00.000Z\n");
-        let roam = tree("- shopping\n   - eggs\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n");
-        assert_eq!(adopt_ids(&mut local, &roam), 0);
+        assert_eq!(adopt_ids(&mut local, &crowded("eggs")), 0, "a different second line");
 
-        let roam = tree("- shopping\n   - milk\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n");
+        assert_eq!(adopt_ids(&mut local, &crowded("milk")), 1);
+        assert_eq!(local.nodes[0].id, "u1");
+    }
+
+    // Tier 2. The two producers do NOT escape a block's text identically (see
+    // this module's doc comment), so a block carrying a shift-enter list, a
+    // dangling fence or a `status::`/`answered::`/`by::` continuation line can
+    // never match on content — it would keep doubling forever. Tier 2 reaches
+    // exactly those, and only where the timestamp answers the question by
+    // itself: one candidate, one claimant, nothing to get wrong.
+
+    /// The `by::` line is a real divergence: the TS escape's whitelist stops at
+    /// `updated`, so it wrote the line unescaped and `parse_outline` ate it as a
+    /// property — the local node's content is now the first line alone, while
+    /// the Rust side escapes the line and keeps it in the text. Same block, two
+    /// spellings, one `created::`.
+    #[test]
+    fn a_block_the_two_producers_escaped_differently_is_adopted_on_a_unique_timestamp() {
+        let mut local = tree("- meeting notes\n  by:: claude-code\n  created:: 2026-08-02T09:00:00.000Z\n");
+        assert_eq!(local.nodes[0].content, "meeting notes", "the property line was eaten");
+        let roam = tree("- meeting notes\n   by:: claude-code\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n");
+        assert_ne!(local.nodes[0].content, roam.nodes[0].content, "tier 1 cannot match these");
+
         assert_eq!(adopt_ids(&mut local, &roam), 1);
         assert_eq!(local.nodes[0].id, "u1");
+        assert!(local.nodes[0].persist_id);
+
+        let (out, st) = merge(&local, &roam);
+        let text = serialize_outline(&out);
+        assert_eq!(text.matches("- meeting notes").count(), 1, "the block doubled:\n{text}");
+        assert_eq!((st.created, st.kept_local), (0, 0));
+    }
+
+    /// Ambiguity on the local side: two id-less blocks share the timestamp, so
+    /// the timestamp no longer identifies one block. A missed adoption is
+    /// recoverable (the block doubles, as it does today); a wrong one overwrites
+    /// the user's text with another block's. Skip.
+    #[test]
+    fn tier_two_skips_a_timestamp_two_local_blocks_share() {
+        let mut local = tree(
+            "- meeting notes\n  by:: claude-code\n  created:: 2026-08-02T09:00:00.000Z\n- something else\n  created:: 2026-08-02T09:00:00.000Z\n",
+        );
+        let roam = tree("- meeting notes\n   by:: claude-code\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n");
+        assert_eq!(adopt_ids(&mut local, &roam), 0);
+        assert!(local.nodes.iter().all(|n| !n.persist_id));
+    }
+
+    /// Ambiguity on the Roam side, same rule from the other end: two Roam
+    /// blocks created in the same millisecond, one local candidate. Nothing
+    /// says which of them the candidate is.
+    #[test]
+    fn tier_two_skips_a_timestamp_two_roam_blocks_share() {
+        let mut local = tree("- meeting notes\n  by:: claude-code\n  created:: 2026-08-02T09:00:00.000Z\n");
+        let roam = tree(
+            "- meeting notes\n   by:: claude-code\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n- another\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u2\n",
+        );
+        assert_eq!(adopt_ids(&mut local, &roam), 0);
+        assert!(!local.nodes[0].persist_id);
+    }
+
+    /// Tier 2 runs only on what tier 1 left over, and tier 1's exact matches
+    /// are not "uses" that make a timestamp ambiguous for it: a block adopted
+    /// on content+created is out of the running on both sides.
+    #[test]
+    fn tier_two_only_sees_what_tier_one_left() {
+        // Same timestamp on two blocks — but one pair matches exactly, so after
+        // tier 1 exactly one candidate and one claimant remain.
+        let mut local = tree(
+            "- exact\n  created:: 2026-08-02T09:00:00.000Z\n- escaped differently\n  by:: x\n  created:: 2026-08-02T09:00:00.000Z\n",
+        );
+        let roam = tree(
+            "- exact\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n- escaped differently\n   by:: x\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u2\n",
+        );
+        assert_eq!(adopt_ids(&mut local, &roam), 2);
+        assert_eq!(local.nodes[0].id, "u1");
+        assert_eq!(by_content(&local, "escaped differently").id, "u2");
+    }
+
+    /// A local block with no `created::` is out of tier 2 as well — the tier
+    /// keys on the timestamp *alone*, so having none is not a weaker key, it is
+    /// none at all.
+    #[test]
+    fn tier_two_still_needs_a_timestamp_on_both_sides() {
+        let mut local = tree("- meeting notes\n  by:: claude-code\n");
+        let roam = tree("- meeting notes\n   by:: claude-code\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n");
+        assert_eq!(adopt_ids(&mut local, &roam), 0);
+
+        let mut local = tree("- meeting notes\n  by:: claude-code\n  created:: 2026-08-02T09:00:00.000Z\n");
+        let roam = tree("- meeting notes\n   by:: claude-code\n  id:: u1\n");
+        assert_eq!(adopt_ids(&mut local, &roam), 0);
+    }
+
+    /// Everything on the node except its id is local state this pass has no
+    /// business touching — `collapsed` is how the user folded their outline and
+    /// `type`/`status`/`line` carry the annotation state they put on the block.
+    /// `merge` already promises to keep them (rule 3); adoption must not take
+    /// them away before `merge` ever sees them.
+    #[test]
+    fn adoption_touches_nothing_but_the_id() {
+        let text = "- the line I marked up\n  type:: question\n  line:: 12\n  status:: open\n  created:: 2026-08-02T09:00:00.000Z\n  collapsed:: true\n";
+        let mut local = tree(text);
+        let roam = tree("- the line I marked up\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n");
+
+        assert_eq!(adopt_ids(&mut local, &roam), 1);
+        let n = &local.nodes[0];
+        assert_eq!((n.source.as_str(), n.anchor_line, n.status.as_deref(), n.collapsed),
+                   ("question", Some(12), Some("open"), true));
+        assert_eq!(n.created_at.as_deref(), Some("2026-08-02T09:00:00.000Z"));
+
+        let (out, _) = merge(&local, &roam);
+        assert_eq!(
+            serialize_outline(&out),
+            "- the line I marked up\n  type:: question\n  line:: 12\n  status:: open\n  created:: 2026-08-02T09:00:00.000Z\n  id:: u1\n  collapsed:: true\n"
+        );
     }
 
     /// Adoption is per node, and a node deeper in the file is reached the same
