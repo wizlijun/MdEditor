@@ -94,6 +94,26 @@ pub fn probe(explicit: Option<&str>) -> Probe {
     Probe { state, found: Some(exe.display().to_string()), version, graphs }
 }
 
+/// The recursive pull that returns a whole daily page in Roam-export shape.
+pub fn day_query(uid: &str) -> String {
+    format!(
+        r#"[:find (pull ?e [:node/title :block/uid :block/string :block/order :block/heading [:create/time :as "create-time"] [:edit/time :as "edit-time"] {{:block/children ...}}]) :where [?e :block/uid "{uid}"]]"#
+    )
+}
+
+/// Fetch one daily page. `graph` is optional — the CLI auto-selects when only
+/// one graph is configured.
+pub fn fetch_day(exe: &Path, graph: Option<&str>, uid: &str) -> Result<serde_json::Value, String> {
+    let query = day_query(uid);
+    let mut args: Vec<&str> = vec!["datalog-query", "--query", &query];
+    if let Some(g) = graph.filter(|g| !g.is_empty()) {
+        args.push("--graph");
+        args.push(g);
+    }
+    let out = run(exe, &args, Duration::from_secs(60))?;
+    serde_json::from_str(&out).map_err(|e| format!("unreadable datalog output: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +149,16 @@ mod tests {
     fn reads_graph_names_from_wrapped_object() {
         let out = r#"{"graphs":[{"graph":"bruce"}]}"#;
         assert_eq!(graphs_from_list(out), Ok(vec!["bruce".to_string()]));
+    }
+
+    #[test]
+    fn day_query_embeds_the_uid_and_aliases_both_timestamps() {
+        let q = day_query("08-02-2026");
+        assert!(q.contains(r#"[?e :block/uid "08-02-2026"]"#));
+        // Without :as both :create/time and :edit/time collapse onto one "time" key.
+        assert!(q.contains(r#"[:create/time :as "create-time"]"#));
+        assert!(q.contains(r#"[:edit/time :as "edit-time"]"#));
+        // Unbounded recursion: a fixed-depth pattern silently truncates deep outlines.
+        assert!(q.contains("{:block/children ...}"));
     }
 }
