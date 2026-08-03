@@ -129,6 +129,17 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<a href="/orchestrate-agents/">So geht\'s</a>.',
   'あなたのフォルダは、どの AI ツールも共有する作業台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同じファイル、'
   '同じルール、すべて git の中。<a href="/orchestrate-agents/">やり方を見る</a>。'),
+ ('Every file it writes follows <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open '
+  'Knowledge Format</a> v0.2, strictly: what a document is, where it came from, who checked it — plain YAML at the top '
+  'of the file. Any tool can read your vault. Not just this one.',
+  '它写出的每一个文件，都严格遵循 <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open '
+  'Knowledge Format</a> v0.2：这是什么、从哪来、谁确认过——就写在文件开头的 YAML 里。你的 vault，任何工具都读得懂，不止这一个。',
+  'Jede Datei, die es schreibt, folgt strikt dem <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open '
+  'Knowledge Format</a> v0.2: was ein Dokument ist, woher es kommt, wer es geprüft hat — schlichtes YAML am Anfang der '
+  'Datei. Jedes Werkzeug kann deinen Vault lesen. Nicht nur dieses.',
+  '書き出すファイルはすべて <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open '
+  'Knowledge Format</a> v0.2 に厳密に従う。何の文書か、どこから来たか、誰が確認したか——ファイル冒頭のただの YAML に。'
+  'あなたの vault は、どのツールからでも読める。これだけではなく。'),
  ("Change AI tools whenever you want. What's yours stays yours.",
   '换 AI 工具，随时。你的东西，永远是你的。',
   'Wechsle das KI-Tool, wann du willst. Was deins ist, bleibt deins.',

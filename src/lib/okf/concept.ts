@@ -22,6 +22,8 @@ export const CONCEPT_TYPE = {
   book: 'Book',
   /** Reading Insights 的阅读数据报告 */
   readingReport: 'Reading Report',
+  /** vault 根的 AGENTS.md(模板见 src-tauri/templates/AGENTS.md) */
+  vaultConventions: 'Vault Conventions',
 } as const
 
 /** OKF actor(§7)。 */

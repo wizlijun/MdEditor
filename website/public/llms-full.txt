@@ -2,7 +2,7 @@
 
 This document tells an LLM agent everything it needs to understand and work
 with note.md and its vaults. It is the authoritative plain-text companion to
-https://notemd.net/. Last updated: 2026-07.
+https://notemd.net/. Last updated: 2026-08.
 
 ## What note.md is
 
@@ -47,11 +47,48 @@ Hermes, or you) can honor it with nothing but file reads and writes.
   `.note.md` as read-only, with one sanctioned exception: the Q&A
   answer-writeback protocol described below.
 
+### Document metadata: Open Knowledge Format (OKF) v0.2
+
+note.md follows the Open Knowledge Format v0.2 strictly, and expects agents
+working in a vault to do the same. Spec:
+https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
+
+- **Hard constraints.** Every `.md` you create in a vault opens with a
+  parseable YAML frontmatter block, and that block carries a non-empty
+  `type`. `index.md` and `log.md` are reserved names — a directory index and
+  a dated change log, never ordinary notes.
+- **Types used by note.md** (OKF does not centrally register types; stay
+  consistent within a vault): `Note` (plain markdown document),
+  `Outline Note` (any `.note.md`), `Daily Note`, `Wiki Page`,
+  `Vault Conventions` (the vault's `AGENTS.md`).
+- **Provenance and trust use the spec's own fields**, all optional but
+  meaningful when absent: `title`, `description`, `tags`, `resource`;
+  `generated: { by, at }`; `verified: [{ by, at }]`; `sources: [{ resource,
+  id, title, author, last_modified }]`; `status: draft|stable|deprecated`
+  (absent means stable); `stale_after: YYYY-MM-DD`.
+- **Actor strings** take one of three forms: `<producer>/<version>` for an
+  agent or tool (`claude-code/opus-5`), `human:<id>` for a person,
+  `process:<id>` for automation. Never sign your own work `human:` — that
+  prefix is what marks content a person wrote or confirmed, the metadata-level
+  counterpart of `✦` (AI) vs `●` (human).
+- **Tolerant conformance, both directions.** Reading: never reject a document
+  for a missing optional field, an unfamiliar `type`, unknown extra keys, a
+  broken link, or a missing `index.md`; a single `verified:` written as a bare
+  mapping counts as a one-element list. Writing: add missing keys only —
+  never drop, reorder or rewrite keys you did not write.
+- Document-level `status` (`draft`/`stable`/`deprecated`) is a different thing
+  from the node-level `status::` of the Q&A protocol below
+  (`open`/`answered`/`adopted`). They never convert into each other.
+- A vault's `AGENTS.md` restates this contract and is authoritative for that
+  vault. The note.md repo carries a checker for the three hard constraints
+  (`scripts/okf-lint.mjs`, run as `pnpm okf:lint <dir>`).
+
 ### The .note.md format
 
-- YAML frontmatter with at least `title` (original, un-slugged), `created`,
+- YAML frontmatter with at least `type` (`Outline Note`, or `Daily Note` /
+  `Wiki Page` in those folders), `title` (original, un-slugged), `created`,
   `updated`. Files imported from other systems may carry extra metadata
-  (e.g. `roam-uid`).
+  (e.g. `roam-uid`); keep it.
 - Body: a nested markdown unordered list (`- ` + indentation) — an outline.
   The file stays readable in any plain-text editor.
 - `[[title]]` wikilinks are resolved against frontmatter `title` across the
@@ -131,7 +168,7 @@ Sweep protocol — how to answer:
            ````
            type:: answer
            answered:: 2026-07-28T14:22:00Z
-           by:: your-agent-name
+           by:: your-agent/version
 
    The opening fence must be longer than the longest run of backticks
    inside the answer (four here, because the body contains a three-tick

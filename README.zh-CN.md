@@ -67,6 +67,33 @@ Claude Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes——它�
 5. **[一个 vault，多个 agent——你是编排者。](docs/product-principle-one-vault-many-agents-you-orchestrate.md)**  
    工人可替换，握笔的是你。
 
+## 严格遵循 OKF v0.2
+
+信念 2 需要的是一套格式，不只是一个后缀。note.md 严格遵循  
+[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
+（OKF）v0.2——Google Cloud 开放的知识文档规范，人与 agent 交换知识用的公共约定：  
+纯 Markdown、YAML frontmatter、可 diff、可移植。
+
+- **写出去的每一份都合规。** note.md 新建的每份文档都以 YAML frontmatter 开头、  
+  带上必填的 `type`——⌘N 新建、`.note.md` 手记、每日笔记、wiki 页、Roam 与电子书  
+  导入、生成的报告，一个不落。存量大纲笔记在你下次保存时补上 `type`；从别处带进来  
+  的纯 `.md` 一个字都不动——绝不往你的文件里塞应用私货。
+- **来源与信任用规范自己的词汇。** `sources`、`generated`、`verified`、`status`、  
+  `stale_after` 全部沿用 OKF 的字段名；actor 用 OKF 的三种形式——工具  
+  `<producer>/<version>`、人 `human:<id>`、自动流程 `process:<id>`。于是"这句是人  
+  确认过的"成了机器可读的事实，而不是靠猜。
+- **读进来的一份都不拒绝。** 缺可选字段、不认识的 `type`、多出来的未知键、断掉的  
+  链接——任何一条都不会让文档被拒绝，note.md 读不懂的键在往返后原样保留。这是  
+  OKF 的宽容一致性，规范把它定为 MUST。
+- **是验过的，不是嘴上的。** `pnpm okf:lint <目录>` 按规范的三条硬约束审计任意  
+  文件夹；每一个写文档的路径都有测试拿它校验产物。
+
+你的 agent 拿到同一份契约：vault 的 `AGENTS.md` 里写明了 OKF 要求，在这个文件夹里  
+干活的 agent 也照此写文件。还在路上的部分：由应用自动填 `generated` / `verified`，  
+以及 bundle 级导出（`index.md`、`log.md`、把 wikilink 改写成 OKF 链接）——进度见  
+[一致性审计](docs/okf-v0.2-conformance-audit.md)。格式细节见  
+[`docs/okf-v0.2-format-constraints.md`](docs/okf-v0.2-format-constraints.md)。
+
 ## AI 写的，人负责
 
 note.md 完全由 AI Coding 开发和维护，所以更新很快。维护者是专业的软件工程玩家，
@@ -131,6 +158,8 @@ Release（两个 `.dmg`、两个 updater 包及签名、驱动按架构自动更
 ## 文档
 
 - 完整功能清单：`[docs/FEATURES.zh-CN.md](docs/FEATURES.zh-CN.md)`
+- 知识文档格式（OKF v0.2）：[`docs/okf-v0.2-format-constraints.md`](docs/okf-v0.2-format-constraints.md)
+  · [一致性审计](docs/okf-v0.2-conformance-audit.md)
 - 写插件：`[docs/plugin-v2-development.md](docs/plugin-v2-development.md)`
 - 设计与计划：`docs/superpowers/specs/`、`docs/superpowers/plans/`
 

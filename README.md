@@ -75,6 +75,40 @@ The rest is yours to discover.
 5. **[One vault, many agents — you orchestrate.](docs/product-principle-one-vault-many-agents-you-orchestrate.md)**
    The workers are interchangeable. You hold the pen.
 
+## Strictly OKF v0.2
+
+Conviction 2 needs a format, not just a file extension. note.md follows the
+[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
+(OKF) v0.2 — Google Cloud's open spec for knowledge that humans and agents
+exchange: plain Markdown, YAML frontmatter, diffable, portable.
+
+- **Everything it writes conforms.** Every document note.md creates opens
+  with YAML frontmatter carrying the required `type` — ⌘N notes, `.note.md`
+  sidecars, daily notes, wiki pages, Roam and e-book imports, generated
+  reports. Existing outline notes get their `type` filled in the next time
+  you save one; a plain `.md` you brought from elsewhere is left exactly as
+  it is — no app cruft injected into your files, ever.
+- **Provenance in the spec's vocabulary.** Source, trust and lifecycle use
+  OKF's own fields — `sources`, `generated`, `verified`, `status`,
+  `stale_after` — and its actor forms, `<producer>/<version>` for a tool,
+  `human:<id>` for a person, `process:<id>` for automation. So "a human
+  confirmed this" becomes machine-readable, not a hunch.
+- **Everything it reads is tolerated.** A missing optional field, an
+  unfamiliar `type`, unknown extra keys, a dead link — none of these ever
+  cause a document to be rejected, and keys note.md doesn't understand
+  survive a round trip untouched. That's OKF's tolerant conformance, and the
+  spec makes it a MUST.
+- **Checked, not claimed.** `pnpm okf:lint <dir>` audits any folder against
+  the spec's three hard constraints; every path that writes a document is
+  tested against it.
+
+Your agents get the same contract: the vault's `AGENTS.md` spells out the OKF
+requirement, so anything working in that folder writes conformant files too.
+Still landing: the app filling in `generated` / `verified` on your behalf, and
+bundle-level export (`index.md`, `log.md`, wikilinks rewritten as OKF links) —
+tracked in the [conformance audit](docs/okf-v0.2-conformance-audit.md).
+Format details: [`docs/okf-v0.2-format-constraints.md`](docs/okf-v0.2-format-constraints.md).
+
 ## Written by AI, answered for by a human
 
 note.md is developed and maintained entirely by AI coding, so releases come
@@ -143,6 +177,9 @@ GitHub Release (two `.dmg`s, two updater tarballs + signatures, and a
 ## Docs
 
 - Full feature list: [`docs/FEATURES.md`](docs/FEATURES.md)
+- Knowledge-document format (OKF v0.2):
+  [`docs/okf-v0.2-format-constraints.md`](docs/okf-v0.2-format-constraints.md)
+  · [conformance audit](docs/okf-v0.2-conformance-audit.md)
 - Writing plugins: [`docs/plugin-v2-development.md`](docs/plugin-v2-development.md)
 - Designs & plans: `docs/superpowers/specs/`, `docs/superpowers/plans/`
 

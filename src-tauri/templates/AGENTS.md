@@ -1,7 +1,16 @@
+---
+type: Vault Conventions
+title: AGENTS.md
+description: Conventions for AI agents working in this vault.
+---
+
 # AGENTS.md
 
 Guidance for AI agents working in this vault. This file is the source of
 truth; CLAUDE.md is a symlink to this file — edit AGENTS.md only.
+
+(The frontmatter above is not decoration — see "Metadata" below. Every
+markdown file in this vault carries one, this file included.)
 
 ## Vault layout
 
@@ -17,6 +26,89 @@ truth; CLAUDE.md is a symlink to this file — edit AGENTS.md only.
   original; edits here do not flow back to the source file.
 - Any other folder — regular markdown documents (`xxx.md`), optionally
   with a companion outline note beside them (see below).
+
+## Metadata: OKF-compatible frontmatter (required)
+
+Every markdown file you create here **must** open with a YAML
+frontmatter block, and that block **must** carry a non-empty `type`.
+The format is the Open Knowledge Format (OKF) v0.2:
+https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
+
+It is still plain Markdown plus YAML — readable, greppable, diffable.
+The metadata is what lets the next agent, or the human two years from
+now, see where a file came from and how far to trust it. A file without
+it is a wall of text with no provenance.
+
+    ---
+    type: Outline Note
+    title: Block references address one assertion, not one paragraph
+    description: Why a block ref points at a claim.
+    tags: [outline, references]
+    generated: { by: your-agent/version, at: 2026-08-03T14:22:00Z }
+    sources:
+      - id: roam-export
+        resource: /sync/roam-2026-07-30.md
+        title: Roam export, 2026-07-30
+    ---
+
+`type` is the **only required key**. Use the value that matches where
+the file lives; types are not centrally registered, so if nothing fits,
+coin a short one and then use it consistently.
+
+| `type` | for |
+|--------|-----|
+| `Note` | a plain markdown document |
+| `Outline Note` | any `.note.md` (outline or companion note) |
+| `Daily Note` | `dailynote/yyyy/yyyy-MM-dd.note.md` |
+| `Wiki Page` | `wikipage/<title>.note.md` |
+
+Everything else is optional, but absent metadata means "unknown", not
+"fine" — write what you actually know:
+
+- `title`, `description`, `tags`, `resource` — recommended on every
+  concept. `title` repeats the filename title; `resource` is a URI for
+  the underlying asset, when the note is about one.
+- `generated: { by, at }` — who produced the content, and when it last
+  changed substantively (not every touch).
+- `verified: [{ by, at }]` — confirmation events, appended not
+  replaced. A single entry may be written as a bare mapping.
+- `sources: [{ resource, id, title, author, last_modified }]` — what
+  the content was derived from. `resource` is an absolute URL, a
+  vault-absolute path (`/sync/foo.md`), or a relative path. Attribute
+  individual claims with markdown footnotes keyed by `sources[].id`.
+- `status: draft | stable | deprecated` (absent means `stable`) and
+  `stale_after: YYYY-MM-DD` for content with a known shelf life.
+
+Every actor string — `generated.by`, `verified[].by`, and the `by::`
+property in the answer protocol below — takes one of three forms:
+
+| form | for | example |
+|------|-----|---------|
+| `<producer>/<version>` | an agent or tool | `claude-code/opus-5` |
+| `human:<id>` | a person | `human:jdoe` |
+| `process:<id>` | automation | `process:nightly-sweep` |
+
+**Never sign your own work `human:`.** That prefix is the only thing
+marking content a person wrote or confirmed — the same line the editor
+draws between `✦` (written by AI) and `●` (thought by you). Mixing the
+two destroys the signal.
+
+Rules that hold in both directions:
+
+- **Preserve what you did not write.** When rewriting a file, add
+  missing keys only; never drop, reorder or rewrite existing keys,
+  including ones you do not recognise.
+- **Never reject a document over its metadata.** No frontmatter, an
+  unfamiliar `type`, unknown extra keys, a link whose target does not
+  exist — read it anyway and leave it alone.
+- **`index.md` and `log.md` are reserved names.** Do not write ordinary
+  notes under them: `index.md` is a directory index (a list of links
+  with descriptions), `log.md` a change log grouped under `YYYY-MM-DD`
+  headings, newest first.
+- The document-level `status` above (`draft`/`stable`/`deprecated`) is
+  **not** the node-level `status::` of the Q&A protocol below
+  (`open`/`answered`/`adopted`). Same word, different namespaces; never
+  convert one into the other.
 
 ## Naming a note
 
@@ -125,12 +217,13 @@ Sweep protocol — how to answer:
            ````
            type:: answer
            answered:: 2026-07-28T14:22:00Z
-           by:: your-agent-name
+           by:: your-agent/version
 
    The opening fence must be longer than the longest run of backticks
    inside the answer (four here, because the body contains a three-tick
    block). Write exactly one answer node per question — answering again
-   replaces it. Keep the property lines in the order shown.
+   replaces it. Keep the property lines in the order shown. `by::` is
+   an actor string: your producer name and version, never `human:`.
 4. Set the question's `status::` to `answered`.
 
 The human reads the answer inline under the annotated paragraph and may
