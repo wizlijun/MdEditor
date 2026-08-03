@@ -114,6 +114,15 @@ fn strip_leading_spaces(raw: &str, max: usize) -> &str {
     &raw[n..]
 }
 
+// orderCounters.length = depth + 1 (markdown.ts:76) is the same sparse-array
+// truncate-or-pad as the parent stack below, but every padded slot here is
+// read back only through this same function (nothing else ever indexes
+// order_counters), and a freshly padded slot is always treated as "start a
+// new counter at 0" regardless of whether it's a real JS `undefined` hole or
+// our eager `-100` sentinel. So padding every intermediate slot with -100
+// up front (instead of leaving true holes and defaulting lazily on read) is
+// observationally identical — unlike the parent stack, there is no
+// "hole vs. real value" distinction that later code can observe.
 fn next_order(order_counters: &mut Vec<i64>, depth: usize) -> i64 {
     if order_counters.len() > depth + 1 {
         order_counters.truncate(depth + 1);
@@ -128,14 +137,19 @@ fn next_order(order_counters: &mut Vec<i64>, depth: usize) -> i64 {
 #[allow(clippy::too_many_arguments)]
 fn push_node(
     tree: &mut Tree,
-    stack: &mut Vec<usize>,
+    stack: &mut Vec<Option<usize>>,
     order_counters: &mut Vec<i64>,
     local_counter: &mut u64,
     depth: usize,
     content: String,
 ) -> usize {
+    // stack[depth - 1] ?? null (markdown.ts:82) — a positional read, not a
+    // "most recently pushed" read. A skipped depth (e.g. 0 then 2) leaves
+    // stack[1] as a hole, so a node pushed at depth 2 parents at the root,
+    // not under the depth-0 node. get(...).flatten() reproduces both the
+    // "index doesn't exist yet" and "index exists but is a hole" cases as None.
     let parent = if depth > 0 {
-        stack.get(depth - 1).map(|&idx| tree.nodes[idx].id.clone())
+        stack.get(depth - 1).copied().flatten().map(|idx| tree.nodes[idx].id.clone())
     } else {
         None
     };
@@ -157,8 +171,12 @@ fn push_node(
     };
     tree.nodes.push(node);
     let idx = tree.nodes.len() - 1;
-    stack.truncate(depth);
-    stack.push(idx);
+    // stack.length = depth; stack[depth] = node (markdown.ts:92-93) — resize
+    // to exactly `depth` elements (truncating OR padding with holes), then
+    // set index `depth`. Padding-with-holes is the part a dense
+    // truncate+push loses: it must leave real gaps, not compact them away.
+    stack.resize(depth, None);
+    stack.push(Some(idx));
     idx
 }
 
@@ -213,7 +231,7 @@ pub fn parse_outline(text: &str) -> Tree {
     let (frontmatter, body) = split_frontmatter_block(text);
     let mut tree = Tree { frontmatter, nodes: Vec::new() };
 
-    let mut stack: Vec<usize> = Vec::new();
+    let mut stack: Vec<Option<usize>> = Vec::new();
     // (node index, depth) of the most recently pushed node.
     let mut current: Option<(usize, usize)> = None;
     let mut order_counters: Vec<i64> = Vec::new();
@@ -436,6 +454,36 @@ mod tests {
         let t = parse_outline("- a\n- b\n- c\n");
         let kids: Vec<&str> = t.children_of(None).iter().map(|n| n.content.as_str()).collect();
         assert_eq!(kids, vec!["a", "b", "c"]);
+    }
+
+    /// Regression: `0 -> 2 -> 3 -> 1` depth sequence (e.g. Tab-indented at 4
+    /// spaces in an external editor, so a bullet lands at depth 2 with no
+    /// depth-1 sibling ever written). The parent stack must be positionally
+    /// indexed like `markdown.ts`'s sparse array — a dense
+    /// truncate-then-push flattens `c` to the root instead of nesting it
+    /// under `b`, silently destroying structure rather than merely
+    /// re-indenting it.
+    #[test]
+    fn skipped_depth_levels_still_nest_by_stack_position() {
+        let text = "- a\n    - b\n      - c\n  - d\n";
+        let t = parse_outline(text);
+        assert_eq!(t.nodes.len(), 4);
+        let by_content = |c: &str| t.nodes.iter().find(|n| n.content == c).unwrap();
+        let a = by_content("a");
+        let b = by_content("b");
+        let c = by_content("c");
+        let d = by_content("d");
+
+        // depth-1 slot was never written when b (depth 2) was pushed, so b
+        // reads as root — not nested under a.
+        assert_eq!(b.parent, None);
+        // c (depth 3) reads stack[2], which b just set — nests under b.
+        assert_eq!(c.parent.as_deref(), Some(b.id.as_str()));
+        // returning to depth 1 reads stack[0] (a) again — re-parents under a.
+        assert_eq!(d.parent.as_deref(), Some(a.id.as_str()));
+        assert_eq!(a.parent, None);
+
+        assert_eq!(serialize_outline(&t), "- a\n  - d\n- b\n  - c\n");
     }
 
     #[test]
