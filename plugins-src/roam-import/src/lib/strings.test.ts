@@ -45,6 +45,8 @@ describe('t', () => {
       'cli.state.ready', 'cli.probeFailed', 'cli.install', 'cli.connect', 'cli.date',
       'cli.graph', 'cli.sync',
       'cli.syncing', 'cli.result', 'cli.resultGoneKept', 'cli.noPage', 'cli.failed',
+      'inc.button', 'inc.lastSynced', 'inc.never', 'inc.running',
+      'inc.result', 'inc.nothing', 'inc.renamed', 'inc.failed',
     ]
     for (const loc of LOCALES) {
       for (const k of keys) expect(CATALOGS[loc], `${loc}.${k}`).toHaveProperty(k)

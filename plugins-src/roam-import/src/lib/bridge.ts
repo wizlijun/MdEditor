@@ -168,3 +168,65 @@ export function syncDay(date: string, opts?: { graph?: string; roamPath?: string
     ...(opts?.roamPath ? { roam_path: opts.roamPath } : {}),
   })
 }
+
+/** One page whose Roam title changed since the last sync, and the file move
+ *  that followed (backend `incremental::Renamed`). `[[wikilink]]`s elsewhere
+ *  in the vault still point at the old name — this is the one place the user
+ *  learns which files moved. */
+export interface SyncRenamed {
+  uid: string
+  from: string
+  to: string
+}
+
+/** `plugin.sync_since`'s result (backend `incremental::SyncReport`).
+ *
+ * ONLY ever seen resolved when `errors` is empty — the backend's
+ * errors-mean-not-clean contract (`sync_since_outcome` in `plugin.rs`) turns
+ * a non-empty `errors` into a REJECTED promise instead, counts folded into
+ * the message, so `failed` is always 0 here too. A caught error from
+ * `syncSince` is where a non-clean run (including `failed === 0` but
+ * `errors` non-empty, e.g. an unreadable ledger or a refused rename) must be
+ * shown — never swallowed into a generic toast. */
+export interface SyncReport {
+  from: string | null
+  to: string | null
+  scanned: number
+  synced: number
+  skipped: number
+  failed: number
+  renamed: SyncRenamed[]
+  errors: string[]
+  dry_run: boolean
+}
+
+/** `plugin.sync_since` — sync everything changed since the ledger's
+ *  watermark (or `since`, when given, which overrides it for one run without
+ *  moving the watermark backwards). Rejects — does not resolve with a report
+ *  carrying `errors` — when the run was not clean; see `SyncReport`. */
+export function syncSince(opts?: {
+  since?: string
+  graph?: string
+  roamPath?: string
+  dryRun?: boolean
+}): Promise<SyncReport> {
+  return pluginRequest('sync_since', {
+    ...(opts?.since ? { since: opts.since } : {}),
+    ...(opts?.graph ? { graph: opts.graph } : {}),
+    ...(opts?.roamPath ? { roam_path: opts.roamPath } : {}),
+    ...(opts?.dryRun ? { dry_run: opts.dryRun } : {}),
+  })
+}
+
+/** `plugin.sync_status`'s result: the ledger's last-synced watermark, or
+ *  `null` when there has never been a sync (backend `sync_status`, ledger-only
+ *  — no fetch, safe to call on mount). */
+export interface SyncStatus {
+  last_synced_at: string | null
+}
+
+/** `plugin.sync_status` — read the ledger's last-synced timestamp without
+ *  triggering a sync. */
+export function syncStatus(): Promise<SyncStatus> {
+  return pluginRequest('sync_status')
+}

@@ -45,6 +45,14 @@ export type MessageKey =
   | 'cli.resultGoneKept'
   | 'cli.noPage'
   | 'cli.failed'
+  | 'inc.button'
+  | 'inc.lastSynced'
+  | 'inc.never'
+  | 'inc.running'
+  | 'inc.result'
+  | 'inc.nothing'
+  | 'inc.renamed'
+  | 'inc.failed'
 
 type Catalog = Record<MessageKey, string>
 
@@ -84,6 +92,14 @@ const en: Catalog = {
   'cli.resultGoneKept': 'Also kept {count} block(s) no longer in Roam',
   'cli.noPage': 'Roam has no daily page for {date} — nothing was written',
   'cli.failed': 'Sync failed: {error}',
+  'inc.button': 'Incremental sync',
+  'inc.lastSynced': 'Last synced: {when}',
+  'inc.never': 'Never synced',
+  'inc.running': 'Scanning and syncing…',
+  'inc.result': 'Scanned {scanned} page(s) · synced {synced} · skipped {skipped}',
+  'inc.nothing': 'Nothing to sync',
+  'inc.renamed': 'Renamed: {from} → {to}',
+  'inc.failed': 'Incremental sync did not finish cleanly: {error}',
 }
 
 const zh: Catalog = {
@@ -122,6 +138,14 @@ const zh: Catalog = {
   'cli.resultGoneKept': '另有 {count} 个 Roam 中已删除的块保留在本地',
   'cli.noPage': 'Roam 里没有 {date} 的日记页，未写入任何文件',
   'cli.failed': '同步失败：{error}',
+  'inc.button': '增量同步',
+  'inc.lastSynced': '上次同步：{when}',
+  'inc.never': '尚未同步过',
+  'inc.running': '正在扫描并同步…',
+  'inc.result': '扫描 {scanned} 页 · 同步 {synced} · 跳过 {skipped}',
+  'inc.nothing': '没有需要同步的变更',
+  'inc.renamed': '已重命名：{from} → {to}',
+  'inc.failed': '增量同步未能干净完成：{error}',
 }
 
 const ja: Catalog = {
@@ -160,6 +184,14 @@ const ja: Catalog = {
   'cli.resultGoneKept': 'Roam から削除された {count} 件のブロックもローカルに保持しました',
   'cli.noPage': 'Roam に {date} のデイリーページがなく、何も書き込まれませんでした',
   'cli.failed': '同期に失敗しました：{error}',
+  'inc.button': '増分同期',
+  'inc.lastSynced': '前回の同期：{when}',
+  'inc.never': 'まだ同期されていません',
+  'inc.running': 'スキャンして同期中…',
+  'inc.result': '{scanned} ページをスキャン · {synced} 件同期 · {skipped} 件スキップ',
+  'inc.nothing': '同期する変更はありません',
+  'inc.renamed': '名称変更：{from} → {to}',
+  'inc.failed': '増分同期が正常に完了しませんでした：{error}',
 }
 
 const de: Catalog = {
@@ -198,6 +230,14 @@ const de: Catalog = {
   'cli.resultGoneKept': 'Zusätzlich {count} nicht mehr in Roam vorhandene(n) Block/Blöcke lokal beibehalten',
   'cli.noPage': 'Roam hat keine Tagesnotiz für {date} — es wurde nichts geschrieben',
   'cli.failed': 'Synchronisierung fehlgeschlagen: {error}',
+  'inc.button': 'Inkrementelle Synchronisierung',
+  'inc.lastSynced': 'Zuletzt synchronisiert: {when}',
+  'inc.never': 'Noch nie synchronisiert',
+  'inc.running': 'Wird gescannt und synchronisiert…',
+  'inc.result': '{scanned} Seite(n) gescannt · {synced} synchronisiert · {skipped} übersprungen',
+  'inc.nothing': 'Nichts zu synchronisieren',
+  'inc.renamed': 'Umbenannt: {from} → {to}',
+  'inc.failed': 'Die inkrementelle Synchronisierung wurde nicht sauber abgeschlossen: {error}',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }
