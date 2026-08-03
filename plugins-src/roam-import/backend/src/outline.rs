@@ -1,1 +1,457 @@
-// filled in by Task 4.
+//! `.note.md` outline model + parser + serializer + front-matter touch-up.
+//! Ported from `src/lib/outline/markdown.ts` (`parseOutline`/`serializeOutline`/
+//! `splitFrontmatterBlock`) — the host's companion-file format. Task 6 reads a
+//! vault `.note.md`, merges Roam blocks into the tree, and writes it back, so
+//! this must parse/serialize byte-identically to the TS side; the golden
+//! fixture in Task 7 is what catches drift, keep the two in step.
+use regex::Regex;
+use std::sync::OnceLock;
+
+/// One outline bullet. `parent`/`order`/`content` mirror the TS `OutlineNode`
+/// shape; `source` stays a plain string (not an enum) because the property
+/// whitelist below is itself the source of truth for valid values.
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub id: String,
+    pub parent: Option<String>,
+    pub order: i64,
+    pub content: String,
+    pub collapsed: bool,
+    pub source: String,
+    pub anchor_line: Option<i64>,
+    pub status: Option<String>,
+    pub answered_at: Option<String>,
+    pub answered_by: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    /// `id::` was explicitly present in the file (or the node was renamed to
+    /// one). Only these ids are ever written back — placeholder `local-N`
+    /// ids exist purely for this-process bookkeeping (Task 6 aligns Roam
+    /// blocks by id and positions local blocks by neighbours).
+    pub persist_id: bool,
+}
+
+pub struct Tree {
+    pub frontmatter: Option<String>,
+    pub nodes: Vec<Node>,
+}
+
+impl Tree {
+    /// Children of `parent` (root when `None`), ascending by `order` —
+    /// mirrors `childrenOf` in `model.ts`.
+    pub fn children_of(&self, parent: Option<&str>) -> Vec<&Node> {
+        let mut out: Vec<&Node> = self
+            .nodes
+            .iter()
+            .filter(|n| n.parent.as_deref() == parent)
+            .collect();
+        out.sort_by_key(|n| n.order);
+        out
+    }
+}
+
+/// File-head YAML front-matter block. Must start at byte 0, `---` alone on
+/// its own line. Mirrors `FM_RE` in markdown.ts exactly (including that `^`
+/// there is *not* multiline — it only ever matches at the string start).
+fn frontmatter_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)").unwrap())
+}
+
+pub fn split_frontmatter_block(text: &str) -> (Option<String>, String) {
+    match frontmatter_pattern().captures(text) {
+        Some(caps) => {
+            let whole = caps.get(0).unwrap();
+            let fm = caps.get(1).unwrap().as_str().to_string();
+            (Some(fm), text[whole.end()..].to_string())
+        }
+        None => (None, text.to_string()),
+    }
+}
+
+fn bullet_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^((?:  )*)- (.*)$").unwrap())
+}
+
+fn prop_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^(type|line|id|collapsed|created|updated|status|answered|by):: (.*)$")
+            .unwrap()
+    })
+}
+
+/// Leading run of backticks, with no requirement on what follows — used to
+/// detect a bullet's first line *opening* a raw fence.
+fn fence_open_len(s: &str) -> Option<usize> {
+    let n = s.chars().take_while(|&c| c == '`').count();
+    if n >= 3 { Some(n) } else { None }
+}
+
+/// A line that is *only* backticks (plus trailing whitespace) — closes a raw
+/// fence when its run is at least as long as the one that opened it.
+fn fence_close_len(s: &str) -> Option<usize> {
+    let n = s.chars().take_while(|&c| c == '`').count();
+    if n < 3 {
+        return None;
+    }
+    if s[n..].chars().all(|c| c.is_whitespace()) { Some(n) } else { None }
+}
+
+/// Strip up to `max` leading spaces (not necessarily that many — tolerates a
+/// hand-edited file with less indentation than expected). Mirrors the JS
+/// fallback `raw.replace(new RegExp(`^ {0,${max}}`), '')`.
+fn strip_leading_spaces(raw: &str, max: usize) -> &str {
+    let mut n = 0;
+    for c in raw.chars() {
+        if c == ' ' && n < max {
+            n += 1;
+        } else {
+            break;
+        }
+    }
+    &raw[n..]
+}
+
+fn next_order(order_counters: &mut Vec<i64>, depth: usize) -> i64 {
+    if order_counters.len() > depth + 1 {
+        order_counters.truncate(depth + 1);
+    }
+    while order_counters.len() <= depth {
+        order_counters.push(-100);
+    }
+    order_counters[depth] += 100;
+    order_counters[depth]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_node(
+    tree: &mut Tree,
+    stack: &mut Vec<usize>,
+    order_counters: &mut Vec<i64>,
+    local_counter: &mut u64,
+    depth: usize,
+    content: String,
+) -> usize {
+    let parent = if depth > 0 {
+        stack.get(depth - 1).map(|&idx| tree.nodes[idx].id.clone())
+    } else {
+        None
+    };
+    *local_counter += 1;
+    let node = Node {
+        id: format!("local-{local_counter}"),
+        parent,
+        order: next_order(order_counters, depth),
+        content,
+        collapsed: false,
+        source: "manual".to_string(),
+        anchor_line: None,
+        status: None,
+        answered_at: None,
+        answered_by: None,
+        created_at: None,
+        updated_at: None,
+        persist_id: false,
+    };
+    tree.nodes.push(node);
+    let idx = tree.nodes.len() - 1;
+    stack.truncate(depth);
+    stack.push(idx);
+    idx
+}
+
+/// Apply one whitelisted `key:: value` property line to `tree.nodes[idx]`.
+/// `value` has already had trailing whitespace stripped (tolerate hard-wrap
+/// trailing spaces from editors/formatters without dropping the property).
+fn apply_prop(tree: &mut Tree, idx: usize, key: &str, value: &str) {
+    let value = value.trim_end().to_string();
+    let node = &mut tree.nodes[idx];
+    match key {
+        "type" => {
+            if matches!(
+                value.as_str(),
+                "toc" | "highlight" | "wikilink" | "annotation" | "note" | "question" | "answer"
+            ) {
+                node.source = value;
+            }
+        }
+        "line" => {
+            if let Ok(n) = value.parse::<i64>() {
+                node.anchor_line = Some(n);
+            }
+        }
+        "collapsed" => node.collapsed = value == "true",
+        "created" => node.created_at = Some(value),
+        "updated" => node.updated_at = Some(value),
+        "status" => {
+            if matches!(value.as_str(), "open" | "answered" | "closed" | "adopted") {
+                node.status = Some(value);
+                // status:: is question-only; a valid status self-heals a
+                // manual/note node into a question even if type:: is
+                // missing/damaged — keeps type/status written back as a pair.
+                if node.source == "manual" || node.source == "note" {
+                    node.source = "question".to_string();
+                }
+            }
+        }
+        "answered" => node.answered_at = Some(value),
+        "by" => node.answered_by = Some(value),
+        "id" => {
+            // Invariant: id:: precedes any children of this node, so no
+            // already-pushed node can reference the old id as its parent —
+            // renaming in place (no id->index map needed) is safe.
+            node.id = value;
+            node.persist_id = true;
+        }
+        _ => {}
+    }
+}
+
+pub fn parse_outline(text: &str) -> Tree {
+    let (frontmatter, body) = split_frontmatter_block(text);
+    let mut tree = Tree { frontmatter, nodes: Vec::new() };
+
+    let mut stack: Vec<usize> = Vec::new();
+    // (node index, depth) of the most recently pushed node.
+    let mut current: Option<(usize, usize)> = None;
+    let mut order_counters: Vec<i64> = Vec::new();
+    // >0 means inside an answer fence (raw mode): every line is taken
+    // verbatim, bullets/properties are not recognized.
+    let mut fence_len: usize = 0;
+    let mut local_counter: u64 = 0;
+
+    let mut lines: Vec<&str> = body.split('\n').collect();
+    // A trailing \n produces one extra empty split element that is a
+    // structural artifact, not a semantic blank line; drop it. The regular
+    // path already skips blank lines and is unaffected — only raw fence mode
+    // (especially an unterminated fence) would otherwise absorb it into the
+    // answer body.
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+
+    for raw in lines {
+        if fence_len > 0 {
+            if let Some((idx, depth)) = current {
+                let cont_indent_len = depth * 2 + 2;
+                let cont_indent = " ".repeat(cont_indent_len);
+                let line = if raw.starts_with(&cont_indent) {
+                    &raw[cont_indent_len..]
+                } else {
+                    strip_leading_spaces(raw, cont_indent_len)
+                };
+                {
+                    let node = &mut tree.nodes[idx];
+                    node.content.push('\n');
+                    node.content.push_str(line);
+                }
+                if let Some(close_len) = fence_close_len(line) {
+                    if close_len >= fence_len {
+                        fence_len = 0;
+                    }
+                }
+                continue;
+            }
+        }
+        if raw.trim().is_empty() {
+            continue;
+        }
+        if let Some(caps) = bullet_pattern().captures(raw) {
+            let depth = caps[1].len() / 2;
+            let rest = caps[2].to_string();
+            if let Some(open_len) = fence_open_len(&rest) {
+                fence_len = open_len;
+            }
+            let idx = push_node(&mut tree, &mut stack, &mut order_counters, &mut local_counter, depth, rest);
+            current = Some((idx, depth));
+            continue;
+        }
+        if let Some((idx, depth)) = current {
+            let cont_indent_len = depth * 2 + 2;
+            let cont_indent = " ".repeat(cont_indent_len);
+            if raw.starts_with(&cont_indent) {
+                let body_line = &raw[cont_indent_len..];
+                if let Some(caps) = prop_pattern().captures(body_line) {
+                    let key = caps[1].to_string();
+                    let value = caps[2].to_string();
+                    apply_prop(&mut tree, idx, &key, &value);
+                } else {
+                    let node = &mut tree.nodes[idx];
+                    node.content.push('\n');
+                    node.content.push_str(body_line);
+                }
+                continue;
+            }
+        }
+        // Unclassifiable line: demote to a root-level manual node (spec: never drop content).
+        let idx = push_node(&mut tree, &mut stack, &mut order_counters, &mut local_counter, 0, raw.trim().to_string());
+        current = Some((idx, 0));
+    }
+
+    tree
+}
+
+pub fn serialize_outline(tree: &Tree) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(fm) = &tree.frontmatter {
+        lines.push("---".to_string());
+        lines.push(fm.clone());
+        lines.push("---".to_string());
+    }
+
+    fn walk(tree: &Tree, lines: &mut Vec<String>, parent: Option<&str>, depth: usize) {
+        for n in tree.children_of(parent) {
+            let indent = "  ".repeat(depth);
+            let mut content_lines = n.content.split('\n');
+            lines.push(format!("{indent}- {}", content_lines.next().unwrap_or("")));
+            // Blank continuation lines are written as truly empty strings, not
+            // indented whitespace: blank lines inside answer prose are semantic.
+            for cont in content_lines {
+                lines.push(if cont.is_empty() { String::new() } else { format!("{indent}  {cont}") });
+            }
+            if n.source != "manual" {
+                lines.push(format!("{indent}  type:: {}", n.source));
+                if let Some(al) = n.anchor_line {
+                    lines.push(format!("{indent}  line:: {al}"));
+                }
+                if n.source == "question" {
+                    lines.push(format!("{indent}  status:: {}", n.status.as_deref().unwrap_or("open")));
+                }
+            }
+            if let Some(c) = &n.created_at {
+                lines.push(format!("{indent}  created:: {c}"));
+            }
+            if let Some(u) = &n.updated_at {
+                lines.push(format!("{indent}  updated:: {u}"));
+            }
+            if let Some(a) = &n.answered_at {
+                lines.push(format!("{indent}  answered:: {a}"));
+            }
+            if let Some(b) = &n.answered_by {
+                lines.push(format!("{indent}  by:: {b}"));
+            }
+            if n.persist_id {
+                lines.push(format!("{indent}  id:: {}", n.id));
+            }
+            if n.collapsed {
+                lines.push(format!("{indent}  collapsed:: true"));
+            }
+            walk(tree, lines, Some(n.id.as_str()), depth + 1);
+        }
+    }
+    walk(tree, &mut lines, None, 0);
+
+    if lines.is_empty() { String::new() } else { lines.join("\n") + "\n" }
+}
+
+/// Refresh a companion file's front-matter without a YAML crate: unknown
+/// keys and their order must survive untouched (round-tripping a
+/// hand-edited or third-party-tool-written file is a hard requirement, not
+/// a nicety). `title`/`created` are filled in only if absent (appended at
+/// the end); `updated` is replaced in place if present, appended otherwise.
+pub fn touch_frontmatter(raw: Option<&str>, title: &str, created: &str, now: &str) -> String {
+    let mut lines: Vec<String> = match raw {
+        Some(r) => r.lines().map(|l| l.to_string()).collect(),
+        None => Vec::new(),
+    };
+
+    let has_key = |lines: &[String], key: &str| {
+        let prefix = format!("{key}:");
+        lines.iter().any(|l| l.trim_start().starts_with(&prefix))
+    };
+
+    if !has_key(&lines, "title") {
+        lines.push(format!("title: {title}"));
+    }
+    if !has_key(&lines, "created") {
+        lines.push(format!("created: {created}"));
+    }
+
+    let updated_line = format!("updated: {now}");
+    match lines.iter().position(|l| l.trim_start().starts_with("updated:")) {
+        Some(pos) => lines[pos] = updated_line,
+        None => lines.push(updated_line),
+    }
+
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trips_a_plain_outline() {
+        let text = "---\ntitle: 2026-08-02\n---\n- a\n  - b\n- c\n";
+        assert_eq!(serialize_outline(&parse_outline(text)), text);
+    }
+
+    #[test]
+    fn round_trips_properties_in_canonical_order() {
+        let text = "- hello\n  created:: 2026-08-02T00:00:00.000Z\n  updated:: 2026-08-02T01:00:00.000Z\n  id:: abc\n  collapsed:: true\n";
+        assert_eq!(serialize_outline(&parse_outline(text)), text);
+    }
+
+    #[test]
+    fn keeps_id_and_marks_it_persisted() {
+        let t = parse_outline("- hello\n  id:: abc\n");
+        assert_eq!(t.nodes[0].id, "abc");
+        assert!(t.nodes[0].persist_id);
+    }
+
+    #[test]
+    fn a_node_without_id_is_not_persisted() {
+        let t = parse_outline("- hello\n");
+        assert!(!t.nodes[0].persist_id);
+        assert_eq!(serialize_outline(&t), "- hello\n");
+    }
+
+    #[test]
+    fn multi_line_content_survives() {
+        let text = "- first\n  second\n";
+        let t = parse_outline(text);
+        assert_eq!(t.nodes[0].content, "first\nsecond");
+        assert_eq!(serialize_outline(&t), text);
+    }
+
+    #[test]
+    fn answer_fences_are_taken_raw() {
+        let text = "- ```\n  type:: answer\n  still inside the fence\n  ```\n";
+        let t = parse_outline(text);
+        assert_eq!(t.nodes.len(), 1);
+        assert!(t.nodes[0].content.contains("type:: answer"));
+        assert_eq!(t.nodes[0].source, "manual");
+    }
+
+    #[test]
+    fn typed_nodes_round_trip() {
+        let text = "- ask me\n  type:: question\n  status:: open\n";
+        assert_eq!(serialize_outline(&parse_outline(text)), text);
+    }
+
+    #[test]
+    fn children_are_ordered() {
+        let t = parse_outline("- a\n- b\n- c\n");
+        let kids: Vec<&str> = t.children_of(None).iter().map(|n| n.content.as_str()).collect();
+        assert_eq!(kids, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn frontmatter_touch_fills_and_refreshes() {
+        let fm = touch_frontmatter(None, "2026-08-02", "2026-08-02T00:00:00.000Z", "2026-08-03T09:00:00.000Z");
+        assert!(fm.contains("title: 2026-08-02"));
+        assert!(fm.contains("created: 2026-08-02T00:00:00.000Z"));
+        assert!(fm.contains("updated: 2026-08-03T09:00:00.000Z"));
+    }
+
+    #[test]
+    fn frontmatter_touch_keeps_unknown_keys_and_only_moves_updated() {
+        let raw = "title: 2026-08-02\nroam-uid: 08-02-2026\nupdated: 2026-01-01T00:00:00.000Z";
+        let fm = touch_frontmatter(Some(raw), "2026-08-02", "x", "2026-08-03T09:00:00.000Z");
+        assert!(fm.contains("roam-uid: 08-02-2026"));
+        assert!(fm.contains("updated: 2026-08-03T09:00:00.000Z"));
+        assert!(!fm.contains("2026-01-01"));
+    }
+}
