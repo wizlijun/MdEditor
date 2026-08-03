@@ -33,4 +33,6 @@ note.md —— 为 AI-native 时代打造的 markdown 阅读器与编辑器。
 - **actor 统一格式**:`<producer>/<version>` / `human:<id>` / `process:<id>`;人工撰写或人工确认必须用 `human:` 前缀(§7)——这与信念 3「`✦` AI 写的、`●` 你想的」同源:人机署名不能混。
 - **Attested Computation 红线**:agent 只能给声明的 `parameters` 提供*值*,**MUST NOT** 撰写或修改计算本身(§10.2)。
 
+当前一致性状况见 **`docs/okf-v0.2-conformance-audit.md`**(2026-08-03 全量审计 + 分期整改建议)。一句话:消费侧宽容度达标,生产侧几乎全线缺 frontmatter / 缺必填 `type`,decision-log 插件是唯一合规样板。
+
 与产品主张的关系:OKF 是「文件高于应用」和「一个 vault,多个 agent」的外部落点——纯 Markdown + YAML frontmatter、可 diff、可移植,正是 vault 对外交换知识时的公共约定。它约束的是知识包的交换格式,不改变 vault 内 `.md` / `.note.md` 的既有约定。
