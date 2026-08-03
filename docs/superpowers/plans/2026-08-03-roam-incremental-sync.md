@@ -19,6 +19,7 @@
 - **合并语义一行不改**:按块 uid 对位、Roam 为准、本地手写块永不丢、`collapsed`/`type`/`status`/`line`/`answered`/`by` 取本地、内容无变化则连写都不写。
 - **`.note.md` 格式一行不改**。`plugins-src/roam-import/backend/tests/fixtures/daily.note.md` 与 `frontmatter-touch.json` 两份 golden 必须保持通过;前者的字节若被本计划改动,须逐行复核并说明。
 - OKF §4.1:每篇写出的文档必须有非空 `type`。日记页 `Daily Note`,wikipage `Wiki Page`,与宿主 `outlineConceptType()` 的目录判定一致。
+  终审 C1 补充:光有 `type` 不够,frontmatter 本身得**可解析**。`touch_frontmatter` 原来写 `title: {title}` 裸值 —— 在只写 `yyyy-MM-dd` 的年代安全,一旦承载任意 Roam 页标题就不是了(`Book: Thinking Fast and Slow` 直接 `frontmatter-unparsable`,`PKM #2` 更阴:能解析,但标题被静默截成 `PKM`)。凡写入 frontmatter 值一律过 `outline::yaml_scalar`,它是宿主 `yaml` 包引号决策的移植(含 plain 判据、多行分支、core schema 回环检查、单双引号选择),两侧由 `frontmatter-touch.json` 的 hostile-title 用例钉住。
 - 时间戳格式与 TS `new Date(ms).toISOString()` 一致:UTC、毫秒、`Z` 结尾。
 - 用户可见文案四语言齐全:`en` / `zh` / `ja` / `de`,由 `strings.test.ts` 断言。
 - 不做 UI 自动化;GUI 由用户实机验证。
