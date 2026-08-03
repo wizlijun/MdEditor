@@ -169,10 +169,16 @@
           isUntitled: true,
           content: '',
         }
+    const cliArgs: Record<string, string> = payload.file ? { file: payload.file } : {}
     const invokeOpts = {
       htmlBaker: renderedHtml != null ? async () => renderedHtml! : undefined,
       settingsReader: () => pluginSettings,
       outputPath,
+      // Every plugin's `cli_str`/`cli_flag` helper probes context.cli.args /
+      // context.cli.flags first — without forwarding the parsed payload here,
+      // those probes always miss and every `--flag` the user typed is
+      // silently ignored (see host.ts's `BuildContextOpts.cli` doc comment).
+      cli: { args: cliArgs, flags: payload.flags },
     }
 
     // The command executes on the plugin's resident runtime via

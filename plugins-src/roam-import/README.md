@@ -37,8 +37,15 @@ existing `.note.md`, block by block, identified by Roam's own block uid
   and position — Roam wins any conflict on a block it still owns.
 - **Your handwritten blocks are preserved.** Anything you wrote directly in
   the `.note.md` file (no `id::`, or an `id::` Roam no longer reports) is
-  never touched or reordered away — it keeps its place relative to the Roam
-  blocks around it.
+  never touched or deleted. Its *position* within its level follows one
+  rule: it's placed right after the nearest sibling before it that's already
+  been placed in the merged output; if there is no such preceding sibling,
+  it goes to the head of its level. One corollary worth knowing: a note you
+  left at the *end* of a level can move to the *top* on the next sync if
+  every one of that level's Roam siblings turns out to be new (nothing
+  before your note anchors it anymore) — your words are never lost, but
+  their exact position within the level is not guaranteed to be stable
+  across syncs the way Roam's own blocks' positions are.
 - **Blocks Roam has since deleted are kept, not deleted.** A block that was
   synced from Roam on an earlier run but no longer exists in Roam's current
   page is left in the file rather than removed — deleting the user's copy of

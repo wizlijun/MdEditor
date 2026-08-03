@@ -28,6 +28,17 @@ export interface BuildContextOpts {
    * so the plugin can use it without the host needing per-plugin code.
    */
   outputPath?: string
+  /**
+   * CLI invocation only: the subcommand's positional file (if any) and its
+   * parsed `--flag` values, forwarded verbatim into `context.cli`. This is
+   * the ONLY thing standing between a plugin's `cli_str`/`cli_flag` helper
+   * (which probes `/cli/args/<name>`, `/cli/flags/<name>`, `/cli/<name>`,
+   * `/<name>` — see e.g. `ebook-import`'s or `roam-import`'s `plugin.rs`)
+   * and every `--flag` a CLI user typed: without this, those probes always
+   * miss and the plugin silently falls back to its own defaults no matter
+   * what was passed on the command line.
+   */
+  cli?: { args?: Record<string, string>; flags?: Record<string, string | boolean> }
 }
 
 export async function buildContext(
@@ -55,6 +66,9 @@ export async function buildContext(
   }
   if (opts.outputPath != null) {
     ctx.output_path = opts.outputPath
+  }
+  if (opts.cli != null) {
+    ctx.cli = opts.cli
   }
   let settings: PluginRequest['settings'] | undefined
   if (manifest.host_capabilities.includes('settings.read') && opts.settingsReader) {

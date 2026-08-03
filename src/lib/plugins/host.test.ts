@@ -43,4 +43,36 @@ describe('buildContext', () => {
       { htmlBaker: async () => '<x/>', settingsReader: () => ({ 'share.baseUrl': 'https://x' }) })
     expect(r.settings).toEqual({ 'share.baseUrl': 'https://x' })
   })
+
+  // A plugin's `cli_str`/`cli_flag` helper (e.g. ebook-import's or
+  // roam-import's `plugin.rs`) probes `context.cli.args`/`context.cli.flags`
+  // first. If `buildContext` doesn't forward what the CLI runner parsed,
+  // every `--flag` a CLI user typed is silently dropped on the floor and the
+  // plugin falls back to its own defaults with no error — this is exactly
+  // the bug Task 10's live E2E run failed to catch (it only exercised the
+  // default date).
+  it('omits context.cli when the caller passes no cli opt (GUI-triggered commands)', async () => {
+    const tab = { path: '/p/foo.md', filename: 'foo.md', extension: 'md', kind: 'markdown' as const, title: 'foo', isDirty: false, isUntitled: false, content: '' }
+    const m = { ...baseManifest, host_capabilities: [] as never[] }
+    const r = await buildContext(m, tab, {})
+    expect(r.context.cli).toBeUndefined()
+  })
+
+  it('forwards cli.args and cli.flags verbatim when the caller passes them', async () => {
+    const tab = { path: '', filename: null, extension: null, kind: 'markdown' as const, title: '', isDirty: false, isUntitled: true, content: '' }
+    const m = { ...baseManifest, host_capabilities: [] as never[] }
+    const r = await buildContext(m, tab, {
+      cli: { args: {}, flags: { date: '2026-08-02', graph: 'bruce' } },
+    })
+    expect(r.context.cli).toEqual({ args: {}, flags: { date: '2026-08-02', graph: 'bruce' } })
+  })
+
+  it('forwards the positional file under cli.args.file', async () => {
+    const tab = { path: '/p/book.epub', filename: 'book.epub', extension: 'epub', kind: 'markdown' as const, title: 'book', isDirty: false, isUntitled: false, content: '' }
+    const m = { ...baseManifest, host_capabilities: [] as never[] }
+    const r = await buildContext(m, tab, {
+      cli: { args: { file: '/p/book.epub' }, flags: { ocr: true } },
+    })
+    expect(r.context.cli).toEqual({ args: { file: '/p/book.epub' }, flags: { ocr: true } })
+  })
 })
