@@ -12,5 +12,6 @@ pub mod outline;
 mod procutil;
 pub mod roam_cli;
 pub mod roam_page;
+pub mod route;
 pub mod sync;
 pub mod syntax;
