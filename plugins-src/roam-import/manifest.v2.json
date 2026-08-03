@@ -2,8 +2,12 @@
   "manifest_version": 2,
   "id": "notemd.roam-import",
   "name": "Roam Research Import",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "kind": "native",
+  "binary": {
+    "aarch64-apple-darwin": "bin/notemd-roam-import",
+    "x86_64-apple-darwin": "bin/notemd-roam-import"
+  },
   "engines": {
     "notemd": ">=6.716.7"
   },
@@ -41,7 +45,8 @@
     "vault.write",
     "fs.read:dialog",
     "clipboard.write",
-    "toast"
+    "toast",
+    "ui"
   ],
   "i18n": {
     "zh": {

@@ -9,8 +9,11 @@
 # md2pdf      → builds the CURRENT-arch native binary (fast dev loop; use
 #               scripts/build-md2pdf-v2.sh for dual-arch release binaries) and
 #               installs bin/ + manifest.
-# roam-import → builds the standalone Vite UI bundle (plugins-src/roam-import →
-#               dist/) and installs it as ui/ + manifest (no binary: pure UI).
+# roam-import → builds the CURRENT-arch native backend crate
+#               (plugins-src/roam-import/backend → notemd-roam-import; roam CLI
+#               discovery/probe) AND the standalone Vite UI bundle
+#               (plugins-src/roam-import → dist/), then installs bin/ + ui/ +
+#               manifest.
 # openclaw    → builds BOTH the CURRENT-arch native backend crate
 #               (plugins-src/openclaw/backend → notemd-openclaw) AND the
 #               standalone Vite UI bundle (plugins-src/openclaw → dist/), then
@@ -67,18 +70,18 @@ if [[ "$PLUGIN" == "md2pdf" ]]; then
 
 elif [[ "$PLUGIN" == "roam-import" ]]; then
   SRC="plugins-src/roam-import"
-  # Build the standalone UI bundle (dist/). pnpm --filter targets the workspace
-  # member by its package.json name.
+  cargo build $([ "$PROFILE" = release ] && echo --release) \
+    --manifest-path "$SRC/backend/Cargo.toml" --bin notemd-roam-import
   pnpm --filter roam-import-plugin build
   VERSION=$(node -e "console.log(require('./$SRC/manifest.v2.json').version)")
   DEST="$ROOT/notemd.roam-import/$VERSION"
-  rm -rf "$DEST"
-  mkdir -p "$DEST/ui"
+  rm -rf "$DEST"; mkdir -p "$DEST/bin" "$DEST/ui"
+  cp "$SRC/backend/target/$PROFILE/notemd-roam-import" "$DEST/bin/"
   cp -R "$SRC/dist/." "$DEST/ui/"
   cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
   ln -sfn "$VERSION" "$ROOT/notemd.roam-import/current"
   mark_installed "notemd.roam-import" "$VERSION"
-  echo "✓ installed notemd.roam-import@$VERSION (ui-only) → $DEST"
+  echo "✓ installed notemd.roam-import@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
 
 elif [[ "$PLUGIN" == "cef" ]]; then
   SRC="plugins-src/custom-editor-fixture"
