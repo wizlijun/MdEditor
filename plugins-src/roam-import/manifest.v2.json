@@ -15,7 +15,8 @@
   "ui": "ui/",
   "activation": {
     "events": [
-      "onCommand:open"
+      "onCommand:open",
+      "onCli:roam-day"
     ]
   },
   "contributes": {
@@ -36,6 +37,19 @@
         "min_width": 520,
         "min_height": 420,
         "open_command": "open"
+      }
+    ],
+    "cli": [
+      {
+        "subcommand": "roam-day",
+        "command": "sync-day",
+        "summary": "Sync one day's Roam daily note into the vault",
+        "args": [],
+        "flags": [
+          { "long": "--date", "type": "string", "help": "yyyy-MM-dd, today or yesterday (default: yesterday)" },
+          { "long": "--graph", "type": "string", "help": "Roam graph name (default: the CLI's own default)" }
+        ],
+        "requires_tab_context": false
       }
     ]
   },

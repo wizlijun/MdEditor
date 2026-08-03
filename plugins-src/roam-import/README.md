@@ -1,0 +1,91 @@
+# Roam Research Import
+
+Bring [Roam Research](https://roamresearch.com) content into a note.md vault as
+plain `.note.md` outline pages. There are two independent paths:
+
+1. **Whole-graph JSON import** — parse a Roam JSON export and write every page
+   as a `.note.md` file (wiki pages + daily notes), with a manifest that
+   tracks what has already been imported so re-running the import is safe.
+2. **CLI daily sync** — pull *one day* of Roam's own daily-note page straight
+   from a running Roam Research desktop app (via the
+   [`@roam-research/roam-cli`](https://github.com/Roam-Research/roam-tools)
+   tool) and merge it into that day's `.note.md`, either from the plugin
+   window or from a shell/cron via `notemd roam-day`.
+
+## Prerequisites for the CLI daily sync
+
+- Roam Research **desktop app running** with the graph open.
+- The `roam` CLI installed (`npm install -g @roam-research/roam-cli` or
+  equivalent) and **connected** once via `roam connect` — this pairs the CLI
+  with the running desktop app. The plugin window's "使用 Roam CLI 同步"
+  toggle shows the live probe result (`missing` / `not_connected` / `ready`,
+  with the CLI's version and the graphs it can see) so you can tell which
+  step is missing before syncing.
+- A vault configured in note.md (the CLI sync writes nothing without one).
+
+The whole-graph JSON import has no such prerequisite — it only reads a file
+you already exported from Roam (Roam → graph menu → Export All → JSON).
+
+## Merge semantics (CLI daily sync)
+
+Every sync of a given day re-merges Roam's current daily page into that day's
+existing `.note.md`, block by block, identified by Roam's own block uid
+(`id::`). Three rules, in one sentence each:
+
+- **Roam is authoritative for its own blocks.** If a block's `id::` still
+  exists in Roam, the file's copy is refreshed to match Roam's current text
+  and position — Roam wins any conflict on a block it still owns.
+- **Your handwritten blocks are preserved.** Anything you wrote directly in
+  the `.note.md` file (no `id::`, or an `id::` Roam no longer reports) is
+  never touched or reordered away — it keeps its place relative to the Roam
+  blocks around it.
+- **Blocks Roam has since deleted are kept, not deleted.** A block that was
+  synced from Roam on an earlier run but no longer exists in Roam's current
+  page is left in the file rather than removed — deleting the user's copy of
+  something is not this plugin's call to make.
+
+Re-running a sync for the same day with nothing changed on either side is a
+no-op: the file comes out byte-identical.
+
+A day Roam has no page for is not written at all — no empty file is created
+just because you asked to sync it.
+
+## Known trade-off: `#.rm-hide`
+
+Roam's own UI hides blocks tagged `#.rm-hide` from view, but the CLI's
+datalog pull has no way to distinguish "hidden" from "visible" — a
+`#.rm-hide`-tagged block is fetched, converted and merged in like any other.
+If you rely on `#.rm-hide` to keep scratch/meta blocks out of your Roam UI,
+be aware they will still show up in the synced `.note.md`.
+
+## CLI usage
+
+```
+notemd roam-day [--date yyyy-MM-dd|today|yesterday] [--graph GRAPH] [--json]
+```
+
+- `--date` — which day to sync. Accepts a literal `yyyy-MM-dd`, or the words
+  `today`/`yesterday` (evaluated against the machine's local calendar, since
+  a daily note is a human's day, not UTC's). Defaults to **yesterday**.
+- `--graph` — which Roam graph to read from, if the `roam` CLI is connected
+  to more than one. Defaults to the `roam` CLI's own default graph.
+- `--json` — emit the result as a single JSON envelope instead of plain text
+  (see below).
+
+The command writes (or updates) `<daily_dir>/<yyyy>/<date>.note.md` in the
+configured vault and exits 0 on success. With `--json`, stdout is:
+
+```json
+{"ok":true,"data":{"date":"2026-08-02","path":"dailynote/2026/2026-08-02.note.md","created":1,"updated":0,"kept_local":1,"roam_gone_kept":0,"found":true}}
+```
+
+`found: false` means Roam has no daily page for that date — the file is left
+exactly as it was (or, on a first sync, never created). A failure (no vault
+configured, the `roam` CLI not found/not connected, an invalid `--date`)
+exits **4** and, with `--json`, prints
+`{"ok":false,"error":{"code":"plugin_failed","message":"…"}}`; without
+`--json` the message goes to stderr instead.
+
+This is the same `sync::sync_requested_day` orchestration the plugin window's
+"同步当日" button drives — there is exactly one implementation of "sync one
+day," reached from either caller.
