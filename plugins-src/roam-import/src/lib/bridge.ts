@@ -121,3 +121,45 @@ export async function toast(
     /* toast is best-effort */
   }
 }
+
+/** Call this plugin's OWN backend (`on_ui_request`). The host strips the
+ *  `plugin.` prefix before forwarding (ui_rpc.rs:258). */
+export function pluginRequest(method: string, params?: unknown): Promise<any> {
+  return bridge().request(`plugin.${method}`, params)
+}
+
+/** `plugin.probe`'s three-state read on the local `roam` CLI. */
+export type ProbeState = 'missing' | 'not_connected' | 'ready'
+export interface RoamProbe {
+  state: ProbeState
+  found: string | null
+  version: string | null
+  graphs: string[]
+}
+
+/** `plugin.sync_day`'s result. `found: false` means Roam had no daily page
+ *  for `date` and nothing was written — distinct from a zero-block sync. */
+export interface SyncOutcome {
+  date: string
+  path: string
+  found: boolean
+  created: number
+  updated: number
+  kept_local: number
+  roam_gone_kept: number
+}
+
+/** `plugin.probe` — three-state read of the local `roam` CLI: not installed,
+ *  installed but no graph connected yet, or ready with a version + graphs. */
+export function probe(roamPath?: string): Promise<RoamProbe> {
+  return pluginRequest('probe', roamPath ? { roam_path: roamPath } : {})
+}
+
+/** `plugin.sync_day` — sync one day's Roam daily note into the vault. */
+export function syncDay(date: string, opts?: { graph?: string; roamPath?: string }): Promise<SyncOutcome> {
+  return pluginRequest('sync_day', {
+    date,
+    ...(opts?.graph ? { graph: opts.graph } : {}),
+    ...(opts?.roamPath ? { roam_path: opts.roamPath } : {}),
+  })
+}

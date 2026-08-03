@@ -29,6 +29,21 @@ export type MessageKey =
   | 'overwriteSelected'
   | 'errParse'
   | 'errWrite'
+  | 'cli.toggle'
+  | 'cli.link'
+  | 'cli.state.missing'
+  | 'cli.state.notConnected'
+  | 'cli.state.ready'
+  | 'cli.probeFailed'
+  | 'cli.install'
+  | 'cli.connect'
+  | 'cli.date'
+  | 'cli.sync'
+  | 'cli.syncing'
+  | 'cli.result'
+  | 'cli.resultGoneKept'
+  | 'cli.noPage'
+  | 'cli.failed'
 
 type Catalog = Record<MessageKey, string>
 
@@ -52,6 +67,21 @@ const en: Catalog = {
   overwriteSelected: 'Overwrite selected',
   errParse: 'Export not readable: {error}',
   errWrite: 'Write failed for {page}: {error}',
+  'cli.toggle': 'Sync via Roam CLI',
+  'cli.link': 'roam-tools',
+  'cli.state.missing': 'roam command not found',
+  'cli.state.notConnected': 'roam {version} is installed, but no graph is connected yet',
+  'cli.state.ready': 'roam {version} · graph {graph}',
+  'cli.probeFailed': 'Could not check the roam CLI: {error}',
+  'cli.install': 'Install: npm i -g @roam-research/roam-cli',
+  'cli.connect': 'Connect: run roam connect in a terminal',
+  'cli.date': 'Date',
+  'cli.sync': 'Sync this day',
+  'cli.syncing': 'Syncing…',
+  'cli.result': 'Added {created} blocks · updated {updated} blocks · kept {kept} local blocks unchanged',
+  'cli.resultGoneKept': 'Also kept {count} block(s) no longer in Roam',
+  'cli.noPage': 'Roam has no daily page for {date} — nothing was written',
+  'cli.failed': 'Sync failed: {error}',
 }
 
 const zh: Catalog = {
@@ -74,6 +104,21 @@ const zh: Catalog = {
   overwriteSelected: '覆盖所选',
   errParse: '导出文件不可读：{error}',
   errWrite: '写入 {page} 失败：{error}',
+  'cli.toggle': '使用 Roam CLI 同步',
+  'cli.link': 'roam-tools',
+  'cli.state.missing': '未检测到 roam 命令',
+  'cli.state.notConnected': '已安装 roam {version}，但尚未连接图谱',
+  'cli.state.ready': 'roam {version} · 图谱 {graph}',
+  'cli.probeFailed': '无法检测 roam CLI：{error}',
+  'cli.install': '安装：npm i -g @roam-research/roam-cli',
+  'cli.connect': '连接：在终端运行 roam connect',
+  'cli.date': '日期',
+  'cli.sync': '同步当日',
+  'cli.syncing': '正在同步…',
+  'cli.result': '新增 {created} 块 · 更新 {updated} 块 · 保留本地 {kept} 块',
+  'cli.resultGoneKept': '另有 {count} 个 Roam 中已删除的块保留在本地',
+  'cli.noPage': 'Roam 里没有 {date} 的日记页，未写入任何文件',
+  'cli.failed': '同步失败：{error}',
 }
 
 const ja: Catalog = {
@@ -96,6 +141,21 @@ const ja: Catalog = {
   overwriteSelected: '選択を上書き',
   errParse: 'エクスポートを読み込めません：{error}',
   errWrite: '{page} の書き込みに失敗：{error}',
+  'cli.toggle': 'Roam CLI で同期',
+  'cli.link': 'roam-tools',
+  'cli.state.missing': 'roam コマンドが見つかりません',
+  'cli.state.notConnected': 'roam {version} はインストール済みですが、グラフが未接続です',
+  'cli.state.ready': 'roam {version} · グラフ {graph}',
+  'cli.probeFailed': 'roam CLI を確認できませんでした：{error}',
+  'cli.install': 'インストール：npm i -g @roam-research/roam-cli',
+  'cli.connect': '接続：ターミナルで roam connect を実行してください',
+  'cli.date': '日付',
+  'cli.sync': 'この日を同期',
+  'cli.syncing': '同期中…',
+  'cli.result': '{created} 件のブロックを追加 · {updated} 件を更新 · {kept} 件のローカルブロックを保持',
+  'cli.resultGoneKept': 'Roam から削除された {count} 件のブロックもローカルに保持しました',
+  'cli.noPage': 'Roam に {date} のデイリーページがなく、何も書き込まれませんでした',
+  'cli.failed': '同期に失敗しました：{error}',
 }
 
 const de: Catalog = {
@@ -118,6 +178,21 @@ const de: Catalog = {
   overwriteSelected: 'Ausgewählte überschreiben',
   errParse: 'Export nicht lesbar: {error}',
   errWrite: 'Schreiben fehlgeschlagen für {page}: {error}',
+  'cli.toggle': 'Über Roam-CLI synchronisieren',
+  'cli.link': 'roam-tools',
+  'cli.state.missing': 'roam-Befehl nicht gefunden',
+  'cli.state.notConnected': 'roam {version} ist installiert, aber es ist noch kein Graph verbunden',
+  'cli.state.ready': 'roam {version} · Graph {graph}',
+  'cli.probeFailed': 'roam-CLI konnte nicht geprüft werden: {error}',
+  'cli.install': 'Installieren: npm i -g @roam-research/roam-cli',
+  'cli.connect': 'Verbinden: roam connect im Terminal ausführen',
+  'cli.date': 'Datum',
+  'cli.sync': 'Diesen Tag synchronisieren',
+  'cli.syncing': 'Synchronisierung läuft…',
+  'cli.result': '{created} Blöcke hinzugefügt · {updated} aktualisiert · {kept} lokale Blöcke beibehalten',
+  'cli.resultGoneKept': 'Zusätzlich {count} nicht mehr in Roam vorhandene(n) Block/Blöcke lokal beibehalten',
+  'cli.noPage': 'Roam hat keine Tagesnotiz für {date} — es wurde nichts geschrieben',
+  'cli.failed': 'Synchronisierung fehlgeschlagen: {error}',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }

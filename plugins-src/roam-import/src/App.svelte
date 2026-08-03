@@ -7,6 +7,7 @@
   import { setLocale, t } from './lib/strings'
   import {
     clipboardWrite, dialogOpenJson, toast, vaultInfo, bridge,
+    probe, syncDay, type RoamProbe, type SyncOutcome,
   } from './lib/bridge'
   import { sha256Hex } from './lib/hash'
   import { parseRoamJson } from './lib/roam-import/parse'
@@ -38,6 +39,70 @@
   let wikiDir = 'wikipage'
   let dailyDir = 'dailynote'
 
+  // ── Roam CLI daily sync (separate flow from the JSON-export import above;
+  //    its state is kept apart on purpose, see Task 8 brief). useCli/cliDate
+  //    are UI preferences only — they live in localStorage, never the backend. ──
+  const CLI_TOGGLE_KEY = 'roam-import:cli:useCli'
+  const CLI_DATE_KEY = 'roam-import:cli:date'
+
+  /** YYYY-MM-DD for yesterday in the machine's local calendar (a daily note
+   *  is a human's day, not UTC's — mirrors the backend's own default day). */
+  function yesterdayLocal(): string {
+    const d = new Date()
+    d.setDate(d.getDate() - 1)
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+
+  function loadUseCli(): boolean {
+    try { return localStorage.getItem(CLI_TOGGLE_KEY) === '1' } catch { return false }
+  }
+  function loadCliDate(): string {
+    try { return localStorage.getItem(CLI_DATE_KEY) || yesterdayLocal() } catch { return yesterdayLocal() }
+  }
+
+  let useCli = $state(loadUseCli())
+  let cliDate = $state(loadCliDate())
+  let probeResult = $state<RoamProbe | null>(null)
+  let probeError = $state<string | null>(null)
+  let syncing = $state(false)
+  let syncResult = $state<SyncOutcome | null>(null)
+  let syncError = $state<string | null>(null)
+
+  $effect(() => {
+    try { localStorage.setItem(CLI_TOGGLE_KEY, useCli ? '1' : '0') } catch { /* best-effort */ }
+  })
+  $effect(() => {
+    try { localStorage.setItem(CLI_DATE_KEY, cliDate) } catch { /* best-effort */ }
+  })
+
+  async function refreshProbe() {
+    probeError = null
+    try {
+      probeResult = await probe()
+    } catch (e) {
+      console.error('[roam-import] probe failed:', e)
+      probeResult = null
+      probeError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function runSync() {
+    if (probeResult?.state !== 'ready' || syncing) return
+    syncing = true
+    syncError = null
+    syncResult = null
+    try {
+      syncResult = await syncDay(cliDate)
+    } catch (e) {
+      syncError = e instanceof Error ? e.message : String(e)
+    } finally {
+      syncing = false
+    }
+  }
+
   onMount(async () => {
     try {
       setLocale(bridge().locale)
@@ -49,6 +114,7 @@
       console.error('[roam-import] init failed:', e)
     }
     ready = true
+    void refreshProbe()
   })
 
   const busy = $derived(stage === 'parse' || stage === 'plan' || stage === 'write')
@@ -156,6 +222,63 @@
     {#if vaultRoot === null}
       <p class="msg">{t('noVault')}</p>
     {:else}
+      <section class="cli">
+        <div class="cli-head">
+          <label class="cli-toggle">
+            <input type="checkbox" bind:checked={useCli} />
+            {t('cli.toggle')}
+          </label>
+          <a class="link" href="https://github.com/Roam-Research/roam-tools" target="_blank" rel="noopener">
+            {t('cli.link')}
+          </a>
+        </div>
+
+        {#if useCli}
+          <div class="cli-body">
+            {#if probeError}
+              <p class="status err">✗ {t('cli.probeFailed', { error: probeError })}</p>
+            {:else if probeResult === null}
+              <p class="msg">…</p>
+            {:else if probeResult.state === 'missing'}
+              <p class="status err">✗ {t('cli.state.missing')}</p>
+              <p class="hint-line">{t('cli.install')}</p>
+            {:else if probeResult.state === 'not_connected'}
+              <p class="status warn">{t('cli.state.notConnected', { version: probeResult.version ?? '' })}</p>
+              <p class="hint-line">{t('cli.connect')}</p>
+            {:else}
+              <p class="status ok">
+                ✓ {t('cli.state.ready', { version: probeResult.version ?? '', graph: probeResult.graphs.join(', ') })}
+              </p>
+            {/if}
+
+            <div class="cli-row">
+              <label class="date-label">
+                {t('cli.date')}
+                <input type="date" bind:value={cliDate} />
+              </label>
+              <button class="sync" onclick={runSync} disabled={probeResult?.state !== 'ready' || syncing}>
+                {syncing ? t('cli.syncing') : t('cli.sync')}
+              </button>
+            </div>
+
+            {#if syncError}
+              <p class="banner error-banner">{t('cli.failed', { error: syncError })}</p>
+            {:else if syncResult}
+              {#if !syncResult.found}
+                <p class="banner">{t('cli.noPage', { date: syncResult.date })}</p>
+              {:else}
+                <p class="banner ok-banner">
+                  {t('cli.result', { created: syncResult.created, updated: syncResult.updated, kept: syncResult.kept_local })}
+                  {#if syncResult.roam_gone_kept > 0}
+                    {' '}{t('cli.resultGoneKept', { count: syncResult.roam_gone_kept })}
+                  {/if}
+                </p>
+              {/if}
+            {/if}
+          </div>
+        {/if}
+      </section>
+
       <section class="hint">
         <p class="hint-title">{t('hint.title')}</p>
         <ol>
@@ -235,6 +358,25 @@
   .hint-title { margin: 0 0 6px; font-weight: 600; }
   .hint ol { margin: 0; padding-left: 20px; }
   .hint li { margin: 2px 0; line-height: 1.45; }
+  .cli {
+    margin: 0 0 14px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+    font-size: 13px;
+  }
+  .cli-head { display: flex; align-items: center; gap: 10px; }
+  .cli-toggle { display: flex; align-items: center; gap: 6px; }
+  .link { color: color-mix(in srgb, CanvasText 60%, transparent); text-decoration: underline; font-size: 12px; }
+  .cli-body { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .status { margin: 0; }
+  .status.ok { color: #34c759; }
+  .status.warn { color: #ff9500; }
+  .status.err { color: #ff3b30; }
+  .hint-line { margin: 0; font-size: 12px; opacity: 0.75; }
+  .cli-row { display: flex; align-items: center; gap: 10px; }
+  .date-label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  button.sync { font-size: 13px; padding: 5px 12px; }
   .pick { font-size: 14px; padding: 6px 14px; }
   .progress { margin-top: 14px; font-size: 13px; }
   progress { width: 100%; }
