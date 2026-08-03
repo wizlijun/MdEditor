@@ -57,11 +57,18 @@ fn reserved_prop_pattern() -> &'static Regex {
 }
 
 /// The bullet shape `parse_outline` recognizes, anchored exactly as its own
-/// `bullet_pattern` is (`^((?:  )*)- `) — an even number of leading spaces,
-/// then `- `.
+/// `bullet_pattern` is (`^((?:  )*)-(?: (.*))?$`) — an even number of leading
+/// spaces, then `-`, then either a space or the end of the line.
+///
+/// The "end of the line" half is not optional here: an *empty* bullet is
+/// written `- `, and that trailing space does not survive editors, formatters
+/// or git hooks, so the parser accepts the bare `-` too. A Roam block holding
+/// an empty shift-enter line is therefore the same hazard `- milk` is, and has
+/// to be escaped the same way. (Only `-` exactly — `--`, `---` and `-dash` are
+/// not bullets to the parser and must stay untouched.)
 fn bullet_line_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^(?:  )*- ").unwrap())
+    RE.get_or_init(|| Regex::new(r"^(?:  )*-(?: |$)").unwrap())
 }
 
 pub fn convert_inline(s: &str) -> String {

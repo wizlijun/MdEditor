@@ -295,6 +295,21 @@ mod tests {
                    "outline\n   - nested\n     - deeper");
     }
 
+    /// C2b, the fourth structural shape. `parse_outline` now also reads a line
+    /// of nothing but indentation and `-` as a (empty) bullet — an empty block
+    /// is written `- `, and the trailing space does not survive contact with
+    /// editors/formatters/git hooks, so the parser accepts both spellings. That
+    /// makes a Roam block containing an empty shift-enter line the same hazard
+    /// `- milk` was: read back as a child, the block loses the `id::` that is
+    /// its identity and `merge` re-creates it on every sync, forever.
+    /// `block_content`'s doc comment says a new structural shape must be taught
+    /// here in the same commit; this is that.
+    #[test]
+    fn an_empty_bullet_shaped_continuation_line_stays_content() {
+        assert_eq!(survives_a_round_trip("shopping\n-\nmilk"), "shopping\n -\nmilk");
+        assert_eq!(survives_a_round_trip("outline\n  -\n    -"), "outline\n   -\n     -");
+    }
+
     /// C3: a fence the block opens and never closes put `parse_outline` into a
     /// raw mode that swallowed the following blocks whole.
     #[test]

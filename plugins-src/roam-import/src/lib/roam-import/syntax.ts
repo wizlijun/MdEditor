@@ -61,8 +61,14 @@ export function rewriteLinks(s: string, renames: Map<string, string>): string {
  *  少一个键就是一个转义漏洞——该续行会被当属性吃掉。 */
 const RESERVED_PROP_RE = /^(type|line|id|collapsed|created|updated|status|answered|by):: /
 
-/** parseOutline 认的 bullet 形状(`^((?:  )*)- `):偶数个前导空格 + `- `。 */
-const BULLET_LINE_RE = /^(?:  )*- /
+/** parseOutline 认的 bullet 形状(`^((?:  )*)-(?: (.*))?$`):偶数个前导空格 + `-`,
+ *  其后要么一个空格、要么行尾。
+ *
+ *  「行尾」这一半不是可选项:空块被写成 `- `,而行尾空格挡不住编辑器/格式化器/
+ *  git 钩子,所以解析端两种拼法都认。于是 Roam 块里一行 shift-enter 空行,
+ *  和 `- milk` 是同一个陷阱,必须同样转义。(只认恰好一个 `-`——`--`/`---`/`-dash`
+ *  在解析端本就不是 bullet,不能碰。) */
+const BULLET_LINE_RE = /^(?:  )*-(?: |$)/
 
 /** 围栏开启/闭合判定,与 parseOutline 的内联正则同源(bullet 首行 `^(`{3,})`
  *  开启 raw 模式,续行 `^(`{3,})\s*$` 且不短于开启长度才闭合)。Rust 侧把同一对
