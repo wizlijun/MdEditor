@@ -312,11 +312,15 @@
     }
   }
 
-  // 「AI 阅读中… 3m12s」的秒针。effect 只读 q(anyRunning),interval 写
-  // nowMs —— nowMs 不在 effect 依赖里,不会自失效死循环($effect 纪律)。
+  // 「AI 阅读中… 3m12s」的秒针。
+  // effect 的依赖必须是这个 boolean,不能是整个 q:并发导入时日志/进度事件
+  // 每 <1s 就刷新 q,effect 每次都会在 interval 触发前把它重建,秒数永远停在
+  // 0s。$derived 的值不变就不通知下游,所以 anyAiRunning 只在真正切换时重挂。
+  // interval 只写 nowMs,而 nowMs 不在依赖里 —— 不会自失效死循环($effect 纪律)。
   let nowMs = $state(Date.now())
+  const anyAiRunning = $derived(q.items.some((i) => i.aiStatus === 'running'))
   $effect(() => {
-    if (!q.items.some((i) => i.aiStatus === 'running')) return
+    if (!anyAiRunning) return
     const t = setInterval(() => {
       nowMs = Date.now()
     }, 1000)
