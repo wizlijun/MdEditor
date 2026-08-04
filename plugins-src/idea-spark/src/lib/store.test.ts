@@ -10,11 +10,14 @@ import { describe, it, expect } from 'vitest'
 import {
   applyRunDone,
   bodyOf,
+  changeIdeaDir,
   createStore,
   frontmatterOf,
   displayName,
+  ideaDocText,
   ideaTemplate,
   markPending,
+  nextFileName,
   relPath,
   setIdeaDir,
   statusOf,
@@ -107,6 +110,47 @@ describe('applyRunDone', () => {
     expect(s.failed).toEqual(['inbox/ideas/a.md'])
   })
 
+  it('folds the CONVENTIONAL proof path into the listing even when open_path differs', () => {
+    // `deriveStatus` and `openResult` both key off `<base>.proof.md`. If an
+    // off-convention `open_path` were the thing folded into `files`, this
+    // function would return 'done' while the row still rendered as a draft
+    // with no way to open the result.
+    const s = storeWithIdea()
+    markPending(s, 'inbox/ideas/a.md', 'run-1')
+
+    const status = applyRunDone(s, {
+      run_id: 'run-1',
+      status: 'success',
+      open_path: 'somewhere/else/report.md',
+    })
+
+    expect(status).toBe('done')
+    expect(s.files).toContain('inbox/ideas/a.proof.md')
+    expect(s.files).not.toContain('somewhere/else/report.md')
+    expect(statusOf(s, 'a.md')).toBe('done')
+    // The artifact the run actually produced is still remembered verbatim.
+    expect(s.lastResult).toBe('somewhere/else/report.md')
+  })
+
+  it('bumps celebrateSeq on every success so a second burst is not cut short', () => {
+    const s = storeWithIdea()
+    markPending(s, 'inbox/ideas/a.md', 'run-1')
+    applyRunDone(s, { run_id: 'run-1', status: 'success' })
+    const first = s.celebrateSeq
+
+    markPending(s, 'inbox/ideas/a.md', 'run-2')
+    applyRunDone(s, { run_id: 'run-2', status: 'success' })
+
+    expect(s.celebrateSeq).toBe(first + 1)
+  })
+
+  it('leaves celebrateSeq alone on failure', () => {
+    const s = storeWithIdea()
+    markPending(s, 'inbox/ideas/a.md', 'run-1')
+    applyRunDone(s, { run_id: 'run-1', status: 'error' })
+    expect(s.celebrateSeq).toBe(0)
+  })
+
   it('an unknown run_id is a no-op (a stale push from another window/session)', () => {
     const s = storeWithIdea()
     markPending(s, 'inbox/ideas/a.md', 'run-1')
@@ -183,6 +227,97 @@ describe('setIdeaDir', () => {
     const before = s.ideaDir
     expect(setIdeaDir(s, dir)).toBe(false)
     expect(s.ideaDir).toBe(before)
+  })
+})
+
+// The save path's naming/serialization decisions, extracted from `saveIdea` so
+// the promises the brief makes about them ("first save names the file, later
+// saves overwrite it", "re-saving preserves created and unknown keys") are
+// pinned by tests instead of only by the bridge-driven action around them.
+describe('nextFileName', () => {
+  it('names a first save from the title and the date, deduped against the directory', () => {
+    const s = createStore()
+    s.files = ['inbox/ideas/2026-08-04-my-idea.md']
+    expect(nextFileName(s, '# my idea\n\nbody', '2026-08-04')).toBe('2026-08-04-my-idea-2.md')
+  })
+
+  it('only dedupes against names it has actually seen (the disk check backstops it)', () => {
+    // The slug keeps the title's case, so a differently-cased retelling of the
+    // same title is a *different* string here — yet the same file on a
+    // case-insensitive filesystem. `saveIdea`'s `host.vault.exists` pass is
+    // what closes that gap; this pins the pure function's honest limit.
+    const s = createStore()
+    s.files = ['inbox/ideas/2026-08-04-my-idea.md']
+    expect(nextFileName(s, '# My Idea', '2026-08-04')).toBe('2026-08-04-My-Idea.md')
+  })
+
+  it('dedupes against non-idea files in the directory too', () => {
+    const s = createStore()
+    // An orphaned sidecar occupies the name just as much as an idea does.
+    s.files = ['inbox/ideas/2026-08-04-a.proof.md']
+    expect(nextFileName(s, '# a', '2026-08-04')).toBe('2026-08-04-a.md')
+    s.files = ['inbox/ideas/2026-08-04-a.md', 'inbox/ideas/2026-08-04-a.proof.md']
+    expect(nextFileName(s, '# a', '2026-08-04')).toBe('2026-08-04-a-2.md')
+  })
+
+  it('keeps the current file name once the idea has been saved, retitled or not', () => {
+    const s = createStore()
+    s.current = '2026-08-04-my-idea.md'
+    expect(nextFileName(s, '# A completely different title', '2026-08-05')).toBe(
+      '2026-08-04-my-idea.md',
+    )
+  })
+})
+
+describe('ideaDocText', () => {
+  it('stamps fresh OKF frontmatter for an idea that has never been saved', () => {
+    const s = createStore()
+    const out = ideaDocText(s, '# Title', '2026-08-04T10:00:00Z')
+    expect(out).toContain('type: Idea')
+    expect(out).toContain('created: 2026-08-04T10:00:00Z')
+    expect(out.endsWith('# Title')).toBe(true)
+  })
+
+  it('preserves created and unknown keys when re-saving a loaded idea', () => {
+    const s = createStore()
+    s.currentFrontmatter = 'type: Idea\ncreated: 2026-01-01T00:00:00Z\nstatus: draft'
+    const out = ideaDocText(s, '# Retitled', '2026-08-04T10:00:00Z')
+    expect(out).toContain('created: 2026-01-01T00:00:00Z')
+    expect(out).toContain('status: draft')
+    expect(out).not.toContain('2026-08-04T10:00:00Z')
+    expect(out.endsWith('# Retitled')).toBe(true)
+  })
+})
+
+describe('changeIdeaDir', () => {
+  function saved(): SparkStore {
+    const s = createStore()
+    s.current = '2026-08-04-a.md'
+    s.currentFrontmatter = 'type: Idea'
+    return s
+  }
+
+  it('detaches the open document when the directory actually changes', () => {
+    const s = saved()
+    expect(changeIdeaDir(s, 'notes/sparks')).toBe(true)
+    expect(s.ideaDir).toBe('notes/sparks')
+    expect(s.current).toBeNull()
+    expect(s.currentFrontmatter).toBeNull()
+  })
+
+  it('keeps the open document when the directory only re-normalizes to the same value', () => {
+    const s = saved()
+    expect(changeIdeaDir(s, ' inbox/ideas/ ')).toBe(true)
+    expect(s.current).toBe('2026-08-04-a.md')
+    expect(s.currentFrontmatter).toBe('type: Idea')
+  })
+
+  it('changes nothing at all when the directory is rejected', () => {
+    const s = saved()
+    expect(changeIdeaDir(s, '../escape')).toBe(false)
+    expect(s.ideaDir).toBe('inbox/ideas')
+    expect(s.current).toBe('2026-08-04-a.md')
+    expect(s.currentFrontmatter).toBe('type: Idea')
   })
 })
 

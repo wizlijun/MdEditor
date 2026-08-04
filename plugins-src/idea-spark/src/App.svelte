@@ -56,17 +56,45 @@
     store.dirty = md !== store.savedMarkdown
   }
 
+  /**
+   * The save button's disabled condition, as a guard. `booting` matters as much
+   * as `busy`: `boot()` sets `vaultRoot` before it reads the state file and
+   * lists the directory, so a Cmd+S landing in that window would save an empty
+   * document (the kit isn't mounted, `markdown()` returns ''), pin `current` to
+   * that empty file for the rest of the session, and do it against a listing
+   * that hasn't loaded yet.
+   */
+  function cannotSave(): boolean {
+    return store.busy || store.booting || store.needVault
+  }
+
   async function save(): Promise<void> {
-    if (store.busy || store.needVault) return
+    if (cannotSave()) return
     await saveIdea(markdown())
   }
 
+  /**
+   * Swapping the editor's content destroys whatever is in it, and a draft that
+   * has never been saved has no undo path — the history list is a 240px rail
+   * right next to the editor, so a mis-click must not cost the user their text.
+   * Unsaved changes are therefore written to disk first (the user sees the
+   * `saved` toast), and a failed save aborts the switch rather than proceeding
+   * to overwrite the buffer. An untouched document isn't dirty, so merely
+   * browsing the history never creates files.
+   */
+  async function keepUnsaved(): Promise<boolean> {
+    if (!store.dirty || cannotSave()) return !store.dirty
+    return (await saveIdea(markdown())) !== null
+  }
+
   async function pick(name: string): Promise<void> {
+    if (!(await keepUnsaved())) return
     const body = await loadIdea(name)
     if (body !== null) showMarkdown(body)
   }
 
-  function startNew(): void {
+  async function startNew(): Promise<void> {
+    if (!(await keepUnsaved())) return
     showMarkdown(newIdea())
     kit?.focus()
   }
@@ -216,7 +244,9 @@
             aria-describedby="delegate-hint">{t('delegate')}</button
           >
           <span id="delegate-hint" class="sr-only">{t('delegateDeferred')}</span>
-          <button type="button" class="primary" disabled={store.busy || store.booting} onclick={save}>
+          <!-- Same predicate as the Cmd/Ctrl+S path, so the shortcut can never
+               do something the disabled button wouldn't. -->
+          <button type="button" class="primary" disabled={cannotSave()} onclick={save}>
             {t('save')}
           </button>
         </div>

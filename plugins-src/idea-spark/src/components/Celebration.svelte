@@ -8,8 +8,15 @@
      the effect's tracking context — a synchronous read-then-write of the same
      `$state` inside an effect self-invalidates into a loop that freezes the
      whole window (MEMORY feedback_svelte_effect_untrack). `untrack` wraps the
-     call anyway as documentation of that intent. The effect's teardown clears
-     a pending timer, so a second run can't be cut short by the first's timer. -->
+     call anyway as documentation of that intent.
+
+     The effect tracks `celebrateSeq`, not just the boolean: raising a flag
+     that is already `true` is not a state change, so a second run finishing
+     inside the first burst's two seconds would not re-run this effect — the
+     first timer would survive and cut the second burst short. Reading the
+     counter makes every raise a change, and the teardown clears the stale
+     timer before the new one starts. -->
+
 <script lang="ts">
   import { untrack } from 'svelte'
   import { clearCelebrate, state as store } from '../lib/store.svelte'
@@ -25,8 +32,12 @@
   }))
 
   $effect(() => {
+    // Read (and carry) the sequence on purpose — see the header note. It is
+    // also handed back to `clearCelebrate` so a timer that somehow outlives its
+    // burst can't clear the next one.
+    const seq = store.celebrateSeq
     if (!store.celebrate) return
-    const id = setTimeout(() => untrack(() => clearCelebrate()), DURATION_MS)
+    const id = setTimeout(() => untrack(() => clearCelebrate(seq)), DURATION_MS)
     return () => clearTimeout(id)
   })
 </script>
@@ -34,7 +45,10 @@
 {#if store.celebrate}
   <div class="celebration" aria-live="polite">
     <div class="confetti" aria-hidden="true">
-      {#each PIECES as p, i (i)}
+      <!-- Keyed by the burst too: a run that finishes inside the previous
+           burst's two seconds re-creates the elements, which is what makes the
+           CSS animation play again instead of staying at its finished state. -->
+      {#each PIECES as p, i (`${store.celebrateSeq}-${i}`)}
         <span
           class="piece"
           style="left:{p.left}%; animation-delay:{p.delay}ms; background:hsl({p.hue} 80% 60%)"

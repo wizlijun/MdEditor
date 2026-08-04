@@ -42,24 +42,33 @@ export function slugFromMarkdown(md: string): string {
 }
 
 /**
- * Skips a leading YAML frontmatter block (`---` fence, content, `---`
- * fence). Exported because the App needs the exact same "where does the body
- * start" rule when it loads a saved idea back into the editor (store.svelte.ts
- * `bodyOf`) — two implementations of this would be two chances to disagree
- * about what counts as frontmatter. Only a fence at the very first line counts — a `---` line further
- * down the document is a thematic break / mid-document separator, not
- * frontmatter, and must not be touched. If the document opens with `---`
- * but the fence is never closed, the whole document is returned unchanged
- * (don't guess where the "body" starts; fall back to scanning from the top,
- * same as before this function existed).
+ * Splits a document into `[frontmatter, body]` — the ONE place that decides
+ * what counts as a leading YAML frontmatter block. Everything that needs
+ * either half goes through here (`stripLeadingFrontmatter` for the body,
+ * store.svelte.ts `frontmatterOf` for the block), because two scanners are two
+ * chances to disagree about where the body starts.
+ *
+ * Only a fence on the very first line counts — a `---` line further down the
+ * document is a thematic break / mid-document separator, not frontmatter, and
+ * must not be touched. A document that opens with `---` but never closes the
+ * fence is reported as having no frontmatter at all (`[null, md]`): don't guess
+ * where the body starts.
+ *
+ * The returned frontmatter excludes both fences and is normalized to `\n` line
+ * endings, so a CRLF file round-trips without dragging carriage returns along.
  */
-export function stripLeadingFrontmatter(md: string): string {
+export function splitFrontmatter(md: string): [string | null, string] {
   const lines = md.split(/\r?\n/)
-  if (lines[0]?.trim() !== '---') return md
+  if (lines[0]?.trim() !== '---') return [null, md]
   for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === '---') return lines.slice(i + 1).join('\n')
+    if (lines[i].trim() === '---') return [lines.slice(1, i).join('\n'), lines.slice(i + 1).join('\n')]
   }
-  return md
+  return [null, md]
+}
+
+/** The body half of {@link splitFrontmatter} — the document minus its frontmatter. */
+export function stripLeadingFrontmatter(md: string): string {
+  return splitFrontmatter(md)[1]
 }
 
 function firstNonEmptyLine(md: string): string | null {

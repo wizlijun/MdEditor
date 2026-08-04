@@ -47,6 +47,7 @@ export const MESSAGE_KEYS = [
   'modeSource',
   'editorUnavailable',
   'unsavedWarning',
+  'historyUnavailable',
 ] as const
 
 export type MessageKey = (typeof MESSAGE_KEYS)[number]
@@ -90,6 +91,7 @@ const en: Catalog = {
   modeSource: 'Markdown source',
   editorUnavailable: 'The rich editor could not be loaded — falling back to plain text.',
   unsavedWarning: 'This idea has unsaved changes.',
+  historyUnavailable: 'The idea folder could not be read — the history may be incomplete.',
 }
 
 const zh: Catalog = {
@@ -127,6 +129,7 @@ const zh: Catalog = {
   modeSource: 'Markdown 源码',
   editorUnavailable: '富文本编辑器加载失败 —— 已退回纯文本编辑。',
   unsavedWarning: '这个想法还有未保存的修改。',
+  historyUnavailable: '读取想法目录失败 —— 历史列表可能不完整。',
 }
 
 const ja: Catalog = {
@@ -164,6 +167,7 @@ const ja: Catalog = {
   modeSource: 'Markdown ソース',
   editorUnavailable: 'リッチエディタを読み込めませんでした —— プレーンテキストに切り替えます。',
   unsavedWarning: 'このアイデアには未保存の変更があります。',
+  historyUnavailable: 'アイデアフォルダを読み取れませんでした —— 履歴が不完全な可能性があります。',
 }
 
 const de: Catalog = {
@@ -201,6 +205,7 @@ const de: Catalog = {
   modeSource: 'Markdown-Quelltext',
   editorUnavailable: 'Der Rich-Text-Editor konnte nicht geladen werden — Rückfall auf reinen Text.',
   unsavedWarning: 'Diese Idee hat ungespeicherte Änderungen.',
+  historyUnavailable: 'Der Ideenordner konnte nicht gelesen werden — der Verlauf ist womöglich unvollständig.',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }

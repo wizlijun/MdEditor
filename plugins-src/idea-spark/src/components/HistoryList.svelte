@@ -20,6 +20,11 @@
 
 <aside class="history">
   <h2>{t('history')}</h2>
+  {#if store.listFailed}
+    <!-- An empty list here would otherwise read as "you have no ideas yet",
+         which is a lie when the directory simply couldn't be read. -->
+    <p class="unavailable">{t('historyUnavailable')}</p>
+  {/if}
   <ul>
     {#each store.docs as name (name)}
       {@const status = statusOf(store, name)}
@@ -53,6 +58,14 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     opacity: 0.6;
+  }
+  .unavailable {
+    margin: 0 0 0.5rem;
+    padding: 0.35rem 0.45rem;
+    border-radius: 6px;
+    background: color-mix(in srgb, #dc2626 12%, transparent);
+    font-size: 0.75rem;
+    line-height: 1.4;
   }
   ul { list-style: none; margin: 0; padding: 0; }
   li {

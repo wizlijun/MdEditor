@@ -14,9 +14,9 @@
 // drives the whole lifecycle from `onMount` and from event handlers, because a
 // `$effect` that synchronously calls a function which reads *and* writes
 // `$state` self-invalidates into a loop that freezes the window (v4.2.4).
-import { bridge, vaultInfo, vaultList, vaultRead, vaultWrite } from './bridge'
+import { bridge, vaultExists, vaultInfo, vaultList, vaultRead, vaultWrite } from './bridge'
 import { buildIdeaDoc, rebuildIdeaDoc } from './idea-doc'
-import { ideaFileName, proofPathFor, stripLeadingFrontmatter } from './naming'
+import { ideaFileName, proofPathFor, splitFrontmatter } from './naming'
 import { DEFAULT_STATE, parseState, serializeState, STATE_PATH } from './state-io'
 import { deriveStatus, listIdeas, type IdeaStatus } from './status'
 import { t } from './strings'
@@ -30,6 +30,10 @@ export interface SparkStore {
   booting: boolean
   /** Set when the Editor Kit failed to load; the UI falls back to a textarea. */
   kitFailed: boolean
+  /** Set when the last directory listing failed outright (as opposed to being
+   *  empty). An empty history list then means "couldn't read", not "no ideas",
+   *  and the save path stops trusting `files` for collision detection. */
+  listFailed: boolean
 
   /** Vault-relative directory ideas live in. */
   ideaDir: string
@@ -59,6 +63,11 @@ export interface SparkStore {
   busy: boolean
   /** Raised by a successful run; `<Celebration/>` consumes and clears it. */
   celebrate: boolean
+  /** Bumped with every raise. `celebrate` alone can't distinguish "still the
+   *  first burst" from "a second run just finished", so the animation timer
+   *  would never restart — and the first burst's timer would cut the second
+   *  one short. */
+  celebrateSeq: number
   /** Proof document of the most recent successful run. Written by
    *  `applyRunDone`; the celebration's "open result" affordance that reads it
    *  lands with the delegation chain (Task 13) — until then the history list's
@@ -81,6 +90,7 @@ export function createStore(): SparkStore {
     needVault: false,
     booting: true,
     kitFailed: false,
+    listFailed: false,
     ideaDir: DEFAULT_STATE.ideaDir,
     files: [],
     docs: [],
@@ -92,6 +102,7 @@ export function createStore(): SparkStore {
     dirty: false,
     busy: false,
     celebrate: false,
+    celebrateSeq: 0,
     lastResult: null,
   }
 }
@@ -127,6 +138,13 @@ export function markPending(s: SparkStore, ideaRel: string, runId: string): void
  * Returns the resulting status, or `null` when no pending run matches
  * `run_id` — a stale push from another session must not celebrate, fail, or
  * mutate anything.
+ *
+ * What goes into `files` is always the CONVENTIONAL proof path
+ * (`proofPathFor(idea)`), never `ev.open_path` verbatim: `deriveStatus` and
+ * `openResult` both key off that convention, so folding in an off-convention
+ * path would return 'done' while the row still rendered as a draft with no way
+ * to open anything. `open_path` is kept — verbatim — in `lastResult`, which is
+ * the field that means "the artifact this run actually produced".
  */
 export function applyRunDone(s: SparkStore, ev: RunDone): IdeaStatus | null {
   const ideaRel = Object.keys(s.pending).find((k) => s.pending[k] === ev.run_id)
@@ -140,11 +158,12 @@ export function applyRunDone(s: SparkStore, ev: RunDone): IdeaStatus | null {
     return 'failed'
   }
 
-  const proof = ev.open_path ?? proofPathFor(ideaRel)
+  const proof = proofPathFor(ideaRel)
   if (!s.files.includes(proof)) s.files = [...s.files, proof]
   s.failed = s.failed.filter((f) => f !== ideaRel)
-  s.lastResult = proof
+  s.lastResult = ev.open_path ?? proof
   s.celebrate = true
+  s.celebrateSeq += 1
   return 'done'
 }
 
@@ -173,6 +192,59 @@ export function setIdeaDir(s: SparkStore, dir: string): boolean {
   return true
 }
 
+/**
+ * `setIdeaDir` plus the bookkeeping a *real* directory change implies: the open
+ * document lives in the old directory and stays there, so it is detached from
+ * the editor. The next save then names a fresh, properly deduplicated file in
+ * the new directory instead of silently cloning the old name into it.
+ * Re-typing the same directory (or a differently-spaced spelling of it) is not
+ * a change and leaves the open document attached.
+ */
+export function changeIdeaDir(s: SparkStore, dir: string): boolean {
+  const before = s.ideaDir
+  if (!setIdeaDir(s, dir)) return false
+  if (s.ideaDir !== before) {
+    s.current = null
+    s.currentFrontmatter = null
+  }
+  return true
+}
+
+/** Bare names of every file the last listing saw (ideas + sidecars + anything else). */
+export function fileNames(s: SparkStore): string[] {
+  const prefix = `${s.ideaDir}/`
+  return s.files.map((f) => (f.startsWith(prefix) ? f.slice(prefix.length) : f))
+}
+
+/**
+ * The file name a save should write to: the one this idea already occupies, or
+ * — for an idea that has never been saved — `YYYY-MM-DD-<slug>.md` deduplicated
+ * against *every* file in the directory (an orphaned `.proof.md` occupies a
+ * name just as much as an idea does).
+ *
+ * Keeping the name once it exists is deliberate: renaming the document because
+ * the user edited its title would scatter one idea across several files.
+ *
+ * Note this only knows what the last listing saw. `saveIdea` re-checks the
+ * winner against the disk before writing — see the note there.
+ */
+export function nextFileName(s: SparkStore, markdown: string, todayStr: string): string {
+  return s.current ?? ideaFileName(markdown, todayStr, new Set(fileNames(s)))
+}
+
+/**
+ * The exact bytes a save writes. A never-saved idea gets fresh OKF frontmatter
+ * stamped `nowIso`; an idea that came off disk keeps its own frontmatter (see
+ * `rebuildIdeaDoc`: existing keys, `created` included, are preserved and only
+ * missing ones are filled in), because the editor holds the body alone and
+ * would otherwise rewrite that metadata away on every save.
+ */
+export function ideaDocText(s: SparkStore, markdown: string, nowIso: string): string {
+  return s.currentFrontmatter === null
+    ? buildIdeaDoc(markdown, nowIso)
+    : rebuildIdeaDoc(s.currentFrontmatter, markdown, nowIso)
+}
+
 /** The pre-filled capture template (localized), used for every fresh idea. */
 export function ideaTemplate(): string {
   return [
@@ -194,7 +266,7 @@ export function ideaTemplate(): string {
 /** On-disk idea text → what the editor shows: frontmatter (and the blank lines
  *  right after it) stripped, so the user edits their prose, not our metadata. */
 export function bodyOf(md: string): string {
-  return stripLeadingFrontmatter(md).replace(/^\n+/, '')
+  return splitFrontmatter(md)[1].replace(/^\n+/, '')
 }
 
 /** `2026-08-04-my-idea.md` → `my-idea` — the history list's label. */
@@ -206,17 +278,12 @@ export function displayName(name: string): string {
 
 /**
  * The raw YAML of a leading frontmatter block (fences excluded), or null when
- * the document has none / never closes the one it opens — the same "what counts
- * as frontmatter" rule `stripLeadingFrontmatter` applies to the body side.
- * Line endings are normalized to `\n` so a CRLF file round-trips cleanly.
+ * the document has none / never closes the one it opens. Shares `naming.ts`'s
+ * single fence scanner with `bodyOf`, so the two halves can never disagree
+ * about what counts as frontmatter.
  */
 export function frontmatterOf(md: string): string | null {
-  const lines = md.split(/\r?\n/)
-  if (lines[0]?.trim() !== '---') return null
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === '---') return lines.slice(1, i).join('\n')
-  }
-  return null
+  return splitFrontmatter(md)[0]
 }
 
 /** Local (not UTC) `YYYY-MM-DD` — the date prefix of a new idea's file name.
@@ -262,11 +329,33 @@ export async function boot(): Promise<void> {
   }
 }
 
-/** Re-lists the idea directory. A missing directory is simply empty. */
+/**
+ * Re-lists the idea directory.
+ *
+ * The host returns the same `io: …` error for "this directory doesn't exist
+ * yet" (the normal first-run state) and for a real IO failure — `vault_list` in
+ * `ui_rpc.rs` can't tell the caller which — so both land here as an empty
+ * listing. What the two cases must NOT share is silence: `listFailed` records
+ * that the emptiness is unverified, so the UI can say so and, more importantly,
+ * so `saveIdea` stops trusting `files` for collision detection. An empty list
+ * that really means "couldn't read" would otherwise make `nextFileName` hand
+ * back an un-suffixed name and overwrite a same-day, same-title idea on disk.
+ */
 export async function reload(): Promise<void> {
+  let failed = false
   const entries = await vaultList(state.ideaDir)
     .then((r) => r.entries ?? [])
-    .catch(() => [] as { name: string; is_dir: boolean }[])
+    .catch((e) => {
+      console.warn('[idea-spark] listing the idea directory failed:', e)
+      failed = true
+      return [] as { name: string; is_dir: boolean }[]
+    })
+  // Toast only on the transition into failure: `reload` runs after every save,
+  // and a persistently unreadable directory would otherwise toast on each one.
+  // The history list keeps showing the condition for as long as it lasts.
+  const was = state.listFailed
+  state.listFailed = failed
+  if (failed && !was) toast(t('historyUnavailable'), 'error')
   state.files = entries.filter((e) => !e.is_dir).map((e) => relPath(state, e.name))
   state.docs = listIdeas(entries)
 }
@@ -293,14 +382,8 @@ export async function saveIdea(markdown: string): Promise<string | null> {
   if (!state.vaultRoot) return null
   state.busy = true
   try {
-    // Dedup against every file in the directory, not just the ideas: a name
-    // that collides with, say, an orphaned `.proof.md` is still a collision.
-    const name = state.current ?? ideaFileName(markdown, today(), new Set(fileNames()))
-    const now = new Date().toISOString()
-    const text =
-      state.currentFrontmatter === null
-        ? buildIdeaDoc(markdown, now)
-        : rebuildIdeaDoc(state.currentFrontmatter, markdown, now)
+    const name = await freeFileName(markdown)
+    const text = ideaDocText(state, markdown, new Date().toISOString())
     await vaultWrite(relPath(state, name), text)
     state.current = name
     // Re-read our own output so the next save preserves this one's `created`.
@@ -319,10 +402,38 @@ export async function saveIdea(markdown: string): Promise<string | null> {
   }
 }
 
-/** Bare names of every known file (idea + sidecars), for dedup on first save. */
-function fileNames(): string[] {
-  const prefix = `${state.ideaDir}/`
-  return state.files.map((f) => (f.startsWith(prefix) ? f.slice(prefix.length) : f))
+/**
+ * `nextFileName`, then a last-moment check against the disk for a *new* idea.
+ *
+ * `nextFileName` can only dedupe against what the last listing saw, and that
+ * listing can be stale or have failed outright (see `reload`) — in which case
+ * it would hand back an un-suffixed name and the write would silently overwrite
+ * a same-day, same-title idea. `host.vault.exists` is the authority, so ask it,
+ * and keep asking as long as the answer is "taken" (bounded, so a bridge that
+ * answers `true` for everything can't spin forever). It also covers a collision
+ * the string-level dedup structurally cannot see: the slug keeps the title's
+ * case, so `My-Idea.md` and `my-idea.md` are two names but one file on a
+ * case-insensitive filesystem (macOS's default).
+ *
+ * An idea that already has a file skips all of this: overwriting itself is the
+ * whole point of a second save.
+ */
+async function freeFileName(markdown: string): Promise<string> {
+  if (state.current) return state.current
+
+  const taken = new Set(fileNames(state))
+  let name = nextFileName(state, markdown, today())
+  for (let i = 0; i < 100; i++) {
+    // A failed existence check must not block the save: treat it as free and
+    // let the write itself report whatever is really wrong.
+    const occupied = await vaultExists(relPath(state, name))
+      .then((r) => r.exists)
+      .catch(() => false)
+    if (!occupied) break
+    taken.add(name)
+    name = ideaFileName(markdown, today(), taken)
+  }
+  return name
 }
 
 /**
@@ -372,15 +483,7 @@ export async function openResult(ideaName: string): Promise<void> {
  * when the directory is rejected, so the popover can keep the field open.
  */
 export async function saveIdeaDir(dir: string): Promise<boolean> {
-  const before = state.ideaDir
-  if (!setIdeaDir(state, dir)) return false
-  if (state.ideaDir !== before) {
-    // The open document lives in the old directory and stays there. Detaching
-    // it means the next save creates a fresh, properly deduplicated file in the
-    // new directory instead of silently cloning the old name into it.
-    state.current = null
-    state.currentFrontmatter = null
-  }
+  if (!changeIdeaDir(state, dir)) return false
   state.busy = true
   try {
     await persist()
@@ -391,7 +494,12 @@ export async function saveIdeaDir(dir: string): Promise<boolean> {
   }
 }
 
-/** Clears the celebration flag once its animation has run its course. */
-export function clearCelebrate(): void {
+/**
+ * Clears the celebration flag once its animation has run its course. Pass the
+ * `celebrateSeq` the timer was started for and a stale timer becomes a no-op:
+ * burst N's two seconds can never cut burst N+1 short.
+ */
+export function clearCelebrate(seq?: number): void {
+  if (seq !== undefined && seq !== state.celebrateSeq) return
   state.celebrate = false
 }
