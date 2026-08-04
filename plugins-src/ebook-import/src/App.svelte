@@ -8,6 +8,7 @@
     hasPending as queueHasPending,
     isRunComplete,
     nextToStart,
+    onAiEvent,
     replayPending,
     reserve,
     stashOrApply,
@@ -31,7 +32,17 @@
     error?: string
   }
   type DragPush = { type: 'drag-drop'; phase: 'enter' | 'leave' | 'drop'; paths: string[] }
-  type HostPush = JobPush | DragPush | { type: string }
+  // Backend only pushes started/done/failed — `queued` is applied locally
+  // (see aiRead() below) right after plugin.ai_read_start succeeds.
+  type AiPush = {
+    type: 'ai_read'
+    job_id: number
+    event: 'started' | 'done' | 'failed'
+    started_at?: string
+    summary_rel?: string
+    error?: string
+  }
+  type HostPush = JobPush | DragPush | AiPush | { type: string }
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -182,6 +193,14 @@
       q = result.q
       pending = result.pending
       if (result.applied && (j.event === 'done' || j.event === 'failed')) void schedule()
+    } else if (m.type === 'ai_read') {
+      const a = m as AiPush
+      q = onAiEvent(q, a.job_id, {
+        event: a.event,
+        started_at: a.started_at,
+        summary_rel: a.summary_rel,
+        error: a.error,
+      })
     }
   })
 
@@ -260,6 +279,46 @@
     } catch (e) {
       globalError = message(e)
     }
+  }
+
+  async function aiRead(item: QueueItem) {
+    if (!item.destRel || item.jobId == null) return
+    try {
+      await bridge().request('plugin.ai_read_start', {
+        job_id: item.jobId,
+        dest_rel: item.destRel,
+        name: item.name,
+      })
+      q = onAiEvent(q, item.jobId, { event: 'queued' })
+    } catch (e) {
+      globalError = message(e)
+    }
+  }
+
+  async function openSummary(item: QueueItem) {
+    if (!item.aiSummaryRel) return
+    try {
+      await bridge().request('host.editor.open', { path: item.aiSummaryRel })
+    } catch (e) {
+      globalError = message(e)
+    }
+  }
+
+  // 「AI 阅读中… 3m12s」的秒针。effect 只读 q(anyRunning),interval 写
+  // nowMs —— nowMs 不在 effect 依赖里,不会自失效死循环($effect 纪律)。
+  let nowMs = $state(Date.now())
+  $effect(() => {
+    if (!q.items.some((i) => i.aiStatus === 'running')) return
+    const t = setInterval(() => {
+      nowMs = Date.now()
+    }, 1000)
+    return () => clearInterval(t)
+  })
+  function aiElapsed(item: QueueItem): string {
+    if (!item.aiStartedAt) return ''
+    const s = Math.max(0, Math.floor((nowMs - Date.parse(item.aiStartedAt)) / 1000))
+    const m = Math.floor(s / 60)
+    return m > 0 ? `${m}m${s % 60}s` : `${s}s`
   }
 
   function clearFinished() {
@@ -432,6 +491,15 @@
             {/if}
             {#if item.status === 'done'}
               <button class="link" onclick={() => openInEditor(item)}>{t('action.openInEditor')}</button>
+              {#if !item.aiStatus || item.aiStatus === 'failed'}
+                <button class="link" onclick={() => aiRead(item)}>{t('action.aiRead')}</button>
+              {:else if item.aiStatus === 'queued'}
+                <span class="stage">{t('ai.queued')}</span>
+              {:else if item.aiStatus === 'running'}
+                <span class="stage">{t('ai.running', { elapsed: aiElapsed(item) })}</span>
+              {:else if item.aiStatus === 'done'}
+                <button class="link" onclick={() => openSummary(item)}>{t('action.viewSummary')}</button>
+              {/if}
             {/if}
           </div>
           {#if item.status === 'done' && item.destRel}
@@ -443,6 +511,9 @@
               {desc.text}
               {#if desc.detail}<span class="detail">{desc.detail}</span>{/if}
             </p>
+          {/if}
+          {#if item.aiStatus === 'failed' && item.aiError}
+            <p class="error">{t('ai.failed')} <span class="detail">{item.aiError}</span></p>
           {/if}
           {#if expanded[item.id]}
             <pre class="log">{item.logs.map(describeLog).join('\n')}</pre>

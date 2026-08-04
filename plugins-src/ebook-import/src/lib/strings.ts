@@ -36,6 +36,11 @@ export type MessageKey =
   | 'action.clear'
   | 'action.start'
   | 'action.running'
+  | 'action.aiRead'
+  | 'action.viewSummary'
+  | 'ai.queued'
+  | 'ai.running'
+  | 'ai.failed'
   | 'log.toggle'
   | 'stage.convert'
   | 'stage.extract'
@@ -108,6 +113,11 @@ const en: Catalog = {
   'action.clear': 'Clear finished',
   'action.start': 'Start import',
   'action.running': 'Importing…',
+  'action.aiRead': 'AI read first',
+  'action.viewSummary': 'View digest',
+  'ai.queued': 'Waiting for AI…',
+  'ai.running': 'AI reading… {elapsed}',
+  'ai.failed': 'AI reading failed',
   'log.toggle': 'Log',
   'stage.convert': 'Converting',
   'stage.extract': 'Extracting',
@@ -178,6 +188,11 @@ const zh: Catalog = {
   'action.clear': '清除已完成',
   'action.start': '开始导入',
   'action.running': '导入中…',
+  'action.aiRead': 'AI 先读',
+  'action.viewSummary': '查看摘要',
+  'ai.queued': '排队等待 AI 阅读…',
+  'ai.running': 'AI 阅读中… {elapsed}',
+  'ai.failed': 'AI 阅读失败',
   'log.toggle': '日志',
   'stage.convert': '转换中',
   'stage.extract': '解包中',
@@ -248,6 +263,11 @@ const ja: Catalog = {
   'action.clear': '完了分を消去',
   'action.start': '取り込みを開始',
   'action.running': '取り込み中…',
+  'action.aiRead': 'AI に先に読ませる',
+  'action.viewSummary': '要約を見る',
+  'ai.queued': 'AI リーディング待機中…',
+  'ai.running': 'AI リーディング中… {elapsed}',
+  'ai.failed': 'AI リーディングに失敗しました',
   'log.toggle': 'ログ',
   'stage.convert': '変換中',
   'stage.extract': '展開中',
@@ -318,6 +338,11 @@ const de: Catalog = {
   'action.clear': 'Fertige entfernen',
   'action.start': 'Import starten',
   'action.running': 'Importiert…',
+  'action.aiRead': 'Zuerst KI lesen lassen',
+  'action.viewSummary': 'Zusammenfassung öffnen',
+  'ai.queued': 'Wartet auf KI…',
+  'ai.running': 'KI liest… {elapsed}',
+  'ai.failed': 'KI-Lektüre fehlgeschlagen',
   'log.toggle': 'Protokoll',
   'stage.convert': 'Wird konvertiert',
   'stage.extract': 'Wird entpackt',
