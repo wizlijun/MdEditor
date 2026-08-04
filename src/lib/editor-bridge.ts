@@ -36,6 +36,10 @@ export function updateDocumentBaseDir(filePath: string): void {
  * tab.currentContent inside this function). This lets callers wrap content
  * in a fenced code block for code-kind tabs without coupling the bridge
  * to file-kind logic.
+ *
+ * The Editor Kit replicates the createEditor options below in
+ * `src/editor-kit/rich.ts` (it cannot import this file: tabs / insights /
+ * Tauri adapters have no IPC in a plugin webview). Keep the two in sync.
  */
 export async function mountRichEditor(
   root: HTMLElement,
