@@ -39,6 +39,10 @@ struct Inner {
     jobs: HashMap<u64, Arc<AtomicBool>>,
     /// Next job id to hand out; starts at 1 (0 would look like "unset").
     next_job: u64,
+    /// "AI 先读"串行队列(claude-agent 的任务锁是 per-task 的)。
+    ai: crate::airead::AiQueue,
+    /// $initialize 下发的宿主 locale,提醒标题本地化用。
+    locale: String,
 }
 
 pub struct EbookImportPlugin {
@@ -400,9 +404,142 @@ fn run_job(
     }
 }
 
+/// AI 阅读 worker:逐本处理直到队空。跑在 tokio 任务里(Host::request 绝不能
+/// 在协议读循环上内联 await),窗口关闭不影响 —— 收尾与提醒照常。
+fn spawn_ai_worker(host: sdk::Host, inner: Arc<Mutex<Inner>>, vault: PathBuf) {
+    tokio::spawn(async move {
+        loop {
+            let job = { inner.lock().unwrap().ai.next() };
+            let Some(job) = job else { break };
+            let locale = { inner.lock().unwrap().locale.clone() };
+            run_ai_job(&host, &vault, &locale, job).await;
+        }
+    });
+}
+
+async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::airead::AiJob) {
+    use crate::airead::{self, RunPoll};
+    let summary_rel = format!(
+        "{}/{}",
+        job.dest_rel,
+        airead::summary_name(chrono::Local::now().date_naive())
+    );
+    let started_at = chrono::Utc::now().to_rfc3339();
+    host.ui_post(
+        WINDOW,
+        json!({ "type": "ai_read", "job_id": job.job_id, "event": "started",
+                "started_at": started_at, "summary_rel": summary_rel }),
+    );
+
+    // `job` is only borrowed (`.dest_rel`/`.name`/`.job_id` cloned/copied per
+    // call below) rather than moved into the closure — `fail` is called from
+    // several sites below, and `job`/`vault`/`summary_rel` are still needed
+    // after those calls, so the closure must remain callable more than once
+    // without consuming its captures.
+    let fail = |err: String| {
+        let dest_rel = job.dest_rel.clone();
+        let name = job.name.clone();
+        let job_id = job.job_id;
+        async move {
+            host.log_warn(&format!("ai-read failed for {dest_rel}: {err}"));
+            host.ui_post(
+                WINDOW,
+                json!({ "type": "ai_read", "job_id": job_id, "event": "failed", "error": err }),
+            );
+            // 失败提醒指向 claude-agent 窗口(那里有完整运行日志)。
+            let _ = host
+                .request(
+                    "host.notify",
+                    json!({
+                        "title": airead::reminder_title(locale, &name, false),
+                        "action": { "kind": "open_plugin_window",
+                                    "plugin_id": "notemd.claude-agent", "window": "main" }
+                    }),
+                )
+                .await;
+        }
+    };
+
+    let book_abs = vault.join(&job.dest_rel).join("book.md");
+    let run = host
+        .request(
+            "host.agent.run",
+            json!({
+                "task": airead::TASK_ID,
+                "prompt": airead::run_prompt(&job.dest_rel, &summary_rel),
+                "note_path": book_abs.to_string_lossy(),
+            }),
+        )
+        .await;
+    let run_id = match run {
+        Ok(v) => match v.get("run_id").and_then(|r| r.as_str()).map(str::to_string) {
+            Some(id) => id,
+            None => return fail(format!("host.agent.run returned no run_id: {v}")).await,
+        },
+        Err(e) => return fail(e).await,
+    };
+
+    // 2s 轮询到收尾;2h 是防呆上限(任务自身 timeout_seconds=1800 会先到)。
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2 * 3600);
+    let mut strikes = 0u32;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if tokio::time::Instant::now() > deadline {
+            return fail("polling deadline exceeded".into()).await;
+        }
+        let status = host
+            .request(
+                "host.agent.status",
+                json!({ "task": airead::TASK_ID, "run_id": run_id }),
+            )
+            .await;
+        let v = match status {
+            Ok(v) => {
+                strikes = 0;
+                v
+            }
+            Err(e) => {
+                // 瞬时中转失败(如 claude-agent 进程重启)容忍几次。
+                strikes += 1;
+                if strikes >= 5 {
+                    return fail(format!("run-status failed {strikes} times: {e}")).await;
+                }
+                continue;
+            }
+        };
+        match airead::interpret_status(&v) {
+            RunPoll::Running => continue,
+            RunPoll::Failed(e) => return fail(e).await,
+            RunPoll::Succeeded => {
+                // record 成功还不算数:约定的摘要文件必须真的在。
+                if !vault.join(&summary_rel).is_file() {
+                    return fail(format!("run succeeded but {summary_rel} is missing")).await;
+                }
+                host.ui_post(
+                    WINDOW,
+                    json!({ "type": "ai_read", "job_id": job.job_id, "event": "done",
+                            "summary_rel": summary_rel }),
+                );
+                let _ = host
+                    .request(
+                        "host.notify",
+                        json!({
+                            "title": airead::reminder_title(locale, &job.name, true),
+                            "action": { "kind": "open_path",
+                                        "path": vault.join(&summary_rel).to_string_lossy() }
+                        }),
+                    )
+                    .await;
+                return;
+            }
+        }
+    }
+}
+
 impl sdk::NotemdPlugin for EbookImportPlugin {
     fn initialize(&mut self, _host: &sdk::Host, params: &proto::InitializeParams) {
         self.data_dir = PathBuf::from(&params.data_dir);
+        self.inner.lock().unwrap().locale = params.locale.clone();
     }
 
     fn activate(&mut self, host: &sdk::Host, _p: &proto::ActivateParams) -> Result<(), String> {
@@ -465,6 +602,7 @@ impl sdk::NotemdPlugin for EbookImportPlugin {
             "save_settings" => self.save_settings(&params),
             "import_start" => self.import_start(host, &params),
             "import_cancel" => self.import_cancel(&params),
+            "ai_read_start" => self.ai_read_start(host, &params),
             other => Err(format!("unknown ui method '{other}'")),
         }
     }
@@ -580,6 +718,38 @@ impl EbookImportPlugin {
             flag.store(true, Ordering::Relaxed);
         }
         Ok(json!({ "ok": true }))
+    }
+
+    /// "AI 先读":入队并(必要时)拉起串行 worker。同步返回,不等 agent。
+    fn ai_read_start(&mut self, host: &sdk::Host, params: &Value) -> Result<Value, String> {
+        let job_id = params
+            .get("job_id")
+            .and_then(|v| v.as_u64())
+            .ok_or("ai_read_start needs 'job_id'")?;
+        let dest_rel = params
+            .get("dest_rel")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim_end_matches('/'))
+            .filter(|s| !s.is_empty())
+            .ok_or("ai_read_start needs 'dest_rel'")?
+            .to_string();
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&dest_rel)
+            .to_string();
+        let (vault, queued, spawn) = {
+            let mut g = self.inner.lock().unwrap();
+            let vault = g.vault.clone().ok_or(NO_VAULT)?;
+            let queued = g.ai.enqueue(crate::airead::AiJob { job_id, dest_rel, name });
+            let spawn = queued && g.ai.claim_worker();
+            (vault, queued, spawn)
+        };
+        if spawn {
+            spawn_ai_worker(host.clone(), self.inner.clone(), vault);
+        }
+        Ok(json!({ "queued": queued }))
     }
 
     /// CLI entry point: `notemd ebook-import <file> [--ocr] [--ocr-provider p] [--root r]`.
