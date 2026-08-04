@@ -16,7 +16,7 @@
 // `$state` self-invalidates into a loop that freezes the window (v4.2.4).
 import { bridge, vaultExists, vaultInfo, vaultList, vaultRead, vaultRemove, vaultRename, vaultWrite } from './bridge'
 import { buildIdeaDoc, rebuildIdeaDoc } from './idea-doc'
-import { proofPathFor, slugFromMarkdown, splitFrontmatter, timestampFileName } from './naming'
+import { proofPathFor, splitFrontmatter, timestampFileName, titleFromMarkdown } from './naming'
 import { isReservedConceptName } from './okf/concept'
 import { DEFAULT_STATE, parseState, serializeState, STATE_PATH } from './state-io'
 import { deriveStatus, listIdeas, type IdeaStatus } from './status'
@@ -83,7 +83,10 @@ export interface SparkStore {
    *  label cache. Populated lazily, one read per row that actually scrolls into
    *  view (`ensureTitle`), because a directory of a few hundred ideas would
    *  otherwise cost a few hundred bridge round trips just to draw a list.
-   *  A name absent from here renders as `displayName(name)` (see `titleOf`). */
+   *  A name absent from here renders as `displayName(name)` (see `titleOf`).
+   *  Kept honest by this window's own writes (`saveIdea`/`loadIdea`/`renameIdea`/
+   *  `deleteIdea`) and dropped wholesale by `invalidateTitles` when the window
+   *  regains focus — this is not the only process that edits these files. */
   titles: Record<string, string>
   /** Rotation counter for the blank-document placeholder line (`placeholder.ts`).
    *  Persisted so the line shown does not reset to the same one on every
@@ -400,16 +403,20 @@ export function frontmatterOf(md: string): string | null {
 /**
  * An idea's label in the inbox, derived from its own text: the body's H1, or
  * its first non-empty line, or — when there is no usable text at all — the file
- * name (`slugFromMarkdown` returns its `'idea'` sentinel for exactly that case).
+ * name.
  *
  * The file name alone is not a usable label any more: names are creation
  * timestamps (`2026-08-04-1942-idea.md`), so a list of them says nothing about
  * what any of the ideas *are*. `md` is the whole document as read from disk;
- * frontmatter is skipped by `slugFromMarkdown` itself.
+ * frontmatter is skipped by `titleFromMarkdown` itself.
+ *
+ * `titleFromMarkdown`, not `slugFromMarkdown`: the latter builds *file names*
+ * (spaces → hyphens, punctuation deleted, 40 code points hard cut) and a row
+ * labelled `Ship-the-thing` is not showing the user their title. See the note
+ * on `titleFromMarkdown` in naming.ts.
  */
 export function rowTitle(md: string, name: string): string {
-  const slug = slugFromMarkdown(md)
-  return slug === 'idea' ? displayName(name) : slug
+  return titleFromMarkdown(md) ?? displayName(name)
 }
 
 /** Cached row label for `name`, or the file-name fallback until its body has
@@ -497,11 +504,23 @@ export function filesToDelete(s: SparkStore, name: string): string[] {
  * `.md` is appended when the user left it off (they are naming an idea, not a
  * file). Refused: blank, a path separator (this renames a file, it does not
  * move it out of the idea directory), a leading dot (hidden files, and `..`
- * with it), a name another file in the directory already occupies, and the
- * OKF-reserved structural names `index.md` / `log.md` — those are refused as
- * `taken` because that is what they are from the user's side: unavailable.
- * (`listIdeas` filters reserved names out, so an idea allowed to take one would
- * silently vanish from the inbox — see `okf/concept.ts`.)
+ * with it), and — all four collapsed into `taken`, because from the user's side
+ * that is exactly what they have in common, the name is not available:
+ *
+ *   1. a name another file in the directory already occupies;
+ *   2. the OKF-reserved structural names `index.md` / `log.md` (see
+ *      `okf/concept.ts`);
+ *   3. anything ending in `.proof.md` — that suffix *means* "argument for the
+ *      idea next door";
+ *   4. a name whose own sidecar slot (`<name>.proof.md`) is already occupied.
+ *
+ * 2 and 3 are not pedantry: `listIdeas` filters BOTH out of the listing, so an
+ * idea allowed to take such a name would vanish from the inbox on the spot —
+ * still on disk, no error shown, no row left to undo it from, and (if it was
+ * the open document) autosave still writing into it. 4 is the mirror image: an
+ * orphaned `b.proof.md` would make the freshly renamed `b.md` claim a `done`
+ * badge and an "open the argument" item pointing at a document that argues
+ * something else entirely.
  *
  * Renaming a file to the name it already has is accepted, not refused as
  * `taken`: the caller then has nothing to do, and telling the user their own
@@ -519,8 +538,9 @@ export function validateRename(
 
   const name = trimmed.endsWith('.md') ? trimmed : `${trimmed}.md`
   if (name === from) return { ok: true, name }
-  if (isReservedConceptName(name)) return { ok: false, reason: 'taken' }
-  if (fileNames(s).includes(name)) return { ok: false, reason: 'taken' }
+  if (isReservedConceptName(name) || name.endsWith('.proof.md')) return { ok: false, reason: 'taken' }
+  const occupied = fileNames(s)
+  if (occupied.includes(name) || occupied.includes(proofPathFor(name))) return { ok: false, reason: 'taken' }
   return { ok: true, name }
 }
 
@@ -721,6 +741,10 @@ export async function loadIdea(name: string): Promise<string | null> {
   try {
     const { content } = await vaultRead(relPath(state, name))
     const body = bodyOf(content)
+    // The whole document is in hand; refreshing the row label off it costs
+    // nothing and corrects a cached title that went stale while the file was
+    // being edited somewhere else (see `ensureTitle`).
+    retitle(null, name, rowTitle(content, name))
     state.current = name
     state.currentFrontmatter = frontmatterOf(content)
     state.savedMarkdown = body
@@ -805,6 +829,21 @@ const titlesInFlight = new Set<string>()
  * delete of that same name), and a failed read is silently left uncached — the
  * row keeps the file-name fallback and a later scroll may retry.
  */
+/**
+ * Drops every cached row label, so the rows on screen read their titles again.
+ *
+ * The cache is otherwise maintained only by this window's own writes, and this
+ * window is not the only writer: "open in the main editor" (the inbox's own
+ * context menu) is the shortest path to editing an idea somewhere else, and an
+ * agent or a vault sync can rewrite one at any time. Called when the window
+ * regains focus — the moment right after the user was plausibly off editing
+ * elsewhere — which costs a screenful of reads and nothing for the rows below
+ * the fold (they re-hydrate as they scroll past, as always).
+ */
+export function invalidateTitles(): void {
+  state.titles = {}
+}
+
 export async function ensureTitle(name: string): Promise<void> {
   if (name in state.titles || titlesInFlight.has(name)) return
   titlesInFlight.add(name)
@@ -849,21 +888,37 @@ function retitle(from: string | null, to: string | null, title?: string): void {
  * A failed removal is reported and stops the loop — deleting the proof of an
  * idea that is still there would leave the pair worse than it found it — and
  * the listing is refreshed either way, so the panel shows what survived.
+ *
+ * PARTIAL failure is the case that matters, and it decides the return value:
+ * the idea is removed first, so "the sidecar's removal failed" means the idea
+ * itself is already gone for good. Treating that as a plain failure — leaving
+ * `current` pointing at the file that was just deleted, with its text still in
+ * the editor — would resurrect it on the next keystroke: autosave asks
+ * `freeFileName`, which hands back `state.current` unchanged, and writes the
+ * document the user was told had been deleted for good straight back to disk.
+ * So the detach is driven by what actually happened to the IDEA, never by
+ * whether the whole batch succeeded.
  */
 export async function deleteIdea(name: string): Promise<string | null> {
   const wasOpen = state.current === name
+  // The idea is `filesToDelete`'s first entry, so the first successful removal
+  // is always the idea itself.
+  let ideaGone = false
   state.busy = true
   try {
     for (const path of filesToDelete(state, name)) {
       await vaultRemove(path)
+      ideaGone = true
     }
   } catch (e) {
     console.error('[idea-spark] delete failed:', e)
     toast(String(e), 'error')
-    await reload()
-    return null
   } finally {
     state.busy = false
+  }
+  if (!ideaGone) {
+    await reload()
+    return null
   }
   retitle(name, null)
   await reload()
@@ -905,20 +960,19 @@ export async function renameIdea(from: string, raw: string): Promise<boolean> {
     state.busy = false
   }
 
-  if (proof) {
-    try {
-      await vaultRename(proofPathFor(relPath(state, from)), proofPathFor(relPath(state, to)))
-    } catch (e) {
-      console.error('[idea-spark] renaming the proof sidecar failed:', e)
-      toast(String(e), 'error')
-    }
-  }
-
-  // Every key that names the file has to move with it, or the run this idea has
-  // in flight (and its failure record) would be attributed to a path that no
-  // longer exists — the row would lose its ⏳ and never get its result.
+  // Every key that names the file moves with it, and it moves HERE — the
+  // instant the idea's own rename lands, before the sidecar's round trip is
+  // even started. In between those two `await`s the file simply does not exist
+  // under its old name, and `state.current` is what autosave writes to: a
+  // change echo arriving in that window (the kit reports edits ~200 ms late)
+  // would schedule a write to the old path and, 1.5 s later, recreate the file
+  // this rename just moved — leaving two copies of one idea.
+  //
+  // `pending` and `failed` move for a duller reason: a run in flight keyed on a
+  // path that no longer exists loses its ⏳ and never gets its result.
   const fromRel = relPath(state, from)
   const toRel = relPath(state, to)
+  if (state.current === from) state.current = to
   if (fromRel in state.pending) {
     const { [fromRel]: runId, ...rest } = state.pending
     state.pending = { ...rest, [toRel]: runId }
@@ -926,7 +980,16 @@ export async function renameIdea(from: string, raw: string): Promise<boolean> {
   }
   state.failed = state.failed.map((f) => (f === fromRel ? toRel : f))
   retitle(from, to)
-  if (state.current === from) state.current = to
+
+  if (proof) {
+    try {
+      await vaultRename(proofPathFor(fromRel), proofPathFor(toRel))
+    } catch (e) {
+      console.error('[idea-spark] renaming the proof sidecar failed:', e)
+      toast(String(e), 'error')
+    }
+  }
+
   await reload()
   return true
 }

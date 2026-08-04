@@ -17,12 +17,18 @@
 
      That means an extra file read per row, which is why the reads are LAZY and
      CACHED: an `IntersectionObserver` asks `ensureTitle(name)` only for rows
-     that actually scroll into view, the store keeps what comes back
-     (`store.titles`) for the rest of the window's life, and `saveIdea` /
-     `renameIdea` / `deleteIdea` keep that cache in step without re-reading
-     anything. An inbox holding several hundred ideas therefore costs a screenful
-     of reads to draw, not several hundred — and scrolling to the bottom pays
-     for what it passes, once.
+     that actually scroll into view, and the store keeps what comes back
+     (`store.titles`). An inbox holding several hundred ideas therefore costs a
+     screenful of reads to draw, not several hundred — and scrolling to the
+     bottom pays for what it passes, once.
+
+     The cache is kept honest from three directions, none of which re-reads a
+     file it doesn't already have in hand: this window's own writes update it
+     (`saveIdea` / `loadIdea` / `renameIdea` / `deleteIdea`), and regaining
+     window focus drops it wholesale — that is the moment the user plausibly
+     comes back from editing an idea in the main editor (which this very panel
+     can open), or from an agent or a sync having rewritten one. Only the rows
+     on screen are re-read then; the rest re-hydrate as they scroll past.
 
      Status comes from `statusOf` (proof file > active run > last failure >
      draft); the panel never stores a status of its own.
@@ -42,6 +48,7 @@
     createdFromName,
     ensureTitle,
     filesToDelete,
+    invalidateTitles,
     openIdea,
     openResult,
     relativeAge,
@@ -100,6 +107,10 @@
 
   // ── lazy row titles ───────────────────────────────────────────────────────
 
+  /** Rows currently on screen — what has to be re-read when the cache is
+   *  dropped (see the `focus` listener). Plain Set: nothing renders it. */
+  const visible = new Set<string>()
+
   // Built at component init, NOT in `onMount`: Svelte runs an element's actions
   // as it creates the element, which is before `onMount` — an observer created
   // there would miss the first screenful of rows entirely.
@@ -109,9 +120,14 @@
       : new IntersectionObserver(
           (entries) => {
             for (const entry of entries) {
-              if (!entry.isIntersecting) continue
               const name = (entry.target as HTMLElement).dataset.idea
-              if (name) void ensureTitle(name)
+              if (!name) continue
+              if (!entry.isIntersecting) {
+                visible.delete(name)
+                continue
+              }
+              visible.add(name)
+              void ensureTitle(name)
             }
           },
           // No explicit root: the viewport, clipped by this panel's own
@@ -126,12 +142,18 @@
     if (!observer) {
       // No IntersectionObserver (very old webview): correctness beats
       // frugality — read every row rather than showing bare file names.
+      visible.add(name)
       void ensureTitle(name)
-      return {}
+      return {
+        destroy() {
+          visible.delete(name)
+        },
+      }
     }
     observer.observe(node)
     return {
       destroy() {
+        visible.delete(name)
         observer.unobserve(node)
       },
     }
@@ -245,8 +267,21 @@
 
   onMount(() => {
     const id = setInterval(() => (now = new Date()), 60_000)
+
+    // Coming back to this window is the one moment we can be fairly sure the
+    // ideas may have been edited behind our back — by the main editor (which
+    // this panel's own context menu opens), by an agent, by a vault sync. The
+    // cached labels are dropped and the rows on screen re-read; everything
+    // below the fold re-hydrates as it scrolls past, as it always does.
+    const onFocus = () => {
+      invalidateTitles()
+      for (const name of visible) void ensureTitle(name)
+    }
+    window.addEventListener('focus', onFocus)
+
     return () => {
       clearInterval(id)
+      window.removeEventListener('focus', onFocus)
       observer?.disconnect()
     }
   })

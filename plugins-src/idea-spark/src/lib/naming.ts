@@ -45,6 +45,31 @@ export function slugFromMarkdown(md: string): string {
 }
 
 /**
+ * The document's own title, for *reading*: its first non-empty body line with
+ * the markdown that decorates it stripped — the `#` of a heading, a `>` quote
+ * marker, a `-`/`*`/`+`/`1.` list bullet — and nothing else. Null when the
+ * document has no usable text (empty, frontmatter only, an unclosed fence).
+ *
+ * Deliberately NOT `slugFromMarkdown`, which is a *file name* generator: that
+ * one turns spaces into hyphens, deletes every character a filesystem or
+ * markdown might object to, and hard-truncates at 40 code points. As a row
+ * label those transformations are all damage — `# Ship the thing` would read
+ * `Ship-the-thing` — and the truncation is redundant besides, since the inbox
+ * column already ellipsizes in CSS (which, unlike a cut, *says* that it cut).
+ * Spaces, punctuation and length are therefore left exactly as written.
+ */
+export function titleFromMarkdown(md: string): string | null {
+  const line = firstNonEmptyLine(stripLeadingFrontmatter(md))
+  if (line == null) return null
+  const stripped = line
+    // `#{1,6}` needs the space (or the end of the line) after it, so a line
+    // opening on `#hashtag` keeps its hash — that is a word, not a heading.
+    .replace(/^\s{0,3}(?:#{1,6}(?:\s+|$)|>\s*|[-*+]\s+|\d+[.)]\s+)/, '')
+    .trim()
+  return stripped || null
+}
+
+/**
  * Splits a document into `[frontmatter, body]` — the ONE place that decides
  * what counts as a leading YAML frontmatter block. Everything that needs
  * either half goes through here (`stripLeadingFrontmatter` for the body,

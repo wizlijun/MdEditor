@@ -6,7 +6,35 @@
 // assert on the result without a Svelte component tree or a host bridge.
 // The async actions (boot/reload/save/...) are bridge IO and are exercised
 // by hand in the window — see the task report's manual-verification list.
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+
+// The action half (`deleteIdea` / `renameIdea` / …) is bridge IO, and the parts
+// of it worth pinning are its ERROR paths — what the store does when the second
+// of two removals fails, or what `state.current` says while a rename is only
+// half applied. Those can't be reached by hand in a window often enough to
+// trust, so the bridge is stubbed and the actions are driven directly. Declared
+// with `vi.hoisted` because `vi.mock`'s factory is hoisted above the imports.
+const host = vi.hoisted(() => ({
+  request: vi.fn(),
+  vaultInfo: vi.fn(),
+  vaultRead: vi.fn(),
+  vaultWrite: vi.fn(),
+  vaultExists: vi.fn(),
+  vaultList: vi.fn(),
+  vaultRemove: vi.fn(),
+  vaultRename: vi.fn(),
+}))
+vi.mock('./bridge', () => ({
+  bridge: () => ({ pluginId: 'test', locale: 'en', theme: 'x', request: host.request, onMessage: () => {} }),
+  vaultInfo: host.vaultInfo,
+  vaultRead: host.vaultRead,
+  vaultWrite: host.vaultWrite,
+  vaultExists: host.vaultExists,
+  vaultList: host.vaultList,
+  vaultRemove: host.vaultRemove,
+  vaultRename: host.vaultRename,
+}))
+
 import {
   applyRunDone,
   bodyOf,
@@ -14,7 +42,9 @@ import {
   clockTime,
   createdFromName,
   createStore,
+  deleteIdea,
   filesToDelete,
+  loadIdea,
   frontmatterOf,
   displayName,
   ideaDocText,
@@ -27,9 +57,11 @@ import {
   rebaseline,
   relativeAge,
   relPath,
+  renameIdea,
   rowTitle,
   showInEditor,
   setIdeaDir,
+  state,
   statusOf,
   titleOf,
   validateRename,
@@ -559,11 +591,32 @@ describe('validateRename', () => {
     expect(validateRename(s, 'a.md', 'taken')).toEqual({ ok: false, reason: 'taken' })
   })
 
-  it("treats a sidecar's name as taken too", () => {
+  it("treats an existing sidecar's own name as taken too", () => {
     const withProof = createStore()
     withProof.ideaDir = 'inbox/ideas'
     withProof.files = ['inbox/ideas/a.md', 'inbox/ideas/b.proof.md']
     expect(validateRename(withProof, 'a.md', 'b.proof')).toEqual({ ok: false, reason: 'taken' })
+  })
+
+  // `listIdeas` drops `*.proof.md` from the listing (a sidecar describes an
+  // idea, it isn't one), so an idea allowed to take that suffix would vanish
+  // from the inbox the moment it was renamed: still on disk, no error, no row
+  // left to undo it from — and, if it was the open document, autosave still
+  // writing into a file with no row. The suffix is refused on its own terms,
+  // NOT merely because some file happens to sit at that name.
+  it.each(['c.proof', 'c.proof.md', '方案A.proof'])('refuses the sidecar suffix %o', (raw) => {
+    expect(validateRename(s, 'a.md', raw)).toEqual({ ok: false, reason: 'taken' })
+  })
+
+  // The mirror image: `b.md` is free but an orphaned `b.proof.md` is lying
+  // around. Renaming into it would make the idea claim a `done` badge and an
+  // "open the argument" item pointing at a document that argues something else.
+  it("refuses a name whose sidecar slot is already occupied", () => {
+    const orphan = createStore()
+    orphan.ideaDir = 'inbox/ideas'
+    orphan.files = ['inbox/ideas/a.md', 'inbox/ideas/b.proof.md']
+    expect(orphan.files).not.toContain('inbox/ideas/b.md') // the name itself is free
+    expect(validateRename(orphan, 'a.md', 'b')).toEqual({ ok: false, reason: 'taken' })
   })
 
   // `index.md` / `log.md` are OKF-reserved structural documents (see
@@ -577,8 +630,15 @@ describe('validateRename', () => {
 })
 
 describe('rowTitle', () => {
-  it('reads the H1 out of the body', () => {
-    expect(rowTitle('# Ship the thing\n\nbody', '2026-08-04-1942-idea.md')).toBe('Ship-the-thing')
+  it('reads the H1 out of the body AS WRITTEN — spaces and all', () => {
+    // Not `Ship-the-thing`: the row shows the document's title, not the file
+    // name that could be derived from it (`slugFromMarkdown`'s job).
+    expect(rowTitle('# Ship the thing\n\nbody', '2026-08-04-1942-idea.md')).toBe('Ship the thing')
+  })
+
+  it('does not truncate — the 240px column ellipsizes in CSS, which says so', () => {
+    const long = `${'长'.repeat(60)}`
+    expect(rowTitle(`# ${long}`, 'x.md')).toBe(long)
   })
 
   it('falls back to the file name when the body yields no title', () => {
@@ -587,7 +647,7 @@ describe('rowTitle', () => {
   })
 
   it('skips frontmatter rather than titling the row `type: Idea`', () => {
-    expect(rowTitle('---\ntype: Idea\n---\n\n# Real title', 'x.md')).toBe('Real-title')
+    expect(rowTitle('---\ntype: Idea\n---\n\n# Real title', 'x.md')).toBe('Real title')
   })
 })
 
@@ -635,5 +695,213 @@ describe('relativeAge', () => {
     expect(relativeAge(new Date(2026, 7, 4, 12, 0, 30), now)).toEqual({ value: 0, unit: 'minute' })
     // Clock skew (a file stamped ahead of us) must not read as "in 5 minutes".
     expect(relativeAge(new Date(2026, 7, 4, 12, 5), now)).toEqual({ value: 0, unit: 'minute' })
+  })
+})
+
+// ── actions, driven against a stubbed bridge ────────────────────────────────
+//
+// Only the paths that a hand test in the window would never reliably reproduce:
+// a removal that half succeeds, and the window between a rename's two host
+// calls. Both are places where getting it wrong destroys or duplicates a user's
+// document, and neither shows up in the pure transitions above.
+
+describe('deleteIdea', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    // Everything the actions call incidentally: the re-list, the state-file
+    // write behind `newIdea()`, and the toast.
+    host.vaultList.mockResolvedValue({ entries: [] })
+    host.vaultWrite.mockResolvedValue({ ok: true })
+    host.request.mockResolvedValue({})
+  })
+
+  /** One saved idea, open in the editor, with a proof sidecar next to it. */
+  function openIdeaWithProof(): void {
+    state.files = ['inbox/ideas/a.md', 'inbox/ideas/a.proof.md']
+    state.docs = ['a.md']
+    state.current = 'a.md'
+    state.currentFrontmatter = 'type: Idea'
+    state.savedMarkdown = '# Ship it'
+    state.titles = { 'a.md': 'Ship it' }
+  }
+
+  it('removes the idea first, then its sidecar', async () => {
+    openIdeaWithProof()
+    host.vaultRemove.mockResolvedValue({ ok: true })
+
+    await deleteIdea('a.md')
+
+    expect(host.vaultRemove.mock.calls.map((c) => c[0])).toEqual([
+      'inbox/ideas/a.md',
+      'inbox/ideas/a.proof.md',
+    ])
+  })
+
+  // The regression that matters: the idea is deleted first, so "the SIDECAR's
+  // removal failed" still means the idea itself is gone for good. Reporting
+  // that as a plain failure would leave `current` pointing at the deleted file
+  // with its text still in the editor — and the next keystroke's autosave
+  // (which asks `freeFileName`, which hands back `state.current` unchanged)
+  // would write the document the user was told had been deleted back to disk.
+  it('detaches the open document when the idea is gone but the sidecar failed', async () => {
+    openIdeaWithProof()
+    host.vaultRemove
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error('io: sidecar is busy'))
+
+    const blank = await deleteIdea('a.md')
+
+    expect(host.vaultRemove).toHaveBeenCalledTimes(2)
+    // Non-null = "show this in the editor": the deleted idea must not stay on
+    // screen attached to a file that no longer exists.
+    expect(blank).toBe('')
+    expect(state.current).toBeNull()
+    expect(state.currentFrontmatter).toBeNull()
+    expect(state.savedMarkdown).toBe('')
+    expect(state.titles['a.md']).toBeUndefined()
+  })
+
+  it('keeps the document attached when the IDEA itself could not be removed', async () => {
+    openIdeaWithProof()
+    host.vaultRemove.mockRejectedValue(new Error('io: permission denied'))
+
+    const blank = await deleteIdea('a.md')
+
+    expect(blank).toBeNull()
+    expect(state.current).toBe('a.md')
+    expect(state.currentFrontmatter).toBe('type: Idea')
+    // Nothing was deleted, so the row's cached label must survive too.
+    expect(state.titles['a.md']).toBe('Ship it')
+    // The sidecar is never attempted once the idea's own removal failed.
+    expect(host.vaultRemove).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves another idea open when a different row is deleted', async () => {
+    openIdeaWithProof()
+    state.files = [...state.files, 'inbox/ideas/b.md']
+    state.docs = ['b.md', 'a.md']
+    host.vaultRemove.mockResolvedValue({ ok: true })
+
+    const blank = await deleteIdea('b.md')
+
+    expect(blank).toBeNull()
+    expect(state.current).toBe('a.md')
+  })
+})
+
+describe('renameIdea', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    state.files = ['inbox/ideas/a.md', 'inbox/ideas/a.proof.md']
+    state.docs = ['a.md']
+    state.current = 'a.md'
+    state.titles = { 'a.md': 'Ship it' }
+    host.vaultList.mockResolvedValue({ entries: [] })
+    host.vaultWrite.mockResolvedValue({ ok: true })
+    host.request.mockResolvedValue({})
+    host.vaultRename.mockResolvedValue({ ok: true })
+  })
+
+  // `state.current` is what autosave writes to, and the two renames are two
+  // full IPC round trips apart. A change echo landing in that window (the kit
+  // reports edits ~200 ms late) would schedule a write to the OLD path and
+  // recreate the file the rename just moved — two copies of one idea. So every
+  // in-memory key has to move the instant the idea's own rename lands, before
+  // the sidecar's call is even started.
+  it('re-points current before the sidecar round trip, not after', async () => {
+    let currentDuringSidecar: string | null = 'not called'
+    host.vaultRename.mockImplementation(async (from: string) => {
+      if (from.endsWith('.proof.md')) currentDuringSidecar = state.current
+      return { ok: true }
+    })
+
+    await renameIdea('a.md', 'b')
+
+    expect(currentDuringSidecar).toBe('b.md')
+    expect(state.current).toBe('b.md')
+  })
+
+  it('carries the pending run, the failure record and the cached title across', async () => {
+    state.pending = { 'inbox/ideas/a.md': 'run-1' }
+    state.failed = ['inbox/ideas/a.md']
+
+    await renameIdea('a.md', 'b')
+
+    expect(state.pending).toEqual({ 'inbox/ideas/b.md': 'run-1' })
+    expect(state.failed).toEqual(['inbox/ideas/b.md'])
+    expect(state.titles).toEqual({ 'b.md': 'Ship it' })
+  })
+
+  it('moves the sidecar with the idea', async () => {
+    await renameIdea('a.md', 'b')
+    expect(host.vaultRename.mock.calls).toEqual([
+      ['inbox/ideas/a.md', 'inbox/ideas/b.md'],
+      ['inbox/ideas/a.proof.md', 'inbox/ideas/b.proof.md'],
+    ])
+  })
+
+  it('changes nothing on disk when the name is refused', async () => {
+    // `.proof` would make the row vanish from the inbox; the guard belongs in
+    // front of the host call, not after it.
+    expect(await renameIdea('a.md', 'b.proof')).toBe(false)
+    expect(await renameIdea('a.md', '  ')).toBe(false)
+    expect(await renameIdea('a.md', 'x/y')).toBe(false)
+    expect(host.vaultRename).not.toHaveBeenCalled()
+    expect(state.current).toBe('a.md')
+  })
+
+  it('leaves everything attached to the old name when the host refuses', async () => {
+    host.vaultRename.mockRejectedValue(new Error('io: destination already exists'))
+
+    expect(await renameIdea('a.md', 'b')).toBe(false)
+
+    expect(state.current).toBe('a.md')
+    expect(state.titles).toEqual({ 'a.md': 'Ship it' })
+    // The sidecar is not moved on its own when the idea did not move.
+    expect(host.vaultRename).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('loadIdea', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    state.docs = ['a.md']
+    state.files = ['inbox/ideas/a.md']
+    host.request.mockResolvedValue({})
+  })
+
+  // The cached row label is otherwise only maintained by this window's own
+  // writes — but "open in the main editor" sends the user off to edit the file
+  // somewhere else, and an agent or a vault sync can rewrite one at any time.
+  // Opening an idea has the whole document in hand, so correcting the label
+  // costs no extra IO and is the cheapest of the cache's honesty checks.
+  it('refreshes the cached row title from the document it just read', async () => {
+    state.titles = { 'a.md': 'the old heading' }
+    host.vaultRead.mockResolvedValue({ content: '---\ntype: Idea\n---\n\n# A better heading\n\nbody' })
+
+    const body = await loadIdea('a.md')
+
+    expect(body).toBe('# A better heading\n\nbody')
+    expect(state.titles['a.md']).toBe('A better heading')
+  })
+
+  it('leaves the cache alone when the read fails', async () => {
+    state.titles = { 'a.md': 'the old heading' }
+    host.vaultRead.mockRejectedValue(new Error('io: gone'))
+
+    expect(await loadIdea('a.md')).toBeNull()
+    expect(state.titles['a.md']).toBe('the old heading')
   })
 })
