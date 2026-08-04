@@ -162,6 +162,30 @@ describe('roam-import front-matter touch parity', () => {
     }
   })
 
+  /** The same two checks against the bytes the PLUGIN writes (`expected`),
+   *  read by the host's own `yaml`. For every case but one those are the very
+   *  bytes asserted below, so this is free; for the one case that carries a
+   *  `host_expected` it is the whole point. `title: 'say "hi"⏎there'` — the
+   *  single-quoted style a value with a `"` and no `'` used to take — makes
+   *  this reader report `Missing closing 'quote`, hand back `say "hi` and drop
+   *  every key after it. Whatever spelling the plugin chooses, the reader that
+   *  has to open the file must get the string back whole. */
+  it.each(written.filter((c) => c.raw == null))('$name — the plugin bytes read back whole', (c) => {
+    const block = c.expected as string
+    expect(lintText('wikipage/x.note.md', `---\n${block}\n---\n- 第一条\n`)).toEqual([])
+    const doc = parseDocument(block)
+    expect(doc.errors).toEqual([])
+    expect(doc.get('title')).toBe(c.title)
+    expect(doc.get('type')).toBe(c.type)
+  })
+
+  /** `host_expected` is the escape hatch for the one shape where `yaml`
+   *  legitimately spells the same string differently: a value containing a
+   *  line break becomes a block scalar here and a double-quoted `\n` escape in
+   *  outline.rs, which does not re-implement block scalars for a shape no Roam
+   *  page title can hold. Every other case must agree byte for byte, so the
+   *  field is absent and this falls back to `expected`. The test above is what
+   *  licenses the divergence — both spellings read back as the same string. */
   it.each(cases)('$name', (c) => {
     expect(
       touchFrontmatter(c.raw as string | null, {
@@ -174,6 +198,6 @@ describe('roam-import front-matter touch parity', () => {
         created: c.created as string,
         now: c.now as string,
       }),
-    ).toBe(c.expected)
+    ).toBe(c.host_expected ?? c.expected)
   })
 })

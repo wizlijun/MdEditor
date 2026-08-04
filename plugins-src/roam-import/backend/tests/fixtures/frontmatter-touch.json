@@ -39,7 +39,28 @@
     "note is already on disk, and a .note.md is hand-edited and agent-edited",
     "(file-over-app). Both sides leave a block that is not a YAML mapping",
     "exactly as it was, rather than appending key: value lines to a scalar and",
-    "leaving behind front-matter the host's own reader cannot parse as a map."
+    "leaving behind front-matter the host's own reader cannot parse as a map.",
+    "",
+    "The last two hostile titles are the boundary of the QUOTE STYLE itself. A",
+    "value that needs quoting, holds a `\"` and no `'` takes single quotes — but a",
+    "single-quoted scalar cannot carry a raw line break in a front-matter block:",
+    "`title: 'say \"hi\"<LF>there'` makes the host's reader report `Missing closing",
+    "'quote`, hand back `say \"hi` as the title and drop type/created/updated with",
+    "it. Unparsable front-matter, i.e. the exact failure the hostile-title cases",
+    "above exist to prevent, reached by the fix for them. So a line break always",
+    "takes the double-quoted escape form.",
+    "",
+    "`host_expected` is for the ONE shape where the two writers legitimately",
+    "differ in bytes: the host's `yaml` package renders a value containing a line",
+    "break as a block scalar (`|-` plus an indented body), which outline.rs does",
+    "not re-implement (chomping indicator, indentation indicator, its own",
+    "fallbacks) for a shape no Roam page title can hold. Both are valid YAML and",
+    "the TS half asserts that BOTH byte forms read back through `parseDocument` as",
+    "the very same string — the divergence is in the spelling, never in what the",
+    "file says. Add one only with that proof; every other case has no",
+    "`host_expected` because the two sides must agree byte for byte. Note the CRLF",
+    "case immediately after: there `yaml` quotes rather than folding, so even the",
+    "bytes match, which pins that the two escape tables agree on \\r and \\n."
   ],
   "cases": [
     {
@@ -239,6 +260,25 @@
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
       "expected": "type: Wiki Page\ntitle: 'Review: \"Dune\"'\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a line break with a double quote — single quotes cannot hold one",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "say \"hi\"\nthere",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"say \\\"hi\\\"\\nthere\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z",
+      "host_expected": "type: Wiki Page\ntitle: |-\n  say \"hi\"\n  there\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a CRLF line break, where the host quotes too, so the bytes match exactly",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "say \"hi\"\r\nthere",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"say \\\"hi\\\"\\r\\nthere\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
     },
     {
       "name": "an ordinary Roam title still needs no quotes at all",

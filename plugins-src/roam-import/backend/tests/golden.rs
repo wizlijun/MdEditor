@@ -152,6 +152,13 @@ fn the_structural_shapes_read_back_as_the_blocks_they_are() {
 /// hand-rolled line-based reimplementation of a function the host builds on
 /// the `yaml` package — had no counterpart assertion at all. Both sides now
 /// assert the same cases; see `src/lib/outline/roam-golden.test.ts`.
+///
+/// `expected` is this side's bytes and every case has one. A case may also
+/// carry `host_expected`, for the single shape where the host's `yaml` package
+/// legitimately spells the same string differently (a value with a line break
+/// becomes a block scalar there, a double-quoted escape here) — that field is
+/// the TS half's business; what makes the divergence safe is asserted there
+/// too, by reading *these* bytes back through the host's own reader.
 #[test]
 fn frontmatter_touch_matches_the_shared_fixture() {
     let fixture: serde_json::Value = serde_json::from_str(FM_TOUCH).unwrap();

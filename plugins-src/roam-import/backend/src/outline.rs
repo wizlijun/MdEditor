@@ -610,23 +610,38 @@ fn is_plain_safe(value: &str) -> bool {
 /// nothing complains, and the title silently becomes `PKM`.
 ///
 /// Quote style follows `yaml`'s `quotedString`: single quotes when the value
-/// contains a `"` and no `'` (so the double quotes need no escaping),
-/// double quotes otherwise.
+/// contains a `"` and no `'` (so the double quotes need no escaping), double
+/// quotes otherwise — **except** that a value containing a line break always
+/// takes the double-quoted form. A single-quoted YAML scalar cannot carry a
+/// raw line break in a front-matter block: `title: 'say "hi"⏎there'` makes the
+/// reader report `Missing closing 'quote`, read the title as `say "hi` and
+/// lose every key after it. That is the unparsable-front-matter failure this
+/// whole function exists to prevent, so the newline check comes first.
 ///
-/// One deliberate divergence, documented rather than matched: `yaml` renders a
-/// value **containing a line break** as a block scalar (`|-` plus an indented
-/// body, folded or literal depending on `lineWidth`), which is a page of
-/// re-implementation for a case that cannot occur — a Roam page title is a
-/// single-line field, and a newline in one would already have produced a file
-/// name with a newline in it long before reaching here. This writes a
-/// double-quoted `\n` escape instead: different bytes, identical string on
-/// read-back, and the host normalises it to its own spelling the next time it
-/// touches the file.
+/// Two divergences from the host's `yaml` package remain, both verified to
+/// read back through its own reader as the same string — they are byte
+/// differences, not disagreements about what the file says:
+///
+/// 1. A value **containing a line break**: `yaml` renders a block scalar (`|-`
+///    plus an indented body), which is a page of re-implementation (chomping
+///    indicator, indentation indicator, its own fallbacks) for a case that
+///    cannot occur — a Roam page title is a single-line field, and a newline
+///    in one would already have produced a file name with a newline in it long
+///    before reaching here. This writes a double-quoted `\n` escape instead.
+///    `parseDocument` reads both back as the identical string, and the host
+///    normalises the bytes to its own spelling the next time it touches the
+///    file. Pinned from both sides by the shared fixture's `host_expected`.
+/// 2. **Control characters** (`\r`, BEL, DEL, C1, ...) with nothing else
+///    hostile about them: `yaml` forces double quotes, this leaves them plain.
+///    The host's reader parses the plain form with no errors and returns the
+///    control character intact, so nothing is lost or truncated; matching
+///    `yaml` here would mean porting its escape table (`\a`, `\v`, `\0`, ...)
+///    as well, for a shape no Roam title can hold.
 pub fn yaml_scalar(value: &str) -> String {
     if is_plain_safe(value) {
         return value.to_string();
     }
-    if value.contains('"') && !value.contains('\'') {
+    if !value.contains('\n') && value.contains('"') && !value.contains('\'') {
         return format!("'{}'", value.replace('\'', "''"));
     }
     let mut out = String::with_capacity(value.len() + 2);
@@ -1127,6 +1142,35 @@ mod tests {
     #[test]
     fn a_line_break_is_escaped_rather_than_written_as_a_block_scalar() {
         assert_eq!(yaml_scalar("line\nbreak"), "\"line\\nbreak\"");
+    }
+
+    /// …and the escape wins over the single-quote style, which is the one
+    /// combination that produced a file nobody could read back. A value with a
+    /// `"`, no `'` and a line break used to take single quotes, and a raw line
+    /// break inside them ends the scalar: the host's reader reports
+    /// `Missing closing 'quote`, hands back `say "hi` as the title and drops
+    /// `created`/`updated`/`type` with it. Exactly the unparsable front-matter
+    /// the quoting exists to prevent, so it is pinned in both styles' terms.
+    #[test]
+    fn a_line_break_beats_the_single_quote_style_that_cannot_hold_one() {
+        assert_eq!(yaml_scalar("say \"hi\"\nthere"), "\"say \\\"hi\\\"\\nthere\"");
+        assert_eq!(yaml_scalar("say \"hi\"\r\nthere"), "\"say \\\"hi\\\"\\r\\nthere\"");
+        // Still single-quoted where there is no line break to force the issue.
+        assert_eq!(yaml_scalar("say: \"hi\""), "'say: \"hi\"'");
+    }
+
+    /// The other, deliberately-open divergence. `yaml` forces double quotes on
+    /// a control character; this leaves the value plain, because the host's
+    /// own reader parses the plain form without an error and hands the
+    /// character back intact — a byte difference, not a disagreement about
+    /// what the file says. Recorded so a later reader knows it was measured
+    /// rather than missed.
+    #[test]
+    fn a_lone_control_character_is_left_plain_where_yaml_would_quote_it() {
+        for c in ['\r', '\u{7}', '\u{7f}', '\u{9b}'] {
+            let v = format!("a{c}b");
+            assert_eq!(yaml_scalar(&v), v, "{:?} started being quoted", c);
+        }
     }
 
     /// I3. `touch_frontmatter` deliberately never overwrites an existing
