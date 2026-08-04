@@ -77,11 +77,17 @@ pub fn interpret_status(v: &serde_json::Value) -> RunPoll {
             if status == "success" {
                 RunPoll::Succeeded
             } else {
-                let tail = rec
-                    .and_then(|r| r.get("result"))
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
-                RunPoll::Failed(format!("{status}: {tail}"))
+                // `result` is claude's own closing message — empty whenever the
+                // process never got that far (not logged in, spawn failure).
+                // The real reason is in stderr_tail then, and "AI 阅读失败
+                // error:" with nothing after the colon helps nobody.
+                let detail = ["result", "stderr_tail"]
+                    .iter()
+                    .filter_map(|k| rec.and_then(|r| r.get(*k)).and_then(|s| s.as_str()))
+                    .map(str::trim)
+                    .find(|s| !s.is_empty())
+                    .unwrap_or("no detail reported");
+                RunPoll::Failed(format!("{status}: {detail}"))
             }
         }
         // 无 record 也无锁:进程死了,或任务锁被别处(窗口/CLI)抢占后我们的
@@ -157,6 +163,32 @@ mod tests {
         ));
         assert!(matches!(interpret_status(&serde_json::json!({"state": "lost"})), RunPoll::Failed(_)));
         assert!(matches!(interpret_status(&serde_json::json!({})), RunPoll::Failed(_)));
+    }
+
+    /// claude not logged in / failing to start leaves `result` empty and the
+    /// real reason in `stderr_tail`; without the fallback the user reads
+    /// "AI 阅读失败 error:" and nothing else.
+    #[test]
+    fn a_failure_with_no_result_falls_back_to_stderr() {
+        let got = interpret_status(&serde_json::json!({
+            "state": "done",
+            "record": {"status": "error", "result": "  ", "stderr_tail": "Invalid API key\n"},
+        }));
+        assert_eq!(got, RunPoll::Failed("error: Invalid API key".into()));
+
+        // Nothing anywhere: still say something rather than a bare colon.
+        let got = interpret_status(&serde_json::json!({
+            "state": "done",
+            "record": {"status": "error"},
+        }));
+        assert_eq!(got, RunPoll::Failed("error: no detail reported".into()));
+
+        // result wins when it has content.
+        let got = interpret_status(&serde_json::json!({
+            "state": "done",
+            "record": {"status": "error", "result": "ran out of turns", "stderr_tail": "noise"},
+        }));
+        assert_eq!(got, RunPoll::Failed("error: ran out of turns".into()));
     }
 
     #[test]
