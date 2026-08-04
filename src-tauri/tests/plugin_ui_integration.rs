@@ -156,11 +156,14 @@ impl PluginView for FixtureView {
     }
 }
 
-/// Unwrap a `Routed::Response` (panics on `Rpc`).
+/// Unwrap a `Routed::Response` (panics on `Rpc`/`HostAsset`).
 fn resp(r: Routed) -> tauri::http::Response<Vec<u8>> {
     match r {
         Routed::Response(r) => r,
         Routed::Rpc(..) => panic!("expected a direct response, got Routed::Rpc"),
+        Routed::HostAsset(path) => {
+            panic!("expected a direct response, got Routed::HostAsset({path})")
+        }
     }
 }
 
@@ -226,6 +229,9 @@ fn handle_parsed_rpc_correct_origin_routes_with_capabilities() {
         }
         Routed::Response(r) => {
             panic!("expected Routed::Rpc, got status {}", r.status())
+        }
+        Routed::HostAsset(path) => {
+            panic!("expected Routed::Rpc, got Routed::HostAsset({path})")
         }
     }
 }

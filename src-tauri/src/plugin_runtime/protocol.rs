@@ -439,6 +439,11 @@ fn serve_host_asset<R: tauri::Runtime>(
 /// Read the persisted UI theme from settings.json (mirrors `read_saved_theme`
 /// in `windows.rs`; kept local so this module stays self-contained). Defaults
 /// to `"default"` when the file is missing/unreadable or the key is absent.
+///
+/// Delegates to `themes::commands::parse_theme_settings` (same reasoning as
+/// `windows::read_saved_theme`): the `theme` key has been an object since
+/// 4517e63, so a plain `.as_str()` read always missed and this always
+/// returned `"default"` — wrong for every real vault.
 fn read_saved_theme<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     use tauri::Manager;
     let Ok(dir) = app.path().app_config_dir() else {
@@ -450,7 +455,7 @@ fn read_saved_theme<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
         return "default".to_string();
     };
-    json.get("theme").and_then(|v| v.as_str()).unwrap_or("default").to_string()
+    crate::themes::commands::parse_theme_settings(&json).0
 }
 
 /// RPC seam: parse the JSON-RPC body, run `ui_rpc::dispatch` (production entry;

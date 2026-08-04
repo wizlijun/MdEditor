@@ -312,6 +312,15 @@ pub fn refresh_plugin_windows_locale<R: Runtime>(app: &tauri::AppHandle<R>, loca
 
 /// Read the persisted UI theme from settings.json (mirrors `read_saved_locale`).
 /// Defaults to `"default"` when the file is missing/unreadable or the key absent.
+///
+/// `settings.json`'s `theme` key has been an object (`{light, dark,
+/// followSystem}`) since 4517e63 (skin → theme.{light,dark,followSystem}
+/// migration); reading it with `.as_str()` therefore always misses and this
+/// always returned `"default"`, injecting a wrong `window.notemd.theme` into
+/// every plugin window. Delegate to `themes::commands::parse_theme_settings`
+/// — the parser Task 7 already wrote (and unit-tests) for exactly this shape,
+/// including the pre-migration `skin` string fallback — and use its light
+/// slot as the single id this legacy field carries.
 fn read_saved_theme<R: Runtime>(app: &tauri::AppHandle<R>) -> String {
     let Ok(dir) = app.path().app_config_dir() else {
         return "default".to_string();
@@ -322,10 +331,14 @@ fn read_saved_theme<R: Runtime>(app: &tauri::AppHandle<R>) -> String {
     let Ok(json) = serde_json::from_str::<Value>(&text) else {
         return "default".to_string();
     };
-    json.get("theme")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_string()
+    theme_id_from_settings(&json)
+}
+
+/// Pure core of [`read_saved_theme`]: pick the single theme id fed to
+/// `window.notemd.theme` from an already-parsed `settings.json` value.
+/// Extracted so the fix is unit-testable without an `AppHandle`.
+fn theme_id_from_settings(json: &Value) -> String {
+    crate::themes::commands::parse_theme_settings(json).0
 }
 
 #[cfg(test)]
@@ -470,6 +483,24 @@ mod tests {
         );
         // Empty win_title falls through to plugin_name.
         assert_eq!(window_title(None, "zh", "main", Some(""), "Plugin Name"), "Plugin Name");
+    }
+
+    #[test]
+    fn theme_id_from_settings_reads_the_post_4517e63_object_shape() {
+        // Regression: `.as_str()` on the `theme` key always missed this shape
+        // and silently fell back to "default" for every real vault.
+        let json = serde_json::json!({
+            "theme": { "light": "effie", "dark": "onedark", "followSystem": false }
+        });
+        assert_eq!(theme_id_from_settings(&json), "effie");
+    }
+
+    #[test]
+    fn theme_id_from_settings_falls_back_through_legacy_and_defaults() {
+        // Pre-migration `skin` string, still real on disk until the next save.
+        assert_eq!(theme_id_from_settings(&serde_json::json!({"skin": "effie"})), "effie");
+        // Nothing usable at all → the documented "default".
+        assert_eq!(theme_id_from_settings(&serde_json::json!({})), "default");
     }
 
     #[test]
