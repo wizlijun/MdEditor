@@ -42,6 +42,11 @@ export const MESSAGE_KEYS = [
   'sectionOutcome',
   'deleteConfirm',
   'close',
+  'newIdea',
+  'modeRich',
+  'modeSource',
+  'editorUnavailable',
+  'unsavedWarning',
 ] as const
 
 export type MessageKey = (typeof MESSAGE_KEYS)[number]
@@ -80,6 +85,11 @@ const en: Catalog = {
   sectionOutcome: 'Outcome',
   deleteConfirm: 'Delete this idea?',
   close: 'Close',
+  newIdea: 'New idea',
+  modeRich: 'Formatted',
+  modeSource: 'Markdown source',
+  editorUnavailable: 'The rich editor could not be loaded — falling back to plain text.',
+  unsavedWarning: 'This idea has unsaved changes.',
 }
 
 const zh: Catalog = {
@@ -112,6 +122,11 @@ const zh: Catalog = {
   sectionOutcome: '结果',
   deleteConfirm: '删除这个想法?',
   close: '关闭',
+  newIdea: '新想法',
+  modeRich: '排版视图',
+  modeSource: 'Markdown 源码',
+  editorUnavailable: '富文本编辑器加载失败 —— 已退回纯文本编辑。',
+  unsavedWarning: '这个想法还有未保存的修改。',
 }
 
 const ja: Catalog = {
@@ -144,6 +159,11 @@ const ja: Catalog = {
   sectionOutcome: '成果',
   deleteConfirm: 'このアイデアを削除しますか?',
   close: '閉じる',
+  newIdea: '新しいアイデア',
+  modeRich: 'リッチ表示',
+  modeSource: 'Markdown ソース',
+  editorUnavailable: 'リッチエディタを読み込めませんでした —— プレーンテキストに切り替えます。',
+  unsavedWarning: 'このアイデアには未保存の変更があります。',
 }
 
 const de: Catalog = {
@@ -176,6 +196,11 @@ const de: Catalog = {
   sectionOutcome: 'Ergebnis',
   deleteConfirm: 'Diese Idee löschen?',
   close: 'Schließen',
+  newIdea: 'Neue Idee',
+  modeRich: 'Formatiert',
+  modeSource: 'Markdown-Quelltext',
+  editorUnavailable: 'Der Rich-Text-Editor konnte nicht geladen werden — Rückfall auf reinen Text.',
+  unsavedWarning: 'Diese Idee hat ungespeicherte Änderungen.',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }

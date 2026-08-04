@@ -43,14 +43,17 @@ export function slugFromMarkdown(md: string): string {
 
 /**
  * Skips a leading YAML frontmatter block (`---` fence, content, `---`
- * fence). Only a fence at the very first line counts — a `---` line further
+ * fence). Exported because the App needs the exact same "where does the body
+ * start" rule when it loads a saved idea back into the editor (store.svelte.ts
+ * `bodyOf`) — two implementations of this would be two chances to disagree
+ * about what counts as frontmatter. Only a fence at the very first line counts — a `---` line further
  * down the document is a thematic break / mid-document separator, not
  * frontmatter, and must not be touched. If the document opens with `---`
  * but the fence is never closed, the whole document is returned unchanged
  * (don't guess where the "body" starts; fall back to scanning from the top,
  * same as before this function existed).
  */
-function stripLeadingFrontmatter(md: string): string {
+export function stripLeadingFrontmatter(md: string): string {
   const lines = md.split(/\r?\n/)
   if (lines[0]?.trim() !== '---') return md
   for (let i = 1; i < lines.length; i++) {

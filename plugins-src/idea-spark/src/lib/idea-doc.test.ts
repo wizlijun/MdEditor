@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { buildIdeaDoc } from './idea-doc'
+import { buildIdeaDoc, rebuildIdeaDoc } from './idea-doc'
 // The host repo's OKF hard-constraint linter is plain JS with no dependency
 // on the main app's src/ tree (only on the `yaml` package this plugin
 // already depends on), so it can be imported straight from the plugin test
@@ -45,5 +45,40 @@ describe('buildIdeaDoc', () => {
     const body = '正文第一行\n\n---\n\n正文第二段'
     const out = buildIdeaDoc(body, '2026-08-04T00:00:00Z')
     expect(out.endsWith(body)).toBe(true)
+  })
+})
+
+describe('rebuildIdeaDoc', () => {
+  const original = 'type: Idea\ncreated: 2026-01-01T00:00:00Z\nstatus: draft\ntags:\n  - transfer'
+
+  it('keeps the original created instead of stamping the save time', () => {
+    const out = rebuildIdeaDoc(original, 'body', '2026-08-04T00:00:00Z')
+    expect(out).toContain('created: 2026-01-01T00:00:00Z')
+    expect(out).not.toContain('2026-08-04T00:00:00Z')
+  })
+
+  it('keeps keys this plugin knows nothing about', () => {
+    const out = rebuildIdeaDoc(original, 'body', '2026-08-04T00:00:00Z')
+    const meta = parseYaml(out.match(/^---\n([\s\S]*?)\n---\n/)![1])
+    expect(meta.status).toBe('draft')
+    expect(meta.tags).toEqual(['transfer'])
+  })
+
+  it('heals a frontmatter that is missing the mandatory type', () => {
+    const out = rebuildIdeaDoc('created: 2026-01-01T00:00:00Z', 'body', '2026-08-04T00:00:00Z')
+    expect(out).toContain('type: Idea')
+    expect(lintText('2026-08-04-x.md', out)).toEqual([])
+  })
+
+  it('supplies created when the original frontmatter has none', () => {
+    const out = rebuildIdeaDoc('type: Idea', 'body', '2026-08-04T00:00:00Z')
+    expect(out).toContain('created: 2026-08-04T00:00:00Z')
+  })
+
+  it('produces a lint-clean document and keeps the body verbatim', () => {
+    const body = '# Title\n\n---\n\nmore'
+    const out = rebuildIdeaDoc(original, body, '2026-08-04T00:00:00Z')
+    expect(out.endsWith(body)).toBe(true)
+    expect(lintText('2026-08-04-title.md', out)).toEqual([])
   })
 })
