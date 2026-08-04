@@ -114,10 +114,12 @@
    嵌套列表再叠一个 0.6em,拿到卡片里每一行都被拉成段落间距。卡片是一眼扫完的清单,
    不是正文 —— 三个 class 的前缀(0-3-x)压过主题,把节奏收回到「条与条之间只隔一个
    行高」。 */
+/* 清单是一整块:与导语(以及后面的内容)之间留 1em 一个空行的距离,块内一行挨一行。 */
 .moraya-editor .answer-card .answer-card-md ul,
-.moraya-editor .answer-card .answer-card-md ol { margin: 0.25em 0; padding-left: 1.5em; }
+.moraya-editor .answer-card .answer-card-md ol { margin: 1em 0; padding-left: 1.5em; }
 .moraya-editor .answer-card .answer-card-md li { margin: 0; }
-.moraya-editor .answer-card .answer-card-md li > p { margin: 0; }
+/* 条目内不留空行:松散列表(marked 会给条目套 <p>)、嵌套子清单一律贴着上一行 */
+.moraya-editor .answer-card .answer-card-md li > p,
 .moraya-editor .answer-card .answer-card-md li > ul,
 .moraya-editor .answer-card .answer-card-md li > ol { margin: 0; }
 .moraya-editor .answer-card .answer-card-md p { margin: 0.4em 0; }
