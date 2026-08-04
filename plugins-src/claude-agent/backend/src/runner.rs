@@ -91,6 +91,9 @@ pub async fn run(run_dir: PathBuf) -> i32 {
         oauth_token: std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok(),
         // A CLI run is a whole-vault pass; the precheck decides from the vault.
         target: None,
+        // The CLI names no single output file (no reminder to earn), so there
+        // is nothing to declare; artifacts still cover output/ and answers/.
+        deliverable: None,
     };
 
     let (tx, mut rx) = mpsc::unbounded_channel();

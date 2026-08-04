@@ -24,6 +24,12 @@ pub struct TaskDef {
     /// starting at all. Exit 0 = run; anything else skips with its output.
     #[serde(default)]
     pub precheck: Option<String>,
+    /// OKF `type` for the file this task delivers, used only by the fallback
+    /// stamp in `engine`/`okf` when the model forgot its own frontmatter.
+    /// Unset ⇒ [`crate::okf::DEFAULT_TYPE`]. Must be a type registered in
+    /// `src/lib/okf/concept.ts`.
+    #[serde(default)]
+    pub okf_type: Option<String>,
 }
 
 fn default_timeout() -> u64 {

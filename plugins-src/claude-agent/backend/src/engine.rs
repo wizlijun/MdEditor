@@ -21,6 +21,10 @@ pub struct RunSpec {
     /// The one file this run is about, if any — handed to the precheck script
     /// as NOTEMD_NOTE so it can answer "is there anything to do?" locally.
     pub target: Option<String>,
+    /// The file this run was asked to PRODUCE (absolute), if the caller named
+    /// one. It usually lives outside `output/`/`answers/`, so it has to be
+    /// declared to be collected as an artifact and OKF-stamped at all.
+    pub deliverable: Option<PathBuf>,
 }
 
 /// Every step the engine emits. The window path turns these into
@@ -210,17 +214,40 @@ pub async fn run(
         (_, Some(0)) => record::Status::Success,
         _ => record::Status::Error,
     });
-    let found = artifacts::collect(&spec.vault, &spec.task_dir, started_at);
+    let found = artifacts::collect(
+        &spec.vault,
+        &spec.task_dir,
+        started_at,
+        spec.deliverable.as_deref(),
+    );
     // 提示词要求 agent 自己写 OKF 头,但那是约束不是保证:漏写就地补上,
     // 免得 vault 里多一份没有 `type` 的文档(§4.1)。已有 frontmatter 的不碰。
-    let stamped = okf::stamp_vault_answers(
-        &spec.vault,
-        &found,
-        &format!("claude-agent/{}", env!("CARGO_PKG_VERSION")),
-        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-    );
+    // 声明的目标文件用任务自报的 type(如 Book Summary),其余走默认 Answer ——
+    // 摘要写在 <vault>/ssot/ebooks/… 而不是 answers/,以前这道闸够不着它。
+    let by = format!("claude-agent/{}", env!("CARGO_PKG_VERSION"));
+    let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let target_rel = spec
+        .deliverable
+        .as_deref()
+        .and_then(|d| artifacts::vault_relative(&spec.vault, d));
+    let mut stamped = 0;
+    if let Some(rel) = &target_rel {
+        stamped += okf::stamp_vault_docs(
+            &spec.vault,
+            std::slice::from_ref(rel),
+            spec.task.okf_type.as_deref().unwrap_or(okf::DEFAULT_TYPE),
+            &by,
+            &at,
+        );
+    }
+    let rest: Vec<String> = found
+        .iter()
+        .filter(|r| Some(*r) != target_rel.as_ref())
+        .cloned()
+        .collect();
+    stamped += okf::stamp_vault_docs(&spec.vault, &rest, okf::DEFAULT_TYPE, &by, &at);
     if stamped > 0 {
-        eprintln!("[claude-agent] stamped OKF front-matter on {stamped} answer file(s)");
+        eprintln!("[claude-agent] stamped OKF front-matter on {stamped} file(s)");
     }
     let rec = finish(
         &spec,
@@ -313,6 +340,7 @@ mod tests {
                 timeout_seconds: timeout,
                 model: None,
                 precheck: None,
+                okf_type: None,
             },
             task_dir,
             task_run_dir: dir.join("runs-t"),
@@ -322,6 +350,7 @@ mod tests {
             run_id: "20260730T000000Z-000001".into(),
             oauth_token: None,
             target: None,
+            deliverable: None,
         }
     }
 
@@ -407,6 +436,67 @@ mod tests {
                 format!("{task_rel}/output/report.md"),
             ]
         );
+    }
+
+    /// The declared target is written wherever the caller wants (an ebook
+    /// digest sits beside its book, not under answers/), so both the artifact
+    /// list and the OKF fallback stamp have to reach it — and the stamp must
+    /// use the TASK's type, not the generic Answer.
+    #[tokio::test]
+    async fn a_declared_deliverable_is_reported_and_okf_stamped_with_the_task_type() {
+        let d = tempfile::tempdir().unwrap();
+        let summary = d.path().join("ssot/ebooks/b/2026-08-04-summary.md");
+        let c = fake_claude(
+            d.path(),
+            "fake-digest",
+            &format!(
+                concat!(
+                    "mkdir -p {dir} && printf '# 深度工作 — 摘要\\n' > {p}\n",
+                    r#"echo '{{"type":"result","result":"done","is_error":false}}'"#
+                ),
+                dir = summary.parent().unwrap().display(),
+                p = summary.display(),
+            ),
+        );
+        let mut s = spec(d.path(), c, 30);
+        s.task.okf_type = Some("Book Summary".into());
+        s.deliverable = Some(summary.clone());
+
+        let (_e, rec) = drive(s).await;
+        assert_eq!(rec.status, record::Status::Success);
+        assert_eq!(rec.artifacts, vec!["ssot/ebooks/b/2026-08-04-summary.md"]);
+        let got = std::fs::read_to_string(&summary).unwrap();
+        assert!(
+            got.starts_with("---\ntype: Book Summary\ntitle: \"深度工作 — 摘要\"\ngenerated: { by: claude-agent/"),
+            "the model forgot its frontmatter and the fallback did not cover it: {got}"
+        );
+    }
+
+    /// The model normally writes its own header — the fallback must not
+    /// double-stamp it.
+    #[tokio::test]
+    async fn a_deliverable_that_already_has_front_matter_is_left_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let summary = d.path().join("ssot/b-summary.md");
+        let body = "---\ntype: Book Summary\ntitle: \"x\"\n---\n# x\n";
+        let c = fake_claude(
+            d.path(),
+            "fake-digest-ok",
+            &format!(
+                concat!(
+                    "mkdir -p {dir} && printf '%s' '{body}' > {p}\n",
+                    r#"echo '{{"type":"result","result":"done","is_error":false}}'"#
+                ),
+                dir = summary.parent().unwrap().display(),
+                p = summary.display(),
+                body = body,
+            ),
+        );
+        let mut s = spec(d.path(), c, 30);
+        s.task.okf_type = Some("Book Summary".into());
+        s.deliverable = Some(summary.clone());
+        drive(s).await;
+        assert_eq!(std::fs::read_to_string(&summary).unwrap(), body);
     }
 
     /// The whole point of a precheck is spending no tokens. If claude still

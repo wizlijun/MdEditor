@@ -497,6 +497,10 @@ impl ClaudeAgentPlugin {
             run_id: run_id.clone(),
             oauth_token: std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok(),
             target,
+            // The file the caller says this run must produce. Doubles as the
+            // OKF stamp target and an artifact — it usually lives outside
+            // output/ and answers/, so nothing else would find it.
+            deliverable: notify.as_ref().map(|n| PathBuf::from(&n.expect_file)),
         };
 
         let (tx, mut rx) = mpsc::unbounded_channel();

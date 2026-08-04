@@ -26,13 +26,19 @@ fn quote(v: &str) -> String {
     format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// 给一份答案补上 OKF 概念头;已经有 frontmatter 就返回 None(不动它)。
-/// `by` 是 §7 的 actor(`<producer>/<version>`),`at` 是 ISO 8601。
-pub fn stamped(text: &str, by: &str, at: &str) -> Option<String> {
+/// 默认 `type`:任务没声明 `okf_type` 时的兜底(`answers/` 下的长答案)。
+/// 取值必须是 `src/lib/okf/concept.ts` 登记过的类型。
+pub const DEFAULT_TYPE: &str = "Answer";
+
+/// 给一份文档补上 OKF 概念头;已经有 frontmatter 就返回 None(不动它)。
+/// `ty` 是 §4.1 的唯一必填键 `type`,`by` 是 §7 的 actor
+/// (`<producer>/<version>`),`at` 是 ISO 8601;`generated` 按 §5.2 写成单一
+/// mapping。
+pub fn stamped(text: &str, ty: &str, by: &str, at: &str) -> Option<String> {
     if has_frontmatter(text) {
         return None;
     }
-    let mut head = String::from("---\ntype: Answer\n");
+    let mut head = format!("---\ntype: {ty}\n");
     if let Some(title) = first_h1(text) {
         head.push_str(&format!("title: {}\n", quote(title)));
     }
@@ -42,12 +48,12 @@ pub fn stamped(text: &str, by: &str, at: &str) -> Option<String> {
 
 /// 对 vault 内的这批交付物就地补头。返回补过的份数。
 /// 读不到/写不动的文件跳过 —— 收尾的元数据补写永远不该让一次成功的运行失败。
-pub fn stamp_vault_answers(vault: &Path, rels: &[String], by: &str, at: &str) -> usize {
+pub fn stamp_vault_docs(vault: &Path, rels: &[String], ty: &str, by: &str, at: &str) -> usize {
     let mut n = 0;
     for rel in rels {
         let p = vault.join(rel);
         let Ok(text) = std::fs::read_to_string(&p) else { continue };
-        let Some(next) = stamped(&text, by, at) else { continue };
+        let Some(next) = stamped(&text, ty, by, at) else { continue };
         if std::fs::write(&p, next).is_ok() {
             n += 1;
         }
@@ -61,8 +67,13 @@ mod tests {
 
     #[test]
     fn stamps_a_bare_answer_with_type_title_and_actor() {
-        let out = stamped("# KV cache 怎么省显存\n\n因为…\n", "claude-code/opus-5", "2026-08-04T09:00:00Z")
-            .expect("a bare answer must be stamped");
+        let out = stamped(
+            "# KV cache 怎么省显存\n\n因为…\n",
+            DEFAULT_TYPE,
+            "claude-code/opus-5",
+            "2026-08-04T09:00:00Z",
+        )
+        .expect("a bare answer must be stamped");
         assert_eq!(
             out,
             concat!(
@@ -76,20 +87,27 @@ mod tests {
         );
     }
 
+    /// 一次 run 的目标文件(如电子书摘要)用任务声明的 type,不是 Answer。
+    #[test]
+    fn stamps_a_task_declared_type() {
+        let out = stamped("# 深度工作 — 摘要\n", "Book Summary", "claude-agent/1.0.0", "T").unwrap();
+        assert!(out.starts_with("---\ntype: Book Summary\ntitle: \"深度工作 — 摘要\"\n"), "got: {out}");
+    }
+
     #[test]
     fn leaves_a_document_that_already_has_front_matter_alone() {
-        assert!(stamped("---\ntype: Answer\n---\n# x\n", "a/1", "t").is_none());
+        assert!(stamped("---\ntype: Answer\n---\n# x\n", DEFAULT_TYPE, "a/1", "t").is_none());
     }
 
     #[test]
     fn omits_the_title_when_there_is_no_h1() {
-        let out = stamped("答案正文,没有标题\n", "a/1", "t").unwrap();
+        let out = stamped("答案正文,没有标题\n", DEFAULT_TYPE, "a/1", "t").unwrap();
         assert!(out.starts_with("---\ntype: Answer\ngenerated: "), "got: {out}");
     }
 
     #[test]
     fn escapes_a_hostile_title() {
-        let out = stamped("# a \"quoted\" \\ title\n", "a/1", "t").unwrap();
+        let out = stamped("# a \"quoted\" \\ title\n", DEFAULT_TYPE, "a/1", "t").unwrap();
         assert!(out.contains("title: \"a \\\"quoted\\\" \\\\ title\"\n"), "got: {out}");
     }
 
@@ -100,7 +118,7 @@ mod tests {
         std::fs::write(dir.path().join("answers/a.md"), "# A\n").unwrap();
         std::fs::write(dir.path().join("answers/b.md"), "---\ntype: Answer\n---\n# B\n").unwrap();
         let rels = vec!["answers/a.md".to_string(), "answers/b.md".to_string(), "answers/missing.md".to_string()];
-        assert_eq!(stamp_vault_answers(dir.path(), &rels, "claude-code/opus-5", "T"), 1);
+        assert_eq!(stamp_vault_docs(dir.path(), &rels, DEFAULT_TYPE, "claude-code/opus-5", "T"), 1);
         assert!(std::fs::read_to_string(dir.path().join("answers/a.md")).unwrap().starts_with("---\ntype: Answer\n"));
         assert_eq!(std::fs::read_to_string(dir.path().join("answers/b.md")).unwrap(), "---\ntype: Answer\n---\n# B\n");
     }

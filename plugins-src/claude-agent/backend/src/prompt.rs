@@ -66,6 +66,7 @@ mod tests {
             timeout_seconds: 1800,
             model: None,
             precheck: None,
+            okf_type: None,
         }
     }
 
