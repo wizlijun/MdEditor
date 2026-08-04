@@ -45,7 +45,8 @@
     "vault.write",
     "toast",
     "editor.open",
-    "editor.kit"
+    "editor.kit",
+    "agent"
   ],
   "i18n": {
     "zh": {

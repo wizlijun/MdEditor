@@ -63,12 +63,17 @@
     onselect,
     ondelete,
     onrename,
+    ondelegate,
   }: {
     onselect: (name: string) => void
     /** Deletes the idea. The App wrapper flushes the autosave first. */
     ondelete: (name: string) => void | Promise<void>
     /** Renames it; false means the name was refused (the row stays in edit mode). */
     onrename: (from: string, raw: string) => Promise<boolean>
+    /** Hands the idea to the agent. Same App-level chain as the action bar's
+     *  own button — flush, run, register the run — just aimed at a row that
+     *  isn't necessarily the open document. */
+    ondelegate: (name: string) => void
   } = $props()
 
   const STATUS_KEY: Record<IdeaStatus, MessageKey> = {
@@ -186,12 +191,18 @@
 
   function itemsFor(name: string): MenuItem[] {
     const hasProof = store.files.includes(proofPathFor(relPath(store, name)))
+    const running = statusOf(store, name) === 'running'
     return [
-      // Delegation is wired up in a later task; this mirrors the action bar's
-      // own disabled Delegate button rather than pretending the row can do
-      // something it can't. (That task also disables it while a run is in
-      // flight — `statusOf(store, name) === 'running'`.)
-      { label: t('menuDelegate'), disabled: true, title: t('delegateDeferred') },
+      // Greyed out while this idea already has a run in flight: a second run
+      // on the same idea would overwrite the first one's `.proof.md`, and
+      // `pending` holds one run id per idea anyway — the second would take the
+      // first one's place and leave it unwatched.
+      {
+        label: t('menuDelegate'),
+        disabled: running,
+        title: running ? t('statusRunning') : t('menuDelegate'),
+        onselect: () => ondelegate(name),
+      },
       // With a proof document there are two things to open, so both are named
       // outright instead of hiding one behind a submenu (design §5 asks for a
       // second level; two flat rows say the same thing and stay reachable with

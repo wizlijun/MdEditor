@@ -16,6 +16,8 @@ import { beforeEach, describe, it, expect, vi } from 'vitest'
 // with `vi.hoisted` because `vi.mock`'s factory is hoisted above the imports.
 const host = vi.hoisted(() => ({
   request: vi.fn(),
+  agentRun: vi.fn(),
+  agentStatus: vi.fn(),
   vaultInfo: vi.fn(),
   vaultRead: vi.fn(),
   vaultWrite: vi.fn(),
@@ -26,6 +28,8 @@ const host = vi.hoisted(() => ({
 }))
 vi.mock('./bridge', () => ({
   bridge: () => ({ pluginId: 'test', locale: 'en', theme: 'x', request: host.request, onMessage: () => {} }),
+  agentRun: host.agentRun,
+  agentStatus: host.agentStatus,
   vaultInfo: host.vaultInfo,
   vaultRead: host.vaultRead,
   vaultWrite: host.vaultWrite,
@@ -55,9 +59,11 @@ import {
   needsSaveBefore,
   nextFileName,
   rebaseline,
+  reconcilePending,
   relativeAge,
   relPath,
   renameIdea,
+  runStatusWord,
   rowTitle,
   showInEditor,
   setIdeaDir,
@@ -903,5 +909,101 @@ describe('loadIdea', () => {
 
     expect(await loadIdea('a.md')).toBeNull()
     expect(state.titles['a.md']).toBe('the old heading')
+  })
+})
+
+describe('runStatusWord', () => {
+  // `applyRunDone` speaks claude-agent's status vocabulary and treats
+  // everything that isn't `success` as a failure — so this mapping is the one
+  // place a timed-out or cancelled run could be mistaken for a finished one.
+  it('is success only for a successful run', () => {
+    expect(runStatusWord({ kind: 'done', success: true })).toBe('success')
+    expect(runStatusWord({ kind: 'done', success: false })).toBe('error')
+    expect(runStatusWord({ kind: 'lost' })).toBe('lost')
+  })
+})
+
+// Startup reconciliation: `pending` came off disk and was written by an
+// EARLIER window, so every entry in it is a claim about a run this process has
+// never seen. Getting this wrong is what turns a ⏳ into a permanent one — or,
+// worse, marks a run that is still going as failed.
+describe('reconcilePending', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    state.files = ['inbox/ideas/a.md']
+    state.docs = ['a.md']
+    state.pending = { 'inbox/ideas/a.md': 'r1' }
+    host.vaultList.mockResolvedValue({ entries: [{ name: 'a.md', is_dir: false }] })
+    host.vaultWrite.mockResolvedValue({ ok: true })
+    host.request.mockResolvedValue({})
+  })
+
+  it('asks about the run under the plugin OWN task, never the agent default', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'lost' })
+    await reconcilePending()
+    // `host.agent.status` defaults a missing task to `answer-note-question`,
+    // which would report on another plugin's run directory entirely.
+    expect(host.agentStatus).toHaveBeenCalledWith('idea-proof', 'r1')
+  })
+
+  it('folds a run that finished while the window was closed into the listing', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'done', record: { status: 'success', result: 'ok' } })
+    // The re-list is the authority on what is on disk, and by now the agent's
+    // proof document is: `applyRunDone`'s optimistic fold only bridges the gap
+    // until this listing lands.
+    host.vaultList.mockResolvedValue({
+      entries: [
+        { name: 'a.md', is_dir: false },
+        { name: 'a.proof.md', is_dir: false },
+      ],
+    })
+
+    const still = await reconcilePending()
+
+    expect(still).toEqual([])
+    expect(state.pending).toEqual({})
+    expect(statusOf(state, 'a.md')).toBe('done')
+    // Dropped from disk too, or the next window would ask about it again.
+    const written = host.vaultWrite.mock.calls.find(([p]) => p === '.notemd/idea-spark.json')
+    expect(JSON.parse(written![1]).pendingRuns).toEqual({})
+  })
+
+  it('does not throw confetti for a run the user was not there to watch', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'done', record: { status: 'success', result: 'ok' } })
+    await reconcilePending()
+    // claude-agent already told them, in the tray, while they were away.
+    expect(state.celebrate).toBe(false)
+  })
+
+  it('marks a run whose process died as failed', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'lost' })
+
+    expect(await reconcilePending()).toEqual([])
+    expect(state.pending).toEqual({})
+    expect(state.failed).toEqual(['inbox/ideas/a.md'])
+  })
+
+  it('hands back a run that is still going so the window can watch it again', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'running', steps: 4, last: 'Read a.md' })
+
+    expect(await reconcilePending()).toEqual([{ ideaRel: 'inbox/ideas/a.md', runId: 'r1' }])
+    expect(state.pending).toEqual({ 'inbox/ideas/a.md': 'r1' })
+    expect(statusOf(state, 'a.md')).toBe('running')
+  })
+
+  it('leaves the entry alone when the agent cannot be reached at all', async () => {
+    // Uninstalled/disabled since the run started. That is not evidence the run
+    // failed, and saying it did would be a lie that outlives the outage.
+    host.agentStatus.mockRejectedValue(new Error('-32000: agent_unavailable: unknown v2 plugin'))
+
+    const still = await reconcilePending()
+
+    expect(still).toEqual([])
+    expect(state.pending).toEqual({ 'inbox/ideas/a.md': 'r1' })
+    expect(state.failed).toEqual([])
   })
 })

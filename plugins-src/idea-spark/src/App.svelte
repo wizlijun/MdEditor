@@ -41,23 +41,31 @@
   import InboxPanel from './components/InboxPanel.svelte'
   import ModeToggle from './components/ModeToggle.svelte'
   import SettingsPopover from './components/SettingsPopover.svelte'
+  import { delegateIdea, interpretStatus, POLL_MS, TASK_ID, type RunView } from './lib/agent-client'
   import { createAutosave } from './lib/autosave'
-  import { bridge } from './lib/bridge'
+  import { agentStatus, bridge } from './lib/bridge'
   import { loadKit, type KitEditor, type KitMode } from './lib/editor-kit'
   import { pickPlaceholder, placeholderLines } from './lib/placeholder'
   import {
     boot,
     deleteIdea,
+    finishRun,
     isBlank,
     loadIdea,
     markEdited,
+    markPending,
     needsSaveBefore,
     newIdea,
+    persist,
     rebaseline,
+    reconcilePending,
+    relPath,
     renameIdea,
+    runStatusWord,
     saveIdea,
     showInEditor,
     state as store,
+    titleOf,
     toast,
     toggleInbox,
   } from './lib/store.svelte'
@@ -71,6 +79,22 @@
   let fallbackText = $state('')
   let mode = $state<KitMode>('rich')
   let settingsOpen = $state(false)
+  /** A `host.agent.run` call is in flight (between the click and the run id). */
+  let delegating = $state(false)
+  /** claude-agent isn't installed/enabled — the layer pointing at the market. */
+  let agentMissing = $state(false)
+  /** Newest progress line of a watched run, with the idea it belongs to. Only
+   *  rendered when that idea is the one in the editor. */
+  let runProgress = $state<{ ideaRel: string; last: string } | null>(null)
+
+  /** The run id arguing the OPEN document, or null. Derived, never assigned:
+   *  `pending` is the single source of truth and the badge in the inbox reads
+   *  the very same map (`statusOf`). */
+  const openRun = $derived(store.current ? (store.pending[relPath(store, store.current)] ?? null) : null)
+  /** The progress line to show next to ⏳, or ''. */
+  const openLast = $derived(
+    store.current && runProgress?.ideaRel === relPath(store, store.current) ? runProgress.last : '',
+  )
 
   /** Rotating grey-text prompt for a blank document. `newIdea()` advances
    *  `placeholderSeq` (and persists it), so a fresh draft gets the next of the
@@ -246,13 +270,152 @@
     kit.focus()
   }
 
+  // ── delegation ────────────────────────────────────────────────────────────
+  //
+  // The chain, end to end: flush the buffer to disk (claude-agent
+  // `canonicalize`s the path it is given, so the file has to exist) → seed the
+  // task template and call `host.agent.run` (`agent-client.ts`) → record the
+  // run in `pending` AND write that to disk at once → poll for inline progress
+  // until the run ends.
+  //
+  // What this window deliberately does NOT own: the notification. The run
+  // outlives the window (closing it tears the plugin down, polling included),
+  // so the tray reminder is claude-agent's job — it is handed the two titles
+  // and the paths in the `notify` spec and pushes exactly one reminder itself.
+  // Sending a second one from here would show the user two, since the tray
+  // registry does not deduplicate.
+
+  /** Consecutive failed status calls before a watcher gives up on a run. */
+  const MAX_POLL_ERRORS = 5
+  /** run_id → the timer for its next poll. NOT `$state`: nothing renders these
+   *  handles, and making them reactive would invalidate the action bar twice a
+   *  second for nothing. */
+  const polls = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Set by `onMount`'s teardown; every scheduled callback checks it. */
+  let unmounted = false
+
+  /**
+   * Follows one run to its end, purely so the window can say "⏳ arguing" and
+   * show what the agent is doing. A `setTimeout` chain rather than an interval
+   * (a slow status call can never stack up behind itself) and never an
+   * `$effect` — an effect that synchronously calls store functions which read
+   * and write `$state` self-invalidates into a loop that freezes the whole
+   * window (MEMORY feedback_svelte_effect_untrack).
+   *
+   * Stopping is not a failure mode: the run belongs to claude-agent, so a
+   * window that closes mid-run loses the progress line and nothing else — the
+   * reminder still arrives, and `reconcilePending` picks the run up next time.
+   */
+  function watch(ideaRel: string, runId: string): void {
+    if (unmounted || polls.has(runId)) return
+    let errors = 0
+
+    const schedule = () => {
+      if (!unmounted) polls.set(runId, setTimeout(() => void poll(), POLL_MS))
+    }
+
+    const poll = async () => {
+      polls.delete(runId)
+      if (unmounted) return
+
+      let view: RunView
+      try {
+        view = interpretStatus(await agentStatus(TASK_ID, runId))
+        errors = 0
+      } catch (e) {
+        console.warn('[idea-spark] a run status poll failed:', e)
+        // Keep asking — but not forever. An agent disabled mid-run would
+        // otherwise reject every two seconds for as long as the window stays
+        // open. Giving up leaves `pending` untouched on purpose: "I can't
+        // reach the agent" is not evidence that the run failed, and startup
+        // reconciliation will ask again.
+        errors += 1
+        if (errors < MAX_POLL_ERRORS) schedule()
+        return
+      }
+      if (unmounted) return
+
+      if (view.kind === 'running') {
+        runProgress = { ideaRel, last: view.last }
+        schedule()
+        return
+      }
+
+      if (runProgress?.ideaRel === ideaRel) runProgress = null
+      // `finishRun` drops the pending entry (memory + disk), re-lists the
+      // directory and — on success — raises `celebrate`, which is what
+      // `<Celebration/>` is watching. `null` means the run was already
+      // settled by something else; say nothing rather than toasting twice.
+      const outcome = await finishRun(runId, runStatusWord(view))
+      if (outcome === 'failed') toast(t('delegateFailed'), 'error')
+    }
+
+    schedule()
+  }
+
+  /**
+   * Hands one idea to the agent. `name` names the row the inbox's context menu
+   * was opened on; omitted, it means the document in the editor.
+   *
+   * The `saveNow()` is load-bearing twice over: `note_path` must point at a
+   * file that already exists, and — for a never-saved draft — the save is what
+   * gives the idea a file name to delegate at all. It is also the same barrier
+   * delete and rename use: no write may still be in flight behind the run.
+   */
+  async function delegate(name?: string): Promise<void> {
+    const vaultRoot = store.vaultRoot
+    if (delegating || store.needVault || !vaultRoot) return
+    // Claimed BEFORE the flush, not after it: `saveNow()` is an await, and a
+    // second click landing inside it would otherwise sail past this guard and
+    // start a second run on the same idea — whose id would take the first
+    // one's place in `pending`, leaving that run unwatched and its proof
+    // document overwritten by whichever run finished last.
+    delegating = true
+    try {
+      await saveNow()
+
+      const target = name ?? store.current
+      // No file: either the draft is blank (never written, by design) or its
+      // save just failed — which `saveIdea` has already reported.
+      if (!target) {
+        toast(t('delegateEmpty'), 'error')
+        return
+      }
+      const ideaRel = relPath(store, target)
+      if (store.pending[ideaRel]) return // already being argued; the row says so
+
+      const result = await delegateIdea(ideaRel, titleOf(store, target), vaultRoot)
+      if (!result.ok) {
+        if (result.reason === 'agent-missing') agentMissing = true
+        else toast(result.message, 'error')
+        return
+      }
+      // Registered in memory and on disk in the same breath. A run that exists
+      // only in memory is lost to a window close, and nothing would ever
+      // reconcile it: the idea would sit there as a draft while claude-agent
+      // quietly finished arguing it.
+      markPending(store, ideaRel, result.runId)
+      await persist()
+      watch(ideaRel, result.runId)
+      toast(t('waitHint'))
+    } finally {
+      delegating = false
+    }
+  }
+
+  /** Focuses the agent-missing layer so Esc reaches it (see its `onkeydown`). */
+  function takeFocus(node: HTMLElement) {
+    node.focus()
+  }
+
   onMount(() => {
     let disposed = false
 
     // Host→UI pushes. `theme-changed` is the kit's business (it registers its
-    // own listener; the bridge fans out to every subscriber), and run
-    // completions only start arriving once delegation is wired (Task 13).
-    // Until then an unknown payload is deliberately ignored, not an error.
+    // own listener; the bridge fans out to every subscriber). Nothing else is
+    // expected: a run reports through `host.agent.status` (polled below), not
+    // through a push — claude-agent posts its run events to its OWN window.
+    // An unknown payload is therefore logged and ignored, not an error.
     bridge().onMessage((payload) => {
       if ((payload as { type?: string } | null)?.type === 'theme-changed') return
       console.debug('[idea-spark] unhandled host push:', payload)
@@ -304,6 +467,17 @@
         kit = null
         store.kitFailed = true
       }
+
+      // Runs recorded by an EARLIER window: ask once where each one stands
+      // (done → folded in and dropped; lost → marked failed; still running →
+      // watched again for its progress line). Last, and unawaited by the mount
+      // path above it, because it may have to wake claude-agent up — the
+      // editor must not wait on that.
+      if (disposed) return
+      for (const { ideaRel, runId } of await reconcilePending()) {
+        if (disposed) return
+        watch(ideaRel, runId)
+      }
     })()
 
     // Capture phase: the editor panes handle their own keys, and Cmd/Ctrl+S
@@ -334,6 +508,14 @@
 
     return () => {
       disposed = true
+      // Stops every status poll: the flag blocks the ones already in flight
+      // from rescheduling, and the loop drops the timers that are waiting.
+      // The RUNS are untouched by this — they belong to claude-agent, which
+      // still delivers their tray reminders, and `reconcilePending` picks
+      // them up when this window next opens.
+      unmounted = true
+      for (const id of polls.values()) clearTimeout(id)
+      polls.clear()
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('beforeunload', onBeforeUnload)
       autosave.dispose() // drops the pending timer; the window is going away
@@ -371,13 +553,25 @@
       <!-- Hidden by default (design §1); the action bar's 📥 toggles it and the
            choice is remembered across windows (`toggleInbox` → `inboxOpen`). -->
       {#if store.inboxOpen}
-        <InboxPanel onselect={pick} ondelete={removeIdea} onrename={rename} />
+        <InboxPanel
+          onselect={pick}
+          ondelete={removeIdea}
+          onrename={rename}
+          ondelegate={(name) => void delegate(name)}
+        />
       {/if}
     </div>
 
     <div class="actionbar">
+      <!-- The run on the OPEN document outranks the save state: while an idea
+           is being argued, "⏳ arguing" is the thing the bar is for. Every
+           other idea's run shows as a ⏳ on its own inbox row (`statusOf`). -->
       <span class="savestate">
-        {#if saveState.kind === 'saving'}
+        {#if delegating}
+          {t('delegating')}
+        {:else if openRun}
+          <span class="running">⏳ {t('statusRunning')}{openLast ? ` · ${openLast}` : ''}</span>
+        {:else if saveState.kind === 'saving'}
           {t('saving')}
         {:else if saveState.kind === 'saved'}
           {t('saved')} {saveState.at}
@@ -392,11 +586,10 @@
       <button
         type="button"
         class="ghost"
-        disabled
-        title={t('delegateDeferred')}
-        aria-describedby="delegate-hint">{t('delegate')}</button
+        disabled={delegating || openRun !== null}
+        title={openRun ? t('statusRunning') : t('delegate')}
+        onclick={() => void delegate()}>{delegating ? t('delegating') : t('delegate')}</button
       >
-      <span id="delegate-hint" class="sr-only">{t('delegateDeferred')}</span>
       <button
         type="button"
         class="icon"
@@ -418,6 +611,35 @@
       {#if settingsOpen}
         <SettingsPopover onclose={() => (settingsOpen = false)} />
       {/if}
+    </div>
+  {/if}
+
+  <!-- claude-agent isn't installed (or has been disabled): the one thing the
+       user can do about it is install it, so say that rather than showing a
+       raw `agent_unavailable:` error in a toast that scrolls away. -->
+  {#if agentMissing}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="backdrop" onclick={() => (agentMissing = false)}></div>
+    <div
+      class="layer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="agent-missing-title"
+      tabindex="-1"
+      use:takeFocus
+      onkeydown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          agentMissing = false
+        }
+      }}
+    >
+      <h2 id="agent-missing-title">{t('agentMissing')}</h2>
+      <p>{t('agentMissingHint')}</p>
+      <div class="layer-actions">
+        <button type="button" class="ghost" onclick={() => (agentMissing = false)}>{t('close')}</button>
+      </div>
     </div>
   {/if}
 
@@ -532,6 +754,16 @@
     cursor: pointer;
   }
   .savestate:has(.failed) { opacity: 1; }
+  /* The run indicator is the one thing in this slot that is about work in
+     flight rather than about a save that already happened — full opacity, and
+     a hard ellipsis so a long "Read some-very-long-name.md" can't push the
+     buttons off the bar. */
+  .savestate:has(.running) {
+    opacity: 0.85;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .actionbar > button {
     padding: 0.25rem 0.7rem;
     border-radius: 6px;
@@ -557,14 +789,50 @@
   .actionbar > button.icon:hover:not(:disabled) {
     background: color-mix(in srgb, currentColor 10%, transparent);
   }
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
+  /* The agent-missing layer. Same geometry as ConfirmDialog's, minus the file
+     list and the destructive button — there is nothing to confirm here. */
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgb(0 0 0 / 0.28);
+  }
+  .layer {
+    position: fixed;
+    z-index: 41;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(420px, calc(100vw - 2rem));
+    box-sizing: border-box;
+    padding: 1rem;
+    border: 1px solid var(--line, #e5e7eb);
+    border-radius: 10px;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
+  }
+  .layer:focus { outline: none; }
+  .layer h2 {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+  }
+  .layer p {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    opacity: 0.8;
+  }
+  .layer-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.9rem;
+  }
+  .layer-actions button {
+    padding: 0.3rem 0.7rem;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
   }
 </style>

@@ -14,7 +14,8 @@
 // drives the whole lifecycle from `onMount` and from event handlers, because a
 // `$effect` that synchronously calls a function which reads *and* writes
 // `$state` self-invalidates into a loop that freezes the window (v4.2.4).
-import { bridge, vaultExists, vaultInfo, vaultList, vaultRead, vaultRemove, vaultRename, vaultWrite } from './bridge'
+import { agentStatus, bridge, vaultExists, vaultInfo, vaultList, vaultRead, vaultRemove, vaultRename, vaultWrite } from './bridge'
+import { interpretStatus, TASK_ID, type RunView } from './agent-client'
 import { buildIdeaDoc, rebuildIdeaDoc } from './idea-doc'
 import { proofPathFor, splitFrontmatter, timestampFileName, titleFromMarkdown } from './naming'
 import { isReservedConceptName } from './okf/concept'
@@ -97,7 +98,7 @@ export interface SparkStore {
   saveState: { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved'; at: string } | { kind: 'failed'; message: string }
 }
 
-/** Terminal push from the host's run watcher (Task 13 wires the transport). */
+/** A run's terminal outcome, as read back from `host.agent.status`. */
 export interface RunDone {
   run_id: string
   /** claude-agent vocabulary: `success` | `error` | `timeout` | `cancelled` | `lost`. */
@@ -617,8 +618,15 @@ export async function reload(): Promise<void> {
   state.docs = listIdeas(entries)
 }
 
-/** Persists `.notemd/idea-spark.json`. Failure is reported, never thrown. */
-async function persist(): Promise<void> {
+/**
+ * Persists `.notemd/idea-spark.json`. Failure is reported, never thrown.
+ *
+ * Exported because `pending` is the one piece of this state that MUST reach
+ * disk the moment it changes: a run registered only in memory is lost to a
+ * window close (or a crash), and nothing would ever reconcile it — the idea
+ * would sit as a draft while claude-agent quietly finished arguing it.
+ */
+export async function persist(): Promise<void> {
   try {
     await vaultWrite(
       STATE_PATH,
@@ -632,6 +640,77 @@ async function persist(): Promise<void> {
   } catch (e) {
     console.error('[idea-spark] writing plugin state failed:', e)
   }
+}
+
+/** `RunView`'s terminal kinds → the claude-agent status word `applyRunDone`
+ *  speaks. Only `success` is a success; everything else is a failed run. */
+export function runStatusWord(view: { kind: 'done'; success: boolean } | { kind: 'lost' }): string {
+  if (view.kind === 'lost') return 'lost'
+  return view.success ? 'success' : 'error'
+}
+
+/**
+ * Applies a terminal outcome and lands the consequences: the pending entry is
+ * dropped from the state file (so a restart doesn't ask about a run that has
+ * already ended) and the directory is re-listed (so the new `.proof.md` is
+ * really there rather than just folded in optimistically by `applyRunDone`).
+ *
+ * Returns what `applyRunDone` did, `null` included — a `run_id` matching no
+ * pending run is a stale answer and must change nothing at all, disk writes
+ * least of all.
+ */
+export async function finishRun(runId: string, status: string): Promise<IdeaStatus | null> {
+  const outcome = applyRunDone(state, { run_id: runId, status })
+  if (outcome === null) return null
+  await persist()
+  await reload()
+  return outcome
+}
+
+/**
+ * One-shot correction of `pending` at startup, and the answer to "what should
+ * this window keep watching".
+ *
+ * `pending` comes off disk, so every entry in it was written by a *previous*
+ * window. In the meantime the run may well have finished (claude-agent is
+ * resident and outlives this window by design — that is why it, and not we,
+ * sends the tray reminder) or died with the machine. Asking once at startup is
+ * what keeps a ⏳ from becoming permanent.
+ *
+ * Three answers, three treatments:
+ *   * `done`   → folded in, dropped from disk (celebration suppressed, see below);
+ *   * `lost`   → marked failed, dropped from disk;
+ *   * `running`→ left exactly as it is, and handed back so the caller can
+ *                resume the inline progress poll for it.
+ *
+ * A status call that *rejects* (claude-agent uninstalled or disabled since the
+ * run was started) also leaves the entry alone: "I can't reach the agent" is
+ * not evidence that the run failed, and marking it failed would be a lie that
+ * outlives the outage.
+ *
+ * The celebration is deliberately swallowed here. Confetti belongs to a run
+ * the user just watched finish; for one that ended while the app was closed,
+ * they already got claude-agent's tray reminder, and a burst at startup —
+ * possibly before the window is even on screen — would be noise.
+ */
+export async function reconcilePending(): Promise<{ ideaRel: string; runId: string }[]> {
+  const still: { ideaRel: string; runId: string }[] = []
+  for (const [ideaRel, runId] of Object.entries(state.pending)) {
+    let view: RunView
+    try {
+      view = interpretStatus(await agentStatus(TASK_ID, runId))
+    } catch (e) {
+      console.warn('[idea-spark] could not reconcile a pending run (the agent did not answer):', e)
+      continue
+    }
+    if (view.kind === 'running') {
+      still.push({ ideaRel, runId })
+      continue
+    }
+    await finishRun(runId, runStatusWord(view))
+  }
+  clearCelebrate()
+  return still
 }
 
 /**
