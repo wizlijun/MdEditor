@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dev-install a v2 plugin into the local app-data plugins root.
 #
-# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import]
+# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import|idea-spark]
 #   default plugin = md2pdf (preserves the original behavior).
 #   --release      = build the native plugin binary in release mode (md2pdf +
 #                    openclaw; ignored for the pure-UI plugins).
@@ -38,8 +38,8 @@ PLUGIN=md2pdf
 for arg in "$@"; do
   case "$arg" in
     --release) PROFILE=release ;;
-    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import) PLUGIN="$arg" ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | ebook-import)" >&2; exit 2 ;;
+    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import|idea-spark) PLUGIN="$arg" ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | ebook-import | idea-spark)" >&2; exit 2 ;;
   esac
 done
 
@@ -199,6 +199,20 @@ elif [[ "$PLUGIN" == "ebook-import" ]]; then
   echo "✓ installed notemd.ebook-import@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
   echo "  open it:                Plugins menu ▸ \"导入电子书(epub、pdf、docx)…\""
   echo "  CLI:                    notemd ebook <file.epub|.pdf|.docx> [--ocr] [--ocr-provider wechat|baidu] [--root <vault-relative>]"
+
+elif [[ "$PLUGIN" == "idea-spark" ]]; then
+  SRC="plugins-src/idea-spark"
+  # Build the standalone UI bundle (dist/). Pure UI plugin; no native backend.
+  pnpm --filter idea-spark build
+  VERSION=$(node -e "console.log(require('./$SRC/manifest.v2.json').version)")
+  DEST="$ROOT/notemd.idea-spark/$VERSION"
+  rm -rf "$DEST"
+  mkdir -p "$DEST/ui"
+  cp -R "$SRC/dist/." "$DEST/ui/"
+  cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
+  ln -sfn "$VERSION" "$ROOT/notemd.idea-spark/current"
+  mark_installed "notemd.idea-spark" "$VERSION"
+  echo "✓ installed notemd.idea-spark@$VERSION (ui-only) → $DEST"
 fi
 
 # ---------------------------------------------------------------------------
