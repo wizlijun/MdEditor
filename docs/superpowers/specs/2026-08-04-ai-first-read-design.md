@@ -93,8 +93,9 @@ ebook-import UI ── plugin.ai_read_start ──▶ ebook-import 后端(FIFO �
   - `OpenPluginWindow(plugin_id, window)`:复用 `tray-plugin:*` 打开插件窗口。
 - 新宿主 API `host.notify`(新 capability `notify`):插件推一条提醒,
   参数 `{title, action}`。
-- 托盘变化:有提醒时菜单出现「提醒 (n)」子菜单(每条一项 + "清除全部提醒"),
-  图标切"提醒态"新资源;图标优先级:错误 > 提醒 > 大文件警告 > 同步中 > 空闲。
+- 托盘变化:有提醒时菜单出现「🔔 n 条提醒」子菜单(每条一项 + "清除全部提醒"),
+  并在图标旁挂数字角标(`tray.set_title(n)`);原有图标四态(错误/大文件警告/同步中/
+  空闲)逻辑不变——角标比新图标资源多传达"几条",且无需新增美术资产。
 - 点击某条提醒:执行 action、从注册表移除、重建菜单并按剩余状态刷新图标。
 - 本功能的用法:成功 →「《书名》AI 摘要已生成」action=OpenPath(摘要);
   失败 →「《书名》AI 阅读失败」action=OpenPluginWindow(claude-agent 主窗口,
