@@ -16,6 +16,15 @@ export interface Autosave {
  * 并发约束:任意时刻至多一次 `save()` 在飞(`inFlight`)。定时器触发或 `flush()`
  * 发现已有一次在飞时,不会另起一次,而是等它结束后再按当时的 `pending` 决定
  * 是否补发一次 —— 避免旧内容的 save 晚于新内容 resolve、静默覆盖磁盘。
+ *
+ * `flush()` 的契约是**返回时磁盘已经追上当时的内容**,而且这条契约对*每一个*
+ * 并发的等待者都成立。所以 `settle` 是个循环而不是「等一次 + 看一眼 pending」:
+ * 两个 flush 同时等同一次在飞的保存时,先醒的那个会消费掉 `pending` 并补发一次,
+ * 后醒的若只看 `pending`(此刻已是 false)就会**不等补发直接放行** —— 调用方
+ * (App 的 `keepUnsaved`)据此判定「已经存好了」而换掉编辑器内容,补发那次随后
+ * 才落地并把旧文档的 `current`/`savedMarkdown` 写回 store,新草稿于是继承了旧
+ * idea 的文件名并覆盖它。循环到「既无 pending 也无 in-flight」才返回,堵的就是
+ * 这条路。
  */
 export function createAutosave(save: () => Promise<void>, delayMs = AUTOSAVE_MS): Autosave {
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -23,22 +32,25 @@ export function createAutosave(save: () => Promise<void>, delayMs = AUTOSAVE_MS)
   let inFlight: Promise<void> | null = null
   let disposed = false
 
-  // 若已有 save 在飞,等它结束;结束后若 pending 仍为真(可能是等待期间新排的),
-  // 补发一次并等它结束。任意时刻只会有一个 save() 调用在飞。
+  // 有在飞的就等它;没有在飞但有 pending 就补发一次并等它。反复直到两者皆无 ——
+  // 于是无论多少个 flush 并发等待,每一个都只在「最后一次 save 已落地」之后返回,
+  // 哪怕补发那次是别的等待者发起的。任意时刻仍只有一个 save() 在飞。
   const settle = async () => {
-    if (inFlight) {
-      await inFlight
-    }
-    if (!pending) return
-    pending = false
-    const p = (async () => {
-      try { await save() } catch { /* 调用方负责显示失败 */ }
-    })()
-    inFlight = p
-    try {
-      await p
-    } finally {
-      if (inFlight === p) inFlight = null
+    while (inFlight || pending) {
+      if (inFlight) {
+        await inFlight
+        continue
+      }
+      pending = false
+      const p = (async () => {
+        try { await save() } catch { /* 调用方负责显示失败 */ }
+      })()
+      inFlight = p
+      try {
+        await p
+      } finally {
+        if (inFlight === p) inFlight = null
+      }
     }
   }
 

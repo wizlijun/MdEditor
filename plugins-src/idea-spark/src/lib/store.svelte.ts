@@ -334,6 +334,20 @@ export function ideaTemplate(): string {
  * `saveIdea`), or the inbox would fill up with empty rows nobody created on
  * purpose. Whitespace counts as blank: a stray newline from a mis-key is not
  * an idea either.
+ *
+ * The rule has a second half that is easy to miss: a blank buffer also never
+ * **empties an idea that already has a file**. Selecting all and deleting does
+ * not truncate the document on disk — the file keeps its last non-blank
+ * content, `saveState` drops to `idle` (the bar must not go on claiming
+ * "saved 19:42" about content the editor no longer shows), and closing the
+ * window warns about unsaved changes like any other unwritten edit.
+ *
+ * That is deliberate: an idea is removed by deleting it (the inbox's job), not
+ * by blanking the editor, and the same guard is the only thing standing
+ * between a spurious empty `onChange` echo — the kit rebuilds its view on
+ * `setMode` — and a saved idea being silently wiped. Trading "you cannot empty
+ * a file from the editor" for "an editor hiccup cannot erase your idea" is the
+ * right way round.
  */
 export function isBlank(markdown: string): boolean {
   return markdown.trim() === ''
@@ -485,7 +499,13 @@ async function persist(): Promise<void> {
  */
 export async function saveIdea(markdown: string): Promise<string | null> {
   if (!state.vaultRoot) return null
-  if (isBlank(markdown)) return null
+  if (isBlank(markdown)) {
+    // Nothing is written — and the previous `saved HH:mm` would now be a claim
+    // about content the user has just deleted from the editor. Drop to `idle`
+    // so the bar says nothing rather than something false.
+    state.saveState = { kind: 'idle' }
+    return null
+  }
   state.busy = true
   state.saveState = { kind: 'saving' }
   try {

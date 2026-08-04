@@ -175,7 +175,17 @@
       return false
     }
     await saveNow()
-    return store.saveState.kind !== 'failed'
+    // Assert the postcondition against the buffer itself rather than inferring
+    // it from `saveState`. `saveState` is a report *about* a save, and reading
+    // it here asks the wrong question twice over: it can still say `saving`
+    // (another writer's save is in flight) and it says nothing at all about
+    // whether the bytes on disk match what the editor holds *now* — a save
+    // that succeeded on an older buffer would read as success. The buffer
+    // comparison is the thing that actually has to be true before the content
+    // may be thrown away, so ask that.
+    if (!needsSaveBefore(store, markdown())) return true
+    toast(t('unsavedWarning'))
+    return false
   }
 
   async function pick(name: string): Promise<void> {
@@ -277,7 +287,10 @@
       // exactly the ones still inside the debounce window.
       if (!needsSaveBefore(store, markdown())) return
       void saveNow()
-      if (!isBlank(markdown())) toast(t('unsavedWarning'))
+      // Warn for a blanked document too: `saveIdea` refuses to write it (see
+      // `isBlank`), so "you deleted everything and closed the window" is
+      // precisely a case where what is on screen never reached the disk.
+      toast(t('unsavedWarning'))
     }
     window.addEventListener('beforeunload', onBeforeUnload)
 

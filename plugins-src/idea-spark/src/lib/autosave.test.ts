@@ -92,6 +92,49 @@ describe('createAutosave', () => {
     await vi.advanceTimersByTimeAsync(3000)
     expect(save).toHaveBeenCalledTimes(2)
   })
+  it('two concurrent flushes both wait for the LAST save to land', async () => {
+    // 回归:settle 曾经只等一次 in-flight、然后看一眼 pending 就返回。两个 flush
+    // 同时等同一次在飞的保存时,先醒的消费掉 pending 并补发第二次,后醒的看到
+    // pending===false 就提前 resolve —— 调用方据此换掉编辑器内容,补发那次随后
+    // 落地,把旧文档的文件名写回 store,新草稿于是覆盖了旧 idea。
+    let resolveFirst: (() => void) | null = null
+    let secondLanded = false
+    const save = vi.fn(() => {
+      if (save.mock.calls.length === 1) {
+        return new Promise<void>((resolve) => { resolveFirst = resolve })
+      }
+      return Promise.resolve().then(() => Promise.resolve()).then(() => { secondLanded = true })
+    })
+    const a = createAutosave(save, 1500)
+
+    // 第一次 save 起飞并卡住(慢盘/网络盘)
+    a.schedule()
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(save).toHaveBeenCalledTimes(1)
+
+    // 用户又打了字,然后两个强制写盘点接连发生(Cmd+S,紧接着「新想法」)
+    a.schedule()
+    // 每个 flush **在自己 resolve 的那一刻**看到的世界 —— 不能等 Promise.all
+    // 之后再看 `secondLanded`:那时先醒的那个 flush 早就把第二次 save 等完了,
+    // 提前放行的那个也会被它掩护过去,断言就测不出东西。
+    let f1Saw: boolean | null = null
+    let f2Saw: boolean | null = null
+    const f1 = a.flush().then(() => { f1Saw = secondLanded })
+    const f2 = a.flush().then(() => { f2Saw = secondLanded })
+
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(f1Saw).toBeNull()
+    expect(f2Saw).toBeNull()
+
+    resolveFirst!()
+    await Promise.all([f1, f2])
+
+    // 两个 flush 都必须在补发的第二次 save 落地之后才 resolve。
+    // 旧实现下 f2Saw === false:它看到 pending 已被 f1 消费掉就直接返回了。
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(f1Saw).toBe(true)
+    expect(f2Saw).toBe(true)
+  })
   it('dispose prevents a later schedule from reviving the instance', async () => {
     const save = vi.fn().mockResolvedValue(undefined)
     const a = createAutosave(save, 1500)
