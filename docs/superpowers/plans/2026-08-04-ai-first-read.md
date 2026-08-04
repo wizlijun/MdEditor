@@ -732,8 +732,8 @@ Expected: FAIL(模板还不存在)。
    type: Book Summary
    title: "<书名> — 摘要"
    generated:
-     - by: claude-code/<你的模型名,如 opus-5>
-       at: <目标文件名里的日期,YYYY-MM-DD>
+     by: claude-code/<你的模型名,如 opus-5>
+     at: <目标文件名里的日期,YYYY-MM-DD>
    sources:
      - resource: book.md
    ---
