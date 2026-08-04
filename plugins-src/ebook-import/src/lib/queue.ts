@@ -254,14 +254,25 @@ export function isRunComplete(q: Queue): boolean {
 
 export type AiStatus = 'queued' | 'running' | 'done' | 'failed'
 
-/** Payload shape of a host `type:"ai_read"` push (backend run_ai_job);
- * `queued` is applied locally by the window right after plugin.ai_read_start. */
-export interface AiEvent {
-  event: 'queued' | 'started' | 'done' | 'failed'
+/** Payload shape of a host `type:"ai_read"` push from backend (Task 8's `run_ai_job`).
+ * Backend only sends `started`/`done`/`failed`. */
+export interface BackendAiEvent {
+  event: 'started' | 'done' | 'failed'
   started_at?: string
   summary_rel?: string
   error?: string
 }
+
+/** Payload shape of AI events applied locally by the window.
+ * `queued` is applied locally right after plugin.ai_read_start succeeds. */
+export interface LocalAiEvent {
+  event: 'queued'
+}
+
+/** Union of all AI event types: backend pushes (started/done/failed) or local application (queued).
+ * For Task 9 (App.svelte): `BackendAiEvent` corresponds to host→UI `{type:"ai_read", …}` pushes;
+ * `LocalAiEvent` is only applied locally. */
+export type AiEvent = BackendAiEvent | LocalAiEvent
 
 export function onAiEvent(q: Queue, jobId: number, ev: AiEvent): Queue {
   const idx = q.items.findIndex((i) => i.jobId === jobId)
@@ -287,8 +298,6 @@ export function onAiEvent(q: Queue, jobId: number, ev: AiEvent): Queue {
     case 'failed':
       next = { ...item, aiStatus: 'failed', aiError: ev.error }
       break
-    default:
-      return q
   }
   const items = [...q.items]
   items[idx] = next
