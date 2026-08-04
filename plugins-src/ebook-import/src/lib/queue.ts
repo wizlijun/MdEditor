@@ -32,6 +32,11 @@ export interface QueueItem {
    */
   cancelled?: boolean
   jobId?: number
+  /** "AI 先读"侧线状态(与导入 status 正交,仅 done 的行会有)。 */
+  aiStatus?: AiStatus
+  aiStartedAt?: string
+  aiSummaryRel?: string
+  aiError?: string
   logs: string[]
 }
 
@@ -245,4 +250,47 @@ export function hasPending(q: Queue): boolean {
  */
 export function isRunComplete(q: Queue): boolean {
   return !hasPending(q) && q.activeId == null
+}
+
+export type AiStatus = 'queued' | 'running' | 'done' | 'failed'
+
+/** Payload shape of a host `type:"ai_read"` push (backend run_ai_job);
+ * `queued` is applied locally by the window right after plugin.ai_read_start. */
+export interface AiEvent {
+  event: 'queued' | 'started' | 'done' | 'failed'
+  started_at?: string
+  summary_rel?: string
+  error?: string
+}
+
+export function onAiEvent(q: Queue, jobId: number, ev: AiEvent): Queue {
+  const idx = q.items.findIndex((i) => i.jobId === jobId)
+  if (idx === -1) return q
+  const item = q.items[idx]
+  let next: QueueItem
+  switch (ev.event) {
+    case 'queued':
+      next = { ...item, aiStatus: 'queued', aiError: undefined }
+      break
+    case 'started':
+      next = {
+        ...item,
+        aiStatus: 'running',
+        aiStartedAt: ev.started_at,
+        aiSummaryRel: ev.summary_rel,
+        aiError: undefined,
+      }
+      break
+    case 'done':
+      next = { ...item, aiStatus: 'done', aiSummaryRel: ev.summary_rel ?? item.aiSummaryRel }
+      break
+    case 'failed':
+      next = { ...item, aiStatus: 'failed', aiError: ev.error }
+      break
+    default:
+      return q
+  }
+  const items = [...q.items]
+  items[idx] = next
+  return { ...q, items }
 }

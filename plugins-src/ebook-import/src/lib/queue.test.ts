@@ -4,10 +4,12 @@ import {
   hasPending,
   isRunComplete,
   nextToStart,
+  onAiEvent,
   onJobEvent,
   replayPending,
   reserve,
   stashOrApply,
+  type AiEvent,
   type ItemStatus,
   type PendingJobEvent,
   type Queue,
@@ -288,5 +290,47 @@ describe('run gating (Start button)', () => {
     expect(isRunComplete({ items: [item(1, 'pending')], activeId: null })).toBe(false)
     expect(isRunComplete({ items: [item(1, 'done')], activeId: null })).toBe(true)
     expect(isRunComplete({ items: [], activeId: null })).toBe(true)
+  })
+})
+
+describe('onAiEvent', () => {
+  function doneItem(id: number, jobId: number): Queue {
+    let q: Queue = { items: [], activeId: null }
+    q = addPaths(q, [`/tmp/book${id}.epub`])
+    const item = { ...q.items[0], status: 'done' as const, jobId, destRel: `ssot/ebooks/2026-08/b${id}` }
+    return { ...q, items: [item] }
+  }
+
+  it('started marks running with timestamps and target', () => {
+    const q = onAiEvent(doneItem(1, 7), 7, {
+      event: 'started',
+      started_at: '2026-08-04T03:00:00Z',
+      summary_rel: 'ssot/ebooks/2026-08/b1/2026-08-04-summary.md',
+    })
+    expect(q.items[0].aiStatus).toBe('running')
+    expect(q.items[0].aiStartedAt).toBe('2026-08-04T03:00:00Z')
+    expect(q.items[0].aiSummaryRel).toBe('ssot/ebooks/2026-08/b1/2026-08-04-summary.md')
+  })
+
+  it('queued then done keeps summary target and clears error', () => {
+    let q = onAiEvent(doneItem(1, 7), 7, { event: 'queued' })
+    expect(q.items[0].aiStatus).toBe('queued')
+    q = onAiEvent(q, 7, { event: 'done', summary_rel: 'x/2026-08-04-summary.md' })
+    expect(q.items[0].aiStatus).toBe('done')
+    expect(q.items[0].aiSummaryRel).toBe('x/2026-08-04-summary.md')
+  })
+
+  it('failed records the error; retry via queued clears it', () => {
+    let q = onAiEvent(doneItem(1, 7), 7, { event: 'failed', error: 'run lost' })
+    expect(q.items[0].aiStatus).toBe('failed')
+    expect(q.items[0].aiError).toBe('run lost')
+    q = onAiEvent(q, 7, { event: 'queued' })
+    expect(q.items[0].aiStatus).toBe('queued')
+    expect(q.items[0].aiError).toBeUndefined()
+  })
+
+  it('unknown jobId is a no-op', () => {
+    const q = doneItem(1, 7)
+    expect(onAiEvent(q, 99, { event: 'started' })).toBe(q)
   })
 })
