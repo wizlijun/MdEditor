@@ -54,7 +54,7 @@ export interface KitOptions {
    * never loses the last edits to a mode switch or a closing window.
    */
   onChange?: (md: string) => void
-  /** Hint shown in an empty source-mode buffer. */
+  /** Hint shown in an empty buffer, in either rich or source mode. */
   placeholder?: string
   /**
    * Vault-relative directory of the document being edited, used to resolve
@@ -129,7 +129,7 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
     rich?.destroy(); rich = null
     source?.destroy(); source = null
     host.innerHTML = ''
-    if (mode === 'rich') rich = await mountRich(host, markdown, root, emit)
+    if (mode === 'rich') rich = await mountRich(host, markdown, root, emit, opts.placeholder)
     else source = mountSource(host, markdown, emit, opts.placeholder)
   }
 

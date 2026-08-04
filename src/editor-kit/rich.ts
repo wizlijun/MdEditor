@@ -8,10 +8,23 @@
 
 import { createEditor, setDocumentBaseDir, type MorayaEditorInstance } from '@moraya/core'
 import { bridgeMediaResolver } from './media'
+// placeholder-plugin only depends on prosemirror-state/view — zero Tauri IPC,
+// so it clears the kit's dependency allowlist.
+import { placeholderPlugin } from '../lib/placeholder-plugin'
+import type { Plugin } from 'prosemirror-state'
 
 /** Base directory (absolute) used to resolve relative image paths in rich mode. */
 export function setKitBaseDir(absoluteDir: string): void {
   setDocumentBaseDir(absoluteDir)
+}
+
+/**
+ * The placeholder plugin only when a hint was given. Pulled out as a pure
+ * function so the wiring can be checked in a DOM-less test (mounting a real
+ * ProseMirror + moraya editor does not work under jsdom).
+ */
+export function richPlugins(placeholder: string | undefined): Plugin[] {
+  return placeholder ? [placeholderPlugin(placeholder)] : []
 }
 
 export async function mountRich(
@@ -19,8 +32,9 @@ export async function mountRich(
   initial: string,
   vaultRoot: string,
   onChange: (md: string) => void,
+  placeholder?: string,
 ): Promise<MorayaEditorInstance> {
-  return createEditor({
+  const instance = await createEditor({
     container: host,
     initialContent: initial,
     mediaResolver: bridgeMediaResolver(vaultRoot),
@@ -41,4 +55,17 @@ export async function mountRich(
     onChange,
     changeDebounceMs: 200,
   })
+
+  // Append the placeholder plugin after mount, same construction as the main
+  // window's editor-append plugins in RichEditor.svelte (`view.updateState(
+  // view.state.reconfigure(...))`).
+  const extra = richPlugins(placeholder)
+  if (extra.length) {
+    instance.view.updateState(
+      instance.view.state.reconfigure({
+        plugins: instance.view.state.plugins.concat(extra),
+      }),
+    )
+  }
+  return instance
 }

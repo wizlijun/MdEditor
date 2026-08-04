@@ -1261,7 +1261,9 @@
     cursor: text;
   }
   /* Hint inside an otherwise blank document so the caret's home is visible.
-     `float` keeps it out of layout flow without needing a positioned parent. */
+     `float` keeps it out of layout flow without needing a positioned parent.
+     Scoped here, so the Editor Kit (src/editor-kit/kit.css) carries its own
+     copy — keep the two in sync. */
   .host :global(.ProseMirror .is-empty)::before {
     content: attr(data-placeholder);
     float: left;
