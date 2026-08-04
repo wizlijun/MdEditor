@@ -14,7 +14,7 @@
 |---|---|
 | 架构 | 方案 A:纯前端插件 + 宿主桥扩展(`host.plugin.execute` + `host.agent.watch`) |
 | idea 目录默认值 | `inbox/ideas`(vault 相对路径,窗口设置可改,存 vault 级 `.notemd/idea-spark.json`) |
-| 等待交互 | 可关窗,后台由宿主守望,完成后系统通知;窗口开着则就地欢庆 |
+| 等待交互 | 可关窗,后台由宿主守望;窗口开着则就地欢庆,关着则下次开窗见「已完成」。**系统通知本期不做**(2026-08-04 用户决定:统一托盘通知另行实现),守望器留 `registerWatchNotifier` 挂钩待接 |
 | 缺依赖降级 | 未装/未启用 claude-agent 时仍可记 idea,委托按钮引导去市场安装 |
 | 编辑器形态 | 复用主程序那套 rich/source 双模式富文本——由宿主提供 Editor Kit 组件包,插件运行时加载,主题完全跟随用户设置,插件包不膨胀(见 §2.1/§3.4);预填轻模板(一句话念头 + 领域/迁移场景/现有条件/期望成果四个可删小节) |
 | 任务模板归属 | 由奇思妙想插件内嵌并幂等种入 vault `.notemd/agent-tasks/idea-proof/`,claude-agent 自动发现,无需给 claude-agent 发版 |
@@ -27,7 +27,7 @@
 |---|---|---|
 | 插件本体 | `plugins-src/idea-spark/`(新) | 纯前端插件,照 `plugins-src/decision-log/` 形态:manifest.v2.json + 独立窗口 UI(Svelte)+ 复制的 `bridge.ts`/`strings.ts`/`okf/concept.ts` |
 | 宿主桥扩展 | `src-tauri/src/plugin_runtime/`(host_api.rs 等) | 新增 `host.plugin.execute`、`host.agent.watch` 两个桥方法及对应 capability |
-| 宿主守望模块 | `src/lib/agent-watch/`(新) | 主程序前端 run 守望器:轮询 claude-agent `run-status`,终态发系统通知;守望列表持久化,重启恢复 |
+| 宿主守望模块 | `src/lib/agent-watch/`(新) | 主程序前端 run 守望器:轮询 claude-agent `run-status`,终态回推插件窗口 + 调通知挂钩;守望列表持久化,重启恢复 |
 | 宿主 Editor Kit | `src/editor-kit/`(新构建目标) | rich/source 双模式编辑器组件包,宿主构建、`plugin://` 运行时下发、主题跟随用户设置(§3.4) |
 | 任务模板 | 插件内嵌资源 | `idea-proof` 任务模板(task.json + CLAUDE.md + `.claude/settings*.json`),首次委托时种入 vault,已存在文件绝不覆盖 |
 
@@ -82,9 +82,9 @@ kit 的挂载选项按奇思妙想的需要收敛:`enableMath: false`、`enableM
    3. 幂等种入 `idea-proof` 模板到 `.notemd/agent-tasks/idea-proof/`(`host.vault.write`,逐文件 exists 检查,已存在绝不覆盖);
    4. `host.plugin.execute` → claude-agent `run-note`,参数 `{note_path: <idea 相对路径>, task: "idea-proof"}`,立即返回 `run_id`;
    5. `host.agent.watch` 登记 `{plugin_id, task, run_id, notify: {title, body, open_path: <预判的 proof 路径>}}`,宿主接管守望;
-   6. 窗口内该 idea 状态变「论证中 ⏳」,提示"可以关窗,完成后会通知你"。
-4. **完成**:宿主发系统通知「奇思妙想论证完成:<标题>」。窗口若开着,经 `window.__notemd_dispatch` 收到完成事件 → 彩带欢庆动画 + 「打开结果文档」按钮(`host.editor.open` 在主编辑器打开 proof 文档)。历史列表该条变「已完成 ✦」。
-5. **失败/lost**:系统通知报失败;窗口内该条状态「失败」,展示错误摘要,可重试(重新 run-note)。
+   6. 窗口内该 idea 状态变「论证中 ⏳」,提示"可以关窗,回来就能看到结果"。
+4. **完成**:窗口若开着,经 `window.__notemd_dispatch` 收到完成事件 → 彩带欢庆动画 + 「打开结果文档」按钮(`host.editor.open` 在主编辑器打开 proof 文档)。窗口关着则下次开窗时历史列表显示「已完成 ✦」并可打开结果。守望器同时调用通知挂钩,本期无注册者(统一托盘通知落地后自动生效)。
+5. **失败/lost**:窗口内该条状态「失败」,展示错误摘要,可重试(重新 run-note);同样经通知挂钩上报。
 
 ### 状态推导(历史列表)
 
@@ -105,10 +105,10 @@ kit 的挂载选项按奇思妙想的需要收敛:`enableMath: false`、`enableM
 - 参数:`{plugin_id, task, run_id, notify: {title, body, open_path}}`。
 - 宿主前端 `src/lib/agent-watch/` 维护守望列表:
   - 轮询模式复用 `src/lib/agent-workspace/store.svelte.ts` 的姿势,调 claude-agent `run-status`;
-  - 终态(done/lost)→ 系统通知;done 且 open_path 存在时通知点击尽量打开该文档(平台回调受限则只提醒);
+  - 终态(done/lost)→ 推送 + 调用通知挂钩 `registerWatchNotifier(fn)`;
   - 发起插件窗口开着时经 `WebviewWindow::eval("window.__notemd_dispatch(...)")` 推送完成事件;
-  - 守望列表持久化到 app 数据目录,主程序重启后恢复轮询(claude-agent 的 run 记录在磁盘上,重启不丢判定依据)。
-- 系统通知:新增 `tauri-plugin-notification` 依赖 + capability 权限(当前宿主无通知插件)。
+  - 守望列表持久化,主程序重启后恢复轮询(claude-agent 的 run 记录在磁盘上,重启不丢判定依据)。
+- **系统通知本期不做**:不引入 `tauri-plugin-notification`。用户另行实现统一托盘通知,届时启动时注册一次 `registerWatchNotifier` 即接上,守望器无需改动。本期缺口:窗口关着时不主动提醒,靠下次开窗看到结果。
 - 实现纪律:轮询用 interval,不搭 `$effect` 链;`$effect` 内调读写 `$state` 的 store 函数必须 `untrack`(v4.2.4 教训)。
 
 ### 3.3 `host.vault.read_bytes`(桥方法,挂在现有 `vault.read` capability 下)
@@ -156,7 +156,7 @@ vault 内布局(claude-agent 约定):
 | claude-agent 未装/未启用 | 委托按钮提示安装,记 idea 不受影响 |
 | idea 目录不存在 | `host.vault.write` 自动建父目录,无需处理 |
 | 未打开 vault | 窗口提示需先打开 vault |
-| run lost | 通知「结果状态未知」,窗口内可重试 |
+| run lost | 窗口内该条标「失败」,可重试;通知挂钩同样收到(本期无注册者) |
 | 宿主版本过旧 | `engines.notemd` 门槛,市场按宿主兼容过滤,装不上 |
 
 ## 7. 测试与验证
@@ -164,8 +164,8 @@ vault 内布局(claude-agent 约定):
 - 插件侧:`strings.test.ts`(四语 key 齐全)、slug/文件名生成、模板种入幂等、frontmatter 过 `scripts/okf-lint-core.mjs` 单测。
 - Editor Kit:markdown round-trip 冒烟(挂载→setMarkdown→getMarkdown 不变形,jsdom 下跑);构建产物存在性纳入主程序 check;保留路径 404 门禁(未声明 `editor.kit` 的插件)单测。
 - 宿主侧:桥方法 capability 门禁单测(未声明 → -32001)、守望器状态机单测(done/lost/重启恢复)。
-- GUI:dev 构建实机手动验证(托盘入口、写 idea、委托、系统通知、欢庆、打开结果);不跑桌面自动化。
-- 发布:`scripts/dev-install-plugin.sh`、`scripts/release-plugins.sh` 各加 `idea-spark` case;先主程序发版(桥扩展 + 通知插件 + CONCEPT_TYPE 登记),再插件上架市场(`gen-plugin-index.mjs` 默认 merge,注意本地 dist-plugins 旧版回扫坑)。
+- GUI:dev 构建实机手动验证(托盘入口、写 idea、委托、欢庆、打开结果、关窗后重开看状态);不跑桌面自动化。
+- 发布:`scripts/dev-install-plugin.sh`、`scripts/release-plugins.sh` 各加 `idea-spark` case;先主程序发版(桥扩展 + Editor Kit + CONCEPT_TYPE 登记),再插件上架市场(`gen-plugin-index.mjs` 默认 merge,注意本地 dist-plugins 旧版回扫坑)。
 
 ## 8. 明确不做(YAGNI)
 

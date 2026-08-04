@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 新增 `notemd.idea-spark` 插件(托盘/插件菜单入口 + rich/source 编辑窗 + 委托 claude-agent 论证 idea),以及它依赖的四件宿主基建:`host.vault.read_bytes`、`host.plugin.execute`、`host.agent.watch`+守望器+系统通知、Editor Kit(`__host__` 运行时下发)。
+**Goal:** 新增 `notemd.idea-spark` 插件(托盘/插件菜单入口 + rich/source 编辑窗 + 委托 claude-agent 论证 idea),以及它依赖的三件宿主基建:`host.vault.read_bytes`、`host.plugin.execute`、`host.agent.watch`+守望器、Editor Kit(`__host__` 运行时下发)。
 
-**Architecture:** 纯前端插件(照 decision-log 形态)+ 宿主桥扩展。编辑器由宿主以 Editor Kit 组件包运行时下发(主前端同一次 vite 构建的第二个 entry,共享 moraya chunk,安装包净增≈0)。委托后宿主前端守望器轮询 claude-agent `run-status`,终态发系统通知并推送回插件窗口。任务模板 `idea-proof` 由插件幂等种入 vault,claude-agent 自动发现。
+**Architecture:** 纯前端插件(照 decision-log 形态)+ 宿主桥扩展。编辑器由宿主以 Editor Kit 组件包运行时下发(主前端同一次 vite 构建的第二个 entry,共享 moraya chunk,安装包净增≈0)。委托后宿主前端守望器轮询 claude-agent `run-status`,终态推回插件窗口并调用通知挂钩(挂钩本期无注册者——系统通知由用户另做的统一托盘通知承接,见 Task 4)。任务模板 `idea-proof` 由插件幂等种入 vault,claude-agent 自动发现。
 
 **Tech Stack:** Svelte 5 + Tauri 2(Rust)、@moraya/core、vitest、cargo test。
 
@@ -303,29 +303,13 @@ git commit -m "feat(plugin-bridge): host.agent.watch 登记事件 + plugin_v2_wi
 
 ---
 
-### Task 4: 系统通知插件接入(tauri-plugin-notification)
+### Task 4: (本期取消)系统通知接入
 
-**Files:**
-- Modify: `src-tauri/Cargo.toml`(dependencies 加 `tauri-plugin-notification = "2"`)
-- Modify: `src-tauri/src/lib.rs`(Builder 链上与其他 `.plugin(...)` 相邻处加 `.plugin(tauri_plugin_notification::init())`)
-- Modify: `src-tauri/capabilities/default.json`(permissions 数组加 `"notification:default"`)
-- Modify: `package.json`(dependencies 加 `"@tauri-apps/plugin-notification": "^2"`)
+**不做。** 用户在另一处统一做托盘通知(tray icon 四态/子菜单那套),届时直接复用,本计划不引入 `tauri-plugin-notification`,也不加 `notification:default` 权限。
 
-**Interfaces:**
-- Produces: 主窗口前端可 `import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'`(Task 8 消费)。
+对下游的影响与替代:Task 8 的守望器**不直接发通知**,改为暴露一个可注册的通知挂钩 `registerWatchNotifier(fn)`(默认无注册者 = 不提醒)。统一托盘通知落地后,只需在启动时调用一次 `registerWatchNotifier` 即可接上,守望器本身不用改。
 
-- [ ] **Step 1: 加依赖与初始化**(如上四处;然后 `pnpm install`)
-- [ ] **Step 2: 编译验证**
-
-Run: `cargo check --manifest-path src-tauri/Cargo.toml && pnpm check`
-Expected: 通过(纯接线无逻辑,无单测;行为由 Task 8 + GUI 验证覆盖)
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/src/lib.rs src-tauri/capabilities/default.json package.json pnpm-lock.yaml
-git commit -m "feat(host): 接入 tauri-plugin-notification(守望器完成提醒用)"
-```
+本期的完成提醒因此降级为:窗口开着 → 就地欢庆(插件窗口收到回推);窗口关着 → 下次开窗时历史列表显示「已完成」。这是已知的临时缺口,不是遗漏。
 
 ---
 
@@ -803,7 +787,7 @@ git commit -m "feat(editor-kit): host.theme.css 主题包 + 主题变更推送�
 - Modify: `src/App.svelte`(listen `agent-watch:add` + onMount resume;与既有 `listen('quick-note', ...)` 同段落接线)
 
 **Interfaces:**
-- Consumes: Tauri 事件 `agent-watch:add`(Task 3 emit,payload 见下);`invoke('plugin_v2_execute', {pluginId: entry.executor, command: 'run-status', context: {run_id, task}})`(与 `agent-workspace/store.svelte.ts:119` 同形);`invoke('plugin_v2_window_push', ...)`(Task 3);`sendNotification`(Task 4)。
+- Consumes: Tauri 事件 `agent-watch:add`(Task 3 emit,payload 见下);`invoke('plugin_v2_execute', {pluginId: entry.executor, command: 'run-status', context: {run_id, task}})`(与 `agent-workspace/store.svelte.ts:119` 同形);`invoke('plugin_v2_window_push', ...)`(Task 3)。**不消费任何通知 API**(Task 4 取消)。
 - Produces:
 
 ```ts
@@ -817,39 +801,53 @@ export interface WatchEntry {
 export function addWatch(entry: WatchEntry): void      // 去重(run_id)、持久化、开始轮询
 export function resumeWatches(): void                  // 启动时从 localStorage 恢复
 export const WATCH_STORAGE_KEY = 'agent-watch.v1'
+
+/** 完成提醒的挂钩。本期无注册者 = 不提醒(通知由统一托盘通知另行承接,Task 4 取消)。
+ *  统一托盘通知落地后只需在启动时注册一次,守望器无需改动。 */
+export type WatchNotifier = (n: { title: string; body: string; openPath?: string; status: string }) => void
+export function registerWatchNotifier(fn: WatchNotifier | null): void
 ```
 
 - 完成时推给发起插件窗口(window id 固定 `main`)的 payload:`{type: 'agent-run-done', run_id, task, status, message, open_path}`(status 取 record.status,lost 时为 `'lost'`)。
 
-- [ ] **Step 1: 写失败测试**(测试缝:注入 execute/notify/push,不碰真 invoke;轮询用假定时器)
+- [ ] **Step 1: 写失败测试**(测试缝:注入 execute/push + 注册通知挂钩,不碰真 invoke;轮询用假定时器)
 
 ```ts
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { addWatch, resumeWatches, WATCH_STORAGE_KEY, __setTransportsForTests } from './store.svelte'
+import { addWatch, resumeWatches, registerWatchNotifier, WATCH_STORAGE_KEY, __setTransportsForTests } from './store.svelte'
 
 const entry = { executor: 'notemd.claude-agent', task: 'idea-proof', run_id: 'r1',
   requester: 'notemd.idea-spark', notify: { title: 'T', body: 'B', open_path: 'inbox/ideas/a.proof.md' } }
 
 describe('agent-watch', () => {
-  beforeEach(() => { localStorage.clear(); vi.useFakeTimers() })
-  it('polls until done, then notifies + pushes + clears storage', async () => {
+  beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); registerWatchNotifier(null) })
+  it('polls until done, then pushes + calls the notifier hook + clears storage', async () => {
     const execute = vi.fn()
       .mockResolvedValueOnce({ state: 'running', steps: 1 })
       .mockResolvedValueOnce({ state: 'done', record: { status: 'success', result: 'ok', artifacts: [] } })
-    const notify = vi.fn(); const push = vi.fn()
-    __setTransportsForTests({ execute, notify, push })
+    const push = vi.fn(); const notifier = vi.fn()
+    __setTransportsForTests({ execute, push })
+    registerWatchNotifier(notifier)
     addWatch(entry)
     expect(JSON.parse(localStorage.getItem(WATCH_STORAGE_KEY)!)).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(2100); await vi.advanceTimersByTimeAsync(2100)
-    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'T' }))
     expect(push).toHaveBeenCalledWith('notemd.idea-spark', 'main',
       expect.objectContaining({ type: 'agent-run-done', run_id: 'r1', status: 'success' }))
+    expect(notifier).toHaveBeenCalledWith(expect.objectContaining({ title: 'T', status: 'success' }))
     expect(JSON.parse(localStorage.getItem(WATCH_STORAGE_KEY)!)).toHaveLength(0)
   })
-  it('lost run still notifies with status lost', async () => {
+  it('works with no notifier registered (this release: nothing to notify with)', async () => {
+    const execute = vi.fn().mockResolvedValue({ state: 'done', record: { status: 'success' } })
+    const push = vi.fn()
+    __setTransportsForTests({ execute, push })
+    addWatch({ ...entry, run_id: 'r3' })
+    await expect(vi.advanceTimersByTimeAsync(2100)).resolves.not.toThrow()
+    expect(push).toHaveBeenCalled()
+  })
+  it('lost run still pushes with status lost', async () => {
     const execute = vi.fn().mockResolvedValue({ state: 'lost' })
-    const notify = vi.fn(); const push = vi.fn()
-    __setTransportsForTests({ execute, notify, push })
+    const push = vi.fn()
+    __setTransportsForTests({ execute, push })
     addWatch({ ...entry, run_id: 'r2' })
     await vi.advanceTimersByTimeAsync(2100)
     expect(push).toHaveBeenCalledWith(expect.anything(), 'main', expect.objectContaining({ status: 'lost' }))
@@ -857,7 +855,7 @@ describe('agent-watch', () => {
   it('resumeWatches restarts polling from storage and dedupes run_id', async () => {
     localStorage.setItem(WATCH_STORAGE_KEY, JSON.stringify([entry]))
     const execute = vi.fn().mockResolvedValue({ state: 'done', record: { status: 'success' } })
-    __setTransportsForTests({ execute, notify: vi.fn(), push: vi.fn() })
+    __setTransportsForTests({ execute, push: vi.fn() })
     resumeWatches(); addWatch(entry) // 重复 add 不得双轮询
     await vi.advanceTimersByTimeAsync(2100)
     expect(execute).toHaveBeenCalledTimes(1)
@@ -872,22 +870,21 @@ Expected: FAIL
 
 - [ ] **Step 3: 实现 store**
 
-要点(全部体现在代码里,无留白):`$state` 的 entries 数组 + `Map<run_id, timer>`;`POLL_MS = 2000`;轮询体照 `agent-workspace/store.svelte.ts:116-151` 的 state 分支(running→续排,done/lost→终态);终态时 `notify({title, body})` → `push(requester, 'main', payload)` → 从列表删除并 persist;`execute` 异常按 lost 处理(executor 被卸载等);持久化 read/write `localStorage[WATCH_STORAGE_KEY]`;生产 transports:
+要点(全部体现在代码里,无留白):`$state` 的 entries 数组 + `Map<run_id, timer>`;`POLL_MS = 2000`;轮询体照 `agent-workspace/store.svelte.ts:116-151` 的 state 分支(running→续排,done/lost→终态);终态时 `push(requester, 'main', payload)` → 调通知挂钩(未注册则跳过)→ 从列表删除并 persist;`execute` 异常按 lost 处理(executor 被卸载等);持久化 read/write `localStorage[WATCH_STORAGE_KEY]`;生产 transports 与挂钩:
 
 ```ts
 const transports = {
   execute: (executor: string, context: unknown) =>
     invoke('plugin_v2_execute', { pluginId: executor, command: 'run-status', context }),
-  notify: async (n: { title: string; body: string }) => {
-    const { isPermissionGranted, requestPermission, sendNotification } = await import('@tauri-apps/plugin-notification')
-    let ok = await isPermissionGranted()
-    if (!ok) ok = (await requestPermission()) === 'granted'
-    if (ok) sendNotification({ title: n.title, body: n.body })
-  },
   push: (pluginId: string, windowId: string, payload: unknown) =>
     invoke('plugin_v2_window_push', { pluginId, windowId, payload }),
 }
 export function __setTransportsForTests(t: Partial<typeof transports> | null): void { /* 合并/复位 */ }
+
+// 通知挂钩:本期无人注册,守望器静默完成(通知由统一托盘通知另行承接)。
+let notifier: WatchNotifier | null = null
+export function registerWatchNotifier(fn: WatchNotifier | null): void { notifier = fn }
+// 终态处调用:notifier?.({ title: e.notify.title, body: e.notify.body, openPath: e.notify.open_path, status })
 ```
 
 App.svelte 接线:
@@ -910,7 +907,7 @@ Expected: PASS
 
 ```bash
 git add src/lib/agent-watch/ src/App.svelte
-git commit -m "feat(agent-watch): 宿主守望器——轮询 run-status,终态系统通知+回推插件窗口,重启可恢复"
+git commit -m "feat(agent-watch): 宿主守望器——轮询 run-status,终态回推插件窗口+预留通知挂钩,重启可恢复"
 ```
 
 ---
@@ -1404,9 +1401,9 @@ bash scripts/dev-install-plugin.sh idea-spark && pnpm tauri dev
 1. 插件菜单与托盘出现「奇思妙想」;点击开窗,标题中文。
 2. 编辑器 rich 模式 live-preview 正常、与主程序主题一致;切主题后插件窗跟随;rich/source 切换保内容。
 3. 写 idea → 保存 → vault `inbox/ideas/` 出现带 frontmatter 的 `.md`(Obsidian/CLI 可读)。
-4. 未装 claude-agent 时点「委托」出引导;装好后委托 → 状态「论证中」→ 关窗。
-5. 跑完系统通知弹出;重开窗见欢庆 + 「打开结果」在主编辑器打开 `.proof.md`;`.proof.md` frontmatter 为 `type: Idea Proof` + `generated`。
-6. 主程序重启后(运行中委托)守望恢复、通知仍达。
+4. 未装 claude-agent 时点「委托」出引导;装好后委托 → 状态「论证中」。
+5. 窗口开着跑完 → 就地欢庆 + 「打开结果」在主编辑器打开 `.proof.md`;`.proof.md` frontmatter 为 `type: Idea Proof` + `generated`。
+6. 委托后关窗、跑完再开窗 → 历史列表该条为「已完成」,可打开结果(本期无系统通知,见 Task 4)。主程序重启后(运行中委托)守望恢复,重开窗仍能看到最终状态。
 7. 设置里改 idea 目录生效;vault 未开时提示。
 
 - [ ] **Step 4: 发布**(用户验证通过后;遵守既有纪律)
@@ -1420,7 +1417,7 @@ bash scripts/dev-install-plugin.sh idea-spark && pnpm tauri dev
 
 ## Self-Review 记录
 
-- Spec 覆盖:§1 manifest/托盘(Task 10)、§2 UX 全流程与状态推导(Task 11/14)、§2.1+§3.4 Editor Kit(Task 5/6/7)、§3.1 plugin.execute(Task 2)、§3.2 watch+通知+持久化(Task 3/4/8)、§3.3 read_bytes(Task 1)、§4 任务模板(Task 12/13)、§5 OKF(Task 9/11/12)、§6 错误处理(agent 缺失 Task 13/14,无 vault Task 14,lost Task 8/14,engines 门 Task 10)、§7 测试(各任务)+§8 YAGNI(未引入批注/wikilink/数学)。
+- Spec 覆盖:§1 manifest/托盘(Task 10)、§2 UX 全流程与状态推导(Task 11/14)、§2.1+§3.4 Editor Kit(Task 5/6/7)、§3.1 plugin.execute(Task 2)、§3.2 watch+持久化(Task 3/8;通知按用户 2026-08-04 决定移出本期,Task 4 取消,守望器留 `registerWatchNotifier` 挂钩)、§3.3 read_bytes(Task 1)、§4 任务模板(Task 12/13)、§5 OKF(Task 9/11/12)、§6 错误处理(agent 缺失 Task 13/14,无 vault Task 14,lost Task 8/14,engines 门 Task 10)、§7 测试(各任务)+§8 YAGNI(未引入批注/wikilink/数学)。
 - 与 spec 的一处已知偏差:kit **不直接 import** `editor-bridge.ts`(它依赖 tabs/insights/Tauri adapters),改为复刻其 createEditor 选项并双向注释互指——spec §3.4 已按此修正。
 - 类型一致性:`mountMarkdownEditor`/`KitEditor`(Task 5↔14)、`WatchEntry`/`agent-run-done` payload(Task 3↔8↔14)、`plugin_execute_gate` 三元组(Task 2)、`SparkState`(Task 11↔13↔14)已对齐。
 - 外部 API 有两处以实际代码为准的适配点,均已在任务内标注兜底:`MorayaEditorInstance` 成员名(Task 5)、`AssetResolver::get`(Task 6)。
