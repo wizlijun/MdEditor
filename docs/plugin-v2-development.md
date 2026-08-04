@@ -218,7 +218,9 @@ plugins-src/<name>/
 **路径规则(`resolve_in_vault`,`ui_rpc.rs:525-577`)**:
 - `path` **必须 vault 相对**;绝对路径、任何 `..` 段都被拒(还防符号链接逃逸)。
 - `host.vault.write` **自动创建父目录**,**没有 `create_dirs` 参数**(勿照搬旧文档)。
-- 读写上限 **200 MB**(`ui_rpc.rs` 的 `MAX_TEXT_BYTES`,为容纳大体量 Roam 导出从 10 MB 调高),超了报 `too_large`。`read_bytes` 把整份文件 base64 进一条 RPC 字符串(约放大 1.33×),同一上限下内存代价更高。
+- 读写上限 **200 MB**(`ui_rpc.rs` 的 `MAX_TEXT_BYTES`,为容纳大体量 Roam 导出从 10 MB 调高),超了报 `too_large`。`host.fs.read_bytes` 把整份文件 base64 进一条 RPC 字符串(约放大 1.33×),同一上限下内存代价更高。
+- **例外:`host.vault.read_bytes` 上限 10 MB**(`MAX_VAULT_BYTES`)。它是 Editor Kit MediaResolver 的字节来源,渲染文档时**按图隐式触发**、没有用户手势限速,继承 200 MB 会让一张超大图把窗口卡在 ~267 MB 字符串上;超限报 `too_large`,图渲染成断链而不是冻 UI。
+- `host.vault.write` 写 `.sh` 时自动补可执行位(0o755)。种 agent 任务模板的 `precheck.sh` 必须可执行,否则 claude-agent 的 precheck 对 spawn 失败是 fail-open,守卫会**静默失效**。
 - 未配置 vault 时报 `vault_required: …`。
 
 > ⚠️ 常见误区更正:`vault.write` 参数只有 `{path, content}`;`vault.info` 返回的是 `{root, wiki_dir, daily_dir}` 而非 `{root, subdirs}`。
@@ -325,6 +327,8 @@ interface SideView {
 | `Vault Conventions` | vault 根的 `AGENTS.md` |
 | `Vault Conventions` | vault 根的 `AGENTS.md`(模板 `src-tauri/templates/AGENTS.md`) |
 | `Decision Board` / `Decision Archive` | 决策日志的未决看板与已裁决归档 |
+| `Idea` | 奇思妙想(idea-spark)里用户写下的 idea 原文 |
+| `Idea Proof` | 奇思妙想里 agent 产出的论证文档 `<name>.proof.md` |
 
 **自检**:`pnpm okf:lint <目录>`(退出码非 0 即有违反,`--ignore <glob>` 排除镜像/报表目录);单测里可直接 `import { lintText } from 'scripts/okf-lint-core.mjs'` 断言产物合规。
 

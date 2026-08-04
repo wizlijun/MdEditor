@@ -51,7 +51,7 @@
 插件不能 import 主程序 `src/`,也不自己打包 moraya——编辑器由宿主以**Editor Kit 组件包**形式在运行时提供(机制见 §3.4)。插件侧只做:
 
 - manifest 声明 capability `editor.kit`;
-- 运行时 `await import('plugin://<id>/__host__/editor-kit-v1.js')`,调 `mountMarkdownEditor(container, opts)` 挂载;
+- 运行时 `await import('plugin://<id>/__host__/assets/editor-kit-v1.js')`(`assets/` 段必需,见 §3.4),调 `mountMarkdownEditor(container, opts)` 挂载;
 - 得到与主程序同源的能力:rich 模式(`inlineSyntaxScope: 'line'` live-preview、input rules、链接展开/点击)、source 模式(透明 textarea + 高亮层 + 行号)、模式切换按钮、单一 markdown 字符串真源;
 - 主题、CSS、MediaResolver 全部 kit 内置,插件零编辑器代码、ui 包保持几十 KB。
 
@@ -119,7 +119,7 @@ kit 的挂载选项按奇思妙想的需要收敛:`enableMath: false`、`enableM
 ### 3.4 Editor Kit:宿主构建、运行时下发的编辑器组件包
 
 - **单一真源**:kit 入口在 `src/editor-kit/`,**直接 import** `src/styles/editor-base.css`(整文件,多余分区无害)、`src/lib/source-highlight.ts`、`src/lib/autopair.ts` 与 `@moraya/core`——CSS 与高亮零复制,core 升级时与主程序编辑器同仓同版本构建,样式/行为漂移风险归零。注意 `src/lib/editor-bridge.ts` 本身依赖 tabs/insights/Tauri adapters(IPC 模块),**不能进 kit 依赖图**:kit 复刻它的 `createEditor` 选项(~20 行),两处注释互指提醒同步。kit 依赖图不得触碰任何依赖 Tauri IPC 的模块,MediaResolver 用桥版实现(`host.vault.read_bytes` → blob URL,远程 URL 直通)。
-- **产物与分发(零额外资源)**:kit **不做独立 lib 构建**,而是主前端同一次 vite 构建的第二个 entry(`rollupOptions.input: { main, 'editor-kit-v1' }`)。rollup 自动把多 entry 共享的 moraya/prosemirror/highlight 拆成公共 chunk——这 ~1.2MB 本来就随主窗口 dist 发,kit 只是引用同一批 chunk,**安装包净增 ≈ 0**(仅壳代码几十 KB)。kit entry 文件名固定不带 hash(`editor-kit-v1.js`),共享 chunk 照常带 hash。`plugin://` 协议处理器新增保留路径 `__host__/`,映射到 app 已有的前端 dist 资源目录(只读,正确 MIME 供 ES module dynamic import,chunk 间相对路径引用原样成立)。插件 ui 包不含任何编辑器代码。
+- **产物与分发(零额外资源)**:kit **不做独立 lib 构建**,而是主前端同一次 vite 构建的第二个 entry(`rollupOptions.input: { main, 'editor-kit-v1' }`)。rollup 自动把多 entry 共享的 moraya/prosemirror/highlight 拆成公共 chunk——这 ~1.2MB 本来就随主窗口 dist 发,kit 只是引用同一批 chunk,**安装包净增 ≈ 0**(仅壳代码几十 KB)。kit entry 文件名固定不带 hash(`editor-kit-v1.js`),共享 chunk 照常带 hash。`plugin://` 协议处理器新增保留路径 `__host__/`,映射到 app 已有的前端 dist 资源目录(只读,正确 MIME 供 ES module dynamic import,chunk 间相对路径引用原样成立)。**加载 URL 是 `plugin://<id>/__host__/assets/editor-kit-v1.js`**:`__host__/<rel>` 直接拼到宿主 dist 树上,而映射只放行 `dist/assets/`,漏掉 `assets/` 段即 404。插件 ui 包不含任何编辑器代码。
 - **API 契约(v1 冻结)**:`mountMarkdownEditor(container, { initialMarkdown, mode, onChange, placeholder? })` → `{ getMarkdown(), setMarkdown(), setMode(), focus(), destroy() }`。向后兼容靠文件名带版本(`-v1`)+ 插件 `engines.notemd` 门槛;未来破坏性变更发 `-v2` 并保留 v1。
 - **主题自适应**:声明了 `editor.kit` capability 的插件窗口,宿主在创建时把 `theme_load_compiled` 的编译主题 CSS 一并注入(与现有 bridge_script 注入同路),主题变更时经现有 eval/dispatch 通道推送更新——编辑器完全跟随用户设置的主题(明暗 + 自定义编辑器主题),不是降级的 light/dark 二值。
 - **授权**:capability `editor.kit` 同时控制两件事:保留路径可加载 + 主题 CSS 注入。未声明的插件请求 `__host__/` 路径返回 404。
@@ -162,7 +162,7 @@ vault 内布局(claude-agent 约定):
 ## 7. 测试与验证
 
 - 插件侧:`strings.test.ts`(四语 key 齐全)、slug/文件名生成、模板种入幂等、frontmatter 过 `scripts/okf-lint-core.mjs` 单测。
-- Editor Kit:markdown round-trip 冒烟(挂载→setMarkdown→getMarkdown 不变形,jsdom 下跑);构建产物存在性纳入主程序 check;保留路径 404 门禁(未声明 `editor.kit` 的插件)单测。
+- Editor Kit:markdown round-trip 冒烟(挂载→setMarkdown→getMarkdown 不变形,jsdom 下跑);构建产物存在性纳入主程序 check —— 落地为 `scripts/check-editor-kit-build.mjs`,由 `pnpm build` 在 `vite build` 之后自动执行(`tauri build` 的 `beforeBuildCommand` 也是它),断言 `dist/assets/editor-kit-v1.{js,css}` 存在、js 非 tree-shake 残骸且含 `mountMarkdownEditor` 导出;保留路径 404 门禁(未声明 `editor.kit` 的插件)单测。
 - 宿主侧:桥方法 capability 门禁单测(未声明 → -32001)、守望器状态机单测(done/lost/重启恢复)。
 - GUI:dev 构建实机手动验证(托盘入口、写 idea、委托、欢庆、打开结果、关窗后重开看状态);不跑桌面自动化。
 - 发布:`scripts/dev-install-plugin.sh`、`scripts/release-plugins.sh` 各加 `idea-spark` case;先主程序发版(桥扩展 + Editor Kit + CONCEPT_TYPE 登记),再插件上架市场(`gen-plugin-index.mjs` 默认 merge,注意本地 dist-plugins 旧版回扫坑)。
