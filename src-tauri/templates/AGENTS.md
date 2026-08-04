@@ -61,7 +61,6 @@ coin a short one and then use it consistently.
 | `Outline Note` | any `.note.md` (outline or companion note) |
 | `Daily Note` | `dailynote/yyyy/yyyy-MM-dd.note.md` |
 | `Wiki Page` | `wikipage/<title>.note.md` |
-| `Answer` | a long answer written to `answers/` (see the Q&A protocol) |
 
 Everything else is optional, but absent metadata means "unknown", not
 "fine" — write what you actually know:
@@ -230,10 +229,35 @@ Sweep protocol — how to answer:
 The human reads the answer inline under the annotated paragraph and may
 insert it into the document; doing so sets `status:: adopted`.
 
+### The answer node is the only deliverable
+
+Answering produces one bullet and one status change — nothing else. No
+explanatory document, no research report, no `wikipage/` entry, no new
+file anywhere in the vault; no edit to `index.md` or `log.md`; no second
+copy of the answer restated at length in chat.
+
+### How to write the answer
+
+- **Short.** Conclusion first, reasons after. Three to eight lines by
+  default.
+- **No warm-up, no wind-down.** Do not restate the question, do not set
+  the scene, do not open with "let's analyse this", do not close with a
+  summary paragraph.
+- **Structured past three sentences.** Longer than that, break it into a
+  short list or a couple of small headings, so a reader can take the
+  conclusion away at a glance.
+- **Honest about doubt.** "Not certain — needs checking against X" beats
+  an invented certainty. If you do not know, say which part you do not
+  know.
+- **Sourced in place.** When you lean on something outside the question
+  — a URL, or another file in this vault — put the link or the vault
+  path next to the claim it supports.
+
 Hard rules: never set `status:: closed` or `status:: adopted` (only the
 human closes or adopts), never edit the main `.md`, never modify any
 existing bullet that is not your own answer node, never touch any other
-part of the outline.
+part of the outline, never write any file other than the `.note.md` that
+holds the question.
 
 ## House rules
 
