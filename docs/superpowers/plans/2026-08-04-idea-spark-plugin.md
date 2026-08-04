@@ -682,10 +682,7 @@ git commit -m "feat(okf): 登记 Idea / Idea Proof 概念类型(奇思妙想插�
     } ],
     "tray": [ { "window": "main" } ]
   },
-  "capabilities": [
-    "vault.read", "vault.write", "toast", "editor.open",
-    "plugin.execute:notemd.claude-agent", "agent.watch", "editor.kit"
-  ],
+  "capabilities": ["vault.read", "vault.write", "toast", "editor.open", "editor.kit"],
   "i18n": {
     "zh": { "name": "奇思妙想", "menus": { "open": "奇思妙想" } },
     "ja": { "name": "アイデアスパーク", "menus": { "open": "アイデアスパーク" } },
