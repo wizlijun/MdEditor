@@ -405,8 +405,7 @@ where
         }
     }
 
-    let loaded = Ledger::load(vault);
-    let mut ledger = loaded.ledger;
+    let crate::ledger::Loaded { mut ledger, problem } = Ledger::load(vault);
     let graph_before = ledger.graph.clone();
     check_graph(&mut ledger, graph)?;
     let mut errors: Vec<String> = Vec::new();
@@ -414,7 +413,16 @@ where
     // nothing to sync never reaches one, and the binding of this vault to this
     // graph is exactly what the *next* run's `check_graph` needs to see. A dry
     // run writes nothing, here as everywhere.
-    if !dry_run && ledger.graph != graph_before {
+    //
+    // Not over a ledger that failed to load, though. `Ledger::load` degrades a
+    // file it cannot parse — conflict markers from a git merge, a truncated
+    // write — to an empty one, so this save would replace the user's damaged
+    // file with `{graph, lastSyncedAt: null, pages: {}}` and destroy the only
+    // copy of the watermark and the uid → path map. The error pushed two lines
+    // below tells them to restore it from git; that instruction has to still be
+    // true by the time they read it. A run that syncs nothing is exactly the
+    // shape a corrupt ledger used to survive, and it must go on surviving it.
+    if !dry_run && problem.is_none() && ledger.graph != graph_before {
         if let Err(e) = ledger.save(vault) {
             errors.push(format!("cannot record the graph name: {e}"));
         }
@@ -425,7 +433,7 @@ where
     // watermark only ever moves forward. Reported, not fatal, for the same
     // reason `Ledger::load` degrades rather than erroring: refusing to sync
     // until the user hand-repairs JSON is worse than syncing loudly.
-    errors.extend(loaded.problem);
+    errors.extend(problem);
 
     let recorded = ledger.last_synced_at.clone();
     let floor_ms = recorded.as_deref().and_then(watermark_ms);
@@ -1200,6 +1208,33 @@ mod tests {
         assert!(!r.errors.is_empty(), "but this run is NOT clean and must not look like one");
         assert!(r.errors[0].contains("unreadable"), "{:?}", r.errors);
         assert!(r.to.is_none(), "and there is no watermark to report, garbage least of all");
+    }
+
+    /// …and the file it tells the user to restore has to still be there when
+    /// they read the message. `Ledger::load` degrades an unparsable ledger to
+    /// an empty one, so the up-front "record the graph name" save would write
+    /// `{graph, lastSyncedAt: null, pages: {}}` straight over the damaged file
+    /// — destroying the only copy of the watermark and the uid → path map one
+    /// line before advising "restore it from git". A run that syncs nothing is
+    /// exactly the shape that used to leave a corrupt ledger alone.
+    #[test]
+    fn a_corrupt_ledger_is_not_overwritten_by_the_run_that_reports_it() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".notemd")).unwrap();
+        let corrupt = "<<<<<<< HEAD\n{\"graph\":\"work\",\
+                       \"lastSyncedAt\":\"2026-07-01T00:00:00.000Z\",\"pages\":{}}\n=======\n";
+        let path = dir.path().join(crate::ledger::LEDGER_REL);
+        std::fs::write(&path, corrupt).unwrap();
+
+        let r = sync_since(dir.path(), DIRS, None, Some("work"), today(), NOW, false,
+                           |_| Ok(vec![]), |_| unreachable!()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), corrupt,
+                   "the ledger the user is being told to restore was overwritten");
+        assert_eq!(r.failed, 0);
+        let told = r.errors.iter().find(|e| e.contains("unreadable")).unwrap_or_else(
+            || panic!("the corrupt ledger was not reported at all: {:?}", r.errors));
+        assert!(told.contains("Restore it from git"), "{told}");
     }
 
     #[test]
