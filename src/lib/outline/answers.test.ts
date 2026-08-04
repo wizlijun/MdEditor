@@ -30,6 +30,70 @@ const note = [
   '',
 ].join('\n')
 
+/** 多节点形态:答复节点写结论,论点分列成子节点(agent 会自带 ✦ 前缀) */
+const multiNote = [
+  '- 原文',
+  '  type:: annotation',
+  '  line:: 3',
+  '  - 持有开环的成本?',
+  '    type:: question',
+  '    status:: answered',
+  '    - ✦ 不需要"真的完成"。',
+  '      type:: answer',
+  '      by:: claude-code/opus-5',
+  '      - ✦ 侵入性思维:托管出去就消失。',
+  '        - ✦ 更深一层的论据',
+  '      - ✦ 注意力残留:只有明确关闭才最小。',
+  '',
+].join('\n')
+
+describe('answer body assembly', () => {
+  const bodyOf = (src: string) => deriveAnswers(parseOutline(src))[0].body
+
+  it('renders answer child nodes as a nested markdown list', () => {
+    expect(bodyOf(multiNote)).toBe([
+      '不需要"真的完成"。',
+      '',
+      '- 侵入性思维:托管出去就消失。',
+      '  - 更深一层的论据',
+      '- 注意力残留:只有明确关闭才最小。',
+    ].join('\n'))
+  })
+
+  it('keeps the single fenced node form working', () => {
+    expect(bodyOf(note)).toBe('因为前缀重复。')
+  })
+
+  it('emits list only when the answer node itself carries no text', () => {
+    const src = multiNote.replace('- ✦ 不需要"真的完成"。', '- ')
+    expect(bodyOf(src)).toBe([
+      '- 侵入性思维:托管出去就消失。',
+      '  - 更深一层的论据',
+      '- 注意力残留:只有明确关闭才最小。',
+    ].join('\n'))
+  })
+
+  it('indents continuation lines of a multi-line child to the item content column', () => {
+    const src = [
+      '- 原文',
+      '  type:: annotation',
+      '  - 问?',
+      '    type:: question',
+      '    status:: answered',
+      '    - ✦ 结论',
+      '      type:: answer',
+      '      - ```js',
+      '        const a = 1',
+      '',
+      '        const b = 2',
+      '        ```',
+      '',
+    ].join('\n')
+    // 围栏子节点的空行是语义(段落分隔),续行整体缩进到条目内容列
+    expect(bodyOf(src)).toBe('结论\n\n- ```js\n  const a = 1\n\n  const b = 2\n  ```')
+  })
+})
+
 describe('deriveAnswers', () => {
   it('returns one entry per question that has an answer node', () => {
     const rows = deriveAnswers(parseOutline(note))

@@ -144,6 +144,16 @@ export function wrapAnswerBody(body: string): string {
   return `${fence}markdown\n${body}\n${fence}`
 }
 
+/** agent 有时会自己在答复行首写 `✦`(协议里说不必写,但写了也合规)。展示端自己出
+ *  sigil、采纳进正文要的是干净 markdown,所以读的时候把首行那个前缀剥掉。只剥首行:
+ *  正文里的 `✦` 是内容。 */
+export function stripAnswerSigil(text: string): string {
+  const nl = text.indexOf('\n')
+  const first = nl === -1 ? text : text.slice(0, nl)
+  const stripped = first.replace(/^[ \t]*✦[ \t]*/, '')
+  return nl === -1 ? stripped : stripped + text.slice(nl)
+}
+
 /** 取答复节点的正文(剥掉首尾围栏行)。无围栏时原样返回(fail open)。 */
 export function answerBodyOf(node: Pick<OutlineNode, 'content'>): string {
   const lines = node.content.split('\n')

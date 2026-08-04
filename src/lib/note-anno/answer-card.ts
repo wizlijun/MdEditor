@@ -18,9 +18,9 @@ interface CardDeps {
   onAdopt: (entry: AnswerEntry, pos: number, view: EditorView) => void
 }
 
-/** 答复首个非空行,作折叠态摘要 */
+/** 答复首个非空行,作折叠态摘要。答复只有子节点清单时首行是个列表项,摘要里不显示行首的 `- ` */
 function summaryOf(body: string): string {
-  const line = body.split('\n').find(l => l.trim() !== '') ?? ''
+  const line = (body.split('\n').find(l => l.trim() !== '') ?? '').replace(/^\s*[-*+] /, '')
   return line.length > 60 ? line.slice(0, 60) + '…' : line
 }
 

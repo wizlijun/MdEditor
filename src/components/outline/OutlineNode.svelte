@@ -3,7 +3,7 @@
   import InlineRender from './InlineRender.svelte'
   import { outline, bump, markDirty, setSelection, clearSelection } from '../../lib/outline/store.svelte'
   import { rangeBetween, selectionRoots } from '../../lib/outline/select'
-  import { childrenOf, setNodeContent, answerBodyOf, type OutlineNode as NodeT, type OutlineTree } from '../../lib/outline/model'
+  import { childrenOf, setNodeContent, answerBodyOf, stripAnswerSigil, type OutlineNode as NodeT, type OutlineTree } from '../../lib/outline/model'
   import {
     createSiblingBelow, createSiblingAbove, mergeWithPrevious,
     indentNode, outdentNode, moveNodeUp, moveNodeDown, applyInlineWrap,
@@ -61,7 +61,8 @@
   const answerSummary = $derived.by(() => {
     if (node.source !== 'answer') return null
     if (!readonly) void outline.version
-    const line = answerBodyOf(node).split('\n').find(l => l.trim() !== '') ?? ''
+    // agent 自己写了 ✦ 时不再叠一个(sigil 归展示端出)
+    const line = stripAnswerSigil(answerBodyOf(node).split('\n').find(l => l.trim() !== '') ?? '')
     return '✦ ' + (line.length > 80 ? line.slice(0, 80) + '…' : line)
   })
 
