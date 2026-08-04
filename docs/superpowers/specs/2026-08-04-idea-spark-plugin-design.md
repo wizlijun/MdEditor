@@ -118,7 +118,7 @@ kit 的挂载选项按奇思妙想的需要收敛:`enableMath: false`、`enableM
 
 ### 3.4 Editor Kit:宿主构建、运行时下发的编辑器组件包
 
-- **单一真源**:kit 入口在 `src/editor-kit/`,**直接 import** `src/lib/editor-bridge.ts`、`src/styles/editor-base.css`(整文件,多余分区无害)、`src/lib/source-highlight.ts`、`src/lib/autopair.ts` 与 `@moraya/core`——零复制,core 升级时与主程序编辑器同仓同版本构建,样式/行为漂移风险归零。kit 入口的依赖图不得触碰任何依赖 Tauri IPC 的模块(如 tauri-media-resolver),MediaResolver 用桥版实现(`host.vault.read_bytes` → blob URL,远程 URL 直通)。
+- **单一真源**:kit 入口在 `src/editor-kit/`,**直接 import** `src/styles/editor-base.css`(整文件,多余分区无害)、`src/lib/source-highlight.ts`、`src/lib/autopair.ts` 与 `@moraya/core`——CSS 与高亮零复制,core 升级时与主程序编辑器同仓同版本构建,样式/行为漂移风险归零。注意 `src/lib/editor-bridge.ts` 本身依赖 tabs/insights/Tauri adapters(IPC 模块),**不能进 kit 依赖图**:kit 复刻它的 `createEditor` 选项(~20 行),两处注释互指提醒同步。kit 依赖图不得触碰任何依赖 Tauri IPC 的模块,MediaResolver 用桥版实现(`host.vault.read_bytes` → blob URL,远程 URL 直通)。
 - **产物与分发(零额外资源)**:kit **不做独立 lib 构建**,而是主前端同一次 vite 构建的第二个 entry(`rollupOptions.input: { main, 'editor-kit-v1' }`)。rollup 自动把多 entry 共享的 moraya/prosemirror/highlight 拆成公共 chunk——这 ~1.2MB 本来就随主窗口 dist 发,kit 只是引用同一批 chunk,**安装包净增 ≈ 0**(仅壳代码几十 KB)。kit entry 文件名固定不带 hash(`editor-kit-v1.js`),共享 chunk 照常带 hash。`plugin://` 协议处理器新增保留路径 `__host__/`,映射到 app 已有的前端 dist 资源目录(只读,正确 MIME 供 ES module dynamic import,chunk 间相对路径引用原样成立)。插件 ui 包不含任何编辑器代码。
 - **API 契约(v1 冻结)**:`mountMarkdownEditor(container, { initialMarkdown, mode, onChange, placeholder? })` → `{ getMarkdown(), setMarkdown(), setMode(), focus(), destroy() }`。向后兼容靠文件名带版本(`-v1`)+ 插件 `engines.notemd` 门槛;未来破坏性变更发 `-v2` 并保留 v1。
 - **主题自适应**:声明了 `editor.kit` capability 的插件窗口,宿主在创建时把 `theme_load_compiled` 的编译主题 CSS 一并注入(与现有 bridge_script 注入同路),主题变更时经现有 eval/dispatch 通道推送更新——编辑器完全跟随用户设置的主题(明暗 + 自定义编辑器主题),不是降级的 light/dark 二值。
