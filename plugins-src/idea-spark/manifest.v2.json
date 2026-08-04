@@ -45,8 +45,6 @@
     "vault.write",
     "toast",
     "editor.open",
-    "plugin.execute:notemd.claude-agent",
-    "agent.watch",
     "editor.kit"
   ],
   "i18n": {
