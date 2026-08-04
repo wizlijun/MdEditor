@@ -164,13 +164,25 @@
           kit = null
           return
         }
-        // The mount itself round-trips the template through ProseMirror, so the
-        // baseline has to come from the kit here too — otherwise the very first
-        // document a user ever sees reports itself dirty ~200 ms in.
+        // The live buffer is already ≠ the template the moment the kit mounts:
+        // the template ends with a trailing newline and ProseMirror's markdown
+        // serializer drops it. (The mount itself emits nothing — `createEditor`
+        // only builds an `EditorState`, it dispatches no transaction, so the
+        // change plugin never echoes.) Without rebaselining off the kit, the
+        // very first document a user ever sees is born dirty and the first
+        // keystroke-free autosave writes a document nobody edited.
         rebaseline(store, kit)
         kit.focus()
       } catch (e) {
         console.error('[idea-spark] the editor kit failed to load:', e)
+        // `rebaseline`/`focus` run *after* `kit` is assigned, so a throw there
+        // would otherwise leave `kitFailed === true` with a live `kit`: the UI
+        // renders the fallback <textarea> (bound to `fallbackText`) while
+        // `markdown()` keeps reading a kit Svelte has already torn out of the
+        // DOM — every later save would persist the wrong text. Drop the kit so
+        // the fallback is the single source of truth.
+        try { kit?.destroy() } catch { /* already broken — nothing left to salvage */ }
+        kit = null
         store.kitFailed = true
       }
     })()

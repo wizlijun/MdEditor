@@ -81,4 +81,41 @@ describe('rebuildIdeaDoc', () => {
     expect(out.endsWith(body)).toBe(true)
     expect(lintText('2026-08-04-title.md', out)).toEqual([])
   })
+
+  // `touchConceptFrontmatter` deliberately refuses to rewrite a frontmatter it
+  // cannot read as a mapping, so these blocks come back untouched — without a
+  // guard the saved file would have no `type` at all (OKF §4.1 hard constraint)
+  // — and on syntactically broken YAML it throws outright, which would abort
+  // the save entirely.
+  describe('frontmatter that cannot carry a type', () => {
+    const cases: Array<[string, string]> = [
+      ['a sequence', '- one\n- two'],
+      ['a bare scalar', 'just a note to self'],
+      ['unparsable YAML', 'a: [1, 2\nb: "unterminated'],
+      ['an empty type', 'type:\ncreated: 2026-01-01T00:00:00Z'],
+      ['a non-string type', 'type: 42'],
+    ]
+
+    for (const [label, fm] of cases) {
+      it(`still writes a lint-clean Idea document for ${label}`, () => {
+        const out = rebuildIdeaDoc(fm, 'body', '2026-08-04T00:00:00Z')
+        expect(lintText('2026-08-04-x.md', out)).toEqual([])
+        const meta = parseYaml(out.match(/^---\n([\s\S]*?)\n---\n/)![1])
+        expect(meta.type).toBe('Idea')
+      })
+
+      it(`keeps the unusable block's bytes in the body for ${label}`, () => {
+        const out = rebuildIdeaDoc(fm, 'body', '2026-08-04T00:00:00Z')
+        const content = out.slice(out.indexOf('\n---\n', 4) + 5)
+        expect(content).toContain(fm.trim())
+        expect(content.endsWith('body')).toBe(true)
+      })
+    }
+
+    it('does not invent an empty salvage paragraph when the block is blank', () => {
+      const out = rebuildIdeaDoc('   ', 'body', '2026-08-04T00:00:00Z')
+      expect(lintText('2026-08-04-x.md', out)).toEqual([])
+      expect(out.endsWith('---\nbody')).toBe(true)
+    })
+  })
 })
