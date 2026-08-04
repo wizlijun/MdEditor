@@ -39,8 +39,13 @@ ebook-import UI ── plugin.ai_read_start ──▶ ebook-import 后端(FIFO �
 - `src-tauri/src/plugin_runtime/host_api.rs` 的 `method_capability` 表新增
   `host.agent.run` / `host.agent.status` → capability `agent`;`ui_rpc.rs` 同步接线。
 - 实现:主程序转发到 `notemd.claude-agent` 的 `command.execute`(复用
-  `lifecycle.rs` 既有派发),`run` 对应参数 `{task, prompt, note_path}`,
+  `lifecycle.rs` 既有派发),`run` 对应参数 `{task, prompt, note_path, notify?}`,
   `status` 对应 `run-status` 的 `{task, run_id}`,结果原样透传。
+  可选的 `notify = {title_ok, title_fail, open_path, expect_file}`(后两者为绝对
+  路径)是**收尾提醒规格**:run 到终态后由 claude-agent 自己发一次 `host.notify`
+  (它没有窗口,不会被调用方窗口的 `Destroyed` 连坐拆掉),因此声明 `notify`
+  capability 的是 claude-agent,不是调用方。`expect_file` 同时充当 OKF 兜底补头
+  与交付物收录的目标。
 - claude-agent 未安装/未启用时返回明确错误码(如 `agent_unavailable`),
   调用方据此提示用户安装。
 - 调用方必须在 manifest `capabilities` 声明 `agent`,否则按既有 capability
