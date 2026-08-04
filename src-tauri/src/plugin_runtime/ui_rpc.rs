@@ -168,6 +168,17 @@ pub trait HostServices: Send + Sync {
     fn open_in_editor(&self, _abs_path: &Path) -> Result<(), String> {
         Err("io: editor.open is only available from a plugin UI window".into())
     }
+    /// AI agent 中转：`command` 为 `"run-task"`/`"run-status"`,`context`/结果原样
+    /// 透传给 `notemd.claude-agent` 插件。默认不可用；生产实现只在
+    /// `TauriServices`(Task 4),经其对内部插件的直调完成中转。
+    fn agent_execute(&self, _command: &str, _context: serde_json::Value) -> Result<serde_json::Value, String> {
+        Err("agent_unavailable: no relay on this channel".into())
+    }
+    /// 推一条托盘全局提醒（角标 + 菜单项 + 点击动作）。默认不可用；生产实现只在
+    /// `TauriServices`(Task 4),落地到 `reminders.rs` 的注册表。
+    fn notify_user(&self, _params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        Err("notify not supported here".into())
+    }
 }
 
 // ── Dispatch ────────────────────────────────────────────────────────────
@@ -316,6 +327,9 @@ pub async fn dispatch_with(
         "host.vault.list" => vault_list(services, &req.params),
         "host.vault.mkdir" => vault_mkdir(services, &req.params),
         "host.editor.open" => editor_open(services, &req.params),
+        "host.agent.run"    => services.agent_execute("run-task", req.params.clone()),
+        "host.agent.status" => services.agent_execute("run-status", req.params.clone()),
+        "host.notify"       => services.notify_user(&req.params),
         // handle_common took log/toast; the gate rejected everything unknown.
         other => Err(format!("io: unhandled method {other}")),
     };

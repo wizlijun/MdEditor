@@ -46,6 +46,9 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         "host.clipboard.write" => Some("clipboard.write"),
         "host.editor.open" => Some("editor.open"),
         "host.location.get" => Some("location"),
+        // AI agent 中转(转发到 notemd.claude-agent)与托盘全局提醒。
+        "host.agent.run" | "host.agent.status" => Some("agent"),
+        "host.notify" => Some("notify"),
         _ => Some("__unknown__"), // 未实现的方法一律拒绝
     }
 }
@@ -180,6 +183,9 @@ pub fn make_sink(
                                 "host.vault.list" => Some(rpc::vault_list(s, &req.params)),
                                 "host.vault.mkdir" => Some(rpc::vault_mkdir(s, &req.params)),
                                 "host.location.get" => Some(s.location_get()),
+                                "host.agent.run" => Some(s.agent_execute("run-task", req.params.clone())),
+                                "host.agent.status" => Some(s.agent_execute("run-status", req.params.clone())),
+                                "host.notify" => Some(s.notify_user(&req.params)),
                                 _ => None,
                             }
                         });
@@ -503,6 +509,9 @@ mod tests {
         assert_eq!(method_capability("host.fs.read_bytes"), Some("fs.read:dialog"));
         assert_eq!(method_capability("host.clipboard.write"), Some("clipboard.write"));
         assert_eq!(method_capability("host.editor.open"), Some("editor.open"));
+        assert_eq!(method_capability("host.agent.run"), Some("agent"));
+        assert_eq!(method_capability("host.agent.status"), Some("agent"));
+        assert_eq!(method_capability("host.notify"), Some("notify"));
         assert_eq!(method_capability("host.unknown"), Some("__unknown__"));
         assert_eq!(method_capability("anything.else"), Some("__unknown__"));
     }
@@ -663,8 +672,9 @@ mod tests {
 
     // ── vault.* on the process channel (pos-log 前置) ─────────────────────────
 
-    /// 最小 HostServices 桩：只有 vault_root 有意义。
-    struct ServicesStub(std::path::PathBuf);
+    /// 最小 HostServices 桩：vault_root 之外，第二个字段记录
+    /// `agent_execute`/`notify_user` 调用，供 host.agent.*/host.notify 测试断言。
+    struct ServicesStub(std::path::PathBuf, Arc<Mutex<Vec<(String, serde_json::Value)>>>);
     impl crate::plugin_runtime::ui_rpc::HostServices for ServicesStub {
         fn pick_paths(
             &self,
@@ -687,6 +697,14 @@ mod tests {
         fn clipboard_write(&self, _t: &str) -> Result<(), String> {
             Err("no clipboard on process channel".into())
         }
+        fn agent_execute(&self, command: &str, context: serde_json::Value) -> Result<serde_json::Value, String> {
+            self.1.lock().unwrap().push((command.to_string(), context));
+            Ok(serde_json::json!({ "run_id": "r-test" }))
+        }
+        fn notify_user(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+            self.1.lock().unwrap().push(("notify".into(), params.clone()));
+            Ok(serde_json::json!({ "ok": true, "id": 1 }))
+        }
     }
 
     #[test]
@@ -700,7 +718,7 @@ mod tests {
             log_dir.path().to_path_buf(),
             emitter,
             noop_poster(),
-            Some(Arc::new(ServicesStub(vault.path().to_path_buf()))),
+            Some(Arc::new(ServicesStub(vault.path().to_path_buf(), Arc::new(Mutex::new(Vec::new()))))),
         );
         // write → {ok:true}
         let resp = sink(req(
@@ -742,7 +760,7 @@ mod tests {
             log_dir.path().to_path_buf(),
             recording_emitter().0,
             noop_poster(),
-            Some(Arc::new(ServicesStub(vault.path().to_path_buf()))),
+            Some(Arc::new(ServicesStub(vault.path().to_path_buf(), Arc::new(Mutex::new(Vec::new()))))),
         );
         let resp = sink2(req("host.dialog.open", Some(5), serde_json::json!({}))).unwrap();
         assert_eq!(resp.error.unwrap().code, proto::ERR_METHOD_NOT_FOUND);
@@ -766,5 +784,69 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(resp.error.unwrap().code, proto::ERR_METHOD_NOT_FOUND);
+    }
+
+    // ── host.agent.*/host.notify (Task 3) ──────────────────────────────────
+
+    #[test]
+    fn agent_run_on_process_channel_relays_run_task_with_capability() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = make_sink(
+            "pub.test".into(),
+            vec!["agent".into()],
+            log_dir.path().to_path_buf(),
+            recording_emitter().0,
+            noop_poster(),
+            Some(Arc::new(ServicesStub(std::env::temp_dir(), seen.clone()))),
+        );
+        let resp = sink(req(
+            "host.agent.run",
+            Some(1),
+            serde_json::json!({"task": "ai-read-ebook", "prompt": "p", "note_path": "/v/b/book.md"}),
+        ))
+        .unwrap();
+        assert_eq!(resp.result.unwrap()["run_id"], "r-test");
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls[0].0, "run-task");
+        assert_eq!(calls[0].1["task"], "ai-read-ebook");
+    }
+
+    #[test]
+    fn agent_and_notify_without_capability_are_denied() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = make_sink(
+            "pub.test".into(),
+            vec![], // 无 agent/notify
+            log_dir.path().to_path_buf(),
+            recording_emitter().0,
+            noop_poster(),
+            Some(Arc::new(ServicesStub(std::env::temp_dir(), seen.clone()))),
+        );
+        let resp = sink(req("host.agent.run", Some(1), serde_json::json!({}))).unwrap();
+        assert_eq!(resp.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+        let resp = sink(req("host.notify", Some(2), serde_json::json!({}))).unwrap();
+        assert_eq!(resp.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn agent_status_relays_run_status() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = make_sink(
+            "pub.test".into(),
+            vec!["agent".into(), "notify".into()],
+            log_dir.path().to_path_buf(),
+            recording_emitter().0,
+            noop_poster(),
+            Some(Arc::new(ServicesStub(std::env::temp_dir(), seen.clone()))),
+        );
+        sink(req("host.agent.status", Some(1), serde_json::json!({"task": "ai-read-ebook", "run_id": "r1"})));
+        sink(req("host.notify", Some(2), serde_json::json!({"title": "t", "action": {"kind": "open_path", "path": "/x"}})));
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls[0].0, "run-status");
+        assert_eq!(calls[1].0, "notify");
     }
 }
