@@ -4,8 +4,10 @@
 // Built as a second vite entry of the main frontend, so it shares the moraya /
 // prosemirror chunks the main window already ships (installer growth ≈ 0) and
 // can never drift from the main editor's styling or highlighting. Plugins load
-// it with `await import('plugin://<id>/__host__/editor-kit-v1.js')` and call
-// `mountMarkdownEditor()`.
+// it with `await import('plugin://<id>/__host__/assets/editor-kit-v1.js')` and
+// call `mountMarkdownEditor()`. The `assets/` segment is NOT optional: the
+// protocol handler maps `__host__/<rel>` onto the host dist tree and only
+// `dist/assets/` is reachable, so dropping it 404s.
 //
 // Hard constraint: nothing in this module's dependency graph may touch Tauri
 // IPC (`@tauri-apps/*`, `src/lib/editor-bridge.ts`, tabs, insights, adapters).
@@ -35,6 +37,12 @@ export interface KitEditor {
 }
 
 export interface KitOptions {
+  /**
+   * NOTE ON THE CONTAINER (see `mountMarkdownEditor`): it must have a
+   * determinate height. The kit lays itself out with `height: 100%` and
+   * absolute positioning, so a container that sizes to its content collapses
+   * source mode to zero height.
+   */
   initialMarkdown: string
   /** Default 'rich'. */
   mode?: KitMode
@@ -84,6 +92,16 @@ function joinAbsolute(root: string, relDir: string): string {
   return rel ? `${base}/${rel}` : base
 }
 
+/**
+ * Mount the editor into `container` (v1 API — frozen).
+ *
+ * **`container` MUST have a determinate height** (a flex/grid child with
+ * `min-height: 0`, an explicit `height`, or absolute insets). The kit fills its
+ * container with `height: 100%` plus absolutely-positioned source-mode layers,
+ * so it contributes no intrinsic height of its own: drop it into a
+ * content-sized box and rich mode looks fine while source mode collapses to
+ * zero height and appears blank.
+ */
 export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptions): Promise<KitEditor> {
   injectKitCss()
   await applyKitTheme()

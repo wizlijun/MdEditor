@@ -43,7 +43,9 @@ export default defineConfig({
         dailyNotes: 'daily-notes.html',
         // Editor Kit: the editor component bundle handed to plugin windows at
         // runtime (spec §3.4). A JS entry with a stable, hash-free file name so
-        // `plugin://<id>/__host__/editor-kit-v1.js` can address it forever; it
+        // `plugin://<id>/__host__/assets/editor-kit-v1.js` can address it
+        // forever (the `assets/` segment is required — `__host__/` maps onto
+        // the host dist tree and only `dist/assets/` is reachable); it
         // shares the moraya / prosemirror chunks with the main window, so the
         // installer grows by ≈ 0.
         'editor-kit': 'src/editor-kit/main.ts',
