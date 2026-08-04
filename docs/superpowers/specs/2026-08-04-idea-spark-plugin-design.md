@@ -16,7 +16,7 @@
 | idea 目录默认值 | `inbox/ideas`(vault 相对路径,窗口设置可改,存 vault 级 `.notemd/idea-spark.json`) |
 | 等待交互 | 可关窗,后台由宿主守望,完成后系统通知;窗口开着则就地欢庆 |
 | 缺依赖降级 | 未装/未启用 claude-agent 时仍可记 idea,委托按钮引导去市场安装 |
-| 编辑器形态 | 复用主程序那套 rich/source 双模式富文本(内嵌 `@moraya/core`,见 §2.1);预填轻模板(一句话念头 + 领域/迁移场景/现有条件/期望成果四个可删小节) |
+| 编辑器形态 | 复用主程序那套 rich/source 双模式富文本——由宿主提供 Editor Kit 组件包,插件运行时加载,主题完全跟随用户设置,插件包不膨胀(见 §2.1/§3.4);预填轻模板(一句话念头 + 领域/迁移场景/现有条件/期望成果四个可删小节) |
 | 任务模板归属 | 由奇思妙想插件内嵌并幂等种入 vault `.notemd/agent-tasks/idea-proof/`,claude-agent 自动发现,无需给 claude-agent 发版 |
 
 ## 1. 总览与组件
@@ -28,6 +28,7 @@
 | 插件本体 | `plugins-src/idea-spark/`(新) | 纯前端插件,照 `plugins-src/decision-log/` 形态:manifest.v2.json + 独立窗口 UI(Svelte)+ 复制的 `bridge.ts`/`strings.ts`/`okf/concept.ts` |
 | 宿主桥扩展 | `src-tauri/src/plugin_runtime/`(host_api.rs 等) | 新增 `host.plugin.execute`、`host.agent.watch` 两个桥方法及对应 capability |
 | 宿主守望模块 | `src/lib/agent-watch/`(新) | 主程序前端 run 守望器:轮询 claude-agent `run-status`,终态发系统通知;守望列表持久化,重启恢复 |
+| 宿主 Editor Kit | `src/editor-kit/`(新构建目标) | rich/source 双模式编辑器组件包,宿主构建、`plugin://` 运行时下发、主题跟随用户设置(§3.4) |
 | 任务模板 | 插件内嵌资源 | `idea-proof` 任务模板(task.json + CLAUDE.md + `.claude/settings*.json`),首次委托时种入 vault,已存在文件绝不覆盖 |
 
 ### manifest 要点
@@ -38,24 +39,23 @@
 - `contributes.menus`:`[{location: "plugins", label: "Idea Spark", command: "open"}]`
 - `contributes.windows`:`[{id: "main", entry: "index.html", 约 720×640, singleton: true, open_command: "open"}]`
 - `contributes.tray`:`[{window: "main"}]`(托盘条目点击直接开窗,机制现成,同 decision-log/weekly-review)
-- `capabilities`:`["vault.read", "vault.write", "toast", "editor.open", "plugin.execute:notemd.claude-agent", "agent.watch"]`
+- `capabilities`:`["vault.read", "vault.write", "toast", "editor.open", "plugin.execute:notemd.claude-agent", "agent.watch", "editor.kit"]`
 - `i18n`:en/zh/ja/de 四语,zh name「奇思妙想」
 
 ## 2. 插件窗口 UX 与数据流
 
 窗口三区:**新 idea 编辑区**(主体,rich/source 双模式编辑器,见 §2.1)、**历史列表**(idea 目录下各 idea 及状态:草稿/论证中/已完成/失败)、**设置**(齿轮弹层:idea 目录路径)。
 
-### 2.1 编辑器:内嵌 rich/source 双模式(与主程序同源)
+### 2.1 编辑器:宿主提供的 rich/source 双模式 Editor Kit
 
-插件不能 import 主程序 `src/`,但 rich 内核 `@moraya/core` 是独立包,插件作为 pnpm workspace 成员直接依赖并打进 ui bundle:
+插件不能 import 主程序 `src/`,也不自己打包 moraya——编辑器由宿主以**Editor Kit 组件包**形式在运行时提供(机制见 §3.4)。插件侧只做:
 
-- **依赖**:插件 `package.json` 声明 `"@moraya/core": "file:../../moraya-core"`,并显式 pin 全部 peerDependencies(prosemirror-*/markdown-it/highlight.js)到与仓库根相同版本,防止行为漂移。**不 import `@moraya/core/style`**(该导出指向不存在的文件,构建会炸)。
-- **rich 模式**:照 `src/lib/editor-bridge.ts` 姿势(仅 3 个 import、~40 行)`createEditor`,选项:`inlineSyntaxScope: 'line'`(live-preview 当前行显源码)、`enableInlineMarkInputRules: false`、`enableMath: false`、`enableMermaid: false`(控体积,katex CSS 不进包)、`enableHistory: true`、`changeDebounceMs: 200`。挂载骨架从 `RichEditor.svelte` 抄必要部分(~150 行),批注/wikilink/slash menu/查找等 mdeditor 扩展一概不要。
-- **MediaResolver**(createEditor 必填):自实现 bridge 版——vault 相对路径经新增桥方法 `host.vault.read_bytes`(见 §3.3)读 base64 转 blob URL;远程 URL 直通;vault 外本地路径显示占位。
-- **source 模式**:照主程序方案自建「透明 textarea + `<pre>` 高亮层 + 行号」骨架(~180 行),复制零依赖的 `src/lib/source-highlight.ts`(136 行)与 `autopair.ts`。
-- **模式切换与状态共享**:照主程序姿势——单一 markdown 字符串真源 + `lastSync` 去环哨兵(~30 行),切换按钮 + 记住上次模式。
-- **CSS**:复制 `src/styles/editor-base.css` 基础子集(基础/cursor-syntax 标记/代码块/hljs token/列表,约 400 行)+ 自写 ~100 行排版变量。主题只跟明暗(桥的 `theme` 字符串 + 自声明 `color-scheme: light dark`,独立窗口惯例),**不跟随主程序自定义编辑器主题**——已知取舍。
-- **已知风险与对策**:core 升级改 DOM 类名时插件 CSS 会静默漂移——backlog:把编辑器基础 CSS 上游进 moraya-core 真正产出 `dist/style.css`,本期不做。插件 ui 包体积约 1.2MB(关 math/mermaid 后),可接受。
+- manifest 声明 capability `editor.kit`;
+- 运行时 `await import('plugin://<id>/__host__/editor-kit-v1.js')`,调 `mountMarkdownEditor(container, opts)` 挂载;
+- 得到与主程序同源的能力:rich 模式(`inlineSyntaxScope: 'line'` live-preview、input rules、链接展开/点击)、source 模式(透明 textarea + 高亮层 + 行号)、模式切换按钮、单一 markdown 字符串真源;
+- 主题、CSS、MediaResolver 全部 kit 内置,插件零编辑器代码、ui 包保持几十 KB。
+
+kit 的挂载选项按奇思妙想的需要收敛:`enableMath: false`、`enableMermaid: false`、无批注/wikilink/slash menu/查找等 mdeditor 扩展。
 
 主流程:
 
@@ -114,7 +114,16 @@
 ### 3.3 `host.vault.read_bytes`(桥方法,挂在现有 `vault.read` capability 下)
 
 - 参数 `{path}`(vault 相对路径,同 `host.vault.read` 的路径校验:拒绝绝对路径/`..`/符号链接逃逸),返回 base64,10MB 上限。
-- 动机:插件窗口零 Tauri IPC,rich 编辑器的 MediaResolver 需要读 vault 内图片字节;现有 `host.vault.read` 只回文本、`host.fs.read_bytes` 仅限 dialog 选中路径。通用基建,其他插件同样受益。
+- 动机:Editor Kit 跑在插件 webview 里,依旧零 Tauri IPC;MediaResolver 读 vault 内图片字节必须走桥。现有 `host.vault.read` 只回文本、`host.fs.read_bytes` 仅限 dialog 选中路径。通用基建,其他插件同样受益。
+
+### 3.4 Editor Kit:宿主构建、运行时下发的编辑器组件包
+
+- **单一真源**:kit 是主仓库的一个新 vite lib 构建目标(如 `src/editor-kit/`),**直接 import** `src/lib/editor-bridge.ts`、`src/styles/editor-base.css`(整文件,多余分区无害)、`src/lib/source-highlight.ts`、`src/lib/autopair.ts` 与 `@moraya/core`——零复制,core 升级时与主程序编辑器同仓同版本构建,样式/行为漂移风险归零。kit 内不得引用任何依赖 Tauri IPC 的模块(如 tauri-media-resolver),MediaResolver 用桥版实现(`host.vault.read_bytes` → blob URL,远程 URL 直通)。
+- **产物与分发**:构建产物(js + css,约 1.2MB)打进 app 资源(`tauri.conf.json` `bundle.resources`);`plugin://` 协议处理器新增保留路径 `__host__/editor-kit-v1.js`,以正确 MIME 供 ES module dynamic import。插件 ui 包不再含任何编辑器代码。
+- **API 契约(v1 冻结)**:`mountMarkdownEditor(container, { initialMarkdown, mode, onChange, placeholder? })` → `{ getMarkdown(), setMarkdown(), setMode(), focus(), destroy() }`。向后兼容靠文件名带版本(`-v1`)+ 插件 `engines.notemd` 门槛;未来破坏性变更发 `-v2` 并保留 v1。
+- **主题自适应**:声明了 `editor.kit` capability 的插件窗口,宿主在创建时把 `theme_load_compiled` 的编译主题 CSS 一并注入(与现有 bridge_script 注入同路),主题变更时经现有 eval/dispatch 通道推送更新——编辑器完全跟随用户设置的主题(明暗 + 自定义编辑器主题),不是降级的 light/dark 二值。
+- **授权**:capability `editor.kit` 同时控制两件事:保留路径可加载 + 主题 CSS 注入。未声明的插件请求 `__host__/` 路径返回 404。
+- **体积账**:app 安装包一次性 +约 1.2MB;每个用编辑器的插件包省下同样体积,第二个受益插件起净赚。
 
 ## 4. `idea-proof` 任务模板与产物
 
@@ -152,17 +161,16 @@ vault 内布局(claude-agent 约定):
 
 ## 7. 测试与验证
 
-- 插件侧:`strings.test.ts`(四语 key 齐全)、slug/文件名生成、模板种入幂等、frontmatter 过 `scripts/okf-lint-core.mjs` 单测;编辑器 markdown round-trip 冒烟(rich 挂载→setContent→getMarkdown 不变形,jsdom 下跑)。
-- 注意:在 `.claude/worktrees` 下开发时,`file:../../moraya-core` 同样受「先 `ln -s moraya-core` 再 `pnpm install`」约束。
+- 插件侧:`strings.test.ts`(四语 key 齐全)、slug/文件名生成、模板种入幂等、frontmatter 过 `scripts/okf-lint-core.mjs` 单测。
+- Editor Kit:markdown round-trip 冒烟(挂载→setMarkdown→getMarkdown 不变形,jsdom 下跑);构建产物存在性纳入主程序 check;保留路径 404 门禁(未声明 `editor.kit` 的插件)单测。
 - 宿主侧:桥方法 capability 门禁单测(未声明 → -32001)、守望器状态机单测(done/lost/重启恢复)。
 - GUI:dev 构建实机手动验证(托盘入口、写 idea、委托、系统通知、欢庆、打开结果);不跑桌面自动化。
 - 发布:`scripts/dev-install-plugin.sh`、`scripts/release-plugins.sh` 各加 `idea-spark` case;先主程序发版(桥扩展 + 通知插件 + CONCEPT_TYPE 登记),再插件上架市场(`gen-plugin-index.mjs` 默认 merge,注意本地 dist-plugins 旧版回扫坑)。
 
 ## 8. 明确不做(YAGNI)
 
-- 编辑器不带 mdeditor 扩展:批注、wikilink、slash menu、查找替换、图片工具条、数学公式、mermaid 一概不做——只要基础 markdown live-preview + source 模式。
-- 不跟随主程序自定义编辑器主题,只跟系统明暗。
-- 编辑器基础 CSS 上游进 moraya-core(产出真实 `dist/style.css`)记 backlog,本期不做。
+- 奇思妙想的编辑器不开 mdeditor 扩展:批注、wikilink、slash menu、查找替换、图片工具条、数学公式、mermaid 一概不做——只要基础 markdown live-preview + source 模式。
+- Editor Kit v1 只服务「基础 markdown 编辑」场景,不承诺暴露批注/wikilink 等扩展点(未来有需求再谈 v2)。
 - 不做 idea 之间的关系图/结网(纯 `.md` 不结网,符合产品原则)。
 - 不做 per-plugin「装了默认关」机制(装 = 启用,是市场现状;"用户开启后"即"安装后")。
 - 不做 CLI 子命令(需要了再加)。
