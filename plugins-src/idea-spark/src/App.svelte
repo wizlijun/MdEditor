@@ -25,8 +25,12 @@
   import {
     boot,
     loadIdea,
+    markEdited,
+    needsSaveBefore,
     newIdea,
+    rebaseline,
     saveIdea,
+    showInEditor,
     state as store,
     toast,
   } from './lib/store.svelte'
@@ -46,14 +50,20 @@
     return kit ? kit.getMarkdown() : fallbackText
   }
 
-  /** Pushes markdown into the live editor (loading an idea / starting a new one). */
+  /**
+   * Pushes markdown into the live editor and re-baselines the dirty check
+   * against what the editor holds *afterwards* — see `showInEditor`: the kit
+   * normalizes markdown on the way in and echoes the normalized form back
+   * ~200 ms later, so baselining on the input would make an untouched document
+   * report itself dirty.
+   */
   function showMarkdown(md: string): void {
-    if (kit) kit.setMarkdown(md)
-    else fallbackText = md
+    if (!kit) fallbackText = md
+    showInEditor(store, kit, md)
   }
 
   function onEdited(md: string): void {
-    store.dirty = md !== store.savedMarkdown
+    markEdited(store, md)
   }
 
   /**
@@ -79,12 +89,23 @@
    * right next to the editor, so a mis-click must not cost the user their text.
    * Unsaved changes are therefore written to disk first (the user sees the
    * `saved` toast), and a failed save aborts the switch rather than proceeding
-   * to overwrite the buffer. An untouched document isn't dirty, so merely
-   * browsing the history never creates files.
+   * to overwrite the buffer.
+   *
+   * The question is put to the **live buffer**, not to `store.dirty`: the flag
+   * trails the editor by a 200 ms debounce, so a paragraph typed just before
+   * the click would slip through an unset flag. An untouched document matches
+   * its baseline byte for byte (see `rebaseline`), so merely browsing the
+   * history still never writes anything.
    */
   async function keepUnsaved(): Promise<boolean> {
-    if (!store.dirty || cannotSave()) return !store.dirty
-    return (await saveIdea(markdown())) !== null
+    const md = markdown()
+    if (!needsSaveBefore(store, md)) return true
+    if (cannotSave()) {
+      // Refusing silently would read as a dead click. Say why nothing happened.
+      toast(t('unsavedWarning'))
+      return false
+    }
+    return (await saveIdea(md)) !== null
   }
 
   async function pick(name: string): Promise<void> {
@@ -143,6 +164,10 @@
           kit = null
           return
         }
+        // The mount itself round-trips the template through ProseMirror, so the
+        // baseline has to come from the kit here too — otherwise the very first
+        // document a user ever sees reports itself dirty ~200 ms in.
+        rebaseline(store, kit)
         kit.focus()
       } catch (e) {
         console.error('[idea-spark] the editor kit failed to load:', e)
@@ -163,7 +188,9 @@
     // Best effort (per spec): a closing webview may never run this. It is a
     // reminder, not a guard — nothing blocks the close.
     const onBeforeUnload = () => {
-      if (store.dirty) toast(t('unsavedWarning'))
+      // Live buffer again, not `dirty` — the last keystrokes before a close are
+      // exactly the ones still inside the debounce window.
+      if (needsSaveBefore(store, markdown())) toast(t('unsavedWarning'))
     }
     window.addEventListener('beforeunload', onBeforeUnload)
 

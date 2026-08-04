@@ -16,9 +16,13 @@ import {
   displayName,
   ideaDocText,
   ideaTemplate,
+  markEdited,
   markPending,
+  needsSaveBefore,
   nextFileName,
+  rebaseline,
   relPath,
+  showInEditor,
   setIdeaDir,
   statusOf,
   type SparkStore,
@@ -318,6 +322,104 @@ describe('changeIdeaDir', () => {
     expect(s.ideaDir).toBe('inbox/ideas')
     expect(s.current).toBe('2026-08-04-a.md')
     expect(s.currentFrontmatter).toBe('type: Idea')
+  })
+})
+
+// The dirty check must be anchored to what the EDITOR holds, never to the text
+// we handed it. moraya's `setContent` dispatches a ProseMirror transaction and
+// the lazy change plugin later re-serializes the doc — a round trip that
+// normalizes the markdown (a template's trailing newline, for one, does not
+// survive it). Baselining on the input would therefore mark an untouched
+// document dirty ~200 ms after it loads, and the auto-save-before-switch would
+// write files the user never asked for (or re-serialize an agent-written idea).
+//
+// The stub models exactly that: it stores what a "PM round trip" would produce,
+// not what it was given.
+function normalizingKit(initial = '') {
+  const normalize = (md: string) => md.replace(/\n+$/, '')
+  let doc = normalize(initial)
+  return {
+    setMarkdown: (md: string) => void (doc = normalize(md)),
+    getMarkdown: () => doc,
+  }
+}
+
+describe('showInEditor', () => {
+  it('baselines on the editor output, not on the text handed to it', () => {
+    const s = createStore()
+    const kit = normalizingKit()
+    const template = '# New idea\n\n## Outcome\n'
+
+    showInEditor(s, kit, template)
+
+    expect(kit.getMarkdown()).toBe('# New idea\n\n## Outcome')
+    expect(s.savedMarkdown).toBe(kit.getMarkdown())
+    expect(s.savedMarkdown).not.toBe(template)
+    expect(s.dirty).toBe(false)
+  })
+
+  it("the editor's own delayed echo cannot fabricate dirt", () => {
+    const s = createStore()
+    const kit = normalizingKit()
+
+    showInEditor(s, kit, '# New idea\n\n## Outcome\n')
+    // ~200 ms later the change plugin reports the serialized doc.
+    markEdited(s, kit.getMarkdown())
+
+    expect(s.dirty).toBe(false)
+    expect(needsSaveBefore(s, kit.getMarkdown())).toBe(false)
+  })
+
+  it('takes the text verbatim when there is no kit (the fallback textarea)', () => {
+    const s = createStore()
+    showInEditor(s, null, '# Draft\n')
+    expect(s.savedMarkdown).toBe('# Draft\n')
+    expect(s.dirty).toBe(false)
+  })
+})
+
+describe('rebaseline', () => {
+  it('adopts the editor content as the baseline (used right after mounting)', () => {
+    const s = createStore()
+    const kit = normalizingKit('# New idea\n\n## Outcome\n')
+    s.savedMarkdown = '# New idea\n\n## Outcome\n' // what we asked the kit to mount
+
+    rebaseline(s, kit)
+
+    expect(s.savedMarkdown).toBe('# New idea\n\n## Outcome')
+    expect(s.dirty).toBe(false)
+    expect(needsSaveBefore(s, kit.getMarkdown())).toBe(false)
+  })
+})
+
+describe('needsSaveBefore', () => {
+  it('asks the live buffer, so an edit inside the debounce window still counts', () => {
+    const s = createStore()
+    const kit = normalizingKit()
+    showInEditor(s, kit, '# Idea')
+    // The user types; `dirty` is still false because the 200 ms debounce has
+    // not fired — but the live buffer already differs and must not be lost.
+    kit.setMarkdown('# Idea\n\nthe part that would be lost')
+
+    expect(s.dirty).toBe(false)
+    expect(needsSaveBefore(s, kit.getMarkdown())).toBe(true)
+  })
+
+  it('is false when the live buffer matches the baseline', () => {
+    const s = createStore()
+    s.savedMarkdown = '# Idea'
+    expect(needsSaveBefore(s, '# Idea')).toBe(false)
+  })
+})
+
+describe('markEdited', () => {
+  it('raises and lowers dirty against the baseline', () => {
+    const s = createStore()
+    s.savedMarkdown = '# Idea'
+    markEdited(s, '# Idea and more')
+    expect(s.dirty).toBe(true)
+    markEdited(s, '# Idea')
+    expect(s.dirty).toBe(false)
   })
 })
 

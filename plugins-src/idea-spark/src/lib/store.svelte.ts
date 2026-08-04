@@ -31,8 +31,10 @@ export interface SparkStore {
   /** Set when the Editor Kit failed to load; the UI falls back to a textarea. */
   kitFailed: boolean
   /** Set when the last directory listing failed outright (as opposed to being
-   *  empty). An empty history list then means "couldn't read", not "no ideas",
-   *  and the save path stops trusting `files` for collision detection. */
+   *  empty). Purely a UI signal: it lets the history list say "couldn't read"
+   *  instead of implying "you have no ideas yet". The save path doesn't consult
+   *  it — `freeFileName` asks the disk unconditionally, which covers a stale
+   *  listing just as well as a failed one. */
   listFailed: boolean
 
   /** Vault-relative directory ideas live in. */
@@ -245,6 +247,64 @@ export function ideaDocText(s: SparkStore, markdown: string, nowIso: string): st
     : rebuildIdeaDoc(s.currentFrontmatter, markdown, nowIso)
 }
 
+/**
+ * The slice of the Editor Kit the dirty check needs. Declared structurally so
+ * tests can stand in a stub — `KitEditor` itself lives behind a `plugin://`
+ * dynamic import that no test can load.
+ */
+export interface EditorHandle {
+  getMarkdown(): string
+  setMarkdown(md: string): void
+}
+
+/**
+ * Adopts whatever the editor currently holds as the dirty-check baseline.
+ *
+ * This MUST be the editor's own output rather than the text we handed it.
+ * moraya's `setContent` dispatches a ProseMirror transaction, and the lazy
+ * change plugin re-serializes the document ~200 ms later without distinguishing
+ * a programmatic set from a keystroke — a round trip that normalizes the
+ * markdown (a trailing newline, for one, does not survive it). Baselining on
+ * the input would therefore mark an *untouched* document dirty a moment after
+ * it loads, which in turn would make the save-before-switch write files nobody
+ * asked for and re-serialize hand- or agent-written ideas into ProseMirror's
+ * preferred spelling. Anchoring on `getMarkdown()` — the same
+ * `serializeMarkdown(view.state.doc)` the plugin will later report — makes the
+ * baseline byte-identical to the echo.
+ */
+export function rebaseline(s: SparkStore, editor: EditorHandle | null): void {
+  if (editor) s.savedMarkdown = editor.getMarkdown()
+  s.dirty = false
+}
+
+/** Pushes text into the editor, then re-baselines against what it actually holds. */
+export function showInEditor(s: SparkStore, editor: EditorHandle | null, md: string): void {
+  if (!editor) {
+    // The fallback textarea is bound verbatim: what goes in is what it holds.
+    s.savedMarkdown = md
+    s.dirty = false
+    return
+  }
+  editor.setMarkdown(md)
+  rebaseline(s, editor)
+}
+
+/** Records the editor's reported content against the baseline. */
+export function markEdited(s: SparkStore, md: string): void {
+  s.dirty = md !== s.savedMarkdown
+}
+
+/**
+ * Whether `liveMarkdown` must be persisted before the editor's content is
+ * replaced. Callers pass the **live** buffer (`getMarkdown()`), never `dirty`:
+ * the flag lags the editor by the change plugin's 200 ms debounce, so a user
+ * who types a paragraph and immediately clicks a history row would otherwise
+ * sail past an unset flag and lose exactly that paragraph.
+ */
+export function needsSaveBefore(s: SparkStore, liveMarkdown: string): boolean {
+  return liveMarkdown !== s.savedMarkdown
+}
+
 /** The pre-filled capture template (localized), used for every fresh idea. */
 export function ideaTemplate(): string {
   return [
@@ -336,10 +396,14 @@ export async function boot(): Promise<void> {
  * yet" (the normal first-run state) and for a real IO failure — `vault_list` in
  * `ui_rpc.rs` can't tell the caller which — so both land here as an empty
  * listing. What the two cases must NOT share is silence: `listFailed` records
- * that the emptiness is unverified, so the UI can say so and, more importantly,
- * so `saveIdea` stops trusting `files` for collision detection. An empty list
- * that really means "couldn't read" would otherwise make `nextFileName` hand
- * back an un-suffixed name and overwrite a same-day, same-title idea on disk.
+ * that the emptiness is unverified so the history list can say so, rather than
+ * letting an unreadable directory pass for an empty one.
+ *
+ * The save path does not read this flag. An empty-because-unreadable listing
+ * would make `nextFileName` hand back an un-suffixed name and overwrite a
+ * same-day, same-title idea, but the defence against that is `freeFileName`
+ * asking `host.vault.exists` unconditionally — which also covers a listing that
+ * is merely stale, a case no flag can detect.
  */
 export async function reload(): Promise<void> {
   let failed = false
@@ -417,6 +481,12 @@ export async function saveIdea(markdown: string): Promise<string | null> {
  *
  * An idea that already has a file skips all of this: overwriting itself is the
  * whole point of a second save.
+ *
+ * Cap behaviour, stated plainly: after 100 occupied candidates the loop gives
+ * up and returns the 101st name **unverified**, which could overwrite it. That
+ * needs 100 same-day, same-title ideas in one directory; a bound is still worth
+ * having, because without one a bridge that answered `true` to everything would
+ * hang the save (and with it the window) forever.
  */
 async function freeFileName(markdown: string): Promise<string> {
   if (state.current) return state.current
@@ -429,10 +499,11 @@ async function freeFileName(markdown: string): Promise<string> {
     const occupied = await vaultExists(relPath(state, name))
       .then((r) => r.exists)
       .catch(() => false)
-    if (!occupied) break
+    if (!occupied) return name
     taken.add(name)
     name = ideaFileName(markdown, today(), taken)
   }
+  console.warn(`[idea-spark] gave up looking for a free name after 100 tries; using ${name} unchecked`)
   return name
 }
 
