@@ -50,3 +50,6 @@ plugins-registry/.wrangler/
 # location helper sidecar (built by scripts/build-location-helper.sh)
 src-tauri/binaries/
 location-helper/target/
+
+# superpowers brainstorm/SDD scratch
+.superpowers/
