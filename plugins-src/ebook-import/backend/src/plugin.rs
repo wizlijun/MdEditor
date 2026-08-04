@@ -413,7 +413,30 @@ fn run_job(
 /// 规格交给没有窗口的 claude-agent 去发(见下方 run_ai_job)。这里的轮询只
 /// 服务于窗口内的行内进度显示,窗口关掉就停,是可接受的。
 fn spawn_ai_worker(host: sdk::Host, inner: Arc<Mutex<Inner>>, vault: PathBuf) {
+    /// worker 的"我在跑"标志的持有凭证。Drop 里放下标志,所以无论正常退出还是
+    /// **panic 展开**,`running` 都不会永远举着 —— 举着就意味着之后每一次
+    /// 「AI 先读」都只入队、永不执行,而且无法恢复。
+    /// 锁可能因 panic 而中毒,这里用 into_inner 照样拿到数据:标志复位比锁的
+    /// 卫生更要紧。
+    struct WorkerSlot(Arc<Mutex<Inner>>);
+    impl Drop for WorkerSlot {
+        fn drop(&mut self) {
+            let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            g.ai.release_worker();
+            if g.ai.pending() > 0 {
+                // 队里还有活但 worker 没了(panic)。不在 Drop 里 spawn(会
+                // 和析构顺序/运行时关停打架);下一次 ai_read_start 会因为
+                // 标志已放下而重新拉起 worker,把余下的书接着做完。
+                eprintln!(
+                    "[ebook-import] ai worker exited with {} job(s) still queued",
+                    g.ai.pending()
+                );
+            }
+        }
+    }
+
     tokio::spawn(async move {
+        let _slot = WorkerSlot(inner.clone());
         loop {
             let job = { inner.lock().unwrap().ai.next() };
             let Some(job) = job else { break };

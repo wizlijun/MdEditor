@@ -42,6 +42,16 @@ impl AiQueue {
         self.running = j.is_some();
         j
     }
+    /// worker 退出时无条件放下标志(见 plugin.rs 的 WorkerSlot)。正常收尾时
+    /// `next` 已经放过了,这里是幂等的补刀:worker panic 掉而标志还举着,
+    /// 之后所有「AI 先读」都只入队不执行,且没有任何办法恢复。
+    pub fn release_worker(&mut self) {
+        self.running = false;
+    }
+    /// 队里还剩几本 —— worker 异常退出后判断要不要再拉一个。
+    pub fn pending(&self) -> usize {
+        self.q.len()
+    }
 }
 
 pub fn summary_name(date: chrono::NaiveDate) -> String {
@@ -142,6 +152,22 @@ mod tests {
         assert_eq!(q.next(), Some(job(1)));
         assert_eq!(q.next(), None); // 队空 → running 落下
         assert!(q.claim_worker(), "after drain a new worker may start");
+    }
+
+    /// worker panic 后必须能重新拉起,否则「AI 先读」永久失灵。
+    #[test]
+    fn release_worker_lets_a_new_worker_take_over() {
+        let mut q = AiQueue::default();
+        q.enqueue(job(1));
+        q.enqueue(job(2));
+        assert!(q.claim_worker());
+        assert_eq!(q.next(), Some(job(1)));
+        // worker 在处理 job1 时炸了:标志还举着,队里还有 job2。
+        assert!(!q.claim_worker());
+        q.release_worker();
+        assert_eq!(q.pending(), 1);
+        assert!(q.claim_worker(), "a new worker must be able to take over");
+        assert_eq!(q.next(), Some(job(2)));
     }
 
     #[test]
