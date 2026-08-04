@@ -1024,6 +1024,21 @@ export async function deleteIdea(name: string): Promise<string | null> {
     return null
   }
   retitle(name, null)
+  // Every key that names the file has to go with it — the same bookkeeping
+  // `renameIdea` does when the name MOVES, except here there is nowhere to
+  // move it to. A `pending` entry for a file that no longer exists is not
+  // cosmetic: `runInFlight` is a GLOBAL gate (claude-agent serializes the
+  // whole task, see its note), so one orphan entry disables delegation for
+  // every idea, `persist()` writes it into `.notemd/idea-spark.json` so it
+  // survives restarts, and `reconcilePending` deliberately leaves a run it
+  // cannot reach alone — leaving hand-editing the JSON as the only way out.
+  const ideaRel = relPath(state, name)
+  if (ideaRel in state.pending) {
+    const { [ideaRel]: _dropped, ...rest } = state.pending
+    state.pending = rest
+    void persist()
+  }
+  state.failed = state.failed.filter((f) => f !== ideaRel)
   await reload()
   return wasOpen ? newIdea() : null
 }

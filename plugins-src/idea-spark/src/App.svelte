@@ -231,7 +231,23 @@
   async function startNew(): Promise<void> {
     if (!(await keepUnsaved())) return
     showMarkdown(newIdea())
+    refreshPlaceholder()
     kit?.focus()
+  }
+
+  /**
+   * Pushes the rotation's current line into the kit. `newIdea()` advances
+   * `placeholderSeq`, but the kit read `opts.placeholder` once at mount and
+   * would otherwise show the window's opening line forever — the rotation
+   * would only ever be visible across window restarts, and "click New again
+   * and you get a different prompt" is precisely what the design promises.
+   *
+   * Read from the store rather than from the `placeholder` `$derived` above so
+   * the value handed over is unambiguously the post-increment one. The
+   * degraded textarea needs nothing here: it binds that derived directly.
+   */
+  function refreshPlaceholder(): void {
+    kit?.setPlaceholder(pickPlaceholder(placeholderLines(), store.placeholderSeq))
   }
 
   /**
@@ -257,6 +273,9 @@
     // the blank draft has to be pushed in here.
     if (blank !== null) {
       showMarkdown(blank)
+      // Same reason as `startNew`: the store detached the document through
+      // `newIdea()`, which advanced the rotation.
+      refreshPlaceholder()
       kit?.focus()
     }
   }
@@ -634,7 +653,11 @@
         ⚙
       </button>
       {#if settingsOpen}
-        <SettingsPopover onclose={() => (settingsOpen = false)} />
+        <!-- Changing the idea directory detaches the open document, so the
+             buffer has to reach the disk in the OLD directory first — otherwise
+             the next autosave tick deposits it as a new file in the new one and
+             the idea exists twice. Same barrier as delete/rename/delegate. -->
+        <SettingsPopover onclose={() => (settingsOpen = false)} onbeforecommit={saveNow} />
       {/if}
     </div>
   {/if}

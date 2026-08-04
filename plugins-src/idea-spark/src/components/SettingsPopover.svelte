@@ -2,18 +2,31 @@
      ideas are saved into. Validation is live and non-destructive (the save
      button greys out for an empty / absolute / `..`-bearing path via
      `normalizeIdeaDir`), so the store is only ever handed a value that already
-     passed the same check `setIdeaDir` applies. -->
+     passed the same check `setIdeaDir` applies.
+
+     `onbeforecommit` is the flush barrier, and it is not optional: a real
+     directory change DETACHES the open document (`changeIdeaDir` clears
+     `current`/`currentFrontmatter`), so a buffer that is still dirty when the
+     save button is pressed would be written by the next autosave tick as a
+     BRAND NEW file in the NEW directory, with freshly stamped frontmatter,
+     while the original keeps the old text — one idea silently forked in two.
+     This is the only place where a settings action can produce a file. -->
 <script lang="ts">
   import { normalizeIdeaDir, saveIdeaDir, state as store } from '../lib/store.svelte'
   import { t } from '../lib/strings'
 
-  const { onclose }: { onclose: () => void } = $props()
+  const { onclose, onbeforecommit }: { onclose: () => void; onbeforecommit?: () => Promise<void> } =
+    $props()
 
   let value = $state(store.ideaDir)
   const valid = $derived(normalizeIdeaDir(value) !== null)
 
   async function commit(): Promise<void> {
     if (!valid) return
+    // Land the open document in the directory it still belongs to, BEFORE the
+    // store detaches it. Awaited: `saveIdeaDir` must not run until the write
+    // has settled.
+    await onbeforecommit?.()
     await saveIdeaDir(value)
     onclose()
   }

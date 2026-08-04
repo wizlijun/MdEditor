@@ -787,6 +787,39 @@ describe('deleteIdea', () => {
     expect(host.vaultRemove).toHaveBeenCalledTimes(1)
   })
 
+  // `runInFlight` is a GLOBAL gate, so a `pending` entry left behind by a
+  // deleted idea doesn't just mis-badge one row — it disables delegation for
+  // the whole plugin, is written to `.notemd/idea-spark.json` by `persist()`
+  // (so it outlives the window), and `reconcilePending` won't clear it when the
+  // agent is unreachable. The only recovery would be editing the JSON by hand.
+  it('drops the deleted idea\'s pending run so delegation is not wedged', async () => {
+    openIdeaWithProof()
+    state.pending = { 'inbox/ideas/a.md': 'run-1' }
+    state.failed = ['inbox/ideas/a.md']
+    expect(runInFlight(state)).toBe(true)
+    host.vaultRemove.mockResolvedValue({ ok: true })
+
+    await deleteIdea('a.md')
+
+    expect(state.pending).toEqual({})
+    expect(state.failed).toEqual([])
+    expect(runInFlight(state)).toBe(false)
+  })
+
+  // The other half: a run belonging to an idea that is still there must survive
+  // its neighbour's deletion, or deleting any row would silently orphan it.
+  it('keeps another idea\'s pending run', async () => {
+    openIdeaWithProof()
+    state.files = [...state.files, 'inbox/ideas/b.md']
+    state.docs = ['b.md', 'a.md']
+    state.pending = { 'inbox/ideas/a.md': 'run-1' }
+    host.vaultRemove.mockResolvedValue({ ok: true })
+
+    await deleteIdea('b.md')
+
+    expect(state.pending).toEqual({ 'inbox/ideas/a.md': 'run-1' })
+  })
+
   it('leaves another idea open when a different row is deleted', async () => {
     openIdeaWithProof()
     state.files = [...state.files, 'inbox/ideas/b.md']

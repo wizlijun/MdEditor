@@ -13,8 +13,6 @@
 export type Locale = 'en' | 'zh' | 'ja' | 'de'
 
 export const MESSAGE_KEYS = [
-  'title',
-  'editorPlaceholder',
   'save',
   'saved',
   'saving',
@@ -29,13 +27,11 @@ export const MESSAGE_KEYS = [
   'waitHint',
   'settings',
   'ideaDir',
-  'history',
   'inbox',
   'statusDraft',
   'statusRunning',
   'statusDone',
   'statusFailed',
-  'openResult',
   'retry',
   'needVault',
   'agentMissing',
@@ -70,7 +66,6 @@ export const MESSAGE_KEYS = [
   'confirmDelete',
   'cancel',
   'inboxEmpty',
-  'rowActions',
 ] as const
 
 export type MessageKey = (typeof MESSAGE_KEYS)[number]
@@ -80,8 +75,6 @@ type Catalog = Record<MessageKey, string>
 // English is the baseline catalog: every other locale is checked against it
 // (see strings.test.ts) for key coverage.
 const en: Catalog = {
-  title: 'Idea Spark',
-  editorPlaceholder: "What's the spark?",
   save: 'Save',
   saved: 'Saved',
   saving: 'Saving…',
@@ -101,13 +94,11 @@ const en: Catalog = {
   waitHint: 'This can take a minute — feel free to keep writing.',
   settings: 'Settings',
   ideaDir: 'Idea folder',
-  history: 'History',
   inbox: 'Inbox',
   statusDraft: 'Draft',
   statusRunning: 'Running',
   statusDone: 'Done',
   statusFailed: 'Failed',
-  openResult: 'Open result',
   retry: 'Retry',
   needVault: 'Open a vault first.',
   agentMissing: 'Claude Agent plugin not found',
@@ -125,7 +116,7 @@ const en: Catalog = {
   editorMode: 'Editor mode',
   editorUnavailable: 'The rich editor could not be loaded — falling back to plain text.',
   unsavedWarning: 'This idea has unsaved changes.',
-  historyUnavailable: 'The idea folder could not be read — the history may be incomplete.',
+  historyUnavailable: 'The idea folder could not be read — the inbox may be incomplete.',
   menuDelegate: 'Delegate to agent',
   menuOpenInMain: 'Open in the main editor',
   menuOpenIdea: 'Open the idea in the main editor',
@@ -142,12 +133,9 @@ const en: Catalog = {
   confirmDelete: 'Delete',
   cancel: 'Cancel',
   inboxEmpty: 'No ideas yet.',
-  rowActions: 'Actions',
 }
 
 const zh: Catalog = {
-  title: '奇思妙想',
-  editorPlaceholder: '有什么灵感?',
   save: '保存',
   saved: '已保存',
   saving: '保存中…',
@@ -162,13 +150,11 @@ const zh: Catalog = {
   waitHint: '这可能要等一会儿 —— 你可以继续写。',
   settings: '设置',
   ideaDir: '想法目录',
-  history: '历史',
   inbox: '收件箱',
   statusDraft: '草稿',
   statusRunning: '进行中',
   statusDone: '已完成',
   statusFailed: '失败',
-  openResult: '打开结果',
   retry: '重试',
   needVault: '请先打开一个 vault。',
   agentMissing: '未找到 Claude 智能体插件',
@@ -186,7 +172,7 @@ const zh: Catalog = {
   editorMode: '编辑模式',
   editorUnavailable: '富文本编辑器加载失败 —— 已退回纯文本编辑。',
   unsavedWarning: '这个想法还有未保存的修改。',
-  historyUnavailable: '读取想法目录失败 —— 历史列表可能不完整。',
+  historyUnavailable: '读取想法目录失败 —— 收件箱可能不完整。',
   menuDelegate: '委托给 agent',
   menuOpenInMain: '在主编辑器打开',
   menuOpenIdea: '在主编辑器打开想法',
@@ -203,12 +189,9 @@ const zh: Catalog = {
   confirmDelete: '删除',
   cancel: '取消',
   inboxEmpty: '还没有想法。',
-  rowActions: '操作',
 }
 
 const ja: Catalog = {
-  title: 'アイデアスパーク',
-  editorPlaceholder: 'ひらめきは何ですか?',
   save: '保存',
   saved: '保存しました',
   saving: '保存中…',
@@ -223,13 +206,11 @@ const ja: Catalog = {
   waitHint: '少し時間がかかることがあります —— そのまま書き続けて構いません。',
   settings: '設定',
   ideaDir: 'アイデアフォルダ',
-  history: '履歴',
   inbox: 'インボックス',
   statusDraft: '下書き',
   statusRunning: '実行中',
   statusDone: '完了',
   statusFailed: '失敗',
-  openResult: '結果を開く',
   retry: '再試行',
   needVault: '先に vault を開いてください。',
   agentMissing: 'Claude エージェント プラグインが見つかりません',
@@ -247,7 +228,7 @@ const ja: Catalog = {
   editorMode: 'エディターモード',
   editorUnavailable: 'リッチエディタを読み込めませんでした —— プレーンテキストに切り替えます。',
   unsavedWarning: 'このアイデアには未保存の変更があります。',
-  historyUnavailable: 'アイデアフォルダを読み取れませんでした —— 履歴が不完全な可能性があります。',
+  historyUnavailable: 'アイデアフォルダを読み取れませんでした —— インボックスが不完全な可能性があります。',
   menuDelegate: 'エージェントに委任',
   menuOpenInMain: 'メインエディタで開く',
   menuOpenIdea: 'アイデアをメインエディタで開く',
@@ -264,12 +245,9 @@ const ja: Catalog = {
   confirmDelete: '削除',
   cancel: 'キャンセル',
   inboxEmpty: 'まだアイデアがありません。',
-  rowActions: '操作',
 }
 
 const de: Catalog = {
-  title: 'Ideenfunke',
-  editorPlaceholder: 'Was ist der Funke?',
   save: 'Speichern',
   saved: 'Gespeichert',
   saving: 'Speichere…',
@@ -284,13 +262,11 @@ const de: Catalog = {
   waitHint: 'Das kann eine Weile dauern — du kannst währenddessen weiterschreiben.',
   settings: 'Einstellungen',
   ideaDir: 'Ideenordner',
-  history: 'Verlauf',
   inbox: 'Eingang',
   statusDraft: 'Entwurf',
   statusRunning: 'Läuft',
   statusDone: 'Fertig',
   statusFailed: 'Fehlgeschlagen',
-  openResult: 'Ergebnis öffnen',
   retry: 'Erneut versuchen',
   needVault: 'Öffne zuerst einen Vault.',
   agentMissing: 'Claude-Agent-Plugin nicht gefunden',
@@ -308,7 +284,7 @@ const de: Catalog = {
   editorMode: 'Editormodus',
   editorUnavailable: 'Der Rich-Text-Editor konnte nicht geladen werden — Rückfall auf reinen Text.',
   unsavedWarning: 'Diese Idee hat ungespeicherte Änderungen.',
-  historyUnavailable: 'Der Ideenordner konnte nicht gelesen werden — der Verlauf ist womöglich unvollständig.',
+  historyUnavailable: 'Der Ideenordner konnte nicht gelesen werden — der Eingang ist womöglich unvollständig.',
   menuDelegate: 'An Agent delegieren',
   menuOpenInMain: 'Im Haupteditor öffnen',
   menuOpenIdea: 'Idee im Haupteditor öffnen',
@@ -325,7 +301,6 @@ const de: Catalog = {
   confirmDelete: 'Löschen',
   cancel: 'Abbrechen',
   inboxEmpty: 'Noch keine Ideen.',
-  rowActions: 'Aktionen',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }

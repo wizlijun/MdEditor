@@ -9,6 +9,16 @@ import { isReservedConceptName } from './okf/concept'
 const FORBIDDEN_CHARS = /[\\/:*?"<>|#%`]/g
 
 /**
+ * Dead in production as of T7, exactly like `ideaFileName` below (its only
+ * remaining caller, itself dead since T4). It briefly backed the inbox list's
+ * row title; that job moved to `titleFromMarkdown`, which keeps spaces,
+ * punctuation and length instead of mangling them into a file name. Nothing
+ * outside this file's own tests reaches it any more:
+ *   * row titles → `titleFromMarkdown`
+ *   * file names → `timestampFileName`
+ * Kept rather than deleted because this task's brief didn't ask for the
+ * removal; a later cleanup should take both functions out together.
+ *
  * Derives a filename-safe slug from the first non-empty line of a markdown
  * document's *body* — a leading YAML frontmatter block, if present, is
  * skipped first (works whether that line is a heading or a plain paragraph —
@@ -18,11 +28,6 @@ const FORBIDDEN_CHARS = /[\\/:*?"<>|#%`]/g
  * after the closing fence), a document whose frontmatter fence is never
  * closed (see `stripLeadingFrontmatter`), or a title made entirely of
  * forbidden characters.
- *
- * No longer used to name idea files on disk — new ideas are named by
- * creation timestamp (`timestampFileName`) so autosave never has to guess a
- * title before the user has written one. This now backs the inbox list's row
- * title: a one-line stand-in for a document that may never grow a heading.
  */
 export function slugFromMarkdown(md: string): string {
   const line = firstNonEmptyLine(stripLeadingFrontmatter(md))
