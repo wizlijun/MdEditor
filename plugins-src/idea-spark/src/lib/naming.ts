@@ -83,18 +83,18 @@ function firstNonEmptyLine(md: string): string | null {
 }
 
 /**
- * `${today}-${slug}.md`, deduplicated against `taken` (existing filenames in
- * the idea directory) by appending `-2`, `-3`, ... . Also guards against ever
- * returning a reserved concept name (`index.md`/`log.md`) — structurally
- * unreachable given the mandatory `${today}-` prefix, but checked anyway as
- * defense in depth since naming.ts is the one place that decides this.
- *
  * Dead in production as of T4: no caller in `store.svelte.ts` reaches this
  * anymore — new ideas are named by `timestampFileName` instead (title-based
  * naming was dropped so autosave never has to guess a title before the user
  * has written one). Kept only for its own tests; left for a later cleanup
  * task to remove rather than deleted here, since this task's brief didn't
  * ask for it.
+ *
+ * `${today}-${slug}.md`, deduplicated against `taken` (existing filenames in
+ * the idea directory) by appending `-2`, `-3`, ... . Also guards against ever
+ * returning a reserved concept name (`index.md`/`log.md`) — structurally
+ * unreachable given the mandatory `${today}-` prefix, but checked anyway as
+ * defense in depth since naming.ts is the one place that decides this.
  */
 export function ideaFileName(md: string, today: string, taken: Set<string>): string {
   const slug = slugFromMarkdown(md)
