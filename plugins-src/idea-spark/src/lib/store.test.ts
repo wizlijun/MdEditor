@@ -60,6 +60,7 @@ import {
   nextFileName,
   rebaseline,
   reconcilePending,
+  runInFlight,
   relativeAge,
   relPath,
   renameIdea,
@@ -909,6 +910,51 @@ describe('loadIdea', () => {
 
     expect(await loadIdea('a.md')).toBeNull()
     expect(state.titles['a.md']).toBe('the old heading')
+  })
+})
+
+// The gate on delegation. claude-agent locks a task's run directory for the
+// duration of a run ("Same task mutually exclusive", lock.rs), and every idea
+// this plugin delegates uses the SAME task — so the rule is one run at a time,
+// full stop. Getting this wrong doesn't fail loudly: `run-task` still hands
+// back a run id, the refusal happens inside the spawned task, no record is
+// ever written, and the second idea surfaces two seconds later as `lost` — a
+// ⚠ and a "the agent couldn't argue this" about an idea nothing ever tried.
+describe('runInFlight', () => {
+  it('is false with nothing pending and true from the first run onwards', () => {
+    const s = createStore()
+    expect(runInFlight(s)).toBe(false)
+    s.pending = { 'inbox/ideas/a.md': 'r1' }
+    expect(runInFlight(s)).toBe(true)
+  })
+
+  it('is true for a run on a DIFFERENT idea than the one being asked about', () => {
+    // The whole point: delegating B while A is running is what the per-idea
+    // guard used to allow.
+    const s = createStore()
+    s.pending = { 'inbox/ideas/a.md': 'r1' }
+    expect(runInFlight(s)).toBe(true)
+  })
+
+  it('is true for a running idea that already has a proof document', () => {
+    // `deriveStatus` ranks `done` above `running`, so a menu keyed on
+    // `statusOf` would call this idea `done` — and enable an action the
+    // action bar has disabled.
+    const s = createStore()
+    s.ideaDir = 'inbox/ideas'
+    s.files = ['inbox/ideas/a.md', 'inbox/ideas/a.proof.md']
+    s.pending = { 'inbox/ideas/a.md': 'r2' }
+    expect(statusOf(s, 'a.md')).toBe('done')
+    expect(runInFlight(s)).toBe(true)
+  })
+
+  it('is false again once the run is applied', () => {
+    const s = createStore()
+    s.ideaDir = 'inbox/ideas'
+    s.files = ['inbox/ideas/a.md']
+    s.pending = { 'inbox/ideas/a.md': 'r1' }
+    applyRunDone(s, { run_id: 'r1', status: 'success' })
+    expect(runInFlight(s)).toBe(false)
   })
 })
 

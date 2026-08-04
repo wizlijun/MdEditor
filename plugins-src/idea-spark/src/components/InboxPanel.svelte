@@ -53,6 +53,7 @@
     openResult,
     relativeAge,
     relPath,
+    runInFlight,
     state as store,
     statusOf,
     titleOf,
@@ -191,16 +192,20 @@
 
   function itemsFor(name: string): MenuItem[] {
     const hasProof = store.files.includes(proofPathFor(relPath(store, name)))
-    const running = statusOf(store, name) === 'running'
+    // Greyed out while ANY idea has a run in flight — claude-agent serializes
+    // the whole `idea-proof` task (see `runInFlight`), and this must be the
+    // very same predicate the action bar's button uses. Keying it on
+    // `statusOf(name)` instead would disagree with the button on two counts:
+    // it would allow a second idea to be delegated (a run that looks started,
+    // writes no record, and reads back as `lost` two seconds later), and it
+    // would report `done` — hence enabled — for an idea whose own re-run is
+    // live, since `deriveStatus` ranks a `.proof.md` above a running run.
+    const busy = runInFlight(store)
     return [
-      // Greyed out while this idea already has a run in flight: a second run
-      // on the same idea would overwrite the first one's `.proof.md`, and
-      // `pending` holds one run id per idea anyway — the second would take the
-      // first one's place and leave it unwatched.
       {
         label: t('menuDelegate'),
-        disabled: running,
-        title: running ? t('statusRunning') : t('menuDelegate'),
+        disabled: busy,
+        title: busy ? t('delegateBusy') : t('menuDelegate'),
         onselect: () => ondelegate(name),
       },
       // With a proof document there are two things to open, so both are named

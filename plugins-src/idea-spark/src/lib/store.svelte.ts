@@ -149,6 +149,30 @@ export function statusOf(s: SparkStore, name: string): IdeaStatus {
 }
 
 /**
+ * Whether ANY run is in flight — the single source of truth for "can another
+ * idea be delegated right now".
+ *
+ * Per-TASK, not per-idea, and that is not a UI preference: claude-agent locks
+ * a task's run directory for the duration of a run ("Same task mutually
+ * exclusive", `lock.rs`; `engine::run` takes `lock::acquire(task_run_dir)` as
+ * its first act, and `task_run_dir` is `runs_root/idea-proof` for every idea
+ * we ever delegate). A second `run-task` while one is live still comes back
+ * with a `run_id` — the refusal happens later, inside the spawned task — so
+ * the second run would look started, write no record at all, and surface two
+ * seconds later as `{state:'lost'}`: a ⚠ and a "the agent couldn't argue this"
+ * toast about an idea that was never attempted, on top of claude-agent's own
+ * failure reminder for it.
+ *
+ * Guarding on `pending` alone (rather than on `statusOf`) is the other half:
+ * `deriveStatus` ranks `done` above `running`, so an idea that already has a
+ * `.proof.md` reports `done` while its re-run is live — a menu item keyed on
+ * that would be enabled while the action bar's own button was disabled.
+ */
+export function runInFlight(s: SparkStore): boolean {
+  return Object.keys(s.pending).length > 0
+}
+
+/**
  * Registers a run against an idea: it becomes `running` and any earlier
  * failure is forgotten, so a retry doesn't render as failed while it runs.
  */

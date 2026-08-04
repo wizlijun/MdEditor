@@ -22,6 +22,7 @@ export const MESSAGE_KEYS = [
   'delegate',
   'delegating',
   'delegateEmpty',
+  'delegateBusy',
   'delegateFailed',
   'notifyOk',
   'notifyFail',
@@ -88,6 +89,9 @@ const en: Catalog = {
   delegate: 'Delegate to agent',
   delegating: 'Delegating…',
   delegateEmpty: 'Write something down before delegating it.',
+  // Not a preference: claude-agent locks the task for the length of a run, so
+  // a second one would be refused after it had already looked started.
+  delegateBusy: 'An idea is already being argued — the agent takes one at a time.',
   delegateFailed: 'The agent couldn’t argue this idea.',
   // The two tray reminders claude-agent pushes when the run ends. The idea's
   // own title is appended to both — a notification arriving an hour later has
@@ -151,6 +155,7 @@ const zh: Catalog = {
   delegate: '委托给 agent',
   delegating: '委托中…',
   delegateEmpty: '先写点什么,再交给 agent 论证。',
+  delegateBusy: '已有一条论证在跑 —— agent 一次只论证一个想法。',
   delegateFailed: 'agent 没能论证这个想法。',
   notifyOk: '论证完成',
   notifyFail: '论证失败',
@@ -211,6 +216,7 @@ const ja: Catalog = {
   delegate: 'エージェントに委任',
   delegating: '委任中…',
   delegateEmpty: '何か書いてから委任してください。',
+  delegateBusy: 'すでに 1 件の論証が実行中です —— エージェントは一度に 1 件だけ扱います。',
   delegateFailed: 'エージェントはこのアイデアを論証できませんでした。',
   notifyOk: '論証が完了しました',
   notifyFail: '論証に失敗しました',
@@ -271,6 +277,7 @@ const de: Catalog = {
   delegate: 'An Agent delegieren',
   delegating: 'Delegiere…',
   delegateEmpty: 'Schreib erst etwas auf, bevor du es delegierst.',
+  delegateBusy: 'Eine Idee wird bereits durchargumentiert — der Agent nimmt eine nach der anderen.',
   delegateFailed: 'Der Agent konnte diese Idee nicht durchargumentieren.',
   notifyOk: 'Idee durchargumentiert',
   notifyFail: 'Argumentation fehlgeschlagen',

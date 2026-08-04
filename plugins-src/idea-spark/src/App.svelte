@@ -61,6 +61,7 @@
     reconcilePending,
     relPath,
     renameIdea,
+    runInFlight,
     runStatusWord,
     saveIdea,
     showInEditor,
@@ -91,6 +92,9 @@
    *  `pending` is the single source of truth and the badge in the inbox reads
    *  the very same map (`statusOf`). */
   const openRun = $derived(store.current ? (store.pending[relPath(store, store.current)] ?? null) : null)
+  /** Any run at all is in flight. What actually gates delegation — claude-agent
+   *  serializes the whole `idea-proof` task, not one idea (see `runInFlight`). */
+  const runBusy = $derived(runInFlight(store))
   /** The progress line to show next to ⏳, or ''. */
   const openLast = $derived(
     store.current && runProgress?.ideaRel === relPath(store, store.current) ? runProgress.last : '',
@@ -365,6 +369,14 @@
   async function delegate(name?: string): Promise<void> {
     const vaultRoot = store.vaultRoot
     if (delegating || store.needVault || !vaultRoot) return
+    // One run at a time, across ALL ideas — see `runInFlight` for why that is
+    // claude-agent's rule rather than ours. The button and the row menu are
+    // both disabled on this same predicate; this is the backstop, and it says
+    // why out loud instead of swallowing the click.
+    if (runInFlight(store)) {
+      toast(t('delegateBusy'), 'error')
+      return
+    }
     // Claimed BEFORE the flush, not after it: `saveNow()` is an await, and a
     // second click landing inside it would otherwise sail past this guard and
     // start a second run on the same idea — whose id would take the first
@@ -375,14 +387,27 @@
       await saveNow()
 
       const target = name ?? store.current
-      // No file: either the draft is blank (never written, by design) or its
-      // save just failed — which `saveIdea` has already reported.
+      // The flush is the ONLY thing standing between the agent and a stale
+      // file, and it cannot report its own failure: `saveNow` never rejects
+      // and `saveIdea` only writes `saveState` — which the action bar is about
+      // to cover with "⏳ arguing" for the whole run. So assert the
+      // postcondition against the buffer itself, exactly as `keepUnsaved`
+      // does: if what the editor holds did not reach the disk, the agent would
+      // argue a version the user has already moved on from. Only checked when
+      // the target IS the open document — another row's file is not what the
+      // editor is holding.
+      if ((target === null || target === store.current) && needsSaveBefore(store, markdown())) {
+        toast(t('unsavedWarning'), 'error')
+        return
+      }
+      // No file: the draft is blank, and by design a blank idea is never
+      // written. (A *failed* save no longer lands here — the check above
+      // catches it and says something true instead of "write something".)
       if (!target) {
         toast(t('delegateEmpty'), 'error')
         return
       }
       const ideaRel = relPath(store, target)
-      if (store.pending[ideaRel]) return // already being argued; the row says so
 
       const result = await delegateIdea(ideaRel, titleOf(store, target), vaultRoot)
       if (!result.ok) {
@@ -586,8 +611,8 @@
       <button
         type="button"
         class="ghost"
-        disabled={delegating || openRun !== null}
-        title={openRun ? t('statusRunning') : t('delegate')}
+        disabled={delegating || runBusy}
+        title={runBusy ? t('delegateBusy') : t('delegate')}
         onclick={() => void delegate()}>{delegating ? t('delegating') : t('delegate')}</button
       >
       <button
