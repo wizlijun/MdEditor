@@ -18,12 +18,49 @@
     "missing key is APPENDED (type, then title, then created), so `type` lands",
     "first only on a block that had no keys at all to append after.",
     "",
+    "The `hostile title` cases at the end are the second boundary, and the",
+    "reason every case above them is deliberately NOT enough: each one uses the",
+    "title `2026-08-02`, because until incremental sync a yyyy-MM-dd date was",
+    "the only title this function ever saw. It is now the writer for arbitrary",
+    "ROAM PAGE TITLES (route.rs hands it `roam_title` verbatim), and a raw",
+    "`title: Book: Thinking Fast and Slow` is not parsable YAML at all — the",
+    "repo's own scripts/okf-lint-core.mjs calls it `frontmatter-unparsable`, and",
+    "the host's `yaml` reader swallows type/created/updated into a nested map",
+    "under `title`, after which fmHas(raw,'type') is false and the host appends",
+    "a SECOND type on its next write. `PKM #2` is quieter and worse: it parses,",
+    "so nothing complains, and the title silently becomes `PKM`. The user's own",
+    "vault already holds `wikipage/Projects- Active.note.md`, so this shape is",
+    "not hypothetical. Both sides must quote identically: the host's yaml",
+    "package decides (plain / '...' / \"...\"), and outline.rs's `yaml_scalar`",
+    "is a port of that decision — these cases are what holds the two together.",
+    "",
     "The three non-mapping cases are the boundary (R6). The plugin does not",
     "have to PRODUCE such a file to be handed one: it writes into whatever daily",
     "note is already on disk, and a .note.md is hand-edited and agent-edited",
     "(file-over-app). Both sides leave a block that is not a YAML mapping",
     "exactly as it was, rather than appending key: value lines to a scalar and",
-    "leaving behind front-matter the host's own reader cannot parse as a map."
+    "leaving behind front-matter the host's own reader cannot parse as a map.",
+    "",
+    "The last two hostile titles are the boundary of the QUOTE STYLE itself. A",
+    "value that needs quoting, holds a `\"` and no `'` takes single quotes — but a",
+    "single-quoted scalar cannot carry a raw line break in a front-matter block:",
+    "`title: 'say \"hi\"<LF>there'` makes the host's reader report `Missing closing",
+    "'quote`, hand back `say \"hi` as the title and drop type/created/updated with",
+    "it. Unparsable front-matter, i.e. the exact failure the hostile-title cases",
+    "above exist to prevent, reached by the fix for them. So a line break always",
+    "takes the double-quoted escape form.",
+    "",
+    "`host_expected` is for the ONE shape where the two writers legitimately",
+    "differ in bytes: the host's `yaml` package renders a value containing a line",
+    "break as a block scalar (`|-` plus an indented body), which outline.rs does",
+    "not re-implement (chomping indicator, indentation indicator, its own",
+    "fallbacks) for a shape no Roam page title can hold. Both are valid YAML and",
+    "the TS half asserts that BOTH byte forms read back through `parseDocument` as",
+    "the very same string — the divergence is in the spelling, never in what the",
+    "file says. Add one only with that proof; every other case has no",
+    "`host_expected` because the two sides must agree byte for byte. Note the CRLF",
+    "case immediately after: there `yaml` quotes rather than folding, so even the",
+    "bytes match, which pins that the two escape tables agree on \\r and \\n."
   ],
   "cases": [
     {
@@ -142,6 +179,124 @@
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
       "expected": "# written by hand\n# and not a mapping yet\n\ntype: Daily Note\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a colon and a space make raw YAML unparsable, so it is quoted",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "Book: Thinking Fast and Slow",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"Book: Thinking Fast and Slow\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a hash after a space opens a comment, silently truncating the title",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "PKM #2",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"PKM #2\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a leading alias indicator",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "*star",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"*star\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a leading reserved indicator",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "@home",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"@home\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a leading bracket reads back as a nested list, not a string",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "[[nested]]",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"[[nested]]\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: an empty title is an empty quoted scalar, not an empty value",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a leading dash and space is a sequence item",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "- 待办",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"- 待办\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: an all-digit title would read back as a number",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "2026",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"2026\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: needs quoting AND contains a double quote, so single quotes are used",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "Review: \"Dune\"",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: 'Review: \"Dune\"'\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a line break with a double quote — single quotes cannot hold one",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "say \"hi\"\nthere",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"say \\\"hi\\\"\\nthere\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z",
+      "host_expected": "type: Wiki Page\ntitle: |-\n  say \"hi\"\n  there\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "hostile title: a CRLF line break, where the host quotes too, so the bytes match exactly",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "say \"hi\"\r\nthere",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: \"say \\\"hi\\\"\\r\\nthere\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "an ordinary Roam title still needs no quotes at all",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "回顾/系统",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: 回顾/系统\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+    },
+    {
+      "name": "a double quote that is not leading does not force quoting either",
+      "raw": null,
+      "type": "Wiki Page",
+      "title": "He said \"no\"",
+      "created": "2026-08-01T16:00:05.019Z",
+      "now": "2026-08-03T09:00:00.000Z",
+      "expected": "type: Wiki Page\ntitle: He said \"no\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
     }
   ]
 }

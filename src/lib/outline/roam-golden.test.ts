@@ -5,8 +5,13 @@ import { describe, it, expect } from 'vitest'
 // no Node type declarations are needed for `pnpm check`.
 import text from '../../../plugins-src/roam-import/backend/tests/fixtures/daily.note.md?raw'
 import fmCases from '../../../plugins-src/roam-import/backend/tests/fixtures/frontmatter-touch.json'
+import { parseDocument } from 'yaml'
 import { parseOutline, serializeOutline } from './markdown'
 import { touchFrontmatter } from './frontmatter'
+// The repo's own OKF v0.2 hard-constraint linter — the same implementation
+// `pnpm okf:lint` runs (see scripts/okf-lint.mjs).
+// @ts-expect-error - plain-JS lint core shared with scripts/okf-lint.mjs
+import { lintText } from '../../../scripts/okf-lint-core.mjs'
 
 /** Format-drift guard, TS half. The Rust backend writes this exact file
  *  (plugins-src/roam-import/backend/tests/golden.rs asserts it byte-for-byte);
@@ -23,10 +28,10 @@ describe('roam-import golden daily note', () => {
     for (const n of persisted) expect(n.id).not.toMatch(/^local-/)
   })
 
-  /** The three shapes a Roam block can forge that `parseOutline` would
+  /** The four shapes a Roam block can forge that `parseOutline` would
    *  otherwise read as structure. Each one, left unescaped, costs the block the
    *  `id::` that is its identity — after which the merge re-creates it on every
-   *  sync and the user's note multiplies without bound. All three are asserted
+   *  sync and the user's note multiplies without bound. All four are asserted
    *  from this side too, because it is this parser they have to survive. */
   const nodeById = (id: string) => [...parseOutline(text).nodes.values()].find((n) => n.id === id)
 
@@ -35,9 +40,14 @@ describe('roam-import golden daily note', () => {
   })
 
   it('keeps an escaped bullet line as content, not a child node', () => {
-    // A Roam shift-enter list (`shopping\n- milk\n- eggs`).
+    // A Roam shift-enter list with an empty line in it
+    // (`shopping\n- milk\n-\n- eggs`). The bare `-` is the empty-bullet shape,
+    // which the escaper had to be taught separately from `- milk`: read back as
+    // a child, it would push the block's own `id::` out of its continuation
+    // indent and the block would be re-created on every sync, forever.
     const block = nodeById('RmQ2xL8vC')
-    expect(block?.content).toBe('shopping\n - milk\n - eggs')
+    expect(block?.content).toBe('shopping\n - milk\n -\n - eggs')
+    expect(block?.persistId).toBe(true)
     const tree = parseOutline(text)
     expect([...tree.nodes.values()].some((n) => n.content === 'milk')).toBe(false)
     expect([...tree.nodes.values()].filter((n) => n.parentId === 'RmQ2xL8vC')).toHaveLength(0)
@@ -49,6 +59,32 @@ describe('roam-import golden daily note', () => {
     // into the fence body.
     expect(nodeById('Fp3nH6wDs')?.createdAt).toBe('2026-08-02T14:15:00.000Z')
     expect(nodeById('Fp3nH6wDs')?.updatedAt).toBe('2026-08-02T14:16:40.000Z')
+    expect(nodeById('Ez6yV4rTn')).toBeDefined()
+  })
+
+  /** An empty Roam block is written `- ` — a dash, a space, and nothing else —
+   *  so the trailing space would otherwise carry the whole meaning of "this
+   *  bullet exists", and editors, formatters and git hooks strip trailing
+   *  whitespace as a matter of course. The fixture holds both halves: the
+   *  block Roam sent (written `- `, with its properties beneath it) and the
+   *  user's own empty bullet, which `local-before.note.md` carries in the
+   *  already-stripped spelling (a bare `-`) and which the merge has to keep. */
+  it('reads an empty Roam block as a node and keeps its properties on it', () => {
+    const empty = nodeById('Ez6yV4rTn')
+    expect(empty?.content).toBe('')
+    expect(empty?.createdAt).toBe('2026-08-02T14:20:00.000Z')
+    expect(empty?.updatedAt).toBe('2026-08-02T14:21:00.000Z')
+    // …and they did not leak up into the block above it, which is what happened
+    // when a bare `-` fell through to the "unclassifiable line" branch.
+    expect(nodeById('Fp3nH6wDs')?.updatedAt).toBe('2026-08-02T14:16:40.000Z')
+  })
+
+  it("keeps the user's own empty bullet as a local block", () => {
+    const mine = [...parseOutline(text).nodes.values()].filter(
+      (n) => n.content === '' && n.persistId !== true,
+    )
+    expect(mine).toHaveLength(1)
+    expect(mine[0].parentId).toBeNull()
   })
 
   it("keeps the user's own blocks free of any id", () => {
@@ -95,6 +131,61 @@ describe('roam-import front-matter touch parity', () => {
     expect(cases.length).toBeGreaterThan(0)
   })
 
+  /** OKF v0.2 §11 conditions 1 and 2, on the bytes themselves. The parity
+   *  assertion below proves the two implementations agree; it cannot prove
+   *  they agree on something *valid* — a raw `title: Book: Thinking Fast and
+   *  Slow` would satisfy it perfectly if both sides wrote it. So every block
+   *  the plugin actually writes goes through the repo's own linter, the same
+   *  one `pnpm okf:lint` runs.
+   *
+   *  Cases where `expected === raw` are excluded: those are the non-mapping
+   *  blocks (`just a sentence`, a sequence, `title:value`) that both sides
+   *  deliberately hand back untouched — the plugin did not write them, it was
+   *  handed them, and refusing to corrupt them is the assertion. */
+  const written = cases.filter((c) => c.expected !== c.raw)
+
+  it.each(written)('$name — and the block it writes satisfies OKF §11', (c) => {
+    const block = touchFrontmatter(c.raw as string | null, {
+      type: c.type as string,
+      title: c.title as string,
+      created: c.created as string,
+      now: c.now as string,
+    })
+    expect(lintText('wikipage/x.note.md', `---\n${block}\n---\n- 第一条\n`)).toEqual([])
+    // Parsable is not enough: `PKM #2` written raw lints clean and reads back
+    // as `PKM`, and `2026` reads back as a number. Where the block carried no
+    // title of its own, what the reader gets has to be exactly what went in.
+    if (c.raw == null) {
+      const doc = parseDocument(block)
+      expect(doc.get('title')).toBe(c.title)
+      expect(doc.get('type')).toBe(c.type)
+    }
+  })
+
+  /** The same two checks against the bytes the PLUGIN writes (`expected`),
+   *  read by the host's own `yaml`. For every case but one those are the very
+   *  bytes asserted below, so this is free; for the one case that carries a
+   *  `host_expected` it is the whole point. `title: 'say "hi"⏎there'` — the
+   *  single-quoted style a value with a `"` and no `'` used to take — makes
+   *  this reader report `Missing closing 'quote`, hand back `say "hi` and drop
+   *  every key after it. Whatever spelling the plugin chooses, the reader that
+   *  has to open the file must get the string back whole. */
+  it.each(written.filter((c) => c.raw == null))('$name — the plugin bytes read back whole', (c) => {
+    const block = c.expected as string
+    expect(lintText('wikipage/x.note.md', `---\n${block}\n---\n- 第一条\n`)).toEqual([])
+    const doc = parseDocument(block)
+    expect(doc.errors).toEqual([])
+    expect(doc.get('title')).toBe(c.title)
+    expect(doc.get('type')).toBe(c.type)
+  })
+
+  /** `host_expected` is the escape hatch for the one shape where `yaml`
+   *  legitimately spells the same string differently: a value containing a
+   *  line break becomes a block scalar here and a double-quoted `\n` escape in
+   *  outline.rs, which does not re-implement block scalars for a shape no Roam
+   *  page title can hold. Every other case must agree byte for byte, so the
+   *  field is absent and this falls back to `expected`. The test above is what
+   *  licenses the divergence — both spellings read back as the same string. */
   it.each(cases)('$name', (c) => {
     expect(
       touchFrontmatter(c.raw as string | null, {
@@ -107,6 +198,6 @@ describe('roam-import front-matter touch parity', () => {
         created: c.created as string,
         now: c.now as string,
       }),
-    ).toBe(c.expected)
+    ).toBe(c.host_expected ?? c.expected)
   })
 })

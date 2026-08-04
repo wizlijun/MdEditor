@@ -5,6 +5,13 @@
 //! cli_finish call. The frontend's CliRunner pulls the payload via the
 //! cli_payload command, performs the work, and reports completion through
 //! cli_finish.
+//!
+//! cli_finish is the single exit point for every route that reaches the
+//! headless Tauri instance (plugin subcommands, and the core-ised `share` /
+//! `reading-insights report` paths — see CliRunner.svelte's `finish()`, the
+//! only caller of the `cli_finish` command). It ends the process itself via
+//! `std::process::exit`, deliberately not via `AppHandle::exit` — see the
+//! comment on `cli_finish` for why that path silently drops the exit code.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -57,25 +64,54 @@ pub fn cli_payload(state: tauri::State<'_, CliState>) -> Result<CliPayload, Stri
     p.ok_or_else(|| "cli payload missing".to_string())
 }
 
+/// What `cli_finish` must do with a `CliResult`, split out from the
+/// tauri::command so the code-preservation contract is unit-testable —
+/// `cli_finish` itself ends in `std::process::exit`, which a test cannot
+/// safely invoke (it would kill the test process).
+pub struct FinishEffects {
+    pub exit_code: i32,
+    pub stdout_line: Option<String>,
+    pub stderr_lines: Vec<String>,
+}
+
+pub fn finish_effects(result: &CliResult) -> FinishEffects {
+    FinishEffects {
+        exit_code: result.exit_code,
+        stdout_line: result
+            .stdout
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .cloned(),
+        stderr_lines: result.stderr.clone(),
+    }
+}
+
 #[tauri::command]
-pub fn cli_finish(
-    result: CliResult,
-    state: tauri::State<'_, CliState>,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
+pub fn cli_finish(result: CliResult, state: tauri::State<'_, CliState>) -> Result<(), String> {
     if let Some(tx) = state.result_tx.lock().unwrap().take() {
-        let code = result.exit_code;
-        if let Some(s) = &result.stdout {
-            if !s.is_empty() {
-                println!("{s}");
-            }
+        let effects = finish_effects(&result);
+        if let Some(s) = &effects.stdout_line {
+            println!("{s}");
         }
-        for line in &result.stderr {
+        for line in &effects.stderr_lines {
             eprintln!("{line}");
         }
+        let exit_code = effects.exit_code;
+        // Kept for the (currently unreachable on macOS) fallback path in
+        // launch_tauri_headless, in case app.run() ever does return.
         let _ = tx.send(result);
-        app.exit(code);
-        Ok(())
+        // Do NOT route this through `AppHandle::exit` / `app.exit(code)`.
+        // That funnels through tao's event loop: tauri-runtime-wry's
+        // `Message::RequestExit(code)` handler unconditionally sets
+        // `*control_flow = ControlFlow::Exit`, which tao defines as an alias
+        // for `ExitWithCode(0)` — the caller-supplied code is discarded right
+        // there. tao's own `EventLoop::run` (macOS, and structurally similar
+        // elsewhere) then calls `std::process::exit(0)` itself, bypassing
+        // Rust's normal call-stack return entirely, so main()'s ExitCode
+        // never gets a chance to matter. This is why every `notemd
+        // <plugin-subcommand>` invocation used to exit 0 regardless of
+        // outcome. Exit directly with the real code instead.
+        std::process::exit(exit_code);
     } else {
         Err("cli_finish called twice or without state".to_string())
     }
@@ -101,5 +137,47 @@ mod tests {
         let state = CliState::new(payload.clone(), tx);
         let first = state.payload.lock().unwrap().clone().unwrap();
         assert_eq!(first.subcommand, "share");
+    }
+
+    /// The defect this guards: cli_finish must exit with the *real* code
+    /// (0 success, 2 bad flags, 3 plugin disabled/missing, 4 plugin failure,
+    /// …) instead of always 0. finish_effects is the pure slice of
+    /// cli_finish's behavior that a test can observe without invoking
+    /// std::process::exit — every exit_code value must survive unchanged.
+    #[test]
+    fn finish_effects_preserves_success_code() {
+        let result = CliResult { exit_code: 0, stdout: Some("wrote /tmp/x".into()), stderr: vec![] };
+        let effects = finish_effects(&result);
+        assert_eq!(effects.exit_code, 0);
+        assert_eq!(effects.stdout_line.as_deref(), Some("wrote /tmp/x"));
+        assert!(effects.stderr_lines.is_empty());
+    }
+
+    #[test]
+    fn finish_effects_preserves_plugin_failure_code() {
+        // The exact shape CliRunner.svelte sends on a caught plugin error.
+        let result = CliResult {
+            exit_code: 4,
+            stdout: Some(r#"{"ok":false,"error":{"code":"plugin_failed","message":"boom"}}"#.into()),
+            stderr: vec!["✗ Roam Import: boom".into()],
+        };
+        let effects = finish_effects(&result);
+        assert_eq!(effects.exit_code, 4);
+        assert_eq!(effects.stderr_lines, vec!["✗ Roam Import: boom".to_string()]);
+    }
+
+    #[test]
+    fn finish_effects_preserves_bad_flag_code() {
+        let result = CliResult { exit_code: 2, stdout: None, stderr: vec!["notemd: missing file argument".into()] };
+        let effects = finish_effects(&result);
+        assert_eq!(effects.exit_code, 2);
+        assert_eq!(effects.stdout_line, None);
+    }
+
+    #[test]
+    fn finish_effects_treats_empty_stdout_as_absent() {
+        let result = CliResult { exit_code: 0, stdout: Some(String::new()), stderr: vec![] };
+        let effects = finish_effects(&result);
+        assert_eq!(effects.stdout_line, None);
     }
 }

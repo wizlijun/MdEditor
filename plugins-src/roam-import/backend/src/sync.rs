@@ -16,8 +16,8 @@
 use crate::convert::{convert_page, iso_ms};
 use crate::merge::merge;
 use crate::outline::{
-    frontmatter_value, parse_outline, serialize_outline, touch_frontmatter,
-    CONCEPT_TYPE_DAILY_NOTE,
+    frontmatter_value, parse_outline, refresh_frontmatter_title, serialize_outline,
+    touch_frontmatter, CONCEPT_TYPE_DAILY_NOTE,
 };
 use crate::roam_page::RoamPage;
 use chrono::NaiveDate;
@@ -76,6 +76,32 @@ pub struct PageOutcome {
     pub wrote: bool,
 }
 
+/// What [`sync_page`] does with a `title:` the file already has.
+///
+/// The default everywhere is [`TitlePolicy::KeepExisting`]: a `.note.md` is
+/// hand-edited and agent-edited, the host's own `touchFrontmatter` never
+/// overwrites a title either, and the shared fixture
+/// (`tests/fixtures/frontmatter-touch.json`) pins that rule from both sides.
+///
+/// [`TitlePolicy::Refresh`] is the one exception, and incremental sync's
+/// rename branch is its only caller. There the sync *knows* the title changed:
+/// the ledger's recorded Roam title for that uid differs from the one Roam is
+/// handing over now, and the file has just moved to match. Without this the
+/// file name says one thing, the front-matter another and the ledger a third,
+/// forever: the post-rename sync usually has nothing else to write, so it
+/// reports `wrote == false` and no later run ever repairs the block.
+///
+/// The moved file alone is deliberately *not* enough — `route_page` reports a
+/// `rename_from` for any path change, including the one where the host's
+/// folder setting changed and every page in the vault moved at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitlePolicy {
+    /// A title the file already carries is the user's, and stays.
+    KeepExisting,
+    /// Replace the top-level `title:` with the one passed in. Rename only.
+    Refresh,
+}
+
 /// `<daily_dir>/<yyyy>/<date>.note.md` — the host's own daily-note layout
 /// (`dailyNotePath` in `src/lib/outline/daily.ts`). The year comes from the
 /// date string itself rather than a re-parse: callers pass a `yyyy-MM-dd`
@@ -89,7 +115,13 @@ pub fn daily_rel_path(daily_dir: &str, date: &str) -> String {
 /// with no `..` segment. `Path::join` *replaces* the base path when handed an
 /// absolute component, so an unchecked value here does not merely escape the
 /// daily folder — it escapes the vault.
-fn is_safe_rel_dir(dir: &str) -> bool {
+///
+/// Shared with [`crate::incremental`] rather than duplicated there: incremental
+/// sync takes *two* host-supplied folder names (wiki and daily) and joins them
+/// into paths exactly the way `sync_day` joins its one, so both callers must
+/// answer this question the same way — a second, drifting copy of the rule is
+/// how one of them ends up accepting `..`.
+pub(crate) fn is_safe_rel_dir(dir: &str) -> bool {
     !dir.is_empty()
         && !Path::new(dir).is_absolute()
         && !dir.starts_with('/')
@@ -193,6 +225,10 @@ fn read_existing(path: &Path) -> Result<String, String> {
 /// caller's call — this function has no notion of "daily" left in it; that
 /// distinction lives one layer up, in `sync_day` and (from Task 5) in
 /// incremental sync's page router.
+///
+/// `title_policy` decides what happens when the file **already** carries a
+/// `title:` — see [`TitlePolicy`]. Everything else about the front-matter is
+/// `touch_frontmatter`'s business.
 pub fn sync_page(
     vault: &Path,
     rel: &str,
@@ -200,6 +236,7 @@ pub fn sync_page(
     title: &str,
     concept_type: &str,
     now: &str,
+    title_policy: TitlePolicy,
 ) -> Result<PageOutcome, String> {
     // Checked here, at the function that writes, rather than trusted to have
     // been validated upstream. `sync_day` still hands this a path it built
@@ -255,7 +292,11 @@ pub fn sync_page(
     let base_fm = merged.frontmatter.clone();
 
     let touch = |raw: Option<&str>, when: &str| {
-        touch_frontmatter(raw, concept_type, title, &created, when)
+        let raw = match title_policy {
+            TitlePolicy::KeepExisting => raw.map(str::to_string),
+            TitlePolicy::Refresh => raw.map(|r| refresh_frontmatter_title(r, title)),
+        };
+        touch_frontmatter(raw.as_deref(), concept_type, title, &created, when)
     };
 
     // A no-op sync must not touch the file AT ALL. `updated:` is refreshed
@@ -321,7 +362,12 @@ pub fn sync_day(
         ));
     }
     let rel = daily_rel_path(daily_dir, date);
-    let page_outcome = sync_page(vault, &rel, page, date, CONCEPT_TYPE_DAILY_NOTE, now)?;
+    // `KeepExisting`: a daily note's title is a date this function computed
+    // itself, so there is never a rename to follow, and a title the user (or
+    // another tool) put there stays theirs.
+    let page_outcome = sync_page(
+        vault, &rel, page, date, CONCEPT_TYPE_DAILY_NOTE, now, TitlePolicy::KeepExisting,
+    )?;
     Ok(SyncOutcome {
         date: date.to_string(),
         path: page_outcome.path,
@@ -899,7 +945,7 @@ mod tests {
         };
         let out = sync_page(
             dir.path(), "wikipage/回顾系统.note.md", Some(&page),
-            "回顾系统", crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW,
+            "回顾系统", crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW, TitlePolicy::KeepExisting,
         ).unwrap();
         assert!(out.found && out.wrote);
         assert_eq!(out.created, 1);
@@ -923,12 +969,49 @@ mod tests {
         };
         let rel = "wikipage/回顾系统.note.md";
         let first = sync_page(dir.path(), rel, Some(&page), "回顾系统",
-                              crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW).unwrap();
+                              crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW,
+                              TitlePolicy::KeepExisting).unwrap();
         assert!(first.wrote);
         let second = sync_page(dir.path(), rel, Some(&page), "回顾系统",
                                crate::outline::CONCEPT_TYPE_WIKI_PAGE,
-                               "2026-09-09T09:09:09.000Z").unwrap();
+                               "2026-09-09T09:09:09.000Z",
+                               TitlePolicy::KeepExisting).unwrap();
         assert!(!second.wrote, "a no-op sync must not write");
+    }
+
+    /// I3, at this layer. `TitlePolicy::Refresh` replaces a `title:` the file
+    /// already carries; `KeepExisting` — the default everywhere else — does
+    /// not, and the shared fixture pins that from both sides.
+    #[test]
+    fn only_the_refresh_policy_rewrites_a_title_the_file_already_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let rel = "wikipage/新名.note.md";
+        let path = dir.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let before = "---\ntype: Wiki Page\ntitle: 旧名\n---\n- 我自己写的\n";
+
+        let page = RoamPage {
+            title: "新名".into(), uid: Some("u".into()),
+            create_time: Some(1785600005019), edit_time: None,
+            children: vec![RoamBlock {
+                uid: Some("b1".into()), string: "from roam".into(), order: 0, heading: None,
+                create_time: None, edit_time: None, children: vec![],
+            }],
+        };
+        let sync = |policy| sync_page(dir.path(), rel, Some(&page), "新名",
+                                      crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW, policy).unwrap();
+
+        std::fs::write(&path, before).unwrap();
+        sync(TitlePolicy::KeepExisting);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("title: 旧名"),
+                "a title the user may have written is not this sync's to change");
+
+        std::fs::write(&path, before).unwrap();
+        sync(TitlePolicy::Refresh);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("title: 新名"), "the rename left the title stale:\n{text}");
+        assert!(!text.contains("旧名"), "the old title is still in there:\n{text}");
+        assert!(text.contains("- 我自己写的"), "the user's block must survive:\n{text}");
     }
 
     #[test]
@@ -936,7 +1019,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         for bad in ["/etc/passwd", "../outside.note.md", "wikipage/../../x.note.md", ""] {
             assert!(sync_page(dir.path(), bad, None, "t",
-                              crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW).is_err(), "{bad}");
+                              crate::outline::CONCEPT_TYPE_WIKI_PAGE, NOW,
+                              TitlePolicy::KeepExisting).is_err(), "{bad}");
         }
     }
 

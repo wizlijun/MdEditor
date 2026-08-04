@@ -7,7 +7,8 @@
   import { setLocale, t } from './lib/strings'
   import {
     clipboardWrite, dialogOpenJson, toast, vaultInfo, bridge,
-    probe, syncDay, type RoamProbe, type SyncOutcome,
+    probe, syncDay, syncSince, syncStatus,
+    type RoamProbe, type SyncOutcome, type SyncReport,
   } from './lib/bridge'
   import { sha256Hex } from './lib/hash'
   import { reconcileGraphChoice } from './lib/graph-choice'
@@ -81,6 +82,19 @@
   let syncResult = $state<SyncOutcome | null>(null)
   let syncError = $state<string | null>(null)
 
+  // ── incremental sync (this task): a second, independent flow in the same
+  //    CLI panel — "sync everything changed since the watermark" rather than
+  //    one chosen day. Its own busy/result/error state, deliberately not
+  //    shared with the per-day flow above, but both buttons are disabled
+  //    while either is running: they can both write into the vault, and
+  //    letting them race is not a scenario worth supporting. ──
+  /** `undefined` = not yet queried (mount hasn't asked, or the CLI toggle is
+   *  off); `null` = queried, and the ledger has never recorded a sync. */
+  let lastSyncedAt = $state<string | null | undefined>(undefined)
+  let incSyncing = $state(false)
+  let incReport = $state<SyncReport | null>(null)
+  let incError = $state<string | null>(null)
+
   $effect(() => {
     try { localStorage.setItem(CLI_TOGGLE_KEY, useCli ? '1' : '0') } catch { /* best-effort */ }
   })
@@ -122,10 +136,11 @@
   function setUseCli(on: boolean) {
     useCli = on
     if (on && probeResult === null) void refreshProbe()
+    if (on && lastSyncedAt === undefined) void refreshSyncStatus()
   }
 
   async function runSync() {
-    if (probeResult?.state !== 'ready' || syncing) return
+    if (probeResult?.state !== 'ready' || syncing || incSyncing) return
     syncing = true
     syncError = null
     syncResult = null
@@ -135,6 +150,48 @@
       syncError = e instanceof Error ? e.message : String(e)
     } finally {
       syncing = false
+    }
+  }
+
+  /** Ledger-only read (`plugin.sync_status`, no fetch) — safe to call on
+   *  mount and after every incremental run so the "last synced" line never
+   *  goes stale. */
+  async function refreshSyncStatus() {
+    try {
+      const s = await syncStatus()
+      lastSyncedAt = s.last_synced_at
+    } catch (e) {
+      console.error('[roam-import] sync_status failed:', e)
+    }
+  }
+
+  /** `{when}` is filled from the ledger's ISO-8601 watermark; rendered with
+   *  the runtime's own locale formatting since this plugin's `t()` catalog
+   *  carries strings, not date-format rules. */
+  function formatWhen(iso: string): string {
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+  }
+
+  async function runIncrementalSync() {
+    if (probeResult?.state !== 'ready' || syncing || incSyncing) return
+    incSyncing = true
+    incError = null
+    incReport = null
+    try {
+      // Resolves for a not-clean run too, carrying `ok: false` and `errors`
+      // (plugin.rs `sync_report_value`). That is deliberate: a run that
+      // synced 39 pages and then hit one problem has to show BOTH — the
+      // counts, the paths and the renames next to what went wrong — and the
+      // rename is the one thing the user cannot find out any other way.
+      incReport = await syncSince(cliGraph ? { graph: cliGraph } : undefined)
+      await refreshSyncStatus()
+    } catch (e) {
+      // Only when there is no report at all: no vault, no `roam` CLI, an
+      // unsafe folder name, or a --graph the ledger disagrees with.
+      incError = e instanceof Error ? e.message : String(e)
+    } finally {
+      incSyncing = false
     }
   }
 
@@ -150,7 +207,10 @@
     }
     ready = true
     // Only when the user has actually turned the CLI sync on — see setUseCli.
-    if (useCli) void refreshProbe()
+    if (useCli) {
+      void refreshProbe()
+      void refreshSyncStatus()
+    }
   })
 
   const busy = $derived(stage === 'parse' || stage === 'plan' || stage === 'write')
@@ -310,10 +370,19 @@
                   </select>
                 </label>
               {/if}
-              <button class="sync" onclick={runSync} disabled={probeResult?.state !== 'ready' || syncing}>
+              <button class="sync" onclick={runSync} disabled={probeResult?.state !== 'ready' || syncing || incSyncing}>
                 {syncing ? t('cli.syncing') : t('cli.sync')}
               </button>
+              <button class="sync" onclick={runIncrementalSync} disabled={probeResult?.state !== 'ready' || syncing || incSyncing}>
+                {incSyncing ? t('inc.running') : t('inc.button')}
+              </button>
             </div>
+
+            {#if lastSyncedAt !== undefined}
+              <p class="hint-line">
+                {lastSyncedAt === null ? t('inc.never') : t('inc.lastSynced', { when: formatWhen(lastSyncedAt) })}
+              </p>
+            {/if}
 
             {#if syncError}
               <p class="banner error-banner">{t('cli.failed', { error: syncError })}</p>
@@ -327,6 +396,60 @@
                     {' '}{t('cli.resultGoneKept', { count: syncResult.roam_gone_kept })}
                   {/if}
                 </p>
+              {/if}
+            {/if}
+
+            {#if incError}
+              <p class="banner error-banner">{t('inc.failed', { error: incError })}</p>
+            {:else if incReport}
+              <!-- A run that is not clean still did work, and the statistics
+                   below are how the user finds out what: which pages landed
+                   where, and above all which files were RENAMED — the
+                   [[wikilink]]s pointing at their old names are broken now,
+                   and this panel is the only place that is ever said. So the
+                   errors get their own banner and the report is rendered
+                   underneath either way; `ok`, not `failed`, picks the
+                   banner (see bridge.ts's SyncReport). -->
+              {#if !incReport.ok}
+                <p class="banner error-banner">
+                  {t('inc.failed', { error: incReport.errors.join(' | ') })}
+                </p>
+              {/if}
+              {#if incReport.scanned === 0}
+                {#if incReport.ok}<p class="banner">{t('inc.nothing')}</p>{/if}
+              {:else}
+                <p class="banner" class:ok-banner={incReport.ok}>
+                  {t('inc.stats', {
+                    scanned: incReport.scanned,
+                    synced: incReport.synced,
+                    skipped: incReport.skipped,
+                    failed: incReport.failed,
+                  })}
+                </p>
+                {#if incReport.renamed.length > 0}
+                  <ul class="renamed-list">
+                    {#each incReport.renamed as r (r.uid)}
+                      <li>{t('inc.renamed', { from: r.from, to: r.to })}</li>
+                    {/each}
+                  </ul>
+                {/if}
+                <!-- Which pages, and where they landed. A count cannot answer
+                     the question the panel is asked — least of all on a dry
+                     run, whose whole job is to say what a real one WOULD do. -->
+                {#if incReport.pages.length > 0}
+                  <p class="list-title">{t('inc.pagesTitle')}</p>
+                  <ul class="renamed-list">
+                    {#each incReport.pages as p (p.uid)}
+                      <li>
+                        {incReport.dry_run
+                          ? t('inc.pagePlanned', { rel: p.rel })
+                          : p.wrote
+                            ? t('inc.pageSynced', { rel: p.rel })
+                            : t('inc.pageUnchanged', { rel: p.rel })}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
               {/if}
             {/if}
           </div>
@@ -438,6 +561,9 @@
   .banner { padding: 10px 12px; border-radius: 6px; font-weight: 600; font-size: 13px; }
   .ok-banner { background: color-mix(in srgb, #34c759 18%, transparent); }
   .error-banner { background: color-mix(in srgb, #ff3b30 22%, transparent); }
+  .renamed-list { margin: -4px 0 0; padding-left: 18px; font-size: 12px; opacity: 0.85; }
+  .renamed-list li { margin: 2px 0; }
+  .list-title { margin: 8px 0 2px; font-size: 12px; font-weight: 600; opacity: 0.7; }
   .conflicts { margin-top: 12px; padding: 10px 12px; font-size: 13px;
     border: 1px solid color-mix(in srgb, #ff9500 55%, transparent); border-radius: 6px; }
   .conflicts label { display: block; font-size: 12px; padding: 2px 0; }

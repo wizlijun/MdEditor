@@ -5,6 +5,7 @@
 //! this must parse/serialize byte-identically to the TS side; the golden
 //! fixture in Task 7 is what catches drift, keep the two in step.
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// One outline bullet. `parent`/`order`/`content` mirror the TS `OutlineNode`
@@ -69,9 +70,21 @@ pub fn split_frontmatter_block(text: &str) -> (Option<String>, String) {
     }
 }
 
+/// A bullet: two-space indent units, then `-`, then either the end of the line
+/// or a single space and the content. The "end of the line" half is what makes
+/// an *empty* bullet survive a round trip through the outside world: it is
+/// written as `- ` (dash, space, empty content), so the trailing space would
+/// otherwise be load-bearing — and editors, formatters and git hooks strip
+/// trailing whitespace routinely, while file-over-app treats an externally
+/// edited vault file as normal input. Mirrors markdown.ts.
+///
+/// The optional group must be `(?: (.*))?`, never `- ?`: the latter would read
+/// `--` and `---` (front-matter fence, horizontal rule) as bullets. The
+/// front-matter fence is in any case already split off `text` before any line
+/// reaches here.
 fn bullet_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^((?:  )*)- (.*)$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^((?:  )*)-(?: (.*))?$").unwrap())
 }
 
 fn prop_pattern() -> &'static Regex {
@@ -255,8 +268,30 @@ fn apply_prop(tree: &mut Tree, idx: usize, key: &str, value: &str) {
     }
 }
 
+/// `\r` is line-ending noise, never content.
+///
+/// A `.note.md` comes back from the outside world — a Windows editor, a
+/// `core.autocrlf` checkout, a synced file — which is the traffic
+/// file-over-app promises to survive. The host's parser is JavaScript, where
+/// `.` and `$` both treat `\r` as a line terminator: a bullet line ending
+/// `\r` fails its bullet regex outright and collapses into its parent, the
+/// same data loss an empty bullet suffered when its trailing space was
+/// stripped. Rust's `regex` crate matches `\r` with `.`, so the two ports
+/// disagreed about whether a CRLF file even has nodes — unacceptable when one
+/// vault is read by several agents.
+///
+/// Stripping once at the parser entry (rather than sprinkling `\r?` through
+/// every pattern) is one place per side, byte-identical between the ports,
+/// and needs no reasoning about JS-vs-Rust regex dialects. Stated plainly: a
+/// CRLF file that is read and rewritten comes back as LF. The serializer is
+/// untouched.
+fn strip_carriage_returns(text: &str) -> Cow<'_, str> {
+    if text.contains('\r') { Cow::Owned(text.replace('\r', "")) } else { Cow::Borrowed(text) }
+}
+
 pub fn parse_outline(text: &str) -> Tree {
-    let (frontmatter, body) = split_frontmatter_block(text);
+    let text = strip_carriage_returns(text);
+    let (frontmatter, body) = split_frontmatter_block(&text);
     let mut tree = Tree { frontmatter, nodes: Vec::new() };
 
     let mut stack: Vec<Option<usize>> = Vec::new();
@@ -306,7 +341,10 @@ pub fn parse_outline(text: &str) -> Tree {
         }
         if let Some(caps) = bullet_pattern().captures(raw) {
             let depth = caps[1].len() / 2;
-            let rest = caps[2].to_string();
+            // Group 2 is absent for an empty bullet written without its
+            // trailing space (`-` alone) — that is an empty content, not a
+            // missing bullet.
+            let rest = caps.get(2).map_or(String::new(), |m| m.as_str().to_string());
             if let Some(open_len) = fence_open_len(&rest) {
                 fence_len = open_len;
             }
@@ -479,6 +517,173 @@ pub const CONCEPT_TYPE_DAILY_NOTE: &str = "Daily Note";
 /// in `src/lib/okf/concept.ts`. Same reasoning: one spelling, in one place.
 pub const CONCEPT_TYPE_WIKI_PAGE: &str = "Wiki Page";
 
+/// The values a YAML 1.2 **core schema** reader resolves to something that is
+/// not a string — `null`/`true`/`123`/`0x1f`/`1e3`/`.inf`. The host's `yaml`
+/// package quotes exactly these when serializing a string (its
+/// `stringifyString` runs every default tag's `test` against the plain form
+/// and falls back to a quoted scalar on a hit), so `title: 123` never comes
+/// back as the number 123.
+fn non_string_scalar_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"^(?:~|[Nn]ull|NULL",
+            r"|[Tt]rue|TRUE|[Ff]alse|FALSE",
+            r"|0o[0-7]+|[-+]?[0-9]+|0x[0-9a-fA-F]+",
+            r"|[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+",
+            r"|[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)",
+            r"|[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$",
+        ))
+        .unwrap()
+    })
+}
+
+/// May `value` be written as a YAML **plain** (unquoted) scalar? A port of the
+/// host `yaml` package's `plainString` guard — the regex in
+/// `yaml/dist/stringify/stringifyString.js`:
+///
+/// ```text
+/// /^[\n\t ,[\]{}#&*!|>'"%@`]|^[?-]$|^[?-][ \t]|[\n:][ \t]|[ \t]\n|[\n\t ]#|[\n\t :]$/
+/// ```
+///
+/// plus the "would it round-trip as a string?" check
+/// ([`non_string_scalar_pattern`]). Kept as a predicate rather than folded
+/// into [`yaml_scalar`] so each clause is separately assertable.
+fn is_plain_safe(value: &str) -> bool {
+    let chars: Vec<char> = value.chars().collect();
+    let Some(&first) = chars.first() else { return false }; // the empty string
+    if matches!(
+        first,
+        '\n' | '\t' | ' ' | ',' | '[' | ']' | '{' | '}' | '#' | '&' | '*' | '!' | '|' | '>'
+            | '\'' | '"' | '%' | '@' | '`'
+    ) {
+        return false;
+    }
+    if value == "?" || value == "-" {
+        return false;
+    }
+    // Not from the regex: `plainString` has an earlier branch that sends ANY
+    // multi-line value to `blockString`, so a line break is never plain even
+    // when the regex would have allowed it. See `yaml_scalar`'s note on the
+    // one place the two implementations part ways.
+    if value.contains('\n') {
+        return false;
+    }
+    if matches!(first, '?' | '-') && matches!(chars.get(1), Some(' ' | '\t')) {
+        return false;
+    }
+    for pair in chars.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        // `: ` / `:\t` / a line break followed by indentation — all of which
+        // make the reader see a nested key or a continuation.
+        if matches!(a, '\n' | ':') && matches!(b, ' ' | '\t') {
+            return false;
+        }
+        if matches!(a, ' ' | '\t') && b == '\n' {
+            return false;
+        }
+        // A `#` preceded by whitespace opens a comment.
+        if matches!(a, '\n' | '\t' | ' ') && b == '#' {
+            return false;
+        }
+    }
+    if matches!(chars[chars.len() - 1], '\n' | '\t' | ' ' | ':') {
+        return false;
+    }
+    !non_string_scalar_pattern().is_match(value)
+}
+
+/// A string as a YAML scalar, quoted **exactly when and how the host's `yaml`
+/// package would quote it**. Both sides write this file — the plugin through
+/// [`touch_frontmatter`], the host through `touchFrontmatter`
+/// (`src/lib/outline/frontmatter.ts`, which goes through `yaml`) — so a
+/// disagreement here is a file one of them cannot read back.
+///
+/// Until incremental sync, the only `title` this ever saw was a `yyyy-MM-dd`
+/// date, and writing it raw was safe. It is now the writer for **arbitrary
+/// Roam page titles**, where raw is not safe at all: `title: Book: Thinking
+/// Fast and Slow` is unparsable YAML (`scripts/okf-lint-core.mjs` reports
+/// `frontmatter-unparsable`), and the host's `yaml` reader swallows the
+/// `type`/`created`/`updated` beneath it into a nested map — after which
+/// `fmHas(raw, 'type')` is false and the host appends a *second* `type`, so
+/// each write compounds the damage. `PKM #2` is worse still: it parses, so
+/// nothing complains, and the title silently becomes `PKM`.
+///
+/// Quote style follows `yaml`'s `quotedString`: single quotes when the value
+/// contains a `"` and no `'` (so the double quotes need no escaping), double
+/// quotes otherwise — **except** that a value containing a line break always
+/// takes the double-quoted form. A single-quoted YAML scalar cannot carry a
+/// raw line break in a front-matter block: `title: 'say "hi"⏎there'` makes the
+/// reader report `Missing closing 'quote`, read the title as `say "hi` and
+/// lose every key after it. That is the unparsable-front-matter failure this
+/// whole function exists to prevent, so the newline check comes first.
+///
+/// Two divergences from the host's `yaml` package remain, both verified to
+/// read back through its own reader as the same string — they are byte
+/// differences, not disagreements about what the file says:
+///
+/// 1. A value **containing a line break**: `yaml` renders a block scalar (`|-`
+///    plus an indented body), which is a page of re-implementation (chomping
+///    indicator, indentation indicator, its own fallbacks) for a case that
+///    cannot occur — a Roam page title is a single-line field, and a newline
+///    in one would already have produced a file name with a newline in it long
+///    before reaching here. This writes a double-quoted `\n` escape instead.
+///    `parseDocument` reads both back as the identical string, and the host
+///    normalises the bytes to its own spelling the next time it touches the
+///    file. Pinned from both sides by the shared fixture's `host_expected`.
+/// 2. **Control characters** (`\r`, BEL, DEL, C1, ...) with nothing else
+///    hostile about them: `yaml` forces double quotes, this leaves them plain.
+///    The host's reader parses the plain form with no errors and returns the
+///    control character intact, so nothing is lost or truncated; matching
+///    `yaml` here would mean porting its escape table (`\a`, `\v`, `\0`, ...)
+///    as well, for a shape no Roam title can hold.
+pub fn yaml_scalar(value: &str) -> String {
+    if is_plain_safe(value) {
+        return value.to_string();
+    }
+    if !value.contains('\n') && value.contains('"') && !value.contains('\'') {
+        return format!("'{}'", value.replace('\'', "''"));
+    }
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Replace the top-level `title:` of a front-matter block, in place, keeping
+/// every other key and its order. Returns the block untouched when it is not a
+/// mapping or has no top-level `title:` at all (in which case
+/// [`touch_frontmatter`] appends one).
+///
+/// The **only** caller is the rename case in [`crate::incremental`]: Roam
+/// renamed the page, the file moved, and without this the front-matter keeps
+/// the old title forever — `touch_frontmatter` fills a *missing* title and
+/// never overwrites one (the shared fixture pins that rule), and the sync that
+/// follows a rename usually has nothing else to write, so no later run repairs
+/// it. Scoped to the one case where the sync *knows* the title changed;
+/// everywhere else an existing title is still the user's to keep.
+pub fn refresh_frontmatter_title(raw: &str, title: &str) -> String {
+    if !matches!(fm_shape(raw), FmShape::Mapping) {
+        return raw.to_string();
+    }
+    let mut lines: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
+    if let Some(pos) = lines.iter().position(|l| l.starts_with("title:") && is_top_level_key(l)) {
+        lines[pos] = format!("title: {}", yaml_scalar(title));
+    }
+    lines.join("\n")
+}
+
 /// Refresh a companion file's front-matter without a YAML crate: unknown
 /// keys and their order must survive untouched (round-tripping a
 /// hand-edited or third-party-tool-written file is a hard requirement, not
@@ -530,17 +735,22 @@ pub fn touch_frontmatter(
         lines.iter().any(|l| l.starts_with(&prefix) && is_top_level_key(l))
     };
 
+    // Every value goes through `yaml_scalar`, not just `title`: the three
+    // others are machine-generated (an OKF type constant, two ISO-8601
+    // instants) and always come back unquoted today, but "this one happens to
+    // be safe" is exactly the reasoning that made `title` unsafe the moment
+    // it started carrying Roam page titles.
     if !has_key(&lines, "type") {
-        lines.push(format!("type: {concept_type}"));
+        lines.push(format!("type: {}", yaml_scalar(concept_type)));
     }
     if !has_key(&lines, "title") {
-        lines.push(format!("title: {title}"));
+        lines.push(format!("title: {}", yaml_scalar(title)));
     }
     if !has_key(&lines, "created") {
-        lines.push(format!("created: {created}"));
+        lines.push(format!("created: {}", yaml_scalar(created)));
     }
 
-    let updated_line = format!("updated: {now}");
+    let updated_line = format!("updated: {}", yaml_scalar(now));
     match lines.iter().position(|l| l.starts_with("updated:") && is_top_level_key(l)) {
         Some(pos) => lines[pos] = updated_line,
         None => lines.push(updated_line),
@@ -690,6 +900,108 @@ mod tests {
         assert_eq!(serialize_outline(&t), "- first\n  id:: dup\n- second\n");
     }
 
+    // Fix F. Same disease as the trailing space: one invisible byte decides
+    // whether a node exists. In JavaScript `.` and `$` treat `\r` as a line
+    // terminator, so a bullet line ending `\r` fails the host's bullet regex
+    // and collapses into its parent — child gone, properties leaked into the
+    // parent's text. Rust's regex crate matches it, so the two ports disagreed
+    // about whether a CRLF file even has nodes. CRLF arrives from outside (a
+    // Windows editor, a `core.autocrlf` checkout, a synced file), which is
+    // exactly the traffic file-over-app promises to survive.
+    //
+    // Both ports now strip every `\r` at the parser entry — line-ending noise,
+    // never content. One place per side, so the next person has nowhere to
+    // miss, and no reasoning about JS-vs-Rust regex dialects is needed.
+    //
+    // The inputs and expectations below are the same, byte for byte, as the
+    // host's `markdown.test.ts` CRLF suite: "both ports yield the same tree
+    // for the same input" is the actual product requirement here.
+
+    /// LF twin of the CRLF fixture, and what a CRLF file is rewritten as.
+    const CRLF_LF_TWIN: &str = "---\ntitle: x\ncreated: y\n---\n- parent\n  - child\n    created:: 2026-08-03T14:11:47.891Z\n    id:: c1\n- after\n";
+
+    #[test]
+    fn a_crlf_file_parses_to_the_same_tree_as_its_lf_twin() {
+        let crlf = CRLF_LF_TWIN.replace('\n', "\r\n");
+        assert_eq!(
+            serialize_outline(&parse_outline(&crlf)),
+            serialize_outline(&parse_outline(CRLF_LF_TWIN))
+        );
+        // …and that is the LF text itself: the serializer is untouched, so a
+        // CRLF file read and rewritten comes back as LF.
+        assert_eq!(serialize_outline(&parse_outline(&crlf)), CRLF_LF_TWIN);
+        assert_eq!(parse_outline(&crlf).frontmatter.as_deref(), Some("title: x\ncreated: y"));
+    }
+
+    /// The data-loss shape, with CRLF instead of a stripped trailing space.
+    #[test]
+    fn a_nested_child_survives_crlf() {
+        let t = parse_outline("- parent\r\n  - child\r\n    created:: 2026-08-03T14:11:47.891Z\r\n    id:: x\r\n");
+        assert_eq!(t.nodes.len(), 2);
+        let parent = &t.nodes[0];
+        let child = &t.nodes[1];
+        assert_eq!(parent.content, "parent", "property lines must not leak into the parent");
+        assert_eq!(child.content, "child");
+        assert_eq!(child.id, "x");
+        assert_eq!(child.parent.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(child.created_at.as_deref(), Some("2026-08-03T14:11:47.891Z"));
+    }
+
+    /// The shape actually found in the vault: an otherwise-LF file with one
+    /// stray `\r` at the end of a single bullet line
+    /// (`dailynote/2024/2024-05-16.note.md:115`).
+    #[test]
+    fn a_single_stray_cr_terminated_line_in_an_lf_file() {
+        let t = parse_outline("- p\n  - abc\r\n    x\n    id:: k\n");
+        assert_eq!(t.nodes.len(), 2);
+        assert_eq!(t.nodes[0].content, "p");
+        assert_eq!(t.nodes[1].id, "k");
+        assert_eq!(t.nodes[1].content, "abc\nx");
+    }
+
+    /// A lone mid-line `\r` is normalised away too — the same way on both
+    /// ports, which is the point. (Leaving it as content would mean relying on
+    /// `.` behaving identically in two different regex engines; it does not.)
+    #[test]
+    fn a_lone_mid_line_cr_is_normalised_the_same_way() {
+        let t = parse_outline("- a\rb\n");
+        assert_eq!(t.nodes.len(), 1);
+        assert_eq!(t.nodes[0].content, "ab");
+    }
+
+    #[test]
+    fn mixed_line_endings_in_one_file() {
+        let t = parse_outline("- a\r\n- b\n- c\r\n");
+        assert_eq!(t.nodes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>(), vec!["a", "b", "c"]);
+    }
+
+    /// Raw fence mode takes its lines verbatim, so it would otherwise carry the
+    /// `\r` straight into the answer body — and the two ports would then differ
+    /// on where the fence closes. Entry-level stripping covers it for free.
+    #[test]
+    fn cr_is_normalised_inside_a_raw_fence_too() {
+        let crlf = "- ```\r\n  type:: answer\r\n  x\r\n  ```\r\n";
+        let lf = crlf.replace("\r\n", "\n");
+        assert_eq!(serialize_outline(&parse_outline(crlf)), serialize_outline(&parse_outline(&lf)));
+        let t = parse_outline(crlf);
+        assert_eq!(t.nodes.len(), 1);
+        assert_eq!(t.nodes[0].content, "```\ntype:: answer\nx\n```");
+    }
+
+    #[test]
+    fn crlf_frontmatter_still_splits() {
+        let t = parse_outline("---\r\ntitle: x\r\ncreated: y\r\n---\r\n- A\r\n");
+        assert_eq!(t.frontmatter.as_deref(), Some("title: x\ncreated: y"));
+        assert_eq!(t.nodes.len(), 1);
+        assert_eq!(t.nodes[0].content, "A");
+        assert_eq!(serialize_outline(&t), "---\ntitle: x\ncreated: y\n---\n- A\n");
+    }
+
+    #[test]
+    fn a_file_without_any_cr_is_untouched() {
+        assert_eq!(serialize_outline(&parse_outline(CRLF_LF_TWIN)), CRLF_LF_TWIN);
+    }
+
     #[test]
     fn frontmatter_touch_fills_and_refreshes() {
         let fm = touch_frontmatter(
@@ -749,6 +1061,146 @@ mod tests {
         assert_eq!(frontmatter_value(None, "updated"), None);
     }
 
+    /// The plain/quoted decision, clause by clause. The cross-language fixture
+    /// (`tests/fixtures/frontmatter-touch.json`) pins the *titles this plugin
+    /// actually writes* against the host's `yaml` package; this pins the
+    /// predicate itself, including shapes a Roam title is unlikely to take but
+    /// which `yaml` still decides one way rather than the other.
+    #[test]
+    fn yaml_scalar_quotes_exactly_what_the_host_yaml_package_quotes() {
+        // Plain: nothing in these needs a quote, and adding one would churn
+        // every existing file in the vault.
+        for plain in [
+            "2026-08-02", "回顾系统", "回顾/系统", "Daily Note", "Wiki Page",
+            "2026-08-01T16:00:05.019Z",     // a `:` not followed by a space
+            "Foo:Bar", "a:b:c", ":leading", "x?", "~x", "a#b", "ok!", "x|y", "a>b",
+            "He said \"no\"",               // a quote that is not leading
+            "back\\slash", "it's", "a - b", "v1.2.3", "1_000",
+            "yes", "no", "on", "Off",       // YAML 1.2 core: not booleans
+        ] {
+            assert_eq!(yaml_scalar(plain), plain, "needlessly quoted {plain:?}");
+        }
+
+        // Double-quoted: an indicator, a structural sequence, or a value that
+        // would resolve as something other than a string.
+        for (raw, want) in [
+            ("Book: Thinking Fast and Slow", "\"Book: Thinking Fast and Slow\""),
+            ("PKM #2", "\"PKM #2\""),
+            ("*star", "\"*star\""),
+            ("@home", "\"@home\""),
+            ("[[nested]]", "\"[[nested]]\""),
+            ("", "\"\""),
+            ("- 待办", "\"- 待办\""),
+            ("-", "\"-\""),
+            ("?", "\"?\""),
+            ("trailing:", "\"trailing:\""),
+            ("trailing ", "\"trailing \""),
+            ("  padded  ", "\"  padded  \""),
+            ("#hash", "\"#hash\""),
+            ("&anchor", "\"&anchor\""),
+            ("!bang", "\"!bang\""),
+            ("|pipe", "\"|pipe\""),
+            (">gt", "\">gt\""),
+            ("%percent", "\"%percent\""),
+            ("`backtick", "\"`backtick\""),
+            ("'squote", "\"'squote\""),
+            (",comma", "\",comma\""),
+            ("{brace", "\"{brace\""),
+            ("2026", "\"2026\""),
+            ("+5", "\"+5\""),
+            ("1.5", "\"1.5\""),
+            ("1e3", "\"1e3\""),
+            ("0x1f", "\"0x1f\""),
+            ("0o17", "\"0o17\""),
+            (".inf", "\".inf\""),
+            (".nan", "\".nan\""),
+            ("true", "\"true\""),
+            ("FALSE", "\"FALSE\""),
+            ("null", "\"null\""),
+            ("~", "\"~\""),
+            // Both quote characters present: double-quoted, with escapes.
+            ("it's: \"both\"", "\"it's: \\\"both\\\"\""),
+            // A backslash only has to be escaped once quoting is on.
+            ("a: b\\c", "\"a: b\\\\c\""),
+        ] {
+            assert_eq!(yaml_scalar(raw), want, "for {raw:?}");
+        }
+
+        // Single-quoted: needs quoting, holds a `"` and no `'`, so `yaml`
+        // picks the style that leaves the double quotes alone.
+        assert_eq!(yaml_scalar("Review: \"Dune\""), "'Review: \"Dune\"'");
+        assert_eq!(yaml_scalar("\"leading quote\""), "'\"leading quote\"'");
+    }
+
+    /// The one place the two implementations deliberately differ, recorded so
+    /// the divergence is a decision rather than a discovery. `yaml` writes a
+    /// value containing a line break as a block scalar; this writes a
+    /// double-quoted `\n` escape. Different bytes, identical string on
+    /// read-back — and unreachable in practice, since a Roam page title is a
+    /// single-line field (a newline in one would have produced a file name
+    /// with a newline in it long before reaching here).
+    #[test]
+    fn a_line_break_is_escaped_rather_than_written_as_a_block_scalar() {
+        assert_eq!(yaml_scalar("line\nbreak"), "\"line\\nbreak\"");
+    }
+
+    /// …and the escape wins over the single-quote style, which is the one
+    /// combination that produced a file nobody could read back. A value with a
+    /// `"`, no `'` and a line break used to take single quotes, and a raw line
+    /// break inside them ends the scalar: the host's reader reports
+    /// `Missing closing 'quote`, hands back `say "hi` as the title and drops
+    /// `created`/`updated`/`type` with it. Exactly the unparsable front-matter
+    /// the quoting exists to prevent, so it is pinned in both styles' terms.
+    #[test]
+    fn a_line_break_beats_the_single_quote_style_that_cannot_hold_one() {
+        assert_eq!(yaml_scalar("say \"hi\"\nthere"), "\"say \\\"hi\\\"\\nthere\"");
+        assert_eq!(yaml_scalar("say \"hi\"\r\nthere"), "\"say \\\"hi\\\"\\r\\nthere\"");
+        // Still single-quoted where there is no line break to force the issue.
+        assert_eq!(yaml_scalar("say: \"hi\""), "'say: \"hi\"'");
+    }
+
+    /// The other, deliberately-open divergence. `yaml` forces double quotes on
+    /// a control character; this leaves the value plain, because the host's
+    /// own reader parses the plain form without an error and hands the
+    /// character back intact — a byte difference, not a disagreement about
+    /// what the file says. Recorded so a later reader knows it was measured
+    /// rather than missed.
+    #[test]
+    fn a_lone_control_character_is_left_plain_where_yaml_would_quote_it() {
+        for c in ['\r', '\u{7}', '\u{7f}', '\u{9b}'] {
+            let v = format!("a{c}b");
+            assert_eq!(yaml_scalar(&v), v, "{:?} started being quoted", c);
+        }
+    }
+
+    /// I3. `touch_frontmatter` deliberately never overwrites an existing
+    /// title (the shared fixture pins that), so after a Roam rename the file
+    /// moves and its front-matter keeps the old name forever. This is the
+    /// narrow exception: only the rename case calls it.
+    #[test]
+    fn refresh_frontmatter_title_replaces_a_title_in_place() {
+        assert_eq!(
+            refresh_frontmatter_title("type: Wiki Page\ntitle: 旧名\ncreated: C", "新名"),
+            "type: Wiki Page\ntitle: 新名\ncreated: C",
+        );
+        // Quoted through the same encoder, or the rename writes the very file
+        // shape C1 exists to prevent.
+        assert_eq!(
+            refresh_frontmatter_title("title: 旧名", "Book: Thinking Fast and Slow"),
+            "title: \"Book: Thinking Fast and Slow\"",
+        );
+        // A nested `title:` belongs to some other key's value.
+        assert_eq!(
+            refresh_frontmatter_title("sources:\n  - title: nested\ntitle: 旧名", "新名"),
+            "sources:\n  - title: nested\ntitle: 新名",
+        );
+        // No top-level title to replace: left alone, `touch_frontmatter` adds one.
+        assert_eq!(refresh_frontmatter_title("type: Wiki Page", "新名"), "type: Wiki Page");
+        // Not a mapping: untouched, exactly like `touch_frontmatter`.
+        assert_eq!(refresh_frontmatter_title("just a sentence", "新名"), "just a sentence");
+        assert_eq!(refresh_frontmatter_title("", "新名"), "");
+    }
+
     /// R6. This function writes into whatever note is already on disk, and a
     /// `.note.md` is hand-edited and agent-edited — it does not have to have
     /// *produced* a file to be handed one. Appending keys to a front-matter
@@ -797,6 +1249,129 @@ mod tests {
         // Comments are not content the keys may be appended *into*, but they
         // are kept — with the blank separator the host's serializer writes.
         assert_eq!(touch(Some("# a\n# b")), "# a\n# b\n\ntype: TY\ntitle: T\ncreated: C\nupdated: N");
+    }
+
+    /// An empty Roam block is serialized as `- ` — a dash, a space, and
+    /// nothing else — which makes the *trailing space* load-bearing. Editors,
+    /// formatters and git hooks strip trailing whitespace as a matter of
+    /// course, and file-over-app treats an externally edited vault file as
+    /// normal input. Once the space is gone, `-` used to fall through to the
+    /// "unclassifiable line" branch: flat, it degraded into a node whose
+    /// content is `-` (re-serialized as `- -`, one level worse every save);
+    /// nested, the child vanished entirely and its `created::`/`id::` lines
+    /// became literal text inside the *parent*. So a line of nothing but
+    /// indentation and `-` is an empty bullet, exactly as `- ` is. The
+    /// serializer is deliberately unchanged: fixing the parser repairs every
+    /// file already on disk without touching a byte of anyone's vault.
+    #[test]
+    fn a_bare_dash_is_an_empty_bullet() {
+        let t = parse_outline("-\n");
+        assert_eq!(t.nodes.len(), 1);
+        assert_eq!(t.nodes[0].content, "");
+    }
+
+    #[test]
+    fn properties_after_a_bare_dash_attach_to_it_not_to_the_previous_node() {
+        let t = parse_outline("- kept\n-\n  created:: 2026-08-03T14:11:47.891Z\n  id:: X\n");
+        assert_eq!(t.nodes.len(), 2);
+        assert_eq!(t.nodes[0].content, "kept");
+        assert_eq!(t.nodes[0].created_at, None);
+        assert_eq!(t.nodes[1].content, "");
+        assert_eq!(t.nodes[1].created_at.as_deref(), Some("2026-08-03T14:11:47.891Z"));
+        assert_eq!(t.nodes[1].id, "X");
+    }
+
+    /// The case that actually destroyed a user's data: the child disappeared
+    /// and `created:: …` showed up as a node's visible name.
+    #[test]
+    fn a_nested_bare_dash_stays_a_real_child() {
+        let t = parse_outline("- parent\n  -\n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n");
+        assert_eq!(t.nodes.len(), 2);
+        let parent = &t.nodes[0];
+        let child = &t.nodes[1];
+        assert_eq!(parent.content, "parent", "property lines must not leak into the parent");
+        assert_eq!(child.content, "");
+        assert_eq!(child.id, "x");
+        assert_eq!(child.parent.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(child.created_at.as_deref(), Some("2026-08-03T14:11:47.891Z"));
+    }
+
+    #[test]
+    fn a_file_that_still_has_the_trailing_space_parses_the_same_way() {
+        let with_space = parse_outline("- parent\n  - \n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n");
+        let stripped = parse_outline("- parent\n  -\n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n");
+        let shape = |t: &Tree| -> Vec<(String, Option<String>, Option<String>)> {
+            t.nodes.iter().map(|n| (n.content.clone(), n.parent.clone(), n.created_at.clone())).collect()
+        };
+        assert_eq!(shape(&stripped), shape(&with_space));
+    }
+
+    /// The serializer is untouched, so a healed file is written back *with*
+    /// the trailing space — and parsing that again is a fixed point. No
+    /// `- -` degradation, no oscillation between the two spellings.
+    #[test]
+    fn a_stripped_empty_bullet_heals_and_then_holds_still() {
+        let stripped = "- parent\n  -\n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n";
+        let healed = "- parent\n  - \n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n";
+        assert_eq!(serialize_outline(&parse_outline(stripped)), healed);
+        assert_eq!(serialize_outline(&parse_outline(healed)), healed);
+        assert_eq!(serialize_outline(&parse_outline("-\n")), "- \n");
+        assert_eq!(serialize_outline(&parse_outline("- \n")), "- \n");
+    }
+
+    /// The bullet rule must stay narrow: `-` counts only when the line ends
+    /// there or a single space follows. `- ?` would swallow `--` and `---`.
+    #[test]
+    fn dash_runs_and_a_dash_as_content_are_unaffected() {
+        // A `---` in the *body* is not front-matter (that split happens on the
+        // whole text, before any bullet is scanned) and not a bullet either.
+        let rule = parse_outline("- A\n---\n");
+        assert_eq!(rule.frontmatter, None);
+        assert_eq!(rule.nodes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>(), vec!["A", "---"]);
+        let dashes = parse_outline("- A\n--\n");
+        assert_eq!(dashes.nodes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>(), vec!["A", "--"]);
+        // Real front-matter still gets split off ahead of the bullet scan.
+        let fm = parse_outline("---\ntitle: x\n---\n- A\n");
+        assert_eq!(fm.frontmatter.as_deref(), Some("title: x"));
+        assert_eq!(fm.nodes.len(), 1);
+        assert_eq!(fm.nodes[0].content, "A");
+        // `- -` is still a bullet whose content is "-".
+        let dash_content = parse_outline("- -\n");
+        assert_eq!(dash_content.nodes.len(), 1);
+        assert_eq!(dash_content.nodes[0].content, "-");
+        assert_eq!(serialize_outline(&dash_content), "- -\n");
+    }
+
+    /// Indentation is still counted in two-space units: an odd-indent `-` must
+    /// do whatever an odd-indent `- x` does today (be absorbed as the previous
+    /// node's continuation line), not quietly become a bullet.
+    #[test]
+    fn an_odd_indent_bare_dash_behaves_like_an_odd_indent_bullet() {
+        assert_eq!(parse_outline("- A\n   - x\n").nodes[0].content, "A\n - x");
+        assert_eq!(parse_outline("- A\n   -\n").nodes[0].content, "A\n -");
+        // With no previous node to continue, both demote to a root node.
+        assert_eq!(parse_outline("   - x\n").nodes[0].content, "- x");
+        assert_eq!(parse_outline("   -\n").nodes[0].content, "-");
+    }
+
+    /// The two id guards must keep holding for empty bullets: a repeated
+    /// `id::` is refused, and a `local-N`-shaped one cannot steal the
+    /// placeholder a later node will be handed.
+    #[test]
+    fn the_id_guards_still_hold_for_empty_bullets() {
+        let t = parse_outline("- parent\n  id:: dup\n  -\n    id:: dup\n");
+        assert_eq!(t.nodes.len(), 2);
+        let child = &t.nodes[1];
+        assert_eq!(child.content, "");
+        assert_ne!(child.id, "dup");
+        assert!(!child.persist_id);
+        assert_eq!(child.parent.as_deref(), Some("dup"));
+        assert_eq!(serialize_outline(&t), "- parent\n  id:: dup\n  - \n");
+
+        let t = parse_outline("-\n  id:: local-2\n  - b\n");
+        let b = t.nodes.iter().find(|n| n.content == "b").unwrap();
+        assert_ne!(b.parent.as_deref(), Some(b.id.as_str()));
+        assert_eq!(serialize_outline(&t), "- \n  - b\n");
     }
 
     #[test]

@@ -40,14 +40,14 @@ fn merged_output_matches_the_golden_fixture() {
     assert_eq!(std::fs::read_to_string(dir.path().join(REL)).unwrap(), GOLDEN);
 
     // The stats the UI reports, pinned against the same fixture: Roam gained
-    // a grandchild, an evening block, a shopping list and a code block
-    // (created), edited the TODO's wording (updated), the user's question,
-    // their reply under the TODO and the whole annotation → question → answer
-    // subtree are untouched (kept_local), and the block Roam has since deleted
-    // is still there (roam_gone_kept).
+    // a grandchild, an evening block, a shopping list, a code block and an
+    // empty block (created), edited the TODO's wording (updated), the user's
+    // question, their reply under the TODO, their empty bullet and the whole
+    // annotation → question → answer subtree are untouched (kept_local), and
+    // the block Roam has since deleted is still there (roam_gone_kept).
     assert_eq!(
         (out.created, out.updated, out.kept_local, out.roam_gone_kept),
-        (4, 1, 5, 1)
+        (5, 1, 6, 1)
     );
     assert!(out.found);
     assert_eq!(out.path, REL);
@@ -82,12 +82,83 @@ fn syncing_the_same_day_again_does_not_touch_the_file() {
     }
 }
 
+/// The four line shapes `parse_outline` reads as structure, asserted from this
+/// side by reading the golden bytes back — not just by writing them. Byte
+/// equality above already pins what the plugin *emits*; this pins what the
+/// plugin's own parser then makes of those bytes, which is the half that has to
+/// agree with the host (`src/lib/outline/roam-golden.test.ts` asserts the same
+/// four against `parseOutline`).
+///
+/// Each shape, left unhandled, has cost a block the `id::` that is its
+/// identity — after which `merge` sees a brand-new Roam block and re-creates
+/// it on every single sync, multiplying the user's note without bound. All
+/// four have been real bugs in this plugin.
+#[test]
+fn the_structural_shapes_read_back_as_the_blocks_they_are() {
+    let tree = outline::parse_outline(GOLDEN);
+    let by_id = |id: &str| tree.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("no {id}"));
+
+    // 1. `key:: value` on a continuation line is text, not a property.
+    assert_eq!(by_id("Nb7sT1uEv").content, "meeting notes\n id:: not-a-property");
+
+    // 2. A Roam shift-enter list — `shopping\n- milk\n-\n- eggs` — is ONE
+    //    block, not a block with three child bullets. Its third line is the
+    //    *empty* bullet shape (a line of nothing but `-`), which the escaper
+    //    had to learn separately from `- milk`.
+    let shopping = by_id("RmQ2xL8vC");
+    assert_eq!(shopping.content, "shopping\n - milk\n -\n - eggs");
+    assert!(shopping.persist_id, "the block must keep the id:: that is its identity");
+    assert!(
+        tree.nodes.iter().all(|n| n.parent.as_deref() != Some("RmQ2xL8vC")),
+        "a shift-enter line was read back as a child bullet"
+    );
+
+    // 3. A fence the Roam block never closed is closed for it, so the blocks
+    //    after it survive as their own nodes instead of being eaten into the
+    //    fence body.
+    assert_eq!(by_id("Fp3nH6wDs").content, "```js\nconst x = 1\n```");
+    assert!(tree.nodes.iter().any(|n| n.id == "Ez6yV4rTn"), "the tail was swallowed by the fence");
+
+    // 4. An empty Roam block is written `- ` — dash, space, nothing — so the
+    //    trailing space would otherwise carry the whole meaning of "this
+    //    bullet exists". It is a node with empty content, and the property
+    //    lines under it belong to IT, not to the block above.
+    let empty = by_id("Ez6yV4rTn");
+    assert_eq!(empty.content, "");
+    assert_eq!(empty.created_at.as_deref(), Some("2026-08-02T14:20:00.000Z"));
+    assert_eq!(empty.updated_at.as_deref(), Some("2026-08-02T14:21:00.000Z"));
+    assert_eq!(
+        by_id("Fp3nH6wDs").updated_at.as_deref(),
+        Some("2026-08-02T14:16:40.000Z"),
+        "the empty bullet's properties leaked into the block above it"
+    );
+
+    // …and the user's own empty bullet: `local-before.note.md` carries it in
+    // the whitespace-stripped spelling (a bare `-`, which is what editors,
+    // formatters and git hooks leave behind), and the merge keeps it as a
+    // local block — with no `id::`, so it is theirs, not Roam's.
+    let mine: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter(|n| n.content.is_empty() && !n.persist_id)
+        .collect();
+    assert_eq!(mine.len(), 1, "the user's stripped empty bullet did not survive as a node");
+    assert_eq!(mine[0].parent, None);
+}
+
 /// Front-matter drift guard, Rust half. The golden `.note.md` above cannot
 /// catch this: its TS half round-trips `tree.frontmatter` verbatim and never
 /// calls the host's `touchFrontmatter`, so `outline::touch_frontmatter` — a
 /// hand-rolled line-based reimplementation of a function the host builds on
 /// the `yaml` package — had no counterpart assertion at all. Both sides now
 /// assert the same cases; see `src/lib/outline/roam-golden.test.ts`.
+///
+/// `expected` is this side's bytes and every case has one. A case may also
+/// carry `host_expected`, for the single shape where the host's `yaml` package
+/// legitimately spells the same string differently (a value with a line break
+/// becomes a block scalar there, a double-quoted escape here) — that field is
+/// the TS half's business; what makes the divergence safe is asserted there
+/// too, by reading *these* bytes back through the host's own reader.
 #[test]
 fn frontmatter_touch_matches_the_shared_fixture() {
     let fixture: serde_json::Value = serde_json::from_str(FM_TOUCH).unwrap();
@@ -105,5 +176,95 @@ fn frontmatter_touch_matches_the_shared_fixture() {
             c["now"].as_str().unwrap(),
         );
         assert_eq!(got, c["expected"].as_str().unwrap(), "{name}");
+    }
+}
+
+/// End-to-end, the check the branch's own end-to-end missed. That run only
+/// ever synced daily notes — the real ledger holds two entries, both
+/// `MM-DD-YYYY` — so the front-matter writer was never handed anything but a
+/// `yyyy-MM-dd` date, and a `title:` written raw looked perfectly safe.
+///
+/// This drives the real `incremental::sync_since` (routing, `sync_page`,
+/// `touch_frontmatter`, the atomic write) over the wiki-page titles that
+/// break raw YAML, and asserts the bytes that reach the vault. The
+/// TypeScript half runs the repo's own `pnpm okf:lint` implementation over
+/// the same blocks (`src/lib/outline/roam-golden.test.ts`); before the fix,
+/// `pnpm okf:lint` reported `frontmatter-unparsable` on four of these nine
+/// files.
+#[test]
+fn a_wiki_page_sync_writes_front_matter_a_yaml_reader_can_read() {
+    use notemd_roam_import::{changed::Changed, incremental, roam_page::{RoamBlock, RoamPage}};
+
+    // (uid, Roam title, the file it must land in, the `title:` line it must
+    // carry). Every title here is one raw YAML gets wrong: unparsable
+    // (`: `, a leading indicator), or — quieter and worse — parsable as
+    // something else (`PKM #2` truncates to `PKM`, `2026` becomes a number,
+    // `[[nested]]` becomes a nested list).
+    let cases: Vec<(&str, &str, &str, &str)> = vec![
+        ("u1", "Book: Thinking Fast and Slow",
+         "wikipage/Book- Thinking Fast and Slow.note.md",
+         "title: \"Book: Thinking Fast and Slow\""),
+        ("u2", "PKM #2", "wikipage/PKM #2.note.md", "title: \"PKM #2\""),
+        ("u3", "*star", "wikipage/star.note.md", "title: \"*star\""),
+        ("u4", "@home", "wikipage/@home.note.md", "title: \"@home\""),
+        ("u5", "[[nested]]", "wikipage/[[nested]].note.md", "title: \"[[nested]]\""),
+        ("u6", "Review: \"Dune\"", "wikipage/Review- -Dune.note.md",
+         "title: 'Review: \"Dune\"'"),
+        ("u7", "2026", "wikipage/2026.note.md", "title: \"2026\""),
+        // …and an ordinary one, which must NOT grow quotes it does not need.
+        ("u8", "回顾/系统", "wikipage/回顾-系统.note.md", "title: 回顾/系统"),
+        // The shape the branch's end-to-end covered, unchanged.
+        ("08-02-2026", "August 2nd, 2026", "dailynote/2026/2026-08-02.note.md",
+         "title: 2026-08-02"),
+    ];
+
+    let dir = tempfile::tempdir().unwrap();
+    let pages = cases.clone();
+    let batch: Vec<Changed> = cases
+        .iter()
+        .enumerate()
+        .map(|(i, (uid, ..))| Changed { uid: (*uid).into(), edited: 1000 + i as i64 })
+        .collect();
+
+    let report = incremental::sync_since(
+        dir.path(), ("wikipage", "dailynote"), None, Some("e2e"),
+        chrono::NaiveDate::from_ymd_opt(2026, 8, 3).unwrap(), NOW, false,
+        move |_| Ok(batch),
+        move |uid| Ok(pages.iter().find(|(u, ..)| *u == uid).map(|(u, title, ..)| RoamPage {
+            title: (*title).into(), uid: Some((*u).into()),
+            create_time: Some(1785600005019), edit_time: None,
+            children: vec![RoamBlock {
+                uid: Some(format!("{u}-b1")), string: "第一条".into(), order: 0,
+                heading: None, create_time: None, edit_time: None, children: vec![],
+            }],
+        })),
+    )
+    .unwrap();
+
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(report.synced, cases.len());
+
+    for (uid, roam_title, rel, title_line) in &cases {
+        let text = std::fs::read_to_string(dir.path().join(rel))
+            .unwrap_or_else(|e| panic!("{uid} ({roam_title}) is not at {rel}: {e}"));
+        let fm = text
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .unwrap_or_else(|| panic!("{rel} has no front-matter block:\n{text}"))
+            .0;
+        // OKF §4.1's one REQUIRED key, and the title, spelled the way the
+        // host's `yaml` package spells it.
+        assert!(
+            fm.lines().any(|l| l == "type: Wiki Page" || l == "type: Daily Note"),
+            "{rel} carries no OKF type:\n{fm}",
+        );
+        assert!(fm.lines().any(|l| l == *title_line), "{rel}:\nwant {title_line}\ngot:\n{fm}");
+    }
+
+    // …and the report names every one of them, which is what a `--dry-run`
+    // over the same graph would have printed.
+    let listed: Vec<&str> = report.pages.iter().map(|p| p.rel.as_str()).collect();
+    for (_, _, rel, _) in &cases {
+        assert!(listed.contains(rel), "{rel} was written but not reported: {listed:?}");
     }
 }

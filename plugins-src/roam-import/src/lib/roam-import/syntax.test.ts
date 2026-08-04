@@ -37,6 +37,21 @@ describe('escapeStructuralLines', () => {
     expect(escapeStructuralLines('a\n - b\n-dash\nx - y')).toBe('a\n - b\n-dash\nx - y')
   })
 
+  it('escapes a continuation line that is a bare `-` (an EMPTY child bullet)', () => {
+    // parseOutline 的第四种结构形状:只有缩进和一个 `-` 的行 = 空 bullet
+    // (空块被写成 `- `,行尾空格会被外部工具删掉,故解析端两种都认)。
+    // 不转义的话,Roam 块里一行 shift-enter 空行会被读回成一个空子节点,
+    // 本块的 id:: 被挤出续行缩进 → 丢身份 → merge 每次同步重建一次。
+    expect(escapeStructuralLines('shopping\n-\nmilk')).toBe('shopping\n -\nmilk')
+    expect(escapeStructuralLines('outline\n  -\n    -')).toBe('outline\n   -\n     -')
+    // 首行是 bullet 自己的正文,永远不转义
+    expect(escapeStructuralLines('-')).toBe('-')
+    // 仍然不碰:奇数缩进、`-` 后接非空格、行内破折号
+    expect(escapeStructuralLines('a\n -\n-dash\nx - y\n--\n---')).toBe('a\n -\n-dash\nx - y\n--\n---')
+    // 幂等:转义结果再转义一次不变
+    expect(escapeStructuralLines(escapeStructuralLines('shopping\n-\nmilk'))).toBe('shopping\n -\nmilk')
+  })
+
   it('leaves lines inside the fence the block itself opened exactly as they are', () => {
     // parseOutline takes those lines verbatim (raw mode), so there is nothing
     // to neutralize — and a space slipped into a YAML sample is the user's code,

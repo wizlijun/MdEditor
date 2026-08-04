@@ -93,6 +93,26 @@ describe('convertPage — blocks that look like outline structure', () => {
     expect(nodesOf(out.text).find((n) => n.id === 'c1')?.content).toBe(code)
   })
 
+  it('keeps an EMPTY shift-enter line as content rather than an empty child bullet', () => {
+    // parseOutline 的第四种结构形状(空 bullet)。不转义的话这个块会被读成三个节点,
+    // 连自己的 id:: 都被挤出续行缩进 → 每次同步都被 merge 当新块重建。
+    const out = convertPage(pageOf([{ uid: 'e1', string: 'shopping\n-\nmilk' }]), new Map())
+    const nodes = nodesOf(out.text)
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].id).toBe('e1')
+    expect(nodes[0].content).toBe('shopping\n -\nmilk')
+  })
+
+  it('去掉 block 文本里的 \\r,因为 parseOutline 入口就会剥掉它', () => {
+    // 与 Rust 侧 convert.rs 的同名测试对应:写出一个「读回来就不一样」的字节,
+    // 等于让往返契约失效。
+    const out = convertPage(pageOf([{ uid: 'r1', string: 'a\r\nb' }, { uid: 'r2', string: 'lone\rcr' }]), new Map())
+    const nodes = nodesOf(out.text)
+    expect(nodes.find((n) => n.id === 'r1')?.content).toBe('a\nb')
+    expect(nodes.find((n) => n.id === 'r2')?.content).toBe('lonecr')
+    expect(out.text).not.toContain('\r')
+  })
+
   it('closes a fence the Roam block never closed so the next block survives', () => {
     const out = convertPage(pageOf([{ uid: 'f1', string: '```js\nconst x = 1' }, { uid: 'f2', string: 'after' }]), new Map())
     const nodes = nodesOf(out.text)

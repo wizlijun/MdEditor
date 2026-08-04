@@ -11,6 +11,10 @@ plain `.note.md` outline pages. There are two independent paths:
    [`@roam-research/roam-cli`](https://github.com/Roam-Research/roam-tools)
    tool) and merge it into that day's `.note.md`, either from the plugin
    window or from a shell/cron via `notemd roam-day`.
+3. **CLI incremental sync** — pull *every page* Roam has changed since the
+   last run, daily notes and wiki pages alike, from the same running desktop
+   app. Same prerequisites and the same merge semantics as (2); see
+   [Incremental sync](#incremental-sync) below.
 
 ## Prerequisites for the CLI daily sync
 
@@ -72,13 +76,265 @@ immediately before publishing and aborts with
 is lost either way; but a cron job that keeps aborting is a cron job that is
 not syncing.
 
-## Known trade-off: `#.rm-hide`
+## Incremental sync
 
-Roam's own UI hides blocks tagged `#.rm-hide` from view, but the CLI's
-datalog pull has no way to distinguish "hidden" from "visible" — a
-`#.rm-hide`-tagged block is fetched, converted and merged in like any other.
-If you rely on `#.rm-hide` to keep scratch/meta blocks out of your Roam UI,
-be aware they will still show up in the synced `.note.md`.
+`notemd roam-day` syncs the day you name. Incremental sync answers the
+question you actually have — *what have I changed in Roam since I last
+looked?* — and pulls all of it in one action: yesterday's daily note you
+finished this morning, the concept page you created last night, the page you
+renamed. Daily notes and wiki pages go to their own folders.
+
+Two entry points, one implementation
+(`incremental::sync_since`, driven identically by both):
+
+- **The plugin window** — an "Incremental sync" button beside the existing
+  "Sync this day", with the last-sync time shown next to it ("Never synced"
+  when there is no ledger yet). Same three-state `roam` CLI probe, same
+  `ready` bar to clear.
+- **The CLI** — `notemd roam-sync`, for a shell or a cron job.
+
+### The ledger: `.notemd/roam-sync.json`
+
+One small JSON file, **inside the vault**, next to the whole-graph import's
+own `.notemd/roam-import.json`:
+
+```json
+{
+  "graph": "bruce",
+  "lastSyncedAt": "2026-08-03T11:58:41.185Z",
+  "pages": {
+    "8IFJWtnad":  { "path": "wikipage/回顾系统.note.md",          "title": "回顾系统" },
+    "08-02-2026": { "path": "dailynote/2026/2026-08-02.note.md", "title": "August 2nd, 2026" }
+  }
+}
+```
+
+`lastSyncedAt` is the watermark; `pages` maps each Roam page uid to the file
+it landed in, which is what makes a rename in Roam a *move* here rather than
+a second file. `graph` records which Roam graph this vault is bound to.
+
+**One vault tracks one graph.** There is a single watermark and a single uid →
+path map in here, and a Roam uid is only unique *within* a graph — so a run
+against a second graph would resume from the first one's watermark and, since
+the watermark only ever moves forward, permanently skip everything the second
+graph changed before that instant, without a word. It would also let one
+graph's uid claim the other's file path. A run whose `--graph` disagrees with
+the recorded one is therefore **refused outright**, with a message naming both;
+sync the second graph into its own vault, or delete this file to re-bind. A run
+that cannot name its graph (the `roam` CLI auto-selects when only one is
+configured) is not a mismatch with anything and leaves the recorded name alone.
+
+It lives in the vault, not in the app's own data directory, **because it
+describes vault files and therefore has to travel with them through git**. A
+ledger left behind on one machine would claim that some uid lives at a path
+that does not exist on the machine reading it. Two machines syncing the same
+graph can produce a git conflict on this file; it is small and flat, so
+resolve it by hand — and losing it entirely is not a data loss, only a
+wider rescan on the next run (re-syncing a page is idempotent).
+
+It is written atomically (temp file → `fsync` → rename) after **every** page,
+not once per run, because the host kills the plugin process on deactivate and
+on quit. A ledger that is present but unreadable — truncated, or carrying
+`<<<<<<<` markers from a git merge — is deliberately **not** treated as "no
+ledger": that would silently mean "start from yesterday" and abandon
+everything older, permanently. It is reported in `errors`, and a run with a
+non-empty `errors` is never presented as clean (the CLI fails it; see
+[Exit codes](#exit-codes)).
+
+### Discovery: two queries, and both are necessary
+
+Finding what changed takes the **union of two datalog queries**, merged by
+uid, taking the later timestamp of the two. This is the single most
+inviting thing in the feature to "simplify", and dropping either half
+silently stops syncing a whole class of change:
+
+| dimension | query | catches | **misses** |
+|---|---|---|---|
+| max `:edit/time` over the page's **blocks** | `[?b :block/page ?p] [?b :edit/time ?t]` | content edits | a page **renamed or created** without any block changing |
+| the **page entity**'s own `:edit/time` | `[?p :edit/time ?t]` | renames, new pages | almost every content edit — for a daily note this value is the moment Roam *created* the page |
+
+Measured on a real graph: `08-03-2026`'s last block edit was
+`2026-08-03T11:58Z` while its page entity's `:edit/time` was
+`2026-08-02T16:00Z` (local midnight, when Roam made the page). In the other
+direction, seven wiki pages had page-entity changes at `2026-08-01T16:18Z`
+that the block dimension could not see at all. Neither query is a superset of
+the other.
+
+Both are filtered **server-side** (`[(> ?t ?since)]`, with `?since` bound
+through `--inputs`), so the result sets stay small however far back the
+watermark is.
+
+### The watermark, and why it moves a millisecond at a time
+
+Pages are processed in ascending `(edited, uid)` order — ascending because
+that is what makes the run resumable, and with `uid` as tiebreaker so a run's
+order is reproducible. On a failure the run **stops** and keeps what it has
+done; the next run resumes from the watermark. Network loss, Roam quitting,
+the plugin process being killed: nothing is skipped, at the cost of
+re-fetching a little (which is free — an unchanged page is not even written).
+
+The watermark advances **a whole timestamp at a time, never a page at a
+time**, and this is the part not to "fix":
+
+> `edited` is not unique. A bulk edit, a scripted import, or the two
+> discovery dimensions coinciding will give two different pages the same
+> millisecond `T`. Say P and Q both have `edited == T`. If P's success moved
+> the watermark to `T` and Q then failed, the next run asks Roam for
+> everything **strictly** after `T` — and that strictness has to stay, or
+> every run would re-sync its own last page forever. Q, which was never
+> synced, is not in the answer. It is skipped permanently and silently.
+
+So all pages sharing an `edited` are one atomic group, and the watermark may
+only cross `T` once every page at `T` has been dealt with. Equivalently: the
+persisted watermark is the greatest `edited` strictly below the smallest
+`edited` among this run's failures, or the batch maximum when there are none.
+
+Two related rules: the watermark is a page's own `edited`, never `now` (using
+`now` would jump over edits made *while the scan was running* and lose them
+forever), and it only ever moves **forward** — `--since` re-reads history
+without rewinding the frontier, so the next ordinary run does not rescan a
+month.
+
+A first run, with no ledger, starts at **local midnight at the start of
+yesterday** — not the beginning of time. Pulling the whole graph is the JSON
+import's job, not this one's.
+
+### Where pages land
+
+| the page | path | OKF `type` |
+|---|---|---|
+| uid shaped `MM-DD-YYYY` (a Roam daily page) | `<daily_dir>/<yyyy>/<yyyy-MM-dd>.note.md` | `Daily Note` |
+| anything else | `<wiki_dir>/<sanitized title>.note.md` | `Wiki Page` |
+
+`daily_dir` and `wiki_dir` come from note.md's own vault settings; the file
+name is sanitized with the same rules as the whole-graph import (illegal
+characters → `-`, empty → `untitled`), and a ` (2)` suffix is added only when
+another *uid* already holds that path. A page with no blocks at all — Roam
+creates one for every `#tag` — is counted as skipped and no file is written.
+
+**A page renamed in Roam has its file moved.** The ledger knows where the uid
+used to live, so the sync `rename`s the old file to the new name before
+merging into it: the blocks you wrote in that file, your annotations and the
+file's git history all follow the rename instead of being stranded in an
+orphan while a fresh file appears next to it. Every move is listed in the
+report.
+
+Two things it deliberately does not do:
+
+- **`[[wikilink]]`s pointing at the old name break.** An incremental run sees
+  only the pages that changed, so it cannot find (let alone rewrite) the
+  links elsewhere in the vault. The rename is *reported*, not repaired — fix
+  the links yourself, or don't.
+- **A file already sitting at the destination is never overwritten.** The old
+  file is left where it is and Roam's content is merged into the destination;
+  you then have two files for one page, with your local-only blocks in the
+  orphan. That is reported in `errors` (so the run is not clean) rather than
+  resolved by clobbering a file that may hold writing which cannot be fetched
+  again.
+
+### Deletions in Roam are not propagated
+
+Consistent with the daily sync's third merge rule: a block or a page you
+delete in Roam **stays in the vault**. A block that was synced once and is
+gone from Roam now is kept and counted as `roam_gone_kept`; a page whose uid
+Roam no longer answers for is simply skipped, and its `.note.md` is left
+alone. Deleting your copy of something is not this plugin's call to make. If
+you want it gone from the vault, delete the file (or the block) there.
+
+### CLI usage
+
+```
+notemd roam-sync [--since yyyy-MM-dd] [--graph GRAPH] [--dry-run] [--json]
+```
+
+- `--since` — backfill from an explicit day instead of the stored watermark,
+  read as **local** midnight (the same day boundary `--date`, the daily
+  calendar and the first-run default use; reading it as UTC would start the
+  scan hours into the morning east of Greenwich and drop that morning's
+  edits). It does not rewind the ledger.
+- `--graph` — which Roam graph, if the `roam` CLI is connected to more than
+  one. The first run that names one binds the vault's ledger to it; a later
+  run naming a different graph is refused (see *The ledger* above).
+- `--dry-run` — list what a real run would sync — **every page and the exact
+  path it would land at** (`pages`), plus the renames it would perform — and
+  **write nothing at all**: no note, no file move, no ledger, no watermark.
+  The report comes back with `"dry_run": true` and `"to": null` (a dry run
+  persists no watermark, so it has none to report).
+- `--json` — a single JSON envelope on stdout instead of plain text.
+
+```json
+{"ok":true,"data":{"from":"2026-08-03T11:58:41.185Z","to":"2026-08-04T09:12:00.000Z","scanned":12,"synced":9,"skipped":2,"failed":1,"pages":[{"uid":"8IFJWtnad","title":"新名","rel":"wikipage/新名.note.md","wrote":true}],"renamed":[{"uid":"8IFJWtnad","from":"wikipage/旧名.note.md","to":"wikipage/新名.note.md"}],"errors":["…"],"dry_run":false}}
+```
+
+`scanned` may exceed `synced + skipped + failed`: a failure stops the run and
+the pages after it are left for the next one. `skipped` counts pages that
+needed no change — gone from Roam, blockless, or already byte-for-byte what
+Roam holds. `failed` is at most 1.
+
+`pages` names every page the run **routed** — its uid, its Roam title, the
+vault-relative path it landed at, and whether that file changed (`wrote`).
+On a dry run `wrote` is `true` for every entry: nothing was written or
+compared, so it says only "a real run would deal with this one" rather than
+guessing. Pages Roam no longer has, and blockless tag pages, have no target
+path and so are not listed — `pages` is deliberately not the same length as
+`scanned`.
+
+### Exit codes
+
+Both `roam-day` and `roam-sync` use the same codes, and a **cron job should
+check them**:
+
+| code | meaning |
+|---|---|
+| `0` | success, and the run was clean |
+| `1` | an unexpected host-side error before the plugin ran |
+| `2` | bad invocation — a required argument was missing |
+| `3` | the plugin is disabled, not installed, or the v2 runtime is off |
+| `4` | the run failed, **or finished with problems** |
+| `127` | no such `notemd` subcommand at all |
+
+Note the second half of `4`. A run that synced every page it found but hit an
+unreadable ledger, or refused a rename because a file was already at the
+destination, has `failed: 0` and a non-empty `errors` — and it is **not**
+clean, because it may be under-scanning. Such a run exits `4` with
+`{"ok":false,"error":{"code":"plugin_failed","message":"…"}}`, rather than
+reporting success. Everything the plugin itself rejects lands here too,
+including no vault configured, the `roam` CLI missing or not connected, a
+`--graph` the ledger disagrees with, and an invalid `--since` (the plugin
+validates it, not the argument parser).
+
+**Exiting `4` does not throw the run away.** The `message` leads with the
+counts (including `renamed=`), names every file that moved on its own line —
+you need those, because the `[[wikilink]]`s pointing at the old names are
+broken now and nothing else will tell you — and ends with `report: {…}`, the
+complete JSON report. So a script can still read every count, path and rename
+out of a failed run:
+
+```sh
+notemd roam-sync --json | jq -r '.error.message // ""' | sed -n 's/^ *report: //p' | jq .pages
+```
+
+The **plugin window** does not go through this contract at all: it gets the
+report either way and shows the statistics, the page list and the renames
+next to the errors, rather than a bare red banner for a run that may have
+synced forty pages.
+
+**Builds up to and including 6.803.1 exited `0` from every plugin
+subcommand**, whatever happened: Tauri's exit path discarded the code the CLI
+had computed. A cron job could not tell a failed sync from a good one. Fixed
+after 6.803.1 — if you are scripting against an older build, do not trust
+`$?` there.
+
+## Known trade-off: `#.rm-hide` / `#.rm-private`
+
+Roam's UI hides blocks tagged `#.rm-hide` from view, and `#.rm-private` is
+used the same way for material meant to stay out of sight. Neither tag is
+visible to the CLI's `datalog-query`, which has no way to distinguish
+"hidden" from "visible" — a tagged block or page is fetched, converted and
+merged in like any other, by both the daily sync and the incremental sync.
+Neither of them filters those tags. If you rely on them to keep
+scratch/meta/private material out of your Roam UI, be aware it will still
+show up in the synced `.note.md` files.
 
 ## CLI usage
 

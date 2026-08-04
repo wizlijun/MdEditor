@@ -373,3 +373,165 @@ describe('fenced answer nodes', () => {
     expect([...t.nodes.values()][0].status).toBe('adopted')
   })
 })
+
+// 一个空块被序列化成 `- ` —— 破折号、空格、然后什么都没有。
+// 于是「行尾空格」承载了语义:编辑器、格式化器、git 钩子都会例行删掉它,
+// 而 file-over-app 明确把「vault 文件被外部改过」当作常态而非异常。
+// 空格被删掉后,`-` 走到「无法归类的行」兜底分支:平铺时降级成内容为 "-" 的根节点
+// (再存一次变 `- -`,每次保存多退化一层);嵌套时更狠——子节点整个消失,
+// 它的 created::/updated::/id:: 变成父节点内容里的可见文本。
+// 修法:解析端把「只有缩进和一个 `-`」的行也认作空 bullet;序列化端一个字节不改。
+describe('a bare `-` is an empty bullet (trailing space must not be load-bearing)', () => {
+  it('parses `-` alone as an empty bullet, not as content "-"', () => {
+    const t = parseOutline('-\n')
+    const nodes = [...t.nodes.values()]
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].content).toBe('')
+  })
+
+  it('attaches following property lines to the empty bullet itself', () => {
+    const t = parseOutline('- kept\n-\n  created:: 2026-08-03T14:11:47.891Z\n  id:: X\n')
+    const nodes = [...t.nodes.values()]
+    expect(nodes.map(n => n.content)).toEqual(['kept', ''])
+    // 属性必须落在空 bullet 上,而不是回填给上一个节点
+    expect(nodes[0].createdAt).toBeUndefined()
+    expect(nodes[1].createdAt).toBe('2026-08-03T14:11:47.891Z')
+    expect(nodes[1].id).toBe('X')
+  })
+
+  it('keeps a nested empty bullet as a real child (the data-destroying case)', () => {
+    const t = parseOutline('- parent\n  -\n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n')
+    const nodes = [...t.nodes.values()]
+    expect(nodes).toHaveLength(2)
+    const parent = nodes.find(n => n.content === 'parent')!
+    const child = t.nodes.get('x')!
+    expect(child).toBeDefined()
+    expect(child.content).toBe('')
+    expect(child.parentId).toBe(parent.id)
+    expect(child.createdAt).toBe('2026-08-03T14:11:47.891Z')
+    // 父节点内容里绝不能出现属性行的字面文本
+    expect(parent.content).toBe('parent')
+  })
+
+  it('parses `- ` (with the trailing space) exactly as before', () => {
+    const withSpace = parseOutline('- parent\n  - \n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n')
+    const withoutSpace = parseOutline('- parent\n  -\n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n')
+    const shape = (t: OutlineTree) =>
+      [...t.nodes.values()].map(n => [n.content, n.parentId === null, n.createdAt])
+    expect(shape(withoutSpace)).toEqual(shape(withSpace))
+    expect(roundTrip('- parent\n  - \n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n'))
+      .toBe('- parent\n  - \n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n')
+  })
+
+  it('re-serialises a stripped file back to `- ` and then holds still', () => {
+    const stripped = '- parent\n  -\n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n'
+    const healed = '- parent\n  - \n    created:: 2026-08-03T14:11:47.891Z\n    id:: x\n'
+    // 序列化端未改,故写回仍带行尾空格——但这一步不再丢数据
+    expect(roundTrip(stripped)).toBe(healed)
+    // 再解析一次稳定:不退化成 `- -`,也不左右摇摆
+    expect(roundTrip(healed)).toBe(healed)
+    expect(roundTrip(roundTrip(stripped))).toBe(healed)
+  })
+
+  it('leaves ---, -- and `- -` alone', () => {
+    // 正文里的 --- / -- 仍是无法归类的行,降级成根节点内容,而不是空 bullet
+    const rule = [...parseOutline('- A\n---\n').nodes.values()]
+    expect(rule.map(n => n.content)).toEqual(['A', '---'])
+    const dashes = [...parseOutline('- A\n--\n').nodes.values()]
+    expect(dashes.map(n => n.content)).toEqual(['A', '--'])
+    // front-matter 围栏仍在 bullet 扫描之前被切走
+    const t = parseOutline('---\ntitle: x\n---\n- A\n')
+    expect(t.frontmatter).toBe('title: x')
+    expect([...t.nodes.values()].map(n => n.content)).toEqual(['A'])
+    // `- -` 依然是内容为 "-" 的 bullet
+    expect([...parseOutline('- -\n').nodes.values()].map(n => n.content)).toEqual(['-'])
+    expect(roundTrip('- -\n')).toBe('- -\n')
+  })
+
+  it('an odd-indent `-` behaves exactly like an odd-indent `- x` today', () => {
+    // 缩进单位仍是两空格:3 空格的 bullet 今天不是 bullet,而是上一节点的续行。
+    // 空 bullet 不得改变这条规则,只是把 `- x` 换成 `-` 而已。
+    const oddWithText = [...parseOutline('- A\n   - x\n').nodes.values()]
+    expect(oddWithText.map(n => n.content)).toEqual(['A\n - x'])
+    const odd = [...parseOutline('- A\n   -\n').nodes.values()]
+    expect(odd.map(n => n.content)).toEqual(['A\n -'])
+    // 没有上一节点可续行时,两者同样降级为根层节点
+    expect([...parseOutline('   - x\n').nodes.values()].map(n => n.content)).toEqual(['- x'])
+    expect([...parseOutline('   -\n').nodes.values()].map(n => n.content)).toEqual(['-'])
+  })
+})
+
+// 修复 F。和「行尾空格」同病:一个看不见的字节决定节点存不存在。
+// JS 里 `.` 和 `$` 都把 `\r` 当行终止符,所以以 `\r` 结尾的 bullet 行匹配不上
+// bullet 正则,整行掉进兜底分支——子节点被父节点吞掉、属性行变成正文,和空格被删
+// 一模一样。而 Rust 的 regex crate 里 `.` 匹配 `\r`,于是两个移植版对同一个 CRLF
+// 文件解析出的树根本不同。CRLF 是从外面进来的(Windows 编辑器、core.autocrlf
+// 检出、同步过来的文件),正是 file-over-app 承诺要扛住的流量。
+//
+// 取法:在 parseOutline 入口把所有 `\r` 去掉——「行结束符噪音,不是内容」。
+// 一个地方、两边一模一样,不用去推 JS 与 Rust 的正则方言差异。
+// 代价明说:CRLF 文件读进来再写回去会变成 LF。
+//
+// 本 describe 里的输入与期望值与 Rust 侧 outline.rs 的 crlf 测试逐字对应——
+// 「两个移植版对同一输入给出同一棵树」才是这里真正的产品要求。
+describe('CRLF / 行尾 \\r 是行结束符噪音,不是内容(修复 F)', () => {
+  const LF = '---\ntitle: x\ncreated: y\n---\n- parent\n  - child\n    created:: 2026-08-03T14:11:47.891Z\n    id:: c1\n- after\n'
+  const CRLF = LF.replace(/\n/g, '\r\n')
+
+  it('a CRLF file parses to the same tree as its LF twin', () => {
+    expect(serializeOutline(parseOutline(CRLF))).toBe(serializeOutline(parseOutline(LF)))
+    // 而且就是 LF 原文——序列化端未动,写回即归一为 LF
+    expect(serializeOutline(parseOutline(CRLF))).toBe(LF)
+    expect(parseOutline(CRLF).frontmatter).toBe('title: x\ncreated: y')
+  })
+
+  it('CRLF 下嵌套子节点仍是真子节点(数据丢失形状)', () => {
+    const t = parseOutline('- parent\r\n  - child\r\n    created:: 2026-08-03T14:11:47.891Z\r\n    id:: x\r\n')
+    const nodes = [...t.nodes.values()]
+    expect(nodes).toHaveLength(2)
+    const parent = nodes.find(n => n.content === 'parent')!
+    const child = t.nodes.get('x')!
+    expect(child.content).toBe('child')
+    expect(child.parentId).toBe(parent.id)
+    expect(child.createdAt).toBe('2026-08-03T14:11:47.891Z')
+    expect(parent.content).toBe('parent')   // 属性行绝不许漏进父节点正文
+  })
+
+  it('LF 文件里一条落单的 \\r 结尾行(vault 里的真实形状)', () => {
+    // dailynote/2024/2024-05-16.note.md:115 就是这个:整篇 LF,唯独一行以 \r 收尾。
+    const t = parseOutline('- p\n  - abc\r\n    x\n    id:: k\n')
+    const nodes = [...t.nodes.values()]
+    expect(nodes).toHaveLength(2)
+    expect(t.nodes.get('k')!.content).toBe('abc\nx')
+    expect(nodes.find(n => n.content === 'p')!.content).toBe('p')
+  })
+
+  it('行中间的落单 \\r 一并归一(两侧同样处理)', () => {
+    expect([...parseOutline('- a\rb\n').nodes.values()].map(n => n.content)).toEqual(['ab'])
+  })
+
+  it('一份文件里混用行尾', () => {
+    expect([...parseOutline('- a\r\n- b\n- c\r\n').nodes.values()].map(n => n.content)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('围栏 raw 模式下的 \\r 同样归一', () => {
+    const crlf = '- ```\r\n  type:: answer\r\n  x\r\n  ```\r\n'
+    const lf = crlf.replace(/\r\n/g, '\n')
+    expect(serializeOutline(parseOutline(crlf))).toBe(serializeOutline(parseOutline(lf)))
+    const t = parseOutline(crlf)
+    const nodes = [...t.nodes.values()]
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].content).toBe('```\ntype:: answer\nx\n```')
+  })
+
+  it('CRLF 的 --- front-matter 仍正确切分', () => {
+    const t = parseOutline('---\r\ntitle: x\r\ncreated: y\r\n---\r\n- A\r\n')
+    expect(t.frontmatter).toBe('title: x\ncreated: y')
+    expect([...t.nodes.values()].map(n => n.content)).toEqual(['A'])
+    expect(serializeOutline(t)).toBe('---\ntitle: x\ncreated: y\n---\n- A\n')
+  })
+
+  it('没有 \\r 的文件行为完全不变', () => {
+    expect(serializeOutline(parseOutline(LF))).toBe(LF)
+  })
+})

@@ -168,3 +168,95 @@ export function syncDay(date: string, opts?: { graph?: string; roamPath?: string
     ...(opts?.roamPath ? { roam_path: opts.roamPath } : {}),
   })
 }
+
+/** One page whose Roam title changed since the last sync, and the file move
+ *  that followed (backend `incremental::Renamed`). `[[wikilink]]`s elsewhere
+ *  in the vault still point at the old name — this is the one place the user
+ *  learns which files moved. */
+export interface SyncRenamed {
+  uid: string
+  from: string
+  to: string
+}
+
+/** One page the run placed, and where (backend `incremental::Planned`).
+ *
+ *  This is what makes `--dry-run` and the window's pre-flight answer the
+ *  question they are asked — *which* pages, at *which* paths — rather than
+ *  just how many. `wrote` is "this changed on disk" after a real run, and
+ *  "a real run would deal with this one" after a dry run (which writes and
+ *  compares nothing, so it declines to guess).
+ *
+ *  Pages Roam no longer has, and blockless tag pages, have no target path and
+ *  so are not listed — `pages.length` is deliberately not `scanned`. */
+export interface SyncPlanned {
+  uid: string
+  title: string
+  rel: string
+  wrote: boolean
+}
+
+/** `plugin.sync_since`'s result (backend `incremental::SyncReport`, plus the
+ * `ok` flag `sync_report_value` stamps on it).
+ *
+ * Resolved for BOTH a clean and a not-clean run. `ok` — not `failed === 0` —
+ * is what says the run was clean: `failed` counts only the one page that
+ * stopped the run outright, while an unreadable ledger or a rename the sync
+ * refused to perform report `failed === 0` with a non-empty `errors` on
+ * purpose. A report with `ok === false` must be shown as a problem, never as
+ * a success banner.
+ *
+ * It resolves rather than rejecting so the window can show what the run *did*
+ * next to what went wrong. The CLI is the one that turns a not-clean run into
+ * a rejection, because exit 4 is the only "not clean" the host's generic CLI
+ * layer can express (`cli_sync_outcome` in `plugin.rs`).
+ *
+ * A rejected `syncSince` therefore means the run never produced a report at
+ * all — no vault, no `roam` CLI, an unsafe folder name, or a `--graph` that
+ * disagrees with the ledger's. */
+export interface SyncReport {
+  /** `errors.length === 0`. See above: this, not `failed`, is "clean". */
+  ok: boolean
+  from: string | null
+  to: string | null
+  scanned: number
+  synced: number
+  skipped: number
+  failed: number
+  pages: SyncPlanned[]
+  renamed: SyncRenamed[]
+  errors: string[]
+  dry_run: boolean
+}
+
+/** `plugin.sync_since` — sync everything changed since the ledger's
+ *  watermark (or `since`, when given, which overrides it for one run without
+ *  moving the watermark backwards). Resolves with a report whether or not the
+ *  run was clean; check `ok`. Rejects only when there is no report to give —
+ *  see `SyncReport`. */
+export function syncSince(opts?: {
+  since?: string
+  graph?: string
+  roamPath?: string
+  dryRun?: boolean
+}): Promise<SyncReport> {
+  return pluginRequest('sync_since', {
+    ...(opts?.since ? { since: opts.since } : {}),
+    ...(opts?.graph ? { graph: opts.graph } : {}),
+    ...(opts?.roamPath ? { roam_path: opts.roamPath } : {}),
+    ...(opts?.dryRun ? { dry_run: opts.dryRun } : {}),
+  })
+}
+
+/** `plugin.sync_status`'s result: the ledger's last-synced watermark, or
+ *  `null` when there has never been a sync (backend `sync_status`, ledger-only
+ *  — no fetch, safe to call on mount). */
+export interface SyncStatus {
+  last_synced_at: string | null
+}
+
+/** `plugin.sync_status` — read the ledger's last-synced timestamp without
+ *  triggering a sync. */
+export function syncStatus(): Promise<SyncStatus> {
+  return pluginRequest('sync_status')
+}

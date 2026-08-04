@@ -122,6 +122,53 @@ pub fn fetch_day(exe: &Path, graph: Option<&str>, uid: &str) -> Result<serde_jso
     serde_json::from_str(&out).map_err(|e| format!("unreadable datalog output: {e}"))
 }
 
+/// Block dimension: max `:edit/time` across a page's blocks, filtered
+/// server-side to strictly-after `?since`. Catches content edits; misses a
+/// page renamed or created without its blocks changing.
+pub fn changed_blocks_query() -> String {
+    r#"[:find ?uid (max ?t) :keys uid edited :in $ ?since
+    :where [?p :block/uid ?uid] [?p :node/title _]
+           [?b :block/page ?p] [?b :edit/time ?t] [(> ?t ?since)]]"#
+        .to_string()
+}
+
+/// Page-entity dimension: the page's own `:edit/time`, filtered server-side
+/// to strictly-after `?since`. Catches renames and page creation; for a
+/// daily note this timestamp is the moment of creation, so it misses almost
+/// every content edit.
+pub fn changed_pages_query() -> String {
+    r#"[:find ?uid ?t :keys uid edited :in $ ?since
+    :where [?p :node/title _] [?p :block/uid ?uid]
+           [?p :edit/time ?t] [(> ?t ?since)]]"#
+        .to_string()
+}
+
+/// Run both change-discovery queries against the graph, `?since` bound via
+/// `--inputs` so the filtering happens server-side and the result sets stay
+/// small. `graph` is optional — the CLI auto-selects when only one graph is
+/// configured, same as `fetch_day`.
+pub fn fetch_changed(
+    exe: &Path,
+    graph: Option<&str>,
+    since_ms: i64,
+) -> Result<(serde_json::Value, serde_json::Value), String> {
+    let inputs = format!("[{since_ms}]");
+    let run_one = |query: &str| -> Result<serde_json::Value, String> {
+        let mut args: Vec<&str> = vec!["datalog-query", "--query", query, "--inputs", &inputs];
+        if let Some(g) = graph.filter(|g| !g.is_empty()) {
+            args.push("--graph");
+            args.push(g);
+        }
+        let out = run(exe, &args, Duration::from_secs(60))?;
+        serde_json::from_str(&out).map_err(|e| format!("unreadable datalog output: {e}"))
+    };
+    let blocks_query = changed_blocks_query();
+    let pages_query = changed_pages_query();
+    let blocks = run_one(&blocks_query)?;
+    let pages = run_one(&pages_query)?;
+    Ok((blocks, pages))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +215,19 @@ mod tests {
         assert!(q.contains(r#"[:edit/time :as "edit-time"]"#));
         // Unbounded recursion: a fixed-depth pattern silently truncates deep outlines.
         assert!(q.contains("{:block/children ...}"));
+    }
+
+    #[test]
+    fn both_changed_queries_filter_server_side_and_target_the_right_attribute() {
+        let b = changed_blocks_query();
+        assert!(b.contains(":in $ ?since"));
+        assert!(b.contains("[(> ?t ?since)]"));
+        assert!(b.contains("[?b :block/page ?p]"), "the block dimension must join through :block/page");
+        assert!(b.contains("(max ?t)"));
+
+        let p = changed_pages_query();
+        assert!(p.contains(":in $ ?since"));
+        assert!(p.contains("[?p :edit/time ?t]"));
+        assert!(!p.contains(":block/page"), "the page dimension must NOT join through blocks");
     }
 }

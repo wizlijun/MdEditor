@@ -4,9 +4,11 @@
 //! both Rust and TypeScript — is an integration test, and an integration test
 //! can only reach a library crate.
 pub mod adopt;
+pub mod changed;
 pub mod convert;
 pub mod dates;
 pub mod discover;
+pub mod incremental;
 pub mod ledger;
 pub mod merge;
 pub mod outline;
