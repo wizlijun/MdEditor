@@ -244,6 +244,8 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
             // The main window's Agent workspace: answer the open questions in
             // ONE note, rather than sweeping the whole vault.
             "run-note" => self.run_note(host, &params.context),
+            // 宿主 host.agent.run 中转:任意任务 + 调用方拼好的定位 prompt。
+            "run-task" => self.run_task(host, &params.context),
             "run-status" => self.run_status(&params.context),
             other => Err(format!("unknown command '{other}'")),
         }
@@ -503,6 +505,30 @@ impl ClaudeAgentPlugin {
         )
     }
 
+    /// Run any task with a caller-composed prompt — the host relays
+    /// `host.agent.run` here. `note_path` (optional) scopes permissions to
+    /// that one file via the task's settings.scoped.json, same as run-note.
+    fn run_task(&mut self, host: &sdk::Host, context: &Value) -> Result<Value, String> {
+        let task_id = context
+            .get("task")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or("run-task needs a 'task'")?;
+        let prompt = context.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+        let note_path = context.get("note_path").and_then(|v| v.as_str()).unwrap_or("");
+        host.log_info(&format!("run-task {task_id}"));
+        self.start(
+            host,
+            json!({
+                "task": task_id,
+                "prompt": prompt,
+                "use_context": false,
+                "note_path": note_path,
+            }),
+            "relay",
+        )
+    }
+
     /// Where a run stands, for the window's progress display. Reads the lock,
     /// the progress snapshot and the record — all on disk, so a run started by
     /// another process reports just as accurately as one we started.
@@ -686,6 +712,56 @@ mod tests {
             .map(|t| t.id)
             .collect();
         assert_eq!(ids, vec![NOTE_TASK, "selfcheck"]);
+        std::env::remove_var("NOTEMD_SHARED_CONFIG");
+    }
+
+    /// The host relays `host.agent.run` straight into this command; the one
+    /// hard requirement is a task id to run — same wording contract as
+    /// `start`'s own 'task' check, so callers can match on it either way.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_task_requires_a_task_id() {
+        let _env = env_guard();
+        let vault = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap().path().join("config.json");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cfg,
+            format!(r#"{{"version":1,"sotvault":"{}"}}"#, vault.path().display()),
+        )
+        .unwrap();
+        std::env::set_var("NOTEMD_SHARED_CONFIG", &cfg);
+
+        let (mut to_plugin, plugin_stdin) = tokio::io::duplex(16 * 1024);
+        let (plugin_stdout, from_plugin) = tokio::io::duplex(16 * 1024);
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(sdk::serve_io(
+                    ClaudeAgentPlugin::new(),
+                    plugin_stdin,
+                    plugin_stdout,
+                ));
+        });
+
+        to_plugin
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:run-task\"}}\n\
+                  {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"command.execute\",\"params\":{\"command\":\"run-task\",\"context\":{\"prompt\":\"x\"}}}\n",
+            )
+            .await
+            .unwrap();
+
+        let answered = await_response(
+            from_plugin,
+            |v| v.get("id").and_then(|i| i.as_u64()) == Some(2),
+            "run-task",
+        )
+        .await;
+        let err = answered["error"]["message"].as_str().unwrap_or_default();
+        assert!(err.contains("'task'"), "err: {err}");
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
     }
 
