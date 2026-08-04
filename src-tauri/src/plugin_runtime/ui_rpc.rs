@@ -709,6 +709,38 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
         crate::show_main_window(&self.app);
         Ok(())
     }
+
+    /// host.agent.* 中转:同步 trait 方法,但 lifecycle 是 async——spawn 到
+    /// tauri 异步运行时,std channel 等结果。会阻塞调用线程(进程通道 = 该
+    /// 插件的协议读循环;UI 通道 = 一个 tokio worker)最多 30s;claude-agent
+    /// 的 run-task/run-status 都是"登记即返回",实际耗时毫秒级,30s 只兜
+    /// 冷启动(ensure_active 首次拉起插件进程)。
+    fn agent_execute(&self, command: &str, context: serde_json::Value) -> Result<serde_json::Value, String> {
+        const AGENT_PLUGIN: &str = "notemd.claude-agent";
+        let app = self.app.clone();
+        let command = command.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tauri::async_runtime::spawn(async move {
+            let out = async {
+                let lc = super::commands::get_or_register(&app, AGENT_PLUGIN)
+                    .map_err(|e| format!("agent_unavailable: {e}"))?;
+                lc.ensure_active(&super::lifecycle::Trigger::Command(command.clone()))
+                    .await
+                    .map_err(|e| format!("agent_unavailable: {e}"))?;
+                lc.execute(plugin_protocol::ExecuteCommandParams { command, context }).await
+            }
+            .await;
+            let _ = tx.send(out);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| Err("agent relay timeout".into()))
+    }
+
+    fn notify_user(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let (title, action) = crate::reminders::parse_notify_params(params)?;
+        let id = crate::reminders::push(title, action);
+        Ok(serde_json::json!({ "ok": true, "id": id }))
+    }
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────
@@ -735,6 +767,9 @@ mod tests {
         clipboard: Arc<Mutex<Vec<String>>>,
         /// recorded editor.open paths
         opened: Arc<Mutex<Vec<PathBuf>>>,
+        /// recorded `agent_execute`/`notify_user` calls: (kind, arg) where kind
+        /// is the relayed command ("run-task"/"run-status") or "notify".
+        agent_calls: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
     }
 
     impl HostServices for StubServices {
@@ -761,6 +796,14 @@ mod tests {
         fn open_in_editor(&self, abs_path: &Path) -> Result<(), String> {
             self.opened.lock().unwrap().push(abs_path.to_path_buf());
             Ok(())
+        }
+        fn agent_execute(&self, command: &str, context: serde_json::Value) -> Result<serde_json::Value, String> {
+            self.agent_calls.lock().unwrap().push((command.to_string(), context));
+            Ok(serde_json::json!({ "run_id": "r-test" }))
+        }
+        fn notify_user(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+            self.agent_calls.lock().unwrap().push(("notify".into(), params.clone()));
+            Ok(serde_json::json!({ "ok": true, "id": 1 }))
         }
     }
 
@@ -1318,5 +1361,82 @@ mod tests {
         let e = r.error.unwrap();
         assert_eq!(e.code, proto::ERR_INTERNAL);
         assert!(e.message.contains("escapes the vault"), "expected 'escapes the vault' in: {}", e.message);
+    }
+
+    // ── host.agent.*/host.notify on the UI RPC bridge ──────────────────────
+    //
+    // dispatch_with's `host.agent.run`/`host.agent.status`/`host.notify` arms
+    // are a SEPARATE match from host_api::make_sink's (子项目②b: process
+    // channel vs UI channel are two independent dispatchers). Task 3's tests
+    // only covered the process channel via make_sink; these pin the UI bridge's
+    // own command-name mapping and capability gate so a "run-task"/"run-status"
+    // swap or a missing capability check here would fail a test.
+
+    #[tokio::test]
+    async fn host_agent_run_maps_to_run_task_with_capability() {
+        let s = StubServices::default();
+        let calls = s.agent_calls.clone();
+        let r = run(
+            &s,
+            &["agent"],
+            "host.agent.run",
+            serde_json::json!({"task": "ai-read-ebook", "prompt": "p"}),
+        )
+        .await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert_eq!(r.result.unwrap()["run_id"], "r-test");
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "run-task");
+        assert_eq!(calls[0].1, serde_json::json!({"task": "ai-read-ebook", "prompt": "p"}));
+    }
+
+    #[tokio::test]
+    async fn host_agent_status_maps_to_run_status_with_capability() {
+        let s = StubServices::default();
+        let calls = s.agent_calls.clone();
+        let r = run(
+            &s,
+            &["agent"],
+            "host.agent.status",
+            serde_json::json!({"task": "ai-read-ebook", "run_id": "r1"}),
+        )
+        .await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "run-status");
+        assert_eq!(calls[0].1, serde_json::json!({"task": "ai-read-ebook", "run_id": "r1"}));
+    }
+
+    #[tokio::test]
+    async fn host_notify_dispatches_to_notify_user_with_capability() {
+        let s = StubServices::default();
+        let calls = s.agent_calls.clone();
+        let params = serde_json::json!({"title": "t", "action": {"kind": "open_path", "path": "/x"}});
+        let r = run(&s, &["notify"], "host.notify", params.clone()).await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert_eq!(r.result.unwrap(), serde_json::json!({"ok": true, "id": 1}));
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "notify");
+        assert_eq!(calls[0].1, params);
+    }
+
+    #[tokio::test]
+    async fn host_agent_and_notify_without_capability_are_denied_and_stub_untouched() {
+        let s = StubServices::default();
+        let calls = s.agent_calls.clone();
+
+        let r = run(&s, &[], "host.agent.run", serde_json::json!({})).await;
+        assert_eq!(r.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+
+        let r = run(&s, &[], "host.agent.status", serde_json::json!({})).await;
+        assert_eq!(r.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+
+        let r = run(&s, &[], "host.notify", serde_json::json!({})).await;
+        assert_eq!(r.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+
+        assert!(calls.lock().unwrap().is_empty(), "stub must not be called when capability is denied");
     }
 }
