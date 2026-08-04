@@ -27,6 +27,10 @@ export const CONCEPT_TYPE = {
   decisionArchive: 'Decision Archive',
   /** agent 写进 `answers/` 的长答案 */
   answer: 'Answer',
+  /** 奇思妙想:用户写下的 idea 原文(plugins-src/idea-spark) */
+  idea: 'Idea',
+  /** 奇思妙想:agent 产出的论证文档 `<name>.proof.md` */
+  ideaProof: 'Idea Proof',
   /** vault 根的 AGENTS.md(模板见 src-tauri/templates/AGENTS.md) */
   vaultConventions: 'Vault Conventions',
 } as const
