@@ -6,6 +6,14 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { TASK_FILES, seedTaskTemplate, TASK_ID } from './task-template'
+// `?raw` is Vite's built-in "import file contents as a string" suffix (typed
+// by vite/client, already in this package's tsconfig `types`) — no node:fs
+// needed, and it works identically under vitest since it shares Vite's
+// module graph. Full-text fixture, copied verbatim from the brief's
+// CLAUDE.md block, so a drift in any of the six protocol steps or the
+// frontmatter field list fails loudly instead of slipping past a couple of
+// `toContain` spot-checks.
+import CLAUDE_MD_FIXTURE from './__fixtures__/idea-proof-claude.md?raw'
 
 describe('idea-proof template', () => {
   it('contains the five files with parseable json and okf-frontmatter protocol', () => {
@@ -16,6 +24,10 @@ describe('idea-proof template', () => {
     expect(TASK_FILES[`.notemd/agent-tasks/${TASK_ID}/CLAUDE.md`]).toContain('type: Idea Proof')
     expect(TASK_FILES[`.notemd/agent-tasks/${TASK_ID}/CLAUDE.md`]).toContain('绝不修改 idea 原文')
     JSON.parse(TASK_FILES[`.notemd/agent-tasks/${TASK_ID}/.claude/settings.json`])
+  })
+
+  it('CLAUDE.md matches the brief verbatim, full text (not just spot-checked substrings)', () => {
+    expect(TASK_FILES[`.notemd/agent-tasks/${TASK_ID}/CLAUDE.md`]).toBe(CLAUDE_MD_FIXTURE)
   })
 
   it('seed is idempotent: existing files are never overwritten', async () => {
@@ -52,17 +64,35 @@ describe('idea-proof template', () => {
     const sh = TASK_FILES[`.notemd/agent-tasks/${TASK_ID}/precheck.sh`]
     expect(sh.startsWith('#!/bin/sh\n')).toBe(true)
     expect(sh).toContain('$NOTEMD_NOTE')
+    expect(sh).toContain('[ -n "$NOTEMD_NOTE" ] || { echo "缺少 idea 文件参数"; exit 1; }')
+    expect(sh).toContain(
+      '[ -s "$NOTEMD_NOTE" ] || { echo "idea 文件不存在或为空:$NOTEMD_NOTE"; exit 1; }',
+    )
     expect(sh.trim().endsWith('exit 0')).toBe(true)
   })
 
-  it('settings.json and settings.scoped.json parse and allow WebSearch/WebFetch (idea-proof needs prior-art checks)', () => {
+  it('settings.json declares its full allow/deny lists (a dropped Write/Edit entry would silently brick .proof.md output)', () => {
     const settings = JSON.parse(TASK_FILES[`.notemd/agent-tasks/${TASK_ID}/.claude/settings.json`])
-    expect(settings.permissions.allow).toContain('WebSearch')
-    expect(settings.permissions.allow).toContain('WebFetch')
+    expect(settings.permissions.allow).toEqual([
+      'Read(${VAULT}/**)',
+      'Write(${VAULT}/**/*.proof.md)',
+      'Edit(${VAULT}/**/*.proof.md)',
+      'WebSearch',
+      'WebFetch',
+    ])
     expect(settings.permissions.deny).toEqual(['Bash', 'Task'])
+  })
 
+  it('settings.scoped.json declares its full allow/deny lists', () => {
     const scoped = JSON.parse(TASK_FILES[`.notemd/agent-tasks/${TASK_ID}/.claude/settings.scoped.json`])
-    expect(scoped.permissions.allow).toContain('Read(${NOTE})')
+    expect(scoped.permissions.allow).toEqual([
+      'Read(${NOTE})',
+      'Read(${VAULT}/**)',
+      'Write(${VAULT}/**/*.proof.md)',
+      'Edit(${VAULT}/**/*.proof.md)',
+      'WebSearch',
+      'WebFetch',
+    ])
     expect(scoped.permissions.deny).toEqual(['Bash', 'Task'])
   })
 
