@@ -20,6 +20,8 @@ export const CONCEPT_TYPE = {
   wikiPage: 'Wiki Page',
   /** 电子书导入产出的 `book.md` */
   book: 'Book',
+  /** AI 先读:电子书摘要 `YYYY-MM-DD-summary.md`(claude-agent ai-read-ebook 任务产出) */
+  bookSummary: 'Book Summary',
   /** Reading Insights 的阅读数据报告 */
   readingReport: 'Reading Report',
   /** 决策日志:未决看板 / 已裁决归档 */

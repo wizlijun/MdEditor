@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(${NOTE})",
+      "Read(${SOURCE})",
+      "Write(${VAULT}/**/*-summary.md)",
+      "Edit(${VAULT}/**/*-summary.md)"
+    ],
+    "deny": ["Bash", "Grep", "Glob", "Task", "WebSearch", "WebFetch"]
+  }
+}

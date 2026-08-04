@@ -1,0 +1,7 @@
+{
+  "name": "AI 阅读电子书",
+  "description": "Read an imported book's book.md and write a date-stamped outline digest beside it.",
+  "prompt": "根据 book.md,生成全书的大纲摘要,让我一眼能看到讲的是什么,按照我可能关注的方式,推荐优先阅读,突出核心观点和洞察,突出反常识的信息,生成简要的 md,以方便我后续追问阅读。输出位置、文件名与 frontmatter 严格遵循 CLAUDE.md 的协议。",
+  "max_turns": 80,
+  "timeout_seconds": 1800
+}

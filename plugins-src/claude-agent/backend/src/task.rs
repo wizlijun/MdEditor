@@ -107,6 +107,21 @@ const BUILTIN: &[(&str, &[(&str, &str)])] = &[
             ),
         ],
     ),
+    (
+        "ai-read-ebook",
+        &[
+            ("task.json", include_str!("../templates/ai-read-ebook/task.json")),
+            ("CLAUDE.md", include_str!("../templates/ai-read-ebook/CLAUDE.md")),
+            (
+                ".claude/settings.json",
+                include_str!("../templates/ai-read-ebook/settings.json"),
+            ),
+            (
+                ".claude/settings.scoped.json",
+                include_str!("../templates/ai-read-ebook/settings.scoped.json"),
+            ),
+        ],
+    ),
 ];
 
 /// Built-in tasks that have been renamed, oldest name first. Without a
@@ -260,14 +275,14 @@ mod tests {
     fn seeds_both_builtin_templates_on_a_fresh_vault() {
         let v = tempfile::tempdir().unwrap();
         let wrote = seed_builtin_templates(v.path());
-        // 3 files each, plus answer-note-question's precheck script.
-        assert_eq!(wrote.len(), 8, "seeded: {wrote:?}");
+        // 3 files each + answer-note-question's precheck + ai-read-ebook's 4 files.
+        assert_eq!(wrote.len(), 12, "seeded: {wrote:?}");
         assert!(task_dir(v.path(), "selfcheck").join("CLAUDE.md").exists());
         assert!(task_dir(v.path(), "answer-note-question")
             .join(".claude/settings.json")
             .exists());
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec!["answer-note-question", "selfcheck"]);
+        assert_eq!(ids, vec!["ai-read-ebook", "answer-note-question", "selfcheck"]);
     }
 
     #[test]
@@ -317,7 +332,7 @@ mod tests {
         seed_builtin_templates(v.path());
         assert!(migrate_renamed_tasks(v.path()).is_empty());
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec!["answer-note-question", "selfcheck"]);
+        assert_eq!(ids, vec!["ai-read-ebook", "answer-note-question", "selfcheck"]);
     }
 
     #[test]
@@ -365,7 +380,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
         let tasks = discover(v.path());
-        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks.len(), 3);
         assert!(tasks.iter().all(|t| !t.name.is_empty() && !t.prompt.is_empty()));
     }
 }

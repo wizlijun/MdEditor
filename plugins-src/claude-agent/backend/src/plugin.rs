@@ -720,7 +720,7 @@ mod tests {
             .into_iter()
             .map(|t| t.id)
             .collect();
-        assert_eq!(ids, vec![NOTE_TASK, "selfcheck"]);
+        assert_eq!(ids, vec!["ai-read-ebook", NOTE_TASK, "selfcheck"]);
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
     }
 
@@ -989,7 +989,7 @@ mod tests {
         task::seed_builtin_templates(v.path());
         let json = serde_json::to_value(overview(v.path())).unwrap();
         let first = &json[0];
-        assert_eq!(first["id"], "answer-note-question");
+        assert_eq!(first["id"], "ai-read-ebook");
         assert!(first["name"].is_string());
         assert_eq!(first["running"], false);
     }
