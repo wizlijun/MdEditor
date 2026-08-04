@@ -213,9 +213,10 @@ fn a_wiki_page_sync_writes_front_matter_a_yaml_reader_can_read() {
         ("u7", "2026", "wikipage/2026.note.md", "title: \"2026\""),
         // …and an ordinary one, which must NOT grow quotes it does not need.
         ("u8", "回顾/系统", "wikipage/回顾-系统.note.md", "title: 回顾/系统"),
-        // The shape the branch's end-to-end covered, unchanged.
+        // The daily note: a YAML 1.1 reader would resolve a bare `2026-08-02`
+        // to a date, so both writers quote it (`yaml11_ambiguous_pattern`).
         ("08-02-2026", "August 2nd, 2026", "dailynote/2026/2026-08-02.note.md",
-         "title: 2026-08-02"),
+         "title: \"2026-08-02\""),
     ];
 
     let dir = tempfile::tempdir().unwrap();

@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { CONCEPT_TYPE, touchConceptFrontmatter, conceptFileText, isReservedConceptName } from './concept'
+import {
+  CONCEPT_TYPE, touchConceptFrontmatter, conceptFileText, isReservedConceptName,
+  RESERVED_CONCEPT_NAMES,
+} from './concept'
 // @ts-expect-error - plain-JS lint core shared with scripts/okf-lint.mjs
-import { lintText } from '../../../scripts/okf-lint-core.mjs'
+import { lintText, RESERVED } from '../../../scripts/okf-lint-core.mjs'
 
 describe('touchConceptFrontmatter', () => {
   it('writes type first for a brand-new document', () => {
@@ -49,6 +52,25 @@ describe('touchConceptFrontmatter', () => {
   })
 })
 
+describe('touchConceptFrontmatter — 跨解析器的标量安全', () => {
+  it('quotes a date-shaped title so YAML 1.1 readers keep it a string', () => {
+    // 日记的 title 就是日期字符串;裸写 2026-07-10 在 PyYAML(YAML 1.1)里会变成 date 对象
+    expect(touchConceptFrontmatter(null, { type: CONCEPT_TYPE.dailyNote, title: '2026-07-10' }))
+      .toBe('type: Daily Note\ntitle: "2026-07-10"')
+  })
+  it('quotes the bool-shaped traps too', () => {
+    expect(touchConceptFrontmatter(null, { type: 'X', title: 'no' })).toContain('title: "no"')
+    expect(touchConceptFrontmatter(null, { type: 'X', title: 'N' })).toContain('title: "N"')
+  })
+  it('leaves a full timestamp plain — a time read as a time is correct', () => {
+    expect(touchConceptFrontmatter(null, { type: 'X', created: '2026-07-10T09:00:00.000Z' }))
+      .toContain('created: 2026-07-10T09:00:00.000Z')
+  })
+  it('leaves an ordinary title unquoted', () => {
+    expect(touchConceptFrontmatter(null, { type: 'X', title: '普通标题' })).toContain('title: 普通标题')
+  })
+})
+
 describe('conceptFileText', () => {
   it('wraps frontmatter and body into a conformant document', () => {
     const text = conceptFileText({ type: CONCEPT_TYPE.note, title: '标题' }, '# 标题\n')
@@ -67,5 +89,11 @@ describe('isReservedConceptName(§8/§9)', () => {
     expect(isReservedConceptName('index.note.md')).toBe(false)
     expect(isReservedConceptName('indexes.md')).toBe(false)
     expect(isReservedConceptName('changelog.md')).toBe(false)
+  })
+})
+
+describe('保留名常量的两份实现', () => {
+  it('scripts/okf-lint-core.mjs 与 src/lib/okf/concept.ts 列的是同一组名字', () => {
+    expect([...RESERVED].sort()).toEqual([...RESERVED_CONCEPT_NAMES].sort())
   })
 })

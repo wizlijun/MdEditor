@@ -616,7 +616,7 @@ mod tests {
         let text = std::fs::read_to_string(dir.path().join(&out.path)).unwrap();
         assert!(text.contains("- from roam"));
         assert!(text.contains("id:: u1"));
-        assert!(text.contains("title: 2026-08-02"));
+        assert!(text.contains("title: \"2026-08-02\""));
         // OKF v0.2 §4.1: every document this repo writes carries a `type`, and
         // for `dailynote/<yyyy>/<date>.note.md` it is `Daily Note`.
         assert!(text.starts_with("---\ntype: Daily Note\n"), "no OKF type:\n{text}");

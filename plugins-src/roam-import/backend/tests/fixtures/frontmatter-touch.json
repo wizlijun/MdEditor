@@ -70,7 +70,7 @@
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
-      "expected": "type: Daily Note\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+      "expected": "type: Daily Note\ntitle: \"2026-08-02\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
     },
     {
       "name": "a pre-OKF note gets type appended at the end, keeping every key it had in place",
@@ -178,7 +178,7 @@
       "title": "2026-08-02",
       "created": "2026-08-01T16:00:05.019Z",
       "now": "2026-08-03T09:00:00.000Z",
-      "expected": "# written by hand\n# and not a mapping yet\n\ntype: Daily Note\ntitle: 2026-08-02\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
+      "expected": "# written by hand\n# and not a mapping yet\n\ntype: Daily Note\ntitle: \"2026-08-02\"\ncreated: 2026-08-01T16:00:05.019Z\nupdated: 2026-08-03T09:00:00.000Z"
     },
     {
       "name": "hostile title: a colon and a space make raw YAML unparsable, so it is quoted",

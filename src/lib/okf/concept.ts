@@ -3,7 +3,7 @@
 //
 // 规则(§4.1):`type` 是唯一必填字段;生产者 MAY 加任意额外键,消费者往返时
 // SHOULD 保留未知键 —— 所以这里只补缺失的键,已有键的值与顺序一律不动。
-import { parseDocument, isMap } from 'yaml'
+import { parseDocument, isMap, isScalar } from 'yaml'
 
 /**
  * 本项目使用的 `type` 取值表。OKF 不做中心注册(§4.1),但项目内必须唯一登记
@@ -22,6 +22,9 @@ export const CONCEPT_TYPE = {
   book: 'Book',
   /** Reading Insights 的阅读数据报告 */
   readingReport: 'Reading Report',
+  /** 决策日志:未决看板 / 已裁决归档 */
+  decisionBoard: 'Decision Board',
+  decisionArchive: 'Decision Archive',
   /** agent 写进 `answers/` 的长答案 */
   answer: 'Answer',
   /** vault 根的 AGENTS.md(模板见 src-tauri/templates/AGENTS.md) */
@@ -86,9 +89,25 @@ export function touchConceptFrontmatter(raw: string | null, meta: ConceptMeta): 
   else if (!isMap(doc.contents)) return raw ?? ''
   for (const [key, value] of Object.entries(meta)) {
     if (value === undefined) continue
-    if (!doc.has(key)) doc.set(key, value)
+    if (!doc.has(key)) doc.set(key, yamlSafeNode(doc, value))
   }
   return doc.toString().replace(/\n$/, '')
+}
+
+/**
+ * YAML 1.1(PyYAML 等)会把 `2026-07-10` 读成 date、`yes`/`no` 读成 bool,而
+ * YAML 1.2(本项目用的 js-yaml 家族)读成字符串。日记的 title 就是日期字符串,
+ * 跨解析器语义漂移会让 agent 拿到 date 对象 —— 这类标量加引号钉成字符串。
+ * 完整时间戳(`generated.at` / `created`)不在此列:那本来就是时间,读成时间没错,
+ * 而且加引号会让既有文件的 diff 全线翻动。
+ */
+const YAML11_AMBIGUOUS = /^(\d{4}-\d{1,2}-\d{1,2}|y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$/
+
+export function yamlSafeNode(doc: ReturnType<typeof parseDocument>, value: unknown): unknown {
+  if (typeof value !== 'string' || !YAML11_AMBIGUOUS.test(value)) return value
+  const node = doc.createNode(value)
+  if (isScalar(node)) node.type = 'QUOTE_DOUBLE'
+  return node
 }
 
 /** 完整的概念文档文本:frontmatter + body。 */

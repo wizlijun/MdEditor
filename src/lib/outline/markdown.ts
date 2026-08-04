@@ -4,11 +4,11 @@ import { createTree, addNode, childrenOf, newId, type OutlineTree, type OutlineN
 const PROP_RE = /^(type|line|id|collapsed|created|updated|status|answered|by):: (.*)$/
 
 /** 文件头部 YAML front-matter 块。必须从第 0 字符开始,--- 独占一行。 */
-const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/
+const FM_RE = /^---\r?\n(?:([\s\S]*?)\r?\n)?---(\r?\n|$)/
 
 export function splitFrontmatterBlock(text: string): { frontmatter: string | null; body: string } {
   const m = text.match(FM_RE)
-  return m ? { frontmatter: m[1], body: text.slice(m[0].length) } : { frontmatter: null, body: text }
+  return m ? { frontmatter: m[1] ?? '', body: text.slice(m[0].length) } : { frontmatter: null, body: text }
 }
 
 /**

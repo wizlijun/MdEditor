@@ -1,0 +1,13 @@
+{
+  "_comment": "human:<id> 的推导规则(OKF §7)。前端 src/lib/okf/actor.ts 的 humanActorId 与后端 src-tauri/src/okf/mod.rs 的 human_id_from 必须对同一组输入给出同一个 id —— 两边各读这份 fixture。",
+  "cases": [
+    { "name": "git 邮箱的本地部分优先", "name_": "Bruce Li", "email": "bruce@runningbruce.com", "os_user": "brucel", "expected": "bruce" },
+    { "name": "带点的邮箱本地部分原样保留", "name_": "X", "email": "first.last@corp.com", "os_user": "x", "expected": "first.last" },
+    { "name": "没有邮箱时退到 git 用户名的 slug", "name_": "Bruce Li", "email": "", "os_user": "brucel", "expected": "bruce-li" },
+    { "name": "git 全无时退到系统用户名", "name_": "", "email": "", "os_user": "brucel", "expected": "brucel" },
+    { "name": "全空退到 local", "name_": "", "email": "", "os_user": "", "expected": "local" },
+    { "name": "全是空白也退到 local", "name_": "   ", "email": "  ", "os_user": "  ", "expected": "local" },
+    { "name": "CJK 名字原样保留,不做音译", "name_": "李雷", "email": "", "os_user": "", "expected": "李雷" },
+    { "name": "多段空白折成单个连字符", "name_": "Ada  Lovelace", "email": "", "os_user": "", "expected": "ada-lovelace" }
+  ]
+}

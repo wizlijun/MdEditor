@@ -1,7 +1,7 @@
 //! The run engine: start claude, pump its stream-json into events, handle
 //! timeout and cancellation. The window path and the detached runner share it —
 //! the only difference is who holds the child process.
-use crate::{artifacts, lock, prompt, record, settings, stream, task::TaskDef};
+use crate::{artifacts, lock, okf, prompt, record, settings, stream, task::TaskDef};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::SystemTime;
@@ -211,6 +211,17 @@ pub async fn run(
         _ => record::Status::Error,
     });
     let found = artifacts::collect(&spec.vault, &spec.task_dir, started_at);
+    // 提示词要求 agent 自己写 OKF 头,但那是约束不是保证:漏写就地补上,
+    // 免得 vault 里多一份没有 `type` 的文档(§4.1)。已有 frontmatter 的不碰。
+    let stamped = okf::stamp_vault_answers(
+        &spec.vault,
+        &found,
+        &format!("claude-agent/{}", env!("CARGO_PKG_VERSION")),
+        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    );
+    if stamped > 0 {
+        eprintln!("[claude-agent] stamped OKF front-matter on {stamped} answer file(s)");
+    }
     let rec = finish(
         &spec,
         started,

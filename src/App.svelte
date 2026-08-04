@@ -18,6 +18,7 @@
   import { loadLocale, t, i18n } from './lib/i18n/store.svelte'
   import { cmdOpen, cmdSave, cmdSaveAs, cmdPrint, cmdCloseActive, cmdToggleMode, dispatch, type CommandId } from './lib/commands'
   import { cmdMdblockRefresh } from './lib/mdblock/commands'
+  import { setMirrorSourceResolver } from './lib/outline/store.svelte'
   import { confirmDirtyClose, showError } from './lib/dialogs'
   import { startAutoSaveWatcher } from './lib/autosave.svelte'
   import { installFocusPoll } from './lib/file-watcher.svelte'
@@ -504,6 +505,9 @@
     // session — (re)installs the tracker idempotently. A direct call covers the
     // case where the root was already loaded before this handler was registered.
     setVaultRootChangedHandler(() => { void maybeInstallTracker(); void ensureWikilinkBlocklist() })
+    // 镜像的伴生笔记要在 front-matter 里记下源文件(OKF §5.1)。store 不直接依赖
+    // sotvault(会成环),所以解析器在这里注入。
+    setMirrorSourceResolver((mainPath) => deviceSourceForVaultPath(mainPath))
     void maybeInstallTracker().catch((e) => console.warn('[App] insights tracker init:', e))
     void ensureWikilinkBlocklist().catch((e) => console.warn('[App] wikilink blocklist init:', e))
 

@@ -1,12 +1,14 @@
 // src/lib/outline/frontmatter.ts
 import { parseDocument, isMap } from 'yaml'
-import { CONCEPT_TYPE, touchConceptFrontmatter } from '../okf/concept'
+import { CONCEPT_TYPE, touchConceptFrontmatter, yamlSafeNode, type ConceptMeta } from '../okf/concept'
 
 export interface TouchOpts {
   /** 缺 title 时写入的标题(原始标题,未 slug 化) */
   title: string
   /** 缺 type 时写入的 OKF 概念类型(§4.1 REQUIRED);默认 Outline Note */
   type?: string
+  /** 缺 sources 时写入的来源(§5.1);镜像的伴生笔记用它记源文件路径 */
+  sources?: ConceptMeta['sources']
   /** 缺 created 时的回退值(通常取文件 birthtime);不传用 now */
   created?: string
   /** 注入时间,便于测试;默认当前时间 ISO 8601 */
@@ -31,10 +33,11 @@ export function touchFrontmatter(raw: string | null, opts: TouchOpts): string {
     type: opts.type ?? CONCEPT_TYPE.outlineNote,
     title: opts.title,
     created: opts.created ?? now,
+    sources: opts.sources,
   })
   const doc = parseDocument(filled)
   if (doc.contents == null || !isMap(doc.contents)) return raw ?? ''
-  doc.set('updated', now)
+  doc.set('updated', yamlSafeNode(doc, now))
   return doc.toString().replace(/\n$/, '')
 }
 

@@ -59,6 +59,24 @@ pub fn notemd_okf_human_id(vault_path: Option<String>) -> String {
 mod tests {
     use super::*;
 
+    /// 与前端 `humanActorId` 共用的规则 fixture:两边对同一组输入必须给出
+    /// 同一个 id,否则同一个人在 vault 里会有两种署名。
+    #[test]
+    fn matches_the_shared_fixture_with_the_frontend() {
+        let raw = include_str!("../../../scripts/fixtures/okf-human-id.json");
+        let doc: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let cases = doc["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for c in cases {
+            let got = human_id_from(
+                c["name_"].as_str().unwrap(),
+                c["email"].as_str().unwrap(),
+                c["os_user"].as_str().unwrap(),
+            );
+            assert_eq!(got, c["expected"].as_str().unwrap(), "case: {}", c["name"]);
+        }
+    }
+
     #[test]
     fn prefers_the_git_email_local_part() {
         assert_eq!(human_id_from("Bruce Li", "bruce@runningbruce.com", "brucel"), "bruce");

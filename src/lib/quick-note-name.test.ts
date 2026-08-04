@@ -5,6 +5,7 @@ import {
   titleSlug,
   isTitleFinished,
   quickNoteRenameTarget,
+  firstH1,
 } from './quick-note-name'
 
 describe('quickNoteFileName', () => {
@@ -121,5 +122,27 @@ describe('quickNoteRenameTarget', () => {
   it('still renames when the title happens to be "quick" — the time is dropped', () => {
     expect(quickNoteRenameTarget('2026-07-25-193045-quick.md', '# quick'))
       .toBe('2026-07-25-quick.md')
+  })
+})
+
+describe('firstH1 — frontmatter 不参与取标题', () => {
+  it('ignores a YAML comment inside frontmatter', () => {
+    expect(firstH1('---\n# Book Metadata\ntype: Note\n---\n# 真标题\n')).toBe('真标题')
+  })
+  it('returns null when only the frontmatter carries a #-line', () => {
+    expect(firstH1('---\n# just a comment\ntype: Note\n---\n正文\n')).toBeNull()
+  })
+  it('still finds a plain H1 without frontmatter', () => {
+    expect(firstH1('# 标题\n正文\n')).toBe('标题')
+  })
+})
+
+describe('quickNoteRenameTarget — 预置 frontmatter 的草稿', () => {
+  it('names the file after the H1 that follows the concept head', () => {
+    expect(quickNoteRenameTarget('2026-07-25-090800-quick.md', '---\ntype: Note\n---\n# 产品思考\n正文'))
+      .toBe('2026-07-25-产品思考.md')
+  })
+  it('does not rename on the frontmatter alone', () => {
+    expect(quickNoteRenameTarget('2026-07-25-090800-quick.md', '---\ntype: Note\n---\n')).toBeNull()
   })
 })

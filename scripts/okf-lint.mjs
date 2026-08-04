@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // OKF v0.2 硬约束校验器 —— 只报告,不修改。
 //
-//   node scripts/okf-lint.mjs <目录> [--json] [--quiet]
+//   node scripts/okf-lint.mjs <目录> [--json] [--quiet] [--ignore <glob>]...
 //
 // 递归扫描目录下的 `.md`,按 docs/okf-v0.2-format-constraints.md §11 的三条
 // 硬约束报告违反项;退出码 1 表示存在违反。规则实现见 okf-lint-core.mjs。
@@ -10,7 +10,7 @@
 // 目录被当作 bundle 根。
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { lintText } from './okf-lint-core.mjs'
+import { lintText, shouldIgnore } from './okf-lint-core.mjs'
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.notemd', 'dist', 'target'])
 
@@ -31,12 +31,13 @@ function walk(dir, out = []) {
 }
 
 const args = process.argv.slice(2)
-const root = args.find((a) => !a.startsWith('--'))
+const root = args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--ignore')
 const asJson = args.includes('--json')
+const ignore = args.flatMap((a, i) => (args[i - 1] === '--ignore' ? [a] : []))
 const quiet = args.includes('--quiet')
 
 if (!root) {
-  console.error('usage: node scripts/okf-lint.mjs <目录> [--json] [--quiet]')
+  console.error('usage: node scripts/okf-lint.mjs <目录> [--json] [--quiet] [--ignore <glob>]...')
   process.exit(2)
 }
 if (!statSync(root).isDirectory()) {
@@ -46,22 +47,25 @@ if (!statSync(root).isDirectory()) {
 
 const violations = []
 let scanned = 0
+let ignored = 0
 for (const file of walk(root)) {
-  scanned++
   const rel = relative(root, file)
+  if (shouldIgnore(rel, ignore)) { ignored++; continue }
+  scanned++
   const bundleRoot = !rel.includes('/')
   violations.push(...lintText(rel, readFileSync(file, 'utf8'), { bundleRoot }))
 }
 
 if (asJson) {
-  console.log(JSON.stringify({ scanned, violations }, null, 2))
+  console.log(JSON.stringify({ scanned, ignored, violations }, null, 2))
 } else {
   for (const v of violations) console.log(`${v.file}: [${v.rule}] ${v.message}`)
   if (!quiet) {
+    const skipped = ignored > 0 ? `,另跳过 ${ignored} 份(--ignore)` : ''
     console.log(
       violations.length === 0
-        ? `OKF: ${scanned} 份文档全部满足硬约束`
-        : `OKF: ${scanned} 份文档中 ${violations.length} 处违反硬约束`,
+        ? `OKF: ${scanned} 份文档全部满足硬约束${skipped}`
+        : `OKF: ${scanned} 份文档中 ${violations.length} 处违反硬约束${skipped}`,
     )
   }
 }

@@ -25,7 +25,7 @@ export function serializeBoard(decisions: OpenDecision[]): string {
     body.push(`- 预测:${d.prediction}(信心 ${confLabel(d.confidence)})· 检查 ${d['check-date']}`)
     body.push('')
   }
-  return buildNote({ type: 'decision-board', decisions }, body)
+  return buildNote({ type: 'Decision Board', decisions }, body)
 }
 export function parseBoard(md: string): OpenDecision[] {
   const fm = readFrontmatter(md)
@@ -40,7 +40,7 @@ export function serializeArchive(resolved: string, decisions: ArchivedDecision[]
     lines.push(`- 预测:${d.prediction}(信心 ${confLabel(d.confidence)})`)
     lines.push('')
   }
-  return buildNote({ type: 'decision-archive', resolved, decisions }, lines)
+  return buildNote({ type: 'Decision Archive', resolved, decisions }, lines)
 }
 export function parseArchive(md: string): ArchivedDecision[] {
   const fm = readFrontmatter(md)

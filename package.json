@@ -18,7 +18,8 @@
     "check:protocol": "bash scripts/gen-plugin-protocol.sh --check",
     "release:plugins": "bash scripts/release-plugins.sh",
     "gen:plugin-index": "node scripts/gen-plugin-index.mjs",
-    "okf:lint": "node scripts/okf-lint.mjs"
+    "okf:lint": "node scripts/okf-lint.mjs",
+    "okf:export": "node scripts/okf-export.mjs"
   },
   "dependencies": {
     "@moraya/core": "file:../moraya-core",

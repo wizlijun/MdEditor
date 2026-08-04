@@ -7,6 +7,7 @@ mod artifacts;
 mod discover;
 mod engine;
 mod lock;
+mod okf;
 mod plugin;
 mod precheck;
 mod prompt;

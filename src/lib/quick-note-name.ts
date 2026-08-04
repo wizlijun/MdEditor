@@ -39,9 +39,12 @@ export function titleSlug(title: string): string | null {
   return slug === '' ? null : slug
 }
 
+/** 首部 YAML frontmatter 块(其中的 `# ...` 是 YAML 注释,不是标题)。 */
+const FM_BLOCK = /^---\r?\n(?:[\s\S]*?\r?\n)?---(\r?\n|$)/
+
 /** First ATX H1 in `text`, or null. Mirrors folder-view's `parseFirstH1`. */
 export function firstH1(text: string): string | null {
-  const m = text.match(/^#\s+(.+?)\s*$/m)
+  const m = text.replace(FM_BLOCK, '').match(/^#\s+(.+?)\s*$/m)
   return m ? m[1] : null
 }
 

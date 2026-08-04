@@ -19,6 +19,14 @@ describe('actor(§7)', () => {
   })
 })
 
+import fixture from '../../../scripts/fixtures/okf-human-id.json'
+
+describe('humanActorId — 与后端共用同一份 fixture', () => {
+  it.each(fixture.cases)('$name', (c) => {
+    expect(humanActorId({ name: c.name_, email: c.email, osUser: c.os_user })).toBe(c.expected)
+  })
+})
+
 describe('humanActorId', () => {
   it('prefers the git email local part — stable and already unique', () => {
     expect(humanActorId({ name: 'Bruce Li', email: 'bruce@runningbruce.com', osUser: 'bruce' })).toBe('bruce')

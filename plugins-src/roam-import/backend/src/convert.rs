@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn frontmatter_title_is_the_iso_date_not_the_roam_title() {
         let t = convert_page(&page(vec![]), "2026-08-02", CONCEPT_TYPE_DAILY_NOTE);
-        assert!(t.frontmatter.as_ref().unwrap().contains("title: 2026-08-02"));
+        assert!(t.frontmatter.as_ref().unwrap().contains("title: \"2026-08-02\""));
         assert!(!t.frontmatter.as_ref().unwrap().contains("August"));
     }
 

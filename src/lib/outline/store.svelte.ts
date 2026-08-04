@@ -9,6 +9,7 @@ import type { BacklinkIndex } from './backlinks'
 import { pageNameOf } from './backlinks'
 import { touchFrontmatter, fmHas, outlineConceptType } from './frontmatter'
 import { outlineDirs } from './dirs.svelte'
+import { sourcesForNote } from './note-source'
 
 export interface OutlineState {
   /** 全屏大纲 tab 模式:当前挂载的 .note.md 路径 */
@@ -113,6 +114,13 @@ export function noteTextHasContent(text: string): boolean {
 // ---------- 全屏大纲 tab 模式(phase 2):IO 由 tabs 体系接管,这里只有内存树 ----------
 
 let changeSink: (() => void) | null = null
+/** 镜像源解析器。由 App 注入(store 不直接依赖 sotvault,避免循环依赖);
+ *  未注入时伴生笔记就不带 sources —— 缺字段永远比写错字段好。 */
+let mirrorSourceResolver: ((mainPath: string) => string | null) | null = null
+export function setMirrorSourceResolver(fn: ((mainPath: string) => string | null) | null): void {
+  mirrorSourceResolver = fn
+}
+
 /** 编辑器注册:任何树变更(markDirty)后被调用,负责 serializeDoc → setContent(tab) */
 export function setChangeSink(fn: (() => void) | null): void { changeSink = fn }
 
@@ -160,6 +168,9 @@ export function serializeDoc(touch = true): string {
     outline.tree.frontmatter = touchFrontmatter(outline.tree.frontmatter, {
       title: pageNameOf(outline.docPath),
       type: outlineConceptType(outline.docPath, outlineDirs),
+      sources: mirrorSourceResolver
+        ? sourcesForNote(outline.docPath, mirrorSourceResolver)
+        : undefined,
     })
   }
   return serializeOutline(

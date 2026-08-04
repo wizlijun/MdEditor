@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 // @ts-expect-error - plain-JS core shared with the CLI (see insights-report-core for the same pattern)
-import { lintText } from './okf-lint-core.mjs'
+import { lintText, shouldIgnore } from './okf-lint-core.mjs'
 
 const rules = (name: string, text: string, opts?: object): string[] =>
   lintText(name, text, opts).map((v: { rule: string }) => v.rule)
@@ -24,6 +24,11 @@ describe('okf lint — 硬约束 1/2:frontmatter 可解析且含非空 type', ()
 
   it('flags unparsable YAML frontmatter', () => {
     expect(rules('note.md', '---\ntype: [unclosed\n---\n')).toEqual(['frontmatter-unparsable'])
+  })
+
+  it('recognises an empty frontmatter block instead of reading it as a rule', () => {
+    // `---\n---` 是退化但合法的首部;当成正文分隔线会把整份文档判成"没有 frontmatter"
+    expect(rules('note.md', '---\n---\n# body\n')).toEqual(['type-missing'])
   })
 
   it('accepts CRLF frontmatter', () => {
@@ -67,5 +72,23 @@ describe('okf lint — 报告内容', () => {
     const [v] = lintText('note.md', '# x\n')
     expect(v.file).toBe('note.md')
     expect(v.message).toMatch(/frontmatter/i)
+  })
+})
+
+describe('shouldIgnore — 扫描时的排除规则', () => {
+  it('matches a directory prefix', () => {
+    expect(shouldIgnore('sync/foo.md', ['sync/'])).toBe(true)
+    expect(shouldIgnore('sync/deep/foo.md', ['sync/'])).toBe(true)
+    expect(shouldIgnore('notes/foo.md', ['sync/'])).toBe(false)
+  })
+  it('matches a * glob within one segment', () => {
+    expect(shouldIgnore('stat/2026-08-04-daily-stat.md', ['stat/*-stat.md'])).toBe(true)
+    expect(shouldIgnore('stat/a/b-stat.md', ['stat/*-stat.md'])).toBe(false)
+  })
+  it('matches ** across segments', () => {
+    expect(shouldIgnore('a/b/c.md', ['a/**/c.md'])).toBe(true)
+  })
+  it('is false with no patterns', () => {
+    expect(shouldIgnore('a.md', [])).toBe(false)
   })
 })

@@ -300,9 +300,11 @@ interface SideView {
 | `Answer` | agent 写进 `answers/` 的长答案 |
 | `Vault Conventions` | vault 根的 `AGENTS.md` |
 | `Vault Conventions` | vault 根的 `AGENTS.md`(模板 `src-tauri/templates/AGENTS.md`) |
-| `decision-board` / `decision-archive` | 决策日志(历史取值,保持不变) |
+| `Decision Board` / `Decision Archive` | 决策日志的未决看板与已裁决归档 |
 
-**自检**:`pnpm okf:lint <目录>`(退出码非 0 即有违反);单测里可直接 `import { lintText } from 'scripts/okf-lint-core.mjs'` 断言产物合规。
+**自检**:`pnpm okf:lint <目录>`(退出码非 0 即有违反,`--ignore <glob>` 排除镜像/报表目录);单测里可直接 `import { lintText } from 'scripts/okf-lint-core.mjs'` 断言产物合规。
+
+**导出成 bundle**:`pnpm okf:export <源目录> <目标目录>` —— 复制副本时补 `type`、把 `[[wikilink]]` 转成 bundle 绝对路径的 Markdown 链接(§6)、生成带 `okf_version` 的根 `index.md` 与 git 历史的 `log.md`,并在写完后自查硬约束。**只改副本,不动源**。
 
 **读侧宽容义务(§11,MUST)**:缺可选字段、未知 `type`、未知附加键、断链一律不得拒绝文档;裸 `verified:` mapping 当单元素列表处理。
 

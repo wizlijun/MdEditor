@@ -133,6 +133,25 @@ mod tests {
         assert_eq!(sanitize_dirname("   "), "");
     }
 
+    /// 与宿主校验器共用的 golden:同一份 `book.md` 头,这里断言字节,
+    /// 宿主 `src/lib/okf/book-head.test.ts` 断言它过 OKF 硬约束。
+    /// 两侧都盯着同一个文件,任何一侧漂了都会红。
+    #[test]
+    fn book_head_matches_the_shared_golden() {
+        let golden = include_str!("../tests/fixtures/book-head.md");
+        let meta = BookMeta {
+            title: Some("7 Powers".into()),
+            creator: Some("Hamilton Helmer".into()),
+            publisher: Some("Stripe Press".into()),
+            language: Some("en".into()),
+        };
+        let head = book_frontmatter("/in/7 \"powers\".epub", &meta);
+        assert!(
+            golden.starts_with(&head),
+            "golden drifted from book_frontmatter\n--- got ---\n{head}\n--- golden ---\n{golden}",
+        );
+    }
+
     #[test]
     fn book_frontmatter_carries_type_title_and_source() {
         let meta = BookMeta {

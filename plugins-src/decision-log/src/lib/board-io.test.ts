@@ -12,7 +12,7 @@ describe('board-io', () => {
   it('board round-trips through .note.md', () => {
     const md = serializeBoard([dec])
     expect(md).toMatch(/^---\n/)                 // front-matter first
-    expect(md).toContain('type: decision-board')
+    expect(md).toContain('type: Decision Board')
     expect(md).toContain('# 未决决策')            // human-readable mirror body
     expect(md).toContain('先做 MVP')
     expect(md).toContain('★★★ ≈75%')             // body shows stars + anchor, not raw float
@@ -42,7 +42,7 @@ describe('board-io', () => {
   it('archive round-trips (incl. weakest-element)', () => {
     const a: ArchivedDecision = { ...dec, status: 'closed', outcome: 'hit', 'still-endorse': false, 'weakest-element': 'alternatives' } as any
     const md = serializeArchive('2026-08-04', [a])
-    expect(md).toContain('type: decision-archive')
+    expect(md).toContain('type: Decision Archive')
     expect(md).toContain('resolved: 2026-08-04')
     const back = parseArchive(md)
     expect(back[0]).toMatchObject({ id: '2026-07-21-01', outcome: 'hit', 'still-endorse': false, 'weakest-element': 'alternatives' })

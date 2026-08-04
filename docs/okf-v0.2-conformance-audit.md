@@ -31,8 +31,24 @@
 | 快速笔记(托盘) | 草稿预置概念头;`shouldSkipEmptySave` 改为「去掉 frontmatter 后无正文即空」,不再产生 0 字节文件 |
 | agent 契约 | `plugins-src/claude-agent/.../answer-note-question/CLAUDE.md`:`by::` 改带版本段、`answers/*.md` 必须带 `type: Answer` 头、禁止自签 `human:` |
 
-未做:P0.3 迁移命令、`index.md`/`log.md` 的**读侧**展示(目录说明)、`sources` 落到 sync 镜像的伴生笔记、P2.1 导出插件、P2.2 Attested Computation。
-下文的发现明细保留审计当时的状态,便于对照;第 8 节是兼容性核查与已知问题。
+**第 3 步(收尾)已完成**(2026-08-04):
+
+| 项 | 落点 |
+|----|------|
+| bundle 导出(P2.1) | `pnpm okf:export <源> <目标>`:副本补 `type`、`[[wikilink]]` → bundle 绝对路径的 Markdown 链接(§6)、生成带 `okf_version` 的根 `index.md`(§8)与 git 历史的 `log.md`(§9),写完自查硬约束;**只改副本,不动源** |
+| 校验器排除规则(C1) | `pnpm okf:lint <目录> --ignore 'sync/**'`,报告里说明跳过了几份 |
+| 镜像来源(B1) | 镜像的伴生 `.note.md` 写 `sources[].resource` = 源文件路径;镜像本身仍是逐字快照 |
+| agent 兜底(B2) | claude-agent 收尾对 `answers/*.md` 就地补概念头(`type: Answer` + `generated`),已有 frontmatter 的不碰 |
+| 跨解析器安全(D2) | 日期/布尔形状的标量加引号钉成字符串,TS 与 Rust 两侧同规则,由共享 fixture 钉住 |
+| 容错(D1、D5) | 空 frontmatter `---\n---` 被识别为首部;取 H1 前先剥掉 frontmatter(YAML 注释不再冒充标题) |
+| 漂移防线(E2、E3、E4) | ebook `book.md` 头的跨语言 golden、保留名常量一致性测试、human id 的 TS↔Rust 共享 fixture |
+| 类型值统一(B3) | decision-log 改 `Decision Board` / `Decision Archive` |
+| 既有红灯(F1) | `handle_parsed_rpc_wrong_origin_403` 更新为实现的契约(缺 Origin = 同源),并补一条正向用例 |
+
+**旧数据一律不迁移**(用户 2026-08-04 决定):存量文件只在本来就要写盘时机会性补 `type`,不做批量改写、不提供迁移命令。
+
+仍未做:`index.md` 的**读侧**展示(把目录说明渲染进文件夹视图,属产品功能而非合规缺口)、P2.2 Attested Computation 试点。
+下文的发现明细保留审计当时的状态,便于对照;第 8 节是兼容性核查与已知问题(已解决的条目标注在该节)。
 
 ---
 
@@ -344,16 +360,16 @@ ebook-import 64、`src-tauri` cargo 382 通过 + 1 处既有失败(见 F1)。
 
 | # | 问题 | 现状 |
 |---|------|------|
-| B1 | `vault/sync/*.md` 镜像没有 frontmatter | 有意:镜像是源文件快照。来源应写进伴生 `.note.md` 的 `sources`,**尚未实现** |
-| B2 | claude-agent 写的 `answers/*.md` 只靠 prompt 约束 | 程序上无强制;agent 不照做就是不合规文档,目前无回读校验 |
-| B3 | decision-log 的 `type` 值仍是 `decision-board` / `decision-archive` | 与其余 Title Case 不一致;改值会动存量文件,暂不动 |
+| B1 | `vault/sync/*.md` 镜像没有 frontmatter | 有意:镜像是源文件快照。**已解决**:来源写进伴生 `.note.md` 的 `sources`(`src/lib/outline/note-source.ts`) |
+| B2 | claude-agent 写的 `answers/*.md` 只靠 prompt 约束 | **已解决**:收尾就地补概念头(`backend/src/okf.rs`),已有 frontmatter 的不碰 |
+| B3 | decision-log 的 `type` 值仍是 kebab-case | **已解决**:改为 `Decision Board` / `Decision Archive`(旧文件不迁移,读侧本就不看 `type`) |
 | B4 | 工作区里的 `exlibris/`、`plugins-src/exlibris/` 未进 git | 不在本次核查范围 |
 
 ### C. 校验器(`pnpm okf:lint`)的边界
 
 | # | 问题 |
 |---|------|
-| C1 | 没有 ignore 机制:对真实 vault 跑会把 sync 镜像与全部存量文件一并报出来(仓库自身的 `docs/` 同理,196/196) |
+| C1 | ~~没有 ignore 机制~~ **已解决**:`--ignore <glob>`(目录前缀或 glob),报告里说明跳过了几份 |
 | C2 | 把扫描根目录当 bundle 根:子目录里的 `index.md` 一律判 `reserved-as-concept`(合 §8,但对"只是普通目录"的用户会刺眼) |
 | C3 | 只查硬约束三条,不查 actor 形式、字段族与链接形态(有意:其余都是 SHOULD/MAY) |
 
@@ -361,11 +377,11 @@ ebook-import 64、`src-tauri` cargo 382 通过 + 1 处既有失败(见 F1)。
 
 | # | 问题 | 影响 |
 |---|------|------|
-| D1 | 空 frontmatter `---\n---` 不被识别(`src/lib/outline/markdown.ts:7` 的 `FM_RE` 与 lint core 同款) | 会被当成正文里的分隔线。合规文档不会出现空 frontmatter,属容错缺口 |
-| D2 | 日记的 `title: 2026-07-10` 是无引号日期形状 | `yaml`(JS)与 Obsidian 读成字符串;**PyYAML(YAML 1.1)会读成 date 对象**。要根治就得给日期形状的标题加引号 |
+| D1 | ~~空 frontmatter 不被识别~~ | **已解决**:两处 `FM_RE` 把中段整体改为可选 |
+| D2 | ~~日期形状的 title 无引号~~ | **已解决**:日期/布尔形状的标量写入时加引号(TS `YAML11_AMBIGUOUS` + Rust `yaml11_ambiguous_pattern`,共享 fixture 钉住)。完整时间戳仍不加引号 —— 时间读成时间没错 |
 | D3 | CRLF 文件保存后 frontmatter 行尾归一为 LF | 既有行为(序列化统一用 `\n`),非本次引入 |
 | D4 | Base 插件把 frontmatter 所有键当属性 | `.base` 表会多出一列 `type` |
-| D5 | `firstH1()` 正则扫全文 | frontmatter 里若有 YAML 注释 `# ...`,会被当成标题参与快速笔记改名。我们不写注释,但外部工具可能写 |
+| D5 | ~~`firstH1()` 会把 frontmatter 里的 YAML 注释当标题~~ | **已解决**:取 H1 前先剥掉首部 frontmatter |
 | D6 | `type` 与用户自有的 `type` 语义可能不同 | 我们**只在缺失时写**,已有值一律不覆盖,所以不会改写用户语义;但同名会让两种用法混在一起 |
 
 ### E. 实现漂移风险(同一规则的多份实现)
@@ -373,12 +389,12 @@ ebook-import 64、`src-tauri` cargo 382 通过 + 1 处既有失败(见 F1)。
 | # | 位置 | 防线 |
 |---|------|------|
 | E1 | host TS `touchFrontmatter` ↔ roam-import Rust `touch_frontmatter` | 已有共享 parity fixture(9efa74c 就是靠它抓到的) |
-| E2 | ebook-import Rust `book_frontmatter` 是第三份实现 | **无 parity 测试**,只有自身单测 |
-| E3 | `scripts/okf-lint-core.mjs` 的 `RESERVED` ↔ `src/lib/okf/concept.ts` 的 `RESERVED_CONCEPT_NAMES` | 两份常量,靠注释互指,无自动校验 |
-| E4 | 前端 `humanActorId()` ↔ Rust `human_id_from()` | 同规则两份实现,两侧各有单测,无 parity fixture |
+| E2 | ebook-import Rust `book_frontmatter` 是第三份实现 | **已解决**:`backend/tests/fixtures/book-head.md` 是跨语言 golden——Rust 钉字节,宿主 `src/lib/okf/book-head.test.ts` 钉合规性 |
+| E3 | 两份保留名常量 | **已解决**:`concept.test.ts` 直接比对两侧的集合 |
+| E4 | 前端 `humanActorId()` ↔ Rust `human_id_from()` | **已解决**:`scripts/fixtures/okf-human-id.json` 由两侧共同读取 |
 
 ### F. 测试基线上的既有问题
 
 | # | 问题 |
 |---|------|
-| F1 | `src-tauri/tests/plugin_ui_integration.rs::handle_parsed_rpc_wrong_origin_403` 失败 | 与 OKF 无关:`protocol.rs` 在 7ee02b8 改成"缺失 Origin 视为同源、只拒显式外来源",而该用例仍断言 `origin: None` 返回 403。测试与实现的既有不一致,应由该改动的作者决定改哪边 |
+| F1 | `handle_parsed_rpc_wrong_origin_403` 失败 | **已解决**:`protocol.rs` 在 7ee02b8 起把"缺失 Origin"视为同源(WebKit 的同源 POST 不带该头),用例已改为只断言显式外来源被拒,并补了一条 `handle_parsed_rpc_missing_origin_is_same_origin` 正向用例 |

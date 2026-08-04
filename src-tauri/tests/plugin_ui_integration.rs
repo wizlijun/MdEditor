@@ -232,7 +232,11 @@ fn handle_parsed_rpc_correct_origin_routes_with_capabilities() {
 
 #[test]
 fn handle_parsed_rpc_wrong_origin_403() {
-    for origin in [None, Some("plugin://evil.plugin"), Some("tauri://localhost")] {
+    // A *foreign* origin is rejected. A missing `Origin` is not: WebKit omits the
+    // header on a same-origin POST to a custom scheme, so `protocol.rs` treats
+    // `None` as same-origin on purpose (see the comment there) — pinned by
+    // `handle_parsed_rpc_missing_origin_is_same_origin` below.
+    for origin in [Some("plugin://evil.plugin"), Some("tauri://localhost")] {
         let r = resp(protocol::handle_parsed(
             &FixtureView,
             "POST",
@@ -244,6 +248,15 @@ fn handle_parsed_rpc_wrong_origin_403() {
         ));
         assert_eq!(r.status(), 403, "origin {origin:?} must be rejected");
     }
+}
+
+#[test]
+fn handle_parsed_rpc_missing_origin_is_same_origin() {
+    let r = protocol::handle_parsed(&FixtureView, "POST", PLUGIN_ID, "/__rpc__", None, "en", "default");
+    assert!(
+        matches!(r, Routed::Rpc(..)),
+        "a missing Origin is WebKit's same-origin POST and must route as RPC",
+    );
 }
 
 #[test]

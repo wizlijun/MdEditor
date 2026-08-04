@@ -523,6 +523,20 @@ pub const CONCEPT_TYPE_WIKI_PAGE: &str = "Wiki Page";
 /// `stringifyString` runs every default tag's `test` against the plain form
 /// and falls back to a quoted scalar on a hit), so `title: 123` never comes
 /// back as the number 123.
+/// Scalars a **YAML 1.1** reader (PyYAML and friends) resolves to a date or a
+/// bool while YAML 1.2 keeps them strings. A daily note's `title` is exactly
+/// such a value (`2026-08-02`), and an agent reading the vault with PyYAML
+/// would get a `date` object where the host has a string. The host quotes these
+/// too (`YAML11_AMBIGUOUS` in `src/lib/okf/concept.ts`); both sides must agree
+/// or the shared front-matter fixture goes red.
+fn yaml11_ambiguous_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^(?:[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}|y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$")
+            .unwrap()
+    })
+}
+
 fn non_string_scalar_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -590,7 +604,7 @@ fn is_plain_safe(value: &str) -> bool {
     if matches!(chars[chars.len() - 1], '\n' | '\t' | ' ' | ':') {
         return false;
     }
-    !non_string_scalar_pattern().is_match(value)
+    !non_string_scalar_pattern().is_match(value) && !yaml11_ambiguous_pattern().is_match(value)
 }
 
 /// A string as a YAML scalar, quoted **exactly when and how the host's `yaml`
@@ -1011,7 +1025,7 @@ mod tests {
             "2026-08-02T00:00:00.000Z",
             "2026-08-03T09:00:00.000Z",
         );
-        assert!(fm.contains("title: 2026-08-02"));
+        assert!(fm.contains("title: \"2026-08-02\""));
         assert!(fm.contains("created: 2026-08-02T00:00:00.000Z"));
         assert!(fm.contains("updated: 2026-08-03T09:00:00.000Z"));
     }
@@ -1022,7 +1036,7 @@ mod tests {
     #[test]
     fn frontmatter_touch_stamps_the_okf_type_first_on_a_fresh_block() {
         let fm = touch_frontmatter(None, CONCEPT_TYPE_DAILY_NOTE, "T", "C", "N");
-        assert_eq!(fm, "type: Daily Note\ntitle: T\ncreated: C\nupdated: N");
+        assert_eq!(fm, "type: Daily Note\ntitle: T\ncreated: C\nupdated: \"N\"");
     }
 
     /// …and a type the file already declares is never rewritten (an existing
@@ -1031,9 +1045,9 @@ mod tests {
     #[test]
     fn an_existing_type_is_kept_and_a_missing_one_is_appended() {
         let kept = touch_frontmatter(Some("type: Outline Note\ntitle: T"), CONCEPT_TYPE_DAILY_NOTE, "T", "C", "N");
-        assert_eq!(kept, "type: Outline Note\ntitle: T\ncreated: C\nupdated: N");
+        assert_eq!(kept, "type: Outline Note\ntitle: T\ncreated: C\nupdated: \"N\"");
         let stamped = touch_frontmatter(Some("title: T\nupdated: old"), CONCEPT_TYPE_DAILY_NOTE, "T", "C", "N");
-        assert_eq!(stamped, "title: T\nupdated: N\ntype: Daily Note\ncreated: C");
+        assert_eq!(stamped, "title: T\nupdated: \"N\"\ntype: Daily Note\ncreated: C");
     }
 
     /// A `type:`/`title:` nested under another key is that key's value, not the
@@ -1046,7 +1060,7 @@ mod tests {
         let fm = touch_frontmatter(Some(raw), CONCEPT_TYPE_DAILY_NOTE, "2026-08-02", "C", "N");
         assert_eq!(
             fm,
-            "title: 2026-08-02\ngenerated:\n  by: claude-code\n  type: not-the-top-level-one\nupdated: N\ntype: Daily Note\ncreated: C"
+            "title: 2026-08-02\ngenerated:\n  by: claude-code\n  type: not-the-top-level-one\nupdated: \"N\"\ntype: Daily Note\ncreated: C"
         );
         // The same rule, read back: a nested `updated:` is not the day's.
         assert_eq!(frontmatter_value(Some(raw), "updated").as_deref(), Some("old"));
@@ -1071,12 +1085,11 @@ mod tests {
         // Plain: nothing in these needs a quote, and adding one would churn
         // every existing file in the vault.
         for plain in [
-            "2026-08-02", "回顾系统", "回顾/系统", "Daily Note", "Wiki Page",
+            "回顾系统", "回顾/系统", "Daily Note", "Wiki Page",
             "2026-08-01T16:00:05.019Z",     // a `:` not followed by a space
             "Foo:Bar", "a:b:c", ":leading", "x?", "~x", "a#b", "ok!", "x|y", "a>b",
             "He said \"no\"",               // a quote that is not leading
             "back\\slash", "it's", "a - b", "v1.2.3", "1_000",
-            "yes", "no", "on", "Off",       // YAML 1.2 core: not booleans
         ] {
             assert_eq!(yaml_scalar(plain), plain, "needlessly quoted {plain:?}");
         }
@@ -1084,6 +1097,14 @@ mod tests {
         // Double-quoted: an indicator, a structural sequence, or a value that
         // would resolve as something other than a string.
         for (raw, want) in [
+            // YAML 1.1 readers (PyYAML) resolve these to a date / a bool, so both
+            // sides quote them even though YAML 1.2 would keep them strings —
+            // see `yaml11_ambiguous_pattern` and the host's `YAML11_AMBIGUOUS`.
+            ("2026-08-02", "\"2026-08-02\""),
+            ("yes", "\"yes\""),
+            ("no", "\"no\""),
+            ("on", "\"on\""),
+            ("Off", "\"Off\""),
             ("Book: Thinking Fast and Slow", "\"Book: Thinking Fast and Slow\""),
             ("PKM #2", "\"PKM #2\""),
             ("*star", "\"*star\""),
@@ -1237,18 +1258,18 @@ mod tests {
             touch_frontmatter(raw, "TY", "T", "C", "N")
         };
         // A key with an empty value is still a key.
-        assert_eq!(touch(Some("title:")), "title:\ntype: TY\ncreated: C\nupdated: N");
+        assert_eq!(touch(Some("title:")), "title:\ntype: TY\ncreated: C\nupdated: \"N\"");
         // A nested sequence under a key: the `- a` line is not a top-level
         // key, but `tags:` above it is — the block is still a mapping.
-        assert_eq!(touch(Some("title: x\ntags:\n  - a")), "title: x\ntags:\n  - a\ntype: TY\ncreated: C\nupdated: N");
+        assert_eq!(touch(Some("title: x\ntags:\n  - a")), "title: x\ntags:\n  - a\ntype: TY\ncreated: C\nupdated: \"N\"");
         // A value that contains a colon of its own.
-        assert_eq!(touch(Some("home: https://notemd.net")), "home: https://notemd.net\ntype: TY\ntitle: T\ncreated: C\nupdated: N");
+        assert_eq!(touch(Some("home: https://notemd.net")), "home: https://notemd.net\ntype: TY\ntitle: T\ncreated: C\nupdated: \"N\"");
         // Empty / whitespace-only reads as "no front-matter at all".
         assert_eq!(touch(Some("")), touch(None));
         assert_eq!(touch(Some("\n   \n")), touch(None));
         // Comments are not content the keys may be appended *into*, but they
         // are kept — with the blank separator the host's serializer writes.
-        assert_eq!(touch(Some("# a\n# b")), "# a\n# b\n\ntype: TY\ntitle: T\ncreated: C\nupdated: N");
+        assert_eq!(touch(Some("# a\n# b")), "# a\n# b\n\ntype: TY\ntitle: T\ncreated: C\nupdated: \"N\"");
     }
 
     /// An empty Roam block is serialized as `- ` — a dash, a space, and
