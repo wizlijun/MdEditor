@@ -516,6 +516,15 @@ impl ClaudeAgentPlugin {
             .ok_or("run-task needs a 'task'")?;
         let prompt = context.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
         let note_path = context.get("note_path").and_then(|v| v.as_str()).unwrap_or("");
+        // Same guard as run-note: a caller-named note MUST resolve inside the
+        // vault, or a task with a scoped policy (settings.scoped.json) would
+        // let this relay write an arbitrary absolute path into the Read
+        // allowlist of .claude/settings.local.json.
+        if !note_path.is_empty() {
+            let vault = self.vault()?;
+            note_relative_to_vault(&vault, note_path)
+                .ok_or_else(|| format!("note is outside the vault: {note_path}"))?;
+        }
         host.log_info(&format!("run-task {task_id}"));
         self.start(
             host,
@@ -762,6 +771,65 @@ mod tests {
         .await;
         let err = answered["error"]["message"].as_str().unwrap_or_default();
         assert!(err.contains("'task'"), "err: {err}");
+        std::env::remove_var("NOTEMD_SHARED_CONFIG");
+    }
+
+    /// `host.agent.run` is capability-gated but open to any plugin declaring
+    /// `agent` — a task with a scoped policy (settings.scoped.json, like
+    /// answer-note-question) turns a caller-named `note_path` into a Read
+    /// allowlist entry. Same guard as run-note: a path outside the vault must
+    /// be refused before it ever reaches `start`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_task_refuses_a_note_path_outside_the_vault() {
+        let _env = env_guard();
+        let vault = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap().path().join("config.json");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cfg,
+            format!(r#"{{"version":1,"sotvault":"{}"}}"#, vault.path().display()),
+        )
+        .unwrap();
+        std::env::set_var("NOTEMD_SHARED_CONFIG", &cfg);
+
+        // A real file that exists, but sits OUTSIDE the vault.
+        let outside = tempfile::tempdir().unwrap();
+        let note = outside.path().join("secret.note.md");
+        std::fs::write(&note, "x").unwrap();
+
+        let (mut to_plugin, plugin_stdin) = tokio::io::duplex(16 * 1024);
+        let (plugin_stdout, from_plugin) = tokio::io::duplex(16 * 1024);
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(sdk::serve_io(
+                    ClaudeAgentPlugin::new(),
+                    plugin_stdin,
+                    plugin_stdout,
+                ));
+        });
+
+        let req = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$activate\",\"params\":{{\"event\":\"onCommand:run-task\"}}}}\n\
+             {{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"command.execute\",\"params\":{{\"command\":\"run-task\",\"context\":{{\"task\":\"selfcheck\",\"note_path\":{}}}}}}}\n",
+            serde_json::to_string(&note.to_string_lossy().to_string()).unwrap(),
+        );
+        to_plugin.write_all(req.as_bytes()).await.unwrap();
+
+        let answered = await_response(
+            from_plugin,
+            |v| v.get("id").and_then(|i| i.as_u64()) == Some(2),
+            "run-task",
+        )
+        .await;
+        let err = answered["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            err.contains("outside the vault"),
+            "err: {err}"
+        );
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
     }
 
