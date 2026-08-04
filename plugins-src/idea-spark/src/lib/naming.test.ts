@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { isReservedConceptName } from './okf/concept'
-import { slugFromMarkdown, ideaFileName, proofPathFor } from './naming'
+import { slugFromMarkdown, ideaFileName, proofPathFor, timestampFileName } from './naming'
 
 describe('slugFromMarkdown', () => {
   it('takes the first heading line, strips the # marker and collapses whitespace', () => {
@@ -94,6 +94,20 @@ describe('ideaFileName', () => {
       const name = ideaFileName(md, today, new Set())
       expect(isReservedConceptName(name)).toBe(false)
     }
+  })
+})
+
+describe('timestampFileName', () => {
+  const at = new Date(2026, 7, 4, 19, 42) // 本地时间 2026-08-04 19:42
+  it('names by creation minute, not by title', () => {
+    expect(timestampFileName(at, new Set())).toBe('2026-08-04-1942-idea.md')
+  })
+  it('pads single-digit month/day/hour/minute', () => {
+    expect(timestampFileName(new Date(2026, 0, 2, 3, 4), new Set())).toBe('2026-01-02-0304-idea.md')
+  })
+  it('suffixes on collision inside the same minute', () => {
+    const taken = new Set(['2026-08-04-1942-idea.md', '2026-08-04-1942-idea-2.md'])
+    expect(timestampFileName(at, taken)).toBe('2026-08-04-1942-idea-3.md')
   })
 })
 

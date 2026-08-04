@@ -16,7 +16,7 @@
 // `$state` self-invalidates into a loop that freezes the window (v4.2.4).
 import { bridge, vaultExists, vaultInfo, vaultList, vaultRead, vaultWrite } from './bridge'
 import { buildIdeaDoc, rebuildIdeaDoc } from './idea-doc'
-import { ideaFileName, proofPathFor, splitFrontmatter } from './naming'
+import { proofPathFor, splitFrontmatter, timestampFileName } from './naming'
 import { DEFAULT_STATE, parseState, serializeState, STATE_PATH } from './state-io'
 import { deriveStatus, listIdeas, type IdeaStatus } from './status'
 import { t } from './strings'
@@ -75,6 +75,16 @@ export interface SparkStore {
    *  lands with the delegation chain (Task 13) — until then the history list's
    *  per-row button is the only way in. */
   lastResult: string | null
+
+  /** Whether the inbox panel is expanded. Persisted (`state-io.ts`). */
+  inboxOpen: boolean
+  /** Rotation counter for the blank-document placeholder line (`placeholder.ts`).
+   *  Persisted so the line shown does not reset to the same one on every
+   *  restart. */
+  placeholderSeq: number
+  /** Autosave's own status, distinct from `busy` (which the action bar reads
+   *  to disable itself during an explicit host call). */
+  saveState: { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved'; at: string } | { kind: 'failed'; message: string }
 }
 
 /** Terminal push from the host's run watcher (Task 13 wires the transport). */
@@ -106,6 +116,9 @@ export function createStore(): SparkStore {
     celebrate: false,
     celebrateSeq: 0,
     lastResult: null,
+    inboxOpen: false,
+    placeholderSeq: 0,
+    saveState: { kind: 'idle' },
   }
 }
 
@@ -220,18 +233,21 @@ export function fileNames(s: SparkStore): string[] {
 
 /**
  * The file name a save should write to: the one this idea already occupies, or
- * — for an idea that has never been saved — `YYYY-MM-DD-<slug>.md` deduplicated
- * against *every* file in the directory (an orphaned `.proof.md` occupies a
- * name just as much as an idea does).
+ * — for an idea that has never been saved — `YYYY-MM-DD-HHmm-idea.md` (the
+ * creation moment, see `timestampFileName`) deduplicated against *every* file
+ * in the directory (an orphaned `.proof.md` occupies a name just as much as
+ * an idea does).
  *
  * Keeping the name once it exists is deliberate: renaming the document because
- * the user edited its title would scatter one idea across several files.
+ * the user edited its title would scatter one idea across several files. The
+ * markdown itself no longer factors into the name at all — see
+ * `timestampFileName` for why.
  *
  * Note this only knows what the last listing saw. `saveIdea` re-checks the
  * winner against the disk before writing — see the note there.
  */
-export function nextFileName(s: SparkStore, markdown: string, todayStr: string): string {
-  return s.current ?? ideaFileName(markdown, todayStr, new Set(fileNames(s)))
+export function nextFileName(s: SparkStore, _markdown: string, nowIso: string): string {
+  return s.current ?? timestampFileName(new Date(nowIso), new Set(fileNames(s)))
 }
 
 /**
@@ -305,22 +321,10 @@ export function needsSaveBefore(s: SparkStore, liveMarkdown: string): boolean {
   return liveMarkdown !== s.savedMarkdown
 }
 
-/** The pre-filled capture template (localized), used for every fresh idea. */
+/** A fresh idea starts blank: no pre-filled template, just a grey-text
+ *  placeholder (`placeholder.ts`) prompting the user to write. */
 export function ideaTemplate(): string {
-  return [
-    `# ${t('templateH1')}`,
-    '',
-    t('templateHint'),
-    '',
-    `## ${t('sectionDomain')}`,
-    '',
-    `## ${t('sectionTransfer')}`,
-    '',
-    `## ${t('sectionResources')}`,
-    '',
-    `## ${t('sectionOutcome')}`,
-    '',
-  ].join('\n')
+  return ''
 }
 
 /** On-disk idea text → what the editor shows: frontmatter (and the blank lines
@@ -344,13 +348,6 @@ export function displayName(name: string): string {
  */
 export function frontmatterOf(md: string): string | null {
   return splitFrontmatter(md)[0]
-}
-
-/** Local (not UTC) `YYYY-MM-DD` — the date prefix of a new idea's file name.
- *  `toISOString()` would name a late-evening idea after tomorrow. */
-function today(d = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
 // ── actions (bridge IO on the singleton) ────────────────────────────────────
@@ -383,6 +380,8 @@ export async function boot(): Promise<void> {
     const persisted = parseState(raw)
     state.ideaDir = persisted.ideaDir
     state.pending = persisted.pendingRuns
+    state.inboxOpen = persisted.inboxOpen
+    state.placeholderSeq = persisted.placeholderSeq
     await reload()
   } finally {
     state.booting = false
@@ -427,7 +426,15 @@ export async function reload(): Promise<void> {
 /** Persists `.notemd/idea-spark.json`. Failure is reported, never thrown. */
 async function persist(): Promise<void> {
   try {
-    await vaultWrite(STATE_PATH, serializeState({ ideaDir: state.ideaDir, pendingRuns: { ...state.pending } }))
+    await vaultWrite(
+      STATE_PATH,
+      serializeState({
+        ideaDir: state.ideaDir,
+        pendingRuns: { ...state.pending },
+        inboxOpen: state.inboxOpen,
+        placeholderSeq: state.placeholderSeq,
+      }),
+    )
   } catch (e) {
     console.error('[idea-spark] writing plugin state failed:', e)
   }
@@ -472,27 +479,26 @@ export async function saveIdea(markdown: string): Promise<string | null> {
  * `nextFileName` can only dedupe against what the last listing saw, and that
  * listing can be stale or have failed outright (see `reload`) — in which case
  * it would hand back an un-suffixed name and the write would silently overwrite
- * a same-day, same-title idea. `host.vault.exists` is the authority, so ask it,
- * and keep asking as long as the answer is "taken" (bounded, so a bridge that
- * answers `true` for everything can't spin forever). It also covers a collision
- * the string-level dedup structurally cannot see: the slug keeps the title's
- * case, so `My-Idea.md` and `my-idea.md` are two names but one file on a
- * case-insensitive filesystem (macOS's default).
+ * a same-minute idea (two windows opened within the same 60-second bucket).
+ * `host.vault.exists` is the authority, so ask it, and keep asking as long as
+ * the answer is "taken" (bounded, so a bridge that answers `true` for
+ * everything can't spin forever).
  *
  * An idea that already has a file skips all of this: overwriting itself is the
  * whole point of a second save.
  *
  * Cap behaviour, stated plainly: after 100 occupied candidates the loop gives
  * up and returns the 101st name **unverified**, which could overwrite it. That
- * needs 100 same-day, same-title ideas in one directory; a bound is still worth
- * having, because without one a bridge that answered `true` to everything would
- * hang the save (and with it the window) forever.
+ * needs 100 ideas created in the same minute in one directory; a bound is
+ * still worth having, because without one a bridge that answered `true` to
+ * everything would hang the save (and with it the window) forever.
  */
 async function freeFileName(markdown: string): Promise<string> {
   if (state.current) return state.current
 
+  const now = new Date()
   const taken = new Set(fileNames(state))
-  let name = nextFileName(state, markdown, today())
+  let name = nextFileName(state, markdown, now.toISOString())
   for (let i = 0; i < 100; i++) {
     // A failed existence check must not block the save: treat it as free and
     // let the write itself report whatever is really wrong.
@@ -501,7 +507,7 @@ async function freeFileName(markdown: string): Promise<string> {
       .catch(() => false)
     if (!occupied) return name
     taken.add(name)
-    name = ideaFileName(markdown, today(), taken)
+    name = timestampFileName(now, taken)
   }
   console.warn(`[idea-spark] gave up looking for a free name after 100 tries; using ${name} unchecked`)
   return name

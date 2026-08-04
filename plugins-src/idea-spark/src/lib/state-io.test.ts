@@ -9,7 +9,12 @@ describe('STATE_PATH', () => {
 
 describe('parseState — happy path', () => {
   it('round-trips a well-formed state through serialize/parse', () => {
-    const s: SparkState = { ideaDir: 'inbox/ideas', pendingRuns: { 'inbox/ideas/a.md': 'run-1' } }
+    const s: SparkState = {
+      ideaDir: 'inbox/ideas',
+      pendingRuns: { 'inbox/ideas/a.md': 'run-1' },
+      inboxOpen: false,
+      placeholderSeq: 0,
+    }
     expect(parseState(serializeState(s))).toEqual(s)
   })
 })
@@ -39,6 +44,8 @@ describe('parseState — falls back to defaults, never throws', () => {
     expect(parseState(JSON.stringify({ ideaDir: 'other/dir' }))).toEqual({
       ideaDir: 'other/dir',
       pendingRuns: {},
+      inboxOpen: false,
+      placeholderSeq: 0,
     })
   })
 
@@ -46,6 +53,8 @@ describe('parseState — falls back to defaults, never throws', () => {
     expect(parseState(JSON.stringify({ pendingRuns: { 'a.md': 'run-9' } }))).toEqual({
       ideaDir: DEFAULT_STATE.ideaDir,
       pendingRuns: { 'a.md': 'run-9' },
+      inboxOpen: false,
+      placeholderSeq: 0,
     })
   })
 
@@ -57,14 +66,20 @@ describe('parseState — falls back to defaults, never throws', () => {
     expect(parseState(JSON.stringify({ ideaDir: 'd', pendingRuns: ['a', 'b'] }))).toEqual({
       ideaDir: 'd',
       pendingRuns: {},
+      inboxOpen: false,
+      placeholderSeq: 0,
     })
     expect(parseState(JSON.stringify({ ideaDir: 'd', pendingRuns: 'nope' }))).toEqual({
       ideaDir: 'd',
       pendingRuns: {},
+      inboxOpen: false,
+      placeholderSeq: 0,
     })
     expect(parseState(JSON.stringify({ ideaDir: 'd', pendingRuns: { 'a.md': 7 } }))).toEqual({
       ideaDir: 'd',
       pendingRuns: {},
+      inboxOpen: false,
+      placeholderSeq: 0,
     })
   })
 
@@ -73,13 +88,31 @@ describe('parseState — falls back to defaults, never throws', () => {
     a.pendingRuns['a.md'] = 'run-1'
     a.ideaDir = 'mutated'
     expect(parseState(null)).toEqual(DEFAULT_STATE)
-    expect(DEFAULT_STATE).toEqual({ ideaDir: 'inbox/ideas', pendingRuns: {} })
+    expect(DEFAULT_STATE).toEqual({
+      ideaDir: 'inbox/ideas',
+      pendingRuns: {},
+      inboxOpen: false,
+      placeholderSeq: 0,
+    })
+  })
+
+  it('defaults the new fields and tolerates wrong types', () => {
+    expect(parseState(null).inboxOpen).toBe(false)
+    expect(parseState(null).placeholderSeq).toBe(0)
+    expect(parseState('{"inboxOpen":"yes","placeholderSeq":"x"}').inboxOpen).toBe(false)
+    expect(parseState('{"inboxOpen":"yes","placeholderSeq":"x"}').placeholderSeq).toBe(0)
+    expect(parseState('{"inboxOpen":true,"placeholderSeq":7}').placeholderSeq).toBe(7)
+  })
+
+  it('round-trips the new fields', () => {
+    const s = { ...DEFAULT_STATE, inboxOpen: true, placeholderSeq: 3 }
+    expect(parseState(serializeState(s))).toEqual(s)
   })
 })
 
 describe('serializeState', () => {
   it('produces JSON parseable back to the same shape', () => {
-    const s: SparkState = { ideaDir: 'inbox/ideas', pendingRuns: {} }
+    const s: SparkState = { ideaDir: 'inbox/ideas', pendingRuns: {}, inboxOpen: false, placeholderSeq: 0 }
     expect(JSON.parse(serializeState(s))).toEqual(s)
   })
 })

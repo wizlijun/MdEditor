@@ -239,36 +239,33 @@ describe('setIdeaDir', () => {
 // saves overwrite it", "re-saving preserves created and unknown keys") are
 // pinned by tests instead of only by the bridge-driven action around them.
 describe('nextFileName', () => {
-  it('names a first save from the title and the date, deduped against the directory', () => {
+  it('names a first save by the creation timestamp, deduped against the directory', () => {
     const s = createStore()
-    s.files = ['inbox/ideas/2026-08-04-my-idea.md']
-    expect(nextFileName(s, '# my idea\n\nbody', '2026-08-04')).toBe('2026-08-04-my-idea-2.md')
-  })
-
-  it('only dedupes against names it has actually seen (the disk check backstops it)', () => {
-    // The slug keeps the title's case, so a differently-cased retelling of the
-    // same title is a *different* string here — yet the same file on a
-    // case-insensitive filesystem. `saveIdea`'s `host.vault.exists` pass is
-    // what closes that gap; this pins the pure function's honest limit.
-    const s = createStore()
-    s.files = ['inbox/ideas/2026-08-04-my-idea.md']
-    expect(nextFileName(s, '# My Idea', '2026-08-04')).toBe('2026-08-04-My-Idea.md')
+    const at = new Date(2026, 7, 4, 19, 42).toISOString()
+    s.files = ['inbox/ideas/2026-08-04-1942-idea.md']
+    expect(nextFileName(s, '# my idea\n\nbody', at)).toBe('2026-08-04-1942-idea-2.md')
   })
 
   it('dedupes against non-idea files in the directory too', () => {
     const s = createStore()
-    // An orphaned sidecar occupies the name just as much as an idea does.
-    s.files = ['inbox/ideas/2026-08-04-a.proof.md']
-    expect(nextFileName(s, '# a', '2026-08-04')).toBe('2026-08-04-a.md')
-    s.files = ['inbox/ideas/2026-08-04-a.md', 'inbox/ideas/2026-08-04-a.proof.md']
-    expect(nextFileName(s, '# a', '2026-08-04')).toBe('2026-08-04-a-2.md')
+    const at = new Date(2026, 7, 4, 19, 42).toISOString()
+    // An orphaned sidecar from a *different* minute does not occupy this
+    // minute's name...
+    s.files = ['inbox/ideas/2026-08-04-1941-idea.proof.md']
+    expect(nextFileName(s, '# a', at)).toBe('2026-08-04-1942-idea.md')
+    // ...but an exact-name collision — idea or sidecar alike — does.
+    s.files = ['inbox/ideas/2026-08-04-1942-idea.md', 'inbox/ideas/2026-08-04-1942-idea.proof.md']
+    expect(nextFileName(s, '# a', at)).toBe('2026-08-04-1942-idea-2.md')
   })
 
-  it('keeps the current file name once the idea has been saved, retitled or not', () => {
+  it('names a never-saved idea by timestamp and keeps the name afterwards', () => {
     const s = createStore()
-    s.current = '2026-08-04-my-idea.md'
-    expect(nextFileName(s, '# A completely different title', '2026-08-05')).toBe(
-      '2026-08-04-my-idea.md',
+    s.ideaDir = 'inbox/ideas'
+    const at = new Date(2026, 7, 4, 19, 42).toISOString()
+    expect(nextFileName(s, '# 随便什么标题', at)).toBe('2026-08-04-1942-idea.md')
+    s.current = '2026-08-04-1942-idea.md'
+    expect(nextFileName(s, '# 改了标题', new Date(2026, 7, 5, 8, 0).toISOString())).toBe(
+      '2026-08-04-1942-idea.md',
     )
   })
 })
@@ -432,11 +429,8 @@ describe('relPath', () => {
 })
 
 describe('ideaTemplate', () => {
-  it('opens with the localized H1 and carries the four sections in order', () => {
-    const tpl = ideaTemplate()
-    expect(tpl.startsWith('# New idea\n')).toBe(true)
-    const headings = tpl.split('\n').filter((l) => l.startsWith('## '))
-    expect(headings).toEqual(['## Domain', '## Transfer', '## Resources', '## Outcome'])
+  it('starts a new idea blank — no template', () => {
+    expect(ideaTemplate()).toBe('')
   })
 })
 

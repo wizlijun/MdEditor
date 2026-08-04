@@ -11,15 +11,18 @@ const FORBIDDEN_CHARS = /[\\/:*?"<>|#%`]/g
 /**
  * Derives a filename-safe slug from the first non-empty line of a markdown
  * document's *body* — a leading YAML frontmatter block, if present, is
- * skipped first so a saved idea (which always has one once round-tripped
- * through `buildIdeaDoc`) still names itself off its real title instead of
- * the `---` fence (works whether that line is a heading or a plain
- * paragraph — heading markers are stripped as part of the forbidden-
- * character pass, so no special-casing is needed). Falls back to `'idea'`
- * when there is no usable text at all: an empty document, a frontmatter-only
- * document (nothing left after the closing fence), a document whose
- * frontmatter fence is never closed (see `stripLeadingFrontmatter`), or a
- * title made entirely of forbidden characters.
+ * skipped first (works whether that line is a heading or a plain paragraph —
+ * heading markers are stripped as part of the forbidden-character pass, so no
+ * special-casing is needed). Falls back to `'idea'` when there is no usable
+ * text at all: an empty document, a frontmatter-only document (nothing left
+ * after the closing fence), a document whose frontmatter fence is never
+ * closed (see `stripLeadingFrontmatter`), or a title made entirely of
+ * forbidden characters.
+ *
+ * No longer used to name idea files on disk — new ideas are named by
+ * creation timestamp (`timestampFileName`) so autosave never has to guess a
+ * title before the user has written one. This now backs the inbox list's row
+ * title: a one-line stand-in for a document that may never grow a heading.
  */
 export function slugFromMarkdown(md: string): string {
   const line = firstNonEmptyLine(stripLeadingFrontmatter(md))
@@ -96,6 +99,26 @@ export function ideaFileName(md: string, today: string, taken: Set<string>): str
     n += 1
   }
   return candidate
+}
+
+/**
+ * `YYYY-MM-DD-HHmm-idea.md`, taken from the **creation moment's local time**
+ * (`toISOString()` would name a late-evening idea after tomorrow). Names are
+ * deliberately not derived from the title: autosave writes to disk before the
+ * user has typed a heading, and renaming after the fact would scatter one
+ * idea across several files. A collision (two ideas opened in the same
+ * minute) appends `-2`, `-3`, ….
+ */
+export function timestampFileName(now: Date, taken: Set<string>): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  const base = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}-idea`
+  let name = `${base}.md`
+  let n = 2
+  while (taken.has(name)) {
+    name = `${base}-${n}.md`
+    n += 1
+  }
+  return name
 }
 
 /** `inbox/ideas/a.md` → `inbox/ideas/a.proof.md`. */
