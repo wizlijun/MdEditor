@@ -109,6 +109,11 @@
 .answer-card-title { font-weight: 600; white-space: nowrap; }
 .answer-card-summary { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .answer-card-body { padding: 0 10px 8px 10px; }
+/* 编辑器正文是 `white-space: pre-wrap`(ProseMirror 的换行 span 靠它成行)。卡片正文
+   却是 markdown 渲染出来的 HTML —— 标签之间的换行(`</li>\n<li>`)在 pre-wrap 下变成
+   真实空行,清单每一行之间凭空多出一行、导语与清单之间多出两行。卡片不是 PM 文本节点,
+   回到常规空白折叠;`<pre>`/`<code>` 有自己的 white-space,不受影响。 */
+.answer-card, .answer-card .answer-card-md { white-space: normal; }
 /* 多节点答复渲染成层级清单,行距要均匀。主题把正文排版编译成
    `[data-theme=x] .moraya-editor ul > li`(0-2-2)这类选择器,条目上下各 0.4em、
    嵌套列表再叠一个 0.6em,拿到卡片里每一行都被拉成段落间距。卡片是一眼扫完的清单,
