@@ -4,6 +4,8 @@
   import { setSideVisible } from '../../lib/side-panel/registry.svelte'
   import { t } from '../../lib/i18n/store.svelte'
   import { companionPathFor } from '../../lib/outline/store.svelte'
+  import { noteHomeForRead } from '../../lib/outline/note-home'
+  import { sotvaultStore } from '../../lib/sotvault.svelte'
   import { openFile, setMode, closeTab, tabs } from '../../lib/tabs.svelte'
   import OutlineEditor from './OutlineEditor.svelte'
   import SideViewSwitcher from '../side-panel/SideViewSwitcher.svelte'
@@ -14,7 +16,17 @@
 
   // Whether the current tab has an outline. Drives body state + button enablement.
   let applicable = $derived(tab != null && outlineAppliesTo(tab))
-  let companionPath = $derived(applicable && tab ? companionPathFor(tab.filePath) : null)
+  // Vault-homed resolution, same as OutlineEditor's: a synced source's note lives
+  // next to the VAULT copy, not next to the source. Using the bare source-side
+  // companion here handed the agent (and 打开/删除笔记) a path that doesn't exist.
+  let companionPath = $derived(
+    applicable && tab
+      ? (noteHomeForRead(tab.filePath, {
+          vaultRoot: sotvaultStore.vaultRoot,
+          records: sotvaultStore.records,
+        }) ?? companionPathFor(tab.filePath))
+      : null,
+  )
 
   // 面板重置计数：删除笔记后自增 → OutlineEditor 重挂 → 重读(文件已无) → 空大纲
   let resetTick = $state(0)

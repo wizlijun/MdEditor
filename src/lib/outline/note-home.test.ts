@@ -46,4 +46,8 @@ describe('noteHomeForRead', () => {
     expect(noteHomeForRead('/dl/foo.md', { vaultRoot: '/v', records: [] }))
       .toBe('/dl/foo.note.md')
   })
+  it('a note path itself has no companion — callers get null, not a double suffix', () => {
+    const records = [rec('/dl/foo.md', '/v/Sync/2026-07-15-foo.md')]
+    expect(noteHomeForRead('/dl/foo.note.md', { vaultRoot: '/v', records })).toBeNull()
+  })
 })

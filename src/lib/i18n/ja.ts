@@ -197,6 +197,7 @@ export const ja: Record<keyof Messages, string> = {
   // Drawer / tab bar
   'drawer.closeMenu': 'メニューを閉じる',
   'tabBar.modified': '変更あり',
+  'syncMark.tooltip': '↔ 常に元ファイルを編集中 · Vault に同期済み',
 
   // Plugins settings
   'plugins.restartNote': '変更は note.md を再起動すると有効になります',

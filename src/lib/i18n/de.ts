@@ -195,6 +195,7 @@ export const de: Record<keyof Messages, string> = {
   // Drawer / tab bar
   'drawer.closeMenu': 'Menü schließen',
   'tabBar.modified': 'geändert',
+  'syncMark.tooltip': '↔ Es wird immer die Quelldatei bearbeitet · mit dem Vault synchronisiert',
 
   // Plugins settings
   'plugins.restartNote': 'Änderungen werden nach dem Neustart von note.md wirksam',

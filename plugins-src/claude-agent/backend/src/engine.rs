@@ -83,13 +83,17 @@ pub async fn run(
     }
 
     // A run aimed at one note gets a policy that only lets it touch that note —
-    // the prompt asked nicely and the model grepped the vault anyway.
+    // the prompt asked nicely and the model grepped the vault anyway. The metas
+    // put the run on the ORIGINAL document's directory rather than the vault's
+    // snapshot of it, for whichever notes this run can reach.
+    let metas = crate::mirror::read_metas(&spec.vault);
     let scope = spec
         .target
         .as_deref()
-        .map(|t| settings::Scope::for_note(std::path::Path::new(t)));
-    let _ = settings::materialize(&spec.task_dir, &spec.vault, scope.as_ref());
-    let argv = prompt::build_argv(&spec.task, &spec.prompt);
+        .map(|t| settings::Scope::for_note(&spec.vault, std::path::Path::new(t), &metas));
+    let _ = settings::materialize(&spec.task_dir, &spec.vault, scope.as_ref(), &metas);
+    let full_prompt = prompt::with_source_context(&spec.prompt, &spec.vault, scope.as_ref());
+    let argv = prompt::build_argv(&spec.task, &full_prompt);
 
     let mut cmd = tokio::process::Command::new(&spec.claude);
     cmd.args(&argv)
@@ -574,7 +578,16 @@ mod tests {
         assert!(got.contains("docs/a.note.md"), "note not in policy: {got}");
         assert!(got.contains("docs/a.md"), "source not in policy: {got}");
         assert!(got.contains("Grep") && got.contains("Bash"), "no deny list: {got}");
-        assert!(!got.contains("Read(" ) || !got.contains("/**)"), "still vault-wide: {got}");
+        // Narrow means "not the whole vault" — the source's own directory IS
+        // granted, since that's where the document actually lives.
+        assert!(
+            !got.contains(&format!("Read({}/**)", d.path().display())),
+            "still vault-wide: {got}"
+        );
+        assert!(
+            got.contains(&format!("Read({}/docs/**)", d.path().display())),
+            "the source's directory must be readable: {got}"
+        );
     }
 
     #[tokio::test]

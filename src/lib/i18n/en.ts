@@ -202,6 +202,7 @@ export const en = {
   // Drawer / tab bar
   'drawer.closeMenu': 'Close menu',
   'tabBar.modified': 'modified',
+  'syncMark.tooltip': '↔ Always editing the source file · synced to the vault',
 
   // Plugins settings
   'plugins.restartNote': 'Changes take effect after restarting note.md',
