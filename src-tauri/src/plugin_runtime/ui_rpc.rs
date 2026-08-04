@@ -329,7 +329,7 @@ pub async fn dispatch_with(
         "host.editor.open" => editor_open(services, &req.params),
         "host.agent.run"    => services.agent_execute("run-task", req.params.clone()),
         "host.agent.status" => services.agent_execute("run-status", req.params.clone()),
-        "host.notify"       => services.notify_user(&req.params),
+        "host.notify"       => notify_push(services, &req.params),
         // handle_common took log/toast; the gate rejected everything unknown.
         other => Err(format!("io: unhandled method {other}")),
     };
@@ -515,11 +515,16 @@ fn resolve_in_vault(services: &dyn HostServices, params: &serde_json::Value) -> 
     let root_c = root
         .canonicalize()
         .map_err(|e| format!("io: vault root unavailable: {e}"))?;
-    let target = root_c.join(&rel);
+    contained_in(&root_c, root_c.join(&rel))
+}
 
-    // Walk up to the deepest existing ancestor, canonicalize it, verify
-    // containment, then re-append the not-yet-existing tail.
-    let mut probe = target.clone();
+/// Step 2 of the fence, on its own so callers that start from an ABSOLUTE path
+/// (`host.notify`'s open_path) get the identical guarantee: canonicalize the
+/// deepest EXISTING ancestor (write targets may not exist yet), require it to
+/// stay under the canonicalized root — which also defeats symlink escapes —
+/// then re-append the not-yet-existing tail.
+fn contained_in(root_c: &Path, target: PathBuf) -> Result<PathBuf, String> {
+    let mut probe = target;
     let mut missing_tail: Vec<std::ffi::OsString> = Vec::new();
     let canon = loop {
         match probe.canonicalize() {
@@ -536,7 +541,7 @@ fn resolve_in_vault(services: &dyn HostServices, params: &serde_json::Value) -> 
             }
         }
     };
-    if !canon.starts_with(&root_c) {
+    if !canon.starts_with(root_c) {
         return Err("io: path escapes the vault".into());
     }
     let mut out = canon;
@@ -544,6 +549,55 @@ fn resolve_in_vault(services: &dyn HostServices, params: &serde_json::Value) -> 
         out.push(name);
     }
     Ok(out)
+}
+
+/// A reminder's `open_path`, fenced to the vault. Unlike `host.vault.*` this
+/// one ACCEPTS an absolute path (the pushing plugin knows the run's real target
+/// and the tray click handler needs an absolute path anyway), but it must still
+/// land inside the vault: without this a plugin holding only `notify` could get
+/// the user to one-click open `~/.ssh/config`, i.e. more reach than
+/// `editor.open` — which does go through `resolve_in_vault`.
+fn resolve_reminder_path(services: &dyn HostServices, raw: &str) -> Result<PathBuf, String> {
+    let root = services
+        .vault_root()
+        .ok_or_else(|| "vault_required: configure a Vault first".to_string())?;
+    let root_c = root
+        .canonicalize()
+        .map_err(|e| format!("io: vault root unavailable: {e}"))?;
+    let p = Path::new(raw.trim());
+    if p.as_os_str().is_empty() {
+        return Err("io: path must not be empty".into());
+    }
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err("io: path escapes the vault".into());
+    }
+    let target = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root_c.join(p)
+    };
+    contained_in(&root_c, target)
+}
+
+/// `host.notify` → the tray reminder registry. The `open_path` action is fenced
+/// to the vault here (and rewritten to its canonical absolute form) before the
+/// reminder is ever registered.
+pub(crate) fn notify_push(
+    services: &dyn HostServices,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let is_open_path = params.pointer("/action/kind").and_then(|v| v.as_str()) == Some("open_path");
+    if !is_open_path {
+        return services.notify_user(params);
+    }
+    let raw = params
+        .pointer("/action/path")
+        .and_then(|v| v.as_str())
+        .ok_or("io: open_path needs a 'path'")?;
+    let abs = resolve_reminder_path(services, raw)?;
+    let mut params = params.clone();
+    params["action"]["path"] = serde_json::json!(abs.to_string_lossy());
+    services.notify_user(&params)
 }
 
 /// `{ path } → { content }` (UTF-8, `MAX_TEXT_BYTES` cap).
@@ -1411,16 +1465,107 @@ mod tests {
 
     #[tokio::test]
     async fn host_notify_dispatches_to_notify_user_with_capability() {
-        let s = StubServices::default();
+        let dir = tempfile::tempdir().unwrap();
+        let summary = dir.path().join("ssot/ebooks/b/2026-08-04-summary.md");
+        std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+        std::fs::write(&summary, "# x").unwrap();
+        let s = StubServices {
+            vault: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
         let calls = s.agent_calls.clone();
-        let params = serde_json::json!({"title": "t", "action": {"kind": "open_path", "path": "/x"}});
+        let params = serde_json::json!({
+            "title": "t",
+            "action": {"kind": "open_path", "path": summary.to_string_lossy()},
+        });
         let r = run(&s, &["notify"], "host.notify", params.clone()).await;
         assert!(r.error.is_none(), "{:?}", r.error);
         assert_eq!(r.result.unwrap(), serde_json::json!({"ok": true, "id": 1}));
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "notify");
-        assert_eq!(calls[0].1, params);
+        assert_eq!(calls[0].1["title"], "t");
+        // The registry gets the canonicalized absolute path, not the raw one
+        // (/tmp → /private/tmp on macOS).
+        assert_eq!(
+            std::path::Path::new(calls[0].1["action"]["path"].as_str().unwrap()),
+            summary.canonicalize().unwrap(),
+        );
+    }
+
+    /// `host.notify`'s OpenPath used to take ANY absolute path and hand it
+    /// straight to the tray click handler — a plugin declaring only `notify`
+    /// could get the user to one-click open `~/.ssh/config`, i.e. strictly more
+    /// reach than `editor.open`, which is fenced. Same fence now.
+    #[tokio::test]
+    async fn host_notify_refuses_an_open_path_outside_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("id_rsa");
+        std::fs::write(&secret, "x").unwrap();
+        let s = StubServices {
+            vault: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let calls = s.agent_calls.clone();
+
+        for path in [
+            secret.to_string_lossy().to_string(),
+            "../escape.md".to_string(),
+            format!("{}/../escape.md", dir.path().display()),
+        ] {
+            let r = run(
+                &s,
+                &["notify"],
+                "host.notify",
+                serde_json::json!({"title": "t", "action": {"kind": "open_path", "path": path}}),
+            )
+            .await;
+            let e = r.error.unwrap_or_else(|| panic!("{path} was accepted"));
+            assert!(e.message.contains("escapes the vault"), "{path}: {}", e.message);
+        }
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "a refused reminder must never reach the registry"
+        );
+    }
+
+    /// A vault-relative path is accepted too (and made absolute), and the
+    /// plugin-window action carries no path to fence.
+    #[tokio::test]
+    async fn host_notify_accepts_a_vault_relative_path_and_the_window_action() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("ssot")).unwrap();
+        std::fs::write(dir.path().join("ssot/a.md"), "# a").unwrap();
+        let s = StubServices {
+            vault: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let calls = s.agent_calls.clone();
+
+        let r = run(
+            &s,
+            &["notify"],
+            "host.notify",
+            serde_json::json!({"title": "t", "action": {"kind": "open_path", "path": "ssot/a.md"}}),
+        )
+        .await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+
+        let r = run(
+            &s,
+            &["notify"],
+            "host.notify",
+            serde_json::json!({"title": "t", "action": {
+                "kind": "open_plugin_window", "plugin_id": "notemd.claude-agent", "window": "main"}}),
+        )
+        .await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(std::path::Path::new(calls[0].1["action"]["path"].as_str().unwrap()).is_absolute());
+        assert_eq!(calls[1].1["action"]["kind"], "open_plugin_window");
     }
 
     #[tokio::test]

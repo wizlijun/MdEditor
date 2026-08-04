@@ -185,7 +185,10 @@ pub fn make_sink(
                                 "host.location.get" => Some(s.location_get()),
                                 "host.agent.run" => Some(s.agent_execute("run-task", req.params.clone())),
                                 "host.agent.status" => Some(s.agent_execute("run-status", req.params.clone())),
-                                "host.notify" => Some(s.notify_user(&req.params)),
+                                // notify_push, not notify_user: the OpenPath
+                                // action has to clear the same vault fence
+                                // `editor.open` does.
+                                "host.notify" => Some(rpc::notify_push(s, &req.params)),
                                 _ => None,
                             }
                         });
@@ -834,6 +837,9 @@ mod tests {
     #[test]
     fn agent_status_relays_run_status() {
         let log_dir = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let summary = vault.path().join("summary.md");
+        std::fs::write(&summary, "# x").unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = make_sink(
             "pub.test".into(),
@@ -841,12 +847,48 @@ mod tests {
             log_dir.path().to_path_buf(),
             recording_emitter().0,
             noop_poster(),
-            Some(Arc::new(ServicesStub(std::env::temp_dir(), seen.clone()))),
+            Some(Arc::new(ServicesStub(vault.path().to_path_buf(), seen.clone()))),
         );
         sink(req("host.agent.status", Some(1), serde_json::json!({"task": "ai-read-ebook", "run_id": "r1"})));
-        sink(req("host.notify", Some(2), serde_json::json!({"title": "t", "action": {"kind": "open_path", "path": "/x"}})));
+        sink(req(
+            "host.notify",
+            Some(2),
+            serde_json::json!({"title": "t", "action": {"kind": "open_path", "path": summary.to_string_lossy()}}),
+        ));
         let calls = seen.lock().unwrap();
         assert_eq!(calls[0].0, "run-status");
         assert_eq!(calls[1].0, "notify");
+    }
+
+    /// The process channel is the one plugins like claude-agent actually push
+    /// reminders on, so the vault fence has to hold HERE too — not only on the
+    /// UI bridge.
+    #[test]
+    fn notify_on_process_channel_refuses_a_path_outside_the_vault() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("id_rsa");
+        std::fs::write(&secret, "x").unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = make_sink(
+            "pub.test".into(),
+            vec!["notify".into()],
+            log_dir.path().to_path_buf(),
+            recording_emitter().0,
+            noop_poster(),
+            Some(Arc::new(ServicesStub(vault.path().to_path_buf(), seen.clone()))),
+        );
+        let resp = sink(req(
+            "host.notify",
+            Some(1),
+            serde_json::json!({"title": "t", "action": {"kind": "open_path", "path": secret.to_string_lossy()}}),
+        ))
+        .unwrap();
+        assert!(
+            resp.error.unwrap().message.contains("escapes the vault"),
+            "an out-of-vault reminder must be refused"
+        );
+        assert!(seen.lock().unwrap().is_empty());
     }
 }
