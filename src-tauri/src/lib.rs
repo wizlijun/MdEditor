@@ -787,7 +787,13 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
             let _ = tray.set_icon(Some(img));
         }
         // Keep the menu-bar glyph clean: no text title next to the icon.
-        let _ = tray.set_title(None::<&str>);
+        // 有未读提醒时在图标旁挂数字角标;否则保持纯图标。
+        let n_reminders = crate::reminders::count();
+        if n_reminders > 0 {
+            let _ = tray.set_title(Some(n_reminders.to_string()));
+        } else {
+            let _ = tray.set_title(None::<&str>);
+        }
         let _ = tray.set_tooltip(Some(&tooltip));
     }
 
@@ -829,6 +835,26 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
 #[cfg(not(target_os = "ios"))]
 pub fn update_tray_icon(app: &tauri::AppHandle, _active: bool) {
     refresh_tray_status(app);
+}
+
+/// 提醒集变更后的托盘刷新:重建下拉菜单(让 🔔 子菜单进出)+ 刷新角标。
+/// 任意线程可调;真正的菜单操作 hop 到主线程(macOS 菜单 API 要求,同
+/// rebuild_menu 的做法)。
+#[cfg(not(target_os = "ios"))]
+pub(crate) fn refresh_tray_reminders(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let locale = read_saved_locale(&handle);
+        if let Some(tray) = handle.tray_by_id("main") {
+            if let Ok((menu, repo_item, status_item, sync_now_item)) = build_tray_menu(&handle, &locale) {
+                *handle.state::<TrayRepoItem>().0.lock().unwrap() = Some(repo_item);
+                *handle.state::<TrayStatusItem>().0.lock().unwrap() = Some(status_item);
+                *handle.state::<TraySyncNowItem>().0.lock().unwrap() = Some(sync_now_item);
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+        refresh_tray_status(&handle);
+    });
 }
 
 /// Build the Tauri runtime `Context` from the embedded tauri.conf.json.
@@ -1199,6 +1225,26 @@ pub fn run() {
                             "tray-sync-log" => { open_logs_window(app, Some("git-sync")); }
                             "tray-edit-agents" => agents_sync::edit_agents_md(app),
                             "tray-quit" => app.exit(0),
+                            "tray-reminder-clear" => {
+                                crate::reminders::clear_all();
+                                // DIRTY 守望会刷新;这里无需手动调用。
+                            }
+                            id if id.starts_with("tray-reminder:") => {
+                                let r = id.strip_prefix("tray-reminder:")
+                                    .and_then(|s| s.parse::<u64>().ok())
+                                    .and_then(crate::reminders::take);
+                                if let Some(r) = r {
+                                    match r.action {
+                                        crate::reminders::ReminderAction::OpenPath { path } => {
+                                            emit_open_file_delayed(app, &path);
+                                            show_main_window(app);
+                                        }
+                                        crate::reminders::ReminderAction::OpenPluginWindow { plugin_id, window } => {
+                                            let _ = crate::plugin_runtime::windows::open_plugin_window(app, &plugin_id, &window);
+                                        }
+                                    }
+                                }
+                            }
                             id if id.starts_with("tray-large-file:") => {
                                 if let Some(idx) = id.strip_prefix("tray-large-file:")
                                     .and_then(|s| s.parse::<usize>().ok())
@@ -1226,6 +1272,18 @@ pub fn run() {
                         }
                     })
                     .build(app)?;
+            }
+
+            // 提醒注册表守望:任何 reminders::push/take/clear 敲响 DIRTY 后刷新托盘。
+            #[cfg(not(target_os = "ios"))]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        crate::reminders::DIRTY.notified().await;
+                        refresh_tray_reminders(&handle);
+                    }
+                });
             }
 
             // Initial CLI argv (Linux / Windows / macOS-when-launched-from-shell).
@@ -1456,6 +1514,8 @@ fn menu_label(locale: &str, key: &str) -> String {
         "tray.largeFiles.header" => ("Over the limit — not synced. Move out of the vault:", "超过上限,未同步。请移出 vault:", "上限超過 —— 未同期。vault から移動してください:", "Über dem Limit — nicht synchronisiert. Aus dem Vault verschieben:"),
         "tray.viewLog" => ("View Log…", "查看日志…", "ログを表示…", "Protokoll anzeigen…"),
         "tray.editAgents" => ("Edit AGENTS.md…", "编辑 AGENTS.md…", "AGENTS.md を編集…", "AGENTS.md bearbeiten…"),
+        "tray.reminders.title" => ("🔔 {n} notification(s)", "🔔 {n} 条提醒", "🔔 通知 {n} 件", "🔔 {n} Erinnerung(en)"),
+        "tray.reminders.clear" => ("Clear All Notifications", "清除全部提醒", "通知をすべてクリア", "Alle Erinnerungen löschen"),
         // Sync status line / tooltip
         "sync.label" => ("Sync", "同步", "同期", "Sync"),
         "sync.neverSynced" => ("never synced", "从未同步", "未同期", "noch nie synchronisiert"),
@@ -1627,6 +1687,26 @@ fn build_tray_menu<R: tauri::Runtime>(
         Some(sub.build()?)
     };
 
+    // 全局提醒子菜单(仅有提醒时出现)。大文件子菜单的同款样式。
+    let reminder_items = crate::reminders::snapshot();
+    let reminders_submenu = if reminder_items.is_empty() {
+        None
+    } else {
+        let title = menu_label(locale, "tray.reminders.title")
+            .replace("{n}", &reminder_items.len().to_string());
+        let mut sub = SubmenuBuilder::with_id(app, "tray-reminders", &title);
+        for r in &reminder_items {
+            let it = MenuItem::with_id(app, format!("tray-reminder:{}", r.id), &r.title, true, None::<&str>)?;
+            sub = sub.item(&it);
+        }
+        let clear = MenuItem::with_id(
+            app, "tray-reminder-clear",
+            menu_label(locale, "tray.reminders.clear"), true, None::<&str>,
+        )?;
+        sub = sub.separator().item(&clear);
+        Some(sub.build()?)
+    };
+
     let sync_now_item = MenuItem::with_id(app, "tray-sync-now", menu_label(locale, "tray.syncNow"), true, None::<&str>)?;
     let sync_log_item = MenuItem::with_id(app, "tray-sync-log", menu_label(locale, "tray.viewLog"), true, None::<&str>)?;
     let edit_agents_item = MenuItem::with_id(app, "tray-edit-agents", menu_label(locale, "tray.editAgents"), true, None::<&str>)?;
@@ -1657,6 +1737,9 @@ fn build_tray_menu<R: tauri::Runtime>(
         .item(&status_item);
     if let Some(ref sm) = large_submenu {
         b2 = b2.item(sm);
+    }
+    if let Some(ref rm) = reminders_submenu {
+        b2 = b2.item(rm);
     }
     let menu = b2
         .item(&sync_now_item)
