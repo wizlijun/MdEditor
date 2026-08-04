@@ -193,7 +193,12 @@ pub fn parse_notify_params(v: &serde_json::Value) -> Result<(String, ReminderAct
 }
 ```
 
-在 `src-tauri/src/lib.rs` 现有 `mod` 声明区(`mod agents_sync;` 附近)加一行 `pub mod reminders;`。
+在 `src-tauri/src/lib.rs` 现有 `mod` 声明区(`mod agents_sync;` 附近)加模块声明,并与相邻桌面端模块一样加 iOS 门控(消费方 `plugin_runtime` 也是同款门控):
+
+```rust
+#[cfg(not(target_os = "ios"))]
+pub mod reminders;
+```
 
 - [ ] **Step 3: 跑测试确认通过**
 
