@@ -283,14 +283,22 @@
 
   async function aiRead(item: QueueItem) {
     if (!item.destRel || item.jobId == null) return
+    const jobId = item.jobId
+    // Same "synchronously claim, then await" shape as reserve()/schedule():
+    // flipping aiStatus to 'queued' before the RPC — not after it resolves —
+    // hides the button within this tick, closing the double-click window a
+    // post-await write would leave open (see queue.ts reserve()'s doc for
+    // why the ordering matters). If the RPC fails, roll the row back to
+    // 'failed' so it isn't stuck showing "queued" forever with no retry.
+    q = onAiEvent(q, jobId, { event: 'queued' })
     try {
       await bridge().request('plugin.ai_read_start', {
-        job_id: item.jobId,
+        job_id: jobId,
         dest_rel: item.destRel,
         name: item.name,
       })
-      q = onAiEvent(q, item.jobId, { event: 'queued' })
     } catch (e) {
+      q = onAiEvent(q, jobId, { event: 'failed', error: message(e) })
       globalError = message(e)
     }
   }
@@ -322,7 +330,19 @@
   }
 
   function clearFinished() {
-    q = { ...q, items: q.items.filter((i) => i.status === 'pending' || i.status === 'running') }
+    // A 'done' import row with AI reading still queued/running must stay:
+    // removing it would drop the item the backend's later ai_read push looks
+    // up by jobId, silently losing that row's status forever.
+    q = {
+      ...q,
+      items: q.items.filter(
+        (i) =>
+          i.status === 'pending' ||
+          i.status === 'running' ||
+          i.aiStatus === 'queued' ||
+          i.aiStatus === 'running',
+      ),
+    }
   }
 
   function toggleLog(id: number) {
