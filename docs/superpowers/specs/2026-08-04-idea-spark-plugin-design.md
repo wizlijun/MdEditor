@@ -16,7 +16,7 @@
 | idea 目录默认值 | `inbox/ideas`(vault 相对路径,窗口设置可改,存 vault 级 `.notemd/idea-spark.json`) |
 | 等待交互 | 可关窗,后台由宿主守望,完成后系统通知;窗口开着则就地欢庆 |
 | 缺依赖降级 | 未装/未启用 claude-agent 时仍可记 idea,委托按钮引导去市场安装 |
-| 编辑器形态 | 预填轻模板(一句话念头 + 领域/迁移场景/现有条件/期望成果四个可删小节) |
+| 编辑器形态 | 复用主程序那套 rich/source 双模式富文本(内嵌 `@moraya/core`,见 §2.1);预填轻模板(一句话念头 + 领域/迁移场景/现有条件/期望成果四个可删小节) |
 | 任务模板归属 | 由奇思妙想插件内嵌并幂等种入 vault `.notemd/agent-tasks/idea-proof/`,claude-agent 自动发现,无需给 claude-agent 发版 |
 
 ## 1. 总览与组件
@@ -43,7 +43,19 @@
 
 ## 2. 插件窗口 UX 与数据流
 
-窗口三区:**新 idea 编辑区**(主体,简单 markdown textarea 即可)、**历史列表**(idea 目录下各 idea 及状态:草稿/论证中/已完成/失败)、**设置**(齿轮弹层:idea 目录路径)。
+窗口三区:**新 idea 编辑区**(主体,rich/source 双模式编辑器,见 §2.1)、**历史列表**(idea 目录下各 idea 及状态:草稿/论证中/已完成/失败)、**设置**(齿轮弹层:idea 目录路径)。
+
+### 2.1 编辑器:内嵌 rich/source 双模式(与主程序同源)
+
+插件不能 import 主程序 `src/`,但 rich 内核 `@moraya/core` 是独立包,插件作为 pnpm workspace 成员直接依赖并打进 ui bundle:
+
+- **依赖**:插件 `package.json` 声明 `"@moraya/core": "file:../../moraya-core"`,并显式 pin 全部 peerDependencies(prosemirror-*/markdown-it/highlight.js)到与仓库根相同版本,防止行为漂移。**不 import `@moraya/core/style`**(该导出指向不存在的文件,构建会炸)。
+- **rich 模式**:照 `src/lib/editor-bridge.ts` 姿势(仅 3 个 import、~40 行)`createEditor`,选项:`inlineSyntaxScope: 'line'`(live-preview 当前行显源码)、`enableInlineMarkInputRules: false`、`enableMath: false`、`enableMermaid: false`(控体积,katex CSS 不进包)、`enableHistory: true`、`changeDebounceMs: 200`。挂载骨架从 `RichEditor.svelte` 抄必要部分(~150 行),批注/wikilink/slash menu/查找等 mdeditor 扩展一概不要。
+- **MediaResolver**(createEditor 必填):自实现 bridge 版——vault 相对路径经新增桥方法 `host.vault.read_bytes`(见 §3.3)读 base64 转 blob URL;远程 URL 直通;vault 外本地路径显示占位。
+- **source 模式**:照主程序方案自建「透明 textarea + `<pre>` 高亮层 + 行号」骨架(~180 行),复制零依赖的 `src/lib/source-highlight.ts`(136 行)与 `autopair.ts`。
+- **模式切换与状态共享**:照主程序姿势——单一 markdown 字符串真源 + `lastSync` 去环哨兵(~30 行),切换按钮 + 记住上次模式。
+- **CSS**:复制 `src/styles/editor-base.css` 基础子集(基础/cursor-syntax 标记/代码块/hljs token/列表,约 400 行)+ 自写 ~100 行排版变量。主题只跟明暗(桥的 `theme` 字符串 + 自声明 `color-scheme: light dark`,独立窗口惯例),**不跟随主程序自定义编辑器主题**——已知取舍。
+- **已知风险与对策**:core 升级改 DOM 类名时插件 CSS 会静默漂移——backlog:把编辑器基础 CSS 上游进 moraya-core 真正产出 `dist/style.css`,本期不做。插件 ui 包体积约 1.2MB(关 math/mermaid 后),可接受。
 
 主流程:
 
@@ -99,6 +111,11 @@
 - 系统通知:新增 `tauri-plugin-notification` 依赖 + capability 权限(当前宿主无通知插件)。
 - 实现纪律:轮询用 interval,不搭 `$effect` 链;`$effect` 内调读写 `$state` 的 store 函数必须 `untrack`(v4.2.4 教训)。
 
+### 3.3 `host.vault.read_bytes`(桥方法,挂在现有 `vault.read` capability 下)
+
+- 参数 `{path}`(vault 相对路径,同 `host.vault.read` 的路径校验:拒绝绝对路径/`..`/符号链接逃逸),返回 base64,10MB 上限。
+- 动机:插件窗口零 Tauri IPC,rich 编辑器的 MediaResolver 需要读 vault 内图片字节;现有 `host.vault.read` 只回文本、`host.fs.read_bytes` 仅限 dialog 选中路径。通用基建,其他插件同样受益。
+
 ## 4. `idea-proof` 任务模板与产物
 
 vault 内布局(claude-agent 约定):
@@ -135,14 +152,17 @@ vault 内布局(claude-agent 约定):
 
 ## 7. 测试与验证
 
-- 插件侧:`strings.test.ts`(四语 key 齐全)、slug/文件名生成、模板种入幂等、frontmatter 过 `scripts/okf-lint-core.mjs` 单测。
+- 插件侧:`strings.test.ts`(四语 key 齐全)、slug/文件名生成、模板种入幂等、frontmatter 过 `scripts/okf-lint-core.mjs` 单测;编辑器 markdown round-trip 冒烟(rich 挂载→setContent→getMarkdown 不变形,jsdom 下跑)。
+- 注意:在 `.claude/worktrees` 下开发时,`file:../../moraya-core` 同样受「先 `ln -s moraya-core` 再 `pnpm install`」约束。
 - 宿主侧:桥方法 capability 门禁单测(未声明 → -32001)、守望器状态机单测(done/lost/重启恢复)。
 - GUI:dev 构建实机手动验证(托盘入口、写 idea、委托、系统通知、欢庆、打开结果);不跑桌面自动化。
 - 发布:`scripts/dev-install-plugin.sh`、`scripts/release-plugins.sh` 各加 `idea-spark` case;先主程序发版(桥扩展 + 通知插件 + CONCEPT_TYPE 登记),再插件上架市场(`gen-plugin-index.mjs` 默认 merge,注意本地 dist-plugins 旧版回扫坑)。
 
 ## 8. 明确不做(YAGNI)
 
-- 不做富文本/moraya 编辑器,textarea 级 markdown 输入即可。
+- 编辑器不带 mdeditor 扩展:批注、wikilink、slash menu、查找替换、图片工具条、数学公式、mermaid 一概不做——只要基础 markdown live-preview + source 模式。
+- 不跟随主程序自定义编辑器主题,只跟系统明暗。
+- 编辑器基础 CSS 上游进 moraya-core(产出真实 `dist/style.css`)记 backlog,本期不做。
 - 不做 idea 之间的关系图/结网(纯 `.md` 不结网,符合产品原则)。
 - 不做 per-plugin「装了默认关」机制(装 = 启用,是市场现状;"用户开启后"即"安装后")。
 - 不做 CLI 子命令(需要了再加)。
