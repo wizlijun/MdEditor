@@ -53,7 +53,8 @@
   import { loadOutlineDirs } from './lib/outline/dirs.svelte'
   import { platform, isIOS } from './lib/platform.svelte'
   import { vaultStore, refreshStatus, syncNow, attachStatusListener } from './lib/vault.svelte'
-  import { canSyncActive, isTrackedVaultFile, deviceSourceForVaultPath, refreshSotvault, sotvaultStore, setVaultRootChangedHandler, initSotvaultNoteConflictToast } from './lib/sotvault.svelte'
+  import { canSyncActive, isTrackedVaultFile, deviceSourceForVaultPath, isMirroredSource, refreshSotvault, sotvaultStore, setVaultRootChangedHandler, initSotvaultNoteConflictToast } from './lib/sotvault.svelte'
+  import { windowTitleFor } from './lib/window-title'
   import { installRecentsSync, refreshRecentMenu, mergedRecents } from './lib/recent-sync.svelte'
   import { maybeInstallTracker, shutdownTracker } from './lib/insights/tracker.svelte'
   import { ensureWikilinkBlocklist } from './lib/wikilink/blocklist-io.svelte'
@@ -695,10 +696,14 @@
   // panel width whenever that side is showing, so it stays over the editor.
   let rightPanelOffset = $derived(isSideVisible('right', current) ? sidePanels.right.width : 0)
 
-  // Window title: filename when single tab, plain "note.md" otherwise
+  // Window title: filename when single tab, plain "note.md" otherwise. A
+  // vault-mirrored source gets the `↔` marker — with one tab there's no tab bar,
+  // so this is the only place that says "you're editing the source".
   $effect(() => {
     const tabCount = tabs.length
-    const title = tabCount === 1 && current ? `${current.title} — note.md` : 'note.md'
+    void sotvaultStore.tick
+    const doc = tabCount === 1 && current ? current.title : null
+    const title = windowTitleFor(doc, isMirroredSource(current?.filePath || null))
     getCurrentWindow().setTitle(title).catch(() => {})
   })
 

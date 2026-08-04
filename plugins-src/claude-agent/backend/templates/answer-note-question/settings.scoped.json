@@ -3,6 +3,7 @@
     "allow": [
       "Read(${NOTE})",
       "Read(${SOURCE})",
+      "Read(${SOURCE_DIR}/**)",
       "Edit(${NOTE})",
       "Write(${NOTE})",
       "Read(${VAULT}/answers/**)",

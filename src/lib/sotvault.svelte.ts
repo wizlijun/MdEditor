@@ -8,6 +8,7 @@ import { getDeviceId } from './settings.svelte'
 import {
   canSyncToVault as computeCanSync,
   isTracked as computeIsTracked,
+  isSyncedSource as computeIsSyncedSource,
   sourceForVault as computeSourceForVault,
   dialogActionFor,
   pushActionForOutcome,
@@ -78,6 +79,12 @@ export function isTrackedVaultFile(path: string | null): boolean {
 /** Source path a tracked vault copy was synced from, or null. */
 export function sourceForVaultPath(path: string | null): string | null {
   return computeSourceForVault(path, sotvaultStore.records)
+}
+
+/** True when `path` is a source OUTSIDE the vault that already has a vault
+ *  mirror — the state the `↔` marker announces ("you're editing the source"). */
+export function isMirroredSource(path: string | null): boolean {
+  return computeIsSyncedSource(path, sotvaultStore.records)
 }
 
 /** True when the given vault path is a mirror recorded by ANY device. */

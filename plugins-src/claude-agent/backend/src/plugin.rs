@@ -486,8 +486,8 @@ impl ClaudeAgentPlugin {
         let rel = note_relative_to_vault(&vault, note_path)
             .ok_or_else(|| format!("note is outside the vault: {note_path}"))?;
         let prompt = format!(
-            "本次只处理这一个文件:`{rel}`,以及它同名的源文档。\n\
-             不要搜索 vault、不要读其它文件 —— 权限也已按此限定,搜索类工具不可用。\n\
+            "本次只处理这一个文件:`{rel}`,以及它对应的源文档(可能在 vault 之外的原目录)。\n\
+             不要搜索 vault —— 权限已按此限定,搜索类工具不可用。\n\
              只回答该文件里 `status:: open` 的问题;没有待答问题时直接报告「无待答问题」并结束。"
         );
         host.log_info(&format!("run-note {task_id} on {rel}"));

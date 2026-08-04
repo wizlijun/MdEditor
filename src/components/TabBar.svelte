@@ -11,7 +11,8 @@
   import type { CommandId } from '../lib/commands'
   import { getPluginScopedAll, pluginScopedVersion } from '../lib/settings.svelte'
   import type { EnabledWhenContext } from '../lib/plugins/types'
-  import { sotvaultStore } from '../lib/sotvault.svelte'
+  import { sotvaultStore, isMirroredSource } from '../lib/sotvault.svelte'
+  import { SYNC_MARK } from '../lib/window-title'
 
   async function onClose(e: MouseEvent, id: string) {
     e.stopPropagation()
@@ -19,6 +20,13 @@
   }
 
   let active = $derived(activeTab())
+
+  /** Is this tab's file a vault-mirrored source? Reads `tick` so the marker
+   *  appears the moment a first sync completes. */
+  function mirrored(path: string): boolean {
+    void sotvaultStore.tick
+    return isMirroredSource(path)
+  }
 
   // Right-click context menu state.
   type CtxState = {
@@ -138,8 +146,9 @@
             class:active={tab.id === activeId.value}
             onclick={() => activate(tab.id)}
             oncontextmenu={(e) => openTabContextMenu(e, tab.id)}
-            title={tab.filePath}
+            title={mirrored(tab.filePath) ? `${t('syncMark.tooltip')}\n${tab.filePath}` : tab.filePath}
           >
+            {#if mirrored(tab.filePath)}<span class="sync-mark" aria-hidden="true">{SYNC_MARK}</span>{/if}
             <span class="title">{tab.title}</span>
             {#if isDirty(tab.id)}<span class="dot" aria-label={t('tabBar.modified')}></span>{/if}
             <span class="close" role="button" onclick={(e) => onClose(e, tab.id)}>×</span>
@@ -220,6 +229,9 @@
     font-weight: 500;
   }
   .title { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+  /* Kept out of .title so it can never be swallowed by the ellipsis or read as
+     part of the filename. */
+  .sync-mark { flex: none; opacity: 0.75; }
   .dot {
     width: 6px;
     height: 6px;

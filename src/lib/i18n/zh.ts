@@ -197,6 +197,7 @@ export const zh: Record<keyof Messages, string> = {
   // Drawer / tab bar
   'drawer.closeMenu': '关闭菜单',
   'tabBar.modified': '已修改',
+  'syncMark.tooltip': '↔ 始终编辑源 md · 已同步到 vault',
 
   // Plugins settings
   'plugins.restartNote': '改动需要重启 note.md 后生效',
