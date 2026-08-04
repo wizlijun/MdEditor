@@ -237,7 +237,7 @@ export const ja: Record<keyof Messages, string> = {
   'capability.secrets': 'シークレット（API キー・トークン）の保存と読み取り',
   'capability.storage': 'このデバイスにプラグインデータを保存',
   'capability.vault.read': 'Vault 内のファイルを読み取り',
-  'capability.vault.write': 'Vault 内でファイルを作成・変更',
+  'capability.vault.write': 'Vault 内でファイルを作成・変更・削除・移動',
   'capability.dialog': 'ファイルの開く/保存ダイアログを表示',
   'capability.clipboard.write': 'クリップボードへ書き込み',
   'capability.location': '位置情報を取得',
