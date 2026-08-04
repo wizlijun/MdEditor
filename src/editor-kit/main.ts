@@ -27,8 +27,10 @@ export interface KitEditor {
   getMarkdown(): string
   setMarkdown(md: string): void
   getMode(): KitMode
+  /** Switches panes. Flushes any pending `onChange` first (see below). */
   setMode(m: KitMode): Promise<void>
   focus(): void
+  /** Tears the editor down. Flushes any pending `onChange` first (see below). */
   destroy(): void
 }
 
@@ -36,7 +38,13 @@ export interface KitOptions {
   initialMarkdown: string
   /** Default 'rich'. */
   mode?: KitMode
-  /** Debounced by the editor itself (200 ms in rich mode). */
+  /**
+   * Debounced by the editor itself (200 ms in rich mode).
+   *
+   * `setMode()` and `destroy()` flush a pending change synchronously before
+   * they do anything else, so a consumer that persists purely on `onChange`
+   * never loses the last edits to a mode switch or a closing window.
+   */
   onChange?: (md: string) => void
   /** Hint shown in an empty source-mode buffer. */
   placeholder?: string
@@ -81,8 +89,11 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
   await applyKitTheme()
   watchKitTheme()
 
+  // Unconditional: moraya's document base dir is module-global state, so a
+  // second mount that omits `baseDir` would silently inherit the previous
+  // mount's directory and resolve relative images against the wrong folder.
   const root = await vaultRoot()
-  if (opts.baseDir !== undefined && root) setKitBaseDir(joinAbsolute(root, opts.baseDir))
+  setKitBaseDir(root ? joinAbsolute(root, opts.baseDir ?? '') : '')
 
   let markdown = opts.initialMarkdown
   let mode: KitMode = opts.mode ?? 'rich'
@@ -111,6 +122,23 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
   const currentMarkdown = () =>
     (mode === 'rich' ? rich?.getMarkdown() : source?.getValue()) ?? markdown
 
+  /**
+   * Emit anything the live pane holds but has not reported yet.
+   *
+   * Rich mode debounces `onChange` by 200 ms and moraya's change plugin only
+   * *clears* that timer on destroy (it does not flush it — see
+   * `moraya-core/src/setup.ts` `destroy()`), so tearing the editor down inside
+   * the debounce window would drop the user's last keystrokes on the floor:
+   * the text survives inside the kit but the consumer — which persists on
+   * `onChange` — never hears about it.
+   */
+  const flush = () => {
+    const cur = currentMarkdown()
+    if (cur === markdown) return
+    markdown = cur
+    opts.onChange?.(cur)
+  }
+
   return {
     getMarkdown: currentMarkdown,
     setMarkdown: (md) => {
@@ -121,12 +149,13 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
     getMode: () => mode,
     setMode: async (m) => {
       if (m === mode) return
-      markdown = currentMarkdown()
+      flush()
       mode = m
       await mountCurrent()
     },
     focus: () => { if (mode === 'rich') rich?.view.focus(); else source?.focus() },
     destroy: () => {
+      flush()
       rich?.destroy(); rich = null
       source?.destroy(); source = null
       host.remove()

@@ -37,7 +37,19 @@ export async function applyKitTheme(): Promise<void> {
   }
 }
 
+/**
+ * Idempotency guard. The theme slot is window-level state, and the bridge's
+ * `onMessage` is push-only with no way to unsubscribe
+ * (`plugin_runtime/windows.rs`: `onMessage(cb) { __listeners.push(cb) }`), so a
+ * mount → destroy → mount cycle would otherwise stack listeners and fire one
+ * RPC per past mount on every theme change. One registration per window is
+ * both necessary and sufficient — hence nothing to unregister on destroy.
+ */
+let watched = false
+
 export function watchKitTheme(): void {
+  if (watched) return
+  watched = true
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => void applyKitTheme())
   const notemd = (window as unknown as { notemd?: { onMessage?(cb: (p: unknown) => void): void } }).notemd
   notemd?.onMessage?.((p: unknown) => {
