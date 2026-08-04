@@ -93,6 +93,28 @@ fn note_relative_to_vault(vault: &std::path::Path, note_path: &str) -> Option<St
     (!s.is_empty()).then_some(s)
 }
 
+/// A task id names ONE directory under `.notemd/agent-tasks/` — nothing else.
+/// This is a security check, not tidiness: `task::task_dir` joins the id
+/// straight onto the tasks root, and a task directory IS the permission policy
+/// of the claude run it starts (`.claude/settings.json`, which may hand out
+/// `Bash`). An id like `../../evil` would let a caller point that policy at any
+/// directory on disk. Rejects separators, `.`/`..` and absolute paths.
+fn valid_task_id(id: &str) -> bool {
+    if id.is_empty() || id.contains('\\') {
+        // Backslash is a separator on Windows and merely a legal filename char
+        // on unix — refuse it either way rather than depend on the platform.
+        return false;
+    }
+    let mut comps = std::path::Path::new(id).components();
+    matches!(comps.next(), Some(std::path::Component::Normal(_))) && comps.next().is_none()
+}
+
+fn check_task_id(id: &str) -> Result<(), String> {
+    valid_task_id(id)
+        .then_some(())
+        .ok_or_else(|| format!("invalid task id '{id}'"))
+}
+
 #[derive(Default)]
 struct Inner {
     vault: Option<PathBuf>,
@@ -402,6 +424,7 @@ impl ClaudeAgentPlugin {
             .filter(|s| !s.is_empty())
             .ok_or("this call needs a 'task'")?
             .to_string();
+        check_task_id(&task_id)?;
         Ok((task::runs_root(&vault), task_id))
     }
 
@@ -422,6 +445,9 @@ impl ClaudeAgentPlugin {
             .and_then(|v| v.as_str())
             .ok_or("missing 'task'")?
             .to_string();
+        // Every entry point (window, CLI, run-note, the host's run-task relay)
+        // funnels through here, so one check covers them all.
+        check_task_id(&task_id)?;
         let user_prompt = params
             .get("prompt")
             .and_then(|v| v.as_str())
@@ -635,6 +661,8 @@ impl ClaudeAgentPlugin {
             .get("run_id")
             .and_then(|v| v.as_str())
             .ok_or("run-status needs a 'run_id'")?;
+        // Same fence as `start`: this id is joined onto the runs root.
+        check_task_id(task_id)?;
         let run_dir = task::runs_root(&vault).join(task_id);
 
         if let Some(rec) = record::find(&run_dir, run_id) {
@@ -1205,6 +1233,96 @@ mod tests {
         let broken = d.path().join("broken.json");
         std::fs::write(&broken, "{not json").unwrap();
         assert_eq!(shared_config_vault_at(&broken), None);
+    }
+
+    /// A task directory is the run's permission policy. An id that can leave
+    /// `.notemd/agent-tasks/` would let a caller (any plugin holding `agent`)
+    /// point that policy at a directory it planted — `.claude/settings.json`
+    /// there could allow `Bash`.
+    #[test]
+    fn a_task_id_may_only_name_one_directory() {
+        for good in ["selfcheck", "ai-read-ebook", "答疑", "a.b", "a..b"] {
+            assert!(valid_task_id(good), "{good} must be allowed");
+        }
+        for bad in [
+            "",
+            "..",
+            ".",
+            "../evil",
+            "../../etc",
+            "a/b",
+            "/abs/path",
+            "./a",
+            "a\\b",
+            "..\\evil",
+        ] {
+            assert!(!valid_task_id(bad), "{bad} must be refused");
+        }
+    }
+
+    #[test]
+    fn run_status_refuses_a_traversing_task_id() {
+        let v = tempfile::tempdir().unwrap();
+        let p = ClaudeAgentPlugin::new();
+        p.inner.lock().unwrap().vault = Some(v.path().to_path_buf());
+        let e = p
+            .run_status(&json!({ "task": "../../evil", "run_id": "R1" }))
+            .unwrap_err();
+        assert!(e.contains("invalid task id"), "err: {e}");
+        // history.* share the same joined-root shape.
+        let e = p
+            .runs_root_and_task(&json!({ "task": "../../evil" }))
+            .unwrap_err();
+        assert!(e.contains("invalid task id"), "err: {e}");
+    }
+
+    /// The host relay is the reachable-from-another-plugin door, so pin it
+    /// end-to-end rather than only at the helper.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_task_refuses_a_traversing_task_id() {
+        let _env = env_guard();
+        let vault = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap().path().join("config.json");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cfg,
+            format!(r#"{{"version":1,"sotvault":"{}"}}"#, vault.path().display()),
+        )
+        .unwrap();
+        std::env::set_var("NOTEMD_SHARED_CONFIG", &cfg);
+
+        let (mut to_plugin, plugin_stdin) = tokio::io::duplex(16 * 1024);
+        let (plugin_stdout, from_plugin) = tokio::io::duplex(16 * 1024);
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(sdk::serve_io(
+                    ClaudeAgentPlugin::new(),
+                    plugin_stdin,
+                    plugin_stdout,
+                ));
+        });
+
+        to_plugin
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:run-task\"}}\n\
+                  {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"command.execute\",\"params\":{\"command\":\"run-task\",\"context\":{\"task\":\"../../evil\",\"prompt\":\"p\"}}}\n",
+            )
+            .await
+            .unwrap();
+
+        let answered = await_response(
+            from_plugin,
+            |v| v.get("id").and_then(|i| i.as_u64()) == Some(2),
+            "run-task",
+        )
+        .await;
+        let err = answered["error"]["message"].as_str().unwrap_or_default();
+        assert!(err.contains("invalid task id"), "err: {err}");
+        std::env::remove_var("NOTEMD_SHARED_CONFIG");
     }
 
     fn a_record(status: record::Status) -> record::RunRecord {
