@@ -5,6 +5,8 @@
 
 本轮做完了:`host.vault.read_bytes`、Editor Kit(第二 vite entry + `__host__/assets/` 运行时下发)、`host.theme.css` 与主题推送、OKF 类型登记、插件脚手架、纯逻辑库、`idea-proof` 任务模板、主界面。**委托 agent 的链路整体押后**(改用并行会话「AI 先读」正在实现的 `host.agent.run`/`host.agent.status`),因此「委托 Agent」按钮当前是禁用态。本轮**不发布**。
 
+> ✅ **已于 2026-08-05 的主界面重做一轮解决**:委托链路(下面「三」列的三个交接点)已经接上——改用 `host.agent.run`/`host.agent.status`,完成提醒由 claude-agent 代发(不是宿主守望器,见「三」的具体说明)。「委托 Agent」按钮不再是禁用态。详见 `docs/superpowers/specs/2026-08-04-idea-spark-ui-redesign-design.md` 与 `docs/superpowers/plans/2026-08-04-idea-spark-ui-redesign.md`。
+
 ## 一、合并前需人工 GUI 验证(自动化测试碰不到)
 
 dev 模式下 `__host__` 读的是磁盘上的 `dist/`(不是 Vite dev server),所以**必须先 `pnpm build` 再 `pnpm tauri dev`**;改了 kit 源码没有 HMR,要重跑 build。
@@ -15,7 +17,7 @@ dev 模式下 `__host__` 读的是磁盘上的 `dist/`(不是 Vite dev server),�
 4. source 模式高度不塌(kit 内部 `height:100%` + 绝对定位,依赖容器有确定高度)。
 5. 写 idea → 保存 → vault `inbox/ideas/` 出现带 OKF frontmatter 的 `.md`(Obsidian/CLI 可直接读)。
 6. 历史列表列出已存 idea;点击载入编辑器;设置里改 idea 目录生效;vault 未打开时给提示。
-7. 「委托 Agent」按钮为禁用态并给出「等 agent 接口就绪」提示(本轮预期行为)。
+7. ~~「委托 Agent」按钮为禁用态并给出「等 agent 接口就绪」提示(本轮预期行为)。~~ ✅ **已于 2026-08-05 的主界面重做一轮解决**:按钮已启用,点击走真实的 `delegateIdea`(`host.agent.run` + 轮询 `host.agent.status`);未装 claude-agent 时改为提示去市场安装。**注意:GUI 实机验证仍未做**(本轮只跑了自动化回归,委托链路的实机确认——含下面第 8 条 precheck 守卫是否真生效——留给用户手动测)。
 8. 其余待确认交互:`Cmd/Ctrl+S` 与编辑器 keymap 是否抢焦;关窗时 `beforeunload` 里的 `host.toast` 能否送达;富文本脏检查有无伪阳性;设置弹层与 kit/庆祝动画的 z-index;booting 首屏无 loading 指示的观感。
 
 ## 二、终审后仍开着的三条(已裁定 park,建议随下一轮处理)
@@ -26,10 +28,16 @@ dev 模式下 `__host__` 读的是磁盘上的 `dist/`(不是 Vite dev server),�
 
 ## 三、接委托链路(押后的 Task 3/8/13)时的交接点
 
+> 委托链路(`plugins-src/idea-spark/src/lib/agent-client.ts` 的 `delegateIdea`/`interpretStatus` + `App.svelte` 的接线)**已于 2026-08-05 的主界面重做一轮合入**——下面四条中三条已解决(逐条见标注,含一条「按不同方式绕开而非按字面实现」的说明),最后一条(precheck 实机确认)仍开着。历史交接点原文保留,不删。
+
 - **API 对齐**:用并行会话「AI 先读」定义的 `host.agent.run` / `host.agent.status`(capability `agent`),**不要**做通用 `host.plugin.execute`(其 spec 明确列为非目标)。完成提醒进它的托盘提醒注册表(`OpenPath` 打开 `.proof.md`),不自造通知机制。manifest 届时补 `agent`。
+  - ✅ 已于 2026-08-05 的主界面重做一轮解决:`delegateIdea` 就是按这个对齐写的——调 `host.agent.run({ task, prompt, note_path, notify })`,`notify.open_path`/`notify.expect_file` 指向 `.proof.md`,manifest 已补 `agent` capability;没有引入 `host.plugin.execute`。
 - **宿主守望器仍然需要**:奇思妙想是纯前端插件、没有后端进程,窗口一关就没人轮询;而「AI 先读」的模型假设插件有后端自行轮询。宿主必须替这类插件守望。
+  - ✅ 已于 2026-08-05 的主界面重做一轮解决,但**不是按原设想的「宿主守望器」解决的**:实际做法是把完成提醒的发送责任交给 claude-agent 自己——它是常驻的后端插件进程,不随奇思妙想的窗口关闭而消失,`host.agent.run` 调用时传入的 `notify` 参数由 claude-agent 在 run 结束时代为调用 `host.notify` 推送托盘提醒。奇思妙想窗口自己只在**开着的时候**轮询 `host.agent.status`(`POLL_MS` 2 秒)做行内进度展示;窗口关闭只停止这条轮询,不影响 run 本身跑完和提醒送达。因此宿主并**没有**新增一个通用的「代插件守望」机制——这条待办被绕开而非按字面实现,如果未来出现没有常驻后端的插件也需要完成提醒,这里仍是空白。
 - **store 侧已备好、零生产调用方**:`markPending()` / `applyRunDone()` / `seedTaskTemplate()` / `state.pending` 持久化 / `state.lastResult`。两个坑:`markPending()` 之后必须补一次 `persist()`(否则重启丢在跑的 run);`applyRunDone` 现在保证「返回 done ⇔ 徽标 done ⇔ 行上有打开结果」,推送里的 `open_path` 只写 `lastResult`,若要按它打开结果得读 `lastResult` 而不是 `proofPathFor`。
+  - ✅ 已于 2026-08-05 的主界面重做一轮解决:两者都已有生产调用方(`App.svelte`)。`markPending(store, ideaRel, result.runId)` 后紧跟 `await persist()`(`App.svelte:422-423`),坑 1 已按提示接线。`seedTaskTemplate` 由 `agent-client.ts` 的 `delegateIdea` 在每次委托前 best-effort 调用。
 - **`precheck.sh` 守卫**:即便有了 chmod,也要实机确认 `idea-proof` 的 precheck 真的生效(`precheck.rs::run` 对 spawn 失败是 fail-open,失效时表现为「守卫静默不拦」而非报错)。
+  - ⚠️ **仍未解决**:本轮只跑了自动化回归(cargo/vitest/svelte-check/build),没有做委托链路的桌面实机验证,`precheck.sh` 是否真的拦截生效未经确认。留给用户按 `task-9-brief.md` 手动验证清单第 7/8 条实测。
 
 ## 四、已知设计权衡(非缺陷,备查)
 

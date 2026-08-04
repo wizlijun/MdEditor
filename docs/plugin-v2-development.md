@@ -174,7 +174,7 @@ plugins-src/<name>/
 | `ui` | `host.ui.post`(插件进程 → 自己的窗口推消息) |
 | `dialog` | `host.dialog.open` / `host.dialog.save` |
 | `vault.read` | `host.vault.info` / `host.vault.read` / `host.vault.read_bytes` / `host.vault.exists` / `host.vault.list` |
-| `vault.write` | `host.vault.write` / `host.vault.mkdir` |
+| `vault.write` | `host.vault.write` / `host.vault.mkdir` / `host.vault.remove` / `host.vault.rename` |
 | `fs.read:dialog` | `host.fs.read_text` / `host.fs.read_bytes`(仅限本会话内经 dialog 选中的路径) |
 | `clipboard.write` | `host.clipboard.write` |
 | `location` | `host.location.get` |
@@ -214,6 +214,8 @@ plugins-src/<name>/
 | `host.vault.list` | `{ path }` | `{ entries: [{ name, is_dir }] }`(按 name 排序) |
 | `host.vault.mkdir` | `{ path }` | `{ ok: true }` |
 | `host.vault.read_bytes` | `{ path }` | `{ base64 }`(vault 内文件原始字节的 base64;供隔离插件窗口渲染 vault 里的图片等二进制资源,同 `vault.read` capability) |
+| `host.vault.remove` | `{ path }` | `{ ok: true }`(源:`ui_rpc.rs:796-805`) |
+| `host.vault.rename` | `{ from, to }` | `{ ok: true }`(源:`ui_rpc.rs:832-854`) |
 
 **路径规则(`resolve_in_vault`,`ui_rpc.rs:525-577`)**:
 - `path` **必须 vault 相对**;绝对路径、任何 `..` 段都被拒(还防符号链接逃逸)。
@@ -222,6 +224,8 @@ plugins-src/<name>/
 - **例外:`host.vault.read_bytes` 上限 10 MB**(`MAX_VAULT_BYTES`)。它是 Editor Kit MediaResolver 的字节来源,渲染文档时**按图隐式触发**、没有用户手势限速,继承 200 MB 会让一张超大图把窗口卡在 ~267 MB 字符串上;超限报 `too_large`,图渲染成断链而不是冻 UI。
 - `host.vault.write` 写 `.sh` 时自动补可执行位(0o755)。种 agent 任务模板的 `precheck.sh` 必须可执行,否则 claude-agent 的 precheck 对 spawn 失败是 fail-open,守卫会**静默失效**。
 - 未配置 vault 时报 `vault_required: …`。
+- `host.vault.remove` **只删文件、拒绝目录**(报 `io: refusing to remove a directory`,不递归清子树);**目标不存在按成功处理**(幂等,调用方可安全重试);目标是**符号链接时删的是链接本身**,不会跟随链接删掉它指向的文件(用 `symlink_metadata` + `remove_file`,不走会解析链接的 `resolve_in_vault`)。
+- `host.vault.rename` 的 `from`/`to` **都要过 vault 围栏**;**目标已存在一律报错、绝不覆盖**(用 `O_EXCL` `create_new` 原子占位再 `rename`,避免"先查是否存在再改名"的 TOCTOU 竞态和悬空符号链接被静默吃掉;`rename` 失败——最常见是 `from` 不存在——会清理掉刚占位的空文件,不留 0 字节垃圾);可以跨目录移动(仍须落在同一 vault 内),`to` 的父目录自动创建;`from`/`to` 命中符号链接时同样操作链接本身而非其目标。
 
 > ⚠️ 常见误区更正:`vault.write` 参数只有 `{path, content}`;`vault.info` 返回的是 `{root, wiki_dir, daily_dir}` 而非 `{root, subdirs}`。
 
