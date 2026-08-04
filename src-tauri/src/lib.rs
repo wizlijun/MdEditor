@@ -786,8 +786,8 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
         if let Ok(img) = icon {
             let _ = tray.set_icon(Some(img));
         }
-        // Keep the menu-bar glyph clean: no text title next to the icon.
-        // 有未读提醒时在图标旁挂数字角标;否则保持纯图标。
+        // 菜单栏字形保持干净:只有存在未读提醒时才在图标旁挂数字角标,
+        // 否则不挂任何文字标题。
         let n_reminders = crate::reminders::count();
         if n_reminders > 0 {
             let _ = tray.set_title(Some(n_reminders.to_string()));
@@ -1240,7 +1240,15 @@ pub fn run() {
                                             show_main_window(app);
                                         }
                                         crate::reminders::ReminderAction::OpenPluginWindow { plugin_id, window } => {
-                                            let _ = crate::plugin_runtime::windows::open_plugin_window(app, &plugin_id, &window);
+                                            // The reminder is already taken off the list by now, so a
+                                            // swallowed error means the click does nothing at all — and
+                                            // the commonest reason to be here (the failure reminder for
+                                            // an AI read) is precisely that claude-agent isn't installed.
+                                            // Log it and fall back to something visible.
+                                            if let Err(e) = crate::plugin_runtime::windows::open_plugin_window(app, &plugin_id, &window) {
+                                                eprintln!("[tray] reminder could not open {plugin_id}/{window}: {e}");
+                                                show_main_window(app);
+                                            }
                                         }
                                     }
                                 }
