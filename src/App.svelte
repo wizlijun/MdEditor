@@ -272,6 +272,10 @@
         let systemDark = false
         let lightAssigned: string | null = null
         let darkAssigned: string | null = null
+        // followSystem is the third field of the host.theme.css bundle (it
+        // decides whether the kit picks dark_css), so a change to it alone
+        // must still reach plugin windows.
+        let followAssigned: boolean | null = null
 
         // Plugin windows are isolated webviews: they never see the style slots
         // above, so an editor.kit plugin re-fetches host.theme.css on this
@@ -283,19 +287,26 @@
 
         async function syncSlots() {
           const t = settings.theme
+          let changed = false
           if (t.light !== lightAssigned) {
             const meta = findThemeById(t.light)
             if (meta) { await applyThemeContent('light', meta.id) }
             lightAssigned = t.light
-            notifyPluginWindows()
+            changed = true
           }
           if (t.dark !== darkAssigned) {
             const meta = findThemeById(t.dark)
             if (meta) { await applyThemeContent('dark', meta.id) }
             darkAssigned = t.dark
-            notifyPluginWindows()
+            changed = true
+          }
+          if (t.followSystem !== followAssigned) {
+            followAssigned = t.followSystem
+            changed = true
           }
           setActiveTheme(computeActiveThemeId(t, systemDark))
+          // One push per actual change (not per changed slot).
+          if (changed) notifyPluginWindows()
         }
 
         const stopSystem = observePrefersColorScheme((dark) => {

@@ -203,21 +203,30 @@ pub fn is_host_method(method: &str) -> bool {
 /// Capability gate for the methods [`dispatch`] intercepts BEFORE delegating to
 /// [`dispatch_with`] — they need the live `AppHandle` (app config dir, compiled
 /// theme artifacts), which the injectable [`HostServices`] deliberately does not
-/// carry. Same table, same -32001 wording as the shared gate; `None` = allowed.
+/// carry. `None` = allowed.
+///
+/// Fails CLOSED, matching the two shared gates ([`dispatch_with`] and
+/// `host_api::make_sink`) code for code and wording for wording: unknown method
+/// → -32601, missing capability → -32001. A future interception that mistypes
+/// its method name is therefore rejected rather than silently served.
 fn capability_denial(
     method: &str,
     capabilities: &[String],
     id: Option<u64>,
 ) -> Option<proto::RpcResponse> {
-    let cap = method_capability(method).filter(|c| *c != "__unknown__")?;
-    if capabilities.iter().any(|c| c == cap) {
-        return None;
+    match method_capability(method) {
+        Some("__unknown__") => Some(err(
+            id,
+            proto::ERR_METHOD_NOT_FOUND,
+            format!("unknown method {method}"),
+        )),
+        Some(cap) if !capabilities.iter().any(|c| c == cap) => Some(err(
+            id,
+            proto::ERR_CAPABILITY_DENIED,
+            format!("method {method} requires capability '{cap}'"),
+        )),
+        _ => None,
     }
-    Some(err(
-        id,
-        proto::ERR_CAPABILITY_DENIED,
-        format!("method {method} requires capability '{cap}'"),
-    ))
 }
 
 /// Production entry point: for `host.*` methods, builds the live services
@@ -898,6 +907,20 @@ mod tests {
 
         // No capabilities at all → same denial.
         assert!(capability_denial("host.theme.css", &[], Some(1)).is_some());
+    }
+
+    /// Fail CLOSED on an unknown method, exactly like the two shared gates
+    /// (`dispatch_with` and `host_api::make_sink` both answer -32601). A
+    /// mistyped method name in a future interception must never be read as
+    /// "allowed" just because the caller happens to hold some capability.
+    #[test]
+    fn capability_denial_rejects_unknown_methods() {
+        let caps: Vec<String> = vec!["editor.kit".into()];
+        let denial = capability_denial("host.nope", &caps, Some(1))
+            .expect("an unknown method must be denied, not fall through");
+        assert_eq!(denial.error.unwrap().code, proto::ERR_METHOD_NOT_FOUND);
+        // Free methods (no capability at all) still pass.
+        assert!(capability_denial("host.log.info", &[], Some(1)).is_none());
     }
 
     #[test]

@@ -112,8 +112,13 @@ const DEFAULT_THEME_ID: &str = "default";
 ///   A missing/blank slot id falls back to `"default"`; `followSystem` is true
 ///   unless it is exactly `false` (same rule as `loadSettings` in
 ///   `src/lib/settings.svelte.ts`).
-/// - `{"theme": "some-id"}` — the historical single-skin string: both slots get
-///   that id and `follow_system` is false (there is no dark counterpart).
+/// - `{"skin": "some-id"}` with no usable `theme` — the REAL pre-4517e63 shape
+///   on disk: both slots get that id and `follow_system` is false (there was no
+///   dark counterpart). The frontend migrates this in memory only, so until the
+///   next `saveSettings` the host must read it too, or a plugin window would
+///   show "default" while the main window shows the user's skin.
+/// - `{"theme": "some-id"}` — same single-id treatment, defensively (this shape
+///   was never persisted, but costs nothing to accept).
 /// - key missing, or anything else (number/array/null/non-object root) →
 ///   `("default", "default", true)`. Never panics.
 pub(crate) fn parse_theme_settings(settings: &serde_json::Value) -> (String, String, bool) {
@@ -124,23 +129,40 @@ pub(crate) fn parse_theme_settings(settings: &serde_json::Value) -> (String, Str
             true,
         )
     };
-    let Some(theme) = settings.get("theme") else {
-        return fallback();
+    // Both single-id legacy shapes resolve the same way; an unusable id is not
+    // trusted (it would only name a file that cannot exist).
+    let legacy = |raw: Option<&str>| match raw {
+        Some(s) if is_usable_theme_id(s) => {
+            let id = s.trim().to_string();
+            Some((id.clone(), id, false))
+        }
+        _ => None,
     };
-    // Historical form: `theme` was a single skin id string.
-    if let Some(id) = theme.as_str() {
-        let id = sanitize_theme_id(Some(id));
-        return (id.clone(), id, false);
+
+    if let Some(theme) = settings.get("theme") {
+        // Defensive: `theme` as a bare string.
+        if let Some(id) = theme.as_str() {
+            return legacy(Some(id)).unwrap_or_else(fallback);
+        }
+        if let Some(obj) = theme.as_object() {
+            let raw = |key: &str| obj.get(key).and_then(|v| v.as_str());
+            // Mirrors the frontend's migration test (`typeof light/dark ===
+            // 'string'`): an object carrying neither slot is not the new shape,
+            // so fall through to the legacy key rather than claiming defaults.
+            if raw("light").is_some() || raw("dark").is_some() {
+                let follow = obj
+                    .get("followSystem")
+                    .map(|v| v.as_bool() != Some(false))
+                    .unwrap_or(true);
+                return (
+                    sanitize_theme_id(raw("light")),
+                    sanitize_theme_id(raw("dark")),
+                    follow,
+                );
+            }
+        }
     }
-    if !theme.is_object() {
-        return fallback();
-    }
-    let slot = |key: &str| sanitize_theme_id(theme.get(key).and_then(|v| v.as_str()));
-    let follow = theme
-        .get("followSystem")
-        .map(|v| v.as_bool() != Some(false))
-        .unwrap_or(true);
-    (slot("light"), slot("dark"), follow)
+    legacy(settings.get("skin").and_then(|v| v.as_str())).unwrap_or_else(fallback)
 }
 
 /// Read `<app config dir>/settings.json` and hand its parsed value to
@@ -170,15 +192,43 @@ fn read_theme_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (String,
 pub fn theme_css_bundle<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> serde_json::Value {
     let (light_id, dark_id, follow) = read_theme_settings(app);
     let load = |id: &str| -> String {
-        compiled_path(app, id)
+        let css = compiled_path(app, id)
             .ok()
             .and_then(|p| std::fs::read_to_string(p).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        unscope_theme_css(&css, id)
     };
+    theme_bundle_json(&load(&light_id), &load(&dark_id), follow)
+}
+
+/// Drop the `[data-theme="<id>"] ` disambiguator from every compiled selector,
+/// leaving the bare `.moraya-editor` host.
+///
+/// Why: `compiler::rewrite_selector_text` prefixes every selector with
+/// [`crate::themes::compiler::scope_prefix`] so the main window can hold both
+/// theme slots at once and pick one via a `data-theme` ancestor. A plugin window
+/// has no such ancestor (`src/editor-kit/main.ts` mounts a bare `.kit-host`
+/// containing the `.moraya-editor`), so shipping the scoped CSS verbatim would
+/// match NOTHING — a fully populated style slot with zero visual effect. That
+/// dimension is meaningless there anyway: the kit's single slot holds exactly
+/// one theme at a time.
+///
+/// Deterministic substring replacement of the prefix the compiler itself
+/// generates (shared helper, so the two cannot drift) — not a regex guess.
+pub(crate) fn unscope_theme_css(css: &str, theme_id: &str) -> String {
+    let prefix = crate::themes::compiler::scope_prefix(theme_id);
+    css.replace(&prefix, ".moraya-editor")
+}
+
+/// Assemble the `host.theme.css` reply. Its three key names are a CROSS-LANGUAGE
+/// contract with `src/editor-kit/theme.ts`, where every field is optional and
+/// falls back to `''` — i.e. a rename on either side degrades silently to an
+/// unstyled editor. Kept as a pure fn so a unit test can pin the keys.
+fn theme_bundle_json(light_css: &str, dark_css: &str, follow_system: bool) -> serde_json::Value {
     serde_json::json!({
-        "light_css": load(&light_id),
-        "dark_css": load(&dark_id),
-        "follow_system": follow,
+        "light_css": light_css,
+        "dark_css": dark_css,
+        "follow_system": follow_system,
     })
 }
 
@@ -187,9 +237,15 @@ pub fn theme_css_bundle<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> serde_j
 /// `../../secret` — degrades to `"default"` instead of reaching the filesystem.
 fn sanitize_theme_id(id: Option<&str>) -> String {
     match id {
-        Some(s) if crate::themes::id::is_valid_theme_id(s.trim()).is_ok() => s.trim().to_string(),
+        Some(s) if is_usable_theme_id(s) => s.trim().to_string(),
         _ => DEFAULT_THEME_ID.to_string(),
     }
+}
+
+/// `themes/id.rs` rules — the same validator `registry.rs` / `import.rs` use, so
+/// this admits every id that can actually name a theme on disk and nothing else.
+fn is_usable_theme_id(id: &str) -> bool {
+    crate::themes::id::is_valid_theme_id(id.trim()).is_ok()
 }
 
 #[cfg(test)]
@@ -241,6 +297,108 @@ mod tests {
             parse_theme_settings(&serde_json::Value::Null),
             ("default".to_string(), "default".to_string(), true)
         );
+    }
+
+    /// The shape real pre-4517e63 vaults actually have on disk: a root-level
+    /// `skin` string and NO `theme` key. Until the frontend's in-memory
+    /// migration is persisted by a later `saveSettings`, this is what a plugin
+    /// window would otherwise read as "default" while the main window shows
+    /// the user's real skin.
+    #[test]
+    fn parse_theme_settings_falls_back_to_the_root_skin_key() {
+        assert_eq!(
+            parse_theme_settings(&json!({"skin": "effie", "autoSave": true})),
+            ("effie".to_string(), "effie".to_string(), false)
+        );
+        // A usable `theme` always wins over the legacy key.
+        assert_eq!(
+            parse_theme_settings(&json!({
+                "skin": "effie",
+                "theme": {"light": "default", "dark": "onedark", "followSystem": true}
+            })),
+            ("default".to_string(), "onedark".to_string(), true)
+        );
+        // An unusable `skin` is ignored rather than trusted.
+        for v in [json!({"skin": 42}), json!({"skin": ""}), json!({"skin": "../x"})] {
+            assert_eq!(
+                parse_theme_settings(&v),
+                ("default".to_string(), "default".to_string(), true),
+                "input: {v}"
+            );
+        }
+    }
+
+    /// C1: the compiled artifact scopes every selector behind a `data-theme`
+    /// ancestor that a plugin window does not have. The prefix must be gone,
+    /// and NOTHING else may change.
+    #[test]
+    fn unscope_theme_css_strips_the_scope_prefix_verbatim() {
+        let scoped = concat!(
+            "[data-theme=\"effie\"] .moraya-editor {\n  line-height: 1.6;\n}\n\n",
+            "[data-theme=\"effie\"] .moraya-editor h1 {\n  font-size: 2em;\n}\n\n",
+            "@media print {\n  [data-theme=\"effie\"] .moraya-editor p > a {\n    color: #000;\n  }\n}\n"
+        );
+        let expected = concat!(
+            ".moraya-editor {\n  line-height: 1.6;\n}\n\n",
+            ".moraya-editor h1 {\n  font-size: 2em;\n}\n\n",
+            "@media print {\n  .moraya-editor p > a {\n    color: #000;\n  }\n}\n"
+        );
+        assert_eq!(unscope_theme_css(scoped, "effie"), expected);
+
+        // Unrelated CSS is untouched, and a mismatched id is left alone (the
+        // bundle always unscopes with the id it just read the file for).
+        assert_eq!(unscope_theme_css("@font-face { src: url(x); }", "effie"), "@font-face { src: url(x); }");
+        assert_eq!(unscope_theme_css(scoped, "onedark"), scoped);
+        assert_eq!(unscope_theme_css("", "effie"), "");
+    }
+
+    /// The prefix stripped above is exactly the one the compiler emits — the
+    /// two derive it from the same helper, so they cannot drift.
+    #[test]
+    fn unscope_theme_css_undoes_the_compilers_own_scoping() {
+        let compiled = crate::themes::compiler::compile_theme_css(
+            "/*\n * Theme Name: X\n */\n:root { --c: red; }\n#write h1 { color: var(--c); }",
+            "effie",
+            "/tmp/themes/effie",
+        )
+        .expect("compile ok");
+        assert!(compiled.contains("[data-theme="), "precondition: compiled CSS is scoped");
+        let out = unscope_theme_css(&compiled, "effie");
+        assert!(!out.contains("[data-theme="), "scope survived: {out}");
+        assert!(out.contains(".moraya-editor h1"), "host selector lost: {out}");
+        assert!(out.contains("--c: red"), "declarations must be untouched: {out}");
+    }
+
+    /// C1 (bundle level) + I3: the wire shape of `host.theme.css`. The key
+    /// names are a cross-language contract with `src/editor-kit/theme.ts`,
+    /// where every field is optional — a rename on either side would be
+    /// SILENT, so pin it here.
+    #[test]
+    fn theme_bundle_json_pins_the_wire_contract_with_the_kit() {
+        let v = theme_bundle_json("/* light */", "/* dark */", true);
+        let obj = v.as_object().expect("bundle must be a JSON object");
+        assert_eq!(obj.len(), 3, "exactly three fields: {v}");
+        assert_eq!(v["light_css"].as_str(), Some("/* light */"));
+        assert_eq!(v["dark_css"].as_str(), Some("/* dark */"));
+        assert_eq!(v["follow_system"].as_bool(), Some(true));
+        assert_eq!(
+            theme_bundle_json("", "", false)["follow_system"].as_bool(),
+            Some(false)
+        );
+
+        // What `theme_css_bundle` actually ships (same composition): neither
+        // CSS field may still carry the scope attribute.
+        let scoped = "[data-theme=\"effie\"] .moraya-editor h1 { color: red; }";
+        let shipped = theme_bundle_json(
+            &unscope_theme_css(scoped, "effie"),
+            &unscope_theme_css(scoped, "effie"),
+            true,
+        );
+        for key in ["light_css", "dark_css"] {
+            let css = shipped[key].as_str().unwrap();
+            assert!(!css.contains("[data-theme="), "{key} still scoped: {css}");
+            assert!(css.contains(".moraya-editor h1"), "{key} lost its host: {css}");
+        }
     }
 
     #[test]
