@@ -47,7 +47,7 @@
 
 **旧数据一律不迁移**(用户 2026-08-04 决定):存量文件只在本来就要写盘时机会性补 `type`,不做批量改写、不提供迁移命令。
 
-仍未做:`index.md` 的**读侧**展示(把目录说明渲染进文件夹视图,属产品功能而非合规缺口)、P2.2 Attested Computation 试点。
+仍未做(均非合规缺口):`index.md` / `log.md` 的**读侧**展示、P2.2 Attested Computation 试点;另欠一次 GUI 实机验证。三项的交接说明见第 9 节。
 下文的发现明细保留审计当时的状态,便于对照;第 8 节是兼容性核查与已知问题(已解决的条目标注在该节)。
 
 ---
@@ -398,3 +398,27 @@ ebook-import 64、`src-tauri` cargo 382 通过 + 1 处既有失败(见 F1)。
 | # | 问题 |
 |---|------|
 | F1 | `handle_parsed_rpc_wrong_origin_403` 失败 | **已解决**:`protocol.rs` 在 7ee02b8 起把"缺失 Origin"视为同源(WebKit 的同源 POST 不带该头),用例已改为只断言显式外来源被拒,并补了一条 `handle_parsed_rpc_missing_origin_is_same_origin` 正向用例 |
+
+
+---
+
+## 9. 待办(2026-08-04 挂起,以后再做)
+
+合规部分已全部落地。下面两项**不是合规缺口**,是功能与探索;第三项是已合并代码欠的一次验证。
+
+### 9.1 `index.md` / `log.md` 的读侧展示
+
+- **现状**:写侧已完整——保留名不会被当概念文档写(`isReservedConceptName`,`src/lib/okf/concept.ts`);`pnpm okf:export` 会生成带 `okf_version` 的根 `index.md` 与 git 历史的 `log.md`。读侧还没有:导入一个真实 bundle 时,`index.md` 只是文件列表里的一份普通文件。
+- **要做**:文件夹视图把同目录 `index.md` 的正文当作该目录说明渲染;`index.md` / `log.md` 不进"概念"类筛选。
+- **注意**:GUI 改动,须先 dev 实机验证。
+
+### 9.2 Attested Computation(§10)试点
+
+- **候选**:decision-log 的命中率记分牌(`starOf` / `confLabel`)、insights 的时长统计。两处都是"文档里只留数字、算法藏在代码里",正是 §10 要解决的形态。
+- **形状**:`type: Attested Computation` + `runtime` + `parameters`,计算本体写在 `# Computation` 下。**红线:agent 只能给声明的 `parameters` 提供值,MUST NOT 撰写或修改计算本身**(§10.2)。
+- **前置**:先定产品取舍——谁执行、attester 放哪、attest 失败如何门禁。
+
+### 9.3 欠一次 GUI 实机验证(已合并代码)
+
+- ⌘N 新建文档 / 托盘快速笔记现在带 frontmatter:光标位置(走 `Selection.atEnd`,理论落在文末)、富文本模式下 frontmatter 表的观感。
+- 「采纳入正文」写 `verified: [{ by: human:<id>, at }]` 的实际落盘效果。
