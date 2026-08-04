@@ -10,12 +10,20 @@
      save button is pressed would be written by the next autosave tick as a
      BRAND NEW file in the NEW directory, with freshly stamped frontmatter,
      while the original keeps the old text — one idea silently forked in two.
-     This is the only place where a settings action can produce a file. -->
+     This is the only place where a settings action can produce a file.
+
+     It returns a BOOLEAN, and that is the whole point: flushing is not the
+     same as having flushed. `saveNow()` never rejects (`autosave.ts` swallows
+     the write's failure by design), so merely awaiting it would let a failed
+     write through and change the directory anyway — the same fork, narrowed
+     to the "the disk said no" branch. The callback has to assert the
+     postcondition and answer yes/no; `false` aborts, leaving the popover open
+     on the field the user was editing. -->
 <script lang="ts">
-  import { normalizeIdeaDir, saveIdeaDir, state as store } from '../lib/store.svelte'
+  import { commitIdeaDir, normalizeIdeaDir, state as store } from '../lib/store.svelte'
   import { t } from '../lib/strings'
 
-  const { onclose, onbeforecommit }: { onclose: () => void; onbeforecommit?: () => Promise<void> } =
+  const { onclose, onbeforecommit }: { onclose: () => void; onbeforecommit?: () => Promise<boolean> } =
     $props()
 
   let value = $state(store.ideaDir)
@@ -23,12 +31,16 @@
 
   async function commit(): Promise<void> {
     if (!valid) return
-    // Land the open document in the directory it still belongs to, BEFORE the
-    // store detaches it. Awaited: `saveIdeaDir` must not run until the write
-    // has settled.
-    await onbeforecommit?.()
-    await saveIdeaDir(value)
-    onclose()
+    // No callback ⇒ nothing to flush ⇒ proceed. Defaulted to an always-yes
+    // rather than optional-called (`onbeforecommit?.()`), because that yields
+    // `undefined`, which is falsy — an absent barrier would read as a refusal
+    // and the setting could never be saved.
+    const ok = await commitIdeaDir(value, onbeforecommit ?? (async () => true))
+    // Left open on purpose when the commit was refused — by the flush barrier
+    // (the user still has unsaved text, and a toast has said so) or by the
+    // store (see `saveIdeaDir`: it returns false "so the popover can keep the
+    // field open"). Closing would hide a change that did not happen.
+    if (ok) onclose()
   }
 
   function onkeydown(e: KeyboardEvent): void {

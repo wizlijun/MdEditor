@@ -44,6 +44,7 @@ import {
   bodyOf,
   changeIdeaDir,
   clockTime,
+  commitIdeaDir,
   createdFromName,
   createStore,
   deleteIdea,
@@ -907,6 +908,77 @@ describe('renameIdea', () => {
     expect(state.titles).toEqual({ 'a.md': 'Ship it' })
     // The sidecar is not moved on its own when the idea did not move.
     expect(host.vaultRename).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The settings popover's commit gate. `changeIdeaDir` detaches the open
+// document, so a directory change made while the buffer is still ahead of the
+// disk forks the idea: the next autosave writes a brand-new file in the NEW
+// directory while the original keeps the old text. `saveNow()` alone can't
+// prevent that — it never rejects (autosave.ts swallows the write's failure) —
+// so the barrier has to be a boolean the caller ASSERTS, and a `false` has to
+// leave the directory, the state file and the listing completely untouched.
+describe('commitIdeaDir', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    host.vaultList.mockResolvedValue({ entries: [] })
+    host.vaultWrite.mockResolvedValue({ ok: true })
+  })
+
+  it('does not change the directory when the flush barrier refuses', async () => {
+    const ok = await commitIdeaDir('elsewhere', async () => false)
+
+    expect(ok).toBe(false)
+    expect(state.ideaDir).toBe('inbox/ideas')
+    // Nothing reached the disk either: no state file, no re-listing.
+    expect(host.vaultWrite).not.toHaveBeenCalled()
+    expect(host.vaultList).not.toHaveBeenCalled()
+  })
+
+  it('leaves the open document attached when the barrier refuses', async () => {
+    state.current = 'a.md'
+    state.currentFrontmatter = 'type: Idea'
+
+    await commitIdeaDir('elsewhere', async () => false)
+
+    // The detach is the fork's mechanism: `current` cleared with dirty text
+    // still in the editor is what makes the next autosave write a new file.
+    expect(state.current).toBe('a.md')
+    expect(state.currentFrontmatter).toBe('type: Idea')
+  })
+
+  it('commits when the barrier says the buffer is safe to let go of', async () => {
+    state.current = 'a.md'
+
+    const ok = await commitIdeaDir('elsewhere', async () => true)
+
+    expect(ok).toBe(true)
+    expect(state.ideaDir).toBe('elsewhere')
+    expect(state.current).toBeNull()
+    expect(host.vaultWrite).toHaveBeenCalled()
+  })
+
+  it('asks the barrier BEFORE touching the directory', async () => {
+    const seen: string[] = []
+    await commitIdeaDir('elsewhere', async () => {
+      // The buffer must still belong to the old directory while it is being
+      // written; asking afterwards would flush into the new one.
+      seen.push(state.ideaDir)
+      return true
+    })
+    expect(seen).toEqual(['inbox/ideas'])
+  })
+
+  it('reports a rejected directory as a failed commit', async () => {
+    // `saveIdeaDir` returns false for a path `normalizeIdeaDir` refuses, and
+    // the popover keys "keep the field open" off this same boolean.
+    const ok = await commitIdeaDir('../escape', async () => true)
+    expect(ok).toBe(false)
+    expect(state.ideaDir).toBe('inbox/ideas')
   })
 })
 

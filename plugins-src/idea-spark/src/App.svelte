@@ -656,8 +656,15 @@
         <!-- Changing the idea directory detaches the open document, so the
              buffer has to reach the disk in the OLD directory first — otherwise
              the next autosave tick deposits it as a new file in the new one and
-             the idea exists twice. Same barrier as delete/rename/delegate. -->
-        <SettingsPopover onclose={() => (settingsOpen = false)} onbeforecommit={saveNow} />
+             the idea exists twice.
+
+             `keepUnsaved` rather than `saveNow`, for the same reason `pick` and
+             `startNew` use it: it flushes AND asserts that the flush landed
+             (`saveNow` never rejects, so a failed write would sail through),
+             answering false when the buffer is still ahead of the disk. The
+             question it asks — "may this document be let go of?" — is exactly
+             the question a directory change poses. -->
+        <SettingsPopover onclose={() => (settingsOpen = false)} onbeforecommit={keepUnsaved} />
       {/if}
     </div>
   {/if}

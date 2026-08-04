@@ -1137,6 +1137,34 @@ export async function saveIdeaDir(dir: string): Promise<boolean> {
 }
 
 /**
+ * Settings' commit gate: change the directory only if `flush` says the open
+ * buffer is safe to let go of. Returns false — having changed NOTHING, disk
+ * included — otherwise, so the popover stays open on the field the user was
+ * editing.
+ *
+ * The gate exists because `changeIdeaDir` DETACHES the open document
+ * (`current`/`currentFrontmatter` cleared): a buffer that never reached the
+ * disk would be written by the next autosave tick as a brand-new file, with
+ * freshly stamped frontmatter, in the NEW directory — while the original keeps
+ * the old text. One idea, silently forked in two. This is the only place where
+ * a settings action can produce a file, so it is the only settings action that
+ * needs a flush barrier at all.
+ *
+ * `flush` is a callback rather than a call to `saveIdeaDir`'s own code because
+ * the buffer lives in the component tree, not in the store — only App.svelte
+ * can ask the live editor what it holds. What it must NOT be is a bare
+ * `saveNow()`: that never rejects (`autosave.ts` swallows the write's failure,
+ * by design — the caller reports it), so awaiting it proves nothing. The
+ * caller has to assert the postcondition — "what the editor holds is on disk"
+ * — and say so with a boolean; `App.svelte`'s `keepUnsaved()` is exactly that
+ * assertion, and is what gets passed in.
+ */
+export async function commitIdeaDir(dir: string, flush: () => Promise<boolean>): Promise<boolean> {
+  if (!(await flush())) return false
+  return await saveIdeaDir(dir)
+}
+
+/**
  * Clears the celebration flag once its animation has run its course. Pass the
  * `celebrateSeq` the timer was started for and a stale timer becomes a no-op:
  * burst N's two seconds can never cut burst N+1 short.
