@@ -45,12 +45,29 @@ use plugin_protocol as proto;
 
 use super::host_api::{handle_common, method_capability, ToastEmitter};
 
-/// Read cap for `host.vault.read` / `host.fs.read_text` / `host.fs.read_bytes`
-/// (200 MB). NOTE: `read_bytes` base64-encodes the whole file into one RPC
-/// string (~1.33× the file), so a read near this cap materializes ~266 MB of
-/// String plus the JS-side decode — raised from 10 MB to admit large Roam
-/// exports, at that memory cost.
+/// Read/write cap for `host.vault.read` / `host.vault.write` /
+/// `host.fs.read_text` / `host.fs.read_bytes` (200 MB). NOTE:
+/// `fs.read_bytes` base64-encodes the whole file into one RPC string (~1.33×
+/// the file), so a read near this cap materializes ~266 MB of String plus the
+/// JS-side decode — raised from 10 MB to admit large Roam exports, at that
+/// memory cost. That trade is deliberate and *one-off*: it is paid once per
+/// user-driven import of a file the user explicitly picked in a dialog.
+/// `host.vault.read_bytes` deliberately does NOT share it — see
+/// `MAX_VAULT_BYTES`.
 const MAX_TEXT_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Read cap for `host.vault.read_bytes` (10 MB, spec §3.3).
+///
+/// Separate from `MAX_TEXT_BYTES` on purpose. `vault.read_bytes` is the Editor
+/// Kit MediaResolver's byte source: it fires *implicitly*, once per embedded
+/// image while a document renders, with no user gesture to pace it. Every read
+/// base64-encodes the file into a single JSON-RPC string (~1.33×) that must be
+/// serialized, crossed into the webview and decoded on the main thread, so
+/// inheriting the 200 MB import cap would let one oversized image stall the
+/// window with ~267 MB of string. 10 MB comfortably covers any image or short
+/// clip a note embeds; anything larger fails fast with `too_large` and renders
+/// as a broken `<img>` instead of freezing the UI.
+const MAX_VAULT_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Standard base64 alphabet (RFC 4648, `+`/`/`, `=` padding).
 const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -584,13 +601,14 @@ pub(crate) fn vault_read(services: &dyn HostServices, params: &serde_json::Value
 }
 
 /// `{ path } → { base64 }` — vault-internal file's raw bytes (base64-encoded),
-/// subject to the same `MAX_TEXT_BYTES` cap as `vault.read`. Used by isolated
-/// plugin webviews (zero Tauri IPC) to render vault-hosted images.
+/// capped at `MAX_VAULT_BYTES` (10 MB, spec §3.3 — deliberately far below the
+/// `MAX_TEXT_BYTES` import cap; see that constant). Used by isolated plugin
+/// webviews (zero Tauri IPC) to render vault-hosted images.
 pub(crate) fn vault_read_bytes(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
     let p = resolve_in_vault(services, params)?;
     let meta = std::fs::metadata(&p).map_err(|e| format!("io: {e}"))?;
-    if meta.len() > MAX_TEXT_BYTES {
-        return Err(format!("too_large: file exceeds {MAX_TEXT_BYTES} bytes"));
+    if meta.len() > MAX_VAULT_BYTES {
+        return Err(format!("too_large: file exceeds {MAX_VAULT_BYTES} bytes"));
     }
     let bytes = std::fs::read(&p).map_err(|e| format!("io: {e}"))?;
     Ok(serde_json::json!({ "base64": base64_encode(&bytes) }))
@@ -608,6 +626,18 @@ pub(crate) fn vault_write(services: &dyn HostServices, params: &serde_json::Valu
         std::fs::create_dir_all(parent).map_err(|e| format!("io: {e}"))?;
     }
     std::fs::write(&p, content).map_err(|e| format!("io: {e}"))?;
+    // A `.sh` written through this bridge is almost always an agent-task
+    // precheck hook, and claude-agent's runner is fail-OPEN on spawn failure
+    // (`precheck.rs::run`: a script it cannot execute is treated as "proceed").
+    // A precheck that isn't executable is therefore a guard that silently never
+    // runs — the same reason claude-agent chmods its own built-in templates
+    // (`plugins-src/claude-agent/backend/src/task.rs` `seed_builtin_templates`).
+    // Best effort: a failed chmod must not fail the write.
+    #[cfg(unix)]
+    if p.extension().and_then(|e| e.to_str()) == Some("sh") {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755));
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -1075,6 +1105,63 @@ mod tests {
         // 越界路径 → Err(resolve_in_vault 拒绝)
         let r = run_as(&s, "p.id", &["vault.read"], "host.vault.read_bytes", serde_json::json!({"path": "../x"})).await;
         assert!(r.error.is_some());
+    }
+
+    /// `vault.read_bytes` fires implicitly, once per embedded image, with no
+    /// user gesture pacing it — so it gets its own 10 MB cap (spec §3.3) and
+    /// must NOT inherit the 200 MB dialog-import cap.
+    #[tokio::test]
+    async fn vault_read_bytes_over_its_own_cap_is_too_large() {
+        assert!(MAX_VAULT_BYTES < MAX_TEXT_BYTES, "the vault byte cap must stay the tighter one");
+        let vault = tempfile::tempdir().unwrap();
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+
+        // Exactly at the cap is fine; one byte over is not.
+        std::fs::write(vault.path().join("ok.bin"), vec![b'x'; MAX_VAULT_BYTES as usize]).unwrap();
+        let r = run_as(&s, "p.id", &["vault.read"], "host.vault.read_bytes", serde_json::json!({"path": "ok.bin"})).await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+
+        std::fs::write(vault.path().join("big.bin"), vec![b'x'; MAX_VAULT_BYTES as usize + 1]).unwrap();
+        let r = run_as(&s, "p.id", &["vault.read"], "host.vault.read_bytes", serde_json::json!({"path": "big.bin"})).await;
+        let e = r.error.unwrap();
+        assert_eq!(e.code, proto::ERR_INTERNAL);
+        assert!(e.message.starts_with("too_large:"), "{}", e.message);
+    }
+
+    /// A plugin-seeded agent precheck (`precheck.sh`) that isn't executable is
+    /// a guard that silently never runs: claude-agent's runner is fail-open on
+    /// spawn failure. Non-`.sh` writes must keep the plain default mode.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vault_write_marks_shell_scripts_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let s = StubServices { vault: Some(dir.path().to_path_buf()), ..Default::default() };
+
+        let r = run(
+            &s,
+            &["vault.write"],
+            "host.vault.write",
+            serde_json::json!({"path": ".notemd/agent-tasks/t/precheck.sh", "content": "#!/bin/sh\nexit 0\n"}),
+        )
+        .await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+        let mode = std::fs::metadata(dir.path().join(".notemd/agent-tasks/t/precheck.sh"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755, "precheck.sh must be executable, got {mode:o}");
+
+        let r = run(
+            &s,
+            &["vault.write"],
+            "host.vault.write",
+            serde_json::json!({"path": "note.md", "content": "hi"}),
+        )
+        .await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+        let mode = std::fs::metadata(dir.path().join("note.md")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0, "a plain .md must not become executable, got {mode:o}");
     }
 
     #[tokio::test]

@@ -90,10 +90,21 @@ pub fn mime_for(path: &Path) -> &'static str {
 /// nested iframes, not who may frame it.) The bridge injected into the served
 /// HTML keeps `connect-src 'self'`, so the in-iframe `window.notemd.request()`
 /// fetch to `/__rpc__` still passes.
+///
+/// **`blob:` in `img-src`/`media-src` (子项目⑤).** A plugin webview has zero
+/// Tauri IPC, so the Editor Kit's MediaResolver (`src/editor-kit/media.ts`)
+/// reads vault files through `host.vault.read_bytes` and hands moraya a
+/// `URL.createObjectURL(...)` result — a `blob:` URL is its ONLY output form,
+/// there is no `asset://`/`file://` fallback in this origin. Without `blob:`
+/// every local image/audio/video in a kit-hosted document is blocked. `blob:`
+/// grants nothing extra: the bytes already came through the capability-gated,
+/// vault-contained bridge, and a blob URL is same-origin and unguessable.
+/// `media-src` is spelled out because audio/video would otherwise fall back to
+/// `default-src 'self'` and be blocked just the same.
 pub fn csp_header(_plugin_id: &str) -> String {
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-     img-src 'self' data:; connect-src 'self'; object-src 'none'; \
-     base-uri 'none'; form-action 'none'; frame-src 'none'"
+     img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; \
+     object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
         .to_string()
 }
 
@@ -615,9 +626,22 @@ mod tests {
         assert_eq!(
             csp_header("test.plugin"),
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-             img-src 'self' data:; connect-src 'self'; object-src 'none'; \
-             base-uri 'none'; form-action 'none'; frame-src 'none'"
+             img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; \
+             object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
         );
+    }
+
+    /// `blob:` is the Editor Kit MediaResolver's ONLY output form
+    /// (`src/editor-kit/media.ts` returns `URL.createObjectURL(...)` for both
+    /// `loadLocalImage` and `loadLocalMedia`), and a plugin webview has no IPC
+    /// to fall back on. Dropping either directive silently blocks every local
+    /// image and every audio/video element in a kit-hosted document — a failure
+    /// the main window can never reproduce, because its `csp` is null.
+    #[test]
+    fn csp_allows_blob_for_kit_media() {
+        let csp = csp_header("test.plugin");
+        assert!(csp.contains("img-src 'self' data: blob:"), "{csp}");
+        assert!(csp.contains("media-src 'self' blob:"), "{csp}");
     }
 
     // ── handle_parsed ───────────────────────────────────────────────────

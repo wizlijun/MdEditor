@@ -128,12 +128,16 @@ fn resolve_asset_serves_fixture_and_blocks_traversal() {
 fn mime_and_csp_for_fixture_assets() {
     assert_eq!(protocol::mime_for(Path::new("index.html")), "text/html");
     assert_eq!(protocol::mime_for(Path::new("app.js")), "text/javascript");
-    // 'self' under plugin://<id> is this plugin only; no remote loads.
+    // 'self' under plugin://<id> is this plugin only; no remote loads. `blob:`
+    // is the one exception, and only for img/media: the Editor Kit's
+    // MediaResolver (`src/editor-kit/media.ts`) has no other output form — it
+    // reads vault bytes over the capability-gated bridge and hands moraya a
+    // `URL.createObjectURL(...)`, because a plugin webview has zero Tauri IPC.
     assert_eq!(
         protocol::csp_header(PLUGIN_ID),
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-         img-src 'self' data:; connect-src 'self'; object-src 'none'; \
-         base-uri 'none'; form-action 'none'; frame-src 'none'"
+         img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; \
+         object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
     );
 }
 
