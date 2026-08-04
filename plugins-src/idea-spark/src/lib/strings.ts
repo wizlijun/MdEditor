@@ -50,6 +50,23 @@ export const MESSAGE_KEYS = [
   'editorUnavailable',
   'unsavedWarning',
   'historyUnavailable',
+  'menuDelegate',
+  'menuOpenInMain',
+  'menuOpenIdea',
+  'menuOpenProof',
+  'menuRename',
+  'menuDelete',
+  'renameEmpty',
+  'renameSlash',
+  'renameDot',
+  'renameTaken',
+  'renameHint',
+  'confirmDeleteTitle',
+  'confirmDeleteBody',
+  'confirmDelete',
+  'cancel',
+  'inboxEmpty',
+  'rowActions',
 ] as const
 
 export type MessageKey = (typeof MESSAGE_KEYS)[number]
@@ -96,6 +113,23 @@ const en: Catalog = {
   editorUnavailable: 'The rich editor could not be loaded — falling back to plain text.',
   unsavedWarning: 'This idea has unsaved changes.',
   historyUnavailable: 'The idea folder could not be read — the history may be incomplete.',
+  menuDelegate: 'Delegate to agent',
+  menuOpenInMain: 'Open in the main editor',
+  menuOpenIdea: 'Open the idea in the main editor',
+  menuOpenProof: 'Open the argument in the main editor',
+  menuRename: 'Rename',
+  menuDelete: 'Delete',
+  renameEmpty: 'A name can’t be empty.',
+  renameSlash: 'A name can’t contain “/”.',
+  renameDot: 'A name can’t start with “.”.',
+  renameTaken: 'That name is already taken.',
+  renameHint: 'Enter to rename, Esc to cancel',
+  confirmDeleteTitle: 'Delete this idea?',
+  confirmDeleteBody: 'This deletes the following files for good — there is no trash:',
+  confirmDelete: 'Delete',
+  cancel: 'Cancel',
+  inboxEmpty: 'No ideas yet.',
+  rowActions: 'Actions',
 }
 
 const zh: Catalog = {
@@ -136,6 +170,23 @@ const zh: Catalog = {
   editorUnavailable: '富文本编辑器加载失败 —— 已退回纯文本编辑。',
   unsavedWarning: '这个想法还有未保存的修改。',
   historyUnavailable: '读取想法目录失败 —— 历史列表可能不完整。',
+  menuDelegate: '委托给 agent',
+  menuOpenInMain: '在主编辑器打开',
+  menuOpenIdea: '在主编辑器打开想法',
+  menuOpenProof: '在主编辑器打开论证',
+  menuRename: '重命名',
+  menuDelete: '删除',
+  renameEmpty: '名字不能为空。',
+  renameSlash: '名字不能包含「/」。',
+  renameDot: '名字不能以「.」开头。',
+  renameTaken: '这个名字已被占用。',
+  renameHint: '回车重命名,Esc 取消',
+  confirmDeleteTitle: '删除这个想法?',
+  confirmDeleteBody: '以下文件会被彻底删除,没有回收站:',
+  confirmDelete: '删除',
+  cancel: '取消',
+  inboxEmpty: '还没有想法。',
+  rowActions: '操作',
 }
 
 const ja: Catalog = {
@@ -176,6 +227,23 @@ const ja: Catalog = {
   editorUnavailable: 'リッチエディタを読み込めませんでした —— プレーンテキストに切り替えます。',
   unsavedWarning: 'このアイデアには未保存の変更があります。',
   historyUnavailable: 'アイデアフォルダを読み取れませんでした —— 履歴が不完全な可能性があります。',
+  menuDelegate: 'エージェントに委任',
+  menuOpenInMain: 'メインエディタで開く',
+  menuOpenIdea: 'アイデアをメインエディタで開く',
+  menuOpenProof: '論証をメインエディタで開く',
+  menuRename: '名前を変更',
+  menuDelete: '削除',
+  renameEmpty: '名前は空にできません。',
+  renameSlash: '名前に「/」は使えません。',
+  renameDot: '名前を「.」で始めることはできません。',
+  renameTaken: 'この名前はすでに使われています。',
+  renameHint: 'Enter で変更、Esc で取消',
+  confirmDeleteTitle: 'このアイデアを削除しますか?',
+  confirmDeleteBody: '次のファイルを完全に削除します(ごみ箱はありません):',
+  confirmDelete: '削除',
+  cancel: 'キャンセル',
+  inboxEmpty: 'まだアイデアがありません。',
+  rowActions: '操作',
 }
 
 const de: Catalog = {
@@ -216,6 +284,23 @@ const de: Catalog = {
   editorUnavailable: 'Der Rich-Text-Editor konnte nicht geladen werden — Rückfall auf reinen Text.',
   unsavedWarning: 'Diese Idee hat ungespeicherte Änderungen.',
   historyUnavailable: 'Der Ideenordner konnte nicht gelesen werden — der Verlauf ist womöglich unvollständig.',
+  menuDelegate: 'An Agent delegieren',
+  menuOpenInMain: 'Im Haupteditor öffnen',
+  menuOpenIdea: 'Idee im Haupteditor öffnen',
+  menuOpenProof: 'Begründung im Haupteditor öffnen',
+  menuRename: 'Umbenennen',
+  menuDelete: 'Löschen',
+  renameEmpty: 'Ein Name darf nicht leer sein.',
+  renameSlash: 'Ein Name darf kein „/“ enthalten.',
+  renameDot: 'Ein Name darf nicht mit „.“ beginnen.',
+  renameTaken: 'Dieser Name ist bereits vergeben.',
+  renameHint: 'Enter zum Umbenennen, Esc zum Abbrechen',
+  confirmDeleteTitle: 'Diese Idee löschen?',
+  confirmDeleteBody: 'Die folgenden Dateien werden endgültig gelöscht — es gibt keinen Papierkorb:',
+  confirmDelete: 'Löschen',
+  cancel: 'Abbrechen',
+  inboxEmpty: 'Noch keine Ideen.',
+  rowActions: 'Aktionen',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }
@@ -239,6 +324,16 @@ export function setLocale(code: string | undefined): void {
 export function t(key: MessageKey): string {
   const catalog = registry[active] ?? en
   return catalog[key] ?? en[key] ?? key
+}
+
+/**
+ * The locale `setLocale` settled on. Exported for the Intl formatters the UI
+ * builds itself (relative times in the inbox) — those need a locale code, not a
+ * catalog lookup, and must not guess one from `navigator.language` when the
+ * host has already resolved what language this window is speaking.
+ */
+export function locale(): Locale {
+  return active
 }
 
 // Exported for tests only (catalog completeness checks).

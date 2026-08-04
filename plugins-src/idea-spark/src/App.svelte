@@ -4,13 +4,16 @@
      chrome is Tauri's job — so the editor starts at the very top edge and runs
      down to a single 38px action bar:
 
-       ┌─────────────────────────────────┐
-       │                        ┌──────┐ │  ← ModeToggle, floating (absolute)
-       │  editor (flex:1)       │👁│</>│ │
-       │                        └──────┘ │
-       ├─────────────────────────────────┤
+       ┌───────────────────────┬─────────┐
+       │              ┌──────┐ │ inbox   │  ← ModeToggle, floating (absolute)
+       │ editor       │👁│</>│ │ 240px,  │
+       │ (flex:1)     └──────┘ │ optional│  ← InboxPanel; 📥 toggles it and the
+       ├───────────────────────┴─────────┤     choice is persisted (`inboxOpen`)
        │ saved 19:42   New  Delegate 📥 ⚙│  ← 38px action bar
        └─────────────────────────────────┘
+
+     The inbox *squeezes* the editor rather than covering it (design §5), and is
+     hidden by default: the window opens on a blank page, not on a file list.
 
      There is no save button: the document is written 1.5s after the user stops
      typing (`autosave.ts`), and forced to disk at every point where the buffer
@@ -35,7 +38,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import Celebration from './components/Celebration.svelte'
-  import HistoryList from './components/HistoryList.svelte'
+  import InboxPanel from './components/InboxPanel.svelte'
   import ModeToggle from './components/ModeToggle.svelte'
   import SettingsPopover from './components/SettingsPopover.svelte'
   import { createAutosave } from './lib/autosave'
@@ -44,16 +47,19 @@
   import { pickPlaceholder, placeholderLines } from './lib/placeholder'
   import {
     boot,
+    deleteIdea,
     isBlank,
     loadIdea,
     markEdited,
     needsSaveBefore,
     newIdea,
     rebaseline,
+    renameIdea,
     saveIdea,
     showInEditor,
     state as store,
     toast,
+    toggleInbox,
   } from './lib/store.svelte'
   import { setLocale, t } from './lib/strings'
 
@@ -200,6 +206,38 @@
     kit?.focus()
   }
 
+  /**
+   * Deleting and renaming both have to reach the disk BEFORE they run, or an
+   * autosave still in flight lands afterwards — recreating the file that was
+   * just deleted, or writing the editor's content back under the old name. The
+   * `saveNow()` here is exactly that barrier: `flush()` resolves only once the
+   * in-flight write has settled, so nothing can arrive behind the mutation.
+   *
+   * It is a barrier even when the row being acted on is NOT the open document:
+   * what must not be in flight is *any* write, and the only writer is this
+   * window's autosave.
+   *
+   * A failed flush does not abort either action. `saveIdea` has already
+   * reported it (and, for a delete, the user's answer to "delete this idea?"
+   * is not made less true by a failed write to it).
+   */
+  async function removeIdea(name: string): Promise<void> {
+    await saveNow()
+    const blank = await deleteIdea(name)
+    // Non-null means the document that was deleted is the one on screen: the
+    // store has already detached it, and the editor still holds its text, so
+    // the blank draft has to be pushed in here.
+    if (blank !== null) {
+      showMarkdown(blank)
+      kit?.focus()
+    }
+  }
+
+  async function rename(from: string, raw: string): Promise<boolean> {
+    await saveNow()
+    return await renameIdea(from, raw)
+  }
+
   async function switchMode(m: KitMode): Promise<void> {
     if (!kit || m === mode) return
     await saveNow() // the panes hand the document over; land it on disk first
@@ -330,10 +368,10 @@
         {/if}
       </section>
 
-      <!-- The inbox is hidden by default (design §1); Task 7 replaces this with
-           the real panel and enables the action bar's toggle. -->
+      <!-- Hidden by default (design §1); the action bar's 📥 toggles it and the
+           choice is remembered across windows (`toggleInbox` → `inboxOpen`). -->
       {#if store.inboxOpen}
-        <HistoryList onselect={pick} />
+        <InboxPanel onselect={pick} ondelete={removeIdea} onrename={rename} />
       {/if}
     </div>
 
@@ -362,10 +400,10 @@
       <button
         type="button"
         class="icon"
-        disabled
         aria-pressed={store.inboxOpen}
         aria-label={t('inbox')}
-        title={t('inbox')}>📥</button
+        title={t('inbox')}
+        onclick={toggleInbox}>📥</button
       >
       <button
         type="button"

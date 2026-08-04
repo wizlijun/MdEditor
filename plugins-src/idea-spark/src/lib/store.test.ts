@@ -12,7 +12,9 @@ import {
   bodyOf,
   changeIdeaDir,
   clockTime,
+  createdFromName,
   createStore,
+  filesToDelete,
   frontmatterOf,
   displayName,
   ideaDocText,
@@ -23,10 +25,14 @@ import {
   needsSaveBefore,
   nextFileName,
   rebaseline,
+  relativeAge,
   relPath,
+  rowTitle,
   showInEditor,
   setIdeaDir,
   statusOf,
+  titleOf,
+  validateRename,
   type SparkStore,
 } from './store.svelte'
 
@@ -506,5 +512,128 @@ describe('displayName', () => {
 
   it('keeps the date when it is all there is', () => {
     expect(displayName('2026-08-04.md')).toBe('2026-08-04')
+  })
+})
+
+// ── inbox: deletion, renaming, row labels ───────────────────────────────────
+
+describe('filesToDelete', () => {
+  it('includes the proof sidecar when it exists', () => {
+    const s = createStore()
+    s.ideaDir = 'inbox/ideas'
+    s.files = ['inbox/ideas/a.md', 'inbox/ideas/a.proof.md', 'inbox/ideas/b.md']
+    expect(filesToDelete(s, 'a.md')).toEqual(['inbox/ideas/a.md', 'inbox/ideas/a.proof.md'])
+    expect(filesToDelete(s, 'b.md')).toEqual(['inbox/ideas/b.md'])
+  })
+
+  it('lists the idea even when the listing never saw it (a stale panel row)', () => {
+    const s = createStore()
+    s.ideaDir = 'inbox/ideas'
+    s.files = []
+    expect(filesToDelete(s, 'a.md')).toEqual(['inbox/ideas/a.md'])
+  })
+})
+
+describe('validateRename', () => {
+  const s = createStore()
+  s.ideaDir = 'inbox/ideas'
+  s.files = ['inbox/ideas/a.md', 'inbox/ideas/taken.md']
+
+  it('appends .md and accepts a free name', () => {
+    expect(validateRename(s, 'a.md', '新名字')).toEqual({ ok: true, name: '新名字.md' })
+    expect(validateRename(s, 'a.md', '新名字.md')).toEqual({ ok: true, name: '新名字.md' })
+  })
+
+  it('renaming to its own name is fine', () => {
+    expect(validateRename(s, 'a.md', 'a')).toEqual({ ok: true, name: 'a.md' })
+  })
+
+  it('trims the surrounding whitespace before judging the name', () => {
+    expect(validateRename(s, 'a.md', '  spaced  ')).toEqual({ ok: true, name: 'spaced.md' })
+  })
+
+  it('rejects empty, slashes, leading dots and taken names', () => {
+    expect(validateRename(s, 'a.md', '   ')).toEqual({ ok: false, reason: 'empty' })
+    expect(validateRename(s, 'a.md', 'x/y')).toEqual({ ok: false, reason: 'slash' })
+    expect(validateRename(s, 'a.md', '.hidden')).toEqual({ ok: false, reason: 'dot' })
+    expect(validateRename(s, 'a.md', 'taken')).toEqual({ ok: false, reason: 'taken' })
+  })
+
+  it("treats a sidecar's name as taken too", () => {
+    const withProof = createStore()
+    withProof.ideaDir = 'inbox/ideas'
+    withProof.files = ['inbox/ideas/a.md', 'inbox/ideas/b.proof.md']
+    expect(validateRename(withProof, 'a.md', 'b.proof')).toEqual({ ok: false, reason: 'taken' })
+  })
+
+  // `index.md` / `log.md` are OKF-reserved structural documents (see
+  // okf/concept.ts). Letting an idea take one of those names would both break
+  // the format contract and make the row vanish from the inbox, since
+  // `listIdeas` filters reserved names out — so the name is refused as
+  // unavailable, which is exactly what `taken` means to the user.
+  it.each(['index', 'log', 'index.md'])('refuses the OKF-reserved name %o', (raw) => {
+    expect(validateRename(s, 'a.md', raw)).toEqual({ ok: false, reason: 'taken' })
+  })
+})
+
+describe('rowTitle', () => {
+  it('reads the H1 out of the body', () => {
+    expect(rowTitle('# Ship the thing\n\nbody', '2026-08-04-1942-idea.md')).toBe('Ship-the-thing')
+  })
+
+  it('falls back to the file name when the body yields no title', () => {
+    expect(rowTitle('', '2026-08-04-1942-idea.md')).toBe('1942-idea')
+    expect(rowTitle('   \n\n', '2026-08-04-1942-idea.md')).toBe('1942-idea')
+  })
+
+  it('skips frontmatter rather than titling the row `type: Idea`', () => {
+    expect(rowTitle('---\ntype: Idea\n---\n\n# Real title', 'x.md')).toBe('Real-title')
+  })
+})
+
+describe('titleOf', () => {
+  it('uses the cached title once the body has been read', () => {
+    const s = createStore()
+    expect(titleOf(s, '2026-08-04-1942-idea.md')).toBe('1942-idea')
+    s.titles = { '2026-08-04-1942-idea.md': 'Ship-the-thing' }
+    expect(titleOf(s, '2026-08-04-1942-idea.md')).toBe('Ship-the-thing')
+  })
+})
+
+describe('createdFromName', () => {
+  it('reads the creation minute out of a timestamp name', () => {
+    expect(createdFromName('2026-08-04-1942-idea.md')).toEqual(new Date(2026, 7, 4, 19, 42))
+  })
+
+  it('reads a date-only name as local midnight', () => {
+    expect(createdFromName('2026-08-04-my-idea.md')).toEqual(new Date(2026, 7, 4, 0, 0))
+  })
+
+  it('is null for a name that carries no date (a renamed idea)', () => {
+    expect(createdFromName('my-idea.md')).toBeNull()
+  })
+
+  it('is null for an impossible date rather than rolling it over', () => {
+    expect(createdFromName('2026-13-45-idea.md')).toBeNull()
+    expect(createdFromName('2026-08-04-2599-idea.md')).toBeNull()
+  })
+})
+
+describe('relativeAge', () => {
+  const now = new Date(2026, 7, 4, 12, 0)
+  it.each([
+    [new Date(2026, 7, 4, 11, 58), -2, 'minute'],
+    [new Date(2026, 7, 4, 9, 0), -3, 'hour'],
+    [new Date(2026, 7, 1, 12, 0), -3, 'day'],
+    [new Date(2026, 3, 4, 12, 0), -4, 'month'],
+    [new Date(2022, 7, 4, 12, 0), -4, 'year'],
+  ])('%o → %i %s ago', (from, value, unit) => {
+    expect(relativeAge(from as Date, now)).toEqual({ value, unit })
+  })
+
+  it('rounds a fresh idea down to "0 minutes", never into the future', () => {
+    expect(relativeAge(new Date(2026, 7, 4, 12, 0, 30), now)).toEqual({ value: 0, unit: 'minute' })
+    // Clock skew (a file stamped ahead of us) must not read as "in 5 minutes".
+    expect(relativeAge(new Date(2026, 7, 4, 12, 5), now)).toEqual({ value: 0, unit: 'minute' })
   })
 })

@@ -63,3 +63,27 @@ export function vaultExists(path: string): Promise<{ exists: boolean }> {
 export function vaultList(path: string): Promise<{ entries: { name: string; is_dir: boolean }[] }> {
   return bridge().request('host.vault.list', { path })
 }
+
+/**
+ * `host.vault.remove` — deletes ONE file (vault-relative path).
+ *
+ * Host semantics worth knowing at the call site: a directory is refused (only
+ * `remove_file` is ever called), a path that doesn't exist resolves as success
+ * (idempotent, so a retry after a partial failure is safe), and a symlink is
+ * removed as the link itself — never followed to its target.
+ */
+export function vaultRemove(path: string): Promise<{ ok: true }> {
+  return bridge().request('host.vault.remove', { path })
+}
+
+/**
+ * `host.vault.rename` — moves a file within the vault (both ends vault-relative).
+ *
+ * NEVER clobbers: an existing `to` rejects with an "exists" error and leaves
+ * both ends untouched (the host does the check atomically), so a caller may
+ * treat rejection as "that name is spoken for" without racing anything.
+ * Missing parent directories of `to` are created.
+ */
+export function vaultRename(from: string, to: string): Promise<{ ok: true }> {
+  return bridge().request('host.vault.rename', { from, to })
+}
