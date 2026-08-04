@@ -147,13 +147,22 @@ const RPC_PATH: &str = "/__rpc__";
 /// Reserved URL prefix under every `plugin://<id>` origin that mirrors the
 /// host's own bundled frontend assets read-only (spec §3.4, Editor Kit).
 ///
-/// It is a *mirror of the whole asset tree*, not a two-file allowlist: the kit
-/// entry (`assets/editor-kit-v1.js`) statically imports several hash-named
-/// shared chunks and the moraya runtime dynamically imports more, so any
-/// filename-based allowlist would break on the next `pnpm build`. The security
-/// boundary is instead: the `editor.kit` capability gate (below), segment
-/// validation, and read-only GET.
+/// It mirrors a whole *directory tree* ([`HOST_ASSET_DIR`]), not a file
+/// allowlist: the kit entry (`assets/editor-kit-v1.js`) statically imports
+/// several hash-named shared chunks and the moraya runtime dynamically imports
+/// more, so any filename-based allowlist would break on the next `pnpm build`.
 const HOST_PREFIX: &str = "/__host__/";
+
+/// The only host directory reachable through [`HOST_PREFIX`].
+///
+/// Vite emits every hashed chunk, stylesheet and font under `dist/assets/`;
+/// what lives at the dist *root* is the app's own HTML entry points
+/// (`index.html`, `insights.html`, `daily-notes.html`, …). Confining the mirror
+/// to this one directory keeps those entry points behind a structural boundary
+/// instead of relying on [`is_html_document`]'s content sniffing, and costs the
+/// kit nothing: its relative imports and `new URL('./…', import.meta.url)`
+/// references all resolve inside the same directory.
+const HOST_ASSET_DIR: &str = "assets/";
 
 /// Capability a plugin manifest must declare to reach [`HOST_PREFIX`].
 const EDITOR_KIT_CAP: &str = "editor.kit";
@@ -219,20 +228,32 @@ pub fn handle_parsed(
 
 /// Route `GET /__host__/<rest>` to the host's bundled frontend assets.
 ///
-/// Security boundary (there is no filename allowlist — see [`HOST_PREFIX`]):
+/// The checks, in the order they run — the order is itself load-bearing:
 ///
-/// 1. **Capability gate.** A manifest without `editor.kit` gets a flat 404 —
-///    the same answer as any other unknown path, so the reserved prefix isn't
-///    even discoverable from an ungranted plugin.
-/// 2. **Segment validation.** Empty, `.` and `..` segments are rejected. This
-///    matters beyond tidiness: in dev builds `AssetResolver` resolves against
-///    the `frontendDist` *directory* and keeps `..` components, so an unchecked
-///    `..` would read outside `dist/`.
-/// 3. **No percent-escapes.** Escapes are refused rather than decoded, because
-///    `AssetResolver::get_asset` percent-decodes downstream: decoding here and
-///    passing the result on would let a double-encoded `%252e%252e` survive
-///    validation as the literal text `%2e%2e` and become `..` afterwards.
-///    No bundled asset name needs an escape, so refusing them costs nothing.
+/// 1. **Capability gate → 404.** `editor.kit` is a *declarative* gate of the
+///    same kind as the `host.*` capabilities (`host_api.rs`): it is read
+///    straight off the plugin's own manifest, and nothing at install time
+///    whitelists it or asks the user to approve it. So it does NOT stop a
+///    malicious plugin — one that simply writes `"editor.kit"` into its
+///    manifest walks through. What it does buy: an ordinary plugin has no such
+///    surface by default, and the declaration is a durable, auditable line in a
+///    manifest the marketplace can review. Against a plugin that *has* declared
+///    it, the real limits are steps 2–4 plus the standing premise that `dist/`
+///    holds no secrets. The gate runs FIRST so an undeclared plugin gets a
+///    byte-identical 404 for every `__host__` URL — well-formed or not — and
+///    cannot infer the reserved prefix exists by diffing status codes.
+/// 2. **Segment validation → 403.** Empty, `.` and `..` segments are rejected.
+///    This matters beyond tidiness: in dev builds `AssetResolver` resolves
+///    against the `frontendDist` *directory* and `PathBuf::components()` keeps
+///    `ParentDir`, so an unchecked `..` really would read outside `dist/`.
+///    Percent-escapes are refused here rather than decoded: `get_asset`
+///    percent-decodes again downstream (`manager/mod.rs`), and declining to
+///    decode at all means this boundary never depends on reasoning about how
+///    many decode passes each side performs. No bundled asset name needs an
+///    escape, so the ban costs nothing.
+/// 3. **Directory confinement → 404.** Only [`HOST_ASSET_DIR`] is mirrored;
+///    the dist root's HTML entry points are structurally out of reach. 404
+///    rather than 403, to stay consistent with step 1's silence.
 /// 4. **Read-only GET** (this function is only reachable from the GET arm).
 fn route_host_asset(capabilities: &[String], rest: &str) -> Routed {
     if !capabilities.iter().any(|c| c == EDITOR_KIT_CAP) {
@@ -243,6 +264,9 @@ fn route_host_asset(capabilities: &[String], rest: &str) -> Routed {
     };
     if rest.split('/').any(bad_segment) {
         return Routed::Response(plain(http::StatusCode::FORBIDDEN, "forbidden"));
+    }
+    if !rest.starts_with(HOST_ASSET_DIR) {
+        return Routed::Response(plain(http::StatusCode::NOT_FOUND, "not found"));
     }
     Routed::HostAsset(format!("/{rest}"))
 }
@@ -255,6 +279,9 @@ fn route_host_asset(capabilities: &[String], rest: &str) -> Routed {
 /// otherwise be answered `200` with HTML under a `text/javascript`
 /// content-type — a baffling parse error inside the plugin webview instead of
 /// an honest 404. No host asset we serve here is HTML.
+///
+/// This is defence in depth, not the boundary: the app's HTML entry points live
+/// at the dist root and are already out of reach via [`HOST_ASSET_DIR`].
 pub fn is_html_document(bytes: &[u8]) -> bool {
     let body = bytes.strip_prefix(b"\xef\xbb\xbf".as_slice()).unwrap_or(bytes);
     let head = &body[..body.len().min(64)];
@@ -394,15 +421,18 @@ fn serve_host_asset<R: tauri::Runtime>(
     let Some(asset) = app.asset_resolver().get(asset_path.to_string()) else {
         return plain(http::StatusCode::NOT_FOUND, "not found");
     };
+    // Move, don't clone: the largest bundled chunks run to ~1.3 MB and this
+    // runs once per request.
+    let bytes = asset.bytes;
     // See `is_html_document`: production lookups fall back to index.html.
-    if is_html_document(asset.bytes()) {
+    if is_html_document(&bytes) {
         return plain(http::StatusCode::NOT_FOUND, "not found");
     }
     http::Response::builder()
         .status(http::StatusCode::OK)
         .header("content-type", mime_for(Path::new(asset_path)))
         .header("cache-control", "no-cache")
-        .body(asset.bytes.clone())
+        .body(bytes)
         .unwrap()
 }
 
@@ -798,6 +828,52 @@ mod tests {
         ] {
             let r = resp(handle_parsed(&view, "GET", "test.plugin", url, None, "en", "default"));
             assert_eq!(r.status(), http::StatusCode::FORBIDDEN, "{url} must be 403");
+        }
+    }
+
+    /// The mirror is confined to `assets/`. The dist root holds the app's own
+    /// HTML entry points; keeping them unreachable must be a structural rule,
+    /// not a job for `is_html_document`'s content sniffing.
+    #[test]
+    fn host_asset_is_confined_to_the_assets_dir() {
+        let dir = ui_fixture();
+        let view = view_with_caps(dir.path(), vec!["editor.kit".into()]);
+        for url in [
+            "/__host__/index.html",
+            "/__host__/insights.html",
+            "/__host__/daily-notes.html",
+            "/__host__/plugin-market.html",
+            "/__host__/assetsx/a.js", // prefix must be a whole segment
+            "/__host__/assets",       // the directory itself is not an asset
+            "/__host__/other/a.js",
+        ] {
+            let r = resp(handle_parsed(&view, "GET", "test.plugin", url, None, "en", "default"));
+            assert_eq!(r.status(), http::StatusCode::NOT_FOUND, "{url} must be 404");
+        }
+    }
+
+    /// An undeclared plugin must not be able to tell the reserved prefix exists
+    /// by diffing responses: every `__host__` URL — well-formed or malformed —
+    /// has to answer byte-identically to any other missing plugin asset. This
+    /// is what the capability gate running BEFORE path validation buys, and
+    /// what would silently break if someone reordered the two for fail-fast.
+    #[test]
+    fn host_asset_gate_precedes_validation_for_ungranted_plugins() {
+        let dir = ui_fixture();
+        let view = view_with_caps(dir.path(), vec![]);
+        let baseline =
+            resp(handle_parsed(&view, "GET", "test.plugin", "/nope.js", None, "en", "default"));
+        for url in [
+            "/__host__/assets/a.js",
+            "/__host__/./x",
+            "/__host__/",
+            "/__host__/%2e%2e/x",
+            "/__host__/../secret",
+            "/__host__/index.html",
+        ] {
+            let r = resp(handle_parsed(&view, "GET", "test.plugin", url, None, "en", "default"));
+            assert_eq!(r.status(), baseline.status(), "{url}");
+            assert_eq!(r.body(), baseline.body(), "{url}");
         }
     }
 
