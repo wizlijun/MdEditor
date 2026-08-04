@@ -20,6 +20,22 @@ describe('slugFromMarkdown', () => {
     expect(slugFromMarkdown('---\ntype: Idea\ncreated: 2026-08-04\n---\n')).toBe('idea')
   })
 
+  it('skips a leading frontmatter block and takes the real title from the body', () => {
+    // The load-bearing case: every saved idea, read back for renaming, has a
+    // frontmatter block in front of its title. Regression for a bug where
+    // the closing `---` fence line itself was mistaken for the title and
+    // collapsed to '' → 'idea'.
+    expect(slugFromMarkdown('---\ntype: Idea\n---\n\n# Real Title Here\n\nbody')).toBe('Real-Title-Here')
+  })
+
+  it('does not skip a "---" that is a mid-document separator, not a leading frontmatter fence', () => {
+    expect(slugFromMarkdown('# Title\n\n---\n\nMore text')).toBe('Title')
+  })
+
+  it('falls back to "idea" when the leading frontmatter fence is never closed (does not swallow the whole doc)', () => {
+    expect(slugFromMarkdown('---\ntype: Idea\n\n# Title\nbody')).toBe('idea')
+  })
+
   it('falls back to "idea" for a title made entirely of forbidden characters', () => {
     expect(slugFromMarkdown('???###%%%')).toBe('idea')
   })

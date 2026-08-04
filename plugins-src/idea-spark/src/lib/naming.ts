@@ -10,16 +10,19 @@ const FORBIDDEN_CHARS = /[\\/:*?"<>|#%`]/g
 
 /**
  * Derives a filename-safe slug from the first non-empty line of a markdown
- * document (works whether that line is a heading or a plain paragraph —
- * heading markers are stripped as part of the forbidden-character pass, so
- * no special-casing is needed). Falls back to `'idea'` when there is no
- * usable text at all: an empty document, a frontmatter-only document (its
- * first non-empty line is a bare `---`, which strips to nothing once
- * leading/trailing dashes are trimmed), or a title made entirely of
- * forbidden characters.
+ * document's *body* — a leading YAML frontmatter block, if present, is
+ * skipped first so a saved idea (which always has one once round-tripped
+ * through `buildIdeaDoc`) still names itself off its real title instead of
+ * the `---` fence (works whether that line is a heading or a plain
+ * paragraph — heading markers are stripped as part of the forbidden-
+ * character pass, so no special-casing is needed). Falls back to `'idea'`
+ * when there is no usable text at all: an empty document, a frontmatter-only
+ * document (nothing left after the closing fence), a document whose
+ * frontmatter fence is never closed (see `stripLeadingFrontmatter`), or a
+ * title made entirely of forbidden characters.
  */
 export function slugFromMarkdown(md: string): string {
-  const line = firstNonEmptyLine(md)
+  const line = firstNonEmptyLine(stripLeadingFrontmatter(md))
   if (line == null) return 'idea'
 
   const cleaned = line
@@ -36,6 +39,24 @@ export function slugFromMarkdown(md: string): string {
   if (chars.length <= 40) return cleaned
   const truncated = chars.slice(0, 40).join('').replace(/-+$/g, '')
   return truncated || 'idea'
+}
+
+/**
+ * Skips a leading YAML frontmatter block (`---` fence, content, `---`
+ * fence). Only a fence at the very first line counts — a `---` line further
+ * down the document is a thematic break / mid-document separator, not
+ * frontmatter, and must not be touched. If the document opens with `---`
+ * but the fence is never closed, the whole document is returned unchanged
+ * (don't guess where the "body" starts; fall back to scanning from the top,
+ * same as before this function existed).
+ */
+function stripLeadingFrontmatter(md: string): string {
+  const lines = md.split(/\r?\n/)
+  if (lines[0]?.trim() !== '---') return md
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') return lines.slice(i + 1).join('\n')
+  }
+  return md
 }
 
 function firstNonEmptyLine(md: string): string | null {
