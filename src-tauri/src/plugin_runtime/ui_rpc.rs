@@ -765,12 +765,25 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
     }
 
     /// host.agent.* 中转:同步 trait 方法,但 lifecycle 是 async——spawn 到
-    /// tauri 异步运行时,std channel 等结果。会阻塞调用线程(进程通道 = 该
-    /// 插件的协议读循环;UI 通道 = 一个 tokio worker)最多 30s;claude-agent
-    /// 的 run-task/run-status 都是"登记即返回",实际耗时毫秒级,30s 只兜
-    /// 冷启动(ensure_active 首次拉起插件进程)。
+    /// tauri 异步运行时,std channel 等结果。
+    ///
+    /// 阻塞的是**调用线程**,两条通道不一样,危险的是前者:
+    /// - 进程通道(后台插件经 host_api sink 调用)阻塞的是**该插件自己的协议
+    ///   读循环**,期间它的 stdout 处理全停 —— 所以上限必须够长到"登记即返回"
+    ///   的调用不可能被截断,而不是靠短超时来自保;
+    /// - UI 通道阻塞的是宿主为这条 `plugin://` 请求单开的**一条 OS 线程**
+    ///   (lib.rs 的 register_asynchronous_uri_scheme_protocol 里
+    ///   `std::thread::spawn`),不占 tokio worker,也不碰主线程。
+    ///
+    /// 超时取 claude-agent manifest 的 `request_timeout_seconds`(300s):曾经
+    /// 的 30s 会在冷启动慢时先行返回错误,而那个 spawn 出去的 future 仍在跑、
+    /// run-task 往往已经登记成功并开始阅读 —— run_id 丢了,调用方判失败发失败
+    /// 提醒,claude 却照常跑完落盘,用户看到"失败"、磁盘上却是成功。
     fn agent_execute(&self, command: &str, context: serde_json::Value) -> Result<serde_json::Value, String> {
         const AGENT_PLUGIN: &str = "notemd.claude-agent";
+        /// 与 plugins-src/claude-agent/manifest.v2.json 的
+        /// `request_timeout_seconds` 一致。
+        const RELAY_TIMEOUT_SECS: u64 = 300;
         let app = self.app.clone();
         let command = command.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -786,8 +799,17 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
             .await;
             let _ = tx.send(out);
         });
-        rx.recv_timeout(std::time::Duration::from_secs(30))
-            .unwrap_or_else(|_| Err("agent relay timeout".into()))
+        // 超时与"发送端消失"是两码事(后者=spawn 的任务 panic 了),共用一句
+        // 文案会把插件崩溃伪装成慢。
+        match rx.recv_timeout(std::time::Duration::from_secs(RELAY_TIMEOUT_SECS)) {
+            Ok(out) => out,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+                "agent relay timeout after {RELAY_TIMEOUT_SECS}s"
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err("agent relay dropped: the relay task ended without answering".into())
+            }
+        }
     }
 
     fn notify_user(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
