@@ -327,6 +327,29 @@ export function ideaTemplate(): string {
   return ''
 }
 
+/**
+ * Whether a document holds nothing but whitespace. Autosave writes on every
+ * pause in typing, and a window is opened far more often than an idea is
+ * actually written down — so a blank document is never given a file (see
+ * `saveIdea`), or the inbox would fill up with empty rows nobody created on
+ * purpose. Whitespace counts as blank: a stray newline from a mis-key is not
+ * an idea either.
+ */
+export function isBlank(markdown: string): boolean {
+  return markdown.trim() === ''
+}
+
+/**
+ * Local `HH:mm` — the action bar's "saved 19:42". Local, not UTC, because it
+ * answers "how long ago did that happen" for the person looking at the screen,
+ * and stored pre-formatted in `saveState.at` so the bar renders a plain string
+ * (nothing else ever needs the instant back).
+ */
+export function clockTime(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 /** On-disk idea text → what the editor shows: frontmatter (and the blank lines
  *  right after it) stripped, so the user edits their prose, not our metadata. */
 export function bodyOf(md: string): string {
@@ -447,11 +470,24 @@ async function persist(): Promise<void> {
  * out from under the user because they edited the title would scatter one idea
  * across several files.
  *
- * Returns the saved file's bare name, or null when the write failed.
+ * A blank document (whitespace only) is NOT written: see `isBlank`. This is the
+ * "no empty files" rule of the autosave design — every window open would
+ * otherwise deposit an empty idea in the inbox.
+ *
+ * Progress is reported through `saveState` rather than a toast: saving now
+ * happens on every pause in typing, and a toast per pause would be unbearable.
+ * The action bar renders the state instead (`saving` → `saved HH:mm` →
+ * `failed`, the last one clickable to retry). A failure still toasts, because
+ * losing writes is worth interrupting for.
+ *
+ * Returns the saved file's bare name, or null when nothing was written (no
+ * vault, blank document, or a failed write).
  */
 export async function saveIdea(markdown: string): Promise<string | null> {
   if (!state.vaultRoot) return null
+  if (isBlank(markdown)) return null
   state.busy = true
+  state.saveState = { kind: 'saving' }
   try {
     const name = await freeFileName(markdown)
     const text = ideaDocText(state, markdown, new Date().toISOString())
@@ -462,10 +498,11 @@ export async function saveIdea(markdown: string): Promise<string | null> {
     state.savedMarkdown = markdown
     state.dirty = false
     await reload()
-    toast(t('saved'))
+    state.saveState = { kind: 'saved', at: clockTime(new Date()) }
     return name
   } catch (e) {
     console.error('[idea-spark] save failed:', e)
+    state.saveState = { kind: 'failed', message: String(e) }
     toast(String(e), 'error')
     return null
   } finally {
@@ -526,6 +563,9 @@ export async function loadIdea(name: string): Promise<string | null> {
     state.currentFrontmatter = frontmatterOf(content)
     state.savedMarkdown = body
     state.dirty = false
+    // The bar reports the *open* document. Carrying "saved 19:42" over from the
+    // idea we just left would claim this one had just been written.
+    state.saveState = { kind: 'idle' }
     return body
   } catch (e) {
     console.error('[idea-spark] load failed:', e)
@@ -534,13 +574,28 @@ export async function loadIdea(name: string): Promise<string | null> {
   }
 }
 
-/** Resets the editor to a fresh, never-saved idea. Returns the template. */
+/**
+ * Resets the editor to a fresh, never-saved idea. Returns the (blank) template.
+ *
+ * Also advances the placeholder rotation and persists it, so the next blank
+ * document — this one included, since App.svelte reads `placeholderSeq` when it
+ * mounts the editor — shows the next of the five lines instead of reopening on
+ * the same one forever. Writing the *state file* here does not contradict "a
+ * blank idea is never written": no idea file is created, only the rotation
+ * counter moves. `persist()` swallows its own failures, so a read-only vault
+ * costs the rotation, never the new document.
+ */
 export function newIdea(): string {
   const tpl = ideaTemplate()
   state.current = null
   state.currentFrontmatter = null
   state.savedMarkdown = tpl
   state.dirty = false
+  // A brand-new blank draft has never been saved, and saying so is the point:
+  // otherwise the bar keeps claiming the *previous* idea's save time.
+  state.saveState = { kind: 'idle' }
+  state.placeholderSeq += 1
+  void persist()
   return tpl
 }
 

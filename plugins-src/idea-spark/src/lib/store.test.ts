@@ -11,11 +11,13 @@ import {
   applyRunDone,
   bodyOf,
   changeIdeaDir,
+  clockTime,
   createStore,
   frontmatterOf,
   displayName,
   ideaDocText,
   ideaTemplate,
+  isBlank,
   markEdited,
   markPending,
   needsSaveBefore,
@@ -431,6 +433,33 @@ describe('relPath', () => {
 describe('ideaTemplate', () => {
   it('starts a new idea blank — no template', () => {
     expect(ideaTemplate()).toBe('')
+  })
+})
+
+describe('isBlank', () => {
+  it('is true for an empty document (what a fresh draft holds)', () => {
+    expect(isBlank('')).toBe(true)
+  })
+
+  it('is true for whitespace only — a stray newline is not an idea', () => {
+    expect(isBlank('\n')).toBe(true)
+    expect(isBlank('   \n\t \r\n')).toBe(true)
+  })
+
+  it('is false as soon as there is any real content', () => {
+    expect(isBlank('a')).toBe(false)
+    expect(isBlank('\n\n  x  \n')).toBe(false)
+  })
+})
+
+describe('clockTime', () => {
+  it('is local HH:mm, zero-padded on both fields', () => {
+    expect(clockTime(new Date(2026, 7, 4, 9, 5))).toBe('09:05')
+    expect(clockTime(new Date(2026, 7, 4, 19, 42))).toBe('19:42')
+  })
+
+  it('renders midnight as 00:00, not 24:00', () => {
+    expect(clockTime(new Date(2026, 7, 4, 0, 0))).toBe('00:00')
   })
 })
 

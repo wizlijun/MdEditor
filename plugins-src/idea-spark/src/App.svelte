@@ -1,4 +1,21 @@
-<!-- App.svelte — the Idea Spark window: capture editor + action bar + history.
+<!-- App.svelte — the Idea Spark window: a blank page you write on.
+
+     Layout (design §1: "open it and write"). No title bar at all — the window
+     chrome is Tauri's job — so the editor starts at the very top edge and runs
+     down to a single 38px action bar:
+
+       ┌─────────────────────────────────┐
+       │                        ┌──────┐ │  ← ModeToggle, floating (absolute)
+       │  editor (flex:1)       │👁│</>│ │
+       │                        └──────┘ │
+       ├─────────────────────────────────┤
+       │ saved 19:42   New  Delegate 📥 ⚙│  ← 38px action bar
+       └─────────────────────────────────┘
+
+     There is no save button: the document is written 1.5s after the user stops
+     typing (`autosave.ts`), and forced to disk at every point where the buffer
+     is about to be replaced or lost. The bar's left side reports that instead.
+
      Declares `color-scheme: light dark` so this standalone plugin window follows
      the system appearance (project convention — otherwise Canvas system colors
      get pinned to light; see MEMORY reference_webview_color_scheme).
@@ -19,11 +36,15 @@
   import { onMount, tick } from 'svelte'
   import Celebration from './components/Celebration.svelte'
   import HistoryList from './components/HistoryList.svelte'
+  import ModeToggle from './components/ModeToggle.svelte'
   import SettingsPopover from './components/SettingsPopover.svelte'
+  import { createAutosave } from './lib/autosave'
   import { bridge } from './lib/bridge'
   import { loadKit, type KitEditor, type KitMode } from './lib/editor-kit'
+  import { pickPlaceholder, placeholderLines } from './lib/placeholder'
   import {
     boot,
+    isBlank,
     loadIdea,
     markEdited,
     needsSaveBefore,
@@ -45,6 +66,13 @@
   let mode = $state<KitMode>('rich')
   let settingsOpen = $state(false)
 
+  /** Rotating grey-text prompt for a blank document. `newIdea()` advances
+   *  `placeholderSeq` (and persists it), so a fresh draft gets the next of the
+   *  five lines; both the kit and the fallback textarea show the same one. */
+  const placeholder = $derived(pickPlaceholder(placeholderLines(), store.placeholderSeq))
+  /** Narrowed once so the template can discriminate on `.kind`. */
+  const saveState = $derived(store.saveState)
+
   /** Whatever the live editor holds — kit or fallback. */
   function markdown(): string {
     return kit ? kit.getMarkdown() : fallbackText
@@ -62,50 +90,92 @@
     showInEditor(store, kit, md)
   }
 
+  /**
+   * Every write to an idea file goes through this one autosave instance —
+   * nothing else calls `saveIdea`. That is what makes the writes serial: the
+   * autosave keeps at most one save in flight and re-runs afterwards if the
+   * document moved on, so a Cmd+S landing on top of a debounce timer can't
+   * have an older buffer finish last and overwrite a newer one.
+   *
+   * `saveIdea` reports its own failures (`saveState` + a toast) and never
+   * rejects, so there is nothing here to catch.
+   */
+  const autosave = createAutosave(async () => {
+    if (cannotSave()) return
+    await saveIdea(markdown())
+  })
+
+  /**
+   * The kit's change callback. Only a document that actually differs from the
+   * baseline schedules a write: `setMarkdown` dispatches a transaction and the
+   * change plugin echoes it back ~200 ms later without distinguishing it from a
+   * keystroke, so scheduling unconditionally would re-save every idea the
+   * moment it was *opened* — restamping its frontmatter and touching files
+   * nobody edited. `markEdited` has just computed exactly that comparison.
+   */
   function onEdited(md: string): void {
     markEdited(store, md)
+    if (store.dirty) autosave.schedule()
   }
 
   /**
-   * The save button's disabled condition, as a guard. `booting` matters as much
-   * as `busy`: `boot()` sets `vaultRoot` before it reads the state file and
-   * lists the directory, so a Cmd+S landing in that window would save an empty
-   * document (the kit isn't mounted, `markdown()` returns ''), pin `current` to
-   * that empty file for the rest of the session, and do it against a listing
-   * that hasn't loaded yet.
+   * Saving is pointless — and was once actively harmful — before the startup
+   * sequence settles: `boot()` sets `vaultRoot` before it reads the state file
+   * and lists the directory, and the kit isn't mounted yet, so `markdown()`
+   * reports the empty fallback. (A blank document is refused by `saveIdea`
+   * anyway; this keeps the intent explicit rather than resting on that.)
+   *
+   * `busy` is deliberately NOT part of this any more. It used to gate the save
+   * button, which no longer exists; treating a concurrent settings write as
+   * "cannot save" would now silently drop an autosave tick instead of merely
+   * greying out a button.
    */
   function cannotSave(): boolean {
-    return store.busy || store.booting || store.needVault
+    return store.booting || store.needVault
   }
 
-  async function save(): Promise<void> {
-    if (cannotSave()) return
-    await saveIdea(markdown())
+  /**
+   * Writes the current buffer to disk *now* and resolves once it has landed
+   * (`flush` awaits the in-flight save). Used wherever waiting 1.5s is not an
+   * option: Cmd/Ctrl+S, switching ideas, starting a new one, switching modes.
+   *
+   * The `schedule()` first is not redundant: `flush()` alone only completes a
+   * save that was already pending, and the kit's own 200 ms onChange debounce
+   * means the last keystrokes may not have reached `onEdited` yet. Asking the
+   * live buffer keeps an unchanged document from being rewritten on every
+   * Cmd+S.
+   */
+  async function saveNow(): Promise<void> {
+    if (needsSaveBefore(store, markdown())) autosave.schedule()
+    await autosave.flush()
   }
 
   /**
    * Swapping the editor's content destroys whatever is in it, and a draft that
-   * has never been saved has no undo path — the history list is a 240px rail
-   * right next to the editor, so a mis-click must not cost the user their text.
-   * Unsaved changes are therefore written to disk first (the user sees the
-   * `saved` toast), and a failed save aborts the switch rather than proceeding
-   * to overwrite the buffer.
+   * has never been saved has no undo path — so unsaved changes are written to
+   * disk first, and a failed write aborts the switch rather than proceeding to
+   * overwrite the buffer.
    *
    * The question is put to the **live buffer**, not to `store.dirty`: the flag
    * trails the editor by a 200 ms debounce, so a paragraph typed just before
    * the click would slip through an unset flag. An untouched document matches
    * its baseline byte for byte (see `rebaseline`), so merely browsing the
-   * history still never writes anything.
+   * inbox still never writes anything.
+   *
+   * A blank draft is let through: by design it is never given a file, so there
+   * is nothing to lose and nothing that could fail.
    */
   async function keepUnsaved(): Promise<boolean> {
     const md = markdown()
     if (!needsSaveBefore(store, md)) return true
+    if (isBlank(md)) return true
     if (cannotSave()) {
       // Refusing silently would read as a dead click. Say why nothing happened.
       toast(t('unsavedWarning'))
       return false
     }
-    return (await saveIdea(md)) !== null
+    await saveNow()
+    return store.saveState.kind !== 'failed'
   }
 
   async function pick(name: string): Promise<void> {
@@ -122,6 +192,7 @@
 
   async function switchMode(m: KitMode): Promise<void> {
     if (!kit || m === mode) return
+    await saveNow() // the panes hand the document over; land it on disk first
     await kit.setMode(m) // flushes any pending onChange before switching
     mode = kit.getMode()
     kit.focus()
@@ -155,7 +226,7 @@
         kit = await mount(editorEl, {
           initialMarkdown: initial,
           mode,
-          placeholder: t('editorPlaceholder'),
+          placeholder,
           baseDir: store.ideaDir,
           onChange: onEdited,
         })
@@ -188,21 +259,25 @@
     })()
 
     // Capture phase: the editor panes handle their own keys, and Cmd/Ctrl+S
-    // must win regardless of where focus sits.
+    // must win regardless of where focus sits. With autosave running, this is
+    // "write it right now" rather than the only way to save.
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 's') {
         e.preventDefault()
-        void save()
+        void saveNow()
       }
     }
     window.addEventListener('keydown', onKeyDown, true)
 
-    // Best effort (per spec): a closing webview may never run this. It is a
-    // reminder, not a guard — nothing blocks the close.
+    // Best effort (per spec): a closing webview may never run this, and it
+    // cannot be awaited — the flush is fired and the warning stays as the
+    // user-visible fallback for the case where the write doesn't make it.
     const onBeforeUnload = () => {
       // Live buffer again, not `dirty` — the last keystrokes before a close are
       // exactly the ones still inside the debounce window.
-      if (needsSaveBefore(store, markdown())) toast(t('unsavedWarning'))
+      if (!needsSaveBefore(store, markdown())) return
+      void saveNow()
+      if (!isBlank(markdown())) toast(t('unsavedWarning'))
     }
     window.addEventListener('beforeunload', onBeforeUnload)
 
@@ -210,6 +285,7 @@
       disposed = true
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('beforeunload', onBeforeUnload)
+      autosave.dispose() // drops the pending timer; the window is going away
       kit?.destroy() // flushes a pending onChange first
       kit = null
     }
@@ -217,23 +293,6 @@
 </script>
 
 <main class="app">
-  <header class="topbar">
-    <h1>{t('title')}</h1>
-    <div class="spacer"></div>
-    <button
-      class="icon"
-      type="button"
-      aria-label={t('settings')}
-      title={t('settings')}
-      onclick={() => (settingsOpen = !settingsOpen)}
-    >
-      ⚙
-    </button>
-    {#if settingsOpen}
-      <SettingsPopover onclose={() => (settingsOpen = false)} />
-    {/if}
-  </header>
-
   {#if store.needVault}
     <div class="notice">{t('needVault')}</div>
   {:else}
@@ -244,54 +303,70 @@
           <textarea
             class="fallback"
             bind:value={fallbackText}
-            placeholder={t('editorPlaceholder')}
+            {placeholder}
             spellcheck="false"
             oninput={() => onEdited(fallbackText)}
           ></textarea>
         {:else}
           <div class="editor" bind:this={editorEl}></div>
+          <!-- Floating over the editor's top-right corner. Not rendered in the
+               degraded textarea case: there are no modes to switch between. -->
+          <div class="float-toggle">
+            <ModeToggle {mode} onchange={switchMode} />
+          </div>
         {/if}
-
-        <div class="actionbar">
-          {#if !store.kitFailed}
-            <div class="modes">
-              <button
-                type="button"
-                class:on={mode === 'rich'}
-                title={t('modeRich')}
-                aria-label={t('modeRich')}
-                aria-pressed={mode === 'rich'}
-                onclick={() => switchMode('rich')}>¶</button
-              >
-              <button
-                type="button"
-                class:on={mode === 'source'}
-                title={t('modeSource')}
-                aria-label={t('modeSource')}
-                aria-pressed={mode === 'source'}
-                onclick={() => switchMode('source')}>{'</>'}</button
-              >
-            </div>
-          {/if}
-          <div class="spacer"></div>
-          <button type="button" class="ghost" onclick={startNew}>{t('newIdea')}</button>
-          <button
-            type="button"
-            class="ghost"
-            disabled
-            title={t('delegateDeferred')}
-            aria-describedby="delegate-hint">{t('delegate')}</button
-          >
-          <span id="delegate-hint" class="sr-only">{t('delegateDeferred')}</span>
-          <!-- Same predicate as the Cmd/Ctrl+S path, so the shortcut can never
-               do something the disabled button wouldn't. -->
-          <button type="button" class="primary" disabled={cannotSave()} onclick={save}>
-            {t('save')}
-          </button>
-        </div>
       </section>
 
-      <HistoryList onselect={pick} />
+      <!-- The inbox is hidden by default (design §1); Task 7 replaces this with
+           the real panel and enables the action bar's toggle. -->
+      {#if store.inboxOpen}
+        <HistoryList onselect={pick} />
+      {/if}
+    </div>
+
+    <div class="actionbar">
+      <span class="savestate">
+        {#if saveState.kind === 'saving'}
+          {t('saving')}
+        {:else if saveState.kind === 'saved'}
+          {t('saved')} {saveState.at}
+        {:else if saveState.kind === 'failed'}
+          <button type="button" class="failed" title={saveState.message} onclick={saveNow}>
+            {t('saveFailed')} · {t('retry')}
+          </button>
+        {/if}
+      </span>
+      <div class="spacer"></div>
+      <button type="button" class="ghost" onclick={startNew}>{t('newIdea')}</button>
+      <button
+        type="button"
+        class="ghost"
+        disabled
+        title={t('delegateDeferred')}
+        aria-describedby="delegate-hint">{t('delegate')}</button
+      >
+      <span id="delegate-hint" class="sr-only">{t('delegateDeferred')}</span>
+      <button
+        type="button"
+        class="icon"
+        disabled
+        aria-pressed={store.inboxOpen}
+        aria-label={t('inbox')}
+        title={t('inbox')}>📥</button
+      >
+      <button
+        type="button"
+        class="icon"
+        aria-label={t('settings')}
+        aria-expanded={settingsOpen}
+        title={t('settings')}
+        onclick={() => (settingsOpen = !settingsOpen)}
+      >
+        ⚙
+      </button>
+      {#if settingsOpen}
+        <SettingsPopover onclose={() => (settingsOpen = false)} />
+      {/if}
     </div>
   {/if}
 
@@ -314,16 +389,6 @@
     height: 100vh;
     box-sizing: border-box;
   }
-  .topbar {
-    position: relative;
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid var(--line, #e5e7eb);
-  }
-  .topbar h1 { margin: 0; font-size: 1rem; }
   .spacer { flex: 1; }
   .notice {
     flex: 1;
@@ -338,12 +403,22 @@
     display: flex;
     min-height: 0;
   }
+  /* `position: relative` anchors the floating ModeToggle; the determinate
+     height chain (flex:1 + min-height:0) is what keeps the kit's source mode
+     from collapsing to zero height. */
   .editor-col {
+    position: relative;
     flex: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+  }
+  .float-toggle {
+    position: absolute;
+    top: 0;
+    right: 12px;
+    z-index: 10;
   }
   /* The kit sizes itself with height:100% + absolute positioning, so its
      container MUST have a determinate height — a bare flex child would let
@@ -379,33 +454,38 @@
     line-height: 1.55;
   }
   .fallback:focus { outline: none; }
+  /* 38px, fixed: the whole point of the layout is that everything above it is
+     writing surface. `position: relative` anchors SettingsPopover, which opens
+     upward from here. */
   .actionbar {
-    flex: 0 0 auto;
+    position: relative;
+    flex: 0 0 38px;
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    padding: 0.5rem 0.75rem;
+    padding: 0 0.75rem;
     border-top: 1px solid var(--line, #e5e7eb);
   }
-  .modes { display: flex; gap: 2px; }
-  .modes button {
-    width: 2rem;
-    padding: 0.25rem 0;
-    border: 1px solid var(--line, #d1d5db);
-    border-radius: 6px;
+  .savestate {
+    font-size: 0.78rem;
+    opacity: 0.6;
+    white-space: nowrap;
+  }
+  .savestate .failed {
+    padding: 0;
+    border: 0;
     background: none;
-    color: inherit;
-    /* button inherits neither font-size nor family (MEMORY note). */
+    color: #dc2626;
     font: inherit;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     cursor: pointer;
   }
-  .modes button.on { background: color-mix(in srgb, var(--accent, #2563eb) 20%, transparent); }
+  .savestate:has(.failed) { opacity: 1; }
   .actionbar > button {
-    padding: 0.3rem 0.8rem;
+    padding: 0.25rem 0.7rem;
     border-radius: 6px;
     font: inherit;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     cursor: pointer;
   }
   .ghost {
@@ -413,23 +493,19 @@
     background: none;
     color: inherit;
   }
-  .primary {
-    border: 1px solid transparent;
-    background: var(--accent, #2563eb);
-    color: #fff;
-  }
   .actionbar > button:disabled { opacity: 0.5; cursor: default; }
-  .icon {
+  /* Scoped through `.actionbar >` so these beat the generic button rule above
+     on specificity (0-2-1 vs 0-1-1) rather than on source order. */
+  .actionbar > button.icon {
     padding: 0.15rem 0.4rem;
     border: 0;
-    border-radius: 6px;
     background: none;
     color: inherit;
-    font: inherit;
     font-size: 1rem;
-    cursor: pointer;
   }
-  .icon:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+  .actionbar > button.icon:hover:not(:disabled) {
+    background: color-mix(in srgb, currentColor 10%, transparent);
+  }
   .sr-only {
     position: absolute;
     width: 1px;

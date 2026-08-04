@@ -54,7 +54,10 @@
   }
   .popover {
     position: absolute;
-    top: 2.4rem;
+    /* Anchored to the *bottom* action bar (App.svelte `.actionbar`, which is
+       `position: relative`), so it opens upward — measuring from the top would
+       push it off the bottom edge of the window. */
+    bottom: 2.4rem;
     right: 0.75rem;
     z-index: 11;
     width: 300px;
