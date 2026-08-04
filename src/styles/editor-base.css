@@ -109,6 +109,21 @@
 .answer-card-title { font-weight: 600; white-space: nowrap; }
 .answer-card-summary { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .answer-card-body { padding: 0 10px 8px 10px; }
+/* 多节点答复渲染成层级清单,行距要均匀。主题把正文排版编译成
+   `[data-theme=x] .moraya-editor ul > li`(0-2-2)这类选择器,条目上下各 0.4em、
+   嵌套列表再叠一个 0.6em,拿到卡片里每一行都被拉成段落间距。卡片是一眼扫完的清单,
+   不是正文 —— 三个 class 的前缀(0-3-x)压过主题,把节奏收回到「条与条之间只隔一个
+   行高」。 */
+.moraya-editor .answer-card .answer-card-md ul,
+.moraya-editor .answer-card .answer-card-md ol { margin: 0.25em 0; padding-left: 1.5em; }
+.moraya-editor .answer-card .answer-card-md li { margin: 0; }
+.moraya-editor .answer-card .answer-card-md li > p { margin: 0; }
+.moraya-editor .answer-card .answer-card-md li > ul,
+.moraya-editor .answer-card .answer-card-md li > ol { margin: 0; }
+.moraya-editor .answer-card .answer-card-md p { margin: 0.4em 0; }
+.moraya-editor .answer-card .answer-card-md > :first-child { margin-top: 0; }
+.moraya-editor .answer-card .answer-card-md > :last-child { margin-bottom: 0; }
+/* 卡片没挂在编辑器里时(独立预览/测试宿主)仍有基本节奏 */
 .answer-card-md > :first-child { margin-top: 0; }
 .answer-card-md > :last-child { margin-bottom: 0; }
 .answer-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
