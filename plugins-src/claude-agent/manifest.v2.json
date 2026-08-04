@@ -5,7 +5,7 @@
   "version": "1.0.5",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.729.2"
+    "notemd": ">=6.804.3"
   },
   "description": "Run Claude Code headless against your vault: task templates live in .notemd/agent-tasks, stream live in a window, or fire detached from the CLI.",
   "binary": {
