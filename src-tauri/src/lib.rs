@@ -37,6 +37,8 @@ pub mod preview_window;
 #[cfg(not(target_os = "ios"))]
 pub mod agents_sync;
 #[cfg(not(target_os = "ios"))]
+pub mod reminders;
+#[cfg(not(target_os = "ios"))]
 pub mod sotvault;
 
 #[cfg(any(target_os = "ios", test))]
