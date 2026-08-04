@@ -36,9 +36,8 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // 子项目②b: plugin process → its own window push.
         "host.ui.post" => Some("ui"),
         "host.dialog.open" | "host.dialog.save" => Some("dialog"),
-        "host.vault.info" | "host.vault.read" | "host.vault.exists" | "host.vault.list" => {
-            Some("vault.read")
-        }
+        "host.vault.info" | "host.vault.read" | "host.vault.read_bytes" | "host.vault.exists"
+        | "host.vault.list" => Some("vault.read"),
         "host.vault.write" | "host.vault.mkdir" => Some("vault.write"),
         // fs.read:dialog — readable only for paths previously returned by a
         // host.dialog.open/save in this session (spec §5 prompt semantics).
@@ -175,6 +174,7 @@ pub fn make_sink(
                             match req.method.as_str() {
                                 "host.vault.info" => Some(Ok(rpc::vault_info(s))),
                                 "host.vault.read" => Some(rpc::vault_read(s, &req.params)),
+                                "host.vault.read_bytes" => Some(rpc::vault_read_bytes(s, &req.params)),
                                 "host.vault.write" => Some(rpc::vault_write(s, &req.params)),
                                 "host.vault.exists" => Some(rpc::vault_exists(s, &req.params)),
                                 "host.vault.list" => Some(rpc::vault_list(s, &req.params)),
@@ -495,6 +495,7 @@ mod tests {
         assert_eq!(method_capability("host.dialog.save"), Some("dialog"));
         assert_eq!(method_capability("host.vault.info"), Some("vault.read"));
         assert_eq!(method_capability("host.vault.read"), Some("vault.read"));
+        assert_eq!(method_capability("host.vault.read_bytes"), Some("vault.read"));
         assert_eq!(method_capability("host.vault.exists"), Some("vault.read"));
         assert_eq!(method_capability("host.vault.list"), Some("vault.read"));
         assert_eq!(method_capability("host.vault.write"), Some("vault.write"));

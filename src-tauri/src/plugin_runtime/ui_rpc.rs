@@ -311,6 +311,7 @@ pub async fn dispatch_with(
         "host.location.get" => services.location_get(),
         "host.vault.info" => Ok(vault_info(services)),
         "host.vault.read" => vault_read(services, &req.params),
+        "host.vault.read_bytes" => vault_read_bytes(services, &req.params),
         "host.vault.write" => vault_write(services, &req.params),
         "host.vault.exists" => vault_exists(services, &req.params),
         "host.vault.list" => vault_list(services, &req.params),
@@ -536,6 +537,19 @@ fn resolve_in_vault(services: &dyn HostServices, params: &serde_json::Value) -> 
 pub(crate) fn vault_read(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
     let p = resolve_in_vault(services, params)?;
     Ok(serde_json::json!({ "content": read_text_capped(&p)? }))
+}
+
+/// `{ path } → { base64 }` — vault-internal file's raw bytes (base64-encoded),
+/// subject to the same `MAX_TEXT_BYTES` cap as `vault.read`. Used by isolated
+/// plugin webviews (zero Tauri IPC) to render vault-hosted images.
+pub(crate) fn vault_read_bytes(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let p = resolve_in_vault(services, params)?;
+    let meta = std::fs::metadata(&p).map_err(|e| format!("io: {e}"))?;
+    if meta.len() > MAX_TEXT_BYTES {
+        return Err(format!("too_large: file exceeds {MAX_TEXT_BYTES} bytes"));
+    }
+    let bytes = std::fs::read(&p).map_err(|e| format!("io: {e}"))?;
+    Ok(serde_json::json!({ "base64": base64_encode(&bytes) }))
 }
 
 /// `{ path, content } → { ok: true }`; creates parent directories. Content is
@@ -951,6 +965,25 @@ mod tests {
         let r = run(&s, &["vault.read"], "host.vault.list", serde_json::json!({"path": "sub/deep"})).await;
         let entries = r.result.unwrap()["entries"].clone();
         assert_eq!(entries, serde_json::json!([{"name": "a.md", "is_dir": false}]));
+    }
+
+    #[tokio::test]
+    async fn vault_read_bytes_returns_base64_and_respects_gate() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("img.png"), b"\x89PNG").unwrap();
+
+        // 有 vault.read → base64(b"\x89PNG") == "iVBORw=="
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+        let r = run_as(&s, "p.id", &["vault.read"], "host.vault.read_bytes", serde_json::json!({"path": "img.png"})).await;
+        assert_eq!(r.result.unwrap()["base64"], "iVBORw==");
+
+        // 无 capability → -32001
+        let r = run_as(&s, "p.id", &[], "host.vault.read_bytes", serde_json::json!({"path": "img.png"})).await;
+        assert_eq!(r.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+
+        // 越界路径 → Err(resolve_in_vault 拒绝)
+        let r = run_as(&s, "p.id", &["vault.read"], "host.vault.read_bytes", serde_json::json!({"path": "../x"})).await;
+        assert!(r.error.is_some());
     }
 
     #[tokio::test]
