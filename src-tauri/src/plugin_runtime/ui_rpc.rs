@@ -825,7 +825,10 @@ pub(crate) fn vault_remove(services: &dyn HostServices, params: &serde_json::Val
 ///   same reason in `vault_remove`.
 ///
 /// The placeholder file `create_new` leaves at `to` is what `rename`
-/// atomically replaces immediately after.
+/// atomically replaces immediately after — and if that `rename` fails (most
+/// commonly: `from` doesn't exist), the placeholder is explicitly removed
+/// before the error is returned, so a failed rename never leaves behind a
+/// 0-byte file the user never created.
 pub(crate) fn vault_rename(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
     let from = vault_leaf_path(services, &serde_json::json!({ "path": req_str(params, "from")? }))?;
     let to = vault_leaf_path(services, &serde_json::json!({ "path": req_str(params, "to")? }))?;
@@ -837,7 +840,16 @@ pub(crate) fn vault_rename(services: &dyn HostServices, params: &serde_json::Val
         .create_new(true)
         .open(&to)
         .map_err(|_| "io: destination already exists".to_string())?;
-    std::fs::rename(&from, &to).map_err(|e| format!("io: {e}"))?;
+    // If `rename` fails (most commonly: `from` doesn't exist — a stale UI
+    // state, a concurrent delete, a typo'd path), the placeholder file
+    // `create_new` just planted at `to` must not be left behind: that would
+    // be a 0-byte file the user never created, silently appearing in the
+    // vault. Best-effort cleanup — a failed remove here must not shadow the
+    // real rename error.
+    if let Err(e) = std::fs::rename(&from, &to) {
+        let _ = std::fs::remove_file(&to);
+        return Err(format!("io: {e}"));
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -1543,6 +1555,31 @@ mod tests {
         assert!(
             std::fs::symlink_metadata(vault.path().join("dead.md")).unwrap().file_type().is_symlink(),
             "the dangling symlink at `to` must survive, unclobbered"
+        );
+    }
+
+    /// Regression: `create_new` plants a 0-byte placeholder at `to` BEFORE
+    /// `rename` runs. If `rename` then fails — most commonly because `from`
+    /// doesn't exist (stale UI state, a concurrent delete, a typo) — that
+    /// placeholder must be cleaned up, not left behind as a ghost file the
+    /// user never created.
+    #[tokio::test]
+    async fn vault_rename_cleans_up_the_placeholder_when_from_is_missing() {
+        let vault = tempfile::tempdir().unwrap();
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "nope.md", "to": "dest.md"}),
+        )
+        .await;
+        assert!(r.error.is_some());
+        assert!(
+            !vault.path().join("dest.md").exists(),
+            "a failed rename must not leave a ghost file at `to`"
         );
     }
 
