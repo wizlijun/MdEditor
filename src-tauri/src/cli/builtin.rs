@@ -283,6 +283,9 @@ FLAGS:
 NOTES:
   Use 'notemd plugin list' to discover plugin ids. Enable/disable persist to
   the app's settings and affect both the CLI and the desktop app.
+  Without @version, install picks the NEWEST version this notemd can run (same
+  choice the in-app plugin market makes); update never moves you to a version
+  that needs a newer notemd. Pass @version to override that deliberately.
   install/update download from the plugin registry and verify every package's
   minisign signature + sha256 before it touches disk; a running app picks up the
   change on its next launch.
@@ -493,27 +496,211 @@ mod market {
 
     // ── Pure, unit-testable helpers ──────────────────────────────────────────
 
-    /// Resolve which version to install for `id`: an explicitly-requested one if
-    /// present in the index, else the single version the index advertises.
-    /// Returns the matching entry. Kept pure (takes a slice) so tests don't hit
-    /// the network.
+    /// The running host version, used for every `min_host` decision here.
+    fn host_version() -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+
+    /// Strictly-newer test used to ORDER registry entries and to evaluate
+    /// `min_host` bounds. Deliberately a port of `isNewerVersion` in
+    /// `src/lib/market/types.ts`: dotted components compared left-to-right as
+    /// numbers (so `1.10.0` > `1.9.0`, which string comparison gets backwards),
+    /// missing components read as 0, a non-numeric component reads as 0.
+    ///
+    /// Kept separate from [`is_newer`] on purpose: this one must agree with the
+    /// market window byte for byte, while `is_newer` is the deliberately strict
+    /// gate on *updating away from an installed version*.
+    fn version_gt(candidate: &str, current: &str) -> bool {
+        let a = version_parts(candidate);
+        let b = version_parts(current);
+        for i in 0..a.len().max(b.len()) {
+            let x = a.get(i).copied().unwrap_or(0);
+            let y = b.get(i).copied().unwrap_or(0);
+            if x != y {
+                return x > y;
+            }
+        }
+        false
+    }
+
+    /// `"1.10.0"` → `[1, 10, 0]`. Mirrors the TS `parseInt(p, 10) || 0`:
+    /// leading digits win, anything else reads as 0.
+    fn version_parts(v: &str) -> Vec<u64> {
+        v.split('.')
+            .map(|p| {
+                let digits: String = p.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+                digits.parse().unwrap_or(0)
+            })
+            .collect()
+    }
+
+    /// True when `host` satisfies a registry `min_host` range like `">=6.803.0"`
+    /// — a comma-separated list of `>=` `>` `<=` `<` `=` comparators over dotted
+    /// numeric versions, the subset the registry actually ships.
+    ///
+    /// Port of `minHostSatisfied` in `src/lib/market/select.ts`, *including its
+    /// fail-open*: a token this parser doesn't understand reads as satisfied.
+    /// Selection must never hide a version the installer might accept — the
+    /// installer re-checks the package's own `engines.notemd` authoritatively
+    /// (full semver `VersionReq`) after signature + hash verification.
+    fn min_host_satisfied(range: &str, host: &str) -> bool {
+        for token in range.split(',') {
+            let part = token.trim();
+            if part.is_empty() || part == "*" {
+                continue;
+            }
+            let Some((op, bound)) = split_comparator(part) else {
+                return true; // unrecognized syntax — fail open
+            };
+            let gt = version_gt(host, bound);
+            let lt = version_gt(bound, host);
+            let ok = match op {
+                ">=" => !lt,
+                ">" => gt,
+                "<=" => !gt,
+                "<" => lt,
+                _ => !gt && !lt, // '='
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The Rust equivalent of the TS regex `^(>=|<=|>|<|=)\s*(\d[\d.]*)$`:
+    /// splits a trimmed comparator token into operator + bound, or `None` when
+    /// it doesn't match (which the caller turns into a fail-open `true`).
+    fn split_comparator(part: &str) -> Option<(&str, &str)> {
+        let (op, rest) = if let Some(r) = part.strip_prefix(">=") {
+            (">=", r)
+        } else if let Some(r) = part.strip_prefix("<=") {
+            ("<=", r)
+        } else if let Some(r) = part.strip_prefix('>') {
+            (">", r)
+        } else if let Some(r) = part.strip_prefix('<') {
+            ("<", r)
+        } else if let Some(r) = part.strip_prefix('=') {
+            ("=", r)
+        } else {
+            return None;
+        };
+        let bound = rest.trim_start();
+        if !bound.starts_with(|c: char| c.is_ascii_digit()) {
+            return None;
+        }
+        if !bound.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return None;
+        }
+        Some((op, bound))
+    }
+
+    /// Newest of `candidates` by [`version_gt`]; with `compatible_only`, skips
+    /// entries whose `min_host` this host does not satisfy. Port of `newest` in
+    /// `src/lib/market/select.ts`.
+    fn newest<'a>(
+        candidates: &[&'a mkt::RegistryEntry],
+        host: &str,
+        compatible_only: bool,
+    ) -> Option<&'a mkt::RegistryEntry> {
+        let mut best: Option<&'a mkt::RegistryEntry> = None;
+        for e in candidates {
+            if compatible_only && !min_host_satisfied(&e.min_host, host) {
+                continue;
+            }
+            if best.is_none_or(|b| version_gt(&e.version, &b.version)) {
+                best = Some(e);
+            }
+        }
+        best
+    }
+
+    /// Resolve which version to install for `id`.
+    ///
+    /// * An explicit `@version` is honored verbatim, *including* one this host
+    ///   cannot run: that is a deliberate user override, and the installer still
+    ///   refuses it authoritatively after verification.
+    /// * Without a version: the newest version this host satisfies — the same
+    ///   choice `pickAvailable` (`src/lib/market/select.ts`) makes for the
+    ///   market window, so the CLI and the window never disagree. The registry
+    ///   index carries ONE ENTRY PER PUBLISHED VERSION, sorted by id then
+    ///   version ascending, so taking the first match (the old bug) installed
+    ///   the OLDEST version on record.
+    /// * When the host satisfies none: the same entry `pickAvailable` would show
+    ///   (the newest overall), but reported as an error up front instead of
+    ///   downloading a package the installer is certain to reject — the message
+    ///   is the honest "requires notemd X" one, so it reads as a stale app
+    ///   rather than a broken registry.
+    ///
+    /// Arch availability is deliberately NOT part of this choice (`select.ts`
+    /// ignores it too): a newest version that ships no package for this arch
+    /// errors out in [`select_download`] instead of silently installing an older
+    /// one behind the user's back. `install <id>@<older>` remains the escape.
+    ///
+    /// Kept pure (takes a slice + the host version) so tests don't hit the
+    /// network.
     fn resolve_entry(
         plugins: &[mkt::RegistryEntry],
         id: &str,
         requested: Option<&str>,
+        host: &str,
     ) -> Result<mkt::RegistryEntry, String> {
-        match requested {
-            Some(v) => plugins
+        if let Some(v) = requested {
+            return plugins
                 .iter()
                 .find(|e| e.id == id && e.version == v)
                 .cloned()
-                .ok_or_else(|| format!("plugin '{id}' version '{v}' not found in registry")),
-            None => plugins
-                .iter()
-                .find(|e| e.id == id)
-                .cloned()
-                .ok_or_else(|| format!("plugin '{id}' not found in registry")),
+                .ok_or_else(|| format!("plugin '{id}' version '{v}' not found in registry"));
         }
+        let group: Vec<&mkt::RegistryEntry> = plugins.iter().filter(|e| e.id == id).collect();
+        if group.is_empty() {
+            return Err(format!("plugin '{id}' not found in registry"));
+        }
+        if let Some(e) = newest(&group, host, true) {
+            return Ok(e.clone());
+        }
+        let overall = newest(&group, host, false).expect("group is non-empty");
+        Err(format!(
+            "plugin '{id}' {} requires notemd {}, host is {host} — update note.md, \
+             or pick an older version explicitly: notemd plugin install {id}@<version>",
+            overall.version, overall.min_host,
+        ))
+    }
+
+    /// Which entry `plugin update` should move `id` to.
+    /// Port of `pickUpdateTo` (`src/lib/market/select.ts`):
+    /// the newest HOST-COMPATIBLE version, offered only when it is strictly
+    /// newer than the installed one — a newer-but-incompatible version is never
+    /// offered, since that update could only fail.
+    ///
+    /// Returns `Err(note)` for the "nothing to do" cases so the caller can print
+    /// why: not published, already current, or held back by `min_host`.
+    fn pick_update_entry<'a>(
+        plugins: &'a [mkt::RegistryEntry],
+        id: &str,
+        installed: &str,
+        host: &str,
+    ) -> Result<&'a mkt::RegistryEntry, String> {
+        let group: Vec<&'a mkt::RegistryEntry> = plugins.iter().filter(|e| e.id == id).collect();
+        if group.is_empty() {
+            return Err("not in registry".into());
+        }
+        if let Some(best) = newest(&group, host, true) {
+            if is_newer(&best.version, installed) {
+                return Ok(best);
+            }
+        }
+        // Nothing compatible is newer. Say so explicitly when a newer version
+        // does exist but this host is too old, so `update` never looks like it
+        // silently ignored a release the market window advertises.
+        let overall = newest(&group, host, false).expect("group is non-empty");
+        if is_newer(&overall.version, installed) {
+            return Err(format!(
+                "up-to-date ({} needs notemd {})",
+                overall.version, overall.min_host
+            ));
+        }
+        Err("up-to-date".into())
     }
 
     /// Pick this host arch's download URL + expected sha256 from an index entry.
@@ -573,7 +760,7 @@ mod market {
             let index = mkt::fetch_index(&base)
                 .await
                 .map_err(|e| (EXIT_RUNTIME, e))?;
-            let entry = resolve_entry(&index.plugins, id, version)
+            let entry = resolve_entry(&index.plugins, id, version, host_version())
                 .map_err(|e| (EXIT_RUNTIME, e))?;
             let (url, sha) = select_download(&entry).map_err(|e| (EXIT_RUNTIME, e))?;
             let sig_url = sig_url_for(&url);
@@ -658,14 +845,13 @@ mod market {
             let index = mkt::fetch_index(&base).await.map_err(|e| (EXIT_RUNTIME, e))?;
             let mut out = Vec::with_capacity(targets.len());
             for (id, installed_ver) in &targets {
-                let Some(entry) = index.plugins.iter().find(|e| e.id == *id).cloned() else {
-                    out.push(UpdateOutcome { id: id.clone(), from: installed_ver.clone(), to: None, note: "not in registry".into() });
-                    continue;
+                let entry = match pick_update_entry(&index.plugins, id, installed_ver, host_version()) {
+                    Ok(e) => e.clone(),
+                    Err(note) => {
+                        out.push(UpdateOutcome { id: id.clone(), from: installed_ver.clone(), to: None, note });
+                        continue;
+                    }
                 };
-                if !is_newer(&entry.version, installed_ver) {
-                    out.push(UpdateOutcome { id: id.clone(), from: installed_ver.clone(), to: None, note: "up-to-date".into() });
-                    continue;
-                }
                 // Newer version available → install it (same verify pipeline).
                 let (url, sha) = select_download(&entry).map_err(|e| (EXIT_RUNTIME, e))?;
                 let sig_url = sig_url_for(&url);
@@ -812,6 +998,10 @@ mod market {
         use std::collections::BTreeMap;
 
         fn entry(id: &str, version: &str) -> RegistryEntry {
+            entry_min_host(id, version, ">=0.0.0")
+        }
+
+        fn entry_min_host(id: &str, version: &str, min_host: &str) -> RegistryEntry {
             let mut sha = BTreeMap::new();
             sha.insert("aarch64-apple-darwin".to_string(), "aa".to_string());
             sha.insert("x86_64-apple-darwin".to_string(), "bb".to_string());
@@ -827,7 +1017,7 @@ mod market {
             RegistryEntry {
                 id: id.to_string(),
                 version: version.to_string(),
-                min_host: ">=0.0.0".to_string(),
+                min_host: min_host.to_string(),
                 archs: vec!["aarch64-apple-darwin".into(), "x86_64-apple-darwin".into()],
                 size: 1,
                 sha256: sha,
@@ -843,29 +1033,210 @@ mod market {
         #[test]
         fn resolve_entry_uses_requested_version() {
             let plugins = vec![entry("x", "1.0.0"), entry("x", "2.0.0"), entry("y", "1.0.0")];
-            let e = resolve_entry(&plugins, "x", Some("2.0.0")).unwrap();
+            let e = resolve_entry(&plugins, "x", Some("2.0.0"), "6.804.1").unwrap();
+            assert_eq!(e.version, "2.0.0");
+        }
+
+        /// An explicit `@version` this host cannot run is a DELIBERATE user
+        /// override: selection honors it and the installer refuses it
+        /// authoritatively ("requires notemd X") after verification. Pinned so
+        /// the min_host pre-filter never leaks into the explicit path.
+        #[test]
+        fn resolve_entry_requested_version_wins_even_when_incompatible() {
+            let plugins = vec![
+                entry_min_host("x", "1.0.0", ">=6.716.7"),
+                entry_min_host("x", "2.0.0", ">=99.0.0"),
+            ];
+            let e = resolve_entry(&plugins, "x", Some("2.0.0"), "6.804.1").unwrap();
             assert_eq!(e.version, "2.0.0");
         }
 
         #[test]
         fn resolve_entry_requested_missing_errors() {
             let plugins = vec![entry("x", "1.0.0")];
-            let err = resolve_entry(&plugins, "x", Some("9.9.9")).unwrap_err();
+            let err = resolve_entry(&plugins, "x", Some("9.9.9"), "6.804.1").unwrap_err();
             assert!(err.contains("version '9.9.9' not found"), "got {err}");
         }
 
         #[test]
         fn resolve_entry_no_version_picks_advertised() {
             let plugins = vec![entry("x", "1.4.0")];
-            let e = resolve_entry(&plugins, "x", None).unwrap();
+            let e = resolve_entry(&plugins, "x", None, "6.804.1").unwrap();
             assert_eq!(e.version, "1.4.0");
         }
 
         #[test]
         fn resolve_entry_unknown_id_errors() {
             let plugins = vec![entry("x", "1.0.0")];
-            let err = resolve_entry(&plugins, "nope", None).unwrap_err();
+            let err = resolve_entry(&plugins, "nope", None, "6.804.1").unwrap_err();
             assert!(err.contains("not found in registry"), "got {err}");
+        }
+
+        /// THE BUG: the index carries one entry per published version, so
+        /// `find(|e| e.id == id)` returned whichever came first — the oldest, in
+        /// the registry's id+version-ascending order. Fed out of order here on
+        /// purpose: the answer must come from comparing versions, never from the
+        /// index's own sort.
+        #[test]
+        fn resolve_entry_no_version_picks_newest_compatible() {
+            let plugins = vec![
+                entry_min_host("notemd.roam-import", "1.1.0", ">=6.803.0"),
+                entry_min_host("notemd.roam-import", "1.0.4", ">=6.716.7"),
+                entry_min_host("notemd.roam-import", "1.2.0", ">=6.803.0"),
+                entry_min_host("other.plugin", "9.9.9", ">=0.0.0"),
+            ];
+            let e = resolve_entry(&plugins, "notemd.roam-import", None, "6.804.1").unwrap();
+            assert_eq!(e.version, "1.2.0");
+        }
+
+        /// Versions where string comparison gets the order backwards.
+        #[test]
+        fn resolve_entry_orders_versions_numerically_not_lexically() {
+            let plugins = vec![entry("x", "1.9.0"), entry("x", "1.10.0"), entry("x", "1.2.0")];
+            let e = resolve_entry(&plugins, "x", None, "6.804.1").unwrap();
+            assert_eq!(e.version, "1.10.0", "'1.10.0' > '1.9.0' numerically");
+        }
+
+        #[test]
+        fn resolve_entry_skips_versions_this_host_cannot_run() {
+            let plugins = vec![
+                entry_min_host("x", "1.0.0", ">=6.716.7"),
+                entry_min_host("x", "1.1.0", ">=6.716.7"),
+                entry_min_host("x", "2.0.0", ">=6.900.0"),
+            ];
+            let e = resolve_entry(&plugins, "x", None, "6.804.1").unwrap();
+            assert_eq!(e.version, "1.1.0", "newest COMPATIBLE, not newest overall");
+        }
+
+        /// Host-side ordering that string comparison gets backwards: host
+        /// 6.10.0 satisfies `>=6.9.0`.
+        #[test]
+        fn resolve_entry_compares_host_numerically() {
+            let plugins = vec![entry_min_host("x", "1.0.0", ">=6.9.0")];
+            assert!(resolve_entry(&plugins, "x", None, "6.10.0").is_ok());
+            assert!(resolve_entry(&plugins, "x", None, "6.8.9").is_err());
+        }
+
+        /// When the host satisfies NO published version, selection agrees with
+        /// `pickAvailable` (the newest overall is the one that would be shown)
+        /// but install refuses up front with the installer's honest wording,
+        /// instead of downloading a package that is certain to be rejected.
+        #[test]
+        fn resolve_entry_errors_when_no_version_is_compatible() {
+            let plugins = vec![
+                entry_min_host("x", "1.0.0", ">=6.900.0"),
+                entry_min_host("x", "2.0.0", ">=7.000.0"),
+            ];
+            let err = resolve_entry(&plugins, "x", None, "6.804.1").unwrap_err();
+            assert!(err.contains("requires notemd >=7.000.0"), "got {err}");
+            assert!(err.contains("2.0.0"), "must name the newest version: {err}");
+            assert!(err.contains("host is 6.804.1"), "got {err}");
+            assert!(err.contains("install x@<version>"), "must offer the override: {err}");
+        }
+
+        /// A `min_host` this parser doesn't understand reads as SATISFIED, so
+        /// selection never hides a version the installer might accept (it
+        /// re-checks `engines.notemd` with full semver anyway). Same fail-open
+        /// as `minHostSatisfied` in select.ts.
+        #[test]
+        fn min_host_unrecognized_syntax_fails_open() {
+            assert!(min_host_satisfied("^1.2.3", "0.0.1"));
+            assert!(min_host_satisfied("~6.8", "0.0.1"));
+            assert!(min_host_satisfied(">=1.0.0-beta", "0.0.1"));
+            assert!(min_host_satisfied("*", "0.0.1"));
+            assert!(min_host_satisfied("", "0.0.1"));
+            let plugins = vec![entry_min_host("x", "3.0.0", "^9.9.9")];
+            assert_eq!(resolve_entry(&plugins, "x", None, "6.804.1").unwrap().version, "3.0.0");
+        }
+
+        /// The comparator subset the registry ships, matched against
+        /// select.test.ts case for case.
+        #[test]
+        fn min_host_matches_select_ts_semantics() {
+            assert!(min_host_satisfied(">=6.716.7", "6.716.7"));
+            assert!(min_host_satisfied(">=6.716.7", "6.720.0"));
+            assert!(!min_host_satisfied(">=6.716.7", "6.716.6"));
+            assert!(min_host_satisfied(">=6.9.0", "6.10.0"));
+            assert!(min_host_satisfied(">=1.0.0, <2.0.0", "1.5.0"));
+            assert!(!min_host_satisfied(">=1.0.0, <2.0.0", "2.0.0"));
+            assert!(min_host_satisfied("<=2.0.0", "2.0.0"));
+            assert!(!min_host_satisfied(">2.0.0", "2.0.0"));
+            assert!(min_host_satisfied("=2.0.0", "2.0.0"));
+            assert!(!min_host_satisfied("=2.0.0", "2.0.1"));
+        }
+
+        #[test]
+        fn version_gt_is_numeric_and_component_wise() {
+            assert!(version_gt("1.10.0", "1.9.0"));
+            assert!(!version_gt("1.9.0", "1.10.0"));
+            assert!(version_gt("6.10.0", "6.9.0"));
+            assert!(!version_gt("1.0.0", "1.0.0"));
+            assert!(version_gt("1.0.1", "1.0"));
+            assert!(!version_gt("1.0", "1.0.0"));
+        }
+
+        /// Arch availability is NOT part of version selection (select.ts ignores
+        /// it too): a newest version with no package for this arch produces an
+        /// honest error rather than a silent downgrade to an older one. The user
+        /// can still ask for the older one by name.
+        #[test]
+        fn resolve_entry_ignores_arch_availability_and_select_download_reports_it() {
+            let mut newest_no_arch = entry("x", "2.0.0");
+            newest_no_arch.download.clear();
+            newest_no_arch.sha256.clear();
+            newest_no_arch.archs.clear();
+            let plugins = vec![entry("x", "1.0.0"), newest_no_arch];
+
+            let e = resolve_entry(&plugins, "x", None, "6.804.1").unwrap();
+            assert_eq!(e.version, "2.0.0", "no silent downgrade to the arch-complete 1.0.0");
+            let err = select_download(&e).unwrap_err();
+            assert!(err.contains("no download for arch"), "got {err}");
+
+            // The explicit escape hatch still installs cleanly.
+            let older = resolve_entry(&plugins, "x", Some("1.0.0"), "6.804.1").unwrap();
+            assert!(select_download(&older).is_ok());
+        }
+
+        // ── plugin update ────────────────────────────────────────────────────
+
+        /// `plugin update` had the same first-match defect: with the live index
+        /// (1.0.4, 1.1.0, 1.2.0) it compared the installed version against the
+        /// OLDEST entry and reported "up-to-date" forever.
+        #[test]
+        fn pick_update_entry_targets_newest_compatible() {
+            let plugins = vec![
+                entry_min_host("r", "1.1.0", ">=6.803.0"),
+                entry_min_host("r", "1.0.4", ">=6.716.7"),
+                entry_min_host("r", "1.2.0", ">=6.803.0"),
+            ];
+            let e = pick_update_entry(&plugins, "r", "1.0.4", "6.804.1").unwrap();
+            assert_eq!(e.version, "1.2.0");
+        }
+
+        #[test]
+        fn pick_update_entry_never_offers_an_incompatible_newer_version() {
+            let plugins = vec![
+                entry_min_host("r", "1.0.4", ">=6.716.7"),
+                entry_min_host("r", "1.2.0", ">=6.900.0"),
+            ];
+            // Held back, and the note says why instead of a bare "up-to-date".
+            let note = pick_update_entry(&plugins, "r", "1.0.4", "6.804.1").unwrap_err();
+            assert!(note.contains("1.2.0"), "got {note}");
+            assert!(note.contains("needs notemd >=6.900.0"), "got {note}");
+        }
+
+        #[test]
+        fn pick_update_entry_notes_up_to_date_and_unknown() {
+            let plugins = vec![entry("r", "1.0.4"), entry("r", "1.2.0")];
+            assert_eq!(pick_update_entry(&plugins, "r", "1.2.0", "6.804.1").unwrap_err(), "up-to-date");
+            assert_eq!(pick_update_entry(&plugins, "nope", "1.0.0", "6.804.1").unwrap_err(), "not in registry");
+        }
+
+        #[test]
+        fn pick_update_entry_orders_numerically() {
+            let plugins = vec![entry("r", "1.9.0"), entry("r", "1.10.0")];
+            let e = pick_update_entry(&plugins, "r", "1.9.0", "6.804.1").unwrap();
+            assert_eq!(e.version, "1.10.0");
         }
 
         #[test]
