@@ -273,17 +273,27 @@
         let lightAssigned: string | null = null
         let darkAssigned: string | null = null
 
+        // Plugin windows are isolated webviews: they never see the style slots
+        // above, so an editor.kit plugin re-fetches host.theme.css on this
+        // push. Fire-and-forget — it touches no reactive state, so it is safe
+        // to call from inside the $effect below.
+        function notifyPluginWindows() {
+          void invoke('plugin_v2_theme_changed').catch(() => {})
+        }
+
         async function syncSlots() {
           const t = settings.theme
           if (t.light !== lightAssigned) {
             const meta = findThemeById(t.light)
             if (meta) { await applyThemeContent('light', meta.id) }
             lightAssigned = t.light
+            notifyPluginWindows()
           }
           if (t.dark !== darkAssigned) {
             const meta = findThemeById(t.dark)
             if (meta) { await applyThemeContent('dark', meta.id) }
             darkAssigned = t.dark
+            notifyPluginWindows()
           }
           setActiveTheme(computeActiveThemeId(t, systemDark))
         }

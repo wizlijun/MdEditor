@@ -39,6 +39,43 @@ pub fn plugin_v2_open_window(
     super::windows::open_plugin_window(&app, &plugin_id, &window_id)
 }
 
+/// `(plugin_id, window_id)` of every window contributed by a plugin that holds
+/// the `editor.kit` capability — the push list for a theme change. Pure over
+/// the STATE map so the filter is unit-testable without an AppHandle.
+fn theme_push_targets(
+    plugins: &std::collections::BTreeMap<String, (plugin_protocol::ManifestV2, PathBuf)>,
+) -> Vec<(String, String)> {
+    plugins
+        .iter()
+        .filter(|(_, (m, _))| m.capabilities.iter().any(|c| c == "editor.kit"))
+        .flat_map(|(pid, (m, _))| {
+            m.contributes
+                .windows
+                .iter()
+                .map(move |w| (pid.clone(), w.id.clone()))
+        })
+        .collect()
+}
+
+/// Notify every OPEN plugin window that holds `editor.kit` that the user's
+/// theme changed, so the Editor Kit re-fetches `host.theme.css`.
+///
+/// Push (not poll) because a plugin webview is isolated: it sees neither the
+/// main window's <style> slots nor its Tauri events. `push_to_window` is a
+/// no-op for a window that isn't open, so iterating the manifest's contributed
+/// windows is safe — the "already open" filter is implicit.
+#[tauri::command]
+pub fn plugin_v2_theme_changed(app: tauri::AppHandle) {
+    let targets = match STATE.read() {
+        Ok(st) => theme_push_targets(&st.plugins),
+        Err(_) => return,
+    };
+    let payload = serde_json::json!({ "type": "theme-changed" });
+    for (pid, wid) in targets {
+        super::windows::push_to_window(&app, &pid, &wid, &payload);
+    }
+}
+
 // ── Marketplace commands (子项目③ Task 2) ────────────────────────────────
 //
 // The frontend market window (Task 6) drives these; the capability-consent
@@ -489,6 +526,53 @@ mod tests {
         assert!(Arc::ptr_eq(&won_first, &first));
         assert!(Arc::ptr_eq(&won_second, &first), "second registration must return the first Arc");
         RUNNING.write().unwrap().remove(id);
+    }
+
+    /// The theme-change push list: only plugins that declared `editor.kit`,
+    /// and one entry per window they contribute. A plugin without the
+    /// capability is never told the theme changed (its window has no kit to
+    /// restyle), and a capability-holder that contributes no window yields no
+    /// target at all.
+    #[test]
+    fn theme_push_targets_selects_only_editor_kit_windows() {
+        let with_window = |id: &str, caps: &[&str], windows: &[&str]| {
+            let mut m = fixture_manifest(id);
+            m.capabilities = caps.iter().map(|c| c.to_string()).collect();
+            m.contributes.windows = windows
+                .iter()
+                .map(|w| {
+                    serde_json::from_value(serde_json::json!({
+                        "id": w, "entry": "index.html", "title": "W",
+                        "width": 800.0, "height": 600.0
+                    }))
+                    .unwrap()
+                })
+                .collect();
+            (m, PathBuf::from("/tmp/install"))
+        };
+
+        let mut plugins = std::collections::BTreeMap::new();
+        plugins.insert(
+            "pub.kit".to_string(),
+            with_window("pub.kit", &["editor.kit", "vault.read"], &["main", "side"]),
+        );
+        plugins.insert(
+            "pub.nokit".to_string(),
+            with_window("pub.nokit", &["vault.read"], &["main"]),
+        );
+        plugins.insert(
+            "pub.kit-headless".to_string(),
+            with_window("pub.kit-headless", &["editor.kit"], &[]),
+        );
+
+        assert_eq!(
+            theme_push_targets(&plugins),
+            vec![
+                ("pub.kit".to_string(), "main".to_string()),
+                ("pub.kit".to_string(), "side".to_string()),
+            ]
+        );
+        assert!(theme_push_targets(&std::collections::BTreeMap::new()).is_empty());
     }
 
     #[test]

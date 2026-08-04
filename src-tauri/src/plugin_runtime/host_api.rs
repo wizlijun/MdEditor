@@ -45,6 +45,10 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         "host.clipboard.write" => Some("clipboard.write"),
         "host.editor.open" => Some("editor.open"),
         "host.location.get" => Some("location"),
+        // editor.kit — the host-embedded editor bundle and the theme CSS that
+        // styles it. UI bridge only (`ui_rpc::dispatch` serves it from the live
+        // AppHandle); on the process channel it stays -32601.
+        "host.theme.css" => Some("editor.kit"),
         _ => Some("__unknown__"), // 未实现的方法一律拒绝
     }
 }
@@ -504,6 +508,7 @@ mod tests {
         assert_eq!(method_capability("host.fs.read_bytes"), Some("fs.read:dialog"));
         assert_eq!(method_capability("host.clipboard.write"), Some("clipboard.write"));
         assert_eq!(method_capability("host.editor.open"), Some("editor.open"));
+        assert_eq!(method_capability("host.theme.css"), Some("editor.kit"));
         assert_eq!(method_capability("host.unknown"), Some("__unknown__"));
         assert_eq!(method_capability("anything.else"), Some("__unknown__"));
     }

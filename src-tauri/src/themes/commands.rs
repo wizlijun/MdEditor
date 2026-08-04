@@ -95,3 +95,181 @@ pub fn theme_install(app: tauri::AppHandle, report: ImportReport, overwrite: boo
 pub fn theme_cancel_import(_app: tauri::AppHandle, staging_dir: String) {
     cleanup_staging(std::path::Path::new(&staging_dir));
 }
+
+// ── Theme CSS bundle for isolated plugin webviews (Editor Kit) ────────────
+//
+// A plugin window is an isolated webview: it never receives the <style> slots
+// the main frontend injects, so the Editor Kit asks the host for the compiled
+// CSS over the `host.theme.css` bridge method (capability `editor.kit`).
+
+/// Theme id used whenever settings.json says nothing usable.
+const DEFAULT_THEME_ID: &str = "default";
+
+/// `settings.json` → `(light_id, dark_id, follow_system)`.
+///
+/// Pure so the tolerance rules are unit-testable without an AppHandle. Shapes:
+/// - `{"theme": {"light": …, "dark": …, "followSystem": …}}` — current form.
+///   A missing/blank slot id falls back to `"default"`; `followSystem` is true
+///   unless it is exactly `false` (same rule as `loadSettings` in
+///   `src/lib/settings.svelte.ts`).
+/// - `{"theme": "some-id"}` — the historical single-skin string: both slots get
+///   that id and `follow_system` is false (there is no dark counterpart).
+/// - key missing, or anything else (number/array/null/non-object root) →
+///   `("default", "default", true)`. Never panics.
+pub(crate) fn parse_theme_settings(settings: &serde_json::Value) -> (String, String, bool) {
+    let fallback = || {
+        (
+            DEFAULT_THEME_ID.to_string(),
+            DEFAULT_THEME_ID.to_string(),
+            true,
+        )
+    };
+    let Some(theme) = settings.get("theme") else {
+        return fallback();
+    };
+    // Historical form: `theme` was a single skin id string.
+    if let Some(id) = theme.as_str() {
+        let id = sanitize_theme_id(Some(id));
+        return (id.clone(), id, false);
+    }
+    if !theme.is_object() {
+        return fallback();
+    }
+    let slot = |key: &str| sanitize_theme_id(theme.get(key).and_then(|v| v.as_str()));
+    let follow = theme
+        .get("followSystem")
+        .map(|v| v.as_bool() != Some(false))
+        .unwrap_or(true);
+    (slot("light"), slot("dark"), follow)
+}
+
+/// Read `<app config dir>/settings.json` and hand its parsed value to
+/// [`parse_theme_settings`]. A missing/unreadable/invalid file yields `Null`,
+/// which the parser maps to the defaults.
+fn read_theme_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (String, String, bool) {
+    let value = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .and_then(|dir| std::fs::read_to_string(dir.join("settings.json")).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .unwrap_or(serde_json::Value::Null);
+    parse_theme_settings(&value)
+}
+
+/// `{light_css, dark_css, follow_system}` — the compiled CSS of both theme
+/// slots, for a webview that cannot see the main window's <style> slots
+/// (Editor Kit in an isolated plugin window; served as `host.theme.css`).
+///
+/// Read-only and total: a slot whose compiled artifact is missing (theme never
+/// compiled, id since deleted) comes back as an empty string rather than an
+/// error, because a themeless editor must still mount.
+///
+/// Deviation from the plan sketch: generic over `R: tauri::Runtime` because the
+/// caller (`ui_rpc::dispatch`) is itself generic over the runtime.
+pub fn theme_css_bundle<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> serde_json::Value {
+    let (light_id, dark_id, follow) = read_theme_settings(app);
+    let load = |id: &str| -> String {
+        compiled_path(app, id)
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default()
+    };
+    serde_json::json!({
+        "light_css": load(&light_id),
+        "dark_css": load(&dark_id),
+        "follow_system": follow,
+    })
+}
+
+/// Keep only ids the theme store can actually address (`themes/id.rs` rules):
+/// an absent, blank or malformed id — including a traversal attempt like
+/// `../../secret` — degrades to `"default"` instead of reaching the filesystem.
+fn sanitize_theme_id(id: Option<&str>) -> String {
+    match id {
+        Some(s) if crate::themes::id::is_valid_theme_id(s.trim()).is_ok() => s.trim().to_string(),
+        _ => DEFAULT_THEME_ID.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_theme_settings_reads_the_object_shape() {
+        let v = json!({"theme": {"light": "default", "dark": "effie", "followSystem": false}});
+        assert_eq!(
+            parse_theme_settings(&v),
+            ("default".to_string(), "effie".to_string(), false)
+        );
+        let v = json!({"theme": {"light": "effie", "dark": "effie", "followSystem": true}});
+        assert_eq!(
+            parse_theme_settings(&v),
+            ("effie".to_string(), "effie".to_string(), true)
+        );
+        // followSystem absent ⇒ true (frontend rule: anything but `false`).
+        let v = json!({"theme": {"light": "effie", "dark": "default"}});
+        assert_eq!(
+            parse_theme_settings(&v),
+            ("effie".to_string(), "default".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn parse_theme_settings_accepts_the_legacy_string_shape() {
+        let v = json!({"theme": "effie"});
+        assert_eq!(
+            parse_theme_settings(&v),
+            ("effie".to_string(), "effie".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn parse_theme_settings_defaults_when_the_key_is_missing() {
+        assert_eq!(
+            parse_theme_settings(&json!({})),
+            ("default".to_string(), "default".to_string(), true)
+        );
+        assert_eq!(
+            parse_theme_settings(&json!({"autoSave": true})),
+            ("default".to_string(), "default".to_string(), true)
+        );
+        // No settings file at all → read_theme_settings passes Null.
+        assert_eq!(
+            parse_theme_settings(&serde_json::Value::Null),
+            ("default".to_string(), "default".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn parse_theme_settings_survives_malformed_shapes() {
+        for v in [
+            json!({"theme": 42}),
+            json!({"theme": null}),
+            json!({"theme": ["effie"]}),
+            json!({"theme": true}),
+            json!([1, 2, 3]),
+            json!("not an object"),
+        ] {
+            assert_eq!(
+                parse_theme_settings(&v),
+                ("default".to_string(), "default".to_string(), true),
+                "input: {v}"
+            );
+        }
+        // Object shape with unusable slot values → per-slot default, no panic.
+        let v = json!({"theme": {"light": 1, "dark": "", "followSystem": "yes"}});
+        assert_eq!(
+            parse_theme_settings(&v),
+            ("default".to_string(), "default".to_string(), true)
+        );
+        // A traversal attempt never becomes a path.
+        let v = json!({"theme": {"light": "../../etc/passwd", "dark": "Effie!"}});
+        assert_eq!(
+            parse_theme_settings(&v),
+            ("default".to_string(), "default".to_string(), true)
+        );
+    }
+}

@@ -968,6 +968,7 @@ pub fn run() {
                 plugin_host::get_plugin_manifests,
                 plugin_runtime::commands::plugin_v2_execute,
                 plugin_runtime::commands::plugin_v2_open_window,
+                plugin_runtime::commands::plugin_v2_theme_changed,
                 plugin_runtime::commands::plugin_market_index,
                 plugin_runtime::commands::plugin_market_preview,
                 plugin_runtime::commands::plugin_market_install,

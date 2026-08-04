@@ -200,6 +200,26 @@ pub fn is_host_method(method: &str) -> bool {
     method.starts_with("host.")
 }
 
+/// Capability gate for the methods [`dispatch`] intercepts BEFORE delegating to
+/// [`dispatch_with`] — they need the live `AppHandle` (app config dir, compiled
+/// theme artifacts), which the injectable [`HostServices`] deliberately does not
+/// carry. Same table, same -32001 wording as the shared gate; `None` = allowed.
+fn capability_denial(
+    method: &str,
+    capabilities: &[String],
+    id: Option<u64>,
+) -> Option<proto::RpcResponse> {
+    let cap = method_capability(method).filter(|c| *c != "__unknown__")?;
+    if capabilities.iter().any(|c| c == cap) {
+        return None;
+    }
+    Some(err(
+        id,
+        proto::ERR_CAPABILITY_DENIED,
+        format!("method {method} requires capability '{cap}'"),
+    ))
+}
+
 /// Production entry point: for `host.*` methods, builds the live services
 /// (dialogs, vault, clipboard, toast emitter, plugin log dir) from `app` and
 /// delegates to [`dispatch_with`]. For NON-host methods (the plugin's own API,
@@ -224,6 +244,21 @@ pub async fn dispatch<R: tauri::Runtime>(
     }
 
     use tauri::Manager;
+
+    // `host.theme.css` is answered HERE instead of in `dispatch_with`: the
+    // bundle comes from the app config dir + compiled theme artifacts, i.e. it
+    // needs the live AppHandle that the injectable `HostServices` deliberately
+    // does not carry. The gate is the same capability table, applied manually.
+    // The process channel therefore never serves it (it falls through
+    // `make_sink` to -32601) — correct: a background plugin has no webview to
+    // style.
+    if req.method == "host.theme.css" {
+        if let Some(denial) = capability_denial(&req.method, capabilities, req.id) {
+            return denial;
+        }
+        return ok(req.id, crate::themes::commands::theme_css_bundle(app));
+    }
+
     let log_dir = app
         .path()
         .app_log_dir()
@@ -833,12 +868,45 @@ mod tests {
             ("host.fs.read_bytes", "fs.read:dialog"),
             ("host.clipboard.write", "clipboard.write"),
             ("host.editor.open", "editor.open"),
+            ("host.theme.css", "editor.kit"),
         ] {
             let r = run(&s, &[], method, serde_json::json!({})).await;
             let e = r.error.unwrap();
             assert_eq!(e.code, proto::ERR_CAPABILITY_DENIED, "{method}");
             assert!(e.message.contains(cap), "{method}: {}", e.message);
         }
+    }
+
+    // ── host.theme.css gate (dispatch() intercepts it; needs an AppHandle) ──
+    //
+    // The bundle itself is read from the live app config dir / compiled theme
+    // artifacts, so only the GATE is unit-testable here — and the gate is the
+    // whole security surface: `dispatch` must refuse a plugin that did not
+    // declare `editor.kit` before it ever touches the theme files.
+
+    #[test]
+    fn theme_css_is_denied_without_the_editor_kit_capability() {
+        let caps: Vec<String> = vec!["vault.read".into(), "editor.open".into()];
+        let denial = capability_denial("host.theme.css", &caps, Some(3))
+            .expect("host.theme.css must be denied without 'editor.kit'");
+        assert_eq!(denial.id, 3);
+        assert!(denial.result.is_none());
+        let e = denial.error.unwrap();
+        assert_eq!(e.code, proto::ERR_CAPABILITY_DENIED);
+        assert!(e.message.contains("editor.kit"), "{}", e.message);
+        assert!(e.message.contains("host.theme.css"), "{}", e.message);
+
+        // No capabilities at all → same denial.
+        assert!(capability_denial("host.theme.css", &[], Some(1)).is_some());
+    }
+
+    #[test]
+    fn theme_css_is_allowed_with_the_editor_kit_capability() {
+        let caps: Vec<String> = vec!["editor.kit".into()];
+        assert!(
+            capability_denial("host.theme.css", &caps, Some(1)).is_none(),
+            "a plugin holding editor.kit must pass the gate"
+        );
     }
 
     // ── 子项目②b method routing (host.* vs plugin.*) ──────────────────────
