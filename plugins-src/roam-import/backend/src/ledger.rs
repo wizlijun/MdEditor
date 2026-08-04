@@ -145,6 +145,16 @@ impl Ledger {
         self.pages.get(uid).map(|r| r.path.as_str())
     }
 
+    /// The Roam title this uid carried at the end of the last sync — the only
+    /// record of what Roam used to call the page. Comparing it against the
+    /// title Roam hands us now is how [`crate::incremental`] tells a genuine
+    /// Roam rename from a file that merely moved for some other reason (the
+    /// host's folder setting changed, say), which is not a licence to rewrite
+    /// the user's `title:`.
+    pub fn title_of(&self, uid: &str) -> Option<&str> {
+        self.pages.get(uid).map(|r| r.title.as_str())
+    }
+
     /// Look up the Roam page UID for a given vault file path.
     pub fn uid_at(&self, path: &str) -> Option<&str> {
         self.pages

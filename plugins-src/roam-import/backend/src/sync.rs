@@ -84,12 +84,16 @@ pub struct PageOutcome {
 /// (`tests/fixtures/frontmatter-touch.json`) pins that rule from both sides.
 ///
 /// [`TitlePolicy::Refresh`] is the one exception, and incremental sync's
-/// rename branch is its only caller. There the sync *knows* the title changed
-/// — Roam renamed the page, `route_page` returned a `rename_from`, and the
-/// file has just moved to match. Without this the file name says one thing,
-/// the front-matter another and the ledger a third, forever: the post-rename
-/// sync usually has nothing else to write, so it reports `wrote == false` and
-/// no later run ever repairs the block.
+/// rename branch is its only caller. There the sync *knows* the title changed:
+/// the ledger's recorded Roam title for that uid differs from the one Roam is
+/// handing over now, and the file has just moved to match. Without this the
+/// file name says one thing, the front-matter another and the ledger a third,
+/// forever: the post-rename sync usually has nothing else to write, so it
+/// reports `wrote == false` and no later run ever repairs the block.
+///
+/// The moved file alone is deliberately *not* enough — `route_page` reports a
+/// `rename_from` for any path change, including the one where the host's
+/// folder setting changed and every page in the vault moved at once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitlePolicy {
     /// A title the file already carries is the user's, and stays.

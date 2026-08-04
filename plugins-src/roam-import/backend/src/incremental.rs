@@ -212,6 +212,10 @@ fn sync_one(
     renamed: &mut Vec<Renamed>,
     errors: &mut Vec<String>,
 ) -> Result<Planned, String> {
+    // Read before anything claims: the rename branch below rewrites this
+    // uid's record, and the title it held *going in* is the only evidence of
+    // what Roam used to call the page.
+    let known_title = ledger.title_of(uid).map(str::to_string);
     let target = route_page(uid, &page.title, dirs, ledger);
     let mut moved = false;
 
@@ -274,14 +278,29 @@ fn sync_one(
     }
 
     // The one case where a `title:` already on disk is not the user's to keep:
-    // Roam renamed the page, so the sync *knows* the old one is wrong. Without
-    // this the file name, the front-matter and the ledger disagree forever —
-    // `touch_frontmatter` only fills a *missing* title, and a post-rename sync
-    // usually has nothing else to write, so no later run repairs it. Scoped to
-    // exactly this branch: everywhere else, an existing title stays.
-    let title_policy = match target.rename_from {
-        Some(_) => TitlePolicy::Refresh,
-        None => TitlePolicy::KeepExisting,
+    // **Roam** renamed the page, so the sync *knows* the old title is wrong.
+    // Without this the file name, the front-matter and the ledger disagree
+    // forever — `touch_frontmatter` only fills a *missing* title, and a
+    // post-rename sync usually has nothing else to write, so no later run
+    // repairs it.
+    //
+    // A moved file is NOT that evidence, which is why the ledger's recorded
+    // title is consulted rather than `rename_from` alone. `route_page` reports
+    // a rename for *any* path change, and the likeliest one has nothing to do
+    // with Roam: change the host's wiki/daily folder setting and every page
+    // moves at once. Refreshing on that would rewrite every hand-written
+    // `title:` in the vault in a single run — and on daily notes, whose
+    // `target.title` is the ISO date, it would replace them all with dates.
+    //
+    // Both conditions, not just the title one: `Refresh` exists to repair the
+    // front-matter of the file this run just moved, and a title change that
+    // does *not* move the file (two Roam titles that sanitise to one file
+    // name) has never triggered it. Widening it there would newly overwrite
+    // hand-written titles on daily notes, whose path is derived from the uid
+    // and so never moves when Roam retitles the page.
+    let title_policy = match (&target.rename_from, &known_title) {
+        (Some(_), Some(before)) if *before != page.title => TitlePolicy::Refresh,
+        _ => TitlePolicy::KeepExisting,
     };
     let outcome = sync_page(
         vault, &target.rel, Some(page), &target.title, target.concept_type, now, title_policy,
@@ -683,6 +702,63 @@ mod tests {
 
         let text = std::fs::read_to_string(dir.path().join("wikipage/回顾系统.note.md")).unwrap();
         assert!(text.contains("title: 我给它起的名字"), "the user's own title was overwritten:\n{text}");
+    }
+
+    /// The other half of that tension, and the reason `Refresh` may not be
+    /// inferred from the file having moved. `route_page` reports a
+    /// `rename_from` for **any** path change, and the likeliest one is not a
+    /// Roam rename at all: the user points the host's wiki folder somewhere
+    /// else and every page moves at once. Roam still calls this page 回顾系统,
+    /// so the title the user wrote is still theirs — a run that refreshed here
+    /// would rewrite every hand-written `title:` in the vault in one go.
+    #[test]
+    fn changing_the_wiki_folder_moves_the_file_and_leaves_the_title_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("wikipage")).unwrap();
+        std::fs::write(dir.path().join("wikipage/回顾系统.note.md"),
+            "---\ntype: Wiki Page\ntitle: 我给它起的名字\n---\n- from roam\n  id:: u-b1\n- 我自己写的\n").unwrap();
+        let mut l = crate::ledger::Ledger::default();
+        l.claim("u", "wikipage/回顾系统.note.md", "回顾系统");
+        l.save(dir.path()).unwrap();
+
+        // Same uid, same Roam title — only the host's folder setting moved.
+        let r = sync_since(
+            dir.path(), ("笔记", "dailynote"), None, None, today(), NOW, false,
+            |_| Ok(vec![Changed { uid: "u".into(), edited: 1000 }]),
+            |_| Ok(Some(page("u", "回顾系统", "from roam"))),
+        ).unwrap();
+
+        assert_eq!(r.renamed.len(), 1, "the file still has to follow the setting");
+        assert_eq!(r.renamed[0].to, "笔记/回顾系统.note.md");
+        assert!(!dir.path().join("wikipage/回顾系统.note.md").exists());
+        let moved = std::fs::read_to_string(dir.path().join("笔记/回顾系统.note.md")).unwrap();
+        assert!(moved.contains("title: 我给它起的名字"),
+                "a folder setting is not Roam renaming the page — the user's title stands:\n{moved}");
+        assert!(moved.contains("我自己写的"), "and nothing they wrote is lost:\n{moved}");
+    }
+
+    /// The same shape on the daily side, where it is worse: `route_page` hands
+    /// a daily note the ISO date as its title, so refreshing on a moved file
+    /// would replace every hand-written daily title in the vault with a date.
+    #[test]
+    fn changing_the_daily_folder_does_not_stamp_dates_over_hand_written_titles() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("dailynote/2026")).unwrap();
+        std::fs::write(dir.path().join("dailynote/2026/2026-08-02.note.md"),
+            "---\ntype: Daily Note\ntitle: 周日复盘\n---\n- from roam\n  id:: 08-02-2026-b1\n").unwrap();
+        let mut l = crate::ledger::Ledger::default();
+        l.claim("08-02-2026", "dailynote/2026/2026-08-02.note.md", "August 2nd, 2026");
+        l.save(dir.path()).unwrap();
+
+        sync_since(
+            dir.path(), ("wikipage", "日记"), None, None, today(), NOW, false,
+            |_| Ok(vec![Changed { uid: "08-02-2026".into(), edited: 1000 }]),
+            |_| Ok(Some(page("08-02-2026", "August 2nd, 2026", "from roam"))),
+        ).unwrap();
+
+        let moved = std::fs::read_to_string(dir.path().join("日记/2026/2026-08-02.note.md")).unwrap();
+        assert!(moved.contains("title: 周日复盘"),
+                "the daily note's hand-written title was replaced by the ISO date:\n{moved}");
     }
 
     #[test]
