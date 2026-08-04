@@ -27,6 +27,36 @@ export function richPlugins(placeholder: string | undefined): Plugin[] {
   return placeholder ? [placeholderPlugin(placeholder)] : []
 }
 
+/**
+ * The plugin list `plugins` would become if the placeholder said `text`.
+ *
+ * `placeholderPlugin` bakes its text in at construction time (it is closed over
+ * by the `decorations` prop), so changing the hint means building a NEW plugin
+ * and swapping it into the editor's configuration — there is no setter.
+ *
+ * Only the placeholder is touched: the outgoing one is matched by ProseMirror
+ * plugin key (all `placeholderPlugin` instances share one module-level
+ * `PluginKey`, so this is exact and can never catch one of moraya's own
+ * plugins), everything else is carried over in order. Dropping moraya's
+ * plugins here would take the editor's history, input rules and keymaps with
+ * them. Mounting without a placeholder and setting one later works too — the
+ * filter simply matches nothing and the new plugin is appended.
+ *
+ * Pure, and separate from `setRichPlaceholder`, so the swap can be asserted in
+ * a DOM-less test (an `EditorView` needs a real layout engine).
+ */
+export function swapPlaceholder(plugins: readonly Plugin[], text: string): Plugin[] {
+  const next = placeholderPlugin(text)
+  const key = (next as unknown as { key: string }).key
+  return plugins.filter((p) => (p as unknown as { key: string }).key !== key).concat(next)
+}
+
+/** Applies {@link swapPlaceholder} to a live editor. */
+export function setRichPlaceholder(instance: MorayaEditorInstance, text: string): void {
+  const { view } = instance
+  view.updateState(view.state.reconfigure({ plugins: swapPlaceholder(view.state.plugins, text) }))
+}
+
 export async function mountRich(
   host: HTMLElement,
   initial: string,

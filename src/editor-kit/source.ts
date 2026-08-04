@@ -10,6 +10,8 @@ import { autoPairInsert } from '../lib/autopair'
 export interface SourcePane {
   getValue(): string
   setValue(v: string): void
+  /** Replaces the hint shown in an empty buffer. */
+  setPlaceholder(text: string): void
   focus(): void
   destroy(): void
 }
@@ -65,6 +67,9 @@ export function mountSource(
   return {
     getValue: () => ta.value,
     setValue: (v) => { ta.value = v; paint() },
+    // Empty string clears it: `placeholder=""` renders nothing, which is what
+    // "no hint" means for a textarea.
+    setPlaceholder: (text) => { ta.placeholder = text },
     focus: () => ta.focus(),
     destroy: () => wrap.remove(),
   }
