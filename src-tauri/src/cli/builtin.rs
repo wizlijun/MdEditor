@@ -501,15 +501,22 @@ mod market {
         env!("CARGO_PKG_VERSION")
     }
 
-    /// Strictly-newer test used to ORDER registry entries and to evaluate
-    /// `min_host` bounds. Deliberately a port of `isNewerVersion` in
-    /// `src/lib/market/types.ts`: dotted components compared left-to-right as
-    /// numbers (so `1.10.0` > `1.9.0`, which string comparison gets backwards),
-    /// missing components read as 0, a non-numeric component reads as 0.
+    /// Strictly-newer test used to ORDER registry entries, to evaluate
+    /// `min_host` bounds, AND to gate `plugin update`'s final "is this
+    /// actually newer than what is installed" decision. Deliberately a port
+    /// of `isNewerVersion` in `src/lib/market/types.ts`: dotted components
+    /// compared left-to-right as numbers (so `1.10.0` > `1.9.0`, which string
+    /// comparison gets backwards), missing components read as 0, a
+    /// non-numeric component reads as 0.
     ///
-    /// Kept separate from [`is_newer`] on purpose: this one must agree with the
-    /// market window byte for byte, while `is_newer` is the deliberately strict
-    /// gate on *updating away from an installed version*.
+    /// This is the ONLY comparator `pick_update_entry` uses — both to order
+    /// candidates and to gate the decision — so it is byte-for-byte the same
+    /// function as `pickUpdateTo` (`select.ts`) for every version string,
+    /// including ones a strict `major.minor.patch` parser would reject. A
+    /// second, stricter comparator here would let the CLI silently disagree
+    /// with the market window on exactly the registry entries where it
+    /// matters most: one comparator says "up-to-date", the other offers an
+    /// update.
     fn version_gt(candidate: &str, current: &str) -> bool {
         let a = version_parts(candidate);
         let b = version_parts(current);
@@ -686,7 +693,7 @@ mod market {
             return Err("not in registry".into());
         }
         if let Some(best) = newest(&group, host, true) {
-            if is_newer(&best.version, installed) {
+            if version_gt(&best.version, installed) {
                 return Ok(best);
             }
         }
@@ -694,7 +701,7 @@ mod market {
         // does exist but this host is too old, so `update` never looks like it
         // silently ignored a release the market window advertises.
         let overall = newest(&group, host, false).expect("group is non-empty");
-        if is_newer(&overall.version, installed) {
+        if version_gt(&overall.version, installed) {
             return Err(format!(
                 "up-to-date ({} needs notemd {})",
                 overall.version, overall.min_host
@@ -730,17 +737,6 @@ mod market {
     /// exactly one place per consumer.
     fn sig_url_for(pkg_url: &str) -> String {
         format!("{pkg_url}.minisig")
-    }
-
-    /// True iff `candidate` is a strictly newer semver than `installed`. Both
-    /// must parse; an unparseable version is treated as "not newer" (never
-    /// auto-updates across a version we can't reason about). Used by
-    /// `plugin update`.
-    fn is_newer(candidate: &str, installed: &str) -> bool {
-        match (semver::Version::parse(candidate), semver::Version::parse(installed)) {
-            (Ok(c), Ok(i)) => c > i,
-            _ => false,
-        }
     }
 
     // ── Command entry points ─────────────────────────────────────────────────
@@ -1239,6 +1235,87 @@ mod market {
             assert_eq!(e.version, "1.10.0");
         }
 
+        /// A two-component registry version parses fine under `version_gt` (the
+        /// TS-matching comparator that orders candidates) but not under strict
+        /// `semver::Version`. Before the fix, `pick_update_entry` ordered by
+        /// `version_gt` but gated the final decision with a *different*,
+        /// semver-only comparator that rejects "1.2" outright — so this update
+        /// was silently swallowed as "up-to-date". One comparator must decide.
+        #[test]
+        fn pick_update_entry_offers_two_component_newer_version() {
+            let plugins = vec![entry("r", "1.2")];
+            let e = pick_update_entry(&plugins, "r", "1.1.9", "6.804.1").unwrap();
+            assert_eq!(e.version, "1.2");
+        }
+
+        /// An INSTALLED version that strict semver cannot parse (four dotted
+        /// components here) must not freeze updates forever. Before the fix,
+        /// the decision gate tried `semver::Version::parse` on the installed
+        /// string, failed, and always answered "not newer" — hiding a
+        /// genuinely newer, well-formed candidate.
+        #[test]
+        fn pick_update_entry_offers_update_past_unparseable_installed_version() {
+            let plugins = vec![entry("r", "2.0.0")];
+            let e = pick_update_entry(&plugins, "r", "1.2.0.9", "6.804.1").unwrap();
+            assert_eq!(e.version, "2.0.0");
+        }
+
+        /// An older candidate must never be offered, regardless of how odd its
+        /// (or the installed version's) shape is — the fix must not turn the
+        /// gate into an accidental "always update" rubber stamp.
+        #[test]
+        fn pick_update_entry_no_update_when_candidate_older_regardless_of_parse_shape() {
+            let plugins = vec![entry("r", "1.5")];
+            let err = pick_update_entry(&plugins, "r", "2.0.0", "6.804.1").unwrap_err();
+            assert_eq!(err, "up-to-date");
+        }
+
+        /// Equal versions are never "an update", even when the shared shape is
+        /// one strict semver would reject.
+        #[test]
+        fn pick_update_entry_no_update_when_candidate_equal_to_installed() {
+            let plugins = vec![entry("r", "1.2")];
+            let err = pick_update_entry(&plugins, "r", "1.2", "6.804.1").unwrap_err();
+            assert_eq!(err, "up-to-date");
+        }
+
+        /// The decision and the ordering must be the SAME function: whatever
+        /// `pick_update_entry` returns is exactly what `newest` already picked
+        /// among host-compatible candidates — never a different entry reached
+        /// by a second, disagreeing comparator. Before the fix, the newest
+        /// compatible entry ("1.1", two-component) was rejected by the strict
+        /// gate, and the fallback "overall newest" (1.2.0, incompatible) was
+        /// then found "newer" by the strict gate too — so the old code
+        /// answered with the WRONG reason (incompatibility) for what should
+        /// have been a clean update to the two-component compatible version.
+        #[test]
+        fn pick_update_entry_decision_agrees_with_newest_among_compatible() {
+            let plugins = vec![
+                entry_min_host("r", "1.0.4", ">=6.716.7"),
+                entry_min_host("r", "1.1", ">=6.716.7"),
+                entry_min_host("r", "1.2.0", ">=6.900.0"), // incompatible with host below
+            ];
+            let group: Vec<&RegistryEntry> = plugins.iter().filter(|e| e.id == "r").collect();
+            let expected = newest(&group, "6.804.1", true).unwrap();
+            let got = pick_update_entry(&plugins, "r", "1.0.4", "6.804.1").unwrap();
+            assert_eq!(got.version, expected.version, "decision must agree with the ordering");
+            assert_eq!(got.version, "1.1", "must pick the newest COMPATIBLE entry — 1.2.0 is incompatible");
+        }
+
+        /// Pin: for today's live registry, every version is a well-formed
+        /// x.y.z, so the two comparators always agreed before this refactor.
+        /// The fix must not change this answer.
+        #[test]
+        fn pick_update_entry_well_formed_versions_unchanged() {
+            let plugins = vec![
+                entry_min_host("r", "1.0.4", ">=6.716.7"),
+                entry_min_host("r", "1.1.0", ">=6.803.0"),
+                entry_min_host("r", "1.2.0", ">=6.803.0"),
+            ];
+            let e = pick_update_entry(&plugins, "r", "1.0.4", "6.804.1").unwrap();
+            assert_eq!(e.version, "1.2.0");
+        }
+
         #[test]
         fn select_download_picks_current_arch() {
             let triple = discovery::current_arch_triple().expect("supported arch");
@@ -1295,16 +1372,6 @@ mod market {
                 sig_url_for("https://h/api/download/x/1.0.0/aarch64-apple-darwin"),
                 "https://h/api/download/x/1.0.0/aarch64-apple-darwin.minisig"
             );
-        }
-
-        #[test]
-        fn is_newer_semver_decision() {
-            assert!(is_newer("2.0.0", "1.9.9"));
-            assert!(is_newer("1.0.1", "1.0.0"));
-            assert!(!is_newer("1.0.0", "1.0.0")); // equal ⇒ not newer
-            assert!(!is_newer("1.0.0", "2.0.0")); // older ⇒ not newer
-            assert!(!is_newer("notsemver", "1.0.0")); // unparseable ⇒ never updates
-            assert!(!is_newer("1.0.0", "alsobad"));
         }
 
         #[test]
