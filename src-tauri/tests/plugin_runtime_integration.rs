@@ -44,6 +44,20 @@ fn init_params(root: &std::path::Path) -> proto::InitializeParams {
     }
 }
 
+/// Poll until `pred` holds, up to ~2s. `host.*` messages are handed to the sink
+/// on its own queue thread (so a slow sink can never stall response routing —
+/// see `PluginProcess::spawn`), which means "the response came back" no longer
+/// implies "the sink already ran".
+async fn wait_until(mut pred: impl FnMut() -> bool) -> bool {
+    for _ in 0..200 {
+        if pred() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    false
+}
+
 /// Poll `has_exited` until it reports an exit code (reaping can lag the pipe
 /// EOF slightly).
 async fn wait_exit_code(proc: &PluginProcess) -> Option<i32> {
@@ -76,7 +90,11 @@ async fn ok_round_trip_toast_and_graceful_shutdown() {
     assert_eq!(out, json!({ "echo": true }));
 
     // ok.sh emits the toast notification *before* the execute response on the
-    // same pipe, so the sequential reader has already delivered it by now.
+    // same pipe; the reader hands it to the sink queue, which runs off-loop.
+    assert!(
+        wait_until(|| !seen.lock().unwrap().is_empty()).await,
+        "the toast notification never reached the sink"
+    );
     {
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 1, "expected exactly one host.* message");
@@ -147,6 +165,79 @@ async fn slow_execute_times_out_without_killing_process() {
     assert_eq!(proc.has_exited().await, None, "process should still be alive");
     // …and still serve later requests: $deactivate succeeds → graceful.
     assert!(proc.shutdown().await, "expected graceful shutdown after timeout");
+}
+
+// ── ②b chatty.sh: the timeout is silence, not elapsed time ──
+//
+// v6.804.5 shipped the opposite: a fixed relay ceiling failed an AI read that
+// was streaming happily and went on to succeed. A plugin that keeps producing
+// output is working, and must not be declared timed out for taking long.
+
+#[tokio::test]
+async fn a_chatty_plugin_is_not_timed_out_while_it_keeps_talking() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let (sink, seen) = recording_sink();
+    // 1s silence budget vs ~2s of chatter: an elapsed-time timeout fails at 1s.
+    let proc = PluginProcess::spawn(&fixture("chatty.sh"), "test.chatty", log_dir.path(), 1, sink)
+        .await
+        .unwrap();
+    initialize_and_activate(&proc, &init_params(log_dir.path()), "onCommand:x")
+        .await
+        .unwrap();
+
+    let started = Instant::now();
+    let err = proc.request("command.execute", json!({})).await.unwrap_err();
+    let waited = started.elapsed();
+
+    // It DID eventually time out — the fixture never answers, and silence after
+    // the chatter stops is exactly what a timeout is for.
+    assert!(err.contains("timeout:1"), "got: {err}");
+    // …but only after the chatter ran out, i.e. the clock restarted on output.
+    assert!(
+        waited >= Duration::from_secs(2),
+        "gave up after {waited:?}: output must restart the silence clock"
+    );
+    assert!(
+        seen.lock().unwrap().len() >= 5,
+        "expected the chatter to have been routed to the sink meanwhile"
+    );
+    assert_eq!(proc.has_exited().await, None, "process should still be alive");
+}
+
+// ── ②c a blocking host_sink must not stall response routing ──
+//
+// The root cause behind the v6.804.5 report: `host.agent.*` relays through the
+// sink and blocks until the OTHER plugin answers. With the sink running inline
+// on the read loop, that stalls this plugin's own responses — the plugin has
+// long since replied and the caller still times out.
+
+#[tokio::test]
+async fn a_blocking_host_sink_does_not_delay_the_plugins_response() {
+    let log_dir = tempfile::tempdir().unwrap();
+    // A sink that takes 2s per message, like a relay waiting on another plugin.
+    let sink: HostSink = Arc::new(|_req| {
+        std::thread::sleep(Duration::from_secs(2));
+        None
+    });
+    let proc = PluginProcess::spawn(&fixture("ok.sh"), "test.blocking", log_dir.path(), 30, sink)
+        .await
+        .unwrap();
+    initialize_and_activate(&proc, &init_params(log_dir.path()), "onStartupFinished")
+        .await
+        .unwrap();
+
+    // ok.sh emits a host.toast notification and THEN the execute response.
+    let started = Instant::now();
+    let out = proc
+        .request("command.execute", json!({ "command": "noop", "context": {} }))
+        .await
+        .unwrap();
+    assert_eq!(out, json!({ "echo": true }));
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the response waited out the blocking sink ({:?})",
+        started.elapsed()
+    );
 }
 
 // ── ③ crash-activate.sh: activation failure surfaces + exit code observed ──
@@ -491,7 +582,12 @@ async fn host_api_make_sink_dispatches_toast_through_real_process() {
         .unwrap();
     assert_eq!(out, json!({ "echo": true }));
 
-    // The make_sink should have fired the emitter with the toast payload.
+    // The make_sink should have fired the emitter with the toast payload (on the
+    // sink's own queue thread, so poll rather than assume it already ran).
+    assert!(
+        wait_until(|| !emitted.lock().unwrap().is_empty()).await,
+        "the toast never reached the emitter"
+    );
     let payloads = emitted.lock().unwrap();
     assert_eq!(payloads.len(), 1, "expected exactly one emitted toast");
     assert_eq!(payloads[0]["plugin_id"], "test.ok");

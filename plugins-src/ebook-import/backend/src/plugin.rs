@@ -485,7 +485,7 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
             "host.agent.run",
             json!({
                 "task": airead::TASK_ID,
-                "prompt": airead::run_prompt(&job.dest_rel, &summary_rel),
+                "prompt": airead::run_prompt(&job.dest_rel, &summary_rel, locale),
                 "note_path": book_abs.to_string_lossy(),
                 // 收尾提醒交给 claude-agent 发:它没有窗口,不会被本插件窗口
                 // 的 Destroyed 事件连坐拆掉。标题在这里生成 —— locale 是
@@ -507,13 +507,16 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
         Err(e) => return fail(e).await,
     };
 
-    // 2s 轮询到收尾;2h 是防呆上限(任务自身 timeout_seconds=1800 会先到)。
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2 * 3600);
+    // 2s 轮询到收尾。2h 是防呆上限,而且是**无进展**的 2h:run 每推进一步就重新
+    // 起算 —— 一本大部头读三个小时是慢,不是死,不该由轮询侧宣判。
+    let quiet_limit = std::time::Duration::from_secs(2 * 3600);
+    let mut deadline = tokio::time::Instant::now() + quiet_limit;
+    let mut last_steps = 0u64;
     let mut strikes = 0u32;
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         if tokio::time::Instant::now() > deadline {
-            return fail("polling deadline exceeded".into()).await;
+            return fail("no progress for 2h".into()).await;
         }
         let status = host
             .request(
@@ -536,7 +539,13 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
             }
         };
         match airead::interpret_status(&v) {
-            RunPoll::Running => continue,
+            RunPoll::Running { steps } => {
+                if steps != last_steps {
+                    last_steps = steps;
+                    deadline = tokio::time::Instant::now() + quiet_limit;
+                }
+                continue;
+            }
             RunPoll::Failed(e) => return fail(e).await,
             RunPoll::Succeeded => {
                 // record 成功还不算数:约定的摘要文件必须真的在。claude-agent

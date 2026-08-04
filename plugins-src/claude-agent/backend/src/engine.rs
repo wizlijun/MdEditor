@@ -164,12 +164,17 @@ pub async fn run(
         updated_at: started.to_rfc3339(),
     };
     record::write_progress(&spec.task_run_dir, &progress);
-    let deadline = tokio::time::sleep(std::time::Duration::from_secs(spec.task.timeout_seconds));
+    // `timeout_seconds` 是**静默上限**,不是总时长上限:每收到一个事件就重新
+    // 起算。一本大部头读 40 分钟不是"卡住",而卡住的表现恰恰是不再有输出 ——
+    // 拿总时长砍活着的 run,只会在最后一刻把已经快写完的摘要扔掉。
+    let quiet_limit = std::time::Duration::from_secs(spec.task.timeout_seconds);
+    let deadline = tokio::time::sleep(quiet_limit);
     tokio::pin!(deadline);
     let forced = loop {
         tokio::select! {
             line = lines.next_line() => match line {
                 Ok(Some(l)) => {
+                    deadline.as_mut().reset(tokio::time::Instant::now() + quiet_limit);
                     if let Some(ev) = stream::parse_line(&l) {
                         match &ev {
                             stream::Event::Result(r) => final_result = Some(r.clone()),
@@ -640,6 +645,45 @@ mod tests {
         let c = fake_claude(d.path(), "fake-hang", "sleep 30");
         let (_e, rec) = drive(spec(d.path(), c, 1)).await;
         assert_eq!(rec.status, record::Status::Timeout);
+    }
+
+    /// 静默上限 ≠ 总时长上限:只要还在出声,跑多久都不该被腰斩。这里的假 claude
+    /// 总共跑 3.5s(超过 3s 的 timeout_seconds),但每 250ms 出一行 —— 必须成功。
+    /// 上限给到 3s 是留给并行跑测试时的进程启动抖动:间隔与上限差 12 倍。
+    #[tokio::test]
+    async fn a_talkative_claude_outlives_the_quiet_limit() {
+        let d = tempfile::tempdir().unwrap();
+        let c = fake_claude(
+            d.path(),
+            "fake-chatty",
+            "i=0\nwhile [ $i -lt 14 ]; do \
+               printf '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"tick\"}]}}\\n'; \
+               sleep 0.25; i=$((i+1)); \
+             done\n\
+             printf '{\"type\":\"result\",\"result\":\"done\"}\\n'",
+        );
+        // 整套测试并行跑时,fork+exec(pre_exec 关掉了 posix_spawn 快路)偶尔会
+        // 卡在 exec 之前 —— 那种 run 一个字都没吐过,判它超时是对的,不是本例要
+        // 测的东西。所以只在"确实出过声"的那次上断言,一次没出声就重试。
+        let mut last = None;
+        for _ in 0..3 {
+            let (evs, rec) = drive(spec(d.path(), c.clone(), 3)).await;
+            if evs.is_empty() {
+                last = Some(rec);
+                continue;
+            }
+            assert_eq!(
+                rec.status,
+                record::Status::Success,
+                "a streaming run must not be timed out ({} events, {} → {})",
+                evs.len(),
+                rec.started_at,
+                rec.ended_at
+            );
+            assert_eq!(rec.result, "done");
+            return;
+        }
+        panic!("the fake claude never produced a single event: {last:?}");
     }
 
     #[tokio::test]

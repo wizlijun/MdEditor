@@ -43,17 +43,27 @@ pub fn discover(explicit: Option<&str>) -> Option<PathBuf> {
     discover_with(explicit, &home, shell_lookup, is_executable)
 }
 
+/// 一个 login+interactive 的 zsh 要把用户整份 rc 跑一遍 —— 几百毫秒起步,rc 重的
+/// 机器上要好几秒。而 `discover` 是在插件的协议读循环里同步调用的:每起一次 run
+/// 就把读循环按住那么久,期间这个进程的应答全都发不出去。装在哪儿这件事一个进程
+/// 生命周期内不会变,查一次就够;结果仍要过 `is_exec`(见 `discover_with`),所以
+/// 缓存到的路径万一被卸载了,还是会退回到候选目录,不会指着一个不存在的 claude。
 fn shell_lookup() -> Option<PathBuf> {
-    let out = std::process::Command::new("/bin/zsh")
-        .args(["-lic", "command -v claude"])
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(s))
-    }
+    static CACHED: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let out = std::process::Command::new("/bin/zsh")
+                .args(["-lic", "command -v claude"])
+                .output()
+                .ok()?;
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(s))
+            }
+        })
+        .clone()
 }
 
 fn is_executable(p: &Path) -> bool {

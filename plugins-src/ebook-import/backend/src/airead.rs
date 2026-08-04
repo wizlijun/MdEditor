@@ -58,11 +58,26 @@ pub fn summary_name(date: chrono::NaiveDate) -> String {
     format!("{}-summary.md", date.format("%Y-%m-%d"))
 }
 
+/// 摘要正文该用哪种语言写。跟随**用户界面语言**($initialize 给的 locale),
+/// 不跟随书的语言:读一本俄语书的人未必读得下俄语摘要,他要的是自己母语的
+/// 「这本书讲什么」。书名与引文另说,由模板约定保留原文。
+pub fn output_language(locale: &str) -> &'static str {
+    match locale.split('-').next().unwrap_or("en") {
+        "zh" => "简体中文",
+        "ja" => "日本語",
+        "de" => "Deutsch",
+        _ => "English",
+    }
+}
+
 /// 附加给 run-task 的定位 prompt(任务模板自带总 prompt,这里只给坐标)。
-pub fn run_prompt(dest_rel: &str, summary_rel: &str) -> String {
+pub fn run_prompt(dest_rel: &str, summary_rel: &str, locale: &str) -> String {
+    let lang = output_language(locale);
     format!(
         "本次只读这一本书:`{dest_rel}/book.md`。\n\
          摘要写到 `{summary_rel}`(同名文件已存在则直接覆盖)。\n\
+         摘要正文一律用 {lang} 书写 —— 与原书语言无关;书名、专有名词、直接引文\n\
+         可保留原文并在需要处附 {lang} 译文。\n\
          不要读、不要改 vault 里的其它文件 —— 权限也已按此限定。"
     )
 }
@@ -70,14 +85,18 @@ pub fn run_prompt(dest_rel: &str, summary_rel: &str) -> String {
 /// 一次 host.agent.status 应答的解读。
 #[derive(Debug, PartialEq)]
 pub enum RunPoll {
-    Running,
+    /// 还在跑;`steps` 是 run 自报的推进步数 —— 只要它在涨就是活的,
+    /// 轮询侧据此把「无进展」上限往后推(见 plugin.rs 的轮询循环)。
+    Running { steps: u64 },
     Succeeded,
     Failed(String),
 }
 
 pub fn interpret_status(v: &serde_json::Value) -> RunPoll {
     match v.get("state").and_then(|s| s.as_str()) {
-        Some("running") => RunPoll::Running,
+        Some("running") => RunPoll::Running {
+            steps: v.get("steps").and_then(|s| s.as_u64()).unwrap_or(0),
+        },
         Some("done") => {
             let rec = v.get("record");
             let status = rec
@@ -178,7 +197,10 @@ mod tests {
 
     #[test]
     fn interpret_status_variants() {
-        assert_eq!(interpret_status(&serde_json::json!({"state": "running", "steps": 3})), RunPoll::Running);
+        assert_eq!(
+            interpret_status(&serde_json::json!({"state": "running", "steps": 3})),
+            RunPoll::Running { steps: 3 }
+        );
         assert_eq!(
             interpret_status(&serde_json::json!({"state": "done", "record": {"status": "success", "result": "ok"}})),
             RunPoll::Succeeded
@@ -215,6 +237,18 @@ mod tests {
             "record": {"status": "error", "result": "ran out of turns", "stderr_tail": "noise"},
         }));
         assert_eq!(got, RunPoll::Failed("error: ran out of turns".into()));
+    }
+
+    /// 摘要语言跟界面走,不跟书走 —— 俄语书 + 中文界面 = 中文摘要。
+    #[test]
+    fn run_prompt_pins_the_output_language_to_the_ui_locale() {
+        let p = run_prompt("ssot/books/2026-08/x", "ssot/books/2026-08/x/2026-08-04-summary.md", "zh-CN");
+        assert!(p.contains("简体中文"), "got: {p}");
+        assert!(run_prompt("d", "s", "ja").contains("日本語"));
+        assert!(run_prompt("d", "s", "de").contains("Deutsch"));
+        // 未知/未设 locale 落到英文,而不是静默跟随书的语言。
+        assert!(run_prompt("d", "s", "").contains("English"));
+        assert!(run_prompt("d", "s", "pt-BR").contains("English"));
     }
 
     #[test]

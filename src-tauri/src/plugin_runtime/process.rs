@@ -45,7 +45,11 @@ pub struct PluginProcess {
     stdin: Mutex<tokio::process::ChildStdin>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<proto::RpcResponse>>>>,
     next_id: AtomicU64,
+    /// **静默上限,不是耗时上限**:一个请求只有在该进程「彻底不吭声」这么久
+    /// 之后才判超时(见 [`PluginProcess::request`])。
     pub request_timeout: Duration,
+    /// 该进程最近一次吐出任意一行 stdout 的时刻 —— 「还活着且在干活」的证据。
+    last_output: std::sync::Mutex<std::time::Instant>,
     /// 读循环任务与进程退出监视由 lifecycle 持有的 JoinHandle 管理。
     pub reader_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -88,6 +92,7 @@ impl PluginProcess {
             pending: Default::default(),
             next_id: AtomicU64::new(1),
             request_timeout: Duration::from_secs(timeout_secs.clamp(1, MAX_REQUEST_TIMEOUT)),
+            last_output: std::sync::Mutex::new(std::time::Instant::now()),
             reader_task: Mutex::new(None),
         });
         // stderr → 日志文件
@@ -103,11 +108,43 @@ impl PluginProcess {
         }
         // stdout 读循环：response → pending；request/notification → host_sink，
         // 有 id 的把 host_sink 的应答写回插件 stdin。
+        //
+        // host_sink 绝不在读循环里跑。它是同步的、而且可以**跑很久** —— host.agent.*
+        // 是转给另一个插件的中转,要等对方答复;一旦它在读循环里阻塞,这个进程的
+        // 应答就没人路由了:插件明明早就回了话,调用方还是会被判超时(v6.804.5 的
+        // 「agent relay timeout after 300s」正是如此:AI 阅读实际 4 分 48 秒跑完并
+        // 成功落盘,调用方却收到超时)。所以 host_sink 挪到自己的线程上,读循环只
+        // 做「解析 + 路由 + 入队」,永远通畅。队列是单线程 FIFO,插件的 host.* 之间
+        // 仍按到达顺序处理。
+        let (sink_tx, sink_rx) = std::sync::mpsc::channel::<proto::RpcRequest>();
+        let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        std::thread::spawn(move || {
+            while let Ok(req) = sink_rx.recv() {
+                if let Some(resp) = host_sink(req) {
+                    if reply_tx.send(serde_json::to_string(&resp).unwrap()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        {
+            let me = proc.clone();
+            tokio::spawn(async move {
+                while let Some(line) = reply_rx.recv().await {
+                    if me.write_line(&line).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
         {
             let me = proc.clone();
             let task = tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    // 任何一行都算「在干活」,包括进度推送 —— request() 的静默计时
+                    // 从这里重新起算。
+                    *me.last_output.lock().unwrap() = std::time::Instant::now();
                     if line.trim().is_empty() {
                         continue;
                     }
@@ -120,15 +157,16 @@ impl PluginProcess {
                         }
                     }
                     if let Ok(req) = serde_json::from_str::<proto::RpcRequest>(&line) {
-                        if let Some(resp) = host_sink(req) {
-                            let _ = me.write_line(&serde_json::to_string(&resp).unwrap()).await;
-                        }
+                        // 队列断了(sink 线程没了)只影响 host.* 的处理,读循环照常。
+                        let _ = sink_tx.send(req);
                     }
                 }
                 // Reader gone ⇒ no response can ever arrive: drop every pending
                 // sender so in-flight `request()` calls fail fast ("channel
                 // closed") instead of sitting out their full timeout.
                 me.pending.lock().await.clear();
+                // sink_tx 在这里落地 ⇒ sink 线程排空后退出 ⇒ reply_tx 落地 ⇒
+                // 回信任务退出。三者不会有一个残留。
             });
             *proc.reader_task.lock().await = Some(task);
         }
@@ -143,9 +181,15 @@ impl PluginProcess {
     }
 
     /// 带超时的宿主→插件 request。超时只 fail 该请求（spec §12），不杀进程。
+    ///
+    /// 超时是**静默超时**,不是总耗时上限:计时在该进程每吐一行 stdout 时重新
+    /// 起算,所以一个还在推进度、还在流式输出的插件永远不会被判超时 —— 只有
+    /// 「一声不吭满 `request_timeout`」才算失联。总耗时封顶交给业务侧(任务自己
+    /// 的 timeout、用户点取消、进程死亡时的 pending drain),而不是在这里把一个
+    /// 正在正常干活的长任务腰斩。
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
         let req = proto::RpcRequest {
             jsonrpc: "2.0".into(),
@@ -157,13 +201,27 @@ impl PluginProcess {
             self.pending.lock().await.remove(&id);
             return Err(e);
         }
-        match tokio::time::timeout(self.request_timeout, rx).await {
-            Err(_) => {
+        let sent_at = std::time::Instant::now();
+        let received = loop {
+            // 静默从「本请求发出」和「进程最后一次出声」里更晚的那个算起。
+            let quiet_since = (*self.last_output.lock().unwrap()).max(sent_at);
+            let deadline = quiet_since + self.request_timeout;
+            let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
                 self.pending.lock().await.remove(&id);
-                Err(format!("timeout:{}", self.request_timeout.as_secs()))
+                return Err(format!(
+                    "timeout:{} (no output from the plugin for that long)",
+                    self.request_timeout.as_secs()
+                ));
+            };
+            match tokio::time::timeout(left, &mut rx).await {
+                Ok(r) => break r,
+                // 窗口内进程又出过声 ⇒ 下一轮 deadline 自动后移,继续等。
+                Err(_) => continue,
             }
-            Ok(Err(_)) => Err("channel closed (process died?)".into()),
-            Ok(Ok(resp)) => match (resp.result, resp.error) {
+        };
+        match received {
+            Err(_) => Err("channel closed (process died?)".into()),
+            Ok(resp) => match (resp.result, resp.error) {
                 (Some(v), _) => Ok(v),
                 (_, Some(e)) => Err(format!("plugin error {}: {}", e.code, e.message)),
                 _ => Err("empty response".into()),
