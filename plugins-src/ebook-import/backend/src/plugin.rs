@@ -405,7 +405,13 @@ fn run_job(
 }
 
 /// AI 阅读 worker:逐本处理直到队空。跑在 tokio 任务里(Host::request 绝不能
-/// 在协议读循环上内联 await),窗口关闭不影响 —— 收尾与提醒照常。
+/// 在协议读循环上内联 await)。
+///
+/// 注意生命周期:导入窗口一关,宿主的 `plugin_runtime/windows.rs`
+/// (`WindowEvent::Destroyed`)就会 `deactivate()` 掉本插件进程,这个 worker
+/// 随之消失。所以**收尾提醒不由这里发**,而是随 `host.agent.run` 的 `notify`
+/// 规格交给没有窗口的 claude-agent 去发(见下方 run_ai_job)。这里的轮询只
+/// 服务于窗口内的行内进度显示,窗口关掉就停,是可接受的。
 fn spawn_ai_worker(host: sdk::Host, inner: Arc<Mutex<Inner>>, vault: PathBuf) {
     tokio::spawn(async move {
         loop {
@@ -431,14 +437,14 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
                 "started_at": started_at, "summary_rel": summary_rel }),
     );
 
-    // `job` is only borrowed (`.dest_rel`/`.name`/`.job_id` cloned/copied per
-    // call below) rather than moved into the closure — `fail` is called from
-    // several sites below, and `job`/`vault`/`summary_rel` are still needed
-    // after those calls, so the closure must remain callable more than once
-    // without consuming its captures.
+    // `job` is only borrowed (`.dest_rel`/`.job_id` cloned/copied per call
+    // below) rather than moved into the closure — `fail` is called from several
+    // sites below, and `job`/`vault`/`summary_rel` are still needed after those
+    // calls, so the closure must remain callable more than once without
+    // consuming its captures. 提醒不在这里发(见 spawn_ai_worker 的生命周期
+    // 说明):这个闭包只更新窗口内的行。
     let fail = |err: String| {
         let dest_rel = job.dest_rel.clone();
-        let name = job.name.clone();
         let job_id = job.job_id;
         async move {
             host.log_warn(&format!("ai-read failed for {dest_rel}: {err}"));
@@ -446,21 +452,11 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
                 WINDOW,
                 json!({ "type": "ai_read", "job_id": job_id, "event": "failed", "error": err }),
             );
-            // 失败提醒指向 claude-agent 窗口(那里有完整运行日志)。
-            let _ = host
-                .request(
-                    "host.notify",
-                    json!({
-                        "title": airead::reminder_title(locale, &name, false),
-                        "action": { "kind": "open_plugin_window",
-                                    "plugin_id": "notemd.claude-agent", "window": "main" }
-                    }),
-                )
-                .await;
         }
     };
 
     let book_abs = vault.join(&job.dest_rel).join("book.md");
+    let summary_abs = vault.join(&summary_rel).to_string_lossy().to_string();
     let run = host
         .request(
             "host.agent.run",
@@ -468,6 +464,15 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
                 "task": airead::TASK_ID,
                 "prompt": airead::run_prompt(&job.dest_rel, &summary_rel),
                 "note_path": book_abs.to_string_lossy(),
+                // 收尾提醒交给 claude-agent 发:它没有窗口,不会被本插件窗口
+                // 的 Destroyed 事件连坐拆掉。标题在这里生成 —— locale 是
+                // $initialize 给本插件的。
+                "notify": {
+                    "title_ok": airead::reminder_title(locale, &job.name, true),
+                    "title_fail": airead::reminder_title(locale, &job.name, false),
+                    "open_path": summary_abs,
+                    "expect_file": summary_abs,
+                },
             }),
         )
         .await;
@@ -511,7 +516,9 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
             RunPoll::Running => continue,
             RunPoll::Failed(e) => return fail(e).await,
             RunPoll::Succeeded => {
-                // record 成功还不算数:约定的摘要文件必须真的在。
+                // record 成功还不算数:约定的摘要文件必须真的在。claude-agent
+                // 在发提醒前用同一条件复核(NotifySpec.expect_file),两边一致;
+                // 这里只是为了行内不显示一个点不开的「查看摘要」。
                 if !vault.join(&summary_rel).is_file() {
                     return fail(format!("run succeeded but {summary_rel} is missing")).await;
                 }
@@ -520,16 +527,6 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
                     json!({ "type": "ai_read", "job_id": job.job_id, "event": "done",
                             "summary_rel": summary_rel }),
                 );
-                let _ = host
-                    .request(
-                        "host.notify",
-                        json!({
-                            "title": airead::reminder_title(locale, &job.name, true),
-                            "action": { "kind": "open_path",
-                                        "path": vault.join(&summary_rel).to_string_lossy() }
-                        }),
-                    )
-                    .await;
                 return;
             }
         }

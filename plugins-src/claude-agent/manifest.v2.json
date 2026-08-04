@@ -96,7 +96,8 @@
     "ui",
     "toast",
     "vault.read",
-    "editor.open"
+    "editor.open",
+    "notify"
   ],
   "request_timeout_seconds": 300
 }

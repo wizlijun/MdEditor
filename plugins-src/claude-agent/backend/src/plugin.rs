@@ -19,6 +19,63 @@ const WINDOW: &str = "main";
 const NO_VAULT: &str = "no vault configured";
 /// The task the main window's Agent workspace runs.
 const NOTE_TASK: &str = "answer-note-question";
+/// Our own id, for a reminder that points back at this window's run log.
+const SELF_PLUGIN_ID: &str = "notemd.claude-agent";
+
+/// The tray reminder a caller wants pushed when its run reaches a terminal
+/// state. Handed to us with `run-task`, and sent from HERE rather than by the
+/// caller, on purpose: a plugin with an open window is torn down the moment
+/// that window closes (`plugin_runtime/windows.rs`, `WindowEvent::Destroyed` →
+/// `deactivate()`), which kills its polling task and its reminder with it.
+/// claude-agent normally has no window open, so its run outlives the caller's.
+///
+/// Known residual edge (accepted, not solved): if the user opens claude-agent's
+/// OWN window and then closes it, this process is torn down the same way and
+/// the run in flight is interrupted — no reminder for that run.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct NotifySpec {
+    title_ok: String,
+    title_fail: String,
+    /// ABSOLUTE path the success reminder opens. The host re-checks that it is
+    /// inside the vault before accepting it (`ui_rpc::notify_push`).
+    open_path: String,
+    /// ABSOLUTE path that must exist for the run to count as a success — a
+    /// `success` record with no file on disk is a failure to the user.
+    expect_file: String,
+}
+
+/// A `success` record is not enough: the file the caller expects has to be on
+/// disk, or the reminder would open nothing.
+fn run_delivered(spec: &NotifySpec, rec: Option<&record::RunRecord>) -> bool {
+    rec.map(|r| r.status) == Some(record::Status::Success)
+        && std::path::Path::new(&spec.expect_file).is_file()
+}
+
+/// `host.notify` params: the file on success, our own run log on failure.
+fn notify_params(spec: &NotifySpec, delivered: bool) -> Value {
+    if delivered {
+        json!({
+            "title": spec.title_ok,
+            "action": { "kind": "open_path", "path": spec.open_path },
+        })
+    } else {
+        json!({
+            "title": spec.title_fail,
+            "action": { "kind": "open_plugin_window",
+                        "plugin_id": SELF_PLUGIN_ID, "window": WINDOW },
+        })
+    }
+}
+
+/// Push the one reminder this run is owed. MUST be called from a spawned task,
+/// never from the protocol read loop: a `host.*` response can only be routed BY
+/// that loop, so awaiting one on it deadlocks the plugin.
+async fn notify_outcome(host: &sdk::Host, spec: &NotifySpec, rec: Option<&record::RunRecord>) {
+    let params = notify_params(spec, run_delivered(spec, rec));
+    if let Err(e) = host.request("host.notify", params).await {
+        host.log_warn(&format!("host.notify failed: {e}"));
+    }
+}
 
 /// A note's path relative to the vault, for naming it in a prompt. Absolute
 /// paths outside the vault (and traversal) return None — a task must not be
@@ -374,6 +431,16 @@ impl ClaudeAgentPlugin {
             .get("use_context")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // A malformed spec is an error rather than a silent None: the caller
+        // would otherwise wait forever for a reminder that was never going to
+        // come.
+        let notify = match params.get("notify") {
+            Some(v) if !v.is_null() => Some(
+                serde_json::from_value::<NotifySpec>(v.clone())
+                    .map_err(|e| format!("bad 'notify': {e}"))?,
+            ),
+            _ => None,
+        };
 
         let task_dir = task::task_dir(&vault, &task_id);
         let mut def = load_task(&vault, &task_id).ok_or(format!("unknown task '{task_id}'"))?;
@@ -418,22 +485,30 @@ impl ClaudeAgentPlugin {
         let inner = self.inner.clone();
         let rid = run_id.clone();
         tokio::spawn(async move {
+            // The pump hands back the terminal record, so the reminder below
+            // reports what actually happened. `None` = the run never reached a
+            // record (the task was already locked, say) — a failure.
             let pump = {
                 let h = h.clone();
                 let rid = rid.clone();
                 tokio::spawn(async move {
+                    let mut last: Option<record::RunRecord> = None;
                     while let Some(step) = rx.recv().await {
                         match step {
                             engine::Step::Event(e) => h.ui_post(
                                 WINDOW,
                                 json!({ "kind": "event", "run_id": rid, "event": e }),
                             ),
-                            engine::Step::Done(r) => h.ui_post(
-                                WINDOW,
-                                json!({ "kind": "done", "run_id": rid, "record": r }),
-                            ),
+                            engine::Step::Done(r) => {
+                                h.ui_post(
+                                    WINDOW,
+                                    json!({ "kind": "done", "run_id": rid, "record": r }),
+                                );
+                                last = Some(r);
+                            }
                         }
                     }
+                    last
                 })
             };
             if let Err(busy) = engine::run(spec, tx, cancel_rx).await {
@@ -443,8 +518,14 @@ impl ClaudeAgentPlugin {
                 );
                 h.toast("warn", "That task is already running", Some(&busy.0.run_id));
             }
-            let _ = pump.await;
+            let rec = pump.await.ok().flatten();
             inner.lock().unwrap().running.remove(&rid);
+            // Exactly one reminder per run that asked for one. We are inside a
+            // spawned task here, which is the only place `host.request` may be
+            // awaited (see `notify_outcome`).
+            if let Some(n) = notify {
+                notify_outcome(&h, &n, rec.as_ref()).await;
+            }
         });
         Ok(json!({ "run_id": run_id }))
     }
@@ -508,6 +589,8 @@ impl ClaudeAgentPlugin {
     /// Run any task with a caller-composed prompt — the host relays
     /// `host.agent.run` here. `note_path` (optional) scopes permissions to
     /// that one file via the task's settings.scoped.json, same as run-note.
+    /// `notify` (optional) is the tray reminder we push on this run's behalf
+    /// when it ends — see [`NotifySpec`] for why the CALLER can't push it.
     fn run_task(&mut self, host: &sdk::Host, context: &Value) -> Result<Value, String> {
         let task_id = context
             .get("task")
@@ -533,6 +616,7 @@ impl ClaudeAgentPlugin {
                 "prompt": prompt,
                 "use_context": false,
                 "note_path": note_path,
+                "notify": context.get("notify").cloned().unwrap_or(Value::Null),
             }),
             "relay",
         )
@@ -1121,6 +1205,115 @@ mod tests {
         let broken = d.path().join("broken.json");
         std::fs::write(&broken, "{not json").unwrap();
         assert_eq!(shared_config_vault_at(&broken), None);
+    }
+
+    fn a_record(status: record::Status) -> record::RunRecord {
+        record::RunRecord {
+            run_id: "R1".into(),
+            task: "ai-read-ebook".into(),
+            trigger: "relay".into(),
+            started_at: "s".into(),
+            ended_at: "e".into(),
+            status,
+            exit_code: Some(0),
+            num_turns: Some(1),
+            session_id: None,
+            result: String::new(),
+            stderr_tail: String::new(),
+            artifacts: Vec::new(),
+        }
+    }
+
+    /// The reminder is only a success when the run said so AND the promised
+    /// file is really there — that existence check used to live in the caller,
+    /// which is exactly the code that dies when its window closes.
+    #[test]
+    fn a_run_only_delivered_when_the_expected_file_exists() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("2026-08-04-summary.md");
+        let spec = NotifySpec {
+            title_ok: "ok".into(),
+            title_fail: "fail".into(),
+            open_path: f.to_string_lossy().to_string(),
+            expect_file: f.to_string_lossy().to_string(),
+        };
+        // success record, no file yet
+        assert!(!run_delivered(&spec, Some(&a_record(record::Status::Success))));
+        std::fs::write(&f, "# x").unwrap();
+        assert!(run_delivered(&spec, Some(&a_record(record::Status::Success))));
+        // file there, but the run failed / never produced a record
+        assert!(!run_delivered(&spec, Some(&a_record(record::Status::Error))));
+        assert!(!run_delivered(&spec, Some(&a_record(record::Status::Timeout))));
+        assert!(!run_delivered(&spec, None));
+    }
+
+    #[test]
+    fn notify_params_point_at_the_file_or_at_our_own_run_log() {
+        let spec = NotifySpec {
+            title_ok: "《书》AI 摘要已生成".into(),
+            title_fail: "《书》AI 阅读失败".into(),
+            open_path: "/v/ssot/ebooks/b/2026-08-04-summary.md".into(),
+            expect_file: "/v/ssot/ebooks/b/2026-08-04-summary.md".into(),
+        };
+        let ok = notify_params(&spec, true);
+        assert_eq!(ok["title"], "《书》AI 摘要已生成");
+        assert_eq!(ok["action"]["kind"], "open_path");
+        assert_eq!(ok["action"]["path"], "/v/ssot/ebooks/b/2026-08-04-summary.md");
+
+        let bad = notify_params(&spec, false);
+        assert_eq!(bad["title"], "《书》AI 阅读失败");
+        assert_eq!(bad["action"]["kind"], "open_plugin_window");
+        assert_eq!(bad["action"]["plugin_id"], SELF_PLUGIN_ID);
+        assert_eq!(bad["action"]["window"], WINDOW);
+    }
+
+    /// A caller that garbles the spec has to hear about it — silently dropping
+    /// it would leave it waiting for a reminder that can never arrive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_task_rejects_a_malformed_notify_spec() {
+        let _env = env_guard();
+        let vault = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap().path().join("config.json");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cfg,
+            format!(r#"{{"version":1,"sotvault":"{}"}}"#, vault.path().display()),
+        )
+        .unwrap();
+        std::env::set_var("NOTEMD_SHARED_CONFIG", &cfg);
+
+        let (mut to_plugin, plugin_stdin) = tokio::io::duplex(16 * 1024);
+        let (plugin_stdout, from_plugin) = tokio::io::duplex(16 * 1024);
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(sdk::serve_io(
+                    ClaudeAgentPlugin::new(),
+                    plugin_stdin,
+                    plugin_stdout,
+                ));
+        });
+
+        to_plugin
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:run-task\"}}\n\
+                  {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"command.execute\",\"params\":{\"command\":\"run-task\",\"context\":{\"task\":\"selfcheck\",\"notify\":{\"title_ok\":\"a\"}}}}\n",
+            )
+            .await
+            .unwrap();
+
+        let answered = await_response(
+            from_plugin,
+            |v| v.get("id").and_then(|i| i.as_u64()) == Some(2),
+            "run-task",
+        )
+        .await;
+        let err = answered["error"]["message"].as_str().unwrap_or_default();
+        assert!(err.contains("notify"), "err: {err}");
+        std::env::remove_var("NOTEMD_SHARED_CONFIG");
     }
 
     #[test]

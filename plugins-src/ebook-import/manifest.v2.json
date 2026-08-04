@@ -79,8 +79,7 @@
     "vault.read",
     "vault.write",
     "editor.open",
-    "agent",
-    "notify"
+    "agent"
   ],
   "request_timeout_seconds": 300,
   "i18n": {

@@ -118,7 +118,8 @@ ebook-import UI ── plugin.ai_read_start ──▶ ebook-import 后端(FIFO �
 | 任务被占(锁) | 进 FIFO 排队,不报错 |
 | run 完成但摘要文件缺失 | 按失败处理 |
 | 超时/agent 失败 | record 状态透传,行内失败 + 失败提醒 |
-| 窗口关闭 | 后端继续轮询、照常发提醒;点提醒直接开 md,不依赖窗口 |
+| 窗口关闭 | 导入窗口一关,宿主 `WindowEvent::Destroyed` 就 `deactivate()` 掉 ebook-import 进程,行内进度不再更新;但**提醒由 claude-agent 发**(`run-task` 的 `notify` 规格),与 ebook-import 窗口生死无关。点提醒直接开 md,不依赖窗口 |
+| claude-agent 窗口被开过又关掉 | 该进程同样被 Destroyed 拆掉,在跑的 run 被中断、提醒不发(已知残留边界,接受) |
 | app 退出 | detached run 继续写摘要,提醒丢失(接受) |
 
 ### 7. 测试与发布
