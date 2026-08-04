@@ -63,3 +63,87 @@ export function vaultExists(path: string): Promise<{ exists: boolean }> {
 export function vaultList(path: string): Promise<{ entries: { name: string; is_dir: boolean }[] }> {
   return bridge().request('host.vault.list', { path })
 }
+
+/**
+ * `host.vault.remove` — deletes ONE file (vault-relative path).
+ *
+ * Host semantics worth knowing at the call site: a directory is refused (only
+ * `remove_file` is ever called), a path that doesn't exist resolves as success
+ * (idempotent, so a retry after a partial failure is safe), and a symlink is
+ * removed as the link itself — never followed to its target.
+ */
+export function vaultRemove(path: string): Promise<{ ok: true }> {
+  return bridge().request('host.vault.remove', { path })
+}
+
+/**
+ * The tray reminder claude-agent pushes when a run reaches a terminal state.
+ *
+ * ALL FOUR fields are required — claude-agent deserializes this into a struct
+ * with no defaults and fails the whole `run-task` call on a missing key (see
+ * `NotifySpec` in plugins-src/claude-agent/backend/src/plugin.rs). `open_path`
+ * and `expect_file` must be ABSOLUTE: the first is handed to the host's
+ * reminder registry, the second is `is_file()`-checked to decide whether a
+ * `success` record actually delivered anything.
+ *
+ * The reminder is sent by claude-agent, NOT by this plugin, and that is the
+ * whole point: a plugin with an open window is torn down when that window
+ * closes, which would take its reminder with it. claude-agent is resident, so
+ * the run — and the notification — outlive this window. (Hence also: no
+ * `notify` capability in our manifest. The tray registry does not deduplicate,
+ * so a second push from here would show the user two reminders for one run.)
+ */
+export interface AgentNotify {
+  title_ok: string
+  title_fail: string
+  open_path: string
+  expect_file: string
+}
+
+export interface AgentRunParams {
+  /** Task id under `.notemd/agent-tasks/` — `idea-proof` for this plugin. */
+  task: string
+  /** Extra prompt text, appended to the task template's own prompt. */
+  prompt?: string
+  /** ABSOLUTE path of the file the run is about. claude-agent `canonicalize`s
+   *  it, so the file MUST already exist — flush the editor to disk first. */
+  note_path: string
+  notify: AgentNotify
+}
+
+/**
+ * `host.agent.run` → `{ run_id }`. The host relays this verbatim to the
+ * resident `notemd.claude-agent` plugin (capability `agent`).
+ *
+ * When claude-agent is not installed or cannot be activated, the rejection's
+ * message is prefixed `agent_unavailable:` — there is no dedicated error code
+ * (it arrives as the generic -32000), so the prefix is the only thing that
+ * distinguishes "no agent" from "the run was refused".
+ */
+export function agentRun(params: AgentRunParams): Promise<{ run_id: string }> {
+  return bridge().request('host.agent.run', params)
+}
+
+/**
+ * `host.agent.status` → `{state:'done',record}` / `{state:'running',steps,last}`
+ * / `{state:'lost'}`. Interpretation lives in `agent-client.ts`.
+ *
+ * `task` is a required argument of this wrapper on purpose: claude-agent's own
+ * handler DEFAULTS a missing `task` to `answer-note-question`, so an omitted
+ * one doesn't fail — it silently reports on the wrong task's run directory.
+ */
+export function agentStatus(task: string, runId: string): Promise<unknown> {
+  return bridge().request('host.agent.status', { task, run_id: runId })
+}
+
+/**
+ * `host.vault.rename` — moves a file within the vault (both ends vault-relative).
+ *
+ * NEVER clobbers: an existing `to` rejects with an "exists" error and leaves
+ * both ends untouched (the host does the check atomically), so a caller may
+ * treat rejection as "that name is spoken for" without racing anything.
+ * Missing parent directories of `to` are created.
+ */
+export function vaultRename(from: string, to: string): Promise<{ ok: true }> {
+  return bridge().request('host.vault.rename', { from, to })
+}

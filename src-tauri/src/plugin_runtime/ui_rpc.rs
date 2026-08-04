@@ -388,6 +388,8 @@ pub async fn dispatch_with(
         "host.vault.exists" => vault_exists(services, &req.params),
         "host.vault.list" => vault_list(services, &req.params),
         "host.vault.mkdir" => vault_mkdir(services, &req.params),
+        "host.vault.remove" => vault_remove(services, &req.params),
+        "host.vault.rename" => vault_rename(services, &req.params),
         "host.editor.open" => editor_open(services, &req.params),
         "host.agent.run"    => services.agent_execute("run-task", req.params.clone()),
         "host.agent.status" => services.agent_execute("run-status", req.params.clone()),
@@ -547,18 +549,11 @@ pub(crate) fn vault_info(services: &dyn HostServices) -> serde_json::Value {
     }
 }
 
-/// Resolve a plugin-supplied vault-relative `path` to an absolute path that is
-/// guaranteed to stay within the vault root:
-/// 1. lexical: absolute paths and any `..` segment are rejected outright;
-/// 2. canonicalize-containment: the deepest EXISTING ancestor (write targets
-///    may not exist yet) is canonicalized and must remain under the
-///    canonicalized root — this also defeats symlink escapes.
-fn resolve_in_vault(services: &dyn HostServices, params: &serde_json::Value) -> Result<PathBuf, String> {
-    let root = services
-        .vault_root()
-        .ok_or_else(|| "vault_required: configure a Vault first".to_string())?;
-    let rel_raw = req_str(params, "path")?.trim();
-    let rel_path = Path::new(rel_raw);
+/// Vault-relative-path sanitization shared by [`resolve_in_vault`] and
+/// [`vault_leaf_path`]: rejects absolute paths and any `..` segment,
+/// collapses `.`. Pure and lexical — no filesystem access, no canonicalize.
+fn sanitize_rel(rel_raw: &str) -> Result<PathBuf, String> {
+    let rel_path = Path::new(rel_raw.trim());
     if rel_path.is_absolute() {
         return Err("io: path must be vault-relative".into());
     }
@@ -574,10 +569,57 @@ fn resolve_in_vault(services: &dyn HostServices, params: &serde_json::Value) -> 
             }
         }
     }
+    Ok(rel)
+}
+
+/// Resolve a plugin-supplied vault-relative `path` to an absolute path that is
+/// guaranteed to stay within the vault root:
+/// 1. lexical: absolute paths and any `..` segment are rejected outright;
+/// 2. canonicalize-containment: the deepest EXISTING ancestor (write targets
+///    may not exist yet) is canonicalized and must remain under the
+///    canonicalized root — this also defeats symlink escapes.
+///
+/// NOTE: step 2 canonicalizes the WHOLE path, including the final component —
+/// i.e. if `path` names a live symlink, the returned `PathBuf` is the link's
+/// resolved TARGET, not the link itself. That is exactly right for read/write
+/// (follow the link, act on its content) but wrong for an operation that must
+/// act on the directory ENTRY itself (delete/rename a link without touching
+/// whatever it points to) — those callers must use [`vault_leaf_path`] instead.
+fn resolve_in_vault(services: &dyn HostServices, params: &serde_json::Value) -> Result<PathBuf, String> {
+    let root = services
+        .vault_root()
+        .ok_or_else(|| "vault_required: configure a Vault first".to_string())?;
+    let rel = sanitize_rel(req_str(params, "path")?)?;
     let root_c = root
         .canonicalize()
         .map_err(|e| format!("io: vault root unavailable: {e}"))?;
     contained_in(&root_c, root_c.join(&rel))
+}
+
+/// Like [`resolve_in_vault`], but for operations that must act on the leaf
+/// ENTRY itself — `host.vault.remove` / `host.vault.rename` — rather than
+/// whatever a symlink at that leaf resolves to.
+///
+/// `resolve_in_vault`'s canonicalize-the-whole-path semantics dereference the
+/// final component: a live symlink `link.md -> real.md` (both inside the
+/// vault, so no escape) would resolve to `real.md`'s path, silently
+/// redirecting a delete/rename onto a DIFFERENT file the caller never named —
+/// exactly the "wrong file" bug that motivates this function.
+///
+/// It still runs the full `resolve_in_vault` fence first (result discarded,
+/// checked for `Err` only), so a genuine escape is rejected exactly as before
+/// — including via a symlinked ANCESTOR directory, or a leaf symlink whose
+/// target lies outside the vault. Only once that fence has passed does it
+/// re-join the same sanitized relative path onto the (uncanonicalized) vault
+/// root, so the final component is never resolved: `symlink_metadata` /
+/// `remove_file` / `rename` on the result see the entry itself.
+fn vault_leaf_path(services: &dyn HostServices, params: &serde_json::Value) -> Result<PathBuf, String> {
+    resolve_in_vault(services, params)?;
+    let root = services
+        .vault_root()
+        .ok_or_else(|| "vault_required: configure a Vault first".to_string())?;
+    let rel = sanitize_rel(req_str(params, "path")?)?;
+    Ok(root.join(rel))
 }
 
 /// Step 2 of the fence, on its own so callers that start from an ABSOLUTE path
@@ -738,6 +780,76 @@ pub(crate) fn vault_list(services: &dyn HostServices, params: &serde_json::Value
 pub(crate) fn vault_mkdir(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
     let p = resolve_in_vault(services, params)?;
     std::fs::create_dir_all(&p).map_err(|e| format!("io: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// `{ path } → { ok: true }`. 只删文件:目录要靠别的方式清理,插件误传一个
+/// 目录名不该把整棵子树带走。目标不存在按成功处理(幂等,调用方重试安全)。
+///
+/// Uses [`vault_leaf_path`], NOT `resolve_in_vault`: `path` naming a live
+/// symlink must remove the LINK entry itself, never dereference it and delete
+/// whatever it points to (see `vault_leaf_path`'s doc). `symlink_metadata`
+/// (not `metadata`) is what makes that possible — it reports the link itself
+/// instead of following it, so a symlink is caught by neither the "already
+/// gone" nor the "is a directory" arm below and falls straight to
+/// `remove_file`, which likewise removes the link entry, not its target.
+pub(crate) fn vault_remove(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let p = vault_leaf_path(services, params)?;
+    match std::fs::symlink_metadata(&p) {
+        Err(_) => return Ok(serde_json::json!({ "ok": true })), // 已不存在
+        Ok(m) if m.is_dir() => return Err("io: refusing to remove a directory".into()),
+        Ok(_) => {}
+    }
+    std::fs::remove_file(&p).map_err(|e| format!("io: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// `{ from, to } → { ok: true }`。两端都过 vault 围栏;目标已存在一律报错而不
+/// 覆盖 —— 重命名撞名时静默吃掉用户的另一个文件是不可接受的。
+///
+/// Both ends resolve through [`vault_leaf_path`] (not `resolve_in_vault`): a
+/// live symlink named by `from` or `to` must be moved/targeted as the link
+/// entry itself, not silently redirected onto whatever it points to.
+///
+/// The "must not already exist" check is an atomic `O_EXCL` create
+/// (`create_new(true)`), not `to.exists()` followed by `rename` — two bugs in
+/// one fix:
+/// - TOCTOU: `exists()` then `rename` leaves a window where a concurrently
+///   created `to` gets silently overwritten (POSIX `rename` clobbers its
+///   destination unconditionally). `create_new` performs the "does it exist"
+///   check and the create atomically at the OS level.
+/// - dangling symlinks: `Path::exists()` follows symlinks, so a dangling one
+///   at `to` reads as "doesn't exist" and would be silently clobbered.
+///   `create_new`'s `O_EXCL` fails on ANY existing directory entry at `to` —
+///   symlink, dangling or not — exactly like `symlink_metadata` used for the
+///   same reason in `vault_remove`.
+///
+/// The placeholder file `create_new` leaves at `to` is what `rename`
+/// atomically replaces immediately after — and if that `rename` fails (most
+/// commonly: `from` doesn't exist), the placeholder is explicitly removed
+/// before the error is returned, so a failed rename never leaves behind a
+/// 0-byte file the user never created.
+pub(crate) fn vault_rename(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let from = vault_leaf_path(services, &serde_json::json!({ "path": req_str(params, "from")? }))?;
+    let to = vault_leaf_path(services, &serde_json::json!({ "path": req_str(params, "to")? }))?;
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("io: {e}"))?;
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&to)
+        .map_err(|_| "io: destination already exists".to_string())?;
+    // If `rename` fails (most commonly: `from` doesn't exist — a stale UI
+    // state, a concurrent delete, a typo'd path), the placeholder file
+    // `create_new` just planted at `to` must not be left behind: that would
+    // be a 0-byte file the user never created, silently appearing in the
+    // vault. Best-effort cleanup — a failed remove here must not shadow the
+    // real rename error.
+    if let Err(e) = std::fs::rename(&from, &to) {
+        let _ = std::fs::remove_file(&to);
+        return Err(format!("io: {e}"));
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -1294,6 +1406,181 @@ mod tests {
         assert!(r.error.is_none(), "{:?}", r.error);
         let mode = std::fs::metadata(dir.path().join("note.md")).unwrap().permissions().mode();
         assert_eq!(mode & 0o111, 0, "a plain .md must not become executable, got {mode:o}");
+    }
+
+    #[tokio::test]
+    async fn vault_remove_deletes_files_and_refuses_directories() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("a.md"), "x").unwrap();
+        std::fs::create_dir(vault.path().join("sub")).unwrap();
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+        // 有 capability → 删除成功
+        let r = run_as(&s, "p.id", &["vault.write"], "host.vault.remove", serde_json::json!({"path": "a.md"})).await;
+        assert_eq!(r.result.unwrap()["ok"], true);
+        assert!(!vault.path().join("a.md").exists());
+        // 幂等:再删一次仍然 ok
+        let r = run_as(&s, "p.id", &["vault.write"], "host.vault.remove", serde_json::json!({"path": "a.md"})).await;
+        assert_eq!(r.result.unwrap()["ok"], true);
+        // 目录 → 拒绝
+        let r = run_as(&s, "p.id", &["vault.write"], "host.vault.remove", serde_json::json!({"path": "sub"})).await;
+        assert!(r.error.unwrap().message.contains("directory"));
+        // 无 capability → -32001
+        let r = run_as(&s, "p.id", &[], "host.vault.remove", serde_json::json!({"path": "b.md"})).await;
+        assert_eq!(r.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+        // 越界 → 错误
+        let r = run_as(&s, "p.id", &["vault.write"], "host.vault.remove", serde_json::json!({"path": "../x"})).await;
+        assert!(r.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn vault_rename_moves_within_vault_and_never_clobbers() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("a.md"), "x").unwrap();
+        std::fs::write(vault.path().join("taken.md"), "y").unwrap();
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "a.md", "to": "sub/b.md"}),
+        )
+        .await;
+        assert_eq!(r.result.unwrap()["ok"], true);
+        assert!(vault.path().join("sub/b.md").exists());
+        assert!(!vault.path().join("a.md").exists());
+        // 目标已存在 → 不覆盖
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "sub/b.md", "to": "taken.md"}),
+        )
+        .await;
+        assert!(r.error.unwrap().message.contains("exists"));
+        assert_eq!(std::fs::read_to_string(vault.path().join("taken.md")).unwrap(), "y");
+        // 两端都过校验
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "sub/b.md", "to": "../out.md"}),
+        )
+        .await;
+        assert!(r.error.is_some());
+    }
+
+    /// Regression for the "wrong file" bug: `resolve_in_vault` canonicalizes
+    /// the final path component, so acting on its result for a LIVE symlink
+    /// (target also inside the vault — not an escape) would silently
+    /// delete/rename the symlink's TARGET instead of the link entry the
+    /// caller named. `vault_remove`/`vault_rename` must operate on the entry
+    /// itself; the real file behind it must never be touched.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vault_remove_and_rename_on_a_live_symlink_never_touch_the_target() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("real.md"), "real content").unwrap();
+        if std::os::unix::fs::symlink("real.md", vault.path().join("link.md")).is_err() {
+            eprintln!("skipping: symlink creation not supported here");
+            return;
+        }
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+
+        // remove the link → the link entry is gone, real.md is untouched.
+        let r = run_as(&s, "p.id", &["vault.write"], "host.vault.remove", serde_json::json!({"path": "link.md"})).await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert_eq!(r.result.unwrap()["ok"], true);
+        assert!(
+            std::fs::symlink_metadata(vault.path().join("link.md")).is_err(),
+            "the link entry must be gone"
+        );
+        assert_eq!(
+            std::fs::read_to_string(vault.path().join("real.md")).unwrap(),
+            "real content",
+            "the symlink's target must survive a remove of the link"
+        );
+
+        // rename a fresh link → only the link entry moves, real.md is untouched.
+        std::os::unix::fs::symlink("real.md", vault.path().join("link2.md")).unwrap();
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "link2.md", "to": "moved-link.md"}),
+        )
+        .await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert_eq!(r.result.unwrap()["ok"], true);
+        assert!(std::fs::symlink_metadata(vault.path().join("link2.md")).is_err());
+        let moved_meta = std::fs::symlink_metadata(vault.path().join("moved-link.md")).unwrap();
+        assert!(moved_meta.file_type().is_symlink(), "the moved entry must still be a symlink");
+        assert_eq!(
+            std::fs::read_to_string(vault.path().join("real.md")).unwrap(),
+            "real content",
+            "the symlink's target must survive a rename of the link"
+        );
+    }
+
+    /// Regression: `Path::exists()` follows symlinks, so a DANGLING symlink at
+    /// `to` (directory entry present, target missing) reads as "doesn't
+    /// exist" and would be silently clobbered by a naive `exists()` +
+    /// `rename` check. The atomic `create_new` guard must reject it exactly
+    /// like a normal existing file.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vault_rename_refuses_to_clobber_a_dangling_symlink_destination() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("a.md"), "x").unwrap();
+        if std::os::unix::fs::symlink("nonexistent-target.md", vault.path().join("dead.md")).is_err() {
+            eprintln!("skipping: symlink creation not supported here");
+            return;
+        }
+        assert!(!vault.path().join("dead.md").exists(), "sanity: exists() must read a dangling link as absent");
+
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "a.md", "to": "dead.md"}),
+        )
+        .await;
+        assert!(r.error.unwrap().message.contains("exists"));
+        assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "x", "source must be untouched");
+        assert!(
+            std::fs::symlink_metadata(vault.path().join("dead.md")).unwrap().file_type().is_symlink(),
+            "the dangling symlink at `to` must survive, unclobbered"
+        );
+    }
+
+    /// Regression: `create_new` plants a 0-byte placeholder at `to` BEFORE
+    /// `rename` runs. If `rename` then fails — most commonly because `from`
+    /// doesn't exist (stale UI state, a concurrent delete, a typo) — that
+    /// placeholder must be cleaned up, not left behind as a ghost file the
+    /// user never created.
+    #[tokio::test]
+    async fn vault_rename_cleans_up_the_placeholder_when_from_is_missing() {
+        let vault = tempfile::tempdir().unwrap();
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "nope.md", "to": "dest.md"}),
+        )
+        .await;
+        assert!(r.error.is_some());
+        assert!(
+            !vault.path().join("dest.md").exists(),
+            "a failed rename must not leave a ghost file at `to`"
+        );
     }
 
     #[tokio::test]

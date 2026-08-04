@@ -17,20 +17,36 @@
 // kit.css `@import`s ../styles/editor-base.css, so the one emitted stylesheet
 // carries the shared editor skin as well (see the note at the top of kit.css).
 import './kit.css'
-import { mountRich, setKitBaseDir } from './rich'
+import { mountRich, setKitBaseDir, setRichPlaceholder } from './rich'
 import { mountSource, type SourcePane } from './source'
 import { loadVaultRoot } from './media'
 import { applyKitTheme, watchKitTheme } from './theme'
 
 export type KitMode = 'rich' | 'source'
 
-/** v1 API — frozen. Breaking changes ship as `editor-kit-v2.js`. */
+/**
+ * v1 API — frozen. Breaking changes ship as `editor-kit-v2.js`.
+ *
+ * "Frozen" means no existing member changes shape; ADDING a member is
+ * backward compatible (every consumer written against the older surface keeps
+ * working untouched) and stays in v1 — `setPlaceholder` arrived that way.
+ */
 export interface KitEditor {
   getMarkdown(): string
   setMarkdown(md: string): void
   getMode(): KitMode
   /** Switches panes. Flushes any pending `onChange` first (see below). */
   setMode(m: KitMode): Promise<void>
+  /**
+   * Replaces the hint shown in an empty buffer, in whichever mode is live —
+   * and for every later mode switch, since the kit remembers it in place of
+   * `opts.placeholder`.
+   *
+   * Needed because `KitOptions.placeholder` is read once at mount: a consumer
+   * that rotates its hint (Idea Spark shows a different prompt on every new
+   * document) would otherwise be stuck on the text the window opened with.
+   */
+  setPlaceholder(text: string): void
   focus(): void
   /** Tears the editor down. Flushes any pending `onChange` first (see below). */
   destroy(): void
@@ -54,7 +70,10 @@ export interface KitOptions {
    * never loses the last edits to a mode switch or a closing window.
    */
   onChange?: (md: string) => void
-  /** Hint shown in an empty source-mode buffer. */
+  /**
+   * Hint shown in an empty buffer, in either rich or source mode. Read once,
+   * at mount; call `setPlaceholder()` to change it afterwards.
+   */
   placeholder?: string
   /**
    * Vault-relative directory of the document being edited, used to resolve
@@ -115,6 +134,10 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
 
   let markdown = opts.initialMarkdown
   let mode: KitMode = opts.mode ?? 'rich'
+  // Kept in a local, NOT read off `opts` at every mount: `setPlaceholder` has
+  // to survive the re-mount `setMode` performs, and `opts` is the caller's
+  // object — which the kit must not write into.
+  let placeholder = opts.placeholder
 
   const host = document.createElement('div')
   host.className = 'kit-host'
@@ -129,8 +152,8 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
     rich?.destroy(); rich = null
     source?.destroy(); source = null
     host.innerHTML = ''
-    if (mode === 'rich') rich = await mountRich(host, markdown, root, emit)
-    else source = mountSource(host, markdown, emit, opts.placeholder)
+    if (mode === 'rich') rich = await mountRich(host, markdown, root, emit, placeholder)
+    else source = mountSource(host, markdown, emit, placeholder)
   }
 
   await mountCurrent()
@@ -165,6 +188,13 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
       else source?.setValue(md)
     },
     getMode: () => mode,
+    setPlaceholder: (text) => {
+      placeholder = text
+      // The live pane is updated in place — re-mounting to change a hint would
+      // throw away the caret, the selection and the undo history.
+      if (mode === 'rich') { if (rich) setRichPlaceholder(rich, text) }
+      else source?.setPlaceholder(text)
+    },
     setMode: async (m) => {
       if (m === mode) return
       flush()

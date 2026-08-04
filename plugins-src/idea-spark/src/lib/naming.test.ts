@@ -1,6 +1,49 @@
 import { describe, it, expect } from 'vitest'
 import { isReservedConceptName } from './okf/concept'
-import { slugFromMarkdown, ideaFileName, proofPathFor } from './naming'
+import { slugFromMarkdown, ideaFileName, proofPathFor, timestampFileName, titleFromMarkdown } from './naming'
+
+// The inbox's row label. Unlike `slugFromMarkdown` (a file-name generator)
+// this one must hand back the title AS WRITTEN — a label that silently swaps
+// spaces for hyphens and cuts at 40 characters is not the document's title.
+describe('titleFromMarkdown', () => {
+  it('takes the H1 and keeps its spaces and punctuation', () => {
+    expect(titleFromMarkdown('# Ship the thing, quickly!\n\nbody')).toBe('Ship the thing, quickly!')
+  })
+
+  it('takes a plain first line when there is no heading', () => {
+    expect(titleFromMarkdown('这只是一段普通话,不是标题。\n\n# 后面才是标题')).toBe(
+      '这只是一段普通话,不是标题。',
+    )
+  })
+
+  it('skips a leading frontmatter block', () => {
+    expect(titleFromMarkdown('---\ntype: Idea\n---\n\n# Real Title\n\nbody')).toBe('Real Title')
+  })
+
+  it('strips quote markers and list bullets, not the text', () => {
+    expect(titleFromMarkdown('> quoted opener')).toBe('quoted opener')
+    expect(titleFromMarkdown('- first bullet')).toBe('first bullet')
+    expect(titleFromMarkdown('1. numbered opener')).toBe('numbered opener')
+    expect(titleFromMarkdown('#### deep heading')).toBe('deep heading')
+  })
+
+  it('keeps characters a FILE NAME would have to drop', () => {
+    expect(titleFromMarkdown('# 50% off: "why not?"')).toBe('50% off: "why not?"')
+  })
+
+  it('does not truncate a long title (the column ellipsizes in CSS instead)', () => {
+    const long = 'x'.repeat(120)
+    expect(titleFromMarkdown(`# ${long}`)).toBe(long)
+  })
+
+  it('is null when there is no usable text at all', () => {
+    expect(titleFromMarkdown('')).toBeNull()
+    expect(titleFromMarkdown('\n\n   \n')).toBeNull()
+    expect(titleFromMarkdown('---\ntype: Idea\n---\n')).toBeNull()
+    // A heading marker with nothing after it is not a title either.
+    expect(titleFromMarkdown('#')).toBeNull()
+  })
+})
 
 describe('slugFromMarkdown', () => {
   it('takes the first heading line, strips the # marker and collapses whitespace', () => {
@@ -94,6 +137,20 @@ describe('ideaFileName', () => {
       const name = ideaFileName(md, today, new Set())
       expect(isReservedConceptName(name)).toBe(false)
     }
+  })
+})
+
+describe('timestampFileName', () => {
+  const at = new Date(2026, 7, 4, 19, 42) // 本地时间 2026-08-04 19:42
+  it('names by creation minute, not by title', () => {
+    expect(timestampFileName(at, new Set())).toBe('2026-08-04-1942-idea.md')
+  })
+  it('pads single-digit month/day/hour/minute', () => {
+    expect(timestampFileName(new Date(2026, 0, 2, 3, 4), new Set())).toBe('2026-01-02-0304-idea.md')
+  })
+  it('suffixes on collision inside the same minute', () => {
+    const taken = new Set(['2026-08-04-1942-idea.md', '2026-08-04-1942-idea-2.md'])
+    expect(timestampFileName(at, taken)).toBe('2026-08-04-1942-idea-3.md')
   })
 })
 

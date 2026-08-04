@@ -9,16 +9,30 @@ export interface SparkState {
   ideaDir: string
   /** ideaRelPath → run_id, for ideas currently being argued by claude-agent. */
   pendingRuns: Record<string, string>
+  /** Whether the inbox panel is expanded. */
+  inboxOpen: boolean
+  /** Rotation counter for the blank-document placeholder line (`placeholder.ts`). */
+  placeholderSeq: number
 }
 
-export const DEFAULT_STATE: SparkState = { ideaDir: 'inbox/ideas', pendingRuns: {} }
+export const DEFAULT_STATE: SparkState = {
+  ideaDir: 'inbox/ideas',
+  pendingRuns: {},
+  inboxOpen: false,
+  placeholderSeq: 0,
+}
 
 export const STATE_PATH = '.notemd/idea-spark.json'
 
 /** Fresh copy of the defaults — never hand out `DEFAULT_STATE` itself, since
  *  `pendingRuns` is a mutable object callers might write into. */
 function defaultState(): SparkState {
-  return { ideaDir: DEFAULT_STATE.ideaDir, pendingRuns: {} }
+  return {
+    ideaDir: DEFAULT_STATE.ideaDir,
+    pendingRuns: {},
+    inboxOpen: DEFAULT_STATE.inboxOpen,
+    placeholderSeq: DEFAULT_STATE.placeholderSeq,
+  }
 }
 
 function isStringRecord(v: unknown): v is Record<string, string> {
@@ -47,7 +61,9 @@ export function parseState(raw: string | null): SparkState {
   const o = parsed as Record<string, unknown>
   const ideaDir = typeof o.ideaDir === 'string' && o.ideaDir.trim() !== '' ? o.ideaDir : DEFAULT_STATE.ideaDir
   const pendingRuns = isStringRecord(o.pendingRuns) ? o.pendingRuns : {}
-  return { ideaDir, pendingRuns }
+  const inboxOpen = o.inboxOpen === true
+  const placeholderSeq = typeof o.placeholderSeq === 'number' && Number.isFinite(o.placeholderSeq) ? o.placeholderSeq : 0
+  return { ideaDir, pendingRuns, inboxOpen, placeholderSeq }
 }
 
 export function serializeState(s: SparkState): string {

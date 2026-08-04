@@ -242,7 +242,7 @@ export const en = {
   'capability.secrets': 'Store and read secrets (API keys, tokens)',
   'capability.storage': 'Store plugin data on this device',
   'capability.vault.read': 'Read files in your Vault',
-  'capability.vault.write': 'Create and modify files in your Vault',
+  'capability.vault.write': 'Create, modify, delete and move files in your Vault',
   'capability.dialog': 'Show open/save file dialogs',
   'capability.clipboard.write': 'Write to the clipboard',
   'capability.location': 'Read your location',

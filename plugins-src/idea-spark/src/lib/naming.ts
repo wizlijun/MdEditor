@@ -9,17 +9,25 @@ import { isReservedConceptName } from './okf/concept'
 const FORBIDDEN_CHARS = /[\\/:*?"<>|#%`]/g
 
 /**
+ * Dead in production as of T7, exactly like `ideaFileName` below (its only
+ * remaining caller, itself dead since T4). It briefly backed the inbox list's
+ * row title; that job moved to `titleFromMarkdown`, which keeps spaces,
+ * punctuation and length instead of mangling them into a file name. Nothing
+ * outside this file's own tests reaches it any more:
+ *   * row titles → `titleFromMarkdown`
+ *   * file names → `timestampFileName`
+ * Kept rather than deleted because this task's brief didn't ask for the
+ * removal; a later cleanup should take both functions out together.
+ *
  * Derives a filename-safe slug from the first non-empty line of a markdown
  * document's *body* — a leading YAML frontmatter block, if present, is
- * skipped first so a saved idea (which always has one once round-tripped
- * through `buildIdeaDoc`) still names itself off its real title instead of
- * the `---` fence (works whether that line is a heading or a plain
- * paragraph — heading markers are stripped as part of the forbidden-
- * character pass, so no special-casing is needed). Falls back to `'idea'`
- * when there is no usable text at all: an empty document, a frontmatter-only
- * document (nothing left after the closing fence), a document whose
- * frontmatter fence is never closed (see `stripLeadingFrontmatter`), or a
- * title made entirely of forbidden characters.
+ * skipped first (works whether that line is a heading or a plain paragraph —
+ * heading markers are stripped as part of the forbidden-character pass, so no
+ * special-casing is needed). Falls back to `'idea'` when there is no usable
+ * text at all: an empty document, a frontmatter-only document (nothing left
+ * after the closing fence), a document whose frontmatter fence is never
+ * closed (see `stripLeadingFrontmatter`), or a title made entirely of
+ * forbidden characters.
  */
 export function slugFromMarkdown(md: string): string {
   const line = firstNonEmptyLine(stripLeadingFrontmatter(md))
@@ -39,6 +47,31 @@ export function slugFromMarkdown(md: string): string {
   if (chars.length <= 40) return cleaned
   const truncated = chars.slice(0, 40).join('').replace(/-+$/g, '')
   return truncated || 'idea'
+}
+
+/**
+ * The document's own title, for *reading*: its first non-empty body line with
+ * the markdown that decorates it stripped — the `#` of a heading, a `>` quote
+ * marker, a `-`/`*`/`+`/`1.` list bullet — and nothing else. Null when the
+ * document has no usable text (empty, frontmatter only, an unclosed fence).
+ *
+ * Deliberately NOT `slugFromMarkdown`, which is a *file name* generator: that
+ * one turns spaces into hyphens, deletes every character a filesystem or
+ * markdown might object to, and hard-truncates at 40 code points. As a row
+ * label those transformations are all damage — `# Ship the thing` would read
+ * `Ship-the-thing` — and the truncation is redundant besides, since the inbox
+ * column already ellipsizes in CSS (which, unlike a cut, *says* that it cut).
+ * Spaces, punctuation and length are therefore left exactly as written.
+ */
+export function titleFromMarkdown(md: string): string | null {
+  const line = firstNonEmptyLine(stripLeadingFrontmatter(md))
+  if (line == null) return null
+  const stripped = line
+    // `#{1,6}` needs the space (or the end of the line) after it, so a line
+    // opening on `#hashtag` keeps its hash — that is a word, not a heading.
+    .replace(/^\s{0,3}(?:#{1,6}(?:\s+|$)|>\s*|[-*+]\s+|\d+[.)]\s+)/, '')
+    .trim()
+  return stripped || null
 }
 
 /**
@@ -80,6 +113,13 @@ function firstNonEmptyLine(md: string): string | null {
 }
 
 /**
+ * Dead in production as of T4: no caller in `store.svelte.ts` reaches this
+ * anymore — new ideas are named by `timestampFileName` instead (title-based
+ * naming was dropped so autosave never has to guess a title before the user
+ * has written one). Kept only for its own tests; left for a later cleanup
+ * task to remove rather than deleted here, since this task's brief didn't
+ * ask for it.
+ *
  * `${today}-${slug}.md`, deduplicated against `taken` (existing filenames in
  * the idea directory) by appending `-2`, `-3`, ... . Also guards against ever
  * returning a reserved concept name (`index.md`/`log.md`) — structurally
@@ -96,6 +136,26 @@ export function ideaFileName(md: string, today: string, taken: Set<string>): str
     n += 1
   }
   return candidate
+}
+
+/**
+ * `YYYY-MM-DD-HHmm-idea.md`, taken from the **creation moment's local time**
+ * (`toISOString()` would name a late-evening idea after tomorrow). Names are
+ * deliberately not derived from the title: autosave writes to disk before the
+ * user has typed a heading, and renaming after the fact would scatter one
+ * idea across several files. A collision (two ideas opened in the same
+ * minute) appends `-2`, `-3`, ….
+ */
+export function timestampFileName(now: Date, taken: Set<string>): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  const base = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}-idea`
+  let name = `${base}.md`
+  let n = 2
+  while (taken.has(name)) {
+    name = `${base}-${n}.md`
+    n += 1
+  }
+  return name
 }
 
 /** `inbox/ideas/a.md` → `inbox/ideas/a.proof.md`. */

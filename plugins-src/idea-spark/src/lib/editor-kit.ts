@@ -21,6 +21,12 @@ export interface KitEditor {
   getMode(): KitMode
   /** Flushes a pending `onChange` before switching panes. */
   setMode(m: KitMode): Promise<void>
+  /**
+   * Replaces the empty-buffer hint in the live pane and for every later mode
+   * switch. `KitOptions.placeholder` is read once at mount, so this is the only
+   * way the rotating prompt on a new idea actually changes what the user sees.
+   */
+  setPlaceholder(text: string): void
   focus(): void
   /** Flushes a pending `onChange` before tearing down. */
   destroy(): void

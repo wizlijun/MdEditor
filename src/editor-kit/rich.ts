@@ -8,10 +8,53 @@
 
 import { createEditor, setDocumentBaseDir, type MorayaEditorInstance } from '@moraya/core'
 import { bridgeMediaResolver } from './media'
+// placeholder-plugin only depends on prosemirror-state/view — zero Tauri IPC,
+// so it clears the kit's dependency allowlist.
+import { placeholderPlugin } from '../lib/placeholder-plugin'
+import type { Plugin } from 'prosemirror-state'
 
 /** Base directory (absolute) used to resolve relative image paths in rich mode. */
 export function setKitBaseDir(absoluteDir: string): void {
   setDocumentBaseDir(absoluteDir)
+}
+
+/**
+ * The placeholder plugin only when a hint was given. Pulled out as a pure
+ * function so the wiring can be checked in a DOM-less test (mounting a real
+ * ProseMirror + moraya editor does not work under jsdom).
+ */
+export function richPlugins(placeholder: string | undefined): Plugin[] {
+  return placeholder ? [placeholderPlugin(placeholder)] : []
+}
+
+/**
+ * The plugin list `plugins` would become if the placeholder said `text`.
+ *
+ * `placeholderPlugin` bakes its text in at construction time (it is closed over
+ * by the `decorations` prop), so changing the hint means building a NEW plugin
+ * and swapping it into the editor's configuration — there is no setter.
+ *
+ * Only the placeholder is touched: the outgoing one is matched by ProseMirror
+ * plugin key (all `placeholderPlugin` instances share one module-level
+ * `PluginKey`, so this is exact and can never catch one of moraya's own
+ * plugins), everything else is carried over in order. Dropping moraya's
+ * plugins here would take the editor's history, input rules and keymaps with
+ * them. Mounting without a placeholder and setting one later works too — the
+ * filter simply matches nothing and the new plugin is appended.
+ *
+ * Pure, and separate from `setRichPlaceholder`, so the swap can be asserted in
+ * a DOM-less test (an `EditorView` needs a real layout engine).
+ */
+export function swapPlaceholder(plugins: readonly Plugin[], text: string): Plugin[] {
+  const next = placeholderPlugin(text)
+  const key = (next as unknown as { key: string }).key
+  return plugins.filter((p) => (p as unknown as { key: string }).key !== key).concat(next)
+}
+
+/** Applies {@link swapPlaceholder} to a live editor. */
+export function setRichPlaceholder(instance: MorayaEditorInstance, text: string): void {
+  const { view } = instance
+  view.updateState(view.state.reconfigure({ plugins: swapPlaceholder(view.state.plugins, text) }))
 }
 
 export async function mountRich(
@@ -19,8 +62,9 @@ export async function mountRich(
   initial: string,
   vaultRoot: string,
   onChange: (md: string) => void,
+  placeholder?: string,
 ): Promise<MorayaEditorInstance> {
-  return createEditor({
+  const instance = await createEditor({
     container: host,
     initialContent: initial,
     mediaResolver: bridgeMediaResolver(vaultRoot),
@@ -41,4 +85,17 @@ export async function mountRich(
     onChange,
     changeDebounceMs: 200,
   })
+
+  // Append the placeholder plugin after mount, same construction as the main
+  // window's editor-append plugins in RichEditor.svelte (`view.updateState(
+  // view.state.reconfigure(...))`).
+  const extra = richPlugins(placeholder)
+  if (extra.length) {
+    instance.view.updateState(
+      instance.view.state.reconfigure({
+        plugins: instance.view.state.plugins.concat(extra),
+      }),
+    )
+  }
+  return instance
 }

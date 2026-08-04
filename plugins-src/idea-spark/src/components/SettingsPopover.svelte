@@ -2,20 +2,45 @@
      ideas are saved into. Validation is live and non-destructive (the save
      button greys out for an empty / absolute / `..`-bearing path via
      `normalizeIdeaDir`), so the store is only ever handed a value that already
-     passed the same check `setIdeaDir` applies. -->
+     passed the same check `setIdeaDir` applies.
+
+     `onbeforecommit` is the flush barrier, and it is not optional: a real
+     directory change DETACHES the open document (`changeIdeaDir` clears
+     `current`/`currentFrontmatter`), so a buffer that is still dirty when the
+     save button is pressed would be written by the next autosave tick as a
+     BRAND NEW file in the NEW directory, with freshly stamped frontmatter,
+     while the original keeps the old text — one idea silently forked in two.
+     This is the only place where a settings action can produce a file.
+
+     It returns a BOOLEAN, and that is the whole point: flushing is not the
+     same as having flushed. `saveNow()` never rejects (`autosave.ts` swallows
+     the write's failure by design), so merely awaiting it would let a failed
+     write through and change the directory anyway — the same fork, narrowed
+     to the "the disk said no" branch. The callback has to assert the
+     postcondition and answer yes/no; `false` aborts, leaving the popover open
+     on the field the user was editing. -->
 <script lang="ts">
-  import { normalizeIdeaDir, saveIdeaDir, state as store } from '../lib/store.svelte'
+  import { commitIdeaDir, normalizeIdeaDir, state as store } from '../lib/store.svelte'
   import { t } from '../lib/strings'
 
-  const { onclose }: { onclose: () => void } = $props()
+  const { onclose, onbeforecommit }: { onclose: () => void; onbeforecommit?: () => Promise<boolean> } =
+    $props()
 
   let value = $state(store.ideaDir)
   const valid = $derived(normalizeIdeaDir(value) !== null)
 
   async function commit(): Promise<void> {
     if (!valid) return
-    await saveIdeaDir(value)
-    onclose()
+    // No callback ⇒ nothing to flush ⇒ proceed. Defaulted to an always-yes
+    // rather than optional-called (`onbeforecommit?.()`), because that yields
+    // `undefined`, which is falsy — an absent barrier would read as a refusal
+    // and the setting could never be saved.
+    const ok = await commitIdeaDir(value, onbeforecommit ?? (async () => true))
+    // Left open on purpose when the commit was refused — by the flush barrier
+    // (the user still has unsaved text, and a toast has said so) or by the
+    // store (see `saveIdeaDir`: it returns false "so the popover can keep the
+    // field open"). Closing would hide a change that did not happen.
+    if (ok) onclose()
   }
 
   function onkeydown(e: KeyboardEvent): void {
@@ -54,7 +79,10 @@
   }
   .popover {
     position: absolute;
-    top: 2.4rem;
+    /* Anchored to the *bottom* action bar (App.svelte `.actionbar`, which is
+       `position: relative`), so it opens upward — measuring from the top would
+       push it off the bottom edge of the window. */
+    bottom: 2.4rem;
     right: 0.75rem;
     z-index: 11;
     width: 300px;

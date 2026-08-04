@@ -30,6 +30,16 @@
   box-sizing: border-box;
 }
 
+/* 空文档的提示文字。规则与主程序 RichEditor.svelte 的同名样式保持一致 ——
+   placeholder-plugin 只挂 data-placeholder,渲染全靠这条。 */
+.kit-host .moraya-editor .is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: color-mix(in srgb, CanvasText 40%, Canvas 60%);
+}
+
 /* ── Source mode ──────────────────────────────────────────────────────────
    A transparent textarea sits exactly on top of a highlighted <pre>: the
    textarea owns caret + editing, the <pre> owns everything visible. Both boxes

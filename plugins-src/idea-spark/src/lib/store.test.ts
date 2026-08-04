@@ -6,25 +6,73 @@
 // assert on the result without a Svelte component tree or a host bridge.
 // The async actions (boot/reload/save/...) are bridge IO and are exercised
 // by hand in the window — see the task report's manual-verification list.
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+
+// The action half (`deleteIdea` / `renameIdea` / …) is bridge IO, and the parts
+// of it worth pinning are its ERROR paths — what the store does when the second
+// of two removals fails, or what `state.current` says while a rename is only
+// half applied. Those can't be reached by hand in a window often enough to
+// trust, so the bridge is stubbed and the actions are driven directly. Declared
+// with `vi.hoisted` because `vi.mock`'s factory is hoisted above the imports.
+const host = vi.hoisted(() => ({
+  request: vi.fn(),
+  agentRun: vi.fn(),
+  agentStatus: vi.fn(),
+  vaultInfo: vi.fn(),
+  vaultRead: vi.fn(),
+  vaultWrite: vi.fn(),
+  vaultExists: vi.fn(),
+  vaultList: vi.fn(),
+  vaultRemove: vi.fn(),
+  vaultRename: vi.fn(),
+}))
+vi.mock('./bridge', () => ({
+  bridge: () => ({ pluginId: 'test', locale: 'en', theme: 'x', request: host.request, onMessage: () => {} }),
+  agentRun: host.agentRun,
+  agentStatus: host.agentStatus,
+  vaultInfo: host.vaultInfo,
+  vaultRead: host.vaultRead,
+  vaultWrite: host.vaultWrite,
+  vaultExists: host.vaultExists,
+  vaultList: host.vaultList,
+  vaultRemove: host.vaultRemove,
+  vaultRename: host.vaultRename,
+}))
+
 import {
   applyRunDone,
   bodyOf,
   changeIdeaDir,
+  clockTime,
+  commitIdeaDir,
+  createdFromName,
   createStore,
+  deleteIdea,
+  filesToDelete,
+  loadIdea,
   frontmatterOf,
   displayName,
   ideaDocText,
   ideaTemplate,
+  isBlank,
   markEdited,
   markPending,
   needsSaveBefore,
   nextFileName,
   rebaseline,
+  reconcilePending,
+  runInFlight,
+  relativeAge,
   relPath,
+  renameIdea,
+  runStatusWord,
+  rowTitle,
   showInEditor,
   setIdeaDir,
+  state,
   statusOf,
+  titleOf,
+  validateRename,
   type SparkStore,
 } from './store.svelte'
 
@@ -239,36 +287,33 @@ describe('setIdeaDir', () => {
 // saves overwrite it", "re-saving preserves created and unknown keys") are
 // pinned by tests instead of only by the bridge-driven action around them.
 describe('nextFileName', () => {
-  it('names a first save from the title and the date, deduped against the directory', () => {
+  it('names a first save by the creation timestamp, deduped against the directory', () => {
     const s = createStore()
-    s.files = ['inbox/ideas/2026-08-04-my-idea.md']
-    expect(nextFileName(s, '# my idea\n\nbody', '2026-08-04')).toBe('2026-08-04-my-idea-2.md')
-  })
-
-  it('only dedupes against names it has actually seen (the disk check backstops it)', () => {
-    // The slug keeps the title's case, so a differently-cased retelling of the
-    // same title is a *different* string here — yet the same file on a
-    // case-insensitive filesystem. `saveIdea`'s `host.vault.exists` pass is
-    // what closes that gap; this pins the pure function's honest limit.
-    const s = createStore()
-    s.files = ['inbox/ideas/2026-08-04-my-idea.md']
-    expect(nextFileName(s, '# My Idea', '2026-08-04')).toBe('2026-08-04-My-Idea.md')
+    const at = new Date(2026, 7, 4, 19, 42).toISOString()
+    s.files = ['inbox/ideas/2026-08-04-1942-idea.md']
+    expect(nextFileName(s, '# my idea\n\nbody', at)).toBe('2026-08-04-1942-idea-2.md')
   })
 
   it('dedupes against non-idea files in the directory too', () => {
     const s = createStore()
-    // An orphaned sidecar occupies the name just as much as an idea does.
-    s.files = ['inbox/ideas/2026-08-04-a.proof.md']
-    expect(nextFileName(s, '# a', '2026-08-04')).toBe('2026-08-04-a.md')
-    s.files = ['inbox/ideas/2026-08-04-a.md', 'inbox/ideas/2026-08-04-a.proof.md']
-    expect(nextFileName(s, '# a', '2026-08-04')).toBe('2026-08-04-a-2.md')
+    const at = new Date(2026, 7, 4, 19, 42).toISOString()
+    // An orphaned sidecar from a *different* minute does not occupy this
+    // minute's name...
+    s.files = ['inbox/ideas/2026-08-04-1941-idea.proof.md']
+    expect(nextFileName(s, '# a', at)).toBe('2026-08-04-1942-idea.md')
+    // ...but an exact-name collision — idea or sidecar alike — does.
+    s.files = ['inbox/ideas/2026-08-04-1942-idea.md', 'inbox/ideas/2026-08-04-1942-idea.proof.md']
+    expect(nextFileName(s, '# a', at)).toBe('2026-08-04-1942-idea-2.md')
   })
 
-  it('keeps the current file name once the idea has been saved, retitled or not', () => {
+  it('names a never-saved idea by timestamp and keeps the name afterwards', () => {
     const s = createStore()
-    s.current = '2026-08-04-my-idea.md'
-    expect(nextFileName(s, '# A completely different title', '2026-08-05')).toBe(
-      '2026-08-04-my-idea.md',
+    s.ideaDir = 'inbox/ideas'
+    const at = new Date(2026, 7, 4, 19, 42).toISOString()
+    expect(nextFileName(s, '# 随便什么标题', at)).toBe('2026-08-04-1942-idea.md')
+    s.current = '2026-08-04-1942-idea.md'
+    expect(nextFileName(s, '# 改了标题', new Date(2026, 7, 5, 8, 0).toISOString())).toBe(
+      '2026-08-04-1942-idea.md',
     )
   })
 })
@@ -432,11 +477,35 @@ describe('relPath', () => {
 })
 
 describe('ideaTemplate', () => {
-  it('opens with the localized H1 and carries the four sections in order', () => {
-    const tpl = ideaTemplate()
-    expect(tpl.startsWith('# New idea\n')).toBe(true)
-    const headings = tpl.split('\n').filter((l) => l.startsWith('## '))
-    expect(headings).toEqual(['## Domain', '## Transfer', '## Resources', '## Outcome'])
+  it('starts a new idea blank — no template', () => {
+    expect(ideaTemplate()).toBe('')
+  })
+})
+
+describe('isBlank', () => {
+  it('is true for an empty document (what a fresh draft holds)', () => {
+    expect(isBlank('')).toBe(true)
+  })
+
+  it('is true for whitespace only — a stray newline is not an idea', () => {
+    expect(isBlank('\n')).toBe(true)
+    expect(isBlank('   \n\t \r\n')).toBe(true)
+  })
+
+  it('is false as soon as there is any real content', () => {
+    expect(isBlank('a')).toBe(false)
+    expect(isBlank('\n\n  x  \n')).toBe(false)
+  })
+})
+
+describe('clockTime', () => {
+  it('is local HH:mm, zero-padded on both fields', () => {
+    expect(clockTime(new Date(2026, 7, 4, 9, 5))).toBe('09:05')
+    expect(clockTime(new Date(2026, 7, 4, 19, 42))).toBe('19:42')
+  })
+
+  it('renders midnight as 00:00, not 24:00', () => {
+    expect(clockTime(new Date(2026, 7, 4, 0, 0))).toBe('00:00')
   })
 })
 
@@ -483,5 +552,609 @@ describe('displayName', () => {
 
   it('keeps the date when it is all there is', () => {
     expect(displayName('2026-08-04.md')).toBe('2026-08-04')
+  })
+})
+
+// ── inbox: deletion, renaming, row labels ───────────────────────────────────
+
+describe('filesToDelete', () => {
+  it('includes the proof sidecar when it exists', () => {
+    const s = createStore()
+    s.ideaDir = 'inbox/ideas'
+    s.files = ['inbox/ideas/a.md', 'inbox/ideas/a.proof.md', 'inbox/ideas/b.md']
+    expect(filesToDelete(s, 'a.md')).toEqual(['inbox/ideas/a.md', 'inbox/ideas/a.proof.md'])
+    expect(filesToDelete(s, 'b.md')).toEqual(['inbox/ideas/b.md'])
+  })
+
+  it('lists the idea even when the listing never saw it (a stale panel row)', () => {
+    const s = createStore()
+    s.ideaDir = 'inbox/ideas'
+    s.files = []
+    expect(filesToDelete(s, 'a.md')).toEqual(['inbox/ideas/a.md'])
+  })
+})
+
+describe('validateRename', () => {
+  const s = createStore()
+  s.ideaDir = 'inbox/ideas'
+  s.files = ['inbox/ideas/a.md', 'inbox/ideas/taken.md']
+
+  it('appends .md and accepts a free name', () => {
+    expect(validateRename(s, 'a.md', '新名字')).toEqual({ ok: true, name: '新名字.md' })
+    expect(validateRename(s, 'a.md', '新名字.md')).toEqual({ ok: true, name: '新名字.md' })
+  })
+
+  it('renaming to its own name is fine', () => {
+    expect(validateRename(s, 'a.md', 'a')).toEqual({ ok: true, name: 'a.md' })
+  })
+
+  it('trims the surrounding whitespace before judging the name', () => {
+    expect(validateRename(s, 'a.md', '  spaced  ')).toEqual({ ok: true, name: 'spaced.md' })
+  })
+
+  it('rejects empty, slashes, leading dots and taken names', () => {
+    expect(validateRename(s, 'a.md', '   ')).toEqual({ ok: false, reason: 'empty' })
+    expect(validateRename(s, 'a.md', 'x/y')).toEqual({ ok: false, reason: 'slash' })
+    expect(validateRename(s, 'a.md', '.hidden')).toEqual({ ok: false, reason: 'dot' })
+    expect(validateRename(s, 'a.md', 'taken')).toEqual({ ok: false, reason: 'taken' })
+  })
+
+  it("treats an existing sidecar's own name as taken too", () => {
+    const withProof = createStore()
+    withProof.ideaDir = 'inbox/ideas'
+    withProof.files = ['inbox/ideas/a.md', 'inbox/ideas/b.proof.md']
+    expect(validateRename(withProof, 'a.md', 'b.proof')).toEqual({ ok: false, reason: 'taken' })
+  })
+
+  // `listIdeas` drops `*.proof.md` from the listing (a sidecar describes an
+  // idea, it isn't one), so an idea allowed to take that suffix would vanish
+  // from the inbox the moment it was renamed: still on disk, no error, no row
+  // left to undo it from — and, if it was the open document, autosave still
+  // writing into a file with no row. The suffix is refused on its own terms,
+  // NOT merely because some file happens to sit at that name.
+  it.each(['c.proof', 'c.proof.md', '方案A.proof'])('refuses the sidecar suffix %o', (raw) => {
+    expect(validateRename(s, 'a.md', raw)).toEqual({ ok: false, reason: 'taken' })
+  })
+
+  // The mirror image: `b.md` is free but an orphaned `b.proof.md` is lying
+  // around. Renaming into it would make the idea claim a `done` badge and an
+  // "open the argument" item pointing at a document that argues something else.
+  it("refuses a name whose sidecar slot is already occupied", () => {
+    const orphan = createStore()
+    orphan.ideaDir = 'inbox/ideas'
+    orphan.files = ['inbox/ideas/a.md', 'inbox/ideas/b.proof.md']
+    expect(orphan.files).not.toContain('inbox/ideas/b.md') // the name itself is free
+    expect(validateRename(orphan, 'a.md', 'b')).toEqual({ ok: false, reason: 'taken' })
+  })
+
+  // `index.md` / `log.md` are OKF-reserved structural documents (see
+  // okf/concept.ts). Letting an idea take one of those names would both break
+  // the format contract and make the row vanish from the inbox, since
+  // `listIdeas` filters reserved names out — so the name is refused as
+  // unavailable, which is exactly what `taken` means to the user.
+  it.each(['index', 'log', 'index.md'])('refuses the OKF-reserved name %o', (raw) => {
+    expect(validateRename(s, 'a.md', raw)).toEqual({ ok: false, reason: 'taken' })
+  })
+})
+
+describe('rowTitle', () => {
+  it('reads the H1 out of the body AS WRITTEN — spaces and all', () => {
+    // Not `Ship-the-thing`: the row shows the document's title, not the file
+    // name that could be derived from it (`slugFromMarkdown`'s job).
+    expect(rowTitle('# Ship the thing\n\nbody', '2026-08-04-1942-idea.md')).toBe('Ship the thing')
+  })
+
+  it('does not truncate — the 240px column ellipsizes in CSS, which says so', () => {
+    const long = `${'长'.repeat(60)}`
+    expect(rowTitle(`# ${long}`, 'x.md')).toBe(long)
+  })
+
+  it('falls back to the file name when the body yields no title', () => {
+    expect(rowTitle('', '2026-08-04-1942-idea.md')).toBe('1942-idea')
+    expect(rowTitle('   \n\n', '2026-08-04-1942-idea.md')).toBe('1942-idea')
+  })
+
+  it('skips frontmatter rather than titling the row `type: Idea`', () => {
+    expect(rowTitle('---\ntype: Idea\n---\n\n# Real title', 'x.md')).toBe('Real title')
+  })
+})
+
+describe('titleOf', () => {
+  it('uses the cached title once the body has been read', () => {
+    const s = createStore()
+    expect(titleOf(s, '2026-08-04-1942-idea.md')).toBe('1942-idea')
+    s.titles = { '2026-08-04-1942-idea.md': 'Ship-the-thing' }
+    expect(titleOf(s, '2026-08-04-1942-idea.md')).toBe('Ship-the-thing')
+  })
+})
+
+describe('createdFromName', () => {
+  it('reads the creation minute out of a timestamp name', () => {
+    expect(createdFromName('2026-08-04-1942-idea.md')).toEqual(new Date(2026, 7, 4, 19, 42))
+  })
+
+  it('reads a date-only name as local midnight', () => {
+    expect(createdFromName('2026-08-04-my-idea.md')).toEqual(new Date(2026, 7, 4, 0, 0))
+  })
+
+  it('is null for a name that carries no date (a renamed idea)', () => {
+    expect(createdFromName('my-idea.md')).toBeNull()
+  })
+
+  it('is null for an impossible date rather than rolling it over', () => {
+    expect(createdFromName('2026-13-45-idea.md')).toBeNull()
+    expect(createdFromName('2026-08-04-2599-idea.md')).toBeNull()
+  })
+})
+
+describe('relativeAge', () => {
+  const now = new Date(2026, 7, 4, 12, 0)
+  it.each([
+    [new Date(2026, 7, 4, 11, 58), -2, 'minute'],
+    [new Date(2026, 7, 4, 9, 0), -3, 'hour'],
+    [new Date(2026, 7, 1, 12, 0), -3, 'day'],
+    [new Date(2026, 3, 4, 12, 0), -4, 'month'],
+    [new Date(2022, 7, 4, 12, 0), -4, 'year'],
+  ])('%o → %i %s ago', (from, value, unit) => {
+    expect(relativeAge(from as Date, now)).toEqual({ value, unit })
+  })
+
+  it('rounds a fresh idea down to "0 minutes", never into the future', () => {
+    expect(relativeAge(new Date(2026, 7, 4, 12, 0, 30), now)).toEqual({ value: 0, unit: 'minute' })
+    // Clock skew (a file stamped ahead of us) must not read as "in 5 minutes".
+    expect(relativeAge(new Date(2026, 7, 4, 12, 5), now)).toEqual({ value: 0, unit: 'minute' })
+  })
+})
+
+// ── actions, driven against a stubbed bridge ────────────────────────────────
+//
+// Only the paths that a hand test in the window would never reliably reproduce:
+// a removal that half succeeds, and the window between a rename's two host
+// calls. Both are places where getting it wrong destroys or duplicates a user's
+// document, and neither shows up in the pure transitions above.
+
+describe('deleteIdea', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    // Everything the actions call incidentally: the re-list, the state-file
+    // write behind `newIdea()`, and the toast.
+    host.vaultList.mockResolvedValue({ entries: [] })
+    host.vaultWrite.mockResolvedValue({ ok: true })
+    host.request.mockResolvedValue({})
+  })
+
+  /** One saved idea, open in the editor, with a proof sidecar next to it. */
+  function openIdeaWithProof(): void {
+    state.files = ['inbox/ideas/a.md', 'inbox/ideas/a.proof.md']
+    state.docs = ['a.md']
+    state.current = 'a.md'
+    state.currentFrontmatter = 'type: Idea'
+    state.savedMarkdown = '# Ship it'
+    state.titles = { 'a.md': 'Ship it' }
+  }
+
+  it('removes the idea first, then its sidecar', async () => {
+    openIdeaWithProof()
+    host.vaultRemove.mockResolvedValue({ ok: true })
+
+    await deleteIdea('a.md')
+
+    expect(host.vaultRemove.mock.calls.map((c) => c[0])).toEqual([
+      'inbox/ideas/a.md',
+      'inbox/ideas/a.proof.md',
+    ])
+  })
+
+  // The regression that matters: the idea is deleted first, so "the SIDECAR's
+  // removal failed" still means the idea itself is gone for good. Reporting
+  // that as a plain failure would leave `current` pointing at the deleted file
+  // with its text still in the editor — and the next keystroke's autosave
+  // (which asks `freeFileName`, which hands back `state.current` unchanged)
+  // would write the document the user was told had been deleted back to disk.
+  it('detaches the open document when the idea is gone but the sidecar failed', async () => {
+    openIdeaWithProof()
+    host.vaultRemove
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error('io: sidecar is busy'))
+
+    const blank = await deleteIdea('a.md')
+
+    expect(host.vaultRemove).toHaveBeenCalledTimes(2)
+    // Non-null = "show this in the editor": the deleted idea must not stay on
+    // screen attached to a file that no longer exists.
+    expect(blank).toBe('')
+    expect(state.current).toBeNull()
+    expect(state.currentFrontmatter).toBeNull()
+    expect(state.savedMarkdown).toBe('')
+    expect(state.titles['a.md']).toBeUndefined()
+  })
+
+  it('keeps the document attached when the IDEA itself could not be removed', async () => {
+    openIdeaWithProof()
+    host.vaultRemove.mockRejectedValue(new Error('io: permission denied'))
+
+    const blank = await deleteIdea('a.md')
+
+    expect(blank).toBeNull()
+    expect(state.current).toBe('a.md')
+    expect(state.currentFrontmatter).toBe('type: Idea')
+    // Nothing was deleted, so the row's cached label must survive too.
+    expect(state.titles['a.md']).toBe('Ship it')
+    // The sidecar is never attempted once the idea's own removal failed.
+    expect(host.vaultRemove).toHaveBeenCalledTimes(1)
+  })
+
+  // `runInFlight` is a GLOBAL gate, so a `pending` entry left behind by a
+  // deleted idea doesn't just mis-badge one row — it disables delegation for
+  // the whole plugin, is written to `.notemd/idea-spark.json` by `persist()`
+  // (so it outlives the window), and `reconcilePending` won't clear it when the
+  // agent is unreachable. The only recovery would be editing the JSON by hand.
+  it('drops the deleted idea\'s pending run so delegation is not wedged', async () => {
+    openIdeaWithProof()
+    state.pending = { 'inbox/ideas/a.md': 'run-1' }
+    state.failed = ['inbox/ideas/a.md']
+    expect(runInFlight(state)).toBe(true)
+    host.vaultRemove.mockResolvedValue({ ok: true })
+
+    await deleteIdea('a.md')
+
+    expect(state.pending).toEqual({})
+    expect(state.failed).toEqual([])
+    expect(runInFlight(state)).toBe(false)
+  })
+
+  // The other half: a run belonging to an idea that is still there must survive
+  // its neighbour's deletion, or deleting any row would silently orphan it.
+  it('keeps another idea\'s pending run', async () => {
+    openIdeaWithProof()
+    state.files = [...state.files, 'inbox/ideas/b.md']
+    state.docs = ['b.md', 'a.md']
+    state.pending = { 'inbox/ideas/a.md': 'run-1' }
+    host.vaultRemove.mockResolvedValue({ ok: true })
+
+    await deleteIdea('b.md')
+
+    expect(state.pending).toEqual({ 'inbox/ideas/a.md': 'run-1' })
+  })
+
+  it('leaves another idea open when a different row is deleted', async () => {
+    openIdeaWithProof()
+    state.files = [...state.files, 'inbox/ideas/b.md']
+    state.docs = ['b.md', 'a.md']
+    host.vaultRemove.mockResolvedValue({ ok: true })
+
+    const blank = await deleteIdea('b.md')
+
+    expect(blank).toBeNull()
+    expect(state.current).toBe('a.md')
+  })
+})
+
+describe('renameIdea', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    state.files = ['inbox/ideas/a.md', 'inbox/ideas/a.proof.md']
+    state.docs = ['a.md']
+    state.current = 'a.md'
+    state.titles = { 'a.md': 'Ship it' }
+    host.vaultList.mockResolvedValue({ entries: [] })
+    host.vaultWrite.mockResolvedValue({ ok: true })
+    host.request.mockResolvedValue({})
+    host.vaultRename.mockResolvedValue({ ok: true })
+  })
+
+  // `state.current` is what autosave writes to, and the two renames are two
+  // full IPC round trips apart. A change echo landing in that window (the kit
+  // reports edits ~200 ms late) would schedule a write to the OLD path and
+  // recreate the file the rename just moved — two copies of one idea. So every
+  // in-memory key has to move the instant the idea's own rename lands, before
+  // the sidecar's call is even started.
+  it('re-points current before the sidecar round trip, not after', async () => {
+    let currentDuringSidecar: string | null = 'not called'
+    host.vaultRename.mockImplementation(async (from: string) => {
+      if (from.endsWith('.proof.md')) currentDuringSidecar = state.current
+      return { ok: true }
+    })
+
+    await renameIdea('a.md', 'b')
+
+    expect(currentDuringSidecar).toBe('b.md')
+    expect(state.current).toBe('b.md')
+  })
+
+  it('carries the pending run, the failure record and the cached title across', async () => {
+    state.pending = { 'inbox/ideas/a.md': 'run-1' }
+    state.failed = ['inbox/ideas/a.md']
+
+    await renameIdea('a.md', 'b')
+
+    expect(state.pending).toEqual({ 'inbox/ideas/b.md': 'run-1' })
+    expect(state.failed).toEqual(['inbox/ideas/b.md'])
+    expect(state.titles).toEqual({ 'b.md': 'Ship it' })
+  })
+
+  it('moves the sidecar with the idea', async () => {
+    await renameIdea('a.md', 'b')
+    expect(host.vaultRename.mock.calls).toEqual([
+      ['inbox/ideas/a.md', 'inbox/ideas/b.md'],
+      ['inbox/ideas/a.proof.md', 'inbox/ideas/b.proof.md'],
+    ])
+  })
+
+  it('changes nothing on disk when the name is refused', async () => {
+    // `.proof` would make the row vanish from the inbox; the guard belongs in
+    // front of the host call, not after it.
+    expect(await renameIdea('a.md', 'b.proof')).toBe(false)
+    expect(await renameIdea('a.md', '  ')).toBe(false)
+    expect(await renameIdea('a.md', 'x/y')).toBe(false)
+    expect(host.vaultRename).not.toHaveBeenCalled()
+    expect(state.current).toBe('a.md')
+  })
+
+  it('leaves everything attached to the old name when the host refuses', async () => {
+    host.vaultRename.mockRejectedValue(new Error('io: destination already exists'))
+
+    expect(await renameIdea('a.md', 'b')).toBe(false)
+
+    expect(state.current).toBe('a.md')
+    expect(state.titles).toEqual({ 'a.md': 'Ship it' })
+    // The sidecar is not moved on its own when the idea did not move.
+    expect(host.vaultRename).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The settings popover's commit gate. `changeIdeaDir` detaches the open
+// document, so a directory change made while the buffer is still ahead of the
+// disk forks the idea: the next autosave writes a brand-new file in the NEW
+// directory while the original keeps the old text. `saveNow()` alone can't
+// prevent that — it never rejects (autosave.ts swallows the write's failure) —
+// so the barrier has to be a boolean the caller ASSERTS, and a `false` has to
+// leave the directory, the state file and the listing completely untouched.
+describe('commitIdeaDir', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    host.vaultList.mockResolvedValue({ entries: [] })
+    host.vaultWrite.mockResolvedValue({ ok: true })
+  })
+
+  it('does not change the directory when the flush barrier refuses', async () => {
+    const ok = await commitIdeaDir('elsewhere', async () => false)
+
+    expect(ok).toBe(false)
+    expect(state.ideaDir).toBe('inbox/ideas')
+    // Nothing reached the disk either: no state file, no re-listing.
+    expect(host.vaultWrite).not.toHaveBeenCalled()
+    expect(host.vaultList).not.toHaveBeenCalled()
+  })
+
+  it('leaves the open document attached when the barrier refuses', async () => {
+    state.current = 'a.md'
+    state.currentFrontmatter = 'type: Idea'
+
+    await commitIdeaDir('elsewhere', async () => false)
+
+    // The detach is the fork's mechanism: `current` cleared with dirty text
+    // still in the editor is what makes the next autosave write a new file.
+    expect(state.current).toBe('a.md')
+    expect(state.currentFrontmatter).toBe('type: Idea')
+  })
+
+  it('commits when the barrier says the buffer is safe to let go of', async () => {
+    state.current = 'a.md'
+
+    const ok = await commitIdeaDir('elsewhere', async () => true)
+
+    expect(ok).toBe(true)
+    expect(state.ideaDir).toBe('elsewhere')
+    expect(state.current).toBeNull()
+    expect(host.vaultWrite).toHaveBeenCalled()
+  })
+
+  it('asks the barrier BEFORE touching the directory', async () => {
+    const seen: string[] = []
+    await commitIdeaDir('elsewhere', async () => {
+      // The buffer must still belong to the old directory while it is being
+      // written; asking afterwards would flush into the new one.
+      seen.push(state.ideaDir)
+      return true
+    })
+    expect(seen).toEqual(['inbox/ideas'])
+  })
+
+  it('reports a rejected directory as a failed commit', async () => {
+    // `saveIdeaDir` returns false for a path `normalizeIdeaDir` refuses, and
+    // the popover keys "keep the field open" off this same boolean.
+    const ok = await commitIdeaDir('../escape', async () => true)
+    expect(ok).toBe(false)
+    expect(state.ideaDir).toBe('inbox/ideas')
+  })
+})
+
+describe('loadIdea', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    state.docs = ['a.md']
+    state.files = ['inbox/ideas/a.md']
+    host.request.mockResolvedValue({})
+  })
+
+  // The cached row label is otherwise only maintained by this window's own
+  // writes — but "open in the main editor" sends the user off to edit the file
+  // somewhere else, and an agent or a vault sync can rewrite one at any time.
+  // Opening an idea has the whole document in hand, so correcting the label
+  // costs no extra IO and is the cheapest of the cache's honesty checks.
+  it('refreshes the cached row title from the document it just read', async () => {
+    state.titles = { 'a.md': 'the old heading' }
+    host.vaultRead.mockResolvedValue({ content: '---\ntype: Idea\n---\n\n# A better heading\n\nbody' })
+
+    const body = await loadIdea('a.md')
+
+    expect(body).toBe('# A better heading\n\nbody')
+    expect(state.titles['a.md']).toBe('A better heading')
+  })
+
+  it('leaves the cache alone when the read fails', async () => {
+    state.titles = { 'a.md': 'the old heading' }
+    host.vaultRead.mockRejectedValue(new Error('io: gone'))
+
+    expect(await loadIdea('a.md')).toBeNull()
+    expect(state.titles['a.md']).toBe('the old heading')
+  })
+})
+
+// The gate on delegation. claude-agent locks a task's run directory for the
+// duration of a run ("Same task mutually exclusive", lock.rs), and every idea
+// this plugin delegates uses the SAME task — so the rule is one run at a time,
+// full stop. Getting this wrong doesn't fail loudly: `run-task` still hands
+// back a run id, the refusal happens inside the spawned task, no record is
+// ever written, and the second idea surfaces two seconds later as `lost` — a
+// ⚠ and a "the agent couldn't argue this" about an idea nothing ever tried.
+describe('runInFlight', () => {
+  it('is false with nothing pending and true from the first run onwards', () => {
+    const s = createStore()
+    expect(runInFlight(s)).toBe(false)
+    s.pending = { 'inbox/ideas/a.md': 'r1' }
+    expect(runInFlight(s)).toBe(true)
+  })
+
+  it('is true for a run on a DIFFERENT idea than the one being asked about', () => {
+    // The whole point: delegating B while A is running is what the per-idea
+    // guard used to allow.
+    const s = createStore()
+    s.pending = { 'inbox/ideas/a.md': 'r1' }
+    expect(runInFlight(s)).toBe(true)
+  })
+
+  it('is true for a running idea that already has a proof document', () => {
+    // `deriveStatus` ranks `done` above `running`, so a menu keyed on
+    // `statusOf` would call this idea `done` — and enable an action the
+    // action bar has disabled.
+    const s = createStore()
+    s.ideaDir = 'inbox/ideas'
+    s.files = ['inbox/ideas/a.md', 'inbox/ideas/a.proof.md']
+    s.pending = { 'inbox/ideas/a.md': 'r2' }
+    expect(statusOf(s, 'a.md')).toBe('done')
+    expect(runInFlight(s)).toBe(true)
+  })
+
+  it('is false again once the run is applied', () => {
+    const s = createStore()
+    s.ideaDir = 'inbox/ideas'
+    s.files = ['inbox/ideas/a.md']
+    s.pending = { 'inbox/ideas/a.md': 'r1' }
+    applyRunDone(s, { run_id: 'r1', status: 'success' })
+    expect(runInFlight(s)).toBe(false)
+  })
+})
+
+describe('runStatusWord', () => {
+  // `applyRunDone` speaks claude-agent's status vocabulary and treats
+  // everything that isn't `success` as a failure — so this mapping is the one
+  // place a timed-out or cancelled run could be mistaken for a finished one.
+  it('is success only for a successful run', () => {
+    expect(runStatusWord({ kind: 'done', success: true })).toBe('success')
+    expect(runStatusWord({ kind: 'done', success: false })).toBe('error')
+    expect(runStatusWord({ kind: 'lost' })).toBe('lost')
+  })
+})
+
+// Startup reconciliation: `pending` came off disk and was written by an
+// EARLIER window, so every entry in it is a claim about a run this process has
+// never seen. Getting this wrong is what turns a ⏳ into a permanent one — or,
+// worse, marks a run that is still going as failed.
+describe('reconcilePending', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    state.files = ['inbox/ideas/a.md']
+    state.docs = ['a.md']
+    state.pending = { 'inbox/ideas/a.md': 'r1' }
+    host.vaultList.mockResolvedValue({ entries: [{ name: 'a.md', is_dir: false }] })
+    host.vaultWrite.mockResolvedValue({ ok: true })
+    host.request.mockResolvedValue({})
+  })
+
+  it('asks about the run under the plugin OWN task, never the agent default', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'lost' })
+    await reconcilePending()
+    // `host.agent.status` defaults a missing task to `answer-note-question`,
+    // which would report on another plugin's run directory entirely.
+    expect(host.agentStatus).toHaveBeenCalledWith('idea-proof', 'r1')
+  })
+
+  it('folds a run that finished while the window was closed into the listing', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'done', record: { status: 'success', result: 'ok' } })
+    // The re-list is the authority on what is on disk, and by now the agent's
+    // proof document is: `applyRunDone`'s optimistic fold only bridges the gap
+    // until this listing lands.
+    host.vaultList.mockResolvedValue({
+      entries: [
+        { name: 'a.md', is_dir: false },
+        { name: 'a.proof.md', is_dir: false },
+      ],
+    })
+
+    const still = await reconcilePending()
+
+    expect(still).toEqual([])
+    expect(state.pending).toEqual({})
+    expect(statusOf(state, 'a.md')).toBe('done')
+    // Dropped from disk too, or the next window would ask about it again.
+    const written = host.vaultWrite.mock.calls.find(([p]) => p === '.notemd/idea-spark.json')
+    expect(JSON.parse(written![1]).pendingRuns).toEqual({})
+  })
+
+  it('does not throw confetti for a run the user was not there to watch', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'done', record: { status: 'success', result: 'ok' } })
+    await reconcilePending()
+    // claude-agent already told them, in the tray, while they were away.
+    expect(state.celebrate).toBe(false)
+  })
+
+  it('marks a run whose process died as failed', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'lost' })
+
+    expect(await reconcilePending()).toEqual([])
+    expect(state.pending).toEqual({})
+    expect(state.failed).toEqual(['inbox/ideas/a.md'])
+  })
+
+  it('hands back a run that is still going so the window can watch it again', async () => {
+    host.agentStatus.mockResolvedValue({ state: 'running', steps: 4, last: 'Read a.md' })
+
+    expect(await reconcilePending()).toEqual([{ ideaRel: 'inbox/ideas/a.md', runId: 'r1' }])
+    expect(state.pending).toEqual({ 'inbox/ideas/a.md': 'r1' })
+    expect(statusOf(state, 'a.md')).toBe('running')
+  })
+
+  it('leaves the entry alone when the agent cannot be reached at all', async () => {
+    // Uninstalled/disabled since the run started. That is not evidence the run
+    // failed, and saying it did would be a lie that outlives the outage.
+    host.agentStatus.mockRejectedValue(new Error('-32000: agent_unavailable: unknown v2 plugin'))
+
+    const still = await reconcilePending()
+
+    expect(still).toEqual([])
+    expect(state.pending).toEqual({ 'inbox/ideas/a.md': 'r1' })
+    expect(state.failed).toEqual([])
   })
 })

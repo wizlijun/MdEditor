@@ -23,10 +23,14 @@ interface FakeRich {
 const h = vi.hoisted(() => ({
   instances: [] as unknown[],
   setKitBaseDir: vi.fn(),
+  setRichPlaceholder: vi.fn(),
 }))
 
 vi.mock('./rich', () => ({
   setKitBaseDir: h.setKitBaseDir,
+  // What it actually does (rebuilding the placeholder plugin and reconfiguring
+  // the view) is covered by rich.test.ts; here only the routing matters.
+  setRichPlaceholder: h.setRichPlaceholder,
   mountRich: async (
     host: HTMLElement,
     initial: string,
@@ -61,6 +65,7 @@ function typeUnflushed(text: string) {
 beforeEach(() => {
   richInstances.length = 0
   h.setKitBaseDir.mockClear()
+  h.setRichPlaceholder.mockClear()
   ;(window as unknown as { notemd: unknown }).notemd = {
     request: vi.fn(async (method: string) => {
       if (method === 'host.vault.info') return { root: '/vault' }
@@ -204,6 +209,39 @@ describe('mountMarkdownEditor — flush semantics', () => {
     await ed.setMode('source')
     ed.destroy()
     expect(onChange).toHaveBeenCalledTimes(1)
+  })
+})
+
+// `opts.placeholder` is read once at mount, so a consumer that rotates its
+// prompt (Idea Spark shows a different one per new document) needs a setter —
+// and the new text has to survive a mode switch, which re-mounts the pane.
+describe('mountMarkdownEditor — setPlaceholder', () => {
+  it('updates the live textarea in source mode', async () => {
+    const c = container()
+    const ed = await mountMarkdownEditor(c, { initialMarkdown: '', mode: 'source', placeholder: '第一句' })
+    const ta = c.querySelector('textarea')!
+    expect(ta.placeholder).toBe('第一句')
+    ed.setPlaceholder('第二句')
+    expect(ta.placeholder).toBe('第二句')
+    ed.destroy()
+  })
+
+  it('routes to the rich pane in rich mode', async () => {
+    const c = container()
+    const ed = await mountMarkdownEditor(c, { initialMarkdown: '', placeholder: '第一句' })
+    ed.setPlaceholder('第二句')
+    expect(h.setRichPlaceholder).toHaveBeenCalledWith(richInstances[0], '第二句')
+    ed.destroy()
+  })
+
+  it('remembers the new text across a mode switch', async () => {
+    const c = container()
+    const ed = await mountMarkdownEditor(c, { initialMarkdown: '', mode: 'source', placeholder: '第一句' })
+    ed.setPlaceholder('第二句')
+    await ed.setMode('rich')
+    await ed.setMode('source')
+    expect(c.querySelector('textarea')!.placeholder).toBe('第二句')
+    ed.destroy()
   })
 })
 
