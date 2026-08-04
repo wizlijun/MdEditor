@@ -388,6 +388,8 @@ pub async fn dispatch_with(
         "host.vault.exists" => vault_exists(services, &req.params),
         "host.vault.list" => vault_list(services, &req.params),
         "host.vault.mkdir" => vault_mkdir(services, &req.params),
+        "host.vault.remove" => vault_remove(services, &req.params),
+        "host.vault.rename" => vault_rename(services, &req.params),
         "host.editor.open" => editor_open(services, &req.params),
         "host.agent.run"    => services.agent_execute("run-task", req.params.clone()),
         "host.agent.status" => services.agent_execute("run-status", req.params.clone()),
@@ -738,6 +740,34 @@ pub(crate) fn vault_list(services: &dyn HostServices, params: &serde_json::Value
 pub(crate) fn vault_mkdir(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
     let p = resolve_in_vault(services, params)?;
     std::fs::create_dir_all(&p).map_err(|e| format!("io: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// `{ path } → { ok: true }`. 只删文件:目录要靠别的方式清理,插件误传一个
+/// 目录名不该把整棵子树带走。目标不存在按成功处理(幂等,调用方重试安全)。
+pub(crate) fn vault_remove(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let p = resolve_in_vault(services, params)?;
+    match std::fs::symlink_metadata(&p) {
+        Err(_) => return Ok(serde_json::json!({ "ok": true })), // 已不存在
+        Ok(m) if m.is_dir() => return Err("io: refusing to remove a directory".into()),
+        Ok(_) => {}
+    }
+    std::fs::remove_file(&p).map_err(|e| format!("io: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// `{ from, to } → { ok: true }`。两端都过 vault 围栏;目标已存在一律报错而不
+/// 覆盖 —— 重命名撞名时静默吃掉用户的另一个文件是不可接受的。
+pub(crate) fn vault_rename(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let from = resolve_in_vault(services, &serde_json::json!({ "path": req_str(params, "from")? }))?;
+    let to = resolve_in_vault(services, &serde_json::json!({ "path": req_str(params, "to")? }))?;
+    if to.exists() {
+        return Err("io: destination already exists".into());
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("io: {e}"))?;
+    }
+    std::fs::rename(&from, &to).map_err(|e| format!("io: {e}"))?;
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -1294,6 +1324,70 @@ mod tests {
         assert!(r.error.is_none(), "{:?}", r.error);
         let mode = std::fs::metadata(dir.path().join("note.md")).unwrap().permissions().mode();
         assert_eq!(mode & 0o111, 0, "a plain .md must not become executable, got {mode:o}");
+    }
+
+    #[tokio::test]
+    async fn vault_remove_deletes_files_and_refuses_directories() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("a.md"), "x").unwrap();
+        std::fs::create_dir(vault.path().join("sub")).unwrap();
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+        // 有 capability → 删除成功
+        let r = run_as(&s, "p.id", &["vault.write"], "host.vault.remove", serde_json::json!({"path": "a.md"})).await;
+        assert_eq!(r.result.unwrap()["ok"], true);
+        assert!(!vault.path().join("a.md").exists());
+        // 幂等:再删一次仍然 ok
+        let r = run_as(&s, "p.id", &["vault.write"], "host.vault.remove", serde_json::json!({"path": "a.md"})).await;
+        assert_eq!(r.result.unwrap()["ok"], true);
+        // 目录 → 拒绝
+        let r = run_as(&s, "p.id", &["vault.write"], "host.vault.remove", serde_json::json!({"path": "sub"})).await;
+        assert!(r.error.unwrap().message.contains("directory"));
+        // 无 capability → -32001
+        let r = run_as(&s, "p.id", &[], "host.vault.remove", serde_json::json!({"path": "b.md"})).await;
+        assert_eq!(r.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+        // 越界 → 错误
+        let r = run_as(&s, "p.id", &["vault.write"], "host.vault.remove", serde_json::json!({"path": "../x"})).await;
+        assert!(r.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn vault_rename_moves_within_vault_and_never_clobbers() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("a.md"), "x").unwrap();
+        std::fs::write(vault.path().join("taken.md"), "y").unwrap();
+        let s = StubServices { vault: Some(vault.path().to_path_buf()), ..Default::default() };
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "a.md", "to": "sub/b.md"}),
+        )
+        .await;
+        assert_eq!(r.result.unwrap()["ok"], true);
+        assert!(vault.path().join("sub/b.md").exists());
+        assert!(!vault.path().join("a.md").exists());
+        // 目标已存在 → 不覆盖
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "sub/b.md", "to": "taken.md"}),
+        )
+        .await;
+        assert!(r.error.unwrap().message.contains("exists"));
+        assert_eq!(std::fs::read_to_string(vault.path().join("taken.md")).unwrap(), "y");
+        // 两端都过校验
+        let r = run_as(
+            &s,
+            "p.id",
+            &["vault.write"],
+            "host.vault.rename",
+            serde_json::json!({"from": "sub/b.md", "to": "../out.md"}),
+        )
+        .await;
+        assert!(r.error.is_some());
     }
 
     #[tokio::test]

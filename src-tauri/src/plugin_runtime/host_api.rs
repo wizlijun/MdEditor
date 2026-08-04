@@ -38,7 +38,9 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         "host.dialog.open" | "host.dialog.save" => Some("dialog"),
         "host.vault.info" | "host.vault.read" | "host.vault.read_bytes" | "host.vault.exists"
         | "host.vault.list" => Some("vault.read"),
-        "host.vault.write" | "host.vault.mkdir" => Some("vault.write"),
+        "host.vault.write" | "host.vault.mkdir" | "host.vault.remove" | "host.vault.rename" => {
+            Some("vault.write")
+        }
         // fs.read:dialog — readable only for paths previously returned by a
         // host.dialog.open/save in this session (spec §5 prompt semantics).
         "host.fs.read_text" | "host.fs.read_bytes" => Some("fs.read:dialog"),
@@ -186,6 +188,8 @@ pub fn make_sink(
                                 "host.vault.exists" => Some(rpc::vault_exists(s, &req.params)),
                                 "host.vault.list" => Some(rpc::vault_list(s, &req.params)),
                                 "host.vault.mkdir" => Some(rpc::vault_mkdir(s, &req.params)),
+                                "host.vault.remove" => Some(rpc::vault_remove(s, &req.params)),
+                                "host.vault.rename" => Some(rpc::vault_rename(s, &req.params)),
                                 "host.location.get" => Some(s.location_get()),
                                 "host.agent.run" => Some(s.agent_execute("run-task", req.params.clone())),
                                 "host.agent.status" => Some(s.agent_execute("run-status", req.params.clone())),
@@ -513,6 +517,8 @@ mod tests {
         assert_eq!(method_capability("host.vault.list"), Some("vault.read"));
         assert_eq!(method_capability("host.vault.write"), Some("vault.write"));
         assert_eq!(method_capability("host.vault.mkdir"), Some("vault.write"));
+        assert_eq!(method_capability("host.vault.remove"), Some("vault.write"));
+        assert_eq!(method_capability("host.vault.rename"), Some("vault.write"));
         assert_eq!(method_capability("host.fs.read_text"), Some("fs.read:dialog"));
         assert_eq!(method_capability("host.fs.read_bytes"), Some("fs.read:dialog"));
         assert_eq!(method_capability("host.clipboard.write"), Some("clipboard.write"));
