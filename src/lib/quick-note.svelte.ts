@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { mkdir, exists } from '@tauri-apps/plugin-fs'
 import { openFile, openPathBackedMarkdownDraft } from './tabs.svelte'
 import { requestEditorFocus } from './editor-focus.svelte'
+import { newFileText } from './new-file'
 import { pushToast } from './toast.svelte'
 import { t } from './i18n/store.svelte'
 import { quickNoteFileName } from './quick-note-name'
@@ -65,7 +66,8 @@ export async function createQuickNote(now: Date = new Date()): Promise<void> {
     } else {
       // No explicit mode: the draft opens in the editor's remembered mode for
       // `.md`, the same one openFile uses and the mode toggle persists.
-      await openPathBackedMarkdownDraft(fullPath, '', { skipEmptySave: true })
+      // 草稿预置 OKF 概念头:落盘的就是合规文档,不必事后补写(§4.1)。
+      await openPathBackedMarkdownDraft(fullPath, newFileText(''), { skipEmptySave: true })
     }
   } catch (e) {
     pushToast({ level: 'error', message: t('quickNote.createFailed'), detail: String(e) })

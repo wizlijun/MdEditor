@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { CONCEPT_TYPE, touchConceptFrontmatter, conceptFileText } from './concept'
+import { CONCEPT_TYPE, touchConceptFrontmatter, conceptFileText, isReservedConceptName } from './concept'
 // @ts-expect-error - plain-JS lint core shared with scripts/okf-lint.mjs
 import { lintText } from '../../../scripts/okf-lint-core.mjs'
 
@@ -54,5 +54,18 @@ describe('conceptFileText', () => {
     const text = conceptFileText({ type: CONCEPT_TYPE.note, title: '标题' }, '# 标题\n')
     expect(text).toBe('---\ntype: Note\ntitle: 标题\n---\n# 标题\n')
     expect(lintText('标题.md', text)).toEqual([])
+  })
+})
+
+describe('isReservedConceptName(§8/§9)', () => {
+  it('flags the two reserved file names, case-insensitively', () => {
+    expect(isReservedConceptName('index.md')).toBe(true)
+    expect(isReservedConceptName('LOG.md')).toBe(true)
+    expect(isReservedConceptName('/v/notes/index.md')).toBe(true)
+  })
+  it('leaves everything else alone, including sidecars of the same stem', () => {
+    expect(isReservedConceptName('index.note.md')).toBe(false)
+    expect(isReservedConceptName('indexes.md')).toBe(false)
+    expect(isReservedConceptName('changelog.md')).toBe(false)
   })
 })

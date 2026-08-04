@@ -647,8 +647,12 @@ export async function overwriteOnDisk(id: string): Promise<void> {
 }
 
 export function shouldSkipEmptySave(t: Tab): boolean {
-  return t.skipEmptySave === true && t.currentContent.length === 0
+  // 快速笔记草稿预置了 OKF 概念头,所以"空"= 去掉首部 frontmatter 后没有正文。
+  return t.skipEmptySave === true && t.currentContent.replace(FM_BLOCK, '').trim().length === 0
 }
+
+/** 首部 YAML frontmatter 块(与 share-baker 同一形状)。 */
+const FM_BLOCK = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/
 
 /**
  * Hide the banner without resolving the change. State stays non-fresh; the

@@ -1,7 +1,7 @@
 // src/lib/outline/create.ts
 import { touchFrontmatter } from './frontmatter'
 import { pageNameOf } from './backlinks'
-import { CONCEPT_TYPE, conceptFileText } from '../okf/concept'
+import { CONCEPT_TYPE, conceptFileText, isReservedConceptName } from '../okf/concept'
 
 /** 新大纲文件的完整文本:front-matter + 单个空节点(空大纲)。
  *  type 缺省由 touchFrontmatter 填 Outline Note(OKF §4.1)。 */
@@ -10,9 +10,13 @@ export function newOutlineFileText(title: string, now?: string, type?: string): 
   return `---\n${fm}\n---\n- \n`
 }
 
-/** 新普通页(vault 外解析 wikilink 时建的 `.md`)的完整文本。 */
+/** 新普通页(vault 外解析 wikilink 时建的 `.md`)的完整文本。
+ *  [[index]] / [[log]] 会落到保留文件名上:这类文件 **MUST NOT** 是概念文档
+ *  (§8/§9),所以只写正文,不盖 frontmatter —— 文件名保持用户看到的样子。 */
 export function newPageFileText(title: string): string {
-  return conceptFileText({ type: CONCEPT_TYPE.note, title }, `# ${title}\n`)
+  const body = `# ${title}\n`
+  if (isReservedConceptName(`${title}.md`)) return body
+  return conceptFileText({ type: CONCEPT_TYPE.note, title }, body)
 }
 
 /** 确保 .note.md 存在(不存在则以空大纲创建)。title 缺省取文件名;

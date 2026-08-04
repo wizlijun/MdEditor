@@ -779,3 +779,16 @@ describe('tabs', () => {
     expect(fs.writeMd).not.toHaveBeenCalled()
   })
 })
+
+describe('shouldSkipEmptySave — 预置 frontmatter 的草稿仍算空', () => {
+  it('treats a draft that is only an OKF concept head as empty', async () => {
+    const { shouldSkipEmptySave } = await import('./tabs.svelte')
+    const tab = { skipEmptySave: true, currentContent: '---\ntype: Note\n---\n' } as never
+    expect(shouldSkipEmptySave(tab)).toBe(true)
+  })
+  it('saves once the user has written a body', async () => {
+    const { shouldSkipEmptySave } = await import('./tabs.svelte')
+    const tab = { skipEmptySave: true, currentContent: '---\ntype: Note\n---\n# 标题\n' } as never
+    expect(shouldSkipEmptySave(tab)).toBe(false)
+  })
+})

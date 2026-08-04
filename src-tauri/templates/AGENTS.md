@@ -61,6 +61,7 @@ coin a short one and then use it consistently.
 | `Outline Note` | any `.note.md` (outline or companion note) |
 | `Daily Note` | `dailynote/yyyy/yyyy-MM-dd.note.md` |
 | `Wiki Page` | `wikipage/<title>.note.md` |
+| `Answer` | a long answer written to `answers/` (see the Q&A protocol) |
 
 Everything else is optional, but absent metadata means "unknown", not
 "fine" — write what you actually know:

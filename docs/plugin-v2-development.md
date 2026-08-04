@@ -297,6 +297,8 @@ interface SideView {
 | `Wiki Page` | `wikipage/<title>.note.md` |
 | `Book` | ebook-import 的 `book.md` |
 | `Reading Report` | Reading Insights 的阅读数据报告 |
+| `Answer` | agent 写进 `answers/` 的长答案 |
+| `Vault Conventions` | vault 根的 `AGENTS.md` |
 | `Vault Conventions` | vault 根的 `AGENTS.md`(模板 `src-tauri/templates/AGENTS.md`) |
 | `decision-board` / `decision-archive` | 决策日志(历史取值,保持不变) |
 

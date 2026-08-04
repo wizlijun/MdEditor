@@ -22,9 +22,24 @@ export const CONCEPT_TYPE = {
   book: 'Book',
   /** Reading Insights 的阅读数据报告 */
   readingReport: 'Reading Report',
+  /** agent 写进 `answers/` 的长答案 */
+  answer: 'Answer',
   /** vault 根的 AGENTS.md(模板见 src-tauri/templates/AGENTS.md) */
   vaultConventions: 'Vault Conventions',
 } as const
+
+/**
+ * §8/§9 的保留文件名:`index.md` 是目录索引、`log.md` 是变更日志,
+ * **MUST NOT** 用作概念文档。(校验器侧的同名常量在 scripts/okf-lint-core.mjs,
+ * 那份是纯 JS、供 CLI 与测试共用,两处必须一起改。)
+ */
+export const RESERVED_CONCEPT_NAMES = ['index.md', 'log.md'] as const
+
+/** 路径或文件名是否是保留名。 */
+export function isReservedConceptName(pathOrName: string): boolean {
+  const base = pathOrName.split('/').pop()?.toLowerCase() ?? ''
+  return (RESERVED_CONCEPT_NAMES as readonly string[]).includes(base)
+}
 
 /** OKF actor(§7)。 */
 export interface Actor {

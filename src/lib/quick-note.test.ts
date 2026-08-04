@@ -46,7 +46,9 @@ describe('createQuickNote', () => {
     expect(mkdir).toHaveBeenCalledWith('/vault/inbox', { recursive: true })
     expect(requestEditorFocus).toHaveBeenCalledWith(path)
     // No `mode`: the draft inherits the editor's remembered mode for `.md`.
-    expect(openPathBackedMarkdownDraft).toHaveBeenCalledWith(path, '', {
+    // 草稿预置 OKF 概念头(§4.1 必填 type),这样保存下来的就是合规文档;
+    // 光标落在文末(Selection.atEnd),不会掉进 frontmatter 里。
+    expect(openPathBackedMarkdownDraft).toHaveBeenCalledWith(path, '---\ntype: Note\n---\n', {
       skipEmptySave: true,
     })
     expect(openFile).not.toHaveBeenCalled()

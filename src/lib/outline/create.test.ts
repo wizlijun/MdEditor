@@ -27,6 +27,13 @@ describe('newOutlineFileText', () => {
     expect(text).toBe(`---\ntype: ${CONCEPT_TYPE.note}\ntitle: 某个概念\n---\n# 某个概念\n`)
     expect(lintText('某个概念.md', text)).toEqual([])
   })
+  it('never stamps a reserved file name as a concept (§8/§9)', () => {
+    // [[index]] 落到 vault 外会建 index.md —— 保留名不得用作概念文档,
+    // 所以只写正文、不写 frontmatter,文件名保持用户看到的样子。
+    expect(newPageFileText('index')).toBe('# index\n')
+    expect(lintText('index.md', newPageFileText('index'))).toEqual([])
+    expect(lintText('log.md', newPageFileText('log'))).toEqual([])
+  })
   it('takes the concept type from the caller (daily notes are Daily Note)', () => {
     const text = newOutlineFileText('2026-07-10', '2026-07-10T09:00:00.000Z', CONCEPT_TYPE.dailyNote)
     expect(text).toContain(`type: ${CONCEPT_TYPE.dailyNote}`)

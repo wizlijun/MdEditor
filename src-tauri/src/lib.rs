@@ -30,6 +30,8 @@ pub mod themes;
 pub mod vault_sync;
 #[cfg(not(target_os = "ios"))]
 pub mod git_history;
+
+pub mod okf;
 #[cfg(not(target_os = "ios"))]
 pub mod preview_window;
 #[cfg(not(target_os = "ios"))]
@@ -1007,6 +1009,7 @@ pub fn run() {
                 sotvault::sotvault_check_update,
                 sotvault::sotvault_apply_update,
                 sotvault::sotvault_accept_current,
+                okf::notemd_okf_human_id,
                 git_history::git_file_log,
                 git_history::git_file_show,
                 git_history::git_file_at,

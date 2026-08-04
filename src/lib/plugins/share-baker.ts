@@ -1,5 +1,7 @@
+import { parse as parseYaml } from 'yaml'
 import { basename } from '../fs'
 import type { Tab } from '../tabs.svelte'
+import { trustTier, lifecycleOf } from '../okf/trust'
 import { invoke } from '@tauri-apps/api/core'
 import {
   htmlEscape,
@@ -230,6 +232,39 @@ export function metadataBlock(opts: {
   return lines.join('\n')
 }
 
+/**
+ * 对外分享页的 OKF 出处元数据。分享出去的 HTML 是公开的,所以这里**只发布
+ * 不指向任何人、任何本地路径的信号**:概念类型、派生的信任层级(§5.3)、
+ * 生命周期(§5.4)。actor id(`human:<id>`)与 `sources[].resource`(常是
+ * 本机绝对路径)一律不出现 —— 出处的价值不该以泄露隐私为代价。
+ *
+ * 文档没有 frontmatter 时返回空串。
+ */
+export function okfMetaBlock(md: string): string {
+  const m = md.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/)
+  if (!m) return ''
+  const fm = m[1]
+  const type = conceptTypeOf(fm)
+  const { status, staleAfter } = lifecycleOf(fm)
+  const lines: string[] = []
+  if (type) lines.push(`<meta name="okf:type" content="${htmlEscape(type)}">`)
+  lines.push(`<meta name="okf:trust-tier" content="${trustTier(fm)}">`)
+  if (status !== 'stable') lines.push(`<meta name="okf:status" content="${status}">`)
+  if (staleAfter) lines.push(`<meta name="okf:stale-after" content="${htmlEscape(staleAfter)}">`)
+  return lines.join('\n')
+}
+
+/** frontmatter 里的 `type`(缺失/非字符串 → null)。 */
+function conceptTypeOf(fm: string): string | null {
+  try {
+    const v = parseYaml(fm)
+    const t = v !== null && typeof v === 'object' ? (v as { type?: unknown }).type : null
+    return typeof t === 'string' && t.trim() !== '' ? t : null
+  } catch {
+    return null
+  }
+}
+
 // Re-export shared pipeline pieces so existing share-baker tests keep their
 // imports stable. Real implementations live in host-render-html.ts.
 export const renderTabBody = sharedRenderTabBody
@@ -306,6 +341,7 @@ export async function bakeShareHtml(tab: Tab, themeId: string = 'default'): Prom
 <meta charset="utf-8">
 ${viewportMetaTag()}
 ${metadataBlock({ title: pageTitle, description, filename })}
+${tab.kind === 'markdown' ? okfMetaBlock(tab.currentContent) : ''}
 ${themedStyleHead(themeCss)}
 </head>
 <body data-theme="${htmlEscape(themeId)}">

@@ -15,7 +15,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 import {
   shareHeaderLabel, isoDateStamp, viewportMetaTag, themeCssBlock,
   guardSize, MAX_HTML_BYTES,
-  extractShareDescription, metadataBlock,
+  extractShareDescription, metadataBlock, okfMetaBlock,
 } from './share-baker'
 import { ShareError } from '../share/types'
 
@@ -371,5 +371,42 @@ describe('bakeShareHtml beacon injection', () => {
     const html = await bakeShareHtml(mdTab(), 'default')
     expect(html).toContain('/a/hit')
     expect(html).toContain('mdi_vid')
+  })
+})
+
+describe('okfMetaBlock — 对外产物带出处,但不泄露身份/路径', () => {
+  it('publishes the concept type and the derived trust tier', () => {
+    const md = [
+      '---', 'type: Note', 'title: t',
+      'verified: { by: human:bruce, at: 2026-08-04T09:00:00Z }',
+      'sources:', '  - resource: /Users/bruce/private/draft.md',
+      '---', '', '正文', '',
+    ].join('\n')
+    const out = okfMetaBlock(md)
+    expect(out).toContain('<meta name="okf:type" content="Note">')
+    expect(out).toContain('<meta name="okf:trust-tier" content="human-reviewed">')
+  })
+
+  it('never leaks actor ids or source paths into a public page', () => {
+    const md = '---\ntype: Note\nverified: { by: human:bruce, at: x }\nsources:\n  - resource: /Users/bruce/x.md\n---\n'
+    const out = okfMetaBlock(md)
+    expect(out).not.toContain('human:bruce')
+    expect(out).not.toContain('/Users/bruce')
+  })
+
+  it('emits status and stale_after only when they carry information', () => {
+    expect(okfMetaBlock('---\ntype: Note\n---\n')).not.toContain('okf:status')
+    expect(okfMetaBlock('---\ntype: Note\nstatus: draft\nstale_after: 2026-09-23\n---\n'))
+      .toContain('<meta name="okf:status" content="draft">')
+    expect(okfMetaBlock('---\ntype: Note\nstale_after: 2026-09-23\n---\n'))
+      .toContain('<meta name="okf:stale-after" content="2026-09-23">')
+  })
+
+  it('is empty for a document without front-matter', () => {
+    expect(okfMetaBlock('# 只有正文\n')).toBe('')
+  })
+
+  it('escapes values instead of trusting them', () => {
+    expect(okfMetaBlock('---\ntype: \'a"b\'\n---\n')).toContain('content="a&quot;b"')
   })
 })

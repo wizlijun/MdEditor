@@ -18,8 +18,21 @@
 | 存量文件 | 不批量迁移;打开后**首次保存**时机会性补 `type`(只补缺失键,顺序不变) |
 | 开发规范 | `docs/plugin-v2-development.md` §9.1(类型登记表 + 硬约束 + 自检命令) |
 
-未做(按原计划排在后面):P0.3 迁移命令、P0.4 `index.md`/`log.md` 的读侧支持、P1 全部(actor / `verified` / `sources` / 分享元数据)、P2.1 导出插件、P2.2 Attested Computation。
-下文的发现明细保留审计当时的状态,便于对照。
+**第 2 步(P1 主体 + P0.4 的生产侧)已完成**(2026-08-04):
+
+| 项 | 落点 |
+|----|------|
+| actor 约定(§7) | `src/lib/okf/actor.ts`(`actor.human/agent/process`、`isOkfActor`、`humanActorId`、`addVerified`) |
+| 人类身份来源 | `src-tauri/src/okf/mod.rs` 的 `notemd_okf_human_id`(vault 的 git 邮箱 → 用户名 → 系统用户名 → `local`),前端缓存在 `src/lib/okf/identity.ts` |
+| 人工确认落成 `verified`(§5.2) | 「采纳入正文」写 `verified: [{ by: human:<id>, at }]`;裸 mapping 会被提升成列表(§11 MUST),同 by+at 不重复 |
+| 派生读侧(§5.3/§5.4) | `src/lib/okf/trust.ts` 的 `trustTier()` / `lifecycleOf()`,永不抛错、未知即 unverified/stable |
+| 分享页出处 | `okfMetaBlock()`:只发 `okf:type` / `okf:trust-tier` / `okf:status` / `okf:stale-after`,**不发 actor id 与 `sources[].resource`**(公开页面不该泄露身份与本机路径) |
+| 保留文件名(§8/§9) | `isReservedConceptName()`;`[[index]]`/`[[log]]` 建出的 `index.md`/`log.md` 只写正文、不盖 frontmatter |
+| 快速笔记(托盘) | 草稿预置概念头;`shouldSkipEmptySave` 改为「去掉 frontmatter 后无正文即空」,不再产生 0 字节文件 |
+| agent 契约 | `plugins-src/claude-agent/.../answer-note-question/CLAUDE.md`:`by::` 改带版本段、`answers/*.md` 必须带 `type: Answer` 头、禁止自签 `human:` |
+
+未做:P0.3 迁移命令、`index.md`/`log.md` 的**读侧**展示(目录说明)、`sources` 落到 sync 镜像的伴生笔记、P2.1 导出插件、P2.2 Attested Computation。
+下文的发现明细保留审计当时的状态,便于对照;第 8 节是兼容性核查与已知问题。
 
 ---
 
@@ -309,3 +322,63 @@ P1 的判据:`by::` 新写入全部匹配 `^(human:|process:|[^/]+/.+)`;人工�
 | 第 6 步 | P2.2 Attested Computation 试点 | 中 | 探索性 |
 
 **建议起点**:第 1 步的 lint + `src/lib/okf/concept.ts`。没有尺子之前做任何字段改造都只是换一种不合规。
+---
+
+## 8. 兼容性核查与已知问题(2026-08-04)
+
+核查范围:所有 `.md` 写入点(前端 / Rust / 插件 / CLI)、所有 frontmatter 读取点、
+外部工具(Obsidian、PyYAML 类 agent)、以及 host TS ↔ 插件 Rust 的实现漂移。
+测试基线:主仓 vitest 1654 通过、`pnpm check` 0 error、roam-import 47、decision-log 78、
+ebook-import 64、`src-tauri` cargo 382 通过 + 1 处既有失败(见 F1)。
+
+### A. 用户会直接看到的行为变化(有意为之)
+
+| # | 变化 | 备注 |
+|---|------|------|
+| A1 | ⌘N 新建、托盘快速笔记的文档带 frontmatter | **未做 GUI 实机验证**。光标走 `Selection.atEnd`(`RichEditor.svelte:100`),理论上落在文末不会掉进 frontmatter;富文本模式下会渲染成属性表 |
+| A2 | 存量 `.note.md` 首次保存时追加一行 `type`(并刷新 `updated`) | vault 的 git 历史会出现一波单行 diff;只在本来就要写盘时发生,打开不改文件 |
+| A3 | 「采纳入正文」会在 `.note.md` 写 `verified` | 若该笔记原先没有 frontmatter,这一步会给它新建一个 frontmatter 块 |
+| A4 | 分享页 `<head>` 多出 `okf:*` meta | 只有 `type` / `trust-tier` / `status` / `stale-after` |
+
+### B. 仍不合规或未纳管的写入点
+
+| # | 问题 | 现状 |
+|---|------|------|
+| B1 | `vault/sync/*.md` 镜像没有 frontmatter | 有意:镜像是源文件快照。来源应写进伴生 `.note.md` 的 `sources`,**尚未实现** |
+| B2 | claude-agent 写的 `answers/*.md` 只靠 prompt 约束 | 程序上无强制;agent 不照做就是不合规文档,目前无回读校验 |
+| B3 | decision-log 的 `type` 值仍是 `decision-board` / `decision-archive` | 与其余 Title Case 不一致;改值会动存量文件,暂不动 |
+| B4 | 工作区里的 `exlibris/`、`plugins-src/exlibris/` 未进 git | 不在本次核查范围 |
+
+### C. 校验器(`pnpm okf:lint`)的边界
+
+| # | 问题 |
+|---|------|
+| C1 | 没有 ignore 机制:对真实 vault 跑会把 sync 镜像与全部存量文件一并报出来(仓库自身的 `docs/` 同理,196/196) |
+| C2 | 把扫描根目录当 bundle 根:子目录里的 `index.md` 一律判 `reserved-as-concept`(合 §8,但对"只是普通目录"的用户会刺眼) |
+| C3 | 只查硬约束三条,不查 actor 形式、字段族与链接形态(有意:其余都是 SHOULD/MAY) |
+
+### D. 解析与互操作的边界
+
+| # | 问题 | 影响 |
+|---|------|------|
+| D1 | 空 frontmatter `---\n---` 不被识别(`src/lib/outline/markdown.ts:7` 的 `FM_RE` 与 lint core 同款) | 会被当成正文里的分隔线。合规文档不会出现空 frontmatter,属容错缺口 |
+| D2 | 日记的 `title: 2026-07-10` 是无引号日期形状 | `yaml`(JS)与 Obsidian 读成字符串;**PyYAML(YAML 1.1)会读成 date 对象**。要根治就得给日期形状的标题加引号 |
+| D3 | CRLF 文件保存后 frontmatter 行尾归一为 LF | 既有行为(序列化统一用 `\n`),非本次引入 |
+| D4 | Base 插件把 frontmatter 所有键当属性 | `.base` 表会多出一列 `type` |
+| D5 | `firstH1()` 正则扫全文 | frontmatter 里若有 YAML 注释 `# ...`,会被当成标题参与快速笔记改名。我们不写注释,但外部工具可能写 |
+| D6 | `type` 与用户自有的 `type` 语义可能不同 | 我们**只在缺失时写**,已有值一律不覆盖,所以不会改写用户语义;但同名会让两种用法混在一起 |
+
+### E. 实现漂移风险(同一规则的多份实现)
+
+| # | 位置 | 防线 |
+|---|------|------|
+| E1 | host TS `touchFrontmatter` ↔ roam-import Rust `touch_frontmatter` | 已有共享 parity fixture(9efa74c 就是靠它抓到的) |
+| E2 | ebook-import Rust `book_frontmatter` 是第三份实现 | **无 parity 测试**,只有自身单测 |
+| E3 | `scripts/okf-lint-core.mjs` 的 `RESERVED` ↔ `src/lib/okf/concept.ts` 的 `RESERVED_CONCEPT_NAMES` | 两份常量,靠注释互指,无自动校验 |
+| E4 | 前端 `humanActorId()` ↔ Rust `human_id_from()` | 同规则两份实现,两侧各有单测,无 parity fixture |
+
+### F. 测试基线上的既有问题
+
+| # | 问题 |
+|---|------|
+| F1 | `src-tauri/tests/plugin_ui_integration.rs::handle_parsed_rpc_wrong_origin_403` 失败 | 与 OKF 无关:`protocol.rs` 在 7ee02b8 改成"缺失 Origin 视为同源、只拒显式外来源",而该用例仍断言 `origin: None` 返回 403。测试与实现的既有不一致,应由该改动的作者决定改哪边 |
