@@ -103,6 +103,16 @@ fn rewrite_one(sel: &str, scope: &str) -> String {
             other => rebuilt.push(other),
         }
     }
+    // A scope target reached mid-selector (Typora's `.mac-os #write`,
+    // `#typora-source #write`) qualifies an *ancestor* of the editor root —
+    // app chrome with no counterpart here. Keeping that prefix and then
+    // prepending the scope below rendered `SCOPE .mac-os SCOPE`, which can
+    // never match, so those rules were dropped silently (600+ per theme in the
+    // vlook family, and the `caret-color` that left the caret invisible).
+    // Anchor on the last scope and discard whatever qualified it.
+    if let Some(last) = rebuilt.iter().rposition(|t| matches!(t, SelToken::ScopeMarker)) {
+        rebuilt.drain(..last);
+    }
     // Convert child combinators following a ScopeMarker into descendant.
     for i in 0..rebuilt.len().saturating_sub(1) {
         if matches!(rebuilt[i], SelToken::ScopeMarker)

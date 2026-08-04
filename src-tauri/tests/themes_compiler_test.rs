@@ -207,3 +207,40 @@ fn empty_url_is_left_alone() {
     let out = rewrite_url_value("", "/Users/u/themes/cl");
     assert_eq!(out, "");
 }
+
+// ── Scope targets qualified by an ancestor ──────────────────────────────────
+// Typora themes routinely gate rules on a body class (`.mac-os #write`,
+// `#typora-source #write`). Those ancestors do not exist here, and the rewrite
+// used to keep them *and* prepend the scope, yielding `SCOPE .mac-os SCOPE` —
+// unmatchable, so the rule silently vanished. Hundreds per theme did, including
+// the `caret-color` that left the editing caret invisible.
+
+#[test]
+fn ancestor_qualified_write_collapses_to_one_scope() {
+    assert_eq!(rewrite_selector_text(".mac-os #write", "x"), SCOPE);
+    assert_eq!(rewrite_selector_text("#typora-source #write", "x"), SCOPE);
+}
+
+#[test]
+fn ancestor_qualified_write_keeps_its_descendants() {
+    assert_eq!(rewrite_selector_text(".mac-os #write p", "x"), format!("{SCOPE} p"));
+    assert_eq!(
+        rewrite_selector_text(".mac-os #write > h1", "x"),
+        format!("{SCOPE} h1"),
+    );
+}
+
+#[test]
+fn compound_body_ancestor_is_dropped_too() {
+    // `body.mac-os` is not a bare scope target, so it stayed in place and killed
+    // the rule just the same.
+    assert_eq!(rewrite_selector_text("body.mac-os #write", "x"), SCOPE);
+}
+
+#[test]
+fn rewritten_selectors_never_repeat_the_scope() {
+    for sel in [".mac-os #write", "body.mac-os #write p", "html body #write", "#write"] {
+        let out = rewrite_selector_text(sel, "x");
+        assert_eq!(out.matches(".moraya-editor").count(), 1, "{sel} → {out}");
+    }
+}
