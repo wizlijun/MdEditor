@@ -90,10 +90,21 @@ pub fn mime_for(path: &Path) -> &'static str {
 /// nested iframes, not who may frame it.) The bridge injected into the served
 /// HTML keeps `connect-src 'self'`, so the in-iframe `window.notemd.request()`
 /// fetch to `/__rpc__` still passes.
+///
+/// **`blob:` in `img-src`/`media-src` (子项目⑤).** A plugin webview has zero
+/// Tauri IPC, so the Editor Kit's MediaResolver (`src/editor-kit/media.ts`)
+/// reads vault files through `host.vault.read_bytes` and hands moraya a
+/// `URL.createObjectURL(...)` result — a `blob:` URL is its ONLY output form,
+/// there is no `asset://`/`file://` fallback in this origin. Without `blob:`
+/// every local image/audio/video in a kit-hosted document is blocked. `blob:`
+/// grants nothing extra: the bytes already came through the capability-gated,
+/// vault-contained bridge, and a blob URL is same-origin and unguessable.
+/// `media-src` is spelled out because audio/video would otherwise fall back to
+/// `default-src 'self'` and be blocked just the same.
 pub fn csp_header(_plugin_id: &str) -> String {
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-     img-src 'self' data:; connect-src 'self'; object-src 'none'; \
-     base-uri 'none'; form-action 'none'; frame-src 'none'"
+     img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; \
+     object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
         .to_string()
 }
 
@@ -144,6 +155,29 @@ pub trait PluginView {
 
 const RPC_PATH: &str = "/__rpc__";
 
+/// Reserved URL prefix under every `plugin://<id>` origin that mirrors the
+/// host's own bundled frontend assets read-only (spec §3.4, Editor Kit).
+///
+/// It mirrors a whole *directory tree* ([`HOST_ASSET_DIR`]), not a file
+/// allowlist: the kit entry (`assets/editor-kit-v1.js`) statically imports
+/// several hash-named shared chunks and the moraya runtime dynamically imports
+/// more, so any filename-based allowlist would break on the next `pnpm build`.
+const HOST_PREFIX: &str = "/__host__/";
+
+/// The only host directory reachable through [`HOST_PREFIX`].
+///
+/// Vite emits every hashed chunk, stylesheet and font under `dist/assets/`;
+/// what lives at the dist *root* is the app's own HTML entry points
+/// (`index.html`, `insights.html`, `daily-notes.html`, …). Confining the mirror
+/// to this one directory keeps those entry points behind a structural boundary
+/// instead of relying on [`is_html_document`]'s content sniffing, and costs the
+/// kit nothing: its relative imports and `new URL('./…', import.meta.url)`
+/// references all resolve inside the same directory.
+const HOST_ASSET_DIR: &str = "assets/";
+
+/// Capability a plugin manifest must declare to reach [`HOST_PREFIX`].
+const EDITOR_KIT_CAP: &str = "editor.kit";
+
 /// Outcome of the pure routing layer. `Rpc` means the request passed all the
 /// pure checks (known plugin, POST /__rpc__, matching Origin) and its body
 /// should be dispatched by `ui_rpc::dispatch` in the shell — a step that needs
@@ -153,6 +187,11 @@ const RPC_PATH: &str = "/__rpc__";
 pub enum Routed {
     /// Dispatch RPC: `(plugin_id, capabilities)`. Body comes from the request.
     Rpc(String, Vec<String>),
+    /// Serve a host-bundled frontend asset (Editor Kit). The payload is the
+    /// host asset path with the [`HOST_PREFIX`] already stripped and validated
+    /// (e.g. `/assets/editor-kit-v1.js`); the shell reads the bytes through
+    /// `app.asset_resolver()`, which this pure core cannot reach.
+    HostAsset(String),
     Response(http::Response<Vec<u8>>),
 }
 
@@ -189,10 +228,76 @@ pub fn handle_parsed(
             }
             Routed::Rpc(plugin_id.to_string(), capabilities)
         }
-        "GET" => Routed::Response(serve_asset(&ui_root, plugin_id, path, locale, theme)),
+        "GET" => match path.strip_prefix(HOST_PREFIX) {
+            Some(rest) => route_host_asset(&capabilities, rest),
+            None => Routed::Response(serve_asset(&ui_root, plugin_id, path, locale, theme)),
+        },
         "POST" => Routed::Response(plain(http::StatusCode::NOT_FOUND, "not found")),
         _ => Routed::Response(plain(http::StatusCode::METHOD_NOT_ALLOWED, "method not allowed")),
     }
+}
+
+/// Route `GET /__host__/<rest>` to the host's bundled frontend assets.
+///
+/// The checks, in the order they run — the order is itself load-bearing:
+///
+/// 1. **Capability gate → 404.** `editor.kit` is a *declarative* gate of the
+///    same kind as the `host.*` capabilities (`host_api.rs`): it is read
+///    straight off the plugin's own manifest, and nothing at install time
+///    whitelists it or asks the user to approve it. So it does NOT stop a
+///    malicious plugin — one that simply writes `"editor.kit"` into its
+///    manifest walks through. What it does buy: an ordinary plugin has no such
+///    surface by default, and the declaration is a durable, auditable line in a
+///    manifest the marketplace can review. Against a plugin that *has* declared
+///    it, the real limits are steps 2–4 plus the standing premise that `dist/`
+///    holds no secrets. The gate runs FIRST so an undeclared plugin gets a
+///    byte-identical 404 for every `__host__` URL — well-formed or not — and
+///    cannot infer the reserved prefix exists by diffing status codes.
+/// 2. **Segment validation → 403.** Empty, `.` and `..` segments are rejected.
+///    This matters beyond tidiness: in dev builds `AssetResolver` resolves
+///    against the `frontendDist` *directory* and `PathBuf::components()` keeps
+///    `ParentDir`, so an unchecked `..` really would read outside `dist/`.
+///    Percent-escapes are refused here rather than decoded: `get_asset`
+///    percent-decodes again downstream (`manager/mod.rs`), and declining to
+///    decode at all means this boundary never depends on reasoning about how
+///    many decode passes each side performs. No bundled asset name needs an
+///    escape, so the ban costs nothing.
+/// 3. **Directory confinement → 404.** Only [`HOST_ASSET_DIR`] is mirrored;
+///    the dist root's HTML entry points are structurally out of reach. 404
+///    rather than 403, to stay consistent with step 1's silence.
+/// 4. **Read-only GET** (this function is only reachable from the GET arm).
+fn route_host_asset(capabilities: &[String], rest: &str) -> Routed {
+    if !capabilities.iter().any(|c| c == EDITOR_KIT_CAP) {
+        return Routed::Response(plain(http::StatusCode::NOT_FOUND, "not found"));
+    }
+    let bad_segment = |seg: &str| {
+        seg.is_empty() || seg == "." || seg == ".." || seg.contains('%') || seg.contains('\\')
+    };
+    if rest.split('/').any(bad_segment) {
+        return Routed::Response(plain(http::StatusCode::FORBIDDEN, "forbidden"));
+    }
+    if !rest.starts_with(HOST_ASSET_DIR) {
+        return Routed::Response(plain(http::StatusCode::NOT_FOUND, "not found"));
+    }
+    Routed::HostAsset(format!("/{rest}"))
+}
+
+/// True when `bytes` open an HTML document.
+///
+/// Guards the host-asset branch against a Tauri quirk: in production
+/// `AssetResolver::get` falls back to the app shell's `index.html` for ANY
+/// unresolved key instead of returning `None`, so a stale/renamed chunk would
+/// otherwise be answered `200` with HTML under a `text/javascript`
+/// content-type — a baffling parse error inside the plugin webview instead of
+/// an honest 404. No host asset we serve here is HTML.
+///
+/// This is defence in depth, not the boundary: the app's HTML entry points live
+/// at the dist root and are already out of reach via [`HOST_ASSET_DIR`].
+pub fn is_html_document(bytes: &[u8]) -> bool {
+    let body = bytes.strip_prefix(b"\xef\xbb\xbf".as_slice()).unwrap_or(bytes);
+    let head = &body[..body.len().min(64)];
+    let head = String::from_utf8_lossy(head).trim_start().to_ascii_lowercase();
+    head.starts_with("<!doctype") || head.starts_with("<html")
 }
 
 /// GET asset serving, extracted from `handle_parsed` for readability.
@@ -306,12 +411,50 @@ pub fn handle<R: tauri::Runtime>(
     ) {
         Routed::Response(r) => r,
         Routed::Rpc(id, capabilities) => dispatch_rpc(app, &id, &capabilities, request.body()),
+        Routed::HostAsset(asset_path) => serve_host_asset(app, &asset_path),
     }
+}
+
+/// Read a host-bundled frontend asset through `AssetResolver` (spec §3.4).
+///
+/// # Dev mode
+///
+/// This works under `pnpm tauri dev` too, but only because Tauri's
+/// `AssetResolver::get_for_scheme` has a `#[cfg(dev)]` branch that falls back
+/// to reading `frontendDist` (`../dist`) **from disk** when `devUrl` is set —
+/// assets are not embedded in dev builds. So the bytes come from the last
+/// `pnpm build`, NOT from the Vite dev server: `dist/` must exist and be fresh,
+/// or the kit is missing (404) / stale. Release builds read the embedded copy.
+fn serve_host_asset<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    asset_path: &str,
+) -> http::Response<Vec<u8>> {
+    let Some(asset) = app.asset_resolver().get(asset_path.to_string()) else {
+        return plain(http::StatusCode::NOT_FOUND, "not found");
+    };
+    // Move, don't clone: the largest bundled chunks run to ~1.3 MB and this
+    // runs once per request.
+    let bytes = asset.bytes;
+    // See `is_html_document`: production lookups fall back to index.html.
+    if is_html_document(&bytes) {
+        return plain(http::StatusCode::NOT_FOUND, "not found");
+    }
+    http::Response::builder()
+        .status(http::StatusCode::OK)
+        .header("content-type", mime_for(Path::new(asset_path)))
+        .header("cache-control", "no-cache")
+        .body(bytes)
+        .unwrap()
 }
 
 /// Read the persisted UI theme from settings.json (mirrors `read_saved_theme`
 /// in `windows.rs`; kept local so this module stays self-contained). Defaults
 /// to `"default"` when the file is missing/unreadable or the key is absent.
+///
+/// Delegates to `themes::commands::parse_theme_settings` (same reasoning as
+/// `windows::read_saved_theme`): the `theme` key has been an object since
+/// 4517e63, so a plain `.as_str()` read always missed and this always
+/// returned `"default"` — wrong for every real vault.
 fn read_saved_theme<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     use tauri::Manager;
     let Ok(dir) = app.path().app_config_dir() else {
@@ -323,7 +466,7 @@ fn read_saved_theme<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
         return "default".to_string();
     };
-    json.get("theme").and_then(|v| v.as_str()).unwrap_or("default").to_string()
+    crate::themes::commands::parse_theme_settings(&json).0
 }
 
 /// RPC seam: parse the JSON-RPC body, run `ui_rpc::dispatch` (production entry;
@@ -387,11 +530,14 @@ mod tests {
     }
 
     fn view_for(dir: &Path) -> MapView {
+        view_with_caps(dir, vec!["toast".to_string()])
+    }
+
+    /// Same as [`view_for`] but with an explicit capability list (for the
+    /// `editor.kit`-gated `__host__` route).
+    fn view_with_caps(dir: &Path, capabilities: Vec<String>) -> MapView {
         let mut map = HashMap::new();
-        map.insert(
-            "test.plugin".to_string(),
-            (dir.to_path_buf(), vec!["toast".to_string()]),
-        );
+        map.insert("test.plugin".to_string(), (dir.to_path_buf(), capabilities));
         MapView(map)
     }
 
@@ -480,18 +626,32 @@ mod tests {
         assert_eq!(
             csp_header("test.plugin"),
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-             img-src 'self' data:; connect-src 'self'; object-src 'none'; \
-             base-uri 'none'; form-action 'none'; frame-src 'none'"
+             img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; \
+             object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
         );
+    }
+
+    /// `blob:` is the Editor Kit MediaResolver's ONLY output form
+    /// (`src/editor-kit/media.ts` returns `URL.createObjectURL(...)` for both
+    /// `loadLocalImage` and `loadLocalMedia`), and a plugin webview has no IPC
+    /// to fall back on. Dropping either directive silently blocks every local
+    /// image and every audio/video element in a kit-hosted document — a failure
+    /// the main window can never reproduce, because its `csp` is null.
+    #[test]
+    fn csp_allows_blob_for_kit_media() {
+        let csp = csp_header("test.plugin");
+        assert!(csp.contains("img-src 'self' data: blob:"), "{csp}");
+        assert!(csp.contains("media-src 'self' blob:"), "{csp}");
     }
 
     // ── handle_parsed ───────────────────────────────────────────────────
 
-    /// Unwrap the `Routed::Response` branch (panics on `Rpc`).
+    /// Unwrap the `Routed::Response` branch (panics on the other variants).
     fn resp(r: Routed) -> http::Response<Vec<u8>> {
         match r {
             Routed::Response(r) => r,
             Routed::Rpc(..) => panic!("expected a direct response, got Routed::Rpc"),
+            Routed::HostAsset(p) => panic!("expected a direct response, got Routed::HostAsset({p})"),
         }
     }
 
@@ -580,7 +740,7 @@ mod tests {
         let view = view_for(dir.path());
         match handle_parsed(&view, "POST", "test.plugin", "/__rpc__", None, "en", "default") {
             Routed::Rpc(id, _) => assert_eq!(id, "test.plugin"),
-            Routed::Response(r) => panic!("missing origin must route, got status {}", r.status()),
+            other => panic!("missing origin must route, got status {}", resp(other).status()),
         }
     }
 
@@ -601,7 +761,7 @@ mod tests {
                 assert_eq!(id, "test.plugin");
                 assert_eq!(capabilities, vec!["toast".to_string()]);
             }
-            Routed::Response(r) => panic!("expected Routed::Rpc, got status {}", r.status()),
+            other => panic!("expected Routed::Rpc, got status {}", resp(other).status()),
         }
     }
 
@@ -627,6 +787,180 @@ mod tests {
         let view = view_for(dir.path());
         let r = resp(handle_parsed(&view, "PUT", "test.plugin", "/index.html", None, "en", "default"));
         assert_eq!(r.status(), 405);
+    }
+
+    // ── __host__ (Editor Kit host assets) ───────────────────────────────
+
+    #[test]
+    fn host_asset_route_requires_editor_kit_capability() {
+        let dir = ui_fixture();
+        // 无 editor.kit → 404
+        let view = view_with_caps(dir.path(), vec!["vault.read".into()]);
+        let r = resp(handle_parsed(
+            &view, "GET", "test.plugin", "/__host__/assets/editor-kit-v1.js", None, "en", "default",
+        ));
+        assert_eq!(r.status(), http::StatusCode::NOT_FOUND);
+
+        // 有 editor.kit → HostAsset,且 __host__ 前缀被剥掉
+        let view = view_with_caps(dir.path(), vec!["editor.kit".into()]);
+        match handle_parsed(
+            &view, "GET", "test.plugin", "/__host__/assets/chunk-abc.js", None, "en", "default",
+        ) {
+            Routed::HostAsset(p) => assert_eq!(p, "/assets/chunk-abc.js"),
+            other => panic!("expected HostAsset, got status {}", resp(other).status()),
+        }
+
+        // 路径穿越照旧拒绝
+        let r = resp(handle_parsed(
+            &view, "GET", "test.plugin", "/__host__/../secret", None, "en", "default",
+        ));
+        assert_eq!(r.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    /// `__host__/` is a read-only mirror of the WHOLE host asset tree, not a
+    /// two-file allowlist: the kit entry statically imports hashed shared
+    /// chunks and the moraya runtime dynamically imports more.
+    #[test]
+    fn host_asset_maps_arbitrary_asset_paths() {
+        let dir = ui_fixture();
+        let view = view_with_caps(dir.path(), vec!["editor.kit".into()]);
+        for (url, expected) in [
+            ("/__host__/assets/editor-kit-v1.js", "/assets/editor-kit-v1.js"),
+            ("/__host__/assets/editor-kit-v1.css", "/assets/editor-kit-v1.css"),
+            ("/__host__/assets/index-D3adB33f.js", "/assets/index-D3adB33f.js"),
+            ("/__host__/assets/KaTeX_Main-Regular-x1.woff2", "/assets/KaTeX_Main-Regular-x1.woff2"),
+            ("/__host__/assets/nested/deep/a.js", "/assets/nested/deep/a.js"),
+        ] {
+            match handle_parsed(&view, "GET", "test.plugin", url, None, "en", "default") {
+                Routed::HostAsset(p) => assert_eq!(p, expected, "for {url}"),
+                other => panic!("{url}: expected HostAsset, got {}", resp(other).status()),
+            }
+        }
+    }
+
+    /// Percent-escapes are refused outright (not decoded): `AssetResolver`
+    /// percent-decodes downstream, so accepting them would reopen traversal
+    /// via double encoding (`%252e%252e` → `%2e%2e` → `..`).
+    #[test]
+    fn host_asset_rejects_percent_escapes_and_bad_segments() {
+        let dir = ui_fixture();
+        let view = view_with_caps(dir.path(), vec!["editor.kit".into()]);
+        for url in [
+            "/__host__/%2e%2e/secret",
+            "/__host__/assets/%252e%252e/secret",
+            "/__host__/assets/../../secret",
+            "/__host__/assets/./x.js",
+            "/__host__/assets//x.js",
+            "/__host__/",
+            "/__host__/assets/..%2fsecret",
+            "/__host__/assets/x\\..\\secret",
+        ] {
+            let r = resp(handle_parsed(&view, "GET", "test.plugin", url, None, "en", "default"));
+            assert_eq!(r.status(), http::StatusCode::FORBIDDEN, "{url} must be 403");
+        }
+    }
+
+    /// The mirror is confined to `assets/`. The dist root holds the app's own
+    /// HTML entry points; keeping them unreachable must be a structural rule,
+    /// not a job for `is_html_document`'s content sniffing.
+    #[test]
+    fn host_asset_is_confined_to_the_assets_dir() {
+        let dir = ui_fixture();
+        let view = view_with_caps(dir.path(), vec!["editor.kit".into()]);
+        for url in [
+            "/__host__/index.html",
+            "/__host__/insights.html",
+            "/__host__/daily-notes.html",
+            "/__host__/plugin-market.html",
+            "/__host__/assetsx/a.js", // prefix must be a whole segment
+            "/__host__/assets",       // the directory itself is not an asset
+            "/__host__/other/a.js",
+        ] {
+            let r = resp(handle_parsed(&view, "GET", "test.plugin", url, None, "en", "default"));
+            assert_eq!(r.status(), http::StatusCode::NOT_FOUND, "{url} must be 404");
+        }
+    }
+
+    /// An undeclared plugin must not be able to tell the reserved prefix exists
+    /// by diffing responses: every `__host__` URL — well-formed or malformed —
+    /// has to answer byte-identically to any other missing plugin asset. This
+    /// is what the capability gate running BEFORE path validation buys, and
+    /// what would silently break if someone reordered the two for fail-fast.
+    #[test]
+    fn host_asset_gate_precedes_validation_for_ungranted_plugins() {
+        let dir = ui_fixture();
+        let view = view_with_caps(dir.path(), vec![]);
+        let baseline =
+            resp(handle_parsed(&view, "GET", "test.plugin", "/nope.js", None, "en", "default"));
+        for url in [
+            "/__host__/assets/a.js",
+            "/__host__/./x",
+            "/__host__/",
+            "/__host__/%2e%2e/x",
+            "/__host__/../secret",
+            "/__host__/index.html",
+        ] {
+            let r = resp(handle_parsed(&view, "GET", "test.plugin", url, None, "en", "default"));
+            assert_eq!(r.status(), baseline.status(), "{url}");
+            assert_eq!(r.body(), baseline.body(), "{url}");
+        }
+    }
+
+    /// The reserved prefix is exactly `/__host__/` — a plugin's own asset whose
+    /// name merely starts with those bytes is still served from its ui root.
+    #[test]
+    fn host_asset_prefix_does_not_shadow_plugin_assets() {
+        let dir = ui_fixture();
+        let view = view_with_caps(dir.path(), vec!["editor.kit".into()]);
+        // Not the reserved prefix → normal (missing) plugin asset → 404, not HostAsset.
+        let r = resp(handle_parsed(
+            &view, "GET", "test.plugin", "/__host__evil.js", None, "en", "default",
+        ));
+        assert_eq!(r.status(), http::StatusCode::NOT_FOUND);
+        // A real plugin asset still resolves normally for an editor.kit plugin.
+        let r = resp(handle_parsed(&view, "GET", "test.plugin", "/app.js", None, "en", "default"));
+        assert_eq!(r.status(), 200);
+        assert_eq!(r.body(), b"console.log(1)");
+    }
+
+    /// Only GET reaches the host-asset mirror; the reserved path is read-only.
+    #[test]
+    fn host_asset_is_get_only() {
+        let dir = ui_fixture();
+        let view = view_with_caps(dir.path(), vec!["editor.kit".into()]);
+        let r = resp(handle_parsed(
+            &view, "POST", "test.plugin", "/__host__/assets/a.js",
+            Some("plugin://test.plugin"), "en", "default",
+        ));
+        assert_eq!(r.status(), http::StatusCode::NOT_FOUND);
+        let r = resp(handle_parsed(
+            &view, "PUT", "test.plugin", "/__host__/assets/a.js", None, "en", "default",
+        ));
+        assert_eq!(r.status(), http::StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    /// An unknown plugin id never reaches the capability gate.
+    #[test]
+    fn host_asset_unknown_plugin_404() {
+        let dir = ui_fixture();
+        let view = view_with_caps(dir.path(), vec!["editor.kit".into()]);
+        let r = resp(handle_parsed(
+            &view, "GET", "other.plugin", "/__host__/assets/a.js", None, "en", "default",
+        ));
+        assert_eq!(r.status(), http::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn html_fallback_sniffing() {
+        // Tauri's production asset lookup falls back to index.html for unknown
+        // keys; those bytes must never be served as a kit chunk.
+        assert!(is_html_document(b"<!doctype html>\n<html>"));
+        assert!(is_html_document(b"  \n<!DOCTYPE HTML>"));
+        assert!(is_html_document(b"<html lang=\"en\">"));
+        assert!(is_html_document(b"\xef\xbb\xbf<!doctype html>"), "BOM-prefixed");
+        assert!(!is_html_document(b"import x from './y.js';"));
+        assert!(!is_html_document(b".a{color:red}"));
+        assert!(!is_html_document(b""));
     }
 
     // ── inject_bridge (pure) ────────────────────────────────────────────

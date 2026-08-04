@@ -102,7 +102,8 @@ plugins-src/<name>/
   "windows":       [ WindowContribution ],   // 见下
   "custom_editors":[ /* 自定义编辑器 */ ],
   "settings":      { /* 设置面板,语义同 v1 */ },
-  "cli":           [ /* CliEntry */ ]
+  "cli":           [ /* CliEntry */ ],
+  "tray":          [ TrayContribution ]      // 见下;托盘"插座"
 }
 ```
 
@@ -134,6 +135,15 @@ plugins-src/<name>/
 
 `open_command` 是打开窗口的关键:菜单项的 `command` 与某窗口的 `open_command` 相等时,点菜单即开窗,无需插件进程参与。
 
+**TrayContribution**(`lib.rs:65-74`):
+```jsonc
+{
+  "window": "main",     // 必须匹配某个 contributes.windows[].id
+  "label": "决策日志"   // 可选;缺省用插件本地化名称(manifest name + i18n.<locale>.name)
+}
+```
+每条 `tray` 贡献在菜单栏托盘下拉里追加一条启动项(位置在"Daily Notes"下方),点击直接开对应插件窗口(`src-tauri/src/lib.rs:1544-1568`:宿主扫描所有已启用插件的 `contributes.tray`,按 label 排序后逐一挂 `tray-plugin:<id>:<window>` 菜单项)。`decision-log`、`weekly-review`、`idea-spark` 均已声明。
+
 ---
 
 ## 4. 校验规则(`validate_manifest`,`lib.rs:170-206`)
@@ -155,7 +165,7 @@ plugins-src/<name>/
 
 ## 5. Capabilities — 能力授权表
 
-**唯一真相:`host_api.rs:32-50` 的 `method_capability()`。** 未在表内的方法一律 `__unknown__` → 拒绝(`-32601`)。未声明对应 capability 的调用 → `-32001 ERR_CAPABILITY_DENIED`。
+**唯一真相:`host_api.rs:32-54` 的 `method_capability()`。** 未在表内的方法一律 `__unknown__` → 拒绝(`-32601`)。未声明对应 capability 的调用 → `-32001 ERR_CAPABILITY_DENIED`。
 
 | capability token | 解锁的 `host.*` 方法 |
 |---|---|
@@ -163,17 +173,29 @@ plugins-src/<name>/
 | `toast` | `host.toast` |
 | `ui` | `host.ui.post`(插件进程 → 自己的窗口推消息) |
 | `dialog` | `host.dialog.open` / `host.dialog.save` |
-| `vault.read` | `host.vault.info` / `host.vault.read` / `host.vault.exists` / `host.vault.list` |
+| `vault.read` | `host.vault.info` / `host.vault.read` / `host.vault.read_bytes` / `host.vault.exists` / `host.vault.list` |
 | `vault.write` | `host.vault.write` / `host.vault.mkdir` |
 | `fs.read:dialog` | `host.fs.read_text` / `host.fs.read_bytes`(仅限本会话内经 dialog 选中的路径) |
 | `clipboard.write` | `host.clipboard.write` |
 | `location` | `host.location.get` |
 | `editor.open` | `host.editor.open` |
 | `renderer.html` | 渲染类(md2pdf 用) |
+| `editor.kit` | `host.theme.css`(UI 桥 only,进程通道 `-32601`);另外解锁一条**保留 URL 路径**(不是 `host.*` 方法)—— `GET plugin://<id>/__host__/assets/...`,见下方说明 |
 
-**通道差异(重要)**:`dialog.*` / `fs.*` / `clipboard.*` **只在 UI 桥可用**;后台进程通道(纯后端插件)即使声明了 `dialog` 也拿不到,会回 `-32601`(`host_api.rs:165-168`)。`vault.*` 和 `location.get` 两个通道都可用。
+**通道差异(重要)**:`dialog.*` / `fs.*` / `clipboard.*` **只在 UI 桥可用**;后台进程通道(纯后端插件)即使声明了 `dialog` 也拿不到,会回 `-32601`(`host_api.rs:165-168`)。`vault.*` 和 `location.get` 两个通道都可用。`editor.kit` 的两个解锁项(`host.theme.css` RPC + `__host__` 资产路径)也都只在 UI 桥可用。
 
 **决策日志需要的最小集合**:`["vault.read", "vault.write", "toast"]`(开窗口时天然可用,窗口本身不需要单独 capability)。
+
+### `editor.kit` 与 `__host__` 保留路径(源:`protocol.rs:147-272`)
+
+`editor.kit` 是给**在插件隔离窗口里内嵌一份宿主 Editor Kit**(moraya 编辑器 + 主题)用的能力,解锁两样东西:
+
+1. **`host.theme.css` RPC** —— 返回 `{ light_css, dark_css, follow_system }`(见 §6),供 kit 给编辑器上色。
+2. **`GET plugin://<id>/__host__/assets/...`** —— 只读镜像宿主自己 `dist/assets/` 目录下的整棵资产树(kit 入口 JS/CSS 及其静态 import 的一堆 hash 文件名 chunk),不是白名单挑几个文件。行为细节(都已用单测钉死,`protocol.rs` 里 `__host__` 相关测试):
+   - **未声明 `editor.kit` 的插件 → 404**,而且这个 404 和"路径合法但资产确实不存在"的 404 **逐字节相同**——没声明能力的插件无法靠对比状态码探测出 `__host__` 这条保留前缀的存在。
+   - **只映射 `dist/assets/` 这一个目录**,不是整个 `dist/`:`dist` 根目录下的 `index.html`/`insights.html`/`daily-notes.html`/`plugin-market.html` 等宿主自己的 HTML 入口永远够不到;路径段里的空段、`.`、`..`、`%`、`\` 一律拒(`403`),规避目录穿越。
+   - **只读 GET**,没有别的方法;`POST`/`PUT` 等一律走各自方法的常规处理(不是这条保留路径的特权)。
+   - **dev 模式下它读的是磁盘上的 `dist/`,不是 Vite dev server** —— `AssetResolver::get_for_scheme` 在 `#[cfg(dev)]` 下会回退到从 `frontendDist`(即 `../dist`)读文件,但字节来自上一次 `pnpm build`,不会热更新。所以开发/联调用了 Editor Kit 的插件时,**必须先 `pnpm build` 一次**再 `pnpm tauri dev`,改了宿主前端要重新 build 才能反映到插件窗口里;发布构建走内嵌资源,不受影响。
 
 ---
 
@@ -191,11 +213,14 @@ plugins-src/<name>/
 | `host.vault.exists` | `{ path }` | `{ exists: bool }` |
 | `host.vault.list` | `{ path }` | `{ entries: [{ name, is_dir }] }`(按 name 排序) |
 | `host.vault.mkdir` | `{ path }` | `{ ok: true }` |
+| `host.vault.read_bytes` | `{ path }` | `{ base64 }`(vault 内文件原始字节的 base64;供隔离插件窗口渲染 vault 里的图片等二进制资源,同 `vault.read` capability) |
 
-**路径规则(`resolve_in_vault`,`ui_rpc.rs:470-523`)**:
+**路径规则(`resolve_in_vault`,`ui_rpc.rs:525-577`)**:
 - `path` **必须 vault 相对**;绝对路径、任何 `..` 段都被拒(还防符号链接逃逸)。
 - `host.vault.write` **自动创建父目录**,**没有 `create_dirs` 参数**(勿照搬旧文档)。
-- 读写上限 **10 MB**(UTF-8 字节),超了报 `too_large`。
+- 读写上限 **200 MB**(`ui_rpc.rs` 的 `MAX_TEXT_BYTES`,为容纳大体量 Roam 导出从 10 MB 调高),超了报 `too_large`。`host.fs.read_bytes` 把整份文件 base64 进一条 RPC 字符串(约放大 1.33×),同一上限下内存代价更高。
+- **例外:`host.vault.read_bytes` 上限 10 MB**(`MAX_VAULT_BYTES`)。它是 Editor Kit MediaResolver 的字节来源,渲染文档时**按图隐式触发**、没有用户手势限速,继承 200 MB 会让一张超大图把窗口卡在 ~267 MB 字符串上;超限报 `too_large`,图渲染成断链而不是冻 UI。
+- `host.vault.write` 写 `.sh` 时自动补可执行位(0o755)。种 agent 任务模板的 `precheck.sh` 必须可执行,否则 claude-agent 的 precheck 对 spawn 失败是 fail-open,守卫会**静默失效**。
 - 未配置 vault 时报 `vault_required: …`。
 
 > ⚠️ 常见误区更正:`vault.write` 参数只有 `{path, content}`;`vault.info` 返回的是 `{root, wiki_dir, daily_dir}` 而非 `{root, subdirs}`。
@@ -212,6 +237,7 @@ plugins-src/<name>/
 | `host.clipboard.write` | `clipboard.write` | `{ text }` → `{ok}` |
 | `host.location.get` | `location` | — → 位置对象 |
 | `host.editor.open` | `editor.open` | `{ path }`(vault 相对)→ `{ ok: true }`;在主编辑器打开文件并聚焦主窗口。仅 UI 桥可用。 |
+| `host.theme.css` | `editor.kit` | — → `{ light_css, dark_css, follow_system }`;隔离插件窗口没有主程序的 `<style>` 插槽,靠这个方法要到编译好的主题 CSS(已去掉 `[data-theme="…"]` 限定前缀,直接对 `.moraya-editor` 生效)。仅 UI 桥可用(`ui_rpc.rs` 里在 `dispatch_with` 之外单独处理,因为要活的 `AppHandle` 读 app 配置目录 + 已编译主题产物;进程通道回 `-32601`)。 |
 
 错误码(`lib.rs:106-110`):`-32001` 能力被拒 / `-32601` 方法不存在 / `-32000` 宿主执行失败(消息带 `"<kind>: <detail>"` 前缀)。
 
@@ -301,6 +327,8 @@ interface SideView {
 | `Vault Conventions` | vault 根的 `AGENTS.md` |
 | `Vault Conventions` | vault 根的 `AGENTS.md`(模板 `src-tauri/templates/AGENTS.md`) |
 | `Decision Board` / `Decision Archive` | 决策日志的未决看板与已裁决归档 |
+| `Idea` | 奇思妙想(idea-spark)里用户写下的 idea 原文 |
+| `Idea Proof` | 奇思妙想里 agent 产出的论证文档 `<name>.proof.md` |
 
 **自检**:`pnpm okf:lint <目录>`(退出码非 0 即有违反,`--ignore <glob>` 排除镜像/报表目录);单测里可直接 `import { lintText } from 'scripts/okf-lint-core.mjs'` 断言产物合规。
 

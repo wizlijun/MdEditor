@@ -69,6 +69,16 @@ pub fn strip_include_when_export(css: &str) -> String {
     out
 }
 
+/// The exact prefix every compiled selector starts with: the theme
+/// disambiguator plus the editor host. Single source of truth so consumers that
+/// must UNDO the scoping (e.g. `themes::commands::unscope_theme_css`, which
+/// feeds isolated plugin webviews that have no `data-theme` ancestor) cannot
+/// drift from the form written here. Pinned literally by
+/// `tests/themes_compiler_test.rs`.
+pub fn scope_prefix(theme_id: &str) -> String {
+    format!(r#"[data-theme="{theme_id}"] .moraya-editor"#)
+}
+
 /// Rewrite a single CSS selector list string to a scoped form.
 ///
 /// Algorithm: split on top-level commas → for each selector, tokenize into
@@ -77,7 +87,7 @@ pub fn strip_include_when_export(css: &str) -> String {
 /// child combinators following the scope to descendants → ensure exactly
 /// one scope at the start → render. Selector-list results are de-duplicated.
 pub fn rewrite_selector_text(input: &str, theme_id: &str) -> String {
-    let scope = format!(r#"[data-theme="{theme_id}"] .moraya-editor"#);
+    let scope = scope_prefix(theme_id);
     let mut parts: Vec<String> = Vec::new();
     for raw in split_top_level_comma(input) {
         parts.push(rewrite_one(raw.trim(), &scope));

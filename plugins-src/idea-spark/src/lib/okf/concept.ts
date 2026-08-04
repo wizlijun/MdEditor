@@ -1,3 +1,12 @@
+// Copied verbatim from `src/lib/okf/concept.ts` (the main app's OKF frontmatter
+// production entry point) — DO NOT modify beyond this header. Idea Spark runs
+// in an isolated plugin webview that cannot `import` anything under the host
+// repo's `src/` (see docs/plugin-v2-development.md §9.1: plugins must not
+// depend on the main app's source tree), so the OKF writer surface has to be
+// vendored into the plugin instead of shared by import. If the upstream file
+// changes, port the change here too — this copy is expected to stay byte-for-
+// byte identical to upstream except for this comment block.
+//
 // OKF v0.2 概念文档的唯一 frontmatter 生产入口。
 // 规范见 docs/okf-v0.2-format-constraints.md;整改计划见 docs/okf-v0.2-conformance-audit.md。
 //
@@ -20,8 +29,6 @@ export const CONCEPT_TYPE = {
   wikiPage: 'Wiki Page',
   /** 电子书导入产出的 `book.md` */
   book: 'Book',
-  /** AI 先读:电子书摘要 `YYYY-MM-DD-summary.md`(claude-agent ai-read-ebook 任务产出) */
-  bookSummary: 'Book Summary',
   /** Reading Insights 的阅读数据报告 */
   readingReport: 'Reading Report',
   /** 决策日志:未决看板 / 已裁决归档 */

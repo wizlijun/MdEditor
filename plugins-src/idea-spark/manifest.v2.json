@@ -1,0 +1,70 @@
+{
+  "manifest_version": 2,
+  "id": "notemd.idea-spark",
+  "name": "Idea Spark",
+  "version": "1.0.0",
+  "kind": "native",
+  "engines": {
+    "notemd": ">=6.804.2"
+  },
+  "description": "Capture a spark, then let an agent argue it into a next-step document.",
+  "ui": "ui/",
+  "activation": {
+    "events": [
+      "onCommand:open"
+    ]
+  },
+  "contributes": {
+    "menus": [
+      {
+        "location": "plugins",
+        "label": "Idea Spark",
+        "command": "open"
+      }
+    ],
+    "windows": [
+      {
+        "id": "main",
+        "entry": "index.html",
+        "title": "Idea Spark",
+        "width": 760,
+        "height": 640,
+        "min_width": 600,
+        "min_height": 480,
+        "open_command": "open"
+      }
+    ],
+    "tray": [
+      {
+        "window": "main"
+      }
+    ]
+  },
+  "capabilities": [
+    "vault.read",
+    "vault.write",
+    "toast",
+    "editor.open",
+    "editor.kit"
+  ],
+  "i18n": {
+    "zh": {
+      "name": "奇思妙想",
+      "menus": {
+        "open": "奇思妙想"
+      }
+    },
+    "ja": {
+      "name": "アイデアスパーク",
+      "menus": {
+        "open": "アイデアスパーク"
+      }
+    },
+    "de": {
+      "name": "Ideenfunke",
+      "menus": {
+        "open": "Ideenfunke"
+      }
+    }
+  }
+}
