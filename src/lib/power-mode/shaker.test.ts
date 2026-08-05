@@ -20,7 +20,7 @@ describe('createShaker', () => {
   it('translates on shake and clears after recoverTime', () => {
     const el = document.createElement('div')
     const s = createShaker(el, () => 1)
-    s.shake(normalizeConfig({ shake: { intensity: 3, recoverTime: 800 } }))
+    s.shake(normalizeConfig({ shake: { enable: true, intensity: 3, recoverTime: 800 } }))
     expect(el.style.transform).toBe('translate3d(3px, 3px, 0)')
     vi.advanceTimersByTime(799)
     expect(el.style.transform).toBe('translate3d(3px, 3px, 0)')
@@ -40,7 +40,7 @@ describe('createShaker', () => {
   it('destroy clears the pending recovery and resets the transform', () => {
     const el = document.createElement('div')
     const s = createShaker(el, () => 1)
-    s.shake(normalizeConfig({}))
+    s.shake(normalizeConfig({ shake: { enable: true } }))
     s.destroy()
     expect(el.style.transform).toBe('')
     // 定时器已被取消:再走完也不该抛

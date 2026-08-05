@@ -7,10 +7,13 @@ import { PRESET_PARAMS, presetConfig, assetBase } from './presets'
  * `surfaces.main` 默认关、插件窗口默认开:狂暴模式在主编辑窗口是干扰,在
  * 「随手写一条」的插件窗口里才是那点仪式感。装了插件就该看到效果,所以
  * 「配置从未写过」不等于「全关」——全关只由「插件没装/停用」表示。
+ *
+ * 震动默认关:抖动最容易让人分心,其余两项(爆炸/连击)默认开。intensity/
+ * recoverTime 取「中度」档(见插件 UI 的 SHAKE_LEVELS);timeout 取「中」档。
  */
 export const DEFAULT_CONFIG: PowerModeConfig = {
   surfaces: { main: false, 'notemd.idea-spark': true },
-  shake: { enable: true, intensity: 5, recoverTime: 800 },
+  shake: { enable: false, intensity: 6, recoverTime: 800 },
   combo: { enable: true, timeout: 10, showExclamation: true, precisionInput: false },
   explosion: { enable: true, presetId: 'particle' },
 }

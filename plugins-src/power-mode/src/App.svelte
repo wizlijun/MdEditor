@@ -48,6 +48,31 @@
 
   const presetLabel = (id: PresetId): string => t(`preset.${id}` as MessageKey)
 
+  // 强度是三档而非连续滑块:一档同时定 intensity 与 recoverTime,选中态按
+  // intensity 匹配(旧配置里的自定义值不匹配任何档,segmented 就都不高亮)。
+  const SHAKE_LEVELS = [
+    { key: 'light',  intensity: 3,  recoverTime: 500 },
+    { key: 'medium', intensity: 6,  recoverTime: 800 },
+    { key: 'heavy',  intensity: 10, recoverTime: 1200 },
+  ] as const
+
+  function setShakeLevel(l: (typeof SHAKE_LEVELS)[number]): void {
+    cfg.shake = { ...cfg.shake, intensity: l.intensity, recoverTime: l.recoverTime }
+    touched()
+  }
+
+  // 超时同样改成三档。
+  const COMBO_TIMEOUTS = [
+    { key: 'short',  seconds: 5 },
+    { key: 'medium', seconds: 10 },
+    { key: 'long',   seconds: 20 },
+  ] as const
+
+  function setComboTimeout(seconds: number): void {
+    cfg.combo = { ...cfg.combo, timeout: seconds }
+    touched()
+  }
+
   onMount(async () => {
     try {
       const payload = await loadPowerMode()
@@ -118,29 +143,33 @@
       <input type="checkbox" bind:checked={cfg.shake.enable} onchange={touched} />
       <span>{t('shake.enable')}</span>
     </label>
-    <label class="row indent">
+    <div class="row indent">
       <span>{t('shake.intensity')}</span>
-      <input type="range" min="1" max="20" step="1" bind:value={cfg.shake.intensity}
-             oninput={touched} disabled={!cfg.shake.enable} />
-      <output>{cfg.shake.intensity} px</output>
-    </label>
-    <label class="row indent">
-      <span>{t('shake.recoverTime')}</span>
-      <input type="range" min="100" max="2000" step="50" bind:value={cfg.shake.recoverTime}
-             oninput={touched} disabled={!cfg.shake.enable} />
-      <output>{cfg.shake.recoverTime} ms</output>
-    </label>
+      <div class="seg" role="group">
+        {#each SHAKE_LEVELS as l (l.key)}
+          <button type="button" class="seg-btn" class:on={cfg.shake.intensity === l.intensity}
+                  disabled={!cfg.shake.enable} onclick={() => setShakeLevel(l)}>
+            {t(`shake.level.${l.key}` as MessageKey)}
+          </button>
+        {/each}
+      </div>
+    </div>
 
     <label class="row">
       <input type="checkbox" bind:checked={cfg.combo.enable} onchange={touched} />
       <span>{t('combo.enable')}</span>
     </label>
-    <label class="row indent">
+    <div class="row indent">
       <span>{t('combo.timeout')}</span>
-      <input type="range" min="2" max="30" step="1" bind:value={cfg.combo.timeout}
-             oninput={touched} disabled={!cfg.combo.enable} />
-      <output>{cfg.combo.timeout} s</output>
-    </label>
+      <div class="seg" role="group">
+        {#each COMBO_TIMEOUTS as o (o.key)}
+          <button type="button" class="seg-btn" class:on={cfg.combo.timeout === o.seconds}
+                  disabled={!cfg.combo.enable} onclick={() => setComboTimeout(o.seconds)}>
+            {t(`combo.timeout.${o.key}` as MessageKey)}
+          </button>
+        {/each}
+      </div>
+    </div>
     <label class="row indent">
       <input type="checkbox" bind:checked={cfg.combo.showExclamation}
              onchange={touched} disabled={!cfg.combo.enable} />
@@ -184,8 +213,19 @@
   .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
   .row.indent { padding-left: 22px; }
   .row span { flex: 0 0 auto; }
-  .row input[type='range'] { flex: 1; }
-  output { min-width: 56px; text-align: right; opacity: .7; font-variant-numeric: tabular-nums; }
+
+  /* 分段选择器:三档强度 / 三档超时。 */
+  .seg { display: inline-flex; margin-left: auto; border-radius: 6px; overflow: hidden;
+         border: 1px solid color-mix(in srgb, currentColor 22%, transparent); }
+  .seg-btn {
+    appearance: none; border: 0; background: transparent; color: inherit;
+    font: inherit; padding: 3px 12px; cursor: pointer;
+    border-left: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  }
+  .seg-btn:first-child { border-left: 0; }
+  .seg-btn.on { background: color-mix(in srgb, currentColor 16%, transparent); font-weight: 600; }
+  .seg-btn:disabled { opacity: .4; cursor: default; }
+
   .hint { margin: 4px 0 0; opacity: .55; font-size: 12px; }
   .hint.indent { padding-left: 22px; }
   .error { color: #d33; margin: 0; }

@@ -5,9 +5,11 @@ export type MessageKey =
   | 'effects.section'
   | 'explosion.enable' | 'explosion.preset'
   | 'preset.particle' | 'preset.lightning' | 'preset.coin' | 'preset.confetti'
-  | 'shake.enable' | 'shake.intensity' | 'shake.recoverTime'
+  | 'shake.enable' | 'shake.intensity'
+  | 'shake.level.light' | 'shake.level.medium' | 'shake.level.heavy'
   | 'combo.enable' | 'combo.timeout' | 'combo.showExclamation' | 'combo.precisionInput'
   | 'combo.precisionInput.hint'
+  | 'combo.timeout.short' | 'combo.timeout.medium' | 'combo.timeout.long'
   | 'demo.section' | 'demo.hint' | 'demo.sample' | 'demo.unavailable'
   | 'saveFailed'
 
@@ -27,9 +29,14 @@ const en: Catalog = {
   'preset.confetti': 'Confetti',
   'shake.enable': 'Screen shake',
   'shake.intensity': 'Intensity',
-  'shake.recoverTime': 'Recovery',
+  'shake.level.light': 'Light',
+  'shake.level.medium': 'Medium',
+  'shake.level.heavy': 'Heavy',
   'combo.enable': 'Combo meter',
   'combo.timeout': 'Timeout',
+  'combo.timeout.short': 'Short',
+  'combo.timeout.medium': 'Medium',
+  'combo.timeout.long': 'Long',
   'combo.showExclamation': 'Exclamations',
   'combo.precisionInput': 'Precision input',
   'combo.precisionInput.hint': 'Only count edits that do not shorten the document.',
@@ -54,9 +61,14 @@ const zh: Catalog = {
   'preset.confetti': '彩纸',
   'shake.enable': '屏幕震动',
   'shake.intensity': '强度',
-  'shake.recoverTime': '恢复时间',
+  'shake.level.light': '轻度',
+  'shake.level.medium': '中度',
+  'shake.level.heavy': '重度',
   'combo.enable': '连击计数',
   'combo.timeout': '超时',
+  'combo.timeout.short': '短',
+  'combo.timeout.medium': '中',
+  'combo.timeout.long': '长',
   'combo.showExclamation': '感叹词',
   'combo.precisionInput': '精确输入',
   'combo.precisionInput.hint': '只统计没让文档变短的编辑。',
@@ -81,9 +93,14 @@ const ja: Catalog = {
   'preset.confetti': '紙吹雪',
   'shake.enable': '画面シェイク',
   'shake.intensity': '強さ',
-  'shake.recoverTime': '復帰時間',
+  'shake.level.light': '弱',
+  'shake.level.medium': '中',
+  'shake.level.heavy': '強',
   'combo.enable': 'コンボカウンター',
   'combo.timeout': 'タイムアウト',
+  'combo.timeout.short': '短',
+  'combo.timeout.medium': '中',
+  'combo.timeout.long': '長',
   'combo.showExclamation': '感嘆詞',
   'combo.precisionInput': '精密入力',
   'combo.precisionInput.hint': '文書が短くならない編集だけを数えます。',
@@ -108,9 +125,14 @@ const de: Catalog = {
   'preset.confetti': 'Konfetti',
   'shake.enable': 'Bildschirmwackeln',
   'shake.intensity': 'Stärke',
-  'shake.recoverTime': 'Erholzeit',
+  'shake.level.light': 'Leicht',
+  'shake.level.medium': 'Mittel',
+  'shake.level.heavy': 'Stark',
   'combo.enable': 'Combo-Zähler',
   'combo.timeout': 'Zeitlimit',
+  'combo.timeout.short': 'Kurz',
+  'combo.timeout.medium': 'Mittel',
+  'combo.timeout.long': 'Lang',
   'combo.showExclamation': 'Ausrufe',
   'combo.precisionInput': 'Präzise Eingabe',
   'combo.precisionInput.hint': 'Nur Änderungen zählen, die das Dokument nicht kürzen.',
