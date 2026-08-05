@@ -19,8 +19,14 @@
        * `Esc` closes without choosing, and `Tab` does the same rather than
          letting focus wander out of a menu that is still on screen -->
 <script module lang="ts">
+  import type { IconName } from '../lib/icons'
+
   export interface MenuItem {
     label: string
+    /** Decorative glyph drawn before the label; the label still carries the
+     *  meaning (the icon is `aria-hidden`). Omit it and the row's text lines
+     *  up with the others regardless — the icon column is always reserved. */
+    icon?: IconName
     /** Runs on activation. Absent (or `disabled`) makes the row inert. */
     onselect?: () => void
     /** Destructive — rendered in the warning color. */
@@ -36,6 +42,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte'
+  import Icon from './Icon.svelte'
 
   const {
     x,
@@ -173,6 +180,12 @@
       title={item.title}
       onclick={() => choose(item)}
     >
+      <!-- Always rendered, icon or not: the column is what keeps every label
+           on the same left edge. Hidden from assistive tech — the label beside
+           it already says what the row does. -->
+      <span class="glyph" aria-hidden="true">
+        {#if item.icon}<Icon name={item.icon} />{/if}
+      </span>
       {item.label}
     </button>
   {/each}
@@ -192,7 +205,9 @@
   }
   .menu:focus { outline: none; }
   button {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
     width: 100%;
     padding: 0.32rem 0.6rem;
     border: 0;
@@ -213,6 +228,16 @@
     outline: none;
   }
   button:disabled { opacity: 0.45; cursor: default; }
+  /* Fixed 16px column, held open even for an item without an icon so the
+     labels never step in and out as the menu's contents change (the
+     idea/proof pair appears and disappears with the `.proof.md`). */
+  .glyph {
+    flex: 0 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 16px;
+  }
   .danger { color: #dc2626; }
   .danger:hover:not(:disabled),
   .danger:focus-visible { background: color-mix(in srgb, #dc2626 14%, transparent); }

@@ -7,10 +7,16 @@
        ┌───────────────────────┬─────────┐
        │              ┌──────┐ │ inbox   │  ← ModeToggle, floating (absolute)
        │ editor       │👁│</>│ │ 240px,  │
-       │ (flex:1)     └──────┘ │ optional│  ← InboxPanel; 📥 toggles it and the
-       ├───────────────────────┴─────────┤     choice is persisted (`inboxOpen`)
-       │ saved 19:42   New  Delegate 📥 ⚙│  ← 38px action bar
+       │ (flex:1)     └──────┘ │ optional│  ← InboxPanel; the inbox button
+       ├───────────────────────┴─────────┤     toggles it and the choice is
+       │ saved 19:42  New  Delegate  ▤  ⚙│  ← 38px bar    persisted (`inboxOpen`)
        └─────────────────────────────────┘
+
+     Every glyph in that bar is an SVG from `components/Icon.svelte` (the two
+     right-hand buttons are icon-only; New and Delegate are icon + label).
+     Nothing here is an emoji any more: a macOS emoji is a color bitmap, so it
+     ignored both `currentColor` and the theme and sat at a different visual
+     weight than the 2px strokes of the ModeToggle right above it.
 
      The inbox *squeezes* the editor rather than covering it (design §5), and is
      hidden by default: the window opens on a blank page, not on a file list.
@@ -38,6 +44,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import Celebration from './components/Celebration.svelte'
+  import Icon from './components/Icon.svelte'
   import InboxPanel from './components/InboxPanel.svelte'
   import ModeToggle from './components/ModeToggle.svelte'
   import SettingsPopover from './components/SettingsPopover.svelte'
@@ -95,7 +102,7 @@
   /** Any run at all is in flight. What actually gates delegation — claude-agent
    *  serializes the whole `idea-proof` task, not one idea (see `runInFlight`). */
   const runBusy = $derived(runInFlight(store))
-  /** The progress line to show next to ⏳, or ''. */
+  /** The progress line to show next to the hourglass, or ''. */
   const openLast = $derived(
     store.current && runProgress?.ideaRel === relPath(store, store.current) ? runProgress.last : '',
   )
@@ -318,7 +325,7 @@
   let unmounted = false
 
   /**
-   * Follows one run to its end, purely so the window can say "⏳ arguing" and
+   * Follows one run to its end, purely so the window can say "⧖ arguing" and
    * show what the agent is doing. A `setTimeout` chain rather than an interval
    * (a slow status call can never stack up behind itself) and never an
    * `$effect` — an effect that synchronously calls store functions which read
@@ -409,7 +416,7 @@
       // The flush is the ONLY thing standing between the agent and a stale
       // file, and it cannot report its own failure: `saveNow` never rejects
       // and `saveIdea` only writes `saveState` — which the action bar is about
-      // to cover with "⏳ arguing" for the whole run. So assert the
+      // to cover with "⧖ arguing" for the whole run. So assert the
       // postcondition against the buffer itself, exactly as `keepUnsaved`
       // does: if what the editor holds did not reach the disk, the agent would
       // argue a version the user has already moved on from. Only checked when
@@ -594,8 +601,9 @@
         {/if}
       </section>
 
-      <!-- Hidden by default (design §1); the action bar's 📥 toggles it and the
-           choice is remembered across windows (`toggleInbox` → `inboxOpen`). -->
+      <!-- Hidden by default (design §1); the action bar's tray button toggles
+           it and the choice is remembered across windows (`toggleInbox` →
+           `inboxOpen`). -->
       {#if store.inboxOpen}
         <InboxPanel
           onselect={pick}
@@ -608,13 +616,20 @@
 
     <div class="actionbar">
       <!-- The run on the OPEN document outranks the save state: while an idea
-           is being argued, "⏳ arguing" is the thing the bar is for. Every
-           other idea's run shows as a ⏳ on its own inbox row (`statusOf`). -->
+           is being argued, "⧖ arguing" is the thing the bar is for. Every
+           other idea's run shows as the same hourglass on its own inbox row,
+           at 12px (`statusOf` → `STATUS_MARK`). -->
       <span class="savestate">
         {#if delegating}
           {t('delegating')}
         {:else if openRun}
-          <span class="running">⏳ {t('statusRunning')}{openLast ? ` · ${openLast}` : ''}</span>
+          <span class="running">
+            <Icon name="running" />
+            <!-- The text is its own element so it — and not the icon — is what
+                 gets clipped when a long "Read some-very-long-name.md"
+                 progress line runs out of bar. -->
+            <span class="runtext">{t('statusRunning')}{openLast ? ` · ${openLast}` : ''}</span>
+          </span>
         {:else if saveState.kind === 'saving'}
           {t('saving')}
         {:else if saveState.kind === 'saved'}
@@ -626,22 +641,36 @@
         {/if}
       </span>
       <div class="spacer"></div>
-      <button type="button" class="ghost" onclick={startNew}>{t('newIdea')}</button>
+      <!-- Icon *and* label on these two: they are the window's two verbs, and
+           the icon is decorative (`aria-hidden` inside `Icon`) — the button's
+           accessible name is still the text next to it. -->
+      <button type="button" class="ghost" onclick={startNew}>
+        <Icon name="new-idea" />
+        {t('newIdea')}
+      </button>
       <button
         type="button"
         class="ghost"
         disabled={delegating || runBusy}
         title={runBusy ? t('delegateBusy') : t('delegate')}
-        onclick={() => void delegate()}>{delegating ? t('delegating') : t('delegate')}</button
+        onclick={() => void delegate()}
       >
+        <Icon name="delegate" />
+        {delegating ? t('delegating') : t('delegate')}
+      </button>
+      <!-- The two icon-only buttons carry their whole meaning in `aria-label`
+           and `title`; that was true when they were emoji and it is what must
+           NOT be dropped now that the glyph is an `aria-hidden` SVG. -->
       <button
         type="button"
         class="icon"
         aria-pressed={store.inboxOpen}
         aria-label={t('inbox')}
         title={t('inbox')}
-        onclick={toggleInbox}>📥</button
+        onclick={toggleInbox}
       >
+        <Icon name="inbox" />
+      </button>
       <button
         type="button"
         class="icon"
@@ -650,7 +679,7 @@
         title={t('settings')}
         onclick={() => (settingsOpen = !settingsOpen)}
       >
-        ⚙
+        <Icon name="settings" />
       </button>
       {#if settingsOpen}
         <!-- Changing the idea directory detaches the open document, so the
@@ -809,6 +838,23 @@
     cursor: pointer;
   }
   .savestate:has(.failed) { opacity: 1; }
+  /* Icon + text on one line. `min-width: 0` on both is what lets the ellipsis
+     below actually engage: a flex item defaults to `min-width: auto` and would
+     refuse to shrink below its text, pushing the buttons off the bar instead. */
+  .savestate .running {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    max-width: 100%;
+    min-width: 0;
+    vertical-align: middle;
+  }
+  .savestate .runtext {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   /* The run indicator is the one thing in this slot that is about work in
      flight rather than about a save that already happened — full opacity, and
      a hard ellipsis so a long "Read some-very-long-name.md" can't push the
@@ -819,7 +865,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Flex so the 16px icon and the label sit on a shared centre line — an
+     inline SVG would otherwise hang off the text baseline and make the bar
+     look crooked. */
   .actionbar > button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     padding: 0.25rem 0.7rem;
     border-radius: 6px;
     font: inherit;
@@ -835,11 +887,12 @@
   /* Scoped through `.actionbar >` so these beat the generic button rule above
      on specificity (0-2-1 vs 0-1-1) rather than on source order. */
   .actionbar > button.icon {
-    padding: 0.15rem 0.4rem;
+    /* Square padding around a square 16px glyph: the old value was tuned for
+       an emoji's own side bearings, which an SVG does not have. */
+    padding: 0.3rem;
     border: 0;
     background: none;
     color: inherit;
-    font-size: 1rem;
   }
   .actionbar > button.icon:hover:not(:disabled) {
     background: color-mix(in srgb, currentColor 10%, transparent);
