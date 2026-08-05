@@ -11,6 +11,7 @@ import { bridgeMediaResolver } from './media'
 // placeholder-plugin only depends on prosemirror-state/view — zero Tauri IPC,
 // so it clears the kit's dependency allowlist.
 import { placeholderPlugin } from '../lib/placeholder-plugin'
+import { powerModePlugin, type ConfigGetter } from '../lib/power-mode/plugin'
 import type { Plugin } from 'prosemirror-state'
 
 /** Base directory (absolute) used to resolve relative image paths in rich mode. */
@@ -63,6 +64,7 @@ export async function mountRich(
   vaultRoot: string,
   onChange: (md: string) => void,
   placeholder?: string,
+  getPowerMode?: ConfigGetter,
 ): Promise<MorayaEditorInstance> {
   const instance = await createEditor({
     container: host,
@@ -89,7 +91,11 @@ export async function mountRich(
   // Append the placeholder plugin after mount, same construction as the main
   // window's editor-append plugins in RichEditor.svelte (`view.updateState(
   // view.state.reconfigure(...))`).
-  const extra = richPlugins(placeholder)
+  //
+  // Power Mode 也在这里接:getter 每次击键现取,所以 setPowerMode() 换配置不需要
+  // 重挂编辑器(重挂会丢光标、选区和撤销栈)。
+  const extra: Plugin[] = richPlugins(placeholder)
+  if (getPowerMode) extra.push(powerModePlugin(getPowerMode, () => 'kit'))
   if (extra.length) {
     instance.view.updateState(
       instance.view.state.reconfigure({

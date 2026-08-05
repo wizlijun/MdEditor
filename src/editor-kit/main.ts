@@ -21,6 +21,8 @@ import { mountRich, setKitBaseDir, setRichPlaceholder } from './rich'
 import { mountSource, type SourcePane } from './source'
 import { loadVaultRoot } from './media'
 import { applyKitTheme, watchKitTheme } from './theme'
+import { loadSurfaceConfig, watchSurfaceFocus } from './power-mode-config'
+import type { PowerModeConfig } from '../lib/power-mode/types'
 
 export type KitMode = 'rich' | 'source'
 
@@ -47,6 +49,13 @@ export interface KitEditor {
    * document) would otherwise be stuck on the text the window opened with.
    */
   setPlaceholder(text: string): void
+  /**
+   * 换掉特效配置,不重挂编辑器。
+   *
+   * v1 是「不改既有成员、可以加成员」的冻结口径,`setPlaceholder` 当年也是这么
+   * 进来的 —— 加一个成员不影响任何既有消费方。
+   */
+  setPowerMode(cfg: PowerModeConfig | null): void
   focus(): void
   /** Tears the editor down. Flushes any pending `onChange` first (see below). */
   destroy(): void
@@ -80,6 +89,16 @@ export interface KitOptions {
    * relative image paths. Omit when the content has no local images.
    */
   baseDir?: string
+  /**
+   * 特效配置。
+   *
+   * **省略**(默认)= kit 自己向宿主要 `host.power_mode.config`,按本窗口的插件 id
+   * 判定生效面,并在窗口重新获得焦点时重拉 —— Idea Spark 因此零改动就生效。
+   *
+   * **显式给值**(含 `null`)= 调用方自管,不看生效面、不自动刷新。Power Mode 插件
+   * 自己的实操区走这条:改一格滑块就 setPowerMode() 推一次。
+   */
+  powerMode?: PowerModeConfig | null
 }
 
 /** The vault root is stable for the window's lifetime; ask the host once. */
@@ -138,6 +157,16 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
   // to survive the re-mount `setMode` performs, and `opts` is the caller's
   // object — which the kit must not write into.
   let placeholder = opts.placeholder
+  // 显式给值 = 调用方自管;省略 = 走宿主配置 + focus 刷新。
+  const selfManaged = 'powerMode' in opts
+  let powerMode: PowerModeConfig | null = opts.powerMode ?? null
+  let stopFocusWatch: (() => void) | null = null
+  if (!selfManaged) {
+    powerMode = await loadSurfaceConfig()
+    stopFocusWatch = watchSurfaceFocus(() => {
+      void loadSurfaceConfig().then((c) => { powerMode = c })
+    })
+  }
 
   const host = document.createElement('div')
   host.className = 'kit-host'
@@ -152,7 +181,7 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
     rich?.destroy(); rich = null
     source?.destroy(); source = null
     host.innerHTML = ''
-    if (mode === 'rich') rich = await mountRich(host, markdown, root, emit, placeholder)
+    if (mode === 'rich') rich = await mountRich(host, markdown, root, emit, placeholder, () => powerMode)
     else source = mountSource(host, markdown, emit, placeholder)
   }
 
@@ -201,9 +230,12 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
       mode = m
       await mountCurrent()
     },
+    setPowerMode: (cfg) => { powerMode = cfg },
     focus: () => { if (mode === 'rich') rich?.view.focus(); else source?.focus() },
     destroy: () => {
       flush()
+      stopFocusWatch?.()
+      stopFocusWatch = null
       rich?.destroy(); rich = null
       source?.destroy(); source = null
       host.remove()

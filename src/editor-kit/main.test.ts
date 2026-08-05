@@ -262,3 +262,12 @@ describe('mountMarkdownEditor — document base dir', () => {
     ed.destroy()
   })
 })
+
+describe('KitOptions.powerMode contract', () => {
+  it('distinguishes "omitted" from "explicit null"', () => {
+    // 这条钉的是 main.ts 里 `'powerMode' in opts` 的判据:显式传 null 表示
+    // 「调用方自管、别去问宿主」,与省略不是一回事。
+    expect('powerMode' in ({ initialMarkdown: '' } as Record<string, unknown>)).toBe(false)
+    expect('powerMode' in ({ initialMarkdown: '', powerMode: null } as Record<string, unknown>)).toBe(true)
+  })
+})
