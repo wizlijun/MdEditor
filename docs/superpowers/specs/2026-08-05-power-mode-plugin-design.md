@@ -4,7 +4,8 @@
 > 源项目：`~/git/obsidian-power-mode`（Obsidian 插件，TypeScript + React 19）
 > 移植方案基线：`~/.paseo/uploads/…/2026-08-05-power-mode-port-design.md`（用户上传，本文在其之上做「插件化」重设计）
 > 目标：note.md 6.805.2+ / 插件 `notemd.power-mode` 1.0.0
-> 状态：设计已确认，尚未实现
+> 状态：已实现并发布（宿主 v6.805.3，插件 notemd.power-mode@1.0.0，2026-08-05）。
+> 落地偏离：震动默认关闭；强度与连击超时改为三档分段选择（轻/中/重、短/中/长），非滑块。
 
 ---
 
