@@ -465,12 +465,25 @@
     let disposed = false
 
     // Host→UI pushes. `theme-changed` is the kit's business (it registers its
-    // own listener; the bridge fans out to every subscriber). Nothing else is
-    // expected: a run reports through `host.agent.status` (polled below), not
-    // through a push — claude-agent posts its run events to its OWN window.
-    // An unknown payload is therefore logged and ignored, not an error.
+    // own listener; the bridge fans out to every subscriber).
+    //
+    // `tray-activate` = the user hit the tray item or Cmd+Ctrl+I on a window
+    // that was ALREADY open (the host skips the push for a window it had to
+    // build — that one boots on a blank draft of its own). Reaching for a
+    // capture tool means "I have a new thought", not "show me the last one", so
+    // it starts a new idea. Through `startNew` and nothing else: that is where
+    // the unsaved-work barrier lives, and a hotkey must not be a way around it.
+    //
+    // A run does NOT report through a push (it is polled via
+    // `host.agent.status`; claude-agent posts run events to its OWN window), so
+    // anything else here is unexpected — logged and ignored, not an error.
     bridge().onMessage((payload) => {
-      if ((payload as { type?: string } | null)?.type === 'theme-changed') return
+      const type = (payload as { type?: string } | null)?.type
+      if (type === 'theme-changed') return
+      if (type === 'tray-activate') {
+        void startNew()
+        return
+      }
       console.debug('[idea-spark] unhandled host push:', payload)
     })
 
