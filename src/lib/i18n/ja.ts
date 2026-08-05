@@ -632,6 +632,7 @@ export const ja: Record<keyof Messages, string> = {
   'logs.categories.all': 'All categories',
   'logs.categories.core': 'Core',
   'logs.categories.gitSync': 'Git Sync',
+  'logs.categories.notification': '通知',
   'logs.categories.plugin': 'Plugins',
   'logs.categories.pluginAll': 'All plugins',
   'logs.categories.frontend': 'Frontend',

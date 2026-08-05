@@ -62,6 +62,7 @@
 
   function catClass(cat: string): string {
     if (cat === 'git-sync') return 'cat-git'
+    if (cat === 'notification') return 'cat-notif'
     if (cat.startsWith('plugin:')) return 'cat-plugin'
     if (cat === 'frontend') return 'cat-frontend'
     return 'cat-core'
@@ -79,6 +80,7 @@
       <option value="all">{t('logs.categories.all')}</option>
       <option value="core">{t('logs.categories.core')}</option>
       <option value="git-sync">{t('logs.categories.gitSync')}</option>
+      <option value="notification">{t('logs.categories.notification')}</option>
       <option value="frontend">{t('logs.categories.frontend')}</option>
       {#if pluginCategories.length > 0}
         <optgroup label={t('logs.categories.plugin')}>
@@ -135,6 +137,7 @@
   .src { color: light-dark(#3f7d2d, #6a9955); white-space: nowrap; }
   .cat { white-space: nowrap; }
   .cat-git { color: light-dark(#0b7bd0, #4fc1ff); }
+  .cat-notif { color: light-dark(#b8860b, #d7ba7d); }
   .cat-plugin { color: light-dark(#8e44ad, #c586c0); }
   .cat-frontend { color: light-dark(#0e8574, #4ec9b0); }
   .cat-core { color: light-dark(#3f7d2d, #6a9955); }
