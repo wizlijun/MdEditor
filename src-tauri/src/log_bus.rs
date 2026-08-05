@@ -179,17 +179,24 @@ macro_rules! log_cat {
     };
 }
 
+// The process-global singleton bus is shared by every test that touches the log
+// buffer — here AND in other modules (e.g. `notifications` mirrors a line here).
+// They must all serialize on one lock, or `cargo test`'s parallelism lets a
+// concurrent push/clear corrupt the ring-buffer assertions. Recover from poison
+// so one panicking test doesn't cascade-fail the rest.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
+#[cfg(test)]
+pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // These tests mutate the process-global singleton bus, so `cargo test`'s
-    // default parallelism would let them bleed into each other. Serialize every
-    // buffer-touching test on one lock (recovering from poison so one panicking
-    // test doesn't cascade-fail the rest).
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
     fn guard() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        super::test_guard()
     }
 
     #[test]

@@ -314,6 +314,9 @@ mod tests {
 
     #[test]
     fn push_mirrors_a_notification_log_line() {
+        // 与 log_bus 的 ring-buffer 测试共享同一进程级缓冲,须同锁串行,否则并发
+        // 的 push/clear 会污染彼此断言。
+        let _g = crate::log_bus::test_guard();
         clear_all();
         crate::log_bus::clear();
         push("《书》摘要已生成".into(), oc("/v/s.md"), None, Severity::Info);

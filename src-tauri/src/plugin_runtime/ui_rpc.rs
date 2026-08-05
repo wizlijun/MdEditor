@@ -196,6 +196,12 @@ pub trait HostServices: Send + Sync {
     fn notify_user(&self, _params: &serde_json::Value) -> Result<serde_json::Value, String> {
         Err("notify not supported here".into())
     }
+    /// 按 `source` key 撤下自己此前推入的 sticky 通知(`{ source }`)。默认 no-op;
+    /// 生产实现在 `TauriServices`,落到 `notifications::dismiss_source`。归入 `notify`
+    /// capability,无需新增权限。
+    fn dismiss_notification(&self, _params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        Ok(serde_json::json!({ "ok": true }))
+    }
 }
 
 // ── Dispatch ────────────────────────────────────────────────────────────
@@ -411,6 +417,7 @@ pub async fn dispatch_with(
         "host.agent.run"    => services.agent_execute("run-task", req.params.clone()),
         "host.agent.status" => services.agent_execute("run-status", req.params.clone()),
         "host.notify"       => notify_push(services, &req.params),
+        "host.dismissNotification" => services.dismiss_notification(&req.params),
         // handle_common took log/toast; the gate rejected everything unknown.
         other => Err(format!("io: unhandled method {other}")),
     };
@@ -1087,6 +1094,13 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
         let (title, action, source, severity) = crate::notifications::parse_notify_params(params)?;
         let id = crate::notifications::push(title, action, source, severity);
         Ok(serde_json::json!({ "ok": true, "id": id }))
+    }
+
+    fn dismiss_notification(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        if let Some(s) = params.get("source").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+            crate::notifications::dismiss_source(s);
+        }
+        Ok(serde_json::json!({ "ok": true }))
     }
 }
 

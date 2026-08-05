@@ -50,6 +50,7 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // AI agent 中转(转发到 notemd.claude-agent)与托盘全局提醒。
         "host.agent.run" | "host.agent.status" => Some("agent"),
         "host.notify" => Some("notify"),
+        "host.dismissNotification" => Some("notify"),
         // editor.kit — the host-embedded editor bundle and the theme CSS that
         // styles it. UI bridge only (`ui_rpc::dispatch` serves it from the live
         // AppHandle); on the process channel it stays -32601.
@@ -202,6 +203,7 @@ pub fn make_sink(
                                 // action has to clear the same vault fence
                                 // `editor.open` does.
                                 "host.notify" => Some(rpc::notify_push(s, &req.params)),
+                                "host.dismissNotification" => Some(s.dismiss_notification(&req.params)),
                                 _ => None,
                             }
                         });
@@ -531,6 +533,7 @@ mod tests {
         assert_eq!(method_capability("host.agent.run"), Some("agent"));
         assert_eq!(method_capability("host.agent.status"), Some("agent"));
         assert_eq!(method_capability("host.notify"), Some("notify"));
+        assert_eq!(method_capability("host.dismissNotification"), Some("notify"));
         assert_eq!(method_capability("host.theme.css"), Some("editor.kit"));
         assert_eq!(method_capability("host.unknown"), Some("__unknown__"));
         assert_eq!(method_capability("anything.else"), Some("__unknown__"));
@@ -725,6 +728,10 @@ mod tests {
             self.1.lock().unwrap().push(("notify".into(), params.clone()));
             Ok(serde_json::json!({ "ok": true, "id": 1 }))
         }
+        fn dismiss_notification(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+            self.1.lock().unwrap().push(("dismiss".into(), params.clone()));
+            Ok(serde_json::json!({ "ok": true }))
+        }
     }
 
     #[test]
@@ -849,6 +856,30 @@ mod tests {
         let resp = sink(req("host.notify", Some(2), serde_json::json!({}))).unwrap();
         assert_eq!(resp.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dismiss_notification_on_process_channel_reaches_services_with_notify_capability() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = make_sink(
+            "pub.test".into(),
+            vec!["notify".into()],
+            log_dir.path().to_path_buf(),
+            recording_emitter().0,
+            noop_poster(),
+            Some(Arc::new(ServicesStub(std::env::temp_dir(), seen.clone()))),
+        );
+        let resp = sink(req(
+            "host.dismissNotification",
+            Some(1),
+            serde_json::json!({ "source": "vault.large_files" }),
+        ))
+        .unwrap();
+        assert_eq!(resp.result.unwrap()["ok"], true);
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls[0].0, "dismiss");
+        assert_eq!(calls[0].1["source"], "vault.large_files");
     }
 
     #[test]
