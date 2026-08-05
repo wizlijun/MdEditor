@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.805.1"
+    "notemd": ">=6.805.2"
   },
   "description": "Capture a spark, then let an agent argue it into a next-step document.",
   "ui": "ui/",
@@ -36,7 +36,9 @@
     ],
     "tray": [
       {
-        "window": "main"
+        "window": "main",
+        "section": "capture",
+        "accelerator": "Cmd+Ctrl+I"
       }
     ]
   },

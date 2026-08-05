@@ -187,8 +187,24 @@
         "window"
       ],
       "properties": {
+        "accelerator": {
+          "description": "系统级全局快捷键，如 `\"Cmd+Ctrl+I\"`：宿主在启动时注册它，按下等同于点击 本托盘项；同时把它作为**显示用**加速键挂在托盘项右侧。\n\n语法同 tauri-plugin-global-shortcut（`Cmd`/`Ctrl`/`Alt`/`Shift` + 键名， 大小写与修饰键顺序都不敏感）。解析失败、或组合已被别的 app 占用，都只记 日志：托盘项本身照常可点，插件照常加载。",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "label": {
           "description": "托盘项文案；缺省用插件本地化名称（manifest `name` + `i18n.<locale>.name`）。",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "section": {
+          "description": "进托盘下拉的哪一组。目前只认 [`TRAY_SECTION_CAPTURE`]（顶部捕获组： 快速笔记/每日笔记那一组，本项排在每日笔记之后、第一条分隔线之前）； 缺省 = 默认组（第一条分隔线之后、\"显示主窗口\"下面）。\n\n刻意用 `Option<String>` 而不是 enum：这个字段是**开放取值**的，将来加一个 新组名不该让老宿主整份 manifest 解析失败（整个结构体是 `deny_unknown_fields`，一次解析失败 = 插件完全加载不出来）。宿主对不认识 的取值降级到默认组即可 —— 位置不理想，但插件仍然可用。",
           "default": null,
           "type": [
             "string",

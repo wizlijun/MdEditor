@@ -42,8 +42,13 @@
   import { onMount } from 'svelte'
   import ConfirmDialog from './ConfirmDialog.svelte'
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte'
+  import Icon from './Icon.svelte'
   import { proofPathFor } from '../lib/naming'
-  import type { IdeaStatus } from '../lib/status'
+  // The status → badge tables live in `status.ts` (pure TS, no DOM) so that
+  // `STATUS_MARK.done`'s `✦` — a product convention, not a glyph choice — is
+  // pinned by `status.test.ts`. A component-private constant is unreachable
+  // from the test suite, which is exactly what it must not be.
+  import { STATUS_KEY, STATUS_MARK } from '../lib/status'
   import {
     createdFromName,
     ensureTitle,
@@ -58,7 +63,7 @@
     statusOf,
     titleOf,
   } from '../lib/store.svelte'
-  import { locale, t, type MessageKey } from '../lib/strings'
+  import { locale, t } from '../lib/strings'
 
   const {
     onselect,
@@ -76,21 +81,6 @@
      *  isn't necessarily the open document. */
     ondelegate: (name: string) => void
   } = $props()
-
-  const STATUS_KEY: Record<IdeaStatus, MessageKey> = {
-    draft: 'statusDraft',
-    running: 'statusRunning',
-    done: 'statusDone',
-    failed: 'statusFailed',
-  }
-  /** Design §5: ✦ argued, ⏳ arguing, ⚠ failed. A draft is unmarked — most rows
-   *  are drafts, and a badge on every one of them is just noise. */
-  const STATUS_MARK: Record<IdeaStatus, string> = {
-    draft: '',
-    running: '⏳',
-    done: '✦',
-    failed: '⚠',
-  }
 
   let menu = $state<{ name: string; x: number; y: number } | null>(null)
   let confirm = $state<{ name: string; lines: string[] } | null>(null)
@@ -204,6 +194,7 @@
     return [
       {
         label: t('menuDelegate'),
+        icon: 'delegate',
         disabled: busy,
         title: busy ? t('delegateBusy') : t('menuDelegate'),
         onselect: () => ondelegate(name),
@@ -211,15 +202,17 @@
       // With a proof document there are two things to open, so both are named
       // outright instead of hiding one behind a submenu (design §5 asks for a
       // second level; two flat rows say the same thing and stay reachable with
-      // the arrow keys alone).
+      // the arrow keys alone). The icons carry that distinction too: a plain
+      // "open elsewhere" box for the idea the user wrote, a document with a
+      // spark for the one the agent produced.
       ...(hasProof
         ? [
-            { label: t('menuOpenIdea'), onselect: () => void openIdea(name) },
-            { label: t('menuOpenProof'), onselect: () => void openResult(name) },
+            { label: t('menuOpenIdea'), icon: 'open-idea' as const, onselect: () => void openIdea(name) },
+            { label: t('menuOpenProof'), icon: 'open-proof' as const, onselect: () => void openResult(name) },
           ]
-        : [{ label: t('menuOpenInMain'), onselect: () => void openIdea(name) }]),
-      { label: t('menuRename'), onselect: () => startRename(name) },
-      { label: t('menuDelete'), danger: true, separated: true, onselect: () => askDelete(name) },
+        : [{ label: t('menuOpenInMain'), icon: 'open-idea' as const, onselect: () => void openIdea(name) }]),
+      { label: t('menuRename'), icon: 'rename', onselect: () => startRename(name) },
+      { label: t('menuDelete'), icon: 'delete', danger: true, separated: true, onselect: () => askDelete(name) },
     ]
   }
 
@@ -315,6 +308,7 @@
   <ul>
     {#each store.docs as name (name)}
       {@const status = statusOf(store, name)}
+      {@const mark = STATUS_MARK[status]}
       <li class:current={name === store.current}>
         {#if renaming === name}
           <input
@@ -340,9 +334,22 @@
             data-idea={name}
           >
             <span class="name">{titleOf(store, name)}</span>
-            {#if STATUS_MARK[status]}
-              <span class="mark {status}" title={t(STATUS_KEY[status])} aria-label={t(STATUS_KEY[status])}>
-                {STATUS_MARK[status]}
+            {#if mark}
+              <!-- `role="img"` is what makes the `aria-label` count: an icon
+                   mark has no text of its own to name it (the SVG is
+                   `aria-hidden`), and a bare `<span aria-label>` with no role
+                   is ignored by assistive tech. -->
+              <span
+                class="mark {status}"
+                role="img"
+                title={t(STATUS_KEY[status])}
+                aria-label={t(STATUS_KEY[status])}
+              >
+                {#if mark.kind === 'icon'}
+                  <Icon name={mark.icon} size={12} />
+                {:else}
+                  {mark.text}
+                {/if}
               </span>
             {/if}
             <span class="age">{ageLabel(name)}</span>
@@ -442,8 +449,16 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The mark is a 12px SVG for `running`/`failed` and the literal `✦` for
+     `done`. The row is baseline-aligned (which is right for its text), so the
+     mark opts out with `align-self: center` — an `<svg display:block>` inside
+     an inline span puts its bottom edge on the baseline and would ride a
+     couple of pixels low next to the `✦`. */
   .mark {
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    align-self: center;
     font-size: 0.75rem;
   }
   .mark.done { color: #16a34a; }
