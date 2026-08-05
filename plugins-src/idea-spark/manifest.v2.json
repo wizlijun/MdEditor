@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.idea-spark",
   "name": "Idea Spark",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "kind": "native",
   "engines": {
     "notemd": ">=6.805.2"
