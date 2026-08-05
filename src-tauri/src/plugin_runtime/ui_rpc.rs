@@ -1084,8 +1084,8 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
     }
 
     fn notify_user(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
-        let (title, action) = crate::reminders::parse_notify_params(params)?;
-        let id = crate::reminders::push(title, action);
+        let (title, action) = crate::notifications::parse_notify_params(params)?;
+        let id = crate::notifications::push(title, action);
         Ok(serde_json::json!({ "ok": true, "id": id }))
     }
 }

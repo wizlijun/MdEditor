@@ -8,7 +8,7 @@ use std::sync::{LazyLock, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ReminderAction {
+pub enum NotificationAction {
     /// 绝对路径:聚焦主窗口并在编辑器打开该文件。
     OpenPath { path: String },
     /// 打开某插件贡献的窗口(失败提醒指向 claude-agent 的运行日志)。
@@ -16,26 +16,26 @@ pub enum ReminderAction {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Reminder {
+pub struct Notification {
     pub id: u64,
     pub title: String,
-    pub action: ReminderAction,
+    pub action: NotificationAction,
 }
 
 #[derive(Debug, Default)]
 pub struct Registry {
     next_id: u64,
-    items: Vec<Reminder>,
+    items: Vec<Notification>,
 }
 
 impl Registry {
-    pub fn push(&mut self, title: String, action: ReminderAction) -> u64 {
+    pub fn push(&mut self, title: String, action: NotificationAction) -> u64 {
         self.next_id += 1;
         let id = self.next_id;
-        self.items.push(Reminder { id, title, action });
+        self.items.push(Notification { id, title, action });
         id
     }
-    pub fn take(&mut self, id: u64) -> Option<Reminder> {
+    pub fn take(&mut self, id: u64) -> Option<Notification> {
         let i = self.items.iter().position(|r| r.id == id)?;
         Some(self.items.remove(i))
     }
@@ -45,7 +45,7 @@ impl Registry {
     pub fn len(&self) -> usize {
         self.items.len()
     }
-    pub fn items(&self) -> &[Reminder] {
+    pub fn items(&self) -> &[Notification] {
         &self.items
     }
 }
@@ -54,12 +54,12 @@ static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| Mutex::new(Registr
 /// 注册表变更信号。notify_one 在无等待者时存 permit,守望任务不会漏事件。
 pub static DIRTY: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
 
-pub fn push(title: String, action: ReminderAction) -> u64 {
+pub fn push(title: String, action: NotificationAction) -> u64 {
     let id = REGISTRY.lock().unwrap().push(title, action);
     DIRTY.notify_one();
     id
 }
-pub fn take(id: u64) -> Option<Reminder> {
+pub fn take(id: u64) -> Option<Notification> {
     let r = REGISTRY.lock().unwrap().take(id);
     if r.is_some() {
         DIRTY.notify_one();
@@ -73,19 +73,19 @@ pub fn clear_all() {
 pub fn count() -> usize {
     REGISTRY.lock().unwrap().len()
 }
-pub fn snapshot() -> Vec<Reminder> {
+pub fn snapshot() -> Vec<Notification> {
     REGISTRY.lock().unwrap().items().to_vec()
 }
 
 /// `host.notify` 参数 → (title, action)。
-pub fn parse_notify_params(v: &serde_json::Value) -> Result<(String, ReminderAction), String> {
+pub fn parse_notify_params(v: &serde_json::Value) -> Result<(String, NotificationAction), String> {
     let title = v
         .get("title")
         .and_then(|t| t.as_str())
         .filter(|s| !s.trim().is_empty())
         .ok_or("host.notify needs a non-empty 'title'")?;
     let action = v.get("action").cloned().ok_or("host.notify needs an 'action'")?;
-    let action: ReminderAction = serde_json::from_value(action).map_err(|e| format!("bad action: {e}"))?;
+    let action: NotificationAction = serde_json::from_value(action).map_err(|e| format!("bad action: {e}"))?;
     Ok((title.to_string(), action))
 }
 
@@ -96,8 +96,8 @@ mod tests {
     #[test]
     fn push_assigns_increasing_ids_and_take_removes() {
         let mut r = Registry::default();
-        let a = r.push("A".into(), ReminderAction::OpenPath { path: "/x/a.md".into() });
-        let b = r.push("B".into(), ReminderAction::OpenPath { path: "/x/b.md".into() });
+        let a = r.push("A".into(), NotificationAction::OpenPath { path: "/x/a.md".into() });
+        let b = r.push("B".into(), NotificationAction::OpenPath { path: "/x/b.md".into() });
         assert!(b > a);
         assert_eq!(r.len(), 2);
         let got = r.take(a).expect("a exists");
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn clear_empties() {
         let mut r = Registry::default();
-        r.push("A".into(), ReminderAction::OpenPath { path: "/x".into() });
+        r.push("A".into(), NotificationAction::OpenPath { path: "/x".into() });
         r.clear();
         assert_eq!(r.len(), 0);
     }
@@ -122,7 +122,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(title, "《书》AI 摘要已生成");
-        assert_eq!(action, ReminderAction::OpenPath { path: "/v/ssot/ebooks/2026-08/书/2026-08-04-summary.md".into() });
+        assert_eq!(action, NotificationAction::OpenPath { path: "/v/ssot/ebooks/2026-08/书/2026-08-04-summary.md".into() });
     }
 
     #[test]
@@ -132,7 +132,7 @@ mod tests {
             "action": { "kind": "open_plugin_window", "plugin_id": "notemd.claude-agent", "window": "main" }
         }))
         .unwrap();
-        assert_eq!(action, ReminderAction::OpenPluginWindow { plugin_id: "notemd.claude-agent".into(), window: "main".into() });
+        assert_eq!(action, NotificationAction::OpenPluginWindow { plugin_id: "notemd.claude-agent".into(), window: "main".into() });
     }
 
     #[test]

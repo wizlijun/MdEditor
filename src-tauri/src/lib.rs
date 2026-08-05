@@ -37,7 +37,7 @@ pub mod preview_window;
 #[cfg(not(target_os = "ios"))]
 pub mod agents_sync;
 #[cfg(not(target_os = "ios"))]
-pub mod reminders;
+pub mod notifications;
 #[cfg(not(target_os = "ios"))]
 pub mod sotvault;
 
@@ -821,7 +821,7 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
         }
         // 菜单栏字形保持干净:只有存在未读提醒时才在图标旁挂数字角标,
         // 否则不挂任何文字标题。
-        let n_reminders = crate::reminders::count();
+        let n_reminders = crate::notifications::count();
         if n_reminders > 0 {
             let _ = tray.set_title(Some(n_reminders.to_string()));
         } else {
@@ -874,7 +874,7 @@ pub fn update_tray_icon(app: &tauri::AppHandle, _active: bool) {
 /// 任意线程可调;真正的菜单操作 hop 到主线程(macOS 菜单 API 要求,同
 /// rebuild_menu 的做法)。
 #[cfg(not(target_os = "ios"))]
-pub(crate) fn refresh_tray_reminders(app: &tauri::AppHandle) {
+pub(crate) fn refresh_tray_notifications(app: &tauri::AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let locale = read_saved_locale(&handle);
@@ -1315,21 +1315,21 @@ pub fn run() {
                             "tray-sync-log" => { open_logs_window(app, Some("git-sync")); }
                             "tray-edit-agents" => agents_sync::edit_agents_md(app),
                             "tray-quit" => app.exit(0),
-                            "tray-reminder-clear" => {
-                                crate::reminders::clear_all();
+                            "tray-notification-clear" => {
+                                crate::notifications::clear_all();
                                 // DIRTY 守望会刷新;这里无需手动调用。
                             }
-                            id if id.starts_with("tray-reminder:") => {
-                                let r = id.strip_prefix("tray-reminder:")
+                            id if id.starts_with("tray-notification:") => {
+                                let r = id.strip_prefix("tray-notification:")
                                     .and_then(|s| s.parse::<u64>().ok())
-                                    .and_then(crate::reminders::take);
+                                    .and_then(crate::notifications::take);
                                 if let Some(r) = r {
                                     match r.action {
-                                        crate::reminders::ReminderAction::OpenPath { path } => {
+                                        crate::notifications::NotificationAction::OpenPath { path } => {
                                             emit_open_file_delayed(app, &path);
                                             show_main_window(app);
                                         }
-                                        crate::reminders::ReminderAction::OpenPluginWindow { plugin_id, window } => {
+                                        crate::notifications::NotificationAction::OpenPluginWindow { plugin_id, window } => {
                                             // The reminder is already taken off the list by now, so a
                                             // swallowed error means the click does nothing at all — and
                                             // the commonest reason to be here (the failure reminder for
@@ -1372,14 +1372,14 @@ pub fn run() {
                     .build(app)?;
             }
 
-            // 提醒注册表守望:任何 reminders::push/take/clear 敲响 DIRTY 后刷新托盘。
+            // 提醒注册表守望:任何 notifications::push/take/clear 敲响 DIRTY 后刷新托盘。
             #[cfg(not(target_os = "ios"))]
             {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     loop {
-                        crate::reminders::DIRTY.notified().await;
-                        refresh_tray_reminders(&handle);
+                        crate::notifications::DIRTY.notified().await;
+                        refresh_tray_notifications(&handle);
                     }
                 });
             }
@@ -1808,7 +1808,7 @@ fn build_tray_menu<R: tauri::Runtime>(
     };
 
     // 全局提醒子菜单(仅有提醒时出现)。大文件子菜单的同款样式。
-    let reminder_items = crate::reminders::snapshot();
+    let reminder_items = crate::notifications::snapshot();
     let reminders_submenu = if reminder_items.is_empty() {
         None
     } else {
@@ -1816,14 +1816,14 @@ fn build_tray_menu<R: tauri::Runtime>(
             .replace("{n}", &reminder_items.len().to_string());
         // 蓝点 = 未读提醒(macOS 未读约定),与状态行/大文件行同一套扁平色点。
         let sub = Submenu::with_id_and_icon(
-            app, "tray-reminders", &title, true, flat_dot(DotColor::Blue),
+            app, "tray-notifications", &title, true, flat_dot(DotColor::Blue),
         )?;
         for r in &reminder_items {
-            let it = MenuItem::with_id(app, format!("tray-reminder:{}", r.id), &r.title, true, None::<&str>)?;
+            let it = MenuItem::with_id(app, format!("tray-notification:{}", r.id), &r.title, true, None::<&str>)?;
             sub.append(&it)?;
         }
         let clear = MenuItem::with_id(
-            app, "tray-reminder-clear",
+            app, "tray-notification-clear",
             menu_label(locale, "tray.reminders.clear"), true, None::<&str>,
         )?;
         sub.append(&PredefinedMenuItem::separator(app)?)?;
