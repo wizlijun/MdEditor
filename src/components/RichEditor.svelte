@@ -1016,6 +1016,8 @@
           const { answerCardPlugin } = await import('../lib/note-anno/answer-card')
           const { answeredMap } = await import('../lib/note-anno/answers-store.svelte')
           const { adoptAnswer } = await import('../lib/note-anno/adopt-answer')
+          const { powerModePlugin } = await import('../lib/power-mode/plugin')
+          const { mainWindowConfig } = await import('../lib/power-mode/host-config.svelte')
           view.updateState(
             view.state.reconfigure({
               plugins: view.state.plugins.concat(
@@ -1027,6 +1029,9 @@
                   onAdopt: (entry, pos, v) => { void adoptAnswer(v, entry, pos, tab.filePath ?? null) },
                 }),
                 placeholderPlugin(t('editor.emptyPlaceholder')),
+                // Power Mode:getter 每次击键现取,配置改了下一次输入就生效;
+                // 生效面关着时返回 null,引擎整条链路直接短路。
+                powerModePlugin(mainWindowConfig, () => tab.filePath ?? 'untitled'),
               ),
             }),
           )

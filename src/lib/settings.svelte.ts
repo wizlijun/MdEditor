@@ -386,3 +386,22 @@ export async function mergePluginScoped(patch: Record<string, unknown>): Promise
   if (needSaveSettings) await saveSettings()
 }
 
+/**
+ * 读某个插件域下的一个键。
+ *
+ * 与 `getPluginScopedKey(fqKey)` 的区别:插件 id 单独传。后者按**第一个点**切
+ * 分,对 v2 的 `publisher.name` 形状 id(如 `notemd.power-mode`)会切成
+ * `notemd`,读到别处去。新代码一律用这个。
+ */
+export function getPluginScopedValue(pluginId: string, key: string): unknown {
+  return pluginScoped[pluginId]?.[key]
+}
+
+/** 写某个插件域下的一个键并落盘。点号安全,理由同 `getPluginScopedValue`。 */
+export async function setPluginScopedValue(pluginId: string, key: string, value: unknown): Promise<void> {
+  if (!pluginScoped[pluginId]) pluginScoped[pluginId] = {}
+  pluginScoped[pluginId][key] = value
+  pluginScopedVersion.value++
+  await saveSettings()
+}
+

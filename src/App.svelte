@@ -233,6 +233,10 @@
     ;(async () => {
       try { await loadSettings() } catch (e) { console.warn('[App] loadSettings:', e) }
       try { await loadLocale() } catch (e) { console.warn('[App] loadLocale:', e) }
+      // Power Mode:配置从 settings 插件域读,并监听插件窗口经 RPC 推来的更新。
+      try {
+        await (await import('./lib/power-mode/host-config.svelte')).initPowerModeHost()
+      } catch (e) { console.warn('[App] initPowerModeHost:', e) }
       await loadFolderViewState()
       await loadOutlineGate()
       await loadHistoryGate()
