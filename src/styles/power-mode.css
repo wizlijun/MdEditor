@@ -1,0 +1,62 @@
+/* Power Mode 运行时样式。移植自 ~/git/obsidian-power-mode/styles.css 前 42 行
+   (设置面板那 74 行随面板重写丢弃)。
+
+   由 editor-base.css @import 引入 —— 那个文件主窗口 (App.svelte) 和 Editor Kit
+   (kit.css) 都吃,所以两个生效面用同一份样式,不需要各自接一次。 */
+
+.power-mode-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  /* 低于模态框/弹窗层。note.md 的对话框在 1000 以上。 */
+  z-index: 60;
+  overflow: hidden;
+}
+
+.power-mode-combo {
+  position: fixed;
+  display: none;
+  right: 6%;
+  top: 120px;
+  font-weight: 900;
+  pointer-events: none;
+  z-index: 61;
+  font-size: 40px;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: monospace;
+}
+
+.power-mode-combo-progress {
+  height: 12px;
+  background-color: white;
+  border: solid 1px white;
+}
+
+.power-mode-combo-text {
+  color: white;
+}
+
+.power-mode-combo-exclamation {
+  font-size: 24px;
+}
+
+.power-mode-explosion {
+  position: absolute;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.power-mode-explosion-mask {
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  filter: saturate(150%);
+}
+
+.power-mode-explosion-image {
+  background-repeat: no-repeat;
+  background-size: contain;
+}

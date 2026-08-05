@@ -1,3 +1,8 @@
+/* Power Mode 的运行时样式。挂在这里而不是各挂一次,是因为本文件正好是主窗口
+   (App.svelte) 与 Editor Kit (kit.css) 唯一共用的样式入口。
+   `@import` 必须先于其它规则,所以放文件最上面。 */
+@import './power-mode.css';
+
 /* ── Editor base (skin-agnostic) ──────────────────────────────────────────── */
 
 .moraya-editor {
