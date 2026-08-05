@@ -54,6 +54,11 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // styles it. UI bridge only (`ui_rpc::dispatch` serves it from the live
         // AppHandle); on the process channel it stays -32601.
         "host.theme.css" => Some("editor.kit"),
+        // Power Mode 配置通道。读侧挂 editor.kit —— 需要它的正是内嵌了 Editor Kit
+        // 的插件窗口;写侧单独一个 token,只有 power-mode 插件声明。两条都只在
+        // UI 桥可用(在 ui_rpc::dispatch 里单独处理,进程通道回 -32601)。
+        "host.power_mode.config" => Some("editor.kit"),
+        "host.power_mode.update" => Some("power-mode"),
         _ => Some("__unknown__"), // 未实现的方法一律拒绝
     }
 }

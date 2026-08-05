@@ -296,6 +296,23 @@ pub async fn dispatch<R: tauri::Runtime>(
         return ok(req.id, crate::themes::commands::theme_css_bundle(app));
     }
 
+    // host.power_mode.* 与 theme.css 同理:要活的 AppHandle(读 app 配置目录下的
+    // settings.json、枚举已加载插件、向主窗口 emit),而注入式 HostServices 刻意
+    // 不带 AppHandle。gate 用同一张能力表,手工施加。
+    if req.method == "host.power_mode.config" || req.method == "host.power_mode.update" {
+        if let Some(denial) = capability_denial(&req.method, capabilities, req.id) {
+            return denial;
+        }
+        return if req.method == "host.power_mode.config" {
+            ok(req.id, power_mode_payload(app))
+        } else {
+            match power_mode_update(app, &req.params) {
+                Ok(v) => ok(req.id, v),
+                Err(detail) => err(req.id, proto::ERR_INTERNAL, detail),
+            }
+        };
+    }
+
     let log_dir = app
         .path()
         .app_log_dir()
@@ -856,6 +873,61 @@ pub(crate) fn vault_rename(services: &dyn HostServices, params: &serde_json::Val
 /// `{ path } → { ok: true }`. Resolves a vault-relative path and opens it in
 /// the main editor (focuses the main window). UI-bridge only — the process
 /// sink's default `open_in_editor` returns an error.
+/// `host.power_mode.config` —— 生效后的配置 + 可配置的生效面清单。
+fn power_mode_payload<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> serde_json::Value {
+    use super::power_mode::{self, PluginBrief};
+    use tauri::Manager;
+
+    // settings.json 由主窗口前端(tauri-plugin-store)独家持有。这里只读:写入
+    // 走 power_mode_update → emit → 前端落盘,避免两个写者打架。
+    let settings = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("settings.json"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let (installed, briefs) = match super::STATE.read() {
+        Ok(st) => {
+            let installed = st.plugins.contains_key(power_mode::PLUGIN_ID);
+            let briefs: Vec<PluginBrief> = st
+                .plugins
+                .iter()
+                .map(|(id, (manifest, _dir))| PluginBrief {
+                    id: id.clone(),
+                    name: manifest.name.clone(),
+                    capabilities: manifest.capabilities.clone(),
+                    i18n: manifest.i18n.clone(),
+                })
+                .collect();
+            (installed, briefs)
+        }
+        Err(_) => (false, Vec::new()),
+    };
+
+    serde_json::json!({
+        "config": power_mode::effective(installed, &settings),
+        "surfaces": power_mode::surfaces(&briefs),
+    })
+}
+
+/// `host.power_mode.update` —— 把新配置转给主窗口前端落盘。
+fn power_mode_update<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use tauri::Emitter;
+    let cfg = params
+        .get("config")
+        .filter(|v| v.is_object())
+        .ok_or_else(|| "bad_request: config must be an object".to_string())?;
+    app.emit_to("main", "power-mode://update", cfg.clone())
+        .map_err(|e| format!("io: emit failed: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 pub(crate) fn editor_open(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
     let p = resolve_in_vault(services, params)?;
     services.open_in_editor(&p)?;
@@ -1921,6 +1993,26 @@ mod tests {
         let calls = opened.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert!(calls[0].ends_with("note.md"), "expected path ending in note.md, got {:?}", calls[0]);
+    }
+
+    /// 读侧挂 editor.kit:需要它的正是内嵌 Editor Kit 的插件窗口。
+    #[tokio::test]
+    async fn power_mode_config_requires_editor_kit() {
+        let s = StubServices::default();
+        let r = run(&s, &["vault.read"], "host.power_mode.config", serde_json::json!({})).await;
+        let e = r.error.expect("expected a denial");
+        assert_eq!(e.code, proto::ERR_CAPABILITY_DENIED);
+        assert!(e.message.contains("editor.kit"), "{}", e.message);
+    }
+
+    /// 写侧单独一个 token:光有 editor.kit 不能改别人的配置。
+    #[tokio::test]
+    async fn power_mode_update_requires_its_own_token() {
+        let s = StubServices::default();
+        let r = run(&s, &["editor.kit"], "host.power_mode.update", serde_json::json!({})).await;
+        let e = r.error.expect("expected a denial");
+        assert_eq!(e.code, proto::ERR_CAPABILITY_DENIED);
+        assert!(e.message.contains("power-mode"), "{}", e.message);
     }
 
     #[tokio::test]

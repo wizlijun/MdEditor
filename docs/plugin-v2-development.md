@@ -186,7 +186,8 @@ plugins-src/<name>/
 | `location` | `host.location.get` |
 | `editor.open` | `host.editor.open` |
 | `renderer.html` | 渲染类(md2pdf 用) |
-| `editor.kit` | `host.theme.css`(UI 桥 only,进程通道 `-32601`);另外解锁一条**保留 URL 路径**(不是 `host.*` 方法)—— `GET plugin://<id>/__host__/assets/...`,见下方说明 |
+| `editor.kit` | `host.theme.css` / `host.power_mode.config`(均 UI 桥 only,进程通道 `-32601`);另外解锁一条**保留 URL 路径**(不是 `host.*` 方法)—— `GET plugin://<id>/__host__/assets/...`,见下方说明 |
+| `power-mode` | `host.power_mode.update`(写 Power Mode 配置)。读侧 `host.power_mode.config` 挂在 `editor.kit` 下 —— 需要读它的正是内嵌 Editor Kit 的插件窗口 |
 
 **通道差异(重要)**:`dialog.*` / `fs.*` / `clipboard.*` **只在 UI 桥可用**;后台进程通道(纯后端插件)即使声明了 `dialog` 也拿不到,会回 `-32601`(`host_api.rs:165-168`)。`vault.*` 和 `location.get` 两个通道都可用。`editor.kit` 的两个解锁项(`host.theme.css` RPC + `__host__` 资产路径)也都只在 UI 桥可用。
 
@@ -248,6 +249,8 @@ plugins-src/<name>/
 | `host.location.get` | `location` | — → 位置对象 |
 | `host.editor.open` | `editor.open` | `{ path }`(vault 相对)→ `{ ok: true }`;在主编辑器打开文件并聚焦主窗口。仅 UI 桥可用。 |
 | `host.theme.css` | `editor.kit` | — → `{ light_css, dark_css, follow_system }`;隔离插件窗口没有主程序的 `<style>` 插槽,靠这个方法要到编译好的主题 CSS(已去掉 `[data-theme="…"]` 限定前缀,直接对 `.moraya-editor` 生效)。仅 UI 桥可用(`ui_rpc.rs` 里在 `dispatch_with` 之外单独处理,因为要活的 `AppHandle` 读 app 配置目录 + 已编译主题产物;进程通道回 `-32601`)。 |
+| `host.power_mode.config` | `editor.kit` | — → `{ config: object\|null, surfaces: [{id, name, names}] }`;`config: null` = power-mode 插件没装/停用(整体关闭),`{}` = 装了但没配过(用默认值)。`surfaces` 是已加载且声明了 `editor.kit` 的插件清单(不含 power-mode 自己),`names` 是 manifest `i18n.<locale>.name` 映射。仅 UI 桥可用。 |
+| `host.power_mode.update` | `power-mode` | `{ config }` → `{ ok: true }`;宿主 emit `power-mode://update` 给主窗口前端,由它落进 settings.json 的插件域(store 是前端独家持有的,Rust 不直接写)。仅 UI 桥可用。 |
 
 错误码(`lib.rs:106-110`):`-32001` 能力被拒 / `-32601` 方法不存在 / `-32000` 宿主执行失败(消息带 `"<kind>: <detail>"` 前缀)。
 
