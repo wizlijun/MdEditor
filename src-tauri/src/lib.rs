@@ -728,22 +728,45 @@ fn state_label(locale: &str, state: vault_sync::SyncState) -> String {
     menu_label(locale, key)
 }
 
+/// 托盘下拉里所有行图标共用的一套扁平色点(36px 实心圆,无高光/渐变),
+/// 这样状态行、大文件警告、提醒三处是同一种视觉语言,而不是混着 emoji。
+#[cfg(not(target_os = "ios"))]
+#[derive(Clone, Copy)]
+enum DotColor {
+    Green,
+    Yellow,
+    Red,
+    Grey,
+    Blue,
+}
+
+/// A flat colored dot sized to sit cleanly next to the macOS menu font.
+#[cfg(not(target_os = "ios"))]
+fn flat_dot(color: DotColor) -> Option<Image<'static>> {
+    let bytes: &'static [u8] = match color {
+        DotColor::Green => include_bytes!("../icons/dot-green.png"),
+        DotColor::Yellow => include_bytes!("../icons/dot-yellow.png"),
+        DotColor::Red => include_bytes!("../icons/dot-red.png"),
+        DotColor::Grey => include_bytes!("../icons/dot-grey.png"),
+        DotColor::Blue => include_bytes!("../icons/dot-blue.png"),
+    };
+    Image::from_bytes(bytes).ok()
+}
+
 /// Flat, font-harmonized status dot shown to the left of the tray dropdown's
-/// status line: green = healthy, red = problem, grey = idle. These are plain
-/// filled circles (no gloss) so they sit cleanly next to the menu text.
+/// status line: green = healthy, red = problem, grey = idle.
 #[cfg(not(target_os = "ios"))]
 fn status_dot_image(state: vault_sync::SyncState, has_large: bool) -> Option<Image<'static>> {
     use vault_sync::SyncState;
-    let bytes: &'static [u8] = if state.is_problem() {
-        include_bytes!("../icons/dot-red.png")
+    flat_dot(if state.is_problem() {
+        DotColor::Red
     } else if has_large {
-        include_bytes!("../icons/dot-yellow.png")
+        DotColor::Yellow
     } else if matches!(state, SyncState::Running | SyncState::Syncing) {
-        include_bytes!("../icons/dot-green.png")
+        DotColor::Green
     } else {
-        include_bytes!("../icons/dot-grey.png")
-    };
-    Image::from_bytes(bytes).ok()
+        DotColor::Grey
+    })
 }
 
 /// Refresh the menu-bar tray icon, tooltip and status menu item so the current
@@ -837,7 +860,7 @@ pub fn update_tray_icon(app: &tauri::AppHandle, _active: bool) {
     refresh_tray_status(app);
 }
 
-/// 提醒集变更后的托盘刷新:重建下拉菜单(让 🔔 子菜单进出)+ 刷新角标。
+/// 提醒集变更后的托盘刷新:重建下拉菜单(让提醒子菜单进出)+ 刷新角标。
 /// 任意线程可调;真正的菜单操作 hop 到主线程(macOS 菜单 API 要求,同
 /// rebuild_menu 的做法)。
 #[cfg(not(target_os = "ios"))]
@@ -1519,11 +1542,11 @@ fn menu_label(locale: &str, key: &str) -> String {
         "tray.dailyNotes" => ("Daily Notes", "每日笔记", "デイリーノート", "Tagesnotizen"),
         "tray.vaultSetFolder" => ("Vault: Set Folder…", "Vault：选择文件夹…", "Vault：フォルダを選択…", "Vault: Ordner wählen…"),
         "tray.syncNow" => ("Sync Now", "立即同步", "今すぐ同期", "Jetzt synchronisieren"),
-        "tray.largeFiles.title" => ("⚠️ {n} file(s) too large", "⚠️ {n} 个文件过大", "⚠️ {n} 件のファイルが大きすぎます", "⚠️ {n} Datei(en) zu groß"),
+        "tray.largeFiles.title" => ("{n} file(s) too large", "{n} 个文件过大", "{n} 件のファイルが大きすぎます", "{n} Datei(en) zu groß"),
         "tray.largeFiles.header" => ("Over the limit — not synced. Move out of the vault:", "超过上限,未同步。请移出 vault:", "上限超過 —— 未同期。vault から移動してください:", "Über dem Limit — nicht synchronisiert. Aus dem Vault verschieben:"),
         "tray.viewLog" => ("View Log…", "查看日志…", "ログを表示…", "Protokoll anzeigen…"),
         "tray.editAgents" => ("Edit AGENTS.md…", "编辑 AGENTS.md…", "AGENTS.md を編集…", "AGENTS.md bearbeiten…"),
-        "tray.reminders.title" => ("🔔 {n} notification(s)", "🔔 {n} 条提醒", "🔔 通知 {n} 件", "🔔 {n} Erinnerung(en)"),
+        "tray.reminders.title" => ("{n} notification(s)", "{n} 条提醒", "通知 {n} 件", "{n} Erinnerung(en)"),
         "tray.reminders.clear" => ("Clear All Notifications", "清除全部提醒", "通知をすべてクリア", "Alle Erinnerungen löschen"),
         // Sync status line / tooltip
         "sync.label" => ("Sync", "同步", "同期", "Sync"),
@@ -1684,16 +1707,20 @@ fn build_tray_menu<R: tauri::Runtime>(
         )?;
         let title = menu_label(locale, "tray.largeFiles.title")
             .replace("{n}", &large_files.len().to_string());
-        let mut sub = SubmenuBuilder::with_id(app, "tray-large-files", &title).item(&header);
+        // 同状态行一样挂扁平色点(黄=警告),而不是 emoji;子菜单项也能带图标。
+        let sub = Submenu::with_id_and_icon(
+            app, "tray-large-files", &title, true, flat_dot(DotColor::Yellow),
+        )?;
+        sub.append(&header)?;
         for (i, f) in large_files.iter().enumerate() {
             let name = std::path::Path::new(f)
                 .file_name().and_then(|s| s.to_str()).unwrap_or(f);
             let it = MenuItem::with_id(
                 app, &format!("tray-large-file:{i}"), name, true, None::<&str>,
             )?;
-            sub = sub.item(&it);
+            sub.append(&it)?;
         }
-        Some(sub.build()?)
+        Some(sub)
     };
 
     // 全局提醒子菜单(仅有提醒时出现)。大文件子菜单的同款样式。
@@ -1703,17 +1730,21 @@ fn build_tray_menu<R: tauri::Runtime>(
     } else {
         let title = menu_label(locale, "tray.reminders.title")
             .replace("{n}", &reminder_items.len().to_string());
-        let mut sub = SubmenuBuilder::with_id(app, "tray-reminders", &title);
+        // 蓝点 = 未读提醒(macOS 未读约定),与状态行/大文件行同一套扁平色点。
+        let sub = Submenu::with_id_and_icon(
+            app, "tray-reminders", &title, true, flat_dot(DotColor::Blue),
+        )?;
         for r in &reminder_items {
             let it = MenuItem::with_id(app, format!("tray-reminder:{}", r.id), &r.title, true, None::<&str>)?;
-            sub = sub.item(&it);
+            sub.append(&it)?;
         }
         let clear = MenuItem::with_id(
             app, "tray-reminder-clear",
             menu_label(locale, "tray.reminders.clear"), true, None::<&str>,
         )?;
-        sub = sub.separator().item(&clear);
-        Some(sub.build()?)
+        sub.append(&PredefinedMenuItem::separator(app)?)?;
+        sub.append(&clear)?;
+        Some(sub)
     };
 
     let sync_now_item = MenuItem::with_id(app, "tray-sync-now", menu_label(locale, "tray.syncNow"), true, None::<&str>)?;

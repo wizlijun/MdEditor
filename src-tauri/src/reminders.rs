@@ -1,5 +1,5 @@
 //! 托盘全局提醒注册表。任何插件经 `host.notify`(capability `notify`)推入一条
-//! 提醒;托盘出现「🔔 N」子菜单与数字角标,点击执行 action 并消掉该条。
+//! 提醒;托盘出现「● N」蓝点子菜单与数字角标,点击执行 action 并消掉该条。
 //! 注册表是进程级全局(仿 plugin_runtime::STATE):HostServices 是泛型
 //! `R: Runtime`,碰不了 Wry 专用的托盘刷新,所以写方只改数据 + 敲 DIRTY,
 //! 由 lib.rs setup 里持有 Wry handle 的守望任务负责重建菜单。
