@@ -59,10 +59,12 @@ fn notify_params(spec: &NotifySpec, delivered: bool) -> Value {
             "action": { "kind": "open_path", "path": spec.open_path },
         })
     } else {
+        // 失败是需要注意的告警:标为 Warn(托盘黄点)。成功走默认 Info(蓝点)。
         json!({
             "title": spec.title_fail,
             "action": { "kind": "open_plugin_window",
                         "plugin_id": SELF_PLUGIN_ID, "window": WINDOW },
+            "severity": "warn",
         })
     }
 }
@@ -1388,12 +1390,16 @@ mod tests {
         assert_eq!(ok["title"], "《书》AI 摘要已生成");
         assert_eq!(ok["action"]["kind"], "open_path");
         assert_eq!(ok["action"]["path"], "/v/ssot/ebooks/b/2026-08-04-summary.md");
+        // 成功不带 severity(宿主默认 Info/蓝点)。
+        assert!(ok.get("severity").is_none());
 
         let bad = notify_params(&spec, false);
         assert_eq!(bad["title"], "《书》AI 阅读失败");
         assert_eq!(bad["action"]["kind"], "open_plugin_window");
         assert_eq!(bad["action"]["plugin_id"], SELF_PLUGIN_ID);
         assert_eq!(bad["action"]["window"], WINDOW);
+        // 失败标 Warn(宿主黄点)。
+        assert_eq!(bad["severity"], "warn");
     }
 
     /// A caller that garbles the spec has to hear about it — silently dropping
