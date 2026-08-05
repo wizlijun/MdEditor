@@ -41,6 +41,17 @@ export const ICONS = {
     '<circle cx="20" cy="12" r="1.5"/>' +
     '<line x1="7.5" y1="12" x2="16.5" y2="12"/>' +
     '<polyline points="13 8.5 16.5 12 13 15.5"/>',
+  /** "Fold this side panel away" — a framed panel with its right-hand column
+   *  marked off and a chevron pointing at it. Transcribed verbatim from the
+   *  main window's own history panel header
+   *  (`src/components/history/HistoryPanel.svelte`) rather than drawn fresh:
+   *  the inbox header is the same control in the same position on the same
+   *  side, so it has to be the same glyph. Same standing obligation as
+   *  ModeToggle's SVGs — if that header's icon changes, re-copy it here. */
+  collapse:
+    '<rect x="3" y="3" width="18" height="18" rx="2"/>' +
+    '<line x1="15" y1="3" x2="15" y2="21"/>' +
+    '<polyline points="8 9 11 12 8 15"/>',
   /** A tray — a container of many things, distinct from a document. */
   inbox:
     '<path d="M3 9h18l-2 10H5L3 9z"/>' +

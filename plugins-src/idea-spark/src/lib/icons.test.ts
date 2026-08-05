@@ -14,6 +14,7 @@ import { ICONS, type IconName } from './icons'
 const EXPECTED: IconName[] = [
   'new-idea',
   'delegate',
+  'collapse',
   'inbox',
   'settings',
   'running',

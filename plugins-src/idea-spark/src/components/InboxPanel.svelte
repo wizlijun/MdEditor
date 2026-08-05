@@ -62,6 +62,7 @@
     state as store,
     statusOf,
     titleOf,
+    toggleInbox,
   } from '../lib/store.svelte'
   import { locale, t } from '../lib/strings'
 
@@ -297,7 +298,23 @@
 </script>
 
 <aside class="inbox" aria-label={t('inbox')}>
-  <h2>{t('inbox')}</h2>
+  <!-- Same header shape as the main window's side panels (see
+       `src/components/history/HistoryPanel.svelte`): the fold-away control
+       sits ahead of the title, on the side the panel folds towards. The action
+       bar's tray button still toggles the panel from outside; this is the same
+       `toggleInbox` — with the panel open, toggling it IS hiding it. -->
+  <header>
+    <button
+      type="button"
+      class="hidebtn"
+      title={t('hideInbox')}
+      aria-label={t('hideInbox')}
+      onclick={toggleInbox}
+    >
+      <Icon name="collapse" size={14} />
+    </button>
+    <h2>{t('inbox')}</h2>
+  </header>
   {#if store.listFailed}
     <!-- An empty list here would otherwise read as "you have no ideas yet",
          which is a lie when the directory simply couldn't be read. -->
@@ -396,12 +413,37 @@
     border-left: 1px solid var(--line, #e5e7eb);
     overflow-y: auto;
   }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    /* Pulled left by the button's own padding so the icon lines up with the
+       rows below it rather than sitting indented from them. */
+    margin: 0 0 0.6rem -3px;
+  }
   h2 {
-    margin: 0 0 0.6rem;
+    margin: 0;
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     opacity: 0.6;
+  }
+  .hidebtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    padding: 3px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: inherit;
+    opacity: 0.6;
+    cursor: pointer;
+  }
+  .hidebtn:hover {
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    opacity: 1;
   }
   .unavailable {
     margin: 0 0 0.5rem;
