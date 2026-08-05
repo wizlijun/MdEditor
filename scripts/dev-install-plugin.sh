@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dev-install a v2 plugin into the local app-data plugins root.
 #
-# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import|idea-spark]
+# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import|idea-spark|power-mode]
 #   default plugin = md2pdf (preserves the original behavior).
 #   --release      = build the native plugin binary in release mode (md2pdf +
 #                    openclaw; ignored for the pure-UI plugins).
@@ -38,8 +38,8 @@ PLUGIN=md2pdf
 for arg in "$@"; do
   case "$arg" in
     --release) PROFILE=release ;;
-    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import|idea-spark) PLUGIN="$arg" ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | ebook-import | idea-spark)" >&2; exit 2 ;;
+    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|ebook-import|idea-spark|power-mode) PLUGIN="$arg" ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | ebook-import | idea-spark | power-mode)" >&2; exit 2 ;;
   esac
 done
 
@@ -213,6 +213,23 @@ elif [[ "$PLUGIN" == "idea-spark" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.idea-spark/current"
   mark_installed "notemd.idea-spark" "$VERSION"
   echo "✓ installed notemd.idea-spark@$VERSION (ui-only) → $DEST"
+
+elif [[ "$PLUGIN" == "power-mode" ]]; then
+  SRC="plugins-src/power-mode"
+  # Build the standalone UI bundle (dist/). Pure UI plugin; no native backend.
+  pnpm --filter power-mode build
+  VERSION=$(node -e "console.log(require('./$SRC/manifest.v2.json').version)")
+  DEST="$ROOT/notemd.power-mode/$VERSION"
+  rm -rf "$DEST"
+  mkdir -p "$DEST/ui"
+  cp -R "$SRC/dist/." "$DEST/ui/"
+  cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
+  ln -sfn "$VERSION" "$ROOT/notemd.power-mode/current"
+  mark_installed "notemd.power-mode" "$VERSION"
+  echo "✓ installed notemd.power-mode@$VERSION (ui-only) → $DEST"
+  echo "  open it:                Plugins menu ▸ \"狂暴模式\""
+  echo "  NOTE: 用了 Editor Kit 的插件联调前必须先 pnpm build —— 插件窗口读的是"
+  echo "        磁盘上的 dist/,不是 Vite dev server。"
 fi
 
 # ---------------------------------------------------------------------------
