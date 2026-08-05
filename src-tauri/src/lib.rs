@@ -821,9 +821,9 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
         }
         // 菜单栏字形保持干净:只有存在未读提醒时才在图标旁挂数字角标,
         // 否则不挂任何文字标题。
-        let n_reminders = crate::notifications::count();
-        if n_reminders > 0 {
-            let _ = tray.set_title(Some(n_reminders.to_string()));
+        let n = crate::notifications::count();
+        if n > 0 {
+            let _ = tray.set_title(Some(n.to_string()));
         } else {
             let _ = tray.set_title(None::<&str>);
         }
@@ -844,22 +844,29 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
         }
     }
 
-    // Rebuild tray menu when large-file list changes so the submenu stays accurate.
-    if let Some(shown) = app.try_state::<TrayShownLargeFiles>() {
-        let mut shown = shown.0.lock().unwrap();
-        if *shown != skipped_large {
-            *shown = skipped_large.clone();
-            drop(shown);
-            let locale2 = read_saved_locale(app);
-            if let Some(tray) = app.tray_by_id("main") {
-                if let Ok((menu, repo_item, status_item, sync_now_item)) = build_tray_menu(app, &locale2) {
-                    *app.state::<TrayRepoItem>().0.lock().unwrap() = Some(repo_item);
-                    *app.state::<TrayStatusItem>().0.lock().unwrap() = Some(status_item);
-                    *app.state::<TraySyncNowItem>().0.lock().unwrap() = Some(sync_now_item);
-                    let _ = tray.set_menu(Some(menu));
-                }
-            }
-        }
+    // 宿主告警并入统一通知(sticky):大文件门禁 / 同步异常。push/dismiss 只在
+    // 内容变化时敲 DIRTY,由通知守望重建菜单——稳态第二轮不再触发,收敛不自激。
+    if has_large {
+        let title = menu_label(&locale, "notif.largeFiles")
+            .replace("{n}", &skipped_large.len().to_string());
+        crate::notifications::push(
+            title,
+            crate::notifications::NotificationAction::OpenLogs { filter: Some("git-sync".into()) },
+            Some("vault.large_files".into()),
+            crate::notifications::Severity::Warn,
+        );
+    } else {
+        crate::notifications::dismiss_source("vault.large_files");
+    }
+    if problem {
+        crate::notifications::push(
+            menu_label(&locale, "notif.syncError"),
+            crate::notifications::NotificationAction::OpenLogs { filter: Some("git-sync".into()) },
+            Some("vault.sync".into()),
+            crate::notifications::Severity::Warn,
+        );
+    } else {
+        crate::notifications::dismiss_source("vault.sync");
     }
 }
 
@@ -1353,19 +1360,6 @@ pub fn run() {
                                     }
                                 }
                             }
-                            id if id.starts_with("tray-large-file:") => {
-                                if let Some(idx) = id.strip_prefix("tray-large-file:")
-                                    .and_then(|s| s.parse::<usize>().ok())
-                                {
-                                    let mgr = app.state::<std::sync::Arc<vault_sync::VaultSyncManager>>();
-                                    let files = mgr.skipped_large_files.lock().unwrap().clone();
-                                    let repo = mgr.repo_path.lock().unwrap().clone();
-                                    if let (Some(rel), Some(root)) = (files.get(idx), repo) {
-                                        let abs = std::path::Path::new(&root).join(rel);
-                                        let _ = std::process::Command::new("open").arg("-R").arg(abs).status();
-                                    }
-                                }
-                            }
                             _ => {}
                         }
                     })
@@ -1618,12 +1612,16 @@ fn menu_label(locale: &str, key: &str) -> String {
         "tray.dailyNotes" => ("Daily Notes", "每日笔记", "デイリーノート", "Tagesnotizen"),
         "tray.vaultSetFolder" => ("Vault: Set Folder…", "Vault：选择文件夹…", "Vault：フォルダを選択…", "Vault: Ordner wählen…"),
         "tray.syncNow" => ("Sync Now", "立即同步", "今すぐ同期", "Jetzt synchronisieren"),
-        "tray.largeFiles.title" => ("{n} file(s) too large", "{n} 个文件过大", "{n} 件のファイルが大きすぎます", "{n} Datei(en) zu groß"),
-        "tray.largeFiles.header" => ("Over the limit — not synced. Move out of the vault:", "超过上限,未同步。请移出 vault:", "上限超過 —— 未同期。vault から移動してください:", "Über dem Limit — nicht synchronisiert. Aus dem Vault verschieben:"),
         "tray.viewLog" => ("View Log…", "查看日志…", "ログを表示…", "Protokoll anzeigen…"),
         "tray.editAgents" => ("Edit AGENTS.md…", "编辑 AGENTS.md…", "AGENTS.md を編集…", "AGENTS.md bearbeiten…"),
-        "tray.reminders.title" => ("{n} notification(s)", "{n} 条提醒", "通知 {n} 件", "{n} Erinnerung(en)"),
-        "tray.reminders.clear" => ("Clear All Notifications", "清除全部提醒", "通知をすべてクリア", "Alle Erinnerungen löschen"),
+        // Unified notifications submenu (Apple-localized: de = Mitteilungen)
+        "tray.notifications.titleN" => ("{n} Notifications", "{n} 条通知", "通知 {n} 件", "{n} Mitteilungen"),
+        "tray.notifications.titleEmpty" => ("Notifications", "通知", "通知", "Mitteilungen"),
+        "tray.notifications.clear" => ("Clear All", "全部清除", "すべて消去", "Alle entfernen"),
+        "tray.notifications.history" => ("Notification History…", "通知历史…", "通知履歴…", "Mitteilungsverlauf…"),
+        // Sticky notification titles produced by host warnings
+        "notif.largeFiles" => ("{n} large files not committed", "{n} 个大文件未进 commit", "{n} 件の大きなファイルは未コミット", "{n} große Dateien nicht committet"),
+        "notif.syncError" => ("Vault sync failed", "Vault 同步失败", "Vault 同期に失敗", "Vault-Synchronisierung fehlgeschlagen"),
         // Sync status line / tooltip
         "sync.label" => ("Sync", "同步", "同期", "Sync"),
         "sync.neverSynced" => ("never synced", "从未同步", "未同期", "noch nie synchronisiert"),
@@ -1785,60 +1783,45 @@ fn build_tray_menu<R: tauri::Runtime>(
         None::<&str>,
     )?;
 
-    // Large-file warning submenu (only shown when files were skipped).
-    let large_files: Vec<String> = {
-        let mgr = app.state::<std::sync::Arc<vault_sync::VaultSyncManager>>();
-        let x = mgr.skipped_large_files.lock().unwrap().clone();
-        x
-    };
-    let large_submenu = if large_files.is_empty() {
-        None
-    } else {
-        let header = IconMenuItem::with_id(
-            app, "tray-large-header",
-            menu_label(locale, "tray.largeFiles.header"),
-            /*enabled=*/ false, None, None::<&str>,
-        )?;
-        let title = menu_label(locale, "tray.largeFiles.title")
-            .replace("{n}", &large_files.len().to_string());
-        // 同状态行一样挂扁平色点(黄=警告),而不是 emoji;子菜单项也能带图标。
-        let sub = Submenu::with_id_and_icon(
-            app, "tray-large-files", &title, true, flat_dot(DotColor::Yellow),
-        )?;
-        sub.append(&header)?;
-        for (i, f) in large_files.iter().enumerate() {
-            let name = std::path::Path::new(f)
-                .file_name().and_then(|s| s.to_str()).unwrap_or(f);
-            let it = MenuItem::with_id(
-                app, &format!("tray-large-file:{i}"), name, true, None::<&str>,
-            )?;
+    // 常驻「通知」子菜单(空也不隐藏)。色点取活跃项最高严重度(黄=Warn/蓝=Info/
+    // 灰=空),与状态行同一套 flat_dot,尺寸一致。大文件/同步告警作为 sticky 通知
+    // 并入此处(由 refresh_tray_status 驱动),不再单列黄灯子菜单。
+    let notif_items = crate::notifications::snapshot();
+    let notif_submenu = {
+        let dot = match crate::notifications::max_severity() {
+            Some(crate::notifications::Severity::Warn) => DotColor::Yellow,
+            Some(crate::notifications::Severity::Info) => DotColor::Blue,
+            None => DotColor::Grey,
+        };
+        let title = if notif_items.is_empty() {
+            menu_label(locale, "tray.notifications.titleEmpty")
+        } else {
+            menu_label(locale, "tray.notifications.titleN")
+                .replace("{n}", &notif_items.len().to_string())
+        };
+        let sub = Submenu::with_id_and_icon(app, "tray-notifications", &title, true, flat_dot(dot))?;
+        for n in &notif_items {
+            let it = MenuItem::with_id(app, format!("tray-notification:{}", n.id), &n.title, true, None::<&str>)?;
             sub.append(&it)?;
         }
-        Some(sub)
-    };
-
-    // 全局提醒子菜单(仅有提醒时出现)。大文件子菜单的同款样式。
-    let reminder_items = crate::notifications::snapshot();
-    let reminders_submenu = if reminder_items.is_empty() {
-        None
-    } else {
-        let title = menu_label(locale, "tray.reminders.title")
-            .replace("{n}", &reminder_items.len().to_string());
-        // 蓝点 = 未读提醒(macOS 未读约定),与状态行/大文件行同一套扁平色点。
-        let sub = Submenu::with_id_and_icon(
-            app, "tray-notifications", &title, true, flat_dot(DotColor::Blue),
-        )?;
-        for r in &reminder_items {
-            let it = MenuItem::with_id(app, format!("tray-notification:{}", r.id), &r.title, true, None::<&str>)?;
-            sub.append(&it)?;
-        }
+        // 「全部清除」只在有瞬时项时可用(不能一键抹掉仍成立的持续告警)。
+        let has_transient = notif_items.iter().any(|n| n.source.is_none());
         let clear = MenuItem::with_id(
             app, "tray-notification-clear",
-            menu_label(locale, "tray.reminders.clear"), true, None::<&str>,
+            menu_label(locale, "tray.notifications.clear"), has_transient, None::<&str>,
         )?;
-        sub.append(&PredefinedMenuItem::separator(app)?)?;
+        // 「通知历史…」永远在:打开日志窗口并预设到 notification 分类。
+        let history = MenuItem::with_id(
+            app, "tray-notification-history",
+            menu_label(locale, "tray.notifications.history"), true, None::<&str>,
+        )?;
+        if !notif_items.is_empty() {
+            sub.append(&PredefinedMenuItem::separator(app)?)?;
+        }
         sub.append(&clear)?;
-        Some(sub)
+        sub.append(&PredefinedMenuItem::separator(app)?)?;
+        sub.append(&history)?;
+        sub
     };
 
     let sync_now_item = MenuItem::with_id(app, "tray-sync-now", menu_label(locale, "tray.syncNow"), true, None::<&str>)?;
@@ -1872,15 +1855,10 @@ fn build_tray_menu<R: tauri::Runtime>(
         b0 = b0.item(it);
     }
     let b = b0.separator();
-    let mut b2 = b
+    let b2 = b
         .item(&sync_repo_item)
-        .item(&status_item);
-    if let Some(ref sm) = large_submenu {
-        b2 = b2.item(sm);
-    }
-    if let Some(ref rm) = reminders_submenu {
-        b2 = b2.item(rm);
-    }
+        .item(&status_item)
+        .item(&notif_submenu);    // 常驻:状态行下、查看日志上
     let menu = b2
         .item(&sync_now_item)
         .item(&sync_log_item)
