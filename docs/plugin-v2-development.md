@@ -135,14 +135,20 @@ plugins-src/<name>/
 
 `open_command` 是打开窗口的关键:菜单项的 `command` 与某窗口的 `open_command` 相等时,点菜单即开窗,无需插件进程参与。
 
-**TrayContribution**(`lib.rs:65-74`):
+**TrayContribution**(`plugin-protocol/src/lib.rs` 的 `TrayContribution`):
 ```jsonc
 {
-  "window": "main",     // 必须匹配某个 contributes.windows[].id
-  "label": "决策日志"   // 可选;缺省用插件本地化名称(manifest name + i18n.<locale>.name)
+  "window": "main",             // 必须匹配某个 contributes.windows[].id
+  "label": "决策日志",          // 可选;缺省用插件本地化名称(manifest name + i18n.<locale>.name)
+  "section": "capture",         // 可选;"capture" = 顶部捕获组,其余/缺省 = 默认组
+  "accelerator": "Cmd+Ctrl+I"   // 可选;全局快捷键 + 托盘项右侧的显示用加速键
 }
 ```
-每条 `tray` 贡献在菜单栏托盘下拉里追加一条启动项(位置在"Daily Notes"下方),点击直接开对应插件窗口(`src-tauri/src/lib.rs:1544-1568`:宿主扫描所有已启用插件的 `contributes.tray`,按 label 排序后逐一挂 `tray-plugin:<id>:<window>` 菜单项)。`decision-log`、`weekly-review`、`idea-spark` 均已声明。
+每条 `tray` 贡献在菜单栏托盘下拉里追加一条启动项,点击直接开对应插件窗口。宿主扫描所有已启用插件的 `contributes.tray`,分两组、各自按 label 排序后挂 `tray-plugin:<id>:<window>` 菜单项(纯逻辑在 `src-tauri/src/plugin_runtime/tray.rs`,组装在 `lib.rs` 的 `build_tray_menu`)。`decision-log`、`weekly-review`、`idea-spark` 均已声明。
+
+- **`section`**:`"capture"` = 顶部捕获组,排在"快速笔记 / 每日笔记"之后、第一条分隔线之前 —— 语义是"开始写点新东西"。缺省(或任何本宿主不认识的取值)= 默认组,在第一条分隔线之后、"显示主窗口"下面。取值是**开放词表**:字段类型是字符串而非 enum,老宿主碰到没见过的组名只会降级到默认组,不会整份 manifest 解析失败。
+- **`accelerator`**:宿主在启动时注册系统级热键,按下等同于点击该托盘项。语法同 tauri-plugin-global-shortcut(大小写与修饰键顺序都不敏感)。**只在启动时注册一次**(跟托盘菜单本身一样:市场里现装的插件要下次启动才进托盘);内置的 `Cmd+Ctrl+M` / `Cmd+Ctrl+N` 优先,插件抢不走;解析失败或组合被别的 app 占用都只写日志。
+- **激活推送**:托盘点击与全局快捷键走同一条路 —— 打开/聚焦窗口后,若**窗口原本就开着**,宿主向它推一条 `{"type":"tray-activate"}`(`bridge().onMessage` 收)。新建的窗口不推:webview 还没加载完,`eval` 会丢,而且新窗口本来就是从初始状态起步的。插件据此实现"每次激活都开一条新的"(idea-spark 收到后走它的 `startNew`,不绕过未保存屏障)。
 
 ---
 

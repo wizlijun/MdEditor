@@ -57,6 +57,16 @@ pub struct TraySyncNowItem(pub Mutex<Option<MenuItem<tauri::Wry>>>);
 pub struct TrayShownLargeFiles(pub Mutex<Vec<String>>);
 #[cfg(not(target_os = "ios"))]
 pub struct DailyNotesEnabled(pub std::sync::Mutex<bool>);
+/// Global hotkeys contributed by plugins (`contributes.tray[].accelerator`):
+/// hotkey id → the `(plugin_id, window)` it opens.
+///
+/// Keyed by `Shortcut::id()` rather than by the manifest string, and that IS the
+/// normalization: the id is derived from the parsed modifier bits and key code,
+/// so `"Cmd+Ctrl+I"`, `"ctrl+cmd+I"` and `"Control+Super+KeyI"` all land on the
+/// same entry. The handler receives the very `Shortcut` we registered, so the
+/// lookup can never miss on spelling.
+#[cfg(not(target_os = "ios"))]
+pub struct PluginShortcuts(pub Mutex<std::collections::HashMap<u32, (String, String)>>);
 
 #[tauri::command]
 fn drain_pending_files(state: tauri::State<'_, PendingFiles>) -> Vec<String> {
@@ -931,6 +941,8 @@ pub fn run() {
     #[cfg(not(target_os = "ios"))]
     let builder = builder.manage(DailyNotesEnabled(std::sync::Mutex::new(false)));
     #[cfg(not(target_os = "ios"))]
+    let builder = builder.manage(PluginShortcuts(Mutex::new(std::collections::HashMap::new())));
+    #[cfg(not(target_os = "ios"))]
     let builder = builder.manage(preview_window::PreviewStore::default());
     #[cfg(not(target_os = "ios"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -985,8 +997,19 @@ pub fn run() {
                     let cmd_ctrl = Modifiers::SUPER | Modifiers::CONTROL;
                     if shortcut.matches(cmd_ctrl, Code::KeyM) {
                         trigger_quick_note(app);
-                    } else if shortcut.matches(cmd_ctrl, Code::KeyN) {
+                        return;
+                    }
+                    if shortcut.matches(cmd_ctrl, Code::KeyN) {
                         show_daily_notes_window(app);
+                        return;
+                    }
+                    // Plugin-contributed hotkeys. Checked last so a plugin can
+                    // never shadow a built-in tray action.
+                    let target = app
+                        .try_state::<PluginShortcuts>()
+                        .and_then(|st| st.0.lock().ok().and_then(|m| m.get(&shortcut.id()).cloned()));
+                    if let Some((plugin_id, window)) = target {
+                        activate_plugin_tray_target(app, &plugin_id, &window);
                     }
                 }
             })
@@ -1106,19 +1129,6 @@ pub fn run() {
         .setup(|app| {
             log_bus::init(app.handle().clone());
 
-            // Register the system-wide tray action hotkeys. A failure (e.g. a
-            // combo is already claimed by another app) is non-fatal: the tray
-            // menu items still work.
-            #[cfg(not(target_os = "ios"))]
-            {
-                use tauri_plugin_global_shortcut::GlobalShortcutExt;
-                if let Err(e) = app
-                    .global_shortcut()
-                    .register_multiple(["Cmd+Ctrl+M", "Cmd+Ctrl+N"])
-                {
-                    dlog(&format!("global-shortcut register tray actions failed: {e}"));
-                }
-            }
             // Dev builds: drop the webview HTTP cache on every launch. Vite's
             // optimized-deps URLs (`?v=<hash>`) are served `immutable`, but the
             // hash only tracks the lockfile — file:-linked @moraya/core content
@@ -1160,6 +1170,64 @@ pub fn run() {
             #[cfg(not(target_os = "ios"))]
             plugin_runtime::location::init_at_startup(&app.handle());
 
+            // System-wide tray hotkeys: the two built-in capture actions plus
+            // whatever the installed plugins declared as
+            // `contributes.tray[].accelerator`. MUST run after
+            // `plugin_runtime::init` — that is what fills the plugin set this
+            // reads. Every failure here is non-fatal (a combo claimed by another
+            // app is routine): the tray menu items still work, they just lose
+            // the keyboard route to them.
+            //
+            // Registered once at startup only, which matches the tray menu
+            // itself: installing a plugin from the market does not rebuild the
+            // tray either, so a newly installed hotkey arrives with the next
+            // launch.
+            #[cfg(not(target_os = "ios"))]
+            {
+                use std::str::FromStr;
+                use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+
+                if let Err(e) = app
+                    .global_shortcut()
+                    .register_multiple(["Cmd+Ctrl+M", "Cmd+Ctrl+N"])
+                {
+                    dlog(&format!("global-shortcut register tray actions failed: {e}"));
+                }
+
+                // The two built-ins are claimed already; the handler checks them
+                // before the plugin table, so record their ids and let a
+                // colliding plugin combo be skipped outright rather than
+                // registered into a hotkey it can never receive.
+                let mut claimed: std::collections::HashSet<u32> = ["Cmd+Ctrl+M", "Cmd+Ctrl+N"]
+                    .iter()
+                    .filter_map(|s| Shortcut::from_str(s).ok())
+                    .map(|s| s.id())
+                    .collect();
+                let mut map: std::collections::HashMap<u32, (String, String)> = Default::default();
+                for (accel, entry) in plugin_runtime::tray::accelerators_from_state() {
+                    let target = format!("{}:{}", entry.plugin_id, entry.window);
+                    let sc = match Shortcut::from_str(&accel) {
+                        Ok(sc) => sc,
+                        Err(e) => {
+                            dlog(&format!("global-shortcut {target}: bad accelerator {accel:?}: {e}"));
+                            continue;
+                        }
+                    };
+                    if !claimed.insert(sc.id()) {
+                        dlog(&format!("global-shortcut {target}: {accel:?} already claimed, skipped"));
+                        continue;
+                    }
+                    // One at a time: `register_multiple` is all-or-nothing, and
+                    // one plugin's occupied combo must not cost every other
+                    // plugin its hotkey.
+                    if let Err(e) = app.global_shortcut().register(sc) {
+                        dlog(&format!("global-shortcut {target}: register {accel:?} failed: {e}"));
+                        continue;
+                    }
+                    map.insert(sc.id(), (entry.plugin_id, entry.window));
+                }
+                *app.state::<PluginShortcuts>().0.lock().unwrap() = map;
+            }
 
             #[cfg(target_os = "ios")]
             vault_ios::init(&app.handle());
@@ -1239,9 +1307,7 @@ pub fn run() {
                                 if let Some((plugin_id, window)) =
                                     id["tray-plugin:".len()..].rsplit_once(':')
                                 {
-                                    let _ = crate::plugin_runtime::windows::open_plugin_window(
-                                        app, plugin_id, window,
-                                    );
+                                    activate_plugin_tray_target(app, plugin_id, window);
                                 }
                             }
                             "tray-sync-repo" => { pick_sync_folder(app); }
@@ -1602,22 +1668,46 @@ pub(crate) fn read_daily_notes_enabled<R: tauri::Runtime>(app: &tauri::AppHandle
     json.get("dailyNotes").and_then(|v| v.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
+/// Open (or focus) a plugin's tray-contributed window, then tell it the user
+/// just *activated* it — the single path behind both a tray click and the
+/// plugin's global hotkey.
+///
+/// The `tray-activate` push is what makes "hit the hotkey, start a new one"
+/// work: focusing a window that is already sitting on yesterday's draft is not
+/// what the user asked for. The plugin decides what "activate" means (Idea Spark
+/// starts a new idea, through the same guard its New button uses).
+///
+/// **The push is deliberately skipped when the window had to be created.** A
+/// fresh window's webview has not loaded yet, so the `eval` behind
+/// `push_to_window` would land in a void — and it would be redundant anyway: a
+/// plugin window boots into its own initial state, which for a capture plugin is
+/// already a blank draft. So: window existed → push; window just built → don't.
+#[cfg(not(target_os = "ios"))]
+fn activate_plugin_tray_target<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    plugin_id: &str,
+    window: &str,
+) {
+    use crate::plugin_runtime::windows;
+    let existed = app.get_webview_window(&windows::window_label(plugin_id, window)).is_some();
+    if let Err(e) = windows::open_plugin_window(app, plugin_id, window) {
+        dlog(&format!("tray activate {plugin_id}:{window} failed: {e}"));
+        return;
+    }
+    if existed {
+        windows::push_to_window(
+            app,
+            plugin_id,
+            window,
+            &crate::plugin_runtime::tray::activate_payload(),
+        );
+    }
+}
+
 /// Build the menu-bar tray dropdown in the given locale. Returns the menu, the
 /// (dynamic) "Vault:" item, status item, and sync-now item so the caller can
 /// stash them for later updates. Event handling stays on the TrayIcon, so
 /// rebuilding just the menu preserves click behavior.
-/// A plugin's display name for the current locale: `i18n.<locale>.name` if the
-/// manifest provides it, else the manifest `name`.
-fn plugin_display_name(m: &plugin_protocol::ManifestV2, locale: &str) -> String {
-    m.i18n
-        .as_ref()
-        .and_then(|v| v.get(locale))
-        .and_then(|l| l.get("name"))
-        .and_then(|n| n.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| m.name.clone())
-}
-
 fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     locale: &str,
@@ -1635,30 +1725,24 @@ fn build_tray_menu<R: tauri::Runtime>(
     )?;
     let show_item = MenuItem::with_id(app, "tray-show", menu_label(locale, "tray.show"), true, None::<&str>)?;
     // Tray "socket": every enabled plugin that declares `contributes.tray` gets a
-    // launch item here, directly below the "Daily Notes" item (when enabled). The
-    // label is the entry's `label` or the plugin's localized name; clicking opens
-    // the plugin window.
-    let plugin_tray_items: Vec<MenuItem<R>> = {
-        let mut entries: Vec<(String, String, String)> = Vec::new(); // (plugin_id, window, label)
-        if let Ok(st) = crate::plugin_runtime::STATE.read() {
-            for (id, (manifest, _dir)) in st.plugins.iter() {
-                for tc in &manifest.contributes.tray {
-                    let label = tc
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| plugin_display_name(manifest, locale));
-                    entries.push((id.clone(), tc.window.clone(), label));
-                }
-            }
-        }
-        entries.sort_by(|a, b| a.2.cmp(&b.2)); // stable order by label
+    // launch item here. Where it lands is the plugin's call
+    // (`contributes.tray[].section`): `"capture"` joins the top block, right
+    // after Daily Notes and before the first separator; anything else (the
+    // default) goes below "Show Main Window", after that separator. Each group
+    // is sorted by label — the entry's `label`, or the plugin's localized name.
+    // Clicking opens the plugin window; `accelerator` is display-only here (the
+    // real system-wide hotkey is registered in `run()`'s setup).
+    let (capture_entries, other_entries) = crate::plugin_runtime::tray::entries_from_state(locale);
+    let to_items = |entries: Vec<crate::plugin_runtime::tray::TrayEntry>| -> Vec<MenuItem<R>> {
         entries
             .into_iter()
-            .filter_map(|(id, window, label)| {
-                MenuItem::with_id(app, format!("tray-plugin:{id}:{window}"), &label, true, None::<&str>).ok()
+            .filter_map(|e| {
+                MenuItem::with_id(app, e.menu_id(), &e.label, true, e.accelerator.as_deref()).ok()
             })
             .collect()
     };
+    let capture_plugin_items = to_items(capture_entries);
+    let plugin_tray_items = to_items(other_entries);
     let sync_repo_label = {
         let mgr = app.state::<std::sync::Arc<vault_sync::VaultSyncManager>>();
         let guard = mgr.repo_path.lock().unwrap();
@@ -1766,6 +1850,12 @@ fn build_tray_menu<R: tauri::Runtime>(
     // built-in "today's note" tray item anymore (removed by product decision).
     if daily_enabled {
         b0 = b0.item(&daily_notes_item);
+    }
+    // The capture group: plugin-contributed capture actions sit with Quick Note
+    // and Daily Notes, above the separator, because that block is "start writing
+    // something new" and they belong to it.
+    for it in &capture_plugin_items {
+        b0 = b0.item(it);
     }
     b0 = b0.separator().item(&show_item);
     for it in &plugin_tray_items {

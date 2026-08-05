@@ -14,6 +14,7 @@ pub mod market;
 pub mod process;
 pub mod protocol;
 pub mod state;
+pub mod tray;
 pub mod ui_rpc;
 pub mod windows;
 

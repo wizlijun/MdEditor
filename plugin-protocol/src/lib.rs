@@ -71,7 +71,28 @@ pub struct TrayContribution {
     /// 托盘项文案；缺省用插件本地化名称（manifest `name` + `i18n.<locale>.name`）。
     #[serde(default)]
     pub label: Option<String>,
+    /// 进托盘下拉的哪一组。目前只认 [`TRAY_SECTION_CAPTURE`]（顶部捕获组：
+    /// 快速笔记/每日笔记那一组，本项排在每日笔记之后、第一条分隔线之前）；
+    /// 缺省 = 默认组（第一条分隔线之后、"显示主窗口"下面）。
+    ///
+    /// 刻意用 `Option<String>` 而不是 enum：这个字段是**开放取值**的，将来加一个
+    /// 新组名不该让老宿主整份 manifest 解析失败（整个结构体是
+    /// `deny_unknown_fields`，一次解析失败 = 插件完全加载不出来）。宿主对不认识
+    /// 的取值降级到默认组即可 —— 位置不理想，但插件仍然可用。
+    #[serde(default)]
+    pub section: Option<String>,
+    /// 系统级全局快捷键，如 `"Cmd+Ctrl+I"`：宿主在启动时注册它，按下等同于点击
+    /// 本托盘项；同时把它作为**显示用**加速键挂在托盘项右侧。
+    ///
+    /// 语法同 tauri-plugin-global-shortcut（`Cmd`/`Ctrl`/`Alt`/`Shift` + 键名，
+    /// 大小写与修饰键顺序都不敏感）。解析失败、或组合已被别的 app 占用，都只记
+    /// 日志：托盘项本身照常可点，插件照常加载。
+    #[serde(default)]
+    pub accelerator: Option<String>,
 }
+
+/// [`TrayContribution::section`] 的唯一已知取值：托盘下拉顶部的"捕获"组。
+pub const TRAY_SECTION_CAPTURE: &str = "capture";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -315,6 +336,73 @@ mod tests {
         m.activation.events = vec!["onSave".to_string()];
         let err = validate_manifest(&m, "7.0.0").unwrap_err();
         assert!(err.contains("onSave"), "got: {err}");
+    }
+
+    // ── contributes.tray ───────────────────────────────────────────────
+
+    /// A manifest carrying nothing but `window` — every tray manifest written
+    /// before `section`/`accelerator` existed — must keep parsing, with both new
+    /// fields absent rather than defaulted to something meaningful.
+    #[test]
+    fn tray_contribution_parses_without_the_new_fields() {
+        let tc: TrayContribution = serde_json::from_value(json!({ "window": "main" })).unwrap();
+        assert_eq!(tc.window, "main");
+        assert_eq!(tc.label, None);
+        assert_eq!(tc.section, None);
+        assert_eq!(tc.accelerator, None);
+    }
+
+    #[test]
+    fn tray_contribution_parses_section_and_accelerator() {
+        let tc: TrayContribution = serde_json::from_value(json!({
+            "window": "main",
+            "label": "Idea Spark",
+            "section": "capture",
+            "accelerator": "Cmd+Ctrl+I",
+        }))
+        .unwrap();
+        assert_eq!(tc.section.as_deref(), Some(TRAY_SECTION_CAPTURE));
+        assert_eq!(tc.accelerator.as_deref(), Some("Cmd+Ctrl+I"));
+    }
+
+    /// `section` is an OPEN vocabulary: a group name this host has never heard
+    /// of must still deserialize (the host degrades it to the default group).
+    /// This is exactly why the field is a `String` and not an enum — an enum
+    /// would fail the whole manifest and take the plugin down with it.
+    #[test]
+    fn tray_contribution_accepts_an_unknown_section() {
+        let tc: TrayContribution =
+            serde_json::from_value(json!({ "window": "main", "section": "sync" })).unwrap();
+        assert_eq!(tc.section.as_deref(), Some("sync"));
+    }
+
+    /// The struct stays `deny_unknown_fields`: a typo'd key is still an error,
+    /// so the new fields didn't loosen the contract in general.
+    #[test]
+    fn tray_contribution_still_rejects_unknown_fields() {
+        let err = serde_json::from_value::<TrayContribution>(json!({
+            "window": "main",
+            "acclerator": "Cmd+Ctrl+I", // typo
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("acclerator"), "got: {err}");
+    }
+
+    /// End to end through `ManifestV2`, since that is what the host actually
+    /// deserializes off disk.
+    #[test]
+    fn manifest_carries_tray_section_and_accelerator() {
+        let mut v = md2pdf_manifest_json();
+        v["ui"] = json!("ui/");
+        v["contributes"]["windows"] = json!([
+            { "id": "main", "entry": "index.html", "width": 760.0, "height": 640.0 }
+        ]);
+        v["contributes"]["tray"] =
+            json!([{ "window": "main", "section": "capture", "accelerator": "Cmd+Ctrl+I" }]);
+        let m: ManifestV2 = serde_json::from_value(v).unwrap();
+        assert_eq!(m.contributes.tray[0].section.as_deref(), Some(TRAY_SECTION_CAPTURE));
+        assert_eq!(m.contributes.tray[0].accelerator.as_deref(), Some("Cmd+Ctrl+I"));
+        assert_eq!(validate_manifest(&m, "7.0.0"), Ok(()));
     }
 
     // ── RpcRequest serde round-trip ────────────────────────────────────
