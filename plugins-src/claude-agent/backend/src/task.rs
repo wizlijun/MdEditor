@@ -80,8 +80,14 @@ const BUILTIN: &[(&str, &[(&str, &str)])] = &[
     (
         "selfcheck",
         &[
-            ("task.json", include_str!("../templates/selfcheck/task.json")),
-            ("CLAUDE.md", include_str!("../templates/selfcheck/CLAUDE.md")),
+            (
+                "task.json",
+                include_str!("../templates/selfcheck/task.json"),
+            ),
+            (
+                "CLAUDE.md",
+                include_str!("../templates/selfcheck/CLAUDE.md"),
+            ),
             (
                 ".claude/settings.json",
                 include_str!("../templates/selfcheck/settings.json"),
@@ -116,8 +122,14 @@ const BUILTIN: &[(&str, &[(&str, &str)])] = &[
     (
         "ai-read-ebook",
         &[
-            ("task.json", include_str!("../templates/ai-read-ebook/task.json")),
-            ("CLAUDE.md", include_str!("../templates/ai-read-ebook/CLAUDE.md")),
+            (
+                "task.json",
+                include_str!("../templates/ai-read-ebook/task.json"),
+            ),
+            (
+                "CLAUDE.md",
+                include_str!("../templates/ai-read-ebook/CLAUDE.md"),
+            ),
             (
                 ".claude/settings.json",
                 include_str!("../templates/ai-read-ebook/settings.json"),
@@ -174,6 +186,62 @@ fn retag_records(task_run_dir: &Path, old: &str, new: &str) {
             let _ = std::fs::write(&p, s + "\n");
         }
     }
+}
+
+/// Tools these templates used to deny and no longer do. Denying them was aimed
+/// at keeping a run on one document, but they fetch information rather than
+/// reach into the vault — the file scope is held by `Bash`/`Grep`/`Glob`, which
+/// stay denied.
+const RETIRED_DENIES: [&str; 4] = ["WebSearch", "WebFetch", "Task", "Skill"];
+
+/// Drop `RETIRED_DENIES` from the built-in templates' deny lists, once.
+///
+/// It has to be a rewrite of the template: a `deny` in the project layer is
+/// final, and `settings.local.json` cannot take it back. Guarded by a marker so
+/// a user who deliberately re-denies one of these keeps their decision — and so
+/// tasks the user wrote themselves are never rewritten at all.
+pub fn retire_information_denies(vault: &Path) -> Vec<String> {
+    let marker = tasks_root(vault).join(".migrations/retired-information-denies");
+    if marker.exists() {
+        return Vec::new();
+    }
+    let mut changed = Vec::new();
+    for (id, files) in BUILTIN {
+        for (rel, _) in *files {
+            if !rel.ends_with(".json") || !rel.starts_with(".claude/") {
+                continue;
+            }
+            let p = task_dir(vault, id).join(rel);
+            let Ok(body) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&body) else {
+                continue;
+            };
+            let Some(deny) = v
+                .get_mut("permissions")
+                .and_then(|p| p.get_mut("deny"))
+                .and_then(|d| d.as_array_mut())
+            else {
+                continue;
+            };
+            let before = deny.len();
+            deny.retain(|e| !e.as_str().is_some_and(|s| RETIRED_DENIES.contains(&s)));
+            if deny.len() == before {
+                continue;
+            }
+            if let Ok(s) = serde_json::to_string_pretty(&v) {
+                if std::fs::write(&p, s + "\n").is_ok() {
+                    changed.push(format!("{id}/{rel}"));
+                }
+            }
+        }
+    }
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&marker, "1\n");
+    changed
 }
 
 /// Idempotent: fill in what's missing, never overwrite. A template the user
@@ -245,7 +313,11 @@ mod tests {
     fn discovers_tasks_sorted_by_id_with_the_dir_name_as_id() {
         let v = tempfile::tempdir().unwrap();
         write_task(v.path(), "zeta", r#"{"name":"Z"}"#);
-        write_task(v.path(), "alpha", r#"{"name":"A","description":"d","prompt":"p"}"#);
+        write_task(
+            v.path(),
+            "alpha",
+            r#"{"name":"A","description":"d","prompt":"p"}"#,
+        );
         let got = discover(v.path());
         assert_eq!(
             got.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
@@ -288,13 +360,93 @@ mod tests {
             .join(".claude/settings.json")
             .exists());
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec!["ai-read-ebook", "answer-note-question", "selfcheck"]);
+        assert_eq!(
+            ids,
+            vec!["ai-read-ebook", "answer-note-question", "selfcheck"]
+        );
+    }
+
+    fn deny_of(v: &Path, id: &str, file: &str) -> Vec<String> {
+        let body = std::fs::read_to_string(task_dir(v, id).join(".claude").join(file)).unwrap();
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["permissions"]["deny"]
+            .as_array()
+            .map(|a| a.iter().map(|x| x.as_str().unwrap().to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    fn write_settings(v: &Path, id: &str, file: &str, body: &str) {
+        let d = task_dir(v, id).join(".claude");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(file), body).unwrap();
+    }
+
+    #[test]
+    fn retires_the_information_denies_from_a_vault_seeded_before_the_change() {
+        // A `deny` in the project layer cannot be undone by settings.local.json,
+        // so an old vault would keep the run offline no matter what code grants.
+        let v = tempfile::tempdir().unwrap();
+        write_settings(
+            v.path(),
+            "answer-note-question",
+            "settings.scoped.json",
+            r#"{"permissions":{"allow":["Read(x)"],"deny":["Bash","Grep","Glob","Task","WebSearch","WebFetch"]}}"#,
+        );
+        assert_eq!(retire_information_denies(v.path()).len(), 1);
+        assert_eq!(
+            deny_of(v.path(), "answer-note-question", "settings.scoped.json"),
+            vec!["Bash", "Grep", "Glob"],
+            "the file-scope denies are the point of the scoped policy and must stay"
+        );
+    }
+
+    #[test]
+    fn the_retirement_happens_once_and_then_respects_the_users_own_denies() {
+        let v = tempfile::tempdir().unwrap();
+        write_settings(
+            v.path(),
+            "selfcheck",
+            "settings.json",
+            r#"{"permissions":{"deny":["WebSearch"]}}"#,
+        );
+        assert_eq!(retire_information_denies(v.path()).len(), 1);
+        // The user decides this task should stay offline after all.
+        write_settings(
+            v.path(),
+            "selfcheck",
+            "settings.json",
+            r#"{"permissions":{"deny":["WebSearch"]}}"#,
+        );
+        assert!(retire_information_denies(v.path()).is_empty());
+        assert_eq!(
+            deny_of(v.path(), "selfcheck", "settings.json"),
+            vec!["WebSearch"]
+        );
+    }
+
+    #[test]
+    fn a_task_the_user_wrote_is_never_touched() {
+        let v = tempfile::tempdir().unwrap();
+        write_settings(
+            v.path(),
+            "idea-proof",
+            "settings.json",
+            r#"{"permissions":{"deny":["WebSearch","Bash"]}}"#,
+        );
+        assert!(retire_information_denies(v.path()).is_empty());
+        assert_eq!(
+            deny_of(v.path(), "idea-proof", "settings.json"),
+            vec!["WebSearch", "Bash"]
+        );
     }
 
     #[test]
     fn migrates_a_renamed_task_with_its_history() {
         let v = tempfile::tempdir().unwrap();
-        write_task(v.path(), "annotation-sweep", r#"{"name":"Old","prompt":"mine"}"#);
+        write_task(
+            v.path(),
+            "annotation-sweep",
+            r#"{"name":"Old","prompt":"mine"}"#,
+        );
         let old_runs = runs_root(v.path()).join("annotation-sweep/runs");
         std::fs::create_dir_all(&old_runs).unwrap();
         std::fs::write(
@@ -326,7 +478,9 @@ mod tests {
         write_task(v.path(), "answer-note-question", r#"{"name":"Current"}"#);
         assert!(migrate_renamed_tasks(v.path()).is_empty());
         assert_eq!(
-            read_task(&task_dir(v.path(), "answer-note-question")).unwrap().name,
+            read_task(&task_dir(v.path(), "answer-note-question"))
+                .unwrap()
+                .name,
             "Current"
         );
         assert!(task_dir(v.path(), "annotation-sweep").exists());
@@ -338,7 +492,10 @@ mod tests {
         seed_builtin_templates(v.path());
         assert!(migrate_renamed_tasks(v.path()).is_empty());
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec!["ai-read-ebook", "answer-note-question", "selfcheck"]);
+        assert_eq!(
+            ids,
+            vec!["ai-read-ebook", "answer-note-question", "selfcheck"]
+        );
     }
 
     #[test]
@@ -348,7 +505,10 @@ mod tests {
         seed_builtin_templates(v.path());
         let sh = task_dir(v.path(), "answer-note-question").join("precheck.sh");
         let mode = std::fs::metadata(&sh).unwrap().permissions().mode();
-        assert!(mode & 0o111 != 0, "precheck.sh must be executable, got {mode:o}");
+        assert!(
+            mode & 0o111 != 0,
+            "precheck.sh must be executable, got {mode:o}"
+        );
         assert_eq!(
             read_task(&task_dir(v.path(), "answer-note-question"))
                 .unwrap()
@@ -387,6 +547,8 @@ mod tests {
         seed_builtin_templates(v.path());
         let tasks = discover(v.path());
         assert_eq!(tasks.len(), 3);
-        assert!(tasks.iter().all(|t| !t.name.is_empty() && !t.prompt.is_empty()));
+        assert!(tasks
+            .iter()
+            .all(|t| !t.name.is_empty() && !t.prompt.is_empty()));
     }
 }

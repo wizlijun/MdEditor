@@ -14,6 +14,9 @@ pub struct RunSpec {
     pub task_dir: PathBuf,
     pub task_run_dir: PathBuf,
     pub claude: PathBuf,
+    /// `PATH` for the child. `None` asks the login shell — which is what
+    /// production wants, and what a test wants to stay out of.
+    pub env_path: Option<String>,
     pub prompt: String,
     pub trigger: String,
     pub run_id: String,
@@ -91,8 +94,22 @@ pub async fn run(
         .target
         .as_deref()
         .map(|t| settings::Scope::for_note(&spec.vault, std::path::Path::new(t), &metas));
-    let _ = settings::materialize(&spec.task_dir, &spec.vault, scope.as_ref(), &metas);
-    let full_prompt = prompt::with_source_context(&spec.prompt, &spec.vault, scope.as_ref());
+    // Which MCP servers exist is a property of the machine: they are granted in
+    // the policy AND named in the prompt, because a tool the model was never
+    // told about is a tool it never reaches for.
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    let servers = settings::mcp_server_names(&home, &[spec.task_dir.clone(), spec.vault.clone()]);
+    let _ = settings::materialize(
+        &spec.task_dir,
+        &spec.vault,
+        scope.as_ref(),
+        &metas,
+        &servers,
+    );
+    let full_prompt = prompt::with_toolbelt(
+        &prompt::with_source_context(&spec.prompt, &spec.vault, scope.as_ref()),
+        &servers,
+    );
     let argv = prompt::build_argv(&spec.task, &full_prompt);
 
     let mut cmd = tokio::process::Command::new(&spec.claude);
@@ -103,7 +120,15 @@ pub async fn run(
         .current_dir(&spec.task_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // claude spawns stdio MCP servers (`npx …`) itself, and a GUI-launched
+        // host inherits a PATH that has none of them.
+        .env(
+            "PATH",
+            spec.env_path
+                .clone()
+                .unwrap_or_else(crate::discover::runtime_path),
+        );
     if let Some(t) = &spec.oauth_token {
         cmd.env("CLAUDE_CODE_OAUTH_TOKEN", t);
     }
@@ -354,6 +379,7 @@ mod tests {
             task_dir,
             task_run_dir: dir.join("runs-t"),
             claude,
+            env_path: None,
             prompt: "hi".into(),
             trigger: "window".into(),
             run_id: "20260730T000000Z-000001".into(),
@@ -398,9 +424,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_child_runs_with_the_login_shells_path() {
+        // Without this, a GUI-launched host hands claude a PATH with no node —
+        // and every stdio MCP server silently fails to start.
+        let d = tempfile::tempdir().unwrap();
+        let seen = d.path().join("path.txt");
+        let c = fake_claude(
+            d.path(),
+            "fake-path",
+            &format!(
+                "printf '%s' \"$PATH\" > {}\necho '{{\"type\":\"result\",\"result\":\"x\"}}'",
+                seen.display()
+            ),
+        );
+        let mut s = spec(d.path(), c, 30);
+        s.env_path = Some("/opt/homebrew/bin:/usr/bin".into());
+        drive(s).await;
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            "/opt/homebrew/bin:/usr/bin"
+        );
+    }
+
+    #[tokio::test]
     async fn writes_a_record_to_disk_for_every_run() {
         let d = tempfile::tempdir().unwrap();
-        let c = fake_claude(d.path(), "fake-rec", r#"echo '{"type":"result","result":"x"}'"#);
+        let c = fake_claude(
+            d.path(),
+            "fake-rec",
+            r#"echo '{"type":"result","result":"x"}'"#,
+        );
         let s = spec(d.path(), c, 30);
         let run_dir = s.task_run_dir.clone();
         drive(s).await;
@@ -523,7 +576,11 @@ mod tests {
         let mut s = spec(d.path(), c, 30);
 
         let check = s.task_dir.join("precheck.sh");
-        std::fs::write(&check, "#!/bin/sh\necho '这篇手记里没有待答的问题'\nexit 1\n").unwrap();
+        std::fs::write(
+            &check,
+            "#!/bin/sh\necho '这篇手记里没有待答的问题'\nexit 1\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&check, std::fs::Permissions::from_mode(0o755)).unwrap();
         s.task.precheck = Some("precheck.sh".into());
 
@@ -582,7 +639,10 @@ mod tests {
         let got = std::fs::read_to_string(&local).unwrap();
         assert!(got.contains("docs/a.note.md"), "note not in policy: {got}");
         assert!(got.contains("docs/a.md"), "source not in policy: {got}");
-        assert!(got.contains("Grep") && got.contains("Bash"), "no deny list: {got}");
+        assert!(
+            got.contains("Grep") && got.contains("Bash"),
+            "no deny list: {got}"
+        );
         // Narrow means "not the whole vault" — the source's own directory IS
         // granted, since that's where the document actually lives.
         assert!(

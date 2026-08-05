@@ -57,7 +57,8 @@ pub fn spawn_detached(
             Ok(())
         });
     }
-    cmd.spawn().map_err(|e| format!("failed to start runner: {e}"))?;
+    cmd.spawn()
+        .map_err(|e| format!("failed to start runner: {e}"))?;
     Ok(serde_json::json!({ "run_id": run_id, "status": "started" }))
 }
 
@@ -75,7 +76,8 @@ pub async fn run(run_dir: PathBuf) -> i32 {
         return 2;
     };
     def.id = req.task_id.clone();
-    let Some(claude) = discover::discover(std::env::var("NOTEMD_CLAUDE_BIN").ok().as_deref()) else {
+    let Some(claude) = discover::discover(std::env::var("NOTEMD_CLAUDE_BIN").ok().as_deref())
+    else {
         return 3;
     };
 
@@ -86,6 +88,7 @@ pub async fn run(run_dir: PathBuf) -> i32 {
         task_dir,
         task_run_dir: task::runs_root(&req.vault).join(&req.task_id),
         claude,
+        env_path: None,
         trigger: "cli".into(),
         run_id: req.run_id.clone(),
         oauth_token: std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok(),

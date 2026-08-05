@@ -67,6 +67,36 @@ pub fn with_source_context(prompt: &str, vault: &Path, scope: Option<&Scope>) ->
     }
 }
 
+/// State the toolbelt this run actually has.
+///
+/// The templates tell the model to answer from the document in front of it, and
+/// a model told that will not go looking for anything else — so a granted tool
+/// it was never told about stays unused. Which MCP servers exist is a property
+/// of the machine, so like `with_source_context` this is generated per run
+/// rather than written into a template that is seeded once and never updated.
+pub fn with_toolbelt(prompt: &str, servers: &[String]) -> String {
+    let mut para = String::from(
+        "## 可用工具\n\
+         需要核实外部事实、时效性内容或文中提到的外部资料时,可用 `WebSearch` / `WebFetch` 检索,\n\
+         也可用 `Task` 派子 agent、`Skill` 调技能。用了外部来源就把 URL 标在它支撑的那句话旁边。\n\
+         这些是**补充**:手上的文档仍是答案的地基,不要用检索结果代替通读原文。",
+    );
+    if !servers.is_empty() {
+        let list = servers
+            .iter()
+            .map(|s| format!("`mcp__{s}`"))
+            .collect::<Vec<_>>()
+            .join("、");
+        para.push_str(&format!(
+            "\n本机还接入了这些 MCP 服务:{list} —— 对上号时优先用它们。"
+        ));
+    }
+    match prompt.trim() {
+        "" => para,
+        p => format!("{p}\n\n{para}"),
+    }
+}
+
 /// claude's arguments (the executable itself excluded).
 ///
 /// Deliberately no `--bare`: that skips discovery of CLAUDE.md, skills and
@@ -116,7 +146,10 @@ mod tests {
             selection: "sel".into(),
         };
         let got = compose("TASK", "USER", Some(&ctx));
-        assert_eq!(got, "TASK\n\nUSER\n\n## 当前文档\n路径:/v/a.md\n选中内容:\nsel");
+        assert_eq!(
+            got,
+            "TASK\n\nUSER\n\n## 当前文档\n路径:/v/a.md\n选中内容:\nsel"
+        );
     }
 
     #[test]
@@ -165,6 +198,24 @@ mod tests {
     }
 
     #[test]
+    fn a_run_is_told_which_mcp_servers_it_can_reach() {
+        // Granting a tool is not enough: a prompt that says "answer from the
+        // source text" gets a model that never reaches for anything else.
+        let got = with_toolbelt("TASK", &["exa".to_string(), "hemory-vault".to_string()]);
+        assert!(got.starts_with("TASK\n\n"), "{got}");
+        assert!(got.contains("mcp__exa"), "{got}");
+        assert!(got.contains("mcp__hemory-vault"), "{got}");
+        assert!(got.contains("WebSearch"), "{got}");
+    }
+
+    #[test]
+    fn a_machine_without_mcp_servers_is_still_told_about_the_web() {
+        let got = with_toolbelt("TASK", &[]);
+        assert!(got.contains("WebSearch"), "{got}");
+        assert!(!got.contains("mcp__"), "no empty MCP list: {got}");
+    }
+
+    #[test]
     fn context_without_selection_keeps_only_the_path() {
         let ctx = TabContext {
             path: "/v/a.md".into(),
@@ -178,7 +229,15 @@ mod tests {
         let got = build_argv(&task(), "hi");
         assert_eq!(
             got,
-            vec!["-p", "hi", "--output-format", "stream-json", "--verbose", "--max-turns", "50"]
+            vec![
+                "-p",
+                "hi",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--max-turns",
+                "50"
+            ]
         );
         assert!(!got.iter().any(|a| a == "--bare"));
     }

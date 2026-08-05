@@ -5,6 +5,8 @@
       "Write(${VAULT}/**/*-summary.md)",
       "Edit(${VAULT}/**/*-summary.md)"
     ],
-    "deny": ["Bash", "Task", "WebSearch", "WebFetch"]
+    "deny": [
+      "Bash"
+    ]
   }
 }

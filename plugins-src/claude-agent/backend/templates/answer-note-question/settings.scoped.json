@@ -13,10 +13,7 @@
     "deny": [
       "Bash",
       "Grep",
-      "Glob",
-      "Task",
-      "WebSearch",
-      "WebFetch"
+      "Glob"
     ]
   }
 }

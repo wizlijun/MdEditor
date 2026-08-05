@@ -233,6 +233,12 @@ fn prepare_vault(host: &sdk::Host, root: &std::path::Path) {
     if !wrote.is_empty() {
         host.log_info(&format!("seeded task templates: {}", wrote.join(", ")));
     }
+    // Seeding never overwrites, so a vault that predates the change keeps denying
+    // tools the templates no longer deny. Only a rewrite can lift a project deny.
+    let freed = task::retire_information_denies(root);
+    if !freed.is_empty() {
+        host.log_info(&format!("retired information denies in: {}", freed.join(", ")));
+    }
     task::ensure_gitignore(root);
 }
 
@@ -492,6 +498,7 @@ impl ClaudeAgentPlugin {
             task_dir,
             task_run_dir: task::runs_root(&vault).join(&task_id),
             claude,
+            env_path: None,
             prompt: full,
             trigger: trigger.to_string(),
             run_id: run_id.clone(),

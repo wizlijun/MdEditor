@@ -10,6 +10,11 @@
 use crate::mirror::{self, MirrorMeta};
 use std::path::{Path, PathBuf};
 
+/// Tools that fetch information rather than reach into the vault. Headless has
+/// nobody to answer a prompt, so an un-granted tool is an unusable one; the file
+/// scope is held by the deny list, not by keeping the run ignorant.
+const INFORMATION_TOOLS: [&str; 4] = ["WebSearch", "WebFetch", "Task", "Skill"];
+
 /// The one note a run is aimed at, and the source document behind it — the
 /// protocol needs both, since a question's `line::` points into the source.
 #[derive(Debug, Clone)]
@@ -47,13 +52,49 @@ impl Scope {
     }
 }
 
+/// The MCP servers configured on this machine, by name. Three places, because
+/// that is where `claude mcp add` puts them: user scope in `~/.claude.json`,
+/// local scope under that file's `projects.<dir>`, and project scope in a
+/// `.mcp.json` beside the task. Sorted and deduped.
+///
+/// Which servers exist is a property of the machine, not of the task, so the
+/// templates can't name them: a rule for a server that isn't installed is dead
+/// weight, and a server the user did install would otherwise stay unusable.
+pub fn mcp_server_names(home: &Path, dirs: &[PathBuf]) -> Vec<String> {
+    let read = |p: PathBuf| {
+        std::fs::read_to_string(p)
+            .ok()
+            .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
+    };
+    let user = read(home.join(".claude.json"));
+    let local = dirs.iter().filter_map(|d| {
+        let projects = user.as_ref()?.get("projects")?;
+        projects.get(d.to_string_lossy().as_ref()).cloned()
+    });
+    let mut names: Vec<String> = user
+        .clone()
+        .into_iter()
+        .chain(dirs.iter().filter_map(|d| read(d.join(".mcp.json"))))
+        .chain(local)
+        .filter_map(|v| v.get("mcpServers")?.as_object().cloned())
+        .flat_map(|o| o.keys().cloned().collect::<Vec<_>>())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// Generate `.claude/settings.local.json`. A task without any settings template
 /// is fine — silently skipped.
+///
+/// `servers` is what this machine has — passed in rather than read from the
+/// environment, so a test never has to stand up a home directory.
 pub fn materialize(
     task_dir: &Path,
     vault: &Path,
     scope: Option<&Scope>,
     metas: &[MirrorMeta],
+    servers: &[String],
 ) -> std::io::Result<()> {
     let scoped = task_dir.join(".claude/settings.scoped.json");
     let src = match scope {
@@ -71,7 +112,19 @@ pub fn materialize(
         Some(s) => vec![s.source_dir.clone()],
         None => mirror::local_source_dirs(metas),
     };
-    let out = allow_reading(&substitute(&body, vault, scope), &dirs);
+    // Headless has nobody to answer a permission prompt, so a tool that isn't
+    // pre-approved here is a tool this run simply cannot use. MCP rules take no
+    // wildcard — `mcp__server__*` matches nothing — so each server is named.
+    let mut rules: Vec<String> = dirs
+        .iter()
+        .map(|d| format!("Read({}/**)", d.to_string_lossy()))
+        .collect();
+    // Granted in code for the same reason the source dirs are: a vault seeded by
+    // an older build keeps its template forever, and `seed_builtin_templates`
+    // will not overwrite it.
+    rules.extend(INFORMATION_TOOLS.iter().map(|t| t.to_string()));
+    rules.extend(servers.iter().map(|s| format!("mcp__{s}")));
+    let out = append_allow(&substitute(&body, vault, scope), &rules);
     let dst = task_dir.join(".claude/settings.local.json");
     if let Some(p) = dst.parent() {
         std::fs::create_dir_all(p)?;
@@ -90,11 +143,11 @@ pub fn substitute(body: &str, vault: &Path, scope: Option<&Scope>) -> String {
     out
 }
 
-/// Append `Read(<dir>/**)` for each directory to `permissions.allow`. Returns the
-/// body unchanged when there is nothing to add or the body isn't the object we
-/// expect — a settings file we can't parse is left exactly as the template wrote it.
-fn allow_reading(body: &str, dirs: &[PathBuf]) -> String {
-    if dirs.is_empty() {
+/// Append rules to `permissions.allow`. Returns the body unchanged when there is
+/// nothing to add or the body isn't the object we expect — a settings file we
+/// can't parse is left exactly as the template wrote it.
+fn append_allow(body: &str, rules: &[String]) -> String {
+    if rules.is_empty() {
         return body.to_string();
     }
     let Ok(mut v) = serde_json::from_str::<serde_json::Value>(body) else {
@@ -107,8 +160,8 @@ fn allow_reading(body: &str, dirs: &[PathBuf]) -> String {
     else {
         return body.to_string();
     };
-    for d in dirs {
-        let rule = serde_json::Value::String(format!("Read({}/**)", d.to_string_lossy()));
+    for r in rules {
+        let rule = serde_json::Value::String(r.clone());
         if !allow.contains(&rule) {
             allow.push(rule);
         }
@@ -211,13 +264,16 @@ mod tests {
             r#"{"permissions":{"allow":["Read(${VAULT}/**)"]}}"#,
             None,
         );
-        materialize(d.path(), Path::new("/v"), None, &metas).unwrap();
+        materialize(d.path(), Path::new("/v"), None, &metas, &[]).unwrap();
         let got = local(d.path());
         assert!(
             got.contains(&format!("Read({}/**)", proj.path().to_string_lossy())),
             "the local original's directory must be readable: {got}"
         );
-        assert!(!got.contains("someone-else"), "a foreign path must not leak in: {got}");
+        assert!(
+            !got.contains("someone-else"),
+            "a foreign path must not leak in: {got}"
+        );
         assert!(
             !got.contains(&format!("Write({}", proj.path().to_string_lossy())),
             "a sweep must never gain write access to a source dir: {got}"
@@ -240,7 +296,7 @@ mod tests {
             r#"{"permissions":{"allow":["Read(${VAULT}/**)"]}}"#,
             Some(r#"{"permissions":{"allow":["Read(${NOTE})","Read(${SOURCE})"]}}"#),
         );
-        materialize(d.path(), v.path(), Some(&sc), &metas).unwrap();
+        materialize(d.path(), v.path(), Some(&sc), &metas, &[]).unwrap();
         let got = local(d.path());
         assert!(got.contains(&orig.to_string_lossy().to_string()), "{got}");
         assert!(
@@ -254,8 +310,14 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let body = r#"{"permissions":{"allow":["Read(${VAULT}/**)"]}}"#;
         write_templates(d.path(), body, None);
-        materialize(d.path(), Path::new("/v"), None, &[]).unwrap();
-        assert_eq!(local(d.path()), r#"{"permissions":{"allow":["Read(/v/**)"]}}"#);
+        materialize(d.path(), Path::new("/v"), None, &[], &[]).unwrap();
+        let got = local(d.path());
+        assert!(got.contains("Read(/v/**)"), "{got}");
+        assert_eq!(
+            got.matches("Read(").count(),
+            1,
+            "no extra directory opened up: {got}"
+        );
     }
 
     #[test]
@@ -266,11 +328,17 @@ mod tests {
             r#"{"allow":["Read(${VAULT}/**)"]}"#,
             Some(r#"{"allow":["Read(${NOTE})"],"deny":["Grep"]}"#),
         );
-        materialize(d.path(), Path::new("/v"), Some(&scope()), &[]).unwrap();
+        materialize(d.path(), Path::new("/v"), Some(&scope()), &[], &[]).unwrap();
         let got = local(d.path());
         assert!(got.contains("Read(/v/docs/a.note.md)"), "got {got}");
-        assert!(got.contains("Grep"), "the deny list must come through: {got}");
-        assert!(!got.contains("Read(/v/**)"), "must not fall back to vault-wide");
+        assert!(
+            got.contains("Grep"),
+            "the deny list must come through: {got}"
+        );
+        assert!(
+            !got.contains("Read(/v/**)"),
+            "must not fall back to vault-wide"
+        );
     }
 
     #[test]
@@ -281,7 +349,7 @@ mod tests {
             r#"{"allow":["Read(${VAULT}/**)"]}"#,
             Some(r#"{"allow":["Read(${NOTE})"]}"#),
         );
-        materialize(d.path(), Path::new("/v"), None, &[]).unwrap();
+        materialize(d.path(), Path::new("/v"), None, &[], &[]).unwrap();
         assert!(local(d.path()).contains("Read(/v/**)"));
     }
 
@@ -289,7 +357,7 @@ mod tests {
     fn a_note_run_falls_back_when_the_template_has_no_narrow_policy() {
         let d = tempfile::tempdir().unwrap();
         write_templates(d.path(), r#"{"allow":["Read(${VAULT}/**)"]}"#, None);
-        materialize(d.path(), Path::new("/v"), Some(&scope()), &[]).unwrap();
+        materialize(d.path(), Path::new("/v"), Some(&scope()), &[], &[]).unwrap();
         assert!(local(d.path()).contains("Read(/v/**)"));
     }
 
@@ -301,7 +369,7 @@ mod tests {
             r#"{"allow":["Read(${VAULT}/**)"]}"#,
             Some(r#"{"allow":["Read(${NOTE})"]}"#),
         );
-        materialize(d.path(), Path::new("/v"), Some(&scope()), &[]).unwrap();
+        materialize(d.path(), Path::new("/v"), Some(&scope()), &[], &[]).unwrap();
         for f in [".claude/settings.json", ".claude/settings.scoped.json"] {
             let t = std::fs::read_to_string(d.path().join(f)).unwrap();
             assert!(t.contains("${"), "{f} lost its placeholders");
@@ -311,8 +379,120 @@ mod tests {
     #[test]
     fn is_a_no_op_when_the_task_has_no_settings_template() {
         let d = tempfile::tempdir().unwrap();
-        materialize(d.path(), Path::new("/v"), None, &[]).unwrap();
+        materialize(d.path(), Path::new("/v"), None, &[], &[]).unwrap();
         assert!(!d.path().join(".claude/settings.local.json").exists());
+    }
+
+    #[test]
+    fn the_information_tools_are_pre_approved_even_for_a_vault_seeded_long_ago() {
+        // Same reason the source dir is granted in code: an old vault keeps its
+        // old template forever, so the grant cannot live in the template.
+        let d = tempfile::tempdir().unwrap();
+        write_templates(
+            d.path(),
+            r#"{"permissions":{"allow":["Read(${VAULT}/**)"]}}"#,
+            None,
+        );
+        materialize(d.path(), Path::new("/v"), None, &[], &[]).unwrap();
+        let got = local(d.path());
+        for tool in ["WebSearch", "WebFetch", "Task", "Skill"] {
+            assert!(
+                got.contains(&format!(r#""{tool}""#)),
+                "{tool} missing from {got}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_configured_mcp_server_is_pre_approved() {
+        // Headless has nobody to answer a permission prompt: a tool that isn't
+        // pre-approved is a tool the run cannot use.
+        let d = tempfile::tempdir().unwrap();
+        write_templates(
+            d.path(),
+            r#"{"permissions":{"allow":["Read(${VAULT}/**)"]}}"#,
+            None,
+        );
+        materialize(
+            d.path(),
+            Path::new("/v"),
+            None,
+            &[],
+            &["exa".to_string(), "hemory-vault".to_string()],
+        )
+        .unwrap();
+        let got = local(d.path());
+        assert!(got.contains(r#""mcp__exa""#), "{got}");
+        assert!(got.contains(r#""mcp__hemory-vault""#), "{got}");
+    }
+
+    #[test]
+    fn a_machine_with_no_mcp_servers_gets_no_stray_rules() {
+        let d = tempfile::tempdir().unwrap();
+        let body = r#"{"permissions":{"allow":["Read(${VAULT}/**)"]}}"#;
+        write_templates(d.path(), body, None);
+        materialize(d.path(), Path::new("/v"), None, &[], &[]).unwrap();
+        assert!(!local(d.path()).contains("mcp__"), "{}", local(d.path()));
+    }
+
+    #[test]
+    fn a_server_the_template_already_named_is_not_listed_twice() {
+        let d = tempfile::tempdir().unwrap();
+        write_templates(d.path(), r#"{"permissions":{"allow":["mcp__exa"]}}"#, None);
+        materialize(d.path(), Path::new("/v"), None, &[], &["exa".to_string()]).unwrap();
+        assert_eq!(
+            local(d.path()).matches("mcp__exa").count(),
+            1,
+            "{}",
+            local(d.path())
+        );
+    }
+
+    #[test]
+    fn mcp_servers_are_collected_from_the_user_config_and_the_project_files() {
+        let home = tempfile::tempdir().unwrap();
+        let task = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join(".claude.json"),
+            r#"{"mcpServers":{"exa":{"command":"npx"}},"projects":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            task.path().join(".mcp.json"),
+            r#"{"mcpServers":{"exa":{},"local-thing":{}}}"#,
+        )
+        .unwrap();
+        let got = mcp_server_names(home.path(), &[task.path().to_path_buf()]);
+        assert_eq!(got, vec!["exa".to_string(), "local-thing".to_string()]);
+    }
+
+    #[test]
+    fn a_server_added_locally_to_the_task_directory_counts_too() {
+        // `claude mcp add` without `-s user` files the server under the cwd's
+        // project entry, which for these runs is the task directory.
+        let home = tempfile::tempdir().unwrap();
+        let task = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join(".claude.json"),
+            serde_json::json!({
+                "projects": {
+                    task.path().to_string_lossy(): {"mcpServers": {"local-only": {}}},
+                    "/somewhere/else": {"mcpServers": {"not-ours": {}}}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let got = mcp_server_names(home.path(), &[task.path().to_path_buf()]);
+        assert_eq!(got, vec!["local-only".to_string()]);
+    }
+
+    #[test]
+    fn an_absent_or_broken_config_yields_no_servers() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(mcp_server_names(home.path(), &[]).is_empty());
+        std::fs::write(home.path().join(".claude.json"), "{ not json").unwrap();
+        assert!(mcp_server_names(home.path(), &[]).is_empty());
     }
 
     #[test]
@@ -320,7 +500,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         write_templates(d.path(), r#"{"allow":["Read(${VAULT}/**)"]}"#, None);
         std::fs::write(d.path().join(".claude/settings.local.json"), "OLD").unwrap();
-        materialize(d.path(), Path::new("/new/vault"), None, &[]).unwrap();
+        materialize(d.path(), Path::new("/new/vault"), None, &[], &[]).unwrap();
         let got = local(d.path());
         assert!(got.contains("/new/vault"));
         assert!(!got.contains("OLD"));
