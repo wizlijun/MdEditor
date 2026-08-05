@@ -12,8 +12,10 @@
        │ saved 19:42  New  Delegate  ▤  ⚙│  ← 38px bar    persisted (`inboxOpen`)
        └─────────────────────────────────┘
 
-     Every glyph in that bar is an SVG from `components/Icon.svelte` (the two
-     right-hand buttons are icon-only; New and Delegate are icon + label).
+     EVERY pictograph in that sketch — 👁 </> ▤ ⚙ — is a stand-in for an SVG,
+     not a character that appears in the markup. The bar's four icons come from
+     `components/Icon.svelte` (New and Delegate are icon + label; the two on the
+     right are icon-only), and the ModeToggle's two come from its own file.
      Nothing here is an emoji any more: a macOS emoji is a color bitmap, so it
      ignored both `currentColor` and the theme and sat at a different visual
      weight than the 2px strokes of the ModeToggle right above it.
@@ -856,14 +858,16 @@
     white-space: nowrap;
   }
   /* The run indicator is the one thing in this slot that is about work in
-     flight rather than about a save that already happened — full opacity, and
-     a hard ellipsis so a long "Read some-very-long-name.md" can't push the
-     buttons off the bar. */
+     flight rather than about a save that already happened — hence the fuller
+     opacity. The truncation of a long "Read some-very-long-name.md" is done by
+     `.runtext` above, not here: this slot's only child is then an atomic
+     inline-flex box, which `text-overflow` cannot act on. `min-width: 0` +
+     `overflow: hidden` stay as the backstop that keeps whatever `.runtext`
+     hasn't already clipped from pushing the buttons off the bar. */
   .savestate:has(.running) {
     opacity: 0.85;
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
   }
   /* Flex so the 16px icon and the label sit on a shared centre line — an
      inline SVG would otherwise hang off the text baseline and make the bar

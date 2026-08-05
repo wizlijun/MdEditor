@@ -43,9 +43,12 @@
   import ConfirmDialog from './ConfirmDialog.svelte'
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte'
   import Icon from './Icon.svelte'
-  import type { IconName } from '../lib/icons'
   import { proofPathFor } from '../lib/naming'
-  import type { IdeaStatus } from '../lib/status'
+  // The status → badge tables live in `status.ts` (pure TS, no DOM) so that
+  // `STATUS_MARK.done`'s `✦` — a product convention, not a glyph choice — is
+  // pinned by `status.test.ts`. A component-private constant is unreachable
+  // from the test suite, which is exactly what it must not be.
+  import { STATUS_KEY, STATUS_MARK } from '../lib/status'
   import {
     createdFromName,
     ensureTitle,
@@ -60,7 +63,7 @@
     statusOf,
     titleOf,
   } from '../lib/store.svelte'
-  import { locale, t, type MessageKey } from '../lib/strings'
+  import { locale, t } from '../lib/strings'
 
   const {
     onselect,
@@ -78,38 +81,6 @@
      *  isn't necessarily the open document. */
     ondelegate: (name: string) => void
   } = $props()
-
-  const STATUS_KEY: Record<IdeaStatus, MessageKey> = {
-    draft: 'statusDraft',
-    running: 'statusRunning',
-    done: 'statusDone',
-    failed: 'statusFailed',
-  }
-  /**
-   * What a row wears in its status column, per design §5. A draft is unmarked
-   * — most rows are drafts, and a badge on every one of them is just noise.
-   *
-   * Two kinds on purpose, and the split is not cosmetic:
-   *
-   *   * `running` and `failed` are 12px stroke icons. They used to be the
-   *     emoji ⏳ and the glyph ⚠, neither of which could follow the row's
-   *     color — a macOS emoji is a color bitmap that ignores the theme
-   *     entirely, and `failed` has to be able to take the warning red from
-   *     `.mark.failed`.
-   *   * `done` keeps the literal `✦`. That is a *product* convention, not an
-   *     icon: across note.md `✦` means "written by AI" and `●` means "written
-   *     by you" (CLAUDE.md, belief 3). An argued idea is marked with the same
-   *     `✦` the proof document itself carries, and swapping in a generic
-   *     check mark would quietly throw that meaning away.
-   */
-  type StatusMark = { kind: 'icon'; icon: IconName } | { kind: 'glyph'; text: string } | null
-
-  const STATUS_MARK: Record<IdeaStatus, StatusMark> = {
-    draft: null,
-    running: { kind: 'icon', icon: 'running' },
-    done: { kind: 'glyph', text: '✦' },
-    failed: { kind: 'icon', icon: 'failed' },
-  }
 
   let menu = $state<{ name: string; x: number; y: number } | null>(null)
   let confirm = $state<{ name: string; lines: string[] } | null>(null)

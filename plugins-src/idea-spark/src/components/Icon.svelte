@@ -22,10 +22,23 @@
 
      ## `{@html}`
 
-     The bodies are module-level string constants in this plugin's own source —
-     no user, vault or agent content ever reaches this — and the alternative (a
-     ten-branch `{#if}` chain) has no exhaustiveness check, whereas
-     `Record<IconName, string>` makes a missing icon a type error. -->
+     Safe here for a closed reason: the bodies are module-level string
+     constants in this plugin's own source, so no user, vault or agent content
+     can ever reach it. The alternative — a ten-branch `{#if name === …}` chain
+     — has no exhaustiveness check, whereas `Record<IconName, string>` makes a
+     missing icon a type error.
+
+     Why the injected `<path>`s land in the SVG namespace rather than being
+     parsed as unknown HTML elements: the tag is the `<svg>`'s ONLY child, so
+     Svelte compiles it to the "controlled" form (`$.html(svg, …, true)` — the
+     third argument is `is_controlled`, NOT a namespace flag) and the runtime
+     does `parent_node.innerHTML = value`. HTML fragment parsing takes its
+     namespace from the context element, and the context element is the `<svg>`
+     itself. If a sibling node were ever added next to this tag, Svelte would
+     stop using the controlled form and instead pass its real `svg` flag
+     (`$.html(node, …, undefined, true)`), which builds the fragment in the SVG
+     namespace explicitly — so both shapes are covered, but only the first one
+     is what this file actually compiles to today. -->
 <script lang="ts">
   import { ICONS, type IconName } from '../lib/icons'
 

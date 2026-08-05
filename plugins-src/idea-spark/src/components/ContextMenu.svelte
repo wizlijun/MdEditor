@@ -180,9 +180,9 @@
       title={item.title}
       onclick={() => choose(item)}
     >
-      <!-- Always rendered, icon or not: the column is what keeps every label
-           on the same left edge. Hidden from assistive tech — the label beside
-           it already says what the row does. -->
+      <!-- Rendered whether or not the item has an icon — see `.glyph` in the
+           styles for why the column is reserved. Hidden from assistive tech:
+           the label beside it already says what the row does. -->
       <span class="glyph" aria-hidden="true">
         {#if item.icon}<Icon name={item.icon} />{/if}
       </span>
@@ -228,9 +228,12 @@
     outline: none;
   }
   button:disabled { opacity: 0.45; cursor: default; }
-  /* Fixed 16px column, held open even for an item without an icon so the
-     labels never step in and out as the menu's contents change (the
-     idea/proof pair appears and disappears with the `.proof.md`). */
+  /* Fixed 16px column, held open even for an item without an icon. Every item
+     this window builds today does have one, so nothing currently depends on
+     it; the column is reserved because this component is generic (it knows
+     about coordinates, focus and dismissal, not about ideas) and must not
+     assume its caller supplies an icon for every row — a mixed menu would
+     otherwise have its labels stepping in and out. */
   .glyph {
     flex: 0 0 16px;
     display: flex;

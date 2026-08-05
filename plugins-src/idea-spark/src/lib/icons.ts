@@ -4,6 +4,14 @@
 // smaller size). Pasting the same path data into two components is how two
 // copies of "the same" icon quietly drift apart.
 //
+// ONE deliberate exception: `ModeToggle.svelte` keeps its eye and `</>` SVGs
+// inlined. They are a verbatim copy of the main window's own ModeToggle and
+// carry a standing obligation to be re-copied by hand when that file changes
+// visually (a plugin runs in an isolated webview and cannot import the host's
+// `src/`). Moving them in here would hide that obligation and make the two
+// files impossible to diff against each other, which is worth more than the
+// consistency of having all ten-plus icons in one place.
+//
 // Each entry is the *inner* markup of one 24×24 icon. The shared wrapper —
 // `viewBox`, `fill="none"`, `stroke="currentColor"`, `stroke-width="2"`, round
 // caps and joins, `aria-hidden` — lives in `components/Icon.svelte` and is

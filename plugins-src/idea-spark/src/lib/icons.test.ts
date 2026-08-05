@@ -8,7 +8,9 @@ import { ICONS, type IconName } from './icons'
 // which is exactly what `failed` (warning color) and `delete` (danger color)
 // depend on, and exactly what the emoji this set replaced could not do.
 
-/** Every call site in the window, so a rename of a key is caught here first. */
+/** The key set the table is supposed to have — nothing more. Renaming a key
+ *  and updating its call sites is TypeScript's problem; what this pins is that
+ *  the set itself doesn't quietly grow or shrink. */
 const EXPECTED: IconName[] = [
   'new-idea',
   'delegate',
@@ -42,6 +44,13 @@ describe('the icon table', () => {
     expect(body).not.toMatch(/#[0-9a-fA-F]{3}/)
     expect(body).not.toMatch(/\b(?:rgb|hsl)a?\(/)
     expect(body).not.toMatch(/\bopacity\s*=/)
+    // Both of the back doors around the four checks above: a presentation
+    // attribute can be restated in `style="stroke:red"` (which wins over the
+    // inherited one), and a `class` can pull in a rule from anywhere in the
+    // bundle. Neither belongs in a table whose entire job is to defer to
+    // `currentColor`.
+    expect(body).not.toMatch(/\bstyle\s*=/)
+    expect(body).not.toMatch(/\bclass\s*=/)
   })
 
   it.each(entries)('%s uses only primitive shapes', (_name, body) => {
