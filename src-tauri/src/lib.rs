@@ -1316,29 +1316,39 @@ pub fn run() {
                             "tray-edit-agents" => agents_sync::edit_agents_md(app),
                             "tray-quit" => app.exit(0),
                             "tray-notification-clear" => {
-                                crate::notifications::clear_all();
-                                // DIRTY 守望会刷新;这里无需手动调用。
+                                // 只清瞬时项;持续告警(大文件/同步)由产生方撤下。DIRTY 守望会刷新。
+                                crate::notifications::clear_transient();
+                            }
+                            "tray-notification-history" => {
+                                // 复用「查看日志」窗口作通知历史,预设到 notification 分类。
+                                open_logs_window(app, Some("notification"));
                             }
                             id if id.starts_with("tray-notification:") => {
-                                let r = id.strip_prefix("tray-notification:")
+                                if let Some(nid) = id.strip_prefix("tray-notification:")
                                     .and_then(|s| s.parse::<u64>().ok())
-                                    .and_then(crate::notifications::take);
-                                if let Some(r) = r {
-                                    match r.action {
-                                        crate::notifications::NotificationAction::OpenPath { path } => {
-                                            emit_open_file_delayed(app, &path);
-                                            show_main_window(app);
-                                        }
-                                        crate::notifications::NotificationAction::OpenPluginWindow { plugin_id, window } => {
-                                            // The reminder is already taken off the list by now, so a
-                                            // swallowed error means the click does nothing at all — and
-                                            // the commonest reason to be here (the failure reminder for
-                                            // an AI read) is precisely that claude-agent isn't installed.
-                                            // Log it and fall back to something visible.
-                                            if let Err(e) = crate::plugin_runtime::windows::open_plugin_window(app, &plugin_id, &window) {
-                                                eprintln!("[tray] reminder could not open {plugin_id}/{window}: {e}");
+                                {
+                                    // 先取快照定位该条,执行 action 后再决定是否移除:瞬时项
+                                    // (source=None)点击即消;持续告警点击只跳转、保留在列表里。
+                                    if let Some(n) = crate::notifications::snapshot().into_iter().find(|x| x.id == nid) {
+                                        match n.action {
+                                            crate::notifications::NotificationAction::OpenPath { path } => {
+                                                emit_open_file_delayed(app, &path);
                                                 show_main_window(app);
                                             }
+                                            crate::notifications::NotificationAction::OpenPluginWindow { plugin_id, window } => {
+                                                // 打开失败(常见:claude-agent 未安装)吞掉后退回主窗口,
+                                                // 至少给用户一个可见反馈。
+                                                if let Err(e) = crate::plugin_runtime::windows::open_plugin_window(app, &plugin_id, &window) {
+                                                    eprintln!("[tray] notification could not open {plugin_id}/{window}: {e}");
+                                                    show_main_window(app);
+                                                }
+                                            }
+                                            crate::notifications::NotificationAction::OpenLogs { filter } => {
+                                                open_logs_window(app, filter.as_deref());
+                                            }
+                                        }
+                                        if n.source.is_none() {
+                                            crate::notifications::take(nid);
                                         }
                                     }
                                 }
