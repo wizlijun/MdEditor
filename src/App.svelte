@@ -47,7 +47,7 @@
   import {
     sidePanels, isSideVisible, loadSidePanels, registerBuiltinSideViews, toggleSideView, getSideView,
   } from './lib/side-panel/registry.svelte'
-  import { loadFolderViewState } from './lib/folder-view.svelte'
+  import { loadFolderViewState, defaultRootToVault } from './lib/folder-view.svelte'
   import { loadOutlineGate } from './lib/outline/gate.svelte'
   import { loadHistoryGate, historyAppliesTo } from './lib/git-history/gate.svelte'
   import { loadOutlineDirs } from './lib/outline/dirs.svelte'
@@ -530,12 +530,15 @@
     // — at startup (post-plugin-init) or when the user configures a vault mid-
     // session — (re)installs the tracker idempotently. A direct call covers the
     // case where the root was already loaded before this handler was registered.
-    setVaultRootChangedHandler(() => { void maybeInstallTracker(); void ensureWikilinkBlocklist() })
+    setVaultRootChangedHandler(() => { void maybeInstallTracker(); void ensureWikilinkBlocklist(); void defaultRootToVault(sotvaultStore.vaultRoot) })
     // 镜像的伴生笔记要在 front-matter 里记下源文件(OKF §5.1)。store 不直接依赖
     // sotvault(会成环),所以解析器在这里注入。
     setMirrorSourceResolver((mainPath) => deviceSourceForVaultPath(mainPath))
     void maybeInstallTracker().catch((e) => console.warn('[App] insights tracker init:', e))
     void ensureWikilinkBlocklist().catch((e) => console.warn('[App] wikilink blocklist init:', e))
+    // 空白启动默认把文件夹视图的根指向 vault(直连补一次:root 可能已在本处理器
+    // 注册前就被 refreshSotvault 装载好了)。守卫:仅当尚无根时才设。
+    void defaultRootToVault(sotvaultStore.vaultRoot).catch((e) => console.warn('[App] folder default root:', e))
 
     const unlistenMenu = listen<string>('menu-event', async (e) => {
       const id = e.payload

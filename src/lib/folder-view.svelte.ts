@@ -348,6 +348,17 @@ export async function setRootDir(dir: string): Promise<void> {
 }
 
 /**
+ * 启动 / 配置 vault 后:若文件夹视图还没有根(空白启动、没有活动文件建立根),
+ * 默认把根指向 vault,让空窗口也能在文件夹视图里看到 vault 内容。已有根则不动
+ * ——不覆盖用户当前的浏览位置,也不跟已 reveal 的文件抢根。vault 未配置时 no-op。
+ */
+export async function defaultRootToVault(vaultRoot: string | null): Promise<void> {
+  if (!vaultRoot) return
+  if (folderView.rootDir != null) return
+  await setRootDir(vaultRoot)
+}
+
+/**
  * React to the active file changing. Reset the root to the file's parent only
  * when the file is outside the current root's subtree (VS Code "reveal"
  * behavior); otherwise keep the root so browsing position is preserved.

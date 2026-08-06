@@ -35,6 +35,7 @@ vi.mock('@tauri-apps/plugin-store', () => ({
 import {
   folderView,
   readFolder,
+  defaultRootToVault,
   syncToActiveFile,
   toggleExpanded,
   loadFolderViewState,
@@ -159,6 +160,26 @@ describe('syncToActiveFile', () => {
     folderView.rootDir = '/a'
     await syncToActiveFile(null)
     expect(folderView.rootDir).toBe('/a')
+  })
+})
+
+describe('defaultRootToVault', () => {
+  it('sets the root to vault when no root yet', async () => {
+    readDirMock.mockResolvedValue([])
+    folderView.rootDir = null
+    await defaultRootToVault('/v')
+    expect(folderView.rootDir).toBe('/v')
+  })
+  it('does not override an existing browsing root', async () => {
+    readDirMock.mockResolvedValue([])
+    folderView.rootDir = '/somewhere'
+    await defaultRootToVault('/v')
+    expect(folderView.rootDir).toBe('/somewhere')
+  })
+  it('is a no-op when no vault is configured', async () => {
+    folderView.rootDir = null
+    await defaultRootToVault(null)
+    expect(folderView.rootDir).toBe(null)
   })
 })
 
