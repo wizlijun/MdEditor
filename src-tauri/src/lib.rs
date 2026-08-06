@@ -806,46 +806,11 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
     );
     let tooltip = format!("note.md — {}: {}", menu_label(&locale, "sync.label"), status_text);
 
-    if let Some(tray) = app.tray_by_id("main") {
-        let icon = if problem {
-            Image::from_bytes(include_bytes!("../icons/tray-icon-error.png"))
-        } else if has_large {
-            Image::from_bytes(include_bytes!("../icons/tray-icon-warning.png"))
-        } else if active {
-            Image::from_bytes(include_bytes!("../icons/tray-icon-active.png"))
-        } else {
-            Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
-        };
-        if let Ok(img) = icon {
-            let _ = tray.set_icon(Some(img));
-        }
-        // 菜单栏字形保持干净:只有存在未读提醒时才在图标旁挂数字角标,
-        // 否则不挂任何文字标题。
-        let n = crate::notifications::count();
-        if n > 0 {
-            let _ = tray.set_title(Some(n.to_string()));
-        } else {
-            let _ = tray.set_title(None::<&str>);
-        }
-        let _ = tray.set_tooltip(Some(&tooltip));
-    }
-
-    if let Some(status_state) = app.try_state::<TrayStatusItem>() {
-        if let Some(item) = status_state.0.lock().unwrap().as_ref() {
-            let _ = item.set_icon(status_dot_image(state, has_large));
-            let _ = item.set_text(&status_text);
-        }
-    }
-
-    // Disable "Sync Now" while a sync is in progress.
-    if let Some(sn) = app.try_state::<TraySyncNowItem>() {
-        if let Some(item) = sn.0.lock().unwrap().as_ref() {
-            let _ = item.set_enabled(state != SyncState::Syncing);
-        }
-    }
-
-    // 宿主告警并入统一通知(sticky):大文件门禁 / 同步异常。push/dismiss 只在
-    // 内容变化时敲 DIRTY,由通知守望重建菜单——稳态第二轮不再触发,收敛不自激。
+    // 宿主告警并入统一通知(sticky):大文件门禁 / 同步异常。**必须在下面读取
+    // `notifications::count()` 之前跑**——否则角标会用本次调用尚未反映这次
+    // push/dismiss 的旧计数,读到「问题刚解决那一刻」的过期数字,只能指望
+    // DIRTY 触发的下一轮异步刷新才纠正过来。push/dismiss 只在内容变化时敲
+    // DIRTY,由通知守望重建菜单——稳态第二轮不再触发,收敛不自激。
     if has_large {
         let title = menu_label(&locale, "notif.largeFiles")
             .replace("{n}", &skipped_large.len().to_string());
@@ -867,6 +832,45 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
         );
     } else {
         crate::notifications::dismiss_source("vault.sync");
+    }
+
+    if let Some(tray) = app.tray_by_id("main") {
+        let icon = if problem {
+            Image::from_bytes(include_bytes!("../icons/tray-icon-error.png"))
+        } else if has_large {
+            Image::from_bytes(include_bytes!("../icons/tray-icon-warning.png"))
+        } else if active {
+            Image::from_bytes(include_bytes!("../icons/tray-icon-active.png"))
+        } else {
+            Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+        };
+        if let Ok(img) = icon {
+            let _ = tray.set_icon(Some(img));
+        }
+        // 菜单栏字形保持干净:只有存在未读提醒时才在图标旁挂数字角标,
+        // 否则不挂任何文字标题。读在上面的 sticky push/dismiss 之后,
+        // 反映的是本次调用的最终状态,不是修正前的旧计数。
+        let n = crate::notifications::count();
+        if n > 0 {
+            let _ = tray.set_title(Some(n.to_string()));
+        } else {
+            let _ = tray.set_title(None::<&str>);
+        }
+        let _ = tray.set_tooltip(Some(&tooltip));
+    }
+
+    if let Some(status_state) = app.try_state::<TrayStatusItem>() {
+        if let Some(item) = status_state.0.lock().unwrap().as_ref() {
+            let _ = item.set_icon(status_dot_image(state, has_large));
+            let _ = item.set_text(&status_text);
+        }
+    }
+
+    // Disable "Sync Now" while a sync is in progress.
+    if let Some(sn) = app.try_state::<TraySyncNowItem>() {
+        if let Some(item) = sn.0.lock().unwrap().as_ref() {
+            let _ = item.set_enabled(state != SyncState::Syncing);
+        }
     }
 }
 
