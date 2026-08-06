@@ -1858,9 +1858,9 @@ fn build_tray_menu<R: tauri::Runtime>(
     let b2 = b
         .item(&sync_repo_item)
         .item(&status_item)
-        .item(&notif_submenu);    // 常驻:状态行下、查看日志上
+        .item(&sync_now_item);
     let menu = b2
-        .item(&sync_now_item)
+        .item(&notif_submenu)     // 常驻:立即同步下、查看日志上
         .item(&sync_log_item)
         .item(&edit_agents_item)
         .separator()
