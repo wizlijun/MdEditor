@@ -68,74 +68,81 @@ fn is_ahead(repo: &Path, remote: &str, branch: &str) -> bool {
     }
 }
 
+/// 远端是否有本地还没有的提交。只有为真时才允许动工作区 —— 单设备连续编辑
+/// 时这一步恒为 false,同步全程不碰用户正在编辑的文件。
+/// 远端跟踪引用缺失(首推)或空仓库按「无新提交」处理。
+fn remote_ahead(repo: &Path, remote: &str, branch: &str) -> bool {
+    if run_git(repo, &["rev-parse", "--verify", "HEAD"]).is_err() {
+        return false;
+    }
+    match run_git(repo, &["rev-list", "--count", &format!("HEAD..{remote}/{branch}")]) {
+        Ok(n) => n.trim().parse::<u64>().map(|c| c > 0).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// 一轮同步。
+///
+/// **不变式:本地改动先落成提交,工作区在同步期间绝不被按回 HEAD。**
+///
+/// 旧实现走 `stash push → rebase → stash pop`,靠把本地改动挪开来腾出干净的树。
+/// 但 `git stash push` 会把工作区重置到 HEAD —— 在真实 vault(14k 文件)上实测
+/// 有 ~200ms 的窗口,用户刚敲下的字从磁盘上消失。编辑器的文件监听撞进这个窗口
+/// 就弹「已被其他应用修改」,而横幅缓存的 `pendingExternal` 正是那份旧内容,点
+/// 「从磁盘重新加载」直接覆盖掉用户的编辑(真实丢过一条批注)。
+///
+/// 改成 commit-first:提交之后工作区自然干净,合并远端不再需要挪动任何未提交
+/// 内容。代价是远端分叉时留下合并提交而非线性历史 —— vault 是自动同步的私有
+/// 仓库,历史形态远不如「不丢字」重要。
 pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
     let has_remote = run_git(repo, &["remote", "get-url", remote]).is_ok();
     let mut skipped_large: Vec<String> = Vec::new();
 
-    if has_remote {
-        let fetch_ok = fetch(repo, remote, branch).is_ok();
+    // ① 本地改动先入库。此后工作区干净,后续步骤无须触碰用户正在编辑的文件。
+    if has_changes(repo)? {
+        skipped_large = stage_except_oversized(repo)?;
+        if has_staged(repo) {
+            let ts = chrono_now();
+            run_git(repo, &["commit", "-m", &format!("vault: auto-sync {ts}")])?;
+        }
+    }
 
-        if !has_changes(repo)? {
-            if fetch_ok {
-                let ff = run_git(repo, &["pull", "--ff-only", remote, branch]);
-                if ff.is_err() {
-                    if let Err(e) = run_git(repo, &["pull", "--rebase", remote, branch]) {
-                        let _ = run_git(repo, &["rebase", "--abort"]);
-                        return Err(format!("pull --rebase failed, skipping cycle: {e}"));
+    if !has_remote {
+        return Ok(SyncReport { skipped_large });
+    }
+
+    let fetch_ok = fetch(repo, remote, branch).is_ok();
+
+    // ② 只有远端确实有新提交时才合并。单设备场景下这里恒为 no-op,磁盘上的
+    //    文件内容自始至终是用户自己那份。
+    if fetch_ok && remote_ahead(repo, remote, branch) {
+        let upstream = format!("{remote}/{branch}");
+        if run_git(repo, &["merge", "--ff-only", &upstream]).is_err() {
+            // 真分叉:合并而非 rebase。rebase 会先把工作区 checkout 回上游再逐个
+            // 重放本地提交,等于把 ① 要消灭的回滚窗口原样请回来。
+            if run_git(repo, &["merge", "--no-edit", "-m", "vault: auto-merge", &upstream]).is_err() {
+                if !repo.join(".git").join("MERGE_HEAD").exists() {
+                    let _ = run_git(repo, &["merge", "--abort"]);
+                    return Err("merge failed, skipping cycle".into());
+                }
+                // 冲突:留一份含双方内容的副本,工作区取本地版本(用户刚写的字优先)。
+                super::conflict::handle_conflicts(repo, "--ours")?;
+                let more = stage_except_oversized(repo)?;
+                for f in more {
+                    if !skipped_large.contains(&f) {
+                        skipped_large.push(f);
                     }
                 }
-            }
-            // 树干净≠已同步:上轮 commit 成功但 push 失败会留下滞留提交,
-            // 不补推就 return Ok 会把失败盖成"Sync completed"且永不重试。
-            if is_ahead(repo, remote, branch) {
-                run_git(repo, &["push", remote, branch])
-                    .map_err(|e| format!("push failed (will retry): {e}"))?;
-            }
-            return Ok(SyncReport { skipped_large });
-        }
-
-        skipped_large = stage_except_oversized(repo)?;
-
-        if fetch_ok {
-            run_git(repo, &["stash", "push", "-m", "vaultgitsync-auto"])?;
-
-            let rebase = run_git(repo, &["rebase", &format!("{remote}/{branch}")]);
-            if rebase.is_err() {
-                let _ = run_git(repo, &["rebase", "--abort"]);
-                let _ = run_git(repo, &["stash", "pop"]);
-                return Err("rebase failed, skipping cycle".into());
-            }
-
-            let pop = run_git(repo, &["stash", "pop"]);
-            if pop.is_err() {
-                super::conflict::handle_conflicts(repo)?;
-            }
-
-            // stash pop / 冲突处理会重新引入改动,再跑一次门禁保证大文件不漏网。
-            let more = stage_except_oversized(repo)?;
-            for f in more {
-                if !skipped_large.contains(&f) {
-                    skipped_large.push(f);
-                }
+                run_git(repo, &["commit", "-m", "vault: auto-merge (conflicts resolved)"])?;
             }
         }
-    } else {
-        if !has_changes(repo)? {
-            return Ok(SyncReport { skipped_large });
-        }
-        skipped_large = stage_except_oversized(repo)?;
     }
 
-    if has_staged(repo) {
-        let ts = chrono_now();
-        run_git(repo, &["commit", "-m", &format!("vault: auto-sync {ts}")])?;
-    }
-
-    if has_remote {
-        let push = run_git(repo, &["push", remote, branch]);
-        if let Err(e) = push {
-            return Err(format!("push failed (will retry): {e}"));
-        }
+    // ③ 树干净≠已同步:上轮 commit 成功但 push 失败会留下滞留提交,
+    //    不补推就 return Ok 会把失败盖成"Sync completed"且永不重试。
+    if is_ahead(repo, remote, branch) {
+        run_git(repo, &["push", remote, branch])
+            .map_err(|e| format!("push failed (will retry): {e}"))?;
     }
 
     Ok(SyncReport { skipped_large })
@@ -233,29 +240,132 @@ mod gate_tests {
         sync(&work, "origin", "main").unwrap();
     }
 
+    /// 另一设备推进一个改动 `note.md` 的提交,返回该 clone 的路径。
+    fn push_from_other_device(root: &std::path::Path, file: &str, content: &str) {
+        let other = root.join("other");
+        if !other.exists() {
+            git(root, &["clone", "-q", "remote.git", "other"]);
+            git(&other, &["config", "user.email", "o@o"]);
+            git(&other, &["config", "user.name", "o"]);
+        }
+        std::fs::write(other.join(file), content).unwrap();
+        git(&other, &["add", "-A"]);
+        git(&other, &["commit", "-q", "-m", "theirs"]);
+        git(&other, &["push", "-q", "origin", "main"]);
+    }
+
+    /// 在 `f` 执行期间以最高频率读 `path`,返回「是否读到过不含 `marker` 的内容」。
+    fn watch_for_revert<R>(path: &std::path::Path, marker: &str, f: impl FnOnce() -> R) -> (R, bool) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let reverted = Arc::new(AtomicBool::new(false));
+        let sampler = {
+            let (stop, reverted) = (stop.clone(), reverted.clone());
+            let (path, marker) = (path.to_path_buf(), marker.to_string());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if let Ok(s) = std::fs::read_to_string(&path) {
+                        if !s.contains(&marker) {
+                            reverted.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
+            })
+        };
+        let out = f();
+        stop.store(true, Ordering::Relaxed);
+        sampler.join().unwrap();
+        (out, reverted.load(Ordering::Relaxed))
+    }
+
+    /// 回归(2026-08-06):同步绝不能把工作区按回 HEAD。
+    ///
+    /// 旧实现走 `git add -A → stash push → rebase → stash pop`,而 `stash push`
+    /// 会把工作区重置到 HEAD —— 在 14k 文件的真实 vault 上实测有 ~200ms 的窗口,
+    /// 用户刚敲下的字从磁盘上消失。编辑器的文件监听正好在这个窗口读盘,于是每轮
+    /// 同步都弹一次「已被其他应用修改」,而横幅缓存的 `pendingExternal` 是那份旧
+    /// 内容 —— 点「从磁盘重新加载」就把用户的编辑覆盖掉(真实丢过一条批注)。
     #[test]
-    fn clean_tree_diverged_conflict_surfaces_error() {
+    fn sync_never_reverts_working_tree() {
         let root = TempDir::new().unwrap();
         let (work, _bare) = init_remote_pair(root.path());
 
-        // 另一设备对同一文件推进冲突提交
-        let other = root.path().join("other");
-        git(root.path(), &["clone", "-q", "remote.git", "other"]);
-        git(&other, &["config", "user.email", "o@o"]);
-        git(&other, &["config", "user.name", "o"]);
-        std::fs::write(other.join("note.md"), "theirs\n").unwrap();
-        git(&other, &["commit", "-q", "-am", "theirs"]);
-        git(&other, &["push", "-q", "origin", "main"]);
+        let note = work.join("note.md");
+        std::fs::write(&note, "base\nUSER-EDIT\n").unwrap();
 
-        // 本地滞留一个冲突提交,工作区干净
-        std::fs::write(work.join("note.md"), "ours\n").unwrap();
-        git(&work, &["commit", "-q", "-am", "ours"]);
+        let (res, reverted) = watch_for_revert(&note, "USER-EDIT", || sync(&work, "origin", "main"));
+        res.unwrap();
 
-        let err = sync(&work, "origin", "main").unwrap_err();
-        assert!(err.contains("pull --rebase failed"), "unexpected error: {err}");
+        assert!(!reverted, "同步期间用户的编辑从磁盘上消失过");
+        let reflog = run_git(&work, &["reflog", "--date=iso"]).unwrap();
         assert!(
-            !work.join(".git/rebase-merge").exists() && !work.join(".git/rebase-apply").exists(),
-            "不应停留在 rebase 中间态"
+            !reflog.contains("reset: moving to HEAD"),
+            "工作区被 reset 回 HEAD:\n{reflog}"
+        );
+        assert!(
+            run_git(&work, &["stash", "list"]).unwrap().trim().is_empty(),
+            "不应残留 stash"
+        );
+        assert_eq!(std::fs::read_to_string(&note).unwrap(), "base\nUSER-EDIT\n");
+    }
+
+    /// 远端也有新提交时同样不许回滚工作区:先提交本地,再合并远端。
+    #[test]
+    fn diverged_sync_merges_without_reverting() {
+        let root = TempDir::new().unwrap();
+        let (work, _bare) = init_remote_pair(root.path());
+        push_from_other_device(root.path(), "theirs.md", "from other device\n");
+
+        let note = work.join("note.md");
+        std::fs::write(&note, "base\nUSER-EDIT\n").unwrap();
+
+        let (res, reverted) = watch_for_revert(&note, "USER-EDIT", || sync(&work, "origin", "main"));
+        res.unwrap();
+
+        assert!(!reverted, "分叉合并期间用户的编辑从磁盘上消失过");
+        assert_eq!(std::fs::read_to_string(&note).unwrap(), "base\nUSER-EDIT\n");
+        assert_eq!(
+            std::fs::read_to_string(work.join("theirs.md")).unwrap(),
+            "from other device\n",
+            "远端的改动应被合并进来"
+        );
+        assert!(
+            run_git(&work, &["status", "--porcelain"]).unwrap().trim().is_empty(),
+            "同步后工作区应干净"
+        );
+    }
+
+    /// 两边改同一文件:本地内容留在工作区,完整的冲突全文另存一份副本。
+    #[test]
+    fn conflicting_edit_keeps_local_and_saves_conflict_copy() {
+        let root = TempDir::new().unwrap();
+        let (work, _bare) = init_remote_pair(root.path());
+        push_from_other_device(root.path(), "note.md", "theirs\n");
+
+        let note = work.join("note.md");
+        std::fs::write(&note, "base\nUSER-EDIT\n").unwrap();
+
+        sync(&work, "origin", "main").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&note).unwrap(),
+            "base\nUSER-EDIT\n",
+            "冲突时本地编辑必须留在工作区"
+        );
+        let copies: Vec<_> = std::fs::read_dir(&work)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with("note.conflict.") && n.ends_with(".md"))
+            .collect();
+        assert_eq!(copies.len(), 1, "应留下一份冲突副本, got {copies:?}");
+        let copy = std::fs::read_to_string(work.join(&copies[0])).unwrap();
+        assert!(copy.contains("USER-EDIT") && copy.contains("theirs"), "副本应含双方内容:\n{copy}");
+        assert!(
+            !work.join(".git/MERGE_HEAD").exists(),
+            "不应停留在合并中间态"
         );
     }
 

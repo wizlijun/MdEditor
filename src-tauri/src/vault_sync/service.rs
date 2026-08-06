@@ -6,6 +6,11 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::{git_ops, watcher, SyncState, VaultSyncManager};
 
+/// vault 内连续这么久没有文件变动,才认为这一阵编辑告一段落、可以同步。
+const QUIET_PERIOD: Duration = Duration::from_secs(10);
+/// 一直不停笔时的兜底:距首个事件超过这么久就无条件同步一次。
+const MAX_DEFER: Duration = Duration::from_secs(120);
+
 pub fn start(app: &AppHandle) -> Result<(), String> {
     let mgr = app.state::<Arc<VaultSyncManager>>();
     let repo_path = mgr.repo_path.lock().unwrap().clone()
@@ -96,9 +101,17 @@ fn run_loop(app: AppHandle, repo: PathBuf, remote: String, branch: String) {
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(_) => {
-                let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                while std::time::Instant::now() < deadline {
-                    let _ = rx.recv_timeout(Duration::from_millis(200));
+                // 等编辑停下来再同步:每来一个文件事件就把窗口顺延,连续 QUIET_PERIOD
+                // 没有动静才跑一轮。创作和大批量修改基本只发生在单台设备上,上传晚
+                // 几十秒无所谓,但每 15 秒抢一轮 git 会在用户正打字时反复扰动仓库。
+                // MAX_DEFER 兜底:长时间不停笔也要定期落一个检查点,不能无限推迟。
+                let start = std::time::Instant::now();
+                loop {
+                    match rx.recv_timeout(QUIET_PERIOD) {
+                        // 又有改动 —— 顺延,除非已经拖到上限。
+                        Ok(_) if start.elapsed() < MAX_DEFER => continue,
+                        _ => break,
+                    }
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
