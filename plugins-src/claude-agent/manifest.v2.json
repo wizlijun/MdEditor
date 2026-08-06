@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.claude-agent",
   "name": "Claude Agent",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "kind": "native",
   "engines": {
     "notemd": ">=6.804.4"

@@ -244,14 +244,23 @@ pub fn retire_information_denies(vault: &Path) -> Vec<String> {
     changed
 }
 
-/// Idempotent: fill in what's missing, never overwrite. A template the user
-/// edited is theirs. Returns the relative paths actually written, for logging.
+/// Seed AND refresh the built-in task templates. The built-ins are owned by the
+/// plugin, not by the vault: their prompts encode the `.note.md` write protocol,
+/// so a stale copy is not a harmless preference — it makes the agent produce
+/// answers the outline parser shreds on the next save. Every plugin update
+/// therefore rewrites them from the binary.
+///
+/// Identical content is left untouched (no mtime churn, no git-sync noise), so
+/// this stays idempotent. To customise a prompt, copy the task to a new id
+/// instead of editing a built-in; if you did edit one, the vault is git-backed
+/// and auto-committed, so the previous text is recoverable from history.
+/// Returns the relative paths actually written, for logging.
 pub fn seed_builtin_templates(vault: &Path) -> Vec<String> {
     let mut wrote = Vec::new();
     for (id, files) in BUILTIN {
         for (rel, body) in *files {
             let p = task_dir(vault, id).join(rel);
-            if p.exists() {
+            if std::fs::read_to_string(&p).is_ok_and(|cur| cur == *body) {
                 continue;
             }
             if let Some(parent) = p.parent() {
@@ -518,15 +527,29 @@ mod tests {
         );
     }
 
+    /// 内置模板归插件所有:过期的必须被刷新。老 vault 停在旧 prompt 上会让 agent
+    /// 写出解析器会撕碎的答复(围栏被挤到续行),所以每次更新都从二进制重写。
     #[test]
-    fn never_overwrites_a_template_the_user_edited() {
+    fn refreshes_a_stale_builtin_template() {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
-        let mine = task_dir(v.path(), "selfcheck").join("CLAUDE.md");
-        std::fs::write(&mine, "MINE").unwrap();
+        let p = task_dir(v.path(), "answer-note-question").join("CLAUDE.md");
+        std::fs::write(&p, "STALE PROMPT").unwrap();
+        let wrote = seed_builtin_templates(v.path());
+        assert!(wrote.iter().any(|w| w == "answer-note-question/CLAUDE.md"));
+        let cur = std::fs::read_to_string(&p).unwrap();
+        assert_ne!(cur, "STALE PROMPT", "过期模板必须被覆盖");
+        assert!(cur.contains("绝不手写 `✦`"), "刷新后应带上最新的围栏约束");
+    }
+
+    /// 幂等:内容已经一致就一个字节都不写 —— 否则每次启动都刷 mtime,
+    /// vault 的 git auto-sync 会被无谓的改动刷屏。
+    #[test]
+    fn leaves_an_up_to_date_template_untouched() {
+        let v = tempfile::tempdir().unwrap();
+        seed_builtin_templates(v.path());
         let wrote = seed_builtin_templates(v.path());
         assert!(wrote.is_empty());
-        assert_eq!(std::fs::read_to_string(&mine).unwrap(), "MINE");
     }
 
     #[test]

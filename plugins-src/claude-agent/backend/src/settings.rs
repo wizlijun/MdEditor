@@ -105,9 +105,8 @@ pub fn materialize(
         return Ok(());
     };
     // Read access to the originals' directories is appended in code, not left to
-    // the template: `seed_builtin_templates` never overwrites, so a vault seeded
-    // by an older build would otherwise keep the agent stuck on the mirror
-    // forever. Read only — a source dir never becomes writable.
+    // the template: the dirs are per-vault and per-run, so no shipped template
+    // could name them. Read only — a source dir never becomes writable.
     let dirs = match scope {
         Some(s) => vec![s.source_dir.clone()],
         None => mirror::local_source_dirs(metas),
@@ -119,9 +118,9 @@ pub fn materialize(
         .iter()
         .map(|d| format!("Read({}/**)", d.to_string_lossy()))
         .collect();
-    // Granted in code for the same reason the source dirs are: a vault seeded by
-    // an older build keeps its template forever, and `seed_builtin_templates`
-    // will not overwrite it.
+    // Granted in code, belt-and-braces: `seed_builtin_templates` now refreshes
+    // the shipped template on every update, but these rules must hold even for a
+    // vault whose template has not been re-seeded yet this run.
     rules.extend(INFORMATION_TOOLS.iter().map(|t| t.to_string()));
     rules.extend(servers.iter().map(|s| format!("mcp__{s}")));
     let out = append_allow(&substitute(&body, vault, scope), &rules);
