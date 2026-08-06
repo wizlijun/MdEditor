@@ -24,7 +24,9 @@ Key facts: macOS app (Tauri, system WebView, signed & notarized; 7 MB download, 
 - Q&A loop: an annotation containing `?` becomes a `type:: question` node
   (`status:: open`) in the companion `.note.md`; agents answer with a
   `type:: answer` child whose body is wrapped in a markdown code fence, and
-  set `status:: answered`. The human reads the answer inline under the
+  set `status:: answered`. The fence must open that bullet (`- ````markdown`)
+  — never write `✦` or anything else before it, or the answer is destroyed
+  on the next save. The human reads the answer inline under the
   annotated paragraph and may insert it into the document. Only the human
   sets `closed` / `adopted`; agents never edit the main `.md`.
 - Files are the single source of truth; indexes are derived and rebuildable.

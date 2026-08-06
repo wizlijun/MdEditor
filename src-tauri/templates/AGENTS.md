@@ -219,6 +219,18 @@ Sweep protocol — how to answer:
            answered:: 2026-07-28T14:22:00Z
            by:: your-agent/version
 
+   **The fence must open the bullet.** The backticks are the first
+   characters after `- `, and nothing else goes on that line. In
+   particular, never hand-write the `✦` sigil: the editor renders it for
+   you, and typing it pushes the fence down onto a continuation line
+   where the outline parser cannot see it. The body's list items are
+   then read as outline nodes, `type:: answer` binds to the wrong
+   bullet, and the answer is torn apart the next time the note is saved.
+
+       - ✦                       ← WRONG: fence is no longer on the bullet
+         ````markdown
+         …
+
    The opening fence must be longer than the longest run of backticks
    inside the answer (four here, because the body contains a three-tick
    block). Write exactly one answer node per question — answering again
@@ -257,7 +269,8 @@ Hard rules: never set `status:: closed` or `status:: adopted` (only the
 human closes or adopts), never edit the main `.md`, never modify any
 existing bullet that is not your own answer node, never touch any other
 part of the outline, never write any file other than the `.note.md` that
-holds the question.
+holds the question, never put anything — `✦` included — before the
+opening fence on the answer bullet.
 
 ## House rules
 
