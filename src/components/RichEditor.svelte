@@ -941,6 +941,7 @@
     window.addEventListener('mdeditor:find-replace-all', onFindReplaceAll)
     window.addEventListener('mdeditor:find-clear', onFindClear)
     window.addEventListener('mdeditor:new-file-select', onNewFileSelect)
+    window.addEventListener('mdeditor:select-all', onSelectAll)
     return () => {
       window.removeEventListener('mdeditor:find-search', onFindSearch)
       window.removeEventListener('mdeditor:find-next', onFindNext)
@@ -949,8 +950,23 @@
       window.removeEventListener('mdeditor:find-replace-all', onFindReplaceAll)
       window.removeEventListener('mdeditor:find-clear', onFindClear)
       window.removeEventListener('mdeditor:new-file-select', onNewFileSelect)
+      window.removeEventListener('mdeditor:select-all', onSelectAll)
     }
   })
+
+  // Native Cmd+A no-ops on this editor: WebKit's `selectAll:` responder action
+  // gets confused by the ProseMirror DOM's mix of editable text and
+  // non-editable atom nodes (images, math blocks, …) and silently does
+  // nothing. The Edit-menu "Select All" item is routed through this custom
+  // event instead (see the Rust `select-all` menu item + App.svelte), doing
+  // the exact same AllSelection dispatch the right-click menu already uses.
+  async function onSelectAll(): Promise<void> {
+    if (!editor || status !== 'mounted') return
+    const view = editor.view as any
+    const { AllSelection } = await getPmState()
+    view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)))
+    view.focus()
+  }
 
   async function onNewFileSelect(_e: Event) {
     if (!editor || status !== 'mounted') return

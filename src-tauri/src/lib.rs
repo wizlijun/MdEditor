@@ -2036,7 +2036,16 @@ fn build_menu<R: tauri::Runtime>(
         .item(&PredefinedMenuItem::cut(app, Some(&menu_label(locale, "sys.cut")))?)
         .item(&PredefinedMenuItem::copy(app, Some(&menu_label(locale, "sys.copy")))?)
         .item(&PredefinedMenuItem::paste(app, Some(&menu_label(locale, "sys.paste")))?)
-        .item(&PredefinedMenuItem::select_all(app, Some(&menu_label(locale, "sys.selectAll")))?)
+        // Custom item, not PredefinedMenuItem::select_all: the native macOS
+        // `selectAll:` responder action no-ops on the rich editor's ProseMirror
+        // DOM (a contenteditable root mixed with non-editable atom nodes
+        // confuses WebKit's native select-all traversal), so Cmd+A silently
+        // did nothing in rich mode. Routing it through our own menu-event
+        // (same pattern as `find`/`new`/`save` below) lets each mounted editor
+        // apply the SAME select-all it already exposes via its right-click
+        // menu (RichEditor: ProseMirror AllSelection; SourceView: textarea
+        // .select()) — see `mdeditor:select-all` in App.svelte.
+        .item(&MenuItemBuilder::with_id("select-all", menu_label(locale, "sys.selectAll")).accelerator("Cmd+A").build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id("find", menu_label(locale, "edit.find")).accelerator("Cmd+F").build(app)?)
         .item(&MenuItemBuilder::with_id("find-replace", menu_label(locale, "edit.findReplace")).build(app)?);

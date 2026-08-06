@@ -502,6 +502,7 @@
     window.addEventListener('mdeditor:find-replace-all', onFindReplaceAll)
     window.addEventListener('mdeditor:find-clear', onFindClear)
     window.addEventListener('mdeditor:new-file-select', onNewFileSelect)
+    window.addEventListener('mdeditor:select-all', onSelectAll)
     return () => {
       window.removeEventListener('mdeditor:find-search', onFindSearch)
       window.removeEventListener('mdeditor:find-next', onFindNext)
@@ -510,6 +511,7 @@
       window.removeEventListener('mdeditor:find-replace-all', onFindReplaceAll)
       window.removeEventListener('mdeditor:find-clear', onFindClear)
       window.removeEventListener('mdeditor:new-file-select', onNewFileSelect)
+      window.removeEventListener('mdeditor:select-all', onSelectAll)
     }
   })
 
@@ -564,6 +566,15 @@
       textareaEl!.focus()
       textareaEl!.setSelectionRange(start, end)
     }, 50)
+  }
+
+  // Native textarea select-all already works; this only exists so the
+  // Edit-menu "Select All" item (routed via mdeditor:select-all, see
+  // RichEditor's own listener for why it's not a native menu accelerator
+  // anymore) also does the right thing when source mode is what's mounted.
+  function onSelectAll() {
+    textareaEl?.focus()
+    textareaEl?.select()
   }
 </script>
 
