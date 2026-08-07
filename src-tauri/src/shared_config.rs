@@ -15,11 +15,20 @@ pub struct SharedConfig {
 
 fn default_version() -> u32 { 1 }
 
+/// 共享配置的位置:`<config_dir>/net.notemd.app/shared.json`。
+///
+/// 「共享」指的是**进程之间**(GUI / CLI / 插件二进制)共享,不是应用之间 ——
+/// 所以它就住在 app 自己的配置目录里,和 `settings.json` 并排,不再单占一个顶层
+/// 目录。`dirs::config_dir()` 在 macOS 上正是 `~/Library/Application Support`,
+/// 与 Tauri 的 `app_config_dir()` 同址;Linux/Windows 也各自落到正确位置。
+///
+/// 插件二进制里有同名解析的副本(roam-import / claude-agent / ebook-import),
+/// 改这里必须同步改那边并重发插件。
 pub fn config_path() -> std::io::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not found")
+    let base = dirs::config_dir().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "config directory not found")
     })?;
-    Ok(home.join("Library/Application Support/com.laobu.mdeditor-shared/config.json"))
+    Ok(base.join(crate::app_dirs::BUNDLE_ID).join("shared.json"))
 }
 
 pub fn read(path: &Path) -> std::io::Result<SharedConfig> {
@@ -43,41 +52,6 @@ pub fn write(path: &Path, cfg: &SharedConfig) -> std::io::Result<()> {
     std::fs::write(&tmp, body)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
-}
-
-/// Migrate the legacy `vault_sync.repo_path` value from a JSON store file into the
-/// shared config's `sotvault` field. Idempotent: a non-empty `sotvault` short-circuits.
-///
-/// `legacy_store_path` points to the Tauri Store JSON (typically
-/// `~/Library/Application Support/net.notemd.app/settings.json`).
-pub fn migrate_vault_sync_repo_to_shared(
-    shared_path: &Path,
-    legacy_store_path: &Path,
-) -> std::io::Result<bool> {
-    let mut cfg = read(shared_path)?;
-    if cfg.sotvault.as_ref().is_some_and(|s| !s.is_empty()) {
-        return Ok(false);
-    }
-    let legacy_raw = match std::fs::read_to_string(legacy_store_path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(e),
-    };
-    let v: serde_json::Value = match serde_json::from_str(&legacy_raw) {
-        Ok(v) => v,
-        Err(_) => return Ok(false),
-    };
-    let repo = v.pointer("/vault_sync.repo_path")
-        .and_then(|x| x.as_str())
-        .map(|s| s.to_string());
-    if let Some(repo) = repo {
-        if !repo.is_empty() {
-            cfg.sotvault = Some(repo);
-            write(shared_path, &cfg)?;
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 #[cfg(test)]
@@ -126,60 +100,5 @@ mod tests {
         std::fs::write(&p, "{ not valid json").unwrap();
         let cfg = read(&p).unwrap();
         assert_eq!(cfg.version, 1);
-    }
-
-    #[test]
-    fn migration_copies_gitsync_repo_when_shared_empty() {
-        let tmp = TempDir::new().unwrap();
-        let shared = tmp.path().join("shared.json");
-        let legacy = tmp.path().join("legacy.json");
-        std::fs::write(&legacy, r#"{"vault_sync.repo_path":"/Users/me/notes"}"#).unwrap();
-
-        let migrated = migrate_vault_sync_repo_to_shared(&shared, &legacy).unwrap();
-        assert!(migrated);
-
-        let cfg = read(&shared).unwrap();
-        assert_eq!(cfg.sotvault.as_deref(), Some("/Users/me/notes"));
-    }
-
-    #[test]
-    fn migration_is_idempotent() {
-        let tmp = TempDir::new().unwrap();
-        let shared = tmp.path().join("shared.json");
-        let legacy = tmp.path().join("legacy.json");
-        std::fs::write(&legacy, r#"{"vault_sync.repo_path":"/Users/me/notes"}"#).unwrap();
-
-        let first = migrate_vault_sync_repo_to_shared(&shared, &legacy).unwrap();
-        let second = migrate_vault_sync_repo_to_shared(&shared, &legacy).unwrap();
-        assert!(first);
-        assert!(!second);
-    }
-
-    #[test]
-    fn migration_noop_when_legacy_missing() {
-        let tmp = TempDir::new().unwrap();
-        let shared = tmp.path().join("shared.json");
-        let legacy = tmp.path().join("legacy.json");
-        let migrated = migrate_vault_sync_repo_to_shared(&shared, &legacy).unwrap();
-        assert!(!migrated);
-    }
-
-    #[test]
-    fn migration_noop_when_shared_already_has_sotvault() {
-        let tmp = TempDir::new().unwrap();
-        let shared = tmp.path().join("shared.json");
-        let legacy = tmp.path().join("legacy.json");
-        write(&shared, &SharedConfig {
-            version: 1,
-            sotvault: Some("/preset".into()),
-            ..Default::default()
-        }).unwrap();
-        std::fs::write(&legacy, r#"{"vault_sync.repo_path":"/Users/me/notes"}"#).unwrap();
-
-        let migrated = migrate_vault_sync_repo_to_shared(&shared, &legacy).unwrap();
-        assert!(!migrated);
-
-        let cfg = read(&shared).unwrap();
-        assert_eq!(cfg.sotvault.as_deref(), Some("/preset"));
     }
 }

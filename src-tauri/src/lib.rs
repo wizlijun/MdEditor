@@ -1114,17 +1114,6 @@ pub fn run() {
                 }
             }
 
-            // Migrate legacy vault_sync.repo_path to shared config sotvault
-            {
-                if let (Ok(app_data_dir), Ok(shared)) = (
-                    app.path().app_data_dir(),
-                    crate::shared_config::config_path(),
-                ) {
-                    let legacy_store = app_data_dir.join("settings.json");
-                    let _ = crate::shared_config::migrate_vault_sync_repo_to_shared(&shared, &legacy_store);
-                }
-            }
-
             #[cfg(not(target_os = "ios"))]
             {
                 let vault_mgr = std::sync::Arc::new(vault_sync::VaultSyncManager::new());

@@ -61,9 +61,9 @@ async function shareVaultDiagnostics(filePath: string): Promise<string[]> {
     lines.push(`  ${k}: ${v === undefined ? '(undefined)' : v === null ? 'null' : typeof v === 'string' ? v : JSON.stringify(v)}`)
   add('file', filePath)
   try {
-    const { homeDir } = await import('@tauri-apps/api/path')
+    const { appConfigDir } = await import('@tauri-apps/api/path')
     const { exists, readTextFile } = await import('@tauri-apps/plugin-fs')
-    const cfgPath = `${await homeDir()}/Library/Application Support/com.laobu.mdeditor-shared/config.json`
+    const cfgPath = `${await appConfigDir()}/shared.json`
     add('shared config', cfgPath)
     const cfgExists = await exists(cfgPath).catch(() => false)
     add('shared config exists', cfgExists)

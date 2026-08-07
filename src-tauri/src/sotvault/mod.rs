@@ -214,13 +214,13 @@ pub(crate) fn resolve_vault_root<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -
     }
     // Fallback: read the shared config file directly (works even when
     // vault_sync::init didn't run, as in the headless CLI). Resolve the config
-    // path via BOTH Tauri's home dir (same source the frontend uses; reliable in
-    // the CLI's spawn env) AND the dirs-crate path, since `dirs::home_dir()` can
-    // diverge from the app's home in a CLI process — that divergence made the
-    // fallback read the wrong/no file and still report vault_required.
+    // path via BOTH Tauri's own config dir (same source the frontend uses;
+    // reliable in the CLI's spawn env) AND the dirs-crate path, since the two
+    // can diverge in a CLI process — that divergence made the fallback read the
+    // wrong/no file and still report vault_required.
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(home) = app.path().home_dir() {
-        candidates.push(home.join("Library/Application Support/com.laobu.mdeditor-shared/config.json"));
+    if let Ok(dir) = app.path().app_config_dir() {
+        candidates.push(dir.join("shared.json"));
     }
     if let Ok(p) = crate::shared_config::config_path() {
         candidates.push(p);
@@ -252,12 +252,12 @@ pub fn sotvault_vault_debug(app: AppHandle) -> Result<serde_json::Value, String>
         .try_state::<Arc<crate::vault_sync::VaultSyncManager>>()
         .and_then(|m| m.repo_path.lock().ok().and_then(|g| g.clone()));
 
-    let tauri_home = app.path().home_dir();
+    let tauri_config_dir = app.path().app_config_dir();
     let dirs_config = crate::shared_config::config_path();
 
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(ref h) = tauri_home {
-        candidates.push(h.join("Library/Application Support/com.laobu.mdeditor-shared/config.json"));
+    if let Ok(ref d) = tauri_config_dir {
+        candidates.push(d.join("shared.json"));
     }
     if let Ok(ref p) = dirs_config {
         candidates.push(p.clone());
@@ -280,7 +280,7 @@ pub fn sotvault_vault_debug(app: AppHandle) -> Result<serde_json::Value, String>
 
     Ok(json!({
         "manager_repo_path": manager_repo_path,
-        "tauri_home_dir": tauri_home.map(|p| p.to_string_lossy().to_string()).map_err(|e| e.to_string()).unwrap_or_else(|e| format!("ERR: {e}")),
+        "tauri_config_dir": tauri_config_dir.map(|p| p.to_string_lossy().to_string()).map_err(|e| e.to_string()).unwrap_or_else(|e| format!("ERR: {e}")),
         "dirs_config_path": dirs_config.map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|e| format!("ERR: {e}")),
         "probes": probes,
         "resolved": resolve_vault_root(&app).map(|p| p.to_string_lossy().to_string()),
