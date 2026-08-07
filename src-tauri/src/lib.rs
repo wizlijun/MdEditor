@@ -806,11 +806,8 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
     );
     let tooltip = format!("note.md — {}: {}", menu_label(&locale, "sync.label"), status_text);
 
-    // 宿主告警并入统一通知(sticky):大文件门禁 / 同步异常。**必须在下面读取
-    // `notifications::count()` 之前跑**——否则角标会用本次调用尚未反映这次
-    // push/dismiss 的旧计数,读到「问题刚解决那一刻」的过期数字,只能指望
-    // DIRTY 触发的下一轮异步刷新才纠正过来。push/dismiss 只在内容变化时敲
-    // DIRTY,由通知守望重建菜单——稳态第二轮不再触发,收敛不自激。
+    // 宿主告警并入统一通知(sticky):大文件门禁 / 同步异常。push/dismiss 只在
+    // 内容变化时敲 DIRTY,由通知守望重建菜单——稳态第二轮不再触发,收敛不自激。
     if has_large {
         let title = menu_label(&locale, "notif.largeFiles")
             .replace("{n}", &skipped_large.len().to_string());
@@ -847,15 +844,9 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
         if let Ok(img) = icon {
             let _ = tray.set_icon(Some(img));
         }
-        // 菜单栏字形保持干净:只有存在未读提醒时才在图标旁挂数字角标,
-        // 否则不挂任何文字标题。读在上面的 sticky push/dismiss 之后,
-        // 反映的是本次调用的最终状态,不是修正前的旧计数。
-        let n = crate::notifications::count();
-        if n > 0 {
-            let _ = tray.set_title(Some(n.to_string()));
-        } else {
-            let _ = tray.set_title(None::<&str>);
-        }
+        // 菜单栏字形保持干净,不挂数字角标:未读数在下拉菜单的「通知 (n)」子菜单
+        // 标题上(build_tray_menu 同步从 snapshot 计算,无异步刷新时序问题;
+        // 图标旁的 set_title 角标曾因刷新时序反复显示过期计数,已整体移除)。
         let _ = tray.set_tooltip(Some(&tooltip));
     }
 

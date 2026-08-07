@@ -159,9 +159,6 @@ pub fn clear_all() {
     REGISTRY.lock().unwrap().items.clear();
     DIRTY.notify_one();
 }
-pub fn count() -> usize {
-    REGISTRY.lock().unwrap().len()
-}
 pub fn max_severity() -> Option<Severity> {
     REGISTRY.lock().unwrap().max_severity()
 }
