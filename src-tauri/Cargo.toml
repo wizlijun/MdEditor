@@ -1,6 +1,6 @@
 [package]
 name = "notemd"
-version = "6.806.5"
+version = "6.808.1"
 edition = "2021"
 
 [lib]
