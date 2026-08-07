@@ -1,6 +1,6 @@
 use crate::themes::compiler::compile_theme_css;
 use crate::themes::import::{prepare_import, install_prepared, cleanup_staging, ImportReport};
-use crate::themes::paths::{compiled_path, compiled_dir, ensure_dirs, source_path, themes_dir, asset_dir};
+use crate::themes::paths::{compiled_path, ensure_dirs, source_path, themes_dir, asset_dir};
 use crate::themes::registry::{scan_themes_dir, ThemeMeta};
 use tauri::{Emitter, Manager};
 

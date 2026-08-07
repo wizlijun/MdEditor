@@ -146,7 +146,7 @@ pub fn init(app: &AppHandle) {
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(2));
             let _ = service::start(&app_clone);
-            crate::update_tray_icon(&app_clone, true);
+            crate::refresh_tray_status(&app_clone);
         });
     }
 }

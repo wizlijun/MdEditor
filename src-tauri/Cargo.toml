@@ -60,6 +60,11 @@ url = "2"
 urlencoding = "2"
 rand = "0.8"
 
+[target.'cfg(unix)'.dependencies]
+# `localtime_r` for the tray's absolute "last synced HH:MM" (see `local_parts`).
+# Already compiled in the graph via core-foundation, so this is free.
+libc = "0.2"
+
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"

@@ -31,41 +31,18 @@
       <string>Editor</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
+      <!-- 刻意只登记纯文本:public.source-code / public.script 与那一长串代码
+           扩展名会让 note.md 挤进每个 .py/.rs/.go 的「打开方式」里,对代码文件
+           是打扰不是价值。要用 note.md 开代码文件,拖进窗口或「打开方式 →
+           其他」仍然可以。 -->
       <key>LSItemContentTypes</key>
       <array>
         <string>public.plain-text</string>
-        <string>public.source-code</string>
-        <string>public.script</string>
       </array>
       <key>CFBundleTypeExtensions</key>
       <array>
         <string>txt</string>
-        <string>log</string>
-        <string>csv</string>
-        <string>tsv</string>
-        <string>json</string>
-        <string>yaml</string>
-        <string>yml</string>
-        <string>toml</string>
-        <string>ini</string>
-        <string>xml</string>
-        <string>py</string>
-        <string>js</string>
-        <string>ts</string>
-        <string>tsx</string>
-        <string>jsx</string>
-        <string>rs</string>
-        <string>go</string>
-        <string>java</string>
-        <string>c</string>
-        <string>cpp</string>
-        <string>h</string>
-        <string>hpp</string>
-        <string>css</string>
-        <string>scss</string>
-        <string>sh</string>
-        <string>bash</string>
-        <string>sql</string>
+        <string>text</string>
       </array>
     </dict>
   </array>

@@ -38,7 +38,7 @@ pub fn prepare_import(zip_path: &Path, existing_ids: &[String]) -> Result<Import
     let staging_path = staging.path().to_path_buf();
     let limits = ExtractLimits::default();
     extract_zip_safely(zip_path, &staging_path, limits).map_err(|e: ExtractError| e.to_string())?;
-    let _ = staging.into_path(); // detach lifetime; cleanup is explicit
+    let _ = staging.keep(); // detach lifetime; cleanup is explicit
 
     let mut themes: Vec<ImportTheme> = Vec::new();
     let mut errors: Vec<ImportError> = Vec::new();

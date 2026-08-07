@@ -657,68 +657,57 @@ fn abbreviate_path(path: &str) -> String {
     }
 }
 
-/// Format a Unix-seconds timestamp string as a compact, localized "… ago"
-/// relative time. `locale` is one of "en" / "zh" / "ja".
+/// 本地时间的「月、日、时、分」。托盘菜单没有 will-show 钩子,菜单项一旦建好就
+/// 挂在那儿不再重算 —— 所以这里刻意用**绝对时刻**而不是「N 分钟前」:相对时间
+/// 会随着挂着的时间越来越错(同步一停,「3 分钟前」能挂一整天),绝对时刻永不过期。
+#[cfg(all(unix, not(target_os = "ios")))]
+fn local_parts(unix_secs: i64) -> Option<(i32, i32, i32, i32)> {
+    let t = unix_secs as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // localtime_r 是可重入版本,自带 DST / 时区处理;失败(NULL)时回落到调用方。
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return None;
+    }
+    Some((tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min))
+}
+
+#[cfg(all(not(unix), not(target_os = "ios")))]
+fn local_parts(_unix_secs: i64) -> Option<(i32, i32, i32, i32)> {
+    None // Windows 走 GetLocalTime,PC 移植时补(见 docs/2026-08-08-pc-port-refactor-plan.md)
+}
+
+/// 绝对时刻串:当天只给 `HH:MM`,跨天补上 `M/D`。
 #[cfg(not(target_os = "ios"))]
-fn relative_time(unix_secs: &str, locale: &str) -> String {
-    let then: u64 = match unix_secs.trim().parse() {
-        Ok(v) => v,
-        Err(_) => return unix_secs.to_string(),
-    };
+fn absolute_time(unix_secs: &str) -> Option<String> {
+    let then: i64 = unix_secs.trim().parse().ok()?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    let d = now.saturating_sub(then);
-    let (n, unit): (u64, &str) = if d < 60 {
-        (d, "s")
-    } else if d < 3600 {
-        (d / 60, "m")
-    } else if d < 86_400 {
-        (d / 3600, "h")
+        .as_secs() as i64;
+    let (mon, day, hour, min) = local_parts(then)?;
+    let same_day = local_parts(now).is_some_and(|(m, d, _, _)| (m, d) == (mon, day));
+    Some(if same_day {
+        format!("{hour:02}:{min:02}")
     } else {
-        (d / 86_400, "d")
-    };
-    if d < 5 {
-        return match locale {
-            "zh" => "刚刚",
-            "ja" => "たった今",
-            "de" => "gerade eben",
-            _ => "just now",
-        }
-        .to_string();
-    }
-    match locale {
-        "zh" => {
-            let u = match unit { "s" => "秒", "m" => "分钟", "h" => "小时", _ => "天" };
-            format!("{n}{u}前")
-        }
-        "ja" => {
-            let u = match unit { "s" => "秒", "m" => "分", "h" => "時間", _ => "日" };
-            format!("{n}{u}前")
-        }
-        "de" => {
-            let u = match unit { "s" => "Sek.", "m" => "Min.", "h" => "Std.", _ => "T." };
-            format!("vor {n} {u}")
-        }
-        _ => format!("{n}{unit} ago"),
-    }
+        format!("{mon}/{day} {hour:02}:{min:02}")
+    })
 }
 
-/// Localized "last synced …" phrase for the tray status line / tooltip.
+/// Localized "last synced …" phrase for the tray status line.
 #[cfg(not(target_os = "ios"))]
 fn last_sync_phrase(locale: &str, last_sync: Option<&str>) -> String {
-    match last_sync {
-        None => menu_label(locale, "sync.neverSynced"),
-        Some(ts) => {
-            let rel = relative_time(ts, locale);
-            match locale {
-                "zh" => format!("{rel}同步"),
-                "ja" => format!("{rel}に同期"),
-                "de" => format!("{rel} synchronisiert"),
-                _ => format!("synced {rel}"),
-            }
-        }
+    let Some(ts) = last_sync else {
+        return menu_label(locale, "sync.neverSynced");
+    };
+    // 时间戳解析不出来(或平台拿不到本地时间)时,原样显示,不编造。
+    let Some(at) = absolute_time(ts) else {
+        return ts.to_string();
+    };
+    match locale {
+        "zh" => format!("{at} 同步"),
+        "ja" => format!("{at} に同期"),
+        "de" => format!("synchronisiert um {at}"),
+        _ => format!("synced at {at}"),
     }
 }
 
@@ -804,7 +793,6 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
         state_label(&locale, state),
         last_sync_phrase(&locale, last_sync.as_deref()),
     );
-    let tooltip = format!("note.md — {}: {}", menu_label(&locale, "sync.label"), status_text);
 
     // 宿主告警并入统一通知(sticky):大文件门禁 / 同步异常。push/dismiss 只在
     // 内容变化时敲 DIRTY,由通知守望重建菜单——稳态第二轮不再触发,收敛不自激。
@@ -844,10 +832,9 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
         if let Ok(img) = icon {
             let _ = tray.set_icon(Some(img));
         }
-        // 菜单栏字形保持干净,不挂数字角标:未读数在下拉菜单的「通知 (n)」子菜单
-        // 标题上(build_tray_menu 同步从 snapshot 计算,无异步刷新时序问题;
-        // 图标旁的 set_title 角标曾因刷新时序反复显示过期计数,已整体移除)。
-        let _ = tray.set_tooltip(Some(&tooltip));
+        // 图标旁不挂任何附加信息:数字角标(set_title)与 tooltip 都已移除 ——
+        // 前者刷新时序不可靠、后者与下拉菜单状态行逐字重复。未读数在「通知 (n)」
+        // 子菜单标题上,同步状态在状态行上,都由 build_tray_menu 同步计算。
     }
 
     if let Some(status_state) = app.try_state::<TrayStatusItem>() {
@@ -863,13 +850,6 @@ pub fn refresh_tray_status(app: &tauri::AppHandle) {
             let _ = item.set_enabled(state != SyncState::Syncing);
         }
     }
-}
-
-/// Back-compat shim: callers that only know "active or not" now just trigger a
-/// full status refresh from the sync manager's real state.
-#[cfg(not(target_os = "ios"))]
-pub fn update_tray_icon(app: &tauri::AppHandle, _active: bool) {
-    refresh_tray_status(app);
 }
 
 /// 提醒集变更后的托盘刷新:重建下拉菜单(让提醒子菜单进出)+ 刷新角标。
@@ -995,18 +975,8 @@ pub fn run() {
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, shortcut, event| {
                 if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    use tauri_plugin_global_shortcut::{Code, Modifiers};
-                    let cmd_ctrl = Modifiers::SUPER | Modifiers::CONTROL;
-                    if shortcut.matches(cmd_ctrl, Code::KeyM) {
-                        trigger_quick_note(app);
-                        return;
-                    }
-                    if shortcut.matches(cmd_ctrl, Code::KeyN) {
-                        show_daily_notes_window(app);
-                        return;
-                    }
-                    // Plugin-contributed hotkeys. Checked last so a plugin can
-                    // never shadow a built-in tray action.
+                    // 只剩插件贡献的热键:内置的 Cmd+Ctrl+M / Cmd+Ctrl+N 已撤销
+                    // (系统级键位占用,且两个动作在托盘菜单里本就一点即到)。
                     let target = app
                         .try_state::<PluginShortcuts>()
                         .and_then(|st| st.0.lock().ok().and_then(|m| m.get(&shortcut.id()).cloned()));
@@ -1189,22 +1159,10 @@ pub fn run() {
                 use std::str::FromStr;
                 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
-                if let Err(e) = app
-                    .global_shortcut()
-                    .register_multiple(["Cmd+Ctrl+M", "Cmd+Ctrl+N"])
-                {
-                    dlog(&format!("global-shortcut register tray actions failed: {e}"));
-                }
-
-                // The two built-ins are claimed already; the handler checks them
-                // before the plugin table, so record their ids and let a
-                // colliding plugin combo be skipped outright rather than
-                // registered into a hotkey it can never receive.
-                let mut claimed: std::collections::HashSet<u32> = ["Cmd+Ctrl+M", "Cmd+Ctrl+N"]
-                    .iter()
-                    .filter_map(|s| Shortcut::from_str(s).ok())
-                    .map(|s| s.id())
-                    .collect();
+                // 宿主不再占用任何内置全局热键;`claimed` 只用来让两个插件之间
+                // 不互相抢同一组合(先来先得,后到的跳过而不是注册进一个收不到
+                // 事件的热键)。
+                let mut claimed: std::collections::HashSet<u32> = Default::default();
                 let mut map: std::collections::HashMap<u32, (String, String)> = Default::default();
                 for (accel, entry) in plugin_runtime::tray::accelerators_from_state() {
                     let target = format!("{}:{}", entry.plugin_id, entry.window);
@@ -1715,16 +1673,15 @@ fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     locale: &str,
 ) -> tauri::Result<(Menu<R>, MenuItem<R>, IconMenuItem<R>, MenuItem<R>)> {
-    // Quick-note action pinned to the very top of the tray dropdown. The
-    // accelerator string is display-only here (the real system-wide hotkey is
-    // registered via tauri-plugin-global-shortcut in `run()`); both funnel into
-    // the same `quick-note` event on the frontend.
+    // Quick-note action pinned to the very top of the tray dropdown. No
+    // accelerator: the built-in system-wide hotkey was withdrawn (it claimed a
+    // global combo for something already one click away here).
     let new_quick_item = MenuItem::with_id(
         app,
         "tray-new-quick",
         menu_label(locale, "tray.newQuick"),
         true,
-        Some("Cmd+Ctrl+M"),
+        None::<&str>,
     )?;
     let show_item = MenuItem::with_id(app, "tray-show", menu_label(locale, "tray.show"), true, None::<&str>)?;
     // Tray "socket": every enabled plugin that declares `contributes.tray` gets a
@@ -1831,7 +1788,7 @@ fn build_tray_menu<R: tauri::Runtime>(
         "tray-daily-notes-open",
         menu_label(locale, "tray.dailyNotes"),
         true,
-        Some("Cmd+Ctrl+N"),
+        None::<&str>,
     )?;
     let mut b0 = MenuBuilder::new(app).item(&new_quick_item);
     // Daily Notes window item only when the feature is enabled; there is no

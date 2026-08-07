@@ -240,26 +240,10 @@
     // default handler for public.html makes macOS treat it as a web-browser
     // candidate and lets it hijack the default browser. Passive "Open With"
     // support (Info.plist) stays, but we never claim the default role.
-    { label: 'Plain text',    exts: ['txt', 'log', 'csv', 'tsv', 'env'] },
-    { label: 'JSON',          exts: ['json', 'jsonc'] },
-    { label: 'YAML',          exts: ['yaml', 'yml'] },
-    { label: 'Config',        exts: ['toml', 'ini', 'conf'] },
-    { label: 'XML',           exts: ['xml'] },
-    { label: 'Shell script',  exts: ['sh', 'bash', 'zsh'] },
-    { label: 'Python',        exts: ['py'] },
-    { label: 'JavaScript',    exts: ['js', 'mjs', 'cjs', 'jsx'] },
-    { label: 'TypeScript',    exts: ['ts', 'tsx'] },
-    { label: 'Rust',          exts: ['rs'] },
-    { label: 'Go',            exts: ['go'] },
-    { label: 'Java',          exts: ['java'] },
-    { label: 'C / C++',       exts: ['c', 'cpp', 'cc', 'h', 'hpp'] },
-    { label: 'Ruby',          exts: ['rb'] },
-    { label: 'Swift',         exts: ['swift'] },
-    { label: 'Kotlin',        exts: ['kt'] },
-    { label: 'PHP',           exts: ['php'] },
-    { label: 'C#',            exts: ['cs'] },
-    { label: 'CSS',           exts: ['css', 'scss'] },
-    { label: 'SQL',           exts: ['sql'] },
+    // 只剩 Markdown + 纯文本。此前还登记了 20 类代码/配置扩展名(py/rs/go/
+    // sql/…),让 note.md 挤进每个源码文件的「打开方式」——对代码文件是打扰
+    // 不是价值。要用 note.md 开这些文件,拖进窗口或「打开方式 → 其他」仍可以。
+    { label: 'Plain text',    exts: ['txt', 'text'] },
   ]
   const ALL_EXTS = FILE_GROUPS.flatMap((g) => g.exts)
 
