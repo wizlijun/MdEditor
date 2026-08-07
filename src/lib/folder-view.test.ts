@@ -37,6 +37,8 @@ import {
   readFolder,
   defaultRootToVault,
   syncToActiveFile,
+  suppressFollowFor,
+  resetFollowState,
   toggleExpanded,
   loadFolderViewState,
   setVisible,
@@ -144,22 +146,46 @@ describe('setSort / setViewMode', () => {
 })
 
 describe('syncToActiveFile', () => {
+  beforeEach(() => { resetFollowState() })
+
   it('resets root to the file parent when outside current subtree', async () => {
     readDirMock.mockResolvedValue([])
     folderView.rootDir = '/other'
     await syncToActiveFile('/a/b/c.md')
     expect(folderView.rootDir).toBe('/a/b')
   })
-  it('keeps root when the file is within the current subtree', async () => {
+  it('follows down to the file parent even when the file is inside the current root', async () => {
     readDirMock.mockResolvedValue([])
     folderView.rootDir = '/a'
     await syncToActiveFile('/a/b/c.md')
-    expect(folderView.rootDir).toBe('/a')
+    expect(folderView.rootDir).toBe('/a/b')
   })
   it('ignores null (untitled) files', async () => {
     folderView.rootDir = '/a'
     await syncToActiveFile(null)
     expect(folderView.rootDir).toBe('/a')
+  })
+  it('keeps a manually navigated root while the active file is unchanged', async () => {
+    readDirMock.mockResolvedValue([])
+    await syncToActiveFile('/a/b/c.md')
+    folderView.rootDir = '/a' // user pressed ↑ (parent folder)
+    await syncToActiveFile('/a/b/c.md')
+    expect(folderView.rootDir).toBe('/a')
+  })
+  it('does not move the root for an open originating inside the tree', async () => {
+    readDirMock.mockResolvedValue([])
+    folderView.rootDir = '/a'
+    suppressFollowFor('/a/b/c.md')
+    await syncToActiveFile('/a/b/c.md')
+    expect(folderView.rootDir).toBe('/a')
+  })
+  it('consumes the suppression once — the next file still follows', async () => {
+    readDirMock.mockResolvedValue([])
+    folderView.rootDir = '/a'
+    suppressFollowFor('/a/b/c.md')
+    await syncToActiveFile('/a/b/c.md')
+    await syncToActiveFile('/a/d/e.md')
+    expect(folderView.rootDir).toBe('/a/d')
   })
 })
 

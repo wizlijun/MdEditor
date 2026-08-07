@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    folderView, setRootDir, refreshAll, syncToActiveFile,
+    folderView, setRootDir, refreshAll, syncToActiveFile, suppressFollowFor,
     parentDir, watchRoot, setFilter, clearFilter, revealInFinder,
     setSort, setViewMode, setHideFolders, togglePin, filterByViewMode, applyHideFolders,
     type FolderEntry, type FolderSortKey, type FolderViewMode,
@@ -41,6 +41,8 @@
   let canGoUp = $derived(!!folderView.rootDir && folderView.rootDir !== '/')
 
   async function open(path: string) {
+    // 树内打开不换根:用户正在这棵树里浏览,重定根会让视图在脚下跳动。
+    suppressFollowFor(path)
     try { await openFile(path) } catch (e) { showError(String(e)) }
   }
   function goUp() {

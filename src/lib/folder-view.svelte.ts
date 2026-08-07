@@ -1,3 +1,4 @@
+import { untrack } from 'svelte'
 import { readDir, watchImmediate, stat, exists, readTextFile, writeTextFile, remove } from '@tauri-apps/plugin-fs'
 import { Store } from '@tauri-apps/plugin-store'
 import { SvelteMap } from 'svelte/reactivity'
@@ -358,17 +359,44 @@ export async function defaultRootToVault(vaultRoot: string | null): Promise<void
   await setRootDir(vaultRoot)
 }
 
+/** 上一次跟随过的活动文件路径:同一文件重复同步不再抢用户手动导航的位置。 */
+let lastFollowedPath: string | null = null
+/** 一次性抑制:文件夹视图树内点开的文件不改根(那本身就是在 view 里浏览)。 */
+let pendingSuppressPath: string | null = null
+
+/** 树内打开前登记:紧接着的这一次跟随跳过换根。标记只消费一次。 */
+export function suppressFollowFor(path: string): void {
+  pendingSuppressPath = path
+}
+
+/** 清跟随状态(模块级,单测用于隔离用例)。 */
+export function resetFollowState(): void {
+  lastFollowedPath = null
+  pendingSuppressPath = null
+}
+
 /**
- * React to the active file changing. Reset the root to the file's parent only
- * when the file is outside the current root's subtree (VS Code "reveal"
- * behavior); otherwise keep the root so browsing position is preserved.
+ * React to the active file changing: the root follows the file's own directory,
+ * even when the file already sits inside the current root's subtree (the tree
+ * doesn't auto-expand ancestors, so a deep file would otherwise be invisible).
+ *
+ * 两个例外:
+ *   - 活动文件没变(面板重挂载、无关状态刷新)→ 保留用户手动导航(↑)的位置;
+ *   - 这次打开来自文件夹视图树内(`suppressFollowFor`)→ 不让树在脚下跳动。
+ *
+ * `folderView.rootDir` 的读取走 untrack:本函数在 $effect 里同步调用,而
+ * `setRootDir` 会写同一批状态,读+写会自失效成死循环。
  */
 export async function syncToActiveFile(filePath: string | null): Promise<void> {
   if (!filePath) return
-  const parent = parentDir(filePath)
-  if (folderView.rootDir && (folderView.rootDir === parent || isWithinDir(filePath, folderView.rootDir))) {
+  if (filePath === lastFollowedPath) return
+  lastFollowedPath = filePath
+  if (pendingSuppressPath === filePath) {
+    pendingSuppressPath = null
     return
   }
+  const parent = parentDir(filePath)
+  if (untrack(() => folderView.rootDir) === parent) return
   await setRootDir(parent)
 }
 
