@@ -87,6 +87,11 @@ git2 = { version = "0.19", default-features = false, features = ["vendored-libgi
 
 [dev-dependencies]
 tempfile = "3"
+# `vault_ios` is `#![cfg(any(target_os = "ios", test))]` — it compiles on the dev
+# machine so its logic is unit-testable off-device, and it needs git2. Keeping
+# git2 here (rather than as a normal desktop dep) keeps it out of every release
+# binary while leaving `cargo test` working on all hosts.
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2", "vendored-openssl"] }
 
 [profile.release]
 opt-level = "z"       # optimize for size
