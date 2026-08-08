@@ -5,7 +5,8 @@
 //! 其次 `user.name`,再次系统用户名。前端只拿到已经算好的 id(纯函数在此可测)。
 
 use std::path::Path;
-use std::process::Command;
+
+use crate::platform::command;
 
 /// 从 git 身份与系统用户名推出人类 id。与前端 `src/lib/okf/actor.ts` 的
 /// `humanActorId` 同规则(CJK 原样保留,不做音译)。
@@ -34,7 +35,7 @@ fn slug(v: &str) -> String {
 
 /// `git config --get <key>`,在 `dir` 下执行(未设仓库级时 git 自动回退到全局)。
 fn git_config(dir: &Path, key: &str) -> String {
-    Command::new("git")
+    command("git")
         .args(["config", "--get", key])
         .current_dir(dir)
         .output()

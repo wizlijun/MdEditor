@@ -58,6 +58,21 @@ fn assert_candidate(dir: &str) -> Result<(), String> {
     }
 }
 
+/// Create the `notemd` launcher link. Split by platform the same way
+/// `agents_sync::make_symlink` is: unix gets a real symlink, everything else
+/// reports the capability as missing rather than failing to compile.
+#[cfg(unix)]
+fn make_link(target: &Path, link: &Path) -> Result<(), String> {
+    std::os::unix::fs::symlink(target, link).map_err(|e| e.to_string())
+}
+
+/// Windows has no unprivileged symlink; the plan is a PATH shim written by the
+/// NSIS installer instead (see docs/2026-08-08-pc-port-refactor-plan.md §5.1).
+#[cfg(not(unix))]
+fn make_link(_target: &Path, _link: &Path) -> Result<(), String> {
+    Err("CLI symlink install is not supported on this platform".to_string())
+}
+
 pub fn install(dir: &Path) -> Result<bool, String> {
     let target = current_app_binary();
     if !target.exists() {
@@ -76,7 +91,7 @@ pub fn install(dir: &Path) -> Result<bool, String> {
             if l.symlink_metadata().is_ok() {
                 std::fs::remove_file(l).map_err(|e| e.to_string())?;
             }
-            std::os::unix::fs::symlink(&target, l).map_err(|e| e.to_string())?;
+            make_link(&target, l)?;
         }
         return Ok(true);
     }
@@ -192,10 +207,15 @@ pub fn cli_install_candidates() -> Vec<String> {
     candidate_dirs().into_iter().map(|p| p.display().to_string()).collect()
 }
 
-#[cfg(test)]
+// The suite below exercises the unix install path end to end: real symlinks,
+// `/usr/local/bin`-shaped candidate dirs, and `sh` quoting for the osascript
+// elevation script. None of that has a Windows counterpart — `install()`
+// reports the capability as missing there (see `make_link`) — so the module is
+// unix-gated rather than contorted, and Windows gets its own assertion below.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::symlink as unix_symlink;
+    use crate::platform::test_symlink as unix_symlink;
 
     #[test]
     fn status_reports_installed_when_link_present() {
@@ -284,5 +304,30 @@ mod tests {
         assert_eq!(sh_single_quote_escape("a'b"), "a'\\''b");
         assert_eq!(sh_single_quote_escape("no quotes"), "no quotes");
         assert_eq!(sh_single_quote_escape("'"), "'\\''");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// Windows has no unprivileged symlink, so CLI install must fail loudly
+    /// rather than half-succeed. The NSIS installer writes a PATH shim instead
+    /// (docs/2026-08-08-pc-port-refactor-plan.md §5.1), and the settings UI is
+    /// expected to hide the affordance.
+    #[test]
+    fn install_reports_unsupported() {
+        let dir = std::env::temp_dir().join(format!(
+            "notemd-install-win-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = install(&dir).unwrap_err();
+        assert!(err.contains("not supported"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

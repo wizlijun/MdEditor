@@ -16,6 +16,7 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 pub mod app_dirs;
 pub mod log_bus;
+pub mod platform;
 pub mod shared_config;
 
 #[cfg(not(target_os = "ios"))]
@@ -83,7 +84,10 @@ fn dlog(msg: &str) {
         if let Ok(mut f) = OpenOptions::new()
             .create(true)
             .append(true)
-            .open("/tmp/mdeditor.log")
+            // `std::env::temp_dir()`, not a literal "/tmp": on Windows that
+            // path resolves to `\tmp` on the current drive, which normally does
+            // not exist, so the debug log silently went nowhere.
+            .open(std::env::temp_dir().join("mdeditor.log"))
         {
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -105,14 +109,19 @@ fn sanitize_io_err(e: std::io::Error) -> String {
     }
 }
 
-/// Validate that the path resolves under the user home, /tmp, /var, or /private.
+/// Validate that the path resolves somewhere a user document legitimately
+/// lives: under the home dir or the platform temp area on unix; anywhere
+/// outside the OS's own directories on Windows (see `allowed_roots`).
 /// Walks up ancestor dirs to handle not-yet-existing files.
 fn safe_path(path: &str) -> Result<std::path::PathBuf, String> {
     use std::path::Path;
     if path.is_empty() {
         return Err("Path must not be empty".to_string());
     }
-    if !path.starts_with('/') {
+    // `is_absolute()` — NOT `starts_with('/')`. On unix the two are identical;
+    // on Windows an absolute path is `C:\…` or `\\server\share`, so the old
+    // check rejected every real path and killed image paste + rename outright.
+    if !Path::new(path).is_absolute() {
         return Err("Path must be absolute".to_string());
     }
     let p = Path::new(path);
@@ -143,12 +152,41 @@ fn safe_path(path: &str) -> Result<std::path::PathBuf, String> {
         Err("Cannot resolve path".to_string())
     })?;
 
-    let home = dirs::home_dir().ok_or("Cannot determine home dir")?;
-    if canonical.starts_with(&home) { return Ok(canonical); }
-    for prefix in &["/tmp", "/var", "/private"] {
-        if canonical.starts_with(prefix) { return Ok(canonical); }
+    if is_allowed_root(&canonical) {
+        return Ok(canonical);
     }
     Err("Path outside allowed directories".to_string())
+}
+
+/// unix: home + /tmp + /var + /private — unchanged from the original inline list.
+#[cfg(not(windows))]
+fn is_allowed_root(canonical: &std::path::Path) -> bool {
+    let Some(home) = dirs::home_dir() else { return false };
+    if canonical.starts_with(&home) {
+        return true;
+    }
+    ["/tmp", "/var", "/private"].iter().any(|p| canonical.starts_with(p))
+}
+
+/// Windows: the unix list above encodes "places a user document plausibly
+/// lives", and home-only does not carry over — a vault on `D:\` is the normal
+/// case on Windows, not an edge case. So the same *intent* (keep the webview
+/// out of the OS's own directories) is expressed as a deny-list of system roots.
+///
+/// `std::fs::canonicalize` returns verbatim paths (`\\?\C:\…`), so the deny
+/// roots get canonicalized too — comparing a verbatim path against a plain
+/// `C:\Windows` would never match and the guard would silently pass everything.
+#[cfg(windows)]
+fn is_allowed_root(canonical: &std::path::Path) -> bool {
+    for var in ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"] {
+        let Some(raw) = std::env::var_os(var) else { continue };
+        let root = std::fs::canonicalize(&raw)
+            .unwrap_or_else(|_| std::path::PathBuf::from(raw));
+        if canonical.starts_with(&root) {
+            return false;
+        }
+    }
+    true
 }
 
 fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
@@ -616,6 +654,13 @@ fn pick_sync_folder_inner(app: &tauri::AppHandle, on_done: impl FnOnce(String) +
         .pick_folder(move |folder| {
             if let Some(path) = folder {
                 let path_str = path.to_string();
+                // Gate BEFORE anything is written. A rejected root must leave
+                // the previous vault (and settings.json / shared.json) exactly
+                // as it was — see sotvault::root_guard for what and why.
+                if let Err(reason) = sotvault::root_guard::check(std::path::Path::new(&path_str)) {
+                    report_vault_root_rejected(&app_clone, &path_str, reason);
+                    return;
+                }
                 let mgr = app_clone.state::<std::sync::Arc<vault_sync::VaultSyncManager>>();
                 *mgr.repo_path.lock().unwrap() = Some(path_str.clone());
 
@@ -638,6 +683,25 @@ fn pick_sync_folder_inner(app: &tauri::AppHandle, on_done: impl FnOnce(String) +
         });
 }
 
+/// Tell the user why the folder they picked was refused, in their language,
+/// and leave a trace in the log bus for support.
+#[cfg(not(target_os = "ios"))]
+fn report_vault_root_rejected(
+    app: &tauri::AppHandle,
+    path: &str,
+    reason: sotvault::root_guard::Reject,
+) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+    let locale = read_saved_locale(app);
+    let body = format!("{}\n\n{}", path, menu_label(&locale, reason.i18n_key()));
+    dlog(&format!("vault root rejected ({reason:?}): {path}"));
+    app.dialog()
+        .message(body)
+        .title(menu_label(&locale, "vault.reject.title"))
+        .kind(MessageDialogKind::Warning)
+        .show(|_| {});
+}
+
 #[cfg(not(target_os = "ios"))]
 fn update_tray_repo_label(app: &tauri::AppHandle, path: &str) {
     if let Some(state) = app.try_state::<TrayRepoItem>() {
@@ -649,7 +713,11 @@ fn update_tray_repo_label(app: &tauri::AppHandle, path: &str) {
 
 #[cfg(not(target_os = "ios"))]
 fn abbreviate_path(path: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    // `dirs::home_dir()`, not `$HOME` — Windows does not set HOME, so the tray
+    // showed the full `C:\Users\…` path where macOS showed `~/…`.
+    let home = dirs::home_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
     if !home.is_empty() && path.starts_with(&home) {
         format!("~{}", &path[home.len()..])
     } else {
@@ -671,9 +739,48 @@ fn local_parts(unix_secs: i64) -> Option<(i32, i32, i32, i32)> {
     Some((tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min))
 }
 
-#[cfg(all(not(unix), not(target_os = "ios")))]
+/// Windows 版:unix 秒 → FILETIME(1601 纪元、100ns 单位)→ UTC SYSTEMTIME →
+/// 本地 SYSTEMTIME。走 `SystemTimeToTzSpecificLocalTime` 而不是
+/// `FileTimeToLocalFileTime`:后者按**当前**的夏令时偏移换算,给一个历史时刻会
+/// 差一小时;前者按那个时刻自己所处的夏令时算,与 unix 侧 `localtime_r` 同义。
+#[cfg(all(windows, not(target_os = "ios")))]
+fn local_parts(unix_secs: i64) -> Option<(i32, i32, i32, i32)> {
+    use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows_sys::Win32::System::Time::{
+        FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime, TIME_ZONE_INFORMATION,
+    };
+
+    // 1601-01-01 → 1970-01-01 是 11644473600 秒;1601 年前的时刻直接放弃。
+    let ticks = unix_secs.checked_add(11_644_473_600)?.checked_mul(10_000_000)?;
+    if ticks < 0 {
+        return None;
+    }
+    let ticks = ticks as u64;
+    let ft = FILETIME {
+        dwLowDateTime: ticks as u32,
+        dwHighDateTime: (ticks >> 32) as u32,
+    };
+    let mut utc: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    let mut local: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    // 两个 API 都是「非零为成功」。null 时区参数 = 使用本机当前时区。
+    if unsafe { FileTimeToSystemTime(&ft, &mut utc) } == 0 {
+        return None;
+    }
+    let tz = std::ptr::null::<TIME_ZONE_INFORMATION>();
+    if unsafe { SystemTimeToTzSpecificLocalTime(tz, &utc, &mut local) } == 0 {
+        return None;
+    }
+    Some((
+        local.wMonth as i32,
+        local.wDay as i32,
+        local.wHour as i32,
+        local.wMinute as i32,
+    ))
+}
+
+#[cfg(all(not(unix), not(windows), not(target_os = "ios")))]
 fn local_parts(_unix_secs: i64) -> Option<(i32, i32, i32, i32)> {
-    None // Windows 走 GetLocalTime,PC 移植时补(见 docs/2026-08-08-pc-port-refactor-plan.md)
+    None
 }
 
 /// 绝对时刻串:当天只给 `HH:MM`,跨天补上 `M/D`。
@@ -1349,6 +1456,9 @@ pub fn run() {
             RunEvent::Ready => {
                 dlog("RunEvent::Ready");
             }
+            // `Opened` only exists on macOS/iOS/Android (tauri app.rs:258) —
+            // Windows/Linux deliver file-open through argv and deep-link instead.
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
             RunEvent::Opened { urls } => {
                 dlog(&format!("RunEvent::Opened {} urls: {:?}",
                     urls.len(),
@@ -1362,7 +1472,8 @@ pub fn run() {
                     }
                 }
             }
-            #[cfg(not(target_os = "ios"))]
+            // macOS-only (tauri app.rs:277): it wraps applicationShouldHandleReopen.
+            #[cfg(target_os = "macos")]
             RunEvent::Reopen { has_visible_windows, .. } => {
                 dlog(&format!("RunEvent::Reopen has_visible_windows={}", has_visible_windows));
                 // Always reveal the main window on dock reactivation. The
@@ -1564,6 +1675,40 @@ fn menu_label(locale: &str, key: &str) -> String {
         // Sticky notification titles produced by host warnings
         "notif.largeFiles" => ("{n} large files not committed", "{n} 个大文件未进 commit", "{n} 件の大きなファイルは未コミット", "{n} große Dateien nicht committet"),
         "notif.syncError" => ("Vault sync failed", "Vault 同步失败", "Vault 同期に失敗", "Vault-Synchronisierung fehlgeschlagen"),
+        // Vault-root guard (sotvault::root_guard). The picker refuses these
+        // locations outright, so the message has to say *why* — otherwise the
+        // dialog just looks broken.
+        "vault.reject.title" => (
+            "That folder can't be a vault",
+            "这个文件夹不能作为 vault",
+            "このフォルダは vault にできません",
+            "Dieser Ordner kann kein Vault sein",
+        ),
+        "vault.reject.notADirectory" => (
+            "Pick an existing folder.",
+            "请选择一个已存在的文件夹。",
+            "既存のフォルダーを選んでください。",
+            "Bitte einen vorhandenen Ordner wählen.",
+        ),
+        "vault.reject.filesystemRoot" => (
+            "A drive or share root would put your whole disk under version control. Pick a folder inside it.",
+            "选中盘符/共享根目录会把整块磁盘纳入版本控制。请选择它下面的某个文件夹。",
+            "ドライブ直下を選ぶとディスク全体がバージョン管理下に入ります。その中のフォルダーを選んでください。",
+            "Ein Laufwerks-Root stellt die ganze Festplatte unter Versionskontrolle. Bitte einen Unterordner wählen.",
+        ),
+        "vault.reject.homeDirectory" => (
+            "The home folder itself would sweep credentials (.ssh, .aws) into every auto-commit. Pick a folder inside it.",
+            "直接选主目录会把 .ssh、.aws 等凭证卷进每一次自动提交。请选择它下面的某个文件夹。",
+            "ホーム直下は .ssh や .aws などの認証情報まで自動コミットに含めます。その中のフォルダーを選んでください。",
+            "Der Home-Ordner selbst zöge Zugangsdaten (.ssh, .aws) in jeden Auto-Commit. Bitte einen Unterordner wählen.",
+        ),
+        "vault.reject.systemDirectory" => (
+            "This belongs to the operating system. Pick a folder in your own documents.",
+            "这是操作系统自己的目录。请在你的文档目录下选择。",
+            "ここは OS の領域です。ご自身のドキュメント配下を選んでください。",
+            "Dieser Ordner gehört dem Betriebssystem. Bitte einen eigenen Dokumentordner wählen.",
+        ),
+
         // Sync status line / tooltip
         "sync.label" => ("Sync", "同步", "同期", "Sync"),
         "sync.neverSynced" => ("never synced", "从未同步", "未同期", "noch nie synchronisiert"),
@@ -1900,13 +2045,13 @@ fn build_menu<R: tauri::Runtime>(
         .separator()
         .item(
             &MenuItemBuilder::with_id("preferences", menu_label(locale, "app.preferences"))
-                .accelerator("Cmd+,")
+                .accelerator("CmdOrCtrl+,")
                 .build(app)?,
         )
         .separator()
         .item(&PredefinedMenuItem::services(app, Some(&menu_label(locale, "sys.services")))?)
         .separator()
-        .item(&MenuItemBuilder::with_id("hide-app", menu_label(locale, "app.hide")).accelerator("Cmd+Shift+H").build(app)?)
+        .item(&MenuItemBuilder::with_id("hide-app", menu_label(locale, "app.hide")).accelerator("CmdOrCtrl+Shift+H").build(app)?)
         .item(&PredefinedMenuItem::hide_others(app, Some(&menu_label(locale, "sys.hideOthers")))?)
         .item(&PredefinedMenuItem::show_all(app, Some(&menu_label(locale, "sys.showAll")))?)
         .separator()
@@ -1922,32 +2067,32 @@ fn build_menu<R: tauri::Runtime>(
         .build()?;
 
     let file_b = SubmenuBuilder::new(app, menu_label(locale, "menu.file"))
-        .item(&MenuItemBuilder::with_id("new", menu_label(locale, "file.new")).accelerator("Cmd+N").build(app)?)
+        .item(&MenuItemBuilder::with_id("new", menu_label(locale, "file.new")).accelerator("CmdOrCtrl+N").build(app)?)
         // "New Base" creates a .base table file. It used to ride in on the
         // bundled `base` plugin manifest; the feature (BaseView, .base parsing,
         // lib/base/create.ts) has always been core, so the menu item is core now
         // too — next to New, rather than under Plugins where plugin-contributed
         // items land.
         .item(&MenuItemBuilder::with_id("new-base", menu_label(locale, "file.newBase")).build(app)?)
-        .item(&MenuItemBuilder::with_id("open", menu_label(locale, "file.open")).accelerator("Cmd+O").build(app)?)
+        .item(&MenuItemBuilder::with_id("open", menu_label(locale, "file.open")).accelerator("CmdOrCtrl+O").build(app)?)
         .item(&recent_menu)
         .separator()
         .item(
             &MenuItemBuilder::with_id("close-tab", menu_label(locale, "file.closeTab"))
-                .accelerator("Cmd+W")
+                .accelerator("CmdOrCtrl+W")
                 .build(app)?,
         )
         .separator()
-        .item(&MenuItemBuilder::with_id("save", menu_label(locale, "file.save")).accelerator("Cmd+S").build(app)?)
+        .item(&MenuItemBuilder::with_id("save", menu_label(locale, "file.save")).accelerator("CmdOrCtrl+S").build(app)?)
         .item(
             &MenuItemBuilder::with_id("save-as", menu_label(locale, "file.saveAs"))
-                .accelerator("Cmd+Shift+S")
+                .accelerator("CmdOrCtrl+Shift+S")
                 .build(app)?,
         )
         .separator()
         .item(
             &MenuItemBuilder::with_id("print", menu_label(locale, "file.print"))
-                .accelerator("Cmd+P")
+                .accelerator("CmdOrCtrl+P")
                 .build(app)?,
         )
         .separator()
@@ -1955,7 +2100,7 @@ fn build_menu<R: tauri::Runtime>(
         .item(&MenuItemBuilder::with_id("view-sync-source", menu_label(locale, "file.viewSyncSource")).build(app)?)
         .item(
             &MenuItemBuilder::with_id("share", menu_label(locale, "file.share"))
-                .accelerator("Cmd+Shift+L")
+                .accelerator("CmdOrCtrl+Shift+L")
                 .build(app)?,
         )
         .item(&MenuItemBuilder::with_id("unshare", menu_label(locale, "file.unshare")).build(app)?)
@@ -1982,16 +2127,16 @@ fn build_menu<R: tauri::Runtime>(
         // apply the SAME select-all it already exposes via its right-click
         // menu (RichEditor: ProseMirror AllSelection; SourceView: textarea
         // .select()) — see `mdeditor:select-all` in App.svelte.
-        .item(&MenuItemBuilder::with_id("select-all", menu_label(locale, "sys.selectAll")).accelerator("Cmd+A").build(app)?)
+        .item(&MenuItemBuilder::with_id("select-all", menu_label(locale, "sys.selectAll")).accelerator("CmdOrCtrl+A").build(app)?)
         .separator()
-        .item(&MenuItemBuilder::with_id("find", menu_label(locale, "edit.find")).accelerator("Cmd+F").build(app)?)
+        .item(&MenuItemBuilder::with_id("find", menu_label(locale, "edit.find")).accelerator("CmdOrCtrl+F").build(app)?)
         .item(&MenuItemBuilder::with_id("find-replace", menu_label(locale, "edit.findReplace")).build(app)?);
     let edit_menu: Submenu<R> = edit_b.build()?;
 
     let view_b = SubmenuBuilder::new(app, menu_label(locale, "menu.view"))
         .item(
             &MenuItemBuilder::with_id("toggle-mode", menu_label(locale, "view.toggleMode"))
-                .accelerator("Cmd+/")
+                .accelerator("CmdOrCtrl+/")
                 .build(app)?,
         )
         .item(&PredefinedMenuItem::fullscreen(app, None)?)
@@ -1999,18 +2144,18 @@ fn build_menu<R: tauri::Runtime>(
         .item(&MenuItemBuilder::with_id("open-insights", menu_label(locale, "view.insights")).build(app)?)
         .item(&MenuItemBuilder::with_id("open-logs", menu_label(locale, "view.logs")).build(app)?)
         .separator()
-        .item(&MenuItemBuilder::with_id("toggle-folder-view", menu_label(locale, "view.folderView")).accelerator("Cmd+Shift+E").build(app)?)
-        .item(&MenuItemBuilder::with_id("toggle-sidecar-notes", menu_label(locale, "view.sidecarNotes")).accelerator("Cmd+Shift+O").build(app)?)
-        .item(&MenuItemBuilder::with_id("toggle-git-history", menu_label(locale, "view.history")).accelerator("Cmd+Shift+Y").build(app)?);
+        .item(&MenuItemBuilder::with_id("toggle-folder-view", menu_label(locale, "view.folderView")).accelerator("CmdOrCtrl+Shift+E").build(app)?)
+        .item(&MenuItemBuilder::with_id("toggle-sidecar-notes", menu_label(locale, "view.sidecarNotes")).accelerator("CmdOrCtrl+Shift+O").build(app)?)
+        .item(&MenuItemBuilder::with_id("toggle-git-history", menu_label(locale, "view.history")).accelerator("CmdOrCtrl+Shift+Y").build(app)?);
     let view_menu: Submenu<R> = view_b.build()?;
 
     let window_b = SubmenuBuilder::new(app, menu_label(locale, "menu.window"))
         .item(&PredefinedMenuItem::minimize(app, Some(&menu_label(locale, "sys.minimize")))?)
         .item(&PredefinedMenuItem::maximize(app, Some(&menu_label(locale, "sys.maximize")))?)
         .separator()
-        .item(&MenuItemBuilder::with_id("zoom-in", menu_label(locale, "window.zoomIn")).accelerator("Cmd+=").build(app)?)
-        .item(&MenuItemBuilder::with_id("zoom-out", menu_label(locale, "window.zoomOut")).accelerator("Cmd+-").build(app)?)
-        .item(&MenuItemBuilder::with_id("zoom-reset", menu_label(locale, "window.actualSize")).accelerator("Cmd+0").build(app)?);
+        .item(&MenuItemBuilder::with_id("zoom-in", menu_label(locale, "window.zoomIn")).accelerator("CmdOrCtrl+=").build(app)?)
+        .item(&MenuItemBuilder::with_id("zoom-out", menu_label(locale, "window.zoomOut")).accelerator("CmdOrCtrl+-").build(app)?)
+        .item(&MenuItemBuilder::with_id("zoom-reset", menu_label(locale, "window.actualSize")).accelerator("CmdOrCtrl+0").build(app)?);
     let window_menu: Submenu<R> = window_b.build()?;
 
     let help_b = SubmenuBuilder::new(app, menu_label(locale, "menu.help"))

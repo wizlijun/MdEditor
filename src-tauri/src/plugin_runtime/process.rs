@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::{oneshot, Mutex};
 
 pub const DEACTIVATE_GRACE_SECS: u64 = 5; // spec §4.2
@@ -64,7 +64,7 @@ impl PluginProcess {
         timeout_secs: u64,
         host_sink: HostSink,
     ) -> Result<Arc<Self>, String> {
-        let mut cmd = Command::new(binary);
+        let mut cmd = crate::platform::tokio_command(binary);
         // Sanitize the child environment: native plugins are trusted by
         // signature, but inheriting the full app environment would needlessly
         // leak host secrets (API keys etc.) into every plugin subprocess —
@@ -72,8 +72,12 @@ impl PluginProcess {
         // everything, then re-add a minimal safe allowlist. openclaw needs
         // HOME/PATH to resolve its UDS socket path; these are covered.
         // Do NOT add secret-bearing vars here.
+        // The allowlist is per-platform: on Windows a bare `env_clear()` is
+        // fatal rather than merely restrictive — without `SystemRoot` the
+        // loader cannot initialise and the child dies before `main`. See
+        // `platform::plugin_env_allowlist`.
         cmd.env_clear();
-        for key in ["HOME", "PATH", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR"] {
+        for key in crate::platform::plugin_env_allowlist() {
             if let Ok(v) = std::env::var(key) {
                 cmd.env(key, v);
             }

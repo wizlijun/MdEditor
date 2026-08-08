@@ -271,7 +271,26 @@ pub fn rewrite_url_value(value: &str, asset_dir: &str) -> String {
     if !normalized.starts_with(base) {
         return "about:blank".to_string();
     }
-    format!("file://{}", normalized.display())
+    file_url(&normalized)
+}
+
+/// `file:` URL for an absolute local path.
+///
+/// A `file:` URL always uses forward slashes, so a Windows path has to be
+/// converted — `format!("file://{}", path.display())` emitted
+/// `file://C:\themes\x\fonts\y.woff2`, which no webview will load, silently
+/// killing every font and image a custom theme references.
+///
+/// The drive-letter form also needs the third slash: `file:///C:/…`. On unix
+/// the path already starts with `/`, so `file://` + `/Users/…` yields the same
+/// three slashes it always did — this is byte-identical there.
+fn file_url(path: &Path) -> String {
+    let s = path.display().to_string().replace('\\', "/");
+    if s.starts_with('/') {
+        format!("file://{s}")
+    } else {
+        format!("file:///{s}")
+    }
 }
 
 fn normalize(p: &Path) -> PathBuf {

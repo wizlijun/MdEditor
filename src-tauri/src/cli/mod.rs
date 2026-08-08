@@ -31,12 +31,18 @@ pub fn is_enabled(
 }
 
 /// Resolve the app config directory (where settings.json lives).
+///
+/// `dirs::config_dir()` IS `~/Library/Application Support` on macOS, so this is
+/// byte-identical to the previous hand-rolled `$HOME/Library/Application
+/// Support` there — and it is the only form that works elsewhere. The old code
+/// keyed off `$HOME`, which Windows does not set: it fell through to `"."` and
+/// scattered settings.json into whatever directory the app happened to be
+/// launched from. Matches `shared_config::config_path` and `runner.rs`, which
+/// were already on `dirs::`.
 pub fn resolve_config_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        return std::path::Path::new(&home)
-            .join("Library").join("Application Support").join(APP_BUNDLE_ID);
-    }
-    PathBuf::from(".")
+    dirs::config_dir()
+        .map(|d| d.join(APP_BUNDLE_ID))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Detect whether the current process should run in CLI mode.

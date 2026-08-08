@@ -1,5 +1,6 @@
 use std::path::Path;
-use std::process::Command;
+
+use crate::platform::command;
 
 use super::SyncReport;
 
@@ -9,7 +10,7 @@ pub type GitResult<T> = Result<T, String>;
 /// runnable, otherwise `None`. Used to surface "git unavailable" prominently
 /// instead of silently reporting a healthy sync.
 pub fn version() -> Option<String> {
-    let output = Command::new("git").arg("--version").output().ok()?;
+    let output = command("git").arg("--version").output().ok()?;
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
@@ -18,7 +19,7 @@ pub fn version() -> Option<String> {
 }
 
 pub fn run_git(repo: &Path, args: &[&str]) -> GitResult<String> {
-    let output = Command::new("git")
+    let output = command("git")
         .args(args)
         .current_dir(repo)
         .output()
@@ -202,12 +203,22 @@ mod gate_tests {
     /// bare 远端 + 已推首个提交的工作仓库,返回 (work, bare)。
     fn init_remote_pair(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
         let bare = root.join("remote.git");
-        git(root, &["init", "--bare", "-q", "remote.git"]);
+        // `-b main` explicitly: without it the bare repo's HEAD follows the
+        // machine's `init.defaultBranch` (still `master` by default), so a
+        // later `clone` lands on a nonexistent branch and `push origin main`
+        // dies with "src refspec main does not match any". The work tree below
+        // already pins `-b main`; the remote must agree.
+        git(root, &["init", "--bare", "-q", "-b", "main", "remote.git"]);
         let work = root.join("work");
         std::fs::create_dir(&work).unwrap();
         git(&work, &["init", "-q", "-b", "main"]);
         git(&work, &["config", "user.email", "t@t"]);
         git(&work, &["config", "user.name", "t"]);
+        // These tests assert file contents byte-for-byte. A machine with the
+        // Windows Git default `core.autocrlf=true` would rewrite LF to CRLF on
+        // checkout and every such assertion would fail for reasons unrelated to
+        // sync. Pin it per-repo rather than depending on the host's global.
+        git(&work, &["config", "core.autocrlf", "false"]);
         git(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
         std::fs::write(work.join("note.md"), "base\n").unwrap();
         git(&work, &["add", "note.md"]);
@@ -247,6 +258,7 @@ mod gate_tests {
             git(root, &["clone", "-q", "remote.git", "other"]);
             git(&other, &["config", "user.email", "o@o"]);
             git(&other, &["config", "user.name", "o"]);
+            git(&other, &["config", "core.autocrlf", "false"]);
         }
         std::fs::write(other.join(file), content).unwrap();
         git(&other, &["add", "-A"]);
@@ -254,21 +266,31 @@ mod gate_tests {
         git(&other, &["push", "-q", "origin", "main"]);
     }
 
-    /// 在 `f` 执行期间以最高频率读 `path`,返回「是否读到过不含 `marker` 的内容」。
-    fn watch_for_revert<R>(path: &std::path::Path, marker: &str, f: impl FnOnce() -> R) -> (R, bool) {
+    /// 在 `f` 执行期间以最高频率读 `path`,返回「读到过的、不含 `marker` 的内容」
+    /// (`None` = 从没读到过)。
+    ///
+    /// 返回内容而不是 bool:一次「不含标记」的读有两种可能 —— 工作区真的被按回
+    /// 了 HEAD,或者读者撞上了 git 的非原子写(open→truncate→write)读到半截。
+    /// 前者是回归,后者是采样噪声,只有把实际内容打出来才分得清。空串一律按撕裂
+    /// 读丢弃:任何一个真实版本的 note.md 都不是空的。
+    fn watch_for_revert<R>(
+        path: &std::path::Path,
+        marker: &str,
+        f: impl FnOnce() -> R,
+    ) -> (R, Option<String>) {
         use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
+        use std::sync::{Arc, Mutex};
 
         let stop = Arc::new(AtomicBool::new(false));
-        let reverted = Arc::new(AtomicBool::new(false));
+        let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let sampler = {
-            let (stop, reverted) = (stop.clone(), reverted.clone());
+            let (stop, seen) = (stop.clone(), seen.clone());
             let (path, marker) = (path.to_path_buf(), marker.to_string());
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     if let Ok(s) = std::fs::read_to_string(&path) {
-                        if !s.contains(&marker) {
-                            reverted.store(true, Ordering::Relaxed);
+                        if !s.is_empty() && !s.contains(&marker) {
+                            *seen.lock().unwrap() = Some(s);
                         }
                     }
                 }
@@ -277,7 +299,8 @@ mod gate_tests {
         let out = f();
         stop.store(true, Ordering::Relaxed);
         sampler.join().unwrap();
-        (out, reverted.load(Ordering::Relaxed))
+        let seen = seen.lock().unwrap().clone();
+        (out, seen)
     }
 
     /// 回归(2026-08-06):同步绝不能把工作区按回 HEAD。
@@ -298,7 +321,7 @@ mod gate_tests {
         let (res, reverted) = watch_for_revert(&note, "USER-EDIT", || sync(&work, "origin", "main"));
         res.unwrap();
 
-        assert!(!reverted, "同步期间用户的编辑从磁盘上消失过");
+        assert_eq!(reverted, None, "同步期间用户的编辑从磁盘上消失过,读到的是");
         let reflog = run_git(&work, &["reflog", "--date=iso"]).unwrap();
         assert!(
             !reflog.contains("reset: moving to HEAD"),
@@ -324,7 +347,7 @@ mod gate_tests {
         let (res, reverted) = watch_for_revert(&note, "USER-EDIT", || sync(&work, "origin", "main"));
         res.unwrap();
 
-        assert!(!reverted, "分叉合并期间用户的编辑从磁盘上消失过");
+        assert_eq!(reverted, None, "分叉合并期间用户的编辑从磁盘上消失过,读到的是");
         assert_eq!(std::fs::read_to_string(&note).unwrap(), "base\nUSER-EDIT\n");
         assert_eq!(
             std::fs::read_to_string(work.join("theirs.md")).unwrap(),
