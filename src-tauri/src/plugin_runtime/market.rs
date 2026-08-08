@@ -83,6 +83,48 @@ pub fn parse_index(bytes: &[u8]) -> Result<RegistryIndex, String> {
     serde_json::from_slice(bytes).map_err(|e| format!("invalid registry index: {e}"))
 }
 
+/// Flatten an error and its `source()` chain into one line.
+///
+/// `reqwest::Error`'s own Display stops at "error sending request for url (…)"
+/// — the part that says *what actually went wrong* (connection refused, dns
+/// failure, TLS) lives in the source chain. Reporting only the head turns every
+/// network fault into the same unactionable sentence.
+fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = e.to_string();
+    let mut cursor = e.source();
+    while let Some(src) = cursor {
+        let text = src.to_string();
+        // Skip links that only restate what the caller already printed.
+        if !out.contains(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        cursor = src.source();
+    }
+    out
+}
+
+/// A note about the proxy, when one is configured.
+///
+/// reqwest routes through `HTTPS_PROXY` / `HTTP_PROXY` silently, so a stale
+/// value fails exactly like a dead registry: same message, completely different
+/// fix. Naming the variable and its value turns a bug report into a one-line
+/// correction. Checked in reqwest's own precedence order for an https URL.
+fn proxy_hint() -> String {
+    for key in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"] {
+        match std::env::var(key) {
+            Ok(value) if !value.trim().is_empty() => return format!(" (proxied via {key}={value})"),
+            _ => continue,
+        }
+    }
+    String::new()
+}
+
+/// Network errors, reported so the reader can act on them.
+fn net_err(what: &str, e: &(dyn std::error::Error + 'static)) -> String {
+    format!("{what}: {}{}", error_chain(e), proxy_hint())
+}
+
 /// `GET {base}/api/index.json` → [`parse_index`]. 10s timeout.
 pub async fn fetch_index(base_url: &str) -> Result<RegistryIndex, String> {
     let url = format!("{}/api/index.json", base_url.trim_end_matches('/'));
@@ -94,14 +136,14 @@ pub async fn fetch_index(base_url: &str) -> Result<RegistryIndex, String> {
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("fetch index: {e}"))?;
+        .map_err(|e| net_err("fetch index", &e))?;
     if !resp.status().is_success() {
         return Err(format!("registry returned {} for {url}", resp.status()));
     }
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| format!("read index body: {e}"))?;
+        .map_err(|e| net_err("read index body", &e))?;
     parse_index(&bytes)
 }
 
@@ -161,7 +203,7 @@ pub async fn download_via<F: FnMut(u64, Option<u64>)>(
         .get(url)
         .send()
         .await
-        .map_err(|e| format!("download: {e}"))?;
+        .map_err(|e| net_err("download", &e))?;
     if !resp.status().is_success() {
         return Err(format!("download returned {} for {url}", resp.status()));
     }
@@ -179,7 +221,7 @@ pub async fn download_via<F: FnMut(u64, Option<u64>)>(
     while let Some(chunk) = resp
         .chunk()
         .await
-        .map_err(|e| format!("download stream: {e}"))?
+        .map_err(|e| net_err("download stream", &e))?
     {
         if out.len() as u64 + chunk.len() as u64 > MAX_PKG_BYTES {
             return Err(format!(
@@ -242,6 +284,77 @@ pub fn registry_base_url<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two-level error whose head says nothing useful — the shape
+    /// `reqwest::Error` has.
+    #[derive(Debug)]
+    struct Layered(&'static str, Option<Box<Layered>>);
+    impl std::fmt::Display for Layered {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::error::Error for Layered {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|e| e as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    #[test]
+    fn error_chain_reaches_the_actual_cause() {
+        let e = Layered(
+            "error sending request for url (https://plugins.notemd.net/api/index.json)",
+            Some(Box::new(Layered(
+                "tcp connect error",
+                Some(Box::new(Layered("connection refused (os error 10061)", None))),
+            ))),
+        );
+        let s = error_chain(&e);
+        assert!(s.contains("error sending request"), "{s}");
+        assert!(s.contains("tcp connect error"), "{s}");
+        // The whole point: the reason a user can act on must survive.
+        assert!(s.contains("os error 10061"), "{s}");
+    }
+
+    #[test]
+    fn error_chain_does_not_repeat_a_link_already_shown() {
+        let e = Layered("same text", Some(Box::new(Layered("same text", None))));
+        assert_eq!(error_chain(&e), "same text");
+    }
+
+    #[test]
+    fn error_chain_handles_a_lone_error() {
+        assert_eq!(error_chain(&Layered("alone", None)), "alone");
+    }
+
+    /// `proxy_hint` reads process-wide env, so these two cases share one test —
+    /// splitting them would let a parallel run observe the other's mutation.
+    #[test]
+    fn proxy_hint_names_the_variable_when_set() {
+        let keys = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"];
+        let saved: Vec<_> = keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+        for k in keys {
+            std::env::remove_var(k);
+        }
+
+        assert_eq!(proxy_hint(), "", "no proxy set → no hint");
+
+        std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:1087");
+        let hint = proxy_hint();
+        assert!(hint.contains("HTTPS_PROXY"), "{hint}");
+        assert!(hint.contains("127.0.0.1:1087"), "{hint}");
+
+        // Blank must count as unset, not as "proxied via ''".
+        std::env::set_var("HTTPS_PROXY", "   ");
+        assert_eq!(proxy_hint(), "");
+
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+    }
 
     fn valid_index_json() -> &'static str {
         r#"{
