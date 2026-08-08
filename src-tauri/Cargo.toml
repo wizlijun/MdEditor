@@ -79,9 +79,10 @@ objc2-core-location = "0.3"
 block2 = "0.6"
 
 [target.'cfg(target_os = "ios")'.dependencies]
-git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2", "vendored-openssl"] }
-
-[target.'cfg(not(target_os = "ios"))'.dependencies]
+# iOS ONLY. Desktop git goes through the external `git` CLI (vault_sync/git_ops.rs);
+# `git2::` appears nowhere outside src/vault_ios/. Keeping it as a desktop dep
+# also dragged in `vendored-openssl`, which on windows-msvc builds OpenSSL from
+# source and therefore needs Perl + NASM on PATH — a build blocker for nothing.
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2", "vendored-openssl"] }
 
 [dev-dependencies]
