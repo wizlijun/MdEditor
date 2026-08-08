@@ -4,6 +4,7 @@
   import { openFile } from '../../lib/tabs.svelte'
   import { t } from '../../lib/i18n/store.svelte'
   import InlineRender from './InlineRender.svelte'
+  import { basename } from '../../lib/paths'
 
   let { page = null, excludeFile = null }: { page?: string | null; excludeFile?: string | null } = $props()
   let hits = $derived.by(() => {
@@ -17,7 +18,7 @@
   <h3>{t('outline.backlinks')} <span class="count">{hits.length}</span></h3>
   {#each hits as hit}
     <button class="hit" onclick={() => void openFile(hit.file)}>
-      <span class="file">{hit.file.split('/').pop()}</span>
+      <span class="file">{basename(hit.file)}</span>
       <span class="text"><InlineRender content={hit.text} /></span>
     </button>
   {/each}

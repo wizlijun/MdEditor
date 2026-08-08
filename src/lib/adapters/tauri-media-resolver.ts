@@ -1,5 +1,6 @@
 import { readFile } from '@tauri-apps/plugin-fs'
 import type { MediaResolver } from '@moraya/core'
+import { basename } from '../paths'
 
 const blobCache = new Map<string, string>()
 
@@ -17,9 +18,9 @@ const MEDIA_MIME: Record<string, string> = {
 }
 
 function pathExt(path: string): string {
-  const basename = path.split('/').pop() ?? ''
-  const dot = basename.lastIndexOf('.')
-  return dot > 0 ? basename.slice(dot + 1).toLowerCase() : ''
+  const base = basename(path)
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(dot + 1).toLowerCase() : ''
 }
 
 function buildBlob(bytes: Uint8Array, mime: string): string {

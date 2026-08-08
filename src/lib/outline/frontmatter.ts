@@ -1,6 +1,7 @@
 // src/lib/outline/frontmatter.ts
 import { parseDocument, isMap } from 'yaml'
 import { CONCEPT_TYPE, touchConceptFrontmatter, yamlSafeNode, type ConceptMeta } from '../okf/concept'
+import { normalize } from '../paths'
 
 export interface TouchOpts {
   /** 缺 title 时写入的标题(原始标题,未 slug 化) */
@@ -49,7 +50,7 @@ export function outlineConceptType(
   path: string,
   dirs: { wikipage: string; dailynote: string },
 ): string {
-  const segments = path.split('/').slice(0, -1)
+  const segments = normalize(path).split('/').slice(0, -1)
   if (segments.includes(dirs.dailynote)) return CONCEPT_TYPE.dailyNote
   if (segments.includes(dirs.wikipage)) return CONCEPT_TYPE.wikiPage
   return CONCEPT_TYPE.outlineNote

@@ -1,13 +1,9 @@
 import { parse } from 'yaml'
-import { joinPath } from '../fs'
+import { joinPath, dirname as parentDir } from '../paths'
 import type { FileRecord } from './model'
 
-// Inlined (not imported from folder-view.svelte.ts) so this module stays free of
+// `paths.ts` (not folder-view.svelte.ts) so this module stays free of
 // Tauri/runes imports and scan.test.ts runs hermetically.
-const parentDir = (p: string) => {
-  const i = p.replace(/\/+$/, '').lastIndexOf('/')
-  return i <= 0 ? '/' : p.slice(0, i)
-}
 
 export interface ScanDeps {
   readDir: (dir: string) => Promise<{ name: string; isDirectory: boolean }[]>

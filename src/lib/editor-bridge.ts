@@ -7,10 +7,13 @@ import { spreadsheetFactory } from './adapters/spreadsheet-factory'
 import { frontmatterFactory } from './frontmatter-view'
 import { activeTab } from './tabs.svelte'
 import { analyticsPluginForEditor } from './insights/tracker.svelte'
+import { isApplePlatformSync } from './platform-sync'
 
 const platform = {
   getCurrentFilePath: () => activeTab()?.filePath ?? null,
-  isMacOS: true,
+  // Gates moraya-core's WKWebView workarounds; must not be hardcoded true or
+  // they run under WebView2 too. See `isApplePlatformSync`.
+  isMacOS: isApplePlatformSync(),
 }
 
 /** Update the base directory used to resolve relative image paths.

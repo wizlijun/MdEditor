@@ -4,6 +4,7 @@ import { Store } from '@tauri-apps/plugin-store'
 import { SvelteMap } from 'svelte/reactivity'
 import { SvelteSet } from 'svelte/reactivity'
 import { classifyPath, joinPath, type FileKind } from './fs'
+import { dirname as parentDir, isWithinDir } from './paths'
 import { companionPathFor } from './outline/store.svelte'
 import type { SotRecord } from './sotvault-logic'
 
@@ -27,20 +28,11 @@ export interface FolderEntry {
   pinned?: boolean
 }
 
-/** Parent directory of a file or directory path. Returns '/' at the root. */
-export function parentDir(path: string): string {
-  const trimmed = path.length > 1 ? path.replace(/\/+$/, '') : path
-  const i = trimmed.lastIndexOf('/')
-  if (i <= 0) return '/'
-  return trimmed.slice(0, i)
-}
-
-/** True when `file` is strictly inside directory `dir` (any depth). */
-export function isWithinDir(file: string, dir: string): boolean {
-  const d = dir.length > 1 ? dir.replace(/\/+$/, '') : dir
-  const prefix = d === '/' ? '/' : d + '/'
-  return file !== d && file.startsWith(prefix)
-}
+/** Parent directory of a file or directory path. Returns the path's own root
+ *  ('/' on unix, 'D:/' on Windows) at the top.
+ *  Imported *and* re-exported: `syncToActiveFile` below calls `parentDir`
+ *  locally, and a bare `export … from` would not bind it in this scope. */
+export { parentDir, isWithinDir }
 
 /**
  * Compile a filter query into a name matcher. Empty/blank query → `null`

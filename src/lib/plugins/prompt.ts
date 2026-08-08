@@ -1,4 +1,4 @@
-import { basename } from '../fs'
+import { basename, dirname } from '../paths'
 
 /**
  * Render a `default_filename` template against the active tab's path.
@@ -20,8 +20,7 @@ export function renderFilenameTemplate(template: string, filePath: string | null
   // dot <= 0 catches no-extension and dotfile cases (".env" → stem ".env")
   const stem = dot <= 0 ? base : base.slice(0, dot)
   const ext  = dot <= 0 ? '' : base.slice(dot + 1)
-  const slash = path.lastIndexOf('/')
-  const dir  = slash <= 0 ? '/' : path.slice(0, slash)
+  const dir  = dirname(path)
 
   return template.replace(/\{(basename|stem|ext|dir)\}/g, (_, name: string) => {
     switch (name) {

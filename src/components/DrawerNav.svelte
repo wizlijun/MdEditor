@@ -6,6 +6,7 @@
   import { showError } from '../lib/dialogs'
   import VaultBrowser from './VaultBrowser.svelte'
   import { t } from '../lib/i18n/store.svelte'
+  import { basename } from '../lib/paths'
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
   let recents = $derived(mergedRecents.paths.length ? mergedRecents.paths : getRecentFiles())
@@ -15,10 +16,6 @@
     try { await openFile(p) } catch (e) { console.warn(e); showError(String(e)) }
   }
 
-  function basename(p: string): string {
-    const i = p.lastIndexOf('/')
-    return i >= 0 ? p.slice(i + 1) : p
-  }
 </script>
 
 <aside class:open class="drawer">

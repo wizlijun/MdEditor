@@ -11,6 +11,7 @@ import { bridgeMediaResolver } from './media'
 // placeholder-plugin only depends on prosemirror-state/view — zero Tauri IPC,
 // so it clears the kit's dependency allowlist.
 import { placeholderPlugin } from '../lib/placeholder-plugin'
+import { isApplePlatformSync } from '../lib/platform-sync'
 import { powerModePlugin, type ConfigGetter } from '../lib/power-mode/plugin'
 import type { Plugin } from 'prosemirror-state'
 
@@ -70,7 +71,7 @@ export async function mountRich(
     container: host,
     initialContent: initial,
     mediaResolver: bridgeMediaResolver(vaultRoot),
-    platform: { getCurrentFilePath: () => null, isMacOS: true },
+    platform: { getCurrentFilePath: () => null, isMacOS: isApplePlatformSync() },
     // Math / mermaid pull heavy renderers the kit's consumers do not need
     // (spec §3.4: kit options are narrowed for plugin windows).
     enableMath: false,

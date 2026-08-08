@@ -10,6 +10,7 @@
 // differs. Keep the two in sync when either changes.
 
 import type { MediaResolver } from '@moraya/core'
+import { basename } from '../lib/paths'
 
 const blobCache = new Map<string, string>()
 
@@ -36,9 +37,9 @@ function bridge(): Bridge | null {
 }
 
 function pathExt(path: string): string {
-  const basename = path.split('/').pop() ?? ''
-  const dot = basename.lastIndexOf('.')
-  return dot > 0 ? basename.slice(dot + 1).toLowerCase() : ''
+  const base = basename(path)
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(dot + 1).toLowerCase() : ''
 }
 
 function buildBlob(bytes: Uint8Array, mime: string): string {
