@@ -626,7 +626,12 @@ mod tests {
         assert_eq!(p.locale, "zh-CN");
         assert_eq!(p.theme, "");
         assert_eq!(p.plugin_root, "/plugins/test.plugin/current");
-        assert_eq!(p.data_dir, "/appdata/plugin_data/test.plugin");
+        // Compare against a `join`ed path, not a POSIX literal: `data_dir` is
+        // built with `PathBuf::join`, so the separator is native.
+        assert_eq!(
+            std::path::Path::new(&p.data_dir),
+            std::path::Path::new("/appdata").join("plugin_data").join("test.plugin"),
+        );
         assert!(!std::path::Path::new(&p.data_dir).exists(), "data_dir must not be created");
     }
 

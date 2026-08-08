@@ -17,9 +17,28 @@ const BUDGET_MS: u128 = 2500;
 #[cfg(not(debug_assertions))]
 const BUDGET_MS: u128 = 500;
 
+/// Put `cmd` into CLI mode.
+///
+/// unix fakes `argv[0]` (that is the real dispatch signal there — a bin-dir
+/// symlink named `notemd`). Windows has no `arg0`, and the GUI executable is
+/// literally `notemd.exe`, so argv[0] cannot disambiguate: `is_cli_mode` keys
+/// off an explicit `--cli` flag there (see cli/mod.rs and the NSIS PATH shim in
+/// docs/2026-08-08-pc-port-refactor-plan.md §5.1). Both paths reach the same
+/// dispatch code, which is what this test measures.
+fn cli_mode(cmd: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.arg0("notemd");
+    }
+    #[cfg(windows)]
+    {
+        cmd.arg("--cli");
+    }
+}
+
 #[test]
 fn cli_help_returns_quickly() {
-    use std::os::unix::process::CommandExt;
     let bin = PathBuf::from(env!("CARGO_BIN_EXE_notemd"));
     let home = std::env::temp_dir().join(format!(
         "notemd-timing-{}-{}",
@@ -32,7 +51,7 @@ fn cli_help_returns_quickly() {
     // We're measuring dispatch overhead, not page-fault-in-the-fs cost.
     {
         let mut warm = Command::new(&bin);
-        warm.arg0("notemd");
+        cli_mode(&mut warm);
         warm.arg("help");
         warm.env("HOME", home.to_str().unwrap());
         let _ = warm.output();
@@ -40,7 +59,7 @@ fn cli_help_returns_quickly() {
 
     let start = Instant::now();
     let mut cmd = Command::new(bin);
-    cmd.arg0("notemd");
+    cli_mode(&mut cmd);
     cmd.arg("help");
     cmd.env("HOME", home.to_str().unwrap());
     let output = cmd.output().expect("spawn");
