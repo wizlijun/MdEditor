@@ -36,6 +36,17 @@
   Skip the test suites. The release path runs them by default for the same
   reason release.sh does.
 
+.PARAMETER Upload
+  Attach the staged files to the GitHub release for this version's tag.
+
+  Uses the REST API with $env:GH_TOKEN (or $env:GITHUB_TOKEN) rather than the
+  gh CLI: gh is not installed on a stock Windows box, and `gh auth login` is
+  interactive, which rules it out for an unattended release. A token needs the
+  `contents: write` scope on the repo.
+
+  The release must already exist — this attaches to it, it does not create or
+  publish one. Assets of the same name are replaced.
+
 .EXAMPLE
   # Key already at ~/.tauri/mdeditor.key
   ./scripts/release-windows.ps1
@@ -43,12 +54,18 @@
 .EXAMPLE
   # Merge into the manifest from the current release
   ./scripts/release-windows.ps1 -LatestJson C:\tmp\latest.json
+
+.EXAMPLE
+  # Build, then attach to the existing release for this version
+  $env:GH_TOKEN = '...'
+  ./scripts/release-windows.ps1 -Upload
 #>
 [CmdletBinding()]
 param(
   [string] $LatestJson,
   [string] $OutDir,
-  [switch] $SkipTests
+  [switch] $SkipTests,
+  [switch] $Upload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -274,17 +291,76 @@ if ($LatestJson) {
 $manifest | ConvertTo-Json -Depth 10 | Set-Content -Path $outFile -Encoding utf8
 Ok "manifest: $outFile"
 
+# ---------- upload ----------
+
+# The staged set. `$updater` is the installer itself under Tauri 2, so it is
+# deduplicated here rather than uploaded twice.
+$assets = @($setup, $sigFile, $outFile) + @(if ($updater -ne $setup) { $updater })
+$assets = $assets | Select-Object -Unique
+
+if ($Upload) {
+  $token = $env:GH_TOKEN
+  if (-not $token) { $token = $env:GITHUB_TOKEN }
+  if (-not $token) { Die "-Upload needs GH_TOKEN (or GITHUB_TOKEN) with 'contents: write' on $repo" }
+
+  # .NET does not read HTTP(S)_PROXY the way curl and reqwest do, so a machine
+  # that only reaches GitHub through a proxy needs it passed explicitly.
+  $proxy = $env:HTTPS_PROXY
+  if (-not $proxy) { $proxy = $env:HTTP_PROXY }
+  $common = @{ Headers = @{
+      Authorization = "Bearer $token"
+      'User-Agent'  = 'notemd-release-windows'
+      Accept        = 'application/vnd.github+json'
+    } }
+  if ($proxy) {
+    $common.Proxy = $proxy
+    Say "uploading via proxy $proxy"
+  }
+
+  Say "resolving release $tag"
+  try {
+    $release = Invoke-RestMethod @common -Uri "https://api.github.com/repos/$repo/releases/tags/$tag"
+  } catch {
+    Die "no release found for $tag — create it first (the macOS assets normally land there via scripts/release.sh): $($_.Exception.Message)"
+  }
+  Ok "release: $($release.name) (draft=$($release.draft), prerelease=$($release.prerelease))"
+
+  foreach ($path in $assets) {
+    $name = [IO.Path]::GetFileName($path)
+
+    # Same-name assets are replaced: re-running after a fix should converge,
+    # not accumulate `foo.exe`, `foo-1.exe`.
+    $existing = $release.assets | Where-Object { $_.name -eq $name }
+    foreach ($old in $existing) {
+      Say "replacing existing asset $name"
+      Invoke-RestMethod @common -Method Delete -Uri $old.url | Out-Null
+    }
+
+    $uploadUri = ($release.upload_url -replace '\{\?name,label\}', '') + "?name=$name"
+    Say "uploading $name ($([math]::Round((Get-Item $path).Length / 1MB, 2)) MB)"
+    $headers = $common.Headers.Clone()
+    $headers['Content-Type'] = 'application/octet-stream'
+    # Not `$args` — that is an automatic variable in PowerShell.
+    $uploadArgs = @{ Headers = $headers; Method = 'Post'; Uri = $uploadUri; InFile = $path }
+    if ($proxy) { $uploadArgs.Proxy = $proxy }
+    Invoke-RestMethod @uploadArgs | Out-Null
+    Ok "uploaded $name"
+  }
+
+  Ok "https://github.com/$repo/releases/tag/$tag"
+}
+
 # ---------- summary ----------
 
 Write-Host ""
 Ok "staged for $tag"
-Write-Host "  installer : $setup"
-Write-Host "  updater   : $updater"
-Write-Host "  signature : $sigFile"
-Write-Host "  manifest  : $outFile"
-Write-Host ""
-Write-Host "Next (needs the gh CLI, and the macOS assets already attached to $tag):" -ForegroundColor Cyan
-Write-Host "  gh -R $repo release upload $tag ```"$setup```" ```"$updater```" ```"$sigFile```" ```"$outFile```" --clobber"
+foreach ($path in $assets) { Write-Host "  $path" }
+if (-not $Upload) {
+  Write-Host ""
+  Write-Host "To attach these to the existing $tag release:" -ForegroundColor Cyan
+  Write-Host '  $env:GH_TOKEN = "<token with contents: write>"'
+  Write-Host "  ./scripts/release-windows.ps1 -Upload -SkipTests"
+}
 Write-Host ""
 Write-Host "Reminder: this build carries NO Authenticode signature, so Windows" -ForegroundColor Yellow
 Write-Host "SmartScreen will warn on download. minisign only satisfies the updater." -ForegroundColor Yellow
