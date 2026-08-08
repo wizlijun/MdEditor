@@ -308,6 +308,43 @@
   let importReport = $state<unknown | null>(null)
   let importBusy = $state(false)
 
+  // ── git proxy ────────────────────────────────────────────────────────────
+  // Machine-local, so it lives in shared.json rather than the vault's own
+  // settings (which sync). Loaded lazily the first time the dialog opens.
+  let gitProxyInput = $state('')
+  let gitProxyBusy = $state(false)
+  let gitProxyError = $state<string | null>(null)
+  let gitProxySaved = $state(false)
+  let gitProxyLoaded = false
+
+  $effect(() => {
+    if (!open || gitProxyLoaded || isIOSPlatform) return
+    gitProxyLoaded = true
+    void (async () => {
+      const { getGitProxy } = await import('../lib/shared-config')
+      gitProxyInput = await getGitProxy().catch(() => '')
+    })()
+  })
+
+  async function onSaveGitProxy() {
+    gitProxyBusy = true
+    gitProxyError = null
+    gitProxySaved = false
+    try {
+      const { setGitProxy } = await import('../lib/shared-config')
+      // The host returns the normalized value, so the field shows exactly what
+      // was stored (trimmed) rather than what was typed.
+      gitProxyInput = await setGitProxy(gitProxyInput)
+      gitProxySaved = true
+    } catch (e) {
+      // Surfaced verbatim: the host writes these to be read by a human
+      // ("unsupported proxy scheme 'ftp' — use http, https, socks5 or socks5h").
+      gitProxyError = typeof e === 'string' ? e : String(e)
+    } finally {
+      gitProxyBusy = false
+    }
+  }
+
   // Mirror the App.svelte drag-drop bus: when a .zip is dropped, App stuffs
   // the prepared ImportReport into pendingThemeImport.report; we surface it
   // here so the ThemeImportDialog modal renders.
@@ -557,6 +594,30 @@
               </p>
             {/if}
             <p class="undo-note">{@html t('settings.defaultApp.undoNote')}</p>
+          </section>
+
+          <section class="block">
+            <h3>{t('settings.proxy.title')}</h3>
+            <p class="desc">{t('settings.proxy.desc')}</p>
+            <div class="row" style="gap: 8px;">
+              <input
+                id="git-proxy"
+                type="text"
+                style="flex: 1;"
+                placeholder="http://127.0.0.1:1080"
+                bind:value={gitProxyInput}
+                onkeydown={(e) => { if (e.key === 'Enter') void onSaveGitProxy() }}
+              />
+              <button onclick={() => void onSaveGitProxy()} disabled={gitProxyBusy}>
+                {gitProxyBusy ? t('settings.proxy.saving') : t('settings.proxy.save')}
+              </button>
+            </div>
+            {#if gitProxyError}
+              <p class="result fail">{gitProxyError}</p>
+            {:else if gitProxySaved}
+              <p class="result ok">{t('settings.proxy.saved')}</p>
+            {/if}
+            <p class="undo-note">{t('settings.proxy.sshNote')}</p>
           </section>
         {/if}
       {:else if selectedTab === 'block'}

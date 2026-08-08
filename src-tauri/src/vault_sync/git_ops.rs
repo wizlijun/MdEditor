@@ -18,8 +18,71 @@ pub fn version() -> Option<String> {
     }
 }
 
+/// Accepted proxy URL, normalized, or an explanation of why it is not one.
+/// An empty/whitespace value means "no proxy" and yields `Ok(None)`.
+///
+/// The scheme set is what git itself understands for `http.proxy`
+/// (libcurl): plain HTTP CONNECT proxies and SOCKS. `socks5h` is the variant
+/// that resolves DNS at the proxy, which is usually what a user behind a
+/// filtered resolver actually wants — so it is accepted rather than "fixed".
+///
+/// Note this covers HTTPS remotes only. An `ssh://` / `git@host:` remote does
+/// not read `http.proxy` at all; it would need `core.sshCommand` with a
+/// ProxyCommand. The vault flow configures HTTPS remotes with a PAT, so that
+/// is the case worth supporting — and saying so beats silently doing nothing.
+pub fn validate_proxy_url(raw: &str) -> Result<Option<String>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let parsed = url::Url::parse(trimmed)
+        .map_err(|e| format!("not a URL: {e} — expected e.g. http://127.0.0.1:1080"))?;
+    match parsed.scheme() {
+        "http" | "https" | "socks5" | "socks5h" => {}
+        other => {
+            return Err(format!(
+                "unsupported proxy scheme '{other}' — use http, https, socks5 or socks5h"
+            ))
+        }
+    }
+    if parsed.host_str().unwrap_or("").is_empty() {
+        return Err("proxy URL has no host — expected e.g. http://127.0.0.1:1080".into());
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+/// The configured git proxy, or `None`.
+///
+/// Read per invocation rather than cached: the file is a few hundred bytes and
+/// a git spawn dominates it by orders of magnitude, and reading fresh means a
+/// settings change takes effect on the next sync tick instead of after a
+/// restart. An invalid stored value is ignored here rather than failing the
+/// sync: the settings command rejects bad input at write time, so a bad value
+/// can only come from a hand-edited file, and refusing to sync at all is a
+/// worse outcome than attempting a direct connection.
+fn configured_proxy() -> Option<String> {
+    let path = crate::shared_config::config_path().ok()?;
+    let cfg = crate::shared_config::read(&path).ok()?;
+    validate_proxy_url(cfg.git_proxy.as_deref().unwrap_or("")).ok().flatten()
+}
+
 pub fn run_git(repo: &Path, args: &[&str]) -> GitResult<String> {
-    let output = command("git")
+    run_git_with_proxy(repo, args, configured_proxy().as_deref())
+}
+
+/// [`run_git`] with the proxy supplied rather than read from disk, so the
+/// injection is testable against a real repo without touching the user's config.
+fn run_git_with_proxy(repo: &Path, args: &[&str], proxy: Option<&str>) -> GitResult<String> {
+    let mut cmd = command("git");
+    // `-c` overrides go BEFORE the subcommand, and are scoped to this single
+    // invocation — nothing is written to the user's repo or global config, so
+    // clearing the setting genuinely stops proxying instead of leaving a stale
+    // `http.proxy` behind in .git/config for every other tool to inherit.
+    if let Some(proxy) = proxy {
+        cmd.arg("-c").arg(format!("http.proxy={proxy}"));
+        cmd.arg("-c").arg(format!("https.proxy={proxy}"));
+    }
+    let output = cmd
         .args(args)
         .current_dir(repo)
         .output()
@@ -156,6 +219,102 @@ fn chrono_now() -> String {
         .unwrap_or_default()
         .as_secs();
     format!("{secs}")
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::validate_proxy_url;
+
+    #[test]
+    fn blank_means_no_proxy() {
+        for raw in ["", "   ", "\t\n"] {
+            assert_eq!(validate_proxy_url(raw), Ok(None), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn accepts_the_schemes_git_understands() {
+        for raw in [
+            "http://127.0.0.1:1080",
+            "https://proxy.corp:8443",
+            "socks5://127.0.0.1:1080",
+            "socks5h://127.0.0.1:1080",
+            "http://user:pass@proxy.corp:3128",
+        ] {
+            assert_eq!(validate_proxy_url(raw), Ok(Some(raw.to_string())), "{raw}");
+        }
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_trimmed() {
+        assert_eq!(
+            validate_proxy_url("  http://127.0.0.1:1080  "),
+            Ok(Some("http://127.0.0.1:1080".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_a_bare_host_port() {
+        // The commonest mistake: pasting what a proxy app shows in its UI.
+        let err = validate_proxy_url("127.0.0.1:1080").unwrap_err();
+        assert!(err.contains("http://127.0.0.1:1080"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_scheme_git_cannot_use() {
+        let err = validate_proxy_url("ftp://127.0.0.1:1080").unwrap_err();
+        assert!(err.contains("unsupported proxy scheme"), "{err}");
+        assert!(err.contains("ftp"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_url_without_a_host() {
+        assert!(validate_proxy_url("http://").is_err());
+    }
+
+    /// Ask a real git what it sees. This is the assertion that matters: it
+    /// proves the override actually reaches the subprocess (and that `-c`
+    /// lands before the subcommand, which is the one way to get this wrong).
+    #[test]
+    fn git_receives_the_proxy_override() {
+        let dir = tempfile::TempDir::new().unwrap();
+        super::super::git_ops::run_git_with_proxy(dir.path(), &["init", "-q"], None).unwrap();
+
+        let got = super::super::git_ops::run_git_with_proxy(
+            dir.path(),
+            &["config", "--get", "http.proxy"],
+            Some("http://127.0.0.1:1080"),
+        )
+        .unwrap();
+        assert_eq!(got.trim(), "http://127.0.0.1:1080");
+
+        let https = super::super::git_ops::run_git_with_proxy(
+            dir.path(),
+            &["config", "--get", "https.proxy"],
+            Some("http://127.0.0.1:1080"),
+        )
+        .unwrap();
+        assert_eq!(https.trim(), "http://127.0.0.1:1080");
+    }
+
+    /// …and that nothing was persisted: with no proxy passed, git must report
+    /// none. A `-c` that leaked into .git/config would show up here.
+    #[test]
+    fn the_override_is_not_written_to_the_repo() {
+        let dir = tempfile::TempDir::new().unwrap();
+        super::super::git_ops::run_git_with_proxy(dir.path(), &["init", "-q"], None).unwrap();
+        super::super::git_ops::run_git_with_proxy(
+            dir.path(),
+            &["config", "--list"],
+            Some("http://127.0.0.1:1080"),
+        )
+        .unwrap();
+
+        // `config --get` exits non-zero when the key is unset.
+        let after =
+            super::super::git_ops::run_git_with_proxy(dir.path(), &["config", "--get", "http.proxy"], None);
+        assert!(after.is_err(), "http.proxy leaked into the repo config: {after:?}");
+    }
 }
 
 #[cfg(test)]

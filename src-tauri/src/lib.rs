@@ -604,6 +604,35 @@ fn shared_config_write(cfg: crate::shared_config::SharedConfig) -> Result<(), St
     crate::shared_config::write(&path, &cfg).map_err(|e| e.to_string())
 }
 
+/// Read the proxy that vault sync's `git` runs through (`""` when unset).
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn git_proxy_get() -> Result<String, String> {
+    Ok(shared_config_read()?.git_proxy.unwrap_or_default())
+}
+
+/// Set (or, with a blank value, clear) that proxy.
+///
+/// Validation lives here rather than in the UI so the rule holds for every
+/// caller, and so the message explaining a rejection is written once. Only the
+/// one field is touched — the rest of shared.json is read back and preserved,
+/// because it also carries the vault path and other processes may have written
+/// it since this window loaded.
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn git_proxy_set(value: String) -> Result<String, String> {
+    let normalized = vault_sync::git_ops::validate_proxy_url(&value)?;
+    let path = crate::shared_config::config_path().map_err(|e| e.to_string())?;
+    let mut cfg = crate::shared_config::read(&path).map_err(|e| e.to_string())?;
+    cfg.git_proxy = normalized.clone();
+    crate::shared_config::write(&path, &cfg).map_err(|e| e.to_string())?;
+    dlog(&format!(
+        "git proxy {}",
+        normalized.as_deref().map(|p| format!("set to {p}")).unwrap_or_else(|| "cleared".into())
+    ));
+    Ok(normalized.unwrap_or_default())
+}
+
 fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -1183,6 +1212,8 @@ pub fn run() {
                 dbg_log,
                 shared_config_read,
                 shared_config_write,
+                git_proxy_get,
+                git_proxy_set,
                 log_bus::logs_append_frontend,
                 log_bus::logs_get_snapshot,
                 log_bus::logs_clear,
