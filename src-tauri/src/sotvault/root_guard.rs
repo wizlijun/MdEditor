@@ -133,9 +133,20 @@ mod tests {
         assert_eq!(no_env("/some/file.md", false), Err(Reject::NotADirectory));
     }
 
+    // `is_filesystem_root` asks `std::path` to parse the path, and that parse is
+    // itself platform-dependent: on Unix a backslash is an ordinary character, so
+    // `C:\` is ONE `Normal` component and is correctly not a root *there*. Only
+    // the Windows build can judge Windows spellings, hence the split — asserting
+    // them on macOS was testing the host's path parser, not our rule.
     #[test]
-    fn rejects_every_spelling_of_a_filesystem_root() {
-        for p in ["/", "C:\\", "C:", "D:/", "\\\\server\\share"] {
+    fn rejects_the_posix_filesystem_root() {
+        assert_eq!(no_env("/", true), Err(Reject::FilesystemRoot));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_every_windows_spelling_of_a_filesystem_root() {
+        for p in ["C:\\", "C:", "D:/", "\\\\server\\share"] {
             assert_eq!(no_env(p, true), Err(Reject::FilesystemRoot), "{p} should be rejected");
         }
     }
@@ -167,7 +178,7 @@ mod tests {
 
     #[test]
     fn rejects_system_directories_and_their_contents() {
-        let roots = [PathBuf::from("/usr"), PathBuf::from("C:\\Windows")];
+        let roots = [PathBuf::from("/usr")];
         assert_eq!(
             check_with(Path::new("/usr"), true, None, &roots),
             Err(Reject::SystemDirectory)
@@ -176,6 +187,16 @@ mod tests {
             check_with(Path::new("/usr/local/vault"), true, None, &roots),
             Err(Reject::SystemDirectory)
         );
+    }
+
+    /// Same rule, Windows spelling. Split for the reason given above: on Unix
+    /// `C:\Windows\System32` is a single `Normal` component, so the component-wise
+    /// `starts_with` can't match and the assertion would fail for a reason that
+    /// has nothing to do with the rule under test.
+    #[cfg(windows)]
+    #[test]
+    fn rejects_windows_system_directories_and_their_contents() {
+        let roots = [PathBuf::from("C:\\Windows")];
         assert_eq!(
             check_with(Path::new("C:\\Windows\\System32"), true, None, &roots),
             Err(Reject::SystemDirectory)
@@ -189,9 +210,17 @@ mod tests {
         assert_eq!(check_with(Path::new("/usr-local/vault"), true, None, &roots), Ok(()));
     }
 
+    /// The live check must accept a directory where a vault actually lives —
+    /// i.e. somewhere under the user's home.
+    ///
+    /// Deliberately NOT `tempfile::tempdir()`: on macOS that lands in
+    /// `/var/folders/…`, and `/var` is in `system_roots()`, so the guard rejects
+    /// it — correctly. Using the system temp dir here tested the guard against a
+    /// location no user would ever pick, and failed for the right reason.
     #[test]
     fn a_real_directory_passes_the_live_check() {
-        let dir = tempfile::tempdir().unwrap();
+        let Some(home) = dirs::home_dir() else { return };
+        let dir = tempfile::tempdir_in(&home).unwrap();
         assert_eq!(check(dir.path()), Ok(()));
     }
 

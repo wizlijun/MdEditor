@@ -253,7 +253,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("notemd-legacy-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir_all(&dir).unwrap();
         let legacy = dir.join("mdedit");
-        unix_symlink(dir.join("no-such-binary"), &legacy).unwrap();
+        unix_symlink(&dir.join("no-such-binary"), &legacy).unwrap();
 
         install(&dir).unwrap();
         assert_eq!(std::fs::read_link(&legacy).unwrap(), current_app_binary());
@@ -265,7 +265,7 @@ mod tests {
     fn uninstall_removes_legacy_link_too() {
         let dir = std::env::temp_dir().join(format!("notemd-uninst-legacy-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir_all(&dir).unwrap();
-        unix_symlink(std::env::current_exe().unwrap(), dir.join("mdedit")).unwrap();
+        unix_symlink(&std::env::current_exe().unwrap(), &dir.join("mdedit")).unwrap();
         install(&dir).unwrap();
         uninstall(&dir).unwrap();
         assert!(dir.join("notemd").symlink_metadata().is_err());
