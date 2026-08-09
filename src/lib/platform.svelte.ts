@@ -17,6 +17,10 @@ export function platform(): Promise<Platform> {
 export const isIOS = async () => (await platform()) === 'ios'
 export const isMacOS = async () => (await platform()) === 'macos'
 
+/** Re-exported for convenience; the implementation is dependency-free so that
+ *  `editor-kit/` can import it without pulling in `@tauri-apps/plugin-os`. */
+export { isApplePlatformSync } from './platform-sync'
+
 /** test-only escape hatch */
 export function _resetCacheForTests() { cached = null }
 

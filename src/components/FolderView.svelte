@@ -12,6 +12,7 @@
   import { showError } from '../lib/dialogs'
   import { planRename, executeRename } from '../lib/outline/rename-pair'
   import { pushToast } from '../lib/toast.svelte'
+  import { basename } from '../lib/paths'
   import FolderTreeNode from './FolderTreeNode.svelte'
 
   let { tab }: { tab: Tab | null } = $props()
@@ -35,10 +36,12 @@
     const filtered = filtering ? all.filter((e) => folderView.filterVisible.has(e.path)) : all
     return applyHideFolders(filterByViewMode(filtered, folderView.viewMode), folderView.hideFolders)
   })
-  let rootName = $derived(
-    folderView.rootDir ? (folderView.rootDir.split('/').filter(Boolean).pop() ?? '/') : ''
+  let rootName = $derived(folderView.rootDir ? basename(folderView.rootDir) : '')
+  // At a filesystem root there is nowhere left to go: '/' on unix, 'D:/' on
+  // Windows (parentDir returns the root itself once it reaches the top).
+  let canGoUp = $derived(
+    !!folderView.rootDir && parentDir(folderView.rootDir) !== folderView.rootDir
   )
-  let canGoUp = $derived(!!folderView.rootDir && folderView.rootDir !== '/')
 
   async function open(path: string) {
     // 树内打开不换根:用户正在这棵树里浏览,重定根会让视图在脚下跳动。
@@ -130,7 +133,7 @@
     // A paired companion (.note.md) is hidden from entriesCache but still lives on
     // disk — feed its filename into siblings so conflict/pairing sees it too.
     for (const e of cached) {
-      if (e.notePath) siblings.push(e.notePath.slice(e.notePath.lastIndexOf('/') + 1))
+      if (e.notePath) siblings.push(basename(e.notePath))
     }
     const plan = planRename(entry.path, newName, siblings)
     if (!plan) {

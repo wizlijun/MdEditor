@@ -4,6 +4,17 @@
 //! "notemd" so the CLI mode path triggers. Asserts stdout / stderr / exit code
 //! for the happy paths. HOME points at a temp dir so the run never sees the
 //! developer's real settings or installed plugins.
+//!
+//! unix-only, and deliberately so. The isolation this file depends on — point
+//! `HOME` at a tempdir and every config/data lookup follows — has no Windows
+//! equivalent: `dirs::config_dir()` / `dirs::data_dir()` resolve through the
+//! Win32 known-folder API (`SHGetKnownFolderPath`), which ignores `%APPDATA%`
+//! in the child environment. Running these assertions unisolated would read —
+//! and `plugin install` would write — the developer's real profile. Covering
+//! the Windows CLI properly needs an explicit config-dir override in
+//! `cli::resolve_config_dir`; until that exists, running here would be worse
+//! than not running.
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::process::Command;

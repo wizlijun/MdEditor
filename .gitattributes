@@ -1,0 +1,36 @@
+# Line endings are normalized to LF in the repository and checked out as LF on
+# every platform.
+#
+# Without this, a Windows clone with the default `core.autocrlf=true` gets CRLF
+# on disk, which breaks the byte-pinned golden fixtures — `roam-golden.test.ts`
+# and `book-head.test.ts` compare exact bytes and fail on a fresh Windows
+# checkout for reasons that have nothing to do with the code under test.
+#
+# It also matters beyond tests: vault content is plain Markdown that must stay
+# byte-identical across macOS / Windows / Linux (CLAUDE.md, "file-over-app"),
+# and a mixed-ending repo is the usual way that guarantee starts to rot.
+#
+# Existing clones need `git add --renormalize .` once for this to take effect
+# on files already in the working tree.
+* text=auto eol=lf
+
+# Binaries must never be touched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.zip binary
+*.epub binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.notemdpkg binary
+
+# Windows-only scripts want CRLF to stay runnable when opened by cmd.exe.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

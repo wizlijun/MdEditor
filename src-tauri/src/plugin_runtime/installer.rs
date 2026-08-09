@@ -320,11 +320,13 @@ fn repoint_current(id_dir: &Path, version: &str) -> Result<(), InstallError> {
     #[cfg(unix)]
     {
         // Relative target so the tree is relocatable.
-        std::os::unix::fs::symlink(version, &tmp).map_err(io)?;
+        crate::platform::link_dir(std::path::Path::new(version), &tmp).map_err(io)?;
     }
     #[cfg(not(unix))]
     {
-        std::os::windows::fs::symlink_dir(&version_dir, &tmp).map_err(io)?;
+        // Absolute: a Windows junction (the no-privilege fallback inside
+        // `link_dir`) cannot name a relative target.
+        crate::platform::link_dir(&version_dir, &tmp).map_err(io)?;
     }
 
     // rename over the existing `current` (atomic replace on unix).
@@ -699,6 +701,23 @@ mod tests {
         .expect("stage");
     }
 
+    /// `<id_dir>/current` resolves to `<id_dir>/<version>`.
+    ///
+    /// Compares the *resolved* target rather than the literal link body: unix
+    /// stores a relative `"1.0.0"` so the tree stays relocatable, while a
+    /// Windows junction (the no-privilege fallback in `platform::link_dir`) can
+    /// only store an absolute path. Both must land on the same directory, and
+    /// that is the property these tests are actually about.
+    fn assert_current_points_at(id_dir: &Path, version: &str) {
+        let current = id_dir.join("current");
+        let target = std::fs::read_link(&current).unwrap();
+        let resolved = if target.is_absolute() { target } else { id_dir.join(target) };
+        assert_eq!(
+            std::fs::canonicalize(&resolved).unwrap(),
+            std::fs::canonicalize(id_dir.join(version)).unwrap(),
+        );
+    }
+
     #[test]
     fn commit_creates_version_dir_and_current() {
         let root_dir = tempfile::tempdir().unwrap();
@@ -716,8 +735,7 @@ mod tests {
         assert!(current.exists());
         // current → version resolves to the manifest.
         assert!(current.join("manifest.json").is_file());
-        let target = std::fs::read_link(&current).unwrap();
-        assert_eq!(target, Path::new(FIXTURE_VERSION));
+        assert_current_points_at(&root.join(FIXTURE_ID), FIXTURE_VERSION);
     }
 
     #[test]
@@ -795,16 +813,10 @@ mod tests {
         std::fs::create_dir_all(&v2).unwrap();
         std::fs::write(v2.join("manifest.json"), b"{}").unwrap();
         repoint_current(&root.join(FIXTURE_ID), "2.0.0").unwrap();
-        assert_eq!(
-            std::fs::read_link(root.join(FIXTURE_ID).join("current")).unwrap(),
-            Path::new("2.0.0")
-        );
+        assert_current_points_at(&root.join(FIXTURE_ID), "2.0.0");
 
         rollback(root, FIXTURE_ID, FIXTURE_VERSION).unwrap();
-        assert_eq!(
-            std::fs::read_link(root.join(FIXTURE_ID).join("current")).unwrap(),
-            Path::new(FIXTURE_VERSION)
-        );
+        assert_current_points_at(&root.join(FIXTURE_ID), FIXTURE_VERSION);
     }
 
     #[test]

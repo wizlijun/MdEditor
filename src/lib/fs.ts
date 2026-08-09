@@ -1,5 +1,6 @@
 import { readTextFile, writeTextFile, stat as fsStat } from '@tauri-apps/plugin-fs'
 import { platform } from './platform.svelte'
+import { basename, joinPath } from './paths'
 
 const IOS_LARGE_FILE_LIMIT = 4 * 1024 * 1024
 
@@ -34,14 +35,12 @@ export function isPermissionError(e: unknown): boolean {
   )
 }
 
-export function basename(path: string): string {
-  const seg = path.split('/').filter(Boolean)
-  return seg[seg.length - 1] ?? path
-}
-
-export function joinPath(dir: string, name: string): string {
-  return (dir.endsWith('/') ? dir.slice(0, -1) : dir) + '/' + name
-}
+// Sourced from `paths.ts` so every consumer of `fs.ts` gets the
+// separator-agnostic implementations (these two used to split on '/' only,
+// which returns the whole path as its own basename on Windows).
+// Imported *and* re-exported: `classifyPath` below calls `basename` locally,
+// and a bare `export … from` would not bind it in this module's scope.
+export { basename, joinPath }
 
 export type FileKind = 'markdown' | 'html' | 'code' | 'image' | 'spreadsheet' | 'base' | 'custom'
 

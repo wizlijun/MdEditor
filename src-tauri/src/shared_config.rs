@@ -11,6 +11,15 @@ pub struct SharedConfig {
     pub rawvault: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibre_path: Option<String>,
+    /// Proxy for the `git` subprocess that drives vault sync, e.g.
+    /// `http://127.0.0.1:1080` or `socks5://127.0.0.1:1080`.
+    ///
+    /// Machine-local on purpose. It lives here rather than in the vault's own
+    /// `.notemd/settings.json` because that file syncs: a proxy that is correct
+    /// on one machine is wrong (or a dead port) on every other one. Same
+    /// reasoning as `sotvault` — see the module docs on what "shared" means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_proxy: Option<String>,
 }
 
 fn default_version() -> u32 { 1 }
@@ -77,10 +86,35 @@ mod tests {
             sotvault: Some("/tmp/sot".into()),
             rawvault: Some("/tmp/raw".into()),
             calibre_path: Some("/Applications/calibre.app/Contents/MacOS".into()),
+            git_proxy: Some("http://127.0.0.1:1080".into()),
         };
         write(&p, &cfg).unwrap();
         let back = read(&p).unwrap();
         assert_eq!(back, cfg);
+    }
+
+    /// A config written before `git_proxy` existed must still load — the field
+    /// is `#[serde(default)]`, and older builds / the plugin binaries that
+    /// carry their own copy of this struct keep writing files without it.
+    #[test]
+    fn reads_a_config_written_before_git_proxy_existed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("config.json");
+        std::fs::write(&p, r#"{"version":1,"sotvault":"/v"}"#).unwrap();
+        let cfg = read(&p).unwrap();
+        assert_eq!(cfg.sotvault.as_deref(), Some("/v"));
+        assert_eq!(cfg.git_proxy, None);
+    }
+
+    /// And an unset proxy must not appear in the file at all, so shared.json
+    /// stays byte-stable for users who never touch the setting.
+    #[test]
+    fn an_unset_proxy_is_not_serialized() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("config.json");
+        write(&p, &SharedConfig { version: 1, sotvault: Some("/v".into()), ..Default::default() }).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(!text.contains("git_proxy"), "{text}");
     }
 
     #[test]

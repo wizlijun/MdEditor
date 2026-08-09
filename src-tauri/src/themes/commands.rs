@@ -19,16 +19,13 @@ pub fn theme_list(app: tauri::AppHandle) -> Result<Vec<ThemeMeta>, String> {
 pub fn theme_reveal(app: tauri::AppHandle) -> Result<(), String> {
     ensure_dirs(&app)?;
     let dir = themes_dir(&app)?;
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&dir)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "macos"))]
-    { let _ = dir; Err("not supported on this platform".into()) }
+    // Three-platform via the opener plugin (already a dependency, and already
+    // how the frontend reveals vault paths — sotvault.svelte.ts:148) instead of
+    // shelling out to macOS's `open`, which left Windows/Linux on the
+    // "not supported" branch.
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Read the compiled CSS for theme `id` from disk and return it. Used by the

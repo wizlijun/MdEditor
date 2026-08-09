@@ -1,3 +1,5 @@
+import { basename, dirname, abbreviateHome } from './paths'
+
 /** One file's worth of a single device's recent history (synced via git). */
 export interface SyncedEntry {
   /** Vault-relative path (set when the file lives inside the Vault). */
@@ -111,10 +113,11 @@ export function mergeRecents(
  * `filename — ~/parent/dir` (home-abbreviated).
  */
 export function formatRecentLabel(absPath: string, home: string | null): string {
-  const i = absPath.lastIndexOf('/')
-  const name = i >= 0 ? absPath.slice(i + 1) : absPath
-  const dir = i > 0 ? absPath.slice(0, i) : ''
-  const h = home ? home.replace(/\/$/, '') : null
-  const shownDir = h && (dir === h || dir.startsWith(h + '/')) ? '~' + dir.slice(h.length) : dir
+  const name = basename(absPath)
+  const dir = dirname(absPath)
+  // `dirname` returns the root itself ('/' or 'D:/') for a top-level file;
+  // that is not worth showing next to the name.
+  const shownDir = dir === '/' || dir === '.' || /^[a-zA-Z]:\/$/.test(dir)
+    ? '' : abbreviateHome(dir, home)
   return shownDir ? `${name} — ${shownDir}` : name
 }

@@ -113,7 +113,7 @@ pub fn git_diff_current(
     std::fs::write(&old_p, hist.as_bytes()).map_err(|e| format!("write temp: {e}"))?;
     std::fs::write(&new_p, current.as_bytes()).map_err(|e| format!("write temp: {e}"))?;
 
-    let out = std::process::Command::new("git")
+    let out = crate::platform::command("git")
         .args([
             "diff",
             "--no-index",

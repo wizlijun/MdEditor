@@ -506,15 +506,17 @@ mod tests {
     #[test]
     fn dedup_appends_suffix_on_collision() {
         // /v/a.md and /v/a-2.md taken; expect /v/a-3.md
-        let taken = ["/v/a.md", "/v/a-2.md"];
-        let exists = |p: &Path| taken.contains(&p.to_string_lossy().as_ref());
+        // Compare via PathBuf so the predicate matches on Windows too: the
+        // candidates are built with `join`, whose separator is native.
+        let taken = [PathBuf::from("/v/a.md"), PathBuf::from("/v/a-2.md")];
+        let exists = |p: &Path| taken.iter().any(|t| t == p);
         let got = dedup_target(Path::new("/v"), "a.md", &exists);
         assert_eq!(got, PathBuf::from("/v/a-3.md"));
     }
 
     #[test]
     fn dedup_handles_no_extension() {
-        let exists = |p: &Path| p.to_string_lossy() == "/v/README";
+        let exists = |p: &Path| p == PathBuf::from("/v/README");
         let got = dedup_target(Path::new("/v"), "README", &exists);
         assert_eq!(got, PathBuf::from("/v/README-2"));
     }
@@ -539,8 +541,8 @@ mod tests {
     fn sync_target_dedups_when_tracked_copy_vanished() {
         // Record points to a copy the user deleted → don't reuse a missing path;
         // dedup around whatever else occupies the dir.
-        let taken = ["/v/Sync/a.md"];
-        let exists = |p: &Path| taken.contains(&p.to_string_lossy().as_ref());
+        let taken = [PathBuf::from("/v/Sync/a.md")];
+        let exists = |p: &Path| taken.iter().any(|t| t == p);
         let got = sync_target(
             Some(PathBuf::from("/v/Sync/gone.md")),
             Path::new("/v/Sync"),

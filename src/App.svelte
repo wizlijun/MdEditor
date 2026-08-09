@@ -14,6 +14,7 @@
   import ModeToggle from './components/ModeToggle.svelte'
   import { activeTab, tabs, closeTab, openFile, newFile, isDirty, activate } from './lib/tabs.svelte'
   import { createNewBase } from './lib/base/create'
+  import { basename } from './lib/paths'
   import { loadSettings, settings, removeRecentFile } from './lib/settings.svelte'
   import { loadLocale, t, i18n } from './lib/i18n/store.svelte'
   import { cmdOpen, cmdSave, cmdSaveAs, cmdPrint, cmdCloseActive, cmdToggleMode, dispatch, type CommandId } from './lib/commands'
@@ -66,7 +67,7 @@
    *  readOnly flag yet; for now the user CAN edit but the content is ephemeral.
    */
   function openRemoteBuffer(remotePath: string, content: string): void {
-    const baseName = remotePath.split('/').pop() ?? remotePath
+    const baseName = basename(remotePath)
     // Re-use an already-open remote tab for the same path if present.
     const existing = tabs.find((t) => t.title === `[remote] ${baseName}` && t.filePath === '')
     if (existing) {

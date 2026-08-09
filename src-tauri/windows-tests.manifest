@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    Application manifest for the *test* binaries only (build.rs links it via
+    /MANIFESTINPUT for `cargo:rustc-link-arg-tests`); the shipped executable
+    gets its own manifest from tauri-build.
+
+    Why it is needed: the lib links tao/muda, which import SetWindowSubclass,
+    DefSubclassProc, RemoveWindowSubclass and TaskDialogIndirect — all exported
+    only by comctl32 **v6**. Without this dependentAssembly the loader binds to
+    the v5 comctl32 in System32, and every test binary dies at load time with
+    STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) before a single test runs.
+  -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>

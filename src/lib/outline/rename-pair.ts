@@ -1,18 +1,9 @@
 // src/lib/outline/rename-pair.ts
 import { sanitizeFileName } from './slug'
-import { joinPath } from '../fs'
-
-// NOTE: We intentionally do NOT import parentDir from '../folder-view.svelte'
-// because that module imports @tauri-apps/plugin-fs and @tauri-apps/plugin-store
-// at the top level, which would break pure vitest runs. Instead we implement
-// a tiny local dirOf() with identical semantics: strip last path segment,
-// return '/' at the root.
-function dirOf(path: string): string {
-  const trimmed = path.length > 1 ? path.replace(/\/+$/, '') : path
-  const i = trimmed.lastIndexOf('/')
-  if (i <= 0) return '/'
-  return trimmed.slice(0, i)
-}
+// NOT '../folder-view.svelte': that module imports @tauri-apps/plugin-fs and
+// @tauri-apps/plugin-store at the top level, which would break pure vitest
+// runs. `paths.ts` is dependency-free and re-exports the same `dirname`.
+import { joinPath, dirname as dirOf } from '../paths'
 
 export interface RenameOp { from: string; to: string }
 export interface RenamePlan { ops: RenameOp[] }

@@ -117,7 +117,13 @@ use std::process::Command;
 fn make_bare_remote() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempdir().unwrap();
     let remote = dir.path().join("remote.git");
-    Command::new("git").args(["init", "--bare", remote.to_str().unwrap()]).output().unwrap();
+    // `-b main` explicitly: otherwise the bare repo's HEAD follows the machine's
+    // `init.defaultBranch` (still `master` by default), the clone below lands on
+    // a nonexistent branch, and every "main"-based assertion downstream fails.
+    Command::new("git")
+        .args(["init", "--bare", "-b", "main", remote.to_str().unwrap()])
+        .output()
+        .unwrap();
 
     let work = dir.path().join("work");
     Command::new("git").args(["clone", remote.to_str().unwrap(), work.to_str().unwrap()]).output().unwrap();

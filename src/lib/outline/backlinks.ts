@@ -2,7 +2,7 @@
 import { parseInline, eachInline } from './parser'
 import { parseOutline } from './markdown'
 import type { OutlineTree } from './model'
-import { basename, joinPath } from '../fs'
+import { basename, joinPath, relative } from '../paths'
 
 export interface BacklinkHit { file: string; text: string; line: number }
 
@@ -34,9 +34,9 @@ export function createIndex(scope: PageScope | null = null): BacklinkIndex {
 export function isWikiPagePath(scope: PageScope | null, path: string): boolean {
   if (!/\.md$/i.test(path)) return false
   if (!scope) return true
-  const root = scope.root.endsWith('/') ? scope.root.slice(0, -1) : scope.root
-  if (!path.startsWith(root + '/')) return false
-  const segs = path.slice(root.length + 1).split('/')
+  const rel = relative(scope.root, path)
+  if (rel === null) return false
+  const segs = rel.split('/')
   return segs.length >= 2 && scope.dirs.includes(segs[0])
 }
 

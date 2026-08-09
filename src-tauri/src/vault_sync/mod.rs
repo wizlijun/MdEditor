@@ -138,6 +138,19 @@ pub fn init(app: &AppHandle) {
         .filter(|s| !s.is_empty());
 
     if let Some(ref path) = repo_path {
+        // The picker gates this too, but the value also arrives from a file on
+        // disk (`shared.json`) that predates the gate or was edited by hand.
+        // Auto-sync means `git add -A` + commit + push on a timer, so a bad
+        // root here is not a cosmetic problem — refuse to start rather than
+        // version-control a whole drive. The config is left alone: the user
+        // re-picks a folder and the picker explains the rule.
+        if let Err(reason) = crate::sotvault::root_guard::check(std::path::Path::new(path)) {
+            crate::log_bus::push(
+                "warn",
+                format!("vault sync not started — configured root is rejected ({reason:?}): {path}"),
+            );
+            return;
+        }
         let mgr = app.state::<Arc<VaultSyncManager>>();
         *mgr.repo_path.lock().unwrap() = Some(path.clone());
 

@@ -588,7 +588,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("secret.txt"), "s3cret").unwrap();
         let dir = ui_fixture();
-        if std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).is_err() {
+        if crate::platform::test_symlink(outside.path(), &dir.path().join("link")).is_err() {
             eprintln!("skipping: symlink creation not supported here");
             return;
         }

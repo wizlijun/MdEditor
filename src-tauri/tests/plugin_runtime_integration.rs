@@ -17,9 +17,98 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-fn fixture(name: &str) -> PathBuf {
+fn fixture_script(name: &str) -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(manifest_dir).join("tests/fixtures/v2").join(name)
+}
+
+/// Path to a fixture, ready to hand to `PluginProcess::spawn`.
+///
+/// The fixtures stay POSIX `sh` scripts — one source, run natively on macOS and
+/// Linux, no per-platform copies to drift apart.
+#[cfg(not(windows))]
+fn fixture(name: &str) -> PathBuf {
+    fixture_script(name)
+}
+
+/// Windows cannot `CreateProcess` a `.sh`, so the fixture is reached through a
+/// generated `.cmd` shim that hands the very same script to Git for Windows'
+/// POSIX shell. The scripts themselves are untouched.
+///
+/// Git for Windows is not a new dependency: vault sync already shells out to
+/// `git`, and the Windows story is "install Git for Windows" rather than
+/// bundling MinGit (docs/2026-08-08-pc-port-refactor-plan.md §5.2/§11), so its
+/// `sh.exe` is present on any machine that can run the app at all. It is also
+/// what GitHub Actions runs for `shell: bash` on windows-latest.
+#[cfg(windows)]
+fn fixture(name: &str) -> PathBuf {
+    let script = fixture_script(name);
+    let shim = shim_dir().join(format!("{name}.cmd"));
+    if !shim.exists() {
+        let sh = posix_sh().unwrap_or_else(|| {
+            panic!(
+                "no POSIX shell found for the .sh fixtures. Install Git for Windows, \
+                 or point NOTEMD_TEST_SH at an sh.exe."
+            )
+        });
+        // CRLF: cmd.exe is the one consumer and it is the least surprising form.
+        let body = format!("@echo off\r\n\"{}\" \"{}\"\r\n", sh.display(), script.display());
+        std::fs::write(&shim, body).expect("write fixture shim");
+    }
+    shim
+}
+
+/// Process-lifetime scratch dir for the generated shims.
+#[cfg(windows)]
+fn shim_dir() -> PathBuf {
+    use std::sync::OnceLock;
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let d = std::env::temp_dir().join(format!("notemd-fixture-shims-{}", std::process::id()));
+        std::fs::create_dir_all(&d).expect("create shim dir");
+        d
+    })
+    .clone()
+}
+
+/// Locate a POSIX shell: `$NOTEMD_TEST_SH`, else the one shipped beside the
+/// `git` already on PATH (`<git root>/bin/sh.exe`, `<git root>/usr/bin/sh.exe`).
+#[cfg(windows)]
+fn posix_sh() -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os("NOTEMD_TEST_SH") {
+        let p = PathBuf::from(explicit);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    // git.exe lives in `<root>/cmd/` or `<root>/bin/`; the shell is under
+    // `<root>/bin/` or `<root>/usr/bin/`.
+    let from_path = std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|d| d.join("git.exe"))
+                .find(|c| c.is_file())
+        })
+        .and_then(|git| Some(git.parent()?.parent()?.to_path_buf()));
+
+    // Well-known install roots as a fallback. Needed because a test run started
+    // from Git Bash inherits an MSYS-form PATH (`/c/Program Files/Git/cmd`),
+    // which means nothing to a native process — the same trap that makes
+    // `pnpm install` fail from Git Bash. Looking here as well keeps the suite
+    // runnable from either shell.
+    let well_known = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .flat_map(|base| {
+            let base = PathBuf::from(base);
+            [base.join("Git"), base.join("Programs/Git")]
+        });
+
+    from_path
+        .into_iter()
+        .chain(well_known)
+        .flat_map(|root| [root.join("bin/sh.exe"), root.join("usr/bin/sh.exe")])
+        .find(|p| p.is_file())
 }
 
 /// HostSink that records every plugin→host request/notification it sees.

@@ -4,6 +4,7 @@
 // 规则(§4.1):`type` 是唯一必填字段;生产者 MAY 加任意额外键,消费者往返时
 // SHOULD 保留未知键 —— 所以这里只补缺失的键,已有键的值与顺序一律不动。
 import { parseDocument, isMap, isScalar } from 'yaml'
+import { basename } from '../paths'
 
 /**
  * 本项目使用的 `type` 取值表。OKF 不做中心注册(§4.1),但项目内必须唯一登记
@@ -46,7 +47,7 @@ export const RESERVED_CONCEPT_NAMES = ['index.md', 'log.md'] as const
 
 /** 路径或文件名是否是保留名。 */
 export function isReservedConceptName(pathOrName: string): boolean {
-  const base = pathOrName.split('/').pop()?.toLowerCase() ?? ''
+  const base = basename(pathOrName).toLowerCase()
   return (RESERVED_CONCEPT_NAMES as readonly string[]).includes(base)
 }
 

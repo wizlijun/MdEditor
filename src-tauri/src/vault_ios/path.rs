@@ -6,7 +6,13 @@ pub fn resolve_vault_path(base: &Path) -> PathBuf {
 }
 
 /// Production helper: read iOS document directory from the app handle.
-#[cfg(any(target_os = "ios", target_os = "macos"))]
+///
+/// `test` is in the gate for the same reason `macos` is: `vault_ios` is
+/// `#![cfg(any(target_os = "ios", test))]` so its logic stays unit-testable off
+/// device, and the module's callers need this function to exist in that build.
+/// `macos` alone covered a Mac dev box; on a Windows one the whole test crate
+/// failed to compile. The body is platform-neutral Tauri API.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 pub fn vault_path(app: &tauri::AppHandle) -> Result<PathBuf, super::VaultError> {
     use tauri::Manager;
     let doc = app.path().document_dir()

@@ -6,10 +6,11 @@
   import { commitReferenceEdit } from '../../lib/outline/recall-writeback-io'
   import { t } from '../../lib/i18n/store.svelte'
   import RefTreeNode from './RefTreeNode.svelte'
+  import { basename } from '../../lib/paths'
 
   let { page = null, excludeFile = null }: { page?: string | null; excludeFile?: string | null } = $props()
 
-  const fileName = (path: string) => path.split('/').pop() ?? path
+  const fileName = (path: string) => basename(path)
 
   let groups = $state<RecallGroup[]>([])
   let totalFiles = $state(0)                    // candidate files — known instantly (the frame)

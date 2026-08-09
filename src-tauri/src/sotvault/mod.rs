@@ -5,6 +5,7 @@ pub mod logic;
 pub mod store;
 pub mod vault_settings;
 pub mod mirror_meta;
+pub mod root_guard;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
