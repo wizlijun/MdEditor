@@ -100,13 +100,19 @@ Say 'signing env ok(子进程可见 PASSWORD = 空)'
 
 # 用手工环境块跑命令。stdin 重定向后立即关闭:万一还有别的提示,子进程读到 EOF
 # 快速失败,而不是把无人值守的发版挂住。
+#
+# 输出既实时打到控制台、也留一份在 $script:LastBuildLog,供构建后断言用
+# —— 有些致命问题 Tauri 只 warn 不失败,只看退出码是看不出来的。
 function Invoke-Build {
   param([Parameter(Mandatory)][string] $CommandLine, [Parameter(Mandatory)][string] $What)
+  $script:LastBuildLog = Join-Path $env:TEMP "notemd-build-$(Get-Random).log"
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   # 经 cmd.exe:`Get-Command pnpm` 解析到 pnpm.ps1,CreateProcess 起不了它
   # ("not a valid application for this OS platform")。
   $psi.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
-  $psi.Arguments = "/c $CommandLine"
+  # 合并 stderr 到 stdout 再落盘:cargo / tauri 把进度叙述写在 stderr 上,
+  # 要断言的那条 warning 也在那儿。
+  $psi.Arguments = "/c $CommandLine > `"$script:LastBuildLog`" 2>&1"
   $psi.WorkingDirectory = (Get-Location).Path
   $psi.UseShellExecute = $false
   $psi.RedirectStandardInput = $true
@@ -114,8 +120,26 @@ function Invoke-Build {
   $psi.Environment['TAURI_SIGNING_PRIVATE_KEY_PASSWORD'] = ''
   $proc = [System.Diagnostics.Process]::Start($psi)
   $proc.StandardInput.Close()
-  $proc.WaitForExit()
-  if ($proc.ExitCode -ne 0) { Die "$What 失败(exit $($proc.ExitCode))" }
+  # 边跑边把日志尾巴打出来:构建要几分钟,完全静默会让人分不清"在编"和"挂住了"
+  # —— 而挂住恰恰是这个脚本历史上最贵的失败模式。
+  $shown = 0
+  while (-not $proc.HasExited) {
+    Start-Sleep -Seconds 5
+    if (Test-Path $script:LastBuildLog) {
+      $lines = @(Get-Content $script:LastBuildLog -ErrorAction SilentlyContinue)
+      if ($lines.Count -gt $shown) {
+        $lines[$shown..($lines.Count - 1)] | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+        $shown = $lines.Count
+      }
+    }
+  }
+  if (Test-Path $script:LastBuildLog) {
+    $lines = @(Get-Content $script:LastBuildLog -ErrorAction SilentlyContinue)
+    if ($lines.Count -gt $shown) {
+      $lines[$shown..($lines.Count - 1)] | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    }
+  }
+  if ($proc.ExitCode -ne 0) { Die "$What 失败(exit $($proc.ExitCode)),完整日志:$script:LastBuildLog" }
 }
 
 # ── 2. 对齐 tag ───────────────────────────────────────────────────────────────
@@ -147,9 +171,43 @@ Invoke-Cli { rustup target add $Triple } | Out-Null
 Say "target = $Triple / updater key = $PlatformKey"
 
 # ── 4. 构建 ───────────────────────────────────────────────────────────────────
+# 构建前清场,两件事都吃过亏:
+#
+# ① 残留的 notemd.exe 会占住产物文件,打包阶段报
+#    `failed to bundle project 另一个程序正在使用此文件 (os error 32)`。
+#    上一轮冒烟测试没退干净就会这样。
+$stale = Get-Process notemd -ErrorAction SilentlyContinue
+if ($stale) {
+  Say "清掉残留的 notemd 进程($($stale.Count) 个),否则打包会被文件占用挡住"
+  $stale | Stop-Process -Force
+  Start-Sleep -Milliseconds 800
+}
+
+# ② 更隐蔽:同一份代码重复打包时 cargo 不会重新链接,于是 Tauri 拿到的是
+#    【上一轮已经被 patch 过】的二进制,找不到待写入的 __TAURI_BUNDLE_TYPE 标记位,
+#    只 warn 不失败 —— 产出一个更新器认不出的包,而构建报"成功"。
+#    删掉最终产物即可逼 cargo 重链(只重链,不重编,几十秒),比 cargo clean 便宜得多。
+$builtExe = "src-tauri/target/$Triple/release/notemd.exe"
+if (Test-Path $builtExe) {
+  Remove-Item $builtExe -Force
+  Say '删掉上一轮的 notemd.exe,强制重新链接(避免 __TAURI_BUNDLE_TYPE 标记丢失)'
+}
+Remove-Item "src-tauri/target/$Triple/release/bundle" -Recurse -Force -ErrorAction SilentlyContinue
+
 Say '构建中(首次约 10-20 分钟)…'
 Invoke-Build -CommandLine 'pnpm install --frozen-lockfile' -What 'pnpm install'
 Invoke-Build -CommandLine "pnpm tauri build --target $Triple" -What 'tauri build'
+
+# 断言而不是只靠预防:这条是 warning,退出码照样是 0,漏了就发出一个
+# 「Updater plugin may not be able to update this package」的包。
+if (Select-String -Path $script:LastBuildLog -Pattern '__TAURI_BUNDLE_TYPE variable not found' -Quiet) {
+  Die @"
+构建产出的二进制缺 __TAURI_BUNDLE_TYPE 标记 —— 更新器将认不出这个包。
+成因通常是 cargo 复用了上一轮已被 patch 过的 notemd.exe。
+清掉后重跑:cargo clean -p notemd --release --target $Triple
+完整日志:$script:LastBuildLog
+"@
+}
 
 # Tauri 2 直接对 NSIS 安装包签名,产出 `<setup>.exe.sig`;并没有 Tauri 1 那个
 # 单独的 `.nsis.zip`。所以安装包本身就是 updater 产物,latest.json 指向它。
