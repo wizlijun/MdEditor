@@ -38,7 +38,12 @@
 # Updater signing (required — release will fail without these):
 #   TAURI_SIGNING_PRIVATE_KEY           private key string OR
 #   TAURI_SIGNING_PRIVATE_KEY_PATH      path to private key file (default: ~/.tauri/mdeditor.key)
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  optional, leave unset if no password
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  留空即可(我们的 key 无密码),但注意:
+#                   Tauri 判的是**变量存不存在**,不是值是否为空。变量缺失时它
+#                   会打印 "expect a prompt for password" 并阻塞等 stdin —— 非
+#                   交互会话里就永远挂着。所以下面第 ~125 行无条件 export 成空
+#                   串,不能删。Windows 侧同理,且 PowerShell 的 `$env:X=""` 是
+#                   *删除*变量,必须用 [Environment]::SetEnvironmentVariable。
 #
 # When all three notarization vars are set AND the signing cert is Developer ID,
 # Tauri's bundler runs `notarytool` automatically and the resulting .dmg passes
