@@ -30,7 +30,32 @@ param(
 
 $ErrorActionPreference = 'Stop'
 function Say($m) { Write-Host "▸ $m" -ForegroundColor Cyan }
-function Die($m) { Write-Host "✗ $m" -ForegroundColor Red; exit 1 }
+
+# 本脚本会 `git checkout <tag>`,也就是把工作区切到 detached HEAD。任何一步失败
+# 都必须切回来 —— 否则一次失败的补包会把发版机静悄悄地留在旧 tag 上,下一个来
+# 操作的人(或下一次跑这个脚本)面对的是错误的代码,而表面上什么都正常。
+#
+# 恢复动作挂在 Die 里而不是只挂 finally:Die 走的是 `exit`,依赖 finally 在
+# `exit` 时一定执行是个不必要的赌注,直接在退出前恢复更确定。
+$script:OriginalRef = $null
+
+function Restore-Ref {
+  if (-not $script:OriginalRef) { return }
+  $current = (git rev-parse --abbrev-ref HEAD 2>$null)
+  if ($current -eq $script:OriginalRef) { return }
+  Write-Host "▸ 切回 $script:OriginalRef" -ForegroundColor Cyan
+  # 这里不能用 Die:它会调回自己。失败只警告,并把手工恢复的命令给出来。
+  git checkout --quiet $script:OriginalRef 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "! 切回 $script:OriginalRef 失败,仓库仍在 detached HEAD。手工执行:git checkout $script:OriginalRef" -ForegroundColor Yellow
+  }
+}
+
+function Die($m) {
+  Write-Host "✗ $m" -ForegroundColor Red
+  Restore-Ref
+  exit 1
+}
 
 # 原生命令统一经此调用。PS 5.1 在 $ErrorActionPreference='Stop' 下,会把原生程序
 # 写到 stderr 的【任意一行】变成终止性错误,而 gh / git / cargo 都在 stderr 上叙述
@@ -152,6 +177,14 @@ $Version = $Tag.TrimStart('v')
 
 $dirty = Invoke-Cli { git status --porcelain }
 if ($dirty) { Die "工作区不干净,先提交或清理:`n$dirty" }
+
+# 记下当前分支,好在结束(无论成败)时切回来。detached HEAD 上启动的话这里得到
+# "HEAD",没有可回去的分支名,就不做恢复 —— 但要说明白,免得以为脚本会兜底。
+$script:OriginalRef = Invoke-Cli { git rev-parse --abbrev-ref HEAD }
+if ($script:OriginalRef -eq 'HEAD') {
+  Write-Host "! 启动时已是 detached HEAD,结束后不会自动切回任何分支" -ForegroundColor Yellow
+  $script:OriginalRef = $null
+}
 
 Invoke-Cli { git checkout --quiet $Tag }
 $pkgVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
@@ -290,6 +323,10 @@ if ($live.version -ne $Version) { Die "线上 latest.json 版本是 $($live.vers
 foreach ($need in @('darwin-aarch64', 'darwin-x86_64', $PlatformKey)) {
   if ($keys -notcontains $need) { Die "线上 latest.json 缺 $need —— 平台条目被弄丢了!" }
 }
+
+# 成功路径同样要切回去 —— 否则跑通之后仓库停在 detached HEAD 上,
+# 下一个来操作的人面对的是 tag 的代码而不是分支。
+Restore-Ref
 
 Write-Host ''
 Write-Host "✓ $Tag 已补齐 Windows" -ForegroundColor Green
