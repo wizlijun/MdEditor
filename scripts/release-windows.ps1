@@ -62,6 +62,7 @@
 #>
 [CmdletBinding()]
 param(
+  [string] $Tag,
   [string] $LatestJson,
   [string] $OutDir,
   [switch] $SkipTests,
@@ -88,6 +89,61 @@ function Invoke-Native {
   $ErrorActionPreference = 'Continue'
   try { & $Cmd } finally { $ErrorActionPreference = $prev }
   if ($LASTEXITCODE -ne 0) { Die "$What failed (exit $LASTEXITCODE)" }
+}
+
+<#
+.SYNOPSIS
+  Run a command with a *present but empty* updater signing password.
+
+.DESCRIPTION
+  Tauri decides whether to prompt for the key password by whether
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD exists — not by whether it is empty:
+
+    absent          → "Decrypting updater signing key, expect a prompt for
+                      password", then blocks on stdin. In an unattended run that
+                      hangs forever, *after* the installer is already built, with
+                      `building` as the last line in the log. Nothing about it
+                      reads as a password problem. This cost 2.5 hours once.
+    present, empty  → decrypts with an empty password. What this project needs.
+    present, wrong  → fails fast, "incorrect updater private key password".
+
+  And on Windows there is no way to put an empty value in the *current*
+  process's environment. All three of these DELETE the variable:
+
+    $env:X = ''                                          (PowerShell)
+    set X=                                               (cmd)
+    [Environment]::SetEnvironmentVariable('X','','Process')
+
+  The last one surprises people — Windows PowerShell 5.1 runs on .NET Framework,
+  where that call forwards to Win32 SetEnvironmentVariableW, and passing an
+  empty string there means "remove".
+
+  A child's environment block, built by hand, *can* hold an empty value. So the
+  build is launched through ProcessStartInfo rather than invoked inline. stdin
+  is redirected and closed as a second line of defence: any prompt that does
+  appear then reads EOF and fails fast instead of hanging.
+#>
+function Invoke-Build {
+  param([Parameter(Mandatory)][string] $Arguments, [Parameter(Mandatory)][string] $What)
+
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  # Via cmd.exe: `Get-Command pnpm` resolves to pnpm.ps1, which CreateProcess
+  # cannot launch ("not a valid application for this OS platform").
+  $psi.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
+  $psi.Arguments = "/c pnpm $Arguments"
+  $psi.WorkingDirectory = $Root
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardInput = $true
+
+  $psi.Environment['TAURI_SIGNING_PRIVATE_KEY'] = $env:TAURI_SIGNING_PRIVATE_KEY
+  $psi.Environment['TAURI_SIGNING_PRIVATE_KEY_PASSWORD'] =
+    if ($null -ne $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) { $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD } else { '' }
+  $psi.Environment['RUSTUP_TOOLCHAIN'] = $env:RUSTUP_TOOLCHAIN
+
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  $proc.StandardInput.Close()
+  $proc.WaitForExit()
+  if ($proc.ExitCode -ne 0) { Die "$What failed (exit $($proc.ExitCode))" }
 }
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -133,9 +189,32 @@ break auto-update for every existing install.
   }
   $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content $keyPath -Raw).Trim()
 }
-if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
-  $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ''
+
+# Tauri wants this variable base64-encoded, but a key file exists in the wild in
+# BOTH forms: `tauri signer generate` writes the canonical minisign document
+# ("untrusted comment: …\n<payload>") to disk, while CI setups and
+# scripts/release.sh's `cat` path carry the base64 of that whole document.
+# Handing the canonical form straight through fails deep inside the bundler with
+# "failed to decode base64 key: Invalid symbol 32, offset 9" — offset 9 being
+# the space in "untrusted comment:", which explains nothing to the reader.
+# Normalize here so either file works.
+$rawKey = $env:TAURI_SIGNING_PRIVATE_KEY.Trim()
+if ($rawKey -like 'untrusted comment:*') {
+  $env:TAURI_SIGNING_PRIVATE_KEY =
+    [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($rawKey + "`n"))
+  Say "key was in canonical minisign form — base64-encoded for the bundler"
+} else {
+  try {
+    $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($rawKey))
+  } catch {
+    Die "updater key is neither a minisign document nor base64 — check $keyPath"
+  }
+  if ($decoded -notlike 'untrusted comment:*') {
+    Die "updater key decodes to something that is not a minisign secret key — check $keyPath"
+  }
 }
+
+# The signing password is NOT set here — it cannot be. See Invoke-Native.
 Ok "updater signing key loaded"
 
 # ---------- toolchain ----------
@@ -151,9 +230,36 @@ if (-not $env:RUSTUP_TOOLCHAIN) {
 }
 Say "toolchain: $env:RUSTUP_TOOLCHAIN"
 
+# ---------- align with the tag ----------
+#
+# The Windows build must be of exactly the code the macOS side tagged. Building
+# whatever happens to be checked out produces a package whose contents do not
+# match the tag — and the signature still verifies, so nothing downstream can
+# catch it. `-Tag` makes that impossible to get wrong by accident.
+
+if ($Tag) {
+  Invoke-Native { git fetch origin --tags --quiet } "git fetch --tags"
+
+  $dirty = (git status --porcelain)
+  if ($dirty) {
+    Die @"
+working tree is dirty — refusing to check out $Tag over local changes.
+Commit or stash first:
+
+$dirty
+"@
+  }
+
+  Say "checking out $Tag"
+  Invoke-Native { git -c advice.detachedHead=false checkout --quiet $Tag } "git checkout $Tag"
+}
+
 $version = (Get-Content (Join-Path $Root 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).version
 if (-not $version) { Die "could not read version from src-tauri/tauri.conf.json" }
-$tag = "v$version"
+$tag = if ($Tag) { $Tag } else { "v$version" }
+if ($tag -ne "v$version") {
+  Die "tag $tag does not match the checked-out version $version — the tag is authoritative, so this build would ship the wrong code"
+}
 $repo = $env:GH_REPO
 if (-not $repo) { $repo = 'wizlijun/note.md' }
 Say "version $version  tag $tag  repo $repo"
@@ -173,7 +279,7 @@ if (-not $SkipTests) {
 # ---------- build ----------
 
 Say "building (release, nsis)"
-Invoke-Native { pnpm tauri build } "build"
+Invoke-Build -Arguments 'tauri build' -What 'build'
 
 $exe = Join-Path $Root 'src-tauri\target\release\notemd.exe'
 $bundleDir = Join-Path $Root 'src-tauri\target\release\bundle\nsis'
@@ -269,6 +375,36 @@ $outFile = Join-Path $OutDir 'latest.json'
 $url = "https://github.com/$repo/releases/download/$tag/" + [IO.Path]::GetFileName($updater)
 $winEntry = [pscustomobject]@{ signature = $signature; url = $url }
 
+# .NET does not read HTTP(S)_PROXY the way curl and reqwest do, so a machine
+# that only reaches GitHub through a proxy needs it passed explicitly — to the
+# download below as well as to the uploads further down.
+$proxy = $env:HTTPS_PROXY
+if (-not $proxy) { $proxy = $env:HTTP_PROXY }
+$dlCommon = @{}
+if ($proxy) { $dlCommon.Proxy = $proxy }
+
+# latest.json is ONE manifest shared by every platform. The copy already on the
+# release carries the darwin-* entries; a locally-built replacement would delete
+# them and break auto-update for every macOS user the moment it is uploaded.
+# So: fetch the live one, merge into it, and refuse to proceed if it cannot be
+# fetched — failing here leaves the release untouched, which is the safe state.
+if (-not $LatestJson -and $Upload) {
+  $LatestJson = Join-Path $OutDir 'latest.upstream.json'
+  Say "downloading the live latest.json from $tag"
+  try {
+    Invoke-WebRequest @dlCommon -Uri "https://github.com/$repo/releases/download/$tag/latest.json" `
+      -OutFile $LatestJson -UseBasicParsing -TimeoutSec 60
+  } catch {
+    Die @"
+could not download the live latest.json from ${tag}: $($_.Exception.Message)
+
+Refusing to build one from scratch — it would carry only windows-x86_64 and
+drop the darwin-* entries, breaking auto-update for every macOS user. Fix the
+network/tag and retry, or pass -LatestJson with a copy fetched by hand.
+"@
+  }
+}
+
 if ($LatestJson) {
   if (-not (Test-Path $LatestJson)) { Die "latest.json not found: $LatestJson" }
   $manifest = Get-Content $LatestJson -Raw | ConvertFrom-Json
@@ -276,10 +412,16 @@ if ($LatestJson) {
     Die "version mismatch: latest.json says '$($manifest.version)', this build is '$version'"
   }
   $manifest.platforms | Add-Member -NotePropertyName 'windows-x86_64' -NotePropertyValue $winEntry -Force
-  Say "merged windows-x86_64 into $LatestJson"
+  $names = ($manifest.platforms | Get-Member -MemberType NoteProperty).Name
+  foreach ($required in 'darwin-aarch64', 'darwin-x86_64') {
+    if ($names -notcontains $required) {
+      Die "merged manifest is missing $required — uploading it would strand those users"
+    }
+  }
+  Say "merged windows-x86_64; platforms now: $($names -join ', ')"
 } else {
-  Write-Host "! no -LatestJson given: emitting a Windows-only manifest." -ForegroundColor Yellow
-  Write-Host "  Uploading this as-is would drop the darwin-* entries and strand macOS users." -ForegroundColor Yellow
+  Write-Host "! no -LatestJson and no -Upload: emitting a Windows-only manifest for inspection." -ForegroundColor Yellow
+  Write-Host "  Do NOT upload this by hand — it has no darwin-* entries." -ForegroundColor Yellow
   $manifest = [pscustomobject]@{
     version   = $version
     notes     = "See https://github.com/$repo/releases/tag/$tag"
@@ -303,10 +445,6 @@ if ($Upload) {
   if (-not $token) { $token = $env:GITHUB_TOKEN }
   if (-not $token) { Die "-Upload needs GH_TOKEN (or GITHUB_TOKEN) with 'contents: write' on $repo" }
 
-  # .NET does not read HTTP(S)_PROXY the way curl and reqwest do, so a machine
-  # that only reaches GitHub through a proxy needs it passed explicitly.
-  $proxy = $env:HTTPS_PROXY
-  if (-not $proxy) { $proxy = $env:HTTP_PROXY }
   $common = @{ Headers = @{
       Authorization = "Bearer $token"
       'User-Agent'  = 'notemd-release-windows'
@@ -346,6 +484,28 @@ if ($Upload) {
     Invoke-RestMethod @uploadArgs | Out-Null
     Ok "uploaded $name"
   }
+
+  # ---------- read back ----------
+  #
+  # Confirm against what the release actually serves, not against what we
+  # believe we sent. A silently-truncated upload or a stale CDN copy looks
+  # exactly like success from the POST alone, and the failure mode — macOS
+  # clients losing their update channel — is invisible from here.
+  Say "verifying the published latest.json"
+  $publishedPath = Join-Path $OutDir 'latest.published.json'
+  Invoke-WebRequest @dlCommon -Uri "https://github.com/$repo/releases/download/$tag/latest.json" `
+    -OutFile $publishedPath -UseBasicParsing -TimeoutSec 60
+  $published = Get-Content $publishedPath -Raw | ConvertFrom-Json
+  $publishedNames = ($published.platforms | Get-Member -MemberType NoteProperty).Name
+  foreach ($required in 'darwin-aarch64', 'darwin-x86_64', 'windows-x86_64') {
+    if ($publishedNames -notcontains $required) {
+      Die "published latest.json is missing $required (has: $($publishedNames -join ', ')) — the release is in a bad state, fix it before announcing"
+    }
+  }
+  if ($published.platforms.'windows-x86_64'.signature -ne $signature) {
+    Die "published windows-x86_64 signature does not match the one just built"
+  }
+  Ok "published platforms: $($publishedNames -join ', ')"
 
   Ok "https://github.com/$repo/releases/tag/$tag"
 }
