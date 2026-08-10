@@ -77,12 +77,34 @@
 
   // Reindex on save elsewhere in the vault; if a query is active, silently
   // refresh it so newly-searchable content shows up without the user
-  // re-typing. Skip while a request is already in flight so a burst of
-  // index-updated events (e.g. several saves in a row) can't stack multiple
-  // overlapping run()s on top of each other — the sequence guard in the
-  // store would just discard all but the last anyway, so this is purely to
-  // avoid pointless calls, not correctness.
+  // re-typing.
   //
+  // Coalescing is done on *our own* refreshes (`refreshing`/`refreshPending`),
+  // not by skipping whenever `searchStore.loading` is set. That earlier guard
+  // was described as "purely to avoid pointless calls, not correctness", and
+  // that was wrong: an index-updated event arriving while any query was in
+  // flight — including one the user just typed — was dropped outright, with
+  // nothing scheduled to retry it, leaving results that silently predate the
+  // update until the user typed again. Overlapping with a user query is
+  // harmless: `SearchStore.run` stamps a monotonic sequence and discards
+  // every response but the newest, and the refresh is issued last, so the
+  // fresher answer is the one that lands.
+  let refreshing = false
+  let refreshPending = false
+  async function refreshAfterIndexUpdate() {
+    if (!searchStore.query.trim()) return
+    if (refreshing) { refreshPending = true; return }
+    refreshing = true
+    try {
+      do {
+        refreshPending = false
+        await searchStore.run(searchStore.query)
+      } while (refreshPending && searchStore.query.trim())
+    } finally {
+      refreshing = false
+    }
+  }
+
   // KNOWN GAP: this does not protect against a *rebuild* triggered
   // elsewhere (another window, a concurrent CLI invocation). If this event
   // fires while some other actor holds the backend index mutex mid-rebuild,
@@ -93,9 +115,7 @@
   // backend-reported "busy" signal (e.g. a distinct event/state emitted
   // around `notemd_search_rebuild`), which is out of scope for this panel.
   $effect(() => {
-    const pending = listen('search://index-updated', () => {
-      if (searchStore.query.trim() && !searchStore.loading) void searchStore.run(searchStore.query)
-    })
+    const pending = listen('search://index-updated', () => { void refreshAfterIndexUpdate() })
     return () => { void pending.then((un) => un()) }
   })
 </script>

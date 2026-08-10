@@ -26,6 +26,11 @@
 //!    matters; on a file with ragged indentation, this module folds lines
 //!    into the wrong node's `text` (still findable, wrong breadcrumb) where
 //!    `markdown.ts` would split them into an extra sibling node.
+//!    What this module does *not* do any more is flatten the line once it has
+//!    matched: it strips at most `contIndent` leading spaces
+//!    ([`strip_cont_indent`]), the same slice `markdown.ts` takes, so
+//!    indentation *inside* a fenced answer body survives into the stored text
+//!    the panel renders and `--json` emits.
 //! 2. **`fence_len` doesn't require "backticks then only whitespace" the way
 //!    TS's close regex (`/^(\`{3,})\s*$/`) does** — trailing non-whitespace
 //!    after the backticks (e.g. `` ``` js``) is still counted as a fence
@@ -54,10 +59,39 @@ fn property(line: &str) -> Option<(&str, &str)> {
         .then(|| (k, v.trim()))
 }
 
+/// A bullet line, as `(depth, content)`.
+///
+/// A **bare `-`** counts, with empty content. That is not leniency, it is the
+/// authoritative parser's rule: `markdown.ts`'s `^((?:  )*)-(?: (.*))?$`
+/// makes the space optional because `serializeOutline` writes an empty block
+/// as `- ` — trailing space and all — and editors, formatters and git hooks
+/// routinely strip trailing whitespace from a vault file. Reading the bare
+/// form as "not a bullet" made this module fold the dash into the previous
+/// node's text and then re-parent that node's children onto the *wrong*
+/// ancestor, so the empty node's whole subtree got the wrong breadcrumb: a
+/// content-attribution divergence, not a formatting nicety. See
+/// `tests/fixtures/outline/empty-bullet.note.md`.
 fn bullet(line: &str) -> Option<(usize, &str)> {
-    let indent = line.len() - line.trim_start().len();
-    let rest = line.trim_start().strip_prefix("- ")?;
+    let t = line.trim_start();
+    let indent = line.len() - t.len();
+    // `-` alone, or `- ` plus content. NOT a prefix test on `-`, which would
+    // swallow `--`/`---` (setext rules, front-matter fences) the same way the
+    // TS regex avoids by requiring end-of-line or exactly one space.
+    let rest = t.strip_prefix("- ").or_else(|| (t == "-").then_some(""))?;
     Some((indent / 2, rest))
+}
+
+/// Strip at most `max` leading spaces — the current node's continuation
+/// indent — instead of every leading space. `markdown.ts` slices exactly
+/// `contIndent` off a continuation line (falling back to `^ {0,N}` when the
+/// line is under-indented), so anything indented *deeper* than its node keeps
+/// that extra indentation. `trim_start()` here used to flatten it, which
+/// silently reformatted the interior of fenced code inside an answer — the
+/// exact text the panel shows and `--json` emits. Tabs are left alone,
+/// matching TS, which only ever counts spaces.
+fn strip_cont_indent(line: &str, max: usize) -> &str {
+    let n = line.chars().take_while(|c| *c == ' ').count().min(max);
+    &line[n..]
 }
 
 /// Number of leading backticks, if there are at least 3 (a fence delimiter).
@@ -84,6 +118,11 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
     let mut chain: Vec<String> = Vec::new();
     // index into `blocks` of the node currently accumulating lines
     let mut current: Option<usize> = None;
+    // The current node's continuation indent, mirroring `markdown.ts`'s
+    // `'  '.repeat(currentDepth) + '  '`: how many leading spaces belong to
+    // the outline structure rather than to the content. See
+    // `strip_cont_indent`.
+    let mut cont_indent = 0usize;
     let mut fence = 0usize;
 
     for (i, raw) in lines.iter().enumerate() {
@@ -96,7 +135,7 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
             if let Some(idx) = current {
                 blocks[idx].line_end = line_no;
                 blocks[idx].text.push('\n');
-                blocks[idx].text.push_str(raw.trim_start());
+                blocks[idx].text.push_str(strip_cont_indent(raw, cont_indent));
             }
             continue;
         }
@@ -115,6 +154,7 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
                 agent_by: None,
             });
             current = Some(blocks.len() - 1);
+            cont_indent = (depth + 1) * 2;
             // A fenced answer body opens right on the bullet's own line (e.g.
             // `- \`\`\`markdown`), not on a later continuation line — same
             // rule the TS parser applies when it pushes the node (checked
@@ -147,6 +187,10 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
                 agent_by: None,
             });
             current = Some(blocks.len() - 1);
+            // `markdown.ts` downgrades this line with `push(0, …)` and sets
+            // `currentDepth = 0`, so its continuation indent is a root
+            // node's.
+            cont_indent = 2;
             continue;
         };
         blocks[idx].line_end = line_no;
@@ -166,7 +210,7 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
         }
         if !raw.trim().is_empty() {
             blocks[idx].text.push('\n');
-            blocks[idx].text.push_str(raw.trim_start());
+            blocks[idx].text.push_str(strip_cont_indent(raw, cont_indent));
         }
     }
 
@@ -290,6 +334,52 @@ mod tests {
         assert_eq!(b[0].text, "stray prose");
         assert_eq!(b[0].breadcrumb, "");
         assert_eq!(b[1].text, "a");
+    }
+
+    /// 空块被 `serializeOutline` 写成 `- `(破折号+空格+空内容),而编辑器/
+    /// 格式化器/git 钩子例行删掉行尾空白 —— 于是「只有缩进和一个 `-`」的行同样
+    /// 是空 bullet,`markdown.ts` 的 `-(?: (.*))?$` 正是为此而写。读成「不是
+    /// bullet」会把破折号折进上一个节点的文本,并把它的子节点改挂到错误的祖先
+    /// 上:内容归属分歧,不是格式细节。
+    #[test]
+    fn a_bare_dash_is_an_empty_bullet_and_still_parents_its_children() {
+        let b = nodes("- top\n-\n  - child\n");
+        assert_eq!(b.len(), 3, "{:?}", b.iter().map(|x| &x.text).collect::<Vec<_>>());
+        assert_eq!(b[0].text, "top");
+        assert_eq!(b[1].text, "", "the bare dash is a node of its own, with empty content");
+        assert_eq!(b[1].line_start, 2);
+        assert_eq!(b[2].text, "child");
+        assert_eq!(b[2].breadcrumb, "", "the child hangs under the empty node, not under `top`");
+    }
+
+    /// The bare-dash rule must stay a whole-line rule, not a `-` prefix test:
+    /// `markdown.ts` requires end-of-line or exactly one space after the dash
+    /// precisely so `--`/`---` (front-matter fences, horizontal rules) are not
+    /// swallowed as bullets.
+    #[test]
+    fn a_double_dash_or_horizontal_rule_is_not_a_bullet() {
+        let b = nodes("- a\n--\n---\n");
+        assert_eq!(b.len(), 1, "{:?}", b.iter().map(|x| &x.text).collect::<Vec<_>>());
+        assert_eq!(b[0].text, "a\n--\n---");
+    }
+
+    /// 围栏答复正文里的缩进是内容,不是排版噪音:面板显示的、`--json` 吐给
+    /// agent 的正是这段文本。`trim_start` 会把每行压平;TS 只剥掉本节点的续行
+    /// 缩进(contIndent),多出来的缩进原样留着。
+    #[test]
+    fn indentation_inside_a_fenced_answer_body_survives() {
+        let md = "- q\n  - ```\n    fn main() {\n        let x = 1;\n    }\n    ```\n";
+        let b = nodes(md);
+        assert_eq!(b.len(), 2, "{:?}", b.iter().map(|x| &x.text).collect::<Vec<_>>());
+        assert_eq!(b[1].text, "```\nfn main() {\n    let x = 1;\n}\n```");
+    }
+
+    /// The same rule outside a fence: a continuation line indented deeper than
+    /// its node keeps the surplus.
+    #[test]
+    fn a_continuation_line_keeps_indentation_beyond_its_nodes_own() {
+        let b = nodes("- a\n      deep\n");
+        assert_eq!(b[0].text, "a\n    deep");
     }
 
     #[test]

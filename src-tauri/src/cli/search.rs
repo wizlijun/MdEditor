@@ -220,10 +220,18 @@ fn scan_options(root: &Path) -> ScanOptions {
 
 /// Last-ditch retrieval with no index at all: walk the vault and substring-match.
 /// Slower and unranked, but the caller gets an answer instead of an excuse.
+///
+/// The walker comes from `searchidx::scan::walk_builder` — the same one the
+/// index itself uses — rather than being configured here. Built locally with
+/// `ignore`'s defaults it honoured `.gitignore`/`.ignore`/global excludes,
+/// and since note.md vaults are git repositories that meant the fallback
+/// searched a *different corpus* than the index: a `.gitignore`d note was
+/// found by one and invisible to the other, with nothing in the output to
+/// say so. Same walker, same `is_indexable`, one corpus.
 fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> Vec<searchidx::Hit> {
     let needle = query.to_lowercase();
     let mut out = Vec::new();
-    for entry in ignore::WalkBuilder::new(root).hidden(true).follow_links(false).build().flatten() {
+    for entry in searchidx::scan::walk_builder(root).build().flatten() {
         if out.len() >= limit {
             break;
         }

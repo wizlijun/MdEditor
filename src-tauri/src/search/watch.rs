@@ -183,9 +183,16 @@ fn drain(app: &AppHandle, root: &Path, batch: Batch) {
     drop(guard);
     if ok {
         // Lets an open search panel refresh without polling.
-        let _ = app.emit("search://index-updated", ());
+        let _ = app.emit(INDEX_UPDATED_EVENT, ());
     }
 }
+
+/// The only contract between this watcher and `SearchPanel.svelte`, and a
+/// string on both sides with no compiler anywhere in between: rename either
+/// end and the panel simply stops auto-refreshing, silently, for everyone.
+/// `the_index_updated_event_name_matches_the_panels_listener` reads the Svelte
+/// file and pins the pair.
+pub const INDEX_UPDATED_EVENT: &str = "search://index-updated";
 
 /// Log *why* a file left the index (or that it was, in fact, indexed) rather
 /// than collapsing every outcome into a bare bool — distinguishing "gone",
@@ -264,6 +271,26 @@ mod tests {
         let access = Event::new(EventKind::Access(AccessKind::Any))
             .add_path(PathBuf::from("/vault/notes/a.md"));
         assert!(relevant_paths(&access, root).is_empty());
+    }
+
+    /// `search://index-updated` exists in exactly two places — the `emit`
+    /// above and `SearchPanel.svelte`'s `listen` — with no shared declaration
+    /// and no build step that checks them against each other. Rename either
+    /// and the panel just stops refreshing after a save: no error, no log
+    /// line, nothing to notice. So the test reads the other side's source and
+    /// asserts the literal is really there.
+    #[test]
+    fn the_index_updated_event_name_matches_the_panels_listener() {
+        let panel = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/components/side-panel/SearchPanel.svelte");
+        let src = std::fs::read_to_string(&panel)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", panel.display()));
+        let needle = format!("listen('{INDEX_UPDATED_EVENT}'");
+        assert!(
+            src.contains(&needle),
+            "SearchPanel.svelte does not listen for {INDEX_UPDATED_EVENT} \
+             (looked for {needle:?}) — auto-refresh is silently dead"
+        );
     }
 
     #[test]

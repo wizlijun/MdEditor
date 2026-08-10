@@ -121,6 +121,50 @@ fn an_unusable_index_degrades_to_a_direct_scan_and_still_exits_zero() {
     assert!(!out.stderr.is_empty(), "a degradation must be announced on stderr");
 }
 
+/// Degrading is only acceptable if it degrades to *the same corpus*. The
+/// index deliberately ignores `.gitignore`/`.ignore` — what belongs in the
+/// index is a vault setting (`searchExcludeDirs`), not a decision delegated
+/// to whatever the repository happens to keep out of git, and a `.gitignore`d
+/// note is still a note. The fallback scan built its walker with `ignore`'s
+/// defaults, which honour all of them; since note.md vaults are git
+/// repositories, that made "found in the GUI / missing from `notemd search`"
+/// a silent, reproducible disagreement. Both paths now share
+/// `searchidx::scan::walk_builder`.
+///
+/// The `.git/HEAD` file is load-bearing: `ignore`'s `require_git` defaults to
+/// true, so without it `.gitignore` would not be applied even by a
+/// default-configured walker and the test would pass vacuously.
+#[test]
+fn the_no_index_fallback_searches_the_same_corpus_as_the_index() {
+    let files: &[(&str, &str)] = &[
+        (".git/HEAD", "ref: refs/heads/main\n"),
+        (".gitignore", "gitignored.md\n"),
+        (".ignore", "plainignored.md\n"),
+        ("gitignored.md", "brownfox one\n"),
+        ("plainignored.md", "brownfox two\n"),
+    ];
+
+    let v = vault(files);
+    let indexed = String::from_utf8_lossy(&search(v.path(), &["brownfox"]).stdout).to_string();
+    assert!(indexed.contains("gitignored.md:1:"), "index path: {indexed}");
+    assert!(indexed.contains("plainignored.md:1:"), "index path: {indexed}");
+
+    // Same query, index forced to be unusable (see the test above for why
+    // pointing the app-data root at a plain file does that).
+    let v2 = vault(files);
+    let blocker = v2.path().join("blocker");
+    std::fs::write(&blocker, b"x").unwrap();
+    let mut cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    cmd.arg("--cli").arg("search").arg("brownfox").arg("--vault").arg(v2.path());
+    cmd.env("HOME", &blocker);
+    #[cfg(windows)]
+    cmd.env("LOCALAPPDATA", &blocker);
+    let out = cmd.output().unwrap();
+    let scanned = String::from_utf8_lossy(&out.stdout);
+    assert!(scanned.contains("gitignored.md:1:"), "fallback path: {scanned}");
+    assert!(scanned.contains("plainignored.md:1:"), "fallback path: {scanned}");
+}
+
 #[test]
 fn missing_vault_is_the_only_hard_error() {
     let mut cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));

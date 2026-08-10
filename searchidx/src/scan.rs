@@ -94,19 +94,36 @@ struct Candidate {
 /// `.gitignore`/`.ignore` files, not a contract this crate controls. Tests
 /// pin both a `.git/x.md` and a `.notemd/z.md` so a change in either layer
 /// is caught.
+/// The one walker configuration this product uses over a vault. Exported
+/// because the CLI's index-less `fallback_scan` must walk the *same* corpus:
+/// with `ignore`'s defaults it honours `.gitignore`/`.ignore`/global excludes,
+/// and note.md vaults are git repositories — so a file the index happily
+/// returns would be invisible to the fallback, and "found in the GUI, missing
+/// from `notemd search`" is precisely the disagreement this crate exists to
+/// make impossible.
+///
+/// Every ignore-file source is off on purpose: what belongs in the index is a
+/// vault decision (`exclude_dirs` in `.notemd/settings.json`), not a decision
+/// delegated to whatever the repository happens to keep out of git. A
+/// `.gitignore`d note is still a note.
+pub fn walk_builder(vault_root: &Path) -> ignore::WalkBuilder {
+    let mut b = ignore::WalkBuilder::new(vault_root);
+    b.hidden(true)
+        .follow_links(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .ignore(false)
+        .parents(false);
+    b
+}
+
 fn walk(vault_root: &Path, opts: &ScanOptions) -> (Vec<Candidate>, Vec<String>) {
     let mut out = Vec::new();
     let mut skipped = Vec::new();
     let limit = opts.large_file_threshold_mb as u64 * 1024 * 1024;
 
-    let walker = ignore::WalkBuilder::new(vault_root)
-        .hidden(true)
-        .follow_links(false)
-        .git_ignore(false)
-        .git_global(false)
-        .git_exclude(false)
-        .parents(false)
-        .build();
+    let walker = walk_builder(vault_root).build();
 
     for entry in walker.flatten() {
         if !entry.file_type().is_some_and(|t| t.is_file()) {

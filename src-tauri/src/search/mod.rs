@@ -61,6 +61,16 @@ pub fn scan_options(vault_root: &Path) -> ScanOptions {
 pub fn open_vault(app: &AppHandle, vault_root: &Path) {
     let my_gen = watch::reserve_generation(app);
     let idx_handle = handle(app);
+    // Drop the previous vault's index *now*, synchronously, before any of the
+    // slow work below is spawned. Otherwise, for the entire duration of the
+    // new vault's open+build+sweep, every query is answered from the OLD
+    // vault's index — and `HitDto::abs_path` is built from that index's own
+    // `vault_root()`, so clicking a result opens a file inside the vault the
+    // user just left. If the new open then fails, that state is permanent:
+    // `open_vault` only runs at launch and at vault-pick. Empty means the
+    // three commands return `NOT_READY`, which is exactly the honest answer
+    // and which the panel already renders.
+    *lock(&idx_handle) = None;
     let root = vault_root.to_path_buf();
     let app = app.clone();
     std::thread::spawn(move || {
