@@ -141,8 +141,27 @@ fn try_open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Opened> {
         .map(|n| n > 0)?;
 
     if !has_meta {
-        stamp_fresh_schema(&conn, vault_root)?;
-        return Ok(Opened::Ready(conn));
+        // No `meta` and nothing else either: a file we just created (or one
+        // wiped down to zero bytes). Ours to build on.
+        let empty: bool = conn
+            .query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0))
+            .map(|n| n == 0)?;
+        if empty {
+            stamp_fresh_schema(&conn, vault_root)?;
+            return Ok(Opened::Ready(conn));
+        }
+        // No `meta` but *some* tables: a half-created index (a crash, a kill,
+        // a full disk between two of `SCHEMA_SQL`'s statements), or someone
+        // else's database that happens to live at our path. Stamping our
+        // schema onto it fails on the first `CREATE TABLE` that already
+        // exists — `SQLITE_ERROR`, which is neither `NOTADB` nor `CORRUPT`,
+        // so `open` would return `Err` on this and every subsequent attempt:
+        // search permanently dead for that vault, with even the panel's
+        // Rebuild button unable to recover it (it comes through here too).
+        // The index is disposable derived data, so the answer is the same one
+        // a stale schema gets: wipe and rebuild.
+        drop(conn);
+        return Ok(Opened::Stale);
     }
 
     let ok = meta_get(&conn, "schema_version").as_deref() == Some(&SCHEMA_VERSION.to_string())
@@ -178,12 +197,20 @@ fn create_fresh(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection
     Ok(conn)
 }
 
+/// Create the schema and stamp `meta`, **atomically**. SQLite runs DDL inside
+/// transactions, so one transaction around the whole batch means the file on
+/// disk only ever has zero tables or all of them — never the half-built state
+/// (`files` created, `meta` not) that a crash, a kill, or a full disk between
+/// two auto-committed `CREATE TABLE`s used to leave behind. `try_open` still
+/// handles that state defensively, since databases created by older builds
+/// are already out there.
 fn stamp_fresh_schema(conn: &Connection, vault_root: &str) -> rusqlite::Result<()> {
-    conn.execute_batch(SCHEMA_SQL)?;
-    meta_set(conn, "schema_version", &SCHEMA_VERSION.to_string())?;
-    meta_set(conn, "tokenizer_id", TOKENIZER_ID)?;
-    meta_set(conn, "vault_root", vault_root)?;
-    Ok(())
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(SCHEMA_SQL)?;
+    meta_set(&tx, "schema_version", &SCHEMA_VERSION.to_string())?;
+    meta_set(&tx, "tokenizer_id", TOKENIZER_ID)?;
+    meta_set(&tx, "vault_root", vault_root)?;
+    tx.commit()
 }
 
 fn set_pragmas(conn: &Connection) -> rusqlite::Result<()> {
@@ -410,6 +437,56 @@ mod tests {
         std::fs::write(&p, b"this is not a sqlite file at all").unwrap();
         let conn = open(&p, "/v").unwrap();
         assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some("1"));
+    }
+
+    /// A database that opens fine, has some of our tables, and no `meta` — the
+    /// state a crash between two of `SCHEMA_SQL`'s statements used to leave —
+    /// must self-heal like any other unusable index. It briefly did not:
+    /// `try_open` stamped the schema onto it, `CREATE TABLE files` failed with
+    /// `SQLITE_ERROR` ("table files already exists"), and since that is
+    /// neither `NOTADB` nor `CORRUPT` it was returned as an `Err` — on this
+    /// open and every one after it. Search dead for that vault until a human
+    /// deleted the file by hand; even Rebuild could not fix it, because
+    /// Rebuild opens through here too.
+    #[test]
+    fn a_half_created_database_is_rebuilt_not_failed_forever() {
+        let (_d, p) = tmp();
+        {
+            let conn = Connection::open(&p).unwrap();
+            conn.execute_batch("CREATE TABLE files(id INTEGER PRIMARY KEY, path TEXT);").unwrap();
+        }
+        let conn = open(&p, "/v").expect("a half-created index must be rebuilt, not reported");
+        assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some("1"));
+        assert_eq!(meta_get(&conn, "vault_root").as_deref(), Some("/v"));
+        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        // And it is a real index afterwards, not just an openable file.
+        drop(conn);
+        let mut conn = open(&p, "/v").unwrap();
+        write(&mut conn, "a.md", "alpha\n");
+        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// The reason the state above should stop being producible in the first
+    /// place: schema creation is one transaction, so an interruption can leave
+    /// zero tables but never a subset of them.
+    #[test]
+    fn schema_creation_is_atomic() {
+        let (_d, p) = tmp();
+        {
+            let conn = Connection::open(&p).unwrap();
+            set_pragmas(&conn).unwrap();
+            // Make the *last* statement of the batch fail, standing in for a
+            // crash/ENOSPC part-way through: `meta` already exists, so
+            // `CREATE TABLE meta` errors after `files`/`blocks`/… succeeded.
+            conn.execute_batch("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);").unwrap();
+            assert!(stamp_fresh_schema(&conn, "/v").is_err());
+            let tables: i64 = conn
+                .query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='files'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(tables, 0, "a failed schema creation must roll back entirely");
+        }
     }
 
     /// 免 IPC 收敛的数学前提:同一文件重复写入必须收敛到同一状态。

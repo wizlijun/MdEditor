@@ -122,10 +122,31 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
                 }
             }
             Event::Start(Tag::Paragraph) | Event::Start(Tag::CodeBlock(_)) => {
-                if pending.is_none() {
-                    let s = bl(range.start);
-                    let e = bl(range.end.saturating_sub(1));
-                    pending = Some((s, e, String::new()));
+                match pending.as_mut() {
+                    // Same rule as `Start(Item)` above, and for the same
+                    // reason: any block opening while an accumulator is live
+                    // is a *different* run of source lines, so it gets a
+                    // separator and widens the range. Reaching this arm with
+                    // `pending` already `Some` means we are inside a tight
+                    // list item — a fenced command under a bullet, a
+                    // blockquote under a bullet — where no inner `Paragraph`
+                    // closed the item's accumulator first. Contributing
+                    // nothing there fused the item's text onto the fence's
+                    // ("Run the migration first" + "notemd migrate" =
+                    // "firstnotemd"), destroying both real tokens and
+                    // inventing one that is in no file. In a *loose* item the
+                    // inner `Paragraph` is the item's own text, so this pushes
+                    // a leading `'\n'` onto an empty buffer — which
+                    // `close_pending` trims away.
+                    Some(p) => {
+                        p.2.push('\n');
+                        p.1 = p.1.max(bl(range.end.saturating_sub(1)));
+                    }
+                    None => {
+                        let s = bl(range.start);
+                        let e = bl(range.end.saturating_sub(1));
+                        pending = Some((s, e, String::new()));
+                    }
                 }
             }
             Event::End(TagEnd::Paragraph) | Event::End(TagEnd::CodeBlock) => {
@@ -335,6 +356,91 @@ mod tests {
         }
         assert!(b.iter().any(|x| x.text.contains("alphaxq")));
         assert!(b.iter().any(|x| x.text.contains("betaxq")));
+    }
+
+    /// The same invariant as above, widened to the whole *class* of shapes that
+    /// can open a block while an accumulator is still live. One input proved
+    /// only that nested `Item`s were handled; the identical fusion happened for
+    /// every non-`Item` block inside a tight list item, and "a bullet with a
+    /// fenced command under it" is about the most ordinary shape this product
+    /// sees — it produced `"Run the migration firstnotemd migrate"`, an
+    /// invented token with *both* real tokens destroyed.
+    ///
+    /// Line ranges are asserted too, not just token integrity: the loose-nested
+    /// case below used to pass token integrity while reporting `L2-3` for text
+    /// that lives on line 4 — a `path#Lnnn` anchor that is confidently wrong,
+    /// which for an agent-facing citation is worse than no result at all. So
+    /// besides the expected tables, every emitted block is re-checked against
+    /// *its own* claimed line span: each token must be findable within the
+    /// source lines the block says it came from.
+    #[test]
+    fn every_block_shape_keeps_tokens_intact_and_line_ranges_honest() {
+        // (name, source, expected Line-level blocks in emission order)
+        let cases: &[(&str, &str, &[(&str, u32, u32)])] = &[
+            (
+                "tight bullet with a fenced command under it",
+                "# Heading\n\n- Run the migration first\n  ```sh\n  notemd migrate\n  ```\n",
+                &[("Heading", 1, 1), ("Run the migration first\nnotemd migrate", 3, 6)],
+            ),
+            (
+                "bullet with a nested blockquote",
+                "- alphaxq\n  > betaxq\n",
+                &[("alphaxq\nbetaxq", 1, 2)],
+            ),
+            (
+                "loose nested list with a trailing paragraph",
+                "- alphaxq\n  - betaxq\n\n  morexq\n",
+                // `morexq` is on line 4, so the block that carries it must say
+                // so — this used to read `(2, 3)`.
+                &[("alphaxq", 1, 4), ("betaxq\nmorexq", 2, 4)],
+            ),
+            (
+                "three-level nest",
+                "- parentxq\n  - childxq\n    - grandxq\n",
+                &[("parentxq\nchildxq\ngrandxq", 1, 3)],
+            ),
+            (
+                "list immediately after a paragraph",
+                "leadxq para\n\n- itemxq one\n- itemxq two\n",
+                &[("leadxq para", 1, 1), ("itemxq one", 3, 3), ("itemxq two", 4, 4)],
+            ),
+            (
+                "list item containing two paragraphs",
+                "- firstxq para\n\n  secondxq para\n",
+                &[("firstxq para", 1, 3), ("secondxq para", 3, 3)],
+            ),
+        ];
+
+        for (name, md, expected) in cases {
+            let blocks = chunk(md, 1);
+
+            let got: Vec<(&str, u32, u32)> = blocks
+                .iter()
+                .filter(|b| b.level == BlockLevel::Line)
+                .map(|b| (b.text.as_str(), b.line_start, b.line_end))
+                .collect();
+            assert_eq!(got, expected.to_vec(), "{name}");
+
+            for block in &blocks {
+                for word in block.text.split_whitespace() {
+                    // Nothing stored may be absent from the source…
+                    assert!(md.contains(word), "{name}: invented token {word:?} in {:?}", block.text);
+                    // …and nothing may be attributed to lines it isn't on.
+                    let src: String = md
+                        .lines()
+                        .skip((block.line_start - 1) as usize)
+                        .take((block.line_end - block.line_start + 1) as usize)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    assert!(
+                        src.contains(word),
+                        "{name}: token {word:?} is not within the claimed range L{}-{} ({src:?})",
+                        block.line_start,
+                        block.line_end
+                    );
+                }
+            }
+        }
     }
 
     /// Three levels, two children under one parent: the accumulator must

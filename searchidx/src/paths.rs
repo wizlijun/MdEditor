@@ -13,12 +13,27 @@ use std::path::{Path, PathBuf};
 
 pub const BUNDLE_ID: &str = "net.notemd.app";
 
-/// Stable per-vault cache key: first 16 hex chars of the SHA-256 of the
-/// `/`-normalized, trailing-slash-free vault path.
-pub fn vault_key(vault_root: &Path) -> String {
+/// The one spelling of a vault path: `/`-separated, no trailing slash.
+///
+/// Everything that turns a vault root into a *string* must come through here.
+/// Two near-copies of this normalization already drifted once: `vault_key`
+/// trimmed the trailing slash and `SearchIndex::open_at`'s `meta.vault_root`
+/// stamp did not, so `~/vault` and `~/vault/` — the second is what both bash
+/// and zsh produce when you tab-complete a directory into `--vault` — resolved
+/// to the *same* `index.db` while stamping *different* strings. The equality
+/// check that makes that stamp conditional was then permanently false, so
+/// every open wrote, alternating forever: a five-second `busy_timeout` stall
+/// on every read against a live writer, which is precisely the cost the
+/// conditional exists to avoid.
+pub fn normalized_vault_root(vault_root: &Path) -> String {
     let norm = vault_root.to_string_lossy().replace('\\', "/");
-    let norm = norm.trim_end_matches('/');
-    crate::norm::content_hash(norm.as_bytes())[..16].to_string()
+    norm.trim_end_matches('/').to_string()
+}
+
+/// Stable per-vault cache key: first 16 hex chars of the SHA-256 of the
+/// normalized vault path.
+pub fn vault_key(vault_root: &Path) -> String {
+    crate::norm::content_hash(normalized_vault_root(vault_root).as_bytes())[..16].to_string()
 }
 
 /// `<local app data>/net.notemd.app/search/<vault_key>/index.db`.
@@ -47,6 +62,20 @@ mod tests {
         assert_eq!(a.len(), 16);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, vault_key(Path::new("/Users/x/other")));
+    }
+
+    /// The normalizer is the single source both the cache key and the
+    /// `meta.vault_root` stamp read from, so its contract is asserted directly
+    /// rather than only through them.
+    #[test]
+    fn normalized_vault_root_is_slash_separated_and_slash_free_at_the_end() {
+        assert_eq!(normalized_vault_root(Path::new("/Users/x/vault")), "/Users/x/vault");
+        assert_eq!(normalized_vault_root(Path::new("/Users/x/vault/")), "/Users/x/vault");
+        assert_eq!(normalized_vault_root(Path::new("/Users/x/vault///")), "/Users/x/vault");
+        assert_eq!(normalized_vault_root(Path::new(r"C:\Users\x\vault\")), "C:/Users/x/vault");
+        // A root path is all trailing slash; trimming it to "" is fine (it is
+        // only ever hashed or compared), but it must not panic.
+        assert_eq!(normalized_vault_root(Path::new("/")), "");
     }
 
     #[test]

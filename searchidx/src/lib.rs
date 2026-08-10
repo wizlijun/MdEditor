@@ -49,7 +49,10 @@ impl SearchIndex {
     }
 
     pub fn open_at(vault_root: &Path, db_path: &Path) -> Result<Self, String> {
-        let root = vault_root.to_string_lossy().replace('\\', "/");
+        // Must be the *same* normalization `paths::vault_key` uses, or two
+        // spellings of one vault share a database while disagreeing about the
+        // stamp — see `paths::normalized_vault_root`.
+        let root = paths::normalized_vault_root(vault_root);
         let conn = store::open(db_path, &root).map_err(|e| e.to_string())?;
         Ok(SearchIndex {
             conn,
@@ -124,4 +127,51 @@ fn today() -> String {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     chunk::ymd_from_unix_public(secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `~/vault` and `~/vault/` are the same vault — and both are ordinary to
+    /// type, since bash and zsh both append the slash when you tab-complete a
+    /// directory into `notemd search --vault`. They resolve to one `index.db`
+    /// (`vault_key` trims the slash), so they must also stamp one
+    /// `meta.vault_root`. When they did not, the equality check guarding that
+    /// stamp was permanently false and *every* open — including read-only
+    /// `notemd search` — wrote. The timing assertion is the symptom that made
+    /// that expensive: a write against another process's open write
+    /// transaction waits out the full 5s `busy_timeout` before giving up.
+    #[test]
+    fn a_trailing_slash_is_the_same_vault_and_stamps_the_same_root() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("index.db");
+        let bare = d.path().join("vault");
+        let slashed = std::path::PathBuf::from(format!("{}/", bare.to_string_lossy()));
+        std::fs::create_dir_all(&bare).unwrap();
+
+        assert_eq!(paths::vault_key(&bare), paths::vault_key(&slashed));
+
+        let first = SearchIndex::open_at(&bare, &db).unwrap();
+        let stamped = store::meta_get(&first.conn, "vault_root").unwrap();
+        assert_eq!(stamped, paths::normalized_vault_root(&bare));
+        drop(first);
+
+        // Stand in for the GUI mid-rebuild: a held write transaction. The
+        // second open has nothing to write, so it must not wait on it.
+        let mut holder = store::open(&db, &stamped).unwrap();
+        let tx = holder
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        store::meta_set(&tx, "probe", "1").unwrap();
+
+        let started = std::time::Instant::now();
+        let second = SearchIndex::open_at(&slashed, &db).unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(4),
+            "the trailing-slash spelling must not re-stamp, and so must not wait on a writer"
+        );
+        assert_eq!(store::meta_get(&second.conn, "vault_root").as_deref(), Some(stamped.as_str()));
+        tx.commit().unwrap();
+    }
 }
