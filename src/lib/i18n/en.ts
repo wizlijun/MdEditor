@@ -545,6 +545,8 @@ export const en = {
   'settings.reloadThemes': 'Reload themes',
   'settings.restoreBuiltins': 'Restore built-in themes',
   'settings.themesLoadFailed': 'Failed to load themes: {error}',
+  'settings.searchExcludeDirs': 'Directories excluded from search',
+  'settings.searchExcludeDirsHint': 'One per line, relative to the vault root. Empty by default.',
   'settings.autoSaveLabel': 'Enable auto-save (writes after 800 ms idle)',
   'settings.dailyNotes.label': 'Daily Notes window',
 

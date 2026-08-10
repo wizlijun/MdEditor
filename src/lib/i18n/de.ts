@@ -538,6 +538,8 @@ export const de: Record<keyof Messages, string> = {
   'settings.reloadThemes': 'Themen neu laden',
   'settings.restoreBuiltins': 'Integrierte Themen wiederherstellen',
   'settings.themesLoadFailed': 'Themen konnten nicht geladen werden: {error}',
+  'settings.searchExcludeDirs': 'Von der Suche ausgeschlossene Ordner',
+  'settings.searchExcludeDirsHint': 'Ein Ordner pro Zeile, relativ zum Tresor-Stammverzeichnis. Standardmäßig leer.',
   'settings.autoSaveLabel': 'Automatisches Speichern aktivieren (speichert nach 800 ms Inaktivität)',
   'settings.dailyNotes.label': 'Daily Notes window',
 

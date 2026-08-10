@@ -22,7 +22,7 @@
   import { outlineShortcuts, setShortcutOverride } from '../lib/outline/gate.svelte'
   import { outlineDirs, setOutlineDir } from '../lib/outline/dirs.svelte'
   import { inboxDir, setInboxDir } from '../lib/quick-note.svelte'
-  import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB } from '../lib/vault-settings.svelte'
+  import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs } from '../lib/vault-settings.svelte'
   import { pushToast } from '../lib/toast.svelte'
   import {
     DEFAULT_SHORTCUTS, resolveShortcuts, displayShortcut, eventToShortcut, findConflict,
@@ -47,11 +47,14 @@
   let syncDirBusy = $state(false)
   let thresholdDraft = $state(DEFAULT_LARGE_FILE_THRESHOLD_MB)
   let thresholdBusy = $state(false)
+  let searchExcludeDirsDraft = $state('')
+  let searchExcludeDirsBusy = $state(false)
   $effect(() => {
     if (!open) return
     void loadVaultSettings().then(() => {
       syncDirDraft = vaultSettings.syncDir
       thresholdDraft = vaultSettings.largeFileThresholdMb
+      searchExcludeDirsDraft = vaultSettings.searchExcludeDirs.join('\n')
     })
   })
   async function onSetOutlineDir(kind: 'wikipage' | 'dailynote', value: string) {
@@ -91,6 +94,22 @@
       pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
     } finally {
       thresholdBusy = false
+    }
+  }
+  async function onSaveSearchExcludeDirs() {
+    const dirs = searchExcludeDirsDraft
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+    searchExcludeDirsBusy = true
+    try {
+      await saveSearchExcludeDirs(dirs)
+      searchExcludeDirsDraft = vaultSettings.searchExcludeDirs.join('\n')
+      pushToast({ level: 'success', message: t('vaultSync.saved') })
+    } catch (e) {
+      pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
+    } finally {
+      searchExcludeDirsBusy = false
     }
   }
 
@@ -564,6 +583,19 @@
               disabled={!vaultSettings.vaultPath || thresholdBusy} />
             <button onclick={onSaveThreshold}
               disabled={!vaultSettings.vaultPath || thresholdBusy}>{t('vaultSync.save')}</button>
+          </label>
+          <label class="row" style="align-items: flex-start;">
+            <span class="lbl">{t('settings.searchExcludeDirs')}</span>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+              <textarea rows="3" bind:value={searchExcludeDirsDraft}
+                disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}
+                style="width: 100%; font: inherit; padding: 6px; border-radius: 4px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); background: Canvas; color: CanvasText; resize: vertical;"
+              ></textarea>
+              <p class="desc" style="margin: 0;">{t('settings.searchExcludeDirsHint')}</p>
+              <button onclick={onSaveSearchExcludeDirs}
+                style="align-self: flex-start;"
+                disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}>{t('vaultSync.save')}</button>
+            </div>
           </label>
         </section>
 

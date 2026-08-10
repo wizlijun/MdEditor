@@ -540,6 +540,8 @@ export const ja: Record<keyof Messages, string> = {
   'settings.reloadThemes': 'テーマを再読み込み',
   'settings.restoreBuiltins': '組み込みテーマを復元',
   'settings.themesLoadFailed': 'テーマの読み込みに失敗：{error}',
+  'settings.searchExcludeDirs': '検索から除外するフォルダ',
+  'settings.searchExcludeDirsHint': '1 行に 1 つ、vault ルートからの相対パス。既定では空です。',
   'settings.autoSaveLabel': '自動保存を有効化（800ms アイドル後に書き込み）',
   'settings.dailyNotes.label': 'Daily Notes window',
 

@@ -573,6 +573,8 @@ export const zh: Record<keyof Messages, string> = {
   'settings.reloadThemes': '重新加载主题',
   'settings.restoreBuiltins': '恢复内置主题',
   'settings.themesLoadFailed': '加载主题失败：{error}',
+  'settings.searchExcludeDirs': '排除出搜索的目录',
+  'settings.searchExcludeDirsHint': '每行一个，相对 vault 根目录。默认为空。',
   'settings.autoSaveLabel': '启用自动保存（空闲 800 毫秒后写入）',
   'settings.dailyNotes.label': '每日笔记窗口',
 

@@ -15,16 +15,19 @@ export interface VaultSettingsDto {
   wikipageDir?: string | null
   dailynoteDir?: string | null
   largeFileThresholdMb?: number | null
+  searchExcludeDirs?: string[] | null
 }
 
 export const vaultSettings = $state<{
   syncDir: string
   largeFileThresholdMb: number
+  searchExcludeDirs: string[]
   vaultPath: string | null
   loaded: boolean
 }>({
   syncDir: DEFAULT_SYNC_DIR,
   largeFileThresholdMb: DEFAULT_LARGE_FILE_THRESHOLD_MB,
+  searchExcludeDirs: [],
   vaultPath: null,
   loaded: false,
 })
@@ -39,6 +42,7 @@ export async function loadVaultSettings(): Promise<void> {
   vaultSettings.vaultPath = root ?? null
   vaultSettings.syncDir = dto?.syncDir ?? DEFAULT_SYNC_DIR
   vaultSettings.largeFileThresholdMb = dto?.largeFileThresholdMb ?? DEFAULT_LARGE_FILE_THRESHOLD_MB
+  vaultSettings.searchExcludeDirs = dto?.searchExcludeDirs ?? []
   vaultSettings.loaded = true
 }
 
@@ -60,4 +64,14 @@ export async function saveLargeFileThreshold(mb: number): Promise<void> {
   })
   vaultSettings.largeFileThresholdMb =
     merged?.largeFileThresholdMb ?? DEFAULT_LARGE_FILE_THRESHOLD_MB
+}
+
+/** Persist the search-excluded directory list (backend validates each entry
+ *  via validate_rel_dir). An empty array is a meaningful value — it clears
+ *  any previously configured exclusions, it is not "not provided". */
+export async function saveSearchExcludeDirs(dirs: string[]): Promise<void> {
+  const merged = await invoke<VaultSettingsDto>('notemd_vault_settings_set', {
+    searchExcludeDirs: dirs,
+  })
+  vaultSettings.searchExcludeDirs = merged?.searchExcludeDirs ?? []
 }
