@@ -60,7 +60,7 @@ PAGES = [
    ["agent 支持", "内置：<code>AGENTS.md</code> 约定、块级引用、批注即 agent 输入", "靠插件和自己动手（一个流行玩法）"],
    ["大纲编辑", "原生 <code>.note.md</code> 大纲视图", "靠插件；Obsidian 以页面为中心"],
    ["插件生态", "小而克制，进程外，按能力授权", "庞大 —— 数千个社区插件"],
-   ["移动端", "还没有（macOS 优先）", "优秀的 iOS/Android 应用"],
+   ["移动端", "还没有（桌面优先：macOS + Windows）", "优秀的 iOS/Android 应用"],
    ["互操作", "vault 可在 Obsidian 打开", "vault 可在 note.md 打开"],
   ]},
  "sections": [
@@ -273,7 +273,7 @@ gh repo create my-vault --private --source=. --push</code></pre>
   ("同步与自动化", """<ul>
 <li><b>note.md 集成：</b>Sync-to-Vault 插件把文件以带日期前缀的名字拷进 git 同步的 vault，刷新时能感知冲突；最近文件历史通过 vault 在设备间镜像。</li>
 <li><b>自动提交：</b>一行 cron 或 launchd 任务，每小时跑 <code>git add -A &amp;&amp; git commit -m "auto" &amp;&amp; git push</code>，就是不费力的持续备份。</li>
-<li><b>多设备：</b>在第二台 Mac 上克隆仓库；写前 pull，写后 push。大纲文件很小，冲突罕见，真撞上了 git 会告诉你到底发生了什么。</li>
+<li><b>多设备：</b>在第二台机器上克隆仓库；写前 pull，写后 push。大纲文件很小，冲突罕见，真撞上了 git 会告诉你到底发生了什么。</li>
 <li><b>agent：</b>给 agent 一个工作副本。像审同事的 PR 一样审它们的提交——因为它们现在就是同事。</li>
 </ul>"""),
  ],

@@ -59,7 +59,7 @@ PAGES = [
    ["Agent-Support", "Eingebaut: <code>AGENTS.md</code>-Konventionen, Block-Zitate, Annotationen als Agent-Input", "Via Plugins und DIY (ein beliebtes Muster)"],
    ["Outliner", "Native <code>.note.md</code>-Outline-Ansicht", "Via Plugins; Obsidian denkt in Seiten"],
    ["Plugin-Ökosystem", "Klein, out-of-process, capability-gated", "Riesig — Tausende Community-Plugins"],
-   ["Mobile", "Noch nicht (macOS zuerst)", "Exzellente iOS/Android-Apps"],
+   ["Mobile", "Noch nicht (Desktop zuerst: macOS + Windows)", "Exzellente iOS/Android-Apps"],
    ["Interop", "Vault öffnet sich in Obsidian", "Vault öffnet sich in note.md"],
   ]},
  "sections": [
@@ -272,7 +272,7 @@ gh repo create my-vault --private --source=. --push</code></pre>
   ("Sync und Automatisierung", """<ul>
 <li><b>note.md-Integration:</b> Das Sync-to-Vault-Plugin kopiert Dateien mit Datums-Präfix in deinen git-synchronisierten Vault, mit konflikt-bewusstem Refresh; die Recent-Files-Historie spiegelt sich über den Vault auf alle Geräte.</li>
 <li><b>Auto-Commit:</b> Eine Cron-Zeile oder ein launchd-Job mit <code>git add -A &amp;&amp; git commit -m "auto" &amp;&amp; git push</code> jede Stunde gibt dir mühelos kontinuierliches Backup.</li>
-<li><b>Multi-Device:</b> Klone das Repo auf einen zweiten Mac; pull vor dem Schreiben, push danach. Konflikte in Outlines sind selten (kleine Dateien), und Git zeigt exakt, was passiert ist, wenn sie doch auftreten.</li>
+<li><b>Multi-Device:</b> Klone das Repo auf einen zweiten Rechner; pull vor dem Schreiben, push danach. Konflikte in Outlines sind selten (kleine Dateien), und Git zeigt exakt, was passiert ist, wenn sie doch auftreten.</li>
 <li><b>Agents:</b> Gib Agents eine Working Copy. Reviewe ihre Commits, wie du den PR einer Kollegin reviewen würdest — denn genau das sind sie jetzt.</li>
 </ul>"""),
  ],

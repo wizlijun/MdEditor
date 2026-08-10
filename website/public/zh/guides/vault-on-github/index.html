@@ -111,15 +111,15 @@ gh repo create my-vault --private --source=. --push</code></pre>
 <p>就这样。GitHub 私有仓库免费，历史无上限。之后想提交多勤都行——或者交给自动化。</p><h2>同步与自动化</h2><ul>
 <li><b>note.md 集成：</b>Sync-to-Vault 插件把文件以带日期前缀的名字拷进 git 同步的 vault，刷新时能感知冲突；最近文件历史通过 vault 在设备间镜像。</li>
 <li><b>自动提交：</b>一行 cron 或 launchd 任务，每小时跑 <code>git add -A &amp;&amp; git commit -m "auto" &amp;&amp; git push</code>，就是不费力的持续备份。</li>
-<li><b>多设备：</b>在第二台 Mac 上克隆仓库；写前 pull，写后 push。大纲文件很小，冲突罕见，真撞上了 git 会告诉你到底发生了什么。</li>
+<li><b>多设备：</b>在第二台机器上克隆仓库；写前 pull，写后 push。大纲文件很小，冲突罕见，真撞上了 git 会告诉你到底发生了什么。</li>
 <li><b>agent：</b>给 agent 一个工作副本。像审同事的 PR 一样审它们的提交——因为它们现在就是同事。</li>
 </ul>
 <section class="faq"><h2>FAQ</h2><h3>GitHub 私有仓库真的免费吗？</h3><p>真的——GitHub 免费计划包含无限私有仓库和完整历史。几十年的文本 vault 也就几兆字节。</p><h3>敏感笔记怎么办？</h3><p>vault 是你的：可以选私有仓库、自托管 Gitea，或者干脆不要远端——git 本地也能用。再谨慎一点，git-crypt 或 age 可以加密指定路径。</p><h3>我需要会 git 吗？</h3><p>会一点就够。三条命令覆盖日常（add、commit、push），note.md 的同步功能把大部分都藏了起来。回报——你写下的每个念头的完整历史——大得不成比例。</p></section>
 </div></main>
 <section class="cta"><div class="wrap">
 <h2>拥有你的思考。</h2>
-<p>免费。开源。你 Mac 上的一个 markdown 文件夹。</p>
-<a class="btn" href="/download">下载 macOS 版</a>
+<p>免费。开源。你自己电脑上的一个 markdown 文件夹。</p>
+<a class="btn" href="/download">下载 note.md</a>
 </div></section>
 <footer><div class="wrap">
 <div class="flinks">

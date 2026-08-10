@@ -18,8 +18,11 @@ better every agent comes to know them. The knowledge graph grows only where
 the human confirms a connection — agents suggest links, they never assert
 them.
 
-- Platform: macOS 13+ (Apple Silicon & Intel), a Tauri app rendering in the
-  system WebView. Code-signed and notarized.
+- Platform: macOS 13+ (Apple Silicon & Intel) and Windows 10/11 x64 — a Tauri
+  app rendering in the system WebView. The macOS build is code-signed and
+  notarized. Windows packages are produced after the macOS release and may
+  trail it by a version or two; https://notemd.net/download hands each
+  platform its newest available installer.
 - Website: https://notemd.net/ · Repo: https://github.com/wizlijun/note.md
 - License: Apache-2.0. Product name is all-lowercase "note.md".
 - Symbol language: `✦` marks what AI writes, `●` marks what the human thinks.

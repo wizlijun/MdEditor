@@ -46,6 +46,7 @@ __pycache__/
 # Wrangler local state (build/dev artifact)
 /.wrangler/
 plugins-registry/.wrangler/
+website/.wrangler/
 
 # location helper sidecar (built by scripts/build-location-helper.sh)
 src-tauri/binaries/

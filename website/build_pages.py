@@ -87,23 +87,23 @@ LANG_ORDER = ["en", "de", "ja", "zh"]
 LANG_LABEL = {"en": "EN", "de": "DE", "ja": "日本語", "zh": "中文"}
 
 CHROME = {
- "en": {"dl": "Download", "pl": "plugins", "cta_h2": "Own your thinking.", "cta_p": "Free. Open. A folder of markdown on your Mac.",
-        "cta_btn": "Download for macOS", "faq": "FAQ",
+ "en": {"dl": "Download", "pl": "plugins", "cta_h2": "Own your thinking.", "cta_p": "Free. Open. A folder of markdown on your own computer.",
+        "cta_btn": "Download note.md", "faq": "FAQ",
         "g_cmp": "Compare", "g_int": "Integrations", "g_gui": "Guides",
         "l_orch": "One vault, many agents", "l_cf": "Free sharing on Cloudflare", "l_gh": "Vault on GitHub", "l_llm": "llms.txt (for agents)",
         "sig": "Text is forever. So is what you thought about it."},
- "de": {"dl": "Laden", "pl": "plugins", "cta_h2": "Besitze dein Denken.", "cta_p": "Frei. Offen. Ein Ordner voller Markdown auf deinem Mac.",
-        "cta_btn": "Für macOS laden", "faq": "FAQ",
+ "de": {"dl": "Laden", "pl": "plugins", "cta_h2": "Besitze dein Denken.", "cta_p": "Frei. Offen. Ein Ordner voller Markdown auf deinem eigenen Rechner.",
+        "cta_btn": "note.md laden", "faq": "FAQ",
         "g_cmp": "Vergleich", "g_int": "Integrationen", "g_gui": "Anleitungen",
         "l_orch": "Ein Vault, viele Agents", "l_cf": "Kostenlos teilen über Cloudflare", "l_gh": "Vault auf GitHub", "l_llm": "llms.txt (für Agents)",
         "sig": "Text ist für immer. Was du darüber dachtest, auch."},
- "ja": {"dl": "ダウンロード", "pl": "プラグイン", "cta_h2": "思考を所有せよ。", "cta_p": "無料。オープン。あなたの Mac にある markdown フォルダ。",
-        "cta_btn": "macOS 版をダウンロード", "faq": "FAQ",
+ "ja": {"dl": "ダウンロード", "pl": "プラグイン", "cta_h2": "思考を所有せよ。", "cta_p": "無料。オープン。あなた自身のパソコンにある markdown フォルダ。",
+        "cta_btn": "note.md をダウンロード", "faq": "FAQ",
         "g_cmp": "比較", "g_int": "連携", "g_gui": "ガイド",
         "l_orch": "ひとつの Vault、多くのエージェント", "l_cf": "Cloudflare で無料共有", "l_gh": "GitHub で Vault をホスト", "l_llm": "llms.txt（エージェント向け）",
         "sig": "テキストは永遠に残る。あなたがそれについて考えたことも。"},
- "zh": {"dl": "下载", "pl": "插件", "cta_h2": "拥有你的思考。", "cta_p": "免费。开源。你 Mac 上的一个 markdown 文件夹。",
-        "cta_btn": "下载 macOS 版", "faq": "FAQ",
+ "zh": {"dl": "下载", "pl": "插件", "cta_h2": "拥有你的思考。", "cta_p": "免费。开源。你自己电脑上的一个 markdown 文件夹。",
+        "cta_btn": "下载 note.md", "faq": "FAQ",
         "g_cmp": "对比", "g_int": "集成", "g_gui": "指南",
         "l_orch": "一个 vault，多个 agent", "l_cf": "Cloudflare 免费分享", "l_gh": "GitHub 托管 vault", "l_llm": "llms.txt（给 agent）",
         "sig": "文字永存。你对它的看法也是。"},
@@ -282,7 +282,7 @@ PAGES = [
    ["Agent support", "Built in: <code>AGENTS.md</code> conventions, block citations, annotations as agent input", "Via plugins and DIY (a popular pattern)"],
    ["Outliner", "Native <code>.note.md</code> outline view", "Via plugins; Obsidian is page-oriented"],
    ["Plugin ecosystem", "Small, out-of-process, capability-gated", "Enormous — thousands of community plugins"],
-   ["Mobile", "Not yet (macOS first)", "Excellent iOS/Android apps"],
+   ["Mobile", "Not yet (desktop first: macOS + Windows)", "Excellent iOS/Android apps"],
    ["Interop", "Vault opens in Obsidian", "Vault opens in note.md"],
   ]},
  "sections": [
@@ -522,7 +522,7 @@ gh repo create my-vault --private --source=. --push</code></pre>
   ("Sync and automation", """<ul>
 <li><b>note.md integration:</b> the Sync-to-Vault plugin copies files into your git-synced vault with date-prefixed names and conflict-aware refresh; recent-file history mirrors across devices through the vault.</li>
 <li><b>Auto-commit:</b> a cron line or launchd job running <code>git add -A &amp;&amp; git commit -m "auto" &amp;&amp; git push</code> every hour gives you effortless continuous backup.</li>
-<li><b>Multi-device:</b> clone the repo on a second Mac; pull before writing, push after. Conflicts in outlines are rare (small files) and git shows exactly what happened when they occur.</li>
+<li><b>Multi-device:</b> clone the repo on a second machine; pull before writing, push after. Conflicts in outlines are rare (small files) and git shows exactly what happened when they occur.</li>
 <li><b>Agents:</b> give agents a working copy. Review their commits like you'd review a colleague's PR — because that's what they are now.</li>
 </ul>"""),
  ],

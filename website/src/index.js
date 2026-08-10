@@ -3,54 +3,83 @@
 // get a 301 to https instead of being served directly. Everything else is
 // delegated to the [assets] binding, preserving html_handling / SPA fallback.
 
-const GH_REPO = "wizlijun/note.md";
+import {
+  GH_REPO,
+  RELEASES_PAGE,
+  detectTarget,
+  macDownloadUrl,
+  windowsUrlFromManifest,
+  windowsUrlFromReleases,
+} from "./resolve-download.js";
+
 const LATEST_JSON_URL = `https://github.com/${GH_REPO}/releases/latest/download/latest.json`;
-const RELEASES_PAGE = `https://github.com/${GH_REPO}/releases`;
+const RELEASES_API_URL = `https://api.github.com/repos/${GH_REPO}/releases?per_page=30`;
+const UA = "notemd-site-worker";
+
 const MANIFEST_TTL_S = 300; // 5 min — keeps GitHub traffic to ~1 hit per POP per TTL
+const RELEASES_TTL_S = 1800; // 30 min — only queried during a Windows lag window
+const RESOLVED_TTL_S = 600; // 10 min — a resolved installer URL is stable
+const LKG_TTL_S = 60 * 60 * 24 * 30; // 30 d — last known good, the failure net
 
 // Per-isolate memory cache in front of the Cache API, so warm isolates skip
 // even the local cache lookup.
-let memManifest = null;
-let memFetchedAt = 0;
+const mem = new Map(); // cache name → { value, expiresAt }
 
-async function fetchManifest(ctx) {
-  const now = Date.now();
-  if (memManifest && now - memFetchedAt < MANIFEST_TTL_S * 1000) return memManifest;
-
-  const cache = caches.default;
-  // Synthetic same-zone key; the real GitHub URL redirects (302 → S3) which
-  // makes it a poor cache key.
-  const cacheKey = new Request("https://notemd.net/__cache/latest.json");
-  let res = await cache.match(cacheKey);
-  if (!res) {
-    const upstream = await fetch(LATEST_JSON_URL, {
-      redirect: "follow",
-      headers: { "User-Agent": "notemd-site-worker" },
-    });
-    if (!upstream.ok) throw new Error(`latest.json fetch failed: ${upstream.status}`);
-    const body = await upstream.text();
-    res = new Response(body, {
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": `public, max-age=${MANIFEST_TTL_S}`,
-      },
-    });
-    ctx.waitUntil(cache.put(cacheKey, res.clone()));
-  }
-  memManifest = await res.json();
-  memFetchedAt = now;
-  return memManifest;
-}
-
-// Sec-CH-UA-Arch arrives quoted ("arm"); query params come from us or from
-// users hand-editing URLs, so accept the common spellings.
-function normalizeArch(raw) {
-  if (!raw) return null;
-  const v = raw.toLowerCase().replace(/"/g, "");
-  if (v === "aarch64" || v === "arm64" || v === "arm") return "aarch64";
-  if (v === "x86_64" || v === "x64" || v === "x86" || v === "amd64" || v === "intel") return "x86_64";
+function memGet(name) {
+  const hit = mem.get(name);
+  if (hit && hit.expiresAt > Date.now()) return hit.value;
+  mem.delete(name);
   return null;
 }
+
+function memPut(name, value, ttlS) {
+  mem.set(name, { value, expiresAt: Date.now() + ttlS * 1000 });
+}
+
+// Synthetic same-zone cache keys; the real GitHub URLs redirect (302 → S3),
+// which makes them poor cache keys.
+const cacheKey = (name) => new Request(`https://notemd.net/__cache/${name}`);
+
+// Reads honour whatever TTL the write used: the Cache API expires the entry on
+// its own Cache-Control, and the memory mirror is refreshed with the remaining
+// max-age parsed back off the cached response.
+async function cacheReadJson(name) {
+  const hit = memGet(name);
+  if (hit !== null) return hit;
+  const res = await caches.default.match(cacheKey(name));
+  if (!res) return null;
+  const ttl = Number(res.headers.get("Cache-Control")?.match(/max-age=(\d+)/)?.[1] ?? 60);
+  const value = await res.json();
+  memPut(name, value, ttl);
+  return value;
+}
+
+function cacheWriteJson(ctx, name, value, ttlS) {
+  memPut(name, value, ttlS);
+  const res = new Response(JSON.stringify(value), {
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": `public, max-age=${ttlS}`,
+    },
+  });
+  ctx.waitUntil(caches.default.put(cacheKey(name), res));
+}
+
+async function fetchJson(url, name, ttlS, ctx) {
+  const cached = await cacheReadJson(name);
+  if (cached !== null) return cached;
+  const upstream = await fetch(url, {
+    redirect: "follow",
+    headers: { "User-Agent": UA, Accept: "application/json" },
+  });
+  if (!upstream.ok) throw new Error(`${name} fetch failed: ${upstream.status}`);
+  const value = await upstream.json();
+  cacheWriteJson(ctx, name, value, ttlS);
+  return value;
+}
+
+const fetchManifest = (ctx) => fetchJson(LATEST_JSON_URL, "latest.json", MANIFEST_TTL_S, ctx);
+const fetchReleases = (ctx) => fetchJson(RELEASES_API_URL, "releases.json", RELEASES_TTL_S, ctx);
 
 function redirect(location) {
   return new Response(null, {
@@ -59,32 +88,70 @@ function redirect(location) {
   });
 }
 
-// GET /download[?arch=aarch64|x86_64] → 302 to the latest .dmg for that arch.
-//
-// Arch precedence: explicit ?arch= > Sec-CH-UA-Arch client hint (Chromium
-// only) > aarch64. Headers cannot reliably distinguish Intel from Apple
-// Silicon (Safari reports Intel on both), so the homepage carries an explicit
-// Intel fallback link instead. Non-mac visitors without ?arch= land on the
-// releases page rather than downloading a binary that won't run.
-async function handleDownload(request, ctx) {
-  const url = new URL(request.url);
-  const explicit = normalizeArch(url.searchParams.get("arch"));
-  const hinted = normalizeArch(request.headers.get("Sec-CH-UA-Arch"));
-  const ua = request.headers.get("User-Agent") || "";
-  const isMac = /Macintosh|Mac OS X/.test(ua) && !/iPhone|iPad|iPod/.test(ua);
+// Resolve the installer URL for one (os, arch), with the last known good URL
+// as the failure net. Windows packages are built on a second machine *after*
+// the macOS release (docs/windows-agent-brief.md), so the newest tag's
+// latest.json may carry only darwin-* entries for a while — hence the
+// releases-list scan, and hence caring about the last URL that did work.
+async function resolveInstaller(target, ctx) {
+  const { os, arch } = target;
+  const freshKey = `dl/${os}-${arch}`;
+  const lkgKey = `dl-lkg/${os}-${arch}`;
 
-  if (!explicit && !isMac) return redirect(RELEASES_PAGE);
-  const arch = explicit ?? hinted ?? "aarch64";
+  const fresh = await cacheReadJson(freshKey).catch(() => null);
+  if (fresh?.url) return fresh.url;
 
+  let url = null;
   try {
     const manifest = await fetchManifest(ctx);
-    const version = manifest.version;
-    // Derive the tag from the updater tarball URL (…/releases/download/<tag>/…)
-    // rather than assuming v<version>, so a tag-format change can't break us.
-    const platformUrl = manifest.platforms?.[`darwin-${arch}`]?.url ?? "";
-    const tag = platformUrl.match(/\/releases\/download\/([^/]+)\//)?.[1] ?? `v${version}`;
-    const dmg = `https://github.com/${GH_REPO}/releases/download/${tag}/note.md-${version}-${arch}.dmg`;
-    return redirect(dmg);
+    url = os === "mac" ? macDownloadUrl(manifest, arch) : windowsUrlFromManifest(manifest, arch);
+  } catch (e) {
+    console.warn("[/download] manifest unavailable:", e);
+  }
+
+  if (!url && os === "windows") {
+    try {
+      const releases = await fetchReleases(ctx);
+      // No native arm64 build yet; Windows on ARM runs the x64 installer under
+      // emulation, so fall through rather than dead-ending ARM visitors.
+      url = windowsUrlFromReleases(releases, arch) ?? windowsUrlFromReleases(releases, "x86_64");
+    } catch (e) {
+      console.warn("[/download] releases list unavailable:", e);
+    }
+  }
+
+  if (url) {
+    cacheWriteJson(ctx, freshKey, { url }, RESOLVED_TTL_S);
+    cacheWriteJson(ctx, lkgKey, { url }, LKG_TTL_S);
+    return url;
+  }
+
+  // Serving a slightly older installer that certainly exists beats dropping a
+  // download click onto the releases list page.
+  const lkg = await cacheReadJson(lkgKey).catch(() => null);
+  return lkg?.url ?? null;
+}
+
+// GET /download[?os=mac|windows][&arch=aarch64|x86_64] → 302 to the installer.
+//
+// Precedence: explicit ?os=/?arch= > User-Agent / Sec-CH-UA-Arch client hint
+// (Chromium only) > per-OS default. Headers cannot reliably distinguish Intel
+// from Apple Silicon (Safari reports Intel on both), so the homepage carries
+// an explicit Intel fallback link instead. Visitors we can't serve a binary to
+// (Linux, mobile, crawlers) get the releases page rather than a download that
+// won't run.
+async function handleDownload(request, ctx) {
+  const url = new URL(request.url);
+  const target = detectTarget({
+    ua: request.headers.get("User-Agent") || "",
+    osParam: url.searchParams.get("os"),
+    archParam: url.searchParams.get("arch"),
+    archHint: request.headers.get("Sec-CH-UA-Arch"),
+  });
+  if (!target) return redirect(RELEASES_PAGE);
+
+  try {
+    return redirect((await resolveInstaller(target, ctx)) ?? RELEASES_PAGE);
   } catch (e) {
     // Never dead-end a download click; the releases page always works.
     console.warn("[/download] falling back to releases page:", e);
