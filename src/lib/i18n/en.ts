@@ -478,6 +478,18 @@ export const en = {
   'previewWindow.empty': 'No preview to show. Reopen it from the history panel.',
   'history.noDiff': 'No differences from the current document',
 
+  // Search panel
+  'search.title': 'Search',
+  'search.placeholder': 'Search this vault…',
+  'search.hide': 'Hide Search',
+  'search.noResults': 'No matches',
+  'search.resultCount': '{n} results · {ms}ms',
+  'search.fallbackScan': 'Dictionary miss — fell back to a direct scan',
+  'search.notReady': 'The index is still building',
+  'search.rebuild': 'Rebuild index',
+  'search.agentWritten': 'AI-written ({agent})',
+  'search.humanVerified': 'Human-verified',
+
   // Folder view
   'folderView.parentFolder': 'Parent folder',
   'folderView.find': 'Find',

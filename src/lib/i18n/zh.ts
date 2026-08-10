@@ -506,6 +506,18 @@ export const zh: Record<keyof Messages, string> = {
   'previewWindow.empty': '没有可显示的预览。请从历史面板重新打开。',
   'history.noDiff': '与当前文档无差异',
 
+  // Search panel
+  'search.title': '搜索',
+  'search.placeholder': '搜索这个 vault…',
+  'search.hide': '隐藏搜索',
+  'search.noResults': '无匹配',
+  'search.resultCount': '{n} 条 · {ms}ms',
+  'search.fallbackScan': '词典未收录——已降级为直接扫描',
+  'search.notReady': '索引仍在构建',
+  'search.rebuild': '重建索引',
+  'search.agentWritten': 'AI 写的({agent})',
+  'search.humanVerified': '人工确认',
+
   // Folder view
   'folderView.parentFolder': '上级文件夹',
   'folderView.find': '查找',

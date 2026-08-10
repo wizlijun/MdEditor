@@ -1665,6 +1665,7 @@ fn menu_label(locale: &str, key: &str) -> String {
         "file.unshare" => ("Unshare Current File…", "取消分享当前文件…", "現在のファイルの共有を解除…", "Freigabe der aktuellen Datei aufheben…"),
         "file.copyShareLink" => ("Copy Share Link", "复制分享链接", "共有リンクをコピー", "Freigabe-Link kopieren"),
         "view.folderView" => ("Folder View", "文件夹视图", "フォルダビュー", "Ordneransicht"),
+        "view.vaultSearch" => ("Search", "搜索", "検索", "Suche"),
         "view.sidecarNotes" => ("Sidecar Notes View", "手记视图", "サイドノートビュー", "Randnotizen-Ansicht"),
         "view.history" => ("History View", "历史视图", "履歴ビュー", "Verlaufsansicht"),
         "window.zoomIn" => ("Zoom In", "放大", "拡大", "Vergrößern"),
@@ -2183,6 +2184,7 @@ fn build_menu<R: tauri::Runtime>(
         .item(&MenuItemBuilder::with_id("open-logs", menu_label(locale, "view.logs")).build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id("toggle-folder-view", menu_label(locale, "view.folderView")).accelerator("CmdOrCtrl+Shift+E").build(app)?)
+        .item(&MenuItemBuilder::with_id("toggle-vault-search", menu_label(locale, "view.vaultSearch")).accelerator("CmdOrCtrl+Shift+F").build(app)?)
         .item(&MenuItemBuilder::with_id("toggle-sidecar-notes", menu_label(locale, "view.sidecarNotes")).accelerator("CmdOrCtrl+Shift+O").build(app)?)
         .item(&MenuItemBuilder::with_id("toggle-git-history", menu_label(locale, "view.history")).accelerator("CmdOrCtrl+Shift+Y").build(app)?);
     let view_menu: Submenu<R> = view_b.build()?;

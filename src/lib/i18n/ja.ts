@@ -473,6 +473,18 @@ export const ja: Record<keyof Messages, string> = {
   'previewWindow.empty': '表示するプレビューがありません。履歴パネルから開き直してください。',
   'history.noDiff': '現在の文書と差分なし',
 
+  // Search panel
+  'search.title': '検索',
+  'search.placeholder': 'この vault を検索…',
+  'search.hide': '検索を隠す',
+  'search.noResults': '一致なし',
+  'search.resultCount': '{n} 件 · {ms}ms',
+  'search.fallbackScan': '辞書未収録 — 直接スキャンにフォールバックしました',
+  'search.notReady': 'インデックスを構築中です',
+  'search.rebuild': 'インデックスを再構築',
+  'search.agentWritten': 'AI が記述 ({agent})',
+  'search.humanVerified': '人が確認済み',
+
   // Folder view
   'folderView.parentFolder': '親フォルダ',
   'folderView.find': '検索',

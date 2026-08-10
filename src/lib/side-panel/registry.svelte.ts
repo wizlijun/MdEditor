@@ -147,6 +147,13 @@ export function registerBuiltinSideViews(): void {
     component: () => import('../../components/FolderView.svelte'),
   })
   registerSideView({
+    id: 'vault-search', side: 'left', order: 20,
+    title: () => t('search.title'),
+    isAvailable: () => !!sotvaultStore.vaultRoot,
+    appliesTo: () => true,
+    component: () => import('../../components/side-panel/SearchPanel.svelte'),
+  })
+  registerSideView({
     id: 'outline-notes', side: 'right', order: 0,
     title: () => t('outline.title'),
     isAvailable: () => outlineGate.enabled,
