@@ -50,6 +50,7 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5",
     "@tauri-apps/cli": "^2",
+    "@types/node": "^22.20.1",
     "happy-dom": "^20.9.0",
     "json-schema-to-typescript": "^15.0.4",
     "prosemirror-commands": "^1.7.1",
