@@ -188,4 +188,39 @@ mod tests {
     fn ymd_from_unix_public_matches_the_internal_helper() {
         assert_eq!(ymd_from_unix_public(MTIME), "2026-08-10");
     }
+
+    /// Pins the edge cases the module comment on `ymd_from_unix` claims are
+    /// covered: epoch, a leap day, both sides of a year boundary, and a
+    /// pre-1970 (negative) timestamp — the case `div_euclid`/`rem_euclid` was
+    /// chosen for. Each value was independently cross-checked against
+    /// Python's `datetime.utcfromtimestamp` before this test was written (see
+    /// the task-6 report's "independent verification" section).
+    #[test]
+    fn ymd_from_unix_handles_epoch_leap_day_year_boundary_and_negative_timestamps() {
+        assert_eq!(ymd_from_unix(0), "1970-01-01"); // epoch
+        assert_eq!(ymd_from_unix(1_709_164_800), "2024-02-29"); // leap day
+        assert_eq!(ymd_from_unix(1_767_139_200), "2025-12-31"); // year boundary, before
+        assert_eq!(ymd_from_unix(1_767_225_600), "2026-01-01"); // year boundary, after
+        assert_eq!(ymd_from_unix(-86_400), "1969-12-31"); // pre-1970, negative input
+    }
+
+    /// The middle of the degradation chain (spec §3.5: filename → created →
+    /// date → generated.at → mtime) is easy to silently reorder. Isolate each
+    /// non-filename, non-mtime rung by omitting the higher-priority keys, and
+    /// confirm `date_inferred` stays false for all of them — only the mtime
+    /// branch sets it.
+    #[test]
+    fn doc_date_falls_back_through_date_then_generated_at_before_mtime() {
+        let p = parse_file("thing.md", "---\ndate: 2021-06-07\n---\nx\n", MTIME);
+        assert_eq!(p.meta.doc_date.as_deref(), Some("2021-06-07"));
+        assert!(!p.meta.date_inferred);
+
+        let p = parse_file(
+            "thing.md",
+            "---\ngenerated:\n  by: claude/1\n  at: 2022-09-10T00:00:00Z\n---\nx\n",
+            MTIME,
+        );
+        assert_eq!(p.meta.doc_date.as_deref(), Some("2022-09-10"));
+        assert!(!p.meta.date_inferred);
+    }
 }
