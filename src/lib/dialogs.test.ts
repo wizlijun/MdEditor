@@ -51,3 +51,26 @@ describe('confirmDirtyClose', () => {
     expect(await confirmDirtyClose('a.md')).toBe('cancel')
   })
 })
+
+describe('pickSaveFile filters', () => {
+  const filtersFor = async (path: string) => {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    ;(save as ReturnType<typeof vi.fn>).mockReset()
+    ;(save as ReturnType<typeof vi.fn>).mockResolvedValueOnce(path)
+    const { pickSaveFile } = await import('./dialogs')
+    await pickSaveFile(path)
+    return (save as ReturnType<typeof vi.fn>).mock.calls[0][0].filters as
+      { name: string; extensions: string[] }[]
+  }
+
+  it('does not offer mdx when saving a markdown file', async () => {
+    // Saving a .md as .mdx would silently move it onto the read-only surface.
+    const filters = await filtersFor('/d/readme.md')
+    expect(filters.flatMap(f => f.extensions)).not.toContain('mdx')
+  })
+
+  it('offers mdx for an mdx file', async () => {
+    const filters = await filtersFor('/d/guide.mdx')
+    expect(filters[0].extensions).toEqual(['mdx'])
+  })
+})

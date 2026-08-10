@@ -65,11 +65,14 @@ export async function pickOpenFile(): Promise<string | null> {
 /** Friendly "File Format" filter names shown in the NSSavePanel dropdown. */
 function saveFilters(ext?: string) {
   if (!ext) return [
-    { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'mdx'] },
+    { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd'] },
     { name: 'All supported', extensions: ALL_EXTS },
   ]
-  if (['md', 'markdown', 'mdown', 'mkd', 'mdx'].includes(ext))
-    return [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'mdx'] }]
+  if (['md', 'markdown', 'mdown', 'mkd'].includes(ext))
+    return [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd'] }]
+  // 单独一组:mdx 不混进 Markdown 组,否则存 .md 时会顺手允许存成 .mdx,
+  // 文件一下子落到只读表面上。
+  if (ext === 'mdx') return [{ name: 'MDX', extensions: ['mdx'] }]
   if (['html', 'htm'].includes(ext))
     return [{ name: 'HTML', extensions: ['html', 'htm'] }]
   if (['txt', 'text', 'log'].includes(ext))
