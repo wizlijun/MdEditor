@@ -30,8 +30,12 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
     // Heading text per depth (index 0 = H1's text), truncated whenever a
     // shallower-or-equal heading arrives.
     let mut chain: Vec<String> = Vec::new();
-    // The section currently accumulating: (start_line, breadcrumb, depth).
-    let mut open_section: Option<(u32, String, usize)> = None;
+    // Stack of sections currently open, outermost first: (start_line,
+    // breadcrumb, depth). Nesting is intended, not a bug to collapse away — a
+    // `# Title` section spanning the whole document and a `## Sub` section
+    // spanning just its own span coexist, giving retrieval both a coarse and
+    // a fine resolution to match against (design spec §3.3).
+    let mut open_sections: Vec<(u32, String, usize)> = Vec::new();
     let mut sections: Vec<Block> = Vec::new();
 
     // Text accumulator for whichever heading is currently open. Kept separate
@@ -53,14 +57,17 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
             Event::Start(Tag::Heading { level, .. }) => {
                 let depth = heading_index(level);
                 let start_line = bl(range.start);
-                // A heading at or above the open section's depth ends it; a
-                // deeper heading (a subsection) is absorbed into it instead.
-                if let Some((s, crumb, d)) = open_section.take() {
-                    if depth <= d {
-                        sections.push(section_block(&starts, body, s, start_line.saturating_sub(1).max(s), crumb));
-                    } else {
-                        open_section = Some((s, crumb, d));
+                // A heading at or above an open section's depth ends that
+                // section (and every section nested inside it, since they are
+                // all at least as deep); a strictly deeper heading opens a
+                // new nested section instead of closing anything.
+                while let Some(&(_, _, d)) = open_sections.last() {
+                    if d < depth {
+                        break;
                     }
+                    let (s, crumb, _) = open_sections.pop().unwrap();
+                    let end = start_line.saturating_sub(1).max(s);
+                    sections.push(section_block(&starts, body, s, end, crumb));
                 }
                 let end_line = bl(range.end.saturating_sub(1));
                 heading = Some((start_line, end_line, depth, String::new()));
@@ -79,9 +86,7 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
                     });
                     chain.truncate(depth);
                     chain.push(text);
-                    if open_section.is_none() {
-                        open_section = Some((s, breadcrumb_of(&chain), depth));
-                    }
+                    open_sections.push((s, breadcrumb_of(&chain), depth));
                 }
             }
             Event::Start(Tag::Paragraph) | Event::Start(Tag::CodeBlock(_)) | Event::Start(Tag::Item) => {
@@ -125,7 +130,7 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
     }
 
     let last_line = bl(body.len().saturating_sub(1));
-    if let Some((s, crumb, _)) = open_section.take() {
+    while let Some((s, crumb, _)) = open_sections.pop() {
         sections.push(section_block(&starts, body, s, last_line, crumb));
     }
     blocks.extend(sections);
@@ -251,5 +256,63 @@ mod tests {
     fn an_empty_body_yields_no_blocks() {
         assert!(chunk("", 1).is_empty());
         assert!(chunk("   \n\n", 1).iter().all(|b| !b.text.trim().is_empty() || b.level == BlockLevel::File));
+    }
+
+    /// A `#` title followed by `##` subsections — the most common document
+    /// shape in this product — must yield a section per level, not one
+    /// section for the whole file. Coarse (title) and fine (subsection)
+    /// sections coexist; ranking sorts out the overlap later (spec §3.3).
+    ///
+    /// Lines: 1 `# Title`, 2 blank, 3 `intro`, 4 blank, 5 `## First`, 6 blank,
+    /// 7 `alpha`, 8 blank, 9 `## Second`, 10 blank, 11 `beta`. `Title` never
+    /// meets a depth-0 heading again, so it stays open to EOF (line 11).
+    /// `First` closes when `Second` arrives (line 9), so it ends at line 8.
+    #[test]
+    fn nested_sections_are_emitted() {
+        let md = "# Title\n\nintro\n\n## First\n\nalpha\n\n## Second\n\nbeta\n";
+        let b = chunk(md, 1);
+        let sections = lines_of(&b, BlockLevel::Section);
+        assert!(sections.contains(&(1, 11)), "{sections:?}"); // whole-doc Title section
+        assert!(sections.contains(&(5, 8)), "{sections:?}"); // First's own span, not Second's
+        assert!(sections.contains(&(9, 11)), "{sections:?}"); // Second's own span
+        assert_eq!(sections.len(), 3, "{sections:?}");
+    }
+
+    /// `# D` at depth 0 must close every open section at depth >= 0 — C (2),
+    /// B (1), and A (0) — not just the innermost one, and D's own section
+    /// then runs to end of input since nothing closes it.
+    ///
+    /// Lines: 1 `# A`, 5 `## B`, 9 `### C`, 13 `# D`, 15 `d` (final paragraph).
+    /// `D` arriving closes A/B/C all at line 12 (the blank line before it);
+    /// `D`'s own section spans 13-15, closed only at EOF.
+    #[test]
+    fn deeper_nesting_closes_correctly_when_a_shallow_heading_arrives() {
+        let md = "# A\n\na\n\n## B\n\nb\n\n### C\n\nc\n\n# D\n\nd\n";
+        let b = chunk(md, 1);
+        let sections = lines_of(&b, BlockLevel::Section);
+        assert_eq!(sections.len(), 4, "{sections:?}");
+        assert!(sections.contains(&(1, 12)), "{sections:?}"); // A
+        assert!(sections.contains(&(5, 12)), "{sections:?}"); // B
+        assert!(sections.contains(&(9, 12)), "{sections:?}"); // C
+        assert!(sections.contains(&(13, 15)), "{sections:?}"); // D
+    }
+
+    /// A heading closes every open section at >= its own depth, but leaves
+    /// shallower ancestors open: `## mid` must close `### deep` but not `# A`.
+    ///
+    /// Lines: 1 `# A`, 5 `### deep`, 9 `## mid`, 11 `m` (final paragraph).
+    /// `mid` (depth 1) closes `deep` (depth 2) at line 8 but does not touch
+    /// `A` (depth 0 < 1), which stays open to EOF (line 11).
+    #[test]
+    fn a_shallower_heading_closes_only_deeper_open_sections() {
+        let md = "# A\n\na\n\n### deep\n\nd\n\n## mid\n\nm\n";
+        let b = chunk(md, 1);
+        let sections = lines_of(&b, BlockLevel::Section);
+        assert_eq!(sections.len(), 3, "{sections:?}");
+        assert!(sections.contains(&(5, 8)), "{sections:?}"); // deep, closed by mid
+        assert!(sections.contains(&(9, 11)), "{sections:?}"); // mid, closed at EOF
+        // `# A`'s section must still be open past `## mid` — it only closes
+        // at end of input, so it spans the whole document.
+        assert!(sections.contains(&(1, 11)), "{sections:?}");
     }
 }
