@@ -11,7 +11,9 @@
 //! reason the crate exists — see docs/2026-08-10-vault-search-index-design.md §2.
 
 pub mod block;
+pub mod chunk;
 pub mod frontmatter;
+pub mod links;
 pub mod norm;
 pub mod outline;
 pub mod prose;
