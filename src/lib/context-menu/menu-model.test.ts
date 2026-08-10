@@ -16,7 +16,16 @@ describe('getMenuModel', () => {
     // then dropped — the user watched their annotation appear and vanish.
     const groups = getMenuModel({ hasSelection: true, readOnly: true })
     const ids = groups.flatMap(g => g.items.map(i => i.id))
-    expect(ids).toEqual(['copy', 'selectAll'])
+    expect(ids).toEqual(['copy', 'selectAll', 'excerpt'])
+  })
+
+  it('read-only offers excerpt-to-note as the one way to leave a judgement', () => {
+    // The document cannot be marked, so the excerpt is the anchor: it needs a
+    // selection to have anything to quote.
+    const groups = getMenuModel({ hasSelection: true, readOnly: true })
+    const excerpt = groups.flatMap(g => g.items).find(i => i.id === 'excerpt')!
+    expect(excerpt.needsSelection).toBe(true)
+    expect(excerpt.emphasis).toBe(true)
   })
 
   it('marks question/note/highlight/wikilink as emphasis, question first, before other marks', () => {

@@ -677,6 +677,8 @@ export const en = {
   'ctxmenu.highlight': 'Highlight',
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': 'Note',
+  'ctxmenu.excerpt': 'Excerpt to Sidecar Notes',
+  'excerpt.failed': 'Could not write the excerpt to the sidecar note.',
   'ctxmenu.question': 'Ask',
   'ctxmenu.bold': 'Bold',
   'ctxmenu.italic': 'Italic',

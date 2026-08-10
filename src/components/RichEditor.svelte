@@ -441,7 +441,7 @@
     const imgEl = (event.target as HTMLElement).closest('img') as HTMLImageElement | null
     ctxHasSel   = !view.state.selection.empty
     ctxImage    = !!imgEl
-    ctxActions  = createRichActions(view, imgEl ? { imageEl: imgEl } : {})
+    ctxActions  = createRichActions(view, { filePath: tab.filePath, ...(imgEl ? { imageEl: imgEl } : {}) })
     ctxMenuPos  = { x: event.clientX, y: event.clientY }
     showCtxMenu = true
   }

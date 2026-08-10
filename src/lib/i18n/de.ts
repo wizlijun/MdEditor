@@ -670,6 +670,8 @@ export const de: Record<keyof Messages, string> = {
   'ctxmenu.highlight': 'Hervorheben',
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': 'Notiz',
+  'ctxmenu.excerpt': 'In Randnotizen übernehmen',
+  'excerpt.failed': 'Der Auszug konnte nicht in die Randnotizen geschrieben werden.',
   'ctxmenu.question': 'Frage',
   'ctxmenu.bold': 'Fett',
   'ctxmenu.italic': 'Kursiv',

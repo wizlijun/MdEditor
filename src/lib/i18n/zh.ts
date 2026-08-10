@@ -257,6 +257,8 @@ export const zh: Record<keyof Messages, string> = {
   'ctxmenu.highlight': '高亮',
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': '笔记',
+  'ctxmenu.excerpt': '摘录到手记',
+  'excerpt.failed': '摘录没能写进手记。',
   'ctxmenu.question': '提问',
   'ctxmenu.bold': '加粗',
   'ctxmenu.italic': '斜体',

@@ -46,6 +46,11 @@ export function getMenuModel(ctx: MenuContext): MenuGroup[] {
   if (ctx.readOnly) {
     return [
       { id: 'clipboard', items: [ item('copy', 'ctxmenu.copy'), item('selectAll', 'ctxmenu.selectAll') ] },
+      // The document can't be marked, so the excerpt carries the anchor: the
+      // quoted text lands in the sidecar note and the judgement hangs off it.
+      { id: 'emphasis', items: [
+        item('excerpt', 'ctxmenu.excerpt', { emphasis: true, icon: 'sparkle', needsSelection: true }),
+      ] },
     ]
   }
   return [
