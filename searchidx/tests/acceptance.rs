@@ -191,11 +191,27 @@ fn an_unchanged_sweep_is_fast() {
 /// catastrophic instance of that (e.g. `fts_search` losing its index and
 /// degrading to a table scan) would blow well past this budget even on a
 /// corpus this small, while ordinary noise on one iteration will not.
+///
+/// Review round 1 finding: the timing bound alone is a bare wall-clock gate
+/// with no property assertion beside it — on a 32-file corpus, even a full
+/// unindexed `LIKE` scan over `blocks.text` (the exact catastrophic
+/// regression this test exists to catch — `fts_search` silently losing its
+/// index and every query degrading to `like_search`) would very plausibly
+/// still finish under 10ms, so the timing bound alone would not reliably
+/// catch it. Asserting `route.as_str() == "t1-fts"` pins the MECHANISM
+/// (queries actually take the indexed path) independent of how fast that
+/// mechanism happens to run on this corpus; the timing assertion stays as a
+/// secondary backstop against slowness within that mechanism.
 #[test]
 fn warm_queries_are_fast() {
     let (_d, mut idx) = open_temp(&corpus());
     idx.rebuild(&ScanOptions::default()).unwrap();
-    let _ = idx.search("note", 20).unwrap();
+    let (_, warm_route) = idx.search("note", 20).unwrap();
+    assert_eq!(
+        warm_route.as_str(),
+        "t1-fts",
+        "a warm query must resolve via the FTS index, not degrade to the bounded scan fallback"
+    );
     let mut times: Vec<u128> = Vec::new();
     for _ in 0..20 {
         let t = Instant::now();
@@ -206,31 +222,104 @@ fn warm_queries_are_fast() {
     assert!(times[times.len() / 2] < 10_000, "p50 {}µs", times[times.len() / 2]);
 }
 
-/// spec §7 + §4:批注(`type:: annotation`)必须排在同一文件里 AI 撰写
-/// (`by:: <非 human:>`)内容之前。`query.rs` 已经用孤立的 `score_of` 调用把
-/// 加成系数本身钉死,这里是端到端版本 —— 走完整 facade(`rebuild` → `search`),
-/// 用真实语料文件(`concepts/2026-02-10-annotation-demo.note.md`)而不是内联
-/// 字符串,证明加成从大纲分块一路传导到最终排序,而不只是分数函数本身对。
+/// spec §7 + §4:批注(`type:: annotation`)必须排在同一文件里的普通内容之前.
+///
+/// Review round 1 finding: the original version of this test used one
+/// fixture where `type:: annotation` sat on one sibling AND `by:: claude/1`
+/// sat on the other, so the annotation boost (×1.2) and the agent-authored
+/// penalty (×0.85) both pushed the SAME direction at once — either multiplier
+/// alone was sufficient to produce the expected order, so a silent regression
+/// of `is_annotation` to a no-op (while the `agent_by` penalty kept working)
+/// would have stayed green. That is exactly the failure mode `query.rs`'s own
+/// `annotations_outrank_agent_authored_blocks` doc comment already warns
+/// about for a stable-sort tie-break — the same shape of gap, one level up.
+///
+/// This version isolates `is_annotation` alone:
+/// `concepts/2026-07-20-isolate-annotation.note.md` has two siblings that are
+/// otherwise byte-for-byte parallel (`annoisotoken alpha ...` /
+/// `annoisotoken bravo ...`, same word count, neither `by::`-tagged), so the
+/// two blocks' raw bm25 is an exact tie — verified empirically: printing
+/// `Hit::score` with the `is_annotation` multiplier temporarily no-op'd in
+/// `score_of` showed the two scores identical to 9 decimal places. The
+/// annotation is deliberately placed on the SECOND bullet (`bravo`), not the
+/// first: `blocks_fts`'s own tie-break (observed, not assumed — see the
+/// mutation-check note below) favors the first-inserted row, so if the
+/// annotation sat on `alpha` this test could pass on tie-break luck alone,
+/// the exact gap being closed here. Putting it on the tie-break-*disfavored*
+/// side means the ×1.2 boost is the only thing that can produce the correct
+/// order.
 #[test]
-fn annotations_outrank_agent_authored_content_end_to_end() {
+fn annotation_boost_outranks_plain_content_end_to_end() {
     let (_d, mut idx) = open_temp(&corpus());
     idx.rebuild(&ScanOptions::default()).unwrap();
-    let (hits, _) = idx.search("目标达成", 20).unwrap();
-    let anno = hits.iter().position(|h| h.text.contains("人工判断")).expect("annotation hit missing");
-    let agent = hits.iter().position(|h| h.text.contains("AI草稿")).expect("agent-authored hit missing");
-    assert!(anno < agent, "human-marked content must rank above agent output: {hits:?}");
+    let (hits, _) = idx.search("annoisotoken", 20).unwrap();
+    let line_hits: Vec<_> = hits.iter().filter(|h| h.level == "line").collect();
+    let annotated = line_hits.iter().position(|h| h.text.contains("bravo")).expect("annotation hit missing");
+    let plain = line_hits.iter().position(|h| h.text.contains("alpha")).expect("plain hit missing");
+    assert!(
+        annotated < plain,
+        "type:: annotation must outrank otherwise-identical plain content: {line_hits:?}"
+    );
+}
+
+/// spec §7 + §4:AI 撰写(`by:: <非 human:>`)内容必须排在同一文件里的普通内容
+/// 之后。Isolates `agent_by` alone, the sibling to the test above — see its
+/// doc comment for why isolation (not the original combined fixture) matters.
+///
+/// `concepts/2026-07-21-isolate-agentby.note.md`'s two blocks are otherwise
+/// parallel and tie exactly on raw bm25 (same verification method as above).
+/// `by:: claude/1` is deliberately on the FIRST bullet (`alpha`) — the
+/// tie-break-favored side (observed, see the mutation-check note below) — so
+/// only the ×0.85 penalty can make the second bullet (`bravo`, plain) win.
+#[test]
+fn agent_authored_content_is_penalized_end_to_end() {
+    let (_d, mut idx) = open_temp(&corpus());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    let (hits, _) = idx.search("agentbytoken", 20).unwrap();
+    let line_hits: Vec<_> = hits.iter().filter(|h| h.level == "line").collect();
+    let plain = line_hits.iter().position(|h| h.text.contains("bravo")).expect("plain hit missing");
+    let agent = line_hits.iter().position(|h| h.text.contains("alpha")).expect("agent-authored hit missing");
+    assert!(
+        plain < agent,
+        "agent-authored (by:: claude/1) content must rank below otherwise-identical plain content: {line_hits:?}"
+    );
 }
 
 /// spec §7 + §4:`human_verified` 内容必须排在同一查询下未核实内容之前 ——
 /// 端到端版本,证明 frontmatter 的 `verified: by: human:...` 一路传导到
-/// `files.human_verified` 再到排序,而不只是 `score_of` 的加成系数本身对。
+/// `files.human_verified` 再到排序,而不只是 `score_of` 的加成系数本身对.
+///
+/// Review round 1 finding: the original fixture pair
+/// (`docs/2026-03-01-verified-fact.md` / `docs/2026-03-02-unverified-fact.md`,
+/// kept in the corpus unchanged for `retrievability.json`) differ in length
+/// by about 40% — `bm25()`'s own length normalization plausibly favored the
+/// shorter file regardless of the boost, an uncontrolled confound. This
+/// version uses a purpose-built pair
+/// (`docs/2026-07-22-verified-marker-a.md` / `-b.md`) with identical word
+/// counts (`humanverifiedtoken review alpha/bravo steady content marker
+/// today`), verified empirically to tie exactly on raw bm25 with the boost
+/// no-op'd. `verified:` sits on `-b.md`, not `-a.md`: `-a.md` sorts first
+/// alphabetically (`walk()` processes candidates in sorted path order) and
+/// is the tie-break-favored side (observed, see the mutation-check note
+/// below), so only the ×1.1 boost can make `-b.md` win.
+///
+/// A pure `score_of`-level pin (`score_of_boosts_human_verified_content` in
+/// `query.rs`, added in this same review round) is the primary, fixture- and
+/// bm25-independent guard for the ×1.1 multiplier; this test additionally
+/// proves the boost survives the full pipeline (frontmatter parsing →
+/// `files.human_verified` → ranking), the way the annotation/agent_by pair
+/// above does for their multipliers.
 #[test]
 fn human_verified_content_outranks_unverified_content_for_the_same_query() {
     let (_d, mut idx) = open_temp(&corpus());
     idx.rebuild(&ScanOptions::default()).unwrap();
-    let (hits, _) = idx.search("决策事项", 20).unwrap();
-    let verified = hits.iter().position(|h| h.path == "docs/2026-03-01-verified-fact.md").expect("verified doc missing");
+    let (hits, _) = idx.search("humanverifiedtoken", 20).unwrap();
+    let verified =
+        hits.iter().position(|h| h.path == "docs/2026-07-22-verified-marker-b.md").expect("verified doc missing");
     let unverified =
-        hits.iter().position(|h| h.path == "docs/2026-03-02-unverified-fact.md").expect("unverified doc missing");
-    assert!(verified < unverified, "human_verified content must outrank unverified content: {hits:?}");
+        hits.iter().position(|h| h.path == "docs/2026-07-22-verified-marker-a.md").expect("unverified doc missing");
+    assert!(
+        verified < unverified,
+        "human_verified content must outrank otherwise-identical unverified content: {hits:?}"
+    );
 }

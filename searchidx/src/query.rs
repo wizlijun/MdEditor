@@ -664,6 +664,34 @@ mod tests {
         assert!(annotated > agent, "human-marked content must outrank agent output: {annotated} vs {agent}");
     }
 
+    /// spec §4's third boost — `human_verified` ×1.1 — had no pure-function pin
+    /// until task-11 review round 1 flagged that its only coverage was an
+    /// end-to-end acceptance test with an uncontrolled bm25 length confound
+    /// between the two fixtures. This mirrors
+    /// `score_of_boosts_annotations_and_penalizes_agent_authored_content`
+    /// immediately above: call `score_of` directly so the ×1.1 multiplier is
+    /// pinned independent of bm25/SQLite/fixture-length behavior entirely.
+    #[test]
+    fn score_of_boosts_human_verified_content() {
+        let base = Hit {
+            path: "a.md".into(),
+            line: 1,
+            line_end: 1,
+            text: String::new(),
+            breadcrumb: String::new(),
+            level: "line".into(),
+            score: 0.0,
+            doc_date: None,
+            agent_by: None,
+            human_verified: false,
+        };
+        let unverified = score_of(-1.0, &base, false, false, "2026-08-10");
+        let mut verified_hit = base.clone();
+        verified_hit.human_verified = true;
+        let verified = score_of(-1.0, &verified_hit, false, false, "2026-08-10");
+        assert!(verified > unverified, "human_verified boost must raise the score: {verified} vs {unverified}");
+    }
+
     #[test]
     fn scores_are_finite_positive_and_descending() {
         let (_d, c) = indexed(&[("a.md", "target target target\n"), ("b.md", "target\n")]);
