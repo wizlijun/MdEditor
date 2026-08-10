@@ -1,7 +1,7 @@
 # `.mdx` 有限兼容设计
 
 日期:2026-08-10
-状态:已确认,待实现
+状态:已实现(2026-08-10 收敛:批注/手记支持已撤回,只保留只读阅读 + source 编辑)
 
 ## 背景
 
@@ -15,11 +15,11 @@ MDX 不是 markdown 的一种写法,而是 markdown + JSX:顶层 `import` / `exp
 - JSX 内部的 4 空格缩进行被识别成代码块,回写后结构改变;
 - 这些文件通常是别人站点的**构建源码**,改坏 = 构建挂掉。
 
-对一个把 file-over-app 写进信条的产品,静默改坏源文件是最不能犯的错。因此本设计的形态不是「把 mdx 当 markdown 全功能编辑」,而是:**认得、能读、能批注,但编辑器永不对它做序列化回写。**
+对一个把 file-over-app 写进信条的产品,静默改坏源文件是最不能犯的错。因此本设计的形态不是「把 mdx 当 markdown 全功能编辑」,而是:**认得、能读、source 可逐字节改,但富文本编辑器永不对它做序列化回写,也不在它身上做批注与手记。**
 
 ## 目标场景
 
-开发者用 note.md 阅读并批注自己文档站仓库里的 `.mdx` —— 源文件绝不能动,判断沉淀进 vault。这与信念 4「你的批注属于 vault,不属于路径」同源。
+开发者用 note.md **阅读**自己文档站仓库里的 `.mdx`,必要时在 source 模式下改字。批注与手记不在支持面内 —— mdx 依赖专门的 build pipeline,把判断沉淀到它身上会牵出一连串它撑不住的语义。要留判断,把内容整理进普通 `.md`。
 
 ## 设计
 
@@ -58,19 +58,20 @@ MDX 不是 markdown 的一种写法,而是 markdown + JSX:顶层 `import` / `exp
 
 **关键安全性质:因为 rich 模式永不写盘,这套启发式判断错了只损失显示效果,不可能损失一个字节。** 这使得我们可以接受一个简单而不完美的扫描器,不必引入完整 MDX AST 解析器。
 
-### 4. 手记:`foo.mdx` → `foo.mdx.note.md`
+### 4. 不接手记,不参与批注
 
-- `companionPathFor()`(`src/lib/outline/store.svelte.ts:72`)增加 mdx 分支,**保留完整原后缀**。理由:同目录下 `index.md` 与 `index.mdx` 共存在 Astro / Next 仓库里不算罕见,沿用「去后缀 + `.note.md`」会让两份文档共用同一份手记且无法分开。`OUTLINE_SUFFIX_RE`(`/\.notes?\.md$/i`)已能把 `foo.mdx.note.md` 识别为手记本身,不会递归派生。
-- `outline/gate.svelte.ts:69` 的 `tab.kind === 'markdown'` 放开到 `markdown | mdx`。
-- 源 `.mdx` 与 vault 镜像副本都不被写入。行内批注(`src/lib/note-anno/`)对 mdx 不可用 —— rich 模式只读,批注命令根本没有入口。
-- 镜像宿主链路**无需改动**:`planNoteHome()` / `noteHomeForRead()`(`src/lib/outline/note-home.ts`)全部由 `companionPathFor()` 驱动,上面那一处改完 vault 外 mdx 的宿主解析就通了。
-- `src-tauri/src/sotvault/logic.rs:193` 的 `is_markdown()` 一并放开到 mdx。它管的不是宿主解析,而是**同步进 vault 时的 `yyyy-MM-dd-` 日期前缀** —— 不改的话 `foo.md` 会被加前缀而 `foo.mdx` 不会,同一目录里出现两套命名。
+`.mdx` 需要专门的 build pipeline,不是 note.md 能负责到底的文档格式。支持面到「能打开 + 只读渲染 + source 逐字节编辑」为止:
+
+- `companionPathFor()`(`src/lib/outline/store.svelte.ts:72`)对 mdx 返回 null —— 没有 `foo.mdx.note.md`,手记面板不出现;
+- 行内批注、提问、高亮对 mdx 一律不可用。只读表面的右键菜单只剩 复制 / 全选。
+
+**只读必须在 `dispatchTransaction` 处兜底,而不是靠 `editable: false`。** 后者只拦 DOM 层输入:右键菜单命令、keymap 快捷键、粘贴全部走 `view.dispatch`,一路畅通把改动加进文档,然后被出口丢弃 —— 用户会看着自己的批注出现又消失。正确做法是接管 `dispatchTransaction`,丢弃 `tr.docChanged`、放行选区/滚动,一个点覆盖所有入口。
 
 ### 5. 明确不做
 
 - 不做 MDX 编译 / 组件预览;
 - 不做 JSX 结构化编辑;
-- 不做 mdx 上的行内批注;
+- 不做 mdx 上的行内批注,也不做手记;
 - mdx 不进关系图(只有 `.note.md` 结网,与「关系只在人确认处生长」一致);
 - 不碰 OKF(mdx 不是 OKF 知识文档格式)。
 
@@ -81,7 +82,9 @@ MDX 不是 markdown 的一种写法,而是 markdown + JSX:顶层 `import` / `exp
 ## 测试
 
 - `src/lib/fs.test.ts`:`classifyPath('a.mdx')` → `{ kind: 'mdx' }`;大小写不敏感。
-- `src/lib/outline/store.test.ts`:`companionPathFor('/d/foo.mdx')` → `/d/foo.mdx.note.md`;`foo.md` 与 `foo.mdx` 不撞车;`foo.mdx.note.md` → `null`。
+- `src/lib/outline/store.test.ts`:`companionPathFor('/d/foo.mdx')` → `null`。
+- `src/lib/outline/gate.test.ts`:手记面板对 mdx 不出现。
+- `src/lib/context-menu/menu-model.test.ts`:只读菜单只剩 复制 / 全选。
 - `src/lib/mdx/display.test.ts`:import/export 行、块级 JSX、围栏代码块内免疫、纯 markdown 原样通过。
 - `src/lib/folder-view.test.ts`:「markdown」视图模式把 mdx 计入。
 - Rust:`sotvault` 的 `is_markdown` 与 `vault_ios` 的 `list_dir` 白名单单测。

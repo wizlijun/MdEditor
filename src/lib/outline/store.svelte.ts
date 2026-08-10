@@ -71,9 +71,8 @@ export const OUTLINE_SUFFIX_RE = /\.notes?\.md$/i
 
 export function companionPathFor(mainPath: string): string | null {
   if (OUTLINE_SUFFIX_RE.test(mainPath)) return null
-  // mdx 保留完整后缀(foo.mdx → foo.mdx.note.md):同目录下 index.md 与
-  // index.mdx 共存不算罕见,去后缀会让两份文档共用一份手记且无法分开。
-  if (/\.mdx$/i.test(mainPath)) return `${mainPath}.note.md`
+  // mdx 不在列:它需要专门的 build pipeline,只读渲染 + source 编辑就是全部
+  // 支持面,不参与批注,也不接手记。
   const m = mainPath.match(/^(.*)\.(md|markdown|mdown|mkd)$/i)
   return m ? `${m[1]}.note.md` : null
 }

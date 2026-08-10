@@ -8,14 +8,8 @@ describe('companionPathFor', () => {
     expect(companionPathFor('/d/foo.md')).toBe('/d/foo.note.md')
     expect(companionPathFor('/d/bar.markdown')).toBe('/d/bar.note.md')
   })
-  it('keeps the full .mdx suffix so foo.md and foo.mdx do not share one note', () => {
-    // index.md 与 index.mdx 共存在 Astro / Next 仓库里不算罕见;去后缀会让
-    // 两份文档共用同一份手记且无法分开。
-    expect(companionPathFor('/d/foo.mdx')).toBe('/d/foo.mdx.note.md')
-    expect(companionPathFor('/d/foo.mdx')).not.toBe(companionPathFor('/d/foo.md'))
-  })
-  it('null for the mdx companion itself (no recursive derivation)', () => {
-    expect(companionPathFor('/d/foo.mdx.note.md')).toBeNull()
+  it('null for mdx — it needs its own build pipeline and gets no sidecar note', () => {
+    expect(companionPathFor('/d/foo.mdx')).toBeNull()
   })
   it('null for companion files themselves (new and legacy suffix) and non-md', () => {
     expect(companionPathFor('/d/foo.note.md')).toBeNull()
