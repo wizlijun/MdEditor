@@ -10,6 +10,8 @@
 //! file watcher are three thin adapters over one algorithm. That is the whole
 //! reason the crate exists — see docs/2026-08-10-vault-search-index-design.md §2.
 
+pub mod block;
 pub mod frontmatter;
 pub mod norm;
+pub mod prose;
 pub mod tokenize;
