@@ -202,20 +202,56 @@ fn an_unchanged_sweep_is_fast() {
 /// (queries actually take the indexed path) independent of how fast that
 /// mechanism happens to run on this corpus; the timing assertion stays as a
 /// secondary backstop against slowness within that mechanism.
+///
+/// Review round 2 finding: the round-1 fix above still could not fail for
+/// the right reason. `search()`'s final fallthrough is `Ok((Vec::new(),
+/// Route::Fts))` — reached whenever `fts_search` returns empty AND
+/// `needs_scan_fallback` is false. `"note"` is 4-char ASCII with no Han, so
+/// `needs_scan_fallback("note")` is false; a `fts_search` that was forced to
+/// unconditionally return `Ok(Vec::new())` (simulating "the FTS index is
+/// gone") still satisfies `route.as_str() == "t1-fts"` — the route string
+/// alone does not distinguish "FTS answered" from "FTS returned nothing and
+/// nothing caught it." Two additions close that: (1) `!hits.is_empty()` on
+/// the warm query itself, which directly catches the empty-fallthrough case;
+/// (2) a second probe (`铁`, a single Han char that is a genuine dictionary
+/// blind spot — see `people/2026-07-01-oov-name.md` and the `慕`/`李慕白`
+/// pair in `query.rs`'s own tests) that MUST route to `t1-scan` with real
+/// hits, proving the route label is load-bearing in both directions rather
+/// than a static string a broken index could still emit.
 #[test]
 fn warm_queries_are_fast() {
     let (_d, mut idx) = open_temp(&corpus());
     idx.rebuild(&ScanOptions::default()).unwrap();
-    let (_, warm_route) = idx.search("note", 20).unwrap();
+
+    let (hits, warm_route) = idx.search("search", 20).unwrap();
     assert_eq!(
         warm_route.as_str(),
         "t1-fts",
         "a warm query must resolve via the FTS index, not degrade to the bounded scan fallback"
     );
+    assert!(
+        !hits.is_empty(),
+        "a warm 'search' query must return real hits — an index whose FTS path silently returns \
+         nothing would still report route t1-fts via search()'s empty fallthrough, so the route \
+         label alone does not catch that regression"
+    );
+
+    // Pin the fallback direction too: a query that genuinely misses the FTS
+    // index (a dictionary blind spot) must route to t1-scan and still find
+    // real hits — proving t1-fts vs t1-scan is a meaningful distinction, not
+    // a label a broken index could produce either way.
+    let (scan_hits, scan_route) = idx.search("铁", 20).unwrap();
+    assert_eq!(
+        scan_route.as_str(),
+        "t1-scan",
+        "a genuine dictionary blind spot must route to the bounded scan fallback"
+    );
+    assert!(!scan_hits.is_empty(), "the scan fallback must actually find the out-of-vocabulary hit");
+
     let mut times: Vec<u128> = Vec::new();
     for _ in 0..20 {
         let t = Instant::now();
-        let _ = idx.search("note", 20).unwrap();
+        let _ = idx.search("search", 20).unwrap();
         times.push(t.elapsed().as_micros());
     }
     times.sort_unstable();
