@@ -1017,7 +1017,22 @@
           lastSync = unwrapped
           setContent(tabId, unwrapped)
         })
-        if (readOnly) (inst.view as unknown as EditorView).setProps({ editable: () => false })
+        if (readOnly) {
+          const v = inst.view as unknown as EditorView
+          // `editable: false` only stops DOM-level input. Menu commands,
+          // keymap shortcuts and paste all reach the doc through
+          // `view.dispatch`, which it does not touch — so drop doc-changing
+          // transactions at the single choke point instead of trying to
+          // disable every entry point. Selection/scroll transactions still
+          // apply, or the view would not respond to clicks at all.
+          v.setProps({
+            editable: () => false,
+            dispatchTransaction: (tr) => {
+              if (tr.docChanged) return
+              v.updateState(v.state.apply(tr))
+            },
+          })
+        }
         // Mark in-sync BEFORE exposing the editor: the inbound $effect runs
         // immediately on `status === 'mounted'`, and would otherwise see a
         // null lastSync and re-push the same content into a freshly-mounted
@@ -1228,6 +1243,7 @@
       position={ctxMenuPos}
       hasSelection={ctxHasSel}
       image={ctxImage}
+      {readOnly}
       actions={ctxActions}
       onClose={() => { showCtxMenu = false }}
     />

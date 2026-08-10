@@ -19,6 +19,8 @@ export interface MenuContext {
   hasSelection: boolean
   /** True when the right-click landed on an image — swaps in the image menu. */
   image?: boolean
+  /** Read-only surface (mdx): only non-mutating items may be offered. */
+  readOnly?: boolean
 }
 
 function item(id: string, key: keyof Messages, extra: Partial<MenuItemSpec> = {}): MenuItemSpec {
@@ -36,6 +38,14 @@ export function getMenuModel(ctx: MenuContext): MenuGroup[] {
   if (ctx.image) {
     return [
       { id: 'image', items: [ item('copyImage', 'ctxmenu.copyImage') ] },
+    ]
+  }
+  // Read-only surface: every other item ends in a `view.dispatch`, which
+  // `editable: false` does NOT block. Offering them would apply the edit to the
+  // in-memory doc and then silently drop it on the way out.
+  if (ctx.readOnly) {
+    return [
+      { id: 'clipboard', items: [ item('copy', 'ctxmenu.copy'), item('selectAll', 'ctxmenu.selectAll') ] },
     ]
   }
   return [

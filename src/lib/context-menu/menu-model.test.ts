@@ -10,6 +10,15 @@ describe('getMenuModel', () => {
     expect(ids).toContain('wikilink')
   })
 
+  it('read-only offers nothing that would mutate the document', () => {
+    // mdx renders read-only. Every mutating command reached the doc anyway via
+    // view.dispatch (editable:false only blocks DOM input), and the change was
+    // then dropped — the user watched their annotation appear and vanish.
+    const groups = getMenuModel({ hasSelection: true, readOnly: true })
+    const ids = groups.flatMap(g => g.items.map(i => i.id))
+    expect(ids).toEqual(['copy', 'selectAll'])
+  })
+
   it('marks question/note/highlight/wikilink as emphasis, question first, before other marks', () => {
     const groups = getMenuModel({ hasSelection: true })
     const emphasis = groups.find(g => g.id === 'emphasis')!

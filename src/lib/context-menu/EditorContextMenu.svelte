@@ -15,15 +15,17 @@
     actions,
     onClose,
     image = false,
+    readOnly = false,
   }: {
     position: { x: number; y: number }
     hasSelection: boolean
     actions: EditorActions
     onClose: () => void
     image?: boolean
+    readOnly?: boolean
   } = $props()
 
-  const groups = getMenuModel({ hasSelection, image })
+  const groups = getMenuModel({ hasSelection, image, readOnly })
 
   let menuEl: HTMLDivElement | undefined = $state()
   let top = $state(position.y)
