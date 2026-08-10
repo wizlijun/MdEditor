@@ -22,10 +22,11 @@ pub mod query;
 pub mod scan;
 pub mod store;
 pub mod tokenize;
+pub mod watch;
 
 pub use block::{Block, BlockLevel, FileMeta, Link};
 pub use query::{Hit, Query, Route};
-pub use scan::{ScanOptions, ScanStats};
+pub use scan::{IndexOutcome, ScanOptions, ScanStats};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -78,10 +79,12 @@ impl SearchIndex {
         scan::sweep(&mut self.conn, &self.vault_root, opts, deadline).map_err(|e| e.to_string())
     }
 
-    pub fn index_one(&mut self, rel: &str, opts: &ScanOptions) -> Result<bool, String> {
-        scan::index_one(&mut self.conn, &self.vault_root, rel, opts)
-            .map(|outcome| outcome == scan::IndexOutcome::Indexed)
-            .map_err(|e| e.to_string())
+    /// Re-index one file. Returns [`IndexOutcome`] rather than a bare bool so
+    /// a caller (the file watcher) can log *why* a file left the index —
+    /// gone, oversized, or no longer indexable are distinct situations, not
+    /// one failure.
+    pub fn index_one(&mut self, rel: &str, opts: &ScanOptions) -> Result<IndexOutcome, String> {
+        scan::index_one(&mut self.conn, &self.vault_root, rel, opts).map_err(|e| e.to_string())
     }
 
     pub fn search(&self, raw: &str, limit: usize) -> Result<(Vec<Hit>, Route), String> {

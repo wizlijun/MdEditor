@@ -359,3 +359,21 @@ fn human_verified_content_outranks_unverified_content_for_the_same_query() {
         "human_verified content must outrank otherwise-identical unverified content: {hits:?}"
     );
 }
+
+/// spec §7:保存 → 可检索 < 500ms。这里测的是"重索引一个文件"本身的成本,
+/// 300ms 去抖之外还剩多少预算。
+#[test]
+fn reindexing_one_file_is_well_under_the_freshness_budget() {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::write(v.path().join("a.md"), "before\n").unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("index.db")).unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    std::fs::write(v.path().join("a.md"), "after brownfox\n").unwrap();
+    let t = Instant::now();
+    idx.index_one("a.md", &ScanOptions::default()).unwrap();
+    let took = t.elapsed();
+    assert!(!idx.search("brownfox", 5).unwrap().0.is_empty());
+    assert!(took < Duration::from_millis(200), "single-file reindex took {took:?}");
+}

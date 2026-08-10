@@ -41,6 +41,8 @@ pub mod agents_sync;
 pub mod notifications;
 #[cfg(not(target_os = "ios"))]
 pub mod sotvault;
+#[cfg(not(target_os = "ios"))]
+pub mod search;
 
 #[cfg(any(target_os = "ios", test))]
 pub mod vault_ios;
@@ -707,6 +709,7 @@ fn pick_sync_folder_inner(app: &tauri::AppHandle, on_done: impl FnOnce(String) +
 
                 update_tray_repo_label(&app_clone, &path_str);
                 agents_sync::restart(&app_clone, &path_str);
+                search::open_vault(&app_clone, std::path::Path::new(&path_str));
                 on_done(path_str);
             }
         });
@@ -1258,6 +1261,7 @@ pub fn run() {
                 app.manage(vault_mgr);
                 vault_sync::init(&app.handle());
                 agents_sync::init(&app.handle());
+                search::init(&app.handle());
             }
 
             // The plugin runtime MUST be initialized before anything that reads
