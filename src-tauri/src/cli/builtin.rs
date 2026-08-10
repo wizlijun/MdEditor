@@ -46,6 +46,7 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
         Builtin::PluginInstall(id, version) => market::run_install(&id, version.as_deref(), parsed),
         Builtin::PluginUpdate(id) => market::run_update(id.as_deref(), parsed),
         Builtin::PluginRemove(id, keep_data) => market::run_remove(&id, keep_data, parsed),
+        Builtin::Search(args) => super::search::run(args.with_global_json(parsed.globals.json)),
     }
 }
 
@@ -123,6 +124,7 @@ pub fn render_help(
     out.push_str("  version       Print version (aliases: -v, --version)\n");
     out.push_str("  plugin        Manage plugins (list, enable, disable, info, install, update, remove)\n");
     out.push_str("  share         Render and publish file as a shareable URL (alias: --share)\n");
+    out.push_str("  search        Full-text search over the Vault (--vault, --json, --limit, --stats)\n");
     out.push_str("  reading-insights [report]   Generate a reading digest from the Vault (--vault, --date, --stdout)\n");
 
     let mut shown_header = false;
@@ -308,6 +310,43 @@ FLAGS:
 Shares are published to the configured share server and the URL is copied to
 the clipboard (disable with --no-clipboard). Files outside the Vault are
 homed into the Vault first.
+",
+        "search" => "\
+notemd search — Full-text search over the Vault
+
+USAGE:
+  notemd search <query...> [--vault <path>] [--json] [--limit <n>] [--context <n>]
+  notemd search --stats --vault <path>
+
+DESCRIPTION:
+  Grep-shaped on purpose: default output is `path:line:text`, one hit per
+  line. Filter flags are sugar for the same query grammar the Vault search
+  panel understands (`tag:x`, `type:x`, `path:x`, `ext:x`,
+  `after:YYYY-MM-DD`, `before:YYYY-MM-DD`) — e.g. `--tag x` is exactly
+  `tag:x` appended to the query.
+
+FLAGS:
+  --vault <path>    Vault root (default: the configured Vault)
+  --json            Emit {query, route, took_ms, hits: [...]}
+  --limit <n>       Max hits (default: 20)
+  --context <n>     Print N lines of context around each hit
+  --tag <t>         Filter: tag:<t>
+  --type <t>        Filter: type:<t>
+  --path <p>        Filter: path:<p> (substring match)
+  --ext <e>         Filter: ext:<e>
+  --after <date>    Filter: doc_date >= date (YYYY-MM-DD)
+  --before <date>   Filter: doc_date <= date (YYYY-MM-DD)
+  --stats           Report index size/freshness instead of searching
+  --rebuild         Force a full rebuild before searching
+  --no-sweep        Skip the bounded freshness sweep (answer from what's indexed)
+
+NOTES:
+  Exit code 0 = hits found, 1 = no hits (not an error — nothing to branch on
+  but 'try something else'), 2 = no Vault configured/found, or a missing
+  query. Retrieval never fails because the index is unhappy: an unusable
+  index, or a freshness sweep that runs past its 2s budget, degrades to a
+  direct file scan (or an answer from the existing index) with a one-line
+  warning on stderr instead of an error.
 ",
         "reading-insights" => "\
 notemd reading-insights — Reading Insights (engagement) report

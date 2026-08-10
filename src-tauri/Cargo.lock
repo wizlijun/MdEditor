@@ -3082,6 +3082,7 @@ dependencies = [
  "git2",
  "hex",
  "hmac",
+ "ignore",
  "libc",
  "lightningcss",
  "minisign-verify",

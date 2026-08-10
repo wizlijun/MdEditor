@@ -37,6 +37,8 @@ pub enum Builtin {
     PluginUpdate(Option<String>),
     /// `plugin remove <id>` (alias `uninstall`). `keep_data` from `--keep-data`.
     PluginRemove(String, bool),
+    /// `search <query...>` — full-text search over the configured vault.
+    Search(super::search::SearchArgs),
 }
 
 /// Split an `id[@version]` token on the LAST `@`, so plugin ids that themselves
@@ -87,6 +89,11 @@ pub fn resolve_with(
 
     if matches!(first.as_str(), "version" | "-v" | "--version") {
         return Route::Builtin(Builtin::Version);
+    }
+
+    // Core, never disabled: an agent's search must not depend on plugin state.
+    if first == "search" {
+        return Route::Builtin(Builtin::Search(super::search::parse_args(&rest[1..], false)));
     }
 
     if first == "plugin" {
