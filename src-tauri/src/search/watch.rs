@@ -17,24 +17,79 @@ use searchidx::watch::{Batch, Pending, DEBOUNCE_MS};
 use searchidx::IndexOutcome;
 use tauri::{AppHandle, Emitter, Manager};
 
-/// Bumped every time `restart` runs. The drain-loop thread checks this on
-/// every wakeup and exits the instant it sees a newer generation — otherwise a
-/// watcher started for a vault the user has since switched away from would
-/// keep reindexing files into (or out of) the *new* vault's index. See
-/// `agents_sync::AgentsSyncState` for the same pattern.
+/// Governs the watcher's lifetime **and** `IndexHandle`'s contents together —
+/// the two must never be allowed to drift apart, or `IndexHandle` can end up
+/// holding one vault's `SearchIndex` while the live watcher watches a
+/// different one (a real bug caught in review: see `search::open_vault`,
+/// which reserves a generation via `reserve_generation` *synchronously*,
+/// before its slow open/build/sweep work starts, and checks `is_current`
+/// immediately before writing `IndexHandle`). The drain-loop thread spawned
+/// by `restart` checks the same counter on every wakeup and exits the instant
+/// it sees a newer generation, so a watcher for a vault the user has since
+/// switched away from cannot keep reindexing into (or out of) the *new*
+/// vault's index. See `agents_sync::AgentsSyncState` for the sibling pattern
+/// — the difference here is that a second piece of shared state
+/// (`IndexHandle`) is also governed by this counter, not just a watcher
+/// thread, so any future writer of `IndexHandle` must reserve/check a
+/// generation the same way `open_vault` does, or reintroduce the split-brain
+/// bug this exists to prevent.
 #[derive(Default)]
 pub struct WatchState {
     generation: AtomicU64,
 }
 
-/// (Re)start the watcher for `vault_root`. Safe to call again — e.g. when the
-/// user picks a different vault folder: the previous watcher/thread notices
-/// the generation bump and exits instead of continuing to write into the old
-/// vault's (still-live) `IndexHandle` contents.
-pub fn restart(app: &AppHandle, vault_root: &Path) {
-    let state = app.state::<WatchState>();
-    let my_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+/// Reserve the next generation number, synchronously, on the caller's thread
+/// — never from inside a spawned thread after slow I/O. `open_vault` calls
+/// this *before* spawning its background thread so that when two
+/// `open_vault` calls race (the user switches vaults again before the first
+/// finishes indexing), the winner is decided by *call order*, not by which
+/// thread's open/build/sweep happens to finish first.
+pub fn reserve_generation(app: &AppHandle) -> u64 {
+    app.state::<WatchState>().generation.fetch_add(1, Ordering::SeqCst) + 1
+}
 
+/// Whether `gen` is still the most recently reserved generation.
+pub fn is_current(app: &AppHandle, generation: u64) -> bool {
+    app.state::<WatchState>().generation.load(Ordering::SeqCst) == generation
+}
+
+/// Whether an event on `rel` (already vault-relative, `/`-separated) should
+/// be forwarded to `Pending`. `.md`-only, and any dot-prefixed path segment
+/// (`.git/`, `.notemd/`, …) is excluded so a git operation doesn't trigger a
+/// reindex storm — broader than `vault_sync/watcher.rs`'s `.git`-only check,
+/// on purpose: a vault can also carry other dot-directories (`.notemd`,
+/// `.trash`, …) that must never feed the index.
+fn should_forward(rel: &str) -> bool {
+    rel.ends_with(".md") && !rel.split('/').any(|s| s.starts_with('.'))
+}
+
+/// The vault-relative paths `event` should produce `Pending::note` calls for.
+/// Extracted out of the `RecommendedWatcher` callback so it can be
+/// unit-tested with synthetic `notify::Event`s — the way
+/// `agents_sync::watcher::should_process` is — instead of only being
+/// exercisable via real filesystem events.
+fn relevant_paths(event: &Event, vault_root: &Path) -> Vec<String> {
+    if !matches!(
+        event.kind,
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+    ) {
+        return Vec::new();
+    }
+    event
+        .paths
+        .iter()
+        .filter_map(|p| searchidx::norm::rel_path(vault_root, p))
+        .filter(|rel| should_forward(rel))
+        .collect()
+}
+
+/// (Re)start the watcher for `vault_root`, under the generation `my_gen`
+/// reserved by the caller (`open_vault`) via `reserve_generation`. Safe to
+/// call again — e.g. when the user picks a different vault folder: the
+/// previous watcher/thread notices a newer generation and exits instead of
+/// continuing to write into the old vault's (still-live) `IndexHandle`
+/// contents.
+pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
     let (tx, rx) = mpsc::channel::<String>();
     let root = vault_root.to_path_buf();
     let filter_root = root.clone();
@@ -42,24 +97,16 @@ pub fn restart(app: &AppHandle, vault_root: &Path) {
     let mut watcher = match RecommendedWatcher::new(
         move |res: Result<Event, notify::Error>| {
             let Ok(event) = res else { return };
-            if !matches!(
-                event.kind,
-                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-            ) {
-                return;
-            }
-            for p in &event.paths {
-                if let Some(rel) = searchidx::norm::rel_path(&filter_root, p) {
-                    // `.git`, `.notemd`, etc.: a git operation must not
-                    // trigger a reindex storm. `.md`-only keeps the channel
-                    // free of every other file type notify reports.
-                    if rel.ends_with(".md") && !rel.split('/').any(|s| s.starts_with('.')) {
-                        let _ = tx.send(rel);
-                    }
-                }
+            for rel in relevant_paths(&event, &filter_root) {
+                let _ = tx.send(rel);
             }
         },
-        notify::Config::default(),
+        // Matches `vault_sync/watcher.rs` and `agents_sync/watcher.rs`: the
+        // poll interval only governs the `PollWatcher` fallback, but setting
+        // it keeps this watcher's degraded-backend behavior consistent with
+        // its two siblings rather than silently diverging from the house
+        // pattern.
+        notify::Config::default().with_poll_interval(Duration::from_secs(2)),
     ) {
         Ok(w) => w,
         Err(e) => {
@@ -156,5 +203,77 @@ fn log_outcome(rel: &str, outcome: IndexOutcome) {
         IndexOutcome::RemovedNotIndexable => {
             crate::dlog(&format!("[search] {rel} left the index (excluded/not indexable)"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{AccessKind, CreateKind, ModifyKind, RemoveKind};
+    use std::path::PathBuf;
+
+    #[test]
+    fn should_forward_accepts_plain_markdown() {
+        assert!(should_forward("a.md"));
+        assert!(should_forward("notes/sub/a.md"));
+    }
+
+    #[test]
+    fn should_forward_rejects_non_markdown() {
+        assert!(!should_forward("a.txt"));
+        assert!(!should_forward("notes/a.png"));
+        // Not a suffix match: a directory or filename that merely contains
+        // ".md" must not slip through.
+        assert!(!should_forward("a.md.tmp"));
+    }
+
+    #[test]
+    fn should_forward_rejects_dot_git() {
+        assert!(!should_forward(".git/HEAD.md"));
+        assert!(!should_forward("sub/.git/objects/pack.md"));
+    }
+
+    #[test]
+    fn should_forward_rejects_dot_notemd() {
+        assert!(!should_forward(".notemd/settings.md"));
+        assert!(!should_forward("a/.notemd/index.md"));
+    }
+
+    fn modify_event(path: &str) -> Event {
+        Event::new(EventKind::Modify(ModifyKind::Any)).add_path(PathBuf::from(path))
+    }
+
+    #[test]
+    fn relevant_paths_resolves_and_filters_relative_to_root() {
+        let root = Path::new("/vault");
+        let event = modify_event("/vault/notes/a.md");
+        assert_eq!(relevant_paths(&event, root), vec!["notes/a.md".to_string()]);
+    }
+
+    #[test]
+    fn relevant_paths_drops_non_markdown_and_dot_dirs() {
+        let root = Path::new("/vault");
+        assert!(relevant_paths(&modify_event("/vault/notes/a.txt"), root).is_empty());
+        assert!(relevant_paths(&modify_event("/vault/.git/HEAD.md"), root).is_empty());
+        assert!(relevant_paths(&modify_event("/vault/.notemd/settings.md"), root).is_empty());
+    }
+
+    #[test]
+    fn relevant_paths_ignores_access_events() {
+        let root = Path::new("/vault");
+        let access = Event::new(EventKind::Access(AccessKind::Any))
+            .add_path(PathBuf::from("/vault/notes/a.md"));
+        assert!(relevant_paths(&access, root).is_empty());
+    }
+
+    #[test]
+    fn relevant_paths_accepts_create_and_remove() {
+        let root = Path::new("/vault");
+        let create =
+            Event::new(EventKind::Create(CreateKind::File)).add_path(PathBuf::from("/vault/a.md"));
+        assert_eq!(relevant_paths(&create, root), vec!["a.md".to_string()]);
+        let remove = Event::new(EventKind::Remove(RemoveKind::File))
+            .add_path(PathBuf::from("/vault/a.md"));
+        assert_eq!(relevant_paths(&remove, root), vec!["a.md".to_string()]);
     }
 }

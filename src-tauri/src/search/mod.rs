@@ -50,7 +50,15 @@ pub fn scan_options(vault_root: &Path) -> ScanOptions {
 /// Open (building if empty) the index for `vault_root` and start watching.
 /// Failures are logged and swallowed: a broken index must never keep the vault
 /// from opening.
+///
+/// The generation is reserved *synchronously*, on the caller's thread, before
+/// any of the slow open/build/sweep work is spawned — so if the user switches
+/// vaults again before this call's background thread finishes, call order
+/// (not finish order) decides which vault's `SearchIndex` ends up in
+/// `IndexHandle`. See `watch::WatchState`'s doc comment for why `IndexHandle`
+/// and the watcher must be governed by the same counter.
 pub fn open_vault(app: &AppHandle, vault_root: &Path) {
+    let my_gen = watch::reserve_generation(app);
     let idx_handle = handle(app);
     let root = vault_root.to_path_buf();
     let app = app.clone();
@@ -64,8 +72,16 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
                 if let Err(e) = idx.sweep(&opts, None) {
                     crate::dlog(&format!("[search] sweep failed: {e}"));
                 }
+                // Discard this thread's work if a newer `open_vault` call has
+                // superseded it — otherwise a slow open for a vault the user
+                // has since switched away from could overwrite the new
+                // vault's (already-current) `IndexHandle` entry.
+                if !watch::is_current(&app, my_gen) {
+                    crate::dlog("[search] open_vault superseded, discarding");
+                    return;
+                }
                 *lock(&idx_handle) = Some(idx);
-                watch::restart(&app, &root);
+                watch::restart(&app, &root, my_gen);
             }
             Err(e) => crate::dlog(&format!("[search] index unavailable: {e}")),
         }
