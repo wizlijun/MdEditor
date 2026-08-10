@@ -34,3 +34,9 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+
+# One deliberate exception to the eol=lf rule above: this fixture exists to
+# carry CRLF bytes into the CRLF-normalization test. Normalizing it to LF
+# would make it a byte-identical copy of basic.note.md — the test would still
+# pass while verifying nothing.
+searchidx/tests/fixtures/outline/crlf.note.md -text
