@@ -1,0 +1,19 @@
+[package]
+name = "searchidx"
+version = "0.1.0"
+edition = "2021"
+description = "Platform-independent full-text index core for note.md vaults."
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+jieba-rs = "0.10"
+pulldown-cmark = { version = "0.13", default-features = false }
+ignore = "0.4"
+sha2 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"
