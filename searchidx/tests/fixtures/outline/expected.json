@@ -14,5 +14,15 @@
     { "line_start": 2, "line_end": 4, "breadcrumb": "顶层节点", "text": "子节点一", "is_annotation": true, "agent_by": "claude/1" },
     { "line_start": 5, "line_end": 6, "breadcrumb": "顶层节点", "text": "子节点二", "is_annotation": false, "agent_by": null },
     { "line_start": 7, "line_end": 7, "breadcrumb": "", "text": "另一个顶层", "is_annotation": false, "agent_by": null }
+  ],
+  "fence-continuation.note.md": [
+    { "line_start": 1, "line_end": 1, "breadcrumb": "", "text": "q", "is_annotation": false, "agent_by": null },
+    { "line_start": 2, "line_end": 3, "breadcrumb": "q", "text": "a\n```", "is_annotation": false, "agent_by": null },
+    { "line_start": 4, "line_end": 4, "breadcrumb": "q > a", "text": "not a bullet", "is_annotation": false, "agent_by": null }
+  ],
+  "prose-before-bullet.note.md": [
+    { "line_start": 1, "line_end": 1, "breadcrumb": "", "text": "孤立的正文行", "is_annotation": false, "agent_by": null },
+    { "line_start": 2, "line_end": 2, "breadcrumb": "", "text": "顶层", "is_annotation": false, "agent_by": null },
+    { "line_start": 3, "line_end": 4, "breadcrumb": "顶层", "text": "子节点", "is_annotation": true, "agent_by": null }
   ]
 }

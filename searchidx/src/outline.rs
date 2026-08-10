@@ -5,6 +5,44 @@
 //! one is read-only and only cares about line attribution, so it stays small;
 //! the shared fixtures in tests/fixtures/outline are what stop the three from
 //! drifting. See tests/outline_fixtures.rs.
+//!
+//! ## Deliberate simplifications (documented, not fixed)
+//!
+//! Conformance work on this module targets **content attribution** — which
+//! lines exist as nodes, and whether any content gets lost — not byte-exact
+//! agreement with `markdown.ts` on indentation strictness. The distinction
+//! matters: attribution drift can make real content unfindable; indentation
+//! drift only changes *how finely* a malformed file gets chunked, and the
+//! design spec pre-accepts that as acceptable slop on files nobody wrote by
+//! hand-following the outline format precisely. Three gaps fall on the
+//! "granularity, not findability" side of that line and are left as-is:
+//!
+//! 1. **Continuation/property lines match regardless of indent.** `markdown.ts`
+//!    requires a continuation line to start with the *exact* `contIndent`
+//!    (`'  '.repeat(currentDepth) + '  '`) for the current node, and falls
+//!    back to manufacturing a new root node otherwise. This module accepts
+//!    any indent, as long as [`property`] or the plain-append path can make
+//!    sense of the line. On a file with consistent 2-space nesting this never
+//!    matters; on a file with ragged indentation, this module folds lines
+//!    into the wrong node's `text` (still findable, wrong breadcrumb) where
+//!    `markdown.ts` would split them into an extra sibling node.
+//! 2. **`fence_len` doesn't require "backticks then only whitespace" the way
+//!    TS's close regex (`/^(\`{3,})\s*$/`) does** — trailing non-whitespace
+//!    after the backticks (e.g. `` ``` js``) is still counted as a fence
+//!    delimiter here. Affects only how a malformed close line is read, not
+//!    whether the fenced content is preserved.
+//! 3. **Bullet depth is `indent_chars / 2` with no divisibility check.** A
+//!    line indented by an odd number of spaces, or by tabs, lands at
+//!    `indent / 2` (integer division) here, where `markdown.ts`'s bullet
+//!    regex (`^((?:  )*)-...`) requires indent in *exact* multiples of two
+//!    spaces and otherwise doesn't match as a bullet at all (falling through
+//!    to the root-node fallback instead). Again: a different chunk boundary
+//!    on a file nobody wrote correctly, not lost content.
+//!
+//! The shared fixtures in `tests/fixtures/outline` do not exercise any of
+//! these three — they exist to pin content attribution, which is the part of
+//! this module's behavior that actually affects whether a user's text is
+//! findable.
 
 use crate::block::{breadcrumb_of, Block, BlockLevel};
 
@@ -23,9 +61,15 @@ fn bullet(line: &str) -> Option<(usize, &str)> {
 }
 
 /// Number of leading backticks, if there are at least 3 (a fence delimiter).
-/// Used both for standalone fence lines and for a bullet's own inline content
-/// (`- \`\`\`` opens an answer body fence right on the item line) — mirroring
-/// the TS parser's `content.match(/^(\`{3,})/)` check done at push time.
+/// Only ever checked against a bullet's own inline content (`- \`\`\`` opens
+/// an answer body fence right on the item line) — mirroring the TS parser's
+/// `content.match(/^(\`{3,})/)` check, which runs once at push time and never
+/// again. A fence marker that shows up on a later continuation line does NOT
+/// open raw mode in `markdown.ts`, so it must not here either: a Rust-only
+/// standalone-line fence branch used to exist here and was removed, because
+/// it made this module *more* protective of embedded `- ` lines than the
+/// authoritative parser is — silent disagreement on which lines are nodes,
+/// not just a formatting nicety. See `tests/fixtures/outline/fence-continuation.note.md`.
 fn fence_len(line: &str) -> Option<usize> {
     let t = line.trim_start();
     let n = t.chars().take_while(|c| *c == '`').count();
@@ -56,13 +100,6 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
             }
             continue;
         }
-        if let Some(n) = fence_len(raw) {
-            fence = n;
-            if let Some(idx) = current {
-                blocks[idx].line_end = line_no;
-            }
-            continue;
-        }
 
         if let Some((depth, content)) = bullet(raw) {
             chain.truncate(depth);
@@ -80,16 +117,38 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
             current = Some(blocks.len() - 1);
             // A fenced answer body opens right on the bullet's own line (e.g.
             // `- \`\`\`markdown`), not on a later continuation line — same
-            // rule the TS parser applies when it pushes the node. Checking
-            // only the standalone-line branch above would miss this and let
-            // every `- ` inside the fence be mistaken for a sibling bullet.
+            // rule the TS parser applies when it pushes the node (checked
+            // once, here, at push time — see the doc comment on `fence_len`).
             if let Some(n) = fence_len(content) {
                 fence = n;
             }
             continue;
         }
 
-        let Some(idx) = current else { continue };
+        let Some(idx) = current else {
+            // A non-bullet, non-blank line before the first bullet isn't
+            // outline syntax, but `markdown.ts` doesn't drop it either — it
+            // downgrades it to a hand-written root node (spec: 不丢内容). A
+            // `.note.md` opened in a plain editor and saved with a stray
+            // leading line must not make that line silently unfindable.
+            // See tests/fixtures/outline/prose-before-bullet.note.md.
+            if raw.trim().is_empty() {
+                continue;
+            }
+            let content = raw.trim().to_string();
+            chain.push(content.clone());
+            blocks.push(Block {
+                line_start: line_no,
+                line_end: line_no,
+                breadcrumb: String::new(),
+                text: content,
+                level: BlockLevel::Line,
+                is_annotation: false,
+                agent_by: None,
+            });
+            current = Some(blocks.len() - 1);
+            continue;
+        };
         blocks[idx].line_end = line_no;
         if let Some((key, value)) = property(raw) {
             match key {
@@ -178,19 +237,39 @@ mod tests {
         assert_eq!(b[2].breadcrumb, "top > mid");
     }
 
-    /// 围栏内的 `- ` 不是 bullet。答复正文里带列表是常态,切错就等于把一条
-    /// 答复劈成几个假节点。
+    /// A fence that opens on a *continuation* line (not the bullet's own
+    /// inline content) does NOT put `markdown.ts` into raw mode — it only
+    /// ever checks for an opening fence once, at push time, against the
+    /// bullet's own content. So a `- ` line inside such a fence is real
+    /// bullet syntax to both parsers: it becomes its own node, not part of
+    /// its parent's text. This used to be named
+    /// `bullets_inside_an_answer_fence_are_content_not_nodes` and asserted
+    /// the opposite (2 nodes) — that was wrong; it encoded a Rust-only
+    /// "smarter than TS" fence branch that has since been removed.
+    ///
+    /// The input deliberately ends right after the embedded bullet line,
+    /// without a closing fence line. A closing fence line here would ALSO
+    /// exercise the (documented, intentionally unfixed) indent-strictness gap
+    /// on continuation-line matching in this module's doc comment — this
+    /// test is only about fence-open attribution, so it stays clear of that
+    /// second variable. See `tests/fixtures/outline/fence-continuation.note.md`
+    /// for the TS-cross-checked version of this shape.
     #[test]
-    fn bullets_inside_an_answer_fence_are_content_not_nodes() {
-        let md = "- q\n  - a\n    ```\n    - not a bullet\n    ```\n";
+    fn a_fence_opened_on_a_continuation_line_does_not_protect_embedded_bullets() {
+        let md = "- q\n  - a\n    ```\n    - not a bullet\n";
         let b = nodes(md);
-        assert_eq!(b.len(), 2, "{:?}", b.iter().map(|x| &x.text).collect::<Vec<_>>());
-        assert!(b[1].text.contains("not a bullet"));
+        assert_eq!(b.len(), 3, "{:?}", b.iter().map(|x| &x.text).collect::<Vec<_>>());
+        assert_eq!(b[0].text, "q");
+        assert_eq!(b[1].text, "a\n```");
+        assert_eq!(b[2].text, "not a bullet");
+        assert_eq!(b[2].breadcrumb, "q > a");
     }
 
-    /// The fence marker can also open right on the bullet's own line (the
-    /// real shape `wrapAnswerBody` produces) — not just on a later
-    /// continuation line, as the previous test covers.
+    /// Unlike the previous test's continuation-line fence, a fence that opens
+    /// right on the bullet's own line (the real shape `wrapAnswerBody`
+    /// produces — see `docs/2026-08-10-vault-search-index-design.md` and
+    /// `src/lib/outline/markdown.test.ts`'s fenced-answer cases) IS
+    /// recognized by both parsers, and does protect embedded `- ` lines.
     #[test]
     fn a_fence_opening_on_the_bullets_own_line_still_protects_its_body() {
         let md = "- q\n  - ```\n    - not a bullet\n    ```\n    type:: answer\n";
@@ -198,6 +277,19 @@ mod tests {
         assert_eq!(b.len(), 2, "{:?}", b.iter().map(|x| &x.text).collect::<Vec<_>>());
         assert!(b[1].text.contains("not a bullet"));
         assert_eq!(b[1].text, "```\n- not a bullet\n```");
+    }
+
+    /// `markdown.ts` downgrades a non-bullet line before the first `- ` to a
+    /// hand-written root node rather than dropping it. See
+    /// `tests/fixtures/outline/prose-before-bullet.note.md` for the
+    /// TS-cross-checked version.
+    #[test]
+    fn content_before_the_first_bullet_becomes_a_root_node_not_lost() {
+        let b = nodes("stray prose\n- a\n");
+        assert_eq!(b.len(), 2, "{:?}", b.iter().map(|x| &x.text).collect::<Vec<_>>());
+        assert_eq!(b[0].text, "stray prose");
+        assert_eq!(b[0].breadcrumb, "");
+        assert_eq!(b[1].text, "a");
     }
 
     #[test]
