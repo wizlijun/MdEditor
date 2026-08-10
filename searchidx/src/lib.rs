@@ -17,4 +17,5 @@ pub mod links;
 pub mod norm;
 pub mod outline;
 pub mod prose;
+pub mod store;
 pub mod tokenize;
