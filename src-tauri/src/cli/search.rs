@@ -294,9 +294,22 @@ fn context_lines(root: &Path, hit: &searchidx::Hit, context: usize) -> Option<Ve
     let raw = std::fs::read_to_string(root.join(&hit.path)).ok()?;
     let text = searchidx::norm::strip_cr(&raw);
     let lines: Vec<&str> = text.lines().collect();
+    // Review round 2: a non-empty *clamped window* is not the same claim as
+    // "this hit still exists". `from` is clamped down by `.max(1)`, so once
+    // `context` is large enough it can land on a line that genuinely exists
+    // even though `hit.line` itself is long gone — that used to print
+    // unrelated lines under the original hit's path/line as if they were its
+    // context. The hit's own start line must still be inside the current
+    // file; only *that* line has to be checked this way — clamping
+    // `hit.line_end` down to the current file length below is the ordinary
+    // end-of-file case (a hit near the end of an unchanged, or merely
+    // trimmed-at-the-end, file) and must keep working.
+    if hit.line as usize > lines.len() {
+        return None;
+    }
     let from = hit.line.saturating_sub(context as u32).max(1);
     let to = (hit.line_end as usize + context).min(lines.len()) as u32;
-    if from > to || lines.is_empty() {
+    if from > to {
         return None;
     }
     let out: Vec<(u32, String)> =

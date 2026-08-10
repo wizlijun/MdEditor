@@ -158,6 +158,40 @@ fn context_flag_prints_surrounding_lines() {
     assert!(text.contains("four"), "{text}");
 }
 
+/// Builds a real index against `v` (query `brownfox`), truncates the indexed
+/// file's on-disk content to `shrink_to`, then re-queries the SAME (now
+/// stale) index with `--no-sweep` plus `extra_query_args` — deterministically
+/// reproducing "the file changed after the freshness sweep but before
+/// printing" without racing a real sweep. Returns the second invocation's
+/// output. Asserts the build call itself found the term, since every caller
+/// needs that sanity check before the interesting part.
+fn query_against_a_stale_index(
+    v: &std::path::Path,
+    shrink_to: &str,
+    extra_query_args: &[&str],
+) -> std::process::Output {
+    let home = temp_home();
+
+    let mut build = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    build.arg("--cli").arg("search").arg("brownfox").arg("--vault").arg(v);
+    isolate(&mut build, &home);
+    let built = build.output().unwrap();
+    assert_eq!(
+        built.status.code(), Some(0),
+        "sanity: the index must find the term before truncation; stderr: {}",
+        String::from_utf8_lossy(&built.stderr),
+    );
+
+    std::fs::write(v.join("a.md"), shrink_to).unwrap();
+
+    let mut query = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    query.arg("--cli").arg("search").arg("brownfox").args(extra_query_args).arg("--no-sweep").arg("--vault").arg(v);
+    isolate(&mut query, &home);
+    let out = query.output().unwrap();
+    let _ = std::fs::remove_dir_all(&home);
+    out
+}
+
 /// Review round 1, Important #2: `--context` used to compute exit code from
 /// the pre-print hit list, not from what was actually printed. If a file
 /// shrinks between the (stale, `--no-sweep`-held) index and the print pass —
@@ -167,46 +201,16 @@ fn context_flag_prints_surrounding_lines() {
 /// command still exited 0. For a grep-shaped tool, exit 0 is a promise that
 /// there is output to read; an agent that trusts it would treat silence as a
 /// successful empty answer instead of retrying or falling back to `rg`.
-///
-/// Reproduced deterministically (not by racing a real sweep) by holding one
-/// index across two invocations that share a `HOME`: the first call builds a
-/// real index while the fixture genuinely has "brownfox" on line 3; the file
-/// is then truncated to one line; the second call passes `--no-sweep` so the
-/// stale row survives, and prints against the now-shrunk file.
 #[test]
 fn a_stale_context_hit_is_dropped_and_the_exit_code_follows_what_was_actually_printed() {
     // Blank-line-separated paragraphs, unlike `context_flag_prints_surrounding_lines`'s
     // fixture above: that one is a single soft-wrapped paragraph spanning
     // lines 1-5, so its hit's `line_end` (5) never exceeds a merely-shrunk
     // file. Here each word is its own block, so "brownfox" indexes as a hit
-    // pinned to line 5 specifically — the shape needed to push `line_end`
-    // past the truncated file's length below.
+    // pinned to line 5 specifically — the shape needed to push it past the
+    // truncated file's length below.
     let v = vault(&[("a.md", "one\n\ntwo\n\nbrownfox\n\nfour\n\nfive\n")]);
-    let home = temp_home();
-
-    let mut build = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
-    build.arg("--cli").arg("search").arg("brownfox").arg("--vault").arg(v.path());
-    isolate(&mut build, &home);
-    let built = build.output().unwrap();
-    assert_eq!(
-        built.status.code(), Some(0),
-        "sanity: the index must find the term before truncation; stderr: {}",
-        String::from_utf8_lossy(&built.stderr),
-    );
-
-    // The file shrinks out from under the (now stale) index — line 3 no
-    // longer exists.
-    std::fs::write(v.path().join("a.md"), "only one line now\n").unwrap();
-
-    let mut query = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
-    query
-        .arg("--cli").arg("search").arg("brownfox")
-        .arg("--context").arg("1")
-        .arg("--no-sweep")
-        .arg("--vault").arg(v.path());
-    isolate(&mut query, &home);
-    let out = query.output().unwrap();
-    let _ = std::fs::remove_dir_all(&home);
+    let out = query_against_a_stale_index(v.path(), "only one line now\n", &["--context", "1"]);
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.is_empty(), "a hit whose lines no longer exist must print nothing, not a stale citation: {stdout}");
@@ -215,6 +219,50 @@ fn a_stale_context_hit_is_dropped_and_the_exit_code_follows_what_was_actually_pr
         "exit code must agree with stdout being empty (no output was printed), not with what the stale index believed; stderr: {}",
         String::from_utf8_lossy(&out.stderr),
     );
+}
+
+/// Review round 2: the round-1 fix guarded on the *clamped window*
+/// (`from <= to`) being non-empty, not on whether the hit's own line still
+/// exists in the current file. `from = hit.line.saturating_sub(context).max(1)`
+/// clamps down to 1 regardless of how large `context` is — so once `context`
+/// is at least as big as the shrinkage, `from` lands back inside the
+/// (now much shorter) file and the guard passed, printing UNRELATED lines
+/// under the original hit's path/line as if they were genuine context.
+/// `--context 1` (the test above) happens to fail safe on this fixture only
+/// because `from` still clamps past the truncated file's single line; this
+/// is the case that arithmetic misses: same shrink, bigger `context`.
+#[test]
+fn a_context_larger_than_the_shrinkage_still_drops_the_stale_hit_not_unrelated_lines() {
+    let v = vault(&[("a.md", "one\n\ntwo\n\nbrownfox\n\nfour\n\nfive\n")]);
+    let out = query_against_a_stale_index(v.path(), "only one line now\n", &["--context", "5"]);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.is_empty(),
+        "a hit whose own line no longer exists must never print — even lines that ARE still in the \
+         file are not this hit's context once its line is gone: {stdout}"
+    );
+    assert_eq!(
+        out.status.code(), Some(1),
+        "exit code must agree with stdout being empty; stderr: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// Confirms the round-2 fix didn't over-correct: a normal hit near the end of
+/// an UNCHANGED file, where `line_end + context` legitimately exceeds the
+/// file's length, must still print — that clamp is the ordinary end-of-file
+/// case, not the staleness race, and the new `hit.line` check must not touch
+/// it. Deliberately a single normal invocation (no truncation, no stale
+/// index): the whole file is one line, and `--context` asks for more
+/// neighbors than exist.
+#[test]
+fn a_large_context_near_the_end_of_an_unchanged_file_still_prints() {
+    let v = vault(&[("a.md", "brownfox\n")]);
+    let out = search(v.path(), &["brownfox", "--context", "5"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("a.md:1:brownfox"), "{text}");
+    assert_eq!(out.status.code(), Some(0));
 }
 
 /// Review round 1, Minor: the non-context path runs every line through
