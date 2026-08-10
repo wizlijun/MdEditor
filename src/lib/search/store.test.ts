@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { searchStore, _setSearchImpl } from './store.svelte'
+import { searchStore, _setSearchImpl, isIndexNotReady } from './store.svelte'
 
 beforeEach(() => searchStore.clear())
 
@@ -42,5 +42,28 @@ describe('searchStore', () => {
     resolvers[0]({ route: 't1-fts', tookMs: 1, total: 1, hits: [{ path: 'old.md' }] })
     await Promise.all([first, second])
     expect(searchStore.hits[0].path).toBe('new.md')
+  })
+})
+
+// Review fix (round 1): this was originally an exact-equality check against
+// the raw backend string, which is more brittle than the substring idiom
+// HistoryPanel.svelte already uses for the same class of problem
+// (`String(e).includes('git-unavailable')`). These pin the substring
+// behavior so a wrapped/reworded message still resolves correctly.
+describe('isIndexNotReady', () => {
+  it('matches the exact backend string', () => {
+    expect(isIndexNotReady('search index not ready')).toBe(true)
+  })
+
+  it('matches when the backend string is wrapped by other text', () => {
+    expect(isIndexNotReady('Error invoking Tauri command: search index not ready')).toBe(true)
+  })
+
+  it('does not match an unrelated error', () => {
+    expect(isIndexNotReady('disk full')).toBe(false)
+  })
+
+  it('does not match null', () => {
+    expect(isIndexNotReady(null)).toBe(false)
   })
 })

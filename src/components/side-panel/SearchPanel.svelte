@@ -8,7 +8,7 @@
   import { showError } from '../../lib/dialogs'
   import { setSideVisible } from '../../lib/side-panel/registry.svelte'
   import SideViewSwitcher from './SideViewSwitcher.svelte'
-  import { searchStore } from '../../lib/search/store.svelte'
+  import { searchStore, isIndexNotReady } from '../../lib/search/store.svelte'
   import { searchApi, type SearchHit } from '../../lib/search/api'
 
   // `tab` is part of every side view's props contract (see SidePanel.svelte);
@@ -28,13 +28,10 @@
   // the input for that window turns a silent hang into an honest wait state.
   let rebuilding = $state(false)
 
-  // "search index not ready" is the one backend error string worth a proper
-  // translation (the common case: index still opening/building at startup).
-  // Anything else is shown as-is — better than nothing, not pretending to
-  // translate arbitrary Rust error text.
-  const NOT_READY = 'search index not ready'
+  // Anything other than the known "not ready" case is shown as-is — better
+  // than nothing, not pretending to translate arbitrary Rust error text.
   let errorText = $derived(
-    searchStore.error === NOT_READY ? t('search.notReady') : searchStore.error,
+    isIndexNotReady(searchStore.error) ? t('search.notReady') : searchStore.error,
   )
 
   function scheduleSearch() {
@@ -80,10 +77,24 @@
 
   // Reindex on save elsewhere in the vault; if a query is active, silently
   // refresh it so newly-searchable content shows up without the user
-  // re-typing.
+  // re-typing. Skip while a request is already in flight so a burst of
+  // index-updated events (e.g. several saves in a row) can't stack multiple
+  // overlapping run()s on top of each other — the sequence guard in the
+  // store would just discard all but the last anyway, so this is purely to
+  // avoid pointless calls, not correctness.
+  //
+  // KNOWN GAP: this does not protect against a *rebuild* triggered
+  // elsewhere (another window, a concurrent CLI invocation). If this event
+  // fires while some other actor holds the backend index mutex mid-rebuild,
+  // the rerun below still blocks for that rebuild's full duration with only
+  // the generic `loading` state to show for it — the same class of silent
+  // hang the brief flagged for this panel's own rebuild button, just
+  // triggered externally instead of from this UI. A real fix needs a
+  // backend-reported "busy" signal (e.g. a distinct event/state emitted
+  // around `notemd_search_rebuild`), which is out of scope for this panel.
   $effect(() => {
     const pending = listen('search://index-updated', () => {
-      if (searchStore.query.trim()) void searchStore.run(searchStore.query)
+      if (searchStore.query.trim() && !searchStore.loading) void searchStore.run(searchStore.query)
     })
     return () => { void pending.then((un) => un()) }
   })

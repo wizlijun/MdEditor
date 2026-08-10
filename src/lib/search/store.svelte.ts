@@ -1,5 +1,17 @@
 import { searchApi, type SearchHit, type SearchResponse } from './api'
 
+// The one backend error string worth a proper translation in the UI (the
+// common case: index still opening/building at startup or right after a
+// vault switch) — see `src-tauri/src/search/mod.rs`'s `NOT_READY` const,
+// which this is a copy of. Kept as a substring match rather than equality
+// (same idiom as `HistoryPanel.svelte`'s `String(e).includes('git-unavailable')`)
+// so a wrapped or lightly-reworded backend message still resolves correctly
+// instead of silently falling through to raw, untranslated English.
+const NOT_READY = 'search index not ready'
+export function isIndexNotReady(error: string | null): boolean {
+  return error != null && error.includes(NOT_READY)
+}
+
 // Injectable so the store is testable without a Tauri host.
 let impl: (q: string, limit?: number) => Promise<SearchResponse> = searchApi.query
 export function _setSearchImpl(fn: typeof impl) { impl = fn }
