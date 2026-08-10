@@ -220,49 +220,69 @@ pub fn edit_agents_md(app: &tauri::AppHandle) {
     }
 }
 
+/// Read `<root>/AGENTS.md` if — and only if — it exists and has content
+/// beyond whitespace. `None` covers a missing file, a 0-byte file, and a
+/// whitespace-only file identically: none of the three is a document there is
+/// anything sensible to append *to*. A `touch AGENTS.md`, an editor saving an
+/// empty buffer, or an interrupted write can all produce the blank case, and
+/// treating it as "empty string, append away" would write a frontmatter-less
+/// fragment straight into `## Searching this vault` — exactly the OKF-invalid
+/// document the missing-file guard exists to prevent, reached through a
+/// different door. Bootstrapping a real AGENTS.md is `edit_agents_md`'s job
+/// (writes the full `TEMPLATE`, which already includes this section), reached
+/// from the tray, not this.
+fn read_nonblank_agents_md(root: &Path) -> Result<Option<String>, String> {
+    let path = root.join(watcher::AGENTS_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let existing = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    Ok((!existing.trim().is_empty()).then_some(existing))
+}
+
+/// Fs-level logic for `notemd_agents_search_section_missing`, testable
+/// without a `tauri::AppHandle`.
+fn agents_search_section_missing_at(root: &Path) -> Result<bool, String> {
+    Ok(match read_nonblank_agents_md(root)? {
+        Some(existing) => logic::search_section_missing(&existing),
+        None => false,
+    })
+}
+
+/// Fs-level logic for `notemd_agents_append_search_section`, testable without
+/// a `tauri::AppHandle`.
+fn agents_append_search_section_at(root: &Path) -> Result<bool, String> {
+    let Some(existing) = read_nonblank_agents_md(root)? else {
+        return Ok(false);
+    };
+    if !logic::search_section_missing(&existing) {
+        return Ok(false);
+    }
+    let path = root.join(watcher::AGENTS_FILE);
+    std::fs::write(&path, logic::append_search_section(&existing)).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Read-only check for the Settings UI: does this vault have an AGENTS.md
 /// that's missing the search convention? Never writes anything — the
 /// write-capable command below is separate so a status poll can never
 /// accidentally trigger a file change.
-///
-/// `false` when AGENTS.md does not exist at all, not just when it already has
-/// the section: append-only means there is nothing to append *to* yet, and
-/// the empty string would otherwise read as "missing the section", which
-/// would tell the GUI to offer a button whose write path (below) produces a
-/// frontmatter-less fragment — a document OKF v0.2 would reject. Bootstrapping
-/// a new AGENTS.md is `edit_agents_md`'s job (writes the full `TEMPLATE`,
-/// which already includes this section), reached from the tray, not this.
 #[tauri::command]
 pub fn notemd_agents_search_section_missing(app: tauri::AppHandle) -> Result<bool, String> {
     let root = crate::sotvault::resolve_vault_root(&app).ok_or("Vault not configured")?;
-    let path = root.join(watcher::AGENTS_FILE);
-    if !path.is_file() {
-        return Ok(false);
-    }
-    let existing = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    Ok(logic::search_section_missing(&existing))
+    agents_search_section_missing_at(&root)
 }
 
 /// Append the search convention to the vault's AGENTS.md. Returns `false`
-/// when it was already there, or when AGENTS.md does not exist yet (nothing
-/// was written either way — see `notemd_agents_search_section_missing` for
-/// why a missing file is not "treat as empty and append"). The GUI calls this
-/// only after the user explicitly confirms — this function does not ask, and
-/// nothing else may call it: a silent rewrite of the user's own file is the
-/// one failure mode this feature exists to avoid.
+/// when it was already there, or when AGENTS.md is missing or blank (nothing
+/// was written either way — see `read_nonblank_agents_md`). The GUI calls
+/// this only after the user explicitly confirms — this function does not
+/// ask, and nothing else may call it: a silent rewrite of the user's own file
+/// is the one failure mode this feature exists to avoid.
 #[tauri::command]
 pub fn notemd_agents_append_search_section(app: tauri::AppHandle) -> Result<bool, String> {
     let root = crate::sotvault::resolve_vault_root(&app).ok_or("Vault not configured")?;
-    let path = root.join(watcher::AGENTS_FILE);
-    if !path.is_file() {
-        return Ok(false);
-    }
-    let existing = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    if !logic::search_section_missing(&existing) {
-        return Ok(false);
-    }
-    std::fs::write(&path, logic::append_search_section(&existing)).map_err(|e| e.to_string())?;
-    Ok(true)
+    agents_append_search_section_at(&root)
 }
 
 fn open_agents_in_editor(app: &tauri::AppHandle, root: &Path) {
@@ -364,5 +384,93 @@ mod fs_tests {
         let gi = fs::read_to_string(d.path().join(".gitignore")).unwrap();
         assert!(gi.contains("node_modules"));
         assert!(gi.contains("CLAUDE.md"));
+    }
+
+    // ---- notemd_agents_search_section_missing / notemd_agents_append_search_section ----
+    // Exercised through the `_at(&Path)` fs-level functions, which the
+    // `#[tauri::command]` wrappers call after resolving an AppHandle to a
+    // vault root — same split as `reconcile` above.
+
+    #[test]
+    fn missing_status_false_when_agents_md_does_not_exist() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(agents_search_section_missing_at(d.path()), Ok(false));
+    }
+
+    #[test]
+    fn missing_status_false_for_a_0_byte_agents_md() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("AGENTS.md"), "").unwrap();
+        assert_eq!(agents_search_section_missing_at(d.path()), Ok(false));
+    }
+
+    #[test]
+    fn missing_status_false_for_a_whitespace_only_agents_md() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("AGENTS.md"), "  \n\n\t\n  ").unwrap();
+        assert_eq!(agents_search_section_missing_at(d.path()), Ok(false));
+    }
+
+    #[test]
+    fn missing_status_true_for_real_content_without_the_section() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("AGENTS.md"), "# Vault\n\nMy own conventions.\n").unwrap();
+        assert_eq!(agents_search_section_missing_at(d.path()), Ok(true));
+    }
+
+    #[test]
+    fn append_writes_nothing_when_agents_md_does_not_exist() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(agents_append_search_section_at(d.path()), Ok(false));
+        assert!(!d.path().join("AGENTS.md").exists(), "must not create the file");
+    }
+
+    /// The regression this whole guard exists for: a 0-byte AGENTS.md must
+    /// come out of the append path exactly as blank as it went in, never
+    /// topped up with a bare, frontmatter-less fragment.
+    #[test]
+    fn append_leaves_a_0_byte_agents_md_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("AGENTS.md");
+        fs::write(&path, "").unwrap();
+        assert_eq!(agents_append_search_section_at(d.path()), Ok(false));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "", "0-byte file must stay 0-byte");
+    }
+
+    /// Same guarantee, whitespace-only case — a file with just a newline is
+    /// no more a real document than an empty one.
+    #[test]
+    fn append_leaves_a_whitespace_only_agents_md_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("AGENTS.md");
+        fs::write(&path, "  \n\n\t\n  ").unwrap();
+        assert_eq!(agents_append_search_section_at(d.path()), Ok(false));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "  \n\n\t\n  ", "whitespace-only file must be untouched");
+    }
+
+    #[test]
+    fn append_writes_the_section_into_real_content() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("AGENTS.md");
+        fs::write(&path, "# Vault\n\nMy own conventions.\n").unwrap();
+        assert_eq!(agents_append_search_section_at(d.path()), Ok(true));
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(after.starts_with("# Vault\n\nMy own conventions.\n"));
+        assert!(after.contains("## Searching this vault"));
+    }
+
+    /// The template and the append path must teach agents the same wording.
+    /// `SEARCH_SECTION` is hand-duplicated into `templates/AGENTS.md` today;
+    /// without this test the two could drift apart silently — a new vault
+    /// (template) and an upgraded vault (append) would then document the
+    /// search command differently depending on which path created its
+    /// AGENTS.md, and nobody would notice until two agents on two machines
+    /// disagreed about how `notemd search` works.
+    #[test]
+    fn template_contains_the_same_search_section_the_append_path_writes() {
+        assert!(
+            TEMPLATE.contains(logic::SEARCH_SECTION.trim()),
+            "templates/AGENTS.md has drifted from agents_sync::logic::SEARCH_SECTION"
+        );
     }
 }
