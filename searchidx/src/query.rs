@@ -1,0 +1,632 @@
+//! Query parsing, retrieval and ranking. The UI and the CLI both call `parse`
+//! and `search`, so a filter that works in one works in the other by
+//! construction.
+
+use rusqlite::{params_from_iter, Connection};
+
+use crate::tokenize::{has_han, tokens};
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Query {
+    pub terms: Vec<String>,
+    pub phrases: Vec<String>,
+    pub tags: Vec<String>,
+    pub types: Vec<String>,
+    pub paths: Vec<String>,
+    pub pages: Vec<String>,
+    pub exts: Vec<String>,
+    pub after: Option<String>,
+    pub before: Option<String>,
+    pub raw: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    Fts,
+    Scan,
+}
+
+impl Route {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Route::Fts => "t1-fts",
+            Route::Scan => "t1-scan",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Hit {
+    pub path: String,
+    pub line: u32,
+    pub line_end: u32,
+    pub text: String,
+    pub breadcrumb: String,
+    pub level: String,
+    pub score: f64,
+    pub doc_date: Option<String>,
+    pub agent_by: Option<String>,
+    pub human_verified: bool,
+}
+
+impl Hit {
+    /// The back-to-source anchor handed to agents, e.g. `docs/a.md#L120`.
+    pub fn source_ref(&self) -> String {
+        format!("{}#L{}", self.path, self.line)
+    }
+}
+
+pub fn parse(raw: &str) -> Query {
+    let mut q = Query { raw: raw.to_string(), ..Default::default() };
+    for token in split_respecting_quotes(raw) {
+        if let Some(rest) = token.strip_prefix('"') {
+            // Only a *closed* quote makes a phrase; an unterminated one is far
+            // more likely a typo than an intent, so it degrades to a term.
+            if let Some(inner) = rest.strip_suffix('"') {
+                if !inner.trim().is_empty() {
+                    q.phrases.push(inner.trim().to_string());
+                    continue;
+                }
+            }
+            push_terms(&mut q, rest.trim_matches('"'));
+            continue;
+        }
+        match token.split_once(':') {
+            Some(("tag", v)) if !v.is_empty() => q.tags.push(v.to_string()),
+            Some(("type", v)) if !v.is_empty() => q.types.push(v.to_string()),
+            Some(("path", v)) if !v.is_empty() => q.paths.push(v.to_string()),
+            Some(("ext", v)) if !v.is_empty() => q.exts.push(v.trim_start_matches('.').to_string()),
+            Some(("after", v)) if !v.is_empty() => q.after = Some(v.to_string()),
+            Some(("before", v)) if !v.is_empty() => q.before = Some(v.to_string()),
+            Some(("page", v)) if !v.is_empty() => {
+                q.pages.push(v.trim_start_matches("[[").trim_end_matches("]]").to_string())
+            }
+            _ => push_terms(&mut q, &token),
+        }
+    }
+    q
+}
+
+fn push_terms(q: &mut Query, raw: &str) {
+    let t = raw.trim();
+    if !t.is_empty() {
+        q.terms.push(t.to_string());
+    }
+}
+
+fn split_respecting_quotes(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    for c in raw.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                cur.push(c);
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+pub fn search(
+    conn: &Connection,
+    q: &Query,
+    limit: usize,
+    today: &str,
+) -> rusqlite::Result<(Vec<Hit>, Route)> {
+    let hits = fts_search(conn, q, limit, today)?;
+    if !hits.is_empty() {
+        return Ok((hits, Route::Fts));
+    }
+    // The dictionary has blind spots — new coinages, personal names, single
+    // characters. A miss there would be invisible to the user, so we pay for a
+    // bounded LIKE scan rather than report "no results". The corpus is bounded
+    // and the scan is capped, which is why the usual "never full-scan" rule is
+    // suspended here on purpose.
+    if needs_scan_fallback(q) {
+        let hits = like_search(conn, q, limit, today)?;
+        if !hits.is_empty() {
+            return Ok((hits, Route::Scan));
+        }
+    }
+    Ok((Vec::new(), Route::Fts))
+}
+
+fn needs_scan_fallback(q: &Query) -> bool {
+    q.terms.iter().chain(q.phrases.iter()).any(|t| has_han(t) || t.chars().count() <= 2)
+}
+
+/// Build the FTS5 MATCH expression. Every term is emitted as a quoted string
+/// literal, which is what neutralizes FTS5 operators (`OR`, `NEAR`, `*`, `^`)
+/// arriving inside user input — an agent will hand us its query verbatim and a
+/// syntax error would look like "no results".
+fn match_expr(q: &Query) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for t in q.terms.iter().chain(q.phrases.iter()) {
+        for tok in tokens(t) {
+            parts.push(format!("\"{}\"", tok.replace('"', "\"\"")));
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(" AND "))
+}
+
+// Column order shared by `fts_search` and `like_search`; `row_to_hit` reads
+// these back by POSITION (0-9). If this list changes, every index in
+// `row_to_hit` and the two `r.get::<_, _>(N)` calls for `rank`/`is_annotation`
+// below must change with it — see the module-level hazard note in the task
+// brief. `is_annotation` is deliberately last (index 9) so both callers can
+// append their own `rank` column (index 10) after it without renumbering.
+const SELECT_COLS: &str = "f.path, b.line_start, b.line_end, b.text, b.breadcrumb, b.level, \
+                           f.doc_date, b.agent_by, f.human_verified, b.is_annotation";
+
+fn fts_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqlite::Result<Vec<Hit>> {
+    let Some(expr) = match_expr(q) else { return Ok(Vec::new()) };
+    let mut sql = format!(
+        "SELECT {SELECT_COLS}, bm25(blocks_fts, 1.0, 2.0) AS rank
+         FROM blocks_fts
+         JOIN blocks b ON b.id = blocks_fts.rowid
+         JOIN files f ON f.id = b.file_id
+         WHERE blocks_fts MATCH ?1"
+    );
+    let mut args: Vec<String> = vec![expr];
+    push_filters(q, &mut sql, &mut args);
+    // Over-fetch: business boosts reorder, and a phrase recheck removes rows.
+    sql.push_str(&format!(" ORDER BY rank ASC LIMIT {}", (limit * 8).max(64)));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
+        Ok((row_to_hit(r)?, r.get::<_, f64>(10)?, r.get::<_, i64>(9)? != 0))
+    })?;
+    finish(rows.collect::<rusqlite::Result<Vec<_>>>()?, q, limit, today)
+}
+
+fn like_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqlite::Result<Vec<Hit>> {
+    let needle = q.phrases.first().or_else(|| q.terms.first()).cloned().unwrap_or_default();
+    if needle.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sql = format!(
+        "SELECT {SELECT_COLS}, 0.0 AS rank
+         FROM blocks b JOIN files f ON f.id = b.file_id
+         WHERE b.text LIKE ?1 ESCAPE '\\'"
+    );
+    let mut args: Vec<String> = vec![format!("%{}%", escape_like(&needle))];
+    push_filters(q, &mut sql, &mut args);
+    // Hard cap: the fallback is a safety net, not a query plan.
+    sql.push_str(" LIMIT 500");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
+        Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0))
+    })?;
+    finish(rows.collect::<rusqlite::Result<Vec<_>>>()?, q, limit, today)
+}
+
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+// Filters are appended to the WHERE clause AFTER the MATCH expression (in
+// `fts_search`) or the LIKE needle (in `like_search`), both of which already
+// occupy `?1`. `next` returns `args.len()` AFTER pushing, so the first filter
+// value bound here lands at `?2`, and each subsequent one numbers
+// consecutively — verified by hand against both call sites (see task report).
+fn push_filters(q: &Query, sql: &mut String, args: &mut Vec<String>) {
+    let next = |args: &mut Vec<String>, v: String| {
+        args.push(v);
+        args.len()
+    };
+    for t in &q.tags {
+        // tags_json is a JSON array; matching the quoted value avoids `a` also
+        // matching `alpha`.
+        let i = next(args, format!("%\"{t}\"%"));
+        sql.push_str(&format!(" AND f.tags_json LIKE ?{i}"));
+    }
+    for t in &q.types {
+        let i = next(args, t.clone());
+        sql.push_str(&format!(" AND f.concept_type = ?{i}"));
+    }
+    for p in &q.paths {
+        let i = next(args, format!("%{}%", escape_like(p)));
+        sql.push_str(&format!(" AND f.path LIKE ?{i} ESCAPE '\\'"));
+    }
+    for e in &q.exts {
+        let i = next(args, e.clone());
+        sql.push_str(&format!(" AND f.ext = ?{i}"));
+    }
+    for p in &q.pages {
+        let i = next(args, p.clone());
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM links l WHERE l.file_id = f.id AND l.target = ?{i})"
+        ));
+    }
+    if let Some(a) = &q.after {
+        let i = next(args, a.clone());
+        sql.push_str(&format!(" AND f.doc_date >= ?{i}"));
+    }
+    if let Some(b) = &q.before {
+        let i = next(args, b.clone());
+        sql.push_str(&format!(" AND f.doc_date <= ?{i}"));
+    }
+}
+
+fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<Hit> {
+    Ok(Hit {
+        path: r.get(0)?,
+        line: r.get::<_, i64>(1)? as u32,
+        line_end: r.get::<_, i64>(2)? as u32,
+        text: r.get(3)?,
+        breadcrumb: r.get(4)?,
+        level: r.get(5)?,
+        doc_date: r.get(6)?,
+        agent_by: r.get(7)?,
+        human_verified: r.get::<_, i64>(8)? != 0,
+        score: 0.0,
+    })
+}
+
+fn finish(
+    rows: Vec<(Hit, f64, bool)>,
+    q: &Query,
+    limit: usize,
+    today: &str,
+) -> rusqlite::Result<Vec<Hit>> {
+    let mut out: Vec<Hit> = Vec::new();
+    for (mut hit, rank, is_annotation) in rows {
+        // A quoted phrase means "these words, in this order". The index stores
+        // OVERLAPPING tokens, so FTS can only tell us the words are all present
+        // — adjacency has to be rechecked against the stored text.
+        let mut phrase_exact = false;
+        if !q.phrases.is_empty() {
+            let hay = hit.text.to_lowercase();
+            if !q.phrases.iter().all(|p| hay.contains(&p.to_lowercase())) {
+                continue;
+            }
+            phrase_exact = true;
+        }
+        hit.score = score_of(rank, &hit, is_annotation, phrase_exact, today);
+        out.push(hit);
+    }
+    let mut out = drop_redundant_rollups(out);
+    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(limit);
+    Ok(out)
+}
+
+/// Multi-granularity indexing (design spec §3.3) means the same words can
+/// match at Line, Section AND File resolution in the same file at once — a
+/// one-paragraph note's Line block and its File-level rollup cover the exact
+/// same lines, and a Section's rollup always engulfs every Line nested in
+/// it. Surfacing all of them is not "more results", it is the same evidence
+/// shown two or three times with the least specific copy often ranking
+/// highest (the file/section business boost in `score_of` outweighs bm25's
+/// length normalization on tiny documents). So: within one file, a hit whose
+/// line range is fully covered by another hit's range is dropped in favor of
+/// the covering hit — unless the ranges are identical, in which case the
+/// FINER level (Line over Section over File) wins the tie. Hits over
+/// disjoint or partially-overlapping ranges (e.g. two different paragraphs,
+/// or two sibling sections) are untouched — this only collapses genuine
+/// containment, never merges distinct evidence.
+fn drop_redundant_rollups(hits: Vec<Hit>) -> Vec<Hit> {
+    let n = hits.len();
+    let mut removed = vec![false; n];
+    for i in 0..n {
+        for j in 0..n {
+            if i == j || hits[i].path != hits[j].path {
+                continue;
+            }
+            // Does i's range fully cover j's range?
+            let engulfs = hits[i].line <= hits[j].line && hits[i].line_end >= hits[j].line_end;
+            if !engulfs {
+                continue;
+            }
+            let same_range = hits[i].line == hits[j].line && hits[i].line_end == hits[j].line_end;
+            let i_is_coarser_level = level_rank(&hits[i].level) > level_rank(&hits[j].level);
+            if !same_range || i_is_coarser_level {
+                // Either i strictly contains j (more territory, less
+                // specific), or the ranges tie and i is the coarser level —
+                // either way j is the more specific match to keep.
+                removed[i] = true;
+            }
+        }
+    }
+    hits.into_iter().zip(removed).filter_map(|(h, r)| (!r).then_some(h)).collect()
+}
+
+/// Coarseness order for the containment tie-break above: Line is the finest
+/// resolution, File the coarsest (design spec §3.3's own ordering).
+fn level_rank(level: &str) -> u8 {
+    match level {
+        "line" => 0,
+        "section" => 1,
+        _ => 2, // "file"
+    }
+}
+
+/// FTS5's `bm25()` returns NEGATIVE values, more negative meaning more relevant.
+/// The design spec's literal `1/(1+rank)` is non-monotonic there (and can go
+/// negative), so we work with `r = -bm25` — non-negative, larger is better —
+/// apply the multiplicative business boosts to `r`, and only then squash into
+/// (0,1) with `r/(1+r)`. Squashing last keeps the ordering the boosts produced.
+///
+/// The boost constants are STARTING VALUES. Changing them means re-running the
+/// retrievability regression set — they encode a product claim (§4): content you
+/// have judged outranks content a model produced.
+fn score_of(rank: f64, hit: &Hit, is_annotation: bool, phrase_exact: bool, today: &str) -> f64 {
+    let mut r = if rank < 0.0 { -rank } else { 0.001 };
+    if phrase_exact {
+        r *= 1.3;
+    }
+    if hit.level == "file" || hit.level == "section" {
+        r *= 1.2;
+    }
+    if is_annotation {
+        r *= 1.2;
+    }
+    if hit.human_verified {
+        r *= 1.1;
+    }
+    // The first line of defense against memory self-propagation: AI-authored
+    // material is findable but never outranks the primary source it summarized.
+    if hit.agent_by.is_some() {
+        r *= 0.85;
+    }
+    if let Some(age) = hit.doc_date.as_deref().and_then(|d| days_between(d, today)) {
+        r *= 1.0 + 0.2 * (-(age as f64) / 180.0).exp();
+    }
+    r / (1.0 + r)
+}
+
+/// Whole days from `from` to `to`, both `YYYY-MM-DD`. `None` on unparseable input.
+fn days_between(from: &str, to: &str) -> Option<i64> {
+    Some((days_from_civil(to)? - days_from_civil(from)?).max(0))
+}
+
+fn days_from_civil(ymd: &str) -> Option<i64> {
+    let mut it = ymd.split('-');
+    let y: i64 = it.next()?.parse().ok()?;
+    let m: i64 = it.next()?.parse().ok()?;
+    let d: i64 = it.next()?.get(..2).unwrap_or("").parse().ok()?;
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_words_are_and_terms() {
+        let q = parse("alpha beta");
+        assert_eq!(q.terms, vec!["alpha", "beta"]);
+        assert!(q.phrases.is_empty());
+    }
+
+    #[test]
+    fn quoted_text_is_a_phrase() {
+        let q = parse(r#"alpha "exact phrase" beta"#);
+        assert_eq!(q.phrases, vec!["exact phrase"]);
+        assert_eq!(q.terms, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn every_filter_prefix_is_recognized() {
+        let q = parse("tag:x type:concept path:docs ext:note.md after:2026-01-01 before:2026-12-31 page:[[Home]] rest");
+        assert_eq!(q.tags, vec!["x"]);
+        assert_eq!(q.types, vec!["concept"]);
+        assert_eq!(q.paths, vec!["docs"]);
+        assert_eq!(q.exts, vec!["note.md"]);
+        assert_eq!(q.after.as_deref(), Some("2026-01-01"));
+        assert_eq!(q.before.as_deref(), Some("2026-12-31"));
+        assert_eq!(q.pages, vec!["Home"]);
+        assert_eq!(q.terms, vec!["rest"]);
+    }
+
+    #[test]
+    fn an_unterminated_quote_degrades_to_a_plain_term() {
+        let q = parse(r#"alpha "unterminated"#);
+        assert!(q.phrases.is_empty());
+        assert!(q.terms.contains(&"unterminated".to_string()));
+    }
+
+    // ---- search over a real index -------------------------------------------
+
+    fn indexed(files: &[(&str, &str)]) -> (tempfile::TempDir, Connection) {
+        let d = tempfile::tempdir().unwrap();
+        for (rel, body) in files {
+            let p = d.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        let mut c = crate::store::open(&d.path().join(".idx.db"), "v").unwrap();
+        crate::scan::build_full(&mut c, d.path(), &crate::scan::ScanOptions::default()).unwrap();
+        (d, c)
+    }
+
+    #[test]
+    fn finds_an_ascii_term_and_returns_a_source_anchor() {
+        let (_d, c) = indexed(&[("2026-01-01-a.md", "# T\n\nthe quick brownfox\n")]);
+        let (hits, route) = search(&c, &parse("brownfox"), 20, "2026-08-10").unwrap();
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].path, "2026-01-01-a.md");
+        assert_eq!(hits[0].line, 3);
+        assert_eq!(route.as_str(), "t1-fts");
+    }
+
+    /// spec §3.2 的招牌用例:查「增量」必须命中只写了「增量索引」的文档。
+    #[test]
+    fn a_cjk_sub_word_query_hits_the_longer_word() {
+        let (_d, c) = indexed(&[("a.md", "本节讲增量索引的设计\n")]);
+        let (hits, _) = search(&c, &parse("增量"), 20, "2026-08-10").unwrap();
+        assert!(!hits.is_empty(), "cut_for_search overlap must make this hit");
+    }
+
+    /// 词典盲区(未登录词/人名/单字):FTS 零命中就降级有界扫描,并如实标注路由。
+    ///
+    /// Deviation from the task brief's literal fixture, recorded in the task
+    /// report: the brief queried the full name `李慕白`, but jieba's bundled
+    /// dictionary actually recognizes that (real, well-known) name as one
+    /// token on both the index and query side (verified with a standalone
+    /// probe), so it is not actually a dictionary blind spot and the query
+    /// resolves via `t1-fts`, not `t1-scan`. `李慕白` IS a genuine blind spot
+    /// for a single-character query, though: `cut_for_search` keeps a
+    /// recognized name as one atomic token and does not also emit its
+    /// individual characters as sub-words (unlike the overlap it gives
+    /// `增量索引`, which is dictionary-unknown as a whole and so gets cut into
+    /// `增量`+`索引`+itself). Querying `慕` in isolation therefore shares zero
+    /// tokens with `李慕白`'s indexed form, giving a real FTS miss.
+    #[test]
+    fn an_out_of_vocabulary_cjk_query_falls_back_to_a_bounded_scan() {
+        let (_d, c) = indexed(&[("a.md", "会见了李慕白同志\n")]);
+        let (hits, route) = search(&c, &parse("慕"), 20, "2026-08-10").unwrap();
+        assert!(!hits.is_empty(), "the dictionary blind spot must not become a miss");
+        assert_eq!(route.as_str(), "t1-scan");
+    }
+
+    /// 引号短语必须做精确子串复核:分词是重叠的,FTS 的 AND 不保证顺序。
+    #[test]
+    fn a_phrase_query_rejects_hits_where_the_words_are_not_adjacent() {
+        let (_d, c) = indexed(&[("a.md", "alpha then beta\n"), ("b.md", "alpha beta\n")]);
+        let (hits, _) = search(&c, &parse(r#""alpha beta""#), 20, "2026-08-10").unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "b.md");
+    }
+
+    #[test]
+    fn filters_narrow_the_result_set() {
+        let (_d, c) = indexed(&[
+            ("docs/a.md", "---\ntype: concept\ntags: [x]\n---\ntarget\n"),
+            ("other/b.md", "target\n"),
+        ]);
+        let only = |q: &str| search(&c, &parse(q), 20, "2026-08-10").unwrap().0.len();
+        assert_eq!(only("target path:docs"), 1);
+        assert_eq!(only("target type:concept"), 1);
+        assert_eq!(only("target tag:x"), 1);
+        assert_eq!(only("target"), 2);
+    }
+
+    /// `path:` filters go through `LIKE ... ESCAPE '\'`; a literal `%`/`_` in
+    /// the filter value must not act as a SQL wildcard, or `path:100%` would
+    /// also match an unrelated `100X/a.md` — exercises hazard 6 from the task
+    /// brief, which no other test in this module covers.
+    #[test]
+    fn a_percent_sign_in_a_path_filter_is_matched_literally_not_as_a_wildcard() {
+        let (_d, c) = indexed(&[("100%/a.md", "target\n"), ("100X/a.md", "target\n")]);
+        let hits = search(&c, &parse("target path:100%"), 20, "2026-08-10").unwrap().0;
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].path, "100%/a.md");
+    }
+
+    #[test]
+    fn date_filters_use_doc_date() {
+        let (_d, c) = indexed(&[("2020-01-01-old.md", "target\n"), ("2026-08-01-new.md", "target\n")]);
+        let hits = search(&c, &parse("target after:2026-01-01"), 20, "2026-08-10").unwrap().0;
+        assert!(hits.iter().all(|h| h.path.starts_with("2026")), "{hits:?}");
+    }
+
+    /// Hand-verified against independently computed day counts — hazard 8
+    /// from the task brief: `days_from_civil` must read the day out of the
+    /// first 2 chars of the third `-`-separated segment, which is what makes
+    /// it tolerant of a full ISO datetime (`...T10:00:00Z`) landing in the
+    /// day position (frontmatter `created`/`date` values are often full
+    /// timestamps, not bare dates).
+    #[test]
+    fn days_between_handles_plain_dates_and_an_iso_datetime_in_the_day_position() {
+        assert_eq!(days_between("2026-08-01", "2026-08-10"), Some(9));
+        assert_eq!(days_between("2026-01-31", "2026-02-01"), Some(1), "cross-month");
+        assert_eq!(days_between("2024-02-28", "2024-03-01"), Some(2), "leap day");
+        assert_eq!(
+            days_between("2026-08-01T10:00:00Z", "2026-08-10"),
+            Some(9),
+            "a full ISO datetime in the day position must parse the same as a bare date"
+        );
+        assert_eq!(days_between("2026-08-10", "2026-08-01"), Some(0), "future 'from' clamps to 0, never negative");
+    }
+
+    /// spec §4 的产品主张:你留过判断的内容优先,AI 生成物降权。
+    ///
+    /// This end-to-end test exercises the full pipeline (outline chunking →
+    /// `is_annotation`/`agent_by` extraction → indexing → ranking), but on
+    /// this particular fixture the two blocks' raw bm25 scores tie exactly
+    /// (both are "target <word>", same token count), so `Vec::sort_by`'s
+    /// stability — not the boost math — is what keeps them in insertion
+    /// order. Mutation-verified: this test still passes with BOTH the
+    /// `is_annotation` boost and the `agent_by` penalty in `score_of`
+    /// hard-coded to a no-op. `score_of_boosts_annotations_and_penalizes_agent_authored_content`
+    /// below is the test that actually isolates and pins the boost math;
+    /// this one stays as the pipeline-wiring smoke test its name promises.
+    #[test]
+    fn annotations_outrank_agent_authored_blocks() {
+        let (_d, c) = indexed(&[("a.note.md", "- target one\n  type:: annotation\n- target two\n  by:: claude/1\n")]);
+        let hits = search(&c, &parse("target"), 20, "2026-08-10").unwrap().0;
+        let anno = hits.iter().position(|h| h.text.contains("one")).unwrap();
+        let agent = hits.iter().position(|h| h.text.contains("two")).unwrap();
+        assert!(anno < agent, "human-marked content must rank above agent output: {hits:?}");
+    }
+
+    /// The test above can pass on stable-sort tie-breaking alone (see its
+    /// comment) — this one calls the pure ranking function directly so the
+    /// two boosts spec §4 cares about (`is_annotation` ×1.2, `agent_by`
+    /// ×0.85) are pinned independent of bm25/SQLite behavior.
+    #[test]
+    fn score_of_boosts_annotations_and_penalizes_agent_authored_content() {
+        let base = Hit {
+            path: "a.md".into(),
+            line: 1,
+            line_end: 1,
+            text: String::new(),
+            breadcrumb: String::new(),
+            level: "line".into(),
+            score: 0.0,
+            doc_date: None,
+            agent_by: None,
+            human_verified: false,
+        };
+        let plain = score_of(-1.0, &base, false, false, "2026-08-10");
+        let annotated = score_of(-1.0, &base, true, false, "2026-08-10");
+        let mut agent_hit = base.clone();
+        agent_hit.agent_by = Some("claude/1".to_string());
+        let agent = score_of(-1.0, &agent_hit, false, false, "2026-08-10");
+        assert!(annotated > plain, "annotation boost must raise the score: {annotated} vs {plain}");
+        assert!(agent < plain, "agent-authored content must be penalized: {agent} vs {plain}");
+        assert!(annotated > agent, "human-marked content must outrank agent output: {annotated} vs {agent}");
+    }
+
+    #[test]
+    fn scores_are_finite_positive_and_descending() {
+        let (_d, c) = indexed(&[("a.md", "target target target\n"), ("b.md", "target\n")]);
+        let hits = search(&c, &parse("target"), 20, "2026-08-10").unwrap().0;
+        assert!(hits.iter().all(|h| h.score > 0.0 && h.score < 1.0 && h.score.is_finite()), "{hits:?}");
+        assert!(hits.windows(2).all(|w| w[0].score >= w[1].score));
+    }
+
+    #[test]
+    fn limit_is_respected() {
+        let (_d, c) = indexed(&[("a.md", "target\n"), ("b.md", "target\n"), ("c.md", "target\n")]);
+        assert_eq!(search(&c, &parse("target"), 2, "2026-08-10").unwrap().0.len(), 2);
+    }
+
+    /// FTS5 的语法字符不能把查询打成语法错误 —— agent 会原样传用户输入进来。
+    #[test]
+    fn fts_syntax_characters_in_a_query_do_not_error() {
+        let (_d, c) = indexed(&[("a.md", "target\n")]);
+        for q in ["a OR b", "NEAR(", "*", "\"", "^x", "a-b"] {
+            assert!(search(&c, &parse(q), 5, "2026-08-10").is_ok(), "query {q:?} must not error");
+        }
+    }
+}
