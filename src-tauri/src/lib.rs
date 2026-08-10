@@ -1198,6 +1198,8 @@ pub fn run() {
                 search::notemd_search,
                 search::notemd_search_stats,
                 search::notemd_search_rebuild,
+                agents_sync::notemd_agents_search_section_missing,
+                agents_sync::notemd_agents_append_search_section,
                 okf::notemd_okf_human_id,
                 git_history::git_file_log,
                 git_history::git_file_show,

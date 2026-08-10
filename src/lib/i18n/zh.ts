@@ -517,6 +517,9 @@ export const zh: Record<keyof Messages, string> = {
   'search.rebuild': '重建索引',
   'search.agentWritten': 'AI 写的({agent})',
   'search.humanVerified': '人工确认',
+  'search.agentsHint': '你的 AGENTS.md 还没告诉 agent 有搜索索引可用。',
+  'search.agentsAdd': '添加这一节',
+  'search.agentsAdded': '已添加到 AGENTS.md',
 
   // Folder view
   'folderView.parentFolder': '上级文件夹',

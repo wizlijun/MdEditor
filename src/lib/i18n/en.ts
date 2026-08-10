@@ -489,6 +489,9 @@ export const en = {
   'search.rebuild': 'Rebuild index',
   'search.agentWritten': 'AI-written ({agent})',
   'search.humanVerified': 'Human-verified',
+  'search.agentsHint': 'Your AGENTS.md does not tell agents about the search index.',
+  'search.agentsAdd': 'Add the section',
+  'search.agentsAdded': 'Added to AGENTS.md',
 
   // Folder view
   'folderView.parentFolder': 'Parent folder',

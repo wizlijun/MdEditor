@@ -484,6 +484,9 @@ export const ja: Record<keyof Messages, string> = {
   'search.rebuild': 'インデックスを再構築',
   'search.agentWritten': 'AI が記述 ({agent})',
   'search.humanVerified': '人が確認済み',
+  'search.agentsHint': 'AGENTS.md に検索インデックスのことが書かれていません。',
+  'search.agentsAdd': 'このセクションを追加',
+  'search.agentsAdded': 'AGENTS.md に追加しました',
 
   // Folder view
   'folderView.parentFolder': '親フォルダ',

@@ -482,6 +482,9 @@ export const de: Record<keyof Messages, string> = {
   'search.rebuild': 'Index neu erstellen',
   'search.agentWritten': 'KI-geschrieben ({agent})',
   'search.humanVerified': 'Menschlich bestätigt',
+  'search.agentsHint': 'Deine AGENTS.md erwähnt den Suchindex noch nicht.',
+  'search.agentsAdd': 'Abschnitt hinzufügen',
+  'search.agentsAdded': 'Zu AGENTS.md hinzugefügt',
 
   // Folder view
   'folderView.parentFolder': 'Übergeordneter Ordner',

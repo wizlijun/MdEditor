@@ -320,14 +320,22 @@ USAGE:
 
 DESCRIPTION:
   Grep-shaped on purpose: default output is `path:line:text`, one hit per
-  line. Filter flags are sugar for the same query grammar the Vault search
-  panel understands (`tag:x`, `type:x`, `path:x`, `ext:x`,
-  `after:YYYY-MM-DD`, `before:YYYY-MM-DD`) — e.g. `--tag x` is exactly
-  `tag:x` appended to the query.
+  line. `rg`/`grep` keep working and are never wrong to use — this is an
+  accelerator, not a gatekeeper. Filter flags are sugar for the same query
+  grammar the Vault search panel understands (`tag:x`, `type:x`, `path:x`,
+  `ext:x`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, `page:[[X]]`) — e.g.
+  `--tag x` is exactly `tag:x` appended to the query; `page:[[X]]` (a wikilink
+  target) has no dedicated flag, type it directly into the query. Quote a
+  phrase (`\"exact phrase\"`) for an exact-match instead of a bag of terms.
 
 FLAGS:
   --vault <path>    Vault root (default: the configured Vault)
-  --json            Emit {query, route, took_ms, total, hits: [...]}
+  --json            Emit {query, route, took_ms, total, hits: [...]}; each hit
+                     adds score, breadcrumb, source_ref (path#Lline) and
+                     provenance ({agent_by, human_verified}) beyond the plain
+                     path/line/text. A hit with provenance.agent_by set was
+                     written by a model — follow its sources to the primary
+                     document before relying on it.
   --limit <n>       Max hits (default: 20)
   --context <n>     Print N lines of context around each hit
   --tag <t>         Filter: tag:<t>
@@ -1569,6 +1577,20 @@ mod tests {
         assert_eq!(share_rows, 1, "share must appear exactly once, got:\n{out}");
         assert!(!out.contains("PLUGIN COMMANDS:"),
             "core stubs must never render a PLUGIN COMMANDS section:\n{out}");
+    }
+    /// Task 18: the CLI topic is the other place (besides AGENTS.md's
+    /// "Searching this vault" section) an agent learns this command's
+    /// grammar. Pin that it actually documents the `page:` filter (it has no
+    /// `--page` flag — the only way to discover it is this text) and the
+    /// extra `--json` fields, so an agent reading `notemd help search` gets
+    /// the same picture `--json` output and the query grammar actually give it.
+    #[test]
+    fn help_search_topic_documents_page_filter_and_json_fields() {
+        let out = render_help(Some("search"), false, &[], &HashMap::new());
+        assert!(out.contains("page:[[X]]"), "must document the page: filter:\n{out}");
+        assert!(out.contains("source_ref"), "must document --json's source_ref field:\n{out}");
+        assert!(out.contains("provenance"), "must document --json's provenance field:\n{out}");
+        assert!(out.contains("agent_by"), "must explain what provenance.agent_by means:\n{out}");
     }
     /// Review round 1, Important #1: `render_core_topic` used to append a
     /// generic "1 Runtime error" footer underneath every topic's own body,

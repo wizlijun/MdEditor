@@ -220,6 +220,51 @@ pub fn edit_agents_md(app: &tauri::AppHandle) {
     }
 }
 
+/// Read-only check for the Settings UI: does this vault have an AGENTS.md
+/// that's missing the search convention? Never writes anything — the
+/// write-capable command below is separate so a status poll can never
+/// accidentally trigger a file change.
+///
+/// `false` when AGENTS.md does not exist at all, not just when it already has
+/// the section: append-only means there is nothing to append *to* yet, and
+/// the empty string would otherwise read as "missing the section", which
+/// would tell the GUI to offer a button whose write path (below) produces a
+/// frontmatter-less fragment — a document OKF v0.2 would reject. Bootstrapping
+/// a new AGENTS.md is `edit_agents_md`'s job (writes the full `TEMPLATE`,
+/// which already includes this section), reached from the tray, not this.
+#[tauri::command]
+pub fn notemd_agents_search_section_missing(app: tauri::AppHandle) -> Result<bool, String> {
+    let root = crate::sotvault::resolve_vault_root(&app).ok_or("Vault not configured")?;
+    let path = root.join(watcher::AGENTS_FILE);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let existing = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    Ok(logic::search_section_missing(&existing))
+}
+
+/// Append the search convention to the vault's AGENTS.md. Returns `false`
+/// when it was already there, or when AGENTS.md does not exist yet (nothing
+/// was written either way — see `notemd_agents_search_section_missing` for
+/// why a missing file is not "treat as empty and append"). The GUI calls this
+/// only after the user explicitly confirms — this function does not ask, and
+/// nothing else may call it: a silent rewrite of the user's own file is the
+/// one failure mode this feature exists to avoid.
+#[tauri::command]
+pub fn notemd_agents_append_search_section(app: tauri::AppHandle) -> Result<bool, String> {
+    let root = crate::sotvault::resolve_vault_root(&app).ok_or("Vault not configured")?;
+    let path = root.join(watcher::AGENTS_FILE);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let existing = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    if !logic::search_section_missing(&existing) {
+        return Ok(false);
+    }
+    std::fs::write(&path, logic::append_search_section(&existing)).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 fn open_agents_in_editor(app: &tauri::AppHandle, root: &Path) {
     let agents = root.join(watcher::AGENTS_FILE);
     if !agents.exists() {

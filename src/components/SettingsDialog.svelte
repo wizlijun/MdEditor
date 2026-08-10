@@ -49,14 +49,36 @@
   let thresholdBusy = $state(false)
   let searchExcludeDirsDraft = $state('')
   let searchExcludeDirsBusy = $state(false)
+  // `null` = not checked yet (or no vault / no AGENTS.md to check). Detection
+  // is read-only (notemd_agents_search_section_missing); the write
+  // (notemd_agents_append_search_section) only ever runs from onAddAgentsSearchSection,
+  // after the user clicks the button below — never on load, never silently.
+  let agentsSectionMissing = $state<boolean | null>(null)
+  let agentsSectionBusy = $state(false)
   $effect(() => {
     if (!open) return
     void loadVaultSettings().then(() => {
       syncDirDraft = vaultSettings.syncDir
       thresholdDraft = vaultSettings.largeFileThresholdMb
       searchExcludeDirsDraft = vaultSettings.searchExcludeDirs.join('\n')
+      if (!vaultSettings.vaultPath) { agentsSectionMissing = null; return }
+      void invoke<boolean>('notemd_agents_search_section_missing')
+        .then((missing) => { agentsSectionMissing = missing })
+        .catch(() => { agentsSectionMissing = null })
     })
   })
+  async function onAddAgentsSearchSection() {
+    agentsSectionBusy = true
+    try {
+      await invoke('notemd_agents_append_search_section')
+      agentsSectionMissing = false
+      pushToast({ level: 'success', message: t('search.agentsAdded') })
+    } catch (e) {
+      pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
+    } finally {
+      agentsSectionBusy = false
+    }
+  }
   async function onSetOutlineDir(kind: 'wikipage' | 'dailynote', value: string) {
     try {
       await setOutlineDir(kind, value)
@@ -597,6 +619,17 @@
                 disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}>{t('vaultSync.save')}</button>
             </div>
           </label>
+          {#if agentsSectionMissing}
+            <label class="row" style="align-items: flex-start;">
+              <span class="lbl"></span>
+              <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+                <p class="desc" style="margin: 0;">{t('search.agentsHint')}</p>
+                <button onclick={onAddAgentsSearchSection}
+                  style="align-self: flex-start;"
+                  disabled={agentsSectionBusy}>{t('search.agentsAdd')}</button>
+              </div>
+            </label>
+          {/if}
         </section>
 
         {#if !isIOSPlatform}

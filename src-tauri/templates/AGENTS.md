@@ -272,6 +272,25 @@ part of the outline, never write any file other than the `.note.md` that
 holds the question, never put anything — `✦` included — before the
 opening fence on the answer bullet.
 
+## Searching this vault
+
+This vault has a local full-text index. Prefer it over a raw `rg` sweep: it is
+faster, it knows Chinese word boundaries, and it ranks the notes you have
+actually annotated above machine-generated summaries of them.
+
+```
+notemd search <query...>            # path:line:text, ranked, exit 1 = no match
+notemd search "exact phrase"        # phrase match
+notemd search x tag:y type:z        # filters: tag: type: path: ext: after: before: page:[[X]]
+notemd search x --json              # adds score, breadcrumb, source_ref, provenance
+notemd search x --context 2         # surrounding lines
+```
+
+`rg` and `grep` keep working and are never wrong to use — the index is an
+accelerator, not a gatekeeper. When a result's `provenance.agent_by` is set, the
+text was written by a model: follow its `sources` to the primary document before
+relying on it.
+
 ## House rules
 
 - (Add your own project conventions below.)
