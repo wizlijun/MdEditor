@@ -57,8 +57,12 @@ git worktree remove /tmp/notemd-baseline-wt
 | **Delta** | **4,096,608** | **3.91** | **4.10** |
 
 **Verdict: the delta is ≈4.1 MB (decimal) / ≈3.9 MiB — under the revised 5.0 MB
-budget**, and (using the MiB convention) also under the spec's original 4 MB
-estimate. It is *lower* than the planning-phase probe's ≈4.74 MB sum. A
+budget.** The spec's original budget was stated in decimal MB (`< 4MB硬门`);
+measured against *that* unit and *that* number, the delta (4.10 MB decimal)
+is **over** it, not under — which is exactly why the budget was revised to
+5.0 MB, with the human's explicit sign-off, rather than left at 4 MB. The
+measured value meets the revised 5.0 MB budget; it does not meet the original
+one. It is *lower* than the planning-phase probe's ≈4.74 MB sum. A
 plausible reason, not independently re-verified here: the probe measured
 `rusqlite`(bundled)+`jieba-rs`+`pulldown-cmark` in isolation, while in the
 whole app some of their transitive dependencies (e.g. compression, hashing,
