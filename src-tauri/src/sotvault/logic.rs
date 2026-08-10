@@ -189,10 +189,13 @@ pub fn is_under_vault(vault_root: &Path, file: &Path) -> bool {
     file.starts_with(vault_root)
 }
 
-/// True when `name`'s extension is `md` (case-insensitive).
+/// True when `name`'s extension is `md` or `mdx` (case-insensitive).
 fn is_markdown(name: &str) -> bool {
     match name.rfind('.') {
-        Some(i) if i + 1 < name.len() => name[i + 1..].eq_ignore_ascii_case("md"),
+        Some(i) if i + 1 < name.len() => {
+            let ext = &name[i + 1..];
+            ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("mdx")
+        }
         _ => false,
     }
 }
@@ -562,6 +565,13 @@ mod tests {
     fn dated_basename_prefixes_undated_md() {
         assert_eq!(dated_basename("notes.md", "2026-06-18"), "2026-06-18-notes.md");
         assert_eq!(dated_basename("NOTES.MD", "2026-06-18"), "2026-06-18-NOTES.MD");
+    }
+
+    #[test]
+    fn dated_basename_prefixes_mdx_like_md() {
+        // mdx is a document too — syncing foo.md and foo.mdx into the vault
+        // should not produce inconsistent naming.
+        assert_eq!(dated_basename("guide.mdx", "2026-06-18"), "2026-06-18-guide.mdx");
     }
 
     #[test]

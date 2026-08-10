@@ -42,7 +42,14 @@ export function isPermissionError(e: unknown): boolean {
 // and a bare `export … from` would not bind it in this module's scope.
 export { basename, joinPath }
 
-export type FileKind = 'markdown' | 'html' | 'code' | 'image' | 'spreadsheet' | 'base' | 'custom'
+/**
+ * `'markdown'` carries an implicit contract across this codebase: the file may
+ * be round-tripped through ProseMirror (parse → edit → serialize back). MDX is
+ * markdown + JSX and is usually somebody's *build source*, so serializing it
+ * back would mangle `import` lines and JSX blocks and break their site. It gets
+ * its own kind so every `kind === 'markdown'` site has to opt in explicitly.
+ */
+export type FileKind = 'markdown' | 'mdx' | 'html' | 'code' | 'image' | 'spreadsheet' | 'base' | 'custom'
 
 export interface FileClass {
   kind: FileKind
@@ -54,6 +61,8 @@ const EXT_TABLE: Record<string, FileClass> = {
   markdown:  { kind: 'markdown' },
   mdown:     { kind: 'markdown' },
   mkd:       { kind: 'markdown' },
+
+  mdx:       { kind: 'mdx' },
 
   html:      { kind: 'html' },
   htm:       { kind: 'html' },

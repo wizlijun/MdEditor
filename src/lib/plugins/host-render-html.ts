@@ -4,6 +4,7 @@ import markedKatex from 'marked-katex-extension'
 import { markedHighlight } from 'marked-highlight'
 import hljs from 'highlight.js'
 import { blockCitationExtension } from '../blockio/marked-citation'
+import { toDisplayMarkdown } from '../mdx/display'
 import type { Tab } from '../tabs.svelte'
 
 /**
@@ -174,7 +175,10 @@ export async function renderTabBody(tab: Tab): Promise<string> {
     const highlighted = hljs.highlight(tab.currentContent, { language: lang }).value
     return `<pre><code class="hljs language-${htmlEscape(lang)}">${highlighted}</code></pre>`
   }
-  return await sharedMarked.parse(tab.currentContent, { async: true })
+  // mdx goes through the same display transform as the reading view, so JSX
+  // and `import` lines render as code instead of leaking into the output.
+  const md = tab.kind === 'mdx' ? toDisplayMarkdown(tab.currentContent) : tab.currentContent
+  return await sharedMarked.parse(md, { async: true })
 }
 
 // ---- image inline ----------------------------------------------------------

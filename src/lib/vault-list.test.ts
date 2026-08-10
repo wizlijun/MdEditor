@@ -27,4 +27,9 @@ describe('vault-list helpers', () => {
     expect(isText('html')).toBe(true)
     expect(isText('png')).toBe(false)
   })
+
+  it('treats mdx as a readable text document', () => {
+    expect(isText('mdx')).toBe(true)
+    expect(fileIcon('mdx')).toBe('📝')
+  })
 })

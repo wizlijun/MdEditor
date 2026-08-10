@@ -164,7 +164,10 @@ export interface PluginRequest {
 /** Level of a `plugin-toast` event emitted by the runtime on a plugin's behalf. */
 export type ToastLevel = 'success' | 'info' | 'warn' | 'error'
 
-export type TabKind = 'markdown' | 'html' | 'code' | 'spreadsheet' | 'base' | 'custom'
+/** Mirrors `FileKind` in `lib/fs.ts`. `'mdx'` is deliberately distinct from
+ *  `'markdown'`: mdx tabs render read-only and are never serialized back, so a
+ *  manifest asking for `kind == 'markdown'` must not match them. */
+export type TabKind = 'markdown' | 'mdx' | 'html' | 'code' | 'spreadsheet' | 'base' | 'custom'
 
 /** What we evaluate `enabled_when` expressions against. */
 export interface EnabledWhenContext {

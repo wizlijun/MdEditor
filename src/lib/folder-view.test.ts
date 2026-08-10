@@ -401,6 +401,9 @@ describe('stripExt / stripNoteSuffix', () => {
     expect(stripExt('B.Markdown')).toBe('B')
     expect(stripExt('note')).toBe('note')
   })
+  it('stripExt removes .mdx too', () => {
+    expect(stripExt('guide.mdx')).toBe('guide')
+  })
   it('stripNoteSuffix removes .note.md / .notes.md', () => {
     expect(stripNoteSuffix('foo.note.md')).toBe('foo')
     expect(stripNoteSuffix('bar.notes.md')).toBe('bar')
@@ -431,6 +434,10 @@ describe('filterByViewMode', () => {
   it('withNotes → folders + hasNote', () => { expect(names('withNotes')).toEqual(['dir', 'has.md']) })
   it('markdown → folders + markdown kind', () => { expect(names('markdown')).toEqual(['dir', 'has.md', 'plain.md', 'solo.note.md']) })
   it('notes → folders + notes (independent + hasNote)', () => { expect(names('notes')).toEqual(['dir', 'has.md', 'solo.note.md']) })
+  it('markdown → includes mdx (users looking for docs expect to see them)', () => {
+    const withMdx: FolderEntry[] = [...rows, { name: 'guide.mdx', path: '/d/guide.mdx', isDir: false, kind: 'mdx' }]
+    expect(filterByViewMode(withMdx, 'markdown').map((e) => e.name)).toContain('guide.mdx')
+  })
 })
 
 describe('applyHideFolders', () => {

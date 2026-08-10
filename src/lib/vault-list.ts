@@ -1,4 +1,4 @@
-const MARKDOWN_EXTS = new Set(['md', 'markdown', 'mdown', 'mkd'])
+const MARKDOWN_EXTS = new Set(['md', 'markdown', 'mdown', 'mkd', 'mdx'])
 const HTML_EXTS = new Set(['html', 'htm'])
 const TEXT_EXTS = new Set(['txt', 'log', 'csv', 'tsv', 'env'])
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif', 'avif'])

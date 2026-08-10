@@ -66,7 +66,8 @@ export async function setOutlineWidth(w: number): Promise<void> {
  *  Delegates to companionPathFor so "applicable" and "has a companion path"
  *  can never disagree (e.g. on `.NOTES.MD` case variants). */
 export function outlineAppliesTo(tab: { kind: string; filePath: string }): boolean {
-  return tab.kind === 'markdown' && companionPathFor(tab.filePath) != null
+  // mdx 也在列:它以只读方式渲染,手记是读者留下判断的唯一去处。
+  return (tab.kind === 'markdown' || tab.kind === 'mdx') && companionPathFor(tab.filePath) != null
 }
 
 let isIos = false

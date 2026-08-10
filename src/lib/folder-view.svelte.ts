@@ -185,7 +185,7 @@ export function parsePinned(text: string): string[] {
 export type FolderViewMode = 'all' | 'withNotes' | 'markdown' | 'notes'
 export const DEFAULT_VIEW_MODE: FolderViewMode = 'all'
 
-const EXT_RE = /\.(md|markdown|mdown|mkd)$/i
+const EXT_RE = /\.(md|markdown|mdown|mkd|mdx)$/i
 
 /** 去 markdown 扩展名（无匹配原样返回）。 */
 export function stripExt(name: string): string {
@@ -205,7 +205,7 @@ export function parseFirstH1(text: string): string | null {
 export function filterByViewMode(entries: FolderEntry[], mode: FolderViewMode): FolderEntry[] {
   switch (mode) {
     case 'withNotes': return entries.filter((e) => e.isDir || e.hasNote === true)
-    case 'markdown': return entries.filter((e) => e.isDir || e.kind === 'markdown')
+    case 'markdown': return entries.filter((e) => e.isDir || e.kind === 'markdown' || e.kind === 'mdx')
     case 'notes': return entries.filter((e) => e.isDir || e.isOutlineNote === true || e.hasNote === true)
     default: return entries
   }

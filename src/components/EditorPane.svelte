@@ -127,6 +127,16 @@
     {#key tab.id}
       <HtmlPreview html={tab.currentContent} />
     {/key}
+  {:else if tab.kind === 'mdx'}
+    <!--
+      mdx rich mode = read-only reading view. MDX is markdown + JSX and usually
+      somebody's build source; a ProseMirror round-trip would mangle its
+      `import` lines and JSX blocks. Editing goes through source mode (Cmd+/),
+      which saves byte-for-byte. Annotation goes to the sidecar note.
+    -->
+    {#key tab.id}
+      <RichEditor {tab} readOnly />
+    {/key}
   {:else}
     {#key tab.id}
       <RichEditor

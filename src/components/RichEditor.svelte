@@ -4,6 +4,7 @@
   import { setContent, activeTab, openFile } from '../lib/tabs.svelte'
   import { classifyLink, resolveWikilinkPath, restoreWikilinks, type LinkAction } from '../lib/link-open'
   import { buildFencedBlock, stripCodeFence } from '../lib/code-fence'
+  import { toDisplayMarkdown } from '../lib/mdx/display'
   import { activeTheme } from '../lib/active-theme.svelte'
   import RichGutter from '../lib/mdblock-hover/rich-gutter.svelte'
   import {
@@ -54,9 +55,16 @@
     tab,
     onFlush,
     wrapAsCodeBlock,
+    readOnly = false,
   }: {
     tab: Tab
     onFlush?: (md: string) => void
+    /**
+     * Render-only mode: the view is mounted non-editable and nothing is ever
+     * pushed back into the tab. Used by mdx, whose JSX/import lines would not
+     * survive a markdown round-trip — see `lib/mdx/display.ts`.
+     */
+    readOnly?: boolean
     /**
      * If defined, the editor is mounted with content wrapped in a fenced block
      * (` ```<lang>...``` `) and `onChange` / `onDestroy` strip the fence before
@@ -628,6 +636,7 @@
   }
 
   function wrapIfNeeded(md: string): string {
+    if (readOnly && tab.kind === 'mdx') return toDisplayMarkdown(md)
     return wrapAsCodeBlock !== undefined ? buildFencedBlock(md, wrapAsCodeBlock) : md
   }
 
@@ -1000,10 +1009,15 @@
         const { mountRichEditor, updateDocumentBaseDir } = await import('../lib/editor-bridge')
         updateDocumentBaseDir(tab.filePath)
         const inst = await mountRichEditor(host!, wrapIfNeeded(tab.currentContent), (md) => {
+          // Read-only tabs render a transformed copy of the file; letting that
+          // copy flow back would overwrite the real content with its display
+          // form. Belt to `editable: () => false`'s braces.
+          if (readOnly) return
           const unwrapped = unwrapIfNeeded(md)
           lastSync = unwrapped
           setContent(tabId, unwrapped)
         })
+        if (readOnly) (inst.view as unknown as EditorView).setProps({ editable: () => false })
         // Mark in-sync BEFORE exposing the editor: the inbound $effect runs
         // immediately on `status === 'mounted'`, and would otherwise see a
         // null lastSync and re-push the same content into a freshly-mounted

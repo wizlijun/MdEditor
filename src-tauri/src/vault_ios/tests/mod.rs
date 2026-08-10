@@ -43,6 +43,18 @@ fn list_dir_filters_by_whitelist_and_hides_dotgit() {
 }
 
 #[test]
+fn list_dir_lists_mdx_documents() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("guide.mdx"), "x").unwrap();
+
+    let entries = crate::vault_ios::list_dir::list(root, "").unwrap();
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+    assert!(names.contains(&"guide.mdx"));
+}
+
+#[test]
 fn list_dir_returns_kind_and_size() {
     let dir = tempdir().unwrap();
     let root = dir.path();

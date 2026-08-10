@@ -35,8 +35,11 @@ MDX 不是 markdown 的一种写法,而是 markdown + JSX:顶层 `import` / `exp
 | `src/lib/vault-list.ts:1` | vault 列表图标 / isText |
 | `src/lib/dialogs.ts:55,68,71` | 打开/保存对话框过滤器 |
 | `src/lib/folder-view.svelte.ts:188` `EXT_RE` | 文件夹视图去后缀显示 |
-| `src/components/SettingsDialog.svelte:238` | 文件关联设置 |
 | `src-tauri/src/vault_ios/list_dir.rs:7` | iOS vault 目录白名单 |
+
+`src/components/SettingsDialog.svelte:238` 的 `FILE_GROUPS` **刻意不加 mdx**。那份清单是 macOS 默认打开方式的注册项(须与 `tauri.conf.json` 的 `fileAssociations` 对应),把 `.mdx` 从 VS Code 手里抢成默认处理程序,对开发者是打扰不是价值 —— 与该处已有注释同源。拖入窗口、「打开方式 → 其他」仍然可用。
+
+`src/lib/plugins/types.ts` 的 `TabKind`(插件 `enabled_when` 的契约)同步加 `'mdx'`。这是向后兼容的联合类型扩展:既有写 `kind == 'markdown'` 的清单不会匹配到 mdx —— 这正是想要的行为。
 
 ### 2. 两种模式:source 可写,rich 只读
 
@@ -59,8 +62,9 @@ MDX 不是 markdown 的一种写法,而是 markdown + JSX:顶层 `import` / `exp
 
 - `companionPathFor()`(`src/lib/outline/store.svelte.ts:72`)增加 mdx 分支,**保留完整原后缀**。理由:同目录下 `index.md` 与 `index.mdx` 共存在 Astro / Next 仓库里不算罕见,沿用「去后缀 + `.note.md`」会让两份文档共用同一份手记且无法分开。`OUTLINE_SUFFIX_RE`(`/\.notes?\.md$/i`)已能把 `foo.mdx.note.md` 识别为手记本身,不会递归派生。
 - `outline/gate.svelte.ts:69` 的 `tab.kind === 'markdown'` 放开到 `markdown | mdx`。
-- 源 `.mdx` 与 vault 镜像副本都不被写入。行内批注(`src/lib/note-anno/`)对 mdx 整体禁用,右键菜单不出现该项。
-- 镜像宿主链路:`src-tauri/src/sotvault/logic.rs:193` 的 `is_markdown()` 目前只认 `"md"`,需放开到 mdx,否则 vault 外的 mdx 做手记时找不到宿主。
+- 源 `.mdx` 与 vault 镜像副本都不被写入。行内批注(`src/lib/note-anno/`)对 mdx 不可用 —— rich 模式只读,批注命令根本没有入口。
+- 镜像宿主链路**无需改动**:`planNoteHome()` / `noteHomeForRead()`(`src/lib/outline/note-home.ts`)全部由 `companionPathFor()` 驱动,上面那一处改完 vault 外 mdx 的宿主解析就通了。
+- `src-tauri/src/sotvault/logic.rs:193` 的 `is_markdown()` 一并放开到 mdx。它管的不是宿主解析,而是**同步进 vault 时的 `yyyy-MM-dd-` 日期前缀** —— 不改的话 `foo.md` 会被加前缀而 `foo.mdx` 不会,同一目录里出现两套命名。
 
 ### 5. 明确不做
 

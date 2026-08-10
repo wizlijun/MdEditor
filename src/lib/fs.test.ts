@@ -9,6 +9,13 @@ describe('classifyPath', () => {
     expect(classifyPath('foo.mkd')).toEqual({ kind: 'markdown' })
   })
 
+  it('mdx is its own kind, never markdown', () => {
+    // 'markdown' 在本代码库里等价于"可被 ProseMirror 全文序列化回写"。
+    // mdx 是别人的构建源码,回写会毁掉 JSX/import —— 必须是独立 kind。
+    expect(classifyPath('foo.mdx')).toEqual({ kind: 'mdx' })
+    expect(classifyPath('FOO.MDX')).toEqual({ kind: 'mdx' })
+  })
+
   it('html extensions', () => {
     expect(classifyPath('foo.html')).toEqual({ kind: 'html' })
     expect(classifyPath('foo.htm')).toEqual({ kind: 'html' })

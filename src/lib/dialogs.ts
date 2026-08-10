@@ -9,7 +9,7 @@ const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'heic', '
 const SUBTITLE_EXTS = ['srt', 'vtt', 'ass', 'ssa']
 
 const ALL_EXTS = [
-  'md', 'markdown', 'mdown', 'mkd',
+  'md', 'markdown', 'mdown', 'mkd', 'mdx',
   'html', 'htm',
   'txt', 'text', 'log', 'csv', 'tsv', 'env',
   ...SUBTITLE_EXTS,
@@ -52,7 +52,7 @@ export async function pickOpenFile(): Promise<string | null> {
   const picked = await openDialog({
     multiple: false,
     filters: [
-      { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd'] },
+      { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'mdx'] },
       { name: 'HTML', extensions: ['html', 'htm'] },
       { name: 'Subtitles', extensions: SUBTITLE_EXTS },
       { name: 'Images', extensions: IMAGE_EXTS },
@@ -65,11 +65,11 @@ export async function pickOpenFile(): Promise<string | null> {
 /** Friendly "File Format" filter names shown in the NSSavePanel dropdown. */
 function saveFilters(ext?: string) {
   if (!ext) return [
-    { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd'] },
+    { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'mdx'] },
     { name: 'All supported', extensions: ALL_EXTS },
   ]
-  if (['md', 'markdown', 'mdown', 'mkd'].includes(ext))
-    return [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd'] }]
+  if (['md', 'markdown', 'mdown', 'mkd', 'mdx'].includes(ext))
+    return [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'mdx'] }]
   if (['html', 'htm'].includes(ext))
     return [{ name: 'HTML', extensions: ['html', 'htm'] }]
   if (['txt', 'text', 'log'].includes(ext))

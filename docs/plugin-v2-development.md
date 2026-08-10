@@ -115,6 +115,10 @@ plugins-src/<name>/
   "command": "open",                         // 触发的命令 id
   "submenu": "可选子菜单名",
   "enabled_when": "currentTab.kind == 'markdown'",  // 条件表达式(可选)
+  // kind 取值:markdown | mdx | html | code | spreadsheet | base | custom。
+  // `mdx` 独立于 `markdown`:mdx tab 只读渲染、永不序列化回写,写文档内容的
+  // 插件不该匹配到它;要同时覆盖两者写
+  // `currentTab.kind == 'markdown' || currentTab.kind == 'mdx'`。
   "prompt": { "kind": "save-dialog", "default_filename": "{stem}.pdf",
               "filters": [{ "name": "PDF", "extensions": ["pdf"] }] }  // 可选
 }

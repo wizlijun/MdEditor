@@ -124,6 +124,23 @@ describe('line breaks', () => {
   })
 })
 
+describe('mdx rendering', () => {
+  it('renders JSX as code, not as live markup', async () => {
+    // Export/share paths must agree with the reading view: MDX components are
+    // shown as the code they are, never emitted into the output document.
+    const tab = {
+      kind: 'mdx',
+      currentContent: "import Chart from './c'\n\n# T\n\n<Chart data={x} />\n",
+      filePath: '/tmp/a.mdx',
+    } as never
+    const html = await renderTabBody(tab)
+    expect(html).toContain('language-jsx')   // import + JSX landed in code blocks
+    expect(html).toContain('&lt;')            // the component tag is escaped text
+    expect(html).not.toContain('<Chart')      // ...never live markup
+    expect(html).toContain('<h1>T</h1>')      // real markdown still renders
+  })
+})
+
 describe('highlight rendering', () => {
   it('renders ^^text^^ as <mark>text</mark>', async () => {
     const tab = { kind: 'markdown', currentContent: 'Hello ^^world^^ end\n', filePath: '/tmp/test.md' } as never
