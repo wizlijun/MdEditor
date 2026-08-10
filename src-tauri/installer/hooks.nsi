@@ -11,8 +11,11 @@
 ; where NSIS cannot run. See task-15-report.md for exactly what a human must
 ; check on a real Windows box before this ships: fresh install (bin\notemd.cmd
 ; exists, `notemd search` works from a new shell), upgrade/repair (PATH gains
-; the entry exactly once), and uninstall (the .cmd, the now-empty bin\, and the
-; PATH entry are all gone).
+; the entry exactly once), uninstall (the .cmd, the now-empty bin\, and the
+; PATH entry are all gone), a per-user PATH longer than 1023 characters
+; (PATH must come back byte-identical, both on install and on uninstall —
+; see the READ FAILURES note below), and a *cancelled* uninstall (say "no" to
+; the "app is still running" prompt: the PATH entry must survive).
 ;
 ; No plugins and no extra !include beyond what stock NSIS ships. `${StrContains}`
 ; is NOT built into NSIS (it needs StrFunc.nsh's init dance, which is easy to
@@ -31,6 +34,30 @@
 ; uninstall would silently splice that neighbor's name in half. See
 ; `NotemdPathHasEntry` and `un.NotemdRemoveFromPath` below and the fix-round-1
 ; trace table in task-15-report.md.
+;
+; READ FAILURES ARE NOT "VALUE ABSENT". `ReadRegStr` reads into a fixed
+; `NSIS_MAX_STRLEN` buffer (1023 chars in stock makensis) and, when the stored
+; value is longer than that — or the read fails for any other reason — sets
+; the error flag and yields "". A per-user PATH over that length is unusual
+; but entirely real. Treating that "" as "there is no PATH yet" would make the
+; installer overwrite the user's entire per-user PATH with a single entry,
+; silently, and again on every auto-update. So every `ReadRegStr` here is
+; bracketed by `ClearErrors`/`IfErrors`, and on error `NotemdPathValueExists`
+; decides between the two cases the empty string conflates:
+;   * no `Path` value under HKCU\Environment at all → safe to create ours;
+;   * a `Path` value exists but we could not read it → write NOTHING and bail.
+; `EnumRegValue` is what makes that distinction possible: it reports value
+; *names* without reading their contents, so it is unaffected by the length
+; limit that defeated the read.
+;
+; (A PowerShell delegation — `[Environment]::SetEnvironmentVariable(...,'User')`
+; — has no length limit and broadcasts WM_SETTINGCHANGE itself, and was
+; considered. Rejected: it would mean re-expressing the PATH splicing in a
+; second language, and that splicing is the part of this file that has been
+; hand-verified across nine shapes including the `bin`/`bin2` prefix
+; collision. Keeping one implementation of the splice and hardening the read
+; around it disturbs less than replacing the whole thing with untested
+; PowerShell that cannot be compile-checked here at all.)
 
 Var R_SIO_Haystack
 Var R_SIO_Needle
@@ -64,6 +91,10 @@ Var NotemdCheckSlice
 Var NotemdHasEntry
 Var NotemdHayLen
 Var NotemdOffset
+
+Var NotemdPathValueFound
+Var NotemdEnumIdx
+Var NotemdEnumName
 
 ; ---------------------------------------------------------------------------
 ; NotemdStrIndexOf / un.NotemdStrIndexOf
@@ -102,6 +133,44 @@ FunctionEnd
 
 !insertmacro NotemdStrIndexOfImpl ""
 !insertmacro NotemdStrIndexOfImpl "un."
+
+; ---------------------------------------------------------------------------
+; NotemdPathValueExists / un.NotemdPathValueExists
+;
+; Sets $NotemdPathValueFound to "1" if HKCU\Environment has a value *named*
+; "Path", "" otherwise. Uses no stack — the caller reads the variable — so
+; there is no Exch/Pop ordering to get wrong for a function whose entire job
+; is to keep a failed read from being mistaken for an absent value.
+;
+; `EnumRegValue` enumerates names only, so a value too long for
+; `NSIS_MAX_STRLEN` (the very case this exists to detect) is still reported.
+; `StrCmp` is NSIS's case-INsensitive comparison, which is the right
+; semantics here: registry value names are case-insensitive, and PATH is
+; spelled "Path" or "PATH" depending on who wrote it last.
+;
+; Labels are function-scoped in NSIS, so the two instantiations below do not
+; collide — same pattern as NotemdStrIndexOfImpl above.
+; ---------------------------------------------------------------------------
+!macro NotemdPathValueExistsImpl un
+Function ${un}NotemdPathValueExists
+  StrCpy $NotemdPathValueFound ""
+  StrCpy $NotemdEnumIdx 0
+  pve_loop:
+    ClearErrors
+    EnumRegValue $NotemdEnumName HKCU "Environment" $NotemdEnumIdx
+    IfErrors pve_done
+    StrCmp $NotemdEnumName "" pve_done
+    StrCmp $NotemdEnumName "Path" pve_found
+    IntOp $NotemdEnumIdx $NotemdEnumIdx + 1
+    Goto pve_loop
+  pve_found:
+    StrCpy $NotemdPathValueFound "1"
+  pve_done:
+FunctionEnd
+!macroend
+
+!insertmacro NotemdPathValueExistsImpl ""
+!insertmacro NotemdPathValueExistsImpl "un."
 
 ; ---------------------------------------------------------------------------
 ; NotemdPathHasEntry — is $INSTDIR\bin present as a *complete* PATH entry
@@ -172,7 +241,25 @@ FunctionEnd
 ; value is left untouched.
 ; ---------------------------------------------------------------------------
 Function un.NotemdRemoveFromPath
+  ; A read we cannot trust must never become a write. If the value exists but
+  ; came back empty/truncated, splicing from "" and writing the result back
+  ; would erase the user's PATH on uninstall — the same hazard as on install,
+  ; with no second chance to notice. Leaving one stale entry behind (pointing
+  ; at a directory that no longer exists, which Windows simply skips) is the
+  ; strictly better failure.
+  ClearErrors
   ReadRegStr $NotemdPath HKCU "Environment" "Path"
+  IfErrors notemd_rm_read_failed notemd_rm_read_ok
+
+  notemd_rm_read_failed:
+    Call un.NotemdPathValueExists
+    StrCmp $NotemdPathValueFound "1" notemd_rm_unreadable notemd_rm_done
+
+  notemd_rm_unreadable:
+    DetailPrint "notemd: could not read the user PATH; leaving it untouched."
+    Goto notemd_rm_done
+
+  notemd_rm_read_ok:
   StrCmp $NotemdPath "" notemd_rm_done
 
   ; Case: our bin dir is the entire PATH value.
@@ -268,7 +355,28 @@ FunctionEnd
   ; like "...\bin2" is never mistaken for ours and does not cause us to
   ; silently skip the append (review round 1, Important finding #2).
   StrCpy $NotemdBin "$INSTDIR\bin"
+  ; An unreadable PATH must not be mistaken for an absent one — see the
+  ; READ FAILURES header note. On an unreadable-but-present value we write
+  ; nothing at all: the user loses the `notemd` command on PATH (recoverable
+  ; in ten seconds by hand) instead of losing their PATH (not recoverable).
+  ClearErrors
   ReadRegStr $NotemdPath HKCU "Environment" "Path"
+  IfErrors notemd_path_read_failed notemd_path_read_ok
+
+  notemd_path_read_failed:
+    Call NotemdPathValueExists
+    StrCmp $NotemdPathValueFound "1" notemd_path_unreadable notemd_path_absent
+
+  notemd_path_unreadable:
+    DetailPrint "notemd: could not read the user PATH; leaving it untouched. Add $INSTDIR\bin to it by hand to use the notemd command."
+    Goto notemd_path_done
+
+  notemd_path_absent:
+    ; No Path value under HKCU\Environment at all: creating one is safe, and
+    ; is the ordinary case on a machine that has never had a per-user PATH.
+    StrCpy $NotemdPath ""
+
+  notemd_path_read_ok:
   Push $NotemdPath
   Push $NotemdBin
   Call NotemdPathHasEntry
@@ -310,11 +418,23 @@ FunctionEnd
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ; File removal stays in PRE because it must precede Tauri's own
+  ; non-recursive `RMDir "$INSTDIR"` — bin\ has to be gone by then or
+  ; $INSTDIR survives as a stray directory.
   Delete "$INSTDIR\bin\notemd.cmd"
   ; No /r: this only succeeds if bin\ is empty. If a user dropped their own
   ; files in there, that is not ours to delete, and we leave the directory.
   RMDir "$INSTDIR\bin"
+!macroend
 
+; The PATH edit runs POST, not PRE, because Tauri's uninstaller shows a
+; cancellable "the app is still running, close it?" prompt *after* the
+; PREUNINSTALL hook. Editing PATH there meant that cancelling an uninstall
+; left a fully installed app whose `notemd` command had silently vanished
+; from every shell — a destructive side effect of an operation the user
+; explicitly aborted. POSTUNINSTALL only runs once the uninstall has actually
+; gone through.
+!macro NSIS_HOOK_POSTUNINSTALL
   StrCpy $NotemdBin "$INSTDIR\bin"
   Call un.NotemdRemoveFromPath
 !macroend

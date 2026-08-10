@@ -49,6 +49,14 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
     // Paragraph), the Paragraph's End closes it first and the Item's End
     // becomes a no-op — see the Item handling below.
     let mut pending: Option<(u32, u32, String)> = None;
+    // How many `Tag::Item`s are currently open. A nested list lives *inside*
+    // its parent item, so without this the inner item's `End` would close the
+    // parent's accumulator and its `Start` would concatenate the child's text
+    // straight onto the parent's with no separator — which manufactured a
+    // token ("alpha onebeta two") that exists nowhere in the vault, on every
+    // parent/child boundary of every nested bullet list. Only the outermost
+    // `End(Item)` closes the block; deeper ones just contribute a line.
+    let mut item_depth = 0usize;
 
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_FOOTNOTES;
 
@@ -89,27 +97,39 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
                     open_sections.push((s, breadcrumb_of(&chain), depth));
                 }
             }
-            Event::Start(Tag::Paragraph) | Event::Start(Tag::CodeBlock(_)) | Event::Start(Tag::Item) => {
+            Event::Start(Tag::Item) => {
+                item_depth += 1;
+                match pending.as_mut() {
+                    // A nested item under an item that is still accumulating:
+                    // separate it with a newline, exactly the way `SoftBreak`
+                    // already separates wrapped lines of one paragraph, and
+                    // widen the block to cover it.
+                    Some(p) => {
+                        p.2.push('\n');
+                        p.1 = p.1.max(bl(range.end.saturating_sub(1)));
+                    }
+                    None => {
+                        let s = bl(range.start);
+                        let e = bl(range.end.saturating_sub(1));
+                        pending = Some((s, e, String::new()));
+                    }
+                }
+            }
+            Event::End(TagEnd::Item) => {
+                item_depth = item_depth.saturating_sub(1);
+                if item_depth == 0 {
+                    close_pending(&mut pending, &mut blocks, &chain);
+                }
+            }
+            Event::Start(Tag::Paragraph) | Event::Start(Tag::CodeBlock(_)) => {
                 if pending.is_none() {
                     let s = bl(range.start);
                     let e = bl(range.end.saturating_sub(1));
                     pending = Some((s, e, String::new()));
                 }
             }
-            Event::End(TagEnd::Paragraph) | Event::End(TagEnd::CodeBlock) | Event::End(TagEnd::Item) => {
-                if let Some((s, e, text)) = pending.take() {
-                    if !text.trim().is_empty() {
-                        blocks.push(Block {
-                            line_start: s,
-                            line_end: e,
-                            breadcrumb: breadcrumb_of(&chain),
-                            text: text.trim().to_string(),
-                            level: BlockLevel::Line,
-                            is_annotation: false,
-                            agent_by: None,
-                        });
-                    }
-                }
+            Event::End(TagEnd::Paragraph) | Event::End(TagEnd::CodeBlock) => {
+                close_pending(&mut pending, &mut blocks, &chain);
             }
             Event::Text(t) | Event::Code(t) => {
                 if let Some(h) = heading.as_mut() {
@@ -151,6 +171,29 @@ pub fn chunk(body: &str, body_start_line: u32) -> Vec<Block> {
         b.line_end += shift;
     }
     blocks
+}
+
+/// Emit whatever the accumulator holds as a `Line` block and clear it.
+/// Extracted so the paragraph/code-block path and the outermost-list-item
+/// path cannot drift apart.
+fn close_pending(
+    pending: &mut Option<(u32, u32, String)>,
+    blocks: &mut Vec<Block>,
+    chain: &[String],
+) {
+    let Some((s, e, text)) = pending.take() else { return };
+    if text.trim().is_empty() {
+        return;
+    }
+    blocks.push(Block {
+        line_start: s,
+        line_end: e,
+        breadcrumb: breadcrumb_of(chain),
+        text: text.trim().to_string(),
+        level: BlockLevel::Line,
+        is_annotation: false,
+        agent_by: None,
+    });
 }
 
 fn heading_index(level: HeadingLevel) -> usize {
@@ -256,6 +299,55 @@ mod tests {
     fn an_empty_body_yields_no_blocks() {
         assert!(chunk("", 1).is_empty());
         assert!(chunk("   \n\n", 1).iter().all(|b| !b.text.trim().is_empty() || b.level == BlockLevel::File));
+    }
+
+    /// Baseline for the nested case below: sibling items are separate blocks
+    /// and each one's line range is its own line.
+    #[test]
+    fn a_tight_list_gives_one_block_per_item() {
+        let md = "- alphaxq one\n- betaxq two\n";
+        let b = chunk(md, 1);
+        let items: Vec<&Block> = b.iter().filter(|x| x.level == BlockLevel::Line).collect();
+        assert_eq!(items.len(), 2, "{:?}", items.iter().map(|x| &x.text).collect::<Vec<_>>());
+        assert_eq!((items[0].text.as_str(), items[0].line_start, items[0].line_end), ("alphaxq one", 1, 1));
+        assert_eq!((items[1].text.as_str(), items[1].line_start, items[1].line_end), ("betaxq two", 2, 2));
+    }
+
+    /// 存进索引的每个词都必须真的在源文件里出现过——这是 `path#Lnnn` 引用可信的
+    /// 全部前提。嵌套 bullet 的父子边界曾把两行直接拼接(`alphaxq onebetaxq
+    /// two`),凭空造出一个 vault 里不存在的词,同时毁掉两个真实的词;而
+    /// `drop_redundant_rollups` 会把没被污染的 File 级块当冗余丢掉,于是这个坏块
+    /// 正是唯一会被召回的那个。
+    #[test]
+    fn a_nested_list_item_is_separated_from_its_parent_not_fused_onto_it() {
+        let md = "- alphaxq one\n  - betaxq two\n";
+        let b = chunk(md, 1);
+        let items: Vec<&Block> = b.iter().filter(|x| x.level == BlockLevel::Line).collect();
+        assert_eq!(items.len(), 1, "{:?}", items.iter().map(|x| &x.text).collect::<Vec<_>>());
+        assert_eq!(items[0].text, "alphaxq one\nbetaxq two");
+        assert_eq!((items[0].line_start, items[0].line_end), (1, 2));
+        // Every word stored must exist in the source, and no word may be
+        // destroyed by the join.
+        for block in &b {
+            for word in block.text.split_whitespace() {
+                assert!(md.contains(word), "invented token {word:?} in {:?}", block.text);
+            }
+        }
+        assert!(b.iter().any(|x| x.text.contains("alphaxq")));
+        assert!(b.iter().any(|x| x.text.contains("betaxq")));
+    }
+
+    /// Three levels, two children under one parent: the accumulator must
+    /// survive the inner `End(Item)`s and close exactly once, at the outermost
+    /// one, with a separator at every boundary.
+    #[test]
+    fn deeply_nested_list_items_each_get_their_own_line_in_the_block() {
+        let md = "- parentxq\n  - childxq one\n  - childxq two\n    - grandchildxq\n";
+        let b = chunk(md, 1);
+        let items: Vec<&Block> = b.iter().filter(|x| x.level == BlockLevel::Line).collect();
+        assert_eq!(items.len(), 1, "{:?}", items.iter().map(|x| &x.text).collect::<Vec<_>>());
+        assert_eq!(items[0].text, "parentxq\nchildxq one\nchildxq two\ngrandchildxq");
+        assert_eq!((items[0].line_start, items[0].line_end), (1, 4));
     }
 
     /// A `#` title followed by `##` subsections — the most common document

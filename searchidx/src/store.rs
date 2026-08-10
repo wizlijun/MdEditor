@@ -46,11 +46,25 @@ pub struct FileRow {
     pub content_hash: String,
 }
 
-/// Open (creating if needed) the index at `db_path`. Anything unexpected —
-/// unreadable file, wrong schema version, wrong tokenizer — is resolved by
-/// deleting the file and starting over. There is deliberately no repair
-/// path: the index is disposable derived data, and rebuild is always
+/// Open (creating if needed) the index at `db_path`. A wrong schema version,
+/// a wrong tokenizer, or a file that is *genuinely not a database* is
+/// resolved by deleting the file and starting over. There is deliberately no
+/// repair path: the index is disposable derived data, and rebuild is always
 /// correct while repair logic never fully is.
+///
+/// What is **not** resolved that way is any *transient* failure — most
+/// importantly `SQLITE_BUSY`/`SQLITE_LOCKED` from another process holding the
+/// write transaction (a `build_full`, a flood sweep), and plain I/O errors.
+/// Those are propagated to the caller, which degrades (the CLI scans files
+/// directly; the GUI leaves `IndexHandle` empty and the panel says "not
+/// ready"). Wiping on an opaque `Err` was a real data-loss bug: `notemd
+/// search` run while the GUI rebuilt would delete `index.db`/`-wal`/`-shm`
+/// out from under the live writer — silently, exit code 0 — leaving the
+/// writer committing into an orphaned inode and the GUI serving a database
+/// nobody else can see until the next relaunch. Deleting the `-wal`/`-shm`
+/// of a live WAL connection is additionally SQLite's own documented
+/// corruption hazard. See `is_corruption` and
+/// `a_concurrent_writer_must_not_cause_open_to_wipe_the_database`.
 ///
 /// Control flow is straight-line, not recursive: `try_open` is called
 /// exactly once, and if it reports the file needs wiping (or fails to open
@@ -70,12 +84,33 @@ pub fn open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection> {
     }
     match try_open(db_path, vault_root) {
         Ok(Opened::Ready(conn)) => return Ok(conn),
-        Ok(Opened::Stale) | Err(_) => {}
+        Ok(Opened::Stale) => {}
+        Err(e) if is_corruption(&e) => {}
+        // Busy / locked / I/O: transient or environmental, never a reason to
+        // destroy the index. Let the caller degrade.
+        Err(e) => return Err(e),
     }
     if !wipe(db_path) {
         return Err(rusqlite::Error::InvalidPath(db_path.to_path_buf()));
     }
     create_fresh(db_path, vault_root)
+}
+
+/// Is this error "the bytes on disk are not a usable database", as opposed to
+/// "somebody else is using it right now" or "the filesystem said no"? Only
+/// the former justifies deleting the file. Kept as a named predicate rather
+/// than inlined in `open`'s match so the distinction is testable on its own
+/// — the alternative (a `SQLITE_BUSY` reaching a wipe) is a data-loss bug,
+/// not a degraded-results bug.
+fn is_corruption(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(err, _)
+            if matches!(
+                err.code,
+                rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt
+            )
+    )
 }
 
 /// The outcome of a single open-and-inspect attempt against an existing (or
@@ -116,8 +151,20 @@ fn try_open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Opened> {
         drop(conn);
         return Ok(Opened::Stale);
     }
-    // vault_root can change if the same cache slot is reused; stamp it.
-    meta_set(&conn, "vault_root", vault_root)?;
+    // vault_root can change if the same cache slot is reused; stamp it —
+    // but only when it actually differs, and best-effort, deliberately NOT
+    // `?`. Every caller reaches this line, including read-only ones like
+    // `notemd search`, so an unconditional write here is a write on the open
+    // path: against a database another process is mid-write on it first
+    // waits out the whole `busy_timeout` and then returns `SQLITE_BUSY` —
+    // which used to make `open` wipe the live index (see `open`), and even
+    // once that is fixed would still cost every reader a five-second stall
+    // for a value nothing reads for correctness (`paths::vault_key` already
+    // scopes the database per vault). Reads never block in WAL mode, so the
+    // compare below is free.
+    if meta_get(&conn, "vault_root").as_deref() != Some(vault_root) {
+        let _ = meta_set(&conn, "vault_root", vault_root);
+    }
     Ok(Opened::Ready(conn))
 }
 
@@ -140,16 +187,31 @@ fn stamp_fresh_schema(conn: &Connection, vault_root: &str) -> rusqlite::Result<(
 }
 
 fn set_pragmas(conn: &Connection) -> rusqlite::Result<()> {
+    // busy_timeout FIRST, so that every statement on this connection — the
+    // journal_mode conversion below included — runs with a grace period
+    // rather than SQLite's default of zero. Measured caveat, recorded so
+    // nobody re-derives it: SQLite does **not** invoke the busy handler for
+    // a journal-mode conversion, so moving this line does not currently
+    // change that one statement's behavior (verified: with the timeout set
+    // first, converting a rollback-journal file to WAL against a held write
+    // transaction still returns `SQLITE_BUSY` immediately). It is ordered
+    // this way as defence in depth — any statement added to this function
+    // later would otherwise silently inherit a zero timeout.
+    conn.pragma_update(None, "busy_timeout", BUSY_TIMEOUT_MS)?;
     // `PRAGMA journal_mode=WAL` returns a row with the resulting mode, so it
     // cannot go through `pragma_update` (which errors on statements that
     // yield results) — read it back via `query_row` instead, which also
     // proves WAL genuinely took effect rather than merely not-erroring.
     let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
     debug_assert_eq!(mode.to_lowercase(), "wal");
-    conn.pragma_update(None, "busy_timeout", 5000)?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     Ok(())
 }
+
+/// How long a statement waits for another process's write transaction before
+/// giving up. Two writers (the GUI and `notemd search`) with no IPC between
+/// them is the design, so contention is ordinary, not exceptional.
+const BUSY_TIMEOUT_MS: i32 = 5000;
 
 /// Delete the database file at `db_path` (best-effort for its `-wal`/`-shm`
 /// sidecars — SQLite recreates those on demand, so leaving a stray one
@@ -292,6 +354,12 @@ mod tests {
         (d, p)
     }
 
+    #[cfg(unix)]
+    fn ino(p: &Path) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(p).unwrap().ino()
+    }
+
     fn write(conn: &mut Connection, rel: &str, text: &str) {
         let parsed = parse_file(rel, text, MTIME);
         let tx = conn.transaction().unwrap();
@@ -388,6 +456,12 @@ mod tests {
         let conn = open(&p, "/v").unwrap();
         let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
+        // The timeout is what makes two writers without IPC workable at all.
+        // Its *ordering* within `set_pragmas` is not observable (see the note
+        // there on journal-mode conversions ignoring the busy handler), so
+        // only the value is asserted.
+        let busy: i64 = conn.query_row("PRAGMA busy_timeout", [], |r| r.get(0)).unwrap();
+        assert_eq!(busy, BUSY_TIMEOUT_MS as i64);
     }
 
     /// A path that can never become a valid sqlite file (its parent does not
@@ -423,6 +497,106 @@ mod tests {
         let blocked = d.path().join("blocked.db");
         std::fs::create_dir(&blocked).unwrap();
         assert!(!wipe(&blocked), "a directory cannot be removed by remove_file; wipe must say so");
+    }
+
+    /// THE data-loss case. Opening the index while another process holds the
+    /// write transaction (an ongoing `build_full`, the watcher's flood sweep,
+    /// the panel's Rebuild button) must leave the database exactly where it
+    /// is. It used to not: `try_open` stamped `vault_root` on *every* open,
+    /// that write returned `SQLITE_BUSY`, and `open`'s catch-all `Err(_)` arm
+    /// wiped `index.db`/`-wal`/`-shm` out from under the live writer. Since
+    /// `AGENTS.md` now tells every agent to run `notemd search` habitually,
+    /// the collision is ordinary, not exotic.
+    #[test]
+    fn a_concurrent_writer_must_not_cause_open_to_wipe_the_database() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v").unwrap();
+            write(&mut conn, "a.md", "alpha\n");
+        }
+        // Stand in for the other process: hold a real write transaction, the
+        // way `build_full` does for the whole duration of a full scan.
+        let mut holder = open(&p, "/v").unwrap();
+        let tx = holder
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        meta_set(&tx, "probe", "1").unwrap();
+
+        #[cfg(unix)]
+        let ino_before = ino(&p);
+        let started = std::time::Instant::now();
+        let conn = open(&p, "/v").expect("a busy writer must not make open fail");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(4),
+            "open must not even *wait* on the writer: it has no reason to write"
+        );
+
+        // File identity: a wipe replaces the inode, so the same path would
+        // resolve to a different file afterwards. Checked where the platform
+        // exposes it, alongside the platform-independent proof below.
+        #[cfg(unix)]
+        assert_eq!(ino(&p), ino_before, "index.db was replaced by a different file");
+
+        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "the live index must survive an open by a second process");
+
+        // And the writer's own transaction must still be able to commit —
+        // it would not be, had its file been unlinked underneath it.
+        tx.commit().unwrap();
+        let n: i64 = holder.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// The other half of the same rule, end-to-end: when the open genuinely
+    /// *does* fail with a lock error, `open` must hand that error back rather
+    /// than "self-heal" by deleting a database that is perfectly fine and in
+    /// active use. `locking_mode=EXCLUSIVE` is the deterministic way to force
+    /// that error — a plain write transaction no longer blocks the (now
+    /// read-only) open path at all, which is the point of the fix above.
+    ///
+    /// Costs one `busy_timeout` (5s) by construction: the second connection
+    /// waits out its full grace period before reporting the failure, which is
+    /// exactly the behavior we want in production.
+    #[test]
+    fn a_lock_error_is_reported_not_self_healed_by_deleting_the_index() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v").unwrap();
+            write(&mut conn, "a.md", "alpha\n");
+        }
+        let holder = open(&p, "/v").unwrap();
+        holder.pragma_update(None, "locking_mode", "EXCLUSIVE").unwrap();
+        holder.execute("INSERT INTO meta(key,value) VALUES('probe','1')", []).unwrap();
+
+        let err = open(&p, "/v").err().expect("an exclusively locked database must not open");
+        assert!(!is_corruption(&err), "a lock error is not corruption: {err:?}");
+        assert!(p.exists(), "the database file must still be there");
+
+        // Release the lock and prove the rows were never destroyed.
+        drop(holder);
+        let conn = open(&p, "/v").unwrap();
+        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "open must not have wiped a database it merely could not lock");
+    }
+
+    /// The classifier behind the arm above. `SQLITE_BUSY`/`SQLITE_LOCKED` and
+    /// I/O failures are transient or environmental; only "these bytes are not
+    /// a database" earns a wipe.
+    #[test]
+    fn only_genuine_corruption_justifies_wiping_the_index() {
+        let err = |code| {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error { code, extended_code: 0 },
+                None,
+            )
+        };
+        assert!(is_corruption(&err(rusqlite::ErrorCode::NotADatabase)));
+        assert!(is_corruption(&err(rusqlite::ErrorCode::DatabaseCorrupt)));
+        assert!(!is_corruption(&err(rusqlite::ErrorCode::DatabaseBusy)));
+        assert!(!is_corruption(&err(rusqlite::ErrorCode::DatabaseLocked)));
+        assert!(!is_corruption(&err(rusqlite::ErrorCode::CannotOpen)));
+        assert!(!is_corruption(&err(rusqlite::ErrorCode::SystemIoFailure)));
+        assert!(!is_corruption(&rusqlite::Error::InvalidQuery));
     }
 
     /// End-to-end version of the same case: when the whole db path is a
