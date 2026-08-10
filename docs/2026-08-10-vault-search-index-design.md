@@ -88,7 +88,7 @@ digraph search {
 ### 3.1 体积决策(随组件确认更新)
 
 - 全平台 bundled SQLite:约 +0.9MB;jieba 词典 gzip 内嵌约 +2.5MB(裸词典 ~5MB,构建期压缩、启动时解压);pulldown-cmark 约 +0.2MB 【源 确+判 · 因 可靠性优先于体积是本次确认的取向】
-- **体积硬门更新:macOS release 二进制总增量 < 4MB,实测数字写入 PR**;README 的 "7MB 下载/11MB 安装" 表述需产品层同步更新(预计安装 ~14-15MB)——这是本次确认的显式代价,不得静默 【源 码(README 承诺;曾以体积否决 MinGit)+确 · 因 承诺变更必须外显,不能靠 PR 附注消化】
+- **体积门(2026-08-10 实测后修订为 5.0MB,原文 4MB):macOS release 二进制总增量实测 +4,096,608 B = 4.10MB 十进制 / 3.91MiB**(baseline 8,547,392 B @ f741b4d → HEAD 12,644,000 B;review 侧独立复现同一字节数)。**4.10MB 超出原定的 4MB 十进制硬门**,经人工裁决改为 5.0MB 预算并接受 —— 代码是对的,不要照旧文把它"修"回 4MB。README 的 "7MB 下载/11MB 安装" 已同步改为 "~11MB 下载 / ~15MB 安装",官网四语落地页同步 【源 码(README 承诺;曾以体积否决 MinGit)+确 · 因 承诺变更必须外显,不能靠 PR 附注消化】
 
 ### 3.2 分词器(`tokenize.rs`,索引与查询共用同一实例)
 
@@ -207,7 +207,7 @@ notemd search <query...> [--vault PATH] [--limit N=20] [--json] [--context N]
 Windows 侧从"等 pc-port"转为**本功能自带的三项 P0 工作**(原对抗性 review 已录问题,现进入本 spec 范围):
 
 1. **CLI 配置目录修复**:`cli::resolve_config_dir()` 现在 Windows 上手拼 mac 风格路径(Git Bash 得 `%HOME%\Library\...`,cmd 退化为 `.`),与 GUI 的 `%APPDATA%\net.notemd.app` 读到不同 settings 【源 码 windows-port-analysis:173-186 · 因 headless vault-root 解析依赖它,不修则 Windows CLI 根本找不到 vault】。修法:统一走 `dirs::config_dir().join(BUNDLE_ID)`(两平台都正确)。
-2. **CLI 入口**:Windows 无 symlink 分发,`is_cli_mode` 的 argv[0] 判定不可达 【源 码 windows-port-analysis:188 · 因 已知缺陷】。修法:安装器写 `notemd.cmd` shim(`@"%~dp0mdeditor.exe" --cli %*`)进 PATH——零体积、`--cli` 显式入口本就可用;AGENTS.md 的 Windows 示例注明。
+2. **CLI 入口**:Windows 无 symlink 分发,`is_cli_mode` 的 argv[0] 判定不可达 【源 码 windows-port-analysis:188 · 因 已知缺陷】。修法:安装器写 `notemd.cmd` shim 进 PATH——零体积、`--cli` 显式入口本就可用;AGENTS.md 的 Windows 示例注明。**shim 内容以实现为准:`@"%~dp0..\notemd.exe" --cli %*`**(本节初稿写的 `@"%~dp0mdeditor.exe" --cli %*` 两处都错:可执行文件叫 `notemd.exe` 不叫 `mdeditor.exe`——见"note.md 改名";且 shim 住在 `$INSTDIR\bin\`,只有那个子目录上 PATH,`%~dp0` 因此指向 `bin\`,必须回上一级才是 exe。放同级会被 PATHEXT 的 .EXE 优先级挡住——那正是 `bin\` 子目录存在的理由,见 `src-tauri/installer/hooks.nsi` 抬头)。
 3. **watcher 后端**:notify 7 在 Windows 走 ReadDirectoryChangesW,无需 `macos_fsevent` 之外的 feature 变更,但洪峰/降级行为须在两平台分别过测试 【源 码 Cargo.toml+判 · 因 两平台事件语义有差异(改名/删除的事件序不同),降级路径是兜底】。
 
 ## 7 · 指标与验收(规模锚定 库 实测:8,826 文件/149MiB;v3.1 随组件确认更新)
@@ -220,10 +220,10 @@ Windows 侧从"等 pc-port"转为**本功能自带的三项 P0 工作**(原对�
 | 查询 p50/p95(索引热) | < 10ms/30ms | 研B§3 · T1 的本分 |
 | CLI 端到端:ASCII 查询 | < 800ms | 码 cli_startup_timing · 纳入同款测试 |
 | CLI 端到端:CJK 查询(含 jieba 惰性加载) | < 1.2s | 确+判 · jieba 词典解析税只在 CJK 查询付,预算相应放宽 |
-| macOS 二进制总增量 | **< 4MB 硬门**(sqlite ~0.9 + jieba gzip ~2.5 + cmark ~0.2) | 确 · 可靠性优先的显式代价;README 体积表述需产品层同步更新 |
+| macOS 二进制总增量 | **< 5.0MB**(原 4MB;实测 +4.10MB 十进制 / 3.91MiB,人工裁决后放宽并接受) | 确 · 可靠性优先的显式代价;README + 官网四语已同步 |
 | 索引库大小 | < 2× 语料(词法分词比 bigram 省) | 判 · 实测写入 PR |
 | % resolved at T1 | ≥ 90% | 研B§11/研D-C5 · 分流健康度 |
-| Retrievability 回归集(100 条已知事实,含新词/人名/单字用例) | 100%,CI 常跑 | 研A§4 · 排序与分词盲区的守门员 |
+| Retrievability 回归集(**50** 条已知事实,含新词/人名/单字用例;原定 100 条,经人工裁决减半——语料本身只有那么多可断言的独立事实,凑数会把守门员稀释成噪音) | 100%,CI 常跑(`tests/fixtures/retrievability.json`) | 研A§4+人工裁决 · 排序与分词盲区的守门员 |
 | 删库重建一致性 | 逐字节一致(同 tokenizer_id 下) | 研A§3 · 索引=纯函数的验收形式 |
 | GUI+CLI 并发收敛 | 专项测试 | 判 §3.8 · 免协调前提必须测试锁死 |
 | **跨平台一致性**:同一 fixtures 两平台索引后,同一查询的命中集与排序一致(路径统一 `/` 后逐字段比对) | CI 双平台矩阵(macOS+Windows)常跑 | 用户需求+判 §2 规约 · "算法尽量一致"的可验收形式 |
@@ -242,14 +242,14 @@ Windows 侧从"等 pc-port"转为**本功能自带的三项 P0 工作**(原对�
 | 故障 | 降级行为 | 数据丢失 |
 | --- | --- | --- |
 | 索引库损坏/schema 或 tokenizer_id 不符 | 删库全量重建 | 否(索引可弃) |
-| jieba 词典解压/初始化失败 | 该查询降级 LIKE 有界扫描+警告;索引侧报错不写入 | 否 |
+| ~~jieba 词典解压/初始化失败~~(**已删:不可实现**) | 实现用 `OnceLock::get_or_init(Jieba::new)`,该构造不返回 `Result`——没有可观测的失败点可降级,写一条永远走不到的降级路径只会让矩阵骗人 | — |
 | CLI sweep 超时(>2s) | 用现有索引作答+stderr 警告 | 否(可能陈旧) |
 | watcher 事件洪峰(>500 文件) | 降级为一次全量 sweep | 否 |
 | watcher 崩溃/句柄失效 | 下次打开 vault 或 CLI sweep 补齐 | 否 |
 | 单字/未登录词查询(分词盲区) | LIKE 有界扫描,`route:"t1-scan"` | 否 |
 | CJK 查询 FTS 零命中 | 自动 LIKE 兜底一次,仍零命中才返回退出码 1 | 否 |
 | frontmatter 解析失败 | 字段置 NULL,正文照常索引 | 否 |
-| 单文件超护栏(>10MB) | 跳过该文件,`--stats` 可见跳过清单 | 否(rg 仍可查) |
+| 单文件超护栏(>10MB) | 跳过该文件,**并把它已有的行删出索引**(不是"留着旧行不动":那些行描述的是文件长大之前的快照,`#L120` 会指到已经不成立的行上;错引比缺引更坏),`--stats` 每次扫描都在跳过清单里解释它的缺席 | 否(rg 仍可查) |
 | GUI+CLI 并发写 | WAL 互斥+幂等替换,自然收敛 | 否 |
 | T3 claude 不可用/超时 | 返回 T1 原始命中+说明,不出分析 | 否 |
 | T3 检索证据冲突 | 并列矛盾,弃答不裁决 | 否 |
