@@ -18,5 +18,6 @@ pub mod norm;
 pub mod outline;
 pub mod paths;
 pub mod prose;
+pub mod scan;
 pub mod store;
 pub mod tokenize;
