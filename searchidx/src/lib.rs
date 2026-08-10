@@ -13,5 +13,6 @@
 pub mod block;
 pub mod frontmatter;
 pub mod norm;
+pub mod outline;
 pub mod prose;
 pub mod tokenize;
