@@ -134,10 +134,13 @@ pub fn search(
     // and the scan is capped, which is why the usual "never full-scan" rule is
     // suspended here on purpose.
     if needs_scan_fallback(q) {
-        let hits = like_search(conn, q, limit, today)?;
-        if !hits.is_empty() {
-            return Ok((hits, Route::Scan));
-        }
+        // Report `Route::Scan` regardless of whether the scan itself found
+        // anything: the route records which retrieval path actually ran, not
+        // whether it succeeded. Collapsing an attempted-but-empty scan back
+        // into `Route::Fts` would tell a caller (the CLI's `--json` output,
+        // read by agents deciding whether a query was exhaustively tried)
+        // that no fallback was attempted when one was.
+        return Ok((like_search(conn, q, limit, today)?, Route::Scan));
     }
     Ok((Vec::new(), Route::Fts))
 }
@@ -191,16 +194,31 @@ fn fts_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqli
 }
 
 fn like_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqlite::Result<Vec<Hit>> {
-    let needle = q.phrases.first().or_else(|| q.terms.first()).cloned().unwrap_or_default();
-    if needle.is_empty() {
+    // Every term and phrase must constrain the scan, ANDed — the same
+    // contract the FTS path gives via `match_expr`. Binding only the first
+    // needle (the original bug here) silently drops every other term, so a
+    // two-term query like `target 慕` would return any file containing
+    // EITHER word instead of both: a confident false positive, which is
+    // worse than the miss this fallback exists to prevent (a miss at least
+    // looks like "no results"; this looked like an answer).
+    let needles: Vec<&str> = q.terms.iter().chain(q.phrases.iter()).map(String::as_str).collect();
+    if needles.is_empty() {
         return Ok(Vec::new());
     }
+    let mut args: Vec<String> = Vec::new();
+    let clauses: Vec<String> = needles
+        .iter()
+        .map(|n| {
+            args.push(format!("%{}%", escape_like(n)));
+            format!("b.text LIKE ?{} ESCAPE '\\'", args.len())
+        })
+        .collect();
     let mut sql = format!(
         "SELECT {SELECT_COLS}, 0.0 AS rank
          FROM blocks b JOIN files f ON f.id = b.file_id
-         WHERE b.text LIKE ?1 ESCAPE '\\'"
+         WHERE {}",
+        clauses.join(" AND ")
     );
-    let mut args: Vec<String> = vec![format!("%{}%", escape_like(&needle))];
     push_filters(q, &mut sql, &mut args);
     // Hard cap: the fallback is a safety net, not a query plan.
     sql.push_str(" LIMIT 500");
@@ -228,9 +246,13 @@ fn push_filters(q: &Query, sql: &mut String, args: &mut Vec<String>) {
     };
     for t in &q.tags {
         // tags_json is a JSON array; matching the quoted value avoids `a` also
-        // matching `alpha`.
-        let i = next(args, format!("%\"{t}\"%"));
-        sql.push_str(&format!(" AND f.tags_json LIKE ?{i}"));
+        // matching `alpha`. The tag value itself must go through
+        // `escape_like` + `ESCAPE '\'` just like `path:` below — an
+        // unescaped `_` is a single-character SQL wildcard, so
+        // `tag:in_progress` would otherwise also match a file tagged
+        // `inXprogress`.
+        let i = next(args, format!("%\"{}\"%", escape_like(t)));
+        sql.push_str(&format!(" AND f.tags_json LIKE ?{i} ESCAPE '\\'"));
     }
     for t in &q.types {
         let i = next(args, t.clone());
@@ -498,6 +520,24 @@ mod tests {
         assert_eq!(route.as_str(), "t1-scan");
     }
 
+    /// Fix round 1, Critical: `like_search` used to bind only
+    /// `q.phrases.first().or_else(|| q.terms.first())`, silently dropping
+    /// every other term — a query with an ordinary term plus a dictionary
+    /// blind-spot term (this fallback's central use case) would return any
+    /// file containing EITHER, not both. Reproduced live by the reviewer on
+    /// exactly this shape. `会见了李慕白同志` forces the fallback (see the
+    /// OOV test above: `慕` shares no FTS token with the recognized
+    /// compound `李慕白`), so this also proves the fix constrains via LIKE,
+    /// not by accidentally resolving through FTS.
+    #[test]
+    fn the_bounded_scan_fallback_constrains_on_every_term_not_just_the_first() {
+        let (_d, c) = indexed(&[("both.md", "target 会见了李慕白同志\n"), ("only_target.md", "target only\n")]);
+        let (hits, route) = search(&c, &parse("target 慕"), 20, "2026-08-10").unwrap();
+        assert_eq!(route.as_str(), "t1-scan", "must genuinely exercise the fallback, not the FTS path");
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].path, "both.md");
+    }
+
     /// 引号短语必须做精确子串复核:分词是重叠的,FTS 的 AND 不保证顺序。
     #[test]
     fn a_phrase_query_rejects_hits_where_the_words_are_not_adjacent() {
@@ -530,6 +570,23 @@ mod tests {
         let hits = search(&c, &parse("target path:100%"), 20, "2026-08-10").unwrap().0;
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert_eq!(hits[0].path, "100%/a.md");
+    }
+
+    /// Fix round 1, Important: the `tag:` filter built its LIKE pattern from
+    /// the raw tag value with no `escape_like()`/`ESCAPE` clause, unlike
+    /// `path:` right above — reproduced live: `tag:in_progress` also matched
+    /// a file tagged `inXprogress`, because an unescaped `_` is a
+    /// single-character SQL wildcard. Snake_case tags are ordinary; this
+    /// pins the same literal-match treatment `path:` already gets.
+    #[test]
+    fn an_underscore_in_a_tag_filter_is_matched_literally_not_as_a_wildcard() {
+        let (_d, c) = indexed(&[
+            ("a.md", "---\ntags: [in_progress]\n---\ntarget\n"),
+            ("b.md", "---\ntags: [inXprogress]\n---\ntarget\n"),
+        ]);
+        let hits = search(&c, &parse("target tag:in_progress"), 20, "2026-08-10").unwrap().0;
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].path, "a.md");
     }
 
     #[test]
@@ -619,6 +676,20 @@ mod tests {
     fn limit_is_respected() {
         let (_d, c) = indexed(&[("a.md", "target\n"), ("b.md", "target\n"), ("c.md", "target\n")]);
         assert_eq!(search(&c, &parse("target"), 2, "2026-08-10").unwrap().0.len(), 2);
+    }
+
+    /// Fix round 1, minor: when FTS misses AND the attempted LIKE fallback
+    /// also misses, `search()` used to report `Route::Fts` — the record
+    /// would say no fallback was tried when one was. The CLI surfaces
+    /// `route` in `--json`, and agents read it to decide whether a query was
+    /// exhaustively tried, so the route must name whichever path actually
+    /// ran, not just the one that found something.
+    #[test]
+    fn a_double_miss_still_reports_the_route_that_actually_ran() {
+        let (_d, c) = indexed(&[("a.md", "target\n")]);
+        let (hits, route) = search(&c, &parse("慕"), 20, "2026-08-10").unwrap();
+        assert!(hits.is_empty(), "{hits:?}");
+        assert_eq!(route.as_str(), "t1-scan", "the fallback was attempted and found nothing; the route must say so");
     }
 
     /// FTS5 的语法字符不能把查询打成语法错误 —— agent 会原样传用户输入进来。
