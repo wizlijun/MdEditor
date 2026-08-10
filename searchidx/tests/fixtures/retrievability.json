@@ -1,0 +1,252 @@
+[
+  {
+    "query": "增量索引",
+    "expect_path": "concepts/2026-01-05-incremental.md",
+    "why": "长词直查"
+  },
+  {
+    "query": "增量",
+    "expect_path": "concepts/2026-01-05-incremental.md",
+    "why": "子词召回:cut_for_search 重叠输出"
+  },
+  {
+    "query": "增量 type:concept",
+    "expect_path": "concepts/2026-01-05-incremental.md",
+    "why": "子词召回与 type 过滤器组合"
+  },
+  {
+    "query": "李慕白",
+    "expect_path": "people/2026-01-10-meeting.md",
+    "why": "已登录复合词整词命中(经 t1-fts,而非降级兜底)"
+  },
+  {
+    "query": "慕",
+    "expect_path": "people/2026-01-10-meeting.md",
+    "why": "词典盲区单字,LIKE 兜底(t1-scan)"
+  },
+  {
+    "query": "会议 讨论",
+    "expect_path": "people/2026-01-10-meeting.md",
+    "why": "两个独立中文词的 AND 组合"
+  },
+  {
+    "query": "我",
+    "expect_path": "notes/single-char.md",
+    "why": "单字查询"
+  },
+  {
+    "query": "\"exact adjacent phrase\"",
+    "expect_path": "prose/phrase.md",
+    "why": "短语精确复核:相邻词序"
+  },
+  {
+    "query": "\"the badger and the fox\"",
+    "expect_path": "prose/adjacency.md",
+    "why": "短语精确复核:对抗同词乱序干扰"
+  },
+  {
+    "query": "brownfox tag:x",
+    "expect_path": "prose/tagged.md",
+    "why": "词项与 tag 过滤器组合"
+  },
+  {
+    "query": "fence_only_token",
+    "expect_path": "prose/fenced.md",
+    "why": "代码围栏内容可检索"
+  },
+  {
+    "query": "crlfmarker",
+    "expect_path": "prose/crlf.md",
+    "why": "CRLF 文件正常入索引"
+  },
+  {
+    "query": "目标达成",
+    "expect_path": "concepts/2026-02-10-annotation-demo.note.md",
+    "why": ".note.md 大纲节点内容可检索"
+  },
+  {
+    "query": "目标达成 ext:note.md",
+    "expect_path": "concepts/2026-02-10-annotation-demo.note.md",
+    "why": "大纲节点内容与 ext 过滤器组合"
+  },
+  {
+    "query": "决策事项",
+    "expect_path": "docs/2026-03-01-verified-fact.md",
+    "why": "human_verified 内容仍可召回"
+  },
+  {
+    "query": "决策事项",
+    "expect_path": "docs/2026-03-02-unverified-fact.md",
+    "why": "未核实内容同样可召回:降权不等于排除"
+  },
+  {
+    "query": "canonical page:[[TargetPage]]",
+    "expect_path": "docs/2026-03-10-hub.md",
+    "why": "page: 过滤器命中含出链的文件"
+  },
+  {
+    "query": "quarterly rollout path:reports",
+    "expect_path": "reports/2026-04-01-status.md",
+    "why": "path: 过滤器消歧同名文件(reports 侧)"
+  },
+  {
+    "query": "quarterly rollout path:other",
+    "expect_path": "other/2026-04-01-status.md",
+    "why": "path: 过滤器消歧同名文件(other 侧)"
+  },
+  {
+    "query": "roadmap type:concept",
+    "expect_path": "docs/2026-04-10-design-note.md",
+    "why": "type: 过滤器"
+  },
+  {
+    "query": "roadmap",
+    "expect_path": "prose/plain-thoughts.md",
+    "why": "无 frontmatter 的文件依旧可检索"
+  },
+  {
+    "query": "spelunking ext:note.md",
+    "expect_path": "docs/2026-04-15-spelunking.note.md",
+    "why": "ext: 过滤器精确选中 note.md 孪生文件"
+  },
+  {
+    "query": "spelunking ext:md",
+    "expect_path": "docs/2026-04-15-spelunking-original.md",
+    "why": "ext: 过滤器精确选中 md 孪生文件"
+  },
+  {
+    "query": "milestonemarker after:2026-01-01",
+    "expect_path": "dates/2026-05-01-new-milestone.md",
+    "why": "after: 日期过滤器(基于文件名日期前缀)"
+  },
+  {
+    "query": "milestonemarker before:2021-01-01",
+    "expect_path": "dates/2020-01-01-old-milestone.md",
+    "why": "before: 日期过滤器"
+  },
+  {
+    "query": "inferreddatetoken after:2020-01-01",
+    "expect_path": "docs/no-date-prefix-file.md",
+    "why": "doc_date 兜底到 mtime 时过滤器依旧生效"
+  },
+  {
+    "query": "tagfiltertoken tag:in_progress",
+    "expect_path": "tags/2026-05-10-inprogress.md",
+    "why": "tag: 下划线字面匹配,不误伤 tag:inXprogress"
+  },
+  {
+    "query": "tagfiltertoken",
+    "expect_path": "tags/2026-05-11-inxprogress.md",
+    "why": "无过滤器时下划线标签文件仍可通过普通词召回"
+  },
+  {
+    "query": "fts5",
+    "expect_path": "docs/2026-06-01-fts5-mixed.md",
+    "why": "ASCII 缩写词小写查询"
+  },
+  {
+    "query": "FTS5",
+    "expect_path": "docs/2026-06-01-fts5-mixed.md",
+    "why": "ASCII 缩写词大写查询,大小写不敏感"
+  },
+  {
+    "query": "FTS5 全文",
+    "expect_path": "docs/2026-06-01-fts5-mixed.md",
+    "why": "中英混排的跨语种 AND 查询"
+  },
+  {
+    "query": "全文检索",
+    "expect_path": "docs/2026-06-01-fts5-mixed.md",
+    "why": "中英混排段落中的长词直查"
+  },
+  {
+    "query": "全文",
+    "expect_path": "docs/2026-06-01-fts5-mixed.md",
+    "why": "中英混排段落中的子词召回"
+  },
+  {
+    "query": "v6",
+    "expect_path": "docs/2026-06-05-versioning.md",
+    "why": "版本号被标点拆成独立词元"
+  },
+  {
+    "query": "808",
+    "expect_path": "docs/2026-06-05-versioning.md",
+    "why": "版本号中段数字单独可检索"
+  },
+  {
+    "query": "\"v6.808.3\"",
+    "expect_path": "docs/2026-06-05-versioning.md",
+    "why": "版本号整体短语精确复核"
+  },
+  {
+    "query": "search engine",
+    "expect_path": "docs/2026-06-05-versioning.md",
+    "why": "两个普通英文词的 AND 组合"
+  },
+  {
+    "query": "function_name_here",
+    "expect_path": "docs/2026-06-10-snake-case.md",
+    "why": "下划线连接的英文标识符整词命中"
+  },
+  {
+    "query": "budget",
+    "expect_path": "docs/2026-06-15-budget-heading.md",
+    "why": "仅出现在标题/面包屑中的词仍可召回"
+  },
+  {
+    "query": "完成设计评审",
+    "expect_path": "concepts/2026-06-20-outline-tree.note.md",
+    "why": ".note.md 叶子节点自身文本直查"
+  },
+  {
+    "query": "里程碑",
+    "expect_path": "concepts/2026-06-20-outline-tree.note.md",
+    "why": ".note.md 祖先节点文本召回,为叶子提供面包屑"
+  },
+  {
+    "query": "Alpha",
+    "expect_path": "concepts/2026-06-20-outline-tree.note.md",
+    "why": ".note.md 根节点英文词召回"
+  },
+  {
+    "query": "秘密武器",
+    "expect_path": "docs/2026-06-25-no-heading-file-level.md",
+    "why": "无标题文件靠 file 级 rollup 召回"
+  },
+  {
+    "query": "卫铁蛋",
+    "expect_path": "people/2026-07-01-oov-name.md",
+    "why": "未登录复合词整词命中,与李慕白同类现象"
+  },
+  {
+    "query": "铁",
+    "expect_path": "people/2026-07-01-oov-name.md",
+    "why": "未登录复合词内部单字,词典盲区,LIKE 兜底"
+  },
+  {
+    "query": "铁蛋",
+    "expect_path": "people/2026-07-01-oov-name.md",
+    "why": "未登录复合词跨切分边界子串,词典盲区,LIKE 兜底"
+  },
+  {
+    "query": "热身索引池",
+    "expect_path": "concepts/2026-07-05-question-node.note.md",
+    "why": "type:: question 节点内容可检索"
+  },
+  {
+    "query": "冷启动",
+    "expect_path": "concepts/2026-07-05-question-node.note.md",
+    "why": "type:: annotation 回答节点内容可检索"
+  },
+  {
+    "query": "combofiltertoken tag:combo path:docs",
+    "expect_path": "docs/2026-07-10-combo-filter.md",
+    "why": "tag+path 双过滤器组合"
+  },
+  {
+    "query": "combofiltertoken tag:combo type:concept",
+    "expect_path": "docs/2026-07-10-combo-filter.md",
+    "why": "tag+type 双过滤器组合,不同过滤器顺序"
+  }
+]

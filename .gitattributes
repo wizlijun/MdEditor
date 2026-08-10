@@ -40,3 +40,10 @@
 # would make it a byte-identical copy of basic.note.md — the test would still
 # pass while verifying nothing.
 searchidx/tests/fixtures/outline/crlf.note.md -text
+
+# Same exception, same reason: the task-11 acceptance corpus's own CRLF
+# fixture (`crlfmarker` in tests/fixtures/retrievability.json) must survive
+# git's clean/smudge filters untouched, or a fresh checkout silently turns it
+# into a plain LF file and the "CRLF files index correctly" acceptance case
+# stops testing anything.
+searchidx/tests/fixtures/corpus/prose/crlf.md -text
