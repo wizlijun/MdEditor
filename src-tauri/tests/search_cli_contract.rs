@@ -157,3 +157,81 @@ fn context_flag_prints_surrounding_lines() {
     assert!(text.contains("two"), "{text}");
     assert!(text.contains("four"), "{text}");
 }
+
+/// Review round 1, Important #2: `--context` used to compute exit code from
+/// the pre-print hit list, not from what was actually printed. If a file
+/// shrinks between the (stale, `--no-sweep`-held) index and the print pass —
+/// an ordinary edit landing in the same window a real freshness sweep would
+/// cover in normal operation — a hit's recorded line range can point past the
+/// file's current end, `context_lines` used to emit nothing for it, and the
+/// command still exited 0. For a grep-shaped tool, exit 0 is a promise that
+/// there is output to read; an agent that trusts it would treat silence as a
+/// successful empty answer instead of retrying or falling back to `rg`.
+///
+/// Reproduced deterministically (not by racing a real sweep) by holding one
+/// index across two invocations that share a `HOME`: the first call builds a
+/// real index while the fixture genuinely has "brownfox" on line 3; the file
+/// is then truncated to one line; the second call passes `--no-sweep` so the
+/// stale row survives, and prints against the now-shrunk file.
+#[test]
+fn a_stale_context_hit_is_dropped_and_the_exit_code_follows_what_was_actually_printed() {
+    // Blank-line-separated paragraphs, unlike `context_flag_prints_surrounding_lines`'s
+    // fixture above: that one is a single soft-wrapped paragraph spanning
+    // lines 1-5, so its hit's `line_end` (5) never exceeds a merely-shrunk
+    // file. Here each word is its own block, so "brownfox" indexes as a hit
+    // pinned to line 5 specifically — the shape needed to push `line_end`
+    // past the truncated file's length below.
+    let v = vault(&[("a.md", "one\n\ntwo\n\nbrownfox\n\nfour\n\nfive\n")]);
+    let home = temp_home();
+
+    let mut build = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    build.arg("--cli").arg("search").arg("brownfox").arg("--vault").arg(v.path());
+    isolate(&mut build, &home);
+    let built = build.output().unwrap();
+    assert_eq!(
+        built.status.code(), Some(0),
+        "sanity: the index must find the term before truncation; stderr: {}",
+        String::from_utf8_lossy(&built.stderr),
+    );
+
+    // The file shrinks out from under the (now stale) index — line 3 no
+    // longer exists.
+    std::fs::write(v.path().join("a.md"), "only one line now\n").unwrap();
+
+    let mut query = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    query
+        .arg("--cli").arg("search").arg("brownfox")
+        .arg("--context").arg("1")
+        .arg("--no-sweep")
+        .arg("--vault").arg(v.path());
+    isolate(&mut query, &home);
+    let out = query.output().unwrap();
+    let _ = std::fs::remove_dir_all(&home);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.is_empty(), "a hit whose lines no longer exist must print nothing, not a stale citation: {stdout}");
+    assert_eq!(
+        out.status.code(), Some(1),
+        "exit code must agree with stdout being empty (no output was printed), not with what the stale index believed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// Review round 1, Minor: the non-context path runs every line through
+/// `one_line` (collapse + 200-char cap) so one huge paragraph can't flood an
+/// agent's context; `--context` used to print raw trimmed lines instead,
+/// losing that cap for exactly the mode most likely to pull in a long line
+/// (a giant table row, a URL) as a neighbor.
+#[test]
+fn context_output_is_length_capped_like_the_default_output() {
+    let long_line = format!("brownfox {}", "x".repeat(500));
+    let v = vault(&[("a.md", &format!("{long_line}\n"))]);
+    let out = search(v.path(), &["brownfox", "--context", "1"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!text.trim().is_empty(), "sanity: must have found the hit");
+    assert!(
+        text.lines().all(|l| l.chars().count() < 300),
+        "a long line in --context output must be capped like the default path: {} chars: {text}",
+        text.lines().map(|l| l.chars().count()).max().unwrap_or(0),
+    );
+}

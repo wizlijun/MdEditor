@@ -327,7 +327,7 @@ DESCRIPTION:
 
 FLAGS:
   --vault <path>    Vault root (default: the configured Vault)
-  --json            Emit {query, route, took_ms, hits: [...]}
+  --json            Emit {query, route, took_ms, total, hits: [...]}
   --limit <n>       Max hits (default: 20)
   --context <n>     Print N lines of context around each hit
   --tag <t>         Filter: tag:<t>
@@ -340,13 +340,15 @@ FLAGS:
   --rebuild         Force a full rebuild before searching
   --no-sweep        Skip the bounded freshness sweep (answer from what's indexed)
 
-NOTES:
-  Exit code 0 = hits found, 1 = no hits (not an error — nothing to branch on
-  but 'try something else'), 2 = no Vault configured/found, or a missing
-  query. Retrieval never fails because the index is unhappy: an unusable
-  index, or a freshness sweep that runs past its 2s budget, degrades to a
-  direct file scan (or an answer from the existing index) with a one-line
-  warning on stderr instead of an error.
+Retrieval never fails because the index is unhappy: an unusable index, or a
+freshness sweep that runs past its 2s budget, degrades to a direct file scan
+(or an answer from the existing index) with a one-line warning on stderr
+instead of an error.
+
+EXIT CODES:
+  0    Output was printed — one or more hits (or --stats/--rebuild ran)
+  1    No hits — not an error, nothing to branch on but 'try something else'
+  2    No Vault configured/found, or a missing query
 ",
         "reading-insights" => "\
 notemd reading-insights — Reading Insights (engagement) report
@@ -370,10 +372,19 @@ reading) stats are shown in the in-app Reading Insights window.
     };
 
     let mut out = body.to_string();
-    out.push_str("\nEXIT CODES:\n");
-    out.push_str("  0    Success\n");
-    out.push_str("  1    Runtime error\n");
-    out.push_str("  2    File or argument error\n");
+    // Most core topics share this generic 0/1/2 footer, but a topic whose own
+    // exit codes mean something more specific (`search`'s 1 is "no hits", not
+    // a runtime error) writes its own `EXIT CODES:` section instead — appending
+    // the generic one on top would tell an agent two contradictory things
+    // about the exit code it will hit most often. `contains` rather than a
+    // per-topic flag so this stays correct automatically if another topic
+    // later grows its own accurate block.
+    if !body.contains("EXIT CODES:") {
+        out.push_str("\nEXIT CODES:\n");
+        out.push_str("  0    Success\n");
+        out.push_str("  1    Runtime error\n");
+        out.push_str("  2    File or argument error\n");
+    }
     Some(out)
 }
 
@@ -1558,6 +1569,37 @@ mod tests {
         assert_eq!(share_rows, 1, "share must appear exactly once, got:\n{out}");
         assert!(!out.contains("PLUGIN COMMANDS:"),
             "core stubs must never render a PLUGIN COMMANDS section:\n{out}");
+    }
+    /// Review round 1, Important #1: `render_core_topic` used to append a
+    /// generic "1 Runtime error" footer underneath every topic's own body,
+    /// including `search`'s, which already states "1 = no hits (not an
+    /// error)" — the one document written specifically so an agent can branch
+    /// on exit codes contradicted itself about the exit code it hits most
+    /// often. Pin that `search` states its exit codes exactly once, and that
+    /// the generic/contradictory wording is nowhere in the topic.
+    #[test]
+    fn help_search_topic_states_exit_codes_once_and_without_the_generic_contradiction() {
+        let out = render_help(Some("search"), false, &[], &HashMap::new());
+        assert_eq!(
+            out.matches("EXIT CODES:").count(), 1,
+            "exit codes must appear exactly once, not doubled by the generic footer:\n{out}"
+        );
+        assert!(out.contains("No hits"), "exit 1 must be documented as 'no hits':\n{out}");
+        assert!(!out.contains("Runtime error"), "the generic footer's contradictory wording must not appear:\n{out}");
+    }
+    /// The other core topics must keep getting the generic footer — this is
+    /// what proves the `body.contains("EXIT CODES:")` guard is scoped to
+    /// `search` alone, not a regression that silently dropped it everywhere.
+    #[test]
+    fn other_core_topics_still_get_the_generic_exit_codes_footer() {
+        for topic in ["help", "version", "plugin", "share"] {
+            let out = render_help(Some(topic), false, &[], &HashMap::new());
+            assert_eq!(
+                out.matches("EXIT CODES:").count(), 1,
+                "topic {topic} must show exit codes exactly once:\n{out}"
+            );
+            assert!(out.contains("Runtime error"), "topic {topic} must keep the generic footer:\n{out}");
+        }
     }
     #[test] fn help_share_topic_documents_every_stub_flag() {
         // 契约对齐：share stub 的 cli entry 声明的每个 flag 长名，都必须出现在

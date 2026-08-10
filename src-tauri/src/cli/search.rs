@@ -195,12 +195,19 @@ pub fn run(args: SearchArgs) -> ExitCode {
     };
 
     let took = started.elapsed().as_millis();
-    if args.json {
+    // Exit code must reflect what actually reached stdout, not what the index
+    // believes exists — see `print_plain`: a `--context` hit whose recorded
+    // line range no longer resolves against the on-disk file (e.g. the file
+    // shrank between the freshness sweep and printing) is dropped rather than
+    // printed, and a caller reading exit 0 as "there is output" must not be
+    // lied to.
+    let printed = if args.json {
         print_json(&query, route, took, &hits);
+        hits.len()
     } else {
-        print_plain(&root, &hits, args.context);
-    }
-    if hits.is_empty() { ExitCode::from(1) } else { ExitCode::from(0) }
+        print_plain(&root, &hits, args.context)
+    };
+    if printed == 0 { ExitCode::from(1) } else { ExitCode::from(0) }
 }
 
 fn scan_options(root: &Path) -> ScanOptions {
@@ -249,27 +256,52 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
     out
 }
 
-fn print_plain(root: &Path, hits: &[searchidx::Hit], context: usize) {
+/// Prints hits grep-style and returns how many *lines* actually reached
+/// stdout — the caller's exit code follows this, not `hits.len()`, precisely
+/// because a `--context` hit can resolve to nothing (see `context_lines`).
+fn print_plain(root: &Path, hits: &[searchidx::Hit], context: usize) -> usize {
+    let mut printed = 0usize;
     for h in hits {
         if context > 0 {
-            for (n, text) in context_lines(root, h, context) {
-                println!("{}:{}:{}", h.path, n, text);
+            let Some(lines) = context_lines(root, h, context) else {
+                // The file no longer has this hit's recorded line range (it
+                // shrank, or vanished, since the hit was indexed). A stale
+                // citation is worse than a dropped one — see `context_lines`.
+                continue;
+            };
+            for (n, text) in lines {
+                println!("{}:{}:{}", h.path, n, one_line(&text));
+                printed += 1;
             }
         } else {
             println!("{}:{}:{}", h.path, h.line, one_line(&h.text));
+            printed += 1;
         }
     }
+    printed
 }
 
-fn context_lines(root: &Path, hit: &searchidx::Hit, context: usize) -> Vec<(u32, String)> {
-    let Ok(raw) = std::fs::read_to_string(root.join(&hit.path)) else {
-        return vec![(hit.line, one_line(&hit.text))];
-    };
+/// `None` when the hit's line range can no longer be honestly resolved
+/// against the *current* on-disk file — unreadable/gone, or (the case a
+/// `--context` request can hit that a plain hit never does, since only this
+/// path re-reads the file) the file has shrunk since the hit was indexed, so
+/// `hit.line`/`hit.line_end` point past its current end. That happens for real
+/// in the ordinary window between a freshness sweep and printing: an edit can
+/// land in between. Printing stale line numbers there would be a wrong
+/// citation, which is worse than silently having fewer results, so the
+/// caller drops the hit instead — see `print_plain`.
+fn context_lines(root: &Path, hit: &searchidx::Hit, context: usize) -> Option<Vec<(u32, String)>> {
+    let raw = std::fs::read_to_string(root.join(&hit.path)).ok()?;
     let text = searchidx::norm::strip_cr(&raw);
     let lines: Vec<&str> = text.lines().collect();
     let from = hit.line.saturating_sub(context as u32).max(1);
     let to = (hit.line_end as usize + context).min(lines.len()) as u32;
-    (from..=to).filter_map(|n| lines.get(n as usize - 1).map(|l| (n, l.trim().to_string()))).collect()
+    if from > to || lines.is_empty() {
+        return None;
+    }
+    let out: Vec<(u32, String)> =
+        (from..=to).filter_map(|n| lines.get(n as usize - 1).map(|l| (n, l.trim().to_string()))).collect();
+    (!out.is_empty()).then_some(out)
 }
 
 /// Collapse a multi-line block to one grep-shaped line, capped so a long
