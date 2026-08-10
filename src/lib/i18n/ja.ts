@@ -672,8 +672,6 @@ export const ja: Record<keyof Messages, string> = {
   'ctxmenu.highlight': 'ハイライト',
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': '注釈',
-  'ctxmenu.excerpt': 'サイドノートに抜き書き',
-  'excerpt.failed': 'サイドノートに抜き書きを書き込めませんでした。',
   'ctxmenu.question': '質問',
   'ctxmenu.bold': '太字',
   'ctxmenu.italic': 'イタリック',

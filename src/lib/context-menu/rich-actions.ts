@@ -79,7 +79,7 @@ async function pasteText(view: EditorView) {
 
 export function createRichActions(
   view: EditorView,
-  opts: { imageEl?: HTMLImageElement; filePath?: string | null } = {},
+  opts: { imageEl?: HTMLImageElement } = {},
 ): EditorActions {
   return {
     canRun(id) {
@@ -104,24 +104,6 @@ export function createRichActions(
           view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)))
           view.focus(); return
         case 'wikilink':  return wrapWikilink(view)
-        case 'excerpt': {
-          // Read-only surfaces (mdx) cannot carry a mark, so the quoted text
-          // itself becomes the anchor inside the sidecar note.
-          const { from, to } = view.state.selection
-          const text = view.state.doc.textBetween(from, to, '\n')
-          const { excerptToNote } = await import('../outline/excerpt-command')
-          const { pushToast } = await import('../toast.svelte')
-          const { t } = await import('../i18n/store.svelte')
-          const res = await excerptToNote(opts.filePath ?? '', text)
-          if (res.ok) {
-            const { setSideVisible, setActiveView } = await import('../side-panel/registry.svelte')
-            await setActiveView('right', 'outline-notes')
-            await setSideVisible('right', true)
-          } else if (res.reason !== 'empty') {
-            pushToast({ level: 'error', message: t('excerpt.failed') })
-          }
-          return
-        }
         case 'note': {
           const { insertNoteRich } = await import('../note-anno/note-commands')
           return insertNoteRich(view)
