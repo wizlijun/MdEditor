@@ -52,37 +52,50 @@ pub struct FileRow {
 /// path: the index is disposable derived data, and rebuild is always
 /// correct while repair logic never fully is.
 ///
-/// Bounded: this makes at most one wipe-and-retry attempt. If the path is
-/// genuinely unopenable (e.g. its parent cannot exist), the second attempt
-/// fails too and that error is returned — it does not loop.
+/// Control flow is straight-line, not recursive: `try_open` is called
+/// exactly once, and if it reports the file needs wiping (or fails to open
+/// at all), at most one wipe and one fresh-schema creation follow — never a
+/// retry loop. The wipe's *result* is verified (`wipe` reports whether the
+/// file is actually gone) rather than assumed, because `remove_file` can
+/// fail silently for reasons outside this process's control — most
+/// realistically on Windows, where another process (the GUI or the CLI,
+/// whichever isn't this one) holding the file open blocks deletion. If the
+/// wipe didn't take, this returns an `Err` instead of looping or — worse —
+/// silently continuing to use a database that is still stale: a stale
+/// index answering queries under the wrong tokenizer is a wrong-results bug
+/// dressed up as a working one, which is worse than failing loudly.
 pub fn open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     match try_open(db_path, vault_root) {
-        Ok(conn) => Ok(conn),
-        Err(_) => {
-            wipe(db_path);
-            try_open(db_path, vault_root)
-        }
+        Ok(Opened::Ready(conn)) => return Ok(conn),
+        Ok(Opened::Stale) | Err(_) => {}
     }
+    if !wipe(db_path) {
+        return Err(rusqlite::Error::InvalidPath(db_path.to_path_buf()));
+    }
+    create_fresh(db_path, vault_root)
 }
 
-/// May recurse exactly once more, from the "stale schema/tokenizer" branch:
-/// that branch wipes the file and retries, and the retry always lands in
-/// the "no meta table yet" branch (a freshly created file has none), which
-/// creates the schema and returns without recursing further. So the total
-/// call depth from a single `try_open` is bounded at 2.
-fn try_open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection> {
+/// The outcome of a single open-and-inspect attempt against an existing (or
+/// newly created) file.
+enum Opened {
+    /// A connection whose `meta` table (freshly created or pre-existing)
+    /// matches the current `SCHEMA_VERSION`/`TOKENIZER_ID` — safe to use.
+    Ready(Connection),
+    /// The file opened, but its `meta` table disagrees with the current
+    /// schema/tokenizer. The caller must wipe the file and start over; this
+    /// function does not do that itself, so it never needs to re-enter.
+    Stale,
+}
+
+/// Open `db_path` and classify what was found. Never recurses and never
+/// wipes anything itself — wiping is the caller's job, done at most once,
+/// in `open`.
+fn try_open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Opened> {
     let conn = Connection::open(db_path)?;
-    // `PRAGMA journal_mode=WAL` returns a row with the resulting mode, so it
-    // cannot go through `pragma_update` (which errors on statements that
-    // yield results) — read it back via `query_row` instead, which also
-    // proves WAL genuinely took effect rather than merely not-erroring.
-    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
-    debug_assert_eq!(mode.to_lowercase(), "wal");
-    conn.pragma_update(None, "busy_timeout", 5000)?;
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    set_pragmas(&conn)?;
 
     let has_meta: bool = conn
         .query_row(
@@ -92,33 +105,66 @@ fn try_open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection> {
         )
         .map(|n| n > 0)?;
 
-    if has_meta {
-        let ok = meta_get(&conn, "schema_version").as_deref() == Some(&SCHEMA_VERSION.to_string())
-            && meta_get(&conn, "tokenizer_id").as_deref() == Some(TOKENIZER_ID);
-        if ok {
-            // vault_root can change if the same cache slot is reused; stamp it.
-            meta_set(&conn, "vault_root", vault_root)?;
-            return Ok(conn);
-        }
-        drop(conn);
-        wipe(db_path);
-        return try_open(db_path, vault_root);
+    if !has_meta {
+        stamp_fresh_schema(&conn, vault_root)?;
+        return Ok(Opened::Ready(conn));
     }
 
-    conn.execute_batch(SCHEMA_SQL)?;
-    meta_set(&conn, "schema_version", &SCHEMA_VERSION.to_string())?;
-    meta_set(&conn, "tokenizer_id", TOKENIZER_ID)?;
+    let ok = meta_get(&conn, "schema_version").as_deref() == Some(&SCHEMA_VERSION.to_string())
+        && meta_get(&conn, "tokenizer_id").as_deref() == Some(TOKENIZER_ID);
+    if !ok {
+        drop(conn);
+        return Ok(Opened::Stale);
+    }
+    // vault_root can change if the same cache slot is reused; stamp it.
     meta_set(&conn, "vault_root", vault_root)?;
+    Ok(Opened::Ready(conn))
+}
+
+/// Open a file that is known to not exist yet (just created, or just
+/// wiped) and build the schema on it. Never called on a file that might
+/// already have a `meta` table — `try_open` owns that check.
+fn create_fresh(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection> {
+    let conn = Connection::open(db_path)?;
+    set_pragmas(&conn)?;
+    stamp_fresh_schema(&conn, vault_root)?;
     Ok(conn)
 }
 
-fn wipe(db_path: &Path) {
+fn stamp_fresh_schema(conn: &Connection, vault_root: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(SCHEMA_SQL)?;
+    meta_set(conn, "schema_version", &SCHEMA_VERSION.to_string())?;
+    meta_set(conn, "tokenizer_id", TOKENIZER_ID)?;
+    meta_set(conn, "vault_root", vault_root)?;
+    Ok(())
+}
+
+fn set_pragmas(conn: &Connection) -> rusqlite::Result<()> {
+    // `PRAGMA journal_mode=WAL` returns a row with the resulting mode, so it
+    // cannot go through `pragma_update` (which errors on statements that
+    // yield results) — read it back via `query_row` instead, which also
+    // proves WAL genuinely took effect rather than merely not-erroring.
+    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+    debug_assert_eq!(mode.to_lowercase(), "wal");
+    conn.pragma_update(None, "busy_timeout", 5000)?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(())
+}
+
+/// Delete the database file at `db_path` (best-effort for its `-wal`/`-shm`
+/// sidecars — SQLite recreates those on demand, so leaving a stray one
+/// behind is harmless) and report whether the *main* file is actually gone
+/// afterward. `remove_file`'s own `Result` is not trusted on its own: the
+/// caller needs to know the file is really gone, not just that the removal
+/// call didn't error, so this re-checks with `Path::exists`.
+fn wipe(db_path: &Path) -> bool {
     let _ = std::fs::remove_file(db_path);
     for suffix in ["-wal", "-shm"] {
         let mut p = db_path.as_os_str().to_os_string();
         p.push(suffix);
         let _ = std::fs::remove_file(Path::new(&p));
     }
+    !db_path.exists()
 }
 
 pub fn meta_get(conn: &Connection, key: &str) -> Option<String> {
@@ -346,14 +392,49 @@ mod tests {
 
     /// A path that can never become a valid sqlite file (its parent does not
     /// exist and cannot be created because a same-named file is in the way)
-    /// must return an `Err`, not recurse forever.
+    /// must return an `Err`, not loop.
     #[test]
-    fn an_unopenable_path_returns_an_error_instead_of_recursing_forever() {
+    fn an_unopenable_path_returns_an_error_instead_of_looping_forever() {
         let (_d, root) = tmp();
         // Make `root`'s would-be parent a plain file, so `db_path`'s parent
         // directory can never exist.
         std::fs::write(&root, b"not a directory").unwrap();
         let bogus = root.join("nested").join("index.db");
         assert!(open(&bogus, "/v").is_err());
+    }
+
+    /// `wipe` must report whether the file is actually gone, not merely
+    /// whether `remove_file` failed to error — that distinction is what lets
+    /// `open`'s stale-database branch be straight-line control flow instead
+    /// of a retry loop that assumes deletion succeeded. A directory is a
+    /// deterministic way to make `remove_file` fail on every platform,
+    /// including as root (unlike a permission-denied/chmod case, which is a
+    /// silent no-op when the test runner is root).
+    #[test]
+    fn wipe_reports_whether_the_file_is_actually_gone() {
+        let d = tempfile::tempdir().unwrap();
+
+        let regular = d.path().join("regular.db");
+        std::fs::write(&regular, b"x").unwrap();
+        assert!(wipe(&regular), "a plain file must be reported removed");
+        assert!(!regular.exists());
+        assert!(wipe(&regular), "wiping an already-gone path is still success");
+
+        let blocked = d.path().join("blocked.db");
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(!wipe(&blocked), "a directory cannot be removed by remove_file; wipe must say so");
+    }
+
+    /// End-to-end version of the same case: when the whole db path is a
+    /// directory, `Connection::open` fails immediately, `open`'s
+    /// wipe-and-recreate path kicks in, and `wipe` fails too (directories
+    /// can't be removed by `remove_file`). `open` must surface that as an
+    /// `Err` rather than looping against a target that's still there.
+    #[test]
+    fn open_returns_an_error_when_the_db_path_cannot_be_wiped() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("index.db");
+        std::fs::create_dir(&p).unwrap();
+        assert!(open(&p, "/v").is_err());
     }
 }
