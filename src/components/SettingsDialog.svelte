@@ -63,9 +63,17 @@
   // and something skipped consuming it. Assigning `selectedTab` while closed
   // is harmless; it just means the dialog is already on the right tab by
   // the time it's shown.
+  //
+  // The flag is consumed unconditionally (before any decision below), but a
+  // request for a tab this platform doesn't render is dropped rather than
+  // honoured: iOS has no search commands and no `open_search_logs_window`,
+  // so the tab button is `!isIOSPlatform`-gated in the strip and landing on
+  // it via this path would show a page nothing can populate.
   $effect(() => {
     const tab = consumePendingSettingsTab()
-    if (tab) selectedTab = tab
+    if (!tab) return
+    if (tab === 'search' && isIOSPlatform) return
+    selectedTab = tab
   })
 
   // Vault-scoped sync folder (stored in {vault}/.notemd/settings.json). Loaded
@@ -320,14 +328,34 @@
     }
   })
 
-  // Live-updates the search tab while it's open: `search://progress` during a
-  // rebuild, `search://index-updated` once one finishes (win or lose) so the
-  // stats table picks up the new counts. Torn down automatically whenever
-  // `selectedTab` moves away from 'search' or the dialog closes (the whole
-  // `{#if open}` block unmounts), same $effect-return-cleanup idiom as
-  // `SearchPanel.svelte`'s own event subscription.
+  // Everything the Search & Index tab needs on entry, in ONE place keyed on
+  // "the tab is showing" — deliberately not split between here and the tab
+  // strip's `onclick`. That split is what made the gear button in
+  // `SearchPanel.svelte` (which routes through `openSettings('search')` →
+  // `pendingSettingsTab` → `selectedTab`, never touching the tab button)
+  // render a fully built index as "— / — / Last built: Never / no files are
+  // currently skipped" — an affirmative false claim on the very panel built
+  // to explain why a file is missing from search. Any future entry point
+  // that lands on this tab gets the data load for free.
+  //
+  //  - `refresh()`: initial snapshot (stats + a poll of `progress()` so a
+  //    page opened mid-rebuild isn't blank until the next event).
+  //  - `searchThresholdDraft`: re-derived on every entry, not only when the
+  //    dialog first opens — otherwise editing the git gate on the Vault tab
+  //    and switching here (without closing the dialog) shows a stale
+  //    effective value that contradicts the hint text under the input.
+  //    Reading `vaultSettings.searchLargeFileThresholdMb` here also makes
+  //    that the effect's dependency, so the draft follows a live change to
+  //    the gate while the tab is already open.
+  //  - the returned unsubscribe: live `search://progress` /
+  //    `search://index-updated` while the tab is showing, torn down whenever
+  //    `selectedTab` moves away or the dialog closes (the whole `{#if open}`
+  //    block unmounts) — same $effect-return-cleanup idiom as
+  //    `SearchPanel.svelte`'s own event subscription.
   $effect(() => {
     if (selectedTab !== 'search') return
+    void indexStatus.refresh()
+    searchThresholdDraft = vaultSettings.searchLargeFileThresholdMb
     return indexStatus.subscribe()
   })
 
@@ -617,19 +645,18 @@
         {#if isIOSPlatform}
           <button class:active={selectedTab === 'vault'} onclick={() => selectedTab = 'vault'}>{t('settings.tab.vault')}</button>
         {/if}
-        <button class:active={selectedTab === 'search'}
-                onclick={() => {
-                  selectedTab = 'search'
-                  void indexStatus.refresh()
-                  // Review round 1, finding 2: re-derive on every tab entry,
-                  // not only when the dialog first opens — otherwise editing
-                  // the git gate on the Vault tab and switching here (without
-                  // closing the dialog) shows a stale effective value that
-                  // contradicts the hint text right below the input.
-                  searchThresholdDraft = vaultSettings.searchLargeFileThresholdMb
-                }}>
-          {t('settings.tab.search')}
-        </button>
+        {#if !isIOSPlatform}
+          <!-- iOS registers no search commands at all (see the `#[cfg(not(
+               target_os = "ios"))]` gates in src-tauri) and
+               `open_search_logs_window` doesn't exist there either, so this
+               tab could only ever show a no-vault message plus a View-logs
+               button that errors on click. Gated like CLI/Updates above.
+               Data loading lives in the `selectedTab === 'search'` $effect,
+               not here — see its comment for why. -->
+          <button class:active={selectedTab === 'search'} onclick={() => selectedTab = 'search'}>
+            {t('settings.tab.search')}
+          </button>
+        {/if}
         <button class:active={selectedTab === 'outline-notes'} onclick={() => selectedTab = 'outline-notes'}>{t('settings.tab.outline')}</button>
         {#each pluginTabs as ptab (ptab.pluginId)}
           <button class:active={selectedTab === ptab.pluginId} onclick={() => selectedTab = ptab.pluginId}>{pluginTabLabel(ptab.manifest, ptab.label)}</button>
