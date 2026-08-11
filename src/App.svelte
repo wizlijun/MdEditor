@@ -55,6 +55,7 @@
   import { platform, isIOS } from './lib/platform.svelte'
   import { vaultStore, refreshStatus, syncNow, attachStatusListener } from './lib/vault.svelte'
   import { canSyncActive, isTrackedVaultFile, deviceSourceForVaultPath, isMirroredSource, refreshSotvault, sotvaultStore, setVaultRootChangedHandler, initSotvaultNoteConflictToast } from './lib/sotvault.svelte'
+  import { indexStatus } from './lib/search/index-status.svelte'
   import { windowTitleFor } from './lib/window-title'
   import { installRecentsSync, refreshRecentMenu, mergedRecents } from './lib/recent-sync.svelte'
   import { maybeInstallTracker, shutdownTracker } from './lib/insights/tracker.svelte'
@@ -531,7 +532,13 @@
     // — at startup (post-plugin-init) or when the user configures a vault mid-
     // session — (re)installs the tracker idempotently. A direct call covers the
     // case where the root was already loaded before this handler was registered.
-    setVaultRootChangedHandler(() => { void maybeInstallTracker(); void ensureWikilinkBlocklist(); void defaultRootToVault(sotvaultStore.vaultRoot) })
+    // `indexStatus.reset()`: the index status cache is per-vault (file/block
+    // counts, db size, built-at, and the skipped-for-size list). The backend
+    // clears its own `SkippedState` on a vault switch precisely so one
+    // vault's oversize files can never be attributed to another; keeping the
+    // frontend snapshot would undo that at the display layer — the settings
+    // page would describe the previous vault until something refreshed it.
+    setVaultRootChangedHandler(() => { indexStatus.reset(); void maybeInstallTracker(); void ensureWikilinkBlocklist(); void defaultRootToVault(sotvaultStore.vaultRoot) })
     // 镜像的伴生笔记要在 front-matter 里记下源文件(OKF §5.1)。store 不直接依赖
     // sotvault(会成环),所以解析器在这里注入。
     setMirrorSourceResolver((mainPath) => deviceSourceForVaultPath(mainPath))
