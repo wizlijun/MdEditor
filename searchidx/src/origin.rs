@@ -261,6 +261,32 @@ mod tests {
     fn note_md_beats_generated_by() {
         assert_eq!(derive("a.note.md", Some(&fm("generated:\n  by: claude/1")), "sync"), Origin::Human);
     }
+    /// The classification this whole feature exists to get right, end to end
+    /// through the frontmatter reader, in the exact shape
+    /// `src-tauri/templates/AGENTS.md` tells every agent to write: a `type:`
+    /// from its own type table plus a **flow-form** `generated:` stamp. Until
+    /// the reader learned the flow form, rule 2 never fired for these files,
+    /// rule 4 caught them on `Note`, and agent output landed in `Human` —
+    /// spec §3.2's explicitly-named expensive direction ("AI 产物混进最该被
+    /// 信任的一层"). Written against `frontmatter::parse` rather than a
+    /// hand-built `Frontmatter` on purpose: a hand-built value cannot regress
+    /// this, because the defect was entirely in the reader.
+    #[test]
+    fn an_agent_stamp_in_agents_md_flow_form_is_derived_not_human() {
+        let f = fm("type: Note\ngenerated: { by: claude-code/opus-5, at: 2026-08-03T14:22:00Z }");
+        assert_eq!(
+            derive("notes/a.md", Some(&f), "sync"),
+            Origin::Derived,
+            "a flow-form `generated.by` must fire rule 2 before rule 4 maps `Note` to Human"
+        );
+        // The mirror image: a human's own inline signature must not lose its
+        // tier either (rule 3), which costs x1.25 AND the x1.1 human_verified
+        // boost when it is missed.
+        let v = fm("type: Book Summary\nverified: [{ by: human:bruce, at: 2026-08-03T14:22:00Z }]");
+        assert_eq!(derive("notes/b.md", Some(&v), "sync"), Origin::Human);
+        assert!(v.human_verified, "and the x1.1 boost must survive too");
+    }
+
     /// Priority: rule 4 beats rule 5 — a summary sitting in the mirror
     /// directory is still an AI summary, not raw material just because of
     /// where it lives.

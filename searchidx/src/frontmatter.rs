@@ -79,7 +79,7 @@ pub fn parse(raw: &str) -> Frontmatter {
                 };
             }
             "generated" => {
-                for entry in collect_block(&mut lines) {
+                for entry in entries_for(value, &mut lines) {
                     match split_key(entry.trim().trim_start_matches("- ")) {
                         Some(("at", v)) => fm.generated_at = scalar(v),
                         Some(("by", v)) => fm.generated_by = scalar(v),
@@ -88,7 +88,7 @@ pub fn parse(raw: &str) -> Frontmatter {
                 }
             }
             "verified" => {
-                for entry in collect_block(&mut lines) {
+                for entry in entries_for(value, &mut lines) {
                     if let Some(("by", v)) = split_key(entry.trim().trim_start_matches("- ")) {
                         if scalar(v).is_some_and(|s| s.starts_with("human:")) {
                             fm.human_verified = true;
@@ -100,6 +100,67 @@ pub fn parse(raw: &str) -> Frontmatter {
         }
     }
     fm
+}
+
+/// The `key: value` entries belonging to a mapping-valued key, whichever of
+/// YAML's two shapes the author used:
+///
+/// ```text
+/// generated:                                    # block form
+///   by: claude-code/opus-5
+/// generated: { by: claude-code/opus-5 }         # flow form
+/// verified: [{ by: human:bruce }]               # flow sequence of mappings
+/// ```
+///
+/// The flow form is not an exotic case here: it is the **only** form
+/// `src-tauri/templates/AGENTS.md` documents — the convention block written
+/// into every vault's `AGENTS.md` shows `generated: { by, at }` and
+/// `verified: [{ by, at }]` on one line, and the claude-agent plugin
+/// (`plugins-src/claude-agent/backend/src/okf.rs`) stamps exactly that. Only
+/// reading the block form meant `origin::derive`'s rules 2 and 3 silently
+/// never fired for documents written to this project's own published
+/// convention: agent output reached the `Human` tier through rule 4, and a
+/// person's inline `human:` signature lost both its tier and its
+/// `human_verified` boost.
+///
+/// An empty value means the block form (the value is on the following
+/// indented lines); anything else is parsed as flow and the block is left
+/// alone. Not consuming the following lines in that case is safe — `parse`'s
+/// main loop skips every whitespace-led line anyway, so nothing leaks into a
+/// column-0 key.
+fn entries_for<'a>(
+    value: &str,
+    lines: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>,
+) -> Vec<String> {
+    if value.trim().is_empty() {
+        collect_block(lines)
+    } else {
+        parse_inline_entries(value)
+    }
+}
+
+/// Split a flow mapping/sequence into the same flat `key: value` entry
+/// strings [`collect_block`] produces, so both shapes share one consumer.
+///
+/// Flattening a sequence's mappings into one list is exactly what the block
+/// form already does (`collect_block` returns every indented line of a
+/// `- by:` list as one `Vec`), and it is what OKF §11 asks for from the other
+/// direction: a bare mapping MUST be readable as a single-element list, so
+/// `{ … }` and `[{ … }]` must not be distinguishable here.
+///
+/// Deliberately character-level, not a YAML parse: the braces/brackets are
+/// only trimmed off each comma-separated part's ends, never removed from the
+/// middle, and the `key: value` split is left to `split_key`, so a value
+/// containing a colon survives exactly as it does in the block form. Every
+/// unparseable shape degrades to an entry `split_key` rejects — it must never
+/// error or panic (module doc comment; OKF §11's consumer obligation).
+fn parse_inline_entries(value: &str) -> Vec<String> {
+    let trim_delims = |c: char| matches!(c, '[' | ']' | '{' | '}') || c.is_whitespace();
+    value
+        .split(',')
+        .map(|part| part.trim_matches(trim_delims).to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
 }
 
 /// Consume the indented (or `- `-prefixed) lines that belong to the key we just
@@ -221,6 +282,79 @@ mod tests {
         assert!(parse("verified:\n  - by: human:me").human_verified);
         assert!(!parse("verified:\n  - by: claude/1").human_verified);
         assert!(!parse("title: x").human_verified);
+    }
+
+    // --- flow (inline) forms of `generated:` / `verified:` -----------------
+    //
+    // `src-tauri/templates/AGENTS.md` — the convention block written into every
+    // vault — documents these keys ONLY in flow form (`generated: { by, at }`,
+    // `verified: [{ by, at }]`), and `plugins-src/claude-agent/backend/src/
+    // okf.rs` emits exactly that. Reading only the block form meant rules 2 and
+    // 3 of `origin::derive` never fired for any document written to this
+    // project's own published convention. One fixture per form below.
+
+    /// Inline map — the literal shape of AGENTS.md's own example.
+    #[test]
+    fn reads_generated_from_an_inline_flow_mapping() {
+        let f = parse("generated: { by: claude-code/opus-5, at: 2026-08-03T14:22:00Z }");
+        assert_eq!(f.generated_by.as_deref(), Some("claude-code/opus-5"));
+        assert_eq!(f.generated_at.as_deref(), Some("2026-08-03T14:22:00Z"));
+    }
+
+    /// Inline sequence, and inline bare mapping — OKF §11 says a bare
+    /// `verified` mapping MUST be read as a single-element list, so both
+    /// shapes have to reach the same place.
+    #[test]
+    fn human_verified_accepts_the_inline_flow_forms() {
+        assert!(parse("verified: [{ by: human:bruce, at: 2026-08-03T14:22:00Z }]").human_verified);
+        assert!(parse("verified: { by: human:bruce, at: 2026-08-03T14:22:00Z }").human_verified);
+        assert!(parse("verified: [{ by: claude/1 }, { by: human:bruce }]").human_verified);
+        assert!(!parse("verified: [{ by: claude/1 }]").human_verified);
+        assert!(!parse("verified: { by: claude/1 }").human_verified);
+    }
+
+    /// Block form (contrast) — the shape that already worked must keep
+    /// working now that a non-empty value on the key's own line takes a
+    /// different branch.
+    #[test]
+    fn the_block_form_still_reads_the_same_values_as_the_inline_form() {
+        let block = parse("generated:\n  by: claude-code/opus-5\n  at: 2026-08-03T14:22:00Z");
+        let inline = parse("generated: { by: claude-code/opus-5, at: 2026-08-03T14:22:00Z }");
+        assert_eq!(block.generated_by, inline.generated_by);
+        assert_eq!(block.generated_at, inline.generated_at);
+        assert!(parse("verified:\n  - by: human:me").human_verified);
+    }
+
+    /// 宽容义务 again, now for the flow forms: an unterminated brace, an empty
+    /// mapping, a scalar where a mapping was expected — none may error or
+    /// panic, all degrade to `None`/`false`.
+    #[test]
+    fn a_malformed_inline_form_yields_none_not_an_error() {
+        for bad in [
+            "generated: {",
+            "generated: { by",
+            "generated: {}",
+            "generated: [{{{",
+            "generated: not-a-mapping",
+            "generated: [",
+            "generated: ,,,",
+        ] {
+            let f = parse(bad);
+            assert_eq!(f.generated_by, None, "{bad}");
+            assert_eq!(f.generated_at, None, "{bad}");
+        }
+        for bad in ["verified: {", "verified: [{ human:me }]", "verified: []", "verified: human:me"] {
+            assert!(!parse(bad).human_verified, "{bad}");
+        }
+    }
+
+    /// Same rule the block form follows via `scalar()`/`split_key()`: only the
+    /// FIRST colon separates key from value, so a value that itself contains a
+    /// colon survives intact. `human:`-prefixed actors (OKF §7) depend on this.
+    #[test]
+    fn an_inline_value_may_contain_a_colon() {
+        assert_eq!(parse("generated: { by: claude/1: x }").generated_by.as_deref(), Some("claude/1: x"));
+        assert_eq!(parse("generated: { by: human:bruce }").generated_by.as_deref(), Some("human:bruce"));
     }
 
     /// 宽容义务:坏 frontmatter 不得让文件消失。
