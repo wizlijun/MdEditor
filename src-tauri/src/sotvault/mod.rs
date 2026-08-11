@@ -308,6 +308,7 @@ pub fn notemd_vault_settings_set(
     large_file_threshold_mb: Option<u32>,
     inbox_dir: Option<String>,
     search_exclude_dirs: Option<Vec<String>>,
+    search_large_file_threshold_mb: Option<u32>,
 ) -> Result<vault_settings::VaultSettings, String> {
     let vault_root = resolve_vault_root(&app).ok_or("Vault not configured")?;
     let base = vault_settings::read(&vault_root);
@@ -319,6 +320,7 @@ pub fn notemd_vault_settings_set(
         large_file_threshold_mb,
         inbox_dir,
         search_exclude_dirs,
+        search_large_file_threshold_mb,
     )?;
     vault_settings::write(&vault_root, &merged)?;
     Ok(merged)

@@ -37,6 +37,14 @@ pub struct VaultSettings {
     /// which of your directories are not worth searching is your call, not ours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_exclude_dirs: Option<Vec<String>>,
+    /// 索引跳过阈值,与 `large_file_threshold_mb`(git 大文件门禁)**语义不同**:
+    /// 那个决定什么不进 commit,这个决定什么不进索引。原始资料类 md
+    /// (ebook 导出、字幕转写)常态超过 1 MB,索引可以放宽而 git 门禁不该跟着放。
+    ///
+    /// 缺失时回落到 git 门禁的值(见 `search::options::for_vault`),所以
+    /// 已经调过门禁的用户不会突然发现索引行为变了;一旦显式设过就彻底脱钩。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_large_file_threshold_mb: Option<u32>,
 }
 
 fn settings_path(vault_root: &Path) -> PathBuf {
@@ -120,6 +128,7 @@ pub fn merge(
     large_file_threshold_mb: Option<u32>,
     inbox_dir: Option<String>,
     search_exclude_dirs: Option<Vec<String>>,
+    search_large_file_threshold_mb: Option<u32>,
 ) -> Result<VaultSettings, String> {
     let mut out = base;
     if let Some(v) = sync_dir {
@@ -146,6 +155,12 @@ pub fn merge(
             out_dirs.push(validate_rel_dir(&raw)?);
         }
         out.search_exclude_dirs = Some(out_dirs);
+    }
+    if let Some(mb) = search_large_file_threshold_mb {
+        if mb == 0 {
+            return Err("search index threshold must be at least 1 MB".into());
+        }
+        out.search_large_file_threshold_mb = Some(mb);
     }
     Ok(out)
 }
@@ -197,6 +212,7 @@ mod tests {
             inbox_dir: Some("inbox".into()),
             large_file_threshold_mb: None,
             search_exclude_dirs: None,
+            search_large_file_threshold_mb: None,
         };
         write(dir.path(), &s).unwrap();
         assert_eq!(read(dir.path()), s);
@@ -259,8 +275,9 @@ mod tests {
             inbox_dir: Some("inbox".into()),
             large_file_threshold_mb: None,
             search_exclude_dirs: None,
+            search_large_file_threshold_mb: None,
         };
-        let out = merge(base, Some("box".into()), None, None, None, None, None).unwrap();
+        let out = merge(base, Some("box".into()), None, None, None, None, None, None).unwrap();
         assert_eq!(out.sync_dir.as_deref(), Some("box"));
         assert_eq!(out.wikipage_dir.as_deref(), Some("wiki"));
         assert_eq!(out.dailynote_dir.as_deref(), Some("daily"));
@@ -269,13 +286,13 @@ mod tests {
 
     #[test]
     fn merge_rejects_invalid_provided_value() {
-        assert!(merge(VaultSettings::default(), Some("../x".into()), None, None, None, None, None).is_err());
-        assert!(merge(VaultSettings::default(), None, None, None, None, Some("../x".into()), None).is_err());
+        assert!(merge(VaultSettings::default(), Some("../x".into()), None, None, None, None, None, None).is_err());
+        assert!(merge(VaultSettings::default(), None, None, None, None, Some("../x".into()), None, None).is_err());
     }
 
     #[test]
     fn merge_sets_inbox_dir() {
-        let out = merge(VaultSettings::default(), None, None, None, None, Some("box".into()), None).unwrap();
+        let out = merge(VaultSettings::default(), None, None, None, None, Some("box".into()), None, None).unwrap();
         assert_eq!(out.inbox_dir.as_deref(), Some("box"));
     }
 
@@ -321,15 +338,15 @@ mod tests {
 
     #[test]
     fn merge_sets_and_validates_threshold() {
-        let out = merge(VaultSettings::default(), None, None, None, Some(25), None, None).unwrap();
+        let out = merge(VaultSettings::default(), None, None, None, Some(25), None, None, None).unwrap();
         assert_eq!(out.large_file_threshold_mb, Some(25));
-        assert!(merge(VaultSettings::default(), None, None, None, Some(0), None, None).is_err());
+        assert!(merge(VaultSettings::default(), None, None, None, Some(0), None, None, None).is_err());
     }
 
     #[test]
     fn merge_keeps_threshold_when_none() {
         let base = VaultSettings { large_file_threshold_mb: Some(50), ..Default::default() };
-        let out = merge(base, Some("box".into()), None, None, None, None, None).unwrap();
+        let out = merge(base, Some("box".into()), None, None, None, None, None, None).unwrap();
         assert_eq!(out.large_file_threshold_mb, Some(50));
     }
 
@@ -357,11 +374,18 @@ mod tests {
     /// 每一项都过 validate_rel_dir:绝对路径与 `..` 不能变成扫描排除规则。
     #[test]
     fn merge_validates_every_exclude_entry() {
-        let ok = merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["a/b".into()])).unwrap();
+        let ok =
+            merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["a/b".into()]), None).unwrap();
         assert_eq!(ok.search_exclude_dirs, Some(vec!["a/b".to_string()]));
-        assert!(merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["../x".into()])).is_err());
-        assert!(merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["/abs".into()])).is_err());
-        assert!(merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["C:\\x".into()])).is_err());
+        assert!(
+            merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["../x".into()]), None).is_err()
+        );
+        assert!(
+            merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["/abs".into()]), None).is_err()
+        );
+        assert!(
+            merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["C:\\x".into()]), None).is_err()
+        );
     }
 
     /// The drive-letter rejection has to hold on the fields that actually feed
@@ -371,17 +395,35 @@ mod tests {
     fn merge_rejects_a_drive_letter_in_every_directory_field() {
         let drive = || Some("C:\\Users\\x".to_string());
         let base = VaultSettings::default;
-        assert!(merge(base(), drive(), None, None, None, None, None).is_err(), "sync_dir");
-        assert!(merge(base(), None, drive(), None, None, None, None).is_err(), "wikipage_dir");
-        assert!(merge(base(), None, None, drive(), None, None, None).is_err(), "dailynote_dir");
-        assert!(merge(base(), None, None, None, None, drive(), None).is_err(), "inbox_dir");
+        assert!(merge(base(), drive(), None, None, None, None, None, None).is_err(), "sync_dir");
+        assert!(merge(base(), None, drive(), None, None, None, None, None).is_err(), "wikipage_dir");
+        assert!(merge(base(), None, None, drive(), None, None, None, None).is_err(), "dailynote_dir");
+        assert!(merge(base(), None, None, None, None, drive(), None, None).is_err(), "inbox_dir");
     }
 
     /// 空数组是有意义的输入(= 清空排除),不能被当成"没提供"。
     #[test]
     fn an_empty_list_clears_the_exclusions() {
         let base = VaultSettings { search_exclude_dirs: Some(vec!["x".into()]), ..Default::default() };
-        let out = merge(base, None, None, None, None, None, Some(vec![])).unwrap();
+        let out = merge(base, None, None, None, None, None, Some(vec![]), None).unwrap();
         assert_eq!(out.search_exclude_dirs, Some(vec![]));
+    }
+
+    #[test]
+    fn search_threshold_round_trips_and_is_absent_when_unset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = VaultSettings { search_large_file_threshold_mb: Some(50), ..Default::default() };
+        write(tmp.path(), &s).unwrap();
+        assert_eq!(read(tmp.path()).search_large_file_threshold_mb, Some(50));
+
+        write(tmp.path(), &VaultSettings::default()).unwrap();
+        let txt = std::fs::read_to_string(tmp.path().join(".notemd/settings.json")).unwrap();
+        assert!(!txt.contains("searchLargeFileThresholdMb"), "{txt}");
+    }
+
+    #[test]
+    fn merge_rejects_a_zero_search_threshold() {
+        let base = VaultSettings::default();
+        assert!(merge(base, None, None, None, None, None, None, Some(0)).is_err());
     }
 }

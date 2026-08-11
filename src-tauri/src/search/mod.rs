@@ -3,14 +3,21 @@
 //! `searchidx`'s, so the GUI and the CLI cannot answer the same query
 //! differently.
 
+pub mod options;
 pub mod watch;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use searchidx::{Hit, IndexStats, ScanOptions, SearchIndex};
+use searchidx::{Hit, IndexStats, SearchIndex};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
+
+/// Kept as an alias — rather than rewriting this module's call sites — so
+/// there is exactly one place (`options::for_vault`) that ever constructs a
+/// `ScanOptions`; see that module's doc comment for why that has to be true
+/// across the GUI/CLI process boundary.
+pub use options::for_vault as scan_options;
 
 /// `None` until a vault is configured (or after a failed open — the index is
 /// optional, the app is not).
@@ -38,14 +45,6 @@ pub fn handle(app: &AppHandle) -> IndexHandle {
 /// stop the app).
 pub fn lock(handle: &IndexHandle) -> MutexGuard<'_, Option<SearchIndex>> {
     handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-pub fn scan_options(vault_root: &Path) -> ScanOptions {
-    let vs = crate::sotvault::vault_settings::read(vault_root);
-    ScanOptions {
-        large_file_threshold_mb: vs.large_file_threshold_mb.unwrap_or(10),
-        exclude_dirs: vs.search_exclude_dirs.unwrap_or_default(),
-    }
 }
 
 /// Open (building if empty) the index for `vault_root` and start watching.

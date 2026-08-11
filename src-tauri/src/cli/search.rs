@@ -141,7 +141,7 @@ pub fn run(args: SearchArgs) -> ExitCode {
     }
 
     let started = std::time::Instant::now();
-    let opts = scan_options(&root);
+    let opts = scan_options_for(&root);
     let mut skipped_large: Vec<String> = Vec::new();
 
     // Every failure below degrades. The only hard error is "no vault".
@@ -210,12 +210,13 @@ pub fn run(args: SearchArgs) -> ExitCode {
     if printed == 0 { ExitCode::from(1) } else { ExitCode::from(0) }
 }
 
-fn scan_options(root: &Path) -> ScanOptions {
-    let vs = crate::sotvault::vault_settings::read(root);
-    ScanOptions {
-        large_file_threshold_mb: vs.large_file_threshold_mb.unwrap_or(10),
-        exclude_dirs: vs.search_exclude_dirs.unwrap_or_default(),
-    }
+/// Thin delegation to the single shared constructor
+/// (`crate::search::options::for_vault`) — public, rather than inlined at the
+/// one call site above, so `tests/search_scan_options_contract.rs` can call
+/// the CLI's path directly and assert it is byte-for-byte the same
+/// `ScanOptions` the GUI builds for the same vault.
+pub fn scan_options_for(root: &Path) -> ScanOptions {
+    crate::search::options::for_vault(root)
 }
 
 /// Last-ditch retrieval with no index at all: walk the vault and substring-match.
