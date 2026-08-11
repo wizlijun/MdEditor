@@ -3,7 +3,6 @@
   import type { Tab } from '../lib/tabs.svelte'
   import { setContent, activeTab, openFile } from '../lib/tabs.svelte'
   import { classifyLink, resolveWikilinkPath, restoreWikilinks, type LinkAction } from '../lib/link-open'
-  import { findFootnoteTarget } from '../lib/footnote-target'
   import { buildFencedBlock, stripCodeFence } from '../lib/code-fence'
   import { toDisplayMarkdown } from '../lib/mdx/display'
   import { activeTheme } from '../lib/active-theme.svelte'
@@ -369,21 +368,8 @@
     // 意思是"该论断出自那篇笔记",所以点它期待的是打开来源本身。
     // 命中判据是 target 恰为定义块:padding 区域(编号所在)属于块自身,而定义正文
     // 在内部的 <p> 里 —— 这样点文字仍能正常选中编辑。
-    const footnoteDef = target.closest('[data-footnote-def]') as HTMLElement | null
-    if (footnoteDef && target === footnoteDef) {
-      const hit = findFootnoteTarget(footnoteDef)
-      // 找不到地址(整条只是文字说明)就不拦截,交给 moraya 的回跳处理
-      if (hit) {
-        event.preventDefault()
-        event.stopImmediatePropagation()
-        if (hit.kind === 'wikilink') void openWikilink(hit.value)
-        else {
-          const action = classifyLink(hit.value, tab.filePath)
-          if (action.kind !== 'ignore') void openLinkAction(action)
-        }
-        return
-      }
-    }
+    // 脚注的点击交给 @moraya/core 的 footnote-plugin 处理(正文角标 → 定义块,
+    // 定义块编号 → 回跳首次引用)。这里不拦截。
 
     const wiki = target.closest('[data-wikilink]') as HTMLElement | null
     const urlEl = wiki ? null : (target.closest('[data-url]') as HTMLElement | null)

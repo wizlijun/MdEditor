@@ -129,23 +129,24 @@
 /* 底部定义列表用编号而不是 label:label 长短不一,一列排下来参差难读;编号
    等宽且与正文角标一一对应。完整 label 走 hover 的 title(见 footnote-plugin)。
    编号由插件以 decoration 形式挂在 data-num 上,不落盘。 */
+/* 与正文角标区分:这是定义列表自己的编号,不是上标角标 —— 用正文同等字号、
+   基线对齐,读起来像编号列表而不是又一个角标。点击回跳到首次引用。 */
 .moraya-editor .moraya-footnote-def::before {
   content: '[' attr(data-num) ']';
   position: absolute;
   left: 0.6em;
   top: 0;
   color: #3b7dd8;
-  font-size: 0.85em;
+  font-size: 1em;
   cursor: pointer;
   user-select: none;
   /* 表格数字字形:多位编号之间也能对齐 */
   font-variant-numeric: tabular-nums;
-  text-decoration: underline dotted rgba(59, 125, 216, 0.5);
-  text-underline-offset: 2px;
 }
 .moraya-editor .moraya-footnote-def:hover::before {
   color: #2a5da8;
-  text-decoration: underline solid #2a5da8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 /* 孤儿定义(没有任何引用)没有编号。仍给一个等宽占位而不是摊开 label,
    否则又回到长短不一;是哪一条 hover 就知道。没有引用可回跳,不做点击态。 */
