@@ -345,6 +345,30 @@ describe('bakeShareHtml', () => {
     __setImageReaderForTests(null)
   })
 
+  it('folds frontmatter into a collapsed details instead of leaking raw YAML', async () => {
+    __setImageReaderForTests(async () => new Uint8Array([0]))
+    const t = fakeTab({ currentContent: '---\ntitle: Hi\ntype: Note\n---\n\n# Head\n\nBody.' })
+    const html = await bakeShareHtml(t)
+    expect(html).toContain('<details class="frontmatter-details">')
+    expect(html).not.toMatch(/<details[^>]*\bopen\b/)
+    expect(html).toContain('<td class="fm-key">title</td>')
+    // The raw block must not survive as prose: no <hr> + YAML paragraph pair.
+    expect(html).not.toMatch(/<p>title: Hi/)
+    // …and the actual document still renders after it.
+    expect(html).toMatch(/<h1[^>]*>Head/)
+    expect(html).toContain('.moraya-editor .frontmatter-details')
+    __setImageReaderForTests(null)
+  })
+
+  it('leaves a frontmatter-less document untouched', async () => {
+    __setImageReaderForTests(async () => new Uint8Array([0]))
+    const t = fakeTab({ currentContent: '# Head\n\n---\n\nAfter the break.' })
+    const html = await bakeShareHtml(t)
+    expect(html).not.toContain('frontmatter-details"')
+    expect(html).toContain('<hr>')
+    __setImageReaderForTests(null)
+  })
+
   it("throws ShareError('too_large') for >25MB input", async () => {
     __setImageReaderForTests(async () => new Uint8Array([0]))
     const huge = 'x'.repeat(26 * 1024 * 1024)
