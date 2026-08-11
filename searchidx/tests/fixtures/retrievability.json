@@ -253,7 +253,7 @@
     "query": "tieringtoken",
     "expect_path": "notes/2026-08-05-tiering-note.md",
     "outranks_path": "docs/2026-08-05-tiering-summary.md",
-    "why": "origin 分级:同一词条下人工笔记(type: Note → human)排在 AI 摘要(type: Book Summary + generated.by: claude/1 → derived)之前。四个语料文件的正文词数一致、doc_date 同为 2026-08-05,raw bm25 精确相等(实测四位命中分数逐位相同),所以只有 ×1.25 能造出这个顺序;而按 path 排序的写入次序是 books<concepts<docs<notes,平手时反而先出 summary —— 断言方向与 tie-break 方向相反,不会靠运气变绿"
+    "why": "origin 分级:同一词条下人工笔记(type: Note → human)排在 AI 摘要(type: Book Summary + generated.by: claude/1 → derived)之前。tieringtoken 一共命中**五个**语料文件(books/ · docs/summary · notes/ · sync/ · web/),五份的正文词数一致、doc_date 同为 2026-08-05,raw bm25 精确相等(实测:三档乘数全置 ×1.0 时五条命中的分数逐位相同)。再加一个 tieringtoken 文件必须同样保持这两条,否则这一组用例会开始靠 bm25 差值而不是靠分级变绿。写入次序按 path 排序是 books<concepts<docs<notes<sync<web,平手时先出的恰好是每条断言里该输的那一侧 —— 断言方向与 tie-break 方向相反,不会靠运气变绿"
   },
   {
     "query": "tieringtoken",
@@ -279,7 +279,15 @@
     "expect_text": "tieringnodetoken bravo",
     "outranks_path": "concepts/2026-08-05-tiering-answer.note.md",
     "outranks_text": "tieringnodetoken alpha",
-    "why": "文件级 human 不抵消块级 agent_by(spec §3.2 的第一条裁决):容器是 .note.md(规则 1 → human ×1.25),里面 agent 写的答复节点(围栏 + type:: answer + by:: claude/1)仍吃 ×0.85,排在同文件的人工节点之后。答复节点刻意放在前面(写入次序占优的一侧),所以只有 ×0.85 能翻转它;顺带钉住 type:: answer 不是 annotation —— 谁把答复当批注给上 ×1.2,这条就红"
+    "why": "文件级 human 不抵消块级 agent_by(spec §3.2 的第一条裁决):容器是 .note.md(规则 1 → human ×1.25),里面 agent 写的答复节点(围栏 + type:: answer + by:: claude/1)仍吃 ×0.85,排在同文件的人工节点之后。两个节点都是协议正规形状的答复节点,逐字对称,只差 by:: claude/1 与 by:: human:bruce;agent 那条刻意放在前面(写入次序占优的一侧),所以只有 ×0.85 能翻转它。注意这一条**不**证明 type:: answer 没被当成 annotation —— 两个节点都是 answer,×1.2 若误加会同时加在两侧、比值不变;那条主张由下面 answerannotoken 那条单独钉"
+  },
+  {
+    "query": "answerannotoken",
+    "expect_path": "concepts/2026-08-06-answer-vs-annotation.note.md",
+    "expect_text": "answerannotoken bravo",
+    "outranks_path": "concepts/2026-08-06-answer-vs-annotation.note.md",
+    "outranks_text": "answerannotoken alpha",
+    "why": "type:: answer 不是 annotation,不该拿 ×1.2。两个节点逐字对称(同为问题节点下的围栏答复,同为 by:: human:bruce,同一个 .note.md 所以 origin 同档),唯一差别是属性 type:: answer(alpha)与 type:: annotation(bravo)—— 后者是本语料里已有的旧式答复写法(见 concepts/2026-07-05-question-node.note.md)。alpha 写在前面因而在平手时占优,所以只有 bravo 的 ×1.2 能把它压下去。谁给 outline.rs 的 is_annotation 分支补上 `|| value == \"answer\"`,两侧同时拿 ×1.2 塌成平手、alpha 靠写入次序反超,这条立刻红(已实测)"
   },
   {
     "query": "roadmap",
