@@ -462,6 +462,40 @@ mod command_tests {
         );
     }
 
+    /// 上一条测试(300 文件)只证明门槛不提前触发——不证明它在真正越过时
+    /// 触发,也不证明触发的格式/`total` 是对的。600 文件精确越过一次 500
+    /// 门槛(核心 crate 的节流让回调落在 …476, 501, 526… 上,第一个
+    /// `>= 500` 的回调是 501),所以正确实现必须、且只能产生一条
+    /// `indexing 501/600`。这条测试和上面那条一起钉住两个方向。
+    #[test]
+    fn a_full_rebuild_past_the_gate_logs_exactly_one_correctly_formatted_milestone() {
+        let _g = crate::log_bus::test_guard();
+        crate::log_bus::clear();
+
+        let v = tempfile::tempdir().unwrap();
+        for i in 0..600 {
+            std::fs::write(v.path().join(format!("f{i}.md")), format!("body {i}\n")).unwrap();
+        }
+        let d = tempfile::tempdir().unwrap();
+        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db")).unwrap();
+        log_rebuild_with(&mut idx, &searchidx::ScanOptions::default(), None).unwrap();
+
+        let lines: Vec<_> = crate::log_bus::snapshot()
+            .into_iter()
+            .filter(|l| l.category == "search")
+            .collect();
+        let milestones: Vec<_> = lines.iter().filter(|l| l.message.starts_with("indexing")).collect();
+        assert_eq!(
+            milestones.len(),
+            1,
+            "600 个文件只越过一次 500 门槛,该且仅该产生一条里程碑行: {lines:?}"
+        );
+        assert_eq!(
+            milestones[0].message, "indexing 501/600",
+            "里程碑行的格式与 total 必须精确: {:?}", milestones[0]
+        );
+    }
+
     #[test]
     fn search_stats_dto_serializes_with_camel_case_field_names() {
         let dto = stats_to_dto(IndexStats {
