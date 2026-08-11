@@ -65,15 +65,50 @@ impl RebuildFlag {
     }
 }
 
+/// RAII cleanup for the rebuild background thread: clears `ProgressState` and
+/// releases `RebuildFlag` in `Drop`, so both happen whether the thread's work
+/// closure returns normally *or* unwinds. A bare `progress.clear(); flag.end();`
+/// placed after the closure call would be skipped entirely if
+/// `rebuild_with_progress`/`log_rebuild_with` panics instead of returning —
+/// `searchidx` has a number of `unwrap`/`expect` call sites, and debug/test
+/// builds unwind by default (only release sets `panic = "abort"`, and even
+/// that's crate-config, not guaranteed here). A stuck `RebuildFlag` is a
+/// silent, permanent regression: "refused, not queued" quietly becomes
+/// "refused for the rest of the process's life" the first time a rebuild
+/// panics.
+struct RebuildGuard {
+    progress: ProgressState,
+    flag: RebuildFlag,
+}
+
+impl Drop for RebuildGuard {
+    fn drop(&mut self) {
+        self.progress.clear();
+        self.flag.end();
+    }
+}
+
+/// The exact `IndexHandle`/`ProgressState`/`RebuildFlag` values `init` hands
+/// to `app.manage`, factored out so a test can assert on *this* construction
+/// directly rather than on locals a test made up separately. This codebase
+/// has never enabled the `tauri::test` feature (no other module uses it), so
+/// there is no `AppHandle` to drive `init` itself from a unit test — calling
+/// this same function `init` calls is the closest a test can get to "the
+/// real wiring" without adding that dependency for one assertion.
+fn managed_state() -> (IndexHandle, ProgressState, RebuildFlag) {
+    (Arc::new(Mutex::new(None)), ProgressState::default(), RebuildFlag::default())
+}
+
 /// Manage app state and, if a vault is already configured (the common case:
 /// app relaunch with an existing vault), open it and start watching — mirrors
 /// `agents_sync::init`'s auto-start. `open_vault` is also called directly from
 /// the folder picker for a freshly chosen/changed vault; see `lib.rs`.
 pub fn init(app: &AppHandle) {
-    app.manage::<IndexHandle>(Arc::new(Mutex::new(None)));
+    let (idx_handle, progress, flag) = managed_state();
+    app.manage::<IndexHandle>(idx_handle);
     app.manage(watch::WatchState::default());
-    app.manage(ProgressState::default());
-    app.manage(RebuildFlag::default());
+    app.manage(progress);
+    app.manage(flag);
     if let Some(root) = crate::sotvault::resolve_vault_root(app) {
         open_vault(app, &root);
     }
@@ -394,6 +429,11 @@ pub fn notemd_search_rebuild(app: AppHandle) -> Result<(), String> {
     let idx_handle = handle(&app);
     let app2 = app.clone();
     std::thread::spawn(move || {
+        // Cleanup (progress cleared, flag released) is guaranteed by
+        // `RebuildGuard::drop`, not by statement order below — see its doc
+        // comment. That covers both the ordinary return path and a panic
+        // unwinding out of the closure this guards.
+        let cleanup = RebuildGuard { progress: progress.clone(), flag: flag.clone() };
         let result = (|| -> Result<(), String> {
             let mut guard = lock(&idx_handle);
             let idx = require_index_mut(&mut guard)?;
@@ -413,13 +453,13 @@ pub fn notemd_search_rebuild(app: AppHandle) -> Result<(), String> {
             log_rebuild_with(idx, &opts, Some(&cb))?;
             Ok(())
         })();
-        // `Done` is the last callback `rebuild_with_progress` ever makes, but
-        // clearing here — after the whole closure above (and therefore the
-        // rebuild) has returned — rather than inside the `Done` callback
-        // itself, also covers the error path: a rebuild that fails partway
-        // must not leave a stale in-progress snapshot behind either.
-        progress.clear();
-        flag.end();
+        // Explicit drop (rather than waiting for scope end) keeps the
+        // pre-guard ordering: progress cleared and the flag released before
+        // the completion event fires, same as before this fix. Still
+        // panic-safe — if the closure above unwinds instead of returning,
+        // `cleanup` is still in scope at that point and `Drop` runs during
+        // the unwind, same effect as this explicit call.
+        drop(cleanup);
         if let Err(e) = &result {
             crate::log_cat!("search", "error", "rebuild failed: {e}");
         }
@@ -657,6 +697,66 @@ mod command_tests {
         assert!(!flag.try_begin(), "进行中第二次必须被拒");
         flag.end();
         assert!(flag.try_begin(), "结束后应当可以再来");
+    }
+
+    /// review round 1, finding 2: `progress.clear(); flag.end();` 写在
+    /// 重建闭包之后的普通语句里,一旦闭包内部 panic(`searchidx` 有不少
+    /// `unwrap`/`expect`,debug/test 构建默认 unwind),两行都会被跳过 ——
+    /// `RebuildFlag` 从此永久卡在 `true`,"拒绝,不排队"悄悄变成
+    /// "此后进程生命周期内一律拒绝"。这条复现 `notemd_search_rebuild`
+    /// 生成线程的确切用法:构造 `RebuildGuard`,再在其作用域内 panic,
+    /// 断言 join 后 flag 已经被释放。
+    #[test]
+    fn rebuild_flag_recovers_after_the_guarded_thread_panics() {
+        let flag = RebuildFlag::default();
+        let progress = ProgressState::default();
+        assert!(flag.try_begin(), "第一次应当拿到");
+        progress.set(Some(searchidx::Progress {
+            phase: searchidx::Phase::Indexing,
+            done: 1,
+            total: 10,
+            current: None,
+            elapsed_ms: 0,
+        }));
+
+        let flag_for_thread = flag.clone();
+        let progress_for_thread = progress.clone();
+        let joined = std::thread::spawn(move || {
+            let _cleanup = RebuildGuard { progress: progress_for_thread, flag: flag_for_thread };
+            panic!("simulated rebuild_with_progress panic (e.g. an unwrap inside searchidx)");
+        })
+        .join();
+
+        assert!(joined.is_err(), "线程应当因 panic 结束");
+        assert!(
+            flag.try_begin(),
+            "guard 的 Drop 必须在 panic 展开时也释放 flag,而不是永久卡住"
+        );
+        assert!(progress.get().is_none(), "guard 的 Drop 也必须在 panic 时清空进度");
+    }
+
+    /// review round 1, finding 1: 之前 `progress_is_readable_while_the_index_lock_is_held`
+    /// 里 `state`/`handle` 是两个各自独立 `Default::default()` 的局部变量,
+    /// 天然不可能互相争用 —— 哪怕生产实现真的把 `ProgressState` 改成复用
+    /// `IndexHandle` 的锁*类型*(同类型、不同实例),那条测试也测不出来
+    /// (已用临时 mutation 验证过,见 task-4-report.md)。这条改为断言
+    /// `init` 真正会用的构造(`managed_state`,`init` 自身直接调用它)—— 比较
+    /// `IndexHandle` 和 `ProgressState` 内部 `Arc` 的指针,断言是两块不同的
+    /// 分配。
+    ///
+    /// 这只证明"不同分配",不证明"运行时不会相互阻塞"——真正的阻塞式验证
+    /// 需要 `tauri::test` feature,这个代码库从未启用过,不为这一条断言
+    /// 引入它。但指针不同已经足以在未来有人把两者合并成一把锁(例如
+    /// `ProgressState` 从 `IndexHandle` 的 `Arc::clone` 构造)时变红。
+    #[test]
+    fn init_wires_progress_state_and_index_handle_to_distinct_locks() {
+        let (idx_handle, progress, _flag) = managed_state();
+        let idx_ptr = Arc::as_ptr(&idx_handle) as *const () as usize;
+        let progress_ptr = Arc::as_ptr(&progress.0) as *const () as usize;
+        assert_ne!(
+            idx_ptr, progress_ptr,
+            "ProgressState 与 IndexHandle 指向同一块分配 —— 违反本任务的核心不变量"
+        );
     }
 
     /// 完成后进度必须清空,否则设置页会一直显示一个停在 100% 的旧进度。
