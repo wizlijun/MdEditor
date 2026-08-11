@@ -116,6 +116,26 @@ describe('saveLargeFileThreshold', () => {
     await saveLargeFileThreshold(5)
     expect(vaultSettings.largeFileThresholdMb).toBe(DEFAULT_LARGE_FILE_THRESHOLD_MB)
   })
+
+  // Review round 1, finding 2: saving the git gate must keep the *displayed*
+  // search-index threshold live while it's still following that gate —
+  // otherwise the settings page can show a stale effective value that
+  // contradicts the one-way-door hint text sitting right next to it.
+  it('keeps the effective search threshold following the git gate when it has not been explicitly set', async () => {
+    vaultSettings.searchLargeFileThresholdExplicit = false
+    vaultSettings.searchLargeFileThresholdMb = 10
+    invoke.mockResolvedValue({ largeFileThresholdMb: 30 })
+    await saveLargeFileThreshold(30)
+    expect(vaultSettings.searchLargeFileThresholdMb).toBe(30)
+  })
+
+  it('does not override an explicitly-set search threshold — the one-way door stays shut', async () => {
+    vaultSettings.searchLargeFileThresholdExplicit = true
+    vaultSettings.searchLargeFileThresholdMb = 50
+    invoke.mockResolvedValue({ largeFileThresholdMb: 30 })
+    await saveLargeFileThreshold(30)
+    expect(vaultSettings.searchLargeFileThresholdMb).toBe(50)
+  })
 })
 
 describe('saveSearchExcludeDirs', () => {

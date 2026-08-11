@@ -76,13 +76,25 @@ export async function saveSyncDir(raw: string): Promise<void> {
   await refreshSotvault()
 }
 
-/** 持久化大文件阈值(MB,>=1)。后端校验;不改 vault 目录结构,故无需 refreshSotvault。 */
+/** 持久化大文件阈值(MB,>=1)。后端校验;不改 vault 目录结构,故无需 refreshSotvault。
+ *
+ *  Review round 1, finding 2: this is the git gate `searchLargeFileThresholdMb`
+ *  falls back to (see that field's doc comment) — while the search threshold has
+ *  never been explicitly saved, its displayed value MUST track this one live,
+ *  or the settings page shows a stale number that contradicts the hint text
+ *  sitting right above the search-threshold input, explaining that exact
+ *  relationship. Only re-derived when `!searchLargeFileThresholdExplicit`; once
+ *  the user has explicitly saved a search threshold, this function must not
+ *  touch it — that's the one-way door itself. */
 export async function saveLargeFileThreshold(mb: number): Promise<void> {
   const merged = await invoke<VaultSettingsDto>('notemd_vault_settings_set', {
     largeFileThresholdMb: mb,
   })
   vaultSettings.largeFileThresholdMb =
     merged?.largeFileThresholdMb ?? DEFAULT_LARGE_FILE_THRESHOLD_MB
+  if (!vaultSettings.searchLargeFileThresholdExplicit) {
+    vaultSettings.searchLargeFileThresholdMb = vaultSettings.largeFileThresholdMb
+  }
 }
 
 /** Persist the search-excluded directory list (backend validates each entry

@@ -594,7 +594,16 @@
           <button class:active={selectedTab === 'vault'} onclick={() => selectedTab = 'vault'}>{t('settings.tab.vault')}</button>
         {/if}
         <button class:active={selectedTab === 'search'}
-                onclick={() => { selectedTab = 'search'; void indexStatus.refresh() }}>
+                onclick={() => {
+                  selectedTab = 'search'
+                  void indexStatus.refresh()
+                  // Review round 1, finding 2: re-derive on every tab entry,
+                  // not only when the dialog first opens — otherwise editing
+                  // the git gate on the Vault tab and switching here (without
+                  // closing the dialog) shows a stale effective value that
+                  // contradicts the hint text right below the input.
+                  searchThresholdDraft = vaultSettings.searchLargeFileThresholdMb
+                }}>
           {t('settings.tab.search')}
         </button>
         <button class:active={selectedTab === 'outline-notes'} onclick={() => selectedTab = 'outline-notes'}>{t('settings.tab.outline')}</button>

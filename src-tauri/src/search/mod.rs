@@ -168,6 +168,30 @@ pub fn lock(handle: &IndexHandle) -> MutexGuard<'_, Option<SearchIndex>> {
     handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Pure decision logic for `open_vault`'s `SkippedState` write: given whether
+/// this thread's generation is still current and its sweep's result, what (if
+/// anything) should be installed into `SkippedState`. `None` means "write
+/// nothing" — either because a newer `open_vault` call superseded this one
+/// (`is_current` false — a stale thread must never overwrite the *current*
+/// vault's skip list with an abandoned vault's, the exact bug review round 1
+/// caught: this write used to run before the generation check existed at
+/// all) or because the sweep itself failed (nothing to report).
+///
+/// Factored out of `open_vault`'s closure so this gating is a plain,
+/// deterministic function a unit test can drive directly — no thread racing
+/// required, since the defect was a pure ordering/gating bug (a write
+/// landing on the wrong side of an `if`), not something that only manifests
+/// under real concurrency.
+fn skipped_write_if_current(
+    is_current: bool,
+    sweep_result: Result<searchidx::ScanStats, String>,
+) -> Option<Vec<searchidx::SkippedFile>> {
+    if !is_current {
+        return None;
+    }
+    sweep_result.ok().map(|s| s.files_skipped_large)
+}
+
 /// Open (building if empty) the index for `vault_root` and start watching.
 /// Failures are logged and swallowed: a broken index must never keep the vault
 /// from opening.
@@ -206,15 +230,38 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
                 // authoritative "what did the last scan actually skip"
                 // answer for the settings page. See `SkippedState`'s doc
                 // comment for why this has to be stashed anywhere at all.
-                match idx.sweep(&opts, None) {
-                    Ok(stats) => skipped_state(&app).set(stats.files_skipped_large),
-                    Err(e) => crate::log_cat!("search", "warn", "sweep failed: {e}"),
+                //
+                // The result is captured but NOT acted on yet — see the
+                // `is_current` check below. Unlike `notemd_search_rebuild`
+                // and `watch::drain`, this sweep runs on an `idx` that is
+                // not yet installed in the shared `IndexHandle`, so it gets
+                // none of that mutex's free serialization against a
+                // concurrent vault switch. It needs the same explicit
+                // generation gate `IndexHandle` already gets below, or a
+                // superseded thread can overwrite the *current* vault's
+                // `SkippedState` with the abandoned vault's skip list —
+                // review round 1 caught this landing one statement above
+                // the gate it should have shared.
+                let sweep_result = idx.sweep(&opts, None);
+                if let Err(e) = &sweep_result {
+                    crate::log_cat!("search", "warn", "sweep failed: {e}");
                 }
                 // Discard this thread's work if a newer `open_vault` call has
                 // superseded it — otherwise a slow open for a vault the user
                 // has since switched away from could overwrite the new
-                // vault's (already-current) `IndexHandle` entry.
-                if !watch::is_current(&app, my_gen) {
+                // vault's (already-current) `IndexHandle` entry, or its
+                // `SkippedState`. Snapshotted once into `current` and reused
+                // for both gated writes below, rather than calling
+                // `is_current` twice — a second call could observe a
+                // *different* answer if another `open_vault` reserves a
+                // generation in between, which would let the two writes
+                // disagree with each other about whether this thread is
+                // still current.
+                let current = watch::is_current(&app, my_gen);
+                if let Some(skipped) = skipped_write_if_current(current, sweep_result) {
+                    skipped_state(&app).set(skipped);
+                }
+                if !current {
                     crate::log_cat!("search", "info", "open_vault superseded, discarding");
                     return;
                 }
@@ -639,6 +686,49 @@ mod command_tests {
         // A later `set` (a second scan) must replace, not accumulate.
         s.set(vec![searchidx::SkippedFile { path: "b.md".into(), size: 20 }]);
         assert_eq!(s.get(), vec![searchidx::SkippedFile { path: "b.md".into(), size: 20 }]);
+    }
+
+    /// Review round 1, finding 1: `open_vault`'s `SkippedState` write used to
+    /// land one statement *before* the `is_current` check that guards
+    /// `IndexHandle`'s own write — so a superseded vault-switch thread could
+    /// overwrite the *current* vault's skipped list with the abandoned
+    /// vault's. This pins the fix's core claim: a stale generation must
+    /// suppress the write, exactly like it already suppresses the
+    /// `IndexHandle` write, regardless of whether the sweep itself
+    /// succeeded.
+    #[test]
+    fn a_stale_generation_suppresses_the_skipped_write_even_on_a_successful_sweep() {
+        let stats = searchidx::ScanStats {
+            files_skipped_large: vec![searchidx::SkippedFile { path: "big.md".into(), size: 999 }],
+            ..Default::default()
+        };
+        assert_eq!(skipped_write_if_current(false, Ok(stats)), None);
+    }
+
+    /// The mirror case: a current generation with a successful sweep must
+    /// install exactly that sweep's skipped list, not an empty one or
+    /// something derived differently.
+    #[test]
+    fn a_current_generation_installs_the_sweeps_own_skipped_list() {
+        let stats = searchidx::ScanStats {
+            files_skipped_large: vec![searchidx::SkippedFile { path: "big.md".into(), size: 999 }],
+            ..Default::default()
+        };
+        assert_eq!(
+            skipped_write_if_current(true, Ok(stats)),
+            Some(vec![searchidx::SkippedFile { path: "big.md".into(), size: 999 }])
+        );
+    }
+
+    /// A failed sweep has nothing to report, current generation or not — this
+    /// is the same "no crash, no phantom state" contract `open_vault`'s
+    /// pre-existing `Err(e) => log` arm already had for the sweep failure
+    /// itself; this just pins that the (separate) `SkippedState` write
+    /// doesn't invent something to write in that case.
+    #[test]
+    fn a_failed_sweep_writes_nothing_even_when_current() {
+        assert_eq!(skipped_write_if_current(true, Err("boom".to_string())), None);
+        assert_eq!(skipped_write_if_current(false, Err("boom".to_string())), None);
     }
 
     #[test]
