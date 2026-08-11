@@ -83,6 +83,9 @@ Tauri 解密 updater 签名私钥时,判据是**环境变量存不存在**,不�
 - Git for Windows、GitHub CLI(`gh`,并 `gh auth login`)
 - Node ≥ 20 + pnpm
 - Rust(rustup,**必须 MSVC toolchain**,不是 gnu)
+- PowerShell:**装不装 PowerShell 7(`pwsh`)都行**。`scripts/release-windows.ps1` 在
+  Windows 自带的 Windows PowerShell 5.1(`powershell.exe`)下也能正常解析和执行,
+  下面的命令给了两种写法。
 - Visual Studio Build Tools,勾选**「使用 C++ 的桌面开发」**
   必须含 MSVC 编译器 **和 Windows SDK**。缺 SDK 会在编 `ring` 这类带 C 代码的依赖时报找不到 `assert.h`。
 - WebView2 Runtime(Win11 一般自带)
@@ -112,7 +115,15 @@ Tauri 解密 updater 签名私钥时,判据是**环境变量存不存在**,不�
 
 ```powershell
 cd note.md
-pwsh scripts/release-windows.ps1 -Tag v6.808.3   # 换成实际 tag
+$env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-msvc"   # 见下方「为什么必须设」
+pwsh scripts/release-windows.ps1 -Tag v6.808.3            # 换成实际 tag
+```
+
+没装 PowerShell 7 就用自带的 5.1,脚本一样跑:
+
+```powershell
+$env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-msvc"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release-windows.ps1 -Tag v6.808.3
 ```
 
 脚本会自动完成:签名环境自检 → 对齐 tag → 识别架构 → 构建 → 上传 setup.exe 与 updater 产物 → 下载并合并 latest.json → 传回 → **回读线上内容校验**。
@@ -120,6 +131,32 @@ pwsh scripts/release-windows.ps1 -Tag v6.808.3   # 换成实际 tag
 它在任何一步失败都会带原因退出,并且**在 latest.json 合并失败时不会上传**,线上保持旧的完好状态。
 
 跑完请报告:输出末尾的平台条目清单、安装包大小、Release 链接。
+
+### 为什么必须设 `RUSTUP_TOOLCHAIN`
+
+`src-tauri/rust-toolchain.toml` 的 `targets` 里列了 apple / iOS 目标 —— 那是 mac 和 iOS
+侧构建需要的。rustup 每次被 cargo 调用时都会试着把清单里缺的 target 补装齐;在只做
+Windows 包的机器上,这些 target 既用不到,又可能因为磁盘上留有**未注册的残留目录**
+而补装失败,失败后 rustup 会把整次安装回滚:
+
+```
+error: failed to install component: 'rust-std-aarch64-apple-darwin',
+detected conflict: 'lib\rustlib\aarch64-apple-darwin\lib\libaddr2line-*.rlib'
+```
+
+外层表现是 `tauri build` 停在 `failed to run 'cargo metadata' command to get workspace
+directory`,**看着像代码或依赖出了问题,其实与被构建的代码完全无关**。
+
+设 `RUSTUP_TOOLCHAIN` 会让 rustup 直接使用指定的 toolchain、完全忽略
+`rust-toolchain.toml`(连同它的 `targets` 列表),于是既不补装也不会冲突。文件里 pin
+的 channel 本来就是 `stable`,与这台机器的默认 toolchain 是同一个,**产物不受影响**。
+
+ARM64 机器上把值换成 `stable-aarch64-pc-windows-msvc`。
+
+**不要为此去改 `rust-toolchain.toml`** —— 那些 apple target 是 mac / iOS 侧要用的,删掉会
+破坏对面的流水线。(想彻底修好本机 rustup 状态也可以:删掉
+`~/.rustup/toolchains/<toolchain>/lib/rustlib/` 下那几个残留的 apple 目录,让 rustup 干净
+重装。但那要在 Windows 机上下几百 MB 根本用不到的 apple std 库,不划算。)
 
 ---
 
