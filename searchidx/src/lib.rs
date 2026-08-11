@@ -26,7 +26,7 @@ pub mod watch;
 
 pub use block::{Block, BlockLevel, FileMeta, Link};
 pub use query::{Hit, Query, Route};
-pub use scan::{IndexOutcome, ScanOptions, ScanStats};
+pub use scan::{IndexOutcome, Phase, Progress, ProgressFn, ScanOptions, ScanStats};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -75,11 +75,34 @@ impl SearchIndex {
     }
 
     pub fn rebuild(&mut self, opts: &ScanOptions) -> Result<ScanStats, String> {
-        scan::build_full(&mut self.conn, &self.vault_root, opts).map_err(|e| e.to_string())
+        self.rebuild_with_progress(opts, None)
+    }
+
+    /// Same as [`Self::rebuild`], but calls `progress` (throttled — every 25
+    /// files or 200ms, always on a phase transition) as the build proceeds.
+    /// `searchidx` has no dependency on `tauri`, so it is up to the caller
+    /// to turn this into events; this crate only promises the callback
+    /// contract.
+    pub fn rebuild_with_progress(
+        &mut self,
+        opts: &ScanOptions,
+        progress: Option<ProgressFn>,
+    ) -> Result<ScanStats, String> {
+        scan::build_full(&mut self.conn, &self.vault_root, opts, progress).map_err(|e| e.to_string())
     }
 
     pub fn sweep(&mut self, opts: &ScanOptions, deadline: Option<Duration>) -> Result<ScanStats, String> {
-        scan::sweep(&mut self.conn, &self.vault_root, opts, deadline).map_err(|e| e.to_string())
+        self.sweep_with_progress(opts, deadline, None)
+    }
+
+    /// Same as [`Self::sweep`], but calls `progress` as the sweep proceeds.
+    pub fn sweep_with_progress(
+        &mut self,
+        opts: &ScanOptions,
+        deadline: Option<Duration>,
+        progress: Option<ProgressFn>,
+    ) -> Result<ScanStats, String> {
+        scan::sweep(&mut self.conn, &self.vault_root, opts, deadline, progress).map_err(|e| e.to_string())
     }
 
     /// Re-index one file. Returns [`IndexOutcome`] rather than a bare bool so

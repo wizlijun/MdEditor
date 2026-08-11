@@ -83,6 +83,61 @@ struct Candidate {
     size: i64,
 }
 
+/// The stage of a scan. The UI uses it to decide what to show; the order
+/// here is the order phases actually execute in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Walking the vault; the total is not yet known.
+    Walking,
+    /// Indexing candidates one at a time.
+    Indexing,
+    /// Removing rows for files that have disappeared (`sweep` only).
+    Removing,
+    Done,
+}
+
+/// A progress snapshot. `current` is a vault-relative path, `/`-separated
+/// per this crate's cross-platform convention.
+#[derive(Debug, Clone)]
+pub struct Progress {
+    pub phase: Phase,
+    pub done: usize,
+    /// Zero during `Walking` — the count is not known until the walk
+    /// completes.
+    pub total: usize,
+    pub current: Option<String>,
+    pub elapsed_ms: u128,
+}
+
+pub type ProgressFn<'a> = &'a (dyn Fn(&Progress) + Send + Sync);
+
+/// Throttles progress callbacks. A per-file callback on a real vault (8,826
+/// files) turns into 8,826 cross-IPC emits and drowns the host's event
+/// loop, so callers are notified at most every `every_n` files or `every`
+/// duration, whichever comes first — except a phase transition, which is
+/// always forced through (`force`), because phases drive the UI's state
+/// machine and a dropped one leaves it stuck showing the wrong phase.
+struct Throttle {
+    every_n: usize,
+    every: Duration,
+    last_at: Instant,
+    last_n: usize,
+}
+
+impl Throttle {
+    fn new() -> Self {
+        Throttle { every_n: 25, every: Duration::from_millis(200), last_at: Instant::now(), last_n: 0 }
+    }
+    fn should_emit(&mut self, done: usize, force: bool) -> bool {
+        if force || done >= self.last_n + self.every_n || self.last_at.elapsed() >= self.every {
+            self.last_at = Instant::now();
+            self.last_n = done;
+            return true;
+        }
+        false
+    }
+}
+
 /// Walk the vault once, returning sorted indexable candidates and the
 /// (also sorted by discovery order) list of paths skipped for size.
 ///
@@ -158,23 +213,46 @@ pub fn build_full(
     conn: &mut Connection,
     vault_root: &Path,
     opts: &ScanOptions,
+    progress: Option<ProgressFn>,
 ) -> rusqlite::Result<ScanStats> {
     let started = Instant::now();
+    let mut throttle = Throttle::new();
+    let report = |phase: Phase, done: usize, total: usize, current: Option<&str>| {
+        if let Some(f) = progress {
+            f(&Progress {
+                phase,
+                done,
+                total,
+                current: current.map(|s| s.to_string()),
+                elapsed_ms: started.elapsed().as_millis(),
+            });
+        }
+    };
+
+    report(Phase::Walking, 0, 0, None);
     let (candidates, skipped) = walk(vault_root, opts);
+    let total = candidates.len();
     let mut stats = ScanStats { files_skipped_large: skipped, ..Default::default() };
 
     // One transaction for the whole build: thousands of small commits is what
     // makes naive SQLite indexers slow, not the parsing.
     let tx = conn.transaction()?;
     tx.execute_batch("DELETE FROM blocks_fts; DELETE FROM blocks; DELETE FROM links; DELETE FROM files;")?;
-    for c in &candidates {
+    for (i, c) in candidates.iter().enumerate() {
         if index_into(&tx, vault_root, c)? {
             stats.files_indexed += 1;
+        }
+        // Force the first callback through so the UI can leave `Walking`
+        // for `Indexing` (and learn `total`) immediately, not after the
+        // first throttle window elapses.
+        if throttle.should_emit(i + 1, i == 0) {
+            report(Phase::Indexing, i + 1, total, Some(&c.rel));
         }
     }
     tx.commit()?;
     store::meta_set(conn, "built_at", &format!("{}", now_secs()))?;
     stats.took_ms = started.elapsed().as_millis();
+    report(Phase::Done, total, total, None);
     Ok(stats)
 }
 
@@ -183,11 +261,16 @@ pub fn sweep(
     vault_root: &Path,
     opts: &ScanOptions,
     deadline: Option<Duration>,
+    progress: Option<ProgressFn>,
 ) -> rusqlite::Result<ScanStats> {
     let started = Instant::now();
-    let mut stats = sweep_with_budget(conn, vault_root, opts, || {
-        deadline.is_some_and(|d| started.elapsed() >= d)
-    })?;
+    let mut stats = sweep_with_budget(
+        conn,
+        vault_root,
+        opts,
+        || deadline.is_some_and(|d| started.elapsed() >= d),
+        progress,
+    )?;
     stats.took_ms = started.elapsed().as_millis();
     Ok(stats)
 }
@@ -204,9 +287,26 @@ fn sweep_with_budget(
     vault_root: &Path,
     opts: &ScanOptions,
     mut over_budget: impl FnMut() -> bool,
+    progress: Option<ProgressFn>,
 ) -> rusqlite::Result<ScanStats> {
+    let started = Instant::now();
+    let mut throttle = Throttle::new();
+    let report = |phase: Phase, done: usize, total: usize, current: Option<&str>| {
+        if let Some(f) = progress {
+            f(&Progress {
+                phase,
+                done,
+                total,
+                current: current.map(|s| s.to_string()),
+                elapsed_ms: started.elapsed().as_millis(),
+            });
+        }
+    };
+
+    report(Phase::Walking, 0, 0, None);
     let known = store::all_file_rows(conn)?;
     let (candidates, skipped) = walk(vault_root, opts);
+    let total = candidates.len();
     let mut stats = ScanStats { files_skipped_large: skipped, ..Default::default() };
 
     let tx = conn.transaction()?;
@@ -214,7 +314,7 @@ fn sweep_with_budget(
     // alive at once, and `tx` needs `&mut` access inside the loop below, so
     // a borrow of `candidates` held across the loop would not compile.
     let mut seen: HashSet<String> = HashSet::with_capacity(candidates.len());
-    for c in &candidates {
+    for (i, c) in candidates.iter().enumerate() {
         seen.insert(c.rel.clone());
         if over_budget() {
             stats.timed_out = true;
@@ -222,36 +322,41 @@ fn sweep_with_budget(
         }
         let known_row = known.get(&c.rel);
         let stat_matches = known_row.is_some_and(|row| row.mtime == c.mtime && row.size == c.size);
-        if stat_matches {
-            continue;
-        }
-        if let Some(row) = known_row {
+        if !stat_matches {
             // stat says "maybe"; the hash decides. Editors that preserve
             // mtime (and same-length edits) would otherwise slip through
-            // unnoticed.
-            if let Ok(bytes) = std::fs::read(vault_root.join(&c.rel)) {
-                if content_hash(&bytes) == row.content_hash {
-                    // Content is unchanged but the stat metadata drifted (a
-                    // `touch`, a checkout, a sync that rewrites timestamps).
-                    // Reconcile the stored mtime/size so the *next* sweep
-                    // hits the cheap stat fast-path instead of re-reading
-                    // and re-hashing this file forever — a file that never
-                    // gets its stat updated here would permanently cost a
-                    // full read+hash on every future sweep. This only
-                    // touches `files` columns that are not derived from
-                    // content (blocks/links/fts are untouched), so it does
-                    // not disturb the file-scoped-replacement convergence
-                    // property between the two writer processes.
-                    tx.execute(
-                        "UPDATE files SET mtime=?1, size=?2 WHERE path=?3",
-                        rusqlite::params![c.mtime, c.size, c.rel],
-                    )?;
-                    continue;
-                }
+            // unnoticed. Only reads the file when there is a known row to
+            // compare against — a brand-new file falls straight through to
+            // `index_into` below, matching the `stat_matches` fast path.
+            let hash_matches = known_row.is_some_and(|row| {
+                std::fs::read(vault_root.join(&c.rel))
+                    .map(|bytes| content_hash(&bytes) == row.content_hash)
+                    .unwrap_or(false)
+            });
+            if hash_matches {
+                // Content is unchanged but the stat metadata drifted (a
+                // `touch`, a checkout, a sync that rewrites timestamps).
+                // Reconcile the stored mtime/size so the *next* sweep hits
+                // the cheap stat fast-path instead of re-reading and
+                // re-hashing this file forever — a file that never gets its
+                // stat updated here would permanently cost a full
+                // read+hash on every future sweep. This only touches
+                // `files` columns that are not derived from content
+                // (blocks/links/fts are untouched), so it does not disturb
+                // the file-scoped-replacement convergence property between
+                // the two writer processes.
+                tx.execute(
+                    "UPDATE files SET mtime=?1, size=?2 WHERE path=?3",
+                    rusqlite::params![c.mtime, c.size, c.rel],
+                )?;
+            } else if index_into(&tx, vault_root, c)? {
+                stats.files_indexed += 1;
             }
         }
-        if index_into(&tx, vault_root, c)? {
-            stats.files_indexed += 1;
+        // Force the first callback through so the UI can leave `Walking`
+        // for `Indexing` (and learn `total`) immediately.
+        if throttle.should_emit(i + 1, i == 0) {
+            report(Phase::Indexing, i + 1, total, Some(&c.rel));
         }
     }
     // Deadline semantics: a partial file list must never be interpreted as
@@ -272,14 +377,22 @@ fn sweep_with_budget(
     // continued absence is explained by its appearance in
     // `files_skipped_large` on every subsequent scan.
     if !stats.timed_out {
-        for path in known.keys() {
-            if !seen.contains(path) {
-                store::remove_file(&tx, path)?;
-                stats.files_removed += 1;
+        let to_remove: Vec<&String> = known.keys().filter(|p| !seen.contains(p.as_str())).collect();
+        let remove_total = to_remove.len();
+        let mut remove_throttle = Throttle::new();
+        for (i, path) in to_remove.into_iter().enumerate() {
+            store::remove_file(&tx, path)?;
+            stats.files_removed += 1;
+            // `done` is the count removed so far, not a position in
+            // `known` — that is what a progress bar for "deleting stale
+            // rows" needs to show.
+            if remove_throttle.should_emit(i + 1, i == 0) {
+                report(Phase::Removing, i + 1, remove_total, Some(path.as_str()));
             }
         }
     }
     tx.commit()?;
+    report(Phase::Done, total, total, None);
     Ok(stats)
 }
 
@@ -380,11 +493,116 @@ mod tests {
         c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap()
     }
 
+    use std::sync::{Arc, Mutex};
+
+    fn recording() -> (Arc<Mutex<Vec<(Phase, usize, usize)>>>, impl Fn(&Progress) + Send + Sync) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let l = log.clone();
+        (log, move |p: &Progress| l.lock().unwrap().push((p.phase, p.done, p.total)))
+    }
+
+    /// 阶段切换必须逐个报告 —— UI 靠它决定显示什么,漏一个就会卡在上一阶段。
+    #[test]
+    fn every_phase_transition_is_reported() {
+        let v = vault(&[("a.md", "x\n"), ("b.md", "y\n")]);
+        let mut c = conn_for(v.path());
+        let (log, cb) = recording();
+        build_full(&mut c, v.path(), &ScanOptions::default(), Some(&cb)).unwrap();
+        let phases: Vec<Phase> = log.lock().unwrap().iter().map(|e| e.0).collect();
+        assert!(phases.first() == Some(&Phase::Walking), "{phases:?}");
+        assert!(phases.contains(&Phase::Indexing), "{phases:?}");
+        assert_eq!(phases.last(), Some(&Phase::Done), "{phases:?}");
+    }
+
+    /// `total` 在 Walking 阶段还不知道(0),扫描完成后必须被填上真实值 ——
+    /// 否则进度条永远停在不确定态。
+    #[test]
+    fn total_is_unknown_while_walking_and_filled_in_afterwards() {
+        let v = vault(&[("a.md", "x\n"), ("b.md", "y\n"), ("c.md", "z\n")]);
+        let mut c = conn_for(v.path());
+        let (log, cb) = recording();
+        build_full(&mut c, v.path(), &ScanOptions::default(), Some(&cb)).unwrap();
+        let entries = log.lock().unwrap().clone();
+        assert_eq!(entries[0], (Phase::Walking, 0, 0));
+        assert!(entries.iter().any(|e| e.0 == Phase::Indexing && e.2 == 3), "{entries:?}");
+    }
+
+    /// 节流:60 个文件不能产生 60 次回调。8,826 个文件逐个跨 IPC emit 会把
+    /// 主线程淹掉,这条测试是那个约束的机器表达。
+    #[test]
+    fn indexing_callbacks_are_throttled_not_per_file() {
+        let files: Vec<(String, String)> =
+            (0..60).map(|i| (format!("f{i}.md"), format!("body {i}\n"))).collect();
+        let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let v = vault(&refs);
+        let mut c = conn_for(v.path());
+        let (log, cb) = recording();
+        build_full(&mut c, v.path(), &ScanOptions::default(), Some(&cb)).unwrap();
+        let indexing = log.lock().unwrap().iter().filter(|e| e.0 == Phase::Indexing).count();
+        assert!(indexing <= 6, "60 个文件产生了 {indexing} 次 Indexing 回调,节流没生效");
+        assert!(indexing >= 2, "一次都没节流出来也不对: {indexing}");
+    }
+
+    /// 不传回调时行为必须与从前逐字一致(既有调用点全部传 None)。
+    #[test]
+    fn a_none_callback_changes_nothing() {
+        let v = vault(&[("a.md", "alpha\n")]);
+        let mut c = conn_for(v.path());
+        let s = build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        assert_eq!(s.files_indexed, 1);
+    }
+
+    /// `sweep` 走三段阶段(Walking → Indexing → Removing → Done)—— 与
+    /// `build_full` 同构,但多一个删除阶段;`Removing` 的 `done` 必须是已删除
+    /// 的计数,不是遍历位置。
+    #[test]
+    fn sweep_reports_removing_with_a_running_removed_count() {
+        let v = vault(&[("a.md", "alpha\n"), ("b.md", "beta\n"), ("c.md", "gamma\n")]);
+        let mut c = conn_for(v.path());
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        fs::remove_file(v.path().join("b.md")).unwrap();
+        fs::remove_file(v.path().join("c.md")).unwrap();
+
+        let (log, cb) = recording();
+        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None, Some(&cb)).unwrap();
+        assert_eq!(s.files_removed, 2);
+
+        let entries = log.lock().unwrap().clone();
+        let removing: Vec<(usize, usize)> =
+            entries.iter().filter(|e| e.0 == Phase::Removing).map(|e| (e.1, e.2)).collect();
+        assert!(!removing.is_empty(), "{entries:?}");
+        // `done` counts must be monotonically increasing and never exceed
+        // the true removed count — a walk-position index (as opposed to a
+        // removed-so-far count) would let `done` run ahead of `total`.
+        // Throttling means the very last removal is not guaranteed to get
+        // its own callback (same as `Indexing`'s tail) — the authoritative
+        // final count is `ScanStats::files_removed`, asserted above.
+        for w in removing.windows(2) {
+            assert!(w[1].0 >= w[0].0, "{removing:?}");
+        }
+        assert!(removing.iter().all(|(done, total)| *done <= *total && *total == 2), "{removing:?}");
+        let phases: Vec<Phase> = entries.iter().map(|e| e.0).collect();
+        assert!(phases.contains(&Phase::Walking), "{phases:?}");
+        assert!(phases.contains(&Phase::Removing), "{phases:?}");
+        assert_eq!(phases.last(), Some(&Phase::Done), "{phases:?}");
+    }
+
+    /// `sweep` 的旧签名(不传回调)必须继续可用,逐字行为不变。
+    #[test]
+    fn sweep_with_a_none_callback_changes_nothing() {
+        let v = vault(&[("a.md", "alpha\n"), ("b.md", "beta\n")]);
+        let mut c = conn_for(v.path());
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        fs::write(v.path().join("a.md"), "alpha changed\n").unwrap();
+        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None, None).unwrap();
+        assert_eq!(s.files_indexed, 1);
+    }
+
     #[test]
     fn build_full_indexes_markdown_and_note_files_only() {
         let v = vault(&[("a.md", "alpha\n"), ("b.note.md", "- beta\n"), ("c.txt", "gamma\n"), ("d.png", "x")]);
         let mut c = conn_for(v.path());
-        let s = build_full(&mut c, v.path(), &ScanOptions::default()).unwrap();
+        let s = build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
         assert_eq!(s.files_indexed, 2);
         assert_eq!(count(&c), 2);
     }
@@ -394,7 +612,7 @@ mod tests {
     fn dot_directories_are_skipped() {
         let v = vault(&[("a.md", "x\n"), (".git/x.md", "y\n"), (".notemd/z.md", "y\n")]);
         let mut c = conn_for(v.path());
-        build_full(&mut c, v.path(), &ScanOptions::default()).unwrap();
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
         assert_eq!(count(&c), 1);
     }
 
@@ -405,7 +623,7 @@ mod tests {
         let v = vault(&[("a.md", "small\n"), ("big.md", &big)]);
         let mut c = conn_for(v.path());
         let opts = ScanOptions { large_file_threshold_mb: 1, ..Default::default() };
-        let s = build_full(&mut c, v.path(), &opts).unwrap();
+        let s = build_full(&mut c, v.path(), &opts, None).unwrap();
         assert_eq!(s.files_indexed, 1);
         assert_eq!(s.files_skipped_large, vec!["big.md".to_string()]);
     }
@@ -415,7 +633,7 @@ mod tests {
         let v = vault(&[("a.md", "x\n"), ("sessions/b.md", "y\n")]);
         let mut c = conn_for(v.path());
         let opts = ScanOptions { exclude_dirs: vec!["sessions".into()], ..Default::default() };
-        build_full(&mut c, v.path(), &opts).unwrap();
+        build_full(&mut c, v.path(), &opts, None).unwrap();
         assert_eq!(count(&c), 1);
     }
 
@@ -423,12 +641,12 @@ mod tests {
     fn sweep_reindexes_only_what_changed() {
         let v = vault(&[("a.md", "alpha\n"), ("b.md", "beta\n")]);
         let mut c = conn_for(v.path());
-        build_full(&mut c, v.path(), &ScanOptions::default()).unwrap();
-        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None, None).unwrap();
         assert_eq!(s.files_indexed, 0, "an unchanged vault must be a no-op");
 
         fs::write(v.path().join("a.md"), "alpha changed\n").unwrap();
-        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None, None).unwrap();
         assert_eq!(s.files_indexed, 1);
     }
 
@@ -436,9 +654,9 @@ mod tests {
     fn sweep_removes_rows_for_deleted_files() {
         let v = vault(&[("a.md", "alpha\n"), ("b.md", "beta\n")]);
         let mut c = conn_for(v.path());
-        build_full(&mut c, v.path(), &ScanOptions::default()).unwrap();
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
         fs::remove_file(v.path().join("b.md")).unwrap();
-        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None, None).unwrap();
         assert_eq!(s.files_removed, 1);
         assert_eq!(count(&c), 1);
     }
@@ -449,12 +667,12 @@ mod tests {
     fn sweep_falls_back_to_hashing_when_stat_looks_unchanged() {
         let v = vault(&[("a.md", "alpha\n")]);
         let mut c = conn_for(v.path());
-        build_full(&mut c, v.path(), &ScanOptions::default()).unwrap();
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
         // same length, same mtime restored
         let meta = fs::metadata(v.path().join("a.md")).unwrap();
         fs::write(v.path().join("a.md"), "alphaX\n").unwrap();
         filetime_set(&v.path().join("a.md"), &meta);
-        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        let s = sweep(&mut c, v.path(), &ScanOptions::default(), None, None).unwrap();
         assert_eq!(s.files_indexed, 1, "content change must be caught even when stat matches");
     }
 
@@ -467,7 +685,7 @@ mod tests {
     fn a_stat_only_change_is_reconciled_once_then_the_next_sweep_does_no_work() {
         let v = vault(&[("a.md", "alpha\n")]);
         let mut c = conn_for(v.path());
-        build_full(&mut c, v.path(), &ScanOptions::default()).unwrap();
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
 
         // Touch the file (advance mtime, same size, same content) without a
         // real edit. std::fs::File::set_modified pushes the timestamp
@@ -478,7 +696,7 @@ mod tests {
         let f = fs::OpenOptions::new().write(true).open(v.path().join("a.md")).unwrap();
         f.set_modified(touched).unwrap();
 
-        let s1 = sweep(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        let s1 = sweep(&mut c, v.path(), &ScanOptions::default(), None, None).unwrap();
         assert_eq!(s1.files_indexed, 0, "content is unchanged, so no file should be re-indexed");
 
         let row_mtime: i64 = c
@@ -492,7 +710,7 @@ mod tests {
         // index_into would need — simplest proxy is that a *second* sweep
         // with nothing touched does zero work, which is only possible if the
         // stat fast path (not a hash re-check) short-circuited.
-        let s2 = sweep(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        let s2 = sweep(&mut c, v.path(), &ScanOptions::default(), None, None).unwrap();
         assert_eq!(s2.files_indexed, 0, "second sweep must be a pure stat no-op");
     }
 
@@ -501,7 +719,7 @@ mod tests {
     fn sweep_reports_a_timeout_instead_of_failing() {
         let v = vault(&[("a.md", "alpha\n")]);
         let mut c = conn_for(v.path());
-        let s = sweep(&mut c, v.path(), &ScanOptions::default(), Some(Duration::from_nanos(1))).unwrap();
+        let s = sweep(&mut c, v.path(), &ScanOptions::default(), Some(Duration::from_nanos(1)), None).unwrap();
         assert!(s.timed_out);
     }
 
@@ -512,11 +730,11 @@ mod tests {
     fn a_timed_out_sweep_still_commits_and_skips_the_deletion_pass() {
         let v = vault(&[("a.md", "alpha\n"), ("b.md", "beta\n")]);
         let mut c = conn_for(v.path());
-        build_full(&mut c, v.path(), &ScanOptions::default()).unwrap();
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
         fs::remove_file(v.path().join("b.md")).unwrap();
         // A deadline of zero always reads as "over budget" on the very first
         // check, before any file is even considered.
-        let s = sweep(&mut c, v.path(), &ScanOptions::default(), Some(Duration::from_secs(0))).unwrap();
+        let s = sweep(&mut c, v.path(), &ScanOptions::default(), Some(Duration::from_secs(0)), None).unwrap();
         assert!(s.timed_out);
         assert_eq!(s.files_removed, 0, "a timed-out sweep must not run the deletion pass");
         assert_eq!(count(&c), 2, "b.md's row must survive an incomplete sweep");
@@ -537,9 +755,9 @@ mod tests {
             }).unwrap().map(|x| x.unwrap()).collect()
         };
         let mut c1 = crate::store::open(&v.path().join(".i1.db"), "v").unwrap();
-        build_full(&mut c1, v.path(), &ScanOptions::default()).unwrap();
+        build_full(&mut c1, v.path(), &ScanOptions::default(), None).unwrap();
         let mut c2 = crate::store::open(&v.path().join(".i2.db"), "v").unwrap();
-        build_full(&mut c2, v.path(), &ScanOptions::default()).unwrap();
+        build_full(&mut c2, v.path(), &ScanOptions::default(), None).unwrap();
         assert_eq!(dump(&c1), dump(&c2));
     }
 
@@ -547,7 +765,7 @@ mod tests {
     fn index_one_reindexes_a_single_file() {
         let v = vault(&[("a.md", "alpha\n")]);
         let mut c = conn_for(v.path());
-        build_full(&mut c, v.path(), &ScanOptions::default()).unwrap();
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
         fs::write(v.path().join("a.md"), "alpha changed\n").unwrap();
         let outcome = index_one(&mut c, v.path(), "a.md", &ScanOptions::default()).unwrap();
         assert_eq!(outcome, IndexOutcome::Indexed);
@@ -559,7 +777,7 @@ mod tests {
     fn index_one_removes_rows_when_the_file_is_gone() {
         let v = vault(&[("a.md", "alpha\n")]);
         let mut c = conn_for(v.path());
-        build_full(&mut c, v.path(), &ScanOptions::default()).unwrap();
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
         fs::remove_file(v.path().join("a.md")).unwrap();
         let outcome = index_one(&mut c, v.path(), "a.md", &ScanOptions::default()).unwrap();
         assert_eq!(outcome, IndexOutcome::RemovedMissing);
@@ -575,7 +793,7 @@ mod tests {
         let v = vault(&[("a.md", "small\n")]);
         let mut c = conn_for(v.path());
         let opts = ScanOptions { large_file_threshold_mb: 1, ..Default::default() };
-        build_full(&mut c, v.path(), &opts).unwrap();
+        build_full(&mut c, v.path(), &opts, None).unwrap();
         assert_eq!(count(&c), 1);
 
         let big = "x".repeat(2 * 1024 * 1024);
@@ -594,12 +812,12 @@ mod tests {
         let v = vault(&[("a.md", "small\n")]);
         let mut c = conn_for(v.path());
         let opts = ScanOptions { large_file_threshold_mb: 1, ..Default::default() };
-        build_full(&mut c, v.path(), &opts).unwrap();
+        build_full(&mut c, v.path(), &opts, None).unwrap();
         assert_eq!(count(&c), 1, "a.md starts out small enough to be indexed");
 
         let big = "x".repeat(2 * 1024 * 1024);
         fs::write(v.path().join("a.md"), &big).unwrap();
-        let s = sweep(&mut c, v.path(), &opts, None).unwrap();
+        let s = sweep(&mut c, v.path(), &opts, None, None).unwrap();
         assert_eq!(count(&c), 0, "a file that grows past the guardrail must leave the index");
         assert_eq!(s.files_skipped_large, vec!["a.md".to_string()], "its absence must be explained by the skip report");
     }
@@ -622,7 +840,7 @@ mod tests {
         let s = sweep_with_budget(&mut c, v.path(), &ScanOptions::default(), || {
             calls += 1;
             calls > 1
-        })
+        }, None)
         .unwrap();
         assert!(s.timed_out);
         assert_eq!(s.files_indexed, 1, "exactly the one file considered before the budget tripped");

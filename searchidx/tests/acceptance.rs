@@ -96,11 +96,11 @@ fn rebuilding_from_scratch_is_deterministic() {
 
     let d1 = tempfile::tempdir().unwrap();
     let mut c1 = searchidx::store::open(&d1.path().join("index.db"), "v").unwrap();
-    searchidx::scan::build_full(&mut c1, &corpus(), &ScanOptions::default()).unwrap();
+    searchidx::scan::build_full(&mut c1, &corpus(), &ScanOptions::default(), None).unwrap();
 
     let d2 = tempfile::tempdir().unwrap();
     let mut c2 = searchidx::store::open(&d2.path().join("index.db"), "v").unwrap();
-    searchidx::scan::build_full(&mut c2, &corpus(), &ScanOptions::default()).unwrap();
+    searchidx::scan::build_full(&mut c2, &corpus(), &ScanOptions::default(), None).unwrap();
 
     let dump1 = dump(&c1);
     let dump2 = dump(&c2);

@@ -476,7 +476,7 @@ mod tests {
             std::fs::write(p, body).unwrap();
         }
         let mut c = crate::store::open(&d.path().join(".idx.db"), "v").unwrap();
-        crate::scan::build_full(&mut c, d.path(), &crate::scan::ScanOptions::default()).unwrap();
+        crate::scan::build_full(&mut c, d.path(), &crate::scan::ScanOptions::default(), None).unwrap();
         (d, c)
     }
 
