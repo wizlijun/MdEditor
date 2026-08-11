@@ -116,10 +116,12 @@
   text-decoration: underline;
 }
 
-/* 脚注定义块 */
+/* 脚注定义块。padding-left 同时是编号的悬挂缩进区 —— 编号必须落在块**内部**,
+   若用 translateX(-100%) 推到边界框外,它虽仍属于本元素,却落在编辑器留白里,
+   既容易点不中也可能被其他元素遮挡(回跳点击因此形同失效)。 */
 .moraya-editor .moraya-footnote-def {
   position: relative;
-  padding-left: 1.2em;
+  padding-left: 3em;
   border-left: 2px solid rgba(59, 125, 216, 0.35);
   color: rgba(0, 0, 0, 0.72);
   font-size: 0.92em;
@@ -130,21 +132,28 @@
 .moraya-editor .moraya-footnote-def::before {
   content: '[' attr(data-num) ']';
   position: absolute;
-  left: 0;
-  transform: translateX(-100%);
-  padding-right: 0.4em;
+  left: 0.6em;
+  top: 0;
   color: #3b7dd8;
   font-size: 0.85em;
   cursor: pointer;
   user-select: none;
   /* 表格数字字形:多位编号之间也能对齐 */
   font-variant-numeric: tabular-nums;
+  text-decoration: underline dotted rgba(59, 125, 216, 0.5);
+  text-underline-offset: 2px;
+}
+.moraya-editor .moraya-footnote-def:hover::before {
+  color: #2a5da8;
+  text-decoration: underline solid #2a5da8;
 }
 /* 孤儿定义(没有任何引用)没有编号。仍给一个等宽占位而不是摊开 label,
-   否则又回到长短不一;是哪一条 hover 就知道。 */
+   否则又回到长短不一;是哪一条 hover 就知道。没有引用可回跳,不做点击态。 */
 .moraya-editor .moraya-footnote-def:not([data-num])::before {
   content: '[·]';
   opacity: 0.55;
+  cursor: default;
+  text-decoration: none;
 }
 
 /* 跳转后的短暂高亮 */
@@ -155,6 +164,16 @@
   0% { background: rgba(59, 125, 216, 0.28); }
   100% { background: transparent; }
 }
+/* 角标是 inline + line-height:0 的小元素,淡背景闪一下几乎看不见 —— 跳过去了
+   也像没反应。这里用反白,并保持前 40% 不变以撑够可察觉的时间。 */
+.moraya-editor .moraya-footnote-ref.moraya-footnote-flash {
+  animation: moraya-footnote-flash-ref 1.2s ease-out;
+  border-radius: 3px;
+}
+@keyframes moraya-footnote-flash-ref {
+  0%, 40% { background: #3b7dd8; color: #fff; }
+  100% { background: transparent; color: #3b7dd8; }
+}
 
 @media (prefers-color-scheme: dark) {
   .moraya-editor .moraya-footnote-ref { color: #6fa8ec; }
@@ -163,13 +182,27 @@
     border-left-color: rgba(111, 168, 236, 0.4);
     color: rgba(255, 255, 255, 0.74);
   }
-  .moraya-editor .moraya-footnote-def::before { color: #6fa8ec; }
+  .moraya-editor .moraya-footnote-def::before {
+    color: #6fa8ec;
+    text-decoration-color: rgba(111, 168, 236, 0.5);
+  }
+  .moraya-editor .moraya-footnote-def:hover::before {
+    color: #9ac6f5;
+    text-decoration-color: #9ac6f5;
+  }
   .moraya-editor .moraya-footnote-flash {
     animation-name: moraya-footnote-flash-dark;
   }
   @keyframes moraya-footnote-flash-dark {
     0% { background: rgba(111, 168, 236, 0.3); }
     100% { background: transparent; }
+  }
+  .moraya-editor .moraya-footnote-ref.moraya-footnote-flash {
+    animation-name: moraya-footnote-flash-ref-dark;
+  }
+  @keyframes moraya-footnote-flash-ref-dark {
+    0%, 40% { background: #6fa8ec; color: #10131a; }
+    100% { background: transparent; color: #6fa8ec; }
   }
 }
 
