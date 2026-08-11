@@ -77,23 +77,23 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
         match SearchIndex::open(&root) {
             Ok(mut idx) => {
                 if let Err(e) = idx.ensure_built(&opts) {
-                    crate::dlog(&format!("[search] initial build failed: {e}"));
+                    crate::log_cat!("search", "error", "initial build failed: {e}");
                 }
                 if let Err(e) = idx.sweep(&opts, None) {
-                    crate::dlog(&format!("[search] sweep failed: {e}"));
+                    crate::log_cat!("search", "warn", "sweep failed: {e}");
                 }
                 // Discard this thread's work if a newer `open_vault` call has
                 // superseded it — otherwise a slow open for a vault the user
                 // has since switched away from could overwrite the new
                 // vault's (already-current) `IndexHandle` entry.
                 if !watch::is_current(&app, my_gen) {
-                    crate::dlog("[search] open_vault superseded, discarding");
+                    crate::log_cat!("search", "info", "open_vault superseded, discarding");
                     return;
                 }
                 *lock(&idx_handle) = Some(idx);
                 watch::restart(&app, &root, my_gen);
             }
-            Err(e) => crate::dlog(&format!("[search] index unavailable: {e}")),
+            Err(e) => crate::log_cat!("search", "error", "index unavailable: {e}"),
         }
     });
 }
@@ -172,6 +172,85 @@ fn hit_to_dto(h: Hit, vault_root: &Path) -> HitDto {
         agent_by: h.agent_by,
         human_verified: h.human_verified,
     }
+}
+
+/// The index logging's single exit point. The granularity is deliberate
+/// (design spec §5): phases + a milestone every 500 files + exceptions
+/// individually — **never per file**. `log_bus` is a single 3000-line ring
+/// buffer shared with git-sync, plugins and the frontend console bridge;
+/// logging one line per file on a real vault (8,826 files) would evict the
+/// whole buffer roughly three times over in one rebuild, wiping out
+/// everyone else's logs and even the search log's own early lines. Per-file
+/// detail belongs in the settings page's live progress (`current`), which
+/// is not buffer-bound.
+///
+/// `extra` is a caller-supplied callback (Task 4 uses it to write progress
+/// state and emit an event). Logging and progress share this one callback
+/// so the core crate is never asked to support multiple subscribers.
+pub(crate) fn log_rebuild_with(
+    idx: &mut SearchIndex,
+    opts: &searchidx::ScanOptions,
+    extra: Option<&(dyn Fn(&searchidx::Progress) + Send + Sync)>,
+) -> Result<searchidx::ScanStats, String> {
+    use searchidx::Phase;
+    crate::log_cat!(
+        "search",
+        "info",
+        "rebuild start: vault={} mode=full threshold={}MB excludes={:?}",
+        idx.vault_root().display(),
+        opts.large_file_threshold_mb,
+        opts.exclude_dirs
+    );
+
+    let last_logged = std::sync::atomic::AtomicUsize::new(0);
+    let cb = move |p: &searchidx::Progress| {
+        if let Some(f) = extra {
+            f(p)
+        }
+        match p.phase {
+            Phase::Walking => {}
+            Phase::Indexing => {
+                if p.done == 0 {
+                    return;
+                }
+                // One line every 500 files — never per file (see doc comment above).
+                let prev = last_logged.load(std::sync::atomic::Ordering::Relaxed);
+                if p.done >= prev + 500 {
+                    last_logged.store(p.done, std::sync::atomic::Ordering::Relaxed);
+                    crate::log_cat!("search", "info", "indexing {}/{}", p.done, p.total);
+                }
+            }
+            Phase::Removing | Phase::Done => {}
+        }
+    };
+    let stats = idx.rebuild_with_progress(opts, Some(&cb))?;
+
+    let skipped = stats.files_skipped_large.len();
+    crate::log_cat!(
+        "search",
+        "info",
+        "walk complete: {} indexable found, {} skipped for size",
+        stats.files_indexed + skipped,
+        skipped
+    );
+    for path in &stats.files_skipped_large {
+        crate::log_cat!("search", "warn", "skipped (over threshold): {path}");
+    }
+
+    // Best-effort: a failure to read the db file back must not turn a
+    // successful rebuild into an error — the summary line is diagnostic,
+    // not load-bearing.
+    let db_bytes = idx.stats().map(|s| s.db_bytes).unwrap_or(0);
+    crate::log_cat!(
+        "search",
+        "info",
+        "rebuild done: {} indexed, {} removed, {} ms, db={} bytes",
+        stats.files_indexed,
+        stats.files_removed,
+        stats.took_ms,
+        db_bytes
+    );
+    Ok(stats)
 }
 
 fn stats_to_dto(s: IndexStats) -> SearchStatsDto {
@@ -347,6 +426,40 @@ mod command_tests {
         for key in ["route", "tookMs", "total", "hits"] {
             assert!(v.get(key).is_some(), "missing key {key} in {v}");
         }
+    }
+
+    /// 一次全量重建产出的 search 分类日志必须在个位到几十行,而不是逐文件。
+    /// log_bus 是全局共享的 3000 行环形缓冲 —— 逐文件写会把 git sync、插件、
+    /// 前端 console 的日志全部冲掉,连自己早期的行也留不住。
+    #[test]
+    fn a_full_rebuild_logs_milestones_not_every_file() {
+        let _g = crate::log_bus::test_guard();
+        crate::log_bus::clear();
+
+        let v = tempfile::tempdir().unwrap();
+        for i in 0..300 {
+            std::fs::write(v.path().join(format!("f{i}.md")), format!("body {i}\n")).unwrap();
+        }
+        let d = tempfile::tempdir().unwrap();
+        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db")).unwrap();
+        log_rebuild_with(&mut idx, &searchidx::ScanOptions::default(), None).unwrap();
+
+        let lines: Vec<_> = crate::log_bus::snapshot()
+            .into_iter()
+            .filter(|l| l.category == "search")
+            .collect();
+        assert!(!lines.is_empty(), "一条都没记");
+        assert!(lines.len() < 30, "300 个文件产生了 {} 行 search 日志,粒度太细", lines.len());
+        assert!(lines.iter().any(|l| l.message.contains("300")), "汇总行应含文件总数: {lines:?}");
+        // 300 < 500,门槛必须一次都不触发。光看总行数不够:核心 crate 自己的
+        // 节流(每 25 文件一次回调)已经把 300 文件的回调次数压到个位数,
+        // 单凭 `lines.len() < 30` 分辨不出"宿主按 500 门槛节流"和"宿主完全
+        // 不节流、逐回调就记"——把每 500 的门槛改成每 1(或干脆去掉判断)
+        // 都不会让上面那条断言变红。这条断言直接钉住 500 门槛本身。
+        assert!(
+            lines.iter().all(|l| !l.message.starts_with("indexing")),
+            "300 个文件不该越过 500 门槛,但记了里程碑行: {lines:?}"
+        );
     }
 
     #[test]

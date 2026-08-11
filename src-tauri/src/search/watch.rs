@@ -110,12 +110,12 @@ pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
     ) {
         Ok(w) => w,
         Err(e) => {
-            crate::dlog(&format!("[search] watcher unavailable: {e}"));
+            crate::log_cat!("search", "error", "watcher unavailable: {e}");
             return;
         }
     };
     if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
-        crate::dlog(&format!("[search] cannot watch {}: {e}", root.display()));
+        crate::log_cat!("search", "error", "cannot watch {}: {e}", root.display());
         return;
     }
 
@@ -165,7 +165,7 @@ fn drain(app: &AppHandle, root: &Path, batch: Batch) {
                 match idx.index_one(&rel, &opts) {
                     Ok(outcome) => log_outcome(&rel, outcome),
                     Err(e) => {
-                        crate::dlog(&format!("[search] reindex {rel} failed: {e}"));
+                        crate::log_cat!("search", "error", "reindex {rel} failed: {e}");
                         ok = false;
                     }
                 }
@@ -175,7 +175,7 @@ fn drain(app: &AppHandle, root: &Path, batch: Batch) {
         Batch::FullSweep => match idx.sweep(&opts, None) {
             Ok(_) => true,
             Err(e) => {
-                crate::dlog(&format!("[search] flood sweep failed: {e}"));
+                crate::log_cat!("search", "error", "flood sweep failed: {e}");
                 false
             }
         },
@@ -202,13 +202,13 @@ fn log_outcome(rel: &str, outcome: IndexOutcome) {
     match outcome {
         IndexOutcome::Indexed => {}
         IndexOutcome::RemovedMissing => {
-            crate::dlog(&format!("[search] {rel} left the index (file gone)"))
+            crate::log_cat!("search", "info", "{rel} left the index (file gone)")
         }
         IndexOutcome::RemovedOversized => {
-            crate::dlog(&format!("[search] {rel} left the index (now oversized)"))
+            crate::log_cat!("search", "warn", "{rel} left the index (now oversized)")
         }
         IndexOutcome::RemovedNotIndexable => {
-            crate::dlog(&format!("[search] {rel} left the index (excluded/not indexable)"))
+            crate::log_cat!("search", "info", "{rel} left the index (excluded/not indexable)")
         }
     }
 }
