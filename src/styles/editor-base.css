@@ -106,7 +106,7 @@
 /* 角标就显示 [^id] 里的 id 本身,不另编号 —— 编号要靠插件按出现顺序派生,
    与磁盘上的写法对不上;直接用 id,看到什么就是文件里写的什么。 */
 .moraya-editor .moraya-footnote-ref::before {
-  content: attr(data-label);
+  content: '[' attr(data-label) ']';
 }
 .moraya-editor .moraya-footnote-ref:hover {
   color: #2a5da8;
