@@ -78,6 +78,18 @@ describe('SearchPanel grouping', () => {
     const counts = Array.from(document.body.querySelectorAll('.group-count')).map((el) => el.textContent)
     expect(counts).toEqual(['1', '1', '1'])
 
+    // Review round 1: headers/counts alone don't prove each hit renders
+    // under ITS OWN group — `{#each group.hits …}` swapped for `{#each
+    // searchStore.hits …}` (every hit rendered under every header) would
+    // leave both assertions above unchanged (counts read `group.hits.length`,
+    // which is still 1 per group; headers don't depend on the inner loop at
+    // all). Read the `.loc` row inside each `.group` and pin which hit is
+    // actually nested under which header.
+    const rowsPerGroup = Array.from(document.body.querySelectorAll('.group')).map((g) =>
+      Array.from(g.querySelectorAll('.hit .loc')).map((el) => el.textContent),
+    )
+    expect(rowsPerGroup).toEqual([['human.md:1'], ['ans.md:1'], ['src.md:1']])
+
     unmount(app)
   })
 
@@ -95,6 +107,11 @@ describe('SearchPanel grouping', () => {
     const headers = Array.from(document.body.querySelectorAll('.group-label')).map((el) => el.textContent)
     expect(headers).toEqual(['Written by you', 'Answer'])
     expect(document.body.textContent).not.toContain('Raw source material')
+
+    const rowsPerGroup = Array.from(document.body.querySelectorAll('.group')).map((g) =>
+      Array.from(g.querySelectorAll('.hit .loc')).map((el) => el.textContent),
+    )
+    expect(rowsPerGroup).toEqual([['human.md:1'], ['ans.md:1']])
 
     unmount(app)
   })

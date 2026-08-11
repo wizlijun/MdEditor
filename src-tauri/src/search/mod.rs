@@ -821,6 +821,18 @@ mod command_tests {
             "sourceRef",
             "agentBy",
             "humanVerified",
+            // Review round 1: these two were added to `HitDto` for grouping
+            // (task B-T7) but never added HERE. Not exploitable today — the
+            // struct-level `rename_all = "camelCase"` is already exercised
+            // by the 12 keys above — but a `#[serde(skip)]` or a typo'd
+            // `#[serde(rename)]` on either field would silently collapse
+            // every hit into `groupHits`'s `derivedOther` bucket (missing
+            // `origin` reads as `undefined`, matching neither `'human'` nor
+            // `'source'`) and make both poles vanish, with every Rust test
+            // still green. This is the one test whose whole job is to catch
+            // that class of bug.
+            "origin",
+            "conceptType",
         ] {
             assert!(v.get(key).is_some(), "missing key {key} in {v}");
         }

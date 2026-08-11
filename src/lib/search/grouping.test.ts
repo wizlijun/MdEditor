@@ -78,15 +78,44 @@ describe('groupHits', () => {
     expect(otherIndex).toBeGreaterThan(namedIndex)
   })
 
-  it('组内保持原有分数顺序', () => {
+  it('组内保持原有分数顺序(四种桶各自独立验证)', () => {
     // `hits` arrives already sorted by score (highest first, per
-    // `searchidx::query::finish`) — grouping must not re-sort within a group.
+    // `searchidx::query::finish`) — grouping must not re-sort within a
+    // group. Review round 1: a fixture with only `human` hits pins this for
+    // 1 of 4 bucket kinds — a regression that re-sorts only inside
+    // `derivedType`/`derivedOther`/`source` (an insert-sorted push, or a
+    // `.sort()` added just in the type loop) would leave a human-only
+    // fixture green. Two hits per bucket kind, interleaved in the input so
+    // no bucket accidentally gets its "natural" order for free.
     const hits = [
-      hit({ path: 'first.md', origin: 'human', score: 0.9 }),
-      hit({ path: 'second.md', origin: 'human', score: 0.4 }),
-      hit({ path: 'third.md', origin: 'human', score: 0.1 }),
+      hit({ path: 'human-first.md', origin: 'human' }),
+      hit({ path: 'answer-first.md', origin: 'derived', conceptType: 'Answer' }),
+      hit({ path: 'other-first.md', origin: 'derived', conceptType: null }),
+      hit({ path: 'source-first.md', origin: 'source' }),
+      hit({ path: 'human-second.md', origin: 'human' }),
+      hit({ path: 'answer-second.md', origin: 'derived', conceptType: 'Answer' }),
+      hit({ path: 'other-second.md', origin: 'derived', conceptType: null }),
+      hit({ path: 'source-second.md', origin: 'source' }),
     ]
     const groups = groupHits(hits)
-    expect(groups[0].hits.map((h) => h.path)).toEqual(['first.md', 'second.md', 'third.md'])
+    const byKind = (kind: string) => groups.find((g) => g.kind === kind)!.hits.map((h) => h.path)
+    expect(byKind('human')).toEqual(['human-first.md', 'human-second.md'])
+    expect(byKind('derivedType')).toEqual(['answer-first.md', 'answer-second.md'])
+    expect(byKind('derivedOther')).toEqual(['other-first.md', 'other-second.md'])
+    expect(byKind('source')).toEqual(['source-first.md', 'source-second.md'])
+  })
+
+  it('空字符串 conceptType 与缺失一样归入「其他」', () => {
+    // `row_to_hit` (searchidx/src/query.rs) deliberately keeps `NULL` and
+    // `''` distinct all the way down the Rust side — its comment says that
+    // distinction "matters to the grouping consumer". This is the one place
+    // that consumer collapses it: `groupHits` uses a truthiness check
+    // (`if (hit.conceptType)`), so `''` and `null` both fall to
+    // `derivedOther`. Pinning it here keeps that Rust comment honest about
+    // what actually happens on the TS side.
+    const hits = [hit({ path: 'empty.md', origin: 'derived', conceptType: '' })]
+    const groups = groupHits(hits)
+    expect(groups).toHaveLength(1)
+    expect(groups[0].kind).toBe('derivedOther')
   })
 })

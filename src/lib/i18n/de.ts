@@ -494,7 +494,7 @@ export const de: Record<keyof Messages, string> = {
   'search.group.human': 'Von dir geschrieben',
   'search.group.source': 'Rohes Quellmaterial',
   'search.group.other': 'Sonstiges',
-  'search.group.count': '{n}',
+  'search.group.count': '{n} Treffer',
 
   // Search & index settings tab
   'search.index.noVault': 'Öffne einen Vault, um den Status des Suchindex zu sehen.',
