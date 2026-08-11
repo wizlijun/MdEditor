@@ -53,10 +53,12 @@ pub struct FileRow {
 }
 
 /// Open (creating if needed) the index at `db_path`. A wrong schema version,
-/// a wrong tokenizer, a changed `sync_dir`, or a file that is *genuinely not
-/// a database* is resolved by deleting the file and starting over. There is
-/// deliberately no repair path: the index is disposable derived data, and
-/// rebuild is always correct while repair logic never fully is.
+/// a wrong tokenizer, or a file that is *genuinely not a database* is
+/// resolved by deleting the file and starting over; a changed `sync_dir` is
+/// resolved by emptying the tables through the connection already opened
+/// (see below). There is deliberately no repair path in either case: the
+/// index is disposable derived data, and rebuild is always correct while
+/// repair logic never fully is.
 ///
 /// What is **not** resolved that way is any *transient* failure — most
 /// importantly `SQLITE_BUSY`/`SQLITE_LOCKED` from another process holding the
@@ -85,16 +87,36 @@ pub struct FileRow {
 /// index answering queries under the wrong tokenizer is a wrong-results bug
 /// dressed up as a working one, which is worse than failing loudly.
 /// `sync_dir` is the vault's currently-configured sync mirror directory name
-/// (see `ScanOptions::sync_dir`) — stamped into `meta` and compared exactly
-/// like `tokenizer_id` below, because `origin::derive` (rule 5) is a function
-/// of it and nothing else re-derives a stored `origin` when only the
-/// *setting* changes (see `a_changed_sync_dir_wipes_the_database`).
+/// (see `ScanOptions::sync_dir`) — stamped into `meta` and compared on every
+/// open, because `origin::derive` (rule 5) is a function of it and nothing
+/// else re-derives a stored `origin` when only the *setting* changes.
+///
+/// **It is the one staleness trigger a user can flip at runtime**, and that
+/// is why it is answered by rebuilding the contents *in place* rather than by
+/// deleting the file (see `rebuild_in_place`, and
+/// `a_changed_sync_dir_must_not_unlink_the_file`). `schema_version` and
+/// `tokenizer_id` are build-time constants — a running process cannot see
+/// them change, so no live handle can exist on the other side of that
+/// mismatch, and wiping stays correct there. A setting can change while the
+/// GUI holds a live WAL connection, so the unlink this function's own doc
+/// comment calls "a real data-loss bug" would come back through a perfectly
+/// legitimate stale path: `notemd search` (which `AGENTS.md` tells every
+/// agent to run habitually) opening the index seconds later, seeing the old
+/// stamp, and deleting `index.db`/`-wal`/`-shm` out from under the GUI.
 pub fn open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Result<Connection> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     match try_open(db_path, vault_root, sync_dir) {
         Ok(Opened::Ready(conn)) => return Ok(conn),
+        Ok(Opened::StaleContents(conn)) => {
+            // A failure here (most realistically `SQLITE_BUSY` against
+            // another process's write transaction) is propagated, never
+            // escalated to a wipe — same rule as every other transient
+            // failure on this path. The caller degrades; the index stays.
+            rebuild_in_place(&conn, sync_dir)?;
+            return Ok(conn);
+        }
         Ok(Opened::Stale) => {}
         Err(e) if is_corruption(&e) => {}
         // Busy / locked / I/O: transient or environmental, never a reason to
@@ -131,11 +153,18 @@ enum Opened {
     /// matches the current `SCHEMA_VERSION`/`TOKENIZER_ID`/`sync_dir` — safe
     /// to use.
     Ready(Connection),
-    /// The file opened, but its `meta` table disagrees with the current
-    /// schema/tokenizer/sync_dir. The caller must wipe the file and start
-    /// over; this function does not do that itself, so it never needs to
-    /// re-enter.
+    /// The file opened, but its *shape* is wrong: a different
+    /// `schema_version` or `tokenizer_id`, or tables without a `meta` at all.
+    /// The caller must wipe the file and start over; this function does not
+    /// do that itself, so it never needs to re-enter.
     Stale,
+    /// The file's shape is current but its *contents* are derived from a
+    /// setting that has since changed (`sync_dir`). Nothing about the schema
+    /// is wrong, so there is nothing to gain from replacing the file — and a
+    /// lot to lose, since this is the only mismatch a user can produce while
+    /// another process holds the database open. The caller empties the tables
+    /// through this very connection and re-stamps.
+    StaleContents(Connection),
 }
 
 /// Open `db_path` and classify what was found. Never recurses and never
@@ -177,20 +206,27 @@ fn try_open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Resul
         return Ok(Opened::Stale);
     }
 
-    // `sync_dir` joins `schema_version`/`tokenizer_id` in this check, not the
-    // best-effort re-stamp `vault_root` gets below: `origin::derive` (rule 5)
-    // is a function of `sync_dir`, and unlike `vault_root` — which nothing
-    // reads for correctness — a stale `sync_dir` means every mirrored file's
-    // stored `origin` is silently wrong until that file's bytes happen to
-    // change. A mismatch here is exactly as disruptive as a tokenizer change
-    // (every stored derived value is suspect), so it gets the same answer:
-    // wipe and rebuild, not a quiet re-stamp.
-    let ok = meta_get(&conn, "schema_version").as_deref() == Some(&SCHEMA_VERSION.to_string())
-        && meta_get(&conn, "tokenizer_id").as_deref() == Some(TOKENIZER_ID)
-        && meta_get(&conn, "sync_dir").as_deref() == Some(sync_dir);
-    if !ok {
+    // Shape first: a different schema or tokenizer means the *tables* are not
+    // the ones this build knows how to read or write, so there is nothing to
+    // salvage and the file itself is replaced. Checked before `sync_dir`
+    // precisely because `rebuild_in_place` below runs `DELETE FROM` against
+    // those tables — it may only run once their shape is known-current.
+    let shape_ok = meta_get(&conn, "schema_version").as_deref() == Some(&SCHEMA_VERSION.to_string())
+        && meta_get(&conn, "tokenizer_id").as_deref() == Some(TOKENIZER_ID);
+    if !shape_ok {
         drop(conn);
         return Ok(Opened::Stale);
+    }
+    // `sync_dir` gets a real check, not the best-effort re-stamp `vault_root`
+    // gets below: `origin::derive` (rule 5) is a function of it, and unlike
+    // `vault_root` — which nothing reads for correctness — a stale `sync_dir`
+    // means every mirrored file's stored `origin` is silently wrong until
+    // that file's bytes happen to change. Every stored derived value is
+    // suspect, so every row goes; but the *file* stays, because unlike the
+    // two above this mismatch can appear while another process is using the
+    // database. See `open`'s doc comment.
+    if meta_get(&conn, "sync_dir").as_deref() != Some(sync_dir) {
+        return Ok(Opened::StaleContents(conn));
     }
     // vault_root can change if the same cache slot is reused; stamp it —
     // but only when it actually differs, and best-effort, deliberately NOT
@@ -269,6 +305,32 @@ const BUSY_TIMEOUT_MS: i32 = 5000;
 /// afterward. `remove_file`'s own `Result` is not trusted on its own: the
 /// caller needs to know the file is really gone, not just that the removal
 /// call didn't error, so this re-checks with `Path::exists`.
+/// Empty every derived table and re-stamp `sync_dir`, keeping the file (and
+/// therefore the inode, and therefore every other process's open handle on
+/// it) exactly where it is. The safe counterpart to [`wipe`] for the one
+/// staleness trigger a user can flip while the database is in use — see
+/// [`open`]'s doc comment for why that distinction matters, and
+/// `a_changed_sync_dir_must_not_unlink_the_file` for the pin.
+///
+/// One transaction, so a crash midway leaves either the old contents or an
+/// empty index — never a half-cleared store still claiming a current
+/// `sync_dir` stamp. The `DELETE FROM` set is the same one `scan::build_full`
+/// uses to start a full rebuild (`blocks_fts` first: it is a standalone FTS
+/// table whose rows are not cascaded by anything).
+///
+/// `built_at` is dropped along with the rows it describes: it is the settings
+/// page's "index built at …" line, and leaving it would have the index claim
+/// a build time for content it no longer holds. The next `ensure_built`
+/// re-stamps it — it sees zero files and rebuilds, which is exactly the
+/// intent here.
+fn rebuild_in_place(conn: &Connection, sync_dir: &str) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch("DELETE FROM blocks_fts; DELETE FROM blocks; DELETE FROM links; DELETE FROM files;")?;
+    tx.execute("DELETE FROM meta WHERE key='built_at'", [])?;
+    meta_set(&tx, "sync_dir", sync_dir)?;
+    tx.commit()
+}
+
 fn wipe(db_path: &Path) -> bool {
     let _ = std::fs::remove_file(db_path);
     for suffix in ["-wal", "-shm"] {
@@ -468,11 +530,14 @@ mod tests {
     /// (rule 5, `origin::derive`), but nothing re-derives it when the vault's
     /// `syncDir` setting changes — the sweep's stat/hash fast path only
     /// touches `mtime`/`size` on an unchanged file, so a stale `origin` would
-    /// otherwise survive indefinitely. Mirrors `a_stale_tokenizer_id_wipes_
-    /// the_database` exactly: stamp `sync_dir` into `meta`, same as
-    /// `tokenizer_id`, and treat a mismatch as `Opened::Stale`.
+    /// otherwise survive indefinitely. So the setting is stamped into `meta`
+    /// and a mismatch invalidates every stored row, same as `tokenizer_id`.
+    ///
+    /// It is invalidated **in place**, not by unlinking the file — see
+    /// `a_changed_sync_dir_must_not_unlink_the_file` directly below for why
+    /// this one differs from every other staleness trigger.
     #[test]
-    fn a_changed_sync_dir_wipes_the_database() {
+    fn a_changed_sync_dir_invalidates_every_stored_origin() {
         let (_d, p) = tmp();
         {
             let mut conn = open(&p, "/v", "sync").unwrap();
@@ -482,6 +547,79 @@ mod tests {
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "a changed sync_dir must invalidate every stored origin");
         assert_eq!(meta_get(&conn, "sync_dir").as_deref(), Some("box"));
+        // Every derived table, not just `files` — a leftover block or FTS row
+        // would outlive the file it belongs to.
+        for t in ["blocks", "blocks_fts", "links"] {
+            let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{t} must be cleared too");
+        }
+        // And the index must not claim a build time for rows it no longer has.
+        assert_eq!(meta_get(&conn, "built_at"), None);
+    }
+
+    /// `sync_dir` is the **first and only wipe trigger a user can flip at
+    /// runtime**: `schema_version` and `tokenizer_id` change only with the
+    /// binary, which cannot happen underneath a live handle, but the vault's
+    /// `syncDir` setting is a text field in the settings dialog. Unlinking
+    /// `index.db` (plus `-wal`/`-shm`) on that trigger reintroduces exactly
+    /// the data-loss/corruption bug `open`'s doc comment describes, through a
+    /// *legitimate* stale path this time: `notemd search` — which `AGENTS.md`
+    /// tells every agent to run habitually — would open the index moments
+    /// after the setting changed, find the stamp stale, and delete the
+    /// sidecars of the GUI's live WAL connection (SQLite's own documented
+    /// corruption hazard), leaving the GUI serving and writing an orphaned
+    /// inode until relaunch.
+    ///
+    /// So this trigger rebuilds the contents in place instead: same file,
+    /// same inode, same open handles, zero rows. The inode assertion is the
+    /// pin — every other assertion in the test above would still pass if the
+    /// file were deleted and recreated.
+    #[cfg(unix)]
+    #[test]
+    fn a_changed_sync_dir_must_not_unlink_the_file() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v", "sync").unwrap();
+            write(&mut conn, "a.md", "hello\n");
+        }
+        // Stand in for the GUI: a live connection held across the change, the
+        // way `IndexHandle` holds one for the whole process lifetime.
+        let live = open(&p, "/v", "sync").unwrap();
+        let ino_before = ino(&p);
+
+        let conn = open(&p, "/v", "box").expect("a sync_dir change must not fail the open");
+        assert_eq!(ino(&p), ino_before, "index.db was unlinked and recreated, not rebuilt in place");
+        assert!(p.exists(), "index.db must still be there");
+
+        // The pre-existing connection must still be looking at the *same*
+        // database — not an orphaned inode nobody else can see.
+        meta_set(&conn, "probe", "written-by-the-reopener").unwrap();
+        assert_eq!(
+            meta_get(&live, "probe").as_deref(),
+            Some("written-by-the-reopener"),
+            "the connection held across the change is reading an orphaned file"
+        );
+    }
+
+    /// The contrast that keeps the two paths distinct: a tokenizer change
+    /// (like a schema bump) still replaces the file outright. Both are
+    /// build-time constants — a running process cannot observe them change —
+    /// so the runtime hazard `a_changed_sync_dir_must_not_unlink_the_file`
+    /// guards against does not apply, and wiping stays the simplest correct
+    /// answer for a store whose *shape* may differ. Without this assertion,
+    /// converting every trigger to an in-place rebuild would go unnoticed.
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_tokenizer_id_still_replaces_the_file() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v", "sync").unwrap();
+            write(&mut conn, "a.md", "hello\n");
+            meta_set(&conn, "tokenizer_id", "v0+something-else").unwrap();
+        }
+        let ino_before = ino(&p);
+        let _conn = open(&p, "/v", "sync").unwrap();
+        assert_ne!(ino(&p), ino_before, "a tokenizer change still wipes the file itself");
     }
 
     #[test]
