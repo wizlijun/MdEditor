@@ -403,7 +403,19 @@ fn report_stats(index: Option<&SearchIndex>, json: bool, skipped: &[SkippedFile]
                 "{}",
                 serde_json::json!({
                     "files": s.files, "blocks": s.blocks, "db_bytes": s.db_bytes,
-                    "built_at": s.built_at, "tokenizer_id": s.tokenizer_id
+                    "built_at": s.built_at, "tokenizer_id": s.tokenizer_id,
+                    // Design spec §5.1's rationale for the per-hit `origin`
+                    // field ("agent 可据此自行分层") applies to the corpus as a
+                    // whole too, and `stats()` computes both of these on every
+                    // call regardless — dropping them here was pure loss.
+                    // snake_case like every other key in this payload, not the
+                    // GUI DTO's camelCase.
+                    "origin_counts": {
+                        "human": s.origin_counts.human,
+                        "derived": s.origin_counts.derived,
+                        "source": s.origin_counts.source,
+                    },
+                    "type_counts": s.type_counts,
                 })
             );
             ExitCode::from(0)

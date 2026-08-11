@@ -115,6 +115,21 @@ pub fn derive(rel_path: &str, fm: Option<&Frontmatter>, sync_dir: &str) -> Origi
         // person authored or transcribed it by hand even though they bothered
         // to stamp it; anything else (`<producer>/<version>`, `process:<id>`)
         // means a generator wrote it.
+        //
+        // Known blind spot, recorded rather than fixed (the order is
+        // spec-normative, §3): this rationale was written about AI *summaries*
+        // — a generator that read something and produced judgment about it —
+        // and does not account for a mechanical conversion pipeline over raw
+        // material. Because rule 2 precedes rule 4, a generator-stamped
+        // `type: Book` classifies `Derived`, even though spec §1 names ebook
+        // exports as the archetype of raw source material and `Book` is the
+        // only type mapped to `Source`. It is latent today only because
+        // `plugins-src/ebook-import/backend/src/bookconf.rs` writes `type:
+        // Book` + `sources:` and no `generated:` — and
+        // `docs/okf-v0.2-conformance-audit.md` is pushing producers toward
+        // stamping `generated`, so one added line there would silently move
+        // every imported book out of the source tier. Revisit the ordering
+        // with the spec, not around it.
         if let Some(by) = fm.generated_by.as_deref() {
             return if by.starts_with("human:") { Origin::Human } else { Origin::Derived };
         }

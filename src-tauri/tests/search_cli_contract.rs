@@ -225,6 +225,32 @@ fn stats_reports_the_index_without_searching() {
     assert!(j["tokenizer_id"].is_string());
 }
 
+/// Design spec §5.1 gives one reason for the `--json` `origin` field on each
+/// hit: "agent 可据此自行分层" — an agent can do its own tiering. That applies
+/// just as much to the corpus-level distribution, and `stats()` already
+/// computes both counts on every call, so `--stats --json` was throwing them
+/// away. An agent deciding whether a vault is mostly its own output or mostly
+/// the human's has no other way to ask.
+#[test]
+fn stats_json_reports_the_provenance_distribution() {
+    let v = vault(&[
+        ("mine.note.md", "- brownfox\n"),                                   // rule 1 -> human
+        ("book.md", "---\ntype: Book\n---\nbrownfox\n"),                    // rule 4 -> source
+        ("s.md", "---\ntype: Book Summary\n---\nbrownfox\n"),               // rule 4 -> derived
+        ("a.md", "---\ngenerated: { by: claude/1 }\n---\nbrownfox\n"),      // rule 2 -> derived
+    ]);
+    let out = search(v.path(), &["--stats", "--json"]);
+    let j: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+
+    assert_eq!(j["origin_counts"]["human"].as_i64(), Some(1), "{j}");
+    assert_eq!(j["origin_counts"]["derived"].as_i64(), Some(2), "{j}");
+    assert_eq!(j["origin_counts"]["source"].as_i64(), Some(1), "{j}");
+    // Only `derived`'s typed files are itemized (see `searchidx::type_counts`),
+    // so the `Book` above must NOT appear here even though it has a type.
+    assert_eq!(j["type_counts"]["Book Summary"].as_i64(), Some(1), "{j}");
+    assert!(j["type_counts"]["Book"].is_null(), "{j}");
+}
+
 #[test]
 fn filters_and_limit_flags_work_as_flags_too() {
     let v = vault(&[("docs/a.md", "brownfox\n"), ("other/b.md", "brownfox\n")]);
