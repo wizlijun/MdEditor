@@ -516,7 +516,7 @@ export const en = {
   // (same convention as `search.group.*` above).
   'search.index.tiersHeading': 'Provenance tiers',
   'search.index.tiersDerivedLabel': 'AI-produced',
-  'search.index.tiersHint': "Tiers are derived from each file's frontmatter when the index is built — nothing here is written back to your notes. If \"Raw source material\" looks unexpectedly high, it usually just means notes are missing frontmatter; add a `type:` field (or any frontmatter) and rebuild the index to reclassify them.",
+  'search.index.tiersHint': "Tiers are derived from each file's frontmatter as it is indexed — nothing here is written back to your notes. If \"Raw source material\" looks unexpectedly high, it usually just means notes are missing frontmatter; add a `type:` field (or any frontmatter) and save. Editing a file reclassifies that file on its own — no full reindex needed.",
   'search.index.rebuildConfirmTitle': 'Rebuild search index?',
   'search.index.rebuildConfirmBody': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs, roughly {seconds}s for your {files} files. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
   'search.index.rebuildConfirmBodyUnknown': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',

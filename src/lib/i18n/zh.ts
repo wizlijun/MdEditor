@@ -541,7 +541,7 @@ export const zh: Record<keyof Messages, string> = {
   // 原始 concept_type 字符串,不翻译(与上面 search.group.* 的约定一致)。
   'search.index.tiersHeading': '来源分层统计',
   'search.index.tiersDerivedLabel': 'AI 生成',
-  'search.index.tiersHint': '分层是构建索引时从每个文件的 frontmatter 推导出来的,不会写回文件本身。如果"原始资料"的数字异常偏高,通常只是笔记缺少 frontmatter——补上 `type:` 字段(或任意 frontmatter)后重建索引即可纠正分类。',
+  'search.index.tiersHint': '分层是索引每个文件时从它的 frontmatter 推导出来的,不会写回文件本身。如果"原始资料"的数字异常偏高,通常只是笔记缺少 frontmatter——补上 `type:` 字段(或任意 frontmatter)保存即可:改过的文件会自己重新分层,不必整库重新索引。',
   'search.index.rebuildConfirmTitle': '重建搜索索引?',
   'search.index.rebuildConfirmBody': '这是一次全量重建——每个文件都会从头重新扫描。重建期间搜索不可用,你的 {files} 个文件大约需要 {seconds} 秒。不会丢失任何笔记:索引只是从你的 markdown 文件派生出的可丢弃副本,不是文件本身。',
   'search.index.rebuildConfirmBodyUnknown': '这是一次全量重建——每个文件都会从头重新扫描。重建期间搜索不可用。不会丢失任何笔记:索引只是从你的 markdown 文件派生出的可丢弃副本,不是文件本身。',

@@ -120,13 +120,32 @@ describe('setLocale', () => {
 // `search.group.source` would silently leave all four hint strings
 // referring to a label that no longer appears on screen, with no red test
 // to catch it.
+// Final fix wave, fix 3: the same sentence must NOT prescribe a full rebuild.
+// Editing a file's frontmatter changes its bytes, so the ordinary
+// sweep/watcher re-runs `chunk::parse_file` -> `origin::derive` for that file
+// on its own; a rebuild (search unavailable for ~10s, `search.rebuild`) is
+// never required to reclassify anything. Spec §9 makes this hint THE
+// discovery-and-correction path for rule 6's deliberate misclassification, so
+// prescribing the most disruptive action available is bad advice at the exact
+// moment the user is trying to fix something. Each locale contributes the
+// word stem its own "rebuild" wording is built from — the assertion has to be
+// per-locale because there is no shared token to look for.
 describe.each([
-  ['en', en],
-  ['zh', zh],
-  ['ja', ja],
-  ['de', de],
-])('%s search.index.tiersHint', (_name, catalog) => {
+  ['en', en, /rebuild/i],
+  ['zh', zh, /重建/],
+  ['ja', ja, /再構築/],
+  ['de', de, /neu erstell|erstell.{0,12}neu/i],
+])('%s search.index.tiersHint', (_name, catalog, rebuildWording) => {
   it("quotes this locale's own search.group.source label", () => {
     expect(catalog['search.index.tiersHint']).toContain(catalog['search.group.source'])
+  })
+  it('does not tell the user to rebuild the index', () => {
+    expect(catalog['search.index.tiersHint']).not.toMatch(rebuildWording)
+  })
+  it('the stem it forbids is the one that locale really uses for rebuilding', () => {
+    // Guards the test above from going vacuous: a `search.rebuild` rewording
+    // that no longer matches this pattern must fail here rather than silently
+    // stop checking anything.
+    expect(catalog['search.rebuild']).toMatch(rebuildWording)
   })
 })
