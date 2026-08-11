@@ -7,11 +7,12 @@ pub mod options;
 pub mod watch;
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use searchidx::{Hit, IndexStats, SearchIndex};
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Kept as an alias — rather than rewriting this module's call sites — so
 /// there is exactly one place (`options::for_vault`) that ever constructs a
@@ -23,6 +24,47 @@ pub use options::for_vault as scan_options;
 /// optional, the app is not).
 pub type IndexHandle = Arc<Mutex<Option<SearchIndex>>>;
 
+/// The latest rebuild progress snapshot, readable by `notemd_search_progress`.
+///
+/// **Deliberately a different `Mutex` from `IndexHandle`.** A rebuild holds
+/// the index lock for its entire duration (see `notemd_search_rebuild`'s doc
+/// comment) — if progress were stored behind that same lock, a settings page
+/// polling for progress would block on the very lock it exists to report on,
+/// and would only ever observe progress *after* the rebuild that produced it
+/// had already finished. That defeats the point, so this is its own lock.
+#[derive(Default, Clone)]
+pub struct ProgressState(Arc<Mutex<Option<searchidx::Progress>>>);
+
+impl ProgressState {
+    pub fn set(&self, p: Option<searchidx::Progress>) {
+        if let Ok(mut g) = self.0.lock() {
+            *g = p
+        }
+    }
+    pub fn get(&self) -> Option<searchidx::Progress> {
+        self.0.lock().ok().and_then(|g| g.clone())
+    }
+    pub fn clear(&self) {
+        self.set(None)
+    }
+}
+
+/// Single-flight guard for `notemd_search_rebuild`. A second rebuild started
+/// while one is already running is refused outright (`try_begin` returns
+/// `false`), never queued — queueing would turn three impatient clicks into
+/// three consecutive full rebuilds.
+#[derive(Default, Clone)]
+pub struct RebuildFlag(Arc<AtomicBool>);
+
+impl RebuildFlag {
+    pub fn try_begin(&self) -> bool {
+        self.0.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    }
+    pub fn end(&self) {
+        self.0.store(false, Ordering::SeqCst)
+    }
+}
+
 /// Manage app state and, if a vault is already configured (the common case:
 /// app relaunch with an existing vault), open it and start watching — mirrors
 /// `agents_sync::init`'s auto-start. `open_vault` is also called directly from
@@ -30,6 +72,8 @@ pub type IndexHandle = Arc<Mutex<Option<SearchIndex>>>;
 pub fn init(app: &AppHandle) {
     app.manage::<IndexHandle>(Arc::new(Mutex::new(None)));
     app.manage(watch::WatchState::default());
+    app.manage(ProgressState::default());
+    app.manage(RebuildFlag::default());
     if let Some(root) = crate::sotvault::resolve_vault_root(app) {
         open_vault(app, &root);
     }
@@ -253,6 +297,45 @@ pub(crate) fn log_rebuild_with(
     Ok(stats)
 }
 
+/// Wire shape for `notemd_search_progress` and the `search://progress` event
+/// — see `progress_dto`'s doc comment for the phase-string mapping.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressDto {
+    pub phase: String,
+    pub done: usize,
+    pub total: usize,
+    pub current: Option<String>,
+    pub elapsed_ms: u128,
+}
+
+/// The event a settings page listens on for live progress during a rebuild
+/// (paired with `notemd_search_progress` for a page opened mid-rebuild, which
+/// would otherwise see nothing until the next event).
+const PROGRESS_EVENT: &str = "search://progress";
+
+/// `searchidx::Phase` has no `Serialize` of its own (the core crate has no
+/// wire-format opinions), so the host spells out the mapping once, here.
+fn phase_str(p: searchidx::Phase) -> &'static str {
+    use searchidx::Phase;
+    match p {
+        Phase::Walking => "walking",
+        Phase::Indexing => "indexing",
+        Phase::Removing => "removing",
+        Phase::Done => "done",
+    }
+}
+
+fn progress_dto(p: &searchidx::Progress) -> ProgressDto {
+    ProgressDto {
+        phase: phase_str(p.phase).to_string(),
+        done: p.done,
+        total: p.total,
+        current: p.current.clone(),
+        elapsed_ms: p.elapsed_ms,
+    }
+}
+
 fn stats_to_dto(s: IndexStats) -> SearchStatsDto {
     SearchStatsDto {
         files: s.files,
@@ -288,24 +371,73 @@ pub fn notemd_search_stats(app: AppHandle) -> Result<SearchStatsDto, String> {
 }
 
 /// Rebuild is a rare, explicit, user-initiated action (a button, not
-/// something on the hot path), and it holds the index lock for its whole
-/// duration rather than swapping the `SearchIndex` out of `IndexHandle` to
-/// rebuild it lock-free. Concurrent `notemd_search`/`notemd_search_stats`
-/// calls block for that window, but they get an honest "still building"
-/// wait; the alternative — taking the index out from under the `Mutex` while
-/// it rebuilds — would make every concurrent caller see `NOT_READY` (a
-/// vault-not-configured state) for an index that in fact exists and is just
-/// busy, which is a worse lie. The file watcher's flood-sweep path
-/// (`watch::drain`) already holds this same lock across a full `sweep`, so
-/// this is the established pattern, not a new tradeoff.
+/// something on the hot path), and it still holds the index lock for the
+/// whole duration of the actual rebuild rather than swapping the
+/// `SearchIndex` out of `IndexHandle` to rebuild it lock-free — the file
+/// watcher's flood-sweep path (`watch::drain`) already holds this same lock
+/// across a full `sweep`, so this is the established pattern, not a new
+/// tradeoff. What changes here is that the command itself no longer blocks
+/// on it: the lock is taken on a spawned background thread, and this command
+/// returns immediately, so a caller polling `notemd_search_progress` (which
+/// deliberately never touches `IndexHandle`) is never stuck behind the very
+/// rebuild it's asking about.
+///
+/// A rebuild already running is refused via `RebuildFlag`, not queued —
+/// three impatient clicks must not become three consecutive full rebuilds.
 #[tauri::command]
-pub fn notemd_search_rebuild(app: AppHandle) -> Result<SearchStatsDto, String> {
+pub fn notemd_search_rebuild(app: AppHandle) -> Result<(), String> {
+    let flag = app.state::<RebuildFlag>().inner().clone();
+    if !flag.try_begin() {
+        return Err("rebuild already running".into());
+    }
+    let progress = app.state::<ProgressState>().inner().clone();
     let idx_handle = handle(&app);
-    let mut guard = lock(&idx_handle);
-    let idx = require_index_mut(&mut guard)?;
-    let root = idx.vault_root().to_path_buf();
-    idx.rebuild(&scan_options(&root))?;
-    Ok(stats_to_dto(idx.stats()?))
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            let mut guard = lock(&idx_handle);
+            let idx = require_index_mut(&mut guard)?;
+            let root = idx.vault_root().to_path_buf();
+            let opts = scan_options(&root);
+            let progress_for_cb = progress.clone();
+            let app_for_cb = app2.clone();
+            // Owned closure, not a borrow: it must outlive `log_rebuild_with`'s
+            // call only, which it does trivially since it lives on this
+            // spawned thread's stack for the duration of that call — no
+            // `thread::scope` needed because nothing here is borrowed *from*
+            // this thread's stack across a thread boundary.
+            let cb = move |p: &searchidx::Progress| {
+                progress_for_cb.set(Some(p.clone()));
+                let _ = app_for_cb.emit(PROGRESS_EVENT, progress_dto(p));
+            };
+            log_rebuild_with(idx, &opts, Some(&cb))?;
+            Ok(())
+        })();
+        // `Done` is the last callback `rebuild_with_progress` ever makes, but
+        // clearing here — after the whole closure above (and therefore the
+        // rebuild) has returned — rather than inside the `Done` callback
+        // itself, also covers the error path: a rebuild that fails partway
+        // must not leave a stale in-progress snapshot behind either.
+        progress.clear();
+        flag.end();
+        if let Err(e) = &result {
+            crate::log_cat!("search", "error", "rebuild failed: {e}");
+        }
+        // Lets an open search panel refresh without polling, win or lose —
+        // matches `watch::drain`'s successful-sweep emit.
+        let _ = app2.emit(watch::INDEX_UPDATED_EVENT, ());
+    });
+    Ok(())
+}
+
+/// Never touches `IndexHandle` — that is the entire point of `ProgressState`
+/// living behind its own lock. Called during a rebuild (to poll live
+/// progress) and immediately after one starts (a settings page opened
+/// mid-rebuild gets this instead of waiting for the next `search://progress`
+/// event).
+#[tauri::command]
+pub fn notemd_search_progress(app: AppHandle) -> Option<ProgressDto> {
+    app.state::<ProgressState>().get().as_ref().map(progress_dto)
 }
 
 #[cfg(test)]
@@ -494,6 +626,70 @@ mod command_tests {
             milestones[0].message, "indexing 501/600",
             "里程碑行的格式与 total 必须精确: {:?}", milestones[0]
         );
+    }
+
+    /// 本任务的核心不变量:重建进行中,进度依然读得到。
+    /// 如果进度状态和索引句柄共用一把锁,这条会挂在 lock 上超时。
+    #[test]
+    fn progress_is_readable_while_the_index_lock_is_held() {
+        let state = ProgressState::default();
+        let handle: IndexHandle = Default::default();
+        let _held = handle.lock().unwrap(); // 模拟重建期间持锁
+
+        state.set(Some(searchidx::Progress {
+            phase: searchidx::Phase::Indexing,
+            done: 7,
+            total: 100,
+            current: Some("a.md".into()),
+            elapsed_ms: 12,
+        }));
+        let got = state.get().expect("持索引锁时进度必须仍可读");
+        assert_eq!(got.done, 7);
+        assert_eq!(got.total, 100);
+    }
+
+    /// 重建进行中再点重建必须被拒,而不是排队 —— 排队意味着用户连点三下
+    /// 就锁死三轮全量重建。
+    #[test]
+    fn a_second_rebuild_is_refused_while_one_is_running() {
+        let flag = RebuildFlag::default();
+        assert!(flag.try_begin(), "第一次应当拿到");
+        assert!(!flag.try_begin(), "进行中第二次必须被拒");
+        flag.end();
+        assert!(flag.try_begin(), "结束后应当可以再来");
+    }
+
+    /// 完成后进度必须清空,否则设置页会一直显示一个停在 100% 的旧进度。
+    #[test]
+    fn progress_is_cleared_when_the_run_finishes() {
+        let state = ProgressState::default();
+        state.set(Some(searchidx::Progress {
+            phase: searchidx::Phase::Done,
+            done: 5,
+            total: 5,
+            current: None,
+            elapsed_ms: 1,
+        }));
+        state.clear();
+        assert!(state.get().is_none());
+    }
+
+    /// 钉住 wire 形状:每个字段名对设置页的 TypeScript 都是 load-bearing 的。
+    #[test]
+    fn progress_dto_serializes_with_camel_case_field_names() {
+        let p = searchidx::Progress {
+            phase: searchidx::Phase::Indexing,
+            done: 3,
+            total: 10,
+            current: Some("a.md".into()),
+            elapsed_ms: 42,
+        };
+        let dto = progress_dto(&p);
+        let v = serde_json::to_value(&dto).unwrap();
+        for key in ["phase", "done", "total", "current", "elapsedMs"] {
+            assert!(v.get(key).is_some(), "missing key {key} in {v}");
+        }
+        assert_eq!(dto.phase, "indexing");
     }
 
     #[test]
