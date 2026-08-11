@@ -103,58 +103,43 @@
   user-select: none;
   margin: 0 1px;
 }
-/* 编号由 footnote-plugin 以 decoration 形式挂在 data-num 上,不落盘。
-   缺 data-num(插件未启用)时回退显示 label,不至于变成一个看不见的空角标。 */
+/* 角标就显示 [^id] 里的 id 本身,不另编号 —— 编号要靠插件按出现顺序派生,
+   与磁盘上的写法对不上;直接用 id,看到什么就是文件里写的什么。 */
 .moraya-editor .moraya-footnote-ref::before {
-  content: '[' attr(data-num) ']';
-}
-.moraya-editor .moraya-footnote-ref:not([data-num])::before {
-  content: '[^' attr(data-label) ']';
+  content: attr(data-label);
 }
 .moraya-editor .moraya-footnote-ref:hover {
   color: #2a5da8;
   text-decoration: underline;
 }
 
-/* 脚注定义块。padding-left 同时是编号的悬挂缩进区 —— 编号必须落在块**内部**,
-   若用 translateX(-100%) 推到边界框外,它虽仍属于本元素,却落在编辑器留白里,
-   既容易点不中也可能被其他元素遮挡(回跳点击因此形同失效)。 */
+/* 脚注定义块。标记必须落在块**内部** —— 早先用 translateX(-100%) 推到边界框外,
+   它虽仍属于本元素,却落在编辑器留白里,既容易点不中也可能被其他元素遮挡,
+   回跳点击因此形同失效。 */
 .moraya-editor .moraya-footnote-def {
   position: relative;
-  padding-left: 3em;
+  padding-left: 0.8em;
   border-left: 2px solid rgba(59, 125, 216, 0.35);
   color: rgba(0, 0, 0, 0.72);
   font-size: 0.92em;
 }
-/* 底部定义列表用编号而不是 label:label 长短不一,一列排下来参差难读;编号
-   等宽且与正文角标一一对应。完整 label 走 hover 的 title(见 footnote-plugin)。
-   编号由插件以 decoration 形式挂在 data-num 上,不落盘。 */
-/* 与正文角标区分:这是定义列表自己的编号,不是上标角标 —— 用正文同等字号、
-   基线对齐,读起来像编号列表而不是又一个角标。点击回跳到首次引用。 */
+/* 定义前的标记写成源码里的样子 `[^id]:` —— 与磁盘内容一一对应,一眼能对上是
+   哪一条。点它回跳到首次引用。 */
+/* float 而不是绝对定位:id 长度不定,绝对定位要么给固定 padding 留白浪费,
+   要么长 id 压到内容上。float 让标记与定义首行同排、宽度自适应。 */
 .moraya-editor .moraya-footnote-def::before {
-  content: '[' attr(data-num) ']';
-  position: absolute;
-  left: 0.6em;
-  top: 0;
+  content: '[^' attr(data-label) ']:';
+  float: left;
+  margin-right: 0.4em;
   color: #3b7dd8;
-  font-size: 1em;
   cursor: pointer;
   user-select: none;
-  /* 表格数字字形:多位编号之间也能对齐 */
-  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .moraya-editor .moraya-footnote-def:hover::before {
   color: #2a5da8;
   text-decoration: underline;
   text-underline-offset: 2px;
-}
-/* 孤儿定义(没有任何引用)没有编号。仍给一个等宽占位而不是摊开 label,
-   否则又回到长短不一;是哪一条 hover 就知道。没有引用可回跳,不做点击态。 */
-.moraya-editor .moraya-footnote-def:not([data-num])::before {
-  content: '[·]';
-  opacity: 0.55;
-  cursor: default;
-  text-decoration: none;
 }
 
 /* 跳转后的短暂高亮 */
