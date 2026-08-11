@@ -32,28 +32,35 @@ rich 模式的 markdown 解析在 `@moraya/core` 的 `src/markdown.ts:33`,markdo
 
 **结论:必须在本地 fork 改 core,没有第二条路。**
 
-## 3 · 为什么不用 `markdown-it-footnote`
+## 3 · 用 `markdown-it-footnote`,但禁掉两条规则
 
-实测 `markdown-it-footnote@4.0.0` 的 token 行为(2026-08-11):
+初版设计判定"不能用 `markdown-it-footnote`",依据是实测到的三条破坏:定义被搬到文末、按引用顺序重排、孤儿定义从 token 流里消失。
 
-- ✅ `footnote_ref.meta.label` 保留原名(`loop`),往返能还原 label
-- ❌ **所有定义被搬到文档末尾**的 `footnote_block`,无论源文件里写在哪
-- ❌ 定义顺序按**首次引用顺序**重排,不是源文件顺序
-- ❌ **未被引用的定义从 token 流里彻底消失** —— `[^orphan]: 内容` 一行输出都没有
+**这个判定错了 —— 三条破坏全部出自同一条核心规则 `footnote_tail`。** 读源码可见,它的块规则 `footnote_def` 本身是**原位**产出 `footnote_reference_open/close` token 的;搬家、重排、删孤儿都是 `core.ruler.after('inline', 'footnote_tail')` 这一道后处理干的。
 
-最后一条是致命的:编辑器里"定义先写、引用后写"或"删了引用但想留定义"都极常见,套用即**永久删除孤儿定义**。前两条则意味着每次保存都把源文件重排一遍。
+实测 `md.core.ruler.disable('footnote_tail')` 之后(2026-08-11):
 
-自写规则可以让定义节点原地不动,孤儿定义、定义顺序全部天然保真,且实现完全可控。代价是不支持内联脚注 `^[...]`(本次不做,见 §8)。
+- ✅ 定义**原位**留在源文件里它本来在的位置
+- ✅ **孤儿定义完整保留**
+- ✅ 多段缩进续行正确解析为多个 paragraph
+- ✅ `footnote_ref.meta.label` 保留原名
+- ✅ 不再注入 `footnote_anchor` 回链锚,也不再有 `footnote_block` 包裹
+
+于是改用这个依赖:省掉约 80 行操作 markdown-it 内部状态(`blkIndent` / `bMarks` / `tShift` / `sCount` 存档恢复)的 tricky 代码,白拿续行处理与 label 边界判定,与上游的分叉面反而更小 —— 只是多一个成熟依赖(markdown-it 官方组织维护)加两行 `disable`。
 
 ## 4 · 解析层(`src/markdown.ts`)
 
-两条自写 markdown-it 规则:
+依赖 `markdown-it-footnote@4.0.0`,三处改动:
 
-**块规则 `footnote_def`** —— 注册在 `reference` 规则**之前**。这是本设计最关键的一行:不抢在 `reference` 前面,`[^loop]: 内容` 就仍会被链接引用定义吃掉,即 §1 的根因。
+**禁 `footnote_tail`(core 规则)** —— `md.core.ruler.disable('footnote_tail')`。见 §3,这是原位保真的全部秘密。
 
-匹配 `[^label]: 内容`,并**必须一并消费后续缩进续行**(4 空格或 Tab)及其间空行。不消费的话,续行会掉进 markdown-it 的缩进代码块规则 —— 那比现状破坏更重。定义内容递归解析为 `block+`。
+**禁 `footnote_inline`(inline 规则)** —— `md.inline.ruler.disable('footnote_inline')`。我们不做内联脚注(§8),而**不禁掉反而会引入新的破坏**:`^[内容]` 会被解析成没有 `label` 的 `footnote_ref`,序列化时无从知道该写回什么。禁掉后它安分地保持纯文本。
 
-**行内规则 `footnote_ref`** —— 注册在 `link` 规则之前,匹配 `[^label]`,产出携带 `label` 的 atom token。**有无对应定义都照样成节点**(与 Obsidian 一致),顺带根治"裸写 `[^x]` 被加反斜杠"的转义问题。
+**加一条兜底规则 `footnote_ref_orphan`** —— `md.inline.ruler.after('footnote_ref', ...)`。markdown-it-footnote 的 `footnote_ref` 规则**要求定义已登记**(`env.footnotes.refs`),因此无定义的裸引用 `[^loop]` 不成节点,会退回纯文本并继续被 `esc()` 加反斜杠 —— 即 §1 的第三种破坏原样残留。兜底规则在它之后接手,产出同名 `footnote_ref` token(`meta.orphan = true`),使**有无定义都成节点**(与 Obsidian 一致)。
+
+实测确认无副作用:`\[^notafootnote]` 转义逃逸仍是纯文本,普通链接 `[a](url)` 与 reference link `[a][r]` 均不受影响。
+
+> 块规则顺序天然正确:`markdown-it-footnote` 把 `footnote_def` 注册在 `reference` **之前**(实测规则链为 `table code fence blockquote hr list footnote_def reference html_block …`),所以 `[^loop]: 内容` 不再会被链接引用定义抢走 —— §1 的根因就此消除。
 
 ## 5 · Schema(`src/schema.ts`)
 
@@ -63,6 +70,8 @@ footnote_definition  block, content 'block+', attrs { label }
 ```
 
 `footnote_ref` 照既有 atom 范式写(参照 `src/schema.ts:583` 的 `note_anchor`)。
+
+markdown-it token → schema 节点的映射:`footnote_ref`(inline,零嵌套)→ `footnote_ref`;`footnote_reference_open` / `footnote_reference_close`(block,成对)→ `footnote_definition`。注意定义的 token 名是 `footnote_reference_*` 而非 `footnote_definition_*`,这是 markdown-it-footnote 的既定命名。
 
 **编号不进 attrs。** 编号是派生值,写进节点属性就会污染磁盘语义,违反 file-over-app。
 
@@ -84,8 +93,7 @@ footnote_definition  block, content 'block+', attrs { label }
 
 ## 8 · 不做
 
-- **内联脚注 `^[直接写内容]`**(Obsidian 写法)。YAGNI,且与既有 `^^高亮^^` 规则共用 `^` 字符,引入会多一层词法优先级冲突风险。不做的情况下它继续按纯文本处理,但**保证不被转义破坏**。
-- 不引入 `markdown-it-footnote` 依赖。
+- **内联脚注 `^[直接写内容]`**(Obsidian 写法)。YAGNI,且与既有 `^^高亮^^` 规则共用 `^` 字符,引入会多一层词法优先级冲突风险。实现方式是禁掉 `footnote_inline` 规则(§4),它继续按纯文本处理 —— 这不只是"不支持",而是**必须显式禁掉**,否则会产生无 label 的 ref 节点造成新破坏。
 - 不碰"回归上游 0.19.1"这个独立议题。
 
 ## 9 · 验证
