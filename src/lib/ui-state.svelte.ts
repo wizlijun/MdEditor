@@ -14,19 +14,42 @@ export const uiState = $state<{ showSettings: boolean; pendingSettingsTab: strin
  * e.g. the search panel's gear button lands on 'search' — even if the
  * dialog is already open, since SettingsDialog reacts to
  * `pendingSettingsTab` changing, not to `open` changing.
- *
- * Every caller that surfaces the dialog MUST go through this function rather
- * than writing `uiState.showSettings = true` directly — that's what keeps
- * `pendingSettingsTab` paired with the open it was requested for. A caller
- * that bypassed it could leave a stale tab request sitting unconsumed if the
- * dialog closes before SettingsDialog's effect flushes; `closeSettings`
- * clears the flag as a second line of defense against exactly that.
  */
 export function openSettings(tab?: string) {
   uiState.showSettings = true
   if (tab) uiState.pendingSettingsTab = tab
 }
+
+/**
+ * NOT on the dialog's hot close path — `SettingsDialog.svelte`'s overlay
+ * click / Escape / Done button all write its bindable `open` prop directly,
+ * which flows back to `uiState.showSettings` through `bind:open` in
+ * `App.svelte` without ever calling this. Kept for callers that hold a
+ * reference to `uiState` but not the dialog instance; the
+ * `pendingSettingsTab` clear here is a courtesy for those, not the mechanism
+ * that keeps the flag from leaking (see `consumePendingSettingsTab` below
+ * for that).
+ */
 export function closeSettings() {
   uiState.showSettings = false
   uiState.pendingSettingsTab = null
+}
+
+/**
+ * The one and only place `pendingSettingsTab` is read and cleared —
+ * `SettingsDialog.svelte`'s consuming `$effect` calls this directly, every
+ * time the flag changes, regardless of whether the dialog is currently
+ * `open`. That "regardless of open" part is load-bearing: an earlier version
+ * gated consumption on `open`, which meant a request set while the dialog
+ * was (about to be) closed could survive to silently redirect a later,
+ * unrelated `openSettings()` call — the search panel's gear button hijacking
+ * a plain Preferences-menu open, for instance. Consuming unconditionally
+ * means the flag's lifetime is at most one reactive flush after it's set,
+ * open or not, so there is no window in which a stale request can outlive
+ * the request that made it.
+ */
+export function consumePendingSettingsTab(): string | null {
+  const tab = uiState.pendingSettingsTab
+  uiState.pendingSettingsTab = null
+  return tab
 }

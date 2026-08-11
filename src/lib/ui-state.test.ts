@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { uiState, openSettings, closeSettings } from './ui-state.svelte'
+import { uiState, openSettings, closeSettings, consumePendingSettingsTab } from './ui-state.svelte'
 
 beforeEach(() => {
   uiState.showSettings = false
@@ -37,18 +37,46 @@ describe('closeSettings', () => {
     expect(uiState.showSettings).toBe(false)
   })
 
-  // Regression for the hijack scenario a reviewer flagged: `pendingSettingsTab`
-  // was previously cleared in exactly one place (SettingsDialog's `$effect`,
-  // gated on `open`). If the dialog closes before that effect gets to
-  // consume the flag — or a caller ever sets `showSettings` without pairing
-  // it through `openSettings` — a stale tab request would silently redirect
-  // the *next* unrelated Settings open (e.g. from the Preferences menu,
-  // which never asked for a tab). Closing must scrub it so no request can
-  // outlive the open it was made for.
-  it('clears a pending tab request so it cannot leak into the next open', () => {
+  // `closeSettings` is not on any of SettingsDialog's real close paths (the
+  // overlay/Escape/Done handlers all write the bindable `open` prop
+  // directly), so this clear is a courtesy for other hypothetical callers,
+  // not the mechanism that prevents the hijack — see `consumePendingSettingsTab`
+  // below for that. Still correct for callers that do go through it.
+  it('clears a pending tab request', () => {
     uiState.showSettings = true
     uiState.pendingSettingsTab = 'search'
     closeSettings()
     expect(uiState.pendingSettingsTab).toBeNull()
+  })
+})
+
+describe('consumePendingSettingsTab', () => {
+  // This is the actual fix for the hijack a reviewer flagged: it's the exact
+  // function `SettingsDialog.svelte`'s consuming `$effect` calls, on every
+  // change to `pendingSettingsTab`, unconditionally — not gated on whether
+  // the dialog happens to be open. A flag that is cleared the moment it's
+  // read can never outlive the request that set it, regardless of what the
+  // dialog's open/close state is doing around it.
+  it('returns the pending tab and clears it in the same call', () => {
+    uiState.pendingSettingsTab = 'search'
+    const tab = consumePendingSettingsTab()
+    expect(tab).toBe('search')
+    expect(uiState.pendingSettingsTab).toBeNull()
+  })
+
+  it('returns null and is a no-op when nothing is pending', () => {
+    const tab = consumePendingSettingsTab()
+    expect(tab).toBeNull()
+    expect(uiState.pendingSettingsTab).toBeNull()
+  })
+
+  // The hijack scenario itself: a tab request consumed once must not still
+  // be sitting there for some later, unrelated `openSettings()` call (e.g.
+  // a plain Preferences-menu click) to pick up.
+  it('a second consume after the first sees nothing left over', () => {
+    uiState.pendingSettingsTab = 'search'
+    consumePendingSettingsTab()
+    openSettings() // no tab argument — the plain Preferences-menu case
+    expect(consumePendingSettingsTab()).toBeNull()
   })
 })

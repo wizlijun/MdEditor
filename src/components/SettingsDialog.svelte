@@ -32,7 +32,7 @@
     type OutlineCommandId,
   } from '../lib/outline/shortcuts'
   import VaultSettingsTab from './VaultSettingsTab.svelte'
-  import { uiState } from '../lib/ui-state.svelte'
+  import { consumePendingSettingsTab } from '../lib/ui-state.svelte'
 
   let { open = $bindable(false) }: { open: boolean } = $props()
 
@@ -51,13 +51,21 @@
   // directly — this module doesn't otherwise know about ui-state.svelte, and
   // routing through a pending flag means a repeat request for the same tab
   // (dialog already open, already on 'search') still re-fires because the
-  // flag itself changed, not just its value. Consumed once, then cleared, so
-  // a plain reopen (no tab requested) doesn't fight the user's manual tab pick.
+  // flag itself changed, not just its value.
+  //
+  // Deliberately NOT gated on `open`: this component is mounted once for the
+  // app's lifetime (only its internal `{#if open}` block toggles), so this
+  // effect runs on every change to `pendingSettingsTab` whether the dialog
+  // is showing or not. `consumePendingSettingsTab()` (see ui-state.svelte.ts
+  // for why) clears the flag unconditionally, so it can never survive to
+  // redirect some later, unrelated open — e.g. a plain Preferences-menu
+  // click landing on 'search' because the gear button set the flag earlier
+  // and something skipped consuming it. Assigning `selectedTab` while closed
+  // is harmless; it just means the dialog is already on the right tab by
+  // the time it's shown.
   $effect(() => {
-    if (open && uiState.pendingSettingsTab) {
-      selectedTab = uiState.pendingSettingsTab
-      uiState.pendingSettingsTab = null
-    }
+    const tab = consumePendingSettingsTab()
+    if (tab) selectedTab = tab
   })
 
   // Vault-scoped sync folder (stored in {vault}/.notemd/settings.json). Loaded
