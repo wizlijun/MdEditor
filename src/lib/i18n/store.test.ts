@@ -112,3 +112,21 @@ describe('setLocale', () => {
     expect(storeSet).not.toHaveBeenCalled()
   })
 })
+
+// Task B-T8 review round 1: `search.index.tiersHint` (the settings page's
+// "raw source material looks high → add frontmatter" sentence, design spec
+// §9) quotes each locale's OWN `search.group.source` label in prose, by
+// design — but nothing before this test pinned the two together. Renaming
+// `search.group.source` would silently leave all four hint strings
+// referring to a label that no longer appears on screen, with no red test
+// to catch it.
+describe.each([
+  ['en', en],
+  ['zh', zh],
+  ['ja', ja],
+  ['de', de],
+])('%s search.index.tiersHint', (_name, catalog) => {
+  it("quotes this locale's own search.group.source label", () => {
+    expect(catalog['search.index.tiersHint']).toContain(catalog['search.group.source'])
+  })
+})

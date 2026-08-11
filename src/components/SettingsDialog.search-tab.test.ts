@@ -137,31 +137,57 @@ describe('SettingsDialog — Search & Index tab entry', () => {
   })
 })
 
+// Locates the "Provenance tiers" section specifically — not the whole
+// dialog body — and reads each row as a (label, value) PAIR rather than a
+// bag of substrings. Review round 1 finding: the original version of this
+// suite asserted `document.body.textContent` contained each expected number
+// and label independently. That passed even when the reviewer swapped
+// `oc.human` and `oc.source` under each other's labels in the component —
+// an inverted pole is the one failure mode that actively defeats spec §9's
+// discovery path ("source looks high → you're missing frontmatter"), and a
+// substring check cannot see it because both numbers are still present
+// SOMEWHERE on the page, just under the wrong label.
+function tierSection(): Element {
+  const section = Array.from(document.body.querySelectorAll('section.block')).find(
+    (s) => s.querySelector('h3')?.textContent?.trim() === 'Provenance tiers',
+  )
+  if (!section) throw new Error('Provenance tiers section not found')
+  return section
+}
+
+function rowValue(section: Element, label: string): string {
+  const row = Array.from(section.querySelectorAll(':scope > .row')).find(
+    (r) => r.querySelector('.lbl')?.textContent?.trim() === label,
+  )
+  if (!row) throw new Error(`no row for label "${label}" in tier section`)
+  const spans = row.querySelectorAll('span')
+  return spans[spans.length - 1]?.textContent?.trim() ?? ''
+}
+
 // Task B-T8 (design spec §6/§9): the placeholder a previous project left
 // ("Per-tier statistics are coming soon.") is now filled in with real
 // numbers read through the same one entry point as the rest of the tab —
 // no second load path, per the regression this file exists to prevent.
 describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)', () => {
-  it('renders the actual origin/type counts, not just the section shell', async () => {
+  it('renders each origin/type count next to its own label, not just anywhere on the page', async () => {
     const app = await mountDialog()
     await settle()
     openSettings('search')
     await settle()
 
-    const text = document.body.textContent ?? ''
     // From the beforeEach stub: human 40, derived 70, source 18,
     // typeCounts { 'Book Summary': 25, Answer: 12 } → untyped derived
     // remainder is 70 - (25 + 12) = 33.
-    expect(text).toContain('40')
-    expect(text).toContain('70')
-    expect(text).toContain('18')
-    expect(text).toContain('Book Summary') // raw concept_type, not translated
-    expect(text).toContain('25')
-    expect(text).toContain('Answer')
-    expect(text).toContain('12')
-    expect(text).toContain('33') // computed untyped-derived ("Other") remainder
+    const section = tierSection()
+    expect(rowValue(section, 'Written by you')).toBe('40') // origin.human pole
+    expect(rowValue(section, 'AI-produced')).toBe('70') // origin.derived total
+    expect(rowValue(section, 'Book Summary')).toBe('25') // raw concept_type, not translated
+    expect(rowValue(section, 'Answer')).toBe('12')
+    expect(rowValue(section, 'Other')).toBe('33') // computed untyped-derived remainder
+    expect(rowValue(section, 'Raw source material')).toBe('18') // origin.source pole
+
     // The old placeholder sentence must be gone.
-    expect(text).not.toContain('coming soon')
+    expect(document.body.textContent).not.toContain('coming soon')
     unmount(app)
   })
 
@@ -177,15 +203,14 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
     openSettings('search')
     await settle()
 
-    const text = document.body.textContent ?? ''
-    expect(text).toContain('7')
-    expect(text).toContain('9')
-    expect(text).toContain('3')
-    expect(text).toContain('Idea')
-    expect(text).toContain('4')
+    const section = tierSection()
+    expect(rowValue(section, 'Written by you')).toBe('7')
+    expect(rowValue(section, 'AI-produced')).toBe('9')
+    expect(rowValue(section, 'Idea')).toBe('4')
     // 9 - 4 = 5 untyped-derived — proves the "Other" row is recomputed per
     // payload, not a number left over from the default stub (40/70/18/33).
-    expect(text).not.toContain('33')
+    expect(rowValue(section, 'Other')).toBe('5')
+    expect(rowValue(section, 'Raw source material')).toBe('3')
     unmount(app)
   })
 })

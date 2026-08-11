@@ -171,21 +171,55 @@ fn origin_counts(conn: &rusqlite::Connection) -> Result<OriginCounts, String> {
     Ok(counts)
 }
 
+/// Review round 1 finding: the bound on how many rows `type_counts` can
+/// return is NOT `CONCEPT_TYPE`'s registry size, which is what the original
+/// version of this module was implicitly sized against. Rule 7
+/// (`origin::derive`) stores whatever string sits in an unregistered `type:`
+/// straight through — so every distinct *free-text* value gets its own
+/// settings-page row, registered or not. A single ebook-import run that
+/// stamps a fresh `type: Chapter N Summary` per chapter, or one agent that
+/// free-types a `type:` per document, produces one row per document, not
+/// one per registered type. 10 is deliberately small: this section is a
+/// compact overview panel (unlike the settings page's skipped-files list or
+/// the 500-file-milestone rebuild log, which are diagnostic and expected to
+/// scroll), and a real vault's derived content is expected to cluster into a
+/// handful of dominant types (`Book Summary`, `Answer`, …) — the tail this
+/// cap drops is exactly the "one-off or mistyped `type:`" case that belongs
+/// folded into a remainder, not itemized by name.
+const TYPE_COUNTS_CAP: i64 = 10;
+
 /// Design spec §6: `derived`'s distribution by `concept_type`, for the
 /// settings page's tier breakdown. Scoped to `origin = 'derived'` AND a
 /// non-null `concept_type` — untyped derived files (rule 7's "has
 /// frontmatter but an unregistered/absent type") are deliberately excluded
 /// rather than stashed under a sentinel key, matching the panel's own
 /// grouping convention (`grouping.ts`'s `derivedOther` group is a computed
-/// remainder, not a named type). A `BTreeMap` gives deterministic key order
-/// for the DTO and its tests; the frontend only reads by key, never assumes
-/// insertion order.
+/// remainder, not a named type).
+///
+/// Capped to the top [`TYPE_COUNTS_CAP`] types by file count (ties broken by
+/// name, for determinism) — see that constant's doc comment for why this is
+/// necessary and how the bound was picked. The overflow is not lost: it is
+/// simply not itemized. `origin_counts.derived` (a separate, uncapped query)
+/// stays the true total, and the frontend's existing "untyped derived"
+/// remainder — `origin_counts.derived - sum(type_counts.values())` — folds
+/// BOTH the genuinely untyped files AND any capped-off named types into the
+/// same "Other" bucket it already renders, with no wire-shape change needed.
+///
+/// A `BTreeMap` gives deterministic key order for the DTO and its tests; the
+/// frontend only reads by key, never assumes insertion order (it re-sorts by
+/// count for display).
 fn type_counts(conn: &rusqlite::Connection) -> Result<std::collections::BTreeMap<String, i64>, String> {
     let mut stmt = conn
-        .prepare("SELECT concept_type, count(*) FROM files WHERE origin = 'derived' AND concept_type IS NOT NULL GROUP BY concept_type")
+        .prepare(
+            "SELECT concept_type, count(*) FROM files \
+             WHERE origin = 'derived' AND concept_type IS NOT NULL \
+             GROUP BY concept_type \
+             ORDER BY count(*) DESC, concept_type ASC \
+             LIMIT ?1",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .query_map([TYPE_COUNTS_CAP], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
         .map_err(|e| e.to_string())?;
     let mut out = std::collections::BTreeMap::new();
     for row in rows {
@@ -316,5 +350,58 @@ mod tests {
         // Untyped derived and every `source`/`human` file must be absent —
         // `type_counts` is scoped to `derived` with a non-null `concept_type`.
         assert_eq!(s.type_counts.len(), 2, "no untyped/source/human entries leaked in: {:?}", s.type_counts);
+    }
+
+    /// Review round 1 finding: `type_counts` has no bound on the number of
+    /// distinct `concept_type` strings it can return — and the bound is NOT
+    /// `CONCEPT_TYPE`'s registry size, because rule 7 stores *unregistered*
+    /// free-text types verbatim too (`TYPE_COUNTS_CAP`'s doc comment has the
+    /// full scenario: per-chapter ebook-import type stamping, one row per
+    /// document). 12 distinct types with strictly decreasing counts (12, 11,
+    /// …, 1) — writing straight into `files` via SQL, bypassing frontmatter
+    /// parsing entirely, since this test is about the `GROUP BY`/`LIMIT`
+    /// behavior, not `origin::derive`, which the fixture-based test above
+    /// already covers.
+    #[test]
+    fn type_counts_caps_at_the_top_n_by_count_without_shrinking_the_derived_total() {
+        let d = tempfile::tempdir().unwrap();
+        let vault = d.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let db = d.path().join("index.db");
+        let idx = SearchIndex::open_at(&vault, &db, "sync").unwrap();
+
+        let mut expected_derived_total = 0i64;
+        for i in 1..=12 {
+            let count = 13 - i; // Type01: 12 files, … Type12: 1 file
+            expected_derived_total += count;
+            for n in 0..count {
+                idx.conn
+                    .execute(
+                        "INSERT INTO files(path, ext, origin, concept_type) VALUES (?1, 'md', 'derived', ?2)",
+                        rusqlite::params![format!("t{i}-{n}.md"), format!("Type{i:02}")],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let s = idx.stats().unwrap();
+        assert_eq!(
+            s.origin_counts.derived, expected_derived_total,
+            "the true derived total (a separate, uncapped query) must not shrink because of the display cap"
+        );
+        assert_eq!(s.type_counts.len(), TYPE_COUNTS_CAP as usize, "only the top {TYPE_COUNTS_CAP} types are itemized");
+        // Type01 (12 files) .. Type10 (3 files) are the top 10 by count.
+        for i in 1..=10 {
+            assert_eq!(
+                s.type_counts.get(&format!("Type{i:02}")).copied(),
+                Some(13 - i),
+                "Type{i:02} (rank {i}) should be in the top {TYPE_COUNTS_CAP}"
+            );
+        }
+        // Type11 (2 files) and Type12 (1 file) are the tail — dropped from
+        // `type_counts`, but still present in `origin_counts.derived` above,
+        // and the frontend folds them into its "Other" remainder.
+        assert!(s.type_counts.get("Type11").is_none(), "the tail must be capped off, not zero-valued");
+        assert!(s.type_counts.get("Type12").is_none());
     }
 }
