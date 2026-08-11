@@ -47,6 +47,11 @@ fn open_temp(vault: &Path) -> (tempfile::TempDir, SearchIndex) {
 /// 顺序断言要求**比较对象本身也被召回**。「B 根本没出现所以 A 赢了」不是
 /// 这条断言想固化的事实 —— 那是一次召回变化,必须红,不能被当成顺序正确
 /// 而静默放过。
+///
+/// **第三种断言(task 6),`expect_none`。** `origin:` 过滤器对非法值的约定是
+/// 失败关闭(匹配零行,不是静默丢过滤器退回全部结果)—— 这条主张只能写成
+/// 「零命中」,`expect_path` 的存在性检查表达不了。带 `expect_none: true` 的
+/// 用例跳过 `expect_path`,改断言 `hits.is_empty()`。
 #[test]
 fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
     let (_d, mut idx) = open_temp(&corpus());
@@ -64,12 +69,29 @@ fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
     let mut failures = Vec::new();
     for case in &cases {
         let q = case["query"].as_str().unwrap();
-        let want = case["expect_path"].as_str().unwrap();
-        let want_text = case["expect_text"].as_str();
         let (hits, route) = idx.search(q, 20).unwrap();
         let seen = |hits: &[searchidx::Hit]| {
             hits.iter().take(3).map(|h| h.path.clone()).collect::<Vec<_>>().join(", ")
         };
+        // A third, negative case shape alongside recall (`expect_path`) and
+        // order (`outranks_path`): `origin:bogus` (task 6) must fail closed —
+        // match nothing, not silently fall back to every tier — and that
+        // claim can only be written as "zero hits", which `expect_path`'s
+        // presence check cannot express. See `query.rs`'s
+        // `an_unrecognized_origin_value_matches_nothing_not_everything` for
+        // the pure-filter version of the same pin.
+        if case["expect_none"].as_bool() == Some(true) {
+            if !hits.is_empty() {
+                failures.push(format!(
+                    "  {q:?} → expected no hits (invalid filter must fail closed), got [{}] (route {})",
+                    seen(&hits),
+                    route.as_str()
+                ));
+            }
+            continue;
+        }
+        let want = case["expect_path"].as_str().unwrap();
+        let want_text = case["expect_text"].as_str();
         let Some(want_at) = position_of(&hits, want, want_text) else {
             failures.push(format!(
                 "  {q:?} → expected {want}{}, got [{}] (route {})",

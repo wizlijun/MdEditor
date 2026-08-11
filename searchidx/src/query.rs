@@ -16,6 +16,7 @@ pub struct Query {
     pub paths: Vec<String>,
     pub pages: Vec<String>,
     pub exts: Vec<String>,
+    pub origins: Vec<String>,
     pub after: Option<String>,
     pub before: Option<String>,
     pub raw: String,
@@ -78,6 +79,13 @@ pub fn parse(raw: &str) -> Query {
             Some(("type", v)) if !v.is_empty() => q.types.push(v.to_string()),
             Some(("path", v)) if !v.is_empty() => q.paths.push(v.to_string()),
             Some(("ext", v)) if !v.is_empty() => q.exts.push(v.trim_start_matches('.').to_string()),
+            // Unvalidated on purpose, like every other filter value here — an
+            // unrecognized tier (`origin:bogus`) is bound literally into the
+            // SQL by `push_filters` below and fails closed (matches zero
+            // rows) rather than erroring or being silently dropped. See the
+            // `an_unrecognized_origin_value_matches_nothing_not_everything`
+            // test for the reasoning.
+            Some(("origin", v)) if !v.is_empty() => q.origins.push(v.to_string()),
             Some(("after", v)) if !v.is_empty() => q.after = Some(v.to_string()),
             Some(("before", v)) if !v.is_empty() => q.before = Some(v.to_string()),
             Some(("page", v)) if !v.is_empty() => {
@@ -269,6 +277,22 @@ fn push_filters(q: &Query, sql: &mut String, args: &mut Vec<String>) {
     for e in &q.exts {
         let i = next(args, e.clone());
         sql.push_str(&format!(" AND f.ext = ?{i}"));
+    }
+    if !q.origins.is_empty() {
+        // Unlike `types`/`exts`/`paths` above (one `AND ... = ?N` clause per
+        // pushed value, which only makes sense when a filter can plausibly
+        // be satisfied by more than one stored value at once, e.g. tags),
+        // `origin` is a single-valued per-file column: a file cannot equal
+        // two different origins simultaneously. ANDing multiple `origin:`
+        // filters the way `types` does would make a second `origin:` filter
+        // silently zero out every result instead of widening the match — see
+        // `multiple_origin_filters_are_ored_not_anded`. `IN (...)` gives the
+        // OR semantics repeating a single-valued filter should have, and
+        // costs nothing when there is only one value (`IN (?N)` behaves like
+        // `= ?N`).
+        let placeholders: Vec<String> =
+            q.origins.iter().map(|o| format!("?{}", next(args, o.clone()))).collect();
+        sql.push_str(&format!(" AND f.origin IN ({})", placeholders.join(", ")));
     }
     for p in &q.pages {
         let i = next(args, p.clone());
@@ -646,6 +670,77 @@ mod tests {
         let hits = search(&c, &parse("target tag:in_progress"), 20, "2026-08-10").unwrap().0;
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert_eq!(hits[0].path, "a.md");
+    }
+
+    #[test]
+    fn origin_prefix_is_recognized_by_parse() {
+        let q = parse("target origin:human");
+        assert_eq!(q.origins, vec!["human"]);
+        assert_eq!(q.terms, vec!["target"]);
+    }
+
+    /// Task 6: `origin:` narrows to one tier. Three files, three tiers, via the
+    /// same `origin::derive` rules the real index uses — `.note.md` is rule 1
+    /// (Human), `type: Book Summary` maps to Derived, `type: Book` maps to
+    /// Source (see `origin::mapped_type_origin`).
+    #[test]
+    fn the_origin_filter_narrows_to_a_single_tier() {
+        let (_d, c) = indexed(&[
+            ("a.note.md", "target\n"),
+            ("b.md", "---\ntype: Book Summary\n---\ntarget\n"),
+            ("c.md", "---\ntype: Book\n---\ntarget\n"),
+        ]);
+        let only = |q: &str| {
+            let mut paths: Vec<String> =
+                search(&c, &parse(q), 20, "2026-08-10").unwrap().0.into_iter().map(|h| h.path).collect();
+            paths.sort();
+            paths
+        };
+        assert_eq!(only("target origin:human"), vec!["a.note.md"]);
+        assert_eq!(only("target origin:derived"), vec!["b.md"]);
+        assert_eq!(only("target origin:source"), vec!["c.md"]);
+        assert_eq!(only("target"), vec!["a.note.md", "b.md", "c.md"], "sanity: all three recall without a filter");
+    }
+
+    /// `origin:` is a per-file singular attribute (like `type:`/`ext:`), so
+    /// repeating it must OR across tiers, not AND to an impossible
+    /// simultaneous match — the task brief flags this explicitly: following
+    /// the literal `f.origin = ?N` per value would AND multiple origin:
+    /// filters together via `push_filters`'s existing per-item-clause idiom,
+    /// and no file can equal two different origins at once, so a second
+    /// `origin:` filter would silently zero out every result. `IN (...)`
+    /// avoids that.
+    #[test]
+    fn multiple_origin_filters_are_ored_not_anded() {
+        let (_d, c) = indexed(&[
+            ("a.note.md", "target\n"),
+            ("b.md", "---\ntype: Book Summary\n---\ntarget\n"),
+            ("c.md", "---\ntype: Book\n---\ntarget\n"),
+        ]);
+        let mut hits = search(&c, &parse("target origin:human origin:source"), 20, "2026-08-10").unwrap().0;
+        hits.sort_by(|a, b| a.path.cmp(&b.path));
+        let paths: Vec<_> = hits.iter().map(|h| h.path.clone()).collect();
+        assert_eq!(paths, vec!["a.note.md", "c.md"], "{hits:?}");
+    }
+
+    /// Retrieval must never fail because of the caller (task brief). Two
+    /// candidate semantics for `origin:bogus`: drop the filter (return every
+    /// tier, as if no `origin:` were given) or match nothing. Dropping the
+    /// filter is the more dangerous of the two — a caller who explicitly
+    /// asked to filter by origin would silently get back an UNFILTERED set
+    /// with no signal that filtering never happened: a confident false
+    /// positive, exactly the failure mode `like_search`'s own doc comment
+    /// above calls worse than a miss ("a miss at least looks like 'no
+    /// results'; this looked like an answer"). So an unrecognized origin
+    /// literal fails closed — it is bound into the SQL literally, like every
+    /// other filter value in this function, and the `files.origin` column
+    /// never stores anything but `human`/`derived`/`source`, so it naturally
+    /// matches zero rows without any special-cased validation.
+    #[test]
+    fn an_unrecognized_origin_value_matches_nothing_not_everything() {
+        let (_d, c) = indexed(&[("a.md", "target\n")]);
+        let hits = search(&c, &parse("target origin:bogus"), 20, "2026-08-10").unwrap().0;
+        assert!(hits.is_empty(), "an invalid origin: value must fail closed, not silently return every tier: {hits:?}");
     }
 
     #[test]

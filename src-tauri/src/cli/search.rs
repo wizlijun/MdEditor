@@ -244,7 +244,24 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
             continue;
         }
         let Ok(raw) = std::fs::read_to_string(entry.path()) else { continue };
-        for (i, line) in searchidx::norm::strip_cr(&raw).lines().enumerate() {
+        let text = searchidx::norm::strip_cr(&raw);
+        // Task 6 made `origin` observable in `--json` for the first time on
+        // this path (score stays 0.0 here, so `score_of` never reads it, but
+        // the CLI now prints it directly). A hardcoded `Origin::Derived` used
+        // to be silently fine because of that — it stopped being fine the
+        // moment this became visible output: it would report `derived` for
+        // exactly the frontmatter-less files the indexed path reports
+        // `source` for (rule 6). Derive it for real, with the same inputs
+        // `chunk::parse_file` uses on the indexed path — `opts.sync_dir` is
+        // already plumbed here (for `is_indexable`), and `fm_present` must be
+        // captured before `unwrap_or_default()` collapses "no frontmatter"
+        // and "empty frontmatter" into the same value (see `origin::derive`'s
+        // own doc comment on why `Some(&Frontmatter::default())` is not `None`).
+        let (fm_raw, _, _) = searchidx::frontmatter::split(&text);
+        let fm_present = fm_raw.is_some();
+        let fm = fm_raw.map(searchidx::frontmatter::parse).unwrap_or_default();
+        let origin = searchidx::origin::derive(&rel, fm_present.then_some(&fm), &opts.sync_dir);
+        for (i, line) in text.lines().enumerate() {
             if line.to_lowercase().contains(&needle) {
                 out.push(searchidx::Hit {
                     path: rel.clone(),
@@ -257,11 +274,7 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
                     doc_date: None,
                     agent_by: None,
                     human_verified: false,
-                    // Last-ditch unranked scan with no index row to read a
-                    // real tier from; `Derived` is the same fail-toward-
-                    // neutral fallback `store::origin_of` uses, and score_of
-                    // is never even called on this path (score stays 0.0).
-                    origin: searchidx::Origin::Derived,
+                    origin,
                 });
                 break;
             }
@@ -359,6 +372,13 @@ fn print_json(query: &str, route: searchidx::Route, took_ms: u128, hits: &[searc
                 // Surfaced so an agent can prefer primary sources over
                 // AI-authored summaries of them (design spec §5-T3).
                 "provenance": { "agent_by": h.agent_by, "human_verified": h.human_verified },
+                // Task 6: the tier `origin::derive` classified this file into
+                // (`"human"`/`"derived"`/`"source"`), alongside — not inside —
+                // `provenance`: `provenance` is per-document signals read from
+                // this file's own frontmatter, `origin` is the category-level
+                // tier `score_of` actually ranks on (see its doc comment on
+                // why the two are independent, not double-counted).
+                "origin": h.origin.as_str(),
             })
         })
         .collect();

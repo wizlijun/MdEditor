@@ -294,5 +294,25 @@
     "expect_path": "docs/2026-04-10-design-note.md",
     "outranks_path": "prose/plain-thoughts.md",
     "why": "spec §3.2/§9 那条刻意的误判,写成可执行形式:plain-thoughts.md 是一段没有 frontmatter 的人工随想,按规则 6 判 source ×0.9,被判 derived 的 design-note(type: concept 未登记 → 规则 7)压过。这是分级上线后 50 条回归集里两处顺序变化之一,已按 spec 的既有裁决接受(修正手段是给文件加 frontmatter,而不是翻转规则 6 的方向)。钉在这里是为了让日后翻转规则 6 的人必须先看见这条、先回去读 §3.2"
+  },
+  {
+    "query": "tieringtoken origin:human",
+    "expect_path": "notes/2026-08-05-tiering-note.md",
+    "why": "task 6 origin: 过滤器,human 档。tieringtoken 在语料里命中五个文件跨全部三档(见上面几条 tieringtoken 用例的 why);origin:human 必须只留下这一份 —— 过滤器不参与 bm25(值只绑进 WHERE,不进 match_expr),所以这条也顺带确认过滤器不会扰动同一批用例已经钉住的排序主张"
+  },
+  {
+    "query": "tieringtoken origin:derived",
+    "expect_path": "docs/2026-08-05-tiering-summary.md",
+    "why": "task 6 origin: 过滤器,derived 档。命中集合应收窄到 docs/summary 与 web/clip 两份 derived 语料(排除 human 的 notes/、source 的 books/ 与 sync/)"
+  },
+  {
+    "query": "tieringtoken origin:source",
+    "expect_path": "books/2026-08-05-tiering-book.md",
+    "why": "task 6 origin: 过滤器,source 档。命中集合应收窄到 books/ 与 sync/ 两份 source 语料(排除 human 的 notes/ 与 derived 的 docs/summary、web/clip)"
+  },
+  {
+    "query": "tieringtoken origin:bogus",
+    "expect_none": true,
+    "why": "task 6 非法 origin: 值必须失败关闭 —— 匹配不到任何行,而不是静默丢弃过滤器、把 tieringtoken 的全部五份语料退回给调用方(那会让调用方误以为自己拿到的是按层过滤过的结果)。见 query.rs 的 an_unrecognized_origin_value_matches_nothing_not_everything"
   }
 ]

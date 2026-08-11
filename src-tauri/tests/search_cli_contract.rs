@@ -82,6 +82,7 @@ fn json_output_carries_the_full_contract() {
     }
     assert_eq!(hit["source_ref"].as_str().unwrap(), "2026-01-01-a.md#L1");
     assert!(hit["provenance"]["human_verified"].is_boolean());
+    assert_eq!(hit["origin"].as_str(), Some("source"), "no frontmatter → rule 6 (task 6)");
 }
 
 /// 路径永远是 vault 相对 + `/` 分隔 —— 两平台给 agent 的锚必须一模一样。
@@ -119,6 +120,37 @@ fn an_unusable_index_degrades_to_a_direct_scan_and_still_exits_zero() {
     assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("a.md:1:"));
     assert!(!out.stderr.is_empty(), "a degradation must be announced on stderr");
+}
+
+/// Task 6 made `origin` observable in `--json` output for the first time —
+/// before this, `fallback_scan`'s hardcoded `Origin::Derived` was inert
+/// (score stays 0.0 on this path; `score_of` is never called). Left alone,
+/// the no-index path would report `derived` for exactly the kind of
+/// frontmatter-less file the indexed path reports `source` for (rule 6:
+/// "a bare `.md` with no frontmatter... judges source, not derived" —
+/// `origin.rs`'s own doc comment). `fallback_scan` has `opts.sync_dir`
+/// available (plumbed for this exact purpose) but no `Frontmatter`, so it
+/// must parse one itself via the same `origin::derive` the indexed path uses
+/// — not merely document the divergence.
+#[test]
+fn the_no_index_fallback_reports_the_same_origin_tier_the_index_would() {
+    let v = vault(&[("a.md", "brownfox\n")]);
+    let mut cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    cmd.arg("--cli").arg("search").arg("brownfox").arg("--vault").arg(v.path()).arg("--json");
+    let blocker = v.path().join("blocker");
+    std::fs::write(&blocker, b"x").unwrap();
+    cmd.env("HOME", &blocker);
+    #[cfg(windows)]
+    cmd.env("LOCALAPPDATA", &blocker);
+    let out = cmd.output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let j: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid json");
+    assert_eq!(
+        j["hits"][0]["origin"].as_str(),
+        Some("source"),
+        "a frontmatter-less .md must classify as source (rule 6) on the no-index fallback, \
+         the same as the indexed path — not the Derived fallback: {j}"
+    );
 }
 
 /// Degrading is only acceptable if it degrades to *the same corpus*. The
