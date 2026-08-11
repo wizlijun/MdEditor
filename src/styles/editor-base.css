@@ -87,6 +87,81 @@
   .moraya-editor .moraya-note-anchor:hover { color: #f5cd60; }
 }
 
+/* 脚注角标。上标定位刻意抄上面 .moraya-note-anchor 的做法:display:inline +
+   line-height:0 + 相对偏移。绝不能用 inline-block 或 vertical-align:super ——
+   那会让盒子按 margin 盒高度参与布局、凭空给行框加出下伸部,大标题和表格里行高
+   被撑大。<sup> 浏览器默认就是 vertical-align:super,所以这里必须显式覆盖。 */
+.moraya-editor .moraya-footnote-ref {
+  display: inline;
+  line-height: 0;
+  vertical-align: baseline;
+  position: relative;
+  top: -0.4em;
+  font-size: 0.72em;
+  color: #3b7dd8;
+  cursor: pointer;
+  user-select: none;
+  margin: 0 1px;
+}
+/* 编号由 footnote-plugin 以 decoration 形式挂在 data-num 上,不落盘。
+   缺 data-num(插件未启用)时回退显示 label,不至于变成一个看不见的空角标。 */
+.moraya-editor .moraya-footnote-ref::before {
+  content: '[' attr(data-num) ']';
+}
+.moraya-editor .moraya-footnote-ref:not([data-num])::before {
+  content: '[^' attr(data-label) ']';
+}
+.moraya-editor .moraya-footnote-ref:hover {
+  color: #2a5da8;
+  text-decoration: underline;
+}
+
+/* 脚注定义块 */
+.moraya-editor .moraya-footnote-def {
+  position: relative;
+  padding-left: 1.2em;
+  border-left: 2px solid rgba(59, 125, 216, 0.35);
+  color: rgba(0, 0, 0, 0.72);
+  font-size: 0.92em;
+}
+.moraya-editor .moraya-footnote-def::before {
+  content: '[^' attr(data-label) ']';
+  position: absolute;
+  left: 0;
+  transform: translateX(-100%);
+  padding-right: 0.4em;
+  color: #3b7dd8;
+  font-size: 0.85em;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 跳转后的短暂高亮 */
+.moraya-editor .moraya-footnote-flash {
+  animation: moraya-footnote-flash 1.2s ease-out;
+}
+@keyframes moraya-footnote-flash {
+  0% { background: rgba(59, 125, 216, 0.28); }
+  100% { background: transparent; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .moraya-editor .moraya-footnote-ref { color: #6fa8ec; }
+  .moraya-editor .moraya-footnote-ref:hover { color: #9ac6f5; }
+  .moraya-editor .moraya-footnote-def {
+    border-left-color: rgba(111, 168, 236, 0.4);
+    color: rgba(255, 255, 255, 0.74);
+  }
+  .moraya-editor .moraya-footnote-def::before { color: #6fa8ec; }
+  .moraya-editor .moraya-footnote-flash {
+    animation-name: moraya-footnote-flash-dark;
+  }
+  @keyframes moraya-footnote-flash-dark {
+    0% { background: rgba(111, 168, 236, 0.3); }
+    100% { background: transparent; }
+  }
+}
+
 /* 正文内联答复卡片:agent 的答复贴在被批注段落之后。✦ = AI 写的,与手写内容视觉上分得开。
    卡片是 decoration —— 不进文档、不影响序列化,源文件字节不变。 */
 .answer-card {
