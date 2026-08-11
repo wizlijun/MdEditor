@@ -66,6 +66,8 @@ beforeEach(() => {
   stats = vi.fn(async () => ({
     files: 128, blocks: 900, dbBytes: 4096, builtAt: '2026-08-11T00:00:00Z',
     tokenizerId: 'jieba-v1', skippedLarge: [{ path: 'big.md', sizeBytes: 9_000_000 }],
+    originCounts: { human: 40, derived: 70, source: 18 },
+    typeCounts: { 'Book Summary': 25, Answer: 12 },
   }))
   progress = vi.fn(async () => null)
   _setIndexApi({ stats, progress, rebuild: vi.fn(async () => {}) })
@@ -131,6 +133,59 @@ describe('SettingsDialog — Search & Index tab entry', () => {
     await settle()
 
     expect(stats).toHaveBeenCalled()
+    unmount(app)
+  })
+})
+
+// Task B-T8 (design spec §6/§9): the placeholder a previous project left
+// ("Per-tier statistics are coming soon.") is now filled in with real
+// numbers read through the same one entry point as the rest of the tab —
+// no second load path, per the regression this file exists to prevent.
+describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)', () => {
+  it('renders the actual origin/type counts, not just the section shell', async () => {
+    const app = await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const text = document.body.textContent ?? ''
+    // From the beforeEach stub: human 40, derived 70, source 18,
+    // typeCounts { 'Book Summary': 25, Answer: 12 } → untyped derived
+    // remainder is 70 - (25 + 12) = 33.
+    expect(text).toContain('40')
+    expect(text).toContain('70')
+    expect(text).toContain('18')
+    expect(text).toContain('Book Summary') // raw concept_type, not translated
+    expect(text).toContain('25')
+    expect(text).toContain('Answer')
+    expect(text).toContain('12')
+    expect(text).toContain('33') // computed untyped-derived ("Other") remainder
+    // The old placeholder sentence must be gone.
+    expect(text).not.toContain('coming soon')
+    unmount(app)
+  })
+
+  it('the rendered numbers track the stats payload, not a fixed stub (mutation check)', async () => {
+    stats.mockResolvedValue({
+      files: 5, blocks: 5, dbBytes: 1, builtAt: null, tokenizerId: 'x',
+      skippedLarge: [],
+      originCounts: { human: 7, derived: 9, source: 3 },
+      typeCounts: { Idea: 4 },
+    })
+    const app = await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('7')
+    expect(text).toContain('9')
+    expect(text).toContain('3')
+    expect(text).toContain('Idea')
+    expect(text).toContain('4')
+    // 9 - 4 = 5 untyped-derived — proves the "Other" row is recomputed per
+    // payload, not a number left over from the default stub (40/70/18/33).
+    expect(text).not.toContain('33')
     unmount(app)
   })
 })

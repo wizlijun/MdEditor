@@ -504,7 +504,13 @@ export const ja: Record<keyof Messages, string> = {
   'search.index.dbSize': 'インデックスサイズ',
   'search.index.builtAt': '最終ビルド',
   'search.index.tokenizer': 'トークナイザー',
-  'search.index.tiersPending': '階層別統計は近日公開予定です。',
+  // 由来別の階層統計(B-T8、design spec §6/§9)—— 前段のプロジェクトが残した
+  // プレースホルダーを埋める。tiersDerivedLabel は origin='derived' 合計の
+  // 見出し。その下の具体的な型は生の concept_type 文字列をそのまま使い、
+  // 翻訳しない(上の search.group.* と同じ約束)。
+  'search.index.tiersHeading': '由来別の階層統計',
+  'search.index.tiersDerivedLabel': 'AI 生成',
+  'search.index.tiersHint': '階層はインデックス構築時に各ファイルのフロントマターから推定されるもので、ノートに書き戻されることはありません。「元資料」の数が不自然に多い場合、多くはノートにフロントマターがないだけです。`type:` フィールド(または任意のフロントマター)を追加してインデックスを再構築すれば、分類を修正できます。',
   'search.index.rebuildConfirmTitle': '検索インデックスを再構築しますか?',
   'search.index.rebuildConfirmBody': 'これは全量の再構築です——すべてのファイルを最初からスキャンし直します。実行中は検索が使えなくなります。{files} 件のファイルでおよそ {seconds} 秒かかる見込みです。ノートが失われることはありません:インデックスは markdown ファイルから派生した使い捨てのコピーであり、ファイル自体ではありません。',
   'search.index.rebuildConfirmBodyUnknown': 'これは全量の再構築です——すべてのファイルを最初からスキャンし直します。実行中は検索が使えなくなります。ノートが失われることはありません:インデックスは markdown ファイルから派生した使い捨てのコピーであり、ファイル自体ではありません。',

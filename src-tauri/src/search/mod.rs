@@ -330,6 +330,22 @@ fn skipped_dto(s: &searchidx::SkippedFile) -> SkippedDto {
     SkippedDto { path: s.path.clone(), size_bytes: s.size }
 }
 
+/// Wire shape for `SearchStatsDto.origin_counts` — mirrors
+/// `searchidx::OriginCounts` field for field. Task B-T8 (design spec §6):
+/// the settings page's "how many files did I write vs. an agent produce vs.
+/// raw material" breakdown.
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OriginCountsDto {
+    pub human: i64,
+    pub derived: i64,
+    pub source: i64,
+}
+
+fn origin_counts_dto(o: searchidx::OriginCounts) -> OriginCountsDto {
+    OriginCountsDto { human: o.human, derived: o.derived, source: o.source }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchStatsDto {
@@ -342,6 +358,16 @@ pub struct SearchStatsDto {
     /// live re-scan (see that type's doc comment for why it's stashed there
     /// instead of recomputed here).
     pub skipped_large: Vec<SkippedDto>,
+    /// Task B-T8: per-tier file counts (design spec §6/§9). Settings-page-only
+    /// — never consulted by ranking, which reads `Hit::origin` per hit instead.
+    pub origin_counts: OriginCountsDto,
+    /// Task B-T8: `derived`'s distribution by `concept_type`, `origin =
+    /// 'derived'` and a non-null type only — see `searchidx::type_counts`'s
+    /// doc comment for why an untyped-derived bucket is deliberately absent
+    /// here rather than under a sentinel key. Keys are raw `concept_type`
+    /// strings and MUST NOT be translated by the frontend (same convention
+    /// as the search panel's group headers, `src/lib/search/grouping.ts`).
+    pub type_counts: std::collections::BTreeMap<String, i64>,
 }
 
 /// Shown to the user when no vault is open yet, or `open_vault`'s background
@@ -519,6 +545,8 @@ fn stats_to_dto(s: IndexStats, skipped_large: Vec<SkippedDto>) -> SearchStatsDto
         built_at: s.built_at,
         tokenizer_id: s.tokenizer_id,
         skipped_large,
+        origin_counts: origin_counts_dto(s.origin_counts),
+        type_counts: s.type_counts,
     }
 }
 
@@ -698,12 +726,17 @@ mod command_tests {
 
     #[test]
     fn stats_to_dto_passes_fields_through_unchanged() {
+        let mut type_counts = std::collections::BTreeMap::new();
+        type_counts.insert("Book Summary".to_string(), 2i64);
+        type_counts.insert("Answer".to_string(), 1i64);
         let s = IndexStats {
             files: 3,
             blocks: 40,
             db_bytes: 12345,
             built_at: Some("2026-08-10T00:00:00Z".to_string()),
             tokenizer_id: "jieba/1".to_string(),
+            origin_counts: searchidx::OriginCounts { human: 1, derived: 3, source: 2 },
+            type_counts,
         };
         let skipped = vec![SkippedDto { path: "big.md".to_string(), size_bytes: 999 }];
         let dto = stats_to_dto(s, skipped);
@@ -715,6 +748,11 @@ mod command_tests {
         assert_eq!(dto.skipped_large.len(), 1);
         assert_eq!(dto.skipped_large[0].path, "big.md");
         assert_eq!(dto.skipped_large[0].size_bytes, 999);
+        assert_eq!(dto.origin_counts.human, 1);
+        assert_eq!(dto.origin_counts.derived, 3);
+        assert_eq!(dto.origin_counts.source, 2);
+        assert_eq!(dto.type_counts.get("Book Summary").copied(), Some(2));
+        assert_eq!(dto.type_counts.get("Answer").copied(), Some(1));
     }
 
     /// `SkippedState` is a fresh, empty `Vec` by default — a rebuild that has
@@ -1130,6 +1168,8 @@ mod command_tests {
 
     #[test]
     fn search_stats_dto_serializes_with_camel_case_field_names() {
+        let mut type_counts = std::collections::BTreeMap::new();
+        type_counts.insert("Book Summary".to_string(), 2i64);
         let dto = stats_to_dto(
             IndexStats {
                 files: 1,
@@ -1137,16 +1177,23 @@ mod command_tests {
                 db_bytes: 1,
                 built_at: None,
                 tokenizer_id: "jieba/1".to_string(),
+                origin_counts: searchidx::OriginCounts { human: 1, derived: 2, source: 3 },
+                type_counts,
             },
             vec![SkippedDto { path: "big.md".to_string(), size_bytes: 42 }],
         );
         let v = serde_json::to_value(&dto).unwrap();
-        for key in ["files", "blocks", "dbBytes", "builtAt", "tokenizerId", "skippedLarge"] {
+        for key in ["files", "blocks", "dbBytes", "builtAt", "tokenizerId", "skippedLarge", "originCounts", "typeCounts"] {
             assert!(v.get(key).is_some(), "missing key {key} in {v}");
         }
         let skipped = v.get("skippedLarge").unwrap().as_array().unwrap();
         assert_eq!(skipped.len(), 1);
         assert!(skipped[0].get("path").is_some(), "{skipped:?}");
         assert!(skipped[0].get("sizeBytes").is_some(), "{skipped:?}");
+        let origin_counts = v.get("originCounts").unwrap();
+        for key in ["human", "derived", "source"] {
+            assert!(origin_counts.get(key).is_some(), "missing key {key} in {origin_counts}");
+        }
+        assert_eq!(v.get("typeCounts").unwrap().get("Book Summary").unwrap().as_i64(), Some(2));
     }
 }

@@ -509,7 +509,14 @@ export const en = {
   'search.index.dbSize': 'Index size',
   'search.index.builtAt': 'Last built',
   'search.index.tokenizer': 'Tokenizer',
-  'search.index.tiersPending': 'Per-tier statistics are coming soon.',
+  // Per-tier statistics (task B-T8, design spec §6/§9) — backfills the
+  // placeholder a previous project left here. `tiersDerivedLabel` is the
+  // bucket header for the `origin = 'derived'` total; the named types under
+  // it use the raw `concept_type` string itself and are not translated
+  // (same convention as `search.group.*` above).
+  'search.index.tiersHeading': 'Provenance tiers',
+  'search.index.tiersDerivedLabel': 'AI-produced',
+  'search.index.tiersHint': "Tiers are derived from each file's frontmatter when the index is built — nothing here is written back to your notes. If \"Raw source material\" looks unexpectedly high, it usually just means notes are missing frontmatter; add a `type:` field (or any frontmatter) and rebuild the index to reclassify them.",
   'search.index.rebuildConfirmTitle': 'Rebuild search index?',
   'search.index.rebuildConfirmBody': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs, roughly {seconds}s for your {files} files. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
   'search.index.rebuildConfirmBodyUnknown': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',

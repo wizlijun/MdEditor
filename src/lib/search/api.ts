@@ -36,6 +36,16 @@ export interface SearchSkippedFile {
   sizeBytes: number
 }
 
+// Mirrors `OriginCountsDto` in `src-tauri/src/search/mod.rs` field for field
+// — per-tier file counts for the settings page (task B-T8, design spec
+// §6/§9). Purely a settings-page display; ranking reads `SearchHit.origin`
+// per hit instead, never these totals.
+export interface SearchOriginCounts {
+  human: number
+  derived: number
+  source: number
+}
+
 export interface SearchStats {
   files: number
   blocks: number
@@ -43,6 +53,14 @@ export interface SearchStats {
   builtAt: string | null
   tokenizerId: string
   skippedLarge: SearchSkippedFile[]
+  originCounts: SearchOriginCounts
+  /** `derived`'s distribution by raw `concept_type` string — `origin =
+   *  'derived'` and a non-null type only. Keys are NEVER translated (same
+   *  convention as `grouping.ts`'s derived-type group headers): a plugin
+   *  can introduce a new type without touching i18n. Untyped `derived`
+   *  files are not itemized here; the settings tab computes that count as
+   *  `originCounts.derived - sum(Object.values(typeCounts))`. */
+  typeCounts: Record<string, number>
 }
 
 // Wire shape for `notemd_search_progress` / the `search://progress` event —

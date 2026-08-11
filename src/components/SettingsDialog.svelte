@@ -1065,10 +1065,43 @@
         </section>
         {#if sotvaultStore.vaultRoot}
           <section class="block">
-            <!-- Tier-statistics table lands here (a follow-on project fills this
-                 container in) — the placeholder keeps this task from having to
-                 redo the layout when that data arrives. -->
-            <p class="desc">{t('search.index.tiersPending')}</p>
+            <h3>{t('search.index.tiersHeading')}</h3>
+            {#if indexStatus.stats}
+              {@const oc = indexStatus.stats.originCounts}
+              {@const tc = indexStatus.stats.typeCounts}
+              {@const namedDerivedTotal = Object.values(tc).reduce((a, b) => a + b, 0)}
+              {@const untypedDerived = Math.max(0, oc.derived - namedDerivedTotal)}
+              <div class="row">
+                <span class="lbl">{t('search.group.human')}</span>
+                <span>{oc.human}</span>
+              </div>
+              <div class="row">
+                <span class="lbl">{t('search.index.tiersDerivedLabel')}</span>
+                <span>{oc.derived}</span>
+              </div>
+              <!-- Named types are the raw `concept_type` string, deliberately
+                   untranslated — same ruling as the search panel's middle-band
+                   group headers (spec §5, `src/lib/search/grouping.ts`). -->
+              {#each Object.entries(tc).sort((a, b) => b[1] - a[1]) as [type, n] (type)}
+                <div class="row" style="padding-left: 16px;">
+                  <span class="lbl">{type}</span>
+                  <span>{n}</span>
+                </div>
+              {/each}
+              {#if untypedDerived > 0}
+                <div class="row" style="padding-left: 16px;">
+                  <span class="lbl">{t('search.group.other')}</span>
+                  <span>{untypedDerived}</span>
+                </div>
+              {/if}
+              <div class="row">
+                <span class="lbl">{t('search.group.source')}</span>
+                <span>{oc.source}</span>
+              </div>
+              <p class="desc" style="margin-top: 8px;">{t('search.index.tiersHint')}</p>
+            {:else}
+              <p class="desc">{indexStatus.loading ? '…' : '—'}</p>
+            {/if}
           </section>
         {/if}
         {#if indexStatus.progress}

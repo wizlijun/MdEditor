@@ -503,7 +503,14 @@ export const de: Record<keyof Messages, string> = {
   'search.index.dbSize': 'Indexgröße',
   'search.index.builtAt': 'Zuletzt erstellt',
   'search.index.tokenizer': 'Tokenizer',
-  'search.index.tiersPending': 'Statistiken nach Ebene folgen in Kürze.',
+  // Statistik nach Herkunftsebene (B-T8, Design-Spec §6/§9) — füllt den
+  // Platzhalter eines früheren Projekts. `tiersDerivedLabel` ist die
+  // Kopfzeile für die Gesamtsumme von `origin = 'derived'`; die benannten
+  // Typen darunter verwenden den rohen `concept_type`-String und werden
+  // nicht übersetzt (gleiche Konvention wie `search.group.*` oben).
+  'search.index.tiersHeading': 'Herkunftsebenen',
+  'search.index.tiersDerivedLabel': 'KI-generiert',
+  'search.index.tiersHint': 'Die Ebenen werden beim Erstellen des Index aus dem Frontmatter jeder Datei abgeleitet — nichts davon wird in deine Notizen zurückgeschrieben. Wirkt „Rohes Quellmaterial“ ungewöhnlich hoch, fehlt den Notizen meist nur Frontmatter; füge ein `type:`-Feld (oder beliebiges Frontmatter) hinzu und erstelle den Index neu, um sie neu einzuordnen.',
   'search.index.rebuildConfirmTitle': 'Suchindex neu erstellen?',
   'search.index.rebuildConfirmBody': 'Dies ist eine vollständige Neuerstellung — jede Datei wird von Grund auf neu gescannt. Während des Vorgangs ist die Suche nicht verfügbar, für deine {files} Dateien dauert das etwa {seconds}s. Es gehen keine Notizen verloren: Der Index ist nur eine Wegwerfkopie, die aus deinen Markdown-Dateien abgeleitet wird, nicht die Dateien selbst.',
   'search.index.rebuildConfirmBodyUnknown': 'Dies ist eine vollständige Neuerstellung — jede Datei wird von Grund auf neu gescannt. Während des Vorgangs ist die Suche nicht verfügbar. Es gehen keine Notizen verloren: Der Index ist nur eine Wegwerfkopie, die aus deinen Markdown-Dateien abgeleitet wird, nicht die Dateien selbst.',

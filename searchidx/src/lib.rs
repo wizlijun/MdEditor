@@ -134,12 +134,72 @@ impl SearchIndex {
             db_bytes: std::fs::metadata(&self.db_path).map(|m| m.len()).unwrap_or(0),
             built_at: store::meta_get(&self.conn, "built_at"),
             tokenizer_id: store::meta_get(&self.conn, "tokenizer_id").unwrap_or_default(),
+            origin_counts: origin_counts(&self.conn)?,
+            type_counts: type_counts(&self.conn)?,
         })
     }
 
     pub fn vault_root(&self) -> &Path {
         &self.vault_root
     }
+}
+
+/// Design spec §6/§9: the settings page's per-tier file counts, one `GROUP
+/// BY` over the real `files.origin` column. Every stored value is one of
+/// `origin::Origin::as_str()`'s three strings by construction (`origin` is
+/// `NOT NULL` and has exactly one writer, `store::replace_file`) — but this
+/// still routes each row through `store::origin_of` rather than matching the
+/// three literals directly, so a row that somehow holds anything else still
+/// lands in a real bucket (falling back to `Derived`, `origin_of`'s own
+/// documented default) instead of silently vanishing from every count.
+fn origin_counts(conn: &rusqlite::Connection) -> Result<OriginCounts, String> {
+    let mut stmt = conn
+        .prepare("SELECT origin, count(*) FROM files GROUP BY origin")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| e.to_string())?;
+    let mut counts = OriginCounts::default();
+    for row in rows {
+        let (raw, n) = row.map_err(|e| e.to_string())?;
+        match store::origin_of(raw.as_deref()) {
+            Origin::Human => counts.human += n,
+            Origin::Derived => counts.derived += n,
+            Origin::Source => counts.source += n,
+        }
+    }
+    Ok(counts)
+}
+
+/// Design spec §6: `derived`'s distribution by `concept_type`, for the
+/// settings page's tier breakdown. Scoped to `origin = 'derived'` AND a
+/// non-null `concept_type` — untyped derived files (rule 7's "has
+/// frontmatter but an unregistered/absent type") are deliberately excluded
+/// rather than stashed under a sentinel key, matching the panel's own
+/// grouping convention (`grouping.ts`'s `derivedOther` group is a computed
+/// remainder, not a named type). A `BTreeMap` gives deterministic key order
+/// for the DTO and its tests; the frontend only reads by key, never assumes
+/// insertion order.
+fn type_counts(conn: &rusqlite::Connection) -> Result<std::collections::BTreeMap<String, i64>, String> {
+    let mut stmt = conn
+        .prepare("SELECT concept_type, count(*) FROM files WHERE origin = 'derived' AND concept_type IS NOT NULL GROUP BY concept_type")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| e.to_string())?;
+    let mut out = std::collections::BTreeMap::new();
+    for row in rows {
+        let (t, n) = row.map_err(|e| e.to_string())?;
+        out.insert(t, n);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OriginCounts {
+    pub human: i64,
+    pub derived: i64,
+    pub source: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +209,8 @@ pub struct IndexStats {
     pub db_bytes: u64,
     pub built_at: Option<String>,
     pub tokenizer_id: String,
+    pub origin_counts: OriginCounts,
+    pub type_counts: std::collections::BTreeMap<String, i64>,
 }
 
 fn today() -> String {
@@ -203,5 +265,56 @@ mod tests {
         );
         assert_eq!(store::meta_get(&second.conn, "vault_root").as_deref(), Some(stamped.as_str()));
         tx.commit().unwrap();
+    }
+
+    /// Task B-T8 (design spec §6/§9): the settings page's per-tier
+    /// statistics come from `IndexStats::origin_counts` /
+    /// `IndexStats::type_counts`, both SQL `GROUP BY`s over the real
+    /// `files` table — not a re-derivation in Rust. Eight files exercise
+    /// every tier plus the "derived but untyped" case that must NOT show up
+    /// in `type_counts` (grouping.ts's convention: untyped derived hits are
+    /// a computed "other" bucket, not a named type — see
+    /// `SettingsDialog.svelte`'s tier section, which derives that bucket as
+    /// `derived - sum(type_counts.values())` rather than the backend
+    /// stashing it under a sentinel key).
+    #[test]
+    fn stats_reports_origin_and_type_counts_via_group_by() {
+        let d = tempfile::tempdir().unwrap();
+        let vault = d.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        // Human: rule 1 (`.note.md`) + rule 3 (`verified.by: human:`).
+        std::fs::write(vault.join("a.note.md"), "my own words\n").unwrap();
+        std::fs::write(
+            vault.join("verified.md"),
+            "---\nverified:\n  by: human:bruce\n---\nsigned off\n",
+        )
+        .unwrap();
+
+        // Derived: two `Book Summary`, one `Answer`, one untyped (rule 7).
+        std::fs::write(vault.join("summary1.md"), "---\ntype: Book Summary\n---\nbody\n").unwrap();
+        std::fs::write(vault.join("summary2.md"), "---\ntype: Book Summary\n---\nbody\n").unwrap();
+        std::fs::write(vault.join("answer1.md"), "---\ntype: Answer\n---\nbody\n").unwrap();
+        std::fs::write(vault.join("untyped.md"), "---\ntitle: no type here\n---\nbody\n").unwrap();
+
+        // Source: mapped `type: Book` + rule 6 (no frontmatter at all).
+        std::fs::write(vault.join("book1.md"), "---\ntype: Book\n---\nbody\n").unwrap();
+        std::fs::write(vault.join("raw.md"), "no frontmatter, no claim\n").unwrap();
+
+        let db = d.path().join("index.db");
+        let mut idx = SearchIndex::open_at(&vault, &db, "sync").unwrap();
+        idx.rebuild(&ScanOptions::default()).unwrap();
+
+        let s = idx.stats().unwrap();
+        assert_eq!(s.files, 8);
+        assert_eq!(s.origin_counts.human, 2, "a.note.md + verified.md");
+        assert_eq!(s.origin_counts.derived, 4, "2x Book Summary + Answer + untyped");
+        assert_eq!(s.origin_counts.source, 2, "Book + no-frontmatter raw.md");
+
+        assert_eq!(s.type_counts.get("Book Summary").copied(), Some(2));
+        assert_eq!(s.type_counts.get("Answer").copied(), Some(1));
+        // Untyped derived and every `source`/`human` file must be absent —
+        // `type_counts` is scoped to `derived` with a non-null `concept_type`.
+        assert_eq!(s.type_counts.len(), 2, "no untyped/source/human entries leaked in: {:?}", s.type_counts);
     }
 }
