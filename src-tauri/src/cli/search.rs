@@ -275,6 +275,7 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
                     agent_by: None,
                     human_verified: false,
                     origin,
+                    concept_type: fm.concept_type.clone(),
                 });
                 break;
             }

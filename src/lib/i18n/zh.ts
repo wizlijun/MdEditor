@@ -522,6 +522,13 @@ export const zh: Record<keyof Messages, string> = {
   'search.agentsAdd': '添加这一节',
   'search.agentsAdded': '已添加到 AGENTS.md',
 
+  // 搜索面板 —— 结果分组(B-T7)。两极标签之外,具名类型组头直接用原始
+  // concept_type 字符串,不翻译(见 src/lib/search/grouping.ts)。
+  'search.group.human': '你写的',
+  'search.group.source': '原始资料',
+  'search.group.other': '其他',
+  'search.group.count': '{n} 条',
+
   // Search & index settings tab
   'search.index.noVault': '打开一个 vault 后即可查看搜索索引状态。',
   'search.index.files': '文件数',

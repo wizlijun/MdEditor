@@ -13,6 +13,13 @@ export interface SearchHit {
   sourceRef: string
   agentBy: string | null
   humanVerified: boolean
+  /** `'human' | 'derived' | 'source'` — mirrors `HitDto.origin` (`searchidx::Origin::as_str()`).
+   *  The two poles the search panel pins at the ends of its grouping. */
+  origin: 'human' | 'derived' | 'source'
+  /** `files.concept_type` verbatim (frontmatter `type`), e.g. `'Book Summary'`.
+   *  `null` when the file has no `type`. Only origin `'derived'` hits are
+   *  subdivided by this in the panel — see `src/lib/search/grouping.ts`. */
+  conceptType: string | null
 }
 
 export interface SearchResponse {

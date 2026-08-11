@@ -10,6 +10,7 @@
   import SideViewSwitcher from './SideViewSwitcher.svelte'
   import { searchStore, isIndexNotReady } from '../../lib/search/store.svelte'
   import type { SearchHit } from '../../lib/search/api'
+  import { groupHits, type HitGroup } from '../../lib/search/grouping'
   import { openSettings } from '../../lib/ui-state.svelte'
 
   // `tab` is part of every side view's props contract (see SidePanel.svelte);
@@ -29,6 +30,30 @@
   let errorText = $derived(
     isIndexNotReady(searchStore.error) ? t('search.notReady') : searchStore.error,
   )
+
+  // Grouping (task B-T7, design spec §5) — UI-only: `groupHits` is a pure
+  // function with no Svelte import (see `src/lib/search/grouping.ts`), this
+  // is the one place its output is rendered. `notemd search`'s own default
+  // output is untouched by this — it stays flat `path:line:text`.
+  let groups = $derived(groupHits(searchStore.hits))
+
+  // Named-type group headers use the raw `concept_type` string verbatim
+  // (it's an open, plugin-extensible vocabulary — see `CONCEPT_TYPE` in
+  // `src/lib/okf/concept.ts` — so translating it here would mean every new
+  // type silently falls back to its own name anyway); the two poles and the
+  // catch-all use translated labels.
+  function groupLabel(group: HitGroup): string {
+    switch (group.kind) {
+      case 'human': return t('search.group.human')
+      case 'source': return t('search.group.source')
+      case 'derivedOther': return t('search.group.other')
+      case 'derivedType': return group.conceptType ?? ''
+    }
+  }
+
+  function groupKey(group: HitGroup): string {
+    return group.kind === 'derivedType' ? `derivedType:${group.conceptType}` : group.kind
+  }
 
   function scheduleSearch() {
     if (debounceTimer) clearTimeout(debounceTimer)
@@ -151,25 +176,33 @@
     {:else if searchStore.route !== null && searchStore.hits.length === 0}
       <p class="empty">{t('search.noResults')}</p>
     {:else if searchStore.hits.length > 0}
-      <ul class="hits">
-        {#each searchStore.hits as hit, i (hit.path + ':' + hit.line + ':' + i)}
-          <li class="hit">
-            <button class="row" onclick={() => void onOpenHit(hit)}>
-              <span class="breadcrumb" title={hit.breadcrumb}>{hit.breadcrumb}</span>
-              <span class="text">
-                {#if hit.agentBy}
-                  <span class="marker" title={t('search.agentWritten', { agent: hit.agentBy })}>✦</span>
-                {/if}
-                {#if hit.humanVerified}
-                  <span class="marker" title={t('search.humanVerified')}>●</span>
-                {/if}
-                {hit.text}
-              </span>
-              <span class="loc">{hit.path}:{hit.line}</span>
-            </button>
-          </li>
-        {/each}
-      </ul>
+      {#each groups as group (groupKey(group))}
+        <div class="group">
+          <div class="group-header">
+            <span class="group-label">{groupLabel(group)}</span>
+            <span class="group-count">{t('search.group.count', { n: group.hits.length })}</span>
+          </div>
+          <ul class="hits">
+            {#each group.hits as hit, i (hit.path + ':' + hit.line + ':' + i)}
+              <li class="hit">
+                <button class="row" onclick={() => void onOpenHit(hit)}>
+                  <span class="breadcrumb" title={hit.breadcrumb}>{hit.breadcrumb}</span>
+                  <span class="text">
+                    {#if hit.agentBy}
+                      <span class="marker" title={t('search.agentWritten', { agent: hit.agentBy })}>✦</span>
+                    {/if}
+                    {#if hit.humanVerified}
+                      <span class="marker" title={t('search.humanVerified')}>●</span>
+                    {/if}
+                    {hit.text}
+                  </span>
+                  <span class="loc">{hit.path}:{hit.line}</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/each}
     {/if}
   </div>
 
@@ -225,6 +258,15 @@
   .error-row { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
   .error { margin: 0; font-size: 12px; color: #c0392b; }
   .settings-btn { margin-left: auto; }
+  .group + .group { margin-top: 6px; }
+  .group-header {
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 4px 8px 2px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;
+    opacity: 0.55;
+  }
+  .group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .group-count { opacity: 0.7; font-weight: 400; text-transform: none; }
   .hits { list-style: none; margin: 0; padding: 0; }
   .hit { border-radius: 6px; }
   .row {

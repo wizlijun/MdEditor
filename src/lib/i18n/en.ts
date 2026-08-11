@@ -494,6 +494,14 @@ export const en = {
   'search.agentsAdd': 'Add the section',
   'search.agentsAdded': 'Added to AGENTS.md',
 
+  // Search panel — result grouping (task B-T7). The two poles; named-type
+  // group headers use the raw `concept_type` string itself and are not
+  // translated (see `src/lib/search/grouping.ts`).
+  'search.group.human': 'Written by you',
+  'search.group.source': 'Raw source material',
+  'search.group.other': 'Other',
+  'search.group.count': '{n}',
+
   // Search & index settings tab
   'search.index.noVault': 'Open a vault to see its search index status.',
   'search.index.files': 'Files',

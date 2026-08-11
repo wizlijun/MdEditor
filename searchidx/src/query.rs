@@ -50,6 +50,11 @@ pub struct Hit {
     pub agent_by: Option<String>,
     pub human_verified: bool,
     pub origin: Origin,
+    /// `files.concept_type` verbatim (frontmatter `type`), e.g. `"Book
+    /// Summary"`. `None` when the file has no `type` at all. Carried through
+    /// purely for UI grouping (task B-T7, design spec §5) — ranking never
+    /// reads it, `origin` already encodes what ranking needs.
+    pub concept_type: Option<String>,
 }
 
 impl Hit {
@@ -174,15 +179,26 @@ fn match_expr(q: &Query) -> Option<String> {
 }
 
 // Column order shared by `fts_search` and `like_search`; `row_to_hit` reads
-// these back by POSITION (0-10). If this list changes, every index in
+// these back by POSITION (0-11). If this list changes, every index in
 // `row_to_hit` and the two `r.get::<_, _>(N)` calls for `rank`/`is_annotation`
 // below must change with it — see the module-level hazard note in the task
-// brief. `f.origin` (index 10) is deliberately last so both callers can
-// append their own `rank` column (index 11 in `fts_search`) after it without
-// renumbering `is_annotation` (index 9, unchanged from before `origin` was
-// added).
+// brief. THIS IS THE SHARPEST EDGE IN THIS FILE: every column here is TEXT
+// or INTEGER-ish, so a shifted index resolves via a nearby column's value
+// with NO type error and NO test failure unless something explicitly pins
+// that column's value round-tripping through a real index (see
+// `a_hits_origin_round_trips_through_the_real_index` and
+// `a_hits_concept_type_round_trips_through_the_real_index` below — both
+// exist specifically to catch that).
+//
+// `f.origin` (index 10) is deliberately last of the "stable" columns, and
+// `f.concept_type` (index 11) is appended AFTER it — not inserted in the
+// middle — so neither this column's position nor any earlier one moves
+// again if a future column is added. Both callers append their own `rank`
+// column after everything here: index 12 in `fts_search`. `is_annotation`
+// (index 9) is unchanged from before `origin`/`concept_type` were added.
 const SELECT_COLS: &str = "f.path, b.line_start, b.line_end, b.text, b.breadcrumb, b.level, \
-                           f.doc_date, b.agent_by, f.human_verified, b.is_annotation, f.origin";
+                           f.doc_date, b.agent_by, f.human_verified, b.is_annotation, f.origin, \
+                           f.concept_type";
 
 fn fts_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqlite::Result<Vec<Hit>> {
     let Some(expr) = match_expr(q) else { return Ok(Vec::new()) };
@@ -200,7 +216,7 @@ fn fts_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqli
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-        Ok((row_to_hit(r)?, r.get::<_, f64>(11)?, r.get::<_, i64>(9)? != 0))
+        Ok((row_to_hit(r)?, r.get::<_, f64>(12)?, r.get::<_, i64>(9)? != 0))
     })?;
     finish(rows.collect::<rusqlite::Result<Vec<_>>>()?, q, limit, today)
 }
@@ -333,6 +349,12 @@ fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<Hit> {
     // promise unreachable in practice and contradict fail-toward-neutral
     // with a fail-loud crash instead (review round 1, Minor #4).
     let origin_raw: Option<String> = r.get(10)?;
+    // `f.concept_type` (index 11, appended after `f.origin` — see
+    // `SELECT_COLS`'s comment). Genuinely nullable: a `.md` with no
+    // frontmatter `type` at all stores `NULL` here, distinct from an empty
+    // string, and that distinction matters to the grouping consumer (task
+    // B-T7): a typeless `derived` hit falls into the UI's catch-all group.
+    let concept_type: Option<String> = r.get(11)?;
     Ok(Hit {
         path: r.get(0)?,
         line: r.get::<_, i64>(1)? as u32,
@@ -344,6 +366,7 @@ fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<Hit> {
         agent_by: r.get(7)?,
         human_verified: r.get::<_, i64>(8)? != 0,
         origin: crate::store::origin_of(origin_raw.as_deref()),
+        concept_type,
         score: 0.0,
     })
 }
@@ -575,6 +598,27 @@ mod tests {
         let source = hits.iter().find(|h| h.path == "b.md").expect("b.md must be found");
         assert_eq!(human.origin, Origin::Human, "{human:?}");
         assert_eq!(source.origin, Origin::Source, "{source:?}");
+    }
+
+    /// Same hazard as the `origin` round-trip above, for the column task
+    /// B-T7 appended: `f.concept_type` (index 11 of `SELECT_COLS`, the new
+    /// last column before `rank`). `b.md` carries a registered `type` in its
+    /// frontmatter; `a.md` carries none. Both are TEXT-shaped like every
+    /// neighboring column, so a mutation that reads the wrong index (off by
+    /// one either direction) would silently substitute another column's
+    /// value here with no type error — this must fail on that mutation, not
+    /// just on `concept_type` never being read at all.
+    #[test]
+    fn a_hits_concept_type_round_trips_through_the_real_index() {
+        let (_d, c) = indexed(&[
+            ("a.md", "target\n"),
+            ("b.md", "---\ntype: Book Summary\n---\ntarget\n"),
+        ]);
+        let hits = search(&c, &parse("target"), 20, "2026-08-10").unwrap().0;
+        let untyped = hits.iter().find(|h| h.path == "a.md").expect("a.md must be found");
+        let typed = hits.iter().find(|h| h.path == "b.md").expect("b.md must be found");
+        assert_eq!(untyped.concept_type, None, "{untyped:?}");
+        assert_eq!(typed.concept_type.as_deref(), Some("Book Summary"), "{typed:?}");
     }
 
     #[test]
@@ -822,6 +866,7 @@ mod tests {
             agent_by: None,
             human_verified: false,
             origin,
+            concept_type: None,
         }
     }
 

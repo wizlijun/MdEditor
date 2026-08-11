@@ -297,6 +297,15 @@ pub struct HitDto {
     pub source_ref: String,
     pub agent_by: Option<String>,
     pub human_verified: bool,
+    /// `"human" | "derived" | "source"` — `searchidx::Origin::as_str()`
+    /// verbatim, same string the `origin:` query filter and the CLI's
+    /// `--json` output already use (task B-T6). The panel's two poles
+    /// (`grouping.ts`) key off this.
+    pub origin: String,
+    /// `files.concept_type` verbatim, e.g. `"Book Summary"`; `None` when the
+    /// file has no `type`. Only the middle (`derived`) band is subdivided by
+    /// this — see `grouping.ts`.
+    pub concept_type: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -353,6 +362,8 @@ fn hit_to_dto(h: Hit, vault_root: &Path) -> HitDto {
     HitDto {
         abs_path: vault_root.join(&h.path).to_string_lossy().to_string(),
         source_ref: h.source_ref(),
+        origin: h.origin.as_str().to_string(),
+        concept_type: h.concept_type,
         path: h.path,
         line: h.line,
         line_end: h.line_end,
@@ -649,6 +660,7 @@ mod command_tests {
             agent_by: Some("claude/1.0".to_string()),
             human_verified: true,
             origin: searchidx::Origin::Derived,
+            concept_type: Some("Book Summary".to_string()),
         }
     }
 
@@ -680,6 +692,8 @@ mod command_tests {
         assert_eq!(dto.doc_date.as_deref(), Some("2026-08-10"));
         assert_eq!(dto.agent_by.as_deref(), Some("claude/1.0"));
         assert!(dto.human_verified);
+        assert_eq!(dto.origin, "derived");
+        assert_eq!(dto.concept_type.as_deref(), Some("Book Summary"));
     }
 
     #[test]
