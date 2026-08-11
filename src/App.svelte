@@ -578,7 +578,7 @@
         case 'zoom-in':     document.documentElement.style.fontSize = `${Math.min(200, (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) + 2)}px`; break
         case 'zoom-out':    document.documentElement.style.fontSize = `${Math.max(10, (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) - 2)}px`; break
         case 'zoom-reset':  document.documentElement.style.fontSize = ''; break
-        case 'preferences': uiState.showSettings = true; break
+        case 'preferences': openSettings(); break
         case 'check-for-updates': {
           // Open the dialog first so the user sees "checking…" feedback,
           // then trigger a forced refresh that bypasses the 20h cache.
@@ -655,7 +655,7 @@
               const report = await invoke('theme_import', { zipPath: path })
               const { pendingThemeImport } = await import('./lib/theme-import-bus.svelte')
               pendingThemeImport.report = report
-              uiState.showSettings = true   // surface the SettingsDialog so its child dialog renders
+              openSettings()   // surface the SettingsDialog so its child dialog renders
             } catch (e) { console.warn('[App] drop theme_import:', e) }
             continue
           }

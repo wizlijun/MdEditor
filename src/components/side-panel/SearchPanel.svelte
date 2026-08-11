@@ -89,16 +89,23 @@
     }
   }
 
-  // KNOWN GAP: this does not protect against a *rebuild* triggered
-  // elsewhere (another window, a concurrent CLI invocation). If this event
-  // fires while some other actor holds the backend index mutex mid-rebuild,
-  // the rerun below still blocks for that rebuild's full duration with only
-  // the generic `loading` state to show for it — the same class of silent
-  // hang a locally-triggered rebuild would cause, just triggered externally
-  // instead of from this UI (the rebuild entry point now lives in the
-  // "搜索与索引" Settings tab, not this panel). A real fix needs a
-  // backend-reported "busy" signal (e.g. a distinct event/state emitted
-  // around `notemd_search_rebuild`), which is out of scope for this panel.
+  // KNOWN GAP: this panel has no local signal for a rebuild in progress,
+  // from ANYWHERE — another window, a concurrent CLI invocation, or this
+  // app's own "搜索与索引" Settings tab (the only in-app rebuild trigger now
+  // that this panel's button is gone). `notemd_search_rebuild` holds the
+  // backend index lock for the rebuild's full duration; if this event fires
+  // while any of those holds it, the rerun below just blocks for that whole
+  // duration with only the generic `loading` state to show for it — a silent
+  // hang, not a crash, but indistinguishable from one to the user. Note this
+  // is NOT covered by SettingsDialog's own busy state: `indexStatus.progress`
+  // is a store that tab subscribes to for its own UI, and this panel doesn't
+  // read it. A real fix means either wiring this panel to `indexStatus` too
+  // (extra subscription + an initial poll for a rebuild already in flight —
+  // see `IndexStatusStore.refresh()`'s doc comment for why the poll is
+  // needed) or a backend-reported "busy" signal; deliberately not done here
+  // since it would re-add the input-disabling behavior this task's brief
+  // explicitly removed from this panel, which is a product call for the
+  // plan's owner, not a side effect of a comment fix.
   $effect(() => {
     const pending = listen('search://index-updated', () => { void refreshAfterIndexUpdate() })
     return () => { void pending.then((un) => un()) }

@@ -36,4 +36,19 @@ describe('closeSettings', () => {
     closeSettings()
     expect(uiState.showSettings).toBe(false)
   })
+
+  // Regression for the hijack scenario a reviewer flagged: `pendingSettingsTab`
+  // was previously cleared in exactly one place (SettingsDialog's `$effect`,
+  // gated on `open`). If the dialog closes before that effect gets to
+  // consume the flag — or a caller ever sets `showSettings` without pairing
+  // it through `openSettings` — a stale tab request would silently redirect
+  // the *next* unrelated Settings open (e.g. from the Preferences menu,
+  // which never asked for a tab). Closing must scrub it so no request can
+  // outlive the open it was made for.
+  it('clears a pending tab request so it cannot leak into the next open', () => {
+    uiState.showSettings = true
+    uiState.pendingSettingsTab = 'search'
+    closeSettings()
+    expect(uiState.pendingSettingsTab).toBeNull()
+  })
 })
