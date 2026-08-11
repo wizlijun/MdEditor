@@ -5,7 +5,10 @@ edition = "2021"
 description = "Platform-independent full-text index core for note.md vaults."
 
 [dependencies]
-rusqlite = { version = "0.40", features = ["bundled"] }
+# `hooks` is what makes a query interruptible: `Connection::progress_handler`
+# is the only place a running statement can be told to stop, and the LIKE
+# fallback spends all of its seconds inside one such statement.
+rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 jieba-rs = "0.10"
 pulldown-cmark = { version = "0.13", default-features = false }
 ignore = "0.4"

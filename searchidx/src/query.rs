@@ -2,6 +2,8 @@
 //! and `search`, so a filter that works in one works in the other by
 //! construction.
 
+use std::sync::Arc;
+
 use rusqlite::{params_from_iter, Connection};
 
 use crate::tokenize::{has_han, tokens};
@@ -118,15 +120,79 @@ fn split_respecting_quotes(raw: &str) -> Vec<String> {
     out
 }
 
+/// Cooperative abort, consulted from SQLite's own progress callback.
+///
+/// It has to be checked *inside* a running statement, not between rows: the
+/// expensive path here is the LIKE fallback, and on a miss it spends its
+/// entire runtime inside a single `step()` over every block in the vault
+/// without ever handing a row back to us. A between-rows check would never
+/// run. Measured on a real vault (8.9k files / 1.3M blocks): 14.3s in one
+/// `step()`.
+pub type Abort = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// What a caller is willing to spend on one query.
+#[derive(Clone, Default)]
+pub struct Limits {
+    /// Allow the bounded LIKE fallback when FTS misses. `false` keeps the
+    /// query on the fast path only — what live typing wants, since the
+    /// fallback costs seconds on a large vault and a half-typed word misses
+    /// FTS almost by definition.
+    pub deep: bool,
+    /// Cut the query short when this returns true. `None` = run to completion.
+    pub abort: Option<Abort>,
+}
+
+impl Limits {
+    /// Every route, no abort — what the CLI and every non-interactive caller
+    /// want, and what `search` has always done.
+    pub fn full() -> Self {
+        Limits { deep: true, abort: None }
+    }
+}
+
+/// One query's answer. Carries *why* it looks the way it does, so the caller
+/// can tell "nothing matches" from "we did not look everywhere yet" — two
+/// states that must never render as the same "no results".
+#[derive(Debug, Clone)]
+pub struct Answer {
+    pub hits: Vec<Hit>,
+    pub route: Route,
+    /// The retrieval was cut short by [`Limits::abort`]. `hits` is whatever
+    /// had been collected by then, not the whole answer.
+    pub truncated: bool,
+    /// FTS found nothing and a LIKE fallback *would* have been tried, but
+    /// [`Limits::deep`] was false. The one honest way to offer "search harder"
+    /// without paying for it on every keystroke.
+    pub deep_available: bool,
+}
+
+/// Back-compatible entry point: every route, no abort.
 pub fn search(
     conn: &Connection,
     q: &Query,
     limit: usize,
     today: &str,
 ) -> rusqlite::Result<(Vec<Hit>, Route)> {
-    let hits = fts_search(conn, q, limit, today)?;
-    if !hits.is_empty() {
-        return Ok((hits, Route::Fts));
+    let a = search_with(conn, q, limit, today, &Limits::full())?;
+    Ok((a.hits, a.route))
+}
+
+pub fn search_with(
+    conn: &Connection,
+    q: &Query,
+    limit: usize,
+    today: &str,
+    limits: &Limits,
+) -> rusqlite::Result<Answer> {
+    // Installed for the whole call and removed on every exit path (including
+    // `?`) by the guard's Drop — a progress handler left behind on this
+    // connection would abort the *next* caller's work, and the next caller is
+    // usually the watcher's sweep or a rebuild.
+    let _guard = ProgressGuard::install(conn, limits.abort.clone())?;
+
+    let (hits, truncated) = fts_search(conn, q, limit, today)?;
+    if !hits.is_empty() || truncated {
+        return Ok(Answer { hits, route: Route::Fts, truncated, deep_available: false });
     }
     // The dictionary has blind spots — new coinages, personal names, single
     // characters. A miss there would be invisible to the user, so we pay for a
@@ -134,15 +200,57 @@ pub fn search(
     // and the scan is capped, which is why the usual "never full-scan" rule is
     // suspended here on purpose.
     if needs_scan_fallback(q) {
+        if !limits.deep {
+            return Ok(Answer {
+                hits: Vec::new(),
+                route: Route::Fts,
+                truncated: false,
+                deep_available: true,
+            });
+        }
         // Report `Route::Scan` regardless of whether the scan itself found
         // anything: the route records which retrieval path actually ran, not
         // whether it succeeded. Collapsing an attempted-but-empty scan back
         // into `Route::Fts` would tell a caller (the CLI's `--json` output,
         // read by agents deciding whether a query was exhaustively tried)
         // that no fallback was attempted when one was.
-        return Ok((like_search(conn, q, limit, today)?, Route::Scan));
+        let (hits, truncated) = like_search(conn, q, limit, today)?;
+        return Ok(Answer { hits, route: Route::Scan, truncated, deep_available: false });
     }
-    Ok((Vec::new(), Route::Fts))
+    Ok(Answer { hits: Vec::new(), route: Route::Fts, truncated: false, deep_available: false })
+}
+
+/// How many SQLite VM instructions between abort checks. Small enough that a
+/// superseded scan dies in well under a frame, large enough that the callback
+/// is noise next to the scan itself (~65k calls across a 14s full scan).
+const PROGRESS_OPS: std::os::raw::c_int = 1000;
+
+struct ProgressGuard<'c> {
+    conn: &'c Connection,
+    installed: bool,
+}
+
+impl<'c> ProgressGuard<'c> {
+    fn install(conn: &'c Connection, abort: Option<Abort>) -> rusqlite::Result<Self> {
+        let Some(abort) = abort else { return Ok(ProgressGuard { conn, installed: false }) };
+        conn.progress_handler(PROGRESS_OPS, Some(move || abort()))?;
+        Ok(ProgressGuard { conn, installed: true })
+    }
+}
+
+impl Drop for ProgressGuard<'_> {
+    fn drop(&mut self) {
+        if self.installed {
+            let _ = self.conn.progress_handler(0, None::<fn() -> bool>);
+        }
+    }
+}
+
+/// An abort is not a failure: SQLite reports it as `SQLITE_INTERRUPT`, and the
+/// rows gathered before it are perfectly good partial results.
+fn is_abort(e: &rusqlite::Error) -> bool {
+    matches!(e, rusqlite::Error::SqliteFailure(err, _)
+        if err.code == rusqlite::ErrorCode::OperationInterrupted)
 }
 
 fn needs_scan_fallback(q: &Query) -> bool {
@@ -172,8 +280,29 @@ fn match_expr(q: &Query) -> Option<String> {
 const SELECT_COLS: &str = "f.path, b.line_start, b.line_end, b.text, b.breadcrumb, b.level, \
                            f.doc_date, b.agent_by, f.human_verified, b.is_annotation";
 
-fn fts_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqlite::Result<Vec<Hit>> {
-    let Some(expr) = match_expr(q) else { return Ok(Vec::new()) };
+/// Drain a row iterator, treating an abort as "stop here" rather than an
+/// error. Returns the rows collected and whether the drain was cut short.
+fn drain<T>(
+    rows: impl Iterator<Item = rusqlite::Result<T>>,
+) -> rusqlite::Result<(Vec<T>, bool)> {
+    let mut out = Vec::new();
+    for r in rows {
+        match r {
+            Ok(v) => out.push(v),
+            Err(e) if is_abort(&e) => return Ok((out, true)),
+            Err(e) => return Err(e),
+        }
+    }
+    Ok((out, false))
+}
+
+fn fts_search(
+    conn: &Connection,
+    q: &Query,
+    limit: usize,
+    today: &str,
+) -> rusqlite::Result<(Vec<Hit>, bool)> {
+    let Some(expr) = match_expr(q) else { return Ok((Vec::new(), false)) };
     let mut sql = format!(
         "SELECT {SELECT_COLS}, bm25(blocks_fts, 1.0, 2.0) AS rank
          FROM blocks_fts
@@ -190,10 +319,16 @@ fn fts_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqli
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
         Ok((row_to_hit(r)?, r.get::<_, f64>(10)?, r.get::<_, i64>(9)? != 0))
     })?;
-    finish(rows.collect::<rusqlite::Result<Vec<_>>>()?, q, limit, today)
+    let (rows, truncated) = drain(rows)?;
+    Ok((finish(rows, q, limit, today)?, truncated))
 }
 
-fn like_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqlite::Result<Vec<Hit>> {
+fn like_search(
+    conn: &Connection,
+    q: &Query,
+    limit: usize,
+    today: &str,
+) -> rusqlite::Result<(Vec<Hit>, bool)> {
     // Every term and phrase must constrain the scan, ANDed — the same
     // contract the FTS path gives via `match_expr`. Binding only the first
     // needle (the original bug here) silently drops every other term, so a
@@ -203,7 +338,7 @@ fn like_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusql
     // looks like "no results"; this looked like an answer).
     let needles: Vec<&str> = q.terms.iter().chain(q.phrases.iter()).map(String::as_str).collect();
     if needles.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), false));
     }
     let mut args: Vec<String> = Vec::new();
     let clauses: Vec<String> = needles
@@ -227,7 +362,8 @@ fn like_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusql
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
         Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0))
     })?;
-    finish(rows.collect::<rusqlite::Result<Vec<_>>>()?, q, limit, today)
+    let (rows, truncated) = drain(rows)?;
+    Ok((finish(rows, q, limit, today)?, truncated))
 }
 
 fn escape_like(s: &str) -> String {
@@ -536,6 +672,66 @@ mod tests {
         assert_eq!(route.as_str(), "t1-scan", "must genuinely exercise the fallback, not the FTS path");
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert_eq!(hits[0].path, "both.md");
+    }
+
+    /// 逐字输入(尤其中文)几乎必然 FTS 未命中,而回退是全表扫描 —— 在真实
+    /// vault(8933 文件 / 1_306_104 blocks)上实测 14.3 秒。所以非 deep 的
+    /// 查询必须**根本不跑**回退,只汇报「深搜可用」,由调用方决定何时付这笔钱。
+    #[test]
+    fn a_shallow_query_never_pays_for_the_scan_fallback_but_says_it_is_available() {
+        let (_d, c) = indexed(&[("both.md", "target 会见了李慕白同志\n")]);
+        let shallow = Limits { deep: false, abort: None };
+        let a = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &shallow).unwrap();
+        assert_eq!(a.route.as_str(), "t1-fts", "the fallback must not have run");
+        assert!(a.hits.is_empty());
+        assert!(a.deep_available, "the caller has to be able to offer the deep search");
+
+        let deep = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &Limits::full()).unwrap();
+        assert_eq!(deep.route.as_str(), "t1-scan");
+        assert_eq!(deep.hits.len(), 1, "{:?}", deep.hits);
+        assert!(!deep.deep_available, "it already ran; there is nothing left to offer");
+    }
+
+    /// 上一轮搜索必须真的停下来,而不只是「结果被丢弃」:它占着索引锁,后面
+    /// 每一次击键都排在它后面。中止点必须在语句**内部** —— 一次未命中的
+    /// LIKE 扫描会在单个 `step()` 里跑满全程,一行都不返回。
+    #[test]
+    fn an_aborted_scan_stops_inside_the_statement_instead_of_running_to_completion() {
+        let (_d, c) = indexed(&[("a.md", "target 李慕白\n")]);
+        // Enough rows that the scan is guaranteed to cross a progress-handler
+        // checkpoint; inserted directly, since what is under test is the
+        // scan's abort, not indexing.
+        c.execute("INSERT INTO files(id, path, ext) VALUES (999, 'bulk.md', 'md')", []).unwrap();
+        let tx = c.unchecked_transaction().unwrap();
+        for i in 0..20_000 {
+            tx.execute(
+                "INSERT INTO blocks(file_id, line_start, line_end, breadcrumb, text, level)
+                 VALUES (999, ?1, ?1, '', ?2, 'line')",
+                rusqlite::params![i, format!("filler row {i} with no needle in it")],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let limits = Limits {
+            deep: true,
+            abort: Some(Arc::new(move || {
+                seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                true
+            })),
+        };
+        let a = search_with(&c, &parse("慕"), 20, "2026-08-10", &limits).unwrap();
+        assert!(calls.load(std::sync::atomic::Ordering::Relaxed) > 0, "abort was never consulted");
+        assert!(a.truncated, "an aborted retrieval must say so, not pose as a complete answer");
+
+        // And the handler must not outlive the call: the next caller through
+        // this connection is usually the watcher's sweep or a rebuild, and an
+        // always-true abort left installed would kill it.
+        let after = search_with(&c, &parse("慕"), 20, "2026-08-10", &Limits::full()).unwrap();
+        assert!(!after.truncated, "the progress handler leaked into the next query");
+        assert_eq!(after.hits.len(), 1, "{:?}", after.hits);
     }
 
     /// 引号短语必须做精确子串复核:分词是重叠的,FTS 的 AND 不保证顺序。

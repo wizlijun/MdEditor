@@ -10,6 +10,7 @@
   import SideViewSwitcher from './SideViewSwitcher.svelte'
   import { searchStore, isIndexNotReady } from '../../lib/search/store.svelte'
   import { searchApi, type SearchHit } from '../../lib/search/api'
+  import { decideTrigger, DEEP_AFTER_MS, DEEP_TIMEOUT_MS } from '../../lib/search/input-trigger'
 
   // `tab` is part of every side view's props contract (see SidePanel.svelte);
   // this panel is vault-wide rather than per-document, so only the
@@ -17,11 +18,25 @@
   let { tab }: { tab: Tab | null } = $props()
 
   // Local input value — kept separate from `searchStore.query` so keystrokes
-  // are never lost to the 200ms debounce window (typing updates this
-  // immediately; the store lags behind on purpose).
+  // are never lost to the debounce window (typing updates this immediately;
+  // the store lags behind on purpose).
   let inputValue = $state('')
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
-  onDestroy(() => { if (debounceTimer) clearTimeout(debounceTimer) })
+  // The auto-escalation to a deep scan, armed only after a fast query came
+  // back empty and stayed empty for a beat.
+  let deepTimer: ReturnType<typeof setTimeout> | undefined
+  // True between `compositionstart` and `compositionend` — i.e. while an IME
+  // is showing candidates. Everything typed in that window is a pinyin/kana
+  // buffer, not a query.
+  let composing = $state(false)
+  onDestroy(cancelTimers)
+
+  function cancelTimers() {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    if (deepTimer) clearTimeout(deepTimer)
+    debounceTimer = undefined
+    deepTimer = undefined
+  }
 
   // `notemd_search_rebuild` holds the index lock for its whole duration, so a
   // query fired mid-rebuild would just hang with no visible cause. Disabling
@@ -34,27 +49,69 @@
     isIndexNotReady(searchStore.error) ? t('search.notReady') : searchStore.error,
   )
 
+  // Every keystroke re-decides *when* (and whether) to query — see
+  // `input-trigger.ts` for the three rules. Rescheduling also cancels a
+  // pending deep scan: the user typing on is the clearest possible signal
+  // that the previous query is no longer the question.
   function scheduleSearch() {
-    if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => { void searchStore.run(inputValue) }, 200)
+    cancelTimers()
+    const d = decideTrigger(inputValue, composing)
+    if (d.kind === 'hold') return
+    if (d.kind === 'clear') { searchStore.clear(); return }
+    debounceTimer = setTimeout(() => { void runShallow() }, d.delayMs)
+  }
+
+  // The fast tier: index only. A miss here is cheap and, crucially, does not
+  // block the next keystroke behind a full-vault scan.
+  async function runShallow() {
+    const asked = inputValue
+    await searchStore.run(asked, { deep: false })
+    // Fast tier missed and a scan would look further. Offer it via the hint,
+    // and — for the user who is sitting there waiting rather than reading the
+    // hint — take it ourselves after a pause, under a time budget.
+    if (searchStore.deepAvailable && inputValue === asked) {
+      deepTimer = setTimeout(() => { void runDeep() }, DEEP_AFTER_MS)
+    }
+  }
+
+  function runDeep() {
+    cancelTimers()
+    return searchStore.run(inputValue, { deep: true, timeoutMs: DEEP_TIMEOUT_MS })
   }
 
   function onKeydown(e: KeyboardEvent) {
+    // A Return that closes an IME candidate window belongs to the IME, not to
+    // us: `isComposing` is exactly that distinction.
+    if (e.isComposing) return
     if (e.key === 'Enter') {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      void searchStore.run(inputValue)
+      void runDeep()
     } else if (e.key === 'Escape') {
-      if (debounceTimer) clearTimeout(debounceTimer)
+      cancelTimers()
       inputValue = ''
       searchStore.clear()
     }
+  }
+
+  function onInput(e: Event) {
+    // Belt and braces with the `composing` flag: Safari/WebKit has been known
+    // to deliver an `input` before `compositionstart` for the first key of a
+    // composition, and `isComposing` is correct on the event itself.
+    if ((e as InputEvent).isComposing) { cancelTimers(); return }
+    scheduleSearch()
+  }
+
+  function onCompositionEnd() {
+    composing = false
+    // The committed characters only exist now, so this is the first moment
+    // the input is a real query.
+    scheduleSearch()
   }
 
   async function onRebuild() {
     rebuilding = true
     try {
       await searchApi.rebuild()
-      if (inputValue.trim()) await searchStore.run(inputValue)
+      if (inputValue.trim()) await searchStore.run(inputValue, { deep: true, timeoutMs: DEEP_TIMEOUT_MS })
     } catch (e) {
       showError(String(e))
     } finally {
@@ -98,7 +155,12 @@
     try {
       do {
         refreshPending = false
-        await searchStore.run(searchStore.query)
+        // Re-run at the tier the visible results came from, or a shallow
+        // refresh would silently downgrade a deep answer to "no matches".
+        await searchStore.run(
+          searchStore.query,
+          searchStore.lastDeep ? { deep: true, timeoutMs: DEEP_TIMEOUT_MS } : { deep: false },
+        )
       } while (refreshPending && searchStore.query.trim())
     } finally {
       refreshing = false
@@ -138,8 +200,10 @@
       class="search-input"
       placeholder={t('search.placeholder')}
       bind:value={inputValue}
-      oninput={scheduleSearch}
+      oninput={onInput}
       onkeydown={onKeydown}
+      oncompositionstart={() => { composing = true; cancelTimers() }}
+      oncompositionend={onCompositionEnd}
       disabled={rebuilding}
     />
   </div>
@@ -155,7 +219,12 @@
     {:else if rebuilding}
       <p class="empty">{t('search.notReady')}</p>
     {:else if searchStore.loading}
-      <p class="empty">…</p>
+      <p class="empty">{searchStore.lastDeep ? t('search.deepRunning') : '…'}</p>
+    {:else if searchStore.deepAvailable}
+      <!-- Not the same as "no matches": the index missed, and a slower scan
+           has not looked yet. Saying "no matches" here would be a lie the
+           user has no way to see through. -->
+      <button class="deep-hint" onclick={() => void runDeep()}>{t('search.deepHint')}</button>
     {:else if searchStore.route !== null && searchStore.hits.length === 0}
       <p class="empty">{t('search.noResults')}</p>
     {:else if searchStore.hits.length > 0}
@@ -187,6 +256,9 @@
         <span>{t('search.resultCount', { n: searchStore.total, ms: searchStore.tookMs })}</span>
         {#if searchStore.route === 't1-scan'}
           <span class="fallback">{t('search.fallbackScan')}</span>
+        {/if}
+        {#if searchStore.truncated}
+          <span class="fallback">{t('search.partial')}</span>
         {/if}
       {/if}
     </footer>
@@ -231,6 +303,13 @@
   .search-input:disabled { opacity: 0.6; }
   .body { flex: 1; overflow-y: auto; padding: 4px; }
   .empty { padding: 8px; opacity: 0.5; font-size: 12px; }
+  .deep-hint {
+    display: block; width: 100%; text-align: left;
+    padding: 8px; font: inherit; font-size: 12px;
+    border: 0; background: transparent; color: inherit;
+    opacity: 0.62; cursor: pointer; border-radius: 6px;
+  }
+  .deep-hint:hover { background: rgba(0,0,0,0.05); opacity: 0.85; }
   .error-row { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
   .error { margin: 0; font-size: 12px; color: #c0392b; }
   .rebuild-btn {
@@ -268,6 +347,7 @@
     .hbtn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
     .search-input { border-color: rgba(255,255,255,0.18); background: var(--input-bg, #2a2a2c); }
     .row:hover { background: rgba(255,255,255,0.08); }
+    .deep-hint:hover { background: rgba(255,255,255,0.08); }
     .rebuild-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
     .error { color: #ff6b5e; }
   }

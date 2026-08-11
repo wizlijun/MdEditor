@@ -6,9 +6,11 @@
 pub mod watch;
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
-use searchidx::{Hit, IndexStats, ScanOptions, SearchIndex};
+use searchidx::{Hit, IndexStats, Limits, ScanOptions, SearchIndex};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
@@ -20,8 +22,48 @@ pub type IndexHandle = Arc<Mutex<Option<SearchIndex>>>;
 /// app relaunch with an existing vault), open it and start watching — mirrors
 /// `agents_sync::init`'s auto-start. `open_vault` is also called directly from
 /// the folder picker for a freshly chosen/changed vault; see `lib.rs`.
+/// Per-window ticket dispenser for in-flight queries.
+///
+/// Typing produces overlapping queries, and a superseded one is not merely
+/// uninteresting — it holds the index mutex, so every later keystroke queues
+/// behind work whose answer nobody will ever look at. Each running query
+/// compares its own ticket against the newest one from SQLite's progress
+/// callback and stops the moment it is behind: the difference between "the
+/// stale response is discarded" (what the frontend already did) and "the
+/// stale *work* stops" (what makes the next keystroke fast).
+///
+/// The number is minted HERE rather than passed in by the caller. A frontend
+/// counter resets to zero on every webview reload while this state does not,
+/// which would leave every query after a reload permanently "superseded" —
+/// search silently dead until app restart.
+///
+/// Keyed by window label, because two windows searching at once are two
+/// users' worth of intent: cancelling one on behalf of the other would leave
+/// a panel showing nothing with no way to ask again.
+#[derive(Default, Clone)]
+pub struct SearchGen(Arc<Mutex<std::collections::HashMap<String, Arc<AtomicU64>>>>);
+
+impl SearchGen {
+    /// Reserve the newest ticket for `window`, handing back the counter it was
+    /// drawn from so the abort check itself is a plain atomic load — it runs
+    /// from SQLite's progress callback tens of thousands of times per scan,
+    /// which is no place for a map lookup behind a mutex.
+    pub fn next(&self, window: &str) -> (u64, Arc<AtomicU64>) {
+        let mut m = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let counter = m.entry(window.to_string()).or_default().clone();
+        let ticket = counter.fetch_add(1, Ordering::AcqRel) + 1;
+        (ticket, counter)
+    }
+}
+
+/// True once a later query from the same window has been dispensed.
+fn superseded(counter: &AtomicU64, ticket: u64) -> bool {
+    counter.load(Ordering::Acquire) > ticket
+}
+
 pub fn init(app: &AppHandle) {
     app.manage::<IndexHandle>(Arc::new(Mutex::new(None)));
+    app.manage(SearchGen::default());
     app.manage(watch::WatchState::default());
     if let Some(root) = crate::sotvault::resolve_vault_root(app) {
         open_vault(app, &root);
@@ -132,6 +174,11 @@ pub struct SearchResponse {
     pub took_ms: u64,
     pub total: usize,
     pub hits: Vec<HitDto>,
+    /// The retrieval hit its time budget. `hits` is a partial answer.
+    pub truncated: bool,
+    /// FTS missed and the (expensive) scan fallback was not run because this
+    /// was a shallow query — the panel offers it instead of paying for it.
+    pub deep_available: bool,
 }
 
 #[derive(Serialize)]
@@ -185,23 +232,70 @@ fn stats_to_dto(s: IndexStats) -> SearchStatsDto {
     }
 }
 
-#[tauri::command]
-pub fn notemd_search(app: AppHandle, query: String, limit: Option<usize>) -> Result<SearchResponse, String> {
-    let started = std::time::Instant::now();
+/// Returned instead of results when a newer query has taken over. Not an
+/// error the user should ever see: the frontend drops it silently, because by
+/// definition a fresher answer is already on its way.
+pub const CANCELLED: &str = "search cancelled";
+
+/// `(async)` is load-bearing, not decoration. A plain `#[tauri::command]` is
+/// generated as `kind = "sync"` and runs on the IPC handler's thread — the
+/// main thread — so every millisecond spent in SQLite is a millisecond the
+/// window cannot paint or accept input. With a 1.3M-block index the scan
+/// fallback measured 14.3s, which is exactly the "typing freezes the app"
+/// report this exists to fix. Holding a `std::sync::Mutex` guard across the
+/// body stays sound because `(async)` on a *sync* fn runs it on the blocking
+/// threadpool (`kind = "sync_threadpool"`), with no await point inside.
+#[tauri::command(async)]
+pub fn notemd_search(
+    app: AppHandle,
+    window: tauri::Window,
+    query: String,
+    limit: Option<usize>,
+    deep: Option<bool>,
+    timeout_ms: Option<u64>,
+) -> Result<SearchResponse, String> {
+    let started = Instant::now();
+    let (ticket, counter) = app.state::<SearchGen>().next(window.label());
+
     let idx_handle = handle(&app);
     let guard = lock(&idx_handle);
+    // Waiting for that lock is exactly when a query goes stale, so this is
+    // the check that matters most: whatever we queued behind, the user has
+    // typed since.
+    if superseded(&counter, ticket) {
+        return Err(CANCELLED.to_string());
+    }
     let idx = require_index(&guard)?;
-    let (hits, route) = idx.search(&query, limit.unwrap_or(50))?;
+
+    let deadline = timeout_ms.map(|ms| started + Duration::from_millis(ms));
+    let abort_counter = counter.clone();
+    let limits = Limits {
+        // Default deep so non-interactive callers keep the old behaviour;
+        // only the panel's live typing opts into the fast-path-only tier.
+        deep: deep.unwrap_or(true),
+        abort: Some(Arc::new(move || {
+            superseded(&abort_counter, ticket)
+                || deadline.is_some_and(|d| Instant::now() >= d)
+        })),
+    };
+    let answer = idx.search_with(&query, limit.unwrap_or(50), &limits)?;
+    // An abort has two causes and they are not the same answer: superseded
+    // means "throw this away", deadline means "partial, and say so".
+    if superseded(&counter, ticket) {
+        return Err(CANCELLED.to_string());
+    }
     let root = idx.vault_root().to_path_buf();
     Ok(SearchResponse {
-        route: route.as_str().to_string(),
+        route: answer.route.as_str().to_string(),
         took_ms: started.elapsed().as_millis() as u64,
-        total: hits.len(),
-        hits: hits.into_iter().map(|h| hit_to_dto(h, &root)).collect(),
+        total: answer.hits.len(),
+        truncated: answer.truncated,
+        deep_available: answer.deep_available,
+        hits: answer.hits.into_iter().map(|h| hit_to_dto(h, &root)).collect(),
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn notemd_search_stats(app: AppHandle) -> Result<SearchStatsDto, String> {
     let idx_handle = handle(&app);
     let guard = lock(&idx_handle);
@@ -220,7 +314,7 @@ pub fn notemd_search_stats(app: AppHandle) -> Result<SearchStatsDto, String> {
 /// busy, which is a worse lie. The file watcher's flood-sweep path
 /// (`watch::drain`) already holds this same lock across a full `sweep`, so
 /// this is the established pattern, not a new tradeoff.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn notemd_search_rebuild(app: AppHandle) -> Result<SearchStatsDto, String> {
     let idx_handle = handle(&app);
     let mut guard = lock(&idx_handle);
@@ -343,11 +437,43 @@ mod command_tests {
 
     #[test]
     fn search_response_serializes_with_camel_case_field_names() {
-        let resp = SearchResponse { route: "t1-fts".to_string(), took_ms: 3, total: 0, hits: vec![] };
+        let resp = SearchResponse {
+            route: "t1-fts".to_string(),
+            took_ms: 3,
+            total: 0,
+            hits: vec![],
+            truncated: false,
+            deep_available: true,
+        };
         let v = serde_json::to_value(&resp).unwrap();
-        for key in ["route", "tookMs", "total", "hits"] {
+        for key in ["route", "tookMs", "total", "hits", "truncated", "deepAvailable"] {
             assert!(v.get(key).is_some(), "missing key {key} in {v}");
         }
+    }
+
+    /// 后端自己发号,是因为前端计数器在 webview reload 后会归零 —— 若由前端
+    /// 传号,reload 之后每一次搜索都会被判定为「已被更新的查询取代」而永远
+    /// 返回 cancelled,搜索直到重启 app 都是死的。
+    #[test]
+    fn a_newer_query_supersedes_an_older_one_from_the_same_window() {
+        let gen = SearchGen::default();
+        let (first, c1) = gen.next("main");
+        assert!(!superseded(&c1, first), "a query must not cancel itself");
+        let (second, c2) = gen.next("main");
+        assert!(second > first);
+        assert!(superseded(&c1, first), "the older query must stop working");
+        assert!(!superseded(&c2, second));
+    }
+
+    /// 两个窗口同时搜索是两个人的意图。互相取消会让其中一个面板空着,而且
+    /// 它没有任何办法重新提问 —— 它并不知道自己被别人取消了。
+    #[test]
+    fn windows_do_not_cancel_each_other() {
+        let gen = SearchGen::default();
+        let (mine, mine_counter) = gen.next("main");
+        let _ = gen.next("daily");
+        let _ = gen.next("daily");
+        assert!(!superseded(&mine_counter, mine));
     }
 
     #[test]

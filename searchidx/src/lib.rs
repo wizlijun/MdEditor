@@ -25,7 +25,7 @@ pub mod tokenize;
 pub mod watch;
 
 pub use block::{Block, BlockLevel, FileMeta, Link};
-pub use query::{Hit, Query, Route};
+pub use query::{Abort, Answer, Hit, Limits, Query, Route};
 pub use scan::{IndexOutcome, ScanOptions, ScanStats};
 
 use std::path::{Path, PathBuf};
@@ -93,6 +93,14 @@ impl SearchIndex {
     pub fn search(&self, raw: &str, limit: usize) -> Result<(Vec<Hit>, Route), String> {
         let q = query::parse(raw);
         query::search(&self.conn, &q, limit, &today()).map_err(|e| e.to_string())
+    }
+
+    /// Same retrieval, under a caller-supplied budget: an interactive caller
+    /// keeps live typing off the expensive fallback ([`Limits::deep`]) and
+    /// abandons a query the moment the user has moved on ([`Limits::abort`]).
+    pub fn search_with(&self, raw: &str, limit: usize, limits: &Limits) -> Result<Answer, String> {
+        let q = query::parse(raw);
+        query::search_with(&self.conn, &q, limit, &today(), limits).map_err(|e| e.to_string())
     }
 
     pub fn stats(&self) -> Result<IndexStats, String> {
