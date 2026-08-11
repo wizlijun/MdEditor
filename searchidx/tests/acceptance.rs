@@ -22,8 +22,33 @@ fn open_temp(vault: &Path) -> (tempfile::TempDir, SearchIndex) {
 /// 分词盲区与排序回归的守门员 —— 见该文件与 task-11 报告里对「100 条」目标的
 /// 诚实核算(语料是刻意的小型合成 fixture,不是 spec 锚定的 8,826 文件真实
 /// vault,硬凑到 100 条会用近重复条目稀释这份清单的可信度)。
+///
+/// **两种断言,一份 fixture。** 每条用例都断言召回(`expect_path` 必须出现在
+/// 前 20 条里);带 `outranks_path` 的用例**额外**断言顺序:`expect_path` 必须
+/// 排在 `outranks_path` 前面。
+///
+/// 为什么要有第二种:origin 分级(spec `2026-08-11-md-origin-tiering-design.md`
+/// §4)是**纯重排序** —— 它一条也不会让文档从结果里消失,只改前后。原本这里
+/// 只有 `hits.iter().any(|h| h.path == want)`,对重排序**结构性地看不见**:
+/// 三档乘数全部改成 ×1.0,这 50 条依旧全绿。所以顺序类主张(「你写的排在 AI
+/// 摘要前」)在这个 fixture 格式里根本写不出来,只能靠人去 diff 有序命中表。
+///
+/// 选择的形式是**扩展既有 fixture**,而不是新开一个平行的顺序测试文件:
+/// 顺序主张和召回主张说的是同一批查询在同一个语料上的行为,拆成两份会各自
+/// 长出各自的语料假设然后漂移(前置项目已经吃过一次「两个乘数一起推同一
+/// 方向」的亏,根因就是断言散落在不同地方)。新键全部可选,原有 50 条一个
+/// 字都不用改 —— 没有 `outranks_path` 的用例行为与之前完全一致。
+///
+/// `expect_text` / `outranks_text` 是**可选的块级选择器**:同一个文件里可能有
+/// 多个块命中同一个词(`.note.md` 的人工节点 vs agent 写的答复节点),只按
+/// path 选会选到 hits 里靠前的那个,断言就变成同一条命中和自己比。给出
+/// 子串时取第一条 path 与 text 都匹配的命中。
+///
+/// 顺序断言要求**比较对象本身也被召回**。「B 根本没出现所以 A 赢了」不是
+/// 这条断言想固化的事实 —— 那是一次召回变化,必须红,不能被当成顺序正确
+/// 而静默放过。
 #[test]
-fn retrievability_regression_set_is_fully_recalled() {
+fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
     let (_d, mut idx) = open_temp(&corpus());
     idx.rebuild(&ScanOptions::default()).unwrap();
 
@@ -40,16 +65,47 @@ fn retrievability_regression_set_is_fully_recalled() {
     for case in &cases {
         let q = case["query"].as_str().unwrap();
         let want = case["expect_path"].as_str().unwrap();
+        let want_text = case["expect_text"].as_str();
         let (hits, route) = idx.search(q, 20).unwrap();
-        if !hits.iter().any(|h| h.path == want) {
+        let seen = |hits: &[searchidx::Hit]| {
+            hits.iter().take(3).map(|h| h.path.clone()).collect::<Vec<_>>().join(", ")
+        };
+        let Some(want_at) = position_of(&hits, want, want_text) else {
             failures.push(format!(
-                "  {q:?} → expected {want}, got {:?} (route {})",
-                hits.iter().take(3).map(|h| h.path.as_str()).collect::<Vec<_>>(),
+                "  {q:?} → expected {want}{}, got [{}] (route {})",
+                want_text.map(|t| format!(" containing {t:?}")).unwrap_or_default(),
+                seen(&hits),
                 route.as_str()
+            ));
+            continue;
+        };
+        let Some(below) = case["outranks_path"].as_str() else { continue };
+        let below_text = case["outranks_text"].as_str();
+        let Some(below_at) = position_of(&hits, below, below_text) else {
+            failures.push(format!(
+                "  {q:?} → order case, but its comparison target {below} was not recalled at all; \
+                 an absent target cannot prove {want} outranks it. got [{}]",
+                seen(&hits)
+            ));
+            continue;
+        };
+        if want_at >= below_at {
+            failures.push(format!(
+                "  {q:?} → {want} (#{want_at}) must outrank {below} (#{below_at}); ranked order: [{}]",
+                hits.iter()
+                    .map(|h| format!("{}:{} {:.6}", h.path, h.line, h.score))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }
     assert!(failures.is_empty(), "retrievability regressions:\n{}", failures.join("\n"));
+}
+
+/// Rank of the first hit on `path` (optionally the first one whose text also
+/// contains `text` — see the fixture-format note on the test above).
+fn position_of(hits: &[searchidx::Hit], path: &str, text: Option<&str>) -> Option<usize> {
+    hits.iter().position(|h| h.path == path && text.map_or(true, |t| h.text.contains(t)))
 }
 
 /// spec §7:删库重建逐字节一致(同一 tokenizer_id 下)。索引=纯函数的验收形式.
@@ -345,6 +401,23 @@ fn agent_authored_content_is_penalized_end_to_end() {
 /// proves the boost survives the full pipeline (frontmatter parsing →
 /// `files.human_verified` → ranking), the way the annotation/agent_by pair
 /// above does for their multipliers.
+///
+/// **Origin tiering broke that isolation, and the `type: Note` line now in
+/// both fixtures is what restores it** (task 5). Until then `-a.md` had no
+/// frontmatter at all, so once `origin` started multiplying the score it
+/// classified `Source` (rule 6) at ×0.9 while `-b.md`'s `verified:` block
+/// classified `Human` (rule 3) at ×1.25 — a 1.39× gap pushing the same
+/// direction as the ×1.1 under test. Measured, not assumed: with `r *= 1.1`
+/// forced to `r *= 1.0`, this test still passed. Worse, the tier gap did not
+/// even depend on `verified:` parsing surviving — with `verified:` unreadable
+/// `-b.md` would fall to rule 7's `Derived` ×1.0 and still beat `-a.md`'s
+/// ×0.9, so the pipeline claim in the paragraph above had quietly become
+/// unfalsifiable. Giving BOTH files `type: Note` (rule 4 → `Human`) ties the
+/// origin multiplier at ×1.25 on both sides, leaving `human_verified` the
+/// only difference again; re-running the same mutation now fails this test,
+/// as it must. Anything that changes either file's frontmatter must re-check
+/// that the two still land in the SAME origin tier — see spec
+/// `2026-08-11-md-origin-tiering-design.md` §8's "逐档隔离" requirement.
 #[test]
 fn human_verified_content_outranks_unverified_content_for_the_same_query() {
     let (_d, mut idx) = open_temp(&corpus());

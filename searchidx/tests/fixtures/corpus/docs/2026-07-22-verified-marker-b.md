@@ -1,4 +1,5 @@
 ---
+type: Note
 verified:
   by: human:bruce
   at: 2026-07-22

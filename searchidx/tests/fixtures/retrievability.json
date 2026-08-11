@@ -248,5 +248,43 @@
     "query": "combofiltertoken tag:combo type:concept",
     "expect_path": "docs/2026-07-10-combo-filter.md",
     "why": "tag+type 双过滤器组合,不同过滤器顺序"
+  },
+  {
+    "query": "tieringtoken",
+    "expect_path": "notes/2026-08-05-tiering-note.md",
+    "outranks_path": "docs/2026-08-05-tiering-summary.md",
+    "why": "origin 分级:同一词条下人工笔记(type: Note → human)排在 AI 摘要(type: Book Summary + generated.by: claude/1 → derived)之前。四个语料文件的正文词数一致、doc_date 同为 2026-08-05,raw bm25 精确相等(实测四位命中分数逐位相同),所以只有 ×1.25 能造出这个顺序;而按 path 排序的写入次序是 books<concepts<docs<notes,平手时反而先出 summary —— 断言方向与 tie-break 方向相反,不会靠运气变绿"
+  },
+  {
+    "query": "tieringtoken",
+    "expect_path": "docs/2026-08-05-tiering-summary.md",
+    "outranks_path": "books/2026-08-05-tiering-book.md",
+    "why": "origin 分级:AI 摘要(derived)排在原始资料(type: Book → source)之前。与上一条一起把 derived 夹在中间 —— derived 若被调成 human 档上一条红,若被调成 source 档这一条红"
+  },
+  {
+    "query": "tieringtoken",
+    "expect_path": "notes/2026-08-05-tiering-note.md",
+    "outranks_path": "books/2026-08-05-tiering-book.md",
+    "why": "origin 分级:原始资料排最后(spec §1 的两极)。human 与 source 两档任一失效都会让这条塌成平手,而平手时先出的是 books/"
+  },
+  {
+    "query": "tieringtoken",
+    "expect_path": "web/2026-08-05-tiering-clip.md",
+    "outranks_path": "sync/2026-08-05-tiering-mirror.md",
+    "why": "origin 规则 5 的端到端形态:两份文件的 frontmatter 完全同型(type: blog-post,未登记 → 规则 7 derived),唯一差别是一份住在 sync/ 镜像目录下(→ source)。这是 ScanOptions.sync_dir 一路穿到 origin::derive 再进 files.origin 的唯一 E2E 钉子;规则 5 一旦失效两者同为 derived 且 sync/ 先写入,这条立刻红"
+  },
+  {
+    "query": "tieringnodetoken",
+    "expect_path": "concepts/2026-08-05-tiering-answer.note.md",
+    "expect_text": "tieringnodetoken bravo",
+    "outranks_path": "concepts/2026-08-05-tiering-answer.note.md",
+    "outranks_text": "tieringnodetoken alpha",
+    "why": "文件级 human 不抵消块级 agent_by(spec §3.2 的第一条裁决):容器是 .note.md(规则 1 → human ×1.25),里面 agent 写的答复节点(围栏 + type:: answer + by:: claude/1)仍吃 ×0.85,排在同文件的人工节点之后。答复节点刻意放在前面(写入次序占优的一侧),所以只有 ×0.85 能翻转它;顺带钉住 type:: answer 不是 annotation —— 谁把答复当批注给上 ×1.2,这条就红"
+  },
+  {
+    "query": "roadmap",
+    "expect_path": "docs/2026-04-10-design-note.md",
+    "outranks_path": "prose/plain-thoughts.md",
+    "why": "spec §3.2/§9 那条刻意的误判,写成可执行形式:plain-thoughts.md 是一段没有 frontmatter 的人工随想,按规则 6 判 source ×0.9,被判 derived 的 design-note(type: concept 未登记 → 规则 7)压过。这是分级上线后 50 条回归集里两处顺序变化之一,已按 spec 的既有裁决接受(修正手段是给文件加 frontmatter,而不是翻转规则 6 的方向)。钉在这里是为了让日后翻转规则 6 的人必须先看见这条、先回去读 §3.2"
   }
 ]
