@@ -513,6 +513,14 @@ export const en = {
   'search.index.progressLine': '{phase} — {done}/{total} ({percent}%)',
   'search.index.currentFile': 'Current file',
   'search.index.elapsed': 'Elapsed: {time}',
+  'search.index.viewLogs': 'View logs',
+  'search.index.viewLogsFailed': 'Could not open the log window: {error}',
+  'search.index.settingsHeading': 'Index settings',
+  'search.index.thresholdLabel': 'Search index size threshold (MB)',
+  'search.index.thresholdHint': 'Files larger than this are skipped by the search index (they stay in the vault and `rg` still finds them). This is separate from the git large-file gate in the Vault tab. Until you save a value here, it follows that gate automatically; once you save, it stops following it for good — even if you change the git gate later.',
+  'search.index.skippedHeading': 'Skipped files',
+  'search.index.skippedEmpty': 'No files are currently skipped.',
+  'search.index.skippedNote': 'These files are not indexed, but `rg` can still find them.',
 
   // Folder view
   'folderView.parentFolder': 'Parent folder',

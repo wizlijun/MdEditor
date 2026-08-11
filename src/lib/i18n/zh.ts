@@ -541,6 +541,14 @@ export const zh: Record<keyof Messages, string> = {
   'search.index.progressLine': '{phase} — {done}/{total}({percent}%)',
   'search.index.currentFile': '当前文件',
   'search.index.elapsed': '已耗时:{time}',
+  'search.index.viewLogs': '查看日志',
+  'search.index.viewLogsFailed': '无法打开日志窗口:{error}',
+  'search.index.settingsHeading': '索引设置',
+  'search.index.thresholdLabel': '搜索索引大小阈值(MB)',
+  'search.index.thresholdHint': '超过此大小的文件不进入搜索索引(文件本身仍留在 vault 中,`rg` 仍可查到)。这与 Vault 标签页的 git 大文件门禁是两回事:在你于此保存一个值之前,它会自动跟随 git 门禁;一旦保存,就永久与 git 门禁脱钩——哪怕之后再改 git 门禁的值,也不会影响索引了。',
+  'search.index.skippedHeading': '被跳过的文件',
+  'search.index.skippedEmpty': '当前没有文件被跳过。',
+  'search.index.skippedNote': '这些文件不进索引,但 `rg` 仍可查到。',
 
   // Folder view
   'folderView.parentFolder': '上级文件夹',

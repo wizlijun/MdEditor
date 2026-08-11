@@ -173,7 +173,15 @@ fn drain(app: &AppHandle, root: &Path, batch: Batch) {
             ok
         }
         Batch::FullSweep => match idx.sweep(&opts, None) {
-            Ok(_) => true,
+            Ok(stats) => {
+                // Same reasoning as `open_vault`'s sweep call — this is a
+                // scan the settings page's skipped-files list would
+                // otherwise never learn happened (it wasn't routed through
+                // `notemd_search_rebuild`, the only other writer it might
+                // expect).
+                crate::search::skipped_state(app).set(stats.files_skipped_large);
+                true
+            }
             Err(e) => {
                 crate::log_cat!("search", "error", "flood sweep failed: {e}");
                 false

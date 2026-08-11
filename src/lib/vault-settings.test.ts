@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs } from './vault-settings.svelte'
+import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs, saveSearchLargeFileThreshold } from './vault-settings.svelte'
 
 /** Route invoke by command name so load's two parallel calls resolve. */
 function route(map: Record<string, unknown>) {
@@ -17,6 +17,8 @@ beforeEach(() => {
   vaultSettings.syncDir = DEFAULT_SYNC_DIR
   vaultSettings.largeFileThresholdMb = DEFAULT_LARGE_FILE_THRESHOLD_MB
   vaultSettings.searchExcludeDirs = []
+  vaultSettings.searchLargeFileThresholdMb = DEFAULT_LARGE_FILE_THRESHOLD_MB
+  vaultSettings.searchLargeFileThresholdExplicit = false
   vaultSettings.vaultPath = null
   vaultSettings.loaded = false
 })
@@ -46,6 +48,33 @@ describe('loadVaultSettings', () => {
     route({ sotvault_vault_root: '/v', notemd_vault_settings_get: { searchExcludeDirs: ['sessions', 'tmp'] } })
     await loadVaultSettings()
     expect(vaultSettings.searchExcludeDirs).toEqual(['sessions', 'tmp'])
+  })
+
+  it('falls back the displayed search threshold to the git gate when unset', async () => {
+    route({
+      sotvault_vault_root: '/v',
+      notemd_vault_settings_get: { largeFileThresholdMb: 25 },
+    })
+    await loadVaultSettings()
+    expect(vaultSettings.searchLargeFileThresholdMb).toBe(25)
+    expect(vaultSettings.searchLargeFileThresholdExplicit).toBe(false)
+  })
+
+  it('falls back the displayed search threshold to the built-in default when both are unset', async () => {
+    route({ sotvault_vault_root: '/v', notemd_vault_settings_get: {} })
+    await loadVaultSettings()
+    expect(vaultSettings.searchLargeFileThresholdMb).toBe(DEFAULT_LARGE_FILE_THRESHOLD_MB)
+    expect(vaultSettings.searchLargeFileThresholdExplicit).toBe(false)
+  })
+
+  it('prefers an explicitly configured search threshold over the git gate', async () => {
+    route({
+      sotvault_vault_root: '/v',
+      notemd_vault_settings_get: { largeFileThresholdMb: 25, searchLargeFileThresholdMb: 50 },
+    })
+    await loadVaultSettings()
+    expect(vaultSettings.searchLargeFileThresholdMb).toBe(50)
+    expect(vaultSettings.searchLargeFileThresholdExplicit).toBe(true)
   })
 
   it('leaves vault path null and sync dir default when vault is not configured', async () => {
@@ -110,5 +139,35 @@ describe('saveSearchExcludeDirs', () => {
     invoke.mockRejectedValue(new Error('directory must stay within the vault'))
     await expect(saveSearchExcludeDirs(['../escape'])).rejects.toThrow()
     expect(vaultSettings.searchExcludeDirs).toEqual(['sessions'])
+  })
+})
+
+describe('saveSearchLargeFileThreshold', () => {
+  it('sends searchLargeFileThresholdMb and adopts the merged result as explicit', async () => {
+    invoke.mockResolvedValue({ searchLargeFileThresholdMb: 50 })
+    await saveSearchLargeFileThreshold(50)
+    expect(invoke).toHaveBeenCalledWith('notemd_vault_settings_set', { searchLargeFileThresholdMb: 50 })
+    expect(vaultSettings.searchLargeFileThresholdMb).toBe(50)
+    expect(vaultSettings.searchLargeFileThresholdExplicit).toBe(true)
+  })
+
+  // This is the one-way-door contract itself: once a save round-trips through
+  // the backend, the displayed value must come from the response's own
+  // searchLargeFileThresholdMb, not silently fall back to the git gate again
+  // — a bug here would make the door look two-way in the UI even though the
+  // backend already stopped following the git gate.
+  it('does not fall back to the git gate after an explicit save, even if the gate value differs', async () => {
+    vaultSettings.largeFileThresholdMb = 10
+    invoke.mockResolvedValue({ searchLargeFileThresholdMb: 50, largeFileThresholdMb: 10 })
+    await saveSearchLargeFileThreshold(50)
+    expect(vaultSettings.searchLargeFileThresholdMb).toBe(50)
+  })
+
+  it('falls back to the git gate value if the backend response omits the field', async () => {
+    vaultSettings.largeFileThresholdMb = 25
+    invoke.mockResolvedValue({})
+    await saveSearchLargeFileThreshold(5)
+    expect(vaultSettings.searchLargeFileThresholdMb).toBe(25)
+    expect(vaultSettings.searchLargeFileThresholdExplicit).toBe(false)
   })
 })

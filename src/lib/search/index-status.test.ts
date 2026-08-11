@@ -36,13 +36,17 @@ beforeEach(() => {
 describe('indexStatus', () => {
   it('中途打开时从 progress() 拉到当前进度,而不是空等下一个事件', async () => {
     _setIndexApi({
-      stats: async () => ({ files: 10, blocks: 40, dbBytes: 1024, builtAt: null, tokenizerId: 'v1' }),
+      stats: async () => ({
+        files: 10, blocks: 40, dbBytes: 1024, builtAt: null, tokenizerId: 'v1',
+        skippedLarge: [{ path: 'big.md', sizeBytes: 2_000_000 }],
+      }),
       progress: async () => ({ phase: 'indexing', done: 3, total: 10, current: 'a.md', elapsedMs: 5 }),
       rebuild: async () => {},
     })
     await indexStatus.refresh()
     expect(indexStatus.progress?.done).toBe(3)
     expect(indexStatus.stats?.files).toBe(10)
+    expect(indexStatus.stats?.skippedLarge).toEqual([{ path: 'big.md', sizeBytes: 2_000_000 }])
   })
 
   it('进度事件覆盖轮询到的快照', async () => {

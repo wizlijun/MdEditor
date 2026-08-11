@@ -22,7 +22,7 @@
   import { outlineShortcuts, setShortcutOverride } from '../lib/outline/gate.svelte'
   import { outlineDirs, setOutlineDir } from '../lib/outline/dirs.svelte'
   import { inboxDir, setInboxDir } from '../lib/quick-note.svelte'
-  import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs } from '../lib/vault-settings.svelte'
+  import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs, saveSearchLargeFileThreshold } from '../lib/vault-settings.svelte'
   import { pushToast } from '../lib/toast.svelte'
   import { sotvaultStore } from '../lib/sotvault.svelte'
   import { indexStatus, estimateRebuildSeconds, elideMiddle, formatElapsedMs } from '../lib/search/index-status.svelte'
@@ -52,6 +52,12 @@
   let thresholdBusy = $state(false)
   let searchExcludeDirsDraft = $state('')
   let searchExcludeDirsBusy = $state(false)
+  // Search & Index tab: index-skip threshold. Loaded from
+  // `vaultSettings.searchLargeFileThresholdMb`, which is already the
+  // *effective* value (explicit save, else the git gate, else the built-in
+  // default — see that field's doc comment in vault-settings.svelte.ts).
+  let searchThresholdDraft = $state(DEFAULT_LARGE_FILE_THRESHOLD_MB)
+  let searchThresholdBusy = $state(false)
   // `null` = not checked yet (or no vault / no AGENTS.md to check). Detection
   // is read-only (notemd_agents_search_section_missing); the write
   // (notemd_agents_append_search_section) only ever runs from onAddAgentsSearchSection,
@@ -64,6 +70,7 @@
       syncDirDraft = vaultSettings.syncDir
       thresholdDraft = vaultSettings.largeFileThresholdMb
       searchExcludeDirsDraft = vaultSettings.searchExcludeDirs.join('\n')
+      searchThresholdDraft = vaultSettings.searchLargeFileThresholdMb
       if (!vaultSettings.vaultPath) { agentsSectionMissing = null; return }
       void invoke<boolean>('notemd_agents_search_section_missing')
         .then((missing) => { agentsSectionMissing = missing })
@@ -135,6 +142,25 @@
       pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
     } finally {
       searchExcludeDirsBusy = false
+    }
+  }
+  // The one-way door: saving here always writes an explicit value, even if
+  // it happens to equal the git gate's current number — from that point on
+  // `vaultSettings.searchLargeFileThresholdExplicit` is true and this stops
+  // following `largeFileThresholdMb` for good (see the field's doc comment
+  // in vault-settings.svelte.ts, and `search.index.thresholdHint` above the
+  // input in the template).
+  async function onSaveSearchThreshold() {
+    const mb = Math.max(1, Math.floor(Number(searchThresholdDraft) || DEFAULT_LARGE_FILE_THRESHOLD_MB))
+    searchThresholdBusy = true
+    try {
+      await saveSearchLargeFileThreshold(mb)
+      searchThresholdDraft = vaultSettings.searchLargeFileThresholdMb
+      pushToast({ level: 'success', message: t('vaultSync.saved') })
+    } catch (e) {
+      pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
+    } finally {
+      searchThresholdBusy = false
     }
   }
 
@@ -322,6 +348,20 @@
         : t('search.index.rebuildConfirmBodyUnknown')
       return await confirm(body, { title: t('search.index.rebuildConfirmTitle'), kind: 'warning' })
     })
+  }
+
+  // Design spec §5/§6.1/§7: jump to the log window pre-filtered to the
+  // `search` category. `open_search_logs_window` is the thin frontend-facing
+  // wrapper around the host's existing `open_logs_window(app, filter)`
+  // (see `src-tauri/src/lib.rs`) — a failure (window can't be built) must
+  // not block the rest of the settings page, so it's a toast, not a thrown
+  // error left for the caller.
+  async function onViewSearchLogs() {
+    try {
+      await invoke('open_search_logs_window')
+    } catch (e) {
+      pushToast({ level: 'error', message: t('search.index.viewLogsFailed', { error: String(e) }), detail: String(e) })
+    }
   }
 
   async function savePluginField(pluginId: string, key: string, value: unknown) {
@@ -667,19 +707,6 @@
             <button onclick={onSaveThreshold}
               disabled={!vaultSettings.vaultPath || thresholdBusy}>{t('vaultSync.save')}</button>
           </label>
-          <label class="row" style="align-items: flex-start;">
-            <span class="lbl">{t('settings.searchExcludeDirs')}</span>
-            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
-              <textarea rows="3" bind:value={searchExcludeDirsDraft}
-                disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}
-                style="width: 100%; font: inherit; padding: 6px; border-radius: 4px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); background: Canvas; color: CanvasText; resize: vertical;"
-              ></textarea>
-              <p class="desc" style="margin: 0;">{t('settings.searchExcludeDirsHint')}</p>
-              <button onclick={onSaveSearchExcludeDirs}
-                style="align-self: flex-start;"
-                disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}>{t('vaultSync.save')}</button>
-            </div>
-          </label>
           {#if agentsSectionMissing}
             <label class="row" style="align-items: flex-start;">
               <span class="lbl"></span>
@@ -927,45 +954,63 @@
           <h3>{t('settings.tab.search')}</h3>
           {#if !sotvaultStore.vaultRoot}
             <p class="desc">{t('search.index.noVault')}</p>
-          {:else if indexStatus.notReady}
-            <p class="desc">{t('search.notReady')}</p>
-          {:else if indexStatus.error}
-            <p class="result fail">{indexStatus.error}</p>
           {:else}
-            <div class="row">
-              <span class="lbl">{t('search.index.files')}</span>
-              <span>{indexStatus.stats ? indexStatus.stats.files : (indexStatus.loading ? '…' : '—')}</span>
-            </div>
-            <div class="row">
-              <span class="lbl">{t('search.index.blocks')}</span>
-              <span>{indexStatus.stats ? indexStatus.stats.blocks : (indexStatus.loading ? '…' : '—')}</span>
-            </div>
-            <div class="row">
-              <span class="lbl">{t('search.index.dbSize')}</span>
-              <span>{indexStatus.stats ? formatBytes(indexStatus.stats.dbBytes) : (indexStatus.loading ? '…' : '—')}</span>
-            </div>
-            <div class="row">
-              <span class="lbl">{t('search.index.builtAt')}</span>
-              <span>{indexStatus.stats?.builtAt ?? (indexStatus.loading ? '…' : t('time.never'))}</span>
-            </div>
-            <div class="row">
-              <span class="lbl">{t('search.index.tokenizer')}</span>
-              <span>{indexStatus.stats ? indexStatus.stats.tokenizerId : (indexStatus.loading ? '…' : '—')}</span>
-            </div>
+            {#if indexStatus.notReady}
+              <p class="desc">{t('search.notReady')}</p>
+            {:else if indexStatus.error}
+              <p class="result fail">{indexStatus.error}</p>
+            {:else}
+              <div class="row">
+                <span class="lbl">{t('search.index.files')}</span>
+                <span>{indexStatus.stats ? indexStatus.stats.files : (indexStatus.loading ? '…' : '—')}</span>
+              </div>
+              <div class="row">
+                <span class="lbl">{t('search.index.blocks')}</span>
+                <span>{indexStatus.stats ? indexStatus.stats.blocks : (indexStatus.loading ? '…' : '—')}</span>
+              </div>
+              <div class="row">
+                <span class="lbl">{t('search.index.dbSize')}</span>
+                <span>{indexStatus.stats ? formatBytes(indexStatus.stats.dbBytes) : (indexStatus.loading ? '…' : '—')}</span>
+              </div>
+              <div class="row">
+                <span class="lbl">{t('search.index.builtAt')}</span>
+                <span>{indexStatus.stats?.builtAt ?? (indexStatus.loading ? '…' : t('time.never'))}</span>
+              </div>
+              <div class="row">
+                <span class="lbl">{t('search.index.tokenizer')}</span>
+                <span>{indexStatus.stats ? indexStatus.stats.tokenizerId : (indexStatus.loading ? '…' : '—')}</span>
+              </div>
+              <div class="row" style="margin-top: 10px;">
+                <span class="lbl"></span>
+                <button onclick={() => void onRebuildIndex()} disabled={indexStatus.progress !== null}>
+                  {t('search.rebuild')}
+                </button>
+              </div>
+              {#if indexStatus.busyNotice}
+                <p class="result">{t('search.index.busyNotice')}</p>
+              {/if}
+              {#if indexStatus.rebuildError}
+                <p class="result fail">{t('search.index.rebuildError', { error: indexStatus.rebuildError })}</p>
+              {/if}
+            {/if}
+            <!-- Independent of the notReady/error branches above — the log
+                 window is exactly where you'd look to understand *why* the
+                 index is stuck or erroring, so it must stay reachable there
+                 too (design spec §7). -->
             <div class="row" style="margin-top: 10px;">
               <span class="lbl"></span>
-              <button onclick={() => void onRebuildIndex()} disabled={indexStatus.progress !== null}>
-                {t('search.rebuild')}
-              </button>
+              <button onclick={() => void onViewSearchLogs()}>{t('search.index.viewLogs')}</button>
             </div>
-            {#if indexStatus.busyNotice}
-              <p class="result">{t('search.index.busyNotice')}</p>
-            {/if}
-            {#if indexStatus.rebuildError}
-              <p class="result fail">{t('search.index.rebuildError', { error: indexStatus.rebuildError })}</p>
-            {/if}
           {/if}
         </section>
+        {#if sotvaultStore.vaultRoot}
+          <section class="block">
+            <!-- Tier-statistics table lands here (a follow-on project fills this
+                 container in) — the placeholder keeps this task from having to
+                 redo the layout when that data arrives. -->
+            <p class="desc">{t('search.index.tiersPending')}</p>
+          </section>
+        {/if}
         {#if indexStatus.progress}
           {@const p = indexStatus.progress}
           {@const percent = progressPercent(p)}
@@ -986,10 +1031,46 @@
         {/if}
         {#if sotvaultStore.vaultRoot}
           <section class="block">
-            <!-- Tier-statistics table lands here (a follow-on project fills this
-                 container in) — the placeholder keeps this task from having to
-                 redo the layout when that data arrives. -->
-            <p class="desc">{t('search.index.tiersPending')}</p>
+            <h3>{t('search.index.settingsHeading')}</h3>
+            <label class="row" style="align-items: flex-start;">
+              <span class="lbl">{t('settings.searchExcludeDirs')}</span>
+              <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+                <textarea rows="3" bind:value={searchExcludeDirsDraft}
+                  disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}
+                  style="width: 100%; font: inherit; padding: 6px; border-radius: 4px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); background: Canvas; color: CanvasText; resize: vertical;"
+                ></textarea>
+                <p class="desc" style="margin: 0;">{t('settings.searchExcludeDirsHint')}</p>
+                <button onclick={onSaveSearchExcludeDirs}
+                  style="align-self: flex-start;"
+                  disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}>{t('vaultSync.save')}</button>
+              </div>
+            </label>
+            <label class="row" style="align-items: flex-start;">
+              <span class="lbl">{t('search.index.thresholdLabel')}</span>
+              <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+                <div class="row" style="gap: 8px;">
+                  <input type="number" min="1" step="1" bind:value={searchThresholdDraft}
+                    disabled={!vaultSettings.vaultPath || searchThresholdBusy} />
+                  <button onclick={onSaveSearchThreshold}
+                    disabled={!vaultSettings.vaultPath || searchThresholdBusy}>{t('vaultSync.save')}</button>
+                </div>
+                <p class="desc" style="margin: 0;">{t('search.index.thresholdHint')}</p>
+              </div>
+            </label>
+          </section>
+          <section class="block">
+            <h3>{t('search.index.skippedHeading')}</h3>
+            {#if !indexStatus.stats || indexStatus.stats.skippedLarge.length === 0}
+              <p class="desc">{t('search.index.skippedEmpty')}</p>
+            {:else}
+              {#each indexStatus.stats.skippedLarge as f (f.path)}
+                <div class="row">
+                  <span class="lbl" title={f.path}>{elideMiddle(f.path)}</span>
+                  <span>{formatBytes(f.sizeBytes)}</span>
+                </div>
+              {/each}
+              <p class="desc" style="margin-top: 4px;">{t('search.index.skippedNote')}</p>
+            {/if}
           </section>
         {/if}
       {:else if selectedTab === 'outline-notes'}

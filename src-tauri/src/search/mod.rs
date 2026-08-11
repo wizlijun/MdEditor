@@ -49,6 +49,34 @@ impl ProgressState {
     }
 }
 
+/// The most recent scan's list of files skipped for exceeding the size
+/// threshold — path plus actual size (`searchidx::SkippedFile`).
+///
+/// **Deliberately its own `Mutex`, same reasoning as [`ProgressState`].** A
+/// `ScanStats` (which is where this list lives) is a return value from
+/// `ensure_built`/`sweep`/`rebuild_with_progress` — it is never written to
+/// the index's own SQLite tables, so without somewhere to stash it, the
+/// settings page would only ever be able to show whatever the *last call it
+/// personally made* happened to return, going stale the instant a scan it
+/// didn't initiate (the watcher's periodic sweep, another window's rebuild)
+/// silently supersedes it. Every scan site (`open_vault`'s initial
+/// build+sweep, `notemd_search_rebuild`, the watcher's flood-sweep in
+/// `watch::drain`) writes here so the settings page always reflects the most
+/// recent scan, whoever ran it.
+#[derive(Default, Clone)]
+pub struct SkippedState(Arc<Mutex<Vec<searchidx::SkippedFile>>>);
+
+impl SkippedState {
+    pub fn set(&self, v: Vec<searchidx::SkippedFile>) {
+        if let Ok(mut g) = self.0.lock() {
+            *g = v
+        }
+    }
+    pub fn get(&self) -> Vec<searchidx::SkippedFile> {
+        self.0.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+}
+
 /// Single-flight guard for `notemd_search_rebuild`. A second rebuild started
 /// while one is already running is refused outright (`try_begin` returns
 /// `false`), never queued — queueing would turn three impatient clicks into
@@ -88,15 +116,21 @@ impl Drop for RebuildGuard {
     }
 }
 
-/// The exact `IndexHandle`/`ProgressState`/`RebuildFlag` values `init` hands
-/// to `app.manage`, factored out so a test can assert on *this* construction
-/// directly rather than on locals a test made up separately. This codebase
-/// has never enabled the `tauri::test` feature (no other module uses it), so
-/// there is no `AppHandle` to drive `init` itself from a unit test — calling
-/// this same function `init` calls is the closest a test can get to "the
-/// real wiring" without adding that dependency for one assertion.
-fn managed_state() -> (IndexHandle, ProgressState, RebuildFlag) {
-    (Arc::new(Mutex::new(None)), ProgressState::default(), RebuildFlag::default())
+/// The exact `IndexHandle`/`ProgressState`/`RebuildFlag`/`SkippedState`
+/// values `init` hands to `app.manage`, factored out so a test can assert on
+/// *this* construction directly rather than on locals a test made up
+/// separately. This codebase has never enabled the `tauri::test` feature (no
+/// other module uses it), so there is no `AppHandle` to drive `init` itself
+/// from a unit test — calling this same function `init` calls is the closest
+/// a test can get to "the real wiring" without adding that dependency for
+/// one assertion.
+fn managed_state() -> (IndexHandle, ProgressState, RebuildFlag, SkippedState) {
+    (
+        Arc::new(Mutex::new(None)),
+        ProgressState::default(),
+        RebuildFlag::default(),
+        SkippedState::default(),
+    )
 }
 
 /// Manage app state and, if a vault is already configured (the common case:
@@ -104,11 +138,12 @@ fn managed_state() -> (IndexHandle, ProgressState, RebuildFlag) {
 /// `agents_sync::init`'s auto-start. `open_vault` is also called directly from
 /// the folder picker for a freshly chosen/changed vault; see `lib.rs`.
 pub fn init(app: &AppHandle) {
-    let (idx_handle, progress, flag) = managed_state();
+    let (idx_handle, progress, flag, skipped) = managed_state();
     app.manage::<IndexHandle>(idx_handle);
     app.manage(watch::WatchState::default());
     app.manage(progress);
     app.manage(flag);
+    app.manage(skipped);
     if let Some(root) = crate::sotvault::resolve_vault_root(app) {
         open_vault(app, &root);
     }
@@ -116,6 +151,13 @@ pub fn init(app: &AppHandle) {
 
 pub fn handle(app: &AppHandle) -> IndexHandle {
     app.state::<IndexHandle>().inner().clone()
+}
+
+/// Fetch the shared `SkippedState` handle — used by both `open_vault` (this
+/// module) and `watch::drain` (a sibling module), which is why this is `pub`
+/// rather than kept private like `managed_state`.
+pub fn skipped_state(app: &AppHandle) -> SkippedState {
+    app.state::<SkippedState>().inner().clone()
 }
 
 /// Lock the index handle, recovering from poisoning rather than propagating a
@@ -158,8 +200,15 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
                 if let Err(e) = idx.ensure_built(&opts) {
                     crate::log_cat!("search", "error", "initial build failed: {e}");
                 }
-                if let Err(e) = idx.sweep(&opts, None) {
-                    crate::log_cat!("search", "warn", "sweep failed: {e}");
+                // `sweep` (unlike `ensure_built`, which is a no-op — and so
+                // returns an empty `ScanStats` — once the index already has
+                // rows) always walks the vault, so its `ScanStats` is the
+                // authoritative "what did the last scan actually skip"
+                // answer for the settings page. See `SkippedState`'s doc
+                // comment for why this has to be stashed anywhere at all.
+                match idx.sweep(&opts, None) {
+                    Ok(stats) => skipped_state(&app).set(stats.files_skipped_large),
+                    Err(e) => crate::log_cat!("search", "warn", "sweep failed: {e}"),
                 }
                 // Discard this thread's work if a newer `open_vault` call has
                 // superseded it — otherwise a slow open for a vault the user
@@ -212,6 +261,19 @@ pub struct SearchResponse {
     pub hits: Vec<HitDto>,
 }
 
+/// Wire shape for one entry of `SearchStatsDto.skipped_large` — a file the
+/// most recent scan skipped for exceeding the size threshold.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedDto {
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+fn skipped_dto(s: &searchidx::SkippedFile) -> SkippedDto {
+    SkippedDto { path: s.path.clone(), size_bytes: s.size }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchStatsDto {
@@ -220,6 +282,10 @@ pub struct SearchStatsDto {
     pub db_bytes: u64,
     pub built_at: Option<String>,
     pub tokenizer_id: String,
+    /// From `SkippedState` — the most recent scan's oversize skips, not a
+    /// live re-scan (see that type's doc comment for why it's stashed there
+    /// instead of recomputed here).
+    pub skipped_large: Vec<SkippedDto>,
 }
 
 /// Shown to the user when no vault is open yet, or `open_vault`'s background
@@ -312,8 +378,8 @@ pub(crate) fn log_rebuild_with(
         stats.files_indexed + skipped,
         skipped
     );
-    for path in &stats.files_skipped_large {
-        crate::log_cat!("search", "warn", "skipped (over threshold): {path}");
+    for f in &stats.files_skipped_large {
+        crate::log_cat!("search", "warn", "skipped (over threshold): {} ({} bytes)", f.path, f.size);
     }
 
     // Best-effort: a failure to read the db file back must not turn a
@@ -371,13 +437,14 @@ fn progress_dto(p: &searchidx::Progress) -> ProgressDto {
     }
 }
 
-fn stats_to_dto(s: IndexStats) -> SearchStatsDto {
+fn stats_to_dto(s: IndexStats, skipped_large: Vec<SkippedDto>) -> SearchStatsDto {
     SearchStatsDto {
         files: s.files,
         blocks: s.blocks,
         db_bytes: s.db_bytes,
         built_at: s.built_at,
         tokenizer_id: s.tokenizer_id,
+        skipped_large,
     }
 }
 
@@ -402,7 +469,8 @@ pub fn notemd_search_stats(app: AppHandle) -> Result<SearchStatsDto, String> {
     let idx_handle = handle(&app);
     let guard = lock(&idx_handle);
     let idx = require_index(&guard)?;
-    Ok(stats_to_dto(idx.stats()?))
+    let skipped = skipped_state(&app).get().iter().map(skipped_dto).collect();
+    Ok(stats_to_dto(idx.stats()?, skipped))
 }
 
 /// Rebuild is a rare, explicit, user-initiated action (a button, not
@@ -426,6 +494,7 @@ pub fn notemd_search_rebuild(app: AppHandle) -> Result<(), String> {
         return Err("rebuild already running".into());
     }
     let progress = app.state::<ProgressState>().inner().clone();
+    let skipped = skipped_state(&app);
     let idx_handle = handle(&app);
     let app2 = app.clone();
     std::thread::spawn(move || {
@@ -450,7 +519,8 @@ pub fn notemd_search_rebuild(app: AppHandle) -> Result<(), String> {
                 progress_for_cb.set(Some(p.clone()));
                 let _ = app_for_cb.emit(PROGRESS_EVENT, progress_dto(p));
             };
-            log_rebuild_with(idx, &opts, Some(&cb))?;
+            let stats = log_rebuild_with(idx, &opts, Some(&cb))?;
+            skipped.set(stats.files_skipped_large);
             Ok(())
         })();
         // Explicit drop (rather than waiting for scope end) keeps the
@@ -538,12 +608,37 @@ mod command_tests {
             built_at: Some("2026-08-10T00:00:00Z".to_string()),
             tokenizer_id: "jieba/1".to_string(),
         };
-        let dto = stats_to_dto(s);
+        let skipped = vec![SkippedDto { path: "big.md".to_string(), size_bytes: 999 }];
+        let dto = stats_to_dto(s, skipped);
         assert_eq!(dto.files, 3);
         assert_eq!(dto.blocks, 40);
         assert_eq!(dto.db_bytes, 12345);
         assert_eq!(dto.built_at.as_deref(), Some("2026-08-10T00:00:00Z"));
         assert_eq!(dto.tokenizer_id, "jieba/1");
+        assert_eq!(dto.skipped_large.len(), 1);
+        assert_eq!(dto.skipped_large[0].path, "big.md");
+        assert_eq!(dto.skipped_large[0].size_bytes, 999);
+    }
+
+    /// `SkippedState` is a fresh, empty `Vec` by default — a rebuild that has
+    /// never run must not somehow report a phantom skipped file.
+    #[test]
+    fn skipped_state_defaults_to_empty() {
+        let s = SkippedState::default();
+        assert!(s.get().is_empty());
+    }
+
+    /// `set`/`get` round-trip exactly — the whole point of this state is that
+    /// a scan site can stash a `ScanStats.files_skipped_large` and a later,
+    /// unrelated command (`notemd_search_stats`) can read it back unchanged.
+    #[test]
+    fn skipped_state_round_trips_the_most_recent_set() {
+        let s = SkippedState::default();
+        s.set(vec![searchidx::SkippedFile { path: "a.md".into(), size: 10 }]);
+        assert_eq!(s.get(), vec![searchidx::SkippedFile { path: "a.md".into(), size: 10 }]);
+        // A later `set` (a second scan) must replace, not accumulate.
+        s.set(vec![searchidx::SkippedFile { path: "b.md".into(), size: 20 }]);
+        assert_eq!(s.get(), vec![searchidx::SkippedFile { path: "b.md".into(), size: 20 }]);
     }
 
     #[test]
@@ -750,12 +845,21 @@ mod command_tests {
     /// `ProgressState` 从 `IndexHandle` 的 `Arc::clone` 构造)时变红。
     #[test]
     fn init_wires_progress_state_and_index_handle_to_distinct_locks() {
-        let (idx_handle, progress, _flag) = managed_state();
+        let (idx_handle, progress, _flag, skipped) = managed_state();
         let idx_ptr = Arc::as_ptr(&idx_handle) as *const () as usize;
         let progress_ptr = Arc::as_ptr(&progress.0) as *const () as usize;
+        let skipped_ptr = Arc::as_ptr(&skipped.0) as *const () as usize;
         assert_ne!(
             idx_ptr, progress_ptr,
             "ProgressState 与 IndexHandle 指向同一块分配 —— 违反本任务的核心不变量"
+        );
+        assert_ne!(
+            idx_ptr, skipped_ptr,
+            "SkippedState 与 IndexHandle 指向同一块分配 —— 同样违反独立于索引锁的不变量"
+        );
+        assert_ne!(
+            progress_ptr, skipped_ptr,
+            "SkippedState 与 ProgressState 指向同一块分配 —— 两者应各自独立"
         );
     }
 
@@ -794,16 +898,23 @@ mod command_tests {
 
     #[test]
     fn search_stats_dto_serializes_with_camel_case_field_names() {
-        let dto = stats_to_dto(IndexStats {
-            files: 1,
-            blocks: 1,
-            db_bytes: 1,
-            built_at: None,
-            tokenizer_id: "jieba/1".to_string(),
-        });
+        let dto = stats_to_dto(
+            IndexStats {
+                files: 1,
+                blocks: 1,
+                db_bytes: 1,
+                built_at: None,
+                tokenizer_id: "jieba/1".to_string(),
+            },
+            vec![SkippedDto { path: "big.md".to_string(), size_bytes: 42 }],
+        );
         let v = serde_json::to_value(&dto).unwrap();
-        for key in ["files", "blocks", "dbBytes", "builtAt", "tokenizerId"] {
+        for key in ["files", "blocks", "dbBytes", "builtAt", "tokenizerId", "skippedLarge"] {
             assert!(v.get(key).is_some(), "missing key {key} in {v}");
         }
+        let skipped = v.get("skippedLarge").unwrap().as_array().unwrap();
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].get("path").is_some(), "{skipped:?}");
+        assert!(skipped[0].get("sizeBytes").is_some(), "{skipped:?}");
     }
 }

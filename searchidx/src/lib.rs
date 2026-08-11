@@ -26,7 +26,7 @@ pub mod watch;
 
 pub use block::{Block, BlockLevel, FileMeta, Link};
 pub use query::{Hit, Query, Route};
-pub use scan::{IndexOutcome, Phase, Progress, ProgressFn, ScanOptions, ScanStats};
+pub use scan::{IndexOutcome, Phase, Progress, ProgressFn, ScanOptions, ScanStats, SkippedFile};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

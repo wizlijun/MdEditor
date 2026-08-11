@@ -16,18 +16,34 @@ export interface VaultSettingsDto {
   dailynoteDir?: string | null
   largeFileThresholdMb?: number | null
   searchExcludeDirs?: string[] | null
+  searchLargeFileThresholdMb?: number | null
 }
 
 export const vaultSettings = $state<{
   syncDir: string
   largeFileThresholdMb: number
   searchExcludeDirs: string[]
+  // The *effective* index-skip threshold: the explicitly-saved value if one
+  // exists, otherwise `largeFileThresholdMb` (the git gate) — the same
+  // one-way fallback `search::options::for_vault` applies on the Rust side
+  // (see that module's doc comment). This is a display value only: loading
+  // it this way does NOT itself save anything, so opening the settings page
+  // can never silently trip the one-way door. Only `saveSearchLargeFileThreshold`
+  // does that, and only when the user clicks Save.
+  searchLargeFileThresholdMb: number
+  // Whether `searchLargeFileThresholdMb` has been explicitly saved (vs. the
+  // displayed value above being a fallback to the git gate) — the settings
+  // UI needs this to explain, truthfully, whether the one-way door has
+  // already been walked through.
+  searchLargeFileThresholdExplicit: boolean
   vaultPath: string | null
   loaded: boolean
 }>({
   syncDir: DEFAULT_SYNC_DIR,
   largeFileThresholdMb: DEFAULT_LARGE_FILE_THRESHOLD_MB,
   searchExcludeDirs: [],
+  searchLargeFileThresholdMb: DEFAULT_LARGE_FILE_THRESHOLD_MB,
+  searchLargeFileThresholdExplicit: false,
   vaultPath: null,
   loaded: false,
 })
@@ -43,6 +59,9 @@ export async function loadVaultSettings(): Promise<void> {
   vaultSettings.syncDir = dto?.syncDir ?? DEFAULT_SYNC_DIR
   vaultSettings.largeFileThresholdMb = dto?.largeFileThresholdMb ?? DEFAULT_LARGE_FILE_THRESHOLD_MB
   vaultSettings.searchExcludeDirs = dto?.searchExcludeDirs ?? []
+  vaultSettings.searchLargeFileThresholdExplicit = dto?.searchLargeFileThresholdMb != null
+  vaultSettings.searchLargeFileThresholdMb =
+    dto?.searchLargeFileThresholdMb ?? vaultSettings.largeFileThresholdMb
   vaultSettings.loaded = true
 }
 
@@ -74,4 +93,16 @@ export async function saveSearchExcludeDirs(dirs: string[]): Promise<void> {
     searchExcludeDirs: dirs,
   })
   vaultSettings.searchExcludeDirs = merged?.searchExcludeDirs ?? []
+}
+
+/** 持久化索引跳过阈值(MB,>=1)。**单向门**:保存后,索引阈值就与
+ *  `largeFileThresholdMb`(git 大文件门禁)彻底脱钩 —— 之后再改 git 门禁,
+ *  索引阈值不会跟着变(见 `search::options::for_vault` 的回落逻辑)。 */
+export async function saveSearchLargeFileThreshold(mb: number): Promise<void> {
+  const merged = await invoke<VaultSettingsDto>('notemd_vault_settings_set', {
+    searchLargeFileThresholdMb: mb,
+  })
+  vaultSettings.searchLargeFileThresholdExplicit = merged?.searchLargeFileThresholdMb != null
+  vaultSettings.searchLargeFileThresholdMb =
+    merged?.searchLargeFileThresholdMb ?? vaultSettings.largeFileThresholdMb
 }

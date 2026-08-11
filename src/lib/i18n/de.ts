@@ -506,6 +506,14 @@ export const de: Record<keyof Messages, string> = {
   'search.index.progressLine': '{phase} — {done}/{total} ({percent}%)',
   'search.index.currentFile': 'Aktuelle Datei',
   'search.index.elapsed': 'Verstrichene Zeit: {time}',
+  'search.index.viewLogs': 'Protokolle anzeigen',
+  'search.index.viewLogsFailed': 'Protokollfenster konnte nicht geöffnet werden: {error}',
+  'search.index.settingsHeading': 'Indexeinstellungen',
+  'search.index.thresholdLabel': 'Schwellenwert für die Suchindex-Größe (MB)',
+  'search.index.thresholdHint': 'Dateien, die größer als dieser Wert sind, werden vom Suchindex übersprungen (sie bleiben im Vault und sind weiterhin über `rg` auffindbar). Dies ist unabhängig von der Git-Großdatei-Schwelle im Vault-Tab: Bis du hier einen Wert speicherst, folgt dieser Wert automatisch der Git-Schwelle; sobald du speicherst, ist die Kopplung dauerhaft aufgehoben — auch wenn du die Git-Schwelle später änderst.',
+  'search.index.skippedHeading': 'Übersprungene Dateien',
+  'search.index.skippedEmpty': 'Derzeit werden keine Dateien übersprungen.',
+  'search.index.skippedNote': 'Diese Dateien sind nicht indiziert, lassen sich aber weiterhin über `rg` finden.',
 
   // Folder view
   'folderView.parentFolder': 'Übergeordneter Ordner',

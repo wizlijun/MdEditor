@@ -516,6 +516,18 @@ fn open_logs_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, filter: Option
     }
 }
 
+/// Frontend-invokable wrapper around `open_logs_window`, preset to the
+/// `search` category — the settings page's "View logs" button
+/// (design spec §5/§6.1). Every existing caller of `open_logs_window` is a
+/// native menu/tray event handler with no `invoke()` path from the webview
+/// (see e.g. `"tray-sync-log"` below); this is the one button that needs a
+/// real command, following `open_daily_notes_window`'s thin-wrapper shape.
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn open_search_logs_window(app: tauri::AppHandle) {
+    open_logs_window(&app, Some("search"));
+}
+
 /// View ▸ Plugin Market… (子项目③). Standalone window cloned from the insights
 /// window: it bootstraps its own webview state and drives the market commands
 /// (index / preview / install / uninstall / set_enabled) + capability consent.
@@ -1212,6 +1224,7 @@ pub fn run() {
                 rename_file,
                 open_plugin_market_window,
                 open_daily_notes_window,
+                open_search_logs_window,
                 set_daily_notes_enabled,
                 editor_show_and_open_path,
                 editor_open_remote_buffer,

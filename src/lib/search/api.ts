@@ -22,12 +22,20 @@ export interface SearchResponse {
   hits: SearchHit[]
 }
 
+// One entry of `SearchStats.skippedLarge` — mirrors `SkippedDto` in
+// `src-tauri/src/search/mod.rs` field for field.
+export interface SearchSkippedFile {
+  path: string
+  sizeBytes: number
+}
+
 export interface SearchStats {
   files: number
   blocks: number
   dbBytes: number
   builtAt: string | null
   tokenizerId: string
+  skippedLarge: SearchSkippedFile[]
 }
 
 // Wire shape for `notemd_search_progress` / the `search://progress` event —

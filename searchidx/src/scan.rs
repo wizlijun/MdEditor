@@ -36,9 +36,22 @@ impl Default for ScanOptions {
 pub struct ScanStats {
     pub files_indexed: usize,
     pub files_removed: usize,
-    pub files_skipped_large: Vec<String>,
+    pub files_skipped_large: Vec<SkippedFile>,
     pub took_ms: u128,
     pub timed_out: bool,
+}
+
+/// A file the walk skipped for exceeding `ScanOptions.large_file_threshold_mb`,
+/// carrying the actual on-disk size that put it over — not just the path.
+/// Callers (`notemd search --stats`, the settings page's skipped-files list)
+/// need the size to explain *why* a specific file is invisible to search
+/// without making the user go stat it themselves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedFile {
+    /// Vault-relative, `/`-separated path.
+    pub path: String,
+    /// On-disk size in bytes at the moment it was skipped.
+    pub size: u64,
 }
 
 /// What [`index_one`] actually did, so callers (the file watcher, in a
@@ -173,7 +186,7 @@ pub fn walk_builder(vault_root: &Path) -> ignore::WalkBuilder {
     b
 }
 
-fn walk(vault_root: &Path, opts: &ScanOptions) -> (Vec<Candidate>, Vec<String>) {
+fn walk(vault_root: &Path, opts: &ScanOptions) -> (Vec<Candidate>, Vec<SkippedFile>) {
     let mut out = Vec::new();
     let mut skipped = Vec::new();
     let limit = opts.large_file_threshold_mb as u64 * 1024 * 1024;
@@ -190,7 +203,7 @@ fn walk(vault_root: &Path, opts: &ScanOptions) -> (Vec<Candidate>, Vec<String>) 
         }
         let Ok(meta) = entry.metadata() else { continue };
         if meta.len() > limit {
-            skipped.push(rel);
+            skipped.push(SkippedFile { path: rel, size: meta.len() });
             continue;
         }
         let mtime = meta
@@ -662,7 +675,27 @@ mod tests {
         let opts = ScanOptions { large_file_threshold_mb: 1, ..Default::default() };
         let s = build_full(&mut c, v.path(), &opts, None).unwrap();
         assert_eq!(s.files_indexed, 1);
-        assert_eq!(s.files_skipped_large, vec!["big.md".to_string()]);
+        assert_eq!(
+            s.files_skipped_large,
+            vec![SkippedFile { path: "big.md".to_string(), size: 2 * 1024 * 1024 }]
+        );
+    }
+
+    /// The skipped report must carry the file's *actual* size, not a rounded
+    /// or guessed one — settings-page callers show it verbatim to explain why
+    /// a specific file is missing from search. A size that doesn't land on a
+    /// round MB boundary pins that nothing along the way truncates/rounds it.
+    #[test]
+    fn the_skipped_size_is_the_exact_byte_count_not_a_rounded_one() {
+        let odd_size = 1_500_037usize; // deliberately not a round MB multiple
+        let big = "x".repeat(odd_size);
+        let v = vault(&[("big.md", &big)]);
+        let mut c = conn_for(v.path());
+        let opts = ScanOptions { large_file_threshold_mb: 1, ..Default::default() };
+        let s = build_full(&mut c, v.path(), &opts, None).unwrap();
+        assert_eq!(s.files_skipped_large.len(), 1);
+        assert_eq!(s.files_skipped_large[0].path, "big.md");
+        assert_eq!(s.files_skipped_large[0].size, odd_size as u64);
     }
 
     #[test]
@@ -856,7 +889,11 @@ mod tests {
         fs::write(v.path().join("a.md"), &big).unwrap();
         let s = sweep(&mut c, v.path(), &opts, None, None).unwrap();
         assert_eq!(count(&c), 0, "a file that grows past the guardrail must leave the index");
-        assert_eq!(s.files_skipped_large, vec!["a.md".to_string()], "its absence must be explained by the skip report");
+        assert_eq!(
+            s.files_skipped_large,
+            vec![SkippedFile { path: "a.md".to_string(), size: 2 * 1024 * 1024 }],
+            "its absence must be explained by the skip report"
+        );
     }
 
     /// review round 1, finding 2: `a_timed_out_sweep_still_commits_and_skips_the_deletion_pass`

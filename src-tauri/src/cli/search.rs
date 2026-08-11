@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use searchidx::{ScanOptions, SearchIndex};
+use searchidx::{ScanOptions, SearchIndex, SkippedFile};
 
 /// The CLI's freshness sweep is bounded: retrieval must never block its caller.
 const SWEEP_DEADLINE: Duration = Duration::from_secs(2);
@@ -142,7 +142,7 @@ pub fn run(args: SearchArgs) -> ExitCode {
 
     let started = std::time::Instant::now();
     let opts = scan_options_for(&root);
-    let mut skipped_large: Vec<String> = Vec::new();
+    let mut skipped_large: Vec<SkippedFile> = Vec::new();
 
     // Every failure below degrades. The only hard error is "no vault".
     let mut index = match SearchIndex::open(&root) {
@@ -366,7 +366,7 @@ fn print_json(query: &str, route: searchidx::Route, took_ms: u128, hits: &[searc
     );
 }
 
-fn report_stats(index: Option<&SearchIndex>, json: bool, skipped: &[String]) -> ExitCode {
+fn report_stats(index: Option<&SearchIndex>, json: bool, skipped: &[SkippedFile]) -> ExitCode {
     let Some(idx) = index else {
         eprintln!("notemd: no index available");
         return ExitCode::from(1);
@@ -389,9 +389,15 @@ fn report_stats(index: Option<&SearchIndex>, json: bool, skipped: &[String]) -> 
             println!("tokenizer  {}", s.tokenizer_id);
             // Spec §3.7/§9: a file skipped by the size guardrail is invisible to
             // search, so `--stats` has to say so — an unexplained miss is worse
-            // than a slow query.
-            for path in skipped {
-                println!("skipped    {path} (over the size threshold; rg still finds it)");
+            // than a slow query. Size is included (not just the path) so the
+            // user can judge at a glance whether raising the threshold is
+            // reasonable.
+            for f in skipped {
+                println!(
+                    "skipped    {} ({:.1} MB, over the size threshold; rg still finds it)",
+                    f.path,
+                    f.size as f64 / 1_048_576.0
+                );
             }
             ExitCode::from(0)
         }

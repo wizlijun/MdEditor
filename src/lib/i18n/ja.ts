@@ -508,6 +508,14 @@ export const ja: Record<keyof Messages, string> = {
   'search.index.progressLine': '{phase} — {done}/{total}({percent}%)',
   'search.index.currentFile': '現在のファイル',
   'search.index.elapsed': '経過時間: {time}',
+  'search.index.viewLogs': 'ログを表示',
+  'search.index.viewLogsFailed': 'ログウィンドウを開けませんでした: {error}',
+  'search.index.settingsHeading': 'インデックス設定',
+  'search.index.thresholdLabel': '検索インデックスのサイズ閾値(MB)',
+  'search.index.thresholdHint': 'この閾値を超えるファイルは検索インデックスから除外されます(ファイル自体は vault に残り、`rg` では引き続き見つかります)。Vault タブの Git 大容量ファイル制限とは別の設定です。ここで値を保存するまでは Git の制限に自動的に追従しますが、一度保存すると、その後 Git 側の値を変更しても二度と追従しなくなります。',
+  'search.index.skippedHeading': 'スキップされたファイル',
+  'search.index.skippedEmpty': '現在スキップされているファイルはありません。',
+  'search.index.skippedNote': 'これらのファイルはインデックスされませんが、`rg` では引き続き検索できます。',
 
   // Folder view
   'folderView.parentFolder': '親フォルダ',
