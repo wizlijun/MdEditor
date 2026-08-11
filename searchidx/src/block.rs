@@ -45,7 +45,7 @@ pub struct Block {
     pub agent_by: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct FileMeta {
     pub title: Option<String>,
     pub concept_type: Option<String>,
@@ -55,6 +55,11 @@ pub struct FileMeta {
     /// True when `doc_date` came from mtime rather than the name/frontmatter.
     pub date_inferred: bool,
     pub human_verified: bool,
+    /// Provenance tier from `origin::derive` (spec §3) — index-side only,
+    /// never written back to the file. See `crate::origin` for the rule
+    /// table and `store::replace_file`/`store::origin_of` for how it is
+    /// persisted and read back.
+    pub origin: crate::origin::Origin,
 }
 
 #[derive(Debug, Clone, PartialEq)]

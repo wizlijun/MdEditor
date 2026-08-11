@@ -21,6 +21,14 @@ pub struct ScanOptions {
     pub large_file_threshold_mb: u32,
     /// Vault-relative directory prefixes to skip, `/`-separated.
     pub exclude_dirs: Vec<String>,
+    /// The sync mirror directory name (default `"sync"`) — fed straight
+    /// through to `origin::derive` (spec §3, rule 5) so a mirrored file is
+    /// classified `Source` regardless of what parses this option. This is
+    /// the ONLY field `search::options::for_vault` (the single construction
+    /// point, see `search_scan_options_contract.rs`) is allowed to read from
+    /// `vault_settings::resolve_sync_dir` — do not hard-code `"sync"` at any
+    /// other call site.
+    pub sync_dir: String,
 }
 
 impl Default for ScanOptions {
@@ -28,7 +36,7 @@ impl Default for ScanOptions {
         // 10 MB matches the vault's git large-file gate. NOT the backlink
         // layer's 1 MB: measured against a real vault, that would drop 46% of
         // the corpus — a guardrail for a different job.
-        ScanOptions { large_file_threshold_mb: 10, exclude_dirs: Vec::new() }
+        ScanOptions { large_file_threshold_mb: 10, exclude_dirs: Vec::new(), sync_dir: "sync".to_string() }
     }
 }
 
@@ -252,7 +260,7 @@ pub fn build_full(
     let tx = conn.transaction()?;
     tx.execute_batch("DELETE FROM blocks_fts; DELETE FROM blocks; DELETE FROM links; DELETE FROM files;")?;
     for (i, c) in candidates.iter().enumerate() {
-        if index_into(&tx, vault_root, c)? {
+        if index_into(&tx, vault_root, c, opts)? {
             stats.files_indexed += 1;
         }
         // Force the first callback through so the UI can leave `Walking`
@@ -376,7 +384,7 @@ fn sweep_with_budget(
                     "UPDATE files SET mtime=?1, size=?2 WHERE path=?3",
                     rusqlite::params![c.mtime, c.size, c.rel],
                 )?;
-            } else if index_into(&tx, vault_root, c)? {
+            } else if index_into(&tx, vault_root, c, opts)? {
                 stats.files_indexed += 1;
             }
         }
@@ -458,7 +466,7 @@ pub fn index_one(
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             let candidate = Candidate { rel: rel.to_string(), mtime, size: meta.len() as i64 };
-            if index_into(&tx, vault_root, &candidate)? {
+            if index_into(&tx, vault_root, &candidate, opts)? {
                 IndexOutcome::Indexed
             } else {
                 // Stat succeeded but the read failed (e.g. a race where the
@@ -481,12 +489,13 @@ fn index_into(
     tx: &rusqlite::Transaction,
     vault_root: &Path,
     c: &Candidate,
+    opts: &ScanOptions,
 ) -> rusqlite::Result<bool> {
     let Ok(bytes) = std::fs::read(vault_root.join(&c.rel)) else { return Ok(false) };
     // Lossy on purpose: a file with a stray non-UTF-8 byte still gets indexed
     // rather than silently vanishing from search.
     let raw = String::from_utf8_lossy(&bytes);
-    let parsed = crate::chunk::parse_file(&c.rel, &raw, c.mtime);
+    let parsed = crate::chunk::parse_file(&c.rel, &raw, c.mtime, &opts.sync_dir);
     let ext = if c.rel.ends_with(".note.md") { "note.md" } else { "md" };
     store::replace_file(tx, &c.rel, ext, c.mtime, c.size, &content_hash(&bytes), &parsed)?;
     Ok(true)

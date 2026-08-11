@@ -23,5 +23,12 @@ pub fn for_vault(vault_root: &Path) -> ScanOptions {
             .or(vs.large_file_threshold_mb)
             .unwrap_or(DEFAULT_THRESHOLD_MB),
         exclude_dirs: vs.search_exclude_dirs.unwrap_or_default(),
+        // `origin::derive` (spec §3 rule 5) needs to know the sync mirror
+        // directory name to classify a mirrored file as `Source`. Read
+        // through the same resolver sync-to-vault itself uses
+        // (`vault_settings::resolve_sync_dir`) rather than re-reading
+        // `.notemd/settings.json` here — that resolver already owns the
+        // validation/fallback-to-default behavior for this setting.
+        sync_dir: crate::sotvault::vault_settings::resolve_sync_dir(vault_root),
     }
 }

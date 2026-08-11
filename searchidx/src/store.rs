@@ -16,9 +16,15 @@ use rusqlite::{params, Connection, Transaction};
 
 use crate::block::BlockLevel;
 use crate::chunk::Parsed;
+use crate::origin::Origin;
 use crate::tokenize::{tokenize, TOKENIZER_ID};
 
-pub const SCHEMA_VERSION: i64 = 1;
+// v1 -> v2: added `files.origin` (provenance tiering, spec
+// `docs/superpowers/specs/2026-08-11-md-origin-tiering-design.md` §3). No
+// migration — see the module doc comment: the index is disposable derived
+// data, so a version bump means `open` wipes and rebuilds rather than
+// ALTERing an old database into shape.
+pub const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE files(
@@ -26,7 +32,7 @@ CREATE TABLE files(
   ext TEXT NOT NULL, mtime INTEGER, size INTEGER, content_hash TEXT,
   title TEXT, concept_type TEXT, tags_json TEXT,
   doc_date TEXT, date_inferred INTEGER,
-  human_verified INTEGER DEFAULT 0);
+  human_verified INTEGER DEFAULT 0, origin TEXT);
 CREATE TABLE blocks(
   id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id),
   line_start INTEGER, line_end INTEGER,
@@ -286,13 +292,13 @@ pub fn replace_file(
     remove_file(tx, rel)?;
     let tags_json = serde_json::to_string(&parsed.meta.tags).unwrap_or_else(|_| "[]".into());
     tx.execute(
-        "INSERT INTO files(path,ext,mtime,size,content_hash,title,concept_type,tags_json,doc_date,date_inferred,human_verified)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        "INSERT INTO files(path,ext,mtime,size,content_hash,title,concept_type,tags_json,doc_date,date_inferred,human_verified,origin)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![
             rel, ext, mtime, size, hash,
             parsed.meta.title, parsed.meta.concept_type, tags_json,
             parsed.meta.doc_date, parsed.meta.date_inferred as i64,
-            parsed.meta.human_verified as i64
+            parsed.meta.human_verified as i64, parsed.meta.origin.as_str()
         ],
     )?;
     let file_id = tx.last_insert_rowid();
@@ -367,6 +373,29 @@ pub fn level_of(s: &str) -> BlockLevel {
     BlockLevel::from_str(s)
 }
 
+/// Turn a stored `files.origin` value back into an [`Origin`] for a later
+/// query/ranking layer. `s` is `None` for a NULL column (a row written by a
+/// hypothetical future schema variant that permits it) or an unrecognized
+/// string (hand-edited row, a downgrade from a build that wrote a different
+/// vocabulary, or plain corruption) — `Origin::from_str` returns `None` for
+/// both.
+///
+/// This is a deliberate, explicit choice, not an incidental `unwrap_or`: an
+/// unreadable `origin` is not the kind of inconsistency this crate's
+/// self-healing story covers (that story is "the whole store's shape is
+/// wrong → wipe and rebuild the whole index", see the module doc comment and
+/// `store::open`) — it is one row with one bad column, and neither wiping the
+/// entire index nor propagating an error through every caller of `query`/
+/// `stats` for that is proportionate. It resolves to `Origin::Derived`, the
+/// same conservative middle tier rule 7 of `origin::derive` already assigns
+/// to a *known-present but unrecognized* frontmatter `type`: never grant the
+/// trust boost reserved for `Human`, and never demote to `Source`'s
+/// special-cased raw-material tier. This is a read-side fallback only — the
+/// row itself is never rewritten to "fix" it.
+pub fn origin_of(s: Option<&str>) -> Origin {
+    s.and_then(Origin::from_str).unwrap_or(Origin::Derived)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,7 +417,7 @@ mod tests {
     }
 
     fn write(conn: &mut Connection, rel: &str, text: &str) {
-        let parsed = parse_file(rel, text, MTIME);
+        let parsed = parse_file(rel, text, MTIME, "sync");
         let tx = conn.transaction().unwrap();
         replace_file(&tx, rel, "md", 1, text.len() as i64, "h1", &parsed).unwrap();
         tx.commit().unwrap();
@@ -431,12 +460,62 @@ mod tests {
         assert_eq!(n, 0);
     }
 
+    /// The specific transition this task's schema bump depends on: a real
+    /// pre-bump (v1, no `origin` column) database must be wiped and rebuilt
+    /// on open rather than used as-is with a missing column — see the module
+    /// doc comment on `open` and the "Do NOT write a migration" constraint on
+    /// this task. Simulated by building a v2 index and then hand-rewriting
+    /// `meta.schema_version` back to "1", the way a real pre-bump database
+    /// would read.
+    #[test]
+    fn a_version_1_database_is_wiped_on_open() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v").unwrap();
+            write(&mut conn, "a.md", "hello\n");
+            meta_set(&conn, "schema_version", "1").unwrap();
+        }
+        let conn = open(&p, "/v").unwrap();
+        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "a v1 (pre-origin-column) database must be wiped, not used with a missing column");
+        assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
+    }
+
+    /// `files.origin` must survive a write/read round trip through the real
+    /// column, not just through `Origin::as_str`/`from_str` in isolation.
+    /// `a.note.md` derives `Origin::Human` via `origin::derive` rule 1
+    /// regardless of frontmatter or `sync_dir`, so this exercises the real
+    /// `chunk::parse_file` -> `replace_file` -> SQL round trip end to end.
+    #[test]
+    fn origin_round_trips_through_the_files_table() {
+        let (_d, p) = tmp();
+        let mut conn = open(&p, "/v").unwrap();
+        write(&mut conn, "a.note.md", "- x\n");
+        let stored: Option<String> = conn
+            .query_row("SELECT origin FROM files WHERE path='a.note.md'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some(Origin::Human.as_str()), "stored column must hold the literal tier string");
+        assert_eq!(origin_of(stored.as_deref()), Origin::Human, "and it must read back as the same tier");
+    }
+
+    /// The read-side fallback for a row `origin::derive` never actually wrote
+    /// this way (NULL, a hand-edited row, or a value from a vocabulary this
+    /// build no longer recognizes) — see the deliberateness note on
+    /// `origin_of` itself. Pinned here, at the store layer, because that
+    /// choice only matters once there is a real column to read from.
+    #[test]
+    fn origin_of_falls_back_to_derived_for_null_or_unrecognized_values() {
+        assert_eq!(origin_of(None), Origin::Derived);
+        assert_eq!(origin_of(Some("not-a-real-tier")), Origin::Derived);
+        assert_eq!(origin_of(Some("")), Origin::Derived);
+    }
+
     #[test]
     fn a_corrupt_database_file_is_replaced_not_reported() {
         let (_d, p) = tmp();
         std::fs::write(&p, b"this is not a sqlite file at all").unwrap();
         let conn = open(&p, "/v").unwrap();
-        assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some("1"));
+        assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
     }
 
     /// A database that opens fine, has some of our tables, and no `meta` — the
@@ -456,7 +535,7 @@ mod tests {
             conn.execute_batch("CREATE TABLE files(id INTEGER PRIMARY KEY, path TEXT);").unwrap();
         }
         let conn = open(&p, "/v").expect("a half-created index must be rebuilt, not reported");
-        assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some("1"));
+        assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
         assert_eq!(meta_get(&conn, "vault_root").as_deref(), Some("/v"));
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);

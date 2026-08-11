@@ -921,7 +921,7 @@ mod command_tests {
         // 阈值 0 = 任何非空文件都算超标。这里只是让 60 个 1 字节文件全部进
         // skipped 列表,免得为了测日志上限真去写 60 个 10MB 文件;设置层不
         // 允许 0(见 vault_settings::merge 的零值拒绝),这是测试专用取值。
-        let opts = searchidx::ScanOptions { large_file_threshold_mb: 0, exclude_dirs: Vec::new() };
+        let opts = searchidx::ScanOptions { large_file_threshold_mb: 0, exclude_dirs: Vec::new(), ..Default::default() };
         let stats = log_rebuild_with(&mut idx, &opts, None).unwrap();
         assert_eq!(stats.files_skipped_large.len(), 60, "60 个文件都该被跳过");
 
@@ -954,7 +954,7 @@ mod command_tests {
         }
         let d = tempfile::tempdir().unwrap();
         let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db")).unwrap();
-        let opts = searchidx::ScanOptions { large_file_threshold_mb: 0, exclude_dirs: Vec::new() };
+        let opts = searchidx::ScanOptions { large_file_threshold_mb: 0, exclude_dirs: Vec::new(), ..Default::default() };
         log_rebuild_with(&mut idx, &opts, None).unwrap();
 
         let lines = crate::log_bus::snapshot();
