@@ -425,8 +425,24 @@ pub(crate) fn log_rebuild_with(
         stats.files_indexed + skipped,
         skipped
     );
-    for f in &stats.files_skipped_large {
+    // Named individually (spec §5) — but bounded. The log ring is 3000 lines
+    // shared with git sync, plugins and everything else; a vault holding raw
+    // material near the threshold can easily skip hundreds of files, and an
+    // unbounded per-file dump would evict every other category's history on a
+    // single rebuild. The full list is not lost by capping here: it is what
+    // `SkippedState` carries to `notemd_search_stats`, which is what the
+    // settings page actually renders.
+    const SKIP_LOG_CAP: usize = 50;
+    for f in stats.files_skipped_large.iter().take(SKIP_LOG_CAP) {
         crate::log_cat!("search", "warn", "skipped (over threshold): {} ({} bytes)", f.path, f.size);
+    }
+    if skipped > SKIP_LOG_CAP {
+        crate::log_cat!(
+            "search",
+            "warn",
+            "…and {} more skipped for size (full list in the Search & Index settings tab)",
+            skipped - SKIP_LOG_CAP
+        );
     }
 
     // Best-effort: a failure to read the db file back must not turn a
@@ -495,7 +511,23 @@ fn stats_to_dto(s: IndexStats, skipped_large: Vec<SkippedDto>) -> SearchStatsDto
     }
 }
 
-#[tauri::command]
+/// `command(async)` on a *sync* fn is the macro's "threadpool execution
+/// context" — the body runs on Tauri's async runtime instead of inline on the
+/// invoke handler's thread (which on macOS is the main/event-loop thread).
+/// That matters here because this command takes the index lock, and a
+/// background rebuild holds that same lock for its whole duration: run
+/// inline, one query issued mid-rebuild freezes the entire app (menus,
+/// rendering, every other command), not just the search panel. Off the IPC
+/// thread the query still waits on the mutex, but only this call waits.
+///
+/// Not applied blanket to every command in this file — only the two that can
+/// block on `IndexHandle`. `notemd_search_rebuild` deliberately does its lock
+/// taking on a thread it spawns itself and returns immediately, and
+/// `notemd_search_progress` never touches `IndexHandle` at all (that is the
+/// entire point of `ProgressState`); both stay in the blocking context, where
+/// they answer with the least possible latency — which for the progress poll
+/// during a rebuild is exactly the property being protected.
+#[tauri::command(async)]
 pub fn notemd_search(app: AppHandle, query: String, limit: Option<usize>) -> Result<SearchResponse, String> {
     let started = std::time::Instant::now();
     let idx_handle = handle(&app);
@@ -511,7 +543,10 @@ pub fn notemd_search(app: AppHandle, query: String, limit: Option<usize>) -> Res
     })
 }
 
-#[tauri::command]
+/// Off the IPC thread for the same reason as `notemd_search` above: this
+/// takes the index lock, so a settings page opened during a rebuild would
+/// otherwise wedge the whole app until the rebuild finished.
+#[tauri::command(async)]
 pub fn notemd_search_stats(app: AppHandle) -> Result<SearchStatsDto, String> {
     let idx_handle = handle(&app);
     let guard = lock(&idx_handle);
@@ -847,9 +882,89 @@ mod command_tests {
             1,
             "600 个文件只越过一次 500 门槛,该且仅该产生一条里程碑行: {lines:?}"
         );
+        // 断言格式与 total 精确,但 done 只断言落在合理区间:核心 crate 除了
+        // 每 25 文件的计数节流,还有一条 200ms 的时间节流,一次时间触发的回调
+        // 落在中间就会把整个序列重新对齐(501 → 502、517 之类)。本机实测跑完
+        // 600 个文件只要 58ms,今天永远命中 501;但在负载高的机器上跨过 200ms
+        // 就会翻红——那是机器慢,不是实现坏。区间上界仍然紧到能抓住真正的
+        // 回归:门槛写错(比如每 100 一条)会让第一条落在 500 以下或产生多条,
+        // 两条断言各自都会红。
+        let caps = milestones[0]
+            .message
+            .strip_prefix("indexing ")
+            .and_then(|rest| rest.split_once('/'))
+            .and_then(|(done, total)| Some((done.parse::<usize>().ok()?, total)))
+            .unwrap_or_else(|| panic!("里程碑行的格式必须是 `indexing <done>/<total>`: {:?}", milestones[0]));
+        assert_eq!(caps.1, "600", "里程碑行的 total 必须是文件总数: {:?}", milestones[0]);
+        assert!(
+            (500..=525).contains(&caps.0),
+            "第一条里程碑必须紧跟在越过 500 门槛之后(允许一次时间节流的错相): {:?}",
+            milestones[0]
+        );
+    }
+
+    /// 超阈值文件按 spec §5 要逐个点名,但不能无限点:log_bus 是 git sync、
+    /// 插件、search 共用的 3000 行环形缓冲,一个放了大量素材的 vault 一次重建
+    /// 就能刷掉其他所有分类的历史。上限 50 条 + 一条 "…and N more" 汇总,
+    /// 完整清单仍由 SkippedState → notemd_search_stats → 设置页承担。
+    #[test]
+    fn the_skipped_for_size_warnings_are_capped_and_summarize_the_remainder() {
+        let _g = crate::log_bus::test_guard();
+        crate::log_bus::clear();
+
+        let v = tempfile::tempdir().unwrap();
+        for i in 0..60 {
+            std::fs::write(v.path().join(format!("big{i:02}.md")), "x").unwrap();
+        }
+        let d = tempfile::tempdir().unwrap();
+        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db")).unwrap();
+        // 阈值 0 = 任何非空文件都算超标。这里只是让 60 个 1 字节文件全部进
+        // skipped 列表,免得为了测日志上限真去写 60 个 10MB 文件;设置层不
+        // 允许 0(见 vault_settings::merge 的零值拒绝),这是测试专用取值。
+        let opts = searchidx::ScanOptions { large_file_threshold_mb: 0, exclude_dirs: Vec::new() };
+        let stats = log_rebuild_with(&mut idx, &opts, None).unwrap();
+        assert_eq!(stats.files_skipped_large.len(), 60, "60 个文件都该被跳过");
+
+        let warns: Vec<_> = crate::log_bus::snapshot()
+            .into_iter()
+            .filter(|l| l.category == "search" && l.message.starts_with("skipped (over threshold)"))
+            .collect();
+        assert_eq!(warns.len(), 50, "逐文件行必须封顶在 50 条: {}", warns.len());
+
+        let summary: Vec<_> = crate::log_bus::snapshot()
+            .into_iter()
+            .filter(|l| l.category == "search" && l.message.contains("more skipped for size"))
+            .collect();
+        assert_eq!(summary.len(), 1, "余下的必须有且只有一条汇总行: {summary:?}");
+        assert!(
+            summary[0].message.contains("10"),
+            "汇总行要说清还剩多少条(60 - 50 = 10): {:?}", summary[0]
+        );
+    }
+
+    /// 不到上限时不该冒出汇总行 —— 否则用户会以为还有没列出来的文件。
+    #[test]
+    fn under_the_cap_no_and_n_more_line_is_emitted() {
+        let _g = crate::log_bus::test_guard();
+        crate::log_bus::clear();
+
+        let v = tempfile::tempdir().unwrap();
+        for i in 0..3 {
+            std::fs::write(v.path().join(format!("big{i}.md")), "x").unwrap();
+        }
+        let d = tempfile::tempdir().unwrap();
+        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db")).unwrap();
+        let opts = searchidx::ScanOptions { large_file_threshold_mb: 0, exclude_dirs: Vec::new() };
+        log_rebuild_with(&mut idx, &opts, None).unwrap();
+
+        let lines = crate::log_bus::snapshot();
         assert_eq!(
-            milestones[0].message, "indexing 501/600",
-            "里程碑行的格式与 total 必须精确: {:?}", milestones[0]
+            lines.iter().filter(|l| l.message.starts_with("skipped (over threshold)")).count(),
+            3
+        );
+        assert!(
+            !lines.iter().any(|l| l.message.contains("more skipped for size")),
+            "3 < 50,不该有汇总行: {lines:?}"
         );
     }
 
