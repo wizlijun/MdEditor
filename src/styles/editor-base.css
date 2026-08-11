@@ -124,8 +124,11 @@
   color: rgba(0, 0, 0, 0.72);
   font-size: 0.92em;
 }
+/* 底部定义列表用编号而不是 label:label 长短不一,一列排下来参差难读;编号
+   等宽且与正文角标一一对应。完整 label 走 hover 的 title(见 footnote-plugin)。
+   编号由插件以 decoration 形式挂在 data-num 上,不落盘。 */
 .moraya-editor .moraya-footnote-def::before {
-  content: '[^' attr(data-label) ']';
+  content: '[' attr(data-num) ']';
   position: absolute;
   left: 0;
   transform: translateX(-100%);
@@ -134,6 +137,14 @@
   font-size: 0.85em;
   cursor: pointer;
   user-select: none;
+  /* 表格数字字形:多位编号之间也能对齐 */
+  font-variant-numeric: tabular-nums;
+}
+/* 孤儿定义(没有任何引用)没有编号。仍给一个等宽占位而不是摊开 label,
+   否则又回到长短不一;是哪一条 hover 就知道。 */
+.moraya-editor .moraya-footnote-def:not([data-num])::before {
+  content: '[·]';
+  opacity: 0.55;
 }
 
 /* 跳转后的短暂高亮 */
