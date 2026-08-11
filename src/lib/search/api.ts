@@ -30,9 +30,28 @@ export interface SearchStats {
   tokenizerId: string
 }
 
+// Wire shape for `notemd_search_progress` / the `search://progress` event —
+// mirrors `ProgressDto` in `src-tauri/src/search/mod.rs` (`phase_str`'s
+// mapping) field for field, including the camelCase `elapsedMs`.
+export interface SearchProgress {
+  phase: 'walking' | 'indexing' | 'removing' | 'done'
+  done: number
+  total: number
+  current: string | null
+  elapsedMs: number
+}
+
 export const searchApi = {
   query: (query: string, limit = 50) =>
     invoke<SearchResponse>('notemd_search', { query, limit }),
   stats: () => invoke<SearchStats>('notemd_search_stats'),
-  rebuild: () => invoke<SearchStats>('notemd_search_rebuild'),
+  // `null` while no rebuild is running — a settings page opened mid-rebuild
+  // calls this to catch up instead of waiting for the next progress event.
+  progress: () => invoke<SearchProgress | null>('notemd_search_progress'),
+  // Fire-and-forget: the backend command spawns a background thread and
+  // returns immediately (see `notemd_search_rebuild`'s doc comment in
+  // `src-tauri/src/search/mod.rs`), so there is no `SearchStats` payload to
+  // return here any more — progress/completion are observed via `progress()`
+  // and the `search://progress` / `search://index-updated` events instead.
+  rebuild: () => invoke<void>('notemd_search_rebuild'),
 }

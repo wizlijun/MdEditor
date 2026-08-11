@@ -488,6 +488,15 @@ export const ja: Record<keyof Messages, string> = {
   'search.agentsAdd': 'このセクションを追加',
   'search.agentsAdded': 'AGENTS.md に追加しました',
 
+  // Search & index settings tab
+  'search.index.noVault': 'vault を開くと検索インデックスの状態が表示されます。',
+  'search.index.files': 'ファイル数',
+  'search.index.blocks': 'ブロック数',
+  'search.index.dbSize': 'インデックスサイズ',
+  'search.index.builtAt': '最終ビルド',
+  'search.index.tokenizer': 'トークナイザー',
+  'search.index.tiersPending': '階層別統計は近日公開予定です。',
+
   // Folder view
   'folderView.parentFolder': '親フォルダ',
   'folderView.find': '検索',
@@ -542,6 +551,7 @@ export const ja: Record<keyof Messages, string> = {
   'settings.tab.cli': 'CLI',
   'settings.tab.updates': '更新',
   'settings.tab.vault': 'Vault',
+  'settings.tab.search': '検索とインデックス',
   'settings.tab.outline': 'サイドノート',
   'settings.tab.insights': 'インサイト',
 

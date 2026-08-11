@@ -486,6 +486,15 @@ export const de: Record<keyof Messages, string> = {
   'search.agentsAdd': 'Abschnitt hinzufügen',
   'search.agentsAdded': 'Zu AGENTS.md hinzugefügt',
 
+  // Search & index settings tab
+  'search.index.noVault': 'Öffne einen Vault, um den Status des Suchindex zu sehen.',
+  'search.index.files': 'Dateien',
+  'search.index.blocks': 'Blöcke',
+  'search.index.dbSize': 'Indexgröße',
+  'search.index.builtAt': 'Zuletzt erstellt',
+  'search.index.tokenizer': 'Tokenizer',
+  'search.index.tiersPending': 'Statistiken nach Ebene folgen in Kürze.',
+
   // Folder view
   'folderView.parentFolder': 'Übergeordneter Ordner',
   'folderView.find': 'Suchen',
@@ -540,6 +549,7 @@ export const de: Record<keyof Messages, string> = {
   'settings.tab.cli': 'CLI',
   'settings.tab.updates': 'Updates',
   'settings.tab.vault': 'Tresor',
+  'settings.tab.search': 'Suche & Index',
   'settings.tab.outline': 'Randnotizen',
   'settings.tab.insights': 'Einblicke',
 

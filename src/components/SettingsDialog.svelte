@@ -24,6 +24,8 @@
   import { inboxDir, setInboxDir } from '../lib/quick-note.svelte'
   import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs } from '../lib/vault-settings.svelte'
   import { pushToast } from '../lib/toast.svelte'
+  import { sotvaultStore } from '../lib/sotvault.svelte'
+  import { indexStatus } from '../lib/search/index-status.svelte'
   import {
     DEFAULT_SHORTCUTS, resolveShortcuts, displayShortcut, eventToShortcut, findConflict,
     type OutlineCommandId,
@@ -267,6 +269,23 @@
     }
   })
 
+  // Live-updates the search tab while it's open: `search://progress` during a
+  // rebuild, `search://index-updated` once one finishes (win or lose) so the
+  // stats table picks up the new counts. Torn down automatically whenever
+  // `selectedTab` moves away from 'search' or the dialog closes (the whole
+  // `{#if open}` block unmounts), same $effect-return-cleanup idiom as
+  // `SearchPanel.svelte`'s own event subscription.
+  $effect(() => {
+    if (selectedTab !== 'search') return
+    return indexStatus.subscribe()
+  })
+
+  function formatBytes(n: number): string {
+    if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+    if (n >= 1024) return `${Math.round(n / 1024)} KB`
+    return `${n} B`
+  }
+
   async function savePluginField(pluginId: string, key: string, value: unknown) {
     pluginValues[pluginId] = { ...(pluginValues[pluginId] ?? {}), [key]: value }
     await mergePluginScoped({ [`${pluginId}.${key}`]: value })
@@ -496,6 +515,10 @@
         {#if isIOSPlatform}
           <button class:active={selectedTab === 'vault'} onclick={() => selectedTab = 'vault'}>{t('settings.tab.vault')}</button>
         {/if}
+        <button class:active={selectedTab === 'search'}
+                onclick={() => { selectedTab = 'search'; void indexStatus.refresh() }}>
+          {t('settings.tab.search')}
+        </button>
         <button class:active={selectedTab === 'outline-notes'} onclick={() => selectedTab = 'outline-notes'}>{t('settings.tab.outline')}</button>
         {#each pluginTabs as ptab (ptab.pluginId)}
           <button class:active={selectedTab === ptab.pluginId} onclick={() => selectedTab = ptab.pluginId}>{pluginTabLabel(ptab.manifest, ptab.label)}</button>
@@ -861,6 +884,46 @@
         </section>
       {:else if selectedTab === 'vault' && isIOSPlatform}
         <VaultSettingsTab />
+      {:else if selectedTab === 'search'}
+        <section class="block">
+          <h3>{t('settings.tab.search')}</h3>
+          {#if !sotvaultStore.vaultRoot}
+            <p class="desc">{t('search.index.noVault')}</p>
+          {:else if indexStatus.notReady}
+            <p class="desc">{t('search.notReady')}</p>
+          {:else if indexStatus.error}
+            <p class="result fail">{indexStatus.error}</p>
+          {:else}
+            <div class="row">
+              <span class="lbl">{t('search.index.files')}</span>
+              <span>{indexStatus.stats ? indexStatus.stats.files : (indexStatus.loading ? '…' : '—')}</span>
+            </div>
+            <div class="row">
+              <span class="lbl">{t('search.index.blocks')}</span>
+              <span>{indexStatus.stats ? indexStatus.stats.blocks : (indexStatus.loading ? '…' : '—')}</span>
+            </div>
+            <div class="row">
+              <span class="lbl">{t('search.index.dbSize')}</span>
+              <span>{indexStatus.stats ? formatBytes(indexStatus.stats.dbBytes) : (indexStatus.loading ? '…' : '—')}</span>
+            </div>
+            <div class="row">
+              <span class="lbl">{t('search.index.builtAt')}</span>
+              <span>{indexStatus.stats?.builtAt ?? (indexStatus.loading ? '…' : t('time.never'))}</span>
+            </div>
+            <div class="row">
+              <span class="lbl">{t('search.index.tokenizer')}</span>
+              <span>{indexStatus.stats ? indexStatus.stats.tokenizerId : (indexStatus.loading ? '…' : '—')}</span>
+            </div>
+          {/if}
+        </section>
+        {#if sotvaultStore.vaultRoot}
+          <section class="block">
+            <!-- Tier-statistics table lands here (a follow-on project fills this
+                 container in) — the placeholder keeps this task from having to
+                 redo the layout when that data arrives. -->
+            <p class="desc">{t('search.index.tiersPending')}</p>
+          </section>
+        {/if}
       {:else if selectedTab === 'outline-notes'}
         <section class="block">
           <h3>{t('outline.shortcutsTitle')}</h3>

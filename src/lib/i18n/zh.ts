@@ -521,6 +521,15 @@ export const zh: Record<keyof Messages, string> = {
   'search.agentsAdd': '添加这一节',
   'search.agentsAdded': '已添加到 AGENTS.md',
 
+  // Search & index settings tab
+  'search.index.noVault': '打开一个 vault 后即可查看搜索索引状态。',
+  'search.index.files': '文件数',
+  'search.index.blocks': '块数',
+  'search.index.dbSize': '索引大小',
+  'search.index.builtAt': '上次构建',
+  'search.index.tokenizer': '分词器',
+  'search.index.tiersPending': '分层统计即将上线。',
+
   // Folder view
   'folderView.parentFolder': '上级文件夹',
   'folderView.find': '查找',
@@ -575,6 +584,7 @@ export const zh: Record<keyof Messages, string> = {
   'settings.tab.cli': 'CLI',
   'settings.tab.updates': '更新',
   'settings.tab.vault': 'Vault',
+  'settings.tab.search': '搜索与索引',
   'settings.tab.outline': '手记',
   'settings.tab.insights': '阅读洞察',
 

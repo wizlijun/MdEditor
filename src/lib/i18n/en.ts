@@ -493,6 +493,15 @@ export const en = {
   'search.agentsAdd': 'Add the section',
   'search.agentsAdded': 'Added to AGENTS.md',
 
+  // Search & index settings tab
+  'search.index.noVault': 'Open a vault to see its search index status.',
+  'search.index.files': 'Files',
+  'search.index.blocks': 'Blocks',
+  'search.index.dbSize': 'Index size',
+  'search.index.builtAt': 'Last built',
+  'search.index.tokenizer': 'Tokenizer',
+  'search.index.tiersPending': 'Per-tier statistics are coming soon.',
+
   // Folder view
   'folderView.parentFolder': 'Parent folder',
   'folderView.find': 'Find',
@@ -547,6 +556,7 @@ export const en = {
   'settings.tab.cli': 'CLI',
   'settings.tab.updates': 'Updates',
   'settings.tab.vault': 'Vault',
+  'settings.tab.search': 'Search & Index',
   'settings.tab.outline': 'Sidecar Notes',
   'settings.tab.insights': 'Insights',
 
