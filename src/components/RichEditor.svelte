@@ -362,6 +362,15 @@
   function handleLinkMouseDown(event: MouseEvent) {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
+
+    // 脚注定义前的编号(CSS ::before,画在定义块左侧 padding 里)→ 打开这条来源
+    // 指向的地址。脚注在 vault 里基本都是出处,`[^loop]: /2026-07-27-….md（说明）`
+    // 意思是"该论断出自那篇笔记",所以点它期待的是打开来源本身。
+    // 命中判据是 target 恰为定义块:padding 区域(编号所在)属于块自身,而定义正文
+    // 在内部的 <p> 里 —— 这样点文字仍能正常选中编辑。
+    // 脚注的点击交给 @moraya/core 的 footnote-plugin 处理(正文角标 → 定义块,
+    // 定义块编号 → 回跳首次引用)。这里不拦截。
+
     const wiki = target.closest('[data-wikilink]') as HTMLElement | null
     const urlEl = wiki ? null : (target.closest('[data-url]') as HTMLElement | null)
     const anchor = wiki || urlEl ? null : (target.closest('a[href]') as HTMLAnchorElement | null)

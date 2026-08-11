@@ -17,6 +17,7 @@ import hljsLightCss from 'highlight.js/styles/github.css?raw'
 import hljsDarkCss from 'highlight.js/styles/github-dark.css?raw'
 import shareBeaconJs from './share-beacon.js?raw'
 import { ShareError } from '../share/types'
+import { splitFrontmatter, frontmatterDetailsHtml, FRONTMATTER_CSS } from '../frontmatter-html'
 
 /// Load the compiled CSS for the requested theme via the `theme_load_compiled`
 /// Tauri command (same routing as theme-loader.ts — avoids needing fs:scope
@@ -324,7 +325,19 @@ export async function bakeShareHtml(tab: Tab, themeId: string = 'default'): Prom
   const rawBytes = new TextEncoder().encode(tab.currentContent).byteLength
   if (rawBytes > MAX_HTML_BYTES) throw new ShareError('too_large', `${rawBytes} bytes`)
 
-  const inlineBody = await renderTabAsInlineBody(tab)
+  // Frontmatter is metadata, not prose: pull it out of the markdown and render
+  // it as a collapsed <details> above the body. marked has no frontmatter rule,
+  // so left in place the block renders as <hr> + a paragraph of raw YAML + <hr>
+  // — the loudest thing on the page. Non-markdown tabs keep their content
+  // verbatim; a leading `---` there is not metadata.
+  const foldable = tab.kind === 'markdown' || tab.kind === 'mdx'
+  const { frontmatter, body } = foldable
+    ? splitFrontmatter(tab.currentContent)
+    : { frontmatter: null, body: tab.currentContent }
+  const bodyTab = frontmatter == null ? tab : { ...tab, currentContent: body }
+  const frontmatterHtml = frontmatter == null ? '' : frontmatterDetailsHtml(frontmatter)
+
+  const inlineBody = await renderTabAsInlineBody(bodyTab)
   // Visible header label stays as the filename (small subtitle below the
   // title). The page <title> + og:title use buildPdfTitle which prefers the
   // first H1 — much better for link-card unfurls than "PROJECT_ANALYSIS.md".
@@ -343,11 +356,12 @@ ${viewportMetaTag()}
 ${metadataBlock({ title: pageTitle, description, filename })}
 ${tab.kind === 'markdown' ? okfMetaBlock(tab.currentContent) : ''}
 ${themedStyleHead(themeCss)}
+<style>${FRONTMATTER_CSS}</style>
 </head>
 <body data-theme="${htmlEscape(themeId)}">
 <div class="share-shell">
 <header class="share-header">${headerLabel} · ${date}</header>
-<main class="moraya-editor">${inlineBody}</main>
+<main class="moraya-editor">${frontmatterHtml}${inlineBody}</main>
 <footer class="share-footer">Powered by <a href="https://notemd.net">note.md</a></footer>
 </div>
 <script>${shareBeaconJs}</script>

@@ -5,7 +5,7 @@ beforeEach(() => searchStore.clear())
 
 describe('searchStore', () => {
   it('stores hits and the route reported by the backend', async () => {
-    _setSearchImpl(async () => ({ route: 't1-fts', tookMs: 3, total: 1, hits: [
+    _setSearchImpl(async () => ({ route: 't1-fts', tookMs: 3, total: 1, truncated: false, deepAvailable: false, hits: [
       { path: 'a.md', absPath: '/v/a.md', line: 2, lineEnd: 2, text: 'x', breadcrumb: '',
         level: 'line', score: 0.5, docDate: null, sourceRef: 'a.md#L2', agentBy: null, humanVerified: false,
         origin: 'derived', conceptType: null },
@@ -43,6 +43,36 @@ describe('searchStore', () => {
     resolvers[0]({ route: 't1-fts', tookMs: 1, total: 1, hits: [{ path: 'old.md' }] })
     await Promise.all([first, second])
     expect(searchStore.hits[0].path).toBe('new.md')
+  })
+
+  // 取消是我们自己要求的,不是故障;把它渲染成红色错误等于把优化变成 bug。
+  it('drops a cancellation silently instead of showing it as an error', async () => {
+    _setSearchImpl(async () => { throw new Error('search cancelled') })
+    await searchStore.run('x')
+    expect(searchStore.error).toBeNull()
+  })
+
+  // 实时输入不该为几秒的全表扫描买单;深搜是回车/长停顿才付的钱。
+  it('only asks for the deep scan when the caller says so', async () => {
+    const deeps: Array<boolean | undefined> = []
+    _setSearchImpl(async (_q, opts) => {
+      deeps.push(opts?.deep)
+      return { route: 't1-fts', tookMs: 1, total: 0, hits: [], truncated: false, deepAvailable: true }
+    })
+    await searchStore.run('增')
+    await searchStore.run('增', { deep: true, timeoutMs: 4000 })
+    expect(deeps).toEqual([undefined, true])
+    expect(searchStore.lastDeep).toBe(true)
+  })
+
+  // 「没找到」和「还没找完」不是一回事,面板要能区分才能给出回车深搜的提示。
+  it('carries the backend’s truncated / deepAvailable signals', async () => {
+    _setSearchImpl(async () => ({
+      route: 't1-scan', tookMs: 4000, total: 0, hits: [], truncated: true, deepAvailable: false,
+    }))
+    await searchStore.run('慕', { deep: true })
+    expect(searchStore.truncated).toBe(true)
+    expect(searchStore.deepAvailable).toBe(false)
   })
 })
 

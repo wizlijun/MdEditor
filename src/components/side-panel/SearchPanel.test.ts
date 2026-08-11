@@ -62,7 +62,14 @@ describe('SearchPanel grouping', () => {
       hit({ path: 'ans.md', text: 'answer text', origin: 'derived', conceptType: 'Answer' }),
       hit({ path: 'human.md', text: 'human text', origin: 'human' }),
     ]
-    const response: SearchResponse = { route: 't1-fts', tookMs: 1, total: hits.length, hits }
+    // `deepAvailable: false` is load-bearing, not filler: the panel renders
+    // the "search every line" hint INSTEAD of results when it is true (that
+    // branch sits above the hits branch), so a fixture that left it unset
+    // would render an empty panel and every assertion below would fail for
+    // the wrong reason.
+    const response: SearchResponse = {
+      route: 't1-fts', tookMs: 1, total: hits.length, hits, truncated: false, deepAvailable: false,
+    }
     _setSearchImpl(async () => response)
 
     const app = await mountPanel()
@@ -98,7 +105,9 @@ describe('SearchPanel grouping', () => {
       hit({ path: 'human.md', origin: 'human' }),
       hit({ path: 'ans.md', origin: 'derived', conceptType: 'Answer' }),
     ]
-    _setSearchImpl(async () => ({ route: 't1-fts', tookMs: 1, total: hits.length, hits }))
+    _setSearchImpl(async () => ({
+      route: 't1-fts', tookMs: 1, total: hits.length, hits, truncated: false, deepAvailable: false,
+    }))
 
     const app = await mountPanel()
     await searchStore.run('x')

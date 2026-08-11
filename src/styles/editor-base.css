@@ -87,6 +87,111 @@
   .moraya-editor .moraya-note-anchor:hover { color: #f5cd60; }
 }
 
+/* 脚注角标。上标定位刻意抄上面 .moraya-note-anchor 的做法:display:inline +
+   line-height:0 + 相对偏移。绝不能用 inline-block 或 vertical-align:super ——
+   那会让盒子按 margin 盒高度参与布局、凭空给行框加出下伸部,大标题和表格里行高
+   被撑大。<sup> 浏览器默认就是 vertical-align:super,所以这里必须显式覆盖。 */
+.moraya-editor .moraya-footnote-ref {
+  display: inline;
+  line-height: 0;
+  vertical-align: baseline;
+  position: relative;
+  top: -0.4em;
+  font-size: 0.72em;
+  color: #3b7dd8;
+  cursor: pointer;
+  user-select: none;
+  margin: 0 1px;
+}
+/* 角标就显示 [^id] 里的 id 本身,不另编号 —— 编号要靠插件按出现顺序派生,
+   与磁盘上的写法对不上;直接用 id,看到什么就是文件里写的什么。 */
+.moraya-editor .moraya-footnote-ref::before {
+  content: '[' attr(data-label) ']';
+}
+.moraya-editor .moraya-footnote-ref:hover {
+  color: #2a5da8;
+  text-decoration: underline;
+}
+
+/* 脚注定义块。标记必须落在块**内部** —— 早先用 translateX(-100%) 推到边界框外,
+   它虽仍属于本元素,却落在编辑器留白里,既容易点不中也可能被其他元素遮挡,
+   回跳点击因此形同失效。 */
+.moraya-editor .moraya-footnote-def {
+  position: relative;
+  padding-left: 0.8em;
+  border-left: 2px solid rgba(59, 125, 216, 0.35);
+  color: rgba(0, 0, 0, 0.72);
+  font-size: 0.92em;
+}
+/* 定义前的标记写成源码里的样子 `[^id]:` —— 与磁盘内容一一对应,一眼能对上是
+   哪一条。点它回跳到首次引用。 */
+/* float 而不是绝对定位:id 长度不定,绝对定位要么给固定 padding 留白浪费,
+   要么长 id 压到内容上。float 让标记与定义首行同排、宽度自适应。 */
+.moraya-editor .moraya-footnote-def::before {
+  content: '[^' attr(data-label) ']:';
+  float: left;
+  margin-right: 0.4em;
+  color: #3b7dd8;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.moraya-editor .moraya-footnote-def:hover::before {
+  color: #2a5da8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 跳转后的短暂高亮 */
+.moraya-editor .moraya-footnote-flash {
+  animation: moraya-footnote-flash 1.2s ease-out;
+}
+@keyframes moraya-footnote-flash {
+  0% { background: rgba(59, 125, 216, 0.28); }
+  100% { background: transparent; }
+}
+/* 角标是 inline + line-height:0 的小元素,淡背景闪一下几乎看不见 —— 跳过去了
+   也像没反应。这里用反白,并保持前 40% 不变以撑够可察觉的时间。 */
+.moraya-editor .moraya-footnote-ref.moraya-footnote-flash {
+  animation: moraya-footnote-flash-ref 1.2s ease-out;
+  border-radius: 3px;
+}
+@keyframes moraya-footnote-flash-ref {
+  0%, 40% { background: #3b7dd8; color: #fff; }
+  100% { background: transparent; color: #3b7dd8; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .moraya-editor .moraya-footnote-ref { color: #6fa8ec; }
+  .moraya-editor .moraya-footnote-ref:hover { color: #9ac6f5; }
+  .moraya-editor .moraya-footnote-def {
+    border-left-color: rgba(111, 168, 236, 0.4);
+    color: rgba(255, 255, 255, 0.74);
+  }
+  .moraya-editor .moraya-footnote-def::before {
+    color: #6fa8ec;
+    text-decoration-color: rgba(111, 168, 236, 0.5);
+  }
+  .moraya-editor .moraya-footnote-def:hover::before {
+    color: #9ac6f5;
+    text-decoration-color: #9ac6f5;
+  }
+  .moraya-editor .moraya-footnote-flash {
+    animation-name: moraya-footnote-flash-dark;
+  }
+  @keyframes moraya-footnote-flash-dark {
+    0% { background: rgba(111, 168, 236, 0.3); }
+    100% { background: transparent; }
+  }
+  .moraya-editor .moraya-footnote-ref.moraya-footnote-flash {
+    animation-name: moraya-footnote-flash-ref-dark;
+  }
+  @keyframes moraya-footnote-flash-ref-dark {
+    0%, 40% { background: #6fa8ec; color: #10131a; }
+    100% { background: transparent; color: #6fa8ec; }
+  }
+}
+
 /* 正文内联答复卡片:agent 的答复贴在被批注段落之后。✦ = AI 写的,与手写内容视觉上分得开。
    卡片是 decoration —— 不进文档、不影响序列化,源文件字节不变。 */
 .answer-card {
