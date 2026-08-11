@@ -22,6 +22,13 @@ export function _setIndexApi(api: IndexApi): void {
 // fresher result.
 let seq = 0
 
+// Substring match against the backend's exact refusal text
+// (`src-tauri/src/search/mod.rs`: `Err("rebuild already running".into())`).
+// A raw Tauri command error can arrive either as an `Error` or as the bare
+// string itself depending on the invoke path, hence the `instanceof` guard
+// below rather than assuming one shape.
+const REBUILD_ALREADY_RUNNING = 'rebuild already running'
+
 class IndexStatusStore {
   stats = $state<SearchStats | null>(null)
   progress = $state<SearchProgress | null>(null)
@@ -31,6 +38,10 @@ class IndexStatusStore {
   // vault switch — surfaced distinctly from `error` so the UI can show a
   // plain sentence instead of something that looks like a crash.
   notReady = $state(false)
+  // A rebuild refused because one is already running — also not a failure,
+  // just a fact the user should be told in plain language rather than as an
+  // error banner. Distinct from `error` for the same reason `notReady` is.
+  busyNotice = $state(false)
 
   /**
    * Pulls a fresh snapshot of both `stats` and `progress`. Deliberately reads
@@ -100,6 +111,41 @@ class IndexStatusStore {
     }
   }
 
+  /**
+   * Rebuild entry point for any UI trigger. `confirm` is called first — a
+   * caller-supplied dialog, not a built-in one, so the store stays testable
+   * without a Tauri host and the UI owns exactly what the confirmation says.
+   * Only a `true` result calls `rebuild()`.
+   *
+   * Deliberately does NOT set any local "rebuilding" flag around the
+   * `rebuild()` call: `notemd_search_rebuild` now returns almost immediately
+   * (the real work runs on a background thread holding the index lock), so a
+   * flag driven off this call's lifetime would flip back to false while the
+   * rebuild is still very much in progress. The UI's busy state must be
+   * driven off `progress` instead, which is what actually tracks the work.
+   *
+   * A `rebuild already running` refusal (a second rebuild request while one
+   * is already in flight — a normal, expected race, not a bug) is caught and
+   * surfaced as `busyNotice` rather than `error`, so the UI can say "a
+   * rebuild is already running" instead of showing something that looks
+   * like a crash.
+   */
+  async requestRebuild(confirm: () => Promise<boolean>): Promise<void> {
+    this.busyNotice = false
+    const ok = await confirm()
+    if (!ok) return
+    try {
+      await impl.rebuild()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg.includes(REBUILD_ALREADY_RUNNING)) {
+        this.busyNotice = true
+      } else {
+        this.error = msg
+      }
+    }
+  }
+
   reset(): void {
     seq++ // invalidate any in-flight refresh() so its response can't land after this
     this.stats = null
@@ -107,7 +153,48 @@ class IndexStatusStore {
     this.loading = false
     this.error = null
     this.notReady = false
+    this.busyNotice = false
   }
 }
 
 export const indexStatus = new IndexStatusStore()
+
+// ── Presentation helpers ────────────────────────────────────────────────
+// Pure functions used by the settings page's progress block / rebuild
+// confirmation. Kept here (not inline in the `.svelte` file) so they're
+// unit-testable without mounting a component.
+
+/**
+ * Order-of-magnitude estimate for the rebuild confirmation dialog, not a
+ * promise. Anchored to the design spec's own cold-build budget — "10k
+ * files/150MB in <10s" (docs/2026-08-10-vault-search-index-design.md
+ * §3.1/§7) — i.e. roughly 1000 files/sec. Real hardware and file sizes vary;
+ * this exists only so the dialog can say "a few seconds" instead of a bare
+ * "search will be unavailable" with no sense of scale.
+ */
+export function estimateRebuildSeconds(files: number): number {
+  return Math.max(1, Math.ceil(files / 1000))
+}
+
+/**
+ * Middle-elides an overlong path: `/very/long/path/to/note.md` →
+ * `/very/lon…note.md`. Keeps a larger share at the front (directory context
+ * matters less than the filename, which lives at the end) while guaranteeing
+ * the tail — usually the most identifying part — always survives.
+ */
+export function elideMiddle(path: string, maxLen = 48): string {
+  if (path.length <= maxLen) return path
+  const keep = maxLen - 1 // reserve one char for the ellipsis
+  const head = Math.ceil(keep * 0.6)
+  const tail = keep - head
+  return path.slice(0, head) + '…' + path.slice(path.length - tail)
+}
+
+/** `elapsedMs` from `SearchProgress` → a short human string ("12.3s", "1m 05s"). */
+export function formatElapsedMs(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  const totalSeconds = Math.floor(ms / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+}

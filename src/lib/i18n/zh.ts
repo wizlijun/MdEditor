@@ -529,6 +529,17 @@ export const zh: Record<keyof Messages, string> = {
   'search.index.builtAt': '上次构建',
   'search.index.tokenizer': '分词器',
   'search.index.tiersPending': '分层统计即将上线。',
+  'search.index.rebuildConfirmTitle': '重建搜索索引?',
+  'search.index.rebuildConfirmBody': '这是一次全量重建——每个文件都会从头重新扫描。重建期间搜索不可用,你的 {files} 个文件大约需要 {seconds} 秒。不会丢失任何笔记:索引只是从你的 markdown 文件派生出的可丢弃副本,不是文件本身。',
+  'search.index.rebuildConfirmBodyUnknown': '这是一次全量重建——每个文件都会从头重新扫描。重建期间搜索不可用。不会丢失任何笔记:索引只是从你的 markdown 文件派生出的可丢弃副本,不是文件本身。',
+  'search.index.busyNotice': '已有一次重建在进行中。',
+  'search.index.progressHeading': '正在重建…',
+  'search.index.phase.walking': '扫描文件中',
+  'search.index.phase.indexing': '索引中',
+  'search.index.phase.removing': '清理陈旧条目中',
+  'search.index.progressLine': '{phase} — {done}/{total}({percent}%)',
+  'search.index.currentFile': '当前文件',
+  'search.index.elapsed': '已耗时:{time}',
 
   // Folder view
   'folderView.parentFolder': '上级文件夹',

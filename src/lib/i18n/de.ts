@@ -494,6 +494,17 @@ export const de: Record<keyof Messages, string> = {
   'search.index.builtAt': 'Zuletzt erstellt',
   'search.index.tokenizer': 'Tokenizer',
   'search.index.tiersPending': 'Statistiken nach Ebene folgen in Kürze.',
+  'search.index.rebuildConfirmTitle': 'Suchindex neu erstellen?',
+  'search.index.rebuildConfirmBody': 'Dies ist eine vollständige Neuerstellung — jede Datei wird von Grund auf neu gescannt. Während des Vorgangs ist die Suche nicht verfügbar, für deine {files} Dateien dauert das etwa {seconds}s. Es gehen keine Notizen verloren: Der Index ist nur eine Wegwerfkopie, die aus deinen Markdown-Dateien abgeleitet wird, nicht die Dateien selbst.',
+  'search.index.rebuildConfirmBodyUnknown': 'Dies ist eine vollständige Neuerstellung — jede Datei wird von Grund auf neu gescannt. Während des Vorgangs ist die Suche nicht verfügbar. Es gehen keine Notizen verloren: Der Index ist nur eine Wegwerfkopie, die aus deinen Markdown-Dateien abgeleitet wird, nicht die Dateien selbst.',
+  'search.index.busyNotice': 'Es läuft bereits eine Neuerstellung.',
+  'search.index.progressHeading': 'Wird neu erstellt…',
+  'search.index.phase.walking': 'Dateien werden gescannt',
+  'search.index.phase.indexing': 'Wird indexiert',
+  'search.index.phase.removing': 'Veraltete Einträge werden entfernt',
+  'search.index.progressLine': '{phase} — {done}/{total} ({percent}%)',
+  'search.index.currentFile': 'Aktuelle Datei',
+  'search.index.elapsed': 'Verstrichene Zeit: {time}',
 
   // Folder view
   'folderView.parentFolder': 'Übergeordneter Ordner',

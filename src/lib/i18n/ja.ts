@@ -496,6 +496,17 @@ export const ja: Record<keyof Messages, string> = {
   'search.index.builtAt': '最終ビルド',
   'search.index.tokenizer': 'トークナイザー',
   'search.index.tiersPending': '階層別統計は近日公開予定です。',
+  'search.index.rebuildConfirmTitle': '検索インデックスを再構築しますか?',
+  'search.index.rebuildConfirmBody': 'これは全量の再構築です——すべてのファイルを最初からスキャンし直します。実行中は検索が使えなくなります。{files} 件のファイルでおよそ {seconds} 秒かかる見込みです。ノートが失われることはありません:インデックスは markdown ファイルから派生した使い捨てのコピーであり、ファイル自体ではありません。',
+  'search.index.rebuildConfirmBodyUnknown': 'これは全量の再構築です——すべてのファイルを最初からスキャンし直します。実行中は検索が使えなくなります。ノートが失われることはありません:インデックスは markdown ファイルから派生した使い捨てのコピーであり、ファイル自体ではありません。',
+  'search.index.busyNotice': '既に再構築が実行中です。',
+  'search.index.progressHeading': '再構築中…',
+  'search.index.phase.walking': 'ファイルをスキャン中',
+  'search.index.phase.indexing': 'インデックス作成中',
+  'search.index.phase.removing': '古いエントリを削除中',
+  'search.index.progressLine': '{phase} — {done}/{total}({percent}%)',
+  'search.index.currentFile': '現在のファイル',
+  'search.index.elapsed': '経過時間: {time}',
 
   // Folder view
   'folderView.parentFolder': '親フォルダ',

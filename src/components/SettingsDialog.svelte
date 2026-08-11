@@ -25,7 +25,8 @@
   import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs } from '../lib/vault-settings.svelte'
   import { pushToast } from '../lib/toast.svelte'
   import { sotvaultStore } from '../lib/sotvault.svelte'
-  import { indexStatus } from '../lib/search/index-status.svelte'
+  import { indexStatus, estimateRebuildSeconds, elideMiddle, formatElapsedMs } from '../lib/search/index-status.svelte'
+  import type { SearchProgress } from '../lib/search/api'
   import {
     DEFAULT_SHORTCUTS, resolveShortcuts, displayShortcut, eventToShortcut, findConflict,
     type OutlineCommandId,
@@ -284,6 +285,43 @@
     if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
     if (n >= 1024) return `${Math.round(n / 1024)} KB`
     return `${n} B`
+  }
+
+  const PHASE_LABEL_KEYS: Record<string, keyof Messages> = {
+    walking: 'search.index.phase.walking',
+    indexing: 'search.index.phase.indexing',
+    removing: 'search.index.phase.removing',
+  }
+  // `phase` is typed as a closed union in `SearchProgress`, but the payload
+  // crosses an IPC boundary from Rust — falling back to the raw string for
+  // an unrecognized value is safer than throwing away the whole progress
+  // block over a label lookup miss.
+  function phaseLabel(phase: SearchProgress['phase']): string {
+    const key = PHASE_LABEL_KEYS[phase]
+    return key ? t(key) : phase
+  }
+
+  function progressPercent(p: SearchProgress): number {
+    if (p.total <= 0) return 0
+    return Math.min(100, Math.round((p.done / p.total) * 100))
+  }
+
+  // Confirmation text must say plainly: full rebuild, search unavailable
+  // meanwhile, roughly how long, and — the part a user would otherwise
+  // reasonably fear — that no notes are lost (the index is a disposable
+  // derivative of the markdown files, not the files themselves). Uses the
+  // codebase's existing `confirm()` dialog pattern (see e.g.
+  // `cmdMdblockReset` in lib/mdblock/commands.ts) rather than a hand-rolled
+  // modal.
+  async function onRebuildIndex() {
+    await indexStatus.requestRebuild(async () => {
+      const { confirm } = await import('@tauri-apps/plugin-dialog')
+      const files = indexStatus.stats?.files
+      const body = files != null
+        ? t('search.index.rebuildConfirmBody', { files, seconds: estimateRebuildSeconds(files) })
+        : t('search.index.rebuildConfirmBodyUnknown')
+      return await confirm(body, { title: t('search.index.rebuildConfirmTitle'), kind: 'warning' })
+    })
   }
 
   async function savePluginField(pluginId: string, key: string, value: unknown) {
@@ -914,8 +952,35 @@
               <span class="lbl">{t('search.index.tokenizer')}</span>
               <span>{indexStatus.stats ? indexStatus.stats.tokenizerId : (indexStatus.loading ? '…' : '—')}</span>
             </div>
+            <div class="row" style="margin-top: 10px;">
+              <span class="lbl"></span>
+              <button onclick={() => void onRebuildIndex()} disabled={indexStatus.progress !== null}>
+                {t('search.rebuild')}
+              </button>
+            </div>
+            {#if indexStatus.busyNotice}
+              <p class="result">{t('search.index.busyNotice')}</p>
+            {/if}
           {/if}
         </section>
+        {#if indexStatus.progress}
+          {@const p = indexStatus.progress}
+          {@const percent = progressPercent(p)}
+          <section class="block">
+            <h3>{t('search.index.progressHeading')}</h3>
+            <p class="desc">{t('search.index.progressLine', { phase: phaseLabel(p.phase), done: p.done, total: p.total, percent })}</p>
+            <div class="progress">
+              <div class="bar" style:width={`${percent}%`}></div>
+            </div>
+            {#if p.current}
+              <div class="row" style="margin-top: 8px;">
+                <span class="lbl">{t('search.index.currentFile')}</span>
+                <span title={p.current}>{elideMiddle(p.current)}</span>
+              </div>
+            {/if}
+            <p class="desc" style="margin-top: 6px;">{t('search.index.elapsed', { time: formatElapsedMs(p.elapsedMs) })}</p>
+          </section>
+        {/if}
         {#if sotvaultStore.vaultRoot}
           <section class="block">
             <!-- Tier-statistics table lands here (a follow-on project fills this
@@ -1114,6 +1179,18 @@
     font-size: 11px;
     line-height: 1.5;
     color: color-mix(in srgb, CanvasText 60%, transparent);
+  }
+  .progress {
+    height: 8px;
+    margin-top: 8px;
+    background: color-mix(in srgb, CanvasText 12%, transparent);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .progress .bar {
+    height: 100%;
+    background: AccentColor;
+    transition: width 0.2s ease-out;
   }
   .tab-strip {
     display: flex;

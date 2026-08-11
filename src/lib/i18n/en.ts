@@ -501,6 +501,17 @@ export const en = {
   'search.index.builtAt': 'Last built',
   'search.index.tokenizer': 'Tokenizer',
   'search.index.tiersPending': 'Per-tier statistics are coming soon.',
+  'search.index.rebuildConfirmTitle': 'Rebuild search index?',
+  'search.index.rebuildConfirmBody': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs, roughly {seconds}s for your {files} files. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
+  'search.index.rebuildConfirmBodyUnknown': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
+  'search.index.busyNotice': 'A rebuild is already running.',
+  'search.index.progressHeading': 'Rebuilding…',
+  'search.index.phase.walking': 'Scanning files',
+  'search.index.phase.indexing': 'Indexing',
+  'search.index.phase.removing': 'Removing stale entries',
+  'search.index.progressLine': '{phase} — {done}/{total} ({percent}%)',
+  'search.index.currentFile': 'Current file',
+  'search.index.elapsed': 'Elapsed: {time}',
 
   // Folder view
   'folderView.parentFolder': 'Parent folder',

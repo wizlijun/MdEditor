@@ -24,7 +24,7 @@ const { listenMock, getListenCalls, resetListenCalls } = vi.hoisted(() => {
 })
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }))
 
-import { indexStatus, _setIndexApi } from './index-status.svelte'
+import { indexStatus, _setIndexApi, estimateRebuildSeconds, elideMiddle, formatElapsedMs } from './index-status.svelte'
 
 beforeEach(() => {
   indexStatus.reset()
@@ -132,5 +132,84 @@ describe('indexStatus.subscribe', () => {
 
     expect(unlistenProgress).toHaveBeenCalledTimes(1)
     expect(unlistenUpdated).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('indexStatus.requestRebuild', () => {
+  it('确认对话框取消时不触发重建', async () => {
+    const rebuild = vi.fn()
+    _setIndexApi({ stats: async () => null, progress: async () => null, rebuild })
+    await indexStatus.requestRebuild(async () => false) // 用户点了取消
+    expect(rebuild).not.toHaveBeenCalled()
+  })
+
+  it('确认后才触发重建', async () => {
+    const rebuild = vi.fn()
+    _setIndexApi({ stats: async () => null, progress: async () => null, rebuild })
+    await indexStatus.requestRebuild(async () => true)
+    expect(rebuild).toHaveBeenCalledTimes(1)
+  })
+
+  // 后端已在跑时会返回 rebuild already running —— 这不是崩溃,要说人话。
+  it('把已在运行呈现为提示而不是错误', async () => {
+    _setIndexApi({
+      stats: async () => null, progress: async () => null,
+      rebuild: async () => { throw new Error('rebuild already running') },
+    })
+    await indexStatus.requestRebuild(async () => true)
+    expect(indexStatus.busyNotice).toBe(true)
+    expect(indexStatus.error).toBeNull()
+  })
+
+  it('把已在运行以外的失败呈现为 error,而不是静默吞掉或误标成 busyNotice', async () => {
+    _setIndexApi({
+      stats: async () => null, progress: async () => null,
+      rebuild: async () => { throw new Error('disk full') },
+    })
+    await indexStatus.requestRebuild(async () => true)
+    expect(indexStatus.error).toBe('disk full')
+    expect(indexStatus.busyNotice).toBe(false)
+  })
+
+  it('每次调用先清掉上一次的 busyNotice,不会陈旧地留着', async () => {
+    _setIndexApi({
+      stats: async () => null, progress: async () => null,
+      rebuild: async () => { throw new Error('rebuild already running') },
+    })
+    await indexStatus.requestRebuild(async () => true)
+    expect(indexStatus.busyNotice).toBe(true)
+
+    _setIndexApi({ stats: async () => null, progress: async () => null, rebuild: async () => {} })
+    await indexStatus.requestRebuild(async () => true)
+    expect(indexStatus.busyNotice).toBe(false)
+  })
+})
+
+describe('rebuild progress display helpers', () => {
+  it('estimateRebuildSeconds anchors to the ~1000 files/sec design budget, floored at 1s', () => {
+    expect(estimateRebuildSeconds(0)).toBe(1)
+    expect(estimateRebuildSeconds(1)).toBe(1)
+    expect(estimateRebuildSeconds(1000)).toBe(1)
+    expect(estimateRebuildSeconds(2500)).toBe(3)
+  })
+
+  it('elideMiddle leaves short paths untouched', () => {
+    expect(elideMiddle('a.md', 48)).toBe('a.md')
+  })
+
+  it('elideMiddle shortens an overlong path and keeps the filename tail intact', () => {
+    const long = '/Users/bruce/vault/projects/deeply/nested/folder/structure/note-name.md'
+    const out = elideMiddle(long, 40)
+    expect(out.length).toBe(40)
+    expect(out).toContain('…')
+    expect(out.endsWith('note-name.md')).toBe(true)
+  })
+
+  it('formatElapsedMs renders sub-minute durations as seconds', () => {
+    expect(formatElapsedMs(1234)).toBe('1.2s')
+  })
+
+  it('formatElapsedMs renders minute-scale durations as m/s', () => {
+    expect(formatElapsedMs(65_000)).toBe('1m 05s')
   })
 })
