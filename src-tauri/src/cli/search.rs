@@ -257,6 +257,11 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
                     doc_date: None,
                     agent_by: None,
                     human_verified: false,
+                    // Last-ditch unranked scan with no index row to read a
+                    // real tier from; `Derived` is the same fail-toward-
+                    // neutral fallback `store::origin_of` uses, and score_of
+                    // is never even called on this path (score stays 0.0).
+                    origin: searchidx::Origin::Derived,
                 });
                 break;
             }

@@ -4,6 +4,7 @@
 
 use rusqlite::{params_from_iter, Connection};
 
+use crate::origin::Origin;
 use crate::tokenize::{has_han, tokens};
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -47,6 +48,7 @@ pub struct Hit {
     pub doc_date: Option<String>,
     pub agent_by: Option<String>,
     pub human_verified: bool,
+    pub origin: Origin,
 }
 
 impl Hit {
@@ -164,13 +166,15 @@ fn match_expr(q: &Query) -> Option<String> {
 }
 
 // Column order shared by `fts_search` and `like_search`; `row_to_hit` reads
-// these back by POSITION (0-9). If this list changes, every index in
+// these back by POSITION (0-10). If this list changes, every index in
 // `row_to_hit` and the two `r.get::<_, _>(N)` calls for `rank`/`is_annotation`
 // below must change with it — see the module-level hazard note in the task
-// brief. `is_annotation` is deliberately last (index 9) so both callers can
-// append their own `rank` column (index 10) after it without renumbering.
+// brief. `f.origin` (index 10) is deliberately last so both callers can
+// append their own `rank` column (index 11 in `fts_search`) after it without
+// renumbering `is_annotation` (index 9, unchanged from before `origin` was
+// added).
 const SELECT_COLS: &str = "f.path, b.line_start, b.line_end, b.text, b.breadcrumb, b.level, \
-                           f.doc_date, b.agent_by, f.human_verified, b.is_annotation";
+                           f.doc_date, b.agent_by, f.human_verified, b.is_annotation, f.origin";
 
 fn fts_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqlite::Result<Vec<Hit>> {
     let Some(expr) = match_expr(q) else { return Ok(Vec::new()) };
@@ -188,7 +192,7 @@ fn fts_search(conn: &Connection, q: &Query, limit: usize, today: &str) -> rusqli
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-        Ok((row_to_hit(r)?, r.get::<_, f64>(10)?, r.get::<_, i64>(9)? != 0))
+        Ok((row_to_hit(r)?, r.get::<_, f64>(11)?, r.get::<_, i64>(9)? != 0))
     })?;
     finish(rows.collect::<rusqlite::Result<Vec<_>>>()?, q, limit, today)
 }
@@ -283,6 +287,7 @@ fn push_filters(q: &Query, sql: &mut String, args: &mut Vec<String>) {
 }
 
 fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<Hit> {
+    let origin_raw: String = r.get(10)?;
     Ok(Hit {
         path: r.get(0)?,
         line: r.get::<_, i64>(1)? as u32,
@@ -293,6 +298,7 @@ fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<Hit> {
         doc_date: r.get(6)?,
         agent_by: r.get(7)?,
         human_verified: r.get::<_, i64>(8)? != 0,
+        origin: crate::store::origin_of(Some(&origin_raw)),
         score: 0.0,
     })
 }
@@ -398,6 +404,30 @@ fn score_of(rank: f64, hit: &Hit, is_annotation: bool, phrase_exact: bool, today
     if hit.human_verified {
         r *= 1.1;
     }
+    // Provenance tiering (spec `docs/superpowers/specs/
+    // 2026-08-11-md-origin-tiering-design.md` §3, CLAUDE.md belief 1): what
+    // you wrote outranks what an agent generated, which outranks raw source
+    // material an agent still has to read. `Derived` gets the identity
+    // multiplier — it is the middle tier, and also the fallback both
+    // `origin::derive` (rule 7) and `store::origin_of` resolve to when the
+    // signal is absent or unreadable, so leaving it at ×1.0 keeps that
+    // fallback genuinely neutral rather than accidentally penalizing it.
+    //
+    // Stacking this with the `human_verified` ×1.1 boost above is
+    // INTENTIONAL, not double-counting: they are different signals about
+    // different things. `human_verified` says "a human signed off on THIS
+    // document" (a per-document fact from `verified.by`). This says
+    // "documents classified into THIS ORIGIN TIER are usually
+    // human-written" (a category-level prior from `origin::derive`). A
+    // hand-written, verified note legitimately earns both — one human
+    // signal from the specific sign-off, one from the general shape of the
+    // document — the same way `is_annotation` and `phrase_exact` above each
+    // apply independently even though both can fire on the same hit.
+    r *= match hit.origin {
+        Origin::Human => 1.25,
+        Origin::Derived => 1.0,
+        Origin::Source => 0.9,
+    };
     // The first line of defense against memory self-propagation: AI-authored
     // material is findable but never outranks the primary source it summarized.
     if hit.agent_by.is_some() {
@@ -636,13 +666,13 @@ mod tests {
         assert!(anno < agent, "human-marked content must rank above agent output: {hits:?}");
     }
 
-    /// The test above can pass on stable-sort tie-breaking alone (see its
-    /// comment) — this one calls the pure ranking function directly so the
-    /// two boosts spec §4 cares about (`is_annotation` ×1.2, `agent_by`
-    /// ×0.85) are pinned independent of bm25/SQLite behavior.
-    #[test]
-    fn score_of_boosts_annotations_and_penalizes_agent_authored_content() {
-        let base = Hit {
+    /// Shared fixture for the pure `score_of` tests below. `origin` defaults
+    /// to whatever the caller passes; callers that don't care about it use
+    /// `Origin::Derived` — the identity multiplier (see `score_of`'s
+    /// origin-tier comment) — so it never contaminates a test pinning a
+    /// different boost.
+    fn hit_with(origin: Origin) -> Hit {
+        Hit {
             path: "a.md".into(),
             line: 1,
             line_end: 1,
@@ -653,7 +683,31 @@ mod tests {
             doc_date: None,
             agent_by: None,
             human_verified: false,
-        };
+            origin,
+        }
+    }
+
+    /// spec §4 的产品主张,与 origin tiering 设计 §3 的落点:你写的 > agent 生成的
+    /// > agent 要读的原始材料。**三档必须各自独立可验** —— 前置项目里出现过「两个
+    /// 乘数一起推同一方向、任一个单独失效测试仍通过」的假阴性(见 mutation check
+    /// in the task report),所以这里逐档断言 `score_of` 本身,而不是端到端排序,
+    /// 且断言两条不等式而非一条,让 mutation check 能分别单独抓到每一档。
+    #[test]
+    fn each_origin_tier_moves_the_score_on_its_own() {
+        let human = score_of(-1.0, &hit_with(Origin::Human), false, false, "2026-08-10");
+        let derived = score_of(-1.0, &hit_with(Origin::Derived), false, false, "2026-08-10");
+        let source = score_of(-1.0, &hit_with(Origin::Source), false, false, "2026-08-10");
+        assert!(human > derived, "human 必须高于 derived: {human} vs {derived}");
+        assert!(derived > source, "derived 必须高于 source: {derived} vs {source}");
+    }
+
+    /// The test above can pass on stable-sort tie-breaking alone (see its
+    /// comment) — this one calls the pure ranking function directly so the
+    /// two boosts spec §4 cares about (`is_annotation` ×1.2, `agent_by`
+    /// ×0.85) are pinned independent of bm25/SQLite behavior.
+    #[test]
+    fn score_of_boosts_annotations_and_penalizes_agent_authored_content() {
+        let base = hit_with(Origin::Derived);
         let plain = score_of(-1.0, &base, false, false, "2026-08-10");
         let annotated = score_of(-1.0, &base, true, false, "2026-08-10");
         let mut agent_hit = base.clone();
@@ -673,18 +727,7 @@ mod tests {
     /// pinned independent of bm25/SQLite/fixture-length behavior entirely.
     #[test]
     fn score_of_boosts_human_verified_content() {
-        let base = Hit {
-            path: "a.md".into(),
-            line: 1,
-            line_end: 1,
-            text: String::new(),
-            breadcrumb: String::new(),
-            level: "line".into(),
-            score: 0.0,
-            doc_date: None,
-            agent_by: None,
-            human_verified: false,
-        };
+        let base = hit_with(Origin::Derived);
         let unverified = score_of(-1.0, &base, false, false, "2026-08-10");
         let mut verified_hit = base.clone();
         verified_hit.human_verified = true;

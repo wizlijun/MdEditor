@@ -648,6 +648,7 @@ mod command_tests {
             doc_date: Some("2026-08-10".to_string()),
             agent_by: Some("claude/1.0".to_string()),
             human_verified: true,
+            origin: searchidx::Origin::Derived,
         }
     }
 
