@@ -287,7 +287,14 @@ fn push_filters(q: &Query, sql: &mut String, args: &mut Vec<String>) {
 }
 
 fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<Hit> {
-    let origin_raw: String = r.get(10)?;
+    // `Option<String>`, not `String`: the column is `NOT NULL` today (v1
+    // databases with no `origin` column are wiped on open, see `store::open`),
+    // but `store::origin_of`'s own doc comment promises a graceful `Derived`
+    // fallback for a NULL row, not a hard `InvalidColumnType` error that
+    // would fail the whole query. Reading it as non-nullable would make that
+    // promise unreachable in practice and contradict fail-toward-neutral
+    // with a fail-loud crash instead (review round 1, Minor #4).
+    let origin_raw: Option<String> = r.get(10)?;
     Ok(Hit {
         path: r.get(0)?,
         line: r.get::<_, i64>(1)? as u32,
@@ -298,7 +305,7 @@ fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<Hit> {
         doc_date: r.get(6)?,
         agent_by: r.get(7)?,
         human_verified: r.get::<_, i64>(8)? != 0,
-        origin: crate::store::origin_of(Some(&origin_raw)),
+        origin: crate::store::origin_of(origin_raw.as_deref()),
         score: 0.0,
     })
 }
@@ -510,6 +517,28 @@ mod tests {
         (d, c)
     }
 
+    /// Review round 1, Important #1: the read path this task exists to add —
+    /// `row_to_hit` pulling `f.origin` back out of the real `files` table —
+    /// was entirely unpinned. `each_origin_tier_moves_the_score_on_its_own`
+    /// builds `Hit`s by hand via `hit_with` and never touches SQL, so it
+    /// cannot catch `row_to_hit` ignoring the column (always `Derived`) or
+    /// reading the wrong index (e.g. index 5 = `b.level`, also `TEXT`, so no
+    /// type error either) — both reduced the whole tiering feature to a
+    /// silent no-op while every existing test stayed green. This goes
+    /// through the real index: `a.note.md` classifies `Human` (rule 1,
+    /// blind to frontmatter), a bare `.md` with none classifies `Source`
+    /// (rule 6) — two tiers, neither the `Derived` fallback both mutations
+    /// above collapse onto, so either mutation is caught here.
+    #[test]
+    fn a_hits_origin_round_trips_through_the_real_index() {
+        let (_d, c) = indexed(&[("a.note.md", "target\n"), ("b.md", "target\n")]);
+        let hits = search(&c, &parse("target"), 20, "2026-08-10").unwrap().0;
+        let human = hits.iter().find(|h| h.path == "a.note.md").expect("a.note.md must be found");
+        let source = hits.iter().find(|h| h.path == "b.md").expect("b.md must be found");
+        assert_eq!(human.origin, Origin::Human, "{human:?}");
+        assert_eq!(source.origin, Origin::Source, "{source:?}");
+    }
+
     #[test]
     fn finds_an_ascii_term_and_returns_a_source_anchor() {
         let (_d, c) = indexed(&[("2026-01-01-a.md", "# T\n\nthe quick brownfox\n")]);
@@ -699,6 +728,19 @@ mod tests {
         let source = score_of(-1.0, &hit_with(Origin::Source), false, false, "2026-08-10");
         assert!(human > derived, "human 必须高于 derived: {human} vs {derived}");
         assert!(derived > source, "derived 必须高于 source: {derived} vs {source}");
+        // Review round 1, Important #2: the two inequalities above only pin
+        // `Derived` to the open interval (0.9, 1.25) — a later "unclassified
+        // deserves a small nudge" change (e.g. `Derived => 1.1`) would still
+        // satisfy both and slip through green. `Derived` being EXACTLY the
+        // identity multiplier is the real invariant: it's what
+        // `store::origin_of` falls back to for an unreadable/unknown/NULL
+        // origin, so "fail toward neutral" only holds if neutral means
+        // literally no change. Pin the exact value against a tier-bypassed
+        // reference: with `rank = -1.0` and every other boost off, `r/(1+r)`
+        // computes to exactly `0.5` before any origin multiplier is applied
+        // — `Derived`'s score must equal that reference exactly, not just
+        // sit somewhere between `source` and `human`.
+        assert_eq!(derived, 0.5, "Derived must be the exact identity multiplier, not merely `< human` and `> source`");
     }
 
     /// The test above can pass on stable-sort tie-breaking alone (see its
