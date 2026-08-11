@@ -187,6 +187,29 @@ pub fn resolve_sync_dir_from(vs: &VaultSettings) -> String {
         .unwrap_or_else(|| DEFAULT_SYNC_DIR.to_string())
 }
 
+/// Did a settings write change the **effective** sync directory — i.e. the
+/// one input `searchidx::origin::derive` (rule 5) reads, and therefore the
+/// one whose change invalidates every `origin` already stored in the index?
+///
+/// Compared on the *resolved* value, not the raw field, so the two ways of
+/// saying "sync" (absent, and explicitly `"sync"`) are the same answer, and
+/// an invalid value that falls back to the default is too. A save that only
+/// touches one of the other six fields answers `false` — reopening the index
+/// costs a full rebuild (search unavailable for the duration), and the six of
+/// them are no reason to pay it.
+///
+/// The caller is `notemd_vault_settings_set`, the single choke point every
+/// settings write goes through, which reopens the search index when this is
+/// true. Without that, `search::open_vault` would run only at launch and
+/// vault-pick, while `search::options::for_vault` is recomputed on the
+/// watcher's per-batch path — so from the moment the setting changed, every
+/// touched file would be re-indexed under the *new* `sync_dir` into a
+/// database stamped with the *old* one, and the untouched majority would
+/// stay silently misclassified.
+pub fn sync_dir_changed(before: &VaultSettings, after: &VaultSettings) -> bool {
+    resolve_sync_dir_from(before) != resolve_sync_dir_from(after)
+}
+
 /// The effective quick-note inbox sub-directory: the configured value when
 /// present and valid, otherwise [`DEFAULT_INBOX_DIR`].
 pub fn resolve_inbox_dir(vault_root: &Path) -> String {
@@ -455,5 +478,41 @@ mod tests {
     fn merge_rejects_a_zero_search_threshold() {
         let base = VaultSettings::default();
         assert!(merge(base, None, None, None, None, None, None, Some(0)).is_err());
+    }
+
+    /// Gate for `notemd_vault_settings_set`'s index reopen. `syncDir` is the
+    /// only setting the search index stamps and derives `origin` from, so it
+    /// is the only one worth a full rebuild — and it must be judged on the
+    /// *resolved* value, or absent-vs-`"sync"` (or any value that falls back
+    /// to the default) would trigger a rebuild that changes nothing.
+    #[test]
+    fn sync_dir_changed_compares_the_resolved_value_only() {
+        let with = |d: Option<&str>| VaultSettings {
+            sync_dir: d.map(str::to_string),
+            ..Default::default()
+        };
+        assert!(sync_dir_changed(&with(Some("sync")), &with(Some("box"))), "a real change must reopen");
+        assert!(sync_dir_changed(&with(None), &with(Some("box"))), "default -> explicit is a real change");
+
+        assert!(!sync_dir_changed(&with(None), &with(None)));
+        assert!(!sync_dir_changed(&with(Some("sync")), &with(Some("sync"))));
+        assert!(
+            !sync_dir_changed(&with(None), &with(Some(DEFAULT_SYNC_DIR))),
+            "absent and the explicit default resolve to the same directory"
+        );
+        assert!(
+            !sync_dir_changed(&with(Some("sync")), &with(Some("../escape"))),
+            "an invalid value resolves back to the default; nothing the index reads changed"
+        );
+
+        // The six other fields must not drag the index through a rebuild.
+        let mut other = with(Some("sync"));
+        other.wikipage_dir = Some("wiki".into());
+        other.dailynote_dir = Some("daily".into());
+        other.inbox_dir = Some("in".into());
+        other.large_file_threshold_mb = Some(3);
+        other.search_large_file_threshold_mb = Some(9);
+        other.search_exclude_dirs = Some(vec!["node_modules".into()]);
+        assert!(!sync_dir_changed(&with(Some("sync")), &other));
     }
 }

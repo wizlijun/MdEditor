@@ -296,6 +296,40 @@ pub fn notemd_vault_settings_get(app: AppHandle) -> Result<vault_settings::Vault
     Ok(vault_settings::read(&vault_root))
 }
 
+/// Validate, merge and persist a partial settings update, reporting whether
+/// the search index has to be reopened afterwards (`syncDir` moved — see
+/// `vault_settings::sync_dir_changed`).
+///
+/// Split out of the command below so that decision is drivable from a test
+/// without an `AppHandle`, the same way `search::skipped_write_if_current` is
+/// split out of `open_vault`.
+#[allow(clippy::too_many_arguments)]
+fn persist_vault_settings(
+    vault_root: &Path,
+    sync_dir: Option<String>,
+    wikipage_dir: Option<String>,
+    dailynote_dir: Option<String>,
+    large_file_threshold_mb: Option<u32>,
+    inbox_dir: Option<String>,
+    search_exclude_dirs: Option<Vec<String>>,
+    search_large_file_threshold_mb: Option<u32>,
+) -> Result<(vault_settings::VaultSettings, bool), String> {
+    let base = vault_settings::read(vault_root);
+    let merged = vault_settings::merge(
+        base.clone(),
+        sync_dir,
+        wikipage_dir,
+        dailynote_dir,
+        large_file_threshold_mb,
+        inbox_dir,
+        search_exclude_dirs,
+        search_large_file_threshold_mb,
+    )?;
+    vault_settings::write(vault_root, &merged)?;
+    let reopen_index = vault_settings::sync_dir_changed(&base, &merged);
+    Ok((merged, reopen_index))
+}
+
 /// Partial update: only the provided (non-null) fields are validated and
 /// written; the rest keep their current on-disk value. Returns the merged
 /// settings actually persisted.
@@ -311,9 +345,8 @@ pub fn notemd_vault_settings_set(
     search_large_file_threshold_mb: Option<u32>,
 ) -> Result<vault_settings::VaultSettings, String> {
     let vault_root = resolve_vault_root(&app).ok_or("Vault not configured")?;
-    let base = vault_settings::read(&vault_root);
-    let merged = vault_settings::merge(
-        base,
+    let (merged, reopen_index) = persist_vault_settings(
+        &vault_root,
         sync_dir,
         wikipage_dir,
         dailynote_dir,
@@ -322,7 +355,19 @@ pub fn notemd_vault_settings_set(
         search_exclude_dirs,
         search_large_file_threshold_mb,
     )?;
-    vault_settings::write(&vault_root, &merged)?;
+    // `syncDir` is the one setting the search index stores a *derived value*
+    // from (`origin`, rule 5) and stamps into its own `meta`. Reopening here
+    // is what keeps the two in step: it re-derives every row under the new
+    // directory, and it does so from *this* process, which holds the live
+    // connection — before some other process (an agent's `notemd search`)
+    // finds the stamp stale and rebuilds the index underneath us. Hooked at
+    // the command rather than in the frontend's `saveSyncDir` so no future
+    // caller of this command can forget it. Returns immediately; the reopen
+    // (open + build + sweep) runs on its own thread.
+    if reopen_index {
+        crate::log_cat!("search", "info", "syncDir changed — reopening the index");
+        crate::search::open_vault(&app, &vault_root);
+    }
     Ok(merged)
 }
 
@@ -692,6 +737,57 @@ pub fn sotvault_accept_current(app: AppHandle, vault_path: String) -> Result<(),
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// `syncDir` is a runtime-editable setting that every stored `origin`
+    /// (`searchidx::origin::derive` rule 5) is derived from, so a save that
+    /// moves it must tell the caller to reopen the index. Nothing else did:
+    /// `search::open_vault` runs only at launch and vault-pick, while
+    /// `search::options::for_vault` is recomputed on the watcher's per-batch
+    /// path — so every file touched after the change was re-indexed under the
+    /// new directory into a database stamped with the old one, the untouched
+    /// majority stayed misclassified, and the settings page's tier counts
+    /// were wrong with no signal anywhere.
+    ///
+    /// Driven through the persist function rather than the command so the
+    /// decision is testable without an `AppHandle` (same reason
+    /// `search::skipped_write_if_current` is factored out of `open_vault`).
+    #[test]
+    fn persisting_a_new_sync_dir_asks_for_an_index_reopen() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let (merged, reopen) = persist_vault_settings(
+            root, Some("box".into()), None, None, None, None, None, None,
+        )
+        .unwrap();
+        assert_eq!(merged.sync_dir.as_deref(), Some("box"));
+        assert!(reopen, "moving syncDir invalidates every stored origin");
+        assert_eq!(vault_settings::read(root).sync_dir.as_deref(), Some("box"), "and it must be persisted");
+
+        // Re-saving the same value changes nothing the index reads.
+        let (_, reopen) = persist_vault_settings(
+            root, Some("box".into()), None, None, None, None, None, None,
+        )
+        .unwrap();
+        assert!(!reopen, "an unchanged syncDir must not cost a full rebuild");
+
+        // Nor does any of the six other fields — each of them alone.
+        for (i, args) in [
+            (Some("wiki".to_string()), None, None, None, None, None),
+            (None, Some("daily".to_string()), None, None, None, None),
+            (None, None, Some(3u32), None, None, None),
+            (None, None, None, Some("in".to_string()), None, None),
+            (None, None, None, None, Some(vec!["node_modules".to_string()]), None),
+            (None, None, None, None, None, Some(9u32)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (_, reopen) =
+                persist_vault_settings(root, None, args.0, args.1, args.2, args.3, args.4, args.5).unwrap();
+            assert!(!reopen, "settings field #{i} must not trigger an index rebuild");
+        }
+    }
 
     #[test]
     fn bundle_copies_image_and_rewrites_link() {
