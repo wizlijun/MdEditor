@@ -32,6 +32,7 @@
     type OutlineCommandId,
   } from '../lib/outline/shortcuts'
   import VaultSettingsTab from './VaultSettingsTab.svelte'
+  import { uiState } from '../lib/ui-state.svelte'
 
   let { open = $bindable(false) }: { open: boolean } = $props()
 
@@ -43,6 +44,21 @@
   let pluginTabs = $state<SettingsTab[]>([])
   let selectedTab = $state<'core' | string>('core')
   let pluginValues = $state<Record<string, Record<string, unknown>>>({})
+
+  // Callers that want the dialog to land on a specific tab (e.g. the search
+  // panel's gear button) go through `openSettings(tab)`, which stashes the
+  // request in `uiState.pendingSettingsTab` rather than writing `selectedTab`
+  // directly — this module doesn't otherwise know about ui-state.svelte, and
+  // routing through a pending flag means a repeat request for the same tab
+  // (dialog already open, already on 'search') still re-fires because the
+  // flag itself changed, not just its value. Consumed once, then cleared, so
+  // a plain reopen (no tab requested) doesn't fight the user's manual tab pick.
+  $effect(() => {
+    if (open && uiState.pendingSettingsTab) {
+      selectedTab = uiState.pendingSettingsTab
+      uiState.pendingSettingsTab = null
+    }
+  })
 
   // Vault-scoped sync folder (stored in {vault}/.notemd/settings.json). Loaded
   // whenever the dialog opens; edited into a draft, then saved on demand.

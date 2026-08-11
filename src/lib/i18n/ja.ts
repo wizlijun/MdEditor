@@ -482,6 +482,7 @@ export const ja: Record<keyof Messages, string> = {
   'search.fallbackScan': '辞書未収録 — 直接スキャンにフォールバックしました',
   'search.notReady': 'インデックスを構築中です',
   'search.rebuild': 'インデックスを再構築',
+  'search.openIndexSettings': '検索とインデックスの設定',
   'search.agentWritten': 'AI が記述 ({agent})',
   'search.humanVerified': '人が確認済み',
   'search.agentsHint': 'AGENTS.md に検索インデックスのことが書かれていません。',

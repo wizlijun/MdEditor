@@ -9,7 +9,8 @@
   import { setSideVisible } from '../../lib/side-panel/registry.svelte'
   import SideViewSwitcher from './SideViewSwitcher.svelte'
   import { searchStore, isIndexNotReady } from '../../lib/search/store.svelte'
-  import { searchApi, type SearchHit } from '../../lib/search/api'
+  import type { SearchHit } from '../../lib/search/api'
+  import { openSettings } from '../../lib/ui-state.svelte'
 
   // `tab` is part of every side view's props contract (see SidePanel.svelte);
   // this panel is vault-wide rather than per-document, so only the
@@ -22,11 +23,6 @@
   let inputValue = $state('')
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
   onDestroy(() => { if (debounceTimer) clearTimeout(debounceTimer) })
-
-  // `notemd_search_rebuild` holds the index lock for its whole duration, so a
-  // query fired mid-rebuild would just hang with no visible cause. Disabling
-  // the input for that window turns a silent hang into an honest wait state.
-  let rebuilding = $state(false)
 
   // Anything other than the known "not ready" case is shown as-is — better
   // than nothing, not pretending to translate arbitrary Rust error text.
@@ -47,18 +43,6 @@
       if (debounceTimer) clearTimeout(debounceTimer)
       inputValue = ''
       searchStore.clear()
-    }
-  }
-
-  async function onRebuild() {
-    rebuilding = true
-    try {
-      await searchApi.rebuild()
-      if (inputValue.trim()) await searchStore.run(inputValue)
-    } catch (e) {
-      showError(String(e))
-    } finally {
-      rebuilding = false
     }
   }
 
@@ -110,8 +94,9 @@
   // fires while some other actor holds the backend index mutex mid-rebuild,
   // the rerun below still blocks for that rebuild's full duration with only
   // the generic `loading` state to show for it — the same class of silent
-  // hang the brief flagged for this panel's own rebuild button, just
-  // triggered externally instead of from this UI. A real fix needs a
+  // hang a locally-triggered rebuild would cause, just triggered externally
+  // instead of from this UI (the rebuild entry point now lives in the
+  // "搜索与索引" Settings tab, not this panel). A real fix needs a
   // backend-reported "busy" signal (e.g. a distinct event/state emitted
   // around `notemd_search_rebuild`), which is out of scope for this panel.
   $effect(() => {
@@ -130,6 +115,12 @@
       </svg>
     </button>
     <SideViewSwitcher side="left" {tab} />
+    <button class="hbtn settings-btn" title={t('search.openIndexSettings')} aria-label={t('search.openIndexSettings')} onclick={() => openSettings('search')}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </button>
   </header>
 
   <div class="search-input-row">
@@ -140,7 +131,6 @@
       bind:value={inputValue}
       oninput={scheduleSearch}
       onkeydown={onKeydown}
-      disabled={rebuilding}
     />
   </div>
 
@@ -148,12 +138,7 @@
     {#if searchStore.error}
       <div class="error-row">
         <p class="error">{errorText}</p>
-        <button class="rebuild-btn" onclick={() => void onRebuild()} disabled={rebuilding}>
-          {t('search.rebuild')}
-        </button>
       </div>
-    {:else if rebuilding}
-      <p class="empty">{t('search.notReady')}</p>
     {:else if searchStore.loading}
       <p class="empty">…</p>
     {:else if searchStore.route !== null && searchStore.hits.length === 0}
@@ -228,18 +213,11 @@
     background: var(--input-bg, #fff); color: inherit;
   }
   .search-input:focus { outline: none; border-color: rgba(0,120,255,0.6); }
-  .search-input:disabled { opacity: 0.6; }
   .body { flex: 1; overflow-y: auto; padding: 4px; }
   .empty { padding: 8px; opacity: 0.5; font-size: 12px; }
   .error-row { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
   .error { margin: 0; font-size: 12px; color: #c0392b; }
-  .rebuild-btn {
-    align-self: flex-start;
-    font-size: 12px; padding: 3px 8px; border-radius: 4px;
-    border: 1px solid var(--border-color, #3335); background: transparent; cursor: pointer;
-  }
-  .rebuild-btn:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
-  .rebuild-btn:disabled { opacity: 0.5; cursor: default; }
+  .settings-btn { margin-left: auto; }
   .hits { list-style: none; margin: 0; padding: 0; }
   .hit { border-radius: 6px; }
   .row {
@@ -268,7 +246,6 @@
     .hbtn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
     .search-input { border-color: rgba(255,255,255,0.18); background: var(--input-bg, #2a2a2c); }
     .row:hover { background: rgba(255,255,255,0.08); }
-    .rebuild-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
     .error { color: #ff6b5e; }
   }
 </style>

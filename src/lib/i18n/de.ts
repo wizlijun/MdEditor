@@ -480,6 +480,7 @@ export const de: Record<keyof Messages, string> = {
   'search.fallbackScan': 'Wörterbuch ohne Treffer — auf direkten Scan zurückgefallen',
   'search.notReady': 'Der Index wird noch erstellt',
   'search.rebuild': 'Index neu erstellen',
+  'search.openIndexSettings': 'Such- und Indexeinstellungen',
   'search.agentWritten': 'KI-geschrieben ({agent})',
   'search.humanVerified': 'Menschlich bestätigt',
   'search.agentsHint': 'Deine AGENTS.md erwähnt den Suchindex noch nicht.',

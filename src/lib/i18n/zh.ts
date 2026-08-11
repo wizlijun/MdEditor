@@ -515,6 +515,7 @@ export const zh: Record<keyof Messages, string> = {
   'search.fallbackScan': '词典未收录——已降级为直接扫描',
   'search.notReady': '索引仍在构建',
   'search.rebuild': '重建索引',
+  'search.openIndexSettings': '搜索与索引设置',
   'search.agentWritten': 'AI 写的({agent})',
   'search.humanVerified': '人工确认',
   'search.agentsHint': '你的 AGENTS.md 还没告诉 agent 有搜索索引可用。',

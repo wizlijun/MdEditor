@@ -487,6 +487,7 @@ export const en = {
   'search.fallbackScan': 'Dictionary miss — fell back to a direct scan',
   'search.notReady': 'The index is still building',
   'search.rebuild': 'Rebuild index',
+  'search.openIndexSettings': 'Search & Index settings',
   'search.agentWritten': 'AI-written ({agent})',
   'search.humanVerified': 'Human-verified',
   'search.agentsHint': 'Your AGENTS.md does not tell agents about the search index.',
