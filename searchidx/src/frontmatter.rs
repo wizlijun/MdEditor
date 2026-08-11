@@ -15,6 +15,7 @@ pub struct Frontmatter {
     pub created: Option<String>,
     pub date: Option<String>,
     pub generated_at: Option<String>,
+    pub generated_by: Option<String>,
     /// True when a `verified` entry carries a `by:` with the OKF `human:` prefix.
     pub human_verified: bool,
 }
@@ -79,8 +80,10 @@ pub fn parse(raw: &str) -> Frontmatter {
             }
             "generated" => {
                 for entry in collect_block(&mut lines) {
-                    if let Some(("at", v)) = split_key(entry.trim().trim_start_matches("- ")) {
-                        fm.generated_at = scalar(v);
+                    match split_key(entry.trim().trim_start_matches("- ")) {
+                        Some(("at", v)) => fm.generated_at = scalar(v),
+                        Some(("by", v)) => fm.generated_by = scalar(v),
+                        _ => {}
                     }
                 }
             }
@@ -189,6 +192,26 @@ mod tests {
     fn reads_generated_at_from_the_nested_generated_block() {
         let f = parse("generated:\n  by: claude/1\n  at: 2026-08-01T10:00:00Z");
         assert_eq!(f.generated_at.as_deref(), Some("2026-08-01T10:00:00Z"));
+    }
+
+    #[test]
+    fn reads_generated_by_alongside_generated_at() {
+        let f = parse("generated:\n  by: claude/1\n  at: 2026-08-01T10:00:00Z");
+        assert_eq!(f.generated_by.as_deref(), Some("claude/1"));
+        assert_eq!(f.generated_at.as_deref(), Some("2026-08-01T10:00:00Z"));
+    }
+
+    /// OKF §7:人工撰写或人工确认必须用 `human:` 前缀。原样保留,
+    /// 由 origin 推导去判断前缀 —— 解析层不做语义。
+    #[test]
+    fn a_human_generated_by_is_preserved_verbatim() {
+        assert_eq!(parse("generated:\n  by: human:bruce").generated_by.as_deref(), Some("human:bruce"));
+    }
+
+    #[test]
+    fn generated_by_is_none_when_absent() {
+        assert_eq!(parse("title: x").generated_by, None);
+        assert_eq!(parse("generated:\n  at: 2026-01-01").generated_by, None);
     }
 
     /// OKF §7:人工确认必须用 `human:` 前缀。§11:裸 mapping 当单元素列表处理。
