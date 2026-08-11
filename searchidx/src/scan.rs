@@ -309,6 +309,20 @@ fn sweep_with_budget(
     let total = candidates.len();
     let mut stats = ScanStats { files_skipped_large: skipped, ..Default::default() };
 
+    // Announce entering Indexing unconditionally (not throttled, not
+    // gated by the budget check below) whenever there is work queued. An
+    // already-expired deadline can trip `over_budget()` on the very first
+    // candidate, `break`-ing before that iteration's own throttled report
+    // ever runs — without this line the whole run would go straight from
+    // Walking to Done with no sign that Indexing was ever entered or that
+    // `total` candidates were queued for it. This report always carries
+    // `done: 0`, so it never overlaps in meaning with the per-candidate
+    // reports below, which report only after a candidate is actually
+    // considered.
+    if total > 0 {
+        report(Phase::Indexing, 0, total, None);
+    }
+
     let tx = conn.transaction()?;
     // Owned strings, not `&c.rel` borrows: `candidates` and `tx` are both
     // alive at once, and `tx` needs `&mut` access inside the loop below, so
@@ -596,6 +610,29 @@ mod tests {
         fs::write(v.path().join("a.md"), "alpha changed\n").unwrap();
         let s = sweep(&mut c, v.path(), &ScanOptions::default(), None, None).unwrap();
         assert_eq!(s.files_indexed, 1);
+    }
+
+    /// review round 1: an already-expired budget must not let the run jump
+    /// straight from `Walking` to `Done` — the caller still needs to learn
+    /// that `Indexing` was entered (and that `total` candidates were
+    /// queued for it) even though the very first candidate trips
+    /// `over_budget()` before any per-candidate work or throttled report
+    /// runs.
+    #[test]
+    fn an_immediately_expired_budget_still_announces_indexing_before_done() {
+        let v = vault(&[("a.md", "alpha\n"), ("b.md", "beta\n")]);
+        let mut c = conn_for(v.path());
+        build_full(&mut c, v.path(), &ScanOptions::default(), None).unwrap();
+        let (log, cb) = recording();
+        let s = sweep_with_budget(&mut c, v.path(), &ScanOptions::default(), || true, Some(&cb)).unwrap();
+        assert!(s.timed_out);
+        assert_eq!(s.files_indexed, 0, "over_budget trips before any candidate is processed");
+
+        let entries = log.lock().unwrap().clone();
+        let phases: Vec<Phase> = entries.iter().map(|e| e.0).collect();
+        assert_eq!(phases, vec![Phase::Walking, Phase::Indexing, Phase::Done], "{phases:?}");
+        let indexing = entries.iter().find(|e| e.0 == Phase::Indexing).unwrap();
+        assert_eq!(*indexing, (Phase::Indexing, 0, 2), "announces the phase with 0 done and the real total, not a per-candidate count");
     }
 
     #[test]
