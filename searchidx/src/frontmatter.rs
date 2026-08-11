@@ -123,20 +123,47 @@ pub fn parse(raw: &str) -> Frontmatter {
 /// person's inline `human:` signature lost both its tier and its
 /// `human_verified` boost.
 ///
-/// An empty value means the block form (the value is on the following
-/// indented lines); anything else is parsed as flow and the block is left
-/// alone. Not consuming the following lines in that case is safe — `parse`'s
+/// Flow is only *preferred*, never assumed: the block form must keep working
+/// for every key line the pre-flow reader accepted, because a silent
+/// regression here lands agent output back in the `Human` tier — the failure
+/// spec §3.2 calls the expensive one. So a non-empty value is tried as flow
+/// and the block is taken instead whenever that yields nothing `split_key`
+/// would accept. That covers the three legal shapes a bare emptiness test
+/// gets wrong:
+///
+/// ```text
+/// generated:  # stamped by the agent      <- trailing comment, block below
+/// generated: {                            <- flow mapping wrapped over lines
+///   by: claude-code/opus-5
+/// }
+/// generated: {}                           <- empty flow, block below
+/// ```
+///
+/// Not consuming the following lines when flow *did* parse is safe — `parse`'s
 /// main loop skips every whitespace-led line anyway, so nothing leaks into a
 /// column-0 key.
 fn entries_for<'a>(
     value: &str,
     lines: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>,
 ) -> Vec<String> {
-    if value.trim().is_empty() {
-        collect_block(lines)
-    } else {
-        parse_inline_entries(value)
+    let inline = parse_inline_entries(strip_trailing_comment(value));
+    if inline.iter().any(|e| split_key(e).is_some()) {
+        return inline;
     }
+    collect_block(lines)
+}
+
+/// Drop a trailing YAML comment so `generated:  # stamped by the agent` is
+/// still recognised as the block form. Only a `#` that opens the line or
+/// follows whitespace starts a comment, so a `#` inside a value survives.
+fn strip_trailing_comment(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    for (i, _) in value.char_indices().filter(|&(_, c)| c == '#') {
+        if i == 0 || bytes[i - 1].is_ascii_whitespace() {
+            return &value[..i];
+        }
+    }
+    value
 }
 
 /// Split a flow mapping/sequence into the same flat `key: value` entry
@@ -323,6 +350,38 @@ mod tests {
         assert_eq!(block.generated_by, inline.generated_by);
         assert_eq!(block.generated_at, inline.generated_at);
         assert!(parse("verified:\n  - by: human:me").human_verified);
+    }
+
+    /// Reading flow must not cost us block. Three legal shapes put something
+    /// after the colon while the real value is still on the following lines;
+    /// treating "non-empty value" as "this is flow" abandoned the block and
+    /// sent agent output back into `Human` — the direction spec §3.2 calls the
+    /// expensive failure. Each case below is a document a person or an agent
+    /// can plausibly write, so each is asserted separately rather than as one
+    /// table: a shared loop would let one shape's regression hide in another's
+    /// pass.
+    #[test]
+    fn a_block_form_survives_anything_that_follows_its_colon() {
+        // A trailing YAML comment on the key line.
+        let commented = parse("generated:  # stamped by the agent\n  by: claude-code/opus-5");
+        assert_eq!(commented.generated_by.as_deref(), Some("claude-code/opus-5"));
+        assert!(parse("verified:  # signed off\n  - by: human:me").human_verified);
+
+        // A flow mapping the author wrapped across lines.
+        let wrapped = parse("generated: {\n  by: claude-code/opus-5\n}");
+        assert_eq!(wrapped.generated_by.as_deref(), Some("claude-code/opus-5"));
+
+        // An empty flow mapping with the entries indented beneath it.
+        let empty_flow = parse("generated: {}\n  by: claude-code/opus-5");
+        assert_eq!(empty_flow.generated_by.as_deref(), Some("claude-code/opus-5"));
+    }
+
+    /// The comment stripper must not eat a `#` that is part of a value —
+    /// only one opening the line or following whitespace starts a comment.
+    #[test]
+    fn a_hash_inside_an_inline_value_is_not_a_comment() {
+        let fm = parse("generated: { by: agent#7/1.0 }");
+        assert_eq!(fm.generated_by.as_deref(), Some("agent#7/1.0"));
     }
 
     /// 宽容义务 again, now for the flow forms: an unterminated brace, an empty

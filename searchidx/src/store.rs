@@ -299,12 +299,6 @@ fn set_pragmas(conn: &Connection) -> rusqlite::Result<()> {
 /// them is the design, so contention is ordinary, not exceptional.
 const BUSY_TIMEOUT_MS: i32 = 5000;
 
-/// Delete the database file at `db_path` (best-effort for its `-wal`/`-shm`
-/// sidecars — SQLite recreates those on demand, so leaving a stray one
-/// behind is harmless) and report whether the *main* file is actually gone
-/// afterward. `remove_file`'s own `Result` is not trusted on its own: the
-/// caller needs to know the file is really gone, not just that the removal
-/// call didn't error, so this re-checks with `Path::exists`.
 /// Empty every derived table and re-stamp `sync_dir`, keeping the file (and
 /// therefore the inode, and therefore every other process's open handle on
 /// it) exactly where it is. The safe counterpart to [`wipe`] for the one
@@ -331,6 +325,16 @@ fn rebuild_in_place(conn: &Connection, sync_dir: &str) -> rusqlite::Result<()> {
     tx.commit()
 }
 
+/// Delete the database file at `db_path` (best-effort for its `-wal`/`-shm`
+/// sidecars — SQLite recreates those on demand, so leaving a stray one behind
+/// is harmless) and report whether the *main* file is actually gone afterward.
+/// `remove_file`'s own `Result` is not trusted on its own: the caller needs to
+/// know the file is really gone, not just that the removal call didn't error,
+/// so this re-checks with `Path::exists`.
+///
+/// Unlinking is only safe for staleness triggers that cannot change while the
+/// database is open — `schema_version` and `tokenizer_id` both move with the
+/// binary. For one a user can flip mid-session, use [`rebuild_in_place`].
 fn wipe(db_path: &Path) -> bool {
     let _ = std::fs::remove_file(db_path);
     for suffix in ["-wal", "-shm"] {
