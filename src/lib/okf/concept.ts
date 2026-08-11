@@ -9,6 +9,14 @@ import { basename } from '../paths'
 /**
  * 本项目使用的 `type` 取值表。OKF 不做中心注册(§4.1),但项目内必须唯一登记
  * 在这里,避免每个写入点各造一套。新增写入点时在此登记后再用。
+ *
+ * **新增一个值时,必须同时给 `searchidx` 的 origin 分级表(`searchidx/src/
+ * origin.rs` 的 `mapped_type_origin`)补上对应档位**,并跑一次
+ * `pnpm gen:origin-types` 重新生成 `searchidx/tests/fixtures/origin/
+ * concept-types.json`(design spec §3.1)。`concept-origin-sync.test.ts` +
+ * `origin.rs` 的跨语言测试只挡得住「加了没映射」——新值编译/测试都过但没人给它
+ * 定档位——挡不住「映射到了错误的层」;后者要靠加值的人自己判断该进
+ * human/derived/source 哪一档。
  */
 export const CONCEPT_TYPE = {
   /** 普通 markdown 笔记(⌘N 新建、vault 外建页) */

@@ -15,6 +15,7 @@ pub mod chunk;
 pub mod frontmatter;
 pub mod links;
 pub mod norm;
+pub mod origin;
 pub mod outline;
 pub mod paths;
 pub mod prose;
