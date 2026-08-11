@@ -498,6 +498,7 @@ export const de: Record<keyof Messages, string> = {
   'search.index.rebuildConfirmBody': 'Dies ist eine vollständige Neuerstellung — jede Datei wird von Grund auf neu gescannt. Während des Vorgangs ist die Suche nicht verfügbar, für deine {files} Dateien dauert das etwa {seconds}s. Es gehen keine Notizen verloren: Der Index ist nur eine Wegwerfkopie, die aus deinen Markdown-Dateien abgeleitet wird, nicht die Dateien selbst.',
   'search.index.rebuildConfirmBodyUnknown': 'Dies ist eine vollständige Neuerstellung — jede Datei wird von Grund auf neu gescannt. Während des Vorgangs ist die Suche nicht verfügbar. Es gehen keine Notizen verloren: Der Index ist nur eine Wegwerfkopie, die aus deinen Markdown-Dateien abgeleitet wird, nicht die Dateien selbst.',
   'search.index.busyNotice': 'Es läuft bereits eine Neuerstellung.',
+  'search.index.rebuildError': 'Neuerstellung fehlgeschlagen: {error}',
   'search.index.progressHeading': 'Wird neu erstellt…',
   'search.index.phase.walking': 'Dateien werden gescannt',
   'search.index.phase.indexing': 'Wird indexiert',

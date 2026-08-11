@@ -533,6 +533,7 @@ export const zh: Record<keyof Messages, string> = {
   'search.index.rebuildConfirmBody': '这是一次全量重建——每个文件都会从头重新扫描。重建期间搜索不可用,你的 {files} 个文件大约需要 {seconds} 秒。不会丢失任何笔记:索引只是从你的 markdown 文件派生出的可丢弃副本,不是文件本身。',
   'search.index.rebuildConfirmBodyUnknown': '这是一次全量重建——每个文件都会从头重新扫描。重建期间搜索不可用。不会丢失任何笔记:索引只是从你的 markdown 文件派生出的可丢弃副本,不是文件本身。',
   'search.index.busyNotice': '已有一次重建在进行中。',
+  'search.index.rebuildError': '重建失败:{error}',
   'search.index.progressHeading': '正在重建…',
   'search.index.phase.walking': '扫描文件中',
   'search.index.phase.indexing': '索引中',

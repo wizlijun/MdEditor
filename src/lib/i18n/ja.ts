@@ -500,6 +500,7 @@ export const ja: Record<keyof Messages, string> = {
   'search.index.rebuildConfirmBody': 'これは全量の再構築です——すべてのファイルを最初からスキャンし直します。実行中は検索が使えなくなります。{files} 件のファイルでおよそ {seconds} 秒かかる見込みです。ノートが失われることはありません:インデックスは markdown ファイルから派生した使い捨てのコピーであり、ファイル自体ではありません。',
   'search.index.rebuildConfirmBodyUnknown': 'これは全量の再構築です——すべてのファイルを最初からスキャンし直します。実行中は検索が使えなくなります。ノートが失われることはありません:インデックスは markdown ファイルから派生した使い捨てのコピーであり、ファイル自体ではありません。',
   'search.index.busyNotice': '既に再構築が実行中です。',
+  'search.index.rebuildError': '再構築に失敗しました:{error}',
   'search.index.progressHeading': '再構築中…',
   'search.index.phase.walking': 'ファイルをスキャン中',
   'search.index.phase.indexing': 'インデックス作成中',

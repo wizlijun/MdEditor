@@ -161,14 +161,30 @@ describe('indexStatus.requestRebuild', () => {
     expect(indexStatus.error).toBeNull()
   })
 
-  it('把已在运行以外的失败呈现为 error,而不是静默吞掉或误标成 busyNotice', async () => {
+  it('把已在运行以外的失败呈现为 rebuildError,而不是静默吞掉或误标成 busyNotice', async () => {
     _setIndexApi({
       stats: async () => null, progress: async () => null,
       rebuild: async () => { throw new Error('disk full') },
     })
     await indexStatus.requestRebuild(async () => true)
-    expect(indexStatus.error).toBe('disk full')
+    expect(indexStatus.rebuildError).toBe('disk full')
     expect(indexStatus.busyNotice).toBe(false)
+  })
+
+  // The bug this guards against: `requestRebuild` used to write non-busy
+  // failures into the same `error` field that gates which template branch
+  // the whole settings panel renders — including the rebuild button itself.
+  // A failed rebuild therefore made its own retry button disappear. A
+  // rebuild failure must leave `error` untouched so the branch (and the
+  // button in it) stays reachable — that's the actual retry path, not a
+  // cosmetic detail.
+  it('一次重建失败后 panel 级 error 保持 null——按钮所在的分支不会被换成报错态', async () => {
+    _setIndexApi({
+      stats: async () => null, progress: async () => null,
+      rebuild: async () => { throw new Error('disk full') },
+    })
+    await indexStatus.requestRebuild(async () => true)
+    expect(indexStatus.error).toBeNull()
   })
 
   it('每次调用先清掉上一次的 busyNotice,不会陈旧地留着', async () => {
@@ -182,6 +198,65 @@ describe('indexStatus.requestRebuild', () => {
     _setIndexApi({ stats: async () => null, progress: async () => null, rebuild: async () => {} })
     await indexStatus.requestRebuild(async () => true)
     expect(indexStatus.busyNotice).toBe(false)
+  })
+
+  it('每次调用也先清掉上一次的 rebuildError,不会陈旧地留着', async () => {
+    _setIndexApi({
+      stats: async () => null, progress: async () => null,
+      rebuild: async () => { throw new Error('disk full') },
+    })
+    await indexStatus.requestRebuild(async () => true)
+    expect(indexStatus.rebuildError).toBe('disk full')
+
+    _setIndexApi({ stats: async () => null, progress: async () => null, rebuild: async () => {} })
+    await indexStatus.requestRebuild(async () => true)
+    expect(indexStatus.rebuildError).toBeNull()
+  })
+})
+
+describe('busyNotice staleness — must clear once the OTHER rebuild is actually done, not just on the next requestRebuild() call', () => {
+  it('refresh() clears a stale busyNotice once progress() reports nothing is running', async () => {
+    _setIndexApi({
+      stats: async () => null, progress: async () => null,
+      rebuild: async () => { throw new Error('rebuild already running') },
+    })
+    await indexStatus.requestRebuild(async () => true)
+    expect(indexStatus.busyNotice).toBe(true)
+
+    // e.g. triggered by `subscribe()`'s search://index-updated handler once
+    // the OTHER rebuild finishes — progress() now returns null.
+    _setIndexApi({ stats: async () => null, progress: async () => null, rebuild: async () => {} })
+    await indexStatus.refresh()
+    expect(indexStatus.busyNotice).toBe(false)
+  })
+
+  it('refresh() leaves busyNotice set while the other rebuild is still running', async () => {
+    _setIndexApi({
+      stats: async () => null, progress: async () => null,
+      rebuild: async () => { throw new Error('rebuild already running') },
+    })
+    await indexStatus.requestRebuild(async () => true)
+    expect(indexStatus.busyNotice).toBe(true)
+
+    _setIndexApi({
+      stats: async () => null,
+      progress: async () => ({ phase: 'indexing', done: 3, total: 10, current: null, elapsedMs: 5 }),
+      rebuild: async () => {},
+    })
+    await indexStatus.refresh()
+    expect(indexStatus.busyNotice).toBe(true)
+  })
+
+  it('a done progress event clears a stale busyNotice too', () => {
+    indexStatus.busyNotice = true
+    indexStatus.applyProgress({ phase: 'done', done: 10, total: 10, current: null, elapsedMs: 10 })
+    expect(indexStatus.busyNotice).toBe(false)
+  })
+
+  it('a non-done progress event does not clear busyNotice — the other rebuild is still running', () => {
+    indexStatus.busyNotice = true
+    indexStatus.applyProgress({ phase: 'indexing', done: 5, total: 10, current: null, elapsedMs: 5 })
+    expect(indexStatus.busyNotice).toBe(true)
   })
 })
 

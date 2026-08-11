@@ -961,6 +961,9 @@
             {#if indexStatus.busyNotice}
               <p class="result">{t('search.index.busyNotice')}</p>
             {/if}
+            {#if indexStatus.rebuildError}
+              <p class="result fail">{t('search.index.rebuildError', { error: indexStatus.rebuildError })}</p>
+            {/if}
           {/if}
         </section>
         {#if indexStatus.progress}

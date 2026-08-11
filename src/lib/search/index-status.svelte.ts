@@ -41,7 +41,17 @@ class IndexStatusStore {
   // A rebuild refused because one is already running — also not a failure,
   // just a fact the user should be told in plain language rather than as an
   // error banner. Distinct from `error` for the same reason `notReady` is.
+  // Cleared whenever we actually observe the other rebuild is no longer
+  // running (see `refresh()` and `applyProgress()` below) — not just on the
+  // next `requestRebuild()` call, otherwise it sits stale on screen ("a
+  // rebuild is already running") long after that rebuild finished.
   busyNotice = $state(false)
+  // A failed rebuild attempt, kept separate from `error` on purpose: `error`
+  // means "the panel couldn't read index status at all" and gates which
+  // template branch renders (including the rebuild button itself); a failed
+  // rebuild is a narrower, retriable event that must NOT make the button
+  // that just failed disappear from under the user.
+  rebuildError = $state<string | null>(null)
 
   /**
    * Pulls a fresh snapshot of both `stats` and `progress`. Deliberately reads
@@ -60,6 +70,10 @@ class IndexStatusStore {
       if (mine !== seq) return // superseded by a newer refresh() — drop the stale response
       this.stats = stats
       this.progress = progress
+      // `progress === null` means no rebuild is running right now (by
+      // anyone) — the exact condition a stale `busyNotice` was reporting on.
+      // If another rebuild is still in flight, leave it set.
+      if (progress === null) this.busyNotice = false
     } catch (e) {
       if (mine !== seq) return
       const msg = e instanceof Error ? e.message : String(e)
@@ -81,6 +95,10 @@ class IndexStatusStore {
    */
   applyProgress(p: SearchProgress): void {
     this.progress = p.phase === 'done' ? null : p
+    // Same staleness fix as `refresh()`, for the event-driven path: a
+    // 'done' event is direct evidence the rebuild that was refusing new
+    // requests has finished, so a `busyNotice` referring to it is stale too.
+    if (p.phase === 'done') this.busyNotice = false
   }
 
   /**
@@ -129,9 +147,17 @@ class IndexStatusStore {
    * surfaced as `busyNotice` rather than `error`, so the UI can say "a
    * rebuild is already running" instead of showing something that looks
    * like a crash.
+   *
+   * Any OTHER failure is written to `rebuildError`, deliberately NOT to
+   * `error`: `error` gates which template branch the whole panel renders
+   * (including the rebuild button itself), so writing a rebuild failure
+   * there made a failed click remove its own retry button from the page.
+   * `rebuildError` is a narrower, retriable notice that lives alongside the
+   * button instead of replacing it.
    */
   async requestRebuild(confirm: () => Promise<boolean>): Promise<void> {
     this.busyNotice = false
+    this.rebuildError = null
     const ok = await confirm()
     if (!ok) return
     try {
@@ -141,7 +167,7 @@ class IndexStatusStore {
       if (msg.includes(REBUILD_ALREADY_RUNNING)) {
         this.busyNotice = true
       } else {
-        this.error = msg
+        this.rebuildError = msg
       }
     }
   }
@@ -154,6 +180,7 @@ class IndexStatusStore {
     this.error = null
     this.notReady = false
     this.busyNotice = false
+    this.rebuildError = null
   }
 }
 

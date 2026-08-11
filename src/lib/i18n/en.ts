@@ -505,6 +505,7 @@ export const en = {
   'search.index.rebuildConfirmBody': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs, roughly {seconds}s for your {files} files. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
   'search.index.rebuildConfirmBodyUnknown': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
   'search.index.busyNotice': 'A rebuild is already running.',
+  'search.index.rebuildError': 'Rebuild failed: {error}',
   'search.index.progressHeading': 'Rebuilding…',
   'search.index.phase.walking': 'Scanning files',
   'search.index.phase.indexing': 'Indexing',
