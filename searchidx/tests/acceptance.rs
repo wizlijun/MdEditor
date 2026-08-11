@@ -52,6 +52,12 @@ fn open_temp(vault: &Path) -> (tempfile::TempDir, SearchIndex) {
 /// 失败关闭(匹配零行,不是静默丢过滤器退回全部结果)—— 这条主张只能写成
 /// 「零命中」,`expect_path` 的存在性检查表达不了。带 `expect_none: true` 的
 /// 用例跳过 `expect_path`,改断言 `hits.is_empty()`。
+///
+/// **第四种断言(task 6 review round 1),`expect_not_path`。** 过滤器用例
+/// (`origin:human` 之类)必须证明**排除**,而 `expect_path` 只证明召回 ——
+/// 一个被整块禁用的过滤器,查询照样召回同一份文件(语料本来就没加过滤时也命中
+/// 它),`expect_path` 单独出现时对此是假阳性。带 `expect_not_path` 的用例
+/// 额外断言该 path 不在返回的命中里。
 #[test]
 fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
     let (_d, mut idx) = open_temp(&corpus());
@@ -101,6 +107,24 @@ fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
             ));
             continue;
         };
+        // A fourth case shape (task 6 review round 1): `outranks_path` proves
+        // ordering, but a filter case (`origin:human`) needs to prove
+        // EXCLUSION, which no positive assertion here can express — a
+        // presence check on `expect_path` alone stays green even with the
+        // filter completely disabled, because the unfiltered query still
+        // recalls the same file (verified empirically: disabling
+        // `push_filters`'s origin clause left the three `tieringtoken
+        // origin:<tier>` cases green while only `expect_none` caught it).
+        // `expect_not_path` closes that gap: the named path must be ABSENT
+        // from the (up to `limit`) hits actually returned.
+        if let Some(not_want) = case["expect_not_path"].as_str() {
+            if hits.iter().any(|h| h.path == not_want) {
+                failures.push(format!(
+                    "  {q:?} → expected {not_want} to be filtered out, but it was still present: got [{}]",
+                    seen(&hits)
+                ));
+            }
+        }
         let Some(below) = case["outranks_path"].as_str() else { continue };
         let below_text = case["outranks_text"].as_str();
         let Some(below_at) = position_of(&hits, below, below_text) else {

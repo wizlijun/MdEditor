@@ -323,16 +323,18 @@ DESCRIPTION:
   line. `rg`/`grep` keep working and are never wrong to use — this is an
   accelerator, not a gatekeeper. Filter flags are sugar for the same query
   grammar the Vault search panel understands (`tag:x`, `type:x`, `path:x`,
-  `ext:x`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, `page:[[X]]`) — e.g.
-  `--tag x` is exactly `tag:x` appended to the query; `page:[[X]]` (a wikilink
-  target) has no dedicated flag, type it directly into the query. Quote a
-  phrase (`\"exact phrase\"`) for an exact-match instead of a bag of terms.
+  `ext:x`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, `page:[[X]]`,
+  `origin:human|derived|source`) — e.g. `--tag x` is exactly `tag:x` appended
+  to the query; `page:[[X]]` (a wikilink target) and `origin:` have no
+  dedicated flag, type them directly into the query. Quote a phrase
+  (`\"exact phrase\"`) for an exact-match instead of a bag of terms.
 
 FLAGS:
   --vault <path>    Vault root (default: the configured Vault)
   --json            Emit {query, route, took_ms, total, hits: [...]}; each hit
-                     adds score, breadcrumb, source_ref (path#Lline) and
-                     provenance ({agent_by, human_verified}) beyond the plain
+                     adds score, breadcrumb, source_ref (path#Lline), origin
+                     (\"human\"|\"derived\"|\"source\") and provenance
+                     ({agent_by, human_verified}) beyond the plain
                      path/line/text. A hit with provenance.agent_by set was
                      written by a model — follow its sources to the primary
                      document before relying on it.

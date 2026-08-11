@@ -251,6 +251,20 @@ fn escape_like(s: &str) -> String {
 // occupy `?1`. `next` returns `args.len()` AFTER pushing, so the first filter
 // value bound here lands at `?2`, and each subsequent one numbers
 // consecutively — verified by hand against both call sites (see task report).
+//
+// Repetition semantics are decided PER FILTER, not by one blanket rule, and
+// the choice is silent unless documented at each site (task 6 review round
+// 1, Minor #3) — so: `tags`/`types`/`paths`/`exts` each emit one `AND ... =
+// ?N` clause per pushed value, which ANDs repeats together (`type:Note
+// type:Idea` matches nothing, same for `ext:`/`path:`). That is correct for
+// `tags` (a file can carry several tags at once, so "must have tag A AND tag
+// B" is a real, satisfiable query) and merely unexploited-but-harmless for
+// the rest — nobody has asked for `type:x OR type:y`. `origin` breaks that
+// pattern on purpose: see its own comment below for why ANDing repeats there
+// would silently zero out every result instead of widening the match. If you
+// add a new single-valued-per-file filter, default to the `tags`/`types`
+// AND idiom UNLESS repeats are a plausible query shape (like `origin:`'s
+// tier), in which case use the `IN (...)` idiom instead and say so.
 fn push_filters(q: &Query, sql: &mut String, args: &mut Vec<String>) {
     let next = |args: &mut Vec<String>, v: String| {
         args.push(v);

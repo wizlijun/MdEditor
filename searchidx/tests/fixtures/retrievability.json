@@ -298,17 +298,20 @@
   {
     "query": "tieringtoken origin:human",
     "expect_path": "notes/2026-08-05-tiering-note.md",
-    "why": "task 6 origin: 过滤器,human 档。tieringtoken 在语料里命中五个文件跨全部三档(见上面几条 tieringtoken 用例的 why);origin:human 必须只留下这一份 —— 过滤器不参与 bm25(值只绑进 WHERE,不进 match_expr),所以这条也顺带确认过滤器不会扰动同一批用例已经钉住的排序主张"
+    "expect_not_path": "docs/2026-08-05-tiering-summary.md",
+    "why": "task 6 origin: 过滤器,human 档。断言两件事:必须召回 notes/tiering-note.md(human),且 docs/tiering-summary.md(derived)必须被过滤掉。只断言 expect_path 撑不住『过滤器真的在过滤』这条主张——tieringtoken 不加任何 origin: 过滤器本来就会召回全部五份跨三档语料,把 push_filters 的 origin 分支整块禁用后这条召回断言依旧全绿(round 1 review 实测),expect_not_path 才是真正逼着过滤器生效的那一半"
   },
   {
     "query": "tieringtoken origin:derived",
     "expect_path": "docs/2026-08-05-tiering-summary.md",
-    "why": "task 6 origin: 过滤器,derived 档。命中集合应收窄到 docs/summary 与 web/clip 两份 derived 语料(排除 human 的 notes/、source 的 books/ 与 sync/)"
+    "expect_not_path": "notes/2026-08-05-tiering-note.md",
+    "why": "task 6 origin: 过滤器,derived 档。断言必须召回 docs/tiering-summary.md(derived)且 notes/tiering-note.md(human)必须被过滤掉——理由同上一条 human 用例,expect_path 单独出现时无法证明过滤器没被禁用"
   },
   {
     "query": "tieringtoken origin:source",
     "expect_path": "books/2026-08-05-tiering-book.md",
-    "why": "task 6 origin: 过滤器,source 档。命中集合应收窄到 books/ 与 sync/ 两份 source 语料(排除 human 的 notes/ 与 derived 的 docs/summary、web/clip)"
+    "expect_not_path": "notes/2026-08-05-tiering-note.md",
+    "why": "task 6 origin: 过滤器,source 档。断言必须召回 books/tiering-book.md(source)且 notes/tiering-note.md(human)必须被过滤掉——理由同上"
   },
   {
     "query": "tieringtoken origin:bogus",

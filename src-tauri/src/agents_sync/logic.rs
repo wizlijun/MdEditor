@@ -13,15 +13,20 @@ actually annotated above machine-generated summaries of them.
 ```
 notemd search <query...>            # path:line:text, ranked, exit 1 = no match
 notemd search "exact phrase"        # phrase match
-notemd search x tag:y type:z        # filters: tag: type: path: ext: after: before: page:[[X]]
-notemd search x --json              # adds score, breadcrumb, source_ref, provenance
+notemd search x tag:y type:z        # filters: tag: type: path: ext: after: before: page:[[X]] origin:
+notemd search x origin:human        # only what a human wrote/signed (vs derived|source)
+notemd search x --json              # adds score, breadcrumb, source_ref, provenance, origin
 notemd search x --context 2         # surrounding lines
 ```
 
 `rg` and `grep` keep working and are never wrong to use — the index is an
 accelerator, not a gatekeeper. When a result's `provenance.agent_by` is set, the
 text was written by a model: follow its `sources` to the primary document before
-relying on it.
+relying on it. `origin` classifies a whole file into `human` (you wrote or
+signed it) / `derived` (a model generated it) / `source` (raw material a model
+still has to read) — filter to `origin:human` to see only what a human
+actually judged, or read the field in `--json` output to weigh a hit
+accordingly.
 "#;
 
 /// True when `agents_md` does not already contain the search convention block.

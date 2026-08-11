@@ -144,7 +144,19 @@ fn the_no_index_fallback_reports_the_same_origin_tier_the_index_would() {
     cmd.env("LOCALAPPDATA", &blocker);
     let out = cmd.output().unwrap();
     assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(!out.stderr.is_empty(), "a degradation must be announced on stderr (same precedent as the sibling test above)");
     let j: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid json");
+    // Both paths classify a bare `a.md` as `source` (rule 6), so the origin
+    // assertion below is only meaningful if the `HOME`-blocker trick above
+    // actually forced degradation to `fallback_scan` — otherwise this test
+    // silently duplicates `json_output_carries_the_full_contract` and would
+    // stay green even with the old hardcoded `Origin::Derived` restored.
+    // `route` is already in the payload being parsed; pin it too.
+    assert_eq!(
+        j["route"].as_str(),
+        Some("t1-scan"),
+        "sanity: this test only proves anything if the no-index fallback actually ran: {j}"
+    );
     assert_eq!(
         j["hits"][0]["origin"].as_str(),
         Some("source"),
