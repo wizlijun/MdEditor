@@ -77,6 +77,27 @@ fn mapped_type_origin(concept_type: &str) -> Option<Origin> {
 /// directory prefix (default `"sync"`, see the vault settings for project A) —
 /// files under it are mirrored copies of something that lives outside the
 /// vault, not something written in it.
+///
+/// **`Some(&Frontmatter::default())` is not equivalent to `None`.** Rule 6
+/// only fires on `None` — a file that genuinely has no `---` frontmatter
+/// block at all. `frontmatter::parse` never fails; a present-but-empty or
+/// present-but-irrelevant frontmatter block still parses to a
+/// `Frontmatter::default()`-shaped value, and passing that here as
+/// `Some(...)` skips rule 6 and falls through to rule 7's `Derived`. If your
+/// call site has already collapsed "no frontmatter" and "empty frontmatter"
+/// into one value (e.g. `fm_raw.map(parse).unwrap_or_default()`, as
+/// `chunk::parse_file` does today), you must pass `None` yourself when
+/// `fm_raw` was `None` to get rule 6's behavior — see
+/// `some_default_frontmatter_is_not_the_same_as_none` below, which pins
+/// today's `Derived` result for that case as a trap for exactly this bug.
+///
+/// Related gray area, not a rule: `---\n---` (a frontmatter block that is
+/// present but empty) also parses to `Frontmatter::default()` and — same as
+/// above — resolves to `Derived` via rule 7, even though rule 7's rationale
+/// ("有 frontmatter、有类型" — has frontmatter, has a type) doesn't actually
+/// describe a file with no type. Spec §3 does not define a separate rule for
+/// "frontmatter present but empty"; this is a known unmodeled case, not an
+/// intentional decision — do not build on it without checking the spec.
 pub fn derive(rel_path: &str, fm: Option<&Frontmatter>, sync_dir: &str) -> Origin {
     // Rule 1 — `.note.md` is your annotation container by construction (the
     // outline/sidecar-notes convention): even before anything is written into
@@ -189,9 +210,43 @@ mod tests {
     fn rule5_mirror_dir_is_source() {
         assert_eq!(derive("sync/x/a.md", Some(&fm("title: t")), "sync"), Origin::Source);
     }
+    /// Rule 5 matches the mirror dir as a `/`-bounded path prefix, not a bare
+    /// string prefix — `synced/` must not match `sync_dir = "sync"`, and a
+    /// `sync` segment nested deeper in the path or an empty `sync_dir` must
+    /// not match at all. A refactor to `rel_path.starts_with(dir)` (dropping
+    /// the `/`) would pass `rule5_mirror_dir_is_source` above while silently
+    /// misclassifying `synced/notes.md` as `Source` — this pins the negative
+    /// space so that refactor goes red instead.
+    #[test]
+    fn rule5_mirror_dir_does_not_match_a_lookalike_prefix() {
+        let title = fm("title: t");
+        assert_eq!(derive("synced/a.md", Some(&title), "sync"), Origin::Derived);
+        assert_eq!(derive("my-sync/a.md", Some(&title), "sync"), Origin::Derived);
+        assert_eq!(derive("a/sync/b.md", Some(&title), "sync"), Origin::Derived);
+        assert_eq!(derive("sync/x/a.md", Some(&title), ""), Origin::Derived);
+    }
     #[test]
     fn rule6_no_frontmatter_is_source() {
         assert_eq!(derive("a.md", None, "sync"), Origin::Source);
+    }
+    /// Pins the trap documented on `derive`'s doc comment: `Some(&Frontmatter
+    /// ::default())` is NOT the same input as `None`, even though both
+    /// represent "nothing interesting in the frontmatter" to a casual reader.
+    /// Rule 6 is keyed off `fm.is_none()`, so this falls through to rule 7 and
+    /// resolves to `Derived` — the opposite of `rule6_no_frontmatter_is_source`
+    /// above despite looking equivalent. `chunk::parse_file` already produces
+    /// exactly this shape today (`fm_raw.map(parse).unwrap_or_default()`
+    /// collapses "no frontmatter" and "empty frontmatter" into one
+    /// `Frontmatter` value before it would reach `derive`), so a caller that
+    /// forwards that value as `Some(&fm)` unconditionally — instead of
+    /// checking `fm_raw.is_some()` first — silently inverts spec §3.2's
+    /// deliberate misclassification direction for the bulk of frontmatter-less
+    /// files. This test does not assert that `Derived` is *correct*; it pins
+    /// what the code does today so a future change to this behavior is a
+    /// deliberate, reviewed decision rather than an accidental regression.
+    #[test]
+    fn some_default_frontmatter_is_not_the_same_as_none() {
+        assert_eq!(derive("a.md", Some(&Frontmatter::default()), "sync"), Origin::Derived);
     }
     #[test]
     fn rule7_unknown_type_is_derived() {

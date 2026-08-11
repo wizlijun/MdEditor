@@ -21,7 +21,7 @@
 //     still equals what running this script right now would produce. That
 //     catches "added a type, forgot to regenerate the fixture" — the failure
 //     mode that would otherwise let the Rust test above silently go stale.
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, realpathSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -37,11 +37,11 @@ export function extractConceptTypes(tsSource) {
   const block = tsSource.slice(start, end)
 
   const values = []
-  const lineRe = /^\s*\/?\/?[\w$]*\s*:\s*'([^']*)'\s*,?\s*$/
+  const lineRe = /^[\w$]+\s*:\s*'([^']*)'\s*,?\s*$/
   for (const rawLine of block.split('\n')) {
     const line = rawLine.trim()
     if (line === '' || line.startsWith('//') || line.startsWith('/*') || line.startsWith('*') || line.startsWith('export')) continue
-    const m = line.match(/^[\w$]+\s*:\s*'([^']*)'\s*,?\s*$/)
+    const m = line.match(lineRe)
     if (m) values.push(m[1])
   }
   if (values.length === 0) throw new Error('extracted zero values — regex likely stale against concept.ts formatting')
@@ -68,4 +68,20 @@ function main() {
   console.log(`wrote ${values.length} types to ${OUT}`)
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main()
+// `import.meta.url === file://${process.argv[1]}` fails open (never runs
+// main) whenever the invoked path's realpath differs from its literal
+// spelling — a macOS `/tmp` symlinking to `/private/tmp`, or a path with a
+// space or non-ASCII character (which `import.meta.url` percent-encodes but
+// `process.argv[1]` does not). Observed: `--check` silently exited 0 without
+// printing anything under exactly that mismatch. Comparing two realpaths
+// avoids both the symlink and the encoding mismatch.
+function isMainModule() {
+  if (!process.argv[1]) return false
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+  } catch {
+    return false
+  }
+}
+
+if (isMainModule()) main()
