@@ -26,9 +26,23 @@ export const sotvaultStore = $state<{ vaultRoot: string | null; records: SotReco
   tick: 0,
 })
 
-/** Notified after every refresh that (re)assigns the vault root — lets features
- *  like reading-insights install themselves once a vault becomes available,
- *  independent of app-boot ordering. Mirrors `setRecentsChangedHandler`. */
+/** Notified when a refresh assigns a vault root **different from the one
+ *  already in the store** — lets features like reading-insights install
+ *  themselves once a vault becomes available, independent of app-boot
+ *  ordering. Mirrors `setRecentsChangedHandler`.
+ *
+ *  The "different from" part is load-bearing. `refreshSotvault` runs from
+ *  ~8 places that are not vault switches at all (note sync, question capture,
+ *  settings saves), and the handler `App.svelte` installs throws away
+ *  per-vault caches — including `indexStatus.reset()`, which blanks the
+ *  settings page's provenance-tier table (design spec §9's discovery path for
+ *  rule 6's deliberate misclassification) to "—" without reloading it: that
+ *  tab's entry effect keys on `selectedTab`, which has not changed. Firing it
+ *  for a refresh that changed nothing is pure loss.
+ *
+ *  A handler registered *after* the root was already loaded is the caller's
+ *  problem to cover with one direct call — see `App.svelte`, which does
+ *  exactly that alongside `setVaultRootChangedHandler`. */
 let vaultRootChangedHandler: (() => void) | null = null
 export function setVaultRootChangedHandler(fn: (() => void) | null): void {
   vaultRootChangedHandler = fn
@@ -58,11 +72,15 @@ export async function refreshSotvault(): Promise<void> {
     const mirrorMetas = root
       ? await invoke<MirrorMeta[]>('notemd_mirror_metas').catch(() => [] as MirrorMeta[])
       : []
+    // Compared against the store's own previous value rather than a private
+    // "last seen" variable: one source of truth, and no way for the two to
+    // drift apart.
+    const rootChanged = sotvaultStore.vaultRoot !== root
     sotvaultStore.vaultRoot = root
     sotvaultStore.records = records
     sotvaultStore.mirrorMetas = mirrorMetas
     sotvaultStore.tick++
-    vaultRootChangedHandler?.()
+    if (rootChanged) vaultRootChangedHandler?.()
   } catch (e) {
     console.warn('[sotvault] refresh:', e)
   }

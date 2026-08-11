@@ -18,7 +18,9 @@ vi.mock('@tauri-apps/plugin-os', () => ({ hostname: async () => 'Test-Mac' }))
 vi.mock('@tauri-apps/plugin-fs', () => ({ stat: async () => ({ birthtime: new Date(0) }) }))
 
 import { getDeviceId } from './settings.svelte'
-import { maybeCheckVaultUpdate, refreshSotvault, sotvaultStore, syncCurrentToVault } from './sotvault.svelte'
+import {
+  maybeCheckVaultUpdate, refreshSotvault, setVaultRootChangedHandler, sotvaultStore, syncCurrentToVault,
+} from './sotvault.svelte'
 
 const VAULT = '/v/Sync/a.md'
 
@@ -45,6 +47,47 @@ describe('refreshSotvault', () => {
     expect(sotvaultStore.vaultRoot).toBe('/v')
     expect(invoke).toHaveBeenCalledWith('sotvault_records')
     expect(sotvaultStore.records).toHaveLength(1)
+  })
+
+  // The handler is `App.svelte`'s vault-switch hook: it resets the search
+  // index status cache (file/block counts, db size, AND the whole provenance
+  // tier table the settings page shows), reinstalls the reading-insights
+  // tracker, reloads the wikilink blocklist and re-points the folder view.
+  // `refreshSotvault` is called from ~8 places that are NOT vault switches —
+  // note sync, question capture, settings saves — and firing on every one of
+  // them blanks the Search & Index tab's tier table to "—" while it is open,
+  // with no reload (the tab's entry effect is keyed on `selectedTab`, which
+  // has not changed). Spec §9 makes that table the discovery path for rule
+  // 6's deliberate misclassification, so blanking it mid-read is exactly the
+  // wrong moment.
+  it('notifies the vault-root handler only when the root actually changes', async () => {
+    const onRootChanged = vi.fn()
+    setVaultRootChangedHandler(onRootChanged)
+    let root: string | null = '/v'
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'sotvault_vault_root') return Promise.resolve(root)
+      if (cmd === 'sotvault_records') return Promise.resolve([])
+      if (cmd === 'notemd_mirror_metas') return Promise.resolve([])
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    })
+
+    await refreshSotvault()
+    expect(onRootChanged).toHaveBeenCalledTimes(1) // null -> '/v'
+
+    // The ~8 non-switch callers: same root, nothing to re-derive.
+    await refreshSotvault()
+    await refreshSotvault()
+    expect(onRootChanged).toHaveBeenCalledTimes(1)
+
+    // A real switch still fires, and so does clearing the vault.
+    root = '/w'
+    await refreshSotvault()
+    expect(onRootChanged).toHaveBeenCalledTimes(2)
+    root = null
+    await refreshSotvault()
+    expect(onRootChanged).toHaveBeenCalledTimes(3)
+
+    setVaultRootChangedHandler(null)
   })
 
   it('loads mirror metas into the store', async () => {

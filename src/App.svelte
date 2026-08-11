@@ -528,12 +528,16 @@
     installRecentsSync().then((fn) => { cleanupRecents = fn })
 
     // reading-insights tracker: install is STATE-driven, not boot-order-driven.
-    // Register a handler so every refreshSotvault() that (re)loads the vault root
-    // — at startup (post-plugin-init) or when the user configures a vault mid-
-    // session — (re)installs the tracker idempotently. A direct call covers the
-    // case where the root was already loaded before this handler was registered.
+    // Register a handler so every refreshSotvault() that lands on a DIFFERENT
+    // vault root — at startup (post-plugin-init) or when the user configures a
+    // vault mid-session — (re)installs the tracker idempotently. A refresh that
+    // re-reads the same root does not fire it (see `setVaultRootChangedHandler`:
+    // most refreshes are not vault switches, and everything below is a
+    // per-vault cache reset). The direct calls after this line cover the case
+    // where the root was already loaded before this handler was registered.
     // `indexStatus.reset()`: the index status cache is per-vault (file/block
-    // counts, db size, built-at, and the skipped-for-size list). The backend
+    // counts, db size, built-at, the skipped-for-size list, and the whole
+    // provenance-tier table). The backend
     // clears its own `SkippedState` on a vault switch precisely so one
     // vault's oversize files can never be attributed to another; keeping the
     // frontend snapshot would undo that at the display layer — the settings
