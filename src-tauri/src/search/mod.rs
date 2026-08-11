@@ -639,18 +639,54 @@ pub fn notemd_search(
 ) -> Result<SearchResponse, String> {
     let started = Instant::now();
     let (ticket, counter) = app.state::<SearchGen>().next(window.label());
-
     let idx_handle = handle(&app);
-    let guard = lock(&idx_handle);
+    search_locked(&idx_handle, started, &query, limit, deep, timeout_ms, &counter, ticket)
+}
+
+/// Everything `notemd_search` does once its ticket is drawn — split out with
+/// no `AppHandle` in sight so a test can drive it against a real index while
+/// another thread holds the very lock this blocks on. That scenario (a query
+/// issued during a rebuild or a flood sweep) is the whole point of the
+/// deadline placement below, and it is not reachable from a test of the
+/// `#[tauri::command]` itself: this codebase has never enabled the
+/// `tauri::test` feature, so there is no `AppHandle` to call it with.
+///
+/// `started` is the *command entry* instant and is used for `took_ms` only —
+/// what the user waited is honestly the whole wait, lock included.
+#[allow(clippy::too_many_arguments)]
+fn search_locked(
+    idx_handle: &IndexHandle,
+    started: Instant,
+    query: &str,
+    limit: Option<usize>,
+    deep: Option<bool>,
+    timeout_ms: Option<u64>,
+    counter: &Arc<AtomicU64>,
+    ticket: u64,
+) -> Result<SearchResponse, String> {
+    let guard = lock(idx_handle);
+    // The time budget starts HERE, after the lock — not at command entry.
+    // Whoever we queued behind (a rebuild's background thread, or
+    // `watch::drain`'s `Batch::FullSweep`, which calls `sweep` with no
+    // deadline of its own) holds this lock for seconds to minutes on a real
+    // vault. Anchored at entry instead, `timeout_ms` would already be spent
+    // by the time we get here, `Limits::abort` would fire on the very first
+    // progress callback, and SQLite would be interrupted before returning a
+    // single row — reported to the panel as `route` set, zero hits,
+    // `truncated: true`, which it renders as "No matches" plus a "hit its
+    // time limit" footer. A wrong answer, not a slow one: exactly the
+    // "nothing matches" vs "we have not looked everywhere yet" confusion
+    // `Answer`'s doc comment in `searchidx/src/query.rs` exists to prevent.
+    // The budget is for the search; the wait is not part of the search.
+    let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
     // Waiting for that lock is exactly when a query goes stale, so this is
     // the check that matters most: whatever we queued behind, the user has
     // typed since.
-    if superseded(&counter, ticket) {
+    if superseded(counter, ticket) {
         return Err(CANCELLED.to_string());
     }
     let idx = require_index(&guard)?;
 
-    let deadline = timeout_ms.map(|ms| started + Duration::from_millis(ms));
     let abort_counter = counter.clone();
     let limits = Limits {
         // Default deep so non-interactive callers keep the old behaviour;
@@ -661,10 +697,10 @@ pub fn notemd_search(
                 || deadline.is_some_and(|d| Instant::now() >= d)
         })),
     };
-    let answer = idx.search_with(&query, limit.unwrap_or(50), &limits)?;
+    let answer = idx.search_with(query, limit.unwrap_or(50), &limits)?;
     // An abort has two causes and they are not the same answer: superseded
     // means "throw this away", deadline means "partial, and say so".
-    if superseded(&counter, ticket) {
+    if superseded(counter, ticket) {
         return Err(CANCELLED.to_string());
     }
     let root = idx.vault_root().to_path_buf();
@@ -1015,6 +1051,88 @@ mod command_tests {
         assert!(second > first);
         assert!(superseded(&c1, first), "the older query must stop working");
         assert!(!superseded(&c2, second));
+    }
+
+    /// 时间预算必须从「拿到索引锁之后」开始算,而不是从命令入口。
+    ///
+    /// 锁的持有者 —— 重建的后台线程,或 `watch::drain` 的 `Batch::FullSweep`
+    /// (它调 `sweep(&opts, None)`,自己根本没有 deadline)—— 在真实 vault 上
+    /// 一持就是几秒到几分钟。预算若锚在命令入口,等到锁到手时早已花光:
+    /// `Limits::abort` 会在 SQLite 的第一次 progress 回调上就触发,语句一行
+    /// 都没返回就被 interrupt,响应是 route 非空 + 0 命中 + `truncated: true`,
+    /// 面板照此渲染成「没有匹配」外加「已达时间上限」的页脚。50 条命中的
+    /// 查询被报成没有匹配 —— 那是错答案,不是慢答案,正是
+    /// `searchidx/src/query.rs` 里 `Answer` 的文档注释要防的
+    /// 「没有匹配」vs「还没找遍」混淆。
+    ///
+    /// 这条必须用真索引 + 真的持锁线程:缺陷是「预算被等锁吃掉」,只有真的
+    /// 等过一次锁才能暴露。600 个文件是为了让 FTS 语句跑得足够久、必然触发
+    /// progress 回调(和上面里程碑测试同一量级),否则语句可能在第一次回调
+    /// 之前就跑完,把预期的红变成假绿。
+    #[test]
+    fn the_time_budget_starts_after_the_index_lock_not_at_command_entry() {
+        const BUDGET_MS: u64 = 50;
+        // 必须远大于 BUDGET_MS:等锁期间预算若在流逝,出来时就已经透支。
+        const HOLD: Duration = Duration::from_millis(400);
+
+        let v = tempfile::tempdir().unwrap();
+        for i in 0..600 {
+            std::fs::write(v.path().join(format!("f{i}.md")), format!("alpha body {i}\n")).unwrap();
+        }
+        let d = tempfile::tempdir().unwrap();
+        let mut idx =
+            searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+        idx.sweep(&searchidx::ScanOptions::default(), None).unwrap();
+        let handle: IndexHandle = Arc::new(Mutex::new(Some(idx)));
+
+        // 模拟重建/洪水 sweep 持锁。用 channel 交接而不是 sleep,保证查询
+        // 线程一定是「排在锁后面」而不是碰巧先抢到。
+        let holder_handle = handle.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let guard = lock(&holder_handle);
+            tx.send(()).unwrap();
+            std::thread::sleep(HOLD);
+            drop(guard);
+        });
+        rx.recv().unwrap();
+
+        let started = Instant::now();
+        let counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+        let resp = search_locked(
+            &handle,
+            started,
+            "alpha",
+            Some(50),
+            Some(true),
+            Some(BUDGET_MS),
+            &counter,
+            1,
+        )
+        .expect("查询本身不该失败");
+        holder.join().unwrap();
+
+        // 先自证测试确实等过锁 —— 否则下面两条断言在任何实现下都会绿,
+        // 这条测试就成了摆设。
+        assert!(
+            started.elapsed() >= HOLD,
+            "测试没有真的排在锁后面(只用了 {:?}),没有复现出等锁场景",
+            started.elapsed()
+        );
+        assert!(
+            !resp.hits.is_empty(),
+            "等锁把 {BUDGET_MS}ms 预算吃光了:命中被报成 0 条(route={}, truncated={})",
+            resp.route,
+            resp.truncated
+        );
+        assert!(
+            !resp.truncated,
+            "查询在预算内跑完却被标成 truncated —— 面板会显示「已达时间上限」"
+        );
+        assert!(
+            !resp.deep_available,
+            "FTS 已经命中,不该再提示深搜"
+        );
     }
 
     /// 两个窗口同时搜索是两个人的意图。互相取消会让其中一个面板空着,而且
