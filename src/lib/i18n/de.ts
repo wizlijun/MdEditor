@@ -471,6 +471,21 @@ export const de: Record<keyof Messages, string> = {
   'previewWindow.empty': 'Keine Vorschau vorhanden. Öffnen Sie sie erneut über das Verlaufspanel.',
   'history.noDiff': 'Keine Unterschiede zum aktuellen Dokument',
 
+  // Search panel
+  'search.title': 'Suche',
+  'search.placeholder': 'Diesen Vault durchsuchen…',
+  'search.hide': 'Suche ausblenden',
+  'search.noResults': 'Keine Treffer',
+  'search.resultCount': '{n} Treffer · {ms}ms',
+  'search.fallbackScan': 'Wörterbuch ohne Treffer — auf direkten Scan zurückgefallen',
+  'search.notReady': 'Der Index wird noch erstellt',
+  'search.rebuild': 'Index neu erstellen',
+  'search.agentWritten': 'KI-geschrieben ({agent})',
+  'search.humanVerified': 'Menschlich bestätigt',
+  'search.agentsHint': 'Deine AGENTS.md erwähnt den Suchindex noch nicht.',
+  'search.agentsAdd': 'Abschnitt hinzufügen',
+  'search.agentsAdded': 'Zu AGENTS.md hinzugefügt',
+
   // Folder view
   'folderView.parentFolder': 'Übergeordneter Ordner',
   'folderView.find': 'Suchen',
@@ -538,6 +553,8 @@ export const de: Record<keyof Messages, string> = {
   'settings.reloadThemes': 'Themen neu laden',
   'settings.restoreBuiltins': 'Integrierte Themen wiederherstellen',
   'settings.themesLoadFailed': 'Themen konnten nicht geladen werden: {error}',
+  'settings.searchExcludeDirs': 'Von der Suche ausgeschlossene Ordner',
+  'settings.searchExcludeDirsHint': 'Ein Ordner pro Zeile, relativ zum Tresor-Stammverzeichnis. Standardmäßig leer.',
   'settings.autoSaveLabel': 'Automatisches Speichern aktivieren (speichert nach 800 ms Inaktivität)',
   'settings.dailyNotes.label': 'Daily Notes window',
 

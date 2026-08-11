@@ -74,3 +74,57 @@ fn cli_help_returns_quickly() {
         BUDGET_MS,
     );
 }
+
+/// Two budgets, because they measure different things: an ASCII query never
+/// touches the Chinese dictionary, a CJK one pays to decompress and parse it
+/// exactly once per process. Conflating them would either hide an ASCII
+/// regression or fail spuriously on a cold dictionary.
+#[cfg(debug_assertions)]
+const SEARCH_ASCII_MS: u128 = 4000;
+#[cfg(debug_assertions)]
+const SEARCH_CJK_MS: u128 = 6000;
+#[cfg(not(debug_assertions))]
+const SEARCH_ASCII_MS: u128 = 800;
+#[cfg(not(debug_assertions))]
+const SEARCH_CJK_MS: u128 = 1200;
+
+#[test]
+fn search_meets_both_startup_budgets() {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_notemd"));
+    // A throwaway HOME so the index lands in a scratch app-data dir instead of
+    // the developer's real one (same isolation as `cli_help_returns_quickly`
+    // above).
+    let home = std::env::temp_dir().join(format!(
+        "notemd-search-timing-home-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    ));
+    std::fs::create_dir_all(&home).unwrap();
+
+    let vault = std::env::temp_dir().join(format!("notemd-search-timing-{}", std::process::id()));
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::write(vault.join("a.md"), "brownfox 全文检索\n").unwrap();
+
+    let run = |q: &str| -> u128 {
+        let mut cmd = Command::new(&bin);
+        cli_mode(&mut cmd);
+        cmd.args(["search", q, "--vault"]).arg(&vault);
+        cmd.env("HOME", &home);
+        let t = Instant::now();
+        let out = cmd.output().expect("spawn");
+        assert!(out.status.success(), "search {q:?} should exit 0, got {:?}: {}", out.status, String::from_utf8_lossy(&out.stderr));
+        t.elapsed().as_millis()
+    };
+    // Warm up disk/dyld caches with a query that actually hits — "warmup" is
+    // not in the fixture, and an empty-result run exits 1 (no hits, not an
+    // error), which would trip the `run` closure's success assertion. Each
+    // invocation is its own fresh process, so this pays only OS-level cache
+    // costs, never the CJK dictionary load the timed run below measures.
+    let _ = run("brownfox");
+    let ascii = run("brownfox");
+    let cjk = run("全文检索");
+    let _ = std::fs::remove_dir_all(&vault);
+    let _ = std::fs::remove_dir_all(&home);
+    assert!(ascii < SEARCH_ASCII_MS, "ascii search took {ascii} ms (budget {SEARCH_ASCII_MS})");
+    assert!(cjk < SEARCH_CJK_MS, "cjk search took {cjk} ms (budget {SEARCH_CJK_MS})");
+}

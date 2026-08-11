@@ -46,6 +46,7 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
         Builtin::PluginInstall(id, version) => market::run_install(&id, version.as_deref(), parsed),
         Builtin::PluginUpdate(id) => market::run_update(id.as_deref(), parsed),
         Builtin::PluginRemove(id, keep_data) => market::run_remove(&id, keep_data, parsed),
+        Builtin::Search(args) => super::search::run(args.with_global_json(parsed.globals.json)),
     }
 }
 
@@ -123,6 +124,7 @@ pub fn render_help(
     out.push_str("  version       Print version (aliases: -v, --version)\n");
     out.push_str("  plugin        Manage plugins (list, enable, disable, info, install, update, remove)\n");
     out.push_str("  share         Render and publish file as a shareable URL (alias: --share)\n");
+    out.push_str("  search        Full-text search over the Vault (--vault, --json, --limit, --stats)\n");
     out.push_str("  reading-insights [report]   Generate a reading digest from the Vault (--vault, --date, --stdout)\n");
 
     let mut shown_header = false;
@@ -309,6 +311,53 @@ Shares are published to the configured share server and the URL is copied to
 the clipboard (disable with --no-clipboard). Files outside the Vault are
 homed into the Vault first.
 ",
+        "search" => "\
+notemd search — Full-text search over the Vault
+
+USAGE:
+  notemd search <query...> [--vault <path>] [--json] [--limit <n>] [--context <n>]
+  notemd search --stats --vault <path>
+
+DESCRIPTION:
+  Grep-shaped on purpose: default output is `path:line:text`, one hit per
+  line. `rg`/`grep` keep working and are never wrong to use — this is an
+  accelerator, not a gatekeeper. Filter flags are sugar for the same query
+  grammar the Vault search panel understands (`tag:x`, `type:x`, `path:x`,
+  `ext:x`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, `page:[[X]]`) — e.g.
+  `--tag x` is exactly `tag:x` appended to the query; `page:[[X]]` (a wikilink
+  target) has no dedicated flag, type it directly into the query. Quote a
+  phrase (`\"exact phrase\"`) for an exact-match instead of a bag of terms.
+
+FLAGS:
+  --vault <path>    Vault root (default: the configured Vault)
+  --json            Emit {query, route, took_ms, total, hits: [...]}; each hit
+                     adds score, breadcrumb, source_ref (path#Lline) and
+                     provenance ({agent_by, human_verified}) beyond the plain
+                     path/line/text. A hit with provenance.agent_by set was
+                     written by a model — follow its sources to the primary
+                     document before relying on it.
+  --limit <n>       Max hits (default: 20)
+  --context <n>     Print N lines of context around each hit
+  --tag <t>         Filter: tag:<t>
+  --type <t>        Filter: type:<t>
+  --path <p>        Filter: path:<p> (substring match)
+  --ext <e>         Filter: ext:<e>
+  --after <date>    Filter: doc_date >= date (YYYY-MM-DD)
+  --before <date>   Filter: doc_date <= date (YYYY-MM-DD)
+  --stats           Report index size/freshness instead of searching
+  --rebuild         Force a full rebuild before searching
+  --no-sweep        Skip the bounded freshness sweep (answer from what's indexed)
+
+Retrieval never fails because the index is unhappy: an unusable index, or a
+freshness sweep that runs past its 2s budget, degrades to a direct file scan
+(or an answer from the existing index) with a one-line warning on stderr
+instead of an error.
+
+EXIT CODES:
+  0    Output was printed — one or more hits (or --stats/--rebuild ran)
+  1    No hits — not an error, nothing to branch on but 'try something else'
+  2    No Vault configured/found, or a missing query
+",
         "reading-insights" => "\
 notemd reading-insights — Reading Insights (engagement) report
 
@@ -331,10 +380,19 @@ reading) stats are shown in the in-app Reading Insights window.
     };
 
     let mut out = body.to_string();
-    out.push_str("\nEXIT CODES:\n");
-    out.push_str("  0    Success\n");
-    out.push_str("  1    Runtime error\n");
-    out.push_str("  2    File or argument error\n");
+    // Most core topics share this generic 0/1/2 footer, but a topic whose own
+    // exit codes mean something more specific (`search`'s 1 is "no hits", not
+    // a runtime error) writes its own `EXIT CODES:` section instead — appending
+    // the generic one on top would tell an agent two contradictory things
+    // about the exit code it will hit most often. `contains` rather than a
+    // per-topic flag so this stays correct automatically if another topic
+    // later grows its own accurate block.
+    if !body.contains("EXIT CODES:") {
+        out.push_str("\nEXIT CODES:\n");
+        out.push_str("  0    Success\n");
+        out.push_str("  1    Runtime error\n");
+        out.push_str("  2    File or argument error\n");
+    }
     Some(out)
 }
 
@@ -1519,6 +1577,51 @@ mod tests {
         assert_eq!(share_rows, 1, "share must appear exactly once, got:\n{out}");
         assert!(!out.contains("PLUGIN COMMANDS:"),
             "core stubs must never render a PLUGIN COMMANDS section:\n{out}");
+    }
+    /// Task 18: the CLI topic is the other place (besides AGENTS.md's
+    /// "Searching this vault" section) an agent learns this command's
+    /// grammar. Pin that it actually documents the `page:` filter (it has no
+    /// `--page` flag — the only way to discover it is this text) and the
+    /// extra `--json` fields, so an agent reading `notemd help search` gets
+    /// the same picture `--json` output and the query grammar actually give it.
+    #[test]
+    fn help_search_topic_documents_page_filter_and_json_fields() {
+        let out = render_help(Some("search"), false, &[], &HashMap::new());
+        assert!(out.contains("page:[[X]]"), "must document the page: filter:\n{out}");
+        assert!(out.contains("source_ref"), "must document --json's source_ref field:\n{out}");
+        assert!(out.contains("provenance"), "must document --json's provenance field:\n{out}");
+        assert!(out.contains("agent_by"), "must explain what provenance.agent_by means:\n{out}");
+    }
+    /// Review round 1, Important #1: `render_core_topic` used to append a
+    /// generic "1 Runtime error" footer underneath every topic's own body,
+    /// including `search`'s, which already states "1 = no hits (not an
+    /// error)" — the one document written specifically so an agent can branch
+    /// on exit codes contradicted itself about the exit code it hits most
+    /// often. Pin that `search` states its exit codes exactly once, and that
+    /// the generic/contradictory wording is nowhere in the topic.
+    #[test]
+    fn help_search_topic_states_exit_codes_once_and_without_the_generic_contradiction() {
+        let out = render_help(Some("search"), false, &[], &HashMap::new());
+        assert_eq!(
+            out.matches("EXIT CODES:").count(), 1,
+            "exit codes must appear exactly once, not doubled by the generic footer:\n{out}"
+        );
+        assert!(out.contains("No hits"), "exit 1 must be documented as 'no hits':\n{out}");
+        assert!(!out.contains("Runtime error"), "the generic footer's contradictory wording must not appear:\n{out}");
+    }
+    /// The other core topics must keep getting the generic footer — this is
+    /// what proves the `body.contains("EXIT CODES:")` guard is scoped to
+    /// `search` alone, not a regression that silently dropped it everywhere.
+    #[test]
+    fn other_core_topics_still_get_the_generic_exit_codes_footer() {
+        for topic in ["help", "version", "plugin", "share"] {
+            let out = render_help(Some(topic), false, &[], &HashMap::new());
+            assert_eq!(
+                out.matches("EXIT CODES:").count(), 1,
+                "topic {topic} must show exit codes exactly once:\n{out}"
+            );
+            assert!(out.contains("Runtime error"), "topic {topic} must keep the generic footer:\n{out}");
+        }
     }
     #[test] fn help_share_topic_documents_every_stub_flag() {
         // 契约对齐：share stub 的 cli entry 声明的每个 flag 长名，都必须出现在

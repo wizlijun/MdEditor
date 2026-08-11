@@ -1,0 +1,37 @@
+{
+  "basic.note.md": [
+    { "line_start": 1, "line_end": 1, "breadcrumb": "", "text": "顶层节点", "is_annotation": false, "agent_by": null },
+    { "line_start": 2, "line_end": 4, "breadcrumb": "顶层节点", "text": "子节点一", "is_annotation": true, "agent_by": "claude/1" },
+    { "line_start": 5, "line_end": 6, "breadcrumb": "顶层节点", "text": "子节点二", "is_annotation": false, "agent_by": null },
+    { "line_start": 7, "line_end": 7, "breadcrumb": "", "text": "另一个顶层", "is_annotation": false, "agent_by": null }
+  ],
+  "fenced-answer.note.md": [
+    { "line_start": 1, "line_end": 3, "breadcrumb": "", "text": "问题节点", "is_annotation": true, "agent_by": null },
+    { "line_start": 4, "line_end": 8, "breadcrumb": "问题节点", "text": "```\n围栏内的一行\n- 这行看起来像 bullet 但不是\n```", "is_annotation": false, "agent_by": null }
+  ],
+  "crlf.note.md": [
+    { "line_start": 1, "line_end": 1, "breadcrumb": "", "text": "顶层节点", "is_annotation": false, "agent_by": null },
+    { "line_start": 2, "line_end": 4, "breadcrumb": "顶层节点", "text": "子节点一", "is_annotation": true, "agent_by": "claude/1" },
+    { "line_start": 5, "line_end": 6, "breadcrumb": "顶层节点", "text": "子节点二", "is_annotation": false, "agent_by": null },
+    { "line_start": 7, "line_end": 7, "breadcrumb": "", "text": "另一个顶层", "is_annotation": false, "agent_by": null }
+  ],
+  "fenced-indent.note.md": [
+    { "line_start": 1, "line_end": 1, "breadcrumb": "", "text": "q", "is_annotation": false, "agent_by": null },
+    { "line_start": 2, "line_end": 6, "breadcrumb": "q", "text": "```\nfn main() {\n    let x = 1;\n}\n```", "is_annotation": false, "agent_by": null }
+  ],
+  "fence-continuation.note.md": [
+    { "line_start": 1, "line_end": 1, "breadcrumb": "", "text": "q", "is_annotation": false, "agent_by": null },
+    { "line_start": 2, "line_end": 3, "breadcrumb": "q", "text": "a\n```", "is_annotation": false, "agent_by": null },
+    { "line_start": 4, "line_end": 4, "breadcrumb": "q > a", "text": "not a bullet", "is_annotation": false, "agent_by": null }
+  ],
+  "empty-bullet.note.md": [
+    { "line_start": 1, "line_end": 1, "breadcrumb": "", "text": "顶层", "is_annotation": false, "agent_by": null },
+    { "line_start": 2, "line_end": 3, "breadcrumb": "", "text": "", "is_annotation": true, "agent_by": null },
+    { "line_start": 4, "line_end": 5, "breadcrumb": "", "text": "空块的子节点", "is_annotation": false, "agent_by": "claude/1" }
+  ],
+  "prose-before-bullet.note.md": [
+    { "line_start": 1, "line_end": 1, "breadcrumb": "", "text": "孤立的正文行", "is_annotation": false, "agent_by": null },
+    { "line_start": 2, "line_end": 2, "breadcrumb": "", "text": "顶层", "is_annotation": false, "agent_by": null },
+    { "line_start": 3, "line_end": 4, "breadcrumb": "顶层", "text": "子节点", "is_annotation": true, "agent_by": null }
+  ]
+}

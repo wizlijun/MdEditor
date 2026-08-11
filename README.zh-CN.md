@@ -4,8 +4,8 @@
 
 > **读 AI 写的，留下你想的，留住只有你才写得出的字。**
 
-为 AI-native 时代打造的 markdown 阅读器、编辑器、双链笔记工具。原生 macOS 应用，下载 7 MB，  
-装完 11 MB。你的笔记是磁盘上一个纯 `.md` 文件夹——永远属于你。
+为 AI-native 时代打造的 markdown 阅读器、编辑器、双链笔记工具。原生 macOS 应用，下载约 11 MB，  
+装完约 15 MB。你的笔记是磁盘上一个纯 `.md` 文件夹——永远属于你。
 
 [下载](https://notemd.net/download) · [插件市场](https://plugins.notemd.net) · [完整功能清单](docs/FEATURES.zh-CN.md)
 
@@ -14,7 +14,7 @@
 ## 1. 读 agent 写的东西，这里体验最好
 
 富文本与源码双模，一个快捷键之隔。任意导入 Notion、Typora 主题。Mermaid、Graphviz、  
-KaTeX 都专门调过，按需加载。没有捆绑 Chromium——整个应用 11 MB。
+KaTeX 都专门调过，按需加载。没有捆绑 Chromium——整个应用装完约 15 MB。
 
 高亮一句断言，在旁边留下你的疑问，就地把写错的句子改对。
 

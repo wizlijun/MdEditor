@@ -69,6 +69,7 @@ export type CommandId =
   | 'toggle-folder-view'
   | 'toggle-sidecar-notes'
   | 'toggle-git-history'
+  | 'toggle-vault-search'
 
 const handlers: Record<CommandId, () => void | Promise<void>> = {
   'open': cmdOpen,
@@ -91,6 +92,7 @@ const handlers: Record<CommandId, () => void | Promise<void>> = {
   'toggle-folder-view': () => toggleSideView('folder-view'),
   'toggle-sidecar-notes': () => toggleSideView('outline-notes'),
   'toggle-git-history': () => toggleSideView('git-history'),
+  'toggle-vault-search': () => toggleSideView('vault-search'),
 }
 
 export function dispatch(id: CommandId): void | Promise<void> {

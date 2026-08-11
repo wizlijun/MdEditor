@@ -22,7 +22,7 @@
   import { outlineShortcuts, setShortcutOverride } from '../lib/outline/gate.svelte'
   import { outlineDirs, setOutlineDir } from '../lib/outline/dirs.svelte'
   import { inboxDir, setInboxDir } from '../lib/quick-note.svelte'
-  import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB } from '../lib/vault-settings.svelte'
+  import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs } from '../lib/vault-settings.svelte'
   import { pushToast } from '../lib/toast.svelte'
   import {
     DEFAULT_SHORTCUTS, resolveShortcuts, displayShortcut, eventToShortcut, findConflict,
@@ -47,13 +47,38 @@
   let syncDirBusy = $state(false)
   let thresholdDraft = $state(DEFAULT_LARGE_FILE_THRESHOLD_MB)
   let thresholdBusy = $state(false)
+  let searchExcludeDirsDraft = $state('')
+  let searchExcludeDirsBusy = $state(false)
+  // `null` = not checked yet (or no vault / no AGENTS.md to check). Detection
+  // is read-only (notemd_agents_search_section_missing); the write
+  // (notemd_agents_append_search_section) only ever runs from onAddAgentsSearchSection,
+  // after the user clicks the button below — never on load, never silently.
+  let agentsSectionMissing = $state<boolean | null>(null)
+  let agentsSectionBusy = $state(false)
   $effect(() => {
     if (!open) return
     void loadVaultSettings().then(() => {
       syncDirDraft = vaultSettings.syncDir
       thresholdDraft = vaultSettings.largeFileThresholdMb
+      searchExcludeDirsDraft = vaultSettings.searchExcludeDirs.join('\n')
+      if (!vaultSettings.vaultPath) { agentsSectionMissing = null; return }
+      void invoke<boolean>('notemd_agents_search_section_missing')
+        .then((missing) => { agentsSectionMissing = missing })
+        .catch(() => { agentsSectionMissing = null })
     })
   })
+  async function onAddAgentsSearchSection() {
+    agentsSectionBusy = true
+    try {
+      await invoke('notemd_agents_append_search_section')
+      agentsSectionMissing = false
+      pushToast({ level: 'success', message: t('search.agentsAdded') })
+    } catch (e) {
+      pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
+    } finally {
+      agentsSectionBusy = false
+    }
+  }
   async function onSetOutlineDir(kind: 'wikipage' | 'dailynote', value: string) {
     try {
       await setOutlineDir(kind, value)
@@ -91,6 +116,22 @@
       pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
     } finally {
       thresholdBusy = false
+    }
+  }
+  async function onSaveSearchExcludeDirs() {
+    const dirs = searchExcludeDirsDraft
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+    searchExcludeDirsBusy = true
+    try {
+      await saveSearchExcludeDirs(dirs)
+      searchExcludeDirsDraft = vaultSettings.searchExcludeDirs.join('\n')
+      pushToast({ level: 'success', message: t('vaultSync.saved') })
+    } catch (e) {
+      pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
+    } finally {
+      searchExcludeDirsBusy = false
     }
   }
 
@@ -565,6 +606,30 @@
             <button onclick={onSaveThreshold}
               disabled={!vaultSettings.vaultPath || thresholdBusy}>{t('vaultSync.save')}</button>
           </label>
+          <label class="row" style="align-items: flex-start;">
+            <span class="lbl">{t('settings.searchExcludeDirs')}</span>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+              <textarea rows="3" bind:value={searchExcludeDirsDraft}
+                disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}
+                style="width: 100%; font: inherit; padding: 6px; border-radius: 4px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); background: Canvas; color: CanvasText; resize: vertical;"
+              ></textarea>
+              <p class="desc" style="margin: 0;">{t('settings.searchExcludeDirsHint')}</p>
+              <button onclick={onSaveSearchExcludeDirs}
+                style="align-self: flex-start;"
+                disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}>{t('vaultSync.save')}</button>
+            </div>
+          </label>
+          {#if agentsSectionMissing}
+            <label class="row" style="align-items: flex-start;">
+              <span class="lbl"></span>
+              <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+                <p class="desc" style="margin: 0;">{t('search.agentsHint')}</p>
+                <button onclick={onAddAgentsSearchSection}
+                  style="align-self: flex-start;"
+                  disabled={agentsSectionBusy}>{t('search.agentsAdd')}</button>
+              </div>
+            </label>
+          {/if}
         </section>
 
         {#if !isIOSPlatform}

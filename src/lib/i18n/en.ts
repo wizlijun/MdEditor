@@ -478,6 +478,21 @@ export const en = {
   'previewWindow.empty': 'No preview to show. Reopen it from the history panel.',
   'history.noDiff': 'No differences from the current document',
 
+  // Search panel
+  'search.title': 'Search',
+  'search.placeholder': 'Search this vault…',
+  'search.hide': 'Hide Search',
+  'search.noResults': 'No matches',
+  'search.resultCount': '{n} results · {ms}ms',
+  'search.fallbackScan': 'Dictionary miss — fell back to a direct scan',
+  'search.notReady': 'The index is still building',
+  'search.rebuild': 'Rebuild index',
+  'search.agentWritten': 'AI-written ({agent})',
+  'search.humanVerified': 'Human-verified',
+  'search.agentsHint': 'Your AGENTS.md does not tell agents about the search index.',
+  'search.agentsAdd': 'Add the section',
+  'search.agentsAdded': 'Added to AGENTS.md',
+
   // Folder view
   'folderView.parentFolder': 'Parent folder',
   'folderView.find': 'Find',
@@ -545,6 +560,8 @@ export const en = {
   'settings.reloadThemes': 'Reload themes',
   'settings.restoreBuiltins': 'Restore built-in themes',
   'settings.themesLoadFailed': 'Failed to load themes: {error}',
+  'settings.searchExcludeDirs': 'Directories excluded from search',
+  'settings.searchExcludeDirsHint': 'One per line, relative to the vault root. Empty by default.',
   'settings.autoSaveLabel': 'Enable auto-save (writes after 800 ms idle)',
   'settings.dailyNotes.label': 'Daily Notes window',
 

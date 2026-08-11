@@ -30,6 +30,14 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tokio = { version = "1", features = ["time", "process", "io-util", "macros", "rt-multi-thread", "sync"] }
 plugin-protocol = { path = "../plugin-protocol" }
+# Platform-independent search core. Everything about *how* the vault is scanned,
+# tokenized, stored and ranked lives there so that this crate's Tauri commands,
+# the CLI and the watcher are three adapters over one algorithm — see
+# docs/2026-08-10-vault-search-index-design.md §2.
+searchidx = { path = "../searchidx" }
+# The CLI's own no-index fallback scan (`cli::search::fallback_scan`) — the
+# searchidx crate carries its own separate copy for the same reason.
+ignore = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 lightningcss = "1.0.0-alpha.66"

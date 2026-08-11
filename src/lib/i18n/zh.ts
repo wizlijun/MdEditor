@@ -506,6 +506,21 @@ export const zh: Record<keyof Messages, string> = {
   'previewWindow.empty': '没有可显示的预览。请从历史面板重新打开。',
   'history.noDiff': '与当前文档无差异',
 
+  // Search panel
+  'search.title': '搜索',
+  'search.placeholder': '搜索这个 vault…',
+  'search.hide': '隐藏搜索',
+  'search.noResults': '无匹配',
+  'search.resultCount': '{n} 条 · {ms}ms',
+  'search.fallbackScan': '词典未收录——已降级为直接扫描',
+  'search.notReady': '索引仍在构建',
+  'search.rebuild': '重建索引',
+  'search.agentWritten': 'AI 写的({agent})',
+  'search.humanVerified': '人工确认',
+  'search.agentsHint': '你的 AGENTS.md 还没告诉 agent 有搜索索引可用。',
+  'search.agentsAdd': '添加这一节',
+  'search.agentsAdded': '已添加到 AGENTS.md',
+
   // Folder view
   'folderView.parentFolder': '上级文件夹',
   'folderView.find': '查找',
@@ -573,6 +588,8 @@ export const zh: Record<keyof Messages, string> = {
   'settings.reloadThemes': '重新加载主题',
   'settings.restoreBuiltins': '恢复内置主题',
   'settings.themesLoadFailed': '加载主题失败：{error}',
+  'settings.searchExcludeDirs': '排除出搜索的目录',
+  'settings.searchExcludeDirsHint': '每行一个，相对 vault 根目录。默认为空。',
   'settings.autoSaveLabel': '启用自动保存（空闲 800 毫秒后写入）',
   'settings.dailyNotes.label': '每日笔记窗口',
 

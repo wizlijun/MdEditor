@@ -1,5 +1,52 @@
 //! Pure decision logic for the CLAUDE.md → AGENTS.md symlink.
 
+/// The convention block that teaches any harness how to search this vault.
+///
+/// Windows and macOS spell the command identically on purpose (the installer
+/// puts a `notemd` shim on PATH) — one instruction, not a platform matrix.
+pub const SEARCH_SECTION: &str = r#"## Searching this vault
+
+This vault has a local full-text index. Prefer it over a raw `rg` sweep: it is
+faster, it knows Chinese word boundaries, and it ranks the notes you have
+actually annotated above machine-generated summaries of them.
+
+```
+notemd search <query...>            # path:line:text, ranked, exit 1 = no match
+notemd search "exact phrase"        # phrase match
+notemd search x tag:y type:z        # filters: tag: type: path: ext: after: before: page:[[X]]
+notemd search x --json              # adds score, breadcrumb, source_ref, provenance
+notemd search x --context 2         # surrounding lines
+```
+
+`rg` and `grep` keep working and are never wrong to use — the index is an
+accelerator, not a gatekeeper. When a result's `provenance.agent_by` is set, the
+text was written by a model: follow its `sources` to the primary document before
+relying on it.
+"#;
+
+/// True when `agents_md` does not already contain the search convention block.
+pub fn search_section_missing(agents_md: &str) -> bool {
+    !agents_md.contains("## Searching this vault")
+}
+
+/// Append-only. Never rewrites, reorders or reformats what is already there:
+/// AGENTS.md is the user's file, and a tool that edits it silently is a tool
+/// they stop trusting.
+pub fn append_search_section(agents_md: &str) -> String {
+    if !search_section_missing(agents_md) {
+        return agents_md.to_string();
+    }
+    let mut out = agents_md.to_string();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !out.ends_with("\n\n") {
+        out.push('\n');
+    }
+    out.push_str(SEARCH_SECTION);
+    out
+}
+
 /// What `CLAUDE.md` currently is on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaudeKind {
@@ -113,5 +160,46 @@ mod tests {
     fn backup_name_suffixes_on_collision() {
         let taken = |n: &str| n == "CLAUDE.20260725.md" || n == "CLAUDE.20260725-2.md";
         assert_eq!(pick_backup_name("20260725", taken), "CLAUDE.20260725-3.md");
+    }
+
+    #[test]
+    fn detects_whether_the_search_section_is_present() {
+        assert!(search_section_missing("# Vault\n\nnotes\n"));
+        assert!(!search_section_missing(&append_search_section("# Vault\n")));
+    }
+
+    /// 一键追加必须是**追加**:用户既有内容一个字节都不能动。这条测试就是
+    /// 「绝不静默改写」的机器表达。
+    #[test]
+    fn appending_leaves_existing_content_byte_identical() {
+        let before = "# Vault\n\nMy own conventions.\n";
+        let after = append_search_section(before);
+        assert!(after.starts_with(before), "existing content must be untouched");
+        assert!(after.contains("## Searching this vault"));
+    }
+
+    #[test]
+    fn appending_twice_does_not_duplicate_the_section() {
+        let once = append_search_section("# Vault\n");
+        assert_eq!(append_search_section(&once), once);
+    }
+
+    /// 文件不以换行结尾时不能把新标题粘到最后一行后面。
+    #[test]
+    fn appending_normalizes_a_missing_trailing_newline() {
+        let after = append_search_section("# Vault");
+        assert!(after.contains("# Vault\n\n## Searching this vault"), "{after}");
+    }
+
+    /// A regression a same-content-check test would miss: appending must not
+    /// just leave `before`'s *content* somewhere in the output, it must leave
+    /// it as an exact, untouched prefix. This pins byte offsets, not just substrings.
+    #[test]
+    fn appended_section_starts_immediately_after_existing_content_plus_separator() {
+        let before = "# Vault\n\nfirst\nsecond\n";
+        let after = append_search_section(before);
+        let suffix = &after[before.len()..];
+        assert!(suffix.starts_with('\n'), "expected exactly one blank-line separator, got {suffix:?}");
+        assert!(suffix[1..].starts_with(SEARCH_SECTION));
     }
 }
