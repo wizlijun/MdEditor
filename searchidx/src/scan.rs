@@ -523,7 +523,7 @@ mod tests {
         d
     }
     fn conn_for(v: &Path) -> Connection {
-        crate::store::open(&v.join(".idx.db"), &v.to_string_lossy()).unwrap()
+        crate::store::open(&v.join(".idx.db"), &v.to_string_lossy(), "sync").unwrap()
     }
     fn count(c: &Connection) -> i64 {
         c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap()
@@ -833,9 +833,9 @@ mod tests {
                     r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?))
             }).unwrap().map(|x| x.unwrap()).collect()
         };
-        let mut c1 = crate::store::open(&v.path().join(".i1.db"), "v").unwrap();
+        let mut c1 = crate::store::open(&v.path().join(".i1.db"), "v", "sync").unwrap();
         build_full(&mut c1, v.path(), &ScanOptions::default(), None).unwrap();
-        let mut c2 = crate::store::open(&v.path().join(".i2.db"), "v").unwrap();
+        let mut c2 = crate::store::open(&v.path().join(".i2.db"), "v", "sync").unwrap();
         build_full(&mut c2, v.path(), &ScanOptions::default(), None).unwrap();
         assert_eq!(dump(&c1), dump(&c2));
     }

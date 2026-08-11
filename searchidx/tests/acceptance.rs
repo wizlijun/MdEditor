@@ -14,7 +14,7 @@ fn corpus() -> PathBuf {
 
 fn open_temp(vault: &Path) -> (tempfile::TempDir, SearchIndex) {
     let d = tempfile::tempdir().unwrap();
-    let idx = SearchIndex::open_at(vault, &d.path().join("index.db")).unwrap();
+    let idx = SearchIndex::open_at(vault, &d.path().join("index.db"), "sync").unwrap();
     (d, idx)
 }
 
@@ -95,11 +95,11 @@ fn rebuilding_from_scratch_is_deterministic() {
     }
 
     let d1 = tempfile::tempdir().unwrap();
-    let mut c1 = searchidx::store::open(&d1.path().join("index.db"), "v").unwrap();
+    let mut c1 = searchidx::store::open(&d1.path().join("index.db"), "v", "sync").unwrap();
     searchidx::scan::build_full(&mut c1, &corpus(), &ScanOptions::default(), None).unwrap();
 
     let d2 = tempfile::tempdir().unwrap();
-    let mut c2 = searchidx::store::open(&d2.path().join("index.db"), "v").unwrap();
+    let mut c2 = searchidx::store::open(&d2.path().join("index.db"), "v", "sync").unwrap();
     searchidx::scan::build_full(&mut c2, &corpus(), &ScanOptions::default(), None).unwrap();
 
     let dump1 = dump(&c1);
@@ -123,14 +123,14 @@ fn two_writers_converge_without_coordination() {
     let d = tempfile::tempdir().unwrap();
     let db = d.path().join("index.db");
 
-    let mut a = SearchIndex::open_at(&vault, &db).unwrap();
+    let mut a = SearchIndex::open_at(&vault, &db, "sync").unwrap();
     a.rebuild(&ScanOptions::default()).unwrap();
 
     let mut files: Vec<String> = Vec::new();
     collect_markdown_files(&vault, &vault, &mut files);
     assert!(!files.is_empty(), "the corpus must contain markdown files to interleave writes over");
 
-    let mut b = SearchIndex::open_at(&vault, &db).unwrap();
+    let mut b = SearchIndex::open_at(&vault, &db, "sync").unwrap();
     for rel in &files {
         a.index_one(rel, &ScanOptions::default()).unwrap();
         b.index_one(rel, &ScanOptions::default()).unwrap();
@@ -138,7 +138,7 @@ fn two_writers_converge_without_coordination() {
     }
     let s = a.stats().unwrap();
     let d2 = tempfile::tempdir().unwrap();
-    let mut fresh = SearchIndex::open_at(&vault, &d2.path().join("index.db")).unwrap();
+    let mut fresh = SearchIndex::open_at(&vault, &d2.path().join("index.db"), "sync").unwrap();
     fresh.rebuild(&ScanOptions::default()).unwrap();
     let fresh_stats = fresh.stats().unwrap();
     assert_eq!(s.files, fresh_stats.files);
@@ -367,7 +367,7 @@ fn reindexing_one_file_is_well_under_the_freshness_budget() {
     let v = tempfile::tempdir().unwrap();
     std::fs::write(v.path().join("a.md"), "before\n").unwrap();
     let d = tempfile::tempdir().unwrap();
-    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("index.db")).unwrap();
+    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("index.db"), "sync").unwrap();
     idx.rebuild(&ScanOptions::default()).unwrap();
 
     std::fs::write(v.path().join("a.md"), "after brownfox\n").unwrap();

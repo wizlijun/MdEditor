@@ -15,6 +15,14 @@ const DEFAULT_THRESHOLD_MB: u32 = 10;
 
 pub fn for_vault(vault_root: &Path) -> ScanOptions {
     let vs = crate::sotvault::vault_settings::read(vault_root);
+    // Computed from the ALREADY-READ `vs`, not `resolve_sync_dir(vault_root)`
+    // (which would read `.notemd/settings.json` a second time). This runs on
+    // the watcher's per-batch path (`search::watch`), so a second read is not
+    // just wasted I/O — if the file is rewritten between the two reads (a
+    // settings save racing a rescan), the two `ScanOptions` fields below
+    // could straddle the write and come from two different versions of the
+    // settings file. One read, one consistent `vs`, both fields from it.
+    let sync_dir = crate::sotvault::vault_settings::resolve_sync_dir_from(&vs);
     ScanOptions {
         // 回落链:索引阈值 → git 门禁 → 默认。中间那一跳是一次性的善意,
         // 让既有用户的索引行为不因为这次拆分而改变。
@@ -24,11 +32,7 @@ pub fn for_vault(vault_root: &Path) -> ScanOptions {
             .unwrap_or(DEFAULT_THRESHOLD_MB),
         exclude_dirs: vs.search_exclude_dirs.unwrap_or_default(),
         // `origin::derive` (spec §3 rule 5) needs to know the sync mirror
-        // directory name to classify a mirrored file as `Source`. Read
-        // through the same resolver sync-to-vault itself uses
-        // (`vault_settings::resolve_sync_dir`) rather than re-reading
-        // `.notemd/settings.json` here — that resolver already owns the
-        // validation/fallback-to-default behavior for this setting.
-        sync_dir: crate::sotvault::vault_settings::resolve_sync_dir(vault_root),
+        // directory name to classify a mirrored file as `Source`.
+        sync_dir,
     }
 }

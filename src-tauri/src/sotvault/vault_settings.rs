@@ -166,11 +166,24 @@ pub fn merge(
 }
 
 /// The effective sync sub-directory: the configured value when present and
-/// valid, otherwise [`DEFAULT_SYNC_DIR`].
+/// valid, otherwise [`DEFAULT_SYNC_DIR`]. Reads `.notemd/settings.json` itself
+/// — for a caller that already has a `VaultSettings` in hand (e.g.
+/// `search::options::for_vault`, which also needs other fields off the same
+/// read), use [`resolve_sync_dir_from`] instead so the file is only read
+/// once. Two separate reads is not just wasted I/O: if the file is rewritten
+/// between them (a settings save racing a watcher-triggered rescan), the two
+/// reads can straddle the write and produce a torn result — some fields from
+/// the old settings, some from the new.
 pub fn resolve_sync_dir(vault_root: &Path) -> String {
-    read(vault_root)
-        .sync_dir
-        .and_then(|v| validate_rel_dir(&v).ok())
+    resolve_sync_dir_from(&read(vault_root))
+}
+
+/// Same effective value as [`resolve_sync_dir`], computed from an
+/// already-read `VaultSettings` rather than reading the file itself.
+pub fn resolve_sync_dir_from(vs: &VaultSettings) -> String {
+    vs.sync_dir
+        .as_deref()
+        .and_then(|v| validate_rel_dir(v).ok())
         .unwrap_or_else(|| DEFAULT_SYNC_DIR.to_string())
 }
 
@@ -334,6 +347,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolve_sync_dir(dir.path()), DEFAULT_SYNC_DIR);
+    }
+
+    /// review round 1, Minor #3: `resolve_sync_dir_from` must agree with
+    /// `resolve_sync_dir` on every case above (default/configured/invalid) —
+    /// it is the single-read variant `search::options::for_vault` uses so it
+    /// does not read `.notemd/settings.json` twice per call.
+    #[test]
+    fn resolve_sync_dir_from_agrees_with_resolve_sync_dir_on_every_case() {
+        assert_eq!(resolve_sync_dir_from(&VaultSettings::default()), DEFAULT_SYNC_DIR);
+        assert_eq!(
+            resolve_sync_dir_from(&VaultSettings { sync_dir: Some("box".into()), ..Default::default() }),
+            "box"
+        );
+        assert_eq!(
+            resolve_sync_dir_from(&VaultSettings { sync_dir: Some("../nope".into()), ..Default::default() }),
+            DEFAULT_SYNC_DIR
+        );
     }
 
     #[test]

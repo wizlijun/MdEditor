@@ -45,17 +45,22 @@ pub struct SearchIndex {
 }
 
 impl SearchIndex {
-    pub fn open(vault_root: &Path) -> Result<Self, String> {
+    /// `sync_dir` is the vault's currently-resolved sync mirror directory
+    /// name (`ScanOptions::sync_dir` / `vault_settings::resolve_sync_dir`) —
+    /// stamped into the index and compared on every open so a changed
+    /// setting invalidates every stored `origin` instead of leaving it
+    /// silently stale. See `store::open`'s doc comment.
+    pub fn open(vault_root: &Path, sync_dir: &str) -> Result<Self, String> {
         let db = paths::index_db_path(vault_root).ok_or("no local app data directory")?;
-        Self::open_at(vault_root, &db)
+        Self::open_at(vault_root, &db, sync_dir)
     }
 
-    pub fn open_at(vault_root: &Path, db_path: &Path) -> Result<Self, String> {
+    pub fn open_at(vault_root: &Path, db_path: &Path, sync_dir: &str) -> Result<Self, String> {
         // Must be the *same* normalization `paths::vault_key` uses, or two
         // spellings of one vault share a database while disagreeing about the
         // stamp — see `paths::normalized_vault_root`.
         let root = paths::normalized_vault_root(vault_root);
-        let conn = store::open(db_path, &root).map_err(|e| e.to_string())?;
+        let conn = store::open(db_path, &root, sync_dir).map_err(|e| e.to_string())?;
         Ok(SearchIndex {
             conn,
             vault_root: vault_root.to_path_buf(),
@@ -177,21 +182,21 @@ mod tests {
 
         assert_eq!(paths::vault_key(&bare), paths::vault_key(&slashed));
 
-        let first = SearchIndex::open_at(&bare, &db).unwrap();
+        let first = SearchIndex::open_at(&bare, &db, "sync").unwrap();
         let stamped = store::meta_get(&first.conn, "vault_root").unwrap();
         assert_eq!(stamped, paths::normalized_vault_root(&bare));
         drop(first);
 
         // Stand in for the GUI mid-rebuild: a held write transaction. The
         // second open has nothing to write, so it must not wait on it.
-        let mut holder = store::open(&db, &stamped).unwrap();
+        let mut holder = store::open(&db, &stamped, "sync").unwrap();
         let tx = holder
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .unwrap();
         store::meta_set(&tx, "probe", "1").unwrap();
 
         let started = std::time::Instant::now();
-        let second = SearchIndex::open_at(&slashed, &db).unwrap();
+        let second = SearchIndex::open_at(&slashed, &db, "sync").unwrap();
         assert!(
             started.elapsed() < std::time::Duration::from_secs(4),
             "the trailing-slash spelling must not re-stamp, and so must not wait on a writer"

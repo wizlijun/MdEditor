@@ -32,7 +32,7 @@ CREATE TABLE files(
   ext TEXT NOT NULL, mtime INTEGER, size INTEGER, content_hash TEXT,
   title TEXT, concept_type TEXT, tags_json TEXT,
   doc_date TEXT, date_inferred INTEGER,
-  human_verified INTEGER DEFAULT 0, origin TEXT);
+  human_verified INTEGER DEFAULT 0, origin TEXT NOT NULL);
 CREATE TABLE blocks(
   id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id),
   line_start INTEGER, line_end INTEGER,
@@ -53,10 +53,10 @@ pub struct FileRow {
 }
 
 /// Open (creating if needed) the index at `db_path`. A wrong schema version,
-/// a wrong tokenizer, or a file that is *genuinely not a database* is
-/// resolved by deleting the file and starting over. There is deliberately no
-/// repair path: the index is disposable derived data, and rebuild is always
-/// correct while repair logic never fully is.
+/// a wrong tokenizer, a changed `sync_dir`, or a file that is *genuinely not
+/// a database* is resolved by deleting the file and starting over. There is
+/// deliberately no repair path: the index is disposable derived data, and
+/// rebuild is always correct while repair logic never fully is.
 ///
 /// What is **not** resolved that way is any *transient* failure — most
 /// importantly `SQLITE_BUSY`/`SQLITE_LOCKED` from another process holding the
@@ -84,11 +84,16 @@ pub struct FileRow {
 /// silently continuing to use a database that is still stale: a stale
 /// index answering queries under the wrong tokenizer is a wrong-results bug
 /// dressed up as a working one, which is worse than failing loudly.
-pub fn open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection> {
+/// `sync_dir` is the vault's currently-configured sync mirror directory name
+/// (see `ScanOptions::sync_dir`) — stamped into `meta` and compared exactly
+/// like `tokenizer_id` below, because `origin::derive` (rule 5) is a function
+/// of it and nothing else re-derives a stored `origin` when only the
+/// *setting* changes (see `a_changed_sync_dir_wipes_the_database`).
+pub fn open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Result<Connection> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    match try_open(db_path, vault_root) {
+    match try_open(db_path, vault_root, sync_dir) {
         Ok(Opened::Ready(conn)) => return Ok(conn),
         Ok(Opened::Stale) => {}
         Err(e) if is_corruption(&e) => {}
@@ -99,7 +104,7 @@ pub fn open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection> {
     if !wipe(db_path) {
         return Err(rusqlite::Error::InvalidPath(db_path.to_path_buf()));
     }
-    create_fresh(db_path, vault_root)
+    create_fresh(db_path, vault_root, sync_dir)
 }
 
 /// Is this error "the bytes on disk are not a usable database", as opposed to
@@ -123,18 +128,20 @@ fn is_corruption(e: &rusqlite::Error) -> bool {
 /// newly created) file.
 enum Opened {
     /// A connection whose `meta` table (freshly created or pre-existing)
-    /// matches the current `SCHEMA_VERSION`/`TOKENIZER_ID` — safe to use.
+    /// matches the current `SCHEMA_VERSION`/`TOKENIZER_ID`/`sync_dir` — safe
+    /// to use.
     Ready(Connection),
     /// The file opened, but its `meta` table disagrees with the current
-    /// schema/tokenizer. The caller must wipe the file and start over; this
-    /// function does not do that itself, so it never needs to re-enter.
+    /// schema/tokenizer/sync_dir. The caller must wipe the file and start
+    /// over; this function does not do that itself, so it never needs to
+    /// re-enter.
     Stale,
 }
 
 /// Open `db_path` and classify what was found. Never recurses and never
 /// wipes anything itself — wiping is the caller's job, done at most once,
 /// in `open`.
-fn try_open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Opened> {
+fn try_open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Result<Opened> {
     let conn = Connection::open(db_path)?;
     set_pragmas(&conn)?;
 
@@ -153,7 +160,7 @@ fn try_open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Opened> {
             .query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0))
             .map(|n| n == 0)?;
         if empty {
-            stamp_fresh_schema(&conn, vault_root)?;
+            stamp_fresh_schema(&conn, vault_root, sync_dir)?;
             return Ok(Opened::Ready(conn));
         }
         // No `meta` but *some* tables: a half-created index (a crash, a kill,
@@ -170,8 +177,17 @@ fn try_open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Opened> {
         return Ok(Opened::Stale);
     }
 
+    // `sync_dir` joins `schema_version`/`tokenizer_id` in this check, not the
+    // best-effort re-stamp `vault_root` gets below: `origin::derive` (rule 5)
+    // is a function of `sync_dir`, and unlike `vault_root` — which nothing
+    // reads for correctness — a stale `sync_dir` means every mirrored file's
+    // stored `origin` is silently wrong until that file's bytes happen to
+    // change. A mismatch here is exactly as disruptive as a tokenizer change
+    // (every stored derived value is suspect), so it gets the same answer:
+    // wipe and rebuild, not a quiet re-stamp.
     let ok = meta_get(&conn, "schema_version").as_deref() == Some(&SCHEMA_VERSION.to_string())
-        && meta_get(&conn, "tokenizer_id").as_deref() == Some(TOKENIZER_ID);
+        && meta_get(&conn, "tokenizer_id").as_deref() == Some(TOKENIZER_ID)
+        && meta_get(&conn, "sync_dir").as_deref() == Some(sync_dir);
     if !ok {
         drop(conn);
         return Ok(Opened::Stale);
@@ -196,10 +212,10 @@ fn try_open(db_path: &Path, vault_root: &str) -> rusqlite::Result<Opened> {
 /// Open a file that is known to not exist yet (just created, or just
 /// wiped) and build the schema on it. Never called on a file that might
 /// already have a `meta` table — `try_open` owns that check.
-fn create_fresh(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection> {
+fn create_fresh(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Result<Connection> {
     let conn = Connection::open(db_path)?;
     set_pragmas(&conn)?;
-    stamp_fresh_schema(&conn, vault_root)?;
+    stamp_fresh_schema(&conn, vault_root, sync_dir)?;
     Ok(conn)
 }
 
@@ -210,12 +226,13 @@ fn create_fresh(db_path: &Path, vault_root: &str) -> rusqlite::Result<Connection
 /// two auto-committed `CREATE TABLE`s used to leave behind. `try_open` still
 /// handles that state defensively, since databases created by older builds
 /// are already out there.
-fn stamp_fresh_schema(conn: &Connection, vault_root: &str) -> rusqlite::Result<()> {
+fn stamp_fresh_schema(conn: &Connection, vault_root: &str, sync_dir: &str) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(SCHEMA_SQL)?;
     meta_set(&tx, "schema_version", &SCHEMA_VERSION.to_string())?;
     meta_set(&tx, "tokenizer_id", TOKENIZER_ID)?;
     meta_set(&tx, "vault_root", vault_root)?;
+    meta_set(&tx, "sync_dir", sync_dir)?;
     tx.commit()
 }
 
@@ -426,7 +443,7 @@ mod tests {
     #[test]
     fn open_creates_the_schema_and_stamps_meta() {
         let (_d, p) = tmp();
-        let conn = open(&p, "/v").unwrap();
+        let conn = open(&p, "/v", "sync").unwrap();
         assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
         assert_eq!(meta_get(&conn, "tokenizer_id").as_deref(), Some(crate::tokenize::TOKENIZER_ID));
         assert_eq!(meta_get(&conn, "vault_root").as_deref(), Some("/v"));
@@ -437,25 +454,45 @@ mod tests {
     fn a_stale_tokenizer_id_wipes_the_database() {
         let (_d, p) = tmp();
         {
-            let mut conn = open(&p, "/v").unwrap();
+            let mut conn = open(&p, "/v", "sync").unwrap();
             write(&mut conn, "a.md", "hello\n");
             meta_set(&conn, "tokenizer_id", "v0+something-else").unwrap();
         }
-        let conn = open(&p, "/v").unwrap();
+        let conn = open(&p, "/v", "sync").unwrap();
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "a tokenizer change must invalidate every stored token");
         assert_eq!(meta_get(&conn, "tokenizer_id").as_deref(), Some(crate::tokenize::TOKENIZER_ID));
+    }
+
+    /// review round 1, Important #1: `origin` is a function of `sync_dir`
+    /// (rule 5, `origin::derive`), but nothing re-derives it when the vault's
+    /// `syncDir` setting changes — the sweep's stat/hash fast path only
+    /// touches `mtime`/`size` on an unchanged file, so a stale `origin` would
+    /// otherwise survive indefinitely. Mirrors `a_stale_tokenizer_id_wipes_
+    /// the_database` exactly: stamp `sync_dir` into `meta`, same as
+    /// `tokenizer_id`, and treat a mismatch as `Opened::Stale`.
+    #[test]
+    fn a_changed_sync_dir_wipes_the_database() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v", "sync").unwrap();
+            write(&mut conn, "a.md", "hello\n");
+        }
+        let conn = open(&p, "/v", "box").unwrap();
+        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "a changed sync_dir must invalidate every stored origin");
+        assert_eq!(meta_get(&conn, "sync_dir").as_deref(), Some("box"));
     }
 
     #[test]
     fn a_stale_schema_version_wipes_the_database() {
         let (_d, p) = tmp();
         {
-            let mut conn = open(&p, "/v").unwrap();
+            let mut conn = open(&p, "/v", "sync").unwrap();
             write(&mut conn, "a.md", "hello\n");
             meta_set(&conn, "schema_version", "0").unwrap();
         }
-        let conn = open(&p, "/v").unwrap();
+        let conn = open(&p, "/v", "sync").unwrap();
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
     }
@@ -471,11 +508,11 @@ mod tests {
     fn a_version_1_database_is_wiped_on_open() {
         let (_d, p) = tmp();
         {
-            let mut conn = open(&p, "/v").unwrap();
+            let mut conn = open(&p, "/v", "sync").unwrap();
             write(&mut conn, "a.md", "hello\n");
             meta_set(&conn, "schema_version", "1").unwrap();
         }
-        let conn = open(&p, "/v").unwrap();
+        let conn = open(&p, "/v", "sync").unwrap();
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "a v1 (pre-origin-column) database must be wiped, not used with a missing column");
         assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
@@ -489,7 +526,7 @@ mod tests {
     #[test]
     fn origin_round_trips_through_the_files_table() {
         let (_d, p) = tmp();
-        let mut conn = open(&p, "/v").unwrap();
+        let mut conn = open(&p, "/v", "sync").unwrap();
         write(&mut conn, "a.note.md", "- x\n");
         let stored: Option<String> = conn
             .query_row("SELECT origin FROM files WHERE path='a.note.md'", [], |r| r.get(0))
@@ -510,11 +547,33 @@ mod tests {
         assert_eq!(origin_of(Some("")), Origin::Derived);
     }
 
+    /// review round 1, Minor #2: `origin` has exactly one writer
+    /// (`replace_file`, which always supplies it), so `origin_of(None)` is
+    /// unreachable through this crate's own code today — there is no
+    /// migration path to protect, so `NOT NULL` is free and turns a *future*
+    /// forgotten-column insert into a loud constraint error at the write
+    /// site instead of a silent `Derived` at the read site. `origin_of`'s
+    /// NULL-tolerant fallback stays as defense for hand-edited/foreign rows,
+    /// per the reviewer's explicit instruction — this test only pins that
+    /// the schema itself refuses to manufacture that case.
+    #[test]
+    fn the_origin_column_rejects_a_null_insert() {
+        let (_d, p) = tmp();
+        let conn = open(&p, "/v", "sync").unwrap();
+        let err = conn
+            .execute(
+                "INSERT INTO files(path,ext,mtime,size,content_hash) VALUES('x.md','md',0,0,'h')",
+                [],
+            )
+            .expect_err("an insert that omits `origin` (defaulting to NULL) must be rejected by the schema");
+        assert!(matches!(err, rusqlite::Error::SqliteFailure(_, _)), "{err:?}");
+    }
+
     #[test]
     fn a_corrupt_database_file_is_replaced_not_reported() {
         let (_d, p) = tmp();
         std::fs::write(&p, b"this is not a sqlite file at all").unwrap();
-        let conn = open(&p, "/v").unwrap();
+        let conn = open(&p, "/v", "sync").unwrap();
         assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
     }
 
@@ -534,14 +593,14 @@ mod tests {
             let conn = Connection::open(&p).unwrap();
             conn.execute_batch("CREATE TABLE files(id INTEGER PRIMARY KEY, path TEXT);").unwrap();
         }
-        let conn = open(&p, "/v").expect("a half-created index must be rebuilt, not reported");
+        let conn = open(&p, "/v", "sync").expect("a half-created index must be rebuilt, not reported");
         assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
         assert_eq!(meta_get(&conn, "vault_root").as_deref(), Some("/v"));
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
         // And it is a real index afterwards, not just an openable file.
         drop(conn);
-        let mut conn = open(&p, "/v").unwrap();
+        let mut conn = open(&p, "/v", "sync").unwrap();
         write(&mut conn, "a.md", "alpha\n");
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
@@ -560,7 +619,7 @@ mod tests {
             // crash/ENOSPC part-way through: `meta` already exists, so
             // `CREATE TABLE meta` errors after `files`/`blocks`/… succeeded.
             conn.execute_batch("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);").unwrap();
-            assert!(stamp_fresh_schema(&conn, "/v").is_err());
+            assert!(stamp_fresh_schema(&conn, "/v", "sync").is_err());
             let tables: i64 = conn
                 .query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='files'", [], |r| r.get(0))
                 .unwrap();
@@ -572,7 +631,7 @@ mod tests {
     #[test]
     fn replacing_a_file_is_idempotent() {
         let (_d, p) = tmp();
-        let mut conn = open(&p, "/v").unwrap();
+        let mut conn = open(&p, "/v", "sync").unwrap();
         write(&mut conn, "a.md", "# T\n\nalpha\n");
         let count = |c: &Connection| -> i64 { c.query_row("SELECT count(*) FROM blocks", [], |r| r.get(0)).unwrap() };
         let first = count(&conn);
@@ -586,7 +645,7 @@ mod tests {
     #[test]
     fn removing_a_file_clears_its_blocks_and_fts_rows() {
         let (_d, p) = tmp();
-        let mut conn = open(&p, "/v").unwrap();
+        let mut conn = open(&p, "/v", "sync").unwrap();
         write(&mut conn, "a.md", "alpha unique-token\n");
         let tx = conn.transaction().unwrap();
         remove_file(&tx, "a.md").unwrap();
@@ -600,7 +659,7 @@ mod tests {
     #[test]
     fn all_file_rows_returns_stat_data_for_sweeping() {
         let (_d, p) = tmp();
-        let mut conn = open(&p, "/v").unwrap();
+        let mut conn = open(&p, "/v", "sync").unwrap();
         write(&mut conn, "a.md", "x\n");
         let rows = all_file_rows(&conn).unwrap();
         assert_eq!(rows.get("a.md").unwrap().content_hash, "h1");
@@ -609,7 +668,7 @@ mod tests {
     #[test]
     fn wal_and_busy_timeout_are_enabled_for_two_process_access() {
         let (_d, p) = tmp();
-        let conn = open(&p, "/v").unwrap();
+        let conn = open(&p, "/v", "sync").unwrap();
         let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
         // The timeout is what makes two writers without IPC workable at all.
@@ -630,7 +689,7 @@ mod tests {
         // directory can never exist.
         std::fs::write(&root, b"not a directory").unwrap();
         let bogus = root.join("nested").join("index.db");
-        assert!(open(&bogus, "/v").is_err());
+        assert!(open(&bogus, "/v", "sync").is_err());
     }
 
     /// `wipe` must report whether the file is actually gone, not merely
@@ -667,12 +726,12 @@ mod tests {
     fn a_concurrent_writer_must_not_cause_open_to_wipe_the_database() {
         let (_d, p) = tmp();
         {
-            let mut conn = open(&p, "/v").unwrap();
+            let mut conn = open(&p, "/v", "sync").unwrap();
             write(&mut conn, "a.md", "alpha\n");
         }
         // Stand in for the other process: hold a real write transaction, the
         // way `build_full` does for the whole duration of a full scan.
-        let mut holder = open(&p, "/v").unwrap();
+        let mut holder = open(&p, "/v", "sync").unwrap();
         let tx = holder
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .unwrap();
@@ -681,7 +740,7 @@ mod tests {
         #[cfg(unix)]
         let ino_before = ino(&p);
         let started = std::time::Instant::now();
-        let conn = open(&p, "/v").expect("a busy writer must not make open fail");
+        let conn = open(&p, "/v", "sync").expect("a busy writer must not make open fail");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(4),
             "open must not even *wait* on the writer: it has no reason to write"
@@ -717,20 +776,20 @@ mod tests {
     fn a_lock_error_is_reported_not_self_healed_by_deleting_the_index() {
         let (_d, p) = tmp();
         {
-            let mut conn = open(&p, "/v").unwrap();
+            let mut conn = open(&p, "/v", "sync").unwrap();
             write(&mut conn, "a.md", "alpha\n");
         }
-        let holder = open(&p, "/v").unwrap();
+        let holder = open(&p, "/v", "sync").unwrap();
         holder.pragma_update(None, "locking_mode", "EXCLUSIVE").unwrap();
         holder.execute("INSERT INTO meta(key,value) VALUES('probe','1')", []).unwrap();
 
-        let err = open(&p, "/v").err().expect("an exclusively locked database must not open");
+        let err = open(&p, "/v", "sync").err().expect("an exclusively locked database must not open");
         assert!(!is_corruption(&err), "a lock error is not corruption: {err:?}");
         assert!(p.exists(), "the database file must still be there");
 
         // Release the lock and prove the rows were never destroyed.
         drop(holder);
-        let conn = open(&p, "/v").unwrap();
+        let conn = open(&p, "/v", "sync").unwrap();
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1, "open must not have wiped a database it merely could not lock");
     }
@@ -765,6 +824,6 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("index.db");
         std::fs::create_dir(&p).unwrap();
-        assert!(open(&p, "/v").is_err());
+        assert!(open(&p, "/v", "sync").is_err());
     }
 }

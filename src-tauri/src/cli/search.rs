@@ -145,7 +145,7 @@ pub fn run(args: SearchArgs) -> ExitCode {
     let mut skipped_large: Vec<SkippedFile> = Vec::new();
 
     // Every failure below degrades. The only hard error is "no vault".
-    let mut index = match SearchIndex::open(&root) {
+    let mut index = match SearchIndex::open(&root, &opts.sync_dir) {
         Ok(i) => Some(i),
         Err(e) => {
             eprintln!("notemd: search index unavailable ({e}); scanning files directly");

@@ -219,7 +219,7 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
     let app = app.clone();
     std::thread::spawn(move || {
         let opts = scan_options(&root);
-        match SearchIndex::open(&root) {
+        match SearchIndex::open(&root, &opts.sync_dir) {
             Ok(mut idx) => {
                 if let Err(e) = idx.ensure_built(&opts) {
                     crate::log_cat!("search", "error", "initial build failed: {e}");
@@ -833,7 +833,7 @@ mod command_tests {
             std::fs::write(v.path().join(format!("f{i}.md")), format!("body {i}\n")).unwrap();
         }
         let d = tempfile::tempdir().unwrap();
-        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db")).unwrap();
+        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
         log_rebuild_with(&mut idx, &searchidx::ScanOptions::default(), None).unwrap();
 
         let lines: Vec<_> = crate::log_bus::snapshot()
@@ -869,7 +869,7 @@ mod command_tests {
             std::fs::write(v.path().join(format!("f{i}.md")), format!("body {i}\n")).unwrap();
         }
         let d = tempfile::tempdir().unwrap();
-        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db")).unwrap();
+        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
         log_rebuild_with(&mut idx, &searchidx::ScanOptions::default(), None).unwrap();
 
         let lines: Vec<_> = crate::log_bus::snapshot()
@@ -917,7 +917,7 @@ mod command_tests {
             std::fs::write(v.path().join(format!("big{i:02}.md")), "x").unwrap();
         }
         let d = tempfile::tempdir().unwrap();
-        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db")).unwrap();
+        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
         // 阈值 0 = 任何非空文件都算超标。这里只是让 60 个 1 字节文件全部进
         // skipped 列表,免得为了测日志上限真去写 60 个 10MB 文件;设置层不
         // 允许 0(见 vault_settings::merge 的零值拒绝),这是测试专用取值。
@@ -953,7 +953,7 @@ mod command_tests {
             std::fs::write(v.path().join(format!("big{i}.md")), "x").unwrap();
         }
         let d = tempfile::tempdir().unwrap();
-        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db")).unwrap();
+        let mut idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
         let opts = searchidx::ScanOptions { large_file_threshold_mb: 0, exclude_dirs: Vec::new(), ..Default::default() };
         log_rebuild_with(&mut idx, &opts, None).unwrap();
 

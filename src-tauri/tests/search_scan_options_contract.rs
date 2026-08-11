@@ -37,9 +37,24 @@ fn both_unset_falls_back_to_the_default() {
 #[test]
 fn the_cli_and_the_gui_build_options_through_one_function() {
     let d = tempfile::tempdir().unwrap();
-    write_settings(d.path(), r#"{"searchLargeFileThresholdMb": 33, "searchExcludeDirs": ["a"]}"#);
+    write_settings(d.path(), r#"{"searchLargeFileThresholdMb": 33, "searchExcludeDirs": ["a"], "syncDir": "box"}"#);
     let gui = mdeditor_lib::search::options::for_vault(d.path());
     let cli = mdeditor_lib::cli::search::scan_options_for(d.path());
     assert_eq!(gui.large_file_threshold_mb, cli.large_file_threshold_mb);
     assert_eq!(gui.exclude_dirs, cli.exclude_dirs);
+    assert_eq!(gui.sync_dir, cli.sync_dir);
+}
+
+/// `sync_dir` feeds `origin::derive` (spec §3 rule 5), so it must resolve the
+/// same way the other options do: unset falls back to the default, and an
+/// explicit value is honored.
+#[test]
+fn sync_dir_defaults_and_uses_the_configured_value() {
+    let d = tempfile::tempdir().unwrap();
+    write_settings(d.path(), r#"{}"#);
+    assert_eq!(mdeditor_lib::search::options::for_vault(d.path()).sync_dir, "sync");
+
+    let d2 = tempfile::tempdir().unwrap();
+    write_settings(d2.path(), r#"{"syncDir": "box"}"#);
+    assert_eq!(mdeditor_lib::search::options::for_vault(d2.path()).sync_dir, "box");
 }
