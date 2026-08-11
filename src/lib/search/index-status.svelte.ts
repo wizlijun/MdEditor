@@ -59,21 +59,47 @@ class IndexStatusStore {
    * a settings page opened while a rebuild is already running has missed
    * every event fired so far, and without this poll it would sit blank
    * until the next throttled callback fires on the backend.
+   *
+   * The two reads are applied INDEPENDENTLY, never bundled into one
+   * `Promise.all` — that is the whole point of the backend's lock split.
+   * `notemd_search_stats` takes the index lock, which a rebuild holds for its
+   * entire duration; `notemd_search_progress` deliberately never touches that
+   * lock so progress stays readable during exactly that window (design spec
+   * §59). Awaiting the pair together would re-couple them on the frontend:
+   * `progress` could not land until `stats` got the lock, i.e. not until the
+   * rebuild finished — which is precisely when progress stops being useful.
    */
   async refresh(): Promise<void> {
     const mine = ++seq
     this.loading = true
     this.error = null
     this.notReady = false
+    // Fire-and-apply: lands as soon as the lock-free command answers, without
+    // waiting on the lock-taking `stats()` below. Guarded by the same `seq` so
+    // a superseded refresh still can't clobber a fresher one. A progress read
+    // failing is not panel-level breakage (stats carries the error reporting),
+    // so it is swallowed rather than blanking the page. Called directly (not
+    // deferred through `Promise.resolve().then(...)`) so it still lands within
+    // the same microtask drain a caller's `await refresh()` completes in; the
+    // `try` only guards a *synchronous* throw out of `impl.progress()`, which
+    // would otherwise escape this method and leave `loading` stuck true.
     try {
-      const [stats, progress] = await Promise.all([impl.stats(), impl.progress()])
+      void impl.progress().then(
+        (p) => {
+          if (mine !== seq) return
+          this.progress = p
+          // `p === null` means no rebuild is running right now (by anyone) —
+          // the exact condition a stale `busyNotice` was reporting on. If
+          // another rebuild is still in flight, leave it set.
+          if (p === null) this.busyNotice = false
+        },
+        () => {},
+      )
+    } catch { /* same as a rejected progress read: stats carries the error */ }
+    try {
+      const stats = await impl.stats()
       if (mine !== seq) return // superseded by a newer refresh() — drop the stale response
       this.stats = stats
-      this.progress = progress
-      // `progress === null` means no rebuild is running right now (by
-      // anyone) — the exact condition a stale `busyNotice` was reporting on.
-      // If another rebuild is still in flight, leave it set.
-      if (progress === null) this.busyNotice = false
     } catch (e) {
       if (mine !== seq) return
       const msg = e instanceof Error ? e.message : String(e)

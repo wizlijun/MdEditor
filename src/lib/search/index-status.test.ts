@@ -25,6 +25,7 @@ const { listenMock, getListenCalls, resetListenCalls } = vi.hoisted(() => {
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }))
 
 import { indexStatus, _setIndexApi, estimateRebuildSeconds, elideMiddle, formatElapsedMs } from './index-status.svelte'
+import type { SearchStats } from './api'
 
 beforeEach(() => {
   indexStatus.reset()
@@ -47,6 +48,39 @@ describe('indexStatus', () => {
     expect(indexStatus.progress?.done).toBe(3)
     expect(indexStatus.stats?.files).toBe(10)
     expect(indexStatus.stats?.skippedLarge).toEqual([{ path: 'big.md', sizeBytes: 2_000_000 }])
+  })
+
+  // The property `refresh()` actually claims, and the one the old
+  // `Promise.all([stats(), progress()])` quietly broke: `notemd_search_stats`
+  // takes the index lock, which a rebuild holds for its whole duration;
+  // `notemd_search_progress` exists precisely so progress stays readable
+  // during that window. Mocking both as instantly-resolving (as every other
+  // test here does) cannot tell the two implementations apart — bundling and
+  // splitting look identical when nothing blocks. So this test makes
+  // `stats()` hang exactly the way the real command does under a rebuild,
+  // and asserts progress lands anyway, without awaiting the hung read.
+  it('stats() 卡在索引锁上时,progress 仍然照常落地(不被打包等待拖住)', async () => {
+    let releaseStats: (v: SearchStats | null) => void = () => {}
+    _setIndexApi({
+      stats: () => new Promise<SearchStats | null>((resolve) => { releaseStats = resolve }),
+      progress: async () => ({ phase: 'indexing', done: 42, total: 600, current: 'a.md', elapsedMs: 7 }),
+      rebuild: async () => {},
+    })
+
+    const pending = indexStatus.refresh() // 故意不 await:重建期间它本就不会返回
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(indexStatus.progress?.done).toBe(42)
+    expect(indexStatus.stats).toBeNull() // 锁还没放,统计当然还没有
+    expect(indexStatus.loading).toBe(true)
+
+    releaseStats({
+      files: 600, blocks: 600, dbBytes: 4096, builtAt: null, tokenizerId: 'v1', skippedLarge: [],
+    })
+    await pending
+    expect(indexStatus.stats?.files).toBe(600)
+    expect(indexStatus.loading).toBe(false)
   })
 
   it('进度事件覆盖轮询到的快照', async () => {
