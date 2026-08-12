@@ -631,6 +631,12 @@ fn score_of(rank: f64, hit: &Hit, is_annotation: bool, phrase_exact: bool, today
         Origin::Human => 1.25,
         Origin::Derived => 1.0,
         Origin::Source => 0.9,
+        // TODO(C-T7): hardcoded at spec §3.1's default rather than sourced
+        // from a configurable `Weights` struct — C-T7 replaces all four of
+        // these literals with `Weights`-driven multipliers. Using the real
+        // spec default here (not an arbitrary placeholder) so ranking is
+        // already correct in the interim, not merely "compiles".
+        Origin::Unlabeled => 0.3,
     };
     // The first line of defense against memory self-propagation: AI-authored
     // material is findable but never outranks the primary source it summarized.
@@ -723,17 +729,19 @@ mod tests {
     /// type error either) — both reduced the whole tiering feature to a
     /// silent no-op while every existing test stayed green. This goes
     /// through the real index: `a.note.md` classifies `Human` (rule 1,
-    /// blind to frontmatter), a bare `.md` with none classifies `Source`
-    /// (rule 6) — two tiers, neither the `Derived` fallback both mutations
-    /// above collapse onto, so either mutation is caught here.
+    /// blind to frontmatter), a bare `.md` with none classifies `Unlabeled`
+    /// (rule 6′ — `indexed`'s `ScanOptions::default()` carries no source
+    /// globs, so rule 5′ never fires here; see the C-T2 task report) — two
+    /// tiers, neither the `Derived` fallback both mutations above collapse
+    /// onto, so either mutation is caught here.
     #[test]
     fn a_hits_origin_round_trips_through_the_real_index() {
         let (_d, c) = indexed(&[("a.note.md", "target\n"), ("b.md", "target\n")]);
         let hits = search(&c, &parse("target"), 20, "2026-08-10").unwrap().0;
         let human = hits.iter().find(|h| h.path == "a.note.md").expect("a.note.md must be found");
-        let source = hits.iter().find(|h| h.path == "b.md").expect("b.md must be found");
+        let unlabeled = hits.iter().find(|h| h.path == "b.md").expect("b.md must be found");
         assert_eq!(human.origin, Origin::Human, "{human:?}");
-        assert_eq!(source.origin, Origin::Source, "{source:?}");
+        assert_eq!(unlabeled.origin, Origin::Unlabeled, "{unlabeled:?}");
     }
 
     /// Same hazard as the `origin` round-trip above, for the column task

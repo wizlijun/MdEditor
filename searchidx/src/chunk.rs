@@ -5,6 +5,7 @@
 //! `rebuild == incremental update` true by construction.
 
 use crate::block::{Block, FileMeta, Link};
+use crate::globs::SourceGlobs;
 use crate::{frontmatter, links, norm, origin, outline, prose};
 
 pub struct Parsed {
@@ -15,9 +16,10 @@ pub struct Parsed {
 
 /// `rel_path` is the vault-relative, `/`-separated path. `mtime_secs` is the
 /// last-modified time, used only as the final fallback for `doc_date`.
-/// `sync_dir` is the vault's configured sync-mirror directory name, forwarded
-/// verbatim to `origin::derive` (spec §3, rule 5).
-pub fn parse_file(rel_path: &str, raw: &str, mtime_secs: i64, sync_dir: &str) -> Parsed {
+/// `globs` is the vault's configured source-glob patterns, forwarded
+/// verbatim to `origin::derive` (spec §3, rule 5′) — this used to be a
+/// `sync_dir: &str` (the sync-mirror special case rule 5′ replaced).
+pub fn parse_file(rel_path: &str, raw: &str, mtime_secs: i64, globs: &SourceGlobs) -> Parsed {
     let text = norm::strip_cr(raw);
     let (fm_raw, body, body_line) = frontmatter::split(&text);
     // `fm_raw.is_some()` must be captured BEFORE it is collapsed below —
@@ -46,7 +48,7 @@ pub fn parse_file(rel_path: &str, raw: &str, mtime_secs: i64, sync_dir: &str) ->
         doc_date,
         date_inferred,
         human_verified: fm.human_verified,
-        origin: origin::derive(rel_path, fm_present.then_some(&fm), sync_dir),
+        origin: origin::derive(rel_path, fm_present.then_some(&fm), globs),
     };
     Parsed { meta, blocks, links: links::extract(body, body_line) }
 }
@@ -135,47 +137,47 @@ mod tests {
 
     #[test]
     fn note_md_files_go_through_the_outline_chunker() {
-        let p = parse_file("a.note.md", "- alpha\n  - beta\n", MTIME, "sync");
+        let p = parse_file("a.note.md", "- alpha\n  - beta\n", MTIME, &no_globs());
         assert!(p.blocks.iter().any(|b| b.text == "beta" && b.breadcrumb == "alpha"));
     }
 
     #[test]
     fn plain_md_files_go_through_the_prose_chunker() {
-        let p = parse_file("a.md", "# T\n\npara\n", MTIME, "sync");
+        let p = parse_file("a.md", "# T\n\npara\n", MTIME, &no_globs());
         assert!(p.blocks.iter().any(|b| b.text == "para"));
     }
 
     /// spec §3.5 的降级链,顺序不能反:文件名 → frontmatter → mtime。
     #[test]
     fn doc_date_prefers_the_filename_prefix() {
-        let p = parse_file("2026-01-02-thing.md", "---\ncreated: 2020-05-05\n---\nx\n", MTIME, "sync");
+        let p = parse_file("2026-01-02-thing.md", "---\ncreated: 2020-05-05\n---\nx\n", MTIME, &no_globs());
         assert_eq!(p.meta.doc_date.as_deref(), Some("2026-01-02"));
         assert!(!p.meta.date_inferred);
     }
 
     #[test]
     fn doc_date_falls_back_to_frontmatter_then_to_mtime() {
-        let p = parse_file("thing.md", "---\ncreated: 2020-05-05\n---\nx\n", MTIME, "sync");
+        let p = parse_file("thing.md", "---\ncreated: 2020-05-05\n---\nx\n", MTIME, &no_globs());
         assert_eq!(p.meta.doc_date.as_deref(), Some("2020-05-05"));
         assert!(!p.meta.date_inferred);
 
-        let p = parse_file("thing.md", "x\n", MTIME, "sync");
+        let p = parse_file("thing.md", "x\n", MTIME, &no_globs());
         assert_eq!(p.meta.doc_date.as_deref(), Some("2026-08-10"));
         assert!(p.meta.date_inferred, "mtime-derived dates must be flagged inferred");
     }
 
     #[test]
     fn title_falls_back_to_the_first_h1_then_to_the_stem() {
-        assert_eq!(parse_file("a.md", "---\ntitle: FM\n---\n# H\n", MTIME, "sync").meta.title.as_deref(), Some("FM"));
-        assert_eq!(parse_file("a.md", "# H\n", MTIME, "sync").meta.title.as_deref(), Some("H"));
-        assert_eq!(parse_file("dir/my-note.md", "text\n", MTIME, "sync").meta.title.as_deref(), Some("my-note"));
+        assert_eq!(parse_file("a.md", "---\ntitle: FM\n---\n# H\n", MTIME, &no_globs()).meta.title.as_deref(), Some("FM"));
+        assert_eq!(parse_file("a.md", "# H\n", MTIME, &no_globs()).meta.title.as_deref(), Some("H"));
+        assert_eq!(parse_file("dir/my-note.md", "text\n", MTIME, &no_globs()).meta.title.as_deref(), Some("my-note"));
     }
 
     /// CRLF 文件必须和 LF 文件产出逐字相同的块 —— 跨平台规约②。
     #[test]
     fn crlf_input_produces_identical_blocks_to_lf() {
-        let lf = parse_file("a.md", "# T\n\npara\n", MTIME, "sync");
-        let crlf = parse_file("a.md", "# T\r\n\r\npara\r\n", MTIME, "sync");
+        let lf = parse_file("a.md", "# T\n\npara\n", MTIME, &no_globs());
+        let crlf = parse_file("a.md", "# T\r\n\r\npara\r\n", MTIME, &no_globs());
         let f = |p: &Parsed| p.blocks.iter().map(|b| (b.line_start, b.line_end, b.text.clone())).collect::<Vec<_>>();
         assert_eq!(f(&lf), f(&crlf));
     }
@@ -183,7 +185,7 @@ mod tests {
     /// 宽容义务:frontmatter 坏掉不影响正文进索引。
     #[test]
     fn a_broken_frontmatter_still_indexes_the_body() {
-        let p = parse_file("a.md", "---\n[[[\n---\nbody text\n", MTIME, "sync");
+        let p = parse_file("a.md", "---\n[[[\n---\nbody text\n", MTIME, &no_globs());
         assert!(p.blocks.iter().any(|b| b.text.contains("body text")));
     }
 
@@ -191,7 +193,7 @@ mod tests {
     /// computed and discarded.
     #[test]
     fn links_found_in_the_body_show_up_on_parsed() {
-        let p = parse_file("a.md", "see [[Target]]\n", MTIME, "sync");
+        let p = parse_file("a.md", "see [[Target]]\n", MTIME, &no_globs());
         assert_eq!(p.links.len(), 1);
         assert_eq!(p.links[0].target, "Target");
     }
@@ -224,7 +226,7 @@ mod tests {
     /// branch sets it.
     #[test]
     fn doc_date_falls_back_through_date_then_generated_at_before_mtime() {
-        let p = parse_file("thing.md", "---\ndate: 2021-06-07\n---\nx\n", MTIME, "sync");
+        let p = parse_file("thing.md", "---\ndate: 2021-06-07\n---\nx\n", MTIME, &no_globs());
         assert_eq!(p.meta.doc_date.as_deref(), Some("2021-06-07"));
         assert!(!p.meta.date_inferred);
 
@@ -232,7 +234,7 @@ mod tests {
             "thing.md",
             "---\ngenerated:\n  by: claude/1\n  at: 2022-09-10T00:00:00Z\n---\nx\n",
             MTIME,
-            "sync",
+            &no_globs(),
         );
         assert_eq!(p.meta.doc_date.as_deref(), Some("2022-09-10"));
         assert!(!p.meta.date_inferred);
@@ -246,14 +248,15 @@ mod tests {
     /// `origin::derive` as `Some(&fm)` unconditionally, every frontmatter-less
     /// `.md` — the bulk of ebook exports, transcripts, and hand-written notes
     /// with no frontmatter — would misclassify as `Derived` instead of the
-    /// spec's deliberate `Source` (§3.2 rule 6), inverting the whole point of
-    /// the tier for exactly the files it exists to protect. This test proves
-    /// the real dispatch point (`parse_file`, not `origin::derive` called
-    /// directly) preserves the absent-vs-empty distinction end-to-end.
+    /// spec's deliberate `Unlabeled` (§3.2 rule 6′, 2026-08-12 design),
+    /// inverting the whole point of the tier for exactly the files it exists
+    /// to protect. This test proves the real dispatch point (`parse_file`,
+    /// not `origin::derive` called directly) preserves the absent-vs-empty
+    /// distinction end-to-end.
     #[test]
-    fn a_file_with_no_frontmatter_block_at_all_classifies_as_source() {
-        let p = parse_file("plain.md", "just a paragraph, no frontmatter\n", MTIME, "sync");
-        assert_eq!(p.meta.origin, crate::origin::Origin::Source);
+    fn a_file_with_no_frontmatter_block_at_all_classifies_as_unlabeled() {
+        let p = parse_file("plain.md", "just a paragraph, no frontmatter\n", MTIME, &no_globs());
+        assert_eq!(p.meta.origin, crate::origin::Origin::Unlabeled);
     }
 
     /// The sibling of the test above, using the SAME input shape
@@ -263,8 +266,24 @@ mod tests {
     /// `origin` because `parse_file` keeps the "was there a block at all"
     /// fact alive past the collapse.
     #[test]
-    fn a_file_with_an_empty_frontmatter_block_does_not_classify_as_source() {
-        let p = parse_file("plain.md", "---\n---\njust a paragraph\n", MTIME, "sync");
-        assert_ne!(p.meta.origin, crate::origin::Origin::Source);
+    fn a_file_with_an_empty_frontmatter_block_does_not_classify_as_unlabeled() {
+        let p = parse_file("plain.md", "---\n---\njust a paragraph\n", MTIME, &no_globs());
+        assert_ne!(p.meta.origin, crate::origin::Origin::Unlabeled);
+    }
+
+    /// A matched source-glob path with no frontmatter must still win rule 5′
+    /// over rule 6′ through the real dispatch point, not just in
+    /// `origin::derive` unit tests — see
+    /// `origin::tests::a_matched_path_without_frontmatter_is_source_not_unlabeled`
+    /// for the narrower pin of the same priority.
+    #[test]
+    fn a_matched_glob_with_no_frontmatter_classifies_as_source_through_parse_file() {
+        let globs = crate::globs::parse(&["ebook/**".to_string()]);
+        let p = parse_file("ebook/a.md", "no frontmatter here\n", MTIME, &globs);
+        assert_eq!(p.meta.origin, crate::origin::Origin::Source);
+    }
+
+    fn no_globs() -> SourceGlobs {
+        SourceGlobs::default()
     }
 }

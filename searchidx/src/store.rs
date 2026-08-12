@@ -500,7 +500,7 @@ mod tests {
     }
 
     fn write(conn: &mut Connection, rel: &str, text: &str) {
-        let parsed = parse_file(rel, text, MTIME, "sync");
+        let parsed = parse_file(rel, text, MTIME, &crate::globs::SourceGlobs::default());
         let tx = conn.transaction().unwrap();
         replace_file(&tx, rel, "md", 1, text.len() as i64, "h1", &parsed).unwrap();
         tx.commit().unwrap();

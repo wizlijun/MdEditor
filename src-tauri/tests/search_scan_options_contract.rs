@@ -45,9 +45,13 @@ fn the_cli_and_the_gui_build_options_through_one_function() {
     assert_eq!(gui.sync_dir, cli.sync_dir);
 }
 
-/// `sync_dir` feeds `origin::derive` (spec §3 rule 5), so it must resolve the
-/// same way the other options do: unset falls back to the default, and an
-/// explicit value is honored.
+/// `sync_dir` no longer feeds `origin::derive` — the 2026-08-12 design (C-T2)
+/// retired rule 5 (the sync-mirror-directory special case) in favor of
+/// user-configured source globs (rule 5′). `ScanOptions.sync_dir` still
+/// exists and is still read by `searchidx::store::open` to stamp/invalidate
+/// the index on a changed setting (an unrelated, still-live concern), so it
+/// must still resolve the same way the other options do: unset falls back to
+/// the default, and an explicit value is honored.
 #[test]
 fn sync_dir_defaults_and_uses_the_configured_value() {
     let d = tempfile::tempdir().unwrap();

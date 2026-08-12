@@ -1,19 +1,24 @@
 //! Provenance tiering for retrieval ranking (spec: `docs/superpowers/specs/
-//! 2026-08-11-md-origin-tiering-design.md`, §3).
+//! 2026-08-11-md-origin-tiering-design.md`, §3; rules 5 and 6 superseded by
+//! `docs/superpowers/specs/2026-08-12-source-globs-and-transcript-indexing-
+//! design.md`, §3 — that document's rule table, 5′/6′, is what the code
+//! below implements).
 //!
-//! `origin` classifies every indexed `.md` file into one of three tiers so
+//! `origin` classifies every indexed `.md` file into one of four tiers so
 //! later ranking can weigh "what you wrote" above "what an agent produced"
-//! above "raw material an agent has to read" (CLAUDE.md belief 1). It is
-//! **derived at index time and never written back to the file** (belief 2,
-//! file-over-app) — the vault's frontmatter stays exactly what its author
-//! wrote; `origin` only ever lives in the index row.
+//! above "raw material an agent has to read" above "nobody has said who
+//! wrote this" (CLAUDE.md belief 1). It is **derived at index time and never
+//! written back to the file** (belief 2, file-over-app) — the vault's
+//! frontmatter stays exactly what its author wrote; `origin` only ever lives
+//! in the index row.
 //!
 //! §3's rule table is ordered and **first match wins**. The order below must
 //! match the spec table exactly; each rule below carries the rationale for
 //! why it sits where it does, because reordering two rules silently changes
-//! real files' tiers (see the two priority tests at the bottom of this file).
+//! real files' tiers (see the priority tests at the bottom of this file).
 
 use crate::frontmatter::Frontmatter;
+use crate::globs::SourceGlobs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
@@ -24,8 +29,20 @@ pub enum Origin {
     Derived,
     /// Raw material an agent (or import pipeline) has to read but did not
     /// judge — ebook exports, transcripts, blog captures. Not your judgment,
-    /// but also not disposable: losing it means re-fetching it.
+    /// but also not disposable: losing it means re-fetching it. Membership
+    /// is decided by the user's source-glob patterns (rule 5′, spec §4.1),
+    /// not by absence of frontmatter — that used to be the proxy and it
+    /// swept in every unlabeled file whether or not it was actually raw
+    /// material (see `Unlabeled` below).
     Source,
+    /// Nobody has claimed this file: no frontmatter, and it did not match a
+    /// source-glob pattern either. This is **not a judgment about the
+    /// content** — an unlabeled file might well be your own writing — it is
+    /// an honest statement that no signal above fired. Ranked lowest of all
+    /// four tiers on purpose (spec §3.1, ×0.3) to create pressure to label
+    /// it one way or the other: add frontmatter, or add it to a source-glob
+    /// pattern if it really is raw material.
+    Unlabeled,
 }
 
 impl Origin {
@@ -34,6 +51,7 @@ impl Origin {
             Origin::Human => "human",
             Origin::Derived => "derived",
             Origin::Source => "source",
+            Origin::Unlabeled => "unlabeled",
         }
     }
 
@@ -42,6 +60,7 @@ impl Origin {
             "human" => Some(Origin::Human),
             "derived" => Some(Origin::Derived),
             "source" => Some(Origin::Source),
+            "unlabeled" => Some(Origin::Unlabeled),
             _ => None,
         }
     }
@@ -73,21 +92,24 @@ fn mapped_type_origin(concept_type: &str) -> Option<Origin> {
 }
 
 /// Derive a file's provenance tier. `rel_path` is vault-relative and
-/// `/`-separated (see `norm::rel_path`). `sync_dir` is the sync mirror
-/// directory prefix (default `"sync"`, see the vault settings for project A) —
-/// files under it are mirrored copies of something that lives outside the
-/// vault, not something written in it.
+/// `/`-separated (see `norm::rel_path`). `globs` is the user's configured
+/// source-glob patterns (`globs::SourceGlobs`, spec §4.1) — rule 5′ asks it
+/// whether `rel_path` counts as raw source material. An empty `SourceGlobs`
+/// (`SourceGlobs::default()`, the state before the user has configured
+/// anything) matches nothing, per that type's own contract — it is not
+/// "matches everything" — so rule 5′ simply never fires and every path falls
+/// through to rule 6′/7 until the user names patterns.
 ///
-/// **`Some(&Frontmatter::default())` is not equivalent to `None`.** Rule 6
+/// **`Some(&Frontmatter::default())` is not equivalent to `None`.** Rule 6′
 /// only fires on `None` — a file that genuinely has no `---` frontmatter
 /// block at all. `frontmatter::parse` never fails; a present-but-empty or
 /// present-but-irrelevant frontmatter block still parses to a
 /// `Frontmatter::default()`-shaped value, and passing that here as
-/// `Some(...)` skips rule 6 and falls through to rule 7's `Derived`. If your
+/// `Some(...)` skips rule 6′ and falls through to rule 7's `Derived`. If your
 /// call site has already collapsed "no frontmatter" and "empty frontmatter"
 /// into one value (e.g. `fm_raw.map(parse).unwrap_or_default()`, as
 /// `chunk::parse_file` does today), you must pass `None` yourself when
-/// `fm_raw` was `None` to get rule 6's behavior — see
+/// `fm_raw` was `None` to get rule 6′'s behavior — see
 /// `some_default_frontmatter_is_not_the_same_as_none` below, which pins
 /// today's `Derived` result for that case as a trap for exactly this bug.
 ///
@@ -98,7 +120,7 @@ fn mapped_type_origin(concept_type: &str) -> Option<Origin> {
 /// describe a file with no type. Spec §3 does not define a separate rule for
 /// "frontmatter present but empty"; this is a known unmodeled case, not an
 /// intentional decision — do not build on it without checking the spec.
-pub fn derive(rel_path: &str, fm: Option<&Frontmatter>, sync_dir: &str) -> Origin {
+pub fn derive(rel_path: &str, fm: Option<&Frontmatter>, globs: &SourceGlobs) -> Origin {
     // Rule 1 — `.note.md` is your annotation container by construction (the
     // outline/sidecar-notes convention): even before anything is written into
     // it, it exists because *you* opened it to hold your marginalia. This is
@@ -143,10 +165,11 @@ pub fn derive(rel_path: &str, fm: Option<&Frontmatter>, sync_dir: &str) -> Origi
         }
 
         // Rule 4 — a registered `type` is the vault's own classification of
-        // what kind of document this is, and it is more specific than "is it
-        // in the mirror directory" (rule 5): a mirrored ebook summary is
-        // still a summary. See `a_registered_type_beats_the_mirror_dir` below
-        // for why this must run before rule 5, not after.
+        // what kind of document this is, and it is more specific than "does
+        // it match a source-glob pattern" (rule 5′): a summary that happens
+        // to sit inside a designated source directory is still a summary.
+        // See `a_registered_type_beats_a_source_glob` below for why this must
+        // run before rule 5′, not after.
         if let Some(t) = fm.concept_type.as_deref() {
             if let Some(o) = mapped_type_origin(t) {
                 return o;
@@ -154,31 +177,48 @@ pub fn derive(rel_path: &str, fm: Option<&Frontmatter>, sync_dir: &str) -> Origi
         }
     }
 
-    // Rule 5 — the sync mirror directory holds copies of files that live
-    // outside the vault (CLAUDE.md belief 4); nothing under it was written in
-    // the vault, so absent a stronger signal above it defaults to raw
-    // material. This check does not require frontmatter, unlike rules 2-4, so
-    // it also catches mirrored files with no frontmatter at all.
-    let dir = sync_dir.trim_matches('/');
-    if !dir.is_empty() && (rel_path == dir || rel_path.starts_with(&format!("{dir}/"))) {
+    // Rule 5′ — hits one of the user's configured source-glob patterns
+    // (spec §4.1, `globs::SourceGlobs`). This replaces the old sync-mirror-
+    // directory special case (former rule 5): that directory check was one
+    // proxy for "raw material I didn't write," when the actual criterion
+    // this product wants is "the user has designated this as raw material" —
+    // globs express that directly and more broadly (ebook exports,
+    // transcript directories, anything else the user names), without a
+    // second parallel mechanism (a setting + a `ScanOptions` field + its own
+    // `meta` stamp) duplicating what a pattern can already say. This check
+    // does not require frontmatter, unlike rules 2-4, so it also catches a
+    // matched file with no frontmatter at all — see
+    // `a_matched_path_without_frontmatter_is_source_not_unlabeled` below for
+    // why that must win over rule 6′, not the other way around.
+    if globs.matches(rel_path) {
         return Origin::Source;
     }
 
-    // Rule 6 — a bare `.md` with no frontmatter at all carries no claim of
-    // authorship, generation, verification, or type — nothing above matched.
-    // The tier here is a **deliberate misclassification**, not a neutral
-    // default: it judges "source" (raw material), not "human" (your
-    // judgment). A hand-written note with no frontmatter is misfiled by this
-    // rule and loses its ranking boost — but the alternative direction is
-    // worse. If the default were `human`, every faceless AI dump that forgot
-    // (or was never given) a `generated.by` stamp would land in the tier
-    // meant to be most trusted, silently diluting the one signal this whole
-    // feature exists to protect. The fix for the misfiled note is cheap and
-    // already a project convention: add frontmatter. The fix for a
-    // human-tier flooded with AI output is not cheap — it is this feature
-    // failing at its one job. See spec §3.2 and §9.
+    // Rule 6′ — a bare `.md` with no frontmatter at all, that also didn't
+    // match a source-glob pattern (rule 5′ already returned above if it
+    // had), carries no claim of authorship, generation, verification, type,
+    // or designated raw material — nothing above matched. The tier here is
+    // still a **deliberate non-default**, not a coin flip: it must not
+    // resolve to `Human`. A hand-written note with no frontmatter is
+    // misfiled by this rule and loses its ranking boost — but the
+    // alternative direction is worse. If the default were `human`, every
+    // faceless AI dump that forgot (or was never given) a `generated.by`
+    // stamp would land in the tier meant to be most trusted, silently
+    // diluting the one signal this whole feature exists to protect.
+    //
+    // Where this differs from the pre-2026-08-12 rule 6: that version also
+    // avoided `Human`, but resolved the file to `Source` instead, reasoning
+    // that "raw material" was at least a safer wrong guess than "your
+    // judgment." That was still a guess dressed up as a classification — a
+    // frontmatter-less file is no more evidence it is raw source material
+    // than it is evidence you wrote it. `Unlabeled` says the honest thing
+    // instead: nobody has claimed this file, in either direction. It is
+    // ranked lowest of all four tiers (spec §3.1, ×0.3) — lower than
+    // `Source` — specifically to create pressure to resolve that: add
+    // frontmatter, or add the file to a source-glob pattern if it genuinely
+    // is raw material. See spec §3.2 and §9 (2026-08-12 design).
     if fm.is_none() {
-        return Origin::Source;
+        return Origin::Unlabeled;
     }
 
     // Rule 7 — frontmatter exists (so something deliberately produced this
@@ -186,8 +226,9 @@ pub fn derive(rel_path: &str, fm: Option<&Frontmatter>, sync_dir: &str) -> Origi
     // to reject a document) but its `type` is not one this vault has
     // registered. That is exactly the shape of a plugin's fresh output before
     // anyone has taught this crate about the new type: assume `derived`
-    // rather than `source`, because "has frontmatter" is itself evidence of a
-    // deliberate producer, not raw capture.
+    // rather than `source` or `unlabeled`, because "has frontmatter" is
+    // itself evidence of a deliberate producer, not raw capture and not
+    // silence.
     Origin::Derived
 }
 
@@ -199,56 +240,52 @@ mod tests {
         crate::frontmatter::parse(s)
     }
 
+    fn globs(p: &[&str]) -> SourceGlobs {
+        crate::globs::parse(&p.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
     #[test]
     fn rule1_note_md_is_always_human() {
-        assert_eq!(derive("a.note.md", None, "sync"), Origin::Human);
+        assert_eq!(derive("a.note.md", None, &globs(&[])), Origin::Human);
     }
     #[test]
     fn rule2_generated_by_agent_is_derived() {
-        assert_eq!(derive("a.md", Some(&fm("generated:\n  by: claude/1")), "sync"), Origin::Derived);
+        assert_eq!(derive("a.md", Some(&fm("generated:\n  by: claude/1")), &globs(&[])), Origin::Derived);
     }
     #[test]
     fn rule2_generated_by_human_is_human() {
-        assert_eq!(derive("a.md", Some(&fm("generated:\n  by: human:bruce")), "sync"), Origin::Human);
+        assert_eq!(derive("a.md", Some(&fm("generated:\n  by: human:bruce")), &globs(&[])), Origin::Human);
     }
     #[test]
     fn rule3_verified_by_human_is_human() {
-        assert_eq!(derive("a.md", Some(&fm("verified:\n  by: human:me")), "sync"), Origin::Human);
+        assert_eq!(derive("a.md", Some(&fm("verified:\n  by: human:me")), &globs(&[])), Origin::Human);
     }
     #[test]
     fn rule4_maps_registered_types() {
-        assert_eq!(derive("a.md", Some(&fm("type: Note")), "sync"), Origin::Human);
-        assert_eq!(derive("a.md", Some(&fm("type: Book Summary")), "sync"), Origin::Derived);
-        assert_eq!(derive("a.md", Some(&fm("type: Book")), "sync"), Origin::Source);
+        assert_eq!(derive("a.md", Some(&fm("type: Note")), &globs(&[])), Origin::Human);
+        assert_eq!(derive("a.md", Some(&fm("type: Book Summary")), &globs(&[])), Origin::Derived);
+        assert_eq!(derive("a.md", Some(&fm("type: Book")), &globs(&[])), Origin::Source);
     }
     #[test]
-    fn rule5_mirror_dir_is_source() {
-        assert_eq!(derive("sync/x/a.md", Some(&fm("title: t")), "sync"), Origin::Source);
+    fn rule5_a_matched_path_is_source() {
+        assert_eq!(derive("ebook/a.md", Some(&fm("title: t")), &globs(&["ebook/**"])), Origin::Source);
     }
-    /// Rule 5 matches the mirror dir as a `/`-bounded path prefix, not a bare
-    /// string prefix — `synced/` must not match `sync_dir = "sync"`, and a
-    /// `sync` segment nested deeper in the path or an empty `sync_dir` must
-    /// not match at all. A refactor to `rel_path.starts_with(dir)` (dropping
-    /// the `/`) would pass `rule5_mirror_dir_is_source` above while silently
-    /// misclassifying `synced/notes.md` as `Source` — this pins the negative
-    /// space so that refactor goes red instead.
+    /// 这是本次的核心修正:缺 frontmatter 不再等同于原始资料。
     #[test]
-    fn rule5_mirror_dir_does_not_match_a_lookalike_prefix() {
-        let title = fm("title: t");
-        assert_eq!(derive("synced/a.md", Some(&title), "sync"), Origin::Derived);
-        assert_eq!(derive("my-sync/a.md", Some(&title), "sync"), Origin::Derived);
-        assert_eq!(derive("a/sync/b.md", Some(&title), "sync"), Origin::Derived);
-        assert_eq!(derive("sync/x/a.md", Some(&title), ""), Origin::Derived);
+    fn rule6_no_frontmatter_and_no_match_is_unlabeled() {
+        assert_eq!(derive("notes/a.md", None, &globs(&["ebook/**"])), Origin::Unlabeled);
     }
+    /// 规则 5′ 压过规则 6′ —— 指定目录里没有 frontmatter 的文件是原始资料,
+    /// 不是未标注。
     #[test]
-    fn rule6_no_frontmatter_is_source() {
-        assert_eq!(derive("a.md", None, "sync"), Origin::Source);
+    fn a_matched_path_without_frontmatter_is_source_not_unlabeled() {
+        assert_eq!(derive("ebook/a.md", None, &globs(&["ebook/**"])), Origin::Source);
     }
     /// Pins the trap documented on `derive`'s doc comment: `Some(&Frontmatter
     /// ::default())` is NOT the same input as `None`, even though both
     /// represent "nothing interesting in the frontmatter" to a casual reader.
-    /// Rule 6 is keyed off `fm.is_none()`, so this falls through to rule 7 and
-    /// resolves to `Derived` — the opposite of `rule6_no_frontmatter_is_source`
+    /// Rule 6′ is keyed off `fm.is_none()`, so this falls through to rule 7 and
+    /// resolves to `Derived` — the opposite of `rule6_no_frontmatter_and_no_match_is_unlabeled`
     /// above despite looking equivalent. `chunk::parse_file` already produces
     /// exactly this shape today (`fm_raw.map(parse).unwrap_or_default()`
     /// collapses "no frontmatter" and "empty frontmatter" into one
@@ -261,11 +298,11 @@ mod tests {
     /// deliberate, reviewed decision rather than an accidental regression.
     #[test]
     fn some_default_frontmatter_is_not_the_same_as_none() {
-        assert_eq!(derive("a.md", Some(&Frontmatter::default()), "sync"), Origin::Derived);
+        assert_eq!(derive("a.md", Some(&Frontmatter::default()), &globs(&[])), Origin::Derived);
     }
     #[test]
     fn rule7_unknown_type_is_derived() {
-        assert_eq!(derive("a.md", Some(&fm("type: Some Plugin Thing")), "sync"), Origin::Derived);
+        assert_eq!(derive("a.md", Some(&fm("type: Some Plugin Thing")), &globs(&[])), Origin::Derived);
     }
 
     /// Priority: rule 1 beats rule 2 — an agent wrote a reply into *your*
@@ -274,7 +311,7 @@ mod tests {
     /// latter tracks who wrote which specific node (see `block::Block::agent_by`).
     #[test]
     fn note_md_beats_generated_by() {
-        assert_eq!(derive("a.note.md", Some(&fm("generated:\n  by: claude/1")), "sync"), Origin::Human);
+        assert_eq!(derive("a.note.md", Some(&fm("generated:\n  by: claude/1")), &globs(&[])), Origin::Human);
     }
     /// The classification this whole feature exists to get right, end to end
     /// through the frontmatter reader, in the exact shape
@@ -290,7 +327,7 @@ mod tests {
     fn an_agent_stamp_in_agents_md_flow_form_is_derived_not_human() {
         let f = fm("type: Note\ngenerated: { by: claude-code/opus-5, at: 2026-08-03T14:22:00Z }");
         assert_eq!(
-            derive("notes/a.md", Some(&f), "sync"),
+            derive("notes/a.md", Some(&f), &globs(&[])),
             Origin::Derived,
             "a flow-form `generated.by` must fire rule 2 before rule 4 maps `Note` to Human"
         );
@@ -298,21 +335,33 @@ mod tests {
         // tier either (rule 3), which costs x1.25 AND the x1.1 human_verified
         // boost when it is missed.
         let v = fm("type: Book Summary\nverified: [{ by: human:bruce, at: 2026-08-03T14:22:00Z }]");
-        assert_eq!(derive("notes/b.md", Some(&v), "sync"), Origin::Human);
+        assert_eq!(derive("notes/b.md", Some(&v), &globs(&[])), Origin::Human);
         assert!(v.human_verified, "and the x1.1 boost must survive too");
     }
 
-    /// Priority: rule 4 beats rule 5 — a summary sitting in the mirror
-    /// directory is still an AI summary, not raw material just because of
-    /// where it lives.
+    /// Priority: rules 2/4 beat rule 5′ — a summary sitting inside a
+    /// designated source-glob directory is still an AI summary, not raw
+    /// material just because of where it lives. (Takes over from the old
+    /// `a_registered_type_beats_the_mirror_dir`, which pinned the same
+    /// priority against the now-removed sync-mirror-directory mechanism.)
     #[test]
-    fn a_registered_type_beats_the_mirror_dir() {
-        assert_eq!(derive("sync/s.md", Some(&fm("type: Book Summary")), "sync"), Origin::Derived);
+    fn a_registered_type_beats_a_source_glob() {
+        assert_eq!(
+            derive("ebook/s.md", Some(&fm("type: Book Summary")), &globs(&["ebook/**"])),
+            Origin::Derived
+        );
+    }
+    #[test]
+    fn a_generated_stamp_beats_a_source_glob() {
+        assert_eq!(
+            derive("ebook/s.md", Some(&fm("generated:\n  by: claude/1")), &globs(&["ebook/**"])),
+            Origin::Derived
+        );
     }
 
     #[test]
     fn as_str_and_from_str_round_trip() {
-        for o in [Origin::Human, Origin::Derived, Origin::Source] {
+        for o in [Origin::Human, Origin::Derived, Origin::Source, Origin::Unlabeled] {
             assert_eq!(Origin::from_str(o.as_str()), Some(o));
         }
         assert_eq!(Origin::from_str("nonsense"), None);

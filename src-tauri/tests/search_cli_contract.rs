@@ -82,7 +82,11 @@ fn json_output_carries_the_full_contract() {
     }
     assert_eq!(hit["source_ref"].as_str().unwrap(), "2026-01-01-a.md#L1");
     assert!(hit["provenance"]["human_verified"].is_boolean());
-    assert_eq!(hit["origin"].as_str(), Some("source"), "no frontmatter → rule 6 (task 6)");
+    // 2026-08-12 design (C-T2): a frontmatter-less file with no configured
+    // source-glob match is `unlabeled` (rule 6′), not `source` (the retired
+    // rule 6) — `ScanOptions` doesn't carry real source globs yet (C-T3),
+    // so this CLI's default vault never matches rule 5′ either.
+    assert_eq!(hit["origin"].as_str(), Some("unlabeled"), "no frontmatter, no glob match → rule 6′");
 }
 
 /// 路径永远是 vault 相对 + `/` 分隔 —— 两平台给 agent 的锚必须一模一样。
@@ -146,12 +150,13 @@ fn the_no_index_fallback_reports_the_same_origin_tier_the_index_would() {
     assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     assert!(!out.stderr.is_empty(), "a degradation must be announced on stderr (same precedent as the sibling test above)");
     let j: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid json");
-    // Both paths classify a bare `a.md` as `source` (rule 6), so the origin
-    // assertion below is only meaningful if the `HOME`-blocker trick above
-    // actually forced degradation to `fallback_scan` — otherwise this test
-    // silently duplicates `json_output_carries_the_full_contract` and would
-    // stay green even with the old hardcoded `Origin::Derived` restored.
-    // `route` is already in the payload being parsed; pin it too.
+    // Both paths classify a bare `a.md` as `unlabeled` (rule 6′, 2026-08-12
+    // design — retired rule 6's `source` default), so the origin assertion
+    // below is only meaningful if the `HOME`-blocker trick above actually
+    // forced degradation to `fallback_scan` — otherwise this test silently
+    // duplicates `json_output_carries_the_full_contract` and would stay
+    // green even with the old hardcoded `Origin::Derived` restored. `route`
+    // is already in the payload being parsed; pin it too.
     assert_eq!(
         j["route"].as_str(),
         Some("t1-scan"),
@@ -159,8 +164,8 @@ fn the_no_index_fallback_reports_the_same_origin_tier_the_index_would() {
     );
     assert_eq!(
         j["hits"][0]["origin"].as_str(),
-        Some("source"),
-        "a frontmatter-less .md must classify as source (rule 6) on the no-index fallback, \
+        Some("unlabeled"),
+        "a frontmatter-less .md must classify as unlabeled (rule 6′) on the no-index fallback, \
          the same as the indexed path — not the Derived fallback: {j}"
     );
 }

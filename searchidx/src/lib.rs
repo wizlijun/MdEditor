@@ -155,12 +155,15 @@ impl SearchIndex {
 
 /// Design spec §6/§9: the settings page's per-tier file counts, one `GROUP
 /// BY` over the real `files.origin` column. Every stored value is one of
-/// `origin::Origin::as_str()`'s three strings by construction (`origin` is
+/// `origin::Origin::as_str()`'s strings by construction (`origin` is
 /// `NOT NULL` and has exactly one writer, `store::replace_file`) — but this
 /// still routes each row through `store::origin_of` rather than matching the
-/// three literals directly, so a row that somehow holds anything else still
-/// lands in a real bucket (falling back to `Derived`, `origin_of`'s own
-/// documented default) instead of silently vanishing from every count.
+/// literals directly, so a row that somehow holds anything else still lands
+/// in a real bucket (falling back to `Derived`, `origin_of`'s own documented
+/// default) instead of silently vanishing from every count. `OriginCounts`
+/// itself only has `human`/`derived`/`source` fields (B-T8's shape) — see
+/// the `Origin::Unlabeled` arm below for why an `unlabeled` row does not yet
+/// land in a bucket of its own.
 fn origin_counts(conn: &rusqlite::Connection) -> Result<OriginCounts, String> {
     let mut stmt = conn
         .prepare("SELECT origin, count(*) FROM files GROUP BY origin")
@@ -175,6 +178,18 @@ fn origin_counts(conn: &rusqlite::Connection) -> Result<OriginCounts, String> {
             Origin::Human => counts.human += n,
             Origin::Derived => counts.derived += n,
             Origin::Source => counts.source += n,
+            // TODO(C-T8/C-T11): `OriginCounts` (and its wire-shape twin
+            // `OriginCountsDto` in src-tauri/src/search/mod.rs) is still the
+            // pre-`Unlabeled` three-tier shape from B-T8 — adding a fourth
+            // field there is settings-page surface, out of scope for C-T2
+            // (which only had to make `Origin` itself compile with a fourth
+            // variant). An `unlabeled` row is real and does get stored (see
+            // `origin::derive` rule 6′), so until a field exists for it here,
+            // `human + derived + source` under-counts `files` by however many
+            // rows are `unlabeled` — a known, temporary undercount, not a
+            // silent drop of the row itself (the row is still indexed and
+            // searchable via `origin:unlabeled`, just not yet tallied here).
+            Origin::Unlabeled => {}
         }
     }
     Ok(counts)
@@ -340,8 +355,12 @@ mod tests {
         std::fs::write(vault.join("answer1.md"), "---\ntype: Answer\n---\nbody\n").unwrap();
         std::fs::write(vault.join("untyped.md"), "---\ntitle: no type here\n---\nbody\n").unwrap();
 
-        // Source: mapped `type: Book` + rule 6 (no frontmatter at all).
+        // Source: mapped `type: Book` (rule 4).
         std::fs::write(vault.join("book1.md"), "---\ntype: Book\n---\nbody\n").unwrap();
+        // Unlabeled: no frontmatter at all and no configured source-glob
+        // pattern to match it either (rule 6′) — `ScanOptions::default()`
+        // below carries no `source_globs` yet (C-T3's job), so this is the
+        // only way to reach rule 6′ through the real pipeline today.
         std::fs::write(vault.join("raw.md"), "no frontmatter, no claim\n").unwrap();
 
         let db = d.path().join("index.db");
@@ -349,10 +368,20 @@ mod tests {
         idx.rebuild(&ScanOptions::default()).unwrap();
 
         let s = idx.stats().unwrap();
-        assert_eq!(s.files, 8);
+        assert_eq!(s.files, 8, "raw.md is still indexed and counted in the total, just not in origin_counts (below)");
         assert_eq!(s.origin_counts.human, 2, "a.note.md + verified.md");
         assert_eq!(s.origin_counts.derived, 4, "2x Book Summary + Answer + untyped");
-        assert_eq!(s.origin_counts.source, 2, "Book + no-frontmatter raw.md");
+        assert_eq!(s.origin_counts.source, 1, "Book only — raw.md now classifies Unlabeled, not Source (rule 6′)");
+        // `raw.md` is real and indexed (see `s.files` above) but `OriginCounts`
+        // has no `unlabeled` field yet (B-T8's three-tier shape — C-T8/C-T11
+        // add the fourth), so `human + derived + source` (2+4+1=7) legitimately
+        // undercounts `s.files` (8) by exactly the one `unlabeled` row. See the
+        // TODO on the `Origin::Unlabeled` match arm in `origin_counts` above.
+        assert_eq!(
+            s.origin_counts.human + s.origin_counts.derived + s.origin_counts.source,
+            s.files - 1,
+            "exactly one file (raw.md) is the known, documented unlabeled undercount"
+        );
 
         assert_eq!(s.type_counts.get("Book Summary").copied(), Some(2));
         assert_eq!(s.type_counts.get("Answer").copied(), Some(1));

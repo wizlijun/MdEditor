@@ -271,7 +271,7 @@
     "query": "tieringtoken",
     "expect_path": "web/2026-08-05-tiering-clip.md",
     "outranks_path": "sync/2026-08-05-tiering-mirror.md",
-    "why": "origin 规则 5 的端到端形态:两份文件的 frontmatter 完全同型(type: blog-post,未登记 → 规则 7 derived),唯一差别是一份住在 sync/ 镜像目录下(→ source)。这是 ScanOptions.sync_dir 一路穿到 origin::derive 再进 files.origin 的唯一 E2E 钉子;规则 5 一旦失效两者同为 derived 且 sync/ 先写入,这条立刻红"
+    "why": "origin 规则 6′ 的端到端形态(2026-08-12 设计,取代已退役的规则 5/ScanOptions.sync_dir 特例——那条旧钉子曾在这里,断言方向相同,机制不同)。两份文件正文词数、doc_date 全同,唯一差别是 sync/…mirror.md 完全没有 frontmatter 块(→ 规则 6′ unlabeled ×0.3),web/…clip.md 有未登记 type(→ 规则 7 derived ×1.0)。这是『没有 frontmatter』这一事实经 chunk::parse_file 一路穿到 origin::derive 再进 files.origin 的唯一 E2E 钉子——origin::derive 的单测测不出 parse_file 有没有正确保留『frontmatter 块缺失』(而非『存在但为空』)这个区分,见 chunk.rs 的 some_default_frontmatter 系列测试。规则 6′ 一旦失效(比如误判成 source 或 human)两者不再是 unlabeled/derived 的 10 倍量级差距,这条立刻红。sync/ 这个目录名是历史遗留,未随机制更换而改名,以保持这次改动最小;C-T3 给 ScanOptions 接上真实 source_globs 后应当补一条规则 5′ 的对应 E2E 钉子"
   },
   {
     "query": "tieringnodetoken",

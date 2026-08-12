@@ -251,16 +251,24 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
         // to be silently fine because of that — it stopped being fine the
         // moment this became visible output: it would report `derived` for
         // exactly the frontmatter-less files the indexed path reports
-        // `source` for (rule 6). Derive it for real, with the same inputs
-        // `chunk::parse_file` uses on the indexed path — `opts.sync_dir` is
-        // already plumbed here (for `is_indexable`), and `fm_present` must be
-        // captured before `unwrap_or_default()` collapses "no frontmatter"
+        // `unlabeled` for (rule 6′). Derive it for real, with the same inputs
+        // `chunk::parse_file` uses on the indexed path, and `fm_present` must
+        // be captured before `unwrap_or_default()` collapses "no frontmatter"
         // and "empty frontmatter" into the same value (see `origin::derive`'s
         // own doc comment on why `Some(&Frontmatter::default())` is not `None`).
+        //
+        // TODO(C-T3): passes an empty `SourceGlobs` — same stopgap as
+        // `searchidx::scan::index_into`, and for the same reason: `opts` has
+        // no source-glob field yet (`ScanOptions.sync_dir` is unrelated —
+        // that one is still read above for `is_indexable`). Once C-T3 adds
+        // `ScanOptions.source_globs`, forward `&opts.source_globs` here so
+        // this fallback path classifies identically to the indexed path
+        // again.
         let (fm_raw, _, _) = searchidx::frontmatter::split(&text);
         let fm_present = fm_raw.is_some();
         let fm = fm_raw.map(searchidx::frontmatter::parse).unwrap_or_default();
-        let origin = searchidx::origin::derive(&rel, fm_present.then_some(&fm), &opts.sync_dir);
+        let origin =
+            searchidx::origin::derive(&rel, fm_present.then_some(&fm), &searchidx::globs::SourceGlobs::default());
         for (i, line) in text.lines().enumerate() {
             if line.to_lowercase().contains(&needle) {
                 out.push(searchidx::Hit {

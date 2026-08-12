@@ -489,13 +489,26 @@ fn index_into(
     tx: &rusqlite::Transaction,
     vault_root: &Path,
     c: &Candidate,
-    opts: &ScanOptions,
+    // Temporarily unused: `ScanOptions` doesn't carry `SourceGlobs` yet — see
+    // the TODO(C-T3) below. Left named (not `_opts`) because C-T3 reads it
+    // again within days; kept as a parameter at all (not dropped) so that
+    // change stays a one-line diff instead of a signature change.
+    #[allow(unused_variables)] opts: &ScanOptions,
 ) -> rusqlite::Result<bool> {
     let Ok(bytes) = std::fs::read(vault_root.join(&c.rel)) else { return Ok(false) };
     // Lossy on purpose: a file with a stray non-UTF-8 byte still gets indexed
     // rather than silently vanishing from search.
     let raw = String::from_utf8_lossy(&bytes);
-    let parsed = crate::chunk::parse_file(&c.rel, &raw, c.mtime, &opts.sync_dir);
+    // TODO(C-T3): `ScanOptions` does not carry `SourceGlobs` yet — that field
+    // (`ScanOptions.source_globs`) and its threading into `search::options`'s
+    // two construction points is Task C-T3's job (spec §5.2 migration). Until
+    // then this passes an empty pattern set, which `SourceGlobs` documents as
+    // "matches nothing" — so rule 5′ never fires on a real scan yet, and
+    // every frontmatter-less `.md` classifies `Unlabeled` (rule 6′) rather
+    // than a mirror-dir-derived `Source`. That is an intentional, temporary
+    // regression scoped to this task sequence, not a silent behavior change:
+    // see the C-T2 task report for the rationale.
+    let parsed = crate::chunk::parse_file(&c.rel, &raw, c.mtime, &crate::globs::SourceGlobs::default());
     let ext = if c.rel.ends_with(".note.md") { "note.md" } else { "md" };
     store::replace_file(tx, &c.rel, ext, c.mtime, c.size, &content_hash(&bytes), &parsed)?;
     Ok(true)
