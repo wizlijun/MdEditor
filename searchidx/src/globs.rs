@@ -19,6 +19,8 @@
 //! bug. The settings UI is expected to warn when a pattern matches zero
 //! files instead.
 
+use std::collections::HashMap;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceGlobs {
     /// Normalized patterns, each pre-split on `/` into segments, ready for
@@ -36,23 +38,50 @@ pub struct SourceGlobs {
 /// consumer-side tolerance obligation the rest of this crate follows
 /// (OKF §11 in spirit: don't reject on a partially-bad input).
 pub fn parse(patterns: &[String]) -> SourceGlobs {
-    let mut normalized: Vec<String> = patterns
+    let mut normalized: Vec<Vec<String>> = patterns
         .iter()
         .map(|p| p.trim().trim_matches('/').to_string())
         .filter(|p| !p.is_empty())
+        .map(|p| collapse_double_star(p.split('/').map(String::from).collect()))
         .collect();
-    // Sorting here — not just at stamp time — means `patterns` and `stamp`
-    // are derived from the exact same normalized list, so they can never
-    // drift out of sync with each other.
+    // Sorting *and deduping* here — not just at stamp time — means
+    // `patterns` and `stamp` are derived from the exact same normalized
+    // list, so they can never drift out of sync with each other.
+    //
+    // Dedup matters because `matches` is unaffected by a repeated entry —
+    // `["a/**", "a/**"]` behaves identically to `["a/**"]` — but without
+    // it those two lists produced different stamps, and a stamp mismatch
+    // on index open triggers a full rebuild. A pasted duplicate line (or a
+    // UI round-trip that duplicates an entry) must not cost the user a
+    // rebuild for a no-op edit. `dedup()` only removes *consecutive*
+    // duplicates, which is why it runs after `sort()`.
     normalized.sort();
+    normalized.dedup();
 
-    let stamp = normalized.join("\n");
-    let patterns = normalized
+    let stamp = normalized
         .iter()
-        .map(|p| p.split('/').map(String::from).collect())
-        .collect();
+        .map(|segs| segs.join("/"))
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    SourceGlobs { patterns, stamp }
+    SourceGlobs { patterns: normalized, stamp }
+}
+
+/// Collapses consecutive `**` segments into one. `a/**/**/b.md` and
+/// `a/**/b.md` match exactly the same set of paths — both mean "zero or
+/// more segments here" — so they must normalize to the same stamp too
+/// (same class of bug as the duplicate-pattern case above). Collapsing
+/// also shrinks the search space `matches_segments` has to explore for
+/// patterns with several `**`s.
+fn collapse_double_star(segs: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(segs.len());
+    for seg in segs {
+        if seg == "**" && out.last().map(String::as_str) == Some("**") {
+            continue;
+        }
+        out.push(seg);
+    }
+    out
 }
 
 impl SourceGlobs {
@@ -92,15 +121,42 @@ impl SourceGlobs {
 /// is the same `/`-boundary problem `scan.rs`'s exclude-dir matcher and
 /// `origin.rs`'s old mirror-dir check solved with `format!("{dir}/")`; here
 /// it falls out of the segment representation for free.
+///
+/// Memoized on `(pattern_index, path_index)`: the predicate at each pair
+/// is pure and depends on nothing outside that pair, so caching it turns
+/// what would otherwise be super-linear backtracking — a pattern with
+/// several `**`s retrying every split point independently — into
+/// `O(pattern_segments × path_segments)`. Without this, a legal (if
+/// unusual) hand-typed pattern with a handful of non-adjacent `**`s
+/// against a moderately deep path takes multiple *seconds* per file, and
+/// nothing in `parse` rejects that pattern as invalid — it would silently
+/// turn a routine scan into minutes of CPU. See
+/// `a_pathological_multi_double_star_pattern_does_not_blow_up`.
 fn matches_segments(pat: &[String], path: &[&str]) -> bool {
-    match pat.first().map(String::as_str) {
-        None => path.is_empty(),
-        Some("**") => (0..=path.len()).any(|i| matches_segments(&pat[1..], &path[i..])),
-        Some(p) => match path.first() {
-            Some(seg) if segment_matches(p, seg) => matches_segments(&pat[1..], &path[1..]),
-            _ => false,
-        },
+    fn go(
+        pat: &[String],
+        path: &[&str],
+        pi: usize,
+        si: usize,
+        memo: &mut HashMap<(usize, usize), bool>,
+    ) -> bool {
+        if let Some(&cached) = memo.get(&(pi, si)) {
+            return cached;
+        }
+        let result = match pat.get(pi).map(String::as_str) {
+            None => si == path.len(),
+            Some("**") => (si..=path.len()).any(|i| go(pat, path, pi + 1, i, memo)),
+            Some(p) => match path.get(si) {
+                Some(seg) if segment_matches(p, seg) => go(pat, path, pi + 1, si + 1, memo),
+                _ => false,
+            },
+        };
+        memo.insert((pi, si), result);
+        result
     }
+
+    let mut memo = HashMap::new();
+    go(pat, path, 0, 0, &mut memo)
 }
 
 /// Matches `*` within a single segment (never crosses `/` — that is what
@@ -185,5 +241,57 @@ mod tests {
     fn the_stamp_is_order_and_whitespace_insensitive() {
         assert_eq!(g(&["b/**", "a/**"]).stamp(), g(&["  a/** ", "/b/**/"]).stamp());
         assert_ne!(g(&["a/**"]).stamp(), g(&["a/*"]).stamp());
+    }
+
+    /// review round 1: a pasted/round-tripped duplicate line is the same
+    /// list semantically (`matches` is identical either way) but was
+    /// producing a different stamp — costing the user a full index rebuild
+    /// for a no-op edit.
+    #[test]
+    fn duplicate_patterns_collapse_to_one_stamp_entry() {
+        assert_eq!(g(&["a/**"]).stamp(), g(&["a/**", "a/**"]).stamp());
+    }
+
+    /// review round 1: `a/**/**/b.md` and `a/**/b.md` match identically on
+    /// every path, so they must stamp identically too — same
+    /// stamp-instability class as the dedup gap above.
+    #[test]
+    fn consecutive_double_stars_collapse_in_the_stamp() {
+        assert_eq!(g(&["a/**/b.md"]).stamp(), g(&["a/**/**/b.md"]).stamp());
+        assert!(g(&["a/**/**/b.md"]).matches("a/x/y/b.md"));
+    }
+
+    /// review round 1: unmemoized `**` recursion is super-linear in path
+    /// depth for patterns with several *non-adjacent* `**` segments — the
+    /// reviewer measured a single `matches()` call taking 15+ seconds at
+    /// depth=30, stars=8, and that pattern is syntactically legal (nothing
+    /// in `parse` rejects it). This pins that a pathological-but-legal
+    /// pattern against a deep path completes fast.
+    ///
+    /// Every path segment is the same repeated literal (`x`) and every
+    /// literal pattern segment between `**`s is also `x`, so *every* split
+    /// point is a locally-valid match — that ambiguity is what makes naive
+    /// backtracking explore combinatorially many (pattern-position,
+    /// path-position) pairs redundantly. The pattern ends in `zzz`, which
+    /// never occurs, so the whole match ultimately fails only after that
+    /// full exhaustive search — the true worst case. (An earlier version
+    /// of this test used a literal that never occurred anywhere in the
+    /// pattern, which let every `**` branch fail in O(1) with no
+    /// backtracking at all — not pathological, and it stayed fast even
+    /// against the unmemoized implementation.)
+    #[test]
+    fn a_pathological_multi_double_star_pattern_does_not_blow_up() {
+        let pattern = format!("x{}/zzz", "/**/x".repeat(8));
+        let s = g(&[pattern.as_str()]);
+        let path = vec!["x"; 30].join("/");
+
+        let start = std::time::Instant::now();
+        assert!(!s.matches(&path));
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "pathological pattern took {elapsed:?} — matches_segments must be memoized"
+        );
     }
 }
