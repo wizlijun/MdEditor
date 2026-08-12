@@ -112,6 +112,42 @@ fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
 
     let mut failures = Vec::new();
     for case in &cases {
+        // Reject unknown keys (review round 1, Minor 2). Every optional key
+        // in this schema is read with `case["k"]`, which yields
+        // `Value::Null` — i.e. "not present" — for a key that is absent OR
+        // misspelled. So a typo'd `expect_lines` silently stops asserting the
+        // line anchor and the suite stays green while the case has quietly
+        // become weaker than its `why` claims. That is the same class of
+        // false-coverage bug this fixture exists to prevent, one level up, and
+        // it matters more here than in most tests: this file is the branch's
+        // only judge of ranking. Fail loudly on anything not in the schema.
+        let known = [
+            "query",
+            "why",
+            "source_globs",
+            "expect_path",
+            "expect_text",
+            "expect_line",
+            "expect_none",
+            "expect_not_path",
+            "outranks_path",
+            "outranks_text",
+        ];
+        let Some(obj) = case.as_object() else {
+            failures.push(format!("  {case} → every case must be a JSON object"));
+            continue;
+        };
+        let unknown: Vec<&str> =
+            obj.keys().map(String::as_str).filter(|k| !known.contains(k)).collect();
+        if !unknown.is_empty() {
+            failures.push(format!(
+                "  {:?} → unknown fixture key(s) {unknown:?}; the schema is {known:?}. \
+                 An unrecognized key is silently ignored, so a typo turns an assertion off \
+                 without turning this suite red — which is why it is rejected here instead",
+                case["query"].as_str().unwrap_or("(no query)"),
+            ));
+            continue;
+        }
         let q = case["query"].as_str().unwrap();
         let globs: Vec<String> = case["source_globs"]
             .as_array()

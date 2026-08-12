@@ -357,6 +357,11 @@
     "why": "task C-T12 新用例 ⑤:指定目录里的 AI 摘要仍判 AI 产出。这份摘要就躺在 `transcripts/**` 里(它总结的正是同目录那份 .srt,frontmatter 的 sources: 指着它),规则 5′ 会匹配它的路径 —— 但规则 2(`generated.by: claude-code/opus-5`)和规则 4(`type: Book Summary`)都排在 5′ 前面,所以它是 derived,不是 source。这是 origin.rs 的 a_registered_type_beats_a_source_glob / a_generated_stamp_beats_a_source_glob 两条单测的端到端形态:规则顺序若被调换,整个『原始资料目录』会连同里面的 AI 摘要一起降到 ×0.9,而摘要恰恰是最该被读到的那一份"
   },
   {
+    "query": "\"so that a quoted citation resolves\"",
+    "expect_none": true,
+    "why": "task C-T12 review round 1:**这条钉的是今天的行为,不是想要的行为**——形状与 origin.rs 的 some_default_frontmatter_is_not_the_same_as_none 相同(那条也明说『不断言 Derived 是对的,只是把现状钉住,好让日后的改动是一次经过评审的决定而不是一次静默回归』)。\n\n事实:引号短语**跨不过块内的换行**。query.rs 的 finish() 复核短语用的是 `hit.text.to_lowercase().contains(&短语)` —— 逐字子串比对;而 prose.rs 的 SoftBreak 分支把 markdown 里的软换行原样写成 `'\\n'` 存进块文本。prose/phrase.md 的那段正文在第 3 行末尾断在『so that a quoted』、第 4 行开头接『citation resolves』,于是这句话在块里长这样:`…so that a quoted\\ncitation resolves…`,查询里的空格与之匹配不上,命中被整条丢弃。**同一句话不加引号可以正常召回**(fixture 里 \"exact adjacent phrase\" 那条也证明了引号短语在**单行内**是好的),所以这不是召回坏了,是引号语义在换行处失效。\n\n范围比转写稿大得多:任何硬换行的普通散文笔记都已经中招,这是先于本分支就存在的机制。本分支只是让它变成**常态**——一条字幕只有五到十个字,transcript::chunk 合并时用 `'\\n'` 连接,所以转写稿里**几乎每一句**跨条的话都落在这个坑里(这也是新用例 ① 刻意不写成引号短语的原因)。\n\n不在本任务修:诚实的修法是复核前把文本按空白归一化(或给转写分块器改用空格连接),两者都会改动**每一种文件类型**的短语排序,不该塞进这个本身就是安全网的任务。钉在这里,是为了让日后真去修的人翻红这条用例、被迫读到这段说明,而不是静默改掉一个没人写下来过的行为。"
+  },
+  {
     "query": "globsummarytoken origin:source",
     "source_globs": ["transcripts/**"],
     "expect_none": true,
