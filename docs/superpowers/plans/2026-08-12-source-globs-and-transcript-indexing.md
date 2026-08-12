@@ -665,7 +665,9 @@ describe('groupHits', () => {
 
 ## Task 11: 设置页界面
 
-**Files:** Modify `src/components/SettingsDialog.svelte` + `SettingsDialog.search-tab.test.ts`、i18n 四语
+**Files:** Modify `src-tauri/src/search/mod.rs`(`OriginCounts` / `OriginCountsDto` 加第四层)、`src/lib/search/api.ts`、`src/components/SettingsDialog.svelte` + `SettingsDialog.search-tab.test.ts`、i18n 四语
+
+> **计划勘误(C-T8 期间发现):** 本任务原先只列了前端文件,但「分层统计从三层改四层」在后端就做不到 —— `OriginCounts`/`OriginCountsDto` 自 B-T8 起就是三层,`unlabeled` 的行数被**静默排除在统计之外**(当时有一条测试专门钉住这个已知的少算)。前端拿不到第四个数字,所以后端必须一起改,`VaultSettingsDto` 也要补 `searchSourceGlobs`/`searchWeights` 两个字段。
 
 - [ ] **Step 1: 组件测试**
 
