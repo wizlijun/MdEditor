@@ -181,14 +181,64 @@ pub struct Answer {
     pub deep_available: bool,
 }
 
-/// Back-compatible entry point: every route, no abort.
+/// The per-origin-tier ranking multipliers (spec §3.1's default values, now
+/// user-tunable rather than hardcoded — task C-T7). `search`/`search_with` are
+/// how a caller supplies its own; every other retrieval function in this
+/// module threads `&Weights` through rather than reading a global, so the
+/// GUI, the `notemd search` CLI and the watcher can each carry a different
+/// (or identical) value without any shared mutable state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Weights {
+    pub human: f64,
+    pub derived: f64,
+    pub source: f64,
+    pub unlabeled: f64,
+}
+
+/// The shipped constants — same four numbers `score_of` hardcoded before this
+/// task, so a caller who never touches `Weights` sees byte-identical ranking.
+/// Failing toward these values (not toward some "neutral" ×1.0 for every
+/// tier) is deliberate, the same lesson `Limits::default()`'s `deep: false`
+/// got wrong: a future `..Default::default()` must land on the safe,
+/// already-shipped behavior, not silently reset every tier to a no-op.
+impl Default for Weights {
+    fn default() -> Self {
+        Weights { human: 1.25, derived: 1.0, source: 0.9, unlabeled: 0.3 }
+    }
+}
+
+impl Weights {
+    /// Reject non-finite, non-positive, and above-5.0 components, falling
+    /// back to the default *for that specific component* — a bad `human`
+    /// value must not also clobber an otherwise-fine `source` value. Zero is
+    /// rejected on purpose: it would collapse an entire tier's scores to
+    /// exactly 0, making ordering *within* that tier undefined rather than
+    /// merely "unweighted". A deliberate inversion (the user weighting
+    /// `source` above `human`) is left untouched — that is their call about
+    /// their own vault, not something this function is allowed to judge.
+    pub fn sanitized(self) -> Weights {
+        let fallback = Weights::default();
+        let clean = |v: f64, default: f64| {
+            if v.is_finite() && v > 0.0 && v <= 5.0 { v } else { default }
+        };
+        Weights {
+            human: clean(self.human, fallback.human),
+            derived: clean(self.derived, fallback.derived),
+            source: clean(self.source, fallback.source),
+            unlabeled: clean(self.unlabeled, fallback.unlabeled),
+        }
+    }
+}
+
+/// Back-compatible entry point: every route, no abort, the shipped ranking
+/// weights.
 pub fn search(
     conn: &Connection,
     q: &Query,
     limit: usize,
     today: &str,
 ) -> rusqlite::Result<(Vec<Hit>, Route)> {
-    let a = search_with(conn, q, limit, today, &Limits::full())?;
+    let a = search_with(conn, q, limit, today, &Limits::full(), &Weights::default())?;
     Ok((a.hits, a.route))
 }
 
@@ -198,6 +248,7 @@ pub fn search_with(
     limit: usize,
     today: &str,
     limits: &Limits,
+    weights: &Weights,
 ) -> rusqlite::Result<Answer> {
     // Installed for the whole call and removed on every exit path (including
     // `?`) by the guard's Drop — a progress handler left behind on this
@@ -205,7 +256,7 @@ pub fn search_with(
     // usually the watcher's sweep or a rebuild.
     let _guard = ProgressGuard::install(conn, limits.abort.clone())?;
 
-    let (hits, truncated) = fts_search(conn, q, limit, today)?;
+    let (hits, truncated) = fts_search(conn, q, limit, today, weights)?;
     if !hits.is_empty() || truncated {
         return Ok(Answer { hits, route: Route::Fts, truncated, deep_available: false });
     }
@@ -229,7 +280,7 @@ pub fn search_with(
         // into `Route::Fts` would tell a caller (the CLI's `--json` output,
         // read by agents deciding whether a query was exhaustively tried)
         // that no fallback was attempted when one was.
-        let (hits, truncated) = like_search(conn, q, limit, today)?;
+        let (hits, truncated) = like_search(conn, q, limit, today, weights)?;
         return Ok(Answer { hits, route: Route::Scan, truncated, deep_available: false });
     }
     Ok(Answer { hits: Vec::new(), route: Route::Fts, truncated: false, deep_available: false })
@@ -329,6 +380,7 @@ fn fts_search(
     q: &Query,
     limit: usize,
     today: &str,
+    weights: &Weights,
 ) -> rusqlite::Result<(Vec<Hit>, bool)> {
     let Some(expr) = match_expr(q) else { return Ok((Vec::new(), false)) };
     let mut sql = format!(
@@ -348,7 +400,7 @@ fn fts_search(
         Ok((row_to_hit(r)?, r.get::<_, f64>(12)?, r.get::<_, i64>(9)? != 0))
     })?;
     let (rows, truncated) = drain(rows)?;
-    Ok((finish(rows, q, limit, today)?, truncated))
+    Ok((finish(rows, q, limit, today, weights)?, truncated))
 }
 
 fn like_search(
@@ -356,6 +408,7 @@ fn like_search(
     q: &Query,
     limit: usize,
     today: &str,
+    weights: &Weights,
 ) -> rusqlite::Result<(Vec<Hit>, bool)> {
     // Every term and phrase must constrain the scan, ANDed — the same
     // contract the FTS path gives via `match_expr`. Binding only the first
@@ -391,7 +444,7 @@ fn like_search(
         Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0))
     })?;
     let (rows, truncated) = drain(rows)?;
-    Ok((finish(rows, q, limit, today)?, truncated))
+    Ok((finish(rows, q, limit, today, weights)?, truncated))
 }
 
 fn escape_like(s: &str) -> String {
@@ -512,6 +565,7 @@ fn finish(
     q: &Query,
     limit: usize,
     today: &str,
+    weights: &Weights,
 ) -> rusqlite::Result<Vec<Hit>> {
     let mut out: Vec<Hit> = Vec::new();
     for (mut hit, rank, is_annotation) in rows {
@@ -526,7 +580,7 @@ fn finish(
             }
             phrase_exact = true;
         }
-        hit.score = score_of(rank, &hit, is_annotation, phrase_exact, today);
+        hit.score = score_of(rank, &hit, is_annotation, phrase_exact, today, weights);
         out.push(hit);
     }
     let mut out = drop_redundant_rollups(out);
@@ -594,7 +648,19 @@ fn level_rank(level: &str) -> u8 {
 /// The boost constants are STARTING VALUES. Changing them means re-running the
 /// retrievability regression set — they encode a product claim (§4): content you
 /// have judged outranks content a model produced.
-fn score_of(rank: f64, hit: &Hit, is_annotation: bool, phrase_exact: bool, today: &str) -> f64 {
+///
+/// `weights` carries the one boost group that is no longer a fixed constant —
+/// the four origin-tier multipliers below — because C-T7 makes them
+/// user-tunable. Every other boost here stays a hardcoded literal on purpose;
+/// only provenance tiering is a settings-page knob (spec §7.1).
+fn score_of(
+    rank: f64,
+    hit: &Hit,
+    is_annotation: bool,
+    phrase_exact: bool,
+    today: &str,
+    weights: &Weights,
+) -> f64 {
     let mut r = if rank < 0.0 { -rank } else { 0.001 };
     if phrase_exact {
         r *= 1.3;
@@ -628,15 +694,16 @@ fn score_of(rank: f64, hit: &Hit, is_annotation: bool, phrase_exact: bool, today
     // document — the same way `is_annotation` and `phrase_exact` above each
     // apply independently even though both can fire on the same hit.
     r *= match hit.origin {
-        Origin::Human => 1.25,
-        Origin::Derived => 1.0,
-        Origin::Source => 0.9,
-        // TODO(C-T7): hardcoded at spec §3.1's default rather than sourced
-        // from a configurable `Weights` struct — C-T7 replaces all four of
-        // these literals with `Weights`-driven multipliers. Using the real
-        // spec default here (not an arbitrary placeholder) so ranking is
-        // already correct in the interim, not merely "compiles".
-        Origin::Unlabeled => 0.3,
+        Origin::Human => weights.human,
+        Origin::Derived => weights.derived,
+        Origin::Source => weights.source,
+        // The ×0.3 default is a deliberate strong penalty, not a token
+        // nudge: stacked with the default top-20 limit, it is usually enough
+        // to push an unlabeled file out of the visible result set entirely.
+        // That is the accepted, confirmed design (spec §3.1) — unlabeled
+        // material is real and searchable via `origin:unlabeled`, it just
+        // does not compete for the front page by default.
+        Origin::Unlabeled => weights.unlabeled,
     };
     // The first line of defense against memory self-propagation: AI-authored
     // material is findable but never outranks the primary source it summarized.
@@ -671,6 +738,13 @@ fn days_from_civil(ymd: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shared "today" for the pure `score_of` tests below, so the date-decay
+    /// boost never activates by accident (every fixture `Hit` has `doc_date:
+    /// None`, but reusing one literal instead of repeating `"2026-08-10"`
+    /// keeps the pure-function tests independent of the SQL-backed ones,
+    /// which still use their own literal per-test dates).
+    const TODAY: &str = "2026-08-10";
 
     #[test]
     fn bare_words_are_and_terms() {
@@ -859,12 +933,12 @@ mod tests {
     fn a_shallow_query_never_pays_for_the_scan_fallback_but_says_it_is_available() {
         let (_d, c) = indexed(&[("both.md", "target 会见了李慕白同志\n")]);
         let shallow = Limits { deep: false, abort: None };
-        let a = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &shallow).unwrap();
+        let a = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &shallow, &Weights::default()).unwrap();
         assert_eq!(a.route.as_str(), "t1-fts", "the fallback must not have run");
         assert!(a.hits.is_empty());
         assert!(a.deep_available, "the caller has to be able to offer the deep search");
 
-        let deep = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &Limits::full()).unwrap();
+        let deep = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &Limits::full(), &Weights::default()).unwrap();
         assert_eq!(deep.route.as_str(), "t1-scan");
         assert_eq!(deep.hits.len(), 1, "{:?}", deep.hits);
         assert!(!deep.deep_available, "it already ran; there is nothing left to offer");
@@ -908,14 +982,14 @@ mod tests {
                 true
             })),
         };
-        let a = search_with(&c, &parse("慕"), 20, "2026-08-10", &limits).unwrap();
+        let a = search_with(&c, &parse("慕"), 20, "2026-08-10", &limits, &Weights::default()).unwrap();
         assert!(calls.load(std::sync::atomic::Ordering::Relaxed) > 0, "abort was never consulted");
         assert!(a.truncated, "an aborted retrieval must say so, not pose as a complete answer");
 
         // And the handler must not outlive the call: the next caller through
         // this connection is usually the watcher's sweep or a rebuild, and an
         // always-true abort left installed would kill it.
-        let after = search_with(&c, &parse("慕"), 20, "2026-08-10", &Limits::full()).unwrap();
+        let after = search_with(&c, &parse("慕"), 20, "2026-08-10", &Limits::full(), &Weights::default()).unwrap();
         assert!(!after.truncated, "the progress handler leaked into the next query");
         assert_eq!(after.hits.len(), 1, "{:?}", after.hits);
     }
@@ -1116,12 +1190,19 @@ mod tests {
     /// 乘数一起推同一方向、任一个单独失效测试仍通过」的假阴性(见 mutation check
     /// in the task report),所以这里逐档断言 `score_of` 本身,而不是端到端排序,
     /// 且断言两条不等式而非一条,让 mutation check 能分别单独抓到每一档。
+    ///
+    /// C-T7: now goes through `Weights::default()` explicitly rather than a
+    /// baked-in literal inside `score_of` — the four assertions below are
+    /// what pin the shipped constants against a regression, not `score_of`
+    /// itself (which now just reads whatever `Weights` it is handed).
     #[test]
     fn each_origin_tier_moves_the_score_on_its_own() {
-        let human = score_of(-1.0, &hit_with(Origin::Human), false, false, "2026-08-10");
-        let derived = score_of(-1.0, &hit_with(Origin::Derived), false, false, "2026-08-10");
-        let source = score_of(-1.0, &hit_with(Origin::Source), false, false, "2026-08-10");
-        let unlabeled = score_of(-1.0, &hit_with(Origin::Unlabeled), false, false, "2026-08-10");
+        let w = Weights::default();
+        let s = |o| score_of(-1.0, &hit_with(o), false, false, TODAY, &w);
+        let human = s(Origin::Human);
+        let derived = s(Origin::Derived);
+        let source = s(Origin::Source);
+        let unlabeled = s(Origin::Unlabeled);
         assert!(human > derived, "human 必须高于 derived: {human} vs {derived}");
         assert!(derived > source, "derived 必须高于 source: {derived} vs {source}");
         // Task 2 review round 2, Important #1: without this inequality, the
@@ -1166,12 +1247,13 @@ mod tests {
     /// ×0.85) are pinned independent of bm25/SQLite behavior.
     #[test]
     fn score_of_boosts_annotations_and_penalizes_agent_authored_content() {
+        let w = Weights::default();
         let base = hit_with(Origin::Derived);
-        let plain = score_of(-1.0, &base, false, false, "2026-08-10");
-        let annotated = score_of(-1.0, &base, true, false, "2026-08-10");
+        let plain = score_of(-1.0, &base, false, false, TODAY, &w);
+        let annotated = score_of(-1.0, &base, true, false, TODAY, &w);
         let mut agent_hit = base.clone();
         agent_hit.agent_by = Some("claude/1".to_string());
-        let agent = score_of(-1.0, &agent_hit, false, false, "2026-08-10");
+        let agent = score_of(-1.0, &agent_hit, false, false, TODAY, &w);
         assert!(annotated > plain, "annotation boost must raise the score: {annotated} vs {plain}");
         assert!(agent < plain, "agent-authored content must be penalized: {agent} vs {plain}");
         assert!(annotated > agent, "human-marked content must outrank agent output: {annotated} vs {agent}");
@@ -1186,12 +1268,42 @@ mod tests {
     /// pinned independent of bm25/SQLite/fixture-length behavior entirely.
     #[test]
     fn score_of_boosts_human_verified_content() {
+        let w = Weights::default();
         let base = hit_with(Origin::Derived);
-        let unverified = score_of(-1.0, &base, false, false, "2026-08-10");
+        let unverified = score_of(-1.0, &base, false, false, TODAY, &w);
         let mut verified_hit = base.clone();
         verified_hit.human_verified = true;
-        let verified = score_of(-1.0, &verified_hit, false, false, "2026-08-10");
+        let verified = score_of(-1.0, &verified_hit, false, false, TODAY, &w);
         assert!(verified > unverified, "human_verified boost must raise the score: {verified} vs {unverified}");
+    }
+
+    /// 默认值就是已发布的四个常量。前车之鉴:`Limits::default()` 的
+    /// `deep: false` 与该类型自己的向后兼容承诺相反,一个未来的
+    /// `..Default::default()` 会静默拿到快路径 —— `Weights::default()` 必须
+    /// 失败也失败在安全一侧:已发布的行为,而不是某个"中性"占位值。
+    #[test]
+    fn the_default_weights_are_the_shipped_constants() {
+        let w = Weights::default();
+        assert_eq!((w.human, w.derived, w.source, w.unlabeled), (1.25, 1.0, 0.9, 0.3));
+    }
+
+    /// 非有限/非正/超 5.0 的分量必须回落到默认值,且回落是逐分量的——一个
+    /// 分量非法不能连累其他分量。
+    #[test]
+    fn an_invalid_weight_falls_back_to_the_default() {
+        for bad in [f64::NAN, -1.0, 0.0, 6.0] {
+            let w = Weights { human: bad, ..Default::default() }.sanitized();
+            assert_eq!(w.human, 1.25, "非法值 {bad} 必须回落");
+            // The rest of the struct must be untouched by a bad `human`.
+            assert_eq!((w.derived, w.source, w.unlabeled), (1.0, 0.9, 0.3));
+        }
+    }
+
+    /// 用户可以把原始资料调得比你写的还高 —— 那是他自己的 vault。
+    #[test]
+    fn a_deliberate_inversion_is_allowed() {
+        let w = Weights { human: 0.5, source: 2.0, ..Default::default() }.sanitized();
+        assert_eq!((w.human, w.source), (0.5, 2.0));
     }
 
     #[test]

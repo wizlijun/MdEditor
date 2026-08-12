@@ -146,9 +146,17 @@ impl SearchIndex {
     /// Same retrieval, under a caller-supplied budget: an interactive caller
     /// keeps live typing off the expensive fallback ([`Limits::deep`]) and
     /// abandons a query the moment the user has moved on ([`Limits::abort`]).
+    ///
+    /// Ranks with [`query::Weights::default`] — the shipped constants. C-T8
+    /// wires a settings-page value through the Tauri command layer and the
+    /// CLI without changing this facade method's own signature (see
+    /// `search::options::weights_for_vault`, the single construction point
+    /// that task introduces); until then every caller through here gets
+    /// identical ranking to before this task existed.
     pub fn search_with(&self, raw: &str, limit: usize, limits: &Limits) -> Result<Answer, String> {
         let q = query::parse(raw);
-        query::search_with(&self.conn, &q, limit, &today(), limits).map_err(|e| e.to_string())
+        query::search_with(&self.conn, &q, limit, &today(), limits, &query::Weights::default())
+            .map_err(|e| e.to_string())
     }
 
     pub fn stats(&self) -> Result<IndexStats, String> {
