@@ -61,21 +61,26 @@ pub struct VaultSettings {
     /// 牵连其余三档,是 `Weights::sanitized()`「坏值只回落那一档」这条
     /// 不变量在"没写"这种缺失形式上的自然延伸。
     ///
-    /// 这里不做取值校验(非有限数/非正数/大于 5.0 都合法地存进来)——
-    /// 校验推迟到读取侧,`search::options::weights_for_vault`(权重的
-    /// 唯一构造点)统一调用 `Weights::sanitized()`,这样手改
-    /// `settings.json` 写出的越界值也总能得到一个可用的结果,而不是让
+    /// **两道独立的校验,解决不同的问题(review round 1, Important 4;
+    /// spec §8:「权重非法 → 保存时拒绝,保留原值」)。** `merge`(写入侧)
+    /// 对每个*显式给出*的字段调用 `validate_search_weights`,越界值直接
+    /// 拒绝整次保存 —— 否则设置页会把 `-1` 读回来当"当前值"渲染,而每次
+    /// 查询其实仍在用 1.25,显示与生效永久不一致,且没有任何报错路径。
+    /// `search::options::weights_for_vault`(权重的唯一构造点)在读取侧
+    /// 仍然调用 `Weights::sanitized()` 兜底 —— 这道防线保护的是没经过
+    /// `merge` 就进了 `settings.json` 的值(手改文件、未来某个不走这条
+    /// 校验路径的写入方),让那种情况也总能拿到一个可用的结果,而不是让
     /// vault 打不开。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_weights: Option<SearchWeights>,
 }
 
 /// Plain data shape for [`VaultSettings::search_weights`] — see that field's
-/// doc comment for why validation is deferred to `search::options::
-/// weights_for_vault` rather than done here. Kept as four independent
-/// `Option<f64>`s rather than `searchidx::query::Weights` itself so this
-/// module, which otherwise has no dependency on the `searchidx` crate's
-/// types, doesn't need one just to describe a settings shape.
+/// doc comment for the two-layer validation story (`merge` rejects at save
+/// time, `Weights::sanitized()` defends at read time). Kept as four
+/// independent `Option<f64>`s rather than `searchidx::query::Weights` itself
+/// so this module, which otherwise has no dependency on the `searchidx`
+/// crate's types, doesn't need one just to describe a settings shape.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchWeights {
@@ -163,9 +168,13 @@ fn has_drive_prefix(seg: &str) -> bool {
 /// value. Fields left None keep their base value. Returns the first validation
 /// error encountered.
 ///
-/// `search_source_globs` and `search_weights` are stored verbatim, with no
-/// validation — see their fields' doc comments on [`VaultSettings`] for why
-/// (tolerant `parse`/`sanitized()` downstream, at read time, instead).
+/// `search_source_globs` is stored verbatim, with no validation — see that
+/// field's doc comment on [`VaultSettings`] for why (`searchidx::globs::
+/// parse` is already tolerant downstream). `search_weights` **is**
+/// validated here — each explicitly-provided component must be finite,
+/// > 0.0, and <= 5.0 (`validate_search_weights`, [`SearchWeights`]'s doc
+/// comment has the fuller rationale) — a save-time rejection on top of,
+/// not instead of, `Weights::sanitized()`'s read-time fallback.
 #[allow(clippy::too_many_arguments)]
 pub fn merge(
     base: VaultSettings,
@@ -215,9 +224,35 @@ pub fn merge(
         out.search_source_globs = Some(list);
     }
     if let Some(w) = search_weights {
+        validate_search_weights(&w)?;
         out.search_weights = Some(w);
     }
     Ok(out)
+}
+
+/// Reject an out-of-range weight at save time (spec §8: "权重非法 → 保存时
+/// 拒绝,保留原值"). Bounds match `searchidx::query::Weights::sanitized`'s
+/// rule exactly (finite, > 0.0, <= 5.0) so a value that would have been
+/// silently corrected on read is instead refused before it ever reaches
+/// disk — see [`VaultSettings::search_weights`]'s doc comment for why both
+/// checks exist rather than just one. Only *provided* components are
+/// checked: an absent field is "not configured," not "invalid," and merging
+/// a partial `SearchWeights` must not fail just because the caller didn't
+/// mention `unlabeled`.
+fn validate_search_weights(w: &SearchWeights) -> Result<(), String> {
+    fn check(name: &str, v: Option<f64>) -> Result<(), String> {
+        match v {
+            Some(x) if !x.is_finite() || x <= 0.0 || x > 5.0 => {
+                Err(format!("{name} weight must be a finite number greater than 0 and at most 5.0"))
+            }
+            _ => Ok(()),
+        }
+    }
+    check("human", w.human)?;
+    check("derived", w.derived)?;
+    check("source", w.source)?;
+    check("unlabeled", w.unlabeled)?;
+    Ok(())
 }
 
 /// The effective sync sub-directory: the configured value when present and
@@ -237,9 +272,9 @@ pub fn merge(
 /// Rule 5 was retired in favor of user-configured source-glob patterns (rule
 /// 5′) back in C-T2, and C-T6 repointed `store::open`'s staleness stamp at
 /// `SourceGlobs::stamp()` to match — both of those two call sites now compute
-/// a glob stamp instead (a `SourceGlobs::default()` stopgap until C-T8 wires
-/// the real `search_source_globs` setting; see the call sites themselves).
-/// This function is unchanged and still resolves the *sync mirror* directory
+/// a glob stamp instead, off `search::options::for_vault`'s real
+/// `search_source_globs`-backed value (wired by C-T8; see the call sites
+/// themselves). This function is unchanged and still resolves the *sync mirror* directory
 /// name correctly for its remaining callers (`sotvault::mod` for the actual
 /// sync-to-vault mirror, `plugin_runtime::ui_rpc` for the plugin RPC surface)
 /// — it just no longer has anything to do with the search index.
@@ -545,6 +580,64 @@ mod tests {
     fn merge_rejects_a_zero_search_threshold() {
         let base = VaultSettings::default();
         assert!(merge(base, None, None, None, None, None, None, Some(0), None, None).is_err());
+    }
+
+    /// Review round 1, Important 4 (spec §8: "权重非法 → 保存时拒绝,保留
+    /// 原值"). Each of `Weights::sanitized`'s rejected shapes — zero,
+    /// negative, above 5.0, non-finite — must be refused at save time, not
+    /// silently stored and only caught later by the read-side fallback.
+    #[test]
+    fn merge_rejects_an_out_of_range_weight() {
+        let bad = |w: SearchWeights| {
+            merge(VaultSettings::default(), None, None, None, None, None, None, None, None, Some(w))
+        };
+        assert!(bad(SearchWeights { human: Some(0.0), ..Default::default() }).is_err(), "0 不合法");
+        assert!(bad(SearchWeights { human: Some(-1.0), ..Default::default() }).is_err(), "负数不合法");
+        assert!(bad(SearchWeights { source: Some(5.000_001), ..Default::default() }).is_err(), "超过 5.0 不合法");
+        assert!(bad(SearchWeights { derived: Some(f64::NAN), ..Default::default() }).is_err(), "NaN 不合法");
+        assert!(bad(SearchWeights { unlabeled: Some(f64::INFINITY), ..Default::default() }).is_err(), "无穷不合法");
+    }
+
+    #[test]
+    fn merge_accepts_boundary_and_ordinary_weights() {
+        let ok = |w: SearchWeights| {
+            merge(VaultSettings::default(), None, None, None, None, None, None, None, None, Some(w))
+        };
+        assert!(ok(SearchWeights { human: Some(5.0), ..Default::default() }).is_ok(), "5.0 是合法上界");
+        assert!(ok(SearchWeights { source: Some(0.000_1), ..Default::default() }).is_ok(), "接近 0 但仍为正的合法值");
+        assert!(ok(SearchWeights::default()).is_ok(), "全部缺省仍合法");
+    }
+
+    /// 缺省字段不是非法值 —— 只提供部分字段的更新不该因为没提到的那几档
+    /// 而失败,`validate_search_weights` 只检查显式给出的字段。
+    #[test]
+    fn merge_does_not_reject_an_absent_component() {
+        let out = merge(
+            VaultSettings::default(),
+            None, None, None, None, None, None, None, None,
+            Some(SearchWeights { human: Some(2.0), ..Default::default() }),
+        )
+        .unwrap();
+        assert_eq!(out.search_weights.unwrap().human, Some(2.0));
+    }
+
+    /// "保存时拒绝,保留原值": a rejected merge must not mutate `base` — the
+    /// caller (`sotvault::persist_vault_settings`) never reaches its own
+    /// `write` call when `merge` returns `Err`, so this pins the half of
+    /// that guarantee that lives in this function: the `Err` path returns
+    /// before touching `out.search_weights` at all.
+    #[test]
+    fn a_rejected_weight_does_not_disturb_the_existing_value() {
+        let base = VaultSettings {
+            search_weights: Some(SearchWeights { human: Some(1.5), ..Default::default() }),
+            ..Default::default()
+        };
+        let err = merge(
+            base,
+            None, None, None, None, None, None, None, None,
+            Some(SearchWeights { human: Some(-1.0), ..Default::default() }),
+        );
+        assert!(err.is_err(), "非法权重必须拒绝整次保存");
     }
 
     // `sync_dir_changed` (and its test, formerly here) was retired by C-T8.

@@ -147,16 +147,36 @@ impl SearchIndex {
     /// keeps live typing off the expensive fallback ([`Limits::deep`]) and
     /// abandons a query the moment the user has moved on ([`Limits::abort`]).
     ///
-    /// Ranks with [`query::Weights::default`] — the shipped constants. C-T8
-    /// wires a settings-page value through the Tauri command layer and the
-    /// CLI without changing this facade method's own signature (see
-    /// `search::options::weights_for_vault`, the single construction point
-    /// that task introduces); until then every caller through here gets
-    /// identical ranking to before this task existed.
+    /// Ranks with [`query::Weights::default`] — the shipped constants,
+    /// unconditionally. Kept that way on purpose rather than reading a
+    /// settings-page value itself: this signature is called from places
+    /// (tests, any future caller that just wants "the shipped ranking")
+    /// that must not have to learn about `Weights` just to keep compiling.
+    /// A caller that wants a configured value — `search::options::
+    /// weights_for_vault` / `cli::search::weights_for`'s the GUI and CLI
+    /// (C-T8) — calls [`Self::search_with_weights`] instead.
     pub fn search_with(&self, raw: &str, limit: usize, limits: &Limits) -> Result<Answer, String> {
+        self.search_with_weights(raw, limit, limits, &query::Weights::default())
+    }
+
+    /// [`Self::search_with`], but ranked with a caller-supplied [`query::
+    /// Weights`] instead of the shipped constants. A sibling method rather
+    /// than a new parameter on `search_with` itself — C-T7's doc comment on
+    /// `query::Weights` (predicting this exact follow-up) ruled out changing
+    /// that facade's signature, since every existing caller of `search_with`
+    /// would otherwise have to start passing weights just to keep compiling.
+    /// `search_with` is now defined in terms of this method with
+    /// `Weights::default()`, so the two can never silently diverge in
+    /// anything but the weights argument.
+    pub fn search_with_weights(
+        &self,
+        raw: &str,
+        limit: usize,
+        limits: &Limits,
+        weights: &query::Weights,
+    ) -> Result<Answer, String> {
         let q = query::parse(raw);
-        query::search_with(&self.conn, &q, limit, &today(), limits, &query::Weights::default())
-            .map_err(|e| e.to_string())
+        query::search_with(&self.conn, &q, limit, &today(), limits, weights).map_err(|e| e.to_string())
     }
 
     pub fn stats(&self) -> Result<IndexStats, String> {

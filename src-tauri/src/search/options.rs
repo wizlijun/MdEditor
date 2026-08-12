@@ -52,7 +52,7 @@ pub fn for_vault(vault_root: &Path) -> ScanOptions {
 /// - Explicitly empty means the user cleared the list on purpose. Re-seeding
 ///   it here would make that impossible to express — every read would
 ///   silently put the default pattern back.
-fn source_globs_from(vs: &VaultSettings) -> SourceGlobs {
+pub(crate) fn source_globs_from(vs: &VaultSettings) -> SourceGlobs {
     match &vs.search_source_globs {
         Some(patterns) => searchidx::globs::parse(patterns),
         None => {
@@ -81,21 +81,29 @@ pub fn search_source_globs_changed(before: &VaultSettings, after: &VaultSettings
     source_globs_from(before).stamp() != source_globs_from(after).stamp()
 }
 
-/// The single construction point for [`Weights`] — the GUI (via the search
-/// commands in `search::mod`) and the CLI (`cli::search`) both resolve a
-/// vault's ranking weights through this function, never by reading
-/// `search_weights` themselves, so the two adapters cannot silently rank the
-/// same vault differently. Mirrors `for_vault`'s shape and its "one read"
-/// discipline.
+/// The single construction point for [`Weights`] — the GUI (`search::mod::
+/// search_locked`, behind `notemd_search`) and the CLI (`cli::search::run`,
+/// via the `weights_for` delegate) both resolve a vault's ranking weights
+/// through this function and both actually rank a query with the result
+/// (`SearchIndex::search_with_weights`), never by reading `search_weights`
+/// themselves, so the two adapters cannot silently rank the same vault
+/// differently — and neither can silently ignore a configured value while
+/// only *resolving* it correctly (review round 1, Important 2: that gap
+/// existed for one round with no test able to catch it). Mirrors
+/// `for_vault`'s shape and its "one read" discipline.
 pub fn weights_for_vault(vault_root: &Path) -> Weights {
     weights_from(&vault_settings::read(vault_root))
 }
 
 /// The `&VaultSettings`-in-hand variant of [`weights_for_vault`], the same
 /// `resolve_*_from` idiom `vault_settings::resolve_sync_dir_from` already
-/// established — a caller that needs both `ScanOptions` and `Weights` for
-/// the same read can build both off one `vault_settings::read` call instead
-/// of paying for the file twice.
+/// established — `pub(crate)`, like [`source_globs_from`]'s sibling, so a
+/// future caller elsewhere in this crate that needs both `ScanOptions` and
+/// `Weights` for the same vault can build both off one `vault_settings::
+/// read` call instead of paying for the file twice (review round 1, Minor
+/// 6: an earlier version of this doc comment claimed that was already
+/// possible while both helpers were private, which no outside caller could
+/// actually act on).
 ///
 /// Every component falls back to [`Weights::default`]'s shipped constant
 /// independently: a missing `search_weights` key, a missing individual
@@ -104,7 +112,7 @@ pub fn weights_for_vault(vault_root: &Path) -> Weights {
 /// that field's default without disturbing the other three siblings. This
 /// is the first production call site for `Weights::sanitized()` — C-T7 built
 /// it but had no real caller yet (see that task's report).
-fn weights_from(vs: &VaultSettings) -> Weights {
+pub(crate) fn weights_from(vs: &VaultSettings) -> Weights {
     let default = Weights::default();
     let sw = vs.search_weights.unwrap_or_default();
     Weights {

@@ -720,7 +720,17 @@ fn search_locked(
                 || deadline.is_some_and(|d| Instant::now() >= d)
         })),
     };
-    let answer = idx.search_with(query, limit.unwrap_or(50), &limits)?;
+    // Review round 1, Important 2: this used to call `idx.search_with`,
+    // which ranks with `Weights::default()` unconditionally — so a user who
+    // configured `searchWeights` (once C-T11 ships the UI) would see the
+    // settings page read the value back correctly while every actual query
+    // kept ranking with the shipped constants, GUI and CLI both.
+    // `weights_for_vault` is the single construction point (task C-T8) both
+    // adapters must go through; reading it here, off the index's own
+    // `vault_root()` rather than a value threaded in from the command, keeps
+    // this the one place that decides what a query's weights are.
+    let weights = crate::search::options::weights_for_vault(idx.vault_root());
+    let answer = idx.search_with_weights(query, limit.unwrap_or(50), &limits, &weights)?;
     // An abort has two causes and they are not the same answer: superseded
     // means "throw this away", deadline means "partial, and say so".
     if superseded(counter, ticket) {
@@ -841,10 +851,10 @@ pub fn notemd_search_progress(app: AppHandle) -> Option<ProgressDto> {
     app.state::<ProgressState>().get().as_ref().map(progress_dto)
 }
 
-/// How many files in the vault, *right now on disk*, `patterns` would put in
-/// scope — the settings page's live preview while a user is drafting a
-/// candidate source-glob pattern (task C-T10's `suggestGlobs`, design spec
-/// §7.1).
+/// How many files in the vault, *right now on disk*, `patterns` would
+/// **designate** — the settings page's live preview while a user is
+/// drafting a candidate source-glob pattern (task C-T10's `suggestGlobs`,
+/// design spec §7.1/§7.2).
 ///
 /// Deliberately walks the vault instead of querying the search index. A
 /// pattern's whole reason for existing is to decide whether `.srt`/`.vtt`/
@@ -856,9 +866,26 @@ pub fn notemd_search_progress(app: AppHandle) -> Option<ProgressDto> {
 /// widening it "because the count looked low," when the true count (once
 /// saved) would already have been fine.
 ///
-/// Reuses `is_indexable` itself — the same gate `for_vault`'s `ScanOptions`
-/// feeds the real scan/rebuild — rather than re-deriving "does this path
-/// count" as a second rule here that could quietly drift from the first.
+/// **A file counts only when `is_indexable` AND the candidate pattern
+/// itself matches it** — review round 1, Critical 1. `is_indexable` alone
+/// is not "does this pattern designate this file": its `.md` branch is
+/// unconditionally `true` regardless of `source_globs` (`.md` is always in
+/// scope for indexing, glob-configured or not — see that function's own
+/// doc comment), so every candidate, however narrow, would otherwise carry
+/// the vault's *entire* ordinary-`.md` baseline. Two consequences that made
+/// that wrong, not just imprecise: spec §7.1's narrow→wide candidate ladder
+/// could invert (a narrower directory with more `.srt` files could
+/// outcount a wider one whose sub-pattern admits none, because both merely
+/// tied on the same untouched `.md` baseline), and spec §7.2's "0 files
+/// matched" warning — the only safety net for the exact case-flipped-path
+/// incident spec §4.1 names as why matching is case-literal — became
+/// structurally unreachable, since the count could never drop below the
+/// vault's `.md` total. `opts.source_globs.matches(&rel)` is the same
+/// field/method `is_indexable` itself already calls internally for the
+/// `.srt`/`.vtt`/`.txt` branch; reusing it here for `.md` too is still "one
+/// judgment, not a second rule" — it is the *existing* rule, just no longer
+/// short-circuited by `.md`'s special case.
+///
 /// Every other field of `ScanOptions` (the exclude list, in particular)
 /// comes from the vault's *actual saved* settings via `for_vault`, so a
 /// directory the user has already excluded from search does not inflate a
@@ -889,7 +916,10 @@ fn count_glob_matches(vault_root: &Path, patterns: &[String]) -> usize {
             continue;
         }
         let Some(rel) = searchidx::norm::rel_path(vault_root, entry.path()) else { continue };
-        if searchidx::scan::is_indexable(&rel, &opts) {
+        // Designation AND acceptance — see this function's caller's doc
+        // comment (review round 1, Critical 1) for why `is_indexable` alone
+        // is not enough: its `.md` branch ignores `source_globs` entirely.
+        if searchidx::scan::is_indexable(&rel, &opts) && opts.source_globs.matches(&rel) {
             count += 1;
         }
     }
@@ -1224,6 +1254,68 @@ mod command_tests {
         assert!(!superseded(&mine_counter, mine));
     }
 
+    /// Review round 1, Important 2: `search_locked` used to call
+    /// `idx.search_with`, which ranks with `Weights::default()`
+    /// unconditionally — a `searchWeights` setting could be saved and read
+    /// back correctly by the settings page while every actual query, GUI
+    /// and CLI, still ranked with the shipped 1.25/1.0/0.9/0.3 constants.
+    /// `the_cli_and_the_gui_resolve_the_same_weights` (the contract test)
+    /// could not catch that: it only asserts the two adapters *resolve* the
+    /// same value, not that either one *uses* it. This drives `search_locked`
+    /// itself — the real function `notemd_search` calls — against a real
+    /// on-disk index and a real `.notemd/settings.json`, and asserts that
+    /// flipping the configured weights from the default ordering to an
+    /// inverted one actually reorders the query's results.
+    #[test]
+    fn a_configured_weight_changes_result_order_through_the_real_query_path() {
+        let v = tempfile::tempdir().unwrap();
+        // Same FTS-matchable body in both files (only the frontmatter/
+        // location differs) so the two hits tie on everything BUT the
+        // origin weight multiplier — the only thing that should be able to
+        // separate them.
+        std::fs::write(v.path().join("derived.md"), "---\ntype: Answer\n---\n\nwidget\n").unwrap();
+        std::fs::create_dir_all(v.path().join("raw")).unwrap();
+        std::fs::write(v.path().join("raw/source.md"), "widget\n").unwrap();
+        std::fs::create_dir_all(v.path().join(".notemd")).unwrap();
+        std::fs::write(
+            v.path().join(".notemd/settings.json"),
+            r#"{"searchSourceGlobs": ["raw/**"]}"#,
+        )
+        .unwrap();
+
+        let opts = crate::search::options::for_vault(v.path());
+        let d = tempfile::tempdir().unwrap();
+        let mut idx =
+            searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), &opts.source_globs.stamp()).unwrap();
+        idx.ensure_built(&opts).unwrap();
+        let handle: IndexHandle = Arc::new(Mutex::new(Some(idx)));
+        let counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+
+        // Default weights: `derived.md` (Origin::Derived, ×1.0) outranks
+        // `raw/source.md` (Origin::Source, ×0.9).
+        let default_resp =
+            search_locked(&handle, Instant::now(), "widget", Some(10), Some(true), None, &counter, 1).unwrap();
+        assert_eq!(
+            default_resp.hits.first().map(|h| h.path.as_str()),
+            Some("derived.md"),
+            "默认权重下 derived 应排在 source 前面 —— 测试前提不成立"
+        );
+
+        // Invert the configured weights so `source` dominates `derived`.
+        std::fs::write(
+            v.path().join(".notemd/settings.json"),
+            r#"{"searchSourceGlobs": ["raw/**"], "searchWeights": {"source": 5.0, "derived": 0.1}}"#,
+        )
+        .unwrap();
+        let inverted_resp =
+            search_locked(&handle, Instant::now(), "widget", Some(10), Some(true), None, &counter, 1).unwrap();
+        assert_eq!(
+            inverted_resp.hits.first().map(|h| h.path.as_str()),
+            Some("raw/source.md"),
+            "配置的反转权重必须真正改变排序,而不是被 Weights::default() 悄悄吃掉"
+        );
+    }
+
     /// 一次全量重建产出的 search 分类日志必须在个位到几十行,而不是逐文件。
     /// log_bus 是全局共享的 3000 行环形缓冲 —— 逐文件写会把 git sync、插件、
     /// 前端 console 的日志全部冲掉,连自己早期的行也留不住。
@@ -1538,41 +1630,127 @@ mod command_tests {
 
     /// A candidate pattern only unlocks the `.srt`/`.vtt`/`.txt` files under
     /// it — the same `is_indexable` extension gate the real scan/rebuild
-    /// uses. A transcript outside the pattern must not be counted.
+    /// uses. A transcript outside the pattern must not be counted. Fixture
+    /// carries ordinary `.md` both inside and outside the pattern too (review
+    /// round 1: the original fixture had no `.md` at all and so could not
+    /// tell the pre-fix "`is_indexable` alone" semantics apart from the
+    /// corrected "designation AND acceptance" one) — only the in-pattern
+    /// `.md` should count, alongside the in-pattern `.srt`.
     #[test]
-    fn count_glob_matches_counts_transcripts_inside_the_candidate_pattern_only() {
+    fn count_glob_matches_counts_files_inside_the_candidate_pattern_only() {
         let v = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(v.path().join("media")).unwrap();
         std::fs::create_dir_all(v.path().join("elsewhere")).unwrap();
         std::fs::write(v.path().join("media/talk.srt"), "1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+        std::fs::write(v.path().join("media/note.md"), "hi\n").unwrap();
         std::fs::write(v.path().join("elsewhere/other.srt"), "1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+        std::fs::write(v.path().join("elsewhere/other.md"), "hi\n").unwrap();
 
         let patterns = vec!["media/**".to_string()];
-        assert_eq!(count_glob_matches(v.path(), &patterns), 1, "只有落在模式内的转写文件该被计入");
+        assert_eq!(count_glob_matches(v.path(), &patterns), 2, "只有落在模式内的文件（.md 和转写皆是）该被计入");
     }
 
-    /// `.md` is unconditionally in scope for `is_indexable` regardless of the
-    /// source-glob pattern (it is this product's native format — see that
-    /// function's own doc comment in `searchidx::scan`), and this command
-    /// deliberately reuses `is_indexable` as-is rather than re-deriving a
-    /// second, narrower notion of "matches". A vault's ordinary `.md` files
-    /// are therefore part of every candidate pattern's count, not just the
-    /// files the literal glob syntax matches — pinned here so that is a
-    /// documented, intentional reading rather than something a future
-    /// "obviously fix this" edit quietly narrows.
+    /// Corrected meaning (review round 1, Critical 1): a file counts only
+    /// when it is BOTH `is_indexable` AND matched by the candidate pattern
+    /// itself (`opts.source_globs.matches`) — not `is_indexable` alone,
+    /// whose `.md` branch is unconditionally `true` regardless of
+    /// `source_globs`. An ordinary `.md` file the candidate pattern does not
+    /// cover must not be counted, or every candidate — no matter how narrow
+    /// — would carry the vault's entire `.md` baseline, which is exactly
+    /// what inverted spec §7.1's own narrow→wide worked example and made
+    /// spec §7.2's "0 files matched" warning unreachable (see the two tests
+    /// below, which pin those two failure modes directly). This replaces
+    /// `count_glob_matches_includes_ordinary_md_files_unconditionally`,
+    /// which declared the old (wrong) behavior intentional.
     #[test]
-    fn count_glob_matches_includes_ordinary_md_files_unconditionally() {
+    fn count_glob_matches_excludes_md_files_the_pattern_does_not_cover() {
         let v = tempfile::tempdir().unwrap();
-        std::fs::write(v.path().join("note.md"), "hello\n").unwrap();
+        std::fs::create_dir_all(v.path().join("ebook")).unwrap();
+        std::fs::write(v.path().join("ebook/a.md"), "x\n").unwrap();
+        std::fs::write(v.path().join("elsewhere.md"), "x\n").unwrap();
 
-        let patterns = vec!["nowhere-relevant/**".to_string()];
-        assert_eq!(count_glob_matches(v.path(), &patterns), 1, ".md 不看 source_globs,总是在范围内");
+        let patterns = vec!["ebook/**".to_string()];
+        assert_eq!(count_glob_matches(v.path(), &patterns), 1, "只有落在模式内的 .md 才该计入,不是全库基线");
+    }
+
+    /// spec §7.1's own worked example (narrow → wide candidates around one
+    /// srt-heavy directory), scaled down for test speed but structurally
+    /// identical in shape: an ordinary-`.md` baseline living both inside and
+    /// outside the directory in question, plus a directory of transcripts
+    /// nested one level deeper than some of that `.md`.
+    ///
+    /// Under the pre-fix "`is_indexable` alone" semantics, the narrowest
+    /// candidate (`ebook/三体/**`) would carry the SAME vault-wide `.md`
+    /// baseline as the wider ones (`is_indexable`'s `.md` branch ignores
+    /// `source_globs`) while only the wider candidates' extra `.srt` files
+    /// counted for real — so a directory with many `.srt` files nested
+    /// under a narrow pattern could outrank a wider sibling pattern that
+    /// admits none, and the ladder would not even be monotonic once
+    /// `notes/`'s unrelated `.md` files are added to the mix. This pins the
+    /// corrected, monotonic ordering instead.
+    #[test]
+    fn count_glob_matches_ladder_is_monotonic_across_narrow_to_wide_candidates() {
+        let v = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(v.path().join("notes")).unwrap();
+        std::fs::create_dir_all(v.path().join("ebook/三体")).unwrap();
+        // Unrelated `.md` baseline elsewhere in the vault — the old
+        // semantics let this leak into every candidate below.
+        for i in 0..5 {
+            std::fs::write(v.path().join(format!("notes/n{i}.md")), "x").unwrap();
+        }
+        for i in 0..4 {
+            std::fs::write(v.path().join(format!("ebook/e{i}.md")), "x").unwrap();
+        }
+        for i in 0..8 {
+            std::fs::write(v.path().join(format!("ebook/t{i}.srt")), "1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+                .unwrap();
+        }
+        std::fs::write(v.path().join("ebook/三体/s.md"), "x").unwrap();
+        for i in 0..2 {
+            std::fs::write(
+                v.path().join(format!("ebook/三体/t{i}.srt")),
+                "1\n00:00:00,000 --> 00:00:01,000\nhi\n",
+            )
+            .unwrap();
+        }
+
+        let narrow = count_glob_matches(v.path(), &["ebook/三体/**".to_string()]);
+        let mid = count_glob_matches(v.path(), &["ebook/**/*.md".to_string()]);
+        let wide = count_glob_matches(v.path(), &["ebook/**".to_string()]);
+
+        assert_eq!(narrow, 3, "ebook/三体/** = 1 md + 2 srt");
+        assert_eq!(mid, 5, "ebook/**/*.md 命中 ebook 下全部 5 个 .md,不含任何 srt");
+        assert_eq!(wide, 15, "ebook/** = 5 md + 10 srt");
+        assert!(
+            narrow <= mid && mid <= wide,
+            "候选从窄到宽,命中数不该出现反转: narrow={narrow} mid={mid} wide={wide}"
+        );
+    }
+
+    /// spec §7.2's zero-match warning is the only safety net for the exact
+    /// case-flipped-path incident spec §4.1 names as why matching is
+    /// case-literal. Under the pre-fix semantics this could never be
+    /// reachable — every vault `.md` was unconditionally counted regardless
+    /// of the pattern, so the floor was the vault's `.md` total, never 0.
+    #[test]
+    fn count_glob_matches_is_zero_for_a_pattern_that_designates_nothing() {
+        let v = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(v.path().join("Sync")).unwrap();
+        std::fs::write(v.path().join("Sync/a.md"), "x\n").unwrap();
+        std::fs::write(v.path().join("note.md"), "x\n").unwrap();
+
+        // Case-literal by design (spec §4.1) — "sync" must not match "Sync".
+        let patterns = vec!["sync/**".to_string()];
+        assert_eq!(count_glob_matches(v.path(), &patterns), 0, "大小写不匹配的模式必须命中 0,警示才打得出来");
     }
 
     /// Excluded directories (a saved, real setting — distinct from the
     /// unsaved candidate `patterns` being previewed) must still be excluded
     /// from the preview count, or a user who already excluded a huge
     /// directory would see it flood back into every pattern's number.
+    /// Fixture carries an in-pattern, non-excluded `.md` too (review round
+    /// 1: the original fixture had no `.md` at all) so this test is not
+    /// blind to the corrected designation-AND-acceptance semantics either.
     #[test]
     fn count_glob_matches_still_honors_the_vaults_real_exclude_dirs() {
         let v = tempfile::tempdir().unwrap();
@@ -1584,9 +1762,11 @@ mod command_tests {
         .unwrap();
         std::fs::create_dir_all(v.path().join("media/raw")).unwrap();
         std::fs::write(v.path().join("media/raw/a.srt"), "1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+        std::fs::write(v.path().join("media/raw/a.md"), "x\n").unwrap();
         std::fs::write(v.path().join("media/b.srt"), "1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+        std::fs::write(v.path().join("media/b.md"), "x\n").unwrap();
 
         let patterns = vec!["media/**".to_string()];
-        assert_eq!(count_glob_matches(v.path(), &patterns), 1, "已排除目录下的转写不该被计入");
+        assert_eq!(count_glob_matches(v.path(), &patterns), 2, "已排除目录下的 .srt 和 .md 都不该被计入");
     }
 }

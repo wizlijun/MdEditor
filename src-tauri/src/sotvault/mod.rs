@@ -385,6 +385,15 @@ pub fn notemd_vault_settings_set(
     // derives anything from, so it should be the single thing that reopens
     // it — two gates would invite the next person who touches this function
     // to wonder which one is load-bearing.
+    //
+    // This does NOT mean a `syncDir` edit can never trigger a reopen any
+    // more (review round 1, Minor 5, caught an earlier version of this
+    // comment overclaiming that). When `searchSourceGlobs` is unconfigured
+    // — the state most users are in — `search::options::for_vault` seeds
+    // `<syncDir>/**`, so `syncDir` is still part of the *resolved* pattern
+    // `search_source_globs_changed` compares. It just isn't compared
+    // directly any more: the gate reads whatever `syncDir` already fed into
+    // that resolved value, for free, the same as every other input to it.
     if reopen_index {
         crate::log_cat!("search", "info", "searchSourceGlobs changed — reopening the index");
         crate::search::open_vault(&app, &vault_root);
@@ -771,13 +780,22 @@ mod tests {
     /// misclassified, and the settings page's tier counts were wrong with no
     /// signal anywhere.
     ///
-    /// `syncDir` used to gate this same reopen (pre-C-T8), back when
-    /// `origin::derive`'s old rule 5 read `sync_dir` directly. That
-    /// connection was retired in C-T2 (rule 5′ superseded rule 5) and C-T6
-    /// (the staleness stamp moved to `SourceGlobs::stamp()`), so `sync_dir`
-    /// is asserted below as one of the fields that must NOT trigger a
-    /// reopen any more — see `search::options::search_source_globs_changed`'s
-    /// doc comment for the fuller history of that retirement.
+    /// `syncDir` used to gate this same reopen directly (pre-C-T8), back
+    /// when `origin::derive`'s old rule 5 read `sync_dir` directly. That
+    /// *direct* connection was retired in C-T2 (rule 5′ superseded rule 5)
+    /// and C-T6 (the staleness stamp moved to `SourceGlobs::stamp()`) — see
+    /// `search::options::search_source_globs_changed`'s doc comment for the
+    /// fuller history. It does NOT follow that `sync_dir` can never trigger
+    /// a reopen any more (review round 1, Minor 5, caught an earlier
+    /// version of this comment claiming exactly that): this test's own
+    /// "other fields don't trigger a reopen" matrix below only holds
+    /// because `searchSourceGlobs` was already explicitly set to
+    /// `"ebook/**"` a few lines above — an *unconfigured* vault seeds
+    /// `<syncDir>/**` (`search::options::for_vault`), so `sync_dir` is
+    /// still part of the resolved value the gate compares in that more
+    /// common state. See `persisting_a_sync_dir_change_reopens_when_globs_
+    /// are_unconfigured` below for that other half of the behavior, pinned
+    /// explicitly rather than left as this test's unstated precondition.
     ///
     /// Driven through the persist function rather than the command so the
     /// decision is testable without an `AppHandle` (same reason
@@ -808,19 +826,21 @@ mod tests {
         .unwrap();
         assert!(!reopen, "an unchanged pattern list must not cost a full rebuild");
 
-        // Nor does any of the other seven fields — each of them alone,
-        // `sync_dir` included (see the doc comment above for why it no
-        // longer belongs in this gate).
+        // Nor does any of the other seven fields — each of them alone. NOT
+        // including `sync_dir` here: with `searchSourceGlobs` already
+        // explicit (set above), `sync_dir` genuinely has no effect on the
+        // resolved value — but that is a property of THIS test's state, not
+        // of `sync_dir` in general, so it gets its own test below instead
+        // of a misleadingly-unconditional-looking entry in this matrix.
         for (i, args) in [
-            (Some("box".to_string()), None, None, None, None, None, None, None),
-            (None, Some("wiki".to_string()), None, None, None, None, None, None),
-            (None, None, Some("daily".to_string()), None, None, None, None, None),
-            (None, None, None, Some(3u32), None, None, None, None),
-            (None, None, None, None, Some("in".to_string()), None, None, None),
-            (None, None, None, None, None, Some(vec!["node_modules".to_string()]), None, None),
-            (None, None, None, None, None, None, Some(9u32), None),
+            (Some("wiki".to_string()), None, None, None, None, None, None),
+            (None, Some("daily".to_string()), None, None, None, None, None),
+            (None, None, Some(3u32), None, None, None, None),
+            (None, None, None, Some("in".to_string()), None, None, None),
+            (None, None, None, None, Some(vec!["node_modules".to_string()]), None, None),
+            (None, None, None, None, None, Some(9u32), None),
             (
-                None, None, None, None, None, None, None,
+                None, None, None, None, None, None,
                 Some(vault_settings::SearchWeights { human: Some(2.0), ..Default::default() }),
             ),
         ]
@@ -828,11 +848,65 @@ mod tests {
         .enumerate()
         {
             let (_, reopen) = persist_vault_settings(
-                root, args.0, args.1, args.2, args.3, args.4, args.5, args.6, None, args.7,
+                root, None, args.0, args.1, args.2, args.3, args.4, args.5, None, args.6,
             )
             .unwrap();
             assert!(!reopen, "settings field #{i} must not trigger an index rebuild");
         }
+    }
+
+    /// The other half of Minor 5's fix: with `searchSourceGlobs`
+    /// unconfigured (the default, most-users-are-in-this-state case),
+    /// `search::options::for_vault` seeds `<syncDir>/**` — so moving
+    /// `syncDir` genuinely does change the resolved `SourceGlobs`, and
+    /// `search_source_globs_changed` (comparing the resolved stamp, not the
+    /// raw `searchSourceGlobs` field) must say so. Without this test, the
+    /// only evidence in this file was `persisting_new_source_globs_asks_
+    /// for_an_index_reopen`'s "other six fields" matrix — which structurally
+    /// cannot exercise this path, because it runs after globs were already
+    /// pinned explicit.
+    #[test]
+    fn persisting_a_sync_dir_change_reopens_when_globs_are_unconfigured() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        assert_eq!(
+            vault_settings::read(root).search_source_globs, None,
+            "测试前提:模式必须是缺省状态,种子规则才会生效"
+        );
+
+        let (_, reopen) =
+            persist_vault_settings(root, Some("box".to_string()), None, None, None, None, None, None, None, None)
+                .unwrap();
+        assert!(reopen, "缺省模式下移动 syncDir 改变了实际解析出的 source_globs,必须重开索引");
+    }
+
+    /// Review round 1, Important 4 (spec §8: "权重非法 → 保存时拒绝,保留
+    /// 原值"). End-to-end through the same choke point `notemd_vault_
+    /// settings_set` uses: a rejected weight must leave the on-disk
+    /// `settings.json` exactly as it was, not partially applied and not
+    /// silently storing the bad value.
+    #[test]
+    fn persisting_an_invalid_weight_is_rejected_and_the_file_is_untouched() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let (merged, _) = persist_vault_settings(
+            root, None, None, None, None, None, None, None, None,
+            Some(vault_settings::SearchWeights { human: Some(1.5), ..Default::default() }),
+        )
+        .unwrap();
+        assert_eq!(merged.search_weights.unwrap().human, Some(1.5));
+        let before = std::fs::read_to_string(root.join(".notemd/settings.json")).unwrap();
+
+        let err = persist_vault_settings(
+            root, None, None, None, None, None, None, None, None,
+            Some(vault_settings::SearchWeights { human: Some(-1.0), ..Default::default() }),
+        );
+        assert!(err.is_err(), "非法权重必须拒绝整次保存");
+
+        let after = std::fs::read_to_string(root.join(".notemd/settings.json")).unwrap();
+        assert_eq!(before, after, "拒绝的写入不该改动磁盘上的原值,一个字节都不该变");
+        assert_eq!(vault_settings::read(root).search_weights.unwrap().human, Some(1.5), "原值必须原样保留");
     }
 
     #[test]

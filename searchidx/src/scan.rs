@@ -33,9 +33,11 @@ pub struct ScanOptions {
     /// is indexed and no `.md` is reclassified as `Source` by this rule.
     ///
     /// `search::options::for_vault` (the single construction point, see
-    /// `search_scan_options_contract.rs`) still passes `SourceGlobs::
-    /// default()` here as of this task — wiring the real setting in is
-    /// `TODO(C-T8)`.
+    /// `search_scan_options_contract.rs`) fills this from the vault's real
+    /// `searchSourceGlobs` setting as of C-T8 — absent seeds `<syncDir>/**`
+    /// from the resolved sync directory, an explicit empty list is
+    /// respected and never re-seeded. It is no longer a
+    /// `SourceGlobs::default()` stopgap.
     pub source_globs: SourceGlobs,
 }
 
@@ -549,12 +551,11 @@ fn index_into(
     // Lossy on purpose: a file with a stray non-UTF-8 byte still gets indexed
     // rather than silently vanishing from search.
     let raw = String::from_utf8_lossy(&bytes);
-    // `opts.source_globs` now reaches `origin::derive` for real (rule 5′) —
-    // see `ScanOptions.source_globs`'s doc comment. `search::options::
-    // for_vault` (the single construction point) still passes
-    // `SourceGlobs::default()` (matches nothing) as of this task, so this
-    // does not yet change GUI/CLI-observed behavior on a real vault —
-    // wiring the real setting in is `TODO(C-T8)`.
+    // `opts.source_globs` reaches `origin::derive` for real (rule 5′) — see
+    // `ScanOptions.source_globs`'s doc comment. `search::options::for_vault`
+    // (the single construction point) fills this from the vault's real
+    // `searchSourceGlobs` setting as of C-T8, so this is real, observed
+    // GUI/CLI behavior on a real vault, not a stopgap.
     let parsed = crate::chunk::parse_file(&c.rel, &raw, c.mtime, &opts.source_globs);
     // spec §5.1: `files.ext` must carry the file's real extension, not
     // always "md" — a `.srt`/`.vtt`/`.txt` file only ever reaches this point

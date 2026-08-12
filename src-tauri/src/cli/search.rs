@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use searchidx::{ScanOptions, SearchIndex, SkippedFile};
+use searchidx::{Limits, ScanOptions, SearchIndex, SkippedFile};
 
 /// The CLI's freshness sweep is bounded: retrieval must never block its caller.
 const SWEEP_DEADLINE: Duration = Duration::from_secs(2);
@@ -199,8 +199,18 @@ pub fn run(args: SearchArgs) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    let (hits, route) = match index.as_ref().map(|i| i.search(&query, args.limit)) {
-        Some(Ok(r)) => r,
+    // Review round 1, Important 2: this used to call `i.search(...)`, which
+    // ranks with `Weights::default()` unconditionally — the CLI's own
+    // `weights_for` (added for the GUI/CLI parity contract test) had no
+    // production caller, so a configured `searchWeights` never actually
+    // reached a `notemd search` query. `weights_for` is the single
+    // construction point (task C-T8) both adapters must go through.
+    let weights = weights_for(&root);
+    let (hits, route) = match index
+        .as_ref()
+        .map(|i| i.search_with_weights(&query, args.limit, &Limits::full(), &weights))
+    {
+        Some(Ok(a)) => (a.hits, a.route),
         Some(Err(e)) => {
             eprintln!("notemd: query failed ({e}); scanning files directly");
             (fallback_scan(&root, &query, args.limit, &opts), searchidx::Route::Scan)
@@ -236,12 +246,9 @@ pub fn scan_options_for(root: &Path) -> ScanOptions {
 /// Same rationale as [`scan_options_for`], for the other single construction
 /// point: `tests/search_scan_options_contract.rs` calls this to assert the
 /// CLI resolves the identical `Weights` the GUI does for the same vault
-/// (task C-T8). Not yet read by this module's own `run` — this CLI's live
-/// query still goes through `SearchIndex::search`, which ranks with
-/// `Weights::default()` (see that method's doc comment in `searchidx/src/
-/// lib.rs` for why threading a configured value into an actual query without
-/// changing that facade's signature is left for a later task, once a
-/// settings surface exists to produce a non-default value at all).
+/// (task C-T8). `run` above calls this too — its live query goes through
+/// `SearchIndex::search_with_weights` with this value, not the
+/// `Weights::default()`-only `SearchIndex::search`/`search_with` facades.
 pub fn weights_for(root: &Path) -> searchidx::query::Weights {
     crate::search::options::weights_for_vault(root)
 }
