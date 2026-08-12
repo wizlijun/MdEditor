@@ -233,6 +233,19 @@ pub fn scan_options_for(root: &Path) -> ScanOptions {
     crate::search::options::for_vault(root)
 }
 
+/// Same rationale as [`scan_options_for`], for the other single construction
+/// point: `tests/search_scan_options_contract.rs` calls this to assert the
+/// CLI resolves the identical `Weights` the GUI does for the same vault
+/// (task C-T8). Not yet read by this module's own `run` — this CLI's live
+/// query still goes through `SearchIndex::search`, which ranks with
+/// `Weights::default()` (see that method's doc comment in `searchidx/src/
+/// lib.rs` for why threading a configured value into an actual query without
+/// changing that facade's signature is left for a later task, once a
+/// settings surface exists to produce a non-default value at all).
+pub fn weights_for(root: &Path) -> searchidx::query::Weights {
+    crate::search::options::weights_for_vault(root)
+}
+
 /// Last-ditch retrieval with no index at all: walk the vault and substring-match.
 /// Slower and unranked, but the caller gets an answer instead of an excuse.
 ///
@@ -274,10 +287,11 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
         // Forwards `&opts.source_globs` — the same field `is_indexable`
         // above already consulted to decide this file was in scope at all —
         // so this fallback path classifies identically to the indexed path
-        // (`searchidx::scan::index_into`). `opts.source_globs` is itself
-        // still a `SourceGlobs::default()` stopgap until `TODO(C-T8)` wires
-        // the real setting into `for_vault`, so both paths agree on
-        // "matches nothing" for now.
+        // (`searchidx::scan::index_into`). As of C-T8, `opts.source_globs`
+        // is the vault's real configured patterns (resolved once by
+        // `for_vault`/`scan_options_for` above, not read again here), so
+        // this agreement is no longer a "both stopgaps happen to match"
+        // coincidence — it is the actual, current classification.
         let (fm_raw, _, _) = searchidx::frontmatter::split(&text);
         let fm_present = fm_raw.is_some();
         let fm = fm_raw.map(searchidx::frontmatter::parse).unwrap_or_default();

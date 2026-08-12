@@ -841,6 +841,61 @@ pub fn notemd_search_progress(app: AppHandle) -> Option<ProgressDto> {
     app.state::<ProgressState>().get().as_ref().map(progress_dto)
 }
 
+/// How many files in the vault, *right now on disk*, `patterns` would put in
+/// scope — the settings page's live preview while a user is drafting a
+/// candidate source-glob pattern (task C-T10's `suggestGlobs`, design spec
+/// §7.1).
+///
+/// Deliberately walks the vault instead of querying the search index. A
+/// pattern's whole reason for existing is to decide whether `.srt`/`.vtt`/
+/// `.txt` files get indexed at all (`is_indexable`'s extension gate) — so
+/// exactly the files a *new, not-yet-saved* pattern would newly admit are
+/// the ones guaranteed not to be in the index yet. Counting from the index
+/// would therefore always undercount, and the direction of that error is the
+/// bad one: it nudges a user second-guessing a narrow pattern toward
+/// widening it "because the count looked low," when the true count (once
+/// saved) would already have been fine.
+///
+/// Reuses `is_indexable` itself — the same gate `for_vault`'s `ScanOptions`
+/// feeds the real scan/rebuild — rather than re-deriving "does this path
+/// count" as a second rule here that could quietly drift from the first.
+/// Every other field of `ScanOptions` (the exclude list, in particular)
+/// comes from the vault's *actual saved* settings via `for_vault`, so a
+/// directory the user has already excluded from search does not inflate a
+/// pattern's preview count; only `source_globs` is swapped for the
+/// candidate `patterns` being typed, which have not been saved yet.
+///
+/// `(async)`: a full vault walk is real I/O, and per the doc comment on
+/// `notemd_search` above, a plain (non-async) `#[tauri::command]` runs on
+/// the main thread — this must not be the one that makes typing in a
+/// settings text field freeze the window.
+#[tauri::command(async)]
+pub fn notemd_search_glob_matches(app: AppHandle, patterns: Vec<String>) -> Result<usize, String> {
+    let vault_root = crate::sotvault::resolve_vault_root(&app).ok_or("Vault not configured")?;
+    Ok(count_glob_matches(&vault_root, &patterns))
+}
+
+/// The command's actual work, split out with a plain `&Path` (no
+/// `AppHandle`) so it is drivable from a test the same way
+/// `skipped_write_if_current`/`search_locked` are elsewhere in this file —
+/// this codebase has never enabled the `tauri::test` feature.
+fn count_glob_matches(vault_root: &Path, patterns: &[String]) -> usize {
+    let mut opts = scan_options(vault_root);
+    opts.source_globs = searchidx::globs::parse(patterns);
+
+    let mut count = 0usize;
+    for entry in searchidx::scan::walk_builder(vault_root).build().flatten() {
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let Some(rel) = searchidx::norm::rel_path(vault_root, entry.path()) else { continue };
+        if searchidx::scan::is_indexable(&rel, &opts) {
+            count += 1;
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod command_tests {
     use super::*;
@@ -1479,5 +1534,59 @@ mod command_tests {
             assert!(origin_counts.get(key).is_some(), "missing key {key} in {origin_counts}");
         }
         assert_eq!(v.get("typeCounts").unwrap().get("Book Summary").unwrap().as_i64(), Some(2));
+    }
+
+    /// A candidate pattern only unlocks the `.srt`/`.vtt`/`.txt` files under
+    /// it — the same `is_indexable` extension gate the real scan/rebuild
+    /// uses. A transcript outside the pattern must not be counted.
+    #[test]
+    fn count_glob_matches_counts_transcripts_inside_the_candidate_pattern_only() {
+        let v = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(v.path().join("media")).unwrap();
+        std::fs::create_dir_all(v.path().join("elsewhere")).unwrap();
+        std::fs::write(v.path().join("media/talk.srt"), "1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+        std::fs::write(v.path().join("elsewhere/other.srt"), "1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+
+        let patterns = vec!["media/**".to_string()];
+        assert_eq!(count_glob_matches(v.path(), &patterns), 1, "只有落在模式内的转写文件该被计入");
+    }
+
+    /// `.md` is unconditionally in scope for `is_indexable` regardless of the
+    /// source-glob pattern (it is this product's native format — see that
+    /// function's own doc comment in `searchidx::scan`), and this command
+    /// deliberately reuses `is_indexable` as-is rather than re-deriving a
+    /// second, narrower notion of "matches". A vault's ordinary `.md` files
+    /// are therefore part of every candidate pattern's count, not just the
+    /// files the literal glob syntax matches — pinned here so that is a
+    /// documented, intentional reading rather than something a future
+    /// "obviously fix this" edit quietly narrows.
+    #[test]
+    fn count_glob_matches_includes_ordinary_md_files_unconditionally() {
+        let v = tempfile::tempdir().unwrap();
+        std::fs::write(v.path().join("note.md"), "hello\n").unwrap();
+
+        let patterns = vec!["nowhere-relevant/**".to_string()];
+        assert_eq!(count_glob_matches(v.path(), &patterns), 1, ".md 不看 source_globs,总是在范围内");
+    }
+
+    /// Excluded directories (a saved, real setting — distinct from the
+    /// unsaved candidate `patterns` being previewed) must still be excluded
+    /// from the preview count, or a user who already excluded a huge
+    /// directory would see it flood back into every pattern's number.
+    #[test]
+    fn count_glob_matches_still_honors_the_vaults_real_exclude_dirs() {
+        let v = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(v.path().join(".notemd")).unwrap();
+        std::fs::write(
+            v.path().join(".notemd/settings.json"),
+            r#"{"searchExcludeDirs": ["media/raw"]}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(v.path().join("media/raw")).unwrap();
+        std::fs::write(v.path().join("media/raw/a.srt"), "1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+        std::fs::write(v.path().join("media/b.srt"), "1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+
+        let patterns = vec!["media/**".to_string()];
+        assert_eq!(count_glob_matches(v.path(), &patterns), 1, "已排除目录下的转写不该被计入");
     }
 }

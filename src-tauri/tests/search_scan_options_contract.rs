@@ -45,6 +45,26 @@ fn the_cli_and_the_gui_build_options_through_one_function() {
     assert_eq!(gui.source_globs, cli.source_globs);
 }
 
+/// Task C-T8's other single construction point: the GUI and the CLI must
+/// resolve the identical ranking `Weights` for the same vault, or the two
+/// adapters rank the same query differently — the same "one algorithm,
+/// three adapters" premise the `ScanOptions` test above exists to protect,
+/// applied to ranking instead of scanning.
+#[test]
+fn the_cli_and_the_gui_resolve_the_same_weights() {
+    let d = tempfile::tempdir().unwrap();
+    write_settings(d.path(), r#"{"searchWeights": {"human": 2.0, "source": 0.5}}"#);
+    let gui = mdeditor_lib::search::options::weights_for_vault(d.path());
+    let cli = mdeditor_lib::cli::search::weights_for(d.path());
+    assert_eq!(gui, cli);
+    // Not a vacuous comparison of two defaults: pin the actually-configured
+    // value made it through, so a `weights_for_vault` that silently ignored
+    // `search_weights` would still fail this test even though `gui == cli`
+    // would trivially hold.
+    assert_eq!(gui.human, 2.0);
+    assert_eq!(gui.source, 0.5);
+}
+
 // `sync_dir` no longer lives on `ScanOptions` at all (C-T3) — the
 // 2026-08-12 design (C-T2) had already retired rule 5 (the
 // sync-mirror-directory special case) in favor of user-configured source

@@ -297,8 +297,8 @@ pub fn notemd_vault_settings_get(app: AppHandle) -> Result<vault_settings::Vault
 }
 
 /// Validate, merge and persist a partial settings update, reporting whether
-/// the search index has to be reopened afterwards (`syncDir` moved — see
-/// `vault_settings::sync_dir_changed`).
+/// the search index has to be reopened afterwards (`searchSourceGlobs`
+/// changed — see `search::options::search_source_globs_changed`).
 ///
 /// Split out of the command below so that decision is drivable from a test
 /// without an `AppHandle`, the same way `search::skipped_write_if_current` is
@@ -313,6 +313,8 @@ fn persist_vault_settings(
     inbox_dir: Option<String>,
     search_exclude_dirs: Option<Vec<String>>,
     search_large_file_threshold_mb: Option<u32>,
+    search_source_globs: Option<Vec<String>>,
+    search_weights: Option<vault_settings::SearchWeights>,
 ) -> Result<(vault_settings::VaultSettings, bool), String> {
     let base = vault_settings::read(vault_root);
     let merged = vault_settings::merge(
@@ -324,15 +326,18 @@ fn persist_vault_settings(
         inbox_dir,
         search_exclude_dirs,
         search_large_file_threshold_mb,
+        search_source_globs,
+        search_weights,
     )?;
     vault_settings::write(vault_root, &merged)?;
-    let reopen_index = vault_settings::sync_dir_changed(&base, &merged);
+    let reopen_index = crate::search::options::search_source_globs_changed(&base, &merged);
     Ok((merged, reopen_index))
 }
 
 /// Partial update: only the provided (non-null) fields are validated and
 /// written; the rest keep their current on-disk value. Returns the merged
 /// settings actually persisted.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn notemd_vault_settings_set(
     app: AppHandle,
@@ -343,6 +348,8 @@ pub fn notemd_vault_settings_set(
     inbox_dir: Option<String>,
     search_exclude_dirs: Option<Vec<String>>,
     search_large_file_threshold_mb: Option<u32>,
+    search_source_globs: Option<Vec<String>>,
+    search_weights: Option<vault_settings::SearchWeights>,
 ) -> Result<vault_settings::VaultSettings, String> {
     let vault_root = resolve_vault_root(&app).ok_or("Vault not configured")?;
     let (merged, reopen_index) = persist_vault_settings(
@@ -354,18 +361,32 @@ pub fn notemd_vault_settings_set(
         inbox_dir,
         search_exclude_dirs,
         search_large_file_threshold_mb,
+        search_source_globs,
+        search_weights,
     )?;
-    // `syncDir` is the one setting the search index stores a *derived value*
-    // from (`origin`, rule 5) and stamps into its own `meta`. Reopening here
-    // is what keeps the two in step: it re-derives every row under the new
-    // directory, and it does so from *this* process, which holds the live
-    // connection — before some other process (an agent's `notemd search`)
-    // finds the stamp stale and rebuilds the index underneath us. Hooked at
-    // the command rather than in the frontend's `saveSyncDir` so no future
-    // caller of this command can forget it. Returns immediately; the reopen
-    // (open + build + sweep) runs on its own thread.
+    // `searchSourceGlobs` is the one setting the search index stores a
+    // *derived value* from (`origin`, rule 5′) and stamps into its own
+    // `meta` (`SourceGlobs::stamp()` — C-T6). Reopening here is what keeps
+    // the two in step: it re-derives every row against the new patterns, and
+    // it does so from *this* process, which holds the live connection —
+    // before some other process (an agent's `notemd search`) finds the
+    // stamp stale and rebuilds the index underneath us. Hooked at the
+    // command rather than in the frontend's save call so no future caller of
+    // this command can forget it. Returns immediately; the reopen (open +
+    // build + sweep) runs on its own thread.
+    //
+    // `syncDir` used to gate this same reopen (pre-C-T8) back when
+    // `origin::derive`'s old rule 5 read `sync_dir` directly. That rule was
+    // retired in C-T2 in favor of source globs, and C-T6 repointed the
+    // index's staleness stamp accordingly — leaving the `syncDir` gate
+    // recomputing an identical stamp on every trigger: harmless, but
+    // pointless. Retired outright here rather than kept alongside this one:
+    // `search_source_globs` is now the single setting the index actually
+    // derives anything from, so it should be the single thing that reopens
+    // it — two gates would invite the next person who touches this function
+    // to wonder which one is load-bearing.
     if reopen_index {
-        crate::log_cat!("search", "info", "syncDir changed — reopening the index");
+        crate::log_cat!("search", "info", "searchSourceGlobs changed — reopening the index");
         crate::search::open_vault(&app, &vault_root);
     }
     Ok(merged)
@@ -738,53 +759,78 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// `syncDir` is a runtime-editable setting that every stored `origin`
-    /// (`searchidx::origin::derive` rule 5) is derived from, so a save that
-    /// moves it must tell the caller to reopen the index. Nothing else did:
-    /// `search::open_vault` runs only at launch and vault-pick, while
-    /// `search::options::for_vault` is recomputed on the watcher's per-batch
-    /// path — so every file touched after the change was re-indexed under the
-    /// new directory into a database stamped with the old one, the untouched
-    /// majority stayed misclassified, and the settings page's tier counts
-    /// were wrong with no signal anywhere.
+    /// `searchSourceGlobs` is a runtime-editable setting that every stored
+    /// `origin` (`searchidx::origin::derive` rule 5′) is derived from, and
+    /// that `store::open`'s staleness stamp is a direct function of
+    /// (`SourceGlobs::stamp()`), so a save that changes it must tell the
+    /// caller to reopen the index. Nothing else does: `search::open_vault`
+    /// runs only at launch and vault-pick, while `search::options::for_vault`
+    /// is recomputed on the watcher's per-batch path — so every file touched
+    /// after the change was re-indexed under the new patterns into a
+    /// database stamped with the old ones, the untouched majority stayed
+    /// misclassified, and the settings page's tier counts were wrong with no
+    /// signal anywhere.
+    ///
+    /// `syncDir` used to gate this same reopen (pre-C-T8), back when
+    /// `origin::derive`'s old rule 5 read `sync_dir` directly. That
+    /// connection was retired in C-T2 (rule 5′ superseded rule 5) and C-T6
+    /// (the staleness stamp moved to `SourceGlobs::stamp()`), so `sync_dir`
+    /// is asserted below as one of the fields that must NOT trigger a
+    /// reopen any more — see `search::options::search_source_globs_changed`'s
+    /// doc comment for the fuller history of that retirement.
     ///
     /// Driven through the persist function rather than the command so the
     /// decision is testable without an `AppHandle` (same reason
     /// `search::skipped_write_if_current` is factored out of `open_vault`).
     #[test]
-    fn persisting_a_new_sync_dir_asks_for_an_index_reopen() {
+    fn persisting_new_source_globs_asks_for_an_index_reopen() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
         let (merged, reopen) = persist_vault_settings(
-            root, Some("box".into()), None, None, None, None, None, None,
+            root, None, None, None, None, None, None, None,
+            Some(vec!["ebook/**".to_string()]), None,
         )
         .unwrap();
-        assert_eq!(merged.sync_dir.as_deref(), Some("box"));
-        assert!(reopen, "moving syncDir invalidates every stored origin");
-        assert_eq!(vault_settings::read(root).sync_dir.as_deref(), Some("box"), "and it must be persisted");
+        assert_eq!(merged.search_source_globs, Some(vec!["ebook/**".to_string()]));
+        assert!(reopen, "changing searchSourceGlobs invalidates every stored origin/index row");
+        assert_eq!(
+            vault_settings::read(root).search_source_globs,
+            Some(vec!["ebook/**".to_string()]),
+            "and it must be persisted"
+        );
 
         // Re-saving the same value changes nothing the index reads.
         let (_, reopen) = persist_vault_settings(
-            root, Some("box".into()), None, None, None, None, None, None,
+            root, None, None, None, None, None, None, None,
+            Some(vec!["ebook/**".to_string()]), None,
         )
         .unwrap();
-        assert!(!reopen, "an unchanged syncDir must not cost a full rebuild");
+        assert!(!reopen, "an unchanged pattern list must not cost a full rebuild");
 
-        // Nor does any of the six other fields — each of them alone.
+        // Nor does any of the other seven fields — each of them alone,
+        // `sync_dir` included (see the doc comment above for why it no
+        // longer belongs in this gate).
         for (i, args) in [
-            (Some("wiki".to_string()), None, None, None, None, None),
-            (None, Some("daily".to_string()), None, None, None, None),
-            (None, None, Some(3u32), None, None, None),
-            (None, None, None, Some("in".to_string()), None, None),
-            (None, None, None, None, Some(vec!["node_modules".to_string()]), None),
-            (None, None, None, None, None, Some(9u32)),
+            (Some("box".to_string()), None, None, None, None, None, None, None),
+            (None, Some("wiki".to_string()), None, None, None, None, None, None),
+            (None, None, Some("daily".to_string()), None, None, None, None, None),
+            (None, None, None, Some(3u32), None, None, None, None),
+            (None, None, None, None, Some("in".to_string()), None, None, None),
+            (None, None, None, None, None, Some(vec!["node_modules".to_string()]), None, None),
+            (None, None, None, None, None, None, Some(9u32), None),
+            (
+                None, None, None, None, None, None, None,
+                Some(vault_settings::SearchWeights { human: Some(2.0), ..Default::default() }),
+            ),
         ]
         .into_iter()
         .enumerate()
         {
-            let (_, reopen) =
-                persist_vault_settings(root, None, args.0, args.1, args.2, args.3, args.4, args.5).unwrap();
+            let (_, reopen) = persist_vault_settings(
+                root, args.0, args.1, args.2, args.3, args.4, args.5, args.6, None, args.7,
+            )
+            .unwrap();
             assert!(!reopen, "settings field #{i} must not trigger an index rebuild");
         }
     }

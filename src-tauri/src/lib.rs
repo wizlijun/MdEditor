@@ -1211,6 +1211,7 @@ pub fn run() {
                 search::notemd_search_stats,
                 search::notemd_search_rebuild,
                 search::notemd_search_progress,
+                search::notemd_search_glob_matches,
                 agents_sync::notemd_agents_search_section_missing,
                 agents_sync::notemd_agents_append_search_section,
                 okf::notemd_okf_human_id,

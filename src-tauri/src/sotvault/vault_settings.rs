@@ -45,6 +45,48 @@ pub struct VaultSettings {
     /// 已经调过门禁的用户不会突然发现索引行为变了;一旦显式设过就彻底脱钩。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_large_file_threshold_mb: Option<u32>,
+    /// 用户配置的原始资料 glob 模式(spec `.superpowers/sdd/2026-08-12-
+    /// source-globs-and-transcript-indexing/`,§4.1)。语法本身极度宽容 ——
+    /// `searchidx::globs::parse` 从不因为一条模式写不对就让整份列表失效,
+    /// 所以这里不做语法校验,原样存、原样读,把容错留给 `parse` 自己。
+    ///
+    /// 缺省(`None`)与显式空列表(`Some(vec![])`)含义不同:`search::
+    /// options::for_vault`(`ScanOptions.source_globs` 的唯一构造点)据此
+    /// 决定要不要用当前解析出的 `syncDir` 种一条默认模式 —— 前者种,后者
+    /// 不种,否则用户把列表清空后又会被悄悄种回去,永远清不掉。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_source_globs: Option<Vec<String>>,
+    /// 按来源分层的排序权重覆盖(task C-T7 `searchidx::query::Weights` 的
+    /// 四个字段)。每个子字段独立可选:缺一个字段只影响那一档的回落,不
+    /// 牵连其余三档,是 `Weights::sanitized()`「坏值只回落那一档」这条
+    /// 不变量在"没写"这种缺失形式上的自然延伸。
+    ///
+    /// 这里不做取值校验(非有限数/非正数/大于 5.0 都合法地存进来)——
+    /// 校验推迟到读取侧,`search::options::weights_for_vault`(权重的
+    /// 唯一构造点)统一调用 `Weights::sanitized()`,这样手改
+    /// `settings.json` 写出的越界值也总能得到一个可用的结果,而不是让
+    /// vault 打不开。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_weights: Option<SearchWeights>,
+}
+
+/// Plain data shape for [`VaultSettings::search_weights`] — see that field's
+/// doc comment for why validation is deferred to `search::options::
+/// weights_for_vault` rather than done here. Kept as four independent
+/// `Option<f64>`s rather than `searchidx::query::Weights` itself so this
+/// module, which otherwise has no dependency on the `searchidx` crate's
+/// types, doesn't need one just to describe a settings shape.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchWeights {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unlabeled: Option<f64>,
 }
 
 fn settings_path(vault_root: &Path) -> PathBuf {
@@ -120,6 +162,11 @@ fn has_drive_prefix(seg: &str) -> bool {
 /// Merge caller-provided (Some) fields onto `base`, validating each provided
 /// value. Fields left None keep their base value. Returns the first validation
 /// error encountered.
+///
+/// `search_source_globs` and `search_weights` are stored verbatim, with no
+/// validation — see their fields' doc comments on [`VaultSettings`] for why
+/// (tolerant `parse`/`sanitized()` downstream, at read time, instead).
+#[allow(clippy::too_many_arguments)]
 pub fn merge(
     base: VaultSettings,
     sync_dir: Option<String>,
@@ -129,6 +176,8 @@ pub fn merge(
     inbox_dir: Option<String>,
     search_exclude_dirs: Option<Vec<String>>,
     search_large_file_threshold_mb: Option<u32>,
+    search_source_globs: Option<Vec<String>>,
+    search_weights: Option<SearchWeights>,
 ) -> Result<VaultSettings, String> {
     let mut out = base;
     if let Some(v) = sync_dir {
@@ -161,6 +210,12 @@ pub fn merge(
             return Err("search index threshold must be at least 1 MB".into());
         }
         out.search_large_file_threshold_mb = Some(mb);
+    }
+    if let Some(list) = search_source_globs {
+        out.search_source_globs = Some(list);
+    }
+    if let Some(w) = search_weights {
+        out.search_weights = Some(w);
     }
     Ok(out)
 }
@@ -199,38 +254,6 @@ pub fn resolve_sync_dir_from(vs: &VaultSettings) -> String {
         .as_deref()
         .and_then(|v| validate_rel_dir(v).ok())
         .unwrap_or_else(|| DEFAULT_SYNC_DIR.to_string())
-}
-
-/// Did a settings write change the **effective** sync directory?
-///
-/// Compared on the *resolved* value, not the raw field, so the two ways of
-/// saying "sync" (absent, and explicitly `"sync"`) are the same answer, and
-/// an invalid value that falls back to the default is too.
-///
-/// **As of C-T6, this has no remaining connection to the search index's
-/// correctness — review round 1 caught a stale comment here that still
-/// claimed otherwise, so read this paragraph as the current, corrected
-/// account.** It originally existed to protect `origin::derive`'s old rule
-/// 5, which read `sync_dir` directly: a `syncDir` change could make a
-/// stored `origin` wrong, so `notemd_vault_settings_set` (the single choke
-/// point every settings write goes through) reopens the search index
-/// through here whenever this returns `true`, and that reopen used to cost
-/// a full rebuild-in-place (search unavailable for the duration). Rule 5
-/// was retired in favor of user-configured source-glob patterns (rule 5′),
-/// and C-T6 repointed `store::open`'s staleness stamp at
-/// `SourceGlobs::stamp()` — a value `sync_dir` no longer feeds (see
-/// `resolve_sync_dir`'s doc comment for the fuller history). A
-/// `syncDir`-triggered reopen today recomputes the identical glob stamp,
-/// `store::open` reports `Opened::Ready`, and nothing is rebuilt: the
-/// reopen this function gates is harmless, just pointless.
-///
-/// Left wired up rather than deleted or renamed: the *mechanism* — gate a
-/// reopen on whether a specific setting's resolved value changed — is
-/// exactly what a future `search_source_globs_changed` sibling will need
-/// once C-T8 adds real source-glob storage, and removing this one is more
-/// naturally bundled with adding that one than done here as a drive-by.
-pub fn sync_dir_changed(before: &VaultSettings, after: &VaultSettings) -> bool {
-    resolve_sync_dir_from(before) != resolve_sync_dir_from(after)
 }
 
 /// The effective quick-note inbox sub-directory: the configured value when
@@ -272,6 +295,8 @@ mod tests {
             large_file_threshold_mb: None,
             search_exclude_dirs: None,
             search_large_file_threshold_mb: None,
+            search_source_globs: None,
+            search_weights: None,
         };
         write(dir.path(), &s).unwrap();
         assert_eq!(read(dir.path()), s);
@@ -335,8 +360,10 @@ mod tests {
             large_file_threshold_mb: None,
             search_exclude_dirs: None,
             search_large_file_threshold_mb: None,
+            search_source_globs: None,
+            search_weights: None,
         };
-        let out = merge(base, Some("box".into()), None, None, None, None, None, None).unwrap();
+        let out = merge(base, Some("box".into()), None, None, None, None, None, None, None, None).unwrap();
         assert_eq!(out.sync_dir.as_deref(), Some("box"));
         assert_eq!(out.wikipage_dir.as_deref(), Some("wiki"));
         assert_eq!(out.dailynote_dir.as_deref(), Some("daily"));
@@ -345,13 +372,13 @@ mod tests {
 
     #[test]
     fn merge_rejects_invalid_provided_value() {
-        assert!(merge(VaultSettings::default(), Some("../x".into()), None, None, None, None, None, None).is_err());
-        assert!(merge(VaultSettings::default(), None, None, None, None, Some("../x".into()), None, None).is_err());
+        assert!(merge(VaultSettings::default(), Some("../x".into()), None, None, None, None, None, None, None, None).is_err());
+        assert!(merge(VaultSettings::default(), None, None, None, None, Some("../x".into()), None, None, None, None).is_err());
     }
 
     #[test]
     fn merge_sets_inbox_dir() {
-        let out = merge(VaultSettings::default(), None, None, None, None, Some("box".into()), None, None).unwrap();
+        let out = merge(VaultSettings::default(), None, None, None, None, Some("box".into()), None, None, None, None).unwrap();
         assert_eq!(out.inbox_dir.as_deref(), Some("box"));
     }
 
@@ -414,15 +441,15 @@ mod tests {
 
     #[test]
     fn merge_sets_and_validates_threshold() {
-        let out = merge(VaultSettings::default(), None, None, None, Some(25), None, None, None).unwrap();
+        let out = merge(VaultSettings::default(), None, None, None, Some(25), None, None, None, None, None).unwrap();
         assert_eq!(out.large_file_threshold_mb, Some(25));
-        assert!(merge(VaultSettings::default(), None, None, None, Some(0), None, None, None).is_err());
+        assert!(merge(VaultSettings::default(), None, None, None, Some(0), None, None, None, None, None).is_err());
     }
 
     #[test]
     fn merge_keeps_threshold_when_none() {
         let base = VaultSettings { large_file_threshold_mb: Some(50), ..Default::default() };
-        let out = merge(base, Some("box".into()), None, None, None, None, None, None).unwrap();
+        let out = merge(base, Some("box".into()), None, None, None, None, None, None, None, None).unwrap();
         assert_eq!(out.large_file_threshold_mb, Some(50));
     }
 
@@ -450,18 +477,35 @@ mod tests {
     /// 每一项都过 validate_rel_dir:绝对路径与 `..` 不能变成扫描排除规则。
     #[test]
     fn merge_validates_every_exclude_entry() {
-        let ok =
-            merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["a/b".into()]), None).unwrap();
+        let ok = merge(
+            VaultSettings::default(),
+            None, None, None, None, None,
+            Some(vec!["a/b".into()]),
+            None, None, None,
+        )
+        .unwrap();
         assert_eq!(ok.search_exclude_dirs, Some(vec!["a/b".to_string()]));
-        assert!(
-            merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["../x".into()]), None).is_err()
-        );
-        assert!(
-            merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["/abs".into()]), None).is_err()
-        );
-        assert!(
-            merge(VaultSettings::default(), None, None, None, None, None, Some(vec!["C:\\x".into()]), None).is_err()
-        );
+        assert!(merge(
+            VaultSettings::default(),
+            None, None, None, None, None,
+            Some(vec!["../x".into()]),
+            None, None, None,
+        )
+        .is_err());
+        assert!(merge(
+            VaultSettings::default(),
+            None, None, None, None, None,
+            Some(vec!["/abs".into()]),
+            None, None, None,
+        )
+        .is_err());
+        assert!(merge(
+            VaultSettings::default(),
+            None, None, None, None, None,
+            Some(vec!["C:\\x".into()]),
+            None, None, None,
+        )
+        .is_err());
     }
 
     /// The drive-letter rejection has to hold on the fields that actually feed
@@ -471,17 +515,17 @@ mod tests {
     fn merge_rejects_a_drive_letter_in_every_directory_field() {
         let drive = || Some("C:\\Users\\x".to_string());
         let base = VaultSettings::default;
-        assert!(merge(base(), drive(), None, None, None, None, None, None).is_err(), "sync_dir");
-        assert!(merge(base(), None, drive(), None, None, None, None, None).is_err(), "wikipage_dir");
-        assert!(merge(base(), None, None, drive(), None, None, None, None).is_err(), "dailynote_dir");
-        assert!(merge(base(), None, None, None, None, drive(), None, None).is_err(), "inbox_dir");
+        assert!(merge(base(), drive(), None, None, None, None, None, None, None, None).is_err(), "sync_dir");
+        assert!(merge(base(), None, drive(), None, None, None, None, None, None, None).is_err(), "wikipage_dir");
+        assert!(merge(base(), None, None, drive(), None, None, None, None, None, None).is_err(), "dailynote_dir");
+        assert!(merge(base(), None, None, None, None, drive(), None, None, None, None).is_err(), "inbox_dir");
     }
 
     /// 空数组是有意义的输入(= 清空排除),不能被当成"没提供"。
     #[test]
     fn an_empty_list_clears_the_exclusions() {
         let base = VaultSettings { search_exclude_dirs: Some(vec!["x".into()]), ..Default::default() };
-        let out = merge(base, None, None, None, None, None, Some(vec![]), None).unwrap();
+        let out = merge(base, None, None, None, None, None, Some(vec![]), None, None, None).unwrap();
         assert_eq!(out.search_exclude_dirs, Some(vec![]));
     }
 
@@ -500,42 +544,23 @@ mod tests {
     #[test]
     fn merge_rejects_a_zero_search_threshold() {
         let base = VaultSettings::default();
-        assert!(merge(base, None, None, None, None, None, None, Some(0)).is_err());
+        assert!(merge(base, None, None, None, None, None, None, Some(0), None, None).is_err());
     }
 
-    /// Gate for `notemd_vault_settings_set`'s index reopen. `syncDir` is the
-    /// only setting the search index stamps and derives `origin` from, so it
-    /// is the only one worth a full rebuild — and it must be judged on the
-    /// *resolved* value, or absent-vs-`"sync"` (or any value that falls back
-    /// to the default) would trigger a rebuild that changes nothing.
-    #[test]
-    fn sync_dir_changed_compares_the_resolved_value_only() {
-        let with = |d: Option<&str>| VaultSettings {
-            sync_dir: d.map(str::to_string),
-            ..Default::default()
-        };
-        assert!(sync_dir_changed(&with(Some("sync")), &with(Some("box"))), "a real change must reopen");
-        assert!(sync_dir_changed(&with(None), &with(Some("box"))), "default -> explicit is a real change");
-
-        assert!(!sync_dir_changed(&with(None), &with(None)));
-        assert!(!sync_dir_changed(&with(Some("sync")), &with(Some("sync"))));
-        assert!(
-            !sync_dir_changed(&with(None), &with(Some(DEFAULT_SYNC_DIR))),
-            "absent and the explicit default resolve to the same directory"
-        );
-        assert!(
-            !sync_dir_changed(&with(Some("sync")), &with(Some("../escape"))),
-            "an invalid value resolves back to the default; nothing the index reads changed"
-        );
-
-        // The six other fields must not drag the index through a rebuild.
-        let mut other = with(Some("sync"));
-        other.wikipage_dir = Some("wiki".into());
-        other.dailynote_dir = Some("daily".into());
-        other.inbox_dir = Some("in".into());
-        other.large_file_threshold_mb = Some(3);
-        other.search_large_file_threshold_mb = Some(9);
-        other.search_exclude_dirs = Some(vec!["node_modules".into()]);
-        assert!(!sync_dir_changed(&with(Some("sync")), &other));
-    }
+    // `sync_dir_changed` (and its test, formerly here) was retired by C-T8.
+    // It gated `notemd_vault_settings_set`'s index reopen on `syncDir`
+    // changes back when `origin::derive`'s rule 5 read `sync_dir` directly.
+    // Rule 5 was retired in favor of source globs (rule 5′) back in C-T2,
+    // and C-T6 repointed the index's staleness stamp at `SourceGlobs::
+    // stamp()` — a value `sync_dir` no longer feeds at all (see
+    // `resolve_sync_dir`'s doc comment above for the fuller history) — which
+    // left `sync_dir_changed` gating a reopen that recomputed an identical
+    // stamp and rebuilt nothing: harmless, but pointless. Its own doc
+    // comment said as much and explicitly deferred deletion to "whenever a
+    // `search_source_globs_changed` sibling is added" rather than as a
+    // drive-by — that moment is this task. See `search::options::
+    // search_source_globs_changed`, which now does this gating job for
+    // real: `search_source_globs` (unlike `sync_dir`) *is* the value the
+    // stamp is a function of, so it is the one worth reopening the index
+    // over.
 }
