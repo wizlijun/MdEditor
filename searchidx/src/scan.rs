@@ -1066,6 +1066,29 @@ mod tests {
         assert!(is_indexable("media/notes.TXT", &opts));
     }
 
+    /// Final fix wave, Blocker 3 — THE COMPOSITION of this gate with the
+    /// glob matcher, which the test above does not reach: it uses a
+    /// directory-shaped `media/**`, where the pattern never looks at the
+    /// extension at all, so it is blind to whether an extension FILTER
+    /// (`*.srt` — the shape `suggestGlobs` emits as rung 2, and the shape a
+    /// user types when a directory holds more than transcripts) agrees with
+    /// this gate about case. Before the fix it did not: this gate admitted
+    /// `B.SRT` while `media/**/*.srt` refused to designate it, so the
+    /// directory indexed 1 of 3 files and §7.2's zero-match warning could
+    /// not fire (the count was 1, not 0) — reopening precisely the
+    /// undiagnosable gap `ends_with_ascii_ci` exists to close.
+    #[test]
+    fn an_extension_filter_glob_and_this_gate_agree_about_case() {
+        let mut opts = ScanOptions::default();
+        for pattern in ["media/**/*.srt", "media/**/*.SRT"] {
+            opts.source_globs = crate::globs::parse(&[pattern.to_string()]);
+            for path in ["media/s1/a.srt", "media/s1/B.SRT", "media/s1/c.Srt"] {
+                assert!(is_indexable(path, &opts), "{pattern} 必须收录 {path}");
+            }
+            assert!(!is_indexable("media/s1/a.txt", &opts), "{pattern} 只框住 .srt");
+        }
+    }
+
     /// The asymmetry with the test above is a decision, not an oversight:
     /// `.md` case is never relaxed.
     #[test]

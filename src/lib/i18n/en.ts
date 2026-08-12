@@ -555,7 +555,7 @@ export const en = {
   // `searchExcludeDirs` above: that removes a directory from the index
   // entirely, this widens what a matched file is allowed to be.
   'search.index.globsHeading': 'Raw source patterns',
-  'search.index.globsHint': "Patterns decide which files count as raw source material — they're what makes `.srt`/`.vtt`/`.txt` transcripts searchable at all (ordinary `.md` files are indexed either way). Matching is literal and case-sensitive, so a renamed vault folder can make every pattern here silently match nothing — save to check for that (see the warning below).",
+  'search.index.globsHint': "Patterns decide which files count as raw source material — they're what makes `.srt`/`.vtt`/`.txt` transcripts searchable at all (ordinary `.md` files are indexed either way). Folder and file names match literally, case included, so a renamed vault folder can make every pattern here silently match nothing — save to check for that (see the warning below). A file-type filter is the one exception: `*.srt` also matches `.SRT`.",
   // Review round 1, Important 3: an unconfigured vault (`searchSourceGlobs`
   // is `null`) is NOT the same state as one where the list was explicitly
   // saved empty — the former still has a real effective pattern (the

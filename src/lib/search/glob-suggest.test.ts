@@ -49,4 +49,14 @@ describe('suggestGlobs', () => {
     const s = suggestGlobs('./ebook/三体/book.md')
     expect(s.map((x) => x.pattern)).toEqual(['ebook/三体/**', 'ebook/**/*.md', 'ebook/**'])
   })
+
+  it('扩展名规范化为小写(终审 Blocker 3)', () => {
+    // 粘一条 `media/s1/B.SRT`(字幕从外部工具来,大写扩展名是常态)。
+    // 以前 rung 2 逐字照抄样例的扩展名,产出 `media/**/*.SRT` —— 看上去
+    // 像「只要大写的那些」,而匹配器现在对扩展名过滤器是大小写不敏感的,
+    // 两端规范化到同一个小写写法才不会误导人。目录段的大小写必须原样保留
+    // (那是 vault 目录改名事故的所在层,匹配器对它仍然字面比较)。
+    const s = suggestGlobs('Media/S1/B.SRT')
+    expect(s.map((x) => x.pattern)).toEqual(['Media/S1/**', 'Media/**/*.srt', 'Media/**'])
+  })
 })

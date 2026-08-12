@@ -96,7 +96,20 @@ export function suggestGlobs(samplePath: string): GlobCandidate[] {
   const dotIndex = filename.lastIndexOf('.')
   // `dotIndex > 0` (not `>= 0`) so a dotfile like `.gitignore` is treated as
   // extension-less rather than yielding the empty-body extension `''`.
-  const ext = dotIndex > 0 ? filename.slice(dotIndex) : ''
+  //
+  // Lower-cased (final fix wave, Blocker 3): the sample path is pasted from a
+  // real file, and transcripts routinely arrive from external tooling as
+  // `B.SRT`. Copying that case verbatim produced `media/**/*.SRT`, which
+  // reads to a human as "the uppercase ones only" even though the matcher
+  // now folds an extension filter's case (`searchidx/src/globs.rs`) — so the
+  // generated pattern would be a needlessly surprising, non-canonical
+  // spelling of the same set. `toLowerCase()` here and
+  // `to_ascii_lowercase()` in the Rust `parse` normalize to the same
+  // canonical form from both ends. This is canonicalization only: the
+  // correctness fix is in the matcher, because it also has to handle a
+  // hand-typed `*.SRT` and, more importantly, a lower-case pattern meeting
+  // upper-case FILES, which no amount of normalizing here can reach.
+  const ext = dotIndex > 0 ? filename.slice(dotIndex).toLowerCase() : ''
 
   const patterns: string[] = []
   const push = (p: string) => {

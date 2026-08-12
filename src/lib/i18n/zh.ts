@@ -570,7 +570,7 @@ export const zh: Record<keyof Messages, string> = {
   'search.index.skippedNote': '这些文件不进索引,但 `rg` 仍可查到。',
 
   'search.index.globsHeading': '原始资料模式',
-  'search.index.globsHint': '模式决定哪些文件算作原始资料——是它们让 `.srt`/`.vtt`/`.txt` 转写稿能被搜到(普通 `.md` 文件无论如何都会进索引)。匹配是字面、区分大小写的,vault 目录一旦改过大小写,这里的模式就会全部悄悄命中 0 个文件——保存时会检查这一点(见下方提示)。',
+  'search.index.globsHint': '模式决定哪些文件算作原始资料——是它们让 `.srt`/`.vtt`/`.txt` 转写稿能被搜到(普通 `.md` 文件无论如何都会进索引)。目录名与文件名按字面匹配、区分大小写,vault 目录一旦改过大小写,这里的模式就会全部悄悄命中 0 个文件——保存时会检查这一点(见下方提示)。只有 `*.srt` 这类扩展名过滤器是例外,它同时匹配 `.SRT`。',
   'search.index.globsImplicitDefault': '还没有保存任何模式——当前 vault 正在用隐式默认值 `{pattern}`。',
   'search.index.globsExplicitlyEmpty': '已保存的模式列表是空的——不会索引任何转写稿(`.srt`/`.vtt`/`.txt`),也没有 `.md` 文件被标记为原始资料。',
   'search.index.globsPatternPlaceholder': '例如 ebook/**',

@@ -538,7 +538,7 @@ export const de: Record<keyof Messages, string> = {
   'search.index.skippedNote': 'Diese Dateien sind nicht indiziert, lassen sich aber weiterhin über `rg` finden.',
 
   'search.index.globsHeading': 'Muster für Rohmaterial',
-  'search.index.globsHint': 'Muster legen fest, welche Dateien als rohes Quellmaterial zählen — erst dadurch werden `.srt`/`.vtt`/`.txt`-Transkripte überhaupt durchsuchbar (gewöhnliche `.md`-Dateien werden so oder so indiziert). Der Abgleich ist wörtlich und groß-/kleinschreibungsabhängig — wurde ein Vault-Ordner umbenannt (andere Groß-/Kleinschreibung), können alle Muster hier still auf nichts mehr passen. Beim Speichern wird darauf geprüft (siehe Warnung unten).',
+  'search.index.globsHint': 'Muster legen fest, welche Dateien als rohes Quellmaterial zählen — erst dadurch werden `.srt`/`.vtt`/`.txt`-Transkripte überhaupt durchsuchbar (gewöhnliche `.md`-Dateien werden so oder so indiziert). Ordner- und Dateinamen werden wörtlich und groß-/kleinschreibungsabhängig abgeglichen — wurde ein Vault-Ordner umbenannt (andere Groß-/Kleinschreibung), können alle Muster hier still auf nichts mehr passen. Beim Speichern wird darauf geprüft (siehe Warnung unten). Die einzige Ausnahme sind Dateityp-Filter: `*.srt` passt auch auf `.SRT`.',
   'search.index.globsImplicitDefault': 'Noch keine Muster gespeichert — dieser Vault verwendet derzeit den impliziten Standard `{pattern}`.',
   'search.index.globsExplicitlyEmpty': 'Die gespeicherte Musterliste ist leer — es werden keine Transkripte (`.srt`/`.vtt`/`.txt`) indiziert, und keine `.md`-Datei wird als rohes Quellmaterial markiert.',
   'search.index.globsPatternPlaceholder': 'z. B. ebook/**',
