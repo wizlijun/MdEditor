@@ -267,14 +267,20 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
     let app = app.clone();
     std::thread::spawn(move || {
         let opts = scan_options(&root);
-        // `sync_dir` is no longer part of `ScanOptions` (C-T3) — resolved
-        // here directly instead. This is a second `.notemd/settings.json`
-        // read alongside the one inside `scan_options`, not the single
-        // consistent read the removed field used to share; see the C-T3
-        // task report for why that is an accepted, narrow trade rather than
-        // a new abstraction.
-        let sync_dir = crate::sotvault::vault_settings::resolve_sync_dir(&root);
-        match SearchIndex::open(&root, &sync_dir) {
+        // The store's staleness stamp is no longer `sync_dir` (C-T6
+        // repointed it at `SourceGlobs::stamp()` — see `store::open`'s doc
+        // comment) and it never rode along on `ScanOptions` in the first
+        // place. TODO(C-T8): once the settings page (C-T11) and its storage
+        // (C-T8) exist, resolve the vault's *configured* source-glob
+        // patterns here — same as `opts.source_globs` inside `scan_options`
+        // — instead of this `SourceGlobs::default()` stopgap. Until then
+        // every vault stamps the same (empty) value, so the check never
+        // fires; see `cli::search::run`, which must be kept in lock-step
+        // with this call — repointing only one of the two would make the
+        // GUI and the CLI stamp different values for the same vault and
+        // invalidate each other's index on every alternation.
+        let globs_stamp = searchidx::globs::SourceGlobs::default().stamp();
+        match SearchIndex::open(&root, &globs_stamp) {
             Ok(mut idx) => {
                 if let Err(e) = idx.ensure_built(&opts) {
                     crate::log_cat!("search", "error", "initial build failed: {e}");

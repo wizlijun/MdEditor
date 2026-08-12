@@ -24,7 +24,19 @@ use crate::tokenize::{tokenize, TOKENIZER_ID};
 // migration — see the module doc comment: the index is disposable derived
 // data, so a version bump means `open` wipes and rebuilds rather than
 // ALTERing an old database into shape.
-pub const SCHEMA_VERSION: i64 = 2;
+//
+// v2 -> v3: a fourth `origin` value (`Origin::Unlabeled`) and three new
+// `files.ext` values (`srt`/`vtt`/`txt`) landed (spec
+// `docs/superpowers/specs/2026-08-12-source-globs-and-transcript-indexing-
+// design.md`) — no column shape changed, but a v2 database's stored `origin`
+// values were computed by a build that didn't know about the unlabeled tier
+// or the source-glob rules that produce it, so they read as wrong under this
+// build's vocabulary. Same no-migration rule as above: bump and let `open`
+// wipe it. This version also retires `sync_dir` in `meta` in favor of
+// `source_globs` (see `open`'s doc comment) — bumping the schema version
+// means every pre-existing database gets wiped on this transition anyway, so
+// there is no in-place rename to worry about.
+pub const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE files(
@@ -54,10 +66,10 @@ pub struct FileRow {
 
 /// Open (creating if needed) the index at `db_path`. A wrong schema version,
 /// a wrong tokenizer, or a file that is *genuinely not a database* is
-/// resolved by deleting the file and starting over; a changed `sync_dir` is
-/// resolved by emptying the tables through the connection already opened
-/// (see below). There is deliberately no repair path in either case: the
-/// index is disposable derived data, and rebuild is always correct while
+/// resolved by deleting the file and starting over; a changed source-glob
+/// stamp is resolved by emptying the tables through the connection already
+/// opened (see below). There is deliberately no repair path in either case:
+/// the index is disposable derived data, and rebuild is always correct while
 /// repair logic never fully is.
 ///
 /// What is **not** resolved that way is any *transient* failure — most
@@ -86,53 +98,55 @@ pub struct FileRow {
 /// silently continuing to use a database that is still stale: a stale
 /// index answering queries under the wrong tokenizer is a wrong-results bug
 /// dressed up as a working one, which is worse than failing loudly.
-/// `sync_dir` is the vault's currently-configured sync mirror directory name
-/// (as of C-T3, no longer a `ScanOptions` field — the two `SearchIndex::open`
-/// callers, `search::mod::open_vault` and `cli::search::run`, resolve it
-/// directly via `vault_settings::resolve_sync_dir`; see that function's doc
-/// comment) — stamped into `meta` and compared on every open. **As of the
-/// 2026-08-12 design (C-T2), this comparison no longer has
-/// a live correctness justification**: `origin::derive`'s rule 5 (the
-/// sync-mirror-directory special case that used to make this a function of
-/// `sync_dir`) was retired in favor of user-configured source-glob patterns
-/// (rule 5′) — no stored `origin` is computed from `sync_dir` any more, so a
-/// changed `sync_dir` today cannot make any stored `origin` wrong. The check
-/// stays wired up, unremoved, because `TODO(C-T6)`: the shape of the problem
-/// it solves — a config value the incremental sweep's stat/hash fast path
-/// cannot see change, so a stale stored value survives indefinitely unless
-/// something stamps the config into `meta` and compares it on open — still
-/// applies, just to the *glob* stamp (`SourceGlobs::stamp()`) instead.
-/// C-T6 is expected to either repoint this exact check at that stamp or add
-/// a sibling check for it and retire this one; until then this is a
-/// harmless-but-pointless full rebuild-in-place on every `syncDir` settings
-/// save, not a correctness bug.
+///
+/// `globs_stamp` is `SourceGlobs::stamp()` for the vault's currently
+/// configured source-glob patterns — stamped into `meta` (key
+/// `source_globs`) and compared on every open. This is the second staleness
+/// trigger of this shape this store has had, and it replaces the first:
+/// `origin::derive`'s old rule 5 read the sync-mirror directory name
+/// (`sync_dir`) directly, so a changed `sync_dir` could make a stored
+/// `origin` wrong, and this same stamp-and-compare mechanism guarded against
+/// it under the `sync_dir`/`meta.sync_dir` names. Rule 5 was retired in
+/// favor of user-configured source-glob patterns (rule 5′) — `origin::derive`
+/// no longer reads `sync_dir` at all — so this check was repointed at
+/// `SourceGlobs::stamp()` instead of being left running against a value with
+/// no remaining correctness reason to be checked (schema bump to 3, see
+/// `SCHEMA_VERSION`, forces every pre-existing database through this
+/// transition once). The *reason* the mechanism exists is unchanged: the
+/// incremental sweep's stat/hash fast path only touches `mtime`/`size` on an
+/// unchanged file, so nothing else re-derives a stored `origin` when the
+/// config it was computed from changes — without stamping that config into
+/// `meta` and comparing it here, a stale `origin` would survive indefinitely.
+/// `search::mod::open_vault` and `cli::search::run` are the two
+/// `SearchIndex::open` callers that compute this value; see
+/// `vault_settings`'s doc comments for why each pays for its own read of
+/// `.notemd/settings.json` rather than sharing one.
 ///
 /// **It is (for now) the one staleness trigger a user can flip at
 /// runtime**, and that is why it is answered by rebuilding the contents *in
 /// place* rather than by deleting the file (see `rebuild_in_place`, and
-/// `a_changed_sync_dir_must_not_unlink_the_file`) — the same in-place
-/// handling C-T6's replacement glob-stamp trigger will need for the same
-/// reason. `schema_version` and `tokenizer_id` are build-time constants — a
-/// running process cannot see them change, so no live handle can exist on
-/// the other side of that mismatch, and wiping stays correct there. A
-/// setting can change while the GUI holds a live WAL connection, so the
-/// unlink this function's own doc comment calls "a real data-loss bug" would
-/// come back through a perfectly legitimate stale path: `notemd search`
-/// (which `AGENTS.md` tells every agent to run habitually) opening the index
-/// seconds later, seeing the old stamp, and deleting
-/// `index.db`/`-wal`/`-shm` out from under the GUI.
-pub fn open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Result<Connection> {
+/// `changed_globs_rebuild_in_place_and_keep_the_inode`). `schema_version` and
+/// `tokenizer_id` are build-time constants — a running process cannot see
+/// them change, so no live handle can exist on the other side of that
+/// mismatch, and wiping stays correct there. A source-glob pattern can
+/// change while the GUI holds a live WAL connection (it is a text field on
+/// the settings page), so the unlink this function's own doc comment calls
+/// "a real data-loss bug" would come back through a perfectly legitimate
+/// stale path: `notemd search` (which `AGENTS.md` tells every agent to run
+/// habitually) opening the index seconds later, seeing the old stamp, and
+/// deleting `index.db`/`-wal`/`-shm` out from under the GUI.
+pub fn open(db_path: &Path, vault_root: &str, globs_stamp: &str) -> rusqlite::Result<Connection> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    match try_open(db_path, vault_root, sync_dir) {
+    match try_open(db_path, vault_root, globs_stamp) {
         Ok(Opened::Ready(conn)) => return Ok(conn),
         Ok(Opened::StaleContents(conn)) => {
             // A failure here (most realistically `SQLITE_BUSY` against
             // another process's write transaction) is propagated, never
             // escalated to a wipe — same rule as every other transient
             // failure on this path. The caller degrades; the index stays.
-            rebuild_in_place(&conn, sync_dir)?;
+            rebuild_in_place(&conn, globs_stamp)?;
             return Ok(conn);
         }
         Ok(Opened::Stale) => {}
@@ -144,7 +158,7 @@ pub fn open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Resul
     if !wipe(db_path) {
         return Err(rusqlite::Error::InvalidPath(db_path.to_path_buf()));
     }
-    create_fresh(db_path, vault_root, sync_dir)
+    create_fresh(db_path, vault_root, globs_stamp)
 }
 
 /// Is this error "the bytes on disk are not a usable database", as opposed to
@@ -168,8 +182,8 @@ fn is_corruption(e: &rusqlite::Error) -> bool {
 /// newly created) file.
 enum Opened {
     /// A connection whose `meta` table (freshly created or pre-existing)
-    /// matches the current `SCHEMA_VERSION`/`TOKENIZER_ID`/`sync_dir` — safe
-    /// to use.
+    /// matches the current `SCHEMA_VERSION`/`TOKENIZER_ID`/`source_globs`
+    /// stamp — safe to use.
     Ready(Connection),
     /// The file opened, but its *shape* is wrong: a different
     /// `schema_version` or `tokenizer_id`, or tables without a `meta` at all.
@@ -177,18 +191,18 @@ enum Opened {
     /// do that itself, so it never needs to re-enter.
     Stale,
     /// The file's shape is current but its *contents* are derived from a
-    /// setting that has since changed (`sync_dir`). Nothing about the schema
-    /// is wrong, so there is nothing to gain from replacing the file — and a
-    /// lot to lose, since this is the only mismatch a user can produce while
-    /// another process holds the database open. The caller empties the tables
-    /// through this very connection and re-stamps.
+    /// setting that has since changed (the source-glob patterns). Nothing
+    /// about the schema is wrong, so there is nothing to gain from replacing
+    /// the file — and a lot to lose, since this is the only mismatch a user
+    /// can produce while another process holds the database open. The caller
+    /// empties the tables through this very connection and re-stamps.
     StaleContents(Connection),
 }
 
 /// Open `db_path` and classify what was found. Never recurses and never
 /// wipes anything itself — wiping is the caller's job, done at most once,
 /// in `open`.
-fn try_open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Result<Opened> {
+fn try_open(db_path: &Path, vault_root: &str, globs_stamp: &str) -> rusqlite::Result<Opened> {
     let conn = Connection::open(db_path)?;
     set_pragmas(&conn)?;
 
@@ -207,7 +221,7 @@ fn try_open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Resul
             .query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0))
             .map(|n| n == 0)?;
         if empty {
-            stamp_fresh_schema(&conn, vault_root, sync_dir)?;
+            stamp_fresh_schema(&conn, vault_root, globs_stamp)?;
             return Ok(Opened::Ready(conn));
         }
         // No `meta` but *some* tables: a half-created index (a crash, a kill,
@@ -226,7 +240,7 @@ fn try_open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Resul
 
     // Shape first: a different schema or tokenizer means the *tables* are not
     // the ones this build knows how to read or write, so there is nothing to
-    // salvage and the file itself is replaced. Checked before `sync_dir`
+    // salvage and the file itself is replaced. Checked before the glob stamp
     // precisely because `rebuild_in_place` below runs `DELETE FROM` against
     // those tables — it may only run once their shape is known-current.
     let shape_ok = meta_get(&conn, "schema_version").as_deref() == Some(&SCHEMA_VERSION.to_string())
@@ -235,23 +249,24 @@ fn try_open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Resul
         drop(conn);
         return Ok(Opened::Stale);
     }
-    // `sync_dir` still gets a real (non-best-effort) check here, the same
-    // shape as `vault_root`'s best-effort re-stamp below but stricter — this
-    // one triggers a full rebuild-in-place on mismatch, `vault_root`'s does
-    // not. TODO(C-T6): as of the 2026-08-12 design (C-T2) that strictness no
-    // longer has a correctness reason — `origin::derive` (rule 5) is no
-    // longer a function of `sync_dir` (retired in favor of source-glob
-    // pattern rule 5′), so a stale `sync_dir` cannot make any stored
-    // `origin` wrong any more. This still runs, unremoved, because the
-    // *mechanism* (compare a stamped config value on open, rebuild in place
-    // on mismatch, because the incremental sweep's stat/hash fast path can't
-    // see a config-only change) is exactly what the glob stamp
-    // (`SourceGlobs::stamp()`) needs too — C-T6 should repoint this
-    // comparison at that stamp rather than leave both a live glob check and
-    // this now-inert `sync_dir` one running side by side (that would be a
-    // redundant full rebuild on every `syncDir` settings save for no
-    // benefit). See `open`'s doc comment for the fuller account.
-    if meta_get(&conn, "sync_dir").as_deref() != Some(sync_dir) {
+    // The glob stamp gets a real (non-best-effort) check here, the same
+    // strict-equality shape as `shape_ok` above — a real invalidation trigger,
+    // not `vault_root`'s silent best-effort re-stamp below — but a different
+    // *consequence* on mismatch: `rebuild_in_place`, not wipe. `origin::derive`
+    // rule 5′ reads the source-glob patterns directly, so a changed pattern
+    // list can make a stored `origin` wrong the same way a changed
+    // `sync_dir` used to under the retired rule 5 (see `open`'s doc comment);
+    // the incremental sweep's stat/hash fast path never re-derives `origin`
+    // for an untouched file, so without this comparison a stale tier would
+    // survive indefinitely. `None != Some(globs_stamp)` here (an absent
+    // `source_globs` key) is treated as a mismatch, same as any other
+    // difference — see `changed_globs_rebuild_in_place_and_keep_the_inode`
+    // and this task's report for why that reading of "absent" was chosen
+    // over treating it as a match: it is conservative, and in practice
+    // unreachable through a normal open, since `shape_ok` above already
+    // routes every pre-this-schema-version database through a full wipe (its
+    // `stamp_fresh_schema` always writes `source_globs` on the way back up).
+    if meta_get(&conn, "source_globs").as_deref() != Some(globs_stamp) {
         return Ok(Opened::StaleContents(conn));
     }
     // vault_root can change if the same cache slot is reused; stamp it —
@@ -274,10 +289,10 @@ fn try_open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Resul
 /// Open a file that is known to not exist yet (just created, or just
 /// wiped) and build the schema on it. Never called on a file that might
 /// already have a `meta` table — `try_open` owns that check.
-fn create_fresh(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Result<Connection> {
+fn create_fresh(db_path: &Path, vault_root: &str, globs_stamp: &str) -> rusqlite::Result<Connection> {
     let conn = Connection::open(db_path)?;
     set_pragmas(&conn)?;
-    stamp_fresh_schema(&conn, vault_root, sync_dir)?;
+    stamp_fresh_schema(&conn, vault_root, globs_stamp)?;
     Ok(conn)
 }
 
@@ -288,13 +303,13 @@ fn create_fresh(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::R
 /// two auto-committed `CREATE TABLE`s used to leave behind. `try_open` still
 /// handles that state defensively, since databases created by older builds
 /// are already out there.
-fn stamp_fresh_schema(conn: &Connection, vault_root: &str, sync_dir: &str) -> rusqlite::Result<()> {
+fn stamp_fresh_schema(conn: &Connection, vault_root: &str, globs_stamp: &str) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(SCHEMA_SQL)?;
     meta_set(&tx, "schema_version", &SCHEMA_VERSION.to_string())?;
     meta_set(&tx, "tokenizer_id", TOKENIZER_ID)?;
     meta_set(&tx, "vault_root", vault_root)?;
-    meta_set(&tx, "sync_dir", sync_dir)?;
+    meta_set(&tx, "source_globs", globs_stamp)?;
     tx.commit()
 }
 
@@ -325,29 +340,29 @@ fn set_pragmas(conn: &Connection) -> rusqlite::Result<()> {
 /// them is the design, so contention is ordinary, not exceptional.
 const BUSY_TIMEOUT_MS: i32 = 5000;
 
-/// Empty every derived table and re-stamp `sync_dir`, keeping the file (and
-/// therefore the inode, and therefore every other process's open handle on
-/// it) exactly where it is. The safe counterpart to [`wipe`] for the one
+/// Empty every derived table and re-stamp `source_globs`, keeping the file
+/// (and therefore the inode, and therefore every other process's open handle
+/// on it) exactly where it is. The safe counterpart to [`wipe`] for the one
 /// staleness trigger a user can flip while the database is in use — see
 /// [`open`]'s doc comment for why that distinction matters, and
-/// `a_changed_sync_dir_must_not_unlink_the_file` for the pin.
+/// `changed_globs_rebuild_in_place_and_keep_the_inode` for the pin.
 ///
 /// One transaction, so a crash midway leaves either the old contents or an
 /// empty index — never a half-cleared store still claiming a current
-/// `sync_dir` stamp. The `DELETE FROM` set is the same one `scan::build_full`
-/// uses to start a full rebuild (`blocks_fts` first: it is a standalone FTS
-/// table whose rows are not cascaded by anything).
+/// `source_globs` stamp. The `DELETE FROM` set is the same one
+/// `scan::build_full` uses to start a full rebuild (`blocks_fts` first: it is
+/// a standalone FTS table whose rows are not cascaded by anything).
 ///
 /// `built_at` is dropped along with the rows it describes: it is the settings
 /// page's "index built at …" line, and leaving it would have the index claim
 /// a build time for content it no longer holds. The next `ensure_built`
 /// re-stamps it — it sees zero files and rebuilds, which is exactly the
 /// intent here.
-fn rebuild_in_place(conn: &Connection, sync_dir: &str) -> rusqlite::Result<()> {
+fn rebuild_in_place(conn: &Connection, globs_stamp: &str) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch("DELETE FROM blocks_fts; DELETE FROM blocks; DELETE FROM links; DELETE FROM files;")?;
     tx.execute("DELETE FROM meta WHERE key='built_at'", [])?;
-    meta_set(&tx, "sync_dir", sync_dir)?;
+    meta_set(&tx, "source_globs", globs_stamp)?;
     tx.commit()
 }
 
@@ -539,6 +554,10 @@ mod tests {
         assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
         assert_eq!(meta_get(&conn, "tokenizer_id").as_deref(), Some(crate::tokenize::TOKENIZER_ID));
         assert_eq!(meta_get(&conn, "vault_root").as_deref(), Some("/v"));
+        // The glob stamp must be written on fresh creation too — a check
+        // that never wrote its comparison value would make every future
+        // open look stale forever (see `open`'s doc comment).
+        assert_eq!(meta_get(&conn, "source_globs").as_deref(), Some("sync"));
     }
 
     /// 索引是可弃派生物:版本不符不修,直接扔掉重建。自愈最简、没有半修好的库。
@@ -556,41 +575,50 @@ mod tests {
         assert_eq!(meta_get(&conn, "tokenizer_id").as_deref(), Some(crate::tokenize::TOKENIZER_ID));
     }
 
-    /// Originally (review round 1 on the prior task): `origin` was a
-    /// function of `sync_dir` (rule 5, `origin::derive`), but nothing
-    /// re-derived it when the vault's `syncDir` setting changed — the
+    /// The predecessor of this mechanism (review round 1 on the prior task):
+    /// `origin` was a function of `sync_dir` (rule 5, `origin::derive`), but
+    /// nothing re-derived it when the vault's `syncDir` setting changed — the
     /// sweep's stat/hash fast path only touches `mtime`/`size` on an
     /// unchanged file, so a stale `origin` would otherwise survive
     /// indefinitely. So the setting was stamped into `meta` and a mismatch
     /// invalidated every stored row, same as `tokenizer_id`.
     ///
-    /// **As of the 2026-08-12 design (C-T2), that premise is gone**: rule 5
-    /// was retired in favor of source-glob patterns (rule 5′), and
-    /// `origin::derive` no longer reads `sync_dir` at all — see the
-    /// `TODO(C-T6)` on `try_open`'s `sync_dir` comparison and on `open`'s doc
-    /// comment. This test still passes, and is still pinning real behavior
-    /// (the code path is unchanged and still wipes on a `sync_dir` mismatch
-    /// today), but the behavior it pins is now a harmless-but-pointless full
-    /// rebuild rather than a necessary one. Left green on purpose rather than
-    /// deleted: C-T6 is expected to repoint this exact trigger at the glob
-    /// stamp, at which point this test's assertions become the right shape
-    /// again for the right reason — deleting it now would just make C-T6
-    /// write it back.
-    ///
-    /// It is invalidated **in place**, not by unlinking the file — see
-    /// `a_changed_sync_dir_must_not_unlink_the_file` directly below for why
-    /// this one differs from every other staleness trigger.
+    /// Rule 5 was retired in favor of source-glob patterns (rule 5′), and
+    /// `origin::derive` no longer reads `sync_dir` at all — the same class of
+    /// staleness now applies to the glob patterns instead (a changed pattern
+    /// list can make a stored `origin` wrong, and the sweep's fast path can't
+    /// see the config change), so this test replaces the `sync_dir` version
+    /// of itself: same shape, same reasoning, repointed at
+    /// `SourceGlobs::stamp()` and `meta.source_globs`. It also folds in the
+    /// inode pin the old `a_changed_sync_dir_must_not_unlink_the_file` test
+    /// carried separately — **only the inode assertion below tells a rebuild
+    /// from a wipe**; every row-count assertion here would also pass if
+    /// `open` unlinked the file and recreated it from scratch, which is
+    /// exactly the mistake the prior round of this mechanism made and this
+    /// task's mutation check is required to catch (see the task report).
+    #[cfg(unix)]
     #[test]
-    fn a_changed_sync_dir_still_invalidates_every_stored_row_though_origin_no_longer_depends_on_it() {
+    fn changed_globs_rebuild_in_place_and_keep_the_inode() {
         let (_d, p) = tmp();
         {
-            let mut conn = open(&p, "/v", "sync").unwrap();
+            let mut conn = open(&p, "/v", "a/**").unwrap();
             write(&mut conn, "a.md", "hello\n");
         }
-        let conn = open(&p, "/v", "box").unwrap();
+        // Stand in for the GUI: a live connection held across the change, the
+        // way `IndexHandle` holds one for the whole process lifetime. A
+        // source-glob pattern is a text field on the settings page, so it can
+        // change while this connection is open — unlike `schema_version` or
+        // `tokenizer_id`, which move only with the binary.
+        let live = open(&p, "/v", "a/**").unwrap();
+        let ino_before = ino(&p);
+
+        let conn = open(&p, "/v", "b/**").expect("a glob-stamp change must not fail the open");
+        assert_eq!(ino(&p), ino_before, "index.db was unlinked and recreated, not rebuilt in place");
+        assert!(p.exists(), "index.db must still be there");
+
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
-        assert_eq!(n, 0, "a changed sync_dir must invalidate every stored origin");
-        assert_eq!(meta_get(&conn, "sync_dir").as_deref(), Some("box"));
+        assert_eq!(n, 0, "a changed source-glob stamp must invalidate every stored origin");
+        assert_eq!(meta_get(&conn, "source_globs").as_deref(), Some("b/**"));
         // Every derived table, not just `files` — a leftover block or FTS row
         // would outlive the file it belongs to.
         for t in ["blocks", "blocks_fts", "links"] {
@@ -599,41 +627,6 @@ mod tests {
         }
         // And the index must not claim a build time for rows it no longer has.
         assert_eq!(meta_get(&conn, "built_at"), None);
-    }
-
-    /// `sync_dir` is the **first and only wipe trigger a user can flip at
-    /// runtime**: `schema_version` and `tokenizer_id` change only with the
-    /// binary, which cannot happen underneath a live handle, but the vault's
-    /// `syncDir` setting is a text field in the settings dialog. Unlinking
-    /// `index.db` (plus `-wal`/`-shm`) on that trigger reintroduces exactly
-    /// the data-loss/corruption bug `open`'s doc comment describes, through a
-    /// *legitimate* stale path this time: `notemd search` — which `AGENTS.md`
-    /// tells every agent to run habitually — would open the index moments
-    /// after the setting changed, find the stamp stale, and delete the
-    /// sidecars of the GUI's live WAL connection (SQLite's own documented
-    /// corruption hazard), leaving the GUI serving and writing an orphaned
-    /// inode until relaunch.
-    ///
-    /// So this trigger rebuilds the contents in place instead: same file,
-    /// same inode, same open handles, zero rows. The inode assertion is the
-    /// pin — every other assertion in the test above would still pass if the
-    /// file were deleted and recreated.
-    #[cfg(unix)]
-    #[test]
-    fn a_changed_sync_dir_must_not_unlink_the_file() {
-        let (_d, p) = tmp();
-        {
-            let mut conn = open(&p, "/v", "sync").unwrap();
-            write(&mut conn, "a.md", "hello\n");
-        }
-        // Stand in for the GUI: a live connection held across the change, the
-        // way `IndexHandle` holds one for the whole process lifetime.
-        let live = open(&p, "/v", "sync").unwrap();
-        let ino_before = ino(&p);
-
-        let conn = open(&p, "/v", "box").expect("a sync_dir change must not fail the open");
-        assert_eq!(ino(&p), ino_before, "index.db was unlinked and recreated, not rebuilt in place");
-        assert!(p.exists(), "index.db must still be there");
 
         // The pre-existing connection must still be looking at the *same*
         // database — not an orphaned inode nobody else can see.
@@ -645,10 +638,36 @@ mod tests {
         );
     }
 
+    /// The other half of the invalidation direction: a genuine change
+    /// triggers exactly once and then settles. If the comparison were
+    /// written backwards (or the re-stamp inside `rebuild_in_place` were
+    /// skipped), reopening with the very stamp `open` just wrote would look
+    /// stale again and wipe the rows it had just rebuilt — every
+    /// `notemd search` invocation (or GUI relaunch) after a legitimate glob
+    /// change would silently re-empty the index forever instead of settling.
+    #[test]
+    fn reopening_with_the_same_glob_stamp_settles_and_stops_rebuilding() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v", "a/**").unwrap();
+            write(&mut conn, "a.md", "hello\n");
+        }
+        {
+            // The one legitimate rebuild: the glob pattern actually changed.
+            let mut conn = open(&p, "/v", "b/**").unwrap();
+            write(&mut conn, "x.md", "world\n");
+        }
+        // Reopening again with the SAME "b/**" stamp must not rebuild a
+        // second time — the file written just above must survive.
+        let conn = open(&p, "/v", "b/**").unwrap();
+        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "a stable glob stamp must not trigger a repeat rebuild");
+    }
+
     /// The contrast that keeps the two paths distinct: a tokenizer change
     /// (like a schema bump) still replaces the file outright. Both are
     /// build-time constants — a running process cannot observe them change —
-    /// so the runtime hazard `a_changed_sync_dir_must_not_unlink_the_file`
+    /// so the runtime hazard `changed_globs_rebuild_in_place_and_keep_the_inode`
     /// guards against does not apply, and wiping stays the simplest correct
     /// answer for a store whose *shape* may differ. Without this assertion,
     /// converting every trigger to an in-place rebuild would go unnoticed.
@@ -700,11 +719,38 @@ mod tests {
         assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
     }
 
+    /// This task's own transition: a real pre-bump (v2, `origin` present but
+    /// no `Unlabeled` tier, no `srt`/`vtt`/`txt` `ext` values, `meta` stamped
+    /// under the retired `sync_dir` key rather than `source_globs`) database
+    /// must be wiped and rebuilt on open, not used as-is — see the
+    /// `SCHEMA_VERSION` doc comment. Simulated the same way
+    /// `a_version_1_database_is_wiped_on_open` simulates its transition: build
+    /// a current (v3) index, then hand-rewrite `meta.schema_version` back to
+    /// what a real v2 database would read.
+    #[test]
+    fn a_version_2_database_is_wiped_on_open() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v", "a/**").unwrap();
+            write(&mut conn, "a.md", "hello\n");
+            meta_set(&conn, "schema_version", "2").unwrap();
+        }
+        let conn = open(&p, "/v", "a/**").unwrap();
+        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(
+            n, 0,
+            "a v2 (pre-source-globs-stamp, pre-unlabeled-tier) database must be wiped, not used as-is"
+        );
+        assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
+        assert_eq!(meta_get(&conn, "source_globs").as_deref(), Some("a/**"));
+    }
+
     /// `files.origin` must survive a write/read round trip through the real
     /// column, not just through `Origin::as_str`/`from_str` in isolation.
     /// `a.note.md` derives `Origin::Human` via `origin::derive` rule 1
-    /// regardless of frontmatter or `sync_dir`, so this exercises the real
-    /// `chunk::parse_file` -> `replace_file` -> SQL round trip end to end.
+    /// regardless of frontmatter or the configured source-glob patterns, so
+    /// this exercises the real `chunk::parse_file` -> `replace_file` -> SQL
+    /// round trip end to end.
     #[test]
     fn origin_round_trips_through_the_files_table() {
         let (_d, p) = tmp();

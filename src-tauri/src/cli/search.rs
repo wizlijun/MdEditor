@@ -144,12 +144,20 @@ pub fn run(args: SearchArgs) -> ExitCode {
     let opts = scan_options_for(&root);
     let mut skipped_large: Vec<SkippedFile> = Vec::new();
 
-    // `sync_dir` is no longer part of `ScanOptions` (C-T3) — resolved here
-    // directly, same as the GUI's `open_vault` (`search::mod`), instead of
-    // riding along on `opts` as it used to.
-    let sync_dir = crate::sotvault::vault_settings::resolve_sync_dir(&root);
+    // The store's staleness stamp is `SourceGlobs::stamp()` (C-T6 repointed
+    // it away from `sync_dir` — see `store::open`'s doc comment), and it
+    // never rode along on `ScanOptions`. TODO(C-T8): resolve the vault's
+    // *configured* source-glob patterns here once the settings page (C-T11)
+    // and its storage (C-T8) exist, same as `opts.source_globs` inside
+    // `scan_options_for`. Until then every vault stamps the same (empty)
+    // `SourceGlobs::default()` value, so the check never fires — kept in
+    // lock-step with `search::mod::open_vault`'s identical stopgap:
+    // repointing only one of the two would make the GUI and the CLI stamp
+    // different values for the same vault and invalidate each other's index
+    // on every alternation.
+    let globs_stamp = searchidx::globs::SourceGlobs::default().stamp();
     // Every failure below degrades. The only hard error is "no vault".
-    let mut index = match SearchIndex::open(&root, &sync_dir) {
+    let mut index = match SearchIndex::open(&root, &globs_stamp) {
         Ok(i) => Some(i),
         Err(e) => {
             eprintln!("notemd: search index unavailable ({e}); scanning files directly");

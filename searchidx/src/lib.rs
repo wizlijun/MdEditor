@@ -48,26 +48,27 @@ pub struct SearchIndex {
 }
 
 impl SearchIndex {
-    /// `sync_dir` is the vault's currently-resolved sync mirror directory
-    /// name (`vault_settings::resolve_sync_dir`), sourced independently of
-    /// `ScanOptions` (which dropped its own `sync_dir` field in C-T3 — see
-    /// `ScanOptions.source_globs`'s doc comment) — stamped into the index
-    /// and compared on every open so a changed setting invalidates every
-    /// stored row instead of leaving it silently stale, though as of C-T2
-    /// that invalidation trigger has no live correctness reason left
-    /// (`TODO(C-T6)`: repoint it at the glob stamp instead). See
-    /// `store::open`'s doc comment.
-    pub fn open(vault_root: &Path, sync_dir: &str) -> Result<Self, String> {
+    /// `globs_stamp` is `SourceGlobs::stamp()` for the vault's currently
+    /// configured source-glob patterns, sourced independently of
+    /// `ScanOptions` (which has its own `source_globs` field, but the two
+    /// `SearchIndex::open` callers — `search::mod::open_vault` and
+    /// `cli::search::run` — compute this value themselves rather than
+    /// threading it through `opts`; see those call sites and
+    /// `vault_settings`'s doc comments for why) — stamped into the index and
+    /// compared on every open so a changed setting invalidates every stored
+    /// row instead of leaving it silently stale. See `store::open`'s doc
+    /// comment.
+    pub fn open(vault_root: &Path, globs_stamp: &str) -> Result<Self, String> {
         let db = paths::index_db_path(vault_root).ok_or("no local app data directory")?;
-        Self::open_at(vault_root, &db, sync_dir)
+        Self::open_at(vault_root, &db, globs_stamp)
     }
 
-    pub fn open_at(vault_root: &Path, db_path: &Path, sync_dir: &str) -> Result<Self, String> {
+    pub fn open_at(vault_root: &Path, db_path: &Path, globs_stamp: &str) -> Result<Self, String> {
         // Must be the *same* normalization `paths::vault_key` uses, or two
         // spellings of one vault share a database while disagreeing about the
         // stamp — see `paths::normalized_vault_root`.
         let root = paths::normalized_vault_root(vault_root);
-        let conn = store::open(db_path, &root, sync_dir).map_err(|e| e.to_string())?;
+        let conn = store::open(db_path, &root, globs_stamp).map_err(|e| e.to_string())?;
         Ok(SearchIndex {
             conn,
             vault_root: vault_root.to_path_buf(),
