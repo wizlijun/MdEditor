@@ -42,23 +42,18 @@ fn the_cli_and_the_gui_build_options_through_one_function() {
     let cli = mdeditor_lib::cli::search::scan_options_for(d.path());
     assert_eq!(gui.large_file_threshold_mb, cli.large_file_threshold_mb);
     assert_eq!(gui.exclude_dirs, cli.exclude_dirs);
-    assert_eq!(gui.sync_dir, cli.sync_dir);
+    assert_eq!(gui.source_globs, cli.source_globs);
 }
 
-/// `sync_dir` no longer feeds `origin::derive` — the 2026-08-12 design (C-T2)
-/// retired rule 5 (the sync-mirror-directory special case) in favor of
-/// user-configured source globs (rule 5′). `ScanOptions.sync_dir` still
-/// exists and is still read by `searchidx::store::open` to stamp/invalidate
-/// the index on a changed setting (an unrelated, still-live concern), so it
-/// must still resolve the same way the other options do: unset falls back to
-/// the default, and an explicit value is honored.
-#[test]
-fn sync_dir_defaults_and_uses_the_configured_value() {
-    let d = tempfile::tempdir().unwrap();
-    write_settings(d.path(), r#"{}"#);
-    assert_eq!(mdeditor_lib::search::options::for_vault(d.path()).sync_dir, "sync");
-
-    let d2 = tempfile::tempdir().unwrap();
-    write_settings(d2.path(), r#"{"syncDir": "box"}"#);
-    assert_eq!(mdeditor_lib::search::options::for_vault(d2.path()).sync_dir, "box");
-}
+// `sync_dir` no longer lives on `ScanOptions` at all (C-T3) — the
+// 2026-08-12 design (C-T2) had already retired rule 5 (the
+// sync-mirror-directory special case) in favor of user-configured source
+// globs (rule 5′), leaving `ScanOptions.sync_dir` with no live correctness
+// reason to exist, and C-T3 deleted it. The GUI (`search::mod::open_vault`)
+// and the CLI (`cli::search::run`) each now resolve `sync_dir` directly
+// from `vault_settings::resolve_sync_dir` for `SearchIndex::open` — still
+// the one shared function, just no longer routed through `ScanOptions`.
+// That resolution's default/override behavior is already pinned by
+// `vault_settings::tests::resolve_sync_dir_*`; this file's job is only
+// `ScanOptions`, which is why there is no `ScanOptions`-shaped test for it
+// here any more.

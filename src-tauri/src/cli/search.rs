@@ -144,8 +144,12 @@ pub fn run(args: SearchArgs) -> ExitCode {
     let opts = scan_options_for(&root);
     let mut skipped_large: Vec<SkippedFile> = Vec::new();
 
+    // `sync_dir` is no longer part of `ScanOptions` (C-T3) — resolved here
+    // directly, same as the GUI's `open_vault` (`search::mod`), instead of
+    // riding along on `opts` as it used to.
+    let sync_dir = crate::sotvault::vault_settings::resolve_sync_dir(&root);
     // Every failure below degrades. The only hard error is "no vault".
-    let mut index = match SearchIndex::open(&root, &opts.sync_dir) {
+    let mut index = match SearchIndex::open(&root, &sync_dir) {
         Ok(i) => Some(i),
         Err(e) => {
             eprintln!("notemd: search index unavailable ({e}); scanning files directly");
@@ -257,18 +261,17 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
         // and "empty frontmatter" into the same value (see `origin::derive`'s
         // own doc comment on why `Some(&Frontmatter::default())` is not `None`).
         //
-        // TODO(C-T3): passes an empty `SourceGlobs` — same stopgap as
-        // `searchidx::scan::index_into`, and for the same reason: `opts` has
-        // no source-glob field yet (`ScanOptions.sync_dir` is unrelated —
-        // that one is still read above for `is_indexable`). Once C-T3 adds
-        // `ScanOptions.source_globs`, forward `&opts.source_globs` here so
-        // this fallback path classifies identically to the indexed path
-        // again.
+        // Forwards `&opts.source_globs` — the same field `is_indexable`
+        // above already consulted to decide this file was in scope at all —
+        // so this fallback path classifies identically to the indexed path
+        // (`searchidx::scan::index_into`). `opts.source_globs` is itself
+        // still a `SourceGlobs::default()` stopgap until `TODO(C-T8)` wires
+        // the real setting into `for_vault`, so both paths agree on
+        // "matches nothing" for now.
         let (fm_raw, _, _) = searchidx::frontmatter::split(&text);
         let fm_present = fm_raw.is_some();
         let fm = fm_raw.map(searchidx::frontmatter::parse).unwrap_or_default();
-        let origin =
-            searchidx::origin::derive(&rel, fm_present.then_some(&fm), &searchidx::globs::SourceGlobs::default());
+        let origin = searchidx::origin::derive(&rel, fm_present.then_some(&fm), &opts.source_globs);
         for (i, line) in text.lines().enumerate() {
             if line.to_lowercase().contains(&needle) {
                 out.push(searchidx::Hit {

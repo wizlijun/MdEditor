@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
+use crate::globs::SourceGlobs;
 use crate::norm::{content_hash, rel_path};
 use crate::store;
 
@@ -21,19 +22,21 @@ pub struct ScanOptions {
     pub large_file_threshold_mb: u32,
     /// Vault-relative directory prefixes to skip, `/`-separated.
     pub exclude_dirs: Vec<String>,
-    /// The sync mirror directory name (default `"sync"`). As of the
-    /// 2026-08-12 design (C-T2), this **no longer feeds `origin::derive`** —
-    /// rule 5 (the sync-mirror-directory special case) was retired in favor
-    /// of user-configured source-glob patterns (rule 5′, `SourceGlobs`,
-    /// `index_into` in this file). The field is still threaded through to
-    /// `store::open` (see that function's doc comment), which currently has
-    /// no live correctness reason to compare it either — `TODO(C-T6)`: that
-    /// invalidation trigger is expected to be repointed at the glob stamp
-    /// instead. This is still the ONLY field `search::options::for_vault`
-    /// (the single construction point, see `search_scan_options_contract.rs`)
-    /// is allowed to read from `vault_settings::resolve_sync_dir` — do not
-    /// hard-code `"sync"` at any other call site.
-    pub sync_dir: String,
+    /// The vault's configured source-glob patterns (spec `.superpowers/sdd/
+    /// 2026-08-12-source-globs-and-transcript-indexing/`, §4.1). Two jobs
+    /// share this one field: forwarded verbatim to `origin::derive` (rule
+    /// 5′, replacing the retired sync-mirror-directory special case, rule
+    /// 5), and consulted by `is_indexable` below to decide whether a
+    /// `.srt`/`.vtt`/`.txt` file is in scope at all. `ScanOptions::default()`
+    /// carries an empty `SourceGlobs`, which matches nothing — so on
+    /// upgrade, before a user has configured anything, no transcript file
+    /// is indexed and no `.md` is reclassified as `Source` by this rule.
+    ///
+    /// `search::options::for_vault` (the single construction point, see
+    /// `search_scan_options_contract.rs`) still passes `SourceGlobs::
+    /// default()` here as of this task — wiring the real setting in is
+    /// `TODO(C-T8)`.
+    pub source_globs: SourceGlobs,
 }
 
 impl Default for ScanOptions {
@@ -41,7 +44,7 @@ impl Default for ScanOptions {
         // 10 MB matches the vault's git large-file gate. NOT the backlink
         // layer's 1 MB: measured against a real vault, that would drop 46% of
         // the corpus — a guardrail for a different job.
-        ScanOptions { large_file_threshold_mb: 10, exclude_dirs: Vec::new(), sync_dir: "sync".to_string() }
+        ScanOptions { large_file_threshold_mb: 10, exclude_dirs: Vec::new(), source_globs: SourceGlobs::default() }
     }
 }
 
@@ -90,8 +93,26 @@ pub enum IndexOutcome {
 /// Whether `rel` (a vault-relative, `/`-separated path) should be indexed at
 /// all — independent of size, which is checked separately so a skip can be
 /// reported rather than silently folded into "not indexable".
+///
+/// The extension gate: `.md` is always in scope, unconditionally — it is
+/// this product's native format and always has been, glob-configured or
+/// not. `.srt`/`.vtt`/`.txt` (raw transcript formats, C-T4/C-T5) are only in
+/// scope *inside* a configured source glob — `opts.source_globs` is "matches
+/// nothing" by default (`ScanOptions::default()`), so an unconfigured vault
+/// indexes none of them, matching the pre-transcript-support behavior.
+/// Every other extension is never indexed. The dot-segment and
+/// `exclude_dirs` checks below run after the extension gate but exclusion
+/// still wins overall — it is the last check, so nothing above it can
+/// short-circuit past it.
 pub fn is_indexable(rel: &str, opts: &ScanOptions) -> bool {
-    if !rel.ends_with(".md") {
+    let in_scope = if rel.ends_with(".md") {
+        true
+    } else if rel.ends_with(".srt") || rel.ends_with(".vtt") || rel.ends_with(".txt") {
+        opts.source_globs.matches(rel)
+    } else {
+        false
+    };
+    if !in_scope {
         return false;
     }
     if rel.split('/').any(|seg| seg.starts_with('.')) {
@@ -494,26 +515,19 @@ fn index_into(
     tx: &rusqlite::Transaction,
     vault_root: &Path,
     c: &Candidate,
-    // Temporarily unused: `ScanOptions` doesn't carry `SourceGlobs` yet — see
-    // the TODO(C-T3) below. Left named (not `_opts`) because C-T3 reads it
-    // again within days; kept as a parameter at all (not dropped) so that
-    // change stays a one-line diff instead of a signature change.
-    #[allow(unused_variables)] opts: &ScanOptions,
+    opts: &ScanOptions,
 ) -> rusqlite::Result<bool> {
     let Ok(bytes) = std::fs::read(vault_root.join(&c.rel)) else { return Ok(false) };
     // Lossy on purpose: a file with a stray non-UTF-8 byte still gets indexed
     // rather than silently vanishing from search.
     let raw = String::from_utf8_lossy(&bytes);
-    // TODO(C-T3): `ScanOptions` does not carry `SourceGlobs` yet — that field
-    // (`ScanOptions.source_globs`) and its threading into `search::options`'s
-    // two construction points is Task C-T3's job (spec §5.2 migration). Until
-    // then this passes an empty pattern set, which `SourceGlobs` documents as
-    // "matches nothing" — so rule 5′ never fires on a real scan yet, and
-    // every frontmatter-less `.md` classifies `Unlabeled` (rule 6′) rather
-    // than a mirror-dir-derived `Source`. That is an intentional, temporary
-    // regression scoped to this task sequence, not a silent behavior change:
-    // see the C-T2 task report for the rationale.
-    let parsed = crate::chunk::parse_file(&c.rel, &raw, c.mtime, &crate::globs::SourceGlobs::default());
+    // `opts.source_globs` now reaches `origin::derive` for real (rule 5′) —
+    // see `ScanOptions.source_globs`'s doc comment. `search::options::
+    // for_vault` (the single construction point) still passes
+    // `SourceGlobs::default()` (matches nothing) as of this task, so this
+    // does not yet change GUI/CLI-observed behavior on a real vault —
+    // wiring the real setting in is `TODO(C-T8)`.
+    let parsed = crate::chunk::parse_file(&c.rel, &raw, c.mtime, &opts.source_globs);
     let ext = if c.rel.ends_with(".note.md") { "note.md" } else { "md" };
     store::replace_file(tx, &c.rel, ext, c.mtime, c.size, &content_hash(&bytes), &parsed)?;
     Ok(true)
@@ -963,6 +977,66 @@ mod tests {
         assert!(!is_indexable(".git/x.md", &opts));
         assert!(!is_indexable(".notemd/z.md", &opts));
         assert!(!is_indexable("sessions/b.md", &opts));
+    }
+
+    #[test]
+    fn md_is_indexed_regardless_of_the_globs() {
+        let opts = ScanOptions::default();
+        assert!(is_indexable("anywhere/a.md", &opts));
+        assert!(is_indexable("b.note.md", &opts));
+    }
+
+    #[test]
+    fn transcripts_are_indexed_only_inside_a_source_glob() {
+        let mut opts = ScanOptions::default();
+        opts.source_globs = crate::globs::parse(&["media/**".to_string()]);
+        assert!(is_indexable("media/talk.srt", &opts));
+        assert!(is_indexable("media/talk.vtt", &opts));
+        assert!(is_indexable("media/notes.txt", &opts));
+        assert!(!is_indexable("elsewhere/talk.srt", &opts), "模式外的转写不得进索引");
+    }
+
+    #[test]
+    fn an_unlisted_extension_is_never_indexed_even_inside_a_glob() {
+        let mut opts = ScanOptions::default();
+        opts.source_globs = crate::globs::parse(&["media/**".to_string()]);
+        assert!(!is_indexable("media/a.pdf", &opts));
+        assert!(!is_indexable("media/a.mp4", &opts));
+    }
+
+    /// 排除优先于收录。
+    #[test]
+    fn exclude_dirs_win_over_a_source_glob() {
+        let mut opts = ScanOptions::default();
+        opts.source_globs = crate::globs::parse(&["media/**".to_string()]);
+        opts.exclude_dirs = vec!["media/raw".to_string()];
+        assert!(!is_indexable("media/raw/a.srt", &opts));
+    }
+
+    /// A `.srt` indexed under a wide glob must lose its row, not be
+    /// stranded, once the user narrows the pattern so it no longer matches
+    /// — the same "no partial file must masquerade as a real one" property
+    /// `sweep_removes_rows_for_deleted_files` and
+    /// `sweep_removes_rows_for_a_file_that_grows_past_the_threshold` pin for
+    /// the other two ways a file can stop being indexable. `walk()` filters
+    /// candidates through `is_indexable` before they ever reach `seen`, so
+    /// the deletion pass below (`known.keys().filter(|p| !seen.contains(..))`)
+    /// removes it through the same generic path as a deleted file — this
+    /// test exists to prove that generic path actually reaches this new
+    /// third case, not just the two it was written against.
+    #[test]
+    fn sweep_removes_a_transcript_that_falls_outside_a_narrowed_glob() {
+        let v = vault(&[("media/talk.srt", "1\n00:00:00,000 --> 00:00:01,000\nhello\n")]);
+        let mut c = conn_for(v.path());
+        let wide = ScanOptions { source_globs: crate::globs::parse(&["media/**".to_string()]), ..Default::default() };
+        build_full(&mut c, v.path(), &wide, None).unwrap();
+        assert_eq!(count(&c), 1, "the transcript must be indexed under the wide glob");
+
+        let narrow =
+            ScanOptions { source_globs: crate::globs::parse(&["media/other/**".to_string()]), ..Default::default() };
+        let s = sweep(&mut c, v.path(), &narrow, None, None).unwrap();
+        assert_eq!(s.files_removed, 1, "narrowing the glob must remove the now-out-of-scope row");
+        assert_eq!(count(&c), 0, "no stranded row may remain");
     }
 
     /// 测试辅助:把 mtime 设回去。用 std 的 File::set_modified,不引入 filetime。

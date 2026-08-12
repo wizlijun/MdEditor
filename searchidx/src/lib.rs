@@ -47,10 +47,14 @@ pub struct SearchIndex {
 
 impl SearchIndex {
     /// `sync_dir` is the vault's currently-resolved sync mirror directory
-    /// name (`ScanOptions::sync_dir` / `vault_settings::resolve_sync_dir`) —
-    /// stamped into the index and compared on every open so a changed
-    /// setting invalidates every stored `origin` instead of leaving it
-    /// silently stale. See `store::open`'s doc comment.
+    /// name (`vault_settings::resolve_sync_dir`), sourced independently of
+    /// `ScanOptions` (which dropped its own `sync_dir` field in C-T3 — see
+    /// `ScanOptions.source_globs`'s doc comment) — stamped into the index
+    /// and compared on every open so a changed setting invalidates every
+    /// stored row instead of leaving it silently stale, though as of C-T2
+    /// that invalidation trigger has no live correctness reason left
+    /// (`TODO(C-T6)`: repoint it at the glob stamp instead). See
+    /// `store::open`'s doc comment.
     pub fn open(vault_root: &Path, sync_dir: &str) -> Result<Self, String> {
         let db = paths::index_db_path(vault_root).ok_or("no local app data directory")?;
         Self::open_at(vault_root, &db, sync_dir)
@@ -359,8 +363,8 @@ mod tests {
         std::fs::write(vault.join("book1.md"), "---\ntype: Book\n---\nbody\n").unwrap();
         // Unlabeled: no frontmatter at all and no configured source-glob
         // pattern to match it either (rule 6′) — `ScanOptions::default()`
-        // below carries no `source_globs` yet (C-T3's job), so this is the
-        // only way to reach rule 6′ through the real pipeline today.
+        // below carries an empty `source_globs` (matches nothing), so this
+        // is the only way to reach rule 6′ through the real pipeline today.
         std::fs::write(vault.join("raw.md"), "no frontmatter, no claim\n").unwrap();
 
         let db = d.path().join("index.db");

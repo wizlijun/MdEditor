@@ -267,7 +267,14 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
     let app = app.clone();
     std::thread::spawn(move || {
         let opts = scan_options(&root);
-        match SearchIndex::open(&root, &opts.sync_dir) {
+        // `sync_dir` is no longer part of `ScanOptions` (C-T3) — resolved
+        // here directly instead. This is a second `.notemd/settings.json`
+        // read alongside the one inside `scan_options`, not the single
+        // consistent read the removed field used to share; see the C-T3
+        // task report for why that is an accepted, narrow trade rather than
+        // a new abstraction.
+        let sync_dir = crate::sotvault::vault_settings::resolve_sync_dir(&root);
+        match SearchIndex::open(&root, &sync_dir) {
             Ok(mut idx) => {
                 if let Err(e) = idx.ensure_built(&opts) {
                     crate::log_cat!("search", "error", "initial build failed: {e}");
