@@ -21,13 +21,18 @@ pub struct ScanOptions {
     pub large_file_threshold_mb: u32,
     /// Vault-relative directory prefixes to skip, `/`-separated.
     pub exclude_dirs: Vec<String>,
-    /// The sync mirror directory name (default `"sync"`) — fed straight
-    /// through to `origin::derive` (spec §3, rule 5) so a mirrored file is
-    /// classified `Source` regardless of what parses this option. This is
-    /// the ONLY field `search::options::for_vault` (the single construction
-    /// point, see `search_scan_options_contract.rs`) is allowed to read from
-    /// `vault_settings::resolve_sync_dir` — do not hard-code `"sync"` at any
-    /// other call site.
+    /// The sync mirror directory name (default `"sync"`). As of the
+    /// 2026-08-12 design (C-T2), this **no longer feeds `origin::derive`** —
+    /// rule 5 (the sync-mirror-directory special case) was retired in favor
+    /// of user-configured source-glob patterns (rule 5′, `SourceGlobs`,
+    /// `index_into` in this file). The field is still threaded through to
+    /// `store::open` (see that function's doc comment), which currently has
+    /// no live correctness reason to compare it either — `TODO(C-T6)`: that
+    /// invalidation trigger is expected to be repointed at the glob stamp
+    /// instead. This is still the ONLY field `search::options::for_vault`
+    /// (the single construction point, see `search_scan_options_contract.rs`)
+    /// is allowed to read from `vault_settings::resolve_sync_dir` — do not
+    /// hard-code `"sync"` at any other call site.
     pub sync_dir: String,
 }
 

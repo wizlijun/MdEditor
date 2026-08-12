@@ -36,13 +36,34 @@ export interface HitGroup {
  *     其他            (derived hits with no conceptType — rule 7's
  *                       unregistered/typeless case — always last among the
  *                       derived groups, never interleaved with named types)
- *   source            (origin = 'source', the pole for raw material)
+ *   source            (origin = 'source' OR 'unlabeled' — see the TODO(C-T10)
+ *                       below on why 'unlabeled' is folded in here for now)
  *
  * A group that would be empty is omitted entirely, not rendered empty — so
  * the group count is exactly `(human present ? 1 : 0) + (distinct derived
- * types present) + (untyped derived present ? 1 : 0) + (source present ? 1
- * : 0)`, which is "more than three" as soon as two or more derived types
- * show up in one result set (by design — see the module doc comment).
+ * types present) + (untyped derived present ? 1 : 0) + (source-or-unlabeled
+ * present ? 1 : 0)`, which is "more than three" as soon as two or more
+ * derived types show up in one result set (by design — see the module doc
+ * comment).
+ *
+ * TODO(C-T10): `origin = 'unlabeled'` (2026-08-12 design, C-T2 — spec §3
+ * rule 6′) is deliberately folded into the `source` group rather than given
+ * its own `HitGroupKind`. This is an interim measure, not the intended final
+ * shape: `Unlabeled` and `Source` are different claims (§9's "known signal"
+ * table), and this file's own module doc says the goal is exactly two poles
+ * plus a derived middle, not three. The reason to fold rather than leave it
+ * unhandled: before this change, an `origin: 'unlabeled'` hit matched none of
+ * the branches below and fell through to `derivedOther` — rendered under the
+ * *AI-produced* heading, which is a strictly stronger false claim than
+ * "raw material" (an unlabeled file might be your own unsigned writing; it
+ * is definitely not evidence an agent produced it). Folding into `source`
+ * is not correct either, but it reproduces this codebase's pre-C-T2 behavior
+ * for these exact files (frontmatter-less `.md` used to classify `Source`
+ * under the retired rule 6) rather than inventing a new, worse mislabel.
+ * C-T10 owns building the real fourth group (a `HitGroupKind` variant, an
+ * i18n label in `SearchPanel.svelte`'s `groupLabel` switch, and presumably
+ * its own position in the ordering — spec §3.1 ranks it below `source`, so
+ * it likely belongs after `source` in the list above, not merged into it).
  *
  * Within each group, hits keep the relative order they arrived in — this
  * function never re-sorts by score; that already happened upstream in
@@ -58,7 +79,9 @@ export function groupHits(hits: SearchHit[]): HitGroup[] {
   for (const hit of hits) {
     if (hit.origin === 'human') {
       human.push(hit)
-    } else if (hit.origin === 'source') {
+    } else if (hit.origin === 'source' || hit.origin === 'unlabeled') {
+      // TODO(C-T10): see the module doc comment above — this is a temporary
+      // fold, not the intended final grouping for 'unlabeled'.
       source.push(hit)
     } else if (hit.conceptType) {
       let bucket = derivedByType.get(hit.conceptType)

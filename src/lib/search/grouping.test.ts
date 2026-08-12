@@ -105,6 +105,25 @@ describe('groupHits', () => {
     expect(byKind('source')).toEqual(['source-first.md', 'source-second.md'])
   })
 
+  it('origin unlabeled 折入 source 组,绝不落进 AI 产出的「其他」组(C-T2 review round 2, Important #4)', () => {
+    // Before this fix, `origin: 'unlabeled'` matched none of `groupHits`'s
+    // branches and fell through to `derivedOther` — rendered under the
+    // AI-produced heading, which is a strictly stronger false claim than
+    // "raw material" (an unlabeled file might be the user's own unsigned
+    // writing; it is definitely not evidence an agent produced it). This is
+    // a documented interim measure (see the TODO(C-T10) on `groupHits`), not
+    // the intended final grouping — C-T10 owns giving `unlabeled` its own
+    // `HitGroupKind`.
+    const hits = [
+      hit({ path: 'unlabeled.md', origin: 'unlabeled' }),
+      hit({ path: 'typed.md', origin: 'derived', conceptType: 'Answer' }),
+    ]
+    const groups = groupHits(hits)
+    const sourceGroup = groups.find((g) => g.kind === 'source')
+    expect(sourceGroup?.hits.map((h) => h.path)).toEqual(['unlabeled.md'])
+    expect(groups.some((g) => g.kind === 'derivedOther')).toBe(false)
+  })
+
   it('空字符串 conceptType 与缺失一样归入「其他」', () => {
     // `row_to_hit` (searchidx/src/query.rs) deliberately keeps `NULL` and
     // `''` distinct all the way down the Rust side — its comment says that

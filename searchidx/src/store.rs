@@ -88,21 +88,36 @@ pub struct FileRow {
 /// dressed up as a working one, which is worse than failing loudly.
 /// `sync_dir` is the vault's currently-configured sync mirror directory name
 /// (see `ScanOptions::sync_dir`) — stamped into `meta` and compared on every
-/// open, because `origin::derive` (rule 5) is a function of it and nothing
-/// else re-derives a stored `origin` when only the *setting* changes.
+/// open. **As of the 2026-08-12 design (C-T2), this comparison no longer has
+/// a live correctness justification**: `origin::derive`'s rule 5 (the
+/// sync-mirror-directory special case that used to make this a function of
+/// `sync_dir`) was retired in favor of user-configured source-glob patterns
+/// (rule 5′) — no stored `origin` is computed from `sync_dir` any more, so a
+/// changed `sync_dir` today cannot make any stored `origin` wrong. The check
+/// stays wired up, unremoved, because `TODO(C-T6)`: the shape of the problem
+/// it solves — a config value the incremental sweep's stat/hash fast path
+/// cannot see change, so a stale stored value survives indefinitely unless
+/// something stamps the config into `meta` and compares it on open — still
+/// applies, just to the *glob* stamp (`SourceGlobs::stamp()`) instead.
+/// C-T6 is expected to either repoint this exact check at that stamp or add
+/// a sibling check for it and retire this one; until then this is a
+/// harmless-but-pointless full rebuild-in-place on every `syncDir` settings
+/// save, not a correctness bug.
 ///
-/// **It is the one staleness trigger a user can flip at runtime**, and that
-/// is why it is answered by rebuilding the contents *in place* rather than by
-/// deleting the file (see `rebuild_in_place`, and
-/// `a_changed_sync_dir_must_not_unlink_the_file`). `schema_version` and
-/// `tokenizer_id` are build-time constants — a running process cannot see
-/// them change, so no live handle can exist on the other side of that
-/// mismatch, and wiping stays correct there. A setting can change while the
-/// GUI holds a live WAL connection, so the unlink this function's own doc
-/// comment calls "a real data-loss bug" would come back through a perfectly
-/// legitimate stale path: `notemd search` (which `AGENTS.md` tells every
-/// agent to run habitually) opening the index seconds later, seeing the old
-/// stamp, and deleting `index.db`/`-wal`/`-shm` out from under the GUI.
+/// **It is (for now) the one staleness trigger a user can flip at
+/// runtime**, and that is why it is answered by rebuilding the contents *in
+/// place* rather than by deleting the file (see `rebuild_in_place`, and
+/// `a_changed_sync_dir_must_not_unlink_the_file`) — the same in-place
+/// handling C-T6's replacement glob-stamp trigger will need for the same
+/// reason. `schema_version` and `tokenizer_id` are build-time constants — a
+/// running process cannot see them change, so no live handle can exist on
+/// the other side of that mismatch, and wiping stays correct there. A
+/// setting can change while the GUI holds a live WAL connection, so the
+/// unlink this function's own doc comment calls "a real data-loss bug" would
+/// come back through a perfectly legitimate stale path: `notemd search`
+/// (which `AGENTS.md` tells every agent to run habitually) opening the index
+/// seconds later, seeing the old stamp, and deleting
+/// `index.db`/`-wal`/`-shm` out from under the GUI.
 pub fn open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Result<Connection> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -217,14 +232,22 @@ fn try_open(db_path: &Path, vault_root: &str, sync_dir: &str) -> rusqlite::Resul
         drop(conn);
         return Ok(Opened::Stale);
     }
-    // `sync_dir` gets a real check, not the best-effort re-stamp `vault_root`
-    // gets below: `origin::derive` (rule 5) is a function of it, and unlike
-    // `vault_root` — which nothing reads for correctness — a stale `sync_dir`
-    // means every mirrored file's stored `origin` is silently wrong until
-    // that file's bytes happen to change. Every stored derived value is
-    // suspect, so every row goes; but the *file* stays, because unlike the
-    // two above this mismatch can appear while another process is using the
-    // database. See `open`'s doc comment.
+    // `sync_dir` still gets a real (non-best-effort) check here, the same
+    // shape as `vault_root`'s best-effort re-stamp below but stricter — this
+    // one triggers a full rebuild-in-place on mismatch, `vault_root`'s does
+    // not. TODO(C-T6): as of the 2026-08-12 design (C-T2) that strictness no
+    // longer has a correctness reason — `origin::derive` (rule 5) is no
+    // longer a function of `sync_dir` (retired in favor of source-glob
+    // pattern rule 5′), so a stale `sync_dir` cannot make any stored
+    // `origin` wrong any more. This still runs, unremoved, because the
+    // *mechanism* (compare a stamped config value on open, rebuild in place
+    // on mismatch, because the incremental sweep's stat/hash fast path can't
+    // see a config-only change) is exactly what the glob stamp
+    // (`SourceGlobs::stamp()`) needs too — C-T6 should repoint this
+    // comparison at that stamp rather than leave both a live glob check and
+    // this now-inert `sync_dir` one running side by side (that would be a
+    // redundant full rebuild on every `syncDir` settings save for no
+    // benefit). See `open`'s doc comment for the fuller account.
     if meta_get(&conn, "sync_dir").as_deref() != Some(sync_dir) {
         return Ok(Opened::StaleContents(conn));
     }
@@ -530,18 +553,32 @@ mod tests {
         assert_eq!(meta_get(&conn, "tokenizer_id").as_deref(), Some(crate::tokenize::TOKENIZER_ID));
     }
 
-    /// review round 1, Important #1: `origin` is a function of `sync_dir`
-    /// (rule 5, `origin::derive`), but nothing re-derives it when the vault's
-    /// `syncDir` setting changes — the sweep's stat/hash fast path only
-    /// touches `mtime`/`size` on an unchanged file, so a stale `origin` would
-    /// otherwise survive indefinitely. So the setting is stamped into `meta`
-    /// and a mismatch invalidates every stored row, same as `tokenizer_id`.
+    /// Originally (review round 1 on the prior task): `origin` was a
+    /// function of `sync_dir` (rule 5, `origin::derive`), but nothing
+    /// re-derived it when the vault's `syncDir` setting changed — the
+    /// sweep's stat/hash fast path only touches `mtime`/`size` on an
+    /// unchanged file, so a stale `origin` would otherwise survive
+    /// indefinitely. So the setting was stamped into `meta` and a mismatch
+    /// invalidated every stored row, same as `tokenizer_id`.
+    ///
+    /// **As of the 2026-08-12 design (C-T2), that premise is gone**: rule 5
+    /// was retired in favor of source-glob patterns (rule 5′), and
+    /// `origin::derive` no longer reads `sync_dir` at all — see the
+    /// `TODO(C-T6)` on `try_open`'s `sync_dir` comparison and on `open`'s doc
+    /// comment. This test still passes, and is still pinning real behavior
+    /// (the code path is unchanged and still wipes on a `sync_dir` mismatch
+    /// today), but the behavior it pins is now a harmless-but-pointless full
+    /// rebuild rather than a necessary one. Left green on purpose rather than
+    /// deleted: C-T6 is expected to repoint this exact trigger at the glob
+    /// stamp, at which point this test's assertions become the right shape
+    /// again for the right reason — deleting it now would just make C-T6
+    /// write it back.
     ///
     /// It is invalidated **in place**, not by unlinking the file — see
     /// `a_changed_sync_dir_must_not_unlink_the_file` directly below for why
     /// this one differs from every other staleness trigger.
     #[test]
-    fn a_changed_sync_dir_invalidates_every_stored_origin() {
+    fn a_changed_sync_dir_still_invalidates_every_stored_row_though_origin_no_longer_depends_on_it() {
         let (_d, p) = tmp();
         {
             let mut conn = open(&p, "/v", "sync").unwrap();

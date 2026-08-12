@@ -253,7 +253,7 @@
     "query": "tieringtoken",
     "expect_path": "notes/2026-08-05-tiering-note.md",
     "outranks_path": "docs/2026-08-05-tiering-summary.md",
-    "why": "origin 分级:同一词条下人工笔记(type: Note → human)排在 AI 摘要(type: Book Summary + generated.by: claude/1 → derived)之前。tieringtoken 一共命中**五个**语料文件(books/ · docs/summary · notes/ · sync/ · web/),五份的正文词数一致、doc_date 同为 2026-08-05,raw bm25 精确相等(实测:三档乘数全置 ×1.0 时五条命中的分数逐位相同)。再加一个 tieringtoken 文件必须同样保持这两条,否则这一组用例会开始靠 bm25 差值而不是靠分级变绿。写入次序按 path 排序是 books<concepts<docs<notes<sync<web,平手时先出的恰好是每条断言里该输的那一侧 —— 断言方向与 tie-break 方向相反,不会靠运气变绿"
+    "why": "origin 分级:同一词条下人工笔记(type: Note → human)排在 AI 摘要(type: Book Summary + generated.by: claude/1 → derived)之前。tieringtoken 最初命中**五个**语料文件(books/ · docs/summary · notes/ · sync/ · web/clip),2026-08-12 设计(C-T2)review round 2 又加了第**六**个(web/…book2.md,见下面『web outranks sync』那条的第二重钉子),六份的正文词数一致、doc_date 同为 2026-08-05,raw bm25 精确相等(实测:四档乘数全置 ×1.0 时六条命中的分数逐位相同)。再加任何 tieringtoken 文件都必须同样保持这两条,否则这一组用例会开始靠 bm25 差值而不是靠分级变绿。写入次序按路径排序是 books<concepts<docs<notes<sync<web(book2.md 排在 web/ 目录内、clip.md 之前,但整个 web/ 目录仍排在 sync/ 之后),平手时先出的恰好是每条断言里该输的那一侧 —— 断言方向与 tie-break 方向相反,不会靠运气变绿"
   },
   {
     "query": "tieringtoken",
@@ -271,7 +271,13 @@
     "query": "tieringtoken",
     "expect_path": "web/2026-08-05-tiering-clip.md",
     "outranks_path": "sync/2026-08-05-tiering-mirror.md",
-    "why": "origin 规则 6′ 的端到端形态(2026-08-12 设计,取代已退役的规则 5/ScanOptions.sync_dir 特例——那条旧钉子曾在这里,断言方向相同,机制不同)。两份文件正文词数、doc_date 全同,唯一差别是 sync/…mirror.md 完全没有 frontmatter 块(→ 规则 6′ unlabeled ×0.3),web/…clip.md 有未登记 type(→ 规则 7 derived ×1.0)。这是『没有 frontmatter』这一事实经 chunk::parse_file 一路穿到 origin::derive 再进 files.origin 的唯一 E2E 钉子——origin::derive 的单测测不出 parse_file 有没有正确保留『frontmatter 块缺失』(而非『存在但为空』)这个区分,见 chunk.rs 的 some_default_frontmatter 系列测试。规则 6′ 一旦失效(比如误判成 source 或 human)两者不再是 unlabeled/derived 的 10 倍量级差距,这条立刻红。sync/ 这个目录名是历史遗留,未随机制更换而改名,以保持这次改动最小;C-T3 给 ScanOptions 接上真实 source_globs 后应当补一条规则 5′ 的对应 E2E 钉子"
+    "why": "origin 规则 6′ 的端到端形态(2026-08-12 设计),取代已退役的规则 5/ScanOptions.sync_dir 特例(那条旧钉子曾断言同一对文件,方向相同,机制不同)。两份文件正文词数、doc_date 全同,唯一差别是 sync/…mirror.md 完全没有 frontmatter 块(→ 规则 6′ unlabeled ×0.3),web/…clip.md 有未登记 type(→ 规则 7 derived ×1.0)。这是『没有 frontmatter』这一事实经 chunk::parse_file 一路穿到 origin::derive 再进 files.origin 的唯一 E2E 钉子——origin::derive 的单测测不出 parse_file 有没有正确保留『frontmatter 块缺失』(而非『存在但为空』)这个区分,见 chunk.rs 的 some_default_frontmatter 系列测试。**这条只证明 unlabeled 排在 derived 之后**,证不出 unlabeled 排在 source 之后——把规则 6′ 误改回旧规则 6(判 source 而非 unlabeled)之后 sync/…mirror.md 变成 source(×0.9),仍然低于 web/…clip.md 的 derived(×1.0),这条依旧通过。区分 unlabeled 和 source 的是下面新增的『books outranks sync』那条,两条合起来才把 unlabeled 四邻(human/derived/source)全部钉住。sync/ 这个目录名是历史遗留,未随机制更换而改名,以保持这次改动最小;C-T3 给 ScanOptions 接上真实 source_globs 后应当补一条规则 5′ 的对应 E2E 钉子"
+  },
+  {
+    "query": "tieringtoken",
+    "expect_path": "web/2026-08-05-tiering-book2.md",
+    "outranks_path": "sync/2026-08-05-tiering-mirror.md",
+    "why": "origin 规则 6′ 的第二重钉子,补上上面『web outranks sync』那条证不出的那一半:source(type: Book → 规则 4,×0.9)必须压过 unlabeled(无 frontmatter、未命中任何 source-glob → 规则 6′,×0.3)。第六份语料文件(既有五份 tieringtoken 语料之外新加的,见第一条 why 里『再加一个 tieringtoken 文件必须同样保持这两条』的预留),故意放在 web/ 目录下(而不是新开一个更靠前的目录)是为了让它在按路径排序的写入次序里排在 sync/ **之后**——写入次序是 books<concepts<docs<notes<sync<web,平手时排在前面的赢,所以如果这条只是靠写入次序侥幸通过,应该是 sync 赢、这条断言的方向(book2 赢)会失败,断言方向与侥幸方向相反,不会靠运气变绿。已实测:把 origin.rs 规则 6′ 的返回值改回退役前的 `Origin::Source`(reviewer 的原始 mutation),sync/…mirror.md 与 web/…book2.md 同为 source(raw bm25 也相等),此时 want_at(book2)不再小于 below_at(sync),这条立刻红;和上面 web/sync 那条一起,两条分别钉住 unlabeled 与 derived、unlabeled 与 source 的边界,合起来才是规则 6′ 完整的 E2E 覆盖"
   },
   {
     "query": "tieringnodetoken",
@@ -293,7 +299,7 @@
     "query": "roadmap",
     "expect_path": "docs/2026-04-10-design-note.md",
     "outranks_path": "prose/plain-thoughts.md",
-    "why": "spec §3.2/§9 那条刻意的误判,写成可执行形式:plain-thoughts.md 是一段没有 frontmatter 的人工随想,按规则 6 判 source ×0.9,被判 derived 的 design-note(type: concept 未登记 → 规则 7)压过。这是分级上线后 50 条回归集里两处顺序变化之一,已按 spec 的既有裁决接受(修正手段是给文件加 frontmatter,而不是翻转规则 6 的方向)。钉在这里是为了让日后翻转规则 6 的人必须先看见这条、先回去读 §3.2"
+    "why": "spec §3.2/§9 那条刻意的误判,写成可执行形式:plain-thoughts.md 是一段没有 frontmatter 的人工随想。2026-08-12 设计之前判 source ×0.9(旧规则 6);之后(2026-08-12 设计,C-T2)判 unlabeled ×0.3(规则 6′,未命中任何 source-glob)——无论哪一版,都被判 derived 的 design-note(type: concept 未登记 → 规则 7)压过,这条断言本身没变。这是分级上线后 50 条回归集里两处顺序变化之一,已按 spec 的既有裁决接受(修正手段是给文件加 frontmatter,而不是翻转规则 6/6′ 的方向)。钉在这里是为了让日后翻转规则 6′ 的人必须先看见这条、先回去读 §3.2。**这条是规则 6′ 的第二个 E2E 见证**(第一/第二重见证见上面 tieringtoken 那两条 sync/books 用例)——上一轮报告说 sync 那条是『唯一』E2E 钉子是错的,这条一直都在,只是没被点名"
   },
   {
     "query": "tieringtoken origin:human",

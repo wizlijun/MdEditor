@@ -13,9 +13,13 @@ export interface SearchHit {
   sourceRef: string
   agentBy: string | null
   humanVerified: boolean
-  /** `'human' | 'derived' | 'source'` — mirrors `HitDto.origin` (`searchidx::Origin::as_str()`).
-   *  The two poles the search panel pins at the ends of its grouping. */
-  origin: 'human' | 'derived' | 'source'
+  /** `'human' | 'derived' | 'source' | 'unlabeled'` — mirrors `HitDto.origin`
+   *  (`searchidx::Origin::as_str()`). `'human'`/`'source'` are the two poles
+   *  the search panel pins at the ends of its grouping; `'unlabeled'` (added
+   *  2026-08-12 design, C-T2) is the backend's honest "nobody has claimed
+   *  this file" tier — see `grouping.ts` for how it renders today (a
+   *  stopgap, not the real fourth group; C-T10 owns that). */
+  origin: 'human' | 'derived' | 'source' | 'unlabeled'
   /** `files.concept_type` verbatim (frontmatter `type`), e.g. `'Book Summary'`.
    *  `null` when the file has no `type`. Only origin `'derived'` hits are
    *  subdivided by this in the panel — see `src/lib/search/grouping.ts`. */

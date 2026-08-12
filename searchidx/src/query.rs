@@ -1092,8 +1092,16 @@ mod tests {
         let human = score_of(-1.0, &hit_with(Origin::Human), false, false, "2026-08-10");
         let derived = score_of(-1.0, &hit_with(Origin::Derived), false, false, "2026-08-10");
         let source = score_of(-1.0, &hit_with(Origin::Source), false, false, "2026-08-10");
+        let unlabeled = score_of(-1.0, &hit_with(Origin::Unlabeled), false, false, "2026-08-10");
         assert!(human > derived, "human 必须高于 derived: {human} vs {derived}");
         assert!(derived > source, "derived 必须高于 source: {derived} vs {source}");
+        // Task 2 review round 2, Important #1: without this inequality, the
+        // suite had ZERO coverage distinguishing `Unlabeled` from `Source` —
+        // `Unlabeled => 0.9` (exactly `Source`'s multiplier, i.e. the retired
+        // rule 6 behavior this whole task exists to end) passed all 194+9+1
+        // tests, because nothing asserted `source` and `unlabeled` differ at
+        // all. `source > unlabeled` is the ordering half of that fix.
+        assert!(source > unlabeled, "source 必须高于 unlabeled: {source} vs {unlabeled}");
         // Review round 1, Important #2: the two inequalities above only pin
         // `Derived` to the open interval (0.9, 1.25) — a later "unclassified
         // deserves a small nudge" change (e.g. `Derived => 1.1`) would still
@@ -1107,6 +1115,20 @@ mod tests {
         // — `Derived`'s score must equal that reference exactly, not just
         // sit somewhere between `source` and `human`.
         assert_eq!(derived, 0.5, "Derived must be the exact identity multiplier, not merely `< human` and `> source`");
+        // Task 2 review round 2, Important #1 (the exact-value half): the
+        // `source > unlabeled` inequality above still only pins `Unlabeled`
+        // to the open interval `(0.0, 0.9)` — it would not catch, say,
+        // `Unlabeled => 0.5` slipping in from a future `Weights` refactor
+        // (C-T7) that transcribes spec §3.1's ×0.3 wrong. Pin the exact
+        // value the same way `derived` is pinned above: `r = 1.0 * 0.3`
+        // before the final `r / (1 + r)` normalization, computed from first
+        // principles (not a decimal literal that could itself be a
+        // typo-in-the-test) so this is falsifiable by inspection.
+        assert_eq!(
+            unlabeled,
+            0.3_f64 / 1.3_f64,
+            "Unlabeled must be exactly ×0.3 (spec §3.1), not merely `< source`"
+        );
     }
 
     /// The test above can pass on stable-sort tie-breaking alone (see its

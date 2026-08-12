@@ -1,1 +1,1 @@
-tieringtoken steady marker content echo
+tieringtoken steady marker content delta
