@@ -24,6 +24,7 @@ pub mod query;
 pub mod scan;
 pub mod store;
 pub mod tokenize;
+pub mod transcript;
 pub mod watch;
 
 pub use block::{Block, BlockLevel, FileMeta, Link};
