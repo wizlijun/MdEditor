@@ -324,16 +324,19 @@ DESCRIPTION:
   accelerator, not a gatekeeper. Filter flags are sugar for the same query
   grammar the Vault search panel understands (`tag:x`, `type:x`, `path:x`,
   `ext:x`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, `page:[[X]]`,
-  `origin:human|derived|source`) — e.g. `--tag x` is exactly `tag:x` appended
-  to the query; `page:[[X]]` (a wikilink target) and `origin:` have no
-  dedicated flag, type them directly into the query. Quote a phrase
-  (`\"exact phrase\"`) for an exact-match instead of a bag of terms.
+  `origin:human|derived|source|unlabeled`) — e.g. `--tag x` is exactly `tag:x`
+  appended to the query; `page:[[X]]` (a wikilink target) and `origin:` have no
+  dedicated flag, type them directly into the query. `origin:unlabeled` finds
+  files with no frontmatter and no source-glob match — ranked lowest by
+  default (×0.3), so they can be missing from plain results entirely; this is
+  how to find them anyway. Quote a phrase (`\"exact phrase\"`) for an
+  exact-match instead of a bag of terms.
 
 FLAGS:
   --vault <path>    Vault root (default: the configured Vault)
   --json            Emit {query, route, took_ms, total, hits: [...]}; each hit
                      adds score, breadcrumb, source_ref (path#Lline), origin
-                     (\"human\"|\"derived\"|\"source\") and provenance
+                     (\"human\"|\"derived\"|\"source\"|\"unlabeled\") and provenance
                      ({agent_by, human_verified}) beyond the plain
                      path/line/text. A hit with provenance.agent_by set was
                      written by a model — follow its sources to the primary

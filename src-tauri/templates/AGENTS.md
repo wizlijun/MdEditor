@@ -282,7 +282,8 @@ actually annotated above machine-generated summaries of them.
 notemd search <query...>            # path:line:text, ranked, exit 1 = no match
 notemd search "exact phrase"        # phrase match
 notemd search x tag:y type:z        # filters: tag: type: path: ext: after: before: page:[[X]] origin:
-notemd search x origin:human        # only what a human wrote/signed (vs derived|source)
+notemd search x origin:human        # only what a human wrote/signed (vs derived|source|unlabeled)
+notemd search x origin:unlabeled    # files with no frontmatter and no source-glob match — fix these
 notemd search x --json              # adds score, breadcrumb, source_ref, provenance, origin
 notemd search x --context 2         # surrounding lines
 ```
@@ -292,9 +293,12 @@ accelerator, not a gatekeeper. When a result's `provenance.agent_by` is set, the
 text was written by a model: follow its `sources` to the primary document before
 relying on it. `origin` classifies a whole file into `human` (you wrote or
 signed it) / `derived` (a model generated it) / `source` (raw material a model
-still has to read) — filter to `origin:human` to see only what a human
-actually judged, or read the field in `--json` output to weigh a hit
-accordingly.
+still has to read) / `unlabeled` (nobody has claimed it — no frontmatter, no
+source-glob match) — filter to `origin:human` to see only what a human
+actually judged, or `origin:unlabeled` to find files worth labeling one way or
+the other, or read the field in `--json` output to weigh a hit accordingly.
+Unlabeled files are ranked lowest by default (×0.3) and can fall out of the
+top results entirely, so `origin:unlabeled` is the way to find them anyway.
 
 ## House rules
 

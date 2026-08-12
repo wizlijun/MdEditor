@@ -1052,16 +1052,35 @@ mod tests {
         assert_eq!(q.terms, vec!["target"]);
     }
 
+    /// C-T9: the fourth tier parses the same way the first three do — `parse`
+    /// never validates the value (see the comment on the `origin:` arm above),
+    /// so this is really pinning that `origin:unlabeled` is not somehow
+    /// special-cased or rejected, the way an allowlist implementation might
+    /// have been tempted to.
+    #[test]
+    fn origin_unlabeled_is_recognized_by_parse() {
+        let q = parse("target origin:unlabeled");
+        assert_eq!(q.origins, vec!["unlabeled"]);
+        assert_eq!(q.terms, vec!["target"]);
+    }
+
     /// Task 6: `origin:` narrows to one tier. Three files, three tiers, via the
     /// same `origin::derive` rules the real index uses — `.note.md` is rule 1
     /// (Human), `type: Book Summary` maps to Derived, `type: Book` maps to
     /// Source (see `origin::mapped_type_origin`).
+    ///
+    /// C-T9 adds a fourth file, `d.md`, with no frontmatter and no configured
+    /// source glob (`indexed()`'s `ScanOptions::default()` carries none) — the
+    /// same rule 6′ shape `a_hits_origin_round_trips_through_the_real_index`
+    /// above exercises — so `origin:unlabeled` is proven to narrow the same
+    /// way the other three tiers already do, not merely to parse.
     #[test]
     fn the_origin_filter_narrows_to_a_single_tier() {
         let (_d, c) = indexed(&[
             ("a.note.md", "target\n"),
             ("b.md", "---\ntype: Book Summary\n---\ntarget\n"),
             ("c.md", "---\ntype: Book\n---\ntarget\n"),
+            ("d.md", "target\n"),
         ]);
         let only = |q: &str| {
             let mut paths: Vec<String> =
@@ -1072,7 +1091,12 @@ mod tests {
         assert_eq!(only("target origin:human"), vec!["a.note.md"]);
         assert_eq!(only("target origin:derived"), vec!["b.md"]);
         assert_eq!(only("target origin:source"), vec!["c.md"]);
-        assert_eq!(only("target"), vec!["a.note.md", "b.md", "c.md"], "sanity: all three recall without a filter");
+        assert_eq!(only("target origin:unlabeled"), vec!["d.md"]);
+        assert_eq!(
+            only("target"),
+            vec!["a.note.md", "b.md", "c.md", "d.md"],
+            "sanity: all four recall without a filter"
+        );
     }
 
     /// `origin:` is a per-file singular attribute (like `type:`/`ext:`), so
@@ -1107,8 +1131,11 @@ mod tests {
     /// results'; this looked like an answer"). So an unrecognized origin
     /// literal fails closed — it is bound into the SQL literally, like every
     /// other filter value in this function, and the `files.origin` column
-    /// never stores anything but `human`/`derived`/`source`, so it naturally
-    /// matches zero rows without any special-cased validation.
+    /// never stores anything but `human`/`derived`/`source`/`unlabeled`, so it
+    /// naturally matches zero rows without any special-cased validation.
+    /// `a.md` carries no frontmatter, so this fixture is itself an `Unlabeled`
+    /// file (rule 6′) — proving `origin:bogus` fails closed even against the
+    /// tier added by C-T9, not just the three that predate it.
     #[test]
     fn an_unrecognized_origin_value_matches_nothing_not_everything() {
         let (_d, c) = indexed(&[("a.md", "target\n")]);

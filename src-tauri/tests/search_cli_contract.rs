@@ -136,9 +136,25 @@ fn an_unusable_index_degrades_to_a_direct_scan_and_still_exits_zero() {
 /// available (plumbed for this exact purpose, as of C-T3) but no
 /// `Frontmatter`, so it must parse one itself via the same `origin::derive`
 /// the indexed path uses — not merely document the divergence.
+///
+/// C-T9 extension: `b.md` adds the case a single frontmatter-less file cannot
+/// exercise — the absent-vs-empty-frontmatter distinction `origin::derive`'s
+/// own doc comment calls out (`Some(&Frontmatter::default())` is NOT `None`).
+/// `a.md` has no `---` block at all (`fm_raw` is `None`), so it must resolve
+/// to `unlabeled` (rule 6′). `b.md` has a *present but empty* `---\n---\n`
+/// block (`fm_raw` is `Some("")`, per `frontmatter::split`), so it must fall
+/// through rule 6′ (which only fires on `fm.is_none()`) to rule 7 and resolve
+/// to `derived`. `fallback_scan` only gets this right if it captures
+/// `fm_present` from `fm_raw.is_some()` *before* `unwrap_or_default()`
+/// collapses both shapes into the same `Frontmatter` value — a fallback that
+/// instead did `Some(&fm_raw.map(parse).unwrap_or_default())` unconditionally
+/// would misreport `a.md` as `derived` too, and a fallback that hardcoded
+/// `unlabeled` for anything without a registered `type` would misreport
+/// `b.md`. Both files share one query so one process invocation proves both
+/// directions of the distinction at once, on the same fallback run.
 #[test]
 fn the_no_index_fallback_reports_the_same_origin_tier_the_index_would() {
-    let v = vault(&[("a.md", "brownfox\n")]);
+    let v = vault(&[("a.md", "brownfox\n"), ("b.md", "---\n---\nbrownfox\n")]);
     let mut cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
     cmd.arg("--cli").arg("search").arg("brownfox").arg("--vault").arg(v.path()).arg("--json");
     let blocker = v.path().join("blocker");
@@ -162,11 +178,23 @@ fn the_no_index_fallback_reports_the_same_origin_tier_the_index_would() {
         Some("t1-scan"),
         "sanity: this test only proves anything if the no-index fallback actually ran: {j}"
     );
+    let hits = j["hits"].as_array().expect("hits array");
+    let origin_of = |path: &str| {
+        hits.iter().find(|h| h["path"].as_str() == Some(path)).unwrap_or_else(|| panic!("{path} missing: {j}"))["origin"]
+            .as_str()
+            .map(str::to_string)
+    };
     assert_eq!(
-        j["hits"][0]["origin"].as_str(),
+        origin_of("a.md").as_deref(),
         Some("unlabeled"),
         "a frontmatter-less .md must classify as unlabeled (rule 6′) on the no-index fallback, \
          the same as the indexed path — not the Derived fallback: {j}"
+    );
+    assert_eq!(
+        origin_of("b.md").as_deref(),
+        Some("derived"),
+        "a .md with a PRESENT but empty frontmatter block must classify as derived (rule 7), \
+         not unlabeled — the absent-vs-empty distinction `origin::derive` documents: {j}"
     );
 }
 
