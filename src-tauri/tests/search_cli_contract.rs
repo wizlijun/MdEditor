@@ -157,7 +157,19 @@ fn an_unusable_index_degrades_to_a_direct_scan_and_still_exits_zero() {
 /// directions of the distinction at once, on the same fallback run.
 #[test]
 fn the_no_index_fallback_reports_the_same_origin_tier_the_index_would() {
-    let v = vault(&[("a.md", "brownfox\n"), ("b.md", "---\n---\nbrownfox\n")]);
+    let v = vault(&[
+        ("a.md", "brownfox\n"),
+        ("b.md", "---\n---\nbrownfox\n"),
+        // Only markdown has frontmatter. A `.txt` opening with `---` is
+        // content, and the words inside it must not be read as a header —
+        // `chunk::parse_file` gates the split on the extension and this path
+        // must gate it identically. It did not: the whole-branch review
+        // measured this exact file reporting `source` on the indexed path
+        // and `derived` on this one, because the pseudo-frontmatter's
+        // `type: Book Summary` reached rule 4 here and nowhere else.
+        ("raw/c.txt", "---\ntype: Book Summary\n---\nbrownfox\n"),
+        (".notemd/settings.json", r#"{"searchSourceGlobs":["raw/**"]}"#),
+    ]);
     let mut cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
     cmd.arg("--cli").arg("search").arg("brownfox").arg("--vault").arg(v.path()).arg("--json");
     let blocker = v.path().join("blocker");
@@ -198,6 +210,15 @@ fn the_no_index_fallback_reports_the_same_origin_tier_the_index_would() {
         Some("derived"),
         "a .md with a PRESENT but empty frontmatter block must classify as derived (rule 7), \
          not unlabeled — the absent-vs-empty distinction `origin::derive` documents: {j}"
+    );
+    assert_eq!(
+        origin_of("raw/c.txt").as_deref(),
+        Some("source"),
+        "a .txt inside a source glob must classify as source on the no-index fallback: its \
+         leading `---` block is CONTENT, not frontmatter, so the `type: Book Summary` inside \
+         it must never reach rule 4. Reading it as a header classifies this file `derived` \
+         here while the indexed path says `source` — the divergence the whole-branch review \
+         measured: {j}"
     );
 }
 

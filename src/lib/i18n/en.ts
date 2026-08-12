@@ -520,7 +520,7 @@ export const en = {
   // (same convention as `search.group.*` above).
   'search.index.tiersHeading': 'Provenance tiers',
   'search.index.tiersDerivedLabel': 'AI-produced',
-  'search.index.tiersHint': "Tiers are worked out as each file is indexed, from its frontmatter and from the raw source patterns above — nothing here is written back to your notes. Only files matching one of your patterns count as \"Raw source material\", so if that number looks unexpectedly high, a pattern is wider than you meant it to be. A file with neither frontmatter nor a matching pattern is \"Unlabeled\": nobody has said who wrote it. Editing a file reclassifies that file on its own — no full reindex needed.",
+  'search.index.tiersHint': "Tiers are worked out as each file is indexed, from its frontmatter and from the raw source patterns above — nothing here is written back to your notes. A file counts as \"Raw source material\" when it matches one of your patterns, or when its own frontmatter declares a type that is raw material (such as `Book`), so if that number looks unexpectedly high, check the patterns first. A file with neither frontmatter nor a matching pattern is \"Unlabeled\": nobody has said who wrote it. Editing a file reclassifies that file on its own — no full reindex needed.",
   // Task C-T11 (design spec §7.4): the fourth tier's row is a clickable
   // action item, not just a number — clicking it opens the search panel
   // already filtered to `origin:unlabeled`, the designed way out of the

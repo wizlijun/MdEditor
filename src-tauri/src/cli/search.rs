@@ -299,7 +299,16 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
         // `for_vault`/`scan_options_for` above, not read again here), so
         // this agreement is no longer a "both stopgaps happen to match"
         // coincidence — it is the actual, current classification.
-        let (fm_raw, _, _) = searchidx::frontmatter::split(&text);
+        // Only markdown has frontmatter. A `.txt`/`.srt`/`.vtt` that happens
+        // to open with `---` is content, not a header — `chunk::parse_file`
+        // gates the split the same way, and skipping this gate here made the
+        // two paths disagree: a `.txt` whose pseudo-frontmatter said
+        // `type: Book Summary` classified `derived` on this path and `source`
+        // on the indexed one.
+        let is_markdown = !(rel.to_lowercase().ends_with(".srt")
+            || rel.to_lowercase().ends_with(".vtt")
+            || rel.to_lowercase().ends_with(".txt"));
+        let fm_raw = if is_markdown { searchidx::frontmatter::split(&text).0 } else { None };
         let fm_present = fm_raw.is_some();
         let fm = fm_raw.map(searchidx::frontmatter::parse).unwrap_or_default();
         let origin = searchidx::origin::derive(&rel, fm_present.then_some(&fm), &opts.source_globs);
