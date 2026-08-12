@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
-use searchidx::{ScanOptions, SearchIndex};
+use searchidx::query::Weights;
+use searchidx::{Limits, ScanOptions, SearchIndex};
 
 fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/corpus")
@@ -15,6 +16,19 @@ fn corpus() -> PathBuf {
 fn open_temp(vault: &Path) -> (tempfile::TempDir, SearchIndex) {
     let d = tempfile::tempdir().unwrap();
     let idx = SearchIndex::open_at(vault, &d.path().join("index.db"), "sync").unwrap();
+    (d, idx)
+}
+
+/// Open + rebuild an index over the corpus with `patterns` as the vault's
+/// configured source globs. The stamp passed to `open_at` is the *same*
+/// `SourceGlobs`'s own stamp, not an independently spelled string — see
+/// `SearchIndex::open`'s doc comment for why those two must never be derived
+/// separately.
+fn open_temp_with_globs(patterns: &[String]) -> (tempfile::TempDir, SearchIndex) {
+    let globs = searchidx::globs::parse(patterns);
+    let d = tempfile::tempdir().unwrap();
+    let mut idx = SearchIndex::open_at(&corpus(), &d.path().join("index.db"), &globs.stamp()).unwrap();
+    idx.rebuild(&ScanOptions { source_globs: globs, ..Default::default() }).unwrap();
     (d, idx)
 }
 
@@ -58,11 +72,30 @@ fn open_temp(vault: &Path) -> (tempfile::TempDir, SearchIndex) {
 /// 一个被整块禁用的过滤器,查询照样召回同一份文件(语料本来就没加过滤时也命中
 /// 它),`expect_path` 单独出现时对此是假阳性。带 `expect_not_path` 的用例
 /// 额外断言该 path 不在返回的命中里。
+///
+/// **第五种断言(task C-T12),`expect_line`。** `.srt`/`.vtt` 的引用契约是
+/// 「时间码被剔出索引文本,但行号仍指向原文件的真实文本行」—— 一个把行号算到
+/// 序号行或时间码行上的分块器,召回断言完全看不出来(文本照样命中),点开却会
+/// 落在一行数字或一串时间码上。带 `expect_line` 的用例额外断言命中的
+/// `Hit::line` 精确等于给定值。
+///
+/// **第六个可选键(task C-T12),`source_globs`。** 转写稿只有被用户的模式指定
+/// 时才进索引(`scan::is_indexable`),「原始资料」与「未标注」的分野也由模式
+/// 决定(`origin::derive` 规则 5′)—— 这两件事在 `ScanOptions::default()`
+/// (空模式集,按 `SourceGlobs` 自己的契约匹配零个文件)下**根本无法表达**。
+/// 带 `source_globs` 的用例跑在一个用该模式单独重建过的索引上;省略该键的用例
+/// (既有 62 条,一字未改)仍跑在默认的空模式索引上。按模式集分组、每组只建一
+/// 次索引,不是每条用例建一次。
+///
+/// **排序权重固定为 `Weights::default()`,而且显式传。** 这份回归集是排序的唯一
+/// 裁判;它若跟着用户配置(`search::options::weights_for_vault`)走就等于没有
+/// 裁判 —— 一个把四档权重全填成 ×1.0 的 vault 会让每一条顺序断言变成同义反复。
+/// 显式走 `search_with_weights`,而不是靠 `SearchIndex::search` 内部恰好也用
+/// 默认值:后者是实现细节,前者是这份 fixture 的前提条件。权重**非**默认时排序
+/// 会跟着变,由下面独立的 `non_default_weights_reorder_the_same_query` 钉住 ——
+/// 那条主张属于「权重真的在起作用」,不属于这份以默认权重为基准的回归集。
 #[test]
 fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
-    let (_d, mut idx) = open_temp(&corpus());
-    idx.rebuild(&ScanOptions::default()).unwrap();
-
     let cases: Vec<serde_json::Value> = serde_json::from_str(
         &std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/retrievability.json"),
@@ -72,10 +105,24 @@ fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
     .unwrap();
     assert!(!cases.is_empty(), "the regression set must not be empty");
 
+    // One index per distinct `source_globs` value, built lazily and reused:
+    // the default (no key at all = empty pattern set) plus whatever the
+    // glob-bearing cases ask for.
+    let mut indexes: Vec<(Vec<String>, (tempfile::TempDir, SearchIndex))> = Vec::new();
+
     let mut failures = Vec::new();
     for case in &cases {
         let q = case["query"].as_str().unwrap();
-        let (hits, route) = idx.search(q, 20).unwrap();
+        let globs: Vec<String> = case["source_globs"]
+            .as_array()
+            .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect())
+            .unwrap_or_default();
+        if !indexes.iter().any(|(g, _)| *g == globs) {
+            indexes.push((globs.clone(), open_temp_with_globs(&globs)));
+        }
+        let idx = &indexes.iter().find(|(g, _)| *g == globs).unwrap().1 .1;
+        let answer = idx.search_with_weights(q, 20, &Limits::full(), &Weights::default()).unwrap();
+        let (hits, route) = (answer.hits, answer.route);
         let seen = |hits: &[searchidx::Hit]| {
             hits.iter().take(3).map(|h| h.path.clone()).collect::<Vec<_>>().join(", ")
         };
@@ -85,13 +132,19 @@ fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
         // claim can only be written as "zero hits", which `expect_path`'s
         // presence check cannot express. See `query.rs`'s
         // `an_unrecognized_origin_value_matches_nothing_not_everything` for
-        // the pure-filter version of the same pin.
+        // the pure-filter version of the same pin. task C-T12 reuses the same
+        // shape for two more "zero hits IS the claim" cases that are not about
+        // failing closed — a transcript outside every source glob must not be
+        // indexed at all, and a file classified `derived` must not also answer
+        // `origin:source` — so the message below states the fixture's own
+        // reason (`why`) rather than assuming the filter-validation one.
         if case["expect_none"].as_bool() == Some(true) {
             if !hits.is_empty() {
                 failures.push(format!(
-                    "  {q:?} → expected no hits (invalid filter must fail closed), got [{}] (route {})",
+                    "  {q:?} → expected no hits, got [{}] (route {}); the case's claim IS the emptiness — {}",
                     seen(&hits),
-                    route.as_str()
+                    route.as_str(),
+                    case["why"].as_str().unwrap_or("(no why recorded)"),
                 ));
             }
             continue;
@@ -107,6 +160,20 @@ fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
             ));
             continue;
         };
+        // A fifth case shape (task C-T12): the transcript chunkers strip
+        // sequence numbers and timecodes out of the indexed text but must
+        // keep every block's line number pointing at the file's real text
+        // line. Recall alone is blind to that — the words are in the block
+        // either way; only the anchor the user clicks is wrong.
+        if let Some(want_line) = case["expect_line"].as_u64() {
+            let got = hits[want_at].line as u64;
+            if got != want_line {
+                failures.push(format!(
+                    "  {q:?} → {want} must be anchored at line {want_line}, got line {got} \
+                     (a timecode or sequence line, or an offset that forgot the body start)"
+                ));
+            }
+        }
         // A fourth case shape (task 6 review round 1): `outranks_path` proves
         // ordering, but a filter case (`origin:human`) needs to prove
         // EXCLUSION, which no positive assertion here can express — a
@@ -152,6 +219,65 @@ fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
 /// contains `text` — see the fixture-format note on the test above).
 fn position_of(hits: &[searchidx::Hit], path: &str, text: Option<&str>) -> Option<usize> {
     hits.iter().position(|h| h.path == path && text.map_or(true, |t| h.text.contains(t)))
+}
+
+/// task C-T12 的第六条新用例:**权重非默认时排序随之改变**。
+///
+/// 这条刻意留在 `retrievability.json` 之外。那份 fixture 的前提条件是
+/// 「排序裁判 = `Weights::default()`」——把一条依赖用户自定义权重的用例塞进去,
+/// 等于在裁判席上再放一个裁判。这里要证的也不是「某份文档应该排在前面」(那是
+/// fixture 的事),而是「`Weights` 这个旋钮真的接在排序上」:C-T7 之前四档乘数
+/// 是 `score_of` 里的字面量,一个把 `weights` 参数收下却继续用字面量的实现,
+/// 设置页会照常保存、照常显示,搜索结果却纹丝不动 —— GUI 侧测不出来,只有
+/// 端到端跑一次两种权重才看得见。
+///
+/// 用 `tieringtoken` 这一组语料(六份正文词数一致、doc_date 相同、raw bm25 精确
+/// 相等的文件,见 fixture 里那条 why),两端各取一极:默认权重下 human ×1.25 的
+/// `notes/…tiering-note.md` 在最前、unlabeled ×0.3 的 `sync/…tiering-mirror.md`
+/// 在最后;把 `unlabeled` 调到 5.0(`Weights::sanitized` 允许的上限),同一个
+/// 索引、同一条查询,两端必须**对调**。断言的是完整的方向翻转,不只是「分数变
+/// 了」——后者一个把权重加进分数却不参与排序的实现也能满足。
+#[test]
+fn non_default_weights_reorder_the_same_query() {
+    let (_d, mut idx) = open_temp(&corpus());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    let paths = |w: &Weights| {
+        idx.search_with_weights("tieringtoken", 20, &Limits::full(), w)
+            .unwrap()
+            .hits
+            .iter()
+            .map(|h| h.path.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let human = "notes/2026-08-05-tiering-note.md";
+    let unlabeled = "sync/2026-08-05-tiering-mirror.md";
+
+    let shipped = paths(&Weights::default());
+    assert_eq!(shipped.first().map(String::as_str), Some(human), "{shipped:?}");
+    assert_eq!(shipped.last().map(String::as_str), Some(unlabeled), "{shipped:?}");
+
+    // Only `unlabeled` moves; every other tier keeps its shipped value, so
+    // nothing but this one knob can explain the flip.
+    let tuned = paths(&Weights { unlabeled: 5.0, ..Weights::default() });
+    assert_eq!(
+        tuned.first().map(String::as_str),
+        Some(unlabeled),
+        "a user-raised `unlabeled` weight must actually reorder retrieval, not just be stored: {tuned:?}"
+    );
+    assert!(
+        tuned.iter().position(|p| p == human).unwrap() > 0,
+        "and the previously-first human hit must have been pushed down: {tuned:?}"
+    );
+    let mut shipped_set = shipped.clone();
+    let mut tuned_set = tuned.clone();
+    shipped_set.sort();
+    tuned_set.sort();
+    assert_eq!(
+        shipped_set, tuned_set,
+        "weights re-rank; they must not change WHICH files are recalled: {shipped:?} vs {tuned:?}"
+    );
 }
 
 /// spec §7:删库重建逐字节一致(同一 tokenizer_id 下)。索引=纯函数的验收形式.

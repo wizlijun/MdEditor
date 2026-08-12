@@ -323,5 +323,43 @@
     "query": "tieringtoken origin:bogus",
     "expect_none": true,
     "why": "task 6 非法 origin: 值必须失败关闭 —— 匹配不到任何行,而不是静默丢弃过滤器、把 tieringtoken 的全部五份语料退回给调用方(那会让调用方误以为自己拿到的是按层过滤过的结果)。见 query.rs 的 an_unrecognized_origin_value_matches_nothing_not_everything"
+  },
+  {
+    "query": "tieringtoken origin:unlabeled",
+    "expect_path": "sync/2026-08-05-tiering-mirror.md",
+    "expect_not_path": "books/2026-08-05-tiering-book.md",
+    "why": "task C-T12 新用例 ④:`origin:unlabeled` 只剩未标注层。这是本次改动对用户承诺的**出口** —— ×0.3 让大量既有笔记从普通搜索里沉底(设计文档 §9 的已知取舍),设置页那一行可点击的统计跑的就是这条查询,它必须真的只返回未标注层。选 books/…tiering-book.md(type: Book → source ×0.9)做排除项,而不是随手挑一份 human:source 是四档里离 unlabeled 最近的一档,也是规则 6′ 之前会把 sync/…mirror.md 判进去的那一档;过滤器若退化成『unlabeled 与 source 同义』,只有这条会红。注意 tieringtoken 组里 unlabeled 只有 sync/…mirror.md 一份,所以 expect_path 与 expect_not_path 合起来就等于『只剩这一层』"
+  },
+  {
+    "query": "它的难点不在存储而在判断",
+    "source_globs": ["transcripts/**"],
+    "expect_path": "transcripts/2026-08-08-retrieval-talk.srt",
+    "expect_line": 3,
+    "why": "task C-T12 新用例 ①:模式命中的 `.srt` 能被**跨字幕条**的句子搜到,且行号落在真实文本行上。查询的这句话在原文件里被切成两条字幕(第 7 行『它的难点不在存储』、第 11 行『而在判断什么值得留下』),任何一条单独成块都匹配不上 —— 只有 transcript.rs 的 TARGET_CHARS 合并把连续字幕并进同一块,这条才可能绿,这也正是收录转写稿的主要动机(见 transcript.rs 的 consecutive_cues_are_merged_so_a_sentence_can_span_them,那是分块器单测,这条是端到端形态:模式 → is_indexable 放行 → 分派到 transcript 分块器 → 进 FTS → 召回)。expect_line 3 是第一条字幕的**文本**行:第 1 行是序号 `1`、第 2 行是时间码,一个把 line_start 算到序号行或时间码行的分块器召回照样全绿(文本进了块),只有点开时才会落错行 —— 所以行号必须单独断言。故意不写成引号短语:短语复核是 `hit.text.contains(短语)` 的字面子串比对,而合并后的块文本在两条字幕之间留着 `\n`,跨条的引号短语因此匹配不上(见 task-12 报告『发现但未修』一节)"
+  },
+  {
+    "query": "outsideglobtoken",
+    "source_globs": ["transcripts/**"],
+    "expect_none": true,
+    "why": "task C-T12 新用例 ②:模式**外**的 `.srt` 一条也搜不到。recordings/2026-08-09-standup.srt 是一份格式完全正常、内容可读的字幕文件,与上一条那份唯一的差别是它不在 `transcripts/**` 里 —— `scan::is_indexable` 的收录白名单只对模式命中的 `.srt`/`.vtt`/`.txt` 放行(`.md` 无条件收录)。这条与上一条成对:上一条只证明『配了模式的转写稿进得来』,一个把三种扩展名无条件放行的实现同样能让它变绿;必须有一份模式外的同类文件断言零命中,白名单才算被钉住。注意本用例跑在**模式非空**的索引上(`transcripts/**` 已配置),所以它证的是『模式在筛选』,不是『没配模式所以什么都没收』"
+  },
+  {
+    "query": "tieringtoken",
+    "source_globs": ["transcripts/**"],
+    "expect_path": "transcripts/2026-08-05-tiering-glob.txt",
+    "outranks_path": "sync/2026-08-05-tiering-mirror.md",
+    "why": "task C-T12 新用例 ③:未标注排在原始资料**之后** —— 规则 5′ 的端到端钉子,C-T2 在 fixture 里预留的那一条(见上面 web/sync 用例 why 结尾『C-T3 给 ScanOptions 接上真实 source_globs 后应当补一条规则 5′ 的对应 E2E 钉子』)。两份文件都没有 frontmatter,唯一差别是 transcripts/…tiering-glob.txt 命中了 `transcripts/**`(规则 5′ → source ×0.9)而 sync/…tiering-mirror.md 没有(规则 6′ → unlabeled ×0.3)。正文逐词对齐既有 tieringtoken 语料的形状(`tieringtoken steady marker content <词>`),doc_date 同为 2026-08-05,raw bm25 相等。方向与 tie-break 相反:写入次序按路径排序,sync < transcripts,平手时先写入的 sync 赢,所以这条只能靠 ×0.9 与 ×0.3 的差值变绿,不会靠运气。已有的 books/sync 那条钉的是 `type: Book` 走规则 4 拿到的 source;这条钉的是**模式**走规则 5′ 拿到的 source,机制不同,两条都要"
+  },
+  {
+    "query": "globsummarytoken origin:derived",
+    "source_globs": ["transcripts/**"],
+    "expect_path": "transcripts/2026-08-08-retrieval-talk-summary.md",
+    "why": "task C-T12 新用例 ⑤:指定目录里的 AI 摘要仍判 AI 产出。这份摘要就躺在 `transcripts/**` 里(它总结的正是同目录那份 .srt,frontmatter 的 sources: 指着它),规则 5′ 会匹配它的路径 —— 但规则 2(`generated.by: claude-code/opus-5`)和规则 4(`type: Book Summary`)都排在 5′ 前面,所以它是 derived,不是 source。这是 origin.rs 的 a_registered_type_beats_a_source_glob / a_generated_stamp_beats_a_source_glob 两条单测的端到端形态:规则顺序若被调换,整个『原始资料目录』会连同里面的 AI 摘要一起降到 ×0.9,而摘要恰恰是最该被读到的那一份"
+  },
+  {
+    "query": "globsummarytoken origin:source",
+    "source_globs": ["transcripts/**"],
+    "expect_none": true,
+    "why": "task C-T12 新用例 ⑤ 的另一半。上一条只证明摘要**在** derived 层;一个把文件同时记进两层(或把 origin: 过滤器退化成不过滤)的实现照样能让它绿。globsummarytoken 只出现在这一份文件里,所以 `origin:source` 必须零命中 —— 它若还在 source 层,这条立刻红。与既有 `tieringtoken origin:bogus` 那条同为『零命中即主张』的形状,但证的是分类而不是失败关闭"
   }
 ]
