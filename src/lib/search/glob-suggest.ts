@@ -31,21 +31,43 @@ export interface GlobCandidate {
  *      (`ebook/**`)
  *
  * This is a fixed three-rung ladder, not a formal narrow-is-a-subset-of-wide
- * chain — rung 1 and rung 2 aren't directly comparable (one trades directory
- * breadth for a file-type filter) and in an unusual layout rung 2 could in
- * principle match more files than rung 3's own directory alone would if that
- * directory were smaller than expected. In the layouts this feature targets
- * (a source-material folder holding one kind of import) the ladder reads
- * narrow-to-wide in practice, and design spec §7.1's own worked example
- * (12 / 340 / 1,204 files) is exactly this shape.
+ * chain. Rung 2 IS a strict subset of rung 3 for any vault — same top-level
+ * directory, with rung 2 adding a trailing extension constraint rung 3
+ * doesn't have — so that pair always orders narrow-to-wide by real match
+ * count too. Rung 1 vs rung 2 is the pair that is NOT comparable: rung 1 is
+ * the file's own directory with no type filter, rung 2 is the *top*
+ * directory with a type filter, and neither is a subset of the other. This
+ * is not an edge case — it's the core scenario this feature exists for: a
+ * mixed-media import folder like `imports/session1/{a.mp3,b.png,c.docx,
+ * d.srt}` alongside `imports/{other-notes.md,logs.txt}` gives rung 1
+ * (`imports/session1/**`) 4 files and rung 2 (`imports/**\/*.srt`) 1 file —
+ * rung 1 is *wider* there, by real count, in an ordinary transcript-import
+ * layout. The candidates are still presented narrow-to-wide by **scope**
+ * (each rung is a deliberate, nameable restriction, strictly looser than
+ * the last in what it constrains), not sorted by whichever happens to match
+ * fewer files in a given vault — C-T11's UI must not promise ascending
+ * counts. Design spec §7.1's own worked example (12 / 340 / 1,204 files)
+ * happens to have ascending counts too, but that's a property of that one
+ * example vault, not a guarantee this function makes.
  *
- * **The caller default-selects rung 1, the narrowest.** That default is a
- * deliberate asymmetry, not a coin flip: writing the pattern too narrow is
+ * Rung 2 (`top-dir + this extension`) is kept as its own candidate rather
+ * than collapsed into a strict `rung2 ⊂ rung3 ⊂ ...` chain — dropping it
+ * would lose "the top directory, restricted to this file type", which is
+ * usually the single most useful candidate for a transcript-import folder
+ * that also holds other file types.
+ *
+ * **The caller default-selects rung 1.** That default holds regardless of
+ * which rung turns out to match fewer files in a given vault (see the
+ * `imports/session1` example above, where rung 1 matches more than rung 2)
+ * — what makes rung 1 the right default is that it is the most
+ * *intentional* scope (exactly the directory the pasted sample lives in),
+ * not that it is the smallest number. And the asymmetry in failure modes
+ * still favors it either way: writing the pattern too narrow is
  * self-correcting — the user notices results are missing and widens it —
- * whereas writing it too wide fails silently, quietly pulling thousands of
- * unrelated files into the index with no symptom for the user to notice at
- * all. When the failure modes are that lopsided, default to the one a human
- * will actually catch.
+ * whereas writing it too wide fails silently, quietly pulling unrelated
+ * files into the index with no symptom for the user to notice at all. When
+ * the failure modes are that lopsided, default to the one a human will
+ * actually catch.
  *
  * Candidates that collapse to the same string (a single-level path makes
  * rung 1 and rung 3 identical — both reduce to `<dir>/**`) are deduped,
@@ -53,9 +75,22 @@ export interface GlobCandidate {
  */
 export function suggestGlobs(samplePath: string): GlobCandidate[] {
   const normalized = samplePath.replace(/\\/g, '/').replace(/^\/+/, '')
-  const segments = normalized.split('/').filter((s) => s.length > 0)
+  // Drop empty segments (collapses `//`, and a leading/trailing `/`) AND `.`
+  // segments (a leading `./`, or an internal `/./`, both ordinary artifacts
+  // of `find .` and several path-copy tools). Left unstripped, a leading
+  // `./` would survive into every candidate as a literal path segment —
+  // vault-relative paths the backend walks never have one, so the resulting
+  // patterns would match nothing, including the very file just pasted.
+  const segments = normalized.split('/').filter((s) => s.length > 0 && s !== '.')
   if (segments.length === 0) return []
 
+  // NOTE: a trailing slash (`suggestGlobs('ebook/三体/')`) is not detected as
+  // "this is a directory, not a file" — the empty-segment filter above drops
+  // it, so the last real segment (`三体`) is read as an extension-less
+  // filename, producing `['ebook/**']` rather than a `三体`-anchored ladder.
+  // Harmless (still non-empty, still self-matching, never mismatches its own
+  // sample), just not the ladder a directory paste would deserve — out of
+  // scope here since every caller today pastes a file path, not a directory.
   const dirs = segments.slice(0, -1)
   const filename = segments[segments.length - 1]
   const dotIndex = filename.lastIndexOf('.')

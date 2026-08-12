@@ -39,4 +39,14 @@ describe('suggestGlobs', () => {
     const s = suggestGlobs('ebook\\三体\\book.md')
     expect(s.map((x) => x.pattern)).toEqual(['ebook/三体/**', 'ebook/**/*.md', 'ebook/**'])
   })
+
+  it('前导 ./ 不留在候选里(review round 1, Important #1)', () => {
+    // `find .` and several path-copy tools routinely prefix a pasted path
+    // with `./`. Left unstripped, every candidate would carry a literal `.`
+    // segment that no vault-relative path the backend walks ever has — the
+    // candidates would report 0 matches each, including for the exact file
+    // just pasted. Must equal the un-prefixed sample's candidates exactly.
+    const s = suggestGlobs('./ebook/三体/book.md')
+    expect(s.map((x) => x.pattern)).toEqual(['ebook/三体/**', 'ebook/**/*.md', 'ebook/**'])
+  })
 })
