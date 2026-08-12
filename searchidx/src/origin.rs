@@ -4,13 +4,21 @@
 //! design.md`, §3 — that document's rule table, 5′/6′, is what the code
 //! below implements).
 //!
-//! `origin` classifies every indexed `.md` file into one of four tiers so
+//! `origin` classifies every indexed file into one of four tiers so
 //! later ranking can weigh "what you wrote" above "what an agent produced"
 //! above "raw material an agent has to read" above "nobody has said who
 //! wrote this" (CLAUDE.md belief 1). It is **derived at index time and never
 //! written back to the file** (belief 2, file-over-app) — the vault's
 //! frontmatter stays exactly what its author wrote; `origin` only ever lives
 //! in the index row.
+//!
+//! "Every indexed file", not just `.md`: since C-T4/C-T5, `chunk::parse_file`
+//! also calls `derive` for `.srt`/`.vtt`/`.txt`. Those arrive with `None`
+//! frontmatter by construction (they have none to parse — see the format
+//! dispatch in `chunk::parse_file`), and they are only ever indexed *inside*
+//! a source glob, so rule 5′ necessarily fires before rule 6′ can: a
+//! transcript is always `Source`, never `Unlabeled`. Spec §3 states that as
+//! an invariant; it is a consequence of the scan gate, not a rule here.
 //!
 //! §3's rule table is ordered and **first match wins**. The order below must
 //! match the spec table exactly; each rule below carries the rationale for

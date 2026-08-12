@@ -130,9 +130,12 @@ fn an_unusable_index_degrades_to_a_direct_scan_and_still_exits_zero() {
 /// before this, `fallback_scan`'s hardcoded `Origin::Derived` was inert
 /// (score stays 0.0 on this path; `score_of` is never called). Left alone,
 /// the no-index path would report `derived` for exactly the kind of
-/// frontmatter-less file the indexed path reports `source` for (rule 6:
-/// "a bare `.md` with no frontmatter... judges source, not derived" —
-/// `origin.rs`'s own doc comment). `fallback_scan` has `opts.source_globs`
+/// frontmatter-less file the indexed path classifies by a rule of its own.
+/// (When Task 6 wrote this, that rule was rule 6 and the answer was `source`;
+/// under the 2026-08-12 design's rule 6′ the same file is `unlabeled`, which
+/// is what the paragraph below and the assertions actually check. Either way
+/// the divergence is the point: the fallback must not answer `derived` just
+/// because it skipped the classifier.) `fallback_scan` has `opts.source_globs`
 /// available (plumbed for this exact purpose, as of C-T3) but no
 /// `Frontmatter`, so it must parse one itself via the same `origin::derive`
 /// the indexed path uses — not merely document the divergence.

@@ -10,6 +10,15 @@
 > 落这份文档的原因:上述判断原本只存在于 gitignored 的 SDD ledger 里,
 > 而那个 worktree 已经关闭。
 
+> **更新(2026-08-12,「原始资料模式 + 转写收录」项目终审)。**
+> 本文写于规则 6(缺 frontmatter ⇒ 原始资料)还生效的时候。该规则已被
+> **规则 5′/6′** 取代:「原始资料」由**用户指定的通配模式**判定,缺 frontmatter
+> 且未命中模式的文件进新的第 4 层**「未标注」(×0.3)**。规范表见
+> `docs/superpowers/specs/2026-08-12-source-globs-and-transcript-indexing-design.md` §3;
+> 用户视角的说明见 `docs/2026-08-12-search-tiering-release-note.md`。
+> 下文受影响的条目已就地改正,**不再保留旧表述** —— 这份文档的用途是
+> 「改这块代码前先读」,留着旧句子等于给未来的人一个假前提。
+
 ## 1. 尚未进行的人工验证(优先级最高)
 
 这三份清单**一条都没跑过**,而合并后的搜索面板同时包含两个会话各自改的 UI,
@@ -25,15 +34,27 @@
 升级后**首次启动会重建一次索引**(`SCHEMA_VERSION` 1→2,约 10 秒,不丢数据)。
 这是设计路径,不是故障;写 release note 时值得单独提一句。
 
+> 2026-08-12 更新:本项目又把 `SCHEMA_VERSION` 推到了 **3**(多了「未标注」层与
+> `srt`/`vtt`/`txt` 扩展名),所以从 v6.812.1 升上来还会再重建一次。已按裁决
+> 写进 `docs/2026-08-12-search-tiering-release-note.md`。
+> 本项目的 GUI 验收清单(spec §9「人工(GUI)」4 条)同样**尚未跑过**。
+
 ## 2. 已知会被用户撞见的行为(均已裁决,非缺陷)
 
-- **没有 frontmatter 的人工笔记会被判成「原始资料」吃 ×0.9**,可能排在 AI 摘要之后。
-  规则 6 的刻意误判,理由见 tiering spec §3.2;修正手段是给文件加 frontmatter,不是改权重。
+- **没有 frontmatter 的人工笔记会被判成「未标注」吃 ×0.3**,大概率被挤出前 20 条。
+  规则 6′ 的刻意强降权(2026-08-12 spec §3.1),不是误判而是压力设计;出口是
+  设置页可点的「未标注」统计行 + `origin:unlabeled`,修正手段是给文件加任意
+  frontmatter(那个文件会自己重新分层,不重建),或者改权重。
+  真实 vault 上这不是尾部情况:8,971 个文件里 5,349 个(59.6%)在此层。
+  (原文写的是「判成『原始资料』吃 ×0.9」—— 那是规则 6 的行为,已作废。)
 - **中间层分组标题是英文原始类型名**(`BOOK SUMMARY`、`ANSWER`),中日德界面下混排。
   经用户拍板照 spec §5 保留。若日后要改,做法是给注册类型加 i18n 键、原始串兜底,
   这样 spec 里「插件加类型不改代码就自动多一组」的承诺仍然成立。
-- **改 `syncDir` 会触发一次完整重建**(约 10 秒搜索不可用)。盖章设计的必然代价,
-  只有真正改了值才付。
+- **改「原始资料模式」会触发一次完整重建**(约 10 秒搜索不可用)。盖章设计的
+  必然代价,只有真正改了语义才付 —— 顺序、空白、首尾斜杠、重复行、`*.SRT` 与
+  `*.srt` 都会规范化成同一个 stamp,不算改动。**改权重不重建**(查询时才乘)。
+  (`syncDir` 自规则 5′ 起不再参与分层,因而也不再是重建触发条件;它只在
+  首次升级时被用来种一条 `<syncDir>/**` 默认模式。)
 
 ## 3. 遗留的小项(按性价比排序)
 
@@ -52,10 +73,13 @@
 
 **可以一直放着:**
 
-- `searchidx/src/origin.rs` 的 sync_dir 匹配是**大小写与分隔符字面**的
-  (`Sync/a.md` 不匹配 `sync`)。写入侧 `validate_rel_dir` 已规范化,最坏是一层判错,
-  改回目录名即自愈。
-- `origin.rs` 与 `scan.rs` 的目录前缀匹配器逐字重复三行,两处各有自己的负向测试。
+- 模式匹配是**大小写字面**的(`Sync/a.md` 不匹配 `sync/**`),现在住在
+  `searchidx/src/globs.rs`,不再是 `origin.rs` 里的 sync_dir 前缀比较。
+  兜底是设置页保存时的「命中 0 个文件」提示。**唯一的例外是扩展名过滤器**:
+  `*.srt` 也匹配 `B.SRT`(与 `scan.rs` 的收录闸门保持一致,理由见 `globs.rs`
+  模块注释)。
+- `scan.rs` 的排除目录仍用自己的目录前缀匹配器;`globs.rs` 按段匹配,`/` 边界
+  是从表示法里免费得到的。两处各有自己的负向测试。
 - `src-tauri/src/search/mod.rs` 两处测试字面量改用了 `..Default::default()`,
   丢掉了「新增 `ScanOptions` 字段必须逐点确认」的编译期守卫 —— 而正是那个编译错误
   在本次暴露了这两处。下次动那两行时顺手恢复。
@@ -73,9 +97,14 @@
   `a_hits_concept_type_round_trips_through_the_real_index` 这两条端到端测试,
   **不要弱化它们**:排序测试和 50 条回归集在列位移下都保持绿。
 - **`origin::derive` 的 `Some(&Frontmatter::default())` 不等于 `None`**。
-  调用方若已把「没有 frontmatter」塌缩成「空 frontmatter」,规则 6 就永不命中,
-  所有无 frontmatter 的文件会判成 `Derived` 而非 `Source`,方向整个反过来。
+  调用方若已把「没有 frontmatter」塌缩成「空 frontmatter」,规则 6′ 就永不命中,
+  所有无 frontmatter 的文件会判成 `Derived` 而非 `Unlabeled`,方向整个反过来。
+- **只有 markdown 走 `frontmatter::split`**。`.srt`/`.vtt`/`.txt` 没有 frontmatter
+  这一步(spec §4.2/§4.3);无条件剥离会吃掉以 `---` 开头的正文,并让那段里的
+  `type:` 行经规则 4 越过规则 5′。见 `chunk::parse_file` 的格式分派。
 - **`notemd search` 默认输出必须逐字保持 `path:line:text`**,agent 按行解析它。
   分组是纯 UI 的事。
 - **`retrievability.json` 的期望值不得照着新输出批量刷新**,每条变更须单独裁决。
-- **`sync_dir` 不匹配走原地重建,绝不 unlink** —— GUI 可能正握着活的 WAL 连接。
+- **模式盖章(`SourceGlobs::stamp()`)不匹配走原地重建,绝不 unlink** ——
+  GUI 可能正握着活的 WAL 连接。(盖章的对象自 C-T6/C-T8 起是原始资料模式,
+  不再是 `sync_dir`;行数断言分不出 unlink 与原地重建,钉住它的是 inode 断言。)
