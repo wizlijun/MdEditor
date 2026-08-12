@@ -175,8 +175,33 @@ impl SearchIndex {
         limits: &Limits,
         weights: &query::Weights,
     ) -> Result<Answer, String> {
+        self.search_ranked(raw, limit, limits, weights, &query::Conventions::default())
+    }
+
+    /// [`Self::search_with_weights`], plus what the ranking needs to know
+    /// about this vault's conventions — today just `wikipageDir`, which is
+    /// what lets the page a `[[…]]` link would create be pinned above
+    /// everything else when the query names it exactly (wikipage priority
+    /// spec §4).
+    ///
+    /// A fourth sibling method rather than a parameter on `search_with_
+    /// weights`, for the same reason `search_with_weights` was a sibling of
+    /// `search_with`: callers who have no vault settings in hand — tests, and
+    /// anything that just wants "the shipped behaviour" — must not have to
+    /// learn about `Conventions` to keep compiling. `Conventions::default()`
+    /// (no directory, so no pinning) is the honest answer for them: a caller
+    /// that cannot know the user's directory name must not guess one.
+    pub fn search_ranked(
+        &self,
+        raw: &str,
+        limit: usize,
+        limits: &Limits,
+        weights: &query::Weights,
+        conventions: &query::Conventions,
+    ) -> Result<Answer, String> {
         let q = query::parse(raw);
-        query::search_with(&self.conn, &q, limit, &today(), limits, weights).map_err(|e| e.to_string())
+        query::search_with(&self.conn, &q, limit, &today(), limits, weights, conventions)
+            .map_err(|e| e.to_string())
     }
 
     pub fn stats(&self) -> Result<IndexStats, String> {

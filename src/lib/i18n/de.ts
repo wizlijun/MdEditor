@@ -494,6 +494,7 @@ export const de: Record<keyof Messages, string> = {
   // Abgesehen von den beiden Polen wird die Gruppenüberschrift für benannte
   // Typen direkt aus dem rohen concept_type-String übernommen und nicht
   // übersetzt (siehe src/lib/search/grouping.ts).
+  'search.group.pinned': 'Wiki-Seite',
   'search.group.human': 'Von dir geschrieben',
   'search.group.source': 'Rohes Quellmaterial',
   'search.group.unlabeled': 'Nicht gekennzeichnet',

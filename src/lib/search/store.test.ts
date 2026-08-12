@@ -8,7 +8,7 @@ describe('searchStore', () => {
     _setSearchImpl(async () => ({ route: 't1-fts', tookMs: 3, total: 1, truncated: false, deepAvailable: false, hits: [
       { path: 'a.md', absPath: '/v/a.md', line: 2, lineEnd: 2, text: 'x', breadcrumb: '',
         level: 'line', score: 0.5, docDate: null, sourceRef: 'a.md#L2', agentBy: null, humanVerified: false,
-        origin: 'derived', conceptType: null },
+        origin: 'derived', conceptType: null, pinned: false },
     ] }))
     await searchStore.run('x')
     expect(searchStore.hits.length).toBe(1)

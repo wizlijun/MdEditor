@@ -57,6 +57,33 @@ pub struct Hit {
     /// purely for UI grouping (task B-T7, design spec §5) — ranking never
     /// reads it, `origin` already encodes what ranking needs.
     pub concept_type: Option<String>,
+    /// This hit's file is the wikilink page the query names exactly, so it
+    /// sorts ahead of every other hit regardless of score (wikipage priority
+    /// spec §4). Computed per query from [`Conventions`], never stored — the
+    /// directory it depends on is a setting the user can rename at any time.
+    ///
+    /// Deliberately a property of the FILE, not of the block: if the page's
+    /// body also matches, `drop_redundant_rollups` keeps a Line-level hit and
+    /// discards the File-level one, and a pin attached only to the File block
+    /// would vanish with it.
+    pub pinned: bool,
+}
+
+/// What the ranking needs to know about this vault's *conventions* — as
+/// opposed to [`Limits`] (what a caller will spend) and [`Weights`] (ranking
+/// arithmetic).
+///
+/// Passed per query rather than stored in the index on purpose: every field
+/// here is a user-editable setting, and baking one into the index would mean
+/// renaming a directory silently produced wrong answers until the next full
+/// rebuild. `renaming_the_wikipage_dir_takes_effect_without_reindexing` in
+/// `tests/acceptance.rs` is the nail in that decision.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Conventions {
+    /// The vault's `wikipageDir` setting — the directory `[[…]]` links create
+    /// pages in. `None` disables pinning entirely, which is what every
+    /// caller that has no vault settings in hand (tests, `search`) gets.
+    pub wikipage_dir: Option<String>,
 }
 
 impl Hit {
@@ -238,10 +265,12 @@ pub fn search(
     limit: usize,
     today: &str,
 ) -> rusqlite::Result<(Vec<Hit>, Route)> {
-    let a = search_with(conn, q, limit, today, &Limits::full(), &Weights::default())?;
+    let a =
+        search_with(conn, q, limit, today, &Limits::full(), &Weights::default(), &Conventions::default())?;
     Ok((a.hits, a.route))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn search_with(
     conn: &Connection,
     q: &Query,
@@ -249,6 +278,7 @@ pub fn search_with(
     today: &str,
     limits: &Limits,
     weights: &Weights,
+    conventions: &Conventions,
 ) -> rusqlite::Result<Answer> {
     // Installed for the whole call and removed on every exit path (including
     // `?`) by the guard's Drop — a progress handler left behind on this
@@ -256,7 +286,7 @@ pub fn search_with(
     // usually the watcher's sweep or a rebuild.
     let _guard = ProgressGuard::install(conn, limits.abort.clone())?;
 
-    let (hits, truncated) = fts_search(conn, q, limit, today, weights)?;
+    let (hits, truncated) = fts_search(conn, q, limit, today, weights, conventions)?;
     if !hits.is_empty() || truncated {
         return Ok(Answer { hits, route: Route::Fts, truncated, deep_available: false });
     }
@@ -280,7 +310,7 @@ pub fn search_with(
         // into `Route::Fts` would tell a caller (the CLI's `--json` output,
         // read by agents deciding whether a query was exhaustively tried)
         // that no fallback was attempted when one was.
-        let (hits, truncated) = like_search(conn, q, limit, today, weights)?;
+        let (hits, truncated) = like_search(conn, q, limit, today, weights, conventions)?;
         return Ok(Answer { hits, route: Route::Scan, truncated, deep_available: false });
     }
     // A query with at least one filter (`origin:`, `type:`, `tag:`, …) but no
@@ -301,7 +331,7 @@ pub fn search_with(
     // (no terms, no phrases, no filters) still falls through to the empty
     // `Answer` below, unchanged.
     if q.terms.is_empty() && q.phrases.is_empty() && has_filters(q) {
-        let (hits, truncated) = filter_only_search(conn, q, limit, today, weights)?;
+        let (hits, truncated) = filter_only_search(conn, q, limit, today, weights, conventions)?;
         return Ok(Answer { hits, route: Route::Fts, truncated, deep_available: false });
     }
     Ok(Answer { hits: Vec::new(), route: Route::Fts, truncated: false, deep_available: false })
@@ -388,12 +418,18 @@ fn match_expr(q: &Query) -> Option<String> {
 // `f.origin` (index 10) is deliberately last of the "stable" columns, and
 // `f.concept_type` (index 11) is appended AFTER it — not inserted in the
 // middle — so neither this column's position nor any earlier one moves
-// again if a future column is added. Both callers append their own `rank`
-// column after everything here: index 12 in `fts_search`. `is_annotation`
-// (index 9) is unchanged from before `origin`/`concept_type` were added.
+// again if a future column is added. `f.title` (index 12) follows the same
+// rule, appended after `concept_type` rather than slotted next to the other
+// `files` columns. Both callers append their own `rank` column after
+// everything here: index 13. `is_annotation` (index 9) is unchanged from
+// before `origin`/`concept_type`/`title` were added.
+//
+// `f.title` is read into `finish`'s row tuple, NOT into `Hit` — pinning is
+// the only consumer and it has no business widening the public hit shape
+// (same treatment `is_annotation` already gets).
 const SELECT_COLS: &str = "f.path, b.line_start, b.line_end, b.text, b.breadcrumb, b.level, \
                            f.doc_date, b.agent_by, f.human_verified, b.is_annotation, f.origin, \
-                           f.concept_type";
+                           f.concept_type, f.title";
 
 /// Drain a row iterator, treating an abort as "stop here" rather than an
 /// error. Returns the rows collected and whether the drain was cut short.
@@ -417,10 +453,18 @@ fn fts_search(
     limit: usize,
     today: &str,
     weights: &Weights,
+    conventions: &Conventions,
 ) -> rusqlite::Result<(Vec<Hit>, bool)> {
     let Some(expr) = match_expr(q) else { return Ok((Vec::new(), false)) };
     let mut sql = format!(
-        "SELECT {SELECT_COLS}, bm25(blocks_fts, 1.0, 2.0) AS rank
+        // Column weights, in `blocks_fts`'s declared order: `tok_text`,
+        // `tok_breadcrumb`, `tok_title`. The title's 4.0 is the point of
+        // giving it its own column at all — appended to `tok_text` instead it
+        // would share that column's length normalization with the whole
+        // document body, and a File-level block's body is the entire file, so
+        // a name match would be diluted to near-nothing on exactly the long
+        // documents where finding a file by its name matters most.
+        "SELECT {SELECT_COLS}, bm25(blocks_fts, 1.0, 2.0, 4.0) AS rank
          FROM blocks_fts
          JOIN blocks b ON b.id = blocks_fts.rowid
          JOIN files f ON f.id = b.file_id
@@ -433,10 +477,10 @@ fn fts_search(
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-        Ok((row_to_hit(r)?, r.get::<_, f64>(12)?, r.get::<_, i64>(9)? != 0))
+        Ok((row_to_hit(r)?, r.get::<_, f64>(13)?, r.get::<_, i64>(9)? != 0, r.get(12)?))
     })?;
     let (rows, truncated) = drain(rows)?;
-    Ok((finish(rows, q, limit, today, weights)?, truncated))
+    Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
 }
 
 fn like_search(
@@ -445,6 +489,7 @@ fn like_search(
     limit: usize,
     today: &str,
     weights: &Weights,
+    conventions: &Conventions,
 ) -> rusqlite::Result<(Vec<Hit>, bool)> {
     // Every term and phrase must constrain the scan, ANDed — the same
     // contract the FTS path gives via `match_expr`. Binding only the first
@@ -477,10 +522,10 @@ fn like_search(
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-        Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0))
+        Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0, r.get(12)?))
     })?;
     let (rows, truncated) = drain(rows)?;
-    Ok((finish(rows, q, limit, today, weights)?, truncated))
+    Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
 }
 
 /// `search_with`'s handling for a query that has filters (`origin:`, `type:`,
@@ -545,6 +590,10 @@ fn filter_only_search(
     limit: usize,
     today: &str,
     weights: &Weights,
+    // Threaded for uniformity with the other two retrieval paths, never
+    // load-bearing here: a filter-only query has no term or phrase to be
+    // "the page for", so `pin_keyword` refuses it twice over.
+    conventions: &Conventions,
 ) -> rusqlite::Result<(Vec<Hit>, bool)> {
     let mut sql = format!(
         "SELECT {SELECT_COLS}
@@ -560,10 +609,10 @@ fn filter_only_search(
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-        Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0))
+        Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0, r.get(12)?))
     })?;
     let (rows, truncated) = drain(rows)?;
-    Ok((finish(rows, q, limit, today, weights)?, truncated))
+    Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
 }
 
 fn escape_like(s: &str) -> String {
@@ -676,18 +725,25 @@ fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<Hit> {
         origin: crate::store::origin_of(origin_raw.as_deref()),
         concept_type,
         score: 0.0,
+        // Set by `finish`, which is where the query and the vault's
+        // conventions are both in scope; a row on its own cannot know.
+        pinned: false,
     })
 }
 
 fn finish(
-    rows: Vec<(Hit, f64, bool)>,
+    rows: Vec<(Hit, f64, bool, Option<String>)>,
     q: &Query,
     limit: usize,
     today: &str,
     weights: &Weights,
+    conventions: &Conventions,
 ) -> rusqlite::Result<Vec<Hit>> {
+    // Resolved once for the whole result set, not per row: both halves depend
+    // only on the query and the settings.
+    let pin = pin_keyword(q).zip(conventions.wikipage_dir.as_deref());
     let mut out: Vec<Hit> = Vec::new();
-    for (mut hit, rank, is_annotation) in rows {
+    for (mut hit, rank, is_annotation, title) in rows {
         // A quoted phrase means "these words, in this order". The index stores
         // OVERLAPPING tokens, so FTS can only tell us the words are all present
         // — adjacency has to be rechecked against the stored text.
@@ -699,13 +755,75 @@ fn finish(
             }
             phrase_exact = true;
         }
-        hit.score = score_of(rank, &hit, is_annotation, phrase_exact, today, weights);
+        let mention = linked_mention(&hit.text, q);
+        hit.score = score_of(rank, &hit, is_annotation, phrase_exact, mention, today, weights);
+        hit.pinned =
+            pin.is_some_and(|(kw, dir)| is_the_named_wikipage(&hit.path, title.as_deref(), kw, dir));
         out.push(hit);
     }
     let mut out = drop_redundant_rollups(out);
-    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    // Pinned first, then by score. A comparison, not a huge multiplier: the
+    // whole point of "硬置顶" is that no combination of bm25 and boosts can
+    // outrun it, which a multiplier — however large — cannot promise.
+    out.sort_by(|a, b| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
+    });
     out.truncate(limit);
     Ok(out)
+}
+
+/// The single keyword this query is "the page for", if it is one at all.
+///
+/// `None` for anything with a filter or more than one term/phrase (wikipage
+/// priority spec §4): 「张三 电话」 is a search, not a request to open 张三's
+/// page, and a pin that jumped the queue there would be插队 rather than help.
+/// A quoted single phrase counts — `"张三"` is the same intent typed more
+/// carefully.
+fn pin_keyword(q: &Query) -> Option<&str> {
+    let filtered = !q.tags.is_empty()
+        || !q.types.is_empty()
+        || !q.paths.is_empty()
+        || !q.exts.is_empty()
+        || !q.origins.is_empty()
+        || !q.pages.is_empty()
+        || q.after.is_some()
+        || q.before.is_some();
+    if filtered {
+        return None;
+    }
+    let kw = match (q.terms.as_slice(), q.phrases.as_slice()) {
+        ([t], []) | ([], [t]) => t.trim(),
+        _ => return None,
+    };
+    (!kw.is_empty()).then_some(kw)
+}
+
+/// Is `path` the wikilink page named exactly `keyword`?
+///
+/// Matches on the filename stem OR the frontmatter title, because a page
+/// created by clicking a `[[…]]` keeps the display name in `title` and a
+/// slugged version in the filename (`src/lib/outline/create.ts`) — checking
+/// only the filename would leave that entire class of pages unpinnable.
+///
+/// Equality, never containment: `[[张三]]` and `[[张三的项目]]` are two
+/// different pages, and only one of them is "the page for 张三". (The ×1.5
+/// mention boost in `linked_mention` deliberately goes the other way — that
+/// one ranks, this one jumps the queue, and a queue-jump has to be exact.)
+fn is_the_named_wikipage(path: &str, title: Option<&str>, keyword: &str, dir: &str) -> bool {
+    // A `dir` of `""` would make `starts_with` true for every path in the
+    // vault, pinning any file whose name matches — fail closed instead.
+    if dir.is_empty() || !path.starts_with(dir) || path.as_bytes().get(dir.len()) != Some(&b'/') {
+        return false;
+    }
+    // `to_lowercase` rather than `eq_ignore_ascii_case`: vault names are
+    // routinely non-ASCII, and a case fold that silently stops working
+    // outside ASCII is the kind of half-measure that looks fine in tests
+    // written in English.
+    let want = keyword.trim().to_lowercase();
+    let same = |s: &str| s.trim().to_lowercase() == want;
+    crate::chunk::stem(path).is_some_and(|s| same(&s)) || title.is_some_and(same)
 }
 
 /// Multi-granularity indexing (design spec §3.3) means the same words can
@@ -748,6 +866,43 @@ fn drop_redundant_rollups(hits: Vec<Hit>) -> Vec<Hit> {
     hits.into_iter().zip(removed).filter_map(|(h, r)| (!r).then_some(h)).collect()
 }
 
+/// True when any of the query's terms or phrases appears inside a `[[…]]`
+/// wikilink's target in `text` (wikipage priority spec §5).
+///
+/// **Substring, not equality, and deliberately so** — this口径 was the
+/// explicitly chosen half of a two-way decision at design time: searching
+/// 「张三」 must also reward a block linking `[[张三的项目]]`. Do not "tighten"
+/// this to an equality check; `a_wikilink_target_merely_containing_the_term_
+/// still_counts` exists to make that change go red.
+///
+/// Only the target half of `[[target|display]]` counts: `[[项目|张三]]` points
+/// at 项目, and treating its display text as a link to 张三 would credit a
+/// link that does not exist.
+///
+/// Parsing goes through `links::extract` rather than a second `[[`-scanner
+/// written here, so this and the `links` table can never disagree about what
+/// a wikilink is. `extract` also collects `[](…)` markdown links, which are
+/// filtered out below — a little wasted work in exchange for one definition
+/// of the syntax.
+fn linked_mention(text: &str, q: &Query) -> bool {
+    let needles: Vec<String> = q
+        .terms
+        .iter()
+        .chain(q.phrases.iter())
+        .map(|t| t.trim().to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if needles.is_empty() {
+        return false;
+    }
+    crate::links::extract(text, 1).iter().any(|l| {
+        l.kind == "wiki" && {
+            let target = l.target.to_lowercase();
+            needles.iter().any(|n| target.contains(n.as_str()))
+        }
+    })
+}
+
 /// Coarseness order for the containment tie-break above: Line is the finest
 /// resolution, File the coarsest (design spec §3.3's own ordering).
 fn level_rank(level: &str) -> u8 {
@@ -777,12 +932,24 @@ fn score_of(
     hit: &Hit,
     is_annotation: bool,
     phrase_exact: bool,
+    linked_mention: bool,
     today: &str,
     weights: &Weights,
 ) -> f64 {
     let mut r = if rank < 0.0 { -rank } else { 0.001 };
     if phrase_exact {
         r *= 1.3;
+    }
+    // The wikipage priority spec's §5. A product claim, not a tuned number:
+    // a block where someone bothered to write `[[张三]]` is about 张三 in a
+    // way a block that merely says the words is not. Deliberately NOT gated
+    // on the query being a single keyword (unlike the pin in `pinned_by`) —
+    // "find me 张三's phone number" is exactly when the linked mention should
+    // win. Fires at most once per hit, however many links match: this
+    // rewards "was it linked", and multiplying per matched term would let a
+    // long query run the boost away.
+    if linked_mention {
+        r *= 1.5;
     }
     if hit.level == "file" || hit.level == "section" {
         r *= 1.2;
@@ -1052,12 +1219,12 @@ mod tests {
     fn a_shallow_query_never_pays_for_the_scan_fallback_but_says_it_is_available() {
         let (_d, c) = indexed(&[("both.md", "target 会见了李慕白同志\n")]);
         let shallow = Limits { deep: false, abort: None };
-        let a = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &shallow, &Weights::default()).unwrap();
+        let a = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &shallow, &Weights::default(), &Conventions::default()).unwrap();
         assert_eq!(a.route.as_str(), "t1-fts", "the fallback must not have run");
         assert!(a.hits.is_empty());
         assert!(a.deep_available, "the caller has to be able to offer the deep search");
 
-        let deep = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &Limits::full(), &Weights::default()).unwrap();
+        let deep = search_with(&c, &parse("target 慕"), 20, "2026-08-10", &Limits::full(), &Weights::default(), &Conventions::default()).unwrap();
         assert_eq!(deep.route.as_str(), "t1-scan");
         assert_eq!(deep.hits.len(), 1, "{:?}", deep.hits);
         assert!(!deep.deep_available, "it already ran; there is nothing left to offer");
@@ -1101,14 +1268,14 @@ mod tests {
                 true
             })),
         };
-        let a = search_with(&c, &parse("慕"), 20, "2026-08-10", &limits, &Weights::default()).unwrap();
+        let a = search_with(&c, &parse("慕"), 20, "2026-08-10", &limits, &Weights::default(), &Conventions::default()).unwrap();
         assert!(calls.load(std::sync::atomic::Ordering::Relaxed) > 0, "abort was never consulted");
         assert!(a.truncated, "an aborted retrieval must say so, not pose as a complete answer");
 
         // And the handler must not outlive the call: the next caller through
         // this connection is usually the watcher's sweep or a rebuild, and an
         // always-true abort left installed would kill it.
-        let after = search_with(&c, &parse("慕"), 20, "2026-08-10", &Limits::full(), &Weights::default()).unwrap();
+        let after = search_with(&c, &parse("慕"), 20, "2026-08-10", &Limits::full(), &Weights::default(), &Conventions::default()).unwrap();
         assert!(!after.truncated, "the progress handler leaked into the next query");
         assert_eq!(after.hits.len(), 1, "{:?}", after.hits);
     }
@@ -1443,7 +1610,105 @@ mod tests {
             human_verified: false,
             origin,
             concept_type: None,
+            pinned: false,
         }
+    }
+
+    // --- 硬置顶(wikipage 检索优先级 spec §4)---------------------------------
+
+    /// §4:置顶要求**精确相等**,与 `linked_mention` 的子串口径**刻意相反**。
+    /// `[[张三]]` 和 `[[张三的项目]]` 是两个不同的页,只有一个是「张三这个词
+    /// 的页」;插队必须精确,加权可以宽。这条与
+    /// `a_wikilink_target_merely_containing_the_term_still_counts` 是一对,
+    /// 谁被顺手改成跟另一个一致,都会有一条红。
+    #[test]
+    fn pinning_requires_an_exact_name_not_merely_a_containing_one() {
+        assert!(is_the_named_wikipage("wikipage/张三.md", None, "张三", "wikipage"));
+        assert!(!is_the_named_wikipage("wikipage/张三的项目.md", None, "张三", "wikipage"));
+    }
+
+    /// §4:文件名 stem **或** frontmatter title 任一精确匹配即可 —— 建页时
+    /// 文件名 slug 化、title 存原文,只认一边会漏掉一整类页面。
+    #[test]
+    fn either_the_filename_stem_or_the_title_can_carry_the_name() {
+        assert!(is_the_named_wikipage("wikipage/zhang-san.md", Some("张三"), "张三", "wikipage"));
+        assert!(is_the_named_wikipage("wikipage/张三.md", Some("别的标题"), "张三", "wikipage"));
+    }
+
+    /// 目录前缀必须整段匹配,不能是「前缀字符串」—— 否则配置成 `wiki` 时
+    /// `wikipage/` 下的文件会跟着一起被置顶。
+    #[test]
+    fn the_directory_must_match_a_whole_path_segment() {
+        assert!(!is_the_named_wikipage("wikipage/张三.md", None, "张三", "wiki"));
+    }
+
+    /// 空目录名(设置被清空/读失败)必须失败关闭。否则 `starts_with("")` 对
+    /// vault 里每个路径都为真,任何同名文件都会被置顶。
+    #[test]
+    fn an_empty_directory_setting_pins_nothing() {
+        assert!(!is_the_named_wikipage("张三.md", None, "张三", ""));
+    }
+
+    /// §4 的触发条件:单一关键词、且不带任何过滤器。
+    #[test]
+    fn only_a_single_unfiltered_keyword_is_a_pin_candidate() {
+        assert_eq!(pin_keyword(&parse("张三")), Some("张三"));
+        assert_eq!(pin_keyword(&parse("\"张三\"")), Some("张三"), "引号短语是同一个意图");
+        assert_eq!(pin_keyword(&parse("张三 电话")), None, "多词查询不是「某个词的页」");
+        assert_eq!(pin_keyword(&parse("张三 ext:md")), None, "带过滤器时用户在做精确检索");
+        assert_eq!(pin_keyword(&parse("ext:md")), None, "没有关键词就没有可置顶的名字");
+    }
+
+    // --- [[提及]] ×1.5(wikipage 检索优先级 spec §5)------------------------
+
+    /// §5:命中块里以 `[[…]]` 形式出现的关键词要加权。裸写的关键词不加 ——
+    /// 这一档奖励的是「有人主动把它连成了链接」,不是又一次词频。
+    #[test]
+    fn a_wikilink_to_the_term_is_a_mention_but_bare_text_is_not() {
+        let q = parse("张三");
+        assert!(linked_mention("昨天见了 [[张三]]", &q));
+        assert!(!linked_mention("昨天见了张三", &q));
+    }
+
+    /// §5 已确认的**放宽**口径:target 子串包含关键词即算,不要求精确相等。
+    /// 搜「张三」时 `[[张三的项目]]` 同样加权。这条专门钉住这个放宽,防止
+    /// 后来者「顺手」改回精确相等 —— 那是设计阶段被明确否掉的方案。
+    #[test]
+    fn a_wikilink_target_merely_containing_the_term_still_counts() {
+        assert!(linked_mention("见 [[张三的项目]]", &parse("张三")));
+    }
+
+    /// §5:不限定单一关键词。多词查询里任一词被连成链接即加权 ——
+    /// 「找张三相关的电话」正是该优先的场景。
+    #[test]
+    fn a_multi_term_query_still_gets_the_mention_boost_from_one_of_its_terms() {
+        assert!(linked_mention("[[张三]] 的电话是 123", &parse("张三 电话")));
+    }
+
+    /// `[[target|display]]`:连的是 target,显示名不算。否则 `[[项目|张三]]`
+    /// 会被当成指向张三的链接,而它指向的是项目。
+    #[test]
+    fn only_the_target_half_of_a_piped_wikilink_counts_not_the_display_text() {
+        assert!(linked_mention("见 [[张三|老张]]", &parse("张三")));
+        assert!(!linked_mention("见 [[项目|张三]]", &parse("张三")));
+    }
+
+    /// 引号短语与裸词一视同仁 —— 两者都是「用户要找的东西」,
+    /// `finish` 在别处也是把 terms 和 phrases 连起来一起处理的。
+    #[test]
+    fn a_quoted_phrase_also_earns_the_mention_boost() {
+        assert!(linked_mention("见 [[张三]]", &parse("\"张三\"")));
+    }
+
+    /// 纯函数断言,不走 bm25 —— 照 `score_of_boosts_human_verified_content`
+    /// 的既有做法,让 1.5 这个常数独立于 SQLite / fixture 长度被钉住。
+    #[test]
+    fn score_of_boosts_a_linked_mention() {
+        let w = Weights::default();
+        let base = hit_with(Origin::Derived);
+        let plain = score_of(-1.0, &base, false, false, false, TODAY, &w);
+        let mentioned = score_of(-1.0, &base, false, false, true, TODAY, &w);
+        assert!(mentioned > plain, "[[提及]] 必须抬高分数: {mentioned} vs {plain}");
     }
 
     /// spec §4 的产品主张,与 origin tiering 设计 §3 的落点:你写的 > agent 生成的
@@ -1459,7 +1724,7 @@ mod tests {
     #[test]
     fn each_origin_tier_moves_the_score_on_its_own() {
         let w = Weights::default();
-        let s = |o| score_of(-1.0, &hit_with(o), false, false, TODAY, &w);
+        let s = |o| score_of(-1.0, &hit_with(o), false, false, false, TODAY, &w);
         let human = s(Origin::Human);
         let derived = s(Origin::Derived);
         let source = s(Origin::Source);
@@ -1510,11 +1775,11 @@ mod tests {
     fn score_of_boosts_annotations_and_penalizes_agent_authored_content() {
         let w = Weights::default();
         let base = hit_with(Origin::Derived);
-        let plain = score_of(-1.0, &base, false, false, TODAY, &w);
-        let annotated = score_of(-1.0, &base, true, false, TODAY, &w);
+        let plain = score_of(-1.0, &base, false, false, false, TODAY, &w);
+        let annotated = score_of(-1.0, &base, true, false, false, TODAY, &w);
         let mut agent_hit = base.clone();
         agent_hit.agent_by = Some("claude/1".to_string());
-        let agent = score_of(-1.0, &agent_hit, false, false, TODAY, &w);
+        let agent = score_of(-1.0, &agent_hit, false, false, false, TODAY, &w);
         assert!(annotated > plain, "annotation boost must raise the score: {annotated} vs {plain}");
         assert!(agent < plain, "agent-authored content must be penalized: {agent} vs {plain}");
         assert!(annotated > agent, "human-marked content must outrank agent output: {annotated} vs {agent}");
@@ -1531,10 +1796,10 @@ mod tests {
     fn score_of_boosts_human_verified_content() {
         let w = Weights::default();
         let base = hit_with(Origin::Derived);
-        let unverified = score_of(-1.0, &base, false, false, TODAY, &w);
+        let unverified = score_of(-1.0, &base, false, false, false, TODAY, &w);
         let mut verified_hit = base.clone();
         verified_hit.human_verified = true;
-        let verified = score_of(-1.0, &verified_hit, false, false, TODAY, &w);
+        let verified = score_of(-1.0, &verified_hit, false, false, false, TODAY, &w);
         assert!(verified > unverified, "human_verified boost must raise the score: {verified} vs {unverified}");
     }
 

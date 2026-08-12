@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
-use searchidx::query::Weights;
+use searchidx::query::{Conventions, Weights};
 use searchidx::{Limits, ScanOptions, SearchIndex};
 
 fn corpus() -> PathBuf {
@@ -657,4 +657,221 @@ fn reindexing_one_file_is_well_under_the_freshness_budget() {
     let took = t.elapsed();
     assert!(!idx.search("brownfox", 5).unwrap().0.is_empty());
     assert!(took < Duration::from_millis(200), "single-file reindex took {took:?}");
+}
+
+// --- wikipage 检索优先级 ------------------------------------------------
+// spec `docs/superpowers/specs/2026-08-12-wikipage-search-priority-design.md`
+
+/// §2/§3:通过 wikilink 建出来的页面,正文就是一个空节点(`- `),标题只躺在
+/// front-matter 里,而文件名是 slug 化的原文。在标题进 FTS 之前,搜这个页
+/// 的名字命中不了它 —— 不是排序低,是这条结果根本不存在。
+///
+/// 两个查询都要绿:`title`(fm 原文)和文件名 stem 是两份可能不同的数据,
+/// 而 wikilink 在本产品里是**按文件名解析**的,所以两个都必须可搜。
+#[test]
+fn a_files_title_and_filename_are_searchable_when_the_body_never_says_them() {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(v.path().join("wikipage")).unwrap();
+    std::fs::write(v.path().join("wikipage/zhang-san.md"), "---\ntitle: 张三\n---\n- \n").unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    for query in ["张三", "zhang-san"] {
+        let (hits, _) = idx.search(query, 20).unwrap();
+        assert!(
+            hits.iter().any(|h| h.path == "wikipage/zhang-san.md"),
+            "查询 {query:?} 找不到它自己的页面: {hits:?}"
+        );
+    }
+}
+
+/// §3:标题只进 `blocks_fts.tok_title`,不进 `blocks.text`。这两份数据本来
+/// 就是分离的,但「把标题拼进 File 块的 text」是这个功能最省事的实现路线 ——
+/// 走了那条路,命中预览里会凭空多出标题,而这条测试是唯一会红的地方。
+#[test]
+fn a_title_match_never_leaks_the_title_into_the_hit_text() {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::write(v.path().join("page.md"), "---\ntitle: 张三\n---\n只有正文没有名字\n").unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    let (hits, _) = idx.search("张三", 20).unwrap();
+    let hit = hits.iter().find(|h| h.path == "page.md").expect("标题命中不见了");
+    assert!(!hit.text.contains("张三"), "标题漏进了展示文本: {:?}", hit.text);
+}
+
+/// §3:`tok_title` 只写在 File 级块上。写在每个块上(另一条省事路线)会让
+/// 「搜文件名 → 这个文件的每一段都命中」,同一份证据按块数重复一遍。
+#[test]
+fn only_the_file_level_block_can_match_on_a_title() {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::write(
+        v.path().join("page.md"),
+        "---\ntitle: 张三\n---\n# 小节甲\n\n第一段内容\n\n# 小节乙\n\n第二段内容\n",
+    )
+    .unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    let (hits, _) = idx.search("张三", 50).unwrap();
+    let mine: Vec<_> = hits.iter().filter(|h| h.path == "page.md").collect();
+    assert_eq!(mine.len(), 1, "标题命中应当只有一条(File 级): {mine:?}");
+    assert_eq!(mine[0].level, "file");
+}
+
+/// §5 端到端:`score_of` 的 ×1.5 是纯函数测试钉住的,但「`finish` 真的从
+/// `hit.text` 算出了这个 flag」只有跑一遍真索引才验得到 —— 把那里写死成
+/// `false`,上面那条纯函数测试照样绿。
+///
+/// 这对 fixture 的 tok_text **逐 token 相同**(`[[…]]` 的方括号不是词字符,
+/// 分词后两边都只剩 `mentiontoken`),所以 bm25 完全打平,唯一的差别只能是
+/// 这一档加权 —— 没有长度归一化的混杂因素。
+#[test]
+fn a_linked_mention_outranks_the_same_words_written_plainly() {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::write(v.path().join("alpha.md"), "steady content 见 mentiontoken 完\n").unwrap();
+    std::fs::write(v.path().join("bravo.md"), "steady content 见 [[mentiontoken]] 完\n").unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    let (hits, _) = idx.search("mentiontoken", 20).unwrap();
+    let linked = hits.iter().position(|h| h.path == "bravo.md").expect("链接那条不见了");
+    let plain = hits.iter().position(|h| h.path == "alpha.md").expect("裸写那条不见了");
+    assert!(linked < plain, "[[提及]] 必须排在同样字面的裸文本之前: {hits:?}");
+}
+
+/// 置顶用例共用的 vault:一个 wikipage,和一个**逐字同形、只多了一条
+/// `verified: by: human:` 的诱饵**放在 vault 根上。
+///
+/// 诱饵为什么要长成这样,试错记录如下(这段是给后来改 fixture 的人看的):
+/// 先用「一篇反复念叨同一个词的长文」当诱饵 —— 输了,因为标题现在有自己的
+/// FTS 列且权重 4.0(§3),而 bm25 偏爱短文档,一个空页在名字命中上稳赢任何
+/// 长文。再把诱饵也改成精确同名 —— 还是输,同样的道理。
+///
+/// 所以诱饵改用**排序信号**而不是内容取胜:两个文件的块逐字相同,唯一差别
+/// 是 `human_verified`(×1.1)与它带来的 origin 档位。诱饵因此稳定地排在
+/// wikipage 前面,而置顶是唯一能把名次翻回来的力量 —— 这正是 §4 那句
+/// 「哪怕另一篇 bm25 高得多、或 origin 是 human」要钉的东西。
+///
+/// 目录名由调用方决定,好让「改目录名」那条用例复用。
+fn pin_vault(page_dir: &str) -> (tempfile::TempDir, tempfile::TempDir, SearchIndex) {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(v.path().join(page_dir)).unwrap();
+    std::fs::write(v.path().join(page_dir).join("张三.md"), "---\ntitle: 张三\n---\n- \n").unwrap();
+    std::fs::write(
+        v.path().join("张三.md"),
+        "---\ntitle: 张三\nverified:\n  by: human:bruce\n---\n- \n",
+    )
+    .unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    (v, d, idx)
+}
+
+fn conv(dir: &str) -> Conventions {
+    Conventions { wikipage_dir: Some(dir.to_string()) }
+}
+
+/// §4:名字与查询完全相同的 wikipage 硬置顶为第一条,绕过所有加权。
+///
+/// 前半段先证明这个 fixture 是有效的 —— 不给 `Conventions` 时那篇长文确实
+/// 排在前面。少了这一步,「置顶生效」就可能只是「它本来就是第一」。
+#[test]
+fn a_wikipage_named_exactly_like_the_query_is_pinned_to_the_top() {
+    let (_v, _d, idx) = pin_vault("wikipage");
+    let w = Weights::default();
+
+    let baseline = idx.search_with_weights("张三", 20, &Limits::full(), &w).unwrap();
+    assert_ne!(
+        baseline.hits[0].path, "wikipage/张三.md",
+        "fixture 失效:没有置顶时它就已经是第一条了,这条用例证明不了任何事"
+    );
+
+    let a = idx.search_ranked("张三", 20, &Limits::full(), &w, &conv("wikipage")).unwrap();
+    assert_eq!(a.hits[0].path, "wikipage/张三.md", "精确同名的 wikipage 必须置顶: {:?}", a.hits);
+    assert!(a.hits[0].pinned);
+}
+
+/// §4:多词查询谈不上「这个关键词的页」。
+#[test]
+fn a_multi_term_query_does_not_pin() {
+    let (_v, _d, idx) = pin_vault("wikipage");
+    let a = idx
+        .search_ranked("张三 张三", 20, &Limits::full(), &Weights::default(), &conv("wikipage"))
+        .unwrap();
+    assert!(a.hits.iter().all(|h| !h.pinned), "多词查询不该置顶: {:?}", a.hits);
+}
+
+/// §4:带过滤器时用户是在做精确检索,不该被一条置顶插队。
+#[test]
+fn a_filtered_query_does_not_pin() {
+    let (_v, _d, idx) = pin_vault("wikipage");
+    let a = idx
+        .search_ranked("张三 ext:md", 20, &Limits::full(), &Weights::default(), &conv("wikipage"))
+        .unwrap();
+    assert!(a.hits.iter().all(|h| !h.pinned), "带过滤器不该置顶: {:?}", a.hits);
+}
+
+/// §4:置顶是 wikilink 目录的特权,vault 里别处的同名文件不享受。
+#[test]
+fn a_same_named_file_outside_the_wikipage_dir_is_not_pinned() {
+    let (_v, _d, idx) = pin_vault("wikipage");
+    let a = idx
+        .search_ranked("张三", 20, &Limits::full(), &Weights::default(), &conv("别的目录"))
+        .unwrap();
+    assert!(
+        a.hits.iter().all(|h| !h.pinned),
+        "配置指向别的目录时,wikipage/ 下的同名文件不该被置顶: {:?}",
+        a.hits
+    );
+}
+
+/// §1 的硬要求:目录名是用户随时可改的配置,改完必须立刻生效,**不重建索引**。
+///
+/// 这条是整个设计里「wikipageDir 走查询侧传参、不进索引」这个决定的钉子:
+/// 一旦有人把目录名塞进索引(存成列、或写进 meta 戳),同一个 `idx` 换个
+/// `Conventions` 就不会改变结果,这条立刻红。
+#[test]
+fn renaming_the_wikipage_dir_takes_effect_without_reindexing() {
+    let (_v, _d, idx) = pin_vault("概念");
+    let w = Weights::default();
+
+    let old = idx.search_ranked("张三", 20, &Limits::full(), &w, &conv("wikipage")).unwrap();
+    assert!(old.hits.iter().all(|h| !h.pinned), "旧目录名不该再置顶: {:?}", old.hits);
+
+    let new = idx.search_ranked("张三", 20, &Limits::full(), &w, &conv("概念")).unwrap();
+    assert_eq!(new.hits[0].path, "概念/张三.md", "改名后必须立刻置顶: {:?}", new.hits);
+    assert!(new.hits[0].pinned);
+}
+
+/// §4:文件名 slug 化、fm `title` 存原文,是 wikilink 建页的常态
+/// (`src/lib/outline/create.ts`)。只按文件名判定的话,这类页面永远置不了顶。
+#[test]
+fn a_wikipage_whose_title_matches_is_pinned_even_when_its_filename_is_slugged() {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(v.path().join("wikipage")).unwrap();
+    std::fs::write(v.path().join("wikipage/zhang-san.md"), "---\ntitle: 张三\n---\n- \n").unwrap();
+    std::fs::write(
+        v.path().join("张三.md"),
+        "---\ntitle: 张三\nverified:\n  by: human:bruce\n---\n- \n",
+    )
+    .unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    let w = Weights::default();
+
+    let baseline = idx.search_with_weights("张三", 20, &Limits::full(), &w).unwrap();
+    assert_ne!(
+        baseline.hits[0].path, "wikipage/zhang-san.md",
+        "fixture 失效:没有置顶时它就已经是第一条了"
+    );
+
+    let a = idx.search_ranked("张三", 20, &Limits::full(), &w, &conv("wikipage")).unwrap();
+    assert_eq!(a.hits[0].path, "wikipage/zhang-san.md", "fm title 匹配也要置顶: {:?}", a.hits);
 }

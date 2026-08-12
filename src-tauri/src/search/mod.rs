@@ -377,6 +377,12 @@ pub struct HitDto {
     /// file has no `type`. Only the middle (`derived`) band is subdivided by
     /// this — see `grouping.ts`.
     pub concept_type: Option<String>,
+    /// `searchidx::Hit::pinned` verbatim: this hit's file is the wikilink
+    /// page the query names exactly. The panel lifts these into their own
+    /// group above the origin poles (`grouping.ts`) — without that, a pinned
+    /// hit would be sorted first by the backend and then buried inside
+    /// whichever origin group its file happens to belong to.
+    pub pinned: bool,
 }
 
 #[derive(Serialize)]
@@ -468,6 +474,7 @@ fn hit_to_dto(h: Hit, vault_root: &Path) -> HitDto {
         source_ref: h.source_ref(),
         origin: h.origin.as_str().to_string(),
         concept_type: h.concept_type,
+        pinned: h.pinned,
         path: h.path,
         line: h.line,
         line_end: h.line_end,
@@ -738,7 +745,15 @@ fn search_locked(
     // `vault_root()` rather than a value threaded in from the command, keeps
     // this the one place that decides what a query's weights are.
     let weights = crate::search::options::weights_for_vault(idx.vault_root());
-    let answer = idx.search_with_weights(query, limit.unwrap_or(50), &limits, &weights)?;
+    // Same rule, same place, one query later: `wikipageDir` decides which
+    // note (if any) is pinned above everything else, and reading it here off
+    // the index's own `vault_root()` keeps this the one place that decides
+    // what a query's ranking inputs are. Cheap enough for the typing hot path
+    // for the same reason `weights_for_vault` above is — one small JSON file,
+    // already in the OS page cache.
+    let conventions = crate::search::options::conventions_for_vault(idx.vault_root());
+    let answer =
+        idx.search_ranked(query, limit.unwrap_or(50), &limits, &weights, &conventions)?;
     // An abort has two causes and they are not the same answer: superseded
     // means "throw this away", deadline means "partial, and say so".
     if superseded(counter, ticket) {
@@ -966,6 +981,7 @@ mod command_tests {
             human_verified: true,
             origin: searchidx::Origin::Derived,
             concept_type: Some("Book Summary".to_string()),
+            pinned: true,
         }
     }
 
@@ -1149,6 +1165,11 @@ mod command_tests {
             // that class of bug.
             "origin",
             "conceptType",
+            // Same class of bug as the two above, with a sharper failure: a
+            // missing `pinned` reads as `undefined` in the panel, which is
+            // falsy, so the 置顶 group silently never renders — the whole
+            // feature gone with every Rust test still green.
+            "pinned",
         ] {
             assert!(v.get(key).is_some(), "missing key {key} in {v}");
         }
@@ -1337,6 +1358,62 @@ mod command_tests {
             Some("raw/source.md"),
             "配置的反转权重必须真正改变排序,而不是被 Weights::default() 悄悄吃掉"
         );
+    }
+
+    /// wikipage 置顶 spec §4:`notemd_search` 必须真的用上解析出来的
+    /// `Conventions`,而不是只把它解析对了。
+    ///
+    /// 这条是照着上面 weights 那条写的 —— C-T8 的 review 记过一次「解析正确
+    /// 但查询没用上,而且没有任何测试能发现」。契约测试只证明 GUI 和 CLI
+    /// 解析出同一个值;唯有从 `search_locked` 走一遍才证明这个值影响了名次。
+    ///
+    /// 同时也是「改目录名不必重建索引」在宿主层的落点:两次查询共用同一个
+    /// `IndexHandle`,中间只改了 `.notemd/settings.json`。
+    #[test]
+    fn a_configured_wikipage_dir_actually_pins_through_the_command_path() {
+        let v = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(v.path().join("wikipage")).unwrap();
+        std::fs::write(v.path().join("wikipage/张三.md"), "---\ntitle: 张三\n---\n- \n").unwrap();
+        // 逐字同形、只多一条 `verified` 的诱饵:没有置顶时它靠 human_verified
+        // 稳赢,所以第一条断言不是空断言。
+        std::fs::write(
+            v.path().join("张三.md"),
+            "---\ntitle: 张三\nverified:\n  by: human:bruce\n---\n- \n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(v.path().join(".notemd")).unwrap();
+        std::fs::write(v.path().join(".notemd/settings.json"), r#"{}"#).unwrap();
+
+        let opts = crate::search::options::for_vault(v.path());
+        let d = tempfile::tempdir().unwrap();
+        let mut idx =
+            searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), &opts.source_globs.stamp()).unwrap();
+        idx.ensure_built(&opts).unwrap();
+        let handle: IndexHandle = Arc::new(Mutex::new(Some(idx)));
+        let counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+
+        let q = |c: &Arc<AtomicU64>| {
+            search_locked(&handle, Instant::now(), "张三", Some(10), Some(true), None, c, 1).unwrap()
+        };
+
+        // 默认目录名(未配置)下,wikipage 下的那篇被置顶。
+        let default_resp = q(&counter);
+        assert_eq!(
+            default_resp.hits.first().map(|h| h.path.as_str()),
+            Some("wikipage/张三.md"),
+            "默认 wikipageDir 下 wikipage 里的同名页必须置顶"
+        );
+        assert!(default_resp.hits[0].pinned, "置顶标记必须一路传到 DTO");
+
+        // 把目录名改到别处 —— 同一个索引,不重建。
+        std::fs::write(v.path().join(".notemd/settings.json"), r#"{"wikipageDir": "概念"}"#).unwrap();
+        let renamed = q(&counter);
+        assert_eq!(
+            renamed.hits.first().map(|h| h.path.as_str()),
+            Some("张三.md"),
+            "改了 wikipageDir 之后旧目录不该再置顶(而且不需要重建索引)"
+        );
+        assert!(renamed.hits.iter().all(|h| !h.pinned));
     }
 
     /// 一次全量重建产出的 search 分类日志必须在个位到几十行,而不是逐文件。

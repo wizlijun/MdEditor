@@ -73,6 +73,7 @@
   // catch-all use translated labels.
   function groupLabel(group: HitGroup): string {
     switch (group.kind) {
+      case 'pinned': return t('search.group.pinned')
       case 'human': return t('search.group.human')
       case 'source': return t('search.group.source')
       case 'unlabeled': return t('search.group.unlabeled')

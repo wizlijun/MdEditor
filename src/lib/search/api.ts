@@ -24,6 +24,11 @@ export interface SearchHit {
    *  `null` when the file has no `type`. Only origin `'derived'` hits are
    *  subdivided by this in the panel — see `src/lib/search/grouping.ts`. */
   conceptType: string | null
+  /** This hit's file is the wikilink page the query names exactly, so the
+   *  backend already sorted it ahead of everything else. `grouping.ts` lifts
+   *  these out into their own group so that ordering survives the panel's
+   *  per-origin grouping. */
+  pinned: boolean
 }
 
 export interface SearchResponse {

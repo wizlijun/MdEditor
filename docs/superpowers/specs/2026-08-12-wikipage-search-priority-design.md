@@ -53,13 +53,14 @@ searchidx 完全不知道 `wikipageDir` 的存在。
 
 ### 迁移
 
-`SCHEMA_VERSION` 从 2 提到 3（`searchidx/src/store.rs:27`）。老索引在 `open` 时自动 wipe + 全量重建，
+`SCHEMA_VERSION` 从 3 提到 4（`searchidx/src/store.rs`）。老索引在 `open` 时自动 wipe + 全量重建，
 用户无需操作；大 vault 有一次性重建开销，日志与设置页进度条可见。
 
-> **合并顺序约束**：兄弟 worktree `source-globs-transcripts` 已把 `SCHEMA_VERSION` 提到 3，
-> 并在同一批文件（`searchidx/src/store.rs`、`query.rs`、设置页）上做 source globs / 权重 / 4 档统计的大改。
-> 两边必须串行合并，后合的一方负责再提一次版本号并解决 `blocks_fts` 建表语句与 `bm25()` 列权重的冲突。
-> 绝不整体 merge，按既有姿势逐个解冲突。
+与前几次 bump 不同，这一次是**真正的列形状变化**：FTS5 表的列数在建表时固定，`bm25()` 的权重个数
+必须与之相等，所以旧库根本回答不了这个版本的查询，不存在"凑合用"的选项。
+
+> 实施时 `source-globs-transcripts` 已经合进 main（`SCHEMA_VERSION` 当时已是 3），
+> 原先记在这里的串行合并约束因此自动解除。
 
 ### 已知的行为面扩大
 
@@ -95,6 +96,15 @@ hit 所属文件满足：
 ### 实现
 
 `Hit` 增加查询期字段 `pinned: bool`（不落库），`query::finish` 的排序改为 `(pinned 降序, score 降序)`。
+
+判定需要 `files.title`（只按文件名判定会漏掉「文件名 slug、title 存原文」那一整类页面）。
+`f.title` **追加**到 `SELECT_COLS` 末尾（index 12，`rank` 顺延到 13），遵守该常量注释里
+「只在末尾追加、绝不插在中间」的既有纪律；title 读进 `finish` 的行元组而不是 `Hit`，
+理由与 `is_annotation` 相同 —— 排序是它唯一的消费者，没有理由撑宽公开的命中结构。
+
+`Conventions` 经 `SearchIndex::search_ranked` 传入，是 `search` → `search_with` →
+`search_with_weights` 这条既有兄弟方法链的第四环，沿用同样的理由：手上没有 vault 设置的调用方
+（测试、以及只要"出厂行为"的代码）不该为了编译通过而被迫学习 `Conventions`。
 
 判定口径是「**该 hit 所属文件**是精确匹配的 wikipage」，而不是「该 hit 是 File 级块」。原因：
 若该文件正文里也含关键词，`drop_redundant_rollups`（`query.rs:552`）会干掉 File 级 rollup、
