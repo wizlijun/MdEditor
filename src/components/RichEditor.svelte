@@ -807,10 +807,21 @@
   import { reveal } from '../lib/outline/reveal.svelte'
   import { consumeEditorFocus } from '../lib/editor-focus.svelte'
 
-  let lastRevealSeq = reveal.req?.seq ?? 0
+  // Starts at 0, NOT at whatever is already pending: this component is rebuilt
+  // by `{#key tab.id}` on every file switch, so a request issued just before
+  // the switch (the search panel does exactly that — `openFile` then reveal)
+  // is always older than this instance. Seeding from `reveal.req.seq` swallowed
+  // it. `req.path` is what keeps that safe: a request aimed at another file is
+  // declined rather than applied to whatever happens to be open.
+  let lastRevealSeq = 0
   $effect(() => {
     const req = reveal.req
-    if (!req || req.seq === lastRevealSeq || !host) return
+    // `status` is part of the condition on purpose — the view mounts through
+    // an async import, so `host` exists well before the document is in the
+    // DOM and a TreeWalker run before then finds nothing. The effect re-runs
+    // when `status` flips, which is the first moment there is text to find.
+    if (!req || req.seq === lastRevealSeq || !host || status !== 'mounted') return
+    if (req.path && req.path !== tab.filePath) return
     lastRevealSeq = req.seq
     // 渲染 DOM 中按锚文本查找第一个匹配的元素
     const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT)

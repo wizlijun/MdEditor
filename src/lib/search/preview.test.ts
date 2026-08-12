@@ -73,13 +73,18 @@ describe('cleanLineText', () => {
 describe('previewLine', () => {
   it('优先返回包含关键词的那一行,而不是块首行', () => {
     const block = ['## 记忆检索', '这一行没有', '外骨骼的能量回收路径'].join('\n')
-    expect(previewLine(block, ['外骨骼'])).toEqual({ text: '外骨骼的能量回收路径', lang: null })
+    expect(previewLine(block, ['外骨骼'])).toEqual({
+      text: '外骨骼的能量回收路径',
+      lang: null,
+      line: 2,
+    })
   })
 
   it('关键词被行内标记切开时也能选中该行(匹配跑在清洗后的文本上)', () => {
     expect(previewLine('前言\n**外**骨骼的髋关节', ['外骨骼'])).toEqual({
       text: '外骨骼的髋关节',
       lang: null,
+      line: 1,
     })
   })
 
@@ -88,17 +93,18 @@ describe('previewLine', () => {
     expect(previewLine(block, ['entity_boost'])).toEqual({
       text: '"entity_boost": 0.3',
       lang: 'json',
+      line: 2,
     })
   })
 
   it('围栏外的命中 lang 为 null', () => {
     const block = ['```json', '{ "a": 1 }', '```', '外骨骼在正文里'].join('\n')
-    expect(previewLine(block, ['外骨骼'])).toEqual({ text: '外骨骼在正文里', lang: null })
+    expect(previewLine(block, ['外骨骼'])).toEqual({ text: '外骨骼在正文里', lang: null, line: 3 })
   })
 
   it('~~~ 也是围栏定界符,语言取 info string 首词', () => {
     const block = ['~~~mermaid graph', 'A --> B', '~~~'].join('\n')
-    expect(previewLine(block, ['A --> B'])).toEqual({ text: 'A --> B', lang: 'mermaid' })
+    expect(previewLine(block, ['A --> B'])).toEqual({ text: 'A --> B', lang: 'mermaid', line: 1 })
   })
 
   it('mermaid 节点里的 <br/> 被清掉', () => {
@@ -106,33 +112,44 @@ describe('previewLine', () => {
     expect(previewLine(block, ['新对话'])).toEqual({
       text: 'NEW["新对话 抽取出的事实"] --> LLM',
       lang: 'mermaid',
+      line: 1,
     })
   })
 
   it('无命中时回退到第一条清洗后非空的行', () => {
     const block = ['---', '# 标题', '正文'].join('\n')
-    expect(previewLine(block, ['不存在的词'])).toEqual({ text: '标题', lang: null })
+    expect(previewLine(block, ['不存在的词'])).toEqual({ text: '标题', lang: null, line: 1 })
   })
 
-  it('剥掉块首的 frontmatter', () => {
+  // The block-level strippers blank their lines instead of deleting them —
+  // `line` is what the panel adds to `hit.line` to jump to the right place,
+  // so renumbering the rest of the block would send the editor to the wrong
+  // line every time a note has frontmatter or an HTML comment.
+  it('剥掉块首的 frontmatter,但行号不因此左移', () => {
     const block = ['---', 'type: Book Summary', 'tags: [a]', '---', '正文在这'].join('\n')
-    expect(previewLine(block, [])).toEqual({ text: '正文在这', lang: null })
+    expect(previewLine(block, [])).toEqual({ text: '正文在这', lang: null, line: 4 })
   })
 
-  it('剥掉 HTML 注释与 script/style 块', () => {
-    expect(previewLine('<!-- 隐藏\n说明 -->\n可见', [])).toEqual({ text: '可见', lang: null })
+  it('剥掉 HTML 注释与 script/style 块,行号同样保持', () => {
+    expect(previewLine('<!-- 隐藏\n说明 -->\n可见', [])).toEqual({
+      text: '可见',
+      lang: null,
+      line: 2,
+    })
     expect(previewLine('<style>\n.a { color: red }\n</style>\n可见', [])).toEqual({
       text: '可见',
       lang: null,
+      line: 3,
     })
     expect(previewLine('<script>\nvar a = 1\n</script>\n可见', [])).toEqual({
       text: '可见',
       lang: null,
+      line: 3,
     })
   })
 
   it('整块都是标记时返回空文本', () => {
-    expect(previewLine('---\n***\n', [])).toEqual({ text: '', lang: null })
+    expect(previewLine('---\n***\n', [])).toEqual({ text: '', lang: null, line: 0 })
   })
 
   it('语言标签小写并截断到 12 字符', () => {

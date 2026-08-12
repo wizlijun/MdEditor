@@ -173,8 +173,8 @@ export interface FileGroup {
 ▸ 会议纪要.md                   2
   今天和 X 谈到了外骨骼的髋关节…
 ▾ 读书笔记.md                   5
-│ L12  外骨骼的能量回收路径
-│ L88  json  "entity_boost": ...,  # 实体加成贡献
+│ 12  外骨骼的能量回收路径
+│ 88  json  "entity_boost": ...,  # 实体加成贡献
 ```
 
 侧栏很窄,所以三层结构**只允许一级、8px 的缩进**:
@@ -182,7 +182,8 @@ export interface FileGroup {
 - **类型组头**与**文件行**齐左,共用现在的 `padding: 4px 8px` 基线,文件行不再因为多一层而缩进。
   类型组头保持现有 11px 小写标签样式。
 - **命中行**缩进 8px,并以 1px `border-left` 画导引线 —— 用线而不是空白表达从属关系。
-- **删掉命中行现有的 `hit.path:line` 尾行**,只留 `L12`。文件名已经在上一行,重复路径既占宽又占高。
+- **删掉命中行现有的 `hit.path:line` 尾行**,只留裸行号 `12`。文件名已经在上一行,重复路径既占宽
+  又占高;`L` 前缀在窄栏里也是纯损耗,上下文已经说明那是行号。
 - **`breadcrumb` 只在展开的命中行显示**,折叠预览行不显示。
 - 文件名只显示 basename;完整 `path` 挂 `title` 悬停查看。
 - 命中数用 `margin-left: auto` 右对齐贴边,不占左侧宽度。
@@ -191,6 +192,26 @@ export interface FileGroup {
   `button` 不继承 `font-size` 的既有坑。
 - `previewLine` 返回的 `lang` 非空时,在预览文本前渲染一个淡色小标签(`json` / `mermaid` /
   `bash`),10px 字号、不换行、不参与省略截断。`lang` 为 `null` 时不占位。
+
+### 点击跳转
+
+点击一条命中要落在**预览显示的那一行**上,而不是块首行。这需要两处配套改动:
+
+1. `previewLine` 返回 `line`(块内 0-based 行号),面板发 `requestReveal(hit.line + p.line, …)`。
+   为此块级预处理(frontmatter / HTML 注释 / script / style)改为**把行留空而不是删行**,否则
+   其后所有行号左移。
+2. `RevealRequest` 增加可选的 `path`,消费方(`RichEditor` / `SourceView`)据此认领请求。
+   原因是 `EditorPane` 用 `{#key tab.id}` 包住编辑器 —— 换文件即整个重建,而搜索面板是
+   `await openFile(...)` 之后才发请求,新实例挂载时请求已经存在。旧代码把 `lastRevealSeq` 初始化
+   成 `reveal.req?.seq`,于是这条请求恒被当作"已消费"吞掉,**从搜索结果打开新文件时定位从来没生效
+   过**。改为初始化 0 + 按 `path` 认领:能认领早于自己挂载的请求,又不会把上一次的定位套到别的文档。
+   `RichEditor` 还要额外等 `status === 'mounted'` —— 它的视图是异步 import 挂载的,`host` 存在时
+   文档还没进 DOM,TreeWalker 扫不到东西。
+
+reveal 的锚文本传**清洗后**的行:rich 模式靠扫描渲染后的文本节点找目标,那里的标记早已不存在,
+原始的 `**外**骨骼` 永远匹配不上;source 模式本来就优先用行号,锚文本只是兜底。
+
+大纲面板的 `onJump` 同样是"先 openFile 再 reveal",一并带上 `mainPath`,顺带修好同一个吞请求的问题。
 
 交互:
 

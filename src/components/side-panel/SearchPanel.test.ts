@@ -47,7 +47,18 @@ vi.mock('@tauri-apps/plugin-store', () => ({
 }))
 vi.mock('@tauri-apps/plugin-os', () => ({ platform: () => 'macos', type: () => 'macos' }))
 
+// Only `openFile` is replaced; everything else in `tabs.svelte` stays real.
+// The panel's reveal call sits *after* `await openFile(...)`, so with the real
+// one (which needs a Tauri host) the click is swallowed by the panel's error
+// handling and the reveal assertions below could never run.
+const openFileMock = vi.fn(async (_path: string) => {})
+vi.mock('../../lib/tabs.svelte', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/tabs.svelte')>()),
+  openFile: (path: string) => openFileMock(path),
+}))
+
 import { searchStore, _setSearchImpl } from '../../lib/search/store.svelte'
+import { reveal } from '../../lib/outline/reveal.svelte'
 import { uiState, closeSettings } from '../../lib/ui-state.svelte'
 import { BOUNDARY_DELAY_MS, IDLE_DELAY_MS, DEEP_TIMEOUT_MS } from '../../lib/search/input-trigger'
 import type { SearchHit, SearchOptions, SearchResponse } from '../../lib/search/api'
@@ -187,7 +198,7 @@ describe('SearchPanel per-file collapsing', () => {
 
     expect(fileRows()[0].getAttribute('aria-expanded')).toBe('true')
     const locs = Array.from(document.body.querySelectorAll('.hit .loc')).map((el) => el.textContent)
-    expect(locs).toEqual(['L12', 'L48'])
+    expect(locs).toEqual(['12', '48'])
     // The collapsed preview is gone once the real rows are showing.
     expect(document.body.querySelectorAll('.preview')).toHaveLength(0)
 
@@ -199,16 +210,43 @@ describe('SearchPanel per-file collapsing', () => {
     unmount(app)
   })
 
-  it('单命中文件不是可展开控件,点击直接打开', async () => {
+  it('单命中文件不是可展开控件,点击直接打开对应文件', async () => {
     const app = await render([hit({ path: 'solo.md', absPath: '/v/solo.md', text: '外骨骼', origin: 'human' })], '外骨骼')
 
     const row = fileRows()[0]
     expect(row.hasAttribute('aria-expanded')).toBe(false)
     row.click()
+    await new Promise((r) => setTimeout(r, 0))
     flushSync()
-    // Still no expansion — the click went to `openFile`, which has no Tauri
-    // host here and is swallowed by the panel's own error handling.
+    expect(openFileMock).toHaveBeenCalledWith('/v/solo.md')
+    // The click opened the file rather than expanding a disclosure.
     expect(document.body.querySelectorAll('.hit')).toHaveLength(0)
+
+    unmount(app)
+  })
+
+  it('点击命中跳到命中所在的行,而不是块首行', async () => {
+    // The block starts at line 40; the match is its third line, so the reveal
+    // has to ask for 42. Asking for `hit.line` would drop the reader at the
+    // heading and leave them hunting for the match.
+    const block = ['## 记忆检索', '这一行不含关键词', '外骨骼的能量回收路径'].join('\n')
+    const app = await render(
+      [hit({ path: 'a.md', absPath: '/v/a.md', line: 40, lineEnd: 42, text: block, origin: 'human' })],
+      '外骨骼',
+    )
+
+    fileRows()[0].click()
+    await new Promise((r) => setTimeout(r, 0))
+    flushSync()
+
+    expect(openFileMock).toHaveBeenCalledWith('/v/a.md')
+    expect(reveal.req).toMatchObject({
+      line: 42,
+      // Cleaned, because rich mode matches against rendered text nodes.
+      text: '外骨骼的能量回收路径',
+      // Addressed, so a rebuilt editor can tell the request is meant for it.
+      path: '/v/a.md',
+    })
 
     unmount(app)
   })

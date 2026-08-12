@@ -120,6 +120,14 @@ function fenceLang(info: string): string | null {
   return first ? first.toLowerCase().slice(0, 12) : null
 }
 
+/** Everything but the newlines — how this module deletes multi-line noise.
+ *  Removing the lines outright would renumber every line after it, and
+ *  `PreviewLine.line` has to stay an index into the *original* block for the
+ *  panel to be able to jump there. */
+function blank(match: string): string {
+  return match.replace(/[^\n]/g, '')
+}
+
 /** Frontmatter, HTML comments and script/style blocks — all of which span
  *  lines, so they have to go before the block is split. */
 function stripBlockNoise(raw: string): string {
@@ -127,10 +135,10 @@ function stripBlockNoise(raw: string): string {
   const lines = s.split('\n')
   if (lines[0]?.trim() === '---') {
     const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---')
-    if (close > 0) s = lines.slice(close + 1).join('\n')
+    if (close > 0) s = lines.map((l, i) => (i <= close ? '' : l)).join('\n')
   }
-  s = s.replace(/<!--[\s\S]*?-->/g, '')
-  s = s.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, '')
+  s = s.replace(/<!--[\s\S]*?-->/g, blank)
+  s = s.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, blank)
   return s
 }
 
@@ -140,6 +148,10 @@ export interface PreviewLine {
    *  when the line is not inside one. The panel renders it as a small chip so
    *  a JSON/mermaid hit reads as code rather than as broken prose. */
   lang: string | null
+  /** 0-based index of this line within the block, so the panel can turn a
+   *  hit's block-start line into the line the user actually saw. `0` when
+   *  nothing was picked. */
+  line: number
 }
 
 /**
@@ -159,7 +171,9 @@ export function previewLine(raw: string, terms: string[]): PreviewLine {
   let lang: string | null = null
   let fallback: PreviewLine | null = null
 
-  for (const line of stripBlockNoise(raw).split('\n')) {
+  const lines = stripBlockNoise(raw).split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
     const m = FENCE.exec(line)
     if (m) {
       const char = m[1][0]
@@ -179,10 +193,10 @@ export function previewLine(raw: string, terms: string[]): PreviewLine {
     const text = cleanLineText(line)
     if (!text) continue
     const low = text.toLowerCase()
-    if (lowered.some((t) => low.includes(t))) return { text, lang }
-    if (!fallback) fallback = { text, lang }
+    if (lowered.some((t) => low.includes(t))) return { text, lang, line: i }
+    if (!fallback) fallback = { text, lang, line: i }
   }
-  return fallback ?? { text: '', lang: null }
+  return fallback ?? { text: '', lang: null, line: 0 }
 }
 
 /** Filter prefixes recognized by `searchidx::query::parse`. Their values

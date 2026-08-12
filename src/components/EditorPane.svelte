@@ -117,7 +117,7 @@
     {/key}
   {:else if tab.mode === 'source'}
     {#key tab.id}
-      <SourceView value={tab.currentContent} oninput={onSourceInput} tabId={tab.id} />
+      <SourceView value={tab.currentContent} oninput={onSourceInput} tabId={tab.id} filePath={tab.filePath} />
     {/key}
   {:else if isOutlineNoteTab(tab)}
     {#key tab.id}
