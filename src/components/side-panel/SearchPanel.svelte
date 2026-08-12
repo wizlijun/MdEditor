@@ -61,6 +61,7 @@
     switch (group.kind) {
       case 'human': return t('search.group.human')
       case 'source': return t('search.group.source')
+      case 'unlabeled': return t('search.group.unlabeled')
       case 'derivedOther': return t('search.group.other')
       case 'derivedType': return group.conceptType ?? ''
     }

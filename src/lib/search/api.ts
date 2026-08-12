@@ -15,10 +15,10 @@ export interface SearchHit {
   humanVerified: boolean
   /** `'human' | 'derived' | 'source' | 'unlabeled'` — mirrors `HitDto.origin`
    *  (`searchidx::Origin::as_str()`). `'human'`/`'source'` are the two poles
-   *  the search panel pins at the ends of its grouping; `'unlabeled'` (added
-   *  2026-08-12 design, C-T2) is the backend's honest "nobody has claimed
-   *  this file" tier — see `grouping.ts` for how it renders today (a
-   *  stopgap, not the real fourth group; C-T10 owns that). */
+   *  the search panel pins near the ends of its grouping; `'unlabeled'`
+   *  (added 2026-08-12 design, C-T2) is the backend's honest "nobody has
+   *  claimed this file" tier — it gets its own fourth group, after `source`
+   *  (see `grouping.ts`). */
   origin: 'human' | 'derived' | 'source' | 'unlabeled'
   /** `files.concept_type` verbatim (frontmatter `type`), e.g. `'Book Summary'`.
    *  `null` when the file has no `type`. Only origin `'derived'` hits are

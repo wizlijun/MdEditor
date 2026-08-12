@@ -492,11 +492,12 @@ export const ja: Record<keyof Messages, string> = {
   'search.agentsAdd': 'このセクションを追加',
   'search.agentsAdded': 'AGENTS.md に追加しました',
 
-  // 検索パネル — 結果のグルーピング(B-T7)。両極のラベル以外、具体的な型の
-  // グループ見出しは生の concept_type 文字列をそのまま使い、翻訳しない
-  // (src/lib/search/grouping.ts 参照)。
+  // 検索パネル — 結果のグルーピング(B-T7;unlabeled グループは C-T10 で追加)。
+  // 両極のラベル以外、具体的な型のグループ見出しは生の concept_type 文字列を
+  // そのまま使い、翻訳しない(src/lib/search/grouping.ts 参照)。
   'search.group.human': 'あなたが書いた',
   'search.group.source': '元資料',
+  'search.group.unlabeled': '未分類',
   'search.group.other': 'その他',
   'search.group.count': '{n} 件',
 

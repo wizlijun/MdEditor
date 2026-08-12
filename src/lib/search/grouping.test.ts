@@ -78,24 +78,27 @@ describe('groupHits', () => {
     expect(otherIndex).toBeGreaterThan(namedIndex)
   })
 
-  it('组内保持原有分数顺序(四种桶各自独立验证)', () => {
+  it('组内保持原有分数顺序(五种桶各自独立验证)', () => {
     // `hits` arrives already sorted by score (highest first, per
     // `searchidx::query::finish`) — grouping must not re-sort within a
     // group. Review round 1: a fixture with only `human` hits pins this for
-    // 1 of 4 bucket kinds — a regression that re-sorts only inside
-    // `derivedType`/`derivedOther`/`source` (an insert-sorted push, or a
-    // `.sort()` added just in the type loop) would leave a human-only
-    // fixture green. Two hits per bucket kind, interleaved in the input so
-    // no bucket accidentally gets its "natural" order for free.
+    // 1 of N bucket kinds — a regression that re-sorts only inside
+    // `derivedType`/`derivedOther`/`source`/`unlabeled` (an insert-sorted
+    // push, or a `.sort()` added just in the type loop) would leave a
+    // human-only fixture green. Two hits per bucket kind, interleaved in the
+    // input so no bucket accidentally gets its "natural" order for free.
+    // C-T10 added the `unlabeled` pair alongside the pre-existing four.
     const hits = [
       hit({ path: 'human-first.md', origin: 'human' }),
       hit({ path: 'answer-first.md', origin: 'derived', conceptType: 'Answer' }),
       hit({ path: 'other-first.md', origin: 'derived', conceptType: null }),
       hit({ path: 'source-first.md', origin: 'source' }),
+      hit({ path: 'unlabeled-first.md', origin: 'unlabeled' }),
       hit({ path: 'human-second.md', origin: 'human' }),
       hit({ path: 'answer-second.md', origin: 'derived', conceptType: 'Answer' }),
       hit({ path: 'other-second.md', origin: 'derived', conceptType: null }),
       hit({ path: 'source-second.md', origin: 'source' }),
+      hit({ path: 'unlabeled-second.md', origin: 'unlabeled' }),
     ]
     const groups = groupHits(hits)
     const byKind = (kind: string) => groups.find((g) => g.kind === kind)!.hits.map((h) => h.path)
@@ -103,25 +106,52 @@ describe('groupHits', () => {
     expect(byKind('derivedType')).toEqual(['answer-first.md', 'answer-second.md'])
     expect(byKind('derivedOther')).toEqual(['other-first.md', 'other-second.md'])
     expect(byKind('source')).toEqual(['source-first.md', 'source-second.md'])
+    expect(byKind('unlabeled')).toEqual(['unlabeled-first.md', 'unlabeled-second.md'])
   })
 
-  it('origin unlabeled 折入 source 组,绝不落进 AI 产出的「其他」组(C-T2 review round 2, Important #4)', () => {
-    // Before this fix, `origin: 'unlabeled'` matched none of `groupHits`'s
-    // branches and fell through to `derivedOther` — rendered under the
-    // AI-produced heading, which is a strictly stronger false claim than
-    // "raw material" (an unlabeled file might be the user's own unsigned
-    // writing; it is definitely not evidence an agent produced it). This is
-    // a documented interim measure (see the TODO(C-T10) on `groupHits`), not
-    // the intended final grouping — C-T10 owns giving `unlabeled` its own
-    // `HitGroupKind`.
+  it('origin unlabeled 自成一组,排在 source 之后,绝不落进 AI 产出的「其他」组(C-T10)', () => {
+    // Before C-T10, `origin: 'unlabeled'` had no `HitGroupKind` of its own:
+    // pre-C-T2 it fell through to `derivedOther` (rendered under the
+    // AI-produced heading — a strictly stronger false claim than "raw
+    // material"), and the C-T2/C-T9 interim folded it into `source` instead
+    // (a different but still wrong claim: an unlabeled file might be the
+    // user's own unsigned writing, not raw source material). Neither claim
+    // is made now — `unlabeled` gets its own group, the fourth in the fixed
+    // order, and is never conflated with `source` or `derivedOther`.
     const hits = [
       hit({ path: 'unlabeled.md', origin: 'unlabeled' }),
+      hit({ path: 'src.md', origin: 'source' }),
       hit({ path: 'typed.md', origin: 'derived', conceptType: 'Answer' }),
     ]
     const groups = groupHits(hits)
+    const unlabeledGroup = groups.find((g) => g.kind === 'unlabeled')
     const sourceGroup = groups.find((g) => g.kind === 'source')
-    expect(sourceGroup?.hits.map((h) => h.path)).toEqual(['unlabeled.md'])
-    expect(groups.some((g) => g.kind === 'derivedOther')).toBe(false)
+    expect(unlabeledGroup?.hits.map((h) => h.path)).toEqual(['unlabeled.md'])
+    expect(sourceGroup?.hits.map((h) => h.path)).toEqual(['src.md'])
+    expect(groups.some((g) => g.kind === 'derivedOther' && g.hits.some((h) => h.path === 'unlabeled.md'))).toBe(false)
+    // Fixed order: unlabeled is the last group, strictly after source.
+    expect(groups.at(-1)?.kind).toBe('unlabeled')
+    expect(groups.findIndex((g) => g.kind === 'source')).toBeLessThan(
+      groups.findIndex((g) => g.kind === 'unlabeled'),
+    )
+  })
+
+  it('四组顺序:你写的 → AI 产出 → 原始资料 → 未标注', () => {
+    const hits = [
+      hit({ path: 'h.md', origin: 'human' }),
+      hit({ path: 'ans.md', origin: 'derived', conceptType: 'Answer' }),
+      hit({ path: 'src.md', origin: 'source' }),
+      hit({ path: 'u.md', origin: 'unlabeled' }),
+    ]
+    const groups = groupHits(hits)
+    expect(groups.map((g) => g.kind)).toEqual(['human', 'derivedType', 'source', 'unlabeled'])
+  })
+
+  it('未标注为空时不显示该组', () => {
+    const hits = [hit({ origin: 'human' }), hit({ origin: 'source' })]
+    const groups = groupHits(hits)
+    expect(groups.some((g) => g.kind === 'unlabeled')).toBe(false)
+    expect(groups.every((g) => g.hits.length > 0)).toBe(true)
   })
 
   it('空字符串 conceptType 与缺失一样归入「其他」', () => {

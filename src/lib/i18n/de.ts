@@ -490,12 +490,13 @@ export const de: Record<keyof Messages, string> = {
   'search.agentsAdd': 'Abschnitt hinzufügen',
   'search.agentsAdded': 'Zu AGENTS.md hinzugefügt',
 
-  // Suchpanel — Ergebnisgruppierung (B-T7). Abgesehen von den beiden Polen
-  // wird die Gruppenüberschrift für benannte Typen direkt aus dem rohen
-  // concept_type-String übernommen und nicht übersetzt (siehe
-  // src/lib/search/grouping.ts).
+  // Suchpanel — Ergebnisgruppierung (B-T7; `unlabeled` durch C-T10 ergänzt).
+  // Abgesehen von den beiden Polen wird die Gruppenüberschrift für benannte
+  // Typen direkt aus dem rohen concept_type-String übernommen und nicht
+  // übersetzt (siehe src/lib/search/grouping.ts).
   'search.group.human': 'Von dir geschrieben',
   'search.group.source': 'Rohes Quellmaterial',
+  'search.group.unlabeled': 'Nicht gekennzeichnet',
   'search.group.other': 'Sonstiges',
   'search.group.count': '{n} Treffer',
 
