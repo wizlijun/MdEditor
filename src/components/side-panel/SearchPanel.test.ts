@@ -47,7 +47,18 @@ vi.mock('@tauri-apps/plugin-store', () => ({
 }))
 vi.mock('@tauri-apps/plugin-os', () => ({ platform: () => 'macos', type: () => 'macos' }))
 
+// Only `openFile` is replaced; everything else in `tabs.svelte` stays real.
+// The panel's reveal call sits *after* `await openFile(...)`, so with the real
+// one (which needs a Tauri host) the click is swallowed by the panel's error
+// handling and the reveal assertions below could never run.
+const openFileMock = vi.fn(async (_path: string) => {})
+vi.mock('../../lib/tabs.svelte', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/tabs.svelte')>()),
+  openFile: (path: string) => openFileMock(path),
+}))
+
 import { searchStore, _setSearchImpl } from '../../lib/search/store.svelte'
+import { reveal } from '../../lib/outline/reveal.svelte'
 import { uiState, closeSettings } from '../../lib/ui-state.svelte'
 import { BOUNDARY_DELAY_MS, IDLE_DELAY_MS, DEEP_TIMEOUT_MS } from '../../lib/search/input-trigger'
 import type { SearchHit, SearchOptions, SearchResponse } from '../../lib/search/api'
@@ -106,16 +117,16 @@ describe('SearchPanel grouping', () => {
     expect(counts).toEqual(['1', '1', '1'])
 
     // Review round 1: headers/counts alone don't prove each hit renders
-    // under ITS OWN group — `{#each group.hits …}` swapped for `{#each
-    // searchStore.hits …}` (every hit rendered under every header) would
-    // leave both assertions above unchanged (counts read `group.hits.length`,
+    // under ITS OWN group — `{#each group.files …}` swapped for a loop over
+    // every hit in the store (every hit rendered under every header) would
+    // leave both assertions above unchanged (counts read `group.hitCount`,
     // which is still 1 per group; headers don't depend on the inner loop at
-    // all). Read the `.loc` row inside each `.group` and pin which hit is
+    // all). Read the file rows inside each `.group` and pin which hit is
     // actually nested under which header.
     const rowsPerGroup = Array.from(document.body.querySelectorAll('.group')).map((g) =>
-      Array.from(g.querySelectorAll('.hit .loc')).map((el) => el.textContent),
+      Array.from(g.querySelectorAll('.file .file-name')).map((el) => el.textContent),
     )
-    expect(rowsPerGroup).toEqual([['human.md:1'], ['ans.md:1'], ['src.md:1']])
+    expect(rowsPerGroup).toEqual([['human.md'], ['ans.md'], ['src.md']])
 
     unmount(app)
   })
@@ -138,9 +149,145 @@ describe('SearchPanel grouping', () => {
     expect(document.body.textContent).not.toContain('Raw source material')
 
     const rowsPerGroup = Array.from(document.body.querySelectorAll('.group')).map((g) =>
-      Array.from(g.querySelectorAll('.hit .loc')).map((el) => el.textContent),
+      Array.from(g.querySelectorAll('.file .file-name')).map((el) => el.textContent),
     )
-    expect(rowsPerGroup).toEqual([['human.md:1'], ['ans.md:1']])
+    expect(rowsPerGroup).toEqual([['human.md'], ['ans.md']])
+
+    unmount(app)
+  })
+})
+
+// Per-file collapsing and the cleaned/highlighted preview line (design spec
+// 2026-08-12 §2/§3). `grouping.test.ts` and `preview.test.ts` cover the pure
+// functions; what only a mounted panel can catch is the wiring — collapsed by
+// default, a click actually expanding, a one-hit file opening instead of
+// expanding, and the query's terms reaching `<mark>`.
+describe('SearchPanel per-file collapsing', () => {
+  function respond(hits: SearchHit[]) {
+    _setSearchImpl(async () => ({
+      route: 't1-fts', tookMs: 1, total: hits.length, hits, truncated: false, deepAvailable: false,
+    }))
+  }
+
+  async function render(hits: SearchHit[], query = 'x') {
+    respond(hits)
+    const app = await mountPanel()
+    await searchStore.run(query)
+    await new Promise((r) => setTimeout(r, 0))
+    return app
+  }
+
+  function fileRows() {
+    return Array.from(document.body.querySelectorAll<HTMLButtonElement>('.file-row'))
+  }
+
+  it('同文件多命中折叠成一行,展开后才出现每条命中', async () => {
+    const app = await render([
+      hit({ path: 'notes/a.md', line: 12, text: '外骨骼的能量回收路径', origin: 'human' }),
+      hit({ path: 'notes/a.md', line: 48, text: '外骨骼与假肢的边界', origin: 'human' }),
+    ], '外骨骼')
+
+    expect(fileRows()).toHaveLength(1)
+    expect(document.body.querySelector('.file-name')!.textContent).toBe('a.md')
+    expect(document.body.querySelector('.file-count')!.textContent).toBe('2')
+    expect(fileRows()[0].getAttribute('aria-expanded')).toBe('false')
+    expect(document.body.querySelectorAll('.hit')).toHaveLength(0)
+
+    fileRows()[0].click()
+    flushSync()
+
+    expect(fileRows()[0].getAttribute('aria-expanded')).toBe('true')
+    const locs = Array.from(document.body.querySelectorAll('.hit .loc')).map((el) => el.textContent)
+    expect(locs).toEqual(['12', '48'])
+    // The collapsed preview is gone once the real rows are showing.
+    expect(document.body.querySelectorAll('.preview')).toHaveLength(0)
+
+    // And it collapses again.
+    fileRows()[0].click()
+    flushSync()
+    expect(document.body.querySelectorAll('.hit')).toHaveLength(0)
+
+    unmount(app)
+  })
+
+  it('单命中文件不是可展开控件,点击直接打开对应文件', async () => {
+    const app = await render([hit({ path: 'solo.md', absPath: '/v/solo.md', text: '外骨骼', origin: 'human' })], '外骨骼')
+
+    const row = fileRows()[0]
+    expect(row.hasAttribute('aria-expanded')).toBe(false)
+    row.click()
+    await new Promise((r) => setTimeout(r, 0))
+    flushSync()
+    expect(openFileMock).toHaveBeenCalledWith('/v/solo.md')
+    // The click opened the file rather than expanding a disclosure.
+    expect(document.body.querySelectorAll('.hit')).toHaveLength(0)
+
+    unmount(app)
+  })
+
+  it('点击命中跳到命中所在的行,而不是块首行', async () => {
+    // The block starts at line 40; the match is its third line, so the reveal
+    // has to ask for 42. Asking for `hit.line` would drop the reader at the
+    // heading and leave them hunting for the match.
+    const block = ['## 记忆检索', '这一行不含关键词', '外骨骼的能量回收路径'].join('\n')
+    const app = await render(
+      [hit({ path: 'a.md', absPath: '/v/a.md', line: 40, lineEnd: 42, text: block, origin: 'human' })],
+      '外骨骼',
+    )
+
+    fileRows()[0].click()
+    await new Promise((r) => setTimeout(r, 0))
+    flushSync()
+
+    expect(openFileMock).toHaveBeenCalledWith('/v/a.md')
+    expect(reveal.req).toMatchObject({
+      line: 42,
+      // Cleaned, because rich mode matches against rendered text nodes.
+      text: '外骨骼的能量回收路径',
+      // Addressed, so a rebuilt editor can tell the request is meant for it.
+      path: '/v/a.md',
+    })
+
+    unmount(app)
+  })
+
+  it('折叠预览取命中所在的那一行,剥掉标记并高亮关键词', async () => {
+    const block = ['## 记忆检索', '这一行不含关键词', '**外**骨骼的[[髋关节|关节]]结构'].join('\n')
+    const app = await render([hit({ path: 'a.md', text: block, origin: 'human' })], '外骨骼')
+
+    const preview = document.body.querySelector('.preview')!
+    expect(preview.textContent).toBe('外骨骼的关节结构')
+    expect(preview.querySelector('mark')!.textContent).toBe('外骨骼')
+
+    unmount(app)
+  })
+
+  it('围栏内的命中标出语言,不把整块 JSON 铺出来', async () => {
+    const block = ['```json', '{', '  "entity_boost": 0.3,', '  "raw_score": 1.0', '}', '```'].join('\n')
+    const app = await render([hit({ path: 'a.md', text: block, origin: 'human' })], 'entity_boost')
+
+    expect(document.body.querySelector('.preview .lang')!.textContent).toBe('json')
+    expect(document.body.querySelector('.preview')!.textContent).toContain('"entity_boost": 0.3,')
+    expect(document.body.querySelector('.preview')!.textContent).not.toContain('raw_score')
+
+    unmount(app)
+  })
+
+  it('换一个查询会收起上一次展开的文件', async () => {
+    const hits = [
+      hit({ path: 'a.md', line: 1, text: '外骨骼一', origin: 'human' }),
+      hit({ path: 'a.md', line: 2, text: '外骨骼二', origin: 'human' }),
+    ]
+    const app = await render(hits, '外骨骼')
+
+    fileRows()[0].click()
+    flushSync()
+    expect(document.body.querySelectorAll('.hit')).toHaveLength(2)
+
+    await searchStore.run('别的词')
+    await new Promise((r) => setTimeout(r, 0))
+    flushSync()
+    expect(document.body.querySelectorAll('.hit')).toHaveLength(0)
 
     unmount(app)
   })

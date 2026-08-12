@@ -623,7 +623,7 @@ export const zh: Record<keyof Messages, string> = {
   'folderView.viewNotes': '只看笔记',
   'folderView.hideFolders': '隐藏文件夹',
   'folderView.renameConflict': '同名文件已存在',
-  'folderView.tabTitle': '文件',
+  'folderView.tabTitle': '文件夹',
 
   // OpenClaw settings + devices
 
@@ -762,6 +762,7 @@ export const zh: Record<keyof Messages, string> = {
   'logs.categories.all': '全部分类',
   'logs.categories.core': '核心',
   'logs.categories.gitSync': 'Git 同步',
+  'logs.categories.search': '索引与搜索',
   'logs.categories.notification': '通知',
   'logs.categories.plugin': '插件',
   'logs.categories.pluginAll': '全部插件',

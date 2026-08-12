@@ -330,7 +330,10 @@
   async function onJump(n: NodeT) {
     if (n.anchorLine == null) return
     await openFile(mainPath).catch(() => {})
-    requestReveal(n.anchorLine, n.content)
+    // `mainPath` addresses the request: opening the main document rebuilds the
+    // editor (`{#key tab.id}`), and the new instance only claims requests
+    // meant for the file it is showing.
+    requestReveal(n.anchorLine, n.content, mainPath)
   }
   function onPageClick(target: string) {
     if (onWikilink) onWikilink(target)

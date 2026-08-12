@@ -634,7 +634,7 @@ export const en = {
   'folderView.viewNotes': 'Notes only',
   'folderView.hideFolders': 'Hide folders',
   'folderView.renameConflict': 'A file with that name already exists',
-  'folderView.tabTitle': 'Files',
+  'folderView.tabTitle': 'Folders',
 
   // OpenClaw settings + devices
 
@@ -773,6 +773,7 @@ export const en = {
   'logs.categories.all': 'All categories',
   'logs.categories.core': 'Core',
   'logs.categories.gitSync': 'Git Sync',
+  'logs.categories.search': 'Index & Search',
   'logs.categories.notification': 'Notifications',
   'logs.categories.plugin': 'Plugins',
   'logs.categories.pluginAll': 'All plugins',

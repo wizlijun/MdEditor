@@ -591,7 +591,7 @@ export const de: Record<keyof Messages, string> = {
   'folderView.viewNotes': 'Nur Notizen',
   'folderView.hideFolders': 'Ordner ausblenden',
   'folderView.renameConflict': 'Eine Datei mit diesem Namen existiert bereits',
-  'folderView.tabTitle': 'Dateien',
+  'folderView.tabTitle': 'Ordner',
 
   // OpenClaw settings + devices
 
@@ -730,6 +730,7 @@ export const de: Record<keyof Messages, string> = {
   'logs.categories.all': 'Alle Kategorien',
   'logs.categories.core': 'Kern',
   'logs.categories.gitSync': 'Git Sync',
+  'logs.categories.search': 'Index & Suche',
   'logs.categories.notification': 'Mitteilungen',
   'logs.categories.plugin': 'Plugins',
   'logs.categories.pluginAll': 'Alle Plugins',

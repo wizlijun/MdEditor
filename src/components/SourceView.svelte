@@ -21,10 +21,14 @@
     value,
     oninput,
     tabId,
+    filePath,
   }: {
     value: string
     oninput: (e: Event) => void
     tabId?: string
+    /** Only used to decide whether a `RevealRequest` is addressed to this
+     *  document — see the reveal effect below. */
+    filePath?: string | null
   } = $props()
 
   let textareaEl: HTMLTextAreaElement | undefined = $state()
@@ -254,10 +258,14 @@
   import EditorContextMenu, { type EditorActions } from '../lib/context-menu/EditorContextMenu.svelte'
   import { createSourceActions } from '../lib/context-menu/source-actions'
 
-  let lastRevealSeq = reveal.req?.seq ?? 0
+  // Same reasoning as RichEditor's copy: `{#key tab.id}` rebuilds this on every
+  // file switch, so a request issued before the switch must still be claimable
+  // — and `req.path` is what stops a stale one landing on the wrong document.
+  let lastRevealSeq = 0
   $effect(() => {
     const req = reveal.req
     if (!req || req.seq === lastRevealSeq || !textareaEl) return
+    if (req.path && req.path !== filePath) return
     lastRevealSeq = req.seq
     const lines = value.split('\n')
     // 行号定位；若该行文本已变（debounce 窗口），按锚文本全文搜索兜底

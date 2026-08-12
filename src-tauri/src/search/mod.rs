@@ -708,6 +708,7 @@ fn search_locked(
     // the check that matters most: whatever we queued behind, the user has
     // typed since.
     if superseded(counter, ticket) {
+        crate::log_cat!("search", "debug", "query={query:?} superseded");
         return Err(CANCELLED.to_string());
     }
     let idx = require_index(&guard)?;
@@ -722,6 +723,11 @@ fn search_locked(
                 || deadline.is_some_and(|d| Instant::now() >= d)
         })),
     };
+    // Read off `limits` *before* the search, because `limits` is moved-from
+    // by nothing here but is borrowed below — and more importantly because
+    // `deep_used` is what the log line reports, and it must be the value the
+    // query actually ran with, not one recomputed from `deep` afterwards.
+    let deep_used = limits.deep;
     // Review round 1, Important 2: this used to call `idx.search_with`,
     // which ranks with `Weights::default()` unconditionally — so a user who
     // configured `searchWeights` (once C-T11 ships the UI) would see the
@@ -736,8 +742,22 @@ fn search_locked(
     // An abort has two causes and they are not the same answer: superseded
     // means "throw this away", deadline means "partial, and say so".
     if superseded(counter, ticket) {
+        crate::log_cat!("search", "debug", "query={query:?} superseded");
         return Err(CANCELLED.to_string());
     }
+    // Deliberately `debug`, not `info`: `log_bus` is one 3000-line ring buffer
+    // shared with git sync, plugins and core, and these lines are produced at
+    // typing speed. Visible by default they would evict everything else; at
+    // `debug` the Logs window's level filter keeps them out until asked for.
+    crate::log_cat!(
+        "search",
+        "debug",
+        "query={query:?} route={} hits={} {}ms deep={deep_used} truncated={}",
+        answer.route.as_str(),
+        answer.hits.len(),
+        started.elapsed().as_millis(),
+        answer.truncated
+    );
     let root = idx.vault_root().to_path_buf();
     Ok(SearchResponse {
         route: answer.route.as_str().to_string(),
@@ -1439,6 +1459,66 @@ mod command_tests {
             summary[0].message.contains("10"),
             "汇总行要说清还剩多少条(60 - 50 = 10): {:?}", summary[0]
         );
+    }
+
+    /// 查询侧必须留下一行可过滤的痕迹 —— 在此之前 `search` 分类只有索引
+    /// 事件,日志窗口按分类筛出来看不到任何「搜索」发生过。
+    #[test]
+    fn a_query_logs_one_debug_line_under_the_search_category() {
+        let _g = crate::log_bus::test_guard();
+        crate::log_bus::clear();
+
+        let v = tempfile::tempdir().unwrap();
+        std::fs::write(v.path().join("a.md"), "alpha body\n").unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let mut idx =
+            searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+        idx.sweep(&searchidx::ScanOptions::default(), None).unwrap();
+        let handle: IndexHandle = Arc::new(Mutex::new(Some(idx)));
+
+        let counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+        search_locked(&handle, Instant::now(), "alpha", Some(50), Some(false), None, &counter, 1)
+            .expect("查询本身不该失败");
+
+        let lines: Vec<_> = crate::log_bus::snapshot()
+            .into_iter()
+            .filter(|l| l.category == "search" && l.message.starts_with("query="))
+            .collect();
+        assert_eq!(lines.len(), 1, "一次查询恰好一行: {lines:?}");
+        // debug 级是刻意的:log_bus 是全局 3000 行环形缓冲,查询行按打字速度
+        // 产生,默认可见会把 git sync / 插件的日志顶出去。
+        assert_eq!(lines[0].level, "debug");
+        let m = &lines[0].message;
+        for expected in ["query=\"alpha\"", "route=t1-fts", "hits=1", "deep=false", "truncated=false"] {
+            assert!(m.contains(expected), "日志行缺 {expected}: {m}");
+        }
+    }
+
+    /// 被更新 ticket 抢占的查询也要留痕,否则「打字时查询去哪了」在日志里
+    /// 是一片空白。
+    #[test]
+    fn a_superseded_query_logs_that_it_was_superseded() {
+        let _g = crate::log_bus::test_guard();
+        crate::log_bus::clear();
+
+        let v = tempfile::tempdir().unwrap();
+        std::fs::write(v.path().join("a.md"), "alpha body\n").unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let idx = searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+        let handle: IndexHandle = Arc::new(Mutex::new(Some(idx)));
+
+        // ticket 1 出发时计数器已经走到 2 —— 正是用户又敲了一个键的情形。
+        let counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(2));
+        // `SearchResponse` 没有 Debug(它是 serde DTO),所以不能用 expect_err。
+        let got = search_locked(&handle, Instant::now(), "alpha", Some(50), Some(false), None, &counter, 1);
+        assert_eq!(got.err().as_deref(), Some(CANCELLED), "被抢占的查询必须报 CANCELLED");
+
+        let lines: Vec<_> = crate::log_bus::snapshot()
+            .into_iter()
+            .filter(|l| l.category == "search" && l.message.contains("superseded"))
+            .collect();
+        assert_eq!(lines.len(), 1, "被抢占也要留一行: {lines:?}");
+        assert_eq!(lines[0].level, "debug");
     }
 
     /// 不到上限时不该冒出汇总行 —— 否则用户会以为还有没列出来的文件。

@@ -14,6 +14,19 @@ import type { SearchHit } from './api'
 
 export type HitGroupKind = 'human' | 'derivedType' | 'derivedOther' | 'source' | 'unlabeled'
 
+/** One file's hits inside a group. The panel renders this collapsed by
+ *  default — a query that matches a long note twenty times used to spend
+ *  twenty rows repeating the same path. */
+export interface FileGroup {
+  /** Vault-relative path — the grouping key, and the hover title. */
+  path: string
+  /** Absolute path, handed to `openFile`. */
+  absPath: string
+  /** Basename, the only part shown; the sidebar is too narrow for the rest. */
+  name: string
+  hits: SearchHit[]
+}
+
 export interface HitGroup {
   kind: HitGroupKind
   /** Only set for `kind === 'derivedType'` — the raw `concept_type` string
@@ -22,7 +35,10 @@ export interface HitGroup {
    *  `src/lib/okf/concept.ts`), not a fixed enum, so this is never
    *  translated — a plugin can introduce a new type without touching i18n. */
   conceptType?: string
-  hits: SearchHit[]
+  files: FileGroup[]
+  /** Hits across all of `files` — the count shown on the group header. It is
+   *  hits, not files: "3" next to 「人写的」 means three matches. */
+  hitCount: number
 }
 
 /**
@@ -61,9 +77,16 @@ export interface HitGroup {
  * now: `unlabeled` is its own group, so a hit in it asserts nothing about
  * who wrote it or whether it's raw material — only that nobody has said yet.
  *
- * Within each group, hits keep the relative order they arrived in — this
- * function never re-sorts by score; that already happened upstream in
- * `searchidx::query::finish`.
+ * Within each group, hits are then bucketed by file. Files are ordered by
+ * where each one *first* appears — since `hits` arrives score-sorted, that is
+ * the file holding the group's best hit. Within a file, hits keep the relative
+ * order they arrived in. This function never re-sorts by score; that already
+ * happened upstream in `searchidx::query::finish`.
+ *
+ * File bucketing is per group, not global: a file with both a `human` hit and
+ * a `source` hit appears once under each. Merging them would mean picking one
+ * pole for a file that genuinely sits in both, which is exactly the
+ * distinction the grouping exists to show.
  */
 export function groupHits(hits: SearchHit[]): HitGroup[] {
   const human: SearchHit[] = []
@@ -94,12 +117,42 @@ export function groupHits(hits: SearchHit[]): HitGroup[] {
   }
 
   const groups: HitGroup[] = []
-  if (human.length > 0) groups.push({ kind: 'human', hits: human })
+  if (human.length > 0) groups.push(makeGroup('human', human))
   for (const conceptType of derivedTypeOrder) {
-    groups.push({ kind: 'derivedType', conceptType, hits: derivedByType.get(conceptType)! })
+    groups.push(makeGroup('derivedType', derivedByType.get(conceptType)!, conceptType))
   }
-  if (derivedOther.length > 0) groups.push({ kind: 'derivedOther', hits: derivedOther })
-  if (source.length > 0) groups.push({ kind: 'source', hits: source })
-  if (unlabeled.length > 0) groups.push({ kind: 'unlabeled', hits: unlabeled })
+  if (derivedOther.length > 0) groups.push(makeGroup('derivedOther', derivedOther))
+  if (source.length > 0) groups.push(makeGroup('source', source))
+  if (unlabeled.length > 0) groups.push(makeGroup('unlabeled', unlabeled))
   return groups
+}
+
+function makeGroup(kind: HitGroupKind, hits: SearchHit[], conceptType?: string): HitGroup {
+  const group: HitGroup = { kind, files: byFile(hits), hitCount: hits.length }
+  if (conceptType !== undefined) group.conceptType = conceptType
+  return group
+}
+
+/** Buckets by `path`, preserving first-appearance order of files and arrival
+ *  order of hits within each. */
+function byFile(hits: SearchHit[]): FileGroup[] {
+  const order: string[] = []
+  const byPath = new Map<string, FileGroup>()
+  for (const hit of hits) {
+    let file = byPath.get(hit.path)
+    if (!file) {
+      file = { path: hit.path, absPath: hit.absPath, name: basename(hit.path), hits: [] }
+      byPath.set(hit.path, file)
+      order.push(hit.path)
+    }
+    file.hits.push(hit)
+  }
+  return order.map((p) => byPath.get(p)!)
+}
+
+/** `path` is always `/`-separated — `searchidx::norm::rel_path` rebuilds it
+ *  that way on every platform, so there is no `\` case to handle. */
+function basename(path: string): string {
+  const cut = path.lastIndexOf('/')
+  return cut < 0 ? path : path.slice(cut + 1)
 }

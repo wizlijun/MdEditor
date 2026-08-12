@@ -14,6 +14,7 @@
   import { pushToast } from '../lib/toast.svelte'
   import { basename } from '../lib/paths'
   import FolderTreeNode from './FolderTreeNode.svelte'
+  import SideViewSwitcher from './side-panel/SideViewSwitcher.svelte'
 
   let { tab }: { tab: Tab | null } = $props()
   let activePath = $derived(tab?.filePath ?? null)
@@ -164,6 +165,10 @@
 
 <div class="folder-view-content">
   <div class="header">
+    <!-- Same left-side view switcher the search panel uses; the wrapper keeps it
+         at content width (and lends it the title weight) so the root name below
+         still gets the remaining space. -->
+    <span class="title"><SideViewSwitcher side="left" {tab} /></span>
     <button class="hbtn" onclick={goUp} disabled={!canGoUp} title={t('folderView.parentFolder')} aria-label={t('folderView.parentFolder')}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <line x1="12" y1="19" x2="12" y2="5" />
@@ -290,6 +295,11 @@
     display: flex; align-items: center; gap: 6px;
     padding: 6px 8px; border-bottom: 1px solid rgba(0,0,0,0.06);
     font-size: 12px;
+  }
+  .title {
+    display: flex; align-items: center;
+    flex: 0 1 auto; min-width: 0;
+    font-weight: 600;
   }
   .root-name {
     flex: 1; min-width: 0;

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import { listen } from '@tauri-apps/api/event'
   import type { Tab } from '../../lib/tabs.svelte'
   import { openFile } from '../../lib/tabs.svelte'
@@ -11,7 +12,8 @@
   import { searchStore, isIndexNotReady } from '../../lib/search/store.svelte'
   import type { SearchHit } from '../../lib/search/api'
   import { decideTrigger, DEEP_AFTER_MS, DEEP_TIMEOUT_MS } from '../../lib/search/input-trigger'
-  import { groupHits, type HitGroup } from '../../lib/search/grouping'
+  import { groupHits, type HitGroup, type FileGroup } from '../../lib/search/grouping'
+  import { parseHighlightTerms, previewLine, highlightParts } from '../../lib/search/preview'
   import { openSettings } from '../../lib/ui-state.svelte'
 
   // `tab` is part of every side view's props contract (see SidePanel.svelte);
@@ -81,6 +83,38 @@
 
   function groupKey(group: HitGroup): string {
     return group.kind === 'derivedType' ? `derivedType:${group.conceptType}` : group.kind
+  }
+
+  // Which file rows are open. Keyed by group *and* path: the same file can
+  // appear under two groups (a note with both a human hit and a source hit),
+  // and expanding one must not expand the other.
+  const expanded = new SvelteSet<string>()
+  function fileKey(group: HitGroup, file: FileGroup): string {
+    return `${groupKey(group)}\u0000${file.path}`
+  }
+  function toggleFile(group: HitGroup, file: FileGroup) {
+    const key = fileKey(group, file)
+    if (!expanded.delete(key)) expanded.add(key)
+  }
+
+  // A new query invalidates every open row — otherwise last query's expansions
+  // land on whichever same-named files happen to come back this time. `untrack`
+  // keeps the write off this effect's own dependency list; without it the
+  // `SvelteSet` mutation re-invalidates the effect that just ran.
+  $effect(() => {
+    searchStore.query
+    untrack(() => expanded.clear())
+  })
+
+  // The words to mark up. Parsed from the query the same way the backend
+  // parses it, so `path:` and friends never highlight anything in the prose.
+  let terms = $derived(parseHighlightTerms(searchStore.query))
+
+  // A hit's one displayable line — `hit.text` is a whole block, and in a vault
+  // full of ```json / ```mermaid fences that block is routinely forty lines of
+  // punctuation. See `src/lib/search/preview.ts`.
+  function preview(hit: SearchHit) {
+    return previewLine(hit.text, terms)
   }
 
   // Every keystroke re-decides *when* (and whether) to query — see
@@ -174,11 +208,16 @@
   async function onOpenHit(hit: SearchHit) {
     try {
       await openFile(hit.absPath)
-      // `text` is a whole block and may span several source lines; the reveal
-      // anchor only ever matches within a single rendered line/text node, so
-      // hand it the first non-blank line rather than the raw multi-line block.
-      const anchor = hit.text.split('\n').find((l) => l.trim().length > 0)?.trim() ?? hit.text
-      requestReveal(hit.line, anchor)
+      // Jump to the line the panel actually showed, not to the top of the
+      // block: `hit.line` is where the block starts, and `p.line` is how far
+      // into it the match sits.
+      //
+      // The anchor is the *cleaned* text on purpose. Rich mode finds its
+      // target by scanning rendered text nodes, where the markup is already
+      // gone — a raw `**外**骨骼` would never match. Source mode prefers the
+      // line number anyway and only falls back to the anchor.
+      const p = previewLine(hit.text, terms)
+      requestReveal(hit.line + p.line, p.text || hit.text, hit.absPath)
     } catch (e) {
       showError(String(e))
     }
@@ -244,18 +283,20 @@
 
 <div class="search-content">
   <header>
-    <button class="hbtn" title={t('search.hide')} aria-label={t('search.hide')} onclick={() => void setSideVisible('left', false)}>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <line x1="9" y1="3" x2="9" y2="21" />
-        <polyline points="16 15 13 12 16 9" />
-      </svg>
-    </button>
     <SideViewSwitcher side="left" {tab} />
     <button class="hbtn settings-btn" title={t('search.openIndexSettings')} aria-label={t('search.openIndexSettings')} onclick={() => openSettings('search')}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="3" />
         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </button>
+    <!-- Collapse sits last, at the right edge — same place the folder view
+         puts it, so the button doesn't move when you switch views. -->
+    <button class="hbtn" title={t('search.hide')} aria-label={t('search.hide')} onclick={() => void setSideVisible('left', false)}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <line x1="9" y1="3" x2="9" y2="21" />
+        <polyline points="16 15 13 12 16 9" />
       </svg>
     </button>
   </header>
@@ -292,24 +333,56 @@
         <div class="group">
           <div class="group-header">
             <span class="group-label">{groupLabel(group)}</span>
-            <span class="group-count">{t('search.group.count', { n: group.hits.length })}</span>
+            <span class="group-count">{t('search.group.count', { n: group.hitCount })}</span>
           </div>
-          <ul class="hits">
-            {#each group.hits as hit, i (hit.path + ':' + hit.line + ':' + i)}
-              <li class="hit">
-                <button class="row" onclick={() => void onOpenHit(hit)}>
-                  <span class="breadcrumb" title={hit.breadcrumb}>{hit.breadcrumb}</span>
-                  <span class="text">
-                    {#if hit.agentBy}
-                      <span class="marker" title={t('search.agentWritten', { agent: hit.agentBy })}>✦</span>
-                    {/if}
-                    {#if hit.humanVerified}
-                      <span class="marker" title={t('search.humanVerified')}>●</span>
-                    {/if}
-                    {hit.text}
+          <ul class="files">
+            {#each group.files as file (file.path)}
+              {@const single = file.hits.length === 1}
+              {@const open = expanded.has(fileKey(group, file))}
+              {@const head = preview(file.hits[0])}
+              <li class="file">
+                <!-- One button for the whole collapsed card. A single-hit file
+                     never expands — the expansion would show the very line
+                     already previewed — so it opens the hit directly and is
+                     not an expandable control at all. -->
+                <button
+                  class="file-row"
+                  class:open
+                  title={file.path}
+                  aria-expanded={single ? undefined : open}
+                  onclick={() => (single ? void onOpenHit(file.hits[0]) : toggleFile(group, file))}
+                >
+                  <span class="file-head">
+                    <span class="twisty" class:hidden={single} aria-hidden="true"></span>
+                    <span class="file-name">{file.name}</span>
+                    <span class="file-count">{file.hits.length}</span>
                   </span>
-                  <span class="loc">{hit.path}:{hit.line}</span>
+                  {#if !open && head.text}
+                    <!-- Kept on one line on purpose: Svelte preserves the
+                         newline+indent between tags as a text node, which
+                         would show up as a leading space in the preview. -->
+                    <span class="preview">{#if head.lang}<span class="lang">{head.lang}</span>{/if}{#each highlightParts(head.text, terms) as part}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
+                  {/if}
                 </button>
+
+                {#if open}
+                  <ul class="hits">
+                    {#each file.hits as hit, i (hit.path + ':' + hit.line + ':' + i)}
+                      {@const p = preview(hit)}
+                      <li class="hit">
+                        <button class="row" onclick={() => void onOpenHit(hit)}>
+                          {#if hit.breadcrumb}
+                            <span class="breadcrumb" title={hit.breadcrumb}>{hit.breadcrumb}</span>
+                          {/if}
+                          <!-- Same one-line rule as the preview above: the
+                               leading spans carry their own margins, and any
+                               newline between them renders as extra space. -->
+                          <span class="text"><span class="loc">{hit.line + p.line}</span>{#if hit.agentBy}<span class="marker" title={t('search.agentWritten', { agent: hit.agentBy })}>✦</span>{/if}{#if hit.humanVerified}<span class="marker" title={t('search.humanVerified')}>●</span>{/if}{#if p.lang}<span class="lang">{p.lang}</span>{/if}{#each highlightParts(p.text, terms) as part}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
               </li>
             {/each}
           </ul>
@@ -379,7 +452,6 @@
   .deep-hint:hover { background: rgba(0,0,0,0.05); opacity: 0.85; }
   .error-row { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
   .error { margin: 0; font-size: 12px; color: #c0392b; }
-  .settings-btn { margin-left: auto; }
   .group + .group { margin-top: 6px; }
   .group-header {
     display: flex; align-items: baseline; gap: 6px;
@@ -389,22 +461,77 @@
   }
   .group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .group-count { opacity: 0.7; font-weight: 400; text-transform: none; }
-  .hits { list-style: none; margin: 0; padding: 0; }
-  .hit { border-radius: 6px; }
-  .row {
-    display: flex; flex-direction: column; gap: 2px;
+  /* The whole result tree is three levels deep but only ever indents once, by
+     8px, and expresses the last step with a rule rather than whitespace — the
+     panel is narrow enough that a second indent level would cost more than the
+     hierarchy is worth. */
+  .files { list-style: none; margin: 0; padding: 0; }
+  .file { border-radius: 6px; }
+  .file-row {
+    display: flex; flex-direction: column; gap: 1px;
     width: 100%; text-align: left;
-    border: 0; background: transparent; cursor: pointer;
-    padding: 6px 8px; border-radius: 6px;
+    border: 0; background: transparent; color: inherit; cursor: pointer;
+    font: inherit; padding: 4px 8px; border-radius: 6px;
+  }
+  .file-row:hover { background: rgba(0,0,0,0.05); }
+  .file-head { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  /* A CSS triangle, not a glyph: buttons do not inherit font-size, so a
+     character here would size unpredictably against the app's text scale. */
+  .twisty { position: relative; flex: 0 0 10px; height: 10px; }
+  .twisty::before {
+    content: ''; position: absolute; left: 2px; top: 1px;
+    border-left: 5px solid currentColor;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    opacity: 0.5;
+    transform-origin: 2.5px 4px;
+    transition: transform 0.12s ease;
+  }
+  .file-row.open .twisty::before { transform: rotate(90deg); }
+  .twisty.hidden { visibility: hidden; }
+  .file-name {
+    font-size: 12px; font-weight: 600; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .file-count { margin-left: auto; padding-left: 6px; flex: 0 0 auto; font-size: 11px; opacity: 0.45; }
+  .preview {
+    display: block; font-size: 12px; opacity: 0.65;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .hits {
+    list-style: none; margin: 0 0 2px 8px; padding: 0;
+    border-left: 1px solid rgba(0,0,0,0.12);
+  }
+  .hit { border-radius: 4px; }
+  .row {
+    display: flex; flex-direction: column; gap: 1px;
+    width: 100%; text-align: left;
+    border: 0; background: transparent; color: inherit; cursor: pointer;
+    font: inherit; padding: 3px 6px; border-radius: 4px;
   }
   .row:hover { background: rgba(0,0,0,0.05); }
   .breadcrumb {
-    font-size: 11px; opacity: 0.55;
+    font-size: 10px; opacity: 0.45;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .text { font-size: 13px; }
+  .text {
+    font-size: 12px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
   .marker { opacity: 0.7; margin-right: 3px; }
-  .loc { font-size: 11px; opacity: 0.45; }
+  .loc { font-size: 10px; opacity: 0.45; margin-right: 4px; font-variant-numeric: tabular-nums; }
+  /* Fence language, so a hit inside ```json reads as code rather than as
+     broken prose. */
+  .lang {
+    font-size: 10px; opacity: 0.6; margin-right: 4px;
+    padding: 0 3px; border-radius: 3px; white-space: nowrap;
+    background: rgba(0,0,0,0.07);
+  }
+  mark {
+    background: rgba(255,214,0,0.45); color: inherit;
+    border-radius: 2px; padding: 0 1px;
+  }
   .status {
     padding: 5px 10px; font-size: 11px; opacity: 0.6;
     border-top: 1px solid var(--border-color, #3333);
@@ -416,7 +543,10 @@
     .search-content { background: var(--drawer-bg, #1c1c1e); }
     .hbtn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
     .search-input { border-color: rgba(255,255,255,0.18); background: var(--input-bg, #2a2a2c); }
-    .row:hover { background: rgba(255,255,255,0.08); }
+    .row:hover, .file-row:hover { background: rgba(255,255,255,0.08); }
+    .hits { border-left-color: rgba(255,255,255,0.16); }
+    .lang { background: rgba(255,255,255,0.12); }
+    mark { background: rgba(255,214,0,0.3); }
     .deep-hint:hover { background: rgba(255,255,255,0.08); }
     .error { color: #ff6b5e; }
   }
