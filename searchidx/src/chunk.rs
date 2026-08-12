@@ -22,7 +22,27 @@ pub struct Parsed {
 /// `sync_dir: &str` (the sync-mirror special case rule 5′ replaced).
 pub fn parse_file(rel_path: &str, raw: &str, mtime_secs: i64, globs: &SourceGlobs) -> Parsed {
     let text = norm::strip_cr(raw);
-    let (fm_raw, body, body_line) = frontmatter::split(&text);
+
+    // Format dispatch is decided FIRST, because it also decides whether the
+    // bytes are allowed to be read as frontmatter at all. Only markdown has
+    // frontmatter: spec §4.2 defines `.srt`/`.vtt` as "cue number / timecode
+    // / text / blank line" and §4.3 defines `.txt` as "split into blocks on
+    // blank lines", neither with a frontmatter step. Running
+    // `frontmatter::split` unconditionally (as this did until the final fix
+    // wave) silently DROPPED content: a `.txt` whose first line happens to
+    // be `---` had everything up to the next `---` removed from the body
+    // before `plain::chunk` ever saw it — unsearchable, with no diagnostic —
+    // and a `type:` line inside that accidental block reclassified the file
+    // through rule 4, overriding the source-glob designation rule 5′ is
+    // supposed to give it. `---` is ordinary punctuation in transcripts and
+    // plain text (a scene divider, a rule under a heading); it is a header
+    // only in markdown.
+    let is_transcript = ends_with_ascii_ci(rel_path, ".srt") || ends_with_ascii_ci(rel_path, ".vtt");
+    let is_plain_text = ends_with_ascii_ci(rel_path, ".txt");
+    let is_markdown = !is_transcript && !is_plain_text;
+
+    let (fm_raw, body, body_line) =
+        if is_markdown { frontmatter::split(&text) } else { (None, text.as_ref(), 1) };
     // `fm_raw.is_some()` must be captured BEFORE it is collapsed below —
     // `fm_raw.map(parse).unwrap_or_default()` produces the exact same
     // `Frontmatter::default()`-shaped value for "no `---` block at all" and
@@ -35,21 +55,22 @@ pub fn parse_file(rel_path: &str, raw: &str, mtime_secs: i64, globs: &SourceGlob
     let fm_present = fm_raw.is_some();
     let fm = fm_raw.map(frontmatter::parse).unwrap_or_default();
 
-    // Extension dispatch. `.note.md` is checked with an exact, case-sensitive
-    // `ends_with` (it is this vault's own in-app convention — see the
-    // asymmetry `is_indexable` documents in `scan.rs`); the three externally-
-    // authored formats go through the SAME `ends_with_ascii_ci` helper
-    // `is_indexable` uses to decide these files are in scope at all, so
-    // dispatch can never disagree with the scan gate about what an
-    // upper-cased `Lecture.SRT` is. `.md` (anything left over) is the
-    // fallback, matching every file `is_indexable` admits that isn't one of
-    // the other three shapes.
-    let blocks = if rel_path.ends_with(".note.md") {
-        outline::chunk(body, body_line)
-    } else if ends_with_ascii_ci(rel_path, ".srt") || ends_with_ascii_ci(rel_path, ".vtt") {
+    // Chunker dispatch, from the same three booleans computed above so it can
+    // never disagree with the frontmatter decision. `.note.md` is checked
+    // with an exact, case-sensitive `ends_with` (it is this vault's own
+    // in-app convention — see the asymmetry `is_indexable` documents in
+    // `scan.rs`); the three externally-authored formats go through the SAME
+    // `ends_with_ascii_ci` helper `is_indexable` uses to decide these files
+    // are in scope at all, so dispatch can never disagree with the scan gate
+    // about what an upper-cased `Lecture.SRT` is. `.md` (anything left over)
+    // is the fallback, matching every file `is_indexable` admits that isn't
+    // one of the other three shapes.
+    let blocks = if is_transcript {
         transcript::chunk(body, body_line)
-    } else if ends_with_ascii_ci(rel_path, ".txt") {
+    } else if is_plain_text {
         plain::chunk(body, body_line)
+    } else if rel_path.ends_with(".note.md") {
+        outline::chunk(body, body_line)
     } else {
         prose::chunk(body, body_line)
     };
@@ -361,6 +382,59 @@ mod tests {
         let g = crate::globs::parse(&["media/**".to_string()]);
         let p = parse_file("media/a.srt", "1\n00:00:01,000 --> 00:00:02,000\n话\n", 0, &g);
         assert_eq!(p.meta.origin, crate::Origin::Source);
+    }
+
+    /// Final fix wave, Blocker 4 — CONTENT LOSS. `frontmatter::split` used to
+    /// run unconditionally, before the format dispatch, so a `.txt` (or
+    /// `.srt`/`.vtt`) whose first line is `---` had everything up to the next
+    /// `---` amputated from the body: those words never reached
+    /// `plain::chunk`, never became a block, and never entered FTS — the
+    /// query below returned zero hits against a file that plainly contains
+    /// the word. Nothing reported it. Spec §4.3 defines `.txt` as "split into
+    /// blocks on blank lines" with no frontmatter step at all; `---` is
+    /// ordinary punctuation outside markdown.
+    #[test]
+    fn a_leading_dash_block_in_a_txt_file_is_content_not_frontmatter() {
+        let p = parse_file("raw/b.txt", "---\nscene alphaword one\n---\nscene betaword two\n", MTIME, &no_globs());
+        let joined = p.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("alphaword"), "leading block was dropped: {:?}", p.blocks);
+        assert!(joined.contains("betaword"), "{:?}", p.blocks);
+    }
+
+    /// The same defect's other half — a TIER FLIP, not just lost text. A
+    /// `type:` line inside that accidental frontmatter block reached rule 4
+    /// (registered type → mapped tier) and beat rule 5′, so a `.txt` sitting
+    /// squarely inside a source-glob pattern classified `Derived` instead of
+    /// `Source`. A non-markdown file has no frontmatter by construction, so
+    /// its tier must be derived from `None` — which is exactly what rules
+    /// 5′/6′ expect (spec §3: "`.srt`/`.txt`/`.vtt` 永不进「未标注」" holds
+    /// only because rule 5′ necessarily fires first).
+    #[test]
+    fn a_type_line_inside_a_txt_file_does_not_override_the_source_glob_tier() {
+        let globs = crate::globs::parse(&["raw/**".to_string()]);
+        let p = parse_file("raw/a.txt", "---\ntype: Book Summary\n---\nhello alpha world\n", MTIME, &globs);
+        assert_eq!(p.meta.origin, crate::origin::Origin::Source);
+        assert_eq!(p.meta.concept_type, None, "a .txt has no frontmatter to take a concept type from");
+    }
+
+    /// Same pin for the transcript branch (spec §4.2 likewise has no
+    /// frontmatter step). The input has to START with `---` for the old
+    /// unconditional `frontmatter::split` to bite at all —
+    /// `frontmatter::split` only recognises a delimiter at byte 0 — so a
+    /// `---` merely sitting inside a cue proves nothing; this is a divider
+    /// line prepended by an export tool, which used to swallow every cue up
+    /// to the next `---`.
+    #[test]
+    fn a_leading_dash_block_in_a_transcript_is_content_not_frontmatter() {
+        let p = parse_file(
+            "media/a.srt",
+            "---\n1\n00:00:01,000 --> 00:00:02,000\ngammaword\n---\n\n2\n00:00:03,000 --> 00:00:04,000\ndeltaword\n",
+            MTIME,
+            &no_globs(),
+        );
+        let joined = p.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("gammaword"), "leading cue was dropped: {:?}", p.blocks);
+        assert!(joined.contains("deltaword"), "{:?}", p.blocks);
     }
 
     fn no_globs() -> SourceGlobs {
