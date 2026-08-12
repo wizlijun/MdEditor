@@ -13,6 +13,7 @@
 pub mod block;
 pub mod chunk;
 pub mod frontmatter;
+pub mod globs;
 pub mod links;
 pub mod norm;
 pub mod origin;
