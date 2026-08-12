@@ -119,7 +119,13 @@
   // was the actual gap the ×0.3-scale incident scenario needs) and the
   // `count === 0` warning (spec §8), so there is only one source of truth
   // for both.
-  interface GlobRow { pattern: string; count: number | null }
+  //
+  // Review round 2 nit: `'error'` is a THIRD state, distinct from `null`
+  // ("not fetched yet" — still shows "…") — without it, a `globMatches`
+  // failure (offline, a locked index, …) left the row showing "…" forever,
+  // indistinguishable from an in-flight fetch that just hasn't resolved.
+  type MatchCount = number | null | 'error'
+  interface GlobRow { pattern: string; count: MatchCount }
   let globRows = $state<GlobRow[]>([])
   let globSaveBusy = $state(false)
   // §8: a blank row is rejected outright, naming the row.
@@ -130,7 +136,7 @@
   // the real vault via `searchApi.globMatches` (see that function's doc
   // comment for why one call per candidate, not a batch).
   let globSampleDraft = $state('')
-  let globCandidates = $state<{ pattern: string; count: number | null }[]>([])
+  let globCandidates = $state<{ pattern: string; count: MatchCount }[]>([])
   // The candidate list is presented narrow → wide by SCOPE, never re-sorted
   // by count (a reviewer proved the ladder can invert in exactly the mixed-
   // media folder this feature targets — see `glob-suggest.ts`'s doc
@@ -257,6 +263,16 @@
 
   // ---- Raw source glob patterns (task C-T8/C-T11, design spec §4.1/§7.1) ----
 
+  // Shared by the saved-pattern list and the candidate ladder. `'error'`
+  // (review round 2 nit) renders distinctly from `null` ("still loading")
+  // so a `globMatches` failure doesn't look identical to an in-flight fetch
+  // forever.
+  function formatMatchCount(count: MatchCount): string {
+    if (count === null) return '…'
+    if (count === 'error') return t('search.index.globsCountUnavailable')
+    return t('search.index.globsMatchCount', { n: count })
+  }
+
   // The vault-relative pattern the backend seeds when `searchSourceGlobs` is
   // `null` (never configured) — mirrors `search::options::source_globs_from`
   // exactly (`<resolved syncDir>/**`; see that function's doc comment for
@@ -265,6 +281,25 @@
   // settings page must show what's actually in effect before the user
   // replaces it, not leave an unconfigured vault looking identical to an
   // intentionally-empty one.
+  //
+  // Known imprecision (review round 2 nit, not fixed): this reads
+  // `vaultSettings.syncDir` VERBATIM, the raw stored value — the backend's
+  // actual seed instead goes through `vault_settings::resolve_sync_dir_from`,
+  // which re-validates it (`validate_rel_dir`: rejects empty/absolute/`..`-
+  // escaping values) and falls back to `DEFAULT_SYNC_DIR` on failure. A
+  // hand-edited, invalid `syncDir` in `.notemd/settings.json` would make
+  // this display a pattern that ISN'T the real effective one. Not fixed
+  // here: re-implementing `validate_rel_dir` in TS would be exactly the
+  // kind of cross-language duplication this codebase avoids elsewhere
+  // (`search::options`'s own doc comment: "GUI 与 CLI 是两个进程... 逐字段
+  // 一致") — the class of bug (drift between two implementations of the same
+  // rule) is the same one C-T7's `weights_for_vault`/CLI contract test
+  // exists to prevent for weights. A proper fix needs either a dedicated
+  // backend command that returns the truly-resolved value, or moving this
+  // validation somewhere both sides can share — out of scope for a nit.
+  // `vaultSettings.syncDir` already carries this same imprecision anywhere
+  // else it's displayed on this tab (e.g. the sync-dir field above), so this
+  // is not a NEW gap, just one more place inheriting an existing one.
   let effectiveDefaultGlob = $derived(`${vaultSettings.syncDir}/**`)
 
   // Design spec §7.1: counts come from the real vault, never the index (see
@@ -280,7 +315,9 @@
       if (!p) continue
       void searchApi.globMatches([p]).then((n) => {
         if (row.pattern.trim() === p) row.count = n
-      }).catch(() => {})
+      }).catch(() => {
+        if (row.pattern.trim() === p) row.count = 'error'
+      })
     }
   }
 
@@ -306,7 +343,9 @@
     if (!p) return
     void searchApi.globMatches([p]).then((n) => {
       if (row.pattern.trim() === p) row.count = n
-    }).catch(() => {})
+    }).catch(() => {
+      if (row.pattern.trim() === p) row.count = 'error'
+    })
   }
 
   // §8, two DIFFERENT error handlings, plus review round 1's Important 3:
@@ -367,7 +406,9 @@
     for (const c of candidates) {
       void searchApi.globMatches([c.pattern]).then((n) => {
         globCandidates = globCandidates.map((x) => (x.pattern === c.pattern ? { ...x, count: n } : x))
-      }).catch(() => {})
+      }).catch(() => {
+        globCandidates = globCandidates.map((x) => (x.pattern === c.pattern ? { ...x, count: 'error' as const } : x))
+      })
     }
   }
   function onUseSelectedCandidate() {
@@ -1463,7 +1504,7 @@
                      actually ships into the index — must show the same
                      real-vault count the candidate ladder above already
                      shows, not just a silent zero-match warning. -->
-                <span class="glob-count">{row.count === null ? '…' : t('search.index.globsMatchCount', { n: row.count })}</span>
+                <span class="glob-count">{formatMatchCount(row.count)}</span>
                 <button onclick={() => onRemoveGlobRow(i)} disabled={globSaveBusy}>{t('search.index.globsRemoveRow')}</button>
               </div>
               {#if row.count === 0}
@@ -1493,7 +1534,7 @@
                       checked={globCandidateSelected === c.pattern}
                       onchange={() => (globCandidateSelected = c.pattern)} />
                     <code style="flex: 1;">{c.pattern}</code>
-                    <span>{c.count === null ? '…' : t('search.index.globsMatchCount', { n: c.count })}</span>
+                    <span>{formatMatchCount(c.count)}</span>
                   </label>
                 {/each}
                 <button class="primary" style="align-self: flex-start;" onclick={onUseSelectedCandidate}>{t('search.index.globsCandidateUse')}</button>
@@ -1505,19 +1546,19 @@
             <p class="desc">{t('search.weights.hint')}</p>
             <div class="row">
               <span class="lbl">{t('search.group.human')}</span>
-              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.human} disabled={weightsBusy} />
+              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.human} oninput={() => (weightsError = null)} disabled={weightsBusy} />
             </div>
             <div class="row">
               <span class="lbl">{t('search.index.tiersDerivedLabel')}</span>
-              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.derived} disabled={weightsBusy} />
+              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.derived} oninput={() => (weightsError = null)} disabled={weightsBusy} />
             </div>
             <div class="row">
               <span class="lbl">{t('search.group.source')}</span>
-              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.source} disabled={weightsBusy} />
+              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.source} oninput={() => (weightsError = null)} disabled={weightsBusy} />
             </div>
             <div class="row">
               <span class="lbl">{t('search.group.unlabeled')}</span>
-              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.unlabeled} disabled={weightsBusy} />
+              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.unlabeled} oninput={() => (weightsError = null)} disabled={weightsBusy} />
             </div>
             <div class="row" style="gap: 8px; margin-top: 8px;">
               <button onclick={onResetWeightsDraft} disabled={weightsBusy}>{t('search.weights.resetDefault')}</button>

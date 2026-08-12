@@ -35,7 +35,7 @@ import { mount, unmount, flushSync } from 'svelte'
 // `vi.clearAllMocks()` alone does NOT undo a `.mockImplementation()`
 // override, only clears call history.
 const { invokeMock, defaultInvokeImpl } = vi.hoisted(() => {
-  const defaultInvokeImpl = async (cmd: string): Promise<unknown> => {
+  const defaultInvokeImpl = async (cmd: string, _args?: unknown): Promise<unknown> => {
     if (cmd === 'sotvault_vault_root') return '/tmp/vault'
     throw new Error('no tauri host in vitest')
   }
@@ -84,6 +84,7 @@ import type { SearchStats, SearchProgress, SearchResponse } from '../lib/search/
 import { searchStore, _setSearchImpl } from '../lib/search/store.svelte'
 import { sidePanels } from '../lib/side-panel/registry.svelte'
 import { toasts } from '../lib/toast.svelte'
+import { ask } from '@tauri-apps/plugin-dialog'
 
 let stats: Mock<() => Promise<SearchStats | null>>
 let progress: Mock<() => Promise<SearchProgress | null>>
@@ -436,5 +437,56 @@ describe('SettingsDialog — Search & Index tab, invalid weight rejected (design
     // the retained previous value and surface an error, per spec §8.
     expect(humanInput.value).toBe('1.25')
     expect(toasts.list.at(-1)?.level).toBe('error')
+  })
+})
+
+// Review round 2: the round-1 report disclosed Important 3's confirm path
+// as "not testable" because `ask` is mocked to always resolve `false`
+// file-wide — that reasoning doesn't hold. `ask` is the same
+// `vi.fn(async () => false)` shape `invokeMock` is (see the file-wide
+// `@tauri-apps/plugin-dialog` mock above), and it can be overridden per
+// test with `vi.mocked(ask).mockResolvedValueOnce(...)` exactly like
+// `invokeMock.mockImplementation(...)` is overridden for the saved-count
+// test above. Both directions are pinned below: declined never reaches
+// `notemd_vault_settings_set`; accepted reaches it with an explicit `[]`.
+describe('SettingsDialog — Search & Index tab, empty pattern list confirm (design spec §8, review round 1 Important 3)', () => {
+  it('declining the confirm leaves the save aborted — notemd_vault_settings_set is never called', async () => {
+    // `ask`'s file-wide default already resolves `false` — no override
+    // needed to exercise the decline path.
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    // No patterns configured — `globRows` starts empty, so clicking Save
+    // goes straight to the empty-list confirm (design spec §8/Important 3).
+    const section = namedSection('Raw source patterns')
+    buttonByText(section, 'Save').click()
+    await settle()
+
+    const settingsSetCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === 'notemd_vault_settings_set')
+    const globsCall = settingsSetCalls.find(
+      ([, args]) => args != null && typeof args === 'object' && 'searchSourceGlobs' in (args as object),
+    )
+    expect(globsCall, `declining must not reach notemd_vault_settings_set: ${JSON.stringify(settingsSetCalls)}`).toBeUndefined()
+  })
+
+  it('accepting the confirm proceeds to save an explicit empty list', async () => {
+    vi.mocked(ask).mockResolvedValueOnce(true)
+
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = namedSection('Raw source patterns')
+    buttonByText(section, 'Save').click()
+    await settle()
+
+    const settingsSetCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === 'notemd_vault_settings_set')
+    const globsCall = settingsSetCalls.find(
+      ([, args]) => args != null && typeof args === 'object' && 'searchSourceGlobs' in (args as object),
+    )
+    expect(globsCall?.[1]).toMatchObject({ searchSourceGlobs: [] })
   })
 })

@@ -553,6 +553,7 @@ export const de: Record<keyof Messages, string> = {
   'search.index.globsSamplePlaceholder': 'Füge einen vault-relativen Pfad ein, z. B. ebook/三体/book.md',
   'search.index.globsSampleGenerate': 'Kandidaten generieren',
   'search.index.globsMatchCount': '{n} Dateien',
+  'search.index.globsCountUnavailable': 'Anzahl nicht verfügbar',
   'search.index.globsCandidateUse': 'Ausgewähltes Muster hinzufügen',
 
   'search.weights.heading': 'Rangordnungs-Gewichte',

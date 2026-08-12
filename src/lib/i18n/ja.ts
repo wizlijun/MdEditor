@@ -553,6 +553,7 @@ export const ja: Record<keyof Messages, string> = {
   'search.index.globsSamplePlaceholder': 'vault からの相対パスを貼り付けてください。例: ebook/三体/book.md',
   'search.index.globsSampleGenerate': '候補を生成',
   'search.index.globsMatchCount': '{n} 件のファイル',
+  'search.index.globsCountUnavailable': '件数を取得できません',
   'search.index.globsCandidateUse': '選択したパターンを追加',
 
   'search.weights.heading': '並び替えの重み',

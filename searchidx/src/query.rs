@@ -487,19 +487,57 @@ fn like_search(
 /// `tag:`, …) but no terms/phrases to `MATCH` — see the call site's doc
 /// comment for why this exists (it used to silently fall through to an
 /// empty result, breaking `origin:unlabeled` and every other bare-filter
-/// query the documented grammar advertises). Reuses `SELECT_COLS`/
-/// `push_filters`/`finish`, the same shape as `like_search` above, minus the
-/// `LIKE` needle clauses (there is no keyword to match against, only
-/// filters).
+/// query the documented grammar advertises).
 ///
-/// `rank` has no bm25 to read (nothing was MATCHed), so every row gets the
-/// same neutral base (`0.0`, mirroring `like_search`'s hardcoded `-1.0` —
-/// see `finish`/`score_of`, which apply their other boosts — origin tier,
-/// recency, verification, annotation — on top of it regardless). Rows are
-/// pre-ordered by path/line for a deterministic pre-score cap, then
-/// `finish` re-scores, sorts, and truncates to `limit` — the same
+/// **One hit per file, not one hit per matching block (review round 2).**
+/// A query with no terms isn't asking "where in the text" — it's asking
+/// "which FILES". Design spec §7.4's settings-page row promises "列出所有
+/// 该补 frontmatter 的文件" (list every file that needs frontmatter), one
+/// entry per file. The first version of this function selected every
+/// matching BLOCK (`FROM blocks b JOIN files f`, `ORDER BY f.path,
+/// b.line_start LIMIT (limit*8).max(64)`) — for any file with more
+/// paragraphs than that cap (an ordinary transcript: dozens of paragraphs
+/// against a `limit 20` cap), that ONE file consumed the entire budget and
+/// every other matching file was invisible, with `truncated` staying
+/// `false` — a confident lie, since the query looked complete. Fixed by
+/// picking exactly one block per file (that file's own first block, via a
+/// correlated subquery ordered by `line_start` then `id`), so the query now
+/// runs `FROM files f JOIN blocks b ON b.id = (...)` — filters are all on
+/// `f.*` (`push_filters` never touches `b.*`), so reordering the join
+/// changes nothing else — and the cap bounds DISTINCT FILES, not blocks.
+/// Passage-level results (potentially several hits per file) are untouched
+/// for any query that still has terms/phrases — this only applies here, to
+/// the bare-filter path.
+///
+/// The `, id ASC` tiebreak is load-bearing, not decoration: `prose.rs`'s
+/// whole-document rollup block (`BlockLevel::File`) always starts at
+/// `line_start = 1`, the same value a document's very first paragraph
+/// starts at when there's no leading blank line — a real, common tie. That
+/// rollup is always the LAST block `chunk()` appends for a file (pushed
+/// after every Line/Section block — see `prose.rs`'s `chunk` — so it always
+/// gets the highest `id` among a file's blocks), so `id ASC` deterministically
+/// resolves the tie toward the finer, more specific first paragraph rather
+/// than a whole-file text dump, and — just as important — makes which block
+/// gets picked reproducible instead of whatever order SQLite's query plan
+/// happens to visit ties in.
+///
+/// Cost note for C-T12 (index volume): the correlated subquery runs once
+/// per file that survives `push_filters`'s `WHERE` clause — cheap via the
+/// existing `blocks_file` index to seek straight to that file's rows, then
+/// an UNINDEXED scan bounded by that ONE file's own block count to find the
+/// minimum `line_start` (there is no `(file_id, line_start)` index).
+/// Ordinary files cost nothing measurable; a single file with an unusually
+/// large block count would make only ITS OWN subquery relatively more
+/// expensive, never the whole corpus the way the pre-fix `ORDER BY` over
+/// every matching block was.
+///
+/// Reuses `SELECT_COLS`/`push_filters`/`finish`, the same idiom `like_search`
+/// above uses. `rank` has no bm25 to read (nothing was MATCHed), so every
+/// row gets the same hardcoded neutral base (`-1.0`, same as `like_search`'s)
+/// — `finish`/`score_of` still apply their other boosts (origin tier,
+/// recency, verification, annotation) on top of it. Capped at the same
 /// over-fetch idiom `fts_search` uses (`(limit * 8).max(64)`), not
-/// `like_search`'s flat 500: a filter-only query is a first-class,
+/// `like_search`'s flat 500 — a filter-only query is a first-class,
 /// documented route now, not a last-resort safety net.
 fn filter_only_search(
     conn: &Connection,
@@ -509,13 +547,16 @@ fn filter_only_search(
     weights: &Weights,
 ) -> rusqlite::Result<(Vec<Hit>, bool)> {
     let mut sql = format!(
-        "SELECT {SELECT_COLS}, 0.0 AS rank
-         FROM blocks b JOIN files f ON f.id = b.file_id
+        "SELECT {SELECT_COLS}
+         FROM files f
+         JOIN blocks b ON b.id = (
+             SELECT b2.id FROM blocks b2 WHERE b2.file_id = f.id ORDER BY b2.line_start ASC, b2.id ASC LIMIT 1
+         )
          WHERE 1 = 1"
     );
     let mut args: Vec<String> = Vec::new();
     push_filters(q, &mut sql, &mut args);
-    sql.push_str(&format!(" ORDER BY f.path ASC, b.line_start ASC LIMIT {}", (limit * 8).max(64)));
+    sql.push_str(&format!(" ORDER BY f.path ASC LIMIT {}", (limit * 8).max(64)));
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
@@ -1247,6 +1288,38 @@ mod tests {
         assert_eq!(paths, vec!["d.md", "e.md"], "{hits:?}");
     }
 
+    /// Review round 2: a filter-only query is asking "which FILES", not
+    /// "where in the text" — the fix above returned real rows, but a
+    /// multi-paragraph file still dominated the whole result set (one hit
+    /// per BLOCK, not per file), which for design spec §7.4's settings-page
+    /// row means a real vault's `origin:unlabeled` click lists one file
+    /// twenty times instead of twenty files once. `f1.md` has five
+    /// paragraphs (five separate `Line` blocks) plus the two ordinary
+    /// single-paragraph files — a correct implementation returns exactly
+    /// one hit per file, not seven.
+    #[test]
+    fn a_filter_only_query_returns_one_hit_per_file_not_one_per_block() {
+        let (_d, c) = indexed(&[
+            (
+                "f1.md",
+                "paragraph one, no frontmatter\n\n\
+                 paragraph two, no frontmatter\n\n\
+                 paragraph three, no frontmatter\n\n\
+                 paragraph four, no frontmatter\n\n\
+                 paragraph five, no frontmatter\n",
+            ),
+            ("f2.md", "a second unlabeled file, one paragraph\n"),
+            ("f3.md", "a third unlabeled file, one paragraph\n"),
+        ]);
+        let mut hits = search(&c, &parse("origin:unlabeled"), 20, "2026-08-10").unwrap().0;
+        hits.sort_by(|a, b| a.path.cmp(&b.path));
+        let paths: Vec<_> = hits.iter().map(|h| h.path.clone()).collect();
+        // Exactly one entry per file — if `f1.md`'s five paragraphs each
+        // produced their own hit, this would be `["f1.md", "f1.md", "f1.md",
+        // "f1.md", "f1.md", "f2.md", "f3.md"]` instead.
+        assert_eq!(paths, vec!["f1.md", "f2.md", "f3.md"], "{hits:?}");
+    }
+
     /// The other half of the fix above: a query that is entirely empty — no
     /// terms, no phrases, and (unlike the test above) no filters either —
     /// must still return nothing. The new filter-only path is gated on
@@ -1257,6 +1330,51 @@ mod tests {
         let (_d, c) = indexed(&[("a.md", "hello world\n")]);
         let hits = search(&c, &parse(""), 20, "2026-08-10").unwrap().0;
         assert!(hits.is_empty(), "{hits:?}");
+    }
+
+    /// Review round 2 nit, upgraded to a real pin: `has_filters` (gates
+    /// `search_with`'s filter-only branch) and `push_filters` (does the
+    /// actual filtering) are two hand-written lists of the same eight
+    /// fields with nothing forcing them to agree. A filter added to
+    /// `push_filters` — a new `Query` field that a future task teaches the
+    /// grammar to parse — but forgotten in `has_filters` would silently
+    /// take a bare (no terms/phrases) query for THAT filter straight back
+    /// to "return nothing", the exact class of bug Critical 1 (round 1) was.
+    /// Calls both real, private functions directly (this test lives inside
+    /// `query.rs`, so it isn't reimplementing either one) with each filter
+    /// field set one at a time, and asserts `has_filters` agrees with
+    /// whether `push_filters` actually emitted a clause.
+    #[test]
+    fn has_filters_agrees_with_push_filters_for_every_filter_field() {
+        let one_field_set: Vec<Query> = vec![
+            Query { tags: vec!["x".into()], ..Default::default() },
+            Query { types: vec!["x".into()], ..Default::default() },
+            Query { paths: vec!["x".into()], ..Default::default() },
+            Query { exts: vec!["x".into()], ..Default::default() },
+            Query { origins: vec!["x".into()], ..Default::default() },
+            Query { pages: vec!["x".into()], ..Default::default() },
+            Query { after: Some("2026-01-01".into()), ..Default::default() },
+            Query { before: Some("2026-01-01".into()), ..Default::default() },
+        ];
+        for q in one_field_set {
+            let mut sql = String::new();
+            let mut args: Vec<String> = Vec::new();
+            push_filters(&q, &mut sql, &mut args);
+            let push_filters_emitted_a_clause = !sql.is_empty();
+            assert_eq!(
+                has_filters(&q), push_filters_emitted_a_clause,
+                "has_filters/push_filters disagree for {q:?} (sql: {sql:?})"
+            );
+        }
+
+        // The converse, over the SAME two functions: nothing set, nothing
+        // emitted, `has_filters` says so.
+        let empty = Query::default();
+        let mut sql = String::new();
+        let mut args: Vec<String> = Vec::new();
+        push_filters(&empty, &mut sql, &mut args);
+        assert!(sql.is_empty(), "{sql:?}");
+        assert!(!has_filters(&empty));
     }
 
     #[test]

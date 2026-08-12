@@ -585,6 +585,10 @@ export const en = {
   'search.index.globsSamplePlaceholder': 'Paste a vault-relative path, e.g. ebook/三体/book.md',
   'search.index.globsSampleGenerate': 'Generate candidates',
   'search.index.globsMatchCount': '{n} files',
+  // Review round 2 nit: distinct from the "…" loading state — a failed
+  // count fetch (offline, a locked index, …) must say so rather than
+  // looking identical to "still counting".
+  'search.index.globsCountUnavailable': 'Count unavailable',
   'search.index.globsCandidateUse': 'Add selected pattern',
 
   // Per-tier ranking weights (task C-T7/C-T11, design spec §3.1/§7.3). Row

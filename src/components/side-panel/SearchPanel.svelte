@@ -23,6 +23,18 @@
   // are never lost to the debounce window (typing updates this immediately;
   // the store lags behind on purpose).
   let inputValue = $state('')
+  // The query THIS panel last asked the store to run (set in the same
+  // synchronous span as the `searchStore.run()` call that issues it — see
+  // `runShallow`/`runDeep` below). Lets the sync effect further down tell
+  // "the store finally caught up with what I typed" (ordinary debounce lag,
+  // must NOT be reflected back into `inputValue` — that would erase
+  // whatever the user has typed since) apart from "something ELSE changed
+  // `searchStore.query` out from under this panel" (an external caller —
+  // e.g. the settings page's "Unlabeled" tier row, design spec §7.4 — MUST
+  // be reflected, or the user lands on real results with an empty input box
+  // and their very next keystroke silently drops the filter that got them
+  // there — review round 2, Minor 9).
+  let lastIssuedQuery = ''
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
   // The auto-escalation to a deep scan, armed only after a fast query came
   // back empty and stayed empty for a beat.
@@ -79,7 +91,7 @@
     cancelTimers()
     const d = decideTrigger(inputValue, composing)
     if (d.kind === 'hold') return
-    if (d.kind === 'clear') { searchStore.clear(); return }
+    if (d.kind === 'clear') { lastIssuedQuery = ''; searchStore.clear(); return }
     debounceTimer = setTimeout(() => { void runShallow() }, d.delayMs)
   }
 
@@ -87,6 +99,7 @@
   // block the next keystroke behind a full-vault scan.
   async function runShallow() {
     const asked = inputValue
+    lastIssuedQuery = asked
     await searchStore.run(asked, { deep: false })
     // Fast tier missed and a scan would look further. Offer it via the hint,
     // and — for the user who is sitting there waiting rather than reading the
@@ -98,8 +111,28 @@
 
   function runDeep() {
     cancelTimers()
+    lastIssuedQuery = inputValue
     return searchStore.run(inputValue, { deep: true, timeoutMs: DEEP_TIMEOUT_MS })
   }
+
+  // Review round 2, Minor 9: reflects an externally-issued `searchStore.run()`
+  // (bypassing this panel's own input entirely) back into `inputValue`.
+  // Guarded on `lastIssuedQuery` rather than firing whenever
+  // `searchStore.query !== inputValue` — during the debounce window that
+  // inequality is also true for perfectly ordinary lag (the user has typed
+  // ahead of what the store has caught up to), and reflecting THAT back
+  // would erase live keystrokes, exactly the bug `inputValue` was split out
+  // to prevent in the first place. `lastIssuedQuery` only ever changes in
+  // the same synchronous span as this panel's own `searchStore.run()` call
+  // (`runShallow`/`runDeep`/the clear paths above), so it tracks
+  // `searchStore.query` in lockstep for everything THIS panel issues — a
+  // mismatch can only mean someone else changed it.
+  $effect(() => {
+    if (searchStore.query !== lastIssuedQuery) {
+      inputValue = searchStore.query
+      lastIssuedQuery = searchStore.query
+    }
+  })
 
   function onKeydown(e: KeyboardEvent) {
     // A Return that closes an IME candidate window belongs to the IME, not to
@@ -110,6 +143,7 @@
     } else if (e.key === 'Escape') {
       cancelTimers()
       inputValue = ''
+      lastIssuedQuery = ''
       searchStore.clear()
     }
   }

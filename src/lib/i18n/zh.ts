@@ -585,6 +585,7 @@ export const zh: Record<keyof Messages, string> = {
   'search.index.globsSamplePlaceholder': '粘贴一条相对 vault 的路径,例如 ebook/三体/book.md',
   'search.index.globsSampleGenerate': '生成候选',
   'search.index.globsMatchCount': '{n} 个文件',
+  'search.index.globsCountUnavailable': '无法获取数量',
   'search.index.globsCandidateUse': '添加所选模式',
 
   'search.weights.heading': '排序权重',

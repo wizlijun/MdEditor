@@ -308,4 +308,55 @@ describe('SearchPanel wiring', () => {
 
     unmount(app)
   })
+
+  // Review round 2, Minor 9: an external caller (the settings page's
+  // "Unlabeled" tier row, design spec §7.4) runs a query directly through
+  // `searchStore.run()`, bypassing this panel's own input entirely. Before
+  // this fix the user landed on real results with an EMPTY input box, and
+  // their very next keystroke silently dropped whatever filter got them
+  // there. Two mount orderings, since `SidePanel.svelte`'s `{#key active.id}`
+  // means this panel is sometimes freshly mounted by that click (the store
+  // already holds the query by the time it renders) and sometimes was
+  // already the active view (the SAME instance has to react to the change).
+  it('reflects an externally-run query into the input box — already-mounted panel', async () => {
+    const app = await mountPanel()
+    expect(input().value).toBe('')
+
+    await searchStore.run('origin:unlabeled', { deep: true })
+    flushSync()
+
+    expect(input().value).toBe('origin:unlabeled')
+    unmount(app)
+  })
+
+  it('reflects an externally-run query into the input box — freshly-mounted panel', async () => {
+    await searchStore.run('origin:unlabeled', { deep: true })
+    const app = await mountPanel()
+    flushSync()
+
+    expect(input().value).toBe('origin:unlabeled')
+    unmount(app)
+  })
+
+  // The guard this fix depends on: ordinary debounce lag (the store hasn't
+  // caught up with what the user just typed yet) must NOT be reflected back
+  // into the input — that would erase live keystrokes, the exact failure
+  // mode `inputValue` was split from `searchStore.query` to prevent in the
+  // first place. A naive `$effect(() => inputValue = searchStore.query)`
+  // would fail this test.
+  it('does not clobber in-progress typing while the store is still lagging behind it', async () => {
+    vi.useFakeTimers()
+    const app = await mountPanel()
+
+    type('ab')
+    await vi.advanceTimersByTimeAsync(IDLE_DELAY_MS - 1)
+    // Confirms the premise: the debounced query has not fired yet, so
+    // `searchStore.query` is still `''` while `inputValue` is `'ab'` —
+    // exactly the state a naive sync effect would misread as "external
+    // change" and stomp on.
+    expect(calls).toEqual([])
+    expect(input().value).toBe('ab')
+
+    unmount(app)
+  })
 })
