@@ -520,13 +520,13 @@ export const en = {
   // (same convention as `search.group.*` above).
   'search.index.tiersHeading': 'Provenance tiers',
   'search.index.tiersDerivedLabel': 'AI-produced',
-  'search.index.tiersHint': "Tiers are derived from each file's frontmatter as it is indexed — nothing here is written back to your notes. If \"Raw source material\" looks unexpectedly high, it usually just means notes are missing frontmatter; add a `type:` field (or any frontmatter) and save. Editing a file reclassifies that file on its own — no full reindex needed.",
+  'search.index.tiersHint': "Tiers are worked out as each file is indexed, from its frontmatter and from the raw source patterns above — nothing here is written back to your notes. Only files matching one of your patterns count as \"Raw source material\", so if that number looks unexpectedly high, a pattern is wider than you meant it to be. A file with neither frontmatter nor a matching pattern is \"Unlabeled\": nobody has said who wrote it. Editing a file reclassifies that file on its own — no full reindex needed.",
   // Task C-T11 (design spec §7.4): the fourth tier's row is a clickable
   // action item, not just a number — clicking it opens the search panel
   // already filtered to `origin:unlabeled`, the designed way out of the
   // ×0.3 demotion (adding frontmatter to a file reclassifies it out of this
   // tier on its own, same as every other tier above).
-  'search.index.tiersUnlabeledHint': 'Click "{label}" above to open the search panel filtered to every file this tier\'s weight is currently demoting.',
+  'search.index.tiersUnlabeledHint': 'Click "{label}" above to list every file this tier\'s weight is currently demoting. Any frontmatter lifts a file out of it — a `type:` field is enough; if the file really is raw material, add it to a pattern above instead.',
   'search.index.rebuildConfirmTitle': 'Rebuild search index?',
   'search.index.rebuildConfirmBody': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs, roughly {seconds}s for your {files} files. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
   'search.index.rebuildConfirmBodyUnknown': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',

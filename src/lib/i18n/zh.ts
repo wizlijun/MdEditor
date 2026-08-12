@@ -546,8 +546,8 @@ export const zh: Record<keyof Messages, string> = {
   // 原始 concept_type 字符串,不翻译(与上面 search.group.* 的约定一致)。
   'search.index.tiersHeading': '来源分层统计',
   'search.index.tiersDerivedLabel': 'AI 生成',
-  'search.index.tiersHint': '分层是索引每个文件时从它的 frontmatter 推导出来的,不会写回文件本身。如果"原始资料"的数字异常偏高,通常只是笔记缺少 frontmatter——补上 `type:` 字段(或任意 frontmatter)保存即可:改过的文件会自己重新分层,不必整库重新索引。',
-  'search.index.tiersUnlabeledHint': '点击上面的「{label}」,在搜索面板中打开这一档权重正在压低的全部文件。',
+  'search.index.tiersHint': '分层是索引每个文件时,由它的 frontmatter 和上面那组原始资料模式一起推导出来的,不会写回文件本身。只有命中模式的文件才算「原始资料」,所以这个数字如果异常偏高,通常是某条模式写得比你本意更宽。既没有 frontmatter、也没命中模式的文件归入「未标注」——只是还没人声明过它是谁写的。改过的文件会自己重新分层,不必整库重新索引。',
+  'search.index.tiersUnlabeledHint': '点击上面的「{label}」,列出这一档权重正在压低的全部文件。补上任意 frontmatter 就能让文件离开这一档——一个 `type:` 字段就够;如果它确实是原始资料,那就把它加进上面的模式。',
   'search.index.rebuildConfirmTitle': '重建搜索索引?',
   'search.index.rebuildConfirmBody': '这是一次全量重建——每个文件都会从头重新扫描。重建期间搜索不可用,你的 {files} 个文件大约需要 {seconds} 秒。不会丢失任何笔记:索引只是从你的 markdown 文件派生出的可丢弃副本,不是文件本身。',
   'search.index.rebuildConfirmBodyUnknown': '这是一次全量重建——每个文件都会从头重新扫描。重建期间搜索不可用。不会丢失任何笔记:索引只是从你的 markdown 文件派生出的可丢弃副本,不是文件本身。',
