@@ -223,16 +223,27 @@ fn origin_counts(conn: &rusqlite::Connection) -> Result<OriginCounts, String> {
             Origin::Human => counts.human += n,
             Origin::Derived => counts.derived += n,
             Origin::Source => counts.source += n,
-            // TODO(C-T8/C-T11): `OriginCounts` (and its wire-shape twin
+            // TODO(C-T11): `OriginCounts` (and its wire-shape twin
             // `OriginCountsDto` in src-tauri/src/search/mod.rs) is still the
             // pre-`Unlabeled` three-tier shape from B-T8 — adding a fourth
             // field there is settings-page surface, out of scope for C-T2
             // (which only had to make `Origin` itself compile with a fourth
-            // variant). An `unlabeled` row is real and does get stored (see
-            // `origin::derive` rule 6′), so until a field exists for it here,
-            // `human + derived + source` under-counts `files` by however many
-            // rows are `unlabeled` — a known, temporary undercount, not a
-            // silent drop of the row itself (the row is still indexed and
+            // variant). C-T8 (source-glob/weights settings wiring) had no
+            // reason to touch this either — `OriginCounts` is a stats-only
+            // read path, orthogonal to what C-T8 built. What remains,
+            // precisely: add `pub unlabeled: i64` to both `OriginCounts`
+            // here and `OriginCountsDto` in `src-tauri/src/search/mod.rs`,
+            // route this arm to increment it instead of doing nothing, and
+            // update `origin_counts_dto`/`stats_to_dto` to pass it through.
+            // The task-11 plan section ("分层统计从三层改四层") names this
+            // requirement but its own `Files:` list only names frontend
+            // files — this backend half is not yet claimed by any file list
+            // in the plan, so whoever picks up C-T11 should not assume it's
+            // free. Until it lands, an `unlabeled` row is real and does get
+            // stored (see `origin::derive` rule 6′), so
+            // `human + derived + source` under-counts `files` by however
+            // many rows are `unlabeled` — a known, temporary undercount, not
+            // a silent drop of the row itself (the row is still indexed and
             // searchable via `origin:unlabeled`, just not yet tallied here).
             Origin::Unlabeled => {}
         }

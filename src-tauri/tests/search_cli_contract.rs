@@ -504,3 +504,50 @@ fn cli_glob_stamp_matches_independently_computed_scan_options_source_globs() {
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+/// Review round 2, item 1: the exact "resolve vs use" gap round 1 closed on
+/// the GUI side (`search::mod::search_locked` calling `idx.search_with`,
+/// which ranks with `Weights::default()` unconditionally, while
+/// `weights_for_vault` sat unused) was still open on the CLI side —
+/// `cli::search::weights_for` existed and was contract-tested for GUI/CLI
+/// parity, but nothing proved `notemd search` itself (`cli::search::run`)
+/// actually rendered its result order with the resolved value rather than
+/// the shipped defaults. Drives the real compiled binary — `notemd search`'s
+/// actual entry point, the one agents invoke — with a real
+/// `.notemd/settings.json`, and asserts a configured, inverted weight
+/// reorders `--json` output.
+#[test]
+fn a_configured_weight_changes_the_clis_own_result_order() {
+    let v = vault(&[
+        ("derived.md", "---\ntype: Answer\n---\n\nwidget\n"),
+        ("raw/source.md", "widget\n"),
+    ]);
+    std::fs::create_dir_all(v.path().join(".notemd")).unwrap();
+    std::fs::write(v.path().join(".notemd/settings.json"), r#"{"searchSourceGlobs": ["raw/**"]}"#).unwrap();
+
+    // Default weights: `derived.md` (Origin::Derived, x1.0) outranks
+    // `raw/source.md` (Origin::Source, x0.9).
+    let default_out = search(v.path(), &["widget", "--json"]);
+    let default_json: serde_json::Value = serde_json::from_slice(&default_out.stdout)
+        .unwrap_or_else(|e| panic!("invalid json ({e}): {}", String::from_utf8_lossy(&default_out.stdout)));
+    assert_eq!(
+        default_json["hits"][0]["path"].as_str(),
+        Some("derived.md"),
+        "默认权重下 derived 应排在 source 前面 —— 测试前提不成立: {default_json}"
+    );
+
+    // Invert the configured weights so `source` dominates `derived`.
+    std::fs::write(
+        v.path().join(".notemd/settings.json"),
+        r#"{"searchSourceGlobs": ["raw/**"], "searchWeights": {"source": 5.0, "derived": 0.1}}"#,
+    )
+    .unwrap();
+    let inverted_out = search(v.path(), &["widget", "--json"]);
+    let inverted_json: serde_json::Value = serde_json::from_slice(&inverted_out.stdout)
+        .unwrap_or_else(|e| panic!("invalid json ({e}): {}", String::from_utf8_lossy(&inverted_out.stdout)));
+    assert_eq!(
+        inverted_json["hits"][0]["path"].as_str(),
+        Some("raw/source.md"),
+        "配置的反转权重必须真正改变 CLI 自己的排序,而不是被 Weights::default() 悄悄吃掉: {inverted_json}"
+    );
+}

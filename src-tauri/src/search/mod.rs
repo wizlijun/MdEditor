@@ -1765,8 +1765,19 @@ mod command_tests {
         std::fs::write(v.path().join("media/raw/a.md"), "x\n").unwrap();
         std::fs::write(v.path().join("media/b.srt"), "1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
         std::fs::write(v.path().join("media/b.md"), "x\n").unwrap();
+        // Review round 2, item 3: an ordinary `.md` entirely OUTSIDE the
+        // candidate pattern too — without this, the fixture cannot tell
+        // "designation AND acceptance" apart from "is_indexable alone",
+        // because every `.md` it contained happened to also be covered by
+        // the pattern (mutation round 1 left this test green under both
+        // semantics).
+        std::fs::write(v.path().join("elsewhere.md"), "x\n").unwrap();
 
         let patterns = vec!["media/**".to_string()];
-        assert_eq!(count_glob_matches(v.path(), &patterns), 2, "已排除目录下的 .srt 和 .md 都不该被计入");
+        assert_eq!(
+            count_glob_matches(v.path(), &patterns),
+            2,
+            "已排除目录下的 .srt 和 .md、以及模式外的 .md 都不该被计入"
+        );
     }
 }

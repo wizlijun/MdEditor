@@ -787,15 +787,19 @@ mod tests {
     /// `search::options::search_source_globs_changed`'s doc comment for the
     /// fuller history. It does NOT follow that `sync_dir` can never trigger
     /// a reopen any more (review round 1, Minor 5, caught an earlier
-    /// version of this comment claiming exactly that): this test's own
-    /// "other fields don't trigger a reopen" matrix below only holds
-    /// because `searchSourceGlobs` was already explicitly set to
-    /// `"ebook/**"` a few lines above — an *unconfigured* vault seeds
-    /// `<syncDir>/**` (`search::options::for_vault`), so `sync_dir` is
-    /// still part of the resolved value the gate compares in that more
-    /// common state. See `persisting_a_sync_dir_change_reopens_when_globs_
-    /// are_unconfigured` below for that other half of the behavior, pinned
-    /// explicitly rather than left as this test's unstated precondition.
+    /// version of this comment claiming exactly that): the seven-field
+    /// matrix below — INCLUDING `sync_dir` — asserts "no reopen" only for
+    /// the state this test has already put the vault in by this point:
+    /// `searchSourceGlobs` explicitly set to `"ebook/**"` a few lines above.
+    /// An *unconfigured* vault seeds `<syncDir>/**` instead
+    /// (`search::options::for_vault`), so `sync_dir` still reaches the
+    /// resolved value the gate compares in that other, more common state —
+    /// see `persisting_a_sync_dir_change_reopens_when_globs_are_
+    /// unconfigured` below, which pins that direction explicitly. Both
+    /// directions matter: round 2 restored `sync_dir` to this matrix after
+    /// round 1 had dropped it to prose only, which let a resurrected
+    /// `sync_dir`-based OR-gate (the exact waste this task removed) pass
+    /// with zero red tests.
     ///
     /// Driven through the persist function rather than the command so the
     /// decision is testable without an `AppHandle` (same reason
@@ -826,21 +830,21 @@ mod tests {
         .unwrap();
         assert!(!reopen, "an unchanged pattern list must not cost a full rebuild");
 
-        // Nor does any of the other seven fields — each of them alone. NOT
-        // including `sync_dir` here: with `searchSourceGlobs` already
-        // explicit (set above), `sync_dir` genuinely has no effect on the
-        // resolved value — but that is a property of THIS test's state, not
-        // of `sync_dir` in general, so it gets its own test below instead
-        // of a misleadingly-unconditional-looking entry in this matrix.
+        // Nor does any of the other seven fields — each of them alone,
+        // `sync_dir` included: with `searchSourceGlobs` already explicit
+        // (set above), moving `sync_dir` genuinely has no effect on the
+        // resolved value. The mirror case (globs unconfigured, where it
+        // DOES) is pinned separately below.
         for (i, args) in [
-            (Some("wiki".to_string()), None, None, None, None, None, None),
-            (None, Some("daily".to_string()), None, None, None, None, None),
-            (None, None, Some(3u32), None, None, None, None),
-            (None, None, None, Some("in".to_string()), None, None, None),
-            (None, None, None, None, Some(vec!["node_modules".to_string()]), None, None),
-            (None, None, None, None, None, Some(9u32), None),
+            (Some("box".to_string()), None, None, None, None, None, None, None),
+            (None, Some("wiki".to_string()), None, None, None, None, None, None),
+            (None, None, Some("daily".to_string()), None, None, None, None, None),
+            (None, None, None, Some(3u32), None, None, None, None),
+            (None, None, None, None, Some("in".to_string()), None, None, None),
+            (None, None, None, None, None, Some(vec!["node_modules".to_string()]), None, None),
+            (None, None, None, None, None, None, Some(9u32), None),
             (
-                None, None, None, None, None, None,
+                None, None, None, None, None, None, None,
                 Some(vault_settings::SearchWeights { human: Some(2.0), ..Default::default() }),
             ),
         ]
@@ -848,7 +852,7 @@ mod tests {
         .enumerate()
         {
             let (_, reopen) = persist_vault_settings(
-                root, None, args.0, args.1, args.2, args.3, args.4, args.5, None, args.6,
+                root, args.0, args.1, args.2, args.3, args.4, args.5, args.6, None, args.7,
             )
             .unwrap();
             assert!(!reopen, "settings field #{i} must not trigger an index rebuild");
