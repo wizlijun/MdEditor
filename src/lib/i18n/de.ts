@@ -539,13 +539,16 @@ export const de: Record<keyof Messages, string> = {
 
   'search.index.globsHeading': 'Muster für Rohmaterial',
   'search.index.globsHint': 'Muster legen fest, welche Dateien als rohes Quellmaterial zählen — erst dadurch werden `.srt`/`.vtt`/`.txt`-Transkripte überhaupt durchsuchbar (gewöhnliche `.md`-Dateien werden so oder so indiziert). Der Abgleich ist wörtlich und groß-/kleinschreibungsabhängig — wurde ein Vault-Ordner umbenannt (andere Groß-/Kleinschreibung), können alle Muster hier still auf nichts mehr passen. Beim Speichern wird darauf geprüft (siehe Warnung unten).',
-  'search.index.globsEmpty': 'Noch keine Muster konfiguriert.',
+  'search.index.globsImplicitDefault': 'Noch keine Muster gespeichert — dieser Vault verwendet derzeit den impliziten Standard `{pattern}`.',
+  'search.index.globsExplicitlyEmpty': 'Die gespeicherte Musterliste ist leer — es werden keine Transkripte (`.srt`/`.vtt`/`.txt`) indiziert, und keine `.md`-Datei wird als rohes Quellmaterial markiert.',
   'search.index.globsPatternPlaceholder': 'z. B. ebook/**',
   'search.index.globsAddRow': 'Muster hinzufügen',
   'search.index.globsRemoveRow': 'Entfernen',
   'search.index.globsBlankError': 'Muster Nr. {row} ist leer — fülle es aus oder entferne die Zeile, dann erneut speichern.',
   'search.index.globsZeroMatchWarning': 'Trifft aktuell auf 0 Dateien zu — prüfe Pfad und Groß-/Kleinschreibung.',
   'search.index.globsRebuildNote': 'Das Speichern einer Musteränderung baut den Suchindex komplett neu auf. Die Gewichte unten sind anders: Sie gelten sofort ab der nächsten Suche, ohne Neuaufbau.',
+  'search.index.globsEmptySaveConfirmTitle': 'Leere Musterliste speichern?',
+  'search.index.globsEmptySaveConfirmBody': 'Dieser Vault verwendet derzeit den impliziten Standard `{default}` für rohes Quellmaterial. Eine leere Liste zu speichern ersetzt ihn durch nichts: Es werden keine Transkripte mehr indiziert, und sobald der dadurch ausgelöste Neuaufbau fertig ist, fällt jede Datei, die dieser Standard als „Rohes Quellmaterial“ markiert hat, auf „Nicht gekennzeichnet“ (Gewicht ×0,3) zurück. Fortfahren?',
   'search.index.globsSampleHeading': 'Aus einem Beispielpfad generieren',
   'search.index.globsSamplePlaceholder': 'Füge einen vault-relativen Pfad ein, z. B. ebook/三体/book.md',
   'search.index.globsSampleGenerate': 'Kandidaten generieren',
@@ -556,6 +559,7 @@ export const de: Record<keyof Messages, string> = {
   'search.weights.hint': 'Die Punktzahl jeder Ebene wird vor der Rangordnung mit diesem Gewicht multipliziert — höher rückt weiter nach oben. Muss größer als 0 und höchstens 5,0 sein.',
   'search.weights.rebuildContrastNote': 'Das Speichern hier gilt ab der nächsten Suche — anders als bei den Mustern oben wird der Index dabei nie neu aufgebaut.',
   'search.weights.resetDefault': 'Standardwerte wiederherstellen',
+  'search.weights.invalidError': 'Gib für „{label}“ einen Wert größer als 0 und höchstens 5,0 ein, bevor du speicherst.',
 
   // Folder view
   'folderView.parentFolder': 'Übergeordneter Ordner',

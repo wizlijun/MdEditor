@@ -271,6 +271,7 @@ fn stats_json_reports_the_provenance_distribution() {
         ("book.md", "---\ntype: Book\n---\nbrownfox\n"),                    // rule 4 -> source
         ("s.md", "---\ntype: Book Summary\n---\nbrownfox\n"),               // rule 4 -> derived
         ("a.md", "---\ngenerated: { by: claude/1 }\n---\nbrownfox\n"),      // rule 2 -> derived
+        ("raw.md", "brownfox, no frontmatter, no matching source glob\n"),  // rule 6' -> unlabeled
     ]);
     let out = search(v.path(), &["--stats", "--json"]);
     let j: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -278,6 +279,13 @@ fn stats_json_reports_the_provenance_distribution() {
     assert_eq!(j["origin_counts"]["human"].as_i64(), Some(1), "{j}");
     assert_eq!(j["origin_counts"]["derived"].as_i64(), Some(2), "{j}");
     assert_eq!(j["origin_counts"]["source"].as_i64(), Some(1), "{j}");
+    // Review round 1: the reviewer judged the `unlabeled` key in scope for
+    // this task (spec §6.3), not a bonus — and it shipped with no test at
+    // all. `raw.md` above has neither frontmatter nor a matching
+    // `searchSourceGlobs` pattern (this vault configures none), so it's the
+    // one file that reaches rule 6' and must show up here, an agent-facing
+    // payload (`notemd search --stats --json`), not just the GUI DTO.
+    assert_eq!(j["origin_counts"]["unlabeled"].as_i64(), Some(1), "{j}");
     // Only `derived`'s typed files are itemized (see `searchidx::type_counts`),
     // so the `Book` above must NOT appear here even though it has a type.
     assert_eq!(j["type_counts"]["Book Summary"].as_i64(), Some(1), "{j}");

@@ -26,11 +26,23 @@ import { mount, unmount, flushSync } from 'svelte'
 // Every OTHER command still rejects, including `notemd_vault_settings_set`
 // itself — the weights-rejection test below depends on that save call
 // failing.
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async (cmd: string) => {
+//
+// `defaultInvokeImpl` is exposed via `vi.hoisted` (not just captured in the
+// factory closure) so the per-row-match-count test below can temporarily
+// swap in a richer implementation (one that also answers
+// `notemd_vault_settings_get`/`notemd_search_glob_matches`) and this file's
+// `beforeEach` can then restore the plain default for every other test —
+// `vi.clearAllMocks()` alone does NOT undo a `.mockImplementation()`
+// override, only clears call history.
+const { invokeMock, defaultInvokeImpl } = vi.hoisted(() => {
+  const defaultInvokeImpl = async (cmd: string): Promise<unknown> => {
     if (cmd === 'sotvault_vault_root') return '/tmp/vault'
     throw new Error('no tauri host in vitest')
-  }),
+  }
+  return { invokeMock: vi.fn(defaultInvokeImpl), defaultInvokeImpl }
+})
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: invokeMock,
   convertFileSrc: (p: string) => p,
 }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -80,6 +92,7 @@ beforeEach(() => {
   // See ThemeImportDialog.test.ts: resetModules() breaks Svelte's DOM
   // operations singleton under happy-dom; clearAllMocks is enough.
   vi.clearAllMocks()
+  invokeMock.mockImplementation(defaultInvokeImpl)
   document.body.innerHTML = ''
   // The tab's body is gated on having a vault at all ("Open a vault to see
   // its search index status") — without this the render assertions would be
@@ -99,14 +112,34 @@ beforeEach(() => {
   sidePanels.left.activeId = null
 })
 
-afterEach(() => { closeSettings(); sotvaultStore.vaultRoot = null })
+// Review round 1, Minor 7: a test that throws BEFORE reaching its own
+// `unmount(app)` used to leave a live component instance mounted — still
+// subscribed to module-singleton stores like `uiState.pendingSettingsTab` —
+// which could then steal that flag from whichever test ran next, turning
+// its failure into a misleading "section not found" instead of the real
+// assertion mismatch (observed first-hand during this task's own mutation
+// checks). Tracking the current instance here and force-unmounting it in
+// `afterEach` makes each test's own guarantee independent of whether the
+// PREVIOUS test passed, failed cleanly, or threw. Individual tests no
+// longer need (or call) `unmount(app)` themselves.
+let currentApp: ReturnType<typeof mount> | null = null
+
+afterEach(() => {
+  closeSettings()
+  sotvaultStore.vaultRoot = null
+  if (currentApp) {
+    try { unmount(currentApp) } catch { /* already unmounted by the test itself */ }
+    currentApp = null
+  }
+})
 
 async function mountDialog() {
   const { default: SettingsDialog } = await import('./SettingsDialog.svelte')
-  return mount(SettingsDialog as unknown as Parameters<typeof mount>[0], {
+  currentApp = mount(SettingsDialog as unknown as Parameters<typeof mount>[0], {
     target: document.body,
     props: { open: true },
   })
+  return currentApp
 }
 
 // Lets the pending-tab $effect, the tab-entry $effect and the async
@@ -120,7 +153,7 @@ async function settle() {
 
 describe('SettingsDialog — Search & Index tab entry', () => {
   it('gear-button path (openSettings("search")) actually loads the index status', async () => {
-    const app = await mountDialog()
+    await mountDialog()
     await settle()
     expect(stats).not.toHaveBeenCalled() // 'core' tab: nothing search-related yet
 
@@ -129,11 +162,10 @@ describe('SettingsDialog — Search & Index tab entry', () => {
 
     expect(stats).toHaveBeenCalled()
     expect(indexStatus.stats?.files).toBe(128)
-    unmount(app)
   })
 
   it('the same path also renders the loaded numbers instead of the em-dash placeholders', async () => {
-    const app = await mountDialog()
+    await mountDialog()
     await settle()
     openSettings('search')
     await settle()
@@ -145,11 +177,10 @@ describe('SettingsDialog — Search & Index tab entry', () => {
     // must NOT be on screen — that sentence being a lie is the whole bug.
     expect(text).toContain('big.md')
     expect(text).not.toContain('No files are currently skipped')
-    unmount(app)
   })
 
   it('the tab-strip button path loads it too — one entry point, not two', async () => {
-    const app = await mountDialog()
+    await mountDialog()
     await settle()
 
     const btn = Array.from(document.body.querySelectorAll('nav.tab-strip button'))
@@ -159,7 +190,6 @@ describe('SettingsDialog — Search & Index tab entry', () => {
     await settle()
 
     expect(stats).toHaveBeenCalled()
-    unmount(app)
   })
 })
 
@@ -196,7 +226,7 @@ function rowValue(section: Element, label: string): string {
 // no second load path, per the regression this file exists to prevent.
 describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)', () => {
   it('renders each origin/type count next to its own label, not just anywhere on the page', async () => {
-    const app = await mountDialog()
+    await mountDialog()
     await settle()
     openSettings('search')
     await settle()
@@ -218,7 +248,6 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
 
     // The old placeholder sentence must be gone.
     expect(document.body.textContent).not.toContain('coming soon')
-    unmount(app)
   })
 
   it('the rendered numbers track the stats payload, not a fixed stub (mutation check)', async () => {
@@ -228,7 +257,7 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
       originCounts: { human: 7, derived: 9, source: 3, unlabeled: 11 },
       typeCounts: { Idea: 4 },
     })
-    const app = await mountDialog()
+    await mountDialog()
     await settle()
     openSettings('search')
     await settle()
@@ -242,7 +271,6 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
     expect(rowValue(section, 'Other')).toBe('5')
     expect(rowValue(section, 'Raw source material')).toBe('3')
     expect(rowValue(section, 'Unlabeled')).toBe('11')
-    unmount(app)
   })
 })
 
@@ -275,7 +303,7 @@ function typeInto(el: Element, value: string): void {
 // contract (see `glob-suggest.ts`) puts `ebook/三体/**` first.
 describe('SettingsDialog — Search & Index tab, source-glob candidates (task C-T11)', () => {
   it('pasting a sample path selects the narrowest candidate by default', async () => {
-    const app = await mountDialog()
+    await mountDialog()
     await settle()
     openSettings('search')
     await settle()
@@ -288,7 +316,34 @@ describe('SettingsDialog — Search & Index tab, source-glob candidates (task C-
 
     const checked = document.body.querySelector('input[name="glob-candidate"]:checked') as HTMLInputElement | null
     expect(checked?.value).toBe('ebook/三体/**')
-    unmount(app)
+  })
+})
+
+// Review round 1, Important 2: the candidate ladder already showed a count
+// per candidate; the SAVED pattern list — what actually ships into the
+// index — did not, so a pattern that quietly matches tens of thousands of
+// files had no on-screen signal at all (the zero-match warning only fires
+// at exactly 0). Every already-saved row must show its real count too.
+describe('SettingsDialog — Search & Index tab, saved pattern row shows its real match count (review round 1, Important 2)', () => {
+  it('renders the count next to each already-saved pattern, not just the candidate ladder', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'sotvault_vault_root') return '/tmp/vault'
+      if (cmd === 'notemd_vault_settings_get') return { searchSourceGlobs: ['ebook/**'] }
+      if (cmd === 'notemd_search_glob_matches') return 42
+      throw new Error('no tauri host in vitest')
+    })
+
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+    await settle() // one more tick for the count fetch `refreshGlobCounts` kicks off on load
+
+    const section = namedSection('Raw source patterns')
+    const row = section.querySelector('.glob-row')
+    const input = row?.querySelector('input[type="text"]') as HTMLInputElement | null
+    expect(input?.value).toBe('ebook/**')
+    expect(row?.querySelector('.glob-count')?.textContent?.trim()).toBe('42 files')
   })
 })
 
@@ -302,7 +357,7 @@ describe('SettingsDialog — Search & Index tab, unlabeled tier click (design sp
       return { route: 't1-fts', tookMs: 1, total: 0, hits: [], truncated: false, deepAvailable: false }
     })
 
-    const app = await mountDialog()
+    await mountDialog()
     await settle()
     openSettings('search')
     await settle()
@@ -320,16 +375,22 @@ describe('SettingsDialog — Search & Index tab, unlabeled tier click (design sp
     // The dialog is a full-screen overlay over the search panel — it has to
     // close for the results to actually be visible.
     expect(document.body.querySelector('[role="dialog"]')).toBeNull()
-    unmount(app)
   })
 })
 
-// Design spec §8: weight validation happens at the backend command boundary
-// and keeps the previously-stored value on rejection — this component must
-// reflect that, not keep showing whatever the user just typed as if it took.
-describe('SettingsDialog — Search & Index tab, weights save rejection (design spec §8)', () => {
-  it('a rejected weight save reverts the draft instead of keeping the typed value', async () => {
-    const app = await mountDialog()
+// Design spec §8: an invalid weight must be rejected and the previously
+// stored value retained. Review round 1, Minor 6: Svelte's number-input
+// binding writes `null` for a cleared/unparseable field, and the backend
+// stores `search_weights` as one wholesale struct (`vault_settings.rs`'s
+// `merge` does `out.search_weights = Some(w)`, not a per-field merge) — so
+// letting a `null` field slip through used to silently replace the ENTIRE
+// stored weights (including any other customized field) with defaults,
+// behind a plain "Saved" success toast. The fix intercepts this
+// client-side, before any request is sent — the two tests below cover both
+// that new path and the pre-existing backend-rejection backstop.
+describe('SettingsDialog — Search & Index tab, invalid weight rejected (design spec §8, review round 1 Minor 6)', () => {
+  it('an out-of-range value is rejected client-side — no request sent, typed value stays visible, no toast', async () => {
+    await mountDialog()
     await settle()
     openSettings('search')
     await settle()
@@ -341,15 +402,39 @@ describe('SettingsDialog — Search & Index tab, weights save rejection (design 
     await settle()
     expect(humanInput.value).toBe('0')
 
+    const toastCountBefore = toasts.list.length
+    buttonByText(section, 'Save').click()
+    await settle()
+
+    // Rejected before ever reaching `invoke` — the input keeps showing the
+    // value the user typed (neither silently reset to the default nor
+    // silently accepted), an inline error names the offending field, and no
+    // save toast fires either way because no request was ever made.
+    expect(humanInput.value).toBe('0')
+    expect(section.querySelector('.result.fail')?.textContent).toContain('Written by you')
+    expect(toasts.list.length).toBe(toastCountBefore)
+  })
+
+  it('a genuine backend rejection still reverts the draft and shows an error toast (backstop path)', async () => {
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = namedSection('Ranking weights')
+    const humanInput = section.querySelector('input[type="number"]') as HTMLInputElement
+    typeInto(humanInput, '2') // passes client-side validation (finite, >0, <=5)
+    await settle()
+    expect(humanInput.value).toBe('2')
+
     buttonByText(section, 'Save').click()
     await settle()
 
     // `invoke` is globally mocked to always reject ("no tauri host in
-    // vitest") — the same shape a real backend rejection takes (spec §8:
-    // zero is invalid, the previous value is retained). The draft must
-    // revert to that retained default, not keep displaying the rejected `0`.
+    // vitest") — client-side validation cannot catch every failure (e.g. a
+    // concurrent write elsewhere), so this backstop must still revert to
+    // the retained previous value and surface an error, per spec §8.
     expect(humanInput.value).toBe('1.25')
     expect(toasts.list.at(-1)?.level).toBe('error')
-    unmount(app)
   })
 })

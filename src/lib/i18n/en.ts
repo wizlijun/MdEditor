@@ -556,7 +556,14 @@ export const en = {
   // entirely, this widens what a matched file is allowed to be.
   'search.index.globsHeading': 'Raw source patterns',
   'search.index.globsHint': "Patterns decide which files count as raw source material — they're what makes `.srt`/`.vtt`/`.txt` transcripts searchable at all (ordinary `.md` files are indexed either way). Matching is literal and case-sensitive, so a renamed vault folder can make every pattern here silently match nothing — save to check for that (see the warning below).",
-  'search.index.globsEmpty': 'No patterns configured yet.',
+  // Review round 1, Important 3: an unconfigured vault (`searchSourceGlobs`
+  // is `null`) is NOT the same state as one where the list was explicitly
+  // saved empty — the former still has a real effective pattern (the
+  // implicit `<syncDir>/**` seed, `{pattern}`); the latter genuinely has
+  // none, which is a warning-worthy state (no `.srt`/`.vtt`/`.txt` at all,
+  // no `.md` tagged as source material).
+  'search.index.globsImplicitDefault': 'No patterns saved yet — this vault currently uses the implicit default `{pattern}`.',
+  'search.index.globsExplicitlyEmpty': 'The saved pattern list is empty — no transcripts (`.srt`/`.vtt`/`.txt`) are indexed, and no `.md` file is tagged as raw source material.',
   'search.index.globsPatternPlaceholder': 'e.g. ebook/**',
   'search.index.globsAddRow': 'Add pattern',
   'search.index.globsRemoveRow': 'Remove',
@@ -568,6 +575,12 @@ export const en = {
   // leaves every pattern syntactically valid while matching nothing.
   'search.index.globsZeroMatchWarning': 'Matches 0 files right now — double-check the path and its case.',
   'search.index.globsRebuildNote': 'Saving a pattern change rebuilds the search index from scratch. The ranking weights below are different: they take effect on your very next search, with no rebuild.',
+  // Review round 1, Important 3: saving an empty list silently replaces the
+  // implicit `{default}` seed — every file that pattern was tagging `Source`
+  // falls to `Unlabeled` (×0.3) once the triggered rebuild finishes. Worth
+  // its own confirmation, separate from the ordinary Save button.
+  'search.index.globsEmptySaveConfirmTitle': 'Save an empty pattern list?',
+  'search.index.globsEmptySaveConfirmBody': 'This vault currently uses the implicit default `{default}` for raw source material. Saving an empty list replaces it with nothing: no transcripts will be indexed, and every file that default was tagging "Raw source material" will fall to "Unlabeled" (weighted ×0.3) once the rebuild this triggers finishes. Continue?',
   'search.index.globsSampleHeading': 'Generate from a sample path',
   'search.index.globsSamplePlaceholder': 'Paste a vault-relative path, e.g. ebook/三体/book.md',
   'search.index.globsSampleGenerate': 'Generate candidates',
@@ -583,6 +596,10 @@ export const en = {
   'search.weights.hint': "Each tier's score is multiplied by this weight before results are ranked — higher surfaces first. Must be greater than 0 and at most 5.0.",
   'search.weights.rebuildContrastNote': 'Saving here takes effect on your very next search — unlike the patterns above, it never rebuilds the index.',
   'search.weights.resetDefault': 'Restore defaults',
+  // Review round 1, Minor 6: caught client-side, before the request is ever
+  // sent — see `invalidWeightField`'s doc comment for why that matters more
+  // here than an ordinary validation message would.
+  'search.weights.invalidError': 'Enter a value greater than 0 and at most 5.0 for "{label}" before saving.',
 
   // Folder view
   'folderView.parentFolder': 'Parent folder',

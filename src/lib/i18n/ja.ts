@@ -539,13 +539,16 @@ export const ja: Record<keyof Messages, string> = {
 
   'search.index.globsHeading': '元資料パターン',
   'search.index.globsHint': 'パターンは、どのファイルを元資料として扱うかを決めます——`.srt`/`.vtt`/`.txt` の書き起こしを検索対象にするのはこの設定です(通常の `.md` はどのみちインデックスされます)。マッチングはリテラルかつ大文字小文字を区別するため、vault フォルダの大文字小文字が変わると、ここのパターンは構文的には有効なまま静かに何もマッチしなくなります——保存時にその点を確認します(下記の警告を参照)。',
-  'search.index.globsEmpty': 'まだパターンが設定されていません。',
+  'search.index.globsImplicitDefault': 'まだパターンが保存されていません——この vault は現在、暗黙の既定値 `{pattern}` を使用しています。',
+  'search.index.globsExplicitlyEmpty': '保存されているパターンのリストが空です——書き起こし(`.srt`/`.vtt`/`.txt`)は一切インデックスされず、「元資料」としてタグ付けされる `.md` ファイルもありません。',
   'search.index.globsPatternPlaceholder': '例: ebook/**',
   'search.index.globsAddRow': 'パターンを追加',
   'search.index.globsRemoveRow': '削除',
   'search.index.globsBlankError': 'パターン #{row} が空です——入力するか行を削除してから、もう一度保存してください。',
   'search.index.globsZeroMatchWarning': '現在 0 件のファイルにマッチしています——パスと大文字小文字を確認してください。',
   'search.index.globsRebuildNote': 'パターンの変更を保存すると、検索インデックスが最初から再構築されます。下の並び替えの重みは違います——次の検索から即座に反映され、再構築はされません。',
+  'search.index.globsEmptySaveConfirmTitle': '空のパターンリストを保存しますか?',
+  'search.index.globsEmptySaveConfirmBody': 'この vault は現在、元資料の判定に暗黙の既定値 `{default}` を使用しています。空のリストを保存すると、それを何もない状態に置き換えます:書き起こしはインデックスされなくなり、この保存で発生する再構築が完了すると、その既定パターンが「元資料」としてタグ付けしていたファイルはすべて「未分類」(重み ×0.3)に落ちます。続けますか?',
   'search.index.globsSampleHeading': 'サンプルパスから生成',
   'search.index.globsSamplePlaceholder': 'vault からの相対パスを貼り付けてください。例: ebook/三体/book.md',
   'search.index.globsSampleGenerate': '候補を生成',
@@ -556,6 +559,7 @@ export const ja: Record<keyof Messages, string> = {
   'search.weights.hint': '各階層のスコアは、並び替え前にこの重みを掛け合わせます——大きいほど上位に表示されます。0 より大きく、5.0 以下である必要があります。',
   'search.weights.rebuildContrastNote': 'ここでの保存は次の検索から即座に反映されます——上のパターンとは異なり、インデックスの再構築は発生しません。',
   'search.weights.resetDefault': '既定値に戻す',
+  'search.weights.invalidError': '保存する前に、「{label}」に 0 より大きく 5.0 以下の値を入力してください。',
 
   // Folder view
   'folderView.parentFolder': '親フォルダ',

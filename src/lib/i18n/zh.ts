@@ -571,13 +571,16 @@ export const zh: Record<keyof Messages, string> = {
 
   'search.index.globsHeading': '原始资料模式',
   'search.index.globsHint': '模式决定哪些文件算作原始资料——是它们让 `.srt`/`.vtt`/`.txt` 转写稿能被搜到(普通 `.md` 文件无论如何都会进索引)。匹配是字面、区分大小写的,vault 目录一旦改过大小写,这里的模式就会全部悄悄命中 0 个文件——保存时会检查这一点(见下方提示)。',
-  'search.index.globsEmpty': '还没有配置任何模式。',
+  'search.index.globsImplicitDefault': '还没有保存任何模式——当前 vault 正在用隐式默认值 `{pattern}`。',
+  'search.index.globsExplicitlyEmpty': '已保存的模式列表是空的——不会索引任何转写稿(`.srt`/`.vtt`/`.txt`),也没有 `.md` 文件被标记为原始资料。',
   'search.index.globsPatternPlaceholder': '例如 ebook/**',
   'search.index.globsAddRow': '新增一条模式',
   'search.index.globsRemoveRow': '删除',
   'search.index.globsBlankError': '第 {row} 条模式是空的——填上内容或删掉这一行,再保存一次。',
   'search.index.globsZeroMatchWarning': '目前命中 0 个文件——请检查路径和大小写。',
   'search.index.globsRebuildNote': '保存模式变更会触发一次全量重建索引。下面的排序权重不同:改完立即在下一次搜索生效,不重建。',
+  'search.index.globsEmptySaveConfirmTitle': '保存一份空的模式列表?',
+  'search.index.globsEmptySaveConfirmBody': '这个 vault 目前用隐式默认值 `{default}` 认定原始资料。保存空列表会把它替换成什么都没有:不会索引任何转写稿,而且这次保存触发的重建完成后,原来被这条默认模式标记为"原始资料"的文件都会掉进"未标注"(权重 ×0.3)。要继续吗?',
   'search.index.globsSampleHeading': '从样例路径生成',
   'search.index.globsSamplePlaceholder': '粘贴一条相对 vault 的路径,例如 ebook/三体/book.md',
   'search.index.globsSampleGenerate': '生成候选',
@@ -588,6 +591,7 @@ export const zh: Record<keyof Messages, string> = {
   'search.weights.hint': '每一档的分数在排序前会乘以这个权重,越大越靠前。取值须大于 0,且不超过 5.0。',
   'search.weights.rebuildContrastNote': '在这里保存会在下一次搜索立即生效——和上面的模式不同,它不会触发索引重建。',
   'search.weights.resetDefault': '恢复默认',
+  'search.weights.invalidError': '「{label}」需要一个大于 0 且不超过 5.0 的值,才能保存。',
 
   // Folder view
   'folderView.parentFolder': '上级文件夹',

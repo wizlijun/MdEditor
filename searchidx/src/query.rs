@@ -283,7 +283,43 @@ pub fn search_with(
         let (hits, truncated) = like_search(conn, q, limit, today, weights)?;
         return Ok(Answer { hits, route: Route::Scan, truncated, deep_available: false });
     }
+    // A query with at least one filter (`origin:`, `type:`, `tag:`, …) but no
+    // terms/phrases — `origin:unlabeled` alone, for instance — is NOT the
+    // same as an empty query. `match_expr` returns `None` for it (nothing to
+    // MATCH), so `fts_search` above never even calls `push_filters`, and
+    // `needs_scan_fallback` only looks at terms/phrases too, so it's `false`
+    // here regardless of filters. Left unhandled, the documented grammar
+    // (AGENTS.md/`--help`'s `origin:unlabeled`, design spec §6.3, and the
+    // settings page's "Unlabeled" statistics row, which runs exactly this
+    // query) silently returns nothing for every caller — GUI, CLI, and any
+    // agent that follows the advertised syntax literally.
+    //
+    // Order matters: this runs AFTER the scan-fallback branch above, so a
+    // query that also has terms/phrases keeps its normal FTS→scan behavior
+    // untouched; this only fires when there was nothing to MATCH in the
+    // first place. And it's gated on `has_filters`, so a truly empty query
+    // (no terms, no phrases, no filters) still falls through to the empty
+    // `Answer` below, unchanged.
+    if q.terms.is_empty() && q.phrases.is_empty() && has_filters(q) {
+        let (hits, truncated) = filter_only_search(conn, q, limit, today, weights)?;
+        return Ok(Answer { hits, route: Route::Fts, truncated, deep_available: false });
+    }
     Ok(Answer { hits: Vec::new(), route: Route::Fts, truncated: false, deep_available: false })
+}
+
+/// Whether `q` carries at least one filter clause (`push_filters` would emit
+/// at least one `AND ...`). Deliberately excludes `terms`/`phrases` — those
+/// are what makes a query a *keyword* search; this only asks "is there a
+/// filter to apply on its own".
+fn has_filters(q: &Query) -> bool {
+    !q.tags.is_empty()
+        || !q.types.is_empty()
+        || !q.paths.is_empty()
+        || !q.exts.is_empty()
+        || !q.origins.is_empty()
+        || !q.pages.is_empty()
+        || q.after.is_some()
+        || q.before.is_some()
 }
 
 /// How many SQLite VM instructions between abort checks. Small enough that a
@@ -438,6 +474,48 @@ fn like_search(
     push_filters(q, &mut sql, &mut args);
     // Hard cap: the fallback is a safety net, not a query plan.
     sql.push_str(" LIMIT 500");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
+        Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0))
+    })?;
+    let (rows, truncated) = drain(rows)?;
+    Ok((finish(rows, q, limit, today, weights)?, truncated))
+}
+
+/// `search_with`'s handling for a query that has filters (`origin:`, `type:`,
+/// `tag:`, …) but no terms/phrases to `MATCH` — see the call site's doc
+/// comment for why this exists (it used to silently fall through to an
+/// empty result, breaking `origin:unlabeled` and every other bare-filter
+/// query the documented grammar advertises). Reuses `SELECT_COLS`/
+/// `push_filters`/`finish`, the same shape as `like_search` above, minus the
+/// `LIKE` needle clauses (there is no keyword to match against, only
+/// filters).
+///
+/// `rank` has no bm25 to read (nothing was MATCHed), so every row gets the
+/// same neutral base (`0.0`, mirroring `like_search`'s hardcoded `-1.0` —
+/// see `finish`/`score_of`, which apply their other boosts — origin tier,
+/// recency, verification, annotation — on top of it regardless). Rows are
+/// pre-ordered by path/line for a deterministic pre-score cap, then
+/// `finish` re-scores, sorts, and truncates to `limit` — the same
+/// over-fetch idiom `fts_search` uses (`(limit * 8).max(64)`), not
+/// `like_search`'s flat 500: a filter-only query is a first-class,
+/// documented route now, not a last-resort safety net.
+fn filter_only_search(
+    conn: &Connection,
+    q: &Query,
+    limit: usize,
+    today: &str,
+    weights: &Weights,
+) -> rusqlite::Result<(Vec<Hit>, bool)> {
+    let mut sql = format!(
+        "SELECT {SELECT_COLS}, 0.0 AS rank
+         FROM blocks b JOIN files f ON f.id = b.file_id
+         WHERE 1 = 1"
+    );
+    let mut args: Vec<String> = Vec::new();
+    push_filters(q, &mut sql, &mut args);
+    sql.push_str(&format!(" ORDER BY f.path ASC, b.line_start ASC LIMIT {}", (limit * 8).max(64)));
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
@@ -1141,6 +1219,44 @@ mod tests {
         let (_d, c) = indexed(&[("a.md", "target\n")]);
         let hits = search(&c, &parse("target origin:bogus"), 20, "2026-08-10").unwrap().0;
         assert!(hits.is_empty(), "an invalid origin: value must fail closed, not silently return every tier: {hits:?}");
+    }
+
+    /// Review round 1, Critical 1: a bare filter query — no terms, no
+    /// phrases, just `origin:unlabeled` — used to structurally return
+    /// nothing. `match_expr` returns `None` when there are no terms/phrases,
+    /// so `fts_search` short-circuited before ever calling `push_filters`;
+    /// `needs_scan_fallback` only inspects terms/phrases too, so it never
+    /// tripped the LIKE fallback either. The filters were simply never
+    /// applied. This is the one documented exit from the ×0.3 unlabeled
+    /// demotion (design spec §3.1/§6.3, AGENTS.md's `origin:unlabeled`
+    /// example, and the settings page's clickable "Unlabeled" statistics
+    /// row) — it has to actually retrieve something. `a.note.md` (Human) and
+    /// `c.md` (a registered `type:`, so Derived) prove the filter narrows,
+    /// not just that SOMETHING comes back.
+    #[test]
+    fn a_bare_filter_query_with_no_terms_or_phrases_still_retrieves() {
+        let (_d, c) = indexed(&[
+            ("d.md", "no frontmatter at all\n"),
+            ("e.md", "also no frontmatter\n"),
+            ("a.note.md", "written by a human\n"),
+            ("c.md", "---\ntype: Book Summary\n---\nderived content\n"),
+        ]);
+        let mut hits = search(&c, &parse("origin:unlabeled"), 20, "2026-08-10").unwrap().0;
+        hits.sort_by(|a, b| a.path.cmp(&b.path));
+        let paths: Vec<_> = hits.iter().map(|h| h.path.clone()).collect();
+        assert_eq!(paths, vec!["d.md", "e.md"], "{hits:?}");
+    }
+
+    /// The other half of the fix above: a query that is entirely empty — no
+    /// terms, no phrases, and (unlike the test above) no filters either —
+    /// must still return nothing. The new filter-only path is gated on
+    /// `has_filters` specifically so this doesn't regress into "no query at
+    /// all silently returns the whole vault".
+    #[test]
+    fn a_fully_empty_query_with_no_filters_either_still_returns_nothing() {
+        let (_d, c) = indexed(&[("a.md", "hello world\n")]);
+        let hits = search(&c, &parse(""), 20, "2026-08-10").unwrap().0;
+        assert!(hits.is_empty(), "{hits:?}");
     }
 
     #[test]

@@ -103,13 +103,27 @@
   // empty draft, an empty saved list is a different, explicit state) and
   // edited as plain strings; validated only at save time (see
   // `onSaveSourceGlobs`).
-  let globPatternsDraft = $state<string[]>([])
+  //
+  // Review round 1, Important 2/Minor 4: `count` travels WITH the row
+  // object, not in a separate index-keyed `Set`/array — the earlier version
+  // kept a `Set<number>` of "zero match" row indices alongside a plain
+  // `string[]` of patterns, which went stale the moment a row was removed
+  // (every index after the removed one shifted, but the `Set` didn't) or
+  // edited (the old count/warning kept describing text that was no longer
+  // on screen). Folding `count` into the row itself means removal takes the
+  // stale count with it for free, and every edit path below explicitly
+  // resets `count` to `null` so a warning can never outlive the pattern it
+  // was measured against. `null` = not fetched yet (or invalidated by an
+  // edit); the count itself is what drives BOTH the always-visible "N
+  // files" readout (Important 2 — the saved list showing no count at all
+  // was the actual gap the ×0.3-scale incident scenario needs) and the
+  // `count === 0` warning (spec §8), so there is only one source of truth
+  // for both.
+  interface GlobRow { pattern: string; count: number | null }
+  let globRows = $state<GlobRow[]>([])
   let globSaveBusy = $state(false)
-  // §8: a blank row is rejected outright (`globPatternBlankError`, naming
-  // the row); a pattern matching 0 files is allowed but flagged per-row
-  // here, indices into `globPatternsDraft` as of the last successful save.
+  // §8: a blank row is rejected outright, naming the row.
   let globPatternBlankError = $state<string | null>(null)
-  let globZeroMatchRows = $state<Set<number>>(new Set())
 
   // "Generate from a sample path" (design spec §7.1) — `suggestGlobs` is
   // pure/local; each candidate's match count is fetched independently from
@@ -144,9 +158,9 @@
       thresholdDraft = vaultSettings.largeFileThresholdMb
       searchExcludeDirsDraft = vaultSettings.searchExcludeDirs.join('\n')
       searchThresholdDraft = vaultSettings.searchLargeFileThresholdMb
-      globPatternsDraft = vaultSettings.searchSourceGlobs ? [...vaultSettings.searchSourceGlobs] : []
+      globRows = (vaultSettings.searchSourceGlobs ?? []).map((p) => ({ pattern: p, count: null }))
       globPatternBlankError = null
-      globZeroMatchRows = new Set()
+      refreshGlobCounts()
       weightsDraft = { ...vaultSettings.searchWeights }
       if (!vaultSettings.vaultPath) { agentsSectionMissing = null; return }
       void invoke<boolean>('notemd_agents_search_section_missing')
@@ -243,15 +257,59 @@
 
   // ---- Raw source glob patterns (task C-T8/C-T11, design spec §4.1/§7.1) ----
 
-  function onAddGlobRow() {
-    globPatternsDraft = [...globPatternsDraft, '']
-  }
-  function onRemoveGlobRow(i: number) {
-    globPatternsDraft = globPatternsDraft.filter((_, idx) => idx !== i)
-    globZeroMatchRows = new Set([...globZeroMatchRows].filter((idx) => idx !== i))
+  // The vault-relative pattern the backend seeds when `searchSourceGlobs` is
+  // `null` (never configured) — mirrors `search::options::source_globs_from`
+  // exactly (`<resolved syncDir>/**`; see that function's doc comment for
+  // why it reads the vault's currently-resolved sync dir, not the literal
+  // `"sync/**"`). Used ONLY for display (review round 1, Important 3): the
+  // settings page must show what's actually in effect before the user
+  // replaces it, not leave an unconfigured vault looking identical to an
+  // intentionally-empty one.
+  let effectiveDefaultGlob = $derived(`${vaultSettings.syncDir}/**`)
+
+  // Design spec §7.1: counts come from the real vault, never the index (see
+  // `searchApi.globMatches`'s doc comment) — one call per pattern, fired in
+  // parallel. Closes over each `row` OBJECT rather than an index, so a row
+  // added/removed/reordered while a fetch is in flight can't misattribute
+  // its result to the wrong row (the `Set<number>` this replaced could).
+  // Guards against a since-edited pattern overwriting a stale in-flight
+  // result with `row.pattern.trim() === p`.
+  function refreshGlobCounts() {
+    for (const row of globRows) {
+      const p = row.pattern.trim()
+      if (!p) continue
+      void searchApi.globMatches([p]).then((n) => {
+        if (row.pattern.trim() === p) row.count = n
+      }).catch(() => {})
+    }
   }
 
-  // §8, two DIFFERENT error handlings in one function:
+  function onAddGlobRow() {
+    globRows = [...globRows, { pattern: '', count: null }]
+  }
+  function onRemoveGlobRow(i: number) {
+    globRows = globRows.filter((_, idx) => idx !== i)
+  }
+  // Review round 1, Minor 4: editing a row's text must invalidate ITS OWN
+  // `count` immediately — the old index-keyed `Set` left a stale "matches 0
+  // files" (or a stale non-zero count) attached to text the user had
+  // already changed. Folding `count` into the row object (see `GlobRow`'s
+  // declaration) makes this a one-line reset instead of a second data
+  // structure to keep in sync.
+  function onGlobRowInput(i: number, value: string) {
+    globRows[i].pattern = value
+    globRows[i].count = null
+  }
+  function onGlobRowBlur(i: number) {
+    const row = globRows[i]
+    const p = row?.pattern.trim()
+    if (!p) return
+    void searchApi.globMatches([p]).then((n) => {
+      if (row.pattern.trim() === p) row.count = n
+    }).catch(() => {})
+  }
+
+  // §8, two DIFFERENT error handlings, plus review round 1's Important 3:
   //  - a blank row is rejected outright, naming which row, and the save
   //    never reaches the backend — `searchidx::globs::parse` tolerates a
   //    blank/unparseable entry (drops it silently), but that tolerance is a
@@ -261,28 +319,34 @@
   //    afterward instead. This is the only safety net for a vault directory
   //    whose case was changed (§4.1 literal case-sensitive matching) — every
   //    pattern stays syntactically valid while matching nothing.
+  //  - saving an EMPTY list needs its own confirmation: for every vault
+  //    that has never configured this setting, the effective pattern is
+  //    `effectiveDefaultGlob` (see above), never nothing — a click here
+  //    replaces that implicit default with an explicit empty list, which
+  //    demotes every file that default was tagging `Source` down to
+  //    `Unlabeled` (×0.3) the moment the triggered rebuild finishes. That is
+  //    real enough (and different enough from every other save on this
+  //    page) to earn its own `ask()` rather than the ordinary Save button.
   async function onSaveSourceGlobs() {
     globPatternBlankError = null
-    const blankIndex = globPatternsDraft.findIndex((p) => p.trim() === '')
+    const blankIndex = globRows.findIndex((r) => r.pattern.trim() === '')
     if (blankIndex !== -1) {
       globPatternBlankError = t('search.index.globsBlankError', { row: String(blankIndex + 1) })
       return
     }
-    const patterns = globPatternsDraft.map((p) => p.trim())
+    const patterns = globRows.map((r) => r.pattern.trim())
+    if (patterns.length === 0) {
+      const ok = await ask(
+        t('search.index.globsEmptySaveConfirmBody', { default: effectiveDefaultGlob }),
+        { title: t('search.index.globsEmptySaveConfirmTitle'), kind: 'warning', okLabel: t('vaultSync.save'), cancelLabel: t('common.cancel') },
+      )
+      if (!ok) return
+    }
     globSaveBusy = true
     try {
       await saveSearchSourceGlobs(patterns)
-      globPatternsDraft = vaultSettings.searchSourceGlobs ? [...vaultSettings.searchSourceGlobs] : []
-      // Real-vault counts (design spec §7.2), one call per pattern — see
-      // `searchApi.globMatches`'s doc comment for why this isn't batched.
-      const zero = new Set<number>()
-      await Promise.all(
-        patterns.map(async (p, i) => {
-          const n = await searchApi.globMatches([p]).catch(() => null)
-          if (n === 0) zero.add(i)
-        }),
-      )
-      globZeroMatchRows = zero
+      globRows = (vaultSettings.searchSourceGlobs ?? []).map((p) => ({ pattern: p, count: null }))
+      refreshGlobCounts()
       pushToast({ level: 'success', message: t('vaultSync.saved') })
     } catch (e) {
       pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
@@ -308,8 +372,11 @@
   }
   function onUseSelectedCandidate() {
     if (!globCandidateSelected) return
-    if (!globPatternsDraft.includes(globCandidateSelected)) {
-      globPatternsDraft = [...globPatternsDraft, globCandidateSelected]
+    if (!globRows.some((r) => r.pattern === globCandidateSelected)) {
+      // Reuses the candidate's already-fetched count instead of re-querying
+      // — `globMatches` was already called for every candidate above.
+      const candidate = globCandidates.find((c) => c.pattern === globCandidateSelected)
+      globRows = [...globRows, { pattern: globCandidateSelected, count: candidate?.count ?? null }]
     }
     globCandidates = []
     globCandidateSelected = null
@@ -318,13 +385,51 @@
 
   // ---- Per-tier ranking weights (task C-T7/C-T11, design spec §3.1/§7.3) ----
 
+  type WeightField = keyof SearchWeights
+  const WEIGHT_FIELDS: WeightField[] = ['human', 'derived', 'source', 'unlabeled']
+  function weightFieldLabel(f: WeightField): string {
+    if (f === 'human') return t('search.group.human')
+    if (f === 'derived') return t('search.index.tiersDerivedLabel')
+    if (f === 'source') return t('search.group.source')
+    return t('search.group.unlabeled')
+  }
+  // Mirrors `vault_settings::validate_search_weights`'s bounds exactly
+  // (finite, > 0, <= 5.0) — review round 1, Minor 6: Svelte's `bind:value`
+  // on a `type="number"` input writes `null` for an empty/unparseable
+  // field, silently defeating the `SearchWeights` TS type. Sending that
+  // `null` through used to reach the backend, which stores `search_weights`
+  // as ONE WHOLESALE STRUCT (`vault_settings.rs`'s `merge` does
+  // `out.search_weights = Some(w)`, not a per-field merge) — so a cleared
+  // `human` field didn't just fail to update `human`, it silently replaced
+  // the entire stored weights (including any other previously-customized
+  // field) with one where `human` reads back as the 1.25 default, while
+  // this component still showed a plain "Saved" success toast. Catching it
+  // HERE, before the request is ever sent, is what makes spec §8's
+  // "reject, keep the previous value" promise true for this failure mode:
+  // the backend is never even asked, so whatever was stored stays stored.
+  function invalidWeightField(w: SearchWeights): WeightField | null {
+    for (const f of WEIGHT_FIELDS) {
+      const v = w[f]
+      if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 5) return f
+    }
+    return null
+  }
+  let weightsError = $state<string | null>(null)
+
   // Fills the draft only — does NOT save. Consistent with every other
   // draft-then-Save control on this tab; the user still has to click Save
   // for "restore defaults" to actually take effect.
   function onResetWeightsDraft() {
     weightsDraft = { ...DEFAULT_SEARCH_WEIGHTS }
+    weightsError = null
   }
   async function onSaveWeights() {
+    weightsError = null
+    const badField = invalidWeightField(weightsDraft)
+    if (badField) {
+      weightsError = t('search.weights.invalidError', { label: weightFieldLabel(badField) })
+      return
+    }
     weightsBusy = true
     try {
       await saveSearchWeights({ ...weightsDraft })
@@ -333,7 +438,10 @@
     } catch (e) {
       // Backend rejection keeps the previously-stored value (design spec
       // §8) — reload the draft from it so the UI doesn't keep showing the
-      // rejected numbers as if they were live.
+      // rejected numbers as if they were live. The client-side check above
+      // is expected to catch the common case (a cleared input); this stays
+      // as a backstop for whatever it can't (e.g. a stale draft racing a
+      // concurrent write from another window).
       weightsDraft = { ...vaultSettings.searchWeights }
       pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
     } finally {
@@ -1331,17 +1439,34 @@
           <section class="block">
             <h3>{t('search.index.globsHeading')}</h3>
             <p class="desc">{t('search.index.globsHint')}</p>
-            {#if globPatternsDraft.length === 0}
-              <p class="desc">{t('search.index.globsEmpty')}</p>
+            {#if globRows.length === 0}
+              {#if vaultSettings.searchSourceGlobs === null}
+                <!-- Review round 1, Important 3: an unconfigured vault is
+                     NOT the same state as an explicitly-saved empty list —
+                     it already has an effective pattern (the implicit
+                     `<syncDir>/**` seed). Showing that here is what lets the
+                     user see what they're about to replace before Save
+                     silently un-seeds it. -->
+                <p class="desc">{t('search.index.globsImplicitDefault', { pattern: effectiveDefaultGlob })}</p>
+              {:else}
+                <p class="result fail">{t('search.index.globsExplicitlyEmpty')}</p>
+              {/if}
             {/if}
-            {#each globPatternsDraft as _pattern, i (i)}
+            {#each globRows as row, i (i)}
               <div class="row glob-row" style="gap: 8px; margin-bottom: 4px;">
-                <input type="text" style="flex: 1;" bind:value={globPatternsDraft[i]}
+                <input type="text" style="flex: 1;" value={row.pattern}
+                  oninput={(e) => onGlobRowInput(i, e.currentTarget.value)}
+                  onblur={() => onGlobRowBlur(i)}
                   placeholder={t('search.index.globsPatternPlaceholder')}
                   disabled={globSaveBusy} />
+                <!-- Review round 1, Important 2: the SAVED list — what
+                     actually ships into the index — must show the same
+                     real-vault count the candidate ladder above already
+                     shows, not just a silent zero-match warning. -->
+                <span class="glob-count">{row.count === null ? '…' : t('search.index.globsMatchCount', { n: row.count })}</span>
                 <button onclick={() => onRemoveGlobRow(i)} disabled={globSaveBusy}>{t('search.index.globsRemoveRow')}</button>
               </div>
-              {#if globZeroMatchRows.has(i)}
+              {#if row.count === 0}
                 <p class="result fail" style="margin: 0 0 6px 0;">{t('search.index.globsZeroMatchWarning')}</p>
               {/if}
             {/each}
@@ -1398,6 +1523,9 @@
               <button onclick={onResetWeightsDraft} disabled={weightsBusy}>{t('search.weights.resetDefault')}</button>
               <button class="primary" onclick={() => void onSaveWeights()} disabled={weightsBusy || !vaultSettings.vaultPath}>{t('vaultSync.save')}</button>
             </div>
+            {#if weightsError}
+              <p class="result fail">{weightsError}</p>
+            {/if}
             <p class="desc" style="margin-top: 8px;">{t('search.weights.rebuildContrastNote')}</p>
           </section>
           <section class="block">
