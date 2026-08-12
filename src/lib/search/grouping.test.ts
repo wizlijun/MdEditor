@@ -25,6 +25,12 @@ function hit(overrides: Partial<SearchHit>): SearchHit {
   }
 }
 
+/** Every hit of a group, in render order — the shape the older assertions in
+ *  this file were written against, before hits were bucketed by file. */
+function allHits(group: { files: { hits: SearchHit[] }[] }): SearchHit[] {
+  return group.files.flatMap((f) => f.hits)
+}
+
 describe('groupHits', () => {
   it('两极固定在首尾,中间按类型', () => {
     const hits = [
@@ -45,7 +51,7 @@ describe('groupHits', () => {
     const hits = [hit({ origin: 'human' }), hit({ origin: 'derived', conceptType: 'Answer' })]
     const groups = groupHits(hits)
     expect(groups.some((g) => g.kind === 'source')).toBe(false)
-    expect(groups.every((g) => g.hits.length > 0)).toBe(true)
+    expect(groups.every((g) => g.hitCount > 0)).toBe(true)
   })
 
   it('组数随结果中出现的类型数变化(2 种类型 → 4 组)', () => {
@@ -98,7 +104,7 @@ describe('groupHits', () => {
       hit({ path: 'source-second.md', origin: 'source' }),
     ]
     const groups = groupHits(hits)
-    const byKind = (kind: string) => groups.find((g) => g.kind === kind)!.hits.map((h) => h.path)
+    const byKind = (kind: string) => allHits(groups.find((g) => g.kind === kind)!).map((h) => h.path)
     expect(byKind('human')).toEqual(['human-first.md', 'human-second.md'])
     expect(byKind('derivedType')).toEqual(['answer-first.md', 'answer-second.md'])
     expect(byKind('derivedOther')).toEqual(['other-first.md', 'other-second.md'])
@@ -117,5 +123,51 @@ describe('groupHits', () => {
     const groups = groupHits(hits)
     expect(groups).toHaveLength(1)
     expect(groups[0].kind).toBe('derivedOther')
+  })
+
+  it('同文件的多条命中聚成一个文件条目', () => {
+    const hits = [
+      hit({ path: 'notes/a.md', line: 3, origin: 'human' }),
+      hit({ path: 'notes/b.md', line: 9, origin: 'human' }),
+      hit({ path: 'notes/a.md', line: 41, origin: 'human' }),
+    ]
+    const files = groupHits(hits)[0].files
+    expect(files.map((f) => f.path)).toEqual(['notes/a.md', 'notes/b.md'])
+    expect(files[0].hits.map((h) => h.line)).toEqual([3, 41])
+    expect(groupHits(hits)[0].hitCount).toBe(3)
+  })
+
+  it('文件顺序取首次出现,即其最高分命中的位置', () => {
+    // `hits` arrives score-sorted, so "first appearance" is "best hit" — a
+    // file whose only hit ranks last must not jump ahead of one that opened
+    // the list.
+    const hits = [
+      hit({ path: 'best.md', origin: 'human' }),
+      hit({ path: 'worst.md', origin: 'human' }),
+      hit({ path: 'best.md', origin: 'human' }),
+      hit({ path: 'best.md', origin: 'human' }),
+    ]
+    expect(groupHits(hits)[0].files.map((f) => f.path)).toEqual(['best.md', 'worst.md'])
+  })
+
+  it('name 是 basename,path/absPath 原样带出', () => {
+    const hits = [hit({ path: 'a/b/会议纪要.md', absPath: '/v/a/b/会议纪要.md', origin: 'human' })]
+    expect(groupHits(hits)[0].files[0]).toMatchObject({
+      path: 'a/b/会议纪要.md',
+      absPath: '/v/a/b/会议纪要.md',
+      name: '会议纪要.md',
+    })
+  })
+
+  it('同名文件跨类型组不合并 —— 它确实同时占着两极', () => {
+    const hits = [
+      hit({ path: 'both.md', line: 1, origin: 'human' }),
+      hit({ path: 'both.md', line: 2, origin: 'source' }),
+    ]
+    const groups = groupHits(hits)
+    expect(groups.map((g) => g.kind)).toEqual(['human', 'source'])
+    expect(groups[0].files.map((f) => f.path)).toEqual(['both.md'])
+    expect(groups[1].files.map((f) => f.path)).toEqual(['both.md'])
+    expect(groups[0].files[0].hits).toHaveLength(1)
   })
 })

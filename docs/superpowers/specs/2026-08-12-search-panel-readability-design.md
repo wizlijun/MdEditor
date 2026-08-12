@@ -30,10 +30,11 @@
 **后端** — `notemd_search` 命令在返回 DTO 前补一行 debug:
 
 ```
-[search] debug  query="外骨骼" route=t1-fts hits=12/40 34ms deep=false truncated=false
+[search] debug  query="外骨骼" route=t1-fts hits=12 34ms deep=false truncated=false
 ```
 
-`hits=12/40` 是「返回条数/命中总数」。被更新 ticket 抢占而中止的查询打:
+`hits` 只有一个数 —— `SearchResponse.total` 与返回条数在后端本来就是同一个值
+(`total: answer.hits.len()`),写成「返回/总数」会是假精度。被更新 ticket 抢占而中止的查询打:
 
 ```
 [search] debug  query="外骨骼" superseded
