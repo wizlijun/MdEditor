@@ -22,11 +22,18 @@
   import { outlineShortcuts, setShortcutOverride } from '../lib/outline/gate.svelte'
   import { outlineDirs, setOutlineDir } from '../lib/outline/dirs.svelte'
   import { inboxDir, setInboxDir } from '../lib/quick-note.svelte'
-  import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs, saveSearchLargeFileThreshold } from '../lib/vault-settings.svelte'
+  import {
+    vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB,
+    saveSearchExcludeDirs, saveSearchLargeFileThreshold, saveSearchSourceGlobs, saveSearchWeights, DEFAULT_SEARCH_WEIGHTS,
+    type SearchWeights,
+  } from '../lib/vault-settings.svelte'
   import { pushToast } from '../lib/toast.svelte'
   import { sotvaultStore } from '../lib/sotvault.svelte'
   import { indexStatus, estimateRebuildSeconds, elideMiddle, formatElapsedMs } from '../lib/search/index-status.svelte'
-  import type { SearchProgress } from '../lib/search/api'
+  import { searchApi, type SearchProgress } from '../lib/search/api'
+  import { suggestGlobs } from '../lib/search/glob-suggest'
+  import { searchStore } from '../lib/search/store.svelte'
+  import { setActiveView, setSideVisible } from '../lib/side-panel/registry.svelte'
   import {
     DEFAULT_SHORTCUTS, resolveShortcuts, displayShortcut, eventToShortcut, findConflict,
     type OutlineCommandId,
@@ -90,6 +97,40 @@
   // default — see that field's doc comment in vault-settings.svelte.ts).
   let searchThresholdDraft = $state(DEFAULT_LARGE_FILE_THRESHOLD_MB)
   let searchThresholdBusy = $state(false)
+
+  // Raw source glob patterns (task C-T8/C-T11, design spec §4.1/§7.1).
+  // Loaded from `vaultSettings.searchSourceGlobs` (null = unconfigured →
+  // empty draft, an empty saved list is a different, explicit state) and
+  // edited as plain strings; validated only at save time (see
+  // `onSaveSourceGlobs`).
+  let globPatternsDraft = $state<string[]>([])
+  let globSaveBusy = $state(false)
+  // §8: a blank row is rejected outright (`globPatternBlankError`, naming
+  // the row); a pattern matching 0 files is allowed but flagged per-row
+  // here, indices into `globPatternsDraft` as of the last successful save.
+  let globPatternBlankError = $state<string | null>(null)
+  let globZeroMatchRows = $state<Set<number>>(new Set())
+
+  // "Generate from a sample path" (design spec §7.1) — `suggestGlobs` is
+  // pure/local; each candidate's match count is fetched independently from
+  // the real vault via `searchApi.globMatches` (see that function's doc
+  // comment for why one call per candidate, not a batch).
+  let globSampleDraft = $state('')
+  let globCandidates = $state<{ pattern: string; count: number | null }[]>([])
+  // The candidate list is presented narrow → wide by SCOPE, never re-sorted
+  // by count (a reviewer proved the ladder can invert in exactly the mixed-
+  // media folder this feature targets — see `glob-suggest.ts`'s doc
+  // comment). Default-selecting `candidates[0]` is what makes the narrowest
+  // — the file's own directory, the most *intentional* scope — the default,
+  // regardless of which candidate turns out to match fewer files.
+  let globCandidateSelected = $state<string | null>(null)
+
+  // Per-tier ranking weights (task C-T7/C-T11, design spec §3.1/§7.3).
+  // Loaded from `vaultSettings.searchWeights`, which already falls back to
+  // `DEFAULT_SEARCH_WEIGHTS` for any unset field.
+  let weightsDraft = $state<SearchWeights>({ ...DEFAULT_SEARCH_WEIGHTS })
+  let weightsBusy = $state(false)
+
   // `null` = not checked yet (or no vault / no AGENTS.md to check). Detection
   // is read-only (notemd_agents_search_section_missing); the write
   // (notemd_agents_append_search_section) only ever runs from onAddAgentsSearchSection,
@@ -103,6 +144,10 @@
       thresholdDraft = vaultSettings.largeFileThresholdMb
       searchExcludeDirsDraft = vaultSettings.searchExcludeDirs.join('\n')
       searchThresholdDraft = vaultSettings.searchLargeFileThresholdMb
+      globPatternsDraft = vaultSettings.searchSourceGlobs ? [...vaultSettings.searchSourceGlobs] : []
+      globPatternBlankError = null
+      globZeroMatchRows = new Set()
+      weightsDraft = { ...vaultSettings.searchWeights }
       if (!vaultSettings.vaultPath) { agentsSectionMissing = null; return }
       void invoke<boolean>('notemd_agents_search_section_missing')
         .then((missing) => { agentsSectionMissing = missing })
@@ -194,6 +239,120 @@
     } finally {
       searchThresholdBusy = false
     }
+  }
+
+  // ---- Raw source glob patterns (task C-T8/C-T11, design spec §4.1/§7.1) ----
+
+  function onAddGlobRow() {
+    globPatternsDraft = [...globPatternsDraft, '']
+  }
+  function onRemoveGlobRow(i: number) {
+    globPatternsDraft = globPatternsDraft.filter((_, idx) => idx !== i)
+    globZeroMatchRows = new Set([...globZeroMatchRows].filter((idx) => idx !== i))
+  }
+
+  // §8, two DIFFERENT error handlings in one function:
+  //  - a blank row is rejected outright, naming which row, and the save
+  //    never reaches the backend — `searchidx::globs::parse` tolerates a
+  //    blank/unparseable entry (drops it silently), but that tolerance is a
+  //    *consumer* obligation, not license for the UI to silently drop a row
+  //    the user just typed and believes was saved.
+  //  - a pattern matching 0 files is ALLOWED to save; flagged per-row
+  //    afterward instead. This is the only safety net for a vault directory
+  //    whose case was changed (§4.1 literal case-sensitive matching) — every
+  //    pattern stays syntactically valid while matching nothing.
+  async function onSaveSourceGlobs() {
+    globPatternBlankError = null
+    const blankIndex = globPatternsDraft.findIndex((p) => p.trim() === '')
+    if (blankIndex !== -1) {
+      globPatternBlankError = t('search.index.globsBlankError', { row: String(blankIndex + 1) })
+      return
+    }
+    const patterns = globPatternsDraft.map((p) => p.trim())
+    globSaveBusy = true
+    try {
+      await saveSearchSourceGlobs(patterns)
+      globPatternsDraft = vaultSettings.searchSourceGlobs ? [...vaultSettings.searchSourceGlobs] : []
+      // Real-vault counts (design spec §7.2), one call per pattern — see
+      // `searchApi.globMatches`'s doc comment for why this isn't batched.
+      const zero = new Set<number>()
+      await Promise.all(
+        patterns.map(async (p, i) => {
+          const n = await searchApi.globMatches([p]).catch(() => null)
+          if (n === 0) zero.add(i)
+        }),
+      )
+      globZeroMatchRows = zero
+      pushToast({ level: 'success', message: t('vaultSync.saved') })
+    } catch (e) {
+      pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
+    } finally {
+      globSaveBusy = false
+    }
+  }
+
+  // "Generate from a sample path" — narrow-to-wide candidates from the pure
+  // `suggestGlobs`, each candidate's match count fetched independently from
+  // the real vault. Deliberately NOT sorted by count and NOT auto-selecting
+  // whichever matches fewest — see `globCandidateSelected`'s declaration.
+  function onGenerateGlobCandidates() {
+    const sample = globSampleDraft.trim()
+    const candidates = suggestGlobs(sample)
+    globCandidates = candidates.map((c) => ({ pattern: c.pattern, count: null }))
+    globCandidateSelected = candidates[0]?.pattern ?? null
+    for (const c of candidates) {
+      void searchApi.globMatches([c.pattern]).then((n) => {
+        globCandidates = globCandidates.map((x) => (x.pattern === c.pattern ? { ...x, count: n } : x))
+      }).catch(() => {})
+    }
+  }
+  function onUseSelectedCandidate() {
+    if (!globCandidateSelected) return
+    if (!globPatternsDraft.includes(globCandidateSelected)) {
+      globPatternsDraft = [...globPatternsDraft, globCandidateSelected]
+    }
+    globCandidates = []
+    globCandidateSelected = null
+    globSampleDraft = ''
+  }
+
+  // ---- Per-tier ranking weights (task C-T7/C-T11, design spec §3.1/§7.3) ----
+
+  // Fills the draft only — does NOT save. Consistent with every other
+  // draft-then-Save control on this tab; the user still has to click Save
+  // for "restore defaults" to actually take effect.
+  function onResetWeightsDraft() {
+    weightsDraft = { ...DEFAULT_SEARCH_WEIGHTS }
+  }
+  async function onSaveWeights() {
+    weightsBusy = true
+    try {
+      await saveSearchWeights({ ...weightsDraft })
+      weightsDraft = { ...vaultSettings.searchWeights }
+      pushToast({ level: 'success', message: t('vaultSync.saved') })
+    } catch (e) {
+      // Backend rejection keeps the previously-stored value (design spec
+      // §8) — reload the draft from it so the UI doesn't keep showing the
+      // rejected numbers as if they were live.
+      weightsDraft = { ...vaultSettings.searchWeights }
+      pushToast({ level: 'error', message: t('vaultSync.saveFailed', { error: String(e) }), detail: String(e) })
+    } finally {
+      weightsBusy = false
+    }
+  }
+
+  // Design spec §7.4: the "Unlabeled" tier row is the designed exit from the
+  // ×0.3 demotion. Surfaces the search panel (registering/showing it if it
+  // isn't already), runs `origin:unlabeled`, and closes this dialog so the
+  // results are actually visible — same `open = false` idiom the Done
+  // button and overlay-click handler below use, not `closeSettings()` (see
+  // that function's doc comment on why the hot close path writes the
+  // bindable prop directly).
+  async function onUnlabeledTierClick() {
+    await setActiveView('left', 'vault-search')
+    await setSideVisible('left', true)
+    open = false
+    await searchStore.run('origin:unlabeled', { deep: true })
   }
 
   type CliStatus = { installed: boolean; path: string | null; target_valid: boolean }
@@ -1098,7 +1257,25 @@
                 <span class="lbl">{t('search.group.source')}</span>
                 <span>{oc.source}</span>
               </div>
+              <!-- Design spec §7.4: the ONE clickable, actionable statistic
+                   row — the designed exit from the ×0.3 demotion (spec §3.1).
+                   `role="button"`/`tabindex`/`onkeydown` make it reachable
+                   without a mouse; `class="tier-unlabeled"` is a dedicated
+                   hook (component tests locate it directly rather than by
+                   label text, since the row is also asserted as a plain
+                   (label, value) pair like every other tier row above). -->
+              <div
+                class="row tier-unlabeled"
+                role="button"
+                tabindex="0"
+                onclick={() => void onUnlabeledTierClick()}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void onUnlabeledTierClick() } }}
+              >
+                <span class="lbl">{t('search.group.unlabeled')}</span>
+                <span>{oc.unlabeled}</span>
+              </div>
               <p class="desc" style="margin-top: 8px;">{t('search.index.tiersHint')}</p>
+              <p class="desc">{t('search.index.tiersUnlabeledHint', { label: t('search.group.unlabeled') })}</p>
             {:else}
               <p class="desc">{indexStatus.loading ? '…' : '—'}</p>
             {/if}
@@ -1150,6 +1327,78 @@
                 <p class="desc" style="margin: 0;">{t('search.index.thresholdHint')}</p>
               </div>
             </label>
+          </section>
+          <section class="block">
+            <h3>{t('search.index.globsHeading')}</h3>
+            <p class="desc">{t('search.index.globsHint')}</p>
+            {#if globPatternsDraft.length === 0}
+              <p class="desc">{t('search.index.globsEmpty')}</p>
+            {/if}
+            {#each globPatternsDraft as _pattern, i (i)}
+              <div class="row glob-row" style="gap: 8px; margin-bottom: 4px;">
+                <input type="text" style="flex: 1;" bind:value={globPatternsDraft[i]}
+                  placeholder={t('search.index.globsPatternPlaceholder')}
+                  disabled={globSaveBusy} />
+                <button onclick={() => onRemoveGlobRow(i)} disabled={globSaveBusy}>{t('search.index.globsRemoveRow')}</button>
+              </div>
+              {#if globZeroMatchRows.has(i)}
+                <p class="result fail" style="margin: 0 0 6px 0;">{t('search.index.globsZeroMatchWarning')}</p>
+              {/if}
+            {/each}
+            <div class="row" style="gap: 8px; margin-top: 6px;">
+              <button onclick={onAddGlobRow} disabled={globSaveBusy}>{t('search.index.globsAddRow')}</button>
+              <button class="primary" onclick={() => void onSaveSourceGlobs()} disabled={globSaveBusy || !vaultSettings.vaultPath}>{t('vaultSync.save')}</button>
+            </div>
+            {#if globPatternBlankError}
+              <p class="result fail">{globPatternBlankError}</p>
+            {/if}
+            <p class="desc" style="margin-top: 10px;">{t('search.index.globsRebuildNote')}</p>
+
+            <h3 style="margin-top: 16px;">{t('search.index.globsSampleHeading')}</h3>
+            <div class="row" style="gap: 8px;">
+              <input type="text" style="flex: 1;" bind:value={globSampleDraft}
+                placeholder={t('search.index.globsSamplePlaceholder')} />
+              <button onclick={onGenerateGlobCandidates} disabled={!globSampleDraft.trim()}>{t('search.index.globsSampleGenerate')}</button>
+            </div>
+            {#if globCandidates.length > 0}
+              <div class="glob-candidates" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
+                {#each globCandidates as c (c.pattern)}
+                  <label class="row" style="gap: 8px;">
+                    <input type="radio" name="glob-candidate" value={c.pattern}
+                      checked={globCandidateSelected === c.pattern}
+                      onchange={() => (globCandidateSelected = c.pattern)} />
+                    <code style="flex: 1;">{c.pattern}</code>
+                    <span>{c.count === null ? '…' : t('search.index.globsMatchCount', { n: c.count })}</span>
+                  </label>
+                {/each}
+                <button class="primary" style="align-self: flex-start;" onclick={onUseSelectedCandidate}>{t('search.index.globsCandidateUse')}</button>
+              </div>
+            {/if}
+          </section>
+          <section class="block">
+            <h3>{t('search.weights.heading')}</h3>
+            <p class="desc">{t('search.weights.hint')}</p>
+            <div class="row">
+              <span class="lbl">{t('search.group.human')}</span>
+              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.human} disabled={weightsBusy} />
+            </div>
+            <div class="row">
+              <span class="lbl">{t('search.index.tiersDerivedLabel')}</span>
+              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.derived} disabled={weightsBusy} />
+            </div>
+            <div class="row">
+              <span class="lbl">{t('search.group.source')}</span>
+              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.source} disabled={weightsBusy} />
+            </div>
+            <div class="row">
+              <span class="lbl">{t('search.group.unlabeled')}</span>
+              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.unlabeled} disabled={weightsBusy} />
+            </div>
+            <div class="row" style="gap: 8px; margin-top: 8px;">
+              <button onclick={onResetWeightsDraft} disabled={weightsBusy}>{t('search.weights.resetDefault')}</button>
+              <button class="primary" onclick={() => void onSaveWeights()} disabled={weightsBusy || !vaultSettings.vaultPath}>{t('vaultSync.save')}</button>
+            </div>
+            <p class="desc" style="margin-top: 8px;">{t('search.weights.rebuildContrastNote')}</p>
           </section>
           <section class="block">
             <h3>{t('search.index.skippedHeading')}</h3>
@@ -1350,6 +1599,26 @@
   }
   .result.fail {
     background: color-mix(in srgb, #cf222e 18%, transparent);
+  }
+  /* Design spec §7.4: the only clickable statistic row — the exit from the
+     unlabeled tier's ×0.3 demotion. */
+  .tier-unlabeled {
+    cursor: pointer;
+    border-radius: 4px;
+    margin: 0 -6px;
+    padding: 2px 6px;
+  }
+  .tier-unlabeled:hover, .tier-unlabeled:focus-visible {
+    background: color-mix(in srgb, AccentColor 12%, transparent);
+    outline: none;
+  }
+  .glob-row input[type="text"] {
+    padding: 6px;
+    border-radius: 4px;
+    border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+    background: Canvas;
+    color: CanvasText;
+    font-size: 13px;
   }
   .undo-note {
     margin: 10px 0 0 0;

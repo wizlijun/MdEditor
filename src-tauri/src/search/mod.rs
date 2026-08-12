@@ -409,17 +409,19 @@ fn skipped_dto(s: &searchidx::SkippedFile) -> SkippedDto {
 /// Wire shape for `SearchStatsDto.origin_counts` — mirrors
 /// `searchidx::OriginCounts` field for field. Task B-T8 (design spec §6):
 /// the settings page's "how many files did I write vs. an agent produce vs.
-/// raw material" breakdown.
+/// raw material" breakdown. `unlabeled` added C-T11, alongside
+/// `searchidx::OriginCounts` itself — see that struct's doc comment.
 #[derive(Serialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OriginCountsDto {
     pub human: i64,
     pub derived: i64,
     pub source: i64,
+    pub unlabeled: i64,
 }
 
 fn origin_counts_dto(o: searchidx::OriginCounts) -> OriginCountsDto {
-    OriginCountsDto { human: o.human, derived: o.derived, source: o.source }
+    OriginCountsDto { human: o.human, derived: o.derived, source: o.source, unlabeled: o.unlabeled }
 }
 
 #[derive(Serialize)]
@@ -990,7 +992,7 @@ mod command_tests {
             db_bytes: 12345,
             built_at: Some("2026-08-10T00:00:00Z".to_string()),
             tokenizer_id: "jieba/1".to_string(),
-            origin_counts: searchidx::OriginCounts { human: 1, derived: 3, source: 2 },
+            origin_counts: searchidx::OriginCounts { human: 1, derived: 3, source: 2, unlabeled: 4 },
             type_counts,
         };
         let skipped = vec![SkippedDto { path: "big.md".to_string(), size_bytes: 999 }];
@@ -1006,6 +1008,7 @@ mod command_tests {
         assert_eq!(dto.origin_counts.human, 1);
         assert_eq!(dto.origin_counts.derived, 3);
         assert_eq!(dto.origin_counts.source, 2);
+        assert_eq!(dto.origin_counts.unlabeled, 4);
         assert_eq!(dto.type_counts.get("Book Summary").copied(), Some(2));
         assert_eq!(dto.type_counts.get("Answer").copied(), Some(1));
     }
@@ -1608,7 +1611,7 @@ mod command_tests {
                 db_bytes: 1,
                 built_at: None,
                 tokenizer_id: "jieba/1".to_string(),
-                origin_counts: searchidx::OriginCounts { human: 1, derived: 2, source: 3 },
+                origin_counts: searchidx::OriginCounts { human: 1, derived: 2, source: 3, unlabeled: 4 },
                 type_counts,
             },
             vec![SkippedDto { path: "big.md".to_string(), size_bytes: 42 }],
@@ -1622,7 +1625,7 @@ mod command_tests {
         assert!(skipped[0].get("path").is_some(), "{skipped:?}");
         assert!(skipped[0].get("sizeBytes").is_some(), "{skipped:?}");
         let origin_counts = v.get("originCounts").unwrap();
-        for key in ["human", "derived", "source"] {
+        for key in ["human", "derived", "source", "unlabeled"] {
             assert!(origin_counts.get(key).is_some(), "missing key {key} in {origin_counts}");
         }
         assert_eq!(v.get("typeCounts").unwrap().get("Book Summary").unwrap().as_i64(), Some(2));

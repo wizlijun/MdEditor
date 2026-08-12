@@ -18,8 +18,19 @@ import { mount, unmount, flushSync } from 'svelte'
 // SettingsDialog pulls in most of the app's store layer transitively. Only
 // the Tauri host boundary needs stubbing — the stores themselves run for
 // real, which is what makes this a test of the wiring rather than of a mock.
+// `sotvault_vault_root` is special-cased to resolve — several Save buttons
+// in the new C-T11 blocks below (source globs / weights) are correctly
+// gated on `vaultSettings.vaultPath` being truthy (same gate the
+// pre-existing search-exclude-dirs/threshold Save buttons use), and that
+// field is populated from exactly this command in `loadVaultSettings()`.
+// Every OTHER command still rejects, including `notemd_vault_settings_set`
+// itself — the weights-rejection test below depends on that save call
+// failing.
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async () => { throw new Error('no tauri host in vitest') }),
+  invoke: vi.fn(async (cmd: string) => {
+    if (cmd === 'sotvault_vault_root') return '/tmp/vault'
+    throw new Error('no tauri host in vitest')
+  }),
   convertFileSrc: (p: string) => p,
 }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -32,6 +43,15 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(async () => null),
   save: vi.fn(async () => null),
   message: vi.fn(async () => {}),
+}))
+// The unlabeled-tier-click test (design spec §7.4) routes through
+// `setActiveView`/`setSideVisible` (`../lib/side-panel/registry.svelte`),
+// both of which call `Store.load(...)` before touching `sidePanels` state —
+// without this mock that hits the same unmocked `invoke` boundary as
+// everything else here and would reject before `sidePanels`/`searchStore`
+// ever update. Same stub shape as `SearchPanel.test.ts`'s.
+vi.mock('@tauri-apps/plugin-store', () => ({
+  Store: { load: vi.fn(async () => ({ get: vi.fn(async () => undefined), set: vi.fn(async () => {}), save: vi.fn(async () => {}) })) },
 }))
 // Desktop, not iOS — the tab is `!isIOSPlatform`-gated in the strip.
 vi.mock('@tauri-apps/plugin-os', () => ({ platform: () => 'macos', type: () => 'macos' }))
@@ -48,7 +68,10 @@ vi.mock('@tauri-apps/api/window', () => ({
 import { openSettings, closeSettings } from '../lib/ui-state.svelte'
 import { indexStatus, _setIndexApi } from '../lib/search/index-status.svelte'
 import { sotvaultStore } from '../lib/sotvault.svelte'
-import type { SearchStats, SearchProgress } from '../lib/search/api'
+import type { SearchStats, SearchProgress, SearchResponse } from '../lib/search/api'
+import { searchStore, _setSearchImpl } from '../lib/search/store.svelte'
+import { sidePanels } from '../lib/side-panel/registry.svelte'
+import { toasts } from '../lib/toast.svelte'
 
 let stats: Mock<() => Promise<SearchStats | null>>
 let progress: Mock<() => Promise<SearchProgress | null>>
@@ -66,11 +89,14 @@ beforeEach(() => {
   stats = vi.fn(async () => ({
     files: 128, blocks: 900, dbBytes: 4096, builtAt: '2026-08-11T00:00:00Z',
     tokenizerId: 'jieba-v1', skippedLarge: [{ path: 'big.md', sizeBytes: 9_000_000 }],
-    originCounts: { human: 40, derived: 70, source: 18 },
+    originCounts: { human: 40, derived: 70, source: 18, unlabeled: 9 },
     typeCounts: { 'Book Summary': 25, Answer: 12 },
   }))
   progress = vi.fn(async () => null)
   _setIndexApi({ stats, progress, rebuild: vi.fn(async () => {}) })
+  searchStore.clear()
+  sidePanels.left.visible = false
+  sidePanels.left.activeId = null
 })
 
 afterEach(() => { closeSettings(); sotvaultStore.vaultRoot = null })
@@ -175,9 +201,12 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
     openSettings('search')
     await settle()
 
-    // From the beforeEach stub: human 40, derived 70, source 18,
+    // From the beforeEach stub: human 40, derived 70, source 18, unlabeled 9,
     // typeCounts { 'Book Summary': 25, Answer: 12 } → untyped derived
-    // remainder is 70 - (25 + 12) = 33.
+    // remainder is 70 - (25 + 12) = 33. Four distinct tier numbers (40, 70,
+    // 18, 9) deliberately chosen so no two tiers could pass by coincidence
+    // if their labels were swapped underneath them — see this file's header
+    // comment on why `rowValue` locates by label instead of `toContain`.
     const section = tierSection()
     expect(rowValue(section, 'Written by you')).toBe('40') // origin.human pole
     expect(rowValue(section, 'AI-produced')).toBe('70') // origin.derived total
@@ -185,6 +214,7 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
     expect(rowValue(section, 'Answer')).toBe('12')
     expect(rowValue(section, 'Other')).toBe('33') // computed untyped-derived remainder
     expect(rowValue(section, 'Raw source material')).toBe('18') // origin.source pole
+    expect(rowValue(section, 'Unlabeled')).toBe('9') // origin.unlabeled — task C-T11's fourth tier
 
     // The old placeholder sentence must be gone.
     expect(document.body.textContent).not.toContain('coming soon')
@@ -195,7 +225,7 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
     stats.mockResolvedValue({
       files: 5, blocks: 5, dbBytes: 1, builtAt: null, tokenizerId: 'x',
       skippedLarge: [],
-      originCounts: { human: 7, derived: 9, source: 3 },
+      originCounts: { human: 7, derived: 9, source: 3, unlabeled: 11 },
       typeCounts: { Idea: 4 },
     })
     const app = await mountDialog()
@@ -208,9 +238,118 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
     expect(rowValue(section, 'AI-produced')).toBe('9')
     expect(rowValue(section, 'Idea')).toBe('4')
     // 9 - 4 = 5 untyped-derived — proves the "Other" row is recomputed per
-    // payload, not a number left over from the default stub (40/70/18/33).
+    // payload, not a number left over from the default stub (40/70/18/33/9).
     expect(rowValue(section, 'Other')).toBe('5')
     expect(rowValue(section, 'Raw source material')).toBe('3')
+    expect(rowValue(section, 'Unlabeled')).toBe('11')
+    unmount(app)
+  })
+})
+
+function namedSection(heading: string): Element {
+  const section = Array.from(document.body.querySelectorAll('section.block')).find(
+    (s) => s.querySelector('h3')?.textContent?.trim() === heading,
+  )
+  if (!section) throw new Error(`no section for heading "${heading}"`)
+  return section
+}
+
+function buttonByText(scope: Element | Document, text: string): HTMLButtonElement {
+  const btn = Array.from(scope.querySelectorAll('button')).find((b) => b.textContent?.trim() === text)
+  if (!btn) throw new Error(`no button with text "${text}"`)
+  return btn as HTMLButtonElement
+}
+
+function typeInto(el: Element, value: string): void {
+  const input = el as HTMLInputElement
+  input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+// Task C-T10/C-T11 (design spec §7.1): "generate from a sample path" must
+// default-select the NARROWEST candidate (the file's own directory) — not
+// whichever candidate happens to match the fewest real files. A reviewer
+// proved the match-count ladder can invert in an ordinary mixed-media
+// import folder, so a UI that defaulted to "smallest count" would silently
+// pick the wrong rung there. `suggestGlobs('ebook/三体/book.md')`'s own
+// contract (see `glob-suggest.ts`) puts `ebook/三体/**` first.
+describe('SettingsDialog — Search & Index tab, source-glob candidates (task C-T11)', () => {
+  it('pasting a sample path selects the narrowest candidate by default', async () => {
+    const app = await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = namedSection('Raw source patterns')
+    typeInto(section.querySelector('input[type="text"]')!, 'ebook/三体/book.md')
+    await settle()
+    buttonByText(section, 'Generate candidates').click()
+    await settle()
+
+    const checked = document.body.querySelector('input[name="glob-candidate"]:checked') as HTMLInputElement | null
+    expect(checked?.value).toBe('ebook/三体/**')
+    unmount(app)
+  })
+})
+
+// Design spec §7.4: the "Unlabeled" tier row is the designed exit from the
+// ×0.3 demotion — it must be a real, clickable action, not decoration.
+describe('SettingsDialog — Search & Index tab, unlabeled tier click (design spec §7.4)', () => {
+  it('clicking the Unlabeled row runs origin:unlabeled in the search panel and closes the dialog', async () => {
+    let lastQuery: string | null = null
+    _setSearchImpl(async (q): Promise<SearchResponse> => {
+      lastQuery = q
+      return { route: 't1-fts', tookMs: 1, total: 0, hits: [], truncated: false, deepAvailable: false }
+    })
+
+    const app = await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = tierSection()
+    const row = Array.from(section.querySelectorAll(':scope > .row')).find(
+      (r) => r.querySelector('.lbl')?.textContent?.trim() === 'Unlabeled',
+    ) as HTMLElement
+    row.click()
+    await settle()
+
+    expect(lastQuery).toBe('origin:unlabeled')
+    expect(sidePanels.left.visible).toBe(true)
+    expect(sidePanels.left.activeId).toBe('vault-search')
+    // The dialog is a full-screen overlay over the search panel — it has to
+    // close for the results to actually be visible.
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    unmount(app)
+  })
+})
+
+// Design spec §8: weight validation happens at the backend command boundary
+// and keeps the previously-stored value on rejection — this component must
+// reflect that, not keep showing whatever the user just typed as if it took.
+describe('SettingsDialog — Search & Index tab, weights save rejection (design spec §8)', () => {
+  it('a rejected weight save reverts the draft instead of keeping the typed value', async () => {
+    const app = await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = namedSection('Ranking weights')
+    const humanInput = section.querySelector('input[type="number"]') as HTMLInputElement
+    expect(humanInput.value).toBe('1.25') // the shipped default (design spec §3.1)
+    typeInto(humanInput, '0')
+    await settle()
+    expect(humanInput.value).toBe('0')
+
+    buttonByText(section, 'Save').click()
+    await settle()
+
+    // `invoke` is globally mocked to always reject ("no tauri host in
+    // vitest") — the same shape a real backend rejection takes (spec §8:
+    // zero is invalid, the previous value is retained). The draft must
+    // revert to that retained default, not keep displaying the rejected `0`.
+    expect(humanInput.value).toBe('1.25')
+    expect(toasts.list.at(-1)?.level).toBe('error')
     unmount(app)
   })
 })

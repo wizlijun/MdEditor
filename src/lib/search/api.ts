@@ -66,12 +66,13 @@ export interface SearchSkippedFile {
 
 // Mirrors `OriginCountsDto` in `src-tauri/src/search/mod.rs` field for field
 // — per-tier file counts for the settings page (task B-T8, design spec
-// §6/§9). Purely a settings-page display; ranking reads `SearchHit.origin`
-// per hit instead, never these totals.
+// §6/§9; `unlabeled` added C-T11). Purely a settings-page display; ranking
+// reads `SearchHit.origin` per hit instead, never these totals.
 export interface SearchOriginCounts {
   human: number
   derived: number
   source: number
+  unlabeled: number
 }
 
 export interface SearchStats {
@@ -120,4 +121,13 @@ export const searchApi = {
   // return here any more — progress/completion are observed via `progress()`
   // and the `search://progress` / `search://index-updated` events instead.
   rebuild: () => invoke<void>('notemd_search_rebuild'),
+  // Task C-T11 (design spec §7.1): how many files under the REAL vault (not
+  // the index — see `src/lib/search/glob-suggest.ts`'s doc comment for why
+  // the index would undercount) a candidate/saved source-glob pattern set
+  // matches. Mirrors `notemd_search_glob_matches` in
+  // `src-tauri/src/search/mod.rs` — walks the vault fresh on every call, so
+  // callers presenting several candidates issue one call per candidate
+  // rather than batching them into one list (each candidate needs its own,
+  // independent count).
+  globMatches: (patterns: string[]) => invoke<number>('notemd_search_glob_matches', { patterns }),
 }

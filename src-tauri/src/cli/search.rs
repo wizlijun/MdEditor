@@ -456,6 +456,13 @@ fn report_stats(index: Option<&SearchIndex>, json: bool, skipped: &[SkippedFile]
                         "human": s.origin_counts.human,
                         "derived": s.origin_counts.derived,
                         "source": s.origin_counts.source,
+                        // C-T11: `unlabeled` used to be silently absent from
+                        // this payload (the same known undercount GUI stats
+                        // carried — see `searchidx::origin_counts`'s doc
+                        // comment); now real, so an agent scripting off
+                        // `notemd search --stats --json` sees the same four
+                        // tiers the settings page does.
+                        "unlabeled": s.origin_counts.unlabeled,
                     },
                     "type_counts": s.type_counts,
                 })

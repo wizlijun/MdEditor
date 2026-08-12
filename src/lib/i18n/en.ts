@@ -521,6 +521,12 @@ export const en = {
   'search.index.tiersHeading': 'Provenance tiers',
   'search.index.tiersDerivedLabel': 'AI-produced',
   'search.index.tiersHint': "Tiers are derived from each file's frontmatter as it is indexed — nothing here is written back to your notes. If \"Raw source material\" looks unexpectedly high, it usually just means notes are missing frontmatter; add a `type:` field (or any frontmatter) and save. Editing a file reclassifies that file on its own — no full reindex needed.",
+  // Task C-T11 (design spec §7.4): the fourth tier's row is a clickable
+  // action item, not just a number — clicking it opens the search panel
+  // already filtered to `origin:unlabeled`, the designed way out of the
+  // ×0.3 demotion (adding frontmatter to a file reclassifies it out of this
+  // tier on its own, same as every other tier above).
+  'search.index.tiersUnlabeledHint': 'Click "{label}" above to open the search panel filtered to every file this tier\'s weight is currently demoting.',
   'search.index.rebuildConfirmTitle': 'Rebuild search index?',
   'search.index.rebuildConfirmBody': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs, roughly {seconds}s for your {files} files. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
   'search.index.rebuildConfirmBodyUnknown': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
@@ -541,6 +547,42 @@ export const en = {
   'search.index.skippedHeading': 'Skipped files',
   'search.index.skippedEmpty': 'No files are currently skipped.',
   'search.index.skippedNote': 'These files are not indexed, but `rg` can still find them.',
+
+  // Raw source glob patterns (task C-T8/C-T11, design spec §4.1/§7.1) — the
+  // whitelist that (a) decides whether `.srt`/`.vtt`/`.txt` files are
+  // indexed at all and (b) tags a matching `.md` file "Raw source material"
+  // (rule 5′) instead of "Unlabeled" (rule 6′). Distinct from
+  // `searchExcludeDirs` above: that removes a directory from the index
+  // entirely, this widens what a matched file is allowed to be.
+  'search.index.globsHeading': 'Raw source patterns',
+  'search.index.globsHint': "Patterns decide which files count as raw source material — they're what makes `.srt`/`.vtt`/`.txt` transcripts searchable at all (ordinary `.md` files are indexed either way). Matching is literal and case-sensitive, so a renamed vault folder can make every pattern here silently match nothing — save to check for that (see the warning below).",
+  'search.index.globsEmpty': 'No patterns configured yet.',
+  'search.index.globsPatternPlaceholder': 'e.g. ebook/**',
+  'search.index.globsAddRow': 'Add pattern',
+  'search.index.globsRemoveRow': 'Remove',
+  // §8: a blank row is rejected at save time and must name which row —
+  // `{row}` is the row's 1-based position in the list as shown on screen.
+  'search.index.globsBlankError': 'Pattern #{row} is blank — fill it in or remove the row, then save again.',
+  // §8: a pattern matching 0 files is allowed to save, but flagged in place
+  // — the one safety net for a vault folder whose case was changed, which
+  // leaves every pattern syntactically valid while matching nothing.
+  'search.index.globsZeroMatchWarning': 'Matches 0 files right now — double-check the path and its case.',
+  'search.index.globsRebuildNote': 'Saving a pattern change rebuilds the search index from scratch. The ranking weights below are different: they take effect on your very next search, with no rebuild.',
+  'search.index.globsSampleHeading': 'Generate from a sample path',
+  'search.index.globsSamplePlaceholder': 'Paste a vault-relative path, e.g. ebook/三体/book.md',
+  'search.index.globsSampleGenerate': 'Generate candidates',
+  'search.index.globsMatchCount': '{n} files',
+  'search.index.globsCandidateUse': 'Add selected pattern',
+
+  // Per-tier ranking weights (task C-T7/C-T11, design spec §3.1/§7.3). Row
+  // labels deliberately reuse `search.group.human`/`tiersDerivedLabel`/
+  // `search.group.source`/`search.group.unlabeled` above rather than a
+  // second set of tier-name keys, so the tier names on this block and on
+  // the statistics block above can never drift apart.
+  'search.weights.heading': 'Ranking weights',
+  'search.weights.hint': "Each tier's score is multiplied by this weight before results are ranked — higher surfaces first. Must be greater than 0 and at most 5.0.",
+  'search.weights.rebuildContrastNote': 'Saving here takes effect on your very next search — unlike the patterns above, it never rebuilds the index.',
+  'search.weights.resetDefault': 'Restore defaults',
 
   // Folder view
   'folderView.parentFolder': 'Parent folder',

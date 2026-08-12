@@ -9,6 +9,22 @@ export const DEFAULT_SYNC_DIR = 'sync'
 /** 大文件阈值默认值(MB);镜像 Rust DEFAULT_LARGE_FILE_THRESHOLD_MB。 */
 export const DEFAULT_LARGE_FILE_THRESHOLD_MB = 10
 
+/** The per-tier ranking multipliers, all four fields present. Mirrors
+ *  `searchidx::query::Weights` / `vault_settings::SearchWeights` — kept as a
+ *  plain object here (not re-exporting a Rust type) the same way the backend
+ *  DTO does, since this module otherwise has no dependency on `searchidx`. */
+export interface SearchWeights {
+  human: number
+  derived: number
+  source: number
+  unlabeled: number
+}
+
+/** The shipped constants — byte-identical to `searchidx::query::Weights`'s
+ *  `Default` impl (design spec §3.1). The "restore defaults" button in the
+ *  settings UI fills the draft with this, it does not call the backend. */
+export const DEFAULT_SEARCH_WEIGHTS: SearchWeights = { human: 1.25, derived: 1.0, source: 0.9, unlabeled: 0.3 }
+
 /** Raw settings DTO as returned by the backend (absent field = null). */
 export interface VaultSettingsDto {
   syncDir?: string | null
@@ -17,6 +33,16 @@ export interface VaultSettingsDto {
   largeFileThresholdMb?: number | null
   searchExcludeDirs?: string[] | null
   searchLargeFileThresholdMb?: number | null
+  /** `searchidx`'s glob-pattern whitelist for raw source material (task
+   *  C-T8/C-T11, design spec §4.1/§7.1). `null`/absent = unconfigured, which
+   *  is a distinct state from an explicit empty list — see
+   *  `vault_settings::VaultSettings::search_source_globs`'s doc comment on
+   *  the Rust side; this module mirrors that distinction rather than
+   *  collapsing it to `[]` the way `searchExcludeDirs` above does, because
+   *  collapsing it here would make "no patterns configured" and "patterns
+   *  explicitly cleared" indistinguishable to the settings page. */
+  searchSourceGlobs?: string[] | null
+  searchWeights?: Partial<SearchWeights> | null
 }
 
 export const vaultSettings = $state<{
@@ -36,6 +62,12 @@ export const vaultSettings = $state<{
   // UI needs this to explain, truthfully, whether the one-way door has
   // already been walked through.
   searchLargeFileThresholdExplicit: boolean
+  // `null` = never explicitly configured (`search::options::for_vault` seeds
+  // `<syncDir>/**` on the Rust side in that case) — kept distinct from `[]`
+  // (explicitly cleared) for the same reason `VaultSettingsDto.searchSourceGlobs`
+  // is, see that field's doc comment.
+  searchSourceGlobs: string[] | null
+  searchWeights: SearchWeights
   vaultPath: string | null
   loaded: boolean
 }>({
@@ -44,6 +76,8 @@ export const vaultSettings = $state<{
   searchExcludeDirs: [],
   searchLargeFileThresholdMb: DEFAULT_LARGE_FILE_THRESHOLD_MB,
   searchLargeFileThresholdExplicit: false,
+  searchSourceGlobs: null,
+  searchWeights: { ...DEFAULT_SEARCH_WEIGHTS },
   vaultPath: null,
   loaded: false,
 })
@@ -62,6 +96,8 @@ export async function loadVaultSettings(): Promise<void> {
   vaultSettings.searchLargeFileThresholdExplicit = dto?.searchLargeFileThresholdMb != null
   vaultSettings.searchLargeFileThresholdMb =
     dto?.searchLargeFileThresholdMb ?? vaultSettings.largeFileThresholdMb
+  vaultSettings.searchSourceGlobs = dto?.searchSourceGlobs ?? null
+  vaultSettings.searchWeights = { ...DEFAULT_SEARCH_WEIGHTS, ...(dto?.searchWeights ?? {}) }
   vaultSettings.loaded = true
 }
 
@@ -117,4 +153,44 @@ export async function saveSearchLargeFileThreshold(mb: number): Promise<void> {
   vaultSettings.searchLargeFileThresholdExplicit = merged?.searchLargeFileThresholdMb != null
   vaultSettings.searchLargeFileThresholdMb =
     merged?.searchLargeFileThresholdMb ?? vaultSettings.largeFileThresholdMb
+}
+
+/** Persist the raw-source-material glob-pattern whitelist (design spec
+ *  §4.1/§7.1, task C-T8/C-T11). Saving a *different resolved pattern set*
+ *  triggers a full index rebuild on the backend
+ *  (`notemd_vault_settings_set` → `search_source_globs_changed` →
+ *  `search::open_vault`) — fire-and-forget from here, same as
+ *  `searchApi.rebuild`; the caller UI is what has to say so up front (design
+ *  spec §7.3's contrast note), this function returns long before the
+ *  rebuild itself finishes.
+ *
+ *  Blank-pattern rejection (spec §8: "空白模式 —— 保存时拒绝并指出是哪一条")
+ *  is deliberately NOT done here. `searchidx::globs::parse` is tolerant of
+ *  an unparseable entry (drops it, does not fail the whole list — that is a
+ *  *consumer* obligation), so nothing on the Rust side rejects a blank
+ *  string either. Silently saving a blank row is a different problem from
+ *  the crate being tolerant of one: the user just typed that row and would
+ *  reasonably believe it was kept. The settings page must validate before
+ *  ever calling this — see `SettingsDialog.svelte`'s `onSaveSourceGlobs`. */
+export async function saveSearchSourceGlobs(patterns: string[]): Promise<void> {
+  const merged = await invoke<VaultSettingsDto>('notemd_vault_settings_set', {
+    searchSourceGlobs: patterns,
+  })
+  vaultSettings.searchSourceGlobs = merged?.searchSourceGlobs ?? null
+}
+
+/** Persist the four per-tier ranking weights (design spec §3.1/§7.3, task
+ *  C-T7/C-T11). Effective on the very next query — unlike
+ *  `saveSearchSourceGlobs` above, this never triggers a rebuild: weights are
+ *  read fresh at query time (`search::options::weights_for_vault`), never
+ *  stamped into the index the way patterns are. Backend validation
+ *  (`vault_settings::validate_search_weights`) rejects a NaN/negative/zero/
+ *  >5.0 component per field and keeps whatever was previously stored — this
+ *  lets that rejection propagate (does not catch it) so the caller can show
+ *  it and revert its own draft to `vaultSettings.searchWeights`. */
+export async function saveSearchWeights(weights: SearchWeights): Promise<void> {
+  const merged = await invoke<VaultSettingsDto>('notemd_vault_settings_set', {
+    searchWeights: weights,
+  })
+  vaultSettings.searchWeights = { ...DEFAULT_SEARCH_WEIGHTS, ...(merged?.searchWeights ?? {}) }
 }
