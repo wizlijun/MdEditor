@@ -564,7 +564,7 @@ export const de: Record<keyof Messages, string> = {
   'folderView.viewNotes': 'Nur Notizen',
   'folderView.hideFolders': 'Ordner ausblenden',
   'folderView.renameConflict': 'Eine Datei mit diesem Namen existiert bereits',
-  'folderView.tabTitle': 'Dateien',
+  'folderView.tabTitle': 'Ordner',
 
   // OpenClaw settings + devices
 

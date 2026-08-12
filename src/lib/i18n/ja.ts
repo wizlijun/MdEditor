@@ -564,7 +564,7 @@ export const ja: Record<keyof Messages, string> = {
   'folderView.viewNotes': 'ノートのみ',
   'folderView.hideFolders': 'フォルダを隠す',
   'folderView.renameConflict': '同名のファイルが既に存在します',
-  'folderView.tabTitle': 'ファイル',
+  'folderView.tabTitle': 'フォルダ',
 
   // OpenClaw settings + devices
 

@@ -570,7 +570,7 @@ export const en = {
   'folderView.viewNotes': 'Notes only',
   'folderView.hideFolders': 'Hide folders',
   'folderView.renameConflict': 'A file with that name already exists',
-  'folderView.tabTitle': 'Files',
+  'folderView.tabTitle': 'Folders',
 
   // OpenClaw settings + devices
 
