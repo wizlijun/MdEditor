@@ -765,6 +765,35 @@ mod tests {
         assert_eq!(typed.concept_type.as_deref(), Some("Book Summary"), "{typed:?}");
     }
 
+    /// C-T5, spec §5.1: `files.ext` must carry a transcript's real
+    /// extension, not always `"md"` — and the whole point of storing it is
+    /// that it's observable through the query language's own `ext:` filter
+    /// (see `every_filter_prefix_is_recognized` above), not just readable by
+    /// a raw `SELECT`. Goes through `build_full` (not `chunk::parse_file`
+    /// directly), so a bug in `store::replace_file`'s `ext` argument is
+    /// caught too, not just a chunk-time computation that never reaches SQL.
+    /// `indexed()` above can't be reused because its `ScanOptions::default()`
+    /// carries no source globs, and `is_indexable` would reject the `.srt`
+    /// file outright.
+    #[test]
+    fn ext_filter_finds_a_transcript_by_its_real_extension_not_md() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("media")).unwrap();
+        std::fs::write(d.path().join("media/talk.srt"), "1\n00:00:01,000 --> 00:00:02,000\nhello world\n").unwrap();
+        let opts = crate::scan::ScanOptions {
+            source_globs: crate::globs::parse(&["media/**".to_string()]),
+            ..Default::default()
+        };
+        let mut c = crate::store::open(&d.path().join(".idx.db"), "v", "sync").unwrap();
+        crate::scan::build_full(&mut c, d.path(), &opts, None).unwrap();
+
+        let srt_hits = search(&c, &parse("ext:srt hello"), 20, "2026-08-10").unwrap().0;
+        assert!(srt_hits.iter().any(|h| h.path == "media/talk.srt"), "{srt_hits:?}");
+
+        let md_hits = search(&c, &parse("ext:md hello"), 20, "2026-08-10").unwrap().0;
+        assert!(md_hits.is_empty(), "a subtitle file must not masquerade as ext:md: {md_hits:?}");
+    }
+
     #[test]
     fn finds_an_ascii_term_and_returns_a_source_anchor() {
         let (_d, c) = indexed(&[("2026-01-01-a.md", "# T\n\nthe quick brownfox\n")]);

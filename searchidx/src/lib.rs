@@ -19,6 +19,7 @@ pub mod norm;
 pub mod origin;
 pub mod outline;
 pub mod paths;
+pub mod plain;
 pub mod prose;
 pub mod query;
 pub mod scan;

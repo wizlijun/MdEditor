@@ -146,7 +146,7 @@ pub fn is_indexable(rel: &str, opts: &ScanOptions) -> bool {
 /// `eq_ignore_ascii_case` instead (that comparison only special-cases the
 /// ASCII range, so any non-ASCII byte is compared for exact equality and a
 /// split sequence's bytes will not equal `suffix`'s ASCII bytes).
-fn ends_with_ascii_ci(s: &str, suffix: &str) -> bool {
+pub(crate) fn ends_with_ascii_ci(s: &str, suffix: &str) -> bool {
     let s = s.as_bytes();
     let suffix = suffix.as_bytes();
     s.len() >= suffix.len() && s[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
@@ -556,17 +556,25 @@ fn index_into(
     // does not yet change GUI/CLI-observed behavior on a real vault —
     // wiring the real setting in is `TODO(C-T8)`.
     let parsed = crate::chunk::parse_file(&c.rel, &raw, c.mtime, &opts.source_globs);
-    // TODO(C-T5): a `.srt`/`.vtt`/`.txt` file that reaches this point (now
-    // possible since `is_indexable` above admits them inside a source glob)
-    // is stamped `ext = "md"` here, same as any other non-`.note.md` file —
-    // spec §5.1 requires `files.ext` to carry `srt`/`vtt`/`txt` instead, and
-    // C-T5 owns the extension dispatch this needs. Harmless until `TODO(
-    // C-T8)` wires a real (non-empty) `source_globs` into `for_vault`: until
-    // then no real vault ever reaches this arm with a transcript file, since
-    // `ScanOptions::default()`'s empty `source_globs` keeps `is_indexable`
-    // rejecting all of them first. C-T5 lands before C-T8, so this never
-    // reaches a user, but is marked rather than left to look unnoticed.
-    let ext = if c.rel.ends_with(".note.md") { "note.md" } else { "md" };
+    // spec §5.1: `files.ext` must carry the file's real extension, not
+    // always "md" — a `.srt`/`.vtt`/`.txt` file only ever reaches this point
+    // inside a matching source glob (`is_indexable`'s gate), but once it
+    // does, it is a real query-language-observable fact (`ext:srt`) and must
+    // not be indistinguishable from a `.md` file. Case-insensitive for the
+    // same three extensions and for the same reason `is_indexable` is (see
+    // its doc comment) — `ends_with_ascii_ci` is the one place that decision
+    // is encoded, reused here rather than re-decided.
+    let ext = if c.rel.ends_with(".note.md") {
+        "note.md"
+    } else if ends_with_ascii_ci(&c.rel, ".srt") {
+        "srt"
+    } else if ends_with_ascii_ci(&c.rel, ".vtt") {
+        "vtt"
+    } else if ends_with_ascii_ci(&c.rel, ".txt") {
+        "txt"
+    } else {
+        "md"
+    };
     store::replace_file(tx, &c.rel, ext, c.mtime, c.size, &content_hash(&bytes), &parsed)?;
     Ok(true)
 }

@@ -6,7 +6,8 @@
 
 use crate::block::{Block, FileMeta, Link};
 use crate::globs::SourceGlobs;
-use crate::{frontmatter, links, norm, origin, outline, prose};
+use crate::scan::ends_with_ascii_ci;
+use crate::{frontmatter, links, norm, origin, outline, plain, prose, transcript};
 
 pub struct Parsed {
     pub meta: FileMeta,
@@ -34,8 +35,21 @@ pub fn parse_file(rel_path: &str, raw: &str, mtime_secs: i64, globs: &SourceGlob
     let fm_present = fm_raw.is_some();
     let fm = fm_raw.map(frontmatter::parse).unwrap_or_default();
 
+    // Extension dispatch. `.note.md` is checked with an exact, case-sensitive
+    // `ends_with` (it is this vault's own in-app convention — see the
+    // asymmetry `is_indexable` documents in `scan.rs`); the three externally-
+    // authored formats go through the SAME `ends_with_ascii_ci` helper
+    // `is_indexable` uses to decide these files are in scope at all, so
+    // dispatch can never disagree with the scan gate about what an
+    // upper-cased `Lecture.SRT` is. `.md` (anything left over) is the
+    // fallback, matching every file `is_indexable` admits that isn't one of
+    // the other three shapes.
     let blocks = if rel_path.ends_with(".note.md") {
         outline::chunk(body, body_line)
+    } else if ends_with_ascii_ci(rel_path, ".srt") || ends_with_ascii_ci(rel_path, ".vtt") {
+        transcript::chunk(body, body_line)
+    } else if ends_with_ascii_ci(rel_path, ".txt") {
+        plain::chunk(body, body_line)
     } else {
         prose::chunk(body, body_line)
     };
@@ -145,6 +159,56 @@ mod tests {
     fn plain_md_files_go_through_the_prose_chunker() {
         let p = parse_file("a.md", "# T\n\npara\n", MTIME, &no_globs());
         assert!(p.blocks.iter().any(|b| b.text == "para"));
+    }
+
+    /// The dispatch itself, pinned through `parse_file` — not just that
+    /// `transcript::chunk` behaves correctly in isolation (that's
+    /// `transcript.rs`'s own test module's job). Distinguishing signal: a
+    /// misroute to `prose::chunk` would fold the timecode line into the same
+    /// paragraph as the text (no blank line separates them here), so the
+    /// exact single-block-with-only-"hello world"-text shape only comes out
+    /// of `transcript::chunk`.
+    #[test]
+    fn srt_and_vtt_files_go_through_the_transcript_chunker() {
+        let p = parse_file("a.srt", "1\n00:00:01,000 --> 00:00:02,000\nhello world\n", MTIME, &no_globs());
+        let texts: Vec<&str> = p.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, vec!["hello world"], "{:?}", p.blocks);
+
+        let p = parse_file("a.vtt", "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n", MTIME, &no_globs());
+        let texts: Vec<&str> = p.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, vec!["hi"], "{:?}", p.blocks);
+    }
+
+    /// Same reasoning as the transcript dispatch test above, for `.txt` →
+    /// `plain::chunk`. Distinguishing signal: `prose::chunk` always appends
+    /// a trailing `BlockLevel::File` rollup block even for a headingless
+    /// body (see `prose.rs`'s `a_file_without_headings_still_gets_a_file_
+    /// block`), so a misroute to `prose` would produce three blocks here,
+    /// not two.
+    #[test]
+    fn txt_files_go_through_the_plain_chunker() {
+        let p = parse_file("a.txt", "para one\n\npara two\n", MTIME, &no_globs());
+        let texts: Vec<&str> = p.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, vec!["para one", "para two"], "{:?}", p.blocks);
+    }
+
+    /// Bullet 2 of the task: dispatch must be case-insensitive for the three
+    /// externally-authored extensions (an uppercase `.SRT`/`.TXT` off a
+    /// ripper or export tool), reusing the exact same helper
+    /// `is_indexable` in `scan.rs` uses to admit them — see that function's
+    /// doc comment for why the asymmetry with `.md` (checked next) exists.
+    #[test]
+    fn dispatch_is_case_insensitive_for_transcripts_and_txt_but_not_for_md() {
+        let p = parse_file("Lecture.SRT", "1\n00:00:01,000 --> 00:00:02,000\nhi\n", MTIME, &no_globs());
+        assert_eq!(p.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), vec!["hi"], "{:?}", p.blocks);
+
+        let p = parse_file("notes.TXT", "para one\n\npara two\n", MTIME, &no_globs());
+        assert_eq!(
+            p.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(),
+            vec!["para one", "para two"],
+            "{:?}",
+            p.blocks
+        );
     }
 
     /// spec §3.5 的降级链,顺序不能反:文件名 → frontmatter → mtime。
@@ -281,6 +345,22 @@ mod tests {
         let globs = crate::globs::parse(&["ebook/**".to_string()]);
         let p = parse_file("ebook/a.md", "no frontmatter here\n", MTIME, &globs);
         assert_eq!(p.meta.origin, crate::origin::Origin::Source);
+    }
+
+    /// The interaction of two tasks (C-T4/C-T5's transcript dispatch and
+    /// C-T2's rule 5′/6′ origin priority): a transcript has no frontmatter
+    /// block at all, so `fm_present` is `false` exactly like the plain `.md`
+    /// case `a_file_with_no_frontmatter_block_at_all_classifies_as_
+    /// unlabeled` pins as `Unlabeled` above — the ONLY reason this one
+    /// doesn't fall into that same tier is that rule 5′ (its path matches a
+    /// configured source glob) wins the priority race before rule 6′
+    /// (absent frontmatter) is ever consulted. Worth pinning on its own
+    /// rather than trusting the two tasks' unit tests to compose correctly.
+    #[test]
+    fn a_transcript_is_source_never_unlabeled() {
+        let g = crate::globs::parse(&["media/**".to_string()]);
+        let p = parse_file("media/a.srt", "1\n00:00:01,000 --> 00:00:02,000\n话\n", 0, &g);
+        assert_eq!(p.meta.origin, crate::Origin::Source);
     }
 
     fn no_globs() -> SourceGlobs {
