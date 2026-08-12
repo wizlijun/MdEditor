@@ -402,3 +402,105 @@ fn context_output_is_length_capped_like_the_default_output() {
         text.lines().map(|l| l.chars().count()).max().unwrap_or(0),
     );
 }
+
+/// C-T6 review round 1, Important #1: `cli::search::run` and
+/// `search::mod::open_vault` each independently compute the `globs_stamp`
+/// they pass to `SearchIndex::open`. An earlier version of this code
+/// computed `SourceGlobs::default().stamp()` directly at both call sites
+/// instead of reading `opts.source_globs.stamp()` off the one `ScanOptions`
+/// `search::options::for_vault` (the declared single construction point)
+/// already built — harmless *today*, since both independently-computed
+/// values and the real one are all the empty-string stopgap, but a mutation
+/// that only breaks the CLI's version of that computation (e.g. hardcoding
+/// a wrong constant) is invisible to every other test in this file: each
+/// invocation here is a fresh process re-deriving the *same* wrong constant
+/// every time, so it never disagrees with itself, and `search_scan_options_
+/// contract.rs`'s `the_cli_and_the_gui_build_options_through_one_function`
+/// only pins that `ScanOptions.source_globs` (the input) is identical
+/// between the two adapters, not that either adapter's `SearchIndex::open`
+/// call actually reads it.
+///
+/// So this test seeds the index with the stamp computed *independently* —
+/// in this test process, straight off `search::options::for_vault`, not
+/// through the CLI binary at all — and then proves the CLI binary's own
+/// internal computation agrees with it. The signal is a phantom row:
+/// `ensure_built` only rebuilds an index whose `files` table is empty. If
+/// `SearchIndex::open` (inside the CLI process) reports the seeded stamp as
+/// current (`Opened::Ready`), the phantom row — for a file deleted from disk
+/// *after* seeding — survives a `--no-sweep` query untouched. If the CLI's
+/// own stamp disagrees with the seeded one (`Opened::StaleContents`),
+/// `rebuild_in_place` empties `files` before `ensure_built` runs, which then
+/// rebuilds from the vault as it exists now — minus the deleted file — so
+/// the phantom row, and the hit for it, are gone. A plain row-count
+/// comparison could not distinguish these two outcomes (both end up with the
+/// same final count for an otherwise-unchanged vault); "does the query still
+/// find a file that no longer exists on disk" is the part that can.
+///
+/// `search::mod::open_vault` (the GUI side of this same contract) has no
+/// equivalent black-box test — it needs a live `AppHandle`, which nothing in
+/// this test suite constructs — so its coverage rests on it using the exact
+/// same `opts.source_globs.stamp()` expression as `cli::search::run` (see
+/// the matching comment at both call sites) plus the `ScanOptions` equality
+/// this file's sibling test already pins.
+#[test]
+fn cli_glob_stamp_matches_independently_computed_scan_options_source_globs() {
+    let v = vault(&[("a.md", "brownfox\n")]);
+    let home = temp_home();
+
+    // Compute the db path and the expected stamp exactly the way
+    // `cli::search::run` is supposed to, then seed the index directly
+    // through the library — never through the CLI binary — so a CLI-side
+    // bug in deriving the stamp cannot also corrupt the baseline this test
+    // compares against. `searchidx::paths::index_db_path` (which
+    // `SearchIndex::open` calls internally) is a pure function of
+    // `dirs::data_local_dir()` (driven by `HOME`/`LOCALAPPDATA`, per
+    // `isolate`'s doc comment above) and the vault path, so setting the same
+    // env here that `isolate` will set on the child process below makes
+    // `SearchIndex::open` in THIS process land on the exact db file the CLI
+    // subprocess will later open.
+    let saved_home = std::env::var_os("HOME");
+    #[cfg(windows)]
+    let saved_appdata = std::env::var_os("LOCALAPPDATA");
+    std::env::set_var("HOME", &home);
+    #[cfg(windows)]
+    std::env::set_var("LOCALAPPDATA", &home);
+
+    let opts = mdeditor_lib::search::options::for_vault(v.path());
+    let expected_stamp = opts.source_globs.stamp();
+    {
+        let mut idx = searchidx::SearchIndex::open(v.path(), &expected_stamp).expect("seed open");
+        idx.rebuild(&opts).expect("seed build");
+    }
+
+    // Restore this process's own env immediately — only the child process
+    // below should see the scratch `HOME`.
+    match saved_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+    #[cfg(windows)]
+    match saved_appdata {
+        Some(a) => std::env::set_var("LOCALAPPDATA", a),
+        None => std::env::remove_var("LOCALAPPDATA"),
+    }
+
+    // The phantom-row probe: delete the indexed file from disk *after*
+    // seeding, so only an unwarranted rebuild can make the hit disappear.
+    std::fs::remove_file(v.path().join("a.md")).unwrap();
+
+    let mut query = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    query.arg("--cli").arg("search").arg("brownfox").arg("--no-sweep").arg("--vault").arg(v.path());
+    isolate(&mut query, &home);
+    let out = query.output().unwrap();
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("a.md:1:"),
+        "the CLI's own glob stamp must match the independently-computed \
+         opts.source_globs.stamp() this index was seeded with — a mismatch \
+         would have rebuilt the index against the now-file-less vault and \
+         lost this phantom row: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}

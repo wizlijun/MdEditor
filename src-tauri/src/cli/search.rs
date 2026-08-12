@@ -145,17 +145,19 @@ pub fn run(args: SearchArgs) -> ExitCode {
     let mut skipped_large: Vec<SkippedFile> = Vec::new();
 
     // The store's staleness stamp is `SourceGlobs::stamp()` (C-T6 repointed
-    // it away from `sync_dir` — see `store::open`'s doc comment), and it
-    // never rode along on `ScanOptions`. TODO(C-T8): resolve the vault's
-    // *configured* source-glob patterns here once the settings page (C-T11)
-    // and its storage (C-T8) exist, same as `opts.source_globs` inside
-    // `scan_options_for`. Until then every vault stamps the same (empty)
-    // `SourceGlobs::default()` value, so the check never fires — kept in
-    // lock-step with `search::mod::open_vault`'s identical stopgap:
-    // repointing only one of the two would make the GUI and the CLI stamp
-    // different values for the same vault and invalidate each other's index
-    // on every alternation.
-    let globs_stamp = searchidx::globs::SourceGlobs::default().stamp();
+    // it away from `sync_dir` — see `store::open`'s doc comment). Derived
+    // from `opts.source_globs` — the field `scan_options_for` (a thin
+    // delegate to `search::options::for_vault`, the declared single
+    // construction point for `ScanOptions`) already populated above —
+    // rather than computed independently. Review round 1: an earlier
+    // version of this call independently recomputed `SourceGlobs::default()`
+    // here (and in `search::mod::open_vault`), which would have gone
+    // permanently inert the moment `for_vault` starts returning real
+    // patterns (C-T8) unless *both* call sites were remembered and
+    // repointed together — see `search::mod::open_vault`'s matching comment
+    // for the full failure mode. Reading it off `opts` makes that drift
+    // structurally impossible.
+    let globs_stamp = opts.source_globs.stamp();
     // Every failure below degrades. The only hard error is "no vault".
     let mut index = match SearchIndex::open(&root, &globs_stamp) {
         Ok(i) => Some(i),

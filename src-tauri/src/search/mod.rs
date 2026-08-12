@@ -269,17 +269,27 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
         let opts = scan_options(&root);
         // The store's staleness stamp is no longer `sync_dir` (C-T6
         // repointed it at `SourceGlobs::stamp()` — see `store::open`'s doc
-        // comment) and it never rode along on `ScanOptions` in the first
-        // place. TODO(C-T8): once the settings page (C-T11) and its storage
-        // (C-T8) exist, resolve the vault's *configured* source-glob
-        // patterns here — same as `opts.source_globs` inside `scan_options`
-        // — instead of this `SourceGlobs::default()` stopgap. Until then
-        // every vault stamps the same (empty) value, so the check never
-        // fires; see `cli::search::run`, which must be kept in lock-step
-        // with this call — repointing only one of the two would make the
-        // GUI and the CLI stamp different values for the same vault and
-        // invalidate each other's index on every alternation.
-        let globs_stamp = searchidx::globs::SourceGlobs::default().stamp();
+        // comment). Derived from `opts.source_globs` — the field
+        // `search::options::for_vault` (the declared single construction
+        // point for `ScanOptions`) already populated above — rather than
+        // computed independently, so there is exactly one place that decides
+        // what the configured patterns are. Review round 1: an earlier
+        // version of this call independently recomputed
+        // `SourceGlobs::default()` here (and in `cli::search::run`) instead
+        // of reading it off `opts` — harmless while both were stopgaps, but
+        // a landmine for whenever `for_vault` starts returning the *real*
+        // configured patterns (C-T8): only one of the two call sites getting
+        // repointed at the real value would make the GUI and the CLI stamp
+        // different values for the same vault and invalidate each other's
+        // index on every alternation, and if *neither* is repointed the
+        // stamp silently stays `""` forever — the whole invalidation
+        // mechanism this task built goes permanently inert with the test
+        // suite still green, because nothing relates the stamp to
+        // `opts.source_globs`. Reading it off `opts` here makes both classes
+        // of drift structurally impossible: C-T8 only has to fix
+        // `for_vault`, and every caller of `opts.source_globs` (this
+        // included) picks up the real value for free.
+        let globs_stamp = opts.source_globs.stamp();
         match SearchIndex::open(&root, &globs_stamp) {
             Ok(mut idx) => {
                 if let Err(e) = idx.ensure_built(&opts) {

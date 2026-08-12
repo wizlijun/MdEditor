@@ -49,15 +49,25 @@ pub struct SearchIndex {
 
 impl SearchIndex {
     /// `globs_stamp` is `SourceGlobs::stamp()` for the vault's currently
-    /// configured source-glob patterns, sourced independently of
-    /// `ScanOptions` (which has its own `source_globs` field, but the two
-    /// `SearchIndex::open` callers — `search::mod::open_vault` and
-    /// `cli::search::run` — compute this value themselves rather than
-    /// threading it through `opts`; see those call sites and
-    /// `vault_settings`'s doc comments for why) — stamped into the index and
-    /// compared on every open so a changed setting invalidates every stored
-    /// row instead of leaving it silently stale. See `store::open`'s doc
-    /// comment.
+    /// configured source-glob patterns — the *same* `SourceGlobs` that ends
+    /// up in `ScanOptions.source_globs`, not an independently resolved
+    /// value. This crate has no `ScanOptions` in hand at `open` time (the
+    /// caller opens the index before it necessarily has one built), so it
+    /// cannot enforce that itself; both of the two `SearchIndex::open`
+    /// callers — `search::mod::open_vault` and `cli::search::run` — compute
+    /// `globs_stamp` as `opts.source_globs.stamp()`, off the very
+    /// `ScanOptions` value returned by `search::options::for_vault` (the
+    /// self-declared single construction point for `ScanOptions`), rather
+    /// than resolving the vault's settings a second time. Precedent this
+    /// deliberately does NOT follow: the retired `sync_dir` version of this
+    /// parameter genuinely was sourced independently, because `sync_dir`
+    /// was never a `ScanOptions` field. `source_globs` *is* one — computing
+    /// `globs_stamp` any other way here would let it drift from the value
+    /// `origin::derive` actually used, silently neutering this whole
+    /// invalidation mechanism the moment the two values diverge. Stamped
+    /// into the index and compared on every open so a changed setting
+    /// invalidates every stored row instead of leaving it silently stale.
+    /// See `store::open`'s doc comment.
     pub fn open(vault_root: &Path, globs_stamp: &str) -> Result<Self, String> {
         let db = paths::index_db_path(vault_root).ok_or("no local app data directory")?;
         Self::open_at(vault_root, &db, globs_stamp)

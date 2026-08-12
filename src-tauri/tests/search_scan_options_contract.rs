@@ -49,11 +49,15 @@ fn the_cli_and_the_gui_build_options_through_one_function() {
 // 2026-08-12 design (C-T2) had already retired rule 5 (the
 // sync-mirror-directory special case) in favor of user-configured source
 // globs (rule 5′), leaving `ScanOptions.sync_dir` with no live correctness
-// reason to exist, and C-T3 deleted it. The GUI (`search::mod::open_vault`)
-// and the CLI (`cli::search::run`) each now resolve `sync_dir` directly
-// from `vault_settings::resolve_sync_dir` for `SearchIndex::open` — still
-// the one shared function, just no longer routed through `ScanOptions`.
-// That resolution's default/override behavior is already pinned by
-// `vault_settings::tests::resolve_sync_dir_*`; this file's job is only
-// `ScanOptions`, which is why there is no `ScanOptions`-shaped test for it
-// here any more.
+// reason to exist, and C-T3 deleted it. Neither call site resolves
+// `sync_dir` for `SearchIndex::open` any more, either (review round 1 on
+// C-T6 caught a stale version of this comment that still said they did):
+// `store::open`'s staleness stamp was repointed at `SourceGlobs::stamp()`
+// (C-T6), and both `search::mod::open_vault` and `cli::search::run` derive
+// it as `opts.source_globs.stamp()` — off the very `ScanOptions` value
+// `the_cli_and_the_gui_build_options_through_one_function` above already
+// pins as identical between the two adapters — rather than resolving
+// anything a second time. That is why there is no separate
+// `ScanOptions`-shaped test for the glob stamp here: asserting
+// `gui.source_globs == cli.source_globs` above is sufficient, since both
+// callers' stamps are a pure function of that already-equal field.

@@ -118,14 +118,17 @@ pub struct FileRow {
 /// config it was computed from changes — without stamping that config into
 /// `meta` and comparing it here, a stale `origin` would survive indefinitely.
 /// `search::mod::open_vault` and `cli::search::run` are the two
-/// `SearchIndex::open` callers that compute this value; see
-/// `vault_settings`'s doc comments for why each pays for its own read of
-/// `.notemd/settings.json` rather than sharing one.
+/// `SearchIndex::open` callers that compute this value, both as
+/// `opts.source_globs.stamp()` off the same `ScanOptions` returned by
+/// `search::options::for_vault` (the declared single construction point) —
+/// never resolved independently, so the stamp can never drift from the
+/// patterns `origin::derive` actually used for that scan.
 ///
 /// **It is (for now) the one staleness trigger a user can flip at
 /// runtime**, and that is why it is answered by rebuilding the contents *in
 /// place* rather than by deleting the file (see `rebuild_in_place`, and
-/// `changed_globs_rebuild_in_place_and_keep_the_inode`). `schema_version` and
+/// `changed_globs_rebuild_in_place`/`changed_globs_rebuild_in_place_keeps_the_inode`).
+/// `schema_version` and
 /// `tokenizer_id` are build-time constants — a running process cannot see
 /// them change, so no live handle can exist on the other side of that
 /// mismatch, and wiping stays correct there. A source-glob pattern can
@@ -260,7 +263,7 @@ fn try_open(db_path: &Path, vault_root: &str, globs_stamp: &str) -> rusqlite::Re
     // for an untouched file, so without this comparison a stale tier would
     // survive indefinitely. `None != Some(globs_stamp)` here (an absent
     // `source_globs` key) is treated as a mismatch, same as any other
-    // difference — see `changed_globs_rebuild_in_place_and_keep_the_inode`
+    // difference — see `changed_globs_rebuild_in_place`
     // and this task's report for why that reading of "absent" was chosen
     // over treating it as a match: it is conservative, and in practice
     // unreachable through a normal open, since `shape_ok` above already
@@ -345,7 +348,7 @@ const BUSY_TIMEOUT_MS: i32 = 5000;
 /// on it) exactly where it is. The safe counterpart to [`wipe`] for the one
 /// staleness trigger a user can flip while the database is in use — see
 /// [`open`]'s doc comment for why that distinction matters, and
-/// `changed_globs_rebuild_in_place_and_keep_the_inode` for the pin.
+/// `changed_globs_rebuild_in_place_keeps_the_inode` for the pin.
 ///
 /// One transaction, so a crash midway leaves either the old contents or an
 /// empty index — never a half-cleared store still claiming a current
@@ -589,16 +592,21 @@ mod tests {
     /// list can make a stored `origin` wrong, and the sweep's fast path can't
     /// see the config change), so this test replaces the `sync_dir` version
     /// of itself: same shape, same reasoning, repointed at
-    /// `SourceGlobs::stamp()` and `meta.source_globs`. It also folds in the
-    /// inode pin the old `a_changed_sync_dir_must_not_unlink_the_file` test
-    /// carried separately — **only the inode assertion below tells a rebuild
-    /// from a wipe**; every row-count assertion here would also pass if
-    /// `open` unlinked the file and recreated it from scratch, which is
-    /// exactly the mistake the prior round of this mechanism made and this
-    /// task's mutation check is required to catch (see the task report).
-    #[cfg(unix)]
+    /// `SourceGlobs::stamp()` and `meta.source_globs`.
+    ///
+    /// Deliberately **not** `#[cfg(unix)]` — review round 1 on this task
+    /// caught that folding every "the tables are actually emptied"
+    /// assertion in with the inode check (below, in the platform-gated
+    /// sibling test) had silently regressed row-count invalidation coverage
+    /// to Unix-only, leaving Windows — a shipped platform — covered only by
+    /// the indirect settle test. `remove_file` on Windows can also fail
+    /// outright while another handle (the `live` connection below) has the
+    /// file open without share-delete, which would surface here as `open`
+    /// returning an unexpected `Err` rather than a wrong row count — another
+    /// reason this assertion set needs to run on every platform, not just
+    /// where `ino` is available.
     #[test]
-    fn changed_globs_rebuild_in_place_and_keep_the_inode() {
+    fn changed_globs_rebuild_in_place() {
         let (_d, p) = tmp();
         {
             let mut conn = open(&p, "/v", "a/**").unwrap();
@@ -610,10 +618,8 @@ mod tests {
         // change while this connection is open — unlike `schema_version` or
         // `tokenizer_id`, which move only with the binary.
         let live = open(&p, "/v", "a/**").unwrap();
-        let ino_before = ino(&p);
 
         let conn = open(&p, "/v", "b/**").expect("a glob-stamp change must not fail the open");
-        assert_eq!(ino(&p), ino_before, "index.db was unlinked and recreated, not rebuilt in place");
         assert!(p.exists(), "index.db must still be there");
 
         let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
@@ -629,13 +635,46 @@ mod tests {
         assert_eq!(meta_get(&conn, "built_at"), None);
 
         // The pre-existing connection must still be looking at the *same*
-        // database — not an orphaned inode nobody else can see.
+        // database — not an orphaned inode (or, on platforms without inodes,
+        // an orphaned file by any other name) nobody else can see. Review
+        // round 1 confirmed this probe alone (with the inode assertion
+        // removed) still catches a wipe-instead-of-rebuild mutation: a wiped
+        // `live` connection ends up reading a different underlying file than
+        // the freshly reopened `conn`, so the two never agree on `probe`.
         meta_set(&conn, "probe", "written-by-the-reopener").unwrap();
         assert_eq!(
             meta_get(&live, "probe").as_deref(),
             Some("written-by-the-reopener"),
             "the connection held across the change is reading an orphaned file"
         );
+    }
+
+    /// The inode half of the pin above, split out (review round 1) so the
+    /// row-count/meta/live-probe assertions in `changed_globs_rebuild_in_place`
+    /// run on every platform — only the inode comparison itself needs `ino`,
+    /// which is Unix-only. Folds in the inode pin the old
+    /// `a_changed_sync_dir_must_not_unlink_the_file` test carried for the
+    /// retired `sync_dir` mechanism: **only this assertion tells a rebuild
+    /// from a wipe** — every row-count assertion in the sibling test above
+    /// would also pass if `open` unlinked the file and recreated it from
+    /// scratch (confirmed by review round 1: with *both* this test and its
+    /// sibling's live-probe assertion removed, a wipe-instead-of-rebuild
+    /// mutation left all 222 tests green), which is exactly the mistake the
+    /// prior round of this mechanism made and this task's mutation check is
+    /// required to catch (see the task report).
+    #[cfg(unix)]
+    #[test]
+    fn changed_globs_rebuild_in_place_keeps_the_inode() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v", "a/**").unwrap();
+            write(&mut conn, "a.md", "hello\n");
+        }
+        let _live = open(&p, "/v", "a/**").unwrap();
+        let ino_before = ino(&p);
+
+        let _conn = open(&p, "/v", "b/**").expect("a glob-stamp change must not fail the open");
+        assert_eq!(ino(&p), ino_before, "index.db was unlinked and recreated, not rebuilt in place");
     }
 
     /// The other half of the invalidation direction: a genuine change
@@ -667,7 +706,7 @@ mod tests {
     /// The contrast that keeps the two paths distinct: a tokenizer change
     /// (like a schema bump) still replaces the file outright. Both are
     /// build-time constants — a running process cannot observe them change —
-    /// so the runtime hazard `changed_globs_rebuild_in_place_and_keep_the_inode`
+    /// so the runtime hazard `changed_globs_rebuild_in_place_keeps_the_inode`
     /// guards against does not apply, and wiping stays the simplest correct
     /// answer for a store whose *shape* may differ. Without this assertion,
     /// converting every trigger to an in-place rebuild would go unnoticed.
@@ -742,6 +781,45 @@ mod tests {
             "a v2 (pre-source-globs-stamp, pre-unlabeled-tier) database must be wiped, not used as-is"
         );
         assert_eq!(meta_get(&conn, "schema_version").as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
+        assert_eq!(meta_get(&conn, "source_globs").as_deref(), Some("a/**"));
+    }
+
+    /// Pins the deliberate choice recorded in the task report: an absent
+    /// `meta.source_globs` row is treated as a **mismatch** (routes to
+    /// `rebuild_in_place`), the same as any other differing value, not as an
+    /// implicit "matches". `None != Some(globs_stamp)` is `true` in Rust, so
+    /// this falls out of the comparison as written — but review round 1
+    /// pointed out that "rewrite the comparison so absent means match" is a
+    /// mutation the rest of this file's suite does not catch (every other
+    /// test that exercises the comparison always has a `source_globs` row to
+    /// compare against), so it needs its own pin rather than resting on an
+    /// argument from the code shape alone.
+    ///
+    /// In practice this state is unreachable through a normal `open`: any
+    /// pre-v3 database fails `shape_ok` first and gets wiped, and
+    /// `stamp_fresh_schema` always writes `source_globs` on the way back up
+    /// — so this test constructs the state directly (delete the key from an
+    /// otherwise-current v3 database) rather than via any real upgrade path.
+    #[test]
+    fn an_absent_source_globs_row_is_treated_as_a_mismatch_not_a_match() {
+        let (_d, p) = tmp();
+        {
+            let mut conn = open(&p, "/v", "a/**").unwrap();
+            write(&mut conn, "a.md", "hello\n");
+            // Simulate a `meta` row with no `source_globs` key at all, while
+            // everything else about the database (schema_version,
+            // tokenizer_id) stays current — a state no real code path in
+            // this crate produces, since `stamp_fresh_schema` always writes
+            // it, but one `try_open`'s comparison must still resolve
+            // deliberately rather than by accident.
+            conn.execute("DELETE FROM meta WHERE key='source_globs'", []).unwrap();
+        }
+        let conn = open(&p, "/v", "a/**").unwrap();
+        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(
+            n, 0,
+            "an absent source_globs stamp must be treated as stale and rebuilt, not silently accepted"
+        );
         assert_eq!(meta_get(&conn, "source_globs").as_deref(), Some("a/**"));
     }
 

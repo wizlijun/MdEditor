@@ -201,25 +201,34 @@ pub fn resolve_sync_dir_from(vs: &VaultSettings) -> String {
         .unwrap_or_else(|| DEFAULT_SYNC_DIR.to_string())
 }
 
-/// Did a settings write change the **effective** sync directory — i.e. the
-/// one input `searchidx::origin::derive` (rule 5) reads, and therefore the
-/// one whose change invalidates every `origin` already stored in the index?
+/// Did a settings write change the **effective** sync directory?
 ///
 /// Compared on the *resolved* value, not the raw field, so the two ways of
 /// saying "sync" (absent, and explicitly `"sync"`) are the same answer, and
-/// an invalid value that falls back to the default is too. A save that only
-/// touches one of the other six fields answers `false` — reopening the index
-/// costs a full rebuild (search unavailable for the duration), and the six of
-/// them are no reason to pay it.
+/// an invalid value that falls back to the default is too.
 ///
-/// The caller is `notemd_vault_settings_set`, the single choke point every
-/// settings write goes through, which reopens the search index when this is
-/// true. Without that, `search::open_vault` would run only at launch and
-/// vault-pick, while `search::options::for_vault` is recomputed on the
-/// watcher's per-batch path — so from the moment the setting changed, every
-/// touched file would be re-indexed under the *new* `sync_dir` into a
-/// database stamped with the *old* one, and the untouched majority would
-/// stay silently misclassified.
+/// **As of C-T6, this has no remaining connection to the search index's
+/// correctness — review round 1 caught a stale comment here that still
+/// claimed otherwise, so read this paragraph as the current, corrected
+/// account.** It originally existed to protect `origin::derive`'s old rule
+/// 5, which read `sync_dir` directly: a `syncDir` change could make a
+/// stored `origin` wrong, so `notemd_vault_settings_set` (the single choke
+/// point every settings write goes through) reopens the search index
+/// through here whenever this returns `true`, and that reopen used to cost
+/// a full rebuild-in-place (search unavailable for the duration). Rule 5
+/// was retired in favor of user-configured source-glob patterns (rule 5′),
+/// and C-T6 repointed `store::open`'s staleness stamp at
+/// `SourceGlobs::stamp()` — a value `sync_dir` no longer feeds (see
+/// `resolve_sync_dir`'s doc comment for the fuller history). A
+/// `syncDir`-triggered reopen today recomputes the identical glob stamp,
+/// `store::open` reports `Opened::Ready`, and nothing is rebuilt: the
+/// reopen this function gates is harmless, just pointless.
+///
+/// Left wired up rather than deleted or renamed: the *mechanism* — gate a
+/// reopen on whether a specific setting's resolved value changed — is
+/// exactly what a future `search_source_globs_changed` sibling will need
+/// once C-T8 adds real source-glob storage, and removing this one is more
+/// naturally bundled with adding that one than done here as a drive-by.
 pub fn sync_dir_changed(before: &VaultSettings, after: &VaultSettings) -> bool {
     resolve_sync_dir_from(before) != resolve_sync_dir_from(after)
 }
