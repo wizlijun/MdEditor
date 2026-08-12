@@ -96,10 +96,21 @@ pub enum IndexOutcome {
 ///
 /// The extension gate: `.md` is always in scope, unconditionally — it is
 /// this product's native format and always has been, glob-configured or
-/// not. `.srt`/`.vtt`/`.txt` (raw transcript formats, C-T4/C-T5) are only in
-/// scope *inside* a configured source glob — `opts.source_globs` is "matches
-/// nothing" by default (`ScanOptions::default()`), so an unconfigured vault
-/// indexes none of them, matching the pre-transcript-support behavior.
+/// not, and its case is never relaxed: a `.md` file is produced in-app or by
+/// an agent following this vault's own conventions, so its exact case is
+/// ours to keep. `.srt`/`.vtt`/`.txt` (raw transcript formats, C-T4/C-T5)
+/// are only in scope *inside* a configured source glob — `opts.source_globs`
+/// is "matches nothing" by default (`ScanOptions::default()`), so an
+/// unconfigured vault indexes none of them, matching the
+/// pre-transcript-support behavior — and their case IS relaxed
+/// (`ends_with_ascii_ci`): those three formats arrive from external tooling
+/// (subtitle rippers, export utilities) this product does not control, and
+/// an uppercase `.SRT` off a ripper is common enough that silently never
+/// indexing it — with no diagnostic anywhere, since the settings page's
+/// "pattern matches N files" count is satisfied by the `.md` files sitting
+/// next to it — would be a real, undiagnosable gap. This asymmetry is a
+/// decision, pinned by `uppercase_transcript_extensions_are_indexed_case_
+/// insensitively` and `uppercase_md_is_still_not_indexed`, not an oversight.
 /// Every other extension is never indexed. The dot-segment and
 /// `exclude_dirs` checks below run after the extension gate but exclusion
 /// still wins overall — it is the last check, so nothing above it can
@@ -107,7 +118,7 @@ pub enum IndexOutcome {
 pub fn is_indexable(rel: &str, opts: &ScanOptions) -> bool {
     let in_scope = if rel.ends_with(".md") {
         true
-    } else if rel.ends_with(".srt") || rel.ends_with(".vtt") || rel.ends_with(".txt") {
+    } else if ends_with_ascii_ci(rel, ".srt") || ends_with_ascii_ci(rel, ".vtt") || ends_with_ascii_ci(rel, ".txt") {
         opts.source_globs.matches(rel)
     } else {
         false
@@ -122,6 +133,23 @@ pub fn is_indexable(rel: &str, opts: &ScanOptions) -> bool {
         let d = d.trim_matches('/');
         !d.is_empty() && (rel == d || rel.starts_with(&format!("{d}/")))
     })
+}
+
+/// ASCII case-insensitive suffix check, used only for the three
+/// externally-authored transcript extensions (see `is_indexable`'s doc
+/// comment for why `.md` does not go through this). Byte-indexed rather
+/// than `to_ascii_lowercase()`-and-compare so it never allocates per call —
+/// this runs on every candidate in a vault walk. Slicing `s.as_bytes()` by a
+/// fixed byte count from the end cannot land mid-codepoint-and-panic the way
+/// slicing a `&str` could, because it produces a `&[u8]`, not a `&str`; a
+/// tail that happens to split a multi-byte UTF-8 character just fails
+/// `eq_ignore_ascii_case` instead (that comparison only special-cases the
+/// ASCII range, so any non-ASCII byte is compared for exact equality and a
+/// split sequence's bytes will not equal `suffix`'s ASCII bytes).
+fn ends_with_ascii_ci(s: &str, suffix: &str) -> bool {
+    let s = s.as_bytes();
+    let suffix = suffix.as_bytes();
+    s.len() >= suffix.len() && s[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
 }
 
 struct Candidate {
@@ -528,6 +556,16 @@ fn index_into(
     // does not yet change GUI/CLI-observed behavior on a real vault —
     // wiring the real setting in is `TODO(C-T8)`.
     let parsed = crate::chunk::parse_file(&c.rel, &raw, c.mtime, &opts.source_globs);
+    // TODO(C-T5): a `.srt`/`.vtt`/`.txt` file that reaches this point (now
+    // possible since `is_indexable` above admits them inside a source glob)
+    // is stamped `ext = "md"` here, same as any other non-`.note.md` file —
+    // spec §5.1 requires `files.ext` to carry `srt`/`vtt`/`txt` instead, and
+    // C-T5 owns the extension dispatch this needs. Harmless until `TODO(
+    // C-T8)` wires a real (non-empty) `source_globs` into `for_vault`: until
+    // then no real vault ever reaches this arm with a transcript file, since
+    // `ScanOptions::default()`'s empty `source_globs` keeps `is_indexable`
+    // rejecting all of them first. C-T5 lands before C-T8, so this never
+    // reaches a user, but is marked rather than left to look unnoticed.
     let ext = if c.rel.ends_with(".note.md") { "note.md" } else { "md" };
     store::replace_file(tx, &c.rel, ext, c.mtime, c.size, &content_hash(&bytes), &parsed)?;
     Ok(true)
@@ -1002,6 +1040,30 @@ mod tests {
         opts.source_globs = crate::globs::parse(&["media/**".to_string()]);
         assert!(!is_indexable("media/a.pdf", &opts));
         assert!(!is_indexable("media/a.mp4", &opts));
+    }
+
+    /// `.srt`/`.vtt`/`.txt` arrive from external tooling (subtitle rippers,
+    /// export utilities) this product does not control, and uppercase
+    /// extensions are common there — a user should not have to rename files
+    /// off a ripper just to get them indexed. `.md`, in the next test, is
+    /// the deliberate opposite: it is produced in-app or by agents following
+    /// this vault's own conventions, so its case is ours to keep exact.
+    #[test]
+    fn uppercase_transcript_extensions_are_indexed_case_insensitively() {
+        let mut opts = ScanOptions::default();
+        opts.source_globs = crate::globs::parse(&["media/**".to_string()]);
+        assert!(is_indexable("media/Lecture01.SRT", &opts));
+        assert!(is_indexable("media/Lecture01.Vtt", &opts));
+        assert!(is_indexable("media/notes.TXT", &opts));
+    }
+
+    /// The asymmetry with the test above is a decision, not an oversight:
+    /// `.md` case is never relaxed.
+    #[test]
+    fn uppercase_md_is_still_not_indexed() {
+        let opts = ScanOptions::default();
+        assert!(!is_indexable("a.MD", &opts));
+        assert!(!is_indexable("a.Md", &opts));
     }
 
     /// 排除优先于收录。

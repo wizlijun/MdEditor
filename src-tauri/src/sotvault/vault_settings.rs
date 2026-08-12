@@ -167,13 +167,36 @@ pub fn merge(
 
 /// The effective sync sub-directory: the configured value when present and
 /// valid, otherwise [`DEFAULT_SYNC_DIR`]. Reads `.notemd/settings.json` itself
-/// — for a caller that already has a `VaultSettings` in hand (e.g.
-/// `search::options::for_vault`, which also needs other fields off the same
-/// read), use [`resolve_sync_dir_from`] instead so the file is only read
-/// once. Two separate reads is not just wasted I/O: if the file is rewritten
+/// — for a caller that already has a `VaultSettings` in hand, use
+/// [`resolve_sync_dir_from`] instead so the file is only read once.
+///
+/// Two separate reads is not just wasted I/O: if the file is rewritten
 /// between them (a settings save racing a watcher-triggered rescan), the two
 /// reads can straddle the write and produce a torn result — some fields from
-/// the old settings, some from the new.
+/// the old settings, some from the new. That is why `search::options::
+/// for_vault` (the `ScanOptions` single construction point) reads `vs` once
+/// and calls `resolve_sync_dir_from(&vs)` for every other field it needs off
+/// the same read — but as of C-T3, `for_vault` no longer resolves `sync_dir`
+/// at all (`ScanOptions` dropped that field: `sync_dir` stopped feeding
+/// `origin::derive` back in C-T2, so `ScanOptions` had nothing left to use it
+/// for). `SearchIndex::open`'s two call sites — `search::mod::open_vault`
+/// and `cli::search::run` — call **this** function directly instead, each
+/// paying a second, independent read of `.notemd/settings.json` alongside
+/// the one already done for `for_vault`'s other fields. That reintroduces
+/// exactly the torn-read window this doc warns about, but the consequence is
+/// bounded: `sync_dir` only ever reaches `store::open`'s staleness stamp
+/// (`TODO(C-T6)`), and since it no longer feeds `origin::derive`, the worst
+/// case of a torn read here is a spurious full rebuild-in-place, never a
+/// wrong stored tier. Both call sites are cold paths (once per vault open,
+/// once per CLI invocation), not the watcher's per-batch path, so the
+/// probability of actually landing in that window is low too.
+///
+/// **C-T6** — when repointing `store::open`'s staleness stamp at
+/// `SourceGlobs::stamp()`, revisit these two direct callers too: if
+/// `sync_dir`'s stamp is retired outright, they can be deleted; if it stays,
+/// consider folding the read back into `for_vault` (e.g. a
+/// `sync_dir_for_vault` sibling function next to it) so there is one read
+/// again instead of two.
 pub fn resolve_sync_dir(vault_root: &Path) -> String {
     resolve_sync_dir_from(&read(vault_root))
 }

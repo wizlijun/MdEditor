@@ -87,8 +87,11 @@ pub struct FileRow {
 /// index answering queries under the wrong tokenizer is a wrong-results bug
 /// dressed up as a working one, which is worse than failing loudly.
 /// `sync_dir` is the vault's currently-configured sync mirror directory name
-/// (see `ScanOptions::sync_dir`) — stamped into `meta` and compared on every
-/// open. **As of the 2026-08-12 design (C-T2), this comparison no longer has
+/// (as of C-T3, no longer a `ScanOptions` field — the two `SearchIndex::open`
+/// callers, `search::mod::open_vault` and `cli::search::run`, resolve it
+/// directly via `vault_settings::resolve_sync_dir`; see that function's doc
+/// comment) — stamped into `meta` and compared on every open. **As of the
+/// 2026-08-12 design (C-T2), this comparison no longer has
 /// a live correctness justification**: `origin::derive`'s rule 5 (the
 /// sync-mirror-directory special case that used to make this a function of
 /// `sync_dir`) was retired in favor of user-configured source-glob patterns

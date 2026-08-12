@@ -132,10 +132,10 @@ fn an_unusable_index_degrades_to_a_direct_scan_and_still_exits_zero() {
 /// the no-index path would report `derived` for exactly the kind of
 /// frontmatter-less file the indexed path reports `source` for (rule 6:
 /// "a bare `.md` with no frontmatter... judges source, not derived" —
-/// `origin.rs`'s own doc comment). `fallback_scan` has `opts.sync_dir`
-/// available (plumbed for this exact purpose) but no `Frontmatter`, so it
-/// must parse one itself via the same `origin::derive` the indexed path uses
-/// — not merely document the divergence.
+/// `origin.rs`'s own doc comment). `fallback_scan` has `opts.source_globs`
+/// available (plumbed for this exact purpose, as of C-T3) but no
+/// `Frontmatter`, so it must parse one itself via the same `origin::derive`
+/// the indexed path uses — not merely document the divergence.
 #[test]
 fn the_no_index_fallback_reports_the_same_origin_tier_the_index_would() {
     let v = vault(&[("a.md", "brownfox\n")]);
