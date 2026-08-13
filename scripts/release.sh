@@ -307,10 +307,13 @@ build_arch() {
   # match. `tauri signer sign` writes "<file>.sig" == $sig_staged.
   say "re-signing updater tarball for $arch_tag (post-notarize bytes)"
   rm -f "$sig_staged"
-  pnpm tauri signer sign \
-    -k "$TAURI_SIGNING_PRIVATE_KEY" \
-    -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
-    "$tarball_staged" >/dev/null
+  # Key and password must NOT go on the command line: pnpm echoes the full
+  # command to stderr (which `>/dev/null` does not catch — v6.813.5's build
+  # log carried the private key verbatim), and argv is readable in `ps` for
+  # the command's whole runtime. The tauri CLI reads both from the
+  # TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) env vars, exported above — in fact
+  # passing `-k`/`-f` *conflicts* with the env var being set.
+  pnpm tauri signer sign "$tarball_staged" >/dev/null
   [[ -f "$sig_staged" ]] || die "re-sign failed: $sig_staged not produced for $arch_tag"
 
   # Fail-fast: if minisign is available, verify the fresh pair against the
