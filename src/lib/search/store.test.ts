@@ -65,6 +65,23 @@ describe('searchStore', () => {
     expect(searchStore.lastDeep).toBe(true)
   })
 
+  // 「显示全部」= limit: 0(后端映射为不设上限)。默认查询不带 limit,
+  // 由 api 层补 50 —— 这里必须钉住两种拼写,面板的按钮语义全靠它。
+  it('passes limit 0 when asked for everything, and no limit otherwise', async () => {
+    const limits: Array<number | undefined> = []
+    _setSearchImpl(async (_q, opts) => {
+      limits.push(opts?.limit)
+      return { route: 't1-fts', tookMs: 1, total: 0, hits: [], truncated: false, deepAvailable: false }
+    })
+    await searchStore.run('x')
+    expect(searchStore.lastAll).toBe(false)
+    await searchStore.run('x', { all: true })
+    expect(limits).toEqual([undefined, 0])
+    expect(searchStore.lastAll).toBe(true)
+    searchStore.clear()
+    expect(searchStore.lastAll).toBe(false)
+  })
+
   // 「没找到」和「还没找完」不是一回事,面板要能区分才能给出回车深搜的提示。
   it('carries the backend’s truncated / deepAvailable signals', async () => {
     _setSearchImpl(async () => ({

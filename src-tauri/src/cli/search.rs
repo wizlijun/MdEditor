@@ -60,9 +60,16 @@ pub fn parse_args(rest: &[String], json_global: bool) -> SearchArgs {
                     i += 1;
                 }
             }
+            // `0` means "everything" — mapped to the sentinel here, at the
+            // host boundary, so `searchidx` itself never has to guess what a
+            // literal zero meant (see `searchidx::NO_LIMIT`'s doc comment).
+            "--all" => a.limit = searchidx::NO_LIMIT,
             "--limit" => {
                 if let Some(v) = rest.get(i + 1) {
-                    a.limit = v.parse().unwrap_or(20);
+                    a.limit = match v.parse().unwrap_or(20) {
+                        0 => searchidx::NO_LIMIT,
+                        n => n,
+                    };
                     i += 1;
                 }
             }
@@ -195,7 +202,7 @@ pub fn run(args: SearchArgs) -> ExitCode {
 
     let query = args.query.join(" ");
     if query.trim().is_empty() {
-        eprintln!("notemd: usage: notemd search <query...> [--vault PATH] [--limit N] [--json]");
+        eprintln!("notemd: usage: notemd search <query...> [--vault PATH] [--limit N] [--all] [--json]");
         return ExitCode::from(2);
     }
 

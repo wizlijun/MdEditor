@@ -516,6 +516,7 @@ export const zh: Record<keyof Messages, string> = {
   'search.deepHint': '快速检索无结果 · 回车逐行深度搜索(较慢)',
   'search.deepRunning': '正在逐行深度搜索…',
   'search.partial': '结果不完整——深度搜索已达时间上限',
+  'search.showAll': '显示全部结果',
   'search.notReady': '索引仍在构建',
   'search.rebuild': '重建索引',
   'search.openIndexSettings': '搜索与索引设置',

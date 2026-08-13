@@ -963,8 +963,14 @@ fn search_locked(
     // for the same reason `weights_for_vault` above is — one small JSON file,
     // already in the OS page cache.
     let conventions = crate::search::options::conventions_for_vault(idx.vault_root());
-    let answer =
-        idx.search_ranked(query, limit.unwrap_or(50), &limits, &weights, &conventions)?;
+    // `0` is the wire spelling of "no count cap" (the panel's 显示全部) —
+    // mapped to the sentinel here at the host boundary, same as the CLI's
+    // `--all`; see `searchidx::NO_LIMIT`'s doc comment.
+    let limit = match limit.unwrap_or(50) {
+        0 => searchidx::NO_LIMIT,
+        n => n,
+    };
+    let answer = idx.search_ranked(query, limit, &limits, &weights, &conventions)?;
     // An abort has two causes and they are not the same answer: superseded
     // means "throw this away", deadline means "partial, and say so".
     if superseded(counter, ticket) {
@@ -1558,6 +1564,33 @@ mod command_tests {
             !resp.deep_available,
             "FTS 已经命中,不该再提示深搜"
         );
+    }
+
+    /// `limit: Some(0)` 是「显示全部」的线上拼写:必须映射成
+    /// `searchidx::NO_LIMIT` 返回全部命中,而不是字面量 0(零条结果)。
+    /// 100 个命中文件特意超过默认的 50 上限,两种语义在此必然分岔。
+    #[test]
+    fn a_zero_limit_means_every_hit_not_zero_hits() {
+        let v = tempfile::tempdir().unwrap();
+        for i in 0..100 {
+            std::fs::write(v.path().join(format!("f{i}.md")), format!("alpha body {i}\n")).unwrap();
+        }
+        let d = tempfile::tempdir().unwrap();
+        let mut idx =
+            searchidx::SearchIndex::open_at(v.path(), &d.path().join("i.db"), "sync").unwrap();
+        idx.sweep(&searchidx::ScanOptions::default(), None).unwrap();
+        let handle: IndexHandle = Arc::new(Mutex::new(Some(idx)));
+        let counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+
+        let capped =
+            search_locked(&handle, Instant::now(), "alpha", None, Some(true), None, &counter, 1)
+                .expect("默认查询不该失败");
+        assert_eq!(capped.hits.len(), 50, "不传 limit 的默认仍是 50 条");
+
+        let all =
+            search_locked(&handle, Instant::now(), "alpha", Some(0), Some(true), None, &counter, 1)
+                .expect("limit=0 查询不该失败");
+        assert_eq!(all.hits.len(), 100, "limit=0 必须返回全部命中");
     }
 
     /// 两个窗口同时搜索是两个人的意图。互相取消会让其中一个面板空着,而且

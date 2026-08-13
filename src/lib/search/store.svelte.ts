@@ -36,6 +36,12 @@ export interface RunOptions {
   /** Pay for the full-scan fallback. Live typing does not; Enter does. */
   deep?: boolean
   timeoutMs?: number
+  /**
+   * Return every hit — sent as `limit: 0`, the wire spelling the backend maps
+   * to `searchidx::NO_LIMIT`. Without it the api layer's `DEFAULT_LIMIT`
+   * applies.
+   */
+  all?: boolean
 }
 
 class SearchStore {
@@ -52,16 +58,24 @@ class SearchStore {
   deepAvailable = $state(false)
   /** Whether the last run was itself deep — so a refresh can match it. */
   lastDeep = $state(false)
+  /** Whether the last run asked for every hit — so the panel knows the
+   *  「显示全部」 offer is already spent, and a refresh can match it. */
+  lastAll = $state(false)
 
   async run(q: string, opts: RunOptions = {}): Promise<void> {
     this.query = q
     if (!q.trim()) { this.clear(); return }
     const mine = ++seq
     this.lastDeep = opts.deep === true
+    this.lastAll = opts.all === true
     this.loading = true
     this.error = null
     try {
-      const res = await impl(q, { deep: opts.deep, timeoutMs: opts.timeoutMs })
+      const res = await impl(q, {
+        deep: opts.deep,
+        timeoutMs: opts.timeoutMs,
+        ...(opts.all ? { limit: 0 } : {}),
+      })
       if (mine !== seq) return // superseded by a newer run() — stale response, drop it
       this.hits = res.hits
       this.route = res.route
@@ -96,6 +110,7 @@ class SearchStore {
     this.truncated = false
     this.deepAvailable = false
     this.lastDeep = false
+    this.lastAll = false
   }
 }
 

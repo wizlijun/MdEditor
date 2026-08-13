@@ -481,6 +481,7 @@ export const de: Record<keyof Messages, string> = {
   'search.deepHint': 'Keine schnellen Treffer — jede Zeile durchsuchen (langsamer)',
   'search.deepRunning': 'Jede Zeile wird durchsucht…',
   'search.partial': 'Unvollständig — die Tiefensuche hat ihr Zeitlimit erreicht',
+  'search.showAll': 'Alle Ergebnisse anzeigen',
   'search.notReady': 'Der Index wird noch erstellt',
   'search.rebuild': 'Index neu erstellen',
   'search.openIndexSettings': 'Such- und Indexeinstellungen',

@@ -488,6 +488,7 @@ export const en = {
   'search.deepHint': 'No quick matches — search every line (slower)',
   'search.deepRunning': 'Searching every line…',
   'search.partial': 'Partial — the deep search reached its time limit',
+  'search.showAll': 'Show all results',
   'search.notReady': 'The index is still building',
   'search.rebuild': 'Rebuild index',
   'search.openIndexSettings': 'Search & Index settings',

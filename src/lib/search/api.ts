@@ -51,6 +51,8 @@ export interface SearchResponse {
  * and the backend's does not.
  */
 export interface SearchOptions {
+  /** Max hits. `0` means every hit — the backend maps it to
+   *  `searchidx::NO_LIMIT`. Omitted → `DEFAULT_LIMIT`. */
   limit?: number
   /**
    * Allow the bounded full-scan fallback when the index misses. Live typing
@@ -119,11 +121,16 @@ export interface SearchIndexState {
   error: string | null
 }
 
+/** The cap a query runs under when the caller doesn't say otherwise. The
+ *  panel compares `hits.length` against this to decide whether the answer
+ *  might be count-capped and a 「显示全部」 re-query is worth offering. */
+export const DEFAULT_LIMIT = 50
+
 export const searchApi = {
   query: (query: string, opts: SearchOptions = {}) =>
     invoke<SearchResponse>('notemd_search', {
       query,
-      limit: opts.limit ?? 50,
+      limit: opts.limit ?? DEFAULT_LIMIT,
       deep: opts.deep,
       timeoutMs: opts.timeoutMs,
     }),

@@ -315,7 +315,7 @@ homed into the Vault first.
 notemd search — Full-text search over the Vault
 
 USAGE:
-  notemd search <query...> [--vault <path>] [--json] [--limit <n>] [--context <n>]
+  notemd search <query...> [--vault <path>] [--json] [--limit <n>] [--all] [--context <n>]
   notemd search --stats --vault <path>
 
 DESCRIPTION:
@@ -341,7 +341,8 @@ FLAGS:
                      path/line/text. A hit with provenance.agent_by set was
                      written by a model — follow its sources to the primary
                      document before relying on it.
-  --limit <n>       Max hits (default: 20)
+  --limit <n>       Max hits (default: 20; 0 = no cap, same as --all)
+  --all             Return every hit, no count cap
   --context <n>     Print N lines of context around each hit
   --tag <t>         Filter: tag:<t>
   --type <t>        Filter: type:<t>

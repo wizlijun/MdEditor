@@ -447,6 +447,19 @@ fn drain<T>(
     Ok((out, false))
 }
 
+/// The over-fetch idiom's SQL `LIMIT` argument. `-1` is SQLite's own "no
+/// limit" spelling — the sentinel can't be formatted in literally, because
+/// `usize::MAX` overflows both the `* 8` and SQLite's i64 integer literal
+/// range. `saturating_mul` guards the near-MAX values in between, which are
+/// callers' to send even if nobody does today.
+fn overfetch_cap(limit: usize) -> i64 {
+    if limit == crate::NO_LIMIT {
+        -1
+    } else {
+        limit.saturating_mul(8).max(64).min(i64::MAX as usize) as i64
+    }
+}
+
 fn fts_search(
     conn: &Connection,
     q: &Query,
@@ -473,7 +486,7 @@ fn fts_search(
     let mut args: Vec<String> = vec![expr];
     push_filters(q, &mut sql, &mut args);
     // Over-fetch: business boosts reorder, and a phrase recheck removes rows.
-    sql.push_str(&format!(" ORDER BY rank ASC LIMIT {}", (limit * 8).max(64)));
+    sql.push_str(&format!(" ORDER BY rank ASC LIMIT {}", overfetch_cap(limit)));
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
@@ -517,8 +530,10 @@ fn like_search(
         clauses.join(" AND ")
     );
     push_filters(q, &mut sql, &mut args);
-    // Hard cap: the fallback is a safety net, not a query plan.
-    sql.push_str(" LIMIT 500");
+    // Hard cap: the fallback is a safety net, not a query plan. An explicit
+    // NO_LIMIT outranks the net — the caller asked for everything, and the
+    // time budget (`Limits`) is still standing behind it.
+    sql.push_str(if limit == crate::NO_LIMIT { " LIMIT -1" } else { " LIMIT 500" });
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
@@ -605,7 +620,7 @@ fn filter_only_search(
     );
     let mut args: Vec<String> = Vec::new();
     push_filters(q, &mut sql, &mut args);
-    sql.push_str(&format!(" ORDER BY f.path ASC LIMIT {}", (limit * 8).max(64)));
+    sql.push_str(&format!(" ORDER BY f.path ASC LIMIT {}", overfetch_cap(limit)));
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
@@ -1844,6 +1859,33 @@ mod tests {
     fn limit_is_respected() {
         let (_d, c) = indexed(&[("a.md", "target\n"), ("b.md", "target\n"), ("c.md", "target\n")]);
         assert_eq!(search(&c, &parse("target"), 2, "2026-08-10").unwrap().0.len(), 2);
+    }
+
+    /// `NO_LIMIT` 必须放开 FTS 路径的两道条数闸门:over-fetch 的
+    /// `(limit * 8).max(64)`(旧代码在哨兵上直接乘法溢出)和 `finish` 的最终
+    /// 截断。100 个命中文件一个都不能少 —— 特意超过 64 的 over-fetch 下限,
+    /// 否则闸门没拆干净测试也照样绿。
+    #[test]
+    fn no_limit_returns_every_fts_hit() {
+        let files: Vec<(String, String)> =
+            (0..100).map(|i| (format!("f{i:03}.md"), "target\n".to_string())).collect();
+        let refs: Vec<(&str, &str)> =
+            files.iter().map(|(p, b)| (p.as_str(), b.as_str())).collect();
+        let (_d, c) = indexed(&refs);
+        let hits = search(&c, &parse("target"), crate::NO_LIMIT, "2026-08-10").unwrap().0;
+        assert_eq!(hits.len(), 100, "NO_LIMIT 下 100 个命中文件必须全数返回");
+    }
+
+    /// 深扫描(LIKE 兜底)的 `LIMIT 500` 硬上限在 `NO_LIMIT` 下也必须让路:
+    /// 词内单字(「李慕白」查「慕」)FTS 必失、走 scan 路由,520 个命中段落
+    /// 不能被安全网截到 500。
+    #[test]
+    fn no_limit_lifts_the_deep_scan_hard_cap() {
+        let body: String = (0..520).map(|i| format!("李慕白 {i}\n\n")).collect();
+        let (_d, c) = indexed(&[("a.md", body.as_str())]);
+        let (hits, route) = search(&c, &parse("慕"), crate::NO_LIMIT, "2026-08-10").unwrap();
+        assert_eq!(route.as_str(), "t1-scan");
+        assert!(hits.len() > 500, "深扫描的 500 条安全网没有让路: {}", hits.len());
     }
 
     /// Fix round 1, minor: when FTS misses AND the attempted LIKE fallback

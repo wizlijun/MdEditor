@@ -328,6 +328,28 @@ fn filters_and_limit_flags_work_as_flags_too() {
     assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 1);
 }
 
+/// `--all`(等价 `--limit 0`)返回全部命中——25 个文件特意超过默认的 20 条,
+/// 否则「放开」与「默认」无法区分。
+#[test]
+fn all_flag_and_limit_zero_return_every_hit() {
+    let files: Vec<(String, String)> =
+        (0..25).map(|i| (format!("f{i:02}.md"), "brownfox\n".to_string())).collect();
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), b.as_str())).collect();
+    let v = vault(&refs);
+
+    let out = search(v.path(), &["brownfox"]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 20, "默认仍是 20 条");
+
+    for flags in [&["brownfox", "--all"][..], &["brownfox", "--limit", "0"][..]] {
+        let out = search(v.path(), flags);
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).lines().count(),
+            25,
+            "{flags:?} 必须返回全部命中"
+        );
+    }
+}
+
 #[test]
 fn context_flag_prints_surrounding_lines() {
     let v = vault(&[("a.md", "one\ntwo\nbrownfox\nfour\nfive\n")]);

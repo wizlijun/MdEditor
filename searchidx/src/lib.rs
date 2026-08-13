@@ -40,6 +40,15 @@ pub use scan::{
     BatchOutcome, IndexOutcome, Phase, Progress, ProgressFn, ScanOptions, ScanStats, SkippedFile,
 };
 
+/// `limit` sentinel for "every hit, no count cap". Lifts the FTS over-fetch
+/// cap, the deep-scan LIMIT 500 safety net, and the final truncation — any
+/// time budget the caller installs via `Limits::abort` still applies (the GUI
+/// does; the CLI runs `Limits::full()` and accepts the wait it asked for).
+/// Hosts expose this as `limit: 0` (CLI `--all` / `--limit 0`); the
+/// 0→`NO_LIMIT` mapping stays on the host side so a literal `limit: 0` here
+/// keeps meaning "zero rows".
+pub const NO_LIMIT: usize = usize::MAX;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

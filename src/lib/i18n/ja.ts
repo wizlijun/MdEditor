@@ -483,6 +483,7 @@ export const ja: Record<keyof Messages, string> = {
   'search.deepHint': '高速検索では見つかりません · Enter で全行検索(低速)',
   'search.deepRunning': '全行を検索しています…',
   'search.partial': '結果は一部です — 全行検索が制限時間に達しました',
+  'search.showAll': 'すべての結果を表示',
   'search.notReady': 'インデックスを構築中です',
   'search.rebuild': 'インデックスを再構築',
   'search.openIndexSettings': '検索とインデックスの設定',

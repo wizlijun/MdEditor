@@ -10,7 +10,7 @@
   import { setSideVisible } from '../../lib/side-panel/registry.svelte'
   import SideViewSwitcher from './SideViewSwitcher.svelte'
   import { searchStore, isIndexNotReady } from '../../lib/search/store.svelte'
-  import type { SearchHit } from '../../lib/search/api'
+  import { DEFAULT_LIMIT, type SearchHit } from '../../lib/search/api'
   import { decideTrigger, DEEP_AFTER_MS, DEEP_TIMEOUT_MS } from '../../lib/search/input-trigger'
   import { groupHits, type HitGroup, type FileGroup } from '../../lib/search/grouping'
   import { parseHighlightTerms, previewLine, highlightParts } from '../../lib/search/preview'
@@ -150,6 +150,28 @@
     return searchStore.run(inputValue, { deep: true, timeoutMs: DEEP_TIMEOUT_MS })
   }
 
+  // The count cap is invisible from the response (`total` counts what came
+  // back, not what exists), so "exactly a full page" is the honest tell that
+  // there may be more. A query with exactly DEFAULT_LIMIT real hits re-runs
+  // once and comes back identical — harmless, and the offer disappears.
+  let maybeCapped = $derived(
+    !searchStore.lastAll && searchStore.hits.length >= DEFAULT_LIMIT,
+  )
+
+  // Re-run the visible query with the cap lifted, at the tier the visible
+  // results came from — upgrading shallow→deep here would silently change
+  // WHAT is being searched, not just how much of it is shown.
+  function runAll() {
+    cancelTimers()
+    lastIssuedQuery = inputValue
+    return searchStore.run(
+      inputValue,
+      searchStore.lastDeep
+        ? { deep: true, timeoutMs: DEEP_TIMEOUT_MS, all: true }
+        : { deep: false, all: true },
+    )
+  }
+
   // Review round 2, Minor 9: reflects an externally-issued `searchStore.run()`
   // (bypassing this panel's own input entirely) back into `inputValue`.
   // Guarded on `lastIssuedQuery` rather than firing whenever
@@ -249,10 +271,13 @@
         refreshPending = false
         // Re-run at the tier the visible results came from, or a shallow
         // refresh would silently downgrade a deep answer to "no matches".
-        await searchStore.run(
-          searchStore.query,
-          searchStore.lastDeep ? { deep: true, timeoutMs: DEEP_TIMEOUT_MS } : { deep: false },
-        )
+        await searchStore.run(searchStore.query, {
+          // Same principle as the tier: refresh at the limit the visible
+          // results came from, or an index update would silently snap an
+          // uncapped answer back to the first 50.
+          all: searchStore.lastAll,
+          ...(searchStore.lastDeep ? { deep: true, timeoutMs: DEEP_TIMEOUT_MS } : { deep: false }),
+        })
       } while (refreshPending && searchStore.query.trim())
     } finally {
       refreshing = false
@@ -389,6 +414,9 @@
           </ul>
         </div>
       {/each}
+      {#if maybeCapped}
+        <button class="show-all" onclick={() => void runAll()}>{t('search.showAll')}</button>
+      {/if}
     {/if}
   </div>
 
@@ -451,6 +479,14 @@
     opacity: 0.62; cursor: pointer; border-radius: 6px;
   }
   .deep-hint:hover { background: rgba(0,0,0,0.05); opacity: 0.85; }
+  /* Same voice as .deep-hint — both are "there may be more" offers. */
+  .show-all {
+    display: block; width: 100%; text-align: center;
+    margin-top: 4px; padding: 6px 8px; font: inherit; font-size: 12px;
+    border: 0; background: transparent; color: inherit;
+    opacity: 0.62; cursor: pointer; border-radius: 6px;
+  }
+  .show-all:hover { background: rgba(0,0,0,0.05); opacity: 0.85; }
   .error-row { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
   .error { margin: 0; font-size: 12px; color: #c0392b; }
   .group + .group { margin-top: 6px; }
@@ -549,6 +585,7 @@
     .lang { background: rgba(255,255,255,0.12); }
     mark { background: rgba(255,214,0,0.3); }
     .deep-hint:hover { background: rgba(255,255,255,0.08); }
+    .show-all:hover { background: rgba(255,255,255,0.08); }
     .error { color: #ff6b5e; }
   }
 </style>
