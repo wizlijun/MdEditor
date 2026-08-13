@@ -123,8 +123,10 @@ The AI-native notes system, rolling out incrementally:
   root, which every CLI agent already reads.
 - **`notemd search`** — retrieval for agents, grep-shaped: default output is
   `path:line:text`, one hit per line, so `rg`/`grep` habits keep working.
-  `--json` adds `source_ref` (`path#Lline`), `origin`, and provenance
-  (`agent_by`, `human_verified`) — a hit written by a model says so, and an
+  `--json` adds `source_ref` (`path#Lline`), `origin`, provenance
+  (`agent_by`, `human_verified`) and `attention_minutes` (decayed minutes of
+  the user's own reading/editing attention on that document, 0 = no data,
+  already factored into ranking) — a hit written by a model says so, and an
   agent can follow it to the primary document instead of trusting it. Exit
   codes distinguish "no hits" (1) from "no vault" (2), and retrieval never
   hard-fails: an unusable index or an over-budget freshness check degrades to

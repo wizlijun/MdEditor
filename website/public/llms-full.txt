@@ -261,6 +261,12 @@ carries:
 - `provenance` — `{agent_by, human_verified}`. **A hit with `agent_by` set
   was written by a model.** Follow its sources to the primary document
   before relying on it; do not cite it as if a human had.
+- `attention_minutes` — decayed minutes of the *user's own* reading/editing
+  attention on that document (read + 1.5× edit, 30-day half-life decayed to
+  today; `0` = no data). Ranking already factors it in; the field is exposed
+  so you can explain the order. Sits alongside `provenance`, not inside it:
+  `provenance` is what the document claims about itself, this is what the
+  user actually did.
 
 Exit codes: `0` printed output · `1` no hits (not an error — nothing to
 branch on but "try something else") · `2` no vault configured, or a missing

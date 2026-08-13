@@ -103,8 +103,10 @@ AI-native 笔记系统，逐步落地中：
   本来就会读。
 - **`notemd search`** —— 给 agent 的检索，形状照着 grep 来：默认输出
   `path:line:text`，一行一条命中，`rg`/`grep` 的习惯照用。`--json` 额外给出
-  `source_ref`（`path#Lline`）、`origin` 与来源信息（`agent_by`、
-  `human_verified`）—— 模型写的命中会自报家门，agent 可以顺着它回到原始
+  `source_ref`（`path#Lline`）、`origin`、来源信息（`agent_by`、
+  `human_verified`）与 `attention_minutes`（用户自己在这份文档上花过的
+  注意力分钟数，已按 30 天半衰期衰减到今天，0 = 没有数据，排序已经计入
+  它）—— 模型写的命中会自报家门，agent 可以顺着它回到原始
   文档，而不是直接采信。退出码把「无命中」（1）与「没有 vault」（2）分开；
   检索也从不硬失败：索引不可用或新鲜度检查超预算时，降级为直接扫文件，
   stderr 留一行说明。
