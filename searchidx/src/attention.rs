@@ -130,6 +130,79 @@ fn resolve(key: &str, device_id: &str, links: &[MirrorLink]) -> Option<String> {
         .map(|l| l.mirror.clone())
 }
 
+use std::path::Path;
+
+/// analytics 子目录,与 `src/lib/insights/store.svelte.ts` 的 `SUBDIR` 一致。
+const ANALYTICS_SUBDIR: &str = ".notemd/analytics";
+
+/// 扫 `<vault>/.notemd/analytics/`,读出未超龄的日文件。
+///
+/// 全程尽力而为:目录不存在、单个文件损坏、文件名不认识 —— 都是跳过,
+/// 不是错误。从没开过 Reading Insights 的用户的正常状态就是「没有目录」,
+/// 那必须退化成「这一档恒等于 ×1.0」,而不是让索引报错。
+///
+/// **超龄判断在读盘之前**,只看文件名:这是 `MAX_AGE_DAYS` 真正省下 IO 的
+/// 地方,十年老 vault 的摄取成本因此是常数而不是线性。
+pub fn collect(vault_root: &Path, as_of: &str) -> Vec<DayFile> {
+    let dir = vault_root.join(ANALYTICS_SUBDIR);
+    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some((day, device_id)) = split_name(&name) else { continue };
+        match crate::query::days_between(day, as_of) {
+            Some(age) if age <= MAX_AGE_DAYS => {}
+            _ => continue,
+        }
+        let Ok(txt) = std::fs::read_to_string(e.path()) else { continue };
+        let Ok(parsed) = serde_json::from_str::<DeviceAnalyticsJson>(&txt) else { continue };
+        let docs: Vec<DocDay> = parsed
+            .docs
+            .into_iter()
+            .flat_map(|(key, days)| {
+                days.into_values().map(move |c| DocDay {
+                    key: key.clone(),
+                    read_ms: c.read_ms,
+                    edit_ms: c.edit_ms,
+                })
+            })
+            .collect();
+        if docs.is_empty() {
+            continue;
+        }
+        out.push(DayFile { day: day.to_string(), device_id: device_id.to_string(), docs });
+    }
+    out
+}
+
+/// `2026-08-13.<deviceId>.json` → `("2026-08-13", "<deviceId>")`。
+/// deviceId 是 UUID(不含点),日期不含点,所以「第一个点」和「最后一个点」
+/// 就是全部的分隔信息 —— 与 `store.svelte.ts` 的 `FILE_RE` 同一条约定。
+fn split_name(name: &str) -> Option<(&str, &str)> {
+    let stem = name.strip_suffix(".json")?;
+    let (day, device) = stem.split_once('.')?;
+    if day.len() != 10 || device.is_empty() {
+        return None;
+    }
+    Some((day, device))
+}
+
+/// 只声明我们要读的字段。`deviceName`、`sessions`、以及 `DayCounters` 里
+/// 其余的计数器都被 serde 忽略 —— 采集侧加字段不该让摄取失败。
+#[derive(serde::Deserialize)]
+struct DeviceAnalyticsJson {
+    #[serde(default)]
+    docs: std::collections::BTreeMap<String, std::collections::BTreeMap<String, CountersJson>>,
+}
+
+#[derive(serde::Deserialize)]
+struct CountersJson {
+    #[serde(default)]
+    read_ms: i64,
+    #[serde(default)]
+    edit_ms: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +387,91 @@ mod tests {
     fn zero_minute_entries_are_not_stored() {
         let m = fold(&[df("2026-08-13", "d1", &[("rel:a.md", 0, 0)])], &[], "2026-08-13");
         assert!(m.is_empty());
+    }
+
+    use std::path::Path;
+
+    fn write_day(root: &Path, name: &str, body: &str) {
+        let dir = root.join(".notemd/analytics");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+
+    /// 正常路径:文件名解析出 day + deviceId,JSON 里取两个计时器。
+    #[test]
+    fn collect_reads_day_and_device_from_the_filename() {
+        let d = tempfile::tempdir().unwrap();
+        write_day(
+            d.path(),
+            "2026-08-13.DEV-1.json",
+            r#"{"deviceId":"DEV-1","deviceName":"mac","docs":{
+                 "rel:a.md":{"2026-08-13":{"read_ms":60000,"edit_ms":1000,"open_count":2,
+                   "edit_sessions":1,"net_chars":10,"mark_ops":0,
+                   "first_seen_at":0,"last_active_at":0}}}}"#,
+        );
+        let files = collect(d.path(), "2026-08-13");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].day, "2026-08-13");
+        assert_eq!(files[0].device_id, "DEV-1");
+        assert_eq!(files[0].docs.len(), 1);
+        assert_eq!(files[0].docs[0].key, "rel:a.md");
+        assert_eq!(files[0].docs[0].read_ms, 60_000);
+        assert_eq!(files[0].docs[0].edit_ms, 1_000);
+    }
+
+    /// 超龄文件**在读盘前**就被文件名筛掉 —— 这是 MAX_AGE_DAYS 省 IO 的地方,
+    /// 不只是省算术。
+    #[test]
+    fn collect_skips_files_older_than_the_cutoff_without_reading_them() {
+        let d = tempfile::tempdir().unwrap();
+        write_day(d.path(), "2020-01-01.DEV-1.json", "这不是合法 JSON,但也不该被读");
+        assert!(collect(d.path(), "2026-08-13").is_empty());
+    }
+
+    /// 单个损坏文件跳过,其余照常 —— 规格 §7 的容错要求。
+    #[test]
+    fn a_corrupt_file_is_skipped_and_the_rest_still_load() {
+        let d = tempfile::tempdir().unwrap();
+        write_day(d.path(), "2026-08-12.DEV-1.json", "{ 半个 JSON");
+        write_day(
+            d.path(),
+            "2026-08-13.DEV-1.json",
+            r#"{"deviceId":"DEV-1","deviceName":"m","docs":{"rel:ok.md":{"2026-08-13":{"read_ms":1,"edit_ms":0,"open_count":0,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}"#,
+        );
+        let files = collect(d.path(), "2026-08-13");
+        assert_eq!(files.len(), 1, "损坏的那个跳过,好的那个还在");
+        assert_eq!(files[0].docs[0].key, "rel:ok.md");
+    }
+
+    /// 没有目录不是错误 —— 从没开过洞察的用户就是这个状态。
+    #[test]
+    fn a_missing_analytics_dir_is_empty_not_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(collect(d.path(), "2026-08-13").is_empty());
+    }
+
+    /// 文件名不符合 `<day>.<deviceId>.json` 的一律忽略(README、.DS_Store…)。
+    #[test]
+    fn unrecognized_filenames_are_ignored() {
+        let d = tempfile::tempdir().unwrap();
+        write_day(d.path(), "README.md", "x");
+        write_day(d.path(), ".DS_Store", "x");
+        write_day(d.path(), "2026-08-13.json", "x");
+        assert!(collect(d.path(), "2026-08-13").is_empty());
+    }
+
+    /// 文件名里的日期是权威,JSON 里内嵌的日期桶键**不覆盖**它。
+    /// 两者本该一致;不一致时(手工编辑、同步冲突残留)以文件名为准,
+    /// 因为超龄截断就是按文件名做的,让内嵌键翻案会绕过截断。
+    #[test]
+    fn the_filename_day_wins_over_the_inner_bucket_key() {
+        let d = tempfile::tempdir().unwrap();
+        write_day(
+            d.path(),
+            "2026-08-13.DEV-1.json",
+            r#"{"deviceId":"DEV-1","deviceName":"m","docs":{"rel:a.md":{"1999-01-01":{"read_ms":60000,"edit_ms":0,"open_count":0,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}"#,
+        );
+        let files = collect(d.path(), "2026-08-13");
+        assert_eq!(files[0].day, "2026-08-13");
     }
 }
