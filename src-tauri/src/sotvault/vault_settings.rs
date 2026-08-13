@@ -251,7 +251,7 @@ pub fn merge(
 /// checked: an absent field is "not configured," not "invalid," and merging
 /// a partial `SearchWeights` must not fail just because the caller didn't
 /// mention `unlabeled`.
-fn validate_search_weights(w: &SearchWeights) -> Result<(), String> {
+pub(crate) fn validate_search_weights(w: &SearchWeights) -> Result<(), String> {
     fn check(name: &str, v: Option<f64>) -> Result<(), String> {
         match v {
             Some(x) if !x.is_finite() || x <= 0.0 || x > 5.0 => {

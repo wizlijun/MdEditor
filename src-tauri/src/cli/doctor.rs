@@ -6,6 +6,7 @@
 //! 因为 doctor 自带一份判断的话,两份必然漂移 —— 见设计文档 §1。
 
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -241,9 +242,184 @@ fn env_checks(cfg: Option<&crate::shared_config::SharedConfig>) -> Vec<Check> {
     ]
 }
 
-/// 采集全部检查。本任务先接入环境组,后续任务逐组填充其余分组。
-fn collect(_args: &DoctorArgs) -> Vec<Check> {
-    env_checks(None)
+// ── 配置与 vault 组 ────────────────────────────────────────────────────────
+
+/// **刻意不走 `shared_config::read()`**:那个函数是 fail-soft 的,文件缺失和
+/// 内容损坏都返回同一个默认值,而这两者对用户意味着完全不同的事(全新安装 vs
+/// 配置被写坏)。doctor 的整个价值就在于把它们分开说。
+fn check_shared_config(path: &Path) -> (Check, Option<crate::shared_config::SharedConfig>) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                Check::warn(
+                    "vault.shared_config",
+                    format!("not created yet: {}", path.display()),
+                    "Normal on a fresh install — set a Vault in Preferences and it appears",
+                ),
+                None,
+            )
+        }
+        Err(e) => {
+            return (
+                Check::fail(
+                    "vault.shared_config",
+                    format!("{}: {e}", path.display()),
+                    "Check the file's permissions",
+                ),
+                None,
+            )
+        }
+    };
+    match serde_json::from_str::<crate::shared_config::SharedConfig>(&text) {
+        Ok(cfg) => (Check::pass("vault.shared_config", path.display().to_string()), Some(cfg)),
+        Err(e) => (
+            Check::fail(
+                "vault.shared_config",
+                format!("{} is not valid JSON: {e}", path.display()),
+                "Move it aside and re-pick your Vault in Preferences",
+            ),
+            None,
+        ),
+    }
+}
+
+fn check_vault_root(
+    explicit: Option<&str>,
+    cfg: Option<&crate::shared_config::SharedConfig>,
+) -> (Check, Option<PathBuf>) {
+    let (raw, source) = match explicit {
+        Some(v) => (v.to_string(), "--vault"),
+        None => match cfg.and_then(|c| c.sotvault.as_deref()).filter(|s| !s.is_empty()) {
+            Some(v) => (v.to_string(), "configured"),
+            None => {
+                return (
+                    Check::warn(
+                        "vault.sotvault",
+                        "no Vault configured",
+                        "Pick one in Preferences, or pass --vault <path>",
+                    ),
+                    None,
+                )
+            }
+        },
+    };
+    let root = PathBuf::from(&raw);
+    if root.is_dir() {
+        (Check::pass("vault.sotvault", format!("{raw} ({source})")), Some(root))
+    } else {
+        (
+            Check::fail(
+                "vault.sotvault",
+                format!("{raw} does not exist ({source})"),
+                "Re-pick the Vault in Preferences, or reconnect the volume it lives on",
+            ),
+            None,
+        )
+    }
+}
+
+fn check_git_repo(root: &Path) -> Check {
+    // git worktree 的 `.git` 是文件而非目录,所以用 exists 而不是 is_dir。
+    if root.join(".git").exists() {
+        Check::pass("vault.git_repo", "git repository")
+    } else {
+        Check::warn(
+            "vault.git_repo",
+            "not a git repository",
+            "Fine for local-only use; Vault sync and history need `git init` plus a remote",
+        )
+    }
+}
+
+/// 同 [`check_shared_config`]:`vault_settings::read` 把损坏文件吞成默认值,
+/// 所以这里自己读自己解析,再把解出来的权重交给**已有的**校验函数。
+fn check_vault_settings(root: &Path) -> Check {
+    let path = root.join(".notemd").join("settings.json");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Check::pass("vault.settings", "using defaults (no .notemd/settings.json)")
+        }
+        Err(e) => {
+            return Check::fail(
+                "vault.settings",
+                format!("{}: {e}", path.display()),
+                "Check the file's permissions",
+            )
+        }
+    };
+    let settings: crate::sotvault::vault_settings::VaultSettings =
+        match serde_json::from_str(&text) {
+            Ok(s) => s,
+            Err(e) => {
+                return Check::fail(
+                    "vault.settings",
+                    format!("{} is not valid JSON: {e}", path.display()),
+                    "Fix the JSON, or delete the file to fall back to defaults",
+                )
+            }
+        };
+    // `search_weights` 是 Option —— 没设过就没什么可校验的。
+    match settings.search_weights.as_ref().map(crate::sotvault::vault_settings::validate_search_weights) {
+        None | Some(Ok(())) => Check::pass("vault.settings", path.display().to_string()),
+        Some(Err(e)) => Check::warn(
+            "vault.settings",
+            e,
+            "Out-of-range weights are clamped at query time; fix them in Preferences → Search",
+        ),
+    }
+}
+
+fn vault_checks(args: &DoctorArgs) -> (Vec<Check>, Option<crate::shared_config::SharedConfig>, Option<PathBuf>) {
+    let path = crate::shared_config::config_path().ok();
+    vault_checks_from(args, path.as_deref())
+}
+
+/// [`vault_checks`] 的可测核心:配置文件路径显式传入。`None` 表示平台上根本
+/// 解析不出配置目录。
+fn vault_checks_from(
+    args: &DoctorArgs,
+    config_path: Option<&Path>,
+) -> (Vec<Check>, Option<crate::shared_config::SharedConfig>, Option<PathBuf>) {
+    let mut out = Vec::new();
+    let cfg = match config_path {
+        Some(p) => {
+            let (c, cfg) = check_shared_config(p);
+            out.push(c);
+            cfg
+        }
+        None => {
+            out.push(Check::fail(
+                "vault.shared_config",
+                "no config directory on this platform",
+                "Report this — notemd cannot store settings here",
+            ));
+            None
+        }
+    };
+    let (c, root) = check_vault_root(args.vault.as_deref(), cfg.as_ref());
+    out.push(c);
+    match root.as_deref() {
+        Some(r) => {
+            out.push(check_git_repo(r));
+            out.push(check_vault_settings(r));
+        }
+        None => {
+            // 没有 vault 就没有判断依据 —— 记 skip,不连坐报 fail。
+            out.push(Check::skip("vault.git_repo", "no Vault to check"));
+            out.push(Check::skip("vault.settings", "no Vault to check"));
+        }
+    }
+    (out, cfg, root)
+}
+
+/// 采集全部检查。本任务接入配置与 vault 组,后续任务逐组填充其余分组。
+fn collect(args: &DoctorArgs) -> Vec<Check> {
+    let (vault, cfg, _root) = vault_checks(args);
+    let mut out = env_checks(cfg.as_ref());
+    out.extend(vault);
+    out
 }
 
 pub fn run(args: DoctorArgs) -> ExitCode {
@@ -405,5 +581,110 @@ mod tests {
         assert_eq!(c.status, Status::Fail);
         // 复用 git_ops::validate_proxy_url 的原话，不另写一套错误文案。
         assert!(c.detail.contains("unsupported proxy scheme"), "{}", c.detail);
+    }
+
+    /// 缺失和损坏必须分开报 —— 这条测试同时钉住「不许改用 shared_config::read()」:
+    /// 那个函数把两种情况都吞成默认值,一旦有人图省事换过去,两条断言会同时变红。
+    #[test]
+    fn missing_shared_config_warns_and_corrupt_one_fails() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let (c, cfg) = check_shared_config(&dir.path().join("shared.json"));
+        assert_eq!(c.status, Status::Warn);
+        assert!(cfg.is_none());
+
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, "{ not json").unwrap();
+        let (c, cfg) = check_shared_config(&bad);
+        assert_eq!(c.status, Status::Fail);
+        assert!(cfg.is_none());
+    }
+
+    #[test]
+    fn well_formed_shared_config_passes_and_yields_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("shared.json");
+        std::fs::write(&p, r#"{"version":1,"sotvault":"/tmp/v"}"#).unwrap();
+        let (c, cfg) = check_shared_config(&p);
+        assert_eq!(c.status, Status::Pass);
+        assert_eq!(cfg.unwrap().sotvault.as_deref(), Some("/tmp/v"));
+    }
+
+    #[test]
+    fn unconfigured_vault_warns_and_yields_no_root() {
+        let (c, root) = check_vault_root(None, None);
+        assert_eq!(c.status, Status::Warn);
+        assert!(root.is_none());
+    }
+
+    #[test]
+    fn configured_but_missing_vault_dir_fails() {
+        let cfg = crate::shared_config::SharedConfig {
+            version: 1,
+            sotvault: Some("/definitely/not/here".into()),
+            ..Default::default()
+        };
+        let (c, root) = check_vault_root(None, Some(&cfg));
+        assert_eq!(c.status, Status::Fail);
+        assert!(root.is_none(), "一个不存在的目录不能继续喂给后面的检查");
+    }
+
+    #[test]
+    fn explicit_vault_flag_wins_over_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::shared_config::SharedConfig {
+            version: 1,
+            sotvault: Some("/definitely/not/here".into()),
+            ..Default::default()
+        };
+        let (c, root) = check_vault_root(Some(dir.path().to_str().unwrap()), Some(&cfg));
+        assert_eq!(c.status, Status::Pass);
+        assert_eq!(root.as_deref(), Some(dir.path()));
+    }
+
+    #[test]
+    fn a_vault_without_git_is_only_a_warning() {
+        // 「文件高于应用」下 vault 不必是 git 仓库,只是同步能力不可用。
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(check_git_repo(dir.path()).status, Status::Warn);
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        assert_eq!(check_git_repo(dir.path()).status, Status::Pass);
+    }
+
+    #[test]
+    fn absent_vault_settings_passes_and_corrupt_one_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(check_vault_settings(dir.path()).status, Status::Pass);
+
+        std::fs::create_dir_all(dir.path().join(".notemd")).unwrap();
+        std::fs::write(dir.path().join(".notemd/settings.json"), "{ not json").unwrap();
+        assert_eq!(check_vault_settings(dir.path()).status, Status::Fail);
+    }
+
+    #[test]
+    fn out_of_range_search_weights_warn() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".notemd")).unwrap();
+        std::fs::write(
+            dir.path().join(".notemd/settings.json"),
+            r#"{"searchWeights":{"human":99.0}}"#,
+        )
+        .unwrap();
+        let c = check_vault_settings(dir.path());
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.detail.contains("human"), "{}", c.detail);
+    }
+
+    #[test]
+    fn unconfigured_vault_skips_the_dependent_checks_instead_of_failing_them() {
+        // 没配 vault 时,git_repo / settings 记 skip,不连坐报 fail(设计文档 §4.2)。
+        let args = DoctorArgs { offline: true, vault: None, ..Default::default() };
+        let checks = vault_checks_from(&args, None).0;
+        let dependent: Vec<&Check> = checks
+            .iter()
+            .filter(|c| c.id == "vault.git_repo" || c.id == "vault.settings")
+            .collect();
+        assert_eq!(dependent.len(), 2);
+        assert!(dependent.iter().all(|c| c.status == Status::Skip), "{dependent:?}");
     }
 }
