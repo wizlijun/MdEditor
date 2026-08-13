@@ -91,6 +91,62 @@ fn attention_due(since_last: Duration) -> bool {
     since_last >= Duration::from_secs(ATTENTION_DEBOUNCE_SECS)
 }
 
+/// 这一轮该不该摄取 —— **两个条件与它们的求值顺序绑死在一个函数里**,因为
+/// 正确性全在这两点上,而它们各有一个看起来完全合理的错法:
+///
+/// * `&&` 写成 `||`(设计简报的伪代码就是 `||`):窗口一到点就摄取,不管有
+///   没有新数据 —— 一个每分钟做一次全量重算的空转定时任务;而且 `||` 的短路
+///   会在到点那一轮**根本不读标志**,下一轮再 `swap` 出个真来,多摄一次。
+/// * 顺序反过来写成 `dirty.swap(false, ..) && attention_due(..)`:返回值完全
+///   正确,但窗口没开时也把标志清掉了 —— 那次 flush 就此人间蒸发,直到用户
+///   下次读文档才会被重新标脏。这是**静默**的错(排序偏旧,无症状)。
+///
+/// 所以 `swap` 只在窗口确认打开之后才执行,复位也因此永远伴随一次真正的摄取。
+/// 三条 mutation 各有一条测试守着,见 `mod tests`。
+fn take_attention_turn(dirty: &AtomicBool, since_last: Duration) -> bool {
+    attention_due(since_last) && dirty.swap(false, Ordering::SeqCst)
+}
+
+/// 一次摄取尝试的结局。存在的理由是让「被取代」与「索引没准备好」在类型上
+/// 分得开 —— 前者是代际闸门**拦下**的,测试要能精确断言到它,而不是从一个
+/// 含混的 `None` 里猜。
+#[derive(Debug, PartialEq)]
+enum Ingest {
+    /// 代际闸门拦下:摄取期间用户切走了 vault,一个字都没往索引里写。
+    Superseded,
+    /// 索引还没装进 `IndexHandle`(或已被 `open_vault` 清空)。
+    NotReady,
+    Done(Result<usize, String>),
+}
+
+/// 摄取的代际闸门:**取锁 → 查代际 → 才写**,三步锁死在一个函数里,中间
+/// 没有缝隙插得进耗时操作。返回 `Superseded` = 本 watcher 已被更新一代的
+/// `open_vault` 取代,`refresh_attention` **一次都没被调用**。
+///
+/// 这是 `install_if_current` 那条纪律在摄取路径上的第二个执行点,形状略有
+/// 不同:那边有个线程本地的 `SearchIndex` 可以整个丢掉,这边 `as_mut()` 改
+/// 的是**共享的**那一个,没有东西可丢 —— 一旦写下去就是「旧 vault 的注意力
+/// 进了新 vault 的索引」,而且完全静默(只是排序变怪)。所以检查必须发生在
+/// 锁里、写之前那一刻。
+///
+/// `is_current_now` 是**闭包**而不是 `bool`,理由与 `install_if_current` 逐字
+/// 相同:传值就意味着调用方可以把耗时操作**之前**的那次快照递进来 —— T9 被
+/// 判 Critical 的正是这个形状。
+fn refresh_attention_if_current(
+    handle: &crate::search::IndexHandle,
+    links: &[searchidx::attention::MirrorLink],
+    is_current_now: impl FnOnce() -> bool,
+) -> Ingest {
+    let mut guard = crate::search::lock(handle);
+    if !is_current_now() {
+        return Ingest::Superseded;
+    }
+    let Some(idx) = guard.as_mut() else {
+        return Ingest::NotReady;
+    };
+    Ingest::Done(idx.refresh_attention(links))
+}
+
 /// 一次事件的两路产物。它们走的是**完全不同的通道**:`index` 进
 /// `Pending` 触发重索引,`attention` 只置一个标志触发摄取。合并成一个
 /// 返回值仅仅因为二者来自同一次路径遍历 —— 语义上必须分开,把 analytics
@@ -196,15 +252,11 @@ pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
                         }
                         drain(&app, &root, pending.take());
                     }
-                    // 摄取的节奏与重索引完全独立:两个条件都满足才干活。
-                    // `swap` 只在窗口已经打开时才执行 —— 时间没到就碰标志
-                    // 会把一次还没摄取的 flush 悄悄抹掉;而窗口开着但标志
-                    // 为假(没有新事件)时,这里什么都不做,它不是一个每
-                    // 分钟空转的定时任务。复位在摄取**之前**,所以摄取期
-                    // 间到达的事件不会被这一轮吞掉。
-                    if attention_due(last_attention.elapsed())
-                        && attention_dirty.swap(false, Ordering::SeqCst)
-                    {
+                    // 摄取的节奏与重索引完全独立。两个条件、以及它们的求值
+                    // 顺序,都在 `take_attention_turn` 里(连同各自的错法与
+                    // 守着它们的测试)。复位发生在摄取**之前**,所以摄取期间
+                    // 到达的事件不会被这一轮吞掉。
+                    if take_attention_turn(&attention_dirty, last_attention.elapsed()) {
                         if stale() {
                             return;
                         }
@@ -221,37 +273,33 @@ pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
 /// 把 vault 的注意力数据全量重算进当前索引。触发者是 `.notemd/analytics/`
 /// 下的写入,不是文档变更 —— 所以这里既不碰 `Pending`,也不做任何扫描。
 ///
-/// **代际检查在锁里、在写之前那一刻再读一次**,而不是复用调用方循环里那次
-/// `stale()`:读 analytics(最多一年的日文件)加上 `links_for_vault`(读
-/// `.notemd/mirrors/`)是耗时操作,用户完全来得及在这期间切走 vault。漏掉
-/// 这一步的后果不是少算一点分数,而是把**旧 vault 的注意力写进新 vault 的
-/// 索引** —— `open_vault` 里 T9 犯过同形状的错(见 `install_if_current`
-/// 的注释),这里是同一条纪律的第二个执行点。`as_mut()` 原地改的是共享的
-/// 那个 `SearchIndex`,不像 `install_if_current` 有个线程本地的副本可丢,
-/// 所以检查只能靠锁的粒度来兜。
+/// 代际闸门在 `refresh_attention_if_current` 里(取锁 → 查代际 → 才写),
+/// 而不是复用调用方循环里那次 `stale()`:读 analytics(最多一年的日文件)
+/// 加上 `links_for_vault`(读 `.notemd/mirrors/`)是耗时操作,用户完全来得及
+/// 在这期间切走 vault。传的是**闭包**,所以求值时刻由闸门自己定,调用方递不
+/// 进一份陈旧的快照。
 fn drain_attention(app: &AppHandle, root: &Path, my_gen: u64) {
     let idx_handle = crate::search::handle(app);
     // 锁外做 IO,与 `drain` 一样:一次摄取不该把并发的搜索命令堵住整段读盘。
+    // 也正因为这段 IO 慢,上面那道闸门才必须在它**之后**、锁**之内**求值。
     let links = crate::search::attention_links::links_for_vault(root);
-    let mut guard = crate::search::lock(&idx_handle);
-    if !is_current(app, my_gen) {
-        crate::log_cat!("search", "info", "attention ingest superseded, discarding");
-        return;
-    }
-    let Some(idx) = guard.as_mut() else { return };
-    let ok = match idx.refresh_attention(&links) {
-        Ok(n) => {
+    let ok = match refresh_attention_if_current(&idx_handle, &links, || is_current(app, my_gen)) {
+        Ingest::Done(Ok(n)) => {
             crate::log_cat!("search", "info", "attention ingest: {n} files");
             true
         }
         // 摄取失败只降级排序(加成退化成 ×1.0),索引本身完全可用 —— 与
         // `open_vault` 里同一条判断,所以只记一行,不动索引状态。
-        Err(e) => {
+        Ingest::Done(Err(e)) => {
             crate::log_cat!("search", "error", "attention ingest failed: {e}");
             false
         }
+        Ingest::Superseded => {
+            crate::log_cat!("search", "info", "attention ingest superseded, discarding");
+            false
+        }
+        Ingest::NotReady => false,
     };
-    drop(guard);
     if ok {
         // 排序输入变了,开着的搜索面板重跑一次查询才看得到新次序。
         let _ = app.emit(INDEX_UPDATED_EVENT, ());
@@ -510,12 +558,132 @@ mod tests {
     }
 
     /// 防抖窗口:59 秒不到点,60 秒到点。到点只是**允许**摄取,真干活还
-    /// 要标志为真 —— 见 `restart` 里的短路写法。
+    /// 要标志为真 —— 见 `take_attention_turn`。
     #[test]
     fn the_attention_window_opens_at_sixty_seconds() {
         assert!(!attention_due(Duration::from_secs(59)));
         assert!(attention_due(Duration::from_secs(60)));
         assert!(attention_due(Duration::from_secs(600)));
+    }
+
+    fn dirty(v: bool) -> AtomicBool {
+        AtomicBool::new(v)
+    }
+
+    /// 正路:窗口开着且有新数据 —— 干活,并且标志被复位(否则下一个窗口会
+    /// 再摄取一遍同样的数据)。
+    #[test]
+    fn a_dirty_flag_inside_an_open_window_takes_its_turn_and_resets() {
+        let f = dirty(true);
+        assert!(take_attention_turn(&f, Duration::from_secs(60)));
+        assert!(!f.load(Ordering::SeqCst), "标志没复位,下一轮会白摄取一次");
+    }
+
+    /// 窗口开着但没有新事件 —— **什么都不做**。设计简报的伪代码写的是
+    /// `||`,照抄就会在这里返回 true:一个每分钟做一次全量重算的空转定时
+    /// 任务,vault 一天被无缘无故重算 1440 次。
+    #[test]
+    fn an_open_window_with_no_new_events_does_nothing() {
+        let f = dirty(false);
+        assert!(!take_attention_turn(&f, Duration::from_secs(600)));
+    }
+
+    /// 窗口没开时**连标志都不许碰**。这条钉的是短路顺序:写成
+    /// `dirty.swap(false, ..) && attention_due(..)` 返回值仍然全对,但那次
+    /// flush 的脏标记已经被吃掉了 —— 用户读过的文档要等到他下次再读才会进
+    /// 排序。静默、无症状,只有这条断言看得见。
+    #[test]
+    fn a_closed_window_does_not_consume_the_dirty_flag() {
+        let f = dirty(true);
+        assert!(!take_attention_turn(&f, Duration::from_secs(59)));
+        assert!(f.load(Ordering::SeqCst), "窗口没开就把标志吃了,这次 flush 丢了");
+        // 窗口一开,刚才那次 flush 必须还在,照常触发摄取。
+        assert!(take_attention_turn(&f, Duration::from_secs(60)));
+    }
+
+    /// 既没到点也没有新事件:两个条件都不满足,更不能干活。
+    #[test]
+    fn a_closed_window_with_a_clean_flag_does_nothing() {
+        assert!(!take_attention_turn(&dirty(false), Duration::from_secs(1)));
+    }
+
+    /// 一个只在测试里用的索引:db 落在 `tempdir` 里(`open_at`,不是 `open`
+    /// —— 后者会写进真实的 app-data 目录)。与 `search::mod` 的同名测试
+    /// 辅助函数同形。
+    fn scratch_handle(dir: &Path) -> crate::search::IndexHandle {
+        let idx = searchidx::SearchIndex::open_at(dir, &dir.join("index.db"), "")
+            .expect("open scratch index");
+        std::sync::Arc::new(std::sync::Mutex::new(Some(idx)))
+    }
+
+    /// 上一轮摄取有没有真的落到这个索引上。`refresh_attention` 每次都会盖
+    /// `meta.attention_as_of`,所以它比行数可靠:零结果的摄取也留痕。
+    fn ingested(handle: &crate::search::IndexHandle) -> bool {
+        crate::search::lock(handle)
+            .as_ref()
+            .expect("scratch 索引不该是空的")
+            .stats()
+            .expect("stats")
+            .attention_as_of
+            .is_some()
+    }
+
+    /// **本环最要紧的一条。** 摄取期间用户切走了 vault —— 闸门必须拦下,而
+    /// 且不是「返回值好看」那种拦下:`refresh_attention` 一次都不能被调用,
+    /// 索引里不许留下任何摄取痕迹。否则就是旧 vault 的注意力写进了新 vault
+    /// 的索引 —— T9 在 `open_vault` 里犯过同形状的错(见 `install_if_current`)。
+    #[test]
+    fn attention_from_a_vault_the_user_left_is_never_written() {
+        let d = tempfile::tempdir().unwrap();
+        let handle = scratch_handle(d.path());
+        // `false` = 读 analytics 的这段时间里,更新一代 open 已经预定了代际。
+        assert_eq!(refresh_attention_if_current(&handle, &[], || false), Ingest::Superseded);
+        assert!(!ingested(&handle), "被取代的线程把注意力写进了索引");
+    }
+
+    /// 同一道门的另一半:代际仍然成立时必须**真的**摄取。否则「谁也写不
+    /// 进去」会是一个绿着的测试套件配上一个永远没有注意力加成的排序。
+    #[test]
+    fn a_still_current_generation_ingests() {
+        let d = tempfile::tempdir().unwrap();
+        let handle = scratch_handle(d.path());
+        assert_eq!(refresh_attention_if_current(&handle, &[], || true), Ingest::Done(Ok(0)));
+        assert!(ingested(&handle), "代际成立却没摄取");
+    }
+
+    /// 陈旧的**快照**没法伪装成新鲜的检查:闸门收的是闭包,求值时刻由它自己
+    /// 决定,而且必须发生在拿到锁**之后** —— 窗口收到锁的粒度以内。一旦有人
+    /// 把签名改回 `bool`,调用方就又能把耗时 IO 之前的快照传进来了,那正是
+    /// T9 那个 bug 的形状。与 `search::mod` 里 `install_if_current` 的同名
+    /// 测试同一条纪律。
+    #[test]
+    fn the_generation_is_read_after_the_lock_is_taken_not_before() {
+        let d = tempfile::tempdir().unwrap();
+        let handle = scratch_handle(d.path());
+        let checked = std::sync::Arc::new(AtomicBool::new(false));
+        let seen_locked = std::sync::Arc::new(AtomicBool::new(false));
+        {
+            let checked = checked.clone();
+            let seen_locked = seen_locked.clone();
+            let probe = handle.clone();
+            let out = refresh_attention_if_current(&handle, &[], move || {
+                checked.store(true, Ordering::SeqCst);
+                // 闭包跑的时候锁必须已经在闸门手里。
+                seen_locked.store(probe.try_lock().is_err(), Ordering::SeqCst);
+                true
+            });
+            assert_eq!(out, Ingest::Done(Ok(0)));
+        }
+        assert!(checked.load(Ordering::SeqCst), "代际检查压根没跑");
+        assert!(seen_locked.load(Ordering::SeqCst), "检查发生在取锁之前,窗口没收窄");
+    }
+
+    /// 索引还没装进 `IndexHandle`(`open_vault` 清空之后、装回之前的那个
+    /// 窗口)时,摄取安静地跳过 —— 不 panic、不 emit。
+    #[test]
+    fn an_absent_index_is_skipped_not_panicked_on() {
+        let handle: crate::search::IndexHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
+        assert_eq!(refresh_attention_if_current(&handle, &[], || true), Ingest::NotReady);
     }
 
     #[test]
