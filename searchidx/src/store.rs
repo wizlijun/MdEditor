@@ -661,6 +661,18 @@ pub fn remove_file(tx: &Transaction, rel: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// One row by path, for callers that know exactly which files they care
+/// about — the watcher's batch, which is a handful of paths and must not pay
+/// for `all_file_rows`'s full-table load to learn about them.
+pub fn file_row(conn: &Connection, path: &str) -> rusqlite::Result<Option<FileRow>> {
+    conn.query_row(
+        "SELECT path,mtime,size,content_hash FROM files WHERE path=?1",
+        params![path],
+        |r| Ok(FileRow { path: r.get(0)?, mtime: r.get(1)?, size: r.get(2)?, content_hash: r.get(3)? }),
+    )
+    .optional()
+}
+
 pub fn all_file_rows(conn: &Connection) -> rusqlite::Result<HashMap<String, FileRow>> {
     let mut stmt = conn.prepare("SELECT path,mtime,size,content_hash FROM files")?;
     let rows = stmt.query_map([], |r| {

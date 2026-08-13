@@ -665,6 +665,112 @@ fn sweep_with_budget(
     Ok(stats)
 }
 
+/// What [`apply_batch`] did with one debounce window's worth of paths.
+/// Three counts rather than one, for the same reason [`IndexOutcome`] is not
+/// a bool: a batch that renamed 500 files and a batch that rebuilt 500 files
+/// cost wildly different amounts and must not read the same in the log.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BatchOutcome {
+    pub renamed: usize,
+    pub reindexed: usize,
+    pub removed: usize,
+    /// Why each removed path left, in batch order. `removed` is this
+    /// vector's length; both are kept because the counts are the log's
+    /// headline and this is its detail. Carried out of the batch rather than
+    /// logged inside it because `searchidx` has no logger — and dropping it
+    /// would retire the distinction [`IndexOutcome`] exists to make (gone
+    /// vs. oversized vs. excluded), which is the only explanation a user
+    /// gets for a file disappearing from search.
+    pub removals: Vec<(String, IndexOutcome)>,
+}
+
+/// Apply one watcher batch, recognising renames *within* it.
+///
+/// A rename reaches the watcher as two events — a removal and a creation —
+/// and if they land in the same debounce window this can pair them and take
+/// the fast path. If they land in different windows the batch only holds one
+/// end, nothing pairs, and every path falls through to [`index_one`]'s
+/// behaviour: a rebuild plus a removal. That is a degradation, not a bug, and
+/// deliberately has no cross-window state to make it rarer (spec §6).
+///
+/// The pairing and confirmation are [`confirm_and_apply`] — the same code the
+/// sweep runs. Only the way the two input sets are collected differs: the
+/// sweep subtracts a full walk from a full table load, this one asks about
+/// the handful of paths in the batch.
+pub fn apply_batch(
+    conn: &mut Connection,
+    vault_root: &Path,
+    rels: &[String],
+    opts: &ScanOptions,
+) -> rusqlite::Result<BatchOutcome> {
+    // The same path can appear twice in one window (write, then rename);
+    // deduplicated up front so it is not classified — or re-indexed — twice.
+    let mut seen: HashSet<&str> = HashSet::new();
+    let unique: Vec<&str> = rels.iter().map(|s| s.as_str()).filter(|r| seen.insert(r)).collect();
+
+    let limit = opts.large_file_threshold_mb as u64 * 1024 * 1024;
+    let mut news: Vec<NewPath> = Vec::new();
+    let mut orphans: Vec<Orphan> = Vec::new();
+    for rel in &unique {
+        // "Present" means present *as something this index would keep*: a
+        // path that is on disk but excluded or oversized is as good as gone,
+        // and its row is about to be removed, so it can orphan just like a
+        // deleted file can.
+        let present = std::fs::metadata(vault_root.join(rel))
+            .ok()
+            .filter(|m| m.is_file() && m.len() <= limit && is_indexable(rel, opts))
+            .map(|m| {
+                let mtime = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                (mtime, m.len() as i64)
+            });
+        match (present, store::file_row(conn, rel)?) {
+            (Some((mtime, size)), None) => news.push(NewPath { rel: rel.to_string(), mtime, size }),
+            (None, Some(row)) => orphans.push(Orphan {
+                path: row.path,
+                size: row.size,
+                mtime: row.mtime,
+                content_hash: row.content_hash,
+            }),
+            _ => {}
+        }
+    }
+    // Same reason as the sweep's sort: when several orphans share a
+    // `(size, mtime)`, which one a new path claims must not depend on the
+    // order the OS happened to deliver the events in.
+    orphans.sort_by(|a, b| a.path.cmp(&b.path));
+    let pairs = rename::pair_candidates(&news, &orphans);
+
+    let tx = conn.transaction()?;
+    let renamed = confirm_and_apply(&tx, vault_root, &news, &orphans, &pairs, opts)?;
+    tx.commit()?;
+
+    let mut out = BatchOutcome { renamed: renamed.to.len(), ..Default::default() };
+    for rel in unique {
+        // Both ends of a settled rename are done. The destination would
+        // otherwise be rebuilt from scratch; the source would otherwise be
+        // handed to `index_one`, whose `remove_file` would match nothing
+        // (the row carries the new path now) while still reporting a
+        // removal — the same lying counter the sweep's deletion pass has to
+        // avoid (spec §5).
+        if renamed.to.contains(rel) || renamed.from.contains(rel) {
+            continue;
+        }
+        match index_one(conn, vault_root, rel, opts)? {
+            IndexOutcome::Indexed => out.reindexed += 1,
+            gone => {
+                out.removed += 1;
+                out.removals.push((rel.to_string(), gone));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Re-index a single file (watcher path). Whenever the file cannot be
 /// indexed — gone, no longer indexable, or over the size guardrail — its
 /// rows are removed and the specific reason is reported via
