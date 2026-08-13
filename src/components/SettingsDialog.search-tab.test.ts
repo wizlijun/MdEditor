@@ -105,6 +105,8 @@ beforeEach(() => {
     tokenizerId: 'jieba-v1', skippedLarge: [{ path: 'big.md', sizeBytes: 9_000_000 }],
     originCounts: { human: 40, derived: 70, source: 18, unlabeled: 9 },
     typeCounts: { 'Book Summary': 25, Answer: 12 },
+    attentionFiles: 0,
+    attentionAsOf: null,
   }))
   progress = vi.fn(async () => null)
   _setIndexApi({ stats, progress, rebuild: vi.fn(async () => {}) })
@@ -257,6 +259,8 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
       skippedLarge: [],
       originCounts: { human: 7, derived: 9, source: 3, unlabeled: 11 },
       typeCounts: { Idea: 4 },
+      attentionFiles: 0,
+      attentionAsOf: null,
     })
     await mountDialog()
     await settle()
@@ -274,6 +278,80 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
     expect(rowValue(section, 'Unlabeled')).toBe('11')
   })
 })
+
+// Task 12 (attention-weighted retrieval spec): ingestion "just not having
+// run" produces no visible symptom anywhere else — search silently degrades
+// to unweighted results. This row is the only place that fact surfaces, so
+// its three states (never run / ran with zero rows / ran with data) must be
+// told apart rather than collapsed into "has a number or doesn't".
+describe('SettingsDialog — Search & Index tab, attention coverage row (task 12)', () => {
+  it('shows N / M once ingestion has run and produced rows', async () => {
+    stats.mockResolvedValue({
+      files: 100, blocks: 900, dbBytes: 4096, builtAt: '2026-08-11T00:00:00Z',
+      tokenizerId: 'jieba-v1', skippedLarge: [],
+      originCounts: { human: 40, derived: 70, source: 18, unlabeled: 9 },
+      typeCounts: {},
+      attentionFiles: 37,
+      attentionAsOf: '2026-08-13',
+    })
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    expect(screen_getByText('37 / 100')).toBeTruthy()
+  })
+
+  it('hides the row entirely when ingestion has never run on this index (attentionAsOf === null)', async () => {
+    stats.mockResolvedValue({
+      files: 100, blocks: 900, dbBytes: 4096, builtAt: '2026-08-11T00:00:00Z',
+      tokenizerId: 'jieba-v1', skippedLarge: [],
+      originCounts: { human: 40, derived: 70, source: 18, unlabeled: 9 },
+      typeCounts: {},
+      attentionFiles: 0,
+      attentionAsOf: null,
+    })
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    expect(queryByAttentionText()).toBeNull()
+  })
+
+  it('shows 0 / M when ingestion ran but produced zero rows — the most important diagnostic case, distinct from never-run', async () => {
+    stats.mockResolvedValue({
+      files: 100, blocks: 900, dbBytes: 4096, builtAt: '2026-08-11T00:00:00Z',
+      tokenizerId: 'jieba-v1', skippedLarge: [],
+      originCounts: { human: 40, derived: 70, source: 18, unlabeled: 9 },
+      typeCounts: {},
+      attentionFiles: 0,
+      attentionAsOf: '2026-08-13',
+    })
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    expect(screen_getByText('0 / 100')).toBeTruthy()
+  })
+})
+
+// Small local helpers mirroring @testing-library/dom's semantics without
+// pulling in the dependency: the rest of this file already reads the DOM
+// directly (see `rowValue`/`tierSection` above), so these two match that
+// convention instead of introducing a new import surface.
+function screen_getByText(text: string): Element {
+  const el = Array.from(document.body.querySelectorAll('span')).find((s) => s.textContent?.trim() === text)
+  if (!el) throw new Error(`no element with text "${text}"`)
+  return el
+}
+
+function queryByAttentionText(): Element | null {
+  return Array.from(document.body.querySelectorAll('span.lbl')).find((s) =>
+    /注意力|Attention/i.test(s.textContent ?? ''),
+  ) ?? null
+}
 
 function namedSection(heading: string): Element {
   const section = Array.from(document.body.querySelectorAll('section.block')).find(

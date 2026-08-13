@@ -1455,6 +1455,20 @@
               </div>
               <p class="desc" style="margin-top: 8px;">{t('search.index.tiersHint')}</p>
               <p class="desc">{t('search.index.tiersUnlabeledHint', { label: t('search.group.unlabeled') })}</p>
+              <!-- Coverage row: ingestion "just not having run" has no visible
+                   symptom anywhere else — search silently degrades to
+                   unweighted results. This is the only discovery path, so it
+                   must stay even though it's plain. `attentionAsOf === null`
+                   means ingestion never ran on this index (row hidden,
+                   nothing to report yet); once it has a value, the row shows
+                   even when `attentionFiles` is 0 — that combination is the
+                   most important diagnostic signal, not a case to hide. -->
+              {#if indexStatus.stats.attentionAsOf}
+                <div class="row">
+                  <span class="lbl">{t('search.index.attentionLabel')}</span>
+                  <span>{indexStatus.stats.attentionFiles} / {indexStatus.stats.files}</span>
+                </div>
+              {/if}
             {:else}
               <p class="desc">{indexStatus.loading ? '…' : '—'}</p>
             {/if}

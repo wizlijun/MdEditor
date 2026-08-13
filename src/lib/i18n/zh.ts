@@ -546,6 +546,7 @@ export const zh: Record<keyof Messages, string> = {
   // tiersDerivedLabel 是 origin='derived' 总数的分组标题;其下具名类型直接用
   // 原始 concept_type 字符串,不翻译(与上面 search.group.* 的约定一致)。
   'search.index.tiersHeading': '来源分层统计',
+  'search.index.attentionLabel': '有注意力数据的文件',
   'search.index.tiersDerivedLabel': 'AI 生成',
   'search.index.tiersHint': '分层是索引每个文件时,由它的 frontmatter 和上面那组原始资料模式一起推导出来的,不会写回文件本身。命中模式的文件算「原始资料」,frontmatter 里自己声明了原始类型(比如 `Book`)的也算,所以这个数字如果异常偏高,先看模式是不是写得比你本意更宽。既没有 frontmatter、也没命中模式的文件归入「未标注」——只是还没人声明过它是谁写的。改过的文件会自己重新分层,不必整库重新索引。',
   'search.index.tiersUnlabeledHint': '点击上面的「{label}」,列出这一档权重正在压低的全部文件。补上任意 frontmatter 就能让文件离开这一档——一个 `type:` 字段就够;如果它确实是原始资料,那就把它加进上面的模式。',
