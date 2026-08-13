@@ -99,7 +99,13 @@ fn base64_encode(input: &[u8]) -> String {
 
 /// Effective outline dir names when the vault-level settings leave them unset —
 /// mirrors `DEFAULT_DIRS` in `src/lib/outline/dirs.svelte.ts`.
-const DEFAULT_WIKI_DIR: &str = "wikipage";
+///
+/// The wikipage default is re-exported from `vault_settings` rather than
+/// spelled again here: search's pinning (`search::options::
+/// conventions_for_vault`) needs the same answer, and two literals would let
+/// the search panel and this RPC disagree about which directory is the wiki
+/// directory.
+use crate::sotvault::vault_settings::DEFAULT_WIKIPAGE_DIR as DEFAULT_WIKI_DIR;
 const DEFAULT_DAILY_DIR: &str = "dailynote";
 
 // ── fs.read:dialog granted-paths registry ───────────────────────────────

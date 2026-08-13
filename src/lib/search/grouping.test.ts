@@ -21,6 +21,7 @@ function hit(overrides: Partial<SearchHit>): SearchHit {
     humanVerified: false,
     origin: 'derived',
     conceptType: null,
+    pinned: false,
     ...overrides,
   }
 }
@@ -43,6 +44,30 @@ describe('groupHits', () => {
     expect(groups[groups.length - 1].kind).toBe('source')
     // The derived type group must sit strictly between the two poles.
     expect(groups.slice(1, -1).every((g) => g.kind === 'derivedType' || g.kind === 'derivedOther')).toBe(true)
+  })
+
+  // --- 置顶组(wikipage 检索优先级 spec §4)---------------------------------
+
+  it('置顶命中单独成组、排在最前', () => {
+    const groups = groupHits([
+      hit({ path: 'wikipage/张三.md', origin: 'derived', pinned: true }),
+      hit({ path: 'human.md', origin: 'human' }),
+    ])
+    expect(groups[0].kind).toBe('pinned')
+    expect(allHits(groups[0]).map((h) => h.path)).toEqual(['wikipage/张三.md'])
+  })
+
+  it('置顶命中不再出现在它本来的 origin 组里', () => {
+    // 后端已经把它排到了第一位;若这里还按 origin 分一次组,它就会沉到
+    // 中间某个组里去,「第一条」在视觉上直接失效 —— 这正是要分出置顶组的
+    // 理由,所以必须断言它没有被重复渲染。
+    const groups = groupHits([hit({ path: 'p.md', origin: 'human', pinned: true })])
+    expect(groups.map((g) => g.kind)).toEqual(['pinned'])
+  })
+
+  it('没有置顶命中时不渲染空的置顶组', () => {
+    const groups = groupHits([hit({ path: 'a.md', origin: 'human' })])
+    expect(groups.some((g) => g.kind === 'pinned')).toBe(false)
   })
 
   it('空组不显示', () => {

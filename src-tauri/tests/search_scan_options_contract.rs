@@ -81,3 +81,40 @@ fn the_cli_and_the_gui_resolve_the_same_weights() {
 // `ScanOptions`-shaped test for the glob stamp here: asserting
 // `gui.source_globs == cli.source_globs` above is sufficient, since both
 // callers' stamps are a pure function of that already-equal field.
+
+// --- wikipage 检索优先级:第三个「唯一构造点」 ---------------------------
+// spec `docs/superpowers/specs/2026-08-12-wikipage-search-priority-design.md`
+
+/// `wikipageDir` 决定哪篇笔记会被硬置顶成第一条。GUI 和 CLI 若各读各的,
+/// 同一个查询在两个入口会给出不同的第一条 —— 与 ScanOptions / Weights
+/// 完全同类的问题,所以同样只能有一份实现。
+#[test]
+fn the_cli_and_the_gui_resolve_the_same_wikipage_conventions() {
+    let d = tempfile::tempdir().unwrap();
+    write_settings(d.path(), r#"{"wikipageDir": "概念"}"#);
+    let gui = mdeditor_lib::search::options::conventions_for_vault(d.path());
+    let cli = mdeditor_lib::cli::search::conventions_for(d.path());
+    assert_eq!(gui, cli);
+    // 不是「两个默认值恰好相等」的空断言:钉住配置值真的被读到了。
+    assert_eq!(gui.wikipage_dir.as_deref(), Some("概念"));
+}
+
+/// 没配过 = 用出厂目录名,而不是「不置顶」。绝大多数 vault 从没动过这个设置,
+/// 对它们而言置顶必须开箱即用。
+#[test]
+fn an_unset_wikipage_dir_falls_back_to_the_shipped_default() {
+    let d = tempfile::tempdir().unwrap();
+    write_settings(d.path(), r#"{}"#);
+    let c = mdeditor_lib::search::options::conventions_for_vault(d.path());
+    assert_eq!(c.wikipage_dir.as_deref(), Some("wikipage"));
+}
+
+/// 非法目录名(路径穿越)必须回落到默认,而不是原样交给排序去比对 ——
+/// 与 `ui_rpc` 对同一个字段的处理保持一致(它也是 validate 失败即回落)。
+#[test]
+fn an_invalid_wikipage_dir_falls_back_instead_of_being_used_verbatim() {
+    let d = tempfile::tempdir().unwrap();
+    write_settings(d.path(), r#"{"wikipageDir": "../escape"}"#);
+    let c = mdeditor_lib::search::options::conventions_for_vault(d.path());
+    assert_eq!(c.wikipage_dir.as_deref(), Some("wikipage"));
+}

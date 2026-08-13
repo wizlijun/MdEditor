@@ -161,7 +161,10 @@ fn first_h1(body: &str) -> Option<String> {
         .filter(|t| !t.is_empty())
 }
 
-fn stem(rel_path: &str) -> Option<String> {
+/// The filename without its `.md` / `.note.md` suffix. `pub(crate)` because
+/// `store::title_tokens` needs the same answer this module's `title` fallback
+/// chain uses — two spellings of "what is this file called" would drift.
+pub(crate) fn stem(rel_path: &str) -> Option<String> {
     let name = rel_path.rsplit('/').next()?;
     let stem = name.strip_suffix(".note.md").or_else(|| name.strip_suffix(".md")).unwrap_or(name);
     (!stem.is_empty()).then(|| stem.to_string())

@@ -12,7 +12,7 @@
 // caller on that path.
 import type { SearchHit } from './api'
 
-export type HitGroupKind = 'human' | 'derivedType' | 'derivedOther' | 'source' | 'unlabeled'
+export type HitGroupKind = 'pinned' | 'human' | 'derivedType' | 'derivedOther' | 'source' | 'unlabeled'
 
 /** One file's hits inside a group. The panel renders this collapsed by
  *  default — a query that matches a long note twenty times used to spend
@@ -44,6 +44,8 @@ export interface HitGroup {
 /**
  * Groups already-ranked hits for display. Order is fixed:
  *
+ *   pinned           (the wikilink page the query names exactly — pulled out
+ *                      of the origin bucketing entirely, see `groupHits`)
  *   human            (origin = 'human', the pole for "what you wrote")
  *     <type A>        (origin = 'derived', subdivided by conceptType,
  *     <type B>         ordered by each type's first appearance in `hits` —
@@ -89,6 +91,13 @@ export interface HitGroup {
  * distinction the grouping exists to show.
  */
 export function groupHits(hits: SearchHit[]): HitGroup[] {
+  // Taken out of the origin bucketing entirely, not merely sorted first: the
+  // backend has already ranked a pinned hit above everything else, and
+  // bucketing it by `origin` like any other hit would drop it back into
+  // whichever group its file belongs to — visually burying the one result the
+  // pin exists to surface. See `grouping.test.ts`'s 「不再出现在它本来的
+  // origin 组里」.
+  const pinned: SearchHit[] = []
   const human: SearchHit[] = []
   const source: SearchHit[] = []
   const unlabeled: SearchHit[] = []
@@ -97,7 +106,9 @@ export function groupHits(hits: SearchHit[]): HitGroup[] {
   const derivedByType = new Map<string, SearchHit[]>()
 
   for (const hit of hits) {
-    if (hit.origin === 'human') {
+    if (hit.pinned) {
+      pinned.push(hit)
+    } else if (hit.origin === 'human') {
       human.push(hit)
     } else if (hit.origin === 'source') {
       source.push(hit)
@@ -117,6 +128,7 @@ export function groupHits(hits: SearchHit[]): HitGroup[] {
   }
 
   const groups: HitGroup[] = []
+  if (pinned.length > 0) groups.push(makeGroup('pinned', pinned))
   if (human.length > 0) groups.push(makeGroup('human', human))
   for (const conceptType of derivedTypeOrder) {
     groups.push(makeGroup('derivedType', derivedByType.get(conceptType)!, conceptType))

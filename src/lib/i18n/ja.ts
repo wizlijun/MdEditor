@@ -495,6 +495,7 @@ export const ja: Record<keyof Messages, string> = {
   // 検索パネル — 結果のグルーピング(B-T7;unlabeled グループは C-T10 で追加)。
   // 両極のラベル以外、具体的な型のグループ見出しは生の concept_type 文字列を
   // そのまま使い、翻訳しない(src/lib/search/grouping.ts 参照)。
+  'search.group.pinned': 'Wiki ページ',
   'search.group.human': 'あなたが書いた',
   'search.group.source': '元資料',
   'search.group.unlabeled': '未分類',

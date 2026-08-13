@@ -67,7 +67,7 @@ function hit(overrides: Partial<SearchHit>): SearchHit {
   return {
     path: 'a.md', absPath: '/v/a.md', line: 1, lineEnd: 1, text: 'hit text', breadcrumb: 'a.md',
     level: 'line', score: 0.5, docDate: null, sourceRef: 'a.md#L1', agentBy: null,
-    humanVerified: false, origin: 'derived', conceptType: null,
+    humanVerified: false, origin: 'derived', conceptType: null, pinned: false,
     ...overrides,
   }
 }
@@ -87,6 +87,35 @@ async function mountPanel() {
 }
 
 describe('SearchPanel grouping', () => {
+  // wikipage 置顶 spec §4:后端已经把这条排到第一位,但面板是按 origin 分组
+  // 渲染的 —— 少了置顶组,它会被塞进中间某个组里,「第一条」在视觉上直接
+  // 失效。`grouping.test.ts` 证明分组函数把它单拎了出来;这条证明面板真的
+  // 把那个组渲染成了第一个,而且标题走了 i18n 而不是硬编码。
+  it('renders the pinned wiki page as the first group, labelled from i18n', async () => {
+    const hits: SearchHit[] = [
+      hit({ path: 'wikipage/zhang.md', text: 'page text', origin: 'derived', pinned: true }),
+      hit({ path: 'human.md', text: 'human text', origin: 'human' }),
+    ]
+    const response: SearchResponse = {
+      route: 't1-fts', tookMs: 1, total: hits.length, hits, truncated: false, deepAvailable: false,
+    }
+    _setSearchImpl(async () => response)
+
+    const app = await mountPanel()
+    await searchStore.run('x')
+    await new Promise((r) => setTimeout(r, 0))
+
+    const headers = Array.from(document.body.querySelectorAll('.group-label')).map((el) => el.textContent)
+    expect(headers).toEqual(['Wiki page', 'Written by you'])
+
+    const rowsPerGroup = Array.from(document.body.querySelectorAll('.group')).map((g) =>
+      Array.from(g.querySelectorAll('.file .file-name')).map((el) => el.textContent),
+    )
+    expect(rowsPerGroup).toEqual([['zhang.md'], ['human.md']])
+
+    unmount(app)
+  })
+
   it('renders the two poles at the ends and a named-type group between them, each with a count', async () => {
     const hits: SearchHit[] = [
       hit({ path: 'src.md', text: 'source text', origin: 'source' }),

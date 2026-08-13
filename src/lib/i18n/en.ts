@@ -500,6 +500,9 @@ export const en = {
   // Search panel — result grouping (task B-T7; `unlabeled` added C-T10).
   // The two poles; named-type group headers use the raw `concept_type`
   // string itself and are not translated (see `src/lib/search/grouping.ts`).
+  // wikipage 置顶(spec §4):与 `outline.wikipageDir` 的措辞保持一致,
+  // 用户在设置里看到的就是这个词。
+  'search.group.pinned': 'Wiki page',
   'search.group.human': 'Written by you',
   'search.group.source': 'Raw source material',
   'search.group.unlabeled': 'Unlabeled',

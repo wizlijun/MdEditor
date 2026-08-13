@@ -36,7 +36,23 @@ use crate::tokenize::{tokenize, TOKENIZER_ID};
 // `source_globs` (see `open`'s doc comment) — bumping the schema version
 // means every pre-existing database gets wiped on this transition anyway, so
 // there is no in-place rename to worry about.
-pub const SCHEMA_VERSION: i64 = 3;
+//
+// v3 -> v4: `blocks_fts` gained a third column, `tok_title`, carrying each
+// file's title and filename stem on its File-level block (spec
+// `docs/superpowers/specs/2026-08-12-wikipage-search-priority-design.md` §3).
+// This one is a genuine *column shape* change — an FTS5 table's column count
+// is fixed at creation and `bm25()`'s weight list must match it — so an old
+// database cannot answer this build's queries at all. Same no-migration rule:
+// bump and let `open` wipe it.
+//
+// v4 -> v5: `blocks_fts` became CONTENTLESS (`content=''`,
+// `contentless_delete=1`). A standard FTS5 table keeps its own copy of every
+// indexed column in a `%_content` shadow table; measured on a real
+// 8,977-file vault that copy was 632 MB of a 1.6 GB index — 39% — and
+// nothing ever read it (queries JOIN back to `blocks` for the real text; no
+// `snippet()`/`highlight()` anywhere; `bm25()` works contentless). Column
+// shape again, so again: bump and let `open` wipe it.
+pub const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE files(
@@ -51,7 +67,8 @@ CREATE TABLE blocks(
   breadcrumb TEXT, text TEXT, level TEXT,
   is_annotation INTEGER DEFAULT 0, agent_by TEXT);
 CREATE INDEX blocks_file ON blocks(file_id);
-CREATE VIRTUAL TABLE blocks_fts USING fts5(tok_text, tok_breadcrumb);
+CREATE VIRTUAL TABLE blocks_fts USING fts5(tok_text, tok_breadcrumb, tok_title,
+  content='', contentless_delete=1);
 CREATE TABLE links(file_id INTEGER, kind TEXT, target TEXT, line INTEGER);
 CREATE INDEX links_file ON links(file_id);
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -338,6 +355,31 @@ fn set_pragmas(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Hand the write-ahead log's disk space back after a large write.
+///
+/// A WAL grows to the high-water mark of the largest transaction that ever
+/// ran and is then *reused*, never shrunk. One full rebuild therefore leaves
+/// a WAL about as large as the database it just built — measured on a real
+/// 8,977-file vault: a 1.7 GB `index.db-wal` beside a 1.6 GB `index.db`, i.e.
+/// half of this feature's entire disk footprint sitting there permanently
+/// doing nothing. `TRUNCATE` is the only checkpoint mode that returns the
+/// space to the filesystem; `PASSIVE` (what `wal_autocheckpoint` runs) only
+/// makes the WAL reusable.
+///
+/// **Best-effort, and that is not a shortcut.** `TRUNCATE` needs every other
+/// connection out of the way, and two uncoordinated writer processes (the GUI
+/// and `notemd search`) is this crate's stated design, not an edge case. A
+/// `SQLITE_BUSY` here means "someone else is mid-query" — it says nothing
+/// about the scan that just succeeded, so it must not turn that scan into an
+/// error. The next rebuild truncates instead.
+pub fn checkpoint_truncate(conn: &Connection) {
+    // `PRAGMA wal_checkpoint` yields a row (busy, log-pages, checkpointed-pages),
+    // so it cannot go through `pragma_update`, which errors on result-producing
+    // statements — the same reason `set_pragmas` reads `journal_mode` back with
+    // `query_row`.
+    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+}
+
 /// How long a statement waits for another process's write transaction before
 /// giving up. Two writers (the GUI and `notemd search`) with no IPC between
 /// them is the design, so contention is ordinary, not exceptional.
@@ -401,6 +443,34 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<(
     Ok(())
 }
 
+/// The text stored in `blocks_fts.tok_title`: the file's title AND its
+/// filename stem, tokenized.
+///
+/// Both, because in the case this column exists for they are two different
+/// strings: a wikipage created by clicking a `[[…]]` keeps the display name
+/// in frontmatter `title` and a slugged version in the filename (see
+/// `src/lib/outline/create.ts`), while wikilinks in this product resolve BY
+/// FILENAME. Indexing only one of the two leaves the page unfindable by the
+/// other name — and which one the user types is not something the index gets
+/// to decide.
+///
+/// Deduplicated because `chunk::parse_file`'s title chain already falls back
+/// to the stem, so for the majority of files (no frontmatter title, no H1)
+/// the two are equal; storing the term twice would inflate its bm25 term
+/// frequency for those files only, quietly ranking untitled files above
+/// titled ones on a name match.
+fn title_tokens(rel: &str, title: Option<&str>) -> String {
+    let stem = crate::chunk::stem(rel);
+    let mut sources: Vec<&str> = Vec::new();
+    for s in [title, stem.as_deref()].into_iter().flatten() {
+        let s = s.trim();
+        if !s.is_empty() && !sources.contains(&s) {
+            sources.push(s);
+        }
+    }
+    tokenize(&sources.join(" "))
+}
+
 /// Delete every row belonging to `rel` and insert the freshly parsed ones.
 /// This is the whole coordination protocol between the two writer
 /// processes: neither reads the other's prior state, both compute the same
@@ -436,15 +506,29 @@ pub fn replace_file(
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         )?;
         let mut ins_fts = tx.prepare_cached(
-            "INSERT INTO blocks_fts(rowid,tok_text,tok_breadcrumb) VALUES(?1,?2,?3)",
+            "INSERT INTO blocks_fts(rowid,tok_text,tok_breadcrumb,tok_title) VALUES(?1,?2,?3,?4)",
         )?;
+        let title_tokens = title_tokens(rel, parsed.meta.title.as_deref());
         for b in &parsed.blocks {
             ins_block.execute(params![
                 file_id, b.line_start, b.line_end, b.breadcrumb, b.text,
                 b.level.as_str(), b.is_annotation as i64, b.agent_by
             ])?;
             let block_id = tx.last_insert_rowid();
-            ins_fts.execute(params![block_id, tokenize(&b.text), tokenize(&b.breadcrumb)])?;
+            // The title rides along on the File-level block ONLY. Written on
+            // every block instead, a query for a file's name would match
+            // every paragraph in it — the same evidence repeated once per
+            // block, which is exactly the noise `drop_redundant_rollups`
+            // exists to remove. One block per file is also the right
+            // granularity for the question a title answers: "what is this
+            // document?", not "where in it".
+            let tok_title = if b.level == BlockLevel::File { title_tokens.as_str() } else { "" };
+            ins_fts.execute(params![
+                block_id,
+                tokenize(&b.text),
+                tokenize(&b.breadcrumb),
+                tok_title
+            ])?;
         }
     }
 

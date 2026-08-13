@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use searchidx::globs::SourceGlobs;
-use searchidx::query::Weights;
+use searchidx::query::{Conventions, Weights};
 use searchidx::ScanOptions;
 
 use crate::sotvault::vault_settings::{self, VaultSettings};
@@ -122,6 +122,34 @@ pub(crate) fn weights_from(vs: &VaultSettings) -> Weights {
         unlabeled: sw.unlabeled.unwrap_or(default.unlabeled),
     }
     .sanitized()
+}
+
+/// The single construction point for [`Conventions`] — the third one in this
+/// module, and it exists for the same reason as the other two: `wikipageDir`
+/// decides which note gets pinned to the top of a result list, so a GUI and a
+/// CLI that resolved it separately would answer the same query with different
+/// first results. `tests/search_scan_options_contract.rs` pins that both go
+/// through here.
+///
+/// An unset (or invalid) value falls back to the shipped default rather than
+/// to "no pinning": almost no vault has ever touched this setting, and those
+/// vaults are exactly the ones the feature has to work for out of the box.
+/// Validation is `validate_rel_dir`, the same gate `plugin_runtime::ui_rpc`
+/// applies to this same field — a configured `../escape` must not become a
+/// path prefix that ranking then compares against.
+pub fn conventions_for_vault(vault_root: &Path) -> Conventions {
+    conventions_from(&vault_settings::read(vault_root))
+}
+
+/// The `&VaultSettings`-in-hand variant of [`conventions_for_vault`], same
+/// idiom (and same "one read" discipline) as [`weights_from`].
+pub(crate) fn conventions_from(vs: &VaultSettings) -> Conventions {
+    let dir = vs
+        .wikipage_dir
+        .as_deref()
+        .and_then(|s| vault_settings::validate_rel_dir(s).ok())
+        .unwrap_or_else(|| vault_settings::DEFAULT_WIKIPAGE_DIR.to_string());
+    Conventions { wikipage_dir: Some(dir) }
 }
 
 #[cfg(test)]

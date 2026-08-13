@@ -388,6 +388,12 @@ pub fn build_full(
     }
     tx.commit()?;
     store::meta_set(conn, "built_at", &format!("{}", now_secs()))?;
+    // Only here, not in `sweep`: a full rebuild is the one transaction big
+    // enough to leave a WAL the size of the whole index, and it already costs
+    // minutes so one checkpoint is noise. Incremental sweeps stay inside
+    // SQLite's default `wal_autocheckpoint` (1000 pages ≈ 4 MB), where a
+    // TRUNCATE per watcher batch would be pure overhead for no space back.
+    store::checkpoint_truncate(conn);
     stats.took_ms = started.elapsed().as_millis();
     report(Phase::Done, total, total, None);
     Ok(stats)

@@ -16,6 +16,18 @@ pub const DEFAULT_SYNC_DIR: &str = "sync";
 /// Default quick-note inbox sub-directory when unset/invalid.
 pub const DEFAULT_INBOX_DIR: &str = "inbox";
 
+/// Default wikilink page sub-directory when unset/invalid — mirrors
+/// `DEFAULT_DIRS.wikipage` in `src/lib/outline/dirs.svelte.ts`.
+///
+/// Lives here rather than beside either of its two consumers
+/// (`plugin_runtime::ui_rpc`, which reports it to plugins, and
+/// `search::options`, which pins the page named by a query) because a third
+/// spelling of `"wikipage"` is exactly how the two would drift: the day
+/// someone changes the shipped default, a copy left behind means the search
+/// panel pins pages in a directory nothing else considers the wiki
+/// directory.
+pub const DEFAULT_WIKIPAGE_DIR: &str = "wikipage";
+
 /// Raw parsed settings. Every field is optional: absent = "not configured",
 /// so callers apply their own defaults (never persisted implicitly).
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]

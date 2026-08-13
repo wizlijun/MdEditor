@@ -206,9 +206,10 @@ pub fn run(args: SearchArgs) -> ExitCode {
     // reached a `notemd search` query. `weights_for` is the single
     // construction point (task C-T8) both adapters must go through.
     let weights = weights_for(&root);
+    let conventions = conventions_for(&root);
     let (hits, route) = match index
         .as_ref()
-        .map(|i| i.search_with_weights(&query, args.limit, &Limits::full(), &weights))
+        .map(|i| i.search_ranked(&query, args.limit, &Limits::full(), &weights, &conventions))
     {
         Some(Ok(a)) => (a.hits, a.route),
         Some(Err(e)) => {
@@ -251,6 +252,14 @@ pub fn scan_options_for(root: &Path) -> ScanOptions {
 /// `Weights::default()`-only `SearchIndex::search`/`search_with` facades.
 pub fn weights_for(root: &Path) -> searchidx::query::Weights {
     crate::search::options::weights_for_vault(root)
+}
+
+/// The third single construction point, same rationale again: `wikipageDir`
+/// decides which note (if any) `run` above pins to the top, and the CLI must
+/// resolve it through the GUI's function rather than reading the setting
+/// itself. `tests/search_scan_options_contract.rs` asserts the two agree.
+pub fn conventions_for(root: &Path) -> searchidx::query::Conventions {
+    crate::search::options::conventions_for_vault(root)
 }
 
 /// Last-ditch retrieval with no index at all: walk the vault and substring-match.
@@ -327,6 +336,13 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
                     human_verified: false,
                     origin,
                     concept_type: fm.concept_type.clone(),
+                    // No index, no pinning: this path exists for the case
+                    // where the index is unavailable, and it has no
+                    // `files.title` to compare a name against. Reporting
+                    // `false` is the honest answer — inventing a pin from
+                    // the path alone would make the no-index fallback rank
+                    // *differently* from the indexed path it stands in for.
+                    pinned: false,
                 });
                 break;
             }
