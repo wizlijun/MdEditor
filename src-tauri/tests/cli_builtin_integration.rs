@@ -123,3 +123,35 @@ fn core_share_alias_routes_not_unknown() {
     let _ = std::fs::remove_dir_all(&home);
     assert_ne!(code, 127);
 }
+
+#[test]
+fn doctor_offline_json_has_envelope() {
+    let home = temp_home();
+    let (code, stdout, _) = run_cli(&["doctor", "--offline", "--json"], &home);
+    let _ = std::fs::remove_dir_all(&home);
+    // 0 或 1 都是合法结果：本机是否装了 git、是否有 CLI 软链会左右 fail 数。
+    // 退出码的精确契约由 doctor.rs 的 exit_code_for 单测钉住，这里只验接线与形状。
+    assert!(code == 0 || code == 1, "code={code} stdout={stdout}");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert!(v["data"]["checks"].is_array(), "{stdout}");
+    assert!(v["data"]["summary"]["failures"].is_number(), "{stdout}");
+}
+
+#[test]
+fn doctor_help_topic_documents_its_own_exit_codes() {
+    let home = temp_home();
+    let (code, stdout, _) = run_cli(&["help", "doctor"], &home);
+    let _ = std::fs::remove_dir_all(&home);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("EXIT CODES:"), "{stdout}");
+    assert!(stdout.contains("--offline"), "{stdout}");
+}
+
+#[test]
+fn help_lists_doctor_as_a_core_command() {
+    let home = temp_home();
+    let (code, stdout, _) = run_cli(&["help"], &home);
+    let _ = std::fs::remove_dir_all(&home);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("doctor"), "{stdout}");
+}
