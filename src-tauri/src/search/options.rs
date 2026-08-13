@@ -120,6 +120,7 @@ pub(crate) fn weights_from(vs: &VaultSettings) -> Weights {
         derived: sw.derived.unwrap_or(default.derived),
         source: sw.source.unwrap_or(default.source),
         unlabeled: sw.unlabeled.unwrap_or(default.unlabeled),
+        attention: sw.attention.unwrap_or(default.attention),
     }
     .sanitized()
 }
@@ -272,5 +273,22 @@ mod tests {
         assert_eq!(w.source, 1.7, "合法显式值生效");
         assert_eq!(w.derived, default.derived);
         assert_eq!(w.unlabeled, default.unlabeled);
+    }
+
+    /// 设置文件里的 attention 一路走到 Weights;0 必须活着到底。
+    #[test]
+    fn attention_weight_round_trips_from_settings() {
+        let d = tempfile::tempdir().unwrap();
+        write_settings(d.path(), r#"{"searchWeights": {"attention": 0}}"#);
+        assert_eq!(weights_for_vault(d.path()).attention, 0.0, "用户关掉它就得关掉");
+
+        write_settings(d.path(), r#"{"searchWeights": {"attention": 0.8}}"#);
+        assert_eq!(weights_for_vault(d.path()).attention, 0.8);
+
+        write_settings(d.path(), r#"{}"#);
+        assert_eq!(
+            weights_for_vault(d.path()).attention,
+            searchidx::query::Weights::default().attention
+        );
     }
 }

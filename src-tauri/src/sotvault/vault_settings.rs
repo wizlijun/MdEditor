@@ -104,6 +104,8 @@ pub struct SearchWeights {
     pub source: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unlabeled: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<f64>,
 }
 
 fn settings_path(vault_root: &Path) -> PathBuf {

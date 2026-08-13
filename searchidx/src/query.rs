@@ -220,6 +220,10 @@ pub struct Weights {
     pub derived: f64,
     pub source: f64,
     pub unlabeled: f64,
+    /// 注意力加成的上限增量(规格里的 `k`)。**语义与上面四个不同**:
+    /// 那四个是乘数,这个是「最多再乘 (1+k)」里的 k,所以 0 是合法的
+    /// 「关掉」而不是坏值 —— 见 `sanitized`。
+    pub attention: f64,
 }
 
 /// The shipped constants — same four numbers `score_of` hardcoded before this
@@ -230,7 +234,7 @@ pub struct Weights {
 /// already-shipped behavior, not silently reset every tier to a no-op.
 impl Default for Weights {
     fn default() -> Self {
-        Weights { human: 1.25, derived: 1.0, source: 0.9, unlabeled: 0.3 }
+        Weights { human: 1.25, derived: 1.0, source: 0.9, unlabeled: 0.3, attention: 0.4 }
     }
 }
 
@@ -248,11 +252,21 @@ impl Weights {
         let clean = |v: f64, default: f64| {
             if v.is_finite() && v > 0.0 && v <= 5.0 { v } else { default }
         };
+        // `attention` 走自己的闸门,**不能**复用上面的 `clean`:那条规则
+        // 拒绝 0(对乘数而言 0 会让整层塌成 0 分,层内顺序未定义),而对
+        // 这个加数而言 0 正是用户表达「关掉这个功能」的唯一方式。上限 2.0
+        // 而非 5.0:k=2 已经是 ×3 封顶,再高就不是加权而是覆盖排序了。
+        let attention = if self.attention.is_finite() && (0.0..=2.0).contains(&self.attention) {
+            self.attention
+        } else {
+            fallback.attention
+        };
         Weights {
             human: clean(self.human, fallback.human),
             derived: clean(self.derived, fallback.derived),
             source: clean(self.source, fallback.source),
             unlabeled: clean(self.unlabeled, fallback.unlabeled),
+            attention,
         }
     }
 }
@@ -1835,6 +1849,35 @@ mod tests {
     fn a_deliberate_inversion_is_allowed() {
         let w = Weights { human: 0.5, source: 2.0, ..Default::default() }.sanitized();
         assert_eq!((w.human, w.source), (0.5, 2.0));
+    }
+
+    /// attention 的 sanitize 规则与 origin 四档**相反**:那四档是乘数,0 会让
+    /// 整层塌成 0 分、层内顺序变未定义,所以拒绝 0;attention 是加数,k=0
+    /// 恰好是「关掉这个功能」的正确表达,必须放行。写成同一条规则就等于
+    /// 剥夺了用户关掉它的能力。
+    #[test]
+    fn attention_weight_allows_zero_but_rejects_garbage() {
+        let d = Weights::default();
+        assert_eq!(d.attention, 0.4);
+
+        let zero = Weights { attention: 0.0, ..Weights::default() }.sanitized();
+        assert_eq!(zero.attention, 0.0, "k=0 必须原样保留 —— 它是关闭开关");
+
+        for bad in [-1.0, f64::NAN, f64::INFINITY, 2.5] {
+            let w = Weights { attention: bad, ..Weights::default() }.sanitized();
+            assert_eq!(w.attention, d.attention, "非法值 {bad} 必须回落默认");
+        }
+
+        let ok = Weights { attention: 1.5, ..Weights::default() }.sanitized();
+        assert_eq!(ok.attention, 1.5);
+    }
+
+    /// 一个坏的 attention 不得连累其它四档(既有约定,逐档独立回落)。
+    #[test]
+    fn a_bad_attention_does_not_clobber_the_origin_tiers() {
+        let w = Weights { attention: f64::NAN, human: 2.0, ..Weights::default() }.sanitized();
+        assert_eq!(w.human, 2.0);
+        assert_eq!(w.attention, Weights::default().attention);
     }
 
     #[test]
