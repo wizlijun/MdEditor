@@ -8,9 +8,10 @@
 //! on purpose (docs/2026-08-10-vault-search-index-design.md §"P3 判据触发").
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use searchidx::watch::{Batch, Pending, DEBOUNCE_MS};
@@ -63,24 +64,65 @@ fn should_forward(rel: &str) -> bool {
     rel.ends_with(".md") && !rel.split('/').any(|s| s.starts_with('.'))
 }
 
-/// The vault-relative paths `event` should produce `Pending::note` calls for.
+/// 注意力摄取的防抖窗口。比索引的 300ms 长两个量级,因为触发它的东西
+/// 不一样:洞察 store 在你读文档的整个过程里持续 flush 当天的文件,而
+/// 摄取是**全量重算**。60 秒意味着最坏情况下每分钟一次全量重算,而不是
+/// 每次 flush 一次。
+pub const ATTENTION_DEBOUNCE_SECS: u64 = 60;
+
+/// 这条路径是一份 analytics 日文件吗。
+///
+/// 针眼开得很窄,而且是**白名单**:`should_forward` 那条「任何 `.` 开头
+/// 的路径段一律挡掉」的规则挡的是 `.git` 的几万个对象,放宽它的代价是
+/// 一次 git 操作变成一场重索引风暴。所以这里精确匹配目录前缀 + `.json`
+/// 后缀 + 深度恰好两级,`.notemd` 下的其它任何东西(设置、镜像记录)都
+/// 不放行 —— 包括 `.notemd/analytics-backup/`,前缀里的那个 `/` 就是拦
+/// 它的。
+fn is_analytics(rel: &str) -> bool {
+    rel.starts_with(".notemd/analytics/")
+        && rel.ends_with(".json")
+        && rel.matches('/').count() == 2
+}
+
+/// 距上次摄取够久了吗。到点只是**允许**摄取,不是命令它摄取:真正干活
+/// 还要 `attention_dirty` 为真,否则这就成了一个每分钟空转一次全量重算
+/// 的定时任务。
+fn attention_due(since_last: Duration) -> bool {
+    since_last >= Duration::from_secs(ATTENTION_DEBOUNCE_SECS)
+}
+
+/// 一次事件的两路产物。它们走的是**完全不同的通道**:`index` 进
+/// `Pending` 触发重索引,`attention` 只置一个标志触发摄取。合并成一个
+/// 返回值仅仅因为二者来自同一次路径遍历 —— 语义上必须分开,把 analytics
+/// 混进 `Pending` 等于每次洞察 flush 都重扫一遍 vault。
+#[derive(Debug, Default, PartialEq)]
+struct Relevant {
+    index: Vec<String>,
+    attention: bool,
+}
+
+/// The vault-relative paths `event` should produce `Pending::note` calls for,
+/// plus whether it touched the analytics directory.
 /// Extracted out of the `RecommendedWatcher` callback so it can be
 /// unit-tested with synthetic `notify::Event`s — the way
 /// `agents_sync::watcher::should_process` is — instead of only being
 /// exercisable via real filesystem events.
-fn relevant_paths(event: &Event, vault_root: &Path) -> Vec<String> {
+fn relevant_paths(event: &Event, vault_root: &Path) -> Relevant {
     if !matches!(
         event.kind,
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
     ) {
-        return Vec::new();
+        return Relevant::default();
     }
-    event
-        .paths
-        .iter()
-        .filter_map(|p| searchidx::norm::rel_path(vault_root, p))
-        .filter(|rel| should_forward(rel))
-        .collect()
+    let mut out = Relevant::default();
+    for rel in event.paths.iter().filter_map(|p| searchidx::norm::rel_path(vault_root, p)) {
+        if should_forward(&rel) {
+            out.index.push(rel);
+        } else if is_analytics(&rel) {
+            out.attention = true;
+        }
+    }
+    out
 }
 
 /// (Re)start the watcher for `vault_root`, under the generation `my_gen`
@@ -93,11 +135,21 @@ pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
     let (tx, rx) = mpsc::channel::<String>();
     let root = vault_root.to_path_buf();
     let filter_root = root.clone();
+    // 摄取的独立通道。刻意**不**走 `tx`:`Pending` 是重索引队列,一条
+    // analytics 事件进去就是一次全量重扫,而洞察 store 在用户读文档时是
+    // 持续 flush 的。一个标志位既表达了「有新数据」,又天然把任意多次
+    // flush 合并成一次摄取。
+    let attention_dirty = Arc::new(AtomicBool::new(false));
+    let dirty_setter = attention_dirty.clone();
 
     let mut watcher = match RecommendedWatcher::new(
         move |res: Result<Event, notify::Error>| {
             let Ok(event) = res else { return };
-            for rel in relevant_paths(&event, &filter_root) {
+            let relevant = relevant_paths(&event, &filter_root);
+            if relevant.attention {
+                dirty_setter.store(true, Ordering::SeqCst);
+            }
+            for rel in relevant.index {
                 let _ = tx.send(rel);
             }
         },
@@ -127,6 +179,9 @@ pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
         // end of `restart`.
         let _watcher = watcher;
         let mut pending = Pending::default();
+        // 从「现在」起算,而不是 0:`open_vault` 刚刚摄取过一次,watcher
+        // 起来的头一分钟没有必要再全量重算一遍。
+        let mut last_attention = Instant::now();
         let stale = || app.state::<WatchState>().generation.load(Ordering::SeqCst) != my_gen;
         loop {
             if stale() {
@@ -135,18 +190,72 @@ pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
             match rx.recv_timeout(Duration::from_millis(DEBOUNCE_MS)) {
                 Ok(rel) => pending.note(rel),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if pending.is_empty() {
-                        continue;
+                    if !pending.is_empty() {
+                        if stale() {
+                            return;
+                        }
+                        drain(&app, &root, pending.take());
                     }
-                    if stale() {
-                        return;
+                    // 摄取的节奏与重索引完全独立:两个条件都满足才干活。
+                    // `swap` 只在窗口已经打开时才执行 —— 时间没到就碰标志
+                    // 会把一次还没摄取的 flush 悄悄抹掉;而窗口开着但标志
+                    // 为假(没有新事件)时,这里什么都不做,它不是一个每
+                    // 分钟空转的定时任务。复位在摄取**之前**,所以摄取期
+                    // 间到达的事件不会被这一轮吞掉。
+                    if attention_due(last_attention.elapsed())
+                        && attention_dirty.swap(false, Ordering::SeqCst)
+                    {
+                        if stale() {
+                            return;
+                        }
+                        drain_attention(&app, &root, my_gen);
+                        last_attention = Instant::now();
                     }
-                    drain(&app, &root, pending.take());
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
     });
+}
+
+/// 把 vault 的注意力数据全量重算进当前索引。触发者是 `.notemd/analytics/`
+/// 下的写入,不是文档变更 —— 所以这里既不碰 `Pending`,也不做任何扫描。
+///
+/// **代际检查在锁里、在写之前那一刻再读一次**,而不是复用调用方循环里那次
+/// `stale()`:读 analytics(最多一年的日文件)加上 `links_for_vault`(读
+/// `.notemd/mirrors/`)是耗时操作,用户完全来得及在这期间切走 vault。漏掉
+/// 这一步的后果不是少算一点分数,而是把**旧 vault 的注意力写进新 vault 的
+/// 索引** —— `open_vault` 里 T9 犯过同形状的错(见 `install_if_current`
+/// 的注释),这里是同一条纪律的第二个执行点。`as_mut()` 原地改的是共享的
+/// 那个 `SearchIndex`,不像 `install_if_current` 有个线程本地的副本可丢,
+/// 所以检查只能靠锁的粒度来兜。
+fn drain_attention(app: &AppHandle, root: &Path, my_gen: u64) {
+    let idx_handle = crate::search::handle(app);
+    // 锁外做 IO,与 `drain` 一样:一次摄取不该把并发的搜索命令堵住整段读盘。
+    let links = crate::search::attention_links::links_for_vault(root);
+    let mut guard = crate::search::lock(&idx_handle);
+    if !is_current(app, my_gen) {
+        crate::log_cat!("search", "info", "attention ingest superseded, discarding");
+        return;
+    }
+    let Some(idx) = guard.as_mut() else { return };
+    let ok = match idx.refresh_attention(&links) {
+        Ok(n) => {
+            crate::log_cat!("search", "info", "attention ingest: {n} files");
+            true
+        }
+        // 摄取失败只降级排序(加成退化成 ×1.0),索引本身完全可用 —— 与
+        // `open_vault` 里同一条判断,所以只记一行,不动索引状态。
+        Err(e) => {
+            crate::log_cat!("search", "error", "attention ingest failed: {e}");
+            false
+        }
+    };
+    drop(guard);
+    if ok {
+        // 排序输入变了,开着的搜索面板重跑一次查询才看得到新次序。
+        let _ = app.emit(INDEX_UPDATED_EVENT, ());
+    }
 }
 
 fn drain(app: &AppHandle, root: &Path, batch: Batch) {
@@ -291,15 +400,16 @@ mod tests {
     fn relevant_paths_resolves_and_filters_relative_to_root() {
         let root = Path::new("/vault");
         let event = modify_event("/vault/notes/a.md");
-        assert_eq!(relevant_paths(&event, root), vec!["notes/a.md".to_string()]);
+        assert_eq!(relevant_paths(&event, root).index, vec!["notes/a.md".to_string()]);
     }
 
     #[test]
     fn relevant_paths_drops_non_markdown_and_dot_dirs() {
         let root = Path::new("/vault");
-        assert!(relevant_paths(&modify_event("/vault/notes/a.txt"), root).is_empty());
-        assert!(relevant_paths(&modify_event("/vault/.git/HEAD.md"), root).is_empty());
-        assert!(relevant_paths(&modify_event("/vault/.notemd/settings.md"), root).is_empty());
+        for p in ["/vault/notes/a.txt", "/vault/.git/HEAD.md", "/vault/.notemd/settings.md"] {
+            let r = relevant_paths(&modify_event(p), root);
+            assert_eq!(r, Relevant::default(), "{p} 不该产生任何通道的活儿");
+        }
     }
 
     #[test]
@@ -307,7 +417,11 @@ mod tests {
         let root = Path::new("/vault");
         let access = Event::new(EventKind::Access(AccessKind::Any))
             .add_path(PathBuf::from("/vault/notes/a.md"));
-        assert!(relevant_paths(&access, root).is_empty());
+        assert!(relevant_paths(&access, root).index.is_empty());
+        // 读取事件也不该触发摄取:analytics 文件被**读**不代表它变了。
+        let read = Event::new(EventKind::Access(AccessKind::Any))
+            .add_path(PathBuf::from("/vault/.notemd/analytics/2026-08-13.DEV-1.json"));
+        assert!(!relevant_paths(&read, root).attention);
     }
 
     /// `search://index-updated` exists in exactly two places — the `emit`
@@ -330,14 +444,88 @@ mod tests {
         );
     }
 
+    /// analytics 文件必须被认出来 —— 它们不是 `.md`,且在 `.notemd/` 下,
+    /// 两条现行规则各挡它一次。
+    #[test]
+    fn analytics_files_are_recognized() {
+        assert!(is_analytics(".notemd/analytics/2026-08-13.DEV-1.json"));
+    }
+
+    /// 针眼只对 analytics 开。`.git` 与 `.notemd` 的其余内容必须照旧挡住,
+    /// 否则一次 git 操作就是一场重索引风暴。
+    #[test]
+    fn the_pinhole_does_not_open_up_the_rest_of_the_dot_dirs() {
+        for p in [
+            ".git/objects/ab/cdef",
+            ".notemd/settings.json",
+            ".notemd/mirrors/DEV-1.json",
+            ".notemd/analytics-backup/x.json",
+        ] {
+            assert!(!is_analytics(p), "{p} 不该被当成 analytics");
+        }
+    }
+
+    /// analytics 事件绝不能进 `Pending`:它触发的是摄取,不是重索引。
+    /// 混进去等于每次洞察 flush 都重扫一遍 vault。
+    #[test]
+    fn analytics_events_never_reach_the_reindex_queue() {
+        assert!(!should_forward(".notemd/analytics/2026-08-13.DEV-1.json"));
+    }
+
+    /// 60 秒防抖:洞察 store 是持续 flush 的,防抖不到位索引会一直在忙。
+    #[test]
+    fn the_attention_debounce_is_sixty_seconds() {
+        assert_eq!(ATTENTION_DEBOUNCE_SECS, 60);
+    }
+
+    /// 白名单还要挡住深度不对的路径:analytics 下再开子目录,或者根本没进
+    /// 目录(`.notemd/analytics.json`),都不是日文件。
+    #[test]
+    fn the_pinhole_is_exactly_one_directory_deep() {
+        assert!(!is_analytics(".notemd/analytics/sub/2026-08-13.DEV-1.json"));
+        assert!(!is_analytics(".notemd/analytics.json"));
+        assert!(!is_analytics(".notemd/analytics/2026-08-13.DEV-1.json.tmp"));
+    }
+
+    /// 一次 analytics 事件走的是摄取通道:标志置起,而重索引队列拿到零条
+    /// 路径。这是「独立通道」在事件层面的样子。
+    #[test]
+    fn an_analytics_event_takes_the_ingest_channel_only() {
+        let root = Path::new("/vault");
+        let r = relevant_paths(
+            &modify_event("/vault/.notemd/analytics/2026-08-13.DEV-1.json"),
+            root,
+        );
+        assert!(r.attention);
+        assert!(r.index.is_empty());
+    }
+
+    /// 普通 `.md` 事件不该碰摄取通道 —— 否则每次保存都是一次全量重算。
+    #[test]
+    fn an_ordinary_markdown_event_does_not_touch_the_ingest_channel() {
+        let root = Path::new("/vault");
+        let r = relevant_paths(&modify_event("/vault/notes/a.md"), root);
+        assert!(!r.attention);
+        assert_eq!(r.index, vec!["notes/a.md".to_string()]);
+    }
+
+    /// 防抖窗口:59 秒不到点,60 秒到点。到点只是**允许**摄取,真干活还
+    /// 要标志为真 —— 见 `restart` 里的短路写法。
+    #[test]
+    fn the_attention_window_opens_at_sixty_seconds() {
+        assert!(!attention_due(Duration::from_secs(59)));
+        assert!(attention_due(Duration::from_secs(60)));
+        assert!(attention_due(Duration::from_secs(600)));
+    }
+
     #[test]
     fn relevant_paths_accepts_create_and_remove() {
         let root = Path::new("/vault");
         let create =
             Event::new(EventKind::Create(CreateKind::File)).add_path(PathBuf::from("/vault/a.md"));
-        assert_eq!(relevant_paths(&create, root), vec!["a.md".to_string()]);
+        assert_eq!(relevant_paths(&create, root).index, vec!["a.md".to_string()]);
         let remove = Event::new(EventKind::Remove(RemoveKind::File))
             .add_path(PathBuf::from("/vault/a.md"));
-        assert_eq!(relevant_paths(&remove, root), vec!["a.md".to_string()]);
+        assert_eq!(relevant_paths(&remove, root).index, vec!["a.md".to_string()]);
     }
 }
