@@ -68,10 +68,11 @@ pub struct VaultSettings {
     /// 不种,否则用户把列表清空后又会被悄悄种回去,永远清不掉。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_source_globs: Option<Vec<String>>,
-    /// 按来源分层的排序权重覆盖(task C-T7 `searchidx::query::Weights` 的
-    /// 四个字段)。每个子字段独立可选:缺一个字段只影响那一档的回落,不
-    /// 牵连其余三档,是 `Weights::sanitized()`「坏值只回落那一档」这条
-    /// 不变量在"没写"这种缺失形式上的自然延伸。
+    /// 按来源分层的排序权重覆盖,加上一个跨层的注意力加成(`searchidx::
+    /// query::Weights` 的五个字段:`human`/`derived`/`source`/`unlabeled`
+    /// 四档 + `attention`)。每个子字段独立可选:缺一个字段只影响那一项的
+    /// 回落,不牵连其余各项,是 `Weights::sanitized()`「坏值只回落那一项」
+    /// 这条不变量在"没写"这种缺失形式上的自然延伸。
     ///
     /// **两道独立的校验,解决不同的问题(review round 1, Important 4;
     /// spec §8:「权重非法 → 保存时拒绝,保留原值」)。** `merge`(写入侧)
@@ -83,16 +84,26 @@ pub struct VaultSettings {
     /// `merge` 就进了 `settings.json` 的值(手改文件、未来某个不走这条
     /// 校验路径的写入方),让那种情况也总能拿到一个可用的结果,而不是让
     /// vault 打不开。
+    ///
+    /// **`attention` 的合法区间与四档相反,不是同一条规则的第五个实例**
+    /// (task 6 review round 2)。四档是排序乘数:`0` 会让整层分数塌成 0,
+    /// 层内顺序变得未定义,所以校验拒绝 `0`。`attention` 是加数(`1 +
+    /// k·f(...)` 里的 `k`),`k = 0` 恰恰是用户表达「关掉这个功能」的唯一
+    /// 方式,校验必须放行;合法区间是 `0.0..=2.0`(不是四档的 `5.0`
+    /// 上限)——`k=2` 已经是 ×3 封顶,再高就不是加权而是覆盖排序了。见
+    /// `validate_search_weights` 里 `check` 的 `low_inclusive` 参数。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_weights: Option<SearchWeights>,
 }
 
 /// Plain data shape for [`VaultSettings::search_weights`] — see that field's
 /// doc comment for the two-layer validation story (`merge` rejects at save
-/// time, `Weights::sanitized()` defends at read time). Kept as four
-/// independent `Option<f64>`s rather than `searchidx::query::Weights` itself
-/// so this module, which otherwise has no dependency on the `searchidx`
-/// crate's types, doesn't need one just to describe a settings shape.
+/// time, `Weights::sanitized()` defends at read time) **and** for why
+/// `attention`'s valid range is the inverse of the other four fields' (`0`
+/// allowed, ceiling `2.0` not `5.0`). Kept as five independent `Option<f64>`s
+/// rather than `searchidx::query::Weights` itself so this module, which
+/// otherwise has no dependency on the `searchidx` crate's types, doesn't need
+/// one just to describe a settings shape.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchWeights {
@@ -245,27 +256,47 @@ pub fn merge(
 }
 
 /// Reject an out-of-range weight at save time (spec §8: "权重非法 → 保存时
-/// 拒绝,保留原值"). Bounds match `searchidx::query::Weights::sanitized`'s
-/// rule exactly (finite, > 0.0, <= 5.0) so a value that would have been
-/// silently corrected on read is instead refused before it ever reaches
-/// disk — see [`VaultSettings::search_weights`]'s doc comment for why both
-/// checks exist rather than just one. Only *provided* components are
+/// 拒绝,保留原值") — see [`VaultSettings::search_weights`]'s doc comment for
+/// why both this save-time check and `Weights::sanitized()`'s read-time
+/// fallback exist rather than just one. Only *provided* components are
 /// checked: an absent field is "not configured," not "invalid," and merging
 /// a partial `SearchWeights` must not fail just because the caller didn't
 /// mention `unlabeled`.
+///
+/// **Two different rules, not one, matching `searchidx::query::Weights::
+/// sanitized`'s own split exactly.** `human`/`derived`/`source`/`unlabeled`
+/// are ranking *multipliers*: `0` would collapse an entire tier's scores to
+/// exactly 0, making ordering *within* that tier undefined, so `0` is
+/// rejected along with everything `<= 0.0` or `> 5.0`. `attention` is an
+/// *additive* boost (`1 + k·f(...)`) — `k = 0` is not a degenerate multiplier,
+/// it is the user's only way to say "turn this off," so it is explicitly
+/// **allowed**; the accepted range is `0.0..=2.0` instead of the four tiers'
+/// `5.0` ceiling (spec: `k=2` is already a ×3 cap, higher stops being a
+/// weight and starts being an override). Getting this backwards — rejecting
+/// `attention: 0` the same way `human: 0` is rejected — would silently take
+/// away the user's only "off" switch for this feature.
 fn validate_search_weights(w: &SearchWeights) -> Result<(), String> {
-    fn check(name: &str, v: Option<f64>) -> Result<(), String> {
+    // `low_inclusive: false` reproduces the four tiers' original `x <= low`
+    // rejection (so `low` itself, typically `0.0`, is refused); `true` is
+    // for `attention`, where the low bound itself is the one legal value a
+    // "turn it off" caller needs to hit.
+    fn check(name: &str, v: Option<f64>, low: f64, low_inclusive: bool, high: f64) -> Result<(), String> {
+        let out_of_range = |x: f64| {
+            !x.is_finite() || if low_inclusive { x < low } else { x <= low } || x > high
+        };
         match v {
-            Some(x) if !x.is_finite() || x <= 0.0 || x > 5.0 => {
-                Err(format!("{name} weight must be a finite number greater than 0 and at most 5.0"))
-            }
+            Some(x) if out_of_range(x) => Err(format!(
+                "{name} weight must be a finite number {} {low} and at most {high}",
+                if low_inclusive { "at least" } else { "greater than" }
+            )),
             _ => Ok(()),
         }
     }
-    check("human", w.human)?;
-    check("derived", w.derived)?;
-    check("source", w.source)?;
-    check("unlabeled", w.unlabeled)?;
+    check("human", w.human, 0.0, false, 5.0)?;
+    check("derived", w.derived, 0.0, false, 5.0)?;
+    check("source", w.source, 0.0, false, 5.0)?;
+    check("unlabeled", w.unlabeled, 0.0, false, 5.0)?;
+    check("attention", w.attention, 0.0, true, 2.0)?;
     Ok(())
 }
 
@@ -620,6 +651,38 @@ mod tests {
         assert!(ok(SearchWeights { human: Some(5.0), ..Default::default() }).is_ok(), "5.0 是合法上界");
         assert!(ok(SearchWeights { source: Some(0.000_1), ..Default::default() }).is_ok(), "接近 0 但仍为正的合法值");
         assert!(ok(SearchWeights::default()).is_ok(), "全部缺省仍合法");
+    }
+
+    /// task 6 review round 2 (Important): `attention` 的保存时校验规则必须
+    /// 与四档相反,理由和读取侧 `Weights::sanitized` 完全一样 —— 四档是
+    /// 乘数,`0` 会让整层分数塌成 0、层内顺序变未定义,所以拒绝;`attention`
+    /// 是加数 `k`,`k = 0` 恰恰是用户表达「关掉这个功能」的唯一方式,保存时
+    /// 必须放行,合法区间是 `0.0..=2.0`(不是四档的 `5.0` 上限)。这条测试
+    /// 同时钉住:这个改动没有连带放宽四档 —— 四档的 `0` 仍然被拒。
+    #[test]
+    fn attention_weight_allows_zero_at_save_time_but_the_origin_tiers_still_reject_it() {
+        let save = |w: SearchWeights| {
+            merge(VaultSettings::default(), None, None, None, None, None, None, None, None, Some(w))
+        };
+        assert!(
+            save(SearchWeights { attention: Some(0.0), ..Default::default() }).is_ok(),
+            "attention: 0 是关闭开关,保存时必须放行"
+        );
+        for bad in [-1.0, f64::NAN, f64::INFINITY, 2.5] {
+            assert!(
+                save(SearchWeights { attention: Some(bad), ..Default::default() }).is_err(),
+                "attention: {bad} 越界,保存时必须拒绝"
+            );
+        }
+        assert!(
+            save(SearchWeights { attention: Some(2.0), ..Default::default() }).is_ok(),
+            "2.0 是 attention 的合法上界"
+        );
+        // 四档不受这次改动影响:0 仍然是非法值,保存时仍被拒。
+        assert!(
+            save(SearchWeights { human: Some(0.0), ..Default::default() }).is_err(),
+            "四档的 0 仍必须被拒 —— attention 的放行规则不能外溢"
+        );
     }
 
     /// 缺省字段不是非法值 —— 只提供部分字段的更新不该因为没提到的那几档
