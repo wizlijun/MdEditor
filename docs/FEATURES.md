@@ -27,11 +27,20 @@ The AI-native notes system, rolling out incrementally:
       for your agents; the `.note.md` carries the state machine, an external
       agent sweeps it, and answers come back as `type:: answer` nodes you can
       accept into the document. Agents never write into the source `.md`.
-- [ ] **Wiki pages** — standalone outline notes under `wikipage/`, one
-      `[[title]]` namespace across the whole vault.
-- [ ] **Global index** — full-vault instant search, backlinks, and link
-      autocomplete, rebuilt from files at any time. (Backlinks and linked
-      references already work across `.note.md`.)
+- [x] **Wiki pages** — standalone outline notes under a configurable
+      `wikipage/` folder, one `[[title]]` namespace across the whole vault.
+      Search knows about them: the page a `[[…]]` would create is pinned to
+      the top when you type its name exactly.
+- [x] **Global index** — full-vault instant search, ranked by provenance,
+      rebuilt from files at any time (the index is derived data; the files
+      are the only source of truth). Query grammar: `tag:` `type:` `path:`
+      `ext:` `after:` `before:` `page:[[X]]`
+      `origin:human|derived|source|unlabeled`, and quoted phrases. Raw
+      material (`.srt`/`.vtt`/`.txt` transcripts) is indexed inside folders
+      you designate. Renames and moves are recognised by content hash, so
+      renaming a directory updates paths instead of rebuilding every file.
+      Headless too — see `notemd search` under *Built for agents*.
+      (Backlinks and linked references already work across `.note.md`.)
 - [ ] **Vault MCP server** — expose `vault_search` / `vault_read` /
       `vault_annotate` so any agent (Claude Cowork, Claude Code, Codex,
       ChatGPT Work, OpenClaw, Hermes, …) can work your vault, with note.md as
@@ -112,6 +121,14 @@ The AI-native notes system, rolling out incrementally:
   quote and follow passages across the vault.
 - **`AGENTS.md` conventions** — the vault's rules live in plain text at its
   root, which every CLI agent already reads.
+- **`notemd search`** — retrieval for agents, grep-shaped: default output is
+  `path:line:text`, one hit per line, so `rg`/`grep` habits keep working.
+  `--json` adds `source_ref` (`path#Lline`), `origin`, and provenance
+  (`agent_by`, `human_verified`) — a hit written by a model says so, and an
+  agent can follow it to the primary document instead of trusting it. Exit
+  codes distinguish "no hits" (1) from "no vault" (2), and retrieval never
+  hard-fails: an unusable index or an over-budget freshness check degrades to
+  a direct file scan with one line on stderr.
 - **`notemd` CLI** — drive plugin features without the GUI:
   `notemd share draft.md` publishes a share link; `--json` for structured
   output; `notemd reading-insights report` writes engagement digests.

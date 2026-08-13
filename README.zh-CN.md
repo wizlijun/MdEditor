@@ -23,7 +23,7 @@ Claude、Codex、OpenClaw 各有各的对话窗口，但没有一个是**读**�
 ## 2. 上一代笔记工具做对的事，全都内置
 
 local-first、git sync、大纲、`[[双链]]`与反向链接、wiki 页面、每日笔记、  
-插件机制。
+全库检索、插件机制。
 
 这些是 Roam Research 和 Obsidian 想明白的事，note.md 把它们落在文件上：一个  
 插件导入你整份 Roam 数据，Obsidian 的 vault 直接打开。
@@ -133,6 +133,8 @@ pnpm tauri build --target x86_64-apple-darwin
 ## CLI
 
 ```bash
+notemd search "关键词" --vault ~/Vault      # 全文检索，输出 path:line:text
+notemd search "关键词" --json               # 带 source_ref、origin、来源信息
 notemd share draft.md                      # 发布分享链接，输出 URL
 notemd share draft.md --json               # 结构化输出
 notemd share draft.md --unshare            # 取消分享
@@ -143,6 +145,12 @@ notemd help                                # 完整帮助
 
 内置核心命令，外加**已启用**插件贡献的子命令。从  
 **Help → Install 'notemd' Command in PATH…** 安装。
+
+agent 最常用的是 `notemd search`。它有意长成 grep 的样子，`rg` 的习惯照用；
+`--json` 每条命中给出 `source_ref`（`path#Lline`）与来源信息 —— 模型写的命中
+会自报家门，可以顺着它回到原始文档，而不是直接采信。过滤语法与应用内搜索
+面板一致（`tag:` `type:` `path:` `ext:` `after:` `before:` `page:[[X]]`
+`origin:`）。详见 `notemd help search`。
 
 ## 发布（仓库维护者）
 
