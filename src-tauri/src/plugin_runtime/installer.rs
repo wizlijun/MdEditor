@@ -280,6 +280,9 @@ fn is_contained(base: &Path, rel: &Path) -> bool {
 /// so a reader either sees the old or the new target, never a half state. The
 /// previous `current` is untouched until the rename succeeds, so a failure
 /// before that point leaves the prior install intact.
+///
+/// Once `current` points at the new version, every version dir except the new
+/// one and the one it just replaced is deleted — see [`prune_versions`].
 pub fn commit_install(
     root: &Path,
     id: &str,
@@ -291,6 +294,9 @@ pub fn commit_install(
 
     std::fs::create_dir_all(&id_dir).map_err(io)?;
 
+    // Read *before* repointing: this is the version `rollback` would go back to.
+    let previous = current_version(&id_dir);
+
     // Idempotent reinstall: clear any prior copy of this exact version.
     if version_dir.exists() {
         std::fs::remove_dir_all(&version_dir).map_err(io)?;
@@ -299,7 +305,83 @@ pub fn commit_install(
 
     // Atomically point current → version via a temp symlink + rename.
     repoint_current(&id_dir, version)?;
+    prune_versions(&id_dir, version, previous.as_deref());
     Ok(())
+}
+
+/// The version `<id_dir>/current` resolves to, by name.
+///
+/// Reads the link target rather than the directory listing: the listing cannot
+/// say which of several versions is live. Unix stores a relative target
+/// (`1.0.9`); the Windows junction fallback stores an absolute path — hence
+/// `file_name` rather than trusting the whole string.
+fn current_version(id_dir: &Path) -> Option<String> {
+    let target = std::fs::read_link(id_dir.join("current")).ok()?;
+    Some(target.file_name()?.to_string_lossy().into_owned())
+}
+
+/// Keep exactly two installed versions — the live one (`keep`) and one to fall
+/// back to — and delete the rest.
+///
+/// Without this, each upgrade left the whole previous tree on disk forever —
+/// measured on a real install: ten versions of one plugin, 3.6 MB each, none of
+/// them reachable. Two are kept, not one, because [`rollback`] repoints
+/// `current` at an *already-installed* version: pruning down to the live one
+/// alone would silently turn a failed upgrade from "step back" into
+/// "re-download or lose the plugin".
+///
+/// `also_keep` is the version `current` pointed at before this install. It is
+/// not simply trusted as the fallback, because on a *reinstall of the live
+/// version* it equals `keep` — one name for both slots, which would leave the
+/// fallback slot empty and prune the only other copy on disk. In that case the
+/// slot goes to the most recently installed other version instead, so "there is
+/// always something to roll back to (once anything else exists)" holds
+/// unconditionally rather than usually.
+///
+/// Best-effort by design, and the reason it returns nothing: a version dir that
+/// will not delete (Windows holding an open handle on a running plugin's
+/// binary, most realistically) is disk-space housekeeping failing, not the
+/// install failing — reporting it as an error would fail an install that
+/// already succeeded. `current`, `current.tmp` and any stray file are skipped:
+/// only real directories that are not symlinks are candidates.
+fn prune_versions(id_dir: &Path, keep: &str, also_keep: Option<&str>) {
+    let Ok(entries) = std::fs::read_dir(id_dir) else {
+        return;
+    };
+    // Every version dir other than the live one, with its install time.
+    let others: Vec<(std::path::PathBuf, String, std::time::SystemTime)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_owned();
+            if name == keep {
+                return None;
+            }
+            // `symlink_metadata`, not `metadata`: `current` is a symlink *to* a
+            // directory, so following it would classify it as one and delete
+            // the live version through its own alias.
+            let meta = entry.path().symlink_metadata().ok()?;
+            if !meta.is_dir() {
+                return None;
+            }
+            let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+            Some((entry.path(), name, mtime))
+        })
+        .collect();
+
+    let fallback = match also_keep {
+        Some(v) if v != keep => Some(v.to_owned()),
+        _ => others
+            .iter()
+            .max_by_key(|(_, _, mtime)| *mtime)
+            .map(|(_, name, _)| name.clone()),
+    };
+
+    for (path, name, _) in &others {
+        if Some(name) == fallback.as_ref() {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(path);
+    }
 }
 
 /// Repoint `<id_dir>/current` at `<version>` atomically. `version` must already
@@ -751,6 +833,143 @@ mod tests {
         }
         let current = root.join(FIXTURE_ID).join("current");
         assert!(current.join("manifest.json").is_file());
+    }
+
+    // ── version pruning ───────────────────────────────────────────────────
+
+    fn expect<const N: usize>(names: [&str; N]) -> std::collections::BTreeSet<String> {
+        names.into_iter().map(String::from).collect()
+    }
+
+    /// Install a chain of versions the way the market does and report what is
+    /// left on disk (excluding `current`).
+    fn install_chain(root: &Path, versions: &[&str]) -> std::collections::BTreeSet<String> {
+        for v in versions {
+            let stage_dir = tempfile::tempdir().unwrap();
+            stage_the_fixture(stage_dir.path());
+            commit_install(root, FIXTURE_ID, v, stage_dir.path()).unwrap();
+        }
+        std::fs::read_dir(root.join(FIXTURE_ID))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "current")
+            .collect()
+    }
+
+    /// The bug this exists for: every upgrade used to leave the whole previous
+    /// tree behind forever (ten versions of one plugin, 3.6 MB each, measured
+    /// on a real install). Only the live version and the rollback target stay.
+    #[test]
+    fn upgrading_prunes_all_but_current_and_the_previous_version() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+
+        let left = install_chain(root, &["1.0.0", "1.0.1", "1.0.2", "1.0.3"]);
+
+        assert_eq!(left, expect(["1.0.2", "1.0.3"]));
+        assert_current_points_at(&root.join(FIXTURE_ID), "1.0.3");
+        assert!(root.join(FIXTURE_ID).join("current/manifest.json").is_file());
+    }
+
+    /// The kept previous version must remain a *usable* install, not just a
+    /// directory name — `rollback` repoints `current` straight at it.
+    #[test]
+    fn the_kept_previous_version_can_still_be_rolled_back_to() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        install_chain(root, &["1.0.0", "1.0.1", "1.0.2"]);
+
+        rollback(root, FIXTURE_ID, "1.0.1").expect("previous version survived the prune");
+
+        assert_current_points_at(&root.join(FIXTURE_ID), "1.0.1");
+        assert!(root.join(FIXTURE_ID).join("current/manifest.json").is_file());
+    }
+
+    /// A reinstall of the version already live must not prune the version it
+    /// would roll back to — `previous` and `keep` are the same name there, and
+    /// naively treating that as "one slot used" would drop the other.
+    #[test]
+    fn reinstalling_the_live_version_keeps_the_rollback_target() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+
+        let left = install_chain(root, &["1.0.0", "1.0.1", "1.0.1"]);
+
+        assert_eq!(left, expect(["1.0.0", "1.0.1"]));
+        assert!(root.join(FIXTURE_ID).join("current/manifest.json").is_file());
+    }
+
+    /// `prune_versions` walks a directory and calls `remove_dir_all`, so what
+    /// it refuses to touch is the safety property: the `current` symlink (whose
+    /// target is the live version — deleting *through* it would take the live
+    /// install with it) and any plain file.
+    #[test]
+    fn prune_never_deletes_the_current_link_or_stray_files() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        install_chain(root, &["1.0.0", "1.0.1"]);
+        let id_dir = root.join(FIXTURE_ID);
+        std::fs::create_dir(id_dir.join("0.9.0")).unwrap();
+        std::fs::write(id_dir.join("notes.txt"), b"user file").unwrap();
+
+        prune_versions(&id_dir, "1.0.1", Some("1.0.0"));
+
+        assert!(id_dir.join("notes.txt").is_file(), "stray file kept");
+        assert!(!id_dir.join("0.9.0").exists(), "unreferenced version pruned");
+        assert_current_points_at(&id_dir, "1.0.1");
+        assert!(id_dir.join("current/manifest.json").is_file(), "live install intact");
+    }
+
+    /// With no prior `current` to name a fallback (a reinstall of the live
+    /// version, or a `current` that never existed), the fallback slot goes to
+    /// the most recently installed other version — the invariant is "two
+    /// versions and a way back", not "two versions when convenient".
+    ///
+    /// unix-only: the backdating helper it needs is `libc::utimes`, and `libc`
+    /// is a `cfg(unix)` dependency. The behaviour under test is platform-neutral.
+    #[cfg(unix)]
+    #[test]
+    fn without_a_named_previous_the_newest_other_version_becomes_the_fallback() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        install_chain(root, &["1.0.0", "1.0.1"]);
+        let id_dir = root.join(FIXTURE_ID);
+        // Older than everything the chain just wrote.
+        std::fs::create_dir(id_dir.join("0.9.0")).unwrap();
+        filetime_backdate(&id_dir.join("0.9.0"));
+
+        prune_versions(&id_dir, "1.0.1", None);
+
+        assert!(id_dir.join("1.0.0").exists(), "newest other version kept as fallback");
+        assert!(!id_dir.join("0.9.0").exists(), "older version still pruned");
+    }
+
+    /// Push a directory's mtime firmly into the past. `install_chain` writes
+    /// every version within the same fraction of a second, so a test that
+    /// depends on "most recent" has to create the ordering it asserts on
+    /// instead of hoping the filesystem's clock resolution provides it.
+    #[cfg(unix)]
+    fn filetime_backdate(dir: &Path) {
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        let ts = old.duration_since(std::time::UNIX_EPOCH).unwrap();
+        let times = [
+            libc::timeval { tv_sec: ts.as_secs() as _, tv_usec: 0 },
+            libc::timeval { tv_sec: ts.as_secs() as _, tv_usec: 0 },
+        ];
+        let path = std::ffi::CString::new(dir.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::utimes(path.as_ptr(), times.as_ptr()) }, 0);
+    }
+
+    #[test]
+    fn current_version_reads_the_link_target_by_name() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        install_chain(root, &["1.0.0", "2.3.4"]);
+
+        assert_eq!(current_version(&root.join(FIXTURE_ID)).as_deref(), Some("2.3.4"));
+        // No install at all → nothing to roll back to.
+        assert_eq!(current_version(&root.join("notemd.absent")), None);
     }
 
     // ── uninstall ─────────────────────────────────────────────────────────
