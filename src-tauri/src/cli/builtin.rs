@@ -340,7 +340,10 @@ FLAGS:
                      ({agent_by, human_verified}) beyond the plain
                      path/line/text. A hit with provenance.agent_by set was
                      written by a model — follow its sources to the primary
-                     document before relying on it.
+                     document before relying on it. attention_minutes(你在
+                     这份文档上花过的注意力分钟数,已按 30 天半衰期衰减到
+                     今天;0 = 没有数据。排序已经计入它,这个字段是让你能
+                     解释顺序)。
   --limit <n>       Max hits (default: 20)
   --context <n>     Print N lines of context around each hit
   --tag <t>         Filter: tag:<t>
@@ -1596,6 +1599,13 @@ mod tests {
         assert!(out.contains("source_ref"), "must document --json's source_ref field:\n{out}");
         assert!(out.contains("provenance"), "must document --json's provenance field:\n{out}");
         assert!(out.contains("agent_by"), "must explain what provenance.agent_by means:\n{out}");
+    }
+    /// `--json` 的字段是 agent 的公共约定,加了字段就得写进帮助,
+    /// 否则只有读源码的人知道它存在。
+    #[test]
+    fn search_help_documents_attention_minutes() {
+        let out = render_help(Some("search"), false, &[], &HashMap::new());
+        assert!(out.contains("attention_minutes"), "必须记录 --json 的注意力字段:\n{out}");
     }
     /// Review round 1, Important #1: `render_core_topic` used to append a
     /// generic "1 Runtime error" footer underneath every topic's own body,

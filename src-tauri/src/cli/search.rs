@@ -451,6 +451,11 @@ fn print_json(query: &str, route: searchidx::Route, took_ms: u128, hits: &[searc
                 // tier `score_of` actually ranks on (see its doc comment on
                 // why the two are independent, not double-counted).
                 "origin": h.origin.as_str(),
+                // 已衰减到今天的注意力分钟数(read + 1.5×edit,30 天半衰期)。
+                // 与 `provenance` 并列而不是嵌进去:`provenance` 是文档自己
+                // 声明的来源,这个是**你**在它身上花掉的时间 —— 一个来自
+                // 文件内容,一个来自你的行为,不该混成一个对象。
+                "attention_minutes": h.attention_minutes,
             })
         })
         .collect();

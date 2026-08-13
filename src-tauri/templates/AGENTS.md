@@ -284,7 +284,7 @@ notemd search "exact phrase"        # phrase match
 notemd search x tag:y type:z        # filters: tag: type: path: ext: after: before: page:[[X]] origin:
 notemd search origin:human          # only what a human wrote/signed (vs derived|source|unlabeled)
 notemd search origin:unlabeled      # files with no frontmatter and no source-glob match — fix these
-notemd search x --json              # adds score, breadcrumb, source_ref, provenance, origin
+notemd search x --json              # adds score, breadcrumb, source_ref, provenance, origin, attention_minutes
 notemd search x --context 2         # surrounding lines
 ```
 
