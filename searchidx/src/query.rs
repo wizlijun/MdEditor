@@ -505,7 +505,7 @@ fn fts_search(
     conventions: &Conventions,
 ) -> rusqlite::Result<(Vec<Hit>, bool)> {
     let Some(expr) = match_expr(q) else { return Ok((Vec::new(), false)) };
-    let mut sql = format!(
+    let base = format!(
         // Column weights, in `blocks_fts`'s declared order: `tok_text`,
         // `tok_breadcrumb`, `tok_title`. The title's 4.0 is the point of
         // giving it its own column at all — appended to `tok_text` instead it
@@ -519,12 +519,71 @@ fn fts_search(
          JOIN files f ON f.id = b.file_id{ATTENTION_JOIN}
          WHERE blocks_fts MATCH ?1"
     );
-    let mut args: Vec<String> = vec![expr];
+
+    // 主臂:相关度。
+    let mut sql = base.clone();
+    let mut args: Vec<String> = vec![expr.clone()];
     push_filters(q, &mut sql, &mut args);
     // Over-fetch: business boosts reorder, and a phrase recheck removes rows.
     sql.push_str(&format!(" ORDER BY rank ASC LIMIT {}", (limit * 8).max(64)));
+    let (main_rows, main_truncated) = run_fts_arm(conn, &sql, &args)?;
 
-    let mut stmt = conn.prepare(&sql)?;
+    // 保底臂:注意力(规格 §5)。纯排序加权救不了 bm25 极低的长文 —— 一份
+    // 「你读了三小时、查询词只出现一次」的文档在 `score_of` 跑起来之前就被
+    // 主臂的 `LIMIT` 砍掉了,再大的系数也没机会作用在它身上。这条臂只做一
+    // 件事:换个排序,给这类文档一个**进入评分阶段**的名额。
+    //
+    // 两条臂**共用同一个 `base`**,也就是同一个 MATCH 和同一套 `push_filters`
+    // 过滤器 —— 这是硬约束,不是巧合:「我读得最多的文档」不是「我搜的东
+    // 西」,这条臂一条不匹配的结果都不许引入。所以 `base` 只构造一次再
+    // clone,而不是抄两份 SQL 字符串:抄的那份迟早会跟主臂漂移,而漂移的
+    // 症状正是「搜什么都出现我常读的那几篇」。
+    //
+    // `(limit * 2).max(8)` 刻意取小:这是保底,不是主力 —— 合并之后最终排序
+    // 仍然由 `score_of` 的相关度主导,这条臂只保证候选集里有它们。
+    let mut arm = base;
+    let mut arm_args: Vec<String> = vec![expr];
+    push_filters(q, &mut arm, &mut arm_args);
+    arm.push_str(&format!(
+        // `att.minutes` 全表共用一个 `as_of`,`finish` 的二次衰减对所有行是
+        // 同一个单调乘数,所以按存量排序 == 按衰减后排序,SQL 里不需要算
+        // 指数。`IS NOT NULL` 而不是 `> 0`:`LEFT JOIN` 未命中的行(绝大多数
+        // 文件)才是要排除的那批,读过但折算成 0 分钟的文件留着无害。
+        " AND att.minutes IS NOT NULL ORDER BY att.minutes DESC, rank ASC LIMIT {}",
+        (limit * 2).max(8)
+    ));
+    let (arm_rows, arm_truncated) = run_fts_arm(conn, &arm, &arm_args)?;
+
+    // 去重键用 `(path, line, line_end)` 而不是 block id:`SELECT_COLS` 里没有
+    // block id,而这个三元组在 `blocks` 里已经唯一。为去重去动 `SELECT_COLS`
+    // 的列序正是 C-T7 的地雷(漏改 `rank` 索引不报类型错,只让 bm25 静默
+    // 失效)—— 而这里的取舍是单向安全的:同一个块两条臂读出的三元组逐字
+    // 相同,所以**重复绝不会漏网**;万一两个不同块撞上同一个三元组,后果
+    // 只是少收一条候选(召回略保守),不会把同一条命中显示两遍。
+    let mut rows = main_rows;
+    let seen: std::collections::HashSet<_> =
+        rows.iter().map(|(h, ..): &RawRow| (h.path.clone(), h.line, h.line_end)).collect();
+    rows.extend(
+        arm_rows
+            .into_iter()
+            .filter(|(h, ..): &RawRow| !seen.contains(&(h.path.clone(), h.line, h.line_end))),
+    );
+    // 两条臂各自可能被 abort 打断,如实反映:任一条被截断,结果集就是不完整的。
+    let truncated = main_truncated || arm_truncated;
+    Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
+}
+
+/// 跑一条 FTS 候选臂,读出 `finish` 要的原始行。
+///
+/// 存在的理由是**列索引只写一遍**:两条臂 SELECT 的列完全相同,各自抄一份
+/// `r.get(...)` 就等于把 C-T7 的地雷(`rank` 在索引 15,读错不报类型错、只让
+/// bm25 静默失效)复制成两颗。
+fn run_fts_arm(
+    conn: &Connection,
+    sql: &str,
+    args: &[String],
+) -> rusqlite::Result<(Vec<RawRow>, bool)> {
+    let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
         Ok((
             row_to_hit(r)?,
@@ -535,10 +594,17 @@ fn fts_search(
             r.get::<_, Option<String>>(14)?, // att.as_of
         ))
     })?;
-    let (rows, truncated) = drain(rows)?;
-    Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
+    drain(rows)
 }
 
+/// **这条路径与 `filter_only_search` 都不加注意力候选臂(规格 §5)。** 别
+/// 「顺手补齐」—— 这是决定,不是遗漏。理由有二:一,截断压力不在这里,两条
+/// 路径都是 `LIMIT 500` / `(limit*8).max(64)` 的宽扫,能匹配上的东西本来就
+/// 基本都在候选集里了,而第二条臂存在的唯一意义就是对抗 `fts_search` 那个
+/// 按 bm25 排序的窄窗口把长文提前砍掉;二,LIKE 是全表 `%needle%` 扫描,本
+/// 来就是最慢的兜底路径,再挂一条同样形状的查询是把最贵的路径的成本翻倍去
+/// 换一个它并不存在的问题。注意力仍然照常参与这两条路径的**排序**
+/// (`SELECT_COLS` 读出 `att.minutes`,`score_of` 加成),只是不额外召回。
 fn like_search(
     conn: &Connection,
     q: &Query,

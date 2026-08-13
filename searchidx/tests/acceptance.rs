@@ -1030,3 +1030,102 @@ fn refresh_attention_on_a_vault_without_insights_is_a_clean_no_op() {
          这是与「从没跑过」区分的唯一途径"
     );
 }
+
+/// 规格 §5:`fts_search` 先按 bm25 `ORDER BY rank ASC LIMIT (limit*8).max(64)`
+/// 取候选、**再**跑 `score_of`,所以纯排序加权救不了排在窗口外的文档 —— 它在
+/// 打分之前就被砍掉了,再大的系数也没机会作用在它身上。第二条臂给这类文档一
+/// 个进入评分阶段的名额。这里构造:80 篇噪声把 `limit=10` 的 80 条候选窗口填
+/// 满,外加一份 bm25 严格垫底、但你在上面花了 10 小时的文档。
+///
+/// **fixture 与简报原稿不同,差异是量算出来的,不是口味。** 简报原稿用的是
+/// 「500 行填充 + 查询词只出现一次」的长文:实测它的 `score_of` 结果比噪声低
+/// **约 45 倍**(噪声 7.41e-7 vs 长文 1.65e-8),而注意力加成的**天花板**是
+/// `1 + k`,默认 k=0.4 即 ×1.4(`attention::boost`,`frac` 已封顶 1.0)。所以
+/// 那份 fixture 在**任何**候选阶段的改动下都进不了前 10 —— 它能被捞进评分,
+/// 但评分之后仍排在 80 篇噪声之后,被最终的 `truncate(limit)` 切掉。要让它可
+/// 见只能给注意力臂在**输出**里留保留席位,而规格 §5 明确拒绝了这条路(「主
+/// 排序仍然是相关度」)。所以这里把 bm25 差距收窄到加成天花板之内(实测比值
+/// ≈1.10,余量 27%),让这条测试断言它**能**断言的那件事:窗口外 = 不可见,
+/// 有注意力 = 进候选 = 可见。差距本身与本测试无关 —— 排序算术归
+/// `query.rs` 的 `attention_alone_moves_the_score` 等单测管。
+#[test]
+fn a_high_attention_document_is_recalled_past_the_bm25_window() {
+    let vault = tempfile::tempdir().unwrap();
+    // 噪声:80 篇短文,每篇都命中查询词,足以填满 (limit*8).max(64) 的窗口
+    // (limit=10 → 80 条,而每篇噪声还各自贡献一条 File 级 rollup,所以窗口
+    // 其实被噪声塞得满满当当)。
+    for i in 0..80 {
+        std::fs::write(vault.path().join(format!("noise{i}.md")), "银河 的 观测 记录\n").unwrap();
+    }
+    // 目标:同样只命中一次,但比噪声更长 —— bm25 的长度归一化让它严格垫底,
+    // 排在候选窗口之外。
+    std::fs::write(vault.path().join("target.md"), "银河 的 观测 记录 补记\n").unwrap();
+
+    let dir = vault.path().join(".notemd/analytics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+    );
+    std::fs::write(
+        dir.join(format!("{today}.DEV-1.json")),
+        format!(
+            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:target.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    // 摄取之前:没有注意力数据,它进不了候选。
+    let before = idx.search("银河", 10).unwrap().0;
+    assert!(
+        !before.iter().any(|h| h.path == "target.md"),
+        "基线错了:它本就该在纯 bm25 下落榜,否则这条测试证明不了任何事"
+    );
+    // 而且落榜的原因必须是**窗口**,不是「压根没 MATCH 上」—— 后者会让上面
+    // 那条断言在一个把查询词拼错的 fixture 上也「通过」,于是整条测试变成
+    // 空转。放大 limit(窗口随之放大到 1600)它就该出现。
+    let wide = idx.search("银河", 200).unwrap().0;
+    assert!(
+        wide.iter().any(|h| h.path == "target.md"),
+        "它必须是命中的,只是 bm25 垫底:{:?}",
+        wide.len()
+    );
+
+    idx.refresh_attention(&[]).unwrap();
+    let after = idx.search("银河", 10).unwrap().0;
+    assert!(
+        after.iter().any(|h| h.path == "target.md"),
+        "注意力臂必须把它捞回来:{:?}",
+        after.iter().map(|h| &h.path).collect::<Vec<_>>()
+    );
+}
+
+/// 第二条臂共用同一个 MATCH 条件,所以**不能**引入不匹配的结果 ——
+/// 「我读得最多的文档」不是「我搜的东西」。
+#[test]
+fn the_attention_arm_never_introduces_a_non_matching_hit() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("read-a-lot.md"), "完全无关的内容\n").unwrap();
+    std::fs::write(vault.path().join("match.md"), "银河\n").unwrap();
+    let dir = vault.path().join(".notemd/analytics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+    );
+    std::fs::write(
+        dir.join(format!("{today}.DEV-1.json")),
+        format!(
+            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:read-a-lot.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    idx.refresh_attention(&[]).unwrap();
+    let hits = idx.search("银河", 10).unwrap().0;
+    assert!(hits.iter().all(|h| h.path != "read-a-lot.md"), "注意力不是匹配条件");
+    assert!(hits.iter().any(|h| h.path == "match.md"));
+}
