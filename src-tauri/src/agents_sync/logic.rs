@@ -18,6 +18,7 @@ notemd search origin:human          # only what a human wrote/signed (vs derived
 notemd search origin:unlabeled      # files with no frontmatter and no source-glob match — fix these
 notemd search x --json              # adds score, breadcrumb, source_ref, provenance, origin
 notemd search x --context 2         # surrounding lines
+notemd search x --all               # every hit — default cap is 20 (--limit N adjusts, 0 = no cap)
 ```
 
 `rg` and `grep` keep working and are never wrong to use — the index is an
