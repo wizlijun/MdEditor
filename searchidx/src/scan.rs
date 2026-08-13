@@ -154,6 +154,66 @@ pub(crate) fn ends_with_ascii_ci(s: &str, suffix: &str) -> bool {
     s.len() >= suffix.len() && s[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
 }
 
+/// The `files.ext` value for a vault-relative path (spec §5.1): `"note.md"`,
+/// `"srt"`, `"vtt"`, `"txt"`, or `"md"` (the fallback, matching every file
+/// `is_indexable` admits that isn't one of the other four shapes). This is
+/// the single place that decision is made — `index_into` calls it rather
+/// than recomputing it, so a rename's fast path (which only needs to redo
+/// this, not re-chunk) has exactly one place to call too. Case-insensitive
+/// for `.srt`/`.vtt`/`.txt` and case-sensitive for `.note.md`/`.md`, via the
+/// same `ends_with_ascii_ci` helper `is_indexable` uses — see that function's
+/// doc comment for why the asymmetry is deliberate.
+pub(crate) fn ext_of(rel: &str) -> &'static str {
+    if rel.ends_with(".note.md") {
+        "note.md"
+    } else if ends_with_ascii_ci(rel, ".srt") {
+        "srt"
+    } else if ends_with_ascii_ci(rel, ".vtt") {
+        "vtt"
+    } else if ends_with_ascii_ci(rel, ".txt") {
+        "txt"
+    } else {
+        "md"
+    }
+}
+
+/// Which chunker `chunk::parse_file` will send a path through. Kept
+/// deliberately separate from `ext_of` above (a `.srt` and a `.vtt` share no
+/// `ext_of` value but do share a `ChunkerClass`) and used by the rename fast
+/// path to decide whether a renamed file's blocks can be kept as-is or must
+/// be recomputed: same class, same content ⇒ same blocks; different class ⇒
+/// re-chunk even if the bytes on disk didn't change, because `a.md` and
+/// `a.note.md` can be byte-identical and still parse completely differently.
+///
+/// MUST mirror `chunk::parse_file`'s format dispatch exactly, including
+/// order — `.note.md` is checked before the `.md` fallback, or every sidecar
+/// note would be classified as prose. If that dispatch changes, this must
+/// change with it (and vice versa); each carries a comment pointing at the
+/// other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChunkerClass {
+    /// `.note.md` → `outline::chunk`.
+    Outline,
+    /// `.srt` / `.vtt` → `transcript::chunk`.
+    Transcript,
+    /// `.txt` → `plain::chunk`.
+    Plain,
+    /// Everything else (`.md`) → `prose::chunk`.
+    Prose,
+}
+
+pub(crate) fn chunker_class(rel: &str) -> ChunkerClass {
+    if ends_with_ascii_ci(rel, ".srt") || ends_with_ascii_ci(rel, ".vtt") {
+        ChunkerClass::Transcript
+    } else if ends_with_ascii_ci(rel, ".txt") {
+        ChunkerClass::Plain
+    } else if rel.ends_with(".note.md") {
+        ChunkerClass::Outline
+    } else {
+        ChunkerClass::Prose
+    }
+}
+
 struct Candidate {
     rel: String,
     mtime: i64,
@@ -561,21 +621,9 @@ fn index_into(
     // always "md" — a `.srt`/`.vtt`/`.txt` file only ever reaches this point
     // inside a matching source glob (`is_indexable`'s gate), but once it
     // does, it is a real query-language-observable fact (`ext:srt`) and must
-    // not be indistinguishable from a `.md` file. Case-insensitive for the
-    // same three extensions and for the same reason `is_indexable` is (see
-    // its doc comment) — `ends_with_ascii_ci` is the one place that decision
-    // is encoded, reused here rather than re-decided.
-    let ext = if c.rel.ends_with(".note.md") {
-        "note.md"
-    } else if ends_with_ascii_ci(&c.rel, ".srt") {
-        "srt"
-    } else if ends_with_ascii_ci(&c.rel, ".vtt") {
-        "vtt"
-    } else if ends_with_ascii_ci(&c.rel, ".txt") {
-        "txt"
-    } else {
-        "md"
-    };
+    // not be indistinguishable from a `.md` file. `ext_of` is the one place
+    // that decision is encoded, reused here rather than re-decided.
+    let ext = ext_of(&c.rel);
     store::replace_file(tx, &c.rel, ext, c.mtime, c.size, &content_hash(&bytes), &parsed)?;
     Ok(true)
 }
@@ -1137,5 +1185,26 @@ mod tests {
     fn filetime_set(p: &Path, meta: &std::fs::Metadata) {
         let f = fs::OpenOptions::new().write(true).open(p).unwrap();
         f.set_modified(meta.modified().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ext_of_covers_every_indexable_shape() {
+        assert_eq!(ext_of("a/b.note.md"), "note.md");
+        assert_eq!(ext_of("a/b.md"), "md");
+        assert_eq!(ext_of("a/b.SRT"), "srt", "大小写不敏感,与 is_indexable 同一决定");
+        assert_eq!(ext_of("a/b.vtt"), "vtt");
+        assert_eq!(ext_of("a/b.TXT"), "txt");
+    }
+
+    /// 快路径的前提。`a.md` 与 `a.note.md` 内容可以一字不差,但走的是不同
+    /// 的分块器 —— 块必须重算,不能只换路径。
+    #[test]
+    fn chunker_class_separates_the_four_dispatch_targets() {
+        assert_eq!(chunker_class("a.note.md"), ChunkerClass::Outline);
+        assert_eq!(chunker_class("a.md"), ChunkerClass::Prose);
+        assert_eq!(chunker_class("a.srt"), ChunkerClass::Transcript);
+        assert_eq!(chunker_class("a.VTT"), ChunkerClass::Transcript);
+        assert_eq!(chunker_class("a.txt"), ChunkerClass::Plain);
+        assert_ne!(chunker_class("a.md"), chunker_class("a.note.md"));
     }
 }
