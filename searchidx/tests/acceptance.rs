@@ -87,13 +87,26 @@ fn open_temp_with_globs(patterns: &[String]) -> (tempfile::TempDir, SearchIndex)
 /// (既有 62 条,一字未改)仍跑在默认的空模式索引上。按模式集分组、每组只建一
 /// 次索引,不是每条用例建一次。
 ///
-/// **排序权重固定为 `Weights::default()`,而且显式传。** 这份回归集是排序的唯一
-/// 裁判;它若跟着用户配置(`search::options::weights_for_vault`)走就等于没有
-/// 裁判 —— 一个把四档权重全填成 ×1.0 的 vault 会让每一条顺序断言变成同义反复。
-/// 显式走 `search_with_weights`,而不是靠 `SearchIndex::search` 内部恰好也用
-/// 默认值:后者是实现细节,前者是这份 fixture 的前提条件。权重**非**默认时排序
-/// 会跟着变,由下面独立的 `non_default_weights_reorder_the_same_query` 钉住 ——
-/// 那条主张属于「权重真的在起作用」,不属于这份以默认权重为基准的回归集。
+/// **排序权重固定为 `Weights::default()`,而且显式传。** 这份回归集是**档位与
+/// 过滤器类**排序主张的唯一裁判;它若跟着用户配置
+/// (`search::options::weights_for_vault`)走就等于没有裁判 —— 一个把四档权重全
+/// 填成 ×1.0 的 vault 会让每一条顺序断言变成同义反复。显式走
+/// `search_with_weights`,而不是靠 `SearchIndex::search` 内部恰好也用默认值:后者
+/// 是实现细节,前者是这份 fixture 的前提条件。权重**非**默认时排序会跟着变,由
+/// 下面独立的 `non_default_weights_reorder_the_same_query` 钉住 —— 那条主张属于
+/// 「权重真的在起作用」,不属于这份以默认权重为基准的回归集。
+///
+/// **它管不到 bm25。** 相关度本身有没有抵达 `score_of`,由 `query.rs` 的
+/// `the_bm25_rank_column_actually_reaches_the_score` 单独钉住 —— 实测把 `rank` 的
+/// 列索引读错,这里 69 条一条不红,只有那条单测会死(task 13 复现)。所以别把
+/// 「回归集绿了」读成「排序没问题」。
+///
+/// 盲区的成因写在这里,免得下一个人白试一遍:60 条召回类断言的候选窗口
+/// (`ORDER BY rank ASC LIMIT (limit*8).max(64)`)在 48 文件语料下从不截断,打分
+/// 怎么错都不改变「有没有被召回进前 20」;9 条顺序断言的语料则是**刻意**构造成
+/// bm25 打平的 —— 要证明档位乘数起作用,先消掉相关度这个混淆因子是前提。于是
+/// 「补一条能抓住 bm25 的顺序用例」按定义就是一条 bm25 与档位乘数打架的用例,
+/// 它同时就不再是一条干净的档位用例。同一条 fixture 记录说不了两件互斥的事。
 #[test]
 fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
     let cases: Vec<serde_json::Value> = serde_json::from_str(
