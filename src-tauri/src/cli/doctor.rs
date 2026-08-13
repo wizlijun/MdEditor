@@ -604,8 +604,98 @@ fn plugin_checks(root: Option<&Path>, host_version: &str) -> Vec<Check> {
     out
 }
 
-/// 采集全部检查。本任务接入配置、vault、搜索索引与插件系统组,后续任务逐组
-/// 填充其余分组。
+// ── 网络组 ────────────────────────────────────────────────────────────────
+
+/// 与 `tauri.conf.json` 的 `plugins.updater.endpoints[0]` 必须一致 —— 由
+/// `updater_endpoint_matches_tauri_conf` 单测钉住。运行时解析 tauri.conf.json
+/// 会引入一份只为诊断而存在的配置读取路径,常量 + 防漂移测试更便宜。
+const UPDATER_ENDPOINT: &str =
+    "https://github.com/wizlijun/note.md/releases/latest/download/latest.json";
+
+const NET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn net_checks(offline: bool) -> Vec<Check> {
+    if offline {
+        return vec![
+            Check::skip("net.registry", "skipped (--offline)"),
+            Check::skip("net.updater", "skipped (--offline)"),
+        ];
+    }
+    let base = crate::plugin_runtime::market::registry_base_url_at(&super::resolve_config_dir());
+    // 两项并发发起,所以整组的耗时上界是单项超时(10s),不是两者相加。
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            let msg = format!("cannot start an async runtime: {e}");
+            return vec![
+                Check::warn("net.registry", msg.clone(), "Retry; report this if it persists"),
+                Check::warn("net.updater", msg, "Retry; report this if it persists"),
+            ];
+        }
+    };
+    rt.block_on(async {
+        let (registry, updater) =
+            tokio::join!(registry_probe(&base), updater_probe(UPDATER_ENDPOINT));
+        vec![registry, updater]
+    })
+}
+
+async fn registry_probe(base: &str) -> Check {
+    match crate::plugin_runtime::market::fetch_index(base).await {
+        Ok(index) => Check::pass(
+            "net.registry",
+            format!("{base} ({} plugins)", index.plugins.len()),
+        ),
+        Err(e) => Check::warn(
+            "net.registry",
+            format!("{base}: {e}"),
+            "The plugin market needs this; everything else works offline",
+        ),
+    }
+}
+
+async fn updater_probe(url: &str) -> Check {
+    let client = match reqwest::Client::builder().timeout(NET_TIMEOUT).build() {
+        Ok(c) => c,
+        Err(e) => {
+            return Check::warn("net.updater", format!("http client: {e}"), "Retry")
+        }
+    };
+    match client.get(url).send().await {
+        Ok(r) if r.status().is_success() => Check::pass("net.updater", "reachable"),
+        Ok(r) => Check::warn(
+            "net.updater",
+            format!("{url} returned {}", r.status()),
+            "Automatic updates will not find a release until this resolves",
+        ),
+        Err(e) => Check::warn(
+            "net.updater",
+            format!("{url}: {e}"),
+            "Automatic updates need this; everything else works offline",
+        ),
+    }
+}
+
+/// 同步外壳,让上面两个 async 探针在单测里可直接调用。
+#[cfg(test)]
+fn probe_registry_at(base: &str) -> Check {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(registry_probe(base))
+}
+
+#[cfg(test)]
+fn probe_updater_at(url: &str) -> Check {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(updater_probe(url))
+}
+
+/// 采集全部检查。
 fn collect(args: &DoctorArgs) -> Vec<Check> {
     let (vault, cfg, root) = vault_checks(args);
     let mut out = env_checks(cfg.as_ref());
@@ -615,6 +705,7 @@ fn collect(args: &DoctorArgs) -> Vec<Check> {
         super::runner::v2_plugins_root().as_deref(),
         env!("CARGO_PKG_VERSION"),
     ));
+    out.extend(net_checks(args.offline));
     out
 }
 
@@ -1062,5 +1153,41 @@ mod tests {
             .unwrap();
         assert_eq!(c.status, Status::Skip);
         assert!(c.detail.contains("disabled"), "{}", c.detail);
+    }
+
+    #[test]
+    fn offline_skips_both_network_probes_without_touching_the_network() {
+        let checks = net_checks(true);
+        assert_eq!(checks.len(), 2);
+        assert!(checks.iter().all(|c| c.status == Status::Skip), "{checks:?}");
+        assert!(checks.iter().any(|c| c.id == "net.registry"));
+        assert!(checks.iter().any(|c| c.id == "net.updater"));
+    }
+
+    /// updater 端点必须与 tauri.conf.json 里真正生效的那个是同一个 URL。
+    /// 这条测试就是防漂移的锁:改了配置没改常量,它立刻变红。
+    #[test]
+    fn updater_endpoint_matches_tauri_conf() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let endpoints = conf["plugins"]["updater"]["endpoints"].as_array().unwrap();
+        assert_eq!(endpoints[0].as_str().unwrap(), UPDATER_ENDPOINT);
+    }
+
+    /// 网络失败是 warn 不是 fail：断网、公司代理、GitHub 抽风都不是「安装损坏」，
+    /// 不该让 `notemd doctor && ...` 在飞机上失败(设计文档 §4.5)。
+    #[test]
+    fn an_unreachable_registry_is_only_a_warning() {
+        // 保留端口 0 不可能连通，且不会真的打到任何服务器上。
+        let c = probe_registry_at("http://127.0.0.1:0");
+        assert_eq!(c.status, Status::Warn, "{c:?}");
+        assert_eq!(c.id, "net.registry");
+    }
+
+    #[test]
+    fn an_unreachable_updater_endpoint_is_only_a_warning() {
+        let c = probe_updater_at("http://127.0.0.1:0/latest.json");
+        assert_eq!(c.status, Status::Warn, "{c:?}");
+        assert_eq!(c.id, "net.updater");
     }
 }

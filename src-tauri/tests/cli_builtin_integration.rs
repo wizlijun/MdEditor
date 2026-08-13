@@ -125,7 +125,7 @@ fn core_share_alias_routes_not_unknown() {
 }
 
 #[test]
-fn doctor_offline_json_has_envelope() {
+fn doctor_offline_json_has_envelope_and_skips_network() {
     let home = temp_home();
     let (code, stdout, _) = run_cli(&["doctor", "--offline", "--json"], &home);
     let _ = std::fs::remove_dir_all(&home);
@@ -135,6 +135,13 @@ fn doctor_offline_json_has_envelope() {
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
     assert!(v["data"]["checks"].is_array(), "{stdout}");
     assert!(v["data"]["summary"]["failures"].is_number(), "{stdout}");
+
+    let checks = v["data"]["checks"].as_array().unwrap();
+    assert!(!checks.is_empty(), "{stdout}");
+    // --offline 下网络组必须整组 skip，绝不发请求。
+    for ch in checks.iter().filter(|c| c["group"] == "net") {
+        assert_eq!(ch["status"], "skip", "{ch}");
+    }
 }
 
 #[test]
