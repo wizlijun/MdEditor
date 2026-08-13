@@ -343,6 +343,10 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
                     // the path alone would make the no-index fallback rank
                     // *differently* from the indexed path it stands in for.
                     pinned: false,
+                    // 同理:没有索引就没有 `doc_attention` 表可查。0.0 是诚实
+                    // 的答案(`attention::boost` 对 0 严格返回 1.0,即不加成),
+                    // 而不是把上一次索引里的陈旧分钟数搬过来。
+                    attention_minutes: 0.0,
                 });
                 break;
             }

@@ -3,6 +3,7 @@
 //! `searchidx`'s, so the GUI and the CLI cannot answer the same query
 //! differently.
 
+mod attention_links;
 pub mod options;
 pub mod watch;
 
@@ -500,6 +501,17 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
                     outcome.phase = None;
                     return;
                 }
+                // 索引建好后立刻摄取一次注意力数据:它是排序的输入,晚一步就
+                // 意味着用户开 vault 后的第一次搜索拿的是没有注意力的排序。
+                // 放在 `is_current` 之后、装进 `IndexHandle` 之前 —— 被取代的
+                // 线程不必白读一遍 analytics,而当前线程装上的索引从第一次查询
+                // 起就带着注意力数据。摄取失败只降级排序,绝不能让整个 open 失
+                // 败(vault 里根本没有 analytics 是完全正常的状态)。
+                let links = attention_links::links_for_vault(&root);
+                match idx.refresh_attention(&links) {
+                    Ok(n) => crate::log_cat!("search", "info", "attention ingest: {n} files"),
+                    Err(e) => crate::log_cat!("search", "warn", "attention ingest failed: {e}"),
+                }
                 *lock(&idx_handle) = Some(idx);
                 watch::restart(&app, &root, my_gen);
                 outcome.phase = Some(OpenPhase::Ready);
@@ -663,6 +675,16 @@ pub struct SearchStatsDto {
     /// strings and MUST NOT be translated by the frontend (same convention
     /// as the search panel's group headers, `src/lib/search/grouping.ts`).
     pub type_counts: std::collections::BTreeMap<String, i64>,
+    /// 有注意力数据的文件数(`searchidx::IndexStats::attention_files` 原样)。
+    /// 与 `files` 一起构成设置页的覆盖率行 —— 「摄取根本没跑起来」在别处没有
+    /// 任何可见症状,这是唯一的发现途径。
+    pub attention_files: i64,
+    /// 上一轮摄取用的 `as_of` 日(`searchidx::IndexStats::attention_as_of`
+    /// 原样)。**必须**保持三态可分:`null` = 摄取从未在这个索引上跑过;
+    /// 有值且 `attentionFiles == 0` = 跑过但零结果;有值且 > 0 = 正常。
+    /// 前端要把前两种说成不同的话,所以这里不许在 DTO 层压成一个布尔或
+    /// 空串 —— 一压就再也分不开了。
+    pub attention_as_of: Option<String>,
 }
 
 /// Shown to the user when no vault is open yet, or `open_vault`'s background
@@ -843,6 +865,8 @@ fn stats_to_dto(s: IndexStats, skipped_large: Vec<SkippedDto>) -> SearchStatsDto
         skipped_large,
         origin_counts: origin_counts_dto(s.origin_counts),
         type_counts: s.type_counts,
+        attention_files: s.attention_files,
+        attention_as_of: s.attention_as_of,
     }
 }
 
@@ -1255,6 +1279,9 @@ mod command_tests {
             origin: searchidx::Origin::Derived,
             concept_type: Some("Book Summary".to_string()),
             pinned: true,
+            // fixture 值:与其它字段一样取一个可辨认的非默认数,这样
+            // 「DTO 把它压成 0」之类的错误不会伪装成正常。
+            attention_minutes: 7.5,
         }
     }
 
@@ -1303,6 +1330,8 @@ mod command_tests {
             tokenizer_id: "jieba/1".to_string(),
             origin_counts: searchidx::OriginCounts { human: 1, derived: 3, source: 2, unlabeled: 4 },
             type_counts,
+            attention_files: 2,
+            attention_as_of: Some("2026-08-12".to_string()),
         };
         let skipped = vec![SkippedDto { path: "big.md".to_string(), size_bytes: 999 }];
         let dto = stats_to_dto(s, skipped);
@@ -1320,6 +1349,38 @@ mod command_tests {
         assert_eq!(dto.origin_counts.unlabeled, 4);
         assert_eq!(dto.type_counts.get("Book Summary").copied(), Some(2));
         assert_eq!(dto.type_counts.get("Answer").copied(), Some(1));
+        assert_eq!(dto.attention_files, 2);
+        assert_eq!(dto.attention_as_of.as_deref(), Some("2026-08-12"));
+    }
+
+    /// `attention_as_of` 的三态在 DTO 层不许被压平:`None`(摄取从未跑过)
+    /// 和 `Some(day)` + `attention_files == 0`(跑过、零结果)是设置页要分开
+    /// 说的两件事。这条钉住 `None` 原样过桥,不被换成空串、也不被 `0` 文件数
+    /// 顺手抹成同一种状态。
+    #[test]
+    fn a_never_ingested_index_keeps_a_null_as_of_distinct_from_a_zero_result_run() {
+        let base = |as_of: Option<String>| IndexStats {
+            files: 3,
+            blocks: 40,
+            db_bytes: 1,
+            built_at: None,
+            tokenizer_id: "jieba/1".to_string(),
+            origin_counts: searchidx::OriginCounts::default(),
+            type_counts: std::collections::BTreeMap::new(),
+            attention_files: 0,
+            attention_as_of: as_of,
+        };
+        let never = stats_to_dto(base(None), Vec::new());
+        let zero_result = stats_to_dto(base(Some("2026-08-12".to_string())), Vec::new());
+        assert_eq!(never.attention_files, 0);
+        assert_eq!(zero_result.attention_files, 0);
+        assert_eq!(never.attention_as_of, None);
+        assert_eq!(zero_result.attention_as_of.as_deref(), Some("2026-08-12"));
+        // 序列化后仍然可分:`null` 与日期字符串,不是同一个值。
+        let a = serde_json::to_value(&never).unwrap();
+        let b = serde_json::to_value(&zero_result).unwrap();
+        assert!(a.get("attentionAsOf").unwrap().is_null(), "{a}");
+        assert_eq!(b.get("attentionAsOf").unwrap().as_str(), Some("2026-08-12"));
     }
 
     /// `SkippedState` is a fresh, empty `Vec` by default — a rebuild that has
@@ -2114,11 +2175,24 @@ mod command_tests {
                 tokenizer_id: "jieba/1".to_string(),
                 origin_counts: searchidx::OriginCounts { human: 1, derived: 2, source: 3, unlabeled: 4 },
                 type_counts,
+                attention_files: 5,
+                attention_as_of: Some("2026-08-13".to_string()),
             },
             vec![SkippedDto { path: "big.md".to_string(), size_bytes: 42 }],
         );
         let v = serde_json::to_value(&dto).unwrap();
-        for key in ["files", "blocks", "dbBytes", "builtAt", "tokenizerId", "skippedLarge", "originCounts", "typeCounts"] {
+        for key in [
+            "files",
+            "blocks",
+            "dbBytes",
+            "builtAt",
+            "tokenizerId",
+            "skippedLarge",
+            "originCounts",
+            "typeCounts",
+            "attentionFiles",
+            "attentionAsOf",
+        ] {
             assert!(v.get(key).is_some(), "missing key {key} in {v}");
         }
         let skipped = v.get("skippedLarge").unwrap().as_array().unwrap();
