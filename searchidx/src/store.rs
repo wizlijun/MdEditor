@@ -44,7 +44,15 @@ use crate::tokenize::{tokenize, TOKENIZER_ID};
 // is fixed at creation and `bm25()`'s weight list must match it — so an old
 // database cannot answer this build's queries at all. Same no-migration rule:
 // bump and let `open` wipe it.
-pub const SCHEMA_VERSION: i64 = 4;
+//
+// v4 -> v5: `blocks_fts` became CONTENTLESS (`content=''`,
+// `contentless_delete=1`). A standard FTS5 table keeps its own copy of every
+// indexed column in a `%_content` shadow table; measured on a real
+// 8,977-file vault that copy was 632 MB of a 1.6 GB index — 39% — and
+// nothing ever read it (queries JOIN back to `blocks` for the real text; no
+// `snippet()`/`highlight()` anywhere; `bm25()` works contentless). Column
+// shape again, so again: bump and let `open` wipe it.
+pub const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE files(
@@ -59,7 +67,8 @@ CREATE TABLE blocks(
   breadcrumb TEXT, text TEXT, level TEXT,
   is_annotation INTEGER DEFAULT 0, agent_by TEXT);
 CREATE INDEX blocks_file ON blocks(file_id);
-CREATE VIRTUAL TABLE blocks_fts USING fts5(tok_text, tok_breadcrumb, tok_title);
+CREATE VIRTUAL TABLE blocks_fts USING fts5(tok_text, tok_breadcrumb, tok_title,
+  content='', contentless_delete=1);
 CREATE TABLE links(file_id INTEGER, kind TEXT, target TEXT, line INTEGER);
 CREATE INDEX links_file ON links(file_id);
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -344,6 +353,31 @@ fn set_pragmas(conn: &Connection) -> rusqlite::Result<()> {
     debug_assert_eq!(mode.to_lowercase(), "wal");
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     Ok(())
+}
+
+/// Hand the write-ahead log's disk space back after a large write.
+///
+/// A WAL grows to the high-water mark of the largest transaction that ever
+/// ran and is then *reused*, never shrunk. One full rebuild therefore leaves
+/// a WAL about as large as the database it just built — measured on a real
+/// 8,977-file vault: a 1.7 GB `index.db-wal` beside a 1.6 GB `index.db`, i.e.
+/// half of this feature's entire disk footprint sitting there permanently
+/// doing nothing. `TRUNCATE` is the only checkpoint mode that returns the
+/// space to the filesystem; `PASSIVE` (what `wal_autocheckpoint` runs) only
+/// makes the WAL reusable.
+///
+/// **Best-effort, and that is not a shortcut.** `TRUNCATE` needs every other
+/// connection out of the way, and two uncoordinated writer processes (the GUI
+/// and `notemd search`) is this crate's stated design, not an edge case. A
+/// `SQLITE_BUSY` here means "someone else is mid-query" — it says nothing
+/// about the scan that just succeeded, so it must not turn that scan into an
+/// error. The next rebuild truncates instead.
+pub fn checkpoint_truncate(conn: &Connection) {
+    // `PRAGMA wal_checkpoint` yields a row (busy, log-pages, checkpointed-pages),
+    // so it cannot go through `pragma_update`, which errors on result-producing
+    // statements — the same reason `set_pragmas` reads `journal_mode` back with
+    // `query_row`.
+    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
 }
 
 /// How long a statement waits for another process's write transaction before

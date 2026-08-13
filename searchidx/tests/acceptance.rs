@@ -875,3 +875,91 @@ fn a_wikipage_whose_title_matches_is_pinned_even_when_its_filename_is_slugged() 
     let a = idx.search_ranked("张三", 20, &Limits::full(), &w, &conv("wikipage")).unwrap();
     assert_eq!(a.hits[0].path, "wikipage/zhang-san.md", "fm title 匹配也要置顶: {:?}", a.hits);
 }
+
+// --- 索引体积 ----------------------------------------------------------
+// 实测(2026-08-13,8,977 文件的真实 vault):index.db 1.6 GB,而 index.db-wal
+// 另有 1.7 GB —— 磁盘占用的一半是重建期涨起来、之后再没缩回去的 WAL 高水位。
+// WAL 只会被复用,不会自己变小,除非做一次 TRUNCATE 检查点。
+
+/// 一次全量重建之后,WAL 必须被还给磁盘,而不是留着重建期的高水位。
+#[test]
+fn a_full_rebuild_truncates_the_write_ahead_log() {
+    let v = tempfile::tempdir().unwrap();
+    // 要足够多的内容把 WAL 顶起来 —— 太小的语料在默认 autocheckpoint
+    // (1000 页)以内,测试会因为「本来就没涨」而假绿。
+    for i in 0..400 {
+        std::fs::write(
+            v.path().join(format!("f{i}.md")),
+            format!("# 标题 {i}\n\n{}\n", "内容 content alpha bravo charlie ".repeat(60)),
+        )
+        .unwrap();
+    }
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("i.db");
+    let mut idx = SearchIndex::open_at(v.path(), &db, "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    let wal = db.with_file_name("i.db-wal");
+    let wal_bytes = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+    let db_bytes = std::fs::metadata(&db).unwrap().len();
+    assert!(
+        db_bytes > 1_000_000,
+        "语料太小,WAL 根本没机会涨起来,这条测试证明不了任何事(db={db_bytes})"
+    );
+    assert!(
+        wal_bytes < 100_000,
+        "重建后 WAL 没有被截断:{wal_bytes} 字节(db={db_bytes})"
+    );
+}
+
+/// 实测(同一次审计):`blocks_fts_content` 632 MB,占 1.6 GB 索引的 39% ——
+/// FTS5 默认会把分词后的文本**再存一份**在 `%_content` 表里。
+///
+/// 这一份从来没人读:查询一律 JOIN 回 `blocks` 取真正的文本,没有任何
+/// `snippet()`/`highlight()` 调用,`bm25()` 在 contentless 表上照常工作。
+/// 所以它是纯粹的浪费,而这条测试就是那 39% 的钉子 —— 谁把 `content=''`
+/// 从建表语句里去掉(比如一次粗心的合并),这里立刻红。
+#[test]
+fn the_fts_table_does_not_keep_a_second_copy_of_the_tokenized_text() {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::write(v.path().join("a.md"), "alpha bravo 增量索引\n").unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("i.db");
+    let mut idx = SearchIndex::open_at(v.path(), &db, "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    drop(idx);
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        !tables.iter().any(|t| t == "blocks_fts_content"),
+        "FTS 又存了一份分词文本(索引体积的 39%): {tables:?}"
+    );
+}
+
+/// contentless 的唯一行为差异,写下来免得将来有人踩:读 FTS 的列值不会报错,
+/// 会**静默返回 NULL**。今天没有任何代码这么做(查询取的是 `b.text`),
+/// 但如果哪天有人顺手写了 `SELECT tok_text FROM blocks_fts`,他不会看到
+/// 一个错误,只会看到空 —— 这条测试把这个陷阱记在案。
+#[test]
+fn reading_an_fts_column_value_yields_null_rather_than_an_error() {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::write(v.path().join("a.md"), "alpha bravo\n").unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("i.db");
+    let mut idx = SearchIndex::open_at(v.path(), &db, "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    drop(idx);
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let got: Option<String> = conn
+        .query_row("SELECT tok_text FROM blocks_fts WHERE blocks_fts MATCH '\"alpha\"' LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(got, None, "contentless 表不该还留着列值");
+}
