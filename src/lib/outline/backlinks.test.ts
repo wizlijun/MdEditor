@@ -1,6 +1,6 @@
 // src/lib/outline/backlinks.test.ts
 import { describe, it, expect, afterEach } from 'vitest'
-import { createIndex, indexFileContent, removeFileFromIndex, backlinksFor, pageNameOf, pageCandidates, resolveTarget, detectNameCollisions, isWikiPagePath } from './backlinks'
+import { createIndex, indexFileContent, removeFileFromIndex, backlinksFor, pageNameOf, pageCandidates, resolveTarget, detectNameCollisions, isWikiPagePath, classifyWatchPaths } from './backlinks'
 import { setBlockedWikilinks } from '../wikilink/blocklist'
 
 function idxWith(files: Record<string, string>) {
@@ -190,5 +190,30 @@ describe('isWikiPagePath', () => {
   })
   it('tolerates trailing slash on root', () => {
     expect(isWikiPagePath({ root: '/v/', dirs: ['wikipage'] }, '/v/wikipage/x.md')).toBe(true)
+  })
+})
+
+describe('classifyWatchPaths', () => {
+  it('separates note paths from a directory-level change', () => {
+    const r = classifyWatchPaths([
+      '/v/wikipage/Foo.note.md',
+      '/v/ssot/books/Paper Bushcraft',   // 目录改名:事件只报目录自身
+    ])
+    expect(r.notes).toEqual(['/v/wikipage/Foo.note.md'])
+    expect(r.dirChange).toBe(true)
+  })
+
+  it('plain files and dot-dirs are neither notes nor a dir change', () => {
+    const r = classifyWatchPaths([
+      '/v/notes/a.md',            // 纯 .md 不入反链索引(设计如此)
+      '/v/images/cover.png',
+      '/v/.git/objects',          // 点目录排除
+    ])
+    expect(r.notes).toEqual([])
+    expect(r.dirChange).toBe(false)
+  })
+
+  it('a dotted directory name is missed by design, not crashed on', () => {
+    expect(classifyWatchPaths(['/v/notes.v2']).dirChange).toBe(false)
   })
 })

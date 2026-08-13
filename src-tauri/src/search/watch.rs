@@ -1,6 +1,6 @@
 //! notify wiring. All policy — debounce, flood degradation — lives in
-//! `searchidx::watch`; this file only turns OS events into `Pending::note`
-//! calls and drives the drain loop.
+//! `searchidx::watch`; this file only turns OS events into `Pending::note` /
+//! `Pending::force_sweep` calls and drives the drain loop.
 //!
 //! A watcher of its own rather than a subscriber to `vault_sync`'s: that one is
 //! tightly coupled to its `run_loop`, and merging them would put a new
@@ -83,6 +83,48 @@ fn relevant_paths(event: &Event, vault_root: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Whether `event` is a directory-level change the per-file channel cannot
+/// express. macOS FSEvents / Windows ReadDirectoryChangesW report a directory
+/// rename as an event on the directory path *only* — no per-child events — so
+/// everything `should_forward` admits misses it and the index keeps every old
+/// path until the next full sweep. Detection:
+///
+/// - rename/create where the path now *is* a directory (the new-name end);
+/// - rename/remove where the path is gone *and* extensionless (the old-name
+///   end — a vanished `LICENSE`-style file also matches, which costs one
+///   cheap stat-walk sweep and nothing else).
+///
+/// Content/metadata `Modify`s on directories are deliberately excluded: some
+/// backends emit them as noise on every child write, and treating those as
+/// directory changes would degrade the watcher to sweep-per-batch.
+fn needs_sweep(event: &Event, vault_root: &Path) -> bool {
+    use notify::event::ModifyKind;
+    let renameish = matches!(event.kind, EventKind::Modify(ModifyKind::Name(_)));
+    let createish = renameish || matches!(event.kind, EventKind::Create(_));
+    let removeish = renameish || matches!(event.kind, EventKind::Remove(_));
+    if !createish && !removeish {
+        return false;
+    }
+    event.paths.iter().any(|p| {
+        let Some(rel) = searchidx::norm::rel_path(vault_root, p) else {
+            return false;
+        };
+        if should_forward(&rel) || rel.split('/').any(|s| s.starts_with('.')) {
+            return false;
+        }
+        (createish && p.is_dir())
+            || (removeish && !p.exists() && Path::new(&rel).extension().is_none())
+    })
+}
+
+/// What the watcher callback sends the drain loop: a vault-relative `.md`
+/// path, or the fact that a directory changed (which has no path the per-file
+/// channel could carry).
+enum Note {
+    File(String),
+    DirChange,
+}
+
 /// (Re)start the watcher for `vault_root`, under the generation `my_gen`
 /// reserved by the caller (`open_vault`) via `reserve_generation`. Safe to
 /// call again — e.g. when the user picks a different vault folder: the
@@ -90,15 +132,18 @@ fn relevant_paths(event: &Event, vault_root: &Path) -> Vec<String> {
 /// continuing to write into the old vault's (still-live) `IndexHandle`
 /// contents.
 pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::channel::<Note>();
     let root = vault_root.to_path_buf();
     let filter_root = root.clone();
 
     let mut watcher = match RecommendedWatcher::new(
         move |res: Result<Event, notify::Error>| {
             let Ok(event) = res else { return };
+            if needs_sweep(&event, &filter_root) {
+                let _ = tx.send(Note::DirChange);
+            }
             for rel in relevant_paths(&event, &filter_root) {
-                let _ = tx.send(rel);
+                let _ = tx.send(Note::File(rel));
             }
         },
         // Matches `vault_sync/watcher.rs` and `agents_sync/watcher.rs`: the
@@ -133,7 +178,8 @@ pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
                 return;
             }
             match rx.recv_timeout(Duration::from_millis(DEBOUNCE_MS)) {
-                Ok(rel) => pending.note(rel),
+                Ok(Note::File(rel)) => pending.note(rel),
+                Ok(Note::DirChange) => pending.force_sweep(),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if pending.is_empty() {
                         continue;
@@ -202,7 +248,7 @@ fn drain(app: &AppHandle, root: &Path, batch: Batch) {
                 crate::log_cat!(
                     "search",
                     "info",
-                    "flood sweep: {} renamed, {} indexed, {} removed, {} ms",
+                    "full sweep: {} renamed, {} indexed, {} removed, {} ms",
                     stats.files_renamed,
                     stats.files_indexed,
                     stats.files_removed,
@@ -212,7 +258,7 @@ fn drain(app: &AppHandle, root: &Path, batch: Batch) {
                 true
             }
             Err(e) => {
-                crate::log_cat!("search", "error", "flood sweep failed: {e}");
+                crate::log_cat!("search", "error", "full sweep failed: {e}");
                 false
             }
         },
@@ -253,7 +299,7 @@ fn log_outcome(rel: &str, outcome: IndexOutcome) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{AccessKind, CreateKind, ModifyKind, RemoveKind};
+    use notify::event::{AccessKind, CreateKind, ModifyKind, RemoveKind, RenameMode};
     use std::path::PathBuf;
 
     #[test]
@@ -328,6 +374,109 @@ mod tests {
             "SearchPanel.svelte does not listen for {INDEX_UPDATED_EVENT} \
              (looked for {needle:?}) — auto-refresh is silently dead"
         );
+    }
+
+    /// 目录改名在 FSEvents/ReadDirectoryChangesW 上只报目录自身路径,不逐个报
+    /// 子文件 —— 事件若被 `.md` 过滤器整个吞掉,索引会一直留着旧路径(v6.813.4
+    /// 实测:改目录名后搜索结果指向不存在的文件)。目录事件必须触发全量 sweep。
+    #[test]
+    fn a_directory_rename_event_needs_a_sweep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("Paper Bushcraft");
+        std::fs::create_dir(&dir).unwrap();
+        let ev = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any))).add_path(dir);
+        assert!(needs_sweep(&ev, tmp.path()));
+    }
+
+    /// 改名事件的「旧路径」端:磁盘上已不存在,无扩展名 → 按目录对待。
+    /// (目录移出 vault / 移入废纸篓时只有这一端。)
+    #[test]
+    fn a_vanished_extensionless_path_needs_a_sweep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ev = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+            .add_path(tmp.path().join("2026-08"));
+        assert!(needs_sweep(&ev, tmp.path()));
+    }
+
+    /// 普通文件事件不许 sweep:.md 走文件通道,其余(图片等)维持忽略 ——
+    /// 否则每次保存/贴图都全量扫一遍。
+    #[test]
+    fn plain_file_events_do_not_need_a_sweep() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("cover.png"), b"x").unwrap();
+        let png = Event::new(EventKind::Create(CreateKind::File))
+            .add_path(tmp.path().join("cover.png"));
+        assert!(!needs_sweep(&png, tmp.path()));
+        let md = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+            .add_path(tmp.path().join("a.md"));
+        assert!(!needs_sweep(&md, tmp.path()));
+    }
+
+    /// 内容/元数据类 Modify 不算目录变化:FSEvents 可能对目录本身发此类噪声,
+    /// 若都触发 sweep,watcher 就退化成「每批全量」。
+    #[test]
+    fn dir_content_modify_noise_does_not_need_a_sweep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("notes");
+        std::fs::create_dir(&dir).unwrap();
+        let ev = Event::new(EventKind::Modify(ModifyKind::Any)).add_path(dir);
+        assert!(!needs_sweep(&ev, tmp.path()));
+    }
+
+    /// 点目录(.git/.notemd/…)下的目录事件与 `should_forward` 同规则排除。
+    #[test]
+    fn dot_dir_events_do_not_need_a_sweep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git = tmp.path().join(".git");
+        std::fs::create_dir_all(git.join("objects")).unwrap();
+        let ev = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+            .add_path(git.join("objects"));
+        assert!(!needs_sweep(&ev, tmp.path()));
+    }
+
+    /// 真实后端(FSEvents/inotify)整链验证:目录改名必须产生至少一个
+    /// `needs_sweep` 认定的事件。合成事件测不出 notify 对目录改名的真实
+    /// 事件形状 —— v6.813.4 的盲区恰恰漏在这里(`.md` 过滤器把目录事件
+    /// 整个吞掉),这条测试直接对着真文件系统钉死它。
+    #[test]
+    fn real_backend_reports_a_directory_rename_sweep_worthily() {
+        use std::sync::{Arc, Mutex};
+        let tmp = tempfile::tempdir().unwrap();
+        // FSEvents 报 /private/var 实路径,tempdir 给 /var 符号链接 —— 不
+        // canonicalize 则 rel_path 解不出相对路径,事件全被丢掉。
+        let root = tmp.path().canonicalize().unwrap();
+        let old = root.join("olddir");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::write(old.join("a.md"), "x").unwrap();
+
+        let hit = Arc::new(Mutex::new(false));
+        let hit_w = hit.clone();
+        let watch_root = root.clone();
+        let mut w = RecommendedWatcher::new(
+            move |res: Result<Event, notify::Error>| {
+                if let Ok(ev) = res {
+                    if needs_sweep(&ev, &watch_root) {
+                        *hit_w.lock().unwrap() = true;
+                    }
+                }
+            },
+            notify::Config::default(),
+        )
+        .unwrap();
+        use notify::Watcher as _;
+        w.watch(&root, RecursiveMode::Recursive).unwrap();
+        // 让 watcher 启动期的历史/噪声事件先过去,再清旗、改名。
+        std::thread::sleep(Duration::from_millis(500));
+        *hit.lock().unwrap() = false;
+        std::fs::rename(&old, root.join("newdir")).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if *hit.lock().unwrap() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("directory rename produced no sweep-worthy event within 5s");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // src/lib/outline/backlinks-io.svelte.ts
 import { watchImmediate } from '@tauri-apps/plugin-fs'
 import { outline, bump } from './store.svelte'
-import { buildFolderIndex, refreshFileInIndex, resolveTarget, detectNameCollisions } from './backlinks'
+import { buildFolderIndex, refreshFileInIndex, resolveTarget, detectNameCollisions, classifyWatchPaths } from './backlinks'
 import { sanitizeFileName } from './slug'
 import { outlineDirs } from './dirs.svelte'
 import { folderView, parentDir } from '../folder-view.svelte'
@@ -48,10 +48,24 @@ export async function ensureIndex(mainPath: string): Promise<void> {
   }
   let timer: ReturnType<typeof setTimeout> | null = null
   const pending = new Set<string>()
+  let needRebuild = false
   watchImmediate(root, (ev) => {
-    for (const p of (ev.paths ?? [])) if (/\.notes?\.md$/i.test(p)) pending.add(p)
+    const { notes, dirChange } = classifyWatchPaths(ev.paths ?? [])
+    for (const p of notes) pending.add(p)
+    if (dirChange) needRebuild = true
     if (timer) clearTimeout(timer)
     timer = setTimeout(async () => {
+      if (gen !== indexGen) return
+      if (needRebuild) {
+        // 目录改名/移动:事件不带子文件路径,逐文件刷新无从下手,整棵重建。
+        needRebuild = false
+        pending.clear()
+        const fresh = await buildFolderIndex(root, [outlineDirs.wikipage, outlineDirs.dailynote], () => {})
+        if (gen !== indexGen) return
+        outline.backlinkIndex = fresh
+        bump()
+        return
+      }
       const current = outline.backlinkIndex
       if (!current) return
       for (const p of [...pending]) { pending.delete(p); await refreshFileInIndex(current, p) }

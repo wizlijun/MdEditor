@@ -41,6 +41,14 @@ impl Pending {
         }
     }
 
+    /// A directory-level change (rename/move/delete) names no `.md` paths at
+    /// all — the OS reports only the directory itself — so per-file updates
+    /// cannot see it. Degrade this window to a full sweep, same as a flood.
+    pub fn force_sweep(&mut self) {
+        self.flooded = true;
+        self.paths.clear();
+    }
+
     pub fn is_empty(&self) -> bool {
         !self.flooded && self.paths.is_empty()
     }
@@ -94,5 +102,18 @@ mod tests {
     #[test]
     fn the_debounce_window_is_300ms() {
         assert_eq!(DEBOUNCE_MS, 300);
+    }
+
+    /// 目录改名/移动事件不携带任何 .md 路径,watcher 层只能把这一窗强制降级为
+    /// 全量 sweep;排空后必须复位,否则一次目录改名让之后每批都变 FullSweep。
+    #[test]
+    fn a_forced_sweep_drains_as_full_sweep_then_resets() {
+        let mut p = Pending::default();
+        p.note("a.md".into());
+        p.force_sweep();
+        assert!(!p.is_empty());
+        assert!(matches!(p.take(), Batch::FullSweep));
+        p.note("b.md".into());
+        assert!(matches!(p.take(), Batch::Files(v) if v == vec!["b.md"]));
     }
 }

@@ -448,7 +448,17 @@ export async function toggleExpanded(dir: string): Promise<void> {
 /** Re-read every directory currently cached (manual refresh). */
 export async function refreshAll(): Promise<void> {
   const dirs = [...folderView.entriesCache.keys()]
-  await Promise.all(dirs.map((d) => readFolder(d).catch(() => {})))
+  await Promise.all(dirs.map(async (d) => {
+    try {
+      await readFolder(d)
+    } catch {
+      // Unreadable = renamed/deleted: keeping the stale entries would leave a
+      // ghost directory in the tree until restart. It re-reads on demand if
+      // the failure was transient.
+      folderView.entriesCache.delete(d)
+      folderView.expanded.delete(d)
+    }
+  }))
   // Keep the active filter current: pick up newly added subfolders/files.
   if (folderView.filter.trim() && folderView.rootDir) {
     await ensureSubtreeLoaded(folderView.rootDir)

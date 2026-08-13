@@ -168,6 +168,25 @@ export async function buildFolderIndex(
   return idx
 }
 
+/**
+ * watcher 事件分类:目录改名/移动在 FSEvents 上只报目录自身路径,不逐个报
+ * 子文件 —— 只按 `.note.md` 过滤会把整个事件吞掉,索引留旧路径。末段无 `.`
+ * 且不以 `.` 开头的路径按目录对待(`notes.v2` 这类带点目录名认不出,漏检的
+ * 代价只是等下一次全量重建,不做 stat 换精度)。
+ */
+export function classifyWatchPaths(paths: string[]): { notes: string[]; dirChange: boolean } {
+  const notes: string[] = []
+  let dirChange = false
+  for (const p of paths) {
+    if (/\.notes?\.md$/i.test(p)) { notes.push(p); continue }
+    const norm = p.replace(/[\\/]+$/, '')
+    if (norm.split(/[\\/]/).some((s) => s.startsWith('.'))) continue
+    const seg = norm.split(/[\\/]/).pop() ?? ''
+    if (seg && !seg.includes('.')) dirChange = true
+  }
+  return { notes, dirChange }
+}
+
 /** file-watcher 事件驱动的单文件增量重扫（仅 .note.md，纯 .md 不索引） */
 export async function refreshFileInIndex(idx: BacklinkIndex, path: string): Promise<void> {
   if (!/\.notes?\.md$/i.test(path)) return

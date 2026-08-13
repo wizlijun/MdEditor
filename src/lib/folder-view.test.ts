@@ -40,6 +40,7 @@ import {
   suppressFollowFor,
   resetFollowState,
   toggleExpanded,
+  refreshAll,
   loadFolderViewState,
   setVisible,
   setWidth,
@@ -515,5 +516,25 @@ describe('countAnsweredQuestions', () => {
   })
   it('does not count unindented lines even with CRLF junk before them', () => {
     expect(countAnsweredQuestions('foo\r\nstatus:: answered\r\nbar')).toBe(0)
+  })
+})
+
+describe('refreshAll', () => {
+  it('drops cache and expansion state for directories that vanished', async () => {
+    // 目录改名后旧路径读取失败:缓存与展开状态必须清掉,否则树里残留旧目录。
+    folderView.entriesCache.clear()
+    folderView.expanded.clear()
+    folderView.filter = ''
+    folderView.entriesCache.set('/root', [])
+    folderView.entriesCache.set('/root/gone', [])
+    folderView.expanded.add('/root/gone')
+    readDirMock.mockImplementation(async (dir: unknown) => {
+      if (dir === '/root/gone') throw new Error('ENOENT')
+      return []
+    })
+    await refreshAll()
+    expect(folderView.entriesCache.has('/root/gone')).toBe(false)
+    expect(folderView.expanded.has('/root/gone')).toBe(false)
+    expect(folderView.entriesCache.has('/root')).toBe(true)
   })
 })
