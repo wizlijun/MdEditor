@@ -568,3 +568,75 @@ describe('SettingsDialog — Search & Index tab, empty pattern list confirm (des
     expect(globsCall?.[1]).toMatchObject({ searchSourceGlobs: [] })
   })
 })
+
+// Final review I-2, end to end through the UI: the settings page sends the
+// whole weights draft, and `vault_settings::merge` REPLACES the stored struct
+// with it — so a field the page does not carry is a field deleted from
+// `settings.json`. `attention` (the attention-boost `k`) has no input here on
+// purpose, which is exactly why it has to survive the round trip: hand-editing
+// `settings.json` is the only way to set it, and `0` — "turn attention
+// weighting off" — is the value users will set.
+describe('SettingsDialog — Search & Index tab, saving tier weights preserves attention (final review I-2)', () => {
+  /** Answers the settings-load command with a stored `attention`, and lets
+   *  the save succeed so the payload can be inspected. */
+  function routeStoredWeights(attention: number) {
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === 'sotvault_vault_root') return '/tmp/vault'
+      if (cmd === 'notemd_vault_settings_get') {
+        return { searchWeights: { human: 1.25, derived: 1, source: 0.9, unlabeled: 0.3, attention } }
+      }
+      if (cmd === 'notemd_vault_settings_set') {
+        return { searchWeights: (args as { searchWeights: unknown }).searchWeights }
+      }
+      throw new Error(`no tauri host in vitest: ${cmd}`)
+    })
+  }
+
+  function savedWeights(): Record<string, number> {
+    const call = invokeMock.mock.calls.filter((c) => c[0] === 'notemd_vault_settings_set').at(-1)
+    if (!call) throw new Error('notemd_vault_settings_set was never called')
+    return (call[1] as { searchWeights: Record<string, number> }).searchWeights
+  }
+
+  // Note on this first test's power, measured: with the pre-fix mirror it
+  // passes anyway, because `{ ...vaultSettings.searchWeights }` carries an
+  // extra runtime key the TS type never declared. What it pins is the
+  // contract (the payload must carry `attention`), and the type layer +
+  // `pnpm check` is what keeps the mirror honest. The `restore defaults`
+  // test below is the one that goes red on the actual pre-fix code — that
+  // path builds its draft from `DEFAULT_SEARCH_WEIGHTS` alone, so a missing
+  // field there really does delete the stored value.
+  it('a stored attention: 0 is still 0 after the user saves the four tier weights', async () => {
+    routeStoredWeights(0)
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = namedSection('Ranking weights')
+    typeInto(section.querySelector('input[type="number"]') as HTMLInputElement, '2')
+    await settle()
+    buttonByText(section, 'Save').click()
+    await settle()
+
+    expect(savedWeights().human).toBe(2)
+    expect(savedWeights().attention, 'saving tier weights must not wipe the attention weight').toBe(0)
+  })
+
+  it('"restore defaults" resets the four tiers it is about, not the attention weight it never mentions', async () => {
+    routeStoredWeights(0)
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = namedSection('Ranking weights')
+    buttonByText(section, 'Restore defaults').click()
+    await settle()
+    buttonByText(section, 'Save').click()
+    await settle()
+
+    expect(savedWeights().human).toBe(1.25) // the tier defaults did get restored
+    expect(savedWeights().attention).toBe(0)
+  })
+})
