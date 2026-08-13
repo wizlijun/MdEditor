@@ -280,8 +280,20 @@ pub fn restart(app: &AppHandle, vault_root: &Path, my_gen: u64) {
 /// 进一份陈旧的快照。
 fn drain_attention(app: &AppHandle, root: &Path, my_gen: u64) {
     let idx_handle = crate::search::handle(app);
-    // 锁外做 IO,与 `drain` 一样:一次摄取不该把并发的搜索命令堵住整段读盘。
-    // 也正因为这段 IO 慢,上面那道闸门才必须在它**之后**、锁**之内**求值。
+    // 锁外只做 `links_for_vault`(读 `.notemd/mirrors/`)。**注意力摄取本身的
+    // 读盘在锁内** —— `SearchIndex::refresh_attention` 里的 `attention::collect`
+    // 要读最多 365×设备数 个 analytics 日文件,而它是在 `refresh_attention_if_
+    // current` 取锁之后才被调用的。这不是「锁外做 IO」,别照抄这句纪律去描述
+    // 别处的代码(最终评审 M-5:注释曾经就是这么写的,与事实不符)。
+    //
+    // 维持现状是**量过之后的取舍**,不是疏忽:release 构建下 365 天 × 2 设备
+    // × 每天 60 篇文档 = 720 个日文件,三轮各 18~19ms,即最坏情况下每 60 秒占
+    // 用索引锁约 20ms。要把它挪到锁外,就得把「读盘 → 折算 → 写表」拆成两段,
+    // 而中间那道代际闸门(取锁 → 查代际 → 才写)正是靠「求值与写入在同一次持
+    // 锁内」才成立的 —— 拆开就要重新论证 split-brain,代价远大于这 20ms。
+    //
+    // 也正因为这段 IO 慢,那道闸门才必须在它**之后**求值,而不是复用调用方
+    // 循环里那次 `stale()` 快照。
     let links = crate::search::attention_links::links_for_vault(root);
     let ok = match refresh_attention_if_current(&idx_handle, &links, || is_current(app, my_gen)) {
         Ingest::Done(Ok(n)) => {
@@ -290,15 +302,26 @@ fn drain_attention(app: &AppHandle, root: &Path, my_gen: u64) {
         }
         // 摄取失败只降级排序(加成退化成 ×1.0),索引本身完全可用 —— 与
         // `open_vault` 里同一条判断,所以只记一行,不动索引状态。
+        // 级别与 `open_vault` 里那次摄取失败**必须相同**(两处都是 `warn`,
+        // 最终评审 M-2):同一件事在两处记成不同级别,按 `error` 过滤日志排障
+        // 的人就只看得见其中一半。`warn` 而不是 `error` 的理由写在上面那句
+        // 注释里 —— 这是可降级的状况,不是故障。
         Ingest::Done(Err(e)) => {
-            crate::log_cat!("search", "error", "attention ingest failed: {e}");
+            crate::log_cat!("search", "warn", "attention ingest failed: {e}");
             false
         }
         Ingest::Superseded => {
             crate::log_cat!("search", "info", "attention ingest superseded, discarding");
             false
         }
-        Ingest::NotReady => false,
+        // 索引还没装好(`open_vault` 清空索引到装回之间的窗口)。跳过这一轮
+        // 是正常的、也会自愈(用户继续读文档就会有下一次 flush),但**不能
+        // 静默**:这一轮的脏标记已经被 `take_attention_turn` 消费掉了(见那
+        // 个函数与 M-6),一行日志都没有的话,「摄取为什么没跑」就完全无从查起。
+        Ingest::NotReady => {
+            crate::log_cat!("search", "info", "attention ingest skipped: index not ready");
+            false
+        }
     };
     if ok {
         // 排序输入变了,开着的搜索面板重跑一次查询才看得到新次序。
