@@ -505,9 +505,14 @@ fn fts_search(
     conventions: &Conventions,
 ) -> rusqlite::Result<(Vec<Hit>, bool)> {
     let Some(expr) = match_expr(q) else { return Ok((Vec::new(), false)) };
-    let [(sql, args), (arm, arm_args)] = fts_arms(q, expr, limit);
+    let ((sql, args), attention_arm) = fts_arms(q, expr, limit, weights.attention);
     let (main_rows, main_truncated) = run_fts_arm(conn, &sql, &args)?;
-    let (arm_rows, arm_truncated) = run_fts_arm(conn, &arm, &arm_args)?;
+    // `k = 0` 关掉的是**整条链路**,不只是打分:没有第二条臂,候选集就与接入
+    // 本功能之前逐条相同(见 `fts_arms` 的「`k = 0` 必须连臂一起关」一节)。
+    let (arm_rows, arm_truncated) = match &attention_arm {
+        Some((arm, arm_args)) => run_fts_arm(conn, arm, arm_args)?,
+        None => (Vec::new(), false),
+    };
 
     // 去重键用 `(path, line, line_end)`,而它**不是唯一键** —— 早先这里的注释
     // 说「这个三元组在 `blocks` 里已经唯一」,那句话是错的:实测任何单块文件
@@ -536,7 +541,8 @@ fn fts_search(
     Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
 }
 
-/// FTS 路径的**两条候选臂**的 SQL 与参数:`[主臂, 保底臂]`。
+/// FTS 路径的候选臂的 SQL 与参数:`(主臂, 保底臂)` —— 保底臂是 `Option`,
+/// `k = 0` 时**根本不构造**(见下)。
 ///
 /// # 为什么是两条
 ///
@@ -574,7 +580,29 @@ fn fts_search(
 /// 就是为这条臂建的。实测它**用不上**(见 `store.rs` v6 注释):查询由 FTS 驱
 /// 动、`doc_attention` 是被 join 的内表,`ORDER BY att.minutes DESC` 只能靠
 /// TEMP B-TREE,换 `INNER JOIN` 也一样。索引已删。
-fn fts_arms(q: &Query, expr: String, limit: usize) -> [(String, Vec<String>); 2] {
+///
+/// # `k = 0` 必须连臂一起关(最终评审 I-1)
+///
+/// 规格 §4.2/§7 把 `k = 0` 定义成**回滚开关**:「全链路输出与接入前逐位相同」。
+/// 只让 `attention::boost` 返回 1.0 是**不够**的 —— 保底臂捞回来的行照样要过
+/// `finish`,origin 四档乘数、`agent_by ×0.85`、`doc_date` 新鲜度加成对它们
+/// 照常作用。于是一份 bm25 在窗口外、但 `origin=human`(×1.25)的文档,完全
+/// 可以压过窗口内 `origin=unlabeled`(×0.3)的文档,而它能进入评分阶段这件事
+/// **只由注意力臂促成**。实测(80 篇噪声 + 1 篇读了 10 小时的 human 文档,
+/// `limit=10`、`attention: 0.0`):摄取前目标落榜,摄取后升到第 1 名并挤掉了
+/// 第 10 名 —— 功能「关着」,结果却变了。所以闸门在**构造**这一步:`k <= 0`
+/// 时压根不生成第二条臂,`fts_search` 也就没有第二条 SQL 可跑。
+///
+/// 附带好处:关掉功能的用户不再为一条必然为空的结果集付 +46%~+62% 的 SQL 成本。
+/// 端到端的等价性由 acceptance 的 `k_zero_keeps_the_whole_pipeline_identical_
+/// to_having_no_attention_data` 钉住(它比 `score_of` 层那两条更强:比的是最终
+/// 可见的 hit 序列)。
+fn fts_arms(
+    q: &Query,
+    expr: String,
+    limit: usize,
+    k: f64,
+) -> ((String, Vec<String>), Option<(String, Vec<String>)>) {
     let base = format!(
         // Column weights, in `blocks_fts`'s declared order: `tok_text`,
         // `tok_breadcrumb`, `tok_title`. The title's 4.0 is the point of
@@ -597,6 +625,14 @@ fn fts_arms(q: &Query, expr: String, limit: usize) -> [(String, Vec<String>); 2]
     // Over-fetch: business boosts reorder, and a phrase recheck removes rows.
     sql.push_str(&format!(" ORDER BY rank ASC LIMIT {}", (limit * 8).max(64)));
 
+    // `k <= 0` = 用户把功能关了(`Weights::sanitized` / `validate_search_weights`
+    // 都刻意放行 0,这是唯一的关闭途径)。此时保底臂**不构造** —— 见上面
+    // 「`k = 0` 必须连臂一起关」。NaN 单独判一次也走关闭分支(`k <= 0.0` 对
+    // NaN 是 false):读取侧 `sanitized` 已经把 NaN 换成了默认值,这里不依赖它。
+    if k.is_nan() || k <= 0.0 {
+        return ((sql, args), None);
+    }
+
     // 保底臂:注意力。两条臂**共用同一个 `base`**,也就是同一个 MATCH 和同一
     // 套 `push_filters` 过滤器 —— 这是硬约束,不是巧合:「我读得最多的文档」
     // 不是「我搜的东西」,这条臂一条不匹配的结果都不许引入。所以 `base` 只构
@@ -616,7 +652,7 @@ fn fts_arms(q: &Query, expr: String, limit: usize) -> [(String, Vec<String>); 2]
         (limit * 2).max(8)
     ));
 
-    [(sql, args), (arm, arm_args)]
+    ((sql, args), Some((arm, arm_args)))
 }
 
 /// 跑一条 FTS 候选臂,读出 `finish` 要的原始行。
@@ -2254,8 +2290,12 @@ mod tests {
     }
 
     /// 另外两条查询路径(`t1-scan` 的 LIKE 回退、无词的 filter-only)与 FTS
-    /// 路径共用 `SELECT_COLS`,但各自硬编码列索引 —— 漏改一条的症状是运行时
-    /// `InvalidColumnType`,不是编译错误。两条都必须真跑到并读出注意力。
+    /// 路径共用 `SELECT_COLS`,但各自硬编码列索引 —— 漏改一条**不报编译错,
+    /// 也不报 `InvalidColumnType`**:`SELECT_COLS` 追加的两列里,索引 13 是
+    /// `COALESCE(att.minutes, 0.0)`,与 `rank` 同为 REAL,读错只是把 bm25 悄悄
+    /// 换成注意力分钟数,分数全塌成一个值、相关性排序静默失效(实测,见
+    /// `SELECT_COLS` 的注释与 `the_bm25_rank_column_actually_reaches_the_score`)。
+    /// 两条路径都必须真跑到并读出注意力。
     #[test]
     fn every_query_path_reads_attention_not_just_the_fts_one() {
         // `会见了李慕白同志` + 查 `慕`:与 `an_out_of_vocabulary_cjk_query_
@@ -2316,7 +2356,9 @@ mod tests {
         let expr = match_expr(&q).expect("查询必须有 MATCH 表达式");
         // 断言的是**真正会跑的那条 SQL**(`fts_arms` 的产物),不是测试里另抄
         // 一份 —— 抄一份的守卫只能证明抄件的计划,那是自说自话。
-        for (tag, (sql, args)) in ["主臂", "保底臂"].iter().zip(fts_arms(&q, expr, 20)) {
+        let (main, arm) = fts_arms(&q, expr, 20, Weights::default().attention);
+        let arm = arm.expect("默认 k > 0 必须有保底臂,否则这条守卫在空转");
+        for (tag, (sql, args)) in ["主臂", "保底臂"].iter().zip([main, arm]) {
             let mut st = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
             let plan: Vec<String> = st
                 .query_map(params_from_iter(args.iter()), |r| r.get::<_, String>(3))
@@ -2336,6 +2378,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `k = 0` 时**第二条臂根本不该被构造出来**(最终评审 I-1)。
+    ///
+    /// 这条钉的是构造这一步(单元级);「关掉之后最终结果与接入前逐位相同」
+    /// 那件事由 acceptance 的 `k_zero_keeps_the_whole_pipeline_identical_to_
+    /// having_no_attention_data` 端到端钉住。两条都要:少了这条,回归时只能
+    /// 从「结果变了」倒推;少了那条,这条只能证明「没造 SQL」,证明不了「用户
+    /// 看到的东西没变」。
+    #[test]
+    fn k_zero_builds_no_attention_arm() {
+        let q = parse("银河");
+        let expr = match_expr(&q).expect("查询必须有 MATCH 表达式");
+        let (main, arm) = fts_arms(&q, expr.clone(), 20, 0.0);
+        assert!(arm.is_none(), "k=0 时不该构造保底臂");
+        assert!(!main.0.contains("att.minutes IS NOT NULL"), "主臂不该被注意力条件污染:{}", main.0);
+        // 反向区分力:k>0 时它必须回来 —— 否则一个「永远不造臂」的实现也能
+        // 让上面那条通过。
+        assert!(fts_arms(&q, expr, 20, 0.4).1.is_some(), "k>0 时保底臂必须在");
     }
 
     /// `doc_attention_minutes` 索引已删除(见 `store.rs` 的 v6 注释与

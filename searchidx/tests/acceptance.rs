@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
-use searchidx::query::{Conventions, Weights};
+use searchidx::query::{Conventions, Hit, Weights};
 use searchidx::{Limits, ScanOptions, SearchIndex};
 
 fn corpus() -> PathBuf {
@@ -1044,6 +1044,51 @@ fn refresh_attention_on_a_vault_without_insights_is_a_clean_no_op() {
     );
 }
 
+/// 80 篇噪声 + 1 篇 bm25 严格垫底、但你在上面花了 10 小时的 `target.md`,外加
+/// 对应的 analytics 日文件。两条测试共用:一条验「默认 k 下它被捞回来」,一条
+/// 验「k=0 下整条链路与没有注意力数据时逐条相同」。抽成函数而不是抄两份 ——
+/// 抄件一旦漂移,两条测试就在各自不同的语料上各说各话,而它们的意义恰恰来自
+/// 「同一份 fixture,只有 k(和 `target_frontmatter`)不同」。
+///
+/// `target_frontmatter` 决定目标文档的 origin 档位,而这**不是可有可无的调味
+/// 料**:噪声一律无 frontmatter(rule 6′ → `Unlabeled`,×0.3)。传 `""` 时目标
+/// 也是 `Unlabeled`,与噪声同档,于是它即使被保底臂捞进评分也仍排在噪声之后、
+/// 被 `truncate(limit)` 切掉 —— 只有注意力加成能把它顶上来。传
+/// `"---\ntype: Note\n---\n"` 时目标是 `Human`(×1.25),这时**即使 k=0**、
+/// 加成恒为 ×1.0,只要保底臂把它捞进评分它就会挤掉窗口内的噪声。后者正是最终
+/// 评审 I-1 的失败场景,`k_zero_keeps_the_whole_pipeline_identical_to_having_
+/// no_attention_data` 用的就是它:换成 `""` 那条测试会在 bug 存在时照样绿。
+fn vault_with_one_high_attention_document(target_frontmatter: &str) -> tempfile::TempDir {
+    let vault = tempfile::tempdir().unwrap();
+    // 噪声:80 篇短文,每篇都命中查询词,足以填满 (limit*8).max(64) 的窗口
+    // (limit=10 → 80 条,而每篇噪声还各自贡献一条 File 级 rollup,所以窗口
+    // 其实被噪声塞得满满当当)。
+    for i in 0..80 {
+        std::fs::write(vault.path().join(format!("noise{i}.md")), "银河 的 观测 记录\n").unwrap();
+    }
+    // 目标:同样只命中一次,但比噪声更长 —— bm25 的长度归一化让它严格垫底,
+    // 排在候选窗口之外。
+    std::fs::write(
+        vault.path().join("target.md"),
+        format!("{target_frontmatter}银河 的 观测 记录 补记\n"),
+    )
+    .unwrap();
+
+    let dir = vault.path().join(".notemd/analytics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+    );
+    std::fs::write(
+        dir.join(format!("{today}.DEV-1.json")),
+        format!(
+            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:target.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+    vault
+}
+
 /// 规格 §5:`fts_search` 先按 bm25 `ORDER BY rank ASC LIMIT (limit*8).max(64)`
 /// 取候选、**再**跑 `score_of`,所以纯排序加权救不了排在窗口外的文档 —— 它在
 /// 打分之前就被砍掉了,再大的系数也没机会作用在它身上。第二条臂给这类文档一
@@ -1063,30 +1108,9 @@ fn refresh_attention_on_a_vault_without_insights_is_a_clean_no_op() {
 /// `query.rs` 的 `attention_alone_moves_the_score` 等单测管。
 #[test]
 fn a_high_attention_document_is_recalled_past_the_bm25_window() {
-    let vault = tempfile::tempdir().unwrap();
-    // 噪声:80 篇短文,每篇都命中查询词,足以填满 (limit*8).max(64) 的窗口
-    // (limit=10 → 80 条,而每篇噪声还各自贡献一条 File 级 rollup,所以窗口
-    // 其实被噪声塞得满满当当)。
-    for i in 0..80 {
-        std::fs::write(vault.path().join(format!("noise{i}.md")), "银河 的 观测 记录\n").unwrap();
-    }
-    // 目标:同样只命中一次,但比噪声更长 —— bm25 的长度归一化让它严格垫底,
-    // 排在候选窗口之外。
-    std::fs::write(vault.path().join("target.md"), "银河 的 观测 记录 补记\n").unwrap();
-
-    let dir = vault.path().join(".notemd/analytics");
-    std::fs::create_dir_all(&dir).unwrap();
-    let today = searchidx::chunk::ymd_from_unix_public(
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
-    );
-    std::fs::write(
-        dir.join(format!("{today}.DEV-1.json")),
-        format!(
-            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:target.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
-        ),
-    )
-    .unwrap();
-
+    // 目标与噪声同档(都无 frontmatter → `Unlabeled`):这条测试要证明的是
+    // **注意力**把它顶了上来,所以不能让 origin 差异替它干活。
+    let vault = vault_with_one_high_attention_document("");
     let (_db, mut idx) = open_temp(vault.path());
     idx.rebuild(&ScanOptions::default()).unwrap();
 
@@ -1112,6 +1136,65 @@ fn a_high_attention_document_is_recalled_past_the_bm25_window() {
         after.iter().any(|h| h.path == "target.md"),
         "注意力臂必须把它捞回来:{:?}",
         after.iter().map(|h| &h.path).collect::<Vec<_>>()
+    );
+}
+
+/// 规格 §4.2/§7:`k = 0` 是**回滚开关** ——「全链路输出与接入前逐位相同」。
+///
+/// 这条与 `query.rs` 里那两条(`k_zero_disables_the_boost_in_score_of`、
+/// `zero_attention_leaves_the_score_bit_identical`)不是重复:那两条钉的是
+/// `score_of` 这一个函数的算术,而最终评审 I-1 实测到的失效**绕过了它们**
+/// —— 打分确实没变,变的是**候选集**。保底臂捞回来的行照样过 `finish`,
+/// origin 四档乘数、`agent_by`、`doc_date` 加成对它们照常作用,于是一份
+/// 「bm25 在窗口外但别的加成站在它这边」的文档能挤掉窗口内的对手,而它能
+/// 进入评分阶段这件事只由注意力臂促成。所以这条比的是**最终可见的 hit
+/// 序列**,而不是任何单个函数的返回值。
+///
+/// 两条断言缺一不可:
+/// - `k=0`:摄取前后的 `(path, line, score)` 序列必须逐条相同;
+/// - `k=默认`(对照臂):同一份 fixture 必须**变**。少了它,一个「注意力
+///   压根不起作用」的实现(或一份选错的 fixture)也能让上面那条通过,整条
+///   测试空转 —— 这正是 I-1 能躲过 13 轮逐环评审的原因。
+#[test]
+fn k_zero_keeps_the_whole_pipeline_identical_to_having_no_attention_data() {
+    // 目标是 `Human`(×1.25)、噪声是 `Unlabeled`(×0.3) —— 见 fixture 的注释:
+    // 这正是「候选集变了 → 可见结果就变了,哪怕加成恒为 ×1.0」的那一类文档。
+    let vault = vault_with_one_high_attention_document("---\ntype: Note\n---\n");
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    let off = Weights { attention: 0.0, ..Weights::default() };
+    // 比 `(path, line, score)` 而不是整个 `Hit`:`Hit::attention_minutes` 是
+    // 纯展示字段(CLI `--json` 用它解释顺序),摄取后它当然会从 0 变成 600,
+    // 那不是「排序被改了」。k=0 要保证的是**排序与可见集**不变。
+    let shape = |hits: &[Hit]| {
+        hits.iter().map(|h| (h.path.clone(), h.line, h.score)).collect::<Vec<_>>()
+    };
+    let run = |idx: &SearchIndex, w: &Weights| {
+        idx.search_with_weights("银河", 10, &Limits::full(), w).unwrap().hits
+    };
+
+    let before_off = run(&idx, &off);
+    let before_on = run(&idx, &Weights::default());
+    idx.refresh_attention(&[]).unwrap();
+    let after_off = run(&idx, &off);
+    let after_on = run(&idx, &Weights::default());
+
+    assert_eq!(
+        shape(&before_off),
+        shape(&after_off),
+        "k=0 是回滚开关:注意力数据的存在不许改变任何一位输出 —— 打分关了还不够,\
+         候选臂也必须一起关"
+    );
+    // 对照臂:证明这份 fixture 真的有区分力。
+    assert!(
+        !before_on.iter().any(|h| h.path == "target.md"),
+        "基线错了:摄取前它本就该落榜"
+    );
+    assert!(
+        after_on.iter().any(|h| h.path == "target.md"),
+        "默认 k 下注意力必须改变结果,否则上面那条「没变」的断言什么都没证明:{:?}",
+        after_on.iter().map(|h| &h.path).collect::<Vec<_>>()
     );
 }
 
