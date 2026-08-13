@@ -1003,11 +1003,16 @@ fn score_of(
 }
 
 /// Whole days from `from` to `to`, both `YYYY-MM-DD`. `None` on unparseable input.
-fn days_between(from: &str, to: &str) -> Option<i64> {
+///
+/// `pub(crate)` since the attention ingest needs the same civil-day arithmetic
+/// and this crate's house rule is that a utility stays where it was born and
+/// gets exported (same as `chunk::ymd_from_unix_public`) rather than being
+/// moved into a new "utils" module nobody owns.
+pub(crate) fn days_between(from: &str, to: &str) -> Option<i64> {
     Some((days_from_civil(to)? - days_from_civil(from)?).max(0))
 }
 
-fn days_from_civil(ymd: &str) -> Option<i64> {
+pub(crate) fn days_from_civil(ymd: &str) -> Option<i64> {
     let mut it = ymd.split('-');
     let y: i64 = it.next()?.parse().ok()?;
     let m: i64 = it.next()?.parse().ok()?;
