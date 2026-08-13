@@ -419,12 +419,23 @@ mod tests {
         assert_eq!(files[0].docs[0].edit_ms, 1_000);
     }
 
-    /// 超龄文件**在读盘前**就被文件名筛掉 —— 这是 MAX_AGE_DAYS 省 IO 的地方,
-    /// 不只是省算术。
+    /// 超龄文件必须被丢弃,不进结果。内容特意给成**合法且非空**的
+    /// analytics JSON:如果截断判断失效(被删掉或改成永假),`collect`
+    /// 会真的把它解析成一条 `DayFile`,断言就会失败 —— 用非法 JSON 当哨兵
+    /// 测不出这件事,因为无论截断在读盘前还是读盘后触发,结果都是同一个
+    /// 空 Vec。
+    ///
+    /// 「判断发生在读盘之前」是性能性质,不在本测试覆盖范围:这条测试不
+    /// 插桩 IO,看不见有没有读盘,只看得见结果对不对。那条性质由代码位置
+    /// 保证(年龄判断先于 `read_to_string`),改 `collect` 时需人工守住顺序。
     #[test]
-    fn collect_skips_files_older_than_the_cutoff_without_reading_them() {
+    fn collect_skips_files_older_than_the_cutoff() {
         let d = tempfile::tempdir().unwrap();
-        write_day(d.path(), "2020-01-01.DEV-1.json", "这不是合法 JSON,但也不该被读");
+        write_day(
+            d.path(),
+            "2020-01-01.DEV-1.json",
+            r#"{"deviceId":"DEV-1","deviceName":"m","docs":{"rel:old.md":{"2020-01-01":{"read_ms":60000,"edit_ms":0,"open_count":0,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}"#,
+        );
         assert!(collect(d.path(), "2026-08-13").is_empty());
     }
 
