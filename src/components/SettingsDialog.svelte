@@ -1324,7 +1324,37 @@
             <p class="desc">{t('search.index.noVault')}</p>
           {:else}
             {#if indexStatus.notReady}
-              <p class="desc">{t('search.notReady')}</p>
+              <!-- Two very different situations used to render as one
+                   sentence here, with the whole stats block (Rebuild button
+                   included) hidden behind the `{:else}`: a scan that clears
+                   itself in seconds-to-minutes, and an open that FAILED and
+                   will never retry on its own. The failed case has to name
+                   its reason and offer the one action that actually recovers
+                   it — reopening, not rebuilding (a rebuild needs the index
+                   handle the failed open never installed). Live progress for
+                   the building case renders in its own section below, driven
+                   by the startup build's progress callback. -->
+              {#if indexStatus.openFailed}
+                <p class="result fail">
+                  {t('search.index.openFailed', { error: indexStatus.openState?.error ?? '' })}
+                </p>
+                <div class="row" style="margin-top: 10px;">
+                  <span class="lbl"></span>
+                  <button onclick={() => void indexStatus.requestReopen()}>{t('search.index.retryOpen')}</button>
+                </div>
+                {#if indexStatus.reopenError}
+                  <p class="result fail">{t('search.index.reopenError', { error: indexStatus.reopenError })}</p>
+                {/if}
+              {:else}
+                <p class="desc">{t('search.notReady')}</p>
+                {#if !indexStatus.progress}
+                  <!-- No progress event yet (the walk hasn't reported, or the
+                       host predates the startup-build callback). Say what is
+                       being waited on rather than leaving a bare sentence
+                       that looks identical to a permanent failure. -->
+                  <p class="desc">{t('search.index.buildingHint')}</p>
+                {/if}
+              {/if}
             {:else if indexStatus.error}
               <p class="result fail">{indexStatus.error}</p>
             {:else}

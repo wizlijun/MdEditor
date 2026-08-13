@@ -535,6 +535,14 @@ export const en = {
   'search.index.rebuildConfirmBodyUnknown': 'This performs a full rebuild — every file is re-scanned from scratch. Search will be unavailable while it runs. No notes are lost: the index is a disposable copy derived from your markdown files, not the files themselves.',
   'search.index.busyNotice': 'A rebuild is already running.',
   'search.index.rebuildError': 'Rebuild failed: {error}',
+  // The other half of "not ready": the index could not be opened at all, and
+  // nothing retries that on its own — so the reason and a retry both have to
+  // be on screen. Rebuilding cannot help here (it needs the handle the failed
+  // open never installed), which is why this offers "Open again" instead.
+  'search.index.openFailed': 'The search index could not be opened: {error}',
+  'search.index.retryOpen': 'Open again',
+  'search.index.reopenError': 'Could not reopen the index: {error}',
+  'search.index.buildingHint': 'Everything in the vault is being scanned. Search, and the numbers on this page, become available when it finishes.',
   'search.index.progressHeading': 'Rebuilding…',
   'search.index.phase.walking': 'Scanning files',
   'search.index.phase.indexing': 'Indexing',

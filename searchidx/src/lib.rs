@@ -89,6 +89,26 @@ impl SearchIndex {
     /// Build if the index is empty, otherwise leave it alone. Callers that want
     /// freshness call [`Self::sweep`].
     pub fn ensure_built(&mut self, opts: &ScanOptions) -> Result<ScanStats, String> {
+        self.ensure_built_with_progress(opts, None)
+    }
+
+    /// Same as [`Self::ensure_built`], but reports progress for the build it
+    /// may run. The cold-start build is the *longest* scan this crate ever
+    /// performs (a full vault, from an empty database) and it is the one the
+    /// user is most likely to be sitting in front of waiting — so a caller
+    /// that has a progress channel must be able to drive it here, not only
+    /// from an explicit [`Self::rebuild`]. Without this the host's startup
+    /// open reported nothing at all for minutes and its settings page could
+    /// only say "still building" with no numbers behind it.
+    ///
+    /// The no-op case (index already has rows) reports nothing, on purpose:
+    /// there is no work to report on, and a lone phase event with no follow-up
+    /// would leave a progress bar on screen that never moves.
+    pub fn ensure_built_with_progress(
+        &mut self,
+        opts: &ScanOptions,
+        progress: Option<ProgressFn>,
+    ) -> Result<ScanStats, String> {
         let files: i64 = self
             .conn
             .query_row("SELECT count(*) FROM files", [], |r| r.get(0))
@@ -96,7 +116,7 @@ impl SearchIndex {
         if files > 0 {
             return Ok(ScanStats::default());
         }
-        self.rebuild(opts)
+        self.rebuild_with_progress(opts, progress)
     }
 
     pub fn rebuild(&mut self, opts: &ScanOptions) -> Result<ScanStats, String> {
@@ -511,5 +531,39 @@ mod tests {
         // and the frontend folds them into its "Other" remainder.
         assert!(s.type_counts.get("Type11").is_none(), "the tail must be capped off, not zero-valued");
         assert!(s.type_counts.get("Type12").is_none());
+    }
+
+    /// The cold-start build — the one every launch runs, and the longest scan
+    /// this crate performs — must be reportable. It was not: `ensure_built`
+    /// had no progress variant at all, so the host's `open_vault` could only
+    /// leave its settings page saying "the index is still building" with no
+    /// phase, no counts and no elapsed time for the whole (minutes-long, on a
+    /// real vault) window.
+    #[test]
+    fn ensure_built_reports_progress_for_the_build_it_runs() {
+        use std::sync::Mutex;
+        let d = tempfile::tempdir().unwrap();
+        let vault = d.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        for i in 0..5 {
+            std::fs::write(vault.join(format!("n{i}.md")), "body\n").unwrap();
+        }
+        let db = d.path().join("index.db");
+        let mut idx = SearchIndex::open_at(&vault, &db, "sync").unwrap();
+
+        let seen: Mutex<Vec<Phase>> = Mutex::new(Vec::new());
+        let cb = |p: &Progress| seen.lock().unwrap().push(p.phase);
+        idx.ensure_built_with_progress(&ScanOptions::default(), Some(&cb)).unwrap();
+
+        let phases = seen.lock().unwrap().clone();
+        assert!(!phases.is_empty(), "a cold build must report something");
+        assert_eq!(phases.last(), Some(&Phase::Done), "the terminal phase drives the UI back out of its progress state");
+
+        // Warm path: nothing to do, so nothing to report — a lone phase event
+        // with no follow-up would leave a progress bar on screen that never
+        // moves.
+        seen.lock().unwrap().clear();
+        idx.ensure_built_with_progress(&ScanOptions::default(), Some(&cb)).unwrap();
+        assert!(seen.lock().unwrap().is_empty(), "an index that already has rows runs no scan and reports none");
     }
 }
