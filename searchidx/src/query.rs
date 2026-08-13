@@ -67,6 +67,13 @@ pub struct Hit {
     /// discards the File-level one, and a pin attached only to the File block
     /// would vanish with it.
     pub pinned: bool,
+    /// 已衰减到今天的注意力分钟数(`doc_attention.minutes` 再按表的 `as_of`
+    /// 到今天二次衰减)。0 = 没有数据,不是「读了 0 分钟」—— 两者对排序的
+    /// 影响相同,所以不用 `Option` 徒增调用方的分支。
+    ///
+    /// 与 `pinned` 一样由 `finish` 填,不在 `row_to_hit` 里:二次衰减需要
+    /// `today`,而一行数据自己不知道今天是几号。
+    pub attention_minutes: f64,
 }
 
 /// What the ranking needs to know about this vault's *conventions* — as
@@ -441,9 +448,25 @@ fn match_expr(q: &Query) -> Option<String> {
 // `f.title` is read into `finish`'s row tuple, NOT into `Hit` — pinning is
 // the only consumer and it has no business widening the public hit shape
 // (same treatment `is_annotation` already gets).
+//
+// C-T7 appended two more, again AFTER everything above rather than beside
+// their thematic neighbors: `COALESCE(att.minutes, 0.0)` (index 13) and
+// `att.as_of` (index 14), both from the `LEFT JOIN doc_attention` each
+// caller adds. They shift every caller's own `rank` column from 13 to 15 —
+// the one hardcoded index in this file that has to move with them, and the
+// only symptom of forgetting is a runtime `InvalidColumnType`, not a
+// compile error.
 const SELECT_COLS: &str = "f.path, b.line_start, b.line_end, b.text, b.breadcrumb, b.level, \
                            f.doc_date, b.agent_by, f.human_verified, b.is_annotation, f.origin, \
-                           f.concept_type, f.title";
+                           f.concept_type, f.title, \
+                           COALESCE(att.minutes, 0.0), att.as_of";
+
+/// Attention is optional data ABOUT a file, never a condition ON it. `LEFT`
+/// is load-bearing, not style: an `INNER JOIN` here would delete every file
+/// the user has never opened — most of the vault, and exactly the
+/// freshly-generated material search exists to find — from every result set,
+/// silently and on all three query paths at once.
+const ATTENTION_JOIN: &str = " LEFT JOIN doc_attention att ON att.path = f.path";
 
 /// Drain a row iterator, treating an abort as "stop here" rather than an
 /// error. Returns the rows collected and whether the drain was cut short.
@@ -481,7 +504,7 @@ fn fts_search(
         "SELECT {SELECT_COLS}, bm25(blocks_fts, 1.0, 2.0, 4.0) AS rank
          FROM blocks_fts
          JOIN blocks b ON b.id = blocks_fts.rowid
-         JOIN files f ON f.id = b.file_id
+         JOIN files f ON f.id = b.file_id{ATTENTION_JOIN}
          WHERE blocks_fts MATCH ?1"
     );
     let mut args: Vec<String> = vec![expr];
@@ -491,7 +514,14 @@ fn fts_search(
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-        Ok((row_to_hit(r)?, r.get::<_, f64>(13)?, r.get::<_, i64>(9)? != 0, r.get(12)?))
+        Ok((
+            row_to_hit(r)?,
+            r.get::<_, f64>(15)?, // ← rank,因 SELECT_COLS 加了两列而位移
+            r.get::<_, i64>(9)? != 0,
+            r.get(12)?,
+            r.get::<_, f64>(13)?, // att.minutes(已 COALESCE)
+            r.get::<_, Option<String>>(14)?, // att.as_of
+        ))
     })?;
     let (rows, truncated) = drain(rows)?;
     Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
@@ -526,7 +556,7 @@ fn like_search(
         .collect();
     let mut sql = format!(
         "SELECT {SELECT_COLS}, 0.0 AS rank
-         FROM blocks b JOIN files f ON f.id = b.file_id
+         FROM blocks b JOIN files f ON f.id = b.file_id{ATTENTION_JOIN}
          WHERE {}",
         clauses.join(" AND ")
     );
@@ -536,7 +566,14 @@ fn like_search(
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-        Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0, r.get(12)?))
+        Ok((
+            row_to_hit(r)?,
+            -1.0f64,
+            r.get::<_, i64>(9)? != 0,
+            r.get(12)?,
+            r.get::<_, f64>(13)?, // att.minutes(已 COALESCE)
+            r.get::<_, Option<String>>(14)?, // att.as_of
+        ))
     })?;
     let (rows, truncated) = drain(rows)?;
     Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
@@ -614,7 +651,7 @@ fn filter_only_search(
          FROM files f
          JOIN blocks b ON b.id = (
              SELECT b2.id FROM blocks b2 WHERE b2.file_id = f.id ORDER BY b2.line_start ASC, b2.id ASC LIMIT 1
-         )
+         ){ATTENTION_JOIN}
          WHERE 1 = 1"
     );
     let mut args: Vec<String> = Vec::new();
@@ -623,7 +660,14 @@ fn filter_only_search(
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-        Ok((row_to_hit(r)?, -1.0f64, r.get::<_, i64>(9)? != 0, r.get(12)?))
+        Ok((
+            row_to_hit(r)?,
+            -1.0f64,
+            r.get::<_, i64>(9)? != 0,
+            r.get(12)?,
+            r.get::<_, f64>(13)?, // att.minutes(已 COALESCE)
+            r.get::<_, Option<String>>(14)?, // att.as_of
+        ))
     })?;
     let (rows, truncated) = drain(rows)?;
     Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
@@ -742,11 +786,18 @@ fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<Hit> {
         // Set by `finish`, which is where the query and the vault's
         // conventions are both in scope; a row on its own cannot know.
         pinned: false,
+        attention_minutes: 0.0, // `finish` 用 `today` 二次衰减后覆盖
     })
 }
 
+/// 一行原始结果:`Hit` 本体,加上三条查询路径各自读出、但**不属于 `Hit`
+/// 公开形状**的四样东西 —— `rank`、`is_annotation`、`f.title`(只有置顶判定
+/// 用),以及 `doc_attention` 的 `minutes` / `as_of`(要用 `today` 二次衰减
+/// 后才成为 `Hit::attention_minutes`)。命名而不是裸 6 元组,纯为可读。
+type RawRow = (Hit, f64, bool, Option<String>, f64, Option<String>);
+
 fn finish(
-    rows: Vec<(Hit, f64, bool, Option<String>)>,
+    rows: Vec<RawRow>,
     q: &Query,
     limit: usize,
     today: &str,
@@ -757,7 +808,12 @@ fn finish(
     // only on the query and the settings.
     let pin = pin_keyword(q).zip(conventions.wikipage_dir.as_deref());
     let mut out: Vec<Hit> = Vec::new();
-    for (mut hit, rank, is_annotation, title) in rows {
+    for (mut hit, rank, is_annotation, title, minutes, as_of) in rows {
+        // 表每天重算,但 app 开着不动时存量会冻住;按 as_of 到今天的天数
+        // 再衰减一次,让陈旧的表优雅退化而不是发出过期的高分。`as_of` 为
+        // NULL(该文件根本没有注意力行)时 minutes 也是 0,衰减多少都是 0。
+        let age = as_of.as_deref().and_then(|d| days_between(d, today)).unwrap_or(0);
+        hit.attention_minutes = minutes * crate::attention::decay(age);
         // A quoted phrase means "these words, in this order". The index stores
         // OVERLAPPING tokens, so FTS can only tell us the words are all present
         // — adjacency has to be rechecked against the stored text.
@@ -1005,6 +1061,14 @@ fn score_of(
         // does not compete for the front page by default.
         Origin::Unlabeled => weights.unlabeled,
     };
+    // 注意力加权(规格 §4.2)。与上面所有档一样是乘性的,但只向上:
+    // `attention::boost` 在 0 分钟时严格返回 1.0,所以从没打开过的文档
+    // ——包括 agent 昨天刚生成、你还没来得及读的那些——原地不动。
+    // 这与 `doc_date` 那档的时间衰减是两件事:那个衰减「文档写于何时」,
+    // 这个衰减「你何时在它身上花过时间」。
+    //
+    // `hit.attention_minutes` 已由 `finish` 衰减到今天,所以这里传 0。
+    r *= crate::attention::boost(hit.attention_minutes, 0, weights.attention);
     // The first line of defense against memory self-propagation: AI-authored
     // material is findable but never outranks the primary source it summarized.
     if hit.agent_by.is_some() {
@@ -1630,6 +1694,7 @@ mod tests {
             origin,
             concept_type: None,
             pinned: false,
+            attention_minutes: 0.0,
         }
     }
 
@@ -1915,5 +1980,152 @@ mod tests {
         for q in ["a OR b", "NEAR(", "*", "\"", "^x", "a-b"] {
             assert!(search(&c, &parse(q), 5, "2026-08-10").is_ok(), "query {q:?} must not error");
         }
+    }
+
+    // --- 注意力加权(规格 §4.2)------------------------------------------------
+
+    /// 规格 §4.2:注意力只加分。零注意力的命中必须与接入前**逐位相同**。
+    #[test]
+    fn zero_attention_leaves_the_score_bit_identical() {
+        let w = Weights::default();
+        let h = hit_with(Origin::Derived);
+        assert_eq!(h.attention_minutes, 0.0, "fixture 默认无注意力");
+        let with_k = score_of(-1.0, &h, false, false, false, TODAY, &w);
+        let no_k = score_of(-1.0, &h, false, false, false, TODAY, &Weights { attention: 0.0, ..w });
+        assert_eq!(with_k, no_k, "注意力为 0 时,k 取任何值都不能改变分数");
+    }
+
+    /// 注意力必须**单独**能推动分数 —— 逐档隔离断言,不靠端到端排序。
+    /// 前置项目(origin tiering)出现过「两个乘数一起推同一方向、任一个
+    /// 单独失效测试仍通过」的假阴性,所以这里断言的是 `score_of` 本身。
+    #[test]
+    fn attention_alone_moves_the_score() {
+        let w = Weights::default();
+        let cold = hit_with(Origin::Derived);
+        let mut warm = hit_with(Origin::Derived);
+        warm.attention_minutes = 60.0;
+        let a = score_of(-1.0, &cold, false, false, false, TODAY, &w);
+        let b = score_of(-1.0, &warm, false, false, false, TODAY, &w);
+        assert!(b > a, "读过 60 分钟的必须高于没读过的: {b} vs {a}");
+    }
+
+    /// 单调:更多注意力不得让分数下降。`score_of` 末尾的 `r/(1+r)` 压缩
+    /// 保序,所以这条在压缩之后依然成立 —— 值得钉住,因为压缩很容易被
+    /// 误读成「加成被吃掉了」。
+    #[test]
+    fn more_attention_never_lowers_the_score() {
+        let w = Weights::default();
+        let mut last = f64::MIN;
+        for m in [0.0, 1.0, 5.0, 30.0, 120.0, 10_000.0] {
+            let mut h = hit_with(Origin::Derived);
+            h.attention_minutes = m;
+            let s = score_of(-1.0, &h, false, false, false, TODAY, &w);
+            assert!(s >= last, "m={m} 让分数掉了: {s} < {last}");
+            last = s;
+        }
+    }
+
+    /// k=0 关掉功能后,连高注意力命中也不动分。
+    #[test]
+    fn k_zero_disables_the_boost_in_score_of() {
+        let off = Weights { attention: 0.0, ..Weights::default() };
+        let cold = hit_with(Origin::Derived);
+        let mut warm = hit_with(Origin::Derived);
+        warm.attention_minutes = 10_000.0;
+        assert_eq!(
+            score_of(-1.0, &cold, false, false, false, TODAY, &off),
+            score_of(-1.0, &warm, false, false, false, TODAY, &off)
+        );
+    }
+
+    /// 与 `a_hits_origin_round_trips_through_the_real_index` 同源的读路径
+    /// 保护:上面四条纯函数测试全部手搓 `Hit`,**碰不到 SQL** —— 它们对
+    /// 「`SELECT_COLS` 加的两列读错索引」「`finish` 忘了填」都是瞎的。
+    ///
+    /// 更要紧的是 `LEFT JOIN`:写成 `INNER JOIN`,整个 vault 里没有注意力
+    /// 数据的文件会从结果里**整体消失**。`b.md` 在这里就是没有 `doc_attention`
+    /// 行的那一半,它必须照常命中且加成为 ×1.0(`attention_minutes == 0`)。
+    #[test]
+    fn attention_minutes_round_trip_through_the_real_index_without_dropping_unread_files() {
+        let (_d, c) = indexed(&[("a.md", "target\n"), ("b.md", "target\n")]);
+        crate::store::replace_attention(
+            &c,
+            "2026-08-10",
+            &std::collections::BTreeMap::from([("a.md".to_string(), 60.0)]),
+        )
+        .unwrap();
+
+        let hits = search(&c, &parse("target"), 20, "2026-08-10").unwrap().0;
+        let read = hits.iter().find(|h| h.path == "a.md").expect("a.md must be found");
+        let unread = hits.iter().find(|h| h.path == "b.md").expect("没有注意力数据的文件必须照常命中");
+        assert!((read.attention_minutes - 60.0).abs() < 1e-9, "{read:?}");
+        assert_eq!(unread.attention_minutes, 0.0, "{unread:?}");
+    }
+
+    /// 表的 `as_of` 到今天的二次衰减由 `finish` 做,而且**只做一次**:
+    /// 60 分钟、一个半衰期前的表,今天应当值 30 分钟,不是 15(做了两遍)。
+    #[test]
+    fn a_stale_attention_table_decays_once_not_twice() {
+        let (_d, c) = indexed(&[("a.md", "target\n")]);
+        crate::store::replace_attention(
+            &c,
+            "2026-07-11", // 2026-08-10 前 30 天 = 一个半衰期
+            &std::collections::BTreeMap::from([("a.md".to_string(), 60.0)]),
+        )
+        .unwrap();
+
+        let hits = search(&c, &parse("target"), 20, "2026-08-10").unwrap().0;
+        let h = hits.iter().find(|h| h.path == "a.md").expect("a.md must be found");
+        assert!((h.attention_minutes - 30.0).abs() < 1e-9, "半衰期整一次: {h:?}");
+    }
+
+    /// `rank` 列位置的显式护栏。C-T7 给 `SELECT_COLS` 追加两列后,`fts_search`
+    /// 里硬编码的 `rank` 索引从 13 挪到 15 —— 而挪错回 13 读到的是
+    /// `COALESCE(att.minutes, 0.0)`:同为 REAL,**不报类型错**,只是把每条
+    /// 命中的 bm25 悄悄换成 0,于是所有分数塌成同一个值,相关性排序整体失效。
+    /// 实测这个变异对当时的整套测试(含 `tests/acceptance.rs` 的检索回归集)
+    /// 全绿 —— bm25 真正抵达 `score_of` 这件事此前没有任何测试钉住。
+    #[test]
+    fn the_bm25_rank_column_actually_reaches_the_score() {
+        let (_d, c) = indexed(&[
+            ("a.md", "target target target target\n"),
+            ("b.md", "target padding padding padding padding padding padding\n"),
+        ]);
+        let hits = search(&c, &parse("target"), 20, "2026-08-10").unwrap().0;
+        let a = hits.iter().find(|h| h.path == "a.md").expect("a.md must be found");
+        let b = hits.iter().find(|h| h.path == "b.md").expect("b.md must be found");
+        assert!(a.score > b.score, "词频高的必须拿到严格更高的分,否则 rank 根本没进来: {hits:?}");
+    }
+
+    /// 另外两条查询路径(`t1-scan` 的 LIKE 回退、无词的 filter-only)与 FTS
+    /// 路径共用 `SELECT_COLS`,但各自硬编码列索引 —— 漏改一条的症状是运行时
+    /// `InvalidColumnType`,不是编译错误。两条都必须真跑到并读出注意力。
+    #[test]
+    fn every_query_path_reads_attention_not_just_the_fts_one() {
+        // `会见了李慕白同志` + 查 `慕`:与 `an_out_of_vocabulary_cjk_query_
+        // falls_back_to_a_bounded_scan` 同一个词典盲区,FTS 零命中才会真的
+        // 走 LIKE 回退。
+        let (_d, c) = indexed(&[("a.md", "会见了李慕白同志\n")]);
+        crate::store::replace_attention(
+            &c,
+            "2026-08-10",
+            &std::collections::BTreeMap::from([("a.md".to_string(), 60.0)]),
+        )
+        .unwrap();
+
+        // LIKE 回退:单字「慕」是词典盲区,FTS 零命中后走 t1-scan。
+        let (scan_hits, route) = search(&c, &parse("慕"), 20, "2026-08-10").unwrap();
+        assert_eq!(route.as_str(), "t1-scan", "必须真的走回退路径");
+        assert!(
+            scan_hits.iter().any(|h| h.path == "a.md" && (h.attention_minutes - 60.0).abs() < 1e-9),
+            "{scan_hits:?}"
+        );
+
+        // filter-only:没有词、只有过滤器。
+        let filter_hits = search(&c, &parse("origin:unlabeled"), 20, "2026-08-10").unwrap().0;
+        assert!(
+            filter_hits.iter().any(|h| h.path == "a.md" && (h.attention_minutes - 60.0).abs() < 1e-9),
+            "{filter_hits:?}"
+        );
     }
 }
