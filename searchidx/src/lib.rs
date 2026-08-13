@@ -22,6 +22,11 @@ pub mod paths;
 pub mod plain;
 pub mod prose;
 pub mod query;
+/// Rename/move detection's pure pairing half. `pub(crate)` throughout: the
+/// two call sites (the sweep and the watcher batch) are both inside this
+/// crate, and the decision is not something a caller should be able to
+/// second-guess from outside.
+pub(crate) mod rename;
 pub mod scan;
 pub mod store;
 pub mod tokenize;
@@ -31,7 +36,9 @@ pub mod watch;
 pub use block::{Block, BlockLevel, FileMeta, Link};
 pub use origin::Origin;
 pub use query::{Abort, Answer, Hit, Limits, Query, Route};
-pub use scan::{IndexOutcome, Phase, Progress, ProgressFn, ScanOptions, ScanStats, SkippedFile};
+pub use scan::{
+    BatchOutcome, IndexOutcome, Phase, Progress, ProgressFn, ScanOptions, ScanStats, SkippedFile,
+};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -156,6 +163,21 @@ impl SearchIndex {
     /// one failure.
     pub fn index_one(&mut self, rel: &str, opts: &ScanOptions) -> Result<IndexOutcome, String> {
         scan::index_one(&mut self.conn, &self.vault_root, rel, opts).map_err(|e| e.to_string())
+    }
+
+    /// Apply one watcher batch. Prefer this over a loop of [`Self::index_one`]
+    /// when the paths arrived together: only a batch can see both ends of a
+    /// rename, and only then can the rename be taken at the cost of an
+    /// UPDATE instead of a full rebuild. `index_one`'s single-file contract
+    /// is unchanged — a rename is a cross-file judgement and cannot be made
+    /// one file at a time (spec §6).
+    ///
+    /// `String` error, like every other method here rather than the
+    /// `rusqlite::Result` the plan sketched: this facade's callers all
+    /// degrade rather than propagate, and one method leaking the storage
+    /// crate's error type into the watcher would be the only exception.
+    pub fn apply_batch(&mut self, rels: &[String], opts: &ScanOptions) -> Result<BatchOutcome, String> {
+        scan::apply_batch(&mut self.conn, &self.vault_root, rels, opts).map_err(|e| e.to_string())
     }
 
     pub fn search(&self, raw: &str, limit: usize) -> Result<(Vec<Hit>, Route), String> {
@@ -531,6 +553,53 @@ mod tests {
         // and the frontend folds them into its "Other" remainder.
         assert!(s.type_counts.get("Type11").is_none(), "the tail must be capped off, not zero-valued");
         assert!(s.type_counts.get("Type12").is_none());
+    }
+
+    fn vault(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        for (rel, body) in files {
+            let p = d.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        d
+    }
+    fn tmp() -> (tempfile::TempDir, std::path::PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("index.db");
+        (d, p)
+    }
+
+    /// 一次重命名的删除与新增落在同一批次里 → 走配对,不重算块。
+    #[test]
+    fn a_batch_containing_both_ends_of_a_rename_takes_the_fast_path() {
+        let v = vault(&[("old.md", "# H\n\nalpha\n")]);
+        let (_d, p) = tmp();
+        // 注意参数顺序:open_at(vault_root, db_path, globs_stamp)
+        let mut idx = SearchIndex::open_at(v.path(), &p, "").unwrap();
+        let opts = ScanOptions::default();
+        idx.ensure_built(&opts).unwrap();
+        std::fs::rename(v.path().join("old.md"), v.path().join("new.md")).unwrap();
+        let out = idx.apply_batch(&["old.md".into(), "new.md".into()], &opts).unwrap();
+        assert_eq!(out.renamed, 1);
+        assert_eq!(out.reindexed, 0);
+        assert_eq!(out.removed, 0);
+    }
+
+    /// 只看得到一半(跨 debounce 窗口)→ 退回逐个处理,即今天的行为。
+    /// 这是降级,不是错误(spec §6)。
+    #[test]
+    fn a_batch_with_only_the_new_half_falls_back_to_a_reindex() {
+        let v = vault(&[("old.md", "# H\n\nalpha\n")]);
+        let (_d, p) = tmp();
+        // 注意参数顺序:open_at(vault_root, db_path, globs_stamp)
+        let mut idx = SearchIndex::open_at(v.path(), &p, "").unwrap();
+        let opts = ScanOptions::default();
+        idx.ensure_built(&opts).unwrap();
+        std::fs::rename(v.path().join("old.md"), v.path().join("new.md")).unwrap();
+        let out = idx.apply_batch(&["new.md".into()], &opts).unwrap();
+        assert_eq!(out.renamed, 0);
+        assert_eq!(out.reindexed, 1);
     }
 
     /// The cold-start build — the one every launch runs, and the longest scan

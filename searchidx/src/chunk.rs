@@ -65,6 +65,11 @@ pub fn parse_file(rel_path: &str, raw: &str, mtime_secs: i64, globs: &SourceGlob
     // about what an upper-cased `Lecture.SRT` is. `.md` (anything left over)
     // is the fallback, matching every file `is_indexable` admits that isn't
     // one of the other three shapes.
+    //
+    // `scan::chunker_class` mirrors this exact dispatch (same order) for the
+    // rename fast path, which needs to know "same chunker or not" without
+    // re-chunking. If this dispatch changes, that function must change with
+    // it.
     let blocks = if is_transcript {
         transcript::chunk(body, body_line)
     } else if is_plain_text {

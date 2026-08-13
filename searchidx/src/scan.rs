@@ -15,6 +15,7 @@ use rusqlite::Connection;
 
 use crate::globs::SourceGlobs;
 use crate::norm::{content_hash, rel_path};
+use crate::rename::{self, NewPath, Orphan};
 use crate::store;
 
 #[derive(Debug, Clone)]
@@ -54,6 +55,12 @@ impl Default for ScanOptions {
 pub struct ScanStats {
     pub files_indexed: usize,
     pub files_removed: usize,
+    /// Files recognised as renames/moves and updated in place instead of
+    /// being rebuilt. Reported separately (and logged, see the `search`
+    /// category) because otherwise a round that rebuilt nothing *because
+    /// everything was a rename* is indistinguishable in the log from a round
+    /// with nothing to do (spec §5).
+    pub files_renamed: usize,
     pub files_skipped_large: Vec<SkippedFile>,
     pub took_ms: u128,
     pub timed_out: bool,
@@ -154,10 +161,125 @@ pub(crate) fn ends_with_ascii_ci(s: &str, suffix: &str) -> bool {
     s.len() >= suffix.len() && s[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
 }
 
+/// The `files.ext` value for a vault-relative path (spec §5.1): `"note.md"`,
+/// `"srt"`, `"vtt"`, `"txt"`, or `"md"` (the fallback, matching every file
+/// `is_indexable` admits that isn't one of the other four shapes). This is
+/// the single place that decision is made — `index_into` calls it rather
+/// than recomputing it, so a rename's fast path (which only needs to redo
+/// this, not re-chunk) has exactly one place to call too. Case-insensitive
+/// for `.srt`/`.vtt`/`.txt` and case-sensitive for `.note.md`/`.md`, via the
+/// same `ends_with_ascii_ci` helper `is_indexable` uses — see that function's
+/// doc comment for why the asymmetry is deliberate.
+pub(crate) fn ext_of(rel: &str) -> &'static str {
+    if rel.ends_with(".note.md") {
+        "note.md"
+    } else if ends_with_ascii_ci(rel, ".srt") {
+        "srt"
+    } else if ends_with_ascii_ci(rel, ".vtt") {
+        "vtt"
+    } else if ends_with_ascii_ci(rel, ".txt") {
+        "txt"
+    } else {
+        "md"
+    }
+}
+
+/// Which chunker `chunk::parse_file` will send a path through. Kept
+/// deliberately separate from `ext_of` above (a `.srt` and a `.vtt` share no
+/// `ext_of` value but do share a `ChunkerClass`) and used by the rename fast
+/// path to decide whether a renamed file's blocks can be kept as-is or must
+/// be recomputed: same class, same content ⇒ same blocks; different class ⇒
+/// re-chunk even if the bytes on disk didn't change, because `a.md` and
+/// `a.note.md` can be byte-identical and still parse completely differently.
+///
+/// MUST mirror `chunk::parse_file`'s format dispatch exactly, including
+/// order — `.note.md` is checked before the `.md` fallback, or every sidecar
+/// note would be classified as prose. If that dispatch changes, this must
+/// change with it (and vice versa); each carries a comment pointing at the
+/// other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChunkerClass {
+    /// `.note.md` → `outline::chunk`.
+    Outline,
+    /// `.srt` / `.vtt` → `transcript::chunk`.
+    Transcript,
+    /// `.txt` → `plain::chunk`.
+    Plain,
+    /// Everything else (`.md`) → `prose::chunk`.
+    Prose,
+}
+
+pub(crate) fn chunker_class(rel: &str) -> ChunkerClass {
+    if ends_with_ascii_ci(rel, ".srt") || ends_with_ascii_ci(rel, ".vtt") {
+        ChunkerClass::Transcript
+    } else if ends_with_ascii_ci(rel, ".txt") {
+        ChunkerClass::Plain
+    } else if rel.ends_with(".note.md") {
+        ChunkerClass::Outline
+    } else {
+        ChunkerClass::Prose
+    }
+}
+
 struct Candidate {
     rel: String,
     mtime: i64,
     size: i64,
+}
+
+/// The set of paths a rename pass moved rows *to*, and the set it moved them
+/// *from*. Callers need both: the destinations must be skipped by whatever
+/// loop would otherwise index them from scratch, and the sources must be
+/// removed from the deletion set (spec §5).
+#[derive(Debug, Default)]
+pub(crate) struct Renamed {
+    pub to: HashSet<String>,
+    pub from: HashSet<String>,
+}
+
+/// Confirm candidate pairs by hashing and apply the ones that hold. This is
+/// the *impure* half of rename detection, and the single copy of it — the
+/// sweep and the watcher batch differ only in how they collect the two input
+/// sets, never in what they do with a pair (spec §3.1).
+///
+/// Every pair is confirmed by reading the new path and comparing its
+/// `content_hash` against the orphan row's. `(size, mtime)` agreement is a
+/// pre-screen and nothing more: two distinct files can share both, and a
+/// mispairing would file one file's content under another file's path, which
+/// is precisely the `path#Lnnn` contract retrieval depends on (spec §3.2).
+///
+/// The metadata comes from `chunk::parse_file` — the same function a full
+/// index calls — with its blocks and links dropped on the floor. Writing a
+/// second, metadata-only derivation would be cheaper and would drift: the
+/// `origin`/`title`/`doc_date` rules are the most frequently amended part of
+/// this crate (spec §4).
+pub(crate) fn confirm_and_apply(
+    tx: &rusqlite::Transaction,
+    vault_root: &Path,
+    news: &[NewPath],
+    orphans: &[Orphan],
+    pairs: &[(usize, usize)],
+    opts: &ScanOptions,
+) -> rusqlite::Result<Renamed> {
+    let mut out = Renamed::default();
+    for &(ni, oi) in pairs {
+        let (n, o) = (&news[ni], &orphans[oi]);
+        let Ok(bytes) = std::fs::read(vault_root.join(&n.rel)) else { continue };
+        if content_hash(&bytes) != o.content_hash {
+            continue;
+        }
+        let raw = String::from_utf8_lossy(&bytes);
+        let parsed = crate::chunk::parse_file(&n.rel, &raw, n.mtime, &opts.source_globs);
+        // `false` means the destination path already has a row — two files
+        // swapping names. Dropping the pair lets both ends fall through to
+        // the ordinary full-index path, which is correct if slower (spec
+        // §4.2).
+        if store::rename_file(tx, &o.path, &n.rel, ext_of(&n.rel), n.mtime, n.size, &parsed.meta)? {
+            out.to.insert(n.rel.clone());
+            out.from.insert(o.path.clone());
+        }
+    }
+    Ok(out)
 }
 
 /// The stage of a scan. The UI uses it to decide what to show; the order
@@ -406,13 +528,51 @@ fn sweep_with_budget(
         report(Phase::Indexing, 0, total, None);
     }
 
+    // Rename detection, before the candidate loop: both of its inputs are
+    // already in hand (`known` from `all_file_rows`, `candidates` from
+    // `walk`), and a pair has to be settled before either end reaches the
+    // loop or the deletion pass, which would otherwise rebuild one and
+    // delete the other.
+    let walked: HashSet<&str> = candidates.iter().map(|c| c.rel.as_str()).collect();
+    // Sorted, because `known` is a HashMap: when several orphans share a
+    // `(size, mtime)` the pairing picks the first one offered, and an
+    // iteration-order-dependent choice would make two runs over the same
+    // vault disagree about which row moved where.
+    let mut orphans: Vec<Orphan> = known
+        .iter()
+        .filter(|(path, _)| !walked.contains(path.as_str()))
+        .map(|(path, row)| Orphan {
+            path: path.clone(),
+            size: row.size,
+            mtime: row.mtime,
+            content_hash: row.content_hash.clone(),
+        })
+        .collect();
+    orphans.sort_by(|a, b| a.path.cmp(&b.path));
+    let news: Vec<NewPath> = candidates
+        .iter()
+        .filter(|c| !known.contains_key(&c.rel))
+        .map(|c| NewPath { rel: c.rel.clone(), size: c.size, mtime: c.mtime })
+        .collect();
+    let pairs = rename::pair_candidates(&news, &orphans);
+
     let tx = conn.transaction()?;
+    let renamed = confirm_and_apply(&tx, vault_root, &news, &orphans, &pairs, opts)?;
+    stats.files_renamed = renamed.to.len();
     // Owned strings, not `&c.rel` borrows: `candidates` and `tx` are both
     // alive at once, and `tx` needs `&mut` access inside the loop below, so
     // a borrow of `candidates` held across the loop would not compile.
     let mut seen: HashSet<String> = HashSet::with_capacity(candidates.len());
     for (i, c) in candidates.iter().enumerate() {
         seen.insert(c.rel.clone());
+        // Already settled above, and settled means *finished* — its row
+        // carries the new path, the new metadata and the old blocks. Falling
+        // into the stat check below would find no `known` row for this path
+        // and rebuild the file from scratch, which is the exact work the
+        // fast path just avoided.
+        if renamed.to.contains(&c.rel) {
+            continue;
+        }
         if over_budget() {
             stats.timed_out = true;
             break;
@@ -474,7 +634,19 @@ fn sweep_with_budget(
     // continued absence is explained by its appearance in
     // `files_skipped_large` on every subsequent scan.
     if !stats.timed_out {
-        let to_remove: Vec<&String> = known.keys().filter(|p| !seen.contains(p.as_str())).collect();
+        // `!renamed.from.contains(p)` is not belt-and-braces. It is true
+        // that `remove_file`'s four DELETEs all match on `path`, and that a
+        // renamed row's `path` is already the new value, so they would match
+        // nothing today — but `files_removed` would still be incremented,
+        // and the log would announce "removed 500 files" on a round that
+        // removed none. Beyond the lying counter, correctness that rests on
+        // a DELETE happening to miss breaks the day someone changes what
+        // `remove_file` matches on. Spec §5 requires the removal to be
+        // explicit.
+        let to_remove: Vec<&String> = known
+            .keys()
+            .filter(|p| !seen.contains(p.as_str()) && !renamed.from.contains(p.as_str()))
+            .collect();
         let remove_total = to_remove.len();
         let mut remove_throttle = Throttle::new();
         for (i, path) in to_remove.into_iter().enumerate() {
@@ -491,6 +663,112 @@ fn sweep_with_budget(
     tx.commit()?;
     report(Phase::Done, total, total, None);
     Ok(stats)
+}
+
+/// What [`apply_batch`] did with one debounce window's worth of paths.
+/// Three counts rather than one, for the same reason [`IndexOutcome`] is not
+/// a bool: a batch that renamed 500 files and a batch that rebuilt 500 files
+/// cost wildly different amounts and must not read the same in the log.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BatchOutcome {
+    pub renamed: usize,
+    pub reindexed: usize,
+    pub removed: usize,
+    /// Why each removed path left, in batch order. `removed` is this
+    /// vector's length; both are kept because the counts are the log's
+    /// headline and this is its detail. Carried out of the batch rather than
+    /// logged inside it because `searchidx` has no logger — and dropping it
+    /// would retire the distinction [`IndexOutcome`] exists to make (gone
+    /// vs. oversized vs. excluded), which is the only explanation a user
+    /// gets for a file disappearing from search.
+    pub removals: Vec<(String, IndexOutcome)>,
+}
+
+/// Apply one watcher batch, recognising renames *within* it.
+///
+/// A rename reaches the watcher as two events — a removal and a creation —
+/// and if they land in the same debounce window this can pair them and take
+/// the fast path. If they land in different windows the batch only holds one
+/// end, nothing pairs, and every path falls through to [`index_one`]'s
+/// behaviour: a rebuild plus a removal. That is a degradation, not a bug, and
+/// deliberately has no cross-window state to make it rarer (spec §6).
+///
+/// The pairing and confirmation are [`confirm_and_apply`] — the same code the
+/// sweep runs. Only the way the two input sets are collected differs: the
+/// sweep subtracts a full walk from a full table load, this one asks about
+/// the handful of paths in the batch.
+pub fn apply_batch(
+    conn: &mut Connection,
+    vault_root: &Path,
+    rels: &[String],
+    opts: &ScanOptions,
+) -> rusqlite::Result<BatchOutcome> {
+    // The same path can appear twice in one window (write, then rename);
+    // deduplicated up front so it is not classified — or re-indexed — twice.
+    let mut seen: HashSet<&str> = HashSet::new();
+    let unique: Vec<&str> = rels.iter().map(|s| s.as_str()).filter(|r| seen.insert(r)).collect();
+
+    let limit = opts.large_file_threshold_mb as u64 * 1024 * 1024;
+    let mut news: Vec<NewPath> = Vec::new();
+    let mut orphans: Vec<Orphan> = Vec::new();
+    for rel in &unique {
+        // "Present" means present *as something this index would keep*: a
+        // path that is on disk but excluded or oversized is as good as gone,
+        // and its row is about to be removed, so it can orphan just like a
+        // deleted file can.
+        let present = std::fs::metadata(vault_root.join(rel))
+            .ok()
+            .filter(|m| m.is_file() && m.len() <= limit && is_indexable(rel, opts))
+            .map(|m| {
+                let mtime = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                (mtime, m.len() as i64)
+            });
+        match (present, store::file_row(conn, rel)?) {
+            (Some((mtime, size)), None) => news.push(NewPath { rel: rel.to_string(), mtime, size }),
+            (None, Some(row)) => orphans.push(Orphan {
+                path: row.path,
+                size: row.size,
+                mtime: row.mtime,
+                content_hash: row.content_hash,
+            }),
+            _ => {}
+        }
+    }
+    // Same reason as the sweep's sort: when several orphans share a
+    // `(size, mtime)`, which one a new path claims must not depend on the
+    // order the OS happened to deliver the events in.
+    orphans.sort_by(|a, b| a.path.cmp(&b.path));
+    let pairs = rename::pair_candidates(&news, &orphans);
+
+    let tx = conn.transaction()?;
+    let renamed = confirm_and_apply(&tx, vault_root, &news, &orphans, &pairs, opts)?;
+    tx.commit()?;
+
+    let mut out = BatchOutcome { renamed: renamed.to.len(), ..Default::default() };
+    for rel in unique {
+        // Both ends of a settled rename are done. The destination would
+        // otherwise be rebuilt from scratch; the source would otherwise be
+        // handed to `index_one`, whose `remove_file` would match nothing
+        // (the row carries the new path now) while still reporting a
+        // removal — the same lying counter the sweep's deletion pass has to
+        // avoid (spec §5).
+        if renamed.to.contains(rel) || renamed.from.contains(rel) {
+            continue;
+        }
+        match index_one(conn, vault_root, rel, opts)? {
+            IndexOutcome::Indexed => out.reindexed += 1,
+            gone => {
+                out.removed += 1;
+                out.removals.push((rel.to_string(), gone));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Re-index a single file (watcher path). Whenever the file cannot be
@@ -567,21 +845,9 @@ fn index_into(
     // always "md" — a `.srt`/`.vtt`/`.txt` file only ever reaches this point
     // inside a matching source glob (`is_indexable`'s gate), but once it
     // does, it is a real query-language-observable fact (`ext:srt`) and must
-    // not be indistinguishable from a `.md` file. Case-insensitive for the
-    // same three extensions and for the same reason `is_indexable` is (see
-    // its doc comment) — `ends_with_ascii_ci` is the one place that decision
-    // is encoded, reused here rather than re-decided.
-    let ext = if c.rel.ends_with(".note.md") {
-        "note.md"
-    } else if ends_with_ascii_ci(&c.rel, ".srt") {
-        "srt"
-    } else if ends_with_ascii_ci(&c.rel, ".vtt") {
-        "vtt"
-    } else if ends_with_ascii_ci(&c.rel, ".txt") {
-        "txt"
-    } else {
-        "md"
-    };
+    // not be indistinguishable from a `.md` file. `ext_of` is the one place
+    // that decision is encoded, reused here rather than re-decided.
+    let ext = ext_of(&c.rel);
     store::replace_file(tx, &c.rel, ext, c.mtime, c.size, &content_hash(&bytes), &parsed)?;
     Ok(true)
 }
@@ -1143,5 +1409,108 @@ mod tests {
     fn filetime_set(p: &Path, meta: &std::fs::Metadata) {
         let f = fs::OpenOptions::new().write(true).open(p).unwrap();
         f.set_modified(meta.modified().unwrap()).unwrap();
+    }
+
+    /// 核心契约:改名后 `path#Lnnn` 仍然指对。快路径不重算块,所以这条
+    /// 必须端到端验 —— 改名前搜到某行,改名后同一查询命中同一段文字、
+    /// 行号一致、路径是新的。
+    #[test]
+    fn a_renamed_file_keeps_its_line_anchors() {
+        let v = vault(&[("old/talk.md", "# H\n\nalpha line\n\nbeta line\n")]);
+        let mut conn = conn_for(v.path());
+        let opts = ScanOptions::default();
+        build_full(&mut conn, v.path(), &opts, None).unwrap();
+        let before = crate::query::search(&conn, &crate::query::parse("beta"), 10, "2026-08-13").unwrap().0;
+        assert_eq!(before.len(), 1);
+        let (old_path, old_line) = (before[0].path.clone(), before[0].line);
+
+        fs::create_dir_all(v.path().join("new")).unwrap();
+        fs::rename(v.path().join("old/talk.md"), v.path().join("new/talk.md")).unwrap();
+        let stats = sweep(&mut conn, v.path(), &opts, None, None).unwrap();
+        assert_eq!(stats.files_renamed, 1, "必须走快路径,而不是删除+重建");
+        assert_eq!(stats.files_indexed, 0, "块不该被重算");
+        assert_eq!(stats.files_removed, 0, "重命名不是删除");
+
+        let after = crate::query::search(&conn, &crate::query::parse("beta"), 10, "2026-08-13").unwrap().0;
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].line, old_line, "行号必须一致");
+        assert_ne!(after[0].path, old_path);
+        assert_eq!(after[0].path, "new/talk.md");
+    }
+
+    /// 元数据确实重算了,不只是换了路径:移进原始资料模式命中的目录
+    /// 必须改变分层(规则 5′)。
+    #[test]
+    fn moving_into_a_source_glob_changes_the_tier() {
+        let v = vault(&[("notes/a.md", "plain body\n")]);
+        let mut conn = conn_for(v.path());
+        let mut opts = ScanOptions::default();
+        opts.source_globs = crate::globs::parse(&["ebook/**".to_string()]);
+        build_full(&mut conn, v.path(), &opts, None).unwrap();
+        let tier = |c: &rusqlite::Connection, path: &str| -> String {
+            c.query_row("SELECT origin FROM files WHERE path=?1", [path], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(tier(&conn, "notes/a.md"), "unlabeled");
+
+        fs::create_dir_all(v.path().join("ebook")).unwrap();
+        fs::rename(v.path().join("notes/a.md"), v.path().join("ebook/a.md")).unwrap();
+        let stats = sweep(&mut conn, v.path(), &opts, None, None).unwrap();
+        assert_eq!(stats.files_renamed, 1);
+        assert_eq!(tier(&conn, "ebook/a.md"), "source", "元数据必须重算,不能只换路径");
+    }
+
+    /// size 与 mtime 都相同但内容不同 —— hash 确认必须拦住。
+    #[test]
+    fn identical_stat_but_different_content_is_not_a_rename() {
+        let v = vault(&[("old.md", "aaaa\n")]);
+        let mut conn = conn_for(v.path());
+        let opts = ScanOptions::default();
+        build_full(&mut conn, v.path(), &opts, None).unwrap();
+        let mt = fs::metadata(v.path().join("old.md")).unwrap().modified().unwrap();
+        fs::remove_file(v.path().join("old.md")).unwrap();
+        fs::write(v.path().join("new.md"), "bbbb\n").unwrap();
+        // 与 `filetime_set` 同法:用 std 的 File::set_modified,不引入 filetime。
+        fs::OpenOptions::new().write(true).open(v.path().join("new.md")).unwrap().set_modified(mt).unwrap();
+
+        let stats = sweep(&mut conn, v.path(), &opts, None, None).unwrap();
+        assert_eq!(stats.files_renamed, 0, "内容不同,不得配对");
+        assert_eq!(stats.files_indexed, 1);
+        assert_eq!(stats.files_removed, 1);
+    }
+
+    /// 分块器类别变化退回全量重建,且块按新分块器重算。
+    #[test]
+    fn changing_the_chunker_class_falls_back_to_a_full_reindex() {
+        let v = vault(&[("a.md", "# H\n\nbody\n")]);
+        let mut conn = conn_for(v.path());
+        let opts = ScanOptions::default();
+        build_full(&mut conn, v.path(), &opts, None).unwrap();
+        fs::rename(v.path().join("a.md"), v.path().join("a.note.md")).unwrap();
+        let stats = sweep(&mut conn, v.path(), &opts, None, None).unwrap();
+        assert_eq!(stats.files_renamed, 0);
+        assert_eq!(stats.files_indexed, 1, "必须重建");
+        let ext: String = conn.query_row("SELECT ext FROM files WHERE path='a.note.md'", [], |r| r.get(0)).unwrap();
+        assert_eq!(ext, "note.md");
+    }
+
+    #[test]
+    fn ext_of_covers_every_indexable_shape() {
+        assert_eq!(ext_of("a/b.note.md"), "note.md");
+        assert_eq!(ext_of("a/b.md"), "md");
+        assert_eq!(ext_of("a/b.SRT"), "srt", "大小写不敏感,与 is_indexable 同一决定");
+        assert_eq!(ext_of("a/b.vtt"), "vtt");
+        assert_eq!(ext_of("a/b.TXT"), "txt");
+    }
+
+    /// 快路径的前提。`a.md` 与 `a.note.md` 内容可以一字不差,但走的是不同
+    /// 的分块器 —— 块必须重算,不能只换路径。
+    #[test]
+    fn chunker_class_separates_the_four_dispatch_targets() {
+        assert_eq!(chunker_class("a.note.md"), ChunkerClass::Outline);
+        assert_eq!(chunker_class("a.md"), ChunkerClass::Prose);
+        assert_eq!(chunker_class("a.srt"), ChunkerClass::Transcript);
+        assert_eq!(chunker_class("a.VTT"), ChunkerClass::Transcript);
+        assert_eq!(chunker_class("a.txt"), ChunkerClass::Plain);
+        assert_ne!(chunker_class("a.md"), chunker_class("a.note.md"));
     }
 }
