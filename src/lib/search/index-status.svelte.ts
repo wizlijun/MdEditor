@@ -1,19 +1,28 @@
 import { listen } from '@tauri-apps/api/event'
-import { searchApi, type SearchStats, type SearchProgress } from './api'
+import { searchApi, type SearchStats, type SearchProgress, type SearchIndexState } from './api'
 import { isIndexNotReady } from './store.svelte'
 
-// Injectable surface, mirroring `searchApi`'s three index-lifecycle methods —
-// lets the store be exercised without a Tauri host (same idiom as
+// Injectable surface, mirroring `searchApi`'s index-lifecycle methods — lets
+// the store be exercised without a Tauri host (same idiom as
 // `_setSearchImpl` in `store.svelte.ts`).
 export interface IndexApi {
   stats: () => Promise<SearchStats | null>
   progress: () => Promise<SearchProgress | null>
   rebuild: () => Promise<void>
+  indexState: () => Promise<SearchIndexState>
+  reopen: () => Promise<void>
 }
 
 let impl: IndexApi = searchApi
-export function _setIndexApi(api: IndexApi): void {
-  impl = api
+/**
+ * Swap in a test double. `Partial`, layered over the real `searchApi`, so a
+ * test only spells out the methods it drives: a test about `stats()` racing
+ * `progress()` says nothing about the index-state read, and shouldn't have to
+ * restate it (nor silently lose coverage of the rest of the surface when a
+ * new method is added here).
+ */
+export function _setIndexApi(api: Partial<IndexApi>): void {
+  impl = { ...searchApi, ...api }
 }
 
 // Monotonic request id, same reason as `SearchStore.run`'s `seq`: two
@@ -52,6 +61,25 @@ class IndexStatusStore {
   // rebuild is a narrower, retriable event that must NOT make the button
   // that just failed disappear from under the user.
   rebuildError = $state<string | null>(null)
+  // What `notReady` actually means right now, straight from the backend's
+  // `OpenState`. `notReady` alone cannot tell "a scan is running" from "the
+  // open failed and nothing will ever retry it" — they are the same empty
+  // index handle — and rendering both as "the index is still building" is
+  // what left a permanently dead index looking like a slow one, with the
+  // Rebuild button hidden behind the same branch. `null` until the first
+  // refresh (or on a host too old to answer), which the UI treats exactly
+  // like the old undifferentiated state.
+  openState = $state<SearchIndexState | null>(null)
+  // A failed `reopen()` attempt. Separate from `error`/`rebuildError` for the
+  // same reason those are separate from each other: it must not remove the
+  // retry button that produced it.
+  reopenError = $state<string | null>(null)
+
+  /** True when the index is unavailable *and will stay that way* until the
+   *  user acts — the case that needs a retry button rather than a spinner. */
+  get openFailed(): boolean {
+    return this.openState?.state === 'failed'
+  }
 
   /**
    * Pulls a fresh snapshot of both `stats` and `progress`. Deliberately reads
@@ -96,6 +124,23 @@ class IndexStatusStore {
         () => {},
       )
     } catch { /* same as a rejected progress read: stats carries the error */ }
+    // Read independently of `stats()` for exactly the same reason as
+    // `progress()` above: `notemd_search_index_state` never touches the index
+    // lock, and its whole job is to describe the window in which `stats()`
+    // cannot answer — bundling them would make it arrive only once the answer
+    // it explains no longer matters. A host without the command (older
+    // backend) leaves `openState` null, which the UI renders as the old
+    // undifferentiated "not ready".
+    try {
+      void impl.indexState().then(
+        (s) => {
+          if (mine !== seq) return
+          this.openState = s
+          if (s.state !== 'failed') this.reopenError = null
+        },
+        () => {},
+      )
+    } catch { /* as above */ }
     try {
       const stats = await impl.stats()
       if (mine !== seq) return // superseded by a newer refresh() — drop the stale response
@@ -180,6 +225,15 @@ class IndexStatusStore {
    * there made a failed click remove its own retry button from the page.
    * `rebuildError` is a narrower, retriable notice that lives alongside the
    * button instead of replacing it.
+   *
+   * `search index not ready` is the third case, and it is not an error to
+   * report either: it means the index was taken away between this page's last
+   * refresh and the click — a vault reopen started underneath it. Observed
+   * exactly that way in the wild (saving a source-glob change reopens the
+   * index; the still-stale panel offered a Rebuild button that could only
+   * come back "not ready"). The honest response is to re-read the state and
+   * let the panel render what is actually happening, not to print the
+   * backend's own sentence at a user who did nothing wrong.
    */
   async requestRebuild(confirm: () => Promise<boolean>): Promise<void> {
     this.busyNotice = false
@@ -192,9 +246,38 @@ class IndexStatusStore {
       const msg = e instanceof Error ? e.message : String(e)
       if (msg.includes(REBUILD_ALREADY_RUNNING)) {
         this.busyNotice = true
+      } else if (isIndexNotReady(msg)) {
+        await this.refresh()
       } else {
         this.rebuildError = msg
       }
+    }
+  }
+
+  /**
+   * Re-runs the backend's vault open — the recovery path for `openFailed`.
+   *
+   * Deliberately NOT routed through `requestRebuild`: a rebuild needs the
+   * index handle that a failed open never installed, so it can only answer
+   * "not ready" (see `notemd_search_reopen`'s doc comment in
+   * `src-tauri/src/search/mod.rs`). No confirmation dialog either — reopening
+   * destroys nothing, and the realistic failure it recovers from
+   * (`database is locked`, i.e. a lost race against another connection) is
+   * fixed by simply trying again.
+   *
+   * Optimistically moves `openState` to `opening` rather than waiting for the
+   * next refresh: the command returns as soon as the background thread is
+   * spawned, and leaving `failed` on screen in the meantime would invite a
+   * second click on a retry that is already running.
+   */
+  async requestReopen(): Promise<void> {
+    this.reopenError = null
+    try {
+      await impl.reopen()
+      this.openState = { state: 'opening', error: null }
+      await this.refresh()
+    } catch (e) {
+      this.reopenError = e instanceof Error ? e.message : String(e)
     }
   }
 
@@ -207,6 +290,8 @@ class IndexStatusStore {
     this.notReady = false
     this.busyNotice = false
     this.rebuildError = null
+    this.openState = null
+    this.reopenError = null
   }
 }
 

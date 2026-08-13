@@ -57,6 +57,81 @@ impl ProgressState {
     }
 }
 
+/// Where `open_vault`'s background thread currently is, so the UI can tell
+/// the three states an empty `IndexHandle` used to collapse into one
+/// indistinguishable "not ready".
+///
+/// `IndexHandle == None` is genuinely ambiguous: no vault yet, an open still
+/// running, or an open that *failed* — and the third is permanent (nothing
+/// re-runs `open_vault` on its own), while the second clears itself in
+/// seconds to minutes. Rendering them identically is what let a failed open
+/// masquerade as "the index is still building" indefinitely, with the
+/// panel's Rebuild button hidden behind the same branch and
+/// `notemd_search_rebuild` unable to recover anyway (it needs the very
+/// handle that failed to open). Reported by `notemd_search_index_state`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenPhase {
+    /// No `open_vault` has run yet (no vault configured).
+    Idle,
+    /// A background open/build/sweep is in flight.
+    Opening,
+    /// An index is installed in `IndexHandle`.
+    Ready,
+    /// The last open failed; the message is the backend's own error text.
+    Failed(String),
+}
+
+/// Shared, lock-of-its-own holder for [`OpenPhase`] — same reasoning as
+/// [`ProgressState`]: it must stay readable while the index lock is held for
+/// a whole rebuild, since "what is the index doing" is exactly the question
+/// asked *during* that window.
+#[derive(Clone)]
+pub struct OpenState(Arc<Mutex<OpenPhase>>);
+
+impl Default for OpenState {
+    fn default() -> Self {
+        OpenState(Arc::new(Mutex::new(OpenPhase::Idle)))
+    }
+}
+
+impl OpenState {
+    pub fn set(&self, p: OpenPhase) {
+        if let Ok(mut g) = self.0.lock() {
+            *g = p
+        }
+    }
+    pub fn get(&self) -> OpenPhase {
+        self.0
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or(OpenPhase::Idle)
+    }
+}
+
+/// Serializes `open_vault`'s background threads against each other.
+///
+/// Two opens for the same vault overlap routinely — the startup open is still
+/// walking the vault when a settings save (`searchSourceGlobs` changed)
+/// triggers a reopen. Both then hold their *own* SQLite connection to the
+/// same file, and the second one needs to write (`store::rebuild_in_place`
+/// empties the tables when the glob stamp changed), so it loses on
+/// `SQLITE_BUSY` — observed in the wild as `index unavailable: database is
+/// locked` one millisecond after the reopen line. The first thread then
+/// finishes, sees it has been superseded, and discards its own perfectly good
+/// index: nothing is installed, and the vault has no search until the app is
+/// restarted.
+///
+/// The generation counter alone cannot prevent that: it decides who *installs*,
+/// not who *runs*. This lock makes the overlap impossible instead of merely
+/// arbitrated — the newer open waits for the older one to let go of the file.
+/// The wait is bounded by the older thread's own supersession checks, which
+/// bail out at every phase boundary once it is no longer current.
+///
+/// Lock order is always `OpenLock` → `IndexHandle`, never the reverse
+/// (`open_vault` clears the handle on the *caller's* thread, before the lock
+/// is ever taken), so this cannot deadlock against a rebuild or a sweep.
+pub type OpenLock = Arc<Mutex<()>>;
+
 /// The most recent scan's list of files skipped for exceeding the size
 /// threshold — path plus actual size (`searchidx::SkippedFile`).
 ///
@@ -132,12 +207,14 @@ impl Drop for RebuildGuard {
 /// from a unit test — calling this same function `init` calls is the closest
 /// a test can get to "the real wiring" without adding that dependency for
 /// one assertion.
-fn managed_state() -> (IndexHandle, ProgressState, RebuildFlag, SkippedState) {
+fn managed_state() -> (IndexHandle, ProgressState, RebuildFlag, SkippedState, OpenState, OpenLock) {
     (
         Arc::new(Mutex::new(None)),
         ProgressState::default(),
         RebuildFlag::default(),
         SkippedState::default(),
+        OpenState::default(),
+        OpenLock::default(),
     )
 }
 
@@ -185,13 +262,15 @@ fn superseded(counter: &AtomicU64, ticket: u64) -> bool {
 /// `agents_sync::init`'s auto-start. `open_vault` is also called directly from
 /// the folder picker for a freshly chosen/changed vault; see `lib.rs`.
 pub fn init(app: &AppHandle) {
-    let (idx_handle, progress, flag, skipped) = managed_state();
+    let (idx_handle, progress, flag, skipped, open_state, open_lock) = managed_state();
     app.manage::<IndexHandle>(idx_handle);
     app.manage(SearchGen::default());
     app.manage(watch::WatchState::default());
     app.manage(progress);
     app.manage(flag);
     app.manage(skipped);
+    app.manage(open_state);
+    app.manage::<OpenLock>(open_lock);
     if let Some(root) = crate::sotvault::resolve_vault_root(app) {
         open_vault(app, &root);
     }
@@ -253,6 +332,22 @@ fn skipped_write_if_current(
 pub fn open_vault(app: &AppHandle, vault_root: &Path) {
     let my_gen = watch::reserve_generation(app);
     let idx_handle = handle(app);
+    let open_state = app.state::<OpenState>().inner().clone();
+    let open_lock = app.state::<OpenLock>().inner().clone();
+    let progress_state = app.state::<ProgressState>().inner().clone();
+    // Set *synchronously*, before the thread is spawned, for the same reason
+    // the generation is reserved here: a settings page that reads the state
+    // between the call and the thread's first statement must already see
+    // "opening", not the previous open's stale `Ready`/`Failed`.
+    open_state.set(OpenPhase::Opening);
+    // …and tell any open settings page *now*, not only when the open
+    // finishes. Observed in the wild: saving a source-glob change triggers a
+    // reopen, the panel keeps rendering the previous open's stats — Rebuild
+    // button and all — and the click that button invites can only come back
+    // `rebuild failed: search index not ready`, because the handle it needs
+    // was just cleared. One event at the start costs a refresh and keeps the
+    // page honest about what the backend is doing.
+    let _ = app.emit(watch::INDEX_UPDATED_EVENT, ());
     // Drop the previous vault's index *now*, synchronously, before any of the
     // slow work below is spawned. Otherwise, for the entire duration of the
     // new vault's open+build+sweep, every query is answered from the OLD
@@ -290,10 +385,61 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
         // `for_vault`, and every caller of `opts.source_globs` (this
         // included) picks up the real value for free.
         let globs_stamp = opts.source_globs.stamp();
+        // The open's own start line. Until this existed, a launch that spent
+        // minutes on a cold build wrote *nothing at all* under the `search`
+        // category — so "is it building or is it broken?" was unanswerable
+        // from the log too, not just from the settings page.
+        crate::log_cat!("search", "info", "opening index: vault={}", root.display());
+        // Held for the whole open+build+sweep: while this thread has its own
+        // connection to the index file, no *other* `open_vault` may open a
+        // second one. See `OpenLock` for the failure this prevents.
+        let _open_guard = open_lock.lock().unwrap_or_else(|p| p.into_inner());
+        // Waiting on that lock can take as long as the previous open's build,
+        // so re-check before doing anything expensive: whoever we waited for
+        // may itself have been superseded by a *third* open that is now the
+        // one that matters.
+        if !watch::is_current(&app, my_gen) {
+            crate::log_cat!("search", "info", "open_vault superseded, discarding");
+            return;
+        }
+        // Cleared (and the phase settled) however this thread leaves —
+        // including a panic out of `searchidx` — so a failed open can never
+        // strand the panel on a progress bar that stopped moving, nor on
+        // "opening" forever. Same rationale as `RebuildGuard`.
+        let mut outcome = OpenGuard {
+            progress: progress_state.clone(),
+            state: open_state.clone(),
+            phase: Some(OpenPhase::Failed("open interrupted".into())),
+        };
         match SearchIndex::open(&root, &globs_stamp) {
             Ok(mut idx) => {
-                if let Err(e) = idx.ensure_built(&opts) {
-                    crate::log_cat!("search", "error", "initial build failed: {e}");
+                // The cold-start build is minutes long on a real vault and
+                // reported *nothing* until this callback existed: the panel
+                // could only say "the index is still building", with no
+                // phase, no counts and no elapsed time, because
+                // `ProgressState` was written by `notemd_search_rebuild`
+                // alone. Same throttled callback shape as that command, so
+                // the settings page's progress block is driven identically
+                // whoever started the scan.
+                let progress_for_cb = progress_state.clone();
+                let app_for_cb = app.clone();
+                let cb = move |p: &searchidx::Progress| {
+                    progress_for_cb.set(Some(p.clone()));
+                    let _ = app_for_cb.emit(PROGRESS_EVENT, progress_dto(p));
+                };
+                match idx.ensure_built_with_progress(&opts, Some(&cb)) {
+                    // `ScanStats::default()` — no build ran, the index already
+                    // had rows. Deliberately silent: the interesting event is
+                    // a cold build, not its absence.
+                    Ok(s) if s.files_indexed > 0 => crate::log_cat!(
+                        "search",
+                        "info",
+                        "cold build done: {} indexed, {} ms",
+                        s.files_indexed,
+                        s.took_ms
+                    ),
+                    Ok(_) => {}
+                    Err(e) => crate::log_cat!("search", "error", "initial build failed: {e}"),
                 }
                 // `sweep` (unlike `ensure_built`, which is a no-op — and so
                 // returns an empty `ScanStats` — once the index already has
@@ -313,7 +459,7 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
                 // `SkippedState` with the abandoned vault's skip list —
                 // review round 1 caught this landing one statement above
                 // the gate it should have shared.
-                let sweep_result = idx.sweep(&opts, None);
+                let sweep_result = idx.sweep_with_progress(&opts, None, Some(&cb));
                 match &sweep_result {
                     // spec §5: `renamed` has to be in this line, or a vault
                     // opened after a directory rename — the case the fast
@@ -347,14 +493,66 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
                 }
                 if !current {
                     crate::log_cat!("search", "info", "open_vault superseded, discarding");
+                    // Deliberately writes no phase: the newer open owns the
+                    // state now, and stamping `Ready`/`Failed` on behalf of a
+                    // vault the user has left is exactly the split-brain the
+                    // generation counter exists to prevent.
+                    outcome.phase = None;
                     return;
                 }
                 *lock(&idx_handle) = Some(idx);
                 watch::restart(&app, &root, my_gen);
+                outcome.phase = Some(OpenPhase::Ready);
+                // Settled *before* the event, not left to scope end: the
+                // event makes the frontend re-read `notemd_search_index_state`
+                // immediately, and a listener that got there first would read
+                // the phase this thread has not written yet — i.e. still
+                // "opening", with no further event coming to correct it. That
+                // is the very "stuck on "still building"" symptom, rebuilt out
+                // of a drop-order detail.
+                drop(outcome);
+                // Tells an open settings page the numbers are available now.
+                // Without this, a page that watched the whole build finish
+                // kept rendering "still building" until it was closed and
+                // reopened — the event was previously emitted only by
+                // `notemd_search_rebuild` and the watcher's sweep, never by
+                // the one scan every launch actually runs.
+                let _ = app.emit(watch::INDEX_UPDATED_EVENT, ());
             }
-            Err(e) => crate::log_cat!("search", "error", "index unavailable: {e}"),
+            Err(e) => {
+                crate::log_cat!("search", "error", "index unavailable: {e}");
+                // A failed open is permanent — nothing retries on its own —
+                // so it has to be *visible*, with the reason, and paired with
+                // a retry the user can reach (`notemd_search_reopen`).
+                outcome.phase = Some(OpenPhase::Failed(e));
+                drop(outcome); // settled before the event — see the Ok arm
+                let _ = app.emit(watch::INDEX_UPDATED_EVENT, ());
+            }
         }
     });
+}
+
+/// RAII settling of `ProgressState`/`OpenState` for `open_vault`'s background
+/// thread, for the same reason [`RebuildGuard`] exists: `searchidx` has
+/// `unwrap`/`expect` call sites and debug builds unwind, and a panic that
+/// left `OpenPhase::Opening` behind would tell the user "still building"
+/// about a thread that no longer exists — the exact indistinguishable-forever
+/// state this whole change removes.
+struct OpenGuard {
+    progress: ProgressState,
+    state: OpenState,
+    /// What to settle on. `None` means "write nothing" — used by a superseded
+    /// thread, whose opinion about the current vault is worthless.
+    phase: Option<OpenPhase>,
+}
+
+impl Drop for OpenGuard {
+    fn drop(&mut self) {
+        self.progress.clear();
+        if let Some(p) = self.phase.take() {
+            self.state.set(p);
+        }
+    }
 }
 
 // --- Tauri commands -------------------------------------------------------
@@ -807,6 +1005,68 @@ pub fn notemd_search_stats(app: AppHandle) -> Result<SearchStatsDto, String> {
     let idx = require_index(&guard)?;
     let skipped = skipped_state(&app).get().iter().map(skipped_dto).collect();
     Ok(stats_to_dto(idx.stats()?, skipped))
+}
+
+/// Wire shape for [`OpenPhase`]. Flat `{state, error}` rather than serde's
+/// enum shapes because the frontend switches on a plain string.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexStateDto {
+    /// `"idle" | "opening" | "ready" | "failed"`.
+    pub state: String,
+    /// Set only for `"failed"`.
+    pub error: Option<String>,
+}
+
+/// What `IndexHandle == None` actually means right now — never touches that
+/// handle (so it answers during a rebuild that holds it, exactly like
+/// `notemd_search_progress`).
+///
+/// Exists because `notemd_search_stats`'s `NOT_READY` cannot distinguish
+/// "still opening" from "the open failed and nothing will retry it", and the
+/// settings page rendered both as *the same sentence with no way out*.
+#[tauri::command]
+pub fn notemd_search_index_state(app: AppHandle) -> IndexStateDto {
+    index_state_dto(app.state::<OpenState>().get())
+}
+
+/// The `OpenPhase` → wire mapping, factored out of the command so the exact
+/// strings the frontend branches on are pinned by a unit test without an
+/// `AppHandle` (this codebase has never enabled `tauri::test`).
+fn index_state_dto(p: OpenPhase) -> IndexStateDto {
+    match p {
+        OpenPhase::Idle => IndexStateDto { state: "idle".into(), error: None },
+        OpenPhase::Opening => IndexStateDto { state: "opening".into(), error: None },
+        OpenPhase::Ready => IndexStateDto { state: "ready".into(), error: None },
+        OpenPhase::Failed(e) => IndexStateDto { state: "failed".into(), error: Some(e) },
+    }
+}
+
+/// Re-run `open_vault` for the configured vault — the user-reachable recovery
+/// from a failed open.
+///
+/// `notemd_search_rebuild` cannot serve that purpose and never could: it
+/// starts by taking the index out of `IndexHandle`, which is precisely what a
+/// failed open never put there, so it answers `NOT_READY` and leaves the
+/// user with no action at all. Reopening is also the *correct* remedy for the
+/// realistic failure (`database is locked` — a transient loss against another
+/// connection), where nothing is wrong with the index worth rebuilding.
+///
+/// Idempotent by construction: `open_vault` reserves a generation and every
+/// older thread stands down, so an impatient double-click costs one wasted
+/// open, not two competing ones.
+///
+/// `async` — i.e. off the main thread — because `open_vault` clears
+/// `IndexHandle` synchronously on its caller's thread, and that lock is held
+/// for the whole duration of a rebuild or a watcher sweep. On the default
+/// (main-thread) command kind, clicking Retry during one of those would
+/// freeze the entire UI until it finished — the same reason
+/// `notemd_search_stats` is `async`.
+#[tauri::command(async)]
+pub fn notemd_search_reopen(app: AppHandle) -> Result<(), String> {
+    let root = crate::sotvault::resolve_vault_root(&app).ok_or("Vault not configured")?;
+    open_vault(&app, &root);
+    Ok(())
 }
 
 /// Rebuild is a rare, explicit, user-initiated action (a button, not
@@ -1719,10 +1979,19 @@ mod command_tests {
     /// `ProgressState` 从 `IndexHandle` 的 `Arc::clone` 构造)时变红。
     #[test]
     fn init_wires_progress_state_and_index_handle_to_distinct_locks() {
-        let (idx_handle, progress, _flag, skipped) = managed_state();
+        let (idx_handle, progress, _flag, skipped, open_state, _open_lock) = managed_state();
         let idx_ptr = Arc::as_ptr(&idx_handle) as *const () as usize;
         let progress_ptr = Arc::as_ptr(&progress.0) as *const () as usize;
         let skipped_ptr = Arc::as_ptr(&skipped.0) as *const () as usize;
+        // `OpenState` joins the same invariant for the same reason: it is read
+        // *while* a rebuild holds the index lock (that is the whole window it
+        // describes), so sharing that lock would make it unreadable exactly
+        // when it matters.
+        let open_ptr = Arc::as_ptr(&open_state.0) as *const () as usize;
+        assert_ne!(
+            idx_ptr, open_ptr,
+            "OpenState 与 IndexHandle 指向同一块分配 —— 索引锁被重建占满时状态就读不出来了"
+        );
         assert_ne!(
             idx_ptr, progress_ptr,
             "ProgressState 与 IndexHandle 指向同一块分配 —— 违反本任务的核心不变量"
@@ -1735,6 +2004,68 @@ mod command_tests {
             progress_ptr, skipped_ptr,
             "SkippedState 与 ProgressState 指向同一块分配 —— 两者应各自独立"
         );
+    }
+
+    /// 前端按这四个字符串分支(`index-status.svelte.ts`),错一个字就是
+    /// 「打开失败」被当成「构建中」渲染 —— 也就是这次要修的那个 bug 本身。
+    #[test]
+    fn index_state_dto_uses_the_exact_strings_the_frontend_branches_on() {
+        assert_eq!(index_state_dto(OpenPhase::Idle).state, "idle");
+        assert_eq!(index_state_dto(OpenPhase::Opening).state, "opening");
+        assert_eq!(index_state_dto(OpenPhase::Ready).state, "ready");
+        let failed = index_state_dto(OpenPhase::Failed("database is locked".into()));
+        assert_eq!(failed.state, "failed");
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("database is locked"),
+            "失败原因必须原样带到界面 —— 用户看到的就是这句,再据此决定重试还是查日志"
+        );
+        for p in [OpenPhase::Idle, OpenPhase::Opening, OpenPhase::Ready] {
+            assert!(index_state_dto(p).error.is_none(), "只有 failed 带 error");
+        }
+    }
+
+    /// `open_vault` 的后台线程无论怎么离开(正常结束、`searchidx` 里
+    /// panic 展开)都必须把状态落定:留下 `Opening` 就等于告诉用户
+    /// 「还在建」,而那个线程已经没了 —— 正是本次要根治的
+    /// 「永远显示构建中、按钮消失」。
+    #[test]
+    fn open_guard_settles_the_phase_and_clears_progress_however_the_thread_leaves() {
+        let progress = ProgressState::default();
+        let state = OpenState::default();
+        progress.set(Some(searchidx::Progress {
+            phase: searchidx::Phase::Indexing,
+            done: 7,
+            total: 99,
+            current: Some("a.md".into()),
+            elapsed_ms: 5,
+        }));
+        state.set(OpenPhase::Opening);
+
+        // 模拟 `searchidx` 里 panic 展开出线程闭包:守卫在展开途中 drop。
+        let (p2, s2) = (progress.clone(), state.clone());
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _g = OpenGuard {
+                progress: p2,
+                state: s2,
+                phase: Some(OpenPhase::Failed("open interrupted".into())),
+            };
+            panic!("searchidx exploded");
+        }));
+        assert!(unwound.is_err(), "这条测试的前提就是真的 panic 了");
+        assert_eq!(state.get(), OpenPhase::Failed("open interrupted".into()));
+        assert!(progress.get().is_none(), "进度必须清空,否则设置页停在一个不动的进度条上");
+    }
+
+    /// 被更新一代 `open_vault` 取代的线程,对「当前 vault」的看法是无效的:
+    /// 它既不能宣布 Ready(可能是上一个 vault 的索引),也不能宣布 Failed
+    /// (会把正在正常构建的新 vault 标成坏的)。
+    #[test]
+    fn a_superseded_open_writes_no_phase() {
+        let state = OpenState::default();
+        state.set(OpenPhase::Opening); // 新一代 open 刚设的
+        drop(OpenGuard { progress: ProgressState::default(), state: state.clone(), phase: None });
+        assert_eq!(state.get(), OpenPhase::Opening, "过期线程不得覆盖当前一代的状态");
     }
 
     /// 完成后进度必须清空,否则设置页会一直显示一个停在 100% 的旧进度。

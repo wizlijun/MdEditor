@@ -31,7 +31,17 @@ beforeEach(() => {
   indexStatus.reset()
   listenMock.mockClear()
   resetListenCalls()
-  _setIndexApi({ stats: async () => null, progress: async () => null, rebuild: async () => {} })
+  // `_setIndexApi` takes a `Partial` and layers it over the real `searchApi`,
+  // whose `invoke` has no host under vitest — so the two lifecycle methods
+  // every test implicitly triggers through `refresh()` are stubbed here
+  // rather than left to reject into the store's swallow-and-continue paths.
+  _setIndexApi({
+    stats: async () => null,
+    progress: async () => null,
+    rebuild: async () => {},
+    indexState: async () => ({ state: 'ready', error: null }),
+    reopen: async () => {},
+  })
 })
 
 describe('indexStatus', () => {
@@ -108,6 +118,90 @@ describe('indexStatus', () => {
     await indexStatus.refresh()
     expect(indexStatus.notReady).toBe(true)
     expect(indexStatus.error).toBeNull()
+  })
+
+  // 这条是本次 bug 的核心:`notReady` 有两种成因,一种会自己过去(正在扫描),
+  // 一种永远不会(open 失败,没有任何东西会重试它 —— 现场日志里就是
+  // `index unavailable: database is locked`)。两者以前都渲染成同一句
+  // 「索引仍在构建」,重建按钮还一起藏进了同一个分支。
+  it('区分「正在构建」与「打开失败」—— 后者必须暴露原因', async () => {
+    _setIndexApi({
+      stats: async () => { throw new Error('search index not ready') },
+      indexState: async () => ({ state: 'failed', error: 'database is locked' }),
+    })
+    await indexStatus.refresh()
+    await Promise.resolve() // indexState 与 stats 各自独立落地
+    expect(indexStatus.notReady).toBe(true)
+    expect(indexStatus.openFailed).toBe(true)
+    expect(indexStatus.openState?.error).toBe('database is locked')
+
+    _setIndexApi({
+      stats: async () => { throw new Error('search index not ready') },
+      indexState: async () => ({ state: 'opening', error: null }),
+    })
+    await indexStatus.refresh()
+    await Promise.resolve()
+    expect(indexStatus.notReady).toBe(true)
+    expect(indexStatus.openFailed).toBe(false)
+  })
+
+  // 打开失败时唯一有效的自救是重新 open —— rebuild 要拿的正是那个没装上的
+  // 句柄,只会再答一次 not ready。
+  it('requestReopen 调后端 reopen,并立刻转入 opening,不留在 failed 上等下一次刷新', async () => {
+    let reopened = 0
+    _setIndexApi({
+      stats: async () => { throw new Error('search index not ready') },
+      indexState: async () => ({ state: 'failed', error: 'database is locked' }),
+      reopen: async () => { reopened++ },
+    })
+    await indexStatus.refresh()
+    await Promise.resolve()
+    expect(indexStatus.openFailed).toBe(true)
+
+    // reopen 之后后端还没来得及改状态就再查一次也无妨:乐观置为 opening 的
+    // 目的只是别让用户对着一个已经在跑的重试再点一次。
+    // 每次 `_setIndexApi` 都是覆在真 `searchApi` 上的一层,不是叠在上一次的
+    // 桩上 —— 所以这里要把 `reopen` 一并带上。
+    _setIndexApi({
+      indexState: async () => ({ state: 'opening', error: null }),
+      reopen: async () => { reopened++ },
+    })
+    await indexStatus.requestReopen()
+    expect(reopened).toBe(1)
+    expect(indexStatus.openState?.state).toBe('opening')
+    expect(indexStatus.reopenError).toBeNull()
+  })
+
+  // 现场日志:保存原始资料模式触发重开索引,设置页还停在旧统计上、按钮还在,
+  // 一点就是 `rebuild failed: search index not ready`。这不是用户的错,也不该
+  // 把后端那句生英文糊在脸上 —— 重新读状态,让面板显示真正在发生的事。
+  it('重建撞上「索引未就绪」时刷新状态,而不是把后端错误串当 rebuildError 展示', async () => {
+    let states = 0
+    _setIndexApi({
+      stats: async () => { throw new Error('search index not ready') },
+      rebuild: async () => { throw new Error('search index not ready') },
+      indexState: async () => { states++; return { state: 'opening', error: null } },
+    })
+    await indexStatus.requestRebuild(async () => true)
+    await Promise.resolve()
+    expect(indexStatus.rebuildError).toBeNull()
+    expect(indexStatus.notReady).toBe(true)
+    expect(states).toBeGreaterThan(0)
+    expect(indexStatus.openState?.state).toBe('opening')
+  })
+
+  it('reopen 自身失败时写 reopenError,不动 error —— 重试按钮不能把自己弄没', async () => {
+    _setIndexApi({
+      stats: async () => { throw new Error('search index not ready') },
+      indexState: async () => ({ state: 'failed', error: 'database is locked' }),
+      reopen: async () => { throw new Error('Vault not configured') },
+    })
+    await indexStatus.refresh()
+    await Promise.resolve()
+    await indexStatus.requestReopen()
+    expect(indexStatus.reopenError).toBe('Vault not configured')
+    expect(indexStatus.error).toBeNull()
+    expect(indexStatus.openFailed).toBe(true)
   })
 })
 

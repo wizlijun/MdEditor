@@ -108,6 +108,17 @@ export interface SearchProgress {
   elapsedMs: number
 }
 
+// Wire shape for `notemd_search_index_state` — mirrors `IndexStateDto` in
+// `src-tauri/src/search/mod.rs`. What an unavailable index actually means:
+// `'opening'` clears itself (a scan is running), `'failed'` never does
+// (nothing re-runs the open on its own — that is what `reopen()` is for).
+// Without this distinction both rendered as the same "still building"
+// sentence, which is how a permanently dead index could look like a slow one.
+export interface SearchIndexState {
+  state: 'idle' | 'opening' | 'ready' | 'failed'
+  error: string | null
+}
+
 export const searchApi = {
   query: (query: string, opts: SearchOptions = {}) =>
     invoke<SearchResponse>('notemd_search', {
@@ -126,6 +137,12 @@ export const searchApi = {
   // return here any more — progress/completion are observed via `progress()`
   // and the `search://progress` / `search://index-updated` events instead.
   rebuild: () => invoke<void>('notemd_search_rebuild'),
+  indexState: () => invoke<SearchIndexState>('notemd_search_index_state'),
+  // Re-runs the backend's `open_vault`. The recovery `rebuild()` cannot
+  // perform: a rebuild needs the index handle a failed open never installed,
+  // so it can only answer "not ready" — see `notemd_search_reopen`'s doc
+  // comment. Fire-and-forget, same as `rebuild()`.
+  reopen: () => invoke<void>('notemd_search_reopen'),
   // Task C-T11 (design spec §7.1): how many files under the REAL vault (not
   // the index — see `src/lib/search/glob-suggest.ts`'s doc comment for why
   // the index would undercount) a candidate/saved source-glob pattern set
