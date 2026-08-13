@@ -441,8 +441,9 @@ fn match_expr(q: &Query) -> Option<String> {
 // middle — so neither this column's position nor any earlier one moves
 // again if a future column is added. `f.title` (index 12) follows the same
 // rule, appended after `concept_type` rather than slotted next to the other
-// `files` columns. Both callers append their own `rank` column after
-// everything here: index 13. `is_annotation` (index 9) is unchanged from
+// `files` columns. Every caller appends its own `rank` column after
+// everything here — index 15 since C-T7 widened this list (it was 13 before;
+// see the C-T7 paragraph below). `is_annotation` (index 9) is unchanged from
 // before `origin`/`concept_type`/`title` were added.
 //
 // `f.title` is read into `finish`'s row tuple, NOT into `Hit` — pinning is
@@ -452,10 +453,21 @@ fn match_expr(q: &Query) -> Option<String> {
 // C-T7 appended two more, again AFTER everything above rather than beside
 // their thematic neighbors: `COALESCE(att.minutes, 0.0)` (index 13) and
 // `att.as_of` (index 14), both from the `LEFT JOIN doc_attention` each
-// caller adds. They shift every caller's own `rank` column from 13 to 15 —
-// the one hardcoded index in this file that has to move with them, and the
-// only symptom of forgetting is a runtime `InvalidColumnType`, not a
-// compile error.
+// caller adds. They shifted every caller's own `rank` column from 13 to 15 —
+// the one hardcoded index in this file that had to move with them.
+//
+// If you add another column here, know exactly how forgetting to move `rank`
+// fails, because the obvious guess is WRONG: it does NOT raise
+// `InvalidColumnType`. Index 13 is `COALESCE(att.minutes, 0.0)` — a REAL,
+// same as `rank` — so a stale `r.get::<_, f64>(13)` reads back a perfectly
+// valid number and every hit's bm25 is silently replaced by its attention
+// minutes (0.0 for most files). `score_of` then floors that to `r = 0.001`
+// for every hit, all scores collapse to one value, and relevance ordering
+// stops existing — with no error, no panic, and (measured, C-T7) not one red
+// test out of the whole suite INCLUDING `tests/acceptance.rs`'s
+// retrievability regression set. `the_bm25_rank_column_actually_reaches_the_
+// score` below was added for exactly this: it is the one test that dies when
+// `rank`'s index is wrong.
 const SELECT_COLS: &str = "f.path, b.line_start, b.line_end, b.text, b.breadcrumb, b.level, \
                            f.doc_date, b.agent_by, f.human_verified, b.is_annotation, f.origin, \
                            f.concept_type, f.title, \
@@ -2060,6 +2072,38 @@ mod tests {
         let unread = hits.iter().find(|h| h.path == "b.md").expect("没有注意力数据的文件必须照常命中");
         assert!((read.attention_minutes - 60.0).abs() < 1e-9, "{read:?}");
         assert_eq!(unread.attention_minutes, 0.0, "{unread:?}");
+    }
+
+    /// 「二次衰减只做一次」这条硬约束的**唯一**护栏。
+    ///
+    /// `finish` 已经把 `as_of → today` 的衰减做过一遍并写进
+    /// `Hit::attention_minutes` 了,所以 `score_of` 里 `attention::boost` 的
+    /// `age_days` 必须传 `0`;传任何非零值都是第二遍衰减 —— 分数悄悄偏低,
+    /// 不报错、不改变命中集合、也不改变任何相对顺序(每条命中都被同样地
+    /// 削弱),没有任何症状。评审实测把那个 `0` 改成 `30` 时,当时的
+    /// 305 + 25 条测试**一条都没红**。
+    ///
+    /// 隔壁的 `a_stale_attention_table_decays_once_not_twice` 挡不住它:那条
+    /// 断言的是 `Hit::attention_minutes`,而那个字段是 `finish` 的产物,
+    /// `score_of` 的参数再怎么改都不会动它。所以这里必须直接断言 `score_of`
+    /// 的**返回值**等于「按 0 天算」的加成。
+    #[test]
+    fn score_of_does_not_decay_the_already_decayed_minutes_a_second_time() {
+        let w = Weights::default();
+        // `Origin::Derived` = ×1.0,`doc_date`/`agent_by`/`human_verified`/
+        // `level: "line"` 全部不触发 —— rank=-1 给出 r=1,于是注意力加成是
+        // 压缩前**唯一**的乘数,等式可以精确成立。
+        let mut h = hit_with(Origin::Derived);
+        h.attention_minutes = 60.0;
+        let s = score_of(-1.0, &h, false, false, false, TODAY, &w);
+
+        let once = crate::attention::boost(60.0, 0, w.attention);
+        assert_eq!(s, once / (1.0 + once), "score_of 必须按 0 天算加成");
+
+        // 断言这条测试**有区分力**:半衰期确实让加成变小,所以上面的等式
+        // 不是碰巧对任何 `age_days` 都成立。
+        let twice = crate::attention::boost(60.0, 30, w.attention);
+        assert!(twice < once, "半衰期必须让加成变小,否则上面那条断言杀不死任何变异");
     }
 
     /// 表的 `as_of` 到今天的二次衰减由 `finish` 做,而且**只做一次**:
