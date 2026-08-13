@@ -552,6 +552,10 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
                     // 没有 analytics 是完全正常的状态(全新 vault、从没开过
                     // Reading Insights)。把它升级成 open 失败等于让一个可选的
                     // 排序输入否决掉整个搜索功能。
+                    //
+                    // 级别与 `watch::drain_attention` 那次摄取失败保持一致
+                    // (两处都是 `warn`,最终评审 M-2):同一件事记成两个级别,
+                    // 按级别过滤日志排障时必然漏掉其中一半。
                     Err(e) => crate::log_cat!("search", "warn", "attention ingest failed: {e}"),
                 }
                 // 代际在**写入的那一刻**重新读一次,而不是复用摄取之前的快照。
@@ -723,9 +727,11 @@ pub struct SearchStatsDto {
     /// strings and MUST NOT be translated by the frontend (same convention
     /// as the search panel's group headers, `src/lib/search/grouping.ts`).
     pub type_counts: std::collections::BTreeMap<String, i64>,
-    /// 有注意力数据的文件数(`searchidx::IndexStats::attention_files` 原样)。
-    /// 与 `files` 一起构成设置页的覆盖率行 —— 「摄取根本没跑起来」在别处没有
-    /// 任何可见症状,这是唯一的发现途径。
+    /// 有注意力数据、**且仍在索引里**的文件数
+    /// (`searchidx::IndexStats::attention_files` 原样)。与 `files` 一起构成
+    /// 设置页的覆盖率行 —— 「摄取根本没跑起来」在别处没有任何可见症状,这是
+    /// 唯一的发现途径。口径是交集(分子永远 ≤ 分母),理由见
+    /// `searchidx::store::attention_file_count`。
     pub attention_files: i64,
     /// 上一轮摄取用的 `as_of` 日(`searchidx::IndexStats::attention_as_of`
     /// 原样)。**必须**保持三态可分:`null` = 摄取从未在这个索引上跑过;

@@ -258,7 +258,7 @@ impl SearchIndex {
             tokenizer_id: store::meta_get(&self.conn, "tokenizer_id").unwrap_or_default(),
             origin_counts: origin_counts(&self.conn)?,
             type_counts: type_counts(&self.conn)?,
-            attention_files: store::attention_rows(&self.conn).unwrap_or(0),
+            attention_files: store::attention_file_count(&self.conn).unwrap_or(0),
             attention_as_of: store::meta_get(&self.conn, "attention_as_of"),
         })
     }
@@ -408,8 +408,13 @@ pub struct IndexStats {
     pub tokenizer_id: String,
     pub origin_counts: OriginCounts,
     pub type_counts: std::collections::BTreeMap<String, i64>,
-    /// 有注意力数据的文件数。与 `files` 一起构成设置页的覆盖率行 ——
-    /// 「摄取根本没跑起来」在别处没有任何可见症状,这是唯一的发现途径。
+    /// 有注意力数据、**且仍在索引里**的文件数。与 `files` 一起构成设置页的
+    /// 覆盖率行 ——「摄取根本没跑起来」在别处没有任何可见症状,这是唯一的
+    /// 发现途径。
+    ///
+    /// 口径是交集而不是 `doc_attention` 的行数,理由(以及那个「60 / 1」的
+    /// 实测)见 `store::attention_file_count`:这个数字与 `files` 一起显示,
+    /// 分子大于分母就等于没有意义。
     pub attention_files: i64,
     /// 上一轮 `refresh_attention` 用的 `as_of`(存在 `meta.attention_as_of`
     /// 键里,不是从 `doc_attention` 的行反推出来的)。

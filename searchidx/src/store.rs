@@ -768,9 +768,24 @@ pub fn replace_attention(
     Ok(rows.len())
 }
 
-/// 有注意力数据的文件数 —— 设置页的覆盖率行读它。
-pub fn attention_rows(conn: &Connection) -> rusqlite::Result<i64> {
-    conn.query_row("SELECT count(*) FROM doc_attention", [], |r| r.get(0))
+/// **索引里**有注意力数据的文件数 —— 设置页的覆盖率行(「N / 总文件数」)读它。
+///
+/// 是 `doc_attention` 与 `files` 的**交集**,不是 `doc_attention` 的行数。这
+/// 两者会分叉,而且是往「分子大于分母」的方向分叉(最终评审 M-3 实测出过
+/// 「60 / 1」):analytics 保留 365 天,`replace_attention` 无条件写下 `fold`
+/// 出来的每一个路径,所以已删除、被 exclude 掉、超大跳过、或不匹配 globs 的
+/// 文件照样各占一行 —— `rebuild_in_place` 也不清这张表。这一行是整个功能对
+/// 用户唯一可见的数字,分子大于分母等于让它失去意义,所以口径必须是规格 §6
+/// 写的那个:「有注意力数据的**文件数** / 索引内文件总数」。
+///
+/// 残留行本身无害(查询侧 `LEFT JOIN` 找不到对应 `files` 行就 join 不上,下
+/// 次摄取自愈),这里只是不把它们算进覆盖率。
+pub fn attention_file_count(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT count(*) FROM doc_attention a JOIN files f ON f.path = a.path",
+        [],
+        |r| r.get(0),
+    )
 }
 
 #[cfg(test)]
@@ -1506,7 +1521,11 @@ mod tests {
         b.insert("z.md".to_string(), 5.0);
         assert_eq!(replace_attention(&c, "2026-08-14", &b).unwrap(), 1);
 
-        assert_eq!(attention_rows(&c).unwrap(), 1, "旧行必须被清掉,不能累加");
+        // 这里问的是**表里还剩几行**,不是覆盖率 —— 所以直接数表,而不是走
+        // `attention_file_count`(它只数与 `files` 相交的那些,见其文档)。
+        let rows: i64 =
+            c.query_row("SELECT count(*) FROM doc_attention", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1, "旧行必须被清掉,不能累加");
         let (p, m, d): (String, f64, String) = c
             .query_row("SELECT path, minutes, as_of FROM doc_attention", [], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -1527,6 +1546,33 @@ mod tests {
         a.insert("x.md".to_string(), 3.0);
         replace_attention(&c, "2026-08-13", &a).unwrap();
         assert_eq!(replace_attention(&c, "2026-08-14", &Default::default()).unwrap(), 0);
-        assert_eq!(attention_rows(&c).unwrap(), 0);
+        let rows: i64 =
+            c.query_row("SELECT count(*) FROM doc_attention", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    /// 覆盖率的分子只数**索引里还在**的文件(最终评审 M-3)。
+    ///
+    /// 失败场景:analytics 留 365 天,而文件早被删掉 / 被 exclude 出索引,
+    /// 于是 `doc_attention` 的行数可以远大于 `files` 的行数,设置页渲染成
+    /// 「60 / 1」这种没有意义的数字。
+    #[test]
+    fn the_attention_coverage_count_only_counts_files_still_in_the_index() {
+        let (_d, p) = tmp();
+        let mut c = open(&p, "/v", "sync").unwrap();
+        write(&mut c, "kept.md", "# 标题\n正文\n");
+
+        let mut rows = std::collections::BTreeMap::new();
+        rows.insert("kept.md".to_string(), 30.0);
+        // 索引里没有的路径:已删除的文件、或被排除出索引的文件。
+        rows.insert("gone.md".to_string(), 600.0);
+        rows.insert("excluded/big.md".to_string(), 900.0);
+        assert_eq!(replace_attention(&c, "2026-08-13", &rows).unwrap(), 3);
+
+        let files: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(files, 1);
+        let n = attention_file_count(&c).unwrap();
+        assert_eq!(n, 1, "只有 kept.md 还在索引里");
+        assert!(n <= files, "覆盖率的分子永远不该大于分母");
     }
 }
