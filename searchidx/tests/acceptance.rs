@@ -963,3 +963,50 @@ fn reading_an_fts_column_value_yields_null_rather_than_an_error() {
         .unwrap();
     assert_eq!(got, None, "contentless 表不该还留着列值");
 }
+
+/// 摄取端到端:vault 里放一份 analytics 文件,refresh 后表里就有对应的行。
+/// 用真实临时目录而不是内存库 —— 这条要验的正是「读盘 → 折算 → 落表」这条链
+/// 有没有接错,而不是三段各自的算术(那些在 attention.rs 的单测里)。
+#[test]
+fn refresh_attention_ingests_analytics_into_the_index() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "# 标题\n正文\n").unwrap();
+    let dir = vault.path().join(".notemd/analytics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+    );
+    std::fs::write(
+        dir.join(format!("{today}.DEV-1.json")),
+        format!(
+            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:a.md":{{"{today}":{{"read_ms":600000,"edit_ms":0,"open_count":1,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+
+    // `open_temp` 返回 `(TempDir, SearchIndex)`,那个 TempDir 装的是 index.db ——
+    // 必须绑住,提前 drop 会把库删掉。
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    assert_eq!(idx.refresh_attention(&[]).unwrap(), 1);
+    let stats = idx.stats().unwrap();
+    assert_eq!(stats.attention_files, 1);
+
+    // 重复调用是幂等的 —— 全量重算的核心保证,也是「不做增量」的理由。
+    assert_eq!(idx.refresh_attention(&[]).unwrap(), 1);
+    assert_eq!(idx.stats().unwrap().attention_files, 1);
+}
+
+/// 没有 analytics 目录 = 从没开过洞察 = 空表,不是错误。
+#[test]
+fn refresh_attention_on_a_vault_without_insights_is_a_clean_no_op() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "正文\n").unwrap();
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    assert_eq!(idx.refresh_attention(&[]).unwrap(), 0);
+    assert_eq!(idx.stats().unwrap().attention_files, 0);
+}
