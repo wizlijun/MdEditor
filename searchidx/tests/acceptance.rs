@@ -1000,13 +1000,33 @@ fn refresh_attention_ingests_analytics_into_the_index() {
     assert_eq!(idx.stats().unwrap().attention_files, 1);
 }
 
-/// 没有 analytics 目录 = 从没开过洞察 = 空表,不是错误。
+/// 没有 analytics 目录 = 从没开过洞察 = 空表,不是错误 —— 但「跑过、零结果」
+/// 与「从没跑过」必须是两个可区分的状态,不能都读成 `None`。
 #[test]
 fn refresh_attention_on_a_vault_without_insights_is_a_clean_no_op() {
     let vault = tempfile::tempdir().unwrap();
     std::fs::write(vault.path().join("a.md"), "正文\n").unwrap();
     let (_db, mut idx) = open_temp(vault.path());
     idx.rebuild(&ScanOptions::default()).unwrap();
+
+    // 摄取真的从没跑过:`attention_as_of` 必须是 `None`。这一侧是区分力的
+    // 前半段 —— 少了它,下面「跑过之后变成 Some」的断言测不出任何东西,因为
+    // 一个恒等于 `Some` 的错误实现也会让它通过。
+    assert_eq!(idx.stats().unwrap().attention_as_of, None, "调用前必须是 None");
+
     assert_eq!(idx.refresh_attention(&[]).unwrap(), 0);
-    assert_eq!(idx.stats().unwrap().attention_files, 0);
+    let stats = idx.stats().unwrap();
+    assert_eq!(stats.attention_files, 0, "没有 analytics 目录,零结果");
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+    );
+    assert_eq!(
+        stats.attention_as_of,
+        Some(today),
+        "跑过一轮之后即使零结果,attention_as_of 也必须变成 Some(今天) —— \
+         这是与「从没跑过」区分的唯一途径"
+    );
 }

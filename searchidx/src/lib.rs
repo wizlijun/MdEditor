@@ -259,10 +259,7 @@ impl SearchIndex {
             origin_counts: origin_counts(&self.conn)?,
             type_counts: type_counts(&self.conn)?,
             attention_files: store::attention_rows(&self.conn).unwrap_or(0),
-            attention_as_of: self
-                .conn
-                .query_row("SELECT as_of FROM doc_attention LIMIT 1", [], |r| r.get(0))
-                .ok(),
+            attention_as_of: store::meta_get(&self.conn, "attention_as_of"),
         })
     }
 
@@ -286,7 +283,12 @@ impl SearchIndex {
         let as_of = today();
         let files = attention::collect(&self.vault_root, &as_of);
         let folded = attention::fold(&files, links, &as_of);
-        store::replace_attention(&self.conn, &as_of, &folded).map_err(|e| e.to_string())
+        let n = store::replace_attention(&self.conn, &as_of, &folded).map_err(|e| e.to_string())?;
+        // `doc_attention` 的行数在零结果时无法反推「跑没跑过」—— 一个空表和一个
+        // 从未摄取过的库看起来完全一样。单独把这一轮跑过的事实盖进 `meta`,
+        // `IndexStats::attention_as_of` 读的是这个键,不是 `doc_attention` 本身。
+        store::meta_set(&self.conn, "attention_as_of", &as_of).map_err(|e| e.to_string())?;
+        Ok(n)
     }
 }
 
@@ -409,7 +411,14 @@ pub struct IndexStats {
     /// 有注意力数据的文件数。与 `files` 一起构成设置页的覆盖率行 ——
     /// 「摄取根本没跑起来」在别处没有任何可见症状,这是唯一的发现途径。
     pub attention_files: i64,
-    /// `doc_attention.as_of`,`None` = 摄取从未跑过。
+    /// 上一轮 `refresh_attention` 用的 `as_of`(存在 `meta.attention_as_of`
+    /// 键里,不是从 `doc_attention` 的行反推出来的)。
+    ///
+    /// `None` **必须**只表示「摄取从未在这个索引上跑过」。「跑过但零结果」是
+    /// 一个不同的状态,表现为 `Some(day)` 且 `attention_files == 0` —— 用户
+    /// 一次没开过 Reading Insights 和开了但恰好没有任何有效数据,是两件设置页
+    /// 需要分开说清的事;如果这个字段只看 `doc_attention` 是否有行,零结果的
+    /// 那一轮会被误判成「从未跑过」,两种状态就再也分不开了。
     pub attention_as_of: Option<String>,
 }
 
