@@ -987,12 +987,12 @@
   // gets confused by the ProseMirror DOM's mix of editable text and
   // non-editable atom nodes (images, math blocks, …) and silently does
   // nothing. The Edit-menu "Select All" item is routed through this custom
-  // event instead (see the Rust `select-all` menu item + App.svelte), doing
-  // the exact same AllSelection dispatch the right-click menu already uses.
+  // event instead (see the Rust `select-all` menu item + App.svelte), applying
+  // the same selection the right-click menu does (lib/editor-select-all.ts).
   async function onSelectAll(): Promise<void> {
     if (!editor || status !== 'mounted') return
     const view = editor.view as any
-    const { AllSelection } = await getPmState()
+    const { selectAllSelection } = await import('../lib/editor-select-all')
     // Focus BEFORE writing the selection. This handler runs off the native
     // Edit-menu round-trip (Cmd+A's key equivalent flashes the menu just like
     // clicking the item does), so the webview is not first responder at this
@@ -1000,7 +1000,7 @@
     // That was the whole symptom: nothing looked selected, yet Backspace
     // deleted the entire document.
     view.focus()
-    view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)))
+    view.dispatch(view.state.tr.setSelection(selectAllSelection(view.state.doc)))
     // Re-sync once the menu has finished dismissing: when focus returns to the
     // webview after our write, WebKit restores its own cached (collapsed) DOM
     // selection. view.focus() re-runs ProseMirror's selectionToDOM from state,
