@@ -229,12 +229,46 @@ conventions plus vault-specific rules. Read it first; it is the contract.
 The `notemd` CLI drives app features headlessly (only commands from enabled
 plugins are exposed):
 
+    notemd search "query" --vault ~/Vault      # full-text search, path:line:text
+    notemd search "query" --json --limit 20    # structured hits with source_ref
     notemd -s draft.md              # publish file as a self-contained web page, prints URL
     notemd share draft.md --json    # structured output
     notemd share draft.md --unshare # revoke
     notemd plugin list
     notemd reading-insights report --vault ~/Vault --date 7d   # engagement digest
     notemd help
+
+#### notemd search
+
+Retrieval, shaped like grep on purpose: `path:line:text`, one hit per line.
+`rg`/`grep` are never the wrong tool here — this is an accelerator, not a
+gatekeeper.
+
+Query grammar (the same one the app's search panel takes; the flags are
+sugar for it): `tag:x` `type:x` `path:x` `ext:x` `after:YYYY-MM-DD`
+`before:YYYY-MM-DD` `page:[[X]]` `origin:human|derived|source|unlabeled`,
+plus `"quoted phrases"` for exact matches.
+
+`--json` emits `{query, route, took_ms, total, hits: [...]}`. Each hit
+carries:
+
+- `source_ref` — `path#Lline`, a citation you can hand back to the human or
+  follow yourself. It survives renames and moves: the index recognises those
+  by content hash and updates the path without renumbering the lines.
+- `origin` — `human` | `derived` | `source` | `unlabeled`. Provenance tier,
+  and the default ranking follows it: what the human wrote or signed off on
+  outranks what a model generated.
+- `provenance` — `{agent_by, human_verified}`. **A hit with `agent_by` set
+  was written by a model.** Follow its sources to the primary document
+  before relying on it; do not cite it as if a human had.
+
+Exit codes: `0` printed output · `1` no hits (not an error — nothing to
+branch on but "try something else") · `2` no vault configured, or a missing
+query.
+
+Retrieval never fails because the index is unhappy: an unusable index, or a
+freshness check that runs past its budget, degrades to a direct file scan
+with one line of warning on stderr.
 
 ### MCP
 
@@ -252,10 +286,12 @@ Shares can be updated in place or revoked (410 after unshare).
 ## Roadmap (agent-relevant)
 
 Shipped: sidecar annotations, the outline editor, a dedicated Daily Notes
-window, and one-shot Roam Research import (a plugin, with date-page rewriting
-and a broken-link report). On the roadmap: a vault-wide index (full-text
-search / backlinks / autocomplete, rebuildable from files) and the vault MCP
-server (`vault_search` / `vault_read` / `vault_annotate`).
+window, one-shot Roam Research import (a plugin, with date-page rewriting
+and a broken-link report), wiki pages, and the vault-wide index — full-text
+search over the whole vault, rebuildable from files at any time, reachable
+headlessly through `notemd search` (see the CLI section above). On the
+roadmap: the vault MCP server (`vault_search` / `vault_read` /
+`vault_annotate`).
 
 ## Contact
 

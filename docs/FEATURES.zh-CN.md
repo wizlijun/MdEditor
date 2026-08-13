@@ -22,10 +22,17 @@ AI-native 笔记系统，逐步落地中：
 - [x] **批注问答闭环** —— 批注里带 `?` 就是向 agent 提的问题；`.note.md`
       承载状态机，外部 agent 扫描处理，答复以 `type:: answer` 节点回来，
       由你决定是否采纳进正文。agent 永远不写源 `.md`。
-- [ ] **Wiki 页面** —— `wikipage/` 下的独立大纲笔记，全 vault 共用一个
-      `[[title]]` 命名空间。
-- [ ] **全局索引** —— 全库即时搜索、反向链接、链接自动补全，可随时从
-      文件全量重建。（反向链接与 linked references 已在 `.note.md` 间生效。）
+- [x] **Wiki 页面** —— 可配置的 `wikipage/` 目录下的独立大纲笔记，全 vault
+      共用一个 `[[title]]` 命名空间。检索认得它们：精确输入页名时，`[[…]]`
+      会创建的那一页被硬置顶。
+- [x] **全局索引** —— 全库即时搜索，按来源分层排序，可随时从文件全量重建
+      （索引是派生数据，文件是唯一事实源）。查询语法：`tag:` `type:` `path:`
+      `ext:` `after:` `before:` `page:[[X]]`
+      `origin:human|derived|source|unlabeled`，以及引号短语。原始资料
+      （`.srt`/`.vtt`/`.txt` 转写稿）在你指定的目录内收录。重命名与移动靠
+      内容 hash 认出，改目录名只更新路径，不重建每个文件。也能无界面使用
+      —— 见「为 agent 而生」里的 `notemd search`。（反向链接与 linked
+      references 已在 `.note.md` 间生效。）
 - [ ] **Vault MCP server** —— 暴露 `vault_search` / `vault_read` /
       `vault_annotate`，任何 agent（Claude Cowork、Claude Code、Codex、
       ChatGPT Work、OpenClaw、Hermes …）都能操作你的 vault，note.md 只是
@@ -94,6 +101,13 @@ AI-native 笔记系统，逐步落地中：
   段落的方式。
 - **`AGENTS.md` 约定** —— vault 的规矩以纯文本放在根目录，任何 CLI agent
   本来就会读。
+- **`notemd search`** —— 给 agent 的检索，形状照着 grep 来：默认输出
+  `path:line:text`，一行一条命中，`rg`/`grep` 的习惯照用。`--json` 额外给出
+  `source_ref`（`path#Lline`）、`origin` 与来源信息（`agent_by`、
+  `human_verified`）—— 模型写的命中会自报家门，agent 可以顺着它回到原始
+  文档，而不是直接采信。退出码把「无命中」（1）与「没有 vault」（2）分开；
+  检索也从不硬失败：索引不可用或新鲜度检查超预算时，降级为直接扫文件，
+  stderr 留一行说明。
 - **`notemd` CLI** —— 不开 GUI 驱动插件功能：`notemd share draft.md` 发布
   分享链接；`--json` 结构化输出；`notemd reading-insights report` 生成投入度
   摘要。从 **Help → Install 'notemd' Command in PATH…** 安装。

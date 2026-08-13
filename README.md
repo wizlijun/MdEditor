@@ -27,7 +27,7 @@ place to *read*. This is.
 ## 2. Everything the last generation got right, built in
 
 Local-first. Git sync. Outliner. `[[wikilinks]]` and backlinks. Wiki pages.
-Daily notes. A plugin system.
+Daily notes. Full-vault search. A plugin system.
 
 Roam Research and Obsidian figured these out. note.md ships them on files:
 one plugin imports your entire Roam graph, and an Obsidian vault opens
@@ -151,6 +151,8 @@ Output: `src-tauri/target/<arch>-apple-darwin/release/bundle/macos/note.md.app`
 ## CLI
 
 ```bash
+notemd search "query" --vault ~/Vault      # full-text search, prints path:line:text
+notemd search "query" --json               # hits with source_ref, origin, provenance
 notemd share draft.md                      # publish a share link, prints URL
 notemd share draft.md --json               # structured output
 notemd share draft.md --unshare            # remove the share
@@ -161,6 +163,13 @@ notemd help                                # full reference
 
 Built-in core commands plus anything contributed by *enabled* plugins.
 Install from **Help → Install 'notemd' Command in PATH…**.
+
+`notemd search` is the one agents reach for. It is grep-shaped on purpose, so
+`rg` habits carry over, and `--json` returns `source_ref` (`path#Lline`)
+alongside each hit's provenance — a hit written by a model says so, and can be
+followed to the primary document instead of trusted. Filters use the same
+grammar as the app's search panel (`tag:` `type:` `path:` `ext:` `after:`
+`before:` `page:[[X]]` `origin:`). See `notemd help search`.
 
 ## Release (maintainers)
 
