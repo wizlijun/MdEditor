@@ -52,7 +52,15 @@ use crate::tokenize::{tokenize, TOKENIZER_ID};
 // nothing ever read it (queries JOIN back to `blocks` for the real text; no
 // `snippet()`/`highlight()` anywhere; `bm25()` works contentless). Column
 // shape again, so again: bump and let `open` wipe it.
-pub const SCHEMA_VERSION: i64 = 5;
+//
+// v5 -> v6: a new `doc_attention` table carries per-file attention-minutes
+// figures folded from the reading-insights analytics JSON on disk (see
+// `attention::fold`). It has no relationship to `files`/`blocks`/`links` shape
+// — no existing column changed — but it is new schema surface all the same,
+// and an old database simply lacks the table a build past this point expects
+// to be able to write to. Same no-migration rule as every prior bump: wipe
+// and let `open` rebuild rather than `ALTER TABLE ADD` it in place.
+pub const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE files(
@@ -71,6 +79,9 @@ CREATE VIRTUAL TABLE blocks_fts USING fts5(tok_text, tok_breadcrumb, tok_title,
   content='', contentless_delete=1);
 CREATE TABLE links(file_id INTEGER, kind TEXT, target TEXT, line INTEGER);
 CREATE INDEX links_file ON links(file_id);
+CREATE TABLE doc_attention(
+  path TEXT PRIMARY KEY, minutes REAL NOT NULL, as_of TEXT NOT NULL);
+CREATE INDEX doc_attention_minutes ON doc_attention(minutes DESC);
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 "#;
 
@@ -713,6 +724,34 @@ pub fn level_of(s: &str) -> BlockLevel {
 /// row itself is never rewritten to "fix" it.
 pub fn origin_of(s: Option<&str>) -> Origin {
     s.and_then(Origin::from_str).unwrap_or(Origin::Derived)
+}
+
+/// 整表替换 `doc_attention`,返回写入行数。
+///
+/// 替换而非 upsert:摄取是全量重算的(见 `attention::fold` 的文档),
+/// 上一轮的残留行没有任何机会被更新到 —— 文件被删掉、镜像被解绑、
+/// 或者干脆衰减到 0 的路径都不会出现在新一轮的输入里,留着就是双计。
+/// 一个事务内完成,查询侧永远看不到「清空了但还没填」的中间态。
+pub fn replace_attention(
+    conn: &Connection,
+    as_of: &str,
+    rows: &std::collections::BTreeMap<String, f64>,
+) -> rusqlite::Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM doc_attention", [])?;
+    {
+        let mut st = tx.prepare("INSERT INTO doc_attention(path, minutes, as_of) VALUES(?1,?2,?3)")?;
+        for (path, minutes) in rows {
+            st.execute(rusqlite::params![path, minutes, as_of])?;
+        }
+    }
+    tx.commit()?;
+    Ok(rows.len())
+}
+
+/// 有注意力数据的文件数 —— 设置页的覆盖率行读它。
+pub fn attention_rows(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("SELECT count(*) FROM doc_attention", [], |r| r.get(0))
 }
 
 #[cfg(test)]
@@ -1426,5 +1465,49 @@ mod tests {
             .query_row("SELECT count(*) FROM blocks_fts WHERE tok_title MATCH 'alpha'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "主干没变,页名必须照旧命中");
+    }
+
+    /// 新表新列 → schema 必须 bump,老库在下次打开时全量重建。
+    #[test]
+    fn the_schema_version_covers_doc_attention() {
+        assert_eq!(SCHEMA_VERSION, 6, "加了 doc_attention 表就必须 bump");
+    }
+
+    /// 写入即整表替换:摄取是全量重算的,残留旧行等于双计。
+    #[test]
+    fn replace_attention_swaps_the_whole_table() {
+        let (_d, p) = tmp();
+        let c = open(&p, "/v", "sync").unwrap();
+        let mut a = std::collections::BTreeMap::new();
+        a.insert("x.md".to_string(), 3.0);
+        a.insert("y.md".to_string(), 1.0);
+        assert_eq!(replace_attention(&c, "2026-08-13", &a).unwrap(), 2);
+
+        let mut b = std::collections::BTreeMap::new();
+        b.insert("z.md".to_string(), 5.0);
+        assert_eq!(replace_attention(&c, "2026-08-14", &b).unwrap(), 1);
+
+        assert_eq!(attention_rows(&c).unwrap(), 1, "旧行必须被清掉,不能累加");
+        let (p, m, d): (String, f64, String) = c
+            .query_row("SELECT path, minutes, as_of FROM doc_attention", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(p, "z.md");
+        assert!((m - 5.0).abs() < 1e-9);
+        assert_eq!(d, "2026-08-14");
+    }
+
+    /// 空结果也要落地:它表达的是「摄取跑过了,一条都没有」,与
+    /// 「从没跑过」在统计行里是两件事。
+    #[test]
+    fn replacing_with_an_empty_map_clears_the_table() {
+        let (_d, p) = tmp();
+        let c = open(&p, "/v", "sync").unwrap();
+        let mut a = std::collections::BTreeMap::new();
+        a.insert("x.md".to_string(), 3.0);
+        replace_attention(&c, "2026-08-13", &a).unwrap();
+        assert_eq!(replace_attention(&c, "2026-08-14", &Default::default()).unwrap(), 0);
+        assert_eq!(attention_rows(&c).unwrap(), 0);
     }
 }
