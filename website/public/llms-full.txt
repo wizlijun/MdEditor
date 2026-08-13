@@ -236,6 +236,7 @@ plugins are exposed):
     notemd share draft.md --unshare # revoke
     notemd plugin list
     notemd reading-insights report --vault ~/Vault --date 7d   # engagement digest
+    notemd doctor                    # self-check env, vault, index, plugins, network (--offline, --json)
     notemd help
 
 #### notemd search

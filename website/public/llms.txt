@@ -34,4 +34,4 @@ Key facts: desktop app for macOS 13+ (Apple Silicon & Intel) and Windows 10/11 x
 
 ## Optional
 
-- [CLI](https://github.com/wizlijun/note.md#cli): `notemd` searches the vault, shares documents and writes reports headlessly; the share worker exposes an MCP endpoint for publishing.
+- [CLI](https://github.com/wizlijun/note.md#cli): `notemd` searches the vault, shares documents, writes reports, and self-checks the local setup (`notemd doctor` — environment, Vault, search index, plugins, network; `--offline`, `--json`) headlessly; the share worker exposes an MCP endpoint for publishing.

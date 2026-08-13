@@ -159,6 +159,7 @@ notemd share draft.md --json               # structured output
 notemd share draft.md --unshare            # remove the share
 notemd plugin list                         # all plugins and their status
 notemd reading-insights report --vault ~/Vault --date 7d
+notemd doctor                              # self-check env, vault, index, plugins, network (--offline, --json)
 notemd help                                # full reference
 ```
 

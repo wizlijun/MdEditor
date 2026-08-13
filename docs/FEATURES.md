@@ -130,6 +130,9 @@ The AI-native notes system, rolling out incrementally:
   hard-fails: an unusable index or an over-budget freshness check degrades to
   a direct file scan with one line on stderr. Default cap is 20 hits;
   `--limit N` adjusts it and `--all` returns everything.
+- **`notemd doctor`** — self-check the local setup: environment, Vault,
+  search index, plugins, and network reachability (`--offline` skips
+  network checks, `--json` for machine-readable output).
 - **`notemd` CLI** — drive plugin features without the GUI:
   `notemd share draft.md` publishes a share link; `--json` for structured
   output; `notemd reading-insights report` writes engagement digests.
