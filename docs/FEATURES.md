@@ -128,7 +128,8 @@ The AI-native notes system, rolling out incrementally:
   agent can follow it to the primary document instead of trusting it. Exit
   codes distinguish "no hits" (1) from "no vault" (2), and retrieval never
   hard-fails: an unusable index or an over-budget freshness check degrades to
-  a direct file scan with one line on stderr.
+  a direct file scan with one line on stderr. Default cap is 20 hits;
+  `--limit N` adjusts it and `--all` returns everything.
 - **`notemd` CLI** — drive plugin features without the GUI:
   `notemd share draft.md` publishes a share link; `--json` for structured
   output; `notemd reading-insights report` writes engagement digests.

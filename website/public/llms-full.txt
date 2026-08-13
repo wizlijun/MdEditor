@@ -249,6 +249,9 @@ sugar for it): `tag:x` `type:x` `path:x` `ext:x` `after:YYYY-MM-DD`
 `before:YYYY-MM-DD` `page:[[X]]` `origin:human|derived|source|unlabeled`,
 plus `"quoted phrases"` for exact matches.
 
+The default cap is 20 hits. `--limit N` adjusts it; `--all` (or `--limit 0`)
+returns every hit with no count cap.
+
 `--json` emits `{query, route, took_ms, total, hits: [...]}`. Each hit
 carries:
 
