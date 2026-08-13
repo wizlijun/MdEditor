@@ -54,6 +54,82 @@ pub fn boost(stored_minutes: f64, age_days: i64, k: f64) -> f64 {
     1.0 + k * frac
 }
 
+use std::collections::BTreeMap;
+
+/// 一份 `YYYY-MM-DD.<deviceId>.json` 里我们关心的部分。
+#[derive(Debug, Clone)]
+pub struct DayFile {
+    /// 文件名里的日期桶(设备本地日,见 `insights/model.ts` 的 `dayKey`)。
+    pub day: String,
+    /// 文件名里的 deviceId。`abs:` 归因**必须**用它配对。
+    pub device_id: String,
+    pub docs: Vec<DocDay>,
+}
+
+/// 一天里一个文档的两个计时器。其余计数器(`open_count`、`mark_ops`…)
+/// 刻意不读:批注已经由 `is_annotation ×1.2` 与 `origin=human ×1.25`
+/// 加过两道了,再摆进来是同一件事数三遍(规格 §4.1)。
+#[derive(Debug, Clone)]
+pub struct DocDay {
+    /// 原样的 docKey,含 `rel:` / `abs:` 前缀。
+    pub key: String,
+    pub read_ms: i64,
+    pub edit_ms: i64,
+}
+
+/// 一条「某设备上的某绝对路径 ↔ vault 里的某镜像」记录,由调用方从
+/// `.notemd/mirrors/` 读出后传入。
+///
+/// 由调用方供给而不是本 crate 自己读盘:`MirrorMeta` 的格式归
+/// `src-tauri/src/sotvault/mirror_meta.rs` 所有,两个 crate 各解析一遍
+/// 意味着格式一改就有一边静默错掉。
+#[derive(Debug, Clone)]
+pub struct MirrorLink {
+    pub device_id: String,
+    pub source: String,
+    /// vault 相对路径,与 `files.path` 同域。
+    pub mirror: String,
+}
+
+/// 把所有日文件折成 `vault 相对路径 → 衰减到 as_of 当天的注意力分钟数`。
+///
+/// 纯函数:同样的输入永远给同样的输出,不碰文件系统、不看时钟。摄取之所以
+/// 是**全量重算**而不是增量累加,原因在规格 §3.1:当天的 analytics 文件整天
+/// 都在被重写(存的是当日累计计数器,不是增量事件),任何水位方案算错时都是
+/// **静默**的 —— 分数偏高,没有任何症状。
+pub fn fold(files: &[DayFile], links: &[MirrorLink], as_of: &str) -> BTreeMap<String, f64> {
+    let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    for f in files {
+        let Some(age) = crate::query::days_between(&f.day, as_of) else { continue };
+        if age > MAX_AGE_DAYS {
+            continue;
+        }
+        let factor = decay(age);
+        for d in &f.docs {
+            let Some(path) = resolve(&d.key, &f.device_id, links) else { continue };
+            let m = minutes_of(d.read_ms, d.edit_ms) * factor;
+            if m > 0.0 {
+                *out.entry(path).or_insert(0.0) += m;
+            }
+        }
+    }
+    out.retain(|_, v| *v > 0.0);
+    out
+}
+
+/// docKey → vault 相对路径。`rel:` 去前缀;`abs:` 查同设备的镜像记录;
+/// 都不匹配就是 `None`(丢弃,不猜)。
+fn resolve(key: &str, device_id: &str, links: &[MirrorLink]) -> Option<String> {
+    if let Some(rel) = key.strip_prefix("rel:") {
+        return (!rel.is_empty()).then(|| rel.to_string());
+    }
+    let abs = key.strip_prefix("abs:")?;
+    links
+        .iter()
+        .find(|l| l.device_id == device_id && l.source == abs)
+        .map(|l| l.mirror.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +202,117 @@ mod tests {
     fn a_stale_table_decays_again_at_query_time() {
         let k = 0.4;
         assert!((boost(60.0, 30, k) - boost(30.0, 0, k)).abs() < 1e-9);
+    }
+
+    fn df(day: &str, device: &str, docs: &[(&str, i64, i64)]) -> DayFile {
+        DayFile {
+            day: day.into(),
+            device_id: device.into(),
+            docs: docs
+                .iter()
+                .map(|(k, r, e)| DocDay { key: (*k).into(), read_ms: *r, edit_ms: *e })
+                .collect(),
+        }
+    }
+
+    /// `rel:` key 直接去掉前缀就是索引里的 `files.path`。
+    #[test]
+    fn rel_keys_become_vault_relative_paths() {
+        let m = fold(&[df("2026-08-13", "d1", &[("rel:notes/a.md", 60_000, 0)])], &[], "2026-08-13");
+        assert!((m["notes/a.md"] - 1.0).abs() < 1e-9);
+        assert_eq!(m.len(), 1);
+    }
+
+    /// 同一文档跨天、跨设备求和,各自按自己的日期衰减。
+    #[test]
+    fn the_same_doc_sums_across_days_and_devices() {
+        let m = fold(
+            &[
+                df("2026-08-13", "d1", &[("rel:a.md", 60_000, 0)]),  // 今天 → 1.0
+                df("2026-07-14", "d2", &[("rel:a.md", 60_000, 0)]),  // 30 天前 → 0.5
+            ],
+            &[],
+            "2026-08-13",
+        );
+        assert!((m["a.md"] - 1.5).abs() < 1e-6, "实得 {}", m["a.md"]);
+    }
+
+    /// 截断边界:第 365 天计入,第 366 天不计。**这条是成本上界的守卫**,
+    /// 删掉它摄取会随 vault 年龄线性变慢而没人发现。
+    #[test]
+    fn the_age_cutoff_includes_day_365_and_excludes_day_366() {
+        // 2026-08-13 往前 365 天 = 2025-08-13;366 天 = 2025-08-12
+        let m = fold(
+            &[
+                df("2025-08-13", "d1", &[("rel:in.md", 60_000, 0)]),
+                df("2025-08-12", "d1", &[("rel:out.md", 60_000, 0)]),
+            ],
+            &[],
+            "2026-08-13",
+        );
+        assert!(m.contains_key("in.md"), "第 365 天必须计入");
+        assert!(!m.contains_key("out.md"), "第 366 天必须被截断");
+    }
+
+    /// 信念 4:vault 外源文件的阅读时长归给它在 vault 里的镜像副本。
+    #[test]
+    fn abs_keys_are_credited_to_their_mirror() {
+        let links = vec![MirrorLink {
+            device_id: "d1".into(),
+            source: "/Users/bruce/Downloads/x.md".into(),
+            mirror: "sync/x.md".into(),
+        }];
+        let m = fold(
+            &[df("2026-08-13", "d1", &[("abs:/Users/bruce/Downloads/x.md", 60_000, 0)])],
+            &links,
+            "2026-08-13",
+        );
+        assert!((m["sync/x.md"] - 1.0).abs() < 1e-9);
+    }
+
+    /// **必须按 deviceId 配对。** 两台机器上的同一个绝对路径是两个不同的
+    /// 文件;跨设备匹配 `source` 会把别人的阅读时间算到你的镜像上。
+    #[test]
+    fn abs_keys_do_not_match_another_devices_mirror_link() {
+        let links = vec![MirrorLink {
+            device_id: "OTHER".into(),
+            source: "/Users/bruce/Downloads/x.md".into(),
+            mirror: "sync/x.md".into(),
+        }];
+        let m = fold(
+            &[df("2026-08-13", "d1", &[("abs:/Users/bruce/Downloads/x.md", 60_000, 0)])],
+            &links,
+            "2026-08-13",
+        );
+        assert!(m.is_empty(), "设备不匹配时必须丢弃,不能猜");
+    }
+
+    /// 查不到镜像的 `abs:` key 直接丢弃 —— 它指向一个不在索引里的文件。
+    #[test]
+    fn unmapped_abs_keys_are_dropped() {
+        let m = fold(&[df("2026-08-13", "d1", &[("abs:/tmp/y.md", 60_000, 0)])], &[], "2026-08-13");
+        assert!(m.is_empty());
+    }
+
+    /// 无法解析的日期不能让整批摄取失败,只跳过该文件。
+    #[test]
+    fn an_unparseable_day_is_skipped_not_fatal() {
+        let m = fold(
+            &[
+                df("not-a-date", "d1", &[("rel:bad.md", 60_000, 0)]),
+                df("2026-08-13", "d1", &[("rel:good.md", 60_000, 0)]),
+            ],
+            &[],
+            "2026-08-13",
+        );
+        assert!(!m.contains_key("bad.md"));
+        assert!(m.contains_key("good.md"));
+    }
+
+    /// 零分钟的条目不进表:它对排序毫无作用,只会让表和 LEFT JOIN 变大。
+    #[test]
+    fn zero_minute_entries_are_not_stored() {
+        let m = fold(&[df("2026-08-13", "d1", &[("rel:a.md", 0, 0)])], &[], "2026-08-13");
+        assert!(m.is_empty());
     }
 }
