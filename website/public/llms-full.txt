@@ -266,7 +266,9 @@ carries:
   today; `0` = no data). Ranking already factors it in; the field is exposed
   so you can explain the order. Sits alongside `provenance`, not inside it:
   `provenance` is what the document claims about itself, this is what the
-  user actually did.
+  user actually did. The desktop app is what ingests this data; `notemd
+  search` only reads it — on a machine where the GUI has never opened this
+  vault, `attention_minutes` is `0` for every hit and ranking is unaffected.
 
 Exit codes: `0` printed output · `1` no hits (not an error — nothing to
 branch on but "try something else") · `2` no vault configured, or a missing

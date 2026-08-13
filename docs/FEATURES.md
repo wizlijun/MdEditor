@@ -126,7 +126,9 @@ The AI-native notes system, rolling out incrementally:
   `--json` adds `source_ref` (`path#Lline`), `origin`, provenance
   (`agent_by`, `human_verified`) and `attention_minutes` (decayed minutes of
   the user's own reading/editing attention on that document, 0 = no data,
-  already factored into ranking) — a hit written by a model says so, and an
+  already factored into ranking — ingested by the desktop app, so it reads 0
+  on a machine where the GUI has never opened this vault) — a hit written by a
+  model says so, and an
   agent can follow it to the primary document instead of trusting it. Exit
   codes distinguish "no hits" (1) from "no vault" (2), and retrieval never
   hard-fails: an unusable index or an over-budget freshness check degrades to

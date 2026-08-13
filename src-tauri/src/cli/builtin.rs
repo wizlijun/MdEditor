@@ -340,10 +340,15 @@ FLAGS:
                      ({agent_by, human_verified}) beyond the plain
                      path/line/text. A hit with provenance.agent_by set was
                      written by a model — follow its sources to the primary
-                     document before relying on it. attention_minutes(你在
-                     这份文档上花过的注意力分钟数,已按 30 天半衰期衰减到
-                     今天;0 = 没有数据。排序已经计入它,这个字段是让你能
-                     解释顺序)。
+                     document before relying on it. attention_minutes is the
+                     user's own reading/editing attention on that document in
+                     minutes, decayed to today with a 30-day half-life (0 = no
+                     data); ranking already factors it in and the field is
+                     exposed so you can explain the order. That data is
+                     ingested by the desktop app — this CLI reads it but never
+                     ingests — so on a machine where the GUI has never opened
+                     this vault it reads 0 for every hit and ranking is
+                     unaffected.
   --limit <n>       Max hits (default: 20)
   --context <n>     Print N lines of context around each hit
   --tag <t>         Filter: tag:<t>
