@@ -159,36 +159,19 @@ fn drain(app: &AppHandle, root: &Path, batch: Batch) {
     let mut guard = crate::search::lock(&idx_handle);
     let Some(idx) = guard.as_mut() else { return };
     let ok = match batch {
-        // One `apply_batch` rather than a loop of `index_one`: a rename
-        // arrives as a removal plus a creation, and only a whole batch can
-        // see both ends and settle it as an UPDATE instead of a rebuild plus
-        // a delete.
-        Batch::Files(paths) => match idx.apply_batch(&paths, &opts) {
-            Ok(out) => {
-                // A summary line only when something was renamed: a batch
-                // that reindexed a file the user just saved is the ordinary
-                // case and has never been logged, and starting now would put
-                // a line in the ring on every keystroke-triggered save.
-                if out.renamed > 0 {
-                    crate::log_cat!(
-                        "search",
-                        "info",
-                        "batch: {} renamed, {} reindexed, {} removed",
-                        out.renamed,
-                        out.reindexed,
-                        out.removed
-                    );
+        Batch::Files(paths) => {
+            let mut ok = true;
+            for rel in paths {
+                match idx.index_one(&rel, &opts) {
+                    Ok(outcome) => log_outcome(&rel, outcome),
+                    Err(e) => {
+                        crate::log_cat!("search", "error", "reindex {rel} failed: {e}");
+                        ok = false;
+                    }
                 }
-                for (rel, outcome) in &out.removals {
-                    log_outcome(rel, *outcome);
-                }
-                true
             }
-            Err(e) => {
-                crate::log_cat!("search", "error", "batch of {} paths failed: {e}", paths.len());
-                false
-            }
-        },
+            ok
+        }
         Batch::FullSweep => match idx.sweep(&opts, None) {
             Ok(stats) => {
                 // Same reasoning as `open_vault`'s sweep call — this is a
@@ -196,18 +179,6 @@ fn drain(app: &AppHandle, root: &Path, batch: Batch) {
                 // otherwise never learn happened (it wasn't routed through
                 // `notemd_search_rebuild`, the only other writer it might
                 // expect).
-                // spec §5: without `renamed` in the line, a sweep that
-                // rebuilt nothing *because a directory was renamed* reads
-                // exactly like a sweep with nothing to do.
-                crate::log_cat!(
-                    "search",
-                    "info",
-                    "flood sweep: {} renamed, {} indexed, {} removed, {} ms",
-                    stats.files_renamed,
-                    stats.files_indexed,
-                    stats.files_removed,
-                    stats.took_ms
-                );
                 crate::search::skipped_state(app).set(stats.files_skipped_large);
                 true
             }

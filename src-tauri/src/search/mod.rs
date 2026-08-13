@@ -460,21 +460,8 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
                 // review round 1 caught this landing one statement above
                 // the gate it should have shared.
                 let sweep_result = idx.sweep_with_progress(&opts, None, Some(&cb));
-                match &sweep_result {
-                    // spec §5: `renamed` has to be in this line, or a vault
-                    // opened after a directory rename — the case the fast
-                    // path exists for — is indistinguishable in the log from
-                    // one opened with nothing to do.
-                    Ok(s) => crate::log_cat!(
-                        "search",
-                        "info",
-                        "open sweep: {} renamed, {} indexed, {} removed, {} ms",
-                        s.files_renamed,
-                        s.files_indexed,
-                        s.files_removed,
-                        s.took_ms
-                    ),
-                    Err(e) => crate::log_cat!("search", "warn", "sweep failed: {e}"),
+                if let Err(e) = &sweep_result {
+                    crate::log_cat!("search", "warn", "sweep failed: {e}");
                 }
                 // Discard this thread's work if a newer `open_vault` call has
                 // superseded it — otherwise a slow open for a vault the user

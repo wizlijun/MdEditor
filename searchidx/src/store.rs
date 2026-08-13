@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, Transaction};
 
 use crate::block::BlockLevel;
 use crate::chunk::Parsed;
@@ -543,102 +543,6 @@ pub fn replace_file(
     Ok(())
 }
 
-/// Move a file's row to a new path without touching its blocks — the whole
-/// point of rename detection (spec §4). Returns `false` when `new_path`
-/// already has a row, which is the caller's signal to fall back to a full
-/// re-index (two files swapping names; spec §4.2).
-///
-/// The occupancy check is a SELECT *before* the UPDATE, deliberately, rather
-/// than catching the UNIQUE violation: a failed statement leaves the
-/// transaction in a state the caller would then have to reason about, and
-/// this one transaction carries an entire sweep's worth of work.
-#[allow(clippy::too_many_arguments)]
-pub fn rename_file(
-    tx: &Transaction,
-    old_path: &str,
-    new_path: &str,
-    ext: &str,
-    mtime: i64,
-    size: i64,
-    meta: &crate::block::FileMeta,
-) -> rusqlite::Result<bool> {
-    let taken: i64 =
-        tx.query_row("SELECT count(*) FROM files WHERE path=?1", params![new_path], |r| r.get(0))?;
-    if taken > 0 {
-        return Ok(false);
-    }
-    // The old row's title, read before the UPDATE overwrites it, so the
-    // `tok_title` decision below can compare old against new. A missing row
-    // is reported the same way an occupied target is: the caller falls back
-    // to a full index, which is correct for a path with no row.
-    let old_title: Option<String> = match tx
-        .query_row("SELECT title FROM files WHERE path=?1", params![old_path], |r| {
-            r.get::<_, Option<String>>(0)
-        }) {
-        Ok(t) => t,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
-        Err(e) => return Err(e),
-    };
-    // Only path-derived columns (spec §4.1's table). `content_hash`,
-    // `concept_type`, `tags_json` and `human_verified` are derived from the
-    // file's *bytes*, which by construction did not change — the caller
-    // proved that by hashing them — so rewriting them here would at best be
-    // a no-op and at worst let a stale `meta` overwrite the truth.
-    tx.execute(
-        "UPDATE files SET path=?1, ext=?2, mtime=?3, size=?4,
-                          title=?5, doc_date=?6, date_inferred=?7, origin=?8
-         WHERE path=?9",
-        params![
-            new_path,
-            ext,
-            mtime,
-            size,
-            meta.title,
-            meta.doc_date,
-            meta.date_inferred as i64,
-            meta.origin.as_str(),
-            old_path
-        ],
-    )?;
-    // `blocks_fts.tok_title` is path-derived too: it carries the file's page
-    // name (its stem) alongside its title, and that is what makes a file
-    // findable BY NAME at all (v4 schema — see `title_tokens`). Spec §4.1's
-    // table was written before that column existed and does not list it;
-    // leaving it stale would mean a renamed file stays findable under its
-    // OLD name and cannot be found under its new one.
-    //
-    // Refreshing it is not free the way a column UPDATE would be: since v5
-    // the table is contentless (`content=''`), so SQLite can neither update
-    // a subset of columns nor read the other two back — the row has to be
-    // deleted and re-inserted whole, which re-tokenizes the File-level
-    // block's text, i.e. the entire document.
-    //
-    // Hence the guard: do it only when the token string actually changes. A
-    // directory rename — the case this whole feature exists for, and the one
-    // where the files are huge transcripts — keeps every stem and title
-    // intact, so it costs nothing here. Only a change to the file's own base
-    // name pays the one tokenize, and it is the one case that needs it.
-    let new_tokens = title_tokens(new_path, meta.title.as_deref());
-    if new_tokens != title_tokens(old_path, old_title.as_deref()) {
-        let row: Option<(i64, String, String)> = tx
-            .query_row(
-                "SELECT b.id, b.text, b.breadcrumb FROM blocks b JOIN files f ON f.id=b.file_id
-                 WHERE f.path=?1 AND b.level=?2",
-                params![new_path, BlockLevel::File.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()?;
-        if let Some((id, text, breadcrumb)) = row {
-            tx.execute("DELETE FROM blocks_fts WHERE rowid=?1", params![id])?;
-            tx.execute(
-                "INSERT INTO blocks_fts(rowid,tok_text,tok_breadcrumb,tok_title) VALUES(?1,?2,?3,?4)",
-                params![id, tokenize(&text), tokenize(&breadcrumb), new_tokens],
-            )?;
-        }
-    }
-    Ok(true)
-}
-
 pub fn remove_file(tx: &Transaction, rel: &str) -> rusqlite::Result<()> {
     // The FTS table is a standalone (not external-content) table, so its
     // rows must be deleted explicitly by rowid — blocks.id IS
@@ -659,18 +563,6 @@ pub fn remove_file(tx: &Transaction, rel: &str) -> rusqlite::Result<()> {
     )?;
     tx.execute("DELETE FROM files WHERE path=?1", params![rel])?;
     Ok(())
-}
-
-/// One row by path, for callers that know exactly which files they care
-/// about — the watcher's batch, which is a handful of paths and must not pay
-/// for `all_file_rows`'s full-table load to learn about them.
-pub fn file_row(conn: &Connection, path: &str) -> rusqlite::Result<Option<FileRow>> {
-    conn.query_row(
-        "SELECT path,mtime,size,content_hash FROM files WHERE path=?1",
-        params![path],
-        |r| Ok(FileRow { path: r.get(0)?, mtime: r.get(1)?, size: r.get(2)?, content_hash: r.get(3)? }),
-    )
-    .optional()
 }
 
 pub fn all_file_rows(conn: &Connection) -> rusqlite::Result<HashMap<String, FileRow>> {
@@ -1323,108 +1215,5 @@ mod tests {
         let p = d.path().join("index.db");
         std::fs::create_dir(&p).unwrap();
         assert!(open(&p, "/v", "sync").is_err());
-    }
-
-    /// `FileMeta` 只 derive 了 `Debug, Clone` —— **没有 `Default`**。
-    /// 要自己写全七个字段,不要用 `..Default::default()`(不会编译)。
-    fn meta(title: &str) -> crate::block::FileMeta {
-        crate::block::FileMeta {
-            title: Some(title.into()),
-            concept_type: None,
-            tags: Vec::new(),
-            doc_date: None,
-            date_inferred: false,
-            human_verified: false,
-            origin: crate::Origin::Unlabeled,
-        }
-    }
-
-    /// 快路径的定义:块一行不动。改名后 blocks 的 id 必须原样保留 ——
-    /// 这是「没有重算」的可验证证据,比行数相等强得多。
-    #[test]
-    fn rename_keeps_every_block_row_untouched() {
-        let (_d, p) = tmp();
-        let mut conn = open(&p, "/v", "").unwrap();
-        write(&mut conn, "old.md", "# T\n\nalpha\n");
-        let before: Vec<i64> = conn
-            .prepare("SELECT b.id FROM blocks b JOIN files f ON f.id=b.file_id WHERE f.path='old.md' ORDER BY b.id")
-            .unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
-        assert!(!before.is_empty());
-
-        let tx = conn.transaction().unwrap();
-        assert!(rename_file(&tx, "old.md", "new.md", "md", 7, 9, &meta("T")).unwrap());
-        tx.commit().unwrap();
-
-        let after: Vec<i64> = conn
-            .prepare("SELECT b.id FROM blocks b JOIN files f ON f.id=b.file_id WHERE f.path='new.md' ORDER BY b.id")
-            .unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
-        assert_eq!(before, after, "块必须原样保留,连 id 都不变");
-        let old_left: i64 = conn
-            .query_row("SELECT count(*) FROM files WHERE path='old.md'", [], |r| r.get(0)).unwrap();
-        assert_eq!(old_left, 0, "旧路径不得残留");
-    }
-
-    /// 目标被占用时必须报告失败而不是让事务炸掉 —— 调用方要靠这个返回值
-    /// 决定退回全量重建(spec §4.2 的名字互换)。
-    #[test]
-    fn rename_reports_false_when_the_target_path_is_taken() {
-        let (_d, p) = tmp();
-        let mut conn = open(&p, "/v", "").unwrap();
-        write(&mut conn, "a.md", "alpha\n");
-        write(&mut conn, "b.md", "beta\n");
-        let tx = conn.transaction().unwrap();
-        assert!(!rename_file(&tx, "a.md", "b.md", "md", 1, 1, &meta("x")).unwrap());
-        tx.commit().unwrap();
-        // 两行都还在,谁也没被破坏
-        let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
-        assert_eq!(n, 2);
-    }
-
-    /// `tok_title` 里带着**文件名主干**(v4 schema,页名可检索),所以它也是
-    /// 路径派生的 —— spec §4.1 的表在 wikipage 检索优先级落地之前写成,漏了
-    /// 这一格。不刷新它,改名后的文件就只能用旧名字搜到,新名字搜不到。
-    /// 刷的只有 File 级那**一行**(`replace_file` 只给它写 `tok_title`),
-    /// 省下的那笔 —— 每个块的 `tok_text` 分词与写入 —— 一分不少。
-    #[test]
-    fn rename_refreshes_the_page_name_in_the_fts_title_column() {
-        let (_d, p) = tmp();
-        let mut conn = open(&p, "/v", "").unwrap();
-        // 正文里既没有 "alpha" 也没有 "beta",命中只可能来自 tok_title。
-        write(&mut conn, "alpha.md", "body\n");
-        let hits = |c: &Connection, term: &str| -> i64 {
-            c.query_row(
-                "SELECT count(*) FROM blocks_fts WHERE tok_title MATCH ?1",
-                params![term],
-                |r| r.get(0),
-            )
-            .unwrap()
-        };
-        assert_eq!(hits(&conn, "alpha"), 1, "改名前:旧页名搜得到");
-
-        let tx = conn.transaction().unwrap();
-        // `chunk::parse_file` 在没有 frontmatter title、没有 H1 时会把 title
-        // 回退成新主干,这里照它的结果传。
-        assert!(rename_file(&tx, "alpha.md", "beta.md", "md", 7, 9, &meta("beta")).unwrap());
-        tx.commit().unwrap();
-
-        assert_eq!(hits(&conn, "beta"), 1, "改名后:新页名必须搜得到");
-        assert_eq!(hits(&conn, "alpha"), 0, "旧页名必须不再命中");
-    }
-
-    /// 目录移动(主干与标题都没变)是这个功能存在的理由,也正是上面那段
-    /// 重插最贵的场合 —— 令牌串没变就一行 FTS 都不许碰。这条钉住的是那个
-    /// 跳过分支没把页名弄丢。
-    #[test]
-    fn moving_a_file_between_directories_leaves_the_page_name_matchable() {
-        let (_d, p) = tmp();
-        let mut conn = open(&p, "/v", "").unwrap();
-        write(&mut conn, "notes/alpha.md", "body\n");
-        let tx = conn.transaction().unwrap();
-        assert!(rename_file(&tx, "notes/alpha.md", "archive/alpha.md", "md", 7, 9, &meta("alpha")).unwrap());
-        tx.commit().unwrap();
-        let n: i64 = conn
-            .query_row("SELECT count(*) FROM blocks_fts WHERE tok_title MATCH 'alpha'", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 1, "主干没变,页名必须照旧命中");
     }
 }
