@@ -414,11 +414,133 @@ fn vault_checks_from(
     (out, cfg, root)
 }
 
-/// 采集全部检查。本任务接入配置与 vault 组,后续任务逐组填充其余分组。
+// ── 搜索索引组 ────────────────────────────────────────────────────────────
+
+/// 与 `notemd search` 同一预算:诊断不许阻塞调用方。
+const SWEEP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn search_checks(root: Option<&Path>) -> Vec<Check> {
+    let Some(root) = root else {
+        return vec![
+            Check::skip("search.index_open", "no Vault to check"),
+            Check::skip("search.stats", "no Vault to check"),
+            Check::skip("search.skipped_large", "no Vault to check"),
+        ];
+    };
+    let db = searchidx::paths::index_db_path(root);
+    search_checks_at(root, db.as_deref())
+}
+
+/// [`search_checks`] 的可测核心:索引 DB 路径显式传入。
+fn search_checks_at(root: &Path, db_path: Option<&Path>) -> Vec<Check> {
+    let Some(db) = db_path else {
+        return vec![
+            Check::warn(
+                "search.index_open",
+                "no local data directory on this platform",
+                "Search falls back to scanning files directly",
+            ),
+            Check::skip("search.stats", "no index"),
+            Check::skip("search.skipped_large", "no index"),
+        ];
+    };
+    // **开库之前**先看文件在不在:`SearchIndex::open` 会创建 DB,而 doctor 是
+    // 只读命令 —— 索引没建过就该说「没建过」,不该顺手替用户建一个。
+    if !db.is_file() {
+        return vec![
+            Check::warn(
+                "search.index_open",
+                format!("not built yet: {}", db.display()),
+                "Build it with: notemd search --stats",
+            ),
+            Check::skip("search.stats", "no index"),
+            Check::skip("search.skipped_large", "no index"),
+        ];
+    }
+
+    // stamp 必须来自 `scan_options_for` 产出的 ScanOptions —— 独立重算会把
+    // 完全健康的索引误判成失效(见 `SearchIndex::open` 的文档注释)。
+    let opts = super::search::scan_options_for(root);
+    let stamp = opts.source_globs.stamp();
+    let mut idx = match searchidx::SearchIndex::open_at(root, db, &stamp) {
+        Ok(i) => i,
+        Err(e) => {
+            return vec![
+                Check::warn(
+                    "search.index_open",
+                    format!("cannot open {}: {e}", db.display()),
+                    "Rebuild it with: notemd search --rebuild <any query>",
+                ),
+                Check::skip("search.stats", "index unavailable"),
+                Check::skip("search.skipped_large", "index unavailable"),
+            ]
+        }
+    };
+    let mut out = vec![Check::pass("search.index_open", db.display().to_string())];
+
+    // 增量 sweep(不是全量首建)—— 与 `notemd search` 每次调用都做的派生数据
+    // 维护完全一致,并且共用同一个 2s 预算。
+    let swept = idx.sweep(&opts, Some(SWEEP_DEADLINE));
+
+    out.push(match idx.stats() {
+        Ok(s) => {
+            let detail = format!(
+                "{} file{}, {} block{}, {:.1} MB, tokenizer {}{}",
+                s.files,
+                if s.files == 1 { "" } else { "s" },
+                s.blocks,
+                if s.blocks == 1 { "" } else { "s" },
+                s.db_bytes as f64 / 1_048_576.0,
+                s.tokenizer_id,
+                s.built_at.as_deref().map(|b| format!(", built {b}")).unwrap_or_default(),
+            );
+            if s.files == 0 {
+                Check::warn(
+                    "search.stats",
+                    detail,
+                    "Nothing is indexed — run: notemd search --rebuild <any query>",
+                )
+            } else {
+                Check::pass("search.stats", detail)
+            }
+        }
+        Err(e) => Check::warn("search.stats", e, "Rebuild with: notemd search --rebuild <any query>"),
+    });
+
+    out.push(match &swept {
+        Ok(s) if s.files_skipped_large.is_empty() => {
+            let note = if s.timed_out { " (freshness sweep hit its 2s budget; list may be partial)" } else { "" };
+            Check::pass("search.skipped_large", format!("none{note}"))
+        }
+        Ok(s) => {
+            let list = s
+                .files_skipped_large
+                .iter()
+                .map(|f| format!("{} ({:.1} MB)", f.path, f.size as f64 / 1_048_576.0))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Check::warn(
+                "search.skipped_large",
+                format!("invisible to search: {list}"),
+                "Raise searchLargeFileThresholdMb in <vault>/.notemd/settings.json, or keep using rg for these",
+            )
+        }
+        Err(e) => Check::warn(
+            "search.skipped_large",
+            format!("freshness sweep failed: {e}"),
+            "Rebuild with: notemd search --rebuild <any query>",
+        ),
+    });
+
+    out
+}
+
+/// 采集全部检查。本任务接入配置、vault 与搜索索引组,后续任务逐组填充其余分组。
 fn collect(args: &DoctorArgs) -> Vec<Check> {
-    let (vault, cfg, _root) = vault_checks(args);
+    let (vault, cfg, root) = vault_checks(args);
     let mut out = env_checks(cfg.as_ref());
     out.extend(vault);
+    out.extend(search_checks(root.as_deref()));
     out
 }
 
@@ -686,5 +808,68 @@ mod tests {
             .collect();
         assert_eq!(dependent.len(), 2);
         assert!(dependent.iter().all(|c| c.status == Status::Skip), "{dependent:?}");
+    }
+
+    #[test]
+    fn no_vault_skips_the_whole_search_group() {
+        let checks = search_checks(None);
+        assert!(!checks.is_empty());
+        assert!(checks.iter().all(|c| c.status == Status::Skip), "{checks:?}");
+    }
+
+    /// 索引还没建过 ⇒ warn + 提示怎么建,而**不是**就地建一个:
+    /// 全量首建可能跑很久,而 doctor 必须是秒级的只读命令(设计文档 §4.3)。
+    #[test]
+    fn an_unbuilt_index_warns_and_does_not_create_the_db() {
+        let vault = tempfile::tempdir().unwrap();
+        let dbdir = tempfile::tempdir().unwrap();
+        let db = dbdir.path().join("index.db");
+
+        let checks = search_checks_at(vault.path(), Some(&db));
+
+        assert!(!db.exists(), "doctor 绝不能建库");
+        let open = checks.iter().find(|c| c.id == "search.index_open").unwrap();
+        assert_eq!(open.status, Status::Warn);
+        assert!(open.hint.as_deref().unwrap().contains("notemd search"), "{open:?}");
+        // 打不开就没有统计可言 —— 后两项记 skip。
+        assert!(checks.iter().any(|c| c.id == "search.stats" && c.status == Status::Skip));
+    }
+
+    #[test]
+    fn an_existing_index_reports_stats() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("a.md"), "# Title\n\nhello doctor\n").unwrap();
+        let dbdir = tempfile::tempdir().unwrap();
+        let db = dbdir.path().join("index.db");
+
+        // 先按 search 命令同款的方式真建一次索引，doctor 才有东西可看。
+        let opts = crate::cli::search::scan_options_for(vault.path());
+        let stamp = opts.source_globs.stamp();
+        let mut idx = searchidx::SearchIndex::open_at(vault.path(), &db, &stamp).unwrap();
+        idx.ensure_built(&opts).unwrap();
+        drop(idx);
+
+        let checks = search_checks_at(vault.path(), Some(&db));
+        let open = checks.iter().find(|c| c.id == "search.index_open").unwrap();
+        assert_eq!(open.status, Status::Pass, "{open:?}");
+        let stats = checks.iter().find(|c| c.id == "search.stats").unwrap();
+        assert_eq!(stats.status, Status::Pass, "{stats:?}");
+        assert!(stats.detail.contains("1 file"), "{}", stats.detail);
+    }
+
+    #[test]
+    fn an_index_over_an_empty_vault_warns_about_zero_files() {
+        let vault = tempfile::tempdir().unwrap();
+        let dbdir = tempfile::tempdir().unwrap();
+        let db = dbdir.path().join("index.db");
+        let opts = crate::cli::search::scan_options_for(vault.path());
+        let stamp = opts.source_globs.stamp();
+        let mut idx = searchidx::SearchIndex::open_at(vault.path(), &db, &stamp).unwrap();
+        idx.ensure_built(&opts).unwrap();
+        drop(idx);
+
+        let checks = search_checks_at(vault.path(), Some(&db));
+        let stats = checks.iter().find(|c| c.id == "search.stats").unwrap();
+        assert_eq!(stats.status, Status::Warn, "{stats:?}");
     }
 }
