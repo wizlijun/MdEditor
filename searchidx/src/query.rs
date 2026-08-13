@@ -505,6 +505,76 @@ fn fts_search(
     conventions: &Conventions,
 ) -> rusqlite::Result<(Vec<Hit>, bool)> {
     let Some(expr) = match_expr(q) else { return Ok((Vec::new(), false)) };
+    let [(sql, args), (arm, arm_args)] = fts_arms(q, expr, limit);
+    let (main_rows, main_truncated) = run_fts_arm(conn, &sql, &args)?;
+    let (arm_rows, arm_truncated) = run_fts_arm(conn, &arm, &arm_args)?;
+
+    // 去重键用 `(path, line, line_end)`,而它**不是唯一键** —— 早先这里的注释
+    // 说「这个三元组在 `blocks` 里已经唯一」,那句话是错的:实测任何单块文件
+    // 都同时有一条 `(1, 1) line` 和一条 `(1, 1) file` 的整篇 rollup,每个文件
+    // 至少撞一对。之所以仍然够用,是因为真正兜住这件事的是下游的
+    // `drop_redundant_rollups`(同一文件里被更细的块覆盖的 rollup 一律丢掉),
+    // 于是撞键的那两条本来就只有一条能活到输出。
+    //
+    // 明知不唯一还用它,是权衡:方向上它只会**多丢**、不会**漏留**。同一个块
+    // 两条臂读出的三元组逐字相同,所以重复绝不会漏网(会显示两遍的那种坏);
+    // 撞键的代价只是保底臂少收一条候选,而那条候选是个 rollup,下游本来也要
+    // 丢。反过来若把 block id 选出来做键,就得动 `SELECT_COLS` 的列序,把
+    // `rank` 从 15 推到 16 —— 那是 C-T7 的地雷(漏改不报类型错,只让 bm25
+    // 静默失效),代价方向是「无声地毁掉相关性排序」。两害相权,取会多丢一条
+    // rollup 的那个。
+    let mut rows = main_rows;
+    let seen: std::collections::HashSet<_> =
+        rows.iter().map(|(h, ..): &RawRow| (h.path.clone(), h.line, h.line_end)).collect();
+    rows.extend(
+        arm_rows
+            .into_iter()
+            .filter(|(h, ..): &RawRow| !seen.contains(&(h.path.clone(), h.line, h.line_end))),
+    );
+    // 两条臂各自可能被 abort 打断,如实反映:任一条被截断,结果集就是不完整的。
+    let truncated = main_truncated || arm_truncated;
+    Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
+}
+
+/// FTS 路径的**两条候选臂**的 SQL 与参数:`[主臂, 保底臂]`。
+///
+/// # 为什么是两条
+///
+/// 主臂先按 bm25 `ORDER BY rank ASC LIMIT (limit*8).max(64)` 取候选、**再**跑
+/// `score_of`。所以纯排序加权救不了排在窗口外的文档:一份「你读了三小时、查询
+/// 词只出现一次」的长文在打分之前就被 `LIMIT` 砍掉了,再大的系数也没机会作用
+/// 在它身上(规格 §5)。保底臂只做一件事:换个排序取候选,给这类文档一个进入
+/// 评分阶段的名额。
+///
+/// # 它保证的是「进入评分」,不是「出现在结果里」——最容易被误解的地方
+///
+/// 保底臂捞回来的行照样要过 `finish`:`score_of` 打分、排序、`truncate(limit)`。
+/// 注意力加成的天花板是 `1 + k`(默认 k=0.4 即 ×1.4,`attention::boost` 里
+/// `frac` 已封顶),所以当一份文档的 bm25 比窗口内的对手差得超过这个倍数、而
+/// 其它加成又不站在它这边时,**用户看到的结果不会有任何变化**。这是规格定的
+/// (「`limit*2` 刻意取小:它是保底,不是主力 —— 主排序仍然是相关度」),不是
+/// 缺陷;但「优先召回」四个字很容易被读成「一定会出现」,对外文案要当心。
+/// 实测参见 acceptance 里 `a_high_attention_document_is_recalled_past_the_bm25_
+/// window` 的注释:简报原稿那份 500 行长文差了 44.9 倍,加满注意力仍差 32.1
+/// 倍,任何候选阶段的改动都救不了它。
+///
+/// # 性能:这条路径现在跑**两条 SQL**
+///
+/// 实测(2000 文件合成 vault):主臂 6147µs、保底臂 3789µs —— FTS 路径的 SQL
+/// 成本约 **+62%**。这是功能本身的代价,不是 bug,但要知道两件事:
+///
+/// 1. `warm_queries_are_fast` 那条守卫对此**完全失明**:它在小 corpus 上 p50
+///    只有 49µs、阈值 10000µs,204 倍余量,再翻一倍也照样绿。
+/// 2. 真正兜住形状的是 `the_attention_arm_stays_fts_driven`(下方单测):它用
+///    `EXPLAIN QUERY PLAN` 钉住保底臂仍由 `blocks_fts` 驱动。会让成本量级跳变
+///    的改动(丢掉 MATCH、改成扫 `blocks`、加相关子查询)都会先在那里变红。
+///    但它管的是**计划形状**,不是绝对耗时 —— 动这段 SQL 请人工量一次。
+///
+/// `doc_attention` 上曾经有一条 `doc_attention_minutes(minutes DESC)` 索引,
+/// 就是为这条臂建的。实测它**用不上**(见 `store.rs` v6 注释):查询由 FTS 驱
+/// 动、`doc_attention` 是被 join 的内表,`ORDER BY att.minutes DESC` 只能靠
+/// TEMP B-TREE,换 `INNER JOIN` 也一样。索引已删。
+fn fts_arms(q: &Query, expr: String, limit: usize) -> [(String, Vec<String>); 2] {
     let base = format!(
         // Column weights, in `blocks_fts`'s declared order: `tok_text`,
         // `tok_breadcrumb`, `tok_title`. The title's 4.0 is the point of
@@ -526,21 +596,12 @@ fn fts_search(
     push_filters(q, &mut sql, &mut args);
     // Over-fetch: business boosts reorder, and a phrase recheck removes rows.
     sql.push_str(&format!(" ORDER BY rank ASC LIMIT {}", (limit * 8).max(64)));
-    let (main_rows, main_truncated) = run_fts_arm(conn, &sql, &args)?;
 
-    // 保底臂:注意力(规格 §5)。纯排序加权救不了 bm25 极低的长文 —— 一份
-    // 「你读了三小时、查询词只出现一次」的文档在 `score_of` 跑起来之前就被
-    // 主臂的 `LIMIT` 砍掉了,再大的系数也没机会作用在它身上。这条臂只做一
-    // 件事:换个排序,给这类文档一个**进入评分阶段**的名额。
-    //
-    // 两条臂**共用同一个 `base`**,也就是同一个 MATCH 和同一套 `push_filters`
-    // 过滤器 —— 这是硬约束,不是巧合:「我读得最多的文档」不是「我搜的东
-    // 西」,这条臂一条不匹配的结果都不许引入。所以 `base` 只构造一次再
-    // clone,而不是抄两份 SQL 字符串:抄的那份迟早会跟主臂漂移,而漂移的
-    // 症状正是「搜什么都出现我常读的那几篇」。
-    //
-    // `(limit * 2).max(8)` 刻意取小:这是保底,不是主力 —— 合并之后最终排序
-    // 仍然由 `score_of` 的相关度主导,这条臂只保证候选集里有它们。
+    // 保底臂:注意力。两条臂**共用同一个 `base`**,也就是同一个 MATCH 和同一
+    // 套 `push_filters` 过滤器 —— 这是硬约束,不是巧合:「我读得最多的文档」
+    // 不是「我搜的东西」,这条臂一条不匹配的结果都不许引入。所以 `base` 只构
+    // 造一次再 clone,而不是抄两份 SQL:抄的那份迟早跟主臂漂移,而漂移的症状
+    // 正是「搜什么都出现我常读的那几篇」。
     let mut arm = base;
     let mut arm_args: Vec<String> = vec![expr];
     push_filters(q, &mut arm, &mut arm_args);
@@ -549,28 +610,13 @@ fn fts_search(
         // 同一个单调乘数,所以按存量排序 == 按衰减后排序,SQL 里不需要算
         // 指数。`IS NOT NULL` 而不是 `> 0`:`LEFT JOIN` 未命中的行(绝大多数
         // 文件)才是要排除的那批,读过但折算成 0 分钟的文件留着无害。
+        //
+        // `(limit * 2).max(8)` 刻意取小:保底,不是主力。
         " AND att.minutes IS NOT NULL ORDER BY att.minutes DESC, rank ASC LIMIT {}",
         (limit * 2).max(8)
     ));
-    let (arm_rows, arm_truncated) = run_fts_arm(conn, &arm, &arm_args)?;
 
-    // 去重键用 `(path, line, line_end)` 而不是 block id:`SELECT_COLS` 里没有
-    // block id,而这个三元组在 `blocks` 里已经唯一。为去重去动 `SELECT_COLS`
-    // 的列序正是 C-T7 的地雷(漏改 `rank` 索引不报类型错,只让 bm25 静默
-    // 失效)—— 而这里的取舍是单向安全的:同一个块两条臂读出的三元组逐字
-    // 相同,所以**重复绝不会漏网**;万一两个不同块撞上同一个三元组,后果
-    // 只是少收一条候选(召回略保守),不会把同一条命中显示两遍。
-    let mut rows = main_rows;
-    let seen: std::collections::HashSet<_> =
-        rows.iter().map(|(h, ..): &RawRow| (h.path.clone(), h.line, h.line_end)).collect();
-    rows.extend(
-        arm_rows
-            .into_iter()
-            .filter(|(h, ..): &RawRow| !seen.contains(&(h.path.clone(), h.line, h.line_end))),
-    );
-    // 两条臂各自可能被 abort 打断,如实反映:任一条被截断,结果集就是不完整的。
-    let truncated = main_truncated || arm_truncated;
-    Ok((finish(rows, q, limit, today, weights, conventions)?, truncated))
+    [(sql, args), (arm, arm_args)]
 }
 
 /// 跑一条 FTS 候选臂,读出 `finish` 要的原始行。
@@ -2238,4 +2284,79 @@ mod tests {
             "{filter_hits:?}"
         );
     }
+    /// 保底臂的**计划形状**守卫,不是耗时阈值。
+    ///
+    /// 背景:这条路径现在每次查询跑两条 SQL,实测(2000 文件合成 vault)保底臂
+    /// 给 FTS 路径的 SQL 成本加了约 +46%~+62%(主臂 4493µs / 保底臂 2046µs,本
+    /// 机;评审在同规模上量到 6147µs / 3789µs)。而 `warm_queries_are_fast` 对
+    /// 这个量级的变化**完全失明** —— 它在小 corpus 上 p50 只有 49µs、阈值
+    /// 10000µs,204 倍余量。
+    ///
+    /// 为什么钉计划形状而不是补一条耗时阈值:能让这条臂的成本**跳量级**的改动
+    /// (丢掉共用的 MATCH、改成扫 `blocks`、塞进相关子查询)全都表现为查询计划
+    /// 从「FTS 驱动 + 主键回表」退化成全表扫描,而计划是确定性的,不受 CI 机器
+    /// 方差影响;一条耗时阈值要么松到测不出东西(现有那条就是反面教材),要么
+    /// 紧到在别人的机器上偶发红。**但要说清它管不到什么**:它管形状,不管绝对
+    /// 耗时,常数级的变慢它一律看不见 —— 动这段 SQL 请人工量一次。
+    #[test]
+    fn the_attention_arm_stays_fts_driven() {
+        let (_d, c) = indexed(&[
+            ("a.md", "银河 的 观测 记录\n"),
+            ("b.md", "银河 的 另一 份 记录\n"),
+            ("c.md", "完全 无关 的 内容\n"),
+        ]);
+        crate::store::replace_attention(
+            &c,
+            "2026-08-10",
+            &std::collections::BTreeMap::from([("a.md".to_string(), 600.0)]),
+        )
+        .unwrap();
+
+        let q = parse("银河");
+        let expr = match_expr(&q).expect("查询必须有 MATCH 表达式");
+        // 断言的是**真正会跑的那条 SQL**(`fts_arms` 的产物),不是测试里另抄
+        // 一份 —— 抄一份的守卫只能证明抄件的计划,那是自说自话。
+        for (tag, (sql, args)) in ["主臂", "保底臂"].iter().zip(fts_arms(&q, expr, 20)) {
+            let mut st = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let plan: Vec<String> = st
+                .query_map(params_from_iter(args.iter()), |r| r.get::<_, String>(3))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect();
+            assert!(
+                plan.first().is_some_and(|l| l.contains("blocks_fts VIRTUAL TABLE INDEX")),
+                "{tag}必须由 FTS 驱动,而不是从别的表开扫:{plan:?}"
+            );
+            for line in &plan {
+                assert!(
+                    line.starts_with("SEARCH")
+                        || line.contains("blocks_fts VIRTUAL TABLE INDEX")
+                        || line.contains("USE TEMP B-TREE"),
+                    "{tag}的计划里出现了全表扫描一类的步骤「{line}」:{plan:?}"
+                );
+            }
+        }
+    }
+
+    /// `doc_attention_minutes` 索引已删除(见 `store.rs` 的 v6 注释与
+    /// `fts_arms` 的文档)。这条守卫钉住「删了就别再凭直觉加回来」:它建于
+    /// T4、专为保底臂的 `ORDER BY att.minutes DESC`,而实测**结构上用不到**
+    /// —— 查询由 FTS 驱动,`doc_attention` 是被 join 的内表,SQLite 只能
+    /// `SEARCH att USING INDEX sqlite_autoindex_doc_attention_1 (path=?)` 再
+    /// 拿 TEMP B-TREE 排序;改成 `INNER JOIN` 也一样。全量重算
+    /// (`replace_attention` 是 DELETE + 重插)每轮都要连它一起重建,所以它
+    /// 不是白拿的。要加回来,先用 `EXPLAIN QUERY PLAN` 证明它真的进了计划。
+    #[test]
+    fn no_unused_index_on_doc_attention() {
+        let (_d, c) = indexed(&[("a.md", "银河\n")]);
+        let n: i64 = c
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'doc_attention' AND name NOT LIKE 'sqlite_autoindex%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "doc_attention 上不该有显式索引 —— 保底臂用不到它");
+    }
+
 }

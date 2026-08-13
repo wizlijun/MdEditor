@@ -60,6 +60,26 @@ use crate::tokenize::{tokenize, TOKENIZER_ID};
 // and an old database simply lacks the table a build past this point expects
 // to be able to write to. Same no-migration rule as every prior bump: wipe
 // and let `open` rebuild rather than `ALTER TABLE ADD` it in place.
+//
+// `doc_attention` deliberately carries NO explicit index. It was first created
+// (T4) with `CREATE INDEX doc_attention_minutes ON doc_attention(minutes DESC)`
+// to serve T8's attention candidate arm (`query::fts_arms`'s second arm,
+// `ORDER BY att.minutes DESC`). Measured with `EXPLAIN QUERY PLAN` once that
+// arm existed: the index is STRUCTURALLY unreachable there and was dropped
+// again in the same unreleased schema version. The arm is FTS-driven —
+// `SCAN blocks_fts VIRTUAL TABLE INDEX` → `SEARCH b`/`f` by rowid → `SEARCH
+// att USING INDEX sqlite_autoindex_doc_attention_1 (path=?)` — so
+// `doc_attention` is the INNER table of a join keyed by `path`, and an ORDER BY
+// on a column of an inner table can only be satisfied by `USE TEMP B-TREE FOR
+// ORDER BY`. Switching the `LEFT JOIN` to `INNER JOIN` does not change that.
+// The index was not free: `replace_attention` replaces the whole table every
+// refresh (DELETE + re-INSERT), so every ingest rebuilt it in full. Removing it
+// needs no further version bump — v6 has never shipped, and an index is not
+// readable surface: a v6 database created by an earlier dev build keeps a stale,
+// unused index, which costs a hair on write and nothing on read, and bumping to
+// v7 would force every dev machine into a full reindex to buy exactly that hair.
+// If you want it back, prove with `EXPLAIN QUERY PLAN` that a real query uses it
+// first — `query::tests::no_unused_index_on_doc_attention` is the tripwire.
 pub const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA_SQL: &str = r#"
@@ -81,7 +101,6 @@ CREATE TABLE links(file_id INTEGER, kind TEXT, target TEXT, line INTEGER);
 CREATE INDEX links_file ON links(file_id);
 CREATE TABLE doc_attention(
   path TEXT PRIMARY KEY, minutes REAL NOT NULL, as_of TEXT NOT NULL);
-CREATE INDEX doc_attention_minutes ON doc_attention(minutes DESC);
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 "#;
 
