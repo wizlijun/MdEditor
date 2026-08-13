@@ -176,9 +176,74 @@ pub fn render_json(checks: &[Check]) -> String {
     .to_string()
 }
 
-/// 采集全部检查。本任务先返回空表,后续任务逐组填充。
+// ── 环境组 ────────────────────────────────────────────────────────────────
+
+/// `install::status` 已经区分「没装」和「装了但 target 不是当前二进制」,但
+/// 它的 `target_valid` 问的是「是否指向*本进程*的二进制」—— 那对 doctor 太严:
+/// 多个安装、dev 构建都会让它为 false 而软链本身完全可用。真正的坏情况是
+/// **指向一个不存在的文件**(dangling),所以 target 是否存在由调用方解析后传入。
+fn check_cli_link(installed: bool, path: Option<&str>, target_exists: Option<bool>) -> Check {
+    if !installed {
+        return Check::warn(
+            "env.cli_link",
+            "not installed",
+            "Install it in Preferences → General → Command line, so `notemd` works in a terminal",
+        );
+    }
+    let p = path.unwrap_or("(unknown path)");
+    if target_exists == Some(false) {
+        return Check::fail(
+            "env.cli_link",
+            format!("{p} points at a target that no longer exists"),
+            "Reinstall it in Preferences → General → Command line",
+        );
+    }
+    Check::pass("env.cli_link", p)
+}
+
+fn check_git(version: Option<&str>) -> Check {
+    match version {
+        Some(v) => Check::pass("env.git", v),
+        None => Check::fail(
+            "env.git",
+            "git not found on PATH",
+            "Install git (on macOS: xcode-select --install) — Vault sync cannot run without it",
+        ),
+    }
+}
+
+fn check_git_proxy(raw: Option<&str>) -> Check {
+    match crate::vault_sync::git_ops::validate_proxy_url(raw.unwrap_or("")) {
+        Ok(None) => Check::pass("env.git_proxy", "not configured"),
+        Ok(Some(url)) => Check::pass("env.git_proxy", url),
+        Err(e) => Check::fail(
+            "env.git_proxy",
+            e,
+            "Fix or clear the proxy in Preferences → Sync",
+        ),
+    }
+}
+
+fn env_checks(cfg: Option<&crate::shared_config::SharedConfig>) -> Vec<Check> {
+    let st = super::install::status(None);
+    // 自己解析软链目标:`InstallStatus` 只带链接路径,不带目标是否存在。
+    // 读不出目标(不是软链)⇒ None ⇒ 宽容按通过处理。
+    let target_exists = st
+        .path
+        .as_deref()
+        .map(std::path::Path::new)
+        .and_then(|p| std::fs::read_link(p).ok())
+        .map(|t| t.exists());
+    vec![
+        check_cli_link(st.installed, st.path.as_deref(), target_exists),
+        check_git(crate::vault_sync::git_ops::version().as_deref()),
+        check_git_proxy(cfg.and_then(|c| c.git_proxy.as_deref())),
+    ]
+}
+
+/// 采集全部检查。本任务先接入环境组,后续任务逐组填充其余分组。
 fn collect(_args: &DoctorArgs) -> Vec<Check> {
-    Vec::new()
+    env_checks(None)
 }
 
 pub fn run(args: DoctorArgs) -> ExitCode {
@@ -282,5 +347,63 @@ mod tests {
     fn global_json_flag_reaches_doctor_args() {
         let a = parse_args(&[], false).with_global_json(true);
         assert!(a.json);
+    }
+
+    #[test]
+    fn cli_link_absent_is_a_warning_not_a_failure() {
+        // GUI 用户不装软链是完全正常的，不能因此让 doctor 退出 1。
+        let c = check_cli_link(false, None, None);
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.hint.is_some());
+    }
+
+    #[test]
+    fn cli_link_present_and_resolvable_passes() {
+        let c = check_cli_link(true, Some("/usr/local/bin/notemd"), Some(true));
+        assert_eq!(c.status, Status::Pass);
+        assert!(c.detail.contains("/usr/local/bin/notemd"), "{}", c.detail);
+    }
+
+    #[test]
+    fn cli_link_pointing_at_a_missing_target_fails() {
+        // dangling 软链 = 命令存在但一跑就报 "no such file"，必须是 fail。
+        let c = check_cli_link(true, Some("/usr/local/bin/notemd"), Some(false));
+        assert_eq!(c.status, Status::Fail);
+    }
+
+    #[test]
+    fn cli_link_that_is_not_a_symlink_passes() {
+        // 非软链（Windows shim、拷贝的二进制）读不出 target；宽容处理，不误报。
+        let c = check_cli_link(true, Some("/usr/local/bin/notemd"), None);
+        assert_eq!(c.status, Status::Pass);
+    }
+
+    #[test]
+    fn missing_git_is_a_failure() {
+        let c = check_git(None);
+        assert_eq!(c.status, Status::Fail);
+        assert_eq!(c.id, "env.git");
+    }
+
+    #[test]
+    fn present_git_reports_its_version() {
+        let c = check_git(Some("git version 2.39.3"));
+        assert_eq!(c.status, Status::Pass);
+        assert!(c.detail.contains("2.39.3"), "{}", c.detail);
+    }
+
+    #[test]
+    fn unset_proxy_passes() {
+        assert_eq!(check_git_proxy(None).status, Status::Pass);
+        assert_eq!(check_git_proxy(Some("  ")).status, Status::Pass);
+    }
+
+    #[test]
+    fn valid_proxy_passes_and_invalid_one_fails() {
+        assert_eq!(check_git_proxy(Some("socks5://127.0.0.1:1080")).status, Status::Pass);
+        let c = check_git_proxy(Some("ftp://nope"));
+        assert_eq!(c.status, Status::Fail);
+        // 复用 git_ops::validate_proxy_url 的原话，不另写一套错误文案。
+        assert!(c.detail.contains("unsupported proxy scheme"), "{}", c.detail);
     }
 }
