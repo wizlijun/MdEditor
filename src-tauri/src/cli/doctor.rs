@@ -535,12 +535,86 @@ fn search_checks_at(root: &Path, db_path: Option<&Path>) -> Vec<Check> {
     out
 }
 
-/// 采集全部检查。本任务接入配置、vault 与搜索索引组,后续任务逐组填充其余分组。
+// ── 插件系统组 ────────────────────────────────────────────────────────────
+
+fn plugin_checks(root: Option<&Path>, host_version: &str) -> Vec<Check> {
+    let Some(root) = root else {
+        return vec![Check::warn(
+            "plugin.root",
+            "cannot resolve the app data directory",
+            "Report this — notemd cannot find where plugins are installed",
+        )];
+    };
+    if !root.exists() {
+        return vec![Check::pass("plugin.root", "no plugins installed")];
+    }
+    let mut out = vec![Check::pass("plugin.root", root.display().to_string())];
+
+    // 同 shared.json / settings.json:`state::load` 把损坏当成空表,而空表和
+    // 「所有插件都读不出来了」是天差地别的两件事。
+    let state_path = root.join("state.json");
+    match std::fs::read_to_string(&state_path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            out.push(Check::pass("plugin.state", "no plugins installed"));
+            return out;
+        }
+        Err(e) => {
+            out.push(Check::fail(
+                "plugin.state",
+                format!("{}: {e}", state_path.display()),
+                "Check the file's permissions",
+            ));
+            return out;
+        }
+        Ok(text) => match serde_json::from_str::<crate::plugin_runtime::state::InstallState>(&text) {
+            Err(e) => {
+                out.push(Check::fail(
+                    "plugin.state",
+                    format!("{} is not valid JSON: {e}", state_path.display()),
+                    "Reinstall the affected plugins with: notemd plugin install <id>",
+                ));
+                return out;
+            }
+            Ok(state) => {
+                out.push(Check::pass(
+                    "plugin.state",
+                    format!("{} installed", state.installed.len()),
+                ));
+                for (id, entry) in &state.installed {
+                    let check_id = format!("plugin.{id}");
+                    if !entry.enabled {
+                        out.push(Check::skip(&check_id, format!("{} (disabled)", entry.version)));
+                        continue;
+                    }
+                    let current = root.join(id).join("current");
+                    // 同一个实现,不复刻:manifest 解析 + validate_manifest +
+                    // id 一致 + 本机架构二进制存在,全在这一个函数里。
+                    match crate::plugin_runtime::discovery::validate_installed(&current, id, host_version) {
+                        Ok(m) => out.push(Check::pass(&check_id, m.version)),
+                        Err(e) => out.push(Check::fail(
+                            &check_id,
+                            e,
+                            format!("Reinstall it with: notemd plugin install {id}"),
+                        )),
+                    }
+                }
+            }
+        },
+    }
+    out
+}
+
+/// 采集全部检查。本任务接入配置、vault、搜索索引与插件系统组,后续任务逐组
+/// 填充其余分组。
 fn collect(args: &DoctorArgs) -> Vec<Check> {
     let (vault, cfg, root) = vault_checks(args);
     let mut out = env_checks(cfg.as_ref());
     out.extend(vault);
     out.extend(search_checks(root.as_deref()));
+    out.extend(plugin_checks(
+        super::runner::v2_plugins_root().as_deref(),
+        env!("CARGO_PKG_VERSION"),
+    ));
     out
 }
 
@@ -871,5 +945,122 @@ mod tests {
         let checks = search_checks_at(vault.path(), Some(&db));
         let stats = checks.iter().find(|c| c.id == "search.stats").unwrap();
         assert_eq!(stats.status, Status::Warn, "{stats:?}");
+    }
+
+    use crate::plugin_runtime::state::{InstallState, InstalledPlugin};
+
+    fn write_plugin_state(root: &Path, entries: &[(&str, bool)]) {
+        let mut s = InstallState::default();
+        for (id, enabled) in entries {
+            s.installed.insert(
+                (*id).to_string(),
+                InstalledPlugin { version: "1.0.0".into(), enabled: *enabled },
+            );
+        }
+        crate::plugin_runtime::state::save(root, &s).unwrap();
+    }
+
+    /// 与 discovery 的测试同款:最小可用 manifest,binary 键就是当前架构三元组。
+    fn fixture_manifest(id: &str, binary_key: &str) -> String {
+        serde_json::json!({
+            "manifest_version": 2,
+            "id": id,
+            "name": "Fixture",
+            "version": "1.0.0",
+            "kind": "native",
+            "engines": { "notemd": ">=0.0.0" },
+            "binary": { binary_key: "bin/fixture" },
+            "activation": { "events": ["onCli:fixture"] },
+            "capabilities": []
+        })
+        .to_string()
+    }
+
+    fn install_fixture(root: &Path, dir_id: &str, manifest: &str, with_binary: bool) {
+        let current = root.join(dir_id).join("current");
+        std::fs::create_dir_all(current.join("bin")).unwrap();
+        std::fs::write(current.join("manifest.json"), manifest).unwrap();
+        if with_binary {
+            std::fs::write(current.join("bin/fixture"), b"#!/bin/sh\nexit 0\n").unwrap();
+        }
+    }
+
+    fn triple() -> &'static str {
+        crate::plugin_runtime::discovery::current_arch_triple().expect("supported arch")
+    }
+
+    #[test]
+    fn no_plugins_installed_is_not_a_problem() {
+        let dir = tempfile::tempdir().unwrap();
+        let checks = plugin_checks(Some(&dir.path().join("plugins")), "1.0.0");
+        assert!(checks.iter().all(|c| c.status == Status::Pass), "{checks:?}");
+    }
+
+    /// state.json 是插件系统的唯一真相源;它坏了 = 插件全体不可信,必须 fail。
+    /// 同时钉住「不许改用 fail-soft 的 state::load()」—— 那个函数把损坏文件
+    /// 当成空表,这条断言会立刻变红。
+    #[test]
+    fn corrupt_plugin_state_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(root.join("state.json"), "{ not json").unwrap();
+        let c = plugin_checks(Some(root), "1.0.0")
+            .into_iter()
+            .find(|c| c.id == "plugin.state")
+            .unwrap();
+        assert_eq!(c.status, Status::Fail);
+    }
+
+    #[test]
+    fn a_healthy_plugin_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_plugin_state(root, &[("notemd.fixture", true)]);
+        install_fixture(root, "notemd.fixture", &fixture_manifest("notemd.fixture", triple()), true);
+
+        let c = plugin_checks(Some(root), "1.0.0")
+            .into_iter()
+            .find(|c| c.id == "plugin.notemd.fixture")
+            .unwrap();
+        assert_eq!(c.status, Status::Pass, "{c:?}");
+        assert_eq!(group_of(&c.id), "plugin");
+    }
+
+    /// 「装了却没反应」的最常见根因:包里没有本机架构的二进制。
+    /// detail 必须原样带上 discovery 的原因串,而不是一句笼统的 "invalid"。
+    #[test]
+    fn a_plugin_without_a_binary_for_this_arch_fails_with_the_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_plugin_state(root, &[("notemd.fixture", true)]);
+        install_fixture(
+            root,
+            "notemd.fixture",
+            &fixture_manifest("notemd.fixture", "wasm32-unknown-unknown"),
+            true,
+        );
+
+        let c = plugin_checks(Some(root), "1.0.0")
+            .into_iter()
+            .find(|c| c.id == "plugin.notemd.fixture")
+            .unwrap();
+        assert_eq!(c.status, Status::Fail);
+        assert!(c.detail.contains("no binary for host arch"), "{}", c.detail);
+    }
+
+    #[test]
+    fn a_disabled_plugin_is_reported_as_skipped_not_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_plugin_state(root, &[("notemd.fixture", false)]);
+        install_fixture(root, "notemd.fixture", &fixture_manifest("notemd.fixture", triple()), true);
+
+        let c = plugin_checks(Some(root), "1.0.0")
+            .into_iter()
+            .find(|c| c.id == "plugin.notemd.fixture")
+            .unwrap();
+        assert_eq!(c.status, Status::Skip);
+        assert!(c.detail.contains("disabled"), "{}", c.detail);
     }
 }
