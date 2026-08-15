@@ -382,6 +382,14 @@ DESCRIPTION:
   never builds a search index from scratch; each finding carries a one-line
   suggestion for what to run next.
 
+  Note: never builds from scratch means no full first-time build, not zero
+  side effects. If the index already exists but searchSourceGlobs changed
+  since it was last opened, opening it clears and re-stamps the table before
+  doctor's own 2s freshness sweep gets to run — so the very first doctor
+  run after such a change can see a partially-repopulated index and leave it
+  that way. Harmless (the next `notemd search` finishes the job), but not
+  literally side-effect-free.
+
 FLAGS:
   --offline         Skip the two network probes (registry, updater)
   --vault <path>    Vault root to check (default: the configured Vault)

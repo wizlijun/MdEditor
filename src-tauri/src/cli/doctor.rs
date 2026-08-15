@@ -66,6 +66,16 @@ pub struct DoctorArgs {
     pub offline: bool,
     pub vault: Option<String>,
     pub json: bool,
+    /// Tokens `parse_args` did not recognize as one of doctor's own flags —
+    /// global flags (`--json`/`-q`/`--cli`/…) are stripped by `args::parse`
+    /// before `rest` ever reaches here, so anything landing in `unknown` is
+    /// genuinely a typo or an argument doctor does not support. `--vault`
+    /// with no following value also lands here: silently falling back to the
+    /// *configured* vault when the caller explicitly asked to check a
+    /// different one would report on the wrong directory. `run()` must check
+    /// this before doing any work and exit 2 — see `help doctor`'s EXIT CODES
+    /// section, which promises exactly that contract.
+    pub unknown: Vec<String>,
 }
 
 impl DoctorArgs {
@@ -82,13 +92,14 @@ pub fn parse_args(rest: &[String], json_global: bool) -> DoctorArgs {
         match rest[i].as_str() {
             "--offline" => a.offline = true,
             "--json" => a.json = true,
-            "--vault" => {
-                if let Some(v) = rest.get(i + 1) {
+            "--vault" => match rest.get(i + 1) {
+                Some(v) => {
                     a.vault = Some(v.clone());
                     i += 1;
                 }
-            }
-            _ => {}
+                None => a.unknown.push("--vault".to_string()),
+            },
+            other => a.unknown.push(other.to_string()),
         }
         i += 1;
     }
@@ -183,7 +194,28 @@ pub fn render_json(checks: &[Check]) -> String {
 /// 它的 `target_valid` 问的是「是否指向*本进程*的二进制」—— 那对 doctor 太严:
 /// 多个安装、dev 构建都会让它为 false 而软链本身完全可用。真正的坏情况是
 /// **指向一个不存在的文件**(dangling),所以 target 是否存在由调用方解析后传入。
-fn check_cli_link(installed: bool, path: Option<&str>, target_exists: Option<bool>) -> Check {
+///
+/// `target_valid == false` while the target *does* exist is a third,
+/// distinct state (neither "broken" nor "fine"): the symlink resolves to
+/// some *other* build — an old download-directory copy, a dev build — and
+/// `notemd` in a terminal silently runs that instead of this one. Not a
+/// `fail` (the command works), but worth a `warn` with the actual target so
+/// the user can tell at a glance whether that is expected.
+fn check_cli_link(
+    installed: bool,
+    path: Option<&str>,
+    target_exists: Option<bool>,
+    target_valid: bool,
+    target: Option<&str>,
+) -> Check {
+    // `install.rs` self-describes as "macOS-only in v1": `candidate_dirs()`
+    // is all macOS paths and the Windows PATH shim is laid down by the NSIS
+    // installer, never through this check chain. Reporting "not installed"
+    // here on Windows would point users at Preferences → General → Command
+    // line, a menu item that only exists on macOS.
+    if !cfg!(target_os = "macos") {
+        return Check::skip("env.cli_link", "managed by the installer on this platform");
+    }
     if !installed {
         return Check::warn(
             "env.cli_link",
@@ -199,7 +231,33 @@ fn check_cli_link(installed: bool, path: Option<&str>, target_exists: Option<boo
             "Reinstall it in Preferences → General → Command line",
         );
     }
+    if target_exists == Some(true) && !target_valid {
+        let t = target.unwrap_or("(unknown target)");
+        return Check::warn(
+            "env.cli_link",
+            format!("{p} points at another build: {t}"),
+            "If unexpected, reinstall it in Preferences → General → Command line to point at this build",
+        );
+    }
     Check::pass("env.cli_link", p)
+}
+
+/// Whether a symlink's target exists, resolving a **relative** target
+/// against the directory the link itself lives in — not the process's
+/// current working directory. `std::fs::read_link` returns the target
+/// exactly as stored (e.g. `../../Applications/note.md.app/…`), and
+/// `Path::exists` on that raw value resolves relative to cwd; a perfectly
+/// working relative symlink checked from any other directory would then
+/// read as dangling. Returns `None` when `p` is not a symlink at all
+/// (permissive — a Windows shim or a copied binary should not be flagged).
+fn symlink_target_exists(p: &Path) -> Option<bool> {
+    let target = std::fs::read_link(p).ok()?;
+    let resolved = if target.is_relative() {
+        p.parent().unwrap_or(Path::new(".")).join(&target)
+    } else {
+        target
+    };
+    Some(resolved.exists())
 }
 
 fn check_git(version: Option<&str>) -> Check {
@@ -227,16 +285,22 @@ fn check_git_proxy(raw: Option<&str>) -> Check {
 
 fn env_checks(cfg: Option<&crate::shared_config::SharedConfig>) -> Vec<Check> {
     let st = super::install::status(None);
-    // 自己解析软链目标:`InstallStatus` 只带链接路径,不带目标是否存在。
-    // 读不出目标(不是软链)⇒ None ⇒ 宽容按通过处理。
-    let target_exists = st
-        .path
-        .as_deref()
-        .map(std::path::Path::new)
-        .and_then(|p| std::fs::read_link(p).ok())
-        .map(|t| t.exists());
+    // 自己解析软链目标是否存在(见 `symlink_target_exists` 的文档注释:相对
+    // 路径必须按链接*所在目录*解析,不是当前工作目录)。读不出目标(不是
+    // 软链)⇒ None ⇒ 宽容按通过处理。目标的原始文本另外读一次,只用于
+    // "points at another build" 的展示,不参与判断。
+    let link_path = st.path.as_deref().map(Path::new);
+    let target_exists = link_path.and_then(symlink_target_exists);
+    let target_display =
+        link_path.and_then(|p| std::fs::read_link(p).ok()).map(|t| t.display().to_string());
     vec![
-        check_cli_link(st.installed, st.path.as_deref(), target_exists),
+        check_cli_link(
+            st.installed,
+            st.path.as_deref(),
+            target_exists,
+            st.target_valid,
+            target_display.as_deref(),
+        ),
         check_git(crate::vault_sync::git_ops::version().as_deref()),
         check_git_proxy(cfg.and_then(|c| c.git_proxy.as_deref())),
     ]
@@ -366,7 +430,7 @@ fn check_vault_settings(root: &Path) -> Check {
         Some(Err(e)) => Check::warn(
             "vault.settings",
             e,
-            "Out-of-range weights are clamped at query time; fix them in Preferences → Search",
+            "Out-of-range weights fall back to the shipped default at query time; fix them in Preferences → Search",
         ),
     }
 }
@@ -390,7 +454,11 @@ fn vault_checks_from(
             cfg
         }
         None => {
-            out.push(Check::fail(
+            // 同 search.index_open / plugin.root 在数据目录解析不出时的判法
+            // 统一成 warn:这三处都是"平台标准目录 API 返回空"这一类情况,在
+            // 实践中不可达,也不是用户能修的东西(不是配置错误,是平台层面
+            // 的异常)——不该让 doctor 因为这个退出 1。
+            out.push(Check::warn(
                 "vault.shared_config",
                 "no config directory on this platform",
                 "Report this — notemd cannot store settings here",
@@ -419,7 +487,7 @@ fn vault_checks_from(
 /// 与 `notemd search` 同一预算:诊断不许阻塞调用方。
 const SWEEP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
-fn search_checks(root: Option<&Path>) -> Vec<Check> {
+fn search_checks(root: Option<&Path>, vault_flag: Option<&str>) -> Vec<Check> {
     let Some(root) = root else {
         return vec![
             Check::skip("search.index_open", "no Vault to check"),
@@ -428,11 +496,43 @@ fn search_checks(root: Option<&Path>) -> Vec<Check> {
         ];
     };
     let db = searchidx::paths::index_db_path(root);
-    search_checks_at(root, db.as_deref())
+    search_checks_at(root, db.as_deref(), vault_flag)
 }
 
-/// [`search_checks`] 的可测核心:索引 DB 路径显式传入。
-fn search_checks_at(root: &Path, db_path: Option<&Path>) -> Vec<Check> {
+/// [`search_checks`] 的可测核心:索引 DB 路径显式传入。生产路径固定用
+/// [`SWEEP_DEADLINE`];[`search_checks_at_with_deadline`] 把预算也做成参数,
+/// 让"sweep 超时"这个分支能在单测里确定性触发,不用真的等 2 秒或跟机器速度
+/// 赛跑。
+fn search_checks_at(root: &Path, db_path: Option<&Path>, vault_flag: Option<&str>) -> Vec<Check> {
+    search_checks_at_with_deadline(root, db_path, vault_flag, SWEEP_DEADLINE)
+}
+
+/// hint 里建议的 `notemd search` 命令要不要带 `--vault`:当这次检查的 vault
+/// 根来自 `--vault` 参数(而不是已配置的那个)时,不带 `--vault` 的命令会让
+/// 读者复制粘贴出一条解析到**另一个**目录的命令。`--stats` 而非 `<any
+/// query>`:`search.rs` 的 `run()` 在要求 query 之前就为 `--stats` return 了
+/// (search.rs:199-201),所以 `--rebuild --stats` 同样有效且不需要用户凭空
+/// 编一个查询词。
+fn search_rebuild_hint(vault_flag: Option<&str>) -> String {
+    match vault_flag {
+        Some(v) => format!("notemd search --rebuild --stats --vault {v}"),
+        None => "notemd search --rebuild --stats".to_string(),
+    }
+}
+
+fn search_stats_hint(vault_flag: Option<&str>) -> String {
+    match vault_flag {
+        Some(v) => format!("notemd search --stats --vault {v}"),
+        None => "notemd search --stats".to_string(),
+    }
+}
+
+fn search_checks_at_with_deadline(
+    root: &Path,
+    db_path: Option<&Path>,
+    vault_flag: Option<&str>,
+    deadline: std::time::Duration,
+) -> Vec<Check> {
     let Some(db) = db_path else {
         return vec![
             Check::warn(
@@ -451,7 +551,7 @@ fn search_checks_at(root: &Path, db_path: Option<&Path>) -> Vec<Check> {
             Check::warn(
                 "search.index_open",
                 format!("not built yet: {}", db.display()),
-                "Build it with: notemd search --stats",
+                format!("Build it with: {}", search_stats_hint(vault_flag)),
             ),
             Check::skip("search.stats", "no index"),
             Check::skip("search.skipped_large", "no index"),
@@ -469,7 +569,7 @@ fn search_checks_at(root: &Path, db_path: Option<&Path>) -> Vec<Check> {
                 Check::warn(
                     "search.index_open",
                     format!("cannot open {}: {e}", db.display()),
-                    "Rebuild it with: notemd search --rebuild <any query>",
+                    format!("Rebuild it with: {}", search_rebuild_hint(vault_flag)),
                 ),
                 Check::skip("search.stats", "index unavailable"),
                 Check::skip("search.skipped_large", "index unavailable"),
@@ -479,8 +579,17 @@ fn search_checks_at(root: &Path, db_path: Option<&Path>) -> Vec<Check> {
     let mut out = vec![Check::pass("search.index_open", db.display().to_string())];
 
     // 增量 sweep(不是全量首建)—— 与 `notemd search` 每次调用都做的派生数据
-    // 维护完全一致,并且共用同一个 2s 预算。
-    let swept = idx.sweep(&opts, Some(SWEEP_DEADLINE));
+    // 维护完全一致,并且共用同一个预算(生产路径是 `SWEEP_DEADLINE`)。
+    let swept = idx.sweep(&opts, Some(deadline));
+
+    // Important 2(终审):这条 note 曾经只拼在 `search.skipped_large` 的
+    // pass 分支上("none"里)——真正需要它的是 warn 分支(列出的大文件清单
+    // 可能因为超时而不全),之前那条分支反而永远走不到 warn。提到 match 之
+    // 前,两个 Ok 分支各自拼一次,而不是各写一份。
+    let timeout_note = match &swept {
+        Ok(s) if s.timed_out => " (freshness sweep hit its 2s budget; list may be partial)",
+        _ => "",
+    };
 
     out.push(match idx.stats() {
         Ok(s) => {
@@ -494,23 +603,33 @@ fn search_checks_at(root: &Path, db_path: Option<&Path>) -> Vec<Check> {
                 s.tokenizer_id,
                 s.built_at.as_deref().map(|b| format!(", built {b}")).unwrap_or_default(),
             );
-            if s.files == 0 {
+            // M1(终审): `files == 0` alone is not evidence of a problem — a
+            // freshly built index over a genuinely empty (of indexable
+            // content) vault also reports zero, and "run --rebuild" changes
+            // nothing there. Only warn when the *sweep itself* couldn't
+            // rule that out: it timed out before finishing, or it actually
+            // indexed something this round (meaning the DB's zero predates
+            // real work that just happened, i.e. something's inconsistent).
+            let sweep_found_nothing_to_explain_the_zero =
+                matches!(&swept, Ok(sw) if !sw.timed_out && sw.files_indexed == 0);
+            if s.files == 0 && !sweep_found_nothing_to_explain_the_zero {
                 Check::warn(
                     "search.stats",
                     detail,
-                    "Nothing is indexed — run: notemd search --rebuild <any query>",
+                    format!("Nothing is indexed — run: {}", search_rebuild_hint(vault_flag)),
                 )
+            } else if s.files == 0 {
+                Check::pass("search.stats", format!("{detail}, no indexable files"))
             } else {
                 Check::pass("search.stats", detail)
             }
         }
-        Err(e) => Check::warn("search.stats", e, "Rebuild with: notemd search --rebuild <any query>"),
+        Err(e) => Check::warn("search.stats", e, format!("Rebuild with: {}", search_rebuild_hint(vault_flag))),
     });
 
     out.push(match &swept {
         Ok(s) if s.files_skipped_large.is_empty() => {
-            let note = if s.timed_out { " (freshness sweep hit its 2s budget; list may be partial)" } else { "" };
-            Check::pass("search.skipped_large", format!("none{note}"))
+            Check::pass("search.skipped_large", format!("none{timeout_note}"))
         }
         Ok(s) => {
             let list = s
@@ -521,14 +640,14 @@ fn search_checks_at(root: &Path, db_path: Option<&Path>) -> Vec<Check> {
                 .join(", ");
             Check::warn(
                 "search.skipped_large",
-                format!("invisible to search: {list}"),
+                format!("invisible to search: {list}{timeout_note}"),
                 "Raise searchLargeFileThresholdMb in <vault>/.notemd/settings.json, or keep using rg for these",
             )
         }
         Err(e) => Check::warn(
             "search.skipped_large",
             format!("freshness sweep failed: {e}"),
-            "Rebuild with: notemd search --rebuild <any query>",
+            format!("Rebuild with: {}", search_rebuild_hint(vault_flag)),
         ),
     });
 
@@ -546,7 +665,15 @@ fn plugin_checks(root: Option<&Path>, host_version: &str) -> Vec<Check> {
         )];
     };
     if !root.exists() {
-        return vec![Check::pass("plugin.root", "no plugins installed")];
+        // M3(终审):`plugin.state` must still appear here, pass, rather than
+        // vanish — a JSON consumer diffing two runs (one before any plugin
+        // was ever installed, one after `state.json` exists but is empty)
+        // must see a stable check-id set, not one that grows a `plugin.state`
+        // row the moment the directory is created for the first time.
+        return vec![
+            Check::pass("plugin.root", "no plugins installed"),
+            Check::pass("plugin.state", "no plugins installed"),
+        ];
     }
     let mut out = vec![Check::pass("plugin.root", root.display().to_string())];
 
@@ -622,6 +749,16 @@ fn net_checks(offline: bool) -> Vec<Check> {
         ];
     }
     let base = crate::plugin_runtime::market::registry_base_url_at(&super::resolve_config_dir());
+    let client = match reqwest::Client::builder().timeout(NET_TIMEOUT).build() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("http client: {e}");
+            return vec![
+                Check::warn("net.registry", msg.clone(), "Retry; report this if it persists"),
+                Check::warn("net.updater", msg, "Retry; report this if it persists"),
+            ];
+        }
+    };
     // 两项并发发起,所以整组的耗时上界是单项超时(10s),不是两者相加。
     let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(rt) => rt,
@@ -635,13 +772,20 @@ fn net_checks(offline: bool) -> Vec<Check> {
     };
     rt.block_on(async {
         let (registry, updater) =
-            tokio::join!(registry_probe(&base), updater_probe(UPDATER_ENDPOINT));
+            tokio::join!(registry_probe(&client, &base), updater_probe(&client, UPDATER_ENDPOINT));
         vec![registry, updater]
     })
 }
 
-async fn registry_probe(base: &str) -> Check {
-    match crate::plugin_runtime::market::fetch_index(base).await {
+/// `client` is injected: production builds one plain client above; tests
+/// supply one with `.no_proxy()` so the loopback probes below cannot be
+/// redirected through a system proxy — reqwest honours `HTTP(S)_PROXY` by
+/// default, and a developer machine with one configured would otherwise turn
+/// "connection refused" into whatever the proxy answers with instead,
+/// silently flipping these tests' expected outcome. Same pattern as
+/// `market::download_via`'s `client` parameter, for the same reason.
+async fn registry_probe(client: &reqwest::Client, base: &str) -> Check {
+    match crate::plugin_runtime::market::fetch_index_via(client, base).await {
         Ok(index) => Check::pass(
             "net.registry",
             format!("{base} ({} plugins)", index.plugins.len()),
@@ -654,13 +798,7 @@ async fn registry_probe(base: &str) -> Check {
     }
 }
 
-async fn updater_probe(url: &str) -> Check {
-    let client = match reqwest::Client::builder().timeout(NET_TIMEOUT).build() {
-        Ok(c) => c,
-        Err(e) => {
-            return Check::warn("net.updater", format!("http client: {e}"), "Retry")
-        }
-    };
+async fn updater_probe(client: &reqwest::Client, url: &str) -> Check {
     match client.get(url).send().await {
         Ok(r) if r.status().is_success() => Check::pass("net.updater", "reachable"),
         Ok(r) => Check::warn(
@@ -676,23 +814,32 @@ async fn updater_probe(url: &str) -> Check {
     }
 }
 
-/// 同步外壳,让上面两个 async 探针在单测里可直接调用。
+/// 同步外壳,让上面两个 async 探针在单测里可直接调用。用 `.no_proxy()` 的
+/// client(见 `registry_probe` 的文档注释)——保留端口 0 的 loopback 请求必须
+/// 真正连接失败,不能被系统代理接住。
+#[cfg(test)]
+fn test_client() -> reqwest::Client {
+    reqwest::Client::builder().timeout(NET_TIMEOUT).no_proxy().build().unwrap()
+}
+
 #[cfg(test)]
 fn probe_registry_at(base: &str) -> Check {
+    let client = test_client();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(registry_probe(base))
+        .block_on(registry_probe(&client, base))
 }
 
 #[cfg(test)]
 fn probe_updater_at(url: &str) -> Check {
+    let client = test_client();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(updater_probe(url))
+        .block_on(updater_probe(&client, url))
 }
 
 /// 采集全部检查。
@@ -700,7 +847,7 @@ fn collect(args: &DoctorArgs) -> Vec<Check> {
     let (vault, cfg, root) = vault_checks(args);
     let mut out = env_checks(cfg.as_ref());
     out.extend(vault);
-    out.extend(search_checks(root.as_deref()));
+    out.extend(search_checks(root.as_deref(), args.vault.as_deref()));
     out.extend(plugin_checks(
         super::runner::v2_plugins_root().as_deref(),
         env!("CARGO_PKG_VERSION"),
@@ -710,6 +857,16 @@ fn collect(args: &DoctorArgs) -> Vec<Check> {
 }
 
 pub fn run(args: DoctorArgs) -> ExitCode {
+    // Argument error: return before `collect()` runs anything, including the
+    // two network probes — a typo'd `--offline` (e.g. `--ofline`) must not
+    // silently fall through to "checked everything, made two requests,
+    // exited 0" (see the `unknown` field's doc comment).
+    if !args.unknown.is_empty() {
+        for x in &args.unknown {
+            eprintln!("notemd: unknown option '{x}' — see: notemd help doctor");
+        }
+        return ExitCode::from(2);
+    }
     let checks = collect(&args);
     if args.json {
         println!("{}", render_json(&checks));
@@ -804,6 +961,30 @@ mod tests {
         assert!(a.offline);
         assert_eq!(a.vault.as_deref(), Some("/tmp/v"));
         assert!(!a.json);
+        assert!(a.unknown.is_empty(), "{:?}", a.unknown);
+    }
+
+    /// Important 1(终审):未识别的 flag 必须落进 `unknown`,而不是被 `_ => {}`
+    /// 静默吞掉 —— 否则 `notemd doctor --ofline` 这种拼错会照常跑完全部检查、
+    /// 发两次网络请求、退出 0,脚本据此误判"离线自检通过"。
+    #[test]
+    fn parse_args_collects_unrecognized_tokens() {
+        let rest: Vec<String> =
+            ["--ofline", "--json", "--nope"].iter().map(|s| s.to_string()).collect();
+        let a = parse_args(&rest, false);
+        assert_eq!(a.unknown, vec!["--ofline".to_string(), "--nope".to_string()]);
+        assert!(a.json, "recognized flags between the unknown ones must still be parsed");
+    }
+
+    /// `--vault` with no following value must not silently fall back to the
+    /// *configured* vault — the caller explicitly asked to check a different
+    /// one, and a silent fallback would report on the wrong directory.
+    #[test]
+    fn parse_args_treats_a_valueless_vault_flag_as_unknown() {
+        let rest: Vec<String> = ["--vault"].iter().map(|s| s.to_string()).collect();
+        let a = parse_args(&rest, false);
+        assert_eq!(a.unknown, vec!["--vault".to_string()]);
+        assert!(a.vault.is_none());
     }
 
     #[test]
@@ -815,14 +996,14 @@ mod tests {
     #[test]
     fn cli_link_absent_is_a_warning_not_a_failure() {
         // GUI 用户不装软链是完全正常的，不能因此让 doctor 退出 1。
-        let c = check_cli_link(false, None, None);
+        let c = check_cli_link(false, None, None, false, None);
         assert_eq!(c.status, Status::Warn);
         assert!(c.hint.is_some());
     }
 
     #[test]
     fn cli_link_present_and_resolvable_passes() {
-        let c = check_cli_link(true, Some("/usr/local/bin/notemd"), Some(true));
+        let c = check_cli_link(true, Some("/usr/local/bin/notemd"), Some(true), true, None);
         assert_eq!(c.status, Status::Pass);
         assert!(c.detail.contains("/usr/local/bin/notemd"), "{}", c.detail);
     }
@@ -830,15 +1011,64 @@ mod tests {
     #[test]
     fn cli_link_pointing_at_a_missing_target_fails() {
         // dangling 软链 = 命令存在但一跑就报 "no such file"，必须是 fail。
-        let c = check_cli_link(true, Some("/usr/local/bin/notemd"), Some(false));
+        let c = check_cli_link(true, Some("/usr/local/bin/notemd"), Some(false), false, None);
         assert_eq!(c.status, Status::Fail);
     }
 
     #[test]
     fn cli_link_that_is_not_a_symlink_passes() {
         // 非软链（Windows shim、拷贝的二进制）读不出 target；宽容处理，不误报。
-        let c = check_cli_link(true, Some("/usr/local/bin/notemd"), None);
+        let c = check_cli_link(true, Some("/usr/local/bin/notemd"), None, false, None);
         assert_eq!(c.status, Status::Pass);
+    }
+
+    /// M9(终审):target 存在但不是本进程的二进制 —— 另一个安装、dev 构建
+    /// 在 PATH 上顶替了正版。曾经把 `target_valid` 整个丢掉,等于放弃这个
+    /// 真实事故类型;现在必须 warn 并把实际目标路径带出来。
+    #[test]
+    fn cli_link_pointing_at_a_different_existing_build_warns() {
+        let c = check_cli_link(
+            true,
+            Some("/usr/local/bin/notemd"),
+            Some(true),
+            false,
+            Some("/tmp/dev-build/notemd"),
+        );
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.detail.contains("/tmp/dev-build/notemd"), "{}", c.detail);
+    }
+
+    /// M8(终审):`install.rs` 自述 macOS-only in v1;在其它平台上给出的
+    /// "Preferences → General → Command line" 建议指向一个不存在的偏好项,
+    /// 必须整条 skip 而不是 warn。
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn cli_link_is_skipped_on_non_macos_platforms() {
+        let c = check_cli_link(true, Some("C:/tools/notemd.exe"), Some(true), true, None);
+        assert_eq!(c.status, Status::Skip);
+    }
+
+    /// Important 3(终审):相对软链的目标必须按链接*所在目录*解析,不是当前
+    /// 工作目录 —— 否则 `~/.local/bin/notemd -> ../../Applications/…` 这种
+    /// 完全可用的相对软链,在别的 cwd 下跑 doctor 会被判成 dangling(假
+    /// fail,doctor 的核心卖点里最伤的一种)。
+    #[test]
+    fn relative_symlink_target_resolves_against_the_links_own_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join("notemd-real"), b"").unwrap();
+
+        let link_dir = dir.path().join("link");
+        std::fs::create_dir_all(&link_dir).unwrap();
+
+        let ok_link = link_dir.join("notemd");
+        std::os::unix::fs::symlink("../bin/notemd-real", &ok_link).unwrap();
+        assert_eq!(symlink_target_exists(&ok_link), Some(true), "a working relative symlink must not read as dangling");
+
+        let dangling_link = link_dir.join("dangling");
+        std::os::unix::fs::symlink("../bin/does-not-exist", &dangling_link).unwrap();
+        assert_eq!(symlink_target_exists(&dangling_link), Some(false));
     }
 
     #[test]
@@ -929,6 +1159,41 @@ mod tests {
         assert_eq!(root.as_deref(), Some(dir.path()));
     }
 
+    /// M13(终审):`check_vault_root` deliberately re-implements
+    /// `search::resolve_vault_root`'s resolution order (spec §4.2 — doctor
+    /// needs to distinguish "not configured" from "configured but missing",
+    /// which `resolve_vault_root`'s `Option<PathBuf>` collapses into one
+    /// `None`). Two independent implementations of the same order drift
+    /// silently the day either one gains a step; pin that they agree, for
+    /// both the `--vault` and the configured-`sotvault` branch.
+    #[test]
+    fn vault_root_resolution_agrees_with_search_resolve_vault_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_str = dir.path().to_str().unwrap();
+
+        // --vault 显式参数分支:两边都必须是 "explicit wins, unconditionally".
+        let cfg = crate::shared_config::SharedConfig {
+            version: 1,
+            sotvault: Some("/definitely/not/here".into()),
+            ..Default::default()
+        };
+        let (_, doctor_root) = check_vault_root(Some(path_str), Some(&cfg));
+        let search_root = crate::cli::search::resolve_vault_root(Some(path_str));
+        assert_eq!(doctor_root, search_root, "explicit --vault 分支必须一致");
+
+        // 未显式指定时落回配置里的 sotvault,且同样过滤空字符串
+        // (`filter(|s| !s.is_empty())`)——这条钉住两边共享同一条过滤规则,
+        // 不是各写一份、日后各自漂移。
+        let configured = crate::shared_config::SharedConfig {
+            version: 1,
+            sotvault: Some(path_str.to_string()),
+            ..Default::default()
+        };
+        let (_, doctor_root2) = check_vault_root(None, Some(&configured));
+        let expected = configured.sotvault.clone().filter(|s| !s.is_empty()).map(PathBuf::from);
+        assert_eq!(doctor_root2, expected, "配置分支的过滤规则必须与 search::resolve_vault_root 相同");
+    }
+
     #[test]
     fn a_vault_without_git_is_only_a_warning() {
         // 「文件高于应用」下 vault 不必是 git 仓库,只是同步能力不可用。
@@ -975,9 +1240,23 @@ mod tests {
         assert!(dependent.iter().all(|c| c.status == Status::Skip), "{dependent:?}");
     }
 
+    /// M2(终审):config dir / data dir(search 组)/ data dir(plugin 组)—— 同
+    /// 一类"平台标准目录 API 解析不出来"的情况,曾经给了三种 status
+    /// (fail/warn/warn)。统一成 warn:这类情况实践中不可达,也不是用户能
+    /// 修的东西,不该让 doctor 因此退出 1。
+    #[test]
+    fn no_config_directory_on_this_platform_is_a_warning_not_a_failure() {
+        let args = DoctorArgs { offline: true, vault: None, ..Default::default() };
+        let (checks, cfg, root) = vault_checks_from(&args, None);
+        assert!(cfg.is_none());
+        assert!(root.is_none());
+        let c = checks.iter().find(|c| c.id == "vault.shared_config").unwrap();
+        assert_eq!(c.status, Status::Warn, "{c:?}");
+    }
+
     #[test]
     fn no_vault_skips_the_whole_search_group() {
-        let checks = search_checks(None);
+        let checks = search_checks(None, None);
         assert!(!checks.is_empty());
         assert!(checks.iter().all(|c| c.status == Status::Skip), "{checks:?}");
     }
@@ -990,7 +1269,7 @@ mod tests {
         let dbdir = tempfile::tempdir().unwrap();
         let db = dbdir.path().join("index.db");
 
-        let checks = search_checks_at(vault.path(), Some(&db));
+        let checks = search_checks_at(vault.path(), Some(&db), None);
 
         assert!(!db.exists(), "doctor 绝不能建库");
         let open = checks.iter().find(|c| c.id == "search.index_open").unwrap();
@@ -998,6 +1277,38 @@ mod tests {
         assert!(open.hint.as_deref().unwrap().contains("notemd search"), "{open:?}");
         // 打不开就没有统计可言 —— 后两项记 skip。
         assert!(checks.iter().any(|c| c.id == "search.stats" && c.status == Status::Skip));
+    }
+
+    /// M7(终审):vault 根若来自 `--vault` 参数,hint 里建议的 `notemd
+    /// search …` 必须原样带上 `--vault <path>` —— 不带的话读者复制粘贴出的
+    /// 命令解析的是**已配置**的那个 vault,而不是刚被诊断的这一个。
+    #[test]
+    fn hint_includes_the_vault_flag_when_the_root_came_from_it() {
+        let vault = tempfile::tempdir().unwrap();
+        let dbdir = tempfile::tempdir().unwrap();
+        let db = dbdir.path().join("index.db");
+
+        let checks = search_checks_at(vault.path(), Some(&db), Some("/explicit/vault"));
+        let open = checks.iter().find(|c| c.id == "search.index_open").unwrap();
+        assert!(
+            open.hint.as_deref().unwrap().contains("--vault /explicit/vault"),
+            "{open:?}"
+        );
+        // 没有显式 --vault 时不该凭空出现。
+        let checks_no_flag = search_checks_at(vault.path(), Some(&db), None);
+        let open_no_flag = checks_no_flag.iter().find(|c| c.id == "search.index_open").unwrap();
+        assert!(!open_no_flag.hint.as_deref().unwrap().contains("--vault"), "{open_no_flag:?}");
+    }
+
+    /// M7(终审):`<any query>` 逼用户凭空编一个查询词;`--stats` 同样有效
+    /// (search.rs 的 run() 在要求 query 之前就为 --stats return 了)且更自然。
+    #[test]
+    fn rebuild_hints_use_stats_not_a_placeholder_query() {
+        assert_eq!(search_rebuild_hint(None), "notemd search --rebuild --stats");
+        assert_eq!(
+            search_rebuild_hint(Some("/v")),
+            "notemd search --rebuild --stats --vault /v"
+        );
     }
 
     #[test]
@@ -1014,16 +1325,21 @@ mod tests {
         idx.ensure_built(&opts).unwrap();
         drop(idx);
 
-        let checks = search_checks_at(vault.path(), Some(&db));
+        let checks = search_checks_at(vault.path(), Some(&db), None);
         let open = checks.iter().find(|c| c.id == "search.index_open").unwrap();
         assert_eq!(open.status, Status::Pass, "{open:?}");
         let stats = checks.iter().find(|c| c.id == "search.stats").unwrap();
         assert_eq!(stats.status, Status::Pass, "{stats:?}");
-        assert!(stats.detail.contains("1 file"), "{}", stats.detail);
+        // M5(终审):弱断言 `contains("1 file")` 连 "1 files"（英语误用复数）
+        // 都会通过；钉住渲染实际产出的逗号，才真正验证了单复数分支。
+        assert!(stats.detail.contains("1 file,"), "{}", stats.detail);
     }
 
+    /// M1(终审):`files == 0` 本身不是问题的证据 —— 全新索引照在一个真的
+    /// 没有可索引内容的 vault 上跑一遍,统计也是 0,而 `--rebuild` 对此毫无
+    /// 意义。sweep 刚跑完、没超时、也没索引到任何东西时记 pass,不该恒 warn。
     #[test]
-    fn an_index_over_an_empty_vault_warns_about_zero_files() {
+    fn an_index_over_an_empty_vault_passes_with_no_indexable_files() {
         let vault = tempfile::tempdir().unwrap();
         let dbdir = tempfile::tempdir().unwrap();
         let db = dbdir.path().join("index.db");
@@ -1033,9 +1349,73 @@ mod tests {
         idx.ensure_built(&opts).unwrap();
         drop(idx);
 
-        let checks = search_checks_at(vault.path(), Some(&db));
+        let checks = search_checks_at(vault.path(), Some(&db), None);
+        let stats = checks.iter().find(|c| c.id == "search.stats").unwrap();
+        assert_eq!(stats.status, Status::Pass, "{stats:?}");
+        assert!(stats.detail.contains("no indexable files"), "{}", stats.detail);
+    }
+
+    /// M1(终审)的对照面:sweep 因为超时而没能确认 vault 是真的空 —— 这时
+    /// `files == 0` 仍然可能只是"还没来得及看",必须继续 warn,不能误判成
+    /// pass。用零预算强制第一次 over_budget() 检查就命中,确定性触发超时
+    /// (`sweep_with_budget` 在遇到第一个候选文件时才检查预算 —— 见
+    /// `searchidx::scan::sweep_with_budget`)。
+    #[test]
+    fn stats_still_warn_when_the_sweep_timed_out_before_confirming_emptiness() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("a.md"), "content").unwrap();
+        let dbdir = tempfile::tempdir().unwrap();
+        let db = dbdir.path().join("index.db");
+        {
+            let opts = crate::cli::search::scan_options_for(vault.path());
+            let stamp = opts.source_globs.stamp();
+            let _ = searchidx::SearchIndex::open_at(vault.path(), &db, &stamp).unwrap();
+        }
+
+        let checks =
+            search_checks_at_with_deadline(vault.path(), Some(&db), None, std::time::Duration::from_secs(0));
         let stats = checks.iter().find(|c| c.id == "search.stats").unwrap();
         assert_eq!(stats.status, Status::Warn, "{stats:?}");
+    }
+
+    /// Important 2(终审):sweep 超时的"list may be partial"提示曾经只挂在
+    /// `files_skipped_large` 为空的 pass 分支上 —— 恰好是不需要它的那条,
+    /// 真正列出大文件清单的 warn 分支反而永远走不到。大文件清单非空 +
+    /// 超时同时发生时,warn 分支的 detail 也必须带上这句提示。
+    #[test]
+    fn skipped_large_warning_carries_the_timeout_note_when_the_list_may_be_partial() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(vault.path().join(".notemd")).unwrap();
+        std::fs::write(
+            vault.path().join(".notemd/settings.json"),
+            r#"{"searchLargeFileThresholdMb":1}"#,
+        )
+        .unwrap();
+        // 2MB，超过刚设的 1MB 阈值 —— walk() 无条件收集 skipped_large，不受
+        // deadline 影响，所以即使零预算这个文件也一定会出现在列表里。
+        std::fs::write(vault.path().join("big.md"), vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        // 一个正常大小的文件，好让候选队列非空 —— `over_budget()` 只在
+        // 索引循环的每次迭代里检查(见 `searchidx::scan::sweep_with_budget`),
+        // 候选队列为空时循环压根不跑一次，`timed_out` 就永远不会被置位。
+        std::fs::write(vault.path().join("small.md"), "hello").unwrap();
+        let dbdir = tempfile::tempdir().unwrap();
+        let db = dbdir.path().join("index.db");
+        {
+            let opts = crate::cli::search::scan_options_for(vault.path());
+            let stamp = opts.source_globs.stamp();
+            let _ = searchidx::SearchIndex::open_at(vault.path(), &db, &stamp).unwrap();
+        }
+
+        let checks =
+            search_checks_at_with_deadline(vault.path(), Some(&db), None, std::time::Duration::from_secs(0));
+        let skipped = checks.iter().find(|c| c.id == "search.skipped_large").unwrap();
+        assert_eq!(skipped.status, Status::Warn, "{skipped:?}");
+        assert!(skipped.detail.contains("big.md"), "{}", skipped.detail);
+        assert!(
+            skipped.detail.contains("list may be partial"),
+            "warn 分支必须也带上超时提示: {}",
+            skipped.detail
+        );
     }
 
     use crate::plugin_runtime::state::{InstallState, InstalledPlugin};
@@ -1085,6 +1465,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let checks = plugin_checks(Some(&dir.path().join("plugins")), "1.0.0");
         assert!(checks.iter().all(|c| c.status == Status::Pass), "{checks:?}");
+        // M3(终审):`plugin.state` must not vanish just because the plugins
+        // root doesn't exist yet — a JSON consumer diffing two runs needs a
+        // stable check-id set regardless of whether anything is installed.
+        assert!(checks.iter().any(|c| c.id == "plugin.state"), "{checks:?}");
     }
 
     /// state.json 是插件系统的唯一真相源;它坏了 = 插件全体不可信,必须 fail。

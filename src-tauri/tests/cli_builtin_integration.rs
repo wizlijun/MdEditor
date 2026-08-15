@@ -139,9 +139,56 @@ fn doctor_offline_json_has_envelope_and_skips_network() {
     let checks = v["data"]["checks"].as_array().unwrap();
     assert!(!checks.is_empty(), "{stdout}");
     // --offline 下网络组必须整组 skip，绝不发请求。
-    for ch in checks.iter().filter(|c| c["group"] == "net") {
+    // M4(终审)：这个循环曾经是空转的——若 collect() 哪天不再调 net_checks，
+    // net 组一条不剩，循环零次迭代、断言全绿。先钉住数量，再逐条断言状态。
+    let net_checks: Vec<&serde_json::Value> =
+        checks.iter().filter(|c| c["group"] == "net").collect();
+    assert_eq!(net_checks.len(), 2, "{stdout}");
+    for ch in &net_checks {
         assert_eq!(ch["status"], "skip", "{ch}");
     }
+
+    // M4(终审)：五组必须齐全，不能因为某个分组的检查函数被悄悄跳过而在
+    // JSON 里整组消失却不被发现。
+    for g in ["env", "vault", "search", "plugin", "net"] {
+        assert!(
+            checks.iter().any(|c| c["group"] == g),
+            "{g} 组缺失: {stdout}"
+        );
+    }
+}
+
+/// Important 1(终审)：拼错的 flag（这里是 `--ofline`）曾经被 `parse_args`
+/// 的 `_ => {}` 静默丢弃——doctor 照常跑完全部检查（含两次网络请求）、退出
+/// 0。现在必须在做任何检查之前就退出 2，且 stdout 不能是一份 JSON 报告
+/// （证明 `run()` 走的是早退分支，没有跑到 `collect()`/`render_*`）。
+#[test]
+fn doctor_unknown_flag_exits_2_without_running_checks() {
+    let home = temp_home();
+    let (code, stdout, stderr) = run_cli(&["doctor", "--ofline"], &home);
+    let _ = std::fs::remove_dir_all(&home);
+    assert_eq!(code, 2, "stdout={stdout} stderr={stderr}");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(stdout.trim()).is_err(),
+        "早退分支不应该打印任何报告: {stdout}"
+    );
+    assert!(stdout.trim().is_empty(), "{stdout}");
+    assert!(stderr.contains("unknown option"), "{stderr}");
+    assert!(stderr.contains("--ofline"), "{stderr}");
+}
+
+/// M12(终审)：`render_plain` 本身有单测覆盖，但 `run()` 走 `print!` 打印
+/// 人类可读输出这条端到端路径此前完全没有集成测试验证过。
+#[test]
+fn doctor_human_readable_output_has_a_summary_line() {
+    let home = temp_home();
+    let (code, stdout, _) = run_cli(&["doctor", "--offline"], &home);
+    let _ = std::fs::remove_dir_all(&home);
+    assert!(code == 0 || code == 1, "code={code} stdout={stdout}");
+    let re_like = stdout.lines().any(|l| {
+        l.contains("passed,") && l.contains("warning") && l.contains("failure") && l.contains("skipped")
+    });
+    assert!(re_like, "summary 行缺失: {stdout}");
 }
 
 #[test]
