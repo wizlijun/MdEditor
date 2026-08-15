@@ -1780,6 +1780,88 @@ mod command_tests {
         assert!(!superseded(&mine_counter, mine));
     }
 
+    /// 权重文件改完**不需要重开 vault**:`weights_for_vault` 在 `search_locked`
+    /// 里每次查询现读一次盘(`vault_settings::read` 没有任何缓存),所以下一次
+    /// 搜索就用上新值。
+    ///
+    /// 这条与下面那条(origin 四档)是同一个机制,但**不能靠它代劳**:注意力
+    /// 的 `k` 除了当乘数,还决定 `fts_arms` 建不建第二条候选臂 —— 四档没有这个
+    /// 消费者。谁要是嫌 typing hot path 上每次读盘贵、给 `weights_for_vault`
+    /// 加个缓存(那行注释就写着 "cheap enough for the typing hot path",正是招
+    /// 人动手的地方),四档那条照样绿,注意力这条会静默失效。
+    ///
+    /// 观察点刻意**不用**「保底臂捞回窗口外的文档」:那需要 80+ 个命中把
+    /// `(limit*8).max(64)` 的窗口撑破,而且目标文档与窗口末位的 bm25 差距必须
+    /// 小于 `1+k`(×1.4 天花板)才可能真的可见 —— fixture 稍一漂移就变成永真或
+    /// 永假。这里改用「两篇正文逐字相同的文档比顺序」:它们在 bm25、origin、
+    /// 日期、批注上全部打平,注意力是唯一自变量,与候选窗口无关。
+    #[test]
+    fn a_changed_attention_weight_takes_effect_without_reopening_the_vault() {
+        let v = tempfile::tempdir().unwrap();
+        // 逐字相同的正文 → 除注意力外的一切都打平。
+        for name in ["a.md", "b.md"] {
+            std::fs::write(v.path().join(name), "---\ntype: Note\n---\n\nwidget\n").unwrap();
+        }
+        std::fs::create_dir_all(v.path().join(".notemd")).unwrap();
+        let settings = v.path().join(".notemd/settings.json");
+        std::fs::write(&settings, r#"{"searchWeights": {"attention": 0}}"#).unwrap();
+
+        let opts = crate::search::options::for_vault(v.path());
+        let d = tempfile::tempdir().unwrap();
+        let mut idx = searchidx::SearchIndex::open_at(
+            v.path(),
+            &d.path().join("i.db"),
+            &opts.source_globs.stamp(),
+        )
+        .unwrap();
+        idx.ensure_built(&opts).unwrap();
+
+        // 走真实摄取路径铺数据(不新增测试专用接口):当天的 analytics 日文件
+        // + 一次 `refresh_attention`。日期必须是今天,否则衰减会把它压没。
+        let today = searchidx::chunk::ymd_from_unix_public(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+        );
+        let adir = v.path().join(".notemd/analytics");
+        std::fs::create_dir_all(&adir).unwrap();
+        std::fs::write(
+            adir.join(format!("{today}.DEV-1.json")),
+            format!(
+                r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:b.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":1,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+            ),
+        )
+        .unwrap();
+        assert_eq!(idx.refresh_attention(&[]).unwrap(), 1, "摄取必须写进 1 条,否则后面验的是空气");
+
+        let handle: IndexHandle = Arc::new(Mutex::new(Some(idx)));
+        let counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+
+        let off = search_locked(
+            &handle, Instant::now(), "widget", Some(10), Some(true), None, &counter, 1,
+        )
+        .unwrap();
+        assert_eq!(
+            off.hits.first().map(|h| h.path.as_str()),
+            Some("a.md"),
+            "attention: 0 时两篇必须完全打平、按稳定顺序出 a.md —— 测试前提不成立"
+        );
+
+        // 只改文件,不碰 handle、不重开、不重建索引。
+        std::fs::write(&settings, r#"{"searchWeights": {"attention": 0.4}}"#).unwrap();
+
+        let on = search_locked(
+            &handle, Instant::now(), "widget", Some(10), Some(true), None, &counter, 1,
+        )
+        .unwrap();
+        assert_eq!(
+            on.hits.first().map(|h| h.path.as_str()),
+            Some("b.md"),
+            "改完权重文件后下一次查询就该用上新值(不需要重开 vault),读过的 b.md 必须反超"
+        );
+    }
+
     /// Review round 1, Important 2: `search_locked` used to call
     /// `idx.search_with`, which ranks with `Weights::default()`
     /// unconditionally — a `searchWeights` setting could be saved and read
