@@ -13,6 +13,7 @@ pub mod router;
 pub mod builtin;
 pub mod runner;
 pub mod install;
+pub mod doctor;
 pub mod search;
 pub mod state;
 

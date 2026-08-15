@@ -275,7 +275,9 @@ pub fn merge(
 /// weight and starts being an override). Getting this backwards — rejecting
 /// `attention: 0` the same way `human: 0` is rejected — would silently take
 /// away the user's only "off" switch for this feature.
-fn validate_search_weights(w: &SearchWeights) -> Result<(), String> {
+/// 公开到 crate 内是刻意的:`notemd doctor` 的 `vault.settings` 检查必须调用
+/// **这一个**权威校验,而不是复刻一份权重规则 —— 两份必然漂移。
+pub(crate) fn validate_search_weights(w: &SearchWeights) -> Result<(), String> {
     // `low_inclusive: false` reproduces the four tiers' original `x <= low`
     // rejection (so `low` itself, typically `0.0`, is refused); `true` is
     // for `attention`, where the low bound itself is the one legal value a

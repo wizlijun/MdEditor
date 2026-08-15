@@ -30,7 +30,7 @@ pub fn scan_root(root: &Path, host_version: &str) -> BTreeMap<String, (ManifestV
             continue;
         }
         let current = root.join(id).join("current");
-        match load_validated(&current, id, host_version) {
+        match validate_installed(&current, id, host_version) {
             Ok(m) => {
                 out.insert(id.clone(), (m, current));
             }
@@ -49,7 +49,13 @@ pub fn scan<R: tauri::Runtime>(
     Ok(scan_root(&root, host_version))
 }
 
-fn load_validated(current: &Path, dir_id: &str, host_version: &str) -> Result<ManifestV2, String> {
+/// 校验一个已安装插件的 `current/` 目录:manifest 可读可解析、通过
+/// `validate_manifest`、id 与安装目录一致、当前架构有二进制。
+///
+/// 公开是刻意的:`notemd doctor` 必须调用**这一个**实现来判断插件是否健康。
+/// 若它在 doctor 里复刻一遍这串判断,两份必然漂移 —— 那正是这个项目反复踩过的
+/// 「第二真相来源」坑。
+pub fn validate_installed(current: &Path, dir_id: &str, host_version: &str) -> Result<ManifestV2, String> {
     let text = std::fs::read_to_string(current.join("manifest.json"))
         .map_err(|e| format!("manifest.json: {e}"))?;
     let m: ManifestV2 =

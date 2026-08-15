@@ -141,6 +141,7 @@ notemd share draft.md --json               # 结构化输出
 notemd share draft.md --unshare            # 取消分享
 notemd plugin list                         # 列出插件及启用状态
 notemd reading-insights report --vault ~/Vault --date 7d
+notemd doctor                              # 自检环境、Vault、索引、插件与网络（--offline、--json）
 notemd help                                # 完整帮助
 ```
 

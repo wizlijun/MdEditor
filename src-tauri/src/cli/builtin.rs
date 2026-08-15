@@ -47,6 +47,7 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
         Builtin::PluginUpdate(id) => market::run_update(id.as_deref(), parsed),
         Builtin::PluginRemove(id, keep_data) => market::run_remove(&id, keep_data, parsed),
         Builtin::Search(args) => super::search::run(args.with_global_json(parsed.globals.json)),
+        Builtin::Doctor(args) => super::doctor::run(args.with_global_json(parsed.globals.json)),
     }
 }
 
@@ -125,6 +126,7 @@ pub fn render_help(
     out.push_str("  plugin        Manage plugins (list, enable, disable, info, install, update, remove)\n");
     out.push_str("  share         Render and publish file as a shareable URL (alias: --share)\n");
     out.push_str("  search        Full-text search over the Vault (--vault, --json, --limit, --stats)\n");
+    out.push_str("  doctor        Self-check every local capability (--offline, --vault, --json)\n");
     out.push_str("  reading-insights [report]   Generate a reading digest from the Vault (--vault, --date, --stdout)\n");
 
     let mut shown_header = false;
@@ -371,6 +373,45 @@ EXIT CODES:
   0    Output was printed — one or more hits (or --stats/--rebuild ran)
   1    No hits — not an error, nothing to branch on but 'try something else'
   2    No Vault configured/found, or a missing query
+",
+        "doctor" => "\
+notemd doctor — Self-check notemd's local setup
+
+USAGE:
+  notemd doctor [--offline] [--vault <path>] [--json]
+
+DESCRIPTION:
+  Runs every local health check and prints a grouped report: environment (CLI
+  symlink, git, proxy), configuration and Vault, the search index, installed
+  plugins, and — unless --offline — reachability of the plugin registry and the
+  update endpoint.
+
+  Diagnose-only. doctor never writes settings, never installs anything, and
+  never builds a search index from scratch; each finding carries a one-line
+  suggestion for what to run next.
+
+  Note: never builds from scratch means no full first-time build, not zero
+  side effects. If the index already exists but searchSourceGlobs changed
+  since it was last opened, opening it clears and re-stamps the table before
+  doctor's own 2s freshness sweep gets to run — so the very first doctor
+  run after such a change can see a partially-repopulated index and leave it
+  that way. Harmless (the next `notemd search` finishes the job), but not
+  literally side-effect-free.
+
+FLAGS:
+  --offline         Skip the two network probes (registry, updater)
+  --vault <path>    Vault root to check (default: the configured Vault)
+  --json            Emit {ok, data: {checks: [...], summary: {...}}}
+
+NOTES:
+  Warnings never change the exit code: an uninstalled CLI symlink, a Vault that
+  is not a git repository, and an unreachable network are all legitimate states,
+  so `notemd doctor && ...` is safe to script.
+
+EXIT CODES:
+  0    No failures (warnings and skipped checks are fine)
+  1    At least one check failed
+  2    Argument error
 ",
         "reading-insights" => "\
 notemd reading-insights — Reading Insights (engagement) report

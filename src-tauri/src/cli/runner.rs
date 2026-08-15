@@ -97,7 +97,7 @@ fn current_scan() -> (
 /// CLI equivalent of Tauri's `app_data_dir()` plugins root: on macOS both
 /// resolve to `~/Library/Application Support/<BUNDLE_ID>`. The equivalence
 /// assumption is documented by `data_dir_matches_tauri_app_data_dir` below.
-fn v2_plugins_root() -> Option<PathBuf> {
+pub(crate) fn v2_plugins_root() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join(crate::app_dirs::BUNDLE_ID).join("plugins"))
 }
 

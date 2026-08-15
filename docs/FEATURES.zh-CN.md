@@ -111,6 +111,8 @@ AI-native 笔记系统，逐步落地中：
   文档，而不是直接采信。退出码把「无命中」（1）与「没有 vault」（2）分开；
   检索也从不硬失败：索引不可用或新鲜度检查超预算时，降级为直接扫文件，
   stderr 留一行说明。默认上限 20 条，`--limit N` 可调，`--all` 返回全部。
+- **`notemd doctor`** —— 自检本地环境、Vault、搜索索引、插件与网络连通性
+  （`--offline` 跳过联网，`--json` 机器可读）。
 - **`notemd` CLI** —— 不开 GUI 驱动插件功能：`notemd share draft.md` 发布
   分享链接；`--json` 结构化输出；`notemd reading-insights report` 生成投入度
   摘要。从 **Help → Install 'notemd' Command in PATH…** 安装。

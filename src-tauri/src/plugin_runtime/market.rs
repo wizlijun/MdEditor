@@ -127,11 +127,21 @@ fn net_err(what: &str, e: &(dyn std::error::Error + 'static)) -> String {
 
 /// `GET {base}/api/index.json` → [`parse_index`]. 10s timeout.
 pub async fn fetch_index(base_url: &str) -> Result<RegistryIndex, String> {
-    let url = format!("{}/api/index.json", base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
+    fetch_index_via(&client, base_url).await
+}
+
+/// [`fetch_index`] with the client injected — same rationale as
+/// [`download_via`]: a caller that wants to probe a loopback test server
+/// (`cli::doctor`'s registry health check, in tests) needs a client with
+/// `.no_proxy()`, since reqwest otherwise honours the system proxy by
+/// default and a stale/misbehaving one would turn a "server unreachable"
+/// test into a flaky pass or a hang.
+pub async fn fetch_index_via(client: &reqwest::Client, base_url: &str) -> Result<RegistryIndex, String> {
+    let url = format!("{}/api/index.json", base_url.trim_end_matches('/'));
     let resp = client
         .get(&url)
         .send()

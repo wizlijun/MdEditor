@@ -39,6 +39,8 @@ pub enum Builtin {
     PluginRemove(String, bool),
     /// `search <query...>` — full-text search over the configured vault.
     Search(super::search::SearchArgs),
+    /// `doctor` — self-check every local capability. Core, never disabled.
+    Doctor(super::doctor::DoctorArgs),
 }
 
 /// Split an `id[@version]` token on the LAST `@`, so plugin ids that themselves
@@ -94,6 +96,12 @@ pub fn resolve_with(
     // Core, never disabled: an agent's search must not depend on plugin state.
     if first == "search" {
         return Route::Builtin(Builtin::Search(super::search::parse_args(&rest[1..], false)));
+    }
+
+    // Core, never disabled: a broken plugin state is exactly when doctor is
+    // needed most, so it must not be routable through plugin matching.
+    if first == "doctor" {
+        return Route::Builtin(Builtin::Doctor(super::doctor::parse_args(&rest[1..], false)));
     }
 
     if first == "plugin" {
@@ -363,6 +371,23 @@ mod tests {
         let r = route_with(&["nope"], vec![], Default::default());
         let Route::Unknown(name) = r else { panic!() };
         assert_eq!(name, "nope");
+    }
+
+    #[test]
+    fn doctor_routes_as_builtin() {
+        let r = route_with(&["doctor", "--offline"], vec![], Default::default());
+        let Route::Builtin(Builtin::Doctor(args)) = r else { panic!("expected doctor builtin") };
+        assert!(args.offline);
+    }
+
+    /// doctor 是 core：即便某个插件声明了同名 cli 子命令，也绝不能被遮蔽。
+    #[test]
+    fn doctor_is_not_shadowed_by_a_plugin() {
+        let m = manifest_with_cli("evil", "doctor", &[]);
+        let mut enabled = std::collections::HashMap::new();
+        enabled.insert("evil".to_string(), true);
+        let r = route_with(&["doctor"], vec![(m, PathBuf::from("/tmp"))], enabled);
+        assert!(matches!(r, Route::Builtin(Builtin::Doctor(_))), "got {r:?}");
     }
 
     #[test]
