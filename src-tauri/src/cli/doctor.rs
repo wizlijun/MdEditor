@@ -190,14 +190,26 @@ pub fn render_json(checks: &[Check]) -> String {
 
 // ── 环境组 ────────────────────────────────────────────────────────────────
 
-/// `install::status` 已经区分「没装」和「装了但 target 不是当前二进制」,但
-/// 它的 `target_valid` 问的是「是否指向*本进程*的二进制」—— 那对 doctor 太严:
-/// 多个安装、dev 构建都会让它为 false 而软链本身完全可用。真正的坏情况是
-/// **指向一个不存在的文件**(dangling),所以 target 是否存在由调用方解析后传入。
+/// `install::status`'s `target_valid` compares `read_link()` against
+/// `current_exe()` as **raw strings**. On macOS `current_exe()` returns the
+/// path the process was *invoked* through, not a canonicalized identity: for
+/// a normal install (`/usr/local/bin/notemd -> /Applications/note.md.app/…`)
+/// running `notemd doctor` from a terminal gives `current_exe() ==
+/// /usr/local/bin/notemd` while `read_link() ==
+/// /Applications/note.md.app/…` — never equal, so `target_valid` is `false`
+/// on *every* correctly-installed machine. A relative symlink falls into the
+/// same trap: `read_link()` returns the raw relative text, which can never
+/// string-equal an absolute `current_exe()`. So doctor does not use
+/// `target_valid` at all; see `env_checks` for the canonicalize-based
+/// comparison it does instead. `points_at_current_build` here is *that*
+/// already-canonicalized verdict, computed by the caller — this function
+/// stays a pure decision table so it stays unit-testable without touching
+/// the filesystem.
 ///
-/// `target_valid == false` while the target *does* exist is a third,
-/// distinct state (neither "broken" nor "fine"): the symlink resolves to
-/// some *other* build — an old download-directory copy, a dev build — and
+/// Distinguishing "points at another build" from "broken" still matters:
+/// `target_exists == Some(true) && !points_at_current_build` is a third,
+/// distinct state (neither "broken" nor "fine") — the symlink resolves to
+/// some *other* build (an old download-directory copy, a dev build) and
 /// `notemd` in a terminal silently runs that instead of this one. Not a
 /// `fail` (the command works), but worth a `warn` with the actual target so
 /// the user can tell at a glance whether that is expected.
@@ -205,7 +217,7 @@ fn check_cli_link(
     installed: bool,
     path: Option<&str>,
     target_exists: Option<bool>,
-    target_valid: bool,
+    points_at_current_build: bool,
     target: Option<&str>,
 ) -> Check {
     // `install.rs` self-describes as "macOS-only in v1": `candidate_dirs()`
@@ -224,6 +236,11 @@ fn check_cli_link(
         );
     }
     let p = path.unwrap_or("(unknown path)");
+    // Order matters: canonicalize() fails (Err) on a dangling symlink, so the
+    // caller can only ever hand us `target_exists == Some(false)` for that
+    // case — never `points_at_current_build == true`. Checking existence
+    // first keeps a dangling link reported as `fail`, not folded into the
+    // "another build" `warn` below.
     if target_exists == Some(false) {
         return Check::fail(
             "env.cli_link",
@@ -231,7 +248,7 @@ fn check_cli_link(
             "Reinstall it in Preferences → General → Command line",
         );
     }
-    if target_exists == Some(true) && !target_valid {
+    if target_exists == Some(true) && !points_at_current_build {
         let t = target.unwrap_or("(unknown target)");
         return Check::warn(
             "env.cli_link",
@@ -283,24 +300,50 @@ fn check_git_proxy(raw: Option<&str>) -> Check {
     }
 }
 
-fn env_checks(cfg: Option<&crate::shared_config::SharedConfig>) -> Vec<Check> {
-    let st = super::install::status(None);
+/// Canonicalize-based verdict for whether `link` currently resolves to the
+/// same file as `current_build`. `std::fs::canonicalize` resolves symlinks
+/// *and* normalizes platform quirks (e.g. `/tmp` → `/private/tmp` on macOS),
+/// so this comes out `true` for both a normal install and a working relative
+/// symlink, and only `false` when the two really are different files on
+/// disk. `canonicalize` returns `Err` for a dangling symlink, which collapses
+/// to `false` here too — harmless, because the dangling case is reported
+/// separately via `target_exists` before this verdict is ever consulted (see
+/// `check_cli_link`'s branch order).
+fn link_targets_current_build(link: &Path, current_build: &Path) -> bool {
+    std::fs::canonicalize(link)
+        .ok()
+        .zip(std::fs::canonicalize(current_build).ok())
+        .is_some_and(|(l, c)| l == c)
+}
+
+/// The full `env.cli_link` decision, given the raw `install::status` fields
+/// plus the current build's own binary path. Split out from `env_checks` so
+/// the canonicalize-based comparison — the actual fix for "every normal
+/// install gets a false 'points at another build' warning" — can be
+/// exercised with real tempdir symlinks in tests, without going through
+/// `install::status(None)`'s live filesystem probing of `/usr/local/bin`
+/// etc.
+fn resolve_cli_link(installed: bool, path: Option<&str>, current_build: &Path) -> Check {
     // 自己解析软链目标是否存在(见 `symlink_target_exists` 的文档注释:相对
     // 路径必须按链接*所在目录*解析,不是当前工作目录)。读不出目标(不是
     // 软链)⇒ None ⇒ 宽容按通过处理。目标的原始文本另外读一次,只用于
     // "points at another build" 的展示,不参与判断。
-    let link_path = st.path.as_deref().map(Path::new);
+    let link_path = path.map(Path::new);
     let target_exists = link_path.and_then(symlink_target_exists);
     let target_display =
         link_path.and_then(|p| std::fs::read_link(p).ok()).map(|t| t.display().to_string());
+    // NOT `install::status`'s `target_valid` — see `check_cli_link`'s doc
+    // comment for why that raw-string comparison flags every normal install
+    // as "another build".
+    let points_at_current_build = target_exists == Some(true)
+        && link_path.is_some_and(|p| link_targets_current_build(p, current_build));
+    check_cli_link(installed, path, target_exists, points_at_current_build, target_display.as_deref())
+}
+
+fn env_checks(cfg: Option<&crate::shared_config::SharedConfig>) -> Vec<Check> {
+    let st = super::install::status(None);
     vec![
-        check_cli_link(
-            st.installed,
-            st.path.as_deref(),
-            target_exists,
-            st.target_valid,
-            target_display.as_deref(),
-        ),
+        resolve_cli_link(st.installed, st.path.as_deref(), &super::install::current_app_binary()),
         check_git(crate::vault_sync::git_ops::version().as_deref()),
         check_git_proxy(cfg.and_then(|c| c.git_proxy.as_deref())),
     ]
@@ -512,17 +555,18 @@ fn search_checks_at(root: &Path, db_path: Option<&Path>, vault_flag: Option<&str
 /// 读者复制粘贴出一条解析到**另一个**目录的命令。`--stats` 而非 `<any
 /// query>`:`search.rs` 的 `run()` 在要求 query 之前就为 `--stats` return 了
 /// (search.rs:199-201),所以 `--rebuild --stats` 同样有效且不需要用户凭空
-/// 编一个查询词。
+/// 编一个查询词。路径加单引号:vault 路径含空格在 macOS 上很常见
+/// (`~/My Vault`),不加引号复制粘贴出来的命令会被 shell 拆词。
 fn search_rebuild_hint(vault_flag: Option<&str>) -> String {
     match vault_flag {
-        Some(v) => format!("notemd search --rebuild --stats --vault {v}"),
+        Some(v) => format!("notemd search --rebuild --stats --vault '{v}'"),
         None => "notemd search --rebuild --stats".to_string(),
     }
 }
 
 fn search_stats_hint(vault_flag: Option<&str>) -> String {
     match vault_flag {
-        Some(v) => format!("notemd search --stats --vault {v}"),
+        Some(v) => format!("notemd search --stats --vault '{v}'"),
         None => "notemd search --stats".to_string(),
     }
 }
@@ -1038,6 +1082,112 @@ mod tests {
         assert!(c.detail.contains("/tmp/dev-build/notemd"), "{}", c.detail);
     }
 
+    /// Problem 1 regression (2026-08): `install::status`'s `target_valid`
+    /// string-compares `read_link()` against `current_exe()`. On macOS
+    /// `current_exe()` returns the *invocation* path, not a canonical
+    /// identity — for a normal install (`/usr/local/bin/notemd ->
+    /// /Applications/note.md.app/Contents/MacOS/notemd`) running `notemd
+    /// doctor` from a terminal gives `current_exe() ==
+    /// /usr/local/bin/notemd`, never equal to the symlink's target, so
+    /// `target_valid` was `false` on *every* correctly-installed machine —
+    /// doctor warned "points at another build" permanently, with no fix that
+    /// makes it go away. `resolve_cli_link` (used by `env_checks`) replaces
+    /// that with a `std::fs::canonicalize()` comparison instead; this test
+    /// builds a real absolute symlink with `tempfile` (no mocking) and
+    /// checks the fixed path passes.
+    #[test]
+    fn resolve_cli_link_normal_absolute_install_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_binary = dir.path().join("app/Contents/MacOS/notemd");
+        std::fs::create_dir_all(app_binary.parent().unwrap()).unwrap();
+        std::fs::write(&app_binary, b"").unwrap();
+
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let link = bin_dir.join("notemd");
+        std::os::unix::fs::symlink(&app_binary, &link).unwrap();
+
+        let c = resolve_cli_link(true, Some(link.to_str().unwrap()), &app_binary);
+        assert_eq!(c.status, Status::Pass, "{c:?}");
+    }
+
+    /// The key regression test: a **relative** symlink (e.g.
+    /// `~/.local/bin/notemd -> ../../Applications/note.md.app/…`) that is
+    /// fully working must neither fail (the earlier, already-fixed bug —
+    /// `read_link()`'s raw relative text resolved against the wrong cwd)
+    /// nor warn (this fix's bug — relative text can never string-equal an
+    /// absolute `current_build` path). `canonicalize()` resolves both the
+    /// relative symlink and any path normalization on both sides, so they
+    /// must compare equal here.
+    #[test]
+    fn resolve_cli_link_relative_symlink_to_current_build_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_binary = dir.path().join("app/Contents/MacOS/notemd");
+        std::fs::create_dir_all(app_binary.parent().unwrap()).unwrap();
+        std::fs::write(&app_binary, b"").unwrap();
+
+        let bin_dir = dir.path().join("local/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let link = bin_dir.join("notemd");
+        std::os::unix::fs::symlink("../../app/Contents/MacOS/notemd", &link).unwrap();
+
+        let c = resolve_cli_link(true, Some(link.to_str().unwrap()), &app_binary);
+        assert_eq!(c.status, Status::Pass, "{c:?}");
+    }
+
+    /// The real M9 accident this whole check exists to catch: the symlink
+    /// resolves to a file that genuinely exists but is not the current
+    /// build (a stale download-directory copy, a leftover dev build). Must
+    /// still warn, with the actual resolved target in the detail.
+    #[test]
+    fn resolve_cli_link_pointing_at_a_different_existing_build_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_binary = dir.path().join("app/Contents/MacOS/notemd");
+        std::fs::create_dir_all(app_binary.parent().unwrap()).unwrap();
+        std::fs::write(&app_binary, b"").unwrap();
+
+        let other_binary = dir.path().join("dev-build/notemd");
+        std::fs::create_dir_all(other_binary.parent().unwrap()).unwrap();
+        std::fs::write(&other_binary, b"").unwrap();
+
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let link = bin_dir.join("notemd");
+        std::os::unix::fs::symlink(&other_binary, &link).unwrap();
+
+        let c = resolve_cli_link(true, Some(link.to_str().unwrap()), &app_binary);
+        assert_eq!(c.status, Status::Warn, "{c:?}");
+        assert!(c.detail.contains(other_binary.to_str().unwrap()), "{}", c.detail);
+    }
+
+    /// `canonicalize()` returns `Err` for a dangling symlink — branch order
+    /// in `check_cli_link` must still classify this as `fail` (existence is
+    /// checked before the canonicalize-based verdict is ever consulted), not
+    /// silently fold it into the "another build" warn.
+    #[test]
+    fn resolve_cli_link_pointing_at_a_dangling_target_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_binary = dir.path().join("app/Contents/MacOS/notemd");
+        std::fs::create_dir_all(app_binary.parent().unwrap()).unwrap();
+        std::fs::write(&app_binary, b"").unwrap();
+
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let link = bin_dir.join("notemd");
+        std::os::unix::fs::symlink(dir.path().join("does-not-exist"), &link).unwrap();
+
+        let c = resolve_cli_link(true, Some(link.to_str().unwrap()), &app_binary);
+        assert_eq!(c.status, Status::Fail, "{c:?}");
+    }
+
+    #[test]
+    fn resolve_cli_link_not_installed_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_binary = dir.path().join("app/Contents/MacOS/notemd");
+        let c = resolve_cli_link(false, None, &app_binary);
+        assert_eq!(c.status, Status::Warn, "{c:?}");
+    }
+
     /// M8(终审):`install.rs` 自述 macOS-only in v1;在其它平台上给出的
     /// "Preferences → General → Command line" 建议指向一个不存在的偏好项,
     /// 必须整条 skip 而不是 warn。
@@ -1291,7 +1441,7 @@ mod tests {
         let checks = search_checks_at(vault.path(), Some(&db), Some("/explicit/vault"));
         let open = checks.iter().find(|c| c.id == "search.index_open").unwrap();
         assert!(
-            open.hint.as_deref().unwrap().contains("--vault /explicit/vault"),
+            open.hint.as_deref().unwrap().contains("--vault '/explicit/vault'"),
             "{open:?}"
         );
         // 没有显式 --vault 时不该凭空出现。
@@ -1307,7 +1457,21 @@ mod tests {
         assert_eq!(search_rebuild_hint(None), "notemd search --rebuild --stats");
         assert_eq!(
             search_rebuild_hint(Some("/v")),
-            "notemd search --rebuild --stats --vault /v"
+            "notemd search --rebuild --stats --vault '/v'"
+        );
+    }
+
+    /// Problem 2: vault 路径含空格时(`~/My Vault` 在 macOS 上很常见),不加
+    /// 引号的 hint 复制粘贴到 shell 会被当成两个参数拆开。
+    #[test]
+    fn hints_single_quote_a_vault_path_containing_spaces() {
+        assert_eq!(
+            search_rebuild_hint(Some("/Users/x/My Vault")),
+            "notemd search --rebuild --stats --vault '/Users/x/My Vault'"
+        );
+        assert_eq!(
+            search_stats_hint(Some("/Users/x/My Vault")),
+            "notemd search --stats --vault '/Users/x/My Vault'"
         );
     }
 
