@@ -10,6 +10,7 @@
 //! file watcher are three thin adapters over one algorithm. That is the whole
 //! reason the crate exists — see docs/2026-08-10-vault-search-index-design.md §2.
 
+pub mod attention;
 pub mod block;
 pub mod chunk;
 pub mod frontmatter;
@@ -266,11 +267,37 @@ impl SearchIndex {
             tokenizer_id: store::meta_get(&self.conn, "tokenizer_id").unwrap_or_default(),
             origin_counts: origin_counts(&self.conn)?,
             type_counts: type_counts(&self.conn)?,
+            attention_files: store::attention_file_count(&self.conn).unwrap_or(0),
+            attention_as_of: store::meta_get(&self.conn, "attention_as_of"),
         })
     }
 
     pub fn vault_root(&self) -> &Path {
         &self.vault_root
+    }
+
+    /// 重新摄取 vault 的注意力数据,返回写入的文件数。
+    ///
+    /// **全量重算**,不是增量:当天的 analytics 文件整天都在被重写,任何
+    /// 「读到哪儿了」的水位方案算错时都是静默的(分数偏高,无症状)。重算是
+    /// 无状态的,因此也是幂等的 —— 连调两次结果完全相同。
+    ///
+    /// `links` 由调用方从 `.notemd/mirrors/` 读出(`MirrorMeta` 的格式归
+    /// `src-tauri` 所有,见 `attention::MirrorLink` 的文档)。传空切片是
+    /// 合法的:那只意味着 vault 外源文件的阅读时长不参与,vault 内的照常。
+    pub fn refresh_attention(
+        &mut self,
+        links: &[attention::MirrorLink],
+    ) -> Result<usize, String> {
+        let as_of = today();
+        let files = attention::collect(&self.vault_root, &as_of);
+        let folded = attention::fold(&files, links, &as_of);
+        let n = store::replace_attention(&self.conn, &as_of, &folded).map_err(|e| e.to_string())?;
+        // `doc_attention` 的行数在零结果时无法反推「跑没跑过」—— 一个空表和一个
+        // 从未摄取过的库看起来完全一样。单独把这一轮跑过的事实盖进 `meta`,
+        // `IndexStats::attention_as_of` 读的是这个键,不是 `doc_attention` 本身。
+        store::meta_set(&self.conn, "attention_as_of", &as_of).map_err(|e| e.to_string())?;
+        Ok(n)
     }
 }
 
@@ -390,6 +417,23 @@ pub struct IndexStats {
     pub tokenizer_id: String,
     pub origin_counts: OriginCounts,
     pub type_counts: std::collections::BTreeMap<String, i64>,
+    /// 有注意力数据、**且仍在索引里**的文件数。与 `files` 一起构成设置页的
+    /// 覆盖率行 ——「摄取根本没跑起来」在别处没有任何可见症状,这是唯一的
+    /// 发现途径。
+    ///
+    /// 口径是交集而不是 `doc_attention` 的行数,理由(以及那个「60 / 1」的
+    /// 实测)见 `store::attention_file_count`:这个数字与 `files` 一起显示,
+    /// 分子大于分母就等于没有意义。
+    pub attention_files: i64,
+    /// 上一轮 `refresh_attention` 用的 `as_of`(存在 `meta.attention_as_of`
+    /// 键里,不是从 `doc_attention` 的行反推出来的)。
+    ///
+    /// `None` **必须**只表示「摄取从未在这个索引上跑过」。「跑过但零结果」是
+    /// 一个不同的状态,表现为 `Some(day)` 且 `attention_files == 0` —— 用户
+    /// 一次没开过 Reading Insights 和开了但恰好没有任何有效数据,是两件设置页
+    /// 需要分开说清的事;如果这个字段只看 `doc_attention` 是否有行,零结果的
+    /// 那一轮会被误判成「从未跑过」,两种状态就再也分不开了。
+    pub attention_as_of: Option<String>,
 }
 
 fn today() -> String {

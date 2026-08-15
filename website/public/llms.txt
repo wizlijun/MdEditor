@@ -30,7 +30,7 @@ Key facts: desktop app for macOS 13+ (Apple Silicon & Intel) and Windows 10/11 x
   annotated paragraph and may insert it into the document. Only the human
   sets `closed` / `adopted`; agents never edit the main `.md`.
 - Files are the single source of truth; indexes are derived and rebuildable.
-- Retrieval: `notemd search "query" --vault <path>` prints `path:line:text`, one hit per line; `--json` adds `source_ref` (`path#Lline`), `origin` (`human|derived|source|unlabeled`) and `provenance` (`agent_by`, `human_verified`). A hit with `agent_by` set was written by a model — follow its sources to the primary document rather than citing it as a human's. Exit `1` means no hits, not an error. Default cap is 20 hits — `--all` (or `--limit 0`) returns every hit. `rg`/`grep` remain perfectly valid; this is an accelerator, not a gatekeeper.
+- Retrieval: `notemd search "query" --vault <path>` prints `path:line:text`, one hit per line; `--json` adds `source_ref` (`path#Lline`), `origin` (`human|derived|source|unlabeled`), `provenance` (`agent_by`, `human_verified`) and `attention_minutes` (decayed minutes of the user's own reading/editing attention on that document, 0 = no data — already factored into ranking, exposed so you can explain the order; that data is ingested by the desktop app, the CLI only reads it, so it is 0 everywhere on a machine where the GUI has never opened this vault). A hit with `agent_by` set was written by a model — follow its sources to the primary document rather than citing it as a human's. Exit `1` means no hits, not an error. Default cap is 20 hits — `--all` (or `--limit 0`) returns every hit. `rg`/`grep` remain perfectly valid; this is an accelerator, not a gatekeeper.
 
 ## Optional
 

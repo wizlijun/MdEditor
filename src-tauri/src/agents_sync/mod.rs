@@ -473,4 +473,37 @@ mod fs_tests {
             "templates/AGENTS.md has drifted from agents_sync::logic::SEARCH_SECTION"
         );
     }
+
+    /// Task 11 review: 6 public docs enumerate `--json`'s extra fields in
+    /// their own prose (README ×2, docs/FEATURES ×2, website/public/llms.txt,
+    /// llms-full.txt) and none of them had a drift tripwire — adding
+    /// `attention_minutes` to `print_json` and to this crate's own
+    /// `SEARCH_SECTION` silently missed all six the first time around.
+    ///
+    /// This does not attempt to pin all six: a full-text `.contains(...)`
+    /// check (the `TEMPLATE`/`SEARCH_SECTION` pattern above) would demand
+    /// byte-identical wording, and each doc's context differs enough
+    /// (overview vs. feature list vs. dense agent-facing convention) that
+    /// forcing identical prose would fight their own editorial purpose —
+    /// see the human-facing commit for how the six diverge in phrasing on
+    /// purpose. What's cheap to hold structurally, without becoming a
+    /// second copy of the wording itself, is field *names*: whichever field
+    /// list is easiest for an outside agent to reach without cloning this
+    /// repo (`llms.txt` — CLAUDE.md names it "给 agent 的公共约定") must at
+    /// least mention every field this crate's own `SEARCH_SECTION` teaches.
+    /// Read at test time via `CARGO_MANIFEST_DIR`, not `include_str!`, so a
+    /// missing `website/` checkout (e.g. a stripped packaging context) fails
+    /// this test rather than the ordinary build.
+    #[test]
+    fn llms_txt_names_every_field_search_section_teaches() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../website/public/llms.txt");
+        let body = std::fs::read_to_string(path).expect("website/public/llms.txt must be readable from src-tauri/");
+        for field in ["source_ref", "origin", "provenance", "attention_minutes"] {
+            assert!(
+                logic::SEARCH_SECTION.contains(field),
+                "test bug: {field} isn't even in SEARCH_SECTION, nothing to compare against"
+            );
+            assert!(body.contains(field), "website/public/llms.txt is missing --json field `{field}` that SEARCH_SECTION documents");
+        }
+    }
 }

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs, saveSearchLargeFileThreshold } from './vault-settings.svelte'
+import { vaultSettings, loadVaultSettings, saveSyncDir, DEFAULT_SYNC_DIR, saveLargeFileThreshold, DEFAULT_LARGE_FILE_THRESHOLD_MB, saveSearchExcludeDirs, saveSearchLargeFileThreshold, saveSearchWeights, DEFAULT_SEARCH_WEIGHTS } from './vault-settings.svelte'
 
 /** Route invoke by command name so load's two parallel calls resolve. */
 function route(map: Record<string, unknown>) {
@@ -189,5 +189,60 @@ describe('saveSearchLargeFileThreshold', () => {
     await saveSearchLargeFileThreshold(5)
     expect(vaultSettings.searchLargeFileThresholdMb).toBe(25)
     expect(vaultSettings.searchLargeFileThresholdExplicit).toBe(false)
+  })
+})
+
+// Final review I-2: the backend stores `search_weights` as ONE WHOLESALE
+// STRUCT (`vault_settings::merge` does `out.search_weights = Some(w)`, not a
+// per-field merge), so any field this mirror forgets is a field DELETED from
+// `settings.json` on the next save. `attention` — the attention-boost `k`,
+// which has no input box and whose interesting value is `0` ("turn the
+// feature off") — was exactly that field: setting it by hand and then saving
+// the four tier weights once silently reset it to the 0.4 default, with no
+// message and no way to notice.
+describe('saveSearchWeights — the attention weight survives a tier-weight save (final review I-2)', () => {
+  it('carries a hand-set attention: 0 through load → save instead of dropping it', async () => {
+    route({
+      sotvault_vault_root: '/v',
+      notemd_vault_settings_get: { searchWeights: { human: 1.25, derived: 1, source: 0.9, unlabeled: 0.3, attention: 0 } },
+    })
+    await loadVaultSettings()
+    expect(vaultSettings.searchWeights.attention).toBe(0)
+
+    // What the settings page sends: the whole draft, which is seeded from
+    // `vaultSettings.searchWeights`.
+    invoke.mockResolvedValue({ searchWeights: { ...vaultSettings.searchWeights } })
+    await saveSearchWeights({ ...vaultSettings.searchWeights, human: 2 })
+
+    const payload = invoke.mock.calls.at(-1)?.[1] as { searchWeights: Record<string, number> }
+    expect(payload.searchWeights.attention).toBe(0)
+    expect(vaultSettings.searchWeights.attention).toBe(0)
+  })
+
+  it('defaults attention to the shipped 0.4 when the config has never set it', async () => {
+    route({ sotvault_vault_root: '/v', notemd_vault_settings_get: {} })
+    await loadVaultSettings()
+    expect(vaultSettings.searchWeights.attention).toBe(DEFAULT_SEARCH_WEIGHTS.attention)
+    expect(DEFAULT_SEARCH_WEIGHTS.attention).toBe(0.4) // byte-identical to `Weights::default()`
+  })
+
+  // Mirrors `searchidx::query::Weights::sanitized`'s attention gate
+  // (`0.0..=2.0`, inclusive at the bottom — the inverse of the four tiers,
+  // which reject 0). A hand-edited out-of-range value is already ignored at
+  // query time; echoing it back would make `validate_search_weights` reject
+  // the whole save and lock the user out of the tier inputs with an error
+  // about a field this page does not show.
+  it('falls back to the default when the stored attention is out of the 0..=2 range', async () => {
+    route({ sotvault_vault_root: '/v', notemd_vault_settings_get: { searchWeights: { attention: 9 } } })
+    await loadVaultSettings()
+    expect(vaultSettings.searchWeights.attention).toBe(DEFAULT_SEARCH_WEIGHTS.attention)
+  })
+
+  it('accepts the whole legal range including both ends', async () => {
+    for (const k of [0, 0.4, 2]) {
+      route({ sotvault_vault_root: '/v', notemd_vault_settings_get: { searchWeights: { attention: k } } })
+      await loadVaultSettings()
+      expect(vaultSettings.searchWeights.attention).toBe(k)
+    }
   })
 })

@@ -52,7 +52,35 @@ use crate::tokenize::{tokenize, TOKENIZER_ID};
 // nothing ever read it (queries JOIN back to `blocks` for the real text; no
 // `snippet()`/`highlight()` anywhere; `bm25()` works contentless). Column
 // shape again, so again: bump and let `open` wipe it.
-pub const SCHEMA_VERSION: i64 = 5;
+//
+// v5 -> v6: a new `doc_attention` table carries per-file attention-minutes
+// figures folded from the reading-insights analytics JSON on disk (see
+// `attention::fold`). It has no relationship to `files`/`blocks`/`links` shape
+// — no existing column changed — but it is new schema surface all the same,
+// and an old database simply lacks the table a build past this point expects
+// to be able to write to. Same no-migration rule as every prior bump: wipe
+// and let `open` rebuild rather than `ALTER TABLE ADD` it in place.
+//
+// `doc_attention` deliberately carries NO explicit index. It was first created
+// (T4) with `CREATE INDEX doc_attention_minutes ON doc_attention(minutes DESC)`
+// to serve T8's attention candidate arm (`query::fts_arms`'s second arm,
+// `ORDER BY att.minutes DESC`). Measured with `EXPLAIN QUERY PLAN` once that
+// arm existed: the index is STRUCTURALLY unreachable there and was dropped
+// again in the same unreleased schema version. The arm is FTS-driven —
+// `SCAN blocks_fts VIRTUAL TABLE INDEX` → `SEARCH b`/`f` by rowid → `SEARCH
+// att USING INDEX sqlite_autoindex_doc_attention_1 (path=?)` — so
+// `doc_attention` is the INNER table of a join keyed by `path`, and an ORDER BY
+// on a column of an inner table can only be satisfied by `USE TEMP B-TREE FOR
+// ORDER BY`. Switching the `LEFT JOIN` to `INNER JOIN` does not change that.
+// The index was not free: `replace_attention` replaces the whole table every
+// refresh (DELETE + re-INSERT), so every ingest rebuilt it in full. Removing it
+// needs no further version bump — v6 has never shipped, and an index is not
+// readable surface: a v6 database created by an earlier dev build keeps a stale,
+// unused index, which costs a hair on write and nothing on read, and bumping to
+// v7 would force every dev machine into a full reindex to buy exactly that hair.
+// If you want it back, prove with `EXPLAIN QUERY PLAN` that a real query uses it
+// first — `query::tests::no_unused_index_on_doc_attention` is the tripwire.
+pub const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE files(
@@ -71,6 +99,8 @@ CREATE VIRTUAL TABLE blocks_fts USING fts5(tok_text, tok_breadcrumb, tok_title,
   content='', contentless_delete=1);
 CREATE TABLE links(file_id INTEGER, kind TEXT, target TEXT, line INTEGER);
 CREATE INDEX links_file ON links(file_id);
+CREATE TABLE doc_attention(
+  path TEXT PRIMARY KEY, minutes REAL NOT NULL, as_of TEXT NOT NULL);
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 "#;
 
@@ -713,6 +743,49 @@ pub fn level_of(s: &str) -> BlockLevel {
 /// row itself is never rewritten to "fix" it.
 pub fn origin_of(s: Option<&str>) -> Origin {
     s.and_then(Origin::from_str).unwrap_or(Origin::Derived)
+}
+
+/// 整表替换 `doc_attention`,返回写入行数。
+///
+/// 替换而非 upsert:摄取是全量重算的(见 `attention::fold` 的文档),
+/// 上一轮的残留行没有任何机会被更新到 —— 文件被删掉、镜像被解绑、
+/// 或者干脆衰减到 0 的路径都不会出现在新一轮的输入里,留着就是双计。
+/// 一个事务内完成,查询侧永远看不到「清空了但还没填」的中间态。
+pub fn replace_attention(
+    conn: &Connection,
+    as_of: &str,
+    rows: &std::collections::BTreeMap<String, f64>,
+) -> rusqlite::Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM doc_attention", [])?;
+    {
+        let mut st = tx.prepare("INSERT INTO doc_attention(path, minutes, as_of) VALUES(?1,?2,?3)")?;
+        for (path, minutes) in rows {
+            st.execute(rusqlite::params![path, minutes, as_of])?;
+        }
+    }
+    tx.commit()?;
+    Ok(rows.len())
+}
+
+/// **索引里**有注意力数据的文件数 —— 设置页的覆盖率行(「N / 总文件数」)读它。
+///
+/// 是 `doc_attention` 与 `files` 的**交集**,不是 `doc_attention` 的行数。这
+/// 两者会分叉,而且是往「分子大于分母」的方向分叉(最终评审 M-3 实测出过
+/// 「60 / 1」):analytics 保留 365 天,`replace_attention` 无条件写下 `fold`
+/// 出来的每一个路径,所以已删除、被 exclude 掉、超大跳过、或不匹配 globs 的
+/// 文件照样各占一行 —— `rebuild_in_place` 也不清这张表。这一行是整个功能对
+/// 用户唯一可见的数字,分子大于分母等于让它失去意义,所以口径必须是规格 §6
+/// 写的那个:「有注意力数据的**文件数** / 索引内文件总数」。
+///
+/// 残留行本身无害(查询侧 `LEFT JOIN` 找不到对应 `files` 行就 join 不上,下
+/// 次摄取自愈),这里只是不把它们算进覆盖率。
+pub fn attention_file_count(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT count(*) FROM doc_attention a JOIN files f ON f.path = a.path",
+        [],
+        |r| r.get(0),
+    )
 }
 
 #[cfg(test)]
@@ -1426,5 +1499,80 @@ mod tests {
             .query_row("SELECT count(*) FROM blocks_fts WHERE tok_title MATCH 'alpha'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "主干没变,页名必须照旧命中");
+    }
+
+    /// 新表新列 → schema 必须 bump,老库在下次打开时全量重建。
+    #[test]
+    fn the_schema_version_covers_doc_attention() {
+        assert_eq!(SCHEMA_VERSION, 6, "加了 doc_attention 表就必须 bump");
+    }
+
+    /// 写入即整表替换:摄取是全量重算的,残留旧行等于双计。
+    #[test]
+    fn replace_attention_swaps_the_whole_table() {
+        let (_d, p) = tmp();
+        let c = open(&p, "/v", "sync").unwrap();
+        let mut a = std::collections::BTreeMap::new();
+        a.insert("x.md".to_string(), 3.0);
+        a.insert("y.md".to_string(), 1.0);
+        assert_eq!(replace_attention(&c, "2026-08-13", &a).unwrap(), 2);
+
+        let mut b = std::collections::BTreeMap::new();
+        b.insert("z.md".to_string(), 5.0);
+        assert_eq!(replace_attention(&c, "2026-08-14", &b).unwrap(), 1);
+
+        // 这里问的是**表里还剩几行**,不是覆盖率 —— 所以直接数表,而不是走
+        // `attention_file_count`(它只数与 `files` 相交的那些,见其文档)。
+        let rows: i64 =
+            c.query_row("SELECT count(*) FROM doc_attention", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1, "旧行必须被清掉,不能累加");
+        let (p, m, d): (String, f64, String) = c
+            .query_row("SELECT path, minutes, as_of FROM doc_attention", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(p, "z.md");
+        assert!((m - 5.0).abs() < 1e-9);
+        assert_eq!(d, "2026-08-14");
+    }
+
+    /// 空结果也要落地:它表达的是「摄取跑过了,一条都没有」,与
+    /// 「从没跑过」在统计行里是两件事。
+    #[test]
+    fn replacing_with_an_empty_map_clears_the_table() {
+        let (_d, p) = tmp();
+        let c = open(&p, "/v", "sync").unwrap();
+        let mut a = std::collections::BTreeMap::new();
+        a.insert("x.md".to_string(), 3.0);
+        replace_attention(&c, "2026-08-13", &a).unwrap();
+        assert_eq!(replace_attention(&c, "2026-08-14", &Default::default()).unwrap(), 0);
+        let rows: i64 =
+            c.query_row("SELECT count(*) FROM doc_attention", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    /// 覆盖率的分子只数**索引里还在**的文件(最终评审 M-3)。
+    ///
+    /// 失败场景:analytics 留 365 天,而文件早被删掉 / 被 exclude 出索引,
+    /// 于是 `doc_attention` 的行数可以远大于 `files` 的行数,设置页渲染成
+    /// 「60 / 1」这种没有意义的数字。
+    #[test]
+    fn the_attention_coverage_count_only_counts_files_still_in_the_index() {
+        let (_d, p) = tmp();
+        let mut c = open(&p, "/v", "sync").unwrap();
+        write(&mut c, "kept.md", "# 标题\n正文\n");
+
+        let mut rows = std::collections::BTreeMap::new();
+        rows.insert("kept.md".to_string(), 30.0);
+        // 索引里没有的路径:已删除的文件、或被排除出索引的文件。
+        rows.insert("gone.md".to_string(), 600.0);
+        rows.insert("excluded/big.md".to_string(), 900.0);
+        assert_eq!(replace_attention(&c, "2026-08-13", &rows).unwrap(), 3);
+
+        let files: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(files, 1);
+        let n = attention_file_count(&c).unwrap();
+        assert_eq!(n, 1, "只有 kept.md 还在索引里");
+        assert!(n <= files, "覆盖率的分子永远不该大于分母");
     }
 }

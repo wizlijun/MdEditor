@@ -350,6 +350,10 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
                     // the path alone would make the no-index fallback rank
                     // *differently* from the indexed path it stands in for.
                     pinned: false,
+                    // 同理:没有索引就没有 `doc_attention` 表可查。0.0 是诚实
+                    // 的答案(`attention::boost` 对 0 严格返回 1.0,即不加成),
+                    // 而不是把上一次索引里的陈旧分钟数搬过来。
+                    attention_minutes: 0.0,
                 });
                 break;
             }
@@ -454,6 +458,11 @@ fn print_json(query: &str, route: searchidx::Route, took_ms: u128, hits: &[searc
                 // tier `score_of` actually ranks on (see its doc comment on
                 // why the two are independent, not double-counted).
                 "origin": h.origin.as_str(),
+                // 已衰减到今天的注意力分钟数(read + 1.5×edit,30 天半衰期)。
+                // 与 `provenance` 并列而不是嵌进去:`provenance` 是文档自己
+                // 声明的来源,这个是**你**在它身上花掉的时间 —— 一个来自
+                // 文件内容,一个来自你的行为,不该混成一个对象。
+                "attention_minutes": h.attention_minutes,
             })
         })
         .collect();

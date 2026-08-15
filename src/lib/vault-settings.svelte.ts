@@ -9,21 +9,73 @@ export const DEFAULT_SYNC_DIR = 'sync'
 /** 大文件阈值默认值(MB);镜像 Rust DEFAULT_LARGE_FILE_THRESHOLD_MB。 */
 export const DEFAULT_LARGE_FILE_THRESHOLD_MB = 10
 
-/** The per-tier ranking multipliers, all four fields present. Mirrors
+/** The ranking weights, all five fields present. Mirrors
  *  `searchidx::query::Weights` / `vault_settings::SearchWeights` — kept as a
  *  plain object here (not re-exporting a Rust type) the same way the backend
- *  DTO does, since this module otherwise has no dependency on `searchidx`. */
+ *  DTO does, since this module otherwise has no dependency on `searchidx`.
+ *
+ *  **Every field the backend knows about MUST be listed here**, including the
+ *  ones this app has no input box for. `vault_settings::merge` stores
+ *  `search_weights` as ONE WHOLESALE STRUCT (`out.search_weights = Some(w)`,
+ *  not a per-field merge), so a field missing from this mirror is a field
+ *  silently *deleted* from `settings.json` the next time the settings page
+ *  saves — which is exactly what happened to `attention` between the backend
+ *  landing it and this mirror not being updated (final review I-2). */
 export interface SearchWeights {
   human: number
   derived: number
   source: number
   unlabeled: number
+  /** `k` in the attention boost `1 + k·f(minutes)`. **No input box** — it is
+   *  round-tripped through this mirror so that saving the four tier weights
+   *  cannot wipe a value the user set by hand in `.notemd/settings.json`
+   *  (today the only way to set it, and `0` — "turn the feature off" — is the
+   *  value that matters most).
+   *
+   *  Its legal range is the INVERSE of the four tiers': `0.0..=2.0`
+   *  **inclusive at the bottom**, because `0` is the off switch, whereas the
+   *  tiers reject `0` (a `0` multiplier collapses a whole tier's scores).
+   *  See `vault_settings::validate_search_weights`'s `low_inclusive`
+   *  parameter and `searchidx::query::Weights::sanitized`. */
+  attention: number
 }
 
 /** The shipped constants — byte-identical to `searchidx::query::Weights`'s
- *  `Default` impl (design spec §3.1). The "restore defaults" button in the
- *  settings UI fills the draft with this, it does not call the backend. */
-export const DEFAULT_SEARCH_WEIGHTS: SearchWeights = { human: 1.25, derived: 1.0, source: 0.9, unlabeled: 0.3 }
+ *  `Default` impl (design spec §3.1; `attention` per the attention-weighted
+ *  retrieval spec §4.3). The "restore defaults" button in the settings UI
+ *  fills the draft with this, it does not call the backend. */
+export const DEFAULT_SEARCH_WEIGHTS: SearchWeights = {
+  human: 1.25,
+  derived: 1.0,
+  source: 0.9,
+  unlabeled: 0.3,
+  attention: 0.4,
+}
+
+/** Mirror of `searchidx::query::Weights::sanitized`'s `attention` gate:
+ *  finite and within `0.0..=2.0` (inclusive), otherwise the default. Applied
+ *  to whatever the backend hands back so the value this module round-trips is
+ *  the one that is actually in effect at query time.
+ *
+ *  Without it, a hand-edited out-of-range `attention` in `settings.json`
+ *  (which the read side already ignores in favour of the default) would be
+ *  echoed straight back in the next save payload, and
+ *  `validate_search_weights` would reject the WHOLE save — leaving the user
+ *  unable to change the four tier weights from a page that shows no
+ *  `attention` field at all to explain why. */
+function saneAttention(v: number | undefined | null): number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 2
+    ? v
+    : DEFAULT_SEARCH_WEIGHTS.attention
+}
+
+/** Backend DTO weights → the full five-field shape, defaults filling any
+ *  absent field. One function so load and save cannot drift apart on which
+ *  fields they carry — the drift between them is what I-2 was. */
+function mergedWeights(dto: Partial<SearchWeights> | null | undefined): SearchWeights {
+  const merged = { ...DEFAULT_SEARCH_WEIGHTS, ...(dto ?? {}) }
+  return { ...merged, attention: saneAttention(merged.attention) }
+}
 
 /** Raw settings DTO as returned by the backend (absent field = null). */
 export interface VaultSettingsDto {
@@ -97,7 +149,7 @@ export async function loadVaultSettings(): Promise<void> {
   vaultSettings.searchLargeFileThresholdMb =
     dto?.searchLargeFileThresholdMb ?? vaultSettings.largeFileThresholdMb
   vaultSettings.searchSourceGlobs = dto?.searchSourceGlobs ?? null
-  vaultSettings.searchWeights = { ...DEFAULT_SEARCH_WEIGHTS, ...(dto?.searchWeights ?? {}) }
+  vaultSettings.searchWeights = mergedWeights(dto?.searchWeights)
   vaultSettings.loaded = true
 }
 
@@ -192,5 +244,5 @@ export async function saveSearchWeights(weights: SearchWeights): Promise<void> {
   const merged = await invoke<VaultSettingsDto>('notemd_vault_settings_set', {
     searchWeights: weights,
   })
-  vaultSettings.searchWeights = { ...DEFAULT_SEARCH_WEIGHTS, ...(merged?.searchWeights ?? {}) }
+  vaultSettings.searchWeights = mergedWeights(merged?.searchWeights)
 }

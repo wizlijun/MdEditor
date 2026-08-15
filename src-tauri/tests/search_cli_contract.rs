@@ -39,6 +39,48 @@ fn isolate(cmd: &mut Command, home: &std::path::Path) {
     cmd.env("LOCALAPPDATA", home);
 }
 
+/// Guards the two tests below that seed an index *in this process* by
+/// temporarily overriding `HOME`/`LOCALAPPDATA` (so `searchidx`'s
+/// `dirs::data_local_dir()`-based path math lands on the same on-disk file
+/// the isolated CLI subprocess will later open) — the technique
+/// `cli_glob_stamp_matches_independently_computed_scan_options_source_globs`
+/// established first. `HOME` is process-wide state; `cargo test` runs the
+/// tests in one file on multiple threads by default, so two such overrides
+/// racing each other (one test restores the other's temp value mid-window)
+/// is exactly the shape of this suite's one known flake. This mutex doesn't
+/// remove that risk against tests in *other* files (a different process
+/// each, out of reach), but it does stop the two in *this* file from
+/// colliding with each other, which local runs showed reliably tripping the
+/// older test the moment a second HOME-mutating test appeared alongside it.
+static PROCESS_HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Runs `f` with `HOME` (and, on Windows, `LOCALAPPDATA`) temporarily set to
+/// `home` for *this* process, restoring the previous value before returning
+/// — under `PROCESS_HOME_ENV_LOCK` so no other test in this file observes
+/// the override.
+fn with_process_home<T>(home: &std::path::Path, f: impl FnOnce() -> T) -> T {
+    let _guard = PROCESS_HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let saved_home = std::env::var_os("HOME");
+    #[cfg(windows)]
+    let saved_appdata = std::env::var_os("LOCALAPPDATA");
+    std::env::set_var("HOME", home);
+    #[cfg(windows)]
+    std::env::set_var("LOCALAPPDATA", home);
+
+    let out = f();
+
+    match saved_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+    #[cfg(windows)]
+    match saved_appdata {
+        Some(a) => std::env::set_var("LOCALAPPDATA", a),
+        None => std::env::remove_var("LOCALAPPDATA"),
+    }
+    out
+}
+
 fn search(vault: &std::path::Path, args: &[&str]) -> std::process::Output {
     let home = temp_home();
     let mut cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
@@ -77,7 +119,7 @@ fn json_output_carries_the_full_contract() {
     assert!(v["route"].as_str().unwrap().starts_with("t1-"));
     assert!(v["took_ms"].is_number());
     let hit = &v["hits"][0];
-    for key in ["path", "line", "text", "score", "breadcrumb", "doc_date", "source_ref"] {
+    for key in ["path", "line", "text", "score", "breadcrumb", "doc_date", "source_ref", "attention_minutes"] {
         assert!(!hit[key].is_null(), "missing {key} in {hit}");
     }
     assert_eq!(hit["source_ref"].as_str().unwrap(), "2026-01-01-a.md#L1");
@@ -87,6 +129,70 @@ fn json_output_carries_the_full_contract() {
     // rule 6) — `ScanOptions` doesn't carry real source globs yet (C-T3),
     // so this CLI's default vault never matches rule 5′ either.
     assert_eq!(hit["origin"].as_str(), Some("unlabeled"), "no frontmatter, no glob match → rule 6′");
+}
+
+/// `json_output_carries_the_full_contract` only proves the key is present —
+/// a hardcoded `"attention_minutes": 0.0` in `print_json` would satisfy it
+/// too, since a freshly-scanned vault genuinely has no attention data (the
+/// CLI never calls `refresh_attention` itself; see `cli::search::run`'s
+/// doc comments — ingestion only happens from the GUI's `open_vault` /
+/// watcher). To catch that regression this test seeds a real, non-zero
+/// `doc_attention` row the same way the GUI would (via
+/// `searchidx::SearchIndex::refresh_attention`, reading a real
+/// `.notemd/analytics/` day file) and asserts the CLI's own `--json` output
+/// actually reflects it — not just that the field exists.
+///
+/// Uses the same "seed the index directly through the library, in-process,
+/// under a temporarily-overridden `HOME` matching what `isolate` sets on the
+/// child" technique as `cli_glob_stamp_matches_independently_computed_scan_options_source_globs`
+/// above, for the same reason: `SearchIndex::open`'s db path is a pure
+/// function of `HOME`/`LOCALAPPDATA`, so this is the only way to land this
+/// process and the CLI subprocess on the exact same on-disk index.
+#[test]
+fn attention_minutes_reflects_real_ingested_data_not_a_hardcoded_stand_in() {
+    let v = vault(&[("a.md", "brownfox\n")]);
+    let home = temp_home();
+
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+    );
+    let analytics_dir = v.path().join(".notemd/analytics");
+    std::fs::create_dir_all(&analytics_dir).unwrap();
+    // 10 read-minutes, no edits, dated today so the 30-day decay factor is
+    // exactly 1.0 — the expected `attention_minutes` is then exactly 10.0,
+    // no date arithmetic needed in the assertion below.
+    std::fs::write(
+        analytics_dir.join(format!("{today}.DEV-1.json")),
+        format!(
+            r#"{{"deviceId":"DEV-1","deviceName":"test","docs":{{
+                 "rel:a.md":{{"{today}":{{"read_ms":600000,"edit_ms":0,"open_count":1,
+                   "edit_sessions":0,"net_chars":0,"mark_ops":0,
+                   "first_seen_at":0,"last_active_at":0}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+
+    with_process_home(&home, || {
+        let opts = mdeditor_lib::search::options::for_vault(v.path());
+        let stamp = opts.source_globs.stamp();
+        let mut idx = searchidx::SearchIndex::open(v.path(), &stamp).expect("seed open");
+        idx.rebuild(&opts).expect("seed build");
+        idx.refresh_attention(&[]).expect("seed attention");
+    });
+
+    let mut cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    cmd.arg("--cli").arg("search").arg("brownfox").arg("--json").arg("--no-sweep").arg("--vault").arg(v.path());
+    isolate(&mut cmd, &home);
+    let out = cmd.output().expect("spawn");
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let j: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid json");
+    let minutes = j["hits"][0]["attention_minutes"].as_f64().expect("attention_minutes must be a number");
+    assert!(
+        (minutes - 10.0).abs() < 1e-6,
+        "seeded 600_000 read_ms (10 minutes) at zero age (decay ×1.0) must come through as 10.0, got {minutes} in {j}"
+    );
 }
 
 /// 路径永远是 vault 相对 + `/` 分隔 —— 两平台给 agent 的锚必须一模一样。
@@ -539,32 +645,16 @@ fn cli_glob_stamp_matches_independently_computed_scan_options_source_globs() {
     // `isolate`'s doc comment above) and the vault path, so setting the same
     // env here that `isolate` will set on the child process below makes
     // `SearchIndex::open` in THIS process land on the exact db file the CLI
-    // subprocess will later open.
-    let saved_home = std::env::var_os("HOME");
-    #[cfg(windows)]
-    let saved_appdata = std::env::var_os("LOCALAPPDATA");
-    std::env::set_var("HOME", &home);
-    #[cfg(windows)]
-    std::env::set_var("LOCALAPPDATA", &home);
-
-    let opts = mdeditor_lib::search::options::for_vault(v.path());
-    let expected_stamp = opts.source_globs.stamp();
-    {
+    // subprocess will later open. Goes through `with_process_home` (rather
+    // than open-coding save/set/restore here) so this override and
+    // `attention_minutes_reflects_real_ingested_data_not_a_hardcoded_stand_in`'s
+    // never race each other for `HOME` — see that helper's doc comment.
+    with_process_home(&home, || {
+        let opts = mdeditor_lib::search::options::for_vault(v.path());
+        let expected_stamp = opts.source_globs.stamp();
         let mut idx = searchidx::SearchIndex::open(v.path(), &expected_stamp).expect("seed open");
         idx.rebuild(&opts).expect("seed build");
-    }
-
-    // Restore this process's own env immediately — only the child process
-    // below should see the scratch `HOME`.
-    match saved_home {
-        Some(h) => std::env::set_var("HOME", h),
-        None => std::env::remove_var("HOME"),
-    }
-    #[cfg(windows)]
-    match saved_appdata {
-        Some(a) => std::env::set_var("LOCALAPPDATA", a),
-        None => std::env::remove_var("LOCALAPPDATA"),
-    }
+    });
 
     // The phantom-row probe: delete the indexed file from disk *after*
     // seeding, so only an unwarranted rebuild can make the hit disappear.

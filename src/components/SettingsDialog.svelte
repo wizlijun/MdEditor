@@ -426,7 +426,13 @@
 
   // ---- Per-tier ranking weights (task C-T7/C-T11, design spec §3.1/§7.3) ----
 
-  type WeightField = keyof SearchWeights
+  // The tier fields this page has inputs for. `SearchWeights` also carries
+  // `attention` (the attention-boost `k`), which has NO input here — it is
+  // only round-tripped, see `onResetWeightsDraft` and `vault-settings`'s
+  // `SearchWeights` doc comment. `Exclude` rather than `keyof` so adding a
+  // sixth backend field can never silently start being validated/labelled as
+  // if it were a tier.
+  type WeightField = Exclude<keyof SearchWeights, 'attention'>
   const WEIGHT_FIELDS: WeightField[] = ['human', 'derived', 'source', 'unlabeled']
   function weightFieldLabel(f: WeightField): string {
     if (f === 'human') return t('search.group.human')
@@ -460,8 +466,15 @@
   // Fills the draft only — does NOT save. Consistent with every other
   // draft-then-Save control on this tab; the user still has to click Save
   // for "restore defaults" to actually take effect.
+  // `attention` is deliberately carried over from the current draft instead
+  // of being reset: this button restores the defaults of the four tier
+  // weights it sits under, and `attention` has no control on this page at
+  // all. Resetting a value the user can only have set by hand — and whose
+  // interesting value is `0`, "turn attention weighting off" — from a button
+  // that never mentions it would be the same silent wipe as final review I-2,
+  // just via a different path.
   function onResetWeightsDraft() {
-    weightsDraft = { ...DEFAULT_SEARCH_WEIGHTS }
+    weightsDraft = { ...DEFAULT_SEARCH_WEIGHTS, attention: weightsDraft.attention }
     weightsError = null
   }
   async function onSaveWeights() {
@@ -1455,6 +1468,20 @@
               </div>
               <p class="desc" style="margin-top: 8px;">{t('search.index.tiersHint')}</p>
               <p class="desc">{t('search.index.tiersUnlabeledHint', { label: t('search.group.unlabeled') })}</p>
+              <!-- Coverage row: ingestion "just not having run" has no visible
+                   symptom anywhere else — search silently degrades to
+                   unweighted results. This is the only discovery path, so it
+                   must stay even though it's plain. `attentionAsOf === null`
+                   means ingestion never ran on this index (row hidden,
+                   nothing to report yet); once it has a value, the row shows
+                   even when `attentionFiles` is 0 — that combination is the
+                   most important diagnostic signal, not a case to hide. -->
+              {#if indexStatus.stats.attentionAsOf}
+                <div class="row">
+                  <span class="lbl">{t('search.index.attentionLabel')}</span>
+                  <span>{indexStatus.stats.attentionFiles} / {indexStatus.stats.files}</span>
+                </div>
+              {/if}
             {:else}
               <p class="desc">{indexStatus.loading ? '…' : '—'}</p>
             {/if}

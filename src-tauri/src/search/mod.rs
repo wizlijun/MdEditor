@@ -3,6 +3,7 @@
 //! `searchidx`'s, so the GUI and the CLI cannot answer the same query
 //! differently.
 
+mod attention_links;
 pub mod options;
 pub mod watch;
 
@@ -319,6 +320,40 @@ fn skipped_write_if_current(
     sweep_result.ok().map(|s| s.files_skipped_large)
 }
 
+/// 把 `idx` 装进共享的 `IndexHandle` —— **代际检查与写入绑死在同一个函数
+/// 里**,中间没有任何缝隙可以插进耗时操作。返回 `false` = 本线程已被更新一代
+/// `open_vault` 取代,索引在此处被丢弃(`idx` 按值传入,函数返回即析构),
+/// 调用方必须立刻放弃、且不写任何 `OpenPhase`。
+///
+/// 存在的理由是这个 bug 已经在这份代码里出现过两次:一次是 `SkippedState`
+/// 的写入落在了代际检查的错误一侧(review round 1),一次是 T9 在
+/// 「检查」与「写入」之间插进了注意力摄取 —— 一段读上千个小文件、用户完全
+/// 来得及切走 vault 的耗时操作 —— 却沿用了摄取**之前**那次快照。后果不是
+/// 索引内容被污染(`idx` 是线程本地的),而是整个索引对象被装回一个用户已经
+/// 离开的 vault:搜索结果与 `HitDto::abs_path` 全部指向旧 vault。
+/// `watch::WatchState` 的文档注释把这条不变式写成了「任何 `IndexHandle` 的
+/// 写入者都必须在写之前那一刻检查 `is_current`」,这个函数是它的执行者。
+///
+/// `is_current_now` 是**闭包**而不是 `bool`:传值就意味着调用方可以传一个
+/// 陈旧的快照进来 —— 正是本 bug 的形状。传闭包则求值时刻由本函数决定,而它
+/// 在**取到锁之后**才求值,把窗口收窄到锁的粒度内:任何更新一代的
+/// `open_vault` 都是先(在调用方线程上、同步地)`reserve_generation` 再去清
+/// `IndexHandle`,所以「我们持锁时读到的代际」已经涵盖了每一个能抢在前面的
+/// 新 open;而在我们之后才预定代际的那个 open,会在我们放锁后照常把这里清成
+/// `None` 再装自己的,终局仍然正确。
+fn install_if_current(
+    handle: &IndexHandle,
+    idx: SearchIndex,
+    is_current_now: impl FnOnce() -> bool,
+) -> bool {
+    let mut guard = lock(handle);
+    if !is_current_now() {
+        return false;
+    }
+    *guard = Some(idx);
+    true
+}
+
 /// Open (building if empty) the index for `vault_root` and start watching.
 /// Failures are logged and swallowed: a broken index must never keep the vault
 /// from opening.
@@ -500,7 +535,36 @@ pub fn open_vault(app: &AppHandle, vault_root: &Path) {
                     outcome.phase = None;
                     return;
                 }
-                *lock(&idx_handle) = Some(idx);
+                // 索引建好后立刻摄取一次注意力数据:它是排序的输入,晚一步就
+                // 意味着用户开 vault 后的第一次搜索拿的是没有注意力的排序。
+                // 放在上面那道门之后 —— 被取代的线程不必白读一遍 analytics。
+                //
+                // ⚠️ 这是一段**耗时**操作(读 `.notemd/analytics/` 下最多一年
+                // 的日文件),所以上面那次 `current` 快照到此为止就作废了:
+                // 用户完全可能在这期间切到另一个 vault。装 `IndexHandle` 的
+                // 代际检查因此**不能**沿用它,见下面 `install_if_current`。
+                // 任何以后想在这里插入耗时操作的人:同一条纪律。
+                let links = attention_links::links_for_vault(&root);
+                match idx.refresh_attention(&links) {
+                    Ok(n) => crate::log_cat!("search", "info", "attention ingest: {n} files"),
+                    // 摄取失败只降级排序(加成退化成 ×1.0),绝不让整个 open
+                    // 失败:没有注意力数据的索引仍然完全可用,而 vault 里根本
+                    // 没有 analytics 是完全正常的状态(全新 vault、从没开过
+                    // Reading Insights)。把它升级成 open 失败等于让一个可选的
+                    // 排序输入否决掉整个搜索功能。
+                    //
+                    // 级别与 `watch::drain_attention` 那次摄取失败保持一致
+                    // (两处都是 `warn`,最终评审 M-2):同一件事记成两个级别,
+                    // 按级别过滤日志排障时必然漏掉其中一半。
+                    Err(e) => crate::log_cat!("search", "warn", "attention ingest failed: {e}"),
+                }
+                // 代际在**写入的那一刻**重新读一次,而不是复用摄取之前的快照。
+                if !install_if_current(&idx_handle, idx, || watch::is_current(&app, my_gen)) {
+                    crate::log_cat!("search", "info", "open_vault superseded, discarding");
+                    // 同上:被取代的线程不写任何 phase。
+                    outcome.phase = None;
+                    return;
+                }
                 watch::restart(&app, &root, my_gen);
                 outcome.phase = Some(OpenPhase::Ready);
                 // Settled *before* the event, not left to scope end: the
@@ -663,6 +727,18 @@ pub struct SearchStatsDto {
     /// strings and MUST NOT be translated by the frontend (same convention
     /// as the search panel's group headers, `src/lib/search/grouping.ts`).
     pub type_counts: std::collections::BTreeMap<String, i64>,
+    /// 有注意力数据、**且仍在索引里**的文件数
+    /// (`searchidx::IndexStats::attention_files` 原样)。与 `files` 一起构成
+    /// 设置页的覆盖率行 —— 「摄取根本没跑起来」在别处没有任何可见症状,这是
+    /// 唯一的发现途径。口径是交集(分子永远 ≤ 分母),理由见
+    /// `searchidx::store::attention_file_count`。
+    pub attention_files: i64,
+    /// 上一轮摄取用的 `as_of` 日(`searchidx::IndexStats::attention_as_of`
+    /// 原样)。**必须**保持三态可分:`null` = 摄取从未在这个索引上跑过;
+    /// 有值且 `attentionFiles == 0` = 跑过但零结果;有值且 > 0 = 正常。
+    /// 前端要把前两种说成不同的话,所以这里不许在 DTO 层压成一个布尔或
+    /// 空串 —— 一压就再也分不开了。
+    pub attention_as_of: Option<String>,
 }
 
 /// Shown to the user when no vault is open yet, or `open_vault`'s background
@@ -843,6 +919,8 @@ fn stats_to_dto(s: IndexStats, skipped_large: Vec<SkippedDto>) -> SearchStatsDto
         skipped_large,
         origin_counts: origin_counts_dto(s.origin_counts),
         type_counts: s.type_counts,
+        attention_files: s.attention_files,
+        attention_as_of: s.attention_as_of,
     }
 }
 
@@ -1261,6 +1339,9 @@ mod command_tests {
             origin: searchidx::Origin::Derived,
             concept_type: Some("Book Summary".to_string()),
             pinned: true,
+            // fixture 值:与其它字段一样取一个可辨认的非默认数,这样
+            // 「DTO 把它压成 0」之类的错误不会伪装成正常。
+            attention_minutes: 7.5,
         }
     }
 
@@ -1309,6 +1390,8 @@ mod command_tests {
             tokenizer_id: "jieba/1".to_string(),
             origin_counts: searchidx::OriginCounts { human: 1, derived: 3, source: 2, unlabeled: 4 },
             type_counts,
+            attention_files: 2,
+            attention_as_of: Some("2026-08-12".to_string()),
         };
         let skipped = vec![SkippedDto { path: "big.md".to_string(), size_bytes: 999 }];
         let dto = stats_to_dto(s, skipped);
@@ -1326,6 +1409,38 @@ mod command_tests {
         assert_eq!(dto.origin_counts.unlabeled, 4);
         assert_eq!(dto.type_counts.get("Book Summary").copied(), Some(2));
         assert_eq!(dto.type_counts.get("Answer").copied(), Some(1));
+        assert_eq!(dto.attention_files, 2);
+        assert_eq!(dto.attention_as_of.as_deref(), Some("2026-08-12"));
+    }
+
+    /// `attention_as_of` 的三态在 DTO 层不许被压平:`None`(摄取从未跑过)
+    /// 和 `Some(day)` + `attention_files == 0`(跑过、零结果)是设置页要分开
+    /// 说的两件事。这条钉住 `None` 原样过桥,不被换成空串、也不被 `0` 文件数
+    /// 顺手抹成同一种状态。
+    #[test]
+    fn a_never_ingested_index_keeps_a_null_as_of_distinct_from_a_zero_result_run() {
+        let base = |as_of: Option<String>| IndexStats {
+            files: 3,
+            blocks: 40,
+            db_bytes: 1,
+            built_at: None,
+            tokenizer_id: "jieba/1".to_string(),
+            origin_counts: searchidx::OriginCounts::default(),
+            type_counts: std::collections::BTreeMap::new(),
+            attention_files: 0,
+            attention_as_of: as_of,
+        };
+        let never = stats_to_dto(base(None), Vec::new());
+        let zero_result = stats_to_dto(base(Some("2026-08-12".to_string())), Vec::new());
+        assert_eq!(never.attention_files, 0);
+        assert_eq!(zero_result.attention_files, 0);
+        assert_eq!(never.attention_as_of, None);
+        assert_eq!(zero_result.attention_as_of.as_deref(), Some("2026-08-12"));
+        // 序列化后仍然可分:`null` 与日期字符串,不是同一个值。
+        let a = serde_json::to_value(&never).unwrap();
+        let b = serde_json::to_value(&zero_result).unwrap();
+        assert!(a.get("attentionAsOf").unwrap().is_null(), "{a}");
+        assert_eq!(b.get("attentionAsOf").unwrap().as_str(), Some("2026-08-12"));
     }
 
     /// `SkippedState` is a fresh, empty `Vec` by default — a rebuild that has
@@ -1390,6 +1505,67 @@ mod command_tests {
     fn a_failed_sweep_writes_nothing_even_when_current() {
         assert_eq!(skipped_write_if_current(true, Err("boom".to_string())), None);
         assert_eq!(skipped_write_if_current(false, Err("boom".to_string())), None);
+    }
+
+    /// 一个只在测试里用的索引:db 落在 `tempdir` 里(`open_at`,不是 `open`
+    /// —— 后者会写进真实的 app-data 目录)。
+    fn scratch_index(dir: &std::path::Path) -> SearchIndex {
+        SearchIndex::open_at(dir, &dir.join("index.db"), "").expect("open scratch index")
+    }
+
+    /// T9 review 抓到的 Critical:注意力摄取被插在「检查代际」与「写
+    /// `IndexHandle`」之间,而写入沿用了摄取**之前**的那次快照 —— 用户在慢
+    /// 摄取期间切走 vault,旧线程照样把自己的索引装了回去。这条钉住修法的
+    /// 核心主张:写入那一刻代际不成立就必须什么都不写。
+    #[test]
+    fn a_generation_that_went_stale_during_the_slow_work_installs_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let handle: IndexHandle = Arc::new(Mutex::new(None));
+        // `false` = 摄取期间用户切了 vault(更新一代 open 已预定代际)。
+        assert!(!install_if_current(&handle, scratch_index(d.path()), || false));
+        assert!(lock(&handle).is_none(), "被取代的线程把索引装了回去");
+    }
+
+    /// 同一个门的另一半:代际仍然成立时必须**真的**装进去 —— 否则「谁也装不
+    /// 进去」会变成一个绿着的测试套件配上一个永远 `NOT_READY` 的搜索面板。
+    #[test]
+    fn a_still_current_generation_installs_the_index() {
+        let d = tempfile::tempdir().unwrap();
+        let handle: IndexHandle = Arc::new(Mutex::new(None));
+        assert!(install_if_current(&handle, scratch_index(d.path()), || true));
+        let guard = lock(&handle);
+        let idx = guard.as_ref().expect("索引没装进 IndexHandle");
+        assert_eq!(
+            idx.vault_root(),
+            Path::new(&searchidx::paths::normalized_vault_root(d.path())),
+            "装进去的不是这个 vault 的索引"
+        );
+    }
+
+    /// 陈旧的**快照**没法伪装成新鲜的检查:`install_if_current` 收的是闭包,
+    /// 求值时刻由它自己决定,而且必须发生在拿到锁**之后**。这条用一个记录调用
+    /// 顺序的闭包钉住「先锁、后判、再写」,因为一旦有人把签名改回 `bool`,
+    /// 调用方就又能把耗时操作之前的快照传进来了 —— 那正是本 bug 的形状。
+    #[test]
+    fn the_generation_is_read_after_the_lock_is_taken_not_before() {
+        let d = tempfile::tempdir().unwrap();
+        let handle: IndexHandle = Arc::new(Mutex::new(None));
+        let checked = Arc::new(AtomicBool::new(false));
+        let seen_locked = Arc::new(AtomicBool::new(false));
+        {
+            let checked = checked.clone();
+            let seen_locked = seen_locked.clone();
+            let probe_handle = handle.clone();
+            let installed = install_if_current(&handle, scratch_index(d.path()), move || {
+                checked.store(true, Ordering::SeqCst);
+                // 闭包跑的时候锁必须已经在 `install_if_current` 手里。
+                seen_locked.store(probe_handle.try_lock().is_err(), Ordering::SeqCst);
+                true
+            });
+            assert!(installed);
+        }
+        assert!(checked.load(Ordering::SeqCst), "代际检查压根没跑");
+        assert!(seen_locked.load(Ordering::SeqCst), "检查发生在取锁之前,窗口没收窄");
     }
 
     #[test]
@@ -2147,11 +2323,24 @@ mod command_tests {
                 tokenizer_id: "jieba/1".to_string(),
                 origin_counts: searchidx::OriginCounts { human: 1, derived: 2, source: 3, unlabeled: 4 },
                 type_counts,
+                attention_files: 5,
+                attention_as_of: Some("2026-08-13".to_string()),
             },
             vec![SkippedDto { path: "big.md".to_string(), size_bytes: 42 }],
         );
         let v = serde_json::to_value(&dto).unwrap();
-        for key in ["files", "blocks", "dbBytes", "builtAt", "tokenizerId", "skippedLarge", "originCounts", "typeCounts"] {
+        for key in [
+            "files",
+            "blocks",
+            "dbBytes",
+            "builtAt",
+            "tokenizerId",
+            "skippedLarge",
+            "originCounts",
+            "typeCounts",
+            "attentionFiles",
+            "attentionAsOf",
+        ] {
             assert!(v.get(key).is_some(), "missing key {key} in {v}");
         }
         let skipped = v.get("skippedLarge").unwrap().as_array().unwrap();

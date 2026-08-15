@@ -97,6 +97,22 @@ export interface SearchStats {
    *  files are not itemized here; the settings tab computes that count as
    *  `originCounts.derived - sum(Object.values(typeCounts))`. */
   typeCounts: Record<string, number>
+  /** Files that have attention data AND are still in the index (task 12,
+   *  attention-weighted retrieval) — the intersection, not `doc_attention`'s
+   *  row count, so this is always <= `files` and the settings page's
+   *  "N / total" row can never render something like "60 / 1" (see
+   *  `searchidx::store::attention_file_count`). Read together with
+   *  `attentionAsOf`, not on its own — see that field's doc comment for why. */
+  attentionFiles: number
+  /** The `as_of` day the attention table was last ingested to, or `null` if
+   *  ingestion has never run on this index. This is deliberately a THIRD
+   *  state, not folded into `attentionFiles === 0`: ingestion silently not
+   *  running has no other visible symptom anywhere — search just quietly
+   *  degrades to unweighted results — so the settings page is the only place
+   *  that can tell "never ran" apart from "ran and found zero rows" (the
+   *  more urgent diagnostic case). Mirrors `attention_as_of` on
+   *  `SearchStatsDto` in `src-tauri/src/search/mod.rs` field for field. */
+  attentionAsOf: string | null
 }
 
 // Wire shape for `notemd_search_progress` / the `search://progress` event —

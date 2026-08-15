@@ -152,7 +152,7 @@ Output: `src-tauri/target/<arch>-apple-darwin/release/bundle/macos/note.md.app`
 
 ```bash
 notemd search "query" --vault ~/Vault      # full-text search, prints path:line:text
-notemd search "query" --json               # hits with source_ref, origin, provenance
+notemd search "query" --json               # hits with source_ref, origin, provenance, attention_minutes (desktop-recorded)
 notemd search "query" --all                # every hit (default cap: 20; --limit N adjusts)
 notemd share draft.md                      # publish a share link, prints URL
 notemd share draft.md --json               # structured output

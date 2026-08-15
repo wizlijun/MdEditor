@@ -515,6 +515,7 @@ export const de: Record<keyof Messages, string> = {
   // Typen darunter verwenden den rohen `concept_type`-String und werden
   // nicht übersetzt (gleiche Konvention wie `search.group.*` oben).
   'search.index.tiersHeading': 'Herkunftsebenen',
+  'search.index.attentionLabel': 'Dateien mit Aufmerksamkeitsdaten',
   'search.index.tiersDerivedLabel': 'KI-generiert',
   'search.index.tiersHint': 'Die Ebenen entstehen beim Indexieren — aus dem Frontmatter jeder Datei und aus den Mustern für rohes Quellmaterial oben; nichts davon wird in deine Notizen zurückgeschrieben. Als „Rohes Quellmaterial“ zählen Dateien, die auf eines deiner Muster passen, sowie Dateien, deren Frontmatter selbst einen Rohmaterial-Typ angibt (etwa `Book`) — wirkt diese Zahl ungewöhnlich hoch, prüfe zuerst die Muster. Eine Datei ohne Frontmatter und ohne passendes Muster ist „Nicht gekennzeichnet“: Niemand hat bisher gesagt, wer sie geschrieben hat. Die geänderte Datei wird von selbst neu eingeordnet — der gesamte Index muss dafür nicht angefasst werden.',
   'search.index.tiersUnlabeledHint': 'Klicke oben auf „{label}“, um alle Dateien aufzulisten, die durch das Gewicht dieser Ebene gerade herabgestuft werden. Beliebiges Frontmatter holt eine Datei wieder heraus — ein `type:`-Feld genügt; ist sie wirklich rohes Quellmaterial, nimm sie stattdessen in ein Muster oben auf.',

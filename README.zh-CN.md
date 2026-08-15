@@ -134,7 +134,7 @@ pnpm tauri build --target x86_64-apple-darwin
 
 ```bash
 notemd search "关键词" --vault ~/Vault      # 全文检索，输出 path:line:text
-notemd search "关键词" --json               # 带 source_ref、origin、来源信息
+notemd search "关键词" --json               # 带 source_ref、origin、来源信息、attention_minutes（由桌面端记录）
 notemd search "关键词" --all                # 返回全部命中（默认上限 20 条，--limit N 可调）
 notemd share draft.md                      # 发布分享链接，输出 URL
 notemd share draft.md --json               # 结构化输出

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
-use searchidx::query::{Conventions, Weights};
+use searchidx::query::{Conventions, Hit, Weights};
 use searchidx::{Limits, ScanOptions, SearchIndex};
 
 fn corpus() -> PathBuf {
@@ -87,13 +87,26 @@ fn open_temp_with_globs(patterns: &[String]) -> (tempfile::TempDir, SearchIndex)
 /// (既有 62 条,一字未改)仍跑在默认的空模式索引上。按模式集分组、每组只建一
 /// 次索引,不是每条用例建一次。
 ///
-/// **排序权重固定为 `Weights::default()`,而且显式传。** 这份回归集是排序的唯一
-/// 裁判;它若跟着用户配置(`search::options::weights_for_vault`)走就等于没有
-/// 裁判 —— 一个把四档权重全填成 ×1.0 的 vault 会让每一条顺序断言变成同义反复。
-/// 显式走 `search_with_weights`,而不是靠 `SearchIndex::search` 内部恰好也用
-/// 默认值:后者是实现细节,前者是这份 fixture 的前提条件。权重**非**默认时排序
-/// 会跟着变,由下面独立的 `non_default_weights_reorder_the_same_query` 钉住 ——
-/// 那条主张属于「权重真的在起作用」,不属于这份以默认权重为基准的回归集。
+/// **排序权重固定为 `Weights::default()`,而且显式传。** 这份回归集是**档位与
+/// 过滤器类**排序主张的唯一裁判;它若跟着用户配置
+/// (`search::options::weights_for_vault`)走就等于没有裁判 —— 一个把四档权重全
+/// 填成 ×1.0 的 vault 会让每一条顺序断言变成同义反复。显式走
+/// `search_with_weights`,而不是靠 `SearchIndex::search` 内部恰好也用默认值:后者
+/// 是实现细节,前者是这份 fixture 的前提条件。权重**非**默认时排序会跟着变,由
+/// 下面独立的 `non_default_weights_reorder_the_same_query` 钉住 —— 那条主张属于
+/// 「权重真的在起作用」,不属于这份以默认权重为基准的回归集。
+///
+/// **它管不到 bm25。** 相关度本身有没有抵达 `score_of`,由 `query.rs` 的
+/// `the_bm25_rank_column_actually_reaches_the_score` 单独钉住 —— 实测把 `rank` 的
+/// 列索引读错,这里 69 条一条不红,只有那条单测会死(task 13 复现)。所以别把
+/// 「回归集绿了」读成「排序没问题」。
+///
+/// 盲区的成因写在这里,免得下一个人白试一遍:60 条召回类断言的候选窗口
+/// (`ORDER BY rank ASC LIMIT (limit*8).max(64)`)在 48 文件语料下从不截断,打分
+/// 怎么错都不改变「有没有被召回进前 20」;9 条顺序断言的语料则是**刻意**构造成
+/// bm25 打平的 —— 要证明档位乘数起作用,先消掉相关度这个混淆因子是前提。于是
+/// 「补一条能抓住 bm25 的顺序用例」按定义就是一条 bm25 与档位乘数打架的用例,
+/// 它同时就不再是一条干净的档位用例。同一条 fixture 记录说不了两件互斥的事。
 #[test]
 fn retrievability_regression_set_is_fully_recalled_and_correctly_ordered() {
     let cases: Vec<serde_json::Value> = serde_json::from_str(
@@ -962,4 +975,253 @@ fn reading_an_fts_column_value_yields_null_rather_than_an_error() {
         .query_row("SELECT tok_text FROM blocks_fts WHERE blocks_fts MATCH '\"alpha\"' LIMIT 1", [], |r| r.get(0))
         .unwrap();
     assert_eq!(got, None, "contentless 表不该还留着列值");
+}
+
+/// 摄取端到端:vault 里放一份 analytics 文件,refresh 后表里就有对应的行。
+/// 用真实临时目录而不是内存库 —— 这条要验的正是「读盘 → 折算 → 落表」这条链
+/// 有没有接错,而不是三段各自的算术(那些在 attention.rs 的单测里)。
+#[test]
+fn refresh_attention_ingests_analytics_into_the_index() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "# 标题\n正文\n").unwrap();
+    let dir = vault.path().join(".notemd/analytics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+    );
+    std::fs::write(
+        dir.join(format!("{today}.DEV-1.json")),
+        format!(
+            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:a.md":{{"{today}":{{"read_ms":600000,"edit_ms":0,"open_count":1,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+
+    // `open_temp` 返回 `(TempDir, SearchIndex)`,那个 TempDir 装的是 index.db ——
+    // 必须绑住,提前 drop 会把库删掉。
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    assert_eq!(idx.refresh_attention(&[]).unwrap(), 1);
+    let stats = idx.stats().unwrap();
+    assert_eq!(stats.attention_files, 1);
+
+    // 重复调用是幂等的 —— 全量重算的核心保证,也是「不做增量」的理由。
+    assert_eq!(idx.refresh_attention(&[]).unwrap(), 1);
+    assert_eq!(idx.stats().unwrap().attention_files, 1);
+}
+
+/// 没有 analytics 目录 = 从没开过洞察 = 空表,不是错误 —— 但「跑过、零结果」
+/// 与「从没跑过」必须是两个可区分的状态,不能都读成 `None`。
+#[test]
+fn refresh_attention_on_a_vault_without_insights_is_a_clean_no_op() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "正文\n").unwrap();
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    // 摄取真的从没跑过:`attention_as_of` 必须是 `None`。这一侧是区分力的
+    // 前半段 —— 少了它,下面「跑过之后变成 Some」的断言测不出任何东西,因为
+    // 一个恒等于 `Some` 的错误实现也会让它通过。
+    assert_eq!(idx.stats().unwrap().attention_as_of, None, "调用前必须是 None");
+
+    assert_eq!(idx.refresh_attention(&[]).unwrap(), 0);
+    let stats = idx.stats().unwrap();
+    assert_eq!(stats.attention_files, 0, "没有 analytics 目录,零结果");
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+    );
+    assert_eq!(
+        stats.attention_as_of,
+        Some(today),
+        "跑过一轮之后即使零结果,attention_as_of 也必须变成 Some(今天) —— \
+         这是与「从没跑过」区分的唯一途径"
+    );
+}
+
+/// 80 篇噪声 + 1 篇 bm25 严格垫底、但你在上面花了 10 小时的 `target.md`,外加
+/// 对应的 analytics 日文件。两条测试共用:一条验「默认 k 下它被捞回来」,一条
+/// 验「k=0 下整条链路与没有注意力数据时逐条相同」。抽成函数而不是抄两份 ——
+/// 抄件一旦漂移,两条测试就在各自不同的语料上各说各话,而它们的意义恰恰来自
+/// 「同一份 fixture,只有 k(和 `target_frontmatter`)不同」。
+///
+/// `target_frontmatter` 决定目标文档的 origin 档位,而这**不是可有可无的调味
+/// 料**:噪声一律无 frontmatter(rule 6′ → `Unlabeled`,×0.3)。传 `""` 时目标
+/// 也是 `Unlabeled`,与噪声同档,于是它即使被保底臂捞进评分也仍排在噪声之后、
+/// 被 `truncate(limit)` 切掉 —— 只有注意力加成能把它顶上来。传
+/// `"---\ntype: Note\n---\n"` 时目标是 `Human`(×1.25),这时**即使 k=0**、
+/// 加成恒为 ×1.0,只要保底臂把它捞进评分它就会挤掉窗口内的噪声。后者正是最终
+/// 评审 I-1 的失败场景,`k_zero_keeps_the_whole_pipeline_identical_to_having_
+/// no_attention_data` 用的就是它:换成 `""` 那条测试会在 bug 存在时照样绿。
+fn vault_with_one_high_attention_document(target_frontmatter: &str) -> tempfile::TempDir {
+    let vault = tempfile::tempdir().unwrap();
+    // 噪声:80 篇短文,每篇都命中查询词,足以填满 (limit*8).max(64) 的窗口
+    // (limit=10 → 80 条,而每篇噪声还各自贡献一条 File 级 rollup,所以窗口
+    // 其实被噪声塞得满满当当)。
+    for i in 0..80 {
+        std::fs::write(vault.path().join(format!("noise{i}.md")), "银河 的 观测 记录\n").unwrap();
+    }
+    // 目标:同样只命中一次,但比噪声更长 —— bm25 的长度归一化让它严格垫底,
+    // 排在候选窗口之外。
+    std::fs::write(
+        vault.path().join("target.md"),
+        format!("{target_frontmatter}银河 的 观测 记录 补记\n"),
+    )
+    .unwrap();
+
+    let dir = vault.path().join(".notemd/analytics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+    );
+    std::fs::write(
+        dir.join(format!("{today}.DEV-1.json")),
+        format!(
+            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:target.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+    vault
+}
+
+/// 规格 §5:`fts_search` 先按 bm25 `ORDER BY rank ASC LIMIT (limit*8).max(64)`
+/// 取候选、**再**跑 `score_of`,所以纯排序加权救不了排在窗口外的文档 —— 它在
+/// 打分之前就被砍掉了,再大的系数也没机会作用在它身上。第二条臂给这类文档一
+/// 个进入评分阶段的名额。这里构造:80 篇噪声把 `limit=10` 的 80 条候选窗口填
+/// 满,外加一份 bm25 严格垫底、但你在上面花了 10 小时的文档。
+///
+/// **fixture 与简报原稿不同,差异是量算出来的,不是口味。** 简报原稿用的是
+/// 「500 行填充 + 查询词只出现一次」的长文:实测它的 `score_of` 结果比噪声低
+/// **约 45 倍**(噪声 7.41e-7 vs 长文 1.65e-8),而注意力加成的**天花板**是
+/// `1 + k`,默认 k=0.4 即 ×1.4(`attention::boost`,`frac` 已封顶 1.0)。所以
+/// 那份 fixture 在**任何**候选阶段的改动下都进不了前 10 —— 它能被捞进评分,
+/// 但评分之后仍排在 80 篇噪声之后,被最终的 `truncate(limit)` 切掉。要让它可
+/// 见只能给注意力臂在**输出**里留保留席位,而规格 §5 明确拒绝了这条路(「主
+/// 排序仍然是相关度」)。所以这里把 bm25 差距收窄到加成天花板之内(实测比值
+/// ≈1.10,余量 27%),让这条测试断言它**能**断言的那件事:窗口外 = 不可见,
+/// 有注意力 = 进候选 = 可见。差距本身与本测试无关 —— 排序算术归
+/// `query.rs` 的 `attention_alone_moves_the_score` 等单测管。
+#[test]
+fn a_high_attention_document_is_recalled_past_the_bm25_window() {
+    // 目标与噪声同档(都无 frontmatter → `Unlabeled`):这条测试要证明的是
+    // **注意力**把它顶了上来,所以不能让 origin 差异替它干活。
+    let vault = vault_with_one_high_attention_document("");
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    // 摄取之前:没有注意力数据,它进不了候选。
+    let before = idx.search("银河", 10).unwrap().0;
+    assert!(
+        !before.iter().any(|h| h.path == "target.md"),
+        "基线错了:它本就该在纯 bm25 下落榜,否则这条测试证明不了任何事"
+    );
+    // 而且落榜的原因必须是**窗口**,不是「压根没 MATCH 上」—— 后者会让上面
+    // 那条断言在一个把查询词拼错的 fixture 上也「通过」,于是整条测试变成
+    // 空转。放大 limit(窗口随之放大到 1600)它就该出现。
+    let wide = idx.search("银河", 200).unwrap().0;
+    assert!(
+        wide.iter().any(|h| h.path == "target.md"),
+        "它必须是命中的,只是 bm25 垫底:{:?}",
+        wide.len()
+    );
+
+    idx.refresh_attention(&[]).unwrap();
+    let after = idx.search("银河", 10).unwrap().0;
+    assert!(
+        after.iter().any(|h| h.path == "target.md"),
+        "注意力臂必须把它捞回来:{:?}",
+        after.iter().map(|h| &h.path).collect::<Vec<_>>()
+    );
+}
+
+/// 规格 §4.2/§7:`k = 0` 是**回滚开关** ——「全链路输出与接入前逐位相同」。
+///
+/// 这条与 `query.rs` 里那两条(`k_zero_disables_the_boost_in_score_of`、
+/// `zero_attention_leaves_the_score_bit_identical`)不是重复:那两条钉的是
+/// `score_of` 这一个函数的算术,而最终评审 I-1 实测到的失效**绕过了它们**
+/// —— 打分确实没变,变的是**候选集**。保底臂捞回来的行照样过 `finish`,
+/// origin 四档乘数、`agent_by`、`doc_date` 加成对它们照常作用,于是一份
+/// 「bm25 在窗口外但别的加成站在它这边」的文档能挤掉窗口内的对手,而它能
+/// 进入评分阶段这件事只由注意力臂促成。所以这条比的是**最终可见的 hit
+/// 序列**,而不是任何单个函数的返回值。
+///
+/// 两条断言缺一不可:
+/// - `k=0`:摄取前后的 `(path, line, score)` 序列必须逐条相同;
+/// - `k=默认`(对照臂):同一份 fixture 必须**变**。少了它,一个「注意力
+///   压根不起作用」的实现(或一份选错的 fixture)也能让上面那条通过,整条
+///   测试空转 —— 这正是 I-1 能躲过 13 轮逐环评审的原因。
+#[test]
+fn k_zero_keeps_the_whole_pipeline_identical_to_having_no_attention_data() {
+    // 目标是 `Human`(×1.25)、噪声是 `Unlabeled`(×0.3) —— 见 fixture 的注释:
+    // 这正是「候选集变了 → 可见结果就变了,哪怕加成恒为 ×1.0」的那一类文档。
+    let vault = vault_with_one_high_attention_document("---\ntype: Note\n---\n");
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+
+    let off = Weights { attention: 0.0, ..Weights::default() };
+    // 比 `(path, line, score)` 而不是整个 `Hit`:`Hit::attention_minutes` 是
+    // 纯展示字段(CLI `--json` 用它解释顺序),摄取后它当然会从 0 变成 600,
+    // 那不是「排序被改了」。k=0 要保证的是**排序与可见集**不变。
+    let shape = |hits: &[Hit]| {
+        hits.iter().map(|h| (h.path.clone(), h.line, h.score)).collect::<Vec<_>>()
+    };
+    let run = |idx: &SearchIndex, w: &Weights| {
+        idx.search_with_weights("银河", 10, &Limits::full(), w).unwrap().hits
+    };
+
+    let before_off = run(&idx, &off);
+    let before_on = run(&idx, &Weights::default());
+    idx.refresh_attention(&[]).unwrap();
+    let after_off = run(&idx, &off);
+    let after_on = run(&idx, &Weights::default());
+
+    assert_eq!(
+        shape(&before_off),
+        shape(&after_off),
+        "k=0 是回滚开关:注意力数据的存在不许改变任何一位输出 —— 打分关了还不够,\
+         候选臂也必须一起关"
+    );
+    // 对照臂:证明这份 fixture 真的有区分力。
+    assert!(
+        !before_on.iter().any(|h| h.path == "target.md"),
+        "基线错了:摄取前它本就该落榜"
+    );
+    assert!(
+        after_on.iter().any(|h| h.path == "target.md"),
+        "默认 k 下注意力必须改变结果,否则上面那条「没变」的断言什么都没证明:{:?}",
+        after_on.iter().map(|h| &h.path).collect::<Vec<_>>()
+    );
+}
+
+/// 第二条臂共用同一个 MATCH 条件,所以**不能**引入不匹配的结果 ——
+/// 「我读得最多的文档」不是「我搜的东西」。
+#[test]
+fn the_attention_arm_never_introduces_a_non_matching_hit() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("read-a-lot.md"), "完全无关的内容\n").unwrap();
+    std::fs::write(vault.path().join("match.md"), "银河\n").unwrap();
+    let dir = vault.path().join(".notemd/analytics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let today = searchidx::chunk::ymd_from_unix_public(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+    );
+    std::fs::write(
+        dir.join(format!("{today}.DEV-1.json")),
+        format!(
+            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:read-a-lot.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+
+    let (_db, mut idx) = open_temp(vault.path());
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    idx.refresh_attention(&[]).unwrap();
+    let hits = idx.search("银河", 10).unwrap().0;
+    assert!(hits.iter().all(|h| h.path != "read-a-lot.md"), "注意力不是匹配条件");
+    assert!(hits.iter().any(|h| h.path == "match.md"));
 }

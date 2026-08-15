@@ -105,6 +105,8 @@ beforeEach(() => {
     tokenizerId: 'jieba-v1', skippedLarge: [{ path: 'big.md', sizeBytes: 9_000_000 }],
     originCounts: { human: 40, derived: 70, source: 18, unlabeled: 9 },
     typeCounts: { 'Book Summary': 25, Answer: 12 },
+    attentionFiles: 0,
+    attentionAsOf: null,
   }))
   progress = vi.fn(async () => null)
   _setIndexApi({ stats, progress, rebuild: vi.fn(async () => {}) })
@@ -257,6 +259,8 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
       skippedLarge: [],
       originCounts: { human: 7, derived: 9, source: 3, unlabeled: 11 },
       typeCounts: { Idea: 4 },
+      attentionFiles: 0,
+      attentionAsOf: null,
     })
     await mountDialog()
     await settle()
@@ -274,6 +278,80 @@ describe('SettingsDialog — Search & Index tab, per-tier statistics (task B-T8)
     expect(rowValue(section, 'Unlabeled')).toBe('11')
   })
 })
+
+// Task 12 (attention-weighted retrieval spec): ingestion "just not having
+// run" produces no visible symptom anywhere else — search silently degrades
+// to unweighted results. This row is the only place that fact surfaces, so
+// its three states (never run / ran with zero rows / ran with data) must be
+// told apart rather than collapsed into "has a number or doesn't".
+describe('SettingsDialog — Search & Index tab, attention coverage row (task 12)', () => {
+  it('shows N / M once ingestion has run and produced rows', async () => {
+    stats.mockResolvedValue({
+      files: 100, blocks: 900, dbBytes: 4096, builtAt: '2026-08-11T00:00:00Z',
+      tokenizerId: 'jieba-v1', skippedLarge: [],
+      originCounts: { human: 40, derived: 70, source: 18, unlabeled: 9 },
+      typeCounts: {},
+      attentionFiles: 37,
+      attentionAsOf: '2026-08-13',
+    })
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    expect(screen_getByText('37 / 100')).toBeTruthy()
+  })
+
+  it('hides the row entirely when ingestion has never run on this index (attentionAsOf === null)', async () => {
+    stats.mockResolvedValue({
+      files: 100, blocks: 900, dbBytes: 4096, builtAt: '2026-08-11T00:00:00Z',
+      tokenizerId: 'jieba-v1', skippedLarge: [],
+      originCounts: { human: 40, derived: 70, source: 18, unlabeled: 9 },
+      typeCounts: {},
+      attentionFiles: 0,
+      attentionAsOf: null,
+    })
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    expect(queryByAttentionText()).toBeNull()
+  })
+
+  it('shows 0 / M when ingestion ran but produced zero rows — the most important diagnostic case, distinct from never-run', async () => {
+    stats.mockResolvedValue({
+      files: 100, blocks: 900, dbBytes: 4096, builtAt: '2026-08-11T00:00:00Z',
+      tokenizerId: 'jieba-v1', skippedLarge: [],
+      originCounts: { human: 40, derived: 70, source: 18, unlabeled: 9 },
+      typeCounts: {},
+      attentionFiles: 0,
+      attentionAsOf: '2026-08-13',
+    })
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    expect(screen_getByText('0 / 100')).toBeTruthy()
+  })
+})
+
+// Small local helpers mirroring @testing-library/dom's semantics without
+// pulling in the dependency: the rest of this file already reads the DOM
+// directly (see `rowValue`/`tierSection` above), so these two match that
+// convention instead of introducing a new import surface.
+function screen_getByText(text: string): Element {
+  const el = Array.from(document.body.querySelectorAll('span')).find((s) => s.textContent?.trim() === text)
+  if (!el) throw new Error(`no element with text "${text}"`)
+  return el
+}
+
+function queryByAttentionText(): Element | null {
+  return Array.from(document.body.querySelectorAll('span.lbl')).find((s) =>
+    /注意力|Attention/i.test(s.textContent ?? ''),
+  ) ?? null
+}
 
 function namedSection(heading: string): Element {
   const section = Array.from(document.body.querySelectorAll('section.block')).find(
@@ -488,5 +566,77 @@ describe('SettingsDialog — Search & Index tab, empty pattern list confirm (des
       ([, args]) => args != null && typeof args === 'object' && 'searchSourceGlobs' in (args as object),
     )
     expect(globsCall?.[1]).toMatchObject({ searchSourceGlobs: [] })
+  })
+})
+
+// Final review I-2, end to end through the UI: the settings page sends the
+// whole weights draft, and `vault_settings::merge` REPLACES the stored struct
+// with it — so a field the page does not carry is a field deleted from
+// `settings.json`. `attention` (the attention-boost `k`) has no input here on
+// purpose, which is exactly why it has to survive the round trip: hand-editing
+// `settings.json` is the only way to set it, and `0` — "turn attention
+// weighting off" — is the value users will set.
+describe('SettingsDialog — Search & Index tab, saving tier weights preserves attention (final review I-2)', () => {
+  /** Answers the settings-load command with a stored `attention`, and lets
+   *  the save succeed so the payload can be inspected. */
+  function routeStoredWeights(attention: number) {
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === 'sotvault_vault_root') return '/tmp/vault'
+      if (cmd === 'notemd_vault_settings_get') {
+        return { searchWeights: { human: 1.25, derived: 1, source: 0.9, unlabeled: 0.3, attention } }
+      }
+      if (cmd === 'notemd_vault_settings_set') {
+        return { searchWeights: (args as { searchWeights: unknown }).searchWeights }
+      }
+      throw new Error(`no tauri host in vitest: ${cmd}`)
+    })
+  }
+
+  function savedWeights(): Record<string, number> {
+    const call = invokeMock.mock.calls.filter((c) => c[0] === 'notemd_vault_settings_set').at(-1)
+    if (!call) throw new Error('notemd_vault_settings_set was never called')
+    return (call[1] as { searchWeights: Record<string, number> }).searchWeights
+  }
+
+  // Note on this first test's power, measured: with the pre-fix mirror it
+  // passes anyway, because `{ ...vaultSettings.searchWeights }` carries an
+  // extra runtime key the TS type never declared. What it pins is the
+  // contract (the payload must carry `attention`), and the type layer +
+  // `pnpm check` is what keeps the mirror honest. The `restore defaults`
+  // test below is the one that goes red on the actual pre-fix code — that
+  // path builds its draft from `DEFAULT_SEARCH_WEIGHTS` alone, so a missing
+  // field there really does delete the stored value.
+  it('a stored attention: 0 is still 0 after the user saves the four tier weights', async () => {
+    routeStoredWeights(0)
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = namedSection('Ranking weights')
+    typeInto(section.querySelector('input[type="number"]') as HTMLInputElement, '2')
+    await settle()
+    buttonByText(section, 'Save').click()
+    await settle()
+
+    expect(savedWeights().human).toBe(2)
+    expect(savedWeights().attention, 'saving tier weights must not wipe the attention weight').toBe(0)
+  })
+
+  it('"restore defaults" resets the four tiers it is about, not the attention weight it never mentions', async () => {
+    routeStoredWeights(0)
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = namedSection('Ranking weights')
+    buttonByText(section, 'Restore defaults').click()
+    await settle()
+    buttonByText(section, 'Save').click()
+    await settle()
+
+    expect(savedWeights().human).toBe(1.25) // the tier defaults did get restored
+    expect(savedWeights().attention).toBe(0)
   })
 })

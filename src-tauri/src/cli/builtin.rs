@@ -340,7 +340,15 @@ FLAGS:
                      ({agent_by, human_verified}) beyond the plain
                      path/line/text. A hit with provenance.agent_by set was
                      written by a model — follow its sources to the primary
-                     document before relying on it.
+                     document before relying on it. attention_minutes is the
+                     user's own reading/editing attention on that document in
+                     minutes, decayed to today with a 30-day half-life (0 = no
+                     data); ranking already factors it in and the field is
+                     exposed so you can explain the order. That data is
+                     ingested by the desktop app — this CLI reads it but never
+                     ingests — so on a machine where the GUI has never opened
+                     this vault it reads 0 for every hit and ranking is
+                     unaffected.
   --limit <n>       Max hits (default: 20; 0 = no cap, same as --all)
   --all             Return every hit, no count cap
   --context <n>     Print N lines of context around each hit
@@ -1597,6 +1605,13 @@ mod tests {
         assert!(out.contains("source_ref"), "must document --json's source_ref field:\n{out}");
         assert!(out.contains("provenance"), "must document --json's provenance field:\n{out}");
         assert!(out.contains("agent_by"), "must explain what provenance.agent_by means:\n{out}");
+    }
+    /// `--json` 的字段是 agent 的公共约定,加了字段就得写进帮助,
+    /// 否则只有读源码的人知道它存在。
+    #[test]
+    fn search_help_documents_attention_minutes() {
+        let out = render_help(Some("search"), false, &[], &HashMap::new());
+        assert!(out.contains("attention_minutes"), "必须记录 --json 的注意力字段:\n{out}");
     }
     /// Review round 1, Important #1: `render_core_topic` used to append a
     /// generic "1 Runtime error" footer underneath every topic's own body,

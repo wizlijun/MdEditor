@@ -51,6 +51,7 @@ describe('indexStatus', () => {
         files: 10, blocks: 40, dbBytes: 1024, builtAt: null, tokenizerId: 'v1',
         skippedLarge: [{ path: 'big.md', sizeBytes: 2_000_000 }],
         originCounts: { human: 2, derived: 6, source: 2, unlabeled: 0 }, typeCounts: {},
+        attentionFiles: 0, attentionAsOf: null,
       }),
       progress: async () => ({ phase: 'indexing', done: 3, total: 10, current: 'a.md', elapsedMs: 5 }),
       rebuild: async () => {},
@@ -89,6 +90,7 @@ describe('indexStatus', () => {
     releaseStats({
       files: 600, blocks: 600, dbBytes: 4096, builtAt: null, tokenizerId: 'v1', skippedLarge: [],
       originCounts: { human: 100, derived: 400, source: 100, unlabeled: 0 }, typeCounts: {},
+      attentionFiles: 0, attentionAsOf: null,
     })
     await pending
     expect(indexStatus.stats?.files).toBe(600)
