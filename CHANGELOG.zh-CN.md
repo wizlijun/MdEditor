@@ -6,6 +6,8 @@
 
 ## 未发布
 
+## v6.817.4 — 2026-08-17
+
 ### 新增
 
 - **第二个 agent,以及在两者之间选择的方式。** 新插件 **DeepSeek 智能体**(插件市场)经 Agent Client Protocol 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 接进 vault,与既有的 Claude 智能体并列。两者读同一批 `.notemd/agent-tasks/` 任务模板、写同一种运行记录、回答手记里同样的问题 —— 任务是一份活儿的描述,不是对某个模型的绑定。谁来服务 agent 插槽现在是一项设置(`<vault>/.notemd/settings.json` 里的 `agentDefaultProvider`);只装了 Claude 智能体时行为与今天完全一致。
