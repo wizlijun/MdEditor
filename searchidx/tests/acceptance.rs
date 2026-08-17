@@ -995,7 +995,7 @@ fn refresh_attention_ingests_analytics_into_the_index() {
     std::fs::write(
         dir.join(format!("{today}.DEV-1.json")),
         format!(
-            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:a.md":{{"{today}":{{"read_ms":600000,"edit_ms":0,"open_count":1,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+            r#"{{"deviceId":"DEV-1","deviceName":"m","day":"{today}","docs":{{"rel:a.md":{{"read_ms":600000,"edit_ms":0,"open_count":1,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}"#
         ),
     )
     .unwrap();
@@ -1082,7 +1082,7 @@ fn vault_with_one_high_attention_document(target_frontmatter: &str) -> tempfile:
     std::fs::write(
         dir.join(format!("{today}.DEV-1.json")),
         format!(
-            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:target.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+            r#"{{"deviceId":"DEV-1","deviceName":"m","day":"{today}","docs":{{"rel:target.md":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}"#
         ),
     )
     .unwrap();
@@ -1213,7 +1213,7 @@ fn the_attention_arm_never_introduces_a_non_matching_hit() {
     std::fs::write(
         dir.join(format!("{today}.DEV-1.json")),
         format!(
-            r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:read-a-lot.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+            r#"{{"deviceId":"DEV-1","deviceName":"m","day":"{today}","docs":{{"rel:read-a-lot.md":{{"read_ms":36000000,"edit_ms":0,"open_count":9,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}"#
         ),
     )
     .unwrap();

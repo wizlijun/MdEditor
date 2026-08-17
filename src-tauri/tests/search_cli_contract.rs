@@ -164,10 +164,14 @@ fn attention_minutes_reflects_real_ingested_data_not_a_hardcoded_stand_in() {
     std::fs::write(
         analytics_dir.join(format!("{today}.DEV-1.json")),
         format!(
-            r#"{{"deviceId":"DEV-1","deviceName":"test","docs":{{
-                 "rel:a.md":{{"{today}":{{"read_ms":600000,"edit_ms":0,"open_count":1,
+            // 盘上形状是 `docs: docKey -> counters`(一层),天由文件名隐含 ——
+            // 权威定义是 src/lib/insights/store.svelte.ts 的 `DayFile`,不是
+            // model.ts 的 `DeviceAnalytics`(那是内存里的多天结构)。v6.817.1
+            // 就是把这两者搞混,导致摄取对所有用户静默失效。
+            r#"{{"deviceId":"DEV-1","deviceName":"test","day":"{today}","docs":{{
+                 "rel:a.md":{{"read_ms":600000,"edit_ms":0,"open_count":1,
                    "edit_sessions":0,"net_chars":0,"mark_ops":0,
-                   "first_seen_at":0,"last_active_at":0}}}}}}}}"#
+                   "first_seen_at":0,"last_active_at":0}}}}}}"#
         ),
     )
     .unwrap();

@@ -1829,7 +1829,7 @@ mod command_tests {
         std::fs::write(
             adir.join(format!("{today}.DEV-1.json")),
             format!(
-                r#"{{"deviceId":"DEV-1","deviceName":"m","docs":{{"rel:b.md":{{"{today}":{{"read_ms":36000000,"edit_ms":0,"open_count":1,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}}}"#
+                r#"{{"deviceId":"DEV-1","deviceName":"m","day":"{today}","docs":{{"rel:b.md":{{"read_ms":36000000,"edit_ms":0,"open_count":1,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}}}"#
             ),
         )
         .unwrap();

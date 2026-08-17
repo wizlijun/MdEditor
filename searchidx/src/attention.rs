@@ -155,17 +155,11 @@ pub fn collect(vault_root: &Path, as_of: &str) -> Vec<DayFile> {
             _ => continue,
         }
         let Ok(txt) = std::fs::read_to_string(e.path()) else { continue };
-        let Ok(parsed) = serde_json::from_str::<DeviceAnalyticsJson>(&txt) else { continue };
+        let Ok(parsed) = serde_json::from_str::<DayFileJson>(&txt) else { continue };
         let docs: Vec<DocDay> = parsed
             .docs
             .into_iter()
-            .flat_map(|(key, days)| {
-                days.into_values().map(move |c| DocDay {
-                    key: key.clone(),
-                    read_ms: c.read_ms,
-                    edit_ms: c.edit_ms,
-                })
-            })
+            .map(|(key, c)| DocDay { key, read_ms: c.read_ms, edit_ms: c.edit_ms })
             .collect();
         if docs.is_empty() {
             continue;
@@ -187,12 +181,20 @@ fn split_name(name: &str) -> Option<(&str, &str)> {
     Some((day, device))
 }
 
-/// 只声明我们要读的字段。`deviceName`、`sessions`、以及 `DayCounters` 里
-/// 其余的计数器都被 serde 忽略 —— 采集侧加字段不该让摄取失败。
+/// 盘上一份日文件的形状。**权威定义是 `src/lib/insights/store.svelte.ts` 的
+/// `DayFile`,不是 `model.ts` 的 `DeviceAnalytics`** —— 后者是内存里的多天结构
+/// (`docKey -> day -> counters`),前者是盘上的单天结构(`docKey -> counters`,
+/// 天由文件名隐含)。首版照着 `DeviceAnalytics` 写成两层嵌套,导致每份文件
+/// 反序列化失败、整个功能静默失效(见 `collect_reads_the_real_on_disk_shape`)。
+///
+/// 只声明要读的字段:`deviceId`、`deviceName`、`day`、`sessions` 以及
+/// `DayCounters` 里其余的计数器都让 serde 忽略 —— 采集侧加字段不该让摄取失败。
+/// 顶层的 `day` 刻意不读:文件名是权威(超龄截断按文件名做,让内嵌值翻案会
+/// 绕过截断)。
 #[derive(serde::Deserialize)]
-struct DeviceAnalyticsJson {
+struct DayFileJson {
     #[serde(default)]
-    docs: std::collections::BTreeMap<String, std::collections::BTreeMap<String, CountersJson>>,
+    docs: std::collections::BTreeMap<String, CountersJson>,
 }
 
 #[derive(serde::Deserialize)]
@@ -397,6 +399,49 @@ mod tests {
         std::fs::write(dir.join(name), body).unwrap();
     }
 
+    /// **真实盘上形状的回归测试(v6.817.1 事故)。**
+    ///
+    /// 首版把 `docs` 写成了 `docKey -> day -> counters` 两层嵌套 —— 那是
+    /// `insights/model.ts` 里 `DeviceAnalytics` 的**内存**结构。盘上的是
+    /// `store.svelte.ts` 的 `DayFile`:`docs` 只有**一层**(`docKey -> counters`),
+    /// 天是文件名隐含的、另有一个顶层 `day` 字段。类型对不上 → serde 整份文件
+    /// 反序列化失败 → `continue` 跳过 → 每个文件都跳过 → 恒 0 条。
+    ///
+    /// 症状是**静默**的:摄取照常跑、日志照常打 `attention ingest: 0 files`、
+    /// 覆盖率行显示 `0 / 9581`,整个功能对所有用户完全没生效,而 23 条单测
+    /// 全绿 —— 因为每条测试都用我自己手写的(同样错的)fixture。
+    ///
+    /// 所以这条测试**不手搓 JSON**,读的是 `tests/fixtures/analytics/` 下按真实
+    /// 盘上形状落的共享 fixture;TS 侧 `store.disk-shape.test.ts` 断言写入端产出
+    /// 与它同形。两端钉同一份文件,格式再漂移就有一边会红。
+    #[test]
+    fn collect_reads_the_real_on_disk_shape() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join(".notemd/analytics");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/analytics/2026-08-17.DEV-1.json");
+        std::fs::copy(&fixture, dir.join("2026-08-17.DEV-1.json")).unwrap();
+
+        let files = collect(d.path(), "2026-08-17");
+        assert_eq!(files.len(), 1, "真实形状的文件必须被读进来,而不是解析失败后跳过");
+        assert_eq!(files[0].day, "2026-08-17");
+        assert_eq!(files[0].device_id, "DEV-1");
+
+        let mut docs = files[0].docs.clone();
+        docs.sort_by(|a, b| a.key.cmp(&b.key));
+        assert_eq!(docs.len(), 2, "两条 docKey 都要读到(rel: 与 abs:)");
+        assert_eq!(docs[0].key, "abs:/Users/somebody/Downloads/outside.md");
+        assert_eq!(docs[1].key, "rel:notes/read-a-lot.md");
+        assert_eq!(docs[1].read_ms, 600_000);
+        assert_eq!(docs[1].edit_ms, 60_000);
+
+        // 端到端:折算出来必须是非零分钟数,而不是「读到了但算成 0」。
+        let m = fold(&files, &[], "2026-08-17");
+        let minutes = m.get("notes/read-a-lot.md").copied().unwrap_or(0.0);
+        assert!((minutes - 11.5).abs() < 1e-6, "600s 读 + 60s 编辑×1.5 = 11.5 分钟,实得 {minutes}");
+    }
+
     /// 正常路径:文件名解析出 day + deviceId,JSON 里取两个计时器。
     #[test]
     fn collect_reads_day_and_device_from_the_filename() {
@@ -404,10 +449,10 @@ mod tests {
         write_day(
             d.path(),
             "2026-08-13.DEV-1.json",
-            r#"{"deviceId":"DEV-1","deviceName":"mac","docs":{
-                 "rel:a.md":{"2026-08-13":{"read_ms":60000,"edit_ms":1000,"open_count":2,
+            r#"{"deviceId":"DEV-1","deviceName":"mac","day":"2026-08-13","docs":{
+                 "rel:a.md":{"read_ms":60000,"edit_ms":1000,"open_count":2,
                    "edit_sessions":1,"net_chars":10,"mark_ops":0,
-                   "first_seen_at":0,"last_active_at":0}}}}"#,
+                   "first_seen_at":0,"last_active_at":0}}}"#,
         );
         let files = collect(d.path(), "2026-08-13");
         assert_eq!(files.len(), 1);
@@ -434,7 +479,7 @@ mod tests {
         write_day(
             d.path(),
             "2020-01-01.DEV-1.json",
-            r#"{"deviceId":"DEV-1","deviceName":"m","docs":{"rel:old.md":{"2020-01-01":{"read_ms":60000,"edit_ms":0,"open_count":0,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}"#,
+            r#"{"deviceId":"DEV-1","deviceName":"m","day":"2020-01-01","docs":{"rel:old.md":{"read_ms":60000,"edit_ms":0,"open_count":0,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}"#,
         );
         assert!(collect(d.path(), "2026-08-13").is_empty());
     }
@@ -447,7 +492,7 @@ mod tests {
         write_day(
             d.path(),
             "2026-08-13.DEV-1.json",
-            r#"{"deviceId":"DEV-1","deviceName":"m","docs":{"rel:ok.md":{"2026-08-13":{"read_ms":1,"edit_ms":0,"open_count":0,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}"#,
+            r#"{"deviceId":"DEV-1","deviceName":"m","day":"2026-08-13","docs":{"rel:ok.md":{"read_ms":1,"edit_ms":0,"open_count":0,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}"#,
         );
         let files = collect(d.path(), "2026-08-13");
         assert_eq!(files.len(), 1, "损坏的那个跳过,好的那个还在");
@@ -472,17 +517,19 @@ mod tests {
     }
 
     /// 文件名里的日期是权威,JSON 里内嵌的日期桶键**不覆盖**它。
-    /// 两者本该一致;不一致时(手工编辑、同步冲突残留)以文件名为准,
-    /// 因为超龄截断就是按文件名做的,让内嵌键翻案会绕过截断。
+    /// 两者本该一致;不一致时(手工编辑、同步冲突残留)**以文件名为准**,
+    /// 因为超龄截断就是按文件名做的 —— 让文件内的值翻案就能绕过截断。
+    ///
+    /// 盘上的日文件有一个顶层 `day` 字段(`DayFile.day`),我们刻意不读它。
     #[test]
-    fn the_filename_day_wins_over_the_inner_bucket_key() {
+    fn the_filename_day_wins_over_the_day_field_inside_the_file() {
         let d = tempfile::tempdir().unwrap();
         write_day(
             d.path(),
             "2026-08-13.DEV-1.json",
-            r#"{"deviceId":"DEV-1","deviceName":"m","docs":{"rel:a.md":{"1999-01-01":{"read_ms":60000,"edit_ms":0,"open_count":0,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}}"#,
+            r#"{"deviceId":"DEV-1","deviceName":"m","day":"1999-01-01","docs":{"rel:a.md":{"read_ms":60000,"edit_ms":0,"open_count":0,"edit_sessions":0,"net_chars":0,"mark_ops":0,"first_seen_at":0,"last_active_at":0}}}"#,
         );
         let files = collect(d.path(), "2026-08-13");
-        assert_eq!(files[0].day, "2026-08-13");
+        assert_eq!(files[0].day, "2026-08-13", "文件名是权威,顶层 day 字段不得翻案");
     }
 }

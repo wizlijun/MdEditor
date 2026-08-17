@@ -1,0 +1,37 @@
+{
+  "deviceId": "DEV-1",
+  "deviceName": "fixture-mac",
+  "day": "2026-08-17",
+  "docs": {
+    "rel:notes/read-a-lot.md": {
+      "read_ms": 600000,
+      "edit_ms": 60000,
+      "open_count": 3,
+      "edit_sessions": 1,
+      "net_chars": 42,
+      "mark_ops": 0,
+      "first_seen_at": 1786944461403,
+      "last_active_at": 1786944478254
+    },
+    "abs:/Users/somebody/Downloads/outside.md": {
+      "read_ms": 120000,
+      "edit_ms": 0,
+      "open_count": 1,
+      "edit_sessions": 0,
+      "net_chars": 0,
+      "mark_ops": 0,
+      "first_seen_at": 1786944461403,
+      "last_active_at": 1786944478254
+    }
+  },
+  "sessions": {
+    "rel:notes/read-a-lot.md": [
+      {
+        "start": 1786944461403,
+        "end": 1786945121403,
+        "read_ms": 600000,
+        "edit_ms": 60000
+      }
+    ]
+  }
+}
