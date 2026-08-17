@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use logic::UpdateOutcome;
-use store::{NoteHome, Record, RecordStore};
+use store::{Record, RecordStore};
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -65,14 +65,6 @@ fn bundle_referenced_images(
 }
 
 
-/// Outcome of reconciling a pair's companion notes: the new merge base to
-/// persist on the `Record`, and whether conflict markers were produced.
-#[derive(Debug)]
-pub struct NoteReconcileOutcome {
-    pub new_base: Option<String>,
-    pub conflict: bool,
-}
-
 /// The companion-note path for an md path (`foo.md` → `foo.note.md`), or None
 /// when `md` is itself a note / non-md.
 fn companion_path(md: &Path) -> Option<PathBuf> {
@@ -98,89 +90,33 @@ fn read_note(p: &Path) -> Result<Option<String>, ()> {
     }
 }
 
-/// Back up `content` next to `note` as `<stem>.conflict.<ts>.<ext>`
-/// (e.g. `foo.note.md` → `foo.note.conflict.1720000000.md`), mirroring the
-/// `.conflict.<ts>` convention in `vault_sync/conflict.rs`.
-fn backup_conflict_note(note: &Path, content: &str, ts: u64) {
-    let stem = note.file_stem().and_then(|s| s.to_str()).unwrap_or("note");
-    let ext = note
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|e| format!(".{e}"))
-        .unwrap_or_default();
-    let backup = note.with_file_name(format!("{stem}.conflict.{ts}{ext}"));
-    if let Err(e) = std::fs::write(&backup, content) {
-        eprintln!("[sotvault] write conflict backup {backup:?} failed: {e}");
-    }
-}
-
-/// Reconcile the companion notes of a synced pair.
-/// `source` = source md path, `vault_md` = vault-copy md path, `base` = the
-/// record's stored `note_merge_base`, `vault_homed` = when true, the note lives
-/// ONLY next to the vault copy and the source side is never read or written.
-/// Writes the merged content to whichever side(s) changed, backs up both
-/// originals to `.conflict.<ts>` on conflict, and returns the new base + conflict
-/// flag. Per-file IO errors are logged and non-fatal (sync must not fail because
-/// a note write hiccuped).
-fn reconcile_companion_notes(
-    source: &Path,
-    vault_md: &Path,
-    base: Option<&str>,
-    vault_homed: bool,
-) -> NoteReconcileOutcome {
+/// Reconcile the companion note of a synced pair. The note lives ONLY next to
+/// the vault copy — the source dir is NEVER written(伴生笔记只住 vault)。
+/// 唯一的 source 侧参与是一次性收养:vault 侧笔记缺失而源旁躺着一份遗留
+/// `.note.md` 时,把它**复制**进 vault(源文件原样保留,之后不再读写)。
+/// Returns the new note base (= current vault note content) to persist on the
+/// `Record`. Per-file IO errors are logged and non-fatal (sync must not fail
+/// because a note write hiccuped).
+fn reconcile_companion_notes(source: &Path, vault_md: &Path, base: Option<&str>) -> Option<String> {
     let Some(vault_note) = companion_path(vault_md) else {
-        return NoteReconcileOutcome { new_base: base.map(str::to_string), conflict: false };
+        return base.map(str::to_string);
     };
-
-    // Vault-homed: the note lives ONLY next to the vault copy. Never read or
-    // write the source-side note — that is exactly the source-dir pollution the
-    // vault-homed mode exists to prevent. Base simply tracks the vault note.
-    if vault_homed {
-        return match read_note(&vault_note) {
-            Ok(Some(c)) => NoteReconcileOutcome { new_base: Some(c), conflict: false },
-            // absent or unreadable → never clobber the stored ancestor
-            _ => NoteReconcileOutcome { new_base: base.map(str::to_string), conflict: false },
-        };
-    }
-
-    // Sidecar (legacy): bidirectional 3-way reconcile of both sides.
-    let Some(src_note) = companion_path(source) else {
-        return NoteReconcileOutcome { new_base: base.map(str::to_string), conflict: false };
-    };
-    let (src_content, vault_content) = match (read_note(&src_note), read_note(&vault_note)) {
-        (Ok(s), Ok(v)) => (s, v),
-        _ => return NoteReconcileOutcome { new_base: base.map(str::to_string), conflict: false },
-    };
-
-    let plan = logic::reconcile_note(base, src_content.as_deref(), vault_content.as_deref());
-
-    if plan.conflict {
-        let ts = now_secs();
-        if let Some(s) = &src_content {
-            backup_conflict_note(&src_note, s, ts);
+    match read_note(&vault_note) {
+        Ok(Some(v)) => Some(v),
+        Ok(None) => {
+            // Vault note absent → one-shot adoption of a legacy source-side note.
+            let adopted = companion_path(source).and_then(|p| read_note(&p).ok().flatten());
+            if let Some(s) = adopted {
+                if let Err(e) = std::fs::write(&vault_note, &s) {
+                    eprintln!("[sotvault] write vault note {vault_note:?} failed: {e}");
+                    return base.map(str::to_string);
+                }
+                return Some(s);
+            }
+            // absent everywhere → never clobber the stored ancestor
+            base.map(str::to_string)
         }
-        if let Some(v) = &vault_content {
-            backup_conflict_note(&vault_note, v, ts);
-        }
-    }
-    if let Some(content) = &plan.write_vault {
-        if let Err(e) = std::fs::write(&vault_note, content) {
-            eprintln!("[sotvault] write vault note {vault_note:?} failed: {e}");
-        }
-    }
-    if let Some(content) = &plan.write_source {
-        if let Err(e) = std::fs::write(&src_note, content) {
-            eprintln!("[sotvault] write source note {src_note:?} failed: {e}");
-        }
-    }
-    NoteReconcileOutcome { new_base: plan.new_base, conflict: plan.conflict }
-}
-
-/// Parse the optional `note_home` command arg into a `NoteHome` (unknown/None → Sidecar).
-fn parse_note_home(s: Option<&str>) -> NoteHome {
-    match s {
-        Some("vault") => NoteHome::Vault,
-        _ => NoteHome::Sidecar,
+        Err(()) => base.map(str::to_string),
     }
 }
 
@@ -565,7 +501,6 @@ pub fn sotvault_sync_to_vault(
     app: AppHandle,
     src_path: String,
     date_prefix: Option<String>,
-    note_home: Option<String>,
     reuse_existing: Option<bool>,
     device_id: Option<String>,
     device_name: Option<String>,
@@ -617,8 +552,7 @@ pub fn sotvault_sync_to_vault(
     let prior_base = s
         .find_by_vault(&target.to_string_lossy())
         .and_then(|r| r.note_merge_base.clone());
-    let home = parse_note_home(note_home.as_deref());
-    let note = reconcile_companion_notes(&source, &target, prior_base.as_deref(), home == NoteHome::Vault);
+    let note_base = reconcile_companion_notes(&source, &target, prior_base.as_deref());
 
     let source_hash = logic::sha256_hex(&src_bytes);
     let vault_hash = logic::sha256_hex(&vault_bytes);
@@ -629,8 +563,7 @@ pub fn sotvault_sync_to_vault(
         synced_at: now_secs(),
         source_hash,
         vault_hash,
-        note_merge_base: note.new_base,
-        note_home: home,
+        note_merge_base: note_base,
     };
     s.upsert(rec.clone());
     save_store(&app, &s)?;
@@ -647,9 +580,6 @@ pub fn sotvault_sync_to_vault(
         if let Err(e) = mirror_meta::write(&vault_root, &meta) {
             eprintln!("[sotvault] write mirror meta failed: {e}");
         }
-    }
-    if note.conflict {
-        let _ = app.emit("sotvault://note-conflict", ());
     }
     Ok(rec)
 }
@@ -722,26 +652,18 @@ pub fn sotvault_apply_update(app: AppHandle, vault_path: String) -> Result<Strin
     let vault_bytes = vault_string.clone().into_bytes();
     std::fs::write(&rec.vault_path, &vault_bytes).map_err(|e| e.to_string())?;
     let prior = rec.note_merge_base.clone();
-    let vault_homed = rec.note_home == NoteHome::Vault;
-    let note = reconcile_companion_notes(
-        Path::new(&rec.source_path),
-        &vault_pathbuf,
-        prior.as_deref(),
-        vault_homed,
-    );
+    let note_base =
+        reconcile_companion_notes(Path::new(&rec.source_path), &vault_pathbuf, prior.as_deref());
 
     let updated = Record {
         synced_at: now_secs(),
         source_hash: logic::sha256_hex(&src_bytes),
         vault_hash: logic::sha256_hex(&vault_bytes),
-        note_merge_base: note.new_base,
+        note_merge_base: note_base,
         ..rec
     };
     s.upsert(updated);
     save_store(&app, &s)?;
-    if note.conflict {
-        let _ = app.emit("sotvault://note-conflict", ());
-    }
     Ok(vault_string)
 }
 
@@ -955,11 +877,12 @@ mod tests {
         std::fs::create_dir_all(&dest_dir).unwrap();
         let target = dest_dir.join("2026-07-10-foo.md");
 
-        let out = reconcile_companion_notes(&src_dir.join("foo.md"), &target, None, false);
+        let out = reconcile_companion_notes(&src_dir.join("foo.md"), &target, None);
 
         assert_eq!(std::fs::read(dest_dir.join("2026-07-10-foo.note.md")).unwrap(), b"- outline note");
-        assert_eq!(out.new_base.as_deref(), Some("- outline note"));
-        assert!(!out.conflict);
+        // 收养是复制:源侧遗留笔记原样保留,不改写
+        assert_eq!(std::fs::read(src_dir.join("foo.note.md")).unwrap(), b"- outline note");
+        assert_eq!(out.as_deref(), Some("- outline note"));
     }
 
     #[test]
@@ -971,79 +894,17 @@ mod tests {
         let dest_dir = tmp.path().join("vault");
         std::fs::create_dir_all(&dest_dir).unwrap();
 
-        let out = reconcile_companion_notes(&src_dir.join("foo.md"), &dest_dir.join("foo.md"), None, false);
+        let out = reconcile_companion_notes(&src_dir.join("foo.md"), &dest_dir.join("foo.md"), None);
 
         // no note on either side → nothing written, no base
         assert!(std::fs::read_dir(&dest_dir).unwrap().next().is_none());
-        assert_eq!(out.new_base, None);
-        assert!(!out.conflict);
+        assert_eq!(out, None);
     }
 
     #[test]
-    fn reconcile_conflict_writes_markers_and_two_backups() {
-        let tmp = TempDir::new().unwrap();
-        let src_dir = tmp.path().join("src");
-        let dest_dir = tmp.path().join("vault");
-        std::fs::create_dir_all(&src_dir).unwrap();
-        std::fs::create_dir_all(&dest_dir).unwrap();
-        std::fs::write(src_dir.join("foo.md"), b"# main").unwrap();
-        std::fs::write(dest_dir.join("foo.md"), b"# main").unwrap();
-        // both note sides edited the same base line differently
-        std::fs::write(src_dir.join("foo.note.md"), b"line local\n").unwrap();
-        std::fs::write(dest_dir.join("foo.note.md"), b"line vault\n").unwrap();
-
-        let out = reconcile_companion_notes(
-            &src_dir.join("foo.md"),
-            &dest_dir.join("foo.md"),
-            Some("line base\n"),
-            false,
-        );
-
-        assert!(out.conflict);
-        // both note files now carry conflict markers and identical content
-        let s = std::fs::read_to_string(src_dir.join("foo.note.md")).unwrap();
-        let v = std::fs::read_to_string(dest_dir.join("foo.note.md")).unwrap();
-        assert!(s.contains("<<<<<<<"));
-        assert_eq!(s, v);
-        // one .conflict backup next to each side, preserving the originals
-        let src_backup = std::fs::read_dir(&src_dir).unwrap()
-            .filter_map(|e| e.ok())
-            .find(|e| e.file_name().to_string_lossy().contains(".conflict."))
-            .expect("source-side .conflict backup missing");
-        assert_eq!(std::fs::read_to_string(src_backup.path()).unwrap(), "line local\n");
-        let vault_backup = std::fs::read_dir(&dest_dir).unwrap()
-            .filter_map(|e| e.ok())
-            .find(|e| e.file_name().to_string_lossy().contains(".conflict."))
-            .expect("vault-side .conflict backup missing");
-        assert_eq!(std::fs::read_to_string(vault_backup.path()).unwrap(), "line vault\n");
-    }
-
-    #[test]
-    fn reconcile_fast_forward_pulls_vault_edit_into_source() {
-        let tmp = TempDir::new().unwrap();
-        let src_dir = tmp.path().join("src");
-        let dest_dir = tmp.path().join("vault");
-        std::fs::create_dir_all(&src_dir).unwrap();
-        std::fs::create_dir_all(&dest_dir).unwrap();
-        // source note untouched since base; vault note moved on
-        std::fs::write(src_dir.join("foo.note.md"), b"base\n").unwrap();
-        std::fs::write(dest_dir.join("foo.note.md"), b"vault edit\n").unwrap();
-
-        let out = reconcile_companion_notes(
-            &src_dir.join("foo.md"),
-            &dest_dir.join("foo.md"),
-            Some("base\n"),
-            false,
-        );
-
-        assert!(!out.conflict);
-        assert_eq!(std::fs::read_to_string(src_dir.join("foo.note.md")).unwrap(), "vault edit\n");
-        assert_eq!(std::fs::read_to_string(dest_dir.join("foo.note.md")).unwrap(), "vault edit\n");
-        assert_eq!(out.new_base.as_deref(), Some("vault edit\n"));
-    }
-
-    #[test]
-    fn vault_homed_reconcile_never_writes_source_note() {
+    fn vault_only_note_never_creates_source_note() {
+        // 回归:菜单「同步到 Vault」建的记录曾默认 sidecar(双向 reconcile),save-push 触发时
+        // 把只存在于 vault 侧的手记凭空拉回源目录,生成孤儿 .note.md(违反「伴生笔记只住 vault」)。
         let tmp = TempDir::new().unwrap();
         let src_dir = tmp.path().join("src");
         let dest_dir = tmp.path().join("vault");
@@ -1053,28 +914,41 @@ mod tests {
         std::fs::write(dest_dir.join("foo.md"), b"# main").unwrap();
         std::fs::write(dest_dir.join("foo.note.md"), b"- vault only note").unwrap();
 
+        let out = reconcile_companion_notes(&src_dir.join("foo.md"), &dest_dir.join("foo.md"), None);
+
+        assert!(
+            !src_dir.join("foo.note.md").exists(),
+            "source-side note must never be created"
+        );
+        assert_eq!(std::fs::read(dest_dir.join("foo.note.md")).unwrap(), b"- vault only note");
+        assert_eq!(out.as_deref(), Some("- vault only note"));
+    }
+
+    #[test]
+    fn vault_edit_is_never_pulled_back_into_source_note() {
+        // 遗留 sidecar 配对:vault 侧手记前进了,源侧旧笔记是只读遗物,绝不被改写;
+        // base 跟随 vault 侧。
+        let tmp = TempDir::new().unwrap();
+        let src_dir = tmp.path().join("src");
+        let dest_dir = tmp.path().join("vault");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dest_dir).unwrap();
+        std::fs::write(src_dir.join("foo.note.md"), b"base\n").unwrap();
+        std::fs::write(dest_dir.join("foo.note.md"), b"vault edit\n").unwrap();
+
         let out = reconcile_companion_notes(
             &src_dir.join("foo.md"),
             &dest_dir.join("foo.md"),
-            None,
-            true, // vault_homed
+            Some("base\n"),
         );
 
-        assert!(!src_dir.join("foo.note.md").exists(), "source note must never be written for vault-homed pair");
-        assert_eq!(std::fs::read(dest_dir.join("foo.note.md")).unwrap(), b"- vault only note");
-        assert_eq!(out.new_base.as_deref(), Some("- vault only note"));
-        assert!(!out.conflict);
+        assert_eq!(std::fs::read_to_string(src_dir.join("foo.note.md")).unwrap(), "base\n");
+        assert_eq!(std::fs::read_to_string(dest_dir.join("foo.note.md")).unwrap(), "vault edit\n");
+        assert_eq!(out.as_deref(), Some("vault edit\n"));
     }
 
     #[test]
-    fn parse_note_home_arg() {
-        assert_eq!(parse_note_home(Some("vault")), NoteHome::Vault);
-        assert_eq!(parse_note_home(Some("sidecar")), NoteHome::Sidecar);
-        assert_eq!(parse_note_home(None), NoteHome::Sidecar);
-    }
-
-    #[test]
-    fn vault_homed_reconcile_absent_note_preserves_base() {
+    fn reconcile_absent_notes_preserve_base() {
         let tmp = TempDir::new().unwrap();
         let src_dir = tmp.path().join("src");
         let dest_dir = tmp.path().join("vault");
@@ -1085,11 +959,9 @@ mod tests {
             &src_dir.join("foo.md"),
             &dest_dir.join("foo.md"),
             Some("- prior base"),
-            true, // vault_homed
         );
         assert!(!src_dir.join("foo.note.md").exists());
-        assert_eq!(out.new_base.as_deref(), Some("- prior base"));
-        assert!(!out.conflict);
+        assert_eq!(out.as_deref(), Some("- prior base"));
     }
 }
 

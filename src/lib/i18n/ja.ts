@@ -76,7 +76,6 @@ export const ja: Record<keyof Messages, string> = {
   'sotvault.conflictKeep': 'Vault の現在の内容を保持し、このファイルの更新通知を停止しますか？',
   'sotvault.updatedFromSource': '✓ ソースから Vault のコピーを更新しました',
   'sotvault.updateFailed': '❌ Vault のコピーの更新に失敗しました',
-  'sotvault.noteConflict': '⚠️ サイドノートのマージ競合が発生しました — 競合マーカーが挿入され、元のファイルがバックアップされました（.conflict）。',
 
   // Vault settings tab
   'vault.connected': '✓ Vault に接続し、リポジトリをクローンしました',

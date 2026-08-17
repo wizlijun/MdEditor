@@ -74,7 +74,6 @@ export const de: Record<keyof Messages, string> = {
   'sotvault.conflictKeep': 'Aktuellen Tresor-Inhalt behalten und Aktualisierungsaufforderungen für diese Datei stoppen?',
   'sotvault.updatedFromSource': '✓ Tresor-Kopie aus der Quelle aktualisiert',
   'sotvault.updateFailed': '❌ Aktualisierung der Tresor-Kopie fehlgeschlagen',
-  'sotvault.noteConflict': '⚠️ Randnotiz hatte einen Zusammenführungskonflikt — Konfliktmarkierungen eingefügt und Originale gesichert (.conflict).',
 
   // Vault settings tab
   'vault.connected': '✓ Tresor verbunden, Repository geklont',

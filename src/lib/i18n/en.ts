@@ -81,7 +81,6 @@ export const en = {
   'sotvault.conflictKeep': 'Keep the current Vault content and stop update prompts for this file?',
   'sotvault.updatedFromSource': '✓ Updated the Vault copy from the source',
   'sotvault.updateFailed': '❌ Failed to update the Vault copy',
-  'sotvault.noteConflict': '⚠️ Sidecar note had a merge conflict — conflict markers inserted and the originals backed up (.conflict).',
 
   // Vault settings tab
   'vault.connected': '✓ Vault connected, repository cloned',

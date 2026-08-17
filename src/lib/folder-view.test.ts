@@ -72,25 +72,25 @@ beforeEach(() => {
 describe('augmentVaultNotes', () => {
   const entry = (name: string, path: string, extra: Partial<FolderEntry> = {}): FolderEntry =>
     ({ name, path, isDir: false, kind: 'markdown', ...extra })
-  const rec = (source_path: string, vault_path: string, note_home?: 'sidecar' | 'vault'): SotRecord =>
-    ({ vault_path, source_path, synced_at: 1, source_hash: 'a', vault_hash: 'b', note_home })
+  const rec = (source_path: string, vault_path: string, note_merge_base?: string | null): SotRecord =>
+    ({ vault_path, source_path, synced_at: 1, source_hash: 'a', vault_hash: 'b', note_merge_base })
 
-  it('marks a source md with a vault-homed record as hasNote → vault companion', () => {
+  it('marks a source md whose record has a vault note as hasNote → vault companion', () => {
     const entries = [entry('foo.md', '/dl/foo.md')]
-    const recs = [rec('/dl/foo.md', '/v/Sync/2026-07-15-foo.md', 'vault')]
+    const recs = [rec('/dl/foo.md', '/v/Sync/2026-07-15-foo.md', '- note content')]
     const [e] = augmentVaultNotes(entries, recs)
     expect(e.hasNote).toBe(true)
     expect(e.notePath).toBe('/v/Sync/2026-07-15-foo.note.md')
   })
-  it('ignores sidecar records and files without a vault-homed record', () => {
+  it('ignores records without a vault note (empty note_merge_base)', () => {
     const entries = [entry('foo.md', '/dl/foo.md'), entry('bar.md', '/dl/bar.md')]
-    const recs = [rec('/dl/foo.md', '/v/Sync/foo.md', 'sidecar')]
+    const recs = [rec('/dl/foo.md', '/v/Sync/foo.md', null)]
     const out = augmentVaultNotes(entries, recs)
     expect(out.every((e) => !e.hasNote)).toBe(true)
   })
   it('leaves already-paired local notes untouched', () => {
     const entries = [entry('foo.md', '/dl/foo.md', { hasNote: true, notePath: '/dl/foo.note.md' })]
-    const recs = [rec('/dl/foo.md', '/v/Sync/foo.md', 'vault')]
+    const recs = [rec('/dl/foo.md', '/v/Sync/foo.md', '- note content')]
     const [e] = augmentVaultNotes(entries, recs)
     expect(e.notePath).toBe('/dl/foo.note.md')   // local pairing wins, not overwritten
   })

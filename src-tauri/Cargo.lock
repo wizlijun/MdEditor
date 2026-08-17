@@ -1048,15 +1048,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diffy"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05264ab2aab4fb952fc4b0f3f6eff1ddfb4563064053a4ea174d91537584a769"
-dependencies = [
- "hashbrown 0.17.0",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3076,7 +3067,6 @@ dependencies = [
  "block2",
  "clap",
  "core-foundation 0.10.1",
- "diffy",
  "dirs 5.0.1",
  "futures-util",
  "git2",

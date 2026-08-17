@@ -61,7 +61,6 @@ minisign-verify = "0.2"
 # Task 3). Already in the lock via plugin-protocol / tauri; a direct dep lets
 # cli/builtin.rs compare an index version against the installed one.
 semver = "1"
-diffy = "0.5"
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 url = "2"

@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import { pushToast } from './toast.svelte'
 import { t } from './i18n/store.svelte'
 import { activeTab, reloadTabFromDisk } from './tabs.svelte'
@@ -46,17 +45,6 @@ export const sotvaultStore = $state<{ vaultRoot: string | null; records: SotReco
 let vaultRootChangedHandler: (() => void) | null = null
 export function setVaultRootChangedHandler(fn: (() => void) | null): void {
   vaultRootChangedHandler = fn
-}
-
-let noteConflictListening = false
-/** Show a toast whenever a sidecar-note merge produced conflict markers.
- *  Idempotent: safe to call once at app boot. */
-export async function initSotvaultNoteConflictToast(): Promise<void> {
-  if (noteConflictListening) return
-  noteConflictListening = true
-  await listen('sotvault://note-conflict', () => {
-    pushToast({ level: 'warn', message: t('sotvault.noteConflict') })
-  })
 }
 
 export async function refreshSotvault(): Promise<void> {
@@ -187,27 +175,27 @@ export async function syncCurrentToVault(): Promise<void> {
 }
 
 /**
- * 把源 md 作为「vault-homed」同步进 vault：复制 md + 建/更新映射，标记
- * note_home=vault（reconcile 永不回写源目录）。返回新 record（含 vault_path）。
+ * 把源 md 同步进 vault：复制 md + 建/更新映射。手记只住 vault 副本旁,
+ * reconcile 永不回写源目录(后端固定行为,无需参数)。返回新 record(含 vault_path)。
  * 不 refreshSotvault——调用方须在把笔记写到 vault 副本旁 **之后** 再刷新，
  * 避免响应式 notePath 提前翻转到尚未写入的空 vault 笔记（数据竞态）。
  */
 export async function syncSourceToVaultAsHome(srcPath: string): Promise<SotRecord> {
   const datePrefix = await sourceCreationYmd(srcPath)
-  return invoke<SotRecord>('sotvault_sync_to_vault', { srcPath, datePrefix, noteHome: 'vault', ...(await deviceInfo()) })
+  return invoke<SotRecord>('sotvault_sync_to_vault', { srcPath, datePrefix, ...(await deviceInfo()) })
 }
 
 /** Ensure a file living OUTSIDE the vault has a vault-homed copy inside it,
  *  reusing this source's existing tracked copy (in-place update — no
  *  proliferating `-2` copies). Same mechanism as writing a note against an
- *  outside md: `noteHome:'vault'` establishes the source→vault relationship so
- *  every later save pushes the source into the vault copy (save-push). Returns
+ *  outside md: the sync establishes the source→vault relationship so every
+ *  later save pushes the source into the vault copy (save-push). Returns
  *  the vault copy's absolute path. Callers guarantee a vault is configured and
  *  the path is outside it. */
 export async function ensureVaultCopyForShare(sourcePath: string): Promise<string> {
   const datePrefix = await sourceCreationYmd(sourcePath)
   const rec = await invoke<SotRecord>('sotvault_sync_to_vault', {
-    srcPath: sourcePath, datePrefix, noteHome: 'vault', reuseExisting: true, ...(await deviceInfo()),
+    srcPath: sourcePath, datePrefix, reuseExisting: true, ...(await deviceInfo()),
   })
   await refreshSotvault()
   return rec.vault_path

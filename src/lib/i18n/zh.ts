@@ -76,7 +76,6 @@ export const zh: Record<keyof Messages, string> = {
   'sotvault.conflictKeep': '保留 Vault 当前内容，并停止对此文件的更新提示？',
   'sotvault.updatedFromSource': '✓ 已从源文件更新 Vault 副本',
   'sotvault.updateFailed': '❌ 更新 Vault 副本失败',
-  'sotvault.noteConflict': '⚠️ 手记合并冲突——已插入冲突标记，原文件已备份（.conflict）。',
 
   // Vault settings tab
   'vault.connected': '✓ Vault 已连接，仓库克隆完成',

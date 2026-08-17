@@ -1,17 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Where a synced pair's companion `.note.md` lives.
-/// `Sidecar` = next to BOTH source and vault (legacy bidirectional behaviour).
-/// `Vault`   = ONLY next to the vault copy; the source dir is never written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum NoteHome {
-    #[default]
-    Sidecar,
-    Vault,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub vault_path: String,
@@ -19,15 +8,12 @@ pub struct Record {
     pub synced_at: u64,
     pub source_hash: String,
     pub vault_hash: String,
-    /// Last-converged companion-note content = the 3-way merge ancestor.
-    /// `#[serde(default)]` keeps old `sotvault-sync.json` files loadable
-    /// (missing key → `None`, which triggers the migration branch on next sync).
+    /// Content of the vault-side companion note as of the last reconcile.
+    /// `#[serde(default)]` keeps old `sotvault-sync.json` files loadable.
+    /// 历史上还有过 `note_home: sidecar|vault` 字段(伴生笔记双向镜像到源目录);
+    /// 该模式已整体移除——手记只住 vault,旧字段在加载时被 serde 静默忽略。
     #[serde(default)]
     pub note_merge_base: Option<String>,
-    /// `#[serde(default)]` keeps pre-existing `sotvault-sync.json` loadable
-    /// (missing key → `Sidecar`), preserving legacy bidirectional note sync.
-    #[serde(default)]
-    pub note_home: NoteHome,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,8 +69,8 @@ pub fn load_records(path: &Path) -> RecordStore {
 
 /// Build (or refresh) the app-support Record for relinking a mirror to a new
 /// local source on this device. Preserves the existing note_merge_base when
-/// refreshing; always vault-homed (the note lives only beside the vault mirror,
-/// so a relinked source dir is never written).
+/// refreshing. The note lives only beside the vault mirror, so a relinked
+/// source dir is never written.
 pub fn relink_record(
     existing: Option<Record>,
     vault_path: &str,
@@ -100,7 +86,6 @@ pub fn relink_record(
         source_hash: source_hash.to_string(),
         vault_hash: vault_hash.to_string(),
         note_merge_base: existing.and_then(|r| r.note_merge_base),
-        note_home: NoteHome::Vault,
     }
 }
 
@@ -126,7 +111,6 @@ mod tests {
             source_hash: "aaa".into(),
             vault_hash: "aaa".into(),
             note_merge_base: None,
-            note_home: NoteHome::Sidecar,
         }
     }
 
@@ -214,15 +198,18 @@ mod tests {
     }
 
     #[test]
-    fn note_home_defaults_to_sidecar_for_legacy_json() {
+    fn legacy_json_with_note_home_field_still_loads() {
+        // 旧版 store 带 note_home("sidecar"/"vault");字段已删,serde 须静默忽略。
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("sotvault-sync.json");
         let legacy = r#"{"version":1,"records":[
             {"vault_path":"/v/a.md","source_path":"/s/a.md",
-             "synced_at":5,"source_hash":"h1","vault_hash":"h2"}]}"#;
+             "synced_at":5,"source_hash":"h1","vault_hash":"h2",
+             "note_home":"sidecar"}]}"#;
         std::fs::write(&p, legacy).unwrap();
         let store = load_records(&p);
-        assert_eq!(store.records[0].note_home, NoteHome::Sidecar);
+        assert_eq!(store.records.len(), 1);
+        assert_eq!(store.records[0].vault_path, "/v/a.md");
     }
 
     #[test]
@@ -234,8 +221,6 @@ mod tests {
         assert_eq!(out.source_hash, "sh");
         assert_eq!(out.vault_hash, "vh");
         assert_eq!(out.synced_at, 999);
-        // Relinked mirrors are vault-homed: never write the source-side note.
-        assert_eq!(out.note_home, NoteHome::Vault);
     }
 
     #[test]
@@ -243,20 +228,6 @@ mod tests {
         let out = relink_record(None, "/v/sync/bar.md", "/new/bar.md", "sh", "vh", 5);
         assert_eq!(out.source_path, "/new/bar.md");
         assert_eq!(out.vault_path, "/v/sync/bar.md");
-        assert_eq!(out.note_home, NoteHome::Vault);
         assert_eq!(out.note_merge_base, None);
-    }
-
-    #[test]
-    fn note_home_vault_round_trips() {
-        let tmp = TempDir::new().unwrap();
-        let p = tmp.path().join("sotvault-sync.json");
-        let mut store = RecordStore::default();
-        let mut r = rec("/v/a.md", "/s/a.md");
-        r.note_home = NoteHome::Vault;
-        store.upsert(r);
-        save_records(&p, &store).unwrap();
-        let loaded = load_records(&p);
-        assert_eq!(loaded.records[0].note_home, NoteHome::Vault);
     }
 }

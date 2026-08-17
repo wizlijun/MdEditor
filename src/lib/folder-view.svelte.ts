@@ -120,15 +120,16 @@ export function pairNoteEntries(entries: FolderEntry[]): FolderEntry[] {
 }
 
 /**
- * 源 md 的"有笔记"标识按 vault 判定:若某源文件有 vault-homed 记录(note_home==='vault'),
- * 即使源目录本地没有 .note.md,也标 hasNote,且 notePath 指向 vault 副本旁的伴生 note
- * (点击即打开 vault 里的笔记)。已本地配对(hasNote)或独立笔记的行不动。
+ * 源 md 的"有笔记"标识按 vault 判定:若某源文件的同步记录带非空 note_merge_base
+ * (= vault 副本旁确有伴生 note),即使源目录本地没有 .note.md,也标 hasNote,
+ * 且 notePath 指向 vault 副本旁的伴生 note(点击即打开 vault 里的笔记)。
+ * 已本地配对(hasNote)或独立笔记的行不动。
  */
 export function augmentVaultNotes(entries: FolderEntry[], records: SotRecord[]): FolderEntry[] {
   if (records.length === 0) return entries
   const vaultNoteBySource = new Map<string, string>()
   for (const r of records) {
-    if (r.note_home !== 'vault') continue
+    if (!r.note_merge_base) continue
     const note = companionPathFor(r.vault_path)
     if (note) vaultNoteBySource.set(r.source_path, note)
   }

@@ -54,7 +54,7 @@
   import { loadOutlineDirs } from './lib/outline/dirs.svelte'
   import { platform, isIOS } from './lib/platform.svelte'
   import { vaultStore, refreshStatus, syncNow, attachStatusListener } from './lib/vault.svelte'
-  import { canSyncActive, isTrackedVaultFile, deviceSourceForVaultPath, isMirroredSource, refreshSotvault, sotvaultStore, setVaultRootChangedHandler, initSotvaultNoteConflictToast } from './lib/sotvault.svelte'
+  import { canSyncActive, isTrackedVaultFile, deviceSourceForVaultPath, isMirroredSource, refreshSotvault, sotvaultStore, setVaultRootChangedHandler } from './lib/sotvault.svelte'
   import { indexStatus } from './lib/search/index-status.svelte'
   import { windowTitleFor } from './lib/window-title'
   import { installRecentsSync, refreshRecentMenu, mergedRecents } from './lib/recent-sync.svelte'
@@ -501,7 +501,6 @@
       // vault root are loaded. installRecentsSync deliberately skips this — it
       // can run before loadSettings finishes.
       void refreshSotvault().then(() => refreshRecentMenu()).catch((e) => console.warn('[App] recents init:', e))
-      void initSotvaultNoteConflictToast().catch((e) => console.warn('[App] note-conflict toast init:', e))
     })()
 
     const uninstallFocus = installFocusPoll()

@@ -4,10 +4,9 @@ export interface SotRecord {
   synced_at: number
   source_hash: string
   vault_hash: string
-  /** Where the companion note lives: `sidecar` = next to both source & vault
-   *  (legacy bidirectional); `vault` = only next to the vault copy. Optional for
-   *  backward-compat with records serialized before the field existed. */
-  note_home?: 'sidecar' | 'vault'
+  /** Vault 侧伴生笔记在上次 reconcile 时的内容快照;非空 ⇒ 该配对确有手记。
+   *  手记只住 vault(源目录永不写入),历史 note_home 字段已移除。 */
+  note_merge_base?: string | null
 }
 
 export function isTracked(path: string | null, records: SotRecord[]): boolean {

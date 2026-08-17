@@ -38,98 +38,6 @@ pub fn decide_update(record: &Record, source_now: &str, vault_now: &str) -> Upda
     }
 }
 
-/// What a companion-note reconcile decided. `write_source`/`write_vault` are the
-/// contents to write to each side (`None` = leave that side untouched).
-/// `new_base` is the content to persist as the next merge ancestor. `conflict`
-/// is true when the merged text contains conflict markers — the caller then also
-/// writes `.conflict.<ts>` backups of both original sides.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NotePlan {
-    pub write_source: Option<String>,
-    pub write_vault: Option<String>,
-    pub new_base: Option<String>,
-    pub conflict: bool,
-}
-
-/// Pure 3-way reconcile of a companion note. `base` = last-converged content
-/// (merge ancestor), `source`/`vault` = current contents (`None` = file absent).
-/// Direction-agnostic: converges BOTH sides to the merged result so the pair
-/// never re-diverges (writing only one side would make the next sync treat the
-/// other side's unique lines as deletions). Missing base with diverged sides is
-/// treated conservatively as a conflict (ancestor = "").
-pub fn reconcile_note(base: Option<&str>, source: Option<&str>, vault: Option<&str>) -> NotePlan {
-    match (source, vault) {
-        (None, None) => NotePlan {
-            write_source: None,
-            write_vault: None,
-            new_base: base.map(str::to_string),
-            conflict: false,
-        },
-        (Some(s), None) => NotePlan {
-            write_source: None,
-            write_vault: Some(s.to_string()),
-            new_base: Some(s.to_string()),
-            conflict: false,
-        },
-        (None, Some(v)) => NotePlan {
-            write_source: Some(v.to_string()),
-            write_vault: None,
-            new_base: Some(v.to_string()),
-            conflict: false,
-        },
-        (Some(s), Some(v)) => {
-            if s == v {
-                return NotePlan {
-                    write_source: None,
-                    write_vault: None,
-                    new_base: Some(s.to_string()),
-                    conflict: false,
-                };
-            }
-            // Fast-forward when exactly one side moved away from a known base.
-            if let Some(b) = base {
-                if s == b {
-                    return NotePlan {
-                        write_source: Some(v.to_string()),
-                        write_vault: None,
-                        new_base: Some(v.to_string()),
-                        conflict: false,
-                    };
-                }
-                if v == b {
-                    return NotePlan {
-                        write_source: None,
-                        write_vault: Some(s.to_string()),
-                        new_base: Some(s.to_string()),
-                        conflict: false,
-                    };
-                }
-            }
-            // Both sides changed (or no base): 3-way merge, converge both sides.
-            let ancestor = base.unwrap_or("");
-            let (merged, conflict) = match merge_notes(ancestor, s, v) {
-                Ok(m) => (m, false),
-                Err(m) => (m, true),
-            };
-            NotePlan {
-                write_source: Some(merged.clone()),
-                write_vault: Some(merged.clone()),
-                new_base: Some(merged),
-                conflict,
-            }
-        }
-    }
-}
-
-/// 3-way text merge via diffy. `Ok` = clean; `Err` = merged text carrying
-/// classic `<<<<<<< ours` / `=======` / `>>>>>>> theirs` conflict markers
-/// (ours = local source note, theirs = vault note).
-fn merge_notes(ancestor: &str, ours: &str, theirs: &str) -> Result<String, String> {
-    diffy::MergeOptions::new()
-        .set_conflict_style(diffy::ConflictStyle::Merge)
-        .merge(ancestor, ours, theirs)
-}
-
 /// Read source + vault files and decide. Missing source -> SourceMissing.
 pub fn check_update_io(record: &Record, source: &Path, vault: &Path) -> Result<UpdateOutcome, String> {
     if !source.exists() {
@@ -428,7 +336,6 @@ pub fn plan_image_assets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::store::NoteHome;
     use tempfile::TempDir;
 
     fn rec(source_hash: &str, vault_hash: &str) -> Record {
@@ -439,7 +346,6 @@ mod tests {
             source_hash: source_hash.into(),
             vault_hash: vault_hash.into(),
             note_merge_base: None,
-            note_home: NoteHome::Sidecar,
         }
     }
 
@@ -494,7 +400,6 @@ mod tests {
             source_hash: sha256_hex(b"OLD"),
             vault_hash: sha256_hex(b"OLD"),
             note_merge_base: None,
-            note_home: NoteHome::Sidecar,
         };
         let out = check_update_io(&r, &source, &vault).unwrap();
         assert_eq!(out, UpdateOutcome::OriginUpdated);
@@ -731,102 +636,5 @@ mod tests {
         assert_eq!(companion_note_name("foo"), None);
     }
 
-    #[test]
-    fn reconcile_both_absent_is_noop() {
-        let p = reconcile_note(Some("b"), None, None);
-        assert_eq!(p, NotePlan { write_source: None, write_vault: None, new_base: Some("b".into()), conflict: false });
-    }
-
-    #[test]
-    fn reconcile_only_source_copies_to_vault() {
-        let p = reconcile_note(None, Some("S"), None);
-        assert_eq!(p.write_vault.as_deref(), Some("S"));
-        assert_eq!(p.write_source, None);
-        assert_eq!(p.new_base.as_deref(), Some("S"));
-        assert!(!p.conflict);
-    }
-
-    #[test]
-    fn reconcile_only_vault_pulls_to_source() {
-        let p = reconcile_note(None, None, Some("V"));
-        assert_eq!(p.write_source.as_deref(), Some("V"));
-        assert_eq!(p.write_vault, None);
-        assert_eq!(p.new_base.as_deref(), Some("V"));
-        assert!(!p.conflict);
-    }
-
-    #[test]
-    fn reconcile_equal_sides_no_writes() {
-        let p = reconcile_note(Some("old"), Some("same"), Some("same"));
-        assert_eq!(p.write_source, None);
-        assert_eq!(p.write_vault, None);
-        assert_eq!(p.new_base.as_deref(), Some("same"));
-        assert!(!p.conflict);
-    }
-
-    #[test]
-    fn reconcile_source_only_changed_fast_forwards_vault() {
-        // vault == base, source moved on
-        let p = reconcile_note(Some("base"), Some("newS"), Some("base"));
-        assert_eq!(p.write_vault.as_deref(), Some("newS"));
-        assert_eq!(p.write_source, None);
-        assert_eq!(p.new_base.as_deref(), Some("newS"));
-        assert!(!p.conflict);
-    }
-
-    #[test]
-    fn reconcile_vault_only_changed_fast_forwards_source() {
-        // source == base, vault moved on
-        let p = reconcile_note(Some("base"), Some("base"), Some("newV"));
-        assert_eq!(p.write_source.as_deref(), Some("newV"));
-        assert_eq!(p.write_vault, None);
-        assert_eq!(p.new_base.as_deref(), Some("newV"));
-        assert!(!p.conflict);
-    }
-
-    #[test]
-    fn reconcile_both_changed_non_overlapping_auto_merges() {
-        // base has a shared, unchanged middle line; source edits the first line
-        // and vault edits the last. The untouched middle gives diffy the context
-        // it needs to auto-merge the two non-overlapping changes.
-        let base = "alpha\nmiddle\nbeta\n";
-        let source = "ALPHA\nmiddle\nbeta\n";
-        let vault = "alpha\nmiddle\nBETA\n";
-        let p = reconcile_note(Some(base), Some(source), Some(vault));
-        assert!(!p.conflict, "non-overlapping edits should auto-merge");
-        // both sides converge to the same merged text
-        assert_eq!(p.write_source, p.write_vault);
-        assert_eq!(p.write_source, p.new_base);
-        let merged = p.new_base.unwrap();
-        assert!(merged.contains("ALPHA"));
-        assert!(merged.contains("BETA"));
-        assert!(!merged.contains("<<<<<<<"));
-    }
-
-    #[test]
-    fn reconcile_both_changed_same_line_conflicts() {
-        let base = "hello\n";
-        let source = "hello local\n";
-        let vault = "hello vault\n";
-        let p = reconcile_note(Some(base), Some(source), Some(vault));
-        assert!(p.conflict, "competing edits to the same line must conflict");
-        let merged = p.new_base.clone().unwrap();
-        assert!(merged.contains("<<<<<<<"));
-        assert!(merged.contains("hello local"));
-        assert!(merged.contains("hello vault"));
-        // converge both sides to the marked result
-        assert_eq!(p.write_source.as_deref(), Some(merged.as_str()));
-        assert_eq!(p.write_vault.as_deref(), Some(merged.as_str()));
-    }
-
-    #[test]
-    fn reconcile_no_base_diverged_is_conflict() {
-        // migration: no stored ancestor, and the two sides differ
-        let p = reconcile_note(None, Some("localA\n"), Some("vaultB\n"));
-        assert!(p.conflict);
-        let merged = p.new_base.clone().unwrap();
-        assert!(merged.contains("localA"));
-        assert!(merged.contains("vaultB"));
-    }
 }
 
