@@ -305,7 +305,11 @@
       {#if candidates.length === 0}
         <p class="empty">{t('col.candidatesEmpty')}</p>
       {:else}
-        {#each candidates as c (c.id)}
+        <!-- Keys carry an index suffix: ids come from agent-written vault files
+             and CAN collide (two decisions once shared 2026-07-31-03); a bare
+             (id) key makes Svelte throw each_key_duplicate and abort the whole
+             render — the window then hangs on "Loading…" forever. -->
+        {#each candidates as c, ci (`${c._fileDate}/${c.id}@${ci}`)}
           <div class="card-slot" class:dragging={dragging?.column === 'candidates' && dragging?.id === c.id}>
             <Card
               column="candidates"
@@ -335,7 +339,7 @@
       {#if store.open.length === 0}
         <p class="empty">{t('col.openEmpty')}</p>
       {:else}
-        {#each store.open as d (d.id)}
+        {#each store.open as d, di (`${d.id}@${di}`)}
           <div class="card-slot" class:dragging={dragging?.column === 'open' && dragging?.id === d.id}>
             <Card
               column="open"
@@ -367,7 +371,7 @@
       {#if store.archived.length === 0}
         <p class="empty">{t('col.archiveEmpty')}</p>
       {:else}
-        {#each store.archived as a (a.id)}
+        {#each store.archived as a, ai (`${a.id}@${ai}`)}
           <div class="card-slot" class:dragging={dragging?.column === 'archive' && dragging?.id === a.id}>
             <Card
               column="archive"
