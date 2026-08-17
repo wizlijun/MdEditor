@@ -122,3 +122,31 @@
 - **Task 14** 宿主 provider 注册表:按 `activation.events` 三件套识别 provider + `agent.default_provider` 设置。
 - **Task 15** `ui_rpc.rs` 的 `agent_execute` 改为设置驱动 + 可选 `harness` 参数;`agent-workspace` store 列表化。
 - **Task 16** 构建脚本、CHANGELOG 双语条目、市场索引,发版。
+
+---
+
+## 落地结果(2026-08-17)
+
+**已发布**:宿主 `v6.817.4`(GitHub Release,双 dmg 已验架构);插件市场
+`notemd.deepseek-agent@1.0.0`(双 arch,minisign 已按 `market.rs` 里的公钥验过签)。
+
+测试:agent-run-core 100 / claude-agent 91(既有测试全绿,行为未变)/
+deepseek-agent 后端 98 + 前端 45 / 宿主 690 + 2165。其中 24 个是端到端 ——
+桩 ACP 服务端(`backend/src/bin/stub_acp.rs`)按剧本演完整条协议。
+
+### 与本计划的一处偏离
+
+**Task 4 只做了模块迁移,没有把 claude-agent 的 `engine.rs` 改到
+`scaffold` 上。** claude 的引擎仍自己内联编排(lock → precheck → spawn →
+pump → artifacts → OKF → record),与 `scaffold.rs` 有约 60 行重复。
+
+理由:那条路径有 15 个覆盖很密的既有测试,重写它有真实的回归风险,而用户可见
+收益为零 —— 去重的主要价值(两个插件不各写一遍锁/记录/工件/OKF/模板/detach)
+已经由模块迁移拿到了。`scaffold.rs` 目前只有 deepseek-agent 在用。
+
+**代价**:OKF 补头或工件收集的规则若要改,眼下得改两处。真要收敛,
+下一次动 claude 引擎时顺手迁,让它自己的测试当保险。
+
+### 未做的验证
+
+**GUI 实机验证没做**(按惯例由用户执行)。手动验收步骤见发布说明。
