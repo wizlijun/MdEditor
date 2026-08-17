@@ -6,6 +6,16 @@
 
 ## 未发布
 
+### 新增
+
+- **第二个 agent,以及在两者之间选择的方式。** 新插件 **DeepSeek 智能体**(插件市场)经 Agent Client Protocol 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 接进 vault,与既有的 Claude 智能体并列。两者读同一批 `.notemd/agent-tasks/` 任务模板、写同一种运行记录、回答手记里同样的问题 —— 任务是一份活儿的描述,不是对某个模型的绑定。谁来服务 agent 插槽现在是一项设置(`<vault>/.notemd/settings.json` 里的 `agentDefaultProvider`);只装了 Claude 智能体时行为与今天完全一致。
+- **任务权限是一份你能读的文件。** DeepSeek 智能体的任务带一份 `policy.json`,写明这次运行被关在哪一档沙箱里(`read-only` / `workspace-write` / `danger-full-access`),以及 agent 中途要权限时怎么答。档位由 harness 自己的沙箱强制执行,不靠提示词自觉,任务列表在你按「运行」之前就把它显示出来。`policy.json` 解析不了会直接停住运行,而不是退回默认值。
+- **harness 的组合配置住在你的 vault 里。** `<vault>/.notemd/dsh/cordis.yml` —— 纯文本、进 git、可以直接手改;想用自己那份,用 `dsh_config` 设置指过去即可。
+
+### 说明
+
+- DeepSeek 智能体目前是**实验性**的:它依赖 DeepSeek Harness 的开发者预览版,上游明示会有破坏性变更。使用前需要 `npm i -g @deepseek-ai/dsh-acp-demo`(或一份 `deepseek-harness` checkout),以及 `DEEPSEEK_API_KEY`。该协议只传输已提交的助手文本 —— 没有实时工具活动,也没有会话续传 —— 所以 DeepSeek 运行的日志比 Claude 运行的安静。这是协议如此,不是功能缺失。
+
 ## v6.817.3 — 2026-08-17
 
 ### 修复

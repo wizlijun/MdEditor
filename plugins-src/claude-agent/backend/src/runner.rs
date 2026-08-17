@@ -6,68 +6,16 @@
 //! So by default the work is handed to this binary's own runner mode: setsid'd
 //! into its own session, it outlives the headless instance, and the plugin can
 //! return a run id immediately.
-use crate::{discover, engine, prompt, record, task};
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use crate::{discover, engine, prompt, task};
+use agent_run_core::detach;
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Request {
-    pub vault: PathBuf,
-    pub task_id: String,
-    pub prompt: String,
-    pub run_id: String,
-}
-
-/// Start a detached runner. Returns the `{run_id, status}` the CLI prints.
-pub fn spawn_detached(
-    vault: &Path,
-    task_id: &str,
-    user_prompt: &str,
-) -> Result<serde_json::Value, String> {
-    let run_id = record::new_run_id(chrono::Utc::now(), std::process::id());
-    let run_dir = task::runs_root(vault)
-        .join(task_id)
-        .join("pending")
-        .join(&run_id);
-    std::fs::create_dir_all(&run_dir).map_err(|e| e.to_string())?;
-    let req = Request {
-        vault: vault.to_path_buf(),
-        task_id: task_id.into(),
-        prompt: user_prompt.into(),
-        run_id: run_id.clone(),
-    };
-    std::fs::write(
-        run_dir.join("request.json"),
-        serde_json::to_string(&req).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg("--runner")
-        .arg(&run_dir)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-    cmd.spawn()
-        .map_err(|e| format!("failed to start runner: {e}"))?;
-    Ok(serde_json::json!({ "run_id": run_id, "status": "started" }))
-}
+pub use agent_run_core::detach::spawn_detached;
 
 /// The runner process body. Returns the process exit code.
 pub async fn run(run_dir: PathBuf) -> i32 {
-    let Ok(body) = std::fs::read_to_string(run_dir.join("request.json")) else {
-        return 2;
-    };
-    let Ok(req) = serde_json::from_str::<Request>(&body) else {
+    let Some(req) = detach::read_request(&run_dir) else {
         return 2;
     };
 
@@ -108,30 +56,15 @@ pub async fn run(run_dir: PathBuf) -> i32 {
         Err(_busy) => 4,
     };
     let _ = drain.await;
-    let _ = std::fs::remove_dir_all(&run_dir);
+    detach::cleanup(&run_dir);
     code
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_run_core::detach::Request;
 
-    #[test]
-    fn spawn_detached_writes_a_request_the_runner_can_read_back() {
-        let v = tempfile::tempdir().unwrap();
-        let out = spawn_detached(v.path(), "selfcheck", "extra").unwrap();
-        let run_id = out["run_id"].as_str().unwrap();
-        assert_eq!(out["status"], "started");
-        let p = task::runs_root(v.path())
-            .join("selfcheck")
-            .join("pending")
-            .join(run_id)
-            .join("request.json");
-        let req: Request = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
-        assert_eq!(req.task_id, "selfcheck");
-        assert_eq!(req.prompt, "extra");
-        assert_eq!(req.run_id, run_id);
-    }
 
     #[tokio::test]
     async fn runner_exits_with_a_code_when_the_request_is_unreadable() {

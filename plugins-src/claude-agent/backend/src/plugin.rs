@@ -6,6 +6,7 @@
 //! blocking here would wedge the whole plugin. Events reach the window from
 //! that task via `host.ui_post`.
 use crate::{discover, engine, lock, prompt, record, runner, task};
+use agent_run_core::task::check_task_id;
 use notemd_plugin_sdk as sdk;
 use sdk::plugin_protocol as proto;
 use serde::Serialize;
@@ -93,28 +94,6 @@ fn note_relative_to_vault(vault: &std::path::Path, note_path: &str) -> Option<St
     let rel = abs.strip_prefix(&root).ok()?;
     let s = rel.to_string_lossy().to_string();
     (!s.is_empty()).then_some(s)
-}
-
-/// A task id names ONE directory under `.notemd/agent-tasks/` — nothing else.
-/// This is a security check, not tidiness: `task::task_dir` joins the id
-/// straight onto the tasks root, and a task directory IS the permission policy
-/// of the claude run it starts (`.claude/settings.json`, which may hand out
-/// `Bash`). An id like `../../evil` would let a caller point that policy at any
-/// directory on disk. Rejects separators, `.`/`..` and absolute paths.
-fn valid_task_id(id: &str) -> bool {
-    if id.is_empty() || id.contains('\\') {
-        // Backslash is a separator on Windows and merely a legal filename char
-        // on unix — refuse it either way rather than depend on the platform.
-        return false;
-    }
-    let mut comps = std::path::Path::new(id).components();
-    matches!(comps.next(), Some(std::path::Component::Normal(_))) && comps.next().is_none()
-}
-
-fn check_task_id(id: &str) -> Result<(), String> {
-    valid_task_id(id)
-        .then_some(())
-        .ok_or_else(|| format!("invalid task id '{id}'"))
 }
 
 #[derive(Default)]
@@ -749,6 +728,7 @@ fn cli_flag(context: &Value, key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_run_core::task::valid_task_id;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     /// NOTEMD_SHARED_CONFIG is process-global, so the tests that set it have to

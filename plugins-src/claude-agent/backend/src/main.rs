@@ -3,16 +3,18 @@
 //!    (the host's CLI path runs in a throwaway headless app instance that would
 //!    otherwise kill the child at exit — see runner.rs).
 //!  - no args: the SDK serve loop, as a host-managed resident plugin process.
-mod artifacts;
+// Everything a run IS — locks, records, progress, artifacts, OKF stamping —
+// lives in the shared `agent-run-core` crate now, so claude-agent and
+// deepseek-agent cannot drift on the on-disk format the host reads. Re-exported
+// at the crate root so the rest of this binary still says `crate::record::…`:
+// the modules moved, the call sites did not have to.
+pub use agent_run_core::{artifacts, lock, mirror, okf, record};
+
 mod discover;
 mod engine;
-mod lock;
-mod mirror;
-mod okf;
 mod plugin;
 mod precheck;
 mod prompt;
-mod record;
 mod runner;
 mod settings;
 mod stream;

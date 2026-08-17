@@ -7,6 +7,16 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **A second agent, and a way to choose between them.** New plugin **DeepSeek Agent** (marketplace) runs [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) against your vault over the Agent Client Protocol, alongside the existing Claude Agent. Both read the same task templates in `.notemd/agent-tasks/`, write the same run records, and answer the same questions in your sidecar notes — a task is a job description, not a binding to one model. Which one serves the agent slot is now a setting (`agentDefaultProvider` in `<vault>/.notemd/settings.json`); with only Claude Agent installed, nothing changes.
+- **Task permissions are a file you can read.** DeepSeek Agent tasks carry a `policy.json` naming the sandbox the run is confined to (`read-only` / `workspace-write` / `danger-full-access`) and what to answer if the agent asks for more. The mode is enforced by the harness's own sandbox, not by the prompt, and the task list shows it before you press Run. A `policy.json` that will not parse stops the run rather than falling back to defaults.
+- **The harness composition lives in your vault.** `<vault>/.notemd/dsh/cordis.yml` — plain text, in git, editable by hand, and pointed elsewhere with the `dsh_config` setting if you want your own.
+
+### Notes
+
+- DeepSeek Agent is **experimental**: it depends on developer-preview releases of DeepSeek Harness, which promise breaking changes. It needs `npm i -g @deepseek-ai/dsh-acp-demo` (or a `deepseek-harness` checkout) plus a `DEEPSEEK_API_KEY`. The protocol carries committed assistant text only — no live tool activity, and no session resume — so a DeepSeek run's log is quieter than a Claude run's. That is the protocol, not a missing feature.
+
 ## v6.817.3 — 2026-08-17
 
 ### Fixed

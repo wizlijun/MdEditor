@@ -1,0 +1,103 @@
+{
+  "manifest_version": 2,
+  "id": "notemd.deepseek-agent",
+  "name": "DeepSeek Agent",
+  "version": "1.0.0",
+  "kind": "native",
+  "engines": {
+    "notemd": ">=6.817.4"
+  },
+  "description": "Run DeepSeek Harness against your vault over the Agent Client Protocol: task templates live in .notemd/agent-tasks, stream live in a window, or fire detached from the CLI. Experimental — depends on a developer-preview release of DeepSeek Harness.",
+  "binary": {
+    "aarch64-apple-darwin": "bin/notemd-deepseek-agent",
+    "x86_64-apple-darwin": "bin/notemd-deepseek-agent"
+  },
+  "ui": "ui/",
+  "activation": {
+    "events": [
+      "onCommand:open",
+      "onCommand:run",
+      "onCommand:run-note",
+      "onCommand:run-task",
+      "onCommand:run-status",
+      "onCli:dsagent"
+    ]
+  },
+  "contributes": {
+    "menus": [
+      {
+        "location": "plugins",
+        "label": "DeepSeek Agent…",
+        "command": "open"
+      }
+    ],
+    "windows": [
+      {
+        "id": "main",
+        "entry": "index.html",
+        "title": "DeepSeek Agent",
+        "width": 900,
+        "height": 640,
+        "min_width": 640,
+        "min_height": 420,
+        "open_command": "open"
+      }
+    ],
+    "cli": [
+      {
+        "subcommand": "dsagent",
+        "command": "run",
+        "summary": "Run a DeepSeek Agent task headlessly",
+        "args": [
+          {
+            "name": "task",
+            "type": "string",
+            "required": true,
+            "help": "Task id — a directory under .notemd/agent-tasks/"
+          }
+        ],
+        "flags": [
+          {
+            "long": "--prompt",
+            "short": "-p",
+            "type": "string",
+            "help": "Extra prompt appended to the task's own"
+          },
+          {
+            "long": "--wait",
+            "type": "boolean",
+            "help": "Run inline and wait for the result (max 300s) instead of detaching"
+          }
+        ]
+      }
+    ]
+  },
+  "i18n": {
+    "zh": {
+      "name": "DeepSeek 智能体",
+      "menus": {
+        "open": "DeepSeek 智能体…"
+      }
+    },
+    "ja": {
+      "name": "DeepSeek エージェント",
+      "menus": {
+        "open": "DeepSeek エージェント…"
+      }
+    },
+    "de": {
+      "name": "DeepSeek Agent",
+      "menus": {
+        "open": "DeepSeek Agent…"
+      }
+    }
+  },
+  "capabilities": [
+    "ui",
+    "toast",
+    "vault.read",
+    "editor.open",
+    "notify"
+  ],
+  "request_timeout_seconds": 300
+}

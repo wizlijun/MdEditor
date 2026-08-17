@@ -1,24 +1,11 @@
 //! Line-by-line parsing of `--output-format stream-json --verbose`. Only four
 //! kinds of event matter to us; everything else (including non-JSON noise) is
 //! dropped rather than surfaced.
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Event {
-    System { subtype: String },
-    Text { text: String },
-    ToolUse { name: String, brief: String },
-    Result(RunResult),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RunResult {
-    pub is_error: bool,
-    pub result: String,
-    pub session_id: Option<String>,
-    pub num_turns: Option<u64>,
-}
+//!
+//! The `Event` shape itself is the wire contract shared with the window and with
+//! deepseek-agent, so it lives in `agent-run-core`; only the claude-specific
+//! PARSING is here.
+pub use agent_run_core::event::{Event, RunResult};
 
 /// Parse one line. `None` means the line produces no event.
 pub fn parse_line(line: &str) -> Option<Event> {

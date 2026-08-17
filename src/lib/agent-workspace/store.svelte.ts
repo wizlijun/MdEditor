@@ -10,7 +10,16 @@ import { pluginRuntime } from '../plugins/runtime.svelte'
  * the plugin's `run-status`, which reads the lock, the progress snapshot and
  * the run record off disk.
  */
-export const PLUGIN_ID = 'notemd.claude-agent'
+/// The commands the agent slot dispatches. A plugin that activates on all three
+/// can serve it — the same convention the host uses
+/// (src-tauri/src/plugin_runtime/agent_provider.rs). Deliberately NOT a new
+/// manifest field: `contributes` is deny_unknown_fields, so adding one would
+/// stop older hosts loading the plugin at all.
+export const AGENT_COMMANDS = ['run-task', 'run-note', 'run-status'] as const
+/** Used when nothing is configured — what every existing vault already has. */
+export const DEFAULT_PLUGIN_ID = 'notemd.claude-agent'
+/** @deprecated Use `agentProviders()` / `activeProvider()`; kept for callers not yet updated. */
+export const PLUGIN_ID = DEFAULT_PLUGIN_ID
 export const NOTE_TASK = 'answer-note-question'
 export const POLL_MS = 1000
 
@@ -32,6 +41,8 @@ export interface AgentRunState {
   message: string
   /** Vault-relative markdown the run produced. */
   artifacts: string[]
+  /** Which agent plugin served this run. */
+  provider: string | null
 }
 
 export function emptyRun(): AgentRunState {
@@ -45,6 +56,7 @@ export function emptyRun(): AgentRunState {
     outcome: null,
     message: '',
     artifacts: [],
+    provider: null,
   }
 }
 
@@ -55,20 +67,57 @@ export function isAgentBusy(): boolean {
   return agentRun.phase === 'starting' || agentRun.phase === 'running'
 }
 
-/** Is the claude-agent plugin installed and enabled? */
+/** Every installed plugin that can serve the agent slot, default first. */
+export function agentProviders(): string[] {
+  const ids = pluginRuntime.manifests
+    .filter((m) => {
+      const events: string[] = (m as { activation?: { events?: string[] } }).activation?.events ?? []
+      return AGENT_COMMANDS.every((c) => events.includes(`onCommand:${c}`))
+    })
+    .map((m) => m.id)
+    .sort()
+  // Default first, so the one that will actually run is the one read first.
+  const i = ids.indexOf(DEFAULT_PLUGIN_ID)
+  if (i > 0) {
+    ids.splice(i, 1)
+    ids.unshift(DEFAULT_PLUGIN_ID)
+  }
+  return ids
+}
+
+/** Which provider this workspace dispatches to. */
+export function activeProvider(): string {
+  const installed = agentProviders()
+  if (chosenProvider && installed.includes(chosenProvider)) return chosenProvider
+  if (installed.includes(DEFAULT_PLUGIN_ID)) return DEFAULT_PLUGIN_ID
+  return installed[0] ?? DEFAULT_PLUGIN_ID
+}
+
+/** Point the workspace at a different harness. Ignored while a run is in flight. */
+export function setProvider(id: string): void {
+  if (isAgentBusy()) return
+  chosenProvider = id
+}
+
+let chosenProvider: string | null = null
+
+/** Is any agent plugin installed and enabled? */
 export function agentPluginAvailable(): boolean {
-  return pluginRuntime.manifests.some((m) => m.id === PLUGIN_ID)
+  return agentProviders().length > 0
 }
 
 type Execute = (command: string, context: unknown) => Promise<any>
 
-let execute: Execute = (command, context) =>
-  invoke('plugin_v2_execute', { pluginId: PLUGIN_ID, command, context })
+// Resolved per call, not captured once: switching provider mid-session must
+// take effect on the next run rather than at the next restart.
+const dispatch: Execute = (command, context) =>
+  invoke('plugin_v2_execute', { pluginId: activeProvider(), command, context })
+
+let execute: Execute = dispatch
 
 /** Test seam: swap the plugin transport. */
 export function __setExecuteForTests(fn: Execute | null): void {
-  execute = fn ?? ((command, context) =>
-    invoke('plugin_v2_execute', { pluginId: PLUGIN_ID, command, context }))
+  execute = fn ?? dispatch
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -95,6 +144,7 @@ export async function startNoteRun(
     phase: 'starting' as AgentPhase,
     notePath,
     startedAt: Date.now(),
+    provider: activeProvider(),
   })
   try {
     const r = await execute('run-note', { note_path: notePath, task: NOTE_TASK })

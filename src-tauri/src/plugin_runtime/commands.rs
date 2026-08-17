@@ -421,6 +421,18 @@ pub fn startup_activate_all<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     });
 }
 
+/// Every installed v2 manifest. Used by the agent slot to work out which
+/// plugins can serve it (`agent_provider::providers`).
+pub fn installed_manifests() -> Vec<plugin_protocol::ManifestV2> {
+    STATE
+        .read()
+        .unwrap()
+        .plugins
+        .values()
+        .map(|(m, _)| m.clone())
+        .collect()
+}
+
 /// STATE lookup half of registration — AppHandle-free so it is unit-testable.
 fn lookup_v2(plugin_id: &str) -> Result<(plugin_protocol::ManifestV2, PathBuf), String> {
     STATE

@@ -1071,13 +1071,29 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
     /// 插件进程死亡时的 pending drain、以及 future panic 时的 tx 落地(下面的
     /// Disconnected 分支)兜住了全部出口。
     fn agent_execute(&self, command: &str, context: serde_json::Value) -> Result<serde_json::Value, String> {
-        const AGENT_PLUGIN: &str = "notemd.claude-agent";
+        // Which plugin serves this call is a CHOICE now, not a constant: an
+        // explicit `harness` parameter wins, else the vault's
+        // `agentDefaultProvider`, else claude-agent (see agent_provider).
+        // Resolved per call rather than cached, so switching the setting takes
+        // effect on the next run instead of at the next restart.
+        let requested = context
+            .get("harness")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let installed =
+            super::agent_provider::providers(&super::commands::installed_manifests());
+        let configured = super::agent_provider::configured_default(self.vault_root().as_deref());
+        let agent_plugin = super::agent_provider::resolve(
+            requested.as_deref(),
+            configured.as_deref(),
+            &installed,
+        );
         let app = self.app.clone();
         let command = command.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         tauri::async_runtime::spawn(async move {
             let out = async {
-                let lc = super::commands::get_or_register(&app, AGENT_PLUGIN)
+                let lc = super::commands::get_or_register(&app, &agent_plugin)
                     .map_err(|e| format!("agent_unavailable: {e}"))?;
                 lc.ensure_active(&super::lifecycle::Trigger::Command(command.clone()))
                     .await

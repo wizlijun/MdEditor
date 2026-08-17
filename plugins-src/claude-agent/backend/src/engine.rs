@@ -227,7 +227,10 @@ pub async fn run(
                                 progress.updated_at = chrono::Utc::now().to_rfc3339();
                                 record::write_progress(&spec.task_run_dir, &progress);
                             }
-                            stream::Event::System { .. } => {}
+                            // claude has nobody to ask at runtime: it
+                            // pre-approves in settings.local.json instead, so
+                            // Permission is an ACP-only variant here.
+                            stream::Event::System { .. } | stream::Event::Permission { .. } => {}
                         }
                         let _ = tx.send(Step::Event(ev));
                     }

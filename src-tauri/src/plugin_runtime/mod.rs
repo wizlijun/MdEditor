@@ -4,6 +4,7 @@
 //! frontend and the CLI as a manifest view model.
 
 pub mod adapter;
+pub mod agent_provider;
 pub mod commands;
 pub mod discovery;
 pub mod host_api;

@@ -1,0 +1,37 @@
+[package]
+name = "notemd-deepseek-agent"
+version = "1.0.0"
+edition = "2021"
+
+# deepseek-agent v2 backend: an ACP client. A run spawns `dsh-acp-demo` with cwd
+# set to the task template dir and drives it over NDJSON JSON-RPC 2.0 — the
+# Agent Client Protocol v1 — rather than parsing a one-way stream of lines. The
+# same binary doubles as a detached `--runner` process for CLI-triggered runs.
+[[bin]]
+name = "notemd-deepseek-agent"
+path = "src/main.rs"
+
+# A scripted stand-in for the real ACP server, used by the engine's end-to-end
+# tests. Not shipped: dev-install and release copy only the binary above.
+[[bin]]
+name = "stub-acp"
+path = "src/bin/stub_acp.rs"
+
+[dependencies]
+notemd-plugin-sdk = { path = "../../../notemd-plugin-sdk" }
+agent-run-core = { path = "../../agent-run-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "process", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# No `panic = "abort"`: the test harness needs unwind.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

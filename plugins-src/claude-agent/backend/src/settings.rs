@@ -7,50 +7,14 @@
 //! the template ships one. That is what actually confines the run: telling a
 //! model in its prompt to look at a single file does not stop it from grepping
 //! the vault, and it did exactly that until the permissions said otherwise.
-use crate::mirror::{self, MirrorMeta};
+use agent_run_core::mirror::{self, MirrorMeta};
+pub use agent_run_core::scope::Scope;
 use std::path::{Path, PathBuf};
 
 /// Tools that fetch information rather than reach into the vault. Headless has
 /// nobody to answer a prompt, so an un-granted tool is an unusable one; the file
 /// scope is held by the deny list, not by keeping the run ignorant.
 const INFORMATION_TOOLS: [&str; 4] = ["WebSearch", "WebFetch", "Task", "Skill"];
-
-/// The one note a run is aimed at, and the source document behind it — the
-/// protocol needs both, since a question's `line::` points into the source.
-#[derive(Debug, Clone)]
-pub struct Scope {
-    pub note: PathBuf,
-    pub source: PathBuf,
-    /// The source's directory: the run's real working context. A mirrored
-    /// document's neighbours live here, not in the vault.
-    pub source_dir: PathBuf,
-}
-
-impl Scope {
-    /// `X.note.md` sits beside `X.md`. When that `X.md` is a vault mirror whose
-    /// original is on this machine, the source is the ORIGINAL — the vault copy
-    /// is a snapshot, the original is where the document actually lives. A path
-    /// that isn't a sidecar note gets itself as the source, which is harmless:
-    /// it only widens Read by one file the run was already pointed at.
-    pub fn for_note(vault: &Path, note: &Path, metas: &[MirrorMeta]) -> Scope {
-        let s = note.to_string_lossy();
-        let beside = s
-            .strip_suffix(".note.md")
-            .or_else(|| s.strip_suffix(".notes.md"))
-            .map(|stem| PathBuf::from(format!("{stem}.md")))
-            .unwrap_or_else(|| note.to_path_buf());
-        let source = mirror::source_for_mirror(vault, &beside, metas).unwrap_or(beside);
-        let source_dir = source
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| source.clone());
-        Scope {
-            note: note.to_path_buf(),
-            source,
-            source_dir,
-        }
-    }
-}
 
 /// The MCP servers configured on this machine, by name. Three places, because
 /// that is where `claude mcp add` puts them: user scope in `~/.claude.json`,

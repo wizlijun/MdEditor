@@ -3,7 +3,7 @@
 #
 #   scripts/release-plugins.sh [--release] <plugin...>
 #     plugin ∈ { md2pdf, roam-import, openclaw, pos-log,
-#                decision-log, weekly-review, claude-agent, ebook-import,
+#                decision-log, weekly-review, claude-agent, deepseek-agent, ebook-import,
 #                idea-spark, power-mode }   (add a case below)
 #     --release  currently a no-op flag reserved for build-profile parity with
 #                dev-install-plugin.sh; the release builds below are always
@@ -12,7 +12,7 @@
 # For each plugin this script:
 #   1. Builds its artifacts by REUSING the existing build scripts
 #      (md2pdf → scripts/build-md2pdf-v2.sh dual-arch bins;
-#       roam-import/openclaw/claude-agent/ebook-import → dual-arch backend
+#       roam-import/openclaw/claude-agent/deepseek-agent/ebook-import → dual-arch backend
 #       crate + pnpm --filter <plugin> build → dist/).
 #   2. Assembles the install-layout tree (manifest.json at root + bin/ and/or
 #      ui/) in a temp staging dir, then ZIPs it into
@@ -43,14 +43,14 @@ PLUGINS=()
 for arg in "$@"; do
   case "$arg" in
     --release) : ;; # reserved; release builds are always release-profile
-    md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|ebook-import|idea-spark|power-mode) PLUGINS+=("$arg") ;;
+    md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode) PLUGINS+=("$arg") ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | pos-log | decision-log | weekly-review | claude-agent | ebook-import | idea-spark | power-mode)" >&2; exit 2 ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | pos-log | decision-log | weekly-review | claude-agent | deepseek-agent | ebook-import | idea-spark | power-mode)" >&2; exit 2 ;;
   esac
 done
 if [[ ${#PLUGINS[@]} -eq 0 ]]; then
-  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|ebook-import|idea-spark|power-mode>..." >&2
+  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode>..." >&2
   exit 2
 fi
 
@@ -353,6 +353,14 @@ release_claude_agent() {
     "notemd-claude-agent" "claude-agent"
 }
 
+# deepseek-agent: an ACP client. Only the plugin binary ships -- the crate's
+# second bin (`stub-acp`) is a test fixture and release_native_ui builds by
+# --bin name, so it is never packaged.
+release_deepseek_agent() {
+  release_native_ui "notemd.deepseek-agent" "$REPO_ROOT/plugins-src/deepseek-agent" \
+    "notemd-deepseek-agent" "deepseek-agent"
+}
+
 # ── ebook-import: native backend + ui, per-arch packages. PDF rasterization
 # uses macOS CoreGraphics (a system framework) -- no vendored dylib to fetch
 # or bundle. ──────────────────────────────────────────────────────────────
@@ -423,6 +431,7 @@ for plugin in "${PLUGINS[@]}"; do
     decision-log) release_decision_log ;;
     weekly-review) release_weekly_review ;;
     claude-agent) release_claude_agent ;;
+    deepseek-agent) release_deepseek_agent ;;
     ebook-import) release_ebook_import ;;
     idea-spark)  release_idea_spark ;;
     power-mode)  release_power_mode ;;

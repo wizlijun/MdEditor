@@ -14,6 +14,10 @@ path = "src/main.rs"
 
 [dependencies]
 notemd-plugin-sdk = { path = "../../../notemd-plugin-sdk" }
+# Locks, run records, progress, artifacts, OKF stamping, task templates, the
+# detach handoff — everything a run is, minus the transport. Shared with
+# deepseek-agent so the two cannot drift on what lands in `.notemd/agent-runs/`.
+agent-run-core = { path = "../../agent-run-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "process", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

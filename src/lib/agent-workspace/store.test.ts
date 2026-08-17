@@ -1,13 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
+  activeProvider,
+  agentPluginAvailable,
+  agentProviders,
   agentRun,
   dismissRun,
   emptyRun,
   isAgentBusy,
+  setProvider,
   startNoteRun,
   __setExecuteForTests,
+  DEFAULT_PLUGIN_ID,
   POLL_MS,
 } from './store.svelte'
+import { pluginRuntime } from '../plugins/runtime.svelte'
 
 /** Drive the poll timer forward by one tick and let its promises settle. */
 async function tick() {
@@ -134,5 +140,67 @@ describe('agent workspace run', () => {
     dismissRun()
     expect(agentRun.phase).toBe('idle')
     expect(agentRun.runId).toBe(null)
+  })
+})
+
+describe('agent providers', () => {
+  const manifest = (id: string, commands: string[]) => ({
+    id,
+    activation: { events: commands.map((c) => `onCommand:${c}`) },
+  })
+  const AGENT = ['run-task', 'run-note', 'run-status']
+
+  function install(...ms: Array<{ id: string; activation: { events: string[] } }>) {
+    // pluginRuntime.manifests is the host's live registry; swap it for the test.
+    ;(pluginRuntime as unknown as { manifests: unknown[] }).manifests = ms
+  }
+
+  afterEach(() => install())
+
+  it('recognizes a plugin that declares all three agent commands', () => {
+    install(manifest('notemd.claude-agent', AGENT))
+    expect(agentProviders()).toEqual(['notemd.claude-agent'])
+    expect(agentPluginAvailable()).toBe(true)
+  })
+
+  it('does not recognize a plugin missing one of them', () => {
+    install(manifest('notemd.half', ['run-task', 'run-status']))
+    expect(agentProviders()).toEqual([])
+    expect(agentPluginAvailable()).toBe(false)
+  })
+
+  it('lists providers with the default first, then sorted', () => {
+    install(
+      manifest('notemd.zzz-agent', AGENT),
+      manifest('notemd.deepseek-agent', AGENT),
+      manifest('notemd.md2pdf', ['export']),
+      manifest('notemd.claude-agent', AGENT),
+    )
+    expect(agentProviders()).toEqual([
+      'notemd.claude-agent',
+      'notemd.deepseek-agent',
+      'notemd.zzz-agent',
+    ])
+  })
+
+  it('dispatches to the default until told otherwise', () => {
+    install(manifest('notemd.claude-agent', AGENT), manifest('notemd.deepseek-agent', AGENT))
+    expect(activeProvider()).toBe('notemd.claude-agent')
+    setProvider('notemd.deepseek-agent')
+    expect(activeProvider()).toBe('notemd.deepseek-agent')
+    setProvider(DEFAULT_PLUGIN_ID)
+  })
+
+  it('falls back when the chosen provider is uninstalled', () => {
+    install(manifest('notemd.claude-agent', AGENT), manifest('notemd.deepseek-agent', AGENT))
+    setProvider('notemd.deepseek-agent')
+    install(manifest('notemd.claude-agent', AGENT))
+    expect(activeProvider()).toBe('notemd.claude-agent')
+    setProvider(DEFAULT_PLUGIN_ID)
+  })
+
+  it('serves from another provider when the default is not installed', () => {
+    install(manifest('notemd.deepseek-agent', AGENT))
+    expect(activeProvider()).toBe('notemd.deepseek-agent')
   })
 })

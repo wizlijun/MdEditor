@@ -1,0 +1,26 @@
+[package]
+name = "agent-run-core"
+version = "1.0.0"
+edition = "2021"
+
+# Harness-neutral run machinery shared by every notemd agent plugin
+# (claude-agent, deepseek-agent, …). Everything in here is about RUNS — locks,
+# records, progress, artifacts, OKF stamping, task templates, the detach
+# handoff — and knows nothing about which model or transport does the work.
+#
+# The three things that are NOT here, because they differ per harness:
+# executable discovery specifics, the transport, and event mapping.
+[lib]
+name = "agent_run_core"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time", "io-util", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
