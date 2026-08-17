@@ -21,6 +21,21 @@ note.md —— 为 AI-native 时代打造的 markdown 阅读器与编辑器。
 
 外宣落点:README(中/英)的「产品理念」段;官网 notemd.net(`website/`);`website/public/llms.txt` / `llms-full.txt`(给 agent 的公共约定)。
 
+## 发版:每次都写增量 CHANGELOG
+
+`CHANGELOG.md`(英)与 `CHANGELOG.zh-CN.md`(中)在根目录,倒序,顶部固定一个「未发布」区。
+**平时改完就往「未发布」区加条目**,发版时 `scripts/release.sh` 把它轮转成版本节。
+
+- 条目**面向用户,不是提交流水账** —— 一条 = 一个用户能感知的变化,不是一个 commit。
+- 需要用户提前知道的事(数据迁移、索引重建、破坏性变更)写在版本节最前面。
+- **门禁是硬的**:两份的「未发布」区都必须非空、版本序列必须逐一对应,否则 `release.sh` 在
+  pre-flight 直接停住。忘了写就发不出去 —— 这是刻意的。
+- GitHub Release 的正文就是 `CHANGELOG.md` 的本次段落(不再用 `generate-notes` 的提交流水账)。
+
+工具:`node scripts/changelog.mjs check | rotate <版本> <日期> | notes <版本>`,
+逻辑在 `scripts/changelog-core.mjs`(有单测)。设计见
+`docs/superpowers/specs/2026-08-17-changelog-gate-design.md`。
+
 ## 格式约束:OKF v0.2(知识文档格式,规范性)
 
 **`docs/okf-v0.2-format-constraints.md`** 是本项目的知识文档格式约束文档(Open Knowledge Format v0.2,Google Cloud 开放规范的中文整理版,SSOT 见文首链接)。凡产出/消费 OKF 知识包(Knowledge Bundle)——例如把 vault 内容导出为可分发的知识集合、或让 agent 按公共约定读写知识文档——**必须严格按该文档执行**,不要凭印象写字段;有疑问先读文档对应小节,再动手。

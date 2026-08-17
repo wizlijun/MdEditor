@@ -1,0 +1,29 @@
+# Changelog
+
+What changed in each release, from the point of view of someone using note.md.
+For the full commit history, see the git log.
+
+中文版:[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
+
+## Unreleased
+
+## v6.817.1 — 2026-08-17
+
+> **The search index rebuilds itself once, the first time you open a vault after upgrading** (about ten seconds; the search panel shows "building" meanwhile). The index is disposable derived data — the rebuild does not touch a single file in your vault.
+
+### Added
+
+- **Search now counts the time you have spent reading.** Time you put into a document (reading plus editing, editing weighted 1.5×) lifts it in search results, decaying with a 30-day half-life — what you read through last month gives way to what you are working on this week. The data comes from Reading Insights, which was already collecting it; nothing new is recorded. Documents you have never opened are **not penalised**, merely unboosted: the summary an agent generated this morning is exactly the thing you are searching for.
+- **Long documents you have actually read no longer get buried.** A long note you spent three hours in, but which mentions your query word only once, used to be cut by the relevance limit before scoring ever happened. It now gets a reserved slot into the ranking stage.
+- **Settings ▸ Search** gained a "Files with attention data" row, showing how much of your vault this data covers.
+- **`notemd search --json` gained an `attention_minutes` field** — decayed minutes of your own attention on that document, so an agent can explain why the order is what it is. The plain `path:line:text` output is unchanged, to the character.
+- **New `notemd doctor` command** — one command that checks environment, config and vault, search index, plugins, and network endpoints, reporting what is wrong in each rather than a blanket "not working".
+
+### Changed
+
+- Search result order will shift. That is the direct consequence of the above: documents you have invested time in move up.
+- The strength of the attention boost is configurable: `searchWeights.attention` in `.notemd/settings.json` (default `0.4`; `0` turns it off entirely). A change takes effect on your next search — no need to reopen the vault.
+
+### Fixed
+
+- When a file outside your vault is mirrored into it, the reading time you spent on the original is now credited to the vault-side mirror instead of being lost.

@@ -155,6 +155,15 @@ command -v pnpm  >/dev/null || die "pnpm not found"
 command -v gh    >/dev/null || die "gh not found"
 command -v cargo >/dev/null || die "cargo not found"
 
+# CHANGELOG 门禁。硬拦:两份的「未发布」区都必须有内容,且版本序列不能漂移。
+# 忘了写 changelog 时,发布停在这里而不是发出一个只有提交流水账的 Release。
+# 逻辑在 scripts/changelog-core.mjs(有单测),见设计 §3.1。
+node scripts/changelog.mjs check >/dev/null \
+  || die "CHANGELOG 没写好:
+$(node scripts/changelog.mjs check 2>&1)
+
+在 CHANGELOG.md 与 CHANGELOG.zh-CN.md 的「未发布」区写上这一版的用户可感知变化,再发。"
+
 # Detach any leftover bundle_dmg.sh random-mount points from previous failed
 # runs. They show up as /Volumes/dmg.XXXXXX. Tauri's dmg packaging step
 # (bundle_dmg.sh) silently fails if a conflicting mount exists.
@@ -221,7 +230,9 @@ revert_bumps() {
     package.json \
     src-tauri/tauri.conf.json \
     src-tauri/Cargo.toml \
-    src-tauri/Cargo.lock 2>/dev/null || true
+    src-tauri/Cargo.lock \
+    CHANGELOG.md \
+    CHANGELOG.zh-CN.md 2>/dev/null || true
 }
 trap 'revert_bumps' ERR
 
@@ -242,6 +253,15 @@ sed -i '' "1,/^version = /s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-t
 grep -q "\"version\": \"$VERSION\""             package.json              || die "bump failed: package.json"
 grep -q "\"version\": \"$VERSION\""             src-tauri/tauri.conf.json || die "bump failed: tauri.conf.json"
 grep -q "^version = \"$VERSION\"$"              src-tauri/Cargo.toml      || die "bump failed: Cargo.toml"
+
+# CHANGELOG 轮转:把两份的「未发布」区就地变成版本节,顶部补回空的未发布区。
+# 与上面四个版本文件同批,一起进 `chore: release` 提交、一起受 revert_bumps
+# 保护 —— 构建失败时不能只回滚版本号却把 changelog 留在轮转后的状态。
+RELEASE_DATE="$(date +%Y-%m-%d)"
+node scripts/changelog.mjs rotate "$VERSION" "$RELEASE_DATE" \
+  || die "changelog rotate failed"
+grep -q "^## v$VERSION — $RELEASE_DATE$" CHANGELOG.md      || die "bump failed: CHANGELOG.md"
+grep -q "^## v$VERSION — $RELEASE_DATE$" CHANGELOG.zh-CN.md || die "bump failed: CHANGELOG.zh-CN.md"
 
 # ---------- build ----------
 
@@ -352,7 +372,8 @@ build_arch x86_64-apple-darwin  x86_64
 
 say "committing v$VERSION"
 trap - ERR  # build succeeded — keep version bumps even if a later step fails
-git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock \
+  CHANGELOG.md CHANGELOG.zh-CN.md
 git commit -m "chore: release v$VERSION"
 git tag -a "$TAG" -m "note.md $VERSION"
 
@@ -378,16 +399,19 @@ Pick the dmg matching your Mac's chip:
 EOF
 )
 
-# Auto-generate "What's Changed" body from the GitHub API and prepend the install preamble.
-GENERATED=$(
-  gh api -X POST "repos/$GH_REPO/releases/generate-notes" \
-    -f tag_name="$TAG" \
-    -f target_commitish="main" \
-    --jq .body 2>/dev/null \
-  || true
-)
+# Release 正文 = 安装说明 preamble + CHANGELOG 里本次版本那一节。
+#
+# 取代了过去的 `gh api releases/generate-notes`:那是提交流水账,告诉你合并了
+# 哪 41 个 commit,不告诉你「这个版本对我有什么不同」。一处写作,两处到达。
+# 取不到就 die 而不是回退到空正文 —— 只剩安装说明的 Release 页「看起来像是
+# 正常的」,没人会发现正文丢了。
+CHANGELOG_SECTION=$(node scripts/changelog.mjs notes "$VERSION") \
+  || die "cannot extract CHANGELOG section for $VERSION"
+[[ -n "$CHANGELOG_SECTION" ]] || die "CHANGELOG section for $VERSION is empty"
 
-NOTES="${PREAMBLE}${GENERATED}"
+NOTES="${PREAMBLE}## What's Changed
+
+${CHANGELOG_SECTION}"
 
 EXTRA=()
 (( DRAFT ))      && EXTRA+=(--draft)
