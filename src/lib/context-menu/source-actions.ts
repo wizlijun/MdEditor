@@ -105,6 +105,12 @@ export function createSourceActions(h: SourceHandle): EditorActions {
           requestAnimationFrame(() => { h.el.focus(); h.el.setSelectionRange(r.selStart, r.selEnd) })
           return
         }
+        case 'trace': {
+          const text = h.value().slice(h.el.selectionStart ?? 0, h.el.selectionEnd ?? 0)
+          if (!text.trim()) return
+          const { openTraceDelegation } = await import('./trace-action')
+          return openTraceDelegation(text)
+        }
         case 'link':      return link(h)
         case 'h1':        return linePrefix(h, '# ')
         case 'h2':        return linePrefix(h, '## ')

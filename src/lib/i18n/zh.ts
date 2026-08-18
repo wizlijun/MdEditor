@@ -257,6 +257,7 @@ export const zh: Record<keyof Messages, string> = {
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': '笔记',
   'ctxmenu.question': '提问',
+  'ctxmenu.trace': '溯源',
   'ctxmenu.bold': '加粗',
   'ctxmenu.italic': '斜体',
   'ctxmenu.strike': '删除线',

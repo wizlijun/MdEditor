@@ -115,6 +115,13 @@ export function createRichActions(
           const { insertNoteRich } = await import('../note-anno/note-commands')
           return insertNoteRich(view, '?')
         }
+        case 'trace': {
+          const { from, to } = view.state.selection
+          const text = view.state.doc.textBetween(from, to, '\n')
+          if (!text.trim()) return
+          const { openTraceDelegation } = await import('./trace-action')
+          return openTraceDelegation(text)
+        }
         case 'link':      return toggleLink(view)
         case 'h1':        return setBlock(view, 'heading', { level: 1 })
         case 'h2':        return setBlock(view, 'heading', { level: 2 })
