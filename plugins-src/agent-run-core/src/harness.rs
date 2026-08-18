@@ -69,13 +69,27 @@ pub enum Probe {
 /// Ask an executable for its version, bounded so a hung binary cannot wedge the
 /// window.
 ///
-/// Exit status is not decoration here. A launcher that runs through a package
-/// manager (`pnpm --dir <repo> run demo:acp`) fails on a version mismatch and
-/// prints its complaint to stdout — first-line-wins would show that complaint AS
-/// the version and mark a harness that cannot start as ready.
-pub fn probe_version(program: &Path, args: &[String], timeout: std::time::Duration) -> Probe {
+/// `path` is the `PATH` the child gets, and it is not optional in practice.
+/// Both harnesses are `#!/usr/bin/env node` shims, and a GUI-launched host
+/// inherits a `PATH` with no node in it — so probing without one fails with
+/// `env: node: No such file or directory` and reports a perfectly healthy
+/// harness as broken. The RUN path always set this; the probe did not, and a
+/// probe that says `ok: false` disables the Run button, so the omission blocked
+/// everything. (Missed because a probe run from a terminal inherits a full
+/// PATH: it was tested in the one context where the bug cannot appear.)
+///
+/// Exit status is not decoration either: a launcher that fails and prints its
+/// complaint to stdout would otherwise have that complaint shown AS the version,
+/// with the harness marked ready.
+pub fn probe_version(
+    program: &Path,
+    args: &[String],
+    path: &str,
+    timeout: std::time::Duration,
+) -> Probe {
     let mut cmd = std::process::Command::new(program);
-    cmd.args(args)
+    cmd.env("PATH", path)
+        .args(args)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -191,13 +205,16 @@ mod tests {
     }
 
     const QUICK: std::time::Duration = std::time::Duration::from_secs(5);
+    /// Enough for `/bin/sh` fakes; the point of the parameter is that callers
+    /// must pass one at all.
+    const PATH: &str = "/usr/bin:/bin";
 
     #[test]
     fn reads_a_version_off_stdout() {
         let d = tempfile::tempdir().unwrap();
         let p = fake(d.path(), "v", "echo '2.1.226 (Claude Code)'");
         assert_eq!(
-            probe_version(&p, &[], QUICK),
+            probe_version(&p, &[], PATH, QUICK),
             Probe::Version("2.1.226 (Claude Code)".into())
         );
     }
@@ -208,7 +225,7 @@ mod tests {
     fn falls_back_to_stderr_when_stdout_is_empty() {
         let d = tempfile::tempdir().unwrap();
         let p = fake(d.path(), "v", "echo '0.1.0-rc.6' >&2");
-        assert_eq!(probe_version(&p, &[], QUICK), Probe::Version("0.1.0-rc.6".into()));
+        assert_eq!(probe_version(&p, &[], PATH, QUICK), Probe::Version("0.1.0-rc.6".into()));
     }
 
     #[test]
@@ -216,7 +233,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = fake(d.path(), "v", r#"echo "$*""#);
         assert_eq!(
-            probe_version(&p, &["--dir".into(), "/repo".into()], QUICK),
+            probe_version(&p, &["--dir".into(), "/repo".into()], PATH, QUICK),
             Probe::Version("--dir /repo --version".into())
         );
     }
@@ -228,7 +245,7 @@ mod tests {
         let p = fake(d.path(), "hang", "sleep 30");
         let started = std::time::Instant::now();
         assert_eq!(
-            probe_version(&p, &[], std::time::Duration::from_millis(300)),
+            probe_version(&p, &[], PATH, std::time::Duration::from_millis(300)),
             Probe::Unavailable
         );
         assert!(
@@ -238,17 +255,49 @@ mod tests {
         );
     }
 
+    /// The bug this exists for. Both harnesses are `#!/usr/bin/env node` shims;
+    /// a GUI-launched host has no node on its PATH, so a probe run without one
+    /// dies with `env: node: No such file or directory` and reports a working
+    /// harness as broken — which disables the Run button.
+    #[test]
+    fn the_child_gets_the_path_it_was_given_not_the_hosts() {
+        let d = tempfile::tempdir().unwrap();
+        // An interpreter that exists only where we choose to name.
+        let bin_dir = d.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        fake(&bin_dir, "notemd-fake-node", r#"echo "9.9.9""#);
+
+        // A shim that finds its interpreter through PATH, exactly like `dsh`.
+        use std::os::unix::fs::PermissionsExt;
+        let shim = d.path().join("shim");
+        std::fs::write(&shim, "#!/usr/bin/env notemd-fake-node\n").unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Without that directory on PATH the shim cannot start at all…
+        assert_ne!(
+            probe_version(&shim, &[], "/usr/bin:/bin", QUICK),
+            Probe::Version("9.9.9".into()),
+            "a PATH without the interpreter must not look like a working harness"
+        );
+        // …and with it, the same binary answers.
+        let with = format!("{}:/usr/bin:/bin", bin_dir.display());
+        assert_eq!(
+            probe_version(&shim, &[], &with, QUICK),
+            Probe::Version("9.9.9".into())
+        );
+    }
+
     #[test]
     fn a_missing_binary_reads_as_no_version() {
         let d = tempfile::tempdir().unwrap();
-        assert_eq!(probe_version(&d.path().join("nope"), &[], QUICK), Probe::Unavailable);
+        assert_eq!(probe_version(&d.path().join("nope"), &[], PATH, QUICK), Probe::Unavailable);
     }
 
     #[test]
     fn a_silent_binary_reads_as_no_version() {
         let d = tempfile::tempdir().unwrap();
         let p = fake(d.path(), "quiet", "exit 0");
-        assert_eq!(probe_version(&p, &[], QUICK), Probe::Unavailable);
+        assert_eq!(probe_version(&p, &[], PATH, QUICK), Probe::Unavailable);
     }
 
     /// Caught live: a monorepo launcher goes through pnpm, and a pnpm version
@@ -264,7 +313,7 @@ mod tests {
             "echo '[ERROR] This project is configured to use 11.7.0 of pnpm. Your current pnpm is v11.0.9'\nexit 1",
         );
         assert_eq!(
-            probe_version(&p, &[], QUICK),
+            probe_version(&p, &[], PATH, QUICK),
             Probe::Failed(
                 "[ERROR] This project is configured to use 11.7.0 of pnpm. Your current pnpm is v11.0.9".into()
             )
@@ -277,7 +326,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = fake(d.path(), "err", "echo 'cannot find module' >&2\nexit 2");
         assert_eq!(
-            probe_version(&p, &[], QUICK),
+            probe_version(&p, &[], PATH, QUICK),
             Probe::Failed("cannot find module".into())
         );
     }

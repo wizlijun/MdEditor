@@ -714,9 +714,12 @@ impl DeepseekAgentPlugin {
         // a version put "[ERROR] This project is configured to use 11.7.0 of
         // pnpm…" where the version belongs and called the harness good to go.
         // `dsh --version` answers instantly (no profile boot, no ACP server), so
-        // this is a plain probe again.
+        // this is a plain probe again — but it needs the SAME enriched PATH the
+        // run gets. `dsh` is `#!/usr/bin/env node`, and a GUI-launched host has
+        // no node on its PATH.
+        let path_env = discover::runtime_path();
         let (ok, version, hint) =
-            match harness::probe_version(&launcher.program, &[], VERSION_PROBE_TIMEOUT) {
+            match harness::probe_version(&launcher.program, &[], &path_env, VERSION_PROBE_TIMEOUT) {
                 harness::Probe::Version(v) => (true, Some(v), None),
                 harness::Probe::Failed(why) => (false, None, Some(why)),
                 harness::Probe::Unavailable => (true, None, None),

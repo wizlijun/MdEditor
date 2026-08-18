@@ -715,7 +715,11 @@ impl ClaudeAgentPlugin {
             .and_then(|v| harness::recent_environment_warning(&task::runs_root(&v), SELF_PLUGIN_ID));
         // A binary that answers `--version` with a failure is present but not
         // usable; calling it ready would send the user off to debug their task.
-        let (ok, version, hint) = match harness::probe_version(&bin, &[], VERSION_PROBE_TIMEOUT) {
+        // The same enriched PATH the run gets: `claude` is a node shim too, and a
+        // GUI-launched host inherits a PATH with no node in it.
+        let path_env = discover::runtime_path();
+        let (ok, version, hint) =
+            match harness::probe_version(&bin, &[], &path_env, VERSION_PROBE_TIMEOUT) {
             harness::Probe::Version(v) => (true, Some(v), None),
             harness::Probe::Failed(why) => (false, None, Some(why)),
             // It is on disk and executable but said nothing. Not evidence of a
