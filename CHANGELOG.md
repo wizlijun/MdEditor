@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.818.7 — 2026-08-18
+
 ### Fixed
 
 - **"DeepSeek Harness — found, but it will not start: env: node: No such file or directory" is gone.** Both agents are launched through a small Node script, and an app started from the Dock inherits a much smaller `PATH` than a terminal does — one with no `node` in it. The run itself always compensated for that; the check that reports which harness you have did not, so a perfectly working install was reported as broken, and reporting it broken disabled the Run button. Nothing to do on your side.
