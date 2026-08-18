@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.818.4 — 2026-08-18
+
 ### Fixed
 
 - **The agent picker's menu is no longer cut off by the window.** It was positioned inside the panel it lives in, so any scrolling container around it — the sidecar note panel, the ebook queue — clipped it before it ever reached a window edge. It now opens in front of everything and chooses its own direction: downward by default, upward when the button sits near the bottom, and shifted sideways rather than off the edge in a narrow panel. It follows its button while you scroll instead of drifting away from it.
