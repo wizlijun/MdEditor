@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.818.3 — 2026-08-18
+
 ### Changed
 
 - **One way to choose which agent runs something, everywhere.** Every button that hands work to an agent now carries the same control beside it — `[ Answer ] by Claude ▾` — in the sidecar note panel, in Idea Spark, and on the ebook queue's AI-read action. The menu lists each installed agent with its harness version and the model it will use, and ticks the one in use, so you can tell what you are about to spend tokens on before you click. An agent whose harness cannot start is shown with the reason rather than silently offered as if it worked.
