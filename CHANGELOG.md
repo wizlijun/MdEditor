@@ -7,6 +7,11 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Trace to source: find where a passage really came from.** Select text in the editor → right-click "Trace source", or type `/trace` in Idea Spark, and an agent hunts down the original source across YouTube, paper archives and western tech blogs (scope is yours to narrow in the delegation text), downloads the subtitles or article body, and writes a summary with backlinks into your vault's `traces/` folder — one click back to the document you asked from, and relative links onward into the captured full-text material. A notification opens the summary when the run finishes. YouTube subtitles use a local `yt-dlp` (without it, the report degrades to link + description and says so honestly).
+- **Slash directives in Idea Spark.** Any agent task template under `.notemd/agent-tasks/` that declares a `directive` becomes a `/command` on the input surface — write your own template, get your own directive; tracing is just the first one.
+
 ## v6.818.2 — 2026-08-18
 
 ### Fixed
