@@ -6,6 +6,8 @@
 
 ## 未发布
 
+## v6.818.6 — 2026-08-18
+
 ### 变更
 
 - **DeepSeek 智能体改用你自己安装的 DeepSeek Harness。** 它会在你机器上找 `dsh`,第一次运行时把 ACP 桥装进一个专属的 `notemd` profile(`dsh plugin --profile notemd add @deepseek-ai/dsh-acp`),然后经它启动。harness 给你的一切 —— 工具、技能、子 agent、网页检索 —— 都跟着来,因为组合由 profile 负责,而不是一份只能挂上子集的手写配置。装它:`npm i -g @deepseek-ai/dsh`,剩下的插件自己搞定。

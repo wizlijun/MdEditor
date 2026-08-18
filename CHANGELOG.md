@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.818.6 — 2026-08-18
+
 ### Changed
 
 - **DeepSeek Agent now uses the DeepSeek Harness you installed.** It looks for `dsh` on your machine, puts the ACP bridge into a `notemd` profile of its own the first time you run something (`dsh plugin --profile notemd add @deepseek-ai/dsh-acp`), and launches through it. Everything the harness gives you — its tools, skills, subagents, web search — comes along, because the profile does the composing instead of a hand-written file that could only ever mount a subset. Install it with `npm i -g @deepseek-ai/dsh`; the plugin does the rest.
