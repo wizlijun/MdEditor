@@ -7,6 +7,13 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **The agent windows no longer sit on "Checking the harness…" forever.** The banner asked the plugin for its harness over a channel the plugin only answered on for menu and relay calls, so the window's question was never answered — and a failed check rendered exactly like one still in progress, so the spinner never stopped. Both are fixed: the question is answered on the window's own channel, and a check that fails now says so.
+- **"Not installed" is no longer shown for a harness that is installed.** A harness that is present but cannot start (a version pin, a missing dependency) now says "found, but it will not start" plus the reason and where it was found, instead of sending you off to install something you already have.
+- **DeepSeek Harness works from a local checkout again.** The harness repository pins an exact pnpm version, and corepack refuses to run rather than switching — so on any machine whose pnpm differs, the agent reported itself unavailable. The launcher now downgrades that pin to a warning. It also reads the harness version from the checkout instead of starting a server to ask, which is both instant and accurate.
+- **The setup hint no longer recommends something that cannot work.** `npm i -g @deepseek-ai/dsh-acp-demo` was the advice; that package requires two dependencies (`dsh-workspace-context`, `dsh-bash-env`) that were never published, so the install either refuses or produces a binary that will not start. The hint now points at the local-checkout route, which does work.
+
 ## v6.818.1 — 2026-08-18
 
 ### Fixed

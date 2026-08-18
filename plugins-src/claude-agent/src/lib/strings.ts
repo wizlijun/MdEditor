@@ -29,7 +29,9 @@ export type MessageKey =
   | 'status.busy'
   | 'turns'
   | 'harness.probing'
+  | 'harness.unknown'
   | 'harness.missing'
+  | 'harness.broken'
   | 'harness.model'
   | 'harness.warning'
   | 'err.noVault'
@@ -67,7 +69,9 @@ const en: Catalog = {
   'status.busy': 'Already running',
   turns: '{n} turns',
   'harness.probing': 'Checking the harness…',
+  'harness.unknown': 'Could not read the harness status — restart the app after updating this plugin.',
   'harness.missing': 'not installed',
+  'harness.broken': 'found, but it will not start',
   'harness.model': 'model {model}',
   'harness.warning': 'Last run failed on the environment: {detail}',
   'err.noVault': 'No vault configured — open or create a vault first.',
@@ -104,7 +108,9 @@ const zh: Catalog = {
   'status.busy': '已在运行',
   turns: '{n} 轮',
   'harness.probing': '正在检查运行环境…',
+  'harness.unknown': '读不到运行环境状态 —— 插件更新后请重启应用。',
   'harness.missing': '未安装',
+  'harness.broken': '装了,但起不来',
   'harness.model': '模型 {model}',
   'harness.warning': '上次运行因环境问题失败:{detail}',
   'err.noVault': '未配置 vault——请先打开或创建一个 vault。',
@@ -141,7 +147,9 @@ const ja: Catalog = {
   'status.busy': '実行中です',
   turns: '{n} ターン',
   'harness.probing': '実行環境を確認中…',
+  'harness.unknown': '実行環境の状態を取得できません。プラグイン更新後はアプリを再起動してください。',
   'harness.missing': '未インストール',
+  'harness.broken': 'インストール済みですが起動できません',
   'harness.model': 'モデル {model}',
   'harness.warning': '前回の実行は環境の問題で失敗しました:{detail}',
   'err.noVault': 'vault が未設定です。まず vault を開くか作成してください。',
@@ -178,7 +186,9 @@ const de: Catalog = {
   'status.busy': 'Läuft bereits',
   turns: '{n} Runden',
   'harness.probing': 'Umgebung wird geprüft…',
+  'harness.unknown': 'Umgebungsstatus nicht lesbar — App nach dem Plugin-Update neu starten.',
   'harness.missing': 'nicht installiert',
+  'harness.broken': 'vorhanden, startet aber nicht',
   'harness.model': 'Modell {model}',
   'harness.warning': 'Letzter Lauf scheiterte an der Umgebung: {detail}',
   'err.noVault': 'Kein Vault konfiguriert — bitte zuerst einen Vault öffnen oder erstellen.',

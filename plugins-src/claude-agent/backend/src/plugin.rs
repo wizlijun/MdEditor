@@ -349,6 +349,11 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
                 }
             }
             "context.get" => Ok(json!({ "tab": self.tab_context })),
+            // Also a UI method, not only a command: the window asks over the
+            // `ui.request` channel (`bridge.request('plugin.…')`), while the
+            // host's relay and the menu use `command.execute`. Registering it in
+            // one place only left the window's banner spinning forever.
+            "harness.status" | "harness-status" => self.harness_status(),
             "run.start" => self.start(host, params, "window"),
             "run.cancel" => {
                 let id = params

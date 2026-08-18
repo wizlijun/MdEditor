@@ -20,6 +20,9 @@ pub const BIN: &str = "dsh-acp-demo";
 pub struct Launcher {
     pub program: PathBuf,
     pub args: Vec<String>,
+    /// The version, when it can be read WITHOUT running anything (a checkout's
+    /// package.json). `None` means "ask the executable".
+    pub known_version: Option<String>,
     /// Where the program is resolved from — shown in the run record so a support
     /// question ("which dsh was that?") has an answer.
     pub origin: String,
@@ -30,6 +33,7 @@ impl Launcher {
         Self {
             program: path,
             args: Vec::new(),
+            known_version: None,
             origin: origin.to_string(),
         }
     }
@@ -45,6 +49,28 @@ pub fn candidates(home: &Path) -> Vec<PathBuf> {
         PathBuf::from("/opt/homebrew/lib/node_modules/@deepseek-ai/dsh-acp-demo/lib/bin.js"),
         home.join(".npm-global/bin").join(BIN),
     ]
+}
+
+/// The version a checkout reports, read from the ACP app's own package.json.
+///
+/// Asking the launcher instead would mean running `pnpm run demo:acp --version`,
+/// which does not handle `--version`: it boots an ACP server that then sits
+/// waiting on stdin until the probe times out. Twenty seconds to learn nothing.
+/// The file says it instantly and says it accurately.
+pub fn repo_version(repo: &Path) -> Option<String> {
+    for rel in [
+        "packages/examples/acp-demo/package.json",
+        "package.json",
+    ] {
+        let body = std::fs::read_to_string(repo.join(rel)).ok();
+        let v = body
+            .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
+            .and_then(|v| v.get("version")?.as_str().map(str::to_string));
+        if let Some(v) = v {
+            return Some(v);
+        }
+    }
+    None
 }
 
 /// Monorepo checkouts worth looking in, in priority order.
@@ -77,11 +103,22 @@ fn repo_launcher(pnpm: PathBuf, repo: &Path) -> Launcher {
     Launcher {
         program: pnpm,
         args: vec![
+            // The harness repo pins `packageManager` (pnpm@11.7.0). When the
+            // user's pnpm differs, corepack refuses to run AT ALL rather than
+            // switching — "This project is configured to use 11.7.0 of pnpm.
+            // Your current pnpm is v11.0.9". That pin protects the repo's own
+            // contributors from lockfile churn; it is not a statement about
+            // whether the ACP server can boot, which is all we want from it.
+            // Downgrading it to a warning is the difference between "DeepSeek
+            // works here" and "DeepSeek is unavailable" on any machine whose
+            // global pnpm is not that exact version.
+            "--pm-on-fail=ignore".into(),
             "--dir".into(),
             repo.to_string_lossy().into_owned(),
             "run".into(),
             "demo:acp".into(),
         ],
+        known_version: repo_version(repo),
         origin: format!("monorepo checkout at {}", repo.display()),
     }
 }
@@ -159,12 +196,21 @@ pub fn runtime_path() -> String {
     core::runtime_path(BIN)
 }
 
-/// What to tell the user when nothing was found. Actionable, and honest that the
-/// npm packages are a developer preview.
+/// What to tell the user when nothing was found.
+///
+/// It deliberately does NOT recommend `npm i -g @deepseek-ai/dsh-acp-demo`,
+/// which is the obvious advice and does not work: that package (0.0.1-rc.1)
+/// declares required peers — `@deepseek-ai/dsh-workspace-context`,
+/// `@deepseek-ai/dsh-bash-env` — that were never published, so the install
+/// either refuses outright or produces a binary that cannot start. Verified
+/// 2026-08-18. Sending someone down a path we know is broken is worse than
+/// admitting the harness is preview-quality.
 pub const NOT_FOUND: &str = "DeepSeek Harness 的 ACP 服务端没找到。\n\
-     装一个:`npm i -g @deepseek-ai/dsh-acp-demo`(开发者预览版),\n\
-     或在插件设置里填 `dsh_acp_bin`(可执行路径)/ `dsh_repo`(monorepo checkout 路径),\n\
-     也可以设环境变量 NOTEMD_DSH_ACP_BIN / DSH_REPO。";
+     目前唯一可用的装法是本地 checkout:克隆 deepseek-harness 仓库,在里面跑一次\n\
+     `pnpm install`,插件会自动发现它(也可用插件设置 `dsh_repo` 或环境变量 DSH_REPO 指定)。\n\
+     npm 上的 @deepseek-ai/dsh-acp-demo 暂时装不起来 —— 它依赖的\n\
+     dsh-workspace-context / dsh-bash-env 还没发布到 npm(2026-08-18 实测)。\n\
+     已有可执行文件的话,用 `dsh_acp_bin` 或 NOTEMD_DSH_ACP_BIN 直接指过去。";
 
 #[cfg(test)]
 mod tests {
@@ -231,7 +277,13 @@ mod tests {
         assert_eq!(got.program, PathBuf::from("/opt/homebrew/bin/pnpm"));
         assert_eq!(
             got.args,
-            vec!["--dir", &repo.to_string_lossy(), "run", "demo:acp"]
+            vec![
+                "--pm-on-fail=ignore",
+                "--dir",
+                &repo.to_string_lossy(),
+                "run",
+                "demo:acp"
+            ]
         );
         assert!(got.origin.contains("monorepo"), "{}", got.origin);
     }
@@ -248,7 +300,7 @@ mod tests {
             |_| true,
         )
         .unwrap();
-        assert_eq!(got.args[1], "/work/dsh");
+        assert_eq!(got.args[2], "/work/dsh");
     }
 
     /// A launcher that names pnpm we could not find would fail at spawn with a
@@ -291,6 +343,28 @@ mod tests {
         assert!(!is_harness_repo(d.path()), "unparseable is not a checkout");
     }
 
+    /// Asking the launcher would boot an ACP server and time out; the file
+    /// answers instantly and accurately.
+    #[test]
+    fn a_checkout_reports_its_version_from_disk_without_running_anything() {
+        let d = tempfile::tempdir().unwrap();
+        let acp = d.path().join("packages/examples/acp-demo");
+        std::fs::create_dir_all(&acp).unwrap();
+        std::fs::write(d.path().join("package.json"), r#"{"version":"0.1.0-rc.5"}"#).unwrap();
+        std::fs::write(acp.join("package.json"), r#"{"version":"0.1.0-rc.5"}"#).unwrap();
+        assert_eq!(repo_version(d.path()).as_deref(), Some("0.1.0-rc.5"));
+    }
+
+    #[test]
+    fn a_checkout_falls_back_to_the_root_version_then_to_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("package.json"), r#"{"version":"9.9.9"}"#).unwrap();
+        assert_eq!(repo_version(d.path()).as_deref(), Some("9.9.9"));
+
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(repo_version(empty.path()), None);
+    }
+
     #[test]
     fn every_candidate_is_absolute() {
         let home = Path::new("/home/u");
@@ -299,10 +373,36 @@ mod tests {
         }
     }
 
+    /// The hint has to point somewhere that WORKS. `npm i -g dsh-acp-demo` is
+    /// the obvious advice and is a dead end — its peers are unpublished — so the
+    /// message must not present it as the fix.
     #[test]
-    fn the_not_found_message_names_a_way_out() {
-        assert!(NOT_FOUND.contains("@deepseek-ai/dsh-acp-demo"));
+    fn the_not_found_message_names_a_way_out_that_actually_works() {
+        assert!(NOT_FOUND.contains("checkout"));
+        assert!(NOT_FOUND.contains("pnpm install"));
         assert!(NOT_FOUND.contains("dsh_acp_bin"));
         assert!(NOT_FOUND.contains("DSH_REPO"));
+        assert!(
+            NOT_FOUND.contains("装不起来"),
+            "the npm route must be named as broken, not offered as the fix"
+        );
+    }
+
+    /// Without this the harness is unavailable on any machine whose global pnpm
+    /// is not the exact version the repo pins — corepack refuses rather than
+    /// switching.
+    #[test]
+    fn the_checkout_launcher_downgrades_the_package_manager_pin_to_a_warning() {
+        let home = Path::new("/home/u");
+        let got = discover_with(
+            None,
+            None,
+            home,
+            |b| (b == "pnpm").then(|| PathBuf::from("/bin/pnpm")),
+            |p| p == Path::new("/bin/pnpm"),
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(got.args[0], "--pm-on-fail=ignore");
     }
 }

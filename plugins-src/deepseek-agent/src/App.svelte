@@ -31,8 +31,11 @@
   let history: RunRecord[] = $state([])
   let allTasks = $state(true)
   let error = $state('')
-  /** The harness behind this window; null while the probe is in flight. */
-  let harness: HarnessStatus | null = $state(null)
+  /** The harness behind this window.
+   *  `undefined` = not asked yet, `null` = asked and the backend could not say.
+   *  Collapsing the two made a failed probe render as a spinner that never
+   *  stopped, which is what "正在检查运行环境…" forever actually was. */
+  let harness: HarnessStatus | null | undefined = $state(undefined)
   /** A past run picked from the list: the centre pane shows ITS log instead of
    *  the live stream, until you go back or start a new run. */
   let selectedRun: RunRecord | null = $state(null)
@@ -64,8 +67,9 @@
     try {
       harness = await request('harness-status')
     } catch {
-      // A backend too old to answer, or one that failed to start. Leaving the
-      // banner blank is better than inventing a status for it.
+      // A backend too old to answer, or one that failed to start. Say so —
+      // `null` is "we asked and got nothing", which the banner renders as a
+      // stated unknown rather than as a probe still in flight.
       harness = null
     }
   }

@@ -513,6 +513,7 @@ mod tests {
                 launcher: crate::discover::Launcher {
                     program: stub(),
                     args: Vec::new(),
+                    known_version: None,
                     origin: "test stub".into(),
                 },
                 config: v.join("cordis.yml"),

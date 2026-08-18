@@ -10,19 +10,35 @@
   import type { MessageKey } from '../lib/strings'
 
   let { status, label }: {
-    /** null while the probe is still in flight. */
-    status: HarnessStatus | null
+    /** `undefined` = the probe has not answered yet; `null` = it answered with
+     *  nothing. Rendering both as "checking…" is how a failed probe became a
+     *  spinner that never stopped. */
+    status: HarnessStatus | null | undefined
     label: (k: MessageKey, v?: Record<string, string | number>) => string
   } = $props()
 </script>
 
-<div class="banner" class:bad={status?.ok === false} class:warn={!!status?.warning}>
-  {#if !status}
+<div
+  class="banner"
+  class:bad={status === null || status?.ok === false}
+  class:warn={!!status?.warning}
+>
+  {#if status === undefined}
     <span class="name">{label('harness.probing')}</span>
+  {:else if status === null}
+    <span class="name">{label('harness.unknown')}</span>
   {:else if !status.ok}
     <span class="name">{status.harness}</span>
-    <span class="state">{label('harness.missing')}</span>
+    <!-- "Not installed" and "installed but will not start" send the user to two
+         completely different places. `origin` is the tell: we found something,
+         it just could not run. Saying "not installed" about a harness sitting
+         in a directory we just named sends them hunting for an install they
+         already have. -->
+    <span class="state">
+      {label(status.origin ? 'harness.broken' : 'harness.missing')}
+    </span>
     {#if status.hint}<span class="hint" title={status.hint}>{status.hint}</span>{/if}
+    {#if status.origin}<span class="origin" title={status.origin}>{status.origin}</span>{/if}
   {:else}
     <span class="name">{status.harness}</span>
     {#if status.version}<span class="ver">{status.version}</span>{/if}

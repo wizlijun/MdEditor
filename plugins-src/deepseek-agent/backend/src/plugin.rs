@@ -330,6 +330,11 @@ impl sdk::NotemdPlugin for DeepseekAgentPlugin {
                 }
             }
             "context.get" => Ok(json!({ "tab": self.tab_context })),
+            // Also a UI method, not only a command: the window asks over the
+            // `ui.request` channel (`bridge.request('plugin.…')`), while the
+            // host's relay and the menu use `command.execute`. Registering it in
+            // one place only left the window's banner spinning forever.
+            "harness.status" | "harness-status" => self.harness_status(),
             "run.start" => self.start(host, params, "window"),
             "run.cancel" => {
                 let id = params
@@ -703,14 +708,23 @@ impl DeepseekAgentPlugin {
         // mismatch. Present but unusable is NOT ready — reporting that failure as
         // a version put "[ERROR] This project is configured to use 11.7.0 of
         // pnpm…" where the version belongs and called the harness good to go.
-        let (ok, version, hint) =
-            match harness::probe_version(&launcher.program, &launcher.args, VERSION_PROBE_TIMEOUT) {
+        // A checkout tells us its version on disk. Running the launcher to ask
+        // would boot an ACP server that waits on stdin until the probe times
+        // out — twenty seconds spent learning nothing.
+        let (ok, version, hint) = match launcher.known_version.clone() {
+            Some(v) => (true, Some(v), None),
+            None => match harness::probe_version(
+                &launcher.program,
+                &launcher.args,
+                VERSION_PROBE_TIMEOUT,
+            ) {
                 harness::Probe::Version(v) => (true, Some(v), None),
                 harness::Probe::Failed(why) => (false, None, Some(why)),
                 // Launchable but silent about its version. Not evidence of a
                 // problem; a run is still worth attempting.
                 harness::Probe::Unavailable => (true, None, None),
-            };
+            },
+        };
         Ok(serde_json::to_value(agent_run_core::HarnessStatus {
             harness: HARNESS_NAME.to_string(),
             ok,
