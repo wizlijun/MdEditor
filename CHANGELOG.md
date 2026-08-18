@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.818.5 — 2026-08-18
+
 ### Fixed
 
 - **A failing DeepSeek Agent run no longer shows an empty window.** The real incident: with a stale harness checkout, pnpm silently reinstalled dependencies for minutes before starting the server, then failed on a network hiccup — and all of it went to stdout, so the run record (and the window) had not a single line to show. Both ends are fixed: runs no longer trigger a silent install (broken dependencies now fail within seconds, with a readable "run pnpm install in your checkout" error), and when a run fails, the launcher's last stdout output is kept in the run record so the window can say why.
