@@ -180,6 +180,7 @@ pub async fn run(
     tokio::pin!(deadline);
 
     let mut collected = String::new();
+    let mut noise = String::new();
     let mut outcome: Option<Outcome> = None;
     let forced = loop {
         if outcome.is_some() {
@@ -189,7 +190,15 @@ pub async fn run(
             line = lines.next_line() => match line {
                 Ok(Some(l)) => {
                     deadline.as_mut().reset(tokio::time::Instant::now() + quiet_limit);
-                    let Some(frame) = acp::parse_incoming(&l) else { continue };
+                    let Some(frame) = acp::parse_incoming(&l) else {
+                        // 非协议噪声(launcher/pnpm 的横幅与进度)。不是垃圾:当
+                        // 服务端根本没起来时(2026-08-18:pnpm 静默补装依赖数分钟
+                        // 后 exit 1,stderr 全程为空),这是仅存的现场证据。
+                        noise.push_str(&l);
+                        noise.push('\n');
+                        noise = record::tail(&noise, record::STDERR_LIMIT * 2);
+                        continue;
+                    };
                     for act in state.step(frame, &spec) {
                         match act {
                             Act::Send(bytes) => { let _ = stdin.write_all(bytes.as_bytes()).await; }
@@ -250,10 +259,29 @@ pub async fn run(
         let _ = child.kill().await;
     }
     let _ = err_task.await;
-    let stderr_tail = record::tail(&err_buf.lock().unwrap(), record::STDERR_LIMIT);
+    let mut stderr_tail = record::tail(&err_buf.lock().unwrap(), record::STDERR_LIMIT);
+    if stderr_tail.is_empty() {
+        // stderr 规定放诊断,但 pnpm/launcher 把一切都打在 stdout —— 空的 stderr
+        // 配上一条失败记录等于「窗口一片空白」。退而取 stdout 噪声的尾巴。
+        stderr_tail = record::tail(&noise, record::STDERR_LIMIT);
+    }
 
     let session = state.session_id().unwrap_or_default().to_string();
     let (status, result) = match (forced, outcome) {
+        // 服务端一帧没答完就走了(EOF/读错):多半从未启动。空 result 会让窗口
+        // 无话可说 —— 合成一句人话,细节由 stderr_tail(或噪声尾巴)兜着。
+        (Some(record::Status::Error), _) => (
+            record::Status::Error,
+            Some(agent_run_core::event::RunResult {
+                is_error: true,
+                result: format!(
+                    "the ACP server exited{} without completing the run — it probably never started; its last output is below",
+                    exit.map(|c| format!(" (code {c})")).unwrap_or_default()
+                ),
+                session_id: (!session.is_empty()).then(|| session.clone()),
+                num_turns: None,
+            }),
+        ),
         (Some(s), _) => (s, None),
         (None, Some(Outcome::Stopped(stop))) => {
             let r = acp::result_for_stop(&stop, &collected, &session);
@@ -645,6 +673,23 @@ mod tests {
         assert_eq!(rec.status, record::Status::Success);
         assert_eq!(rec.result, "还是答出来了");
         assert!(rec.stderr_tail.contains("stderr diagnostics"), "{rec:?}");
+    }
+
+    /// 2026-08-18 真实事故:checkout 依赖残缺,`pnpm run` 静默补装数分钟后
+    /// exit 1;全部输出在 stdout,stderr 为空 —— 记录里 result/stderr_tail 双空,
+    /// 窗口一片空白。修复后:噪声尾巴进 stderr_tail,EOF 无结果时合成一句解释。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_server_that_dies_before_the_protocol_leaves_an_explanation() {
+        let _g = env_guard();
+        let _d = EnvVar::set("STUB_DIE_EARLY", "1");
+        let f = Fixture::new();
+        let (_evs, rec) = drive(f.spec(30)).await;
+        assert_eq!(rec.status, record::Status::Error);
+        assert!(rec.result.contains("exited"), "must explain itself: {rec:?}");
+        assert!(
+            rec.stderr_tail.contains("Progress: resolved 925"),
+            "stdout noise is the only evidence there is — keep its tail: {rec:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

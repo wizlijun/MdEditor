@@ -113,6 +113,11 @@ fn repo_launcher(pnpm: PathBuf, repo: &Path) -> Launcher {
             // works here" and "DeepSeek is unavailable" on any machine whose
             // global pnpm is not that exact version.
             "--pm-on-fail=ignore".into(),
+            // pnpm 11 在 `run` 前会校验依赖并**静默补装**:进度全在 stdout、
+            // 一装数分钟、网络一抖就 exit 1,ACP 服务根本没起来(2026-08-18 事故)。
+            // 关掉它:依赖残缺就让脚本在 2 秒内带着清晰的 stderr 快死 ——
+            // 「先去 checkout 里跑一次 pnpm install」是用户能看懂的下一步。
+            "--config.verify-deps-before-run=false".into(),
             "--dir".into(),
             repo.to_string_lossy().into_owned(),
             "run".into(),
@@ -279,6 +284,7 @@ mod tests {
             got.args,
             vec![
                 "--pm-on-fail=ignore",
+                "--config.verify-deps-before-run=false",
                 "--dir",
                 &repo.to_string_lossy(),
                 "run",
@@ -300,7 +306,7 @@ mod tests {
             |_| true,
         )
         .unwrap();
-        assert_eq!(got.args[2], "/work/dsh");
+        assert_eq!(got.args[3], "/work/dsh");
     }
 
     /// A launcher that names pnpm we could not find would fail at spawn with a

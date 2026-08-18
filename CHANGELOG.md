@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **A failing DeepSeek Agent run no longer shows an empty window.** The real incident: with a stale harness checkout, pnpm silently reinstalled dependencies for minutes before starting the server, then failed on a network hiccup — and all of it went to stdout, so the run record (and the window) had not a single line to show. Both ends are fixed: runs no longer trigger a silent install (broken dependencies now fail within seconds, with a readable "run pnpm install in your checkout" error), and when a run fails, the launcher's last stdout output is kept in the run record so the window can say why.
+
 ### Added
 
 - **Idea Spark: the prompt you delegate with is now yours to edit.** Settings has a new "Agent prompts" section listing "Argue an idea" and every `/directive` you have; clicking one opens it in the normal Markdown editor. The prompt has always been an ordinary file in your vault (`.notemd/agent-tasks/<task>/CLAUDE.md`) — this just puts a door on it. Edits apply to the next delegation, and the plugin never overwrites what you wrote.

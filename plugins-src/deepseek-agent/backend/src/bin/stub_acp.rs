@@ -19,6 +19,7 @@
 //! | `STUB_ECHO_CWD` | stream the process cwd and the announced session cwd instead of the text |
 //! | `STUB_ECHO_ENV` | stream the named variable's value instead of the text |
 //! | `STUB_NOISE` | print a non-JSON banner line before the protocol starts |
+//! | `STUB_DIE_EARLY` | print install-style noise on stdout, nothing on stderr, exit 1 before the protocol |
 //! | `STUB_ARGV_FILE` | write the argv it was launched with to this path |
 use std::io::{BufRead, Write};
 
@@ -44,6 +45,14 @@ fn main() {
     if let Some(p) = env("STUB_ARGV_FILE") {
         let argv: Vec<String> = std::env::args().collect();
         let _ = std::fs::write(p, argv.join("\n"));
+    }
+    if flag("STUB_DIE_EARLY") {
+        // 真实事故的形状(2026-08-18):`pnpm run` 先补装依赖,几分钟的进度全在
+        // stdout,stderr 一个字没有,最后 exit 1,协议一帧未发。
+        println!("Scope: all 238 workspace projects");
+        println!("Progress: resolved 925, reused 908, downloaded 1, added 915");
+        println!("[ERROR] TimeoutError: The operation was aborted due to timeout");
+        std::process::exit(1);
     }
     if flag("STUB_NOISE") {
         // A real harness prints diagnostics; the client must not choke on them.
