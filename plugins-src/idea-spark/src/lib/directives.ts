@@ -2,7 +2,7 @@
 // 在输入面以 `/名字` 调用。发现走 vault RPC,全容错(参考 state-io.ts 的 parseState
 // 与 agent-run-core task.rs「task.json 坏了就跳过」的先例)——一个坏模板不拉黑
 // 整张指令表。
-const TASKS_DIR = '.notemd/agent-tasks'
+import { TASKS_DIR } from './prompts'
 
 export interface DirectiveEntry {
   taskId: string

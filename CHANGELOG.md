@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Idea Spark: the prompt you delegate with is now yours to edit.** Settings has a new "Agent prompts" section listing "Argue an idea" and every `/directive` you have; clicking one opens it in the normal Markdown editor. The prompt has always been an ordinary file in your vault (`.notemd/agent-tasks/<task>/CLAUDE.md`) — this just puts a door on it. Edits apply to the next delegation, and the plugin never overwrites what you wrote.
+
 ### Fixed
 
 - **Picking a different agent in a sidecar note now actually takes.** The choice was held in a value the interface did not watch, so the tick and the "by …" label kept showing the previous agent — it looked like selecting DeepSeek had failed. The choice now applies immediately, is remembered across restarts like the other surfaces, and a run in progress keeps reporting through the agent that started it instead of following a later change.

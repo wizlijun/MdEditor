@@ -15,7 +15,8 @@
 // `$effect` that synchronously calls a function which reads *and* writes
 // `$state` self-invalidates into a loop that freezes the window (v4.2.4).
 import { agentStatus, bridge, vaultExists, vaultInfo, vaultList, vaultRead, vaultRemove, vaultRename, vaultWrite } from './bridge'
-import { interpretStatus, TASK_ID, type RunView } from './agent-client'
+import { interpretStatus, seedOwnTemplates, TASK_ID, type RunView } from './agent-client'
+import { promptPathFor } from './prompts'
 import { buildIdeaDoc, rebuildIdeaDoc } from './idea-doc'
 import { proofPathFor, splitFrontmatter, timestampFileName, titleFromMarkdown } from './naming'
 import { isReservedConceptName } from './okf/concept'
@@ -896,6 +897,36 @@ export async function openResult(ideaName: string): Promise<void> {
 /** Opens the idea itself in the main window's editor (the inbox's context menu). */
 export async function openIdea(ideaName: string): Promise<void> {
   await openInMain(relPath(state, ideaName))
+}
+
+/**
+ * Opens one task's prompt — its `CLAUDE.md` — in the main window's editor.
+ *
+ * The prompt is edited where it actually lives; this plugin keeps no copy of
+ * it. Templates are seeded first (idempotent, existing files untouched) so the
+ * file is on disk even for a user who has never delegated anything yet.
+ *
+ * A task with no `CLAUDE.md` at all — possible for a third-party directive
+ * whose whole prompt sits in `task.json` — is refused with a toast rather than
+ * handed to the editor, which would open a blank buffer at a path that means
+ * nothing until it is saved.
+ */
+export async function openPrompt(taskId: string): Promise<void> {
+  await seedOwnTemplates()
+  const path = promptPathFor(taskId)
+  // A failed existence check is NOT treated as "missing": that would refuse a
+  // file that is probably there. Let the editor be the one to complain.
+  let there = true
+  try {
+    there = (await vaultExists(path)).exists === true
+  } catch (e) {
+    console.warn('[idea-spark] checking for a task prompt failed:', e)
+  }
+  if (!there) {
+    toast(t('promptMissing'), 'error')
+    return
+  }
+  await openInMain(path)
 }
 
 async function openInMain(path: string): Promise<void> {

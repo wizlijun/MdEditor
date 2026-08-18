@@ -847,7 +847,13 @@
              answering false when the buffer is still ahead of the disk. The
              question it asks — "may this document be let go of?" — is exactly
              the question a directory change poses. -->
-        <SettingsPopover onclose={() => (settingsOpen = false)} onbeforecommit={keepUnsaved} />
+        <!-- `directives` rides along so the popover can offer every `/命令`'s
+             prompt for editing, not just the delegate button's own task. -->
+        <SettingsPopover
+          onclose={() => (settingsOpen = false)}
+          onbeforecommit={keepUnsaved}
+          {directives}
+        />
       {/if}
     </div>
   {/if}

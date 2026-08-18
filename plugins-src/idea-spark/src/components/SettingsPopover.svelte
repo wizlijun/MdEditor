@@ -20,11 +20,32 @@
      postcondition and answer yes/no; `false` aborts, leaving the popover open
      on the field the user was editing. -->
 <script lang="ts">
-  import { commitIdeaDir, normalizeIdeaDir, state as store } from '../lib/store.svelte'
+  import { commitIdeaDir, normalizeIdeaDir, openPrompt, state as store } from '../lib/store.svelte'
+  import { TASK_ID } from '../lib/agent-client'
+  import { promptEntries, type PromptDirective } from '../lib/prompts'
   import { t } from '../lib/strings'
 
-  const { onclose, onbeforecommit }: { onclose: () => void; onbeforecommit?: () => Promise<boolean> } =
-    $props()
+  const {
+    onclose,
+    onbeforecommit,
+    directives = [],
+  }: {
+    onclose: () => void
+    onbeforecommit?: () => Promise<boolean>
+    /** The `/命令` table App.svelte discovered; each one is an editable prompt too. */
+    directives?: readonly PromptDirective[]
+  } = $props()
+
+  const prompts = $derived(promptEntries(TASK_ID, t('promptMain'), directives))
+
+  // Editing a prompt is not a setting change: nothing here is committed, and
+  // the idea buffer is not detached — so no flush barrier, unlike `commit`.
+  // The popover closes because the main window is about to take focus and a
+  // popover left open behind it would be waiting for a click nobody will make.
+  async function editPrompt(taskId: string): Promise<void> {
+    onclose()
+    await openPrompt(taskId)
+  }
 
   let value = $state(store.ideaDir)
   const valid = $derived(normalizeIdeaDir(value) !== null)
@@ -63,6 +84,22 @@
     autocomplete="off"
     {onkeydown}
   />
+  <!-- 委托提示词:一行一个 task 模板的 CLAUDE.md,点开就是标准 md 编辑器。 -->
+  <div class="section">
+    <span class="label" id="prompts-label">{t('prompts')}</span>
+    <ul class="prompts" aria-labelledby="prompts-label">
+      {#each prompts as p (p.taskId)}
+        <li>
+          <button type="button" class="row" onclick={() => editPrompt(p.taskId)}>
+            <span class="name">{p.label}</span>
+            <span class="path" aria-hidden="true">{p.taskId}/CLAUDE.md</span>
+          </button>
+        </li>
+      {/each}
+    </ul>
+    <p class="hint">{t('promptsHint')}</p>
+  </div>
+
   <div class="actions">
     <button type="button" class="ghost" onclick={onclose}>{t('close')}</button>
     <button type="button" class="primary" disabled={!valid || store.busy} onclick={commit}>
@@ -94,11 +131,56 @@
     color: CanvasText;
     box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
   }
-  label {
+  label,
+  .label {
     display: block;
     font-size: 0.75rem;
     opacity: 0.7;
     margin-bottom: 0.3rem;
+  }
+  .section {
+    margin-top: 0.9rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--line, #e5e7eb);
+  }
+  .prompts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: none;
+    color: inherit;
+    text-align: left;
+  }
+  .row:hover,
+  .row:focus-visible {
+    background: color-mix(in srgb, CanvasText 8%, transparent);
+  }
+  .name {
+    font-size: 0.85rem;
+  }
+  /* The file behind the row — the point of "the prompt is a file you own". */
+  .path {
+    margin-left: auto;
+    font-size: 0.7rem;
+    opacity: 0.55;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hint {
+    margin: 0.45rem 0 0;
+    font-size: 0.7rem;
+    line-height: 1.4;
+    opacity: 0.6;
   }
   input {
     width: 100%;

@@ -195,6 +195,18 @@ export async function seedDirectiveTemplates(): Promise<void> {
   }
 }
 
+/**
+ * 播种本插件自带的**全部**模板(论证 + 指令),失败静默。
+ *
+ * 「编辑提示词」用它:用户可能从没委托过,提示词文件也就还不在盘上;先播种,
+ * 打开的才是那份真的会被 agent 读到的 CLAUDE.md,而不是一个空白新文件。
+ * 播种存在即跳过,所以对改过提示词的人是纯粹的空操作。
+ */
+export async function seedOwnTemplates(): Promise<void> {
+  await seed()
+  await seedDirectiveTemplates()
+}
+
 export async function delegateDirective(
   entry: { taskId: string; display: string },
   rest: string,
