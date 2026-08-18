@@ -22,21 +22,18 @@
 <script lang="ts">
   import { commitIdeaDir, normalizeIdeaDir, openPrompt, state as store } from '../lib/store.svelte'
   import { TASK_ID } from '../lib/agent-client'
-  import { promptEntries, type PromptDirective } from '../lib/prompts'
   import { t } from '../lib/strings'
 
   const {
     onclose,
     onbeforecommit,
-    directives = [],
   }: {
     onclose: () => void
     onbeforecommit?: () => Promise<boolean>
-    /** The `/命令` table App.svelte discovered; each one is an editable prompt too. */
-    directives?: readonly PromptDirective[]
   } = $props()
 
-  const prompts = $derived(promptEntries(TASK_ID, t('promptMain'), directives))
+  /** 这个插件唯一的可编辑提示词:论证任务的 CLAUDE.md。 */
+  const prompts = $derived([{ taskId: TASK_ID, label: t('promptMain') }])
 
   // Editing a prompt is not a setting change: nothing here is committed, and
   // the idea buffer is not detached — so no flush barrier, unlike `commit`.

@@ -10,7 +10,7 @@
 //   * `task` must be sent to `host.agent.status`, whose own default is another
 //     plugin's task (`answer-note-question`).
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { delegateDirective, delegateIdea, interpretStatus, POLL_MS, TASK_ID } from './agent-client'
+import { delegateIdea, interpretStatus, POLL_MS, TASK_ID } from './agent-client'
 import { TASK_FILES } from './task-template'
 
 // This package has no jsdom (nothing else in it needs a DOM), so vitest runs
@@ -179,40 +179,5 @@ describe('constants', () => {
   it('names the task the template seeds, and polls on a human interval', () => {
     expect(TASK_ID).toBe('idea-proof')
     expect(POLL_MS).toBe(2000)
-  })
-})
-
-describe('delegateDirective', () => {
-  const entry = { taskId: 'trace-source', display: '溯源' }
-
-  it('task 取 entry.taskId,prompt=rest+输出行,notify 指向摘要绝对路径', async () => {
-    const request = vi.fn().mockResolvedValue({ run_id: 'r1' })
-    useBridge(request)
-
-    const r = await delegateDirective(entry, '只查论文\n\n> 引文', '/V')
-
-    expect(r.ok).toBe(true)
-    expect(r.outRel).toMatch(/^traces\/\d{4}-\d{2}-\d{2}-\d{6}\.md$/)
-    const [method, params] = request.mock.calls.at(-1)!
-    expect(method).toBe('host.agent.run')
-    expect(params.task).toBe('trace-source')
-    expect(params.prompt).toBe(`只查论文\n\n> 引文\n\n输出: ${r.outRel}\n`)
-    expect(params.note_path).toBeUndefined()
-    expect(params.notify.open_path).toBe(`/V/${r.outRel}`)
-    expect(params.notify.expect_file).toBe(`/V/${r.outRel}`)
-    expect(params.notify.title_ok).toContain('/溯源')
-    expect(Object.keys(params.notify).sort()).toEqual([
-      'expect_file', 'open_path', 'title_fail', 'title_ok',
-    ])
-  })
-
-  it('agent_unavailable 前缀映射 agent-missing', async () => {
-    const request = vi.fn().mockImplementation((method: string) => {
-      if (method === 'host.agent.run') return Promise.reject(new Error('agent_unavailable: not installed'))
-      return Promise.resolve({ exists: true })
-    })
-    useBridge(request)
-    const r = await delegateDirective(entry, 'y', '/V')
-    expect(r).toMatchObject({ ok: false, reason: 'agent-missing' })
   })
 })

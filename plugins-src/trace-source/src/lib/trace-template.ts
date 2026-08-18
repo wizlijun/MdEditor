@@ -1,5 +1,13 @@
-// trace-source 任务模板:溯源。播种约定与坑同 task-template.ts(见其文件头注释:
-// 数组拼行防 ``` 与 ${VAULT};host.vault.write 无 chmod)。
+// trace-source 任务模板:溯源。
+//
+// 每个文件体都用「数组拼行 + join('\n')」而不是模板字符串,两个坑逼出来的:
+//   1. CLAUDE.md 自身含 ``` 围栏,会提前终结 `...` 模板字面量;
+//   2. 多处含字面量 `${VAULT}` / `${NOTE}`——那是 claude-agent 运行时替换的
+//      占位符,真模板字面量里会被 JS 求值成 ReferenceError。
+//
+// 协议键(委托文本里的字段名)是语言中立的英文:`Source-Doc:` / `Output:`。
+// 宿主右键预填(src/lib/context-menu/trace-action.ts)与本插件的委托调用
+// (delegate.ts)写的就是这两个键,三处必须一致。
 export const TRACE_TASK_ID = 'trace-source'
 
 const BASE = `.notemd/agent-tasks/${TRACE_TASK_ID}`
@@ -12,8 +20,7 @@ const TASK_JSON = [
   '  "max_turns": 100,',
   '  "timeout_seconds": 2700,',
   '  "precheck": "precheck.sh",',
-  '  "okf_type": "Trace Report",',
-  '  "directive": ["溯源", "trace"]',
+  '  "okf_type": "Trace Report"',
   '}',
   '',
 ].join('\n')
@@ -65,11 +72,11 @@ const CLAUDE_MD = [
   '# 任务:溯源——为一段话找到原始出处',
   '',
   '你在 note.md 的 agent 插件里以 headless 模式运行,vault 根在 `${VAULT}`。',
-  '委托文本的结构:',
+  '委托文本的结构(字段名固定为英文键,不随界面语言变化):',
   '',
   '- `> ` 引用块 = 待溯源的原文(用户从某篇文档里选出来的一段话)。',
-  '- `源文档: <路径>` 行 = 这段话所在的文档,摘要要反向链接回它。可能缺失。',
-  '- `输出: <路径>` 行 = 摘要文件的落点(vault 相对路径),**不得改名**。',
+  '- `Source-Doc: <路径>` 行 = 这段话所在的文档,摘要要反向链接回它。可能缺失。',
+  '- `Output: <路径>` 行 = 摘要文件的落点(vault 相对路径),**不得改名**。',
   '- 其余文字 = 用户的范围与关注点说明(如「只查 YouTube 和 arxiv」「关注工程实现」)。',
   '  未指定范围时,YouTube、论文库(arxiv/Semantic Scholar 等)、欧美技术博客三类都试。',
   '',
@@ -99,12 +106,12 @@ const CLAUDE_MD = [
   '   ---',
   '   ```',
   '',
-  '5. 摘要写到 `输出:` 指定的路径,结构:',
+  '5. 摘要写到 `Output:` 指定的路径,结构:',
   '   - frontmatter:`type: Trace Report`、`title`(一行主题)、`generated:',
   '     { by: process:trace-source, at: <ISO 8601 时间> }`、`sources:` 列出全部',
   '     核验过的出处 URL。',
   '   - `## 缘起`:原样引用待溯源引文(引用块),下一行给出源文档链接——',
-  '     `源文档:` 是 vault 内相对路径时写 `[<文件名>](<相对路径>)` 形式的 markdown',
+  '     `Source-Doc:` 是 vault 内相对路径时写 `[<文件名>](<相对路径>)` 形式的 markdown',
   '     链接,vault 外或缺失时原样写路径纯文本。',
   '   - `## 结论`:最可能的原始出处,标可信度(确认/高度疑似/未找到);每条断言旁',
   '     直接标 URL。',
@@ -130,4 +137,25 @@ export const TRACE_TASK_FILES: Record<string, string> = {
   [`${BASE}/precheck.sh`]: PRECHECK_SH,
   [`${BASE}/.claude/settings.json`]: SETTINGS_JSON,
   [`${BASE}/.claude/settings.scoped.json`]: SETTINGS_SCOPED_JSON,
+}
+
+/** Host I/O this module needs, injected so it stays unit-testable without the bridge. */
+export interface SeedIo {
+  exists(path: string): Promise<boolean>
+  write(path: string, content: string): Promise<void>
+}
+
+/**
+ * Seeds the task template into the vault, one file at a time. Idempotent and
+ * non-destructive: a file that already exists (including one the user has
+ * edited) is left untouched — never overwritten.
+ *
+ * Note: this cannot set precheck.sh's executable bit (host.vault.write has no
+ * chmod); claude-agent runs prechecks through `sh` so the bit is not needed.
+ */
+export async function seedTraceTemplate(io: SeedIo): Promise<void> {
+  for (const [path, content] of Object.entries(TRACE_TASK_FILES)) {
+    if (await io.exists(path)) continue
+    await io.write(path, content)
+  }
 }

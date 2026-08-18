@@ -20,15 +20,26 @@ describe('getMenuModel', () => {
   })
 
   it('marks question/note/highlight/wikilink as emphasis, question first, before other marks', () => {
-    const groups = getMenuModel({ hasSelection: true })
+    const groups = getMenuModel({ hasSelection: true, traceInstalled: true })
     const emphasis = groups.find(g => g.id === 'emphasis')!
     expect(emphasis.items.map(i => i.id)).toEqual(['question', 'trace', 'note', 'highlight', 'wikilink'])
     expect(emphasis.items.every(i => i.emphasis)).toBe(true)
     expect(emphasis.items.map(i => i.icon)).toEqual(['question', 'trace', 'sparkle', 'highlight', 'wikilink'])
   })
 
+  // 「溯源」是 trace-source 插件的入口:没装插件的菜单项点了也打不开任何窗口,
+  // 比没有菜单项更糟——所以按安装状态显隐。
+  it('trace only appears when the trace-source plugin is installed', () => {
+    for (const ctx of [{ hasSelection: true }, { hasSelection: true, traceInstalled: false }]) {
+      const ids = getMenuModel(ctx).flatMap(g => g.items.map(i => i.id))
+      expect(ids).not.toContain('trace')
+    }
+    const ids = getMenuModel({ hasSelection: true, traceInstalled: true }).flatMap(g => g.items.map(i => i.id))
+    expect(ids).toContain('trace')
+  })
+
   it('trace requires a selection', () => {
-    const emphasis = getMenuModel({ hasSelection: false }).find(g => g.id === 'emphasis')!
+    const emphasis = getMenuModel({ hasSelection: false, traceInstalled: true }).find(g => g.id === 'emphasis')!
     const trace = emphasis.items.find(i => i.id === 'trace')!
     expect(trace.needsSelection).toBe(true)
     expect(trace.icon).toBe('trace')

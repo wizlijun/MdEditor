@@ -108,8 +108,7 @@ export interface AgentRunParams {
   prompt?: string
   /** ABSOLUTE path of the file the run is about. claude-agent `canonicalize`s
    *  it, so the file MUST already exist — flush the editor to disk first.
-   *  Optional in the run-task schema; directive runs are self-contained and
-   *  omit it. */
+   *  Optional in the run-task schema. */
   note_path?: string
   notify: AgentNotify
   /** Which agent should run it. Omitted = whatever the host would pick. */

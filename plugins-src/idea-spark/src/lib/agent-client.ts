@@ -14,7 +14,6 @@
 import { agentRun, agentStatus, vaultExists, vaultWrite } from './bridge'
 import { proofPathFor } from './naming'
 import { seedTaskTemplate, TASK_ID, type SeedIo } from './task-template'
-import { TRACE_TASK_FILES } from './trace-template'
 import { t } from './strings'
 
 export { TASK_ID }
@@ -173,30 +172,8 @@ export function interpretStatus(raw: unknown): RunView {
   return { kind: 'lost' }
 }
 
-/** 指令产物统一落 traces/,时间戳定名——调用方因此能预知 expect_file(spec §3)。 */
-export function directiveOutputRel(now: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0')
-  const d = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
-  const t = `${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`
-  return `traces/${d}-${t}.md`
-}
-
 /**
- * 委托一次 /指令 运行。与 delegateIdea 的差别:task 来自指令表而非写死,
- * 没有 note_path(指令文本自足),输出路径由这里定死并追加成 `输出:` 行——
- * 模板协议要求 agent 不得改名,expect_file 因此可预知。
- */
-/** 尽力播种指令模板(fresh vault 首开也能发现 /溯源);失败静默,权威报错在委托时。 */
-export async function seedDirectiveTemplates(): Promise<void> {
-  try {
-    await seedTaskTemplate(seedIo, TRACE_TASK_FILES)
-  } catch (e) {
-    console.warn('[idea-spark] seeding trace-source failed:', e)
-  }
-}
-
-/**
- * 播种本插件自带的**全部**模板(论证 + 指令),失败静默。
+ * 播种本插件自带的模板(论证),失败静默。
  *
  * 「编辑提示词」用它:用户可能从没委托过,提示词文件也就还不在盘上;先播种,
  * 打开的才是那份真的会被 agent 读到的 CLAUDE.md,而不是一个空白新文件。
@@ -204,40 +181,4 @@ export async function seedDirectiveTemplates(): Promise<void> {
  */
 export async function seedOwnTemplates(): Promise<void> {
   await seed()
-  await seedDirectiveTemplates()
-}
-
-export async function delegateDirective(
-  entry: { taskId: string; display: string },
-  rest: string,
-  vaultRoot: string,
-  harness?: string,
-): Promise<DelegateResult & { outRel?: string }> {
-  await seedDirectiveTemplates()
-  const outRel = directiveOutputRel(new Date())
-  const outAbs = absolute(vaultRoot, outRel)
-  try {
-    const { run_id } = await agentRun({
-      task: entry.taskId,
-      harness,
-      prompt: `${rest}\n\n输出: ${outRel}\n`,
-      notify: {
-        title_ok: `${t('notifyDirectiveOk')} · /${entry.display}`,
-        title_fail: `${t('notifyDirectiveFail')} · /${entry.display}`,
-        open_path: outAbs,
-        expect_file: outAbs,
-      },
-    })
-    if (typeof run_id !== 'string' || run_id === '') {
-      return { ok: false, reason: 'error', message: 'the agent started a run without a run id' }
-    }
-    return { ok: true, runId: run_id, outRel }
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    return {
-      ok: false,
-      reason: message.includes('agent_unavailable') ? 'agent-missing' : 'error',
-      message,
-    }
-  }
 }

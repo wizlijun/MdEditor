@@ -1,0 +1,64 @@
+{
+  "manifest_version": 2,
+  "id": "notemd.trace-source",
+  "name": "Trace Source",
+  "version": "1.0.0",
+  "kind": "native",
+  "engines": {
+    "notemd": ">=6.818.4"
+  },
+  "description": "Trace a passage back to its original source — an agent searches, verifies, and writes a summary with backlinks into traces/.",
+  "ui": "ui/",
+  "activation": {
+    "events": [
+      "onCommand:open"
+    ]
+  },
+  "contributes": {
+    "menus": [
+      {
+        "location": "plugins",
+        "label": "Trace Source",
+        "command": "open"
+      }
+    ],
+    "windows": [
+      {
+        "id": "main",
+        "entry": "index.html",
+        "title": "Trace Source",
+        "width": 720,
+        "height": 560,
+        "min_width": 560,
+        "min_height": 420,
+        "open_command": "open"
+      }
+    ]
+  },
+  "capabilities": [
+    "vault.read",
+    "vault.write",
+    "editor.kit",
+    "agent"
+  ],
+  "i18n": {
+    "zh": {
+      "name": "溯源",
+      "menus": {
+        "open": "溯源"
+      }
+    },
+    "ja": {
+      "name": "出典をたどる",
+      "menus": {
+        "open": "出典をたどる"
+      }
+    },
+    "de": {
+      "name": "Quellensuche",
+      "menus": {
+        "open": "Quellensuche"
+      }
+    }
+  }
+}

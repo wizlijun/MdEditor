@@ -7,6 +7,11 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Tracing a passage to its source is now its own plugin.** Install "Trace Source" (溯源) from the marketplace and the right-click 「溯源」 item appears; without it, the item stays out of the menu instead of opening a window that isn't there. Right-clicking a selection opens a dedicated composer prefilled with the quoted passage — add scope notes ("only YouTube and arxiv") and hand it to an agent; the report lands in `traces/` and a notification tells you when it's ready. A menu entry under Plugins opens a blank composer for text copied from elsewhere.
+- **The `/溯源` slash command is gone, and the delegation text speaks your language.** The dedicated window IS the trace mode, so there is no command word to type — and no Chinese protocol labels in an English or Japanese UI: the machine-readable lines are now the language-neutral `Source-Doc:` / `Output:`. Idea Spark goes back to being purely about capturing and arguing ideas; the slash-command layer it carried for tracing is removed. (If you used tracing before this release, delete `.notemd/agent-tasks/trace-source/` once so the new template can be seeded.)
+
 ## v6.818.7 — 2026-08-18
 
 ### Fixed

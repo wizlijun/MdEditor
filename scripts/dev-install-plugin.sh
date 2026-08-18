@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dev-install a v2 plugin into the local app-data plugins root.
 #
-# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode]
+# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source]
 #   default plugin = md2pdf (preserves the original behavior).
 #   --release      = build the native plugin binary in release mode (md2pdf +
 #                    openclaw; ignored for the pure-UI plugins).
@@ -38,8 +38,8 @@ PLUGIN=md2pdf
 for arg in "$@"; do
   case "$arg" in
     --release) PROFILE=release ;;
-    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode) PLUGIN="$arg" ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | deepseek-agent | ebook-import | idea-spark | power-mode)" >&2; exit 2 ;;
+    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source) PLUGIN="$arg" ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | deepseek-agent | ebook-import | idea-spark | power-mode | trace-source)" >&2; exit 2 ;;
   esac
 done
 
@@ -236,6 +236,20 @@ elif [[ "$PLUGIN" == "idea-spark" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.idea-spark/current"
   mark_installed "notemd.idea-spark" "$VERSION"
   echo "✓ installed notemd.idea-spark@$VERSION (ui-only) → $DEST"
+
+elif [[ "$PLUGIN" == "trace-source" ]]; then
+  SRC="plugins-src/trace-source"
+  # Build the standalone UI bundle (dist/). Pure UI plugin; no native backend.
+  pnpm --filter trace-source build
+  VERSION=$(node -e "console.log(require('./$SRC/manifest.v2.json').version)")
+  DEST="$ROOT/notemd.trace-source/$VERSION"
+  rm -rf "$DEST"
+  mkdir -p "$DEST/ui"
+  cp -R "$SRC/dist/." "$DEST/ui/"
+  cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
+  ln -sfn "$VERSION" "$ROOT/notemd.trace-source/current"
+  mark_installed "notemd.trace-source" "$VERSION"
+  echo "✓ installed notemd.trace-source@$VERSION (ui-only) → $DEST"
 
 elif [[ "$PLUGIN" == "power-mode" ]]; then
   SRC="plugins-src/power-mode"

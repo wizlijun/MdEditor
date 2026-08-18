@@ -51,11 +51,9 @@
   import ModeToggle from './components/ModeToggle.svelte'
   import SettingsPopover from './components/SettingsPopover.svelte'
   import {
-    delegateDirective,
     delegateIdea,
     interpretStatus,
     POLL_MS,
-    seedDirectiveTemplates,
     TASK_ID,
     type RunView,
   } from './lib/agent-client'
@@ -65,14 +63,8 @@
     rememberedProvider,
     type AgentOption,
   } from './lib/agent-picker/types'
-  import {
-    discoverDirectives,
-    matchDirective,
-    parseDirectiveInput,
-    type DirectiveEntry,
-  } from './lib/directives'
   import { createAutosave } from './lib/autosave'
-  import { agentProviders, agentStatus, bridge, vaultList, vaultRead } from './lib/bridge'
+  import { agentProviders, agentStatus, bridge } from './lib/bridge'
   import { loadKit, type KitEditor, type KitMode } from './lib/editor-kit'
   import { pickPlaceholder, placeholderLines } from './lib/placeholder'
   import {
@@ -146,15 +138,6 @@
   /** Newest progress line of a watched run, with the idea it belongs to. Only
    *  rendered when that idea is the one in the editor. */
   let runProgress = $state<{ ideaRel: string; last: string } | null>(null)
-  /** 输入面可用的 /指令 表(directive 非空的 task 模板)。boot 后发现一次。 */
-  let directives = $state<DirectiveEntry[]>([])
-  /** 编辑器当前文本的影子,只为指令 chip 服务(kit 没有可响应的取文本接口)。 */
-  let liveText = $state('')
-  /** 当前文本命中的指令,没有则 null——chip 与委托路由共用。 */
-  const matchedDirective = $derived.by(() => {
-    const p = parseDirectiveInput(liveText)
-    return p ? matchDirective(directives, p.name) : null
-  })
 
   /** The run id arguing the OPEN document, or null. Derived, never assigned:
    *  `pending` is the single source of truth and the badge in the inbox reads
@@ -189,7 +172,6 @@
    */
   function showMarkdown(md: string): void {
     if (!kit) fallbackText = md
-    liveText = md
     showInEditor(store, kit, md)
   }
 
@@ -217,7 +199,6 @@
    * nobody edited. `markEdited` has just computed exactly that comparison.
    */
   function onEdited(md: string): void {
-    liveText = md
     markEdited(store, md)
     if (store.dirty) autosave.schedule()
   }
@@ -487,24 +468,6 @@
     try {
       await saveNow()
 
-      // /指令 路径:编辑器里的委托文本命中指令表时,整段(去掉指令 token)交给
-      // 对应 task 模板,产物落 traces/,完成提醒由 agent 插件推。只对「委托当前
-      // 文档」生效——收件箱行委托的是历史 idea,仍走论证。
-      if (name === undefined) {
-        const parsed = parseDirectiveInput(markdown())
-        const entry = parsed && matchDirective(directives, parsed.name)
-        if (parsed && entry) {
-          const r = await delegateDirective(entry, parsed.rest, vaultRoot, agentId)
-          if (!r.ok) {
-            if (r.reason === 'agent-missing') agentMissing = true
-            else toast(r.message, 'error')
-            return
-          }
-          toast(t('waitHint'))
-          return
-        }
-      }
-
       const target = name ?? store.current
       // The flush is the ONLY thing standing between the agent and a stale
       // file, and it cannot report its own failure: `saveNow` never rejects
@@ -590,18 +553,6 @@
       // editor coming up.
       void loadAgents()
 
-      // 指令表:尽力播种(fresh vault 首开也能发现 /溯源)后发现一次。
-      // 不挡编辑器挂载——失败只是没有 chip,委托时还有权威报错。
-      void (async () => {
-        try {
-          await seedDirectiveTemplates()
-          const found = await discoverDirectives({ list: vaultList, read: vaultRead })
-          if (!disposed) directives = found
-        } catch (e) {
-          console.warn('[idea-spark] directive discovery failed:', e)
-        }
-      })()
-
       const initial = newIdea()
       fallbackText = initial
       await tick()
@@ -650,7 +601,7 @@
       // watched again for its progress line). Last, and unawaited by the mount
       // path above it, because it may have to wake claude-agent up — the
       // editor must not wait on that.
-      // 右键「溯源」新开窗口时,预填经 URL query 进来(已开窗口走 host push)。
+      // 宿主入口新开窗口时,预填经 URL query 进来(已开窗口走 host push)。
       try {
         const raw = new URLSearchParams(location.search).get('seed')
         if (raw) {
@@ -751,12 +702,6 @@
       {/if}
     </div>
 
-    {#if matchedDirective}
-      <div class="directive-chip" title={matchedDirective.description}>
-        /{matchedDirective.display}{matchedDirective.description ? ` · ${matchedDirective.description}` : ''}
-      </div>
-    {/if}
-
     <div class="actionbar">
       <!-- The run on the OPEN document outranks the save state: while an idea
            is being argued, "⧖ arguing" is the thing the bar is for. Every
@@ -847,12 +792,9 @@
              answering false when the buffer is still ahead of the disk. The
              question it asks — "may this document be let go of?" — is exactly
              the question a directory change poses. -->
-        <!-- `directives` rides along so the popover can offer every `/命令`'s
-             prompt for editing, not just the delegate button's own task. -->
         <SettingsPopover
           onclose={() => (settingsOpen = false)}
           onbeforecommit={keepUnsaved}
-          {directives}
         />
       {/if}
     </div>
@@ -983,16 +925,6 @@
     padding: 0 0.75rem;
     border-top: 1px solid var(--line, #e5e7eb);
   }
-  .directive-chip {
-    padding: 4px 12px;
-    font-size: 12px;
-    color: var(--muted-foreground, #888);
-    border-top: 1px solid var(--border, rgba(128, 128, 128, 0.25));
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .savestate {
     font-size: 0.78rem;
     opacity: 0.6;

@@ -8,6 +8,8 @@
 <script lang="ts">
   import { getMenuModel, type MenuItemSpec } from './menu-model'
   import { iconSvg } from './icons'
+  import { pluginRuntime } from '../plugins/runtime.svelte'
+  import { TRACE_PLUGIN_ID } from './trace-action'
 
   let {
     position,
@@ -25,7 +27,14 @@
     readOnly?: boolean
   } = $props()
 
-  const groups = getMenuModel({ hasSelection, image, readOnly })
+  // 「溯源」按 trace-source 插件的安装状态显隐。菜单每次右键都重建,而
+  // `manifests` 在装/卸插件后由 `plugins-changed` 刷新,所以这里读一次即可。
+  const groups = getMenuModel({
+    hasSelection,
+    image,
+    readOnly,
+    traceInstalled: pluginRuntime.manifests.some((m) => m.id === TRACE_PLUGIN_ID),
+  })
 
   let menuEl: HTMLDivElement | undefined = $state()
   let top = $state(position.y)

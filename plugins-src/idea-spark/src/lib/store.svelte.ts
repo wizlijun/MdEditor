@@ -906,10 +906,10 @@ export async function openIdea(ideaName: string): Promise<void> {
  * it. Templates are seeded first (idempotent, existing files untouched) so the
  * file is on disk even for a user who has never delegated anything yet.
  *
- * A task with no `CLAUDE.md` at all — possible for a third-party directive
- * whose whole prompt sits in `task.json` — is refused with a toast rather than
- * handed to the editor, which would open a blank buffer at a path that means
- * nothing until it is saved.
+ * A task with no `CLAUDE.md` at all — possible for a template whose whole
+ * prompt sits in `task.json` — is refused with a toast rather than handed to
+ * the editor, which would open a blank buffer at a path that means nothing
+ * until it is saved.
  */
 export async function openPrompt(taskId: string): Promise<void> {
   await seedOwnTemplates()

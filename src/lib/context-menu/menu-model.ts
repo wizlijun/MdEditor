@@ -21,6 +21,10 @@ export interface MenuContext {
   image?: boolean
   /** Read-only surface (mdx): only non-mutating items may be offered. */
   readOnly?: boolean
+  /** The `notemd.trace-source` plugin is installed. 「溯源」 is that plugin's
+   *  entry point — without it the item would open nothing, so it is omitted
+   *  rather than offered dead. */
+  traceInstalled?: boolean
 }
 
 function item(id: string, key: keyof Messages, extra: Partial<MenuItemSpec> = {}): MenuItemSpec {
@@ -57,7 +61,9 @@ export function getMenuModel(ctx: MenuContext): MenuGroup[] {
     ] },
     { id: 'emphasis', items: [
       item('question', 'ctxmenu.question', { emphasis: true, icon: 'question' }),
-      item('trace', 'ctxmenu.trace', { emphasis: true, needsSelection: true, icon: 'trace' }),
+      ...(ctx.traceInstalled
+        ? [item('trace', 'ctxmenu.trace', { emphasis: true, needsSelection: true, icon: 'trace' })]
+        : []),
       item('note', 'ctxmenu.note', { emphasis: true, icon: 'sparkle' }),
       item('highlight', 'ctxmenu.highlight', { emphasis: true, icon: 'highlight' }),
       item('wikilink', 'ctxmenu.wikilink', { emphasis: true, icon: 'wikilink' }),

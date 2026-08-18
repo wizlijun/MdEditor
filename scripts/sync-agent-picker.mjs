@@ -23,6 +23,7 @@ export const FILES = ['AgentPicker.svelte', 'types.ts']
 export const TARGETS = [
   'plugins-src/idea-spark/src/lib/agent-picker',
   'plugins-src/ebook-import/src/lib/agent-picker',
+  'plugins-src/trace-source/src/lib/agent-picker',
 ]
 
 const SRC = 'src/lib/agent-picker'

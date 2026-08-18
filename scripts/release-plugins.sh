@@ -4,7 +4,7 @@
 #   scripts/release-plugins.sh [--release] <plugin...>
 #     plugin ∈ { md2pdf, roam-import, openclaw, pos-log,
 #                decision-log, weekly-review, claude-agent, deepseek-agent, ebook-import,
-#                idea-spark, power-mode }   (add a case below)
+#                idea-spark, power-mode, trace-source }   (add a case below)
 #     --release  currently a no-op flag reserved for build-profile parity with
 #                dev-install-plugin.sh; the release builds below are always
 #                release-profile.
@@ -43,14 +43,14 @@ PLUGINS=()
 for arg in "$@"; do
   case "$arg" in
     --release) : ;; # reserved; release builds are always release-profile
-    md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode) PLUGINS+=("$arg") ;;
+    md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source) PLUGINS+=("$arg") ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | pos-log | decision-log | weekly-review | claude-agent | deepseek-agent | ebook-import | idea-spark | power-mode)" >&2; exit 2 ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | pos-log | decision-log | weekly-review | claude-agent | deepseek-agent | ebook-import | idea-spark | power-mode | trace-source)" >&2; exit 2 ;;
   esac
 done
 if [[ ${#PLUGINS[@]} -eq 0 ]]; then
-  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode>..." >&2
+  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source>..." >&2
   exit 2
 fi
 
@@ -257,6 +257,35 @@ release_power_mode() {
   rm -rf "$stage"; trap - RETURN
 }
 
+# ── trace-source: ui-only, single universal package (same shape as idea-spark)
+release_trace_source() {
+  local id="notemd.trace-source"
+  local src="$REPO_ROOT/plugins-src/trace-source"
+  local manifest="$src/manifest.v2.json"
+  local version; version="$(manifest_field "$manifest" version)"
+  echo "== $id @ $version =="
+
+  echo "[$id] building UI bundle (pnpm --filter trace-source build)…"
+  pnpm --filter trace-source build
+
+  local out_dir="$OUT_ROOT/$id/$version"
+  mkdir -p "$out_dir"
+  cp "$manifest" "$out_dir/manifest.json"   # for gen-plugin-index.mjs
+
+  local stage; stage="$(mktemp -d)"
+  trap 'rm -rf "$stage"' RETURN
+  mkdir -p "$stage/ui"
+  cp "$manifest" "$stage/manifest.json"
+  cp -R "$src/dist/." "$stage/ui/"
+
+  local pkg="$out_dir/universal.notemdpkg"
+  zip_pkg "$stage" "$pkg"
+  sign_pkg "$pkg"
+  local sha; sha="$(shasum -a 256 "$pkg" | awk '{print $1}')"
+  echo "[$id] universal.notemdpkg  sha256=$sha  → $pkg"
+  rm -rf "$stage"; trap - RETURN
+}
+
 # ── weekly-review: ui-only, single universal package (same shape as decision-log)
 release_weekly_review() {
   local id="notemd.weekly-review"
@@ -435,6 +464,7 @@ for plugin in "${PLUGINS[@]}"; do
     ebook-import) release_ebook_import ;;
     idea-spark)  release_idea_spark ;;
     power-mode)  release_power_mode ;;
+    trace-source) release_trace_source ;;
   esac
 done
 
