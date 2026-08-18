@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.818.8 — 2026-08-18
+
 ### Changed
 
 - **Tracing a passage to its source is now its own plugin.** Install "Trace Source" (溯源) from the marketplace and the right-click 「溯源」 item appears; without it, the item stays out of the menu instead of opening a window that isn't there. Right-clicking a selection opens a dedicated composer prefilled with the quoted passage — add scope notes ("only YouTube and arxiv") and hand it to an agent; the report lands in `traces/` and a notification tells you when it's ready. A menu entry under Plugins opens a blank composer for text copied from elsewhere.
