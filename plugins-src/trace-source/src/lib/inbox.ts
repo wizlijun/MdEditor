@@ -20,10 +20,21 @@ export interface InboxIo {
 }
 
 export interface ReportEntry {
-  /** File name inside the trace directory. */
+  /** Report file name inside the trace directory (whether or not it exists yet). */
   name: string
-  /** Frontmatter `title`, or null when unreadable/absent (row shows the name). */
+  /** Frontmatter `title` (report's, or the request's for an orphan), or null. */
   title: string | null
+  /** False for a delegation whose report never landed — the request directory
+   *  exists but `<name>` doesn't. Those rows are how a lost/failed/still-running
+   *  task stays VISIBLE instead of silently vanishing on refresh. */
+  hasReport: boolean
+}
+
+/** `2026-08-18-143012-source-trace.md` → `2026-08-18-143012-source-trace/00-request.md`.
+ *  The request lives INSIDE the materials directory (number 00, materials start
+ *  at 01) so a delete takes it along and the report can link it relatively. */
+export function requestPathFor(reportName: string): string {
+  return `${materialsDirFor(reportName)}/00-request.md`
 }
 
 /** How many rows get their title read. Beyond this the rows still list — they
@@ -86,29 +97,70 @@ function titleOf(content: string): string | null {
 }
 
 /**
- * Lists the trace directory's reports, newest first (the timestamp names sort
- * lexically, so reverse name order IS reverse time order). Throws when the
- * directory itself can't be listed — the caller shows "couldn't read" instead
- * of a lying "no traces yet". A single report whose *content* can't be read
- * still lists, with a null title.
+ * Lists the trace directory's rows, newest first (the timestamp names sort
+ * lexically, so reverse name order IS reverse time order). Two kinds:
+ *   - report files (`*-source-trace.md`) — finished traces;
+ *   - ORPHANS: a `*-source-trace/` directory with no matching report file.
+ *     That is a delegation that hasn't (or never) produced its report — still
+ *     running, failed, or aborted before the run even started. Listing them is
+ *     what keeps a task visible across a window refresh.
+ * Throws when the directory itself can't be listed — the caller shows
+ * "couldn't read" instead of a lying "no traces yet". A single row whose
+ * *content* can't be read still lists, with a null title.
  */
 export async function listReports(io: Pick<InboxIo, 'list' | 'read'>, dir: string): Promise<ReportEntry[]> {
   const { entries } = await io.list(dir)
-  const names = entries
-    .filter((e) => !e.is_dir && e.name.endsWith(REPORT_SUFFIX))
-    .map((e) => e.name)
-    .sort()
-    .reverse()
+  const reportNames = new Set(
+    entries.filter((e) => !e.is_dir && e.name.endsWith(REPORT_SUFFIX)).map((e) => e.name),
+  )
+  const orphanNames = entries
+    .filter((e) => e.is_dir && e.name.endsWith('-source-trace') && !reportNames.has(`${e.name}.md`))
+    .map((e) => `${e.name}.md`)
+  const names = [...reportNames, ...orphanNames].sort().reverse()
   return Promise.all(
     names.map(async (name, i): Promise<ReportEntry> => {
-      if (i >= TITLE_READS) return { name, title: null }
+      const hasReport = reportNames.has(name)
+      if (i >= TITLE_READS) return { name, title: null, hasReport }
+      const titlePath = hasReport ? `${dir}/${name}` : `${dir}/${requestPathFor(name)}`
       try {
-        return { name, title: titleOf((await io.read(`${dir}/${name}`)).content) }
+        return { name, title: titleOf((await io.read(titlePath)).content), hasReport }
       } catch {
-        return { name, title: null }
+        return { name, title: null, hasReport }
       }
     }),
   )
+}
+
+/** How long a derived request title may run before it is cut. */
+const TITLE_MAX = 60
+
+/**
+ * The request document written to `requestPathFor(...)` at delegation time —
+ * the user's own words, saved BEFORE the agent is involved so nothing about
+ * the ask is lost to a crash, a failed run, or a closed window.
+ *
+ * OKF: `type: Trace Request` (registered host-side in concept.ts; Human tier
+ * in searchidx origin mapping). Human-authored, so no `generated` stamp.
+ */
+export function buildRequestDoc(text: string): string {
+  const firstLine =
+    text
+      .split('\n')
+      .map((l) => l.replace(/^>\s*/, '').trim())
+      .find((l) => l !== '') ?? ''
+  const cut = firstLine.length > TITLE_MAX ? `${firstLine.slice(0, TITLE_MAX)}…` : firstLine
+  const title = cut || 'Trace request'
+  // YAML scalar safety: quote anything that could open a flow/keyed construct.
+  const needsQuote = /^[\s:>#\-?&*!|%@`"'{[\]}]|[:#]\s|\t/.test(title)
+  const yamlTitle = needsQuote ? `"${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : title
+  return `---\ntype: Trace Request\ntitle: ${yamlTitle}\n---\n\n${text.replace(/\s+$/, '')}\n`
+}
+
+/** Undoes `buildRequestDoc`'s wrapper for loading a request back into the
+ *  composer. Content without a frontmatter block passes through untouched. */
+export function stripFrontmatter(content: string): string {
+  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(content)
+  return m ? content.slice(m[0].length).replace(/^\r?\n/, '') : content
 }
 
 /**

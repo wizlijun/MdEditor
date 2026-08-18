@@ -14,7 +14,7 @@ export const TRACE_TASK_ID = 'trace-source'
  *  against the on-disk task.json: an older/absent marker means the whole
  *  template is rewritten once (migration); a current one means existing files
  *  — including user-edited prompts — are never touched. */
-export const TEMPLATE_VERSION = 2
+export const TEMPLATE_VERSION = 3
 
 const BASE = `.notemd/agent-tasks/${TRACE_TASK_ID}`
 
@@ -91,6 +91,10 @@ const CLAUDE_MD = [
   '- `Output: <路径>` 行 = 摘要文件的落点(vault 相对路径),**不得改名**。',
   '- 其余文字 = 用户的范围与关注点说明(如「只查 YouTube 和 arxiv」「关注工程实现」)。',
   '  未指定范围时,YouTube、论文库(arxiv/Semantic Scholar 等)、欧美技术博客三类都试。',
+  '',
+  '委托方在运行开始前已把这份委托文本存为 `<摘要同名去 .md>/00-request.md`',
+  '(`type: Trace Request`)。它是用户的原稿:**只读**,不算材料,不要改写、',
+  '不要删除、也不要在摘要的「继续阅读」里列它;材料编号从 `01` 起。',
   '',
   '## 流程',
   '',

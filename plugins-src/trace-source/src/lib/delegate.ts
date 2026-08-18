@@ -65,19 +65,21 @@ export async function seedTemplates(): Promise<void> {
 /**
  * Starts one trace run. `text` is the composed delegation (quoted passage,
  * optional `Source-Doc:` line, the user's scope notes); the `Output:` line is
- * appended here and nowhere else. Never throws — `agent-missing` is told apart
- * by the `agent_unavailable:` prefix the host puts on the message.
+ * appended here and nowhere else. `outRel` comes from the CALLER — it computes
+ * the name once (via `traceOutputRel`) so the saved request document, the
+ * pending-run registry and the run's output all agree on one identity.
+ * Never throws — `agent-missing` is told apart by the `agent_unavailable:`
+ * prefix the host puts on the message.
  */
 export async function delegateTrace(
   text: string,
   vaultRoot: string,
-  /** Vault-relative directory the report lands in (the settings value). */
-  traceDir: string,
+  /** Vault-relative report path this run must write (`traceOutputRel(...)`). */
+  outRel: string,
   /** Which agent should run it; omitted = whatever the host would pick. */
   harness?: string,
 ): Promise<DelegateResult> {
   await seed()
-  const outRel = traceOutputRel(new Date(), traceDir)
   const outAbs = absolute(vaultRoot, outRel)
   try {
     const { run_id } = await agentRun({

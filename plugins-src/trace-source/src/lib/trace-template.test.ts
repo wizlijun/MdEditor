@@ -48,9 +48,12 @@ describe('trace-source 模板', () => {
     expect(md).not.toContain('源文档:')
   })
 
-  it('CLAUDE.md 含协议要件:source-trace 命名、降级、缘起、红线', () => {
+  it('CLAUDE.md 含协议要件:source-trace 命名、降级、缘起、红线、委托稿只读', () => {
     const md = at('/CLAUDE.md')
-    for (const must of ['-source-trace', 'yt-dlp', '未取到字幕', '缘起', 'Trace Material', '绝不'])
+    for (const must of [
+      '-source-trace', 'yt-dlp', '未取到字幕', '缘起', 'Trace Material', '绝不',
+      '00-request.md', // 委托稿在材料目录里,agent 不得改写、材料编号从 01 起
+    ])
       expect(md, must).toContain(must)
     expect(md).toContain('${VAULT}') // 数组拼行没被 JS 求值
   })

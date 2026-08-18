@@ -65,9 +65,18 @@
     interpretStatus,
     POLL_MS,
     seedTemplates,
+    traceOutputRel,
     type RunView,
   } from './lib/delegate'
-  import { deleteReport, listReports, previewDelete, type ReportEntry } from './lib/inbox'
+  import {
+    buildRequestDoc,
+    deleteReport,
+    listReports,
+    previewDelete,
+    requestPathFor,
+    stripFrontmatter,
+    type ReportEntry,
+  } from './lib/inbox'
   import { loadKit, type KitEditor } from './lib/editor-kit'
   import { parseState, serializeState, STATE_PATH, type TraceState } from './lib/state-io'
   import { TRACE_TASK_ID } from './lib/trace-template'
@@ -103,6 +112,9 @@
   // ── the report inbox ──────────────────────────────────────────────────────
   let reports = $state<ReportEntry[]>([])
   let listFailed = $state(false)
+  /** Rows whose runs are registered as in flight — drives the ⧖ badge. Entries
+   *  leave `pendingRuns` at any terminal answer, so this IS "running". */
+  const runningNames = $derived(new Set(Object.keys(settings.pendingRuns)))
 
   // ── which agent runs this trace ───────────────────────────────────────────
   const AGENT_SURFACE = 'trace-source'
@@ -130,10 +142,19 @@
   }
 
   /** Best-effort settings write: losing the memory of a toggle must never
-   *  cost the user anything else. */
+   *  cost the user anything else. (`pendingRuns` rides along — a run that
+   *  exists only in memory is lost to a window close, and nothing would ever
+   *  reconcile it.) */
   async function persist(): Promise<void> {
     try {
-      await vaultWrite(STATE_PATH, serializeState({ traceDir: settings.traceDir, inboxOpen: settings.inboxOpen }))
+      await vaultWrite(
+        STATE_PATH,
+        serializeState({
+          traceDir: settings.traceDir,
+          inboxOpen: settings.inboxOpen,
+          pendingRuns: { ...settings.pendingRuns },
+        }),
+      )
     } catch (e) {
       console.warn('[trace-source] persisting settings failed:', e)
     }
@@ -174,6 +195,22 @@
     void editorOpen(`${settings.traceDir}/${name}`).catch((e) => {
       errorMsg = e instanceof Error ? e.message : String(e)
     })
+  }
+
+  function openRequest(name: string): void {
+    void editorOpen(`${settings.traceDir}/${requestPathFor(name)}`).catch((e) => {
+      errorMsg = e instanceof Error ? e.message : String(e)
+    })
+  }
+
+  /** A failed trace's request, back into the composer for another go. */
+  async function reloadRequest(name: string): Promise<void> {
+    try {
+      const { content } = await vaultRead(`${settings.traceDir}/${requestPathFor(name)}`)
+      applySeed(stripFrontmatter(content))
+    } catch (e) {
+      errorMsg = e instanceof Error ? e.message : String(e)
+    }
   }
 
   async function removeReport(name: string): Promise<void> {
@@ -227,25 +264,36 @@
     applySeed('')
   }
 
-  // ── watching one run to its end ───────────────────────────────────────────
-  /** Consecutive failed status calls before the watcher gives up. Giving up
-   *  leaves the run alone on purpose: "I can't reach the agent" is not
-   *  evidence the run failed — the notification still arrives. */
+  // ── watching runs to their end ────────────────────────────────────────────
+  /** Consecutive failed status calls before a watcher gives up. Giving up
+   *  leaves the run REGISTERED on purpose: "I can't reach the agent" is not
+   *  evidence the run failed — the notification still arrives, and the next
+   *  boot's reconciliation asks again. */
   const MAX_POLL_ERRORS = 5
-  let pollTimer: ReturnType<typeof setTimeout> | null = null
+  /** report name → the timer for its next poll. NOT `$state`: nothing renders
+   *  the handles. */
+  const polls = new Map<string, ReturnType<typeof setTimeout>>()
   let unmounted = false
 
-  function watch(runId: string): void {
-    if (unmounted) return
+  /** Drops one run from the pending registry (memory + disk) at a terminal
+   *  answer. Visibility survives the drop: a report row shows done, a
+   *  reportless one shows failed via the orphan detection. */
+  async function settleRun(name: string): Promise<void> {
+    delete settings.pendingRuns[name]
+    await persist()
+  }
+
+  function watch(name: string, runId: string): void {
+    if (unmounted || polls.has(name)) return
     let errors = 0
 
     const schedule = () => {
-      if (!unmounted) pollTimer = setTimeout(() => void poll(), POLL_MS)
+      if (!unmounted) polls.set(name, setTimeout(() => void poll(), POLL_MS))
     }
 
     const poll = async () => {
-      pollTimer = null
-      if (unmounted || run?.id !== runId) return
+      polls.delete(name)
+      if (unmounted) return
 
       let view: RunView
       try {
@@ -255,26 +303,29 @@
         console.warn('[trace-source] a run status poll failed:', e)
         errors += 1
         if (errors < MAX_POLL_ERRORS) schedule()
-        else run = null
+        else if (run?.id === runId) run = null
         return
       }
-      if (unmounted || run?.id !== runId) return
+      if (unmounted) return
 
       if (view.kind === 'running') {
-        run = { id: runId, last: view.last }
+        if (run?.id === runId) run = { id: runId, last: view.last }
         schedule()
         return
       }
 
-      run = null
-      if (view.kind === 'done' && view.success) {
-        finished = 'ok'
-        // The report just landed: show it without waiting for a manual toggle.
-        if (settings.inboxOpen) void refreshReports()
-      } else {
-        finished = 'fail'
-        errorMsg = view.kind === 'done' && view.message ? view.message : ''
+      await settleRun(name)
+      if (run?.id === runId) {
+        run = null
+        if (view.kind === 'done' && view.success) {
+          finished = 'ok'
+        } else {
+          finished = 'fail'
+          errorMsg = view.kind === 'done' && view.message ? view.message : ''
+        }
       }
+      // The row just changed shape (report landed / turned failed): show it.
+      if (settings.inboxOpen) void refreshReports()
     }
 
     schedule()
@@ -289,19 +340,62 @@
     }
     delegating = true
     try {
-      const r = await delegateTrace(text, vaultRoot, settings.traceDir, agentId)
+      // Save FIRST: the user's ask must be on disk before the agent is
+      // involved, so neither a failed run nor a closed window can lose it.
+      // A vault that refuses the write refuses the delegation — silently
+      // proceeding would break the very promise this file exists for.
+      const outRel = traceOutputRel(new Date(), settings.traceDir)
+      const reportName = outRel.slice(outRel.lastIndexOf('/') + 1)
+      try {
+        await vaultWrite(`${settings.traceDir}/${requestPathFor(reportName)}`, buildRequestDoc(text))
+      } catch (e) {
+        errorMsg = e instanceof Error ? e.message : String(e)
+        return
+      }
+
+      const r = await delegateTrace(text, vaultRoot, outRel, agentId)
       if (!r.ok) {
         if (r.reason === 'agent-missing') agentMissing = true
         else errorMsg = r.message
+        // The saved request stays: the inbox shows it as a reportless row,
+        // whose menu offers loading it back into the editor.
+        if (settings.inboxOpen) void refreshReports()
         return
       }
       finished = null
       errorMsg = ''
+      // Registered in memory and on disk in the same breath — a run that
+      // exists only in memory is lost to a window close.
+      settings.pendingRuns[reportName] = r.runId
+      await persist()
       run = { id: r.runId, last: '' }
-      watch(r.runId)
+      watch(reportName, r.runId)
+      if (settings.inboxOpen) void refreshReports()
     } finally {
       delegating = false
     }
+  }
+
+  /**
+   * Runs recorded by an EARLIER window: ask once where each one stands.
+   * Still running → watched again (row keeps its ⧖); ended, however it ended
+   * → dropped from the registry (the row reads done/failed from the disk).
+   * `lost` and unreachable both leave nothing worth polling.
+   */
+  async function reconcilePending(): Promise<void> {
+    for (const [name, runId] of Object.entries({ ...settings.pendingRuns })) {
+      if (unmounted) return
+      let view: RunView
+      try {
+        view = interpretStatus(await agentStatus(TRACE_TASK_ID, runId))
+      } catch (e) {
+        console.warn('[trace-source] reconciling a run failed:', e)
+        continue // not evidence of anything; ask again next boot
+      }
+      if (view.kind === 'running') watch(name, runId)
+      else await settleRun(name)
+    }
+    if (settings.inboxOpen) void refreshReports()
   }
 
   /** Focuses the agent-missing layer so Esc reaches it (see its `onkeydown`). */
@@ -382,12 +476,17 @@
         kit = null
         kitFailed = true
       }
+
+      // Last, and unawaited by the mount path above: it may have to wake the
+      // agent plugin up, and the editor must not wait on that.
+      if (!disposed) void reconcilePending()
     })()
 
     return () => {
       disposed = true
       unmounted = true
-      if (pollTimer !== null) clearTimeout(pollTimer)
+      for (const id of polls.values()) clearTimeout(id)
+      polls.clear()
       kit?.destroy()
       kit = null
     }
@@ -417,8 +516,11 @@
       {#if settings.inboxOpen}
         <InboxPanel
           {reports}
+          running={runningNames}
           {listFailed}
           onopen={openReport}
+          onopenrequest={openRequest}
+          onreload={(name) => void reloadRequest(name)}
           ondelete={removeReport}
           onpreviewdelete={previewRemove}
           ontoggle={() => void toggleInbox()}

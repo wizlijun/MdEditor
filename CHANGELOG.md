@@ -10,6 +10,7 @@ For the full commit history, see the git log.
 ### Added
 
 - **Trace Source grew an inbox and settings.** (Marketplace: Trace Source 1.1.0.) Reports now land in `inbox/traces/` by default (changeable in the window's settings), named `<date>-<time>-source-trace.md` with full-text materials in a same-named folder beside each report. The new inbox panel — same shape as Idea Spark's — lists past reports newest first; click one to read it in the main editor, right-click to open or delete it (materials included). While a trace runs, the bar shows live progress and the inbox refreshes itself the moment the report lands. The delegation prompt is editable from settings, and the task template migrates itself once — no manual deleting this time.
+- **A trace can no longer be lost.** (Marketplace: Trace Source 1.2.0.) The moment you delegate, your ask is saved to disk — `…-source-trace/00-request.md` beside where the report will land — *before* the agent is involved, and the run itself is registered so a closed or refreshed window picks it right back up: still running shows ⧖, finished shows the report, and a run that produced nothing shows ✗ instead of vanishing. A failed row's right-click menu loads your request back into the editor for another go. If saving the request fails, the delegation refuses to start rather than silently proceeding without a safety net.
 
 ## v6.818.8 — 2026-08-18
 

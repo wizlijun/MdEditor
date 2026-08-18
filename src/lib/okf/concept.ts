@@ -42,10 +42,12 @@ export const CONCEPT_TYPE = {
   idea: 'Idea',
   /** 奇思妙想:agent 产出的论证文档 `<name>.proof.md` */
   ideaProof: 'Idea Proof',
-  /** 溯源:agent 产出的溯源摘要 `traces/<date>-<time>.md`(idea-spark trace-source 任务) */
+  /** 溯源:agent 产出的溯源摘要 `<dir>/<ts>-source-trace.md`(trace-source 插件) */
   traceReport: 'Trace Report',
-  /** 溯源:下载的原始材料全文(字幕转写/博客正文/论文节选),`traces/<同名>/` 子目录 */
+  /** 溯源:下载的原始材料全文(字幕转写/博客正文/论文节选),报告同名子目录 */
   traceMaterial: 'Trace Material',
+  /** 溯源:用户的委托稿,报告同名子目录下的 `00-request.md`(委托时落盘,agent 只读) */
+  traceRequest: 'Trace Request',
   /** vault 根的 AGENTS.md(模板见 src-tauri/templates/AGENTS.md) */
   vaultConventions: 'Vault Conventions',
 } as const

@@ -8,17 +8,27 @@ export interface TraceState {
   traceDir: string
   /** Whether the inbox panel is expanded. */
   inboxOpen: boolean
+  /** report file name → run_id, for traces still being worked on. What makes
+   *  a delegation survive a window close: the next boot asks each run where
+   *  it stands instead of forgetting it ever started. */
+  pendingRuns: Record<string, string>
 }
 
 export const DEFAULT_STATE: TraceState = {
   traceDir: 'inbox/traces',
   inboxOpen: false,
+  pendingRuns: {},
 }
 
 export const STATE_PATH = '.notemd/trace-source.json'
 
 function defaultState(): TraceState {
-  return { traceDir: DEFAULT_STATE.traceDir, inboxOpen: DEFAULT_STATE.inboxOpen }
+  return { traceDir: DEFAULT_STATE.traceDir, inboxOpen: DEFAULT_STATE.inboxOpen, pendingRuns: {} }
+}
+
+function isStringRecord(v: unknown): v is Record<string, string> {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return false
+  return Object.values(v).every((x) => typeof x === 'string')
 }
 
 /**
@@ -40,7 +50,9 @@ export function parseState(raw: string | null): TraceState {
   const traceDir =
     typeof o.traceDir === 'string' && o.traceDir.trim() !== '' ? o.traceDir : DEFAULT_STATE.traceDir
   const inboxOpen = o.inboxOpen === true
-  return { traceDir, inboxOpen }
+  // 值不是字符串的登记整体弃用:一个坏 run_id 会永远轮询不出结果。
+  const pendingRuns = isStringRecord(o.pendingRuns) ? o.pendingRuns : {}
+  return { traceDir, inboxOpen, pendingRuns }
 }
 
 export function serializeState(s: TraceState): string {

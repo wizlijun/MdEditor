@@ -88,9 +88,8 @@ impl Origin {
 /// `concept.ts` for the same caveat from the other side.
 fn mapped_type_origin(concept_type: &str) -> Option<Origin> {
     match concept_type {
-        "Note" | "Outline Note" | "Daily Note" | "Wiki Page" | "Idea" | "Vault Conventions" => {
-            Some(Origin::Human)
-        }
+        "Note" | "Outline Note" | "Daily Note" | "Wiki Page" | "Idea" | "Vault Conventions"
+        | "Trace Request" => Some(Origin::Human),
         "Book Summary" | "Answer" | "Idea Proof" | "Reading Report" | "Decision Board"
         | "Decision Archive" | "Trace Report" => Some(Origin::Derived),
         "Book" | "Trace Material" => Some(Origin::Source),

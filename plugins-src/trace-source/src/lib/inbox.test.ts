@@ -1,6 +1,8 @@
-// inbox.ts 的合同:哪些文件算报告、按什么顺序列、标题从哪来、删除带走什么。
+// inbox.ts 的合同:哪些文件算报告、按什么顺序列、标题从哪来、删除带走什么、
+// 委托稿长什么样、没长成报告的委托怎么被发现。
 import { describe, expect, it, vi } from 'vitest'
 import {
+  buildRequestDoc,
   createdFromName,
   deleteReport,
   listReports,
@@ -8,11 +10,18 @@ import {
   previewDelete,
   relativeAge,
   REPORT_SUFFIX,
+  requestPathFor,
+  stripFrontmatter,
 } from './inbox'
 
 const DIR = 'inbox/traces'
 
-function io(files: Record<string, string>, dirs: Record<string, string[]> = {}) {
+function io(
+  files: Record<string, string>,
+  dirs: Record<string, string[]> = {},
+  /** 目录下的深层文件,键是相对 DIR 的路径(如 `x-source-trace/00-request.md`)。 */
+  deep: Record<string, string> = {},
+) {
   return {
     list: vi.fn(async (path: string) => {
       if (path === DIR) {
@@ -27,6 +36,8 @@ function io(files: Record<string, string>, dirs: Record<string, string[]> = {}) 
       throw new Error('no such dir')
     }),
     read: vi.fn(async (path: string) => {
+      const rel = path.startsWith(`${DIR}/`) ? path.slice(DIR.length + 1) : path
+      if (rel in deep) return { content: deep[rel] }
       const name = path.split('/').pop() ?? ''
       if (name in files) return { content: files[name] }
       throw new Error('no such file')
@@ -36,7 +47,7 @@ function io(files: Record<string, string>, dirs: Record<string, string[]> = {}) 
 }
 
 describe('listReports', () => {
-  it('只认 -source-trace.md 结尾的文件,倒序,标题取 frontmatter title', async () => {
+  it('只认 -source-trace.md 结尾的文件,倒序,标题取 frontmatter title,hasReport=true', async () => {
     const reports = await listReports(
       io({
         '2026-08-17-090000-source-trace.md': '---\ntitle: 早的\n---\n正文',
@@ -51,6 +62,7 @@ describe('listReports', () => {
       '2026-08-17-090000-source-trace.md',
     ])
     expect(reports.map((r) => r.title)).toEqual(['晚的', '早的'])
+    expect(reports.every((r) => r.hasReport)).toBe(true)
   })
 
   it('frontmatter 缺失或读失败时 title 为 null,行仍在', async () => {
@@ -68,6 +80,25 @@ describe('listReports', () => {
     const bad = io({})
     bad.list.mockRejectedValue(new Error('io'))
     await expect(listReports(bad, DIR)).rejects.toThrow()
+  })
+
+  it('有委托稿目录但无报告 → 孤儿行(hasReport=false,标题读自 00-request.md),排序仍按时间倒序', async () => {
+    const rows = await listReports(
+      io(
+        { '2026-08-17-090000-source-trace.md': '---\ntitle: 完成的\n---' },
+        {
+          '2026-08-18-143012-source-trace': ['00-request.md'],
+          // 已有报告的材料目录不再重复成行
+          '2026-08-17-090000-source-trace': ['00-request.md', '01-blog.md'],
+        },
+        { '2026-08-18-143012-source-trace/00-request.md': '---\ntype: Trace Request\ntitle: 悬着的\n---\n> 引文' },
+      ),
+      DIR,
+    )
+    expect(rows.map((r) => [r.name, r.hasReport, r.title])).toEqual([
+      ['2026-08-18-143012-source-trace.md', false, '悬着的'],
+      ['2026-08-17-090000-source-trace.md', true, '完成的'],
+    ])
   })
 })
 
@@ -123,5 +154,42 @@ describe('previewDelete / deleteReport', () => {
 describe('constants', () => {
   it('报告后缀是产品约定,钉死', () => {
     expect(REPORT_SUFFIX).toBe('-source-trace.md')
+  })
+
+  it('委托稿住在材料目录里,00 号——材料从 01 起,永不相撞', () => {
+    expect(requestPathFor('2026-08-18-143012-source-trace.md')).toBe(
+      '2026-08-18-143012-source-trace/00-request.md',
+    )
+  })
+})
+
+describe('buildRequestDoc', () => {
+  it('frontmatter 带 type: Trace Request 与从首行截取的 title,正文原样', () => {
+    const doc = buildRequestDoc('> 这段话是谁说的\n> 第二行\n\nSource-Doc: a.md\n')
+    expect(doc).toMatch(/^---\n/)
+    expect(doc).toContain('type: Trace Request')
+    expect(doc).toContain('title: 这段话是谁说的')
+    expect(doc).toContain('> 这段话是谁说的\n> 第二行\n\nSource-Doc: a.md')
+  })
+
+  it('title 去掉引用符、截断超长行、对引号安全', () => {
+    const doc = buildRequestDoc(`> ${'长'.repeat(80)}\n`)
+    const m = /title: (.+)/.exec(doc)!
+    expect(m[1].length).toBeLessThanOrEqual(61) // 60 + 省略号
+    expect(buildRequestDoc('> a "quoted" line\n')).toContain('title: a "quoted" line')
+    // 冒号开头等 YAML 险字符走引号包裹
+    expect(buildRequestDoc(': tricky\n')).toContain('title: ": tricky"')
+  })
+
+  it('空文本也给出非空 title(OKF 生产者约束:type 非空、文档可解析)', () => {
+    const doc = buildRequestDoc('   \n')
+    expect(doc).toMatch(/title: \S/)
+  })
+})
+
+describe('stripFrontmatter', () => {
+  it('去掉 frontmatter 还原委托正文;没有 frontmatter 原样返回', () => {
+    expect(stripFrontmatter('---\ntype: Trace Request\ntitle: x\n---\n\n> 正文\n')).toBe('> 正文\n')
+    expect(stripFrontmatter('> 没有头\n')).toBe('> 没有头\n')
   })
 })

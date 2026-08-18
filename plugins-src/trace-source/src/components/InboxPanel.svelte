@@ -24,17 +24,26 @@
 
   const {
     reports,
+    running,
     listFailed,
     onopen,
+    onopenrequest,
+    onreload,
     ondelete,
     onpreviewdelete,
     ontoggle,
   }: {
     reports: ReportEntry[]
+    /** Report names whose runs are still in flight (the pending registry). */
+    running: ReadonlySet<string>
     /** The directory listing itself failed — say so instead of "no reports". */
     listFailed: boolean
     /** Opens the report in the main editor. */
     onopen: (name: string) => void
+    /** Opens the saved request (`00-request.md`) in the main editor. */
+    onopenrequest: (name: string) => void
+    /** Loads the request text back into the composer for re-delegation. */
+    onreload: (name: string) => void
     /** Deletes the report and its materials (App owns the IO). */
     ondelete: (name: string) => void | Promise<void>
     /** Names every file a delete would take, for the confirm dialog. */
@@ -42,6 +51,21 @@
     /** The header's fold-away button — same `toggle` the action bar uses. */
     ontoggle: () => void
   } = $props()
+
+  type RowStatus = 'done' | 'running' | 'failed'
+
+  /** A row's three states: report exists → done; run registered → running;
+   *  neither → a delegation that produced nothing (failed/aborted/lost). */
+  function statusOf(r: ReportEntry): RowStatus {
+    if (r.hasReport) return 'done'
+    return running.has(r.name) ? 'running' : 'failed'
+  }
+
+  const STATUS_KEY = {
+    done: 'statusDone',
+    running: 'statusRunning',
+    failed: 'statusFailed',
+  } as const
 
   let menu = $state<{ name: string; x: number; y: number } | null>(null)
   let confirm = $state<{ name: string; lines: string[] } | null>(null)
@@ -81,11 +105,25 @@
     opener = null
   }
 
-  function itemsFor(name: string): MenuItem[] {
-    return [
-      { label: t('menuOpenReport'), icon: 'open-report', onselect: () => onopen(name) },
-      { label: t('menuDelete'), icon: 'delete', danger: true, separated: true, onselect: () => void askDelete(name) },
-    ]
+  function itemsFor(r: ReportEntry): MenuItem[] {
+    switch (statusOf(r)) {
+      case 'done':
+        return [
+          { label: t('menuOpenReport'), icon: 'open-report', onselect: () => onopen(r.name) },
+          { label: t('menuOpenRequest'), icon: 'trace', onselect: () => onopenrequest(r.name) },
+          { label: t('menuDelete'), icon: 'delete', danger: true, separated: true, onselect: () => void askDelete(r.name) },
+        ]
+      case 'running':
+        // No delete while the agent is writing into the very directory a
+        // delete would empty — the row settles into done/failed soon enough.
+        return [{ label: t('menuOpenRequest'), icon: 'trace', onselect: () => onopenrequest(r.name) }]
+      case 'failed':
+        return [
+          { label: t('menuReload'), icon: 'delegate', onselect: () => onreload(r.name) },
+          { label: t('menuOpenRequest'), icon: 'trace', onselect: () => onopenrequest(r.name) },
+          { label: t('menuDelete'), icon: 'delete', danger: true, separated: true, onselect: () => void askDelete(r.name) },
+        ]
+    }
   }
 
   async function askDelete(name: string): Promise<void> {
@@ -124,15 +162,32 @@
   {/if}
   <ul>
     {#each reports as r (r.name)}
+      {@const status = statusOf(r)}
       <li>
+        <!-- Click follows the row's nature: a finished report opens to read;
+             a pending/failed row opens what exists — the saved request. -->
         <button
           class="row"
           type="button"
-          onclick={() => onopen(r.name)}
+          onclick={() => (status === 'done' ? onopen(r.name) : onopenrequest(r.name))}
           oncontextmenu={(e) => openMenu(e, r.name)}
           title={r.name}
         >
           <span class="name">{label(r)}</span>
+          <span
+            class="mark {status}"
+            role="img"
+            title={t(STATUS_KEY[status])}
+            aria-label={t(STATUS_KEY[status])}
+          >
+            {#if status === 'running'}
+              <Icon name="running" size={12} />
+            {:else if status === 'done'}
+              ✦
+            {:else}
+              ✗
+            {/if}
+          </span>
           <span class="age">{ageLabel(r.name)}</span>
         </button>
       </li>
@@ -142,12 +197,13 @@
 
 <!-- `{#key}`: the menu measures and positions itself once, when it mounts. -->
 {#if menu}
+  {@const row = reports.find((r) => r.name === menu!.name) ?? { name: menu.name, title: null, hasReport: false }}
   {#key menu}
     <ContextMenu
       x={menu.x}
       y={menu.y}
-      label={label(reports.find((r) => r.name === menu!.name) ?? { name: menu.name, title: null })}
-      items={itemsFor(menu.name)}
+      label={label(row)}
+      items={itemsFor(row)}
       onclose={closeMenu}
     />
   {/key}
@@ -249,6 +305,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The row is baseline-aligned (right for its text); the mark opts out with
+     `align-self: center` so the 12px SVG doesn't ride low next to the ✦. */
+  .mark {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    align-self: center;
+    font-size: 0.75rem;
+  }
+  .mark.done { color: #16a34a; }
+  .mark.failed { color: #dc2626; }
   .age {
     flex: 0 0 auto;
     font-size: 0.68rem;

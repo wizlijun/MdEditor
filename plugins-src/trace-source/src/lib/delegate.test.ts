@@ -39,23 +39,23 @@ describe('traceOutputRel', () => {
   })
 })
 
+const OUT = 'inbox/traces/2026-08-18-143012-source-trace.md'
+
 describe('delegateTrace', () => {
-  it('prompt=委托文本+Output 行,notify 指向摘要绝对路径,无 note_path', async () => {
+  it('prompt=委托文本+Output 行(用调用方给的 outRel),notify 指向摘要绝对路径,无 note_path', async () => {
     const request = vi.fn().mockResolvedValue({ run_id: 'r1' })
     useBridge(request)
 
-    const r = await delegateTrace('只查论文\n\n> 引文', '/V', 'inbox/traces')
+    const r = await delegateTrace('只查论文\n\n> 引文', '/V', OUT)
 
-    expect(r.ok).toBe(true)
-    const outRel = (r as { outRel: string }).outRel
-    expect(outRel).toMatch(/^inbox\/traces\/\d{4}-\d{2}-\d{2}-\d{6}-source-trace\.md$/)
+    expect(r).toMatchObject({ ok: true, runId: 'r1', outRel: OUT })
     const [method, params] = request.mock.calls.at(-1)!
     expect(method).toBe('host.agent.run')
     expect(params.task).toBe('trace-source')
-    expect(params.prompt).toBe(`只查论文\n\n> 引文\n\nOutput: ${outRel}\n`)
+    expect(params.prompt).toBe(`只查论文\n\n> 引文\n\nOutput: ${OUT}\n`)
     expect(params.note_path).toBeUndefined()
-    expect(params.notify.open_path).toBe(`/V/${outRel}`)
-    expect(params.notify.expect_file).toBe(`/V/${outRel}`)
+    expect(params.notify.open_path).toBe(`/V/${OUT}`)
+    expect(params.notify.expect_file).toBe(`/V/${OUT}`)
     expect(Object.keys(params.notify).sort()).toEqual([
       'expect_file', 'open_path', 'title_fail', 'title_ok',
     ])
@@ -69,7 +69,7 @@ describe('delegateTrace', () => {
     })
     useBridge(request)
 
-    await delegateTrace('x', '/V', 'inbox/traces')
+    await delegateTrace('x', '/V', OUT)
 
     const methods = request.mock.calls.map(([m]) => m)
     const writes = methods.filter((m) => m === 'host.vault.write')
@@ -88,15 +88,15 @@ describe('delegateTrace', () => {
       return { run_id: 'r1' }
     })
     useBridge(request)
-    await expect(delegateTrace('x', '/V', 'inbox/traces')).resolves.toMatchObject({ ok: true, runId: 'r1' })
+    await expect(delegateTrace('x', '/V', OUT)).resolves.toMatchObject({ ok: true, runId: 'r1' })
   })
 
   it('vault 根带尾斜杠不产生 //', async () => {
     const request = vi.fn().mockResolvedValue({ run_id: 'r1' })
     useBridge(request)
-    const r = await delegateTrace('x', '/V/', 'inbox/traces')
+    await delegateTrace('x', '/V/', OUT)
     const [, params] = request.mock.calls.at(-1)!
-    expect(params.notify.open_path).toBe(`/V/${(r as { outRel: string }).outRel}`)
+    expect(params.notify.open_path).toBe(`/V/${OUT}`)
   })
 
   it('agent_unavailable 前缀映射 agent-missing', async () => {
@@ -105,13 +105,13 @@ describe('delegateTrace', () => {
       return { exists: true }
     })
     useBridge(request)
-    const r = await delegateTrace('x', '/V', 'inbox/traces')
+    const r = await delegateTrace('x', '/V', OUT)
     expect(r).toMatchObject({ ok: false, reason: 'agent-missing' })
   })
 
   it('没有 run id 的应答按错误报,绝不算已开始', async () => {
     useBridge(vi.fn().mockResolvedValue({}))
-    const r = await delegateTrace('x', '/V', 'inbox/traces')
+    const r = await delegateTrace('x', '/V', OUT)
     expect(r).toMatchObject({ ok: false, reason: 'error' })
   })
 })
