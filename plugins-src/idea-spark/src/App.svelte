@@ -51,8 +51,14 @@
   import ModeToggle from './components/ModeToggle.svelte'
   import SettingsPopover from './components/SettingsPopover.svelte'
   import { delegateIdea, interpretStatus, POLL_MS, TASK_ID, type RunView } from './lib/agent-client'
+  import AgentPicker from './lib/agent-picker/AgentPicker.svelte'
+  import {
+    rememberProvider,
+    rememberedProvider,
+    type AgentOption,
+  } from './lib/agent-picker/types'
   import { createAutosave } from './lib/autosave'
-  import { agentStatus, bridge } from './lib/bridge'
+  import { agentProviders, agentStatus, bridge } from './lib/bridge'
   import { loadKit, type KitEditor, type KitMode } from './lib/editor-kit'
   import { pickPlaceholder, placeholderLines } from './lib/placeholder'
   import {
@@ -79,7 +85,7 @@
     toast,
     toggleInbox,
   } from './lib/store.svelte'
-  import { setLocale, t } from './lib/strings'
+  import { setLocale, t, tv } from './lib/strings'
 
   setLocale(bridge().locale)
 
@@ -93,6 +99,36 @@
   let delegating = $state(false)
   /** claude-agent isn't installed/enabled — the layer pointing at the market. */
   let agentMissing = $state(false)
+
+  // ── which agent runs this idea ────────────────────────────────────────────
+  // Remembered per surface: proving an idea with Claude while the ebook queue
+  // reads with DeepSeek is a reasonable thing to want, and one shared setting
+  // cannot express it.
+  const AGENT_SURFACE = 'idea-spark'
+  let agents: AgentOption[] = $state([])
+  let agentId: string | undefined = $state(undefined)
+
+  async function loadAgents() {
+    try {
+      const r = await agentProviders()
+      agents = r.providers ?? []
+      agentId = rememberedProvider(
+        AGENT_SURFACE,
+        agents.map((a) => a.id),
+        r.default,
+      )
+    } catch {
+      // An older host without host.agent.providers, or no agent installed. The
+      // picker hides itself and the run goes to whatever the host picks.
+      agents = []
+      agentId = undefined
+    }
+  }
+
+  function pickAgent(id: string) {
+    agentId = id
+    rememberProvider(AGENT_SURFACE, id)
+  }
   /** Newest progress line of a watched run, with the idea it belongs to. Only
    *  rendered when that idea is the one in the editor. */
   let runProgress = $state<{ ideaRel: string; last: string } | null>(null)
@@ -437,7 +473,7 @@
       }
       const ideaRel = relPath(store, target)
 
-      const result = await delegateIdea(ideaRel, titleOf(store, target), vaultRoot)
+      const result = await delegateIdea(ideaRel, titleOf(store, target), vaultRoot, agentId)
       if (!result.ok) {
         if (result.reason === 'agent-missing') agentMissing = true
         else toast(result.message, 'error')
@@ -490,6 +526,9 @@
     void (async () => {
       await boot()
       if (disposed || store.needVault) return
+      // Which agents exist is independent of the draft, so it does not gate the
+      // editor coming up.
+      void loadAgents()
 
       const initial = newIdea()
       fallbackText = initial
@@ -673,6 +712,17 @@
         <Icon name="delegate" />
         {delegating ? t('delegating') : t('delegate')}
       </button>
+      <!-- `[ 委托给 agent ] by Claude ▾` — the same pairing as every other place
+           a run can be started. -->
+      {#if agents.length}
+        <AgentPicker
+          options={agents}
+          selected={agentId ?? null}
+          disabled={delegating || runBusy}
+          onselect={pickAgent}
+          label={tv as (k: string, v?: Record<string, string | number>) => string}
+        />
+      {/if}
       <!-- The two icon-only buttons carry their whole meaning in `aria-label`
            and `title`; that was true when they were emoji and it is what must
            NOT be dropped now that the glyph is an `aria-hidden` SVG. -->

@@ -197,6 +197,12 @@ pub trait HostServices: Send + Sync {
     fn agent_execute(&self, _command: &str, _context: serde_json::Value) -> Result<serde_json::Value, String> {
         Err("agent_unavailable: no relay on this channel".into())
     }
+    /// Every installed agent, with the harness behind it. Powers the "by X ▾"
+    /// picker that sits beside every "run this with an agent" button, so one
+    /// answer drives one control wherever that button appears.
+    fn agent_providers(&self) -> Result<serde_json::Value, String> {
+        Err("agent_unavailable: no relay on this channel".into())
+    }
     /// 推一条托盘全局提醒（角标 + 菜单项 + 点击动作）。默认不可用；生产实现只在
     /// `TauriServices`(Task 4),落地到 `reminders.rs` 的注册表。
     fn notify_user(&self, _params: &serde_json::Value) -> Result<serde_json::Value, String> {
@@ -422,6 +428,7 @@ pub async fn dispatch_with(
         "host.editor.open" => editor_open(services, &req.params),
         "host.agent.run"    => services.agent_execute("run-task", req.params.clone()),
         "host.agent.status" => services.agent_execute("run-status", req.params.clone()),
+        "host.agent.providers" => services.agent_providers(),
         "host.notify"       => notify_push(services, &req.params),
         "host.dismissNotification" => services.dismiss_notification(&req.params),
         // handle_common took log/toast; the gate rejected everything unknown.
@@ -1088,29 +1095,53 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
             configured.as_deref(),
             &installed,
         );
-        let app = self.app.clone();
-        let command = command.to_string();
-        let (tx, rx) = std::sync::mpsc::channel();
-        tauri::async_runtime::spawn(async move {
-            let out = async {
-                let lc = super::commands::get_or_register(&app, &agent_plugin)
-                    .map_err(|e| format!("agent_unavailable: {e}"))?;
-                lc.ensure_active(&super::lifecycle::Trigger::Command(command.clone()))
-                    .await
-                    .map_err(|e| format!("agent_unavailable: {e}"))?;
-                lc.execute(plugin_protocol::ExecuteCommandParams { command, context }).await
-            }
-            .await;
-            let _ = tx.send(out);
-        });
-        // "发送端消失" = spawn 的任务 panic 了,单独说清楚,别混进业务错误里。
-        match rx.recv() {
-            Ok(out) => out,
-            Err(std::sync::mpsc::RecvError) => {
-                Err("agent relay dropped: the relay task ended without answering".into())
+        agent_execute_on(&self.app, &agent_plugin, command, context)
+    }
+
+    /// Ask every installed agent plugin what harness it has.
+    ///
+    /// Each answer costs a `harness-status` round trip (which may shell out to
+    /// `claude --version`), and several surfaces can ask at once when a few
+    /// windows are open, so the result is cached briefly. The TTL is short on
+    /// purpose: re-authenticating, or installing a harness, should show up
+    /// within seconds rather than after a restart.
+    fn agent_providers(&self) -> Result<serde_json::Value, String> {
+        const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(20);
+        static CACHE: std::sync::Mutex<Option<(std::time::Instant, serde_json::Value)>> =
+            std::sync::Mutex::new(None);
+        if let Some((at, v)) = CACHE.lock().unwrap().as_ref() {
+            if at.elapsed() < CACHE_TTL {
+                return Ok(v.clone());
             }
         }
+
+        let manifests = super::commands::installed_manifests();
+        let ids = super::agent_provider::providers(&manifests);
+        let configured = super::agent_provider::configured_default(self.vault_root().as_deref());
+        let selected = super::agent_provider::resolve(None, configured.as_deref(), &ids);
+
+        let mut out = Vec::new();
+        for id in &ids {
+            let manifest = manifests.iter().find(|m| &m.id == id);
+            // A harness that will not answer is still an installed provider.
+            // Listing it with an unknown harness beats hiding it — a plugin the
+            // user can see in their plugin list vanishing from the picker reads
+            // as a bug, not as a diagnosis.
+            let harness = agent_execute_on(&self.app, id, "harness-status", serde_json::json!({}))
+                .ok();
+            out.push(serde_json::json!({
+                "id": id,
+                "name": manifest.map(|m| m.name.clone()).unwrap_or_else(|| id.clone()),
+                "i18n": manifest.and_then(|m| m.i18n.clone()),
+                "selected": id == &selected,
+                "harness": harness,
+            }));
+        }
+        let v = serde_json::json!({ "providers": out, "default": selected });
+        *CACHE.lock().unwrap() = Some((std::time::Instant::now(), v.clone()));
+        Ok(v)
     }
+
 
     fn notify_user(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
         let (title, action, source, severity) = crate::notifications::parse_notify_params(params)?;
@@ -1123,6 +1154,46 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
             crate::notifications::dismiss_source(s);
         }
         Ok(serde_json::json!({ "ok": true }))
+    }
+}
+
+/// Run one command on ONE named agent plugin, blocking the calling thread.
+///
+/// A free function rather than a method so the provider list can poll each
+/// installed agent by id, instead of only whichever one the setting resolves to.
+///
+/// 阻塞的是**调用线程**,不碰读循环 —— 见 `agent_execute` 上的长注释。这里同样
+/// **不自设超时**:曾经是 30s、后来 300s,两次都栽在同一件事上(run 还在跑就被
+/// 判失败,而磁盘上其实成功了)。
+fn agent_execute_on<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    agent_plugin: &str,
+    command: &str,
+    context: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let app = app.clone();
+    let agent_plugin = agent_plugin.to_string();
+    let command = command.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    tauri::async_runtime::spawn(async move {
+        let out = async {
+            let lc = super::commands::get_or_register(&app, &agent_plugin)
+                .map_err(|e| format!("agent_unavailable: {e}"))?;
+            lc.ensure_active(&super::lifecycle::Trigger::Command(command.clone()))
+                .await
+                .map_err(|e| format!("agent_unavailable: {e}"))?;
+            lc.execute(plugin_protocol::ExecuteCommandParams { command, context })
+                .await
+        }
+        .await;
+        let _ = tx.send(out);
+    });
+    // "发送端消失" = spawn 的任务 panic 了,单独说清楚,别混进业务错误里。
+    match rx.recv() {
+        Ok(out) => out,
+        Err(std::sync::mpsc::RecvError) => {
+            Err("agent relay dropped: the relay task ended without answering".into())
+        }
     }
 }
 
@@ -2072,6 +2143,27 @@ mod tests {
     // only covered the process channel via make_sink; these pin the UI bridge's
     // own command-name mapping and capability gate so a "run-task"/"run-status"
     // swap or a missing capability check here would fail a test.
+
+    /// The picker beside every "run this with an agent" button is built from
+    /// this one answer, so its shape is a contract three separate webviews
+    /// depend on. It is capability-gated like the rest of `host.agent.*`.
+    #[tokio::test]
+    async fn host_agent_providers_is_gated_and_answers_a_provider_list() {
+        let s = StubServices::default();
+        let denied = run(&s, &[], "host.agent.providers", serde_json::json!({})).await;
+        assert!(
+            denied.error.is_some(),
+            "must not be reachable without the agent capability"
+        );
+
+        // The stub has no relay, so this exercises the gate and the dispatch
+        // arm; the production shape is pinned by `agent_provider`'s own tests.
+        let allowed = run(&s, &["agent"], "host.agent.providers", serde_json::json!({})).await;
+        assert!(
+            allowed.error.is_some() && allowed.error.unwrap().message.contains("agent_unavailable"),
+            "with the capability it must reach the relay rather than the gate"
+        );
+    }
 
     #[tokio::test]
     async fn host_agent_run_maps_to_run_task_with_capability() {

@@ -96,6 +96,8 @@ export async function delegateIdea(
   ideaRel: string,
   title: string,
   vaultRoot: string,
+  /** Which agent should run it; omitted = whatever the host would pick. */
+  harness?: string,
 ): Promise<DelegateResult> {
   await seed()
 
@@ -103,6 +105,7 @@ export async function delegateIdea(
   try {
     const { run_id } = await agentRun({
       task: TASK_ID,
+      ...(harness ? { harness } : {}),
       prompt: `idea: ${ideaRel}\nproof: ${proofPathFor(ideaRel)}`,
       note_path: absolute(vaultRoot, ideaRel),
       notify: {

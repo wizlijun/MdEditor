@@ -292,6 +292,15 @@
           <button onclick={stop}>{tr('run.stop')}</button>
         {:else}
           <button class="primary" onclick={start} disabled={!selectedTask}>{tr('run.start')}</button>
+          <!-- Display only, deliberately: this window IS one agent, so a picker
+               here could only offer to run something somewhere else. The same
+               "by X" phrasing as the pickers elsewhere, without the menu. -->
+          {#if harness?.ok}
+            <span class="by" title={harness.origin ?? ''}>
+              {tr('agentPicker.by', { name: (harness.harness ?? '').replace(/\s*(Code|Harness)$/i, '') })}
+              {#if harness.version}<span class="byver">{harness.version}</span>{/if}
+            </span>
+          {/if}
         {/if}
       </footer>
     {/if}

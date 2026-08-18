@@ -67,6 +67,14 @@ export const MESSAGE_KEYS = [
   'confirmDelete',
   'cancel',
   'inboxEmpty',
+  // The agent picker beside the delegate button. Same keys, same wording as
+  // every other surface that offers to run something with an agent — the
+  // control is a standard, so its vocabulary is too.
+  'agentPicker.by',
+  'agentPicker.model',
+  'agentPicker.unknown',
+  'agentPicker.notInstalled',
+  'agentPicker.broken',
 ] as const
 
 export type MessageKey = (typeof MESSAGE_KEYS)[number]
@@ -135,6 +143,11 @@ const en: Catalog = {
   confirmDelete: 'Delete',
   cancel: 'Cancel',
   inboxEmpty: 'No ideas yet.',
+  'agentPicker.by': 'by {name}',
+  'agentPicker.model': 'model {model}',
+  'agentPicker.unknown': 'harness unknown',
+  'agentPicker.notInstalled': 'not installed',
+  'agentPicker.broken': 'found, but it will not start',
 }
 
 const zh: Catalog = {
@@ -192,6 +205,11 @@ const zh: Catalog = {
   confirmDelete: '删除',
   cancel: '取消',
   inboxEmpty: '还没有想法。',
+  'agentPicker.by': '由 {name} 执行',
+  'agentPicker.model': '模型 {model}',
+  'agentPicker.unknown': '运行环境未知',
+  'agentPicker.notInstalled': '未安装',
+  'agentPicker.broken': '装了,但起不来',
 }
 
 const ja: Catalog = {
@@ -249,6 +267,11 @@ const ja: Catalog = {
   confirmDelete: '削除',
   cancel: 'キャンセル',
   inboxEmpty: 'まだアイデアがありません。',
+  'agentPicker.by': '実行:{name}',
+  'agentPicker.model': 'モデル {model}',
+  'agentPicker.unknown': '実行環境不明',
+  'agentPicker.notInstalled': '未インストール',
+  'agentPicker.broken': 'インストール済みですが起動できません',
 }
 
 const de: Catalog = {
@@ -306,6 +329,11 @@ const de: Catalog = {
   confirmDelete: 'Löschen',
   cancel: 'Abbrechen',
   inboxEmpty: 'Noch keine Ideen.',
+  'agentPicker.by': 'via {name}',
+  'agentPicker.model': 'Modell {model}',
+  'agentPicker.unknown': 'Umgebung unbekannt',
+  'agentPicker.notInstalled': 'nicht installiert',
+  'agentPicker.broken': 'vorhanden, startet aber nicht',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }
@@ -329,6 +357,22 @@ export function setLocale(code: string | undefined): void {
 export function t(key: MessageKey): string {
   const catalog = registry[active] ?? en
   return catalog[key] ?? en[key] ?? key
+}
+
+/**
+ * `t` with `{placeholder}` substitution.
+ *
+ * The shared agent picker takes a `(key, vars) => string`, because one control
+ * serves four different i18n tables. An unknown placeholder is left as written
+ * rather than blanked: a visible `{model}` is a bug report, an empty space is a
+ * mystery.
+ */
+export function tv(key: MessageKey, vars?: Record<string, string | number>): string {
+  const s = t(key)
+  if (!vars) return s
+  return s.replace(/\{(\w+)\}/g, (whole, name) =>
+    name in vars ? String(vars[name]) : whole,
+  )
 }
 
 /**

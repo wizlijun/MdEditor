@@ -10,6 +10,11 @@ pub struct AiJob {
     pub job_id: u64,
     pub dest_rel: String,
     pub name: String,
+    /// Which agent should read the book. `None` = whatever the host would pick.
+    /// Chosen in the window (the `by X ▾` picker beside the AI-read button) and
+    /// carried here so the choice survives the queue: a job can sit behind
+    /// others for a long time, and it must run on the agent it was queued for.
+    pub harness: Option<String>,
 }
 
 /// FIFO + 单 worker 标志。所有方法都要在 Inner 的锁内调用,保证原子。
@@ -151,7 +156,29 @@ mod tests {
     use super::*;
 
     fn job(id: u64) -> AiJob {
-        AiJob { job_id: id, dest_rel: format!("ssot/ebooks/2026-08/b{id}"), name: format!("b{id}") }
+        AiJob {
+            job_id: id,
+            dest_rel: format!("ssot/ebooks/2026-08/b{id}"),
+            name: format!("b{id}"),
+            harness: None,
+        }
+    }
+
+    /// A job can sit behind others for a long time. It has to run on the agent
+    /// chosen when it was queued — not on whatever the picker says by the time
+    /// the worker reaches it.
+    #[test]
+    fn a_queued_job_carries_the_agent_it_was_queued_for() {
+        let mut q = AiQueue::default();
+        let mut with_agent = job(1);
+        with_agent.harness = Some("notemd.deepseek-agent".into());
+        assert!(q.enqueue(with_agent));
+        assert!(q.enqueue(job(2)));
+        assert_eq!(
+            q.next().unwrap().harness.as_deref(),
+            Some("notemd.deepseek-agent")
+        );
+        assert_eq!(q.next().unwrap().harness, None, "unset means the host picks");
     }
 
     #[test]

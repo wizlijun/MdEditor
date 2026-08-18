@@ -18,6 +18,7 @@ export interface NotemdBridge {
   onMessage(cb: (payload: unknown) => void): void
 }
 
+import type { AgentProviders } from './agent-picker/types'
 declare global {
   interface Window {
     notemd: NotemdBridge
@@ -109,6 +110,8 @@ export interface AgentRunParams {
    *  it, so the file MUST already exist — flush the editor to disk first. */
   note_path: string
   notify: AgentNotify
+  /** Which agent should run it. Omitted = whatever the host would pick. */
+  harness?: string
 }
 
 /**
@@ -122,6 +125,17 @@ export interface AgentRunParams {
  */
 export function agentRun(params: AgentRunParams): Promise<{ run_id: string }> {
   return bridge().request('host.agent.run', params)
+}
+
+/**
+ * `host.agent.providers` → every installed agent plus the harness behind it.
+ *
+ * Feeds the `by X ▾` picker beside the delegate button. The host answers from
+ * one place so the control is the same here as in a sidecar note or the ebook
+ * queue; this window does not get to invent its own idea of what an agent is.
+ */
+export function agentProviders(): Promise<AgentProviders> {
+  return bridge().request('host.agent.providers', {})
 }
 
 /**

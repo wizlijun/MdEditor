@@ -7,6 +7,12 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **One way to choose which agent runs something, everywhere.** Every button that hands work to an agent now carries the same control beside it — `[ Answer ] by Claude ▾` — in the sidecar note panel, in Idea Spark, and on the ebook queue's AI-read action. The menu lists each installed agent with its harness version and the model it will use, and ticks the one in use, so you can tell what you are about to spend tokens on before you click. An agent whose harness cannot start is shown with the reason rather than silently offered as if it worked.
+- **Each place remembers its own agent.** Proving an idea with one agent while books are read by another is a normal thing to want, so the choice is per surface rather than one global setting. An ebook queued for a particular agent still runs on that agent even if you change the picker while it waits.
+- **The agent windows state which harness they are.** Claude Agent and DeepSeek Agent show `by Claude · 2.1.233` beside their Run button — as a statement, not a menu: that window is that agent, so offering to switch inside it would only be able to send the work elsewhere.
+
 ## v6.818.2 — 2026-08-18
 
 ### Fixed

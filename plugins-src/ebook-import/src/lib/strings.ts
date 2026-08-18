@@ -37,6 +37,13 @@ export type MessageKey =
   | 'action.start'
   | 'action.running'
   | 'action.aiRead'
+  // The agent picker beside the AI-read button. Same keys and wording as every
+  // other surface that offers to run something with an agent.
+  | 'agentPicker.by'
+  | 'agentPicker.model'
+  | 'agentPicker.unknown'
+  | 'agentPicker.notInstalled'
+  | 'agentPicker.broken'
   | 'action.viewSummary'
   | 'ai.queued'
   | 'ai.running'
@@ -114,6 +121,11 @@ const en: Catalog = {
   'action.start': 'Start import',
   'action.running': 'Importing…',
   'action.aiRead': 'AI read first',
+  'agentPicker.by': 'by {name}',
+  'agentPicker.model': 'model {model}',
+  'agentPicker.unknown': 'harness unknown',
+  'agentPicker.notInstalled': 'not installed',
+  'agentPicker.broken': 'found, but it will not start',
   'action.viewSummary': 'View digest',
   'ai.queued': 'Waiting for AI…',
   'ai.running': 'AI reading… {elapsed}',
@@ -189,6 +201,11 @@ const zh: Catalog = {
   'action.start': '开始导入',
   'action.running': '导入中…',
   'action.aiRead': 'AI 先读',
+  'agentPicker.by': '由 {name} 执行',
+  'agentPicker.model': '模型 {model}',
+  'agentPicker.unknown': '运行环境未知',
+  'agentPicker.notInstalled': '未安装',
+  'agentPicker.broken': '装了,但起不来',
   'action.viewSummary': '查看摘要',
   'ai.queued': '排队等待 AI 阅读…',
   'ai.running': 'AI 阅读中… {elapsed}',
@@ -264,6 +281,11 @@ const ja: Catalog = {
   'action.start': '取り込みを開始',
   'action.running': '取り込み中…',
   'action.aiRead': 'AI に先に読ませる',
+  'agentPicker.by': '実行:{name}',
+  'agentPicker.model': 'モデル {model}',
+  'agentPicker.unknown': '実行環境不明',
+  'agentPicker.notInstalled': '未インストール',
+  'agentPicker.broken': 'インストール済みですが起動できません',
   'action.viewSummary': '要約を見る',
   'ai.queued': 'AI リーディング待機中…',
   'ai.running': 'AI リーディング中… {elapsed}',
@@ -339,6 +361,11 @@ const de: Catalog = {
   'action.start': 'Import starten',
   'action.running': 'Importiert…',
   'action.aiRead': 'Zuerst KI lesen lassen',
+  'agentPicker.by': 'via {name}',
+  'agentPicker.model': 'Modell {model}',
+  'agentPicker.unknown': 'Umgebung unbekannt',
+  'agentPicker.notInstalled': 'nicht installiert',
+  'agentPicker.broken': 'vorhanden, startet aber nicht',
   'action.viewSummary': 'Zusammenfassung öffnen',
   'ai.queued': 'Wartet auf KI…',
   'ai.running': 'KI liest… {elapsed}',

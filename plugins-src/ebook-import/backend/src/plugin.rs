@@ -487,6 +487,9 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
                 "task": airead::TASK_ID,
                 "prompt": airead::run_prompt(&job.dest_rel, &summary_rel, locale),
                 "note_path": book_abs.to_string_lossy(),
+                // The agent chosen when this job was queued. Absent means the
+                // host picks — which is what an older window sends.
+                "harness": job.harness,
                 // 收尾提醒交给 claude-agent 发:它没有窗口,不会被本插件窗口
                 // 的 Destroyed 事件连坐拆掉。标题在这里生成 —— locale 是
                 // $initialize 给本插件的。
@@ -768,10 +771,21 @@ impl EbookImportPlugin {
             .filter(|s| !s.is_empty())
             .unwrap_or(&dest_rel)
             .to_string();
+        // Which agent the window chose. Absent = let the host decide.
+        let harness = params
+            .get("harness")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         let (vault, queued, spawn) = {
             let mut g = self.inner.lock().unwrap();
             let vault = g.vault.clone().ok_or(NO_VAULT)?;
-            let queued = g.ai.enqueue(crate::airead::AiJob { job_id, dest_rel, name });
+            let queued = g.ai.enqueue(crate::airead::AiJob {
+                job_id,
+                dest_rel,
+                name,
+                harness,
+            });
             let spawn = queued && g.ai.claim_worker();
             (vault, queued, spawn)
         };

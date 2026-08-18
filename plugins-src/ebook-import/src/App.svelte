@@ -1,5 +1,11 @@
 <script lang="ts">
   import { bridge } from './lib/bridge'
+  import AgentPicker from './lib/agent-picker/AgentPicker.svelte'
+  import {
+    rememberProvider,
+    rememberedProvider,
+    type AgentOption,
+  } from './lib/agent-picker/types'
   import { describeLog } from './lib/logs'
   import { setLocale, t, type MessageKey } from './lib/strings'
   import { describeError } from './lib/errors'
@@ -281,6 +287,33 @@
     }
   }
 
+  // ── which agent reads the book ────────────────────────────────────────────
+  // Remembered per surface: reading books with DeepSeek while a sidecar note is
+  // answered by Claude is a reasonable thing to want, and one shared setting
+  // cannot express it. The choice is carried INTO the queue, so a job that
+  // waits behind others still runs on the agent it was queued for.
+  const AGENT_SURFACE = 'ebook-import'
+  let agents: AgentOption[] = $state([])
+  let agentId: string | undefined = $state(undefined)
+
+  async function loadAgents() {
+    try {
+      const r = await bridge().request('host.agent.providers', {})
+      agents = r?.providers ?? []
+      agentId = rememberedProvider(AGENT_SURFACE, agents.map((a) => a.id), r?.default ?? '')
+    } catch {
+      // An older host without host.agent.providers, or no agent installed: hide
+      // the picker and let the host decide, exactly as before.
+      agents = []
+      agentId = undefined
+    }
+  }
+
+  function pickAgent(id: string) {
+    agentId = id
+    rememberProvider(AGENT_SURFACE, id)
+  }
+
   async function aiRead(item: QueueItem) {
     if (!item.destRel || item.jobId == null) return
     const jobId = item.jobId
@@ -296,6 +329,7 @@
         job_id: jobId,
         dest_rel: item.destRel,
         name: item.name,
+        ...(agentId ? { harness: agentId } : {}),
       })
     } catch (e) {
       q = onAiEvent(q, jobId, { event: 'failed', error: message(e) })
@@ -368,6 +402,7 @@
   }
 
   void loadEnv()
+  void loadAgents()
 </script>
 
 <!-- Drag highlighting is driven entirely by the host's `type:"drag-drop"`
@@ -516,7 +551,17 @@
             {#if item.status === 'done'}
               <button class="link" onclick={() => openInEditor(item)}>{t('action.openInEditor')}</button>
               {#if !item.aiStatus || item.aiStatus === 'failed'}
+                <!-- `[ AI 先读 ] by Claude ▾` — the same pairing as every other
+                     place a run can be started. -->
                 <button class="link" onclick={() => aiRead(item)}>{t('action.aiRead')}</button>
+                {#if agents.length}
+                  <AgentPicker
+                    options={agents}
+                    selected={agentId ?? null}
+                    onselect={pickAgent}
+                    label={t as (k: string, v?: Record<string, string | number>) => string}
+                  />
+                {/if}
               {:else if item.aiStatus === 'queued'}
                 <span class="stage">{t('ai.queued')}</span>
               {:else if item.aiStatus === 'running'}

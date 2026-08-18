@@ -28,6 +28,7 @@ export type MessageKey =
   | 'status.cancelled'
   | 'status.busy'
   | 'turns'
+  | 'agentPicker.by'
   | 'harness.probing'
   | 'harness.unknown'
   | 'harness.missing'
@@ -68,6 +69,7 @@ const en: Catalog = {
   'status.cancelled': 'Stopped',
   'status.busy': 'Already running',
   turns: '{n} turns',
+  'agentPicker.by': 'by {name}',
   'harness.probing': 'Checking the harness…',
   'harness.unknown': 'Could not read the harness status — restart the app after updating this plugin.',
   'harness.missing': 'not installed',
@@ -107,6 +109,7 @@ const zh: Catalog = {
   'status.cancelled': '已停止',
   'status.busy': '已在运行',
   turns: '{n} 轮',
+  'agentPicker.by': '由 {name} 执行',
   'harness.probing': '正在检查运行环境…',
   'harness.unknown': '读不到运行环境状态 —— 插件更新后请重启应用。',
   'harness.missing': '未安装',
@@ -146,6 +149,7 @@ const ja: Catalog = {
   'status.cancelled': '停止しました',
   'status.busy': '実行中です',
   turns: '{n} ターン',
+  'agentPicker.by': '実行:{name}',
   'harness.probing': '実行環境を確認中…',
   'harness.unknown': '実行環境の状態を取得できません。プラグイン更新後はアプリを再起動してください。',
   'harness.missing': '未インストール',
@@ -185,6 +189,7 @@ const de: Catalog = {
   'status.cancelled': 'Gestoppt',
   'status.busy': 'Läuft bereits',
   turns: '{n} Runden',
+  'agentPicker.by': 'via {name}',
   'harness.probing': 'Umgebung wird geprüft…',
   'harness.unknown': 'Umgebungsstatus nicht lesbar — App nach dem Plugin-Update neu starten.',
   'harness.missing': 'nicht installiert',

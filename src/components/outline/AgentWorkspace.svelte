@@ -14,6 +14,8 @@
   } from '../../lib/agent-workspace/store.svelte'
   import { pluginRuntime } from '../../lib/plugins/runtime.svelte'
   import { pluginName } from '../../lib/plugins/plugin-i18n'
+  import AgentPicker from '../../lib/agent-picker/AgentPicker.svelte'
+  import type { AgentOption } from '../../lib/agent-picker/types'
 
   let { notePath, onfinished }:
     {
@@ -31,17 +33,17 @@
   const current = $derived(activeProvider())
   const status = $derived(harnessStatuses[current])
 
-  /** "Claude Code 2.1.226 · model claude-opus-5" — what you are about to spend
-      tokens on, before you spend them. */
-  function harnessLabel(id: string): string {
-    const s = harnessStatuses[id]
-    const plugin = pluginRuntime.manifests.find((m) => m.id === id)
-    const name = s?.harness ?? (plugin ? pluginName(plugin) : id)
-    if (!s) return name
-    if (!s.ok) return `${name} — ${t('agent.harnessUnknown')}`
-    const bits = [name, s.version, s.default_model && t('agent.model', { model: s.default_model })]
-    return bits.filter(Boolean).join(' · ')
-  }
+  /** What the picker renders: every installed agent plus its harness. */
+  const pickerOptions = $derived<AgentOption[]>(
+    providers.map((id) => ({
+      id,
+      name: (() => {
+        const m = pluginRuntime.manifests.find((p) => p.id === id)
+        return m ? pluginName(m) : id
+      })(),
+      harness: harnessStatuses[id] ?? null,
+    })),
+  )
 
   // Ask each harness what it is. Once when the panel appears, and again after a
   // run ends — a run is exactly when an expired credential becomes visible.
@@ -109,28 +111,6 @@
          the enabled agent plugins offer for the current note. -->
     <h3>{t('agent.title')}</h3>
 
-    <!-- WHICH agent, and is it in a state to run. Both plugins share one task
-         directory, so without this the same task reads identically under either
-         harness — which is how an expired Claude credential got read as a
-         DeepSeek failure. -->
-    <div class="harness">
-      {#if providers.length > 1}
-        <select
-          class="pick"
-          value={current}
-          disabled={busy}
-          title={status?.origin ?? ''}
-          onchange={(e) => setProvider((e.currentTarget as HTMLSelectElement).value)}
-        >
-          {#each providers as id (id)}
-            <option value={id}>{harnessLabel(id)}</option>
-          {/each}
-        </select>
-      {:else}
-        <span class="one" title={status?.origin ?? ''}>{harnessLabel(current)}</span>
-      {/if}
-    </div>
-
     {#if status && !status.ok}
       <p class="alert" title={status.hint ?? ''}>
         {t('agent.harnessMissing', { harness: status.harness })}
@@ -152,6 +132,9 @@
       {#if busy}
         <span class="elapsed">{t('agent.elapsed', { s: elapsed })}</span>
       {:else}
+        <!-- `[ Answer ] by Claude ▾` — the standard pairing wherever a run can
+             be started. Two controls, not a split button: changing the agent
+             and spending tokens should not be one pixel apart. -->
         <button
           class="run"
           disabled={!notePath || status?.ok === false}
@@ -160,6 +143,13 @@
         >
           {t('agent.answerQuestions')}
         </button>
+        <AgentPicker
+          options={pickerOptions}
+          selected={current}
+          disabled={busy}
+          onselect={setProvider}
+          label={t as (k: string, v?: Record<string, string | number>) => string}
+        />
       {/if}
     </div>
   </section>

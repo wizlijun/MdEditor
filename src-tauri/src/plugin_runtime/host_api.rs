@@ -49,6 +49,11 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         "host.location.get" => Some("location"),
         // AI agent 中转(转发到 notemd.claude-agent)与托盘全局提醒。
         "host.agent.run" | "host.agent.status" => Some("agent"),
+        // Which agents are installed, and what harness each one has. Every
+        // surface that offers "run this with an agent" renders the same picker
+        // from this one answer, so the choice looks and behaves identically
+        // whether you are in a sidecar note, Idea Spark, or the ebook queue.
+        "host.agent.providers" => Some("agent"),
         "host.notify" => Some("notify"),
         "host.dismissNotification" => Some("notify"),
         // editor.kit — the host-embedded editor bundle and the theme CSS that
