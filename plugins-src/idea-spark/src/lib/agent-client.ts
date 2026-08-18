@@ -183,16 +183,21 @@ export function directiveOutputRel(now: Date): string {
  * 没有 note_path(指令文本自足),输出路径由这里定死并追加成 `输出:` 行——
  * 模板协议要求 agent 不得改名,expect_file 因此可预知。
  */
-export async function delegateDirective(
-  entry: { taskId: string; display: string },
-  rest: string,
-  vaultRoot: string,
-): Promise<DelegateResult & { outRel?: string }> {
+/** 尽力播种指令模板(fresh vault 首开也能发现 /溯源);失败静默,权威报错在委托时。 */
+export async function seedDirectiveTemplates(): Promise<void> {
   try {
     await seedTaskTemplate(seedIo, TRACE_TASK_FILES)
   } catch (e) {
     console.warn('[idea-spark] seeding trace-source failed:', e)
   }
+}
+
+export async function delegateDirective(
+  entry: { taskId: string; display: string },
+  rest: string,
+  vaultRoot: string,
+): Promise<DelegateResult & { outRel?: string }> {
+  await seedDirectiveTemplates()
   const outRel = directiveOutputRel(new Date())
   const outAbs = absolute(vaultRoot, outRel)
   try {
