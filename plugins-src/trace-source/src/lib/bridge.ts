@@ -46,6 +46,11 @@ export function vaultInfo(): Promise<VaultInfo> {
   return bridge().request('host.vault.info')
 }
 
+/** `host.vault.read` → file content (vault-relative path). */
+export function vaultRead(path: string): Promise<{ content: string }> {
+  return bridge().request('host.vault.read', { path })
+}
+
 /** `host.vault.write` — writes text, creating parent dirs (vault-relative path). */
 export function vaultWrite(path: string, content: string): Promise<{ ok: true }> {
   return bridge().request('host.vault.write', { path, content })
@@ -54,6 +59,35 @@ export function vaultWrite(path: string, content: string): Promise<{ ok: true }>
 /** `host.vault.exists` → whether a vault-relative path exists. */
 export function vaultExists(path: string): Promise<{ exists: boolean }> {
   return bridge().request('host.vault.exists', { path })
+}
+
+/** `host.vault.list` → directory entries (vault-relative path). */
+export function vaultList(path: string): Promise<{ entries: { name: string; is_dir: boolean }[] }> {
+  return bridge().request('host.vault.list', { path })
+}
+
+/**
+ * `host.vault.remove` — deletes ONE file (vault-relative path). A directory is
+ * refused; a path that doesn't exist resolves as success (idempotent); a
+ * symlink is removed as the link itself, never followed.
+ */
+export function vaultRemove(path: string): Promise<{ ok: true }> {
+  return bridge().request('host.vault.remove', { path })
+}
+
+/** `host.editor.open` — opens a vault-relative path in the main window's editor. */
+export function editorOpen(path: string): Promise<unknown> {
+  return bridge().request('host.editor.open', { path })
+}
+
+/**
+ * `host.agent.status` → `{state:'done',record}` / `{state:'running',steps,last}`
+ * / `{state:'lost'}`. Interpretation lives in `delegate.ts`. `task` is required
+ * on purpose: the agent's own handler DEFAULTS a missing task to another
+ * plugin's task and would silently report on the wrong run directory.
+ */
+export function agentStatus(task: string, runId: string): Promise<unknown> {
+  return bridge().request('host.agent.status', { task, run_id: runId })
 }
 
 /**

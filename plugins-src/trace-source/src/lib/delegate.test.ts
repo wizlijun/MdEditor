@@ -29,8 +29,13 @@ beforeEach(() => {
 })
 
 describe('traceOutputRel', () => {
-  it('时间戳定名,落 traces/ 根', () => {
-    expect(traceOutputRel(new Date(2026, 7, 18, 14, 30, 12))).toBe('traces/2026-08-18-143012.md')
+  it('时间戳-source-trace 定名,落在指定目录', () => {
+    expect(traceOutputRel(new Date(2026, 7, 18, 14, 30, 12), 'inbox/traces')).toBe(
+      'inbox/traces/2026-08-18-143012-source-trace.md',
+    )
+    expect(traceOutputRel(new Date(2026, 7, 18, 14, 30, 12), 'my/dir/')).toBe(
+      'my/dir/2026-08-18-143012-source-trace.md',
+    )
   })
 })
 
@@ -39,11 +44,11 @@ describe('delegateTrace', () => {
     const request = vi.fn().mockResolvedValue({ run_id: 'r1' })
     useBridge(request)
 
-    const r = await delegateTrace('只查论文\n\n> 引文', '/V')
+    const r = await delegateTrace('只查论文\n\n> 引文', '/V', 'inbox/traces')
 
     expect(r.ok).toBe(true)
     const outRel = (r as { outRel: string }).outRel
-    expect(outRel).toMatch(/^traces\/\d{4}-\d{2}-\d{2}-\d{6}\.md$/)
+    expect(outRel).toMatch(/^inbox\/traces\/\d{4}-\d{2}-\d{2}-\d{6}-source-trace\.md$/)
     const [method, params] = request.mock.calls.at(-1)!
     expect(method).toBe('host.agent.run')
     expect(params.task).toBe('trace-source')
@@ -64,7 +69,7 @@ describe('delegateTrace', () => {
     })
     useBridge(request)
 
-    await delegateTrace('x', '/V')
+    await delegateTrace('x', '/V', 'inbox/traces')
 
     const methods = request.mock.calls.map(([m]) => m)
     const writes = methods.filter((m) => m === 'host.vault.write')
@@ -74,17 +79,22 @@ describe('delegateTrace', () => {
 
   it('播种失败仍然发起运行', async () => {
     const request = vi.fn(async (method: string) => {
-      if (method === 'host.vault.exists' || method === 'host.vault.write') throw new Error('io: read-only')
+      if (
+        method === 'host.vault.exists' ||
+        method === 'host.vault.write' ||
+        method === 'host.vault.read'
+      )
+        throw new Error('io: read-only')
       return { run_id: 'r1' }
     })
     useBridge(request)
-    await expect(delegateTrace('x', '/V')).resolves.toMatchObject({ ok: true, runId: 'r1' })
+    await expect(delegateTrace('x', '/V', 'inbox/traces')).resolves.toMatchObject({ ok: true, runId: 'r1' })
   })
 
   it('vault 根带尾斜杠不产生 //', async () => {
     const request = vi.fn().mockResolvedValue({ run_id: 'r1' })
     useBridge(request)
-    const r = await delegateTrace('x', '/V/')
+    const r = await delegateTrace('x', '/V/', 'inbox/traces')
     const [, params] = request.mock.calls.at(-1)!
     expect(params.notify.open_path).toBe(`/V/${(r as { outRel: string }).outRel}`)
   })
@@ -95,13 +105,32 @@ describe('delegateTrace', () => {
       return { exists: true }
     })
     useBridge(request)
-    const r = await delegateTrace('x', '/V')
+    const r = await delegateTrace('x', '/V', 'inbox/traces')
     expect(r).toMatchObject({ ok: false, reason: 'agent-missing' })
   })
 
   it('没有 run id 的应答按错误报,绝不算已开始', async () => {
     useBridge(vi.fn().mockResolvedValue({}))
-    const r = await delegateTrace('x', '/V')
+    const r = await delegateTrace('x', '/V', 'inbox/traces')
     expect(r).toMatchObject({ ok: false, reason: 'error' })
+  })
+})
+
+describe('interpretStatus', () => {
+  it('解读 running/done/lost 三种形状,未知形状按 lost', async () => {
+    const { interpretStatus } = await import('./delegate')
+    expect(interpretStatus({ state: 'running', steps: 3, last: 'Read a.md' })).toEqual({
+      kind: 'running', steps: 3, last: 'Read a.md',
+    })
+    expect(interpretStatus({ state: 'running' })).toEqual({ kind: 'running', steps: 0, last: '' })
+    expect(interpretStatus({ state: 'done', record: { status: 'success', result: 'ok' } })).toEqual({
+      kind: 'done', success: true, message: 'ok',
+    })
+    expect(interpretStatus({ state: 'done', record: { status: 'error', stderr_tail: 'boom' } })).toEqual({
+      kind: 'done', success: false, message: 'boom',
+    })
+    expect(interpretStatus({ state: 'done' })).toEqual({ kind: 'lost' })
+    expect(interpretStatus(null)).toEqual({ kind: 'lost' })
+    expect(interpretStatus({ nonsense: 1 })).toEqual({ kind: 'lost' })
   })
 })
