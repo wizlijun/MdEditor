@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.818.1 — 2026-08-18
+
 ### Fixed
 
 - **The Agent area under a sidecar note is back.** v6.817.4 made it check whether an agent plugin was installed by reading a manifest field the host never sends to the front-end, so the answer was always "none" and the whole section vanished. The check now uses a flag the host computes and projects.
