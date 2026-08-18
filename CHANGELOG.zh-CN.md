@@ -6,6 +6,15 @@
 
 ## 未发布
 
+### 变更
+
+- **DeepSeek 智能体改用你自己安装的 DeepSeek Harness。** 它会在你机器上找 `dsh`,第一次运行时把 ACP 桥装进一个专属的 `notemd` profile(`dsh plugin --profile notemd add @deepseek-ai/dsh-acp`),然后经它启动。harness 给你的一切 —— 工具、技能、子 agent、网页检索 —— 都跟着来,因为组合由 profile 负责,而不是一份只能挂上子集的手写配置。装它:`npm i -g @deepseek-ai/dsh`,剩下的插件自己搞定。
+- **vault 里那份 harness 配置从「整份组合」变成「覆盖层」。** `<vault>/.notemd/dsh/cordis.patch.yml` 只写 note.md 要改的部分 —— 哪里可写、用哪个模型、以及关掉一个会冲垮协议流的东西 —— 叠在你的 profile 之上。它仍然是 vault 里的纯文本,仍然归你改。你没动过的旧 `cordis.yml` 会在首次运行时被清掉。
+
+### 修复
+
+- **不再报 "Cannot find package 'tsx'"。** 插件此前会退而去驱动一份 DeepSeek Harness 的**源码 checkout**,那需要钉死版本的包管理器、一个开发依赖、以及九百多个包的安装 —— 没人会有这些,而它们失败的方式又和你的 vault 毫无关系。这条路已删除。安装提示现在只指那条真正可用的。
+
 ## v6.818.5 — 2026-08-18
 
 ### 修复

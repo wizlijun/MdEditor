@@ -1,221 +1,172 @@
-//! Find something that can serve ACP over stdio.
+//! Find the user's DeepSeek Harness and get an ACP server out of it.
 //!
-//! `@deepseek-ai/dsh-acp` is a transport adapter, not a runnable program: it
-//! needs `ctx.agents`, an LLM adapter, a sandbox and a tool stack around it. The
-//! runnable composition is `@deepseek-ai/dsh-acp-demo`, which ships a
-//! `dsh-acp-demo` bin that boots an ACP stdio server from a `cordis.yml`.
+//! ## What a user actually installs
 //!
-//! Five tiers, in order. The last one exists because the npm packages lag the
-//! monorepo (`dsh` is at 0.1.0-rc.6 while `dsh-acp*` sits at 0.0.1-rc.1), so a
-//! contributor with a checkout should be able to run against it directly.
+//! ```text
+//! npm i -g @deepseek-ai/dsh                                # the harness
+//! dsh plugin --profile notemd add @deepseek-ai/dsh-acp     # the ACP bridge
+//! dsh --profile notemd --patch <vault>/.notemd/dsh/cordis.patch.yml
+//! ```
+//!
+//! Worth spelling out, because an earlier version of this file got it wrong.
+//! `@deepseek-ai/dsh-acp-demo` cannot be installed standalone — its peers
+//! (`dsh-workspace-context`, `dsh-bash-env`) are unpublished — and from that I
+//! concluded npm was a dead end and fell back to driving a source checkout
+//! through pnpm. Wrong: a profile installs with `nodeLinker: hoisted` and
+//! `autoInstallPeers: false` precisely so those peers **fall through to the dsh
+//! installation's own `node_modules`** (`packages/boot/app-boot/src/profile.ts`).
+//! They are not missing; dsh supplies them. Installing into an empty directory
+//! was testing the one configuration that cannot work.
+//!
+//! The checkout path went with it. It needed the repository's dev toolchain — a
+//! pinned pnpm, `tsx`, a 900-package install — none of which a user has.
 use agent_run_core::discover as core;
 use std::path::{Path, PathBuf};
 
-/// The published bin name.
-pub const BIN: &str = "dsh-acp-demo";
+/// The harness executable.
+pub const BIN: &str = "dsh";
 
-/// How to start the ACP server. Two shapes, because a monorepo checkout is run
-/// through its package manager rather than as a bare executable.
+/// The profile note.md keeps its ACP bridge in.
+///
+/// Its own, not the user's `web` or `headless` profile: this one gets a bridge
+/// mounted and HMR disabled, and neither belongs in a profile they drive
+/// interactively.
+pub const PROFILE: &str = "notemd";
+
+/// The package that turns a profile into an ACP server.
+pub const ACP_PACKAGE: &str = "@deepseek-ai/dsh-acp";
+
+/// How to start the ACP server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Launcher {
+    /// The `dsh` executable.
     pub program: PathBuf,
-    pub args: Vec<String>,
-    /// The version, when it can be read WITHOUT running anything (a checkout's
-    /// package.json). `None` means "ask the executable".
-    pub known_version: Option<String>,
-    /// Where the program is resolved from — shown in the run record so a support
-    /// question ("which dsh was that?") has an answer.
+    /// Where it was resolved from — shown in the window and the run record, so
+    /// "which dsh was that?" has an answer.
     pub origin: String,
 }
 
 impl Launcher {
-    fn bin(path: PathBuf, origin: &str) -> Self {
-        Self {
-            program: path,
-            args: Vec::new(),
-            known_version: None,
-            origin: origin.to_string(),
-        }
+    /// The argv for one ACP run: boot our profile with the vault's overlay on
+    /// top.
+    ///
+    /// `--patch` is repeatable and applies AFTER the profile's own layer, which
+    /// is what lets the vault file stay authoritative without restating the 78
+    /// rows `dsh-base` already provides.
+    pub fn args(&self, patch: &Path) -> Vec<String> {
+        vec![
+            "--profile".into(),
+            PROFILE.into(),
+            "--patch".into(),
+            patch.to_string_lossy().into_owned(),
+        ]
     }
 }
 
-/// Well-known install locations for the published bin, in priority order.
+/// Well-known install locations, in priority order.
 pub fn candidates(home: &Path) -> Vec<PathBuf> {
     vec![
         home.join(".local/bin").join(BIN),
         PathBuf::from("/opt/homebrew/bin").join(BIN),
         PathBuf::from("/usr/local/bin").join(BIN),
-        // npm's global prefix on the two layouts Homebrew produces.
-        PathBuf::from("/opt/homebrew/lib/node_modules/@deepseek-ai/dsh-acp-demo/lib/bin.js"),
         home.join(".npm-global/bin").join(BIN),
     ]
 }
 
-/// The version a checkout reports, read from the ACP app's own package.json.
-///
-/// Asking the launcher instead would mean running `pnpm run demo:acp --version`,
-/// which does not handle `--version`: it boots an ACP server that then sits
-/// waiting on stdin until the probe times out. Twenty seconds to learn nothing.
-/// The file says it instantly and says it accurately.
-pub fn repo_version(repo: &Path) -> Option<String> {
-    for rel in [
-        "packages/examples/acp-demo/package.json",
-        "package.json",
-    ] {
-        let body = std::fs::read_to_string(repo.join(rel)).ok();
-        let v = body
-            .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
-            .and_then(|v| v.get("version")?.as_str().map(str::to_string));
-        if let Some(v) = v {
-            return Some(v);
-        }
-    }
-    None
+/// `$DSH_HOME`, or the default the harness itself uses.
+pub fn dsh_home(home: &Path) -> PathBuf {
+    std::env::var("DSH_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home.join(".dsh"))
 }
 
-/// Monorepo checkouts worth looking in, in priority order.
-pub fn repo_candidates(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join("git/deepseek-harness"),
-        home.join("src/deepseek-harness"),
-        home.join("deepseek-harness"),
-    ]
+/// Where `dsh plugin --profile notemd …` installs to.
+pub fn profile_dir(home: &Path) -> PathBuf {
+    dsh_home(home).join("profiles").join(PROFILE)
 }
 
-/// Is this directory a DeepSeek Harness checkout that can boot an ACP server?
+/// Is the ACP bridge already in our profile?
 ///
-/// Checked by CONTENT, not by name: the marker is the `demo:acp` script in the
-/// root package.json, which is the thing we would actually invoke. A directory
-/// that merely has the right name is not enough.
-pub fn is_harness_repo(dir: &Path) -> bool {
-    std::fs::read_to_string(dir.join("package.json"))
+/// Read from the profile manifest rather than by running `dsh plugin` every
+/// launch: that command shells out to pnpm, and doing it per run would put a
+/// package-manager round trip in front of every agent request.
+pub fn acp_installed(home: &Path) -> bool {
+    let p = profile_dir(home).join("package.json");
+    std::fs::read_to_string(p)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.pointer("/scripts/demo:acp").cloned())
+        .and_then(|v| v.get("dependencies")?.get(ACP_PACKAGE).cloned())
         .is_some()
 }
 
-/// Run an ACP server straight out of a monorepo checkout. `pnpm --dir <repo> run
-/// demo:acp` is the repository's own documented entry point ("Running", in
-/// `packages/acp/acp/README.md`), so this stays on a supported path rather than
-/// reaching into the package layout.
-fn repo_launcher(pnpm: PathBuf, repo: &Path) -> Launcher {
-    Launcher {
-        program: pnpm,
-        args: vec![
-            // The harness repo pins `packageManager` (pnpm@11.7.0). When the
-            // user's pnpm differs, corepack refuses to run AT ALL rather than
-            // switching — "This project is configured to use 11.7.0 of pnpm.
-            // Your current pnpm is v11.0.9". That pin protects the repo's own
-            // contributors from lockfile churn; it is not a statement about
-            // whether the ACP server can boot, which is all we want from it.
-            // Downgrading it to a warning is the difference between "DeepSeek
-            // works here" and "DeepSeek is unavailable" on any machine whose
-            // global pnpm is not that exact version.
-            "--pm-on-fail=ignore".into(),
-            // pnpm 11 在 `run` 前会校验依赖并**静默补装**:进度全在 stdout、
-            // 一装数分钟、网络一抖就 exit 1,ACP 服务根本没起来(2026-08-18 事故)。
-            // 关掉它:依赖残缺就让脚本在 2 秒内带着清晰的 stderr 快死 ——
-            // 「先去 checkout 里跑一次 pnpm install」是用户能看懂的下一步。
-            "--config.verify-deps-before-run=false".into(),
-            "--dir".into(),
-            repo.to_string_lossy().into_owned(),
-            "run".into(),
-            "demo:acp".into(),
-        ],
-        known_version: repo_version(repo),
-        origin: format!("monorepo checkout at {}", repo.display()),
-    }
-}
-
-/// Pure core, injectable for tests.
-///
-/// * `explicit` — the plugin setting, then `$NOTEMD_DSH_ACP_BIN`.
-/// * `explicit_repo` — the plugin setting, then `$DSH_REPO`.
-#[allow(clippy::too_many_arguments)]
+/// Pure core, injectable for tests. `explicit` is the plugin setting, then
+/// `$NOTEMD_DSH_BIN`.
 pub fn discover_with(
     explicit: Option<&str>,
-    explicit_repo: Option<&str>,
     home: &Path,
     shell_lookup: impl Fn(&str) -> Option<PathBuf>,
     is_exec: impl Fn(&Path) -> bool,
-    is_repo: impl Fn(&Path) -> bool,
 ) -> Option<Launcher> {
-    // 1-4: a real executable, by the shared three-tier mechanism.
-    if let Some(p) = core::discover_with(
-        explicit,
-        &candidates(home),
-        || shell_lookup(BIN),
-        &is_exec,
-    ) {
-        let origin = match explicit {
-            Some(e) if !e.is_empty() && Path::new(e) == p => "explicit setting".to_string(),
-            _ => format!("{} on PATH", BIN),
-        };
-        return Some(Launcher::bin(p, &origin));
-    }
-
-    // 5: a checkout, driven through pnpm. Useless without pnpm, so resolve that
-    // first and give up quietly rather than emitting a launcher that cannot run.
-    let pnpm = shell_lookup("pnpm")
-        .filter(|p| is_exec(p))
-        .or_else(|| {
-            [
-                PathBuf::from("/opt/homebrew/bin/pnpm"),
-                PathBuf::from("/usr/local/bin/pnpm"),
-                home.join(".local/bin/pnpm"),
-            ]
-            .into_iter()
-            .find(|p| is_exec(p))
-        })?;
-    let repo = explicit_repo
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .filter(|p| is_repo(p))
-        .or_else(|| repo_candidates(home).into_iter().find(|p| is_repo(p)))?;
-    Some(repo_launcher(pnpm, &repo))
+    let p = core::discover_with(explicit, &candidates(home), || shell_lookup(BIN), &is_exec)?;
+    let origin = match explicit {
+        Some(e) if !e.is_empty() && Path::new(e) == p => "explicit setting".to_string(),
+        _ => p.to_string_lossy().into_owned(),
+    };
+    Some(Launcher { program: p, origin })
 }
 
 /// Production entry.
-pub fn discover(explicit: Option<&str>, explicit_repo: Option<&str>) -> Option<Launcher> {
+pub fn discover(explicit: Option<&str>) -> Option<Launcher> {
     let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
     let explicit = explicit
         .map(str::to_string)
-        .or_else(|| std::env::var("NOTEMD_DSH_ACP_BIN").ok());
-    let explicit_repo = explicit_repo
-        .map(str::to_string)
-        .or_else(|| std::env::var("DSH_REPO").ok());
+        .or_else(|| std::env::var("NOTEMD_DSH_BIN").ok());
     discover_with(
         explicit.as_deref(),
-        explicit_repo.as_deref(),
         &home,
         |bin| core::probe(bin).0,
         core::is_executable,
-        is_harness_repo,
     )
 }
 
-/// The `PATH` the ACP server should see. dsh is a Node program that also spawns
-/// its own tooling, and a GUI-launched host inherits a `PATH` with no node.
+/// Put the ACP bridge into our profile. Idempotent; a no-op once installed.
+///
+/// Everything goes through the upstream CLI — version resolution, the lockfile,
+/// the bundle reconcile are its semantics, not ours. This plugin never writes
+/// inside `$DSH_HOME` itself.
+pub fn ensure_acp(dsh: &Path, home: &Path, path_env: &str) -> Result<bool, String> {
+    if acp_installed(home) {
+        return Ok(false);
+    }
+    let out = std::process::Command::new(dsh)
+        .args(["plugin", "--profile", PROFILE, "add", ACP_PACKAGE])
+        .env("PATH", path_env)
+        .output()
+        .map_err(|e| format!("could not run `{} plugin`: {e}", dsh.display()))?;
+    if !out.status.success() {
+        let why = agent_run_core::harness::first_line(&String::from_utf8_lossy(&out.stderr))
+            .or_else(|| agent_run_core::harness::first_line(&String::from_utf8_lossy(&out.stdout)))
+            .unwrap_or_else(|| "no output".into());
+        return Err(format!(
+            "把 {ACP_PACKAGE} 装进 `{PROFILE}` profile 失败:{why}\n\
+             在终端自己跑一次能看到完整输出:\n  \
+             dsh plugin --profile {PROFILE} add {ACP_PACKAGE}"
+        ));
+    }
+    Ok(true)
+}
+
+/// The `PATH` the harness should see. dsh is a Node program that spawns its own
+/// tooling (pnpm, npx); a GUI-launched host inherits a `PATH` with no node.
 pub fn runtime_path() -> String {
     core::runtime_path(BIN)
 }
 
-/// What to tell the user when nothing was found.
-///
-/// It deliberately does NOT recommend `npm i -g @deepseek-ai/dsh-acp-demo`,
-/// which is the obvious advice and does not work: that package (0.0.1-rc.1)
-/// declares required peers — `@deepseek-ai/dsh-workspace-context`,
-/// `@deepseek-ai/dsh-bash-env` — that were never published, so the install
-/// either refuses outright or produces a binary that cannot start. Verified
-/// 2026-08-18. Sending someone down a path we know is broken is worse than
-/// admitting the harness is preview-quality.
-pub const NOT_FOUND: &str = "DeepSeek Harness 的 ACP 服务端没找到。\n\
-     目前唯一可用的装法是本地 checkout:克隆 deepseek-harness 仓库,在里面跑一次\n\
-     `pnpm install`,插件会自动发现它(也可用插件设置 `dsh_repo` 或环境变量 DSH_REPO 指定)。\n\
-     npm 上的 @deepseek-ai/dsh-acp-demo 暂时装不起来 —— 它依赖的\n\
-     dsh-workspace-context / dsh-bash-env 还没发布到 npm(2026-08-18 实测)。\n\
-     已有可执行文件的话,用 `dsh_acp_bin` 或 NOTEMD_DSH_ACP_BIN 直接指过去。";
+/// What to tell the user when `dsh` is nowhere to be found.
+pub const NOT_FOUND: &str = "没找到 DeepSeek Harness(`dsh`)。\n\
+     装它:`npm i -g @deepseek-ai/dsh`。\n\
+     ACP 桥由插件自动装进它的 `notemd` profile,你不用手动配。\n\
+     已经装在别处的话,用插件设置 `dsh_bin` 或环境变量 NOTEMD_DSH_BIN 指过去。";
 
 #[cfg(test)]
 mod tests {
@@ -223,192 +174,150 @@ mod tests {
 
     const NONE: fn(&str) -> Option<PathBuf> = |_| None;
 
+    /// `DSH_HOME` is process-global; the tests that set it take turns.
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
-    fn an_explicit_executable_wins_over_everything() {
+    fn an_explicit_path_wins() {
         let got = discover_with(
-            Some("/custom/acp"),
-            Some("/home/u/git/deepseek-harness"),
+            Some("/custom/dsh"),
             Path::new("/home/u"),
-            |_| Some(PathBuf::from("/shell/dsh-acp-demo")),
-            |_| true,
+            |_| Some(PathBuf::from("/shell/dsh")),
             |_| true,
         )
         .unwrap();
-        assert_eq!(got.program, PathBuf::from("/custom/acp"));
-        assert!(got.args.is_empty());
+        assert_eq!(got.program, PathBuf::from("/custom/dsh"));
         assert_eq!(got.origin, "explicit setting");
     }
 
     #[test]
-    fn falls_back_to_the_binary_on_path() {
+    fn falls_back_to_the_login_shell_then_to_the_usual_places() {
         let got = discover_with(
-            Some("/gone/acp"),
-            None,
+            Some("/gone/dsh"),
             Path::new("/home/u"),
-            |b| (b == BIN).then(|| PathBuf::from("/shell/dsh-acp-demo")),
-            |p| p != Path::new("/gone/acp"),
-            |_| false,
+            |b| (b == BIN).then(|| PathBuf::from("/opt/homebrew/bin/dsh")),
+            |p| p != Path::new("/gone/dsh"),
         )
         .unwrap();
-        assert_eq!(got.program, PathBuf::from("/shell/dsh-acp-demo"));
-        assert!(got.origin.contains(BIN), "{}", got.origin);
-    }
+        assert_eq!(got.program, PathBuf::from("/opt/homebrew/bin/dsh"));
 
-    #[test]
-    fn falls_back_to_the_well_known_install_locations() {
         let home = Path::new("/home/u");
-        let want = home.join(".local/bin").join(BIN);
+        let want = home.join(".local/bin/dsh");
         let w = want.clone();
-        let got = discover_with(None, None, home, NONE, move |p| p == w, |_| false).unwrap();
+        let got = discover_with(None, home, NONE, move |p| p == w).unwrap();
         assert_eq!(got.program, want);
     }
 
-    /// The npm packages lag the monorepo, so a contributor's checkout has to be
-    /// reachable — but only through the repository's own documented entry point.
     #[test]
-    fn falls_back_to_a_monorepo_checkout_through_pnpm() {
-        let home = Path::new("/home/u");
-        let repo = home.join("git/deepseek-harness");
-        let r = repo.clone();
-        let got = discover_with(
-            None,
-            None,
-            home,
-            |b| (b == "pnpm").then(|| PathBuf::from("/opt/homebrew/bin/pnpm")),
-            |p| p == Path::new("/opt/homebrew/bin/pnpm"),
-            move |p| p == r,
-        )
-        .unwrap();
-        assert_eq!(got.program, PathBuf::from("/opt/homebrew/bin/pnpm"));
+    fn returns_none_when_dsh_is_not_installed() {
         assert_eq!(
-            got.args,
+            discover_with(None, Path::new("/home/u"), NONE, |_| false),
+            None
+        );
+    }
+
+    /// One run = one boot of our own profile with the vault's overlay on top.
+    #[test]
+    fn the_argv_boots_our_profile_with_the_vault_overlay() {
+        let l = Launcher {
+            program: PathBuf::from("/opt/homebrew/bin/dsh"),
+            origin: "x".into(),
+        };
+        assert_eq!(
+            l.args(Path::new("/v/.notemd/dsh/cordis.patch.yml")),
             vec![
-                "--pm-on-fail=ignore",
-                "--config.verify-deps-before-run=false",
-                "--dir",
-                &repo.to_string_lossy(),
-                "run",
-                "demo:acp"
+                "--profile",
+                "notemd",
+                "--patch",
+                "/v/.notemd/dsh/cordis.patch.yml"
             ]
         );
-        assert!(got.origin.contains("monorepo"), "{}", got.origin);
     }
 
+    /// Checked from the manifest, not by running the installer: `dsh plugin`
+    /// shells out to pnpm, and doing that per run would put a package-manager
+    /// round trip in front of every agent request.
     #[test]
-    fn an_explicit_repo_setting_beats_the_well_known_checkouts() {
-        let home = Path::new("/home/u");
-        let got = discover_with(
-            None,
-            Some("/work/dsh"),
-            home,
-            |b| (b == "pnpm").then(|| PathBuf::from("/bin/pnpm")),
-            |p| p == Path::new("/bin/pnpm"),
-            |_| true,
-        )
-        .unwrap();
-        assert_eq!(got.args[3], "/work/dsh");
-    }
-
-    /// A launcher that names pnpm we could not find would fail at spawn with a
-    /// confusing error; better to report "not found" and print the install hint.
-    #[test]
-    fn a_checkout_without_pnpm_is_not_a_launcher() {
-        let home = Path::new("/home/u");
-        assert_eq!(
-            discover_with(None, None, home, NONE, |_| false, |_| true),
-            None
-        );
-    }
-
-    #[test]
-    fn returns_none_when_there_is_nothing_at_all() {
-        assert_eq!(
-            discover_with(None, None, Path::new("/home/u"), NONE, |_| false, |_| false),
-            None
-        );
-    }
-
-    /// Recognized by the script we would actually invoke, not by directory name:
-    /// a same-named directory that cannot boot an ACP server is not a checkout.
-    #[test]
-    fn a_harness_checkout_is_recognized_by_its_demo_acp_script() {
+    fn the_bridge_is_detected_from_the_profile_manifest() {
+        let _g = env_guard();
         let d = tempfile::tempdir().unwrap();
-        assert!(!is_harness_repo(d.path()), "an empty dir is not a checkout");
+        std::env::set_var("DSH_HOME", d.path());
+        let home = Path::new("/unused");
+        assert!(!acp_installed(home), "an empty home has no bridge");
 
-        std::fs::write(d.path().join("package.json"), r#"{"name":"something-else"}"#).unwrap();
-        assert!(!is_harness_repo(d.path()), "a name alone is not enough");
+        let prof = d.path().join("profiles/notemd");
+        std::fs::create_dir_all(&prof).unwrap();
+        std::fs::write(prof.join("package.json"), r#"{"dependencies":{}}"#).unwrap();
+        assert!(!acp_installed(home), "a profile without the package is not ready");
 
         std::fs::write(
-            d.path().join("package.json"),
-            r#"{"name":"deepseek-harness","scripts":{"demo:acp":"node …"}}"#,
+            prof.join("package.json"),
+            r#"{"dependencies":{"@deepseek-ai/dsh-acp":"0.0.1-rc.1"}}"#,
         )
         .unwrap();
-        assert!(is_harness_repo(d.path()));
+        assert!(acp_installed(home));
 
-        std::fs::write(d.path().join("package.json"), "{not json").unwrap();
-        assert!(!is_harness_repo(d.path()), "unparseable is not a checkout");
+        std::fs::write(prof.join("package.json"), "{not json").unwrap();
+        assert!(!acp_installed(home), "an unreadable manifest is not proof");
+        std::env::remove_var("DSH_HOME");
     }
 
-    /// Asking the launcher would boot an ACP server and time out; the file
-    /// answers instantly and accurately.
+    /// Already installed ⇒ no package-manager round trip at all.
     #[test]
-    fn a_checkout_reports_its_version_from_disk_without_running_anything() {
+    fn ensuring_the_bridge_is_a_no_op_once_it_is_there() {
+        let _g = env_guard();
         let d = tempfile::tempdir().unwrap();
-        let acp = d.path().join("packages/examples/acp-demo");
-        std::fs::create_dir_all(&acp).unwrap();
-        std::fs::write(d.path().join("package.json"), r#"{"version":"0.1.0-rc.5"}"#).unwrap();
-        std::fs::write(acp.join("package.json"), r#"{"version":"0.1.0-rc.5"}"#).unwrap();
-        assert_eq!(repo_version(d.path()).as_deref(), Some("0.1.0-rc.5"));
+        std::env::set_var("DSH_HOME", d.path());
+        let prof = d.path().join("profiles/notemd");
+        std::fs::create_dir_all(&prof).unwrap();
+        std::fs::write(
+            prof.join("package.json"),
+            r#"{"dependencies":{"@deepseek-ai/dsh-acp":"0.0.1-rc.1"}}"#,
+        )
+        .unwrap();
+        // A path that would fail loudly if it were ever executed.
+        assert_eq!(
+            ensure_acp(Path::new("/nonexistent/dsh"), Path::new("/unused"), "/usr/bin"),
+            Ok(false)
+        );
+        std::env::remove_var("DSH_HOME");
     }
 
     #[test]
-    fn a_checkout_falls_back_to_the_root_version_then_to_nothing() {
+    fn a_failed_install_reports_the_command_to_run_by_hand() {
+        let _g = env_guard();
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("package.json"), r#"{"version":"9.9.9"}"#).unwrap();
-        assert_eq!(repo_version(d.path()).as_deref(), Some("9.9.9"));
-
-        let empty = tempfile::tempdir().unwrap();
-        assert_eq!(repo_version(empty.path()), None);
+        std::env::set_var("DSH_HOME", d.path());
+        let e = ensure_acp(Path::new("/nonexistent/dsh"), Path::new("/unused"), "/usr/bin")
+            .unwrap_err();
+        assert!(e.contains("could not run"), "{e}");
+        std::env::remove_var("DSH_HOME");
     }
 
+    /// The hint has to name the thing that actually works: `dsh-acp-demo` from
+    /// npm does not install, and a user has no source checkout.
     #[test]
-    fn every_candidate_is_absolute() {
-        let home = Path::new("/home/u");
-        for c in candidates(home).into_iter().chain(repo_candidates(home)) {
-            assert!(c.is_absolute(), "{c:?}");
-        }
-    }
-
-    /// The hint has to point somewhere that WORKS. `npm i -g dsh-acp-demo` is
-    /// the obvious advice and is a dead end — its peers are unpublished — so the
-    /// message must not present it as the fix.
-    #[test]
-    fn the_not_found_message_names_a_way_out_that_actually_works() {
-        assert!(NOT_FOUND.contains("checkout"));
-        assert!(NOT_FOUND.contains("pnpm install"));
-        assert!(NOT_FOUND.contains("dsh_acp_bin"));
-        assert!(NOT_FOUND.contains("DSH_REPO"));
+    fn the_not_found_message_names_the_real_install() {
+        assert!(NOT_FOUND.contains("npm i -g @deepseek-ai/dsh"));
+        assert!(NOT_FOUND.contains("NOTEMD_DSH_BIN"));
         assert!(
-            NOT_FOUND.contains("装不起来"),
-            "the npm route must be named as broken, not offered as the fix"
+            !NOT_FOUND.contains("acp-demo"),
+            "that package cannot be installed standalone"
+        );
+        assert!(
+            !NOT_FOUND.contains("checkout"),
+            "users do not have a source checkout"
         );
     }
 
-    /// Without this the harness is unavailable on any machine whose global pnpm
-    /// is not the exact version the repo pins — corepack refuses rather than
-    /// switching.
     #[test]
-    fn the_checkout_launcher_downgrades_the_package_manager_pin_to_a_warning() {
-        let home = Path::new("/home/u");
-        let got = discover_with(
-            None,
-            None,
-            home,
-            |b| (b == "pnpm").then(|| PathBuf::from("/bin/pnpm")),
-            |p| p == Path::new("/bin/pnpm"),
-            |_| true,
-        )
-        .unwrap();
-        assert_eq!(got.args[0], "--pm-on-fail=ignore");
+    fn every_candidate_is_an_absolute_dsh_path() {
+        for c in candidates(Path::new("/home/u")) {
+            assert!(c.is_absolute(), "{c:?}");
+            assert_eq!(c.file_name().unwrap(), BIN);
+        }
     }
 }

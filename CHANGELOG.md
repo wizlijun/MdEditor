@@ -7,6 +7,15 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **DeepSeek Agent now uses the DeepSeek Harness you installed.** It looks for `dsh` on your machine, puts the ACP bridge into a `notemd` profile of its own the first time you run something (`dsh plugin --profile notemd add @deepseek-ai/dsh-acp`), and launches through it. Everything the harness gives you — its tools, skills, subagents, web search — comes along, because the profile does the composing instead of a hand-written file that could only ever mount a subset. Install it with `npm i -g @deepseek-ai/dsh`; the plugin does the rest.
+- **The vault's harness file is now an overlay, not a whole composition.** `<vault>/.notemd/dsh/cordis.patch.yml` says only what note.md changes — where writes are allowed, which model, and silencing one thing that would corrupt the protocol stream — layered on top of your profile. It is still plain text in your vault, still yours to edit. The previous `cordis.yml` is removed on first run if you never edited it.
+
+### Fixed
+
+- **"Cannot find package 'tsx'" is gone.** The plugin used to fall back to driving a DeepSeek Harness *source checkout* through its development toolchain, which needed a pinned package manager, a dev dependency, and a 900-package install — none of which anyone has, and all of which failed in ways that had nothing to do with your vault. That path is removed. The setup hint now names the one install that works.
+
 ## v6.818.5 — 2026-08-18
 
 ### Fixed

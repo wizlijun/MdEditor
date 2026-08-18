@@ -31,7 +31,7 @@ pub async fn run(run_dir: PathBuf) -> i32 {
             return 5;
         }
     };
-    let Some(launcher) = discover::discover(None, None) else {
+    let Some(launcher) = discover::discover(None) else {
         eprintln!("{}", discover::NOT_FOUND);
         return 3;
     };

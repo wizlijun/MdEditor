@@ -1,0 +1,52 @@
+# DeepSeek Harness —— note.md 的 ACP 覆盖层(notemd.deepseek-agent 下发)
+#
+# 这份文件是**你的**,不是插件的私产:它住在 vault 里、进 git、可以直接手改。
+# 插件只在内容与自己编进二进制的那份不一致时覆盖它;想长期改就复制一份,用插件
+# 设置 `dsh_config` 指过去,插件从此不再碰它。
+#
+# 怎么被用到:插件跑
+#   dsh --profile notemd --patch <本文件>
+# `--patch` 是**覆盖层**,应用在 profile 自己那层之后。所以这里只写"要改什么",
+# 不用重复 `dsh-base` 已经给的 78 行(agent 主干、DeepSeek 适配器、沙箱、审批、
+# 整套工具)。你装的 dsh 有什么能力,这里就有什么能力。
+#
+# 语法:顶层是一个 YAML 数组;`- id: X` 定位既有行并覆盖它的 config 或 disabled,
+# `- insert: [...]` 插入新行。允许 `!!js` 表达式。
+
+# ── stdout 是 ACP 的 JSON-RPC 通道 ────────────────────────────────────────
+# HMR 会监视文件并往 stdout 写,一行日志就能把协议流冲垮。
+- id: hmr
+  disabled: true
+
+# ── 权限:这一段才是真正的边界 ────────────────────────────────────────────
+#
+# 任务 policy.json 里的 permission_mode 最终落在这里。ACP 的
+# session/request_permission 只带一个 toolCallId(没有工具名、没有路径),所以
+# 客户端侧不可能按路径判断;能看见文件系统的是沙箱,规矩就立在沙箱上。
+#
+# workspaceRoot 用 process.cwd():插件把子进程的 cwd 设成任务目录,于是
+# workspace-write 模式下可写的正是这次任务自己的目录。
+- id: sandbox-policy
+  config:
+    mode: !!js "process.env.DSH_PERMISSION_MODE ?? 'workspace-write'"
+    workspaceRoot: !!js process.cwd()
+
+# 审批闸:`ask` 时每次越界都会经 ACP 问客户端一句,由 policy.json 的
+# on_permission_request 应答;danger-full-access 下直接 never。
+- id: approval
+  config:
+    policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
+
+# ── ACP 桥 ────────────────────────────────────────────────────────────────
+# 在 stdin/stdout 上开一条 AgentSideConnection,驱动 profile 提供的 ctx.agents。
+# 这个包由插件用 `dsh plugin --profile notemd add @deepseek-ai/dsh-acp` 装进
+# profile;它的 peer 由你安装的 dsh 自身提供(profile 的 hoisted linker +
+# autoInstallPeers:false 就是为此设计的)。
+#
+# 想换模型改这里,或在任务的 task.json 里写 `model`。
+- insert:
+    - id: acp
+      name: '@deepseek-ai/dsh-acp'
+      config:
+        provider: deepseek-official
+        model: deepseek-v4-pro

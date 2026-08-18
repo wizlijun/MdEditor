@@ -252,7 +252,7 @@ impl sdk::NotemdPlugin for DeepseekAgentPlugin {
             if let Some(root) = &root {
                 prepare_vault(&host, root);
                 host.log_info(&format!("deepseek-agent ready (vault={})", root.display()));
-                match discover::discover(None, None) {
+                match discover::discover(None) {
                     Some(l) => host.log_info(&format!("ACP server: {}", l.origin)),
                     None => host.log_warn(&discover::NOT_FOUND.replace('\n', " ")),
                 }
@@ -323,7 +323,7 @@ impl sdk::NotemdPlugin for DeepseekAgentPlugin {
                     Some(v) => Ok(json!({
                         "tasks": overview(&v),
                         "ready": true,
-                        "harness": discover::discover(None, None).map(|l| l.origin),
+                        "harness": discover::discover(None).map(|l| l.origin),
                     })),
                     None if !checked => Ok(json!({ "tasks": [], "ready": false })),
                     None => Err(NO_VAULT.to_string()),
@@ -460,7 +460,12 @@ impl DeepseekAgentPlugin {
         // The permission gate first: a task whose policy will not parse must not
         // run, whatever else is or isn't installed.
         let policy = policy::Policy::load(&task_dir)?;
-        let launcher = discover::discover(None, None).ok_or(discover::NOT_FOUND)?;
+        let launcher = discover::discover(None).ok_or(discover::NOT_FOUND)?;
+        // Put the ACP bridge in our profile the first time it is needed. A
+        // no-op afterwards (read from the profile manifest), so this is not a
+        // package-manager round trip per run.
+        let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+        discover::ensure_acp(&launcher.program, &home, &discover::runtime_path())?;
         let config = composition::resolve_config(&vault, None)?;
 
         let target = params
@@ -686,7 +691,7 @@ impl DeepseekAgentPlugin {
     /// constant here — so a user who edited their `cordis.yml` sees their own
     /// choice rather than ours.
     fn harness_status(&self) -> Result<Value, String> {
-        let Some(launcher) = discover::discover(None, None) else {
+        let Some(launcher) = discover::discover(None) else {
             return Ok(serde_json::to_value(agent_run_core::HarnessStatus::missing(
                 HARNESS_NAME,
                 discover::NOT_FOUND,
@@ -708,23 +713,14 @@ impl DeepseekAgentPlugin {
         // mismatch. Present but unusable is NOT ready — reporting that failure as
         // a version put "[ERROR] This project is configured to use 11.7.0 of
         // pnpm…" where the version belongs and called the harness good to go.
-        // A checkout tells us its version on disk. Running the launcher to ask
-        // would boot an ACP server that waits on stdin until the probe times
-        // out — twenty seconds spent learning nothing.
-        let (ok, version, hint) = match launcher.known_version.clone() {
-            Some(v) => (true, Some(v), None),
-            None => match harness::probe_version(
-                &launcher.program,
-                &launcher.args,
-                VERSION_PROBE_TIMEOUT,
-            ) {
+        // `dsh --version` answers instantly (no profile boot, no ACP server), so
+        // this is a plain probe again.
+        let (ok, version, hint) =
+            match harness::probe_version(&launcher.program, &[], VERSION_PROBE_TIMEOUT) {
                 harness::Probe::Version(v) => (true, Some(v), None),
                 harness::Probe::Failed(why) => (false, None, Some(why)),
-                // Launchable but silent about its version. Not evidence of a
-                // problem; a run is still worth attempting.
                 harness::Probe::Unavailable => (true, None, None),
-            },
-        };
+            };
         Ok(serde_json::to_value(agent_run_core::HarnessStatus {
             harness: HARNESS_NAME.to_string(),
             ok,

@@ -8,7 +8,7 @@
 //! than a one-way stream of lines.
 //!
 //! ```text
-//! spawn dsh-acp-demo --config <vault cordis.yml>   cwd = the task dir
+//! spawn dsh --profile notemd --patch <vault overlay>   cwd = the task dir
 //!   → initialize                assert the protocol version (§acp::check_initialize)
 //!   → session/new               cwd = the task dir; mcpServers = [] (non-empty is rejected)
 //!   → session/prompt            the composed three-part prompt
@@ -91,9 +91,10 @@ pub async fn run(
     };
 
     let mut cmd = tokio::process::Command::new(&spec.launcher.program);
-    cmd.args(&spec.launcher.args)
-        .arg("--config")
-        .arg(&spec.config)
+    // `dsh --profile notemd --patch <vault overlay>`: the profile is the
+    // composition (the bridge plus dsh-base's rows), the overlay is what note.md
+    // changes about it.
+    cmd.args(spec.launcher.args(&spec.config))
         // cwd = the task template dir. It is both the ACP session's workspace
         // (so `workspace-write` fences writes to exactly this task's directory)
         // and where the harness discovers AGENTS.md.
@@ -510,7 +511,7 @@ mod tests {
         fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(dir.path().join("task")).unwrap();
-            std::fs::write(dir.path().join("cordis.yml"), "# stub\n").unwrap();
+            std::fs::write(dir.path().join("cordis.patch.yml"), "# stub\n").unwrap();
             Self { dir }
         }
 
@@ -541,11 +542,9 @@ mod tests {
                 },
                 launcher: crate::discover::Launcher {
                     program: stub(),
-                    args: Vec::new(),
-                    known_version: None,
                     origin: "test stub".into(),
                 },
-                config: v.join("cordis.yml"),
+                config: v.join("cordis.patch.yml"),
                 // Keep the login shell out of the tests entirely.
                 env_path: Some("/usr/bin:/bin".into()),
                 sessions_dir: v.join("sessions"),
@@ -650,15 +649,20 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_config_and_a_login_free_path_reach_the_child() {
+    async fn the_profile_and_the_vault_overlay_reach_the_child() {
         let _g = env_guard();
         let f = Fixture::new();
         let argv = f.dir.path().join("argv.txt");
         let _a = EnvVar::set("STUB_ARGV_FILE", argv.to_str().unwrap());
         drive(f.spec(30)).await;
         let seen = std::fs::read_to_string(&argv).unwrap();
-        assert!(seen.contains("--config"), "argv: {seen}");
-        assert!(seen.contains("cordis.yml"), "argv: {seen}");
+        // `dsh --profile notemd --patch <vault overlay>`: the profile is the
+        // composition, the overlay is what note.md changes about it.
+        assert!(seen.contains("--profile"), "argv: {seen}");
+        assert!(seen.contains("notemd"), "argv: {seen}");
+        assert!(seen.contains("--patch"), "argv: {seen}");
+        assert!(seen.contains("cordis.patch.yml"), "argv: {seen}");
+        assert!(!seen.contains("--config"), "the old flag is gone: {seen}");
     }
 
     /// A harness that prints a banner on stdout before the protocol starts must
