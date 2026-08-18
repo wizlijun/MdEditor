@@ -1451,7 +1451,7 @@ pub fn run() {
                                             crate::notifications::NotificationAction::OpenPluginWindow { plugin_id, window } => {
                                                 // 打开失败(常见:claude-agent 未安装)吞掉后退回主窗口,
                                                 // 至少给用户一个可见反馈。
-                                                if let Err(e) = crate::plugin_runtime::windows::open_plugin_window(app, &plugin_id, &window) {
+                                                if let Err(e) = crate::plugin_runtime::windows::open_plugin_window(app, &plugin_id, &window, None) {
                                                     eprintln!("[tray] notification could not open {plugin_id}/{window}: {e}");
                                                     show_main_window(app);
                                                 }
@@ -1843,7 +1843,7 @@ fn activate_plugin_tray_target<R: tauri::Runtime>(
 ) {
     use crate::plugin_runtime::windows;
     let existed = app.get_webview_window(&windows::window_label(plugin_id, window)).is_some();
-    if let Err(e) = windows::open_plugin_window(app, plugin_id, window) {
+    if let Err(e) = windows::open_plugin_window(app, plugin_id, window, None) {
         dlog(&format!("tray activate {plugin_id}:{window} failed: {e}"));
         return;
     }

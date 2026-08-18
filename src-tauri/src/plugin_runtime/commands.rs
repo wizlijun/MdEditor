@@ -35,8 +35,31 @@ pub fn plugin_v2_open_window(
     app: tauri::AppHandle,
     plugin_id: String,
     window_id: String,
+    seed: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    super::windows::open_plugin_window(&app, &plugin_id, &window_id)
+    let existed = app
+        .get_webview_window(&super::windows::window_label(&plugin_id, &window_id))
+        .is_some();
+    let seed_json = seed.as_ref().map(|s| s.to_string());
+    // 新建窗口经 URL query 携带(eval 推送在 webview 加载前会落空);
+    // 已开窗口 query 到不了(singleton 分支 focus 后直接返回),改走 push。
+    super::windows::open_plugin_window(
+        &app,
+        &plugin_id,
+        &window_id,
+        if existed { None } else { seed_json.as_deref() },
+    )?;
+    if existed {
+        if let Some(s) = seed {
+            super::windows::push_to_window(
+                &app,
+                &plugin_id,
+                &window_id,
+                &serde_json::json!({ "type": "seed", "payload": s }),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// `(plugin_id, window_id)` of every window contributed by a plugin that holds
