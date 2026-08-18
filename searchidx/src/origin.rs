@@ -91,10 +91,9 @@ fn mapped_type_origin(concept_type: &str) -> Option<Origin> {
         "Note" | "Outline Note" | "Daily Note" | "Wiki Page" | "Idea" | "Vault Conventions" => {
             Some(Origin::Human)
         }
-        "Book Summary" | "Answer" | "Idea Proof" | "Reading Report" | "Decision Board" | "Decision Archive" => {
-            Some(Origin::Derived)
-        }
-        "Book" => Some(Origin::Source),
+        "Book Summary" | "Answer" | "Idea Proof" | "Reading Report" | "Decision Board"
+        | "Decision Archive" | "Trace Report" => Some(Origin::Derived),
+        "Book" | "Trace Material" => Some(Origin::Source),
         _ => None,
     }
 }
@@ -273,6 +272,11 @@ mod tests {
         assert_eq!(derive("a.md", Some(&fm("type: Note")), &globs(&[])), Origin::Human);
         assert_eq!(derive("a.md", Some(&fm("type: Book Summary")), &globs(&[])), Origin::Derived);
         assert_eq!(derive("a.md", Some(&fm("type: Book")), &globs(&[])), Origin::Source);
+    }
+    #[test]
+    fn trace_types_map_report_derived_material_source() {
+        assert_eq!(derive("traces/a.md", Some(&fm("type: Trace Report")), &globs(&[])), Origin::Derived);
+        assert_eq!(derive("traces/a/01-b.md", Some(&fm("type: Trace Material")), &globs(&[])), Origin::Source);
     }
     #[test]
     fn rule5_a_matched_path_is_source() {

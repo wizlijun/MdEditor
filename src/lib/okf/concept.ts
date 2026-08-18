@@ -42,6 +42,10 @@ export const CONCEPT_TYPE = {
   idea: 'Idea',
   /** 奇思妙想:agent 产出的论证文档 `<name>.proof.md` */
   ideaProof: 'Idea Proof',
+  /** 溯源:agent 产出的溯源摘要 `traces/<date>-<time>.md`(idea-spark trace-source 任务) */
+  traceReport: 'Trace Report',
+  /** 溯源:下载的原始材料全文(字幕转写/博客正文/论文节选),`traces/<同名>/` 子目录 */
+  traceMaterial: 'Trace Material',
   /** vault 根的 AGENTS.md(模板见 src-tauri/templates/AGENTS.md) */
   vaultConventions: 'Vault Conventions',
 } as const
