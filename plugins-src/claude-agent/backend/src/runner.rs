@@ -38,6 +38,7 @@ pub async fn run(run_dir: PathBuf) -> i32 {
         claude,
         env_path: None,
         trigger: "cli".into(),
+        harness: "notemd.claude-agent".into(),
         run_id: req.run_id.clone(),
         oauth_token: std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok(),
         // A CLI run is a whole-vault pass; the precheck decides from the vault.

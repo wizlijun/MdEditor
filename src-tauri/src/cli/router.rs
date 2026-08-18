@@ -218,6 +218,9 @@ mod tests {
             description: None,
             kind: crate::plugin_host::PluginKind::External,
             binary: Some("bin".to_string()),
+            // A CLI stub is not an agent provider; the field exists so the
+            // shape matches what the adapter produces.
+            agent_provider: false,
             default_enabled: None,
             menus: vec![],
             context_menus: vec![],

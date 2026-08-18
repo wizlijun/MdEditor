@@ -6,6 +6,7 @@
 //! blocking here would wedge the whole plugin. Events reach the window from
 //! that task via `host.ui_post`.
 use crate::{discover, engine, lock, prompt, record, runner, task};
+use agent_run_core::harness;
 use agent_run_core::task::check_task_id;
 use notemd_plugin_sdk as sdk;
 use sdk::plugin_protocol as proto;
@@ -20,8 +21,14 @@ const WINDOW: &str = "main";
 const NO_VAULT: &str = "no vault configured";
 /// The task the main window's Agent workspace runs.
 const NOTE_TASK: &str = "answer-note-question";
-/// Our own id, for a reminder that points back at this window's run log.
+/// Our own id, for a reminder that points back at this window's run log — and
+/// the provenance stamped on every run record (both agent plugins share one
+/// runs root, so a record without this reads as anyone's).
 const SELF_PLUGIN_ID: &str = "notemd.claude-agent";
+/// The harness behind this plugin, as the window names it.
+const HARNESS_NAME: &str = "Claude Code";
+/// A version probe runs while the window waits, so it is bounded tightly.
+const VERSION_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The tray reminder a caller wants pushed when its run reaches a terminal
 /// state. Handed to us with `run-task`, and sent from HERE rather than by the
@@ -313,6 +320,10 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
             // 宿主 host.agent.run 中转:任意任务 + 调用方拼好的定位 prompt。
             "run-task" => self.run_task(host, &params.context),
             "run-status" => self.run_status(&params.context),
+            // What the window shows above everything else: is Claude Code
+            // there, which version, and did the last run die of something that
+            // will kill the next one too.
+            "harness-status" => self.harness_status(),
             other => Err(format!("unknown command '{other}'")),
         }
     }
@@ -482,6 +493,7 @@ impl ClaudeAgentPlugin {
             env_path: None,
             prompt: full,
             trigger: trigger.to_string(),
+            harness: SELF_PLUGIN_ID.to_string(),
             run_id: run_id.clone(),
             oauth_token: std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok(),
             target,
@@ -672,6 +684,51 @@ impl ClaudeAgentPlugin {
         }
         // No record and no live lock: the process died without writing one.
         Ok(json!({ "state": "lost" }))
+    }
+
+    /// Is Claude Code usable, and which one is it?
+    ///
+    /// `--version` is cheap and truthful about presence. It says nothing about
+    /// credentials — an expired OAuth session versions itself perfectly happily
+    /// and then fails every run — so the last run's environment-level failure
+    /// rides along. We report what we observed rather than provoking a billed
+    /// model call to find out.
+    fn harness_status(&self) -> Result<Value, String> {
+        let Some(bin) = discover::discover(std::env::var("NOTEMD_CLAUDE_BIN").ok().as_deref())
+        else {
+            return Ok(serde_json::to_value(agent_run_core::HarnessStatus::missing(
+                HARNESS_NAME,
+                "安装 Claude Code(`npm i -g @anthropic-ai/claude-code`),或用 NOTEMD_CLAUDE_BIN 指定路径。",
+            ))
+            .unwrap());
+        };
+        // Scoped to OUR runs: both agent plugins share one runs root, so an
+        // unfiltered read would show the other harness's expired credential here.
+        let warning = self
+            .vault()
+            .ok()
+            .and_then(|v| harness::recent_environment_warning(&task::runs_root(&v), SELF_PLUGIN_ID));
+        // A binary that answers `--version` with a failure is present but not
+        // usable; calling it ready would send the user off to debug their task.
+        let (ok, version, hint) = match harness::probe_version(&bin, &[], VERSION_PROBE_TIMEOUT) {
+            harness::Probe::Version(v) => (true, Some(v), None),
+            harness::Probe::Failed(why) => (false, None, Some(why)),
+            // It is on disk and executable but said nothing. Not evidence of a
+            // problem — plenty of runs have started from exactly this state.
+            harness::Probe::Unavailable => (true, None, None),
+        };
+        Ok(serde_json::to_value(agent_run_core::HarnessStatus {
+            harness: HARNESS_NAME.to_string(),
+            ok,
+            version,
+            origin: bin.to_string_lossy().into_owned(),
+            // Claude Code resolves its own model from the user's settings unless
+            // a task pins one, so naming a model here would be a guess.
+            default_model: None,
+            hint,
+            warning,
+        })
+        .unwrap())
     }
 
     /// The CLI entry point. Detached by default; `--wait` runs inline.
@@ -1063,6 +1120,7 @@ mod tests {
                 result: "ok".into(),
                 stderr_tail: String::new(),
                 artifacts: Vec::new(),
+                harness: Some(SELF_PLUGIN_ID.into()),
             },
         )
         .unwrap();
@@ -1177,6 +1235,7 @@ mod tests {
                 result: "answered 2".into(),
                 stderr_tail: String::new(),
                 artifacts: vec!["answers/a.md".into()],
+                harness: Some(SELF_PLUGIN_ID.into()),
             },
         )
         .unwrap();
@@ -1332,6 +1391,7 @@ mod tests {
             result: String::new(),
             stderr_tail: String::new(),
             artifacts: Vec::new(),
+            harness: Some(SELF_PLUGIN_ID.into()),
         }
     }
 

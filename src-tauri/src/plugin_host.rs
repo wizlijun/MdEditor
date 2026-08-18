@@ -64,6 +64,12 @@ pub struct PluginManifest {
     /// a consumer, so nothing reads this.
     #[serde(default)]
     pub default_enabled: Option<bool>,
+    /// Can this plugin serve the host's agent slot? Computed by
+    /// `plugin_runtime::adapter` from the manifest's activation events (see
+    /// `plugin_runtime::agent_provider`), so every consumer — the sidecar
+    /// note's Agent area, the CLI — applies one rule rather than its own copy.
+    #[serde(default)]
+    pub agent_provider: bool,
     #[serde(default)]
     pub menus: Vec<MenuEntry>,
     #[serde(default)]

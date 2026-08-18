@@ -72,6 +72,35 @@ pub fn resolve_config(vault: &Path, override_path: Option<&str>) -> Result<PathB
     }
 }
 
+/// The model a run uses when its task pins none — read out of the composition
+/// the run will actually boot from, not from a constant here. A user who edited
+/// their `cordis.yml` to a different model must see THAT model reported, or the
+/// window is telling them something the run will contradict.
+///
+/// Deliberately a line scan rather than a YAML parse: the file carries `!!js`
+/// tags that a plain YAML reader rejects, and one field does not justify a
+/// dependency that would then need to understand them.
+pub fn default_model(config: &Path) -> Option<String> {
+    let body = std::fs::read_to_string(config).ok()?;
+    let mut in_acp = false;
+    for line in body.lines() {
+        let t = line.trim();
+        if t.starts_with("- id:") {
+            in_acp = t.contains("acp-agent");
+            continue;
+        }
+        if in_acp {
+            if let Some(v) = t.strip_prefix("model:") {
+                let v = v.trim().trim_matches(&['\'', '"'][..]).trim();
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Lines to keep out of the vault's git history. The session logs are the
 /// harness's own append-only trace — large, churny, and reconstructible.
 pub const GITIGNORE_LINES: [&str; 1] = [".notemd/dsh/sessions/"];
@@ -168,6 +197,40 @@ mod tests {
             "both the sandbox fence and the approval gate must read the mode"
         );
         assert!(DEFAULT_CONFIG.contains("@deepseek-ai/dsh-acp-demo"));
+    }
+
+    #[test]
+    fn reads_the_acp_agents_model_out_of_the_shipped_composition() {
+        let v = tempfile::tempdir().unwrap();
+        ensure_config(v.path()).unwrap();
+        assert_eq!(
+            default_model(&config_path(v.path())).as_deref(),
+            Some("deepseek-v4-pro")
+        );
+    }
+
+    /// A user who edits their composition must see the model THEY chose — the
+    /// window telling them one thing while the run does another is worse than
+    /// telling them nothing.
+    #[test]
+    fn reads_an_edited_model_rather_than_a_constant() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("mine.yml");
+        std::fs::write(
+            &p,
+            "- id: llm-deepseek\n  config:\n    model: not-this-one\n\n- id: acp-agent\n  name: '@deepseek-ai/dsh-acp-demo'\n  config:\n    provider: deepseek-official\n    model: deepseek-v4-flash\n",
+        )
+        .unwrap();
+        assert_eq!(default_model(&p).as_deref(), Some("deepseek-v4-flash"));
+    }
+
+    #[test]
+    fn a_composition_without_a_model_reads_as_unknown() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("bare.yml");
+        std::fs::write(&p, "- id: acp-agent\n  name: '@deepseek-ai/dsh-acp-demo'\n").unwrap();
+        assert_eq!(default_model(&p), None);
+        assert_eq!(default_model(&d.path().join("gone.yml")), None);
     }
 
     /// A key inlined here would be committed to the user's vault.

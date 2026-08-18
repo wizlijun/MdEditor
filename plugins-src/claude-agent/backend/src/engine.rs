@@ -19,6 +19,9 @@ pub struct RunSpec {
     pub env_path: Option<String>,
     pub prompt: String,
     pub trigger: String,
+    /// The plugin id performing this run. Lands in the record so a shared runs
+    /// root cannot make this harness's failure look like the other's.
+    pub harness: String,
     pub run_id: String,
     pub oauth_token: Option<String>,
     /// The one file this run is about, if any — handed to the precheck script
@@ -345,6 +348,7 @@ fn finish(
         ),
         stderr_tail,
         artifacts,
+        harness: Some(spec.harness.clone()),
     }
 }
 
@@ -385,6 +389,7 @@ mod tests {
             env_path: None,
             prompt: "hi".into(),
             trigger: "window".into(),
+            harness: "notemd.claude-agent".into(),
             run_id: "20260730T000000Z-000001".into(),
             oauth_token: None,
             target: None,

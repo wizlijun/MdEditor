@@ -22,6 +22,7 @@ pub mod artifacts;
 pub mod detach;
 pub mod discover;
 pub mod event;
+pub mod harness;
 pub mod lock;
 pub mod mirror;
 pub mod okf;
@@ -33,6 +34,7 @@ pub mod scope;
 pub mod task;
 
 pub use event::{Event, RunResult, Step};
+pub use harness::HarnessStatus;
 pub use record::{RunRecord, Status};
 pub use scope::Scope;
 pub use task::TaskDef;

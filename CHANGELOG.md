@@ -7,6 +7,17 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **The Agent area under a sidecar note is back.** v6.817.4 made it check whether an agent plugin was installed by reading a manifest field the host never sends to the front-end, so the answer was always "none" and the whole section vanished. The check now uses a flag the host computes and projects.
+- **A run says which agent performed it.** Both agent plugins share one task directory and one run history, so a Claude run appeared in the DeepSeek Agent window looking exactly like a DeepSeek run — which is how an expired *Claude* login got read as a DeepSeek failure. Every run now records its agent, history rows from the other agent are labelled, and each window's environment warning only reports its own harness's problems. (Runs recorded before this update carry no agent and are attributed to neither.)
+
+### Added
+
+- **Pick which agent answers.** With both agents installed, the Agent area under a sidecar note gets a picker showing each one's harness, version and model — "Claude Code · 2.1.233" — so you know what you are about to spend tokens on before you click.
+- **Each agent window states its environment up front.** A banner above the task list: the harness, its version, the model a run uses when the task pins none, and where the executable came from. If the harness is present but cannot start, it says so with the reason instead of reporting itself ready.
+- **An expired login is reported as an expired login.** When the newest run failed on something environmental — expired credentials, a missing API key, a rate limit — the window says so, rather than leaving it to look like the task was at fault.
+
 ## v6.817.4 — 2026-08-17
 
 ### Added

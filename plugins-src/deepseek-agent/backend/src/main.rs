@@ -7,6 +7,11 @@
 //! Everything a run IS — locks, records, progress, artifacts, OKF stamping —
 //! lives in the shared `agent-run-core` crate, so this plugin and claude-agent
 //! cannot drift on the on-disk format the host reads.
+/// This plugin's id. Stamped on every run record: both agent plugins share one
+/// runs root, so a record that does not say who produced it reads as anyone's —
+/// which is how an expired *Claude* credential got read as a DeepSeek failure.
+pub const SELF_PLUGIN_ID: &str = "notemd.deepseek-agent";
+
 mod acp;
 mod composition;
 mod discover;

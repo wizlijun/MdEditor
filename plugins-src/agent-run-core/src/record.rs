@@ -36,6 +36,17 @@ pub struct RunRecord {
     /// keeps records written before this field readable.
     #[serde(default)]
     pub artifacts: Vec<String>,
+    /// WHICH agent performed this run — `notemd.claude-agent`,
+    /// `notemd.deepseek-agent`.
+    ///
+    /// Both agent plugins share one tasks root AND one runs root on purpose (a
+    /// task is a job description, not a binding to one model), which means every
+    /// window lists every run. Without this field a claude run shows up in the
+    /// DeepSeek Agent window looking exactly like a deepseek run — which is how
+    /// an expired *Claude* credential got read as a DeepSeek failure. `None` on
+    /// records written before the field existed: unknown, not "mine".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
 }
 
 pub fn runs_dir(task_run_dir: &Path) -> PathBuf {
@@ -214,6 +225,7 @@ mod tests {
             result: "ok".into(),
             stderr_tail: String::new(),
             artifacts: Vec::new(),
+            harness: Some("notemd.claude-agent".into()),
         }
     }
 

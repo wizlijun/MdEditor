@@ -10,12 +10,6 @@ import { pluginRuntime } from '../plugins/runtime.svelte'
  * the plugin's `run-status`, which reads the lock, the progress snapshot and
  * the run record off disk.
  */
-/// The commands the agent slot dispatches. A plugin that activates on all three
-/// can serve it — the same convention the host uses
-/// (src-tauri/src/plugin_runtime/agent_provider.rs). Deliberately NOT a new
-/// manifest field: `contributes` is deny_unknown_fields, so adding one would
-/// stop older hosts loading the plugin at all.
-export const AGENT_COMMANDS = ['run-task', 'run-note', 'run-status'] as const
 /** Used when nothing is configured — what every existing vault already has. */
 export const DEFAULT_PLUGIN_ID = 'notemd.claude-agent'
 /** @deprecated Use `agentProviders()` / `activeProvider()`; kept for callers not yet updated. */
@@ -24,6 +18,30 @@ export const NOTE_TASK = 'answer-note-question'
 export const POLL_MS = 1000
 
 export type AgentPhase = 'idle' | 'starting' | 'running' | 'done' | 'error'
+
+/**
+ * One agent's harness, as its plugin reports it (`harness-status`).
+ *
+ * Version and model are not decoration: with two agents installed, "which one
+ * am I about to spend tokens on, and is it even working" is exactly what the
+ * switcher has to answer BEFORE the click.
+ */
+export interface HarnessStatus {
+  /** The harness's own name: "Claude Code", "DeepSeek Harness". */
+  harness: string
+  /** Is the executable there? Everything else is decoration if this is false. */
+  ok: boolean
+  version?: string | null
+  /** Where it resolved from — a path, or "monorepo checkout at …". */
+  origin?: string
+  /** The model used when the task pins none. */
+  default_model?: string | null
+  /** What to do about it when `ok` is false. */
+  hint?: string | null
+  /** An environment-level failure seen in the newest run — expired credentials,
+   *  rate limits. The run would fail the same way again. */
+  warning?: string | null
+}
 
 export interface AgentRunState {
   phase: AgentPhase
@@ -69,11 +87,12 @@ export function isAgentBusy(): boolean {
 
 /** Every installed plugin that can serve the agent slot, default first. */
 export function agentProviders(): string[] {
+  // `agent_provider` is computed host-side and projected by the adapter. Do NOT
+  // re-derive it here from `activation.events`: the view model carries no
+  // `activation` at all, so that check matches nothing and the Agent area
+  // silently disappears (the v6.817.4 regression).
   const ids = pluginRuntime.manifests
-    .filter((m) => {
-      const events: string[] = (m as { activation?: { events?: string[] } }).activation?.events ?? []
-      return AGENT_COMMANDS.every((c) => events.includes(`onCommand:${c}`))
-    })
+    .filter((m) => m.agent_provider === true)
     .map((m) => m.id)
     .sort()
   // Default first, so the one that will actually run is the one read first.
@@ -100,6 +119,39 @@ export function setProvider(id: string): void {
 }
 
 let chosenProvider: string | null = null
+
+/** provider id → its harness, once asked. */
+export const harnessStatuses = $state<Record<string, HarnessStatus>>({})
+
+/**
+ * Ask every installed provider about its harness.
+ *
+ * Each answer shells out to `<harness> --version`, so this is called when the
+ * panel appears and after a run ends (a run is exactly when an expired
+ * credential becomes visible) — not on every render.
+ */
+export async function refreshHarnesses(): Promise<void> {
+  await Promise.all(
+    agentProviders().map(async (id) => {
+      try {
+        const s = await invoke<HarnessStatus>('plugin_v2_execute', {
+          pluginId: id,
+          command: 'harness-status',
+          context: {},
+        })
+        if (s && typeof s === 'object') harnessStatuses[id] = s
+      } catch (e) {
+        // A plugin too old to answer, or one that failed to start. Say so
+        // rather than leaving the row blank — "unknown" is information.
+        harnessStatuses[id] = {
+          harness: id,
+          ok: false,
+          hint: e instanceof Error ? e.message : String(e),
+        }
+      }
+    }),
+  )
+}
 
 /** Is any agent plugin installed and enabled? */
 export function agentPluginAvailable(): boolean {

@@ -1,12 +1,19 @@
 <script lang="ts">
   import { t } from '../../lib/i18n/store.svelte'
   import {
+    activeProvider,
+    agentProviders,
     agentRun,
     agentPluginAvailable,
     dismissRun,
+    harnessStatuses,
     isAgentBusy,
+    refreshHarnesses,
+    setProvider,
     startNoteRun,
   } from '../../lib/agent-workspace/store.svelte'
+  import { pluginRuntime } from '../../lib/plugins/runtime.svelte'
+  import { pluginName } from '../../lib/plugins/plugin-i18n'
 
   let { notePath, onfinished }:
     {
@@ -19,6 +26,32 @@
   const available = $derived(agentPluginAvailable())
   const busy = $derived(isAgentBusy())
   const mine = $derived(agentRun.notePath === notePath)
+
+  const providers = $derived(agentProviders())
+  const current = $derived(activeProvider())
+  const status = $derived(harnessStatuses[current])
+
+  /** "Claude Code 2.1.226 · model claude-opus-5" — what you are about to spend
+      tokens on, before you spend them. */
+  function harnessLabel(id: string): string {
+    const s = harnessStatuses[id]
+    const plugin = pluginRuntime.manifests.find((m) => m.id === id)
+    const name = s?.harness ?? (plugin ? pluginName(plugin) : id)
+    if (!s) return name
+    if (!s.ok) return `${name} — ${t('agent.harnessUnknown')}`
+    const bits = [name, s.version, s.default_model && t('agent.model', { model: s.default_model })]
+    return bits.filter(Boolean).join(' · ')
+  }
+
+  // Ask each harness what it is. Once when the panel appears, and again after a
+  // run ends — a run is exactly when an expired credential becomes visible.
+  $effect(() => {
+    void providers.length
+    void refreshHarnesses()
+  })
+  $effect(() => {
+    if (agentRun.phase === 'done' || agentRun.phase === 'error') void refreshHarnesses()
+  })
 
   // Ticks once a second so the elapsed time moves while a run is in flight.
   let now = $state(Date.now())
@@ -76,6 +109,40 @@
          the enabled agent plugins offer for the current note. -->
     <h3>{t('agent.title')}</h3>
 
+    <!-- WHICH agent, and is it in a state to run. Both plugins share one task
+         directory, so without this the same task reads identically under either
+         harness — which is how an expired Claude credential got read as a
+         DeepSeek failure. -->
+    <div class="harness">
+      {#if providers.length > 1}
+        <select
+          class="pick"
+          value={current}
+          disabled={busy}
+          title={status?.origin ?? ''}
+          onchange={(e) => setProvider((e.currentTarget as HTMLSelectElement).value)}
+        >
+          {#each providers as id (id)}
+            <option value={id}>{harnessLabel(id)}</option>
+          {/each}
+        </select>
+      {:else}
+        <span class="one" title={status?.origin ?? ''}>{harnessLabel(current)}</span>
+      {/if}
+    </div>
+
+    {#if status && !status.ok}
+      <p class="alert" title={status.hint ?? ''}>
+        {t('agent.harnessMissing', { harness: status.harness })}
+      </p>
+    {:else if status?.warning}
+      <!-- An environment failure repeats no matter what you ask it to do, so it
+           is worth interrupting for: re-authenticating is the fix, not retrying. -->
+      <p class="alert" title={status.warning}>
+        {t('agent.harnessWarning', { detail: status.warning })}
+      </p>
+    {/if}
+
     <div class="row">
       <span class="line" class:bad={agentRun.phase === 'error'} title={tip}>
         {#if busy && mine}<span class="spinner" aria-hidden="true"></span>{/if}
@@ -87,7 +154,7 @@
       {:else}
         <button
           class="run"
-          disabled={!notePath}
+          disabled={!notePath || status?.ok === false}
           title={notePath ?? t('agent.noNote')}
           onclick={() => notePath && void startNoteRun(notePath, onfinished)}
         >
@@ -111,6 +178,40 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     opacity: 0.45;
+  }
+  .harness { display: flex; margin: 0 0 4px; }
+  /* select inherits neither font-size nor family — declare both, or the row
+     drifts at larger UI font sizes. */
+  .pick {
+    font: inherit;
+    font-size: 11px;
+    max-width: 100%;
+    padding: 1px 4px;
+    border-radius: 5px;
+    border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    background: transparent;
+    color: inherit;
+    opacity: 0.75;
+    cursor: pointer;
+  }
+  .pick:disabled { cursor: default; opacity: 0.45; }
+  .one {
+    font-size: 11px;
+    opacity: 0.55;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .alert {
+    margin: 0 0 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #b8860b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: default;
   }
   .row {
     display: flex;

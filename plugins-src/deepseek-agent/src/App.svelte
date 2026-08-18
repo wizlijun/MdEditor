@@ -9,9 +9,11 @@
     type HostMessage,
     type Task,
     type RunRecord,
+    type HarnessStatus,
   } from './lib/events'
   import TaskList from './components/TaskList.svelte'
   import RunStream from './components/RunStream.svelte'
+  import HarnessBanner from './components/HarnessBanner.svelte'
   import RunLog from './components/RunLog.svelte'
   import HistoryList from './components/HistoryList.svelte'
   import ArtifactLinks from './components/ArtifactLinks.svelte'
@@ -29,6 +31,8 @@
   let history: RunRecord[] = $state([])
   let allTasks = $state(true)
   let error = $state('')
+  /** The harness behind this window; null while the probe is in flight. */
+  let harness: HarnessStatus | null = $state(null)
   /** A past run picked from the list: the centre pane shows ITS log instead of
    *  the live stream, until you go back or start a new run. */
   let selectedRun: RunRecord | null = $state(null)
@@ -40,15 +44,35 @@
   onMessage((m: HostMessage) => {
     view = reduce(view, m)
     // A finished run belongs in the list — and in the task's status — at once.
-    if (m.kind === 'done' || m.kind === 'busy') void refresh()
+    if (m.kind === 'done' || m.kind === 'busy') {
+      void refresh()
+      // A run is when an expired credential stops being hypothetical.
+      void loadHarness()
+    }
   })
 
   // The backend resolves the vault root asynchronously (asking the host for it
   // from inside activate would deadlock its protocol loop), so the first
   // tasks.list can legitimately answer "not ready yet". Retry briefly instead
   // of showing an empty list.
+  /**
+   * Ask the backend what harness it has. Called at startup and after every run:
+   * a run is exactly when an expired credential becomes visible, and the banner
+   * would otherwise keep claiming everything is fine.
+   */
+  async function loadHarness() {
+    try {
+      harness = await request('harness-status')
+    } catch {
+      // A backend too old to answer, or one that failed to start. Leaving the
+      // banner blank is better than inventing a status for it.
+      harness = null
+    }
+  }
+
   async function load() {
     try {
+      void loadHarness()
       for (let i = 0; i < 20 && !(await loadTasks()); i++) {
         await new Promise((r) => setTimeout(r, 250))
       }
@@ -173,6 +197,10 @@
 
 <main>
   <aside>
+    <!-- Before the task list, because "which harness, and does it work" decides
+         whether anything below is worth clicking. -->
+    <HarnessBanner status={harness} label={tr} />
+
     <h2>{tr('tasks.title')}</h2>
     {#if tasks.length === 0}
       <p class="empty">{tr('tasks.empty')}</p>

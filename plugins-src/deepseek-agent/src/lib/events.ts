@@ -46,6 +46,9 @@ export interface RunRecord {
   stderr_tail: string
   /** Vault-relative markdown this run produced; opens in an editor tab. */
   artifacts?: string[]
+  /** WHICH agent plugin performed this run. Both agents share one runs root, so
+   *  a row without this is from before the field existed — unknown, not ours. */
+  harness?: string | null
 }
 
 /** A task template plus its live state (`tasks.list`). */
@@ -120,4 +123,21 @@ export function reduce(view: RunView, msg: HostMessage): RunView {
   // An unknown kind is ignored rather than fatal: the backend may add variants
   // (it only ever adds), and an older window must keep rendering.
   return view
+}
+
+/** One harness, as the backend's `harness-status` command reports it. */
+export interface HarnessStatus {
+  /** The harness's own name: "DeepSeek Harness", "Claude Code". */
+  harness: string
+  /** Is the executable there? Everything else is decoration if this is false. */
+  ok: boolean
+  version?: string | null
+  /** Where it resolved from — a path, or "monorepo checkout at …". */
+  origin?: string
+  /** The model used when the task pins none. */
+  default_model?: string | null
+  hint?: string | null
+  /** An environment-level failure seen in the newest run — expired credentials,
+   *  rate limits. The run would fail the same way again, whatever the task. */
+  warning?: string | null
 }

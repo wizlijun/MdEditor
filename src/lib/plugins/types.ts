@@ -107,6 +107,11 @@ export interface PluginManifest {
   /** Always `''` on adapted manifests — the runtime resolves the plugin's
    *  binary itself from the install tree. */
   binary: string
+  /** Can this plugin serve the host's agent slot? Computed HOST-side from the
+   *  manifest's activation events (`plugin_runtime::agent_provider`) and
+   *  projected by the adapter — the view model deliberately carries no
+   *  `activation`, so this flag is the only way to ask. */
+  agent_provider?: boolean
   menus?: MenuEntry[]
   context_menus?: ContextMenuEntry[]
   /** Custom-editor contributions (子项目④), passed through by the adapter.

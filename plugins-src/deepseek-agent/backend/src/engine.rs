@@ -75,6 +75,7 @@ pub async fn run(
                 result: String::new(),
                 stderr_tail: String::new(),
                 artifacts: Vec::new(),
+                harness: Some(crate::SELF_PLUGIN_ID.to_string()),
             });
         }
         Err(Blocked::Skip(reason)) => {
@@ -505,6 +506,7 @@ mod tests {
                     task_run_dir: v.join("runs-t"),
                     run_id: "20260817T000000Z-000001".into(),
                     trigger: "window".into(),
+                    harness: crate::SELF_PLUGIN_ID.to_string(),
                     target: None,
                     deliverable: None,
                 },

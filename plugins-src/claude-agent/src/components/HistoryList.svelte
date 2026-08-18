@@ -3,6 +3,11 @@
   import { fmtShort } from '../lib/datetime'
   import type { MessageKey } from '../lib/strings'
 
+  /** This plugin's own id; a run stamped with any other harness is labelled. */
+  const SELF_ID = 'notemd.claude-agent'
+  /** `notemd.claude-agent` → `claude` — enough to tell them apart in a row. */
+  const shortHarness = (id: string) => id.replace(/^notemd\./, '').replace(/-agent$/, '')
+
   let { runs, label, empty, showTask = false, selectedId = null, onselect, ondelete, onclear }:
     {
       runs: RunRecord[]
@@ -57,6 +62,13 @@
           {#if showTask}<span class="task">{run.task}</span>{/if}
           <span class="when">{when(run.started_at)}</span>
           {#if run.trigger === 'cli'}<span class="cli">CLI</span>{/if}
+          <!-- Both agent plugins share one runs root, so this list shows the
+               OTHER harness's runs too. Unlabelled, a claude failure here reads
+               as a deepseek failure — which is exactly how an expired Claude
+               credential got blamed on DeepSeek. -->
+          {#if run.harness && run.harness !== SELF_ID}
+            <span class="other" title={run.harness}>{shortHarness(run.harness)}</span>
+          {/if}
         </button>
       </li>
     {/each}
@@ -120,6 +132,17 @@
     white-space: nowrap;
   }
   .when { opacity: 0.55; margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+  /* A run from the other agent: present, readable, and clearly not ours. */
+  .other {
+    flex: none;
+    font-size: 9px;
+    padding: 0 4px;
+    border-radius: 3px;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    opacity: 0.65;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
   .cli {
     font-size: 9px;
     opacity: 0.5;

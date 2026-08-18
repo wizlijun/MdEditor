@@ -28,6 +28,10 @@ export type MessageKey =
   | 'status.cancelled'
   | 'status.busy'
   | 'turns'
+  | 'harness.probing'
+  | 'harness.missing'
+  | 'harness.model'
+  | 'harness.warning'
   | 'err.noVault'
   | 'err.harnessNotFound'
   | 'err.badPolicy'
@@ -63,6 +67,10 @@ const en: Catalog = {
   'status.cancelled': 'Stopped',
   'status.busy': 'Already running',
   turns: '{n} turns',
+  'harness.probing': 'Checking the harness…',
+  'harness.missing': 'not installed',
+  'harness.model': 'model {model}',
+  'harness.warning': 'Last run failed on the environment: {detail}',
   'err.noVault': 'No vault configured — open or create a vault first.',
   'err.harnessNotFound':
     'DeepSeek Harness ACP server not found — install @deepseek-ai/dsh-acp-demo, or set dsh_acp_bin / DSH_REPO.',
@@ -98,6 +106,10 @@ const zh: Catalog = {
   'status.cancelled': '已停止',
   'status.busy': '已在运行',
   turns: '{n} 轮',
+  'harness.probing': '正在检查运行环境…',
+  'harness.missing': '未安装',
+  'harness.model': '模型 {model}',
+  'harness.warning': '上次运行因环境问题失败:{detail}',
   'err.noVault': '未配置 vault——请先打开或创建一个 vault。',
   'err.harnessNotFound':
     '未找到 DeepSeek Harness 的 ACP 服务端——请装 @deepseek-ai/dsh-acp-demo,或设置 dsh_acp_bin / DSH_REPO。',
@@ -133,6 +145,10 @@ const ja: Catalog = {
   'status.cancelled': '停止しました',
   'status.busy': '実行中です',
   turns: '{n} ターン',
+  'harness.probing': '実行環境を確認中…',
+  'harness.missing': '未インストール',
+  'harness.model': 'モデル {model}',
+  'harness.warning': '前回の実行は環境の問題で失敗しました:{detail}',
   'err.noVault': 'vault が未設定です。まず vault を開くか作成してください。',
   'err.harnessNotFound':
     'DeepSeek Harness の ACP サーバーが見つかりません。@deepseek-ai/dsh-acp-demo をインストールするか、dsh_acp_bin / DSH_REPO を設定してください。',
@@ -168,6 +184,10 @@ const de: Catalog = {
   'status.cancelled': 'Gestoppt',
   'status.busy': 'Läuft bereits',
   turns: '{n} Runden',
+  'harness.probing': 'Umgebung wird geprüft…',
+  'harness.missing': 'nicht installiert',
+  'harness.model': 'Modell {model}',
+  'harness.warning': 'Letzter Lauf scheiterte an der Umgebung: {detail}',
   'err.noVault': 'Kein Vault konfiguriert — bitte zuerst einen Vault öffnen oder erstellen.',
   'err.harnessNotFound':
     'DeepSeek-Harness-ACP-Server nicht gefunden — @deepseek-ai/dsh-acp-demo installieren oder dsh_acp_bin / DSH_REPO setzen.',

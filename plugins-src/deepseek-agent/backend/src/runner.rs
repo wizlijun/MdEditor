@@ -48,6 +48,7 @@ pub async fn run(run_dir: PathBuf) -> i32 {
             task_run_dir: task::runs_root(&req.vault).join(&req.task_id),
             run_id: req.run_id.clone(),
             trigger: "cli".into(),
+            harness: crate::SELF_PLUGIN_ID.to_string(),
             // A CLI run is a whole-vault pass; the precheck decides from the vault.
             target: None,
             // The CLI names no single output file, so there is nothing to

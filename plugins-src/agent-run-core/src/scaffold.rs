@@ -21,6 +21,10 @@ pub struct RunMeta {
     pub task_run_dir: PathBuf,
     pub run_id: String,
     pub trigger: String,
+    /// The plugin id performing this run (`notemd.claude-agent`,
+    /// `notemd.deepseek-agent`). Lands in the record so a shared runs root
+    /// cannot make one harness's failure look like another's.
+    pub harness: String,
     /// The one file this run is about, if any — handed to the precheck script as
     /// `NOTEMD_NOTE` so it can answer "is there anything to do?" locally.
     pub target: Option<String>,
@@ -246,6 +250,7 @@ fn build_record(
         ),
         stderr_tail,
         artifacts,
+        harness: Some(meta.harness.clone()),
     }
 }
 
@@ -274,6 +279,7 @@ mod tests {
             task_run_dir: dir.join("runs-t"),
             run_id: "20260817T000000Z-000001".into(),
             trigger: "window".into(),
+            harness: "notemd.test-agent".into(),
             target: None,
             deliverable: None,
         }

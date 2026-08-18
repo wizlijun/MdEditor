@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.deepseek-agent",
   "name": "DeepSeek Agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "kind": "native",
   "engines": {
     "notemd": ">=6.817.4"
@@ -20,6 +20,7 @@
       "onCommand:run-note",
       "onCommand:run-task",
       "onCommand:run-status",
+      "onCommand:harness-status",
       "onCli:dsagent"
     ]
   },

@@ -8,7 +8,7 @@
 use crate::{composition, discover, engine, policy, runner, task};
 use agent_run_core::scaffold::RunMeta;
 use agent_run_core::task::check_task_id;
-use agent_run_core::{lock, prompt, record};
+use agent_run_core::{harness, lock, prompt, record};
 use notemd_plugin_sdk as sdk;
 use sdk::plugin_protocol as proto;
 use serde::Serialize;
@@ -22,7 +22,12 @@ const WINDOW: &str = "main";
 const NO_VAULT: &str = "no vault configured";
 /// The task the main window's Agent workspace runs.
 const NOTE_TASK: &str = "answer-note-question";
-const SELF_PLUGIN_ID: &str = "notemd.deepseek-agent";
+use crate::SELF_PLUGIN_ID;
+/// The harness behind this plugin, as the window names it.
+const HARNESS_NAME: &str = "DeepSeek Harness";
+/// A version probe runs while the window waits, so it is bounded tightly. A
+/// checkout launcher goes through pnpm, which is slower to start than a bin.
+const VERSION_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The tray reminder a caller wants pushed when its run reaches a terminal
 /// state. Sent from HERE rather than by the caller: a plugin with an open window
@@ -292,6 +297,10 @@ impl sdk::NotemdPlugin for DeepseekAgentPlugin {
             // 宿主 host.agent.run 中转:任意任务 + 调用方拼好的定位 prompt。
             "run-task" => self.run_task(host, &params.context),
             "run-status" => self.run_status(&params.context),
+            // What the window shows above everything else: is the ACP server
+            // there, which dsh is it, which model will it use, and did the last
+            // run die of something that will kill the next one too.
+            "harness-status" => self.harness_status(),
             other => Err(format!("unknown command '{other}'")),
         }
     }
@@ -478,6 +487,7 @@ impl DeepseekAgentPlugin {
                 task_run_dir: task::runs_root(&vault).join(&task_id),
                 run_id: run_id.clone(),
                 trigger: trigger.to_string(),
+                harness: SELF_PLUGIN_ID.to_string(),
                 target,
                 deliverable: notify.as_ref().map(|n| PathBuf::from(&n.expect_file)),
             },
@@ -661,6 +671,56 @@ impl DeepseekAgentPlugin {
         }
         // No record and no live lock: the process died without writing one.
         Ok(json!({ "state": "lost" }))
+    }
+
+    /// Is DeepSeek Harness usable, and which one is it?
+    ///
+    /// The version comes from the launcher itself (`dsh-acp-demo --version`, or
+    /// `pnpm --dir <repo> run demo:acp --version` for a checkout). The model is
+    /// read out of the composition this vault will ACTUALLY boot — not a
+    /// constant here — so a user who edited their `cordis.yml` sees their own
+    /// choice rather than ours.
+    fn harness_status(&self) -> Result<Value, String> {
+        let Some(launcher) = discover::discover(None, None) else {
+            return Ok(serde_json::to_value(agent_run_core::HarnessStatus::missing(
+                HARNESS_NAME,
+                discover::NOT_FOUND,
+            ))
+            .unwrap());
+        };
+        let vault = self.vault().ok();
+        let default_model = vault
+            .as_deref()
+            .and_then(|v| composition::resolve_config(v, None).ok())
+            .and_then(|c| composition::default_model(&c));
+        // Scoped to OUR runs: both agent plugins share one runs root, so an
+        // unfiltered read showed Claude's expired OAuth in this window as though
+        // DeepSeek were the broken one.
+        let warning = vault
+            .as_deref()
+            .and_then(|v| harness::recent_environment_warning(&task::runs_root(v), SELF_PLUGIN_ID));
+        // A checkout launcher runs through pnpm, which fails loudly on a version
+        // mismatch. Present but unusable is NOT ready — reporting that failure as
+        // a version put "[ERROR] This project is configured to use 11.7.0 of
+        // pnpm…" where the version belongs and called the harness good to go.
+        let (ok, version, hint) =
+            match harness::probe_version(&launcher.program, &launcher.args, VERSION_PROBE_TIMEOUT) {
+                harness::Probe::Version(v) => (true, Some(v), None),
+                harness::Probe::Failed(why) => (false, None, Some(why)),
+                // Launchable but silent about its version. Not evidence of a
+                // problem; a run is still worth attempting.
+                harness::Probe::Unavailable => (true, None, None),
+            };
+        Ok(serde_json::to_value(agent_run_core::HarnessStatus {
+            harness: HARNESS_NAME.to_string(),
+            ok,
+            version,
+            origin: launcher.origin,
+            default_model,
+            hint,
+            warning,
+        })
+        .unwrap())
     }
 
     /// The CLI entry point. Detached by default; `--wait` runs inline.
@@ -977,6 +1037,7 @@ mod tests {
                 result: "答了 2 个".into(),
                 stderr_tail: String::new(),
                 artifacts: vec!["answers/a.md".into()],
+                harness: Some(SELF_PLUGIN_ID.into()),
             },
         )
         .unwrap();
@@ -1112,6 +1173,7 @@ mod tests {
             result: String::new(),
             stderr_tail: String::new(),
             artifacts: Vec::new(),
+            harness: Some(SELF_PLUGIN_ID.into()),
         };
         assert!(!run_delivered(&spec, Some(&rec(record::Status::Success))));
         std::fs::write(&f, "# x").unwrap();

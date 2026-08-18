@@ -144,27 +144,36 @@ describe('agent workspace run', () => {
 })
 
 describe('agent providers', () => {
-  const manifest = (id: string, commands: string[]) => ({
+  // The REAL view-model shape the host sends (plugin_runtime::adapter). It
+  // carries no `activation` — the v6.817.4 regression was a filter written
+  // against an invented shape that had one, which matched nothing and made the
+  // whole Agent area vanish. Anything added here must exist in `to_v1`'s output.
+  const manifest = (id: string, isAgent: boolean) => ({
     id,
-    activation: { events: commands.map((c) => `onCommand:${c}`) },
+    name: id,
+    version: '1.0.0',
+    binary: '',
+    host_capabilities: [],
+    agent_provider: isAgent,
   })
-  const AGENT = ['run-task', 'run-note', 'run-status']
+  const AGENT = true
+  const NOT_AGENT = false
 
-  function install(...ms: Array<{ id: string; activation: { events: string[] } }>) {
+  function install(...ms: Array<ReturnType<typeof manifest>>) {
     // pluginRuntime.manifests is the host's live registry; swap it for the test.
     ;(pluginRuntime as unknown as { manifests: unknown[] }).manifests = ms
   }
 
   afterEach(() => install())
 
-  it('recognizes a plugin that declares all three agent commands', () => {
+  it('recognizes a plugin the host flagged as a provider', () => {
     install(manifest('notemd.claude-agent', AGENT))
     expect(agentProviders()).toEqual(['notemd.claude-agent'])
     expect(agentPluginAvailable()).toBe(true)
   })
 
-  it('does not recognize a plugin missing one of them', () => {
-    install(manifest('notemd.half', ['run-task', 'run-status']))
+  it('does not recognize a plugin the host did not flag', () => {
+    install(manifest('notemd.half', NOT_AGENT))
     expect(agentProviders()).toEqual([])
     expect(agentPluginAvailable()).toBe(false)
   })
@@ -173,7 +182,7 @@ describe('agent providers', () => {
     install(
       manifest('notemd.zzz-agent', AGENT),
       manifest('notemd.deepseek-agent', AGENT),
-      manifest('notemd.md2pdf', ['export']),
+      manifest('notemd.md2pdf', NOT_AGENT),
       manifest('notemd.claude-agent', AGENT),
     )
     expect(agentProviders()).toEqual([

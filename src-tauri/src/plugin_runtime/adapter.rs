@@ -19,6 +19,12 @@ pub fn to_v1(m: &plugin_protocol::ManifestV2) -> Result<PluginManifest, String> 
         // build its ext→editor registry from the adapted manifest.
         "custom_editors": m.contributes.custom_editors,
         "manifest_version": 2,
+        // Whether this plugin can serve the agent slot. COMPUTED here, not
+        // re-derived by the frontend: the rule (declares the three agent
+        // commands) lives in `agent_provider` alone, so the TS side cannot
+        // drift from it. The events themselves are deliberately NOT projected —
+        // the view model carries conclusions, not raw manifest internals.
+        "agent_provider": super::agent_provider::is_provider(m),
     });
     if let Some(d) = &m.description { v["description"] = serde_json::json!(d); }
     if let Some(s) = &m.contributes.settings { v["settings"] = s.clone(); }
@@ -359,5 +365,76 @@ mod tests {
         assert!(v1.host_capabilities.is_empty());
         assert!(v1.open_windows.is_none());
         assert_eq!(v1.timeout_seconds, 30, "serde default applies");
+    }
+}
+
+#[cfg(test)]
+mod agent_provider_projection {
+    use super::*;
+
+    fn manifest(events: &[&str]) -> plugin_protocol::ManifestV2 {
+        serde_json::from_value(serde_json::json!({
+            "manifest_version": 2,
+            "id": "notemd.x",
+            "name": "X",
+            "version": "1.0.0",
+            "kind": "native",
+            "engines": { "notemd": ">=6.0.0" },
+            "activation": { "events": events },
+            "capabilities": [],
+        }))
+        .unwrap()
+    }
+
+    /// The regression this exists for: the sidecar note's Agent area asks the
+    /// VIEW MODEL whether an agent is installed. `activation` is NOT projected
+    /// (the view model carries conclusions, not manifest internals), so the
+    /// answer has to travel as its own field — deriving it frontend-side from
+    /// `activation.events` silently yields "no agents installed" and the whole
+    /// Agent area disappears. That shipped in v6.817.4.
+    #[test]
+    fn the_view_model_says_whether_a_plugin_can_serve_the_agent_slot() {
+        let agent = to_v1(&manifest(&[
+            "onCommand:run-task",
+            "onCommand:run-note",
+            "onCommand:run-status",
+        ]))
+        .unwrap();
+        assert!(agent.agent_provider);
+
+        let not_agent = to_v1(&manifest(&["onCommand:export"])).unwrap();
+        assert!(!not_agent.agent_provider);
+    }
+
+    /// It has to survive serialization: the frontend reads JSON, not the struct.
+    #[test]
+    fn the_flag_reaches_the_frontend_as_json() {
+        let v = serde_json::to_value(
+            to_v1(&manifest(&[
+                "onCommand:run-task",
+                "onCommand:run-note",
+                "onCommand:run-status",
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v["agent_provider"], true);
+        assert!(
+            v.get("activation").is_none(),
+            "the view model carries conclusions, not raw manifest internals"
+        );
+    }
+
+    /// Both shipped agent plugins, end to end through the real adapter.
+    #[test]
+    fn both_shipped_agent_plugins_project_as_providers() {
+        for path in [
+            "../plugins-src/claude-agent/manifest.v2.json",
+            "../plugins-src/deepseek-agent/manifest.v2.json",
+        ] {
+            let body = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+            let m: plugin_protocol::ManifestV2 = serde_json::from_str(&body).unwrap();
+            assert!(to_v1(&m).unwrap().agent_provider, "{path}");
+        }
     }
 }
