@@ -274,6 +274,7 @@ mod tests {
                 model: None,
                 precheck: None,
                 okf_type: None,
+                directive: Vec::new(),
             },
             task_dir,
             task_run_dir: dir.join("runs-t"),

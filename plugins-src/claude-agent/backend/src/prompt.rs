@@ -74,6 +74,7 @@ mod tests {
             model: None,
             precheck: None,
             okf_type: None,
+            directive: Vec::new(),
         }
     }
 
