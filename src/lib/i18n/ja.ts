@@ -782,6 +782,7 @@ export const ja: Record<keyof Messages, string> = {
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': '注釈',
   'ctxmenu.question': '質問',
+  'ctxmenu.trace': '出典を探す',
   'ctxmenu.bold': '太字',
   'ctxmenu.italic': 'イタリック',
   'ctxmenu.strike': '取り消し線',

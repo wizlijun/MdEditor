@@ -162,8 +162,11 @@ export interface SeedIo {
  * Note: this cannot set precheck.sh's executable bit (host.vault.write has no
  * chmod). See task-12-report.md for the consequence and mitigation.
  */
-export async function seedTaskTemplate(io: SeedIo): Promise<void> {
-  for (const [path, content] of Object.entries(TASK_FILES)) {
+export async function seedTaskTemplate(
+  io: SeedIo,
+  files: Record<string, string> = TASK_FILES,
+): Promise<void> {
+  for (const [path, content] of Object.entries(files)) {
     if (await io.exists(path)) continue
     await io.write(path, content)
   }

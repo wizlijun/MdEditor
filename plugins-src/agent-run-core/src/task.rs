@@ -37,6 +37,10 @@ pub struct TaskDef {
     /// [`crate::okf::DEFAULT_TYPE`]. Must be registered in `src/lib/okf/concept.ts`.
     #[serde(default)]
     pub okf_type: Option<String>,
+    /// 输入面指令名列表(如 ["溯源","trace"]),首项为展示名。非空 ⇒ 这个模板
+    /// 可在 idea-spark 输入面以 `/名字` 调用。不参与运行语义,纯发现/展示。
+    #[serde(default)]
+    pub directive: Vec<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -246,6 +250,16 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         write_task(v.path(), "t", r#"{"name":"T"}"#);
         assert_eq!(discover(v.path())[0].timeout_seconds, 1800);
+    }
+
+    #[test]
+    fn directive_field_parses_and_defaults_empty() {
+        let v = tempfile::tempdir().unwrap();
+        write_task(v.path(), "with", r#"{"name":"T","directive":["溯源","trace"]}"#);
+        write_task(v.path(), "without", r#"{"name":"U"}"#);
+        let got = discover(v.path());
+        assert_eq!(got[0].directive, vec!["溯源", "trace"]);
+        assert!(got[1].directive.is_empty());
     }
 
     #[test]

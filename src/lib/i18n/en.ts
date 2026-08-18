@@ -831,6 +831,7 @@ export const en = {
   'ctxmenu.wikilink': 'WikiLink',
   'ctxmenu.note': 'Note',
   'ctxmenu.question': 'Ask',
+  'ctxmenu.trace': 'Trace source',
   'ctxmenu.bold': 'Bold',
   'ctxmenu.italic': 'Italic',
   'ctxmenu.strike': 'Strikethrough',

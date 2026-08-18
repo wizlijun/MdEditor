@@ -501,6 +501,7 @@ mod tests {
                         model: Some("deepseek-v4-pro".into()),
                         precheck: None,
                         okf_type: None,
+            directive: Vec::new(),
                     },
                     task_dir: v.join("task"),
                     task_run_dir: v.join("runs-t"),

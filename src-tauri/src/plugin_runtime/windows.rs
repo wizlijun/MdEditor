@@ -143,14 +143,31 @@ pub(crate) fn window_title(
         .unwrap_or_else(|| plugin_name.to_string())
 }
 
+/// 插件窗口 URL。`seed_json` 非空时挂成 `?seed=<urlencoded>`——protocol.rs 按
+/// `url.path()` 解析资产,query 只被页面 JS 读取(预填等一次性 payload 的通道;
+/// 已开的 singleton 窗口到不了这里,那一路走 `push_to_window`)。
+pub(crate) fn plugin_window_url(plugin_id: &str, entry: &str, seed_json: Option<&str>) -> String {
+    let base = format!("plugin://{plugin_id}/{entry}");
+    match seed_json {
+        None => base,
+        Some(s) => {
+            let enc: String = url::form_urlencoded::byte_serialize(s.as_bytes()).collect();
+            format!("{base}?seed={enc}")
+        }
+    }
+}
+
 /// Open (or focus, if a singleton is already up) the window contributed under
 /// `window_id` by `plugin_id`. `locale`/`theme` are read from the app to seed
 /// the bridge. The window loads `plugin://<id>/<entry>` and gets NO capability
 /// entry, so its only host channel is the `plugin://` fetch-RPC bridge.
+/// `seed_json` rides the URL query of a freshly built window; it is ignored on
+/// the singleton-focus path (a loaded webview reads pushes, not its URL).
 pub fn open_plugin_window<R: Runtime>(
     app: &tauri::AppHandle<R>,
     plugin_id: &str,
     window_id: &str,
+    seed_json: Option<&str>,
 ) -> Result<(), String> {
     // STATE lookup: manifest (for the window contribution + fallback title).
     let (manifest, _install_dir) = super::STATE
@@ -192,7 +209,7 @@ pub fn open_plugin_window<R: Runtime>(
 
     // `plugin://<id>/<entry>` is served by super::protocol. A custom scheme uses
     // WebviewUrl::CustomProtocol (External is documented http/https-only).
-    let url = format!("plugin://{plugin_id}/{}", win.entry)
+    let url = plugin_window_url(plugin_id, &win.entry, seed_json)
         .parse()
         .map_err(|e| format!("bad plugin url: {e}"))?;
 
@@ -344,6 +361,17 @@ fn theme_id_from_settings(json: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_url_with_and_without_seed() {
+        assert_eq!(
+            plugin_window_url("a.b", "index.html", None),
+            "plugin://a.b/index.html"
+        );
+        let u = plugin_window_url("a.b", "index.html", Some(r#"{"t":"溯源 x"}"#));
+        assert!(u.starts_with("plugin://a.b/index.html?seed=%7B%22t%22"), "{u}");
+        assert!(!u.contains('"'), "JSON 必须整体转义进 query:{u}");
+    }
 
     #[test]
     fn window_label_sanitizes_dots_to_hyphens() {
