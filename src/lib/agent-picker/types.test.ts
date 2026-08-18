@@ -141,3 +141,13 @@ describe('placing the menu', () => {
     }
   })
 })
+
+describe('storage that is not there at all', () => {
+  /// A missing `localStorage` global throws a ReferenceError from a default
+  /// parameter — a different failure from "storage denied", and one that took
+  /// the whole picker down instead of falling back.
+  it('falls back instead of throwing when there is no storage', () => {
+    expect(rememberedProvider('note', ['a', 'b'], 'a', null)).toBe('a')
+    expect(() => rememberProvider('note', 'b', null)).not.toThrow()
+  })
+})

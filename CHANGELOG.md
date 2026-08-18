@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Picking a different agent in a sidecar note now actually takes.** The choice was held in a value the interface did not watch, so the tick and the "by …" label kept showing the previous agent — it looked like selecting DeepSeek had failed. The choice now applies immediately, is remembered across restarts like the other surfaces, and a run in progress keeps reporting through the agent that started it instead of following a later change.
+
 ## v6.818.4 — 2026-08-18
 
 ### Fixed

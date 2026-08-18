@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { pluginRuntime } from '../plugins/runtime.svelte'
+import { rememberProvider, rememberedProvider } from '../agent-picker/types'
 
 /**
  * The Agent workspace under the sidecar-note panel: hand ONE note to the
@@ -107,7 +108,7 @@ export function agentProviders(): string[] {
 /** Which provider this workspace dispatches to. */
 export function activeProvider(): string {
   const installed = agentProviders()
-  if (chosenProvider && installed.includes(chosenProvider)) return chosenProvider
+  if (chosen.id && installed.includes(chosen.id)) return chosen.id
   if (installed.includes(DEFAULT_PLUGIN_ID)) return DEFAULT_PLUGIN_ID
   return installed[0] ?? DEFAULT_PLUGIN_ID
 }
@@ -115,10 +116,32 @@ export function activeProvider(): string {
 /** Point the workspace at a different harness. Ignored while a run is in flight. */
 export function setProvider(id: string): void {
   if (isAgentBusy()) return
-  chosenProvider = id
+  chosen.id = id
+  rememberProvider(SURFACE, id)
 }
 
-let chosenProvider: string | null = null
+/**
+ * The chosen provider, as reactive state.
+ *
+ * It has to be `$state`: a plain module variable changes without telling
+ * anybody, so the picker's tick and its "by X" label kept rendering the old
+ * agent after a choice — which reads as "selecting DeepSeek did nothing", even
+ * though the next run would have gone there.
+ *
+ * A field on an object rather than a bare `let`, because a module-level `$state`
+ * primitive is copied at import and the reassignment would not travel.
+ */
+const chosen = $state<{ id: string | null }>({ id: null })
+
+/** This surface's name for the per-surface memory the plugins also use. */
+const SURFACE = 'note'
+
+/** Restore the last choice. Safe to call repeatedly. */
+export function restoreProvider(): void {
+  const installed = agentProviders()
+  if (!installed.length) return
+  chosen.id = rememberedProvider(SURFACE, installed, DEFAULT_PLUGIN_ID)
+}
 
 /** provider id → its harness, once asked. */
 export const harnessStatuses = $state<Record<string, HarnessStatus>>({})
@@ -163,7 +186,15 @@ type Execute = (command: string, context: unknown) => Promise<any>
 // Resolved per call, not captured once: switching provider mid-session must
 // take effect on the next run rather than at the next restart.
 const dispatch: Execute = (command, context) =>
-  invoke('plugin_v2_execute', { pluginId: activeProvider(), command, context })
+  invoke('plugin_v2_execute', {
+    // A run in flight keeps polling the agent that STARTED it. Reading the
+    // picker here instead would send `run-status` to the other plugin the
+    // moment the choice changed — which reports `lost`, because that plugin
+    // never ran anything with this id.
+    pluginId: agentRun.provider ?? activeProvider(),
+    command,
+    context,
+  })
 
 let execute: Execute = dispatch
 

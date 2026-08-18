@@ -9,6 +9,7 @@
     harnessStatuses,
     isAgentBusy,
     refreshHarnesses,
+    restoreProvider,
     setProvider,
     startNoteRun,
   } from '../../lib/agent-workspace/store.svelte'
@@ -49,6 +50,9 @@
   // run ends — a run is exactly when an expired credential becomes visible.
   $effect(() => {
     void providers.length
+    // Restore the last choice before asking the harnesses, so the picker shows
+    // the right agent on the first frame rather than snapping after the probes.
+    restoreProvider()
     void refreshHarnesses()
   })
   $effect(() => {

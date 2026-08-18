@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   activeProvider,
   agentPluginAvailable,
+  restoreProvider,
   agentProviders,
   agentRun,
   dismissRun,
@@ -211,5 +212,59 @@ describe('agent providers', () => {
   it('serves from another provider when the default is not installed', () => {
     install(manifest('notemd.deepseek-agent', AGENT))
     expect(activeProvider()).toBe('notemd.deepseek-agent')
+  })
+})
+
+describe('choosing an agent', () => {
+  const manifest = (id: string, isAgent: boolean) => ({
+    id,
+    name: id,
+    version: '1.0.0',
+    binary: '',
+    host_capabilities: [],
+    agent_provider: isAgent,
+  })
+  function install(...ms: Array<ReturnType<typeof manifest>>) {
+    ;(pluginRuntime as unknown as { manifests: unknown[] }).manifests = ms
+  }
+
+  // This suite runs without a DOM, so there is no `localStorage` global. The
+  // store must work anyway — that is the point of `safeStorage()` — so nothing
+  // here touches storage directly.
+  beforeEach(() => {
+    install(manifest('notemd.claude-agent', true), manifest('notemd.deepseek-agent', true))
+    setProvider('notemd.claude-agent')
+  })
+  afterEach(() => install())
+
+  /// The bug this exists for: picking DeepSeek looked like it did nothing.
+  it('a choice takes effect immediately', () => {
+    setProvider('notemd.deepseek-agent')
+    expect(activeProvider()).toBe('notemd.deepseek-agent')
+    setProvider('notemd.claude-agent')
+    expect(activeProvider()).toBe('notemd.claude-agent')
+  })
+
+  /// With no storage to read, restoring must leave a working provider rather
+  /// than blanking the picker.
+  it('restoring without storage keeps a usable provider', () => {
+    setProvider('notemd.deepseek-agent')
+    restoreProvider()
+    expect(['notemd.claude-agent', 'notemd.deepseek-agent']).toContain(activeProvider())
+  })
+
+  it('dispatches the run to the agent that was chosen', async () => {
+    const seen: string[] = []
+    __setExecuteForTests(async (command) => {
+      seen.push(command)
+      return { run_id: 'R1' }
+    })
+    setProvider('notemd.deepseek-agent')
+    expect(activeProvider()).toBe('notemd.deepseek-agent')
+    await startNoteRun('/v/a.note.md', () => {})
+    expect(agentRun.provider).toBe('notemd.deepseek-agent')
+    expect(seen).toContain('run-note')
+    __setExecuteForTests(null)
+    dismissRun()
   })
 })

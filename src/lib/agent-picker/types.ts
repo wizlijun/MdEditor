@@ -53,11 +53,11 @@ export function rememberedProvider(
   surface: string,
   installed: string[],
   fallback: string,
-  storage: Pick<Storage, 'getItem'> = localStorage,
+  storage: Pick<Storage, 'getItem'> | null = safeStorage(),
 ): string {
   let saved: string | null = null
   try {
-    saved = storage.getItem(providerKey(surface))
+    saved = storage?.getItem(providerKey(surface)) ?? null
   } catch {
     // Private mode, or a webview with storage disabled. The fallback is right.
   }
@@ -68,12 +68,29 @@ export function rememberedProvider(
 export function rememberProvider(
   surface: string,
   id: string,
-  storage: Pick<Storage, 'setItem'> = localStorage,
+  storage: Pick<Storage, 'setItem'> | null = safeStorage(),
 ): void {
   try {
-    storage.setItem(providerKey(surface), id)
+    storage?.setItem(providerKey(surface), id)
   } catch {
     // Not being able to remember the choice is not a reason to refuse it.
+  }
+}
+
+/**
+ * `localStorage`, or null where there is none.
+ *
+ * A default parameter of `localStorage` throws a ReferenceError outright when
+ * the global does not exist — which is not the same as storage being denied,
+ * and takes the whole picker down with it rather than falling back. Resolved
+ * per call, not once at module load, because the module may be imported before
+ * the document exists.
+ */
+function safeStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage
+  } catch {
+    return null
   }
 }
 
