@@ -16,7 +16,7 @@
   // CANONICAL COPY: src/lib/agent-picker/AgentPicker.svelte. The plugin copies
   // are kept byte-identical by a test (see agent-picker.copies.test.ts); edit
   // this file and rerun `node scripts/sync-agent-picker.mjs`.
-  import type { AgentOption } from './types'
+  import { placeMenu, type AgentOption, type Placement } from './types'
 
   let { options, selected, disabled = false, onselect, label }: {
     options: AgentOption[]
@@ -30,6 +30,28 @@
 
   let open = $state(false)
   let root: HTMLElement | undefined = $state()
+  let trigger: HTMLButtonElement | undefined = $state()
+  let menuEl: HTMLElement | undefined = $state()
+  /** Viewport coordinates; null until the menu has been measured. */
+  let at: Placement | null = $state(null)
+
+  /**
+   * Measure the button and the menu, then place it.
+   *
+   * Done after render rather than from CSS because the direction depends on how
+   * much room this particular button has — a row at the bottom of the ebook
+   * queue and one at the top need opposite answers, and CSS cannot ask.
+   */
+  function reposition() {
+    if (!trigger || !menuEl) return
+    const a = trigger.getBoundingClientRect()
+    const m = menuEl.getBoundingClientRect()
+    at = placeMenu(
+      { top: a.top, left: a.left, width: a.width, height: a.height },
+      { width: m.width, height: m.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+  }
 
   const current = $derived(options.find((o) => o.id === selected) ?? options[0])
   /** "by Claude" — the short name, because the row is not the place for detail. */
@@ -59,19 +81,34 @@
 
   // Click-away and Escape. A menu you cannot dismiss without choosing is a
   // menu that has taken a decision hostage.
+  //
+  // Scroll and resize reposition rather than close: a `fixed` menu does not
+  // travel with the button it belongs to, so left alone it would detach and
+  // float over unrelated content.
   $effect(() => {
     if (!open) return
+    at = null
+    // Measure once the menu is in the DOM. Until `at` is set it renders
+    // off-screen (see the style), so nothing flashes in the wrong corner.
+    requestAnimationFrame(reposition)
     const away = (e: MouseEvent) => {
-      if (root && !root.contains(e.target as Node)) open = false
+      const t = e.target as Node
+      if (root && !root.contains(t) && menuEl && !menuEl.contains(t)) open = false
     }
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') open = false
     }
+    const move = () => reposition()
     document.addEventListener('mousedown', away, true)
     document.addEventListener('keydown', key)
+    // `true`: catch scrolling in any ancestor, not just the document.
+    window.addEventListener('scroll', move, true)
+    window.addEventListener('resize', move)
     return () => {
       document.removeEventListener('mousedown', away, true)
       document.removeEventListener('keydown', key)
+      window.removeEventListener('scroll', move, true)
+      window.removeEventListener('resize', move)
     }
   })
 </script>
@@ -86,6 +123,7 @@
   <span class="wrap" bind:this={root}>
     <button
       class="by"
+      bind:this={trigger}
       {disabled}
       aria-haspopup="menu"
       aria-expanded={open}
@@ -97,7 +135,16 @@
     </button>
 
     {#if open}
-      <div class="menu" role="menu">
+      <!-- `position: fixed`, placed in viewport coordinates. Absolute would be
+           clipped by the first scrolling ancestor — the sidecar panel, the
+           ebook queue — long before it ever reached a window edge. -->
+      <div
+        class="menu"
+        class:up={at?.side === 'up'}
+        bind:this={menuEl}
+        role="menu"
+        style={at ? `top:${at.top}px; left:${at.left}px` : 'top:0; left:0; visibility:hidden'}
+      >
         {#each options as o (o.id)}
           <button
             role="menuitemradio"
@@ -145,10 +192,8 @@
   .one { cursor: default; padding: 2px 0; }
   .caret { font-size: 9px; opacity: 0.8; }
   .menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 50;
+    position: fixed;
+    z-index: 9998;
     min-width: 210px;
     padding: 4px;
     border-radius: 8px;

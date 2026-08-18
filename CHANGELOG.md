@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **The agent picker's menu is no longer cut off by the window.** It was positioned inside the panel it lives in, so any scrolling container around it — the sidecar note panel, the ebook queue — clipped it before it ever reached a window edge. It now opens in front of everything and chooses its own direction: downward by default, upward when the button sits near the bottom, and shifted sideways rather than off the edge in a narrow panel. It follows its button while you scroll instead of drifting away from it.
+
 ### Added
 
 - **Trace to source: find where a passage really came from.** Select text in the editor → right-click "Trace source", or type `/trace` in Idea Spark, and an agent hunts down the original source across YouTube, paper archives and western tech blogs (scope is yours to narrow in the delegation text), downloads the subtitles or article body, and writes a summary with backlinks into your vault's `traces/` folder — one click back to the document you asked from, and relative links onward into the captured full-text material. A notification opens the summary when the run finishes. YouTube subtitles use a local `yt-dlp` (without it, the report degrades to link + description and says so honestly).

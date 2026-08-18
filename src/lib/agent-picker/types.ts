@@ -80,3 +80,62 @@ export function rememberProvider(
 export function providerKey(surface: string): string {
   return `notemd.agent.provider.${surface}`
 }
+
+// ── where the menu goes ─────────────────────────────────────────────────────
+
+export interface Rect {
+  top: number
+  left: number
+  width: number
+  height: number
+}
+
+export interface Placement {
+  top: number
+  left: number
+  /** Which way it opened, for the caller's styling/animation. */
+  side: 'up' | 'down'
+}
+
+/**
+ * Place the menu relative to its button, in VIEWPORT coordinates.
+ *
+ * Viewport coordinates because the menu renders `position: fixed`: the button
+ * sits inside scrolling panels and list rows, and an absolutely-positioned menu
+ * is clipped by the first ancestor with `overflow` — no amount of choosing a
+ * direction fixes that, since the clip happens before the menu ever reaches the
+ * window edge.
+ *
+ * Preference order, and why:
+ *  - **Below, right-aligned.** The button is right-of-centre in every surface
+ *    that uses it, and reading down from what you clicked is the default habit.
+ *  - **Flip up** when there is not enough room below and more room above — a
+ *    row near the bottom of a long ebook queue is the common case.
+ *  - **Flip to left-aligned** when right-aligning would push it off the left
+ *    edge, which happens in the narrow sidecar panel.
+ *  - **Clamp** as the last resort, so a menu taller than the viewport still
+ *    has its top on screen rather than its middle.
+ */
+export function placeMenu(
+  anchor: Rect,
+  menu: { width: number; height: number },
+  viewport: { width: number; height: number },
+  gap = 4,
+  margin = 8,
+): Placement {
+  const below = anchor.top + anchor.height + gap
+  const above = anchor.top - gap - menu.height
+  const roomBelow = viewport.height - margin - below
+  const roomAbove = anchor.top - gap - margin
+
+  let side: 'up' | 'down' = 'down'
+  if (menu.height > roomBelow && roomAbove > roomBelow) side = 'up'
+  let top = side === 'down' ? below : above
+
+  // Right-aligned to the button, falling back to left-aligned, then clamped.
+  let left = anchor.left + anchor.width - menu.width
+  if (left < margin) left = anchor.left
+  left = Math.min(Math.max(left, margin), Math.max(margin, viewport.width - menu.width - margin))
+  top = Math.min(Math.max(top, margin), Math.max(margin, viewport.height - menu.height - margin))
+  return { top, left, side }
+}
