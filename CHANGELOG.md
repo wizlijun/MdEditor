@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.818.2 — 2026-08-18
+
 ### Fixed
 
 - **The agent windows no longer sit on "Checking the harness…" forever.** The banner asked the plugin for its harness over a channel the plugin only answered on for menu and relay calls, so the window's question was never answered — and a failed check rendered exactly like one still in progress, so the spinner never stopped. Both are fixed: the question is answered on the window's own channel, and a check that fails now says so.
