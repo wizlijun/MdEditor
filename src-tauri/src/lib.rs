@@ -1286,6 +1286,14 @@ pub fn run() {
                 vault_sync::init(&app.handle());
                 agents_sync::init(&app.handle());
                 search::init(&app.handle());
+                // MUST run after `search::init`: `mcp::server::build_env` reads
+                // both `search::IndexHandle` (via `search::handle`) and the
+                // `OpenState` it manages — neither is `app.manage`d until
+                // `search::init` runs, and `app.state::<T>()` panics on an
+                // unmanaged type. Reordering this would panic at startup with
+                // no clue why, since the panic site is a request handler, not
+                // this setup call.
+                mcp::server::init(&app.handle());
             }
 
             // The plugin runtime MUST be initialized before anything that reads

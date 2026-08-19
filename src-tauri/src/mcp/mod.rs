@@ -8,4 +8,6 @@
 pub mod dispatch;
 pub mod protocol;
 pub mod roots;
+pub mod server;
+pub mod shim;
 pub mod tools;

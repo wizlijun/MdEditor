@@ -48,6 +48,7 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
         Builtin::PluginRemove(id, keep_data) => market::run_remove(&id, keep_data, parsed),
         Builtin::Search(args) => super::search::run(args.with_global_json(parsed.globals.json)),
         Builtin::Doctor(args) => super::doctor::run(args.with_global_json(parsed.globals.json)),
+        Builtin::Mcp => crate::mcp::shim::run_shim(),
     }
 }
 
