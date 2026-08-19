@@ -53,9 +53,21 @@ pub struct SearchContext<'a> {
     pub opts: &'a ScanOptions,
 }
 
-/// The result of one retrieval. The CLI renders this to stdout (plain or
-/// JSON); MCP will serialize the same struct — one `SearchOutcome`, two
-/// renderers, so they cannot drift apart from each other.
+/// The result of one retrieval. `hits`/`route` feed the CLI's stdout (plain
+/// or JSON) exactly as before this struct existed; MCP will render the same
+/// two fields from the same struct, so they cannot drift apart from each
+/// other.
+///
+/// `took_ms` is the one field the CLI does NOT forward verbatim: it only
+/// covers what `execute()` itself does (resolve weights/conventions, then
+/// rank-or-fall-back) — not the index open/`ensure_built`/sweep that
+/// `cli::search::run` does *before* calling `execute()`. The CLI's own
+/// `--json` `took_ms` predates this struct and must keep meaning "the whole
+/// pipeline," so `run()` times that itself and never reads this field (see
+/// its own `started` binding). This field exists for a caller like MCP that
+/// reuses an already-hot index and never opens or sweeps one — for that
+/// caller, "how long did the query take" and "how long did the whole
+/// pipeline take" are the same question, and this is the honest answer to it.
 pub struct SearchOutcome {
     pub query: String,
     pub route: searchidx::Route,
@@ -231,6 +243,18 @@ pub fn run(args: SearchArgs) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // Measures the *whole* pipeline below (index open + ensure_built/sweep +
+    // query) — this is what `--json`'s `took_ms` has always reported, and
+    // that shape must not change now that the query itself moved into
+    // `execute()`. `execute()` has its own internal `Instant::now()` too
+    // (see `SearchOutcome::took_ms`'s doc comment), but that one only times
+    // the query — it starts *after* this function has already opened,
+    // built, and swept the index, so it deliberately measures something
+    // smaller. Do not "simplify" this to a single timer: this one feeds
+    // `print_json` below, `execute()`'s is for a caller (MCP) that reuses an
+    // already-hot index and never opens or sweeps anything, so the two
+    // numbers are honestly different things, not a duplicate.
+    let started = std::time::Instant::now();
     let opts = scan_options_for(&root);
     let mut skipped_large: Vec<SkippedFile> = Vec::new();
 
@@ -302,7 +326,11 @@ pub fn run(args: SearchArgs) -> ExitCode {
     // binary.
     let ctx = SearchContext { root: &root, index: index.as_ref(), opts: &opts };
     let outcome = execute(&ctx, &query, args.limit);
-    let (hits, route, took) = (outcome.hits, outcome.route, outcome.took_ms);
+    // `outcome.took_ms` is deliberately NOT used for the CLI's reported
+    // timing — see `started`'s doc comment above for why the two numbers
+    // are not interchangeable.
+    let (hits, route) = (outcome.hits, outcome.route);
+    let took = started.elapsed().as_millis();
     // Exit code must reflect what actually reached stdout, not what the index
     // believes exists — see `print_plain`: a `--context` hit whose recorded
     // line range no longer resolves against the on-disk file (e.g. the file
@@ -631,5 +659,42 @@ mod tests {
             ]
         );
         assert_eq!(v["path"], "notes/a.md");
+    }
+
+    /// Pins the split this refactor's fix round 1 introduced: `execute()`'s
+    /// `took_ms` must cover only the call itself, not any work the caller
+    /// did before calling it (in `run()`'s case, opening/building/sweeping
+    /// the index — see `SearchOutcome::took_ms`'s doc comment). Sleeps a
+    /// known, generous interval *before* calling `execute()` on an
+    /// already-built index, then asserts the reported `took_ms` is far
+    /// smaller than the sleep — if `execute()`'s timer ever started before
+    /// this test's sleep (e.g. someone hoists `Instant::now()` out to share
+    /// it with a caller-side timer), this fails. Asserts an order-of-
+    /// magnitude bound, not an exact number, so it isn't flaky on a slow CI
+    /// box: a single FTS query against a one-file fixture is sub-millisecond
+    /// in practice, nowhere near the 300ms sleep.
+    #[test]
+    fn execute_took_ms_excludes_time_spent_before_the_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("a.md"), "brownfox\n").unwrap();
+
+        let opts = scan_options_for(root);
+        let stamp = opts.source_globs.stamp();
+        let db_dir = tempfile::tempdir().unwrap();
+        let mut index = SearchIndex::open_at(root, &db_dir.path().join("index.db"), &stamp).unwrap();
+        index.ensure_built(&opts).unwrap();
+
+        let sleep_ms: u128 = 300;
+        std::thread::sleep(std::time::Duration::from_millis(sleep_ms as u64));
+
+        let ctx = SearchContext { root, index: Some(&index), opts: &opts };
+        let outcome = execute(&ctx, "brownfox", 20);
+        assert!(
+            outcome.took_ms < sleep_ms / 2,
+            "execute()'s took_ms ({0}ms) must not include the {sleep_ms}ms slept before calling \
+             it — a query against a one-file fixture should be a small fraction of that: {0}",
+            outcome.took_ms
+        );
     }
 }
