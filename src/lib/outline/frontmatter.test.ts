@@ -1,6 +1,6 @@
 // src/lib/outline/frontmatter.test.ts
 import { describe, it, expect } from 'vitest'
-import { touchFrontmatter, fmHas, outlineConceptType } from './frontmatter'
+import { touchFrontmatter, fmHas, outlineConceptType, signCompanionNoteText } from './frontmatter'
 import { CONCEPT_TYPE } from '../okf/concept'
 
 const NOW = '2026-07-10T09:00:00.000Z'
@@ -61,6 +61,30 @@ describe('touchFrontmatter', () => {
     })
     expect(out).toContain('by: claude-code/opus-5')
     expect(out).not.toContain('human:bruce')
+  })
+})
+
+describe('signCompanionNoteText', () => {
+  // flushDisk() 在 OutlineEditor.svelte 里用 `!existed` 判定「首次落盘=创建」,
+  // 只在那个分支调用这个纯函数;这里直接测函数本身,不发明测试专用 hook。
+  const FIRST_WRITE = '---\ntype: Outline Note\ntitle: T\ncreated: 2026-01-01T00:00:00.000Z\nupdated: 2026-01-01T00:00:00.000Z\n---\n- \n'
+
+  it('首次落盘且给了署名 —— 补 generated,body 原样保留', () => {
+    const out = signCompanionNoteText(FIRST_WRITE, { by: 'human:bruce', at: '2026-01-01T00:00:00.000Z' })
+    expect(out).toContain('generated:\n  by: human:bruce\n  at: 2026-01-01T00:00:00.000Z')
+    expect(out.endsWith('---\n- \n')).toBe(true)
+  })
+  it('已经有 generated 的文本(比如再次落盘)——不覆盖、不新增', () => {
+    const withGenerated = FIRST_WRITE.replace('created: 2026-01-01T00:00:00.000Z\n', 'created: 2026-01-01T00:00:00.000Z\ngenerated:\n  by: claude-code/opus-5\n  at: 2026-01-01T00:00:00.000Z\n')
+    const out = signCompanionNoteText(withGenerated, { by: 'human:bruce', at: '2026-08-20T10:00:00.000Z' })
+    expect(out).toBe(withGenerated)
+  })
+  it('没传署名(身份取不到)——原文一字不改', () => {
+    expect(signCompanionNoteText(FIRST_WRITE)).toBe(FIRST_WRITE)
+  })
+  it('没有 frontmatter 的文本 —— 原样返回,不硬造一段', () => {
+    const noFm = '- 只有正文\n'
+    expect(signCompanionNoteText(noFm, { by: 'human:bruce', at: '2026-01-01T00:00:00.000Z' })).toBe(noFm)
   })
 })
 

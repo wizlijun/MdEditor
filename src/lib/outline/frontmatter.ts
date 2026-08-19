@@ -2,6 +2,7 @@
 import { parseDocument, isMap } from 'yaml'
 import { CONCEPT_TYPE, touchConceptFrontmatter, yamlSafeNode, type ConceptMeta } from '../okf/concept'
 import { normalize } from '../paths'
+import { splitFrontmatterBlock } from './markdown'
 
 export interface TouchOpts {
   /** 缺 title 时写入的标题(原始标题,未 slug 化) */
@@ -44,6 +45,26 @@ export function touchFrontmatter(raw: string | null, opts: TouchOpts): string {
   if (doc.contents == null || !isMap(doc.contents)) return raw ?? ''
   doc.set('updated', yamlSafeNode(doc, now))
   return doc.toString().replace(/\n$/, '')
+}
+
+/**
+ * 伴生 `.note.md` **首次落盘**这一刻的签名 patch(spec:companion note 也是
+ * 一个创建入口)。只在 `generated` 键缺失时补一条,其余字段(type/title/
+ * created/updated/...)一律不动——这不是又一个 touchFrontmatter,它只做
+ * 一件事:给已经成型的文本追加一个可能缺失的键。
+ *
+ * 纯文本变换,不做 I/O、不判断"是不是创建":调用方(OutlineEditor.svelte
+ * 的 flushDisk)已经用 `!existed` 判定过创建时机,只在那个分支传 author;
+ * 保存路径(store.svelte.ts)永远不会调用这个函数,读它就知道红线在哪。
+ */
+export function signCompanionNoteText(text: string, author?: ConceptMeta['generated']): string {
+  if (!author) return text
+  const { frontmatter, body } = splitFrontmatterBlock(text)
+  if (frontmatter == null) return text
+  const doc = parseDocument(frontmatter)
+  if (doc.contents == null || !isMap(doc.contents) || doc.has('generated')) return text
+  doc.set('generated', yamlSafeNode(doc, author))
+  return `---\n${doc.toString().replace(/\n$/, '')}\n---\n${body}`
 }
 
 /**

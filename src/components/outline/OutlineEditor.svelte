@@ -15,6 +15,7 @@
   } from '../../lib/outline/store.svelte'
   import { sha256Hex } from '../../lib/hash'
   import { decideCompanionWrite } from '../../lib/outline/companion-write'
+  import { signCompanionNoteText } from '../../lib/outline/frontmatter'
   import { deriveAutoItems } from '../../lib/outline/derive'
   import { syncAutoItems } from '../../lib/outline/sync'
   import { childrenOf, newId, calculateOrderBetween, setNodeContent, treeHasQuestion, type OutlineNode as NodeT } from '../../lib/outline/model'
@@ -171,9 +172,18 @@
         const existing = await fs.readTextFile(target).catch(() => '')
         if (noteTextHasContent(existing)) return null
       }
+      // 首次落盘 = 创建事件(spec:companion note 也是一个创建入口)。只在
+      // !existed 时签一次 human: 署名,且只补缺失的 generated 键——保存路径
+      // (store.svelte.ts)永远不传 generated,已存在的文件不会在这里长出/换掉署名。
+      let writeText = text
+      if (!existed) {
+        const { humanActor } = await import('../../lib/okf/identity')
+        const by = await humanActor().catch(() => null)
+        if (by) writeText = signCompanionNoteText(text, { by, at: new Date().toISOString() })
+      }
       const diskText = existed ? await fs.readTextFile(target).catch(() => null) : null
       const diskHash = diskText != null ? await sha256Hex(diskText) : null
-      const ourHash = await sha256Hex(text)
+      const ourHash = await sha256Hex(writeText)
       const decision = decideCompanionWrite({
         fileExists: diskText != null, diskHash, lastHash: noteDiskHash, ourHash,
       })
@@ -184,7 +194,7 @@
         markSaved()
         return target
       }
-      await fs.writeTextFile(target, text)
+      await fs.writeTextFile(target, writeText)
       noteDiskHash = ourHash
       await markCanonicalBaseline()
       markSaved()
