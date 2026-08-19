@@ -76,7 +76,7 @@ libc = "0.2"
 # Local-time conversion for the tray's absolute "last synced HH:MM" — the unix
 # build uses `libc::localtime_r` for exactly the same thing (see `local_parts`).
 # Already compiled in the graph via tauri, so this costs nothing.
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Time"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Time", "Win32_Security", "Win32_Security_Authorization"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
 tauri-plugin-single-instance = "2"

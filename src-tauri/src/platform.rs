@@ -214,6 +214,76 @@ pub mod ipc {
         tokio::net::UnixStream::connect(endpoint()?).await
     }
 
+    /// 建一个只有当前用户能碰的管道实例。
+    ///
+    /// `ServerOptions::create` 传的是 NULL `lpSecurityAttributes`,而
+    /// `CreateNamedPipe` 文档写明:NULL 时的默认安全描述符对 Everyone 组和
+    /// 匿名账户授予**读权限** —— 同机的另一个本地账户就能读到 MCP 流量(vault
+    /// 搜索结果)。这与 unix 侧 `0600` 想达到的效果不对等,也是 spec 明写的
+    /// 「Windows 建管道时挂 SECURITY_DESCRIPTOR 限本用户」。
+    ///
+    /// SDDL `"D:P(A;;GA;;;OW)"`:受保护的 DACL(`P`,不继承)、只有一条 ACE
+    /// 把 Generic-All 授给 owner(`OW`),别的主体不出现 —— 是
+    /// `ConvertStringSecurityDescriptorToSecurityDescriptorW` 里最不容易出错的
+    /// 构造方式,免得手搭 ACL/SID 的字节布局。
+    #[cfg(windows)]
+    fn create_owner_only_pipe(
+        name: &str,
+        first_instance: bool,
+    ) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+        use std::ffi::c_void;
+        use std::os::windows::ffi::OsStrExt;
+        use tokio::net::windows::named_pipe::ServerOptions;
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        };
+        use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+
+        const SDDL: &str = "D:P(A;;GA;;;OW)";
+        let wide: Vec<u16> = std::ffi::OsStr::new(SDDL)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // Safety: `wide` is a live null-terminated UTF-16 buffer for the
+        // duration of this call; `sd` is a valid out-pointer the API fills in
+        // with a heap allocation (owned by us afterwards, freed below).
+        let ok = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                wide.as_ptr(),
+                SDDL_REVISION_1,
+                &mut sd,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut attrs = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: sd,
+            bInheritHandle: 0,
+        };
+
+        // Safety: `attrs` is a live, correctly-sized SECURITY_ATTRIBUTES for
+        // the duration of this synchronous call; `create_with_security_attributes_raw`
+        // only reads it while `CreateNamedPipe` runs.
+        let result = unsafe {
+            ServerOptions::new()
+                .first_pipe_instance(first_instance)
+                .create_with_security_attributes_raw(name, &mut attrs as *mut _ as *mut c_void)
+        };
+
+        // Safety: `sd` was allocated by the Convert…W call above and is used
+        // nowhere after this point in either branch.
+        unsafe { LocalFree(sd as _) };
+
+        result
+    }
+
     #[cfg(windows)]
     pub struct Listener {
         name: String,
@@ -223,21 +293,19 @@ pub mod ipc {
     #[cfg(windows)]
     impl Listener {
         pub async fn accept(&mut self) -> io::Result<Stream> {
-            use tokio::net::windows::named_pipe::ServerOptions;
             let server = self.next.take().ok_or_else(|| io::Error::other("listener closed"))?;
             server.connect().await?;
             // 下一个实例必须在把当前这个交出去之前建好,否则客户端会在
             // 两次 accept 之间撞上 ERROR_FILE_NOT_FOUND。
-            self.next = Some(ServerOptions::new().create(&self.name)?);
+            self.next = Some(create_owner_only_pipe(&self.name, false)?);
             Ok(server)
         }
     }
 
     #[cfg(windows)]
     pub async fn listen() -> io::Result<Listener> {
-        use tokio::net::windows::named_pipe::ServerOptions;
         let name = endpoint()?.to_string_lossy().to_string();
-        let first = ServerOptions::new().first_pipe_instance(true).create(&name)?;
+        let first = create_owner_only_pipe(&name, true)?;
         Ok(Listener { name, next: Some(first) })
     }
 
@@ -252,6 +320,24 @@ pub mod ipc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every IPC test below binds the same fixed endpoint (the unix socket
+    /// path / Windows pipe name is a single well-known constant, not
+    /// per-test), so running them concurrently makes them fight each other —
+    /// one test's `remove_file`/rebind lands mid-flight of another. This
+    /// guard makes that safe under a plain `cargo test`, not just under
+    /// `--test-threads=1`: correctness must not depend on a CLI flag a CI
+    /// script, an IDE's "run all", or a dev typing the obvious command could
+    /// omit.
+    ///
+    /// Poisoning is tolerated (`unwrap_or_else(PoisonError::into_inner)`):
+    /// one panicking IPC test must not cascade into every other IPC test
+    /// failing with a poisoned-lock error instead of its own assertion.
+    static IPC_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn ipc_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        IPC_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn allowlist_carries_no_secrets() {
@@ -289,6 +375,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ipc_endpoint_fits_sun_path() {
+        let _guard = ipc_test_guard();
         let p = super::ipc::endpoint().expect("endpoint resolvable");
         let len = p.as_os_str().len();
         assert!(len < 104, "socket path too long ({len}): {}", p.display());
@@ -298,6 +385,7 @@ mod tests {
     #[tokio::test]
     async fn ipc_round_trip() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let _guard = ipc_test_guard();
         let mut listener = super::ipc::listen().await.expect("listen");
         let server = tokio::spawn(async move {
             let stream = listener.accept().await.expect("accept");
@@ -318,6 +406,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn stale_socket_file_is_reclaimed() {
+        let _guard = ipc_test_guard();
         let path = super::ipc::endpoint().unwrap();
         let _ = std::fs::remove_file(&path);
         // 造一个「有文件但没人监听」的现场 —— 正是崩溃后留下的样子。
@@ -332,6 +421,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn live_listener_is_not_evicted() {
+        let _guard = ipc_test_guard();
         let path = super::ipc::endpoint().unwrap();
         let _ = std::fs::remove_file(&path);
         let _first = super::ipc::listen().await.expect("first listen");
