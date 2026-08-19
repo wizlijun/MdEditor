@@ -12,8 +12,13 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-fn path_of(vault_root: &Path) -> PathBuf {
+/// 返回 `.notemd/vault-id` 在给定 vault 根目录中的路径。被 MCP roots 握手使用。
+pub(crate) fn vault_id_path(vault_root: &Path) -> PathBuf {
     vault_root.join(".notemd").join("vault-id")
+}
+
+fn path_of(vault_root: &Path) -> PathBuf {
+    vault_id_path(vault_root)
 }
 
 /// 形如 `3f2504e0-4f89-41d3-9a0c-0305e82c3301` 才算数:长度、连字符位置、
