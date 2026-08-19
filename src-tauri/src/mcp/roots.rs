@@ -11,9 +11,6 @@ use crate::sotvault::vault_id;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
-#[cfg(windows)]
-use std::os::windows::ffi::OsStrExt as WindowsOsStrExt;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MountStatus { Matched, Mismatched, Unknown }
 
@@ -50,40 +47,35 @@ fn percent_decode_bytes(encoded: &str) -> Vec<u8> {
 }
 
 /// `file:///a/b` → `/a/b`, `file://localhost/a/b` → `/a/b`。
-/// 非 file: 的 root 或非 localhost 的 authority 直接跳过。
-/// 处理 percent-encoding (例如空格为 `%20`)。
+/// A root whose scheme is not `file:`, or whose authority is neither empty
+/// nor `localhost`, is not this server's business — skip it and let the
+/// caller keep looking at the remaining roots.
+/// Percent-encoding (e.g. a space as `%20`) is decoded before matching.
 fn uri_to_path(uri: &str) -> Option<PathBuf> {
-    // Strip the "file://" prefix
-    let Some(after_scheme) = uri.strip_prefix("file://") else { return None };
+    let after_scheme = uri.strip_prefix("file://")?;
 
-    // Parse authority and path
-    // file://[authority]/path
-    // Empty authority "" → file:///path (local)
-    // "localhost" → local
-    // Any other non-empty authority → remote (skip it)
-
+    // `file://[authority]/path`. An empty authority (`file:///path`) and
+    // `localhost` both mean "this machine"; anything else is a remote host
+    // this server has no business resolving, so it is skipped rather than
+    // treated as local.
+    const LOCALHOST_PREFIX: &str = "localhost/";
     let path_part = if after_scheme.starts_with('/') {
-        // file:///path — empty authority
         after_scheme
-    } else if after_scheme.starts_with("localhost/") {
-        // file://localhost/path
-        &after_scheme[9..] // len("localhost") = 9
-    } else {
-        // Check if there's a non-localhost authority
-        if let Some(slash_pos) = after_scheme.find('/') {
-            let authority = &after_scheme[..slash_pos];
-            // If authority is non-empty and not localhost, skip it
-            if !authority.is_empty() {
-                return None;
-            }
-            &after_scheme[slash_pos..]
-        } else {
-            // No slash means no path component, malformed
-            return None;
+    } else if after_scheme.starts_with(LOCALHOST_PREFIX) {
+        // Keep the leading '/' that terminates the authority, matching the
+        // `file:///path` branch above — both arms hand `path_part` a string
+        // starting with '/'.
+        &after_scheme[LOCALHOST_PREFIX.len() - 1..]
+    } else if let Some(slash_pos) = after_scheme.find('/') {
+        let authority = &after_scheme[..slash_pos];
+        if !authority.is_empty() {
+            return None; // non-localhost authority: remote, not ours
         }
+        &after_scheme[slash_pos..]
+    } else {
+        return None; // no path component at all: malformed
     };
 
-    // Percent-decode the path
     let decoded_bytes = percent_decode_bytes(path_part);
 
     // Convert decoded bytes to OsStr in a platform-specific way:
@@ -91,18 +83,28 @@ fn uri_to_path(uri: &str) -> Option<PathBuf> {
     // - Windows: paths are UTF-16; cannot represent arbitrary byte sequences. Use lossy UTF-8
     //   conversion. A mangled path will simply not match any vault-id and fall through to
     //   the existing skip behaviour, which is the safe outcome.
-    let path = {
-        #[cfg(unix)]
-        {
-            std::ffi::OsStr::from_bytes(&decoded_bytes)
-        }
-        #[cfg(windows)]
-        {
-            let string = String::from_utf8_lossy(&decoded_bytes);
-            std::ffi::OsStr::new(&string)
-        }
-    };
-    Some(PathBuf::from(path))
+    #[cfg(unix)]
+    {
+        Some(PathBuf::from(std::ffi::OsStr::from_bytes(&decoded_bytes)))
+    }
+    #[cfg(windows)]
+    {
+        let string = String::from_utf8_lossy(&decoded_bytes).into_owned();
+        // `file:///C:/Users/me/vault` decodes above to `/C:/Users/me/vault` —
+        // a leading slash in front of a drive letter, which the Windows path
+        // parser reads as "rooted but driveless" and never resolves to the
+        // real `C:\Users\me\vault`. Strip that one leading slash when what
+        // follows is a drive letter (`^[A-Za-z]:`); leave everything else
+        // (UNC-shaped or otherwise) alone.
+        let stripped = string
+            .strip_prefix('/')
+            .filter(|rest| {
+                let b = rest.as_bytes();
+                b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+            })
+            .unwrap_or(&string);
+        Some(PathBuf::from(stripped))
+    }
 }
 
 /// `None` 表示 client 未声明 roots 能力 ⇒ `Unknown`,回落 agent 自查协议。
@@ -154,10 +156,34 @@ mod tests {
     const ID: &str = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
     const OTHER: &str = "11111111-4111-8111-8111-111111111111";
 
+    /// The URI's path part, always with the leading `/` `uri_to_path` expects
+    /// right after the (empty or `localhost`) authority — on unix this is
+    /// just `path.display()` (already absolute, already starts with `/`); on
+    /// Windows `path.display()` starts with a drive letter (`C:\Users\...`),
+    /// so a `/` is prepended and backslashes are normalized to `/`, giving
+    /// the well-formed `file:///C:/Users/...` shape a real Windows MCP client
+    /// sends (this is the cfg-aware builder the drive-letter fix needs: the
+    /// old `format!("file://{}", path.display())` produced the malformed
+    /// `file://C:\Users\...` on Windows, which every test here used to build).
+    fn uri_path(path: &std::path::Path) -> String {
+        #[cfg(unix)]
+        {
+            path.display().to_string()
+        }
+        #[cfg(windows)]
+        {
+            format!("/{}", path.display().to_string().replace('\\', "/"))
+        }
+    }
+
+    fn file_uri(path: &std::path::Path) -> String {
+        format!("file://{}", uri_path(path))
+    }
+
     #[test]
     fn matching_root_is_matched() {
         let d = vault_with(ID);
-        let uri = format!("file://{}", d.path().display());
+        let uri = file_uri(d.path());
         let (st, matched) = classify(Some(&[uri.clone()]), ID);
         assert_eq!(st, MountStatus::Matched);
         assert_eq!(matched.as_deref(), Some(uri.as_str()));
@@ -166,7 +192,7 @@ mod tests {
     #[test]
     fn non_matching_roots_are_mismatched() {
         let d = vault_with(OTHER);
-        let uri = format!("file://{}", d.path().display());
+        let uri = file_uri(d.path());
         let (st, matched) = classify(Some(&[uri]), ID);
         assert_eq!(st, MountStatus::Mismatched);
         assert_eq!(matched, None);
@@ -185,9 +211,28 @@ mod tests {
     #[test]
     fn roots_without_vault_id_are_mismatched() {
         let d = tempfile::tempdir().unwrap();
-        let uri = format!("file://{}", d.path().display());
+        let uri = file_uri(d.path());
         let (st, _) = classify(Some(&[uri]), ID);
         assert_eq!(st, MountStatus::Mismatched);
+    }
+
+    /// Windows drive-letter regression: `file:///C:/Users/me/vault` must
+    /// resolve to `C:\Users\me\vault`, not the rooted-but-driveless
+    /// `\C:\Users\me\vault` the naive "strip one leading slash" parse used to
+    /// produce (that path never opens, so a correctly-mounted Windows vault
+    /// was reported `Mismatched`). Windows-only: the parsing branch under
+    /// test only exists under `cfg(windows)`, and this repo cannot cross-
+    /// compile/run for Windows (see the task report) — this pins the
+    /// behaviour for whenever it does run there.
+    #[cfg(windows)]
+    #[test]
+    fn windows_drive_letter_uri_is_matched() {
+        let d = vault_with(ID);
+        let uri = format!("file:///{}", d.path().display().to_string().replace('\\', "/"));
+        assert!(uri.starts_with("file:///") && uri[8..].as_bytes()[1] == b':', "fixture must actually look like file:///C:/...: {uri}");
+        let (st, matched) = classify(Some(&[uri.clone()]), ID);
+        assert_eq!(st, MountStatus::Matched, "a correctly mounted Windows vault must not be Mismatched");
+        assert_eq!(matched.as_deref(), Some(uri.as_str()));
     }
 
     #[test]
@@ -218,7 +263,7 @@ mod tests {
         std::fs::write(space_dir.join(".notemd/vault-id"), format!("{ID}\n")).unwrap();
 
         // file:// URI 中空格编码为 %20
-        let uri_with_encoded_space = format!("file://{}", space_dir.display().to_string().replace(" ", "%20"));
+        let uri_with_encoded_space = format!("file://{}", uri_path(&space_dir).replace(' ', "%20"));
         let (st, matched) = classify(Some(&[uri_with_encoded_space.clone()]), ID);
         assert_eq!(st, MountStatus::Matched, "percent-encoded path 应该能正确解析并匹配");
         assert_eq!(matched.as_deref(), Some(uri_with_encoded_space.as_str()));
@@ -228,8 +273,7 @@ mod tests {
     #[test]
     fn file_localhost_uri_is_recognized() {
         let d = vault_with(ID);
-        let path_str = d.path().display().to_string();
-        let uri = format!("file://localhost{}", path_str);
+        let uri = format!("file://localhost{}", uri_path(d.path()));
         let (st, matched) = classify(Some(&[uri.clone()]), ID);
         assert_eq!(st, MountStatus::Matched);
         assert_eq!(matched.as_deref(), Some(uri.as_str()));
@@ -239,9 +283,8 @@ mod tests {
     #[test]
     fn non_localhost_authority_is_skipped() {
         let d = vault_with(ID);
-        let path_str = d.path().display().to_string();
         // 构造 file://example.com/path
-        let uri = format!("file://example.com{}", path_str);
+        let uri = format!("file://example.com{}", uri_path(d.path()));
         // 这个 URI 会被跳过,由于没有其他根,结果应该是 Mismatched
         let (st, _) = classify(Some(&[uri]), ID);
         assert_eq!(st, MountStatus::Mismatched, "remote authority 应该被跳过");
@@ -253,8 +296,8 @@ mod tests {
         let good = vault_with(ID);
         let bad = tempfile::tempdir().unwrap(); // 无 .notemd/vault-id
 
-        let bad_uri = format!("file://{}", bad.path().display());
-        let good_uri = format!("file://{}", good.path().display());
+        let bad_uri = file_uri(bad.path());
+        let good_uri = file_uri(good.path());
 
         let (st, matched) = classify(Some(&[bad_uri, good_uri.clone()]), ID);
         assert_eq!(st, MountStatus::Matched, "第二个可用的根应该被找到");
@@ -265,7 +308,7 @@ mod tests {
     #[test]
     fn non_file_scheme_does_not_prevent_later_match() {
         let good = vault_with(ID);
-        let good_uri = format!("file://{}", good.path().display());
+        let good_uri = file_uri(good.path());
 
         // 一个非 file: scheme 的 URI
         let http_uri = "https://example.com/vault".to_string();

@@ -19,6 +19,15 @@ const ROOTS_DEADLINE: Duration = Duration::from_secs(5);
 pub fn run_shim() -> ExitCode {
     let rx = spawn_reader();
     let mut stdout = std::io::stdout();
+    run_loop(&rx, &mut stdout)
+}
+
+/// `run_shim`'s actual message loop, with the input channel and output
+/// sink parameterized out — purely so a test can drive it with a real
+/// `mpsc::Sender` instead of real stdin (mirrors how `request_roots` below
+/// is tested). Dropping the paired `Sender` ends the loop the same way EOF
+/// does in production.
+fn run_loop(rx: &mpsc::Receiver<Line>, stdout: &mut impl Write) -> ExitCode {
     let mut supports_roots = false;
     // `None` = 尚未问过;问过一次(不管拿没拿到)就永远是 `Some`,不再重问 ——
     // 这就是"每个连接只问一次"的全部实现,不需要额外的 bool。
@@ -28,15 +37,34 @@ pub fn run_shim() -> ExitCode {
         let msg = match line {
             Line::Msg(v) => v,
             Line::ParseError => {
-                reply_parse_error(&mut stdout);
+                reply_parse_error(stdout);
                 continue;
             }
         };
         if msg.get("id").is_none() {
             // 通知不回。但 initialize 之后 client 会发 initialized,忽略即可。
+            //
+            // `notifications/roots/list_changed` (spec §4.2) 是这里唯一需要
+            // 真的做点什么的通知:用户中途换了挂载目录,缓存的 `roots` 若
+            // 继续沿用,后续每次 `tools/call` 都会照旧宣称 matched/mismatched
+            // 针对**旧**挂载点——agent 可能因此把返回路径解析到新目录里一个
+            // 同名但不同的文件,恰是握手本身要防的事。清掉缓存,下一次
+            // `tools/call` 会照常触发 `request_roots` 重新问一遍。
+            if msg.get("method").and_then(|v| v.as_str()) == Some("notifications/roots/list_changed") {
+                roots = None;
+            }
             continue;
         }
-        let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        // 有 `id` 但没有 `method` = 这是一条 JSON-RPC *响应*,不是发给我们的
+        // 请求——例如客户端对我们早先发出的某次请求(不是这次 `request_roots`
+        // 已经等到、消费掉的那条)迟到的答复。JSON-RPC 的响应与请求共享
+        // "有 id" 这一个特征,`method` 才是能把两者分开的字段。误把它当请求
+        // 处理会算出 `method == ""`,落进下面的 catch-all,给客户端自己拥有
+        // 的 `id` 回一个 `-32601` 错误——对一条响应报错是协议违规,严格的
+        // 客户端会记录甚至直接断开会话(finding 2)。
+        let Some(method) = msg.get("method").and_then(|v| v.as_str()) else {
+            continue;
+        };
 
         if method == "initialize" {
             supports_roots = crate::mcp::server::client_supports_roots(
@@ -51,14 +79,14 @@ pub fn run_shim() -> ExitCode {
         // 攒在 `queued_tool_calls` 里,原样按到达顺序补发。
         let mut queued_tool_calls = Vec::new();
         if method == "tools/call" && supports_roots && roots.is_none() {
-            let outcome = request_roots(&rx, &mut stdout, ROOTS_DEADLINE);
+            let outcome = request_roots(rx, stdout, ROOTS_DEADLINE);
             roots = Some(outcome.roots);
             queued_tool_calls = outcome.queued_tool_calls;
         }
 
-        answer(&msg, roots.as_deref(), &mut stdout);
+        answer(&msg, roots.as_deref(), stdout);
         for q in queued_tool_calls {
-            answer(&q, roots.as_deref(), &mut stdout);
+            answer(&q, roots.as_deref(), stdout);
         }
     }
     ExitCode::SUCCESS
@@ -207,7 +235,9 @@ fn request_roots(
             return RootsOutcome { roots, queued_tool_calls };
         }
         if msg.get("id").is_none() { continue; } // 通知,不回也不需要处理
-        let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        // 有 id 没 method = 响应,不是发给我们的请求(见 `run_shim` 里同一条
+        // 判断的注释——两处必须一致,都不能把响应当成请求答复一个 -32601)。
+        let Some(method) = msg.get("method").and_then(|v| v.as_str()) else { continue };
         if method == "tools/call" {
             queued_tool_calls.push(msg);
         } else if let Some(reply) = dispatch::handle(None, &msg) {
@@ -331,6 +361,36 @@ mod tests {
         assert!(outcome.queued_tool_calls.is_empty());
     }
 
+    /// finding 2: a stray JSON-RPC *response* (has `id`, no `method` — e.g. a
+    /// late reply to some earlier request of the client's own) arriving while
+    /// waiting for `notemd-roots` must be silently skipped, not answered.
+    /// Before the fix this fell through the old `unwrap_or("")` into the
+    /// catch-all, sending the client an error keyed on an id the client
+    /// itself owns — a protocol violation strict clients may end the session
+    /// over.
+    #[test]
+    fn stray_response_while_waiting_is_ignored_not_answered() {
+        let (tx, rx) = mpsc::channel::<Line>();
+        tx.send(Line::Msg(serde_json::json!({
+            "jsonrpc": "2.0", "id": 99, "result": { "ok": true }
+        })))
+        .unwrap();
+        tx.send(Line::Msg(serde_json::json!({
+            "jsonrpc": "2.0", "id": "notemd-roots", "result": { "roots": [] }
+        })))
+        .unwrap();
+        let mut out: Vec<u8> = Vec::new();
+        let outcome = request_roots(&rx, &mut out, Duration::from_secs(5));
+        assert!(outcome.roots.is_empty());
+        assert!(outcome.queued_tool_calls.is_empty());
+        // `out` does carry our own outgoing `roots/list` request (written
+        // before the wait loop even starts) — that is not a reply to
+        // anything. What must never appear is a reply keyed on id `99`,
+        // which the client itself owns.
+        let written = String::from_utf8(out).unwrap();
+        assert!(!written.contains("99"), "a stray response must draw no reply at all: {written}");
+    }
+
     /// A garbage line arriving while waiting still gets the conventional
     /// -32700 reply, and does not derail the wait for the real response.
     #[test]
@@ -346,5 +406,51 @@ mod tests {
         assert!(outcome.roots.is_empty());
         let written = String::from_utf8(out).unwrap();
         assert!(written.contains("-32700"), "{written}");
+    }
+
+    /// finding 8 / spec §4.2: `notifications/roots/list_changed` must
+    /// invalidate the cached roots, not be silently dropped. Drives the full
+    /// `run_loop` (not just `request_roots`) through: `initialize` declaring
+    /// roots support, a `tools/call` that fetches roots once, the
+    /// `list_changed` notification, then a second `tools/call` — which must
+    /// re-fetch (a second outgoing `roots/list` request) rather than reuse
+    /// the stale cache. Before the fix, the notification fell into the
+    /// no-`method`-handling "notification, nothing to do" branch and the
+    /// second `tools/call` never asked again — every later response kept
+    /// judging the *old* mount, exactly the harm the handshake exists to
+    /// prevent.
+    #[test]
+    fn list_changed_notification_invalidates_cached_roots() {
+        let (tx, rx) = mpsc::channel::<Line>();
+        tx.send(Line::Msg(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "capabilities": { "roots": { "listChanged": true } } }
+        })))
+        .unwrap();
+        tx.send(Line::Msg(tool_call(2))).unwrap();
+        tx.send(Line::Msg(serde_json::json!({
+            "jsonrpc": "2.0", "id": "notemd-roots", "result": { "roots": [{ "uri": "file:///old" }] }
+        })))
+        .unwrap();
+        tx.send(Line::Msg(serde_json::json!({
+            "jsonrpc": "2.0", "method": "notifications/roots/list_changed"
+        })))
+        .unwrap();
+        tx.send(Line::Msg(tool_call(3))).unwrap();
+        tx.send(Line::Msg(serde_json::json!({
+            "jsonrpc": "2.0", "id": "notemd-roots", "result": { "roots": [{ "uri": "file:///new" }] }
+        })))
+        .unwrap();
+        drop(tx); // ends the loop like EOF would
+
+        let mut out: Vec<u8> = Vec::new();
+        run_loop(&rx, &mut out);
+
+        let written = String::from_utf8(out).unwrap();
+        let roots_list_requests = written.matches(r#""method":"roots/list""#).count();
+        assert_eq!(
+            roots_list_requests, 2,
+            "must re-fetch roots after list_changed instead of reusing the stale cache: {written}"
+        );
     }
 }
