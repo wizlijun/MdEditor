@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.820.1 — 2026-08-20
+
 ### Fixed
 
 - **`notemd reading-insights` no longer reports nothing at all.** It was looking for `.mdeditor/analytics/` in your vault while the app has long been writing to `.notemd/analytics/` — the directory simply wasn't there, so the report came back empty without complaint. A spot the product rename missed.

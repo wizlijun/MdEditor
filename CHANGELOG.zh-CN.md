@@ -6,6 +6,8 @@
 
 ## 未发布
 
+## v6.820.1 — 2026-08-20
+
 ### 修复
 
 - **`notemd reading-insights` 的命令行报告不再永远是空的。** 它一直在 vault 里找 `.mdeditor/analytics/`,而应用早就写到 `.notemd/analytics/` 了 —— 目录不存在,脚本就安静地报了个空。产品改名时漏掉的一处。
