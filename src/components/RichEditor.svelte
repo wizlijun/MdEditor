@@ -404,7 +404,12 @@
     }
     try {
       const { exists, writeTextFile } = await import('@tauri-apps/plugin-fs')
-      if (!(await exists(abs))) await writeTextFile(abs, '')
+      if (!(await exists(abs))) {
+        // 0 字节文件违反 OKF §4.1(必须有可解析 frontmatter + 非空 type),
+        // 而且在索引里落进最低档 Unlabeled。走和大纲面板同一条建页路径。
+        const { newWikilinkFileText } = await import('../lib/link-open')
+        await writeTextFile(abs, await newWikilinkFileText(abs))
+      }
       await openFile(abs)
     } catch (e) {
       const { showError } = await import('../lib/dialogs')

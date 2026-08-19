@@ -1,4 +1,5 @@
 import { classifyPath } from './fs'
+import { basename } from './paths'
 
 /** Matches a URI scheme prefix like `http:`, `mailto:`, `file:` (RFC 3986). */
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i
@@ -84,6 +85,25 @@ export function resolveWikilinkPath(name: string, basePath: string | undefined):
   if (!rel) return null
   if (!/\.[a-z0-9]+$/i.test(rel)) rel += '.md' // bare name → .md
   return resolveRelative(rel, basePath)
+}
+
+/**
+ * Full text for a newly-created `[[wikilink]]` target file that lives outside
+ * the vault (RichEditor's `openWikilink`). Extracted out of the component so
+ * the write path is unit-testable without mounting the editor — a 0-byte
+ * `.md` here violates OKF §4.1's only hard producer constraint (parseable
+ * frontmatter + non-empty `type`) and used to be exactly what this call site
+ * wrote. Routes through the same `newPageFileText` as the outline panel's
+ * vault-external page creation, so both paths sign identically.
+ */
+export async function newWikilinkFileText(absPath: string): Promise<string> {
+  const [{ newPageFileText }, { humanActor }] = await Promise.all([
+    import('./outline/create'),
+    import('./okf/identity'),
+  ])
+  const by = await humanActor().catch(() => null)
+  const title = basename(absPath).replace(/\.md$/i, '')
+  return newPageFileText(title, by ? { by, at: new Date().toISOString() } : undefined)
 }
 
 /**

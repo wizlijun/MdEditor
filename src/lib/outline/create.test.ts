@@ -39,6 +39,15 @@ describe('newOutlineFileText', () => {
     expect(text).toBe(`---\ntype: ${CONCEPT_TYPE.note}\ntitle: 某个概念\n---\n# 某个概念\n`)
     expect(lintText('某个概念.md', text)).toEqual([])
   })
+  it('newPageFileText 带署名时写 generated', () => {
+    const text = newPageFileText('某个概念', { by: 'human:bruce', at: '2026-08-20T10:31:00.000Z' })
+    expect(text).toContain('generated:\n  by: human:bruce')
+    expect(lintText('某个概念.md', text)).toEqual([])
+  })
+  it('保留名不因为署名而破例——index/log 仍然只写正文', () => {
+    expect(newPageFileText('index', { by: 'human:bruce', at: '2026-08-20T10:31:00.000Z' }))
+      .toBe('# index\n')
+  })
   it('never stamps a reserved file name as a concept (§8/§9)', () => {
     // [[index]] 落到 vault 外会建 index.md —— 保留名不得用作概念文档,
     // 所以只写正文、不写 frontmatter,文件名保持用户看到的样子。

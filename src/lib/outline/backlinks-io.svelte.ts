@@ -135,7 +135,9 @@ export async function openPageOrCreate(target: string): Promise<void> {
   try {
     const { exists, writeTextFile } = await import('@tauri-apps/plugin-fs')
     if (!(await exists(path).catch(() => false))) {
-      await writeTextFile(path, newPageFileText(safe))
+      const { humanActor } = await import('../okf/identity')
+      const by = await humanActor().catch(() => null)
+      await writeTextFile(path, newPageFileText(safe, by ? { by, at: new Date().toISOString() } : undefined))
     }
     await openFile(path)
   } catch (e) {
