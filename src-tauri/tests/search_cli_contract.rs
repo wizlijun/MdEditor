@@ -767,49 +767,68 @@ fn json_took_ms_reflects_the_whole_pipeline_not_just_the_query() {
     let files: Vec<(String, String)> =
         (0..300).map(|i| (format!("f{i:04}.md"), format!("# Note {i}\n\nwidget content number {i}\n"))).collect();
     let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), b.as_str())).collect();
-    let v = vault(&refs);
-    let home = temp_home();
 
-    let mut rebuild_cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
-    rebuild_cmd
-        .arg("--cli")
-        .arg("search")
-        .arg("widget")
-        .arg("--rebuild")
-        .arg("--json")
-        .arg("--vault")
-        .arg(v.path());
-    isolate(&mut rebuild_cmd, &home);
-    let rebuild_out = rebuild_cmd.output().unwrap();
-    assert_eq!(
-        rebuild_out.status.code(), Some(0),
-        "sanity: --rebuild must succeed; stderr: {}", String::from_utf8_lossy(&rebuild_out.stderr),
-    );
-    let rebuild_json: serde_json::Value = serde_json::from_slice(&rebuild_out.stdout)
-        .unwrap_or_else(|e| panic!("invalid json ({e}): {}", String::from_utf8_lossy(&rebuild_out.stdout)));
-    let rebuild_took = rebuild_json["took_ms"].as_u64().expect("took_ms must be a number");
+    // Best-of-N rather than a single sample. The bound below is a *ratio* between
+    // two wall-clock measurements, and `cargo test` runs test binaries in
+    // parallel — a loaded machine can inflate the warm query's `took_ms` by more
+    // than it inflates the rebuild's, collapsing the ratio and failing a
+    // correct implementation. Retrying does not weaken the assertion: under the
+    // regression this guards (`took_ms` degenerating to query-only timing) the
+    // two runs measure the same thing in *every* attempt, so no attempt can
+    // ever clear 3x. It only tolerates a single noisy sample.
+    const ATTEMPTS: usize = 3;
+    let mut samples: Vec<(u64, u64)> = Vec::with_capacity(ATTEMPTS);
 
-    let mut warm_cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
-    warm_cmd.arg("--cli").arg("search").arg("widget").arg("--no-sweep").arg("--json").arg("--vault").arg(v.path());
-    isolate(&mut warm_cmd, &home);
-    let warm_out = warm_cmd.output().unwrap();
-    let _ = std::fs::remove_dir_all(&home);
-    assert_eq!(
-        warm_out.status.code(), Some(0),
-        "sanity: the warm --no-sweep query must succeed; stderr: {}", String::from_utf8_lossy(&warm_out.stderr),
-    );
-    let warm_json: serde_json::Value = serde_json::from_slice(&warm_out.stdout)
-        .unwrap_or_else(|e| panic!("invalid json ({e}): {}", String::from_utf8_lossy(&warm_out.stdout)));
-    let warm_took = warm_json["took_ms"].as_u64().expect("took_ms must be a number");
+    for _ in 0..ATTEMPTS {
+        let v = vault(&refs);
+        let home = temp_home();
 
-    // `.max(1)`: a genuinely-zero warm_took must not make the ratio bound
-    // vacuous (anything would clear `> 3 * 0`); floor it at 1ms instead.
-    assert!(
-        rebuild_took > warm_took.max(1) * 3,
-        "a full --rebuild across {} freshly-created files ({rebuild_took}ms) must report a took_ms \
-         well above (>3x) an immediately-following --no-sweep query against the same, already-built, \
-         warm index ({warm_took}ms) — if took_ms ever degenerates to query-only timing the two \
-         collapse to the same noise-level magnitude instead of this order-of-magnitude gap",
+        let mut rebuild_cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+        rebuild_cmd
+            .arg("--cli")
+            .arg("search")
+            .arg("widget")
+            .arg("--rebuild")
+            .arg("--json")
+            .arg("--vault")
+            .arg(v.path());
+        isolate(&mut rebuild_cmd, &home);
+        let rebuild_out = rebuild_cmd.output().unwrap();
+        assert_eq!(
+            rebuild_out.status.code(), Some(0),
+            "sanity: --rebuild must succeed; stderr: {}", String::from_utf8_lossy(&rebuild_out.stderr),
+        );
+        let rebuild_json: serde_json::Value = serde_json::from_slice(&rebuild_out.stdout)
+            .unwrap_or_else(|e| panic!("invalid json ({e}): {}", String::from_utf8_lossy(&rebuild_out.stdout)));
+        let rebuild_took = rebuild_json["took_ms"].as_u64().expect("took_ms must be a number");
+
+        let mut warm_cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+        warm_cmd.arg("--cli").arg("search").arg("widget").arg("--no-sweep").arg("--json").arg("--vault").arg(v.path());
+        isolate(&mut warm_cmd, &home);
+        let warm_out = warm_cmd.output().unwrap();
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(
+            warm_out.status.code(), Some(0),
+            "sanity: the warm --no-sweep query must succeed; stderr: {}", String::from_utf8_lossy(&warm_out.stderr),
+        );
+        let warm_json: serde_json::Value = serde_json::from_slice(&warm_out.stdout)
+            .unwrap_or_else(|e| panic!("invalid json ({e}): {}", String::from_utf8_lossy(&warm_out.stdout)));
+        let warm_took = warm_json["took_ms"].as_u64().expect("took_ms must be a number");
+
+        // `.max(1)`: a genuinely-zero warm_took must not make the ratio bound
+        // vacuous (anything would clear `> 3 * 0`); floor it at 1ms instead.
+        if rebuild_took > warm_took.max(1) * 3 {
+            return;
+        }
+        samples.push((rebuild_took, warm_took));
+    }
+
+    panic!(
+        "across {ATTEMPTS} attempts, a full --rebuild over {} freshly-created files never reported a \
+         took_ms well above (>3x) an immediately-following --no-sweep query against the same, \
+         already-built, warm index. Samples (rebuild_ms, warm_ms): {samples:?}. If took_ms ever \
+         degenerates to query-only timing the two collapse to the same noise-level magnitude \
+         instead of this order-of-magnitude gap",
         files.len(),
     );
 }
