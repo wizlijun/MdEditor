@@ -12,6 +12,7 @@ import { maybeAutoRefresh } from './mdblock/auto-refresh'
 import { quickNoteRenameTarget } from './quick-note-name'
 import { newFileText } from './new-file'
 import { isConfiguredMemoryProjectionPath } from './memory-projection'
+import { humanActorNow } from './okf/identity'
 
 export type Mode = 'source' | 'rich'
 
@@ -96,7 +97,11 @@ const newFileTemplates = [
 ]
 
 export function newFile(): void {
-  const content = newFileText(newFileTemplates[Math.floor(Math.random() * newFileTemplates.length)])
+  const by = humanActorNow()
+  const content = newFileText(
+    newFileTemplates[Math.floor(Math.random() * newFileTemplates.length)],
+    by ? { by, at: new Date().toISOString() } : undefined,
+  )
   const currentTab = activeTab()
   const mode: Mode = currentTab && currentTab.kind !== 'image' ? currentTab.mode : 'source'
   const tab: Tab = {
