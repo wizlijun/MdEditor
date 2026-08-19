@@ -99,4 +99,43 @@ mod tests {
         let r = handle(None, &m).unwrap();
         assert_eq!(r["result"]["isError"], true);
     }
+
+    /// 端到端:`tools::search` → `protocol::tool_ok`(把 payload 字符串化进
+    /// `content[0].text`)这条粘合线之前没有任何测试用 `Some(env)` 真的走过
+    /// 一遍——之前每条 dispatch 测试都传 `None`。
+    #[test]
+    fn tools_call_search_with_env_reaches_tool_ok_payload() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("notes")).unwrap();
+        std::fs::write(d.path().join("notes/a.md"), "# T\n\nzebraquux 在这里\n").unwrap();
+        let opts = crate::cli::search::scan_options_for(d.path());
+        let mut idx =
+            searchidx::SearchIndex::open(d.path(), &opts.source_globs.stamp()).unwrap();
+        idx.ensure_built(&opts).unwrap();
+        let env = ToolEnv {
+            vault_root: d.path().to_path_buf(),
+            index: std::sync::Arc::new(std::sync::Mutex::new(Some(idx))),
+            roots: None,
+            open_phase: None,
+        };
+
+        let m = json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                        "params": { "name": "search", "arguments": { "query": "zebraquux" } } });
+        let r = handle(Some(&env), &m).unwrap();
+        assert!(r.get("error").is_none());
+        assert!(
+            r["result"]["isError"].as_bool().unwrap_or(false) == false,
+            "成功响应不该带 isError:true"
+        );
+
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(text).expect("content[0].text 必须是可解析 JSON");
+        assert_eq!(payload["vault_id"].as_str().unwrap().len(), 36);
+        assert!(payload["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["path"] == "notes/a.md"));
+    }
 }
