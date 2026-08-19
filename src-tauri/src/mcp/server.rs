@@ -5,20 +5,41 @@ use tauri::{AppHandle, Manager};
 
 use crate::mcp::{dispatch, tools::ToolEnv};
 
+/// Backoff between failed `accept()`s. A single failure is routine (a
+/// transient pipe-creation error on Windows, see `platform::ipc::Listener`'s
+/// doc comment) and self-heals on the next call; without a delay here a
+/// *sustained* failure would spin a tokio worker at 100% CPU forever, since
+/// `accept()` can return `Err` without ever awaiting real I/O.
+const ACCEPT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
 pub fn init(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut listener = match crate::platform::ipc::listen().await {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("notemd: MCP 监听未启动: {e}");
+                // A packaged app has no attached terminal — `eprintln!` here
+                // goes nowhere and MCP is then silently dead for the rest of
+                // the process's life with no trace anywhere. Route through
+                // the log bus (lands in logs/app-YYYY-MM-DD.log + the in-app
+                // log window), same channel `search`/`vault_sync` use for
+                // backend failures.
+                crate::log_cat!("mcp", "error", "MCP 监听未启动: {e}");
                 return;
             }
         };
         loop {
-            let Ok(stream) = listener.accept().await else { continue };
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move { serve_one(app, stream).await });
+            match listener.accept().await {
+                Ok(stream) => {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move { serve_one(app, stream).await });
+                }
+                Err(e) => {
+                    // Visible + throttled, not a silent instant-retry spin.
+                    crate::log_cat!("mcp", "error", "MCP accept 失败: {e}");
+                    tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
+                }
+            }
         }
     });
 }

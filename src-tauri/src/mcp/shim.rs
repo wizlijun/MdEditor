@@ -17,7 +17,18 @@ pub fn run_shim() -> ExitCode {
     let mut supports_roots = false;
     let mut roots: Option<Vec<String>> = None;
 
-    while let Some(msg) = next_msg(&mut reader) {
+    while let Some(next) = next_msg(&mut reader) {
+        let msg = match next {
+            Line::Msg(v) => v,
+            Line::ParseError => {
+                // 解析不了不该悄无声息 —— JSON-RPC 的约定答法是 -32700 带
+                // null id(读到这一步连 id 都取不出来,取不出来正是"parse
+                // error"这个错误码存在的原因)。继续读下一行仍然是对的,一行
+                // 垃圾不该终止会话。
+                reply_parse_error(&mut stdout);
+                continue;
+            }
+        };
         if msg.get("id").is_none() {
             // 通知不回。但 initialize 之后 client 会发 initialized,忽略即可。
             continue;
@@ -57,8 +68,16 @@ pub fn run_shim() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// 读下一条 JSON 消息。空行与解析不了的行直接跳过 —— 一行垃圾不该终止会话。
-fn next_msg(reader: &mut impl BufRead) -> Option<serde_json::Value> {
+/// 一行输入解析后的结果:有效 JSON,还是解析失败。空行不算数,直接跳过。
+enum Line {
+    Msg(serde_json::Value),
+    /// 非空但解析不了的一行。调用方决定怎么答(通常是 -32700 + null id),
+    /// 这里只负责识别,不负责回复 —— `next_msg` 没有 stdout 的写入权。
+    ParseError,
+}
+
+/// 读下一条输入。空行跳过;EOF 才真正结束会话。
+fn next_msg(reader: &mut impl BufRead) -> Option<Line> {
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -67,10 +86,18 @@ fn next_msg(reader: &mut impl BufRead) -> Option<serde_json::Value> {
         }
         let t = line.trim();
         if t.is_empty() { continue; }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
-            return Some(v);
-        }
+        return Some(match serde_json::from_str::<serde_json::Value>(t) {
+            Ok(v) => Line::Msg(v),
+            Err(_) => Line::ParseError,
+        });
     }
+}
+
+/// JSON-RPC 的约定答法:解析失败连 `id` 都取不出来,答 `null`。
+fn reply_parse_error(stdout: &mut impl Write) {
+    let reply = protocol::error(&serde_json::Value::Null, -32700, "parse error: invalid JSON");
+    let _ = writeln!(stdout, "{reply}");
+    let _ = stdout.flush();
 }
 
 /// 反向请求 client 的 roots。
@@ -84,7 +111,14 @@ fn request_roots(reader: &mut impl BufRead, stdout: &mut impl Write) -> Vec<Stri
     let _ = writeln!(stdout, r#"{{"jsonrpc":"2.0","id":"{ID}","method":"roots/list"}}"#);
     let _ = stdout.flush();
 
-    while let Some(msg) = next_msg(reader) {
+    while let Some(next) = next_msg(reader) {
+        let msg = match next {
+            Line::Msg(v) => v,
+            Line::ParseError => {
+                reply_parse_error(stdout);
+                continue;
+            }
+        };
         if msg.get("id").and_then(|v| v.as_str()) == Some(ID) {
             return msg
                 .get("result")

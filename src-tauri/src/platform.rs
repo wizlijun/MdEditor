@@ -293,11 +293,32 @@ pub mod ipc {
     #[cfg(windows)]
     impl Listener {
         pub async fn accept(&mut self) -> io::Result<Stream> {
-            let server = self.next.take().ok_or_else(|| io::Error::other("listener closed"))?;
+            // `self.next` reads `None` in two cases: this is the very first
+            // call (never true — `listen()` always seeds it), or a *previous*
+            // call left it empty because preparing the spare instance failed
+            // below. Retrying the creation here — instead of treating `None`
+            // as "listener permanently closed" — is what makes a transient
+            // failure self-healing rather than fatal: without this, one
+            // failed `CreateNamedPipe` bricks every later `accept()` forever
+            // (each returns `Err` instantly, with no I/O wait), spinning the
+            // caller's loop at 100% CPU with MCP silently dead.
+            let server = match self.next.take() {
+                Some(s) => s,
+                None => create_owner_only_pipe(&self.name, false)?,
+            };
             server.connect().await?;
             // 下一个实例必须在把当前这个交出去之前建好,否则客户端会在
             // 两次 accept 之间撞上 ERROR_FILE_NOT_FOUND。
-            self.next = Some(create_owner_only_pipe(&self.name, false)?);
+            //
+            // If THIS creation fails, do not let it discard the connection
+            // we just successfully accepted above (`server.connect()` already
+            // succeeded — a real client is on the other end of `server`).
+            // Leave `self.next` as `None` instead: the next `accept()` call
+            // retries creation via the branch above. The failure still
+            // surfaces to the caller — on the *next* call, if the retry also
+            // fails — so it is never silently lost, just not blamed on the
+            // connection that already succeeded.
+            self.next = create_owner_only_pipe(&self.name, false).ok();
             Ok(server)
         }
     }
