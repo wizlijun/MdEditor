@@ -963,23 +963,23 @@
   })
 
   $effect(() => {
-    window.addEventListener('mdeditor:find-search', onFindSearch)
-    window.addEventListener('mdeditor:find-next', onFindNext)
-    window.addEventListener('mdeditor:find-prev', onFindPrev)
-    window.addEventListener('mdeditor:find-replace', onFindReplace)
-    window.addEventListener('mdeditor:find-replace-all', onFindReplaceAll)
-    window.addEventListener('mdeditor:find-clear', onFindClear)
-    window.addEventListener('mdeditor:new-file-select', onNewFileSelect)
-    window.addEventListener('mdeditor:select-all', onSelectAll)
+    window.addEventListener('notemd:find-search', onFindSearch)
+    window.addEventListener('notemd:find-next', onFindNext)
+    window.addEventListener('notemd:find-prev', onFindPrev)
+    window.addEventListener('notemd:find-replace', onFindReplace)
+    window.addEventListener('notemd:find-replace-all', onFindReplaceAll)
+    window.addEventListener('notemd:find-clear', onFindClear)
+    window.addEventListener('notemd:new-file-select', onNewFileSelect)
+    window.addEventListener('notemd:select-all', onSelectAll)
     return () => {
-      window.removeEventListener('mdeditor:find-search', onFindSearch)
-      window.removeEventListener('mdeditor:find-next', onFindNext)
-      window.removeEventListener('mdeditor:find-prev', onFindPrev)
-      window.removeEventListener('mdeditor:find-replace', onFindReplace)
-      window.removeEventListener('mdeditor:find-replace-all', onFindReplaceAll)
-      window.removeEventListener('mdeditor:find-clear', onFindClear)
-      window.removeEventListener('mdeditor:new-file-select', onNewFileSelect)
-      window.removeEventListener('mdeditor:select-all', onSelectAll)
+      window.removeEventListener('notemd:find-search', onFindSearch)
+      window.removeEventListener('notemd:find-next', onFindNext)
+      window.removeEventListener('notemd:find-prev', onFindPrev)
+      window.removeEventListener('notemd:find-replace', onFindReplace)
+      window.removeEventListener('notemd:find-replace-all', onFindReplaceAll)
+      window.removeEventListener('notemd:find-clear', onFindClear)
+      window.removeEventListener('notemd:new-file-select', onNewFileSelect)
+      window.removeEventListener('notemd:select-all', onSelectAll)
     }
   })
 
@@ -1140,7 +1140,7 @@
           lastSync = md
           setContent(tabId, md)
         }
-        window.addEventListener('mdeditor:flush-doc', _flushDocHandler)
+        window.addEventListener('notemd:flush-doc', _flushDocHandler)
 
         // Tauri native file drag-drop
         setupDragDrop().then(fn => { _dragDropUnlisten = fn }).catch(console.warn)
@@ -1201,8 +1201,8 @@
       if (status !== 'mounted' || !editor || tab.filePath !== d.path) return
       focusRichEditorAtEnd(editor.view as any)
     }
-    window.addEventListener('mdeditor:focus-editor', onFocusEditor)
-    return () => window.removeEventListener('mdeditor:focus-editor', onFocusEditor)
+    window.addEventListener('notemd:focus-editor', onFocusEditor)
+    return () => window.removeEventListener('notemd:focus-editor', onFocusEditor)
   })
 
   onDestroy(() => {
@@ -1215,7 +1215,7 @@
     _pmEl?.removeEventListener('input',   checkSlashMenu as EventListener)
     _pmEl?.removeEventListener('contextmenu', handleRichContextMenu as EventListener)
     _dragDropUnlisten?.()
-    if (_flushDocHandler) window.removeEventListener('mdeditor:flush-doc', _flushDocHandler)
+    if (_flushDocHandler) window.removeEventListener('notemd:flush-doc', _flushDocHandler)
     host?.removeEventListener('dragover', _dragoverHandler!)
     host?.removeEventListener('drop',     _dropHandler!)
     if (editor) {

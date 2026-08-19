@@ -679,7 +679,7 @@ describe('tabs', () => {
     expect(m.isDirty(t.id)).toBe(true)
   })
 
-  it('newFile dispatches mdeditor:new-file-select when window is available', async () => {
+  it('newFile dispatches notemd:new-file-select when window is available', async () => {
     const dispatched: CustomEvent[] = []
     ;(globalThis as Record<string, unknown>).window = {
       dispatchEvent: (e: CustomEvent) => dispatched.push(e),
@@ -689,7 +689,7 @@ describe('tabs', () => {
       m.newFile()
       await new Promise((r) => setTimeout(r, 0))  // flush queueMicrotask
       expect(dispatched.length).toBe(1)
-      expect(dispatched[0].type).toBe('mdeditor:new-file-select')
+      expect(dispatched[0].type).toBe('notemd:new-file-select')
       expect(dispatched[0].detail.start).toBeGreaterThan(0)
       expect(dispatched[0].detail.end).toBeGreaterThan(dispatched[0].detail.start)
     } finally {
@@ -747,7 +747,7 @@ describe('tabs', () => {
     expect(m.isDirty(t.id)).toBe(false)
   })
 
-  it('restoreVersion dispatches mdeditor:auto-reloaded so every editor rebuilds', async () => {
+  it('restoreVersion dispatches notemd:auto-reloaded so every editor rebuilds', async () => {
     // OutlineEditor (and SourceView cursor-preserve) only refresh on this event;
     // reusing the auto-reload path is what makes restore visible in all modes.
     const fs = await import('./fs')
@@ -764,7 +764,7 @@ describe('tabs', () => {
     } finally {
       delete (globalThis as Record<string, unknown>).window
     }
-    const evt = dispatched.find((e) => e.type === 'mdeditor:auto-reloaded')
+    const evt = dispatched.find((e) => e.type === 'notemd:auto-reloaded')
     expect(evt).toBeTruthy()
     expect(evt!.detail.tabId).toBe(t.id)
     expect(evt!.detail.newContent).toBe('V1')

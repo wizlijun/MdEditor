@@ -1,4 +1,4 @@
-use mdeditor_lib::themes::appearance::{resolve_appearance, title_case_from_stem, Appearance};
+use notemd_lib::themes::appearance::{resolve_appearance, title_case_from_stem, Appearance};
 
 #[test]
 fn explicit_header_wins() {

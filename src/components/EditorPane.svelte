@@ -83,8 +83,8 @@
       }
       restoreScroll()
     }
-    window.addEventListener('mdeditor:auto-reloaded', handler)
-    return () => window.removeEventListener('mdeditor:auto-reloaded', handler)
+    window.addEventListener('notemd:auto-reloaded', handler)
+    return () => window.removeEventListener('notemd:auto-reloaded', handler)
   })
 </script>
 

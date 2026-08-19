@@ -76,7 +76,7 @@ fn drain_pending_files(state: tauri::State<'_, PendingFiles>) -> Vec<String> {
     state.0.lock().unwrap().drain(..).collect()
 }
 
-/// Append a diagnostic line to /tmp/mdeditor.log in debug builds (best-effort).
+/// Append a diagnostic line to /tmp/notemd.log in debug builds (best-effort).
 /// Also pushes to the unified log bus in all builds.
 #[allow(unused_variables)]
 fn dlog(msg: &str) {
@@ -89,7 +89,7 @@ fn dlog(msg: &str) {
             // `std::env::temp_dir()`, not a literal "/tmp": on Windows that
             // path resolves to `\tmp` on the current drive, which normally does
             // not exist, so the debug log silently went nowhere.
-            .open(std::env::temp_dir().join("mdeditor.log"))
+            .open(std::env::temp_dir().join("notemd.log"))
         {
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -594,7 +594,7 @@ async fn editor_open_remote_buffer(app: tauri::AppHandle, remote_path: String, c
     Ok(())
 }
 
-/// Frontend diagnostics into /tmp/mdeditor.log (debug builds only; dlog is a
+/// Frontend diagnostics into /tmp/notemd.log (debug builds only; dlog is a
 /// release no-op). Lets unattended GUI verification trace webview-side state.
 #[tauri::command]
 fn dbg_log(msg: String) {
@@ -2184,7 +2184,7 @@ fn build_menu<R: tauri::Runtime>(
         // (same pattern as `find`/`new`/`save` below) lets each mounted editor
         // apply the SAME select-all it already exposes via its right-click
         // menu (RichEditor: ProseMirror AllSelection; SourceView: textarea
-        // .select()) — see `mdeditor:select-all` in App.svelte.
+        // .select()) — see `notemd:select-all` in App.svelte.
         .item(&MenuItemBuilder::with_id("select-all", menu_label(locale, "sys.selectAll")).accelerator("CmdOrCtrl+A").build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id("find", menu_label(locale, "edit.find")).accelerator("CmdOrCtrl+F").build(app)?)

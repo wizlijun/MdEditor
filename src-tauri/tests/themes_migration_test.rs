@@ -1,4 +1,4 @@
-use mdeditor_lib::themes::migration::copy_built_ins_if_missing;
+use notemd_lib::themes::migration::copy_built_ins_if_missing;
 use std::fs;
 use tempfile::tempdir;
 

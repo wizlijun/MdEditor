@@ -459,7 +459,7 @@ pub const INDEX_UPDATED_EVENT: &str = "search://index-updated";
 
 /// Log *why* a file left the index (or that it was, in fact, indexed) rather
 /// than collapsing every outcome into a bare bool — distinguishing "gone",
-/// "oversized" and "excluded" matters for someone reading `/tmp/mdeditor.log`
+/// "oversized" and "excluded" matters for someone reading `/tmp/notemd.log`
 /// after the fact.
 fn log_outcome(rel: &str, outcome: IndexOutcome) {
     match outcome {

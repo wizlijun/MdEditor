@@ -6,11 +6,11 @@
 //! activation — and for plugin_runtime::host_api (Task 7): capability-gated
 //! `host.toast` dispatched through `make_sink` wired into a real process.
 
-use mdeditor_lib::plugin_runtime::host_api::make_sink;
-use mdeditor_lib::plugin_runtime::lifecycle::{
+use notemd_lib::plugin_runtime::host_api::make_sink;
+use notemd_lib::plugin_runtime::lifecycle::{
     startup_activation, PhaseKind, PluginLifecycle, SpawnCtx, Trigger,
 };
-use mdeditor_lib::plugin_runtime::process::{initialize_and_activate, HostSink, PluginProcess};
+use notemd_lib::plugin_runtime::process::{initialize_and_activate, HostSink, PluginProcess};
 use plugin_protocol as proto;
 use serde_json::json;
 use std::path::PathBuf;
@@ -621,7 +621,7 @@ async fn startup_activation_activates_only_matching_plugins() {
 
 /// Build a `ToastEmitter` that records every payload it sees.
 fn recording_toast_emitter()
--> (mdeditor_lib::plugin_runtime::host_api::ToastEmitter, Arc<Mutex<Vec<serde_json::Value>>>)
+-> (notemd_lib::plugin_runtime::host_api::ToastEmitter, Arc<Mutex<Vec<serde_json::Value>>>)
 {
     let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
     let seen_in = seen.clone();
@@ -646,7 +646,7 @@ async fn host_api_make_sink_dispatches_toast_through_real_process() {
     // Build a real capability-gated sink for plugin id "test.ok" with "toast" cap.
     // 子项目②b added a `UiPoster` arg (host.ui.post); this test doesn't exercise
     // it, so pass a no-op poster.
-    let ui_poster: mdeditor_lib::plugin_runtime::host_api::UiPoster =
+    let ui_poster: notemd_lib::plugin_runtime::host_api::UiPoster =
         Arc::new(|_window_id: &str, _payload: &serde_json::Value| {});
     let sink: HostSink = make_sink(
         "test.ok".into(),
@@ -707,7 +707,7 @@ async fn host_api_make_sink_dispatches_toast_through_real_process() {
 /// Build a `UiPoster` that records every `(window_id, payload)` it receives.
 #[allow(clippy::type_complexity)]
 fn recording_ui_poster() -> (
-    mdeditor_lib::plugin_runtime::host_api::UiPoster,
+    notemd_lib::plugin_runtime::host_api::UiPoster,
     Arc<Mutex<Vec<(String, serde_json::Value)>>>,
 ) {
     let seen: Arc<Mutex<Vec<(String, serde_json::Value)>>> = Arc::new(Mutex::new(Vec::new()));

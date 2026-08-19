@@ -1,4 +1,4 @@
-use mdeditor_lib::themes::id::{is_valid_theme_id, ThemeIdError};
+use notemd_lib::themes::id::{is_valid_theme_id, ThemeIdError};
 
 #[test]
 fn accepts_simple_lowercase() {

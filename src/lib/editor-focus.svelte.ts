@@ -13,7 +13,7 @@ const pending = new Set<string>()
 export function requestEditorFocus(path: string): void {
   if (path) pending.add(path)
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('mdeditor:focus-editor', { detail: { path } }))
+    window.dispatchEvent(new CustomEvent('notemd:focus-editor', { detail: { path } }))
   }
 }
 

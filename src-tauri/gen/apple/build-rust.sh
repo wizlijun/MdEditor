@@ -87,7 +87,7 @@ SRC_TAURI=$(cd "${SRCROOT}/../.." && pwd)
 # shellcheck disable=SC2086
 (cd "$SRC_TAURI" && cargo build $PROFILE_FLAG --target "$TARGET" --lib --features tauri/custom-protocol)
 
-SRC="${SRC_TAURI}/target/${TARGET}/${PROFILE_DIR}/libmdeditor_lib.a"
+SRC="${SRC_TAURI}/target/${TARGET}/${PROFILE_DIR}/libnotemd_lib.a"
 DST_DIR="${SRCROOT}/Externals/${ARCHS}/${CONFIGURATION}"
 
 if [ ! -f "$SRC" ]; then

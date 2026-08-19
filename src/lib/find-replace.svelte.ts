@@ -38,7 +38,7 @@ export function closeFind() {
   findState.replacement = ''
   findState.matchCount = 0
   findState.currentMatch = 0
-  window.dispatchEvent(new CustomEvent('mdeditor:find-clear'))
+  window.dispatchEvent(new CustomEvent('notemd:find-clear'))
 }
 
 export function buildRegex(state: FindState): RegExp | null {

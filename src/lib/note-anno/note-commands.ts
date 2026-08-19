@@ -17,7 +17,7 @@ export function sanitizeNote(s: string): string {
  * tab content, so annotation edits would otherwise lag behind.
  */
 function requestDocFlush() {
-  window.dispatchEvent(new CustomEvent('mdeditor:flush-doc'))
+  window.dispatchEvent(new CustomEvent('notemd:flush-doc'))
 }
 
 /**

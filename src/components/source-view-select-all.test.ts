@@ -3,8 +3,8 @@
  */
 // Regression: the native Edit-menu "Select All" (PredefinedMenuItem) no-ops in
 // rich mode (see src-tauri/src/lib.rs for why), so it was replaced with a
-// custom menu item that broadcasts `mdeditor:select-all` — the same convention
-// already used for `mdeditor:find-*`. This pins down SourceView's side: its
+// custom menu item that broadcasts `notemd:select-all` — the same convention
+// already used for `notemd:find-*`. This pins down SourceView's side: its
 // listener must focus + select the whole textarea.
 import { describe, it, expect, vi } from 'vitest'
 
@@ -26,7 +26,7 @@ async function mountSourceView() {
 }
 
 describe('SourceView select-all integration', () => {
-  it('selects the entire textarea value on mdeditor:select-all', async () => {
+  it('selects the entire textarea value on notemd:select-all', async () => {
     const target = await mountSourceView()
     const textarea = target.querySelector('textarea') as HTMLTextAreaElement
     // Start from an empty, un-focused selection so the assertion below can't
@@ -34,7 +34,7 @@ describe('SourceView select-all integration', () => {
     textarea.setSelectionRange(0, 0)
     textarea.blur()
 
-    window.dispatchEvent(new CustomEvent('mdeditor:select-all'))
+    window.dispatchEvent(new CustomEvent('notemd:select-all'))
 
     expect(document.activeElement).toBe(textarea)
     expect(textarea.selectionStart).toBe(0)

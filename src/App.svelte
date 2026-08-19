@@ -338,7 +338,7 @@
             void syncSlots()
           })
         })
-        ;(window as unknown as { __mdeditor_stop_theme?: () => void }).__mdeditor_stop_theme = () => {
+        ;(window as unknown as { __notemd_stop_theme?: () => void }).__notemd_stop_theme = () => {
           stopSystem()
           stopWatch()
           stopThemesWatch()
@@ -583,8 +583,8 @@
         case 'find':        openFind(); break
         case 'find-replace': openFindReplace(); break
         // Custom item (not PredefinedMenuItem::select_all — see lib.rs): broadcast
-        // to whichever editor is mounted, same convention as mdeditor:find-*.
-        case 'select-all':  window.dispatchEvent(new CustomEvent('mdeditor:select-all')); break
+        // to whichever editor is mounted, same convention as notemd:find-*.
+        case 'select-all':  window.dispatchEvent(new CustomEvent('notemd:select-all')); break
         case 'zoom-in':     document.documentElement.style.fontSize = `${Math.min(200, (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) + 2)}px`; break
         case 'zoom-out':    document.documentElement.style.fontSize = `${Math.max(10, (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) - 2)}px`; break
         case 'zoom-reset':  document.documentElement.style.fontSize = ''; break
