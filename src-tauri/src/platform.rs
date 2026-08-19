@@ -479,6 +479,28 @@ pub mod ipc {
             assert!(path.exists(), "对方的 socket 文件必须还在");
             let _ = std::fs::remove_file(&path);
         }
+
+        /// finding 7: `listen_at` sets `0o600` on the socket file right
+        /// after `bind()`, and until now nothing checked the result — that
+        /// one line is the entire enforcement of spec §7's "access control
+        /// is the OS" argument (unix: file permissions). If it silently
+        /// stopped firing, every local account on the machine could connect
+        /// and read vault search results over the pipe. Trivial and
+        /// isolated now that `listen_at` takes a path.
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn socket_file_is_owner_only() {
+            use std::os::unix::fs::PermissionsExt;
+            let path = scratch_path("owner-only-perms");
+            let _ = std::fs::remove_file(&path);
+            let _l = listen_at(&path).await.expect("listen");
+            let mode = std::fs::metadata(&path).expect("socket file must exist").permissions().mode();
+            assert_eq!(
+                mode & 0o777, 0o600,
+                "socket file must be 0600 (owner read/write only), got {:o}", mode & 0o777
+            );
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 

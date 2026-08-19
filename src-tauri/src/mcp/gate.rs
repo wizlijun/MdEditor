@@ -25,13 +25,6 @@ pub fn enabled_from_settings(app: &AppHandle) -> bool {
     enabled_from_value(&serde_json::json!({ "mcpServer": v }))
 }
 
-/// 「held handle」≠「活着」的那一位判定。纯函数,只吃 `JoinHandle::
-/// is_finished()` 的结果 —— 抽出来是为了不需要真的 `AppHandle` 就能单测
-/// `start` 的这一步判断(见 `tests::finished_handle_is_not_considered_running`)。
-fn is_still_running(finished: bool) -> bool {
-    !finished
-}
-
 /// Abort a held task handle. Harmless if it has already finished (the
 /// dead-handle recovery path in `start_with`) or is genuinely still running
 /// (the explicit `stop()` path) — both call this on their way out. This is
@@ -94,7 +87,7 @@ fn remove_socket_file(path: &std::path::Path) {
 fn start_with(spawn: impl FnOnce() -> tauri::async_runtime::JoinHandle<()>) {
     let mut guard = TASK.lock().unwrap();
     if let Some(h) = guard.as_ref() {
-        if is_still_running(h.inner().is_finished()) {
+        if !h.inner().is_finished() {
             return;
         }
         abort(guard.take());
@@ -175,13 +168,6 @@ mod tests {
     fn malformed_value_falls_back_to_enabled() {
         assert!(enabled_from_value(&json!({ "mcpServer": { "enabled": "no" } })));
         assert!(enabled_from_value(&json!({ "mcpServer": 42 })));
-    }
-
-    /// `is_still_running` 是整个修复的判断核心,单独钉住:跑完了就不算在跑。
-    #[test]
-    fn finished_handle_is_not_considered_running() {
-        assert!(!is_still_running(true));
-        assert!(is_still_running(false));
     }
 
     /// 核心回归用例(review round 1 发现):`start_with` 手上的 handle 一旦已经

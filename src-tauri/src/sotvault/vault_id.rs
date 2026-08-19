@@ -17,10 +17,6 @@ pub(crate) fn vault_id_path(vault_root: &Path) -> PathBuf {
     vault_root.join(".notemd").join("vault-id")
 }
 
-fn path_of(vault_root: &Path) -> PathBuf {
-    vault_id_path(vault_root)
-}
-
 /// 形如 `3f2504e0-4f89-41d3-9a0c-0305e82c3301` 才算数:长度、连字符位置、
 /// 版本位(第 15 个字符)、变体位(第 20 个字符)全部校验。宽松一点就等于
 /// 让一次误写永久污染 vault 身份。
@@ -51,7 +47,7 @@ fn generate() -> String {
 
 /// 读取,不存在或不合法则创建。幂等。
 pub fn ensure(vault_root: &Path) -> io::Result<String> {
-    let p = path_of(vault_root);
+    let p = vault_id_path(vault_root);
     if let Ok(raw) = std::fs::read_to_string(&p) {
         let trimmed = raw.trim();
         if is_uuid_v4(trimmed) {

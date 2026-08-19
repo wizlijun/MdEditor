@@ -94,6 +94,17 @@ pub fn execute(ctx: &SearchContext, query: &str, limit: usize) -> SearchOutcome 
         Some(Ok(a)) => (a.hits, a.route),
         Some(Err(e)) => {
             eprintln!("notemd: query failed ({e}); scanning files directly");
+            // `execute()` is shared with the packaged GUI (via
+            // `mcp::tools::search`), whose stderr goes nowhere — the
+            // `eprintln!` above is silent there, same failure class as
+            // `server.rs`'s listener-startup error. `push_cat_quiet` (not
+            // `push_cat`) so this doesn't ALSO print a second line after the
+            // CLI's own `eprintln!` above, which would change what `notemd
+            // search` prints.
+            crate::log_bus::push_cat_quiet(
+                "search", "backend", "warn",
+                format!("query failed ({e}); scanning files directly"),
+            );
             (fallback_scan(ctx.root, query, limit, ctx.opts), searchidx::Route::Scan)
         }
         None => (fallback_scan(ctx.root, query, limit, ctx.opts), searchidx::Route::Scan),
