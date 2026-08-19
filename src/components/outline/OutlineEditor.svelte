@@ -11,7 +11,7 @@
   import {
     outline, attachDoc, detach, serializeDoc, setChangeSink, regenerate,
     bump, markDirty, markSynced, markSaved, pinnedIds, setSelection, clearSelection, companionPathFor,
-    isEffectivelyEmptyTree, noteTextHasContent,
+    isEffectivelyEmptyTree, noteTextHasContent, signOutlineFrontmatterOnCreate,
   } from '../../lib/outline/store.svelte'
   import { sha256Hex } from '../../lib/hash'
   import { decideCompanionWrite } from '../../lib/outline/companion-write'
@@ -153,6 +153,10 @@
     const text = diskPending ?? (forceCreate ? serializeDoc() : null)
     diskPending = null
     if (text == null) return null
+    // 早拍快照:签名前有两次 await(动态 import + humanActor()),全局单例树
+    // 可能已被切到另一篇文档——同 line 252/668 的 docPath!==path 守卫惯例,
+    // 签名时机用这份早拍的路径核对,而不是届时可能已经翻篇的 notePath。
+    const path = notePath
     try {
       const fs = await import('@tauri-apps/plugin-fs')
       // 空大纲不触发建家/同步(浏览/空树不得污染,也不得把源拷进 vault)
@@ -175,11 +179,18 @@
       // 首次落盘 = 创建事件(spec:companion note 也是一个创建入口)。只在
       // !existed 时签一次 human: 署名,且只补缺失的 generated 键——保存路径
       // (store.svelte.ts)永远不传 generated,已存在的文件不会在这里长出/换掉署名。
+      // 签名同时补两处:落盘字节(writeText)+ 内存树(signOutlineFrontmatterOnCreate),
+      // 否则内存那份下一次 serializeDoc() 时没有这个键,下一次保存就把磁盘上刚写的
+      // 签名覆盖掉——内存树才是序列化的唯一事实源,不同步就是白签。
       let writeText = text
       if (!existed) {
         const { humanActor } = await import('../../lib/okf/identity')
         const by = await humanActor().catch(() => null)
-        if (by) writeText = signCompanionNoteText(text, { by, at: new Date().toISOString() })
+        if (by) {
+          const author = { by, at: new Date().toISOString() }
+          writeText = signCompanionNoteText(text, author)
+          signOutlineFrontmatterOnCreate(path, author)
+        }
       }
       const diskText = existed ? await fs.readTextFile(target).catch(() => null) : null
       const diskHash = diskText != null ? await sha256Hex(diskText) : null

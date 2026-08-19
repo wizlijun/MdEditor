@@ -1,6 +1,6 @@
 // src/lib/outline/frontmatter.test.ts
 import { describe, it, expect } from 'vitest'
-import { touchFrontmatter, fmHas, outlineConceptType, signCompanionNoteText } from './frontmatter'
+import { touchFrontmatter, fmHas, outlineConceptType, signCompanionNoteText, signFrontmatterBlock } from './frontmatter'
 import { CONCEPT_TYPE } from '../okf/concept'
 
 const NOW = '2026-07-10T09:00:00.000Z'
@@ -85,6 +85,30 @@ describe('signCompanionNoteText', () => {
   it('没有 frontmatter 的文本 —— 原样返回,不硬造一段', () => {
     const noFm = '- 只有正文\n'
     expect(signCompanionNoteText(noFm, { by: 'human:bruce', at: '2026-01-01T00:00:00.000Z' })).toBe(noFm)
+  })
+})
+
+describe('signFrontmatterBlock', () => {
+  // signCompanionNoteText 落盘用的是完整文本;signOutlineFrontmatterOnCreate
+  // (store.svelte.ts)patch 的是 OutlineTree.frontmatter —— 同一种 raw 形状
+  // (不含 --- 分隔符),两处 patch 逻辑必须是同一个函数,不能各写一份。
+  const RAW = 'type: Outline Note\ntitle: T\ncreated: 2026-01-01T00:00:00.000Z'
+
+  it('缺 generated 且给了署名 —— 补一条,其余字段不动', () => {
+    const out = signFrontmatterBlock(RAW, { by: 'human:bruce', at: '2026-01-01T00:00:00.000Z' })
+    expect(out).toContain('generated:\n  by: human:bruce\n  at: 2026-01-01T00:00:00.000Z')
+    expect(out).toContain('type: Outline Note')
+    expect(out).toContain('title: T')
+  })
+  it('已有 generated ——不覆盖', () => {
+    const withGenerated = `${RAW}\ngenerated:\n  by: claude-code/opus-5\n  at: 2026-01-01T00:00:00.000Z`
+    expect(signFrontmatterBlock(withGenerated, { by: 'human:bruce', at: '2026-08-20T10:00:00.000Z' })).toBe(withGenerated)
+  })
+  it('没传署名——原样返回', () => {
+    expect(signFrontmatterBlock(RAW)).toBe(RAW)
+  })
+  it('raw 为 null——原样返回 null,不凭空造出一段 frontmatter', () => {
+    expect(signFrontmatterBlock(null, { by: 'human:bruce', at: '2026-01-01T00:00:00.000Z' })).toBeNull()
   })
 })
 
