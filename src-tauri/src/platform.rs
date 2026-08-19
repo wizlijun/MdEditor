@@ -141,6 +141,114 @@ pub fn test_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io
     }
 }
 
+/// 外壳(`notemd mcp`)与 GUI 主程序之间的那一跳。
+///
+/// **不开 TCP 端口**:UDS / Named Pipe 都不在网络栈上,于是端口占用、
+/// DNS rebinding、CSRF、Origin 校验这一整类问题连同 token 一起消失,
+/// 访问控制交给 OS(unix 文件权限 / Windows 管道 ACL)。
+///
+/// 不用「AF_UNIX 一把梭」:Windows 10 1803+ 虽支持 AF_UNIX,但 tokio 在
+/// Windows 上不支持它(`UnixStream` 由 `cfg(unix)` 门死),得另引
+/// `uds_windows` 再自建异步桥 —— 所谓统一只是换个地方分叉,还多背一个依赖。
+pub mod ipc {
+    use std::io;
+    use std::path::PathBuf;
+
+    #[cfg(unix)]
+    pub type Stream = tokio::net::UnixStream;
+    #[cfg(windows)]
+    pub type Stream = tokio::net::windows::named_pipe::NamedPipeServer;
+
+    /// unix:socket 文件路径。Linux 用 `$XDG_RUNTIME_DIR`(runtime socket
+    /// 不属于 config 目录),macOS 无此变量,回落 App Support。
+    #[cfg(unix)]
+    pub fn endpoint() -> io::Result<PathBuf> {
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .map(|d| d.join("notemd"))
+            .or_else(|| dirs::config_dir().map(|d| d.join(crate::app_dirs::BUNDLE_ID)))
+            .ok_or_else(|| io::Error::other("no runtime or config dir"))?;
+        std::fs::create_dir_all(&base)?;
+        Ok(base.join("mcp.sock"))
+    }
+
+    #[cfg(windows)]
+    pub fn endpoint() -> io::Result<PathBuf> {
+        Ok(PathBuf::from(r"\\.\pipe\net.notemd.app.mcp"))
+    }
+
+    #[cfg(unix)]
+    pub struct Listener(tokio::net::UnixListener);
+
+    #[cfg(unix)]
+    impl Listener {
+        pub async fn accept(&mut self) -> io::Result<Stream> {
+            let (s, _) = self.0.accept().await?;
+            Ok(s)
+        }
+    }
+
+    /// unix 的僵尸 socket:主程序崩溃后 `.sock` 残留,再 `bind()` 得
+    /// `EADDRINUSE`。**先 connect 探活,被拒才 unlink** —— 无脑删会踢掉一个
+    /// 正在健康运行的实例(spec §3.4)。
+    #[cfg(unix)]
+    pub async fn listen() -> io::Result<Listener> {
+        use std::os::unix::fs::PermissionsExt;
+        let path = endpoint()?;
+        if path.exists() {
+            match tokio::net::UnixStream::connect(&path).await {
+                Ok(_) => return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "another note.md instance is already serving MCP",
+                )),
+                Err(_) => { let _ = std::fs::remove_file(&path); }
+            }
+        }
+        let l = tokio::net::UnixListener::bind(&path)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        Ok(Listener(l))
+    }
+
+    #[cfg(unix)]
+    pub async fn connect() -> io::Result<tokio::net::UnixStream> {
+        tokio::net::UnixStream::connect(endpoint()?).await
+    }
+
+    #[cfg(windows)]
+    pub struct Listener {
+        name: String,
+        next: Option<tokio::net::windows::named_pipe::NamedPipeServer>,
+    }
+
+    #[cfg(windows)]
+    impl Listener {
+        pub async fn accept(&mut self) -> io::Result<Stream> {
+            use tokio::net::windows::named_pipe::ServerOptions;
+            let server = self.next.take().ok_or_else(|| io::Error::other("listener closed"))?;
+            server.connect().await?;
+            // 下一个实例必须在把当前这个交出去之前建好,否则客户端会在
+            // 两次 accept 之间撞上 ERROR_FILE_NOT_FOUND。
+            self.next = Some(ServerOptions::new().create(&self.name)?);
+            Ok(server)
+        }
+    }
+
+    #[cfg(windows)]
+    pub async fn listen() -> io::Result<Listener> {
+        use tokio::net::windows::named_pipe::ServerOptions;
+        let name = endpoint()?.to_string_lossy().to_string();
+        let first = ServerOptions::new().first_pipe_instance(true).create(&name)?;
+        Ok(Listener { name, next: Some(first) })
+    }
+
+    #[cfg(windows)]
+    pub async fn connect() -> io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        let name = endpoint()?.to_string_lossy().to_string();
+        ClientOptions::new().open(&name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +282,62 @@ mod tests {
         // Smoke: the builder must compile and be usable on every platform.
         let c = command("git");
         assert_eq!(c.get_program(), std::ffi::OsStr::new("git"));
+    }
+
+    /// 端点路径必须在 `sun_path` 上限之内 —— macOS 104 / Linux 108 字节。
+    /// 用户名可以很长,这里断言而不是假设(spec §3.4)。
+    #[cfg(unix)]
+    #[test]
+    fn ipc_endpoint_fits_sun_path() {
+        let p = super::ipc::endpoint().expect("endpoint resolvable");
+        let len = p.as_os_str().len();
+        assert!(len < 104, "socket path too long ({len}): {}", p.display());
+    }
+
+    /// 一个往返:listen → connect → 写一帧 → 读回来。两个平台各自的分支都要过。
+    #[tokio::test]
+    async fn ipc_round_trip() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let mut listener = super::ipc::listen().await.expect("listen");
+        let server = tokio::spawn(async move {
+            let stream = listener.accept().await.expect("accept");
+            let (r, mut w) = tokio::io::split(stream);
+            let mut lines = BufReader::new(r).lines();
+            let line = lines.next_line().await.unwrap().unwrap();
+            w.write_all(format!("echo:{line}\n").as_bytes()).await.unwrap();
+        });
+        let stream = super::ipc::connect().await.expect("connect");
+        let (r, mut w) = tokio::io::split(stream);
+        w.write_all(b"hello\n").await.unwrap();
+        let mut lines = BufReader::new(r).lines();
+        assert_eq!(lines.next_line().await.unwrap().unwrap(), "echo:hello");
+        server.await.unwrap();
+    }
+
+    /// 僵尸 socket:主程序崩溃后文件残留,再 listen 必须能重建(spec §3.4、§8.6)。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stale_socket_file_is_reclaimed() {
+        let path = super::ipc::endpoint().unwrap();
+        let _ = std::fs::remove_file(&path);
+        // 造一个「有文件但没人监听」的现场 —— 正是崩溃后留下的样子。
+        std::fs::write(&path, b"").unwrap();
+        assert!(path.exists());
+        let _l = super::ipc::listen().await.expect("必须能回收僵尸 socket");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 反过来:已有实例在健康监听时,第二次 listen 必须**失败**而不是把
+    /// 对方的 socket 删掉。无脑 unlink 会踢掉一个正在服务的实例。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_listener_is_not_evicted() {
+        let path = super::ipc::endpoint().unwrap();
+        let _ = std::fs::remove_file(&path);
+        let _first = super::ipc::listen().await.expect("first listen");
+        let second = super::ipc::listen().await;
+        assert!(second.is_err(), "健康实例不得被顶掉");
+        assert!(path.exists(), "对方的 socket 文件必须还在");
+        let _ = std::fs::remove_file(&path);
     }
 }
