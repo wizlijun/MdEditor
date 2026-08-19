@@ -154,6 +154,22 @@ agent 最常用的是 `notemd search`。它有意长成 grep 的样子，`rg` �
 面板一致（`tag:` `type:` `path:` `ext:` `after:` `before:` `page:[[X]]`
 `origin:`）。详见 `notemd help search`。
 
+## MCP：给不方便调 shell 的 agent
+
+note.md 也能以 [MCP](https://modelcontextprotocol.io) 的方式说话（走 stdio），
+于是 agent 可以把 `search` / `vault_info` 当工具调用，而不必去 shell 里执行
+`notemd search`。两个工具都是只读的，查的是 CLI 与应用本来就共用的那份热索引。
+
+在 agent 客户端的配置里注册：
+
+```json
+{"command": "notemd", "args": ["mcp"]}
+```
+
+不开 TCP 端口：外壳与正在运行的 note.md 进程之间走本机套接字（macOS/Linux 是
+Unix domain socket，Windows 是命名管道），不碰网络。默认开启，不想跑可以在
+设置里关掉。
+
 ## 发布（仓库维护者）
 
 ```bash
