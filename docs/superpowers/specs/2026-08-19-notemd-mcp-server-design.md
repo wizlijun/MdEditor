@@ -40,6 +40,7 @@ Codex,谁擅长什么按活儿派)、**agent 建议你确认**(MCP 只读,永不
    「内部 spawn `notemd search --json`」)。
 4. **IPC**:外壳与主程序之间走 Unix domain socket(Windows 用 Named Pipe),
    不开 TCP 端口。
+5. **随主程序启动,可在设置里关**:设置项 `mcpServer.enabled`,**默认开**。
 
 ## 一、架构与进程边界
 
@@ -235,6 +236,30 @@ MCP 端更换 vault 配置而 agent 不知情。
 工具描述里必须写清 `provenance.agent_by` 与 `origin` 的含义,使 agent 能按 vault
 `AGENTS.md` 的既有教义行事(见到 `agent_by` 就追 sources、需要时过滤 `origin:human`)。
 
+## 五之二、启动与设置开关
+
+MCP 监听**随主程序启动**,设置项 `mcpServer.enabled` **默认开**。
+
+**为什么默认开**:这个能力的价值全在「agent 想用的时候它就在」。默认关意味着
+用户要先知道有这个功能、再去找到开关——而绝大多数人是在 agent 报「找不到 notemd」
+之后才会去翻设置。默认开的代价近乎为零:不开端口、不联网、只读、进程内复用
+已有索引,没开 note.md 时连监听都不存在。
+
+**为什么放应用级 `settings.json` 而不是 `.notemd/settings.json`**:后者随 git 同步,
+而「这台机器要不要对外提供 MCP」是**每台机器各自的事**——台式机上开、笔记本上关
+是完全合理的配置,同步过去反而是错的。
+
+| 项 | 值 |
+|---|---|
+| 存储 | 应用级 `settings.json`(`app.store("settings.json")`,Rust 与前端同源) |
+| 键 | `mcpServer.enabled` |
+| 默认 | `true`。**键缺失即视为开**——老用户升级上来不需要做任何事 |
+| 生效 | 立即。关 → 停止监听并清掉 socket 文件;开 → 重新监听。不需要重启 |
+| UI | 设置页,与其他功能开关同列;副文案给出注册用的那行 JSON,方便直接复制 |
+
+关闭时 socket 文件必须**一并删除**,否则外壳会连上一个不再有人 accept 的端点然后挂住;
+外壳侧同时要有超时,不能无限等(见 §6)。
+
 ## 六、错误与降级
 
 每一级失败都降级,不把整轮工具调用判死:
@@ -242,6 +267,8 @@ MCP 端更换 vault 配置而 agent 不知情。
 | 情形 | 行为 |
 |---|---|
 | note.md 未运行 / IPC 连不上 | `isError: true`,文案说明启动即可用 |
+| MCP 被用户关掉 | 同上——外壳无从区分「没开」与「关了」,文案两种都提 |
+| 端点在但无人 accept(残留 socket) | 外壳侧 5s 超时 → `isError: true`,不无限等 |
 | 未配置 vault | `isError: true`,指向 Preferences |
 | 索引不可用 | `execute()` 已有的 `fallback_scan` 兜底;响应里 `route` 如实标 `scan` |
 | freshness sweep 超时 | 按现有索引作答,响应里标注(与 CLI 的 2s 上限同一条路径) |
@@ -278,7 +305,7 @@ MCP 端更换 vault 配置而 agent 不知情。
 | P2 | `.notemd/vault-id` 生成 + 幂等测试 | ✅ 不依赖 MCP |
 | P3 | `platform.rs` 里的 IPC 层(UDS / Named Pipe) | ✅ 冒烟往返 |
 | P4 | `notemd mcp` 外壳 + `mcp::server` + 两个工具 + roots 握手 | ✅ 端到端 |
-| P5 | 设置页开关与状态;文档(README、AGENTS.md 模板) | ✅ |
+| P5 | 设置页开关(`mcpServer.enabled`,默认开)与即时生效;文档(README、AGENTS.md 模板) | ✅ |
 
 P1/P2 互不依赖,可并行。
 
