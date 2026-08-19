@@ -6,3 +6,4 @@
 //! 两边不可能对不上 —— 不靠约定,靠编译。
 
 pub mod protocol;
+pub mod roots;
