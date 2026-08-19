@@ -37,6 +37,90 @@ impl SearchArgs {
     }
 }
 
+/// One retrieval's environment: an already-opened index plus that vault's
+/// scan settings.
+///
+/// `index` is **borrowed**, not opened here: the GUI main process already
+/// holds a `search::IndexHandle` (`Arc<Mutex<Option<SearchIndex>>>`) and the
+/// MCP server (once it exists) must reuse that handle rather than open a
+/// second sqlite connection onto the same file. The index's lifecycle stays
+/// with whichever host constructed it — `execute()` only answers "given an
+/// already-open index, how do we query it and how do we degrade" — the CLI
+/// below is the one adapter that opens its own.
+pub struct SearchContext<'a> {
+    pub root: &'a Path,
+    pub index: Option<&'a SearchIndex>,
+    pub opts: &'a ScanOptions,
+}
+
+/// The result of one retrieval. The CLI renders this to stdout (plain or
+/// JSON); MCP will serialize the same struct — one `SearchOutcome`, two
+/// renderers, so they cannot drift apart from each other.
+pub struct SearchOutcome {
+    pub query: String,
+    pub route: searchidx::Route,
+    pub took_ms: u128,
+    pub hits: Vec<searchidx::Hit>,
+}
+
+/// Runs one retrieval. Does not print, does not decide an exit code, does not
+/// touch the index's lifecycle — those are all host concerns.
+///
+/// `weights` / `conventions` are resolved in here rather than accepted as
+/// parameters: `search::options` declares `weights_for`/`conventions_for` as
+/// the single construction point for each, and letting every caller resolve
+/// its own copy is exactly how the two adapters would drift (see this
+/// module's other single-construction-point comments, e.g. `scan_options_for`).
+pub fn execute(ctx: &SearchContext, query: &str, limit: usize) -> SearchOutcome {
+    let started = std::time::Instant::now();
+    let weights = weights_for(ctx.root);
+    let conventions = conventions_for(ctx.root);
+    let (hits, route) = match ctx
+        .index
+        .map(|i| i.search_ranked(query, limit, &Limits::full(), &weights, &conventions))
+    {
+        Some(Ok(a)) => (a.hits, a.route),
+        Some(Err(e)) => {
+            eprintln!("notemd: query failed ({e}); scanning files directly");
+            (fallback_scan(ctx.root, query, limit, ctx.opts), searchidx::Route::Scan)
+        }
+        None => (fallback_scan(ctx.root, query, limit, ctx.opts), searchidx::Route::Scan),
+    };
+    SearchOutcome { query: query.to_string(), route, took_ms: started.elapsed().as_millis(), hits }
+}
+
+/// The JSON shape of a single hit. Shared by `print_json` and (eventually)
+/// MCP, so the two surfaces can never carry a different field set for the
+/// same underlying `Hit`.
+pub fn hit_to_json(h: &searchidx::Hit) -> serde_json::Value {
+    serde_json::json!({
+        "path": h.path,
+        "line": h.line,
+        "line_end": h.line_end,
+        "text": h.text,
+        "score": h.score,
+        "breadcrumb": h.breadcrumb,
+        "level": h.level,
+        "doc_date": h.doc_date,
+        "source_ref": h.source_ref(),
+        // Surfaced so an agent can prefer primary sources over
+        // AI-authored summaries of them (design spec §5-T3).
+        "provenance": { "agent_by": h.agent_by, "human_verified": h.human_verified },
+        // Task 6: the tier `origin::derive` classified this file into
+        // (`"human"`/`"derived"`/`"source"`), alongside — not inside —
+        // `provenance`: `provenance` is per-document signals read from
+        // this file's own frontmatter, `origin` is the category-level
+        // tier `score_of` actually ranks on (see its doc comment on
+        // why the two are independent, not double-counted).
+        "origin": h.origin.as_str(),
+        // 已衰减到今天的注意力分钟数(read + 1.5×edit,30 天半衰期)。
+        // 与 `provenance` 并列而不是嵌进去:`provenance` 是文档自己
+        // 声明的来源,这个是**你**在它身上花掉的时间 —— 一个来自
+        // 文件内容,一个来自你的行为,不该混成一个对象。
+        "attention_minutes": h.attention_minutes,
+    })
+}
+
 /// Flags map onto the same filter syntax the UI uses: `--tag x` is sugar for
 /// `tag:x`, so there is one grammar to learn and one parser to maintain
 /// (`searchidx::query::parse` is the only place that interprets it).
@@ -147,7 +231,6 @@ pub fn run(args: SearchArgs) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    let started = std::time::Instant::now();
     let opts = scan_options_for(&root);
     let mut skipped_large: Vec<SkippedFile> = Vec::new();
 
@@ -212,21 +295,14 @@ pub fn run(args: SearchArgs) -> ExitCode {
     // production caller, so a configured `searchWeights` never actually
     // reached a `notemd search` query. `weights_for` is the single
     // construction point (task C-T8) both adapters must go through.
-    let weights = weights_for(&root);
-    let conventions = conventions_for(&root);
-    let (hits, route) = match index
-        .as_ref()
-        .map(|i| i.search_ranked(&query, args.limit, &Limits::full(), &weights, &conventions))
-    {
-        Some(Ok(a)) => (a.hits, a.route),
-        Some(Err(e)) => {
-            eprintln!("notemd: query failed ({e}); scanning files directly");
-            (fallback_scan(&root, &query, args.limit, &opts), searchidx::Route::Scan)
-        }
-        None => (fallback_scan(&root, &query, args.limit, &opts), searchidx::Route::Scan),
-    };
-
-    let took = started.elapsed().as_millis();
+    //
+    // `execute()` is the shared core: it resolves `weights`/`conventions`,
+    // ranks-or-falls-back, and times itself — the same function MCP will
+    // call against a borrowed `IndexHandle` instead of shelling out to this
+    // binary.
+    let ctx = SearchContext { root: &root, index: index.as_ref(), opts: &opts };
+    let outcome = execute(&ctx, &query, args.limit);
+    let (hits, route, took) = (outcome.hits, outcome.route, outcome.took_ms);
     // Exit code must reflect what actually reached stdout, not what the index
     // believes exists — see `print_plain`: a `--context` hit whose recorded
     // line range no longer resolves against the on-disk file (e.g. the file
@@ -435,37 +511,9 @@ fn one_line(text: &str) -> String {
 }
 
 fn print_json(query: &str, route: searchidx::Route, took_ms: u128, hits: &[searchidx::Hit]) {
-    let arr: Vec<serde_json::Value> = hits
-        .iter()
-        .map(|h| {
-            serde_json::json!({
-                "path": h.path,
-                "line": h.line,
-                "line_end": h.line_end,
-                "text": h.text,
-                "score": h.score,
-                "breadcrumb": h.breadcrumb,
-                "level": h.level,
-                "doc_date": h.doc_date,
-                "source_ref": h.source_ref(),
-                // Surfaced so an agent can prefer primary sources over
-                // AI-authored summaries of them (design spec §5-T3).
-                "provenance": { "agent_by": h.agent_by, "human_verified": h.human_verified },
-                // Task 6: the tier `origin::derive` classified this file into
-                // (`"human"`/`"derived"`/`"source"`), alongside — not inside —
-                // `provenance`: `provenance` is per-document signals read from
-                // this file's own frontmatter, `origin` is the category-level
-                // tier `score_of` actually ranks on (see its doc comment on
-                // why the two are independent, not double-counted).
-                "origin": h.origin.as_str(),
-                // 已衰减到今天的注意力分钟数(read + 1.5×edit,30 天半衰期)。
-                // 与 `provenance` 并列而不是嵌进去:`provenance` 是文档自己
-                // 声明的来源,这个是**你**在它身上花掉的时间 —— 一个来自
-                // 文件内容,一个来自你的行为,不该混成一个对象。
-                "attention_minutes": h.attention_minutes,
-            })
-        })
-        .collect();
+    // `hit_to_json` is the single construction point for a hit's JSON shape —
+    // shared with MCP, so the two surfaces cannot silently drift apart.
+    let arr: Vec<serde_json::Value> = hits.iter().map(hit_to_json).collect();
     println!(
         "{}",
         serde_json::json!({
@@ -533,5 +581,55 @@ fn report_stats(index: Option<&SearchIndex>, json: bool, skipped: &[SkippedFile]
             eprintln!("notemd: {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `execute()` 产出的每条命中,序列化后必须与 `--json` 里那条逐字段相等。
+    /// 这是 CLI 与 MCP 之间唯一的一致性保证:两边渲染同一份 `SearchOutcome`。
+    ///
+    /// Uses `open_at` with a scratch db path (the convention every other
+    /// index-backed unit test in this crate follows — see `search::mod`'s
+    /// own test module) rather than `SearchIndex::open`, which resolves its
+    /// db path off the real `HOME`/`dirs::data_local_dir()`: a unit test has
+    /// no business writing into the developer's actual app-data directory,
+    /// and `cargo test` runs this file's tests on multiple threads by
+    /// default.
+    #[test]
+    fn execute_hits_serialize_identically_to_cli_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(
+            root.join("notes/a.md"),
+            "---\ntype: Note\n---\n\n# 标题\n\nquickbrownfox 出现在这里\n",
+        )
+        .unwrap();
+
+        let opts = scan_options_for(root);
+        let stamp = opts.source_globs.stamp();
+        let db_dir = tempfile::tempdir().unwrap();
+        let mut index = SearchIndex::open_at(root, &db_dir.path().join("index.db"), &stamp).unwrap();
+        index.ensure_built(&opts).unwrap();
+
+        let ctx = SearchContext { root, index: Some(&index), opts: &opts };
+        let outcome = execute(&ctx, "quickbrownfox", 20);
+        assert!(!outcome.hits.is_empty(), "fixture must produce a hit");
+
+        let v = hit_to_json(&outcome.hits[0]);
+        // 字段集必须与 print_json 拼的完全一致,一个不多一个不少。
+        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "attention_minutes", "breadcrumb", "doc_date", "level", "line",
+                "line_end", "origin", "path", "provenance", "score", "source_ref", "text",
+            ]
+        );
+        assert_eq!(v["path"], "notes/a.md");
     }
 }
