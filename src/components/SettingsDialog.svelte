@@ -1062,6 +1062,22 @@
               />
               {t('settings.dailyNotes.label')}
             </label>
+            <label class="row" style="margin-top: 6px;">
+              <input
+                type="checkbox"
+                bind:checked={settings.mcpServer.enabled}
+                onchange={async () => {
+                  await saveSettings()
+                  try {
+                    await invoke('set_mcp_enabled', { enabled: settings.mcpServer.enabled })
+                  } catch (e) { console.warn('[settings] set_mcp_enabled:', e) }
+                }}
+              />
+              {t('settings.mcp.enable')}
+            </label>
+            <p class="desc" style="margin-top: 4px;">
+              {t('settings.mcp.hint')} <code>{'{"command": "notemd", "args": ["mcp"]}'}</code>
+            </p>
           {/if}
         </section>
 

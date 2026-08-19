@@ -6,6 +6,7 @@
 //! 两边不可能对不上 —— 不靠约定,靠编译。
 
 pub mod dispatch;
+pub mod gate;
 pub mod protocol;
 pub mod roots;
 pub mod server;

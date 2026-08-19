@@ -78,6 +78,42 @@ describe('settings', () => {
 
 })
 
+describe('mcpServer setting', () => {
+  it('defaults to enabled when the key is absent (upgrading user, no settings.json entry)', async () => {
+    mockGet.mockResolvedValue(undefined)
+    const { loadSettings, settings } = await import('./settings.svelte')
+    await loadSettings()
+    expect(settings.mcpServer.enabled).toBe(true)
+  })
+
+  it('respects an explicit `enabled: false`', async () => {
+    mockGet.mockImplementation(async (key: string) =>
+      key === 'mcpServer' ? { enabled: false } : undefined,
+    )
+    const { loadSettings, settings } = await import('./settings.svelte')
+    await loadSettings()
+    expect(settings.mcpServer.enabled).toBe(false)
+  })
+
+  it('respects an explicit `enabled: true`', async () => {
+    mockGet.mockImplementation(async (key: string) =>
+      key === 'mcpServer' ? { enabled: true } : undefined,
+    )
+    const { loadSettings, settings } = await import('./settings.svelte')
+    await loadSettings()
+    expect(settings.mcpServer.enabled).toBe(true)
+  })
+
+  it('saveSettings persists mcpServer.enabled', async () => {
+    mockGet.mockResolvedValue(undefined)
+    const { loadSettings, saveSettings, settings } = await import('./settings.svelte')
+    await loadSettings()
+    settings.mcpServer.enabled = false
+    await saveSettings()
+    expect(mockSet).toHaveBeenCalledWith('mcpServer', { enabled: false })
+  })
+})
+
 describe('recent files: opened-at, tombstones, removal', () => {
   it('pushRecentFile records a lastOpened timestamp for the path', async () => {
     const { pushRecentFile, getRecentOpenedAt } = await import('./settings.svelte')

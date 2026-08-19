@@ -1231,6 +1231,7 @@ pub fn run() {
                 open_daily_notes_window,
                 open_search_logs_window,
                 set_daily_notes_enabled,
+                mcp::gate::set_mcp_enabled,
                 editor_show_and_open_path,
                 editor_open_remote_buffer,
                 update_recent_menu,

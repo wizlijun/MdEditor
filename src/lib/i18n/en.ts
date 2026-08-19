@@ -699,6 +699,9 @@ export const en = {
   'settings.searchExcludeDirsHint': 'One per line, relative to the vault root. Empty by default.',
   'settings.autoSaveLabel': 'Enable auto-save (writes after 800 ms idle)',
   'settings.dailyNotes.label': 'Daily Notes window',
+  'settings.mcp.enable': 'Serve this vault to agents over MCP',
+  'settings.mcp.hint':
+    'Lets Claude Code, Cowork and Codex search your vault with note.md’s ranking instead of grep. Read-only; no network port is opened. Register it with:',
 
   // Settings → Default app
   'settings.defaultApp.heading': 'Default app for text & code files',

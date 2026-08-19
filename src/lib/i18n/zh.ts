@@ -683,6 +683,9 @@ export const zh: Record<keyof Messages, string> = {
   'settings.searchExcludeDirsHint': '每行一个，相对 vault 根目录。默认为空。',
   'settings.autoSaveLabel': '启用自动保存（空闲 800 毫秒后写入）',
   'settings.dailyNotes.label': '每日笔记窗口',
+  'settings.mcp.enable': '通过 MCP 向 agent 提供本 vault 检索',
+  'settings.mcp.hint':
+    '让 Claude Code、Cowork、Codex 用 note.md 的排序检索 vault,而不是靠 grep。只读;不开网络端口。注册方式:',
 
   // Settings → Default app
   'settings.defaultApp.heading': '文本与代码文件的默认应用',

@@ -12,8 +12,10 @@ use crate::mcp::{dispatch, tools::ToolEnv};
 /// `accept()` can return `Err` without ever awaiting real I/O.
 const ACCEPT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
-pub fn init(app: &AppHandle) {
-    let app = app.clone();
+/// Spawn the accept loop. Returns the `JoinHandle` so `gate::stop` can abort
+/// it — that's the whole reason this is split out of `init` rather than
+/// fired-and-forgotten like it used to be.
+pub fn spawn_listener(app: AppHandle) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
         let mut listener = match crate::platform::ipc::listen().await {
             Ok(l) => l,
@@ -41,7 +43,15 @@ pub fn init(app: &AppHandle) {
                 }
             }
         }
-    });
+    })
+}
+
+/// Startup entry point: serve only if the `mcpServer.enabled` setting allows
+/// it (missing key defaults to on — see `gate::enabled_from_settings`).
+pub fn init(app: &AppHandle) {
+    if crate::mcp::gate::enabled_from_settings(app) {
+        crate::mcp::gate::start(app);
+    }
 }
 
 async fn serve_one(app: AppHandle, stream: crate::platform::ipc::Stream) {
