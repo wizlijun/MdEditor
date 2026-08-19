@@ -167,3 +167,57 @@ fn mcp_is_reached_through_real_cli_routing() {
     assert!(!stderr.contains("unknown command"), "stderr was: {stderr}");
     assert_eq!(replies.len(), 1);
 }
+
+/// A client that declares the `roots` capability gets asked for its roots
+/// (a reverse `roots/list` request) before its first `tools/call` is
+/// forwarded, and the round trip completes rather than hanging — this is the
+/// end-to-end shape of the fix for the deadlock where `request_roots` used to
+/// have no deadline of its own and could wait forever on a client that never
+/// answered while it was itself waiting on us.
+///
+/// This test's "client" answers immediately: all three input lines are
+/// written to the child's stdin up front (see `run_mcp_session`), including
+/// the reply to the `roots/list` request the shim hasn't sent yet at write
+/// time. That's fine — the shim reads its stdin sequentially through a single
+/// pipe, so by the time it actually asks (mid-way through handling the
+/// `tools/call`), the answer is already sitting there waiting to be read; no
+/// real interactivity is required to prove the round trip doesn't hang. The
+/// literal id `"notemd-roots"` is this shim's actual wire contract for the
+/// reverse request (see `mcp::shim::request_roots`), not a guess.
+///
+/// There is no GUI reachable in this test, so the `tools/call` still
+/// degrades to `result.isError`, same as every other test in this file —
+/// this test is only about the roots round trip completing, not about roots
+/// reaching a live GUI (that's `mcp::server`'s unit tests).
+#[test]
+fn roots_round_trip_completes_without_hanging_when_client_answers() {
+    let home = temp_home();
+    let (code, replies, stderr) = run_mcp_session(
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"roots":{}}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vault_info","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":"notemd-roots","result":{"roots":[{"uri":"file:///tmp/whatever"}]}}"#,
+        ],
+        &home,
+    );
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    // 3 lines out: the initialize reply, the shim's own outgoing roots/list
+    // request (a request, not a reply to anything we sent), and the
+    // tools/call reply once the round trip resolves.
+    assert_eq!(replies.len(), 3, "replies were: {replies:?}");
+
+    let msgs: Vec<serde_json::Value> =
+        replies.iter().map(|l| serde_json::from_str(l).expect(l)).collect();
+
+    assert_eq!(msgs[0]["id"], 1);
+    assert!(msgs[0].get("error").is_none(), "{}", msgs[0]);
+
+    assert_eq!(msgs[1]["method"], "roots/list");
+    assert_eq!(msgs[1]["id"], "notemd-roots");
+
+    assert_eq!(msgs[2]["id"], 2);
+    assert!(msgs[2].get("error").is_none(), "{}", msgs[2]);
+    assert_eq!(msgs[2]["result"]["isError"], true, "{}", msgs[2]);
+}
