@@ -32,6 +32,42 @@ actually judged, or `origin:unlabeled` to find files worth labeling one way or
 the other, or read the field in `--json` output to weigh a hit accordingly.
 Unlabeled files are ranked lowest by default (×0.3) and can fall out of the
 top results entirely, so `origin:unlabeled` is the way to find them anyway.
+
+### If you can't run `notemd` yourself
+
+Some harnesses can call tools but can't reach a binary on this machine. note.md
+serves the same index over MCP for those — register it once, in the client's
+own config, and `search` / `vault_info` show up as tools:
+
+```json
+{ "mcpServers": { "notemd": { "command": "notemd", "args": ["mcp"] } } }
+```
+
+`search` takes only `query`, `limit` (0 = no cap) and `context`. The filters go
+inside the query string, exactly as above — one grammar, whether you type it in
+a shell or pass it as a tool argument. Hits carry the same fields `--json` does,
+so everything above about `origin` and `provenance.agent_by` applies unchanged.
+
+Two fields exist only on this surface, and both are worth reading before you
+trust a path:
+
+- **`vault_info.index_state`** — `ready` means answers are real. `opening` means
+  wait a few seconds and ask again. `failed` or `idle` means the index isn't
+  serving; that is when falling back to `rg` is the right move, not a defeat.
+- **`mount.status`** — whether the paths you get back mean anything *to you*.
+  `matched`: a folder you have mounted is this vault, so open hits directly.
+  `mismatched`: it isn't. Use the returned `text` and `breadcrumb`; resolving
+  `/dailynote/2026/x.note.md` against your own mount would open a different file
+  that happens to share the name. `unknown`: the client didn't say what it has
+  mounted — compare `<your mount>/.notemd/vault-id` against the response's
+  `vault_id` before you resolve anything.
+
+A `truncated: true` response means the byte budget cut the list short, not that
+the vault holds no more. Narrow the query and ask again.
+
+Calling `vault_info` once at the start of a session costs nothing and is the
+cheapest way to learn all of the above. This surface is read-only: it can find
+things and tell you where they are, but it will never write to the vault.
 "#;
 
 /// True when `agents_md` does not already contain the search convention block.
