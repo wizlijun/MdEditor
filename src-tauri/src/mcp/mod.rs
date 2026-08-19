@@ -5,5 +5,7 @@
 //! 外壳与 server 是同一个二进制,于是工具 schema 是同一个编译期常量,
 //! 两边不可能对不上 —— 不靠约定,靠编译。
 
+pub mod dispatch;
 pub mod protocol;
 pub mod roots;
+pub mod tools;

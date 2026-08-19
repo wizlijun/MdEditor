@@ -500,6 +500,16 @@ fn print_plain(root: &Path, hits: &[searchidx::Hit], context: usize) -> usize {
 /// land in between. Printing stale line numbers there would be a wrong
 /// citation, which is worse than silently having fewer results, so the
 /// caller drops the hit instead — see `print_plain`.
+/// `context_lines` 的公开壳,给 MCP 用。逻辑一行不改 —— 包括「行号已失效
+/// 就整条丢弃」那条规则:陈旧的引用比缺失的引用更糟。
+pub fn context_lines_public(
+    root: &Path,
+    hit: &searchidx::Hit,
+    context: usize,
+) -> Option<Vec<(u32, String)>> {
+    context_lines(root, hit, context)
+}
+
 fn context_lines(root: &Path, hit: &searchidx::Hit, context: usize) -> Option<Vec<(u32, String)>> {
     let raw = std::fs::read_to_string(root.join(&hit.path)).ok()?;
     let text = searchidx::norm::strip_cr(&raw);
