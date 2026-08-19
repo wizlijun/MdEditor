@@ -650,6 +650,9 @@ export const ja: Record<keyof Messages, string> = {
   'settings.searchExcludeDirsHint': '1 行に 1 つ、vault ルートからの相対パス。既定では空です。',
   'settings.autoSaveLabel': '自動保存を有効化（800ms アイドル後に書き込み）',
   'settings.dailyNotes.label': 'Daily Notes window',
+  'settings.mcp.enable': 'MCP 経由でこの vault を agent に提供する',
+  'settings.mcp.hint':
+    'Claude Code、Cowork、Codex が grep の代わりに note.md のランキングで vault を検索できるようになります。読み取り専用で、ネットワークポートは開きません。登録方法:',
 
   // Settings → Default app
   'settings.defaultApp.heading': 'テキスト・コードファイルの既定アプリ',

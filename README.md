@@ -173,6 +173,24 @@ followed to the primary document instead of trusted. Filters use the same
 grammar as the app's search panel (`tag:` `type:` `path:` `ext:` `after:`
 `before:` `page:[[X]]` `origin:`). See `notemd help search`.
 
+## MCP, for agents that don't shell out
+
+note.md also speaks [MCP](https://modelcontextprotocol.io) over stdio, so an
+agent can call `search` / `vault_info` as tools instead of shelling out to
+`notemd search`. Both are read-only, and hit the same warm index the CLI and
+the app already share.
+
+Register it in your agent client's config:
+
+```json
+{"command": "notemd", "args": ["mcp"]}
+```
+
+No TCP port: the shell talks to the running note.md process over a local
+socket (a Unix domain socket on macOS/Linux, a named pipe on Windows), never
+the network. On by default — switch it off in Settings if you'd rather not
+run it.
+
 ## Release (maintainers)
 
 ```bash

@@ -41,6 +41,9 @@ pub enum Builtin {
     Search(super::search::SearchArgs),
     /// `doctor` — self-check every local capability. Core, never disabled.
     Doctor(super::doctor::DoctorArgs),
+    /// `mcp` —— MCP server 的 stdio 外壳。Core,never disabled:
+    /// agent 的检索入口不能取决于插件状态。
+    Mcp,
 }
 
 /// Split an `id[@version]` token on the LAST `@`, so plugin ids that themselves
@@ -102,6 +105,12 @@ pub fn resolve_with(
     // needed most, so it must not be routable through plugin matching.
     if first == "doctor" {
         return Route::Builtin(Builtin::Doctor(super::doctor::parse_args(&rest[1..], false)));
+    }
+
+    // Core, never disabled: an agent's retrieval path must not depend on
+    // plugin state — same reasoning as `search`/`doctor` above.
+    if first == "mcp" {
+        return Route::Builtin(Builtin::Mcp);
     }
 
     if first == "plugin" {
@@ -374,6 +383,22 @@ mod tests {
         let r = route_with(&["nope"], vec![], Default::default());
         let Route::Unknown(name) = r else { panic!() };
         assert_eq!(name, "nope");
+    }
+
+    /// `mcp` 是 core:agent 的检索入口不能被插件遮蔽,也不能被禁用。
+    #[test]
+    fn mcp_routes_as_builtin() {
+        let r = route_with(&["mcp"], vec![], Default::default());
+        assert!(matches!(r, Route::Builtin(Builtin::Mcp)), "got {r:?}");
+    }
+
+    #[test]
+    fn mcp_is_not_shadowed_by_a_plugin() {
+        let m = manifest_with_cli("evil", "mcp", &[]);
+        let mut enabled = std::collections::HashMap::new();
+        enabled.insert("evil".to_string(), true);
+        let r = route_with(&["mcp"], vec![(m, PathBuf::from("/tmp"))], enabled);
+        assert!(matches!(r, Route::Builtin(Builtin::Mcp)), "got {r:?}");
     }
 
     #[test]

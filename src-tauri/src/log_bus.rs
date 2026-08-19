@@ -317,6 +317,28 @@ pub fn push_cat(category: &str, source: &str, level: &str, message: String) {
     });
 }
 
+/// Same as [`push_cat`], minus the `eprintln!` dev stderr mirror.
+///
+/// For call sites whose caller already owns its own stderr output byte-for-
+/// byte — `cli::search::execute` is the motivating one: it is shared between
+/// `notemd search`, whose `eprintln!` text is observable CLI behaviour that
+/// must not change, and the packaged GUI (via `mcp::tools::search`), which
+/// has no attached terminal for `push_cat`'s mirror to reach anyway (the same
+/// silent-failure class `server.rs`'s `spawn_listener` error path already
+/// routes around). Calling `push_cat` there instead would print a second,
+/// differently-formatted `[category] …` line after the CLI's own — changing
+/// what `notemd search` prints, which this function exists to avoid while
+/// still landing the line in the app log / log file for the GUI case.
+pub fn push_cat_quiet(category: &str, source: &str, level: &str, message: String) {
+    bus().record(LogLine {
+        ts: now_rfc3339(),
+        source: source.into(),
+        category: category.into(),
+        level: level.into(),
+        message,
+    });
+}
+
 pub fn snapshot() -> Vec<LogLine> {
     bus().buffer.lock().map(|b| b.iter().cloned().collect()).unwrap_or_default()
 }
@@ -457,6 +479,24 @@ mod tests {
         assert_eq!(last.category, "git-sync");
         assert_eq!(last.source, "backend");
         assert_eq!(last.level, "warn");
+        clear();
+    }
+
+    /// finding 10: `cli::search::execute` needs a call that lands in the log
+    /// bus (so a GUI-side query failure is visible in the app log) without
+    /// printing a second stderr line after the CLI's own `eprintln!` — this
+    /// pins that `push_cat_quiet` still does the former (records exactly
+    /// like `push_cat`) while doing none of the latter.
+    #[test]
+    fn push_cat_quiet_records_without_the_stderr_mirror() {
+        let _g = guard();
+        clear();
+        push_cat_quiet("search", "backend", "warn", "query failed (boom); scanning files directly".into());
+        let last = snapshot().pop().unwrap();
+        assert_eq!(last.category, "search");
+        assert_eq!(last.source, "backend");
+        assert_eq!(last.level, "warn");
+        assert_eq!(last.message, "query failed (boom); scanning files directly");
         clear();
     }
 

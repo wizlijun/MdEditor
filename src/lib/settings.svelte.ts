@@ -52,12 +52,17 @@ export const settings = $state<{
   theme: ThemeSettings
   mdblock: MdblockSettings
   dailyNotes: { enabled: boolean }
+  mcpServer: { enabled: boolean }
 }>({
   autoSave: false,
   toastAutoClose: false,
   theme: { ...DEFAULT_THEME },
   mdblock: structuredClone(DEFAULT_MDBLOCK_SETTINGS),
   dailyNotes: { enabled: false },
+  // Default ON — a missing key must also mean ON (mirrored in loadSettings
+  // below with `!== false`), so an upgrading user gets MCP without having to
+  // discover the setting first.
+  mcpServer: { enabled: true },
 })
 
 let store: Awaited<ReturnType<typeof Store.load>> | null = null
@@ -182,6 +187,9 @@ export async function loadSettings(): Promise<void> {
     : structuredClone(DEFAULT_MDBLOCK_SETTINGS)
   const storedDaily = await s.get<{ enabled: boolean }>('dailyNotes')
   settings.dailyNotes.enabled = storedDaily?.enabled ?? false
+  // Missing key = enabled (see the design note on the initial state above).
+  const storedMcp = await s.get<{ enabled: boolean }>('mcpServer')
+  settings.mcpServer.enabled = storedMcp?.enabled !== false
   settingsHydrated = true
   pluginScopedVersion.value++
   await loadShareDb()
@@ -200,6 +208,7 @@ export async function saveSettings(): Promise<void> {
   await s.set('plugins', pluginScoped)
   await s.set('mdblock', settings.mdblock)
   await s.set('dailyNotes', { enabled: settings.dailyNotes.enabled })
+  await s.set('mcpServer', { enabled: settings.mcpServer.enabled })
   await s.save()
   // Notify other webviews (e.g. the standalone Daily Notes window) so they can
   // re-read settings and re-apply theme/locale live. Fire-and-forget.

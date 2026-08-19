@@ -727,3 +727,89 @@ fn a_configured_weight_changes_the_clis_own_result_order() {
         "配置的反转权重必须真正改变 CLI 自己的排序,而不是被 Weights::default() 悄悄吃掉: {inverted_json}"
     );
 }
+
+/// Fix round 2 (regression review of the `took_ms` fix in `cli::search::run`):
+/// the earlier fix's own unit test (`cli::search::tests::
+/// execute_took_ms_excludes_time_spent_before_the_call`) only proves
+/// `execute()`'s own timer is query-only in isolation. It cannot catch the
+/// actual bug that shipped — `run()` wiring `print_json` to
+/// `outcome.took_ms` instead of its own whole-pipeline `started.elapsed()` —
+/// because that unit test never calls `run()` or reads what the CLI prints.
+/// If someone re-wires that call site back to the query-only value, that
+/// unit test still passes, and so does `json_output_carries_the_full_
+/// contract` above (it only asserts `took_ms.is_number()`). Only observing
+/// the actual `--json` output of the actual binary closes that gap.
+///
+/// Two invocations, same isolated `HOME` so the second reuses the index the
+/// first built:
+///  - `--rebuild` against ~300 freshly-generated files: forces a full
+///    rebuild, whose cost sits INSIDE the pipeline window (between `run()`'s
+///    `started` and `execute()` returning) but OUTSIDE `execute()`'s own
+///    query-only window.
+///  - `--no-sweep` immediately after, same vault, same warm index: pipeline
+///    overhead is close to zero (`ensure_built` sees an up-to-date stamp and
+///    does nothing before the query runs).
+///
+/// Asserts `rebuild_took > 3 * warm_took`, not just `rebuild_took >
+/// warm_took` — verified by hand (temporarily re-wiring `run()` to the
+/// query-only value and running this test repeatedly) that a plain `>` is
+/// NOT a reliable pin: under the regression both numbers collapse to
+/// noise-level query-only timings (observed ~2-3ms either side, occasionally
+/// `rebuild_took` edges out `warm_took` by chance even though neither
+/// measured the rebuild at all), while the correct code's real margin is an
+/// order of magnitude (observed ~60ms vs ~3ms, a ~20x ratio) — a ratio
+/// comfortably below that real margin but well above the regression's noise
+/// ceiling is the actual structural signal, not the bare inequality. This is
+/// still a *relative* comparison, not a tuned millisecond constant: it scales
+/// with however fast or slow the machine is.
+#[test]
+fn json_took_ms_reflects_the_whole_pipeline_not_just_the_query() {
+    let files: Vec<(String, String)> =
+        (0..300).map(|i| (format!("f{i:04}.md"), format!("# Note {i}\n\nwidget content number {i}\n"))).collect();
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), b.as_str())).collect();
+    let v = vault(&refs);
+    let home = temp_home();
+
+    let mut rebuild_cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    rebuild_cmd
+        .arg("--cli")
+        .arg("search")
+        .arg("widget")
+        .arg("--rebuild")
+        .arg("--json")
+        .arg("--vault")
+        .arg(v.path());
+    isolate(&mut rebuild_cmd, &home);
+    let rebuild_out = rebuild_cmd.output().unwrap();
+    assert_eq!(
+        rebuild_out.status.code(), Some(0),
+        "sanity: --rebuild must succeed; stderr: {}", String::from_utf8_lossy(&rebuild_out.stderr),
+    );
+    let rebuild_json: serde_json::Value = serde_json::from_slice(&rebuild_out.stdout)
+        .unwrap_or_else(|e| panic!("invalid json ({e}): {}", String::from_utf8_lossy(&rebuild_out.stdout)));
+    let rebuild_took = rebuild_json["took_ms"].as_u64().expect("took_ms must be a number");
+
+    let mut warm_cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    warm_cmd.arg("--cli").arg("search").arg("widget").arg("--no-sweep").arg("--json").arg("--vault").arg(v.path());
+    isolate(&mut warm_cmd, &home);
+    let warm_out = warm_cmd.output().unwrap();
+    let _ = std::fs::remove_dir_all(&home);
+    assert_eq!(
+        warm_out.status.code(), Some(0),
+        "sanity: the warm --no-sweep query must succeed; stderr: {}", String::from_utf8_lossy(&warm_out.stderr),
+    );
+    let warm_json: serde_json::Value = serde_json::from_slice(&warm_out.stdout)
+        .unwrap_or_else(|e| panic!("invalid json ({e}): {}", String::from_utf8_lossy(&warm_out.stdout)));
+    let warm_took = warm_json["took_ms"].as_u64().expect("took_ms must be a number");
+
+    // `.max(1)`: a genuinely-zero warm_took must not make the ratio bound
+    // vacuous (anything would clear `> 3 * 0`); floor it at 1ms instead.
+    assert!(
+        rebuild_took > warm_took.max(1) * 3,
+        "a full --rebuild across {} freshly-created files ({rebuild_took}ms) must report a took_ms \
+         well above (>3x) an immediately-following --no-sweep query against the same, already-built, \
+         warm index ({warm_took}ms) — if took_ms ever degenerates to query-only timing the two \
+         collapse to the same noise-level magnitude instead of this order-of-magnitude gap",
+        files.len(),
+    );
+}
