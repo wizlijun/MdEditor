@@ -48,6 +48,20 @@ describe('touchFrontmatter', () => {
     expect(out).toContain('type: Book')
     expect(out).not.toContain(CONCEPT_TYPE.wikiPage)
   })
+  it('已有文件再 touch 不会长出 generated——只在创建时签', () => {
+    const raw = 'type: Outline Note\ntitle: T\ncreated: 2026-01-01T00:00:00.000Z'
+    const out = touchFrontmatter(raw, { title: 'T', now: '2026-08-20T10:00:00.000Z' })
+    expect(out).not.toContain('generated')
+  })
+  it('已有 generated 的文件,再传一个署名也不覆盖', () => {
+    const raw = 'type: Outline Note\ntitle: T\ngenerated:\n  by: claude-code/opus-5\n  at: 2026-01-01T00:00:00.000Z'
+    const out = touchFrontmatter(raw, {
+      title: 'T', now: '2026-08-20T10:00:00.000Z',
+      generated: { by: 'human:bruce', at: '2026-08-20T10:00:00.000Z' },
+    })
+    expect(out).toContain('by: claude-code/opus-5')
+    expect(out).not.toContain('human:bruce')
+  })
 })
 
 describe('outlineConceptType', () => {

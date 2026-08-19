@@ -10,6 +10,9 @@ export interface TouchOpts {
   type?: string
   /** 缺 sources 时写入的来源(§5.1);镜像的伴生笔记用它记源文件路径 */
   sources?: ConceptMeta['sources']
+  /** 缺 generated 时写入的生成署名(§5.2)。**只有创建路径才传** ——
+   *  保存路径传了会让旧文件凭一次保存就获得人写署名(spec §2.2)。 */
+  generated?: ConceptMeta['generated']
   /** 缺 created 时的回退值(通常取文件 birthtime);不传用 now */
   created?: string
   /** 注入时间,便于测试;默认当前时间 ISO 8601 */
@@ -35,6 +38,7 @@ export function touchFrontmatter(raw: string | null, opts: TouchOpts): string {
     title: opts.title,
     created: opts.created ?? now,
     sources: opts.sources,
+    generated: opts.generated,
   })
   const doc = parseDocument(filled)
   if (doc.contents == null || !isMap(doc.contents)) return raw ?? ''
