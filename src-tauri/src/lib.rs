@@ -43,6 +43,8 @@ pub mod notifications;
 pub mod sotvault;
 #[cfg(not(target_os = "ios"))]
 pub mod search;
+#[cfg(not(target_os = "ios"))]
+pub mod mcp;
 
 #[cfg(any(target_os = "ios", test))]
 pub mod vault_ios;
