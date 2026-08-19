@@ -193,25 +193,43 @@ pub mod ipc {
     /// 正在健康运行的实例(spec §3.4)。
     #[cfg(unix)]
     pub async fn listen() -> io::Result<Listener> {
+        listen_at(&endpoint()?).await
+    }
+
+    /// `listen()`'s actual logic, with the path parameterized out — purely so
+    /// a test can point this at a scratch file instead of the machine's real,
+    /// shared MCP socket (mirrors `mcp::gate::remove_socket_file`'s reasoning).
+    /// No test may call `endpoint()` and pass its result here; that would
+    /// bind/unlink the one socket path every note.md instance on the machine
+    /// shares, including a real GUI that may be serving MCP while `cargo
+    /// test` runs.
+    #[cfg(unix)]
+    async fn listen_at(path: &std::path::Path) -> io::Result<Listener> {
         use std::os::unix::fs::PermissionsExt;
-        let path = endpoint()?;
         if path.exists() {
-            match tokio::net::UnixStream::connect(&path).await {
+            match tokio::net::UnixStream::connect(path).await {
                 Ok(_) => return Err(io::Error::new(
                     io::ErrorKind::AddrInUse,
                     "another note.md instance is already serving MCP",
                 )),
-                Err(_) => { let _ = std::fs::remove_file(&path); }
+                Err(_) => { let _ = std::fs::remove_file(path); }
             }
         }
-        let l = tokio::net::UnixListener::bind(&path)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let l = tokio::net::UnixListener::bind(path)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         Ok(Listener(l))
     }
 
     #[cfg(unix)]
     pub async fn connect() -> io::Result<tokio::net::UnixStream> {
-        tokio::net::UnixStream::connect(endpoint()?).await
+        connect_at(&endpoint()?).await
+    }
+
+    /// `connect()`'s actual logic, path parameterized for the same reason as
+    /// `listen_at`.
+    #[cfg(unix)]
+    async fn connect_at(path: &std::path::Path) -> io::Result<tokio::net::UnixStream> {
+        tokio::net::UnixStream::connect(path).await
     }
 
     /// 建一个只有当前用户能碰的管道实例。
@@ -325,40 +343,148 @@ pub mod ipc {
 
     #[cfg(windows)]
     pub async fn listen() -> io::Result<Listener> {
-        let name = endpoint()?.to_string_lossy().to_string();
-        let first = create_owner_only_pipe(&name, true)?;
-        Ok(Listener { name, next: Some(first) })
+        listen_at(&endpoint()?.to_string_lossy()).await
+    }
+
+    /// `listen()`'s actual logic, with the pipe name parameterized out —
+    /// same reasoning as the unix `listen_at`: no test may resolve
+    /// `endpoint()` and pass its result here, since that names the one pipe
+    /// every note.md instance on the machine shares.
+    #[cfg(windows)]
+    async fn listen_at(name: &str) -> io::Result<Listener> {
+        let first = create_owner_only_pipe(name, true)?;
+        Ok(Listener { name: name.to_string(), next: Some(first) })
     }
 
     #[cfg(windows)]
     pub async fn connect() -> io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
+        connect_at(&endpoint()?.to_string_lossy()).await
+    }
+
+    /// `connect()`'s actual logic, name parameterized for the same reason as
+    /// `listen_at`.
+    #[cfg(windows)]
+    async fn connect_at(name: &str) -> io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
         use tokio::net::windows::named_pipe::ClientOptions;
-        let name = endpoint()?.to_string_lossy().to_string();
-        ClientOptions::new().open(&name)
+        ClientOptions::new().open(name)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// 端点路径必须在 `sun_path` 上限之内 —— macOS 104 / Linux 108 字节。
+        /// 用户名可以很长,这里断言而不是假设(spec §3.4)。这是本模块里
+        /// 唯一还解析真实 `endpoint()` 的测试 —— 它只读长度,不 bind、不
+        /// unlink,所以不需要下面几条测试用的 scratch 端点隔离,也不需要锁。
+        #[cfg(unix)]
+        #[test]
+        fn ipc_endpoint_fits_sun_path() {
+            let p = endpoint().expect("endpoint resolvable");
+            let len = p.as_os_str().len();
+            assert!(len < 104, "socket path too long ({len}): {}", p.display());
+        }
+
+        /// 每条测试各自专属的 scratch 端点 —— **绝不能**解析真实
+        /// `endpoint()`:那是这台机器上每个 note.md 实例共享的唯一 socket
+        /// 路径,`cargo test` 跑的时候真实 GUI 可能正在上面服务 MCP
+        /// (mirrors `mcp::gate::remove_socket_file`'s reasoning, and is the
+        /// fix for the bug that reasoning warns about: these tests used to
+        /// call `endpoint()` directly and could delete/rebind a live
+        /// instance's real socket). 用测试函数名当后缀,配合 pid,保证这几
+        /// 条测试并发跑也不会互相踩文件 —— 因此不再需要旧版靠一把全局锁
+        /// 序列化它们的 `IPC_TEST_LOCK`。
+        #[cfg(unix)]
+        fn scratch_path(tag: &str) -> std::path::PathBuf {
+            std::env::temp_dir()
+                .join(format!("notemd-platform-ipc-test-{}-{tag}.sock", std::process::id()))
+        }
+
+        #[cfg(windows)]
+        fn scratch_name(tag: &str) -> String {
+            format!(r"\\.\pipe\notemd-platform-ipc-test-{}-{tag}", std::process::id())
+        }
+
+        /// 一个往返:listen → connect → 写一帧 → 读回来。
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn ipc_round_trip() {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+            let path = scratch_path("round-trip");
+            let _ = std::fs::remove_file(&path);
+            let mut listener = listen_at(&path).await.expect("listen");
+            let server = tokio::spawn(async move {
+                let stream = listener.accept().await.expect("accept");
+                let (r, mut w) = tokio::io::split(stream);
+                let mut lines = BufReader::new(r).lines();
+                let line = lines.next_line().await.unwrap().unwrap();
+                w.write_all(format!("echo:{line}\n").as_bytes()).await.unwrap();
+            });
+            let stream = connect_at(&path).await.expect("connect");
+            let (r, mut w) = tokio::io::split(stream);
+            w.write_all(b"hello\n").await.unwrap();
+            let mut lines = BufReader::new(r).lines();
+            assert_eq!(lines.next_line().await.unwrap().unwrap(), "echo:hello");
+            server.await.unwrap();
+            let _ = std::fs::remove_file(&path);
+        }
+
+        /// Windows 镜像:同样的往返,走命名管道分支。未在本仓库验证过 ——
+        /// 见任务报告里的说明(交叉依赖在这台机器上没有可用的 Windows
+        /// 工具链)。
+        #[cfg(windows)]
+        #[tokio::test]
+        async fn ipc_round_trip() {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+            let name = scratch_name("round-trip");
+            let mut listener = listen_at(&name).await.expect("listen");
+            let server = tokio::spawn(async move {
+                let stream = listener.accept().await.expect("accept");
+                let (r, mut w) = tokio::io::split(stream);
+                let mut lines = BufReader::new(r).lines();
+                let line = lines.next_line().await.unwrap().unwrap();
+                w.write_all(format!("echo:{line}\n").as_bytes()).await.unwrap();
+            });
+            let stream = connect_at(&name).await.expect("connect");
+            let (r, mut w) = tokio::io::split(stream);
+            w.write_all(b"hello\n").await.unwrap();
+            let mut lines = BufReader::new(r).lines();
+            assert_eq!(lines.next_line().await.unwrap().unwrap(), "echo:hello");
+            server.await.unwrap();
+        }
+
+        /// 僵尸 socket:主程序崩溃后文件残留,再 listen 必须能重建(spec §3.4、§8.6)。
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn stale_socket_file_is_reclaimed() {
+            let path = scratch_path("stale-reclaim");
+            let _ = std::fs::remove_file(&path);
+            // 造一个「有文件但没人监听」的现场 —— 正是崩溃后留下的样子。
+            std::fs::write(&path, b"").unwrap();
+            assert!(path.exists());
+            let _l = listen_at(&path).await.expect("必须能回收僵尸 socket");
+            let _ = std::fs::remove_file(&path);
+        }
+
+        /// 反过来:已有实例在健康监听时,第二次 listen 必须**失败**而不是把
+        /// 对方的 socket 删掉。无脑 unlink 会踢掉一个正在服务的实例。
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn live_listener_is_not_evicted() {
+            let path = scratch_path("live-not-evicted");
+            let _ = std::fs::remove_file(&path);
+            let _first = listen_at(&path).await.expect("first listen");
+            let second = listen_at(&path).await;
+            assert!(second.is_err(), "健康实例不得被顶掉");
+            assert!(path.exists(), "对方的 socket 文件必须还在");
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Every IPC test below binds the same fixed endpoint (the unix socket
-    /// path / Windows pipe name is a single well-known constant, not
-    /// per-test), so running them concurrently makes them fight each other —
-    /// one test's `remove_file`/rebind lands mid-flight of another. This
-    /// guard makes that safe under a plain `cargo test`, not just under
-    /// `--test-threads=1`: correctness must not depend on a CLI flag a CI
-    /// script, an IDE's "run all", or a dev typing the obvious command could
-    /// omit.
-    ///
-    /// Poisoning is tolerated (`unwrap_or_else(PoisonError::into_inner)`):
-    /// one panicking IPC test must not cascade into every other IPC test
-    /// failing with a poisoned-lock error instead of its own assertion.
-    static IPC_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn ipc_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        IPC_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     #[test]
     fn allowlist_carries_no_secrets() {
@@ -391,64 +517,4 @@ mod tests {
         assert_eq!(c.get_program(), std::ffi::OsStr::new("git"));
     }
 
-    /// 端点路径必须在 `sun_path` 上限之内 —— macOS 104 / Linux 108 字节。
-    /// 用户名可以很长,这里断言而不是假设(spec §3.4)。
-    #[cfg(unix)]
-    #[test]
-    fn ipc_endpoint_fits_sun_path() {
-        let _guard = ipc_test_guard();
-        let p = super::ipc::endpoint().expect("endpoint resolvable");
-        let len = p.as_os_str().len();
-        assert!(len < 104, "socket path too long ({len}): {}", p.display());
-    }
-
-    /// 一个往返:listen → connect → 写一帧 → 读回来。两个平台各自的分支都要过。
-    #[tokio::test]
-    async fn ipc_round_trip() {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        let _guard = ipc_test_guard();
-        let mut listener = super::ipc::listen().await.expect("listen");
-        let server = tokio::spawn(async move {
-            let stream = listener.accept().await.expect("accept");
-            let (r, mut w) = tokio::io::split(stream);
-            let mut lines = BufReader::new(r).lines();
-            let line = lines.next_line().await.unwrap().unwrap();
-            w.write_all(format!("echo:{line}\n").as_bytes()).await.unwrap();
-        });
-        let stream = super::ipc::connect().await.expect("connect");
-        let (r, mut w) = tokio::io::split(stream);
-        w.write_all(b"hello\n").await.unwrap();
-        let mut lines = BufReader::new(r).lines();
-        assert_eq!(lines.next_line().await.unwrap().unwrap(), "echo:hello");
-        server.await.unwrap();
-    }
-
-    /// 僵尸 socket:主程序崩溃后文件残留,再 listen 必须能重建(spec §3.4、§8.6)。
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn stale_socket_file_is_reclaimed() {
-        let _guard = ipc_test_guard();
-        let path = super::ipc::endpoint().unwrap();
-        let _ = std::fs::remove_file(&path);
-        // 造一个「有文件但没人监听」的现场 —— 正是崩溃后留下的样子。
-        std::fs::write(&path, b"").unwrap();
-        assert!(path.exists());
-        let _l = super::ipc::listen().await.expect("必须能回收僵尸 socket");
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// 反过来:已有实例在健康监听时,第二次 listen 必须**失败**而不是把
-    /// 对方的 socket 删掉。无脑 unlink 会踢掉一个正在服务的实例。
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn live_listener_is_not_evicted() {
-        let _guard = ipc_test_guard();
-        let path = super::ipc::endpoint().unwrap();
-        let _ = std::fs::remove_file(&path);
-        let _first = super::ipc::listen().await.expect("first listen");
-        let second = super::ipc::listen().await;
-        assert!(second.is_err(), "健康实例不得被顶掉");
-        assert!(path.exists(), "对方的 socket 文件必须还在");
-        let _ = std::fs::remove_file(&path);
-    }
 }
