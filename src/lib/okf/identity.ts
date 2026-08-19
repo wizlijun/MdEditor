@@ -21,6 +21,20 @@ export async function humanActor(): Promise<string> {
   return cached
 }
 
+/**
+ * 已解析的身份,**同步**取。未预热时返回 null —— 调用方(⌘N 这类热路径)
+ * 拿 null 就不签,绝不为了一个署名去阻塞两次 git 子进程。窗口由
+ * `warmHumanActor()` 在启动时关掉。
+ */
+export function humanActorNow(): string | null {
+  return cached
+}
+
+/** 后台预热缓存。不返回、不抛错——预热失败最多就是这一轮不签。 */
+export function warmHumanActor(): void {
+  void humanActor().catch(() => {})
+}
+
 /** 测试/重登 vault 后清缓存。 */
 export function resetHumanActor(): void {
   cached = null
