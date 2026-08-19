@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn log_show_at_roundtrip_in_temp_repo() {
-        let dir = std::env::temp_dir().join(format!("mdeditor-gh-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("notemd-gh-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         git(&dir, &["init", "-q"]);
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn diff_current_buffer_vs_rev() {
-        let dir = std::env::temp_dir().join(format!("mdeditor-gh-dc-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("notemd-gh-dc-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         git(&dir, &["init", "-q"]);

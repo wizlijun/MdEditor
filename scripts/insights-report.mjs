@@ -17,7 +17,7 @@ const tz = -new Date().getTimezoneOffset()
 let from = arg('--from'), to = arg('--to')
 if (!from || !to) { const r = resolvePreset(arg('--date', 'yesterday'), Date.now(), tz); from = r.from; to = r.to }
 
-const dir = join(vault, '.mdeditor', 'analytics')
+const dir = join(vault, '.notemd', 'analytics')
 const files = []
 if (existsSync(dir)) {
   for (const name of await readdir(dir)) {

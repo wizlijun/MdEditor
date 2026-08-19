@@ -20,7 +20,7 @@ fn the_gui_and_the_cli_resolve_one_index_path() {
 /// 这是 headless vault-root 解析的前提:读错文件 = CLI 找不到 vault。
 #[test]
 fn the_cli_config_dir_is_the_platform_config_dir_for_this_bundle() {
-    let dir = mdeditor_lib::cli::resolve_config_dir();
+    let dir = notemd_lib::cli::resolve_config_dir();
     let expected = dirs::config_dir().unwrap().join("net.notemd.app");
     assert_eq!(dir, expected);
 }
@@ -31,7 +31,7 @@ fn the_cli_config_dir_is_the_platform_config_dir_for_this_bundle() {
 #[test]
 fn the_index_is_local_while_the_config_is_not() {
     let idx = searchidx::paths::index_db_path(Path::new(r"C:\vault")).unwrap();
-    let cfg = mdeditor_lib::cli::resolve_config_dir();
+    let cfg = notemd_lib::cli::resolve_config_dir();
     assert_ne!(idx.parent().unwrap().parent().unwrap().parent(), cfg.parent());
     assert!(idx.to_string_lossy().to_lowercase().contains(r"\local\"));
 }

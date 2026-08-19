@@ -318,8 +318,8 @@
           .catch((err) => console.warn('[outline] rebuild after reload failed:', err))
       })
     }
-    window.addEventListener('mdeditor:auto-reloaded', handler)
-    return () => window.removeEventListener('mdeditor:auto-reloaded', handler)
+    window.addEventListener('notemd:auto-reloaded', handler)
+    return () => window.removeEventListener('notemd:auto-reloaded', handler)
   })
 
   // 索引是共享单例:编辑器卸载不 teardown(面板可能还在用);
@@ -689,7 +689,7 @@
    * 笔记一旦有 tab 撑着,外部变更就归既有 file-watcher 管:它有正确的
    * `lastKnownHash` 基线与 `recordOurWrite` 配套,而本组件的 `noteDiskHash`
    * 只在 panel-disk 写盘路径上维护。两边都插手会把自己的保存误判成外部冲突。
-   * tab 那条路重载后派发 `mdeditor:auto-reloaded`,上面的监听器负责重建树。
+   * tab 那条路重载后派发 `notemd:auto-reloaded`,上面的监听器负责重建树。
    *
    * 监听的是**父目录**而非文件本身:笔记可能尚未存在(agent 稍后才创建)、
    * 也可能被 git 同步以「删除+重建」或改名的方式替换 —— 盯文件会一装就失败、

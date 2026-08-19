@@ -1,4 +1,4 @@
-use mdeditor_lib::themes::header::{parse_header, ParsedHeader};
+use notemd_lib::themes::header::{parse_header, ParsedHeader};
 
 #[test]
 fn parses_full_header() {

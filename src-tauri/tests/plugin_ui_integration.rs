@@ -9,7 +9,7 @@
 //!     process side uses — Task 3.
 //!
 //! Approach: a plain integration test file. Every seam these tests need is
-//! already `pub` on the `mdeditor_lib` crate — `discovery::scan_root`,
+//! already `pub` on the `notemd_lib` crate — `discovery::scan_root`,
 //! `protocol::{resolve_asset, mime_for, csp_header, handle_parsed, PluginView,
 //! Routed}`, and `ui_rpc::{dispatch_with, HostServices, OpenOptions,
 //! SaveOptions, DialogFilter}` plus `host_api::ToastEmitter`. Nothing here
@@ -19,13 +19,13 @@
 
 use std::path::{Path, PathBuf};
 
-use mdeditor_lib::plugin_runtime::discovery::scan_root;
-use mdeditor_lib::plugin_runtime::host_api::ToastEmitter;
-use mdeditor_lib::plugin_runtime::protocol::{
+use notemd_lib::plugin_runtime::discovery::scan_root;
+use notemd_lib::plugin_runtime::host_api::ToastEmitter;
+use notemd_lib::plugin_runtime::protocol::{
     self, AssetError, PluginView, Routed,
 };
-use mdeditor_lib::plugin_runtime::state::{self, InstallState, InstalledPlugin};
-use mdeditor_lib::plugin_runtime::ui_rpc::{
+use notemd_lib::plugin_runtime::state::{self, InstallState, InstalledPlugin};
+use notemd_lib::plugin_runtime::ui_rpc::{
     dispatch_with, HostServices, OpenOptions, SaveOptions,
 };
 use plugin_protocol as proto;

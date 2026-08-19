@@ -4,9 +4,11 @@ version = "6.818.8"
 edition = "2021"
 
 [lib]
-# Keep the lib crate name stable: the iOS build links `libmdeditor_lib.a` and
-# main.rs / all modules reference `mdeditor_lib::`. Only the binary is renamed.
-name = "mdeditor_lib"
+# Renamed from `mdeditor_lib` alongside the product rename. The old comment here
+# claimed the name had to stay because "the iOS build links libmdeditor_lib.a" —
+# that was never a constraint, just an unfinished rename: exactly one line in
+# `gen/apple/build-rust.sh` names the archive, and it moved with this.
+name = "notemd_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

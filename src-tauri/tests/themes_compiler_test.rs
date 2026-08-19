@@ -1,5 +1,5 @@
-use mdeditor_lib::themes::compiler::strip_include_when_export;
-use mdeditor_lib::themes::compiler::rewrite_selector_text;
+use notemd_lib::themes::compiler::strip_include_when_export;
+use notemd_lib::themes::compiler::rewrite_selector_text;
 
 #[test]
 fn strips_basic_form() {
@@ -119,7 +119,7 @@ fn scope_attribute_uses_id_verbatim() {
     assert_eq!(out, r#"[data-theme="claude-like"] .moraya-editor"#);
 }
 
-use mdeditor_lib::themes::compiler::compile_theme_css;
+use notemd_lib::themes::compiler::compile_theme_css;
 
 #[test]
 fn end_to_end_minimal_theme() {
@@ -168,7 +168,7 @@ fn malformed_css_returns_err() {
     assert!(result.is_err());
 }
 
-use mdeditor_lib::themes::compiler::rewrite_url_value;
+use notemd_lib::themes::compiler::rewrite_url_value;
 
 #[test]
 fn relative_url_resolves_against_asset_dir() {

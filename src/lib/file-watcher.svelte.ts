@@ -82,7 +82,7 @@ function applyDecision(
       tab.externalBannerDismissed = false
       tab.pendingExternal = undefined
       // Hint for source-mode editor: try to keep the user near where they were.
-      window.dispatchEvent(new CustomEvent('mdeditor:auto-reloaded', {
+      window.dispatchEvent(new CustomEvent('notemd:auto-reloaded', {
         detail: { tabId: tab.id, oldContent, newContent: s.content },
       }))
       // After delete→recreate, the original FSEvents subscription may be

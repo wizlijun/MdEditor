@@ -23,28 +23,28 @@
     // inside its own run — a self-feeding loop that Svelte kills after ~1000
     // iterations, leaving search-as-you-type permanently dead.
     untrack(() => {
-      window.dispatchEvent(new CustomEvent('mdeditor:find-search', {
+      window.dispatchEvent(new CustomEvent('notemd:find-search', {
         detail: { query: q, caseSensitive: cs, wholeWord: ww, useRegex: re },
       }))
     })
   })
 
   function next() {
-    window.dispatchEvent(new CustomEvent('mdeditor:find-next'))
+    window.dispatchEvent(new CustomEvent('notemd:find-next'))
   }
 
   function prev() {
-    window.dispatchEvent(new CustomEvent('mdeditor:find-prev'))
+    window.dispatchEvent(new CustomEvent('notemd:find-prev'))
   }
 
   function replaceCurrent() {
-    window.dispatchEvent(new CustomEvent('mdeditor:find-replace', {
+    window.dispatchEvent(new CustomEvent('notemd:find-replace', {
       detail: { replacement: findState.replacement },
     }))
   }
 
   function replaceAll() {
-    window.dispatchEvent(new CustomEvent('mdeditor:find-replace-all', {
+    window.dispatchEvent(new CustomEvent('notemd:find-replace-all', {
       detail: { replacement: findState.replacement },
     }))
   }

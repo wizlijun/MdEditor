@@ -1,4 +1,4 @@
-use mdeditor_lib::themes::registry::{scan_themes_dir, ThemeMeta};
+use notemd_lib::themes::registry::{scan_themes_dir, ThemeMeta};
 use std::fs;
 use tempfile::tempdir;
 

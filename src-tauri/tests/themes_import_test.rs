@@ -1,4 +1,4 @@
-use mdeditor_lib::themes::import::{prepare_import, ImportReport};
+use notemd_lib::themes::import::{prepare_import, ImportReport};
 use std::fs;
 use std::io::Write;
 use tempfile::tempdir;

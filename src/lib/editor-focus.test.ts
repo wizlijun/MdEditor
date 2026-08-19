@@ -18,7 +18,7 @@ describe('editor focus request', () => {
     requestEditorFocus('/tmp/quick.md')
 
     expect(dispatched).toHaveLength(1)
-    expect(dispatched[0].type).toBe('mdeditor:focus-editor')
+    expect(dispatched[0].type).toBe('notemd:focus-editor')
     expect(dispatched[0].detail).toEqual({ path: '/tmp/quick.md' })
     expect(consumeEditorFocus('/tmp/quick.md')).toBe(true)
     expect(consumeEditorFocus('/tmp/quick.md')).toBe(false)

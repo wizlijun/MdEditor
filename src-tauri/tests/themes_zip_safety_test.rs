@@ -1,4 +1,4 @@
-use mdeditor_lib::themes::zip_safety::{extract_zip_safely, ExtractError, ExtractLimits};
+use notemd_lib::themes::zip_safety::{extract_zip_safely, ExtractError, ExtractLimits};
 use std::fs;
 use std::io::Write;
 use tempfile::tempdir;

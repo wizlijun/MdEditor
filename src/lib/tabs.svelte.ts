@@ -114,7 +114,7 @@ export function newFile(): void {
   if (bodyStart > 2) {
     queueMicrotask(() => {
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('mdeditor:new-file-select', {
+        window.dispatchEvent(new CustomEvent('notemd:new-file-select', {
           detail: { start: bodyStart, end: bodyEnd },
         }))
       }
@@ -349,7 +349,7 @@ export async function reloadTabFromDisk(path: string): Promise<void> {
   t.externalBannerDismissed = false
   t.pendingExternal = undefined
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('mdeditor:auto-reloaded', {
+    window.dispatchEvent(new CustomEvent('notemd:auto-reloaded', {
       detail: { tabId: t.id, oldContent, newContent: content },
     }))
   }
@@ -379,7 +379,7 @@ export function setContent(id: string, md: string): void {
  * disk and refresh every editor view immediately — no manual ⌘S. Reuses the
  * auto-reload path (`reloadTabFromDisk`) so Rich/Source/Outline all rebuild from
  * the new bytes and the tab lands clean (initialContent === currentContent).
- * OutlineEditor in particular only rebuilds on `mdeditor:auto-reloaded`, which a
+ * OutlineEditor in particular only rebuilds on `notemd:auto-reloaded`, which a
  * bare `setContent` never fires — hence going through disk here.
  */
 export async function restoreVersion(id: string, content: string): Promise<void> {
@@ -627,7 +627,7 @@ export async function reloadFromDisk(id: string): Promise<void> {
   // 少了它,横幅上点「重新加载」大纲不会刷新(RichEditor 另有 currentContent
   // 入站 effect 兜底,所以此前只有大纲这条链是断的)。
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('mdeditor:auto-reloaded', {
+    window.dispatchEvent(new CustomEvent('notemd:auto-reloaded', {
       detail: { tabId: t.id, oldContent, newContent: p.content },
     }))
   }

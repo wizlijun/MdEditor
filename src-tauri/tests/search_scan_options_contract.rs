@@ -14,7 +14,7 @@ fn write_settings(root: &Path, json: &str) {
 fn the_index_threshold_falls_back_to_the_git_gate_when_unset() {
     let d = tempfile::tempdir().unwrap();
     write_settings(d.path(), r#"{"largeFileThresholdMb": 25}"#);
-    let opts = mdeditor_lib::search::options::for_vault(d.path());
+    let opts = notemd_lib::search::options::for_vault(d.path());
     assert_eq!(opts.large_file_threshold_mb, 25, "未设索引阈值时应跟随 git 门禁");
 }
 
@@ -22,7 +22,7 @@ fn the_index_threshold_falls_back_to_the_git_gate_when_unset() {
 fn an_explicit_index_threshold_decouples_from_the_git_gate() {
     let d = tempfile::tempdir().unwrap();
     write_settings(d.path(), r#"{"largeFileThresholdMb": 10, "searchLargeFileThresholdMb": 50}"#);
-    let opts = mdeditor_lib::search::options::for_vault(d.path());
+    let opts = notemd_lib::search::options::for_vault(d.path());
     assert_eq!(opts.large_file_threshold_mb, 50, "显式设过就不再跟随");
 }
 
@@ -30,7 +30,7 @@ fn an_explicit_index_threshold_decouples_from_the_git_gate() {
 fn both_unset_falls_back_to_the_default() {
     let d = tempfile::tempdir().unwrap();
     write_settings(d.path(), r#"{}"#);
-    assert_eq!(mdeditor_lib::search::options::for_vault(d.path()).large_file_threshold_mb, 10);
+    assert_eq!(notemd_lib::search::options::for_vault(d.path()).large_file_threshold_mb, 10);
 }
 
 /// 两个 adapter 的构造必须是同一个函数,不是两份「碰巧一致」的实现。
@@ -38,8 +38,8 @@ fn both_unset_falls_back_to_the_default() {
 fn the_cli_and_the_gui_build_options_through_one_function() {
     let d = tempfile::tempdir().unwrap();
     write_settings(d.path(), r#"{"searchLargeFileThresholdMb": 33, "searchExcludeDirs": ["a"], "syncDir": "box"}"#);
-    let gui = mdeditor_lib::search::options::for_vault(d.path());
-    let cli = mdeditor_lib::cli::search::scan_options_for(d.path());
+    let gui = notemd_lib::search::options::for_vault(d.path());
+    let cli = notemd_lib::cli::search::scan_options_for(d.path());
     assert_eq!(gui.large_file_threshold_mb, cli.large_file_threshold_mb);
     assert_eq!(gui.exclude_dirs, cli.exclude_dirs);
     assert_eq!(gui.source_globs, cli.source_globs);
@@ -54,8 +54,8 @@ fn the_cli_and_the_gui_build_options_through_one_function() {
 fn the_cli_and_the_gui_resolve_the_same_weights() {
     let d = tempfile::tempdir().unwrap();
     write_settings(d.path(), r#"{"searchWeights": {"human": 2.0, "source": 0.5}}"#);
-    let gui = mdeditor_lib::search::options::weights_for_vault(d.path());
-    let cli = mdeditor_lib::cli::search::weights_for(d.path());
+    let gui = notemd_lib::search::options::weights_for_vault(d.path());
+    let cli = notemd_lib::cli::search::weights_for(d.path());
     assert_eq!(gui, cli);
     // Not a vacuous comparison of two defaults: pin the actually-configured
     // value made it through, so a `weights_for_vault` that silently ignored
@@ -92,8 +92,8 @@ fn the_cli_and_the_gui_resolve_the_same_weights() {
 fn the_cli_and_the_gui_resolve_the_same_wikipage_conventions() {
     let d = tempfile::tempdir().unwrap();
     write_settings(d.path(), r#"{"wikipageDir": "概念"}"#);
-    let gui = mdeditor_lib::search::options::conventions_for_vault(d.path());
-    let cli = mdeditor_lib::cli::search::conventions_for(d.path());
+    let gui = notemd_lib::search::options::conventions_for_vault(d.path());
+    let cli = notemd_lib::cli::search::conventions_for(d.path());
     assert_eq!(gui, cli);
     // 不是「两个默认值恰好相等」的空断言:钉住配置值真的被读到了。
     assert_eq!(gui.wikipage_dir.as_deref(), Some("概念"));
@@ -105,7 +105,7 @@ fn the_cli_and_the_gui_resolve_the_same_wikipage_conventions() {
 fn an_unset_wikipage_dir_falls_back_to_the_shipped_default() {
     let d = tempfile::tempdir().unwrap();
     write_settings(d.path(), r#"{}"#);
-    let c = mdeditor_lib::search::options::conventions_for_vault(d.path());
+    let c = notemd_lib::search::options::conventions_for_vault(d.path());
     assert_eq!(c.wikipage_dir.as_deref(), Some("wikipage"));
 }
 
@@ -115,6 +115,6 @@ fn an_unset_wikipage_dir_falls_back_to_the_shipped_default() {
 fn an_invalid_wikipage_dir_falls_back_instead_of_being_used_verbatim() {
     let d = tempfile::tempdir().unwrap();
     write_settings(d.path(), r#"{"wikipageDir": "../escape"}"#);
-    let c = mdeditor_lib::search::options::conventions_for_vault(d.path());
+    let c = notemd_lib::search::options::conventions_for_vault(d.path());
     assert_eq!(c.wikipage_dir.as_deref(), Some("wikipage"));
 }

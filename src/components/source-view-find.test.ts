@@ -69,7 +69,7 @@ describe('SourceView find integration', () => {
     expect(pre.querySelectorAll('.search-hit').length).toBe(39)
     expect(currentPos()).toBe(0)
 
-    window.dispatchEvent(new CustomEvent('mdeditor:find-next'))
+    window.dispatchEvent(new CustomEvent('notemd:find-next'))
     await new Promise((r) => setTimeout(r, 10))
 
     expect(findState.currentMatch).toBe(2)
@@ -83,12 +83,12 @@ describe('SourceView find integration', () => {
 
     let dispatched = 0
     const count = () => { dispatched++ }
-    window.addEventListener('mdeditor:find-search', count)
-    window.dispatchEvent(new CustomEvent('mdeditor:find-search', {
+    window.addEventListener('notemd:find-search', count)
+    window.dispatchEvent(new CustomEvent('notemd:find-search', {
       detail: { query: 'alpha', caseSensitive: false, wholeWord: false, useRegex: false },
     }))
     await new Promise((r) => setTimeout(r, 20))
-    window.removeEventListener('mdeditor:find-search', count)
+    window.removeEventListener('notemd:find-search', count)
 
     expect(dispatched).toBe(1)
     expect(findState.matchCount).toBe(40)

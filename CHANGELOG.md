@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **`notemd reading-insights` no longer reports nothing at all.** It was looking for `.mdeditor/analytics/` in your vault while the app has long been writing to `.notemd/analytics/` — the directory simply wasn't there, so the report came back empty without complaint. A spot the product rename missed.
+
 ### Added
 
 - **Trace Source grew an inbox and settings.** (Marketplace: Trace Source 1.1.0.) Reports now land in `inbox/traces/` by default (changeable in the window's settings), named `<date>-<time>-source-trace.md` with full-text materials in a same-named folder beside each report. The new inbox panel — same shape as Idea Spark's — lists past reports newest first; click one to read it in the main editor, right-click to open or delete it (materials included). While a trace runs, the bar shows live progress and the inbox refreshes itself the moment the report lands. The delegation prompt is editable from settings, and the task template migrates itself once — no manual deleting this time.

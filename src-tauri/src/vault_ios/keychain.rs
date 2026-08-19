@@ -38,7 +38,7 @@ pub mod stub {
     fn dir() -> PathBuf {
         std::env::var("MDEDITOR_KEYCHAIN_STUB_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir().join("mdeditor-keychain-stub"))
+            .unwrap_or_else(|_| std::env::temp_dir().join("notemd-keychain-stub"))
     }
 
     fn path(account: &str) -> PathBuf {

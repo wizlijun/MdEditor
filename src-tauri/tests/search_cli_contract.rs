@@ -177,7 +177,7 @@ fn attention_minutes_reflects_real_ingested_data_not_a_hardcoded_stand_in() {
     .unwrap();
 
     with_process_home(&home, || {
-        let opts = mdeditor_lib::search::options::for_vault(v.path());
+        let opts = notemd_lib::search::options::for_vault(v.path());
         let stamp = opts.source_globs.stamp();
         let mut idx = searchidx::SearchIndex::open(v.path(), &stamp).expect("seed open");
         idx.rebuild(&opts).expect("seed build");
@@ -654,7 +654,7 @@ fn cli_glob_stamp_matches_independently_computed_scan_options_source_globs() {
     // `attention_minutes_reflects_real_ingested_data_not_a_hardcoded_stand_in`'s
     // never race each other for `HOME` — see that helper's doc comment.
     with_process_home(&home, || {
-        let opts = mdeditor_lib::search::options::for_vault(v.path());
+        let opts = notemd_lib::search::options::for_vault(v.path());
         let expected_stamp = opts.source_globs.stamp();
         let mut idx = searchidx::SearchIndex::open(v.path(), &expected_stamp).expect("seed open");
         idx.rebuild(&opts).expect("seed build");
