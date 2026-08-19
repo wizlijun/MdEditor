@@ -127,6 +127,8 @@ pub fn render_help(
     out.push_str("  plugin        Manage plugins (list, enable, disable, info, install, update, remove)\n");
     out.push_str("  share         Render and publish file as a shareable URL (alias: --share)\n");
     out.push_str("  search        Full-text search over the Vault (--vault, --json, --limit, --stats)\n");
+    out.push_str("  mcp           Serve this vault to agents over MCP (stdio). Register with:\n");
+    out.push_str("                  { \"command\": \"notemd\", \"args\": [\"mcp\"] }\n");
     out.push_str("  doctor        Self-check every local capability (--offline, --vault, --json)\n");
     out.push_str("  reading-insights [report]   Generate a reading digest from the Vault (--vault, --date, --stdout)\n");
 
