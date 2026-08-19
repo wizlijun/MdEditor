@@ -32,39 +32,72 @@ fn is_still_running(finished: bool) -> bool {
     !finished
 }
 
-/// `stop()` 该做的那件事:abort(handle 已经跑完的话这是空操作)+ 删 socket
-/// 文件。`start_with` 的「发现 handle 已死」分支与显式 `stop()` 共用这一个
-/// 函数 —— 两条路径必须做同一件事,否则「死监听器留下的僵尸 socket」在
-/// 重启路径上不会被清,新监听器起来前那个文件还在,复现的正是
-/// `platform::ipc::listen()` 文档里写的 `AddrInUse` 那一类失败。
-fn cleanup(handle: Option<tauri::async_runtime::JoinHandle<()>>) {
+/// Abort a held task handle. Harmless if it has already finished (the
+/// dead-handle recovery path in `start_with`) or is genuinely still running
+/// (the explicit `stop()` path) — both call this on their way out. This is
+/// **not** paired with socket-file cleanup here; see `start_with` and
+/// `stop()` for why those two paths deliberately disagree on that.
+fn abort(handle: Option<tauri::async_runtime::JoinHandle<()>>) {
     if let Some(h) = handle {
         h.abort();
     }
-    #[cfg(unix)]
-    if let Ok(p) = crate::platform::ipc::endpoint() {
-        let _ = std::fs::remove_file(p);
-    }
 }
 
-/// `start` 的核心逻辑,`spawn` 参数化出去 —— 好让测试不需要真的 `AppHandle`
-/// 也能喂一个「立刻跑完」的假监听器进来,钉住下面这条修复。
+/// Best-effort delete of the unix socket file at `path`. Windows named pipes
+/// have no filesystem entry, so callers only invoke this under `#[cfg(unix)]`.
 ///
-/// **幂等,但「幂等」判的是活着,不是「有没有个 handle 挂在那儿」。**
-/// `server::spawn_listener` 起的任务会在 `platform::ipc::listen()` 失败时
-/// (比如 socket 被占、或残留文件恰好把 `AddrInUse` 判成了「有人在跑」)自己
-/// 打完日志就返回 —— 这时 `TASK` 里挂着的是一个**已经跑完**的 handle。旧版本
-/// 只看 `is_some()`,于是这种情况下 MCP 永久哑火:往后每次 `start()` 都会
-/// 因为「看到 Some」而直接放弃,用户把开关关了又开也救不回来(能救回来是
-/// 因为 `stop()` 无条件 `take()`,但没人会知道要这么做)。这里改成先问
-/// handle 是否还活着;死的就当成 `stop()` 已经发生过一样清理,再落子新的。
+/// Takes the path as a parameter rather than resolving
+/// `platform::ipc::endpoint()` internally, purely so a test can point this at
+/// a scratch file instead of the machine's real, shared MCP socket — see
+/// `tests::removes_the_file_it_is_given`. No test in this module may call
+/// `platform::ipc::endpoint()` and pass its result here; that would delete
+/// (or fight over) the one socket path every note.md instance on the machine
+/// shares, including a real GUI that may be serving MCP while `cargo test`
+/// runs.
+#[cfg(unix)]
+fn remove_socket_file(path: &std::path::Path) {
+    let _ = std::fs::remove_file(path);
+}
+
+/// `start`'s core logic, with `spawn` parameterized out — so a test can hand
+/// it an `AppHandle`-free stand-in listener and pin the recovery behavior
+/// below without needing a real Tauri app.
+///
+/// **Idempotent, but "idempotent" is judged by liveness, not by "is there a
+/// handle sitting in `TASK`".** `server::spawn_listener`'s task self-
+/// terminates — logs and returns — when `platform::ipc::listen()` fails,
+/// leaving a *finished* handle behind. The old version only checked
+/// `is_some()`, so that case wedged MCP off forever: every later `start()`
+/// saw `Some` and gave up, and the only way back was the user happening to
+/// flip the setting off and on (which works only because `stop()`
+/// unconditionally `take()`s — nobody would know that's what fixes it).
+///
+/// **The dead-handle branch deliberately does NOT remove the socket file —
+/// unlike `stop()` below.** Read `platform::ipc::listen()` (unix): it
+/// connect-probes the existing path *before* ever unlinking it. If the probe
+/// succeeds, `listen()` returns `AddrInUse` and leaves the file alone (that
+/// probe is the whole "don't evict a live listener" invariant, also covered
+/// by `platform::ipc`'s `live_listener_is_not_evicted` test). If the probe
+/// fails, the socket is genuinely stale and `listen()` unlinks it and binds
+/// successfully — so that case never produces a dead handle at all; it
+/// self-heals inside `listen()`. `spawn_listener` calls `listen()` exactly
+/// once with no retry, so the *only* way this branch is ever reached is the
+/// first case: a live sibling instance currently owns the socket. Removing
+/// the file here would silently kill that peer's reachability (new clients
+/// get `ENOENT` on a path nobody accepts on) while the peer keeps running,
+/// unaware — exactly the harm the probe exists to prevent, reintroduced
+/// through this module instead. `listen()` is the one place with the probe
+/// to make that call correctly; this function does not duplicate the
+/// decision without it. It only aborts the dead handle and lets the
+/// subsequent `listen()` call (inside the freshly spawned task) sort out
+/// stale-vs-live on its own, the same way it always does.
 fn start_with(spawn: impl FnOnce() -> tauri::async_runtime::JoinHandle<()>) {
     let mut guard = TASK.lock().unwrap();
     if let Some(h) = guard.as_ref() {
         if is_still_running(h.inner().is_finished()) {
             return;
         }
-        cleanup(guard.take());
+        abort(guard.take());
     }
     *guard = Some(spawn());
 }
@@ -77,10 +110,20 @@ pub fn start(app: &AppHandle) {
     start_with(|| crate::mcp::server::spawn_listener(app));
 }
 
-/// 停止监听并**删掉 socket 文件** —— 留着的话外壳会连上一个不再有人 accept 的
-/// 端点然后挂住(外壳侧另有超时兜底,但两边都做才对)。
+/// Stop listening and **remove the socket file** — unlike the dead-handle
+/// path in `start_with` above, this one always removes it, no probe needed.
+/// An explicit `stop()` is the user asking *this machine's own* listener to
+/// go away right now: there is no "might be a live sibling" ambiguity to
+/// resolve, because we are the one who just tore it down. Leaving the file
+/// behind here is exactly what makes the shell hang connecting to an
+/// endpoint nobody accepts on (the shell has its own timeout as a backstop,
+/// but both ends should behave).
 pub fn stop() {
-    cleanup(TASK.lock().unwrap().take());
+    abort(TASK.lock().unwrap().take());
+    #[cfg(unix)]
+    if let Ok(p) = crate::platform::ipc::endpoint() {
+        remove_socket_file(&p);
+    }
 }
 
 #[tauri::command]
@@ -149,6 +192,11 @@ mod tests {
     /// 用 `start_with` 而不是 `start`,是因为这个仓库从没启用过 `tauri::test`
     /// feature,拿不到真的 `AppHandle` 去调 `server::spawn_listener` —— 把
     /// spawn 步骤参数化出去,才能不依赖真实 GUI 状态单测这条恢复路径。
+    ///
+    /// 这条测试也顺带钉住了 review round 2 的 Finding 1:`start_with` 的死
+    /// handle 分支只调 `abort`,不碰任何 socket 文件(不像 `stop()`)—— 所以
+    /// 这条测试从不触碰机器上真实的 MCP 端点,与 `removes_the_file_it_is_given`
+    /// 依赖的隔离是同一件事的两面。
     #[test]
     fn dead_handle_is_replaced_not_treated_as_running() {
         let _guard = task_test_guard();
@@ -210,5 +258,37 @@ mod tests {
         if let Some(h) = TASK.lock().unwrap().take() {
             h.abort();
         }
+    }
+
+    /// Pins `remove_socket_file`'s one job — delete the file at the path
+    /// it's given — against a scratch temp file, **never**
+    /// `platform::ipc::endpoint()`'s real path (review round 2, Finding 2:
+    /// a prior version of this test suite called the real endpoint-touching
+    /// cleanup directly, which would delete the one MCP socket every
+    /// note.md instance on the machine shares — including a real GUI
+    /// serving MCP while `cargo test` runs). The parameterized signature is
+    /// what makes that avoidable: production `stop()` still resolves the
+    /// real endpoint, but the removal logic itself is tested in isolation.
+    #[cfg(unix)]
+    #[test]
+    fn removes_the_file_it_is_given() {
+        let path = std::env::temp_dir()
+            .join(format!("notemd-gate-test-{}.sock", std::process::id()));
+        std::fs::write(&path, b"").unwrap();
+        assert!(path.exists());
+        remove_socket_file(&path);
+        assert!(!path.exists());
+    }
+
+    /// Same function, missing file: must not panic (mirrors "the listener
+    /// was never started" / "someone already cleaned it up" cases).
+    #[cfg(unix)]
+    #[test]
+    fn tolerates_a_missing_file() {
+        let path = std::env::temp_dir()
+            .join(format!("notemd-gate-test-missing-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        assert!(!path.exists());
+        remove_socket_file(&path); // must not panic
     }
 }
