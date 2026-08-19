@@ -1,13 +1,23 @@
-// Builds the on-disk text for an idea's original `.md` file. Purely a thin
-// wrapper over the vendored OKF writer (./okf/concept.ts) — no `generated`
-// actor, because idea originals are human-authored (§7: human: prefix only
-// applies when we'd claim authorship; here we simply don't stamp one).
+// Builds the on-disk text for an idea's original `.md` file. A thin wrapper
+// over the vendored OKF writer (./okf/concept.ts). Idea originals are
+// human-authored and now say so: `generated: { by: human:<id>, at }` (OKF
+// §5.2/§7). The actor comes from the host (`host.vault.info` → `author`);
+// when the host is too old to answer, we leave it unsigned rather than
+// inventing one.
 import { parse as parseYaml } from 'yaml'
 import { CONCEPT_TYPE, conceptFileText, touchConceptFrontmatter } from './okf/concept'
 
-/** Full idea document text: OKF frontmatter (`type: Idea`, `created`) + body. */
-export function buildIdeaDoc(body: string, nowIso: string): string {
-  return conceptFileText({ type: CONCEPT_TYPE.idea, created: nowIso }, body)
+/** Full idea document text: OKF frontmatter (`type: Idea`, `created`,
+ *  and — when the host told us who you are — `generated`) + body. */
+export function buildIdeaDoc(body: string, nowIso: string, author?: string): string {
+  return conceptFileText(
+    {
+      type: CONCEPT_TYPE.idea,
+      created: nowIso,
+      generated: author ? { by: author, at: nowIso } : undefined,
+    },
+    body,
+  )
 }
 
 /**

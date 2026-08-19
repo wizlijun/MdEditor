@@ -27,6 +27,8 @@ import { t, type MessageKey } from './strings'
 export interface SparkStore {
   /** Absolute vault root, or null when no vault is open (→ `needVault`). */
   vaultRoot: string | null
+  /** 本机人类身份的完整 OKF actor 串(`human:<id>`);宿主太老时为 null。 */
+  author: string | null
   /** True once the startup sequence found no open vault; the UI shows only a hint. */
   needVault: boolean
   /** True until the startup sequence settles (vault info + state + listing). */
@@ -111,6 +113,7 @@ export interface RunDone {
 export function createStore(): SparkStore {
   return {
     vaultRoot: null,
+    author: null,
     needVault: false,
     booting: true,
     kitFailed: false,
@@ -294,9 +297,9 @@ export function nextFileName(s: SparkStore, _markdown: string, nowIso: string): 
  * missing ones are filled in), because the editor holds the body alone and
  * would otherwise rewrite that metadata away on every save.
  */
-export function ideaDocText(s: SparkStore, markdown: string, nowIso: string): string {
+export function ideaDocText(s: SparkStore, markdown: string, nowIso: string, author?: string): string {
   return s.currentFrontmatter === null
-    ? buildIdeaDoc(markdown, nowIso)
+    ? buildIdeaDoc(markdown, nowIso, author)
     : rebuildIdeaDoc(s.currentFrontmatter, markdown, nowIso)
 }
 
@@ -590,8 +593,11 @@ export function toast(message: string, level: 'info' | 'error' = 'info'): void {
 export async function boot(): Promise<void> {
   state.booting = true
   try {
-    const info = await vaultInfo().catch(() => ({ root: null }) as { root: string | null })
+    const info = await vaultInfo().catch(
+      () => ({ root: null, author: undefined }) as { root: string | null; author?: string },
+    )
     state.vaultRoot = info?.root ?? null
+    state.author = info?.author ?? null
     if (!state.vaultRoot) {
       state.needVault = true
       return
@@ -773,7 +779,7 @@ export async function saveIdea(markdown: string): Promise<string | null> {
   state.saveState = { kind: 'saving' }
   try {
     const name = await freeFileName(markdown)
-    const text = ideaDocText(state, markdown, new Date().toISOString())
+    const text = ideaDocText(state, markdown, new Date().toISOString(), state.author ?? undefined)
     await vaultWrite(relPath(state, name), text)
     state.current = name
     // Re-read our own output so the next save preserves this one's `created`.
