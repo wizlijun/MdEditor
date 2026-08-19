@@ -77,7 +77,20 @@ async fn serve_one(app: AppHandle, stream: crate::platform::ipc::Stream) {
 
         let mut env = build_env(&app);
         if let Some(e) = env.as_mut() { e.roots = roots.clone(); }
-        let reply = dispatch::handle(env.as_ref(), &msg);
+        // `dispatch::handle` for `tools/call` ultimately runs `tools::search`
+        // (or `vault_info`) inline under a blocking `std::sync::Mutex` on the
+        // shared index handle — while the GUI's own watcher is mid-rebuild
+        // that lock can be held for tens of seconds. This task runs on a
+        // tokio worker; blocking it for that long starves every other async
+        // task queued on the same worker, including this app's own Tauri
+        // commands (this repo has already been bitten by exactly that class
+        // of stall — see the `#[tauri::command(async)]` discipline elsewhere).
+        // `spawn_blocking` moves the whole call onto the blocking thread
+        // pool, where a long lock hold only costs a thread, not the runtime's
+        // ability to make progress on everything else.
+        let reply = tokio::task::spawn_blocking(move || dispatch::handle(env.as_ref(), &msg))
+            .await
+            .unwrap_or(None);
         if let Some(reply) = reply {
             if w.write_all(format!("{reply}\n").as_bytes()).await.is_err() { break; }
             let _ = w.flush().await;
@@ -127,5 +140,58 @@ mod tests {
         let params = serde_json::json!({ "capabilities": {} });
         assert!(!super::client_supports_roots(&params));
         assert!(!super::client_supports_roots(&serde_json::json!({})));
+    }
+
+    /// finding 4: `serve_one` now runs `dispatch::handle` — which can hold
+    /// `ToolEnv`'s index mutex for as long as a rebuild takes — inside
+    /// `spawn_blocking`, precisely so a long hold cannot occupy an async
+    /// worker. This pins the general mechanism `serve_one` relies on (there
+    /// is no way to unit-test `serve_one` itself here — it needs a real
+    /// `AppHandle`, which this repo has never enabled `tauri::test` to
+    /// provide; see `mcp::gate`'s tests for the same constraint).
+    ///
+    /// Runs on a `current_thread` runtime — the worst case, a single worker
+    /// — so the difference is unmissable: a blocking call made *inline*
+    /// (not via `spawn_blocking`) would alone occupy that one worker for the
+    /// whole lock hold, and the concurrently spawned async task below could
+    /// not complete until it finished. Routed through `spawn_blocking`, the
+    /// hold moves to the blocking-thread pool and the async task is free to
+    /// run in the meantime.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_blocking_keeps_the_async_runtime_free_during_a_long_lock_hold() {
+        let held_for = std::time::Duration::from_millis(200);
+        let lock = std::sync::Arc::new(std::sync::Mutex::new(()));
+
+        // Simulate "the GUI's rebuild thread holds the index mutex": grab it
+        // on a real OS thread and don't let go for `held_for`.
+        let holder_lock = lock.clone();
+        let holder = std::thread::spawn(move || {
+            let _g = holder_lock.lock().unwrap();
+            std::thread::sleep(held_for);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(20)); // let the holder actually grab it first
+
+        let blocking_lock = lock.clone();
+        let blocking = tokio::task::spawn_blocking(move || {
+            // Blocks the *blocking-pool* thread, not this runtime's one
+            // worker — mirrors `serve_one`'s `spawn_blocking(move ||
+            // dispatch::handle(..))`.
+            let _g = blocking_lock.lock().unwrap();
+        });
+
+        let start = std::time::Instant::now();
+        let fast = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        });
+        fast.await.unwrap();
+        assert!(
+            start.elapsed() < held_for,
+            "the runtime's only worker must stay free while the blocking call is in flight, \
+             not queue behind it: fast async task took {:?} (lock held for {held_for:?})",
+            start.elapsed(),
+        );
+
+        blocking.await.unwrap();
+        holder.join().unwrap();
     }
 }

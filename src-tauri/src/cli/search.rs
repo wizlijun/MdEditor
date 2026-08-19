@@ -548,17 +548,38 @@ fn one_line(text: &str) -> String {
     }
 }
 
+/// The envelope every `--json` / MCP `search` response shares:
+/// `query`/`route`/`took_ms`/`total`/`hits`. Single construction point,
+/// mirroring [`hit_to_json`]'s role for the per-hit shape (see its doc
+/// comment) — before this existed, `print_json` below and `mcp::tools::search`
+/// each hand-wrote these same keys a second time, and a key added to one
+/// would not make the other red (review finding 5).
+///
+/// Takes `hits` already rendered — via [`hit_to_json`], optionally with
+/// per-surface extras layered on (the CLI adds nothing; MCP adds a
+/// `context` array and applies its own byte-budget truncation) — rather than
+/// mapping `Hit`s itself, since this function has no business knowing about
+/// either surface's extras.
+pub fn envelope_json(
+    query: &str,
+    route: searchidx::Route,
+    took_ms: u128,
+    hits: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "query": query,
+        "route": route.as_str(),
+        "took_ms": took_ms,
+        "total": hits.len(),
+        "hits": hits,
+    })
+}
+
 fn print_json(query: &str, route: searchidx::Route, took_ms: u128, hits: &[searchidx::Hit]) {
     // `hit_to_json` is the single construction point for a hit's JSON shape —
     // shared with MCP, so the two surfaces cannot silently drift apart.
     let arr: Vec<serde_json::Value> = hits.iter().map(hit_to_json).collect();
-    println!(
-        "{}",
-        serde_json::json!({
-            "query": query, "route": route.as_str(), "took_ms": took_ms,
-            "total": hits.len(), "hits": arr
-        })
-    );
+    println!("{}", envelope_json(query, route, took_ms, arr));
 }
 
 fn report_stats(index: Option<&SearchIndex>, json: bool, skipped: &[SkippedFile]) -> ExitCode {
