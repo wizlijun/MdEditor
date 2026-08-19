@@ -11,6 +11,9 @@ use crate::sotvault::vault_id;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt as WindowsOsStrExt;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MountStatus { Matched, Mismatched, Unknown }
 
@@ -82,7 +85,23 @@ fn uri_to_path(uri: &str) -> Option<PathBuf> {
 
     // Percent-decode the path
     let decoded_bytes = percent_decode_bytes(path_part);
-    let path = std::ffi::OsStr::from_bytes(&decoded_bytes);
+
+    // Convert decoded bytes to OsStr in a platform-specific way:
+    // - Unix: paths are byte sequences; preserve arbitrary bytes (even non-UTF-8) faithfully
+    // - Windows: paths are UTF-16; cannot represent arbitrary byte sequences. Use lossy UTF-8
+    //   conversion. A mangled path will simply not match any vault-id and fall through to
+    //   the existing skip behaviour, which is the safe outcome.
+    let path = {
+        #[cfg(unix)]
+        {
+            std::ffi::OsStr::from_bytes(&decoded_bytes)
+        }
+        #[cfg(windows)]
+        {
+            let string = String::from_utf8_lossy(&decoded_bytes);
+            std::ffi::OsStr::new(&string)
+        }
+    };
     Some(PathBuf::from(path))
 }
 
