@@ -1,5 +1,15 @@
 //! 方法分发。`initialize` 与 `tools/list` **不需要 env**(主程序可以没开);
 //! 只有 `tools/call` 需要。
+//!
+//! `env: None` 到达这里时,主程序在事实上**是**开着的:唯一的生产调用点是
+//! `server::serve_one`,它只在 IPC 连接被成功 accept 之后才跑,而「note.md
+//! 没开 / MCP 被关掉」那两种真正连不上的情形,外壳早在能调到这里之前就已经
+//! 在 `shim::forward` 里被拦住并单独报了(那条消息是外壳自己写的,见
+//! `shim.rs`)。所以这里唯一会真的把 `env` 传成 `None` 的原因是
+//! `server::build_env` 里那个 `resolve_vault_root(app)?` 落了空 —— **没配置
+//! vault**,不是「没运行」。两种情形的补救动作完全不同(启动应用 vs. 去
+//! Preferences 选一个 vault),答错的那句会让 agent 对着一个已经开着的
+//! note.md 反复重试同一件永远不会改变的事,直到放弃整个工具。
 
 use serde_json::{json, Value};
 
@@ -22,9 +32,12 @@ pub fn handle(env: Option<&ToolEnv>, msg: &Value) -> Option<Value> {
         "prompts/list" => json!({ "jsonrpc": "2.0", "id": id, "result": { "prompts": [] } }),
         "tools/call" => {
             let Some(env) = env else {
+                // 见模块顶部的注释:能走到这条分支,IPC 已经连通,note.md
+                // 已经在跑——缺的是一个已配置的 vault,不是「没运行」。
                 return Some(protocol::tool_error(
                     &id,
-                    "note.md 未运行。启动 note.md 后即可检索;在此之前请用 grep/rg 兜底。",
+                    "note.md 正在运行,但尚未配置 vault。请在 Preferences 中选择一个 vault \
+                     后即可检索;在此之前请用 grep/rg 兜底。",
                 ));
             };
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -76,7 +89,9 @@ mod tests {
         assert_eq!(r["result"]["protocolVersion"], "2025-11-25");
     }
 
-    /// 没有 env(主程序不在)时调工具 ⇒ isError,不是协议 error。
+    /// 没有 env(生产中即「vault 未配置」,见模块顶注)时调工具 ⇒ isError,
+    /// 不是协议 error,文案指向 Preferences 而不是「note.md 未运行」——
+    /// 后者对这个真实触发条件是假的(finding 3)。
     #[test]
     fn tools_call_without_env_is_tool_error() {
         let m = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
@@ -84,6 +99,9 @@ mod tests {
         let r = handle(None, &m).unwrap();
         assert_eq!(r["result"]["isError"], true);
         assert!(r.get("error").is_none());
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Preferences"), "必须指向 Preferences,而不是让 agent 反复启动一个已经在跑的 note.md: {text}");
+        assert!(!text.contains("未运行"), "note.md 明明在跑,不能说它没运行: {text}");
     }
 
     #[test]

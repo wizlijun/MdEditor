@@ -74,9 +74,10 @@ fn run_loop(rx: &mpsc::Receiver<Line>, stdout: &mut impl Write) -> ExitCode {
 
         // 这条 `tools/call` 触发了向 client 反向问 roots。等待期间 client 可能
         // 会先发它自己的下一个 `tools/call`——那条不能就地用
-        // `dispatch::handle(None, ..)` 答掉(会答成"note.md 未运行",这是假的:
-        // GUI 可能好好开着,只是我们还没问完 roots)。`request_roots` 把它们
-        // 攒在 `queued_tool_calls` 里,原样按到达顺序补发。
+        // `dispatch::handle(None, ..)` 答掉(会答成"vault 未配置",这同样是假
+        // 的:GUI 可能好好开着、vault 也配置好了,只是我们还没问完 roots)。
+        // `request_roots` 把它们攒在 `queued_tool_calls` 里,原样按到达顺序
+        // 补发,交给真正连了 IPC 的 `forward` 去答。
         let mut queued_tool_calls = Vec::new();
         if method == "tools/call" && supports_roots && roots.is_none() {
             let outcome = request_roots(rx, stdout, ROOTS_DEADLINE);
@@ -189,10 +190,11 @@ struct RootsOutcome {
 /// 不是可选的加固。超时就放弃,回落到空 roots,让上层判定落到 `Unknown`。
 ///
 /// 等待期间看到的 `tools/call` 不能用 `dispatch::handle(None, ..)` 就地答掉——
-/// 那条路径只要 `env` 是 `None` 就无条件答"note.md 未运行",而这里的
-/// `None` 只是"这条内部检查不需要 env",不代表 GUI 真的不在。就地这么答会
-/// 把一个可能存在的 GUI 报成不存在,agent 可能因此整场会话退回 grep。
-/// 所以这类消息只入队,交回调用方按普通 `tools/call` 走真正的 `forward`。
+/// 那条路径只要 `env` 是 `None` 就无条件答"vault 未配置",而这里的
+/// `None` 只是"这条内部检查不需要 env",不代表 GUI 真的没配置 vault。就地
+/// 这么答会把一个可能配置齐全的 vault 报成没配置,agent 可能因此整场会话
+/// 退回 grep。所以这类消息只入队,交回调用方按普通 `tools/call` 走真正的
+/// `forward`。
 fn request_roots(
     rx: &mpsc::Receiver<Line>,
     stdout: &mut impl Write,
