@@ -10,6 +10,7 @@ For the full commit history, see the git log.
 ### Fixed
 
 - **Backspace with an IME candidate window open no longer eats an extra character.** Typing Japanese, Chinese or Korean in the outline and pressing Backspace to correct the pre-edit string deleted a character in the IME *and* merged the line into the one above it — one keystroke handled twice, once by the input method and once by us. Keys pressed mid-composition now belong to the input method throughout the app: the outline's Backspace/Enter/arrow-key line commands, the source editor's auto-pairing, the rich editor's slash menu, the annotation popup's Enter-to-save and Enter in a recalled-block edit all hold off until the candidate window closes. Once the text is committed nothing changes.
+- **Cmd+A in rich mode selects the whole document again.** It used to grab only part of it — just the folded frontmatter block, or, with the caret inside a code block, only that block — while right-clicking ▸ Select All worked fine on the same file. The shortcut was the one path that never used the editor's real select-all: macOS was swallowing the chord as an Edit-menu key equivalent, and whatever slipped through hit the underlying editor's own crude `Mod-a`. All three entry points (keyboard, right-click, Edit menu) now apply the same selection. Side effect worth knowing: Cmd+A no longer shows a shortcut next to Edit ▸ Select All, and it no longer gets stolen from the search box or other text fields — it selects whatever actually has focus.
 
 ## v6.824.1 — 2026-08-24
 

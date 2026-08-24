@@ -2,7 +2,7 @@ import type { EditorView } from 'prosemirror-view'
 import { toggleMark } from 'prosemirror-commands'
 import { TextSelection } from 'prosemirror-state'
 import type { EditorActions } from './EditorContextMenu.svelte'
-import { selectAllSelection } from '../editor-select-all'
+import { applySelectAll } from '../editor-select-all'
 import {
   setBlock, wrapBlock, wrapList, insertAtom, insertTable, insertTaskList,
 } from './block-helpers'
@@ -101,9 +101,7 @@ export function createRichActions(
           catch (e) { console.error('copy image failed', e) }
           return
         }
-        case 'selectAll':
-          view.dispatch(view.state.tr.setSelection(selectAllSelection(view.state.doc)))
-          view.focus(); return
+        case 'selectAll': return applySelectAll(view)
         case 'wikilink':  return wrapWikilink(view)
         case 'note': {
           const { insertNoteRich } = await import('../note-anno/note-commands')

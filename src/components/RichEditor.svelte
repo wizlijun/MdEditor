@@ -32,6 +32,7 @@
   import { openEditForMark, openEditForAnchor, insertNoteRich } from '../lib/note-anno/note-commands'
   import NotePopover from '../lib/note-anno/NotePopover.svelte'
   import NoteEditPopup from '../lib/note-anno/NoteEditPopup.svelte'
+  import { applySelectAll, handleSelectAllKeydown } from '../lib/editor-select-all'
   import { setBlockType, wrapIn } from 'prosemirror-commands'
   import { wrapInList } from 'prosemirror-schema-list'
   import LinkedReferences from './outline/LinkedReferences.svelte'
@@ -545,6 +546,15 @@
     const s = view.state
     const sc = s.schema.nodes
 
+    // ── Select All: Cmd+A ──
+    // Handled here rather than left to the editor's own `Mod-a`: moraya-core
+    // binds that to a raw AllSelection (which WebKit paints clamped to the
+    // frontmatter block) and narrows it to the enclosing code_block when the
+    // caret is inside one. Both look like "Cmd+A only selected part of the
+    // document". Routing it through the shared helper gives the keyboard the
+    // exact selection the right-click menu applies.
+    if (handleSelectAllKeydown(event, view)) return
+
     // ── Heading shortcuts: Cmd+1-6 ──
     if (mod && !shift && !alt && /^[1-6]$/.test(event.key)) {
       event.preventDefault()
@@ -991,24 +1001,25 @@
     }
   })
 
-  // Native Cmd+A no-ops on this editor: WebKit's `selectAll:` responder action
-  // gets confused by the ProseMirror DOM's mix of editable text and
-  // non-editable atom nodes (images, math blocks, …) and silently does
-  // nothing. The Edit-menu "Select All" item is routed through this custom
-  // event instead (see the Rust `select-all` menu item + App.svelte), applying
-  // the same selection the right-click menu does (lib/editor-select-all.ts).
-  async function onSelectAll(): Promise<void> {
+  // Clicking Edit ▸ Select All. Native `PredefinedMenuItem::select_all` no-ops
+  // on this editor — WebKit's `selectAll:` responder action gets confused by
+  // the ProseMirror DOM's mix of editable text and non-editable atom nodes
+  // (images, math blocks, …) — so the item is a custom one broadcasting
+  // `notemd:select-all` (see the Rust menu + App.svelte).
+  //
+  // The keyboard no longer comes through here: Cmd+A is handled in
+  // handleRichKeydown, because a menu key-equivalent never reaches the webview
+  // at all and the focus round-trip below is fragile. This path stays for the
+  // mouse, where that round-trip is unavoidable.
+  function onSelectAll(): void {
     if (!editor || status !== 'mounted') return
     const view = editor.view as any
-    const { selectAllSelection } = await import('../lib/editor-select-all')
-    // Focus BEFORE writing the selection. This handler runs off the native
-    // Edit-menu round-trip (Cmd+A's key equivalent flashes the menu just like
-    // clicking the item does), so the webview is not first responder at this
-    // point — a selection written then lands in state but never gets painted.
-    // That was the whole symptom: nothing looked selected, yet Backspace
-    // deleted the entire document.
+    // Focus BEFORE writing the selection: clicking the menu item leaves the
+    // webview as not-first-responder, and a selection written then lands in
+    // state but never gets painted — nothing looks selected, yet Backspace
+    // deletes the whole document.
     view.focus()
-    view.dispatch(view.state.tr.setSelection(selectAllSelection(view.state.doc)))
+    applySelectAll(view)
     // Re-sync once the menu has finished dismissing: when focus returns to the
     // webview after our write, WebKit restores its own cached (collapsed) DOM
     // selection. view.focus() re-runs ProseMirror's selectionToDOM from state,

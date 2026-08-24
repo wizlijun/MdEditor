@@ -2214,13 +2214,20 @@ fn build_menu<R: tauri::Runtime>(
         // Custom item, not PredefinedMenuItem::select_all: the native macOS
         // `selectAll:` responder action no-ops on the rich editor's ProseMirror
         // DOM (a contenteditable root mixed with non-editable atom nodes
-        // confuses WebKit's native select-all traversal), so Cmd+A silently
-        // did nothing in rich mode. Routing it through our own menu-event
-        // (same pattern as `find`/`new`/`save` below) lets each mounted editor
-        // apply the SAME select-all it already exposes via its right-click
-        // menu (RichEditor: ProseMirror AllSelection; SourceView: textarea
-        // .select()) — see `notemd:select-all` in App.svelte.
-        .item(&MenuItemBuilder::with_id("select-all", menu_label(locale, "sys.selectAll")).accelerator("CmdOrCtrl+A").build(app)?)
+        // confuses WebKit's native select-all traversal). Clicking this item
+        // broadcasts `notemd:select-all` (same pattern as `find`/`new`/`save`
+        // below) so whichever editor is mounted applies its own select-all.
+        //
+        // Deliberately NO accelerator. A menu key-equivalent is swallowed by
+        // macOS in `performKeyEquivalent:`, so the webview never sees the
+        // keydown; select-all then had to survive a menu focus round-trip,
+        // during which WebKit restores its own cached DOM selection over the
+        // one we wrote — Cmd+A ended up selecting only part of the document.
+        // Without the accelerator the chord reaches the webview directly and
+        // is handled there (RichEditor's handleRichKeydown / the textarea's
+        // native select-all), which also stops Cmd+A being hijacked away from
+        // whatever input actually has focus.
+        .item(&MenuItemBuilder::with_id("select-all", menu_label(locale, "sys.selectAll")).build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id("find", menu_label(locale, "edit.find")).accelerator("CmdOrCtrl+F").build(app)?)
         .item(&MenuItemBuilder::with_id("find-replace", menu_label(locale, "edit.findReplace")).build(app)?);
