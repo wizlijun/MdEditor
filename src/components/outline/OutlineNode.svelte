@@ -12,6 +12,7 @@
   import { parseClipboardOutline } from '../../lib/outline/paste'
   import { visibleNodes } from '../../lib/outline/model'
   import { matchCommand, type OutlineCommandId } from '../../lib/outline/shortcuts'
+  import { isImeKey } from '../../lib/ime'
   import { writeBackNoteEdit } from '../../lib/outline/note-writeback-io'
   import { t } from '../../lib/i18n/store.svelte'
 
@@ -189,7 +190,16 @@
     outline.editingId = id
   }
 
+  /** compositionstart↔compositionend 之间为真。`isImeKey` 之外再记一份:
+   *  个别 webview 上 keydown 的 isComposing/keyCode 不可靠,而这一段区间是
+   *  webview 一定会给的(SearchPanel 用的也是这套「双保险」)。 */
+  let composing = false
+
   function onKeydown(e: KeyboardEvent) {
+    // IME 变换中(候选窗口开着)的按键归输入法:退格删预编辑串里的一个字符、
+    // 回车确认候选、上下键翻候选。这里再处理一遍就是同一下按键被处理两次 ——
+    // 退格会连带把这个节点并进上一个,用户看到「多删了一个字」。
+    if (composing || isImeKey(e)) return
     const el = e.currentTarget as HTMLTextAreaElement
     // 先给菜单层机会（/ 与 [[ 菜单打开时接管 ↑↓/Enter/Esc）
     if (onEditorInput(node, el.value, el.selectionStart, el, e)) { e.preventDefault(); return }
@@ -349,7 +359,9 @@
         rows="1"
         value={content}
         onbeforeinput={(e) => { if (!editable) e.preventDefault() }}
-        onblur={(e) => commitEdit((e.currentTarget as HTMLTextAreaElement).value)}
+        oncompositionstart={() => { composing = true }}
+        oncompositionend={() => { composing = false }}
+        onblur={(e) => { composing = false; commitEdit((e.currentTarget as HTMLTextAreaElement).value) }}
         onkeydown={onKeydown}
         onpaste={onPaste}
         oninput={(e) => {

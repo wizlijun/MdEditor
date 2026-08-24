@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Backspace with an IME candidate window open no longer eats an extra character.** Typing Japanese, Chinese or Korean in the outline and pressing Backspace to correct the pre-edit string deleted a character in the IME *and* merged the line into the one above it — one keystroke handled twice, once by the input method and once by us. Keys pressed mid-composition now belong to the input method throughout the app: the outline's Backspace/Enter/arrow-key line commands, the source editor's auto-pairing, the rich editor's slash menu, the annotation popup's Enter-to-save and Enter in a recalled-block edit all hold off until the candidate window closes. Once the text is committed nothing changes.
+
 ## v6.824.1 — 2026-08-24
 
 ### Added

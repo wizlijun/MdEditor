@@ -15,6 +15,7 @@
     isHoverActive,
   } from '../lib/mdblock-hover/hover-store.svelte'
   import { settings } from '../lib/settings.svelte'
+  import { isImeKey } from '../lib/ime'
   import { t } from '../lib/i18n/store.svelte'
   import { answersStore, loadAnswersFor } from '../lib/note-anno/answers-store.svelte'
   import '../lib/styles/attachment.css'
@@ -503,6 +504,13 @@
   }
 
   function handleRichKeydown(event: KeyboardEvent) {
+    // ── IME first ──
+    // This listener is registered in the CAPTURE phase, so it sees the key
+    // before ProseMirror does. While an IME is composing, ↑↓/Enter/Esc drive
+    // the candidate window — letting the slash menu eat them (or running a
+    // shortcut) handles the same keystroke twice. See src/lib/ime.ts.
+    if (isImeKey(event)) return
+
     // ── Slash menu navigation (highest priority) ──
     if (showSlashMenu) {
       if (event.key === 'ArrowDown') {

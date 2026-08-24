@@ -6,6 +6,7 @@
 
 import { renderSourceHtml } from '../lib/source-highlight'
 import { autoPairInsert } from '../lib/autopair'
+import { isImeKey } from '../lib/ime'
 
 export interface SourcePane {
   getValue(): string
@@ -42,6 +43,10 @@ export function mountSource(
   // Auto-close paired markdown markers ([[ ** __ ^^ ~~ == and `), matching
   // SourceView.svelte: collapsed selection, single printable key, no modifiers.
   ta.addEventListener('keydown', (ev) => {
+    // Mid-composition the key belongs to the IME (same guard the main window's
+    // SourceView uses) — pairing on a pre-edit keystroke edits a buffer the
+    // user hasn't committed yet.
+    if (isImeKey(ev)) return
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return
     if (ev.key.length !== 1) return
     const pos = ta.selectionStart ?? 0

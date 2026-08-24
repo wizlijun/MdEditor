@@ -2,6 +2,7 @@
   import type { RecallTreeNode } from '../../lib/outline/recall'
   import InlineRender from './InlineRender.svelte'
   import RefTreeNode from './RefTreeNode.svelte'
+  import { isImeKey } from '../../lib/ime'
 
   // Collapsible renderer for one recalled subtree node. When `editable`, the
   // text can be edited in place (Phase B / B1): commit writes back to source.
@@ -40,6 +41,8 @@
   }
   function onKeydown(e: KeyboardEvent) {
     e.stopPropagation()
+    // 变换中的回车是在确认候选，不是在提交这一行（见 src/lib/ime.ts）
+    if (isImeKey(e)) return
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() }
     else if (e.key === 'Escape') { e.preventDefault(); editing = false }
   }

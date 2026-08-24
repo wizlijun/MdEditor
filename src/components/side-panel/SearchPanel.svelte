@@ -7,6 +7,7 @@
   import { requestReveal } from '../../lib/outline/reveal.svelte'
   import { t } from '../../lib/i18n/store.svelte'
   import { showError } from '../../lib/dialogs'
+  import { isImeKey } from '../../lib/ime'
   import { setSideVisible } from '../../lib/side-panel/registry.svelte'
   import SideViewSwitcher from './SideViewSwitcher.svelte'
   import { searchStore, isIndexNotReady } from '../../lib/search/store.svelte'
@@ -193,8 +194,9 @@
 
   function onKeydown(e: KeyboardEvent) {
     // A Return that closes an IME candidate window belongs to the IME, not to
-    // us: `isComposing` is exactly that distinction.
-    if (e.isComposing) return
+    // us. `isImeKey` is that distinction plus the two fallbacks old webviews
+    // need (see src/lib/ime.ts) — the editors share it.
+    if (isImeKey(e)) return
     if (e.key === 'Enter') {
       void runDeep()
     } else if (e.key === 'Escape') {

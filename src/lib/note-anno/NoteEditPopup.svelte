@@ -2,6 +2,7 @@
   import { noteUi, styleVars } from './note-ui.svelte'
   import { t } from '../i18n/store.svelte'
   import { iconSvg } from '../context-menu/icons'
+  import { isImeKey } from '../ime'
 
   // Captured at mount: the parent only mounts this while noteUi.edit is set.
   const editState = noteUi.edit!
@@ -49,6 +50,10 @@
     if (root && !root.contains(e.target as Node)) close(true)
   }
   function onKeydown(e: KeyboardEvent) {
+    // 变换中的回车/Esc 归输入法（确认候选 / 取消预编辑），弹窗不能跟着关掉
+    // 并把还没确认的半截批注存进去（见 src/lib/ime.ts）。仍然拦下不外传:
+    // 弹窗开着时这些键本来就轮不到外面的全局 Escape 处理。
+    if (isImeKey(e)) { e.stopPropagation(); return }
     if (e.key === 'Escape') { e.stopPropagation(); close(true) }
     // Notes are single-line (newlines are flattened on save) → Enter confirms.
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); close(true) }

@@ -15,6 +15,7 @@
   import { saveClipboardResource, isAttachmentUrl, basenameOf } from '../lib/paste-resources'
   import { isVideoUrl, fetchVideoInfo } from '../lib/video-links'
   import { autoPairInsert } from '../lib/autopair'
+  import { isImeKey } from '../lib/ime'
   import { renderSourceHtml, type HitRange } from '../lib/source-highlight'
 
   let {
@@ -82,6 +83,10 @@
   })
 
   async function onTextareaKeydown(ev: KeyboardEvent) {
+    // Keys pressed while an IME is composing belong to the IME, not to us —
+    // acting on them handles the same keystroke twice (see src/lib/ime.ts).
+    if (isImeKey(ev)) return
+
     // Inline formatting shortcuts — independent of mdblock setting
     if (ev.metaKey || ev.ctrlKey) {
       // ── Insert annotation: Cmd+Shift+N / Ask: Cmd+? (both mirror rich mode) ──
