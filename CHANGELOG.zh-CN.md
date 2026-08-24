@@ -6,6 +6,8 @@
 
 ## 未发布
 
+## v6.824.1 — 2026-08-24
+
 ### 新增
 
 - **`notemd .` 与 `notemd xxx.md`:命令行直接把东西开进应用。** 不用记子命令,给 `notemd` 一个路径就行 —— 文件开成标签页,目录成为文件夹视图的根。路径按 shell 的当前目录解析,相对路径照样能用;应用已经开着就交给那个窗口,不会再开一个,命令本身立刻返回,不等窗口。文件不存在会明说(`cannot open 'x.md': No such file or directory`),而不是「unknown command」;同名时命令仍然优先 —— 想开那个文件请写 `./search`。详见 `notemd help open`。
