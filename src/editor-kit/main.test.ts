@@ -271,3 +271,57 @@ describe('KitOptions.powerMode contract', () => {
     expect('powerMode' in ({ initialMarkdown: '', powerMode: null } as Record<string, unknown>)).toBe(true)
   })
 })
+
+// 插件窗口用的就是这个 kit,所以主窗口修过的输入法问题必须在这儿也成立:
+// 结束变换的那一下按键(退格删掉最后一个预编辑字符 / 回车确认候选)会在
+// compositionend **之后**才到,ProseMirror 认得但只是不处理、不 preventDefault,
+// 于是 contenteditable 自己又删一个已确定的字符。rich 模式必须把它取消掉。
+describe('mountMarkdownEditor — 输入法收尾那一击(见 src/lib/ime.ts)', () => {
+  function press(el: HTMLElement, key = 'Backspace') {
+    const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+    el.dispatchEvent(ev)
+    return ev
+  }
+  /** 站在编辑区里发一次「变换刚结束」。 */
+  function endComposition(el: HTMLElement) {
+    el.dispatchEvent(new Event('compositionstart', { bubbles: true }))
+    el.dispatchEvent(new Event('compositionend', { bubbles: true }))
+  }
+
+  it('rich 模式:收尾那一击被取消', async () => {
+    const c = container()
+    const ed = await mountMarkdownEditor(c, { initialMarkdown: 'x', mode: 'rich' })
+    const pm = c.querySelector('.moraya-editor') as HTMLElement
+    endComposition(pm)
+    expect(press(pm).defaultPrevented, '不取消的话 contenteditable 会多删一个字').toBe(true)
+    expect(press(pm).defaultPrevented, '只吃一下,第二下是用户真的又按了').toBe(false)
+    ed.destroy()
+  })
+
+  it('rich 模式:没变换过的按键原样放行', async () => {
+    const c = container()
+    const ed = await mountMarkdownEditor(c, { initialMarkdown: 'x', mode: 'rich' })
+    const pm = c.querySelector('.moraya-editor') as HTMLElement
+    expect(press(pm).defaultPrevented).toBe(false)
+    ed.destroy()
+  })
+
+  it('切到 source 后不再插手 —— textarea 自己会挡,再取消一次是多的', async () => {
+    const c = container()
+    const ed = await mountMarkdownEditor(c, { initialMarkdown: 'x', mode: 'rich' })
+    await ed.setMode('source')
+    const ta = c.querySelector('textarea') as HTMLElement
+    endComposition(ta)
+    expect(press(ta).defaultPrevented).toBe(false)
+    ed.destroy()
+  })
+
+  it('destroy 之后不留监听器', async () => {
+    const c = container()
+    const ed = await mountMarkdownEditor(c, { initialMarkdown: 'x', mode: 'rich' })
+    const pm = c.querySelector('.moraya-editor') as HTMLElement
+    ed.destroy()
+    endComposition(pm)
+    expect(press(pm).defaultPrevented).toBe(false)
+  })
+})

@@ -15,7 +15,7 @@
     isHoverActive,
   } from '../lib/mdblock-hover/hover-store.svelte'
   import { settings } from '../lib/settings.svelte'
-  import { createImeGuard } from '../lib/ime'
+  import { createImeGuard, attachImeGuard } from '../lib/ime'
   import { t } from '../lib/i18n/store.svelte'
   import { answersStore, loadAnswersFor } from '../lib/note-anno/answers-store.svelte'
   import '../lib/styles/attachment.css'
@@ -506,29 +506,8 @@
 
   /** 变换区间(含结束那一下按键)的守卫,见 src/lib/ime.ts */
   const ime = createImeGuard()
-  const _imeStart = () => ime.start()
-  const _imeEnd   = () => ime.end()
-
-  /**
-   * 取消「收尾那一击」。
-   *
-   * WKWebView 把结束变换的那一下(退格删掉最后一个预编辑字符 / 回车确认候选)
-   * 在 `compositionend` **之后**再作为一个普通按键派发出来,身上已经没有任何
-   * 输入法标记。ProseMirror 认得这种情况(`inOrNearComposition`),但它只是
-   * `return`,并不 `preventDefault` —— 于是 contenteditable 的原生行为照跑,
-   * 把前面一个已确定的字符也删了。source 模式是 `<textarea>`、没有 PM,所以
-   * 只有 rich 模式复现。
-   *
-   * 挂在 `host`(`.ProseMirror` 的祖先)的捕获阶段:PM 的监听器就挂在
-   * `.ProseMirror` 自己身上,而按键的 target 正是那个 contenteditable ——
-   * 同一元素上 at-target 阶段按注册顺序触发,PM 先挂,所以「在 .ProseMirror
-   * 上用 capture」并不能抢在它前面。必须从祖先捕获。
-   */
-  const _imeTailCancel = (e: KeyboardEvent) => {
-    if (!ime.consumeTail(e)) return
-    e.preventDefault()
-    e.stopImmediatePropagation()
-  }
+  /** attachImeGuard 的卸载函数(挂载后填上) */
+  let _imeDetach: (() => void) | null = null
 
   function handleRichKeydown(event: KeyboardEvent) {
     // ── IME first ──
@@ -1170,12 +1149,11 @@
         _pmEl?.addEventListener('click', handleImageClick as EventListener)
         _pmEl?.addEventListener('mousedown', handleLinkMouseDown as EventListener, true)
         _pmEl?.addEventListener('keydown', handleRichKeydown as EventListener, true)
-        // On `host`, in capture: an ancestor's capture listener is the only
-        // registration that reliably runs before ProseMirror's own — see
-        // `_imeTailCancel`.
-        host!.addEventListener('compositionstart', _imeStart, true)
-        host!.addEventListener('compositionend',   _imeEnd, true)
-        host!.addEventListener('keydown', _imeTailCancel as EventListener, true)
+        // Cancels the keystroke that CLOSES a composition — ProseMirror
+        // recognises it but only declines to act, leaving the contenteditable's
+        // own delete to eat a committed character. Shares `ime` with
+        // `handleRichKeydown`. See src/lib/ime.ts.
+        _imeDetach = attachImeGuard(host!, ime)
         _pmEl?.addEventListener('input',   checkSlashMenu as EventListener)
         _pmEl?.addEventListener('contextmenu', handleRichContextMenu as EventListener)
 
@@ -1265,9 +1243,7 @@
     _pmEl?.removeEventListener('click', handleImageClick as EventListener)
     _pmEl?.removeEventListener('mousedown', handleLinkMouseDown as EventListener, true)
     _pmEl?.removeEventListener('keydown', handleRichKeydown as EventListener, true)
-    host?.removeEventListener('compositionstart', _imeStart, true)
-    host?.removeEventListener('compositionend',   _imeEnd, true)
-    host?.removeEventListener('keydown', _imeTailCancel as EventListener, true)
+    _imeDetach?.(); _imeDetach = null
     _pmEl?.removeEventListener('input',   checkSlashMenu as EventListener)
     _pmEl?.removeEventListener('contextmenu', handleRichContextMenu as EventListener)
     _dragDropUnlisten?.()

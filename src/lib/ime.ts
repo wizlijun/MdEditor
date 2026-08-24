@@ -87,3 +87,33 @@ export function createImeGuard(now: () => number = () => Date.now()): ImeGuard {
     },
   }
 }
+
+/**
+ * 给一块 contenteditable(ProseMirror)装上收尾守卫,返回卸载函数。
+ *
+ * **必须挂在祖先上,而且是捕获阶段。** ProseMirror 的键盘监听器挂在
+ * `.ProseMirror` 元素自己身上,而按键的 target 正是那个 contenteditable ——
+ * 同一元素上 at-target 阶段不分捕获/冒泡,一律按注册顺序触发,PM 又挂得比
+ * 我们早。所以「在 .ProseMirror 上 addEventListener(..., true)」抢不到它前面,
+ * 只有从祖先捕获才行。
+ *
+ * @param host `.ProseMirror` 的祖先容器
+ * @param guard 复用调用方已有的守卫(它可能还要用 `blocks`);默认自建一个
+ */
+export function attachImeGuard(host: HTMLElement, guard: ImeGuard = createImeGuard()): () => void {
+  const onStart = () => guard.start()
+  const onEnd = () => guard.end()
+  const onKeydown = (e: Event) => {
+    if (!guard.consumeTail(e as KeyboardEvent)) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+  }
+  host.addEventListener('compositionstart', onStart, true)
+  host.addEventListener('compositionend', onEnd, true)
+  host.addEventListener('keydown', onKeydown, true)
+  return () => {
+    host.removeEventListener('compositionstart', onStart, true)
+    host.removeEventListener('compositionend', onEnd, true)
+    host.removeEventListener('keydown', onKeydown, true)
+  }
+}
