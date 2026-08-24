@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.824.3 — 2026-08-24
+
 ### Fixed
 
 - **Deleting the *last* character of an IME pre-edit string no longer eats the character in front of it.** v6.824.2 fixed Backspace during composition, but not the one keystroke that both deletes the last pre-edit character *and* ends the composition: some webviews announce the composition as over *before* they deliver that key, so by the time it arrived it no longer looked like an IME key and the editor treated it as an ordinary edit. A composition is now considered to own that closing keystroke too, so backspacing a candidate away to nothing leaves the text before it alone. Every editor applies the same rule — outline, source mode, rich mode, the annotation popup and recalled-block edits — so the Enter that confirms a candidate is no longer read as "commit this line" either. Rich mode needed more than looking away: the editor engine already recognises that keystroke but only declines to act on it, leaving the browser's own delete to run, so it is now cancelled outright.
