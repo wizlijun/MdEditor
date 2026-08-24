@@ -44,6 +44,12 @@ pub enum Builtin {
     /// `mcp` —— MCP server 的 stdio 外壳。Core,never disabled:
     /// agent 的检索入口不能取决于插件状态。
     Mcp,
+    /// `notemd .` / `notemd xxx.md` — open paths in the desktop app. Holds the
+    /// raw tokens; `open::run` resolves them against the cwd and reports a
+    /// missing file. Lowest precedence: only reached when nothing matched a
+    /// command, so a command name never loses to a same-named file (write
+    /// `./search` for that).
+    Open(Vec<String>),
 }
 
 /// Split an `id[@version]` token on the LAST `@`, so plugin ids that themselves
@@ -68,7 +74,16 @@ pub struct PluginRoute {
 /// Resolves against the live filesystem.
 pub fn resolve(parsed: &Parsed) -> Route {
     let (manifests, enabled) = current_scan();
-    resolve_with(&parsed.rest, &manifests, &enabled)
+    let route = resolve_with(&parsed.rest, &manifests, &enabled);
+    // Nothing matched a command → the tokens may still name files/directories
+    // to open (`notemd .`). The probe needs the disk, which is exactly what
+    // `resolve_with` is kept free of, so it happens out here.
+    if matches!(route, Route::Unknown(_)) {
+        if let Some(open) = super::open::route_unmatched(&parsed.rest) {
+            return open;
+        }
+    }
+    route
 }
 
 /// Pure resolver — takes pre-scanned data. Used by tests.

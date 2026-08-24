@@ -1083,7 +1083,9 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
         dlog(&format!("single_instance argv: {:?}", argv));
         for arg in argv.iter().skip(1) {
-            emit_open_file_delayed(app, arg);
+            if let Some(path) = argv_open_target(arg) {
+                emit_open_file_delayed(app, &path);
+            }
         }
         if let Some(w) = app.get_webview_window("main") {
             let _ = w.show();
@@ -1511,7 +1513,9 @@ pub fn run() {
             // `tauri-plugin-deep-link`'s `on_open_url` (frontend-side belt-and-braces).
             let handle = app.handle();
             for arg in std::env::args().skip(1) {
-                emit_open_file_delayed(handle, &arg);
+                if let Some(path) = argv_open_target(&arg) {
+                    emit_open_file_delayed(handle, &path);
+                }
             }
 
             Ok(())
@@ -1590,6 +1594,26 @@ fn bootstrap_themes(app: &tauri::AppHandle) -> Result<(), String> {
     themes::migration::copy_built_ins_if_missing(&res_dir, &themes, BUILT_IN_THEME_IDS)?;
     let _ = themes::commands::theme_recompile_all(app.clone());
     Ok(())
+}
+
+/// An argv entry as something to open, or `None` if it is not a path at all.
+///
+/// Two jobs. Flags are dropped: `notemd .` relaunches the GUI with a `--gui`
+/// marker (see `cli::open::GUI_FLAG`), and that must never surface as a tab
+/// titled "--gui". And relative paths are made absolute *here*, against the
+/// launching process's working directory — the webview has no cwd to resolve
+/// them against. A path that does not exist is passed through unchanged so the
+/// frontend still reports it, rather than the arg vanishing silently.
+fn argv_open_target(arg: &str) -> Option<String> {
+    if arg.starts_with('-') {
+        return None;
+    }
+    Some(
+        std::path::Path::new(arg)
+            .canonicalize()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| arg.to_string()),
+    )
 }
 
 fn emit_open_file_delayed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, path: &str) {
@@ -2287,6 +2311,39 @@ mod menu_label_tests {
     #[test]
     fn unknown_key_falls_back_to_the_key() {
         assert_eq!(menu_label("zh", "file.nosuchitem"), "file.nosuchitem");
+    }
+}
+
+#[cfg(test)]
+mod argv_open_target_tests {
+    use super::argv_open_target;
+
+    /// The GUI relaunch marker (and any other flag) is not a file to open.
+    #[test]
+    fn flags_are_not_open_targets() {
+        assert_eq!(argv_open_target("--gui"), None);
+        assert_eq!(argv_open_target("--cli"), None);
+        assert_eq!(argv_open_target("-q"), None);
+    }
+
+    /// Resolved against the process cwd — which under `cargo test` is the crate
+    /// root, so `src/lib.rs` is a real relative path to hand it. (No
+    /// `set_current_dir`: cwd is process-global and tests run in parallel.)
+    #[test]
+    fn relative_paths_become_absolute() {
+        let got = argv_open_target("src/lib.rs").expect("not a flag");
+        assert!(std::path::Path::new(&got).is_absolute(), "{got}");
+        assert!(got.ends_with("lib.rs"), "{got}");
+    }
+
+    /// A path that isn't there still reaches the frontend, which surfaces the
+    /// error — silently dropping it would look like the app ignored the user.
+    #[test]
+    fn missing_path_passes_through() {
+        assert_eq!(
+            argv_open_target("/definitely/not/here.md").as_deref(),
+            Some("/definitely/not/here.md")
+        );
     }
 }
 

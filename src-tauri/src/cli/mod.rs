@@ -16,6 +16,7 @@ pub mod install;
 pub mod doctor;
 pub mod search;
 pub mod state;
+pub mod open;
 
 use crate::app_dirs::BUNDLE_ID as APP_BUNDLE_ID;
 
@@ -58,6 +59,10 @@ pub fn resolve_config_dir() -> PathBuf {
 /// `/usr/local/bin/notemd`) or a bare `notemd` argv[0], neither of which
 /// contains those path segments.
 pub fn is_cli_mode(argv: &[String]) -> bool {
+    // `notemd <path>` re-launches this same binary to show the window; the
+    // marker it passes has to win over every heuristic below, or a `notemd`
+    // that lives outside a bundle would relaunch itself forever.
+    if argv.iter().any(|a| a == open::GUI_FLAG) { return false; }
     if argv.iter().any(|a| a == "--cli") { return true; }
     if let Some(arg0) = argv.first() {
         // `cargo run` (tauri dev) launches with a *relative* arg0
@@ -131,6 +136,22 @@ mod tests {
         assert!(is_cli_mode(&argv("/usr/local/bin/notemd")));
         assert!(is_cli_mode(&argv("mdedit")));
         assert!(is_cli_mode(&argv("/opt/homebrew/bin/mdedit")));
+    }
+
+    /// The re-launch marker beats both the `--cli` flag and a bare `notemd`
+    /// argv[0] — otherwise `notemd .` would spawn CLI processes in a loop.
+    #[test]
+    fn gui_flag_beats_every_cli_signal() {
+        assert!(!is_cli_mode(&vec![
+            "/usr/local/bin/notemd".to_string(),
+            "--gui".to_string(),
+            "/Users/x/notes".to_string(),
+        ]));
+        assert!(!is_cli_mode(&vec![
+            "notemd".to_string(),
+            "--cli".to_string(),
+            "--gui".to_string(),
+        ]));
     }
 
     #[test]

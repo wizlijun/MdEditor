@@ -49,6 +49,7 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
         Builtin::Search(args) => super::search::run(args.with_global_json(parsed.globals.json)),
         Builtin::Doctor(args) => super::doctor::run(args.with_global_json(parsed.globals.json)),
         Builtin::Mcp => crate::mcp::shim::run_shim(),
+        Builtin::Open(tokens) => super::open::run(&tokens, parsed),
     }
 }
 
@@ -109,6 +110,8 @@ pub fn render_help(
     out.push_str(&format!("Version: {version} (plugin API {PLUGIN_API_VERSION})\n\n"));
     out.push_str("USAGE:\n");
     out.push_str("  notemd [global options] <command> [args...]\n");
+    out.push_str("  notemd <file>...                       Open files in the desktop app\n");
+    out.push_str("  notemd .                               Open a directory in the folder view\n");
     for m in manifests {
         let is_on = super::is_enabled(m, enabled);
         if !is_on { continue }
@@ -183,7 +186,8 @@ pub fn render_help(
     out.push_str("  5    Plugin package failed verification (signature / hash)\n");
     out.push_str("  127  Unknown command\n");
 
-    out.push_str("\nRun 'notemd help <command>' for details on a specific command.\n");
+    out.push_str("\nRun 'notemd help open' for how paths are opened in the app.\n");
+    out.push_str("Run 'notemd help <command>' for details on a specific command.\n");
     out.push_str("Run 'notemd help --all' to see disabled / unavailable commands too.\n");
     out
 }
@@ -415,6 +419,32 @@ EXIT CODES:
   0    No failures (warnings and skipped checks are fine)
   1    At least one check failed
   2    Argument error
+",
+        "open" | "." => "\
+notemd <path> — Open a file or directory in the desktop app
+
+USAGE:
+  notemd .                 Open the current directory in the folder view
+  notemd xxx.md            Open a file from the current directory in a tab
+  notemd a.md b.md dir/    Open several paths at once
+
+DESCRIPTION:
+  There is no `open` keyword: any argument that names something on disk and
+  matches no command is opened. Paths are resolved against the shell's working
+  directory before they reach the app, and a directory becomes the folder
+  view's root instead of a tab.
+
+  If the app is already running, the paths go to that window — no second
+  instance, no second copy of your unsaved work. If it is not, it starts.
+  Either way the command returns immediately; it does not wait for the window.
+
+  A command name always wins over a same-named file: `notemd search` searches.
+  Write `./search` to open the file instead.
+
+EXIT CODES:
+  0    Handed to the app
+  1    The app could not be launched
+  2    No such file or directory
 ",
         "reading-insights" => "\
 notemd reading-insights — Reading Insights (engagement) report

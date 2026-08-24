@@ -13,6 +13,7 @@
   import EmptyState from './components/EmptyState.svelte'
   import ModeToggle from './components/ModeToggle.svelte'
   import { activeTab, tabs, closeTab, openFile, newFile, isDirty, activate } from './lib/tabs.svelte'
+  import { openPath } from './lib/open-path'
   import { createNewBase } from './lib/base/create'
   import { basename } from './lib/paths'
   import { loadSettings, settings, removeRecentFile } from './lib/settings.svelte'
@@ -143,9 +144,12 @@
 
     // Register file-open listeners IMMEDIATELY (before any async work)
     // so we never miss events from Rust side.
+    // `openPath`, not `openFile`: this channel also carries directories
+    // (`notemd .`, a folder dropped on the dock icon), which open the folder
+    // view instead of a tab.
     const unlistenOpenFile = listen<string>('open-file', async (e) => {
       try {
-        await openFile(e.payload)
+        await openPath(e.payload)
         win.show()
         win.setFocus()
       } catch (err) { console.warn('[App] open-file:', err); showError(String(err)) }
@@ -213,7 +217,7 @@
 
     invoke<string[]>('drain_pending_files').then(async (paths) => {
       for (const p of paths) {
-        try { await openFile(p) } catch (err) { console.warn('[App] drain_pending_files:', err); showError(String(err)) }
+        try { await openPath(p) } catch (err) { console.warn('[App] drain_pending_files:', err); showError(String(err)) }
       }
     }).catch((err) => console.warn('[App] drain_pending_files:', err))
 

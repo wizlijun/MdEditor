@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **`notemd .` and `notemd xxx.md` open things in the app.** No subcommand to remember: hand `notemd` a path and it lands in the window — a file opens as a tab, a directory becomes the folder view's root. Paths are resolved against the shell's working directory, so relative ones work; if the app is already running the path goes to that window instead of starting a second one, and the command returns to your prompt without waiting. A missing file says so (`cannot open 'x.md': No such file or directory`) instead of "unknown command", and a command name still wins over a same-named file — write `./search` to open the file. See `notemd help open`.
+
 ## v6.820.1 — 2026-08-20
 
 ### Fixed
