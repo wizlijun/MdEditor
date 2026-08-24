@@ -26,3 +26,64 @@
 export function isImeKey(e: KeyboardEvent): boolean {
   return e.isComposing === true || e.keyCode === 229 || e.key === 'Process'
 }
+
+/**
+ * 结束这一段变换的**那一下**按键,`isImeKey` 是抓不住的。
+ *
+ * 删预编辑串的最后一个字符时,这一下同时做两件事:删掉字符、结束变换。规范里
+ * 它应该是 `keydown(isComposing=true)` → `compositionend`;但 WebKit 系的
+ * webview 会反过来,先 `compositionend`、再派发 `keydown`,而那时
+ * `isComposing` 已经是 false 了。于是「一个一个删,删到最后一个」正好落在
+ * 唯一一个漏判的位置上 —— 用户看到的是最后一下退格把前面的内容也吃掉了。
+ *
+ * 所以判据不能只看单个事件,得看这一段时间:`compositionend` 之后极短的一个
+ * 尾巴内到达的按键,仍然算这一段变换的收尾。一次物理按键的事件序列不会跨越
+ * 这么长,而人也打不了这么快 —— 鼠标点选候选项之后再按键同理,隔着一次移动
+ * 和一次点击,不可能落在窗口内。
+ */
+const TAIL_MS = 60
+
+export interface ImeGuard {
+  /** compositionstart */
+  start(): void
+  /** compositionend */
+  end(): void
+  /** 失焦等场合彻底复位,免得状态卡住把键盘锁死 */
+  reset(): void
+  /** true = 这一下按键归输入法,别处理 */
+  blocks(e: KeyboardEvent): boolean
+  /**
+   * true = 这一下就是**收尾**那一击(变换已结束、按键刚到)。**只报一次**,
+   * 报过就把窗口关掉。
+   *
+   * 和 `blocks` 分开,是因为两种输入区的处置正相反:
+   *
+   *  - `<textarea>`:输入法已经把该做的做完了,我们「不管」就对了 —— `blocks`。
+   *  - contenteditable(ProseMirror):PM 自己也认得这一击(`inOrNearComposition`,
+   *    prosemirror-view/dist/index.js),但它只是 `return`,**不** `preventDefault`。
+   *    于是 contenteditable 的原生退格照跑,吃掉一个已确定的字符。这里必须主动
+   *    把这一击**取消**掉,「不管」是不够的。
+   *
+   * 一次性,是为了不误伤鼠标点选候选之后的第一次真按键。
+   */
+  consumeTail(e: KeyboardEvent): boolean
+}
+
+/** `now` 可注入,纯粹为了测试能确定性地推进时间。 */
+export function createImeGuard(now: () => number = () => Date.now()): ImeGuard {
+  let composing = false
+  let endedAt = -Infinity
+  return {
+    start() { composing = true },
+    end() { composing = false; endedAt = now() },
+    reset() { composing = false; endedAt = -Infinity },
+    blocks(e: KeyboardEvent) {
+      return composing || isImeKey(e) || now() - endedAt < TAIL_MS
+    },
+    consumeTail(_e: KeyboardEvent) {
+      if (composing || now() - endedAt >= TAIL_MS) return false
+      endedAt = -Infinity
+      return true
+    },
+  }
+}

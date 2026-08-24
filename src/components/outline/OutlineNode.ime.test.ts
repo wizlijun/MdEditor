@@ -108,12 +108,34 @@ describe('OutlineNode — Backspace 与 IME 变换中状态', () => {
 
     expect(outline.tree.nodes.has('cur')).toBe(true)
 
-    // compositionend 之后键盘归还给编辑器,行首退格必须重新生效
+    // compositionend 的短尾巴过去之后,键盘归还给编辑器,行首退格必须重新生效
     ta.dispatchEvent(new Event('compositionend', { bubbles: true }))
     flushSync()
+    await new Promise((r) => setTimeout(r, 80))
     backspace(ta, false)
-    expect(outline.tree.nodes.has('cur'), 'compositionend 之后不能一直哑着').toBe(false)
+    expect(outline.tree.nodes.has('cur'), '变换结束之后不能一直哑着').toBe(false)
 
+    unmount(app)
+  })
+
+  // 「一个一个删预编辑串，删到最后一个时把前面的也吃掉了」的那一下。
+  // 删掉最后一个字符的退格同时结束了变换，而 WebKit 系 webview 会先派发
+  // compositionend、再派发这一下 keydown —— 那时 isComposing 已经是 false，
+  // 单看事件谁也拦不住它。守卫按「compositionend 之后的短尾巴」判定。
+  it('结束变换的那一下退格:compositionend 先于 keydown 到达时也不误删', async () => {
+    twoNodes()
+    const app = await mountCurrent()
+
+    const ta = document.body.querySelector('textarea') as HTMLTextAreaElement
+    ta.dispatchEvent(new Event('compositionstart', { bubbles: true }))
+    flushSync()
+    ta.dispatchEvent(new Event('compositionend', { bubbles: true }))   // 反序
+    flushSync()
+    ta.setSelectionRange(0, 0)
+
+    backspace(ta, false)   // 同一次物理按键，紧随其后，什么标记都没有
+
+    expect(outline.tree.nodes.has('cur'), '这一下仍是那段变换的收尾').toBe(true)
     unmount(app)
   })
 

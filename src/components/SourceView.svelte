@@ -15,7 +15,7 @@
   import { saveClipboardResource, isAttachmentUrl, basenameOf } from '../lib/paste-resources'
   import { isVideoUrl, fetchVideoInfo } from '../lib/video-links'
   import { autoPairInsert } from '../lib/autopair'
-  import { isImeKey } from '../lib/ime'
+  import { createImeGuard } from '../lib/ime'
   import { renderSourceHtml, type HitRange } from '../lib/source-highlight'
 
   let {
@@ -82,10 +82,13 @@
     return () => window.removeEventListener('mdblock:jump', onJump)
   })
 
+  /** 变换区间(含结束那一下按键)的守卫,见 src/lib/ime.ts */
+  const ime = createImeGuard()
+
   async function onTextareaKeydown(ev: KeyboardEvent) {
     // Keys pressed while an IME is composing belong to the IME, not to us —
     // acting on them handles the same keystroke twice (see src/lib/ime.ts).
-    if (isImeKey(ev)) return
+    if (ime.blocks(ev)) return
 
     // Inline formatting shortcuts — independent of mdblock setting
     if (ev.metaKey || ev.ctrlKey) {
@@ -607,6 +610,9 @@
       {oninput}
       onscroll={syncScroll}
       onkeydown={onTextareaKeydown}
+      oncompositionstart={() => ime.start()}
+      oncompositionend={() => ime.end()}
+      onblur={() => ime.reset()}
       onpaste={handlePaste}
       oncontextmenu={onContextMenu}
       spellcheck="true"

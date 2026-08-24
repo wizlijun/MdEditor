@@ -2,7 +2,7 @@
   import type { RecallTreeNode } from '../../lib/outline/recall'
   import InlineRender from './InlineRender.svelte'
   import RefTreeNode from './RefTreeNode.svelte'
-  import { isImeKey } from '../../lib/ime'
+  import { createImeGuard } from '../../lib/ime'
 
   // Collapsible renderer for one recalled subtree node. When `editable`, the
   // text can be edited in place (Phase B / B1): commit writes back to source.
@@ -39,10 +39,13 @@
     editing = false
     if (draft !== node.text) void onCommit?.(node.path, node.text, draft)
   }
+  /** 变换区间(含结束那一下按键)的守卫,见 src/lib/ime.ts */
+  const ime = createImeGuard()
+
   function onKeydown(e: KeyboardEvent) {
     e.stopPropagation()
     // 变换中的回车是在确认候选，不是在提交这一行（见 src/lib/ime.ts）
-    if (isImeKey(e)) return
+    if (ime.blocks(e)) return
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() }
     else if (e.key === 'Escape') { e.preventDefault(); editing = false }
   }
@@ -69,7 +72,9 @@
       role="presentation"
     ></span>
     {#if editing}
-      <textarea class="edit" rows="1" bind:value={draft} onkeydown={onKeydown} onblur={commit} use:autofocusGrow></textarea>
+      <textarea class="edit" rows="1" bind:value={draft} onkeydown={onKeydown}
+        oncompositionstart={() => ime.start()} oncompositionend={() => ime.end()}
+        onblur={() => { ime.reset(); commit() }} use:autofocusGrow></textarea>
     {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_tabindex -->
       <span

@@ -2,7 +2,7 @@
   import { noteUi, styleVars } from './note-ui.svelte'
   import { t } from '../i18n/store.svelte'
   import { iconSvg } from '../context-menu/icons'
-  import { isImeKey } from '../ime'
+  import { createImeGuard } from '../ime'
 
   // Captured at mount: the parent only mounts this while noteUi.edit is set.
   const editState = noteUi.edit!
@@ -46,6 +46,9 @@
     if (!/[?？]\s*$/.test(text)) text = text.trimEnd() + '？'
     close(true)
   }
+  /** 变换区间(含结束那一下按键)的守卫,见 src/lib/ime.ts */
+  const ime = createImeGuard()
+
   function onWindowMousedown(e: MouseEvent) {
     if (root && !root.contains(e.target as Node)) close(true)
   }
@@ -53,7 +56,7 @@
     // 变换中的回车/Esc 归输入法（确认候选 / 取消预编辑），弹窗不能跟着关掉
     // 并把还没确认的半截批注存进去（见 src/lib/ime.ts）。仍然拦下不外传:
     // 弹窗开着时这些键本来就轮不到外面的全局 Escape 处理。
-    if (isImeKey(e)) { e.stopPropagation(); return }
+    if (ime.blocks(e)) { e.stopPropagation(); return }
     if (e.key === 'Escape') { e.stopPropagation(); close(true) }
     // Notes are single-line (newlines are flattened on save) → Enter confirms.
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); close(true) }
@@ -67,6 +70,8 @@
   bind:this={root}
   style="left:{editState.x}px; top:{editState.y}px; {styleVars(editState.style)}"
   onkeydown={onKeydown}
+  oncompositionstart={() => ime.start()}
+  oncompositionend={() => ime.end()}
   role="dialog"
   aria-label={t('ctxmenu.note')}
   tabindex="-1"
