@@ -19,7 +19,6 @@
 import './kit.css'
 import { mountRich, setKitBaseDir, setRichPlaceholder } from './rich'
 import { mountSource, type SourcePane } from './source'
-import { attachImeGuard } from '../lib/ime'
 import { loadVaultRoot } from './media'
 import { applyKitTheme, watchKitTheme } from './theme'
 import { loadSurfaceConfig, watchSurfaceFocus } from './power-mode-config'
@@ -175,25 +174,15 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
 
   let rich: Awaited<ReturnType<typeof mountRich>> | null = null
   let source: SourcePane | null = null
-  /**
-   * Rich mode only. The kit's source pane is a `<textarea>` and guards itself
-   * (`mountSource`); rich mode is a ProseMirror contenteditable and needs the
-   * composition-closing keystroke *cancelled*, not merely ignored — the same
-   * fix the main window's editor carries. See src/lib/ime.ts.
-   */
-  let detachIme: (() => void) | null = null
 
   const emit = (md: string) => { markdown = md; opts.onChange?.(md) }
 
   async function mountCurrent(): Promise<void> {
     rich?.destroy(); rich = null
     source?.destroy(); source = null
-    detachIme?.(); detachIme = null
     host.innerHTML = ''
-    if (mode === 'rich') {
-      rich = await mountRich(host, markdown, root, emit, placeholder, () => powerMode)
-      detachIme = attachImeGuard(host)
-    } else source = mountSource(host, markdown, emit, placeholder)
+    if (mode === 'rich') rich = await mountRich(host, markdown, root, emit, placeholder, () => powerMode)
+    else source = mountSource(host, markdown, emit, placeholder)
   }
 
   await mountCurrent()
@@ -249,7 +238,6 @@ export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptio
       stopFocusWatch = null
       rich?.destroy(); rich = null
       source?.destroy(); source = null
-      detachIme?.(); detachIme = null
       host.remove()
     },
   }

@@ -8,6 +8,7 @@ import { frontmatterFactory } from './frontmatter-view'
 import { activeTab } from './tabs.svelte'
 import { analyticsPluginForEditor } from './insights/tracker.svelte'
 import { isApplePlatformSync } from './platform-sync'
+import { guardRichEditor, type ImeGuard } from './ime'
 
 const platform = {
   getCurrentFilePath: () => activeTab()?.filePath ?? null,
@@ -48,6 +49,7 @@ export async function mountRichEditor(
   root: HTMLElement,
   initialContent: string,
   onChange: (md: string) => void,
+  imeGuard?: ImeGuard,
 ): Promise<MorayaEditorInstance> {
   const instance = await coreCreateEditor({
     container: root,
@@ -79,5 +81,5 @@ export async function mountRichEditor(
       plugins: instance.view.state.plugins.concat(plugin),
     }),
   )
-  return instance
+  return guardRichEditor(root, instance, imeGuard)
 }

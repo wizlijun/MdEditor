@@ -15,7 +15,7 @@
     isHoverActive,
   } from '../lib/mdblock-hover/hover-store.svelte'
   import { settings } from '../lib/settings.svelte'
-  import { createImeGuard, attachImeGuard } from '../lib/ime'
+  import { createImeGuard } from '../lib/ime'
   import { t } from '../lib/i18n/store.svelte'
   import { answersStore, loadAnswersFor } from '../lib/note-anno/answers-store.svelte'
   import '../lib/styles/attachment.css'
@@ -506,8 +506,6 @@
 
   /** 变换区间(含结束那一下按键)的守卫,见 src/lib/ime.ts */
   const ime = createImeGuard()
-  /** attachImeGuard 的卸载函数(挂载后填上) */
-  let _imeDetach: (() => void) | null = null
 
   function handleRichKeydown(event: KeyboardEvent) {
     // ── IME first ──
@@ -1075,7 +1073,7 @@
           const unwrapped = unwrapIfNeeded(md)
           lastSync = unwrapped
           setContent(tabId, unwrapped)
-        })
+        }, ime)
         if (readOnly) {
           const v = inst.view as unknown as EditorView
           // `editable: false` only stops DOM-level input. Menu commands,
@@ -1149,11 +1147,6 @@
         _pmEl?.addEventListener('click', handleImageClick as EventListener)
         _pmEl?.addEventListener('mousedown', handleLinkMouseDown as EventListener, true)
         _pmEl?.addEventListener('keydown', handleRichKeydown as EventListener, true)
-        // Cancels the keystroke that CLOSES a composition — ProseMirror
-        // recognises it but only declines to act, leaving the contenteditable's
-        // own delete to eat a committed character. Shares `ime` with
-        // `handleRichKeydown`. See src/lib/ime.ts.
-        _imeDetach = attachImeGuard(host!, ime)
         _pmEl?.addEventListener('input',   checkSlashMenu as EventListener)
         _pmEl?.addEventListener('contextmenu', handleRichContextMenu as EventListener)
 
@@ -1243,7 +1236,6 @@
     _pmEl?.removeEventListener('click', handleImageClick as EventListener)
     _pmEl?.removeEventListener('mousedown', handleLinkMouseDown as EventListener, true)
     _pmEl?.removeEventListener('keydown', handleRichKeydown as EventListener, true)
-    _imeDetach?.(); _imeDetach = null
     _pmEl?.removeEventListener('input',   checkSlashMenu as EventListener)
     _pmEl?.removeEventListener('contextmenu', handleRichContextMenu as EventListener)
     _dragDropUnlisten?.()

@@ -117,3 +117,27 @@ export function attachImeGuard(host: HTMLElement, guard: ImeGuard = createImeGua
     host.removeEventListener('keydown', onKeydown, true)
   }
 }
+
+/**
+ * 把 Rich 编辑器实例和它的 IME 守卫绑成同一个生命周期。
+ *
+ * Rich 挂载函数应直接返回这个包装后的实例，而不是要求每个上层组件记得另挂
+ * `attachImeGuard`。这样无论主窗口、Editor Kit，还是以后新增的 Rich 消费方，
+ * 都天然拥有同一套保护；调用编辑器原有的 `destroy()` 时也会自动卸载监听器。
+ */
+export function guardRichEditor<T extends { destroy(): void }>(
+  host: HTMLElement,
+  instance: T,
+  guard: ImeGuard = createImeGuard(),
+): T {
+  const detach = attachImeGuard(host, guard)
+  const destroy = instance.destroy.bind(instance)
+  let active = true
+  instance.destroy = () => {
+    if (!active) return
+    active = false
+    detach()
+    destroy()
+  }
+  return instance
+}

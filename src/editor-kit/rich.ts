@@ -13,6 +13,7 @@ import { bridgeMediaResolver } from './media'
 import { placeholderPlugin } from '../lib/placeholder-plugin'
 import { isApplePlatformSync } from '../lib/platform-sync'
 import { powerModePlugin, type ConfigGetter } from '../lib/power-mode/plugin'
+import { guardRichEditor } from '../lib/ime'
 import type { Plugin } from 'prosemirror-state'
 
 /** Base directory (absolute) used to resolve relative image paths in rich mode. */
@@ -104,5 +105,5 @@ export async function mountRich(
       }),
     )
   }
-  return instance
+  return guardRichEditor(host, instance)
 }
