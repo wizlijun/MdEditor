@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.827.1 — 2026-08-27
+
 ### Fixed
 
 - **Plugin windows got the IME fix too.** Idea Spark, Trace Source and Power Mode write into the same rich editor the main window uses, and it carried the same defect v6.824.3 fixed: backspacing an IME candidate away to nothing ate the character in front of it, and the Enter that confirmed a candidate could act twice. They pick this up from the app — no plugin update to install.
