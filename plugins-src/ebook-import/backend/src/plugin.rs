@@ -321,6 +321,44 @@ fn dest_relative(vault: &Path, dest: &Path) -> String {
     rel.to_string_lossy().replace('\\', "/")
 }
 
+/// A parsed `plugin.ai_read_start` request.
+struct AiReadRequest {
+    /// The import job this book came from. `None` for a library book, which has
+    /// no job behind it — imported in an earlier session, by the CLI, or months
+    /// ago. `ai_read_start` allocates a fresh id for those so every AI read is
+    /// still addressable by the one thing the `ai_read` pushes carry.
+    job_id: Option<u64>,
+    dest_rel: String,
+    name: String,
+    harness: Option<String>,
+}
+
+fn parse_ai_read(params: &Value) -> Result<AiReadRequest, String> {
+    let dest_rel = params
+        .get("dest_rel")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim_end_matches('/'))
+        .filter(|s| !s.is_empty())
+        .ok_or("ai_read_start needs 'dest_rel'")?
+        .to_string();
+    Ok(AiReadRequest {
+        job_id: params.get("job_id").and_then(|v| v.as_u64()),
+        name: params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&dest_rel)
+            .to_string(),
+        // Which agent the window chose. Absent = let the host decide.
+        harness: params
+            .get("harness")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        dest_rel,
+    })
+}
+
 /// Runs one import to completion off the protocol thread, pushing
 /// `log`/`progress`/`done`/`failed` events to the window as it goes. Free
 /// function (not a method) because it runs on its own `std::thread`, well
@@ -635,6 +673,7 @@ impl sdk::NotemdPlugin for EbookImportPlugin {
             "import_start" => self.import_start(host, &params),
             "import_cancel" => self.import_cancel(&params),
             "ai_read_start" => self.ai_read_start(host, &params),
+            "library_list" => self.library_list(),
             other => Err(format!("unknown ui method '{other}'")),
         }
     }
@@ -752,47 +791,49 @@ impl EbookImportPlugin {
         Ok(json!({ "ok": true }))
     }
 
+    /// Every book already in the vault under `<ebooks_root>/<YYYY-MM>/<Title>/`,
+    /// not just what this session imported — the window's library list.
+    fn library_list(&self) -> Result<Value, String> {
+        let vault = self.vault()?;
+        let root = settings::load_vault(&vault).ebooks_root;
+        Ok(json!({ "books": crate::library::scan(&vault, &root) }))
+    }
+
     /// "AI 先读":入队并(必要时)拉起串行 worker。同步返回,不等 agent。
     fn ai_read_start(&mut self, host: &sdk::Host, params: &Value) -> Result<Value, String> {
-        let job_id = params
-            .get("job_id")
-            .and_then(|v| v.as_u64())
-            .ok_or("ai_read_start needs 'job_id'")?;
-        let dest_rel = params
-            .get("dest_rel")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim_end_matches('/'))
-            .filter(|s| !s.is_empty())
-            .ok_or("ai_read_start needs 'dest_rel'")?
-            .to_string();
-        let name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&dest_rel)
-            .to_string();
-        // Which agent the window chose. Absent = let the host decide.
-        let harness = params
-            .get("harness")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-        let (vault, queued, spawn) = {
+        let req = parse_ai_read(params)?;
+        let (vault, outcome, spawn, job_id) = {
             let mut g = self.inner.lock().unwrap();
             let vault = g.vault.clone().ok_or(NO_VAULT)?;
-            let queued = g.ai.enqueue(crate::airead::AiJob {
-                job_id,
-                dest_rel,
-                name,
-                harness,
+            // A library book brings no job id. Allocate one from the same
+            // counter the imports use, so the id space stays single and the
+            // `ai_read` pushes keep addressing rows the one way they always
+            // have.
+            let job_id = req.job_id.unwrap_or_else(|| {
+                let id = g.next_job;
+                g.next_job += 1;
+                id
             });
-            let spawn = queued && g.ai.claim_worker();
-            (vault, queued, spawn)
+            let outcome = g.ai.enqueue(crate::airead::AiJob {
+                job_id,
+                dest_rel: req.dest_rel,
+                name: req.name,
+                harness: req.harness,
+            });
+            let spawn = outcome == crate::airead::Enqueue::Queued && g.ai.claim_worker();
+            (vault, outcome, spawn, job_id)
         };
         if spawn {
             spawn_ai_worker(host.clone(), self.inner.clone(), vault);
         }
-        Ok(json!({ "queued": queued }))
+        Ok(match outcome {
+            crate::airead::Enqueue::Queued => json!({ "queued": true, "job_id": job_id }),
+            // This book is already being read under another id. Hand that id
+            // back so the window's row follows the run that exists.
+            crate::airead::Enqueue::Duplicate(existing) => {
+                json!({ "queued": false, "job_id": existing })
+            }
+        })
     }
 
     /// CLI entry point: `notemd ebook-import <file> [--ocr] [--ocr-provider p] [--root r]`.
@@ -878,6 +919,76 @@ mod tests {
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    // ── ai_read_start request parsing ───────────────────────────────────
+
+    /// A book the import queue just finished carries the job id that imported
+    /// it, so the window's row keeps following the same id it already has.
+    #[test]
+    fn an_ai_read_from_the_import_queue_keeps_its_job_id() {
+        let r = parse_ai_read(&json!({
+            "job_id": 3, "dest_rel": "ssot/ebooks/2026-08/Seven Powers", "name": "Seven Powers",
+        }))
+        .unwrap();
+        assert_eq!(r.job_id, Some(3));
+        assert_eq!(r.dest_rel, "ssot/ebooks/2026-08/Seven Powers");
+        assert_eq!(r.name, "Seven Powers");
+    }
+
+    /// A book from the library has no import job behind it — it was imported in
+    /// an earlier session, or by the CLI, or months ago. Re-reading it must not
+    /// require inventing a job id in the window.
+    #[test]
+    fn a_library_book_may_ask_for_an_ai_read_with_no_job_id() {
+        let r = parse_ai_read(&json!({
+            "dest_rel": "ssot/ebooks/2026-01/Old Book", "name": "Old Book",
+        }))
+        .unwrap();
+        assert_eq!(r.job_id, None);
+    }
+
+    #[test]
+    fn an_ai_read_without_a_dest_rel_is_rejected() {
+        assert!(parse_ai_read(&json!({ "job_id": 1 })).is_err());
+        assert!(parse_ai_read(&json!({ "dest_rel": "" })).is_err());
+        assert!(parse_ai_read(&json!({ "dest_rel": "/" })).is_err());
+    }
+
+    /// `dest_rel` is the dedup key now, so `…/Book` and `…/Book/` must not read
+    /// as two different books.
+    #[test]
+    fn a_trailing_slash_on_dest_rel_is_trimmed() {
+        let r = parse_ai_read(&json!({ "dest_rel": "ssot/ebooks/2026-08/Book/" })).unwrap();
+        assert_eq!(r.dest_rel, "ssot/ebooks/2026-08/Book");
+    }
+
+    /// The name only feeds the tray reminder's title. Missing is not fatal.
+    #[test]
+    fn a_missing_name_falls_back_to_the_path() {
+        let r = parse_ai_read(&json!({ "dest_rel": "ssot/ebooks/2026-08/Book" })).unwrap();
+        assert_eq!(r.name, "ssot/ebooks/2026-08/Book");
+    }
+
+    #[test]
+    fn an_absent_or_empty_harness_lets_the_host_pick() {
+        assert_eq!(
+            parse_ai_read(&json!({ "dest_rel": "d" })).unwrap().harness,
+            None
+        );
+        assert_eq!(
+            parse_ai_read(&json!({ "dest_rel": "d", "harness": "" }))
+                .unwrap()
+                .harness,
+            None
+        );
+        assert_eq!(
+            parse_ai_read(&json!({ "dest_rel": "d", "harness": "notemd.claude-agent" }))
+                .unwrap()
+                .harness
+                .as_deref(),
+            Some("notemd.claude-agent")
+        );
     }
 
     // ── save_settings merge rules ───────────────────────────────────────

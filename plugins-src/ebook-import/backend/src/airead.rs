@@ -17,21 +17,37 @@ pub struct AiJob {
     pub harness: Option<String>,
 }
 
+/// 一次 [`AiQueue::enqueue`] 的结果。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Enqueue {
+    Queued,
+    /// 这本书已经在队里、或正在被读。带上那个 job_id,窗口好把这一行绑到
+    /// 已有的那次运行上跟着看进度,而不是卡在「排队中」等一个永不到来的推送。
+    Duplicate(u64),
+}
+
 /// FIFO + 单 worker 标志。所有方法都要在 Inner 的锁内调用,保证原子。
 #[derive(Debug, Default)]
 pub struct AiQueue {
     q: VecDeque<AiJob>,
     running: bool,
+    /// worker 手上正在读的那一本。它已经出队了,但活儿没完 —— 去重必须把它算
+    /// 进来,否则「正在读」的书还能被再点一次,两次运行抢着写同一个摘要文件。
+    active: Option<AiJob>,
 }
 
 impl AiQueue {
-    /// 入队;同 job_id 已在队中(重复点击)返回 false。
-    pub fn enqueue(&mut self, job: AiJob) -> bool {
-        if self.q.iter().any(|j| j.job_id == job.job_id) {
-            return false;
+    /// 入队。见 [`Enqueue`]。
+    ///
+    /// 身份是**书**(`dest_rel`),不是 job_id:同一本书可以从导入队列的
+    /// 「AI 先读」和书库的「重读」两处点进来,job_id 不同,活儿是同一份。
+    pub fn enqueue(&mut self, job: AiJob) -> Enqueue {
+        let same = |j: &AiJob| j.job_id == job.job_id || j.dest_rel == job.dest_rel;
+        if let Some(dup) = self.active.iter().chain(self.q.iter()).find(|j| same(j)) {
+            return Enqueue::Duplicate(dup.job_id);
         }
         self.q.push_back(job);
-        true
+        Enqueue::Queued
     }
     /// 入队后是否要拉起 worker(已有 worker 在跑则不拉)。
     pub fn claim_worker(&mut self) -> bool {
@@ -42,16 +58,23 @@ impl AiQueue {
         true
     }
     /// worker 取下一本;队空时放下 running 标志并返回 None(worker 退出)。
+    /// 取出的这本记进 `active`:上一本到此为止(可以再读了),这一本进入
+    /// 「正在读」而仍算被占用。
     pub fn next(&mut self) -> Option<AiJob> {
         let j = self.q.pop_front();
         self.running = j.is_some();
+        self.active = j.clone();
         j
     }
     /// worker 退出时无条件放下标志(见 plugin.rs 的 WorkerSlot)。正常收尾时
     /// `next` 已经放过了,这里是幂等的补刀:worker panic 掉而标志还举着,
     /// 之后所有「AI 先读」都只入队不执行,且没有任何办法恢复。
+    ///
+    /// 同时放掉 `active`:worker 没了,它手上那本书也就没人在读了。留着的话
+    /// 那本书会被去重逻辑永久挡住,再也重读不了 —— 恰恰是最需要重试的一本。
     pub fn release_worker(&mut self) {
         self.running = false;
+        self.active = None;
     }
     /// 队里还剩几本 —— worker 异常退出后判断要不要再拉一个。
     pub fn pending(&self) -> usize {
@@ -172,8 +195,8 @@ mod tests {
         let mut q = AiQueue::default();
         let mut with_agent = job(1);
         with_agent.harness = Some("notemd.deepseek-agent".into());
-        assert!(q.enqueue(with_agent));
-        assert!(q.enqueue(job(2)));
+        assert_eq!(q.enqueue(with_agent), Enqueue::Queued);
+        assert_eq!(q.enqueue(job(2)), Enqueue::Queued);
         assert_eq!(
             q.next().unwrap().harness.as_deref(),
             Some("notemd.deepseek-agent")
@@ -184,9 +207,65 @@ mod tests {
     #[test]
     fn enqueue_dedups_by_job_id() {
         let mut q = AiQueue::default();
-        assert!(q.enqueue(job(1)));
-        assert!(!q.enqueue(job(1)), "duplicate click must not double-queue");
-        assert!(q.enqueue(job(2)));
+        assert_eq!(q.enqueue(job(1)), Enqueue::Queued);
+        assert_eq!(
+            q.enqueue(job(1)),
+            Enqueue::Duplicate(1),
+            "duplicate click must not double-queue"
+        );
+        assert_eq!(q.enqueue(job(2)), Enqueue::Queued);
+    }
+
+    /// The window can reach one book from two places — the import queue's
+    /// "AI 先读" and the library's "重读". Both are the same work on the same
+    /// `book.md`, writing the same summary file; queueing it twice burns a
+    /// second run's tokens for nothing. Identity is the book, not the job id.
+    #[test]
+    fn one_book_queued_from_two_places_is_read_once() {
+        let mut q = AiQueue::default();
+        let from_import = AiJob {
+            job_id: 1,
+            dest_rel: "ssot/ebooks/2026-08/Seven Powers".into(),
+            name: "Seven Powers".into(),
+            harness: None,
+        };
+        let from_library = AiJob {
+            job_id: 7,
+            ..from_import.clone()
+        };
+        assert_eq!(q.enqueue(from_import), Enqueue::Queued);
+        assert_eq!(
+            q.enqueue(from_library),
+            Enqueue::Duplicate(1),
+            "the window binds its row to the job already doing this book"
+        );
+        assert_eq!(q.pending(), 1);
+    }
+
+    /// The book being read right now is off the queue but still in progress —
+    /// asking for it again must be refused just the same, or the running read
+    /// and a second one would race to write the same summary file.
+    #[test]
+    fn the_book_currently_being_read_is_not_queued_again() {
+        let mut q = AiQueue::default();
+        q.enqueue(job(1));
+        q.claim_worker();
+        assert_eq!(q.next().map(|j| j.job_id), Some(1));
+        let retry = AiJob { job_id: 9, ..job(1) };
+        assert_eq!(q.enqueue(retry), Enqueue::Duplicate(1));
+    }
+
+    /// …but once that read is over, re-reading the same book is exactly what
+    /// the library's "重读" is for. A finished book must not be blocked forever.
+    #[test]
+    fn a_book_can_be_read_again_after_its_read_finishes() {
+        let mut q = AiQueue::default();
+        q.enqueue(job(1));
+        q.claim_worker();
+        q.next();
+        assert_eq!(q.next(), None); // 队空,worker 退出
+        let again = AiJob { job_id: 9, ..job(1) };
+        assert_eq!(q.enqueue(again), Enqueue::Queued);
     }
 
     #[test]
@@ -214,6 +293,20 @@ mod tests {
         assert_eq!(q.pending(), 1);
         assert!(q.claim_worker(), "a new worker must be able to take over");
         assert_eq!(q.next(), Some(job(2)));
+    }
+
+    /// A worker that died mid-book leaves nobody reading it. If `active` stayed
+    /// set, that book could never be queued again — the one case where the
+    /// duplicate guard would lock a user out of retrying.
+    #[test]
+    fn release_worker_frees_the_book_that_died_with_it() {
+        let mut q = AiQueue::default();
+        q.enqueue(job(1));
+        q.claim_worker();
+        q.next();
+        q.release_worker();
+        let retry = AiJob { job_id: 9, ..job(1) };
+        assert_eq!(q.enqueue(retry), Enqueue::Queued);
     }
 
     #[test]

@@ -1,6 +1,17 @@
 <script lang="ts">
-  import { bridge } from './lib/bridge'
+  import { bridge, vaultExists } from './lib/bridge'
   import AgentPicker from './lib/agent-picker/AgentPicker.svelte'
+  import LibraryPanel from './components/LibraryPanel.svelte'
+  import { formatElapsed } from './lib/elapsed'
+  import {
+    bindAiJob,
+    claimAiRead,
+    failAiRead,
+    latestSummary,
+    mergeLibrary,
+    onLibraryAiEvent,
+    type LibraryBook,
+  } from './lib/library'
   import {
     rememberProvider,
     rememberedProvider,
@@ -199,14 +210,23 @@
       q = result.q
       pending = result.pending
       if (result.applied && (j.event === 'done' || j.event === 'failed')) void schedule()
+      // A finished import is a new book in the vault — and thus a new library row.
+      if (result.applied && j.event === 'done') void loadLibrary()
     } else if (m.type === 'ai_read') {
       const a = m as AiPush
-      q = onAiEvent(q, a.job_id, {
+      const ev = {
         event: a.event,
         started_at: a.started_at,
         summary_rel: a.summary_rel,
         error: a.error,
-      })
+      }
+      // Fed to BOTH reducers: a read can be started from the queue's row or
+      // the library's, and each ignores a job it doesn't own. Keeping them
+      // independent is why neither needs to know the other exists.
+      q = onAiEvent(q, a.job_id, ev)
+      library = onLibraryAiEvent(library, a.job_id, ev)
+      // A finished read wrote a summary file the last listing can't know about.
+      if (a.event === 'done') void loadLibrary()
     }
   })
 
@@ -259,6 +279,9 @@
       baiduKeyInput = ''
       baiduSecretInput = ''
       await loadEnv()
+      // Saving may have moved the ebooks root, which is where the library is
+      // read from — the old root's books are not this vault's library anymore.
+      await loadLibrary()
       savedFlash = true
       setTimeout(() => (savedFlash = false), 1500)
     } catch (e) {
@@ -279,12 +302,7 @@
 
   async function openInEditor(item: QueueItem) {
     if (!item.destRel) return
-    try {
-      const dir = item.destRel.replace(/\/+$/, '')
-      await bridge().request('host.editor.open', { path: `${dir}/book.md` })
-    } catch (e) {
-      globalError = message(e)
-    }
+    await openPath(`${item.destRel.replace(/\/+$/, '')}/book.md`)
   }
 
   // ── which agent reads the book ────────────────────────────────────────────
@@ -338,12 +356,72 @@
   }
 
   async function openSummary(item: QueueItem) {
-    if (!item.aiSummaryRel) return
+    if (item.aiSummaryRel) await openPath(item.aiSummaryRel)
+  }
+
+  // ── the library: every book in the vault, not just this session's ────────
+  let library: LibraryBook[] = $state([])
+
+  async function loadLibrary() {
     try {
-      await bridge().request('host.editor.open', { path: item.aiSummaryRel })
+      const res = await bridge().request('plugin.library_list', {})
+      library = mergeLibrary(library, res?.books ?? [])
     } catch (e) {
       globalError = message(e)
     }
+  }
+
+  /**
+   * "AI 先读" / "重读" from a library row. Same shape as `aiRead` above:
+   * claim the row synchronously, then send. The difference is the job id —
+   * a library book has no import job behind it, so the backend allocates one
+   * and answers with it (or, if this book is already being read, with the id
+   * of the run that exists, so this row follows that one instead of starting
+   * a second read of the same book).
+   */
+  async function libraryRead(book: LibraryBook) {
+    library = claimAiRead(library, book.rel)
+    try {
+      const res = await bridge().request('plugin.ai_read_start', {
+        dest_rel: book.rel,
+        name: book.name,
+        ...(agentId ? { harness: agentId } : {}),
+      })
+      if (typeof res?.job_id === 'number') library = bindAiJob(library, book.rel, res.job_id)
+    } catch (e) {
+      library = failAiRead(library, book.rel, message(e))
+      globalError = message(e)
+    }
+  }
+
+  async function openPath(path: string) {
+    try {
+      await bridge().request('host.editor.open', { path })
+    } catch (e) {
+      globalError = message(e)
+    }
+  }
+
+  // ── the AI reading prompt ────────────────────────────────────────────────
+  // The prompt is a plain file in the vault, not a setting in this window —
+  // same as idea-spark's. Editing it is opening it in the main editor.
+  // claude-agent seeds this template on first activation; this plugin does not
+  // carry a copy, so that there is exactly one version of it to drift from.
+  const PROMPT_PATH = '.notemd/agent-tasks/ai-read-ebook/CLAUDE.md'
+
+  async function editPrompt() {
+    globalError = ''
+    try {
+      // A failed existence check is NOT read as "missing" — that would refuse a
+      // file that is probably there. Only a definite `false` gets the hint.
+      if ((await vaultExists(PROMPT_PATH)) === false) {
+        globalError = t('err.promptMissing')
+        return
+      }
+    } catch {
+      /* let the editor be the one to complain */
+    }
+    await openPath(PROMPT_PATH)
   }
 
   // 「AI 阅读中… 3m12s」的秒针。
@@ -352,7 +430,10 @@
   // 0s。$derived 的值不变就不通知下游,所以 anyAiRunning 只在真正切换时重挂。
   // interval 只写 nowMs,而 nowMs 不在依赖里 —— 不会自失效死循环($effect 纪律)。
   let nowMs = $state(Date.now())
-  const anyAiRunning = $derived(q.items.some((i) => i.aiStatus === 'running'))
+  const anyAiRunning = $derived(
+    q.items.some((i) => i.aiStatus === 'running') ||
+      library.some((b) => b.aiStatus === 'running'),
+  )
   $effect(() => {
     if (!anyAiRunning) return
     const t = setInterval(() => {
@@ -360,12 +441,6 @@
     }, 1000)
     return () => clearInterval(t)
   })
-  function aiElapsed(item: QueueItem): string {
-    if (!item.aiStartedAt) return ''
-    const s = Math.max(0, Math.floor((nowMs - Date.parse(item.aiStartedAt)) / 1000))
-    const m = Math.floor(s / 60)
-    return m > 0 ? `${m}m${s % 60}s` : `${s}s`
-  }
 
   function clearFinished() {
     // A 'done' import row with AI reading still queued/running must stay:
@@ -401,8 +476,10 @@
     return known.includes(key) ? t(key) : ''
   }
 
-  void loadEnv()
   void loadAgents()
+  // The vault root resolves asynchronously (see loadEnv), and library_list
+  // fails without it — so the first listing waits for loadEnv to settle.
+  void loadEnv().then(loadLibrary)
 </script>
 
 <!-- Drag highlighting is driven entirely by the host's `type:"drag-drop"`
@@ -482,6 +559,17 @@
           </a>
         {/if}
         <button class="secondary" onclick={pickCalibre}>{t('settings.calibre.pick')}</button>
+      </div>
+
+      <!-- The prompt is a file you own, not a box in this window: it lives in
+           the vault, is plain markdown, and is git-versioned like everything
+           else there. Clicking opens it in the main editor. -->
+      <div class="prompt-row">
+        <button class="prompt" onclick={editPrompt}>
+          <span>{t('settings.prompt')}</span>
+          <span class="path">{PROMPT_PATH}</span>
+        </button>
+        <p class="field-hint">{t('settings.promptHint')}</p>
       </div>
 
       <div class="save-row">
@@ -565,7 +653,7 @@
               {:else if item.aiStatus === 'queued'}
                 <span class="stage">{t('ai.queued')}</span>
               {:else if item.aiStatus === 'running'}
-                <span class="stage">{t('ai.running', { elapsed: aiElapsed(item) })}</span>
+                <span class="stage">{t('ai.running', { elapsed: formatElapsed(item.aiStartedAt, nowMs) })}</span>
               {:else if item.aiStatus === 'done'}
                 <button class="link" onclick={() => openSummary(item)}>{t('action.viewSummary')}</button>
               {/if}
@@ -591,6 +679,21 @@
       {/each}
     {/if}
   </section>
+
+  <LibraryPanel
+    books={library}
+    {agents}
+    agentId={agentId ?? null}
+    {nowMs}
+    onread={libraryRead}
+    onopenbook={(b) => openPath(`${b.rel}/book.md`)}
+    onopensummary={(b) => {
+      const s = latestSummary(b)
+      if (s) void openPath(s)
+    }}
+    onpickagent={pickAgent}
+    onrefresh={loadLibrary}
+  />
 </main>
 
 <style>
@@ -695,6 +798,37 @@
     gap: 8px;
     margin-top: 2px;
   }
+  .prompt-row {
+    margin-top: 2px;
+    padding-top: 8px;
+    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .prompt {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    padding: 4px 6px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: none;
+    color: inherit;
+    text-align: left;
+    font-size: 12px;
+  }
+  .prompt:hover,
+  .prompt:focus-visible {
+    background: color-mix(in srgb, currentColor 8%, transparent);
+  }
+  /* The file behind the row — the point of "the prompt is a file you own". */
+  .prompt .path {
+    margin-left: auto;
+    font-size: 10px;
+    opacity: 0.55;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .dropzone {
     display: flex;
     flex-direction: column;
@@ -753,12 +887,17 @@
   @media (prefers-color-scheme: dark) {
     .ocr .cost { color: #f0c04a; }
   }
+  /* Shrinks to its contents rather than claiming half the window: opening this
+     plugin to browse the library with an empty queue is the common case, and
+     `flex: 1` would leave a large blank area above the books. Capped so a long
+     queue can't push the library off-screen either — it scrolls instead. */
   .queue {
-    flex: 1;
+    flex: 0 1 auto;
     display: flex;
     flex-direction: column;
     gap: 6px;
     min-height: 0;
+    max-height: 45vh;
     overflow-y: auto;
   }
   .queue-head {

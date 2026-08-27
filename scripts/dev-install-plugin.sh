@@ -358,10 +358,10 @@ fi
 #      wait "queued"); each row's status flips
 #      queued → running → done/error live.
 #   6. Per book, check
-#      <vault>/ssot/ebooks/YYYY-MM/<书名>/ contains the three-piece set:
-#      config.txt (bookread-format config), book.md (HTML→MD from the
-#      Calibre HTMLZ), and images/ (localized image assets referenced from
-#      book.md).
+#      <vault>/ssot/ebooks/YYYY-MM/<书名>/ contains the import outputs:
+#      config.txt (bookread-format config), meta.yml (`added_at` in RFC 3339
+#      UTC), book.md (HTML→MD from the Calibre HTMLZ), and images/
+#      (localized image assets referenced from book.md).
 #   7. Click the row's editor button → book.md opens in a normal note.md tab.
 #   8. Tick the OCR checkbox on a SCANNED PDF (no extractable text layer) and
 #      pick a provider:

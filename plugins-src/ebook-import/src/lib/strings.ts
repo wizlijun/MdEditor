@@ -37,6 +37,17 @@ export type MessageKey =
   | 'action.start'
   | 'action.running'
   | 'action.aiRead'
+  | 'action.aiReread'
+  | 'library.title'
+  | 'library.empty'
+  | 'library.noMatch'
+  | 'library.search'
+  | 'library.refresh'
+  | 'library.summaryOn'
+  | 'library.unread'
+  | 'settings.prompt'
+  | 'settings.promptHint'
+  | 'err.promptMissing'
   // The agent picker beside the AI-read button. Same keys and wording as every
   // other surface that offers to run something with an agent.
   | 'agentPicker.by'
@@ -121,6 +132,19 @@ const en: Catalog = {
   'action.start': 'Start import',
   'action.running': 'Importing…',
   'action.aiRead': 'AI read first',
+  'action.aiReread': 'Read again',
+  'library.title': 'Library',
+  'library.empty': 'No books yet — import one and it shows up here.',
+  'library.noMatch': 'No book matches that name.',
+  'library.search': 'Search by title',
+  'library.refresh': 'Refresh',
+  'library.summaryOn': 'Digest {date}',
+  'library.unread': 'Not read yet',
+  'settings.prompt': 'AI reading prompt',
+  'settings.promptHint':
+    'The prompt is a plain file in your vault. Edit it and every AI read after that follows your version.',
+  'err.promptMissing':
+    "The prompt file isn't in the vault yet — run one AI read and the template lands there.",
   'agentPicker.by': 'by {name}',
   'agentPicker.model': 'model {model}',
   'agentPicker.unknown': 'harness unknown',
@@ -201,6 +225,17 @@ const zh: Catalog = {
   'action.start': '开始导入',
   'action.running': '导入中…',
   'action.aiRead': 'AI 先读',
+  'action.aiReread': '重读',
+  'library.title': '书库',
+  'library.empty': '还没有书——导入一本,它就会出现在这里。',
+  'library.noMatch': '没有匹配这个书名的书。',
+  'library.search': '按书名搜索',
+  'library.refresh': '刷新',
+  'library.summaryOn': '{date} 摘要',
+  'library.unread': '尚未读过',
+  'settings.prompt': 'AI 阅读提示词',
+  'settings.promptHint': '提示词就是 vault 里的一个纯文本文件。改了它,之后每一次 AI 阅读都按你的版本来。',
+  'err.promptMissing': '提示词文件还没落到 vault——先跑一次「AI 先读」,模板会自动生成。',
   'agentPicker.by': '由 {name} 执行',
   'agentPicker.model': '模型 {model}',
   'agentPicker.unknown': '运行环境未知',
@@ -281,6 +316,19 @@ const ja: Catalog = {
   'action.start': '取り込みを開始',
   'action.running': '取り込み中…',
   'action.aiRead': 'AI に先に読ませる',
+  'action.aiReread': '読み直す',
+  'library.title': '蔵書',
+  'library.empty': 'まだ本がありません。取り込むとここに並びます。',
+  'library.noMatch': 'その書名に一致する本はありません。',
+  'library.search': '書名で検索',
+  'library.refresh': '再読み込み',
+  'library.summaryOn': '{date} の要約',
+  'library.unread': '未読',
+  'settings.prompt': 'AI リーディングのプロンプト',
+  'settings.promptHint':
+    'プロンプトは vault 内のただのテキストファイルです。書き換えれば、以降の AI リーディングはすべてその内容に従います。',
+  'err.promptMissing':
+    'プロンプトファイルはまだ vault にありません。AI リーディングを一度実行すると、テンプレートが作成されます。',
   'agentPicker.by': '実行:{name}',
   'agentPicker.model': 'モデル {model}',
   'agentPicker.unknown': '実行環境不明',
@@ -361,6 +409,19 @@ const de: Catalog = {
   'action.start': 'Import starten',
   'action.running': 'Importiert…',
   'action.aiRead': 'Zuerst KI lesen lassen',
+  'action.aiReread': 'Erneut lesen',
+  'library.title': 'Bibliothek',
+  'library.empty': 'Noch keine Bücher — importiere eines, dann steht es hier.',
+  'library.noMatch': 'Kein Buch passt zu diesem Titel.',
+  'library.search': 'Nach Titel suchen',
+  'library.refresh': 'Aktualisieren',
+  'library.summaryOn': 'Zusammenfassung vom {date}',
+  'library.unread': 'Noch nicht gelesen',
+  'settings.prompt': 'Prompt für die KI-Lektüre',
+  'settings.promptHint':
+    'Der Prompt ist eine einfache Datei in deinem Vault. Änderst du sie, folgt jede weitere KI-Lektüre deiner Fassung.',
+  'err.promptMissing':
+    'Die Prompt-Datei liegt noch nicht im Vault — führe eine KI-Lektüre aus, dann wird die Vorlage angelegt.',
   'agentPicker.by': 'via {name}',
   'agentPicker.model': 'Modell {model}',
   'agentPicker.unknown': 'Umgebung unbekannt',

@@ -1,6 +1,6 @@
 //! The end-to-end import pipeline: validate the input file, produce
-//! markdown (via Calibre+HTMLZ or OCR), write `config.txt`, and land the
-//! result in the vault under `<ebooks_root>/<YYYY-MM>/<Title>/`.
+//! markdown (via Calibre+HTMLZ or OCR), write `config.txt` + `meta.yml`, and
+//! land the result in the vault under `<ebooks_root>/<YYYY-MM>/<Title>/`.
 //!
 //! Every dependency (Calibre binary path, OCR engine, log/progress sinks,
 //! the cancel flag) is injected through [`PipelineCtx`]/parameters rather
@@ -186,7 +186,11 @@ pub fn run_import(
         return Err("could not derive a directory name for this book".to_string());
     }
 
-    let month = month_dir(chrono::Local::now().date_naive());
+    // One clock read drives both the month bucket and the durable import time.
+    // Reading twice around midnight could otherwise put a book under one month
+    // while recording a timestamp from the following day in its metadata.
+    let added_at = chrono::Local::now();
+    let month = month_dir(added_at.date_naive());
     let month_parent = ctx.vault_root.join(ctx.ebooks_root).join(month);
     std::fs::create_dir_all(&month_parent)
         .map_err(|e| format!("create {}: {e}", month_parent.display()))?;
@@ -194,7 +198,13 @@ pub fn run_import(
     check_cancelled(ctx.cancelled)?;
 
     (ctx.progress)("finalize", None);
-    finalize(ctx.work, &dest, &input.to_string_lossy(), &meta)?;
+    finalize(
+        ctx.work,
+        &dest,
+        &input.to_string_lossy(),
+        &meta,
+        added_at.with_timezone(&chrono::Utc),
+    )?;
 
     Ok(dest)
 }
@@ -223,6 +233,7 @@ pub fn month_dir(d: chrono::NaiveDate) -> String {
 }
 
 /// Copies the finished work dir's outputs into `dest`: `config.txt` as-is,
+/// `meta.yml` with the RFC 3339 UTC instant the book joined the vault,
 /// `input.md` renamed to `book.md` (the vault-facing name) with an OKF
 /// concept head prepended (`type: Book` + the source book as `sources[]`,
 /// see bookconf::book_frontmatter), and `images/` (if the run produced one
@@ -233,6 +244,7 @@ pub fn finalize(
     dest: &Path,
     input_file: &str,
     meta: &bookconf::BookMeta,
+    added_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), String> {
     std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
 
@@ -256,6 +268,22 @@ pub fn finalize(
     if images_src.exists() {
         copy_dir_recursive(&images_src, &dest.join("images"))?;
     }
+
+    // Commit metadata last: a directory with `meta.yml` represents a finished
+    // import, not a partial destination left behind by a failed book/image
+    // write. The rename is atomic within the destination directory.
+    let meta_tmp = dest.join(".meta.yml.tmp");
+    let meta_yml = dest.join("meta.yml");
+    let timestamp = added_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    std::fs::write(&meta_tmp, format!("added_at: {timestamp}\n"))
+        .map_err(|e| format!("write {}: {e}", meta_tmp.display()))?;
+    std::fs::rename(&meta_tmp, &meta_yml).map_err(|e| {
+        format!(
+            "rename {} -> {}: {e}",
+            meta_tmp.display(),
+            meta_yml.display()
+        )
+    })?;
 
     Ok(())
 }
@@ -352,6 +380,14 @@ mod tests {
         let cfg = std::fs::read_to_string(dest.join("config.txt")).unwrap();
         assert!(cfg.contains("conversion_method=ocr"), "got: {cfg}");
         assert!(cfg.contains("original_title=My Book"), "got: {cfg}");
+        let meta_yml = std::fs::read_to_string(dest.join("meta.yml")).unwrap();
+        let timestamp = meta_yml
+            .strip_prefix("added_at: ")
+            .and_then(|s| s.strip_suffix('\n'))
+            .expect("meta.yml must contain only added_at");
+        let parsed = chrono::DateTime::parse_from_rfc3339(timestamp).unwrap();
+        assert_eq!(parsed.offset().local_minus_utc(), 0);
+        assert!(timestamp.ends_with('Z'));
         assert!(
             progress_calls.iter().any(|(stage, _)| stage == "finalize"),
             "expected a finalize progress stage, got {progress_calls:?}"
@@ -389,10 +425,17 @@ mod tests {
             title: Some("Some Book".into()),
             ..Default::default()
         };
-        finalize(&work, &dest, "/in/some-book.epub", &meta).unwrap();
+        let added_at = chrono::DateTime::parse_from_rfc3339("2026-08-27T06:40:15Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        finalize(&work, &dest, "/in/some-book.epub", &meta, added_at).unwrap();
 
         assert!(dest.join("config.txt").exists());
         assert!(dest.join("book.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("meta.yml")).unwrap(),
+            "added_at: 2026-08-27T06:40:15Z\n"
+        );
         assert!(dest.join("images/pic.png").exists());
         assert_eq!(
             std::fs::read_to_string(dest.join("book.md")).unwrap(),
@@ -403,6 +446,24 @@ mod tests {
             ),
             "book.md is the converted markdown prefixed with its OKF concept head"
         );
+    }
+
+    #[test]
+    fn a_failed_finalize_does_not_publish_meta_yml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let dest = tmp.path().join("dest/Incomplete Book");
+        let meta = crate::bookconf::BookMeta::default();
+        let added_at = chrono::DateTime::parse_from_rfc3339("2026-08-27T06:40:15Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let err = finalize(&work, &dest, "/in/missing.epub", &meta, added_at).unwrap_err();
+
+        assert!(err.contains("input.md"), "got: {err}");
+        assert!(!dest.join("meta.yml").exists());
+        assert!(!dest.join(".meta.yml.tmp").exists());
     }
 
     #[test]

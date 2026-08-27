@@ -7,6 +7,12 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Ebook Import now shows your whole library, and lets the AI read any of it again.** The window used to know only about the files you dropped into it this session — a book imported last month was out of reach, and re-reading one meant importing it a second time. Below the import queue there is now a Library list of every book already in the vault, searchable by title, showing when each was imported and the date of its latest AI digest. Any row opens `book.md`, opens the digest, or starts a fresh read with the agent of your choice. A re-read overwrites that day's digest and leaves earlier ones alone, so the history stays on disk. Asking for the same book from both lists no longer starts two runs — the second one joins the first instead of racing it to write the same file.
+- **The AI reading prompt is a file you can edit.** Settings has a new row for `.notemd/agent-tasks/ai-read-ebook/CLAUDE.md` — the instructions the agent follows when it reads a book. Click it and it opens in the main editor like any other note. Change what the digest should emphasise, and every read after that follows your version. (The file appears once Claude Agent has run at least once; until then the row says so.)
+- **Ebook imports now keep their join time as data.** Every imported book directory gets a `meta.yml` with an explicit `added_at` timestamp in RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`), instead of leaving the time to be guessed later from its month folder or mutable file timestamps. The Library is sorted by this timestamp, newest first.
+
 ## v6.827.1 — 2026-08-27
 
 ### Fixed
