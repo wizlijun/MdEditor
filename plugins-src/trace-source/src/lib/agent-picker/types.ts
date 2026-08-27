@@ -31,6 +31,8 @@ export interface AgentOption {
   name: string
   /** null when the plugin could not be asked. */
   harness?: AgentHarness | null
+  /** Maximum jobs this provider may run at once. Old hosts omit it; callers use 1. */
+  max_concurrency?: number
 }
 
 /** `host.agent.providers` answer. */

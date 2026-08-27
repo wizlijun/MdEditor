@@ -28,8 +28,26 @@ pub fn collect(
     since: SystemTime,
     deliverable: Option<&Path>,
 ) -> Vec<String> {
+    collect_with_answers(vault, task_dir, since, deliverable, true)
+}
+
+/// A provider can opt out of the shared `answers/` scan when tasks are allowed
+/// to run concurrently. An mtime-only scan cannot prove which concurrent
+/// process wrote a global answer; task-local output and an explicit deliverable
+/// remain attributable because the task lock/declared path owns them.
+pub fn collect_with_answers(
+    vault: &Path,
+    task_dir: &Path,
+    since: SystemTime,
+    deliverable: Option<&Path>,
+    include_vault_answers: bool,
+) -> Vec<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
-    for root in [task_dir.join("output"), vault.join(VAULT_OUTPUT_DIR)] {
+    let mut roots = vec![task_dir.join("output")];
+    if include_vault_answers {
+        roots.push(vault.join(VAULT_OUTPUT_DIR));
+    }
+    for root in roots {
         for p in written_markdown(&root, since) {
             if let Some(rel) = vault_relative(vault, &p) {
                 out.insert(rel);
@@ -135,6 +153,18 @@ mod tests {
         assert_eq!(
             collect(v.path(), &task, just_before(), None),
             vec!["answers/2026-07-31-kv-cache.md"]
+        );
+    }
+
+    #[test]
+    fn scoped_collection_does_not_claim_concurrent_global_answers() {
+        let v = tempfile::tempdir().unwrap();
+        let task = v.path().join(".notemd/agent-tasks/t");
+        touch(&v.path().join("answers/from-another-run.md"), "# other");
+        touch(&task.join("output/mine.md"), "# mine");
+        assert_eq!(
+            collect_with_answers(v.path(), &task, just_before(), None, false),
+            vec![".notemd/agent-tasks/t/output/mine.md"]
         );
     }
 

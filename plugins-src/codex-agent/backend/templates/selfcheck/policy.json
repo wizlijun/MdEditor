@@ -1,0 +1,5 @@
+{
+  "permission_mode": "workspace-write",
+  "on_permission_request": "reject",
+  "rationale": "自检要能写一个文件到任务目录下,才能证明沙箱确实按 workspace-write 放行;越权请求拒绝。"
+}

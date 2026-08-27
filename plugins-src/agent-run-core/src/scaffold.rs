@@ -1,9 +1,9 @@
 //! The shape every run has, minus the transport.
 //!
-//! Both engines do the same five things around their very different middles:
+//! Every agent engine does the same five things around its different middle:
 //! take the task lock, ask the precheck whether this is worth starting, track
 //! progress across processes, collect what was written, and land a record. Those
-//! five live here so the two harnesses cannot drift apart on what a "run" means
+//! five live here so providers cannot drift apart on what a "run" means
 //! — the window and the host read one on-disk shape regardless of who produced it.
 //!
 //! What is NOT here is the middle: spawning the harness and turning its output
@@ -22,7 +22,7 @@ pub struct RunMeta {
     pub run_id: String,
     pub trigger: String,
     /// The plugin id performing this run (`notemd.claude-agent`,
-    /// `notemd.deepseek-agent`). Lands in the record so a shared runs root
+    /// `notemd.codex-agent`, `notemd.deepseek-agent`). Lands in the record so a shared runs root
     /// cannot make one harness's failure look like another's.
     pub harness: String,
     /// The one file this run is about, if any — handed to the precheck script as
@@ -59,8 +59,11 @@ pub enum Blocked {
 pub async fn preflight(meta: &RunMeta) -> Result<Started, Blocked> {
     let started = chrono::Utc::now();
     let started_at = SystemTime::now();
-    let guard = lock::acquire(
+    let guard = lock::acquire_for_run(
         &meta.task_run_dir,
+        &meta.task.id,
+        &meta.vault,
+        meta.target.as_deref(),
         lock::LockInfo {
             pid: std::process::id() as i32,
             run_id: meta.run_id.clone(),
@@ -130,7 +133,7 @@ impl ProgressTracker {
 /// front-matter, write the record, clear the progress snapshot.
 ///
 /// `by` is the OKF §7 actor (`<producer>/<version>`) — `claude-agent/1.0.11`,
-/// `deepseek-harness/deepseek-v4-pro`. Never a `human:` prefix.
+/// `codex/gpt-5`, `deepseek-harness/deepseek-v4-pro`. Never a `human:` prefix.
 #[allow(clippy::too_many_arguments)]
 pub fn finalize(
     meta: &RunMeta,
@@ -142,12 +145,51 @@ pub fn finalize(
     stderr_tail: String,
     by: &str,
 ) -> record::RunRecord {
-    let found = artifacts::collect(
+    finalize_scoped(
+        meta,
+        started,
+        status,
+        exit_code,
+        result,
+        fallback_err,
+        stderr_tail,
+        by,
+        true,
+    )
+}
+
+/// Finalize with control over the legacy global `answers/` mtime scan. New
+/// concurrent providers should pass `false` and use task-local `output/` or an
+/// explicit deliverable, which can be attributed to one run without guessing.
+#[allow(clippy::too_many_arguments)]
+pub fn finalize_scoped(
+    meta: &RunMeta,
+    started: &Started,
+    status: record::Status,
+    exit_code: Option<i32>,
+    result: Option<crate::event::RunResult>,
+    fallback_err: String,
+    stderr_tail: String,
+    by: &str,
+    include_vault_answers: bool,
+) -> record::RunRecord {
+    let mut found = artifacts::collect_with_answers(
         &meta.vault,
         &meta.task_dir,
         started.started_at,
         meta.deliverable.as_deref(),
+        include_vault_answers,
     );
+    // Concurrent AI reads share the task template/output directories. Only the
+    // explicitly declared summary can be attributed to this run without an
+    // mtime race against another book finishing at the same time.
+    if lock::scoped_target(&meta.task.id, &meta.vault, meta.target.as_deref()).is_some() {
+        let declared = meta
+            .deliverable
+            .as_deref()
+            .and_then(|path| artifacts::vault_relative(&meta.vault, path));
+        found.retain(|path| Some(path) == declared.as_ref());
+    }
     // 提示词要求 agent 自己写 OKF 头,但那是约束不是保证:漏写就地补上,免得
     // vault 里多一份没有 `type` 的文档(OKF §4.1)。已有 frontmatter 的不碰。
     let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -188,7 +230,7 @@ pub fn finalize(
     let _ = record::write(&meta.task_run_dir, &rec);
     // The record is the answer from here on; a leftover snapshot would read as
     // a run still in flight.
-    record::clear_progress(&meta.task_run_dir);
+    record::clear_progress_for(&meta.task_run_dir, &meta.run_id);
     rec
 }
 
@@ -212,7 +254,7 @@ pub fn finalize_without_run(
         Vec::new(),
     );
     let _ = record::write(&meta.task_run_dir, &rec);
-    record::clear_progress(&meta.task_run_dir);
+    record::clear_progress_for(&meta.task_run_dir, &meta.run_id);
     rec
 }
 
@@ -310,6 +352,32 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn ai_reads_of_different_books_preflight_together_but_one_book_does_not() {
+        let d = tempfile::tempdir().unwrap();
+        let make = |name: &str, run_id: &str| {
+            let mut m = meta(d.path());
+            m.task.id = "ai-read-ebook".into();
+            m.run_id = run_id.into();
+            let book = d.path().join(format!("books/{name}/book.md"));
+            std::fs::create_dir_all(book.parent().unwrap()).unwrap();
+            std::fs::write(&book, name).unwrap();
+            m.target = Some(book.to_string_lossy().into_owned());
+            m
+        };
+        let a = make("a", "run-a");
+        let b = make("b", "run-b");
+        let same_a = make("a", "run-a-again");
+        let first = preflight(&a).await.ok().expect("first book must start");
+        let second = preflight(&b).await.ok().expect("another book may run");
+        match preflight(&same_a).await {
+            Err(Blocked::Busy(who)) => assert_eq!(who.run_id, "run-a"),
+            _ => panic!("the same book must stay exclusive across runs"),
+        }
+        assert_eq!(lock::current_all(&a.task_run_dir).len(), 2);
+        drop((first, second));
+    }
+
     /// The whole point of a precheck is spending no tokens — and it must not
     /// hold the lock afterwards either.
     #[tokio::test]
@@ -377,7 +445,37 @@ mod tests {
             .starts_with("---\ntype: Answer\n"));
         // Landed on disk, and the live snapshot is gone.
         assert_eq!(record::recent(&m.task_run_dir, 5).len(), 1);
-        assert!(record::read_progress(&m.task_run_dir).is_none());
+        assert!(record::read_progress_for(&m.task_run_dir, &m.run_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_scoped_ai_read_only_claims_its_declared_deliverable() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = meta(d.path());
+        m.task.id = "ai-read-ebook".into();
+        let book = d.path().join("books/a/book.md");
+        let summary = d.path().join("books/a/summary.md");
+        std::fs::create_dir_all(book.parent().unwrap()).unwrap();
+        std::fs::write(&book, "book").unwrap();
+        m.target = Some(book.to_string_lossy().into_owned());
+        m.deliverable = Some(summary.clone());
+        let started = preflight(&m).await.ok().unwrap();
+
+        std::fs::write(&summary, "# mine").unwrap();
+        std::fs::create_dir_all(m.task_dir.join("output")).unwrap();
+        std::fs::write(m.task_dir.join("output/other.md"), "# other").unwrap();
+        let rec = finalize_scoped(
+            &m,
+            &started,
+            record::Status::Success,
+            Some(0),
+            None,
+            String::new(),
+            String::new(),
+            "test/1",
+            false,
+        );
+        assert_eq!(rec.artifacts, vec!["books/a/summary.md"]);
     }
 
     #[tokio::test]
@@ -431,7 +529,7 @@ mod tests {
         p.step("answered it", "answered it");
         assert_eq!(p.steps(), 2);
 
-        let seen = record::read_progress(&m.task_run_dir).unwrap();
+        let seen = record::read_progress_for(&m.task_run_dir, &m.run_id).unwrap();
         assert_eq!(seen.run_id, m.run_id);
         assert_eq!(seen.steps, 2);
         assert_eq!(seen.last, "answered it");
@@ -449,9 +547,15 @@ mod tests {
         let long = "字".repeat(200);
         p.step(&long, &long);
         assert_eq!(
-            record::read_progress(&m.task_run_dir).unwrap().last.chars().count(),
+            record::read_progress_for(&m.task_run_dir, &m.run_id)
+                .unwrap()
+                .last
+                .chars()
+                .count(),
             80
         );
-        assert!(record::read_log(&m.task_run_dir, &m.run_id).unwrap().contains(&long));
+        assert!(record::read_log(&m.task_run_dir, &m.run_id)
+            .unwrap()
+            .contains(&long));
     }
 }

@@ -3,6 +3,7 @@
 //! the vault.
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const RESULT_LIMIT: usize = 8 * 1024;
 pub const STDERR_LIMIT: usize = 2 * 1024;
@@ -37,9 +38,9 @@ pub struct RunRecord {
     #[serde(default)]
     pub artifacts: Vec<String>,
     /// WHICH agent performed this run — `notemd.claude-agent`,
-    /// `notemd.deepseek-agent`.
+    /// `notemd.codex-agent`, `notemd.deepseek-agent`.
     ///
-    /// Both agent plugins share one tasks root AND one runs root on purpose (a
+    /// Agent plugins share one tasks root AND one runs root on purpose (a
     /// task is a job description, not a binding to one model), which means every
     /// window lists every run. Without this field a claude run shows up in the
     /// DeepSeek Agent window looking exactly like a deepseek run — which is how
@@ -70,19 +71,40 @@ pub fn progress_path(task_run_dir: &Path) -> PathBuf {
     task_run_dir.join("progress.json")
 }
 
+pub fn progress_path_for(task_run_dir: &Path, run_id: &str) -> PathBuf {
+    task_run_dir.join("progress").join(format!("{run_id}.json"))
+}
+
 pub fn write_progress(task_run_dir: &Path, p: &Progress) {
-    let _ = std::fs::create_dir_all(task_run_dir);
+    let path = progress_path_for(task_run_dir, &p.run_id);
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(task_run_dir));
     if let Ok(s) = serde_json::to_string(p) {
-        let _ = std::fs::write(progress_path(task_run_dir), s);
+        let _ = std::fs::write(path, s);
     }
 }
 
+/// Legacy single-run reader. New status paths should use
+/// [`read_progress_for`], which cannot confuse concurrent runs.
 pub fn read_progress(task_run_dir: &Path) -> Option<Progress> {
     serde_json::from_str(&std::fs::read_to_string(progress_path(task_run_dir)).ok()?).ok()
 }
 
+pub fn read_progress_for(task_run_dir: &Path, run_id: &str) -> Option<Progress> {
+    let direct = std::fs::read_to_string(progress_path_for(task_run_dir, run_id))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Progress>(&s).ok());
+    direct.or_else(|| read_progress(task_run_dir).filter(|p| p.run_id == run_id))
+}
+
 pub fn clear_progress(task_run_dir: &Path) {
     let _ = std::fs::remove_file(progress_path(task_run_dir));
+}
+
+pub fn clear_progress_for(task_run_dir: &Path, run_id: &str) {
+    let _ = std::fs::remove_file(progress_path_for(task_run_dir, run_id));
+    if read_progress(task_run_dir).is_some_and(|p| p.run_id == run_id) {
+        clear_progress(task_run_dir);
+    }
 }
 
 /// Cap a single run's log. Enough to read what happened, small enough that a
@@ -101,7 +123,11 @@ pub fn append_log(task_run_dir: &Path, run_id: &str, line: &str) {
     }
     let _ = std::fs::create_dir_all(runs_dir(task_run_dir));
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&p)
+    {
         let _ = writeln!(f, "{line}");
     }
 }
@@ -201,10 +227,17 @@ pub fn recent_all(runs_root: &std::path::Path, n: usize) -> Vec<RunRecord> {
     all
 }
 
-/// `20260730T104233Z-<low 24 bits of the pid, hex>`: lexical order is time
-/// order, and two processes in the same second don't collide.
+/// Timestamp + pid + a process-local sequence: lexical order follows time and
+/// repeated calls in the same process and nanosecond cannot overwrite records.
 pub fn new_run_id(now: chrono::DateTime<chrono::Utc>, pid: u32) -> String {
-    format!("{}-{:06x}", now.format("%Y%m%dT%H%M%SZ"), pid & 0xff_ffff)
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "{}{:09}Z-{:06x}-{seq:016x}",
+        now.format("%Y%m%dT%H%M%S"),
+        now.timestamp_subsec_nanos(),
+        pid & 0xff_ffff,
+    )
 }
 
 #[cfg(test)]
@@ -240,6 +273,43 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_progress_is_isolated_and_cleared_one_run_at_a_time() {
+        let d = tempfile::tempdir().unwrap();
+        let progress = |id: &str, steps| Progress {
+            run_id: id.into(),
+            steps,
+            last: format!("step {steps}"),
+            updated_at: "now".into(),
+        };
+        write_progress(d.path(), &progress("r1", 1));
+        write_progress(d.path(), &progress("r2", 2));
+        assert_eq!(read_progress_for(d.path(), "r1").unwrap().steps, 1);
+        assert_eq!(read_progress_for(d.path(), "r2").unwrap().steps, 2);
+
+        clear_progress_for(d.path(), "r1");
+        assert!(read_progress_for(d.path(), "r1").is_none());
+        assert_eq!(read_progress_for(d.path(), "r2").unwrap().steps, 2);
+    }
+
+    #[test]
+    fn per_run_reader_falls_back_to_the_legacy_matching_snapshot() {
+        let d = tempfile::tempdir().unwrap();
+        let old = Progress {
+            run_id: "old".into(),
+            steps: 3,
+            last: "legacy".into(),
+            updated_at: "then".into(),
+        };
+        std::fs::write(
+            progress_path(d.path()),
+            serde_json::to_string(&old).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(read_progress_for(d.path(), "old").unwrap().steps, 3);
+        assert!(read_progress_for(d.path(), "other").is_none());
+    }
+
+    #[test]
     fn recent_returns_newest_first_and_respects_the_limit() {
         let d = tempfile::tempdir().unwrap();
         for id in [
@@ -270,9 +340,25 @@ mod tests {
     #[test]
     fn run_ids_sort_chronologically() {
         use chrono::TimeZone;
-        let a = new_run_id(chrono::Utc.with_ymd_and_hms(2026, 7, 30, 1, 0, 0).unwrap(), 1);
-        let b = new_run_id(chrono::Utc.with_ymd_and_hms(2026, 7, 30, 2, 0, 0).unwrap(), 1);
+        let a = new_run_id(
+            chrono::Utc.with_ymd_and_hms(2026, 7, 30, 1, 0, 0).unwrap(),
+            1,
+        );
+        let b = new_run_id(
+            chrono::Utc.with_ymd_and_hms(2026, 7, 30, 2, 0, 0).unwrap(),
+            1,
+        );
         assert!(a < b);
+    }
+
+    #[test]
+    fn run_ids_are_unique_within_the_same_process_and_instant() {
+        use chrono::TimeZone;
+        use std::collections::HashSet;
+
+        let now = chrono::Utc.with_ymd_and_hms(2026, 7, 30, 1, 0, 0).unwrap();
+        let ids: HashSet<_> = (0..2_000).map(|_| new_run_id(now, 7)).collect();
+        assert_eq!(ids.len(), 2_000);
     }
 
     #[test]
@@ -286,7 +372,10 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         append_log(d.path(), "R1", "Read a.md");
         append_log(d.path(), "R1", "Write answers/a.md");
-        assert_eq!(read_log(d.path(), "R1").unwrap(), "Read a.md\nWrite answers/a.md\n");
+        assert_eq!(
+            read_log(d.path(), "R1").unwrap(),
+            "Read a.md\nWrite answers/a.md\n"
+        );
         assert_eq!(read_log(d.path(), "R2"), None);
     }
 
@@ -299,7 +388,10 @@ mod tests {
         }
         let len = read_log(d.path(), "R1").unwrap().len();
         assert!(len >= LOG_LIMIT, "should fill up to the cap, got {len}");
-        assert!(len < LOG_LIMIT + 9 * 1024, "should stop just past it, got {len}");
+        assert!(
+            len < LOG_LIMIT + 9 * 1024,
+            "should stop just past it, got {len}"
+        );
     }
 
     #[test]

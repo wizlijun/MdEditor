@@ -425,11 +425,12 @@ mod agent_provider_projection {
         );
     }
 
-    /// Both shipped agent plugins, end to end through the real adapter.
+    /// All three shipped agent plugins, end to end through the real adapter.
     #[test]
-    fn both_shipped_agent_plugins_project_as_providers() {
+    fn all_shipped_agent_plugins_project_as_providers() {
         for path in [
             "../plugins-src/claude-agent/manifest.v2.json",
+            "../plugins-src/codex-agent/manifest.v2.json",
             "../plugins-src/deepseek-agent/manifest.v2.json",
         ] {
             let body = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));

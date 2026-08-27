@@ -10,6 +10,7 @@ plugins-src/openclaw/backend/target/
 plugins-src/pos-log/backend/target/
 plugins-src/claude-agent/backend/target/
 plugins-src/deepseek-agent/backend/target/
+plugins-src/codex-agent/backend/target/
 plugins-src/agent-run-core/target/
 plugins-src/ebook-import/backend/target/
 plugins-src/roam-import/backend/target/

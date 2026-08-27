@@ -1,7 +1,8 @@
 //! A template's `.claude/settings.json` stays portable by writing `${VAULT}`
 //! instead of a machine path. Before each run the placeholders are substituted
-//! into `.claude/settings.local.json` — Claude Code's own local override layer,
-//! already gitignored on the vault side.
+//! into a per-run settings file passed with `--settings`. The legacy
+//! `materialize` test helper can still write `.claude/settings.local.json`, but the
+//! engine never shares that mutable file between concurrent runs.
 //!
 //! A run aimed at ONE note uses a narrower policy, `settings.scoped.json`, if
 //! the template ships one. That is what actually confines the run: telling a
@@ -53,6 +54,7 @@ pub fn mcp_server_names(home: &Path, dirs: &[PathBuf]) -> Vec<String> {
 ///
 /// `servers` is what this machine has — passed in rather than read from the
 /// environment, so a test never has to stand up a home directory.
+#[cfg(test)]
 pub fn materialize(
     task_dir: &Path,
     vault: &Path,
@@ -60,13 +62,28 @@ pub fn materialize(
     metas: &[MirrorMeta],
     servers: &[String],
 ) -> std::io::Result<()> {
+    let dst = task_dir.join(".claude/settings.local.json");
+    materialize_to(task_dir, &dst, vault, scope, metas, servers).map(|_| ())
+}
+
+/// Render one run's dynamic permissions to a private file. Concurrent scoped
+/// runs must never share `settings.local.json`: the last writer would silently
+/// replace another book's read/write boundary before Claude loads it.
+pub fn materialize_to(
+    task_dir: &Path,
+    dst: &Path,
+    vault: &Path,
+    scope: Option<&Scope>,
+    metas: &[MirrorMeta],
+    servers: &[String],
+) -> std::io::Result<bool> {
     let scoped = task_dir.join(".claude/settings.scoped.json");
     let src = match scope {
         Some(_) if scoped.is_file() => scoped,
         _ => task_dir.join(".claude/settings.json"),
     };
     let Ok(body) = std::fs::read_to_string(&src) else {
-        return Ok(());
+        return Ok(false);
     };
     // Read access to the originals' directories is appended in code, not left to
     // the template: the dirs are per-vault and per-run, so no shipped template
@@ -88,11 +105,11 @@ pub fn materialize(
     rules.extend(INFORMATION_TOOLS.iter().map(|t| t.to_string()));
     rules.extend(servers.iter().map(|s| format!("mcp__{s}")));
     let out = append_allow(&substitute(&body, vault, scope), &rules);
-    let dst = task_dir.join(".claude/settings.local.json");
     if let Some(p) = dst.parent() {
         std::fs::create_dir_all(p)?;
     }
-    std::fs::write(dst, out)
+    std::fs::write(dst, out)?;
+    Ok(true)
 }
 
 pub fn substitute(body: &str, vault: &Path, scope: Option<&Scope>) -> String {
@@ -266,6 +283,49 @@ mod tests {
             got.contains(&format!("Read({}/**)", proj.path().to_string_lossy())),
             "{got}"
         );
+    }
+
+    #[test]
+    fn concurrent_runs_render_to_distinct_files_without_touching_shared_local_settings() {
+        let d = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let a = vault.path().join("books/a/book.md");
+        let b = vault.path().join("books/b/book.md");
+        std::fs::create_dir_all(a.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(b.parent().unwrap()).unwrap();
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+        write_templates(
+            d.path(),
+            r#"{"permissions":{"allow":["Read(${VAULT}/**)"]}}"#,
+            Some(r#"{"permissions":{"allow":["Read(${NOTE})"]}}"#),
+        );
+        let out_a = d.path().join("runs/a.json");
+        let out_b = d.path().join("runs/b.json");
+        materialize_to(
+            d.path(),
+            &out_a,
+            vault.path(),
+            Some(&Scope::for_note(vault.path(), &a, &[])),
+            &[],
+            &[],
+        )
+        .unwrap();
+        materialize_to(
+            d.path(),
+            &out_b,
+            vault.path(),
+            Some(&Scope::for_note(vault.path(), &b, &[])),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let rendered_a = std::fs::read_to_string(out_a).unwrap();
+        let rendered_b = std::fs::read_to_string(out_b).unwrap();
+        assert!(rendered_a.contains(&a.to_string_lossy().to_string()));
+        assert!(!rendered_a.contains(&b.to_string_lossy().to_string()));
+        assert!(rendered_b.contains(&b.to_string_lossy().to_string()));
+        assert!(!d.path().join(".claude/settings.local.json").exists());
     }
 
     #[test]

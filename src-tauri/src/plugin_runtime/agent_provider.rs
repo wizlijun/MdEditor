@@ -32,6 +32,58 @@ pub const DEFAULT_PROVIDER: &str = "notemd.claude-agent";
 /// The vault setting that overrides it.
 pub const SETTING_KEY: &str = "agentDefaultProvider";
 
+/// App-level setting contributed by every provider's settings page. Agent
+/// capacity is device-local (it depends on this machine's credentials and
+/// resources), so it lives in the app's `settings.json`, not in the vault.
+pub const MAX_CONCURRENCY_KEY: &str = "maxConcurrency";
+pub const DEFAULT_MAX_CONCURRENCY: u64 = 1;
+pub const MAX_CONCURRENCY: u64 = 5;
+
+/// Read `plugins[provider_id].maxConcurrency` from the app settings store.
+///
+/// Settings `select` fields persist strings today, while hand-edited or future
+/// settings may contain a JSON number. Accept both, clamp the supported range,
+/// and fail closed to one worker for every malformed shape.
+pub fn max_concurrency(settings: &serde_json::Value, provider_id: &str) -> u64 {
+    let raw = settings
+        .get("plugins")
+        .and_then(|v| v.get(provider_id))
+        .and_then(|v| v.get(MAX_CONCURRENCY_KEY));
+    let parsed = raw.and_then(|v| {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+    });
+    parsed
+        .unwrap_or(DEFAULT_MAX_CONCURRENCY)
+        .clamp(DEFAULT_MAX_CONCURRENCY, MAX_CONCURRENCY)
+}
+
+/// Add the current device-local capacity to a cached provider response.
+/// Harness discovery is expensive and may be cached; settings are cheap and
+/// must be overlaid on every request so a saved value takes effect at once.
+pub fn with_max_concurrency(
+    mut providers: serde_json::Value,
+    settings: &serde_json::Value,
+) -> serde_json::Value {
+    if let Some(items) = providers
+        .get_mut("providers")
+        .and_then(|v| v.as_array_mut())
+    {
+        for item in items {
+            let Some(id) = item.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+                continue;
+            };
+            if let Some(obj) = item.as_object_mut() {
+                obj.insert(
+                    "max_concurrency".into(),
+                    serde_json::Value::from(max_concurrency(settings, &id)),
+                );
+            }
+        }
+    }
+    providers
+}
+
 /// Can this plugin serve the agent slot?
 pub fn is_provider(m: &ManifestV2) -> bool {
     REQUIRED_COMMANDS.iter().all(|c| {
@@ -144,6 +196,7 @@ mod tests {
     #[test]
     fn a_plugin_declaring_all_three_commands_is_a_provider() {
         assert!(is_provider(&agent("notemd.claude-agent")));
+        assert!(is_provider(&agent("notemd.codex-agent")));
         assert!(is_provider(&agent("notemd.deepseek-agent")));
     }
 
@@ -159,12 +212,13 @@ mod tests {
         assert!(!is_provider(&manifest("notemd.none", &[])));
     }
 
-    /// The two shipped plugins' real manifests must satisfy the convention, or
+    /// The three shipped plugins' real manifests must satisfy the convention, or
     /// the slot silently has no providers.
     #[test]
-    fn both_shipped_agent_manifests_are_recognized() {
+    fn all_shipped_agent_manifests_are_recognized() {
         for path in [
             "../plugins-src/claude-agent/manifest.v2.json",
+            "../plugins-src/codex-agent/manifest.v2.json",
             "../plugins-src/deepseek-agent/manifest.v2.json",
         ] {
             let body = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -195,6 +249,97 @@ mod tests {
     #[test]
     fn providers_is_empty_when_no_agent_is_installed() {
         assert!(providers(&[manifest("notemd.md2pdf", &["onCommand:export"])]).is_empty());
+    }
+
+    #[test]
+    fn max_concurrency_defaults_accepts_both_store_shapes_and_clamps() {
+        let id = "notemd.claude-agent";
+        assert_eq!(max_concurrency(&serde_json::json!({}), id), 1);
+        assert_eq!(
+            max_concurrency(
+                &serde_json::json!({"plugins": {(id): {"maxConcurrency": "3"}}}),
+                id
+            ),
+            3
+        );
+        assert_eq!(
+            max_concurrency(
+                &serde_json::json!({"plugins": {(id): {"maxConcurrency": 4}}}),
+                id
+            ),
+            4
+        );
+        assert_eq!(
+            max_concurrency(
+                &serde_json::json!({"plugins": {(id): {"maxConcurrency": 0}}}),
+                id
+            ),
+            1
+        );
+        assert_eq!(
+            max_concurrency(
+                &serde_json::json!({"plugins": {(id): {"maxConcurrency": "99"}}}),
+                id
+            ),
+            5
+        );
+        assert_eq!(
+            max_concurrency(
+                &serde_json::json!({"plugins": {(id): {"maxConcurrency": "many"}}}),
+                id
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn current_capacity_is_overlaid_without_mutating_the_cached_provider_image() {
+        let base = serde_json::json!({
+            "providers": [{"id": "notemd.claude-agent", "harness": {"ok": true}}],
+            "default": "notemd.claude-agent"
+        });
+        let first = with_max_concurrency(
+            base.clone(),
+            &serde_json::json!({"plugins": {"notemd.claude-agent": {"maxConcurrency": "2"}}}),
+        );
+        let changed = with_max_concurrency(
+            base.clone(),
+            &serde_json::json!({"plugins": {"notemd.claude-agent": {"maxConcurrency": "5"}}}),
+        );
+        assert_eq!(first["providers"][0]["max_concurrency"], 2);
+        assert_eq!(changed["providers"][0]["max_concurrency"], 5);
+        assert!(base["providers"][0].get("max_concurrency").is_none());
+    }
+
+    #[test]
+    fn shipped_agents_offer_the_same_one_to_five_capacity_setting() {
+        for (path, id) in [
+            (
+                "../plugins-src/claude-agent/manifest.v2.json",
+                "notemd.claude-agent",
+            ),
+            (
+                "../plugins-src/codex-agent/manifest.v2.json",
+                "notemd.codex-agent",
+            ),
+            (
+                "../plugins-src/deepseek-agent/manifest.v2.json",
+                "notemd.deepseek-agent",
+            ),
+        ] {
+            let body = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+            let m: ManifestV2 =
+                serde_json::from_str(&body).unwrap_or_else(|e| panic!("{path}: {e}"));
+            let settings = m.contributes.settings.expect("agent settings contribution");
+            let field = &settings["schema"][0];
+            assert_eq!(field["key"], format!("{id}.maxConcurrency"));
+            assert_eq!(field["type"], "select");
+            assert_eq!(
+                field["options"],
+                serde_json::json!(["1", "2", "3", "4", "5"])
+            );
+            assert_eq!(field["default"], "1");
+        }
     }
 
     /// Today's behaviour, byte for byte: one claude-agent installed, no setting.

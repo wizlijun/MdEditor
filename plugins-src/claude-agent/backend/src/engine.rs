@@ -54,8 +54,11 @@ pub async fn run(
     // run's. Taken before the lock so a file written the instant claude starts
     // still counts.
     let started_at = SystemTime::now();
-    let _guard = lock::acquire(
+    let _guard = lock::acquire_for_run(
         &spec.task_run_dir,
+        &spec.task.id,
+        &spec.vault,
+        spec.target.as_deref(),
         lock::LockInfo {
             pid: std::process::id() as i32,
             run_id: spec.run_id.clone(),
@@ -83,7 +86,7 @@ pub async fn run(
             Vec::new(),
         );
         let _ = record::write(&spec.task_run_dir, &rec);
-        record::clear_progress(&spec.task_run_dir);
+        record::clear_progress_for(&spec.task_run_dir, &spec.run_id);
         let _ = tx.send(Step::Done(rec));
         return Ok(());
     }
@@ -102,18 +105,54 @@ pub async fn run(
     // told about is a tool it never reaches for.
     let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
     let servers = settings::mcp_server_names(&home, &[spec.task_dir.clone(), spec.vault.clone()]);
-    let _ = settings::materialize(
+    let private_settings = spec
+        .task_run_dir
+        .join("settings")
+        .join(format!("{}.json", spec.run_id));
+    let has_private_settings = match settings::materialize_to(
         &spec.task_dir,
+        &private_settings,
         &spec.vault,
         scope.as_ref(),
         &metas,
         &servers,
-    );
+    ) {
+        Ok(wrote) => wrote,
+        Err(e) => {
+            let _ = std::fs::remove_file(&private_settings);
+            let rec = finish(
+                &spec,
+                started,
+                record::Status::Error,
+                None,
+                None,
+                format!("could not prepare per-run Claude settings: {e}"),
+                String::new(),
+                Vec::new(),
+            );
+            let _ = record::write(&spec.task_run_dir, &rec);
+            let _ = tx.send(Step::Done(rec));
+            return Ok(());
+        }
+    };
+    struct PrivateSettings(Option<PathBuf>);
+    impl Drop for PrivateSettings {
+        fn drop(&mut self) {
+            if let Some(path) = self.0.as_deref() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    let _private_settings = PrivateSettings(has_private_settings.then(|| private_settings.clone()));
     let full_prompt = prompt::with_toolbelt(
         &prompt::with_source_context(&spec.prompt, &spec.vault, scope.as_ref()),
         &servers,
     );
-    let argv = prompt::build_argv(&spec.task, &full_prompt);
+    let argv = prompt::build_argv_with_settings(
+        &spec.task,
+        &full_prompt,
+        has_private_settings.then_some(private_settings.as_path()),
+    );
 
     let mut cmd = tokio::process::Command::new(&spec.claude);
     cmd.args(&argv)
@@ -138,7 +177,6 @@ pub async fn run(
     // Own process group, so a timeout/cancel can take down claude AND every
     // process it spawned in one signal.
     unsafe {
-        use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
             libc::setsid();
             Ok(())
@@ -254,12 +292,19 @@ pub async fn run(
         (_, Some(0)) => record::Status::Success,
         _ => record::Status::Error,
     });
-    let found = artifacts::collect(
+    let mut found = artifacts::collect(
         &spec.vault,
         &spec.task_dir,
         started_at,
         spec.deliverable.as_deref(),
     );
+    if lock::scoped_target(&spec.task.id, &spec.vault, spec.target.as_deref()).is_some() {
+        let declared = spec
+            .deliverable
+            .as_deref()
+            .and_then(|path| artifacts::vault_relative(&spec.vault, path));
+        found.retain(|path| Some(path) == declared.as_ref());
+    }
     // 提示词要求 agent 自己写 OKF 头,但那是约束不是保证:漏写就地补上,
     // 免得 vault 里多一份没有 `type` 的文档(§4.1)。已有 frontmatter 的不碰。
     // 声明的目标文件用任务自报的 type(如 Book Summary),其余走默认 Answer ——
@@ -302,7 +347,7 @@ pub async fn run(
     let _ = record::write(&spec.task_run_dir, &rec);
     // The record is the answer from here on; a leftover snapshot would read as
     // a run still in flight.
-    record::clear_progress(&spec.task_run_dir);
+    record::clear_progress_for(&spec.task_run_dir, &spec.run_id);
     let _ = tx.send(Step::Done(rec));
     Ok(())
 }
@@ -382,7 +427,7 @@ mod tests {
                 model: None,
                 precheck: None,
                 okf_type: None,
-            directive: Vec::new(),
+                directive: Vec::new(),
             },
             task_dir,
             task_run_dir: dir.join("runs-t"),
@@ -543,6 +588,30 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_scoped_ai_read_does_not_claim_another_runs_shared_output() {
+        let d = tempfile::tempdir().unwrap();
+        let book = d.path().join("books/b/book.md");
+        let summary = d.path().join("books/b/summary.md");
+        std::fs::create_dir_all(book.parent().unwrap()).unwrap();
+        std::fs::write(&book, "book").unwrap();
+        let c = fake_claude(
+            d.path(),
+            "fake-scoped-artifacts",
+            &format!(
+                "mkdir -p output && echo '# other' > output/other.md\necho '# mine' > {}\necho '{{\"type\":\"result\",\"result\":\"done\",\"is_error\":false}}'",
+                summary.display()
+            ),
+        );
+        let mut s = spec(d.path(), c, 30);
+        s.task.id = "ai-read-ebook".into();
+        s.target = Some(book.to_string_lossy().into_owned());
+        s.deliverable = Some(summary);
+
+        let (_events, rec) = drive(s).await;
+        assert_eq!(rec.artifacts, vec!["books/b/summary.md"]);
+    }
+
     /// The model normally writes its own header — the fallback must not
     /// double-stamp it.
     #[tokio::test]
@@ -624,10 +693,14 @@ mod tests {
     #[tokio::test]
     async fn a_note_scoped_run_gets_a_policy_confined_to_that_note() {
         let d = tempfile::tempdir().unwrap();
+        let captured = d.path().join("captured-settings.json");
         let c = fake_claude(
             d.path(),
             "fake-scoped",
-            r#"echo '{"type":"result","result":"done","is_error":false}'"#,
+            &format!(
+                "while [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--settings\" ]; then cp \"$2\" \"{}\"; fi\n  shift\ndone\necho '{{\"type\":\"result\",\"result\":\"done\",\"is_error\":false}}'",
+                captured.display()
+            ),
         );
         let mut s = spec(d.path(), c, 30);
         std::fs::create_dir_all(s.task_dir.join(".claude")).unwrap();
@@ -645,7 +718,11 @@ mod tests {
         let local = s.task_dir.join(".claude/settings.local.json");
 
         drive(s).await;
-        let got = std::fs::read_to_string(&local).unwrap();
+        let got = std::fs::read_to_string(&captured).unwrap();
+        assert!(
+            !local.exists(),
+            "the shared local policy must stay untouched"
+        );
         assert!(got.contains("docs/a.note.md"), "note not in policy: {got}");
         assert!(got.contains("docs/a.md"), "source not in policy: {got}");
         assert!(

@@ -24,8 +24,9 @@
 # session/request_permission 只带一个 toolCallId(没有工具名、没有路径),所以
 # 客户端侧不可能按路径判断;能看见文件系统的是沙箱,规矩就立在沙箱上。
 #
-# workspaceRoot 用 process.cwd():插件把子进程的 cwd 设成任务目录,于是
-# workspace-write 模式下可写的正是这次任务自己的目录。
+# 普通 agent 的真正 workspaceRoot 来自 ACP session/new.cwd；这里的
+# process.cwd() 只是无 session/cwd 调用的 fallback。插件按运行范围传入
+# 目标文件父目录（有明确目标时）或任务目录（无范围时）。
 - id: sandbox-policy
   config:
     mode: !!js "process.env.DSH_PERMISSION_MODE ?? 'workspace-write'"

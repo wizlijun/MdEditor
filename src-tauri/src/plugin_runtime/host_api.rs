@@ -53,7 +53,7 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // surface that offers "run this with an agent" renders the same picker
         // from this one answer, so the choice looks and behaves identically
         // whether you are in a sidecar note, Idea Spark, or the ebook queue.
-        "host.agent.providers" => Some("agent"),
+        "host.agent.providers" | "host.agent.limits" => Some("agent"),
         "host.notify" => Some("notify"),
         "host.dismissNotification" => Some("notify"),
         // editor.kit — the host-embedded editor bundle and the theme CSS that
@@ -204,6 +204,8 @@ pub fn make_sink(
                                 "host.location.get" => Some(s.location_get()),
                                 "host.agent.run" => Some(s.agent_execute("run-task", req.params.clone())),
                                 "host.agent.status" => Some(s.agent_execute("run-status", req.params.clone())),
+                                "host.agent.providers" => Some(s.agent_providers()),
+                                "host.agent.limits" => Some(s.agent_limits()),
                                 // notify_push, not notify_user: the OpenPath
                                 // action has to clear the same vault fence
                                 // `editor.open` does.
@@ -537,6 +539,8 @@ mod tests {
         assert_eq!(method_capability("host.editor.open"), Some("editor.open"));
         assert_eq!(method_capability("host.agent.run"), Some("agent"));
         assert_eq!(method_capability("host.agent.status"), Some("agent"));
+        assert_eq!(method_capability("host.agent.providers"), Some("agent"));
+        assert_eq!(method_capability("host.agent.limits"), Some("agent"));
         assert_eq!(method_capability("host.notify"), Some("notify"));
         assert_eq!(method_capability("host.dismissNotification"), Some("notify"));
         assert_eq!(method_capability("host.theme.css"), Some("editor.kit"));
@@ -729,6 +733,26 @@ mod tests {
             self.1.lock().unwrap().push((command.to_string(), context));
             Ok(serde_json::json!({ "run_id": "r-test" }))
         }
+        fn agent_providers(&self) -> Result<serde_json::Value, String> {
+            self.1
+                .lock()
+                .unwrap()
+                .push(("providers".into(), serde_json::json!({})));
+            Ok(serde_json::json!({
+                "providers": [{"id": "notemd.claude-agent", "max_concurrency": 3}],
+                "default": "notemd.claude-agent"
+            }))
+        }
+        fn agent_limits(&self) -> Result<serde_json::Value, String> {
+            self.1
+                .lock()
+                .unwrap()
+                .push(("limits".into(), serde_json::json!({})));
+            Ok(serde_json::json!({
+                "providers": [{"id": "notemd.claude-agent", "max_concurrency": 3}],
+                "default": "notemd.claude-agent"
+            }))
+        }
         fn notify_user(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
             self.1.lock().unwrap().push(("notify".into(), params.clone()));
             Ok(serde_json::json!({ "ok": true, "id": 1 }))
@@ -842,6 +866,47 @@ mod tests {
         let calls = seen.lock().unwrap();
         assert_eq!(calls[0].0, "run-task");
         assert_eq!(calls[0].1["task"], "ai-read-ebook");
+    }
+
+    #[test]
+    fn agent_providers_is_available_on_the_process_channel() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = make_sink(
+            "pub.test".into(),
+            vec!["agent".into()],
+            log_dir.path().to_path_buf(),
+            recording_emitter().0,
+            noop_poster(),
+            Some(Arc::new(ServicesStub(std::env::temp_dir(), seen.clone()))),
+        );
+        let resp = sink(req("host.agent.providers", Some(1), serde_json::json!({}))).unwrap();
+        assert_eq!(
+            resp.result.as_ref().unwrap()["providers"][0]["max_concurrency"],
+            3
+        );
+        assert_eq!(seen.lock().unwrap()[0].0, "providers");
+    }
+
+    #[test]
+    fn agent_limits_is_available_on_the_process_channel() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = make_sink(
+            "pub.test".into(),
+            vec!["agent".into()],
+            log_dir.path().to_path_buf(),
+            recording_emitter().0,
+            noop_poster(),
+            Some(Arc::new(ServicesStub(std::env::temp_dir(), seen.clone()))),
+        );
+        let resp = sink(req("host.agent.limits", Some(1), serde_json::json!({}))).unwrap();
+        assert_eq!(
+            resp.result.as_ref().unwrap()["providers"][0]["max_concurrency"],
+            3
+        );
+        assert_eq!(resp.result.as_ref().unwrap()["default"], "notemd.claude-agent");
+        assert_eq!(seen.lock().unwrap()[0].0, "limits");
     }
 
     #[test]

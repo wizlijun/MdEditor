@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.deepseek-agent",
   "name": "DeepSeek Agent",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.817.4"
+    "notemd": ">=6.827.2"
   },
   "description": "Run DeepSeek Harness against your vault over the Agent Client Protocol: task templates live in .notemd/agent-tasks, stream live in a window, or fire detached from the CLI. Experimental — depends on a developer-preview release of DeepSeek Harness.",
   "binary": {
@@ -44,6 +44,18 @@
         "open_command": "open"
       }
     ],
+    "settings": {
+      "tab_label": "DeepSeek Agent",
+      "schema": [
+        {
+          "key": "notemd.deepseek-agent.maxConcurrency",
+          "type": "select",
+          "label": "Maximum concurrent AI reads",
+          "options": ["1", "2", "3", "4", "5"],
+          "default": "1"
+        }
+      ]
+    },
     "cli": [
       {
         "subcommand": "dsagent",
@@ -78,18 +90,30 @@
       "name": "DeepSeek 智能体",
       "menus": {
         "open": "DeepSeek 智能体…"
+      },
+      "settings.tab_label": "DeepSeek 智能体",
+      "settings.fields": {
+        "notemd.deepseek-agent.maxConcurrency": "AI 阅读最大并行数"
       }
     },
     "ja": {
       "name": "DeepSeek エージェント",
       "menus": {
         "open": "DeepSeek エージェント…"
+      },
+      "settings.tab_label": "DeepSeek エージェント",
+      "settings.fields": {
+        "notemd.deepseek-agent.maxConcurrency": "AI 読書の最大同時実行数"
       }
     },
     "de": {
       "name": "DeepSeek Agent",
       "menus": {
         "open": "DeepSeek Agent…"
+      },
+      "settings.tab_label": "DeepSeek Agent",
+      "settings.fields": {
+        "notemd.deepseek-agent.maxConcurrency": "Maximale parallele KI-Lesevorgänge"
       }
     }
   },

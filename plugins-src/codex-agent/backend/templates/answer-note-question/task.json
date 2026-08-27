@@ -1,0 +1,8 @@
+{
+  "name": "回答手记里的问题",
+  "description": "用 Codex CLI 回答 .note.md 里 status:: open 的问题",
+  "prompt": "读这篇手记和它对应的源文档,回答其中 `status:: open` 的问题。按 AGENTS.md 的写法把答复写成 `type:: answer` 子节点,答完把问题的 status:: 改成 answered。答不出来就说答不出来,并把 status:: 留在 open。",
+  "timeout_seconds": 1800,
+  "precheck": "precheck.sh",
+  "okf_type": "Answer"
+}

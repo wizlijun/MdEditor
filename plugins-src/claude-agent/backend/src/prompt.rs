@@ -5,6 +5,7 @@
 pub use agent_run_core::prompt::{compose, with_source_context, TabContext};
 
 use crate::task::TaskDef;
+use std::path::Path;
 
 /// State the toolbelt this run actually has.
 ///
@@ -40,7 +41,16 @@ pub fn with_toolbelt(prompt: &str, servers: &[String]) -> String {
 ///
 /// Deliberately no `--bare`: that skips discovery of CLAUDE.md, skills and
 /// .mcp.json, which is the entire point of running inside a task template.
+#[cfg(test)]
 pub fn build_argv(task: &TaskDef, prompt: &str) -> Vec<String> {
+    build_argv_with_settings(task, prompt, None)
+}
+
+pub fn build_argv_with_settings(
+    task: &TaskDef,
+    prompt: &str,
+    settings: Option<&Path>,
+) -> Vec<String> {
     let mut v = vec![
         "-p".to_string(),
         prompt.to_string(),
@@ -48,6 +58,16 @@ pub fn build_argv(task: &TaskDef, prompt: &str) -> Vec<String> {
         "stream-json".to_string(),
         "--verbose".to_string(),
     ];
+    if let Some(path) = settings {
+        // Never load the shared task-local settings.local.json: concurrent
+        // scoped runs each have a private dynamic policy passed via --settings.
+        v.extend([
+            "--setting-sources".into(),
+            "user,project".into(),
+            "--settings".into(),
+            path.to_string_lossy().into_owned(),
+        ]);
+    }
     if let Some(t) = task.max_turns {
         v.push("--max-turns".into());
         v.push(t.to_string());
@@ -78,12 +98,6 @@ mod tests {
         }
     }
 
-
-
-
-
-
-
     #[test]
     fn a_run_is_told_which_mcp_servers_it_can_reach() {
         // Granting a tool is not enough: a prompt that says "answer from the
@@ -101,7 +115,6 @@ mod tests {
         assert!(got.contains("WebSearch"), "{got}");
         assert!(!got.contains("mcp__"), "no empty MCP list: {got}");
     }
-
 
     #[test]
     fn argv_is_stream_json_verbose_and_never_bare() {
@@ -127,6 +140,15 @@ mod tests {
         t.model = Some("claude-opus-5".into());
         let got = build_argv(&t, "hi");
         assert!(got.windows(2).any(|w| w == ["--model", "claude-opus-5"]));
+    }
+
+    #[test]
+    fn argv_uses_private_settings_and_excludes_the_shared_local_source() {
+        let got = build_argv_with_settings(&task(), "hi", Some(Path::new("/runs/r1.json")));
+        assert!(got.windows(2).any(|w| w == ["--settings", "/runs/r1.json"]));
+        assert!(got
+            .windows(2)
+            .any(|w| w == ["--setting-sources", "user,project"]));
     }
 
     #[test]

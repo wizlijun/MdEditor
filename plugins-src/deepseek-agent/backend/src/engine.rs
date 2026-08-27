@@ -21,7 +21,7 @@ use agent_run_core::event::{Event, Step};
 use agent_run_core::record;
 use agent_run_core::scaffold::{self, Blocked, ProgressTracker, RunMeta};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -42,6 +42,73 @@ pub struct RunSpec {
     /// Whether a plugin window is open to put an `ask` decision to.
     pub window_open: bool,
     pub api_key: Option<String>,
+}
+
+/// DSH derives `workspace-write` from the ACP session's immutable cwd. A
+/// caller-declared deliverable is the narrowest honest boundary; a note-scoped
+/// run uses the note's directory. Unscoped tasks retain their task directory.
+fn session_workspace(meta: &RunMeta) -> PathBuf {
+    let root = meta.vault.canonicalize().ok();
+    let inside_vault = |candidate: &Path| {
+        let canonical = candidate.canonicalize().ok()?;
+        canonical.starts_with(root.as_ref()?).then_some(canonical)
+    };
+    let scoped_parent = |path: &Path| {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            meta.vault.join(path)
+        };
+        inside_vault(absolute.parent()?)
+    };
+
+    if let Some(deliverable) = meta.deliverable.as_deref() {
+        if let Some(dir) = scoped_parent(deliverable) {
+            return dir;
+        }
+    }
+    if let Some(target) = meta.target.as_deref().map(Path::new) {
+        if let Some(dir) = scoped_parent(target) {
+            return dir;
+        }
+    }
+    meta.task_dir.clone()
+}
+
+/// Moving the ACP cwd to the output directory would otherwise make DSH stop
+/// discovering the task's AGENTS.md/CLAUDE.md. Carry the harness-specific task
+/// protocol into the direct prompt whenever the session leaves task_dir.
+fn prompt_for_session(spec: &RunSpec) -> String {
+    let workspace = session_workspace(&spec.meta);
+    let same_dir = workspace.canonicalize().ok() == spec.meta.task_dir.canonicalize().ok();
+    if same_dir {
+        return spec.prompt.clone();
+    }
+    let instructions = ["AGENTS.md", "CLAUDE.md"]
+        .iter()
+        .find_map(|name| std::fs::read_to_string(spec.meta.task_dir.join(name)).ok())
+        .filter(|body| !body.trim().is_empty());
+    let mut parts = Vec::new();
+    if let Some(body) = instructions {
+        parts.push(format!(
+            "## 任务协议（来自任务目录，必须遵守）\n提示中提到的 AGENTS.md 或 CLAUDE.md 均指以下协议：\n{}",
+            body.trim()
+        ));
+    }
+    let mut paths = format!(
+        "## 本次运行路径\nVault 根目录：`{}`\n当前可写工作区：`{}`\n任务或用户提示中的 Vault 相对路径都以 Vault 根目录解析。",
+        spec.meta.vault.display(),
+        workspace.display()
+    );
+    if let Some(target) = spec.meta.target.as_deref() {
+        paths.push_str(&format!("\n本次输入文件：`{target}`"));
+    }
+    if let Some(deliverable) = spec.meta.deliverable.as_deref() {
+        paths.push_str(&format!("\n本次唯一约定产物：`{}`", deliverable.display()));
+    }
+    parts.push(paths);
+    parts.push(spec.prompt.trim().to_string());
+    parts.join("\n\n")
 }
 
 /// The actor written into `by::` / `generated.by` (OKF §7). Always the harness
@@ -95,9 +162,9 @@ pub async fn run(
     // composition (the bridge plus dsh-base's rows), the overlay is what note.md
     // changes about it.
     cmd.args(spec.launcher.args(&spec.config))
-        // cwd = the task template dir. It is both the ACP session's workspace
-        // (so `workspace-write` fences writes to exactly this task's directory)
-        // and where the harness discovers AGENTS.md.
+        // Process cwd stays at the task template so launch-time relative files
+        // remain stable. The ACP session gets its separately scoped cwd during
+        // the handshake; DSH uses THAT as the workspace-write boundary.
         .current_dir(&spec.meta.task_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -120,7 +187,6 @@ pub async fn run(
     // Own process group, so a timeout or cancel takes down the server AND every
     // process it spawned in one signal.
     unsafe {
-        use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
             libc::setsid();
             Ok(())
@@ -268,7 +334,7 @@ pub async fn run(
     }
 
     let session = state.session_id().unwrap_or_default().to_string();
-    let (status, result) = match (forced, outcome) {
+    let (mut status, mut result) = match (forced, outcome) {
         // 服务端一帧没答完就走了(EOF/读错):多半从未启动。空 result 会让窗口
         // 无话可说 —— 合成一句人话,细节由 stderr_tail(或噪声尾巴)兜着。
         (Some(record::Status::Error), _) => (
@@ -304,6 +370,35 @@ pub async fn run(
         ),
         (None, None) => (record::Status::Error, None),
     };
+
+    // `end_turn` only means the model stopped talking. When a caller declared
+    // one concrete output, success also means that file now exists.
+    if status == record::Status::Success {
+        if let Some(path) = spec.meta.deliverable.as_deref().filter(|p| !p.is_file()) {
+            status = record::Status::Error;
+            let message = format!("promised deliverable was not created: {}", path.display());
+            match &mut result {
+                Some(r) => {
+                    r.is_error = true;
+                    if r.result.trim().is_empty() {
+                        r.result = message;
+                    } else {
+                        r.result.push_str("\n\n[");
+                        r.result.push_str(&message);
+                        r.result.push(']');
+                    }
+                }
+                None => {
+                    result = Some(agent_run_core::event::RunResult {
+                        is_error: true,
+                        result: message,
+                        session_id: (!session.is_empty()).then(|| session.clone()),
+                        num_turns: None,
+                    });
+                }
+            }
+        }
+    }
 
     let rec = scaffold::finalize(
         &spec.meta,
@@ -451,16 +546,17 @@ impl Dialogue {
             acp::METHOD_INITIALIZE => match acp::check_initialize(&result) {
                 Ok(_) => vec![Act::Send(self.begin(
                     acp::METHOD_SESSION_NEW,
-                    acp::new_session_params(&spec.meta.task_dir.to_string_lossy()),
+                    acp::new_session_params(&session_workspace(&spec.meta).to_string_lossy()),
                 ))],
                 Err(e) => vec![Act::Finish(Outcome::Failed(e))],
             },
             acp::METHOD_SESSION_NEW => match acp::session_id(&result) {
                 Ok(s) => {
                     self.session = Some(s.clone());
-                    vec![Act::Send(
-                        self.begin(acp::METHOD_SESSION_PROMPT, acp::prompt_params(&s, &spec.prompt)),
-                    )]
+                    vec![Act::Send(self.begin(
+                        acp::METHOD_SESSION_PROMPT,
+                        acp::prompt_params(&s, &prompt_for_session(spec)),
+                    ))]
                 }
                 Err(e) => vec![Act::Finish(Outcome::Failed(e))],
             },
@@ -488,7 +584,6 @@ impl Dialogue {
 mod tests {
     use super::*;
     use agent_run_core::task::TaskDef;
-    use std::path::Path;
 
     /// The scripted ACP server, built alongside this crate's own binary.
     fn stub() -> PathBuf {
@@ -595,6 +690,58 @@ mod tests {
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    #[test]
+    fn scoped_workspace_stays_inside_the_vault_and_carries_task_instructions() {
+        let f = Fixture::new();
+        let mut spec = f.spec(30);
+        std::fs::write(spec.meta.task_dir.join("AGENTS.md"), "ONLY WRITE THE SUMMARY").unwrap();
+        std::fs::write(spec.meta.task_dir.join("CLAUDE.md"), "SHOULD NOT BE INJECTED").unwrap();
+        let workspace = f.dir.path().join("ssot/books/b");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let target = workspace.join("book.md");
+        std::fs::write(&target, "book").unwrap();
+        let deliverable = workspace.join("summary.md");
+        spec.meta.target = Some(target.to_string_lossy().to_string());
+        spec.meta.deliverable = Some(deliverable.clone());
+
+        assert_eq!(session_workspace(&spec.meta), workspace.canonicalize().unwrap());
+        let prompt = prompt_for_session(&spec);
+        assert!(prompt.contains("ONLY WRITE THE SUMMARY"), "{prompt}");
+        assert!(!prompt.contains("SHOULD NOT BE INJECTED"), "{prompt}");
+        assert!(prompt.contains(&f.dir.path().to_string_lossy().to_string()), "{prompt}");
+        assert!(prompt.contains(&deliverable.to_string_lossy().to_string()), "{prompt}");
+
+        let outside = tempfile::tempdir().unwrap();
+        spec.meta.deliverable = Some(outside.path().join("escape.md"));
+        spec.meta.target = None;
+        assert_eq!(
+            session_workspace(&spec.meta).canonicalize().unwrap(),
+            spec.meta.task_dir.canonicalize().unwrap(),
+            "an out-of-vault deliverable must not move the sandbox boundary"
+        );
+
+        let link = f.dir.path().join("linked-outside");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        spec.meta.deliverable = Some(link.join("escape-through-link.md"));
+        assert_eq!(
+            session_workspace(&spec.meta).canonicalize().unwrap(),
+            spec.meta.task_dir.canonicalize().unwrap(),
+            "a symlink out of the vault must not move the sandbox boundary"
+        );
+    }
+
+    #[test]
+    fn a_note_scoped_run_uses_the_notes_directory_when_no_deliverable_is_named() {
+        let f = Fixture::new();
+        let mut spec = f.spec(30);
+        let notes = f.dir.path().join("notes/topic");
+        std::fs::create_dir_all(&notes).unwrap();
+        let note = notes.join("question.note.md");
+        std::fs::write(&note, "- question").unwrap();
+        spec.meta.target = Some("notes/topic/question.note.md".into());
+        assert_eq!(session_workspace(&spec.meta), notes.canonicalize().unwrap());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn walks_the_handshake_and_records_a_success() {
         let _g = env_guard();
@@ -616,23 +763,42 @@ mod tests {
         );
     }
 
-    /// The session workspace IS the task directory: that is what makes
-    /// `workspace-write` mean "this task's own directory", and what puts the
-    /// task's AGENTS.md where the harness looks for it.
+    /// The child still starts in the task directory, but a scoped run's ACP
+    /// session workspace is the promised deliverable's directory. DSH derives
+    /// the `workspace-write` boundary from session/new.cwd, not process.cwd.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_child_runs_in_the_task_dir_and_is_told_so_in_session_new() {
+    async fn a_deliverable_scopes_the_session_workspace_without_moving_the_child() {
         let _g = env_guard();
         let _e = EnvVar::set("STUB_ECHO_CWD", "1");
         let f = Fixture::new();
-        let spec = f.spec(30);
-        let want = spec.meta.task_dir.canonicalize().unwrap();
+        let mut spec = f.spec(30);
+        let task_dir = spec.meta.task_dir.canonicalize().unwrap();
+        let workspace = f.dir.path().join("ssot/books/b");
+        std::fs::create_dir_all(&workspace).unwrap();
+        spec.meta.deliverable = Some(workspace.join("summary.md"));
         let (_evs, rec) = drive(spec).await;
 
         let mut lines = rec.result.lines();
         let process_cwd = PathBuf::from(lines.next().unwrap()).canonicalize().unwrap();
         let session_cwd = PathBuf::from(lines.next().unwrap()).canonicalize().unwrap();
-        assert_eq!(process_cwd, want, "the process must run in the task dir");
-        assert_eq!(session_cwd, want, "session/new must announce the task dir");
+        assert_eq!(process_cwd, task_dir, "the process must run in the task dir");
+        assert_eq!(session_cwd, workspace.canonicalize().unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn success_without_the_promised_deliverable_is_an_error() {
+        let _g = env_guard();
+        let _t = EnvVar::set("STUB_TEXT", "写好了");
+        let f = Fixture::new();
+        let mut spec = f.spec(30);
+        let workspace = f.dir.path().join("ssot/books/b");
+        std::fs::create_dir_all(&workspace).unwrap();
+        spec.meta.deliverable = Some(workspace.join("missing-summary.md"));
+
+        let (_evs, rec) = drive(spec).await;
+        assert_eq!(rec.status, record::Status::Error, "{rec:?}");
+        assert!(rec.result.contains("promised deliverable"), "{}", rec.result);
+        assert!(rec.result.contains("missing-summary.md"), "{}", rec.result);
     }
 
     /// The permission mode is the run's only real boundary; it reaches the child

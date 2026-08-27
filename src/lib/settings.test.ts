@@ -259,4 +259,18 @@ describe('plugin-scoped settings', () => {
     expect(all['share.baseUrl']).toBe('https://y')
     expect(all['share.apiKey']).toBe('secret')
   })
+
+  it('stores a setting under the complete dotted plugin id', async () => {
+    const { loadSettings, getPluginScopedAll, setPluginScopedValue } = await import('./settings.svelte')
+    await loadSettings()
+    await setPluginScopedValue('notemd.claude-agent', 'maxConcurrency', '3')
+
+    expect(getPluginScopedAll('notemd.claude-agent')).toEqual({
+      'notemd.claude-agent.maxConcurrency': '3',
+    })
+    const setCall = mockSet.mock.calls.findLast((args) => args[0] === 'plugins')
+    expect(setCall?.[1]).toEqual({
+      'notemd.claude-agent': { maxConcurrency: '3' },
+    })
+  })
 })

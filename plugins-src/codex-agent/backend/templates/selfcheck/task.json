@@ -1,0 +1,7 @@
+{
+  "name": "自检",
+  "description": "确认 Codex CLI 接得上：报告模型、工作目录与约定文件",
+  "prompt": "做一次环境自检,把结果写成一段简短报告:①你是哪个模型;②当前工作目录;③你在这个目录和它的上级目录里读到了哪些 AGENTS.md;④试着在工作目录下写一个文件 output/selfcheck.md,报告成功还是被沙箱拒绝。不要修改任何别的文件。",
+  "timeout_seconds": 300,
+  "okf_type": "Answer"
+}

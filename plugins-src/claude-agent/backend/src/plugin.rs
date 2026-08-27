@@ -677,14 +677,21 @@ impl ClaudeAgentPlugin {
         if let Some(rec) = record::find(&run_dir, run_id) {
             return Ok(json!({ "state": "done", "record": rec }));
         }
-        let held = lock::current(&run_dir).filter(|h| h.run_id == run_id);
-        if let Some(h) = held {
-            let p = record::read_progress(&run_dir).filter(|p| p.run_id == run_id);
+        if let Some(h) = lock::current_for_run(&run_dir, run_id) {
+            let p = record::read_progress_for(&run_dir, run_id);
             return Ok(json!({
                 "state": "running",
                 "started_at": h.started_at,
                 "steps": p.as_ref().map(|p| p.steps).unwrap_or(0),
                 "last": p.map(|p| p.last).unwrap_or_default(),
+            }));
+        }
+        if self.inner.lock().unwrap().running.contains_key(run_id) {
+            return Ok(json!({
+                "state": "running",
+                "started_at": "",
+                "steps": 0,
+                "last": "starting",
             }));
         }
         // No record and no live lock: the process died without writing one.

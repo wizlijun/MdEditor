@@ -203,6 +203,11 @@ pub trait HostServices: Send + Sync {
     fn agent_providers(&self) -> Result<serde_json::Value, String> {
         Err("agent_unavailable: no relay on this channel".into())
     }
+    /// Lightweight provider capacities for schedulers that poll frequently.
+    /// Unlike `agent_providers`, this must not probe harness binaries or auth.
+    fn agent_limits(&self) -> Result<serde_json::Value, String> {
+        Err("agent_unavailable: no relay on this channel".into())
+    }
     /// 推一条托盘全局提醒（角标 + 菜单项 + 点击动作）。默认不可用；生产实现只在
     /// `TauriServices`(Task 4),落地到 `reminders.rs` 的注册表。
     fn notify_user(&self, _params: &serde_json::Value) -> Result<serde_json::Value, String> {
@@ -429,6 +434,7 @@ pub async fn dispatch_with(
         "host.agent.run"    => services.agent_execute("run-task", req.params.clone()),
         "host.agent.status" => services.agent_execute("run-status", req.params.clone()),
         "host.agent.providers" => services.agent_providers(),
+        "host.agent.limits" => services.agent_limits(),
         "host.notify"       => notify_push(services, &req.params),
         "host.dismissNotification" => services.dismiss_notification(&req.params),
         // handle_common took log/toast; the gate rejected everything unknown.
@@ -956,6 +962,20 @@ pub(crate) fn editor_open(services: &dyn HostServices, params: &serde_json::Valu
 
 // ── Production HostServices (live AppHandle) ──────────────────────────────
 
+/// Read the application-level settings store. This is deliberately read-only:
+/// the main window remains the sole writer, while isolated plugin windows and
+/// process plugins can observe a freshly saved provider capacity immediately.
+fn read_app_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> serde_json::Value {
+    use tauri::Manager;
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("settings.json"))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|body| serde_json::from_str(&body).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
 /// Live implementation wired to a Tauri `AppHandle`. Constructed per-dispatch
 /// by [`dispatch`]. The `blocking_*` dialog calls hop to the main thread
 /// internally and wait — safe here because dispatch never runs on main (see
@@ -1107,18 +1127,37 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
     /// within seconds rather than after a restart.
     fn agent_providers(&self) -> Result<serde_json::Value, String> {
         const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(20);
-        static CACHE: std::sync::Mutex<Option<(std::time::Instant, serde_json::Value)>> =
+        type Harnesses = std::collections::BTreeMap<String, Option<serde_json::Value>>;
+        static CACHE: std::sync::Mutex<Option<(std::time::Instant, Harnesses)>> =
             std::sync::Mutex::new(None);
-        if let Some((at, v)) = CACHE.lock().unwrap().as_ref() {
-            if at.elapsed() < CACHE_TTL {
-                return Ok(v.clone());
-            }
-        }
 
         let manifests = super::commands::installed_manifests();
         let ids = super::agent_provider::providers(&manifests);
         let configured = super::agent_provider::configured_default(self.vault_root().as_deref());
         let selected = super::agent_provider::resolve(None, configured.as_deref(), &ids);
+
+        // Cache only the expensive harness probes. Provider discovery, the
+        // selected default, and device-local capacities are cheap and rebuilt
+        // on every call so settings and install changes are visible at once.
+        let cached = CACHE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(at, _)| at.elapsed() < CACHE_TTL)
+            .cloned();
+        let (cache_at, mut harnesses) = cached
+            .map(|(at, values)| (at, values))
+            .unwrap_or_else(|| (std::time::Instant::now(), Harnesses::new()));
+        for id in &ids {
+            if !harnesses.contains_key(id) {
+                harnesses.insert(
+                    id.clone(),
+                    agent_execute_on(&self.app, id, "harness-status", serde_json::json!({})).ok(),
+                );
+            }
+        }
+        harnesses.retain(|id, _| ids.iter().any(|installed| installed == id));
+        *CACHE.lock().unwrap() = Some((cache_at, harnesses.clone()));
 
         let mut out = Vec::new();
         for id in &ids {
@@ -1127,21 +1166,34 @@ impl<R: tauri::Runtime> HostServices for TauriServices<R> {
             // Listing it with an unknown harness beats hiding it — a plugin the
             // user can see in their plugin list vanishing from the picker reads
             // as a bug, not as a diagnosis.
-            let harness = agent_execute_on(&self.app, id, "harness-status", serde_json::json!({}))
-                .ok();
             out.push(serde_json::json!({
                 "id": id,
                 "name": manifest.map(|m| m.name.clone()).unwrap_or_else(|| id.clone()),
                 "i18n": manifest.and_then(|m| m.i18n.clone()),
                 "selected": id == &selected,
-                "harness": harness,
+                "harness": harnesses.get(id).cloned().flatten(),
             }));
         }
         let v = serde_json::json!({ "providers": out, "default": selected });
-        *CACHE.lock().unwrap() = Some((std::time::Instant::now(), v.clone()));
-        Ok(v)
+        Ok(super::agent_provider::with_max_concurrency(
+            v,
+            &read_app_settings(&self.app),
+        ))
     }
 
+    fn agent_limits(&self) -> Result<serde_json::Value, String> {
+        let ids = super::agent_provider::providers(&super::commands::installed_manifests());
+        let configured = super::agent_provider::configured_default(self.vault_root().as_deref());
+        let selected = super::agent_provider::resolve(None, configured.as_deref(), &ids);
+        let providers = ids
+            .into_iter()
+            .map(|id| serde_json::json!({ "id": id }))
+            .collect::<Vec<_>>();
+        Ok(super::agent_provider::with_max_concurrency(
+            serde_json::json!({ "providers": providers, "default": selected }),
+            &read_app_settings(&self.app),
+        ))
+    }
 
     fn notify_user(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
         let (title, action, source, severity) = crate::notifications::parse_notify_params(params)?;
@@ -1254,6 +1306,12 @@ mod tests {
         fn agent_execute(&self, command: &str, context: serde_json::Value) -> Result<serde_json::Value, String> {
             self.agent_calls.lock().unwrap().push((command.to_string(), context));
             Ok(serde_json::json!({ "run_id": "r-test" }))
+        }
+        fn agent_limits(&self) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({
+                "providers": [{"id": "notemd.deepseek-agent", "max_concurrency": 2}],
+                "default": "notemd.deepseek-agent"
+            }))
         }
         fn notify_user(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
             self.agent_calls.lock().unwrap().push(("notify".into(), params.clone()));
@@ -2163,6 +2221,19 @@ mod tests {
             allowed.error.is_some() && allowed.error.unwrap().message.contains("agent_unavailable"),
             "with the capability it must reach the relay rather than the gate"
         );
+    }
+
+    #[tokio::test]
+    async fn host_agent_limits_is_gated_and_reaches_the_lightweight_service() {
+        let s = StubServices::default();
+        let denied = run(&s, &[], "host.agent.limits", serde_json::json!({})).await;
+        assert_eq!(denied.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+
+        let allowed = run(&s, &["agent"], "host.agent.limits", serde_json::json!({})).await;
+        assert!(allowed.error.is_none(), "{:?}", allowed.error);
+        let result = allowed.result.unwrap();
+        assert_eq!(result["default"], "notemd.deepseek-agent");
+        assert_eq!(result["providers"][0]["max_concurrency"], 2);
     }
 
     #[tokio::test]

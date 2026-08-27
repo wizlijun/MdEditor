@@ -670,13 +670,21 @@ impl DeepseekAgentPlugin {
         if let Some(rec) = record::find(&run_dir, run_id) {
             return Ok(json!({ "state": "done", "record": rec }));
         }
-        if let Some(h) = lock::current(&run_dir).filter(|h| h.run_id == run_id) {
-            let p = record::read_progress(&run_dir).filter(|p| p.run_id == run_id);
+        if let Some(h) = lock::current_for_run(&run_dir, run_id) {
+            let p = record::read_progress_for(&run_dir, run_id);
             return Ok(json!({
                 "state": "running",
                 "started_at": h.started_at,
                 "steps": p.as_ref().map(|p| p.steps).unwrap_or(0),
                 "last": p.map(|p| p.last).unwrap_or_default(),
+            }));
+        }
+        if self.inner.lock().unwrap().running.contains_key(run_id) {
+            return Ok(json!({
+                "state": "running",
+                "started_at": "",
+                "steps": 0,
+                "last": "starting",
             }));
         }
         // No record and no live lock: the process died without writing one.
@@ -920,7 +928,7 @@ mod tests {
             .into_iter()
             .map(|t| t.id)
             .collect();
-        assert_eq!(ids, vec![NOTE_TASK, "selfcheck"]);
+        assert_eq!(ids, vec!["ai-read-ebook", NOTE_TASK, "selfcheck"]);
         assert!(composition::config_path(vault.path()).is_file());
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
         let _ = std::fs::remove_file(&cfg);
@@ -1083,14 +1091,14 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         task::seed_builtin_templates(v.path());
         let got = overview(v.path());
-        assert_eq!(got.len(), 2);
+        assert_eq!(got.len(), 3);
         for t in &got {
             assert_eq!(t.permission_mode, "workspace-write");
             assert!(!t.policy_rationale.is_empty(), "{}", t.def.id);
             assert!(!t.running);
         }
         let json = serde_json::to_value(&got).unwrap();
-        assert_eq!(json[0]["id"], NOTE_TASK);
+        assert_eq!(json[0]["id"], "ai-read-ebook");
         assert_eq!(json[0]["permission_mode"], "workspace-write");
     }
 

@@ -39,7 +39,7 @@ struct Inner {
     jobs: HashMap<u64, Arc<AtomicBool>>,
     /// Next job id to hand out; starts at 1 (0 would look like "unset").
     next_job: u64,
-    /// "AI 先读"串行队列(claude-agent 的任务锁是 per-task 的)。
+    /// "AI 先读"按 agent provider 分 lane 的并行队列。
     ai: crate::airead::AiQueue,
     /// $initialize 下发的宿主 locale,提醒标题本地化用。
     locale: String,
@@ -442,44 +442,148 @@ fn run_job(
     }
 }
 
-/// AI 阅读 worker:逐本处理直到队空。跑在 tokio 任务里(Host::request 绝不能
-/// 在协议读循环上内联 await)。
+/// 拉起一批已经在 [`crate::airead::AiQueue`] 中原子占好 slot 的 worker。
+fn spawn_ai_workers(
+    host: &sdk::Host,
+    inner: &Arc<Mutex<Inner>>,
+    vault: &Path,
+    claims: Vec<crate::airead::WorkerClaim>,
+) {
+    for claim in claims {
+        spawn_ai_worker(
+            host.clone(),
+            inner.clone(),
+            vault.to_path_buf(),
+            claim,
+        );
+    }
+}
+
+/// 每个 worker 只消费一个 provider 的 FIFO。跑在 tokio 任务里
+/// (`Host::request` 绝不能在协议读循环上内联 await)。
 ///
 /// 注意生命周期:导入窗口一关,宿主的 `plugin_runtime/windows.rs`
 /// (`WindowEvent::Destroyed`)就会 `deactivate()` 掉本插件进程,这个 worker
 /// 随之消失。所以**收尾提醒不由这里发**,而是随 `host.agent.run` 的 `notify`
 /// 规格交给没有窗口的 claude-agent 去发(见下方 run_ai_job)。这里的轮询只
 /// 服务于窗口内的行内进度显示,窗口关掉就停,是可接受的。
-fn spawn_ai_worker(host: sdk::Host, inner: Arc<Mutex<Inner>>, vault: PathBuf) {
-    /// worker 的"我在跑"标志的持有凭证。Drop 里放下标志,所以无论正常退出还是
-    /// **panic 展开**,`running` 都不会永远举着 —— 举着就意味着之后每一次
-    /// 「AI 先读」都只入队、永不执行,而且无法恢复。
+fn spawn_ai_worker(
+    host: sdk::Host,
+    inner: Arc<Mutex<Inner>>,
+    vault: PathBuf,
+    claim: crate::airead::WorkerClaim,
+) {
+    /// Drop 只放掉这个 provider 的这个 slot。另一个 provider、甚至同 provider
+    /// 的其它 worker 仍应继续;active 书也随本 worker 放掉,允许失败后重试。
     /// 锁可能因 panic 而中毒,这里用 into_inner 照样拿到数据:标志复位比锁的
     /// 卫生更要紧。
-    struct WorkerSlot(Arc<Mutex<Inner>>);
+    struct WorkerSlot {
+        inner: Arc<Mutex<Inner>>,
+        provider: String,
+        worker_id: u64,
+    }
     impl Drop for WorkerSlot {
         fn drop(&mut self) {
-            let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
-            g.ai.release_worker();
+            let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            g.ai.release_worker(&self.provider, self.worker_id);
             if g.ai.pending() > 0 {
-                // 队里还有活但 worker 没了(panic)。不在 Drop 里 spawn(会
-                // 和析构顺序/运行时关停打架);下一次 ai_read_start 会因为
-                // 标志已放下而重新拉起 worker,把余下的书接着做完。
                 eprintln!(
-                    "[ebook-import] ai worker exited with {} job(s) still queued",
-                    g.ai.pending()
+                    "[ebook-import] {provider} ai worker {worker_id} exited with {} job(s) still queued",
+                    g.ai.pending(),
+                    provider = self.provider,
+                    worker_id = self.worker_id,
                 );
             }
         }
     }
 
     tokio::spawn(async move {
-        let _slot = WorkerSlot(inner.clone());
+        let provider = claim.provider;
+        let worker_id = claim.worker_id;
+        let _slot = WorkerSlot {
+            inner: inner.clone(),
+            provider: provider.clone(),
+            worker_id,
+        };
         loop {
-            let job = { inner.lock().unwrap().ai.next() };
+            let job = { inner.lock().unwrap().ai.next(&provider, worker_id) };
             let Some(job) = job else { break };
             let locale = { inner.lock().unwrap().locale.clone() };
             run_ai_job(&host, &vault, &locale, job).await;
+            inner.lock().unwrap().ai.finish(&provider, worker_id);
+        }
+    });
+}
+
+/// 独立 poller 读取每个 agent 设置页的最新并行上限。`host.agent.limits`
+/// 只读 settings,不做 harness/auth probe,所以这里可以短周期轮询:增容会补
+/// worker;降容只让 active 完成后退休。旧宿主没有轻量接口时退回 providers。
+fn spawn_ai_scheduler(host: sdk::Host, inner: Arc<Mutex<Inner>>, vault: PathBuf) {
+    struct SchedulerSlot {
+        inner: Arc<Mutex<Inner>>,
+        armed: bool,
+    }
+    impl Drop for SchedulerSlot {
+        fn drop(&mut self) {
+            if self.armed {
+                self.inner
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .ai
+                    .release_scheduler();
+            }
+        }
+    }
+
+    tokio::spawn(async move {
+        let mut slot = SchedulerSlot {
+            inner: inner.clone(),
+            armed: true,
+        };
+        loop {
+            let response = match host.request("host.agent.limits", json!({})).await {
+                Ok(v) => Ok(v),
+                Err(limits_error) => host
+                    .request("host.agent.providers", json!({}))
+                    .await
+                    .map_err(|providers_error| {
+                        format!(
+                            "host.agent.limits failed: {limits_error}; host.agent.providers failed: {providers_error}"
+                        )
+                    }),
+            };
+            let snapshot = match response {
+                Ok(v) => crate::airead::provider_snapshot(&v),
+                Err(e) => {
+                    // 两个接口都失败时,已有 lane 也必须降回 1。旧窗口没有
+                    // harness 的 job 则显式固定到历史默认 Claude,确保 run/status
+                    // 始终路由到同一 provider,下一轮再问最新设置。
+                    host.log_warn(&e);
+                    crate::airead::ProviderSnapshot {
+                        default: crate::airead::DEFAULT_PROVIDER.into(),
+                        limits: Default::default(),
+                    }
+                }
+            };
+            let (claims, stop) = {
+                let mut g = inner.lock().unwrap_or_else(|e| e.into_inner());
+                g.ai.resolve_default(&snapshot.default);
+                g.ai.apply_limits(&snapshot.limits);
+                let claims = g.ai.claim_workers();
+                let stop = g.ai.idle();
+                // 与 idle 判断在同一把锁内放下标志,避免「判断为空 → 新任务
+                // 入队但看见 scheduler 仍在 → scheduler 退出」的丢唤醒窗口。
+                if stop {
+                    g.ai.release_scheduler();
+                    slot.armed = false;
+                }
+                (claims, stop)
+            };
+            spawn_ai_workers(&host, &inner, &vault, claims);
+            if stop {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 }
@@ -525,9 +629,9 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
                 "task": airead::TASK_ID,
                 "prompt": airead::run_prompt(&job.dest_rel, &summary_rel, locale),
                 "note_path": book_abs.to_string_lossy(),
-                // The agent chosen when this job was queued. Absent means the
-                // host picks — which is what an older window sends.
-                "harness": job.harness,
+                // The agent chosen in the picker, or the host default that the
+                // scheduler pinned for an older window before dispatch.
+                "harness": job.harness.clone(),
                 // 收尾提醒交给 claude-agent 发:它没有窗口,不会被本插件窗口
                 // 的 Destroyed 事件连坐拆掉。标题在这里生成 —— locale 是
                 // $initialize 给本插件的。
@@ -562,7 +666,13 @@ async fn run_ai_job(host: &sdk::Host, vault: &Path, locale: &str, job: crate::ai
         let status = host
             .request(
                 "host.agent.status",
-                json!({ "task": airead::TASK_ID, "run_id": run_id }),
+                json!({
+                    "task": airead::TASK_ID,
+                    "run_id": run_id,
+                    // Status must be routed back to the same provider that
+                    // started this run; the user's default can change mid-book.
+                    "harness": job.harness.clone(),
+                }),
             )
             .await;
         let v = match status {
@@ -799,10 +909,10 @@ impl EbookImportPlugin {
         Ok(json!({ "books": crate::library::scan(&vault, &root) }))
     }
 
-    /// "AI 先读":入队并(必要时)拉起串行 worker。同步返回,不等 agent。
+    /// "AI 先读":同步入队;后台 scheduler 按 provider 设置拉起 worker。
     fn ai_read_start(&mut self, host: &sdk::Host, params: &Value) -> Result<Value, String> {
         let req = parse_ai_read(params)?;
-        let (vault, outcome, spawn, job_id) = {
+        let (vault, outcome, spawn_scheduler, job_id) = {
             let mut g = self.inner.lock().unwrap();
             let vault = g.vault.clone().ok_or(NO_VAULT)?;
             // A library book brings no job id. Allocate one from the same
@@ -820,11 +930,13 @@ impl EbookImportPlugin {
                 name: req.name,
                 harness: req.harness,
             });
-            let spawn = outcome == crate::airead::Enqueue::Queued && g.ai.claim_worker();
-            (vault, outcome, spawn, job_id)
+            // Duplicate can be the click that revives a queue after a poller
+            // panic, so claiming the scheduler is not conditional on Queued.
+            let spawn_scheduler = g.ai.claim_scheduler();
+            (vault, outcome, spawn_scheduler, job_id)
         };
-        if spawn {
-            spawn_ai_worker(host.clone(), self.inner.clone(), vault);
+        if spawn_scheduler {
+            spawn_ai_scheduler(host.clone(), self.inner.clone(), vault);
         }
         Ok(match outcome {
             crate::airead::Enqueue::Queued => json!({ "queued": true, "job_id": job_id }),
@@ -971,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_or_empty_harness_lets_the_host_pick() {
+    fn an_absent_or_empty_harness_stays_unresolved_for_the_scheduler() {
         assert_eq!(
             parse_ai_read(&json!({ "dest_rel": "d" })).unwrap().harness,
             None
@@ -1356,6 +1468,303 @@ mod tests {
             "expected a string 'error', got: {payload}"
         );
 
+        std::env::remove_var("NOTEMD_SHARED_CONFIG");
+    }
+
+    /// End-to-end scheduler contract over the real plugin protocol: settings
+    /// come from the process-side host API, providers overlap, one provider's
+    /// FIFO stops at its own cap, and status goes back to the provider that
+    /// created the run rather than whichever provider is now the default.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ai_reads_run_in_parallel_per_provider_and_status_keeps_the_harness() {
+        let _env = env_guard();
+        let vault = tempfile::tempdir().unwrap();
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg = cfg_dir.path().join("config.json");
+        std::fs::write(
+            &cfg,
+            format!(r#"{{"version":1,"sotvault":"{}"}}"#, vault.path().display()),
+        )
+        .unwrap();
+        std::env::set_var("NOTEMD_SHARED_CONFIG", &cfg);
+
+        let (mut to_plugin, plugin_stdin) = tokio::io::duplex(64 * 1024);
+        let (plugin_stdout, from_plugin) = tokio::io::duplex(64 * 1024);
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(sdk::serve_io(EbookImportPlugin::new(), plugin_stdin, plugin_stdout));
+        });
+
+        to_plugin
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:open\"}}\n",
+            )
+            .await
+            .unwrap();
+        for (id, harness) in [
+            (11, Some("notemd.claude-agent")),
+            (12, Some("notemd.claude-agent")),
+            (13, Some("notemd.claude-agent")),
+            (15, Some("notemd.claude-agent")),
+            // An old window omits harness. The scheduler must pin this to the
+            // snapshot default before both run and status are dispatched.
+            (14, None),
+        ] {
+            let mut params = json!({
+                "job_id": id,
+                "dest_rel": format!("ssot/ebooks/2026-08/book-{id}"),
+                "name": format!("book-{id}"),
+            });
+            if let Some(harness) = harness {
+                params["harness"] = json!(harness);
+            }
+            let req = json!({
+                "jsonrpc": "2.0", "id": id, "method": "ui.request",
+                "params": { "method": "ai_read_start", "params": params }
+            });
+            to_plugin
+                .write_all(format!("{req}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+
+        let mut lines = BufReader::new(from_plugin).lines();
+        let mut runs: Vec<(u64, String)> = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while runs.len() < 3 {
+                let line = lines.next_line().await.unwrap().expect("plugin stdout closed");
+                let v: Value = serde_json::from_str(&line).unwrap();
+                match v.get("method").and_then(|m| m.as_str()) {
+                    Some("host.vault.info") => {
+                        let id = v["id"].as_u64().unwrap();
+                        let response = json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "result": { "root": vault.path().to_string_lossy() },
+                        });
+                        to_plugin
+                            .write_all(format!("{response}\n").as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                    Some("host.agent.limits") => {
+                        let id = v["id"].as_u64().unwrap();
+                        let response = json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "result": {
+                              "default": "notemd.deepseek-agent",
+                              "providers": [
+                                { "id": "notemd.claude-agent", "max_concurrency": 2 },
+                                { "id": "notemd.deepseek-agent", "max_concurrency": 1 },
+                              ]
+                            },
+                        });
+                        to_plugin
+                            .write_all(format!("{response}\n").as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                    Some("host.agent.run") => runs.push((
+                        v["id"].as_u64().unwrap(),
+                        v["params"]["harness"].as_str().unwrap().to_string(),
+                    )),
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("three provider slots were not dispatched");
+
+        assert_eq!(
+            runs.iter()
+                .filter(|(_, h)| h == "notemd.claude-agent")
+                .count(),
+            2
+        );
+        assert_eq!(
+            runs.iter()
+                .filter(|(_, h)| h == "notemd.deepseek-agent")
+                .count(),
+            1,
+            "the harness-less job is pinned to the snapshot default"
+        );
+
+        // The fourth Claude job stays queued until one of Claude's two slots
+        // actually reaches a terminal status. A free DeepSeek lane must not
+        // let it bypass its own provider cap.
+        let premature = tokio::time::timeout(Duration::from_millis(500), async {
+            loop {
+                let line = lines.next_line().await.unwrap().expect("plugin stdout closed");
+                let v: Value = serde_json::from_str(&line).unwrap();
+                if v.get("method").and_then(|m| m.as_str()) == Some("host.agent.run") {
+                    break v;
+                }
+            }
+        })
+        .await;
+        assert!(premature.is_err(), "a fourth run bypassed its provider cap");
+
+        let (request_id, harness) = runs
+            .iter()
+            .find(|(_, harness)| harness == "notemd.claude-agent")
+            .cloned()
+            .unwrap();
+        let response = json!({
+            "jsonrpc": "2.0", "id": request_id, "result": { "run_id": "run-1" },
+        });
+        to_plugin
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let (status_request_id, status_harness) =
+            tokio::time::timeout(Duration::from_secs(6), async {
+            loop {
+                let line = lines.next_line().await.unwrap().expect("plugin stdout closed");
+                let v: Value = serde_json::from_str(&line).unwrap();
+                if v.get("method").and_then(|m| m.as_str()) == Some("host.agent.status") {
+                    break (
+                        v["id"].as_u64().unwrap(),
+                        v["params"]["harness"].as_str().unwrap().to_string(),
+                    );
+                }
+            }
+        })
+        .await
+        .expect("run-status was not polled");
+        assert_eq!(status_harness, harness);
+
+        let response = json!({
+            "jsonrpc": "2.0", "id": status_request_id,
+            "result": { "state": "done", "record": {
+                "status": "success", "result": "ok"
+            }},
+        });
+        to_plugin
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let next_harness = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let line = lines.next_line().await.unwrap().expect("plugin stdout closed");
+                let v: Value = serde_json::from_str(&line).unwrap();
+                if v.get("method").and_then(|m| m.as_str()) == Some("host.agent.run") {
+                    break v["params"]["harness"].as_str().unwrap().to_string();
+                }
+            }
+        })
+        .await
+        .expect("the queued Claude job was not dispatched after a slot was released");
+        assert_eq!(next_harness, "notemd.claude-agent");
+
+        drop(to_plugin);
+        std::env::remove_var("NOTEMD_SHARED_CONFIG");
+    }
+
+    /// If neither the lightweight limits API nor the legacy providers API is
+    /// available, the scheduler still starts safely at one worker per lane.
+    /// The queue unit test separately pins the important refresh case: an
+    /// existing lane previously at five is also reduced to one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ai_scheduler_fails_closed_when_both_settings_rpcs_fail() {
+        let _env = env_guard();
+        let vault = tempfile::tempdir().unwrap();
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg = cfg_dir.path().join("config.json");
+        std::fs::write(
+            &cfg,
+            format!(r#"{{"version":1,"sotvault":"{}"}}"#, vault.path().display()),
+        )
+        .unwrap();
+        std::env::set_var("NOTEMD_SHARED_CONFIG", &cfg);
+
+        let (mut to_plugin, plugin_stdin) = tokio::io::duplex(64 * 1024);
+        let (plugin_stdout, from_plugin) = tokio::io::duplex(64 * 1024);
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(sdk::serve_io(EbookImportPlugin::new(), plugin_stdin, plugin_stdout));
+        });
+
+        to_plugin
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:open\"}}\n",
+            )
+            .await
+            .unwrap();
+        for id in [21, 22] {
+            let req = json!({
+                "jsonrpc": "2.0", "id": id, "method": "ui.request",
+                "params": { "method": "ai_read_start", "params": {
+                    "job_id": id,
+                    "dest_rel": format!("ssot/ebooks/2026-08/fail-closed-{id}"),
+                    "name": format!("fail-closed-{id}"),
+                    "harness": "notemd.claude-agent",
+                }}
+            });
+            to_plugin
+                .write_all(format!("{req}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+
+        let mut lines = BufReader::new(from_plugin).lines();
+        let first_harness = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let line = lines.next_line().await.unwrap().expect("plugin stdout closed");
+                let v: Value = serde_json::from_str(&line).unwrap();
+                match v.get("method").and_then(|m| m.as_str()) {
+                    Some("host.vault.info") => {
+                        let response = json!({
+                            "jsonrpc": "2.0", "id": v["id"],
+                            "result": { "root": vault.path().to_string_lossy() },
+                        });
+                        to_plugin
+                            .write_all(format!("{response}\n").as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                    Some("host.agent.limits") | Some("host.agent.providers") => {
+                        let response = json!({
+                            "jsonrpc": "2.0", "id": v["id"],
+                            "error": { "code": -32601, "message": "unsupported" },
+                        });
+                        to_plugin
+                            .write_all(format!("{response}\n").as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                    Some("host.agent.run") => {
+                        break v["params"]["harness"].as_str().unwrap().to_string();
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("the fail-closed worker was not dispatched");
+        assert_eq!(first_harness, "notemd.claude-agent");
+
+        let second = tokio::time::timeout(Duration::from_millis(500), async {
+            loop {
+                let line = lines.next_line().await.unwrap().expect("plugin stdout closed");
+                let v: Value = serde_json::from_str(&line).unwrap();
+                if v.get("method").and_then(|m| m.as_str()) == Some("host.agent.run") {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(second.is_err(), "both failed RPCs must leave only one slot");
+
+        drop(to_plugin);
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
     }
 

@@ -2,7 +2,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { onMount } from 'svelte'
   import { ask, open as openFilePicker } from '@tauri-apps/plugin-dialog'
-  import { settings, saveSettings, getPluginScopedAll, mergePluginScoped, pluginScopedVersion } from '../lib/settings.svelte'
+  import { settings, saveSettings, getPluginScopedAll, setPluginScopedValue, pluginScopedVersion } from '../lib/settings.svelte'
   import { i18n, setLocale, availableLocales, t, type Locale } from '../lib/i18n/store.svelte'
   import type { Messages } from '../lib/i18n/en'
   import { pluginTabLabel, pluginFieldLabel } from '../lib/plugins/plugin-i18n'
@@ -739,7 +739,7 @@
 
   async function savePluginField(pluginId: string, key: string, value: unknown) {
     pluginValues[pluginId] = { ...(pluginValues[pluginId] ?? {}), [key]: value }
-    await mergePluginScoped({ [`${pluginId}.${key}`]: value })
+    await setPluginScopedValue(pluginId, key, value)
   }
 
   // The 22 categories cover every extension our editor supports as a document type.

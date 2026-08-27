@@ -1,19 +1,63 @@
-//! "AI 先读"队列:done 的书逐本转给 claude-agent(任务锁是 per-task 的,
-//! 只能串行),轮询 run 到收尾,经 host.notify 推托盘提醒。
+//! "AI 先读"队列:每种 agent provider 有自己的 FIFO 与并行上限,不同
+//! provider 可同时读;轮询 run 到收尾,经 host.notify 推托盘提醒。
 //! 本模块只放可单测的纯逻辑;拉起 tokio 任务的粘合在 plugin.rs。
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const TASK_ID: &str = "ai-read-ebook";
+pub const DEFAULT_PROVIDER: &str = "notemd.claude-agent";
+pub const MIN_CONCURRENCY: usize = 1;
+pub const MAX_CONCURRENCY: usize = 5;
+const UNRESOLVED_PROVIDER: &str = "__host_default__";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSnapshot {
+    pub default: String,
+    pub limits: BTreeMap<String, usize>,
+}
+
+/// `host.agent.limits` / `host.agent.providers` 的调度快照。宿主已做校验,
+/// 这里仍兼容旧版/手写应答:
+/// number 或 string 都收,缺失/非法按 1,任何值最终都夹在 1..=5。
+pub fn provider_snapshot(v: &serde_json::Value) -> ProviderSnapshot {
+    let mut out = BTreeMap::new();
+    if let Some(providers) = v.get("providers").and_then(|p| p.as_array()) {
+        for provider in providers {
+            let Some(id) = provider
+                .get("id")
+                .and_then(|id| id.as_str())
+                .filter(|id| !id.is_empty())
+            else {
+                continue;
+            };
+            let raw = provider.get("max_concurrency");
+            let limit = raw
+                .and_then(|n| n.as_u64().map(|n| n as usize))
+                .or_else(|| raw.and_then(|n| n.as_str()?.parse::<usize>().ok()))
+                .unwrap_or(MIN_CONCURRENCY)
+                .clamp(MIN_CONCURRENCY, MAX_CONCURRENCY);
+            out.insert(id.to_string(), limit);
+        }
+    }
+    let default = v
+        .get("default")
+        .and_then(|d| d.as_str())
+        .filter(|d| !d.is_empty())
+        .unwrap_or(DEFAULT_PROVIDER)
+        .to_string();
+    ProviderSnapshot {
+        default,
+        limits: out,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiJob {
     pub job_id: u64,
     pub dest_rel: String,
     pub name: String,
-    /// Which agent should read the book. `None` = whatever the host would pick.
-    /// Chosen in the window (the `by X ▾` picker beside the AI-read button) and
-    /// carried here so the choice survives the queue: a job can sit behind
-    /// others for a long time, and it must run on the agent it was queued for.
+    /// Which agent should read the book. `None` is the legacy/unresolved shape;
+    /// the scheduler pins it to the host snapshot's default before dispatch.
+    /// A picker choice is carried here so it survives a long wait in the queue.
     pub harness: Option<String>,
 }
 
@@ -26,59 +70,199 @@ pub enum Enqueue {
     Duplicate(u64),
 }
 
-/// FIFO + 单 worker 标志。所有方法都要在 Inner 的锁内调用,保证原子。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerClaim {
+    pub provider: String,
+    pub worker_id: u64,
+}
+
+#[derive(Debug)]
+struct ProviderLane {
+    q: VecDeque<QueuedJob>,
+    active: BTreeMap<u64, AiJob>,
+    workers: BTreeSet<u64>,
+    limit: usize,
+}
+
+#[derive(Debug)]
+struct QueuedJob {
+    order: u64,
+    job: AiJob,
+}
+
+impl Default for ProviderLane {
+    fn default() -> Self {
+        Self {
+            q: VecDeque::new(),
+            active: BTreeMap::new(),
+            workers: BTreeSet::new(),
+            limit: MIN_CONCURRENCY,
+        }
+    }
+}
+
+/// 每 provider 一条 FIFO。所有方法都在 [`crate::plugin::Inner`] 的锁内调用,
+/// 所以入队、去重、占 worker slot 和取 job 都是原子的。
 #[derive(Debug, Default)]
 pub struct AiQueue {
-    q: VecDeque<AiJob>,
-    running: bool,
-    /// worker 手上正在读的那一本。它已经出队了,但活儿没完 —— 去重必须把它算
-    /// 进来,否则「正在读」的书还能被再点一次,两次运行抢着写同一个摘要文件。
-    active: Option<AiJob>,
+    lanes: BTreeMap<String, ProviderLane>,
+    next_job_order: u64,
+    next_worker_id: u64,
+    scheduler_running: bool,
 }
 
 impl AiQueue {
+    fn provider(job: &AiJob) -> &str {
+        // `None` comes from an older host/window, from before the picker
+        // existed. It cannot enter a real provider lane until the scheduler
+        // reads and pins the host's current default.
+        job.harness.as_deref().unwrap_or(UNRESOLVED_PROVIDER)
+    }
+
     /// 入队。见 [`Enqueue`]。
     ///
     /// 身份是**书**(`dest_rel`),不是 job_id:同一本书可以从导入队列的
     /// 「AI 先读」和书库的「重读」两处点进来,job_id 不同,活儿是同一份。
     pub fn enqueue(&mut self, job: AiJob) -> Enqueue {
         let same = |j: &AiJob| j.job_id == job.job_id || j.dest_rel == job.dest_rel;
-        if let Some(dup) = self.active.iter().chain(self.q.iter()).find(|j| same(j)) {
+        let duplicate = self.lanes.values().find_map(|lane| {
+            lane.active
+                .values()
+                .chain(lane.q.iter().map(|queued| &queued.job))
+                .find(|j| same(j))
+        });
+        if let Some(dup) = duplicate {
             return Enqueue::Duplicate(dup.job_id);
         }
-        self.q.push_back(job);
+        self.next_job_order += 1;
+        let order = self.next_job_order;
+        self.lanes
+            .entry(Self::provider(&job).to_string())
+            .or_default()
+            .q
+            .push_back(QueuedJob { order, job });
         Enqueue::Queued
     }
-    /// 入队后是否要拉起 worker(已有 worker 在跑则不拉)。
-    pub fn claim_worker(&mut self) -> bool {
-        if self.running {
+
+    /// 把旧窗口未携带 harness 的任务固定到宿主当前 default。先固定再 run,
+    /// 后续默认值变化不会把 status 路由到另一个 provider。合并按真实入队顺序,
+    /// 所以显式选中 default provider 的 job 也保持同一条 FIFO。
+    pub fn resolve_default(&mut self, provider: &str) {
+        let Some(mut unresolved) = self.lanes.remove(UNRESOLVED_PROVIDER) else {
+            return;
+        };
+        if unresolved.q.is_empty() {
+            return;
+        }
+        for queued in &mut unresolved.q {
+            queued.job.harness = Some(provider.to_string());
+        }
+        let lane = self.lanes.entry(provider.to_string()).or_default();
+        let mut merged: Vec<_> = lane.q.drain(..).chain(unresolved.q).collect();
+        merged.sort_by_key(|queued| queued.order);
+        lane.q = merged.into();
+    }
+
+    /// 原子应用完整快照。应答里缺失的 provider 也降回 1;传空 map 就是读取
+    /// 全失败时的 fail-closed,不能让上一次的 5 并行永久残留。
+    pub fn apply_limits(&mut self, limits: &BTreeMap<String, usize>) {
+        for (provider, lane) in &mut self.lanes {
+            if provider == UNRESOLVED_PROVIDER {
+                continue;
+            }
+            lane.limit = limits
+                .get(provider)
+                .copied()
+                .unwrap_or(MIN_CONCURRENCY)
+                .clamp(MIN_CONCURRENCY, MAX_CONCURRENCY);
+        }
+    }
+
+    /// 为每条 lane 原子预占目前缺少的 worker。返回值里的每个 token 必须恰好
+    /// 拉起一个 worker;先登记再 spawn,防止并发入队重复拉起超额 worker。
+    pub fn claim_workers(&mut self) -> Vec<WorkerClaim> {
+        let mut claims = Vec::new();
+        for (provider, lane) in &mut self.lanes {
+            if provider == UNRESOLVED_PROVIDER {
+                continue;
+            }
+            let work = lane.active.len() + lane.q.len();
+            let wanted = lane.limit.min(work);
+            while lane.workers.len() < wanted {
+                self.next_worker_id += 1;
+                let worker_id = self.next_worker_id;
+                lane.workers.insert(worker_id);
+                claims.push(WorkerClaim {
+                    provider: provider.clone(),
+                    worker_id,
+                });
+            }
+        }
+        claims
+    }
+
+    /// 一个已占 slot 的 worker 取本 provider FIFO 的下一本。上限被调低时,
+    /// 超额 worker 返回 None 自行退休;active job 从不被中断。
+    pub fn next(&mut self, provider: &str, worker_id: u64) -> Option<AiJob> {
+        let lane = self.lanes.get_mut(provider)?;
+        if !lane.workers.contains(&worker_id)
+            || lane.workers.len() > lane.limit
+            || lane.active.contains_key(&worker_id)
+        {
+            return None;
+        }
+        let job = lane.q.pop_front()?.job;
+        lane.active.insert(worker_id, job.clone());
+        Some(job)
+    }
+
+    /// 正常完成/失败都释放 active 书;slot 保留,worker 可继续取下一本。
+    pub fn finish(&mut self, provider: &str, worker_id: u64) {
+        if let Some(lane) = self.lanes.get_mut(provider) {
+            lane.active.remove(&worker_id);
+        }
+    }
+
+    /// worker 退出(包括 panic)时只释放自己的 active 书和 slot。别的 worker
+    /// 仍在读的书必须继续参与全局去重。
+    pub fn release_worker(&mut self, provider: &str, worker_id: u64) {
+        if let Some(lane) = self.lanes.get_mut(provider) {
+            lane.active.remove(&worker_id);
+            lane.workers.remove(&worker_id);
+        }
+    }
+
+    pub fn claim_scheduler(&mut self) -> bool {
+        if self.scheduler_running {
             return false;
         }
-        self.running = true;
+        self.scheduler_running = true;
         true
     }
-    /// worker 取下一本;队空时放下 running 标志并返回 None(worker 退出)。
-    /// 取出的这本记进 `active`:上一本到此为止(可以再读了),这一本进入
-    /// 「正在读」而仍算被占用。
-    pub fn next(&mut self) -> Option<AiJob> {
-        let j = self.q.pop_front();
-        self.running = j.is_some();
-        self.active = j.clone();
-        j
+
+    pub fn release_scheduler(&mut self) {
+        self.scheduler_running = false;
     }
-    /// worker 退出时无条件放下标志(见 plugin.rs 的 WorkerSlot)。正常收尾时
-    /// `next` 已经放过了,这里是幂等的补刀:worker panic 掉而标志还举着,
-    /// 之后所有「AI 先读」都只入队不执行,且没有任何办法恢复。
-    ///
-    /// 同时放掉 `active`:worker 没了,它手上那本书也就没人在读了。留着的话
-    /// 那本书会被去重逻辑永久挡住,再也重读不了 —— 恰恰是最需要重试的一本。
-    pub fn release_worker(&mut self) {
-        self.running = false;
-        self.active = None;
+
+    /// pending、active、worker 都清空后 poller 才退出。worker 在队空后还需
+    /// 再走一次 `next` + Drop,所以只看 pending 会过早停掉生命周期监督。
+    pub fn idle(&self) -> bool {
+        self.lanes.values().all(|lane| {
+            lane.q.is_empty() && lane.active.is_empty() && lane.workers.is_empty()
+        })
     }
+
     /// 队里还剩几本 —— worker 异常退出后判断要不要再拉一个。
     pub fn pending(&self) -> usize {
-        self.q.len()
+        self.lanes.values().map(|lane| lane.q.len()).sum()
+    }
+
+    #[cfg(test)]
+    pub fn worker_count(&self, provider: &str) -> usize {
+        self.lanes
+            .get(provider)
+            .map(|lane| lane.workers.len())
+            .unwrap_or(0)
     }
 }
 
@@ -183,25 +367,241 @@ mod tests {
             job_id: id,
             dest_rel: format!("ssot/ebooks/2026-08/b{id}"),
             name: format!("b{id}"),
-            harness: None,
+            harness: Some(DEFAULT_PROVIDER.into()),
         }
     }
 
-    /// A job can sit behind others for a long time. It has to run on the agent
-    /// chosen when it was queued — not on whatever the picker says by the time
-    /// the worker reaches it.
+    fn unresolved_job(id: u64) -> AiJob {
+        AiJob {
+            harness: None,
+            ..job(id)
+        }
+    }
+
+    fn provider_job(id: u64, provider: &str) -> AiJob {
+        AiJob {
+            harness: Some(provider.into()),
+            ..job(id)
+        }
+    }
+
+    fn limits(entries: &[(&str, usize)]) -> BTreeMap<String, usize> {
+        entries
+            .iter()
+            .map(|(provider, limit)| ((*provider).to_string(), *limit))
+            .collect()
+    }
+
     #[test]
-    fn a_queued_job_carries_the_agent_it_was_queued_for() {
+    fn provider_snapshot_accepts_default_current_and_legacy_limit_shapes() {
+        let got = provider_snapshot(&serde_json::json!({
+            "default": "notemd.deepseek-agent",
+            "providers": [
+                {"id": "notemd.claude-agent", "max_concurrency": 3},
+                {"id": "notemd.codex-agent", "max_concurrency": "5"},
+                {"id": "notemd.deepseek-agent", "max_concurrency": 99},
+                {"id": "notemd.old-agent"},
+                {"max_concurrency": 4}
+            ]
+        }));
+        assert_eq!(got.default, "notemd.deepseek-agent");
+        assert_eq!(got.limits["notemd.claude-agent"], 3);
+        assert_eq!(got.limits["notemd.codex-agent"], 5);
+        assert_eq!(got.limits["notemd.deepseek-agent"], 5);
+        assert_eq!(got.limits["notemd.old-agent"], 1);
+        assert_eq!(got.limits.len(), 4);
+
+        let legacy = provider_snapshot(&serde_json::json!({}));
+        assert_eq!(legacy.default, DEFAULT_PROVIDER);
+        assert!(legacy.limits.is_empty());
+    }
+
+    #[test]
+    fn providers_have_independent_capacity_and_fifo_queues() {
         let mut q = AiQueue::default();
-        let mut with_agent = job(1);
-        with_agent.harness = Some("notemd.deepseek-agent".into());
-        assert_eq!(q.enqueue(with_agent), Enqueue::Queued);
-        assert_eq!(q.enqueue(job(2)), Enqueue::Queued);
+        q.enqueue(provider_job(1, "notemd.claude-agent"));
+        q.enqueue(provider_job(2, "notemd.claude-agent"));
+        q.enqueue(provider_job(3, "notemd.deepseek-agent"));
+        q.enqueue(provider_job(4, "notemd.deepseek-agent"));
+        q.apply_limits(&limits(&[
+            ("notemd.claude-agent", 1),
+            ("notemd.deepseek-agent", 2),
+        ]));
+
+        let claims = q.claim_workers();
+        assert_eq!(claims.len(), 3, "one Claude and two DeepSeek slots");
+        let claude = claims
+            .iter()
+            .find(|c| c.provider == "notemd.claude-agent")
+            .unwrap();
+        let mut deepseek: Vec<_> = claims
+            .iter()
+            .filter(|c| c.provider == "notemd.deepseek-agent")
+            .collect();
+        deepseek.sort_by_key(|c| c.worker_id);
+
+        assert_eq!(q.next(&claude.provider, claude.worker_id).unwrap().job_id, 1);
+        assert_eq!(q.next(&deepseek[0].provider, deepseek[0].worker_id).unwrap().job_id, 3);
+        assert_eq!(q.next(&deepseek[1].provider, deepseek[1].worker_id).unwrap().job_id, 4);
+        assert!(q.claim_workers().is_empty(), "Claude's second book must wait");
+    }
+
+    #[test]
+    fn limits_are_clamped_and_can_grow_while_work_is_pending() {
+        let mut q = AiQueue::default();
+        for id in 1..=7 {
+            q.enqueue(provider_job(id, "notemd.claude-agent"));
+        }
+        q.apply_limits(&limits(&[("notemd.claude-agent", 0)]));
+        assert_eq!(q.claim_workers().len(), 1, "zero clamps to one");
+
+        q.apply_limits(&limits(&[("notemd.claude-agent", 99)]));
+        assert_eq!(q.claim_workers().len(), 4, "the hard maximum is five");
+        assert_eq!(q.worker_count("notemd.claude-agent"), 5);
+    }
+
+    #[test]
+    fn lowering_a_limit_retires_excess_workers_without_cancelling_active_jobs() {
+        let provider = "notemd.deepseek-agent";
+        let mut q = AiQueue::default();
+        for id in 1..=5 {
+            q.enqueue(provider_job(id, provider));
+        }
+        q.apply_limits(&limits(&[(provider, 3)]));
+        let claims = q.claim_workers();
+        for c in &claims {
+            assert!(q.next(provider, c.worker_id).is_some());
+        }
+
+        q.apply_limits(&limits(&[(provider, 1)]));
+        for c in &claims {
+            q.finish(provider, c.worker_id);
+        }
+        assert!(q.next(provider, claims[0].worker_id).is_none());
+        q.release_worker(provider, claims[0].worker_id);
+        assert!(q.next(provider, claims[1].worker_id).is_none());
+        q.release_worker(provider, claims[1].worker_id);
         assert_eq!(
-            q.next().unwrap().harness.as_deref(),
+            q.next(provider, claims[2].worker_id).unwrap().job_id,
+            4,
+            "one existing worker keeps consuming the FIFO"
+        );
+    }
+
+    #[test]
+    fn duplicate_books_are_rejected_across_provider_lanes() {
+        let mut q = AiQueue::default();
+        q.enqueue(provider_job(1, "notemd.claude-agent"));
+        let claim = q.claim_workers().pop().unwrap();
+        q.next(&claim.provider, claim.worker_id);
+
+        let same_book = AiJob {
+            job_id: 9,
+            harness: Some("notemd.deepseek-agent".into()),
+            ..job(1)
+        };
+        assert_eq!(q.enqueue(same_book), Enqueue::Duplicate(1));
+    }
+
+    #[test]
+    fn releasing_one_worker_only_frees_its_own_active_book() {
+        let provider = "notemd.codex-agent";
+        let mut q = AiQueue::default();
+        q.enqueue(provider_job(1, provider));
+        q.enqueue(provider_job(2, provider));
+        q.apply_limits(&limits(&[(provider, 2)]));
+        let claims = q.claim_workers();
+        for c in &claims {
+            q.next(provider, c.worker_id);
+        }
+
+        q.release_worker(provider, claims[0].worker_id);
+        assert_eq!(q.worker_count(provider), 1);
+        assert_eq!(
+            q.enqueue(AiJob { job_id: 8, ..provider_job(1, provider) }),
+            Enqueue::Queued,
+            "the dead worker's book is retryable"
+        );
+        assert_eq!(
+            q.enqueue(AiJob { job_id: 9, ..provider_job(2, provider) }),
+            Enqueue::Duplicate(2),
+            "the other worker's active book stays claimed"
+        );
+    }
+
+    /// A legacy job with no harness is pinned before dispatch. Jobs explicitly
+    /// queued for that provider and default-routed jobs share one FIFO.
+    #[test]
+    fn unresolved_default_is_pinned_and_merged_in_enqueue_order() {
+        let mut q = AiQueue::default();
+        assert_eq!(q.enqueue(unresolved_job(1)), Enqueue::Queued);
+        assert_eq!(
+            q.enqueue(provider_job(2, "notemd.deepseek-agent")),
+            Enqueue::Queued
+        );
+        let claims = q.claim_workers();
+        assert_eq!(claims.len(), 1, "only the explicit provider may run");
+        assert_eq!(claims[0].provider, "notemd.deepseek-agent");
+
+        q.resolve_default("notemd.deepseek-agent");
+        q.apply_limits(&limits(&[("notemd.deepseek-agent", 1)]));
+        assert!(q.claim_workers().is_empty());
+        let claim = &claims[0];
+        assert_eq!(
+            q.next(&claim.provider, claim.worker_id)
+                .map(|job| (job.job_id, job.harness)),
+            Some((1, Some("notemd.deepseek-agent".into())))
+        );
+        q.finish(&claim.provider, claim.worker_id);
+        assert_eq!(
+            q.next(&claim.provider, claim.worker_id)
+                .map(|job| (job.job_id, job.harness)),
+            Some((2, Some("notemd.deepseek-agent".into())))
+        );
+    }
+
+    #[test]
+    fn empty_limit_snapshot_fails_existing_lanes_closed_to_one() {
+        let provider = "notemd.claude-agent";
+        let mut q = AiQueue::default();
+        for id in 1..=7 {
+            q.enqueue(provider_job(id, provider));
+        }
+        q.apply_limits(&limits(&[(provider, 5)]));
+        let claims = q.claim_workers();
+        assert_eq!(claims.len(), 5);
+        for claim in &claims {
+            q.next(provider, claim.worker_id).unwrap();
+        }
+
+        q.apply_limits(&BTreeMap::new());
+        for claim in &claims {
+            q.finish(provider, claim.worker_id);
+        }
+        for claim in &claims[..4] {
+            assert!(q.next(provider, claim.worker_id).is_none());
+            q.release_worker(provider, claim.worker_id);
+        }
+        assert_eq!(
+            q.next(provider, claims[4].worker_id)
+                .map(|job| job.job_id),
+            Some(6),
+            "only one worker may continue after both settings RPCs fail"
+        );
+    }
+
+    #[test]
+    fn explicitly_selected_agent_survives_the_queue() {
+        let mut q = AiQueue::default();
+        q.enqueue(provider_job(1, "notemd.deepseek-agent"));
+        let claim = q.claim_workers().pop().unwrap();
+        assert_eq!(
+            q.next(&claim.provider, claim.worker_id)
+                .unwrap()
+                .harness
+                .as_deref(),
             Some("notemd.deepseek-agent")
         );
-        assert_eq!(q.next().unwrap().harness, None, "unset means the host picks");
     }
 
     #[test]
@@ -249,8 +649,12 @@ mod tests {
     fn the_book_currently_being_read_is_not_queued_again() {
         let mut q = AiQueue::default();
         q.enqueue(job(1));
-        q.claim_worker();
-        assert_eq!(q.next().map(|j| j.job_id), Some(1));
+        let claim = q.claim_workers().pop().unwrap();
+        assert_eq!(
+            q.next(&claim.provider, claim.worker_id)
+                .map(|j| j.job_id),
+            Some(1)
+        );
         let retry = AiJob { job_id: 9, ..job(1) };
         assert_eq!(q.enqueue(retry), Enqueue::Duplicate(1));
     }
@@ -261,22 +665,25 @@ mod tests {
     fn a_book_can_be_read_again_after_its_read_finishes() {
         let mut q = AiQueue::default();
         q.enqueue(job(1));
-        q.claim_worker();
-        q.next();
-        assert_eq!(q.next(), None); // 队空,worker 退出
+        let claim = q.claim_workers().pop().unwrap();
+        q.next(&claim.provider, claim.worker_id);
+        q.finish(&claim.provider, claim.worker_id);
         let again = AiJob { job_id: 9, ..job(1) };
         assert_eq!(q.enqueue(again), Enqueue::Queued);
     }
 
     #[test]
-    fn claim_worker_only_once_until_drained() {
+    fn claimed_worker_slots_are_not_claimed_twice() {
         let mut q = AiQueue::default();
         q.enqueue(job(1));
-        assert!(q.claim_worker());
-        assert!(!q.claim_worker(), "second start while running must not spawn");
-        assert_eq!(q.next(), Some(job(1)));
-        assert_eq!(q.next(), None); // 队空 → running 落下
-        assert!(q.claim_worker(), "after drain a new worker may start");
+        let claim = q.claim_workers().pop().unwrap();
+        assert!(q.claim_workers().is_empty());
+        assert_eq!(q.next(&claim.provider, claim.worker_id), Some(job(1)));
+        q.finish(&claim.provider, claim.worker_id);
+        assert_eq!(q.next(&claim.provider, claim.worker_id), None);
+        q.release_worker(&claim.provider, claim.worker_id);
+        q.enqueue(job(2));
+        assert_eq!(q.claim_workers().len(), 1);
     }
 
     /// worker panic 后必须能重新拉起,否则「AI 先读」永久失灵。
@@ -285,14 +692,15 @@ mod tests {
         let mut q = AiQueue::default();
         q.enqueue(job(1));
         q.enqueue(job(2));
-        assert!(q.claim_worker());
-        assert_eq!(q.next(), Some(job(1)));
-        // worker 在处理 job1 时炸了:标志还举着,队里还有 job2。
-        assert!(!q.claim_worker());
-        q.release_worker();
+        let claim = q.claim_workers().pop().unwrap();
+        assert_eq!(q.next(&claim.provider, claim.worker_id), Some(job(1)));
+        q.release_worker(&claim.provider, claim.worker_id);
         assert_eq!(q.pending(), 1);
-        assert!(q.claim_worker(), "a new worker must be able to take over");
-        assert_eq!(q.next(), Some(job(2)));
+        let replacement = q.claim_workers().pop().unwrap();
+        assert_eq!(
+            q.next(&replacement.provider, replacement.worker_id),
+            Some(job(2))
+        );
     }
 
     /// A worker that died mid-book leaves nobody reading it. If `active` stayed
@@ -302,9 +710,9 @@ mod tests {
     fn release_worker_frees_the_book_that_died_with_it() {
         let mut q = AiQueue::default();
         q.enqueue(job(1));
-        q.claim_worker();
-        q.next();
-        q.release_worker();
+        let claim = q.claim_workers().pop().unwrap();
+        q.next(&claim.provider, claim.worker_id);
+        q.release_worker(&claim.provider, claim.worker_id);
         let retry = AiJob { job_id: 9, ..job(1) };
         assert_eq!(q.enqueue(retry), Enqueue::Queued);
     }

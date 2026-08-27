@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dev-install a v2 plugin into the local app-data plugins root.
 #
-# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source]
+# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source]
 #   default plugin = md2pdf (preserves the original behavior).
 #   --release      = build the native plugin binary in release mode (md2pdf +
 #                    openclaw; ignored for the pure-UI plugins).
@@ -25,6 +25,9 @@
 #               (plugins-src/claude-agent/backend → notemd-claude-agent; the
 #               headless runner plus its detached --runner mode) AND the
 #               standalone Vite UI bundle, then installs bin/ + ui/ + manifest.
+# codex-agent → builds BOTH the CURRENT-arch native backend crate
+#               (plugins-src/codex-agent/backend → notemd-codex-agent) AND the
+#               standalone Vite UI bundle, then installs bin/ + ui/ + manifest.
 # ebook-import→ builds the CURRENT-arch native backend crate
 #               (plugins-src/ebook-import/backend → notemd-ebook-import;
 #               Calibre/HTMLZ/OCR pipeline + CLI, PDF rasterization via
@@ -38,8 +41,8 @@ PLUGIN=md2pdf
 for arg in "$@"; do
   case "$arg" in
     --release) PROFILE=release ;;
-    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source) PLUGIN="$arg" ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | deepseek-agent | ebook-import | idea-spark | power-mode | trace-source)" >&2; exit 2 ;;
+    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source) PLUGIN="$arg" ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | codex-agent | deepseek-agent | ebook-import | idea-spark | power-mode | trace-source)" >&2; exit 2 ;;
   esac
 done
 
@@ -182,6 +185,25 @@ elif [[ "$PLUGIN" == "claude-agent" ]]; then
   echo "✓ installed notemd.claude-agent@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
   echo "  open it:                Plugins menu ▸ \"Claude Agent…\" (restart the app first)"
   echo "  needs:                  Claude Code installed and logged in (claude --version)"
+
+elif [[ "$PLUGIN" == "codex-agent" ]]; then
+  SRC="plugins-src/codex-agent"
+  # CURRENT-arch native backend plus the standalone agent window.
+  cargo build $([ "$PROFILE" = release ] && echo --release) \
+    --manifest-path "$SRC/backend/Cargo.toml" --bin notemd-codex-agent
+  pnpm --filter codex-agent build
+  VERSION=$(node -e "console.log(require('./$SRC/manifest.v2.json').version)")
+  DEST="$ROOT/notemd.codex-agent/$VERSION"
+  rm -rf "$DEST"
+  mkdir -p "$DEST/bin" "$DEST/ui"
+  cp "$SRC/backend/target/$PROFILE/notemd-codex-agent" "$DEST/bin/notemd-codex-agent"
+  cp -R "$SRC/dist/." "$DEST/ui/"
+  cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
+  ln -sfn "$VERSION" "$ROOT/notemd.codex-agent/current"
+  mark_installed "notemd.codex-agent" "$VERSION"
+  echo "✓ installed notemd.codex-agent@$VERSION ($PROFILE, $(uname -m), backend + ui) → $DEST"
+  echo "  open it:                Plugins menu ▸ \"Codex Agent…\" (restart the app first)"
+  echo "  needs:                  Codex CLI installed and logged in (codex --version)"
 
 elif [[ "$PLUGIN" == "deepseek-agent" ]]; then
   SRC="plugins-src/deepseek-agent"

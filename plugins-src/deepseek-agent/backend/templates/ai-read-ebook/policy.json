@@ -1,0 +1,5 @@
+{
+  "permission_mode": "workspace-write",
+  "on_permission_request": "reject",
+  "rationale": "AI 阅读只需读取书籍并在调用方指定的书籍目录写一个摘要；ACP session cwd 将 workspace-write 收窄到该目录，越界请求一律拒绝。"
+}

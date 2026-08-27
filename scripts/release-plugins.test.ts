@@ -19,6 +19,7 @@ import { join } from 'node:path'
  */
 const ROOT = join(__dirname, '..')
 const SCRIPT = readFileSync(join(ROOT, 'scripts/release-plugins.sh'), 'utf8')
+const DEV_INSTALL = readFileSync(join(ROOT, 'scripts/dev-install-plugin.sh'), 'utf8')
 
 /** `plugin-arg → release_fn` from the dispatch `case` at the foot of the script. */
 function dispatchTable(): Map<string, string> {
@@ -97,5 +98,28 @@ describe('release-plugins.sh packaging shape', () => {
     expect(zip).toContain('universal.notemdpkg')
     expect(zip).toContain('manifest_binary_count')
     expect(zip).toMatch(/exit 4/)
+  })
+
+  it('builds and packages codex-agent as a native plugin with UI', () => {
+    expect(table.get('codex-agent')).toBe('release_codex_agent')
+    const body = functionBody('release_codex_agent')
+    expect(body).toContain('notemd.codex-agent')
+    expect(body).toContain('plugins-src/codex-agent')
+    expect(body).toContain('notemd-codex-agent')
+    expect(body).toContain('"codex-agent"')
+    expect(packagingBody('release_codex_agent')).toContain('$triple.notemdpkg')
+    expect(packagingBody('release_codex_agent')).toContain('cargo build --release --locked')
+  })
+})
+
+describe('dev-install-plugin.sh codex-agent dispatch', () => {
+  it('accepts, builds and installs the codex-agent backend and UI', () => {
+    expect(DEV_INSTALL).toMatch(/\|codex-agent\|/)
+    expect(DEV_INSTALL).toContain('elif [[ "$PLUGIN" == "codex-agent" ]]')
+    expect(DEV_INSTALL).toContain('--bin notemd-codex-agent')
+    expect(DEV_INSTALL).toContain('pnpm --filter codex-agent build')
+    expect(DEV_INSTALL).toContain('mark_installed "notemd.codex-agent" "$VERSION"')
+    expect(DEV_INSTALL).toContain('"$DEST/bin/notemd-codex-agent"')
+    expect(DEV_INSTALL).toContain('"$DEST/ui/"')
   })
 })

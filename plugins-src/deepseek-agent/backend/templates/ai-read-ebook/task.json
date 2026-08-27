@@ -1,0 +1,8 @@
+{
+  "name": "AI 阅读电子书",
+  "description": "Read an imported book's book.md and write a date-stamped outline digest beside it.",
+  "prompt": "根据 book.md 生成全书大纲摘要：推荐优先阅读，突出核心观点、洞察和反常识信息。输出位置、文件名与 frontmatter 严格遵循任务协议。",
+  "max_turns": 80,
+  "timeout_seconds": 1800,
+  "okf_type": "Book Summary"
+}

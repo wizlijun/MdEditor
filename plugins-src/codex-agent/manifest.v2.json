@@ -1,0 +1,123 @@
+{
+  "manifest_version": 2,
+  "id": "notemd.codex-agent",
+  "name": "Codex Agent",
+  "version": "1.0.2",
+  "kind": "native",
+  "engines": {
+    "notemd": ">=6.827.2"
+  },
+  "description": "Run Codex CLI headlessly against your vault: task templates live in .notemd/agent-tasks, stream live in a window, or fire detached from the CLI.",
+  "binary": {
+    "aarch64-apple-darwin": "bin/notemd-codex-agent",
+    "x86_64-apple-darwin": "bin/notemd-codex-agent"
+  },
+  "ui": "ui/",
+  "activation": {
+    "events": [
+      "onCommand:open",
+      "onCommand:run",
+      "onCommand:run-note",
+      "onCommand:run-task",
+      "onCommand:run-status",
+      "onCommand:harness-status",
+      "onCli:codex-agent"
+    ]
+  },
+  "contributes": {
+    "menus": [
+      {
+        "location": "plugins",
+        "label": "Codex Agent…",
+        "command": "open"
+      }
+    ],
+    "windows": [
+      {
+        "id": "main",
+        "entry": "index.html",
+        "title": "Codex Agent",
+        "width": 900,
+        "height": 640,
+        "min_width": 640,
+        "min_height": 420,
+        "open_command": "open"
+      }
+    ],
+    "settings": {
+      "tab_label": "Codex Agent",
+      "schema": [
+        {
+          "key": "notemd.codex-agent.maxConcurrency",
+          "type": "select",
+          "label": "Maximum concurrent AI reads",
+          "options": ["1", "2", "3", "4", "5"],
+          "default": "1"
+        }
+      ]
+    },
+    "cli": [
+      {
+        "subcommand": "codex-agent",
+        "command": "run",
+        "summary": "Run a Codex Agent task headlessly",
+        "args": [
+          {
+            "name": "task",
+            "type": "string",
+            "required": true,
+            "help": "Task id — a directory under .notemd/agent-tasks/"
+          }
+        ],
+        "flags": [
+          {
+            "long": "--prompt",
+            "short": "-p",
+            "type": "string",
+            "help": "Extra prompt appended to the task's own"
+          }
+        ]
+      }
+    ]
+  },
+  "i18n": {
+    "zh": {
+      "name": "Codex 智能体",
+      "menus": {
+        "open": "Codex 智能体…"
+      },
+      "settings.tab_label": "Codex 智能体",
+      "settings.fields": {
+        "notemd.codex-agent.maxConcurrency": "AI 阅读最大并行数"
+      }
+    },
+    "ja": {
+      "name": "Codex エージェント",
+      "menus": {
+        "open": "Codex エージェント…"
+      },
+      "settings.tab_label": "Codex エージェント",
+      "settings.fields": {
+        "notemd.codex-agent.maxConcurrency": "AI 読書の最大同時実行数"
+      }
+    },
+    "de": {
+      "name": "Codex Agent",
+      "menus": {
+        "open": "Codex Agent…"
+      },
+      "settings.tab_label": "Codex Agent",
+      "settings.fields": {
+        "notemd.codex-agent.maxConcurrency": "Maximale parallele KI-Lesevorgänge"
+      }
+    }
+  },
+  "capabilities": [
+    "ui",
+    "toast",
+    "vault.read",
+    "editor.open",
+    "notify"
+  ],
+  "request_timeout_seconds": 300
+}

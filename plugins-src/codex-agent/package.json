@@ -1,0 +1,21 @@
+{
+  "name": "codex-agent",
+  "version": "1.0.2",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5",
+    "svelte": "^5",
+    "svelte-check": "^4",
+    "typescript": "^5",
+    "vite": "^6",
+    "vitest": "^4",
+    "jsdom": "^25"
+  }
+}

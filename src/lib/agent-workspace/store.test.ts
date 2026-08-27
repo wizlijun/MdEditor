@@ -183,11 +183,13 @@ describe('agent providers', () => {
     install(
       manifest('notemd.zzz-agent', AGENT),
       manifest('notemd.deepseek-agent', AGENT),
+      manifest('notemd.codex-agent', AGENT),
       manifest('notemd.md2pdf', NOT_AGENT),
       manifest('notemd.claude-agent', AGENT),
     )
     expect(agentProviders()).toEqual([
       'notemd.claude-agent',
+      'notemd.codex-agent',
       'notemd.deepseek-agent',
       'notemd.zzz-agent',
     ])

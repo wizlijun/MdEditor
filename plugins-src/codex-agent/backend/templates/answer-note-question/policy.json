@@ -1,0 +1,5 @@
+{
+  "permission_mode": "workspace-write",
+  "on_permission_request": "reject",
+  "rationale": "答疑只需要读源文、写手记。真正的边界由 codex 沙箱按 workspace-write 强制;运行时的越权请求一律拒绝,无人值守时没人能替你点同意。"
+}

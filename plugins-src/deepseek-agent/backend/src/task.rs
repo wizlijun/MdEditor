@@ -75,6 +75,19 @@ const OWNED: &Templates = &[
             ),
         ],
     ),
+    (
+        "ai-read-ebook",
+        &[
+            (
+                "AGENTS.md",
+                include_str!("../templates/ai-read-ebook/AGENTS.md"),
+            ),
+            (
+                "policy.json",
+                include_str!("../templates/ai-read-ebook/policy.json"),
+            ),
+        ],
+    ),
 ];
 
 /// Files another agent plugin may also seed: written once, then left alone.
@@ -95,6 +108,11 @@ const SHARED: &[(&str, &str, &str)] = &[
         "precheck.sh",
         include_str!("../templates/answer-note-question/precheck.sh"),
     ),
+    (
+        "ai-read-ebook",
+        "task.json",
+        include_str!("../templates/ai-read-ebook/task.json"),
+    ),
 ];
 
 /// Keep derived data out of the vault's git history.
@@ -110,13 +128,13 @@ mod tests {
     use agent_run_core::task::tasks_root;
 
     #[test]
-    fn seeds_both_templates_on_a_fresh_vault() {
+    fn seeds_all_templates_on_a_fresh_vault() {
         let v = tempfile::tempdir().unwrap();
         let wrote = seed_builtin_templates(v.path());
-        assert_eq!(wrote.len(), 7, "seeded: {wrote:?}");
+        assert_eq!(wrote.len(), 10, "seeded: {wrote:?}");
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec!["answer-note-question", "selfcheck"]);
-        for id in ["selfcheck", "answer-note-question"] {
+        assert_eq!(ids, vec!["ai-read-ebook", "answer-note-question", "selfcheck"]);
+        for id in ["selfcheck", "answer-note-question", "ai-read-ebook"] {
             assert!(task_dir(v.path(), id).join("AGENTS.md").exists(), "{id}");
             assert!(task_dir(v.path(), id).join("policy.json").exists(), "{id}");
         }
@@ -126,22 +144,24 @@ mod tests {
     fn every_seeded_policy_parses() {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
-        for id in ["selfcheck", "answer-note-question"] {
+        for id in ["selfcheck", "answer-note-question", "ai-read-ebook"] {
             crate::policy::Policy::load(&task_dir(v.path(), id))
                 .unwrap_or_else(|e| panic!("{id}: {e}"));
         }
     }
 
     #[test]
-    fn every_seeded_task_json_parses_and_names_a_model() {
+    fn every_seeded_task_json_parses() {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
         let tasks = discover(v.path());
-        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks.len(), 3);
         for t in tasks {
             assert!(!t.name.is_empty(), "{}", t.id);
             assert!(!t.prompt.is_empty(), "{}", t.id);
-            assert!(t.model.is_some(), "{} must pin a model", t.id);
+            if t.id != "ai-read-ebook" {
+                assert!(t.model.is_some(), "{} must pin a model", t.id);
+            }
         }
     }
 
