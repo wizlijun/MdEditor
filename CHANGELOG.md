@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.827.2 — 2026-08-27
+
 ### Added
 
 - **AI book reading can now use several agents at once without overrunning any provider.** Claude Agent, Codex Agent and DeepSeek Agent each get a “Maximum concurrent AI reads” setting from 1 to 5 (default 1). Ebook Import keeps a separate FIFO lane for each provider, so Claude and DeepSeek can work at the same time while additional Claude jobs wait behind Claude's own limit. Changing the setting takes effect while the queue is running; lowering it lets active reads finish, and the same book is still never dispatched twice.

@@ -6,6 +6,8 @@
 
 ## 未发布
 
+## v6.827.2 — 2026-08-27
+
 ### 新增
 
 - **AI 读书现在可由多个 agent 并行处理，同时严格遵守各 provider 的额度。** Claude Agent、Codex Agent、DeepSeek Agent 的设置页各新增「AI 阅读最大并行数」，范围 1–5、默认 1。电子书导入会为每个 provider 维护独立 FIFO：Claude 与 DeepSeek 可以同时读，同属 Claude 的额外任务则只在 Claude 自己的额度后排队。运行中修改设置也会生效；降容不会打断正在读的书，同一本书仍不会被重复派发。
