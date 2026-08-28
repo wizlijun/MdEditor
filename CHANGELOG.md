@@ -7,6 +7,27 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **More Mermaid diagram families and styling controls are available.** The bundled engine now includes Event Modeling, `cynefin-beta`, swimlanes and the railroad beta variants, plus donut pies, richer XY chart labels/legends, collapsible flowchart subgraphs, additional flowchart shapes and ER subgraphs.
+
+### Changed
+
+- **Mermaid has been upgraded from 11.14.0 to 11.17.2, and every note.md rendering path now uses that exact build.** Rich editing, preview, sharing, printing and PDF export no longer risk resolving different Mermaid versions. The engine remains lazy-loaded, so the extra diagram code does not enlarge note.md's initial application chunk.
+- **New Vaults teach AI agents exactly which Mermaid they can generate.** The default `AGENTS.md` now names the bundled 11.17.2 grammar families, Unicode and styling support, beta boundaries, and reliable-generation rules. Existing Vault instructions remain untouched.
+- **Several upstream renderer defaults intentionally produce cleaner output.** Class diagrams use Mermaid's unified renderer by default; C4 diagrams use unified pure-SVG shapes and wrap long labels; dotted class namespaces are hierarchical; and tree-view icons are hidden unless requested. Existing diagrams remain valid, but these diagram families may have small spacing, shape or marker differences from 11.14.
+- **Mermaid custom CSS is parsed more strictly.** Invalid or unbalanced `classDef`/theme rules and unsafe at-rules are discarded instead of leaking into the page. State-diagram comments must use `%%`; a single `%` is now ordinary diagram text.
+
+### Fixed
+
+- **`quadrantChart` accepts unquoted Chinese, Japanese, Korean, accented and emoji labels.** Axis names, quadrant captions and data-point names no longer fail at the 11.14 lexer. `architecture-beta` titles and labels likewise accept unquoted Unicode and punctuation such as `/` and `-`.
+- **Related Mermaid line, marker and label regressions are fixed together.** This includes restored flowchart/block `edgePaths`, single self-loop paths in flowcharts and state diagrams, correctly scaled class-relation markers, ELK arrowheads in dark themes, classDef text colors, wide block labels, C4 long-label wrapping, sequence `alt`/`else` and `rect` backgrounds, RTL message alignment, Gantt marker placement, radar labels, Venn unions, XY chart labels and large tree-view labels.
+- **Mermaid 11.17 remains usable on note.md's older supported macOS WebViews.** A compatibility path supplies the CSSOM object needed by Mermaid's safer style sanitizer when WebKit exposes stylesheets but cannot construct `CSSStyleSheet` directly.
+
+### Security
+
+- **Mermaid and its SVG/CSS sanitizer dependencies include the current upstream security fixes.** The upgrade removes the Mermaid, DOMPurify and UUID advisories associated with the previous locked graph stack, including malformed diagram/CSS injection and denial-of-service cases.
+
 ## v6.828.5 — 2026-08-28
 
 ### Fixed
