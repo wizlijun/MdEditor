@@ -2,14 +2,14 @@
   "manifest_version": 2,
   "id": "notemd.roam-import",
   "name": "Roam Research Import",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "kind": "native",
   "binary": {
     "aarch64-apple-darwin": "bin/notemd-roam-import",
     "x86_64-apple-darwin": "bin/notemd-roam-import"
   },
   "engines": {
-    "notemd": ">=6.808.2"
+    "notemd": ">=6.828.3"
   },
   "description": "Import a Roam Research JSON export into the vault as .note.md outline pages and daily notes",
   "ui": "ui/",
@@ -24,7 +24,7 @@
     "menus": [
       {
         "location": "file",
-        "submenu": "capture-import",
+        "submenu": "import-export",
         "label": "Import from Roam Research…",
         "command": "open"
       }

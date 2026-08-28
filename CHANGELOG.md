@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Plugin categories now use concise, task-oriented names and one home per plugin.** The Plugins menu and marketplaces now use Agents, Capture, Reading, Thinking, Import & Export, and Editing. Existing category keys remain readable during upgrades, while unknown third-party values still fall back to Other.
+
 ## v6.828.2 — 2026-08-28
 
 ### Changed

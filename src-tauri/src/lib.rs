@@ -1696,30 +1696,16 @@ fn menu_label(locale: &str, key: &str) -> String {
         "menu.help" => ("Help", "帮助", "ヘルプ", "Hilfe"),
         "menu.plugins" => ("Plugins", "插件", "プラグイン", "Plugins"),
         "plugins.group.agents" => ("Agents", "智能体", "エージェント", "Agenten"),
-        "plugins.group.captureImport" => (
-            "Capture & Import",
-            "采集与导入",
-            "収集とインポート",
-            "Erfassen & Importieren",
+        "plugins.group.capture" => ("Capture", "记录", "記録", "Erfassen"),
+        "plugins.group.reading" => ("Reading", "阅读", "読書", "Lesen"),
+        "plugins.group.thinking" => ("Thinking", "思考", "思考", "Denken"),
+        "plugins.group.importExport" => (
+            "Import & Export",
+            "导入与导出",
+            "読み込みと書き出し",
+            "Importieren und Exportieren",
         ),
-        "plugins.group.thinkingReview" => (
-            "Thinking & Review",
-            "思考与复盘",
-            "思考と振り返り",
-            "Denken & Reflexion",
-        ),
-        "plugins.group.publishExport" => (
-            "Publish & Export",
-            "发布与导出",
-            "公開とエクスポート",
-            "Veröffentlichen & Exportieren",
-        ),
-        "plugins.group.editorExtensions" => (
-            "Editor Extensions",
-            "编辑增强",
-            "エディター拡張",
-            "Editor-Erweiterungen",
-        ),
+        "plugins.group.editing" => ("Editing", "编辑", "編集", "Bearbeiten"),
         "plugins.group.other" => ("Other", "其他", "その他", "Sonstige"),
         "file.openRecent" => ("Open Recent", "打开最近", "最近使ったファイルを開く", "Zuletzt geöffnet"),
         "file.noRecent" => ("No Recent Files", "无最近文件", "最近のファイルなし", "Keine letzten Dateien"),
@@ -2308,10 +2294,11 @@ fn build_menu<R: tauri::Runtime>(
             for group in contributed {
                 let label_key = match group.key {
                     "agents" => "plugins.group.agents",
-                    "capture-import" => "plugins.group.captureImport",
-                    "thinking-review" => "plugins.group.thinkingReview",
-                    "publish-export" => "plugins.group.publishExport",
-                    "editor-extensions" => "plugins.group.editorExtensions",
+                    "capture" => "plugins.group.capture",
+                    "reading" => "plugins.group.reading",
+                    "thinking" => "plugins.group.thinking",
+                    "import-export" => "plugins.group.importExport",
+                    "editing" => "plugins.group.editing",
                     _ => "plugins.group.other",
                 };
                 let mut gb = SubmenuBuilder::new(app, menu_label(locale, label_key));
@@ -2348,6 +2335,17 @@ mod menu_label_tests {
         assert_eq!(menu_label("zh", "file.newBase"), "新建 Base");
         assert_eq!(menu_label("ja", "file.newBase"), "新規 Base");
         assert_eq!(menu_label("de", "file.newBase"), "Neue Base");
+    }
+
+    #[test]
+    fn import_export_plugin_group_is_localized_in_every_locale() {
+        assert_eq!(menu_label("en", "plugins.group.importExport"), "Import & Export");
+        assert_eq!(menu_label("zh", "plugins.group.importExport"), "导入与导出");
+        assert_eq!(menu_label("ja", "plugins.group.importExport"), "読み込みと書き出し");
+        assert_eq!(
+            menu_label("de", "plugins.group.importExport"),
+            "Importieren und Exportieren",
+        );
     }
 
     /// An unknown key falls back to the key itself, so a missing catalog entry

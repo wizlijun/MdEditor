@@ -2,16 +2,23 @@ import { describe, expect, it } from 'vitest'
 import { groupPluginsByCategory, normalizePluginCategory, PLUGIN_CATEGORY_ORDER } from './categories'
 
 describe('plugin capability categories', () => {
+  it('uses the documented top-level category order', () => {
+    expect(PLUGIN_CATEGORY_ORDER).toEqual([
+      'agents', 'capture', 'reading', 'thinking', 'import-export', 'editing', 'other',
+    ])
+  })
+
   it('keeps the fixed capability order and stable input order within a group', () => {
     const rows = [
-      { id: 'capture', category: 'capture-import' },
+      { id: 'reading', category: 'reading' },
       { id: 'agent-b', category: 'agents' },
       { id: 'agent-a', category: 'agents' },
-      { id: 'editor', category: 'editor-extensions' },
+      { id: 'capture', category: 'capture' },
+      { id: 'editor', category: 'editing' },
     ]
     const groups = groupPluginsByCategory(rows)
     expect(groups.map((group) => group.key)).toEqual([
-      'agents', 'capture-import', 'editor-extensions',
+      'agents', 'capture', 'reading', 'editing',
     ])
     expect(groups[0].items.map((row) => row.id)).toEqual(['agent-b', 'agent-a'])
   })
@@ -30,5 +37,12 @@ describe('plugin capability categories', () => {
 
   it('keeps Other last', () => {
     expect(PLUGIN_CATEGORY_ORDER.at(-1)).toBe('other')
+  })
+
+  it('maps previous category keys to their closest current category', () => {
+    expect(normalizePluginCategory('capture-import')).toBe('capture')
+    expect(normalizePluginCategory('thinking-review')).toBe('thinking')
+    expect(normalizePluginCategory('publish-export')).toBe('import-export')
+    expect(normalizePluginCategory('editor-extensions')).toBe('editing')
   })
 })

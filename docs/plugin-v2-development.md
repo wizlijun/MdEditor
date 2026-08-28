@@ -113,7 +113,7 @@ plugins-src/<name>/
   "location": "file|window|plugins|tab",   // 菜单归属
   "label": "Import from Roam Research…",    // 可被 i18n 覆盖
   "command": "open",                         // 触发的命令 id
-  "submenu": "agents",                       // 一级能力分组 key，见下
+  "submenu": "agents",                       // 一级分类 key，见下；每个插件只归属一类
   "enabled_when": "currentTab.kind == 'markdown'",  // 条件表达式(可选)
   // kind 取值:markdown | mdx | html | code | spreadsheet | base | custom。
   // `mdx` 独立于 `markdown`:mdx tab 只读渲染、永不序列化回写,写文档内容的
@@ -124,19 +124,25 @@ plugins-src/<name>/
 }
 ```
 
-所有插件命令统一收在顶部「插件」菜单中，`submenu` 用稳定、非本地化的能力
-key 建立一层子菜单。当前支持并固定按以下顺序显示：
+所有插件命令统一收在顶部「插件」菜单中，`submenu` 用稳定、非本地化的一级
+分类 key 建立一层子菜单。分类采用 Apple 式的简短、熟悉、任务导向表述；每个
+插件只归属一个分类，不使用多标签或次级分类。按用户使用插件的首要意图归类，
+而不是按内部实现技术归类；同一插件贡献多个菜单项时，所有菜单项必须声明同一
+`submenu`。当前支持并固定按以下顺序显示：
 
-1. `agents` — Agent 执行后端与会话
-2. `capture-import` — 信息采集与内容导入
-3. `thinking-review` — 思考、溯源与复盘
-4. `publish-export` — 发布与导出
-5. `editor-extensions` — 编辑体验增强
+1. `agents` — Agents / 智能体：Agent 执行后端与会话
+2. `capture` — Capture / 记录：主动或自动记录想法、来源和上下文
+3. `reading` — Reading / 阅读：阅读、转换、OCR 与 AI 先读
+4. `thinking` — Thinking / 思考：决策记录与周期回顾
+5. `import-export` — Import & Export / 导入与导出：其他产品迁入和内容导出
+6. `editing` — Editing / 编辑：直接改变编辑体验
 
 未知值或省略字段会进入「其他」，插件命令不会消失。分组名由 Host 统一本地化，
 manifest 不写 `Agents`、`智能体` 等显示文本。插件市场索引也从首个菜单贡献的
 `submenu` 派生同一分类，因此不要在其他位置重复维护分类。仅支持一层，不使用
 `agents/tools` 这类路径。旧 Host 会忽略这层展示并继续平铺，插件仍可正常加载。
+上一版的 `capture-import`、`thinking-review`、`publish-export`、
+`editor-extensions` 只作为读取兼容别名；新 manifest 不得继续写这些 key。
 
 **WindowContribution**(`lib.rs:64-78`):
 ```jsonc

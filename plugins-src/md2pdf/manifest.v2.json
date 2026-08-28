@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.md2pdf",
   "name": "Export to PDF",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.716.7"
+    "notemd": ">=6.828.3"
   },
   "description": "Export the current Markdown or HTML tab to a typographically-clean A4 PDF",
   "binary": {
@@ -22,7 +22,7 @@
     "menus": [
       {
         "location": "file",
-        "submenu": "publish-export",
+        "submenu": "import-export",
         "label": "Export to PDF…",
         "command": "export",
         "enabled_when": "currentTab.kind == 'markdown' || currentTab.kind == 'html'",

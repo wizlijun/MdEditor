@@ -144,9 +144,9 @@ en:{
  entry_lbl:'How to use',host:'Requires note.md ',
  err:"Couldn't load plugins, please retry later.",empty:'No plugins published yet.',
  fallback:'Enable it from the Plugins menu in note.md after install.',
- group_agents:'Agents',group_capture_import:'Capture & Import',
- group_thinking_review:'Thinking & Review',group_publish_export:'Publish & Export',
- group_editor_extensions:'Editor Extensions',group_other:'Other'
+ group_agents:'Agents',group_capture:'Capture',group_reading:'Reading',
+ group_thinking:'Thinking',group_import_export:'Import & Export',
+ group_editing:'Editing',group_other:'Other'
 },
 zh:{
  nav_home:'note.md 主站',nav_plugins:'插件',nav_download:'下载',
@@ -161,9 +161,9 @@ zh:{
  entry_lbl:'使用入口',host:'需要 note.md ',
  err:'暂时无法加载插件列表，请稍后重试。',empty:'暂无已上架插件。',
  fallback:'安装后在 note.md 的「插件」菜单中启用。',
- group_agents:'智能体',group_capture_import:'采集与导入',
- group_thinking_review:'思考与复盘',group_publish_export:'发布与导出',
- group_editor_extensions:'编辑增强',group_other:'其他'
+ group_agents:'智能体',group_capture:'记录',group_reading:'阅读',
+ group_thinking:'思考',group_import_export:'导入与导出',
+ group_editing:'编辑',group_other:'其他'
 }};
 // Per-plugin entry, from each manifest's contributes.menus.location.
 // Every plugin command lands in the Plugins menu regardless of the location its
@@ -175,15 +175,15 @@ var ENTRY_MAP={
  'notemd.codex-agent':{en:'<b>Plugins</b> → <b>Agents</b> → Codex Agent…',zh:'「<b>插件</b>」→「<b>智能体</b>」→ Codex 智能体…'},
  'notemd.deepseek-agent':{en:'<b>Plugins</b> → <b>Agents</b> → DeepSeek Agent…',zh:'「<b>插件</b>」→「<b>智能体</b>」→ DeepSeek 智能体…'},
  'notemd.openclaw-chat':{en:'<b>Plugins</b> → <b>Agents</b> → OpenClaw',zh:'「<b>插件</b>」→「<b>智能体</b>」→ OpenClaw'},
- 'notemd.idea-spark':{en:'<b>Plugins</b> → <b>Capture & Import</b> → Idea Spark',zh:'「<b>插件</b>」→「<b>采集与导入</b>」→ 奇思妙想'},
- 'notemd.ebook-import':{en:'<b>Plugins</b> → <b>Capture & Import</b> → Import Ebooks… (also CLI <code>notemd ebook</code>)',zh:'「<b>插件</b>」→「<b>采集与导入</b>」→ 导入电子书…（也支持 CLI <code>notemd ebook</code>）'},
- 'notemd.roam-import':{en:'<b>Plugins</b> → <b>Capture & Import</b> → Import from Roam Research…',zh:'「<b>插件</b>」→「<b>采集与导入</b>」→ 从 Roam Research 导入…'},
- 'notemd.pos-log':{en:'<b>Plugins</b> → <b>Capture & Import</b> → Save Location Now',zh:'「<b>插件</b>」→「<b>采集与导入</b>」→ 立即保存位置'},
- 'notemd.trace-source':{en:'<b>Plugins</b> → <b>Thinking & Review</b> → Trace Source',zh:'「<b>插件</b>」→「<b>思考与复盘</b>」→ 溯源'},
- 'notemd.decision-log':{en:'<b>Plugins</b> → <b>Thinking & Review</b> → Decision Log',zh:'「<b>插件</b>」→「<b>思考与复盘</b>」→ 决策日志'},
- 'notemd.weekly-review':{en:'<b>Plugins</b> → <b>Thinking & Review</b> → Weekly Review',zh:'「<b>插件</b>」→「<b>思考与复盘</b>」→ 周检视'},
- 'notemd.md2pdf':{en:'<b>Plugins</b> → <b>Publish & Export</b> → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」→「<b>发布与导出</b>」→ 导出为 PDF…（也支持 CLI <code>notemd pdf</code>）'},
- 'notemd.power-mode':{en:'<b>Plugins</b> → <b>Editor Extensions</b> → Power Mode',zh:'「<b>插件</b>」→「<b>编辑增强</b>」→ 狂暴模式'}
+ 'notemd.idea-spark':{en:'<b>Plugins</b> → <b>Capture</b> → Idea Spark',zh:'「<b>插件</b>」→「<b>记录</b>」→ 奇思妙想'},
+ 'notemd.ebook-import':{en:'<b>Plugins</b> → <b>Reading</b> → Import Ebooks… (also CLI <code>notemd ebook</code>)',zh:'「<b>插件</b>」→「<b>阅读</b>」→ 导入电子书…（也支持 CLI <code>notemd ebook</code>）'},
+ 'notemd.roam-import':{en:'<b>Plugins</b> → <b>Import & Export</b> → Import from Roam Research…',zh:'「<b>插件</b>」→「<b>导入与导出</b>」→ 从 Roam Research 导入…'},
+ 'notemd.pos-log':{en:'<b>Plugins</b> → <b>Capture</b> → Save Location Now',zh:'「<b>插件</b>」→「<b>记录</b>」→ 立即保存位置'},
+ 'notemd.trace-source':{en:'<b>Plugins</b> → <b>Capture</b> → Trace Source',zh:'「<b>插件</b>」→「<b>记录</b>」→ 溯源'},
+ 'notemd.decision-log':{en:'<b>Plugins</b> → <b>Thinking</b> → Decision Log',zh:'「<b>插件</b>」→「<b>思考</b>」→ 决策日志'},
+ 'notemd.weekly-review':{en:'<b>Plugins</b> → <b>Thinking</b> → Weekly Review',zh:'「<b>插件</b>」→「<b>思考</b>」→ 周检视'},
+ 'notemd.md2pdf':{en:'<b>Plugins</b> → <b>Import & Export</b> → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」→「<b>导入与导出</b>」→ 导出为 PDF…（也支持 CLI <code>notemd pdf</code>）'},
+ 'notemd.power-mode':{en:'<b>Plugins</b> → <b>Editing</b> → Power Mode',zh:'「<b>插件</b>」→「<b>编辑</b>」→ 狂暴模式'}
 };
 function pickLang(){
  var q=new URLSearchParams(location.search).get('lang');
@@ -205,8 +205,9 @@ function applyStatic(){
 function entryFor(id){
  var e=ENTRY_MAP[id];return e?e[lang]:I18N[lang].fallback;
 }
-var GROUP_ORDER=['agents','capture-import','thinking-review','publish-export','editor-extensions','other'];
-function normalizeGroup(value){return GROUP_ORDER.indexOf(value)>=0?value:'other';}
+var GROUP_ORDER=['agents','capture','reading','thinking','import-export','editing','other'];
+var LEGACY_GROUPS={'capture-import':'capture','thinking-review':'thinking','publish-export':'import-export','editor-extensions':'editing'};
+function normalizeGroup(value){return GROUP_ORDER.indexOf(value)>=0?value:(LEGACY_GROUPS[value]||'other');}
 function groupLabel(key){
  return I18N[lang]['group_'+key.replace(/-/g,'_')]||I18N[lang].group_other;
 }

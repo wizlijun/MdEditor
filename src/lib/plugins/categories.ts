@@ -2,28 +2,38 @@ import type { Messages } from '../i18n/en'
 
 export const PLUGIN_CATEGORY_ORDER = [
   'agents',
-  'capture-import',
-  'thinking-review',
-  'publish-export',
-  'editor-extensions',
+  'capture',
+  'reading',
+  'thinking',
+  'import-export',
+  'editing',
   'other',
 ] as const
 
 export type PluginCategory = typeof PLUGIN_CATEGORY_ORDER[number]
 
 const KNOWN_CATEGORIES = new Set<string>(PLUGIN_CATEGORY_ORDER)
+const LEGACY_CATEGORIES: Record<string, PluginCategory> = {
+  'capture-import': 'capture',
+  'thinking-review': 'thinking',
+  'publish-export': 'import-export',
+  'editor-extensions': 'editing',
+}
 
 export function normalizePluginCategory(category: string | null | undefined): PluginCategory {
-  return category && KNOWN_CATEGORIES.has(category) ? category as PluginCategory : 'other'
+  if (!category) return 'other'
+  if (KNOWN_CATEGORIES.has(category)) return category as PluginCategory
+  return LEGACY_CATEGORIES[category] ?? 'other'
 }
 
 export function pluginCategoryLabelKey(category: PluginCategory): keyof Messages {
   const keys: Record<PluginCategory, keyof Messages> = {
     agents: 'pluginCategory.agents',
-    'capture-import': 'pluginCategory.captureImport',
-    'thinking-review': 'pluginCategory.thinkingReview',
-    'publish-export': 'pluginCategory.publishExport',
-    'editor-extensions': 'pluginCategory.editorExtensions',
+    capture: 'pluginCategory.capture',
+    reading: 'pluginCategory.reading',
+    thinking: 'pluginCategory.thinking',
+    'import-export': 'pluginCategory.importExport',
+    editing: 'pluginCategory.editing',
     other: 'pluginCategory.other',
   }
   return keys[category]

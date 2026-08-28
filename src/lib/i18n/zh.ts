@@ -207,10 +207,11 @@ export const zh: Record<keyof Messages, string> = {
 
   // 插件能力分组
   'pluginCategory.agents': '智能体',
-  'pluginCategory.captureImport': '采集与导入',
-  'pluginCategory.thinkingReview': '思考与复盘',
-  'pluginCategory.publishExport': '发布与导出',
-  'pluginCategory.editorExtensions': '编辑增强',
+  'pluginCategory.capture': '记录',
+  'pluginCategory.reading': '阅读',
+  'pluginCategory.thinking': '思考',
+  'pluginCategory.importExport': '导入与导出',
+  'pluginCategory.editing': '编辑',
   'pluginCategory.other': '其他',
 
   // Plugin Market window (子项目③)

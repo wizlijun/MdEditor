@@ -37,11 +37,13 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_ROOT = join(REPO_ROOT, 'dist-plugins')
 const REGISTRY_BASE = 'https://plugins.notemd.net'
 const PLUGIN_CATEGORIES = new Set([
-  'agents',
-  'capture-import',
-  'thinking-review',
-  'publish-export',
-  'editor-extensions',
+  'agents', 'capture', 'reading', 'thinking', 'import-export', 'editing',
+])
+const LEGACY_PLUGIN_CATEGORIES = new Map([
+  ['capture-import', 'capture'],
+  ['thinking-review', 'thinking'],
+  ['publish-export', 'import-export'],
+  ['editor-extensions', 'editing'],
 ])
 
 /**
@@ -55,7 +57,8 @@ export function pluginCategoryFromManifest(manifest) {
   const raw = Array.isArray(menus)
     ? menus.find((menu) => typeof menu?.submenu === 'string')?.submenu
     : null
-  return PLUGIN_CATEGORIES.has(raw) ? raw : 'other'
+  if (PLUGIN_CATEGORIES.has(raw)) return raw
+  return LEGACY_PLUGIN_CATEGORIES.get(raw) ?? 'other'
 }
 
 function sha256Hex(path) {

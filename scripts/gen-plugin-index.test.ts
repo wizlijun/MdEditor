@@ -29,6 +29,20 @@ describe('pluginCategoryFromManifest', () => {
     })).toBe('agents')
   })
 
+  it('normalizes previous capability keys in newly generated indexes', () => {
+    const aliases = {
+      'capture-import': 'capture',
+      'thinking-review': 'thinking',
+      'publish-export': 'import-export',
+      'editor-extensions': 'editing',
+    }
+    for (const [legacy, current] of Object.entries(aliases)) {
+      expect(pluginCategoryFromManifest({
+        contributes: { menus: [{ command: 'open', submenu: legacy }] },
+      })).toBe(current)
+    }
+  })
+
   it('falls back to other for missing or unknown groups', () => {
     expect(pluginCategoryFromManifest({})).toBe('other')
     expect(pluginCategoryFromManifest({

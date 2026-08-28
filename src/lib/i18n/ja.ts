@@ -207,10 +207,11 @@ export const ja: Record<keyof Messages, string> = {
 
   // プラグイン機能カテゴリ
   'pluginCategory.agents': 'エージェント',
-  'pluginCategory.captureImport': '収集とインポート',
-  'pluginCategory.thinkingReview': '思考と振り返り',
-  'pluginCategory.publishExport': '公開とエクスポート',
-  'pluginCategory.editorExtensions': 'エディター拡張',
+  'pluginCategory.capture': '記録',
+  'pluginCategory.reading': '読書',
+  'pluginCategory.thinking': '思考',
+  'pluginCategory.importExport': '読み込みと書き出し',
+  'pluginCategory.editing': '編集',
   'pluginCategory.other': 'その他',
 
   // Plugin Market window (子项目③)

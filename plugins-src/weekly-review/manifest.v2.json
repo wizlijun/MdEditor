@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.weekly-review",
   "name": "Weekly Review",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.723.3"
+    "notemd": ">=6.828.3"
   },
   "description": "A year-at-a-glance calendar of your weekly reviews.",
   "ui": "ui/",
@@ -18,7 +18,7 @@
     "menus": [
       {
         "location": "window",
-        "submenu": "thinking-review",
+        "submenu": "thinking",
         "label": "Weekly Review",
         "command": "open"
       }

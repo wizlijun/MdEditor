@@ -132,7 +132,7 @@ mod tests {
             "binary": { "aarch64-apple-darwin": "bin/md2pdf-v2", "x86_64-apple-darwin": "bin/md2pdf-v2" },
             "activation": { "events": ["onCommand:export", "onCli:pdf2"] },
             "contributes": {
-                "menus": [{ "location": "file", "submenu": "publish-export",
+                "menus": [{ "location": "file", "submenu": "import-export",
                             "label": "Export to PDF (v2)…", "command": "export",
                             "enabled_when": "currentTab.kind == 'markdown'",
                             "prompt": { "kind": "save-dialog", "default_filename": "{stem}.pdf",
@@ -177,7 +177,7 @@ mod tests {
         let me = &v1.menus[0];
         assert_eq!(me.location, "file");
         assert_eq!(me.command, "export");
-        assert_eq!(me.submenu.as_deref(), Some("publish-export"));
+        assert_eq!(me.submenu.as_deref(), Some("import-export"));
         assert_eq!(me.label, "Export to PDF (v2)…");
         assert_eq!(me.enabled_when.as_deref(), Some("currentTab.kind == 'markdown'"));
         let prompt = me.prompt.as_ref().expect("prompt passthrough");
@@ -284,15 +284,15 @@ mod tests {
             ("notemd.codex-agent", "agents"),
             ("notemd.deepseek-agent", "agents"),
             ("notemd.openclaw-chat", "agents"),
-            ("notemd.ebook-import", "capture-import"),
-            ("notemd.idea-spark", "capture-import"),
-            ("notemd.pos-log", "capture-import"),
-            ("notemd.roam-import", "capture-import"),
-            ("notemd.decision-log", "thinking-review"),
-            ("notemd.trace-source", "thinking-review"),
-            ("notemd.weekly-review", "thinking-review"),
-            ("notemd.md2pdf", "publish-export"),
-            ("notemd.power-mode", "editor-extensions"),
+            ("notemd.ebook-import", "reading"),
+            ("notemd.idea-spark", "capture"),
+            ("notemd.pos-log", "capture"),
+            ("notemd.roam-import", "import-export"),
+            ("notemd.decision-log", "thinking"),
+            ("notemd.trace-source", "capture"),
+            ("notemd.weekly-review", "thinking"),
+            ("notemd.md2pdf", "import-export"),
+            ("notemd.power-mode", "editing"),
         ]
         .into_iter()
         .collect();
@@ -307,12 +307,18 @@ mod tests {
             let Some(expected_group) = expected.get(m.id.as_str()) else {
                 continue;
             };
-            let actual = m
+            let actual: Vec<_> = m
                 .contributes
                 .menus
                 .iter()
-                .find_map(|menu| menu.get("submenu").and_then(|value| value.as_str()));
-            assert_eq!(actual, Some(*expected_group), "{}", path.display());
+                .filter_map(|menu| menu.get("submenu").and_then(|value| value.as_str()))
+                .collect();
+            assert!(!actual.is_empty(), "{} has no category", path.display());
+            assert!(
+                actual.iter().all(|group| *group == *expected_group),
+                "{} has inconsistent categories: {actual:?}",
+                path.display(),
+            );
         }
     }
 

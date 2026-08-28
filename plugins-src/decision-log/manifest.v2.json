@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.decision-log",
   "name": "Decision Log",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.722.1"
+    "notemd": ">=6.828.3"
   },
   "description": "Predict before, judge after — a calibrated decision journal stored as .note.md.",
   "ui": "ui/",
@@ -18,7 +18,7 @@
     "menus": [
       {
         "location": "window",
-        "submenu": "thinking-review",
+        "submenu": "thinking",
         "label": "Decision Log",
         "command": "open"
       }

@@ -212,10 +212,11 @@ export const en = {
 
   // Stable capability groups shared by the Plugins menu and marketplaces
   'pluginCategory.agents': 'Agents',
-  'pluginCategory.captureImport': 'Capture & Import',
-  'pluginCategory.thinkingReview': 'Thinking & Review',
-  'pluginCategory.publishExport': 'Publish & Export',
-  'pluginCategory.editorExtensions': 'Editor Extensions',
+  'pluginCategory.capture': 'Capture',
+  'pluginCategory.reading': 'Reading',
+  'pluginCategory.thinking': 'Thinking',
+  'pluginCategory.importExport': 'Import & Export',
+  'pluginCategory.editing': 'Editing',
   'pluginCategory.other': 'Other',
 
   // Plugin Market window (子项目③)

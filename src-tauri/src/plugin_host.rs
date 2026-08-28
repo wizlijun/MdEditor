@@ -209,22 +209,24 @@ pub struct LocatedMenuItem {
 /// `menus[].submenu` carries one of these language-neutral keys. Keeping the
 /// field open means an older Host still loads newer plugin manifests; this
 /// Host normalizes unknown/missing keys to Other instead of hiding an action.
-pub const PLUGIN_MENU_GROUP_ORDER: [&str; 6] = [
+pub const PLUGIN_MENU_GROUP_ORDER: [&str; 7] = [
     "agents",
-    "capture-import",
-    "thinking-review",
-    "publish-export",
-    "editor-extensions",
+    "capture",
+    "reading",
+    "thinking",
+    "import-export",
+    "editing",
     "other",
 ];
 
 pub fn normalize_plugin_menu_group(group: Option<&str>) -> &'static str {
     match group {
         Some("agents") => "agents",
-        Some("capture-import") => "capture-import",
-        Some("thinking-review") => "thinking-review",
-        Some("publish-export") => "publish-export",
-        Some("editor-extensions") => "editor-extensions",
+        Some("capture") | Some("capture-import") => "capture",
+        Some("reading") => "reading",
+        Some("thinking") | Some("thinking-review") => "thinking",
+        Some("import-export") | Some("publish-export") => "import-export",
+        Some("editing") | Some("editor-extensions") => "editing",
         _ => "other",
     }
 }
@@ -352,16 +354,30 @@ mod tests {
     }
 
     #[test]
+    fn plugin_menu_group_order_matches_the_documented_taxonomy() {
+        assert_eq!(PLUGIN_MENU_GROUP_ORDER, [
+            "agents",
+            "capture",
+            "reading",
+            "thinking",
+            "import-export",
+            "editing",
+            "other",
+        ]);
+    }
+
+    #[test]
     fn plugin_menu_groups_follow_capability_order_and_keep_item_order() {
         let items = vec![
-            menu_item("capture-1", Some("capture-import")),
+            menu_item("reading-1", Some("reading")),
             menu_item("agent-1", Some("agents")),
             menu_item("agent-2", Some("agents")),
-            menu_item("editor-1", Some("editor-extensions")),
+            menu_item("capture-1", Some("capture")),
+            menu_item("editor-1", Some("editing")),
         ];
         let groups = group_plugin_menu_items(&items);
         assert_eq!(groups.iter().map(|g| g.key).collect::<Vec<_>>(), vec![
-            "agents", "capture-import", "editor-extensions",
+            "agents", "capture", "reading", "editing",
         ]);
         assert_eq!(groups[0].items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec![
             "agent-1", "agent-2",
@@ -371,16 +387,24 @@ mod tests {
     #[test]
     fn unknown_or_missing_plugin_menu_group_falls_back_to_other() {
         let items = vec![
-            menu_item("known", Some("thinking-review")),
+            menu_item("known", Some("thinking")),
             menu_item("unknown", Some("future-category")),
             menu_item("missing", None),
         ];
         let groups = group_plugin_menu_items(&items);
         assert_eq!(groups.iter().map(|g| g.key).collect::<Vec<_>>(), vec![
-            "thinking-review", "other",
+            "thinking", "other",
         ]);
         assert_eq!(groups[1].items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec![
             "unknown", "missing",
         ]);
+    }
+
+    #[test]
+    fn previous_plugin_menu_group_keys_map_to_current_groups() {
+        assert_eq!(normalize_plugin_menu_group(Some("capture-import")), "capture");
+        assert_eq!(normalize_plugin_menu_group(Some("thinking-review")), "thinking");
+        assert_eq!(normalize_plugin_menu_group(Some("publish-export")), "import-export");
+        assert_eq!(normalize_plugin_menu_group(Some("editor-extensions")), "editing");
     }
 }

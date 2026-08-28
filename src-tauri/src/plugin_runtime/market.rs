@@ -384,7 +384,7 @@ mod tests {
                 "x86_64-apple-darwin": "bb"
               },
               "name": "Export to PDF",
-              "category": "publish-export",
+              "category": "import-export",
               "description": "Render the current note to PDF.",
               "i18n": { "zh": { "name": "导出 PDF" } },
               "icon_url": "https://plugins.notemd.net/icons/md2pdf.png",
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(e.archs.len(), 2);
         assert_eq!(e.sha256.get("aarch64-apple-darwin").unwrap(), "aa");
         assert_eq!(e.name, "Export to PDF");
-        assert_eq!(e.category.as_deref(), Some("publish-export"));
+        assert_eq!(e.category.as_deref(), Some("import-export"));
         assert!(e.description.is_some());
         assert!(e.i18n.is_some());
         assert!(e.icon_url.is_some());

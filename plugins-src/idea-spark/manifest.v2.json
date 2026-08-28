@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.idea-spark",
   "name": "Idea Spark",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.805.2"
+    "notemd": ">=6.828.3"
   },
   "description": "Capture a spark, then let an agent argue it into a next-step document.",
   "ui": "ui/",
@@ -18,7 +18,7 @@
     "menus": [
       {
         "location": "plugins",
-        "submenu": "capture-import",
+        "submenu": "capture",
         "label": "Idea Spark",
         "command": "open"
       }

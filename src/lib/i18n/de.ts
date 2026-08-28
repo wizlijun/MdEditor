@@ -205,10 +205,11 @@ export const de: Record<keyof Messages, string> = {
 
   // Plugin-Funktionsgruppen
   'pluginCategory.agents': 'Agenten',
-  'pluginCategory.captureImport': 'Erfassen & Importieren',
-  'pluginCategory.thinkingReview': 'Denken & Reflexion',
-  'pluginCategory.publishExport': 'Veröffentlichen & Exportieren',
-  'pluginCategory.editorExtensions': 'Editor-Erweiterungen',
+  'pluginCategory.capture': 'Erfassen',
+  'pluginCategory.reading': 'Lesen',
+  'pluginCategory.thinking': 'Denken',
+  'pluginCategory.importExport': 'Importieren und Exportieren',
+  'pluginCategory.editing': 'Bearbeiten',
   'pluginCategory.other': 'Sonstige',
 
   // Plugin Market window (子项目③)
