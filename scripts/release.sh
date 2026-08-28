@@ -273,10 +273,36 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null 2>&1 || tr
 # arrays, so we stash results in arch-suffixed variables (e.g. DMG_STAGED_AARCH64).
 STAGED_ASSETS=()
 
+tauri_build_with_apple_retries() {
+  local arch="$1" attempt=1 max_attempts=3 log rc
+  while :; do
+    log=$(mktemp -t notemd-tauri-build)
+    set +e
+    APPLE_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" pnpm tauri build --target "$arch" 2>&1 | tee "$log"
+    rc=${PIPESTATUS[0]}
+    set -e
+
+    if (( rc == 0 )); then
+      rm -f "$log"
+      return 0
+    fi
+    if (( attempt >= max_attempts )) ||
+       ! grep -Eq 'HTTPClientError\.(connectTimeout|deadlineExceeded)|abortedUpload|timestamp service is not available' "$log"; then
+      rm -f "$log"
+      return "$rc"
+    fi
+
+    say "Apple signing/notarization service failed transiently; retrying $arch ($(( attempt + 1 ))/$max_attempts)"
+    rm -f "$log"
+    attempt=$(( attempt + 1 ))
+    sleep 5
+  done
+}
+
 build_arch() {
   local arch="$1" arch_tag="$2"
   say "building target $arch"
-  APPLE_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" pnpm tauri build --target "$arch"
+  tauri_build_with_apple_retries "$arch"
 
   local bundle="src-tauri/target/$arch/release/bundle"
   local dmg_src tarball_src sig_src
