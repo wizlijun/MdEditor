@@ -13,6 +13,8 @@ For the full commit history, see the git log.
 
 - **Idea Spark recognizes the existing `*-idea.md` filename convention again.** The inbox now lists only ordinary files with that exact lowercase suffix; new and renamed ideas use the same suffix, while proof documents, other Markdown files, directories and `.idea.md` names stay out of the list.
 
+## v6.828.4 — 2026-08-28
+
 ### Changed
 
 - **Position Log is now Location Log.** The plugin name and its Capture menu item now use one concise name in every supported language. Existing installs upgrade in place because the internal plugin ID remains `notemd.pos-log`.
