@@ -7,5 +7,10 @@ allowBuilds:
   sharp: true
   workerd: true
 
+# @moraya/core loads Mermaid as an optional peer while mermaid-mini re-exports
+# it from its own dependency. Keep both product paths on the same audited build.
+overrides:
+  mermaid: 11.17.2
+
 packages:
   - 'plugins-src/*'

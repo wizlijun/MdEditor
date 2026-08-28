@@ -165,6 +165,57 @@ Mechanics: the title goes into the filename verbatim — non-ASCII is kept
 as is, whitespace becomes `-`, and only `/ \ : * ? " < > |` are replaced
 with `-`. Keep the H1 in the file identical to the title in its name.
 
+## Mermaid diagrams
+
+note.md renders fenced Mermaid with **Mermaid 11.17.2** in rich editing,
+preview, sharing, printing and PDF export. Put one complete diagram in each
+`mermaid` fence; the first non-comment line selects its grammar:
+
+````markdown
+```mermaid
+flowchart LR
+  source["Source note"] --> check{"Verified?"}
+  check -->|yes| stable["Stable note"]
+```
+````
+
+Grammars available in this build:
+
+- Everyday diagrams: `flowchart`/`graph`, `sequenceDiagram`, `classDiagram`,
+  `stateDiagram`/`stateDiagram-v2`, `erDiagram`, `journey`, `gantt`, `pie`,
+  `quadrantChart`, `requirementDiagram`, `gitGraph`, `mindmap`, `timeline`,
+  `kanban`, and C4 (`C4Context`, `C4Container`, `C4Component`, `C4Dynamic`,
+  `C4Deployment`).
+- Data and structured diagrams: `xychart`/`xychart-beta`,
+  `sankey`/`sankey-beta`, `block`/`block-beta`, `packet`/`packet-beta`,
+  `architecture-beta`, `radar-beta`, `treeView-beta`, `eventmodeling`,
+  `ishikawa`/`ishikawa-beta`, `venn-beta`, `treemap`, and `wardley-beta`.
+- New experimental families: `cynefin-beta`, `swimlane-beta`,
+  `railroad-beta`, `railroad-ebnf-beta`, `railroad-abnf-beta`, and
+  `railroad-peg-beta`. Use a beta grammar only when it fits the request; do
+  not invent syntax from a Mermaid version newer than 11.17.2.
+
+Generation rules for reliable rendering:
+
+- Use short ASCII identifiers (`user`, `api`, `step_1`) and put human text in
+  labels. Unicode labels, including CJK and emoji, are supported; quote a label
+  when it contains Mermaid punctuation such as brackets, braces, colons,
+  semicolons, pipes or arrow-like text.
+- Comments start with `%%`, never a single `%` (which is ordinary text in this
+  version).
+- `classDef`, `class` and `style` are supported. Keep CSS declarations valid
+  and braces balanced; unsafe at-rules and malformed CSS are discarded by the
+  renderer's sanitizer. Do not depend on external scripts, stylesheets or HTML
+  side effects — exported diagrams are standalone SVG.
+- Flowcharts support additional shapes and collapsible subgraphs; pie charts
+  support donut rendering; XY charts support labels and legends; class diagrams
+  use the unified renderer; and C4 labels are pure SVG with long-label wrapping.
+- Keep `quadrantChart` axis, quadrant and point labels concise: Unicode works,
+  but this version does not auto-wrap those labels or interpret Markdown or
+  `<br>` inside them.
+- Prefer the simplest grammar that communicates the relationship. If syntax is
+  uncertain, generate a small valid diagram instead of guessing a directive.
+
 ## The `.note.md` suffix
 
 - A file ending in `.note.md` is an **outline note**: a bullet-list

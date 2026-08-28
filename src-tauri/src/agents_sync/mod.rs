@@ -287,14 +287,33 @@ pub fn notemd_agents_append_search_section(app: tauri::AppHandle) -> Result<bool
 
 fn open_agents_in_editor(app: &tauri::AppHandle, root: &Path) {
     let agents = root.join(watcher::AGENTS_FILE);
-    if !agents.exists() {
-        let _ = std::fs::write(&agents, TEMPLATE);
-    }
+    let _ = create_default_agents_md(root);
     // Creates/repairs the CLAUDE.md symlink and ensures the .gitignore line.
     run_check(app, root);
     crate::show_main_window(app);
     if let Some(p) = agents.to_str() {
         crate::emit_open_file_delayed(app, p);
+    }
+}
+
+/// Create the built-in conventions only when AGENTS.md is genuinely absent.
+/// `create_new` makes that promise atomic and refuses to follow an existing or
+/// dangling symlink, so opening the editor can never replace user instructions.
+fn create_default_agents_md(root: &Path) -> std::io::Result<bool> {
+    use std::io::Write;
+
+    let path = root.join(watcher::AGENTS_FILE);
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => {
+            file.write_all(TEMPLATE.as_bytes())?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(error),
     }
 }
 
@@ -384,6 +403,79 @@ mod fs_tests {
         let gi = fs::read_to_string(d.path().join(".gitignore")).unwrap();
         assert!(gi.contains("node_modules"));
         assert!(gi.contains("CLAUDE.md"));
+    }
+
+    #[test]
+    fn creates_the_default_agents_template_only_when_missing() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(create_default_agents_md(d.path()).unwrap());
+        assert_eq!(
+            fs::read_to_string(d.path().join("AGENTS.md")).unwrap(),
+            TEMPLATE
+        );
+        assert!(!create_default_agents_md(d.path()).unwrap());
+    }
+
+    #[test]
+    fn default_template_creation_never_replaces_existing_instructions() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("AGENTS.md");
+        for existing in ["", "  \n", "# My vault\n\nKeep this exactly.\n"] {
+            fs::write(&path, existing).unwrap();
+            assert!(!create_default_agents_md(d.path()).unwrap());
+            assert_eq!(fs::read_to_string(&path).unwrap(), existing);
+            fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_template_creation_does_not_follow_a_dangling_symlink() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("outside.md");
+        std::os::unix::fs::symlink(&target, d.path().join("AGENTS.md")).unwrap();
+        assert!(!create_default_agents_md(d.path()).unwrap());
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn template_mermaid_contract_matches_the_frontend_dependency() {
+        let package_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../package.json");
+        let package: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(package_path).expect("root package.json must be readable"),
+        )
+        .expect("root package.json must be valid JSON");
+        let version = package["dependencies"]["mermaid"]
+            .as_str()
+            .expect("package.json must pin Mermaid directly");
+
+        assert!(
+            TEMPLATE.contains(&format!("Mermaid {version}")),
+            "Vault AGENTS.md must document the exact bundled Mermaid version"
+        );
+        for grammar in [
+            "quadrantChart",
+            "architecture-beta",
+            "eventmodeling",
+            "cynefin-beta",
+            "swimlane-beta",
+            "railroad-beta",
+        ] {
+            assert!(
+                TEMPLATE.contains(grammar),
+                "Vault AGENTS.md is missing `{grammar}`"
+            );
+        }
+        for rule in [
+            "Comments start with `%%`",
+            "short ASCII identifiers",
+            "does not auto-wrap",
+        ] {
+            assert!(
+                TEMPLATE.contains(rule),
+                "Vault AGENTS.md is missing Mermaid rule: {rule}"
+            );
+        }
     }
 
     // ---- notemd_agents_search_section_missing / notemd_agents_append_search_section ----

@@ -1,5 +1,5 @@
 /**
- * @vitest-environment happy-dom
+ * @vitest-environment jsdom
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
@@ -9,6 +9,7 @@ import {
   hasMathContent,
   inlineImages,
   renderTabBody,
+  renderTabAsInlineBody,
   renderMarkdownInline,
   __setImageReaderForTests,
 } from './host-render-html'
@@ -121,6 +122,27 @@ describe('line breaks', () => {
     const tab = { kind: 'markdown', currentContent: 'first line\nsecond line\n', filePath: '/tmp/p.md' } as never
     const html = await renderTabBody(tab)
     expect(html).toContain('<br>')
+  })
+})
+
+describe('Mermaid export rendering', () => {
+  it('renders a Unicode quadrant into inline SVG for share and PDF consumers', async () => {
+    const tab = {
+      kind: 'markdown',
+      currentContent: `\`\`\`mermaid
+quadrantChart
+  x-axis 低触达 --> 高触达
+  y-axis 低参与 --> 高参与
+  quadrant-1 扩大投入
+  活动甲: [0.3, 0.6]
+\`\`\``,
+      filePath: '/tmp/quadrant.md',
+    } as never
+
+    const html = await renderTabAsInlineBody(tab)
+    expect(html).toContain('aria-roledescription="quadrantChart"')
+    expect(html).toContain('活动甲')
+    expect(html).not.toContain('renderer-error')
   })
 })
 

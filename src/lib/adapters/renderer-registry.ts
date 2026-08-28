@@ -1,4 +1,5 @@
 import type { RendererRegistry, RendererPluginModule } from '@moraya/core'
+import { ensureMermaidCssStyleSheetCompatibility } from '../mermaid-cssom'
 
 type Loader = () => Promise<RendererPluginModule>
 
@@ -59,6 +60,7 @@ let mermaidQueue: Promise<unknown> = Promise.resolve()
 const mermaidPlugin: PluginEntry = {
   version: '1',
   load: async () => {
+    ensureMermaidCssStyleSheetCompatibility()
     const mod = (await import('mermaid-mini')) as unknown as { default?: MermaidLike }
     const mermaid: MermaidLike =
       (mod.default as MermaidLike | undefined) ?? (mod as unknown as MermaidLike)

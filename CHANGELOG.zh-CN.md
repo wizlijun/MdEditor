@@ -6,6 +6,27 @@
 
 ## 未发布
 
+### 新增
+
+- **可用的 Mermaid 图形家族与样式控制更多了。** 内置引擎新增 Event Modeling、`cynefin-beta`、泳道图和 railroad beta 系列，同时支持环形饼图、更丰富的 XY 图标签/图例、可折叠 flowchart 子图、更多 flowchart 形状以及 ER 子图。
+
+### 变更
+
+- **Mermaid 从 11.14.0 安全升级到 11.17.2，note.md 的所有渲染入口统一使用这一精确版本。** 富文本编辑、预览、分享、打印与 PDF 导出不会再解析到不同的 Mermaid 版本；图形代码仍然按需加载，因此不会增大 note.md 的初始应用 chunk。
+- **新 Vault 会明确告诉 AI agent 可以生成哪些 Mermaid。** 默认 `AGENTS.md` 现在会列出内置 11.17.2 的图形家族、Unicode 与样式能力、beta 边界和可靠生成规则；已有 Vault 的用户指令不会被改写。
+- **若干上游渲染器默认值会有意产生更整洁的输出。** classDiagram 默认使用 Mermaid 统一渲染器；C4 改用统一的纯 SVG 形状并支持长标签换行；带点号的 class namespace 按层级组织；tree-view 图标默认隐藏。既有语法仍然有效，但这些图形的间距、形状或标记可能与 11.14 略有差异。
+- **Mermaid 自定义 CSS 的解析更严格。** 无效或括号不平衡的 `classDef`/主题规则及不安全的 at-rule 会被丢弃，不再泄漏到页面。状态图注释必须使用 `%%`；单个 `%` 现在会被当作普通图形文本。
+
+### 修复
+
+- **`quadrantChart` 现在可以直接使用未加引号的中日韩文字、重音字符和 emoji 标签。** 坐标轴名称、象限标题与数据点名称不再触发 11.14 的 lexer 错误；`architecture-beta` 的标题与标签也能直接使用 Unicode 以及 `/`、`-` 等标点。
+- **同一区间内的 Mermaid 连线、标记与标签回归一并修复。** 包括恢复 flowchart/block 的 `edgePaths`、flowchart 与状态图只绘制一条自环路径、正确缩放 classDiagram 关系标记、深色主题下的 ELK 箭头、classDef 文字颜色、宽 block 标签、C4 长标签换行、sequence 的 `alt`/`else` 与 `rect` 背景、RTL 消息对齐、Gantt 标记位置、雷达图标签、Venn 并集、XY 图标签以及大型 tree-view 标签。
+- **Mermaid 11.17 在 note.md 仍支持的旧版 macOS WebView 上也能工作。** 当 WebKit 已暴露 stylesheet、却还不能直接构造 `CSSStyleSheet` 时，兼容路径会提供新版安全样式净化器需要的 CSSOM 对象。
+
+### 安全
+
+- **Mermaid 及其 SVG/CSS 净化依赖已包含当前上游安全修复。** 本次升级清除了旧图形依赖锁定版本涉及的 Mermaid、DOMPurify 与 UUID 告警，包括畸形图形/CSS 注入及拒绝服务问题。
+
 ## v6.828.5 — 2026-08-28
 
 ### 修复

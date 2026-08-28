@@ -9,6 +9,7 @@ import { activeTab } from './tabs.svelte'
 import { analyticsPluginForEditor } from './insights/tracker.svelte'
 import { isApplePlatformSync } from './platform-sync'
 import { guardRichEditor, type ImeGuard } from './ime'
+import { ensureMermaidCssStyleSheetCompatibility } from './mermaid-cssom'
 
 const platform = {
   getCurrentFilePath: () => activeTab()?.filePath ?? null,
@@ -51,6 +52,7 @@ export async function mountRichEditor(
   onChange: (md: string) => void,
   imeGuard?: ImeGuard,
 ): Promise<MorayaEditorInstance> {
+  ensureMermaidCssStyleSheetCompatibility()
   const instance = await coreCreateEditor({
     container: root,
     initialContent,
