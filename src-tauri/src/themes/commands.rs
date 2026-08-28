@@ -188,6 +188,21 @@ fn read_theme_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (String,
 /// caller (`ui_rpc::dispatch`) is itself generic over the runtime.
 pub fn theme_css_bundle<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> serde_json::Value {
     let (light_id, dark_id, follow) = read_theme_settings(app);
+    theme_css_bundle_for_settings(app, &light_id, &dark_id, follow)
+}
+
+/// Build the same Editor Kit bundle from the main window's authoritative
+/// in-memory settings. Theme changes use this path instead of re-reading
+/// `settings.json`: the Svelte store updates before its async save completes,
+/// so a disk round-trip here can otherwise return the previous theme forever.
+pub fn theme_css_bundle_for_settings<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    light_id: &str,
+    dark_id: &str,
+    follow_system: bool,
+) -> serde_json::Value {
+    let light_id = sanitize_theme_id(Some(light_id));
+    let dark_id = sanitize_theme_id(Some(dark_id));
     let load = |id: &str| -> String {
         let css = compiled_path(app, id)
             .ok()
@@ -195,7 +210,7 @@ pub fn theme_css_bundle<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> serde_j
             .unwrap_or_default();
         unscope_theme_css(&css, id)
     };
-    theme_bundle_json(&load(&light_id), &load(&dark_id), follow)
+    theme_bundle_json(&load(&light_id), &load(&dark_id), follow_system)
 }
 
 /// Drop the `[data-theme="<id>"] ` disambiguator from every compiled selector,

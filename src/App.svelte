@@ -295,11 +295,14 @@
         let followAssigned: boolean | null = null
 
         // Plugin windows are isolated webviews: they never see the style slots
-        // above, so an editor.kit plugin re-fetches host.theme.css on this
-        // push. Fire-and-forget — it touches no reactive state, so it is safe
-        // to call from inside the $effect below.
-        function notifyPluginWindows() {
-          void invoke('plugin_v2_theme_changed').catch(() => {})
+        // above. Carry the current in-memory ids in the push so they cannot
+        // race settings.json persistence and re-apply the previous theme.
+        function notifyPluginWindows(t: typeof settings.theme) {
+          void invoke('plugin_v2_theme_changed', {
+            lightId: t.light,
+            darkId: t.dark,
+            followSystem: t.followSystem,
+          }).catch(() => {})
         }
 
         async function syncSlots() {
@@ -323,7 +326,7 @@
           }
           setActiveTheme(computeActiveThemeId(t, systemDark))
           // One push per actual change (not per changed slot).
-          if (changed) notifyPluginWindows()
+          if (changed) notifyPluginWindows(t)
         }
 
         const stopSystem = observePrefersColorScheme((dark) => {
