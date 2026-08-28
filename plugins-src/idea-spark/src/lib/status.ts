@@ -31,7 +31,7 @@ export function deriveStatus(
 
 /**
  * Filters a directory listing down to ordinary files whose names match the
- * plugin's strict `*.idea.md` contract. Other Markdown and proof sidecars are
+ * plugin's strict `*-idea.md` contract. Other Markdown and proof sidecars are
  * documents in the same directory, but they aren't ideas.
  * Sorted newest-first — idea filenames are `YYYY-MM-DD-...`, so a plain
  * descending string sort puts the newest date first.

@@ -270,7 +270,7 @@ export function fileNames(s: SparkStore): string[] {
 
 /**
  * The file name a save should write to: the one this idea already occupies, or
- * — for an idea that has never been saved — `YYYY-MM-DD-HHmm.idea.md` (the
+ * — for an idea that has never been saved — `YYYY-MM-DD-HHmm-idea.md` (the
  * creation moment, see `timestampFileName`) deduplicated against *every* file
  * in the directory (an orphaned `.proof.md` occupies a name just as much as
  * an idea does).
@@ -407,7 +407,7 @@ export function bodyOf(md: string): string {
   return splitFrontmatter(md)[1].replace(/^\n+/, '')
 }
 
-/** `2026-08-04-my-idea.idea.md` → `my-idea` — the history list's label. */
+/** `2026-08-04-my-topic-idea.md` → `my-topic` — the history list's label. */
 export function displayName(name: string): string {
   const base = name.endsWith(IDEA_FILE_SUFFIX)
     ? name.slice(0, -IDEA_FILE_SUFFIX.length)
@@ -434,7 +434,7 @@ export function frontmatterOf(md: string): string | null {
  * name.
  *
  * The file name alone is not a usable label any more: names are creation
- * timestamps (`2026-08-04-1942.idea.md`), so a list of them says nothing about
+ * timestamps (`2026-08-04-1942-idea.md`), so a list of them says nothing about
  * what any of the ideas *are*. `md` is the whole document as read from disk;
  * frontmatter is skipped by `titleFromMarkdown` itself.
  *
@@ -529,7 +529,7 @@ export function filesToDelete(s: SparkStore, name: string): string[] {
 /**
  * Validates a user-typed rename and resolves it to a file name.
  *
- * `.idea.md` is appended when the user left it off; a trailing plain `.md` is
+ * `-idea.md` is appended when the user left it off; a trailing plain `.md` is
  * replaced with it. Refused: blank, a path separator (this renames a file; it
  * does not move it out of the idea directory), a leading dot (hidden files,
  * including `..`), and — all four collapsed into `taken`, because from the user's side
@@ -543,8 +543,8 @@ export function filesToDelete(s: SparkStore, name: string): string[] {
  *   4. a name whose own sidecar slot (`<name>.proof.md`) is already occupied.
  *
  * 2 and 3 are not pedantry: neither is an available idea name. 4 is the mirror
- * image: an orphaned `b.idea.proof.md` would make a freshly renamed
- * `b.idea.md` claim a `done` badge and an "open the argument" item pointing at
+ * image: an orphaned `b-idea.proof.md` would make a freshly renamed
+ * `b-idea.md` claim a `done` badge and an "open the argument" item pointing at
  * a document that argues something else entirely.
  *
  * Renaming a file to the name it already has is accepted, not refused as
