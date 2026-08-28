@@ -6,6 +6,8 @@
 
 ## 未发布
 
+## v6.828.6 — 2026-08-28
+
 ### 新增
 
 - **可用的 Mermaid 图形家族与样式控制更多了。** 内置引擎新增 Event Modeling、`cynefin-beta`、泳道图和 railroad beta 系列，同时支持环形饼图、更丰富的 XY 图标签/图例、可折叠 flowchart 子图、更多 flowchart 形状以及 ER 子图。

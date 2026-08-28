@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.828.6 — 2026-08-28
+
 ### Added
 
 - **More Mermaid diagram families and styling controls are available.** The bundled engine now includes Event Modeling, `cynefin-beta`, swimlanes and the railroad beta variants, plus donut pies, richer XY chart labels/legends, collapsible flowchart subgraphs, additional flowchart shapes and ER subgraphs.
