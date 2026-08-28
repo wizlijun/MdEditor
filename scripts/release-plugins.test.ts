@@ -147,3 +147,35 @@ describe('agent-owned concurrency settings', () => {
     }
   })
 })
+
+describe('Location Log product identity', () => {
+  const manifest = JSON.parse(
+    readFileSync(join(ROOT, 'plugins-src', 'pos-log', 'manifest.v2.json'), 'utf8'),
+  ) as {
+    id: string
+    name: string
+    contributes: { menus: Array<{ command: string; label: string }> }
+    i18n: Record<string, { name: string; menus: Record<string, string> }>
+  }
+
+  it('keeps the stable plugin id while using one display name per locale', () => {
+    expect(manifest.id).toBe('notemd.pos-log')
+    expect(manifest.name).toBe('Location Log')
+    expect(manifest.contributes.menus).toContainEqual(
+      expect.objectContaining({ command: 'save-now', label: 'Location Log' }),
+    )
+
+    expect(manifest.i18n.zh).toMatchObject({
+      name: '位置记录',
+      menus: { 'save-now': '位置记录' },
+    })
+    expect(manifest.i18n.ja).toMatchObject({
+      name: '位置記録',
+      menus: { 'save-now': '位置記録' },
+    })
+    expect(manifest.i18n.de).toMatchObject({
+      name: 'Standortprotokoll',
+      menus: { 'save-now': 'Standortprotokoll' },
+    })
+  })
+})

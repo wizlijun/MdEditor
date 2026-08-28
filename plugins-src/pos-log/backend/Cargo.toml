@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2021"
 
 # pos-log v2 backend: a resident background plugin (no idle shutdown). Every
-# 30 min (and on demand via the "Save Location Now" command) it asks the HOST
+# 30 min (and on demand via the "Location Log" command) it asks the HOST
 # for a location fix via `host.location.get` — the host does CoreLocation on
 # its main thread because a bare plugin binary can't get macOS location
 # authorization. All vault IO goes through Host::request → host.vault.*.

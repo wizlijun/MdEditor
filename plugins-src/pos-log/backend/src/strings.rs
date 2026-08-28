@@ -51,25 +51,25 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
     use Key::*;
     use Locale::*;
     match (locale, key) {
-        (En, LocationUnavailable) => "Position Log couldn't get your location",
-        (Zh, LocationUnavailable) => "Position Log 无法获取位置",
-        (Ja, LocationUnavailable) => "Position Log は位置情報を取得できませんでした",
-        (De, LocationUnavailable) => "Position Log konnte deinen Standort nicht ermitteln",
+        (En, LocationUnavailable) => "Location Log couldn't get your location",
+        (Zh, LocationUnavailable) => "位置记录无法获取位置",
+        (Ja, LocationUnavailable) => "位置記録は位置情報を取得できませんでした",
+        (De, LocationUnavailable) => "Standortprotokoll konnte deinen Standort nicht ermitteln",
 
-        (En, EmptyGeocode) => "Position Log got no usable address for this location",
-        (Zh, EmptyGeocode) => "Position Log 未能解析出有效地址",
-        (Ja, EmptyGeocode) => "Position Log は有効な住所を取得できませんでした",
-        (De, EmptyGeocode) => "Position Log konnte keine verwertbare Adresse ermitteln",
+        (En, EmptyGeocode) => "Location Log got no usable address for this location",
+        (Zh, EmptyGeocode) => "位置记录未能解析出有效地址",
+        (Ja, EmptyGeocode) => "位置記録は有効な住所を取得できませんでした",
+        (De, EmptyGeocode) => "Standortprotokoll konnte keine verwertbare Adresse ermitteln",
 
-        (En, VaultRequired) => "Position Log needs a vault configured",
-        (Zh, VaultRequired) => "Position Log 需要已配置的 vault",
-        (Ja, VaultRequired) => "Position Log には vault の設定が必要です",
-        (De, VaultRequired) => "Position Log benötigt einen konfigurierten Tresor",
+        (En, VaultRequired) => "Location Log needs a vault configured",
+        (Zh, VaultRequired) => "位置记录需要已配置的 vault",
+        (Ja, VaultRequired) => "位置記録には vault の設定が必要です",
+        (De, VaultRequired) => "Standortprotokoll benötigt einen konfigurierten Tresor",
 
-        (En, SaveFailed) => "Position Log couldn't save your location",
-        (Zh, SaveFailed) => "Position Log 保存位置失败",
-        (Ja, SaveFailed) => "Position Log は位置情報を保存できませんでした",
-        (De, SaveFailed) => "Position Log konnte deinen Standort nicht speichern",
+        (En, SaveFailed) => "Location Log couldn't save your location",
+        (Zh, SaveFailed) => "位置记录保存位置失败",
+        (Ja, SaveFailed) => "位置記録は位置情報を保存できませんでした",
+        (De, SaveFailed) => "Standortprotokoll konnte deinen Standort nicht speichern",
     }
 }
 
@@ -142,6 +142,14 @@ mod tests {
                 assert_ne!(t(locale, key), en, "{locale:?}/{key:?} left in English");
             }
         }
+    }
+
+    #[test]
+    fn catalogs_use_the_current_product_name() {
+        assert!(t(Locale::En, Key::SaveFailed).starts_with("Location Log"));
+        assert!(t(Locale::Zh, Key::SaveFailed).starts_with("位置记录"));
+        assert!(t(Locale::Ja, Key::SaveFailed).starts_with("位置記録"));
+        assert!(t(Locale::De, Key::SaveFailed).starts_with("Standortprotokoll"));
     }
 
     #[test]

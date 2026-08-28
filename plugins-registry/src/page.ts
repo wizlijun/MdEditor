@@ -178,7 +178,7 @@ var ENTRY_MAP={
  'notemd.idea-spark':{en:'<b>Plugins</b> → <b>Capture</b> → Idea Spark',zh:'「<b>插件</b>」→「<b>记录</b>」→ 奇思妙想'},
  'notemd.ebook-import':{en:'<b>Plugins</b> → <b>Reading</b> → Import Ebooks… (also CLI <code>notemd ebook</code>)',zh:'「<b>插件</b>」→「<b>阅读</b>」→ 导入电子书…（也支持 CLI <code>notemd ebook</code>）'},
  'notemd.roam-import':{en:'<b>Plugins</b> → <b>Import & Export</b> → Import from Roam Research…',zh:'「<b>插件</b>」→「<b>导入与导出</b>」→ 从 Roam Research 导入…'},
- 'notemd.pos-log':{en:'<b>Plugins</b> → <b>Capture</b> → Save Location Now',zh:'「<b>插件</b>」→「<b>记录</b>」→ 立即保存位置'},
+ 'notemd.pos-log':{en:'<b>Plugins</b> → <b>Capture</b> → Location Log',zh:'「<b>插件</b>」→「<b>记录</b>」→ 位置记录'},
  'notemd.trace-source':{en:'<b>Plugins</b> → <b>Capture</b> → Trace Source',zh:'「<b>插件</b>」→「<b>记录</b>」→ 溯源'},
  'notemd.decision-log':{en:'<b>Plugins</b> → <b>Thinking</b> → Decision Log',zh:'「<b>插件</b>」→「<b>思考</b>」→ 决策日志'},
  'notemd.weekly-review':{en:'<b>Plugins</b> → <b>Thinking</b> → Weekly Review',zh:'「<b>插件</b>」→「<b>思考</b>」→ 周检视'},

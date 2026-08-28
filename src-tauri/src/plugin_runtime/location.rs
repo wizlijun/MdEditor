@@ -40,7 +40,7 @@ pub fn fetch_once<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> Result<Value
     Err("location is only supported on macOS".into())
 }
 
-/// No-op: the request is made on demand (Save Location Now / the 30-min round);
+/// No-op: the request is made on demand (Location Log / the 30-min round);
 /// since it runs in-process as note.md.app, an authorized user needs no prompt.
 pub fn init_at_startup<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) {}
 

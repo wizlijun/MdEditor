@@ -51,8 +51,8 @@
   <!-- pos-log 插件：定位权限归因到宿主 app（插件进程 = 责任进程 note.md）。
        两个 key 都放以覆盖 macOS 版本差异。 -->
   <key>NSLocationUsageDescription</key>
-  <string>note.md records your location to your vault when the Position Log plugin is enabled.</string>
+  <string>note.md records your location to your vault when the Location Log plugin is enabled.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>note.md records your location to your vault when the Position Log plugin is enabled.</string>
+  <string>note.md records your location to your vault when the Location Log plugin is enabled.</string>
 </dict>
 </plist>

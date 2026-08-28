@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Position Log is now Location Log.** The plugin name and its Capture menu item now use one concise name in every supported language. Existing installs upgrade in place because the internal plugin ID remains `notemd.pos-log`.
+
+### Fixed
+
+- **The native Plugins menu now displays `Import & Export` with its ampersand intact.** The menu backend's mnemonic marker is escaped before building the category submenu.
+
 ## v6.828.3 — 2026-08-28
 
 ### Changed

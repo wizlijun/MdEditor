@@ -1304,7 +1304,7 @@ pub fn run() {
             #[cfg(not(target_os = "ios"))]
             plugin_runtime::init(&app.handle());
             // Request location authorization at launch (macOS): the prompt then
-            // appears reliably, and the Position Log plugin can use it afterwards.
+            // appears reliably, and the Location Log plugin can use it afterwards.
             #[cfg(not(target_os = "ios"))]
             plugin_runtime::location::init_at_startup(&app.handle());
 
@@ -1835,6 +1835,13 @@ fn menu_label(locale: &str, key: &str) -> String {
     .to_string()
 }
 
+/// Tauri/muda treats `&` as a cross-platform mnemonic marker. Product copy
+/// does not declare mnemonics, so double it when handing a literal label to a
+/// native menu builder; the platform layer renders `&&` as one visible `&`.
+fn native_menu_literal(label: &str) -> String {
+    label.replace('&', "&&")
+}
+
 /// Best-effort read of the persisted UI locale from the store file so the
 /// native menu can be built in the right language at startup. Falls back to
 /// English if the file is missing/unreadable or the value is unknown.
@@ -2301,7 +2308,8 @@ fn build_menu<R: tauri::Runtime>(
                     "editing" => "plugins.group.editing",
                     _ => "plugins.group.other",
                 };
-                let mut gb = SubmenuBuilder::new(app, menu_label(locale, label_key));
+                let group_label = native_menu_literal(&menu_label(locale, label_key));
+                let mut gb = SubmenuBuilder::new(app, group_label);
                 for it in group.items {
                     let mut mb = MenuItemBuilder::with_id(&it.id, &it.label);
                     if let Some(s) = &it.shortcut { mb = mb.accelerator(s); }
@@ -2346,6 +2354,12 @@ mod menu_label_tests {
             menu_label("de", "plugins.group.importExport"),
             "Importieren und Exportieren",
         );
+    }
+
+    #[test]
+    fn native_menu_literals_escape_ampersands_from_mnemonic_parsing() {
+        assert_eq!(super::native_menu_literal("Import & Export"), "Import && Export");
+        assert_eq!(super::native_menu_literal("Reading"), "Reading");
     }
 
     /// An unknown key falls back to the key itself, so a missing catalog entry

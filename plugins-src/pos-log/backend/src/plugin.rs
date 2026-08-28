@@ -67,7 +67,7 @@ impl sdk::NotemdPlugin for PosLogPlugin {
         params: &proto::ExecuteCommandParams,
     ) -> Result<Value, String> {
         match params.command.as_str() {
-            // Plugins ▸ "Save Location Now" — fire a single fetch+write cycle
+            // Plugins ▸ Capture ▸ "Location Log" — fire a single fetch+write cycle
             // off the tokio runtime and return immediately (the toast reports
             // the outcome). Reuses the same round the 30-min loop runs.
             "save-now" => {
@@ -85,7 +85,7 @@ impl sdk::NotemdPlugin for PosLogPlugin {
 }
 
 /// 一轮：取位（host.location.get）→ 组行 → 决策 → 写盘。所有失败仅告警跳过
-/// （spec §8 错误表）。`announce`=true（手动「Save Location Now」）总是弹 toast
+/// （spec §8 错误表）。`announce`=true（手动「Location Log」）总是弹 toast
 /// 反馈结果；=false（30 分钟循环）沿用 `warned_once` 抑制重复告警。`locale`
 /// selects the toast wording (captured from `$initialize` — see `PosLogPlugin`).
 async fn run_round(host: &sdk::Host, locale: Locale, warned_once: &mut bool, announce: bool) {

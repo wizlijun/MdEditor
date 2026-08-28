@@ -147,6 +147,8 @@ describe('GET / (landing page)', () => {
     expect(body).toContain('Capture')
     expect(body).toContain('Reading')
     expect(body).toContain('Import & Export')
+    expect(body).toContain('Location Log')
+    expect(body).toContain('位置记录')
     expect(body).toContain("'capture-import':'capture'")
     expect(body).toContain('groupPlugins')
   })
