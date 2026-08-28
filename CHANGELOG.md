@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.828.4 — 2026-08-28
+
 ### Changed
 
 - **Position Log is now Location Log.** The plugin name and its Capture menu item now use one concise name in every supported language. Existing installs upgrade in place because the internal plugin ID remains `notemd.pos-log`.
