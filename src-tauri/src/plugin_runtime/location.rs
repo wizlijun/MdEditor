@@ -18,6 +18,19 @@
 
 use serde_json::Value;
 
+/// `kCLErrorDenied` / `CLError::Denied` raw value.
+const CL_ERROR_DENIED_CODE: isize = 1;
+const LOCATION_DENIED_ERROR: &str =
+    "location: denied — enable note.md in System Settings ▸ Privacy & Security ▸ Location Services";
+
+fn core_location_failure(code: isize, description: &str) -> String {
+    if code == CL_ERROR_DENIED_CODE {
+        LOCATION_DENIED_ERROR.into()
+    } else {
+        format!("location: didFailWithError code={code} {description}")
+    }
+}
+
 /// Blocking one-shot location read → `{country, province, city, poi, latitude, longitude}`.
 #[cfg(target_os = "macos")]
 pub fn fetch_once<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> Result<Value, String> {
@@ -114,13 +127,10 @@ mod mac {
 
             #[unsafe(method(locationManager:didFailWithError:))]
             unsafe fn did_fail(&self, _manager: &CLLocationManager, error: &NSError) {
+                let description = error.localizedDescription().to_string();
                 set_result(
                     &self.ivars().slot,
-                    Err(format!(
-                        "location: didFailWithError code={} {}",
-                        error.code(),
-                        error.localizedDescription()
-                    )),
+                    Err(super::core_location_failure(error.code(), &description)),
                 );
             }
 
@@ -130,7 +140,7 @@ mod mac {
                 match status {
                     CLAuthorizationStatus::Denied | CLAuthorizationStatus::Restricted => set_result(
                         &self.ivars().slot,
-                        Err("location: denied — enable note.md in System Settings ▸ Privacy & Security ▸ Location Services".into()),
+                        Err(super::LOCATION_DENIED_ERROR.into()),
                     ),
                     CLAuthorizationStatus::AuthorizedAlways
                     | CLAuthorizationStatus::AuthorizedWhenInUse => unsafe {
@@ -160,7 +170,7 @@ mod mac {
             match manager.authorizationStatus() {
                 CLAuthorizationStatus::Denied | CLAuthorizationStatus::Restricted => set_result(
                     &slot,
-                    Err("location: denied — enable note.md in System Settings ▸ Privacy & Security ▸ Location Services".into()),
+                    Err(super::LOCATION_DENIED_ERROR.into()),
                 ),
                 CLAuthorizationStatus::NotDetermined => {
                     // Fresh user: request (best effort) AND start — an authorized
@@ -232,5 +242,40 @@ mod mac {
             unsafe { (*error).localizedDescription() }.to_string()
         };
         Err(format!("location: reverse geocode failed: {msg}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn denied_core_location_error_is_actionable() {
+        assert_eq!(
+            core_location_failure(1, "kCLErrorDomain error 1"),
+            LOCATION_DENIED_ERROR
+        );
+    }
+
+    #[test]
+    fn other_core_location_errors_keep_diagnostics() {
+        assert_eq!(
+            core_location_failure(2, "network unavailable"),
+            "location: didFailWithError code=2 network unavailable"
+        );
+    }
+
+    #[test]
+    fn mac_bundle_config_includes_location_entitlement() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        assert_eq!(
+            config["bundle"]["macOS"]["entitlements"],
+            "Entitlements.plist"
+        );
+
+        let entitlements = include_str!("../../Entitlements.plist");
+        assert!(entitlements
+            .contains("<key>com.apple.security.personal-information.location</key>\n  <true/>"));
     }
 }

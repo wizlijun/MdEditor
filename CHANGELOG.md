@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Location Log can request macOS location access and explains permission failures clearly.** Signed builds now carry the Location entitlement required for the system authorization prompt. If access is disabled, the warning names the exact System Settings path instead of exposing only a `kCLErrorDomain code=1` error.
+
 ## v6.828.6 — 2026-08-28
 
 ### Added

@@ -73,6 +73,25 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
     }
 }
 
+/// Main toast text for a failed `host.location.get` call. Permission failures
+/// must be actionable without expanding the technical detail; other failures
+/// retain the existing generic message and keep diagnostics in toast detail.
+pub fn location_unavailable(locale: Locale, error: &str) -> &'static str {
+    let denied = error.contains("location: denied")
+        || error.contains("didFailWithError code=1 ")
+        || error.contains("kCLErrorDomain error 1.)");
+    if !denied {
+        return t(locale, Key::LocationUnavailable);
+    }
+
+    match locale {
+        Locale::En => "Location Log needs location access. Enable note.md in System Settings → Privacy & Security → Location Services.",
+        Locale::Zh => "位置记录需要定位权限，请在「系统设置」→「隐私与安全性」→「定位服务」中开启 note.md",
+        Locale::Ja => "位置記録には位置情報へのアクセスが必要です。「システム設定」→「プライバシーとセキュリティ」→「位置情報サービス」で note.md を有効にしてください",
+        Locale::De => "Das Standortprotokoll benötigt Standortzugriff. Aktiviere note.md unter Systemeinstellungen → Datenschutz & Sicherheit → Ortungsdienste.",
+    }
+}
+
 /// "Recorded {addr}" — a new line was appended (announce-only feedback).
 pub fn recorded(locale: Locale, addr: &str) -> String {
     match locale {
@@ -150,6 +169,33 @@ mod tests {
         assert!(t(Locale::Zh, Key::SaveFailed).starts_with("位置记录"));
         assert!(t(Locale::Ja, Key::SaveFailed).starts_with("位置記録"));
         assert!(t(Locale::De, Key::SaveFailed).starts_with("Standortprotokoll"));
+    }
+
+    #[test]
+    fn permission_denied_is_actionable_in_every_locale() {
+        let stable = "-32000: location: denied — enable note.md in System Settings";
+        let legacy = "-32000: location: didFailWithError code=1 kCLErrorDomain error 1";
+
+        for &locale in &LOCALES {
+            let stable_message = location_unavailable(locale, stable);
+            let legacy_message = location_unavailable(locale, legacy);
+            assert_eq!(stable_message, legacy_message, "{locale:?}");
+            assert!(
+                stable_message.contains("note.md"),
+                "{locale:?}: {stable_message}"
+            );
+            assert_ne!(stable_message, t(locale, Key::LocationUnavailable));
+        }
+    }
+
+    #[test]
+    fn non_permission_location_errors_keep_the_generic_message() {
+        for &locale in &LOCALES {
+            assert_eq!(
+                location_unavailable(locale, "-32000: location: didFailWithError code=2 network"),
+                t(locale, Key::LocationUnavailable)
+            );
+        }
     }
 
     #[test]

@@ -106,7 +106,7 @@ async fn run_round(host: &sdk::Host, locale: Locale, warned_once: &mut bool, ann
         }
         Err(e) => {
             if announce || !*warned_once {
-                host.toast("warning", strings::t(locale, strings::Key::LocationUnavailable), Some(&e));
+                host.toast("warning", strings::location_unavailable(locale, &e), Some(&e));
                 *warned_once = true;
             }
             host.log_warn(&format!("pos-log: host.location.get failed: {e}"));
@@ -255,5 +255,54 @@ mod tests {
         let resp = format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"ok":true}}}}"#);
         host_w.write_all(resp.as_bytes()).await.unwrap();
         host_w.write_all(b"\n").await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn denied_location_toast_explains_how_to_enable_access() {
+        let (host_side, plugin_side) = tokio::io::duplex(64 * 1024);
+        let (plug_r, plug_w) = tokio::io::split(plugin_side);
+        tokio::spawn(sdk::serve_io(PosLogPlugin::new(), plug_r, plug_w));
+
+        let (host_r, mut host_w) = tokio::io::split(host_side);
+        let mut lines = BufReader::new(host_r).lines();
+        host_w.write_all(br#"{"jsonrpc":"2.0","id":1,"method":"$initialize","params":{"protocol_version":2,"host_version":"6.828.6","locale":"zh-CN","theme":"light","plugin_root":"/tmp/plugin","data_dir":"/tmp/data"}}"#).await.unwrap();
+        host_w.write_all(b"\n").await.unwrap();
+        host_w.write_all(br#"{"jsonrpc":"2.0","id":2,"method":"$activate","params":{"event":"onStartupFinished"}}"#).await.unwrap();
+        host_w.write_all(b"\n").await.unwrap();
+
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+        loop {
+            let line = tokio::time::timeout_at(deadline, lines.next_line())
+                .await
+                .expect("timed out waiting for location warning")
+                .unwrap()
+                .expect("pipe closed");
+            let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+            match v["method"].as_str() {
+                Some("host.location.get") => {
+                    let id = v["id"].as_u64().unwrap();
+                    let resp = format!(
+                        r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":-32000,"message":"location: denied — enable note.md in System Settings"}}}}"#
+                    );
+                    host_w.write_all(resp.as_bytes()).await.unwrap();
+                    host_w.write_all(b"\n").await.unwrap();
+                }
+                Some("host.toast") => {
+                    let message = v["params"]["message"].as_str().unwrap();
+                    assert!(message.contains("定位权限"), "message: {message}");
+                    assert!(message.contains("系统设置"), "message: {message}");
+                    assert!(message.contains("note.md"), "message: {message}");
+                    assert_eq!(
+                        v["params"]["detail"],
+                        "-32000: location: denied — enable note.md in System Settings"
+                    );
+                    break;
+                }
+                Some(method) if method.starts_with("host.vault.") => {
+                    panic!("permission failure must not touch vault: {method}")
+                }
+                _ => {}
+            }
+        }
     }
 }
