@@ -7,6 +7,12 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Rich editors in Idea Spark and Trace Source now follow theme fonts immediately.** Open plugin windows no longer race the settings save and briefly keep the previous theme, while Effie's bundled LXGW webfont is allowed through the plugin sandbox's narrowly scoped font policy instead of silently falling back to a system font. The fix comes with the note.md app; no separate plugin update is required.
+
+- **Idea Spark recognizes the existing `*-idea.md` filename convention again.** The inbox now lists only ordinary files with that exact lowercase suffix; new and renamed ideas use the same suffix, while proof documents, other Markdown files, directories and `.idea.md` names stay out of the list.
+
 ## v6.828.4 — 2026-08-28
 
 ### Changed

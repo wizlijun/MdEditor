@@ -292,8 +292,8 @@ describe('nextFileName', () => {
   it('names a first save by the creation timestamp, deduped against the directory', () => {
     const s = createStore()
     const at = new Date(2026, 7, 4, 19, 42).toISOString()
-    s.files = ['inbox/ideas/2026-08-04-1942.idea.md']
-    expect(nextFileName(s, '# my idea\n\nbody', at)).toBe('2026-08-04-1942-2.idea.md')
+    s.files = ['inbox/ideas/2026-08-04-1942-idea.md']
+    expect(nextFileName(s, '# my idea\n\nbody', at)).toBe('2026-08-04-1942-2-idea.md')
   })
 
   it('dedupes against non-idea files in the directory too', () => {
@@ -301,21 +301,21 @@ describe('nextFileName', () => {
     const at = new Date(2026, 7, 4, 19, 42).toISOString()
     // An orphaned sidecar from a *different* minute does not occupy this
     // minute's name...
-    s.files = ['inbox/ideas/2026-08-04-1941.idea.proof.md']
-    expect(nextFileName(s, '# a', at)).toBe('2026-08-04-1942.idea.md')
+    s.files = ['inbox/ideas/2026-08-04-1941-idea.proof.md']
+    expect(nextFileName(s, '# a', at)).toBe('2026-08-04-1942-idea.md')
     // ...but an orphaned sidecar occupying this minute's proof slot does.
-    s.files = ['inbox/ideas/2026-08-04-1942.idea.proof.md']
-    expect(nextFileName(s, '# a', at)).toBe('2026-08-04-1942-2.idea.md')
+    s.files = ['inbox/ideas/2026-08-04-1942-idea.proof.md']
+    expect(nextFileName(s, '# a', at)).toBe('2026-08-04-1942-2-idea.md')
   })
 
   it('names a never-saved idea by timestamp and keeps the name afterwards', () => {
     const s = createStore()
     s.ideaDir = 'inbox/ideas'
     const at = new Date(2026, 7, 4, 19, 42).toISOString()
-    expect(nextFileName(s, '# 随便什么标题', at)).toBe('2026-08-04-1942.idea.md')
-    s.current = '2026-08-04-1942.idea.md'
+    expect(nextFileName(s, '# 随便什么标题', at)).toBe('2026-08-04-1942-idea.md')
+    s.current = '2026-08-04-1942-idea.md'
     expect(nextFileName(s, '# 改了标题', new Date(2026, 7, 5, 8, 0).toISOString())).toBe(
-      '2026-08-04-1942.idea.md',
+      '2026-08-04-1942-idea.md',
     )
   })
 })
@@ -545,11 +545,11 @@ describe('frontmatterOf', () => {
 
 describe('displayName', () => {
   it('drops the date prefix and the extension', () => {
-    expect(displayName('2026-08-04-my-idea.idea.md')).toBe('my-idea')
+    expect(displayName('2026-08-04-my-topic-idea.md')).toBe('my-topic')
   })
 
   it('keeps a name that has no date prefix', () => {
-    expect(displayName('my-idea.idea.md')).toBe('my-idea')
+    expect(displayName('my-topic-idea.md')).toBe('my-topic')
   })
 
   it('keeps the date when it is all there is', () => {
@@ -579,27 +579,27 @@ describe('filesToDelete', () => {
 describe('validateRename', () => {
   const s = createStore()
   s.ideaDir = 'inbox/ideas'
-  s.files = ['inbox/ideas/a.idea.md', 'inbox/ideas/taken.idea.md']
+  s.files = ['inbox/ideas/a-idea.md', 'inbox/ideas/taken-idea.md']
 
-  it('normalizes a free name to the .idea.md suffix', () => {
-    expect(validateRename(s, 'a.idea.md', '新名字')).toEqual({ ok: true, name: '新名字.idea.md' })
-    expect(validateRename(s, 'a.idea.md', '新名字.md')).toEqual({ ok: true, name: '新名字.idea.md' })
-    expect(validateRename(s, 'a.idea.md', '新名字.idea.md')).toEqual({ ok: true, name: '新名字.idea.md' })
+  it('normalizes a free name to the -idea.md suffix', () => {
+    expect(validateRename(s, 'a-idea.md', '新名字')).toEqual({ ok: true, name: '新名字-idea.md' })
+    expect(validateRename(s, 'a-idea.md', '新名字.md')).toEqual({ ok: true, name: '新名字-idea.md' })
+    expect(validateRename(s, 'a-idea.md', '新名字-idea.md')).toEqual({ ok: true, name: '新名字-idea.md' })
   })
 
   it('renaming to its own name is fine', () => {
-    expect(validateRename(s, 'a.idea.md', 'a')).toEqual({ ok: true, name: 'a.idea.md' })
+    expect(validateRename(s, 'a-idea.md', 'a')).toEqual({ ok: true, name: 'a-idea.md' })
   })
 
   it('trims the surrounding whitespace before judging the name', () => {
-    expect(validateRename(s, 'a.idea.md', '  spaced  ')).toEqual({ ok: true, name: 'spaced.idea.md' })
+    expect(validateRename(s, 'a-idea.md', '  spaced  ')).toEqual({ ok: true, name: 'spaced-idea.md' })
   })
 
   it('rejects empty, slashes, leading dots and taken names', () => {
     expect(validateRename(s, 'a.md', '   ')).toEqual({ ok: false, reason: 'empty' })
     expect(validateRename(s, 'a.md', 'x/y')).toEqual({ ok: false, reason: 'slash' })
     expect(validateRename(s, 'a.md', '.hidden')).toEqual({ ok: false, reason: 'dot' })
-    expect(validateRename(s, 'a.idea.md', 'taken')).toEqual({ ok: false, reason: 'taken' })
+    expect(validateRename(s, 'a-idea.md', 'taken')).toEqual({ ok: false, reason: 'taken' })
   })
 
   it("treats an existing sidecar's own name as taken too", () => {
@@ -609,7 +609,7 @@ describe('validateRename', () => {
     expect(validateRename(withProof, 'a.md', 'b.proof')).toEqual({ ok: false, reason: 'taken' })
   })
 
-  // `listIdeas` only admits `*.idea.md` (a proof sidecar describes an idea, it
+  // `listIdeas` only admits `*-idea.md` (a proof sidecar describes an idea, it
   // isn't one), so an idea allowed to take `.proof.md` would vanish
   // from the inbox the moment it was renamed: still on disk, no error, no row
   // left to undo it from — and, if it was the open document, autosave still
@@ -619,15 +619,15 @@ describe('validateRename', () => {
     expect(validateRename(s, 'a.md', raw)).toEqual({ ok: false, reason: 'taken' })
   })
 
-  // The mirror image: `b.idea.md` is free but an orphaned
-  // `b.idea.proof.md` is lying around. Renaming into it would make the idea
+  // The mirror image: `b-idea.md` is free but an orphaned
+  // `b-idea.proof.md` is lying around. Renaming into it would make the idea
   // claim a `done` badge and an "open the argument" item pointing elsewhere.
   it("refuses a name whose sidecar slot is already occupied", () => {
     const orphan = createStore()
     orphan.ideaDir = 'inbox/ideas'
-    orphan.files = ['inbox/ideas/a.idea.md', 'inbox/ideas/b.idea.proof.md']
-    expect(orphan.files).not.toContain('inbox/ideas/b.idea.md') // the name itself is free
-    expect(validateRename(orphan, 'a.idea.md', 'b')).toEqual({ ok: false, reason: 'taken' })
+    orphan.files = ['inbox/ideas/a-idea.md', 'inbox/ideas/b-idea.proof.md']
+    expect(orphan.files).not.toContain('inbox/ideas/b-idea.md') // the name itself is free
+    expect(validateRename(orphan, 'a-idea.md', 'b')).toEqual({ ok: false, reason: 'taken' })
   })
 
   // `index.md` / `log.md` are OKF-reserved structural documents (see
@@ -643,7 +643,7 @@ describe('rowTitle', () => {
   it('reads the H1 out of the body AS WRITTEN — spaces and all', () => {
     // Not `Ship-the-thing`: the row shows the document's title, not the file
     // name that could be derived from it (`slugFromMarkdown`'s job).
-    expect(rowTitle('# Ship the thing\n\nbody', '2026-08-04-1942.idea.md')).toBe('Ship the thing')
+    expect(rowTitle('# Ship the thing\n\nbody', '2026-08-04-1942-idea.md')).toBe('Ship the thing')
   })
 
   it('does not truncate — the 240px column ellipsizes in CSS, which says so', () => {
@@ -652,8 +652,8 @@ describe('rowTitle', () => {
   })
 
   it('falls back to the file name when the body yields no title', () => {
-    expect(rowTitle('', '2026-08-04-1942.idea.md')).toBe('1942')
-    expect(rowTitle('   \n\n', '2026-08-04-1942.idea.md')).toBe('1942')
+    expect(rowTitle('', '2026-08-04-1942-idea.md')).toBe('1942')
+    expect(rowTitle('   \n\n', '2026-08-04-1942-idea.md')).toBe('1942')
   })
 
   it('skips frontmatter rather than titling the row `type: Idea`', () => {
@@ -664,15 +664,15 @@ describe('rowTitle', () => {
 describe('titleOf', () => {
   it('uses the cached title once the body has been read', () => {
     const s = createStore()
-    expect(titleOf(s, '2026-08-04-1942.idea.md')).toBe('1942')
-    s.titles = { '2026-08-04-1942.idea.md': 'Ship-the-thing' }
-    expect(titleOf(s, '2026-08-04-1942.idea.md')).toBe('Ship-the-thing')
+    expect(titleOf(s, '2026-08-04-1942-idea.md')).toBe('1942')
+    s.titles = { '2026-08-04-1942-idea.md': 'Ship-the-thing' }
+    expect(titleOf(s, '2026-08-04-1942-idea.md')).toBe('Ship-the-thing')
   })
 })
 
 describe('createdFromName', () => {
   it('reads the creation minute out of a timestamp name', () => {
-    expect(createdFromName('2026-08-04-1942.idea.md')).toEqual(new Date(2026, 7, 4, 19, 42))
+    expect(createdFromName('2026-08-04-1942-idea.md')).toEqual(new Date(2026, 7, 4, 19, 42))
   })
 
   it('reads a date-only name as local midnight', () => {
@@ -722,19 +722,19 @@ describe('reload', () => {
     state.ideaDir = 'inbox/ideas'
     host.vaultList.mockResolvedValue({
       entries: [
-        { name: 'a.idea.md', is_dir: false },
-        { name: 'a.idea.proof.md', is_dir: false },
+        { name: 'a-idea.md', is_dir: false },
+        { name: 'a-idea.proof.md', is_dir: false },
         { name: 'notes.md', is_dir: false },
-        { name: 'nested.idea.md', is_dir: true },
+        { name: 'nested-idea.md', is_dir: true },
       ],
     })
 
     await reload()
 
-    expect(state.docs).toEqual(['a.idea.md'])
+    expect(state.docs).toEqual(['a-idea.md'])
     expect(state.files).toEqual([
-      'inbox/ideas/a.idea.md',
-      'inbox/ideas/a.idea.proof.md',
+      'inbox/ideas/a-idea.md',
+      'inbox/ideas/a-idea.proof.md',
       'inbox/ideas/notes.md',
     ])
   })
@@ -751,7 +751,7 @@ describe('saveIdea', () => {
 
     let proofChecks = 0
     host.vaultExists.mockImplementation(async (path: string) => ({
-      exists: path.endsWith('.idea.proof.md') && proofChecks++ === 0,
+      exists: path.endsWith('-idea.proof.md') && proofChecks++ === 0,
     }))
 
     const saved = await saveIdea('# New idea')
@@ -760,7 +760,7 @@ describe('saveIdea', () => {
     const secondIdea = checked[2]
 
     expect(checked[1]).toBe(firstIdea.replace(/\.md$/, '.proof.md'))
-    expect(secondIdea).toBe(firstIdea.replace(/\.idea\.md$/, '-2.idea.md'))
+    expect(secondIdea).toBe(firstIdea.replace(/-idea\.md$/, '-2-idea.md'))
     expect(checked[3]).toBe(secondIdea.replace(/\.md$/, '.proof.md'))
     expect(saved).toBe(secondIdea.slice('inbox/ideas/'.length))
     expect(host.vaultWrite).toHaveBeenCalledWith(secondIdea, expect.any(String))
@@ -895,10 +895,10 @@ describe('renameIdea', () => {
     state.booting = false
     state.vaultRoot = '/vault'
     state.ideaDir = 'inbox/ideas'
-    state.files = ['inbox/ideas/a.idea.md', 'inbox/ideas/a.idea.proof.md']
-    state.docs = ['a.idea.md']
-    state.current = 'a.idea.md'
-    state.titles = { 'a.idea.md': 'Ship it' }
+    state.files = ['inbox/ideas/a-idea.md', 'inbox/ideas/a-idea.proof.md']
+    state.docs = ['a-idea.md']
+    state.current = 'a-idea.md'
+    state.titles = { 'a-idea.md': 'Ship it' }
     host.vaultList.mockResolvedValue({ entries: [] })
     host.vaultWrite.mockResolvedValue({ ok: true })
     host.request.mockResolvedValue({})
@@ -918,48 +918,48 @@ describe('renameIdea', () => {
       return { ok: true }
     })
 
-    await renameIdea('a.idea.md', 'b')
+    await renameIdea('a-idea.md', 'b')
 
-    expect(currentDuringSidecar).toBe('b.idea.md')
-    expect(state.current).toBe('b.idea.md')
+    expect(currentDuringSidecar).toBe('b-idea.md')
+    expect(state.current).toBe('b-idea.md')
   })
 
   it('carries the pending run, the failure record and the cached title across', async () => {
-    state.pending = { 'inbox/ideas/a.idea.md': 'run-1' }
-    state.failed = ['inbox/ideas/a.idea.md']
+    state.pending = { 'inbox/ideas/a-idea.md': 'run-1' }
+    state.failed = ['inbox/ideas/a-idea.md']
 
-    await renameIdea('a.idea.md', 'b')
+    await renameIdea('a-idea.md', 'b')
 
-    expect(state.pending).toEqual({ 'inbox/ideas/b.idea.md': 'run-1' })
-    expect(state.failed).toEqual(['inbox/ideas/b.idea.md'])
-    expect(state.titles).toEqual({ 'b.idea.md': 'Ship it' })
+    expect(state.pending).toEqual({ 'inbox/ideas/b-idea.md': 'run-1' })
+    expect(state.failed).toEqual(['inbox/ideas/b-idea.md'])
+    expect(state.titles).toEqual({ 'b-idea.md': 'Ship it' })
   })
 
   it('moves the sidecar with the idea', async () => {
-    await renameIdea('a.idea.md', 'b')
+    await renameIdea('a-idea.md', 'b')
     expect(host.vaultRename.mock.calls).toEqual([
-      ['inbox/ideas/a.idea.md', 'inbox/ideas/b.idea.md'],
-      ['inbox/ideas/a.idea.proof.md', 'inbox/ideas/b.idea.proof.md'],
+      ['inbox/ideas/a-idea.md', 'inbox/ideas/b-idea.md'],
+      ['inbox/ideas/a-idea.proof.md', 'inbox/ideas/b-idea.proof.md'],
     ])
   })
 
   it('changes nothing on disk when the name is refused', async () => {
     // `.proof` would make the row vanish from the inbox; the guard belongs in
     // front of the host call, not after it.
-    expect(await renameIdea('a.idea.md', 'b.proof')).toBe(false)
-    expect(await renameIdea('a.idea.md', '  ')).toBe(false)
-    expect(await renameIdea('a.idea.md', 'x/y')).toBe(false)
+    expect(await renameIdea('a-idea.md', 'b.proof')).toBe(false)
+    expect(await renameIdea('a-idea.md', '  ')).toBe(false)
+    expect(await renameIdea('a-idea.md', 'x/y')).toBe(false)
     expect(host.vaultRename).not.toHaveBeenCalled()
-    expect(state.current).toBe('a.idea.md')
+    expect(state.current).toBe('a-idea.md')
   })
 
   it('leaves everything attached to the old name when the host refuses', async () => {
     host.vaultRename.mockRejectedValue(new Error('io: destination already exists'))
 
-    expect(await renameIdea('a.idea.md', 'b')).toBe(false)
+    expect(await renameIdea('a-idea.md', 'b')).toBe(false)
 
-    expect(state.current).toBe('a.idea.md')
-    expect(state.titles).toEqual({ 'a.idea.md': 'Ship it' })
+    expect(state.current).toBe('a-idea.md')
+    expect(state.titles).toEqual({ 'a-idea.md': 'Ship it' })
     // The sidecar is not moved on its own when the idea did not move.
     expect(host.vaultRename).toHaveBeenCalledTimes(1)
   })

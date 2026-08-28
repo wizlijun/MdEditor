@@ -81,22 +81,39 @@ fn theme_push_targets(
 }
 
 /// Notify every OPEN plugin window that holds `editor.kit` that the user's
-/// theme changed, so the Editor Kit re-fetches `host.theme.css`.
+/// theme changed. The push carries the bundle built from the main window's
+/// in-memory theme ids, so an async settings save cannot make the plugin fetch
+/// the previous values from disk.
 ///
 /// Push (not poll) because a plugin webview is isolated: it sees neither the
 /// main window's <style> slots nor its Tauri events. `push_to_window` is a
 /// no-op for a window that isn't open, so iterating the manifest's contributed
 /// windows is safe — the "already open" filter is implicit.
 #[tauri::command]
-pub fn plugin_v2_theme_changed(app: tauri::AppHandle) {
+pub fn plugin_v2_theme_changed(
+    app: tauri::AppHandle,
+    light_id: String,
+    dark_id: String,
+    follow_system: bool,
+) {
     let targets = match STATE.read() {
         Ok(st) => theme_push_targets(&st.plugins),
         Err(_) => return,
     };
-    let payload = serde_json::json!({ "type": "theme-changed" });
+    let bundle = crate::themes::commands::theme_css_bundle_for_settings(
+        &app,
+        &light_id,
+        &dark_id,
+        follow_system,
+    );
+    let payload = theme_changed_payload(bundle);
     for (pid, wid) in targets {
         super::windows::push_to_window(&app, &pid, &wid, &payload);
     }
+}
+
+fn theme_changed_payload(theme: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "type": "theme-changed", "theme": theme })
 }
 
 // ── Marketplace commands (子项目③ Task 2) ────────────────────────────────
@@ -622,6 +639,18 @@ mod tests {
             ]
         );
         assert!(theme_push_targets(&std::collections::BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn theme_change_push_carries_the_authoritative_bundle() {
+        let theme = serde_json::json!({
+            "light_css": ".moraya-editor { font-family: New; }",
+            "dark_css": ".moraya-editor { font-family: NewDark; }",
+            "follow_system": true
+        });
+        let payload = theme_changed_payload(theme.clone());
+        assert_eq!(payload["type"], "theme-changed");
+        assert_eq!(payload["theme"], theme);
     }
 
     #[test]

@@ -37,54 +37,55 @@ describe('deriveStatus', () => {
 })
 
 describe('listIdeas', () => {
-  it('keeps only files whose names end exactly in .idea.md', () => {
+  it('keeps only files whose names end exactly in -idea.md', () => {
     const entries = [
-      { name: '2026-08-04-a.idea.md', is_dir: false },
-      { name: '2026-08-04-a.md', is_dir: false },
       { name: '2026-08-04-a-idea.md', is_dir: false },
-      { name: '2026-08-04-a.idea.proof.md', is_dir: false },
-      { name: '2026-08-04-a.IDEA.md', is_dir: false },
-      { name: '2026-08-04-a.idea.md.bak', is_dir: false },
+      { name: '2026-08-04-a.md', is_dir: false },
+      { name: '2026-08-04-a.idea.md', is_dir: false },
+      { name: '2026-08-04-a-idea.proof.md', is_dir: false },
+      { name: '2026-08-04-a-IDEA.md', is_dir: false },
+      { name: '2026-08-04-a-idea.MD', is_dir: false },
+      { name: '2026-08-04-a-idea.md.bak', is_dir: false },
     ]
-    expect(listIdeas(entries)).toEqual(['2026-08-04-a.idea.md'])
+    expect(listIdeas(entries)).toEqual(['2026-08-04-a-idea.md'])
   })
 
   it('excludes directory entries', () => {
     const entries = [
-      { name: '2026-08-04-a.idea.md', is_dir: false },
-      { name: 'subdir.idea.md', is_dir: true },
+      { name: '2026-08-04-a-idea.md', is_dir: false },
+      { name: 'subdir-idea.md', is_dir: true },
     ]
-    expect(listIdeas(entries)).toEqual(['2026-08-04-a.idea.md'])
+    expect(listIdeas(entries)).toEqual(['2026-08-04-a-idea.md'])
   })
 
   it('excludes reserved concept names (index.md/log.md)', () => {
     const entries = [
-      { name: '2026-08-04-a.idea.md', is_dir: false },
+      { name: '2026-08-04-a-idea.md', is_dir: false },
       { name: 'index.md', is_dir: false },
       { name: 'log.md', is_dir: false },
     ]
-    expect(listIdeas(entries)).toEqual(['2026-08-04-a.idea.md'])
+    expect(listIdeas(entries)).toEqual(['2026-08-04-a-idea.md'])
   })
 
   it('excludes non-markdown files', () => {
     const entries = [
-      { name: '2026-08-04-a.idea.md', is_dir: false },
+      { name: '2026-08-04-a-idea.md', is_dir: false },
       { name: 'notes.txt', is_dir: false },
       { name: '.DS_Store', is_dir: false },
     ]
-    expect(listIdeas(entries)).toEqual(['2026-08-04-a.idea.md'])
+    expect(listIdeas(entries)).toEqual(['2026-08-04-a-idea.md'])
   })
 
   it('sorts newest date first (descending by name)', () => {
     const entries = [
-      { name: '2026-08-01-old.idea.md', is_dir: false },
-      { name: '2026-08-04-new.idea.md', is_dir: false },
-      { name: '2026-08-02-mid.idea.md', is_dir: false },
+      { name: '2026-08-01-old-idea.md', is_dir: false },
+      { name: '2026-08-04-new-idea.md', is_dir: false },
+      { name: '2026-08-02-mid-idea.md', is_dir: false },
     ]
     expect(listIdeas(entries)).toEqual([
-      '2026-08-04-new.idea.md',
-      '2026-08-02-mid.idea.md',
-      '2026-08-01-old.idea.md',
+      '2026-08-04-new-idea.md',
+      '2026-08-02-mid-idea.md',
+      '2026-08-01-old-idea.md',
     ])
   })
 

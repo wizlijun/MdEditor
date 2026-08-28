@@ -10,7 +10,7 @@
      ## What a row says, and where it comes from
 
      The file name is no longer a label: names are creation timestamps
-     (`2026-08-04-1942.idea.md`), so a column of them tells you nothing about
+     (`2026-08-04-1942-idea.md`), so a column of them tells you nothing about
      what any of the ideas are. The label is therefore read out of the document
      itself — `rowTitle` → the body's H1, its first non-empty line, or the file
      name as a last resort.

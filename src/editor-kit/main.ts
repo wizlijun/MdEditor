@@ -142,8 +142,8 @@ function joinAbsolute(root: string, relDir: string): string {
  */
 export async function mountMarkdownEditor(container: HTMLElement, opts: KitOptions): Promise<KitEditor> {
   injectKitCss()
-  await applyKitTheme()
   watchKitTheme()
+  await applyKitTheme()
 
   // Unconditional: moraya's document base dir is module-global state, so a
   // second mount that omits `baseDir` would silently inherit the previous

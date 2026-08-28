@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { applyKitTheme, watchKitTheme } from './theme'
 
 const onMessage = vi.fn()
+let themeMessage: ((payload: unknown) => void) | null = null
 
 function stubBridge(request: unknown) {
   ;(window as unknown as { notemd: unknown }).notemd = { request, onMessage }
@@ -12,7 +13,11 @@ function stubBridge(request: unknown) {
 
 beforeEach(() => {
   document.querySelectorAll('style[data-kit-theme]').forEach((n) => n.remove())
-  onMessage.mockClear()
+  onMessage.mockReset()
+  themeMessage = null
+  onMessage.mockImplementation((cb: (payload: unknown) => void) => {
+    themeMessage = cb
+  })
 })
 
 describe('applyKitTheme', () => {
@@ -39,10 +44,14 @@ describe('applyKitTheme', () => {
 })
 
 describe('watchKitTheme', () => {
-  it('registers host-push and colour-scheme listeners only once per window', () => {
+  it('keeps an authoritative push that arrives while the initial RPC is pending', async () => {
     // The bridge's onMessage is push-only with no unsubscribe, and the theme
     // slot is window-level state: repeated mounts must not stack listeners.
-    stubBridge(vi.fn().mockResolvedValue({ light_css: '', dark_css: '' }))
+    // A host push carries the authoritative in-memory bundle so the kit never
+    // re-reads an older settings.json while the settings save is in flight.
+    let resolveInitial!: (theme: { light_css: string; dark_css: string }) => void
+    const request = vi.fn().mockReturnValue(new Promise((resolve) => { resolveInitial = resolve }))
+    stubBridge(request)
     const mql = window.matchMedia('(prefers-color-scheme: dark)')
     const addSpy = vi.spyOn(Object.getPrototypeOf(mql), 'addEventListener')
 
@@ -52,6 +61,15 @@ describe('watchKitTheme', () => {
 
     expect(onMessage).toHaveBeenCalledTimes(1)
     expect(addSpy).toHaveBeenCalledTimes(1)
+    const initial = applyKitTheme()
+    themeMessage?.({
+      type: 'theme-changed',
+      theme: { light_css: '.new{}', dark_css: '.new-dark{}', follow_system: false },
+    })
+    resolveInitial({ light_css: '.old{}', dark_css: '' })
+    await initial
+    expect(document.querySelector('style[data-kit-theme]')?.textContent).toBe('.new{}')
+    expect(request).toHaveBeenCalledTimes(1)
     addSpy.mockRestore()
   })
 })

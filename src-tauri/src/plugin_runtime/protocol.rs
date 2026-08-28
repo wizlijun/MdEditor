@@ -77,8 +77,10 @@ pub fn mime_for(path: &Path) -> &'static str {
     }
 }
 
-/// `'self'` under a `plugin://<id>` origin is this plugin only; every remote
-/// load is denied (spec §7.1). `object-src`/`base-uri`/`form-action`/`frame-src`
+/// `'self'` under a `plugin://<id>` origin is this plugin only. The sole remote
+/// exception is the exact, versioned jsDelivr package used by the built-in
+/// Effie theme; it is limited to stylesheet/font fetches, not script, connect,
+/// image or media traffic. `object-src`/`base-uri`/`form-action`/`frame-src`
 /// are locked explicitly: `base-uri` and `form-action` do NOT inherit
 /// `default-src`, so without them a `<form action="https://…">` (or a `<base>`
 /// hijack) would still be a navigation/exfil channel.
@@ -102,7 +104,8 @@ pub fn mime_for(path: &Path) -> &'static str {
 /// `media-src` is spelled out because audio/video would otherwise fall back to
 /// `default-src 'self'` and be blocked just the same.
 pub fn csp_header(_plugin_id: &str) -> String {
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/lxgw-wenkai-lite-webfont@1.7.0/; \
+     font-src 'self' https://cdn.jsdelivr.net/npm/lxgw-wenkai-lite-webfont@1.7.0/; \
      img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; \
      object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
         .to_string()
@@ -625,7 +628,8 @@ mod tests {
     fn csp_exact_string() {
         assert_eq!(
             csp_header("test.plugin"),
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/lxgw-wenkai-lite-webfont@1.7.0/; \
+             font-src 'self' https://cdn.jsdelivr.net/npm/lxgw-wenkai-lite-webfont@1.7.0/; \
              img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; \
              object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
         );
@@ -642,6 +646,16 @@ mod tests {
         let csp = csp_header("test.plugin");
         assert!(csp.contains("img-src 'self' data: blob:"), "{csp}");
         assert!(csp.contains("media-src 'self' blob:"), "{csp}");
+    }
+
+    #[test]
+    fn csp_allows_only_the_bundled_effie_webfont_remote() {
+        let csp = csp_header("test.plugin");
+        let exact = "https://cdn.jsdelivr.net/npm/lxgw-wenkai-lite-webfont@1.7.0/";
+        assert!(csp.contains(&format!("style-src 'self' 'unsafe-inline' {exact};")), "{csp}");
+        assert!(csp.contains(&format!("font-src 'self' {exact};")), "{csp}");
+        assert!(!csp.contains("style-src 'self' 'unsafe-inline' https:;"), "{csp}");
+        assert!(!csp.contains("font-src 'self' https:;"), "{csp}");
     }
 
     // ── handle_parsed ───────────────────────────────────────────────────
