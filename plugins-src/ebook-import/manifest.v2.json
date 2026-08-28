@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.ebook-import",
   "name": "Ebook Import",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "kind": "native",
   "engines": {
     "notemd": ">=6.827.2"
@@ -23,6 +23,7 @@
     "menus": [
       {
         "location": "plugins",
+        "submenu": "capture-import",
         "label": "Import Ebooks (epub/pdf/docx)…",
         "command": "open"
       }

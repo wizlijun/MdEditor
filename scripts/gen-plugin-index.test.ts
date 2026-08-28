@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergeIndexes, compareVersions } from './gen-plugin-index.mjs'
+import { mergeIndexes, compareVersions, pluginCategoryFromManifest } from './gen-plugin-index.mjs'
 
 // Minimal RegistryEntry stand-in: mergeIndexes only keys on id/version and
 // compares entries structurally; every other field rides along opaquely.
@@ -19,6 +19,21 @@ describe('compareVersions', () => {
   it('treats missing components as zero', () => {
     expect(compareVersions('1.0', '1.0.0')).toBe(0)
     expect(compareVersions('1.0.0', '1.0.0')).toBe(0)
+  })
+})
+
+describe('pluginCategoryFromManifest', () => {
+  it('uses the first declared menu capability group', () => {
+    expect(pluginCategoryFromManifest({
+      contributes: { menus: [{ command: 'open', submenu: 'agents' }] },
+    })).toBe('agents')
+  })
+
+  it('falls back to other for missing or unknown groups', () => {
+    expect(pluginCategoryFromManifest({})).toBe('other')
+    expect(pluginCategoryFromManifest({
+      contributes: { menus: [{ command: 'open', submenu: 'future-category' }] },
+    })).toBe('other')
   })
 })
 

@@ -36,6 +36,27 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_ROOT = join(REPO_ROOT, 'dist-plugins')
 const REGISTRY_BASE = 'https://plugins.notemd.net'
+const PLUGIN_CATEGORIES = new Set([
+  'agents',
+  'capture-import',
+  'thinking-review',
+  'publish-export',
+  'editor-extensions',
+])
+
+/**
+ * The primary marketplace category reuses the first menu contribution's
+ * one-level submenu key. The same manifest field drives the native Plugins
+ * menu, so membership cannot drift between surfaces. Unknown/missing values
+ * remain visible under Other.
+ */
+export function pluginCategoryFromManifest(manifest) {
+  const menus = manifest?.contributes?.menus
+  const raw = Array.isArray(menus)
+    ? menus.find((menu) => typeof menu?.submenu === 'string')?.submenu
+    : null
+  return PLUGIN_CATEGORIES.has(raw) ? raw : 'other'
+}
 
 function sha256Hex(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
@@ -90,6 +111,7 @@ function buildEntry(idDirName, version, versionDir) {
     size: Math.max(...sizes),
     sha256,
     name: m.name ?? id,
+    category: pluginCategoryFromManifest(m),
     description: m.description ?? null,
     i18n: m.i18n ?? null,
     icon_url: m.icon_url ?? null,

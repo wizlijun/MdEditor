@@ -205,6 +205,14 @@ export const zh: Record<keyof Messages, string> = {
   'plugins.needsVault': '需先设置 Vault 才能启用此插件',
   'plugins.internalError': '{name}：插件错误',
 
+  // 插件能力分组
+  'pluginCategory.agents': '智能体',
+  'pluginCategory.captureImport': '采集与导入',
+  'pluginCategory.thinkingReview': '思考与复盘',
+  'pluginCategory.publishExport': '发布与导出',
+  'pluginCategory.editorExtensions': '编辑增强',
+  'pluginCategory.other': '其他',
+
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': '插件市场',
   'pluginMarket.refresh': '刷新',

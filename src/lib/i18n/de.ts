@@ -203,6 +203,14 @@ export const de: Record<keyof Messages, string> = {
   'plugins.needsVault': 'Legen Sie zuerst einen Tresor fest, um dieses Plugin zu aktivieren',
   'plugins.internalError': '{name}: Plugin-Fehler',
 
+  // Plugin-Funktionsgruppen
+  'pluginCategory.agents': 'Agenten',
+  'pluginCategory.captureImport': 'Erfassen & Importieren',
+  'pluginCategory.thinkingReview': 'Denken & Reflexion',
+  'pluginCategory.publishExport': 'Veröffentlichen & Exportieren',
+  'pluginCategory.editorExtensions': 'Editor-Erweiterungen',
+  'pluginCategory.other': 'Sonstige',
+
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'Plugin-Markt',
   'pluginMarket.refresh': 'Aktualisieren',

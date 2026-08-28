@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.roam-import",
   "name": "Roam Research Import",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "kind": "native",
   "binary": {
     "aarch64-apple-darwin": "bin/notemd-roam-import",
@@ -24,6 +24,7 @@
     "menus": [
       {
         "location": "file",
+        "submenu": "capture-import",
         "label": "Import from Roam Research…",
         "command": "open"
       }

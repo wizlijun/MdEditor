@@ -54,6 +54,8 @@ h2{font-family:var(--serif);font-size:27px;margin:0 0 14px;font-weight:700}
 .install ol{margin:12px 0 0;padding-left:22px}
 .install li{margin:0 0 8px;color:#33363D}
 .install code{font-family:var(--mono);font-size:.9em;background:#FFF9EE;padding:1px 6px;border-radius:5px}
+.plugin-group{margin:0 0 34px}
+.group-title{font-family:var(--mono);font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#626874;margin:0 0 12px}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px 24px 22px;display:flex;flex-direction:column}
 .card-top{display:flex;align-items:baseline;gap:12px;margin-bottom:10px}
@@ -116,7 +118,7 @@ main{padding:38px 0 16px}
 </section>
 
 <h2 data-t="latest_h">Latest plugins</h2>
-<div class="grid" id="grid">
+<div id="grid">
 <div class="msg" data-t="loading">Loading plugins…</div>
 </div>
 </main>
@@ -141,7 +143,10 @@ en:{
  foot:'Official plugin marketplace',
  entry_lbl:'How to use',host:'Requires note.md ',
  err:"Couldn't load plugins, please retry later.",empty:'No plugins published yet.',
- fallback:'Enable it from the Plugins menu in note.md after install.'
+ fallback:'Enable it from the Plugins menu in note.md after install.',
+ group_agents:'Agents',group_capture_import:'Capture & Import',
+ group_thinking_review:'Thinking & Review',group_publish_export:'Publish & Export',
+ group_editor_extensions:'Editor Extensions',group_other:'Other'
 },
 zh:{
  nav_home:'note.md 主站',nav_plugins:'插件',nav_download:'下载',
@@ -155,7 +160,10 @@ zh:{
  foot:'官方插件市场',
  entry_lbl:'使用入口',host:'需要 note.md ',
  err:'暂时无法加载插件列表，请稍后重试。',empty:'暂无已上架插件。',
- fallback:'安装后在 note.md 的「插件」菜单中启用。'
+ fallback:'安装后在 note.md 的「插件」菜单中启用。',
+ group_agents:'智能体',group_capture_import:'采集与导入',
+ group_thinking_review:'思考与复盘',group_publish_export:'发布与导出',
+ group_editor_extensions:'编辑增强',group_other:'其他'
 }};
 // Per-plugin entry, from each manifest's contributes.menus.location.
 // Every plugin command lands in the Plugins menu regardless of the location its
@@ -163,14 +171,19 @@ zh:{
 // that one menu. Labels are the plugin's own localized menu text.
 // (No backticks in here: this block lives inside the PAGE_HTML template string.)
 var ENTRY_MAP={
- 'notemd.md2pdf':{en:'<b>Plugins</b> menu → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」菜单 → Export to PDF…（也支持 CLI <code>notemd pdf</code>）'},
- 'notemd.roam-import':{en:'<b>Plugins</b> menu → Import from Roam Research…',zh:'「<b>插件</b>」菜单 → 从 Roam Research 导入…'},
- 'notemd.openclaw-chat':{en:'<b>Plugins</b> menu → OpenClaw',zh:'「<b>插件</b>」菜单 → OpenClaw'},
- 'notemd.pos-log':{en:'<b>Plugins</b> menu → Save Location Now (auto-logs on startup once installed)',zh:'「<b>插件</b>」菜单 → 立即记录位置（装好后随启动自动记录）'},
- 'notemd.ebook-import':{en:'<b>Plugins</b> menu → Import Ebooks (epub/pdf/docx)… (also CLI <code>notemd ebook</code>)',zh:'「<b>插件</b>」菜单 → 导入电子书（epub、pdf、docx）…（也支持 CLI <code>notemd ebook</code>）'},
- 'notemd.claude-agent':{en:'<b>Plugins</b> menu → Claude Agent… (also CLI <code>notemd agent</code>)',zh:'「<b>插件</b>」菜单 → Claude 智能体…（也支持 CLI <code>notemd agent</code>）'},
- 'notemd.decision-log':{en:'<b>Plugins</b> menu → Decision Log, or the menu-bar tray',zh:'「<b>插件</b>」菜单 → 决策日志，或从菜单栏托盘打开'},
- 'notemd.weekly-review':{en:'<b>Plugins</b> menu → Weekly Review, or the menu-bar tray',zh:'「<b>插件</b>」菜单 → 周检视，或从菜单栏托盘打开'}
+ 'notemd.claude-agent':{en:'<b>Plugins</b> → <b>Agents</b> → Claude Agent… (also CLI <code>notemd agent</code>)',zh:'「<b>插件</b>」→「<b>智能体</b>」→ Claude 智能体…（也支持 CLI <code>notemd agent</code>）'},
+ 'notemd.codex-agent':{en:'<b>Plugins</b> → <b>Agents</b> → Codex Agent…',zh:'「<b>插件</b>」→「<b>智能体</b>」→ Codex 智能体…'},
+ 'notemd.deepseek-agent':{en:'<b>Plugins</b> → <b>Agents</b> → DeepSeek Agent…',zh:'「<b>插件</b>」→「<b>智能体</b>」→ DeepSeek 智能体…'},
+ 'notemd.openclaw-chat':{en:'<b>Plugins</b> → <b>Agents</b> → OpenClaw',zh:'「<b>插件</b>」→「<b>智能体</b>」→ OpenClaw'},
+ 'notemd.idea-spark':{en:'<b>Plugins</b> → <b>Capture & Import</b> → Idea Spark',zh:'「<b>插件</b>」→「<b>采集与导入</b>」→ 奇思妙想'},
+ 'notemd.ebook-import':{en:'<b>Plugins</b> → <b>Capture & Import</b> → Import Ebooks… (also CLI <code>notemd ebook</code>)',zh:'「<b>插件</b>」→「<b>采集与导入</b>」→ 导入电子书…（也支持 CLI <code>notemd ebook</code>）'},
+ 'notemd.roam-import':{en:'<b>Plugins</b> → <b>Capture & Import</b> → Import from Roam Research…',zh:'「<b>插件</b>」→「<b>采集与导入</b>」→ 从 Roam Research 导入…'},
+ 'notemd.pos-log':{en:'<b>Plugins</b> → <b>Capture & Import</b> → Save Location Now',zh:'「<b>插件</b>」→「<b>采集与导入</b>」→ 立即保存位置'},
+ 'notemd.trace-source':{en:'<b>Plugins</b> → <b>Thinking & Review</b> → Trace Source',zh:'「<b>插件</b>」→「<b>思考与复盘</b>」→ 溯源'},
+ 'notemd.decision-log':{en:'<b>Plugins</b> → <b>Thinking & Review</b> → Decision Log',zh:'「<b>插件</b>」→「<b>思考与复盘</b>」→ 决策日志'},
+ 'notemd.weekly-review':{en:'<b>Plugins</b> → <b>Thinking & Review</b> → Weekly Review',zh:'「<b>插件</b>」→「<b>思考与复盘</b>」→ 周检视'},
+ 'notemd.md2pdf':{en:'<b>Plugins</b> → <b>Publish & Export</b> → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」→「<b>发布与导出</b>」→ 导出为 PDF…（也支持 CLI <code>notemd pdf</code>）'},
+ 'notemd.power-mode':{en:'<b>Plugins</b> → <b>Editor Extensions</b> → Power Mode',zh:'「<b>插件</b>」→「<b>编辑增强</b>」→ 狂暴模式'}
 };
 function pickLang(){
  var q=new URLSearchParams(location.search).get('lang');
@@ -192,17 +205,33 @@ function applyStatic(){
 function entryFor(id){
  var e=ENTRY_MAP[id];return e?e[lang]:I18N[lang].fallback;
 }
+var GROUP_ORDER=['agents','capture-import','thinking-review','publish-export','editor-extensions','other'];
+function normalizeGroup(value){return GROUP_ORDER.indexOf(value)>=0?value:'other';}
+function groupLabel(key){
+ return I18N[lang]['group_'+key.replace(/-/g,'_')]||I18N[lang].group_other;
+}
+function groupPlugins(list){
+ var groups={};GROUP_ORDER.forEach(function(key){groups[key]=[];});
+ (list||[]).forEach(function(plugin){groups[normalizeGroup(plugin.category)].push(plugin);});
+ return GROUP_ORDER.filter(function(key){return groups[key].length;}).map(function(key){
+  return {key:key,items:groups[key]};
+ });
+}
+function renderCard(p,d){
+ var host=p.min_host?'<div class="host">'+esc(d.host)+esc(p.min_host)+'</div>':'';
+ return '<div class="card">'+
+  '<div class="card-top"><h3>'+esc(p.name||p.id)+'</h3>'+
+  (p.version?'<span class="ver">v'+esc(p.version)+'</span>':'')+'</div>'+
+  '<p class="desc">'+esc(p.description||'')+'</p>'+
+  '<div class="entry"><span class="lbl">'+esc(d.entry_lbl)+'</span>'+entryFor(p.id)+host+'</div>'+
+  '</div>';
+}
 function renderPlugins(list){
  var d=I18N[lang];var grid=document.getElementById('grid');
  if(!list||!list.length){grid.innerHTML='<div class="msg">'+esc(d.empty)+'</div>';return;}
- grid.innerHTML=list.map(function(p){
-  var host=p.min_host?'<div class="host">'+esc(d.host)+esc(p.min_host)+'</div>':'';
-  return '<div class="card">'+
-   '<div class="card-top"><h3>'+esc(p.name||p.id)+'</h3>'+
-   (p.version?'<span class="ver">v'+esc(p.version)+'</span>':'')+'</div>'+
-   '<p class="desc">'+esc(p.description||'')+'</p>'+
-   '<div class="entry"><span class="lbl">'+esc(d.entry_lbl)+'</span>'+entryFor(p.id)+host+'</div>'+
-   '</div>';
+ grid.innerHTML=groupPlugins(list).map(function(group){
+  return '<section class="plugin-group"><h3 class="group-title">'+esc(groupLabel(group.key))+'</h3>'+
+   '<div class="grid">'+group.items.map(function(p){return renderCard(p,d);}).join('')+'</div></section>';
  }).join('');
 }
 function cmpVer(a,b){

@@ -13,6 +13,7 @@ export interface RegistryEntry {
   size: number
   sha256: Record<string, string>
   name: string
+  category?: string | null
   description: string | null
   i18n?: unknown
   icon_url?: string | null
@@ -30,6 +31,7 @@ export interface InstalledV2 {
   version: string
   enabled: boolean
   name: string | null
+  category?: string | null
   capabilities: string[]
 }
 
@@ -38,6 +40,7 @@ export interface InstalledRow {
   kind: 'v1' | 'v2'
   id: string
   name: string
+  category?: string | null
   version: string
   enabled: boolean
   capabilities: string[]

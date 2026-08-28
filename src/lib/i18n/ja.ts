@@ -205,6 +205,14 @@ export const ja: Record<keyof Messages, string> = {
   'plugins.needsVault': '有効にするには先に Vault を設定してください',
   'plugins.internalError': '{name}：プラグインエラー',
 
+  // プラグイン機能カテゴリ
+  'pluginCategory.agents': 'エージェント',
+  'pluginCategory.captureImport': '収集とインポート',
+  'pluginCategory.thinkingReview': '思考と振り返り',
+  'pluginCategory.publishExport': '公開とエクスポート',
+  'pluginCategory.editorExtensions': 'エディター拡張',
+  'pluginCategory.other': 'その他',
+
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'プラグインマーケット',
   'pluginMarket.refresh': '更新',

@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.md2pdf",
   "name": "Export to PDF",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "kind": "native",
   "engines": {
     "notemd": ">=6.716.7"
@@ -22,6 +22,7 @@
     "menus": [
       {
         "location": "file",
+        "submenu": "publish-export",
         "label": "Export to PDF…",
         "command": "export",
         "enabled_when": "currentTab.kind == 'markdown' || currentTab.kind == 'html'",

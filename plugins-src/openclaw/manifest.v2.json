@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.openclaw-chat",
   "name": "OpenClaw Chat",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "kind": "native",
   "engines": {
     "notemd": ">=6.716.7"
@@ -22,6 +22,7 @@
     "menus": [
       {
         "location": "window",
+        "submenu": "agents",
         "label": "OpenClaw (v2)",
         "command": "open"
       }

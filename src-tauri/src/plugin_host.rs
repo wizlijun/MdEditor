@@ -117,8 +117,8 @@ pub struct PromptSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MenuEntry {
     pub location: String,
-    /// Optional named sub-menu under `location` (e.g. "import" nests the item
-    /// under File ▸ Import). None keeps the item flat in the top-level menu.
+    /// Stable one-level capability group under Plugins (e.g. `agents`).
+    /// Unknown or missing values are presented under Other.
     #[serde(default)]
     pub submenu: Option<String>,
     pub label: String,
@@ -205,7 +205,56 @@ pub struct LocatedMenuItem {
     pub submenu: Option<String>,
 }
 
-/// Returns menu entries flattened across all active plugins, with ids encoded
+/// Stable one-level capability groups shown under the native Plugins menu.
+/// `menus[].submenu` carries one of these language-neutral keys. Keeping the
+/// field open means an older Host still loads newer plugin manifests; this
+/// Host normalizes unknown/missing keys to Other instead of hiding an action.
+pub const PLUGIN_MENU_GROUP_ORDER: [&str; 6] = [
+    "agents",
+    "capture-import",
+    "thinking-review",
+    "publish-export",
+    "editor-extensions",
+    "other",
+];
+
+pub fn normalize_plugin_menu_group(group: Option<&str>) -> &'static str {
+    match group {
+        Some("agents") => "agents",
+        Some("capture-import") => "capture-import",
+        Some("thinking-review") => "thinking-review",
+        Some("publish-export") => "publish-export",
+        Some("editor-extensions") => "editor-extensions",
+        _ => "other",
+    }
+}
+
+pub struct PluginMenuGroup<'a> {
+    pub key: &'static str,
+    pub items: Vec<&'a LocatedMenuItem>,
+}
+
+/// Group plugin actions in the fixed capability order while preserving the
+/// existing stable manifest/id order inside each group.
+pub fn group_plugin_menu_items(items: &[LocatedMenuItem]) -> Vec<PluginMenuGroup<'_>> {
+    let mut groups: Vec<PluginMenuGroup<'_>> = PLUGIN_MENU_GROUP_ORDER
+        .iter()
+        .map(|key| PluginMenuGroup { key, items: Vec::new() })
+        .collect();
+    for item in items {
+        let key = normalize_plugin_menu_group(item.submenu.as_deref());
+        groups
+            .iter_mut()
+            .find(|group| group.key == key)
+            .expect("normalized plugin group is in PLUGIN_MENU_GROUP_ORDER")
+            .items
+            .push(item);
+    }
+    groups.retain(|group| !group.items.is_empty());
+    groups
+}
+
+/// Returns menu entries across all active plugins, with ids encoded
 /// as `plugin:<id>:<command>`. Menu labels are resolved for `locale` (falling
 /// back to the manifest's English label per missing key; a plugin's i18n block
 /// is passed through by the adapter).
@@ -290,5 +339,48 @@ mod tests {
         let m: PluginManifest = serde_json::from_str(json).unwrap();
         assert_eq!(m.kind, PluginKind::Builtin);
         assert!(m.binary.is_none());
+    }
+
+    fn menu_item(id: &str, group: Option<&str>) -> LocatedMenuItem {
+        LocatedMenuItem {
+            id: id.to_string(),
+            label: id.to_string(),
+            shortcut: None,
+            location: "plugins".to_string(),
+            submenu: group.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn plugin_menu_groups_follow_capability_order_and_keep_item_order() {
+        let items = vec![
+            menu_item("capture-1", Some("capture-import")),
+            menu_item("agent-1", Some("agents")),
+            menu_item("agent-2", Some("agents")),
+            menu_item("editor-1", Some("editor-extensions")),
+        ];
+        let groups = group_plugin_menu_items(&items);
+        assert_eq!(groups.iter().map(|g| g.key).collect::<Vec<_>>(), vec![
+            "agents", "capture-import", "editor-extensions",
+        ]);
+        assert_eq!(groups[0].items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec![
+            "agent-1", "agent-2",
+        ]);
+    }
+
+    #[test]
+    fn unknown_or_missing_plugin_menu_group_falls_back_to_other() {
+        let items = vec![
+            menu_item("known", Some("thinking-review")),
+            menu_item("unknown", Some("future-category")),
+            menu_item("missing", None),
+        ];
+        let groups = group_plugin_menu_items(&items);
+        assert_eq!(groups.iter().map(|g| g.key).collect::<Vec<_>>(), vec![
+            "thinking-review", "other",
+        ]);
+        assert_eq!(groups[1].items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec![
+            "unknown", "missing",
+        ]);
     }
 }

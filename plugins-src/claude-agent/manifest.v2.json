@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.claude-agent",
   "name": "Claude Agent",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "kind": "native",
   "engines": {
     "notemd": ">=6.828.1"
@@ -28,6 +28,7 @@
     "menus": [
       {
         "location": "plugins",
+        "submenu": "agents",
         "label": "Claude Agent…",
         "command": "open"
       }

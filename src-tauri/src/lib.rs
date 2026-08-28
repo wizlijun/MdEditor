@@ -1695,6 +1695,32 @@ fn menu_label(locale: &str, key: &str) -> String {
         "menu.window" => ("Window", "窗口", "ウインドウ", "Fenster"),
         "menu.help" => ("Help", "帮助", "ヘルプ", "Hilfe"),
         "menu.plugins" => ("Plugins", "插件", "プラグイン", "Plugins"),
+        "plugins.group.agents" => ("Agents", "智能体", "エージェント", "Agenten"),
+        "plugins.group.captureImport" => (
+            "Capture & Import",
+            "采集与导入",
+            "収集とインポート",
+            "Erfassen & Importieren",
+        ),
+        "plugins.group.thinkingReview" => (
+            "Thinking & Review",
+            "思考与复盘",
+            "思考と振り返り",
+            "Denken & Reflexion",
+        ),
+        "plugins.group.publishExport" => (
+            "Publish & Export",
+            "发布与导出",
+            "公開とエクスポート",
+            "Veröffentlichen & Exportieren",
+        ),
+        "plugins.group.editorExtensions" => (
+            "Editor Extensions",
+            "编辑增强",
+            "エディター拡張",
+            "Editor-Erweiterungen",
+        ),
+        "plugins.group.other" => ("Other", "其他", "その他", "Sonstige"),
         "file.openRecent" => ("Open Recent", "打开最近", "最近使ったファイルを開く", "Zuletzt geöffnet"),
         "file.noRecent" => ("No Recent Files", "无最近文件", "最近のファイルなし", "Keine letzten Dateien"),
         "file.new" => ("New", "新建", "新規", "Neu"),
@@ -2276,13 +2302,25 @@ fn build_menu<R: tauri::Runtime>(
             &MenuItemBuilder::with_id("open-plugin-market", menu_label(locale, "plugins.market"))
                 .build(app)?,
         );
-        let contributed: Vec<_> = plugin_items.iter().collect();
+        let contributed = plugin_host::group_plugin_menu_items(plugin_items);
         if !contributed.is_empty() {
             b = b.separator();
-            for it in contributed {
-                let mut mb = MenuItemBuilder::with_id(&it.id, &it.label);
-                if let Some(s) = &it.shortcut { mb = mb.accelerator(s); }
-                b = b.item(&mb.build(app)?);
+            for group in contributed {
+                let label_key = match group.key {
+                    "agents" => "plugins.group.agents",
+                    "capture-import" => "plugins.group.captureImport",
+                    "thinking-review" => "plugins.group.thinkingReview",
+                    "publish-export" => "plugins.group.publishExport",
+                    "editor-extensions" => "plugins.group.editorExtensions",
+                    _ => "plugins.group.other",
+                };
+                let mut gb = SubmenuBuilder::new(app, menu_label(locale, label_key));
+                for it in group.items {
+                    let mut mb = MenuItemBuilder::with_id(&it.id, &it.label);
+                    if let Some(s) = &it.shortcut { mb = mb.accelerator(s); }
+                    gb = gb.item(&mb.build(app)?);
+                }
+                b = b.item(&gb.build()?);
             }
         }
         b.build()?

@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Plugins are now organized by capability instead of one long menu.** The Plugins menu and both marketplace views share five stable groups: Agents, Capture & Import, Thinking & Review, Publish & Export, and Editor Extensions. Claude, Codex and DeepSeek now sit together under Agents; unknown third-party group values remain visible under Other.
+
 ## v6.828.1 — 2026-08-28
 
 ### Fixed

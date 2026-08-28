@@ -38,6 +38,7 @@
     type InstalledRow,
   } from './lib/market/types'
   import { pickAvailable, pickUpdateTo } from './lib/market/select'
+  import { groupPluginsByCategory, pluginCategoryLabelKey } from './lib/plugins/categories'
   import ConsentModal from './components/market/ConsentModal.svelte'
 
   let ready = $state(false)
@@ -50,6 +51,8 @@
   let busy = $state<Record<string, boolean>>({})
   // Running app version for min_host selection; null = unknown (fail open).
   let hostVersion: string | null = null
+  let installedGroups = $derived(groupPluginsByCategory(installedRows))
+  let availableGroups = $derived(groupPluginsByCategory(available))
 
   // Consent modal target (null = closed).
   let consent = $state<{ id: string; version: string; name: string } | null>(null)
@@ -116,6 +119,7 @@
         kind: 'v2',
         id: p.id,
         name: p.name ?? p.id,
+        category: p.category,
         version: p.version,
         enabled: p.enabled,
         capabilities: p.capabilities ?? [],
@@ -207,34 +211,39 @@
       {#if installedRows.length === 0}
         <p class="empty">{t('pluginMarket.noneInstalled')}</p>
       {:else}
-        {#each installedRows as row (row.id)}
-          <div class="card">
-            <div class="line">
-              <label class="toggle">
-                <input type="checkbox" checked={row.enabled}
-                       disabled={busy[row.id]}
-                       onchange={(e) => toggleEnabled(row, (e.currentTarget as HTMLInputElement).checked)} />
-                <span class="name">{row.name}</span>
-              </label>
-              <span class="version">{row.version}</span>
-              <span class="badge">v2</span>
-              <span class="spacer"></span>
-              {#if row.updateTo}
-                <button class="mini primary" disabled={busy[row.id]} onclick={() => update(row)}>
-                  {t('pluginMarket.update', { version: row.updateTo })}
-                </button>
-              {/if}
-              <button class="mini danger" disabled={busy[row.id]} onclick={() => uninstall(row)}>
-                {t('pluginMarket.uninstall')}
-              </button>
-            </div>
-            {#if row.capabilities.length > 0}
-              <div class="caps">
-                {#each row.capabilities as cap (cap)}
-                  <span class="cap" class:sensitive={isSensitiveCapability(cap)}>{capabilityLabel(cap)}</span>
-                {/each}
+        {#each installedGroups as group (group.key)}
+          <div class="plugin-group">
+            <h3>{t(pluginCategoryLabelKey(group.key))}</h3>
+            {#each group.items as row (row.id)}
+              <div class="card">
+                <div class="line">
+                  <label class="toggle">
+                    <input type="checkbox" checked={row.enabled}
+                           disabled={busy[row.id]}
+                           onchange={(e) => toggleEnabled(row, (e.currentTarget as HTMLInputElement).checked)} />
+                    <span class="name">{row.name}</span>
+                  </label>
+                  <span class="version">{row.version}</span>
+                  <span class="badge">v2</span>
+                  <span class="spacer"></span>
+                  {#if row.updateTo}
+                    <button class="mini primary" disabled={busy[row.id]} onclick={() => update(row)}>
+                      {t('pluginMarket.update', { version: row.updateTo })}
+                    </button>
+                  {/if}
+                  <button class="mini danger" disabled={busy[row.id]} onclick={() => uninstall(row)}>
+                    {t('pluginMarket.uninstall')}
+                  </button>
+                </div>
+                {#if row.capabilities.length > 0}
+                  <div class="caps">
+                    {#each row.capabilities as cap (cap)}
+                      <span class="cap" class:sensitive={isSensitiveCapability(cap)}>{capabilityLabel(cap)}</span>
+                    {/each}
+                  </div>
+                {/if}
               </div>
-            {/if}
+            {/each}
           </div>
         {/each}
       {/if}
@@ -245,19 +254,24 @@
       {#if available.length === 0}
         <p class="empty">{t('pluginMarket.noneAvailable')}</p>
       {:else}
-        {#each available as entry (entry.id)}
-          <div class="card">
-            <div class="line">
-              <span class="name">{entry.name}</span>
-              <span class="version">{entry.version}</span>
-              <span class="spacer"></span>
-              <button class="mini primary" onclick={() => beginInstall(entry)}>
-                {t('pluginMarket.install')}
-              </button>
-            </div>
-            {#if entry.description}
-              <p class="desc">{entry.description}</p>
-            {/if}
+        {#each availableGroups as group (group.key)}
+          <div class="plugin-group">
+            <h3>{t(pluginCategoryLabelKey(group.key))}</h3>
+            {#each group.items as entry (entry.id)}
+              <div class="card">
+                <div class="line">
+                  <span class="name">{entry.name}</span>
+                  <span class="version">{entry.version}</span>
+                  <span class="spacer"></span>
+                  <button class="mini primary" onclick={() => beginInstall(entry)}>
+                    {t('pluginMarket.install')}
+                  </button>
+                </div>
+                {#if entry.description}
+                  <p class="desc">{entry.description}</p>
+                {/if}
+              </div>
+            {/each}
           </div>
         {/each}
       {/if}
@@ -279,6 +293,8 @@
   h1 { font-size: 16px; margin: 0; flex: 1; }
   h2 { font-size: 13px; margin: 18px 0 8px; color: color-mix(in srgb, CanvasText 65%, transparent);
     text-transform: uppercase; letter-spacing: 0.5px; }
+  .plugin-group > h3 { font-size: 11px; margin: 13px 2px 7px;
+    color: color-mix(in srgb, CanvasText 52%, transparent); font-weight: 650; }
   .msg { color: color-mix(in srgb, CanvasText 55%, transparent); font-size: 13px; padding: 20px; }
   .notice {
     font-size: 12.5px; padding: 10px 12px; border-radius: 8px; margin: 4px 0 8px;

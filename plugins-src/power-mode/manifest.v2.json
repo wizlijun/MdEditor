@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.power-mode",
   "name": "Power Mode",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "kind": "native",
   "engines": { "notemd": ">=6.805.3" },
   "description": "Cursor explosions, a combo meter and a little screen shake while you type.",
@@ -10,7 +10,7 @@
   "activation": { "events": ["onCommand:open"] },
   "contributes": {
     "menus": [
-      { "location": "plugins", "label": "Power Mode", "command": "open" }
+      { "location": "plugins", "submenu": "editor-extensions", "label": "Power Mode", "command": "open" }
     ],
     "windows": [
       {

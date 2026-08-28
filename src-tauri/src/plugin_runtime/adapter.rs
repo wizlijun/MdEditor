@@ -132,7 +132,8 @@ mod tests {
             "binary": { "aarch64-apple-darwin": "bin/md2pdf-v2", "x86_64-apple-darwin": "bin/md2pdf-v2" },
             "activation": { "events": ["onCommand:export", "onCli:pdf2"] },
             "contributes": {
-                "menus": [{ "location": "file", "label": "Export to PDF (v2)…", "command": "export",
+                "menus": [{ "location": "file", "submenu": "publish-export",
+                            "label": "Export to PDF (v2)…", "command": "export",
                             "enabled_when": "currentTab.kind == 'markdown'",
                             "prompt": { "kind": "save-dialog", "default_filename": "{stem}.pdf",
                                         "filters": [{ "name": "PDF", "extensions": ["pdf"] }] } }],
@@ -176,6 +177,7 @@ mod tests {
         let me = &v1.menus[0];
         assert_eq!(me.location, "file");
         assert_eq!(me.command, "export");
+        assert_eq!(me.submenu.as_deref(), Some("publish-export"));
         assert_eq!(me.label, "Export to PDF (v2)…");
         assert_eq!(me.enabled_when.as_deref(), Some("currentTab.kind == 'markdown'"));
         let prompt = me.prompt.as_ref().expect("prompt passthrough");
@@ -272,6 +274,46 @@ mod tests {
             .collect();
         assert_eq!(results.len(), 1, "bad manifest should be skipped, good survives");
         assert_eq!(results[0].id, "pub.good");
+    }
+
+    #[test]
+    fn shipped_user_facing_plugins_declare_a_known_capability_group() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins-src");
+        let expected: std::collections::HashMap<&str, &str> = [
+            ("notemd.claude-agent", "agents"),
+            ("notemd.codex-agent", "agents"),
+            ("notemd.deepseek-agent", "agents"),
+            ("notemd.openclaw-chat", "agents"),
+            ("notemd.ebook-import", "capture-import"),
+            ("notemd.idea-spark", "capture-import"),
+            ("notemd.pos-log", "capture-import"),
+            ("notemd.roam-import", "capture-import"),
+            ("notemd.decision-log", "thinking-review"),
+            ("notemd.trace-source", "thinking-review"),
+            ("notemd.weekly-review", "thinking-review"),
+            ("notemd.md2pdf", "publish-export"),
+            ("notemd.power-mode", "editor-extensions"),
+        ]
+        .into_iter()
+        .collect();
+
+        for entry in std::fs::read_dir(&root).expect("plugins-src is readable") {
+            let path = entry.unwrap().path().join("manifest.v2.json");
+            if !path.exists() {
+                continue;
+            }
+            let m: plugin_protocol::ManifestV2 =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let Some(expected_group) = expected.get(m.id.as_str()) else {
+                continue;
+            };
+            let actual = m
+                .contributes
+                .menus
+                .iter()
+                .find_map(|menu| menu.get("submenu").and_then(|value| value.as_str()));
+            assert_eq!(actual, Some(*expected_group), "{}", path.display());
+        }
     }
 
     /// Windows carrying an `open_command` become an `open_command → window_id`

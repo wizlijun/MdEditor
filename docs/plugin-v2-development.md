@@ -113,7 +113,7 @@ plugins-src/<name>/
   "location": "file|window|plugins|tab",   // 菜单归属
   "label": "Import from Roam Research…",    // 可被 i18n 覆盖
   "command": "open",                         // 触发的命令 id
-  "submenu": "可选子菜单名",
+  "submenu": "agents",                       // 一级能力分组 key，见下
   "enabled_when": "currentTab.kind == 'markdown'",  // 条件表达式(可选)
   // kind 取值:markdown | mdx | html | code | spreadsheet | base | custom。
   // `mdx` 独立于 `markdown`:mdx tab 只读渲染、永不序列化回写,写文档内容的
@@ -123,6 +123,20 @@ plugins-src/<name>/
               "filters": [{ "name": "PDF", "extensions": ["pdf"] }] }  // 可选
 }
 ```
+
+所有插件命令统一收在顶部「插件」菜单中，`submenu` 用稳定、非本地化的能力
+key 建立一层子菜单。当前支持并固定按以下顺序显示：
+
+1. `agents` — Agent 执行后端与会话
+2. `capture-import` — 信息采集与内容导入
+3. `thinking-review` — 思考、溯源与复盘
+4. `publish-export` — 发布与导出
+5. `editor-extensions` — 编辑体验增强
+
+未知值或省略字段会进入「其他」，插件命令不会消失。分组名由 Host 统一本地化，
+manifest 不写 `Agents`、`智能体` 等显示文本。插件市场索引也从首个菜单贡献的
+`submenu` 派生同一分类，因此不要在其他位置重复维护分类。仅支持一层，不使用
+`agents/tools` 这类路径。旧 Host 会忽略这层展示并继续平铺，插件仍可正常加载。
 
 **WindowContribution**(`lib.rs:64-78`):
 ```jsonc

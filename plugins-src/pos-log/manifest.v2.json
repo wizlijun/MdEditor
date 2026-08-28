@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.pos-log",
   "name": "Position Log",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "kind": "native",
   "engines": {
     "notemd": ">=6.720.4"
@@ -22,6 +22,7 @@
     "menus": [
       {
         "location": "plugins",
+        "submenu": "capture-import",
         "label": "Save Location Now",
         "command": "save-now"
       }

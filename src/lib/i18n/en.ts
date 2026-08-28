@@ -210,6 +210,14 @@ export const en = {
   'plugins.needsVault': 'Set a Vault first to enable this plugin',
   'plugins.internalError': '{name}: plugin error',
 
+  // Stable capability groups shared by the Plugins menu and marketplaces
+  'pluginCategory.agents': 'Agents',
+  'pluginCategory.captureImport': 'Capture & Import',
+  'pluginCategory.thinkingReview': 'Thinking & Review',
+  'pluginCategory.publishExport': 'Publish & Export',
+  'pluginCategory.editorExtensions': 'Editor Extensions',
+  'pluginCategory.other': 'Other',
+
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'Plugin Market',
   'pluginMarket.refresh': 'Refresh',

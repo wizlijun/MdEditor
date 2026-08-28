@@ -381,18 +381,32 @@ pub fn plugin_market_installed(app: tauri::AppHandle) -> Result<Vec<serde_json::
         let manifest: Option<plugin_protocol::ManifestV2> = std::fs::read_to_string(&manifest_path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok());
-        let (name, capabilities) = match &manifest {
+        let (name, capabilities, category) = match &manifest {
             Some(m) => (
                 serde_json::Value::String(m.name.clone()),
                 serde_json::to_value(&m.capabilities).unwrap_or(serde_json::Value::Array(vec![])),
+                serde_json::Value::String(
+                    crate::plugin_host::normalize_plugin_menu_group(
+                        m.contributes
+                            .menus
+                            .iter()
+                            .find_map(|menu| menu.get("submenu").and_then(|value| value.as_str())),
+                    )
+                    .to_string(),
+                ),
             ),
-            None => (serde_json::Value::Null, serde_json::Value::Array(vec![])),
+            None => (
+                serde_json::Value::Null,
+                serde_json::Value::Array(vec![]),
+                serde_json::Value::String("other".to_string()),
+            ),
         };
         out.push(serde_json::json!({
             "id": id,
             "version": entry.version,
             "enabled": entry.enabled,
             "name": name,
+            "category": category,
             "capabilities": capabilities,
         }));
     }
@@ -646,6 +660,7 @@ mod tests {
             size: 1,
             sha256: sh,
             name: id.to_string(),
+            category: None,
             description: None,
             i18n: None,
             icon_url: None,

@@ -69,6 +69,10 @@ pub struct RegistryEntry {
     /// arch → lowercase hex sha256 of that arch's `.notemdpkg`.
     pub sha256: BTreeMap<String, String>,
     pub name: String,
+    /// Stable capability group derived from the manifest's primary menu
+    /// `submenu`. Old registry entries omit it and fall back to Other.
+    #[serde(default)]
+    pub category: Option<String>,
     pub description: Option<String>,
     pub i18n: Option<serde_json::Value>,
     pub icon_url: Option<String>,
@@ -380,6 +384,7 @@ mod tests {
                 "x86_64-apple-darwin": "bb"
               },
               "name": "Export to PDF",
+              "category": "publish-export",
               "description": "Render the current note to PDF.",
               "i18n": { "zh": { "name": "导出 PDF" } },
               "icon_url": "https://plugins.notemd.net/icons/md2pdf.png",
@@ -404,6 +409,7 @@ mod tests {
         assert_eq!(e.archs.len(), 2);
         assert_eq!(e.sha256.get("aarch64-apple-darwin").unwrap(), "aa");
         assert_eq!(e.name, "Export to PDF");
+        assert_eq!(e.category.as_deref(), Some("publish-export"));
         assert!(e.description.is_some());
         assert!(e.i18n.is_some());
         assert!(e.icon_url.is_some());
@@ -423,6 +429,7 @@ mod tests {
         let idx = parse_index(json.as_bytes()).expect("minimal index");
         let e = &idx.plugins[0];
         assert_eq!(e.id, "x.y");
+        assert!(e.category.is_none());
         assert!(e.description.is_none());
         assert!(e.i18n.is_none());
         assert!(e.icon_url.is_none());

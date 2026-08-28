@@ -17,6 +17,7 @@ const SAMPLE_INDEX = JSON.stringify({
       size: 1024,
       sha256: { 'aarch64-apple-darwin': 'deadbeef' },
       name: 'Export to PDF',
+      category: 'publish-export',
       download: {
         'aarch64-apple-darwin':
           'https://plugins.notemd.net/api/download/notemd.md2pdf/1.2.0/aarch64-apple-darwin',
@@ -143,6 +144,9 @@ describe('GET / (landing page)', () => {
     const body = await r.text()
     expect(body).toContain('<!DOCTYPE html>')
     expect(body).toContain('/api/index.json')
+    expect(body).toContain('Capture & Import')
+    expect(body).toContain('Thinking & Review')
+    expect(body).toContain('groupPlugins')
   })
 
   it('serves the same page at /index.html', async () => {
