@@ -17,6 +17,7 @@
   import RunLog from './components/RunLog.svelte'
   import HistoryList from './components/HistoryList.svelte'
   import ArtifactLinks from './components/ArtifactLinks.svelte'
+  import SettingsPage from './components/SettingsPage.svelte'
 
   const locale = bridge().locale
   const tr = (k: MessageKey, v?: Record<string, string | number>) => t(locale, k, v)
@@ -40,6 +41,7 @@
    *  the live stream, until you go back or start a new run. */
   let selectedRun: RunRecord | null = $state(null)
   let selectedLog = $state('')
+  let settingsOpen = $state(false)
 
   const running = $derived(view.status === 'running')
   const current = $derived(tasks.find((t) => t.id === selectedTask) ?? null)
@@ -120,6 +122,7 @@
   })
 
   async function selectRun(run: RunRecord) {
+    settingsOpen = false
     selectedRun = run
     selectedLog = ''
     try {
@@ -217,6 +220,7 @@
       onselect={(id) => {
         selectedTask = id
         selectedRun = null
+        settingsOpen = false
       }}
       label={tr}
     />
@@ -244,10 +248,25 @@
         onclear={clearRuns}
       />
     </div>
+    <button
+      type="button"
+      class="settings-entry"
+      class:active={settingsOpen}
+      aria-pressed={settingsOpen}
+      onclick={() => (settingsOpen = !settingsOpen)}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9 3v2.2L6.8 6.5 5 5.4 3 9l2 1.1v3.8L3 15l2 3.6 1.8-1.1L9 18.8V21h6v-2.2l2.2-1.3 1.8 1.1 2-3.6-2-1.1v-3.8L21 9l-2-3.6-1.8 1.1L15 5.2V3z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+      <span>{tr('settings.title')}</span>
+    </button>
   </aside>
 
   <section>
-    {#if selectedRun}
+    {#if settingsOpen}
+      <SettingsPage label={tr} />
+    {:else if selectedRun}
       <RunLog run={selectedRun} log={selectedLog} label={tr} />
     {:else}
       <header>
@@ -324,6 +343,26 @@
     border-right: 1px solid color-mix(in srgb, currentColor 15%, transparent);
   }
   .runs { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -5px; padding: 0 5px; }
+  .settings-entry {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: none;
+    width: 100%;
+    margin-top: 10px;
+    padding: 9px 6px 2px;
+    border: 0;
+    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    opacity: 0.7;
+  }
+  .settings-entry:hover, .settings-entry.active { opacity: 1; }
+  .settings-entry svg { width: 15px; height: 15px; }
   h2 {
     display: flex;
     align-items: baseline;

@@ -2,6 +2,7 @@ export type Capability =
   | 'renderer.html'
   | 'renderer.raw'
   | 'settings.read'
+  | 'settings'
   | `settings.write:${string}`
   | 'clipboard.write'
   | 'toast'

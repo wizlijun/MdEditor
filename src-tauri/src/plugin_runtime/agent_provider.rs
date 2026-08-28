@@ -312,33 +312,24 @@ mod tests {
     }
 
     #[test]
-    fn shipped_agents_offer_the_same_one_to_five_capacity_setting() {
-        for (path, id) in [
-            (
-                "../plugins-src/claude-agent/manifest.v2.json",
-                "notemd.claude-agent",
-            ),
-            (
-                "../plugins-src/codex-agent/manifest.v2.json",
-                "notemd.codex-agent",
-            ),
-            (
-                "../plugins-src/deepseek-agent/manifest.v2.json",
-                "notemd.deepseek-agent",
-            ),
+    fn shipped_agents_keep_capacity_in_their_own_settings_pages() {
+        for path in [
+            "../plugins-src/claude-agent/manifest.v2.json",
+            "../plugins-src/codex-agent/manifest.v2.json",
+            "../plugins-src/deepseek-agent/manifest.v2.json",
         ] {
             let body = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
             let m: ManifestV2 =
                 serde_json::from_str(&body).unwrap_or_else(|e| panic!("{path}: {e}"));
-            let settings = m.contributes.settings.expect("agent settings contribution");
-            let field = &settings["schema"][0];
-            assert_eq!(field["key"], format!("{id}.maxConcurrency"));
-            assert_eq!(field["type"], "select");
-            assert_eq!(
-                field["options"],
-                serde_json::json!(["1", "2", "3", "4", "5"])
-            );
-            assert_eq!(field["default"], "1");
+            assert!(m.contributes.settings.is_none(), "{path} must not create a global Settings tab");
+            assert!(m.capabilities.iter().any(|cap| cap == "settings"), "{path}");
+            assert!(!m.capabilities.iter().any(|cap| cap == "agent"), "{path} must not gain cross-agent authority");
+
+            let raw: serde_json::Value = serde_json::from_str(&body).unwrap();
+            for catalog in raw["i18n"].as_object().unwrap().values() {
+                assert!(catalog.get("settings.tab_label").is_none(), "{path}");
+                assert!(catalog.get("settings.fields").is_none(), "{path}");
+            }
         }
     }
 

@@ -414,3 +414,15 @@ export async function setPluginScopedValue(pluginId: string, key: string, value:
   await saveSettings()
 }
 
+/**
+ * Mirror a plugin-window write that Rust has already persisted.
+ *
+ * `host.settings.set` saves through tauri-plugin-store before emitting the
+ * change. Updating only this in-memory copy avoids a second write while still
+ * preventing a later global `saveSettings()` from restoring stale plugin data.
+ */
+export function applyPluginScopedExternalValue(pluginId: string, key: string, value: unknown): void {
+  if (!pluginScoped[pluginId]) pluginScoped[pluginId] = {}
+  pluginScoped[pluginId][key] = value
+  pluginScopedVersion.value++
+}

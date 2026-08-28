@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Agent concurrency now lives where it belongs: inside each Agent plugin.** Claude Agent, Codex Agent and DeepSeek Agent each have a Settings entry at the bottom of their own window. The page keeps the same 1–5 “Maximum concurrent AI reads” control and preserves values already chosen. The three plugin tabs have been removed from note.md's global Settings, and plugins can read or write only their own settings scope.
+
 ## v6.827.2 — 2026-08-27
 
 ### Added

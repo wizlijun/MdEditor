@@ -115,6 +115,11 @@ const DEFAULT_DAILY_DIR: &str = "dailynote";
 static GRANTED_PATHS: LazyLock<Mutex<HashMap<String, HashSet<PathBuf>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// `plugins` is one JSON object in settings.json, so self-scoped writes are a
+/// read-modify-write of that object. Serialize plugin-window writers to avoid
+/// two Agent settings pages losing each other's changes.
+static PLUGIN_SETTINGS_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 fn grant_path(plugin_id: &str, path: &Path) {
     if let Ok(mut m) = GRANTED_PATHS.lock() {
         m.entry(plugin_id.to_string()).or_default().insert(path.to_path_buf());
@@ -317,6 +322,28 @@ pub async fn dispatch<R: tauri::Runtime>(
             return denial;
         }
         return ok(req.id, crate::themes::commands::theme_css_bundle(app));
+    }
+
+    // Plugin-owned settings are UI-only and self-scoped. `plugin_id` comes
+    // from the authenticated plugin:// Origin; callers never get to choose the
+    // scope in params. Rust persists before acknowledging, then tells the main
+    // window to refresh its in-memory mirror so a later global save cannot
+    // overwrite this value with stale state.
+    if req.method == "host.settings.get" || req.method == "host.settings.set" {
+        if let Some(denial) = capability_denial(&req.method, capabilities, req.id) {
+            return denial;
+        }
+        return if req.method == "host.settings.get" {
+            match plugin_settings_get(app, plugin_id, &req.params) {
+                Ok(v) => ok(req.id, v),
+                Err(detail) => err(req.id, proto::ERR_INTERNAL, detail),
+            }
+        } else {
+            match plugin_settings_set(app, plugin_id, &req.params) {
+                Ok(v) => ok(req.id, v),
+                Err(detail) => err(req.id, proto::ERR_INTERNAL, detail),
+            }
+        };
     }
 
     // host.power_mode.* 与 theme.css 同理:要活的 AppHandle(读 app 配置目录下的
@@ -954,6 +981,98 @@ fn power_mode_update<R: tauri::Runtime>(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Return exactly one plugin's settings scope. `plugin_id` is supplied by the
+/// authenticated bridge, never by request params.
+fn plugin_settings_payload(settings: &serde_json::Value, plugin_id: &str) -> serde_json::Value {
+    let scope = settings
+        .get("plugins")
+        .and_then(|v| v.get(plugin_id))
+        .filter(|v| v.is_object())
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    serde_json::json!({ "settings": scope })
+}
+
+/// Validate a self-scoped write. A caller-supplied plugin id is rejected
+/// outright so the API cannot accidentally become cross-plugin if a future
+/// refactor starts reading extra params.
+fn plugin_settings_change(
+    plugin_id: &str,
+    params: &serde_json::Value,
+) -> Result<(String, serde_json::Value, serde_json::Value), String> {
+    if params.get("plugin_id").is_some() || params.get("pluginId").is_some() {
+        return Err("bad_request: plugin id is derived from the authenticated origin".into());
+    }
+    let key = params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|key| !key.is_empty() && key.len() <= 128 && !key.chars().any(char::is_control))
+        .ok_or_else(|| "bad_request: key must be a non-empty local settings key".to_string())?;
+    let value = params
+        .get("value")
+        .cloned()
+        .ok_or_else(|| "bad_request: value is required".to_string())?;
+    let event = serde_json::json!({
+        "plugin_id": plugin_id,
+        "key": key,
+        "value": value,
+    });
+    Ok((key.to_string(), value, event))
+}
+
+fn plugin_settings_get<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    plugin_id: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use tauri_plugin_store::StoreExt;
+    if params.get("plugin_id").is_some() || params.get("pluginId").is_some() {
+        return Err("bad_request: plugin id is derived from the authenticated origin".into());
+    }
+    let store = app
+        .store("settings.json")
+        .map_err(|e| format!("io: open settings store failed: {e}"))?;
+    let settings = serde_json::json!({
+        "plugins": store.get("plugins").unwrap_or_else(|| serde_json::json!({}))
+    });
+    Ok(plugin_settings_payload(&settings, plugin_id))
+}
+
+fn plugin_settings_set<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    plugin_id: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use tauri::Emitter;
+    use tauri_plugin_store::StoreExt;
+
+    let (key, value, event) = plugin_settings_change(plugin_id, params)?;
+    let _write_guard = PLUGIN_SETTINGS_WRITE_LOCK
+        .lock()
+        .map_err(|_| "io: plugin settings write lock poisoned".to_string())?;
+    let store = app
+        .store("settings.json")
+        .map_err(|e| format!("io: open settings store failed: {e}"))?;
+    let mut plugins = store
+        .get("plugins")
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let mut scope = plugins
+        .get(plugin_id)
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    scope.insert(key, value);
+    plugins.insert(plugin_id.to_string(), serde_json::Value::Object(scope));
+    store.set("plugins", serde_json::Value::Object(plugins));
+    store
+        .save()
+        .map_err(|e| format!("io: save settings failed: {e}"))?;
+    app.emit_to("main", "plugin-settings://changed", event)
+        .map_err(|e| format!("io: emit settings change failed: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 pub(crate) fn editor_open(services: &dyn HostServices, params: &serde_json::Value) -> Result<serde_json::Value, String> {
     let p = resolve_in_vault(services, params)?;
     services.open_in_editor(&p)?;
@@ -1367,6 +1486,49 @@ mod tests {
         assert!(e.message.contains("vault.read"), "{}", e.message);
     }
 
+    #[test]
+    fn plugin_settings_read_is_bound_to_the_authenticated_plugin() {
+        let settings = serde_json::json!({
+            "plugins": {
+                "notemd.claude-agent": { "maxConcurrency": "2" },
+                "notemd.deepseek-agent": { "maxConcurrency": "5" }
+            }
+        });
+        assert_eq!(
+            plugin_settings_payload(&settings, "notemd.claude-agent"),
+            serde_json::json!({ "settings": { "maxConcurrency": "2" } })
+        );
+    }
+
+    #[test]
+    fn plugin_settings_write_uses_authenticated_plugin_and_rejects_spoofing() {
+        let (_, _, event) = plugin_settings_change(
+            "notemd.claude-agent",
+            &serde_json::json!({ "key": "maxConcurrency", "value": "4" }),
+        )
+        .unwrap();
+        assert_eq!(event["plugin_id"], "notemd.claude-agent");
+        assert_eq!(event["key"], "maxConcurrency");
+        assert!(plugin_settings_change(
+            "notemd.claude-agent",
+            &serde_json::json!({
+                "plugin_id": "notemd.deepseek-agent",
+                "key": "maxConcurrency",
+                "value": "5"
+            }),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn plugin_settings_methods_require_the_settings_capability() {
+        for method in ["host.settings.get", "host.settings.set"] {
+            let denied = capability_denial(method, &[], Some(1)).expect("must deny");
+            assert_eq!(denied.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+            assert!(capability_denial(method, &["settings".into()], Some(1)).is_none());
+        }
+    }
+
     #[tokio::test]
     async fn unknown_method_returns_32601() {
         let s = StubServices::default();
@@ -1389,6 +1551,8 @@ mod tests {
             ("host.clipboard.write", "clipboard.write"),
             ("host.editor.open", "editor.open"),
             ("host.theme.css", "editor.kit"),
+            ("host.settings.get", "settings"),
+            ("host.settings.set", "settings"),
         ] {
             let r = run(&s, &[], method, serde_json::json!({})).await;
             let e = r.error.unwrap();

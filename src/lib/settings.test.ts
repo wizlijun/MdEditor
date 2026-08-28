@@ -273,4 +273,21 @@ describe('plugin-scoped settings', () => {
       'notemd.claude-agent': { maxConcurrency: '3' },
     })
   })
+
+  it('mirrors an already-persisted plugin-window setting without writing twice', async () => {
+    const {
+      loadSettings,
+      getPluginScopedAll,
+      applyPluginScopedExternalValue,
+    } = await import('./settings.svelte')
+    await loadSettings()
+    mockSet.mockClear()
+
+    applyPluginScopedExternalValue('notemd.deepseek-agent', 'maxConcurrency', '4')
+
+    expect(getPluginScopedAll('notemd.deepseek-agent')).toEqual({
+      'notemd.deepseek-agent.maxConcurrency': '4',
+    })
+    expect(mockSet).not.toHaveBeenCalled()
+  })
 })

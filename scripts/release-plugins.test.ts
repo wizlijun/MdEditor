@@ -123,3 +123,27 @@ describe('dev-install-plugin.sh codex-agent dispatch', () => {
     expect(DEV_INSTALL).toContain('"$DEST/ui/"')
   })
 })
+
+describe('agent-owned concurrency settings', () => {
+  const agentDirs = ['claude-agent', 'codex-agent', 'deepseek-agent']
+
+  it.each(agentDirs)('%s keeps concurrency out of the global Settings dialog', (dir) => {
+    const manifest = JSON.parse(
+      readFileSync(join(ROOT, 'plugins-src', dir, 'manifest.v2.json'), 'utf8'),
+    ) as {
+      capabilities?: string[]
+      engines?: { notemd?: string }
+      contributes?: { settings?: unknown }
+      i18n?: Record<string, Record<string, unknown>>
+    }
+
+    expect(manifest.contributes?.settings).toBeUndefined()
+    expect(manifest.capabilities).toContain('settings')
+    expect(manifest.capabilities).not.toContain('agent')
+    expect(manifest.engines?.notemd).toBe('>=6.828.1')
+    for (const catalog of Object.values(manifest.i18n ?? {})) {
+      expect(catalog['settings.tab_label']).toBeUndefined()
+      expect(catalog['settings.fields']).toBeUndefined()
+    }
+  })
+})

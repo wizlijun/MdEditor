@@ -35,6 +35,11 @@ export type MessageKey =
   | 'harness.broken'
   | 'harness.model'
   | 'harness.warning'
+  | 'settings.title'
+  | 'settings.maxConcurrency'
+  | 'settings.maxConcurrencyHint'
+  | 'settings.loadFailed'
+  | 'settings.saveFailed'
   | 'harness.installHint'
   | 'harness.loginHint'
   | 'harness.probeFailed'
@@ -80,6 +85,11 @@ const en: Catalog = {
   'harness.broken': 'found, but it will not start',
   'harness.model': 'model {model}',
   'harness.warning': 'Last run failed on the environment: {detail}',
+  'settings.title': 'Settings',
+  'settings.maxConcurrency': 'Maximum concurrent AI reads',
+  'settings.maxConcurrencyHint': 'Limits this agent in ebook “AI pre-read” queues. Lowering it does not interrupt work already running.',
+  'settings.loadFailed': 'Could not load this setting. The default is 1.',
+  'settings.saveFailed': 'Could not save this setting. The previous value is still active.',
   'harness.installHint': 'Install @openai/codex, or set NOTEMD_CODEX_BIN to the executable.',
   'harness.loginHint': 'Run `codex login` in a terminal, then check again.',
   'harness.probeFailed': 'Status check failed: {detail}',
@@ -125,6 +135,11 @@ const zh: Catalog = {
   'harness.broken': '装了,但起不来',
   'harness.model': '模型 {model}',
   'harness.warning': '上次运行因环境问题失败:{detail}',
+  'settings.title': '设置',
+  'settings.maxConcurrency': 'AI 阅读最大并行数',
+  'settings.maxConcurrencyHint': '限制此智能体在电子书“AI 先读”队列中的并行数。调低后不会中断正在运行的任务。',
+  'settings.loadFailed': '无法读取此设置，将使用默认值 1。',
+  'settings.saveFailed': '无法保存此设置，仍使用之前的值。',
   'harness.installHint': '请安装 @openai/codex，或用 NOTEMD_CODEX_BIN 指定可执行文件。',
   'harness.loginHint': '请在终端运行 `codex login`，然后重新检查。',
   'harness.probeFailed': '状态检查失败：{detail}',
@@ -170,6 +185,11 @@ const ja: Catalog = {
   'harness.broken': 'インストール済みですが起動できません',
   'harness.model': 'モデル {model}',
   'harness.warning': '前回の実行は環境の問題で失敗しました:{detail}',
+  'settings.title': '設定',
+  'settings.maxConcurrency': 'AI 読書の最大同時実行数',
+  'settings.maxConcurrencyHint': '電子書籍の「AI 先読み」キューで、このエージェントの同時実行数を制限します。値を下げても実行中の処理は中断されません。',
+  'settings.loadFailed': 'この設定を読み込めません。既定値 1 を使用します。',
+  'settings.saveFailed': 'この設定を保存できません。以前の値が引き続き有効です。',
   'harness.installHint': '@openai/codex をインストールするか、NOTEMD_CODEX_BIN で実行ファイルを指定してください。',
   'harness.loginHint': 'ターミナルで `codex login` を実行してから、もう一度確認してください。',
   'harness.probeFailed': '状態確認に失敗しました:{detail}',
@@ -215,6 +235,11 @@ const de: Catalog = {
   'harness.broken': 'vorhanden, startet aber nicht',
   'harness.model': 'Modell {model}',
   'harness.warning': 'Letzter Lauf scheiterte an der Umgebung: {detail}',
+  'settings.title': 'Einstellungen',
+  'settings.maxConcurrency': 'Maximale parallele KI-Lesevorgänge',
+  'settings.maxConcurrencyHint': 'Begrenzt diesen Agenten in den „KI-Vorlesen“-Warteschlangen für E-Books. Eine Verringerung unterbricht keine laufende Aufgabe.',
+  'settings.loadFailed': 'Diese Einstellung konnte nicht geladen werden. Standardwert 1 wird verwendet.',
+  'settings.saveFailed': 'Diese Einstellung konnte nicht gespeichert werden. Der vorherige Wert bleibt aktiv.',
   'harness.installHint': '@openai/codex installieren oder die ausführbare Datei mit NOTEMD_CODEX_BIN angeben.',
   'harness.loginHint': '`codex login` im Terminal ausführen und danach erneut prüfen.',
   'harness.probeFailed': 'Statusprüfung fehlgeschlagen: {detail}',

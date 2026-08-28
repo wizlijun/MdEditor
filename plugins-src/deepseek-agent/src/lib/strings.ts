@@ -35,6 +35,11 @@ export type MessageKey =
   | 'harness.broken'
   | 'harness.model'
   | 'harness.warning'
+  | 'settings.title'
+  | 'settings.maxConcurrency'
+  | 'settings.maxConcurrencyHint'
+  | 'settings.loadFailed'
+  | 'settings.saveFailed'
   | 'err.noVault'
   | 'err.harnessNotFound'
   | 'err.badPolicy'
@@ -77,6 +82,11 @@ const en: Catalog = {
   'harness.broken': 'found, but it will not start',
   'harness.model': 'model {model}',
   'harness.warning': 'Last run failed on the environment: {detail}',
+  'settings.title': 'Settings',
+  'settings.maxConcurrency': 'Maximum concurrent AI reads',
+  'settings.maxConcurrencyHint': 'Limits this agent in ebook “AI pre-read” queues. Lowering it does not interrupt work already running.',
+  'settings.loadFailed': 'Could not load this setting. The default is 1.',
+  'settings.saveFailed': 'Could not save this setting. The previous value is still active.',
   'err.noVault': 'No vault configured — open or create a vault first.',
   'err.harnessNotFound':
     'DeepSeek Harness ACP server not found — install @deepseek-ai/dsh-acp-demo, or set dsh_acp_bin / DSH_REPO.',
@@ -119,6 +129,11 @@ const zh: Catalog = {
   'harness.broken': '装了,但起不来',
   'harness.model': '模型 {model}',
   'harness.warning': '上次运行因环境问题失败:{detail}',
+  'settings.title': '设置',
+  'settings.maxConcurrency': 'AI 阅读最大并行数',
+  'settings.maxConcurrencyHint': '限制此智能体在电子书“AI 先读”队列中的并行数。调低后不会中断正在运行的任务。',
+  'settings.loadFailed': '无法读取此设置，将使用默认值 1。',
+  'settings.saveFailed': '无法保存此设置，仍使用之前的值。',
   'err.noVault': '未配置 vault——请先打开或创建一个 vault。',
   'err.harnessNotFound':
     '未找到 DeepSeek Harness 的 ACP 服务端——请装 @deepseek-ai/dsh-acp-demo,或设置 dsh_acp_bin / DSH_REPO。',
@@ -161,6 +176,11 @@ const ja: Catalog = {
   'harness.broken': 'インストール済みですが起動できません',
   'harness.model': 'モデル {model}',
   'harness.warning': '前回の実行は環境の問題で失敗しました:{detail}',
+  'settings.title': '設定',
+  'settings.maxConcurrency': 'AI 読書の最大同時実行数',
+  'settings.maxConcurrencyHint': '電子書籍の「AI 先読み」キューで、このエージェントの同時実行数を制限します。値を下げても実行中の処理は中断されません。',
+  'settings.loadFailed': 'この設定を読み込めません。既定値 1 を使用します。',
+  'settings.saveFailed': 'この設定を保存できません。以前の値が引き続き有効です。',
   'err.noVault': 'vault が未設定です。まず vault を開くか作成してください。',
   'err.harnessNotFound':
     'DeepSeek Harness の ACP サーバーが見つかりません。@deepseek-ai/dsh-acp-demo をインストールするか、dsh_acp_bin / DSH_REPO を設定してください。',
@@ -203,6 +223,11 @@ const de: Catalog = {
   'harness.broken': 'vorhanden, startet aber nicht',
   'harness.model': 'Modell {model}',
   'harness.warning': 'Letzter Lauf scheiterte an der Umgebung: {detail}',
+  'settings.title': 'Einstellungen',
+  'settings.maxConcurrency': 'Maximale parallele KI-Lesevorgänge',
+  'settings.maxConcurrencyHint': 'Begrenzt diesen Agenten in den „KI-Vorlesen“-Warteschlangen für E-Books. Eine Verringerung unterbricht keine laufende Aufgabe.',
+  'settings.loadFailed': 'Diese Einstellung konnte nicht geladen werden. Standardwert 1 wird verwendet.',
+  'settings.saveFailed': 'Diese Einstellung konnte nicht gespeichert werden. Der vorherige Wert bleibt aktiv.',
   'err.noVault': 'Kein Vault konfiguriert — bitte zuerst einen Vault öffnen oder erstellen.',
   'err.harnessNotFound':
     'DeepSeek-Harness-ACP-Server nicht gefunden — @deepseek-ai/dsh-acp-demo installieren oder dsh_acp_bin / DSH_REPO setzen.',

@@ -239,6 +239,12 @@
     ;(async () => {
       try { await loadSettings() } catch (e) { console.warn('[App] loadSettings:', e) }
       try { await loadLocale() } catch (e) { console.warn('[App] loadLocale:', e) }
+      // Plugin windows persist their own settings through a self-scoped Host
+      // RPC; mirror those writes so a later global save cannot restore stale
+      // plugin values from this window's memory.
+      try {
+        await (await import('./lib/plugins/host-settings.svelte')).initPluginSettingsHost()
+      } catch (e) { console.warn('[App] initPluginSettingsHost:', e) }
       // Power Mode:配置从 settings 插件域读,并监听插件窗口经 RPC 推来的更新。
       try {
         await (await import('./lib/power-mode/host-config.svelte')).initPowerModeHost()

@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.codex-agent",
   "name": "Codex Agent",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.827.2"
+    "notemd": ">=6.828.1"
   },
   "description": "Run Codex CLI headlessly against your vault: task templates live in .notemd/agent-tasks, stream live in a window, or fire detached from the CLI.",
   "binary": {
@@ -44,18 +44,6 @@
         "open_command": "open"
       }
     ],
-    "settings": {
-      "tab_label": "Codex Agent",
-      "schema": [
-        {
-          "key": "notemd.codex-agent.maxConcurrency",
-          "type": "select",
-          "label": "Maximum concurrent AI reads",
-          "options": ["1", "2", "3", "4", "5"],
-          "default": "1"
-        }
-      ]
-    },
     "cli": [
       {
         "subcommand": "codex-agent",
@@ -85,30 +73,18 @@
       "name": "Codex 智能体",
       "menus": {
         "open": "Codex 智能体…"
-      },
-      "settings.tab_label": "Codex 智能体",
-      "settings.fields": {
-        "notemd.codex-agent.maxConcurrency": "AI 阅读最大并行数"
       }
     },
     "ja": {
       "name": "Codex エージェント",
       "menus": {
         "open": "Codex エージェント…"
-      },
-      "settings.tab_label": "Codex エージェント",
-      "settings.fields": {
-        "notemd.codex-agent.maxConcurrency": "AI 読書の最大同時実行数"
       }
     },
     "de": {
       "name": "Codex Agent",
       "menus": {
         "open": "Codex Agent…"
-      },
-      "settings.tab_label": "Codex Agent",
-      "settings.fields": {
-        "notemd.codex-agent.maxConcurrency": "Maximale parallele KI-Lesevorgänge"
       }
     }
   },
@@ -117,7 +93,8 @@
     "toast",
     "vault.read",
     "editor.open",
-    "notify"
+    "notify",
+    "settings"
   ],
   "request_timeout_seconds": 300
 }

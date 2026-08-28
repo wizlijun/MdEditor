@@ -54,6 +54,10 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // from this one answer, so the choice looks and behaves identically
         // whether you are in a sidecar note, Idea Spark, or the ebook queue.
         "host.agent.providers" | "host.agent.limits" => Some("agent"),
+        // Plugin-window-only settings channel. The UI bridge binds every read
+        // and write to the Origin-authenticated plugin id, so holding this
+        // token never exposes another plugin's settings scope.
+        "host.settings.get" | "host.settings.set" => Some("settings"),
         "host.notify" => Some("notify"),
         "host.dismissNotification" => Some("notify"),
         // editor.kit — the host-embedded editor bundle and the theme CSS that
@@ -541,6 +545,8 @@ mod tests {
         assert_eq!(method_capability("host.agent.status"), Some("agent"));
         assert_eq!(method_capability("host.agent.providers"), Some("agent"));
         assert_eq!(method_capability("host.agent.limits"), Some("agent"));
+        assert_eq!(method_capability("host.settings.get"), Some("settings"));
+        assert_eq!(method_capability("host.settings.set"), Some("settings"));
         assert_eq!(method_capability("host.notify"), Some("notify"));
         assert_eq!(method_capability("host.dismissNotification"), Some("notify"));
         assert_eq!(method_capability("host.theme.css"), Some("editor.kit"));
@@ -585,6 +591,27 @@ mod tests {
         let resp = sink(notification("host.vault.read", serde_json::json!({"path": "a.md"})));
         assert!(resp.is_none());
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn settings_are_ui_only_even_when_the_process_holds_the_capability() {
+        let dir = tempfile::tempdir().unwrap();
+        let (emitter, _) = recording_emitter();
+        let sink = make_sink(
+            "notemd.claude-agent".into(),
+            vec!["settings".into()],
+            dir.path().to_path_buf(),
+            emitter,
+            noop_poster(),
+            None,
+        );
+
+        for method in ["host.settings.get", "host.settings.set"] {
+            let resp = sink(req(method, Some(6), serde_json::json!({}))).unwrap();
+            let err = resp.error.unwrap();
+            assert_eq!(err.code, proto::ERR_METHOD_NOT_FOUND, "{method}");
+            assert!(err.message.contains("process channel"), "{}", err.message);
+        }
     }
 
     // ── 子项目②b host.ui.post ─────────────────────────────────────────────────
