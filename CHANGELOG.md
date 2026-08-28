@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.828.5 — 2026-08-28
+
 ### Fixed
 
 - **Rich editors in Idea Spark and Trace Source now follow theme fonts immediately.** Open plugin windows no longer race the settings save and briefly keep the previous theme, while Effie's bundled LXGW webfont is allowed through the plugin sandbox's narrowly scoped font policy instead of silently falling back to a system font. The fix comes with the note.md app; no separate plugin update is required.
