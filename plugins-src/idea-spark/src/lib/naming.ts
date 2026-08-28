@@ -4,6 +4,20 @@
 // CLI/tests.
 import { isReservedConceptName } from './okf/concept'
 
+/** The filename contract that distinguishes an idea from other Markdown. */
+export const IDEA_FILE_SUFFIX = '.idea.md'
+
+export function isIdeaFileName(name: string): boolean {
+  return name.endsWith(IDEA_FILE_SUFFIX)
+}
+
+/** Keeps rename input ergonomic while ensuring the result is still an idea. */
+export function withIdeaFileSuffix(name: string): string {
+  if (isIdeaFileName(name)) return name
+  const base = name.endsWith('.md') ? name.slice(0, -3) : name
+  return `${base}${IDEA_FILE_SUFFIX}`
+}
+
 /** Characters that are unsafe (or at least unwelcome) in a filesystem name,
  *  or that collide with markdown syntax (`#`) / template syntax (`%`, backtick). */
 const FORBIDDEN_CHARS = /[\\/:*?"<>|#%`]/g
@@ -120,8 +134,8 @@ function firstNonEmptyLine(md: string): string | null {
  * task to remove rather than deleted here, since this task's brief didn't
  * ask for it.
  *
- * `${today}-${slug}.md`, deduplicated against `taken` (existing filenames in
- * the idea directory) by appending `-2`, `-3`, ... . Also guards against ever
+ * `${today}-${slug}.idea.md`, deduplicated against `taken` (existing filenames
+ * in the idea directory) by appending `-2`, `-3`, ... . Also guards against ever
  * returning a reserved concept name (`index.md`/`log.md`) — structurally
  * unreachable given the mandatory `${today}-` prefix, but checked anyway as
  * defense in depth since naming.ts is the one place that decides this.
@@ -129,17 +143,17 @@ function firstNonEmptyLine(md: string): string | null {
 export function ideaFileName(md: string, today: string, taken: Set<string>): string {
   const slug = slugFromMarkdown(md)
   const base = `${today}-${slug}`
-  let candidate = `${base}.md`
+  let candidate = `${base}${IDEA_FILE_SUFFIX}`
   let n = 2
-  while (taken.has(candidate) || isReservedConceptName(candidate)) {
-    candidate = `${base}-${n}.md`
+  while (taken.has(candidate) || taken.has(proofPathFor(candidate)) || isReservedConceptName(candidate)) {
+    candidate = `${base}-${n}${IDEA_FILE_SUFFIX}`
     n += 1
   }
   return candidate
 }
 
 /**
- * `YYYY-MM-DD-HHmm-idea.md`, taken from the **creation moment's local time**
+ * `YYYY-MM-DD-HHmm.idea.md`, taken from the **creation moment's local time**
  * (`toISOString()` would name a late-evening idea after tomorrow). Names are
  * deliberately not derived from the title: autosave writes to disk before the
  * user has typed a heading, and renaming after the fact would scatter one
@@ -148,17 +162,17 @@ export function ideaFileName(md: string, today: string, taken: Set<string>): str
  */
 export function timestampFileName(now: Date, taken: Set<string>): string {
   const p = (n: number) => String(n).padStart(2, '0')
-  const base = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}-idea`
-  let name = `${base}.md`
+  const base = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}`
+  let name = `${base}${IDEA_FILE_SUFFIX}`
   let n = 2
-  while (taken.has(name)) {
-    name = `${base}-${n}.md`
+  while (taken.has(name) || taken.has(proofPathFor(name))) {
+    name = `${base}-${n}${IDEA_FILE_SUFFIX}`
     n += 1
   }
   return name
 }
 
-/** `inbox/ideas/a.md` → `inbox/ideas/a.proof.md`. */
+/** `inbox/ideas/a.idea.md` → `inbox/ideas/a.idea.proof.md`. */
 export function proofPathFor(ideaRelPath: string): string {
   return ideaRelPath.endsWith('.md')
     ? `${ideaRelPath.slice(0, -3)}.proof.md`

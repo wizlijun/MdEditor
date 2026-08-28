@@ -13,6 +13,10 @@ For the full commit history, see the git log.
 
 - **Plugins are now organized by capability instead of one long menu.** The Plugins menu and both marketplace views share five stable groups: Agents, Capture & Import, Thinking & Review, Publish & Export, and Editor Extensions. Claude, Codex and DeepSeek now sit together under Agents; unknown third-party group values remain visible under Other.
 
+### Fixed
+
+- **Idea Spark now lists only files explicitly named `*.idea.md`.** Ordinary Markdown, proof documents, directories and case-mismatched suffixes in the idea folder no longer appear as ideas. New and renamed ideas keep the `.idea.md` suffix, and an orphaned proof file can no longer make a fresh idea look already argued.
+
 ## v6.828.1 — 2026-08-28
 
 ### Fixed

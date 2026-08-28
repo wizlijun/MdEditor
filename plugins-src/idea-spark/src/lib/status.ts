@@ -2,7 +2,7 @@
 // facts (directory listing, pending-run map, failed set) via the bridge and
 // this module turns them into what the UI actually renders — no IO here.
 import type { IconName } from './icons'
-import { isReservedConceptName } from './okf/concept'
+import { isIdeaFileName } from './naming'
 import type { MessageKey } from './strings'
 
 export type IdeaStatus = 'draft' | 'running' | 'done' | 'failed'
@@ -30,17 +30,16 @@ export function deriveStatus(
 }
 
 /**
- * Filters a directory listing down to idea files: `.md` files that aren't a
- * `.proof.md` sidecar (those describe an idea, they aren't one), aren't a
- * directory, and aren't a reserved concept name (`index.md`/`log.md`).
+ * Filters a directory listing down to ordinary files whose names match the
+ * plugin's strict `*.idea.md` contract. Other Markdown and proof sidecars are
+ * documents in the same directory, but they aren't ideas.
  * Sorted newest-first — idea filenames are `YYYY-MM-DD-...`, so a plain
  * descending string sort puts the newest date first.
  */
 export function listIdeas(entries: Array<{ name: string; is_dir: boolean }>): string[] {
   return entries
     .filter((e) => !e.is_dir)
-    .filter((e) => e.name.endsWith('.md') && !e.name.endsWith('.proof.md'))
-    .filter((e) => !isReservedConceptName(e.name))
+    .filter((e) => isIdeaFileName(e.name))
     .map((e) => e.name)
     .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
 }

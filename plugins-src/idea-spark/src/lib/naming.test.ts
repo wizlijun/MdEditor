@@ -110,22 +110,22 @@ describe('slugFromMarkdown', () => {
 })
 
 describe('ideaFileName', () => {
-  it('builds "<today>-<slug>.md" for a fresh title', () => {
-    expect(ideaFileName('# 我的点子', '2026-08-04', new Set())).toBe('2026-08-04-我的点子.md')
+  it('builds "<today>-<slug>.idea.md" for a fresh title', () => {
+    expect(ideaFileName('# 我的点子', '2026-08-04', new Set())).toBe('2026-08-04-我的点子.idea.md')
   })
 
   it('falls back to the "idea" slug for a titleless document', () => {
-    expect(ideaFileName('', '2026-08-04', new Set())).toBe('2026-08-04-idea.md')
+    expect(ideaFileName('', '2026-08-04', new Set())).toBe('2026-08-04-idea.idea.md')
   })
 
   it('appends -2, -3, ... on collision, in order', () => {
-    const taken = new Set(['2026-08-04-idea.md', '2026-08-04-idea-2.md'])
-    expect(ideaFileName('', '2026-08-04', taken)).toBe('2026-08-04-idea-3.md')
+    const taken = new Set(['2026-08-04-idea.idea.md', '2026-08-04-idea-2.idea.md'])
+    expect(ideaFileName('', '2026-08-04', taken)).toBe('2026-08-04-idea-3.idea.md')
   })
 
   it('never returns a name only one collision away from what is already taken', () => {
-    const taken = new Set(['2026-08-04-x.md'])
-    expect(ideaFileName('x', '2026-08-04', taken)).toBe('2026-08-04-x-2.md')
+    const taken = new Set(['2026-08-04-x.idea.md'])
+    expect(ideaFileName('x', '2026-08-04', taken)).toBe('2026-08-04-x-2.idea.md')
   })
 
   it('never produces a reserved concept name, even in pathological inputs', () => {
@@ -136,6 +136,7 @@ describe('ideaFileName', () => {
     for (const [md, today] of [['index', ''], ['log', ''], ['index', 'log'], ['', '']] as const) {
       const name = ideaFileName(md, today, new Set())
       expect(isReservedConceptName(name)).toBe(false)
+      expect(name.endsWith('.idea.md')).toBe(true)
     }
   })
 })
@@ -143,14 +144,19 @@ describe('ideaFileName', () => {
 describe('timestampFileName', () => {
   const at = new Date(2026, 7, 4, 19, 42) // 本地时间 2026-08-04 19:42
   it('names by creation minute, not by title', () => {
-    expect(timestampFileName(at, new Set())).toBe('2026-08-04-1942-idea.md')
+    expect(timestampFileName(at, new Set())).toBe('2026-08-04-1942.idea.md')
   })
   it('pads single-digit month/day/hour/minute', () => {
-    expect(timestampFileName(new Date(2026, 0, 2, 3, 4), new Set())).toBe('2026-01-02-0304-idea.md')
+    expect(timestampFileName(new Date(2026, 0, 2, 3, 4), new Set())).toBe('2026-01-02-0304.idea.md')
   })
   it('suffixes on collision inside the same minute', () => {
-    const taken = new Set(['2026-08-04-1942-idea.md', '2026-08-04-1942-idea-2.md'])
-    expect(timestampFileName(at, taken)).toBe('2026-08-04-1942-idea-3.md')
+    const taken = new Set(['2026-08-04-1942.idea.md', '2026-08-04-1942-2.idea.md'])
+    expect(timestampFileName(at, taken)).toBe('2026-08-04-1942-3.idea.md')
+  })
+
+  it('does not claim a basename whose orphaned proof sidecar already exists', () => {
+    const taken = new Set(['2026-08-04-1942.idea.proof.md'])
+    expect(timestampFileName(at, taken)).toBe('2026-08-04-1942-2.idea.md')
   })
 })
 

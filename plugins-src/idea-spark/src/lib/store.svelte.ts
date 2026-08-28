@@ -18,7 +18,7 @@ import { agentStatus, bridge, vaultExists, vaultInfo, vaultList, vaultRead, vaul
 import { interpretStatus, seedOwnTemplates, TASK_ID, type RunView } from './agent-client'
 import { promptPathFor } from './prompts'
 import { buildIdeaDoc, rebuildIdeaDoc } from './idea-doc'
-import { proofPathFor, splitFrontmatter, timestampFileName, titleFromMarkdown } from './naming'
+import { IDEA_FILE_SUFFIX, proofPathFor, splitFrontmatter, timestampFileName, titleFromMarkdown, withIdeaFileSuffix } from './naming'
 import { isReservedConceptName } from './okf/concept'
 import { DEFAULT_STATE, parseState, serializeState, STATE_PATH } from './state-io'
 import { deriveStatus, listIdeas, type IdeaStatus } from './status'
@@ -270,7 +270,7 @@ export function fileNames(s: SparkStore): string[] {
 
 /**
  * The file name a save should write to: the one this idea already occupies, or
- * — for an idea that has never been saved — `YYYY-MM-DD-HHmm-idea.md` (the
+ * — for an idea that has never been saved — `YYYY-MM-DD-HHmm.idea.md` (the
  * creation moment, see `timestampFileName`) deduplicated against *every* file
  * in the directory (an orphaned `.proof.md` occupies a name just as much as
  * an idea does).
@@ -407,9 +407,11 @@ export function bodyOf(md: string): string {
   return splitFrontmatter(md)[1].replace(/^\n+/, '')
 }
 
-/** `2026-08-04-my-idea.md` → `my-idea` — the history list's label. */
+/** `2026-08-04-my-idea.idea.md` → `my-idea` — the history list's label. */
 export function displayName(name: string): string {
-  const base = name.endsWith('.md') ? name.slice(0, -3) : name
+  const base = name.endsWith(IDEA_FILE_SUFFIX)
+    ? name.slice(0, -IDEA_FILE_SUFFIX.length)
+    : name.replace(/\.md$/, '')
   const stripped = base.replace(/^\d{4}-\d{2}-\d{2}-/, '')
   return stripped || base
 }
@@ -432,7 +434,7 @@ export function frontmatterOf(md: string): string | null {
  * name.
  *
  * The file name alone is not a usable label any more: names are creation
- * timestamps (`2026-08-04-1942-idea.md`), so a list of them says nothing about
+ * timestamps (`2026-08-04-1942.idea.md`), so a list of them says nothing about
  * what any of the ideas *are*. `md` is the whole document as read from disk;
  * frontmatter is skipped by `titleFromMarkdown` itself.
  *
@@ -527,10 +529,10 @@ export function filesToDelete(s: SparkStore, name: string): string[] {
 /**
  * Validates a user-typed rename and resolves it to a file name.
  *
- * `.md` is appended when the user left it off (they are naming an idea, not a
- * file). Refused: blank, a path separator (this renames a file, it does not
- * move it out of the idea directory), a leading dot (hidden files, and `..`
- * with it), and — all four collapsed into `taken`, because from the user's side
+ * `.idea.md` is appended when the user left it off; a trailing plain `.md` is
+ * replaced with it. Refused: blank, a path separator (this renames a file; it
+ * does not move it out of the idea directory), a leading dot (hidden files,
+ * including `..`), and — all four collapsed into `taken`, because from the user's side
  * that is exactly what they have in common, the name is not available:
  *
  *   1. a name another file in the directory already occupies;
@@ -540,13 +542,10 @@ export function filesToDelete(s: SparkStore, name: string): string[] {
  *      idea next door";
  *   4. a name whose own sidecar slot (`<name>.proof.md`) is already occupied.
  *
- * 2 and 3 are not pedantry: `listIdeas` filters BOTH out of the listing, so an
- * idea allowed to take such a name would vanish from the inbox on the spot —
- * still on disk, no error shown, no row left to undo it from, and (if it was
- * the open document) autosave still writing into it. 4 is the mirror image: an
- * orphaned `b.proof.md` would make the freshly renamed `b.md` claim a `done`
- * badge and an "open the argument" item pointing at a document that argues
- * something else entirely.
+ * 2 and 3 are not pedantry: neither is an available idea name. 4 is the mirror
+ * image: an orphaned `b.idea.proof.md` would make a freshly renamed
+ * `b.idea.md` claim a `done` badge and an "open the argument" item pointing at
+ * a document that argues something else entirely.
  *
  * Renaming a file to the name it already has is accepted, not refused as
  * `taken`: the caller then has nothing to do, and telling the user their own
@@ -562,9 +561,12 @@ export function validateRename(
   if (trimmed.includes('/')) return { ok: false, reason: 'slash' }
   if (trimmed.startsWith('.')) return { ok: false, reason: 'dot' }
 
-  const name = trimmed.endsWith('.md') ? trimmed : `${trimmed}.md`
+  const markdownName = trimmed.endsWith('.md') ? trimmed : `${trimmed}.md`
+  if (isReservedConceptName(markdownName) || markdownName.endsWith('.proof.md')) {
+    return { ok: false, reason: 'taken' }
+  }
+  const name = withIdeaFileSuffix(trimmed)
   if (name === from) return { ok: true, name }
-  if (isReservedConceptName(name) || name.endsWith('.proof.md')) return { ok: false, reason: 'taken' }
   const occupied = fileNames(s)
   if (occupied.includes(name) || occupied.includes(proofPathFor(name))) return { ok: false, reason: 'taken' }
   return { ok: true, name }
@@ -803,9 +805,9 @@ export async function saveIdea(markdown: string): Promise<string | null> {
  * listing can be stale or have failed outright (see `reload`) — in which case
  * it would hand back an un-suffixed name and the write would silently overwrite
  * a same-minute idea (two windows opened within the same 60-second bucket).
- * `host.vault.exists` is the authority, so ask it, and keep asking as long as
- * the answer is "taken" (bounded, so a bridge that answers `true` for
- * everything can't spin forever).
+ * `host.vault.exists` is the authority, so ask it about both the idea and its
+ * proof slot, and keep asking as long as either answer is "taken" (bounded, so
+ * a bridge that answers `true` for everything can't spin forever).
  *
  * An idea that already has a file skips all of this: overwriting itself is the
  * whole point of a second save.
@@ -822,13 +824,16 @@ async function freeFileName(markdown: string): Promise<string> {
   const now = new Date()
   const taken = new Set(fileNames(state))
   let name = nextFileName(state, markdown, now.toISOString())
+  const exists = (path: string) => vaultExists(path).then((r) => r.exists).catch(() => false)
   for (let i = 0; i < 100; i++) {
-    // A failed existence check must not block the save: treat it as free and
-    // let the write itself report whatever is really wrong.
-    const occupied = await vaultExists(relPath(state, name))
-      .then((r) => r.exists)
-      .catch(() => false)
-    if (!occupied) return name
+    const idea = relPath(state, name)
+    // A failed existence check must not block the save: treat that slot as free
+    // and let the eventual write report whatever is really wrong.
+    const [ideaOccupied, proofOccupied] = await Promise.all([
+      exists(idea),
+      exists(proofPathFor(idea)),
+    ])
+    if (!ideaOccupied && !proofOccupied) return name
     taken.add(name)
     name = timestampFileName(now, taken)
   }
