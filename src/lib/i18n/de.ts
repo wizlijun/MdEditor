@@ -387,10 +387,8 @@ export const de: Record<keyof Messages, string> = {
   'agent.copyContext': 'Kontext kopieren',
   'agent.contextCopied': 'Kopiert',
   'agent.contextText':
-    'Arbeite mit folgendem note.md-Kontext weiter:\n\n' +
-    '- Aktuell geöffnetes Dokument (vollständiger Pfad): {documentPath}\n' +
-    '- Randnotiz zu den hervorgehobenen Notizen (vollständiger Pfad): {notePath}\n\n' +
-    'Lade beide Dateien, bevor du antwortest.',
+    '- Quelldokument (Hauptinhalt): {documentPath}\n' +
+    '- Randnotiz (Markierungen, Anmerkungen und offene Fragen): {notePath}',
   'agent.answerQuestions': 'Antworten',
   'agent.hint': 'Die offenen Fragen einem Agenten übergeben.',
   'agent.starting': 'Startet…',
