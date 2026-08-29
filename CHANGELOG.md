@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.829.2 — 2026-08-29
+
 ### Changed
 
 - **Copy context is now limited to the two files an agent needs.** The copied text gives only the source document's role and full path plus the sidecar note's role and full path, without an extra preamble or instructions.
