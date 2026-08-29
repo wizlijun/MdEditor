@@ -17,9 +17,12 @@
   import { pluginName } from '../../lib/plugins/plugin-i18n'
   import AgentPicker from '../../lib/agent-picker/AgentPicker.svelte'
   import type { AgentOption } from '../../lib/agent-picker/types'
+  import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 
-  let { notePath, onfinished }:
+  let { sourcePath, notePath, onfinished }:
     {
+      /** The document currently open in the main editor. */
+      sourcePath: string | null
       /** The sidecar note this workspace acts on; null when the tab has none. */
       notePath: string | null
       /** Called after a run reaches a terminal state, to refresh the views. */
@@ -33,6 +36,40 @@
   const providers = $derived(agentProviders())
   const current = $derived(activeProvider())
   const status = $derived(harnessStatuses[current])
+
+  let contextCopied = $state(false)
+  let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
+  // A success label belongs to the paths that were actually copied. Switching
+  // tabs must not leave "Copied" attached to a different document.
+  $effect(() => {
+    void sourcePath
+    void notePath
+    contextCopied = false
+    return () => {
+      if (copiedTimer) clearTimeout(copiedTimer)
+      copiedTimer = null
+    }
+  })
+
+  async function copyContext() {
+    if (!sourcePath || !notePath) return
+    const documentPath = sourcePath
+    const sidecarPath = notePath
+    const text = t('agent.contextText', { documentPath, notePath: sidecarPath })
+    try {
+      await writeText(text)
+      if (documentPath !== sourcePath || sidecarPath !== notePath) return
+      contextCopied = true
+      if (copiedTimer) clearTimeout(copiedTimer)
+      copiedTimer = setTimeout(() => {
+        contextCopied = false
+        copiedTimer = null
+      }, 1400)
+    } catch (e) {
+      console.warn('[agent] copying context failed:', e)
+    }
+  }
 
   /** What the picker renders: every installed agent plus its harness. */
   const pickerOptions = $derived<AgentOption[]>(
@@ -113,7 +150,18 @@
   <section class="agents" aria-label={t('agent.title')}>
     <!-- A heading of its own, because this becomes a list: one row per task
          the enabled agent plugins offer for the current note. -->
-    <h3>{t('agent.title')}</h3>
+    <div class="heading">
+      <h3>{t('agent.title')}</h3>
+      <button
+        class="copy-context"
+        disabled={!sourcePath || !notePath}
+        title={t('agent.copyContext')}
+        aria-live="polite"
+        onclick={() => void copyContext()}
+      >
+        {contextCopied ? t('agent.contextCopied') : t('agent.copyContext')}
+      </button>
+    </div>
 
     {#if status && !status.ok}
       <p class="alert" title={status.hint ?? ''}>
@@ -165,14 +213,38 @@
     padding: 5px 12px 7px;
     border-top: 1px solid var(--border-color, #3333);
   }
-  h3 {
+  .heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     margin: 0 0 3px;
+  }
+  h3 {
+    margin: 0;
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     opacity: 0.45;
   }
+  .copy-context {
+    flex: none;
+    font: inherit;
+    font-size: 11px;
+    padding: 1px 5px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: inherit;
+    opacity: 0.6;
+    cursor: pointer;
+  }
+  .copy-context:hover:not(:disabled) {
+    opacity: 0.9;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  .copy-context:disabled { opacity: 0.3; cursor: default; }
   .harness { display: flex; margin: 0 0 4px; }
   /* select inherits neither font-size nor family — declare both, or the row
      drifts at larger UI font sizes. */

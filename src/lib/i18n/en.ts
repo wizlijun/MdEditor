@@ -391,6 +391,13 @@ export const en = {
 
   // Outline Notes
   'agent.title': 'Agents',
+  'agent.copyContext': 'Copy context',
+  'agent.contextCopied': 'Copied',
+  'agent.contextText':
+    'Continue with the following note.md context:\n\n' +
+    '- Open document (full path): {documentPath}\n' +
+    '- Sidecar note for the highlighted notes (full path): {notePath}\n\n' +
+    'Load both files before answering.',
   'agent.answerQuestions': 'Answer',
   'agent.hint': 'Hand the open questions to an agent.',
   'agent.starting': 'Starting…',

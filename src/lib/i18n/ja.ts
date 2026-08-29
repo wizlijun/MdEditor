@@ -386,6 +386,13 @@ export const ja: Record<keyof Messages, string> = {
 
   // Outline Notes
   'agent.title': 'Agents',
+  'agent.copyContext': 'コンテキストをコピー',
+  'agent.contextCopied': 'コピー済み',
+  'agent.contextText':
+    '次の note.md コンテキストを引き継いでください。\n\n' +
+    '- 現在開いている文書（フルパス）：{documentPath}\n' +
+    '- ハイライトされたノートに対応する sidecar note（フルパス）：{notePath}\n\n' +
+    '回答する前に、両方のファイルを読み込んでください。',
   'agent.answerQuestions': '回答',
   'agent.hint': '未回答の質問をエージェントに任せます。',
   'agent.starting': '起動中…',

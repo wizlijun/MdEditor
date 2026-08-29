@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Sidecar Notes can copy a ready-to-use context prompt for another agent harness.** The Agent area now provides a Copy context button containing the open document's full path, the resolved sidecar-note path for its highlights, and a clear instruction to load both files. Successful copies confirm briefly in place; the button and copied prompt follow the current UI language.
+
 ### Fixed
 
 - **Location Log can request macOS location access and explains permission failures clearly.** Signed builds now carry the Location entitlement required for the system authorization prompt. If access is disabled, the warning names the exact System Settings path instead of exposing only a `kCLErrorDomain code=1` error.
