@@ -155,7 +155,7 @@
       {/key}
     </div>
   {/if}
-  <AgentWorkspace notePath={companionPath} onfinished={refreshAfterAgent} />
+  <AgentWorkspace sourcePath={tab?.filePath ?? null} notePath={companionPath} onfinished={refreshAfterAgent} />
 </div>
 
 {#if menu.open}
