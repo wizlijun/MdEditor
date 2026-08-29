@@ -61,10 +61,8 @@ describe('AgentWorkspace Copy context', () => {
     await settle()
 
     expect(writeText).toHaveBeenCalledWith(
-      'Continue with the following note.md context:\n\n' +
-      '- Open document (full path): /Users/me/Vault/reading/source.md\n' +
-      '- Sidecar note for the highlighted notes (full path): /Users/me/Vault/notes/source.note.md\n\n' +
-      'Load both files before answering.',
+      '- Source document (primary content): /Users/me/Vault/reading/source.md\n' +
+      '- Sidecar note (highlights, annotations, and questions): /Users/me/Vault/notes/source.note.md',
     )
     expect(button.textContent?.trim()).toBe('Copied')
 
@@ -115,8 +113,8 @@ describe('AgentWorkspace Copy context', () => {
     button.click()
     await settle()
 
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('当前打开的文档（完整路径）：/资料/原文.md'))
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('对应高亮手记的 sidecar note（完整路径）：/资料/原文.note.md'))
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('源文档（正文内容）：/资料/原文.md'))
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('手记文件（高亮、批注与待答问题）：/资料/原文.note.md'))
     expect(button.textContent?.trim()).toBe('已复制')
 
     unmount(app)

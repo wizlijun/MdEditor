@@ -423,10 +423,8 @@ export const zh: Record<keyof Messages, string> = {
   'agent.copyContext': '复制上下文',
   'agent.contextCopied': '已复制',
   'agent.contextText':
-    '请基于以下 note.md 上下文继续：\n\n' +
-    '- 当前打开的文档（完整路径）：{documentPath}\n' +
-    '- 对应高亮手记的 sidecar note（完整路径）：{notePath}\n\n' +
-    '请先加载这两个文件，再继续回答。',
+    '- 源文档（正文内容）：{documentPath}\n' +
+    '- 手记文件（高亮、批注与待答问题）：{notePath}',
   'agent.answerQuestions': '回答',
   'agent.hint': '把待答的问题交给 agent。',
   'agent.starting': '正在启动…',
