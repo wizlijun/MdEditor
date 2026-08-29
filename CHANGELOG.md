@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.829.1 — 2026-08-29
+
 ### Added
 
 - **Sidecar Notes can copy a ready-to-use context prompt for another agent harness.** The Agent area now provides a Copy context button containing the open document's full path, the resolved sidecar-note path for its highlights, and a clear instruction to load both files. Successful copies confirm briefly in place; the button and copied prompt follow the current UI language.
