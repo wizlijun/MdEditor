@@ -14,7 +14,6 @@
     onReopen,
     onRelink,
     onDragStart,
-    onDragEnd,
   }: {
     item: WorkspaceItem
     disabled?: boolean
@@ -26,8 +25,7 @@
     onOpen(item: WorkspaceItem): void
     onReopen(item: WorkspaceItem): void
     onRelink(item: WorkspaceItem): void
-    onDragStart?(item: WorkspaceItem): void
-    onDragEnd?(): void
+    onDragStart?(item: WorkspaceItem, event: PointerEvent): void
   } = $props()
 
   const statusKey = $derived(`status.${item.state}` as MessageKey)
@@ -49,20 +47,14 @@
   class="card"
   class:orphan={item.orphan}
   class:dragging
+  class:draggable={canDrag && !disabled}
   data-item-key={item.key}
-  draggable={canDrag && !disabled}
-  ondragstart={(event) => {
-    if (!canDrag || disabled) {
-      event.preventDefault()
-      return
-    }
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = 'move'
-      event.dataTransfer.setData('text/plain', item.key)
-    }
-    onDragStart?.(item)
+  data-draggable={canDrag && !disabled}
+  onpointerdown={(event) => {
+    if (!canDrag || disabled || event.button !== 0) return
+    if (event.target instanceof Element && event.target.closest('button')) return
+    onDragStart?.(item, event)
   }}
-  ondragend={() => onDragEnd?.()}
 >
   <div class="body">
     <div class="title-line">
@@ -105,8 +97,8 @@
     box-shadow: 0 1px 2px color-mix(in srgb, var(--shadow) 8%, transparent);
   }
   .card.orphan { border-style: dashed; }
-  .card[draggable="true"] { cursor: grab; }
-  .card[draggable="true"]:active { cursor: grabbing; }
+  .card.draggable { cursor: grab; user-select: none; }
+  .card.draggable:active { cursor: grabbing; }
   .card.dragging { opacity: 0.42; }
   .body { min-width: 0; }
   .title-line { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 7px; min-width: 0; }

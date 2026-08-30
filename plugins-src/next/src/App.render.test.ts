@@ -104,7 +104,56 @@ function workspace(): NextWorkspace {
   }
 }
 
+function targetLane(lane: string, left = 300): HTMLElement {
+  const target = document.querySelector<HTMLElement>(`[data-lane="${lane}"]`)!
+  target.getBoundingClientRect = () => ({
+    x: left, y: 0, left, top: 0, right: left + 200, bottom: 500,
+    width: 200, height: 500, toJSON: () => ({}),
+  })
+  return target
+}
+
+function pointerDrag(itemKey: string, lane: string, pointerId = 1): void {
+  targetLane(lane)
+  document.querySelector<HTMLElement>(`[data-item-key="${itemKey}"]`)!
+    .dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, button: 0, pointerId, clientX: 10, clientY: 10,
+    }))
+  window.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, pointerId, clientX: 350, clientY: 50,
+  }))
+  window.dispatchEvent(new PointerEvent('pointerup', {
+    bubbles: true, pointerId, clientX: 350, clientY: 50,
+  }))
+  flushSync()
+}
+
 describe('Next window', () => {
+  it('uses pointer movement to place a card because Tauri swallows HTML5 drag events', () => {
+    mocks.state.workspace = workspace()
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const waitingLane = targetLane('waiting')
+    const captureCard = document.querySelector<HTMLElement>('[data-item-key="capture"]')!
+    captureCard.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, button: 0, pointerId: 7, clientX: 10, clientY: 10,
+    }))
+    window.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerId: 7, clientX: 350, clientY: 50,
+    }))
+    flushSync()
+    expect(waitingLane.classList.contains('over')).toBe(true)
+    expect(document.querySelector('.drag-ghost')?.textContent).toContain('默认隐藏的想法')
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, pointerId: 7, clientX: 350, clientY: 50,
+    }))
+    flushSync()
+
+    expect(document.querySelector<HTMLButtonElement>('.routes button[aria-pressed="true"]')?.textContent)
+      .toContain('等待回收')
+  })
+
   it('shows a New Idea shortcut and creates into the displayed Idea directory', async () => {
     const next = workspace()
     next.ideaDir = 'capture/sparks'
@@ -169,17 +218,13 @@ describe('Next window', () => {
     expect(document.body.textContent).toContain('已经关闭的想法')
   })
 
-  it('opens the target placement route on drop and reopens a dormant card dropped into capture', async () => {
+  it('opens the target placement route on pointer drop and reopens a dormant card dropped into capture', async () => {
     const next = workspace()
     mocks.state.workspace = next
     component = mount(App, { target: document.body })
     flushSync()
 
-    const captureCard = document.querySelector<HTMLElement>('[data-item-key="capture"]')!
-    captureCard.dispatchEvent(new Event('dragstart', { bubbles: true }))
-    document.querySelector<HTMLElement>('[data-lane="waiting"]')!
-      .dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }))
-    flushSync()
+    pointerDrag('capture', 'waiting')
 
     const activeRoute = document.querySelector<HTMLButtonElement>('.routes button[aria-pressed="true"]')
     expect(activeRoute?.textContent).toContain('等待回收')
@@ -191,25 +236,19 @@ describe('Next window', () => {
     showPlaced.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     flushSync()
 
-    document.querySelector<HTMLElement>('[data-item-key="dormant"]')!
-      .dispatchEvent(new Event('dragstart', { bubbles: true }))
-    document.querySelector<HTMLElement>('[data-lane="capture"]')!
-      .dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }))
+    pointerDrag('dormant', 'capture', 2)
     await Promise.resolve()
     expect(mocks.reopen).toHaveBeenCalledWith(next.dormant[0])
   })
 
-  it('does nothing on a same-lane drop and disables dragging while saving', () => {
+  it('does nothing on a same-lane pointer drop and disables dragging while saving', () => {
     mocks.state.workspace = workspace()
     component = mount(App, { target: document.body })
     flushSync()
 
     const wip = document.querySelector<HTMLElement>('[data-item-key="wip"]')!
-    expect(wip.getAttribute('draggable')).toBe('true')
-    wip.dispatchEvent(new Event('dragstart', { bubbles: true }))
-    document.querySelector<HTMLElement>('[data-lane="wip"]')!
-      .dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }))
-    flushSync()
+    expect(wip.dataset.draggable).toBe('true')
+    pointerDrag('wip', 'wip')
     expect(document.querySelector('[role="dialog"]')).toBeNull()
 
     unmount(component!)
@@ -218,7 +257,7 @@ describe('Next window', () => {
     mocks.state.saving = true
     component = mount(App, { target: document.body })
     flushSync()
-    expect(document.querySelector<HTMLElement>('[data-item-key="wip"]')!.getAttribute('draggable')).toBe('false')
+    expect(document.querySelector<HTMLElement>('[data-item-key="wip"]')!.dataset.draggable).toBe('false')
   })
 
   it('reopens a closed idea before placing it into a new lane', async () => {
@@ -230,11 +269,7 @@ describe('Next window', () => {
     const showPlaced = [...document.querySelectorAll('button')].find((node) => node.textContent?.includes('显示已安放'))!
     showPlaced.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     flushSync()
-    document.querySelector<HTMLElement>('[data-item-key="closed"]')!
-      .dispatchEvent(new Event('dragstart', { bubbles: true }))
-    document.querySelector<HTMLElement>('[data-lane="wip"]')!
-      .dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }))
-    flushSync()
+    pointerDrag('closed', 'wip')
 
     for (const field of ['commitment', 'nextAction', 'closeCondition']) {
       document.querySelector<HTMLButtonElement>(`[data-choices-for="${field}"] button`)!
@@ -247,6 +282,53 @@ describe('Next window', () => {
     expect(mocks.reopen).toHaveBeenCalledWith(next.closed[0])
     expect(mocks.place).toHaveBeenCalledWith(next.closed[0], expect.objectContaining({ route: 'commit' }))
     expect(mocks.reopen.mock.invocationCallOrder[0]).toBeLessThan(mocks.place.mock.invocationCallOrder[0])
+  })
+
+  it('cancels a pointer drag with Escape and never starts one from a card button', () => {
+    mocks.state.workspace = workspace()
+    component = mount(App, { target: document.body })
+    flushSync()
+    targetLane('waiting')
+
+    const card = document.querySelector<HTMLElement>('[data-item-key="capture"]')!
+    card.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, button: 0, pointerId: 8, clientX: 10, clientY: 10,
+    }))
+    window.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerId: 8, clientX: 350, clientY: 50,
+    }))
+    flushSync()
+    expect(document.querySelector('.drag-ghost')).toBeTruthy()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, pointerId: 8, clientX: 350, clientY: 50,
+    }))
+    flushSync()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+
+    card.querySelector<HTMLButtonElement>('button')!.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, button: 0, pointerId: 9, clientX: 10, clientY: 10,
+    }))
+    window.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerId: 9, clientX: 350, clientY: 50,
+    }))
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, pointerId: 9, clientX: 350, clientY: 50,
+    }))
+    flushSync()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+
+    card.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, button: 0, pointerId: 10, clientX: 10, clientY: 10,
+    }))
+    window.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerId: 10, clientX: 350, clientY: 50,
+    }))
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, pointerId: 10, clientX: 900, clientY: 50,
+    }))
+    flushSync()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
 
   it('keeps a reopened orphan visible in a repair area with placement and relink actions', () => {
