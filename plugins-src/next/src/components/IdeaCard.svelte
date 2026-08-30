@@ -28,8 +28,8 @@
     onReopen(item: WorkspaceItem): void
     onRelink(item: WorkspaceItem): void
     onDragStart?(item: WorkspaceItem, event: PointerEvent): void
-    onPreviewStart?(item: WorkspaceItem, anchor: HTMLElement): void
-    onPreviewEnd?(event: PointerEvent | FocusEvent): void
+    onPreviewStart?(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus'): void
+    onPreviewEnd?(trigger: 'pointer' | 'focus'): void
   } = $props()
 
   const statusKey = $derived(`status.${item.state}` as MessageKey)
@@ -60,13 +60,17 @@
   tabindex={hasPreview ? 0 : undefined}
   aria-describedby={hasPreview ? 'idea-preview-tip' : undefined}
   onpointerenter={(event) => {
-    if (hasPreview) onPreviewStart?.(item, event.currentTarget)
+    if (hasPreview) onPreviewStart?.(item, event.currentTarget, 'pointer')
   }}
-  onpointerleave={(event) => onPreviewEnd?.(event)}
+  onpointerleave={() => onPreviewEnd?.('pointer')}
   onfocusin={(event) => {
-    if (hasPreview) onPreviewStart?.(item, event.currentTarget)
+    if (hasPreview) onPreviewStart?.(item, event.currentTarget, 'focus')
   }}
-  onfocusout={(event) => onPreviewEnd?.(event)}
+  onfocusout={(event) => {
+    const next = event.relatedTarget
+    if (next instanceof Node && event.currentTarget.contains(next)) return
+    onPreviewEnd?.('focus')
+  }}
   onpointerdown={(event) => {
     if (!canDrag || disabled || event.button !== 0) return
     if (event.target instanceof Element && event.target.closest('button')) return
@@ -117,6 +121,7 @@
   .card.draggable { cursor: grab; user-select: none; }
   .card.draggable:active { cursor: grabbing; }
   .card.dragging { opacity: 0.42; }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .body { min-width: 0; }
   .title-line { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 7px; min-width: 0; }
   h3 { width: 100%; margin: 0; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.38; font-weight: 650; }

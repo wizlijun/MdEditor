@@ -46,9 +46,11 @@
   let ghostY = $state(0)
   let previewing = $state<WorkspaceItem | null>(null)
   let previewAnchor: HTMLElement | null = null
-  let previewTip = $state<HTMLElement | null>(null)
   let previewX = $state(12)
   let previewY = $state(12)
+  let previewPointerActive = false
+  let previewFocusActive = false
+  let previewCloseTimer: number | null = null
   const laneElements = $state<Partial<Record<Lane, HTMLElement>>>({})
   const dragThreshold = 5
 
@@ -95,7 +97,24 @@
 
   function openCreation() {
     if (store.loading || store.saving || placing || relinking) return
+    closePreview()
     creating = true
+  }
+
+  function openPlacement(item: WorkspaceItem, route?: Route) {
+    closePreview()
+    placing = item
+    placementRoute = route
+  }
+
+  function openRelink(item: WorkspaceItem) {
+    closePreview()
+    relinking = item
+  }
+
+  async function refreshWorkspace() {
+    closePreview()
+    await refresh()
   }
 
   async function submitIdea(body: string) {
@@ -130,10 +149,12 @@
   }
 
   function doOpen(item: WorkspaceItem) {
+    closePreview()
     void report(() => openItem(item), 'error.open')
   }
 
   function doReopen(item: WorkspaceItem) {
+    closePreview()
     void report(() => reopen(item), 'error.save')
   }
 
@@ -170,13 +191,28 @@
   }
 
   function closePreview() {
+    if (previewCloseTimer !== null) window.clearTimeout(previewCloseTimer)
+    previewCloseTimer = null
+    previewPointerActive = false
+    previewFocusActive = false
     previewing = null
     previewAnchor = null
-    previewTip = null
   }
 
-  function previewStart(item: WorkspaceItem, anchor: HTMLElement) {
+  function cancelPreviewClose() {
+    if (previewCloseTimer !== null) window.clearTimeout(previewCloseTimer)
+    previewCloseTimer = null
+  }
+
+  function previewStart(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus') {
     if (!item.body?.trim() || dragging) return
+    cancelPreviewClose()
+    if (previewAnchor !== anchor) {
+      previewPointerActive = false
+      previewFocusActive = false
+    }
+    if (trigger === 'pointer') previewPointerActive = true
+    else previewFocusActive = true
     previewing = item
     previewAnchor = anchor
     const rect = anchor.getBoundingClientRect()
@@ -193,10 +229,28 @@
     previewY = Math.max(margin, Math.min(rect.top, window.innerHeight - maxHeight - margin))
   }
 
-  function previewEnd(event: PointerEvent | FocusEvent) {
-    const next = event.relatedTarget
-    if (next instanceof Node && (previewAnchor?.contains(next) || previewTip?.contains(next))) return
-    closePreview()
+  function schedulePreviewClose() {
+    if (previewPointerActive || previewFocusActive || previewCloseTimer !== null) return
+    previewCloseTimer = window.setTimeout(() => {
+      previewCloseTimer = null
+      if (!previewPointerActive && !previewFocusActive) closePreview()
+    }, 100)
+  }
+
+  function previewEnd(trigger: 'pointer' | 'focus') {
+    if (trigger === 'pointer') previewPointerActive = false
+    else previewFocusActive = false
+    schedulePreviewClose()
+  }
+
+  function previewTipEnter() {
+    cancelPreviewClose()
+    previewPointerActive = true
+  }
+
+  function previewTipLeave() {
+    previewPointerActive = false
+    schedulePreviewClose()
   }
 
   function laneAtPoint(x: number, y: number): Lane | null {
@@ -213,8 +267,7 @@
       doReopen(item)
       return
     }
-    placementRoute = routeFor(lane)
-    placing = item
+    openPlacement(item, routeFor(lane))
   }
 
   function pointerMove(event: PointerEvent) {
@@ -245,9 +298,9 @@
   }
 
   onMount(() => {
-    void report(refresh, 'error.load')
+    void report(refreshWorkspace, 'error.load')
     const onFocus = () => {
-      if (!store.saving) void report(refresh, 'error.load')
+      if (!store.saving) void report(refreshWorkspace, 'error.load')
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && (dragPress || dragging)) {
@@ -269,6 +322,7 @@
     return () => {
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('keydown', onKey)
+      cancelPreviewClose()
     }
   })
 </script>
@@ -279,6 +333,7 @@
   onpointercancel={dragEnd}
   onblur={() => { dragEnd(); closePreview() }}
   onresize={closePreview}
+  onscroll={closePreview}
 />
 
 <main class="app">
@@ -293,7 +348,7 @@
         <span>{t('action.newIdea')}</span>
         <kbd>{newIdeaShortcut}</kbd>
       </button>
-      <button type="button" class="refresh" disabled={store.loading || store.saving} onclick={() => void report(refresh, 'error.load')}>
+      <button type="button" class="refresh" disabled={store.loading || store.saving} onclick={() => void report(refreshWorkspace, 'error.load')}>
         ↻ <span>{t('common.refresh')}</span>
       </button>
     </div>
@@ -324,10 +379,12 @@
                 {item}
                 disabled={interactionDisabled}
                 canPlace={item.state === 'capture'}
-                onPlace={(value) => { placing = value; placementRoute = undefined }}
+                onPlace={(value) => openPlacement(value)}
                 onOpen={doOpen}
                 onReopen={doReopen}
-                onRelink={(value) => relinking = value}
+                onRelink={openRelink}
+                onPreviewStart={previewStart}
+                onPreviewEnd={previewEnd}
               />
             {/each}
           </div>
@@ -366,10 +423,10 @@
                       dragging={dragging?.key === item.key}
                       canPlace={item.state === 'capture' || item.state === 'wip' || item.state === 'waiting'}
                       canReopen={item.state === 'dormant' || item.state === 'closed'}
-                      onPlace={(value) => { placing = value; placementRoute = undefined }}
+                      onPlace={(value) => openPlacement(value)}
                       onOpen={doOpen}
                       onReopen={doReopen}
-                      onRelink={(value) => relinking = value}
+                      onRelink={openRelink}
                       onDragStart={dragStart}
                       onPreviewStart={previewStart}
                       onPreviewEnd={previewEnd}
@@ -394,12 +451,12 @@
 
 {#if previewing?.body}
   <aside
-    bind:this={previewTip}
     id="idea-preview-tip"
     class="idea-preview-tip"
     role="tooltip"
     style="left:{previewX}px; top:{previewY}px"
-    onpointerleave={previewEnd}
+    onpointerenter={previewTipEnter}
+    onpointerleave={previewTipLeave}
   ><pre>{previewing.body}</pre></aside>
 {/if}
 
@@ -505,8 +562,8 @@
   .lane.available { border-style: dashed; }
   .lane.over { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
   .drag-ghost { position: fixed; z-index: 60; max-width: 240px; transform: translate(10px, 10px); overflow: hidden; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--fg); box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 22%, transparent); padding: 9px 12px; font-size: 12px; font-weight: 650; opacity: 0.88; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; }
-  .idea-preview-tip { position: fixed; z-index: 55; width: min(380px, calc(100vw - 24px)); max-height: min(480px, calc(100vh - 24px)); box-sizing: border-box; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 12px; background: color-mix(in srgb, var(--card) 96%, transparent); color: var(--fg); box-shadow: 0 14px 38px color-mix(in srgb, var(--shadow) 28%, transparent); padding: 14px 16px; backdrop-filter: blur(18px); }
-  .idea-preview-tip pre { margin: 0; font: 12.5px/1.55 inherit; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .idea-preview-tip { position: fixed; z-index: 15; width: min(380px, calc(100vw - 24px)); max-height: min(480px, calc(100vh - 24px)); box-sizing: border-box; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 12px; background: color-mix(in srgb, var(--card) 96%, transparent); color: var(--fg); box-shadow: 0 14px 38px color-mix(in srgb, var(--shadow) 28%, transparent); padding: 14px 16px; backdrop-filter: blur(18px); }
+  .idea-preview-tip pre { margin: 0; font-family: inherit; font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
   .lane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 10px; }
   .lane-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.01em; }
   .lane-head span { min-width: 20px; border-radius: 999px; background: var(--card); color: var(--muted); padding: 2px 7px; text-align: center; font-size: 11px; }
