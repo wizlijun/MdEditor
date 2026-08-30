@@ -41,6 +41,11 @@
   let relinking = $state<WorkspaceItem | null>(null)
   let dragging = $state<WorkspaceItem | null>(null)
   let dragOver = $state<Lane | null>(null)
+  let dragPress: { item: WorkspaceItem; startX: number; startY: number; pointerId: number } | null = null
+  let ghostX = $state(0)
+  let ghostY = $state(0)
+  const laneElements = $state<Partial<Record<Lane, HTMLElement>>>({})
+  const dragThreshold = 5
 
   const workspace = $derived(store.workspace)
   const blocked = $derived(Boolean(workspace?.readOnlyError || workspace?.projection.hasBlockingIssues))
@@ -140,28 +145,34 @@
     return 'settle'
   }
 
-  function dragStart(item: WorkspaceItem) {
-    if (interactionDisabled || item.state === 'unsupported') return
-    dragging = item
+  function dragStart(item: WorkspaceItem, event: PointerEvent) {
+    if (dragPress || interactionDisabled || item.state === 'unsupported') return
+    dragPress = {
+      item,
+      startX: event.clientX,
+      startY: event.clientY,
+      pointerId: event.pointerId,
+    }
+    ghostX = event.clientX
+    ghostY = event.clientY
   }
 
   function dragEnd() {
+    dragPress = null
     dragging = null
     dragOver = null
   }
 
-  function dragEnter(event: DragEvent, lane: Lane) {
-    if (!dragging || !canDrop(dragging, lane)) return
-    event.preventDefault()
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-    dragOver = lane
+  function laneAtPoint(x: number, y: number): Lane | null {
+    for (const lane of ['capture', 'wip', 'waiting', 'dormant', 'closed'] as const) {
+      const rect = laneElements[lane]?.getBoundingClientRect()
+      if (rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return lane
+    }
+    return null
   }
 
-  function drop(event: DragEvent, lane: Lane) {
-    event.preventDefault()
-    const item = dragging
-    dragEnd()
-    if (!item || !canDrop(item, lane)) return
+  function moveToLane(item: WorkspaceItem, lane: Lane) {
+    if (!canDrop(item, lane)) return
     if (lane === 'capture') {
       doReopen(item)
       return
@@ -170,12 +181,44 @@
     placing = item
   }
 
+  function pointerMove(event: PointerEvent) {
+    if (!dragPress || event.pointerId !== dragPress.pointerId) return
+    if (!dragging) {
+      const distance = Math.hypot(event.clientX - dragPress.startX, event.clientY - dragPress.startY)
+      if (distance < dragThreshold) return
+      if (interactionDisabled) {
+        dragEnd()
+        return
+      }
+      dragging = dragPress.item
+    }
+    event.preventDefault()
+    ghostX = event.clientX
+    ghostY = event.clientY
+    const lane = laneAtPoint(event.clientX, event.clientY)
+    dragOver = lane && canDrop(dragging, lane) ? lane : null
+  }
+
+  function pointerUp(event: PointerEvent) {
+    if (!dragPress || event.pointerId !== dragPress.pointerId) return
+    const item = dragging
+    const hovered = item ? laneAtPoint(event.clientX, event.clientY) : null
+    const lane = item && hovered && canDrop(item, hovered) ? hovered : null
+    dragEnd()
+    if (item && lane) moveToLane(item, lane)
+  }
+
   onMount(() => {
     void report(refresh, 'error.load')
     const onFocus = () => {
       if (!store.saving) void report(refresh, 'error.load')
     }
     const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && (dragPress || dragging)) {
+        event.preventDefault()
+        dragEnd()
+        return
+      }
       if (event.key.toLocaleLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return
       event.preventDefault()
       if (!creating) openCreation()
@@ -188,6 +231,13 @@
     }
   })
 </script>
+
+<svelte:window
+  onpointermove={pointerMove}
+  onpointerup={pointerUp}
+  onpointercancel={dragEnd}
+  onblur={dragEnd}
+/>
 
 <main class="app">
   <header class="topbar">
@@ -253,18 +303,12 @@
         <div class="board">
           {#each lanes as lane (lane.id)}
             <section
+              bind:this={laneElements[lane.id]}
               class="lane"
               aria-label={t(lane.title)}
               class:over={dragOver === lane.id}
               class:available={Boolean(dragging && canDrop(dragging, lane.id))}
               data-lane={lane.id}
-              ondragenter={(event) => dragEnter(event, lane.id)}
-              ondragover={(event) => dragEnter(event, lane.id)}
-              ondragleave={(event) => {
-                const related = event.relatedTarget
-                if (!(related instanceof Node) || !event.currentTarget.contains(related)) dragOver = null
-              }}
-              ondrop={(event) => drop(event, lane.id)}
             >
               <header class="lane-head">
                 <h2>{t(lane.title)}</h2>
@@ -285,7 +329,6 @@
                       onReopen={doReopen}
                       onRelink={(value) => relinking = value}
                       onDragStart={dragStart}
-                      onDragEnd={dragEnd}
                     />
                   </div>
                 {:else}
@@ -300,6 +343,10 @@
     </div>
   {/if}
 </main>
+
+{#if dragging}
+  <div class="drag-ghost" style="left:{ghostX}px; top:{ghostY}px">{dragging.title}</div>
+{/if}
 
 {#if placing}
   <PlaceSheet item={placing} saving={store.saving} initialRoute={placementRoute} onCancel={closePlacement} onSubmit={submitPlacement} />
@@ -402,6 +449,7 @@
   .lane { min-width: 0; min-height: 420px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--chip) 48%, transparent); transition: border-color 120ms ease, background 120ms ease; }
   .lane.available { border-style: dashed; }
   .lane.over { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+  .drag-ghost { position: fixed; z-index: 60; max-width: 240px; transform: translate(10px, 10px); overflow: hidden; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--fg); box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 22%, transparent); padding: 9px 12px; font-size: 12px; font-weight: 650; opacity: 0.88; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; }
   .lane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 10px; }
   .lane-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.01em; }
   .lane-head span { min-width: 20px; border-radius: 999px; background: var(--card); color: var(--muted); padding: 2px 7px; text-align: center; font-size: 11px; }

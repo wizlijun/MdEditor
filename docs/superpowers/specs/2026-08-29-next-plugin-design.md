@@ -158,6 +158,8 @@ flowchart LR
 
 卡片只显示恢复行动所需的信息：标题、下一步或等待对象、必要日期，以及独立的「已有论证」徽标。不做优先级、估时、分数、标签云或卡片 `…` popup。卡片可拖到另一泳道：drop 只预选对应安放 route，仍须在 sheet 确认该状态的必填信息后才写事件；Dormant/Closed 拖回 Capture 使用显式 `reopen`。按钮完整保留，作为键盘操作和精确编辑路径。
 
+Tauri 插件窗口的 OS 级 drag-drop handler 会吞掉 webview 内的 HTML5 `dragstart/drop`，因此泳道拖动必须由 pointer 事件实现：按下后移动超过 5px 才进入拖动态，以泳道的 viewport rect 命中目标，松开才触发转换；Escape、pointer cancel、窗口失焦、同泳道与无效落点均只取消，不写事件。测试必须走 pointerdown → pointermove → pointerup，不能伪造宿主实机收不到的 HTML5 DnD。
+
 安放 sheet 对每个可枚举字段提供 4–5 个快捷答案，点击即可填入，仍可在下方编辑。承诺、下一步、关闭条件、等待对象、回收日期、唤醒条件、停止理由、出口方式和结果均遵循选择优先；具体项目名、人员、产品、链接等无法可靠推断的信息必须输入，不能用泛化类别制造虚假去向。快捷答案只是减少输入，绝不替人自动提交或自动承诺。
 
 ## 6. 文件与真相源
@@ -321,7 +323,7 @@ events:
 ## 13. MVP 实现位置
 
 - 插件源码：`plugins-src/next/`
-- 插件 ID：`notemd.next`，当前版本 `1.2.0`
+- 插件 ID：`notemd.next`，当前版本 `1.2.1`
 - 最低 Host：`6.829.2`；本实现同时登记 `Next` OKF 类型，随下一次 Host 发布生效
 - 开发安装：`scripts/dev-install-plugin.sh next`
 - 专项验证：`pnpm --filter next-plugin test && pnpm --filter next-plugin check && pnpm --filter next-plugin build`
