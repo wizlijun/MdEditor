@@ -5,6 +5,7 @@ import type { NextWorkspace, WorkspaceItem } from './repository'
 const mocks = vi.hoisted(() => ({
   loadWorkspace: vi.fn(),
   appendEvent: vi.fn(),
+  createIdeaSource: vi.fn(),
   openSource: vi.fn(),
 }))
 
@@ -14,11 +15,12 @@ vi.mock('./repository', async (importOriginal) => {
     ...original,
     loadWorkspace: mocks.loadWorkspace,
     appendEvent: mocks.appendEvent,
+    createIdeaSource: mocks.createIdeaSource,
     openSource: mocks.openSource,
   }
 })
 
-import { place, refresh, state } from './store.svelte'
+import { createIdea, place, refresh, state } from './store.svelte'
 
 const capture: WorkspaceItem = {
   key: 'inbox/ideas/a-idea.md',
@@ -37,6 +39,7 @@ function workspace(): NextWorkspace {
     ledger: { type: 'Next', version: 1, source_dirs: ['inbox/ideas'], events: [], extra: {} },
     ledgerRaw: 'loaded',
     sourceDirs: ['inbox/ideas'],
+    ideaDir: 'inbox/ideas',
     projection: reduceEvents([]),
     sources: [],
     items: [capture],
@@ -60,6 +63,29 @@ beforeEach(() => {
 })
 
 describe('Next store IO serialization', () => {
+  it('creates one source idea, refreshes the projection, and returns its path', async () => {
+    const refreshed = workspace()
+    mocks.createIdeaSource.mockResolvedValueOnce({
+      path: 'inbox/ideas/2026-08-30-0905-idea.md',
+      content: 'document',
+    })
+    mocks.loadWorkspace.mockResolvedValueOnce(refreshed)
+
+    await expect(createIdea('一个念头')).resolves.toBe('inbox/ideas/2026-08-30-0905-idea.md')
+    expect(mocks.createIdeaSource).toHaveBeenCalledWith('一个念头')
+    expect(state.workspace).toBe(refreshed)
+    expect(state.saving).toBe(false)
+  })
+
+  it('preserves the current workspace and reports an error when creation fails', async () => {
+    const before = state.workspace
+    mocks.createIdeaSource.mockRejectedValueOnce(new Error('disk full'))
+    await expect(createIdea('一个念头')).rejects.toThrow('disk full')
+    expect(state.workspace).toBe(before)
+    expect(state.error).toContain('disk full')
+    expect(mocks.loadWorkspace).not.toHaveBeenCalled()
+  })
+
   it('blocks placement while a focus refresh may be persisting source directories', async () => {
     let finishLoad!: (value: NextWorkspace) => void
     mocks.loadWorkspace.mockImplementationOnce(() => new Promise<NextWorkspace>((resolve) => {

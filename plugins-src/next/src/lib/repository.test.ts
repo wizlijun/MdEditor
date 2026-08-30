@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import YAML from 'yaml'
-import { appendEvent, loadWorkspace, type VaultPort } from './repository'
+import { appendEvent, createIdeaSource, loadWorkspace, type VaultPort } from './repository'
 import { NEXT_PATH } from './ledger'
 import { placeEvent, relinkEvent, reopenEvent } from './events'
 import type { CommitEvent, NextEvent, SettleEvent } from './model'
@@ -44,6 +44,14 @@ class MemoryVault implements VaultPort {
 
 const idea = (created = '2026-08-29T01:00:00Z') => `---\ntype: Idea\ncreated: ${created}\n---\n# A useful idea\n`
 const ideaWithoutCreated = '---\ntype: Idea\n---\n# A useful idea\n'
+const creationTime = () => ({
+  getFullYear: () => 2026,
+  getMonth: () => 7,
+  getDate: () => 30,
+  getHours: () => 9,
+  getMinutes: () => 5,
+  toISOString: () => '2026-08-30T01:05:00.000Z',
+}) as unknown as Date
 
 const commit = (eventId = 'e1'): CommitEvent => ({
   at: '2026-08-29T02:00:00Z',
@@ -57,11 +65,61 @@ const commit = (eventId = 'e1'): CommitEvent => ({
 })
 
 describe('Next repository', () => {
+  it('creates a new Idea in Idea Spark current directory without appending a lifecycle event', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('.notemd/idea-spark.json', JSON.stringify({ ideaDir: 'capture/sparks' }))
+    const created = await createIdeaSource('# 新念头', {
+      now: creationTime,
+    }, vault)
+
+    expect(created.path).toBe('capture/sparks/2026-08-30-0905-idea.md')
+    expect(vault.files.get(created.path)).toBe(
+      '---\ntype: Idea\ncreated: 2026-08-30T01:05:00.000Z\n---\n# 新念头',
+    )
+    expect(vault.files.has(NEXT_PATH)).toBe(false)
+
+    const workspace = await loadWorkspace(vault)
+    expect(workspace.ideaDir).toBe('capture/sparks')
+    expect(workspace.capture).toEqual([
+      expect.objectContaining({ path: created.path, title: '新念头', state: 'capture' }),
+    ])
+    expect(workspace.ledger.events).toEqual([])
+  })
+
+  it('falls back to the default Idea directory and never overwrites an idea or proof slot', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('.notemd/idea-spark.json', '{broken')
+    vault.files.set('inbox/ideas/2026-08-30-0905-idea.md', idea())
+    vault.files.set('inbox/ideas/2026-08-30-0905-2-idea.proof.md', '# Proof')
+
+    const created = await createIdeaSource('另一个念头', {
+      now: creationTime,
+    }, vault)
+
+    expect(created.path).toBe('inbox/ideas/2026-08-30-0905-3-idea.md')
+    expect(vault.files.get('inbox/ideas/2026-08-30-0905-idea.md')).toBe(idea())
+    expect(vault.files.get('inbox/ideas/2026-08-30-0905-2-idea.proof.md')).toBe('# Proof')
+  })
+
+  it('rejects blank ideas and a write that cannot be read back exactly', async () => {
+    const vault = new MemoryVault()
+    await expect(createIdeaSource('   ', {}, vault)).rejects.toThrow('blank')
+    const originalRead = vault.read.bind(vault)
+    vault.read = async (path: string) => {
+      if (path.endsWith('-idea.md')) return { content: 'changed elsewhere' }
+      return originalRead(path)
+    }
+    await expect(createIdeaSource('内容', {
+      now: creationTime,
+    }, vault)).rejects.toThrow('did not match')
+  })
+
   it('discovers historic idea names while proof remains evidence only', async () => {
     const vault = new MemoryVault()
     vault.files.set('inbox/ideas/a-idea.md', idea())
     vault.files.set('inbox/ideas/a-idea.proof.md', '# Proof')
     const workspace = await loadWorkspace(vault)
+    expect(workspace.ideaDir).toBe('inbox/ideas')
     expect(workspace.capture).toHaveLength(1)
     expect(workspace.capture[0]).toMatchObject({ proofed: true, state: 'capture' })
     expect(workspace.closed).toHaveLength(0)

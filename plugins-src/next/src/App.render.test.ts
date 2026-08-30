@@ -7,6 +7,7 @@ import type { NextWorkspace, WorkspaceItem } from './lib/repository'
 const mocks = vi.hoisted(() => ({
   state: { workspace: null as NextWorkspace | null, loading: false, saving: false, error: null as string | null },
   refresh: vi.fn(async () => {}),
+  createIdea: vi.fn(async () => 'inbox/ideas/new-idea.md'),
   place: vi.fn(async () => {}),
   reopen: vi.fn(async () => {}),
   relink: vi.fn(async () => {}),
@@ -27,6 +28,7 @@ vi.mock('./lib/bridge', () => ({
 vi.mock('./lib/store.svelte', () => ({
   state: mocks.state,
   refresh: mocks.refresh,
+  createIdea: mocks.createIdea,
   place: mocks.place,
   reopen: mocks.reopen,
   relink: mocks.relink,
@@ -42,6 +44,7 @@ afterEach(() => {
   component = null
   document.body.innerHTML = ''
   vi.clearAllMocks()
+  mocks.createIdea.mockResolvedValue('inbox/ideas/new-idea.md')
   mocks.state.saving = false
 })
 
@@ -86,6 +89,7 @@ function workspace(): NextWorkspace {
     ledger: { type: 'Next', version: 1, source_dirs: ['inbox/ideas'], events: [], extra: {} },
     ledgerRaw: null,
     sourceDirs: ['inbox/ideas'],
+    ideaDir: 'inbox/ideas',
     projection: reduceEvents([]),
     sources: [],
     items: [wip, waiting, capture, dormant, closed],
@@ -101,6 +105,47 @@ function workspace(): NextWorkspace {
 }
 
 describe('Next window', () => {
+  it('shows a New Idea shortcut and creates into the displayed Idea directory', async () => {
+    const next = workspace()
+    next.ideaDir = 'capture/sparks'
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const createButton = document.querySelector<HTMLButtonElement>('[data-action="new-idea"]')
+    expect(createButton?.textContent).toContain('新建 Idea')
+    createButton!.click()
+    flushSync()
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('capture/sparks')
+
+    const textarea = document.querySelector<HTMLTextAreaElement>('textarea[name="idea"]')!
+    textarea.value = '值得记录的念头'
+    textarea.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLFormElement>('[data-form="create-idea"]')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(mocks.createIdea).toHaveBeenCalledWith('值得记录的念头'))
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull())
+  })
+
+  it('opens New Idea with Command-N and keeps the draft when saving fails', async () => {
+    mocks.state.workspace = workspace()
+    mocks.createIdea.mockRejectedValueOnce(new Error('disk full'))
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', metaKey: true, bubbles: true, cancelable: true }))
+    flushSync()
+    const textarea = document.querySelector<HTMLTextAreaElement>('textarea[name="idea"]')!
+    textarea.value = '不要丢掉我'
+    textarea.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLFormElement>('[data-form="create-idea"]')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(mocks.toast).toHaveBeenCalled())
+    flushSync()
+
+    expect(document.querySelector<HTMLTextAreaElement>('textarea[name="idea"]')?.value).toBe('不要丢掉我')
+  })
+
   it('renders five equal-width swimlanes while keeping dormant and closed memories folded', () => {
     mocks.state.workspace = workspace()
     component = mount(App, { target: document.body })

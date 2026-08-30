@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import CreateIdeaSheet from './components/CreateIdeaSheet.svelte'
   import IdeaCard from './components/IdeaCard.svelte'
   import PlaceSheet from './components/PlaceSheet.svelte'
   import RelinkSheet from './components/RelinkSheet.svelte'
@@ -8,6 +9,7 @@
   import { itemSearchText, type WorkspaceItem } from './lib/repository'
   import type { IdeaSource } from './lib/source'
   import {
+    createIdea,
     open as openItem,
     place,
     refresh,
@@ -32,6 +34,7 @@
   setLocale(bridge().locale)
 
   let showPlaced = $state(false)
+  let creating = $state(false)
   let search = $state('')
   let placing = $state<WorkspaceItem | null>(null)
   let placementRoute = $state<Route | undefined>()
@@ -42,6 +45,9 @@
   const workspace = $derived(store.workspace)
   const blocked = $derived(Boolean(workspace?.readOnlyError || workspace?.projection.hasBlockingIssues))
   const interactionDisabled = $derived(store.saving || blocked)
+  const newIdeaShortcut = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+    ? '⌘N'
+    : 'Ctrl+N'
   const repair = $derived(workspace?.items.filter((item) => item.state === 'unsupported' || (item.state === 'capture' && item.orphan)) ?? [])
 
   function filter(items: WorkspaceItem[]): WorkspaceItem[] {
@@ -69,12 +75,24 @@
     ]
   })
 
-  async function report(action: () => Promise<void>, messageKey: 'error.save' | 'error.open' | 'error.load') {
+  async function report(action: () => Promise<void>, messageKey: 'error.save' | 'error.open' | 'error.load' | 'error.create') {
     try {
       await action()
     } catch (error) {
       await toast('error', t(messageKey), String(error))
     }
+  }
+
+  function openCreation() {
+    if (store.loading || store.saving || placing || relinking) return
+    creating = true
+  }
+
+  async function submitIdea(body: string) {
+    await report(async () => {
+      await createIdea(body)
+      creating = false
+    }, 'error.create')
   }
 
   function closePlacement() {
@@ -157,8 +175,17 @@
     const onFocus = () => {
       if (!store.saving) void report(refresh, 'error.load')
     }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLocaleLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return
+      event.preventDefault()
+      if (!creating) openCreation()
+    }
     window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('keydown', onKey)
+    }
   })
 </script>
 
@@ -168,9 +195,16 @@
       <h1>{t('app.title')}</h1>
       <p>{t('app.value')}</p>
     </div>
-    <button class="refresh" disabled={store.loading || store.saving} onclick={() => void report(refresh, 'error.load')}>
-      ↻ <span>{t('common.refresh')}</span>
-    </button>
+    <div class="top-actions">
+      <button type="button" data-action="new-idea" class="new-idea" aria-keyshortcuts="Meta+N Control+N" disabled={store.loading || store.saving} onclick={openCreation}>
+        <span aria-hidden="true">＋</span>
+        <span>{t('action.newIdea')}</span>
+        <kbd>{newIdeaShortcut}</kbd>
+      </button>
+      <button type="button" class="refresh" disabled={store.loading || store.saving} onclick={() => void report(refresh, 'error.load')}>
+        ↻ <span>{t('common.refresh')}</span>
+      </button>
+    </div>
   </header>
 
   {#if store.loading && !workspace}
@@ -275,6 +309,15 @@
   <RelinkSheet item={relinking} saving={store.saving} onCancel={() => relinking = null} onSubmit={submitRelink} />
 {/if}
 
+{#if creating}
+  <CreateIdeaSheet
+    ideaDir={workspace?.ideaDir ?? 'inbox/ideas'}
+    saving={store.saving}
+    onCancel={() => creating = false}
+    onSubmit={submitIdea}
+  />
+{/if}
+
 <style>
   :global(:root) {
     color-scheme: light dark;
@@ -328,9 +371,14 @@
   .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 28px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(18px); }
   h1 { margin: 0; font-size: 24px; line-height: 1.1; letter-spacing: -0.02em; }
   .topbar p { margin: 5px 0 0; color: var(--muted); }
+  .top-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+  .new-idea, .refresh { min-height: 34px; box-sizing: border-box; border-radius: 9px; padding: 7px 10px; font-weight: 650; cursor: pointer; }
+  .new-idea { display: flex; align-items: center; gap: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+  .new-idea:hover:not(:disabled) { filter: brightness(1.06); }
+  .new-idea kbd { border-radius: 5px; background: color-mix(in srgb, #000 16%, transparent); padding: 1px 5px; font: 10px/1.5 inherit; }
   .refresh { flex: none; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--fg); padding: 7px 10px; font-weight: 600; cursor: pointer; }
   .refresh:hover:not(:disabled) { background: var(--hover); }
-  .refresh:disabled { opacity: 0.45; }
+  .refresh:disabled, .new-idea:disabled { opacity: 0.45; cursor: default; }
   .loading { min-height: 60vh; display: grid; place-items: center; color: var(--muted); }
   .content { padding: 22px 28px 48px; }
   .banner, .repair, .board-tools, .board-scroll, .drag-help { max-width: 1500px; margin-right: auto; margin-left: auto; }

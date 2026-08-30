@@ -1,6 +1,7 @@
 import { placeEvent, relinkEvent, reopenEvent, type PlaceInput } from './events'
 import {
   appendEvent,
+  createIdeaSource,
   loadWorkspace,
   openSource,
   type NextWorkspace,
@@ -34,6 +35,22 @@ export async function refresh(): Promise<void> {
     throw error
   } finally {
     state.loading = false
+    state.saving = false
+  }
+}
+
+export async function createIdea(body: string): Promise<string> {
+  if (state.saving) throw new Error('Next is already saving')
+  state.saving = true
+  state.error = null
+  try {
+    const created = await createIdeaSource(body)
+    state.workspace = await loadWorkspace()
+    return created.path
+  } catch (error) {
+    state.error = String(error)
+    throw error
+  } finally {
     state.saving = false
   }
 }

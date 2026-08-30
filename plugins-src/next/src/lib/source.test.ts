@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildIdeaDocument,
   DEFAULT_IDEA_DIR,
   isIdeaFileName,
   normalizeVaultDir,
@@ -7,6 +8,7 @@ import {
   parseIdeaSource,
   proofPathFor,
   sortIdeasNewestFirst,
+  timestampIdeaFileName,
   titleFromMarkdown,
 } from './source'
 
@@ -19,6 +21,21 @@ describe('idea source contract', () => {
 
   it('derives the proof sidecar without changing the idea path', () => {
     expect(proofPathFor('inbox/ideas/a-idea.md')).toBe('inbox/ideas/a-idea.proof.md')
+  })
+
+  it('uses Idea Spark local-time names and avoids both idea and proof collisions', () => {
+    const at = new Date(2026, 7, 30, 9, 5)
+    expect(timestampIdeaFileName(at, new Set())).toBe('2026-08-30-0905-idea.md')
+    expect(timestampIdeaFileName(at, new Set([
+      '2026-08-30-0905-idea.md',
+      '2026-08-30-0905-2-idea.proof.md',
+    ]))).toBe('2026-08-30-0905-3-idea.md')
+  })
+
+  it('builds the same minimal OKF Idea contract while preserving the body', () => {
+    const body = '# 一个念头\n\n---\n\n继续说明'
+    const document = buildIdeaDocument(body, '2026-08-30T01:05:00.000Z')
+    expect(document).toBe('---\ntype: Idea\ncreated: 2026-08-30T01:05:00.000Z\n---\n' + body)
   })
 
   it('rejects absolute and traversal directories', () => {
