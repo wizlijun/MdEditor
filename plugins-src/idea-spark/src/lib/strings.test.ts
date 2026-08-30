@@ -8,4 +8,18 @@ describe('strings', () => {
       }
     }
   })
+
+  it('describes a proof as evidence progress, not completed work', () => {
+    expect({
+      en: CATALOGS.en.statusDone,
+      zh: CATALOGS.zh.statusDone,
+      ja: CATALOGS.ja.statusDone,
+      de: CATALOGS.de.statusDone,
+    }).toEqual({
+      en: 'Proofed',
+      zh: '已论证',
+      ja: '論証済み',
+      de: 'Durchargumentiert',
+    })
+  })
 })

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dev-install a v2 plugin into the local app-data plugins root.
 #
-# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source]
+# Usage: scripts/dev-install-plugin.sh [--release] [md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|next|power-mode|trace-source]
 #   default plugin = md2pdf (preserves the original behavior).
 #   --release      = build the native plugin binary in release mode (md2pdf +
 #                    openclaw; ignored for the pure-UI plugins).
@@ -41,8 +41,8 @@ PLUGIN=md2pdf
 for arg in "$@"; do
   case "$arg" in
     --release) PROFILE=release ;;
-    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|power-mode|trace-source) PLUGIN="$arg" ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | codex-agent | deepseek-agent | ebook-import | idea-spark | power-mode | trace-source)" >&2; exit 2 ;;
+    md2pdf|roam-import|openclaw|cef|pos-log|decision-log|weekly-review|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|next|power-mode|trace-source) PLUGIN="$arg" ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | cef | pos-log | decision-log | weekly-review | claude-agent | codex-agent | deepseek-agent | ebook-import | idea-spark | next | power-mode | trace-source)" >&2; exit 2 ;;
   esac
 done
 
@@ -258,6 +258,20 @@ elif [[ "$PLUGIN" == "idea-spark" ]]; then
   ln -sfn "$VERSION" "$ROOT/notemd.idea-spark/current"
   mark_installed "notemd.idea-spark" "$VERSION"
   echo "✓ installed notemd.idea-spark@$VERSION (ui-only) → $DEST"
+
+elif [[ "$PLUGIN" == "next" ]]; then
+  SRC="plugins-src/next"
+  # Build the standalone UI bundle (dist/). Pure UI plugin; no native backend.
+  pnpm --filter next-plugin build
+  VERSION=$(node -e "console.log(require('./$SRC/manifest.v2.json').version)")
+  DEST="$ROOT/notemd.next/$VERSION"
+  rm -rf "$DEST"
+  mkdir -p "$DEST/ui"
+  cp -R "$SRC/dist/." "$DEST/ui/"
+  cp "$SRC/manifest.v2.json" "$DEST/manifest.json"
+  ln -sfn "$VERSION" "$ROOT/notemd.next/current"
+  mark_installed "notemd.next" "$VERSION"
+  echo "✓ installed notemd.next@$VERSION (ui-only) → $DEST"
 
 elif [[ "$PLUGIN" == "trace-source" ]]; then
   SRC="plugins-src/trace-source"

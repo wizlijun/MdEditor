@@ -1,7 +1,7 @@
 # Next 插件设计
 
 - 日期：2026-08-29
-- 状态：设计草案，先验证后实现
+- 状态：MVP 已实现，产品效果仍须按 G0–G4 验证
 - 插件：`notemd.next`
 - 分类：Thinking / 思考
 - 输入：用户提供的《Open 念头应先分流承诺再限制 WIP》及其中列出的研究与验证门
@@ -215,7 +215,7 @@ events:
 | `reopen` | 回到 Capture，等待人重新判断 |
 | `relink` | 只更新源引用，不改变承诺状态 |
 
-`source_dirs` 是 Capture 扫描范围：首次创建时写入当前 `ideaDir`；以后发现 Idea Spark 改了目录，就保留旧值并加入新值，避免旧目录中尚未安放的念头失联。
+`source_dirs` 是 Capture 扫描范围：窗口首次成功载入时即创建空事件文档并写入当前 `ideaDir`；以后每次载入发现 Idea Spark 改了目录，就在扫描前保留旧值并加入新值。目录历史不能等到第一次安放事件才持久化，否则这之前发生的目录迁移会让旧 Capture 失联。
 
 `event_id` 每次安放唯一，`idea_id` 在第一次处置时生成并在后续事件中保持稳定；`relink` 也按 `idea_id` 更新引用。插件按事件顺序归约出当前状态。重复 `event_id` 只有在 payload 完全相同时才视为幂等；同 ID 不同内容、或同一 source 对应多个 `idea_id`，都停止写入并要求人工解决。
 
@@ -259,7 +259,7 @@ events:
 - capabilities 仅 `vault.read`、`vault.write`、`editor.open`、`toast`。
 - 复用 Idea Spark 的文件名/proof 映射与标题提取思路；复用 Decision Log 的纯 transition / IO 分层和 `.note.md` frontmatter + 正文镜像模式。
 - 窗口打开和重新聚焦时刷新；首版不轮询、不常驻、不发独立通知。
-- `Next` 需要先登记到主程序 `CONCEPT_TYPE` 与搜索 origin，并以新的 Host 最低版本发布；这是格式登记，不新增 Host API。
+- `Next` 同步登记到主程序 `CONCEPT_TYPE` 与搜索 origin；这是格式登记，不新增 Host API。运行时只依赖 6.829.2 已有的 Vault、编辑器与 toast API，因此无需为插件人为抬高最低 Host。
 
 虽然 `vault.write` capability 也能调用 remove/rename，本插件代码不得对 source 使用这两个方法。能力模型暂时无法表达更窄的“只写 ledger”。
 
@@ -317,3 +317,13 @@ events:
 输入材料支持的稳定方向是：具体计划可降低未完成目标干扰，外部托管可改善前瞻记忆，任务切换支持限制已承诺 WIP，目标脱离支持把放弃设计成正当出口，Kanban 支持限制在制品，Shape Up 支持保留记忆但不维持中央 backlog。
 
 这些依据支持“可信安放机制”，不直接证明 `WIP=3`、四个动作或本插件能降低认知负荷。若验证通过，最多只能声称：对一个 AI 高强度、Markdown Vault 用户，这个分层可能减少半成品沉积、恢复成本和主观压力；不能外推到团队或普通用户。
+
+## 13. MVP 实现位置
+
+- 插件源码：`plugins-src/next/`
+- 插件 ID：`notemd.next`，版本 `1.0.0`
+- 最低 Host：`6.829.2`；本实现同时登记 `Next` OKF 类型，随下一次 Host 发布生效
+- 开发安装：`scripts/dev-install-plugin.sh next`
+- 专项验证：`pnpm --filter next-plugin test && pnpm --filter next-plugin check && pnpm --filter next-plugin build`
+
+实现完成只证明状态机、存储安全边界和交互可运行，不代表 G0–G4 的行为效果已经成立。首版仍使用 WIP 软提醒；只有后续 G3 通过才启用领域层已经支持的硬限制开关。

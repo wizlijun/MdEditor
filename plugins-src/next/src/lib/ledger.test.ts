@@ -1,0 +1,55 @@
+import { describe, expect, it } from 'vitest'
+import { LedgerFormatError, newLedger, parseLedger, serializeLedger } from './ledger'
+
+const valid = `---
+type: Next
+version: 1
+source_dirs:
+  - inbox/ideas
+events:
+  - at: 2026-08-29T01:00:00Z
+    event_id: e1
+    idea_id: i1
+    action: future-action
+    future_field: keep-me
+future_top: keep-me-too
+---
+# Ignored mirror
+`
+
+describe('Next event document', () => {
+  it('preserves unknown top-level fields and events losslessly', () => {
+    const parsed = parseLedger(valid)
+    const again = parseLedger(serializeLedger(parsed))
+    expect(again.extra).toEqual({ future_top: 'keep-me-too' })
+    expect(again.events[0]).toMatchObject({ action: 'future-action', future_field: 'keep-me' })
+  })
+
+  it('creates a minimal readable document', () => {
+    const markdown = serializeLedger(newLedger(['inbox/ideas', 'inbox/ideas']))
+    expect(markdown).toMatch(/^---\ntype: Next\n/)
+    expect(markdown).toContain('# Next')
+    expect(parseLedger(markdown).source_dirs).toEqual(['inbox/ideas'])
+  })
+
+  it.each([
+    ['missing frontmatter', '# Next', 'missing_frontmatter'],
+    ['wrong type', '---\ntype: Note\nversion: 1\nsource_dirs: []\nevents: []\n---', 'wrong_type'],
+    ['new version', '---\ntype: Next\nversion: 2\nsource_dirs: []\nevents: []\n---', 'unsupported_version'],
+    ['unsafe source', '---\ntype: Next\nversion: 1\nsource_dirs: [../ideas]\nevents: []\n---', 'invalid_source_dirs'],
+    ['bad events', '---\ntype: Next\nversion: 1\nsource_dirs: []\nevents: nope\n---', 'invalid_events'],
+  ])('refuses %s instead of falling back to an empty ledger', (_name, markdown, code) => {
+    expect(() => parseLedger(markdown)).toThrowError(LedgerFormatError)
+    try {
+      parseLedger(markdown)
+    } catch (error) {
+      expect(error).toMatchObject({ code })
+    }
+  })
+
+  it('keeps unknown event actions visible in the readable mirror', () => {
+    const markdown = serializeLedger(parseLedger(valid))
+    expect(markdown).toContain('future-action')
+    expect(markdown).toContain('`i1`')
+  })
+})

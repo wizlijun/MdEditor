@@ -124,6 +124,26 @@ describe('dev-install-plugin.sh codex-agent dispatch', () => {
   })
 })
 
+describe('Next plugin packaging', () => {
+  it('builds and packages Next as a universal UI plugin', () => {
+    const table = dispatchTable()
+    expect(table.get('next')).toBe('release_next')
+    const release = functionBody('release_next')
+    expect(release).toContain('notemd.next')
+    expect(release).toContain('plugins-src/next')
+    expect(release).toContain('pnpm --filter next-plugin build')
+    expect(packagingBody('release_next')).toContain('universal.notemdpkg')
+  })
+
+  it('accepts, builds and installs Next in the dev installer', () => {
+    expect(DEV_INSTALL).toMatch(/\|next\|/)
+    expect(DEV_INSTALL).toContain('elif [[ "$PLUGIN" == "next" ]]')
+    expect(DEV_INSTALL).toContain('pnpm --filter next-plugin build')
+    expect(DEV_INSTALL).toContain('mark_installed "notemd.next" "$VERSION"')
+    expect(DEV_INSTALL).toContain('"$DEST/ui/"')
+  })
+})
+
 describe('agent-owned concurrency settings', () => {
   const agentDirs = ['claude-agent', 'codex-agent', 'deepseek-agent']
 
