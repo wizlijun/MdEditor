@@ -14,6 +14,8 @@
     onReopen,
     onRelink,
     onDragStart,
+    onPreviewStart,
+    onPreviewEnd,
   }: {
     item: WorkspaceItem
     disabled?: boolean
@@ -26,9 +28,12 @@
     onReopen(item: WorkspaceItem): void
     onRelink(item: WorkspaceItem): void
     onDragStart?(item: WorkspaceItem, event: PointerEvent): void
+    onPreviewStart?(item: WorkspaceItem, anchor: HTMLElement): void
+    onPreviewEnd?(event: PointerEvent | FocusEvent): void
   } = $props()
 
   const statusKey = $derived(`status.${item.state}` as MessageKey)
+  const hasPreview = $derived(Boolean(item.body?.trim()))
   const detail = $derived.by(() => {
     const projection = item.projection
     if (!projection) return ''
@@ -43,6 +48,7 @@
   })
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <article
   class="card"
   class:orphan={item.orphan}
@@ -50,6 +56,17 @@
   class:draggable={canDrag && !disabled}
   data-item-key={item.key}
   data-draggable={canDrag && !disabled}
+  role="group"
+  tabindex={hasPreview ? 0 : undefined}
+  aria-describedby={hasPreview ? 'idea-preview-tip' : undefined}
+  onpointerenter={(event) => {
+    if (hasPreview) onPreviewStart?.(item, event.currentTarget)
+  }}
+  onpointerleave={(event) => onPreviewEnd?.(event)}
+  onfocusin={(event) => {
+    if (hasPreview) onPreviewStart?.(item, event.currentTarget)
+  }}
+  onfocusout={(event) => onPreviewEnd?.(event)}
   onpointerdown={(event) => {
     if (!canDrag || disabled || event.button !== 0) return
     if (event.target instanceof Element && event.target.closest('button')) return

@@ -8,6 +8,8 @@ export interface IdeaSource {
   path: string
   created?: string
   title: string
+  /** Human-authored Markdown after frontmatter, preserved verbatim for preview. */
+  body: string
   proofed: boolean
 }
 
@@ -88,13 +90,14 @@ export function titleFromMarkdown(markdown: string, fallback: string): string {
 }
 
 export function parseIdeaSource(path: string, markdown: string, proofed: boolean): IdeaSource {
-  const [meta] = splitFrontmatter(markdown)
+  const [meta, body] = splitFrontmatter(markdown)
   const created = typeof meta?.created === 'string' && meta.created.trim() ? meta.created.trim() : undefined
   const name = path.split('/').at(-1) ?? path
   return {
     path,
     ...(created ? { created } : {}),
     title: titleFromMarkdown(markdown, name),
+    body,
     proofed,
   }
 }

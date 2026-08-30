@@ -44,6 +44,11 @@
   let dragPress: { item: WorkspaceItem; startX: number; startY: number; pointerId: number } | null = null
   let ghostX = $state(0)
   let ghostY = $state(0)
+  let previewing = $state<WorkspaceItem | null>(null)
+  let previewAnchor: HTMLElement | null = null
+  let previewTip = $state<HTMLElement | null>(null)
+  let previewX = $state(12)
+  let previewY = $state(12)
   const laneElements = $state<Partial<Record<Lane, HTMLElement>>>({})
   const dragThreshold = 5
 
@@ -147,6 +152,7 @@
 
   function dragStart(item: WorkspaceItem, event: PointerEvent) {
     if (dragPress || interactionDisabled || item.state === 'unsupported') return
+    closePreview()
     dragPress = {
       item,
       startX: event.clientX,
@@ -161,6 +167,36 @@
     dragPress = null
     dragging = null
     dragOver = null
+  }
+
+  function closePreview() {
+    previewing = null
+    previewAnchor = null
+    previewTip = null
+  }
+
+  function previewStart(item: WorkspaceItem, anchor: HTMLElement) {
+    if (!item.body?.trim() || dragging) return
+    previewing = item
+    previewAnchor = anchor
+    const rect = anchor.getBoundingClientRect()
+    const margin = 12
+    const gap = 10
+    const width = Math.min(380, Math.max(0, window.innerWidth - margin * 2))
+    const maxHeight = Math.min(480, Math.max(0, window.innerHeight - margin * 2))
+    const beside = rect.right + gap
+    const alternate = rect.left - width - gap
+    previewX = Math.max(margin, Math.min(
+      beside + width <= window.innerWidth - margin ? beside : alternate,
+      window.innerWidth - width - margin,
+    ))
+    previewY = Math.max(margin, Math.min(rect.top, window.innerHeight - maxHeight - margin))
+  }
+
+  function previewEnd(event: PointerEvent | FocusEvent) {
+    const next = event.relatedTarget
+    if (next instanceof Node && (previewAnchor?.contains(next) || previewTip?.contains(next))) return
+    closePreview()
   }
 
   function laneAtPoint(x: number, y: number): Lane | null {
@@ -219,6 +255,11 @@
         dragEnd()
         return
       }
+      if (event.key === 'Escape' && previewing) {
+        event.preventDefault()
+        closePreview()
+        return
+      }
       if (event.key.toLocaleLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return
       event.preventDefault()
       if (!creating) openCreation()
@@ -236,7 +277,8 @@
   onpointermove={pointerMove}
   onpointerup={pointerUp}
   onpointercancel={dragEnd}
-  onblur={dragEnd}
+  onblur={() => { dragEnd(); closePreview() }}
+  onresize={closePreview}
 />
 
 <main class="app">
@@ -299,7 +341,7 @@
         </button>
       </div>
 
-      <div class="board-scroll">
+        <div class="board-scroll" onscroll={closePreview}>
         <div class="board">
           {#each lanes as lane (lane.id)}
             <section
@@ -329,6 +371,8 @@
                       onReopen={doReopen}
                       onRelink={(value) => relinking = value}
                       onDragStart={dragStart}
+                      onPreviewStart={previewStart}
+                      onPreviewEnd={previewEnd}
                     />
                   </div>
                 {:else}
@@ -346,6 +390,17 @@
 
 {#if dragging}
   <div class="drag-ghost" style="left:{ghostX}px; top:{ghostY}px">{dragging.title}</div>
+{/if}
+
+{#if previewing?.body}
+  <aside
+    bind:this={previewTip}
+    id="idea-preview-tip"
+    class="idea-preview-tip"
+    role="tooltip"
+    style="left:{previewX}px; top:{previewY}px"
+    onpointerleave={previewEnd}
+  ><pre>{previewing.body}</pre></aside>
 {/if}
 
 {#if placing}
@@ -450,6 +505,8 @@
   .lane.available { border-style: dashed; }
   .lane.over { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
   .drag-ghost { position: fixed; z-index: 60; max-width: 240px; transform: translate(10px, 10px); overflow: hidden; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--fg); box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 22%, transparent); padding: 9px 12px; font-size: 12px; font-weight: 650; opacity: 0.88; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; }
+  .idea-preview-tip { position: fixed; z-index: 55; width: min(380px, calc(100vw - 24px)); max-height: min(480px, calc(100vh - 24px)); box-sizing: border-box; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 12px; background: color-mix(in srgb, var(--card) 96%, transparent); color: var(--fg); box-shadow: 0 14px 38px color-mix(in srgb, var(--shadow) 28%, transparent); padding: 14px 16px; backdrop-filter: blur(18px); }
+  .idea-preview-tip pre { margin: 0; font: 12.5px/1.55 inherit; overflow-wrap: anywhere; white-space: pre-wrap; }
   .lane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 10px; }
   .lane-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.01em; }
   .lane-head span { min-width: 20px; border-radius: 999px; background: var(--card); color: var(--muted); padding: 2px 7px; text-align: center; font-size: 11px; }

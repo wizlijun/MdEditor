@@ -156,7 +156,7 @@ flowchart LR
 
 五条泳道和卡片等宽；窗口不足时只横向滚动，不压缩卡片。`Capture` 默认最多呈现 10 条近期念头但不暴露总债务；`WIP` 与 `Waiting` 完整显示；`Dormant` 默认只显示已到日期的条目；`Closed` 默认为空。用户主动「显示已安放」或搜索时，才加载全部 Dormant/Closed。孤立与未知记录进入独立修复区，不混入可拖放状态。
 
-卡片只显示恢复行动所需的信息：标题、下一步或等待对象、必要日期，以及独立的「已有论证」徽标。不做优先级、估时、分数、标签云或卡片 `…` popup。卡片可拖到另一泳道：drop 只预选对应安放 route，仍须在 sheet 确认该状态的必填信息后才写事件；Dormant/Closed 拖回 Capture 使用显式 `reopen`。按钮完整保留，作为键盘操作和精确编辑路径。
+卡片只显示恢复行动所需的信息：标题、下一步或等待对象、必要日期，以及独立的「已有论证」徽标。不做优先级、估时、分数、标签云或卡片 `…` popup。鼠标停留或键盘聚焦卡片时，在泳道滚动容器外显示完整 Idea 正文 Tip；正文来自扫描时已读取的源文件，不为 hover 二次读取，孤立卡片不显示旧内容。长正文限制在视口内滚动，Escape、离开、滚动、失焦或开始拖动时关闭。卡片可拖到另一泳道：drop 只预选对应安放 route，仍须在 sheet 确认该状态的必填信息后才写事件；Dormant/Closed 拖回 Capture 使用显式 `reopen`。按钮完整保留，作为键盘操作和精确编辑路径。
 
 Tauri 插件窗口的 OS 级 drag-drop handler 会吞掉 webview 内的 HTML5 `dragstart/drop`，因此泳道拖动必须由 pointer 事件实现：按下后移动超过 5px 才进入拖动态，以泳道的 viewport rect 命中目标，松开才触发转换；Escape、pointer cancel、窗口失焦、同泳道与无效落点均只取消，不写事件。测试必须走 pointerdown → pointermove → pointerup，不能伪造宿主实机收不到的 HTML5 DnD。
 
@@ -323,7 +323,7 @@ events:
 ## 13. MVP 实现位置
 
 - 插件源码：`plugins-src/next/`
-- 插件 ID：`notemd.next`，当前版本 `1.2.1`
+- 插件 ID：`notemd.next`，当前版本 `1.2.2`
 - 最低 Host：`6.829.2`；本实现同时登记 `Next` OKF 类型，随下一次 Host 发布生效
 - 开发安装：`scripts/dev-install-plugin.sh next`
 - 专项验证：`pnpm --filter next-plugin test && pnpm --filter next-plugin check && pnpm --filter next-plugin build`

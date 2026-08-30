@@ -67,15 +67,26 @@ describe('idea source contract', () => {
       path: 'inbox/ideas/a-idea.md',
       created: '2026-08-29T01:02:03Z',
       title: 'Build it',
+      body: '# Build it',
       proofed: true,
     })
   })
 
+  it('preserves every human-authored body line for previews, with or without frontmatter', () => {
+    const body = '# 标题\n\n第一段。\n\n- 细节一\n- 细节二\n\n最后一段。'
+    expect(parseIdeaSource(
+      'inbox/ideas/a-idea.md',
+      `---\ntype: Idea\ncreated: 2026-08-29T01:02:03Z\n---\n${body}`,
+      false,
+    ).body).toBe(body)
+    expect(parseIdeaSource('inbox/ideas/b-idea.md', body, false).body).toBe(body)
+  })
+
   it('sorts reliable creation times first and newest', () => {
     const items = [
-      { path: 'z-idea.md', title: 'z', proofed: false },
-      { path: 'a-idea.md', title: 'a', proofed: false, created: '2026-08-28T00:00:00Z' },
-      { path: 'b-idea.md', title: 'b', proofed: false, created: '2026-08-29T00:00:00Z' },
+      { path: 'z-idea.md', title: 'z', body: 'z', proofed: false },
+      { path: 'a-idea.md', title: 'a', body: 'a', proofed: false, created: '2026-08-28T00:00:00Z' },
+      { path: 'b-idea.md', title: 'b', body: 'b', proofed: false, created: '2026-08-29T00:00:00Z' },
     ]
     expect(sortIdeasNewestFirst(items).map((item) => item.title)).toEqual(['b', 'a', 'z'])
   })

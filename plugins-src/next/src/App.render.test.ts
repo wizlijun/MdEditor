@@ -52,6 +52,7 @@ const item = (key: string, title: string, state: WorkspaceItem['state']): Worksp
   key,
   state,
   title,
+  body: `# ${title}\n\n第一段。\n\n这是完整 Idea 的最后一段。`,
   path: `inbox/ideas/${key}-idea.md`,
   proofed: false,
   orphan: false,
@@ -129,6 +130,62 @@ function pointerDrag(itemKey: string, lane: string, pointerId = 1): void {
 }
 
 describe('Next window', () => {
+  it('previews the complete Idea body in a viewport tip on hover and keyboard focus', () => {
+    mocks.state.workspace = workspace()
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const card = document.querySelector<HTMLElement>('[data-item-key="capture"]')!
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+
+    card.dispatchEvent(new PointerEvent('pointerenter'))
+    flushSync()
+    let tip = document.querySelector<HTMLElement>('[role="tooltip"]')!
+    expect(tip.textContent).toContain('# 默认隐藏的想法')
+    expect(tip.textContent).toContain('这是完整 Idea 的最后一段。')
+    expect(tip.closest('.board-scroll')).toBeNull()
+    expect(card.getAttribute('aria-describedby')).toBe(tip.id)
+    expect(tip.classList.contains('idea-preview-tip')).toBe(true)
+
+    card.dispatchEvent(new PointerEvent('pointerleave', { relatedTarget: tip }))
+    flushSync()
+    expect(document.querySelector('[role="tooltip"]')).toBe(tip)
+    tip.dispatchEvent(new PointerEvent('pointerleave'))
+    flushSync()
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+
+    card.focus()
+    flushSync()
+    tip = document.querySelector<HTMLElement>('[role="tooltip"]')!
+    expect(tip.textContent).toContain('这是完整 Idea 的最后一段。')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    flushSync()
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+  })
+
+  it('renders Idea Markdown as text and does not preview a missing source', () => {
+    const next = workspace()
+    next.capture[0].body = '<img src=x onerror="alert(1)">\n\n最后一行'
+    next.wip[0].body = undefined
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const capture = document.querySelector<HTMLElement>('[data-item-key="capture"]')!
+    capture.dispatchEvent(new PointerEvent('pointerenter'))
+    flushSync()
+    const tip = document.querySelector<HTMLElement>('[role="tooltip"]')!
+    expect(tip.textContent).toContain('<img src=x onerror="alert(1)">')
+    expect(tip.querySelector('img')).toBeNull()
+
+    capture.dispatchEvent(new PointerEvent('pointerleave'))
+    document.querySelector<HTMLElement>('[data-item-key="wip"]')!
+      .dispatchEvent(new PointerEvent('pointerenter'))
+    flushSync()
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+  })
+
   it('uses pointer movement to place a card because Tauri swallows HTML5 drag events', () => {
     mocks.state.workspace = workspace()
     component = mount(App, { target: document.body })
@@ -136,6 +193,9 @@ describe('Next window', () => {
 
     const waitingLane = targetLane('waiting')
     const captureCard = document.querySelector<HTMLElement>('[data-item-key="capture"]')!
+    captureCard.dispatchEvent(new PointerEvent('pointerenter'))
+    flushSync()
+    expect(document.querySelector('[role="tooltip"]')).toBeTruthy()
     captureCard.dispatchEvent(new PointerEvent('pointerdown', {
       bubbles: true, button: 0, pointerId: 7, clientX: 10, clientY: 10,
     }))
@@ -143,6 +203,7 @@ describe('Next window', () => {
       bubbles: true, pointerId: 7, clientX: 350, clientY: 50,
     }))
     flushSync()
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
     expect(waitingLane.classList.contains('over')).toBe(true)
     expect(document.querySelector('.drag-ghost')?.textContent).toContain('默认隐藏的想法')
     window.dispatchEvent(new PointerEvent('pointerup', {
