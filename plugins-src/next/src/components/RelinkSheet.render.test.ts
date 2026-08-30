@@ -27,6 +27,7 @@ function orphan(match: WorkspaceItem['relinkMatch']): WorkspaceItem {
     relinkCandidates: [{
       path: 'new/a-idea.md',
       title: 'Candidate',
+      body: '# Candidate',
       created: match === 'created' ? '2026-08-29T01:00:00Z' : '2026-08-30T01:00:00Z',
       proofed: false,
     }],

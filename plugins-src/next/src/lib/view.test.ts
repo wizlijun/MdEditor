@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isDormantDue, placedItems } from './view'
+import { isDormantDue, placedItems, previewPosition } from './view'
 import type { WorkspaceItem } from './repository'
 
 const dormant = (trigger: string): WorkspaceItem => ({
@@ -49,5 +49,28 @@ describe('Next view projection', () => {
     expect(placedItems([closed, capture], 'product')).toEqual([closed])
     expect(placedItems([capture], '')).toEqual([])
     expect(placedItems([orphanCapture], '')).toEqual([orphanCapture])
+  })
+
+  it('positions a short preview beside its card using the rendered tip size', () => {
+    expect(previewPosition(
+      { left: 100, right: 348, top: 420 },
+      { width: 380, height: 80 },
+      { width: 760, height: 520 },
+    )).toEqual({ x: 358, y: 420 })
+
+    expect(previewPosition(
+      { left: 600, right: 720, top: 100 },
+      { width: 380, height: 160 },
+      { width: 760, height: 520 },
+    )).toEqual({ x: 210, y: 100 })
+  })
+
+  it('keeps the preview inside a narrow viewport when neither side can fit', () => {
+    const position = previewPosition(
+      { left: 100, right: 200, top: 490 },
+      { width: 276, height: 300 },
+      { width: 300, height: 520 },
+    )
+    expect(position).toEqual({ x: 12, y: 208 })
   })
 })

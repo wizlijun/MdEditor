@@ -43,6 +43,7 @@ export interface WorkspaceItem {
   idea_id?: string
   state: IdeaProjection['state'] | 'capture'
   title: string
+  body?: string
   path?: string
   created?: string
   proofed: boolean
@@ -222,6 +223,7 @@ function projectItems(sources: IdeaSource[], projection: LedgerProjection): Work
       title: sourceExists && source
         ? source.title
         : idea.source?.path.split('/').at(-1)?.replace(/-idea\.md$/, '') ?? idea.idea_id,
+      ...(sourceExists && source ? { body: source.body } : {}),
       ...(idea.source?.path ? { path: idea.source.path } : {}),
       ...(idea.source?.created ? { created: idea.source.created } : {}),
       proofed: sourceExists ? source?.proofed ?? false : false,
@@ -238,6 +240,7 @@ function projectItems(sources: IdeaSource[], projection: LedgerProjection): Work
       key: source.path,
       state: 'capture',
       title: source.title,
+      body: source.body,
       path: source.path,
       ...(source.created ? { created: source.created } : {}),
       proofed: source.proofed,

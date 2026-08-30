@@ -81,7 +81,7 @@ describe('Next repository', () => {
     const workspace = await loadWorkspace(vault)
     expect(workspace.ideaDir).toBe('capture/sparks')
     expect(workspace.capture).toEqual([
-      expect.objectContaining({ path: created.path, title: '新念头', state: 'capture' }),
+      expect.objectContaining({ path: created.path, title: '新念头', body: '# 新念头', state: 'capture' }),
     ])
     expect(workspace.ledger.events).toEqual([])
   })
@@ -135,6 +135,7 @@ describe('Next repository', () => {
     expect(new Set(vault.writes)).toEqual(new Set([NEXT_PATH]))
     expect(vault.files.get('inbox/ideas/a-idea.md')).toBe(before)
     expect(after.wip).toHaveLength(1)
+    expect(after.wip[0]).toMatchObject({ body: '# A useful idea\n' })
     expect(after.wip[0].projection).toMatchObject({ state: 'wip', next_action: 'Run one test' })
   })
 
@@ -199,6 +200,7 @@ describe('Next repository', () => {
     vault.files.delete('inbox/ideas/a-idea.md')
     workspace = await loadWorkspace(vault)
     expect(workspace.wip[0]).toMatchObject({ orphan: true, state: 'wip' })
+    expect(workspace.wip[0].body).toBeUndefined()
     expect(workspace.closed).toHaveLength(0)
   })
 
@@ -264,6 +266,7 @@ describe('Next repository', () => {
     expect(workspace.wip[0]).toMatchObject({
       orphan: false,
       path: 'inbox/ideas/renamed-idea.md',
+      body: '# A useful idea\n',
     })
   })
 
@@ -372,6 +375,7 @@ describe('Next repository', () => {
     workspace = await appendEvent(workspace, relinkEvent(current, {
       path: 'inbox/ideas/renamed-idea.md',
       title: 'A useful idea',
+      body: '# A useful idea\n',
       created: '2026-08-29T01:00:00Z',
       proofed: false,
     }, { now: () => '2026-08-29T04:00:00Z', id: () => 'relink-event' }), {}, vault)

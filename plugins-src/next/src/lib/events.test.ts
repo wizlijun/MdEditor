@@ -46,6 +46,7 @@ describe('event construction', () => {
       path: 'archive/a-idea.md',
       created: capture.created,
       title: 'Idea',
+      body: '# Idea',
       proofed: false,
     }, sequential)).toMatchObject({
       idea_id: 'existing',

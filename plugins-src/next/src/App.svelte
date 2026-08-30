@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import CreateIdeaSheet from './components/CreateIdeaSheet.svelte'
   import IdeaCard from './components/IdeaCard.svelte'
   import PlaceSheet from './components/PlaceSheet.svelte'
@@ -18,7 +18,7 @@
     state as store,
   } from './lib/store.svelte'
   import { setLocale, t, type MessageKey } from './lib/strings'
-  import { isDormantDue } from './lib/view'
+  import { isDormantDue, previewPosition } from './lib/view'
 
   type Lane = 'capture' | 'wip' | 'waiting' | 'dormant' | 'closed'
   type Route = PlaceInput['route']
@@ -41,9 +41,26 @@
   let relinking = $state<WorkspaceItem | null>(null)
   let dragging = $state<WorkspaceItem | null>(null)
   let dragOver = $state<Lane | null>(null)
-  let dragPress: { item: WorkspaceItem; startX: number; startY: number; pointerId: number } | null = null
+  let dragPress: {
+    item: WorkspaceItem
+    anchor: HTMLElement
+    tipId: string
+    startX: number
+    startY: number
+    pointerId: number
+  } | null = null
   let ghostX = $state(0)
   let ghostY = $state(0)
+  let previewing = $state<WorkspaceItem | null>(null)
+  let previewAnchor: HTMLElement | null = null
+  let previewTip = $state<HTMLElement | null>(null)
+  let previewTipId = $state('')
+  let previewX = $state(12)
+  let previewY = $state(12)
+  let previewPositionVersion = 0
+  let previewPointerActive = false
+  let previewFocusActive = false
+  let previewCloseTimer: ReturnType<typeof setTimeout> | null = null
   const laneElements = $state<Partial<Record<Lane, HTMLElement>>>({})
   const dragThreshold = 5
 
@@ -90,7 +107,24 @@
 
   function openCreation() {
     if (store.loading || store.saving || placing || relinking) return
+    closePreview()
     creating = true
+  }
+
+  function openPlacement(item: WorkspaceItem, route?: Route) {
+    closePreview()
+    placing = item
+    placementRoute = route
+  }
+
+  function openRelink(item: WorkspaceItem) {
+    closePreview()
+    relinking = item
+  }
+
+  async function refreshWorkspace() {
+    closePreview()
+    await refresh()
   }
 
   async function submitIdea(body: string) {
@@ -125,10 +159,12 @@
   }
 
   function doOpen(item: WorkspaceItem) {
+    closePreview()
     void report(() => openItem(item), 'error.open')
   }
 
   function doReopen(item: WorkspaceItem) {
+    closePreview()
     void report(() => reopen(item), 'error.save')
   }
 
@@ -147,8 +183,12 @@
 
   function dragStart(item: WorkspaceItem, event: PointerEvent) {
     if (dragPress || interactionDisabled || item.state === 'unsupported') return
+    closePreview()
+    const anchor = event.currentTarget as HTMLElement
     dragPress = {
       item,
+      anchor,
+      tipId: anchor.getAttribute('aria-describedby') ?? '',
       startX: event.clientX,
       startY: event.clientY,
       pointerId: event.pointerId,
@@ -161,6 +201,103 @@
     dragPress = null
     dragging = null
     dragOver = null
+  }
+
+  function closePreview() {
+    if (previewCloseTimer !== null) clearTimeout(previewCloseTimer)
+    previewCloseTimer = null
+    previewPointerActive = false
+    previewFocusActive = false
+    previewing = null
+    previewAnchor = null
+    previewTip = null
+    previewTipId = ''
+    previewPositionVersion += 1
+  }
+
+  function cancelPreviewClose() {
+    if (previewCloseTimer !== null) clearTimeout(previewCloseTimer)
+    previewCloseTimer = null
+  }
+
+  async function positionPreview(item: WorkspaceItem, anchor: HTMLElement, version: number) {
+    const viewport = { width: window.innerWidth, height: window.innerHeight }
+    const fallbackSize = {
+      width: Math.min(380, Math.max(0, viewport.width - 24)),
+      height: Math.min(480, Math.max(0, viewport.height - 24)),
+    }
+    const initial = previewPosition(anchor.getBoundingClientRect(), fallbackSize, viewport)
+    previewX = initial.x
+    previewY = initial.y
+    await tick()
+    if (version !== previewPositionVersion || previewing !== item || previewAnchor !== anchor || !previewTip) return
+    const measured = previewTip.getBoundingClientRect()
+    const actualSize = {
+      width: measured.width || fallbackSize.width,
+      height: measured.height || fallbackSize.height,
+    }
+    const final = previewPosition(
+      anchor.getBoundingClientRect(),
+      actualSize,
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+    previewX = final.x
+    previewY = final.y
+  }
+
+  function previewStart(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus', tipId: string) {
+    if (!item.body?.trim() || dragPress || dragging) return
+    cancelPreviewClose()
+    if (previewAnchor !== anchor) {
+      previewPointerActive = false
+      previewFocusActive = false
+    }
+    if (trigger === 'pointer') previewPointerActive = true
+    else previewFocusActive = true
+    previewing = item
+    previewAnchor = anchor
+    previewTipId = tipId
+    previewPositionVersion += 1
+    void positionPreview(item, anchor, previewPositionVersion)
+  }
+
+  function schedulePreviewClose() {
+    if (previewPointerActive || previewFocusActive || previewCloseTimer !== null) return
+    previewCloseTimer = setTimeout(() => {
+      previewCloseTimer = null
+      if (!previewPointerActive && !previewFocusActive) closePreview()
+    }, 100)
+  }
+
+  function previewEnd(trigger: 'pointer' | 'focus') {
+    if (trigger === 'pointer') previewPointerActive = false
+    else previewFocusActive = false
+    schedulePreviewClose()
+  }
+
+  function previewTipEnter() {
+    cancelPreviewClose()
+    previewPointerActive = true
+  }
+
+  function previewTipLeave() {
+    previewPointerActive = false
+    schedulePreviewClose()
+  }
+
+  function previewKeydown(event: KeyboardEvent) {
+    if (!previewTip || !previewing || event.target !== previewAnchor) return
+    const page = Math.max(120, previewTip.clientHeight * 0.8)
+    let next: number | null = null
+    if (event.key === 'ArrowDown') next = previewTip.scrollTop + 40
+    else if (event.key === 'ArrowUp') next = previewTip.scrollTop - 40
+    else if (event.key === 'PageDown') next = previewTip.scrollTop + page
+    else if (event.key === 'PageUp') next = previewTip.scrollTop - page
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = previewTip.scrollHeight
+    if (next === null) return
+    event.preventDefault()
+    previewTip.scrollTop = Math.max(0, next)
   }
 
   function laneAtPoint(x: number, y: number): Lane | null {
@@ -177,8 +314,7 @@
       doReopen(item)
       return
     }
-    placementRoute = routeFor(lane)
-    placing = item
+    openPlacement(item, routeFor(lane))
   }
 
   function pointerMove(event: PointerEvent) {
@@ -190,6 +326,7 @@
         dragEnd()
         return
       }
+      closePreview()
       dragging = dragPress.item
     }
     event.preventDefault()
@@ -200,18 +337,29 @@
   }
 
   function pointerUp(event: PointerEvent) {
+    const press = dragPress
     if (!dragPress || event.pointerId !== dragPress.pointerId) return
     const item = dragging
     const hovered = item ? laneAtPoint(event.clientX, event.clientY) : null
     const lane = item && hovered && canDrop(item, hovered) ? hovered : null
     dragEnd()
+    if (!item && press && !interactionDisabled && press.tipId) {
+      const rect = press.anchor.getBoundingClientRect()
+      const pointerInside = event.clientX >= rect.left && event.clientX <= rect.right
+        && event.clientY >= rect.top && event.clientY <= rect.bottom
+      const focused = press.anchor.contains(document.activeElement)
+      if (pointerInside || focused) {
+        previewStart(press.item, press.anchor, focused ? 'focus' : 'pointer', press.tipId)
+      }
+      return
+    }
     if (item && lane) moveToLane(item, lane)
   }
 
   onMount(() => {
-    void report(refresh, 'error.load')
+    void report(refreshWorkspace, 'error.load')
     const onFocus = () => {
-      if (!store.saving) void report(refresh, 'error.load')
+      if (!store.saving) void report(refreshWorkspace, 'error.load')
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && (dragPress || dragging)) {
@@ -219,6 +367,13 @@
         dragEnd()
         return
       }
+      if (event.key === 'Escape' && previewing) {
+        event.preventDefault()
+        closePreview()
+        return
+      }
+      previewKeydown(event)
+      if (event.defaultPrevented) return
       if (event.key.toLocaleLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return
       event.preventDefault()
       if (!creating) openCreation()
@@ -228,6 +383,7 @@
     return () => {
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('keydown', onKey)
+      cancelPreviewClose()
     }
   })
 </script>
@@ -236,7 +392,9 @@
   onpointermove={pointerMove}
   onpointerup={pointerUp}
   onpointercancel={dragEnd}
-  onblur={dragEnd}
+  onblur={() => { dragEnd(); closePreview() }}
+  onresize={closePreview}
+  onscroll={closePreview}
 />
 
 <main class="app">
@@ -251,7 +409,7 @@
         <span>{t('action.newIdea')}</span>
         <kbd>{newIdeaShortcut}</kbd>
       </button>
-      <button type="button" class="refresh" disabled={store.loading || store.saving} onclick={() => void report(refresh, 'error.load')}>
+      <button type="button" class="refresh" disabled={store.loading || store.saving} onclick={() => void report(refreshWorkspace, 'error.load')}>
         ↻ <span>{t('common.refresh')}</span>
       </button>
     </div>
@@ -282,10 +440,12 @@
                 {item}
                 disabled={interactionDisabled}
                 canPlace={item.state === 'capture'}
-                onPlace={(value) => { placing = value; placementRoute = undefined }}
+                onPlace={(value) => openPlacement(value)}
                 onOpen={doOpen}
                 onReopen={doReopen}
-                onRelink={(value) => relinking = value}
+                onRelink={openRelink}
+                onPreviewStart={previewStart}
+                onPreviewEnd={previewEnd}
               />
             {/each}
           </div>
@@ -299,7 +459,7 @@
         </button>
       </div>
 
-      <div class="board-scroll">
+        <div class="board-scroll" onscroll={closePreview}>
         <div class="board">
           {#each lanes as lane (lane.id)}
             <section
@@ -324,11 +484,13 @@
                       dragging={dragging?.key === item.key}
                       canPlace={item.state === 'capture' || item.state === 'wip' || item.state === 'waiting'}
                       canReopen={item.state === 'dormant' || item.state === 'closed'}
-                      onPlace={(value) => { placing = value; placementRoute = undefined }}
+                      onPlace={(value) => openPlacement(value)}
                       onOpen={doOpen}
                       onReopen={doReopen}
-                      onRelink={(value) => relinking = value}
+                      onRelink={openRelink}
                       onDragStart={dragStart}
+                      onPreviewStart={previewStart}
+                      onPreviewEnd={previewEnd}
                     />
                   </div>
                 {:else}
@@ -346,6 +508,18 @@
 
 {#if dragging}
   <div class="drag-ghost" style="left:{ghostX}px; top:{ghostY}px">{dragging.title}</div>
+{/if}
+
+{#if previewing?.body}
+  <aside
+    bind:this={previewTip}
+    id={previewTipId}
+    class="idea-preview-tip"
+    role="tooltip"
+    style="left:{previewX}px; top:{previewY}px"
+    onpointerenter={previewTipEnter}
+    onpointerleave={previewTipLeave}
+  ><pre>{previewing.body}</pre></aside>
 {/if}
 
 {#if placing}
@@ -450,6 +624,8 @@
   .lane.available { border-style: dashed; }
   .lane.over { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
   .drag-ghost { position: fixed; z-index: 60; max-width: 240px; transform: translate(10px, 10px); overflow: hidden; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--fg); box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 22%, transparent); padding: 9px 12px; font-size: 12px; font-weight: 650; opacity: 0.88; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; }
+  .idea-preview-tip { position: fixed; z-index: 15; width: min(380px, calc(100vw - 24px)); max-height: min(480px, calc(100vh - 24px)); box-sizing: border-box; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 12px; background: color-mix(in srgb, var(--card) 96%, transparent); color: var(--fg); box-shadow: 0 14px 38px color-mix(in srgb, var(--shadow) 28%, transparent); padding: 14px 16px; backdrop-filter: blur(18px); }
+  .idea-preview-tip pre { margin: 0; font-family: inherit; font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
   .lane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 10px; }
   .lane-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.01em; }
   .lane-head span { min-width: 20px; border-radius: 999px; background: var(--card); color: var(--muted); padding: 2px 7px; text-align: center; font-size: 11px; }

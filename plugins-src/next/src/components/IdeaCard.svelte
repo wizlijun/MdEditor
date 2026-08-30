@@ -14,6 +14,8 @@
     onReopen,
     onRelink,
     onDragStart,
+    onPreviewStart,
+    onPreviewEnd,
   }: {
     item: WorkspaceItem
     disabled?: boolean
@@ -26,9 +28,15 @@
     onReopen(item: WorkspaceItem): void
     onRelink(item: WorkspaceItem): void
     onDragStart?(item: WorkspaceItem, event: PointerEvent): void
+    onPreviewStart?(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus', tipId: string): void
+    onPreviewEnd?(trigger: 'pointer' | 'focus'): void
   } = $props()
 
   const statusKey = $derived(`status.${item.state}` as MessageKey)
+  const hasPreview = $derived(Boolean(item.body?.trim()))
+  const domToken = $derived(encodeURIComponent(item.key))
+  const titleId = $derived(`idea-card-title-${domToken}`)
+  const tipId = $derived(`idea-preview-${domToken}`)
   const detail = $derived.by(() => {
     const projection = item.projection
     if (!projection) return ''
@@ -43,6 +51,7 @@
   })
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <article
   class="card"
   class:orphan={item.orphan}
@@ -50,6 +59,22 @@
   class:draggable={canDrag && !disabled}
   data-item-key={item.key}
   data-draggable={canDrag && !disabled}
+  role="group"
+  tabindex={hasPreview ? 0 : undefined}
+  aria-labelledby={titleId}
+  aria-describedby={hasPreview ? tipId : undefined}
+  onpointerenter={(event) => {
+    if (hasPreview) onPreviewStart?.(item, event.currentTarget, 'pointer', tipId)
+  }}
+  onpointerleave={() => onPreviewEnd?.('pointer')}
+  onfocusin={(event) => {
+    if (hasPreview) onPreviewStart?.(item, event.currentTarget, 'focus', tipId)
+  }}
+  onfocusout={(event) => {
+    const next = event.relatedTarget
+    if (next instanceof Node && event.currentTarget.contains(next)) return
+    onPreviewEnd?.('focus')
+  }}
   onpointerdown={(event) => {
     if (!canDrag || disabled || event.button !== 0) return
     if (event.target instanceof Element && event.target.closest('button')) return
@@ -58,7 +83,7 @@
 >
   <div class="body">
     <div class="title-line">
-      <h3>{item.title}</h3>
+      <h3 id={titleId}>{item.title}</h3>
       <span class="state">{t(statusKey)}</span>
       {#if item.proofed}<span class="badge proof">{t('badge.proofed')}</span>{/if}
       {#if item.orphan}<span class="badge warning">{t('badge.orphan')}</span>{/if}
@@ -100,6 +125,7 @@
   .card.draggable { cursor: grab; user-select: none; }
   .card.draggable:active { cursor: grabbing; }
   .card.dragging { opacity: 0.42; }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .body { min-width: 0; }
   .title-line { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 7px; min-width: 0; }
   h3 { width: 100%; margin: 0; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.38; font-weight: 650; }
