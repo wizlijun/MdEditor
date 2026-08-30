@@ -1,0 +1,65 @@
+{
+  "manifest_version": 2,
+  "id": "notemd.next",
+  "name": "Next",
+  "version": "1.0.0",
+  "kind": "native",
+  "engines": {
+    "notemd": ">=6.829.2"
+  },
+  "description": "Give every idea a next step — or a place to rest.",
+  "ui": "ui/",
+  "activation": {
+    "events": [
+      "onCommand:open"
+    ]
+  },
+  "contributes": {
+    "menus": [
+      {
+        "location": "plugins",
+        "submenu": "thinking",
+        "label": "Next",
+        "command": "open"
+      }
+    ],
+    "windows": [
+      {
+        "id": "main",
+        "entry": "index.html",
+        "title": "Next",
+        "width": 760,
+        "height": 720,
+        "min_width": 620,
+        "min_height": 520,
+        "open_command": "open"
+      }
+    ]
+  },
+  "capabilities": [
+    "vault.read",
+    "vault.write",
+    "editor.open",
+    "toast"
+  ],
+  "i18n": {
+    "zh": {
+      "name": "Next",
+      "menus": {
+        "open": "Next"
+      }
+    },
+    "ja": {
+      "name": "Next",
+      "menus": {
+        "open": "Next"
+      }
+    },
+    "de": {
+      "name": "Next",
+      "menus": {
+        "open": "Next"
+      }
+    }
+  }
+}

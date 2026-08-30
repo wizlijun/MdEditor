@@ -42,6 +42,8 @@ export const CONCEPT_TYPE = {
   idea: 'Idea',
   /** 奇思妙想:agent 产出的论证文档 `<name>.proof.md` */
   ideaProof: 'Idea Proof',
+  /** Next:用户维护的念头处置账本 */
+  next: 'Next',
   /** 溯源:agent 产出的溯源摘要 `<dir>/<ts>-source-trace.md`(trace-source 插件) */
   traceReport: 'Trace Report',
   /** 溯源:下载的原始材料全文(字幕转写/博客正文/论文节选),报告同名子目录 */

@@ -7,6 +7,12 @@ import {
 // @ts-expect-error - plain-JS lint core shared with scripts/okf-lint.mjs
 import { lintText, RESERVED } from '../../../scripts/okf-lint-core.mjs'
 
+describe('CONCEPT_TYPE', () => {
+  it('publicly registers the Next ledger type', () => {
+    expect(CONCEPT_TYPE.next).toBe('Next')
+  })
+})
+
 describe('touchConceptFrontmatter', () => {
   it('writes type first for a brand-new document', () => {
     expect(touchConceptFrontmatter(null, { type: CONCEPT_TYPE.note, title: '会议纪要' }))
