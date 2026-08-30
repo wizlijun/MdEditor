@@ -5,7 +5,7 @@
   import RelinkSheet from './components/RelinkSheet.svelte'
   import { bridge, toast } from './lib/bridge'
   import type { PlaceInput } from './lib/events'
-  import type { WorkspaceItem } from './lib/repository'
+  import { itemSearchText, type WorkspaceItem } from './lib/repository'
   import type { IdeaSource } from './lib/source'
   import {
     open as openItem,
@@ -15,22 +15,59 @@
     reopen,
     state as store,
   } from './lib/store.svelte'
-  import { setLocale, t } from './lib/strings'
-  import { isDormantDue, placedItems } from './lib/view'
+  import { setLocale, t, type MessageKey } from './lib/strings'
+  import { isDormantDue } from './lib/view'
+
+  type Lane = 'capture' | 'wip' | 'waiting' | 'dormant' | 'closed'
+  type Route = PlaceInput['route']
+
+  interface LaneView {
+    id: Lane
+    title: MessageKey
+    empty: MessageKey
+    items: WorkspaceItem[]
+    count: string
+  }
 
   setLocale(bridge().locale)
 
-  let showCapture = $state(false)
   let showPlaced = $state(false)
   let search = $state('')
   let placing = $state<WorkspaceItem | null>(null)
+  let placementRoute = $state<Route | undefined>()
   let relinking = $state<WorkspaceItem | null>(null)
+  let dragging = $state<WorkspaceItem | null>(null)
+  let dragOver = $state<Lane | null>(null)
 
   const workspace = $derived(store.workspace)
   const blocked = $derived(Boolean(workspace?.readOnlyError || workspace?.projection.hasBlockingIssues))
-  const due = $derived(workspace?.dormant.filter((item) => isDormantDue(item)) ?? [])
-  const repair = $derived(workspace?.items.filter((item) => item.state === 'capture' && item.orphan) ?? [])
-  const found = $derived(workspace ? placedItems(workspace.items, search) : [])
+  const interactionDisabled = $derived(store.saving || blocked)
+  const repair = $derived(workspace?.items.filter((item) => item.state === 'unsupported' || (item.state === 'capture' && item.orphan)) ?? [])
+
+  function filter(items: WorkspaceItem[]): WorkspaceItem[] {
+    const query = search.trim().toLocaleLowerCase()
+    return query ? items.filter((item) => itemSearchText(item).includes(query)) : items
+  }
+
+  const lanes = $derived.by<LaneView[]>(() => {
+    if (!workspace) return []
+    const searching = Boolean(search.trim())
+    const capture = workspace.capture.filter((item) => !item.orphan)
+    const dormant = searching || showPlaced
+      ? workspace.dormant
+      : workspace.dormant.filter((item) => isDormantDue(item))
+    const closed = searching || showPlaced ? workspace.closed : []
+    const visibleCapture = filter(searching ? capture : capture.slice(0, 10))
+    const visibleDormant = filter(dormant)
+    const visibleClosed = filter(closed)
+    return [
+      { id: 'capture', title: 'section.capture', empty: 'empty.capture', items: visibleCapture, count: String(visibleCapture.length) },
+      { id: 'wip', title: 'section.wip', empty: 'empty.wip', items: filter(workspace.wip), count: t('count.wip', { count: workspace.wip.length }) },
+      { id: 'waiting', title: 'section.waiting', empty: 'empty.waiting', items: filter(workspace.waiting), count: t('count.waiting', { count: workspace.waiting.length }) },
+      { id: 'dormant', title: 'status.dormant', empty: 'empty.dormant', items: visibleDormant, count: String(visibleDormant.length) },
+      { id: 'closed', title: 'status.closed', empty: 'empty.closed', items: visibleClosed, count: String(visibleClosed.length) },
+    ]
+  })
 
   async function report(action: () => Promise<void>, messageKey: 'error.save' | 'error.open' | 'error.load') {
     try {
@@ -40,12 +77,18 @@
     }
   }
 
+  function closePlacement() {
+    placing = null
+    placementRoute = undefined
+  }
+
   async function submitPlacement(input: PlaceInput) {
     if (!placing) return
     const item = placing
     await report(async () => {
+      if (item.state === 'dormant' || item.state === 'closed') await reopen(item)
       await place(item, input)
-      placing = null
+      closePlacement()
     }, 'error.save')
   }
 
@@ -64,6 +107,49 @@
 
   function doReopen(item: WorkspaceItem) {
     void report(() => reopen(item), 'error.save')
+  }
+
+  function canDrop(item: WorkspaceItem, lane: Lane): boolean {
+    if (interactionDisabled || item.state === 'unsupported' || item.state === lane) return false
+    if (lane === 'capture') return item.state === 'dormant' || item.state === 'closed'
+    return true
+  }
+
+  function routeFor(lane: Exclude<Lane, 'capture'>): Route {
+    if (lane === 'wip') return 'commit'
+    if (lane === 'waiting') return 'wait'
+    if (lane === 'dormant') return 'park'
+    return 'settle'
+  }
+
+  function dragStart(item: WorkspaceItem) {
+    if (interactionDisabled || item.state === 'unsupported') return
+    dragging = item
+  }
+
+  function dragEnd() {
+    dragging = null
+    dragOver = null
+  }
+
+  function dragEnter(event: DragEvent, lane: Lane) {
+    if (!dragging || !canDrop(dragging, lane)) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    dragOver = lane
+  }
+
+  function drop(event: DragEvent, lane: Lane) {
+    event.preventDefault()
+    const item = dragging
+    dragEnd()
+    if (!item || !canDrop(item, lane)) return
+    if (lane === 'capture') {
+      doReopen(item)
+      return
+    }
+    placementRoute = routeFor(lane)
+    placing = item
   }
 
   onMount(() => {
@@ -100,113 +186,89 @@
       {#if workspace.scanErrors.length}
         <div class="banner warning" title={workspace.scanErrors.join('\n')}>{t('common.error')} · {workspace.scanErrors[0]}</div>
       {/if}
-      {#if workspace.projection.wipAtLimit}
-        <div class="banner calm">{t('warning.wip')}</div>
-      {/if}
-      {#if workspace.projection.waitingExceeded}
-        <div class="banner calm">{t('warning.waiting')}</div>
-      {/if}
+      {#if workspace.projection.wipAtLimit}<div class="banner calm">{t('warning.wip')}</div>{/if}
+      {#if workspace.projection.waitingExceeded}<div class="banner calm">{t('warning.waiting')}</div>{/if}
 
       {#if repair.length}
-        <section>
+        <section class="repair">
           <div class="section-head"><h2>{t('section.repair')}</h2></div>
-          <div class="cards">
+          <div class="repair-cards">
             {#each repair as item (item.key)}
-              <IdeaCard {item} disabled={store.saving || blocked} canPlace onPlace={(value) => placing = value} onOpen={doOpen} onReopen={doReopen} onRelink={(value) => relinking = value} />
+              <IdeaCard
+                {item}
+                disabled={interactionDisabled}
+                canPlace={item.state === 'capture'}
+                onPlace={(value) => { placing = value; placementRoute = undefined }}
+                onOpen={doOpen}
+                onReopen={doReopen}
+                onRelink={(value) => relinking = value}
+              />
             {/each}
           </div>
         </section>
       {/if}
 
-      <section>
-        <div class="section-head">
-          <h2>{t('section.wip')}</h2>
-          <span>{t('count.wip', { count: workspace.wip.length })}</span>
-        </div>
-        <div class="cards">
-          {#each workspace.wip as item (item.key)}
-            <IdeaCard {item} disabled={store.saving || blocked} canPlace onPlace={(value) => placing = value} onOpen={doOpen} onReopen={doReopen} onRelink={(value) => relinking = value} />
-          {:else}
-            <p class="empty">{t('empty.wip')}</p>
-          {/each}
-        </div>
-      </section>
-
-      <section>
-        <div class="section-head">
-          <h2>{t('section.waiting')}</h2>
-          <span>{t('count.waiting', { count: workspace.waiting.length })}</span>
-        </div>
-        <div class="cards">
-          {#each workspace.waiting as item (item.key)}
-            <IdeaCard {item} disabled={store.saving || blocked} canPlace onPlace={(value) => placing = value} onOpen={doOpen} onReopen={doReopen} onRelink={(value) => relinking = value} />
-          {:else}
-            <p class="empty">{t('empty.waiting')}</p>
-          {/each}
-        </div>
-      </section>
-
-      {#if due.length}
-        <section>
-          <div class="section-head"><h2>{t('section.resurfaced')}</h2></div>
-          <div class="cards">
-            {#each due as item (item.key)}
-              <IdeaCard {item} disabled={store.saving || blocked} canReopen onPlace={(value) => placing = value} onOpen={doOpen} onReopen={doReopen} onRelink={(value) => relinking = value} />
-            {/each}
-          </div>
-        </section>
-      {/if}
-
-      <div class="disclosure-actions">
-        <button class:active={showCapture} onclick={() => showCapture = !showCapture}>
-          {showCapture ? t('action.hideCapture') : t('action.placeOne')}
-        </button>
+      <div class="board-tools">
+        <input class="search" type="search" bind:value={search} placeholder={t('search.placeholder')} />
         <button class:active={showPlaced} onclick={() => showPlaced = !showPlaced}>
           {showPlaced ? t('action.hidePlaced') : t('action.findPlaced')}
         </button>
       </div>
 
-      {#if showCapture}
-        <section class="disclosed">
-          <div class="section-head"><h2>{t('section.capture')}</h2></div>
-          <div class="cards">
-            {#each workspace.capture.slice(0, 10) as item (item.key)}
-              <IdeaCard {item} disabled={store.saving || blocked} canPlace onPlace={(value) => placing = value} onOpen={doOpen} onReopen={doReopen} onRelink={(value) => relinking = value} />
-            {:else}
-              <p class="empty">{t('empty.capture')}</p>
-            {/each}
-          </div>
-        </section>
-      {/if}
-
-      {#if showPlaced}
-        <section class="disclosed">
-          <div class="section-head"><h2>{t('section.placed')}</h2></div>
-          <input class="search" type="search" bind:value={search} placeholder={t('search.placeholder')} />
-          <div class="cards">
-            {#each found as item (item.key)}
-              <IdeaCard
-                {item}
-                disabled={store.saving || blocked}
-                canReopen={item.state === 'dormant' || item.state === 'closed'}
-                canPlace={item.state === 'capture'}
-                onPlace={(value) => placing = value}
-                onOpen={doOpen}
-                onReopen={doReopen}
-                onRelink={(value) => relinking = value}
-              />
-            {:else}
-              <p class="empty">{t('empty.search')}</p>
-            {/each}
-          </div>
-        </section>
-      {/if}
+      <div class="board-scroll">
+        <div class="board">
+          {#each lanes as lane (lane.id)}
+            <section
+              class="lane"
+              aria-label={t(lane.title)}
+              class:over={dragOver === lane.id}
+              class:available={Boolean(dragging && canDrop(dragging, lane.id))}
+              data-lane={lane.id}
+              ondragenter={(event) => dragEnter(event, lane.id)}
+              ondragover={(event) => dragEnter(event, lane.id)}
+              ondragleave={(event) => {
+                const related = event.relatedTarget
+                if (!(related instanceof Node) || !event.currentTarget.contains(related)) dragOver = null
+              }}
+              ondrop={(event) => drop(event, lane.id)}
+            >
+              <header class="lane-head">
+                <h2>{t(lane.title)}</h2>
+                <span>{lane.count}</span>
+              </header>
+              <div class="lane-body" role="list" aria-label={t(lane.title)}>
+                {#each lane.items as item (item.key)}
+                  <div role="listitem">
+                    <IdeaCard
+                      {item}
+                      disabled={interactionDisabled}
+                      canDrag={item.state !== 'unsupported'}
+                      dragging={dragging?.key === item.key}
+                      canPlace={item.state === 'capture' || item.state === 'wip' || item.state === 'waiting'}
+                      canReopen={item.state === 'dormant' || item.state === 'closed'}
+                      onPlace={(value) => { placing = value; placementRoute = undefined }}
+                      onOpen={doOpen}
+                      onReopen={doReopen}
+                      onRelink={(value) => relinking = value}
+                      onDragStart={dragStart}
+                      onDragEnd={dragEnd}
+                    />
+                  </div>
+                {:else}
+                  <p class="empty">{t(lane.empty)}</p>
+                {/each}
+              </div>
+            </section>
+          {/each}
+        </div>
+      </div>
+      <p class="drag-help">{t('board.dragHelp')}</p>
     </div>
   {/if}
 </main>
 
 {#if placing}
-  <PlaceSheet item={placing} saving={store.saving} onCancel={() => placing = null} onSubmit={submitPlacement} />
+  <PlaceSheet item={placing} saving={store.saving} initialRoute={placementRoute} onCancel={closePlacement} onSubmit={submitPlacement} />
 {/if}
 
 {#if relinking}
@@ -270,29 +332,39 @@
   .refresh:hover:not(:disabled) { background: var(--hover); }
   .refresh:disabled { opacity: 0.45; }
   .loading { min-height: 60vh; display: grid; place-items: center; color: var(--muted); }
-  .content { max-width: 860px; margin: 0 auto; padding: 22px 28px 48px; }
-  section { margin: 0 0 24px; }
-  .section-head { display: flex; align-items: baseline; gap: 8px; margin: 0 2px 9px; }
-  .section-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.02em; }
-  .section-head span { color: var(--muted); font-size: 12px; }
-  .cards { display: grid; gap: 8px; }
-  .empty { margin: 0; padding: 12px 2px; color: var(--muted); font-size: 12.5px; }
-  .banner { display: grid; gap: 3px; margin-bottom: 10px; padding: 10px 12px; border-radius: 10px; font-size: 12px; }
+  .content { padding: 22px 28px 48px; }
+  .banner, .repair, .board-tools, .board-scroll, .drag-help { max-width: 1500px; margin-right: auto; margin-left: auto; }
+  .banner { display: grid; gap: 3px; margin-bottom: 10px; padding: 10px 12px; border-radius: 10px; font-size: 12px; box-sizing: border-box; }
   .banner span { opacity: 0.75; overflow-wrap: anywhere; }
   .banner.danger { background: color-mix(in srgb, var(--danger) 12%, var(--card)); color: var(--danger); }
   .banner.warning { background: var(--warn-bg); color: var(--warn-fg); }
   .banner.calm { background: var(--chip); color: var(--muted-strong); }
-  .disclosure-actions { display: flex; gap: 8px; margin: 4px 0 22px; }
-  .disclosure-actions button { border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg); padding: 8px 12px; font-weight: 650; cursor: pointer; }
-  .disclosure-actions button:hover { background: var(--hover); }
-  .disclosure-actions button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-  .disclosed { padding-top: 2px; }
-  .search { box-sizing: border-box; width: 100%; margin: 0 0 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--input); color: var(--fg); padding: 9px 11px; outline: none; }
+  .repair { margin-bottom: 16px; }
+  .section-head { margin: 0 2px 8px; }
+  .section-head h2 { margin: 0; font-size: 13px; }
+  .repair-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 8px; }
+  .board-tools { display: flex; gap: 8px; margin-bottom: 12px; }
+  .search { flex: 1; min-width: 160px; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--input); color: var(--fg); padding: 9px 11px; outline: none; }
   .search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .board-tools button { flex: none; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg); padding: 8px 12px; font-weight: 650; cursor: pointer; }
+  .board-tools button:hover { background: var(--hover); }
+  .board-tools button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .board-scroll { overflow-x: auto; padding: 2px 2px 14px; }
+  .board { display: grid; grid-template-columns: repeat(5, minmax(248px, 1fr)); gap: 12px; min-width: 1312px; }
+  .lane { min-width: 0; min-height: 420px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--chip) 48%, transparent); transition: border-color 120ms ease, background 120ms ease; }
+  .lane.available { border-style: dashed; }
+  .lane.over { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+  .lane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 10px; }
+  .lane-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.01em; }
+  .lane-head span { min-width: 20px; border-radius: 999px; background: var(--card); color: var(--muted); padding: 2px 7px; text-align: center; font-size: 11px; }
+  .lane-body { display: grid; align-content: start; gap: 8px; min-height: 360px; }
+  .empty { margin: 0; padding: 14px 5px; color: var(--muted); font-size: 12px; }
+  .drag-help { margin-top: 8px; color: var(--muted); font-size: 11.5px; }
   @media (max-width: 660px) {
     .topbar { padding: 16px 18px 13px; }
     .topbar p { max-width: 440px; }
     .refresh span { display: none; }
     .content { padding: 18px 16px 36px; }
+    .board { grid-template-columns: repeat(5, 248px); }
   }
 </style>
