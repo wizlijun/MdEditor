@@ -147,6 +147,9 @@ describe('Next window', () => {
     expect(tip.textContent).toContain('这是完整 Idea 的最后一段。')
     expect(tip.closest('.board-scroll')).toBeNull()
     expect(card.getAttribute('aria-describedby')).toBe(tip.id)
+    const waitingCard = document.querySelector<HTMLElement>('[data-item-key="waiting"]')!
+    expect(waitingCard.getAttribute('aria-describedby')).not.toBe(card.getAttribute('aria-describedby'))
+    expect(document.getElementById(card.getAttribute('aria-labelledby')!)?.textContent).toBe('默认隐藏的想法')
     expect(tip.classList.contains('idea-preview-tip')).toBe(true)
 
     card.dispatchEvent(new PointerEvent('pointerleave', { relatedTarget: tip }))
@@ -162,6 +165,14 @@ describe('Next window', () => {
     flushSync()
     tip = document.querySelector<HTMLElement>('[role="tooltip"]')!
     expect(tip.textContent).toContain('这是完整 Idea 的最后一段。')
+    Object.defineProperty(tip, 'clientHeight', { configurable: true, value: 200 })
+    Object.defineProperty(tip, 'scrollHeight', { configurable: true, value: 1000 })
+    card.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true }))
+    expect(tip.scrollTop).toBe(160)
+    card.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
+    expect(tip.scrollTop).toBe(1000)
+    card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }))
+    expect(tip.scrollTop).toBe(0)
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     flushSync()
@@ -271,6 +282,9 @@ describe('Next window', () => {
     captureCard.dispatchEvent(new PointerEvent('pointerdown', {
       bubbles: true, button: 0, pointerId: 7, clientX: 10, clientY: 10,
     }))
+    captureCard.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+    flushSync()
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
     window.dispatchEvent(new PointerEvent('pointermove', {
       bubbles: true, pointerId: 7, clientX: 350, clientY: 50,
     }))
@@ -285,6 +299,27 @@ describe('Next window', () => {
 
     expect(document.querySelector<HTMLButtonElement>('.routes button[aria-pressed="true"]')?.textContent)
       .toContain('等待回收')
+  })
+
+  it('restores the focused preview after a click that never becomes a drag', () => {
+    mocks.state.workspace = workspace()
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const card = document.querySelector<HTMLElement>('[data-item-key="capture"]')!
+    card.dispatchEvent(new PointerEvent('pointerenter'))
+    card.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, button: 0, pointerId: 12, clientX: 10, clientY: 10,
+    }))
+    card.focus()
+    flushSync()
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, pointerId: 12, clientX: 10, clientY: 10,
+    }))
+    flushSync()
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain('默认隐藏的想法')
   })
 
   it('shows a New Idea shortcut and creates into the displayed Idea directory', async () => {

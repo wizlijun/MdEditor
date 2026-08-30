@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import CreateIdeaSheet from './components/CreateIdeaSheet.svelte'
   import IdeaCard from './components/IdeaCard.svelte'
   import PlaceSheet from './components/PlaceSheet.svelte'
@@ -18,7 +18,7 @@
     state as store,
   } from './lib/store.svelte'
   import { setLocale, t, type MessageKey } from './lib/strings'
-  import { isDormantDue } from './lib/view'
+  import { isDormantDue, previewPosition } from './lib/view'
 
   type Lane = 'capture' | 'wip' | 'waiting' | 'dormant' | 'closed'
   type Route = PlaceInput['route']
@@ -41,16 +41,26 @@
   let relinking = $state<WorkspaceItem | null>(null)
   let dragging = $state<WorkspaceItem | null>(null)
   let dragOver = $state<Lane | null>(null)
-  let dragPress: { item: WorkspaceItem; startX: number; startY: number; pointerId: number } | null = null
+  let dragPress: {
+    item: WorkspaceItem
+    anchor: HTMLElement
+    tipId: string
+    startX: number
+    startY: number
+    pointerId: number
+  } | null = null
   let ghostX = $state(0)
   let ghostY = $state(0)
   let previewing = $state<WorkspaceItem | null>(null)
   let previewAnchor: HTMLElement | null = null
+  let previewTip = $state<HTMLElement | null>(null)
+  let previewTipId = $state('')
   let previewX = $state(12)
   let previewY = $state(12)
+  let previewPositionVersion = 0
   let previewPointerActive = false
   let previewFocusActive = false
-  let previewCloseTimer: number | null = null
+  let previewCloseTimer: ReturnType<typeof setTimeout> | null = null
   const laneElements = $state<Partial<Record<Lane, HTMLElement>>>({})
   const dragThreshold = 5
 
@@ -174,8 +184,11 @@
   function dragStart(item: WorkspaceItem, event: PointerEvent) {
     if (dragPress || interactionDisabled || item.state === 'unsupported') return
     closePreview()
+    const anchor = event.currentTarget as HTMLElement
     dragPress = {
       item,
+      anchor,
+      tipId: anchor.getAttribute('aria-describedby') ?? '',
       startX: event.clientX,
       startY: event.clientY,
       pointerId: event.pointerId,
@@ -191,21 +204,49 @@
   }
 
   function closePreview() {
-    if (previewCloseTimer !== null) window.clearTimeout(previewCloseTimer)
+    if (previewCloseTimer !== null) clearTimeout(previewCloseTimer)
     previewCloseTimer = null
     previewPointerActive = false
     previewFocusActive = false
     previewing = null
     previewAnchor = null
+    previewTip = null
+    previewTipId = ''
+    previewPositionVersion += 1
   }
 
   function cancelPreviewClose() {
-    if (previewCloseTimer !== null) window.clearTimeout(previewCloseTimer)
+    if (previewCloseTimer !== null) clearTimeout(previewCloseTimer)
     previewCloseTimer = null
   }
 
-  function previewStart(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus') {
-    if (!item.body?.trim() || dragging) return
+  async function positionPreview(item: WorkspaceItem, anchor: HTMLElement, version: number) {
+    const viewport = { width: window.innerWidth, height: window.innerHeight }
+    const fallbackSize = {
+      width: Math.min(380, Math.max(0, viewport.width - 24)),
+      height: Math.min(480, Math.max(0, viewport.height - 24)),
+    }
+    const initial = previewPosition(anchor.getBoundingClientRect(), fallbackSize, viewport)
+    previewX = initial.x
+    previewY = initial.y
+    await tick()
+    if (version !== previewPositionVersion || previewing !== item || previewAnchor !== anchor || !previewTip) return
+    const measured = previewTip.getBoundingClientRect()
+    const actualSize = {
+      width: measured.width || fallbackSize.width,
+      height: measured.height || fallbackSize.height,
+    }
+    const final = previewPosition(
+      anchor.getBoundingClientRect(),
+      actualSize,
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+    previewX = final.x
+    previewY = final.y
+  }
+
+  function previewStart(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus', tipId: string) {
+    if (!item.body?.trim() || dragPress || dragging) return
     cancelPreviewClose()
     if (previewAnchor !== anchor) {
       previewPointerActive = false
@@ -215,23 +256,14 @@
     else previewFocusActive = true
     previewing = item
     previewAnchor = anchor
-    const rect = anchor.getBoundingClientRect()
-    const margin = 12
-    const gap = 10
-    const width = Math.min(380, Math.max(0, window.innerWidth - margin * 2))
-    const maxHeight = Math.min(480, Math.max(0, window.innerHeight - margin * 2))
-    const beside = rect.right + gap
-    const alternate = rect.left - width - gap
-    previewX = Math.max(margin, Math.min(
-      beside + width <= window.innerWidth - margin ? beside : alternate,
-      window.innerWidth - width - margin,
-    ))
-    previewY = Math.max(margin, Math.min(rect.top, window.innerHeight - maxHeight - margin))
+    previewTipId = tipId
+    previewPositionVersion += 1
+    void positionPreview(item, anchor, previewPositionVersion)
   }
 
   function schedulePreviewClose() {
     if (previewPointerActive || previewFocusActive || previewCloseTimer !== null) return
-    previewCloseTimer = window.setTimeout(() => {
+    previewCloseTimer = setTimeout(() => {
       previewCloseTimer = null
       if (!previewPointerActive && !previewFocusActive) closePreview()
     }, 100)
@@ -251,6 +283,21 @@
   function previewTipLeave() {
     previewPointerActive = false
     schedulePreviewClose()
+  }
+
+  function previewKeydown(event: KeyboardEvent) {
+    if (!previewTip || !previewing || event.target !== previewAnchor) return
+    const page = Math.max(120, previewTip.clientHeight * 0.8)
+    let next: number | null = null
+    if (event.key === 'ArrowDown') next = previewTip.scrollTop + 40
+    else if (event.key === 'ArrowUp') next = previewTip.scrollTop - 40
+    else if (event.key === 'PageDown') next = previewTip.scrollTop + page
+    else if (event.key === 'PageUp') next = previewTip.scrollTop - page
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = previewTip.scrollHeight
+    if (next === null) return
+    event.preventDefault()
+    previewTip.scrollTop = Math.max(0, next)
   }
 
   function laneAtPoint(x: number, y: number): Lane | null {
@@ -279,6 +326,7 @@
         dragEnd()
         return
       }
+      closePreview()
       dragging = dragPress.item
     }
     event.preventDefault()
@@ -289,11 +337,22 @@
   }
 
   function pointerUp(event: PointerEvent) {
+    const press = dragPress
     if (!dragPress || event.pointerId !== dragPress.pointerId) return
     const item = dragging
     const hovered = item ? laneAtPoint(event.clientX, event.clientY) : null
     const lane = item && hovered && canDrop(item, hovered) ? hovered : null
     dragEnd()
+    if (!item && press && !interactionDisabled && press.tipId) {
+      const rect = press.anchor.getBoundingClientRect()
+      const pointerInside = event.clientX >= rect.left && event.clientX <= rect.right
+        && event.clientY >= rect.top && event.clientY <= rect.bottom
+      const focused = press.anchor.contains(document.activeElement)
+      if (pointerInside || focused) {
+        previewStart(press.item, press.anchor, focused ? 'focus' : 'pointer', press.tipId)
+      }
+      return
+    }
     if (item && lane) moveToLane(item, lane)
   }
 
@@ -313,6 +372,8 @@
         closePreview()
         return
       }
+      previewKeydown(event)
+      if (event.defaultPrevented) return
       if (event.key.toLocaleLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return
       event.preventDefault()
       if (!creating) openCreation()
@@ -451,7 +512,8 @@
 
 {#if previewing?.body}
   <aside
-    id="idea-preview-tip"
+    bind:this={previewTip}
+    id={previewTipId}
     class="idea-preview-tip"
     role="tooltip"
     style="left:{previewX}px; top:{previewY}px"

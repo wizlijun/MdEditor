@@ -28,12 +28,15 @@
     onReopen(item: WorkspaceItem): void
     onRelink(item: WorkspaceItem): void
     onDragStart?(item: WorkspaceItem, event: PointerEvent): void
-    onPreviewStart?(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus'): void
+    onPreviewStart?(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus', tipId: string): void
     onPreviewEnd?(trigger: 'pointer' | 'focus'): void
   } = $props()
 
   const statusKey = $derived(`status.${item.state}` as MessageKey)
   const hasPreview = $derived(Boolean(item.body?.trim()))
+  const domToken = $derived(encodeURIComponent(item.key))
+  const titleId = $derived(`idea-card-title-${domToken}`)
+  const tipId = $derived(`idea-preview-${domToken}`)
   const detail = $derived.by(() => {
     const projection = item.projection
     if (!projection) return ''
@@ -58,13 +61,14 @@
   data-draggable={canDrag && !disabled}
   role="group"
   tabindex={hasPreview ? 0 : undefined}
-  aria-describedby={hasPreview ? 'idea-preview-tip' : undefined}
+  aria-labelledby={titleId}
+  aria-describedby={hasPreview ? tipId : undefined}
   onpointerenter={(event) => {
-    if (hasPreview) onPreviewStart?.(item, event.currentTarget, 'pointer')
+    if (hasPreview) onPreviewStart?.(item, event.currentTarget, 'pointer', tipId)
   }}
   onpointerleave={() => onPreviewEnd?.('pointer')}
   onfocusin={(event) => {
-    if (hasPreview) onPreviewStart?.(item, event.currentTarget, 'focus')
+    if (hasPreview) onPreviewStart?.(item, event.currentTarget, 'focus', tipId)
   }}
   onfocusout={(event) => {
     const next = event.relatedTarget
@@ -79,7 +83,7 @@
 >
   <div class="body">
     <div class="title-line">
-      <h3>{item.title}</h3>
+      <h3 id={titleId}>{item.title}</h3>
       <span class="state">{t(statusKey)}</span>
       {#if item.proofed}<span class="badge proof">{t('badge.proofed')}</span>{/if}
       {#if item.orphan}<span class="badge warning">{t('badge.orphan')}</span>{/if}
