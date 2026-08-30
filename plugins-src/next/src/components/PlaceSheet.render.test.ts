@@ -44,6 +44,69 @@ function change(select: HTMLSelectElement, value: string) {
 }
 
 describe('PlaceSheet', () => {
+  it('preselects a drop target route and offers four or five quick answers for each required field', () => {
+    setLocale('zh')
+    mounted.push(mount(PlaceSheet, {
+      target: document.body,
+      props: { item, saving: false, initialRoute: 'wait', onCancel: vi.fn(), onSubmit: vi.fn() },
+    }))
+    flushSync()
+
+    expect(document.querySelector<HTMLButtonElement>('.routes button[aria-pressed="true"]')?.textContent).toContain('等待回收')
+    expect(document.querySelectorAll('[data-choices-for="waitingFor"] button')).toHaveLength(4)
+    expect(document.querySelectorAll('[data-choices-for="reviewAt"] button')).toHaveLength(5)
+  })
+
+  it('fills a valid commitment from quick answers without requiring typing', async () => {
+    setLocale('zh')
+    const onSubmit = vi.fn(async () => {})
+    mounted.push(mount(PlaceSheet, {
+      target: document.body,
+      props: { item, saving: false, onCancel: vi.fn(), onSubmit },
+    }))
+    flushSync()
+
+    for (const field of ['commitment', 'nextAction', 'closeCondition']) {
+      const choices = document.querySelectorAll<HTMLButtonElement>(`[data-choices-for="${field}"] button`)
+      expect(choices).toHaveLength(4)
+      choices[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    }
+    document.querySelector('form')!.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      route: 'commit',
+      commitment: expect.stringContaining('验证一个念头'),
+      next_action: expect.any(String),
+      close_condition: expect.any(String),
+    }))
+  })
+
+  it('offers choices for dormant and settlement details while preserving editable inputs', () => {
+    setLocale('zh')
+    mounted.push(mount(PlaceSheet, {
+      target: document.body,
+      props: { item, saving: false, initialRoute: 'park', onCancel: vi.fn(), onSubmit: vi.fn() },
+    }))
+    flushSync()
+
+    expect(document.querySelectorAll('[data-choices-for="wakeTrigger"] button')).toHaveLength(5)
+    expect(document.querySelectorAll('[data-choices-for="nextAction"] button')).toHaveLength(4)
+    expect(document.querySelector<HTMLInputElement>('[data-choices-for="wakeTrigger"] + input')).toBeTruthy()
+
+    clickButton('结束或已有去处')
+    change(document.querySelectorAll('select')[0], 'stopped')
+    change(document.querySelectorAll('select')[1], 'drop')
+    expect(document.querySelectorAll('[data-choices-for="reason"] button')).toHaveLength(4)
+
+    change(document.querySelectorAll('select')[0], 'transferred')
+    expect(document.querySelectorAll('[data-choices-for="target"] button')).toHaveLength(0)
+    expect(document.querySelector<HTMLInputElement>('input[placeholder*="项目"]')).toBeTruthy()
+
+    change(document.querySelectorAll('select')[0], 'done')
+    expect(document.querySelectorAll('[data-choices-for="result"] button')).toHaveLength(4)
+  })
+
   it('requires the three commitment fields before submitting', async () => {
     setLocale('zh')
     const onSubmit = vi.fn(async () => {})

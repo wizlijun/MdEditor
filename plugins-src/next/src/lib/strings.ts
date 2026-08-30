@@ -13,6 +13,8 @@ export type MessageKey =
   | 'empty.wip'
   | 'empty.waiting'
   | 'empty.capture'
+  | 'empty.dormant'
+  | 'empty.closed'
   | 'empty.search'
   | 'section.wip'
   | 'section.waiting'
@@ -37,6 +39,7 @@ export type MessageKey =
   | 'warning.waiting'
   | 'warning.readOnly'
   | 'search.placeholder'
+  | 'board.dragHelp'
   | 'sheet.title'
   | 'sheet.choose'
   | 'route.commit'
@@ -69,6 +72,40 @@ export type MessageKey =
   | 'field.target.placeholder'
   | 'field.result'
   | 'field.result.placeholder'
+  | 'preset.commit.verify'
+  | 'preset.commit.prototype'
+  | 'preset.commit.plan'
+  | 'preset.commit.deliver'
+  | 'preset.next.evidence'
+  | 'preset.next.experiment'
+  | 'preset.next.draft'
+  | 'preset.next.user'
+  | 'preset.close.decision'
+  | 'preset.close.prototype'
+  | 'preset.close.used'
+  | 'preset.close.metric'
+  | 'preset.wait.person'
+  | 'preset.wait.agent'
+  | 'preset.wait.review'
+  | 'preset.wait.evidence'
+  | 'preset.date.tomorrow'
+  | 'preset.date.days3'
+  | 'preset.date.week1'
+  | 'preset.date.weeks2'
+  | 'preset.date.month1'
+  | 'preset.wake.week'
+  | 'preset.wake.month'
+  | 'preset.wake.related'
+  | 'preset.wake.repeat'
+  | 'preset.wake.evidence'
+  | 'preset.reason.value'
+  | 'preset.reason.timing'
+  | 'preset.reason.disproved'
+  | 'preset.reason.better'
+  | 'preset.result.accepted'
+  | 'preset.result.source'
+  | 'preset.result.delivered'
+  | 'preset.result.recorded'
   | 'exit.done'
   | 'exit.stopped'
   | 'exit.transferred'
@@ -117,6 +154,8 @@ const en: Catalog = {
   'empty.wip': 'Nothing is actively committed.',
   'empty.waiting': 'Nothing is waiting for review.',
   'empty.capture': 'No recent ideas need a decision.',
+  'empty.dormant': 'Nothing needs to return to view.',
+  'empty.closed': 'Closed ideas stay out of sight until you show or search them.',
   'empty.search': 'No placed ideas match.',
   'section.wip': 'In hand',
   'section.waiting': 'Waiting',
@@ -128,7 +167,7 @@ const en: Catalog = {
   'count.waiting': '{count}',
   'action.placeOne': 'Place an idea',
   'action.hideCapture': 'Hide ideas',
-  'action.findPlaced': 'Find placed ideas',
+  'action.findPlaced': 'Show placed ideas',
   'action.hidePlaced': 'Hide placed ideas',
   'action.place': 'Place',
   'action.reopen': 'Reopen',
@@ -141,6 +180,7 @@ const en: Catalog = {
   'warning.waiting': 'More than five items are waiting. Make sure each still has a real review responsibility.',
   'warning.readOnly': 'Next is read-only until its event document is repaired.',
   'search.placeholder': 'Search title, action, or destination',
+  'board.dragHelp': 'Drag a card to another lane. Next asks only for the information that state needs.',
   'sheet.title': 'Place “{title}”',
   'sheet.choose': 'What happens next?',
   'route.commit': 'Move forward now',
@@ -173,6 +213,40 @@ const en: Catalog = {
   'field.target.placeholder': 'Project, person, product, link, rule, or automation',
   'field.result': 'Result',
   'field.result.placeholder': 'Optional result or evidence link',
+  'preset.commit.verify': 'Verify whether “{title}” is worth continuing',
+  'preset.commit.prototype': 'Build a usable prototype of “{title}”',
+  'preset.commit.plan': 'Turn “{title}” into a reviewable plan',
+  'preset.commit.deliver': 'Deliver the smallest useful result for “{title}”',
+  'preset.next.evidence': 'Collect three key pieces of evidence',
+  'preset.next.experiment': 'Run one minimal experiment',
+  'preset.next.draft': 'Write the first version',
+  'preset.next.user': 'Ask one real user to review it',
+  'preset.close.decision': 'Reach a clear continue-or-stop decision',
+  'preset.close.prototype': 'Complete a usable prototype',
+  'preset.close.used': 'One person uses it and gives feedback',
+  'preset.close.metric': 'Meet the chosen validation measure',
+  'preset.wait.person': 'A person’s reply about “{title}”',
+  'preset.wait.agent': 'An agent’s result for “{title}”',
+  'preset.wait.review': 'Review or acceptance feedback on “{title}”',
+  'preset.wait.evidence': 'Key evidence about “{title}”',
+  'preset.date.tomorrow': 'Tomorrow',
+  'preset.date.days3': 'In 3 days',
+  'preset.date.week1': 'In 1 week',
+  'preset.date.weeks2': 'In 2 weeks',
+  'preset.date.month1': 'In 1 month',
+  'preset.wake.week': 'Next week',
+  'preset.wake.month': 'Next month',
+  'preset.wake.related': 'When a related project starts',
+  'preset.wake.repeat': 'When the same problem appears again',
+  'preset.wake.evidence': 'When key evidence appears',
+  'preset.reason.value': 'Not valuable enough',
+  'preset.reason.timing': 'The timing is wrong',
+  'preset.reason.disproved': 'The core assumption was disproved',
+  'preset.reason.better': 'A better solution already exists',
+  'preset.result.accepted': 'Completed and accepted',
+  'preset.result.source': 'The source note is the result',
+  'preset.result.delivered': 'Delivered',
+  'preset.result.recorded': 'Evidence has been recorded',
   'exit.done': 'Done',
   'exit.stopped': 'Stopped',
   'exit.transferred': 'Moved elsewhere',
@@ -220,6 +294,8 @@ const zh: Catalog = {
   'empty.wip': '手上没有正在承诺的想法。',
   'empty.waiting': '没有等待回收的结果。',
   'empty.capture': '最近没有需要安放的想法。',
+  'empty.dormant': '没有需要再次浮现的想法。',
+  'empty.closed': '已关闭想法默认不常亮；显示或搜索时才会出现。',
   'empty.search': '没有匹配的已安放想法。',
   'section.wip': '手上',
   'section.waiting': '等回收',
@@ -231,7 +307,7 @@ const zh: Catalog = {
   'count.waiting': '{count}',
   'action.placeOne': '安放一个想法',
   'action.hideCapture': '收起想法',
-  'action.findPlaced': '查找已安放',
+  'action.findPlaced': '显示已安放',
   'action.hidePlaced': '收起已安放',
   'action.place': '安放',
   'action.reopen': '重新考虑',
@@ -244,6 +320,7 @@ const zh: Catalog = {
   'warning.waiting': '等待项已超过五个。请确认每一项仍有真实的回收责任。',
   'warning.readOnly': '事件文档修复前，Next 将保持只读。',
   'search.placeholder': '搜索标题、下一步或去向',
+  'board.dragHelp': '把卡片拖到另一条泳道；Next 只会询问该状态真正需要的信息。',
   'sheet.title': '安放“{title}”',
   'sheet.choose': '接下来怎么办？',
   'route.commit': '现在推进',
@@ -276,6 +353,40 @@ const zh: Catalog = {
   'field.target.placeholder': '项目、人员、产品、链接、规则或自动化',
   'field.result': '结果',
   'field.result.placeholder': '可选的结果或证据链接',
+  'preset.commit.verify': '验证“{title}”是否值得继续',
+  'preset.commit.prototype': '为“{title}”做一个可用原型',
+  'preset.commit.plan': '把“{title}”写成可评审方案',
+  'preset.commit.deliver': '交付“{title}”的最小可用结果',
+  'preset.next.evidence': '收集三个关键证据',
+  'preset.next.experiment': '做一个最小实验',
+  'preset.next.draft': '写出第一版',
+  'preset.next.user': '找一位真实使用者确认',
+  'preset.close.decision': '得到明确继续或停止结论',
+  'preset.close.prototype': '完成一个可用原型',
+  'preset.close.used': '有人实际使用并给出反馈',
+  'preset.close.metric': '达到预设验证指标',
+  'preset.wait.person': '关于“{title}”的他人回复',
+  'preset.wait.agent': '关于“{title}”的 Agent 结果',
+  'preset.wait.review': '关于“{title}”的评审或验收反馈',
+  'preset.wait.evidence': '关于“{title}”的关键证据',
+  'preset.date.tomorrow': '明天',
+  'preset.date.days3': '3 天后',
+  'preset.date.week1': '1 周后',
+  'preset.date.weeks2': '2 周后',
+  'preset.date.month1': '1 个月后',
+  'preset.wake.week': '下周',
+  'preset.wake.month': '下个月',
+  'preset.wake.related': '相关项目启动时',
+  'preset.wake.repeat': '再次遇到同类问题时',
+  'preset.wake.evidence': '获得关键证据时',
+  'preset.reason.value': '价值不足',
+  'preset.reason.timing': '时机不对',
+  'preset.reason.disproved': '核心假设已被否定',
+  'preset.reason.better': '已有更好的方案',
+  'preset.result.accepted': '已完成并验收',
+  'preset.result.source': '原文即结果',
+  'preset.result.delivered': '已交付',
+  'preset.result.recorded': '已有证据记录',
   'exit.done': '完成',
   'exit.stopped': '停止',
   'exit.transferred': '转到别处',
@@ -323,6 +434,8 @@ const ja: Catalog = {
   'empty.wip': '現在引き受けているアイデアはありません。',
   'empty.waiting': '確認待ちの項目はありません。',
   'empty.capture': '最近、判断が必要なアイデアはありません。',
+  'empty.dormant': '再表示が必要なアイデアはありません。',
+  'empty.closed': '終了したアイデアは、表示または検索するまで隠れます。',
   'empty.search': '一致するアイデアはありません。',
   'section.wip': '進行中',
   'section.waiting': '確認待ち',
@@ -334,7 +447,7 @@ const ja: Catalog = {
   'count.waiting': '{count}',
   'action.placeOne': 'アイデアを置く',
   'action.hideCapture': 'アイデアを隠す',
-  'action.findPlaced': '配置済みを探す',
+  'action.findPlaced': '配置済みを表示',
   'action.hidePlaced': '配置済みを隠す',
   'action.place': '置く',
   'action.reopen': '再検討',
@@ -347,6 +460,7 @@ const ja: Catalog = {
   'warning.waiting': '確認待ちが五つを超えています。すべてに確認責任が残っているか確かめてください。',
   'warning.readOnly': 'イベント文書を修復するまで Next は読み取り専用です。',
   'search.placeholder': 'タイトル、次の行動、移動先を検索',
+  'board.dragHelp': 'カードを別のレーンへドラッグできます。Next はその状態に必要な情報だけを尋ねます。',
   'sheet.title': '「{title}」の置き場所',
   'sheet.choose': '次はどうしますか？',
   'route.commit': '今進める',
@@ -379,6 +493,40 @@ const ja: Catalog = {
   'field.target.placeholder': 'プロジェクト、人、製品、リンク、原則、自動化',
   'field.result': '成果',
   'field.result.placeholder': '任意の成果または証拠へのリンク',
+  'preset.commit.verify': '「{title}」を続ける価値があるか検証する',
+  'preset.commit.prototype': '「{title}」の使える試作を作る',
+  'preset.commit.plan': '「{title}」をレビュー可能な案にする',
+  'preset.commit.deliver': '「{title}」の最小限の成果を届ける',
+  'preset.next.evidence': '重要な証拠を三つ集める',
+  'preset.next.experiment': '最小限の実験を一つ行う',
+  'preset.next.draft': '初版を書く',
+  'preset.next.user': '実際の利用者一人に確認する',
+  'preset.close.decision': '続行か中止かを明確に決める',
+  'preset.close.prototype': '使える試作を完成する',
+  'preset.close.used': '一人が実際に使い、感想を返す',
+  'preset.close.metric': '決めた検証指標を満たす',
+  'preset.wait.person': '「{title}」についての相手からの返事',
+  'preset.wait.agent': '「{title}」についての Agent の結果',
+  'preset.wait.review': '「{title}」についてのレビューまたは検収結果',
+  'preset.wait.evidence': '「{title}」についての重要な証拠',
+  'preset.date.tomorrow': '明日',
+  'preset.date.days3': '3日後',
+  'preset.date.week1': '1週間後',
+  'preset.date.weeks2': '2週間後',
+  'preset.date.month1': '1か月後',
+  'preset.wake.week': '来週',
+  'preset.wake.month': '来月',
+  'preset.wake.related': '関連プロジェクトが始まった時',
+  'preset.wake.repeat': '同じ問題が再び起きた時',
+  'preset.wake.evidence': '重要な証拠が得られた時',
+  'preset.reason.value': '価値が十分ではない',
+  'preset.reason.timing': '今は時期が違う',
+  'preset.reason.disproved': '中心となる仮説が否定された',
+  'preset.reason.better': 'より良い解決策がすでにある',
+  'preset.result.accepted': '完了して検収済み',
+  'preset.result.source': '原文が成果',
+  'preset.result.delivered': '納品済み',
+  'preset.result.recorded': '証拠を記録済み',
   'exit.done': '完了',
   'exit.stopped': '中止',
   'exit.transferred': '別の場所へ移動',
@@ -426,6 +574,8 @@ const de: Catalog = {
   'empty.wip': 'Keine Idee ist derzeit verbindlich aktiv.',
   'empty.waiting': 'Nichts wartet auf eine Prüfung.',
   'empty.capture': 'Keine neue Idee braucht eine Entscheidung.',
+  'empty.dormant': 'Keine Idee muss wieder in den Blick kommen.',
+  'empty.closed': 'Geschlossene Ideen bleiben verborgen, bis du sie anzeigst oder suchst.',
   'empty.search': 'Keine passende abgelegte Idee.',
   'section.wip': 'In Arbeit',
   'section.waiting': 'Wartet',
@@ -437,7 +587,7 @@ const de: Catalog = {
   'count.waiting': '{count}',
   'action.placeOne': 'Eine Idee ablegen',
   'action.hideCapture': 'Ideen ausblenden',
-  'action.findPlaced': 'Abgelegte Ideen suchen',
+  'action.findPlaced': 'Abgelegte Ideen anzeigen',
   'action.hidePlaced': 'Abgelegte Ideen ausblenden',
   'action.place': 'Ablegen',
   'action.reopen': 'Neu prüfen',
@@ -450,6 +600,7 @@ const de: Catalog = {
   'warning.waiting': 'Mehr als fünf Punkte warten. Prüfe, ob für jeden noch echte Abnahmeverantwortung besteht.',
   'warning.readOnly': 'Next bleibt schreibgeschützt, bis das Ereignisdokument repariert ist.',
   'search.placeholder': 'Titel, nächsten Schritt oder Ziel suchen',
+  'board.dragHelp': 'Ziehe eine Karte in eine andere Bahn. Next fragt nur nach den Angaben, die dieser Zustand braucht.',
   'sheet.title': '„{title}“ ablegen',
   'sheet.choose': 'Was geschieht als Nächstes?',
   'route.commit': 'Jetzt weiterführen',
@@ -482,6 +633,40 @@ const de: Catalog = {
   'field.target.placeholder': 'Projekt, Person, Produkt, Link, Regel oder Automatisierung',
   'field.result': 'Resultat',
   'field.result.placeholder': 'Optionales Resultat oder Link zum Nachweis',
+  'preset.commit.verify': 'Prüfen, ob „{title}“ weiterverfolgt werden soll',
+  'preset.commit.prototype': 'Einen brauchbaren Prototyp für „{title}“ bauen',
+  'preset.commit.plan': '„{title}“ als prüfbaren Plan ausarbeiten',
+  'preset.commit.deliver': 'Das kleinste brauchbare Ergebnis für „{title}“ liefern',
+  'preset.next.evidence': 'Drei wichtige Belege sammeln',
+  'preset.next.experiment': 'Ein minimales Experiment durchführen',
+  'preset.next.draft': 'Die erste Version schreiben',
+  'preset.next.user': 'Eine echte Nutzerin oder einen Nutzer fragen',
+  'preset.close.decision': 'Klar über Fortsetzen oder Stoppen entscheiden',
+  'preset.close.prototype': 'Einen brauchbaren Prototyp fertigstellen',
+  'preset.close.used': 'Eine Person nutzt es und gibt Rückmeldung',
+  'preset.close.metric': 'Das gewählte Prüfkriterium erreichen',
+  'preset.wait.person': 'Antwort einer Person zu „{title}“',
+  'preset.wait.agent': 'Ergebnis eines Agents zu „{title}“',
+  'preset.wait.review': 'Prüf- oder Abnahmefeedback zu „{title}“',
+  'preset.wait.evidence': 'Wichtiger Beleg zu „{title}“',
+  'preset.date.tomorrow': 'Morgen',
+  'preset.date.days3': 'In 3 Tagen',
+  'preset.date.week1': 'In 1 Woche',
+  'preset.date.weeks2': 'In 2 Wochen',
+  'preset.date.month1': 'In 1 Monat',
+  'preset.wake.week': 'Nächste Woche',
+  'preset.wake.month': 'Nächsten Monat',
+  'preset.wake.related': 'Wenn ein verwandtes Projekt beginnt',
+  'preset.wake.repeat': 'Wenn dasselbe Problem erneut auftritt',
+  'preset.wake.evidence': 'Wenn ein wichtiger Beleg vorliegt',
+  'preset.reason.value': 'Nicht wertvoll genug',
+  'preset.reason.timing': 'Der Zeitpunkt ist falsch',
+  'preset.reason.disproved': 'Die Kernannahme wurde widerlegt',
+  'preset.reason.better': 'Es gibt bereits eine bessere Lösung',
+  'preset.result.accepted': 'Fertig und abgenommen',
+  'preset.result.source': 'Die Quellnotiz ist das Ergebnis',
+  'preset.result.delivered': 'Geliefert',
+  'preset.result.recorded': 'Nachweis wurde festgehalten',
   'exit.done': 'Erledigt',
   'exit.stopped': 'Gestoppt',
   'exit.transferred': 'Weitergegeben',

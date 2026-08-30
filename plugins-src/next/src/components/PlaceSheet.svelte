@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte'
+  import ChoiceField, { type ChoiceOption } from './ChoiceField.svelte'
   import type { PlaceInput } from '../lib/events'
   import type { SettlementExit } from '../lib/model'
   import type { WorkspaceItem } from '../lib/repository'
@@ -11,17 +12,20 @@
   let {
     item,
     saving,
+    initialRoute,
     onCancel,
     onSubmit,
   }: {
     item: WorkspaceItem
     saving: boolean
+    initialRoute?: Route
     onCancel(): void
     onSubmit(input: PlaceInput): Promise<void>
   } = $props()
 
   const projection = untrack(() => item.projection)
-  let route = $state<Route>(projection?.state === 'waiting' ? 'wait' : projection?.state === 'dormant' ? 'park' : 'commit')
+  const inferredRoute: Route = projection?.state === 'waiting' ? 'wait' : projection?.state === 'dormant' ? 'park' : projection?.state === 'closed' ? 'settle' : 'commit'
+  let route = $state<Route>(untrack(() => initialRoute ?? inferredRoute))
   let commitment = $state(projection?.state === 'wip' ? projection.commitment : '')
   let nextAction = $state(projection?.state === 'wip' || projection?.state === 'dormant' ? projection.next_action ?? '' : '')
   let closeCondition = $state(projection?.state === 'wip' ? projection.close_condition : '')
@@ -35,6 +39,69 @@
   let result = $state('')
   let invalid = $state(false)
   let sheetEl: HTMLDivElement | undefined = $state()
+
+  function choice(label: string, value = label): ChoiceOption {
+    return { label, value }
+  }
+
+  function dateAfter(days: number): string {
+    const date = new Date()
+    date.setHours(12, 0, 0, 0)
+    date.setDate(date.getDate() + days)
+    const pad = (value: number) => String(value).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+  }
+
+  const commitmentOptions = $derived([
+    choice(t('preset.commit.verify', { title: item.title })),
+    choice(t('preset.commit.prototype', { title: item.title })),
+    choice(t('preset.commit.plan', { title: item.title })),
+    choice(t('preset.commit.deliver', { title: item.title })),
+  ])
+  const nextActionOptions = $derived([
+    choice(t('preset.next.evidence')),
+    choice(t('preset.next.experiment')),
+    choice(t('preset.next.draft')),
+    choice(t('preset.next.user')),
+  ])
+  const closeConditionOptions = $derived([
+    choice(t('preset.close.decision')),
+    choice(t('preset.close.prototype')),
+    choice(t('preset.close.used')),
+    choice(t('preset.close.metric')),
+  ])
+  const waitingOptions = $derived([
+    choice(t('preset.wait.person', { title: item.title })),
+    choice(t('preset.wait.agent', { title: item.title })),
+    choice(t('preset.wait.review', { title: item.title })),
+    choice(t('preset.wait.evidence', { title: item.title })),
+  ])
+  const reviewOptions = $derived([
+    choice(t('preset.date.tomorrow'), dateAfter(1)),
+    choice(t('preset.date.days3'), dateAfter(3)),
+    choice(t('preset.date.week1'), dateAfter(7)),
+    choice(t('preset.date.weeks2'), dateAfter(14)),
+    choice(t('preset.date.month1'), dateAfter(30)),
+  ])
+  const wakeOptions = $derived([
+    choice(t('preset.wake.week'), dateAfter(7)),
+    choice(t('preset.wake.month'), dateAfter(30)),
+    choice(t('preset.wake.related')),
+    choice(t('preset.wake.repeat')),
+    choice(t('preset.wake.evidence')),
+  ])
+  const reasonOptions = $derived([
+    choice(t('preset.reason.value')),
+    choice(t('preset.reason.timing')),
+    choice(t('preset.reason.disproved')),
+    choice(t('preset.reason.better')),
+  ])
+  const resultOptions = $derived([
+    choice(t('preset.result.accepted')),
+    choice(t('preset.result.source')),
+    choice(t('preset.result.delivered')),
+    choice(t('preset.result.recorded')),
+  ])
 
   const viaOptions = $derived.by(() => {
     switch (exitKind) {
@@ -167,16 +234,16 @@
 
     <form onsubmit={submit}>
       {#if route === 'commit'}
-        <label><span>{t('field.commitment')}</span><textarea rows="2" bind:value={commitment} placeholder={t('field.commitment.placeholder')}></textarea></label>
-        <label><span>{t('field.nextAction')}</span><textarea rows="2" bind:value={nextAction} placeholder={t('field.nextAction.placeholder')}></textarea></label>
-        <label><span>{t('field.closeCondition')}</span><textarea rows="2" bind:value={closeCondition} placeholder={t('field.closeCondition.placeholder')}></textarea></label>
+        <ChoiceField field="commitment" label={t('field.commitment')} bind:value={commitment} options={commitmentOptions} placeholder={t('field.commitment.placeholder')} multiline />
+        <ChoiceField field="nextAction" label={t('field.nextAction')} bind:value={nextAction} options={nextActionOptions} placeholder={t('field.nextAction.placeholder')} multiline />
+        <ChoiceField field="closeCondition" label={t('field.closeCondition')} bind:value={closeCondition} options={closeConditionOptions} placeholder={t('field.closeCondition.placeholder')} multiline />
       {:else if route === 'wait'}
-        <label><span>{t('field.waitingFor')}</span><textarea rows="2" bind:value={waitingFor} placeholder={t('field.waitingFor.placeholder')}></textarea></label>
-        <label><span>{t('field.reviewAt')}</span><input type="date" bind:value={reviewAt} /></label>
+        <ChoiceField field="waitingFor" label={t('field.waitingFor')} bind:value={waitingFor} options={waitingOptions} placeholder={t('field.waitingFor.placeholder')} multiline />
+        <ChoiceField field="reviewAt" label={t('field.reviewAt')} bind:value={reviewAt} options={reviewOptions} type="date" />
       {:else if route === 'park'}
-        <label><span>{t('field.wakeTrigger')}</span><input bind:value={wakeTrigger} placeholder={t('field.wakeTrigger.placeholder')} /></label>
+        <ChoiceField field="wakeTrigger" label={t('field.wakeTrigger')} bind:value={wakeTrigger} options={wakeOptions} placeholder={t('field.wakeTrigger.placeholder')} />
         <small class="help">{t('field.wakeTrigger.help')}</small>
-        <label><span>{t('field.nextAction')} · {t('common.optional')}</span><textarea rows="2" bind:value={nextAction} placeholder={t('field.nextAction.placeholder')}></textarea></label>
+        <ChoiceField field="nextAction" label={`${t('field.nextAction')} · ${t('common.optional')}`} bind:value={nextAction} options={nextActionOptions} placeholder={t('field.nextAction.placeholder')} multiline />
       {:else}
         <div class="split">
           <label>
@@ -200,13 +267,13 @@
           </label>
         </div>
         {#if reasonRequired || exitKind === 'stopped'}
-          <label><span>{t('field.reason')}{reasonRequired ? '' : ` · ${t('common.optional')}`}</span><textarea rows="2" bind:value={reason} placeholder={t('field.reason.placeholder')}></textarea></label>
+          <ChoiceField field="reason" label={`${t('field.reason')}${reasonRequired ? '' : ` · ${t('common.optional')}`}`} bind:value={reason} options={reasonOptions} placeholder={t('field.reason.placeholder')} multiline />
         {/if}
         {#if targetRequired}
           <label><span>{t('field.target')}</span><input bind:value={target} placeholder={t('field.target.placeholder')} /></label>
         {/if}
         {#if exitKind === 'done'}
-          <label><span>{t('field.result')} · {t('common.optional')}</span><input bind:value={result} placeholder={t('field.result.placeholder')} /></label>
+          <ChoiceField field="result" label={`${t('field.result')} · ${t('common.optional')}`} bind:value={result} options={resultOptions} placeholder={t('field.result.placeholder')} />
         {/if}
       {/if}
 
@@ -235,9 +302,8 @@
   .routes span { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.35; }
   form { display: grid; gap: 13px; padding: 18px 24px 22px; border-top: 1px solid var(--line); }
   label { display: grid; gap: 6px; font-size: 12px; font-weight: 600; }
-  textarea, input, select { width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--input); color: var(--fg); padding: 9px 10px; font: inherit; outline: none; }
-  textarea { resize: vertical; min-height: 42px; }
-  textarea:focus, input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  input, select { width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--input); color: var(--fg); padding: 9px 10px; font: inherit; outline: none; }
+  input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .error { margin: 0; color: var(--danger); font-size: 12px; }
   .help { margin-top: -7px; color: var(--muted); font-size: 11px; line-height: 1.45; }

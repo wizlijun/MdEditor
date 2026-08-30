@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.next",
   "name": "Next",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "kind": "native",
   "engines": {
     "notemd": ">=6.829.2"
@@ -28,9 +28,9 @@
         "id": "main",
         "entry": "index.html",
         "title": "Next",
-        "width": 760,
-        "height": 720,
-        "min_width": 620,
+        "width": 1240,
+        "height": 760,
+        "min_width": 720,
         "min_height": 520,
         "open_command": "open"
       }
