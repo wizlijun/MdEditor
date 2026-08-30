@@ -25,6 +25,7 @@ export type MessageKey =
   | 'count.wip'
   | 'count.waiting'
   | 'action.placeOne'
+  | 'action.newIdea'
   | 'action.hideCapture'
   | 'action.findPlaced'
   | 'action.hidePlaced'
@@ -40,6 +41,12 @@ export type MessageKey =
   | 'warning.readOnly'
   | 'search.placeholder'
   | 'board.dragHelp'
+  | 'create.title'
+  | 'create.destination'
+  | 'create.field'
+  | 'create.placeholder'
+  | 'create.save'
+  | 'create.saveShortcut'
   | 'sheet.title'
   | 'sheet.choose'
   | 'route.commit'
@@ -129,6 +136,8 @@ export type MessageKey =
   | 'relink.createdUnknown'
   | 'relink.noCandidates'
   | 'error.required'
+  | 'error.ideaRequired'
+  | 'error.create'
   | 'error.load'
   | 'error.save'
   | 'error.open'
@@ -166,6 +175,7 @@ const en: Catalog = {
   'count.wip': '{count}/3',
   'count.waiting': '{count}',
   'action.placeOne': 'Place an idea',
+  'action.newIdea': 'New Idea',
   'action.hideCapture': 'Hide ideas',
   'action.findPlaced': 'Show placed ideas',
   'action.hidePlaced': 'Hide placed ideas',
@@ -181,6 +191,12 @@ const en: Catalog = {
   'warning.readOnly': 'Next is read-only until its event document is repaired.',
   'search.placeholder': 'Search title, action, or destination',
   'board.dragHelp': 'Drag a card to another lane. Next asks only for the information that state needs.',
+  'create.title': 'New Idea',
+  'create.destination': 'Save to {path}',
+  'create.field': 'Idea',
+  'create.placeholder': 'Write down the thought before it disappears…',
+  'create.save': 'Create Idea',
+  'create.saveShortcut': '⌘↵ / Ctrl↵ to save',
   'sheet.title': 'Place “{title}”',
   'sheet.choose': 'What happens next?',
   'route.commit': 'Move forward now',
@@ -270,6 +286,8 @@ const en: Catalog = {
   'relink.createdUnknown': 'unknown',
   'relink.noCandidates': 'No unclaimed idea files were found.',
   'error.required': 'Complete the required fields.',
+  'error.ideaRequired': 'Write down the idea before saving.',
+  'error.create': 'Next could not create this Idea.',
   'error.load': 'Next could not load your ideas.',
   'error.save': 'Next could not save this decision.',
   'error.open': 'The source file could not be opened.',
@@ -306,6 +324,7 @@ const zh: Catalog = {
   'count.wip': '{count}/3',
   'count.waiting': '{count}',
   'action.placeOne': '安放一个想法',
+  'action.newIdea': '新建 Idea',
   'action.hideCapture': '收起想法',
   'action.findPlaced': '显示已安放',
   'action.hidePlaced': '收起已安放',
@@ -321,6 +340,12 @@ const zh: Catalog = {
   'warning.readOnly': '事件文档修复前，Next 将保持只读。',
   'search.placeholder': '搜索标题、下一步或去向',
   'board.dragHelp': '把卡片拖到另一条泳道；Next 只会询问该状态真正需要的信息。',
+  'create.title': '新建 Idea',
+  'create.destination': '保存到 {path}',
+  'create.field': 'Idea',
+  'create.placeholder': '趁念头还在，把它写下来…',
+  'create.save': '创建 Idea',
+  'create.saveShortcut': '⌘↵ / Ctrl↵ 保存',
   'sheet.title': '安放“{title}”',
   'sheet.choose': '接下来怎么办？',
   'route.commit': '现在推进',
@@ -410,6 +435,8 @@ const zh: Catalog = {
   'relink.createdUnknown': '未知',
   'relink.noCandidates': '没有找到尚未被认领的 idea 文件。',
   'error.required': '请补全必填内容。',
+  'error.ideaRequired': '请先写下 Idea。',
+  'error.create': 'Next 无法创建这个 Idea。',
   'error.load': 'Next 无法载入你的想法。',
   'error.save': 'Next 无法保存这次安放。',
   'error.open': '无法打开原文。',
@@ -446,6 +473,7 @@ const ja: Catalog = {
   'count.wip': '{count}/3',
   'count.waiting': '{count}',
   'action.placeOne': 'アイデアを置く',
+  'action.newIdea': '新規 Idea',
   'action.hideCapture': 'アイデアを隠す',
   'action.findPlaced': '配置済みを表示',
   'action.hidePlaced': '配置済みを隠す',
@@ -461,6 +489,12 @@ const ja: Catalog = {
   'warning.readOnly': 'イベント文書を修復するまで Next は読み取り専用です。',
   'search.placeholder': 'タイトル、次の行動、移動先を検索',
   'board.dragHelp': 'カードを別のレーンへドラッグできます。Next はその状態に必要な情報だけを尋ねます。',
+  'create.title': '新規 Idea',
+  'create.destination': '{path} に保存',
+  'create.field': 'Idea',
+  'create.placeholder': '消える前に思いつきを書き留める…',
+  'create.save': 'Idea を作成',
+  'create.saveShortcut': '⌘↵ / Ctrl↵ で保存',
   'sheet.title': '「{title}」の置き場所',
   'sheet.choose': '次はどうしますか？',
   'route.commit': '今進める',
@@ -550,6 +584,8 @@ const ja: Catalog = {
   'relink.createdUnknown': '不明',
   'relink.noCandidates': '未使用の idea ファイルがありません。',
   'error.required': '必須項目を入力してください。',
+  'error.ideaRequired': '保存する前に Idea を入力してください。',
+  'error.create': 'Next はこの Idea を作成できませんでした。',
   'error.load': 'Next はアイデアを読み込めませんでした。',
   'error.save': 'Next はこの判断を保存できませんでした。',
   'error.open': '原文を開けませんでした。',
@@ -586,6 +622,7 @@ const de: Catalog = {
   'count.wip': '{count}/3',
   'count.waiting': '{count}',
   'action.placeOne': 'Eine Idee ablegen',
+  'action.newIdea': 'Neue Idee',
   'action.hideCapture': 'Ideen ausblenden',
   'action.findPlaced': 'Abgelegte Ideen anzeigen',
   'action.hidePlaced': 'Abgelegte Ideen ausblenden',
@@ -601,6 +638,12 @@ const de: Catalog = {
   'warning.readOnly': 'Next bleibt schreibgeschützt, bis das Ereignisdokument repariert ist.',
   'search.placeholder': 'Titel, nächsten Schritt oder Ziel suchen',
   'board.dragHelp': 'Ziehe eine Karte in eine andere Bahn. Next fragt nur nach den Angaben, die dieser Zustand braucht.',
+  'create.title': 'Neue Idee',
+  'create.destination': 'Speichern unter {path}',
+  'create.field': 'Idee',
+  'create.placeholder': 'Halte den Gedanken fest, bevor er verschwindet…',
+  'create.save': 'Idee erstellen',
+  'create.saveShortcut': '⌘↵ / Ctrl↵ zum Speichern',
   'sheet.title': '„{title}“ ablegen',
   'sheet.choose': 'Was geschieht als Nächstes?',
   'route.commit': 'Jetzt weiterführen',
@@ -690,6 +733,8 @@ const de: Catalog = {
   'relink.createdUnknown': 'unbekannt',
   'relink.noCandidates': 'Keine unbelegten Ideendateien gefunden.',
   'error.required': 'Fülle die erforderlichen Felder aus.',
+  'error.ideaRequired': 'Schreibe die Idee vor dem Speichern auf.',
+  'error.create': 'Next konnte diese Idee nicht erstellen.',
   'error.load': 'Next konnte deine Ideen nicht laden.',
   'error.save': 'Next konnte diese Entscheidung nicht speichern.',
   'error.open': 'Die Quelldatei konnte nicht geöffnet werden.',

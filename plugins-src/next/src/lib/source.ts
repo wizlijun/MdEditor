@@ -38,6 +38,24 @@ export function proofPathFor(path: string): string {
   return path.endsWith('.md') ? `${path.slice(0, -3)}.proof.md` : `${path}.proof.md`
 }
 
+/** Idea Spark-compatible local-time name; proof sidecars reserve the slot too. */
+export function timestampIdeaFileName(now: Date, taken: ReadonlySet<string>): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  const base = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`
+  let name = `${base}${IDEA_SUFFIX}`
+  let suffix = 2
+  while (taken.has(name) || taken.has(proofPathFor(name))) {
+    name = `${base}-${suffix}${IDEA_SUFFIX}`
+    suffix += 1
+  }
+  return name
+}
+
+/** Minimal OKF Idea document. The human-authored body is preserved verbatim. */
+export function buildIdeaDocument(body: string, created: string): string {
+  return `---\ntype: Idea\ncreated: ${created}\n---\n${body}`
+}
+
 export function splitFrontmatter(markdown: string): [Record<string, unknown> | null, string] {
   const lines = markdown.split(/\r?\n/)
   if (lines[0]?.trim() !== '---') return [null, markdown]

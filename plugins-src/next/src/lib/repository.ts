@@ -10,6 +10,7 @@ import { ownersOfSource, reduceEvents, validateAppend } from './domain'
 import { NEXT_PATH, newLedger, parseLedger, serializeLedger, type LedgerDocument } from './ledger'
 import type { IdeaProjection, LedgerProjection, NextEvent, SourceRef } from './model'
 import {
+  buildIdeaDocument,
   DEFAULT_IDEA_DIR,
   IDEA_SPARK_STATE_PATH,
   isIdeaFileName,
@@ -17,6 +18,7 @@ import {
   parseIdeaSource,
   proofPathFor,
   sortIdeasNewestFirst,
+  timestampIdeaFileName,
   type IdeaSource,
 } from './source'
 
@@ -54,6 +56,8 @@ export interface NextWorkspace {
   ledger: LedgerDocument
   ledgerRaw: string | null
   sourceDirs: string[]
+  /** Idea Spark's current capture directory; historic sourceDirs remain separate. */
+  ideaDir: string
   projection: LedgerProjection
   sources: IdeaSource[]
   items: WorkspaceItem[]
@@ -88,6 +92,48 @@ async function currentIdeaDir(port: VaultPort): Promise<string> {
   } catch {
     return DEFAULT_IDEA_DIR
   }
+}
+
+export interface CreatedIdea {
+  path: string
+  content: string
+}
+
+/**
+ * Creates one new source Idea without producing a Next lifecycle event.
+ * Existing ideas and proof sidecars are only checked for collisions, never changed.
+ */
+export async function createIdeaSource(
+  body: string,
+  options: { now?: () => Date } = {},
+  port: VaultPort = hostVault,
+): Promise<CreatedIdea> {
+  if (!body.trim()) throw new Error('Idea body cannot be blank')
+  const ideaDir = await currentIdeaDir(port)
+  const now = options.now?.() ?? new Date()
+  const taken = new Set<string>()
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const name = timestampIdeaFileName(now, taken)
+    const path = `${ideaDir}/${name}`
+    const proofPath = `${ideaDir}/${proofPathFor(name)}`
+    const [ideaOccupied, proofOccupied] = await Promise.all([
+      port.exists(path),
+      port.exists(proofPath),
+    ])
+    if (ideaOccupied.exists || proofOccupied.exists) {
+      taken.add(name)
+      continue
+    }
+
+    const content = buildIdeaDocument(body, now.toISOString())
+    await port.write(path, content)
+    const written = (await port.read(path)).content
+    if (written !== content) throw new Error('Created Idea did not match after writing')
+    return { path, content }
+  }
+
+  throw new Error('Could not find a free Idea filename after 100 attempts')
 }
 
 interface ScanResult {
@@ -266,6 +312,7 @@ export async function loadWorkspace(port: VaultPort = hostVault): Promise<NextWo
     ledger,
     ledgerRaw,
     sourceDirs,
+    ideaDir,
     projection,
     sources: scan.sources,
     items,

@@ -1,6 +1,7 @@
 # Next 插件设计
 
 - 日期：2026-08-29
+- 更新：2026-08-30（1.2 新增显式快速捕捉）
 - 状态：MVP 已实现，产品效果仍须按 G0–G4 验证
 - 插件：`notemd.next`
 - 分类：Thinking / 思考
@@ -12,9 +13,9 @@
 
 > 把所有念头安全地留在 Vault，只把最多三个正在推进的承诺留在手上。
 
-Next 不负责制造想法，只负责分流和安放。Idea Spark 继续是低摩擦的 Capture 入口；Next 是独立的 Thinking 插件，读取已经落盘的 idea，保存人的处置判断。两者分开，正是“捕捉不等于承诺”在产品架构上的体现。
+Next 主要负责分流和安放，同时提供一个人的显式快速捕捉入口：顶栏「新建 Idea」或 `⌘N / Ctrl+N`。它把正文写入 Idea Spark 当前使用的同一个目录，只生成一条未承诺的 Capture，不自动进入 WIP。Idea Spark 继续提供完整编辑、托盘和 agent 论证能力；两者共用文件契约但不混淆“捕捉”与“承诺”。
 
-首版只有一个核心动作：**安放**。它把一条念头放到四个去向之一：现在推进、等待回收、以后再看、结束或已有去处。
+核心动作仍是**安放**：把一条念头放到四个去向之一——现在推进、等待回收、以后再看、结束或已有去处。新建只是更快进入 Capture，不产生处置事件。
 
 ## 1. 三层边界
 
@@ -24,7 +25,7 @@ Next 不负责制造想法，只负责分流和安放。Idea Spark 继续是低�
 | 承诺层 | 人决定是否承担下一步与验收责任 | Next 处置事件 |
 | 执行层 | 已升级项目、委托、购买或自动化后的实际工作 | 对应项目、人员、产品或流程 |
 
-Next 只拥有中间一层。它不改原文，不替代项目管理，也不把外部系统复制进来。
+Next 拥有承诺层，并可在人明确点击新建时向捕捉层追加一份新原文。它不改任何既有原文，不替代项目管理，也不把外部系统复制进来。
 
 ### 1.1 五条不可破坏的不变量
 
@@ -40,11 +41,11 @@ Next 只拥有中间一层。它不改原文，不替代项目管理，也不把
 
 不把功能塞进现有 `notemd.idea-spark`：
 
-- Idea Spark 的首要动作是 Capture，带捕捉快捷入口；Next 的首要动作是 Thinking。项目要求插件单一分类。
+- Idea Spark 的首要动作是 Capture，提供完整编辑、托盘和 agent 工作流；Next 的首要动作仍是 Thinking，只补一个窗口内的最小快速记录入口。项目要求插件保持单一分类。
 - Idea Spark 还保留永久删除 idea/proof 的能力；Next 中的 close 只解除承诺，永不删除源文件。
 - 独立的 Next 以后可以接其他来源，不被 Idea Spark 的编辑器和 agent 任务绑死。
 
-Next 也不新增捕捉框、托盘项或快捷键，因此不会出现第二个 capture inbox。
+Next 不新增托盘项，也不建立第二个 inbox。窗口内新建与 Idea Spark 读取同一份 `.notemd/idea-spark.json`；配置缺失或非法时共同回退到 `inbox/ideas/`。
 
 ## 2. 核心抽象：证据与承诺正交
 
@@ -144,6 +145,8 @@ flowchart LR
 
 插件是一个纯前端 singleton 独立窗口，从「插件 → 思考 → Next」打开。当前插件协议不能注册主窗口侧栏，因此不设计常驻看板；窗口内使用横向五泳道，让状态关系和可拖放目标一眼可见。
 
+顶栏提供「新建 Idea」按钮，并显示平台快捷键 `⌘N / Ctrl+N`。弹层只要求无法省略的正文输入，明确显示保存目录，支持 `⌘Enter / Ctrl+Enter` 保存和 Escape 取消；保存失败保留草稿。创建成功后新 Idea 出现在 Capture 泳道，不自动打开、不自动安放。
+
 ```text
 ┌ 待安放 ─────┐ ┌ 手上 2/3 ───┐ ┌ 等回收 2 ───┐ ┌ 以后 ───────┐ ┌ 已关闭 ─────┐
 │ 最近念头 A   │ │ 承诺 A       │ │ 等设计稿     │ │ 到期才浮现   │ │ 默认不常亮   │
@@ -159,11 +162,12 @@ flowchart LR
 
 ## 6. 文件与真相源
 
-### 6.1 源文件只读
+### 6.1 只新增，不改既有源文件
 
 - 首版在 Next 文档的 `source_dirs` 中发现严格以 `*-idea.md` 结尾的普通文件；初始目录取 Idea Spark 当前 `ideaDir`，缺失时默认 `inbox/ideas/`。
 - 必须兼容既有 `*-idea.md` 命名，不能擅自改成 `*.idea.md`。
-- 原始 idea 与同名 proof 只读。Next 永不删除、重命名或改写它们。
+- 人可从 Next 新增一条原始 idea；文件名、frontmatter、目录 fallback 与 Idea Spark 保持一致，同分钟创建会同时避让已有 idea 和 proof 槽位。
+- 所有已存在的原始 idea 与同名 proof 仍为只读。Next 永不删除、重命名或改写它们；安放动作也绝不触碰源文件。
 - 没有处置事件的源文件隐式为 `Capture`，不需要为每条候选生成卡片文件。
 
 ### 6.2 单一可读台账
@@ -241,7 +245,7 @@ events:
 
 首版只消费两类已落盘来源：
 
-1. 人用 Idea Spark 显式记录或由选中文本预填的 idea。
+1. 人用 Idea Spark 或 Next 顶栏显式记录，或由选中文本预填的 idea。
 2. agent 按公开文件约定写出的 `*-idea.md` 候选。
 
 产品协议规定 AI 只生成候选和 proof，不写 Next、不进入 WIP、不预选关闭结果；本插件也不提供任何 agent 写事件的入口。任意外部 agent 仍可能凭 Vault 权限改文件，插件无法把这条产品边界升级成 OS 级强制。**正常工作流中，只有人的「安放」动作产生处置事件。**
@@ -251,17 +255,17 @@ events:
 ## 8. 最小技术形态
 
 - 纯 UI 插件，无 backend、无 Editor Kit、无 agent capability。
-- `manifest.v2.json`：`id: notemd.next`，单一 `main` window，菜单 `location: plugins`、`submenu: thinking`，菜单名为 `Next`，不贡献 tray 或快捷键。
+- `manifest.v2.json`：`id: notemd.next`，单一 `main` window，菜单 `location: plugins`、`submenu: thinking`，菜单名为 `Next`，不贡献 tray；`⌘N / Ctrl+N` 是窗口内键盘行为，不要求 Host 新增命令协议。
 - capabilities 仅 `vault.read`、`vault.write`、`editor.open`、`toast`。
 - 复用 Idea Spark 的文件名/proof 映射与标题提取思路；复用 Decision Log 的纯 transition / IO 分层和 `.note.md` frontmatter + 正文镜像模式。
 - 窗口打开和重新聚焦时刷新；首版不轮询、不常驻、不发独立通知。
 - `Next` 同步登记到主程序 `CONCEPT_TYPE` 与搜索 origin；这是格式登记，不新增 Host API。运行时只依赖 6.829.2 已有的 Vault、编辑器与 toast API，因此无需为插件人为抬高最低 Host。
 
-虽然 `vault.write` capability 也能调用 remove/rename，本插件代码不得对 source 使用这两个方法。能力模型暂时无法表达更窄的“只写 ledger”。
+虽然 `vault.write` capability 也能调用 remove/rename，本插件代码只允许新增 source 与写 Next 事件文档，不得删除、重命名或覆盖既有 source。能力模型暂时无法表达更窄的“新增 Idea + 写 ledger”。
 
 ## 9. 明确不做
 
-- 不新增捕捉框、托盘入口或第二个 inbox。
+- 不新增托盘入口、完整 Idea 编辑器或第二个 inbox；Next 只保留一次性快速输入。
 - 不做全量常亮的 open 看板或永久 backlog；泳道拖放不能绕过人的确认与必填校验。
 - 不显示 capture 总数，不做逾期红点和“清零”奖励。
 - 不做 AI 对话监听、自动承诺或自动关闭。
@@ -317,7 +321,7 @@ events:
 ## 13. MVP 实现位置
 
 - 插件源码：`plugins-src/next/`
-- 插件 ID：`notemd.next`，当前版本 `1.1.0`
+- 插件 ID：`notemd.next`，当前版本 `1.2.0`
 - 最低 Host：`6.829.2`；本实现同时登记 `Next` OKF 类型，随下一次 Host 发布生效
 - 开发安装：`scripts/dev-install-plugin.sh next`
 - 专项验证：`pnpm --filter next-plugin test && pnpm --filter next-plugin check && pnpm --filter next-plugin build`
