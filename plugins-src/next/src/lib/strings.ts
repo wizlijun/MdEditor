@@ -3,6 +3,7 @@ export type Locale = 'en' | 'zh' | 'ja' | 'de'
 export type MessageKey =
   | 'app.title'
   | 'app.value'
+  | 'filter.projects'
   | 'common.loading'
   | 'common.refresh'
   | 'common.open'
@@ -158,6 +159,7 @@ type Catalog = Record<MessageKey, string>
 const en: Catalog = {
   'app.title': 'Next',
   'app.value': 'Give every idea a next step — or a place to rest.',
+  'filter.projects': 'Projects',
   'common.loading': 'Loading…',
   'common.refresh': 'Refresh',
   'common.open': 'Open',
@@ -312,6 +314,7 @@ const en: Catalog = {
 const zh: Catalog = {
   'app.title': 'Next',
   'app.value': '给每个想法一个下一步，或一个安心的去处。',
+  'filter.projects': '项目',
   'common.loading': '正在载入…',
   'common.refresh': '刷新',
   'common.open': '打开',
@@ -466,6 +469,7 @@ const zh: Catalog = {
 const ja: Catalog = {
   'app.title': 'Next',
   'app.value': 'すべてのアイデアに、次の一歩か安心できる置き場所を。',
+  'filter.projects': 'プロジェクト',
   'common.loading': '読み込み中…',
   'common.refresh': '更新',
   'common.open': '開く',
@@ -620,6 +624,7 @@ const ja: Catalog = {
 const de: Catalog = {
   'app.title': 'Next',
   'app.value': 'Gib jeder Idee einen nächsten Schritt – oder einen ruhigen Ort.',
+  'filter.projects': 'Projekte',
   'common.loading': 'Wird geladen…',
   'common.refresh': 'Aktualisieren',
   'common.open': 'Öffnen',

@@ -1,7 +1,7 @@
 # Next 插件设计
 
 - 日期：2026-08-29
-- 更新：2026-08-31（1.3 新增项目标记与完整文章交付）
+- 更新：2026-08-31（1.3.1 新增项目快捷筛选）
 - 状态：MVP 已实现，产品效果仍须按 G0–G4 验证
 - 插件：`notemd.next`
 - 分类：Thinking / 思考
@@ -156,6 +156,8 @@ flowchart LR
 插件是一个纯前端 singleton 独立窗口，从「插件 → 思考 → Next」打开。当前插件协议不能注册主窗口侧栏，因此不设计常驻看板；窗口内使用横向五泳道，让状态关系和可拖放目标一眼可见。
 
 顶栏提供「新建 Idea」按钮，并显示平台快捷键 `⌘N / Ctrl+N`。弹层只要求无法省略的正文输入，明确显示保存目录，支持 `⌘Enter / Ctrl+Enter` 保存和 Escape 取消；保存失败保留草稿。创建成功后新 Idea 出现在 Capture 泳道，不自动打开、不自动安放。界面不直接暴露内部状态术语；五条泳道采用用户已经熟悉的名称：`收件箱 / 进行中 / 等待 / 稍后 / 已完成`（英文为 `Inbox / In Progress / Waiting / Someday / Done`）。
+
+副标题之后按当前项目候选顺序列出项目胶囊。点击一个项目后，五条泳道与修复区只显示 `project` 完全匹配的卡片；再次点击同一项目即清除筛选。项目筛选与文字搜索取交集，只改变当前投影，不写事件、不改变 WIP 计数或项目候选顺序。没有项目时不显示空筛选区。
 
 ```text
 ┌ 收件箱 ─────┐ ┌ 进行中 2/3 ─┐ ┌ 等待 2 ─────┐ ┌ 稍后 ───────┐ ┌ 已完成 ─────┐
@@ -334,7 +336,7 @@ events:
 ## 13. MVP 实现位置
 
 - 插件源码：`plugins-src/next/`
-- 插件 ID：`notemd.next`，当前版本 `1.3.0`
+- 插件 ID：`notemd.next`，当前版本 `1.3.1`
 - 最低 Host：`6.829.2`；本实现同时登记 `Next` OKF 类型，随下一次 Host 发布生效
 - 开发安装：`scripts/dev-install-plugin.sh next`
 - 专项验证：`pnpm --filter next-plugin test && pnpm --filter next-plugin check && pnpm --filter next-plugin build`

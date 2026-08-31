@@ -36,6 +36,7 @@
   let showPlaced = $state(false)
   let creating = $state(false)
   let search = $state('')
+  let selectedProject = $state('')
   let placing = $state<WorkspaceItem | null>(null)
   let placementRoute = $state<Route | undefined>()
   let relinking = $state<WorkspaceItem | null>(null)
@@ -65,27 +66,55 @@
   const dragThreshold = 5
 
   const workspace = $derived(store.workspace)
+  const projectOptions = $derived(workspace?.projectOptions ?? [])
+  const activeProject = $derived(projectOptions.includes(selectedProject) ? selectedProject : '')
+  const filtering = $derived(Boolean(search.trim() || activeProject))
   const blocked = $derived(Boolean(workspace?.readOnlyError || workspace?.projection.hasBlockingIssues))
   const interactionDisabled = $derived(store.saving || blocked)
   const newIdeaShortcut = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
     ? '⌘N'
     : 'Ctrl+N'
-  const repair = $derived(workspace?.items.filter((item) => item.state === 'unsupported' || (item.state === 'capture' && item.orphan)) ?? [])
+  const repair = $derived(workspace?.items.filter((item) => (
+    item.state === 'unsupported' || (item.state === 'capture' && item.orphan)
+  ) && matchesFilters(item)) ?? [])
+
+  $effect(() => {
+    if (workspace && selectedProject && !projectOptions.includes(selectedProject)) selectedProject = ''
+  })
+
+  function matchesProject(item: WorkspaceItem): boolean {
+    if (!activeProject) return true
+    const projection = item.projection
+    if (projection?.project === activeProject) return true
+    return projection?.state === 'closed'
+      && projection.exit.kind === 'transferred'
+      && projection.exit.via === 'project'
+      && projection.target === activeProject
+  }
+
+  function matchesFilters(item: WorkspaceItem): boolean {
+    if (!matchesProject(item)) return false
+    const query = search.trim().toLocaleLowerCase()
+    return !query || itemSearchText(item).includes(query)
+  }
 
   function filter(items: WorkspaceItem[]): WorkspaceItem[] {
-    const query = search.trim().toLocaleLowerCase()
-    return query ? items.filter((item) => itemSearchText(item).includes(query)) : items
+    return items.filter(matchesFilters)
+  }
+
+  function toggleProject(project: string) {
+    closePreview()
+    selectedProject = activeProject === project ? '' : project
   }
 
   const lanes = $derived.by<LaneView[]>(() => {
     if (!workspace) return []
-    const searching = Boolean(search.trim())
     const capture = workspace.capture.filter((item) => !item.orphan)
-    const dormant = searching || showPlaced
+    const dormant = filtering || showPlaced
       ? workspace.dormant
       : workspace.dormant.filter((item) => isDormantDue(item))
-    const closed = searching || showPlaced ? workspace.closed : []
-    const visibleCapture = filter(searching ? capture : capture.slice(0, 10))
+    const closed = filtering || showPlaced ? workspace.closed : []
+    const visibleCapture = filter(filtering ? capture : capture.slice(0, 10))
     const visibleDormant = filter(dormant)
     const visibleClosed = filter(closed)
     return [
@@ -399,9 +428,24 @@
 
 <main class="app">
   <header class="topbar">
-    <div>
+    <div class="title-block">
       <h1>{t('app.title')}</h1>
-      <p>{t('app.value')}</p>
+      <div class="subtitle-row">
+        <p>{t('app.value')}</p>
+        {#if projectOptions.length}
+          <div class="project-filters" role="group" aria-label={t('filter.projects')}>
+            {#each projectOptions as project}
+              <button
+                type="button"
+                data-project-filter={project}
+                aria-pressed={activeProject === project}
+                class:active={activeProject === project}
+                onclick={() => toggleProject(project)}
+              >{project}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </div>
     <div class="top-actions">
       <button type="button" data-action="new-idea" class="new-idea" aria-keyshortcuts="Meta+N Control+N" disabled={store.loading || store.saving} onclick={openCreation}>
@@ -454,9 +498,11 @@
 
       <div class="board-tools">
         <input class="search" type="search" bind:value={search} placeholder={t('search.placeholder')} />
-        <button class:active={showPlaced} onclick={() => showPlaced = !showPlaced}>
-          {showPlaced ? t('action.hidePlaced') : t('action.findPlaced')}
-        </button>
+        {#if !filtering}
+          <button class:active={showPlaced} onclick={() => showPlaced = !showPlaced}>
+            {showPlaced ? t('action.hidePlaced') : t('action.findPlaced')}
+          </button>
+        {/if}
       </div>
 
         <div class="board-scroll" onscroll={closePreview}>
@@ -597,8 +643,15 @@
   :global(button), :global(input), :global(textarea), :global(select) { font-family: inherit; }
   .app { min-height: 100vh; }
   .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 28px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(18px); }
+  .title-block { min-width: 0; }
   h1 { margin: 0; font-size: 24px; line-height: 1.1; letter-spacing: -0.02em; }
-  .topbar p { margin: 5px 0 0; color: var(--muted); }
+  .subtitle-row { display: flex; align-items: center; min-width: 0; gap: 10px; margin-top: 5px; }
+  .topbar p { margin: 0; color: var(--muted); }
+  .project-filters { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; max-width: min(680px, 52vw); gap: 5px; overflow-x: auto; scrollbar-width: none; }
+  .project-filters::-webkit-scrollbar { display: none; }
+  .project-filters button { flex: none; max-width: 180px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--chip); color: var(--muted-strong); padding: 3px 8px; font: inherit; font-size: 11px; font-weight: 600; line-height: 1.35; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
+  .project-filters button:hover { background: var(--hover); }
+  .project-filters button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
   .top-actions { flex: none; display: flex; align-items: center; gap: 8px; }
   .new-idea, .refresh { min-height: 34px; box-sizing: border-box; border-radius: 9px; padding: 7px 10px; font-weight: 650; cursor: pointer; }
   .new-idea { display: flex; align-items: center; gap: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
@@ -640,8 +693,10 @@
   .empty { margin: 0; padding: 14px 5px; color: var(--muted); font-size: 12px; }
   .drag-help { margin-top: 8px; color: var(--muted); font-size: 11.5px; }
   @media (max-width: 660px) {
-    .topbar { padding: 16px 18px 13px; }
+    .topbar { align-items: flex-start; padding: 16px 18px 13px; }
     .topbar p { max-width: 440px; }
+    .subtitle-row { display: grid; gap: 6px; }
+    .project-filters { width: 100%; max-width: 100%; }
     .refresh span { display: none; }
     .content { padding: 18px 16px 36px; }
     .board { grid-template-columns: repeat(5, 248px); }
