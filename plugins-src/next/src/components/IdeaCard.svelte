@@ -85,6 +85,7 @@
     <div class="title-line">
       <h3 id={titleId}>{item.title}</h3>
       <span class="state">{t(statusKey)}</span>
+      {#if item.projection?.project}<span class="badge project">{item.projection.project}</span>{/if}
       {#if item.proofed}<span class="badge proof">{t('badge.proofed')}</span>{/if}
       {#if item.orphan}<span class="badge warning">{t('badge.orphan')}</span>{/if}
       {#if item.state === 'unsupported'}<span class="badge warning">{t('badge.unsupported')}</span>{/if}
@@ -133,6 +134,7 @@
   .state, .badge { flex: none; border-radius: 999px; padding: 2px 7px; font-size: 10.5px; font-weight: 600; }
   .state { background: var(--chip); color: var(--muted-strong); }
   .badge.proof { background: var(--proof-bg); color: var(--proof-fg); }
+  .badge.project { background: var(--accent-soft); color: var(--accent); }
   .badge.warning { background: var(--warn-bg); color: var(--warn-fg); }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; }
   button { font: inherit; cursor: pointer; }

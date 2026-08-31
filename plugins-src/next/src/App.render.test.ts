@@ -62,7 +62,20 @@ const item = (key: string, title: string, state: WorkspaceItem['state']): Worksp
 })
 
 function workspace(): NextWorkspace {
-  const wip = item('wip', '正在验证的想法', 'wip')
+  const wip: WorkspaceItem = {
+    ...item('wip', '正在验证的想法', 'wip'),
+    idea_id: 'wip',
+    projection: {
+      idea_id: 'wip',
+      state: 'wip',
+      last_event_id: 'e-wip',
+      last_at: '2026-08-30T00:00:00Z',
+      project: 'Next',
+      commitment: '验证项目标记',
+      next_action: '运行测试',
+      close_condition: '可以复用',
+    },
+  }
   const waiting = item('waiting', '等待设计稿', 'waiting')
   const capture = item('capture', '默认隐藏的想法', 'capture')
   const dormant: WorkspaceItem = {
@@ -101,6 +114,7 @@ function workspace(): NextWorkspace {
     dormant: [dormant],
     closed: [closed],
     unsupported: [],
+    projectOptions: [],
     scanErrors: [],
     readOnlyError: null,
   }
@@ -131,6 +145,13 @@ function pointerDrag(itemKey: string, lane: string, pointerId = 1): void {
 }
 
 describe('Next window', () => {
+  it('shows the current project marker on its card', () => {
+    mocks.state.workspace = workspace()
+    component = mount(App, { target: document.body })
+    flushSync()
+    expect(document.querySelector('[data-item-key="wip"] .badge.project')?.textContent).toBe('Next')
+  })
+
   it('previews the complete Idea body in a viewport tip on hover and keyboard focus', () => {
     vi.useFakeTimers()
     mocks.state.workspace = workspace()
@@ -371,6 +392,9 @@ describe('Next window', () => {
     expect(document.querySelectorAll('[data-lane]')).toHaveLength(5)
     expect([...document.querySelectorAll('[data-lane]')].map((lane) => lane.getAttribute('data-lane'))).toEqual([
       'capture', 'wip', 'waiting', 'dormant', 'closed',
+    ])
+    expect([...document.querySelectorAll('[data-lane] h2')].map((heading) => heading.textContent)).toEqual([
+      '收件箱', '进行中', '等待', '稍后', '已完成',
     ])
     expect(document.body.textContent).toContain('正在验证的想法')
     expect(document.body.textContent).toContain('等待设计稿')

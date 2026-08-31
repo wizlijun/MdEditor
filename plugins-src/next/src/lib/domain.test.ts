@@ -57,13 +57,18 @@ describe('validateEvent', () => {
   it.each([
     [{ kind: 'done' }, {}, true],
     [{ kind: 'done', via: 'delegate' }, { result: 'vault/delivery.md' }, true],
+    [{ kind: 'done', delivery: 'article' }, {}, true],
+    [{ kind: 'done', delivery: 'article' }, { result: 'writing/article.md' }, true],
+    [{ kind: 'done', via: 'delegate', delivery: 'article' }, { result: 'writing/article.md' }, true],
+    [{ kind: 'done', delivery: 'email' }, {}, true],
     [{ kind: 'stopped', via: 'ignore' }, {}, true],
     [{ kind: 'stopped', via: 'drop' }, {}, false],
     [{ kind: 'stopped', via: 'disproved' }, { reason: '关键假设不成立' }, true],
     [{ kind: 'transferred', via: 'project' }, {}, false],
     [{ kind: 'transferred', via: 'project' }, { target: 'projects/next.md' }, true],
+    [{ kind: 'transferred', via: 'publish' }, { target: 'https://example.com/legacy' }, true],
     [{ kind: 'compressed', via: 'automate' }, { target: 'scripts/next.ts' }, true],
-  ])('enforces the settlement matrix for %#', (exit, extra, expected) => {
+  ])('reads the v1 settlement matrix without claiming unknown extensions', (exit, extra, expected) => {
     const result = validateEvent({
       at,
       event_id: 'e1',
@@ -74,6 +79,12 @@ describe('validateEvent', () => {
       ...extra,
     })
     expect(result.ok).toBe(expected)
+  })
+
+  it('reads project assignments and preserves previously unknown project shapes', () => {
+    expect(validateEvent({ ...commit('e1', 'i1', 'a-idea.md'), project: 'Next' }).ok).toBe(true)
+    expect(validateEvent({ ...commit('e2', 'i2', 'b-idea.md'), project: null }).ok).toBe(true)
+    expect(validateEvent({ ...commit('e3', 'i3', 'c-idea.md'), project: { legacy: true } }).ok).toBe(true)
   })
 
   it('accepts an unknown action as an unsupported envelope and preserves extra fields', () => {
@@ -93,6 +104,47 @@ describe('validateEvent', () => {
 })
 
 describe('reduceEvents', () => {
+  it('inherits, changes, and explicitly clears a project marker across placements', () => {
+    const result = reduceEvents([
+      { ...commit('e1', 'idea-1', 'inbox/ideas/a-idea.md'), project: 'Next' },
+      { at, event_id: 'e2', idea_id: 'idea-1', action: 'wait', waiting_for: 'review', review_at: '2026-09-02' },
+      { at, event_id: 'e3', idea_id: 'idea-1', action: 'park', wake_trigger: 'later', project: 'Writing' },
+      { at, event_id: 'e4', idea_id: 'idea-1', action: 'reopen' },
+      { ...commit('e5', 'idea-1'), project: null },
+    ])
+
+    expect(result.hasBlockingIssues).toBe(false)
+    expect(result.ideas.get('idea-1')).not.toHaveProperty('project')
+  })
+
+  it('keeps a project marker when a later event omits the field', () => {
+    const result = reduceEvents([
+      { ...commit('e1', 'idea-1', 'inbox/ideas/a-idea.md'), project: 'Next' },
+      { at, event_id: 'e2', idea_id: 'idea-1', action: 'wait', waiting_for: 'review', review_at: '2026-09-02' },
+    ])
+    expect(result.ideas.get('idea-1')).toMatchObject({ state: 'waiting', project: 'Next' })
+  })
+
+  it('clears a project marker on relink and ignores an unowned legacy project shape', () => {
+    const cleared = reduceEvents([
+      { ...commit('e1', 'idea-1', 'inbox/ideas/a-idea.md'), project: 'Next' },
+      {
+        at,
+        event_id: 'e2',
+        idea_id: 'idea-1',
+        action: 'relink',
+        source: source('archive/a-idea.md'),
+        project: null,
+      },
+    ])
+    expect(cleared.hasBlockingIssues).toBe(false)
+    expect(cleared.ideas.get('idea-1')).not.toHaveProperty('project')
+
+    const legacy = reduceEvents([{ ...commit('e3', 'idea-2', 'inbox/ideas/b-idea.md'), project: { legacy: true } }])
+    expect(legacy.hasBlockingIssues).toBe(false)
+    expect(legacy.ideas.get('idea-2')).not.toHaveProperty('project')
+  })
+
   it('reduces commit → wait → commit → park → reopen without changing idea_id', () => {
     const events = [
       commit('e1', 'idea-1', 'inbox/ideas/a-idea.md'),
@@ -268,6 +320,42 @@ describe('reduceEvents', () => {
 })
 
 describe('validateAppend', () => {
+  it('keeps exact replay idempotent for a readable historical extension shape', () => {
+    const historical = {
+      ...commit('historical', 'historical-idea', 'inbox/ideas/historical-idea.md'),
+      project: { legacy: true },
+    }
+    expect(validateAppend(reduceEvents([historical]), historical)).toMatchObject({
+      ok: true,
+      idempotent: true,
+    })
+  })
+
+  it.each([
+    [{ ...commit('writer-project', 'writer-1', 'inbox/ideas/writer-1-idea.md'), project: '   ' }, 'project'],
+    [{
+      at,
+      event_id: 'writer-article',
+      idea_id: 'writer-2',
+      action: 'settle',
+      source: source('inbox/ideas/writer-2-idea.md'),
+      exit: { kind: 'done', delivery: 'article' },
+    }, 'result'],
+    [{
+      at,
+      event_id: 'writer-delivery',
+      idea_id: 'writer-3',
+      action: 'settle',
+      source: source('inbox/ideas/writer-3-idea.md'),
+      exit: { kind: 'done', delivery: 'email' },
+    }, 'exit.delivery'],
+  ])('strictly validates extensions emitted by this writer', (event, field) => {
+    expect(validateAppend(reduceEvents([]), event)).toEqual({
+      ok: false,
+      issues: [expect.objectContaining({ code: 'invalid_event', fields: expect.arrayContaining([field]) })],
+    })
+  })
+
   const threeWip = reduceEvents([
     commit('e1', 'i1', 'inbox/ideas/1-idea.md'),
     commit('e2', 'i2', 'inbox/ideas/2-idea.md'),

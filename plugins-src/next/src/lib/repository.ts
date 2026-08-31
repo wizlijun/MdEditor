@@ -68,6 +68,8 @@ export interface NextWorkspace {
   dormant: WorkspaceItem[]
   closed: WorkspaceItem[]
   unsupported: WorkspaceItem[]
+  /** Current project markers plus legacy project-transfer targets, newest first. */
+  projectOptions: string[]
   scanErrors: string[]
   readOnlyError: string | null
 }
@@ -182,13 +184,14 @@ function sourceOwners(projection: LedgerProjection, source: IdeaSource): Readonl
 }
 
 function textOfProjection(projection: IdeaProjection): string {
+  const project = projection.project ?? ''
   switch (projection.state) {
-    case 'wip': return `${projection.commitment} ${projection.next_action} ${projection.close_condition}`
-    case 'waiting': return `${projection.waiting_for} ${projection.review_at}`
-    case 'dormant': return `${projection.wake_trigger} ${projection.next_action ?? ''}`
-    case 'closed': return `${projection.exit.kind} ${projection.exit.via ?? ''} ${projection.reason ?? ''} ${projection.target ?? ''} ${projection.result ?? ''}`
-    case 'unsupported': return projection.unsupported_actions.join(' ')
-    case 'capture': return ''
+    case 'wip': return `${project} ${projection.commitment} ${projection.next_action} ${projection.close_condition}`
+    case 'waiting': return `${project} ${projection.waiting_for} ${projection.review_at}`
+    case 'dormant': return `${project} ${projection.wake_trigger} ${projection.next_action ?? ''}`
+    case 'closed': return `${project} ${projection.exit.kind} ${projection.exit.via ?? ''} ${projection.reason ?? ''} ${projection.target ?? ''} ${projection.result ?? ''}`
+    case 'unsupported': return `${project} ${projection.unsupported_actions.join(' ')}`
+    case 'capture': return project
   }
 }
 
@@ -255,6 +258,27 @@ function byLastEventDesc(a: WorkspaceItem, b: WorkspaceItem): number {
   const left = a.projection?.last_at ?? a.created ?? ''
   const right = b.projection?.last_at ?? b.created ?? ''
   return right.localeCompare(left)
+}
+
+function projectOptionsOf(items: WorkspaceItem[]): string[] {
+  const options: string[] = []
+  for (const item of items.slice().sort(byLastEventDesc)) {
+    const projection = item.projection
+    if (!projection) continue
+    const values = [
+      projection.project,
+      projection.state === 'closed'
+        && projection.exit.kind === 'transferred'
+        && projection.exit.via === 'project'
+        ? projection.target
+        : undefined,
+    ]
+    for (const value of values) {
+      const normalized = value?.trim()
+      if (normalized && !options.includes(normalized)) options.push(normalized)
+    }
+  }
+  return options
 }
 
 async function persistSourceDirs(
@@ -325,6 +349,7 @@ export async function loadWorkspace(port: VaultPort = hostVault): Promise<NextWo
     dormant: items.filter((item) => item.state === 'dormant').sort(byLastEventDesc),
     closed: items.filter((item) => item.state === 'closed').sort(byLastEventDesc),
     unsupported: items.filter((item) => item.state === 'unsupported').sort(byLastEventDesc),
+    projectOptions: projectOptionsOf(items),
     scanErrors: scan.errors,
     readOnlyError,
   }

@@ -10,7 +10,9 @@ import type {
 import { sourceRefOf, type WorkspaceItem } from './repository'
 import type { IdeaSource } from './source'
 
-export type PlaceInput =
+type ProjectChange = { project?: string | null }
+
+export type PlaceInput = (
   | { route: 'commit'; commitment: string; next_action: string; close_condition: string }
   | { route: 'wait'; waiting_for: string; review_at: string }
   | { route: 'park'; wake_trigger: string; next_action?: string }
@@ -21,6 +23,7 @@ export type PlaceInput =
       target?: string
       result?: string
     }
+) & ProjectChange
 
 export interface EventFactory {
   now(): string
@@ -40,6 +43,12 @@ function clean(value: string | undefined): string | undefined {
   return result ? result : undefined
 }
 
+function projectChange(value: string | null | undefined): { project?: string | null } {
+  if (value === null) return { project: null }
+  const project = clean(value)
+  return project ? { project } : {}
+}
+
 function envelope(item: WorkspaceItem, factory: EventFactory) {
   const source = sourceRefOf(item)
   if (!item.idea_id && !source) throw new Error('a new idea requires a source')
@@ -56,7 +65,7 @@ export function placeEvent(
   input: PlaceInput,
   factory: EventFactory = defaultEventFactory,
 ): NextEvent {
-  const base = envelope(item, factory)
+  const base = { ...envelope(item, factory), ...projectChange(input.project) }
   switch (input.route) {
     case 'commit': {
       const event: CommitEvent = {
@@ -90,6 +99,11 @@ export function placeEvent(
     case 'settle': {
       const reason = clean(input.reason)
       const target = clean(input.target)
+        ?? (input.exit.kind === 'transferred'
+          && input.exit.via === 'project'
+          && typeof base.project === 'string'
+          ? base.project
+          : undefined)
       const result = clean(input.result)
       const event: SettleEvent = {
         ...base,

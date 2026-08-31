@@ -126,6 +126,7 @@ function readableBody(events: Record<string, unknown>[]): string {
       ['waiting_for', 'waiting for'],
       ['review_at', 'review on'],
       ['wake_trigger', 'wake trigger'],
+      ['project', 'project'],
       ['reason', 'reason'],
       ['target', 'destination'],
       ['result', 'result'],
@@ -136,7 +137,8 @@ function readableBody(events: Record<string, unknown>[]): string {
     if (isRecord(event.exit)) {
       const kind = scalar(event.exit.kind)
       const via = scalar(event.exit.via)
-      if (kind) lines.push(`- outcome: ${kind}${via ? ` via ${via}` : ''}`)
+      const delivery = scalar(event.exit.delivery)
+      if (kind) lines.push(`- outcome: ${kind}${via ? ` via ${via}` : ''}${delivery ? ` · delivery: ${delivery}` : ''}`)
     }
     lines.push('')
   }

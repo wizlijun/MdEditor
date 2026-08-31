@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import YAML from 'yaml'
-import { appendEvent, createIdeaSource, loadWorkspace, type VaultPort } from './repository'
+import { appendEvent, createIdeaSource, itemSearchText, loadWorkspace, type VaultPort } from './repository'
 import { NEXT_PATH } from './ledger'
 import { placeEvent, relinkEvent, reopenEvent } from './events'
 import type { CommitEvent, NextEvent, SettleEvent } from './model'
@@ -137,6 +137,25 @@ describe('Next repository', () => {
     expect(after.wip).toHaveLength(1)
     expect(after.wip[0]).toMatchObject({ body: '# A useful idea\n' })
     expect(after.wip[0].projection).toMatchObject({ state: 'wip', next_action: 'Run one test' })
+  })
+
+  it('offers distinct active project markers for reuse, ordered by recent placement', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/ideas/a-idea.md', idea('2026-08-29T01:00:00Z'))
+    vault.files.set('inbox/ideas/b-idea.md', idea('2026-08-29T01:01:00Z'))
+    let workspace = await loadWorkspace(vault)
+    const [newer, older] = workspace.capture
+    const ids = ['e1', 'i1', 'e2', 'i2']
+    const eventFactory = { now: () => ids[0] === 'e1' ? '2026-08-29T02:00:00Z' : '2026-08-29T03:00:00Z', id: () => ids.shift()! }
+    workspace = await appendEvent(workspace, placeEvent(older, {
+      route: 'park', wake_trigger: 'later', project: 'Writing',
+    }, eventFactory), {}, vault)
+    workspace = await appendEvent(workspace, placeEvent(newer, {
+      route: 'park', wake_trigger: 'later', project: 'Next',
+    }, eventFactory), {}, vault)
+
+    expect(workspace.projectOptions).toEqual(['Next', 'Writing'])
+    expect(itemSearchText(workspace.dormant[0])).toContain('next')
   })
 
   it('keeps idea and proof bytes unchanged across all six lifecycle actions', async () => {

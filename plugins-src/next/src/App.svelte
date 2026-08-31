@@ -523,7 +523,14 @@
 {/if}
 
 {#if placing}
-  <PlaceSheet item={placing} saving={store.saving} initialRoute={placementRoute} onCancel={closePlacement} onSubmit={submitPlacement} />
+  <PlaceSheet
+    item={placing}
+    saving={store.saving}
+    initialRoute={placementRoute}
+    projectOptions={workspace?.projectOptions ?? []}
+    onCancel={closePlacement}
+    onSubmit={submitPlacement}
+  />
 {/if}
 
 {#if relinking}

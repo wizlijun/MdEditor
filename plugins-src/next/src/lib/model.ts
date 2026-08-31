@@ -20,6 +20,8 @@ export interface EventBase {
   idea_id: string
   action: NextAction
   source?: SourceRef
+  /** Omitted inherits, a string assigns, and null explicitly clears the marker. */
+  project?: string | null
   [key: string]: unknown
 }
 
@@ -42,7 +44,13 @@ export interface ParkEvent extends EventBase {
   next_action?: string
 }
 
-export type DoneExit = { kind: 'done'; via?: 'delegate'; [key: string]: unknown }
+export type DoneExit = {
+  kind: 'done'
+  via?: 'delegate'
+  /** Compatibility-safe delivery subtype; older readers preserve this unknown field. */
+  delivery?: 'article'
+  [key: string]: unknown
+}
 export type StoppedExit = {
   kind: 'stopped'
   via: 'drop' | 'disproved' | 'ignore'
@@ -103,6 +111,7 @@ export interface IdeaProjectionBase {
   source?: SourceRef
   last_event_id: string
   last_at: string
+  project?: string
 }
 
 export interface CaptureIdea extends IdeaProjectionBase {

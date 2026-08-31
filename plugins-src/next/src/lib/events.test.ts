@@ -54,4 +54,53 @@ describe('event construction', () => {
       source: { path: 'archive/a-idea.md', created: capture.created },
     })
   })
+
+  it('normalizes project markers, supports clearing, and mirrors project transfers into legacy target', () => {
+    const placed: WorkspaceItem = {
+      ...capture,
+      idea_id: 'existing',
+      projection: {
+        idea_id: 'existing',
+        state: 'wip',
+        last_event_id: 'old',
+        last_at: '2026-08-29T00:00:00Z',
+        source: { path: capture.path!, created: capture.created },
+        project: 'Old project',
+        commitment: 'Test',
+        next_action: 'Run',
+        close_condition: 'Know',
+      },
+    }
+    const sequential: EventFactory = { now: factory.now, id: () => 'new-event' }
+
+    expect(placeEvent(placed, {
+      route: 'wait',
+      waiting_for: 'Review',
+      review_at: '2026-09-02',
+      project: null,
+    }, sequential)).toMatchObject({ action: 'wait', project: null })
+
+    expect(placeEvent(placed, {
+      route: 'settle',
+      exit: { kind: 'transferred', via: 'project' },
+      project: ' Writing ',
+    }, sequential)).toMatchObject({
+      action: 'settle',
+      project: 'Writing',
+      target: 'Writing',
+    })
+  })
+
+  it('constructs a published article as a completed delivery', () => {
+    const sequential: EventFactory = { now: factory.now, id: () => 'new-event' }
+    expect(placeEvent(capture, {
+      route: 'settle',
+      exit: { kind: 'done', delivery: 'article' },
+      result: ' writing/article.md ',
+    }, sequential)).toMatchObject({
+      action: 'settle',
+      exit: { kind: 'done', delivery: 'article' },
+      result: 'writing/article.md',
+    })
+  })
 })
