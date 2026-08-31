@@ -216,9 +216,17 @@ export const ja: Record<keyof Messages, string> = {
 
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'プラグインマーケット',
+  'pluginMarket.subtitle': 'やりたいことから探して、note.md を自分らしく拡張できます。',
   'pluginMarket.refresh': '更新',
+  'pluginMarket.pluginsUnit': '個のプラグイン',
+  'pluginMarket.loadingCatalog': 'ほかのプラグインを確認中…',
   'pluginMarket.installedHeading': 'インストール済み',
   'pluginMarket.availableHeading': '利用可能',
+  'pluginMarket.enabled': '有効',
+  'pluginMarket.disabled': '無効',
+  'pluginMarket.updateAvailable': '更新あり',
+  'pluginMarket.onDevice': 'このデバイスにインストール済みです。接続すると詳細を読み込めます。',
+  'pluginMarket.localStateError': 'インストール済みプラグインを更新できませんでした：{error}',
   'pluginMarket.noneInstalled': 'インストール済みのプラグインはありません。',
   'pluginMarket.noneAvailable': 'これ以上利用可能なプラグインはありません。',
   'pluginMarket.install': 'インストール',
