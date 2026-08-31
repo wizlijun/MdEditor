@@ -119,6 +119,12 @@ function readableBody(events: Record<string, unknown>[]): string {
     const source = isRecord(event.source) ? scalar(event.source.path) : null
     if (ideaId) lines.push(`- idea: \`${ideaId}\``)
     if (source) lines.push(`- source: \`${source}\``)
+    const projects = Array.isArray(event.projects) ? event.projects.map(scalar).filter(Boolean) : []
+    if (projects.length) lines.push(`- projects: ${projects.join(' · ')}`)
+    else {
+      const project = scalar(event.project)
+      if (project) lines.push(`- project: ${project}`)
+    }
     for (const [key, label] of [
       ['commitment', 'commitment'],
       ['next_action', 'next action'],
@@ -126,7 +132,6 @@ function readableBody(events: Record<string, unknown>[]): string {
       ['waiting_for', 'waiting for'],
       ['review_at', 'review on'],
       ['wake_trigger', 'wake trigger'],
-      ['project', 'project'],
       ['reason', 'reason'],
       ['target', 'destination'],
       ['result', 'result'],

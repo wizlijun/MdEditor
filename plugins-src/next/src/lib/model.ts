@@ -20,7 +20,9 @@ export interface EventBase {
   idea_id: string
   action: NextAction
   source?: SourceRef
-  /** Omitted inherits, a string assigns, and null explicitly clears the marker. */
+  /** Canonical tag set. Omitted inherits, an array replaces, and null clears. */
+  projects?: string[] | null
+  /** Compatibility shadow for readers before 1.4; mirrors the first project tag. */
   project?: string | null
   [key: string]: unknown
 }
@@ -111,6 +113,8 @@ export interface IdeaProjectionBase {
   source?: SourceRef
   last_event_id: string
   last_at: string
+  projects?: readonly string[]
+  /** Derived first tag retained for compatibility with pre-1.4 views. */
   project?: string
 }
 
@@ -159,6 +163,32 @@ export type IdeaProjection =
   | DormantIdea
   | ClosedIdea
   | UnsupportedIdea
+
+export function projectTagsOf(projection: IdeaProjection | undefined): readonly string[] {
+  if (projection?.projects?.length) return projection.projects
+  return projection?.project ? [projection.project] : []
+}
+
+export function normalizeProjectTag(value: string): string {
+  return value.normalize('NFKC').trim()
+}
+
+export function projectTagKey(value: string): string {
+  return normalizeProjectTag(value).toLocaleLowerCase()
+}
+
+export function uniqueProjectTags(values: readonly string[]): string[] {
+  const projects: string[] = []
+  const keys = new Set<string>()
+  for (const value of values) {
+    const project = normalizeProjectTag(value)
+    const key = projectTagKey(project)
+    if (!project || keys.has(key)) continue
+    projects.push(project)
+    keys.add(key)
+  }
+  return projects
+}
 
 export type DomainIssueCode =
   | 'invalid_event'

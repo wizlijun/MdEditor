@@ -55,7 +55,7 @@ describe('event construction', () => {
     })
   })
 
-  it('normalizes project markers, supports clearing, and mirrors project transfers into legacy target', () => {
+  it('normalizes multi-project tags, dual-writes the legacy primary, and keeps transfer target explicit', () => {
     const placed: WorkspaceItem = {
       ...capture,
       idea_id: 'existing',
@@ -65,6 +65,7 @@ describe('event construction', () => {
         last_event_id: 'old',
         last_at: '2026-08-29T00:00:00Z',
         source: { path: capture.path!, created: capture.created },
+        projects: ['Old project'],
         project: 'Old project',
         commitment: 'Test',
         next_action: 'Run',
@@ -77,17 +78,19 @@ describe('event construction', () => {
       route: 'wait',
       waiting_for: 'Review',
       review_at: '2026-09-02',
-      project: null,
-    }, sequential)).toMatchObject({ action: 'wait', project: null })
+      projects: null,
+    }, sequential)).toMatchObject({ action: 'wait', projects: null, project: null })
 
     expect(placeEvent(placed, {
       route: 'settle',
       exit: { kind: 'transferred', via: 'project' },
-      project: ' Writing ',
+      projects: [' Writing ', 'Next', 'writing'],
+      target: 'Next',
     }, sequential)).toMatchObject({
       action: 'settle',
       project: 'Writing',
-      target: 'Writing',
+      projects: ['Writing', 'Next'],
+      target: 'Next',
     })
   })
 

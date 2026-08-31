@@ -107,7 +107,7 @@ describe('PlaceSheet', () => {
     expect(document.querySelectorAll('[data-choices-for="result"] button')).toHaveLength(4)
   })
 
-  it('allows choosing an existing project marker or entering a new one on any route', async () => {
+  it('allows selecting multiple existing project tags and creating one with Enter', async () => {
     setLocale('zh')
     const onSubmit = vi.fn(async () => {})
     mounted.push(mount(PlaceSheet, {
@@ -122,11 +122,18 @@ describe('PlaceSheet', () => {
     }))
     flushSync()
 
-    const project = document.querySelector<HTMLInputElement>('input[list="project-options"]')!
-    expect(project).toBeTruthy()
-    expect([...document.querySelectorAll<HTMLOptionElement>('#project-options option')].map((option) => option.value))
-      .toEqual(['Next', '写作计划'])
+    document.querySelector<HTMLButtonElement>('[data-project-option="Next"]')!.click()
+    document.querySelector<HTMLButtonElement>('[data-project-option="写作计划"]')!.click()
+    const project = document.querySelector<HTMLInputElement>('[data-project-input]')!
+    input(project, ' next ')
+    project.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    flushSync()
+    expect(document.querySelectorAll('[data-project-tag]')).toHaveLength(2)
     input(project, '新项目')
+    project.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    flushSync()
+    expect([...document.querySelectorAll<HTMLElement>('[data-project-tag]')].map((tag) => tag.dataset.projectTag))
+      .toEqual(['Next', '写作计划', '新项目'])
     for (const field of ['commitment', 'nextAction', 'closeCondition']) {
       document.querySelector<HTMLButtonElement>(`[data-choices-for="${field}"] button`)!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -134,7 +141,10 @@ describe('PlaceSheet', () => {
     document.querySelector('form')!.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
     await Promise.resolve()
 
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ route: 'commit', project: '新项目' }))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      route: 'commit',
+      projects: ['Next', '写作计划', '新项目'],
+    }))
   })
 
   it('uses the project picker as the legacy target when upgrading an idea to a project', async () => {
@@ -155,14 +165,43 @@ describe('PlaceSheet', () => {
     flushSync()
     expect(onSubmit).not.toHaveBeenCalled()
 
-    input(document.querySelector<HTMLInputElement>('input[list="project-options"]')!, 'Next')
+    document.querySelector<HTMLButtonElement>('[data-project-option="Next"]')!.click()
     form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
     await Promise.resolve()
     expect(onSubmit).toHaveBeenCalledWith({
       route: 'settle',
       exit: { kind: 'transferred', via: 'project' },
-      project: 'Next',
+      projects: ['Next'],
       target: 'Next',
+    })
+  })
+
+  it('requires an explicit target when upgrading a multi-project idea', async () => {
+    setLocale('zh')
+    const onSubmit = vi.fn(async () => {})
+    mounted.push(mount(PlaceSheet, {
+      target: document.body,
+      props: { item, saving: false, projectOptions: ['Next', '写作'], onCancel: vi.fn(), onSubmit },
+    }))
+    clickButton('结束或已有去处')
+    change(document.querySelectorAll('select')[0], 'transferred')
+    change(document.querySelectorAll('select')[1], 'project')
+    document.querySelector<HTMLButtonElement>('[data-project-option="Next"]')!.click()
+    document.querySelector<HTMLButtonElement>('[data-project-option="写作"]')!.click()
+
+    const form = document.querySelector('form')!
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    flushSync()
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    change(document.querySelector<HTMLSelectElement>('[data-project-target]')!, '写作')
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    expect(onSubmit).toHaveBeenCalledWith({
+      route: 'settle',
+      exit: { kind: 'transferred', via: 'project' },
+      projects: ['Next', '写作'],
+      target: '写作',
     })
   })
 
@@ -178,6 +217,7 @@ describe('PlaceSheet', () => {
         state: 'wip',
         last_event_id: 'e1',
         last_at: '2026-08-29T00:00:00Z',
+        projects: ['Next'],
         project: 'Next',
         commitment: '验证',
         next_action: '测试',
@@ -188,10 +228,10 @@ describe('PlaceSheet', () => {
       target: document.body,
       props: { item: projected, saving: false, projectOptions: ['Next'], onCancel: vi.fn(), onSubmit },
     }))
-    input(document.querySelector<HTMLInputElement>('input[list="project-options"]')!, '')
+    document.querySelector<HTMLButtonElement>('[data-project-tag="Next"]')!.click()
     document.querySelector('form')!.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
     await Promise.resolve()
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ route: 'commit', project: null }))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ route: 'commit', projects: null }))
   })
 
   it('treats a published full article as done and requires its path or link', async () => {

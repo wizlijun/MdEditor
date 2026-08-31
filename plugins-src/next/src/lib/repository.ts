@@ -8,7 +8,8 @@ import {
 } from './bridge'
 import { ownersOfSource, reduceEvents, validateAppend } from './domain'
 import { NEXT_PATH, newLedger, parseLedger, serializeLedger, type LedgerDocument } from './ledger'
-import type { IdeaProjection, LedgerProjection, NextEvent, SourceRef } from './model'
+import { projectTagKey, projectTagsOf, type IdeaProjection, type LedgerProjection, type NextEvent, type SourceRef } from './model'
+import { buildProjectMatcher, type ProjectSuggestion } from './project-match'
 import {
   buildIdeaDocument,
   DEFAULT_IDEA_DIR,
@@ -51,6 +52,8 @@ export interface WorkspaceItem {
   projection?: IdeaProjection
   relinkCandidates: IdeaSource[]
   relinkMatch: 'created' | 'manual' | null
+  /** Local, non-persistent suggestion. It is never a confirmed project tag. */
+  suggestedProject?: ProjectSuggestion
 }
 
 export interface NextWorkspace {
@@ -184,7 +187,7 @@ function sourceOwners(projection: LedgerProjection, source: IdeaSource): Readonl
 }
 
 function textOfProjection(projection: IdeaProjection): string {
-  const project = projection.project ?? ''
+  const project = projectTagsOf(projection).join(' ')
   switch (projection.state) {
     case 'wip': return `${project} ${projection.commitment} ${projection.next_action} ${projection.close_condition}`
     case 'waiting': return `${project} ${projection.waiting_for} ${projection.review_at}`
@@ -266,7 +269,7 @@ function projectOptionsOf(items: WorkspaceItem[]): string[] {
     const projection = item.projection
     if (!projection) continue
     const values = [
-      projection.project,
+      ...projectTagsOf(projection),
       projection.state === 'closed'
         && projection.exit.kind === 'transferred'
         && projection.exit.via === 'project'
@@ -275,10 +278,27 @@ function projectOptionsOf(items: WorkspaceItem[]): string[] {
     ]
     for (const value of values) {
       const normalized = value?.trim()
-      if (normalized && !options.includes(normalized)) options.push(normalized)
+      if (normalized && !options.some((option) => projectTagKey(option) === projectTagKey(normalized))) options.push(normalized)
     }
   }
   return options
+}
+
+function withProjectSuggestions(items: WorkspaceItem[], projectOptions: string[]): WorkspaceItem[] {
+  const matcher = buildProjectMatcher(
+    items.flatMap((item) => {
+      const projects = projectTagsOf(item.projection)
+      return item.projection && projects.length && item.body?.trim()
+        ? [{ projects, text: `${item.title}\n${item.body}` }]
+        : []
+    }),
+    projectOptions,
+  )
+  return items.map((item) => {
+    if (item.state !== 'capture' || item.projection || !item.body?.trim()) return item
+    const suggestedProject = matcher.recommend(`${item.title}\n${item.body}`)
+    return suggestedProject ? { ...item, suggestedProject } : item
+  })
 }
 
 async function persistSourceDirs(
@@ -334,7 +354,9 @@ export async function loadWorkspace(port: VaultPort = hostVault): Promise<NextWo
   const sourceDirs = unique([...ledger.source_dirs, ideaDir])
   const scan = await scanIdeaDirs(sourceDirs, port)
   const projection = reduceEvents(ledger.events)
-  const items = projectItems(scan.sources, projection)
+  const projectedItems = projectItems(scan.sources, projection)
+  const projectOptions = projectOptionsOf(projectedItems)
+  const items = withProjectSuggestions(projectedItems, projectOptions)
   return {
     ledger,
     ledgerRaw,
@@ -349,7 +371,7 @@ export async function loadWorkspace(port: VaultPort = hostVault): Promise<NextWo
     dormant: items.filter((item) => item.state === 'dormant').sort(byLastEventDesc),
     closed: items.filter((item) => item.state === 'closed').sort(byLastEventDesc),
     unsupported: items.filter((item) => item.state === 'unsupported').sort(byLastEventDesc),
-    projectOptions: projectOptionsOf(items),
+    projectOptions,
     scanErrors: scan.errors,
     readOnlyError,
   }

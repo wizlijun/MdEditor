@@ -3,6 +3,7 @@
   import ChoiceField, { type ChoiceOption } from './ChoiceField.svelte'
   import type { PlaceInput } from '../lib/events'
   import type { SettlementExit } from '../lib/model'
+  import { normalizeProjectTag, projectTagKey, uniqueProjectTags } from '../lib/model'
   import type { WorkspaceItem } from '../lib/repository'
   import { t } from '../lib/strings'
 
@@ -13,6 +14,7 @@
     item,
     saving,
     initialRoute,
+    initialProjects = [],
     projectOptions = [],
     onCancel,
     onSubmit,
@@ -20,6 +22,7 @@
     item: WorkspaceItem
     saving: boolean
     initialRoute?: Route
+    initialProjects?: readonly string[]
     projectOptions?: readonly string[]
     onCancel(): void
     onSubmit(input: PlaceInput): Promise<void>
@@ -39,7 +42,14 @@
   let reason = $state('')
   let target = $state('')
   let result = $state('')
-  let project = $state(projection?.project ?? '')
+  const previousProjects = untrack(() => projection?.projects?.length
+    ? [...projection.projects]
+    : projection?.project
+      ? [projection.project]
+      : [])
+  let projects = $state<string[]>(uniqueProjectTags([...previousProjects, ...untrack(() => initialProjects)]))
+  let projectDraft = $state('')
+  let projectTarget = $state('')
   let invalid = $state(false)
   let sheetEl: HTMLDivElement | undefined = $state()
 
@@ -119,6 +129,7 @@
   const projectRequired = $derived(exitKind === 'transferred' && exitVia === 'project')
   const targetRequired = $derived(exitKind === 'compressed' || (exitKind === 'transferred' && exitVia !== 'project'))
   const articleRequired = $derived(exitKind === 'done' && exitVia === 'article')
+  const availableProjects = $derived(projectOptions.filter((option) => !projects.some((project) => projectTagKey(project) === projectTagKey(option))).slice(0, 5))
 
   function chooseRoute(value: Route) {
     route = value
@@ -139,6 +150,36 @@
     target = ''
     result = ''
     invalid = false
+  }
+
+  function addProject(value: string) {
+    const project = normalizeProjectTag(value)
+    if (!project) return
+    if (projects.some((existing) => projectTagKey(existing) === projectTagKey(project))) {
+      projectDraft = ''
+      return
+    }
+    const previousCount = projects.length
+    projects = [...projects, project]
+    projectDraft = ''
+    if (projects.length === 1) projectTarget = projects[0]
+    else if (previousCount === 1) projectTarget = ''
+    invalid = false
+  }
+
+  function removeProject(project: string) {
+    projects = projects.filter((value) => value !== project)
+    if (projects.length === 1) projectTarget = projects[0]
+    else if (!projects.includes(projectTarget)) projectTarget = ''
+  }
+
+  function projectKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      addProject(projectDraft)
+    } else if (event.key === 'Backspace' && !projectDraft && projects.length) {
+      removeProject(projects.at(-1)!)
+    }
   }
 
   function exitValue(): SettlementExit {
@@ -162,11 +203,9 @@
     return t(`via.${via}` as never)
   }
 
-  function projectChange(): { project?: string | null } {
-    const previous = projection?.project?.trim() ?? ''
-    const next = project.trim()
-    if (next === previous) return {}
-    return next ? { project: next } : previous ? { project: null } : {}
+  function projectChange(): { projects?: string[] | null } {
+    if (projects.length === previousProjects.length && projects.every((value, index) => value === previousProjects[index])) return {}
+    return projects.length ? { projects: [...projects] } : previousProjects.length ? { projects: null } : {}
   }
 
   function isValid(): boolean {
@@ -177,7 +216,7 @@
     if (exitKind !== 'done' && !exitVia) return false
     if (reasonRequired && !reason.trim()) return false
     if (targetRequired && !target.trim()) return false
-    if (projectRequired && !project.trim()) return false
+    if (projectRequired && (!projects.length || (projects.length > 1 && !projects.includes(projectTarget)))) return false
     if (articleRequired && !result.trim()) return false
     return true
   }
@@ -204,7 +243,7 @@
       await onSubmit({
         route,
         exit: exitValue(),
-        target: projectRequired ? project : target,
+        target: projectRequired ? (projects.length === 1 ? projects[0] : projectTarget) : target,
         ...projectField,
       })
     }
@@ -311,13 +350,40 @@
         {/if}
       {/if}
 
-      <label>
-        <span>{t('field.project')}{projectRequired ? '' : ` · ${t('common.optional')}`}</span>
-        <input list="project-options" bind:value={project} placeholder={t('field.project.placeholder')} />
-        <datalist id="project-options">
-          {#each projectOptions as option}<option value={option}></option>{/each}
-        </datalist>
-      </label>
+      <fieldset class="project-picker">
+        <legend>{t('field.project')}{projectRequired ? '' : ` · ${t('common.optional')}`}</legend>
+        {#if projects.length}
+          <div class="selected-projects" aria-label={t('field.project.selected')}>
+            {#each projects as project}
+              <button type="button" class="project-tag selected" data-project-tag={project} onclick={() => removeProject(project)}>
+                <span>{project}</span><span aria-hidden="true">×</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        {#if availableProjects.length}
+          <div class="project-options" aria-label={t('field.project.existing')}>
+            {#each availableProjects as option}
+              <button type="button" class="project-tag" data-project-option={option} onclick={() => addProject(option)}>＋ {option}</button>
+            {/each}
+          </div>
+        {/if}
+        <div class="project-create">
+          <input data-project-input bind:value={projectDraft} onkeydown={projectKeydown} placeholder={t('field.project.placeholder')} />
+          <button type="button" disabled={!projectDraft.trim()} onclick={() => addProject(projectDraft)}>{t('field.project.add')}</button>
+        </div>
+        <small>{t('field.project.help')}</small>
+      </fieldset>
+
+      {#if projectRequired && projects.length > 1}
+        <label>
+          <span>{t('field.project.target')}</span>
+          <select data-project-target value={projectTarget} onchange={(event) => projectTarget = event.currentTarget.value}>
+            <option value="" disabled>{t('field.project.target.placeholder')}</option>
+            {#each projects as project}<option value={project}>{project}</option>{/each}
+          </select>
+        </label>
+      {/if}
 
       {#if invalid}<p class="error" role="alert">{t('error.required')}</p>{/if}
       <footer>
@@ -346,6 +412,17 @@
   label { display: grid; gap: 6px; font-size: 12px; font-weight: 600; }
   input, select { width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--input); color: var(--fg); padding: 9px 10px; font: inherit; outline: none; }
   input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .project-picker { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+  .project-picker legend { margin-bottom: 2px; padding: 0; font-size: 12px; font-weight: 600; }
+  .selected-projects, .project-options { display: flex; flex-wrap: wrap; gap: 6px; }
+  .project-tag { max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--chip); color: var(--muted-strong); padding: 5px 9px; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
+  .project-tag:hover { background: var(--hover); }
+  .project-tag.selected { display: inline-flex; align-items: center; gap: 5px; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .project-create { display: grid; grid-template-columns: 1fr auto; gap: 7px; }
+  .project-create button { border: 1px solid var(--line-strong); border-radius: 9px; background: var(--card); color: var(--fg); padding: 7px 12px; font: inherit; font-weight: 650; cursor: pointer; }
+  .project-create button:hover:not(:disabled) { background: var(--hover); }
+  .project-create button:disabled { opacity: 0.45; cursor: default; }
+  .project-picker small { color: var(--muted); font-size: 11px; font-weight: 400; }
   .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .error { margin: 0; color: var(--danger); font-size: 12px; }
   .help { margin-top: -7px; color: var(--muted); font-size: 11px; line-height: 1.45; }

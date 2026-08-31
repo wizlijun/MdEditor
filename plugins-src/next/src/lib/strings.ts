@@ -82,6 +82,14 @@ export type MessageKey =
   | 'field.result.placeholder'
   | 'field.project'
   | 'field.project.placeholder'
+  | 'field.project.selected'
+  | 'field.project.existing'
+  | 'field.project.add'
+  | 'field.project.help'
+  | 'field.project.target'
+  | 'field.project.target.placeholder'
+  | 'project.suggestion'
+  | 'project.suggestion.detail'
   | 'field.article'
   | 'field.article.placeholder'
   | 'preset.commit.verify'
@@ -238,6 +246,14 @@ const en: Catalog = {
   'field.result.placeholder': 'Optional result or evidence link',
   'field.project': 'Project',
   'field.project.placeholder': 'Choose or enter a project',
+  'field.project.selected': 'Selected projects',
+  'field.project.existing': 'Existing projects',
+  'field.project.add': 'Add',
+  'field.project.help': 'Select more than one, or create a new tag.',
+  'field.project.target': 'Upgrade to which project?',
+  'field.project.target.placeholder': 'Choose one project',
+  'project.suggestion': 'Suggested · {project}',
+  'project.suggestion.detail': 'Local match: {terms}. Click to confirm before placing.',
   'field.article': 'Published article',
   'field.article.placeholder': 'Article path or public URL',
   'preset.commit.verify': 'Verify whether “{title}” is worth continuing',
@@ -393,6 +409,14 @@ const zh: Catalog = {
   'field.result.placeholder': '可选的结果或证据链接',
   'field.project': '项目',
   'field.project.placeholder': '选择已有项目，或输入项目名称',
+  'field.project.selected': '已选项目',
+  'field.project.existing': '已有项目',
+  'field.project.add': '添加',
+  'field.project.help': '可多选；也可以创建一个新的项目 Tag。',
+  'field.project.target': '升级到哪个项目？',
+  'field.project.target.placeholder': '选择一个项目',
+  'project.suggestion': '建议 · {project}',
+  'project.suggestion.detail': '本地匹配：{terms}。点击确认后再安放。',
   'field.article': '完整文章',
   'field.article.placeholder': '文章路径或公开链接',
   'preset.commit.verify': '验证“{title}”是否值得继续',
@@ -548,6 +572,14 @@ const ja: Catalog = {
   'field.result.placeholder': '任意の成果または証拠へのリンク',
   'field.project': 'プロジェクト',
   'field.project.placeholder': '既存のプロジェクトを選択するか入力',
+  'field.project.selected': '選択済みのプロジェクト',
+  'field.project.existing': '既存のプロジェクト',
+  'field.project.add': '追加',
+  'field.project.help': '複数選択、または新しいプロジェクトタグを作成できます。',
+  'field.project.target': 'どのプロジェクトに昇格しますか？',
+  'field.project.target.placeholder': 'プロジェクトを選択',
+  'project.suggestion': '候補 · {project}',
+  'project.suggestion.detail': 'ローカル一致：{terms}。クリックして確認後に配置します。',
   'field.article': '公開済み記事',
   'field.article.placeholder': '記事のパスまたは公開 URL',
   'preset.commit.verify': '「{title}」を続ける価値があるか検証する',
@@ -703,6 +735,14 @@ const de: Catalog = {
   'field.result.placeholder': 'Optionales Resultat oder Link zum Nachweis',
   'field.project': 'Projekt',
   'field.project.placeholder': 'Projekt auswählen oder eingeben',
+  'field.project.selected': 'Ausgewählte Projekte',
+  'field.project.existing': 'Vorhandene Projekte',
+  'field.project.add': 'Hinzufügen',
+  'field.project.help': 'Mehrfachauswahl oder ein neues Projekt-Tag erstellen.',
+  'field.project.target': 'In welches Projekt übernehmen?',
+  'field.project.target.placeholder': 'Ein Projekt auswählen',
+  'project.suggestion': 'Vorschlag · {project}',
+  'project.suggestion.detail': 'Lokaler Treffer: {terms}. Vor dem Ablegen bestätigen.',
   'field.article': 'Veröffentlichter Artikel',
   'field.article.placeholder': 'Artikelpfad oder öffentliche URL',
   'preset.commit.verify': 'Prüfen, ob „{title}“ weiterverfolgt werden soll',

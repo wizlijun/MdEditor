@@ -70,4 +70,21 @@ describe('Next event document', () => {
     expect(markdown).toContain('- outcome: done · delivery: article')
     expect(markdown).toContain('- result: writing/article.md')
   })
+
+  it('shows every confirmed project tag in the readable mirror', () => {
+    const markdown = serializeLedger({
+      ...newLedger(['inbox/ideas']),
+      events: [{
+        at: '2026-08-31T12:00:00Z',
+        event_id: 'e-projects',
+        idea_id: 'i-projects',
+        action: 'park',
+        source: { path: 'inbox/ideas/a-idea.md' },
+        wake_trigger: 'later',
+        projects: ['Next', 'Writing'],
+        project: 'Next',
+      }],
+    })
+    expect(markdown).toContain('- projects: Next · Writing')
+  })
 })

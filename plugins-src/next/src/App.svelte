@@ -6,6 +6,7 @@
   import RelinkSheet from './components/RelinkSheet.svelte'
   import { bridge, toast } from './lib/bridge'
   import type { PlaceInput } from './lib/events'
+  import { projectTagsOf } from './lib/model'
   import { itemSearchText, type WorkspaceItem } from './lib/repository'
   import type { IdeaSource } from './lib/source'
   import {
@@ -39,6 +40,7 @@
   let selectedProject = $state('')
   let placing = $state<WorkspaceItem | null>(null)
   let placementRoute = $state<Route | undefined>()
+  let placementProjects = $state<string[]>([])
   let relinking = $state<WorkspaceItem | null>(null)
   let dragging = $state<WorkspaceItem | null>(null)
   let dragOver = $state<Lane | null>(null)
@@ -85,7 +87,7 @@
   function matchesProject(item: WorkspaceItem): boolean {
     if (!activeProject) return true
     const projection = item.projection
-    if (projection?.project === activeProject) return true
+    if (projectTagsOf(projection).includes(activeProject)) return true
     return projection?.state === 'closed'
       && projection.exit.kind === 'transferred'
       && projection.exit.via === 'project'
@@ -140,10 +142,11 @@
     creating = true
   }
 
-  function openPlacement(item: WorkspaceItem, route?: Route) {
+  function openPlacement(item: WorkspaceItem, route?: Route, initialProjects: readonly string[] = []) {
     closePreview()
     placing = item
     placementRoute = route
+    placementProjects = [...initialProjects]
   }
 
   function openRelink(item: WorkspaceItem) {
@@ -166,6 +169,7 @@
   function closePlacement() {
     placing = null
     placementRoute = undefined
+    placementProjects = []
   }
 
   async function submitPlacement(input: PlaceInput) {
@@ -488,6 +492,7 @@
                 onOpen={doOpen}
                 onReopen={doReopen}
                 onRelink={openRelink}
+                onSuggestProject={(value, project) => openPlacement(value, undefined, [project])}
                 onPreviewStart={previewStart}
                 onPreviewEnd={previewEnd}
               />
@@ -534,6 +539,7 @@
                       onOpen={doOpen}
                       onReopen={doReopen}
                       onRelink={openRelink}
+                      onSuggestProject={(value, project) => openPlacement(value, undefined, [project])}
                       onDragStart={dragStart}
                       onPreviewStart={previewStart}
                       onPreviewEnd={previewEnd}
@@ -573,6 +579,7 @@
     item={placing}
     saving={store.saving}
     initialRoute={placementRoute}
+    initialProjects={placementProjects}
     projectOptions={workspace?.projectOptions ?? []}
     onCancel={closePlacement}
     onSubmit={submitPlacement}

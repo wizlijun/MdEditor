@@ -85,6 +85,8 @@ describe('validateEvent', () => {
     expect(validateEvent({ ...commit('e1', 'i1', 'a-idea.md'), project: 'Next' }).ok).toBe(true)
     expect(validateEvent({ ...commit('e2', 'i2', 'b-idea.md'), project: null }).ok).toBe(true)
     expect(validateEvent({ ...commit('e3', 'i3', 'c-idea.md'), project: { legacy: true } }).ok).toBe(true)
+    expect(validateEvent({ ...commit('e4', 'i4', 'd-idea.md'), projects: ['Next', 'Writing'] }).ok).toBe(true)
+    expect(validateEvent({ ...commit('e5', 'i5', 'e-idea.md'), projects: { legacy: true } }).ok).toBe(true)
   })
 
   it('accepts an unknown action as an unsupported envelope and preserves extra fields', () => {
@@ -123,6 +125,30 @@ describe('reduceEvents', () => {
       { at, event_id: 'e2', idea_id: 'idea-1', action: 'wait', waiting_for: 'review', review_at: '2026-09-02' },
     ])
     expect(result.ideas.get('idea-1')).toMatchObject({ state: 'waiting', project: 'Next' })
+  })
+
+  it('uses multi-project tags as the canonical set while retaining the legacy primary tag', () => {
+    const result = reduceEvents([
+      { ...commit('e1', 'idea-1', 'inbox/ideas/a-idea.md'), projects: ['Next', 'Writing'], project: 'Next' },
+      { at, event_id: 'e2', idea_id: 'idea-1', action: 'wait', waiting_for: 'review', review_at: '2026-09-02' },
+      { at, event_id: 'e3', idea_id: 'idea-1', action: 'park', wake_trigger: 'later', projects: ['Research', 'Next'], project: 'Research' },
+    ])
+    expect(result.ideas.get('idea-1')).toMatchObject({ state: 'dormant', projects: ['Research', 'Next'], project: 'Research' })
+  })
+
+  it('falls back to legacy project changes and explicitly clears the full tag set', () => {
+    const changed = reduceEvents([
+      { ...commit('e1', 'idea-1', 'inbox/ideas/a-idea.md'), projects: ['Next', 'Writing'], project: 'Next' },
+      { at, event_id: 'e2', idea_id: 'idea-1', action: 'wait', waiting_for: 'review', review_at: '2026-09-02', project: 'Legacy' },
+    ])
+    expect(changed.ideas.get('idea-1')).toMatchObject({ projects: ['Legacy'], project: 'Legacy' })
+
+    const cleared = reduceEvents([
+      { ...commit('e1', 'idea-1', 'inbox/ideas/a-idea.md'), projects: ['Next', 'Writing'], project: 'Next' },
+      { at, event_id: 'e2', idea_id: 'idea-1', action: 'wait', waiting_for: 'review', review_at: '2026-09-02', projects: null, project: null },
+    ])
+    expect(cleared.ideas.get('idea-1')).not.toHaveProperty('projects')
+    expect(cleared.ideas.get('idea-1')).not.toHaveProperty('project')
   })
 
   it('clears a project marker on relink and ignores an unowned legacy project shape', () => {
@@ -333,6 +359,10 @@ describe('validateAppend', () => {
 
   it.each([
     [{ ...commit('writer-project', 'writer-1', 'inbox/ideas/writer-1-idea.md'), project: '   ' }, 'project'],
+    [{ ...commit('writer-projects-empty', 'writer-4', 'inbox/ideas/writer-4-idea.md'), projects: [] }, 'projects'],
+    [{ ...commit('writer-projects-blank', 'writer-5', 'inbox/ideas/writer-5-idea.md'), projects: ['Next', ' '] }, 'projects'],
+    [{ ...commit('writer-projects-duplicate', 'writer-6', 'inbox/ideas/writer-6-idea.md'), projects: ['Next', 'next'] }, 'projects'],
+    [{ ...commit('writer-projects-shadow', 'writer-7', 'inbox/ideas/writer-7-idea.md'), projects: ['Next', 'Writing'], project: 'Writing' }, 'project'],
     [{
       at,
       event_id: 'writer-article',
@@ -378,6 +408,18 @@ describe('validateAppend', () => {
       ok: false,
       issues: [expect.objectContaining({ code: 'event_id_conflict' })],
     })
+  })
+
+  it('treats a different project-tag order as a conflicting payload', () => {
+    const exact = {
+      ...commit('projects-order', 'order-idea', 'inbox/ideas/order-idea.md'),
+      projects: ['Next', 'Writing'],
+      project: 'Next',
+    }
+    const projection = reduceEvents([exact])
+    expect(validateAppend(projection, exact)).toMatchObject({ ok: true, idempotent: true })
+    expect(validateAppend(projection, { ...exact, projects: ['Writing', 'Next'], project: 'Writing' }))
+      .toEqual({ ok: false, issues: [expect.objectContaining({ code: 'event_id_conflict' })] })
   })
 
   it('allows an exact replay even when another event has made the ledger read-only', () => {

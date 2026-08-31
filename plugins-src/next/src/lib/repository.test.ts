@@ -148,14 +148,37 @@ describe('Next repository', () => {
     const ids = ['e1', 'i1', 'e2', 'i2']
     const eventFactory = { now: () => ids[0] === 'e1' ? '2026-08-29T02:00:00Z' : '2026-08-29T03:00:00Z', id: () => ids.shift()! }
     workspace = await appendEvent(workspace, placeEvent(older, {
-      route: 'park', wake_trigger: 'later', project: 'Writing',
+      route: 'park', wake_trigger: 'later', projects: ['Writing', 'Shared'],
     }, eventFactory), {}, vault)
     workspace = await appendEvent(workspace, placeEvent(newer, {
       route: 'park', wake_trigger: 'later', project: 'Next',
     }, eventFactory), {}, vault)
 
-    expect(workspace.projectOptions).toEqual(['Next', 'Writing'])
+    expect(workspace.projectOptions).toEqual(['Next', 'Writing', 'Shared'])
     expect(itemSearchText(workspace.dormant[0])).toContain('next')
+  })
+
+  it('derives a non-persistent Inbox project suggestion from confirmed local examples', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/ideas/a-idea.md', '---\ntype: Idea\ncreated: 2026-08-29T01:00:00Z\n---\n# 念头泳道\n\n处理念头、泳道和关闭出口。')
+    vault.files.set('inbox/ideas/b-idea.md', '---\ntype: Idea\ncreated: 2026-08-29T01:01:00Z\n---\n# 新的念头安放\n\n继续改进泳道与关闭出口。')
+    let workspace = await loadWorkspace(vault)
+    expect(workspace.capture.every((item) => item.suggestedProject === undefined)).toBe(true)
+    const historical = workspace.capture.find((item) => item.path?.endsWith('a-idea.md'))!
+    const ids = ['e-project', 'i-project']
+    workspace = await appendEvent(workspace, placeEvent(historical, {
+      route: 'park',
+      wake_trigger: 'later',
+      projects: ['Next'],
+    }, {
+      now: () => '2026-08-29T02:00:00Z',
+      id: () => ids.shift()!,
+    }), {}, vault)
+
+    expect(workspace.projectOptions).toEqual(['Next'])
+    expect(workspace.capture).toHaveLength(1)
+    expect(workspace.capture[0].suggestedProject).toMatchObject({ project: 'Next', reason: 'content' })
+    expect(workspace.ledger.events).toHaveLength(1)
   })
 
   it('keeps idea and proof bytes unchanged across all six lifecycle actions', async () => {

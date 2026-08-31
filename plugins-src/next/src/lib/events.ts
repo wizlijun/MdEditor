@@ -7,10 +7,15 @@ import type {
   SettlementExit,
   WaitEvent,
 } from './model'
+import { uniqueProjectTags } from './model'
 import { sourceRefOf, type WorkspaceItem } from './repository'
 import type { IdeaSource } from './source'
 
-type ProjectChange = { project?: string | null }
+type ProjectChange = {
+  projects?: string[] | null
+  /** Deprecated input accepted for callers before 1.4. */
+  project?: string | null
+}
 
 export type PlaceInput = (
   | { route: 'commit'; commitment: string; next_action: string; close_condition: string }
@@ -43,10 +48,18 @@ function clean(value: string | undefined): string | undefined {
   return result ? result : undefined
 }
 
-function projectChange(value: string | null | undefined): { project?: string | null } {
-  if (value === null) return { project: null }
-  const project = clean(value)
-  return project ? { project } : {}
+function normalizedProjects(values: readonly string[]): string[] {
+  return uniqueProjectTags(values)
+}
+
+function projectChange(input: ProjectChange): { projects?: string[] | null; project?: string | null } {
+  if (input.projects === null || (input.projects === undefined && input.project === null)) {
+    return { projects: null, project: null }
+  }
+  const projects = input.projects === undefined
+    ? typeof input.project === 'string' ? normalizedProjects([input.project]) : []
+    : normalizedProjects(input.projects)
+  return projects.length ? { projects, project: projects[0] } : {}
 }
 
 function envelope(item: WorkspaceItem, factory: EventFactory) {
@@ -65,7 +78,7 @@ export function placeEvent(
   input: PlaceInput,
   factory: EventFactory = defaultEventFactory,
 ): NextEvent {
-  const base = { ...envelope(item, factory), ...projectChange(input.project) }
+  const base = { ...envelope(item, factory), ...projectChange(input) }
   switch (input.route) {
     case 'commit': {
       const event: CommitEvent = {
@@ -101,8 +114,8 @@ export function placeEvent(
       const target = clean(input.target)
         ?? (input.exit.kind === 'transferred'
           && input.exit.via === 'project'
-          && typeof base.project === 'string'
-          ? base.project
+          && base.projects?.length === 1
+          ? base.projects[0]
           : undefined)
       const result = clean(input.result)
       const event: SettleEvent = {
