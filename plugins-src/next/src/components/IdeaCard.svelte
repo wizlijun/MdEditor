@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { WorkspaceItem } from '../lib/repository'
+  import { projectTagsOf } from '../lib/model'
   import { t, type MessageKey } from '../lib/strings'
 
   let {
@@ -13,6 +14,7 @@
     onOpen,
     onReopen,
     onRelink,
+    onSuggestProject,
     onDragStart,
     onPreviewStart,
     onPreviewEnd,
@@ -27,6 +29,7 @@
     onOpen(item: WorkspaceItem): void
     onReopen(item: WorkspaceItem): void
     onRelink(item: WorkspaceItem): void
+    onSuggestProject?(item: WorkspaceItem, project: string): void
     onDragStart?(item: WorkspaceItem, event: PointerEvent): void
     onPreviewStart?(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus', tipId: string): void
     onPreviewEnd?(trigger: 'pointer' | 'focus'): void
@@ -37,6 +40,7 @@
   const domToken = $derived(encodeURIComponent(item.key))
   const titleId = $derived(`idea-card-title-${domToken}`)
   const tipId = $derived(`idea-preview-${domToken}`)
+  const projects = $derived(projectTagsOf(item.projection))
   const detail = $derived.by(() => {
     const projection = item.projection
     if (!projection) return ''
@@ -85,7 +89,20 @@
     <div class="title-line">
       <h3 id={titleId}>{item.title}</h3>
       <span class="state">{t(statusKey)}</span>
-      {#if item.projection?.project}<span class="badge project">{item.projection.project}</span>{/if}
+      {#each projects.slice(0, 2) as project}
+        <span class="badge project" title={projects.join(', ')}>{project}</span>
+      {/each}
+      {#if projects.length > 2}<span class="badge project" title={projects.join(', ')}>+{projects.length - 2}</span>{/if}
+      {#if item.suggestedProject && onSuggestProject}
+        <button
+          type="button"
+          class="badge project-suggestion"
+          data-project-suggestion={item.suggestedProject.project}
+          title={t('project.suggestion.detail', { terms: item.suggestedProject.matchedTerms.join(' · ') })}
+          disabled={disabled}
+          onclick={() => onSuggestProject?.(item, item.suggestedProject!.project)}
+        >{t('project.suggestion', { project: item.suggestedProject.project })}</button>
+      {/if}
       {#if item.proofed}<span class="badge proof">{t('badge.proofed')}</span>{/if}
       {#if item.orphan}<span class="badge warning">{t('badge.orphan')}</span>{/if}
       {#if item.state === 'unsupported'}<span class="badge warning">{t('badge.unsupported')}</span>{/if}
@@ -135,6 +152,8 @@
   .state { background: var(--chip); color: var(--muted-strong); }
   .badge.proof { background: var(--proof-bg); color: var(--proof-fg); }
   .badge.project { background: var(--accent-soft); color: var(--accent); }
+  .project-suggestion { border: 1px dashed var(--accent); background: transparent; color: var(--accent); cursor: pointer; }
+  .project-suggestion:hover:not(:disabled) { background: var(--accent-soft); }
   .badge.warning { background: var(--warn-bg); color: var(--warn-fg); }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; }
   button { font: inherit; cursor: pointer; }

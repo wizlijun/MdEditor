@@ -70,6 +70,7 @@ function workspace(): NextWorkspace {
       state: 'wip',
       last_event_id: 'e-wip',
       last_at: '2026-08-30T00:00:00Z',
+      projects: ['Next', 'Research', 'Product'],
       project: 'Next',
       commitment: '验证项目标记',
       next_action: '运行测试',
@@ -145,11 +146,33 @@ function pointerDrag(itemKey: string, lane: string, pointerId = 1): void {
 }
 
 describe('Next window', () => {
-  it('shows the current project marker on its card', () => {
+  it('shows multiple project tags compactly on its card', () => {
     mocks.state.workspace = workspace()
     component = mount(App, { target: document.body })
     flushSync()
-    expect(document.querySelector('[data-item-key="wip"] .badge.project')?.textContent).toBe('Next')
+    expect([...document.querySelectorAll('[data-item-key="wip"] .badge.project')].map((badge) => badge.textContent))
+      .toEqual(['Next', 'Research', '+1'])
+  })
+
+  it('shows a local Inbox project suggestion and requires a click before selecting it', () => {
+    const next = workspace()
+    next.capture[0].suggestedProject = {
+      project: 'Next',
+      reason: 'content',
+      score: 4,
+      matchedTerms: ['念头', '泳道'],
+      candidatesScored: 1,
+    }
+    next.projectOptions = ['Next']
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    expect(document.querySelector('[data-project-tag="Next"]')).toBeNull()
+    document.querySelector<HTMLButtonElement>('[data-project-suggestion="Next"]')!.click()
+    flushSync()
+    expect(document.querySelector('[role="dialog"] [data-project-tag="Next"]')).toBeTruthy()
+    expect(mocks.place).not.toHaveBeenCalled()
   })
 
   it('previews the complete Idea body in a viewport tip on hover and keyboard focus', () => {

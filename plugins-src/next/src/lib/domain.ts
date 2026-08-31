@@ -2,6 +2,7 @@ import {
   DEFAULT_WAITING_WARNING,
   DEFAULT_WIP_LIMIT,
   NEXT_ACTIONS,
+  projectTagKey,
   type AppendOptions,
   type AppendValidation,
   type DomainIssue,
@@ -33,6 +34,14 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function isNonBlankString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+function readableProjects(value: unknown): string[] | null | undefined {
+  if (value === null) return null
+  if (!Array.isArray(value) || value.length === 0) return undefined
+  const projects = value.map((project) => typeof project === 'string' ? project.trim() : '')
+  if (projects.some((project) => !project) || new Set(projects.map(projectTagKey)).size !== projects.length) return undefined
+  return projects
 }
 
 function isDateLike(value: string): boolean {
@@ -252,13 +261,18 @@ function markUnsupported(
   const lastKnownState = current?.state === 'unsupported'
     ? current.last_known_state
     : current?.state
+  const currentProjects = current?.projects?.length
+    ? [...current.projects]
+    : current?.project
+      ? [current.project]
+      : []
   const unsupported: UnsupportedIdea = {
     idea_id: ideaId,
     state: 'unsupported',
     last_event_id: eventId,
     last_at: at,
     unsupported_actions: actions,
-    ...(current?.project ? { project: current.project } : {}),
+    ...(currentProjects.length ? { projects: currentProjects, project: currentProjects[0] } : {}),
     ...(current?.source ? { source: current.source } : source ? { source } : {}),
     ...(lastKnownState ? { last_known_state: lastKnownState } : {}),
   }
@@ -362,11 +376,20 @@ function canTransition(from: IdeaState | undefined, action: NextAction): boolean
 function applyKnownEvent(state: MutableProjection, event: NextEvent, index: number): void {
   const current = state.ideas.get(event.idea_id)
   const source = event.source ?? current?.source
-  const project = event.project === null
+  const eventProjects = readableProjects(event.projects)
+  const projects = eventProjects === null
     ? undefined
-    : isNonBlankString(event.project)
-      ? event.project
-      : current?.project
+    : eventProjects
+      ? eventProjects
+      : event.project === null
+        ? undefined
+        : isNonBlankString(event.project)
+          ? [event.project.trim()]
+          : current?.projects
+            ? [...current.projects]
+            : current?.project
+              ? [current.project]
+              : undefined
 
   if (!current && !event.source) {
     addIssue(state, {
@@ -419,7 +442,7 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
     last_event_id: event.event_id,
     last_at: event.at,
     ...(source ? { source } : {}),
-    ...(project ? { project } : {}),
+    ...(projects?.length ? { projects, project: projects[0] } : {}),
   }
   switch (event.action) {
     case 'commit':
@@ -462,7 +485,7 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
       break
     case 'relink':
       {
-        const { project: _currentProject, ...currentWithoutProject } = current!
+        const { project: _currentProject, projects: _currentProjects, ...currentWithoutProject } = current!
         state.ideas.set(event.idea_id, { ...currentWithoutProject, ...base, source: event.source })
       }
       break
@@ -625,6 +648,24 @@ function writerExtensionErrors(value: unknown): FieldValidationError[] {
   const errors: FieldValidationError[] = []
   if (value.project !== undefined && value.project !== null && !isNonBlankString(value.project)) {
     errors.push({ field: 'project', message: 'must be a non-blank string or null when present' })
+  }
+  if (value.projects !== undefined) {
+    if (value.projects === null) {
+      if (value.project !== null) errors.push({ field: 'project', message: 'must be null when projects is null' })
+    } else if (!Array.isArray(value.projects) || value.projects.length === 0) {
+      errors.push({ field: 'projects', message: 'must be a non-empty string array or null when present' })
+    } else {
+      const projects = value.projects
+      const normalized = projects.map((project) => typeof project === 'string' ? project.trim() : '')
+      if (normalized.some((project, index) => !project || project !== projects[index])) {
+        errors.push({ field: 'projects', message: 'must contain trimmed non-blank strings' })
+      } else if (new Set(normalized.map(projectTagKey)).size !== normalized.length) {
+        errors.push({ field: 'projects', message: 'must not contain duplicates' })
+      }
+      if (value.project !== normalized[0]) {
+        errors.push({ field: 'project', message: 'must mirror the first projects entry' })
+      }
+    }
   }
   if (value.action !== 'settle' || !isRecord(value.exit) || value.exit.kind !== 'done') return errors
   if (value.exit.delivery === undefined) return errors
