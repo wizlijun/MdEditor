@@ -216,9 +216,17 @@ export const zh: Record<keyof Messages, string> = {
 
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': '插件市场',
+  'pluginMarket.subtitle': '按你想完成的事情浏览，为 note.md 加上新的能力。',
   'pluginMarket.refresh': '刷新',
+  'pluginMarket.pluginsUnit': '个插件',
+  'pluginMarket.loadingCatalog': '正在查找更多插件…',
   'pluginMarket.installedHeading': '已安装',
   'pluginMarket.availableHeading': '可安装',
+  'pluginMarket.enabled': '已启用',
+  'pluginMarket.disabled': '已停用',
+  'pluginMarket.updateAvailable': '可更新',
+  'pluginMarket.onDevice': '已安装在这台设备上，联网后可载入详细信息。',
+  'pluginMarket.localStateError': '无法刷新已安装插件：{error}',
   'pluginMarket.noneInstalled': '尚未安装任何插件。',
   'pluginMarket.noneAvailable': '没有更多可安装的插件。',
   'pluginMarket.install': '安装',

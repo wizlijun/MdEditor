@@ -7,6 +7,11 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **The Plugin Market is now organized as a spacious catalog instead of two dense lists.** Each capability category has one distinct section containing both installed and available plugins, with responsive cards that make descriptions, versions, enabled state, available updates and actions easy to scan.
+- **Installed plugins appear before the network catalog finishes loading.** The market restores a small local snapshot first, reconciles it with the plugins on this device, then adds the full catalog and update state when the registry responds. Going offline no longer makes installed plugins disappear.
+
 ## v6.829.2 — 2026-08-29
 
 ### Changed

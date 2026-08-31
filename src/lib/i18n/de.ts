@@ -214,9 +214,17 @@ export const de: Record<keyof Messages, string> = {
 
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'Plugin-Markt',
+  'pluginMarket.subtitle': 'Nach Aufgaben entdecken und note.md passend erweitern.',
   'pluginMarket.refresh': 'Aktualisieren',
+  'pluginMarket.pluginsUnit': 'Plugins',
+  'pluginMarket.loadingCatalog': 'Weitere Plugins werden gesucht…',
   'pluginMarket.installedHeading': 'Installiert',
   'pluginMarket.availableHeading': 'Verfügbar',
+  'pluginMarket.enabled': 'Aktiviert',
+  'pluginMarket.disabled': 'Deaktiviert',
+  'pluginMarket.updateAvailable': 'Update verfügbar',
+  'pluginMarket.onDevice': 'Auf diesem Gerät installiert. Verbinden Sie sich, um Details zu laden.',
+  'pluginMarket.localStateError': 'Installierte Plugins konnten nicht aktualisiert werden: {error}',
   'pluginMarket.noneInstalled': 'Keine Plugins installiert.',
   'pluginMarket.noneAvailable': 'Keine weiteren Plugins verfügbar.',
   'pluginMarket.install': 'Installieren',

@@ -221,9 +221,17 @@ export const en = {
 
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'Plugin Market',
+  'pluginMarket.subtitle': 'Browse by what you want to do, and make note.md your own.',
   'pluginMarket.refresh': 'Refresh',
+  'pluginMarket.pluginsUnit': 'plugins',
+  'pluginMarket.loadingCatalog': 'Checking for more plugins…',
   'pluginMarket.installedHeading': 'Installed',
   'pluginMarket.availableHeading': 'Available',
+  'pluginMarket.enabled': 'Enabled',
+  'pluginMarket.disabled': 'Disabled',
+  'pluginMarket.updateAvailable': 'Update available',
+  'pluginMarket.onDevice': 'Installed on this device. Connect to the market to load details.',
+  'pluginMarket.localStateError': 'Could not refresh installed plugins: {error}',
   'pluginMarket.noneInstalled': 'No plugins installed.',
   'pluginMarket.noneAvailable': 'No additional plugins available.',
   'pluginMarket.install': 'Install',
