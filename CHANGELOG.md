@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.831.1 — 2026-08-31
+
 ### Changed
 
 - **The Plugin Market is now organized as a spacious catalog instead of two dense lists.** Each capability category has one distinct section containing both installed and available plugins, with responsive cards that make descriptions, versions, enabled state, available updates and actions easy to scan.
