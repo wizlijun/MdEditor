@@ -8,18 +8,21 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { t } from '../../lib/i18n/store.svelte'
-  import { capabilityLabel, isSensitiveCapability } from '../../lib/market/types'
+  import { i18n, t } from '../../lib/i18n/store.svelte'
+  import { localizedPluginDescription, localizedPluginName } from '../../lib/market/plugin-text'
+  import { capabilityLabel, isSensitiveCapability, type PluginMarketI18n } from '../../lib/market/types'
 
   interface Props {
     id: string
     version: string
     name: string
+    description?: string | null
+    i18n?: PluginMarketI18n | null
     /** Resolves after a successful install so the parent can re-fetch lists. */
     onInstalled: () => void
     onClose: () => void
   }
-  let { id, version, name, onInstalled, onClose }: Props = $props()
+  let { id, version, name, description, i18n: registryI18n, onInstalled, onClose }: Props = $props()
 
   // Preview manifest returned by plugin_market_preview (verified, not installed).
   interface PreviewManifest {
@@ -27,6 +30,7 @@
     name: string
     version: string
     description?: string | null
+    i18n?: PluginMarketI18n | null
     capabilities?: string[]
   }
 
@@ -34,6 +38,14 @@
   let installing = $state(false)
   let error = $state<string | null>(null)
   let manifest = $state<PreviewManifest | null>(null)
+  let textSource = $derived({
+    id,
+    name: name || manifest?.name,
+    description: description ?? manifest?.description,
+    i18n: registryI18n ?? manifest?.i18n,
+  })
+  let displayName = $derived(localizedPluginName(textSource, i18n.locale))
+  let displayDescription = $derived(localizedPluginDescription(textSource, i18n.locale))
 
   // Live download progress for THIS plugin, pushed by the host as bytes land
   // (`plugin-download-progress`). A multi-megabyte package over a slow link
@@ -113,7 +125,7 @@
 <div class="overlay" role="presentation" onclick={() => !installing && onClose()}
      onkeydown={(e) => e.key === 'Escape' && !installing && onClose()}>
   <div class="modal" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
-    <h2>{t('pluginMarket.consent.title', { name: manifest?.name ?? name })}</h2>
+    <h2>{t('pluginMarket.consent.title', { name: displayName })}</h2>
     <p class="ver">{id} · {version}</p>
 
     {#if loading}
@@ -131,8 +143,8 @@
     {:else if error}
       <p class="msg error">{error}</p>
     {:else}
-      {#if manifest?.description}
-        <p class="desc">{manifest.description}</p>
+      {#if displayDescription}
+        <p class="desc">{displayDescription}</p>
       {/if}
       <p class="intro">{t('pluginMarket.consent.intro')}</p>
       {#if caps.length === 0}

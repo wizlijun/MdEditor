@@ -80,18 +80,21 @@
   "i18n": {
     "zh": {
       "name": "Roam Research 导入",
+      "description": "将 Roam Research 的 JSON 导出文件导入知识库，转换为 `.note.md` 大纲页面和每日笔记。",
       "menus": {
         "open": "从 Roam Research 导入…"
       }
     },
     "ja": {
       "name": "Roam Research インポート",
+      "description": "Roam Research の JSON エクスポートを Vault に取り込み、`.note.md` 形式のアウトラインページとデイリーノートへ変換します。",
       "menus": {
         "open": "Roam Research からインポート…"
       }
     },
     "de": {
       "name": "Roam-Research-Import",
+      "description": "Einen JSON-Export aus Roam Research ins Vault importieren und in Gliederungsseiten sowie tägliche Notizen im `.note.md`-Format umwandeln.",
       "menus": {
         "open": "Aus Roam Research importieren…"
       }

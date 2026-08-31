@@ -30,7 +30,7 @@
   import { getVersion } from '@tauri-apps/api/app'
   import { confirm } from '@tauri-apps/plugin-dialog'
   import { loadSettings } from './lib/settings.svelte'
-  import { loadLocale, watchLocaleChanges, t } from './lib/i18n/store.svelte'
+  import { i18n, loadLocale, watchLocaleChanges, t } from './lib/i18n/store.svelte'
   import { pushToast } from './lib/toast.svelte'
   import {
     capabilityLabel,
@@ -42,6 +42,7 @@
   } from './lib/market/types'
   import { pickAvailable, pickUpdateTo } from './lib/market/select'
   import { readInstalledCache, writeInstalledCache } from './lib/market/cache'
+  import { localizedPluginDescription, localizedPluginName } from './lib/market/plugin-text'
   import {
     groupPluginsByCategory,
     pluginCategoryLabelKey,
@@ -102,7 +103,13 @@
   let marketGroups = $derived(groupPluginsByCategory(marketItems))
 
   // Consent modal target (null = closed).
-  let consent = $state<{ id: string; version: string; name: string } | null>(null)
+  let consent = $state<{
+    id: string
+    version: string
+    name: string
+    description?: string | null
+    i18n?: RegistryEntry['i18n']
+  } | null>(null)
 
   onMount(() => {
     let unlisten: (() => void) | null = null
@@ -170,15 +177,22 @@
     entries: RegistryEntry[],
     persist: boolean,
   ) {
+    const previousById = new Map(installedState.map((plugin) => [plugin.id, plugin]))
     const listings = new Map(
       pickAvailable(entries, new Set<string>(), hostVersion).map((entry) => [entry.id, entry]),
     )
     installedState = v2.map((plugin) => {
       const listing = listings.get(plugin.id)
+      const previous = previousById.get(plugin.id)
       return {
         ...plugin,
-        name: plugin.name ?? listing?.name ?? plugin.id,
-        category: plugin.category ?? listing?.category,
+        name: plugin.name ?? listing?.name ?? previous?.name ?? plugin.id,
+        description: plugin.description ?? listing?.description ?? previous?.description,
+        i18n: mergePluginI18n(
+          mergePluginI18n(previous?.i18n, listing?.i18n),
+          plugin.i18n,
+        ),
+        category: plugin.category ?? listing?.category ?? previous?.category,
       }
     })
 
@@ -191,6 +205,8 @@
         kind: 'v2',
         id: p.id,
         name: p.name ?? p.id,
+        description: p.description,
+        i18n: p.i18n,
         category: p.category,
         version: p.version,
         enabled: p.enabled,
@@ -198,7 +214,7 @@
         updateTo: pickUpdateTo(entries, p.id, p.version, hostVersion),
       })
     }
-    installedRows = rows.sort((a, b) => a.name.localeCompare(b.name))
+    installedRows = rows.sort((a, b) => a.id.localeCompare(b.id))
     const installedIds = new Set(installedState.map((row) => row.id))
     available = available.filter((entry) => !installedIds.has(entry.id))
     if (persist) writeInstalledCache(installedState)
@@ -233,8 +249,8 @@
     }
   }
 
-  async function uninstall(row: InstalledRow) {
-    const ok = await confirm(t('pluginMarket.uninstallConfirm', { name: row.name }), {
+  async function uninstall(row: InstalledRow, displayName: string) {
+    const ok = await confirm(t('pluginMarket.uninstallConfirm', { name: displayName }), {
       title: t('pluginMarket.windowTitle'),
       kind: 'warning',
     })
@@ -242,7 +258,7 @@
     setBusy(row.id, true)
     try {
       await invoke('plugin_market_uninstall', { id: row.id, keepData: false })
-      pushToast({ level: 'success', message: t('pluginMarket.uninstalled', { name: row.name }) })
+      pushToast({ level: 'success', message: t('pluginMarket.uninstalled', { name: displayName }) })
       await refresh()
     } catch (e) {
       pushToast({ level: 'error', message: friendlyError(String(e)) })
@@ -254,19 +270,31 @@
   // Update = install the newer version over the current (install commits the
   // new version + reconciles). Runs through the consent modal, same as a fresh
   // install, so the user re-consents to the new version's capabilities.
-  function update(row: InstalledRow) {
-    if (!row.updateTo) return
-    consent = { id: row.id, version: row.updateTo, name: row.name }
+  function update(item: InstalledMarketItem) {
+    if (!item.row.updateTo) return
+    consent = {
+      id: item.id,
+      version: item.row.updateTo,
+      name: item.listing?.name ?? item.row.name,
+      description: item.listing?.description ?? item.row.description,
+      i18n: mergePluginI18n(item.listing?.i18n, item.row.i18n),
+    }
   }
 
   // ── Available actions ──────────────────────────────────────────────────────
 
   function beginInstall(entry: RegistryEntry) {
-    consent = { id: entry.id, version: entry.version, name: entry.name }
+    consent = {
+      id: entry.id,
+      version: entry.version,
+      name: entry.name,
+      description: entry.description,
+      i18n: entry.i18n,
+    }
   }
 
   function onInstalled() {
-    const name = consent?.name ?? ''
+    const name = consent ? localizedPluginName(consent, i18n.locale) : ''
     consent = null
     pushToast({ level: 'success', message: t('pluginMarket.installed', { name }) })
     void refresh()
@@ -287,6 +315,42 @@
 
   function monogram(name: string): string {
     return Array.from(name.trim())[0]?.toLocaleUpperCase() ?? 'P'
+  }
+
+  function mergePluginI18n(
+    fallback: RegistryEntry['i18n'],
+    primary: InstalledV2['i18n'],
+  ): InstalledV2['i18n'] {
+    if (!fallback) return primary
+    if (!primary) return fallback
+    const merged = { ...fallback }
+    for (const [locale, catalog] of Object.entries(primary)) {
+      merged[locale] = { ...fallback[locale], ...catalog }
+    }
+    return merged
+  }
+
+  function installedTextSource(item: InstalledMarketItem) {
+    return {
+      id: item.id,
+      name: item.row.name,
+      description: item.row.description,
+      i18n: mergePluginI18n(item.listing?.i18n, item.row.i18n),
+    }
+  }
+
+  function itemName(item: MarketItem): string {
+    return localizedPluginName(
+      item.kind === 'installed' ? installedTextSource(item) : item.entry,
+      i18n.locale,
+    )
+  }
+
+  function itemDescription(item: MarketItem): string | null {
+    return localizedPluginDescription(
+      item.kind === 'installed' ? installedTextSource(item) : item.entry,
+      i18n.locale,
+    )
   }
 </script>
 
@@ -352,16 +416,24 @@
 
               <div class="plugin-grid">
                 {#each group.items as item (item.id)}
-                  <article class="plugin-card" class:installed-card={item.kind === 'installed'}>
+                  {@const displayName = itemName(item)}
+                  {@const displayDescription = itemDescription(item)}
+                  <article
+                    class="plugin-card"
+                    class:installed-card={item.kind === 'installed'}
+                    class:update-card={item.kind === 'installed' && !!item.row.updateTo}
+                  >
                     {#if item.kind === 'installed'}
                       <div class="card-heading">
-                        <span class="plugin-mark" aria-hidden="true">{monogram(item.row.name)}</span>
+                        <span class="plugin-mark" aria-hidden="true">{monogram(displayName)}</span>
                         <div class="plugin-title">
-                          <h3>{item.row.name}</h3>
+                          <h3>{displayName}</h3>
                           <span class="version">v{item.row.version}</span>
                         </div>
                         {#if item.row.updateTo}
-                          <span class="status update-status">{t('pluginMarket.updateAvailable')}</span>
+                          <span class="status update-status">
+                            {t('pluginMarket.updateAvailable')} · v{item.row.updateTo}
+                          </span>
                         {:else}
                           <span class="status" class:enabled={item.row.enabled}>
                             {item.row.enabled ? t('pluginMarket.enabled') : t('pluginMarket.disabled')}
@@ -369,7 +441,7 @@
                         {/if}
                       </div>
 
-                      <p class="desc">{item.listing?.description ?? t('pluginMarket.onDevice')}</p>
+                      <p class="desc">{displayDescription ?? t('pluginMarket.onDevice')}</p>
 
                       {#if item.row.capabilities.length > 0}
                         <div class="caps">
@@ -388,26 +460,27 @@
                         </label>
                         <div class="actions">
                           {#if item.row.updateTo}
-                            <button class="mini primary" disabled={busy[item.row.id]} onclick={() => update(item.row)}>
+                            <button class="mini primary update-action" disabled={busy[item.row.id]}
+                              onclick={() => update(item)}>
                               {t('pluginMarket.update', { version: item.row.updateTo })}
                             </button>
                           {/if}
-                          <button class="mini quiet danger" disabled={busy[item.row.id]} onclick={() => uninstall(item.row)}>
+                          <button class="mini quiet danger" disabled={busy[item.row.id]} onclick={() => uninstall(item.row, displayName)}>
                             {t('pluginMarket.uninstall')}
                           </button>
                         </div>
                       </footer>
                     {:else}
                       <div class="card-heading">
-                        <span class="plugin-mark" aria-hidden="true">{monogram(item.entry.name)}</span>
+                        <span class="plugin-mark" aria-hidden="true">{monogram(displayName)}</span>
                         <div class="plugin-title">
-                          <h3>{item.entry.name}</h3>
+                          <h3>{displayName}</h3>
                           <span class="version">v{item.entry.version}</span>
                         </div>
                         <span class="status available-status">{t('pluginMarket.availableHeading')}</span>
                       </div>
 
-                      {#if item.entry.description}<p class="desc">{item.entry.description}</p>{/if}
+                      {#if displayDescription}<p class="desc">{displayDescription}</p>{/if}
 
                       <footer class="card-footer available-footer">
                         <span class="plugin-id">{item.entry.id}</span>
@@ -427,6 +500,7 @@
 
 {#if consent}
   <ConsentModal id={consent.id} version={consent.version} name={consent.name}
+                description={consent.description} i18n={consent.i18n}
                 onInstalled={onInstalled} onClose={() => (consent = null)} />
 {/if}
 
@@ -447,61 +521,61 @@
       radial-gradient(circle at 92% 4%, color-mix(in srgb, #18a7c7 10%, transparent), transparent 28rem),
       Canvas;
   }
-  .page-shell { width: min(1120px, calc(100% - 64px)); margin: 0 auto; padding: 48px 0 72px; }
+  .page-shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 24px 0 40px; }
   .boot { min-height: 100%; display: grid; place-items: center; }
   .hero {
     position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 24px;
+    gap: 14px 20px;
     align-items: start;
-    padding: 10px 2px 34px;
+    padding: 6px 2px 20px;
   }
   .hero-copy h1 {
     margin: 0;
-    font-size: clamp(30px, 5vw, 44px);
+    font-size: clamp(28px, 4vw, 36px);
     line-height: 1.02;
     letter-spacing: -0.045em;
     font-weight: 760;
   }
   .hero-copy p {
     max-width: 650px;
-    margin: 13px 0 0;
+    margin: 7px 0 0;
     color: color-mix(in srgb, CanvasText 62%, transparent);
-    font-size: 15px;
-    line-height: 1.55;
+    font-size: 13px;
+    line-height: 1.4;
   }
   .summary {
     grid-column: 1 / -1;
     display: inline-flex;
     align-items: center;
     justify-self: start;
-    min-height: 38px;
-    padding: 0 14px;
+    min-height: 30px;
+    padding: 0 11px;
     border: 1px solid color-mix(in srgb, CanvasText 9%, transparent);
     border-radius: 999px;
     background: color-mix(in srgb, Canvas 72%, transparent);
     -webkit-backdrop-filter: blur(18px);
     backdrop-filter: blur(18px);
-    box-shadow: 0 10px 32px color-mix(in srgb, CanvasText 5%, transparent);
+    box-shadow: 0 6px 20px color-mix(in srgb, CanvasText 4%, transparent);
   }
   .summary-item {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     color: color-mix(in srgb, CanvasText 58%, transparent);
-    font-size: 12px;
+    font-size: 11px;
     white-space: nowrap;
   }
-  .summary-item strong { color: CanvasText; font-size: 13px; }
-  .summary-divider { width: 1px; height: 16px; margin: 0 12px; background: color-mix(in srgb, CanvasText 13%, transparent); }
+  .summary-item strong { color: CanvasText; font-size: 12px; }
+  .summary-divider { width: 1px; height: 14px; margin: 0 9px; background: color-mix(in srgb, CanvasText 13%, transparent); }
   .syncing { gap: 7px; }
   .notice {
     display: flex;
     gap: 11px;
     align-items: flex-start;
-    margin: 0 0 26px;
-    padding: 13px 15px;
+    margin: 0 0 14px;
+    padding: 10px 12px;
     border: 1px solid color-mix(in srgb, #e0a800 24%, transparent);
     border-radius: 14px;
     background: color-mix(in srgb, #e0a800 10%, Canvas);
@@ -520,19 +594,19 @@
     font-weight: 750;
   }
   .notice p { margin: 2px 0 0; line-height: 1.45; overflow-wrap: anywhere; }
-  .catalog { display: grid; gap: 28px; }
+  .catalog { display: grid; gap: 14px; }
   .category-block {
     --accent: #635bff;
     --accent-soft: color-mix(in srgb, var(--accent) 11%, Canvas);
     position: relative;
     overflow: hidden;
-    padding: 28px;
+    padding: 16px;
     border: 1px solid color-mix(in srgb, var(--accent) 15%, CanvasText 7%);
-    border-radius: 26px;
+    border-radius: 18px;
     background:
       radial-gradient(circle at 100% 0, color-mix(in srgb, var(--accent) 10%, transparent), transparent 22rem),
       color-mix(in srgb, Canvas 94%, var(--accent) 6%);
-    box-shadow: 0 18px 60px color-mix(in srgb, CanvasText 5%, transparent);
+    box-shadow: 0 8px 28px color-mix(in srgb, CanvasText 4%, transparent);
   }
   .category-block[data-category='capture'] { --accent: #ec5d74; }
   .category-block[data-category='reading'] { --accent: #f09a3e; }
@@ -540,32 +614,32 @@
   .category-block[data-category='import-export'] { --accent: #159c92; }
   .category-block[data-category='editing'] { --accent: #3479db; }
   .category-block[data-category='other'] { --accent: #7a8495; }
-  .category-header { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+  .category-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
   .category-mark {
     display: grid;
     place-items: center;
-    width: 46px;
-    height: 46px;
+    width: 34px;
+    height: 34px;
     flex: 0 0 auto;
-    border-radius: 15px;
+    border-radius: 10px;
     background: var(--accent);
     color: white;
-    box-shadow: 0 9px 20px color-mix(in srgb, var(--accent) 26%, transparent);
-    font-size: 20px;
+    box-shadow: 0 5px 12px color-mix(in srgb, var(--accent) 22%, transparent);
+    font-size: 15px;
     font-weight: 650;
     letter-spacing: -0.06em;
   }
-  .category-header h2 { margin: 0; font-size: 20px; letter-spacing: -0.025em; }
-  .category-header p { margin: 4px 0 0; color: color-mix(in srgb, CanvasText 48%, transparent); font-size: 11.5px; }
-  .plugin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .category-header h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
+  .category-header p { margin: 2px 0 0; color: color-mix(in srgb, CanvasText 48%, transparent); font-size: 10px; }
+  .plugin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
   .plugin-card {
     min-width: 0;
-    min-height: 190px;
+    min-height: 152px;
     display: flex;
     flex-direction: column;
-    padding: 18px;
+    padding: 13px;
     border: 1px solid color-mix(in srgb, CanvasText 9%, transparent);
-    border-radius: 18px;
+    border-radius: 14px;
     background: color-mix(in srgb, Canvas 92%, transparent);
     box-shadow: 0 2px 3px color-mix(in srgb, CanvasText 3%, transparent);
     transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
@@ -576,61 +650,78 @@
     box-shadow: 0 14px 30px color-mix(in srgb, CanvasText 8%, transparent);
   }
   .installed-card { border-color: color-mix(in srgb, var(--accent) 18%, CanvasText 7%); }
-  .card-heading { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .update-card {
+    border-color: #f08a00;
+    background:
+      linear-gradient(135deg, color-mix(in srgb, #f08a00 13%, Canvas), transparent 58%),
+      color-mix(in srgb, Canvas 94%, #f08a00 6%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, #f08a00 30%, transparent),
+      0 8px 24px color-mix(in srgb, #f08a00 14%, transparent);
+  }
+  .update-card:hover {
+    border-color: #f08a00;
+    box-shadow: 0 0 0 1px color-mix(in srgb, #f08a00 42%, transparent),
+      0 12px 28px color-mix(in srgb, #f08a00 20%, transparent);
+  }
+  .card-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
   .plugin-mark {
     display: grid;
     place-items: center;
-    width: 38px;
-    height: 38px;
+    width: 32px;
+    height: 32px;
     flex: 0 0 auto;
-    border-radius: 12px;
+    border-radius: 9px;
     background: var(--accent-soft);
     color: var(--accent);
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 750;
   }
   .plugin-title { min-width: 0; flex: 1; }
-  .plugin-title h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; letter-spacing: -0.01em; }
+  .plugin-title h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; letter-spacing: -0.01em; }
   .version {
     display: block;
-    margin-top: 3px;
+    margin-top: 2px;
     color: color-mix(in srgb, CanvasText 43%, transparent);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 10.5px;
+    font-size: 9.5px;
   }
   .status {
     flex: 0 0 auto;
-    padding: 4px 8px;
+    padding: 3px 7px;
     border-radius: 999px;
     background: color-mix(in srgb, CanvasText 7%, transparent);
     color: color-mix(in srgb, CanvasText 54%, transparent);
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 650;
   }
   .status.enabled,
   .available-status { background: color-mix(in srgb, var(--accent) 12%, transparent); color: color-mix(in srgb, var(--accent) 90%, CanvasText); }
-  .update-status { background: color-mix(in srgb, #f0a020 18%, transparent); color: #b36b00; }
+  .update-status {
+    background: #e97700;
+    color: white;
+    box-shadow: 0 3px 10px color-mix(in srgb, #e97700 30%, transparent);
+  }
   .desc {
     display: -webkit-box;
-    min-height: 40px;
-    margin: 15px 0 10px;
+    min-height: 34px;
+    margin: 9px 0 7px;
     overflow: hidden;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     line-clamp: 2;
     color: color-mix(in srgb, CanvasText 61%, transparent);
-    font-size: 12px;
-    line-height: 1.55;
+    font-size: 11.5px;
+    line-height: 1.45;
   }
-  .caps { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+  .caps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 7px; }
   .cap {
     max-width: 100%;
-    padding: 3px 7px;
+    padding: 2px 6px;
     overflow: hidden;
     border-radius: 999px;
     background: color-mix(in srgb, CanvasText 6%, transparent);
     color: color-mix(in srgb, CanvasText 52%, transparent);
-    font-size: 9.5px;
+    font-size: 8.5px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -641,7 +732,7 @@
     justify-content: space-between;
     gap: 10px;
     margin-top: auto;
-    padding-top: 14px;
+    padding-top: 9px;
     border-top: 1px solid color-mix(in srgb, CanvasText 7%, transparent);
   }
   .available-footer { justify-content: flex-end; }
@@ -693,11 +784,13 @@
   button:hover:not(:disabled) { transform: translateY(-1px); background: color-mix(in srgb, CanvasText 7%, Canvas); }
   button:focus-visible { outline: 2px solid var(--accent, #3479db); outline-offset: 2px; }
   button:disabled { opacity: 0.48; cursor: default; }
-  .refresh { min-height: 38px; padding: 0 14px; -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+  .refresh { min-height: 32px; padding: 0 12px; -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
   .refresh > span { font-size: 16px; }
-  .mini { min-height: 30px; padding: 0 11px; font-size: 10.5px; }
+  .mini { min-height: 27px; padding: 0 9px; font-size: 10px; }
   .primary { border-color: transparent; background: var(--accent, #3479db); color: white; }
   .primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent, #3479db) 88%, black); }
+  .update-action { background: #e97700; box-shadow: 0 3px 10px color-mix(in srgb, #e97700 22%, transparent); }
+  .update-action:hover:not(:disabled) { background: #c95f00; }
   .quiet { border-color: transparent; background: transparent; }
   .danger { color: #d43b54; }
   .danger:hover:not(:disabled) { background: color-mix(in srgb, #d43b54 9%, transparent); }
@@ -734,28 +827,26 @@
   .spinning { display: inline-block; animation: spin 850ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes shimmer { to { background-position-x: -220%; } }
-  @media (min-width: 1080px) {
+  @media (min-width: 920px) {
     .plugin-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
-  @media (max-width: 720px) {
-    .page-shell { width: min(100% - 32px, 1120px); padding: 28px 0 48px; }
-    .hero { gap: 18px 12px; padding-bottom: 26px; }
-    .hero-copy h1 { font-size: 31px; }
-    .hero-copy p { font-size: 13px; }
+  @media (max-width: 680px) {
+    .page-shell { width: min(100% - 28px, 1180px); padding: 20px 0 32px; }
+    .hero { gap: 12px; padding-bottom: 18px; }
+    .hero-copy h1 { font-size: 28px; }
     .refresh { padding: 0 11px; }
-    .category-block { padding: 20px; border-radius: 22px; }
+    .category-block { padding: 14px; border-radius: 16px; }
     .plugin-grid { grid-template-columns: minmax(0, 1fr); }
   }
   @media (max-width: 520px) {
-    .page-shell { width: min(100% - 24px, 1120px); padding-top: 22px; }
+    .page-shell { width: min(100% - 20px, 1180px); padding-top: 16px; }
     .hero { grid-template-columns: minmax(0, 1fr); }
     .refresh { position: absolute; top: 0; right: 0; }
     .hero-copy { padding-right: 90px; }
     .summary { max-width: 100%; box-sizing: border-box; }
-    .category-block { padding: 16px; }
-    .category-header { margin-bottom: 18px; }
-    .category-mark { width: 40px; height: 40px; border-radius: 13px; }
-    .plugin-card { padding: 16px; }
+    .category-block { padding: 12px; }
+    .category-header { margin-bottom: 10px; }
+    .plugin-card { padding: 12px; }
     .card-footer { align-items: flex-end; flex-wrap: wrap; }
     .actions { flex-wrap: wrap; }
   }

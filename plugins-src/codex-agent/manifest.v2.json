@@ -72,18 +72,21 @@
   "i18n": {
     "zh": {
       "name": "Codex 智能体",
+      "description": "在知识库中以无界面方式运行 Codex CLI：使用 `.notemd/agent-tasks` 中的任务模板，在窗口中实时查看执行过程，或通过 CLI 在后台启动。",
       "menus": {
         "open": "Codex 智能体…"
       }
     },
     "ja": {
       "name": "Codex エージェント",
+      "description": "Vault 内で Codex CLI をヘッドレス実行します。`.notemd/agent-tasks` のタスクテンプレートを使い、ウィンドウで進行状況をリアルタイム表示するほか、CLI からバックグラウンド実行もできます。",
       "menus": {
         "open": "Codex エージェント…"
       }
     },
     "de": {
       "name": "Codex Agent",
+      "description": "Codex CLI headless im Vault ausführen: mit Aufgabenvorlagen aus `.notemd/agent-tasks`, live in einem Fenster oder im Hintergrund über die CLI.",
       "menus": {
         "open": "Codex Agent…"
       }

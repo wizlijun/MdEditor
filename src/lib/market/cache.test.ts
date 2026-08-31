@@ -16,6 +16,10 @@ const installed: InstalledV2 = {
   version: '1.3.0',
   enabled: false,
   name: 'Next',
+  description: 'Give every idea a next step.',
+  i18n: {
+    zh: { name: '下一步', description: '让每个想法都有明确的下一步。' },
+  },
   category: 'thinking',
   capabilities: ['vault.read', 'vault.write'],
 }
@@ -33,6 +37,17 @@ describe('plugin market installed cache', () => {
       [INSTALLED_CACHE_KEY]: JSON.stringify({
         version: 1,
         installed: [installed, { id: 'broken', enabled: 'yes' }],
+      }),
+    })
+
+    expect(readInstalledCache(storage)).toEqual([installed])
+  })
+
+  it('rejects malformed i18n metadata without discarding other rows', () => {
+    const storage = store({
+      [INSTALLED_CACHE_KEY]: JSON.stringify({
+        version: 1,
+        installed: [{ ...installed, id: 'broken', i18n: 'bad' }, installed],
       }),
     })
 

@@ -168,6 +168,41 @@ describe('agent-owned concurrency settings', () => {
   })
 })
 
+describe('plugin market metadata localization', () => {
+  const publishedDirs = [
+    'claude-agent',
+    'codex-agent',
+    'decision-log',
+    'deepseek-agent',
+    'ebook-import',
+    'idea-spark',
+    'md2pdf',
+    'next',
+    'openclaw',
+    'pos-log',
+    'power-mode',
+    'roam-import',
+    'trace-source',
+    'weekly-review',
+  ]
+
+  it.each(publishedDirs)('%s provides a name and description for every market locale', (dir) => {
+    const manifest = JSON.parse(
+      readFileSync(join(ROOT, 'plugins-src', dir, 'manifest.v2.json'), 'utf8'),
+    ) as {
+      i18n?: Record<string, { name?: unknown; description?: unknown }>
+    }
+
+    for (const locale of ['zh', 'ja', 'de']) {
+      expect(manifest.i18n?.[locale]?.name, `${dir}: missing ${locale} name`)
+        .toEqual(expect.any(String))
+      expect(manifest.i18n?.[locale]?.description, `${dir}: missing ${locale} description`)
+        .toEqual(expect.any(String))
+      expect((manifest.i18n?.[locale]?.description as string).trim()).not.toBe('')
+    }
+  })
+})
+
 describe('Location Log product identity', () => {
   const manifest = JSON.parse(
     readFileSync(join(ROOT, 'plugins-src', 'pos-log', 'manifest.v2.json'), 'utf8'),

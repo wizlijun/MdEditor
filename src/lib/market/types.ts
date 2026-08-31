@@ -4,6 +4,13 @@
 import { t } from '../i18n/store.svelte'
 import type { Messages } from '../i18n/en'
 
+export interface PluginMarketI18nEntry {
+  name?: string
+  description?: string
+}
+
+export type PluginMarketI18n = Record<string, PluginMarketI18nEntry>
+
 /** One entry of the registry index (`plugin_market_index` → RegistryIndex). */
 export interface RegistryEntry {
   id: string
@@ -15,7 +22,7 @@ export interface RegistryEntry {
   name: string
   category?: string | null
   description: string | null
-  i18n?: unknown
+  i18n?: PluginMarketI18n | null
   icon_url?: string | null
   changelog_url?: string | null
   download: Record<string, string>
@@ -31,6 +38,8 @@ export interface InstalledV2 {
   version: string
   enabled: boolean
   name: string | null
+  description?: string | null
+  i18n?: PluginMarketI18n | null
   category?: string | null
   capabilities: string[]
 }
@@ -40,6 +49,8 @@ export interface InstalledRow {
   kind: 'v1' | 'v2'
   id: string
   name: string
+  description?: string | null
+  i18n?: PluginMarketI18n | null
   category?: string | null
   version: string
   enabled: boolean

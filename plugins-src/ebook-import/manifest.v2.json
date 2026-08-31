@@ -86,18 +86,21 @@
   "i18n": {
     "zh": {
       "name": "导入电子书",
+      "description": "将 EPUB、PDF 和 DOCX 电子书导入知识库并转换为 Markdown。支持 Calibre 转换和扫描版 PDF OCR，内容按书名归档至 `ssot/ebooks/YYYY-MM/`。",
       "menus": {
         "open": "导入电子书(epub、pdf、docx)…"
       }
     },
     "ja": {
       "name": "電子書籍を取り込む",
+      "description": "EPUB・PDF・DOCX を Markdown に変換して Vault へ取り込みます。Calibre による変換とスキャン PDF の OCR に対応し、`ssot/ebooks/YYYY-MM/` に書籍ごとに整理します。",
       "menus": {
         "open": "電子書籍を取り込む(epub・pdf・docx)…"
       }
     },
     "de": {
       "name": "E-Books importieren",
+      "description": "EPUB-, PDF- und DOCX-E-Books als Markdown ins Vault importieren. Unterstützt Calibre-Konvertierung und OCR für gescannte PDFs; die Inhalte werden unter `ssot/ebooks/YYYY-MM/` nach Buch archiviert.",
       "menus": {
         "open": "E-Books importieren (epub/pdf/docx)…"
       }

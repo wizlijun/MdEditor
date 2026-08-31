@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **The Plugin Market fits substantially more plugins on screen.** The header, category sections, grid gaps and cards are tighter while preserving clear category boundaries; plugins with an available update now receive an orange card highlight, target-version badge and matching primary action.
+
+### Fixed
+
+- **Plugin names and descriptions now follow the current interface language throughout the market.** Non-Western localized product names retain the English name in parentheses, while Western-language names stay concise. Installed plugins keep this metadata in the local-first cache, including for offline launches after the first refresh.
+
 ## v6.831.1 — 2026-08-31
 
 ### Changed

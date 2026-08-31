@@ -28,7 +28,7 @@
 //
 // Does NOT upload. Tail prints the wrangler kv command as guidance.
 
-import { readFileSync, readdirSync, writeFileSync, statSync, existsSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync, statSync, existsSync, mkdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -59,6 +59,25 @@ export function pluginCategoryFromManifest(manifest) {
     : null
   if (PLUGIN_CATEGORIES.has(raw)) return raw
   return LEGACY_PLUGIN_CATEGORIES.get(raw) ?? 'other'
+}
+
+/**
+ * Refresh user-facing registry copy from source manifests without rebuilding or
+ * replacing immutable plugin packages. Package/version/hash/download fields
+ * remain untouched; unknown third-party entries pass through verbatim.
+ */
+export function applySourceMetadata(entries, manifests) {
+  const byId = new Map(manifests.map((manifest) => [manifest.id, manifest]))
+  return entries.map((entry) => {
+    const manifest = byId.get(entry.id)
+    if (!manifest) return entry
+    return {
+      ...entry,
+      name: manifest.name ?? entry.name,
+      description: manifest.description ?? entry.description ?? null,
+      i18n: manifest.i18n ?? entry.i18n ?? null,
+    }
+  })
 }
 
 function sha256Hex(path) {
@@ -212,6 +231,17 @@ function scanLocal() {
   return plugins
 }
 
+function scanSourceManifests() {
+  const sourceRoot = join(REPO_ROOT, 'plugins-src')
+  const manifests = []
+  for (const dirName of dirsIn(sourceRoot).sort()) {
+    const path = join(sourceRoot, dirName, 'manifest.v2.json')
+    if (!existsSync(path)) continue
+    manifests.push(JSON.parse(readFileSync(path, 'utf8')))
+  }
+  return manifests
+}
+
 async function fetchLive() {
   const url = `${REGISTRY_BASE}/api/index.json`
   const resp = await fetch(url)
@@ -234,7 +264,7 @@ async function main() {
     }
   }
 
-  if (!existsSync(OUT_ROOT)) {
+  if (!existsSync(OUT_ROOT) && localOnly) {
     console.error(`no dist-plugins/ — run scripts/release-plugins.sh first`)
     process.exit(1)
   }
@@ -251,10 +281,12 @@ async function main() {
   }
 
   const r = mergeIndexes(local, live, drops)
+  const plugins = applySourceMetadata(r.plugins, scanSourceManifests())
+  mkdirSync(OUT_ROOT, { recursive: true })
   const outPath = join(OUT_ROOT, 'index.json')
-  writeFileSync(outPath, JSON.stringify({ plugins: r.plugins }, null, 2) + '\n')
+  writeFileSync(outPath, JSON.stringify({ plugins }, null, 2) + '\n')
 
-  console.log(`wrote ${outPath} (${r.plugins.length} plugin version(s))`)
+  console.log(`wrote ${outPath} (${plugins.length} plugin version(s))`)
   if (r.added.length) console.log(`  added     (new here):        ${r.added.join(', ')}`)
   if (r.replaced.length) console.log(`  replaced  (local ≠ live):    ${r.replaced.join(', ')}`)
   if (r.unchanged.length) console.log(`  unchanged (local == live):   ${r.unchanged.join(', ')}`)

@@ -49,18 +49,21 @@
   "i18n": {
     "zh": {
       "name": "决策日志",
+      "description": "先预测，后复盘——以 `.note.md` 格式保存的校准型决策日志。",
       "menus": {
         "open": "决策日志"
       }
     },
     "ja": {
       "name": "意思決定ログ",
+      "description": "先に予測し、後から判断を検証するための意思決定ジャーナルです。記録は `.note.md` 形式で保存されます。",
       "menus": {
         "open": "意思決定ログ"
       }
     },
     "de": {
       "name": "Entscheidungsprotokoll",
+      "description": "Erst prognostizieren, später bewerten – ein kalibriertes Entscheidungsjournal im `.note.md`-Format.",
       "menus": {
         "open": "Entscheidungsprotokoll"
       }
