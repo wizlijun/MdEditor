@@ -396,6 +396,7 @@ describe('Next window', () => {
     expect([...document.querySelectorAll('[data-lane] h2')].map((heading) => heading.textContent)).toEqual([
       '收件箱', '进行中', '等待', '稍后', '已完成',
     ])
+    expect(document.querySelector('.project-filters')).toBeNull()
     expect(document.body.textContent).toContain('正在验证的想法')
     expect(document.body.textContent).toContain('等待设计稿')
     expect(document.body.textContent).toContain('默认隐藏的想法')
@@ -408,6 +409,112 @@ describe('Next window', () => {
     flushSync()
     expect(document.body.textContent).toContain('以后再看的想法')
     expect(document.body.textContent).toContain('已经关闭的想法')
+  })
+
+  it('lists projects after the subtitle and toggles a project filter that composes with search', () => {
+    const next = workspace()
+    next.projectOptions = ['Next', 'Writing', 'Legacy']
+    next.waiting[0].projection = {
+      idea_id: 'waiting',
+      state: 'waiting',
+      last_event_id: 'e-waiting',
+      last_at: '2026-08-31T00:00:00Z',
+      project: 'Writing',
+      waiting_for: '设计稿',
+      review_at: '2026-09-01T00:00:00Z',
+    }
+    next.closed[0].projection = {
+      idea_id: 'closed',
+      state: 'closed',
+      last_event_id: 'e-closed',
+      last_at: '2026-08-28T00:00:00Z',
+      project: 'Next',
+      exit: { kind: 'transferred', via: 'project' },
+      target: 'Legacy',
+    }
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const subtitle = document.querySelector('.subtitle-row > p')
+    const filters = subtitle?.nextElementSibling
+    expect(filters?.classList.contains('project-filters')).toBe(true)
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('[data-project-filter]')]
+    expect(buttons.map((button) => button.textContent)).toEqual(['Next', 'Writing', 'Legacy'])
+
+    buttons[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(buttons[0].getAttribute('aria-pressed')).toBe('true')
+    expect(document.body.textContent).toContain('正在验证的想法')
+    expect(document.body.textContent).toContain('已经关闭的想法')
+    expect(document.body.textContent).not.toContain('等待设计稿')
+    expect(document.body.textContent).not.toContain('默认隐藏的想法')
+    expect([...document.querySelectorAll('button')].some((button) => button.textContent?.includes('显示已安放'))).toBe(false)
+
+    buttons[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(buttons[0].getAttribute('aria-pressed')).toBe('false')
+    expect(document.body.textContent).toContain('等待设计稿')
+    expect(document.body.textContent).toContain('默认隐藏的想法')
+    expect(document.body.textContent).not.toContain('已经关闭的想法')
+    expect([...document.querySelectorAll('button')].some((button) => button.textContent?.includes('显示已安放'))).toBe(true)
+
+    buttons[2].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(document.body.textContent).toContain('已经关闭的想法')
+    expect(document.body.textContent).not.toContain('正在验证的想法')
+
+    buttons[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(document.body.textContent).toContain('等待设计稿')
+    expect(document.body.textContent).not.toContain('正在验证的想法')
+
+    const search = document.querySelector<HTMLInputElement>('input[type="search"]')!
+    search.value = '不存在'
+    search.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    flushSync()
+    expect(document.body.textContent).not.toContain('等待设计稿')
+    search.value = '设计稿'
+    search.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    flushSync()
+    expect(document.body.textContent).toContain('等待设计稿')
+  })
+
+  it('applies project and text filters together to repair cards', () => {
+    const next = workspace()
+    const repair: WorkspaceItem = {
+      ...item('repair', '需要修复的 Next 想法', 'unsupported'),
+      idea_id: 'repair',
+      projection: {
+        idea_id: 'repair',
+        state: 'unsupported',
+        last_event_id: 'e-repair',
+        last_at: '2026-08-31T00:00:00Z',
+        project: 'Next',
+        unsupported_actions: ['future-action'],
+      },
+    }
+    next.items.push(repair)
+    next.unsupported.push(repair)
+    next.projectOptions = ['Next']
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    document.querySelector<HTMLButtonElement>('[data-project-filter="Next"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(document.body.textContent).toContain('需要修复的 Next 想法')
+
+    const search = document.querySelector<HTMLInputElement>('input[type="search"]')!
+    search.value = '不存在'
+    search.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    flushSync()
+    expect(document.body.textContent).not.toContain('需要修复的 Next 想法')
+    search.value = '需要修复'
+    search.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    flushSync()
+    expect(document.body.textContent).toContain('需要修复的 Next 想法')
   })
 
   it('opens the target placement route on pointer drop and reopens a dormant card dropped into capture', async () => {
