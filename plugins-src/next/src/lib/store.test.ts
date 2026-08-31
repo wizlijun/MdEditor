@@ -49,6 +49,7 @@ function workspace(): NextWorkspace {
     dormant: [],
     closed: [],
     unsupported: [],
+    projectOptions: [],
     scanErrors: [],
     readOnlyError: null,
   }

@@ -258,6 +258,7 @@ function markUnsupported(
     last_event_id: eventId,
     last_at: at,
     unsupported_actions: actions,
+    ...(current?.project ? { project: current.project } : {}),
     ...(current?.source ? { source: current.source } : source ? { source } : {}),
     ...(lastKnownState ? { last_known_state: lastKnownState } : {}),
   }
@@ -361,6 +362,11 @@ function canTransition(from: IdeaState | undefined, action: NextAction): boolean
 function applyKnownEvent(state: MutableProjection, event: NextEvent, index: number): void {
   const current = state.ideas.get(event.idea_id)
   const source = event.source ?? current?.source
+  const project = event.project === null
+    ? undefined
+    : isNonBlankString(event.project)
+      ? event.project
+      : current?.project
 
   if (!current && !event.source) {
     addIssue(state, {
@@ -413,6 +419,7 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
     last_event_id: event.event_id,
     last_at: event.at,
     ...(source ? { source } : {}),
+    ...(project ? { project } : {}),
   }
   switch (event.action) {
     case 'commit':
@@ -454,7 +461,10 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
       state.ideas.set(event.idea_id, { ...base, state: 'capture' })
       break
     case 'relink':
-      state.ideas.set(event.idea_id, { ...current!, ...base, source: event.source })
+      {
+        const { project: _currentProject, ...currentWithoutProject } = current!
+        state.ideas.set(event.idea_id, { ...currentWithoutProject, ...base, source: event.source })
+      }
       break
   }
 }
@@ -606,6 +616,32 @@ function prospectiveIssue(
 }
 
 /**
+ * v1 readers preserve extension fields they did not previously own. The 1.3
+ * writer is stricter about the shapes it emits without retroactively making a
+ * previously readable ledger invalid.
+ */
+function writerExtensionErrors(value: unknown): FieldValidationError[] {
+  if (!isRecord(value)) return []
+  const errors: FieldValidationError[] = []
+  if (value.project !== undefined && value.project !== null && !isNonBlankString(value.project)) {
+    errors.push({ field: 'project', message: 'must be a non-blank string or null when present' })
+  }
+  if (value.action !== 'settle' || !isRecord(value.exit) || value.exit.kind !== 'done') return errors
+  if (value.exit.delivery === undefined) return errors
+  if (value.exit.delivery !== 'article') {
+    errors.push({ field: 'exit.delivery', message: 'this writer only supports delivery=article' })
+    return errors
+  }
+  if (value.exit.via !== undefined) {
+    errors.push({ field: 'exit', message: 'article delivery cannot also be delegated' })
+  }
+  if (!isNonBlankString(value.result)) {
+    errors.push({ field: 'result', message: 'article delivery requires a result path or URL' })
+  }
+  return errors
+}
+
+/**
  * Validate a human-authored event against a loaded projection before writing.
  * Unknown actions are readable, but this v1 writer never emits them.
  */
@@ -615,16 +651,25 @@ export function validateAppend(
   options: AppendOptions = {},
 ): AppendValidation {
   const validated = validateEvent(rawEvent)
-  if (!validated.ok) {
+  if (validated.ok && validated.known) {
+    const previous = projection.eventById.get(validated.event.event_id)
+    if (previous !== undefined && payloadEqual(previous, rawEvent)) {
+      return { ok: true, idempotent: true, event: validated.event }
+    }
+  }
+
+  const extensionErrors = writerExtensionErrors(rawEvent)
+  if (!validated.ok || extensionErrors.length > 0) {
+    const errors = [...(!validated.ok ? validated.errors : []), ...extensionErrors]
     return {
       ok: false,
       issues: [{
         code: 'invalid_event',
         severity: 'blocking',
-        message: validated.errors.map((error) => `${error.field}: ${error.message}`).join('; '),
+        message: errors.map((error) => `${error.field}: ${error.message}`).join('; '),
         ...(envelopeString(rawEvent, 'event_id') ? { event_id: envelopeString(rawEvent, 'event_id') } : {}),
         ...(envelopeString(rawEvent, 'idea_id') ? { idea_id: envelopeString(rawEvent, 'idea_id') } : {}),
-        fields: validated.errors.map((error) => error.field),
+        fields: errors.map((error) => error.field),
       }],
     }
   }
@@ -643,7 +688,6 @@ export function validateAppend(
 
   const previous = projection.eventById.get(event.event_id)
   if (previous !== undefined) {
-    if (payloadEqual(previous, rawEvent)) return { ok: true, idempotent: true, event }
     return {
       ok: false,
       issues: [prospectiveIssue(

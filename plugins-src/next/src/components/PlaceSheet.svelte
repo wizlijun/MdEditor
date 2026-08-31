@@ -13,12 +13,14 @@
     item,
     saving,
     initialRoute,
+    projectOptions = [],
     onCancel,
     onSubmit,
   }: {
     item: WorkspaceItem
     saving: boolean
     initialRoute?: Route
+    projectOptions?: readonly string[]
     onCancel(): void
     onSubmit(input: PlaceInput): Promise<void>
   } = $props()
@@ -37,6 +39,7 @@
   let reason = $state('')
   let target = $state('')
   let result = $state('')
+  let project = $state(projection?.project ?? '')
   let invalid = $state(false)
   let sheetEl: HTMLDivElement | undefined = $state()
 
@@ -105,7 +108,7 @@
 
   const viaOptions = $derived.by(() => {
     switch (exitKind) {
-      case 'done': return ['', 'delegate']
+      case 'done': return ['', 'delegate', 'article']
       case 'stopped': return ['drop', 'disproved', 'ignore']
       case 'transferred': return ['merge', 'project', 'delegate', 'buy', 'publish']
       case 'compressed': return ['principle', 'automate']
@@ -113,7 +116,9 @@
     }
   })
   const reasonRequired = $derived(exitKind === 'stopped' && (exitVia === 'drop' || exitVia === 'disproved'))
-  const targetRequired = $derived(exitKind === 'transferred' || exitKind === 'compressed')
+  const projectRequired = $derived(exitKind === 'transferred' && exitVia === 'project')
+  const targetRequired = $derived(exitKind === 'compressed' || (exitKind === 'transferred' && exitVia !== 'project'))
+  const articleRequired = $derived(exitKind === 'done' && exitVia === 'article')
 
   function chooseRoute(value: Route) {
     route = value
@@ -129,9 +134,20 @@
     invalid = false
   }
 
+  function chooseExitVia(value: string) {
+    exitVia = value
+    target = ''
+    result = ''
+    invalid = false
+  }
+
   function exitValue(): SettlementExit {
     if (!exitKind) throw new Error('an outcome must be selected')
-    if (exitKind === 'done') return exitVia === 'delegate' ? { kind: 'done', via: 'delegate' } : { kind: 'done' }
+    if (exitKind === 'done') {
+      if (exitVia === 'delegate') return { kind: 'done', via: 'delegate' }
+      if (exitVia === 'article') return { kind: 'done', delivery: 'article' }
+      return { kind: 'done' }
+    }
     if (exitKind === 'stopped') return { kind: 'stopped', via: exitVia as 'drop' | 'disproved' | 'ignore' }
     if (exitKind === 'transferred') return { kind: 'transferred', via: exitVia as 'merge' | 'project' | 'delegate' | 'buy' | 'publish' }
     return { kind: 'compressed', via: exitVia as 'principle' | 'automate' }
@@ -142,7 +158,15 @@
     if (via === 'delegate') {
       return t(exitKind === 'done' ? 'via.delegateDone' : 'via.delegateTransferred')
     }
+    if (via === 'article') return t('via.article')
     return t(`via.${via}` as never)
+  }
+
+  function projectChange(): { project?: string | null } {
+    const previous = projection?.project?.trim() ?? ''
+    const next = project.trim()
+    if (next === previous) return {}
+    return next ? { project: next } : previous ? { project: null } : {}
   }
 
   function isValid(): boolean {
@@ -153,6 +177,8 @@
     if (exitKind !== 'done' && !exitVia) return false
     if (reasonRequired && !reason.trim()) return false
     if (targetRequired && !target.trim()) return false
+    if (projectRequired && !project.trim()) return false
+    if (articleRequired && !result.trim()) return false
     return true
   }
 
@@ -163,18 +189,24 @@
       return
     }
     invalid = false
+    const projectField = projectChange()
     if (route === 'commit') {
-      await onSubmit({ route, commitment, next_action: nextAction, close_condition: closeCondition })
+      await onSubmit({ route, commitment, next_action: nextAction, close_condition: closeCondition, ...projectField })
     } else if (route === 'wait') {
-      await onSubmit({ route, waiting_for: waitingFor, review_at: reviewAt })
+      await onSubmit({ route, waiting_for: waitingFor, review_at: reviewAt, ...projectField })
     } else if (route === 'park') {
-      await onSubmit({ route, wake_trigger: wakeTrigger, next_action: nextAction })
+      await onSubmit({ route, wake_trigger: wakeTrigger, next_action: nextAction, ...projectField })
     } else if (exitKind === 'done') {
-      await onSubmit({ route, exit: exitValue(), result })
+      await onSubmit({ route, exit: exitValue(), result, ...projectField })
     } else if (exitKind === 'stopped') {
-      await onSubmit({ route, exit: exitValue(), reason })
+      await onSubmit({ route, exit: exitValue(), reason, ...projectField })
     } else {
-      await onSubmit({ route, exit: exitValue(), target })
+      await onSubmit({
+        route,
+        exit: exitValue(),
+        target: projectRequired ? project : target,
+        ...projectField,
+      })
     }
   }
 
@@ -258,7 +290,7 @@
           </label>
           <label>
             <span>{t('field.exitVia')}</span>
-            <select bind:value={exitVia} disabled={!exitKind}>
+            <select value={exitVia} disabled={!exitKind} onchange={(event) => chooseExitVia(event.currentTarget.value)}>
               {#if exitKind !== 'done'}<option value="" disabled>{t('field.exitVia.placeholder')}</option>{/if}
               {#each viaOptions as via}
                 <option value={via}>{viaLabel(via)}</option>
@@ -272,10 +304,20 @@
         {#if targetRequired}
           <label><span>{t('field.target')}</span><input bind:value={target} placeholder={t('field.target.placeholder')} /></label>
         {/if}
-        {#if exitKind === 'done'}
+        {#if articleRequired}
+          <label><span>{t('field.article')}</span><input id="articleResult" bind:value={result} placeholder={t('field.article.placeholder')} /></label>
+        {:else if exitKind === 'done'}
           <ChoiceField field="result" label={`${t('field.result')} · ${t('common.optional')}`} bind:value={result} options={resultOptions} placeholder={t('field.result.placeholder')} />
         {/if}
       {/if}
+
+      <label>
+        <span>{t('field.project')}{projectRequired ? '' : ` · ${t('common.optional')}`}</span>
+        <input list="project-options" bind:value={project} placeholder={t('field.project.placeholder')} />
+        <datalist id="project-options">
+          {#each projectOptions as option}<option value={option}></option>{/each}
+        </datalist>
+      </label>
 
       {#if invalid}<p class="error" role="alert">{t('error.required')}</p>{/if}
       <footer>

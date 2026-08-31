@@ -52,4 +52,22 @@ describe('Next event document', () => {
     expect(markdown).toContain('future-action')
     expect(markdown).toContain('`i1`')
   })
+
+  it('keeps project markers and article delivery visible in the readable mirror', () => {
+    const markdown = serializeLedger({
+      ...newLedger(['inbox/ideas']),
+      events: [{
+        at: '2026-08-31T00:00:00Z',
+        event_id: 'e1',
+        idea_id: 'i1',
+        action: 'settle',
+        project: 'Writing',
+        exit: { kind: 'done', delivery: 'article' },
+        result: 'writing/article.md',
+      }],
+    })
+    expect(markdown).toContain('- project: Writing')
+    expect(markdown).toContain('- outcome: done · delivery: article')
+    expect(markdown).toContain('- result: writing/article.md')
+  })
 })

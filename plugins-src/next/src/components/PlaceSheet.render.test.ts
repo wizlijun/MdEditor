@@ -107,6 +107,121 @@ describe('PlaceSheet', () => {
     expect(document.querySelectorAll('[data-choices-for="result"] button')).toHaveLength(4)
   })
 
+  it('allows choosing an existing project marker or entering a new one on any route', async () => {
+    setLocale('zh')
+    const onSubmit = vi.fn(async () => {})
+    mounted.push(mount(PlaceSheet, {
+      target: document.body,
+      props: {
+        item,
+        saving: false,
+        projectOptions: ['Next', '写作计划'],
+        onCancel: vi.fn(),
+        onSubmit,
+      },
+    }))
+    flushSync()
+
+    const project = document.querySelector<HTMLInputElement>('input[list="project-options"]')!
+    expect(project).toBeTruthy()
+    expect([...document.querySelectorAll<HTMLOptionElement>('#project-options option')].map((option) => option.value))
+      .toEqual(['Next', '写作计划'])
+    input(project, '新项目')
+    for (const field of ['commitment', 'nextAction', 'closeCondition']) {
+      document.querySelector<HTMLButtonElement>(`[data-choices-for="${field}"] button`)!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    }
+    document.querySelector('form')!.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ route: 'commit', project: '新项目' }))
+  })
+
+  it('uses the project picker as the legacy target when upgrading an idea to a project', async () => {
+    setLocale('zh')
+    const onSubmit = vi.fn(async () => {})
+    mounted.push(mount(PlaceSheet, {
+      target: document.body,
+      props: { item, saving: false, projectOptions: ['Next'], onCancel: vi.fn(), onSubmit },
+    }))
+
+    clickButton('结束或已有去处')
+    change(document.querySelectorAll('select')[0], 'transferred')
+    change(document.querySelectorAll('select')[1], 'project')
+    expect(document.querySelector('input[placeholder*="人员"]')).toBeNull()
+
+    const form = document.querySelector('form')!
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    flushSync()
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    input(document.querySelector<HTMLInputElement>('input[list="project-options"]')!, 'Next')
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    expect(onSubmit).toHaveBeenCalledWith({
+      route: 'settle',
+      exit: { kind: 'transferred', via: 'project' },
+      project: 'Next',
+      target: 'Next',
+    })
+  })
+
+  it('explicitly clears an inherited project marker when the field is emptied', async () => {
+    setLocale('zh')
+    const onSubmit = vi.fn(async () => {})
+    const projected: WorkspaceItem = {
+      ...item,
+      idea_id: 'idea-1',
+      state: 'wip',
+      projection: {
+        idea_id: 'idea-1',
+        state: 'wip',
+        last_event_id: 'e1',
+        last_at: '2026-08-29T00:00:00Z',
+        project: 'Next',
+        commitment: '验证',
+        next_action: '测试',
+        close_condition: '结论',
+      },
+    }
+    mounted.push(mount(PlaceSheet, {
+      target: document.body,
+      props: { item: projected, saving: false, projectOptions: ['Next'], onCancel: vi.fn(), onSubmit },
+    }))
+    input(document.querySelector<HTMLInputElement>('input[list="project-options"]')!, '')
+    document.querySelector('form')!.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ route: 'commit', project: null }))
+  })
+
+  it('treats a published full article as done and requires its path or link', async () => {
+    setLocale('zh')
+    const onSubmit = vi.fn(async () => {})
+    mounted.push(mount(PlaceSheet, {
+      target: document.body,
+      props: { item, saving: false, onCancel: vi.fn(), onSubmit },
+    }))
+
+    clickButton('结束或已有去处')
+    change(document.querySelectorAll('select')[0], 'done')
+    change(document.querySelectorAll('select')[1], 'article')
+    expect(document.body.textContent).toContain('整理并发布为完整文章')
+
+    const form = document.querySelector('form')!
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    flushSync()
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    input(document.querySelector<HTMLInputElement>('#articleResult')!, 'writing/next-article.md')
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    expect(onSubmit).toHaveBeenCalledWith({
+      route: 'settle',
+      exit: { kind: 'done', delivery: 'article' },
+      result: 'writing/next-article.md',
+    })
+  })
+
   it('requires the three commitment fields before submitting', async () => {
     setLocale('zh')
     const onSubmit = vi.fn(async () => {})
