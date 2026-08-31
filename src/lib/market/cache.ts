@@ -1,4 +1,4 @@
-import type { InstalledV2 } from './types'
+import type { InstalledV2, PluginMarketI18n } from './types'
 
 export const INSTALLED_CACHE_KEY = 'notemd.plugin-market.installed.v1'
 
@@ -28,19 +28,39 @@ function installedPlugin(value: unknown): InstalledV2 | null {
     typeof row.version !== 'string' || row.version === '' ||
     typeof row.enabled !== 'boolean' ||
     !(row.name === null || typeof row.name === 'string') ||
+    !(row.description === undefined || row.description === null || typeof row.description === 'string') ||
     !(row.category === undefined || row.category === null || typeof row.category === 'string') ||
     !Array.isArray(row.capabilities) ||
     !row.capabilities.every((cap) => typeof cap === 'string')
   ) return null
+
+  const i18n = pluginI18n(row.i18n)
+  if (row.i18n !== undefined && row.i18n !== null && i18n === null) return null
 
   return {
     id: row.id,
     version: row.version,
     enabled: row.enabled,
     name: row.name,
+    description: row.description as string | null | undefined,
+    i18n,
     category: row.category as string | null | undefined,
     capabilities: [...row.capabilities] as string[],
   }
+}
+
+function pluginI18n(value: unknown): PluginMarketI18n | null | undefined {
+  if (value === undefined || value === null) return value
+  if (typeof value !== 'object' || Array.isArray(value)) return null
+  const result: PluginMarketI18n = {}
+  for (const [locale, rawCatalog] of Object.entries(value)) {
+    if (!rawCatalog || typeof rawCatalog !== 'object' || Array.isArray(rawCatalog)) continue
+    const catalog = rawCatalog as Record<string, unknown>
+    const name = typeof catalog.name === 'string' ? catalog.name : undefined
+    const description = typeof catalog.description === 'string' ? catalog.description : undefined
+    if (name !== undefined || description !== undefined) result[locale] = { name, description }
+  }
+  return result
 }
 
 /** Restore only the small, local-first snapshot used before the registry loads. */
@@ -75,6 +95,8 @@ export function writeInstalledCache(
         version: row.version,
         enabled: row.enabled,
         name: row.name,
+        description: row.description,
+        i18n: row.i18n,
         category: row.category,
         capabilities: [...row.capabilities],
       })),

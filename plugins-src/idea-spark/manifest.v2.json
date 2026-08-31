@@ -54,18 +54,21 @@
   "i18n": {
     "zh": {
       "name": "奇思妙想",
+      "description": "捕捉一闪而过的灵感，再让智能体将它推敲成一份明确下一步的文档。",
       "menus": {
         "open": "奇思妙想"
       }
     },
     "ja": {
       "name": "アイデアスパーク",
+      "description": "ひらめきを書き留め、エージェントとの議論を通じて、次の一歩が明確なドキュメントへ育てます。",
       "menus": {
         "open": "アイデアスパーク"
       }
     },
     "de": {
       "name": "Ideenfunke",
+      "description": "Einen Geistesblitz festhalten und ihn gemeinsam mit einem Agenten zu einem Dokument mit einem klaren nächsten Schritt ausarbeiten.",
       "menus": {
         "open": "Ideenfunke"
       }

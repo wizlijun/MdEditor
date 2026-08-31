@@ -49,18 +49,21 @@
   "i18n": {
     "zh": {
       "name": "周检视",
+      "description": "用全年日历总览每周复盘记录。",
       "menus": {
         "open": "周检视"
       }
     },
     "ja": {
       "name": "ウィークリーレビュー",
+      "description": "毎週の振り返りを年間カレンダーで一覧できます。",
       "menus": {
         "open": "ウィークリーレビュー"
       }
     },
     "de": {
       "name": "Wochenrückblick",
+      "description": "Die wöchentlichen Rückblicke in einem Jahreskalender auf einen Blick erfassen.",
       "menus": {
         "open": "Wochenrückblick"
       }

@@ -46,18 +46,21 @@
   "i18n": {
     "zh": {
       "name": "溯源",
+      "description": "追溯一段文字的原始出处——由智能体搜索并核实来源，再将摘要和反向链接写入 `traces/`。",
       "menus": {
         "open": "溯源"
       }
     },
     "ja": {
       "name": "出典をたどる",
+      "description": "文章の一節を元の出典までたどります。エージェントが検索・検証し、要約とバックリンクを `traces/` に保存します。",
       "menus": {
         "open": "出典をたどる"
       }
     },
     "de": {
       "name": "Quellensuche",
+      "description": "Eine Textpassage bis zu ihrer ursprünglichen Quelle zurückverfolgen. Ein Agent sucht und prüft die Quelle und speichert eine Zusammenfassung mit Rückverweisen unter `traces/`.",
       "menus": {
         "open": "Quellensuche"
       }

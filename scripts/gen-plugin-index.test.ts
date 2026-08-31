@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { mergeIndexes, compareVersions, pluginCategoryFromManifest } from './gen-plugin-index.mjs'
+import {
+  applySourceMetadata,
+  mergeIndexes,
+  compareVersions,
+  pluginCategoryFromManifest,
+} from './gen-plugin-index.mjs'
 
 // Minimal RegistryEntry stand-in: mergeIndexes only keys on id/version and
 // compares entries structurally; every other field rides along opaquely.
@@ -48,6 +53,37 @@ describe('pluginCategoryFromManifest', () => {
     expect(pluginCategoryFromManifest({
       contributes: { menus: [{ command: 'open', submenu: 'future-category' }] },
     })).toBe('other')
+  })
+})
+
+describe('applySourceMetadata', () => {
+  it('refreshes official localized copy without changing immutable package fields', () => {
+    const live = entry('notemd.idea-spark', '1.3.5', {
+      name: 'Idea Spark',
+      description: 'Old copy',
+      i18n: { zh: { name: '奇思妙想' } },
+      sha256: { universal: 'keep-sha' },
+      download: { universal: 'https://plugins.notemd.net/pkg' },
+    })
+    const [updated] = applySourceMetadata([live], [{
+      id: 'notemd.idea-spark',
+      name: 'Idea Spark',
+      description: 'Capture a spark.',
+      i18n: { zh: { name: '奇思妙想', description: '捕捉一闪而过的灵感。' } },
+    }])
+
+    expect(updated).toMatchObject({
+      version: '1.3.5',
+      description: 'Capture a spark.',
+      i18n: { zh: { name: '奇思妙想', description: '捕捉一闪而过的灵感。' } },
+      sha256: { universal: 'keep-sha' },
+      download: { universal: 'https://plugins.notemd.net/pkg' },
+    })
+  })
+
+  it('leaves unknown third-party entries unchanged', () => {
+    const thirdParty = entry('third.party', '1.0.0', { description: 'Third party' })
+    expect(applySourceMetadata([thirdParty], [])).toEqual([thirdParty])
   })
 })
 

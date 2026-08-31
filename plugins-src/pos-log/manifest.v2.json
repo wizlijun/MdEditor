@@ -38,18 +38,21 @@
   "i18n": {
     "zh": {
       "name": "位置记录",
+      "description": "通过 macOS 系统定位服务记录位置。地址变化时，将国家、省市、兴趣点及经纬度追加至 `pos/YYYY-MM-DD-pos.md`；每 30 分钟或按需检查。",
       "menus": {
         "save-now": "位置记录"
       }
     },
     "ja": {
       "name": "位置記録",
+      "description": "macOS の位置情報サービスで現在地を記録します。30 分ごと、または必要に応じて住所の変化を確認し、国・地域・都市・スポット・緯度経度を `pos/YYYY-MM-DD-pos.md` に追記します。",
       "menus": {
         "save-now": "位置記録"
       }
     },
     "de": {
       "name": "Standortprotokoll",
+      "description": "Den Standort über die macOS-Ortungsdienste protokollieren. Bei Adressänderungen werden Land, Region, Stadt, POI und Koordinaten alle 30 Minuten oder auf Abruf an `pos/YYYY-MM-DD-pos.md` angehängt.",
       "menus": {
         "save-now": "Standortprotokoll"
       }

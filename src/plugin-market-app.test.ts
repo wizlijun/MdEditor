@@ -6,6 +6,7 @@ import { readInstalledCache, writeInstalledCache } from './lib/market/cache'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
+  i18n: { locale: 'en' },
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }))
@@ -31,6 +32,7 @@ vi.mock('./lib/i18n/store.svelte', () => {
     'pluginMarket.enabled': 'Enabled',
     'pluginMarket.disabled': 'Disabled',
     'pluginMarket.updateAvailable': 'Update available',
+    'pluginMarket.update': 'Update to {version}',
     'pluginMarket.onDevice': 'Installed on this device.',
     'pluginMarket.noneAvailable': 'No plugins available.',
     'pluginMarket.noneInstalled': 'No plugins installed.',
@@ -40,6 +42,7 @@ vi.mock('./lib/i18n/store.svelte', () => {
     'capability.vault.read': 'Read files',
   }
   return {
+    i18n: mocks.i18n,
     loadLocale: vi.fn(async () => {}),
     watchLocaleChanges: vi.fn(async () => () => {}),
     t: (key: string, params?: Record<string, string | number>) => {
@@ -92,6 +95,7 @@ function entry(id: string, name: string, version = '1.0.0'): RegistryEntry {
 beforeEach(() => {
   localStorage.clear()
   mocks.invoke.mockReset()
+  mocks.i18n.locale = 'en'
 })
 
 afterEach(async () => {
@@ -128,6 +132,8 @@ describe('plugin market staged loading', () => {
     })
     await vi.waitFor(() => expect(document.body.textContent).toContain('Idea Spark'))
     expect(document.body.textContent).toContain('Update available')
+    expect(document.querySelector('.update-card')?.textContent).toContain('v1.1.0')
+    expect(document.querySelector('.update-card .update-action')?.textContent).toContain('1.1.0')
     expect(document.querySelectorAll('.category-block[data-category="thinking"]')).toHaveLength(1)
     expect(document.querySelectorAll('.category-block[data-category="thinking"] .plugin-card')).toHaveLength(2)
   })
@@ -147,5 +153,71 @@ describe('plugin market staged loading', () => {
     await vi.waitFor(() => expect(document.body.textContent).toContain('Could not reach the plugin registry'))
     expect(document.body.textContent).toContain('Device Next')
     expect(readInstalledCache()).toEqual([installed('Device Next', false)])
+  })
+
+  it('keeps cached translations when an older installed manifest refreshes offline', async () => {
+    mocks.i18n.locale = 'zh'
+    const cachedPlugin: InstalledV2 = {
+      ...installed('Idea Spark'),
+      id: 'notemd.idea-spark',
+      description: 'Capture a spark.',
+      i18n: {
+        zh: { name: '奇思妙想', description: '捕捉一闪而过的灵感。' },
+      },
+    }
+    writeInstalledCache([cachedPlugin])
+    const registry = deferred<RegistryIndex>()
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'plugin_market_installed') {
+        return Promise.resolve([{
+          ...cachedPlugin,
+          i18n: null,
+        }])
+      }
+      if (command === 'plugin_market_index') return registry.promise
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+    await vi.waitFor(() => expect(document.body.textContent).toContain('奇思妙想（Idea Spark）'))
+    registry.reject(new Error('offline'))
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Could not reach the plugin registry'))
+    expect(document.body.textContent).toContain('捕捉一闪而过的灵感。')
+    expect(readInstalledCache()[0]?.i18n).toEqual(cachedPlugin.i18n)
+  })
+
+  it('localizes plugin names and descriptions while retaining non-Western English names', async () => {
+    mocks.i18n.locale = 'zh'
+    const localPlugin: InstalledV2 = {
+      ...installed('Idea Spark'),
+      id: 'notemd.idea-spark',
+      description: null,
+      i18n: {
+        zh: { name: '奇思妙想' },
+      },
+    }
+    const installedListing = entry('notemd.idea-spark', 'Idea Spark', '1.1.0')
+    installedListing.description = 'Capture a spark.'
+    installedListing.i18n = {
+      zh: { name: '奇思妙想', description: '捕捉一闪而过的灵感。' },
+    }
+    const availablePlugin = entry('notemd.trace-source', 'Trace Source')
+    availablePlugin.i18n = {
+      zh: { name: '溯源', description: '追溯文字的原始出处。' },
+    }
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'plugin_market_installed') return Promise.resolve([localPlugin])
+      if (command === 'plugin_market_index') {
+        return Promise.resolve({ plugins: [installedListing, availablePlugin] })
+      }
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+    await vi.waitFor(() => expect(document.body.textContent).toContain('奇思妙想（Idea Spark）'))
+    expect(document.body.textContent).toContain('捕捉一闪而过的灵感。')
+    expect(document.body.textContent).toContain('溯源（Trace Source）')
+    expect(document.body.textContent).toContain('追溯文字的原始出处。')
   })
 })

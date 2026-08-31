@@ -77,18 +77,21 @@
   "i18n": {
     "zh": {
       "name": "DeepSeek 智能体",
+      "description": "通过 Agent Client Protocol 在知识库中运行 DeepSeek Harness：支持任务模板、窗口实时输出和 CLI 后台执行。此功能为实验性功能，依赖开发者预览版 DeepSeek Harness。",
       "menus": {
         "open": "DeepSeek 智能体…"
       }
     },
     "ja": {
       "name": "DeepSeek エージェント",
+      "description": "Agent Client Protocol 経由で DeepSeek Harness を Vault 内に実行します。タスクテンプレート、ウィンドウへのリアルタイム出力、CLI からのバックグラウンド実行に対応しています。開発者プレビュー版に依存する実験的機能です。",
       "menus": {
         "open": "DeepSeek エージェント…"
       }
     },
     "de": {
       "name": "DeepSeek Agent",
+      "description": "DeepSeek Harness über das Agent Client Protocol im Vault ausführen – mit Aufgabenvorlagen, Live-Ausgabe im Fenster und Hintergrundstart per CLI. Experimentell; erfordert eine Entwickler-Vorschau von DeepSeek Harness.",
       "menus": {
         "open": "DeepSeek Agent…"
       }

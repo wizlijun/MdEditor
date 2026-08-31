@@ -43,18 +43,21 @@
   "i18n": {
     "zh": {
       "name": "OpenClaw",
+      "description": "通过 UDS 或中继与 OpenClaw 智能体对话。完整状态机运行在插件自身进程中，并将内容实时传回窗口。",
       "menus": {
         "open": "OpenClaw（v2）"
       }
     },
     "ja": {
       "name": "OpenClaw",
+      "description": "UDS またはリレー経由で OpenClaw エージェントと対話します。状態管理はプラグイン独自のプロセスで動作し、内容をウィンドウへリアルタイム配信します。",
       "menus": {
         "open": "OpenClaw（v2）"
       }
     },
     "de": {
       "name": "OpenClaw",
+      "description": "Über UDS oder Relay mit dem OpenClaw-Agenten chatten. Die vollständige Zustandslogik läuft im eigenen Plugin-Prozess und überträgt Inhalte live an das Fenster.",
       "menus": {
         "open": "OpenClaw (v2)"
       }

@@ -385,8 +385,9 @@ pub async fn plugin_market_set_enabled(
 
 /// List installed plugins from state.json joined with each
 /// `<root>/<id>/current/manifest.json`: `{id, version, enabled, name,
-/// capabilities}`. A plugin whose manifest is unreadable is still listed (with
-/// null name/empty capabilities) so the UI can offer to uninstall it.
+/// description, i18n, capabilities}`. A plugin whose manifest is unreadable is
+/// still listed (with null metadata/empty capabilities) so the UI can offer to
+/// uninstall it.
 #[tauri::command]
 pub fn plugin_market_installed(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
     let root = state::plugins_root(&app).ok_or("cannot resolve app data dir")?;
@@ -398,9 +399,11 @@ pub fn plugin_market_installed(app: tauri::AppHandle) -> Result<Vec<serde_json::
         let manifest: Option<plugin_protocol::ManifestV2> = std::fs::read_to_string(&manifest_path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok());
-        let (name, capabilities, category) = match &manifest {
+        let (name, description, i18n, capabilities, category) = match &manifest {
             Some(m) => (
                 serde_json::Value::String(m.name.clone()),
+                serde_json::to_value(&m.description).unwrap_or(serde_json::Value::Null),
+                serde_json::to_value(&m.i18n).unwrap_or(serde_json::Value::Null),
                 serde_json::to_value(&m.capabilities).unwrap_or(serde_json::Value::Array(vec![])),
                 serde_json::Value::String(
                     crate::plugin_host::normalize_plugin_menu_group(
@@ -414,6 +417,8 @@ pub fn plugin_market_installed(app: tauri::AppHandle) -> Result<Vec<serde_json::
             ),
             None => (
                 serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::Null,
                 serde_json::Value::Array(vec![]),
                 serde_json::Value::String("other".to_string()),
             ),
@@ -423,6 +428,8 @@ pub fn plugin_market_installed(app: tauri::AppHandle) -> Result<Vec<serde_json::
             "version": entry.version,
             "enabled": entry.enabled,
             "name": name,
+            "description": description,
+            "i18n": i18n,
             "category": category,
             "capabilities": capabilities,
         }));

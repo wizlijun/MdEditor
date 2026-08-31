@@ -27,8 +27,8 @@
   },
   "capabilities": ["editor.kit", "power-mode"],
   "i18n": {
-    "zh": { "name": "狂暴模式", "menus": { "open": "狂暴模式" } },
-    "ja": { "name": "パワーモード", "menus": { "open": "パワーモード" } },
-    "de": { "name": "Power-Modus", "menus": { "open": "Power-Modus" } }
+    "zh": { "name": "狂暴模式", "description": "输入时呈现光标爆炸、连击计数和轻微屏幕震动效果。", "menus": { "open": "狂暴模式" } },
+    "ja": { "name": "パワーモード", "description": "入力に合わせてカーソルの爆発エフェクト、コンボメーター、軽い画面揺れを表示します。", "menus": { "open": "パワーモード" } },
+    "de": { "name": "Power-Modus", "description": "Cursor-Explosionen, Combo-Anzeige und dezentes Bildschirmwackeln beim Tippen.", "menus": { "open": "Power-Modus" } }
   }
 }
