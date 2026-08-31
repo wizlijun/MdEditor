@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.831.2 — 2026-08-31
+
 ### Changed
 
 - **The Plugin Market fits substantially more plugins on screen.** The header, category sections, grid gaps and cards are tighter while preserving clear category boundaries; plugins with an available update now receive an orange card highlight, target-version badge and matching primary action.
