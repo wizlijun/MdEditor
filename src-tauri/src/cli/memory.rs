@@ -4,7 +4,9 @@
 //! not disappear when the Memory window plugin is disabled. The window and CLI
 //! still share `crate::memory_control` for every state transition.
 
+use crate::memory_control::v2 as memory_v2;
 use crate::memory_control::{self, model::*};
+use chrono::{SecondsFormat, Utc};
 use serde_json::json;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -37,7 +39,10 @@ pub fn parse_args(rest: &[String], json_global: bool) -> MemoryArgs {
         let token = &rest[i];
         if token == "--json" {
             out.json = true;
-        } else if matches!(token.as_str(), "--confirm-human-approved" | "--all") {
+        } else if matches!(
+            token.as_str(),
+            "--confirm-human-approved" | "--all" | "--dry-run" | "--external-transfer"
+        ) {
             out.bools.insert(token.trim_start_matches("--").to_string());
         } else if token.starts_with("--") {
             if let Some(value) = rest.get(i + 1) {
@@ -248,9 +253,7 @@ fn show(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
         let before = target.map(|entry| entry.text.as_str()).unwrap_or("—");
         let after = match proposal.frontmatter.proposal.operation {
             Operation::Revoke => "revoked (history retained)".to_string(),
-            Operation::Delete => {
-                "removed from projection (candidate/event retained)".to_string()
-            }
+            Operation::Delete => "removed from projection (candidate/event retained)".to_string(),
             Operation::SetPriority => format!(
                 "{:?}: {}",
                 proposal
@@ -374,51 +377,488 @@ fn propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-fn decide(args: &MemoryArgs, root: &std::path::Path, action: DecisionAction) -> Result<(), String> {
-    let proposal_id = args
+fn v2_snapshot(root: &std::path::Path) -> Result<serde_json::Value, String> {
+    memory_control::dispatch(
+        root,
+        "host.memory.v2.snapshot",
+        &json!({"as_of_valid_time": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)}),
+    )
+}
+
+fn parse_v2_enum<T: serde::de::DeserializeOwned>(value: &str, name: &str) -> Result<T, String> {
+    serde_json::from_value(json!(value)).map_err(|_| format!("invalid {name}: {value}"))
+}
+
+fn required_flag<'a>(args: &'a MemoryArgs, name: &str) -> Result<&'a str, String> {
+    args.flags
+        .get(name)
+        .map(String::as_str)
+        .ok_or_else(|| format!("--{name} is required"))
+}
+
+fn current_v2(
+    root: &std::path::Path,
+) -> Result<(memory_v2::RepositorySnapshot, memory_v2::MemorySnapshotV2), String> {
+    let repository = memory_v2::V2Repository::new(root)
+        .load()
+        .map_err(|error| error.to_string())?;
+    if repository.mode != memory_v2::RepositoryMode::V2Active {
+        return Err(format!("MEMORY_PROTOCOL_NOT_ACTIVE: {:?}", repository.mode));
+    }
+    let reduced = memory_v2::reduce(
+        &repository,
+        &memory_v2::SnapshotRequest {
+            as_of_valid_time: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            space: None,
+            purpose: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    Ok((repository, reduced))
+}
+
+fn v2_kind_data(kind: memory_v2::ClaimKind, text: &str, actor: &str) -> memory_v2::KindData {
+    match kind {
+        memory_v2::ClaimKind::Identity => memory_v2::KindData::Identity(memory_v2::IdentityData {
+            identity_type: memory_v2::IdentityType::Person,
+            value: text.into(),
+        }),
+        memory_v2::ClaimKind::Preference => {
+            memory_v2::KindData::Preference(memory_v2::PreferenceData {
+                dimension: "general".into(),
+            })
+        }
+        memory_v2::ClaimKind::Boundary => memory_v2::KindData::Boundary(memory_v2::BoundaryData {
+            behavior_policy: memory_v2::BehaviorPolicy {
+                effect: memory_v2::PolicyEffect::Deny,
+                actions: vec!["unspecified-action".into()],
+                resources: vec!["owner-data".into()],
+                conditions: vec![text.into()],
+            },
+        }),
+        memory_v2::ClaimKind::Decision => memory_v2::KindData::Decision(memory_v2::DecisionData {
+            made_by: actor.into(),
+            decided_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            decision_scope: "personal-assistant".into(),
+        }),
+        memory_v2::ClaimKind::Belief => memory_v2::KindData::Belief(memory_v2::BeliefData {
+            proposition: text.into(),
+        }),
+        memory_v2::ClaimKind::Observation => {
+            memory_v2::KindData::Observation(memory_v2::ObservationData {
+                observer: actor.into(),
+            })
+        }
+        memory_v2::ClaimKind::Commitment => {
+            memory_v2::KindData::Commitment(memory_v2::CommitmentData {
+                committed_by: actor.into(),
+                beneficiary: actor.into(),
+            })
+        }
+        memory_v2::ClaimKind::Practice => memory_v2::KindData::Practice(memory_v2::PracticeData {
+            practice_scope: "general".into(),
+        }),
+        memory_v2::ClaimKind::MaterialFact => {
+            memory_v2::KindData::MaterialFact(memory_v2::MaterialFactData {
+                proposition: text.into(),
+            })
+        }
+        memory_v2::ClaimKind::Quotation => {
+            memory_v2::KindData::Quotation(memory_v2::QuotationData {
+                speaker: actor.into(),
+            })
+        }
+        memory_v2::ClaimKind::LegacyUnclassified => {
+            memory_v2::KindData::LegacyUnclassified(memory_v2::LegacyData {
+                missing_semantics: vec!["claim-kind".into()],
+            })
+        }
+    }
+}
+
+fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
+    let operation = args
         .positionals
         .first()
-        .cloned()
-        .or_else(|| args.flags.get("id").cloned())
-        .ok_or("approve/reject requires a proposal id")?;
-    let expected_sha256 = args
+        .map(String::as_str)
+        .unwrap_or("create");
+    if !matches!(operation, "create" | "replace" | "revoke") {
+        return Err("v2 propose operation must be create, replace, or revoke".into());
+    }
+    let (repository, reduced) = current_v2(root)?;
+    let owner = reduced
+        .authority
+        .owner
+        .clone()
+        .ok_or("MEMORY_UNAUTHORIZED: owner authority is conflicted")?;
+    let request_id = args
         .flags
-        .get("proposal-sha256")
+        .get("request-id")
         .cloned()
-        .ok_or("decision requires --proposal-sha256 from `notemd memory show --json`")?;
-    let actor = args
+        .or_else(|| args.flags.get("dedupe-key").cloned())
+        .ok_or("propose requires --request-id (or legacy --dedupe-key)")?;
+    let recorded_by = required_flag(args, "recorded-by")
+        .or_else(|_| required_flag(args, "by"))?
+        .to_string();
+
+    let existing = if operation == "create" {
+        None
+    } else {
+        let claim_id = required_flag(args, "target")?;
+        let view = reduced
+            .claims
+            .iter()
+            .find(|view| view.claim_id == claim_id)
+            .ok_or_else(|| format!("claim not found: {claim_id}"))?;
+        if view.current_heads.len() != 1 {
+            return Err("MEMORY_STALE_BASE: target must have exactly one current head".into());
+        }
+        Some(
+            repository
+                .claims
+                .iter()
+                .find(|item| item.value.revision_id == view.current_heads[0].revision_id)
+                .ok_or("MEMORY_INVALID_DAG: current revision is missing")?
+                .value
+                .clone(),
+        )
+    };
+
+    let text = if operation == "revoke" {
+        existing
+            .as_ref()
+            .map(|claim| claim.text.clone())
+            .unwrap_or_default()
+    } else {
+        required_flag(args, "text")?.trim().to_string()
+    };
+    if text.is_empty() {
+        return Err("--text must not be empty".into());
+    }
+    let claim_kind = if let Some(claim) = &existing {
+        claim.claim_kind
+    } else {
+        parse_v2_enum(required_flag(args, "claim-kind")?, "claim-kind")?
+    };
+    let target = if let Some(claim) = &existing {
+        claim.projection.target
+    } else {
+        parse_v2_enum(
+            args.flags
+                .get("scope")
+                .or_else(|| args.flags.get("projection"))
+                .map(String::as_str)
+                .unwrap_or("memory"),
+            "projection",
+        )?
+    };
+    let category = existing
+        .as_ref()
+        .map(|claim| claim.projection.category.clone())
+        .unwrap_or(required_flag(args, "category")?.to_string());
+    let asserted_by = args
         .flags
-        .get("approved-by")
-        .or_else(|| args.flags.get("decided-by"))
+        .get("asserted-by")
         .cloned()
-        .ok_or("decision requires --approved-by human:<id>")?;
-    let value = memory_control::decide(
-        root,
-        DecideInput {
-            proposal_id,
-            expected_sha256,
-            action,
-            actor,
-            human_confirmed: args.bools.contains("confirm-human-approved"),
-            reason: args.flags.get("reason").cloned(),
-        },
-    )?;
+        .unwrap_or_else(|| owner.actor_id.clone());
+    let kind_data = existing
+        .as_ref()
+        .map(|claim| claim.kind_data.clone())
+        .unwrap_or_else(|| v2_kind_data(claim_kind, &text, &asserted_by));
+    let context = existing
+        .as_ref()
+        .map(|claim| claim.context.clone())
+        .unwrap_or(memory_v2::ClaimContext {
+            spaces: vec![required_flag(args, "space")?.to_string()],
+            applies_when: vec![],
+            excludes_when: vec![],
+        });
+    let consent = existing
+        .as_ref()
+        .map(|claim| claim.consent.clone())
+        .unwrap_or(memory_v2::Consent {
+            scope: "personal-assistant-only".into(),
+            allowed_purposes: vec![required_flag(args, "purpose")?.to_string()],
+            external_provider_policy: parse_v2_enum(
+                args.flags
+                    .get("provider-policy")
+                    .map(String::as_str)
+                    .unwrap_or("deny"),
+                "provider-policy",
+            )?,
+        });
+    let proposal =
+        memory_v2::propose_pending(
+            root,
+            memory_v2::PendingProposalInput {
+                request_id,
+                claim_id: existing.as_ref().map(|claim| claim.claim_id.clone()),
+                text,
+                claim_kind,
+                kind_data,
+                subject: memory_v2::Subject {
+                    kind: memory_v2::SubjectKind::VaultOwner,
+                    id: owner.owner_id,
+                    relation_to_owner: memory_v2::OwnerRelation::Self_,
+                },
+                asserted_by: vec![memory_v2::Assertion {
+                    kind: "actor".into(),
+                    id: asserted_by,
+                    basis: args
+                        .flags
+                        .get("basis")
+                        .cloned()
+                        .unwrap_or_else(|| "agent-recorded".into()),
+                }],
+                recorded_by: memory_v2::Recorder {
+                    kind: "agent".into(),
+                    id: recorded_by,
+                    device_id: args
+                        .flags
+                        .get("device-id")
+                        .cloned()
+                        .unwrap_or_else(|| "device:cli".into()),
+                },
+                projection: memory_v2::Projection {
+                    target,
+                    category,
+                    visibility: memory_v2::Visibility::Projection,
+                },
+                lifecycle: if operation == "revoke" {
+                    memory_v2::LifecycleState::Revoked
+                } else {
+                    memory_v2::LifecycleState::Active
+                },
+                temporal: existing
+                    .as_ref()
+                    .map(|claim| claim.temporal.clone())
+                    .unwrap_or(memory_v2::Temporal {
+                        valid_from: args.flags.get("valid-from").cloned(),
+                        valid_until: args.flags.get("valid-until").cloned(),
+                        ..Default::default()
+                    }),
+                epistemic: existing
+                    .as_ref()
+                    .map(|claim| claim.epistemic.clone())
+                    .unwrap_or(memory_v2::Epistemic {
+                        basis: args
+                            .flags
+                            .get("basis")
+                            .cloned()
+                            .unwrap_or_else(|| "inferred".into()),
+                        representation_certainty: "unknown".into(),
+                        truth_status: "not-assessed".into(),
+                        truth_confidence: "unknown".into(),
+                    }),
+                trust_tier: existing.as_ref().map(|claim| claim.trust_tier).unwrap_or(
+                    parse_v2_enum(
+                        args.flags
+                            .get("trust-tier")
+                            .map(String::as_str)
+                            .unwrap_or("contextual"),
+                        "trust-tier",
+                    )?,
+                ),
+                risk_class: existing.as_ref().map(|claim| claim.risk_class).unwrap_or(
+                    parse_v2_enum(
+                        args.flags
+                            .get("risk-class")
+                            .map(String::as_str)
+                            .unwrap_or("informational"),
+                        "risk-class",
+                    )?,
+                ),
+                salience: existing
+                    .as_ref()
+                    .map(|claim| claim.salience)
+                    .unwrap_or(parse_v2_enum(
+                        args.flags
+                            .get("salience")
+                            .map(String::as_str)
+                            .unwrap_or("normal"),
+                        "salience",
+                    )?),
+                polarity: existing
+                    .as_ref()
+                    .map(|claim| claim.polarity)
+                    .unwrap_or(parse_v2_enum(
+                        args.flags
+                            .get("polarity")
+                            .map(String::as_str)
+                            .unwrap_or("neutral"),
+                        "polarity",
+                    )?),
+                sensitivity: existing.as_ref().map(|claim| claim.sensitivity).unwrap_or(
+                    parse_v2_enum(
+                        args.flags
+                            .get("sensitivity")
+                            .map(String::as_str)
+                            .unwrap_or("normal"),
+                        "sensitivity",
+                    )?,
+                ),
+                context,
+                consent,
+                agent_use: memory_v2::AgentUse {
+                    guidance: args
+                        .flags
+                        .get("guidance")
+                        .or_else(|| args.flags.get("agent-guidance"))
+                        .cloned()
+                        .unwrap_or_default(),
+                    avoid_error: args.flags.get("avoid-error").cloned().unwrap_or_default(),
+                },
+                evidence: args
+                    .flags
+                    .get("source")
+                    .map(|resource| {
+                        vec![memory_v2::Evidence {
+                            relation: memory_v2::EvidenceRelation::EvidenceOfSpeech,
+                            resource: resource.clone(),
+                            content_sha256: None,
+                            title: None,
+                        }]
+                    })
+                    .unwrap_or_default(),
+                dedupe_key: args
+                    .flags
+                    .get("dedupe-key")
+                    .cloned()
+                    .unwrap_or_else(|| "cli-proposal".into()),
+            },
+        )?;
+    let value = serde_json::to_value(&proposal).map_err(|error| error.to_string())?;
     print_json_or_text(
         args,
-        value.clone(),
+        value,
         format!(
-            "{:?} proposal {} -> entry {}",
-            action,
-            value["proposal_id"].as_str().unwrap_or(""),
-            value["entry_id"].as_str().unwrap_or("")
+            "Created pending Claim {} revision {}",
+            proposal.claim_id, proposal.revision_id
         ),
     );
     Ok(())
 }
 
+fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String> {
+    if matches!(
+        args.action.as_str(),
+        "approve" | "reject" | "ignore" | "delete" | "resolve"
+    ) {
+        return Err("MEMORY_UNAUTHORIZED: human memory decisions are only accepted from the trusted Memory UI".into());
+    }
+    let snapshot = v2_snapshot(root)?;
+    match args.action.as_str() {
+        "snapshot" | "list" => {
+            let mut value = snapshot;
+            if args.action == "list" && !args.bools.contains("all") {
+                value = json!({"claims": value["claims"], "pending": value["pending"], "conflicts": value["conflicts"], "health": value["health"]});
+            }
+            print_json_or_text(
+                args,
+                value.clone(),
+                serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "owner" => {
+            let value = snapshot["owner"].clone();
+            print_json_or_text(
+                args,
+                value.clone(),
+                serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "pending" | "conflicts" => {
+            let value = snapshot[args.action.as_str()].clone();
+            print_json_or_text(
+                args,
+                value.clone(),
+                serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "show" => {
+            let needle = args
+                .positionals
+                .first()
+                .ok_or("show requires a claim or revision id")?;
+            let found = ["claims", "pending", "conflicts", "history"]
+                .iter()
+                .flat_map(|key| snapshot[*key].as_array().into_iter().flatten())
+                .find(|item| item.to_string().contains(needle))
+                .cloned()
+                .ok_or_else(|| format!("claim or revision not found: {needle}"))?;
+            print_json_or_text(
+                args,
+                found.clone(),
+                serde_json::to_string_pretty(&found).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "propose" => v2_propose(args, root).map(|_| ExitCode::SUCCESS),
+        "context" => {
+            let request = json!({
+                "space": required_flag(args, "space")?, "purpose": required_flag(args, "purpose")?,
+                "caller": required_flag(args, "caller")?, "provider": required_flag(args, "provider")?,
+                "model": required_flag(args, "model")?,
+                "tools": args.flags.get("tool").map(|value| value.split(',').map(str::trim).filter(|value| !value.is_empty()).collect::<Vec<_>>()).unwrap_or_default(),
+                "external_transfer": args.bools.contains("external-transfer"),
+                "as_of_valid_time": args.flags.get("as-of").cloned().unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true))
+            });
+            let value = memory_control::dispatch(root, "host.memory.v2.context", &request)?;
+            print_json_or_text(
+                args,
+                value.clone(),
+                serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "check" | "doctor" => {
+            let health = memory_control::dispatch(root, "host.memory.v2.check", &json!({}))?;
+            let ok = health["status"] != "damaged" && health["status"] != "unsupported";
+            print_json_or_text(
+                args,
+                health.clone(),
+                serde_json::to_string_pretty(&health).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::from(if ok { 0 } else { 1 }))
+        }
+        "rebuild" | "reconcile" => {
+            memory_v2::rebuild_projections(root)?;
+            print_json_or_text(
+                args,
+                json!({"rebuilt": true}),
+                "Memory v2 projections rebuilt.".into(),
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "migrate" => Err("MEMORY_PROTOCOL_ALREADY_ACTIVE: v2 migration is not applicable".into()),
+        other => Err(format!("unknown v2 memory action: {other}")),
+    }
+}
+
 pub fn run(args: MemoryArgs) -> ExitCode {
     let result = (|| -> Result<ExitCode, String> {
         let root = root(&args)?;
+        let repository_mode = memory_v2::V2Repository::new(&root)
+            .load()
+            .map_err(|error| error.to_string())?
+            .mode;
+        if repository_mode == memory_v2::RepositoryMode::V2Active {
+            return run_v2(&args, &root);
+        }
+        if repository_mode == memory_v2::RepositoryMode::V2Incomplete {
+            return Err(
+                "MEMORY_PROTOCOL_INCOMPLETE: repair v2 control assets before continuing".into(),
+            );
+        }
+        if matches!(
+            args.action.as_str(),
+            "approve" | "reject" | "ignore" | "delete"
+        ) {
+            return Err("MEMORY_UNAUTHORIZED: human memory decisions are only accepted from the trusted Memory UI".into());
+        }
         match args.action.as_str() {
             "list" => list(&args, &root).map(|_| ExitCode::SUCCESS),
             "show" => show(&args, &root).map(|_| ExitCode::SUCCESS),
@@ -429,8 +869,7 @@ pub fn run(args: MemoryArgs) -> ExitCode {
                 Ok(ExitCode::SUCCESS)
             }
             "propose" => propose(&args, &root).map(|_| ExitCode::SUCCESS),
-            "approve" => decide(&args, &root, DecisionAction::Approve).map(|_| ExitCode::SUCCESS),
-            "reject" => decide(&args, &root, DecisionAction::Reject).map(|_| ExitCode::SUCCESS),
+            "approve" | "reject" => unreachable!("decision actions are rejected above"),
             "check" | "doctor" => {
                 let snapshot = memory_control::list(&root)?;
                 let ok = !snapshot.integrity.drift;
@@ -447,13 +886,20 @@ pub fn run(args: MemoryArgs) -> ExitCode {
                 Ok(ExitCode::from(if ok { 0 } else { 1 }))
             }
             "migrate" => {
-                let value = memory_control::migrate(&root)?;
+                if !args.bools.contains("dry-run") {
+                    return Err("migration requires --dry-run; authoritative apply is not available until the protocol freeze gate passes".into());
+                }
+                let value = memory_control::dispatch(
+                    &root,
+                    "host.memory.v2.migrate",
+                    &json!({"mode": "dry-run"}),
+                )?;
                 print_json_or_text(
                     &args,
                     value.clone(),
                     format!(
-                        "Migrated {} legacy entries to pending proposals.",
-                        value["migrated"].as_u64().unwrap_or(0)
+                        "Migration dry-run: {} claims, zero writes.",
+                        value["counts"]["claims"].as_u64().unwrap_or(0)
                     ),
                 );
                 Ok(ExitCode::SUCCESS)
@@ -516,27 +962,23 @@ mod tests {
     }
 
     #[test]
-    fn approval_confirmation_is_a_dedicated_flag() {
+    fn v2_context_and_migration_boolean_flags_are_not_value_flags() {
         let args = parse_args(
             &[
-                "approve",
-                "p1",
-                "--proposal-sha256",
-                "abc123",
-                "--approved-by",
-                "human:bruce",
-                "--confirm-human-approved",
+                "context",
+                "--external-transfer",
+                "--dry-run",
+                "--space",
+                "work",
             ]
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>(),
             false,
         );
-        assert!(args.bools.contains("confirm-human-approved"));
-        assert_eq!(
-            args.flags.get("proposal-sha256").map(String::as_str),
-            Some("abc123")
-        );
+        assert!(args.bools.contains("external-transfer"));
+        assert!(args.bools.contains("dry-run"));
+        assert_eq!(args.flags.get("space").map(String::as_str), Some("work"));
     }
 
     #[test]

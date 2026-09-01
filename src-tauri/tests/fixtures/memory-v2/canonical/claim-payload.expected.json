@@ -1,0 +1,7 @@
+{
+  "algorithm": "RFC8785",
+  "schema": "notemd.memory/claim-revision/v2",
+  "normalization_profile": "notemd.memory.claim-payload/2",
+  "canonical_bytes": 3656,
+  "payload_sha256": "44a3bcbd77c854b064f0b87515530419eec93aec68d9d8b1e72e897f95dc0be4"
+}

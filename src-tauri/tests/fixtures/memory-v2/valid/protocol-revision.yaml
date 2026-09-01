@@ -1,0 +1,23 @@
+schema: notemd.memory/protocol-revision/v2
+revision_id: 01999f70-0000-7000-8000-000000000002
+base_heads: []
+causal_context:
+  parents: []
+protocol_major: 2
+protocol_minor: 0
+renderer_version: notemd.memory.projector/2
+claim_schema: notemd.memory/claim-revision/v2
+category_registry:
+  user: [owner, identity, preferences, work-style, boundaries, other]
+  memory: [decisions, constraints, practices, context, other]
+decision:
+  verdict: approve
+  actor_id: owner:01999f70-0000-7000-8000-000000000004
+  authority_context:
+    heads:
+      - revision_id: 01999f70-0000-7000-8000-000000000003
+        payload_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    capability: memory.protocol.modify
+transition:
+  operation: initialize
+payload_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

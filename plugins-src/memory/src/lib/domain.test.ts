@@ -1,66 +1,67 @@
 import { describe, expect, it } from 'vitest'
-import { describeDelta, describeMetadataDelta, exactDecisionPrompt, filterEntries, pendingProposalForEntry, pendingProposals, usageRule } from './domain'
-import type { MemoryEntry, Proposal } from './types'
+import {
+  approvalForPending,
+  approvalKindFor,
+  approvalLabels,
+  categoryLabel,
+  currentClaims,
+  hostError,
+  pendingClaims,
+  subjectLabel,
+  temporalLabel,
+} from './domain'
+import type { EffectiveClaim, MemoryClaimRevision, PendingClaim } from './types'
 
-const entry: MemoryEntry = {
-  id: 'e1', scope: 'memory', section: 'S', text: 'Keep evidence precise', revision: 1,
-  status: 'active', priority: 'high', polarity: 'negative', epistemic_status: 'owner-stated', certainty: 'high',
-  agent_guidance: 'Respect the boundary.', avoid_error: 'Never disclose it.', classification_complete: true,
-  document: 'MEMORY.md', legacy: false,
-}
-
-const proposal = (operation: Proposal['proposal']['operation'], decision: Proposal['decision'] = 'pending'): Proposal => ({
-  type: 'Memory Proposal', title: 'x', created: '2026-09-01T00:00:00Z',
-  proposal: { version: 1, id: 'p1', scope: 'memory', operation, target_id: 'e1', base_revision: 1,
-    dedupe_key: 'k', action_sensitive: false, merge_from: [], suggested_priority: 'normal' },
-  generated: { by: 'agent/x', at: '2026-09-01T00:00:00Z' }, sources: [], text: 'Updated fact', reason: '',
-  path: 'inbox/memory-candidates/p.md', sha256: 'a', decision,
+const claim = (overrides: Partial<MemoryClaimRevision> = {}): MemoryClaimRevision => ({
+  schema: 'notemd.memory/claim-revision/v2', claim_id: 'claim-1', revision_id: 'revision-1', parents: [],
+  claim_kind: 'preference', subject: { kind: 'vault-owner', id: 'owner-1', relation_to_owner: 'self' },
+  asserted_by: [{ kind: 'owner', id: 'owner-1' }], recorded_by: { kind: 'host', id: 'notemd.memory-ui' },
+  recorded_at: '2026-09-01T08:30:00Z', text: '回答先给出结论。', projection: { target: 'user', category: 'preferences', visibility: 'projection' },
+  workflow: { state: 'approved' }, lifecycle: { state: 'active' }, temporal: { valid_from: '2026-09-01T08:30:00Z' },
+  epistemic: { basis: 'owner-stated', representation_certainty: 'high', truth_status: 'not-assessed', truth_confidence: 'unknown' },
+  trust_tier: 'stable-preference', risk_class: 'informational', salience: 'normal', polarity: 'positive', sensitivity: 'normal',
+  context: { spaces: ['work/hemory'], applies_when: [], excludes_when: [] },
+  consent: { scope: 'personal-assistant-only', allowed_purposes: ['planning', 'writing'], external_provider_policy: 'prompt' },
+  agent_use: { guidance: '先给出结论。', avoid_error: '不要扩张为行动授权。' },
+  decision: { verdict: 'approve', approval_kind: 'self-representation', actor_id: 'human:bruce', decided_at: '2026-09-01T08:30:00Z' },
+  payload_sha256: 'sha-1', ...overrides,
 })
 
-describe('memory domain', () => {
-  it('filters by search and high priority', () => {
-    expect(filterEntries([entry], 'evidence', 'all', 'active', true)).toEqual([entry])
-    expect(filterEntries([entry], 'missing', 'all', 'active', true)).toEqual([])
-    expect(filterEntries([{ ...entry, priority: 'critical' }], '', 'all', 'active', true, 'negative')).toHaveLength(1)
-    expect(filterEntries([entry], '', 'all', 'active', false, 'positive')).toEqual([])
-    expect(filterEntries([{ ...entry, scope: 'user-owner' }], '', 'all', 'active', false)).toEqual([])
+describe('Memory Protocol v2 domain', () => {
+  it('filters only current approved active claims and keeps pinned negative claims first', () => {
+    const normal: EffectiveClaim = { claim: claim(), application_state: 'current' }
+    const pinned: EffectiveClaim = { claim: claim({ claim_id: 'claim-2', revision_id: 'revision-2', text: '不要泄露私人内容。', salience: 'pinned', polarity: 'negative' }), application_state: 'current' }
+    const stale: EffectiveClaim = { claim: claim({ claim_id: 'claim-3' }), application_state: 'stale' }
+    expect(currentClaims([normal, stale, pinned], '', 'all').map((item) => item.claim.claim_id)).toEqual(['claim-2', 'claim-1'])
+    expect(currentClaims([normal], '结论', 'user')).toHaveLength(1)
+    expect(currentClaims([normal], '结论', 'memory')).toHaveLength(0)
   })
-  it('keeps only pending proposals', () => {
-    expect(pendingProposals([proposal('replace'), proposal('replace', 'approved')])).toHaveLength(1)
+
+  it('keeps approval semantics distinct by claim kind', () => {
+    expect(approvalKindFor('preference')).toBe('self-representation')
+    expect(approvalKindFor('boundary')).toBe('behavioral-authorization')
+    expect(approvalKindFor('material-fact')).toBe('factual-verification')
+    expect(approvalLabels['self-representation'].explanation).toContain('不验证外部事实')
+    expect(approvalLabels['behavioral-authorization'].button).toBe('允许此行为')
+    expect(approvalLabels['factual-verification'].button).toBe('确认事实正确')
   })
-  it('reuses only the exact pending proposal attached to an entry', () => {
-    const pendingEntry = { ...entry, status: 'pending', proposal: 'p1' }
-    expect(pendingProposalForEntry(pendingEntry, [proposal('create')])?.proposal.id).toBe('p1')
-    expect(pendingProposalForEntry(pendingEntry, [{ ...proposal('create'), proposal: { ...proposal('create').proposal, target_id: 'other' } }])).toBeUndefined()
-    expect(pendingProposalForEntry({ ...pendingEntry, scope: 'user-owner' }, [proposal('create')])).toBeUndefined()
+
+  it('sorts action-sensitive pending first without upgrading its semantics', () => {
+    const informational: PendingClaim = { revision: claim({ workflow: { state: 'pending' }, decision: undefined }), expected_sha256: 'a', expected_heads: [] }
+    const boundary: PendingClaim = { revision: claim({ claim_id: 'claim-2', revision_id: 'revision-2', claim_kind: 'boundary', workflow: { state: 'pending' }, risk_class: 'action-sensitive', decision: undefined }), expected_sha256: 'b', expected_heads: [] }
+    expect(pendingClaims([informational, boundary])[0].revision.claim_id).toBe('claim-2')
+    expect(approvalForPending(boundary)).toBe('behavioral-authorization')
   })
-  it('renders a revoke as a delta instead of physical deletion', () => {
-    expect(describeDelta(proposal('revoke'), [entry])).toEqual({ before: entry.text, after: '撤销（保留历史）' })
+
+  it('renders subject, category and valid time without treating record time as valid time', () => {
+    const item = claim({ subject: { kind: 'vault-owner', id: 'owner-1', relation_to_owner: 'self', label: 'Bruce' } })
+    expect(subjectLabel(item)).toBe('Bruce')
+    expect(categoryLabel('user', 'preferences')).toBe('偏好')
+    expect(temporalLabel(item)).toContain('2026年9月1日')
+    expect(temporalLabel(claim({ temporal: {} }))).toBe('未声明有效时间')
   })
-  it('makes physical projection deletion explicit while retaining audit history', () => {
-    expect(describeDelta(proposal('delete'), [entry])).toEqual({
-      before: entry.text,
-      after: '从当前记忆中删除（保留审计记录）',
-    })
-  })
-  it('binds approval to the exact id, hash and displayed delta', () => {
-    const prompt = exactDecisionPrompt(proposal('replace'), [entry], 'Confirm exact change')
-    expect(prompt).toContain('Proposal: p1')
-    expect(prompt).toContain('SHA-256: a')
-    expect(prompt).toContain(`Before:\n${entry.text}`)
-    expect(prompt).toContain('After:\nUpdated fact')
-  })
-  it('shows the complete before and after behavior metadata', () => {
-    const change = { ...proposal('replace'), proposal: { ...proposal('replace').proposal,
-      suggested_agent_guidance: 'Apply only with consent.', suggested_avoid_error: 'Never infer consent.' } }
-    const metadata = describeMetadataDelta(change, [entry])
-    expect(metadata.agentGuidance).toEqual({ before: 'Respect the boundary.', after: 'Apply only with consent.' })
-    expect(metadata.avoidError).toEqual({ before: 'Never disclose it.', after: 'Never infer consent.' })
-  })
-  it('makes negative guidance explicit and sorts it before neutral context', () => {
-    const neutral = { ...entry, id: 'e2', priority: 'high' as const, polarity: 'neutral' as const }
-    expect(filterEntries([neutral, entry], '', 'all', 'active', false).map((item) => item.id)).toEqual(['e1', 'e2'])
-    expect(usageRule(entry)).toBe('Never disclose it.')
-    expect(usageRule({ ...entry, status: 'pending' })).toContain('不能作为确定事实')
+
+  it('turns an unsupported v2 Host into a clear compatibility message', () => {
+    expect(hostError(new Error('unknown method host.memory.v2.snapshot'))).toContain('宿主尚未提供 Memory Protocol v2 RPC')
   })
 })

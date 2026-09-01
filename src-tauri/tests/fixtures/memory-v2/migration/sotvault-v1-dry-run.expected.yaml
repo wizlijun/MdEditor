@@ -1,0 +1,108 @@
+schema: notemd.memory/migration-dry-run-fixture/v2
+fixture_revision: rfc-0.10-review-2026-09-01
+source_vault: sotvault
+mode: dry-run
+authorizes_apply: false
+privacy:
+  contains_fact_text: false
+  contains_owner_identity: false
+source_inventory:
+  candidates: 113
+  candidates_schema_v1: 113
+  events: 25
+  approve_events: 24
+  reject_events: 1
+  current_entries: 34
+  current_active: 15
+  current_pending: 19
+  scopes:
+    memory: 12
+    user-profile: 21
+    user-owner: 1
+semantic_coverage:
+  explicit_claim_kind: 0
+  explicit_subject: 0
+  explicit_asserted_by: 0
+  explicit_valid_time: 0
+expected_dispositions:
+  - disposition: preserve-pending
+    count: 19
+    workflow_state: pending
+    application_state: unavailable
+    projection_eligible: false
+    reason_codes: [v1-pending-is-not-approval, semantic-review-required]
+  - disposition: preserve-approved-quarantine-unknown
+    count: 11
+    workflow_state: approved
+    claim_kind: legacy-unclassified
+    application_state: quarantined
+    projection_eligible: false
+    reason_codes: [epistemic-unknown, certainty-unknown, claim-kind-unproven, subject-unproven, asserted-by-unproven, valid-time-unproven]
+  - disposition: preserve-approved-quarantine-owner-stated
+    count: 3
+    workflow_state: approved
+    claim_kind: legacy-unclassified
+    application_state: quarantined
+    projection_eligible: false
+    reason_codes: [approval-meaning-unproven, claim-kind-unproven, valid-time-unproven]
+  - disposition: owner-activation-eligible-after-chain-validation
+    count: 1
+    workflow_state: approved
+    application_state: eligible
+    projection_eligible: false
+    reason_codes: [requires-proposal-event-owner-actor-three-way-match, authority-dag-target]
+mapping_rules:
+  - target: claim_kind
+    value: legacy-unclassified
+    provenance: v1.category
+    basis: category-is-not-claim-kind
+    confidence: insufficient
+  - target: subject
+    value: unknown
+    provenance: null
+    basis: v1-scope-does-not-prove-subject
+    confidence: insufficient
+  - target: asserted_by
+    value: unknown
+    provenance: null
+    basis: producer-approver-source-and-git-author-are-not-assertor
+    confidence: insufficient
+  - target: temporal.valid_from
+    value: null
+    provenance: null
+    basis: created-event-and-git-times-are-transaction-times-only
+    confidence: insufficient
+  - target: salience
+    value: normal
+    provenance: v1.priority
+    basis: priority-only-produces-suggested-salience
+    confidence: review-required
+idempotency_contract:
+  identity_inputs: [sorted-source-paths, source-byte-sha256, mapping-version, protocol-root-hash, authority-root-hash]
+  forbidden_identity_inputs: [now, random-uuid, device-clock, file-mtime, git-commit-time]
+  dry_run_writes: 0
+  apply_requires: [expected-plan-sha256, clean-or-explicitly-approved-git-state, shared-lock, unchanged-source-manifest]
+  existing_same_id_same_hash: success
+  existing_same_id_different_hash: integrity-conflict
+unknown_or_corrupt:
+  unknown_schema: quarantine
+  duplicate_yaml_key: blocker
+  yaml_anchor_alias_or_custom_tag: blocker
+  malformed_utf8: blocker
+  missing_referenced_candidate: blocker
+  event_candidate_hash_mismatch: blocker
+  approve_reject_conflict: blocker
+  root_projection_event_mismatch: quarantine
+  unsupported_host_or_plugin: protocol-2-write-fence-read-only
+rollback:
+  before_activation: isolate-staging-and-byte-restore-v1
+  after_activation: forward-migration-only
+  legacy_assets: git-move-to-.notemd/memory/legacy/v1/<migration-id>
+  state_json: retain-protocol-2-write-fence-at-legacy-path
+  git_history_erasure_promised: false
+acceptance:
+  counts_are_review_snapshot_only: true
+  apply_must_rescan: true
+  count_change_changes_plan_hash: true
+  projection_diff_requires_human_review: true
+  batch_upgrade_to_factual_or_behavioral_authority_forbidden: true

@@ -1,0 +1,19 @@
+description: Agent proposal state derived from the complete Claim fixture.
+operations:
+  - replace:
+      path: workflow.state
+      value: pending
+  - replace:
+      path: decision
+      value: null
+  - replace:
+      path: transition.operation
+      value: propose-create
+  - replace:
+      path: transition.approves_revision_id
+      value: null
+  - replace:
+      path: transition.approves_payload_sha256
+      value: null
+expected_application_state: unavailable
+projection_eligible: false

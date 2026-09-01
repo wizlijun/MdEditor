@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://notemd.example/schemas/memory/claim-revision-v2.json",
+  "title": "NoteMD Memory v2 Claim revision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "claim_id", "revision_id", "request_id", "parents", "causal_context", "claim_kind", "kind_data", "subject", "asserted_by", "recorded_by", "recorded_at", "text", "projection", "workflow", "lifecycle", "temporal", "epistemic", "trust_tier", "risk_class", "salience", "polarity", "sensitivity", "context", "consent", "agent_use", "decision", "transition", "evidence", "lineage", "dedupe_key", "payload_sha256"],
+  "properties": {
+    "schema": { "const": "notemd.memory/claim-revision/v2" },
+    "claim_id": { "$ref": "#/$defs/id" },
+    "revision_id": { "$ref": "#/$defs/id" },
+    "request_id": { "$ref": "#/$defs/id" },
+    "parents": { "type": "array", "items": { "$ref": "#/$defs/revisionRef" } },
+    "causal_context": { "$ref": "#/$defs/causalContext" },
+    "claim_kind": { "enum": ["identity", "preference", "boundary", "decision", "belief", "observation", "commitment", "practice", "material_fact", "quotation", "legacy-unclassified"] },
+    "kind_data": { "$ref": "#/$defs/kindData" },
+    "subject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id", "relation_to_owner"],
+      "properties": {
+        "kind": { "enum": ["vault-owner", "person", "project", "organization", "system", "artifact", "other"] },
+        "id": { "$ref": "#/$defs/id" },
+        "relation_to_owner": { "enum": ["self", "direct", "shared-context", "external", "unknown"] }
+      }
+    },
+    "asserted_by": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/assertor" } },
+    "recorded_by": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id", "device_id"],
+      "properties": {
+        "kind": { "enum": ["host", "agent", "human", "process", "migration"] },
+        "id": { "$ref": "#/$defs/id" },
+        "device_id": { "$ref": "#/$defs/id" }
+      }
+    },
+    "recorded_at": { "$ref": "#/$defs/dateTime" },
+    "text": { "type": "string", "minLength": 1 },
+    "projection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target", "category", "visibility"],
+      "properties": {
+        "target": { "enum": ["user", "memory", "none"] },
+        "category": { "type": "string", "minLength": 1 },
+        "visibility": { "enum": ["projection", "trusted-agent", "ui-only", "withheld"] }
+      }
+    },
+    "workflow": {
+      "type": "object", "additionalProperties": false, "required": ["state"],
+      "properties": { "state": { "enum": ["pending", "approved", "rejected", "ignored"] } }
+    },
+    "lifecycle": {
+      "type": "object", "additionalProperties": false, "required": ["state"],
+      "properties": { "state": { "enum": ["active", "revoked", "deleted", "merged"] } }
+    },
+    "temporal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["uttered_at", "observed_at", "valid_from", "valid_until", "planned_for", "due_at", "review_after"],
+      "properties": {
+        "uttered_at": { "$ref": "#/$defs/nullableDateTime" },
+        "observed_at": { "$ref": "#/$defs/nullableDateTime" },
+        "valid_from": { "$ref": "#/$defs/nullableDateTime" },
+        "valid_until": { "$ref": "#/$defs/nullableDateTime" },
+        "planned_for": { "$ref": "#/$defs/nullableDateTime" },
+        "due_at": { "$ref": "#/$defs/nullableDateTime" },
+        "review_after": { "$ref": "#/$defs/nullableDateTime" }
+      }
+    },
+    "epistemic": {
+      "type": "object", "additionalProperties": false,
+      "required": ["basis", "representation_certainty", "truth_status", "truth_confidence"],
+      "properties": {
+        "basis": { "enum": ["owner-stated", "source-supported", "inferred", "contested", "unknown"] },
+        "representation_certainty": { "enum": ["high", "medium", "low", "unknown"] },
+        "truth_status": { "enum": ["verified", "not-assessed", "contested", "false", "unknown"] },
+        "truth_confidence": { "enum": ["high", "medium", "low", "unknown"] }
+      }
+    },
+    "trust_tier": { "enum": ["identity", "stable-preference", "contextual"] },
+    "risk_class": { "enum": ["action-sensitive", "behavioral", "informational"] },
+    "salience": { "enum": ["pinned", "normal"] },
+    "polarity": { "enum": ["positive", "negative", "neutral"] },
+    "sensitivity": { "enum": ["normal", "private", "restricted"] },
+    "context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["spaces", "applies_when", "excludes_when"],
+      "properties": {
+        "spaces": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "applies_when": { "$ref": "#/$defs/stringSet" },
+        "excludes_when": { "$ref": "#/$defs/stringSet" }
+      }
+    },
+    "consent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scope", "allowed_purposes", "external_provider_policy"],
+      "properties": {
+        "scope": { "type": "string", "minLength": 1 },
+        "allowed_purposes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["planning", "writing", "information-answer", "external-action", "sync", "projection", "export/share"] } },
+        "external_provider_policy": { "enum": ["deny", "prompt", "allow"] }
+      }
+    },
+    "agent_use": {
+      "type": "object", "additionalProperties": false,
+      "required": ["guidance", "avoid_error"],
+      "properties": { "guidance": { "type": "string", "minLength": 1 }, "avoid_error": { "type": "string", "minLength": 1 } }
+    },
+    "decision": { "oneOf": [{ "$ref": "#/$defs/decision" }, { "type": "null" }] },
+    "transition": { "$ref": "#/$defs/transition" },
+    "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+    "lineage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["derived_from", "produced_by_operation"],
+      "properties": {
+        "derived_from": { "type": "array", "items": { "$ref": "#/$defs/lineageRef" } },
+        "produced_by_operation": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] }
+      }
+    },
+    "dedupe_key": { "type": "string", "minLength": 1 },
+    "payload_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "allOf": [
+    { "if": { "properties": { "claim_kind": { "const": "identity" } } }, "then": { "properties": { "kind_data": { "required": ["identity"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "preference" } } }, "then": { "properties": { "kind_data": { "required": ["preference"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "boundary" } } }, "then": { "properties": { "kind_data": { "required": ["boundary"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "decision" } } }, "then": { "properties": { "kind_data": { "required": ["decision"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "belief" } } }, "then": { "properties": { "kind_data": { "required": ["belief"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "observation" } } }, "then": { "properties": { "kind_data": { "required": ["observation"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "commitment" } } }, "then": { "properties": { "kind_data": { "required": ["commitment"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "practice" } } }, "then": { "properties": { "kind_data": { "required": ["practice"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "material_fact" } } }, "then": { "properties": { "kind_data": { "required": ["material_fact"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "quotation" } } }, "then": { "properties": { "kind_data": { "required": ["quotation"] } } } },
+    { "if": { "properties": { "claim_kind": { "const": "legacy-unclassified" } } }, "then": { "properties": { "kind_data": { "required": ["legacy-unclassified"] } } } }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "dateTime": { "type": "string", "format": "date-time" },
+    "nullableDateTime": { "oneOf": [{ "$ref": "#/$defs/dateTime" }, { "type": "null" }] },
+    "stringSet": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "revisionRef": {
+      "type": "object", "additionalProperties": false, "required": ["revision_id", "payload_sha256"],
+      "properties": { "revision_id": { "$ref": "#/$defs/id" }, "payload_sha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "recordRef": {
+      "type": "object", "additionalProperties": false, "required": ["record_id", "raw_sha256"],
+      "properties": { "record_id": { "$ref": "#/$defs/id" }, "raw_sha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "lineageRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["claim_id", "revision_id", "payload_sha256"],
+      "properties": {
+        "claim_id": { "$ref": "#/$defs/id" },
+        "revision_id": { "$ref": "#/$defs/id" },
+        "payload_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "causalContext": {
+      "type": "object", "additionalProperties": false, "required": ["parents"],
+      "properties": { "parents": { "type": "array", "items": { "$ref": "#/$defs/recordRef" } } }
+    },
+    "assertor": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "id", "basis"],
+      "properties": {
+        "kind": { "enum": ["owner", "human", "agent", "system", "source", "migration", "unknown"] },
+        "id": { "$ref": "#/$defs/id" },
+        "basis": { "enum": ["direct-input", "quoted-source", "observation", "inference", "migration-unknown"] }
+      }
+    },
+    "kindData": {
+      "type": "object", "minProperties": 1, "maxProperties": 1, "additionalProperties": false,
+      "properties": {
+        "identity": { "type": "object", "additionalProperties": false, "required": ["identity_type", "value"], "properties": { "identity_type": { "enum": ["person", "role", "account", "relationship"] }, "value": { "type": "string", "minLength": 1 } } },
+        "preference": { "type": "object", "additionalProperties": false, "required": ["dimension"], "properties": { "dimension": { "type": "string", "minLength": 1 } } },
+        "boundary": { "type": "object", "additionalProperties": false, "required": ["behavior_policy"], "properties": { "behavior_policy": { "type": "object", "additionalProperties": false, "required": ["effect", "actions", "resources", "conditions"], "properties": { "effect": { "enum": ["deny", "allow", "prompt"] }, "actions": { "$ref": "#/$defs/stringSet" }, "resources": { "$ref": "#/$defs/stringSet" }, "conditions": { "$ref": "#/$defs/stringSet" } } } } },
+        "decision": { "type": "object", "additionalProperties": false, "required": ["made_by", "decided_at", "decision_scope"], "properties": { "made_by": { "$ref": "#/$defs/id" }, "decided_at": { "$ref": "#/$defs/dateTime" }, "decision_scope": { "type": "string", "minLength": 1 } } },
+        "belief": { "type": "object", "additionalProperties": false, "required": ["proposition"], "properties": { "proposition": { "type": "string", "minLength": 1 } } },
+        "observation": { "type": "object", "additionalProperties": false, "required": ["observer"], "properties": { "observer": { "$ref": "#/$defs/id" } } },
+        "commitment": { "type": "object", "additionalProperties": false, "required": ["committed_by", "beneficiary"], "properties": { "committed_by": { "$ref": "#/$defs/id" }, "beneficiary": { "$ref": "#/$defs/id" } } },
+        "practice": { "type": "object", "additionalProperties": false, "required": ["practice_scope"], "properties": { "practice_scope": { "type": "string", "minLength": 1 } } },
+        "material_fact": { "type": "object", "additionalProperties": false, "required": ["proposition"], "properties": { "proposition": { "type": "string", "minLength": 1 } } },
+        "quotation": { "type": "object", "additionalProperties": false, "required": ["speaker"], "properties": { "speaker": { "$ref": "#/$defs/id" } } },
+        "legacy-unclassified": { "type": "object", "additionalProperties": false, "required": ["missing_semantics"], "properties": { "missing_semantics": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["claim-kind", "subject", "asserted-by", "valid-time", "approval-meaning", "evidence-relation"] } } } }
+      }
+    },
+    "decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["verdict", "approval_kind", "authority_scope", "actor_id", "decided_at", "protocol_context", "authority_context"],
+      "properties": {
+        "verdict": { "enum": ["approve", "reject"] },
+        "approval_kind": { "enum": ["self-representation", "behavioral-authorization", "factual-verification"] },
+        "authority_scope": { "type": "string", "minLength": 1 },
+        "actor_id": { "$ref": "#/$defs/id" },
+        "decided_at": { "$ref": "#/$defs/dateTime" },
+        "protocol_context": { "type": "object", "additionalProperties": false, "required": ["heads"], "properties": { "heads": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/revisionRef" } } } },
+        "authority_context": { "type": "object", "additionalProperties": false, "required": ["heads", "capability"], "properties": { "heads": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/revisionRef" } }, "capability": { "type": "string", "minLength": 1 } } }
+      }
+    },
+    "transition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation", "approves_revision_id", "approves_payload_sha256"],
+      "properties": {
+        "operation": { "enum": ["propose-create", "create-approved", "propose-replace", "approve", "reject", "ignore", "replace", "set-salience", "reclassify-trust", "reclassify-risk", "change-context-consent", "revoke", "delete", "reinstate", "restore-deleted", "resolve"] },
+        "approves_revision_id": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "approves_payload_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["relation", "resource", "content_sha256", "title"],
+      "properties": {
+        "relation": { "enum": ["evidence-of-speech", "evidence-of-observation", "evidence-of-truth", "derived-from"] },
+        "resource": { "type": "string", "minLength": 1 },
+        "content_sha256": { "$ref": "#/$defs/sha256" },
+        "title": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

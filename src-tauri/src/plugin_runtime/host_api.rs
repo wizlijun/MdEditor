@@ -73,7 +73,12 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // these methods to the official `notemd.memory` plugin id; native
         // plugin processes never receive this surface.
         "host.memory.list" | "host.memory.suggest" | "host.memory.propose"
-        | "host.memory.decide" | "host.memory.migrate" | "host.memory.check" => Some("memory.control"),
+        | "host.memory.decide" | "host.memory.migrate" | "host.memory.check"
+        | "host.memory.v2.snapshot" | "host.memory.v2.context"
+        | "host.memory.v2.contextManifest" | "host.memory.v2.check" | "host.memory.v2.add"
+        | "host.memory.v2.approve" | "host.memory.v2.reject" | "host.memory.v2.ignore"
+        | "host.memory.v2.delete" | "host.memory.v2.resolve" | "host.memory.v2.setSalience"
+        | "host.memory.v2.migrate" => Some("memory.control"),
         _ => Some("__unknown__"), // 未实现的方法一律拒绝
     }
 }
@@ -557,6 +562,17 @@ mod tests {
         assert_eq!(method_capability("host.theme.css"), Some("editor.kit"));
         assert_eq!(method_capability("host.memory.list"), Some("memory.control"));
         assert_eq!(method_capability("host.memory.decide"), Some("memory.control"));
+        for method in [
+            "host.memory.v2.snapshot",
+            "host.memory.v2.context",
+            "host.memory.v2.add",
+            "host.memory.v2.approve",
+            "host.memory.v2.resolve",
+            "host.memory.v2.contextManifest",
+            "host.memory.v2.migrate",
+        ] {
+            assert_eq!(method_capability(method), Some("memory.control"), "{method}");
+        }
         assert_eq!(method_capability("host.unknown"), Some("__unknown__"));
         assert_eq!(method_capability("anything.else"), Some("__unknown__"));
     }

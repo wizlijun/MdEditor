@@ -162,6 +162,10 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
     let has_remote = run_git(repo, &["remote", "get-url", remote]).is_ok();
     let mut skipped_large: Vec<String> = Vec::new();
 
+    // Memory v2 root Markdown files are derived projections. Rebuild before
+    // committing, and fail closed if a partially activated v2 tree is found.
+    reconcile_memory_v2(repo)?;
+
     // ① 本地改动先入库。此后工作区干净,后续步骤无须触碰用户正在编辑的文件。
     if has_changes(repo)? {
         skipped_large = stage_except_oversized(repo)?;
@@ -189,6 +193,22 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
                     let _ = run_git(repo, &["merge", "--abort"]);
                     return Err("merge failed, skipping cycle".into());
                 }
+                // Immutable authoritative Memory assets must never use the
+                // ordinary ours/theirs fallback. A same-path collision means
+                // tampering, an ID collision, or protocol damage.
+                let conflicted = conflicted_paths(repo)?;
+                if conflicted.iter().any(|path| path.starts_with(".notemd/memory/")) {
+                    let detail = conflicted
+                        .iter()
+                        .filter(|path| path.starts_with(".notemd/memory/"))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let _ = run_git(repo, &["merge", "--abort"]);
+                    return Err(format!(
+                        "MEMORY_SOURCE_CONFLICT: authoritative Memory assets conflicted: {detail}"
+                    ));
+                }
                 // 冲突:留一份含双方内容的副本,工作区取本地版本(用户刚写的字优先)。
                 super::conflict::handle_conflicts(repo, "--ours")?;
                 let more = stage_except_oversized(repo)?;
@@ -198,6 +218,21 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
                     }
                 }
                 run_git(repo, &["commit", "-m", "vault: auto-merge (conflicts resolved)"])?;
+            }
+        }
+
+        // Git merges immutable records; the reducer decides semantic heads and
+        // rewrites the disposable projections from the merged collection.
+        reconcile_memory_v2(repo)?;
+        if has_changes(repo)? {
+            let more = stage_except_oversized(repo)?;
+            for file in more {
+                if !skipped_large.contains(&file) {
+                    skipped_large.push(file);
+                }
+            }
+            if has_staged(repo) {
+                run_git(repo, &["commit", "-m", "vault: reconcile Memory v2 projections"])?;
             }
         }
     }
@@ -210,6 +245,28 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
     }
 
     Ok(SyncReport { skipped_large })
+}
+
+fn conflicted_paths(repo: &Path) -> GitResult<Vec<String>> {
+    let out = run_git(repo, &["diff", "--name-only", "--diff-filter=U"])?;
+    Ok(out.lines().map(str::trim).filter(|path| !path.is_empty()).map(str::to_string).collect())
+}
+
+fn reconcile_memory_v2(repo: &Path) -> GitResult<()> {
+    use crate::memory_control::v2::{rebuild_projections, RepositoryMode, V2Repository};
+
+    let snapshot = V2Repository::new(repo)
+        .load()
+        .map_err(|error| format!("Memory v2 reconcile failed: {error}"))?;
+    match snapshot.mode {
+        RepositoryMode::V2Active => rebuild_projections(repo)
+            .map(|_| ())
+            .map_err(|error| format!("Memory v2 reconcile failed: {error}")),
+        RepositoryMode::V2Incomplete => Err(
+            "MEMORY_PROTOCOL_INCOMPLETE: Memory v2 assets exist without a valid activation".into(),
+        ),
+        RepositoryMode::Absent | RepositoryMode::LegacyV1 => Ok(()),
+    }
 }
 
 fn chrono_now() -> String {
@@ -357,6 +414,20 @@ mod gate_tests {
         let tree = run_git(dir.path(), &["ls-tree", "-r", "--name-only", "HEAD"]).unwrap();
         assert!(tree.contains("note.md"));
         assert!(!tree.contains("huge.bin"));
+    }
+
+    #[test]
+    fn sync_fails_closed_when_memory_v2_is_partially_activated() {
+        let dir = init_repo();
+        std::fs::create_dir_all(dir.path().join(".notemd/memory/claims/aa")).unwrap();
+
+        let error = sync(dir.path(), "origin", "main").unwrap_err();
+
+        assert!(error.contains("MEMORY_PROTOCOL_INCOMPLETE"), "{error}");
+        assert!(
+            run_git(dir.path(), &["rev-parse", "--verify", "HEAD"]).is_err(),
+            "an incomplete authority tree must not be committed"
+        );
     }
 
     /// bare 远端 + 已推首个提交的工作仓库,返回 (work, bare)。

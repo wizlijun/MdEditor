@@ -635,62 +635,34 @@ mod fs_tests {
 
     #[test]
     fn collaboration_templates_define_owner_and_memory_boundaries() {
-        for rule in [
-            "type: User Profile",
-            "actor: null",
-            "confirmed: false",
-            "must not create owner Tasks",
-            "GENERATED / READ-ONLY",
-            "notemd memory propose",
-            "direct filesystem edit is",
-            "dedicated human-confirmation flag",
-            "--proposal-sha256",
-            "contains no inline citations",
-            "do not add a second confirmation step",
-        ] {
-            assert!(
-                USER_TEMPLATE.contains(rule),
-                "USER.md is missing rule: {rule}"
-            );
-        }
-        for rule in [
-            "type: Memory",
-            "owner_ref: /USER.md",
-            "Tasks and reminders belong in `/inbox/tasks/`",
-            "daily or episodic detail",
-            "explicit human confirmation",
-            "shared, public, or external contexts",
-            "/inbox/memory-candidates/",
-            "/memory/events/",
-            "status:: revoked",
-            "--proposal-sha256",
-            "contains no inline citations",
-            "do not add a second confirmation step",
-        ] {
-            assert!(
-                MEMORY_TEMPLATE.contains(rule),
-                "MEMORY.md is missing rule: {rule}"
-            );
+        assert_eq!(USER_TEMPLATE, "# USER\n");
+        assert_eq!(MEMORY_TEMPLATE, "# MEMORY\n");
+        for projection in [USER_TEMPLATE, MEMORY_TEMPLATE] {
+            assert!(!projection.starts_with("---"));
+            assert!(!projection.contains("::"));
+            assert!(!projection.contains("[^"));
         }
         for rule in [
             "## Shared user model and long-term memory",
-            "read `/USER.md`",
-            "first, then `/MEMORY.md`",
-            "`owner.actor`",
-            "`owner.confirmed: true`",
-            "An Agent must not create a",
-            "Do not copy tasks, reminders, or daily logs into `MEMORY.md`",
-            "read-only projections",
-            "Neither a human nor an Agent edits `USER.md` directly",
-            "It is also a read-only projection",
-            "/inbox/memory-candidates/*.memory-candidate.md",
-            "/memory/events/**/*.memory-event.md",
-            "--proposal-sha256",
-            "do not expect citations or `source::` in the projection",
+            "generated, read-only plain-text projections",
+            "only authoritative memory data",
+            "notemd memory owner --json",
+            "Never parse owner identity from `/USER.md`",
+            "notemd memory context --space",
+            "notemd memory propose",
+            "Do not store facts whose subject is another person",
+            "no YAML\n  frontmatter",
             "do not ask for a second confirmation",
+            "Delete creates a tombstone",
+            "protocol-2 write fence",
+            "Tasks and reminders remain one file per Task under `/inbox/tasks/`",
         ] {
             assert!(TEMPLATE.contains(rule), "AGENTS.md is missing rule: {rule}");
         }
+        assert!(!TEMPLATE.contains("`owner.actor`"));
+        assert!(!TEMPLATE.contains("`owner.names`"));
+        assert!(!TEMPLATE.contains("/inbox/memory-candidates/"));
+        assert!(!TEMPLATE.contains("/memory/events/"));
     }
 
     // ---- notemd_agents_search_section_missing / notemd_agents_append_search_section ----

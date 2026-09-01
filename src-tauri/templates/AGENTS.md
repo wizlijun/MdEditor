@@ -9,15 +9,16 @@ description: Conventions for AI agents working in this vault.
 Guidance for AI agents working in this vault. This file is the source of
 truth; CLAUDE.md is a symlink to this file — edit AGENTS.md only.
 
-(The frontmatter above is not decoration — see "Metadata" below. Every
-markdown file in this vault carries one, this file included.)
+(The frontmatter above is not decoration — see "Metadata" below. Markdown
+files in this vault carry it except for the generated `/USER.md` and
+`/MEMORY.md` plain-text projections.)
 
 ## Vault layout
 
-- `/USER.md` — canonical, machine-readable owner identity and stable user
-  profile. Read it before deciding who owns a Task.
-- `/MEMORY.md` — compact, human-and-AI curated long-term facts and decisions.
-  It is not a task list or daily log.
+- `/USER.md` — generated plain-text projection of eligible owner facts. It is
+  not the machine-readable owner authority source.
+- `/MEMORY.md` — generated plain-text projection of eligible durable facts and
+  decisions. It is not a task list, daily log, or authority source.
 - `dailynote/` — daily outline notes, organized as
   `yyyy/yyyy-MM-dd.note.md` (e.g. `2026/2026-07-10.note.md`).
   Monthly and yearly summaries live in the same year folder as
@@ -35,8 +36,10 @@ markdown file in this vault carries one, this file included.)
 
 ## Metadata: OKF-compatible frontmatter (required)
 
-Every markdown file you create here **must** open with a YAML
-frontmatter block, and that block **must** carry a non-empty `type`.
+Except for the generated root `/USER.md` and `/MEMORY.md` projections, every
+markdown file you create here **must** open with a YAML frontmatter block, and
+that block **must** carry a non-empty `type`. Those two projections MUST have
+no frontmatter or machine metadata; never add it during a generic metadata fix.
 The format is the Open Knowledge Format (OKF) v0.2:
 https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
 
@@ -68,8 +71,6 @@ coin a short one and then use it consistently.
 | `Daily Note` | `dailynote/yyyy/yyyy-MM-dd.note.md` |
 | `Wiki Page` | `wikipage/<title>.note.md` |
 | `Task` | one executable item in `inbox/tasks/*-task.md` |
-| `User Profile` | the root `/USER.md` owner profile |
-| `Memory` | the root `/MEMORY.md` durable memory |
 
 Everything else is optional, but absent metadata means "unknown", not
 "fine" — write what you actually know:
@@ -86,8 +87,8 @@ Everything else is optional, but absent metadata means "unknown", not
   vault-absolute path (`/sync/foo.md`), or a relative path. Attribute
   individual claims with markdown footnotes keyed by `sources[].id`, except in
   the controlled `/USER.md` and `/MEMORY.md` projections. Those two files never
-  expose inline citation markers, footnote definitions, or per-entry
-  `source::`; their immutable candidates retain provenance in `sources`.
+  expose inline citation markers, footnote definitions, or per-entry source
+  notes; Claim revisions under `/.notemd/memory/` retain provenance.
 - `status: draft | stable | deprecated` (absent means `stable`) and
   `stale_after: YYYY-MM-DD` for content with a known shelf life.
 
@@ -124,96 +125,63 @@ Rules that hold in both directions:
 
 ## Shared user model and long-term memory
 
-`/USER.md` and `/MEMORY.md` are read-only projections jointly maintained
-through the Memory control protocol. For private, owner-scoped vault work,
-read `/USER.md` first, then `/MEMORY.md`, before relying on personal context.
-Always do this before extracting or creating Inbox Tasks. In shared, public,
-or external contexts, do not load, quote, or inject their contents unless the
-owner has authorized that use.
+`/USER.md` and `/MEMORY.md` are generated, read-only plain-text projections.
+They are computed from the versioned Claim records under `/.notemd/memory/`,
+which are the only authoritative memory data. Do not infer status, provenance,
+permission, or certainty from projection text alone.
 
-### File purpose and safe use
+### Projection contract
 
-- `/USER.md` describes the confirmed vault owner and durable facts about that
-  person: identity and aliases, stable preferences, collaboration style, and
-  explicit personal boundaries. Use it to resolve whose vault this is, decide
-  whether an Inbox Task belongs to the owner, and adapt owner-scoped assistance.
-  Do not use it as proof about other people, as authorization for an external
-  action, or in a shared/public answer without the owner's permission.
-- `/MEMORY.md` describes durable cross-session context that is not a personal
-  profile: current constraints, decisions, corrections, and product or working
-  principles. Use it to avoid repeating settled mistakes and to preserve
-  continuity across sessions. It is not a Task list, activity log, transcript,
-  source archive, or blanket permission to act.
-- Reading either file is a two-step operation: read the claim, then read its
-  adjacent `status`, `polarity`, `epistemic-status`, `certainty`,
-  `agent-guidance`, `avoid-error`, and `proposal`. Never detach a claim from
-  those qualifiers when retrieving, summarizing, quoting, or passing context
-  to another Agent. When provenance matters, resolve `proposal::` to the exact
-  immutable candidate under `/inbox/memory-candidates/` and inspect its
-  `sources`; do not expect citations or `source::` in the projection.
+- Read `/USER.md` first and `/MEMORY.md` second for private, owner-scoped work.
+  `/USER.md` contains projection-eligible facts about the confirmed vault owner;
+  `/MEMORY.md` contains other projection-eligible durable facts, constraints,
+  decisions, commitments, preferences, and boundaries.
+- Each projection has exactly one H1. Content uses one layer of H2 categories
+  followed by multi-line fact bullets. It contains descriptions only: no YAML
+  frontmatter, IDs, workflow state, priority, polarity, confidence, provenance,
+  hashes, citations, source notes, or other machine metadata.
+- Resolve owner identity with `notemd memory owner --json`. Never parse owner
+  identity from `/USER.md`. If the owner is unknown, conflicting, or inactive,
+  do not create an owner Task.
+- Before using a fact, obtain its current metadata and context decision with
+  `notemd memory context --space <space> --purpose <purpose> --caller <caller>
+  --provider <provider> --model <model> --json`.
+  Treat withheld, pending, quarantined, contested, stale, or conflict-blocked
+  Claims as unavailable. Approval to remember a Claim is not proof that it is
+  true and never grants permission for an external action.
+- In shared, public, or external contexts, do not load, quote, or inject either
+  projection unless the owner and the Claim consent policy authorize that use.
 
-`USER.md` is the sole source of truth for who owns the vault and for durable
-profile facts. The owner is configured only when `owner.actor` is a non-empty
-`human:<id>`, `owner.names` identifies that person, and
-`owner.confirmed: true`. If the file is missing, conflicting, unconfirmed, or
-uses the default `null` actor, the owner is unknown. An Agent must not create a
-Task. Neither a human nor an Agent edits `USER.md` directly. Use the Memory
-plugin, or use `notemd memory propose` to create one immutable, sourced
-candidate. Owner identity, names, authority, permissions and action-sensitive
-preferences are always one-at-a-time human decisions.
+### Mutation contract
 
-`MEMORY.md` holds compact, cross-session facts, constraints and decisions that
-do not belong in the user profile. It is also a read-only projection. Read each
-entry as a structured claim: `status::` says whether the owner reviewed it;
-`epistemic-status::` describes its evidence; `certainty::` describes confidence;
-`polarity::` says how an Agent should act; and `priority::` controls attention.
-These axes are independent. `approved-by::` means the owner agreed to remember
-the claim, not that the outside world has proved it true.
-
-Treat `status:: pending`, `epistemic-status:: unknown`, or
-`certainty:: unknown` as unconfirmed material: inspect the exact candidate
-referenced by `proposal::` and verify its `sources`, or ask the owner before
-relying on it. Never turn approval into certainty. Never
-assign `certainty:: high` to `epistemic-status:: inferred`. `polarity:: positive`
-means follow the stated preference or principle when relevant;
-`polarity:: negative` means actively avoid the recorded mistake, disclosure, or
-boundary violation; `neutral` is context only. For negative, inferred,
-contested, low-certainty, or unknown entries, obey `avoid-error::` before using
-the claim. `priority:: critical` is reserved for identity, privacy, authority,
-and mistakes that could cause real-world action. Priority never grants authority.
-
-Every new create, replace, or merge candidate must contain one atomic claim and
-all of: `priority`, `polarity`, `epistemic-status`, `certainty`, an executable
-one-sentence `agent-guidance`, and at least one exact `sources[].resource`. It
-must also contain
-`avoid-error` for negative, inferred, contested, low-certainty, or unknown
-claims. When evidence is insufficient, propose conservative `unknown` values;
-do not fill gaps with confident language.
-
-Agent changes must be immutable candidates under
-`/inbox/memory-candidates/*.memory-candidate.md`. An Agent may use
-`notemd memory list`, `show`, `suggest` and `propose`; `propose` never changes
-the projection. Approval or rejection binds the candidate SHA-256 in an
-immutable `/memory/events/**/*.memory-event.md`. An Agent may record approval
-from a conversation only when the confirmed owner explicitly approves the
-exact proposal ID or displayed diff; never infer approval, turn `--yes` into
-approval, self-sign `human:`, or batch action-sensitive proposals. For a CLI
-decision, first read `notemd memory show <proposal-id> --json`, then pass that
-exact `sha256` as `--proposal-sha256`; a changed hash must fail closed.
-In the Memory plugin, the owner's deliberate click on **Confirm** for a fact or
-**Approve** for a displayed proposal is the approval decision itself: record
-that SHA-bound decision immediately and do not ask for a second confirmation.
-
-Replacing or merging keeps exactly one active revision. Deletion is a
-traceable `revoke`, not physical history removal. Direct filesystem edits are
-drift: do not accept or overwrite them silently. Stop controlled writes until
-the difference is imported as a candidate or the approved projection is
-restored.
-
-Do not copy tasks, reminders, or daily logs into `MEMORY.md`. Tasks belong in
-`/inbox/tasks/`, episodic detail belongs in `dailynote/`, and raw material stays
-with its source. Neither file may contain credentials, tokens, private keys, or
-other secrets because both normally sync with the vault.
+- Neither humans nor Agents edit `/USER.md` or `/MEMORY.md` directly. An Agent
+  may submit only one atomic, owner-related durable Claim at a time with
+  `notemd memory propose`; proposing never activates or approves the Claim.
+  Do not store facts whose subject is another person merely because the fact
+  appeared in the owner's vault.
+- Every proposed Claim must keep claim kind, subject, assertor, event time,
+  validity time, epistemic basis, truth status, confidence, salience, polarity,
+  sensitivity, risk, context, consent, evidence, lineage, and Agent-use guidance
+  as separate typed fields. Unknown values stay unknown; never turn a category,
+  producer, approver, source, or transaction timestamp into semantic evidence.
+- A deliberate owner click on **Confirm**, **Deny**, **Important**, **Ignore**,
+  or **Delete** is the decision itself. Persist the exact hash-bound decision
+  immediately and do not ask for a second confirmation. Agent-originated
+  recommendations remain pending until an authorized human decides them.
+- A direct filesystem edit to either projection is untrusted import input, not
+  approval. Import it as a pending Claim or restore the generated projection;
+  never silently adopt or overwrite drift.
+- Concurrent devices append immutable revisions and compare protocol, authority,
+  and Claim heads. Stale heads, hash mismatches, divergent parents, unsupported
+  schemas, and action-sensitive conflicts fail closed until explicitly resolved.
+- A legacy Host or plugin that does not declare Memory protocol v2 support is
+  read-only. Respect the protocol-2 write fence and never fall back to v1 paths.
+- Delete creates a tombstone. Purge is a separate, explicitly authorized
+  operation and cannot promise removal from Git history or another device.
+- Never store credentials, tokens, private keys, authentication material, or
+  restricted plaintext in Git-backed memory assets.
+- Tasks and reminders remain one file per Task under `/inbox/tasks/`; daily or
+  episodic detail remains in `dailynote/`; raw material remains with its source.
 
 ## Inbox tasks
 
@@ -225,12 +193,12 @@ item in the summary instead of manufacturing a commitment.
 
 ### Ownership gate
 
-Before evaluating ownership, read `/USER.md` using the rules above. Only create
-a Task when its obligation belongs to the **confirmed vault owner** identified
-by `owner.actor` and `owner.names`. The source must explicitly assign the action
-to that person, record that person's own commitment, or state a deadline that
-person must meet. If the owner cannot be confirmed from `USER.md`, create no
-Task.
+Before evaluating ownership, call `notemd memory owner --json`. Only create a
+Task when its obligation belongs to the active, conflict-free owner returned by
+that command. The source must explicitly assign the action to that person,
+record that person's own commitment, or state a deadline that person must meet.
+Never parse owner identity from `/USER.md`; if the authority reducer cannot
+confirm the owner, create no Task.
 
 - Never create a Task for work assigned to another person, even when that work
   affects the owner or the owner's project. Keep it in the summary with the

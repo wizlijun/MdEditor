@@ -7,6 +7,7 @@
 mod document;
 pub mod model;
 mod store;
+pub mod v2;
 
 use serde_json::{json, Value};
 use std::path::Path;
@@ -31,6 +32,19 @@ pub fn migrate(root: &Path) -> Result<Value, String> {
 
 /// Host RPC adapter used only by the official Memory plugin window.
 pub fn dispatch(root: &Path, method: &str, params: &Value) -> Result<Value, String> {
+    if method.starts_with("host.memory.v2.") {
+        return v2::dispatch_rpc(root, method, params);
+    }
+    let mode = v2::V2Repository::new(root)
+        .load()
+        .map_err(|error| error.to_string())?
+        .mode;
+    if matches!(mode, v2::RepositoryMode::V2Active | v2::RepositoryMode::V2Incomplete) {
+        return Err(
+            "MEMORY_PROTOCOL_V2_WRITE_FENCE: upgrade the Memory plugin; v1 RPC is disabled"
+                .into(),
+        );
+    }
     match method {
         "host.memory.list" => serde_json::to_value(list(root)?).map_err(|e| e.to_string()),
         "host.memory.suggest" => suggest(root),

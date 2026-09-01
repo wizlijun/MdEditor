@@ -1,0 +1,28 @@
+schema: notemd.memory/authority-revision/v2
+revision_id: 01999f70-0000-7000-8000-000000000003
+base_heads: []
+causal_context:
+  parents: []
+owner:
+  owner_id: owner:01999f70-0000-7000-8000-000000000004
+  actor_id: human:fixture-owner
+principals:
+  - actor_id: human:fixture-owner
+    capabilities:
+      - memory.claim.approve
+      - memory.claim.resolve
+      - memory.protocol.modify
+      - memory.authority.modify
+recovery:
+  mode: local-owner-setup
+decision:
+  verdict: approve
+  actor_id: human:fixture-owner
+  authority_context:
+    heads:
+      - revision_id: 01999f70-0000-7000-8000-000000000003
+        payload_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    capability: memory.authority.modify
+transition:
+  operation: initialize
+payload_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

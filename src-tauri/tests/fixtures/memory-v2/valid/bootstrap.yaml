@@ -1,0 +1,9 @@
+schema: notemd.memory/bootstrap/v2
+vault_id: 01999f70-0000-7000-8000-000000000001
+protocol_family: notemd.memory
+initial_protocol_revision:
+  revision_id: 01999f70-0000-7000-8000-000000000002
+  payload_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+initial_authority_revision:
+  revision_id: 01999f70-0000-7000-8000-000000000003
+  payload_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
