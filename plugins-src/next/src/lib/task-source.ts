@@ -1,5 +1,7 @@
 import { Document, isScalar, parseDocument } from 'yaml'
+import { editableFrontmatter, serializeEditableFrontmatter } from './frontmatter-document'
 import { normalizeContexts, normalizePriority, PRIORITIES, type Priority } from './metadata'
+import type { PlanningMetadata } from './metadata'
 
 export const TASK_SUFFIX = '-task.md'
 export const DEFAULT_TASK_DIR = 'inbox/tasks'
@@ -293,6 +295,33 @@ export function parseTaskSource(path: string, markdown: string): TaskSource {
   const parsed = splitTaskFrontmatter(markdown)
   const validated = validateTaskMeta(parsed.value, parsed.dueIsQuoted)
   return { path, ...validated, body: parsed.body, frontmatter: parsed.value }
+}
+
+/** Update plugin-owned Task planning fields and revalidate the complete source contract. */
+export function updateTaskPlanningDocument(
+  path: string,
+  markdown: string,
+  metadata: PlanningMetadata,
+): string {
+  // Refuse to repair or reinterpret an invalid/future Task through this editor.
+  parseTaskSource(path, markdown)
+  const editable = editableFrontmatter(markdown, false)
+  const { document } = editable
+  document.setIn(['task', 'priority'], normalizePriority(metadata.priority))
+  if (metadata.due) {
+    document.setIn(['task', 'due'], metadata.due)
+    const due = document.getIn(['task', 'due'], true)
+    if (isScalar(due)) due.type = 'QUOTE_DOUBLE'
+  } else {
+    document.deleteIn(['task', 'due'])
+  }
+  const contexts = normalizeContexts(metadata.contexts)
+  if (contexts.length) document.setIn(['task', 'contexts'], contexts)
+  else document.deleteIn(['task', 'contexts'])
+
+  const updated = serializeEditableFrontmatter(editable)
+  parseTaskSource(path, updated)
+  return updated
 }
 
 /**

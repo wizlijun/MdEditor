@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createIdeaSource: vi.fn(),
   createTaskSource: vi.fn(),
   openSource: vi.fn(),
+  updateItemPlanningMetadata: vi.fn(),
   loadNextSettings: vi.fn(async () => ({ wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' })),
   saveNextSettings: vi.fn(async (value) => value),
 }))
@@ -21,6 +22,7 @@ vi.mock('./repository', async (importOriginal) => {
     createIdeaSource: mocks.createIdeaSource,
     createTaskSource: mocks.createTaskSource,
     openSource: mocks.openSource,
+    updateItemPlanningMetadata: mocks.updateItemPlanningMetadata,
   }
 })
 
@@ -31,7 +33,7 @@ vi.mock('./settings', () => ({
   saveNextSettings: mocks.saveNextSettings,
 }))
 
-import { createIdea, createTask, place, refresh, state, updateSettings } from './store.svelte'
+import { createIdea, createTask, place, refresh, state, updateMetadata, updateSettings } from './store.svelte'
 
 const capture: WorkspaceItem = {
   key: 'inbox/ideas/a-idea.md',
@@ -70,6 +72,9 @@ function workspace(): NextWorkspace {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  delete capture.priority
+  delete capture.due
+  delete capture.contexts
   mocks.loadNextSettings.mockResolvedValue({ wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' })
   mocks.saveNextSettings.mockImplementation(async (value) => value)
   state.workspace = workspace()
@@ -79,6 +84,55 @@ beforeEach(() => {
 })
 
 describe('Next store IO serialization', () => {
+  it('updates source metadata, refreshes the workspace, and serializes concurrent actions', async () => {
+    const refreshed = workspace()
+    refreshed.capture[0] = { ...capture, priority: 'P0', due: '2026-09-08', contexts: ['@电脑'] }
+    refreshed.items = refreshed.capture
+    let finishUpdate!: () => void
+    mocks.updateItemPlanningMetadata.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      finishUpdate = resolve
+    }))
+    mocks.loadWorkspace.mockResolvedValueOnce(refreshed)
+
+    const updating = updateMetadata(capture, { priority: 'P0', due: '2026-09-08', contexts: ['@电脑'] })
+    expect(state.saving).toBe(true)
+    await expect(place(capture, {
+      route: 'commit', commitment: 'Validate', next_action: 'Test', close_condition: 'Done',
+    })).rejects.toThrow('already saving')
+    finishUpdate()
+    await expect(updating).resolves.toEqual({})
+
+    expect(mocks.updateItemPlanningMetadata).toHaveBeenCalledWith(capture, {
+      priority: 'P0', due: '2026-09-08', contexts: ['@电脑'],
+    })
+    expect(state.workspace).toBe(refreshed)
+    expect(state.saving).toBe(false)
+  })
+
+  it('keeps the draft-facing card current when refresh fails after a durable metadata save', async () => {
+    mocks.updateItemPlanningMetadata.mockResolvedValueOnce(undefined)
+    mocks.loadWorkspace.mockRejectedValueOnce(new Error('refresh unavailable'))
+
+    await expect(updateMetadata(capture, { priority: 'P3', contexts: [] })).resolves.toEqual({
+      refreshError: 'Error: refresh unavailable',
+    })
+
+    expect(capture.priority).toBe('P3')
+    expect(capture.contexts).toEqual([])
+    expect(capture.due).toBeUndefined()
+    expect(state.error).toBeNull()
+  })
+
+  it('preserves the current workspace and surfaces source write failures', async () => {
+    const before = state.workspace
+    mocks.updateItemPlanningMetadata.mockRejectedValueOnce(new Error('disk full'))
+
+    await expect(updateMetadata(capture, { priority: 'P1', contexts: ['@电话'] })).rejects.toThrow('disk full')
+    expect(state.workspace).toBe(before)
+    expect(state.error).toContain('disk full')
+    expect(mocks.loadWorkspace).not.toHaveBeenCalled()
+  })
+
   it('creates a Task in Inbox without appending a lifecycle event', async () => {
     const refreshed = workspace()
     const taskItem: WorkspaceItem = {

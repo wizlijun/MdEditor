@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   relink: vi.fn(async () => {}),
   open: vi.fn(async () => {}),
   updateSettings: vi.fn(async () => {}),
+  updateMetadata: vi.fn(async () => ({})),
   toast: vi.fn(async () => {}),
 }))
 
@@ -45,6 +46,7 @@ vi.mock('./lib/store.svelte', () => ({
   relink: mocks.relink,
   open: mocks.open,
   updateSettings: mocks.updateSettings,
+  updateMetadata: mocks.updateMetadata,
 }))
 
 import App from './App.svelte'
@@ -59,6 +61,7 @@ afterEach(() => {
   mocks.createIdea.mockResolvedValue('inbox/ideas/new-idea.md')
   mocks.createTask.mockResolvedValue({ path: 'inbox/tasks/new-task.md', placedCurrent: false })
   mocks.updateSettings.mockResolvedValue(undefined)
+  mocks.updateMetadata.mockResolvedValue({})
   mocks.state.saving = false
   mocks.state.settings = { wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' }
   vi.useRealTimers()
@@ -568,6 +571,11 @@ describe('Next window', () => {
     expect(card.textContent).toContain('P0 · 紧急')
     expect(card.textContent).toContain('@电脑')
     expect(document.querySelectorAll('[data-lane]')).toHaveLength(5)
+    card.querySelector<HTMLButtonElement>('[data-action="edit-metadata"]')!.click()
+    flushSync()
+    expect(document.querySelector<HTMLSelectElement>('[name="priority"]')?.value).toBe('P0')
+    expect(document.querySelector<HTMLInputElement>('[name="due"]')?.value).toBe('2026-09-02')
+    expect(document.querySelector<HTMLInputElement>('[name="contexts"]')?.value).toBe('@电脑')
   })
 
   it('shows safe planning fallbacks on legacy cards in every lane component', () => {
@@ -579,6 +587,62 @@ describe('Next window', () => {
     expect(card.textContent).toContain('P2 · 普通')
     expect(card.textContent).toContain('无截止日期')
     expect(card.textContent).toContain('情境未明确')
+  })
+
+  it('offers the same metadata editor on valid cards in every lane and saves source fields', async () => {
+    const next = workspace()
+    next.wip[0].priority = 'P1'
+    next.wip[0].due = '2026-09-08'
+    next.wip[0].contexts = ['@电脑']
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    document.querySelector<HTMLButtonElement>('.board-tools button')!.click()
+    flushSync()
+    for (const key of ['capture', 'wip', 'waiting', 'dormant', 'closed']) {
+      expect(document.querySelector(`[data-item-key="${key}"] [data-action="edit-metadata"]`)).toBeTruthy()
+    }
+
+    document.querySelector<HTMLButtonElement>('[data-item-key="wip"] [data-action="edit-metadata"]')!.click()
+    flushSync()
+    expect(document.querySelector<HTMLSelectElement>('[name="priority"]')?.value).toBe('P1')
+    expect(document.querySelector<HTMLInputElement>('[name="due"]')?.value).toBe('2026-09-08')
+    expect(document.querySelector<HTMLInputElement>('[name="contexts"]')?.value).toBe('@电脑')
+
+    const due = document.querySelector<HTMLInputElement>('[name="due"]')!
+    due.value = ''
+    due.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    const contexts = document.querySelector<HTMLInputElement>('[name="contexts"]')!
+    contexts.value = '@电话'
+    contexts.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLFormElement>('[data-form="edit-metadata"]')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+
+    await vi.waitFor(() => expect(mocks.updateMetadata).toHaveBeenCalledWith(next.wip[0], {
+      priority: 'P1', contexts: ['@电话'],
+    }))
+    await vi.waitFor(() => expect(document.querySelector('[data-form="edit-metadata"]')).toBeNull())
+  })
+
+  it('keeps metadata edits visible when the source write fails', async () => {
+    mocks.state.workspace = workspace()
+    mocks.updateMetadata.mockRejectedValueOnce(new Error('disk full'))
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    document.querySelector<HTMLButtonElement>('[data-item-key="wip"] [data-action="edit-metadata"]')!.click()
+    flushSync()
+    const contexts = document.querySelector<HTMLInputElement>('[name="contexts"]')!
+    contexts.value = '@不要丢失'
+    contexts.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLFormElement>('[data-form="edit-metadata"]')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+
+    await vi.waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(
+      'error', '无法保存元数据，当前编辑仍保留。', 'Error: disk full',
+    ))
+    expect(document.querySelector<HTMLInputElement>('[name="contexts"]')?.value).toBe('@不要丢失')
   })
 
   it('prefills future cards from the complete Next settings snapshot', () => {

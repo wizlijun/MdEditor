@@ -11,7 +11,7 @@ import {
 import { ownersOfSource, reduceEvents, validateAppend } from './domain'
 import { NEXT_PATH, newLedger, parseLedger, serializeLedger, upgradeLedgerToV2, type LedgerDocument } from './ledger'
 import { itemKey, projectTagKey, projectTagsOf, type IdeaProjection, type ItemKind, type LedgerProjection, type NextEvent, type SourceRef } from './model'
-import { DEFAULT_PRIORITY, normalizeContexts, normalizePriority, type PlanningMetadata, type Priority } from './metadata'
+import { DEFAULT_PRIORITY, normalizeContexts, normalizeDue, normalizePriority, PRIORITIES, type PlanningMetadata, type Priority } from './metadata'
 import { buildProjectMatcher, type ProjectSuggestion } from './project-match'
 import {
   buildIdeaDocument,
@@ -23,6 +23,7 @@ import {
   proofPathFor,
   sortIdeasNewestFirst,
   timestampIdeaFileName,
+  updateIdeaPlanningDocument,
   type IdeaSource,
 } from './source'
 import {
@@ -33,6 +34,7 @@ import {
   TASK_SUFFIX,
   taskIdentityHint,
   timestampTaskFileName,
+  updateTaskPlanningDocument,
   type TaskDetails,
   type TaskSource,
 } from './task-source'
@@ -767,6 +769,49 @@ export async function appendEvent(
 export async function openSource(item: WorkspaceItem, port: VaultPort = hostVault): Promise<void> {
   if (!item.path || item.orphan) throw new Error('source file is missing')
   await port.open(item.path)
+}
+
+function validatedPlanningMetadata(metadata: PlanningMetadata): PlanningMetadata {
+  if (!(PRIORITIES as readonly unknown[]).includes(metadata.priority)) {
+    throw new Error('priority must be P0, P1, P2, or P3')
+  }
+  const due = metadata.due === undefined ? undefined : normalizeDue(metadata.due)
+  if (metadata.due !== undefined && !due) throw new Error('due must be YYYY-MM-DD')
+  return {
+    priority: metadata.priority,
+    ...(due ? { due } : {}),
+    contexts: normalizeContexts(metadata.contexts),
+  }
+}
+
+/** Persist mutable planning metadata in the card's source, never in the lifecycle ledger. */
+export async function updateItemPlanningMetadata(
+  item: WorkspaceItem,
+  metadata: PlanningMetadata,
+  port: VaultPort = hostVault,
+): Promise<void> {
+  if (!item.path || item.orphan) throw new Error('source file is missing')
+  if (item.repairReason) throw new Error('source must be repaired before editing metadata')
+  const current = (await port.read(item.path)).content
+  const normalized = validatedPlanningMetadata(metadata)
+  let updated: string
+
+  if (item.kind === 'task') {
+    const source = parseTaskSource(item.path, current)
+    if (item.item_id && source.task.id !== item.item_id) throw new Error('Task source identity changed')
+    updated = updateTaskPlanningDocument(item.path, current, normalized)
+  } else {
+    const source = parseIdeaSource(item.path, current, false)
+    if (item.created && source.created !== item.created) throw new Error('Idea source identity changed')
+    updated = updateIdeaPlanningDocument(current, normalized)
+    // Validate the exact document before it can replace the source.
+    parseIdeaSource(item.path, updated, false)
+  }
+
+  if (updated === current) return
+  await port.write(item.path, updated)
+  const written = (await port.read(item.path)).content
+  if (written !== updated) throw new Error('Updated source did not match after writing')
 }
 
 export function sourceRefOf(item: WorkspaceItem): SourceRef | undefined {

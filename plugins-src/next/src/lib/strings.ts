@@ -36,6 +36,7 @@ export type MessageKey =
   | 'action.reopen'
   | 'action.relink'
   | 'action.openSource'
+  | 'action.editMetadata'
   | 'badge.proofed'
   | 'badge.task'
   | 'badge.agent'
@@ -46,6 +47,11 @@ export type MessageKey =
   | 'badge.overdue'
   | 'badge.contextMissing'
   | 'metadata.label'
+  | 'metadata.edit.title'
+  | 'metadata.edit.help'
+  | 'metadata.edit.save'
+  | 'metadata.edit.saveError'
+  | 'metadata.edit.refreshWarning'
   | 'priority.P0'
   | 'priority.P1'
   | 'priority.P2'
@@ -248,6 +254,7 @@ const en: Catalog = {
   'action.reopen': 'Reopen',
   'action.relink': 'Relink',
   'action.openSource': 'Open source',
+  'action.editMetadata': 'Edit metadata',
   'badge.proofed': 'Proofed',
   'badge.task': 'Task',
   'badge.agent': 'Agent',
@@ -258,6 +265,11 @@ const en: Catalog = {
   'badge.overdue': 'Overdue {date}',
   'badge.contextMissing': 'Context not clarified',
   'metadata.label': 'Priority, due date, and contexts',
+  'metadata.edit.title': 'Edit planning for “{title}”',
+  'metadata.edit.help': 'These values are saved directly in the card source.',
+  'metadata.edit.save': 'Save metadata',
+  'metadata.edit.saveError': 'Could not save metadata. Your edits are still here.',
+  'metadata.edit.refreshWarning': 'Metadata was saved, but Next could not refresh the board yet.',
   'priority.P0': 'P0 · Urgent',
   'priority.P1': 'P1 · High',
   'priority.P2': 'P2 · Normal',
@@ -459,6 +471,7 @@ const zh: Catalog = {
   'action.reopen': '重新考虑',
   'action.relink': '重新关联',
   'action.openSource': '打开原文',
+  'action.editMetadata': '编辑元数据',
   'badge.proofed': '已有论证',
   'badge.task': '任务',
   'badge.agent': 'Agent 添加',
@@ -469,6 +482,11 @@ const zh: Catalog = {
   'badge.overdue': '已逾期 {date}',
   'badge.contextMissing': '情境未明确',
   'metadata.label': '优先级、截止日期与情境',
+  'metadata.edit.title': '编辑“{title}”的规划元数据',
+  'metadata.edit.help': '这些值会直接保存到卡片的来源文件。',
+  'metadata.edit.save': '保存元数据',
+  'metadata.edit.saveError': '无法保存元数据，当前编辑仍保留。',
+  'metadata.edit.refreshWarning': '元数据已保存，但 Next 暂时无法刷新看板。',
   'priority.P0': 'P0 · 紧急',
   'priority.P1': 'P1 · 高',
   'priority.P2': 'P2 · 普通',
@@ -670,6 +688,7 @@ const ja: Catalog = {
   'action.reopen': '再検討',
   'action.relink': '再リンク',
   'action.openSource': '原文を開く',
+  'action.editMetadata': 'メタデータを編集',
   'badge.proofed': '検証済み',
   'badge.task': 'タスク',
   'badge.agent': 'Agent が追加',
@@ -680,6 +699,11 @@ const ja: Catalog = {
   'badge.overdue': '期限超過 {date}',
   'badge.contextMissing': 'コンテキスト未整理',
   'metadata.label': '優先度、期限、コンテキスト',
+  'metadata.edit.title': '「{title}」の計画メタデータを編集',
+  'metadata.edit.help': 'これらの値はカードのソースファイルに直接保存されます。',
+  'metadata.edit.save': 'メタデータを保存',
+  'metadata.edit.saveError': 'メタデータを保存できませんでした。編集中の内容は保持されています。',
+  'metadata.edit.refreshWarning': 'メタデータは保存されましたが、Next はまだボードを更新できません。',
   'priority.P0': 'P0 · 緊急',
   'priority.P1': 'P1 · 高',
   'priority.P2': 'P2 · 通常',
@@ -881,6 +905,7 @@ const de: Catalog = {
   'action.reopen': 'Neu prüfen',
   'action.relink': 'Neu verknüpfen',
   'action.openSource': 'Quelle öffnen',
+  'action.editMetadata': 'Metadaten bearbeiten',
   'badge.proofed': 'Geprüft',
   'badge.task': 'Aufgabe',
   'badge.agent': 'Von Agent hinzugefügt',
@@ -891,6 +916,11 @@ const de: Catalog = {
   'badge.overdue': 'Überfällig {date}',
   'badge.contextMissing': 'Kontext ungeklärt',
   'metadata.label': 'Priorität, Fälligkeit und Kontexte',
+  'metadata.edit.title': 'Planungsdaten für „{title}“ bearbeiten',
+  'metadata.edit.help': 'Diese Werte werden direkt in der Quelldatei der Karte gespeichert.',
+  'metadata.edit.save': 'Metadaten speichern',
+  'metadata.edit.saveError': 'Die Metadaten konnten nicht gespeichert werden. Ihre Änderungen bleiben erhalten.',
+  'metadata.edit.refreshWarning': 'Die Metadaten wurden gespeichert, aber Next konnte das Board noch nicht aktualisieren.',
   'priority.P0': 'P0 · Dringend',
   'priority.P1': 'P1 · Hoch',
   'priority.P2': 'P2 · Normal',

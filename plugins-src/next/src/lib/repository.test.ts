@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import YAML from 'yaml'
-import { appendEvent, createIdeaSource, createTaskSource, itemSearchText, loadWorkspace, type VaultPort } from './repository'
+import { appendEvent, createIdeaSource, createTaskSource, itemSearchText, loadWorkspace, updateItemPlanningMetadata, type VaultPort } from './repository'
 import { NEXT_PATH } from './ledger'
 import { placeEvent, relinkEvent, reopenEvent } from './events'
 import type { CommitEvent, NextEvent, SettleEvent } from './model'
@@ -364,6 +364,59 @@ describe('Next repository', () => {
       priority: 'P0', due: '2026-09-08', contexts: ['@电脑', '@电话'],
     })
     expect(itemSearchText(workspace.wip[0])).toContain('@电话')
+  })
+
+  it('updates Idea metadata in its source without appending a lifecycle event', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/ideas/a-idea.md', `---\ntype: Idea\ncreated: 2026-08-29T01:00:00Z\ncustom: keep\n---\n# A useful idea\n`)
+    const workspace = await loadWorkspace(vault)
+    vault.writes = []
+
+    await updateItemPlanningMetadata(workspace.capture[0], {
+      priority: 'P0', due: '2026-09-08', contexts: ['@电脑'],
+    }, vault)
+
+    expect(vault.writes).toEqual(['inbox/ideas/a-idea.md'])
+    expect(vault.files.has(NEXT_PATH)).toBe(true)
+    const reloaded = await loadWorkspace(vault)
+    expect(reloaded.capture[0]).toMatchObject({
+      priority: 'P0', due: '2026-09-08', contexts: ['@电脑'],
+    })
+    expect(YAML.parse(vault.files.get('inbox/ideas/a-idea.md')!.split('---')[1]!).custom).toBe('keep')
+  })
+
+  it('updates Task metadata at task.* and clears optional values', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/tasks/submit-task.md', task().replace(
+      `${TASK_ID}\n`,
+      `${TASK_ID}\n  priority: P1\n  due: "2026-09-08"\n  contexts: ["@电脑"]\n`,
+    ))
+    const workspace = await loadWorkspace(vault)
+    vault.writes = []
+
+    await updateItemPlanningMetadata(workspace.capture[0], { priority: 'P3', contexts: [] }, vault)
+
+    expect(vault.writes).toEqual(['inbox/tasks/submit-task.md'])
+    const reloaded = await loadWorkspace(vault)
+    expect(reloaded.capture[0]).toMatchObject({ priority: 'P3', contexts: [] })
+    expect(reloaded.capture[0].due).toBeUndefined()
+    expect(reloaded.capture[0].task).toEqual({ version: 1, id: TASK_ID, priority: 'P3' })
+  })
+
+  it('refuses metadata updates for missing, repaired, or externally replaced sources', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/ideas/a-idea.md', idea())
+    const workspace = await loadWorkspace(vault)
+    vault.writes = []
+
+    await expect(updateItemPlanningMetadata({ ...workspace.capture[0], orphan: true }, {
+      priority: 'P2', contexts: [],
+    }, vault)).rejects.toThrow('missing')
+    vault.files.set('inbox/ideas/a-idea.md', idea('2026-08-30T01:00:00Z'))
+    await expect(updateItemPlanningMetadata(workspace.capture[0], {
+      priority: 'P2', contexts: [],
+    }, vault)).rejects.toThrow('changed')
+    expect(vault.writes).toEqual([])
   })
 
   it('falls back to the default Idea directory and never overwrites an idea or proof slot', async () => {

@@ -10,6 +10,7 @@ import {
   taskIdentityHint,
   taskSlug,
   timestampTaskFileName,
+  updateTaskPlanningDocument,
   type TaskSourceErrorCode,
 } from './task-source'
 
@@ -170,6 +171,36 @@ body`,
     expect(parsed.task.priority).toBe('P0')
     expect(parsed.task.contexts).toEqual(['@电脑'])
     expect(parsed.body).toBe(body)
+  })
+
+  it('updates Task planning metadata without changing identity, unknown fields, or body', () => {
+    const original = `---\r\ntype: Task\r\ntitle: Future-compatible task\r\ncreated: 2026-09-01T03:20:00Z\r\nfuture_top: keep-me\r\ntask:\r\n  version: 1\r\n  id: ${TASK_ID}\r\n  priority: P3\r\n  due: "2026-09-02"\r\n  contexts: ["@old"]\r\n  future_nested:\r\n    enabled: true\r\n---\r\nbody\r\n---\r\nkeep this exactly`
+    const updated = updateTaskPlanningDocument('inbox/tasks/future-task.md', original, {
+      priority: 'P0', due: '2026-09-08', contexts: ['@电脑', '@电话'],
+    })
+    const parsed = parseTaskSource('inbox/tasks/future-task.md', updated)
+
+    expect(parsed.task).toMatchObject({
+      id: TASK_ID,
+      priority: 'P0',
+      due: '2026-09-08',
+      contexts: ['@电脑', '@电话'],
+    })
+    expect((parsed.frontmatter.task as Record<string, unknown>).future_nested).toEqual({ enabled: true })
+    expect(parsed.frontmatter.future_top).toBe('keep-me')
+    expect(parsed.body).toBe('body\r\n---\r\nkeep this exactly')
+    expect(updated).toContain('due: "2026-09-08"')
+  })
+
+  it('clears optional Task planning metadata while keeping priority explicit', () => {
+    const updated = updateTaskPlanningDocument('inbox/tasks/a-task.md', minimalDocument(
+      '  priority: P1\n  due: "2026-09-08"\n  contexts: ["@电脑"]\n',
+    ), { priority: 'P2', contexts: [] })
+    expect(parseTaskSource('inbox/tasks/a-task.md', updated).task).toEqual({
+      version: 1,
+      id: TASK_ID,
+      priority: 'P2',
+    })
   })
 
   it('rejects malformed frontmatter and every invalid required field explicitly', () => {

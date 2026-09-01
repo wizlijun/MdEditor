@@ -3,6 +3,7 @@
   import CreateIdeaSheet, { type IdeaDraft } from './components/CreateIdeaSheet.svelte'
   import CreateTaskSheet, { type TaskDraft } from './components/CreateTaskSheet.svelte'
   import IdeaCard from './components/IdeaCard.svelte'
+  import MetadataSheet from './components/MetadataSheet.svelte'
   import PlaceSheet from './components/PlaceSheet.svelte'
   import RelinkSheet from './components/RelinkSheet.svelte'
   import SettingsPage from './components/SettingsPage.svelte'
@@ -10,6 +11,7 @@
   import type { PlaceInput } from './lib/events'
   import { projectTagsOf } from './lib/model'
   import { planningDefaults, type NextSettings } from './lib/settings'
+  import { DEFAULT_PRIORITY, type PlanningMetadata } from './lib/metadata'
   import { itemSearchText, type WorkspaceItem } from './lib/repository'
   import type { IdeaSource } from './lib/source'
   import {
@@ -22,6 +24,7 @@
     reopen,
     state as store,
     updateSettings,
+    updateMetadata,
   } from './lib/store.svelte'
   import { setLocale, t, type MessageKey } from './lib/strings'
   import { isDormantDue, previewPosition } from './lib/view'
@@ -48,6 +51,7 @@
   let placementRoute = $state<Route | undefined>()
   let placementProjects = $state<string[]>([])
   let relinking = $state<WorkspaceItem | null>(null)
+  let editingMetadata = $state<WorkspaceItem | null>(null)
   let settingsOpen = $state(false)
   let dragging = $state<WorkspaceItem | null>(null)
   let dragOver = $state<Lane | null>(null)
@@ -157,21 +161,21 @@
   }
 
   function openCreation() {
-    if (store.loading || store.saving || placing || relinking || creatingTask) return
+    if (store.loading || store.saving || placing || relinking || editingMetadata || creatingTask) return
     closePreview()
     settingsOpen = false
     creating = true
   }
 
   function openTaskCreation() {
-    if (store.loading || store.saving || placing || relinking || creating) return
+    if (store.loading || store.saving || placing || relinking || editingMetadata || creating) return
     closePreview()
     settingsOpen = false
     creatingTask = true
   }
 
   function toggleSettings() {
-    if (store.loading || store.saving || placing || relinking || creating || creatingTask) return
+    if (store.loading || store.saving || placing || relinking || editingMetadata || creating || creatingTask) return
     closePreview()
     settingsOpen = !settingsOpen
   }
@@ -191,6 +195,33 @@
   function openRelink(item: WorkspaceItem) {
     closePreview()
     relinking = item
+  }
+
+  function openMetadata(item: WorkspaceItem) {
+    if (!item.path || item.orphan || item.repairReason || store.saving) return
+    closePreview()
+    editingMetadata = item
+  }
+
+  function planningMetadataOf(item: WorkspaceItem): PlanningMetadata {
+    const due = item.due ?? item.task?.due
+    return {
+      priority: item.priority ?? item.task?.priority ?? DEFAULT_PRIORITY,
+      ...(due ? { due } : {}),
+      contexts: item.contexts ?? item.task?.contexts ?? [],
+    }
+  }
+
+  async function submitMetadata(metadata: PlanningMetadata): Promise<void> {
+    if (!editingMetadata) return
+    const item = editingMetadata
+    try {
+      const result = await updateMetadata(item, metadata)
+      editingMetadata = null
+      if (result.refreshError) await toast('warn', t('metadata.edit.refreshWarning'), result.refreshError)
+    } catch (error) {
+      await toast('error', t('metadata.edit.saveError'), String(error))
+    }
   }
 
   async function refreshWorkspace() {
@@ -532,7 +563,7 @@
         aria-label={t('action.settings')}
         aria-pressed={settingsOpen}
         title={t('action.settings')}
-        disabled={store.loading || store.saving || Boolean(placing || relinking || creating || creatingTask)}
+        disabled={store.loading || store.saving || Boolean(placing || relinking || editingMetadata || creating || creatingTask)}
         onclick={toggleSettings}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -577,11 +608,13 @@
               <IdeaCard
                 {item}
                 disabled={interactionDisabled}
+                metadataDisabled={store.saving}
                 canPlace={item.state === 'capture'}
                 onPlace={(value) => openPlacement(value)}
                 onOpen={doOpen}
                 onReopen={doReopen}
                 onRelink={openRelink}
+                onEditMetadata={item.path && !item.orphan && !item.repairReason ? openMetadata : undefined}
                 onSuggestProject={(value, project) => openPlacement(value, undefined, [project])}
                 onPreviewStart={previewStart}
                 onPreviewEnd={previewEnd}
@@ -622,6 +655,7 @@
                     <IdeaCard
                       {item}
                       disabled={interactionDisabled}
+                      metadataDisabled={store.saving}
                       canDrag={item.state !== 'unsupported'}
                       dragging={dragging?.key === item.key}
                       canPlace={item.state === 'capture' || item.state === 'wip' || item.state === 'waiting'}
@@ -630,6 +664,7 @@
                       onOpen={doOpen}
                       onReopen={doReopen}
                       onRelink={openRelink}
+                      onEditMetadata={item.path && !item.orphan && !item.repairReason ? openMetadata : undefined}
                       onSuggestProject={(value, project) => openPlacement(value, undefined, [project])}
                       onDragStart={dragStart}
                       onPreviewStart={previewStart}
@@ -679,6 +714,16 @@
 
 {#if relinking}
   <RelinkSheet item={relinking} saving={store.saving} onCancel={() => relinking = null} onSubmit={submitRelink} />
+{/if}
+
+{#if editingMetadata}
+  <MetadataSheet
+    itemTitle={editingMetadata.title}
+    metadata={planningMetadataOf(editingMetadata)}
+    saving={store.saving}
+    onCancel={() => editingMetadata = null}
+    onSubmit={submitMetadata}
+  />
 {/if}
 
 {#if creating}

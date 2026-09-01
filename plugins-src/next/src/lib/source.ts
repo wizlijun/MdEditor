@@ -1,4 +1,6 @@
+import { isMap, isScalar } from 'yaml'
 import YAML from 'yaml'
+import { editableFrontmatter, serializeEditableFrontmatter } from './frontmatter-document'
 import { DEFAULT_PRIORITY, normalizeContexts, normalizeDue, normalizePriority, type PlanningMetadata, type Priority } from './metadata'
 
 export const IDEA_SUFFIX = '-idea.md'
@@ -129,6 +131,27 @@ export function parseIdeaSource(path: string, markdown: string, proofed: boolean
     ...(due ? { due } : {}),
     ...(contexts.length ? { contexts } : {}),
   }
+}
+
+/** Update plugin-owned Idea planning fields without touching unrelated metadata or body bytes. */
+export function updateIdeaPlanningDocument(markdown: string, metadata: PlanningMetadata): string {
+  const editable = editableFrontmatter(markdown, true)
+  const { document } = editable
+  if (document.get('type') === undefined) document.set('type', 'Idea')
+  if (!isMap(document.get('next', true))) document.set('next', document.createNode({}))
+  document.setIn(['next', 'priority'], normalizePriority(metadata.priority))
+  const due = normalizeDue(metadata.due)
+  if (due) {
+    document.setIn(['next', 'due'], due)
+    const dueNode = document.getIn(['next', 'due'], true)
+    if (isScalar(dueNode)) dueNode.type = 'QUOTE_DOUBLE'
+  } else {
+    document.deleteIn(['next', 'due'])
+  }
+  const contexts = normalizeContexts(metadata.contexts)
+  if (contexts.length) document.setIn(['next', 'contexts'], contexts)
+  else document.deleteIn(['next', 'contexts'])
+  return serializeEditableFrontmatter(editable)
 }
 
 export function sortIdeasNewestFirst(items: IdeaSource[]): IdeaSource[] {

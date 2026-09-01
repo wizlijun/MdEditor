@@ -6,11 +6,13 @@ import {
   hostVault,
   loadWorkspace,
   openSource,
+  updateItemPlanningMetadata,
   type CreateTaskInput,
   type CreateIdeaInput,
   type NextWorkspace,
   type WorkspaceItem,
 } from './repository'
+import type { PlanningMetadata } from './metadata'
 import { DEFAULT_NEXT_SETTINGS, loadNextSettings, normalizeNextSettings, saveNextSettings, type NextSettings } from './settings'
 import type { IdeaSource } from './source'
 
@@ -83,6 +85,54 @@ export async function createIdea(input: CreateIdeaInput): Promise<string> {
     })
     state.workspace = await loadConfiguredWorkspace()
     return created.path
+  } catch (error) {
+    state.error = String(error)
+    throw error
+  } finally {
+    state.saving = false
+  }
+}
+
+export interface UpdateMetadataResult {
+  refreshError?: string
+}
+
+function applyPlanningMetadata(item: WorkspaceItem, metadata: PlanningMetadata): void {
+  item.priority = metadata.priority
+  if (metadata.due) item.due = metadata.due
+  else delete item.due
+  item.contexts = [...metadata.contexts]
+  if (item.task) {
+    item.task = {
+      ...item.task,
+      priority: metadata.priority,
+      ...(metadata.due ? { due: metadata.due } : {}),
+      ...(metadata.contexts.length ? { contexts: [...metadata.contexts] } : {}),
+    }
+    if (!metadata.due) delete item.task.due
+    if (!metadata.contexts.length) delete item.task.contexts
+  }
+}
+
+export async function updateMetadata(
+  item: WorkspaceItem,
+  metadata: PlanningMetadata,
+): Promise<UpdateMetadataResult> {
+  if (!state.workspace) throw new Error('Next is not loaded')
+  if (state.saving) throw new Error('Next is already saving')
+  state.saving = true
+  state.error = null
+  try {
+    await updateItemPlanningMetadata(item, metadata)
+    // The source write is the durable commit point. Update the visible card
+    // before refreshing so a later scan failure is never reported as a failed save.
+    applyPlanningMetadata(item, metadata)
+    try {
+      state.workspace = await loadConfiguredWorkspace()
+      return {}
+    } catch (error) {
+      return { refreshError: String(error) }
+    }
   } catch (error) {
     state.error = String(error)
     throw error

@@ -7,6 +7,7 @@
   let {
     item,
     disabled = false,
+    metadataDisabled = disabled,
     canPlace = false,
     canReopen = false,
     canDrag = false,
@@ -15,6 +16,7 @@
     onOpen,
     onReopen,
     onRelink,
+    onEditMetadata,
     onSuggestProject,
     onDragStart,
     onPreviewStart,
@@ -22,6 +24,7 @@
   }: {
     item: WorkspaceItem
     disabled?: boolean
+    metadataDisabled?: boolean
     canPlace?: boolean
     canReopen?: boolean
     canDrag?: boolean
@@ -30,6 +33,7 @@
     onOpen(item: WorkspaceItem): void
     onReopen(item: WorkspaceItem): void
     onRelink(item: WorkspaceItem): void
+    onEditMetadata?(item: WorkspaceItem): void
     onSuggestProject?(item: WorkspaceItem, project: string): void
     onDragStart?(item: WorkspaceItem, event: PointerEvent): void
     onPreviewStart?(item: WorkspaceItem, anchor: HTMLElement, trigger: 'pointer' | 'focus', tipId: string): void
@@ -140,6 +144,9 @@
     {#if detail}<p>{detail}</p>{/if}
   </div>
   <div class="actions">
+    {#if onEditMetadata}
+      <button type="button" class="quiet" data-action="edit-metadata" disabled={metadataDisabled} onclick={() => onEditMetadata?.(item)}>{t('action.editMetadata')}</button>
+    {/if}
     {#if item.path && !item.orphan}
       <button class="quiet" disabled={disabled} onclick={() => onOpen(item)}>{t('common.open')}</button>
     {/if}

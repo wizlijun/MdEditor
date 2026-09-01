@@ -8,8 +8,10 @@ import {
   parseIdeaSource,
   proofPathFor,
   sortIdeasNewestFirst,
+  splitFrontmatter,
   timestampIdeaFileName,
   titleFromMarkdown,
+  updateIdeaPlanningDocument,
 } from './source'
 
 describe('idea source contract', () => {
@@ -52,6 +54,42 @@ describe('idea source contract', () => {
     expect(parseIdeaSource('inbox/ideas/a-idea.md', '---\ntype: Idea\nnext:\n  priority: impossible\n  due: tomorrow\n  contexts: nope\n---\n# Legacy', false)).toMatchObject({
       title: 'Legacy', body: '# Legacy', proofed: false,
     })
+  })
+
+  it('updates planning metadata while preserving unrelated frontmatter and the exact body', () => {
+    const body = '# Legacy\r\n\r\nKeep this body byte-for-byte.\r\n'
+    const updated = updateIdeaPlanningDocument(`---\r\ntype: Idea\r\ntitle: Keep me\r\ncustom:\r\n  nested: true\r\nnext:\r\n  priority: P3\r\n  due: "2026-09-02"\r\n  contexts: ["@old"]\r\n---\r\n${body}`, {
+      priority: 'P0',
+      due: '2026-09-08',
+      contexts: ['@电脑', '@电话'],
+    })
+
+    expect(updated.slice(updated.indexOf('---\r\n', 5) + 5)).toBe(body)
+    const [meta] = splitFrontmatter(updated)
+    expect(meta).toMatchObject({
+      title: 'Keep me',
+      custom: { nested: true },
+      next: { priority: 'P0', due: '2026-09-08', contexts: ['@电脑', '@电话'] },
+    })
+  })
+
+  it('adds missing Idea frontmatter and can clear optional planning metadata', () => {
+    const body = '# No metadata yet\n\nDo not lose me.'
+    const added = updateIdeaPlanningDocument(body, { priority: 'P2', contexts: [] })
+    expect(added).toContain('type: Idea')
+    expect(added).toContain('priority: P2')
+    expect(added.endsWith(body)).toBe(true)
+
+    const cleared = updateIdeaPlanningDocument(buildIdeaDocument(body, '2026-09-01T01:00:00Z', {
+      priority: 'P1', due: '2026-09-08', contexts: ['@电脑'],
+    }), { priority: 'P3', contexts: [] })
+    const [meta] = splitFrontmatter(cleared)
+    expect(meta?.next).toEqual({ priority: 'P3' })
+
+    const repaired = updateIdeaPlanningDocument('---\ntype: Idea\nnext: legacy\n---\n# Repair me', {
+      priority: 'P1', contexts: [],
+    })
+    expect(splitFrontmatter(repaired)[0]?.next).toEqual({ priority: 'P1' })
   })
 
   it('rejects absolute and traversal directories', () => {
