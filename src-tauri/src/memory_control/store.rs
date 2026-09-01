@@ -639,6 +639,19 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
         ));
     }
     let spec = &proposal.frontmatter.proposal;
+    if input.action == DecisionAction::Approve
+        && !matches!(spec.operation, Operation::Create)
+        && (spec
+            .target_id
+            .as_deref()
+            .is_none_or(|target_id| target_id.trim().is_empty())
+            || spec.base_revision.is_none())
+    {
+        return Err(
+            "memory: candidate target_id and base_revision are required for this operation"
+                .into(),
+        );
+    }
     if spec.scope == Scope::UserOwner {
         match document::owner_actor(&user)? {
             Some(current) if current != input.actor => {
@@ -1598,6 +1611,69 @@ mod tests {
         .unwrap_err();
 
         assert!(error.contains("owner scope supports only create/replace"));
+    }
+
+    #[test]
+    fn decision_rejects_a_handwritten_delete_without_base_revision() {
+        let v = vault();
+        migrate(v.path()).unwrap();
+        let entry = list(v.path())
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|entry| entry.scope == Scope::Memory)
+            .unwrap();
+        let proposal = propose(
+            v.path(),
+            ProposeInput {
+                scope: Scope::Memory,
+                operation: Operation::Delete,
+                text: String::new(),
+                source: "human-input://human:bruce/delete".into(),
+                by: "notemd-memory/human-ui".into(),
+                dedupe_key: "test/handwritten-delete".into(),
+                reason: "test missing base defense".into(),
+                target_id: Some(entry.id.clone()),
+                base_revision: Some(entry.revision),
+                section: None,
+                priority: None,
+                polarity: None,
+                epistemic_status: None,
+                certainty: None,
+                agent_guidance: None,
+                avoid_error: None,
+                merge_from: vec![],
+            },
+        )
+        .unwrap();
+        let path = v.path().join(&proposal.path);
+        let raw = fs::read_to_string(&path).unwrap();
+        let base_line = format!("  base_revision: {}\n", entry.revision);
+        assert!(raw.contains(&base_line));
+        fs::write(&path, raw.replacen(&base_line, "", 1)).unwrap();
+        let changed = list(v.path())
+            .unwrap()
+            .proposals
+            .into_iter()
+            .find(|item| item.frontmatter.proposal.id == proposal.frontmatter.proposal.id)
+            .unwrap();
+        let before = fs::read_to_string(v.path().join("MEMORY.md")).unwrap();
+
+        let error = decide(
+            v.path(),
+            DecideInput {
+                proposal_id: changed.frontmatter.proposal.id,
+                expected_sha256: changed.sha256,
+                action: DecisionAction::Approve,
+                actor: "human:bruce".into(),
+                human_confirmed: true,
+                reason: None,
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("candidate target_id and base_revision are required"));
+        assert_eq!(before, fs::read_to_string(v.path().join("MEMORY.md")).unwrap());
     }
 
     #[test]

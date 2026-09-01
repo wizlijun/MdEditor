@@ -7,6 +7,15 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Memory facts now have one-click review actions.** Confirm, deny, mark important, mark ignorable, or delete a fact without filling out the full metadata form. Pending facts reuse their exact original candidate, and every write still requires the in-window SHA-bound confirmation step.
+
+### Changed
+
+- **Deleting a memory now has explicit, auditable semantics.** An approved delete removes only the current `USER.md` or `MEMORY.md` projection block while retaining the immutable candidate and decision event; hand-written update candidates without an exact target revision fail closed.
+- **Next card titles are now the direct editing entry point.** Clicking an Idea or Task title opens its content and metadata editor without adding another competing card control.
+
 ## v6.901.6 — 2026-09-01
 
 ### Added
