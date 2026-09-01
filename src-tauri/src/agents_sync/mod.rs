@@ -482,6 +482,13 @@ mod fs_tests {
     fn template_documents_the_create_only_inbox_task_protocol() {
         for rule in [
             "`inbox/tasks/YYYY-MM-DD-HHmm-<slug>-task.md`",
+            "### Ownership gate",
+            "obligation belongs to the **vault owner**",
+            "work assigned to another person",
+            "A team-level action is not an owner Task",
+            "Follow up with Alice on Friday",
+            "If ownership",
+            "ambiguous, create no Task",
             "**direct child**",
             "type: Task",
             "`task.version` must be the integer `1`",

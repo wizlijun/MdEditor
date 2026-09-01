@@ -145,6 +145,8 @@ sources:
 
 约束：
 
+- Agent 只为 Vault 拥有者本人明确承担的义务创建 Task。分配给他人的工作、泛化团队
+  事项或责任主体不明的动作留在总结中；不能把别人的义务改写成拥有者的 Task。
 - `generated.by` 使用 OKF actor 格式 `<producer>/<version>`；`generated.at` 为本次内容生成时刻。
 - `sources[].resource` 优先指向触发任务的 Vault 文档；存在明确来源时不得只写一段不可追溯的摘要。
 - `task.dedupe_key` 对自动生产者必填，对人工创建可省略。推荐格式为 `<producer>/<schema-version>:<period>:<stable-source-key>`。
@@ -240,6 +242,8 @@ events:
 
 每日总结 Agent 是 create-only writer：
 
+- 先做责任主体判断；只有 Vault owner 本人明确负责的事项才可进入 Task 目录。
+- 他人的待办、未分配的团队动作和归属不明事项只留在总结中，不创建 Task。
 - 只可新增合法的 `inbox/tasks/*-task.md`。
 - 写入前按 exact `dedupe_key` 去重。
 - 先写非匹配临时文件，校验后再无覆盖地发布最终文件。
@@ -291,6 +295,7 @@ Task sheet 首版提供：
 - 人与 Agent 创建的每个 Task 都是一份独立、合法、可搜索的 `inbox/tasks/*-task.md`，绝不覆盖已有文件。
 - 合法 Task 刷新后进入收件箱；错误后缀、`type` 不符、坏 YAML、重复 ID 不进入正常泳道。
 - Agent Task 有 `generated`、`sources` 和稳定 `dedupe_key`；同一次每日总结重跑不产生重复文件。
+- Agent 只创建 Vault owner 本人明确承担的任务，不把他人或归属不明的事项写入 Task 目录。
 - Task 来源明确时把项目归属保存在 `task.project`，并与人确认的 ledger 项目标签保持边界。
 - 默认新建 Task 不写 lifecycle event、不占 WIP；只有人的安放，或人工显式「保存并标记为当前」，可以进入 WIP。
 - Task 可打开、预览、搜索、拖动，并复用五泳道全部生命周期动作。

@@ -121,6 +121,24 @@ action, or real deadline. It is not a suggestion, an idea worth exploring, a
 topic to remember, or work that is already complete. When in doubt, leave the
 item in the summary instead of manufacturing a commitment.
 
+### Ownership gate
+
+Only create a Task when the obligation belongs to the **vault owner**. The
+source must explicitly assign the action to the owner, record the owner's own
+commitment, or state a deadline the owner must meet.
+
+- Never create a Task for work assigned to another person, even when that work
+  affects the owner or the owner's project. Keep it in the summary with the
+  actual responsible person.
+- A team-level action is not an owner Task unless the source gives the owner a
+  specific part. Write only that part, not the whole team's obligation.
+- "Wait for Alice to send the contract" is Alice's work, not the owner's Task.
+  "Follow up with Alice on Friday" is an owner Task only when the source
+  explicitly requires that follow-up.
+- Do not rewrite somebody else's obligation as the owner's Task. If ownership
+  is inferred, shared, or ambiguous, create no Task and flag the ambiguity in
+  the summary instead.
+
 ### One Task, one file
 
 - Create one file per independently actionable outcome. Do not bundle unrelated
