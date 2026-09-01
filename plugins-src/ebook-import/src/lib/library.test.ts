@@ -7,6 +7,8 @@ import {
   latestSummary,
   mergeLibrary,
   onLibraryAiEvent,
+  replayPendingLibraryAi,
+  stashOrApplyLibraryAi,
   type LibraryBook,
   type RawBook,
 } from './library'
@@ -182,5 +184,52 @@ describe('onLibraryAiEvent', () => {
   it('leaves an untouched list alone', () => {
     const l = [book('A'), book('B')]
     expect(onLibraryAiEvent(l, 1, { event: 'started' })).toEqual(l)
+  })
+})
+
+describe('concurrent unbound AI reads', () => {
+  it('does not guess that an unknown push belongs to the sole unbound row', () => {
+    const list = claimAiRead([book('A')], 'ssot/ebooks/2026-08/A')
+    const stashed = stashOrApplyLibraryAi(list, [], 41, {
+      event: 'started',
+      started_at: 'A-start',
+    })
+    expect(stashed.list[0]).toMatchObject({ aiStatus: 'queued', aiJobId: undefined })
+    const bound = bindAiJob(stashed.list, 'ssot/ebooks/2026-08/A', 41)
+    const replayed = replayPendingLibraryAi(bound, stashed.pending, 41)
+    expect(replayed.list[0]).toMatchObject({ aiStatus: 'running', aiStartedAt: 'A-start' })
+  })
+
+  it('stashes early pushes until each RPC response identifies its row', () => {
+    let list = claimAiRead([book('A'), book('B')], 'ssot/ebooks/2026-08/A')
+    list = claimAiRead(list, 'ssot/ebooks/2026-08/B')
+    let pending: import('./library').PendingLibraryAiEvent[] = []
+
+    let result = stashOrApplyLibraryAi(list, pending, 41, {
+      event: 'started',
+      started_at: 'A-start',
+    })
+    list = result.list
+    pending = result.pending
+    result = stashOrApplyLibraryAi(list, pending, 42, { event: 'failed', error: 'B-fail' })
+    pending = result.pending
+    expect(pending).toHaveLength(2)
+    expect(result.list.every((row) => row.aiStatus === 'queued')).toBe(true)
+
+    list = bindAiJob(result.list, 'ssot/ebooks/2026-08/B', 42)
+    let replay = replayPendingLibraryAi(list, pending, 42)
+    list = replay.list
+    pending = replay.pending
+    expect(list[1]).toMatchObject({ aiJobId: 42, aiStatus: 'failed', aiError: 'B-fail' })
+    expect(pending.map((item) => item.jobId)).toEqual([41])
+
+    list = bindAiJob(list, 'ssot/ebooks/2026-08/A', 41)
+    replay = replayPendingLibraryAi(list, pending, 41)
+    expect(replay.list[0]).toMatchObject({
+      aiJobId: 41,
+      aiStatus: 'running',
+      aiStartedAt: 'A-start',
+    })
+    expect(replay.pending).toEqual([])
   })
 })

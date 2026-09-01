@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 fn default_ebooks_root() -> String {
     "ssot/ebooks".to_string()
@@ -101,6 +101,48 @@ pub fn validate_ebooks_root(root: &str) -> Result<(), String> {
         return Err("ebooks_root must be a vault-relative path".to_string());
     }
     Ok(())
+}
+
+/// Resolve the configured books root without following a symlink out of the
+/// Vault. The lexical validation above is not enough: `vault/ssot/ebooks` (or
+/// its current month child) may itself be a symlink to an arbitrary directory.
+pub fn checked_vault_dir(vault_root: &Path, relative: &str) -> Result<PathBuf, String> {
+    validate_ebooks_root(relative)?;
+    let lexical = vault_root.join(relative);
+    let canonical_vault = vault_root
+        .canonicalize()
+        .map_err(|e| format!("resolve vault {}: {e}", vault_root.display()))?;
+    let mut current = canonical_vault.clone();
+    for component in Path::new(relative).components() {
+        match component {
+            Component::Normal(name) => current.push(name),
+            Component::CurDir => continue,
+            _ => return Err("ebooks_root must be a vault-relative path".to_string()),
+        }
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "refusing symlink in ebook library path {}",
+                    current.display()
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(format!(
+                    "ebook library path is not a directory: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("inspect {}: {error}", current.display())),
+        }
+    }
+    if !current.starts_with(&canonical_vault) {
+        return Err("ebook library path escapes the vault".to_string());
+    }
+    // Keep the caller's Vault spelling (`/var/...` vs macOS `/private/var/...`)
+    // so returned paths and Vault-relative UI contracts remain compatible.
+    Ok(lexical)
 }
 
 pub fn load_device(data_dir: &Path) -> DeviceSettings {
@@ -214,6 +256,20 @@ mod tests {
     fn validate_ebooks_root_accepts_vault_relative_paths() {
         assert!(validate_ebooks_root("ssot/ebooks").is_ok());
         assert!(validate_ebooks_root("books/sub").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_vault_dir_rejects_a_symlinked_library_component() {
+        use std::os::unix::fs::symlink;
+
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(vault.path().join("ssot")).unwrap();
+        symlink(outside.path(), vault.path().join("ssot/ebooks")).unwrap();
+
+        let error = checked_vault_dir(vault.path(), "ssot/ebooks").unwrap_err();
+        assert!(error.contains("symlink"), "{error}");
     }
 
     #[test]

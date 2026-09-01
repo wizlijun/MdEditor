@@ -3,7 +3,7 @@
     cloneTopics,
     createTopic,
     moveTopic,
-    removeTopic,
+    stageTopicRemoval,
     topicCount,
     validateTopics,
     type TopicCounts,
@@ -17,15 +17,16 @@
     topics,
     counts = {},
     onsave,
-    ondelete,
     onclose,
   }: {
     open: boolean
     topics: TopicDefinition[]
     counts?: TopicCounts
-    onsave: (topics: TopicDefinition[]) => void | Promise<void>
-    /** Existing books are migrated before their topic definition is removed. */
-    ondelete: (topicId: string, migrateToId?: string) => void | Promise<void>
+    /** Deletions and migrations are committed atomically with the other edits. */
+    onsave: (
+      topics: TopicDefinition[],
+      migrations: Record<string, string>,
+    ) => void | Promise<void>
     onclose: () => void
   } = $props()
 
@@ -73,20 +74,15 @@
     entries.splice(entryIndex, 1)
   }
 
-  async function deleteDraft(topic: TopicDefinition) {
-    const count = topicCount(counts, topic.id)
-    const migrateToId = migrations[topic.id] || undefined
-    if (count > 0 && !migrateToId) return
+  function needsMigration(topicId: string): boolean {
+    return topicCount(counts, topicId) > 0 || Object.values(migrations).includes(topicId)
+  }
+
+  function deleteDraft(topic: TopicDefinition) {
     actionError = ''
-    try {
-      if (originalIds.includes(topic.id)) await ondelete(topic.id, migrateToId)
-      drafts = removeTopic(drafts, topic.id)
-      migrations = Object.fromEntries(
-        Object.entries(migrations).filter(([id]) => id !== topic.id),
-      )
-    } catch (error) {
-      actionError = error instanceof Error ? error.message : String(error)
-    }
+    const staged = stageTopicRemoval(drafts, originalIds, counts, migrations, topic.id)
+    drafts = staged.topics
+    migrations = staged.migrations
   }
 
   async function save() {
@@ -94,7 +90,7 @@
     saving = true
     actionError = ''
     try {
-      await onsave(cloneTopics(drafts))
+      await onsave(cloneTopics(drafts), { ...migrations })
     } catch (error) {
       actionError = error instanceof Error ? error.message : String(error)
     } finally {
@@ -231,7 +227,7 @@
             </div>
 
             <div class="delete-row">
-              {#if topicCount(counts, topic.id) > 0}
+              {#if needsMigration(topic.id)}
                 <label class="migration">
                   <span>{t('topic.manager.migrate')}</span>
                   <select bind:value={migrations[topic.id]}>
@@ -247,7 +243,7 @@
                 class="danger"
                 disabled={
                   drafts.length <= 1 ||
-                  (topicCount(counts, topic.id) > 0 && !migrations[topic.id])
+                  (needsMigration(topic.id) && !migrations[topic.id])
                 }
                 onclick={() => deleteDraft(topic)}
               >{t('topic.manager.delete')}</button>

@@ -97,7 +97,7 @@ pub fn run_import(
             ACCEPTED_EXTENSIONS.join(", ")
         ));
     }
-    let ebooks_dir = ctx.vault_root.join(ctx.ebooks_root);
+    let ebooks_dir = crate::settings::checked_vault_dir(ctx.vault_root, ctx.ebooks_root)?;
     let catalog = crate::topics::read_catalog(&ebooks_dir)?;
     if !catalog.contains_topic(ctx.topic_id) {
         return Err(format!(
@@ -212,10 +212,27 @@ pub fn run_import(
         if !current_catalog.contains_topic(ctx.topic_id) {
             return Err(format!("ebook topic {:?} no longer exists", ctx.topic_id));
         }
+        crate::topics::preflight_indexes(&ebooks_dir, &current_catalog)?;
         let month_parent = ebooks_dir.join(month);
+        if let Ok(metadata) = std::fs::symlink_metadata(&month_parent) {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(format!(
+                    "refusing unsafe ebook month directory {}",
+                    month_parent.display()
+                ));
+            }
+        }
         std::fs::create_dir_all(&month_parent)
             .map_err(|e| format!("create {}: {e}", month_parent.display()))?;
         let dest = unique_dest(&month_parent, &dirname);
+        if let Ok(metadata) = std::fs::symlink_metadata(&dest) {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(format!(
+                    "refusing unsafe ebook destination {}",
+                    dest.display()
+                ));
+            }
+        }
         finalize(
             ctx.work,
             &dest,
@@ -228,12 +245,17 @@ pub fn run_import(
         // Indexes are projections of the committed metadata. Rebuild from the
         // complete scan instead of appending one row, so retries and concurrent
         // imports converge without duplicates.
-        crate::topics::rebuild_indexes(&ebooks_dir, &current_catalog).map_err(|e| {
-            format!(
-                "book imported at {} but topic index rebuild failed: {e}",
+        if let Err(error) = crate::topics::rebuild_indexes(&ebooks_dir, &current_catalog) {
+            // `meta.yml` is the import commit marker. Once it exists, reporting
+            // a failed job makes the UI retry into `Title (2)`. Indexes are
+            // derived and activation/library reconciliation can safely retry,
+            // so surface the degraded state as a warning while returning the
+            // committed destination as success.
+            (ctx.log)(format!(
+                "WARNING: book imported at {} but topic index rebuild needs retry: {error}",
                 dest.display()
-            )
-        })?;
+            ));
+        }
         Ok(dest)
     })?;
 
@@ -329,9 +351,7 @@ pub fn finalize(
 /// and `work`/the vault destination aren't guaranteed to share one.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dst).map_err(|e| format!("mkdir {}: {e}", dst.display()))?;
-    for entry in
-        std::fs::read_dir(src).map_err(|e| format!("read dir {}: {e}", src.display()))?
-    {
+    for entry in std::fs::read_dir(src).map_err(|e| format!("read dir {}: {e}", src.display()))? {
         let entry = entry.map_err(|e| format!("read dir entry in {}: {e}", src.display()))?;
         let path = entry.path();
         let target = dst.join(entry.file_name());
@@ -455,6 +475,91 @@ mod tests {
             progress_calls.iter().any(|(stage, _)| stage == "finalize"),
             "expected a finalize progress stage, got {progress_calls:?}"
         );
+    }
+
+    #[test]
+    fn index_collision_is_detected_before_the_import_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        seed_topics(&vault);
+        std::fs::write(
+            vault.join("ssot/ebooks/软件工程.index.md"),
+            "# hand-written notes\n",
+        )
+        .unwrap();
+        let input = tmp.path().join("No Duplicate.pdf");
+        std::fs::write(&input, b"%PDF-1.4 fake").unwrap();
+        let mut log = |_: String| {};
+        let mut progress = |_: &str, _: Option<(usize, usize)>| {};
+        let cancelled = AtomicBool::new(false);
+        let mut ctx = PipelineCtx {
+            vault_root: &vault,
+            ebooks_root: "ssot/ebooks",
+            topic_id: TOPIC_ID,
+            work: &tmp.path().join("work"),
+            log: &mut log,
+            progress: &mut progress,
+            cancelled: &cancelled,
+        };
+
+        let error = run_import(
+            &mut ctx,
+            &input,
+            true,
+            Some(Box::new(StubOcrEngine { markdown: "# Body" })),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("hand-written"), "{error}");
+        let month = month_dir(chrono::Local::now().date_naive());
+        assert!(
+            !vault
+                .join("ssot/ebooks")
+                .join(month)
+                .join("No Duplicate")
+                .exists(),
+            "a deterministic index failure must not commit a book the UI could retry"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_month_is_rejected_without_writing_outside_the_vault() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        seed_topics(&vault);
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let month = month_dir(chrono::Local::now().date_naive());
+        symlink(&outside, vault.join("ssot/ebooks").join(&month)).unwrap();
+        let input = tmp.path().join("Escape.pdf");
+        std::fs::write(&input, b"%PDF-1.4 fake").unwrap();
+        let mut log = |_: String| {};
+        let mut progress = |_: &str, _: Option<(usize, usize)>| {};
+        let cancelled = AtomicBool::new(false);
+        let mut ctx = PipelineCtx {
+            vault_root: &vault,
+            ebooks_root: "ssot/ebooks",
+            topic_id: TOPIC_ID,
+            work: &tmp.path().join("work"),
+            log: &mut log,
+            progress: &mut progress,
+            cancelled: &cancelled,
+        };
+        let error = run_import(
+            &mut ctx,
+            &input,
+            true,
+            Some(Box::new(StubOcrEngine { markdown: "# Body" })),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("unsafe ebook month"), "{error}");
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
     }
 
     #[test]

@@ -11,8 +11,10 @@
     failAiRead,
     latestSummary,
     mergeLibrary,
-    onLibraryAiEvent,
+    replayPendingLibraryAi,
+    stashOrApplyLibraryAi,
     type LibraryBook,
+    type PendingLibraryAiEvent,
   } from './lib/library'
   import {
     rememberProvider,
@@ -22,6 +24,7 @@
   import { describeLog } from './lib/logs'
   import { setLocale, t, type MessageKey } from './lib/strings'
   import { describeError } from './lib/errors'
+  import { topicDesignAvailability } from './lib/topic-agent'
   import {
     addPaths,
     assignTopic,
@@ -104,6 +107,7 @@
   let globalError = $state('')
   let topics: TopicDefinition[] = $state([])
   let topicCatalogExtra: Record<string, unknown> = {}
+  let topicRevision = 'absent'
   let topicCounts: TopicCounts = $state({})
   let selectedTopicId: string | null = $state(null)
   let topicManagerOpen = $state(false)
@@ -251,7 +255,9 @@
       // the library's, and each ignores a job it doesn't own. Keeping them
       // independent is why neither needs to know the other exists.
       q = onAiEvent(q, a.job_id, ev)
-      library = onLibraryAiEvent(library, a.job_id, ev)
+      const result = stashOrApplyLibraryAi(library, pendingLibraryAi, a.job_id, ev)
+      library = result.list
+      pendingLibraryAi = result.pending
       // A finished read wrote a summary file the last listing can't know about.
       if (a.event === 'done') void loadLibrary()
     } else if (m.type === 'topic_agent') {
@@ -349,6 +355,18 @@
   const AGENT_SURFACE = 'ebook-import'
   let agents: AgentOption[] = $state([])
   let agentId: string | undefined = $state(undefined)
+  const topicDesign = $derived(topicDesignAvailability(agents))
+  const topicDesignStatus = $derived(
+    topicDesign.available
+      ? t('topic.agentProviderAvailable', {
+          name: topicDesign.provider.harness?.harness ?? topicDesign.provider.name,
+        })
+      : t(
+          topicDesign.reason === 'missing'
+            ? 'topic.agentProviderMissing'
+            : 'topic.agentProviderUnavailable',
+        ),
+  )
 
   async function loadAgents() {
     try {
@@ -397,6 +415,7 @@
 
   // ── the library: every book in the vault, not just this session's ────────
   let library: LibraryBook[] = $state([])
+  let pendingLibraryAi: PendingLibraryAiEvent[] = []
 
   async function loadLibrary() {
     try {
@@ -410,6 +429,7 @@
   async function loadTopics() {
     try {
       const state = await bridge().request('plugin.topic_state', {})
+      topicRevision = typeof state?.revision === 'string' ? state.revision : 'absent'
       const catalog = state?.catalog ?? null
       topics = catalog?.topics ?? []
       if (catalog) {
@@ -444,19 +464,13 @@
     selectedTopicId = topicId
   }
 
-  async function saveTopics(nextTopics: TopicDefinition[]) {
+  async function saveTopics(nextTopics: TopicDefinition[], migrations: Record<string, string>) {
     await bridge().request('plugin.topic_save', {
       catalog: { ...topicCatalogExtra, schema_version: 1, topics: nextTopics },
+      expected_revision: topicRevision,
+      migrations,
     })
     topicManagerOpen = false
-    await Promise.all([loadTopics(), loadLibrary()])
-  }
-
-  async function deleteTopic(topicId: string, migrateToId?: string) {
-    await bridge().request('plugin.topic_delete', {
-      topic_id: topicId,
-      ...(migrateToId ? { migrate_to: migrateToId } : {}),
-    })
     await Promise.all([loadTopics(), loadLibrary()])
   }
 
@@ -471,12 +485,16 @@
 
   async function startTopicDesign() {
     if (topicAgentRunning) return
+    if (!topicDesign.available) {
+      globalError = topicDesignStatus
+      return
+    }
     topicAgentRunning = true
     topicProposal = null
     globalError = ''
     try {
       await bridge().request('plugin.topic_agent_start', {
-        ...(agentId ? { harness: agentId } : {}),
+        harness: topicDesign.provider.id,
       })
     } catch (e) {
       topicAgentRunning = false
@@ -511,7 +529,12 @@
         name: book.name,
         ...(agentId ? { harness: agentId } : {}),
       })
-      if (typeof res?.job_id === 'number') library = bindAiJob(library, book.rel, res.job_id)
+      if (typeof res?.job_id === 'number') {
+        library = bindAiJob(library, book.rel, res.job_id)
+        const replay = replayPendingLibraryAi(library, pendingLibraryAi, res.job_id)
+        library = replay.list
+        pendingLibraryAi = replay.pending
+      }
     } catch (e) {
       library = failAiRead(library, book.rel, message(e))
       globalError = message(e)
@@ -712,17 +735,17 @@
     onmanage={() => (topicManagerOpen = true)}
   />
   <div class="topic-actions">
-    <button class="secondary" onclick={startTopicDesign} disabled={topicAgentRunning || library.length === 0}>
+    <button
+      class="secondary"
+      onclick={startTopicDesign}
+      disabled={topicAgentRunning || library.length === 0 || !topicDesign.available}
+      title={topicDesignStatus}
+    >
       {topicAgentRunning ? t('topic.agentRunning') : t('topic.agentDesign')}
     </button>
-    {#if agents.length}
-      <AgentPicker
-        options={agents}
-        selected={agentId ?? null}
-        onselect={pickAgent}
-        label={t as (k: string, v?: Record<string, string | number>) => string}
-      />
-    {/if}
+    <span class:unavailable={!topicDesign.available} class="topic-agent-status">
+      {topicDesignStatus}
+    </span>
     {#if unclassifiedBooks.length > 0}
       <span class="topic-warning">{t('topic.unclassifiedCount', { count: unclassifiedBooks.length })}</span>
     {/if}
@@ -872,7 +895,6 @@
     {topics}
     counts={topicCounts}
     onsave={saveTopics}
-    ondelete={deleteTopic}
     onclose={() => (topicManagerOpen = false)}
   />
 
@@ -1218,6 +1240,13 @@
   }
   .topic-warning {
     font-size: 10px;
+    color: #b26a00;
+  }
+  .topic-agent-status {
+    font-size: 10px;
+    color: #2e7d32;
+  }
+  .topic-agent-status.unavailable {
     color: #b26a00;
   }
   .topic-select {

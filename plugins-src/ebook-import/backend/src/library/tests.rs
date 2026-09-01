@@ -12,7 +12,11 @@ fn book(vault: &Path, root: &str, month: &str, name: &str, files: &[&str]) {
 fn book_with_added_at(vault: &Path, month: &str, name: &str, added_at: &str) {
     book(vault, "ssot/ebooks", month, name, &["book.md"]);
     std::fs::write(
-        vault.join("ssot/ebooks").join(month).join(name).join("meta.yml"),
+        vault
+            .join("ssot/ebooks")
+            .join(month)
+            .join(name)
+            .join("meta.yml"),
         format!("added_at: {added_at}\n"),
     )
     .unwrap();
@@ -126,7 +130,10 @@ fn summaries_are_collected_newest_first() {
     );
 
     let got = scan(v, "ssot/ebooks");
-    assert_eq!(got[0].summaries, ["2026-08-26-summary.md", "2026-08-04-summary.md"]);
+    assert_eq!(
+        got[0].summaries,
+        ["2026-08-26-summary.md", "2026-08-04-summary.md"]
+    );
 }
 
 #[test]
@@ -157,6 +164,93 @@ fn an_escaping_root_scans_to_nothing_rather_than_walking_out() {
     assert!(scan(v, "../..").is_empty());
     assert!(scan(v, "/etc").is_empty());
     assert!(scan(v, "").is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_library_root_does_not_list_books_outside_the_vault() {
+    use std::os::unix::fs::symlink;
+
+    let vault = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    book(outside.path(), "", "2026-08", "Outside", &["book.md"]);
+    std::fs::create_dir_all(vault.path().join("ssot")).unwrap();
+    symlink(outside.path(), vault.path().join("ssot/ebooks")).unwrap();
+    assert!(scan(vault.path(), "ssot/ebooks").is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_book_markdown_is_not_a_library_book() {
+    use std::os::unix::fs::symlink;
+
+    let vault = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let dir = vault.path().join("ssot/ebooks/2026-08/Symlink Book");
+    std::fs::create_dir_all(&dir).unwrap();
+    let outside_book = outside.path().join("secret.md");
+    std::fs::write(&outside_book, "outside").unwrap();
+    symlink(&outside_book, dir.join("book.md")).unwrap();
+
+    assert!(scan(vault.path(), "ssot/ebooks").is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_meta_is_treated_as_missing() {
+    use std::os::unix::fs::symlink;
+
+    let vault = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    book(
+        vault.path(),
+        "ssot/ebooks",
+        "2026-08",
+        "Symlink Meta",
+        &["book.md"],
+    );
+    book_with_added_at(vault.path(), "2026-01", "Valid", "2026-01-01T00:00:00Z");
+    let external_meta = outside.path().join("meta.yml");
+    std::fs::write(
+        &external_meta,
+        "added_at: 2099-01-01T00:00:00Z\ntopic_id: leaked-topic\n",
+    )
+    .unwrap();
+    symlink(
+        &external_meta,
+        vault
+            .path()
+            .join("ssot/ebooks/2026-08/Symlink Meta/meta.yml"),
+    )
+    .unwrap();
+
+    let got = scan(vault.path(), "ssot/ebooks");
+    assert_eq!(
+        got.iter()
+            .map(|book| book.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Valid", "Symlink Meta"]
+    );
+    assert_eq!(got[1].topic_id, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_summary_is_not_exposed_by_the_library() {
+    use std::os::unix::fs::symlink;
+
+    let vault = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let dir = vault.path().join("ssot/ebooks/2026-08/Book");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("book.md"), "book").unwrap();
+    std::fs::write(dir.join("2026-08-01-summary.md"), "inside").unwrap();
+    let external = outside.path().join("secret.md");
+    std::fs::write(&external, "outside").unwrap();
+    symlink(&external, dir.join("2026-08-02-summary.md")).unwrap();
+
+    let got = scan(vault.path(), "ssot/ebooks");
+    assert_eq!(got[0].summaries, ["2026-08-01-summary.md"]);
 }
 
 /// The nesting is exactly two levels. A book one level too deep is not a book

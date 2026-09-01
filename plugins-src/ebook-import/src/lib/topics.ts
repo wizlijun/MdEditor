@@ -178,6 +178,32 @@ export function removeTopic(topics: TopicDefinition[], id: string): TopicDefinit
   return [...topics.slice(0, index), ...topics.slice(index + 1)]
 }
 
+export function stageTopicRemoval(
+  topics: TopicDefinition[],
+  originalIds: string[],
+  counts: TopicCounts,
+  migrations: Record<string, string>,
+  id: string,
+): { topics: TopicDefinition[]; migrations: Record<string, string>; removed: boolean } {
+  const count = topicCount(counts, id)
+  const target = migrations[id]
+  const isMigrationTarget = Object.values(migrations).includes(id)
+  if (
+    topics.length <= 1 ||
+    !topics.some((topic) => topic.id === id) ||
+    ((count > 0 || isMigrationTarget) && !target)
+  ) {
+    return { topics, migrations, removed: false }
+  }
+  const nextMigrations = Object.fromEntries(
+    Object.entries(migrations)
+      .filter(([source]) => source !== id)
+      .map(([source, destination]) => [source, destination === id ? target! : destination]),
+  )
+  if (originalIds.includes(id) && count > 0) nextMigrations[id] = target
+  return { topics: removeTopic(topics, id), migrations: nextMigrations, removed: true }
+}
+
 export function topicCount(counts: TopicCounts, id: string): number {
   const count = counts[id]
   return Number.isFinite(count) && count > 0 ? count : 0

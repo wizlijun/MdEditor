@@ -28,6 +28,11 @@ export interface LibraryBook extends RawBook {
   aiError?: string
 }
 
+export interface PendingLibraryAiEvent {
+  jobId: number
+  event: BackendAiEvent | LocalAiEvent
+}
+
 /**
  * Rebuilds the list from a fresh `library_list` answer, carrying each book's
  * AI-read state over by `rel`.
@@ -156,4 +161,40 @@ export function onLibraryAiEvent(
   const out = [...list]
   out[idx] = next
   return out
+}
+
+/**
+ * Preserve a push that races two or more concurrent `ai_read_start` replies.
+ * Even with one unbound row, an unrelated import-queue read can emit the same
+ * push shape. The RPC response's job id is therefore the only safe identity.
+ */
+export function stashOrApplyLibraryAi(
+  list: LibraryBook[],
+  pending: PendingLibraryAiEvent[],
+  jobId: number,
+  event: BackendAiEvent | LocalAiEvent,
+): { list: LibraryBook[]; pending: PendingLibraryAiEvent[] } {
+  if (list.some((book) => book.aiJobId === jobId)) {
+    return { list: onLibraryAiEvent(list, jobId, event), pending }
+  }
+  if (list.some((book) => book.aiStatus === 'queued' && book.aiJobId == null)) {
+    return { list, pending: [...pending, { jobId, event }] }
+  }
+  return { list, pending }
+}
+
+/** Replay only one newly bound job's pushes, in arrival order. */
+export function replayPendingLibraryAi(
+  list: LibraryBook[],
+  pending: PendingLibraryAiEvent[],
+  jobId: number,
+): { list: LibraryBook[]; pending: PendingLibraryAiEvent[] } {
+  let next = list
+  const rest: PendingLibraryAiEvent[] = []
+  for (const item of pending) {
+    if (item.jobId === jobId) next = onLibraryAiEvent(next, item.jobId, item.event)
+    else rest.push(item)
+  }
+  const stillUnbound = next.some((book) => book.aiStatus === 'queued' && book.aiJobId == null)
+  return { list: next, pending: stillUnbound ? rest : [] }
 }

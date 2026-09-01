@@ -2,14 +2,14 @@
   "permissions": {
     "allow": [
       "Read(${NOTE})",
-      "Read(${VAULT}/.notemd/ebook-import/topic-design/inventory.yml)",
-      "Write(${VAULT}/.notemd/ebook-import/topic-design/topics.proposal.yml)",
-      "Edit(${VAULT}/.notemd/ebook-import/topic-design/topics.proposal.yml)"
+      "Read(${VAULT}/.notemd/ebook-import/topic-design/inventory.yml)"
     ],
     "deny": [
       "Bash",
       "Glob",
-      "Grep"
+      "Grep",
+      "Write",
+      "Edit"
     ]
   }
 }

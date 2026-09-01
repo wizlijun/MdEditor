@@ -3,6 +3,7 @@ import {
   createTopic,
   moveTopic,
   removeTopic,
+  stageTopicRemoval,
   topicCount,
   updateTopic,
   validateTopics,
@@ -118,5 +119,35 @@ describe('topic reducers', () => {
   it('reads missing topic counts as zero', () => {
     expect(topicCount({ business: 3 }, 'business')).toBe(3)
     expect(topicCount({}, 'software')).toBe(0)
+  })
+
+  it('stages deletion and migration without mutating the persisted inputs', () => {
+    const before = [topic('business'), topic('software')]
+    const migrations = { business: 'software' }
+    const staged = stageTopicRemoval(before, ['business', 'software'], { business: 2 }, migrations, 'business')
+    expect(staged.removed).toBe(true)
+    expect(staged.topics.map((entry) => entry.id)).toEqual(['software'])
+    expect(staged.migrations).toEqual({ business: 'software' })
+    expect(before.map((entry) => entry.id)).toEqual(['business', 'software'])
+    expect(migrations).toEqual({ business: 'software' })
+  })
+
+  it('does not stage an in-use topic deletion without a migration', () => {
+    const before = [topic('business'), topic('software')]
+    const staged = stageTopicRemoval(before, ['business', 'software'], { business: 1 }, {}, 'business')
+    expect(staged).toEqual({ topics: before, migrations: {}, removed: false })
+  })
+
+  it('retargets earlier staged migrations when their destination is deleted', () => {
+    const before = [topic('software'), topic('history')]
+    const staged = stageTopicRemoval(
+      before,
+      ['business', 'software', 'history'],
+      { business: 2, software: 1 },
+      { business: 'software', software: 'history' },
+      'software',
+    )
+    expect(staged.topics.map((entry) => entry.id)).toEqual(['history'])
+    expect(staged.migrations).toEqual({ business: 'history', software: 'history' })
   })
 })

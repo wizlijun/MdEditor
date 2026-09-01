@@ -9,6 +9,7 @@ use fs2::FileExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -212,11 +213,37 @@ pub fn parse_catalog(yaml: &str) -> Result<TopicCatalog, String> {
     Ok(catalog)
 }
 
+fn regular_file_state(path: &Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(true),
+        Ok(_) => Err(format!(
+            "refusing non-regular or symlinked catalog {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("inspect {}: {error}", path.display())),
+    }
+}
+
 pub fn read_catalog(ebooks_root: &Path) -> Result<TopicCatalog, String> {
     let path = ebooks_root.join(TOPICS_FILE);
+    if !regular_file_state(&path)? {
+        return Err(format!("read {}: file does not exist", path.display()));
+    }
     let yaml =
         std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     parse_catalog(&yaml)
+}
+
+pub fn catalog_revision(ebooks_root: &Path) -> Result<Option<String>, String> {
+    let path = ebooks_root.join(TOPICS_FILE);
+    if !regular_file_state(&path)? {
+        return Ok(None);
+    }
+    match std::fs::read(&path) {
+        Ok(bytes) => Ok(Some(format!("sha256:{:x}", Sha256::digest(bytes)))),
+        Err(error) => Err(format!("read {}: {error}", path.display())),
+    }
 }
 
 pub fn write_catalog(ebooks_root: &Path, catalog: &TopicCatalog) -> Result<PathBuf, String> {
@@ -225,6 +252,7 @@ pub fn write_catalog(ebooks_root: &Path, catalog: &TopicCatalog) -> Result<PathB
         .map_err(|e| format!("create {}: {e}", ebooks_root.display()))?;
     let yaml = serde_yaml::to_string(catalog).map_err(|e| format!("serialize topics.yml: {e}"))?;
     let path = ebooks_root.join(TOPICS_FILE);
+    let _ = regular_file_state(&path)?;
     atomic_write(&path, yaml.as_bytes())?;
     Ok(path)
 }
@@ -276,6 +304,45 @@ pub fn assign_book_topic(
     write_book_topic(meta_path, topic_id)
 }
 
+/// Resolve one scanned book's metadata without accepting separators, symlinked
+/// directories, or symlinked files. `scan_books` produces exactly two path
+/// components; rechecking at mutation time closes the scan→write escape.
+pub fn existing_book_meta(ebooks_root: &Path, rel: &str) -> Result<PathBuf, String> {
+    let components: Vec<_> = Path::new(rel).components().collect();
+    if components.len() != 2
+        || components
+            .iter()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(format!("unsafe library book path {rel:?}"));
+    }
+    let mut current = ebooks_root.to_path_buf();
+    for component in components {
+        let std::path::Component::Normal(name) = component else {
+            unreachable!()
+        };
+        current.push(name);
+        let metadata = std::fs::symlink_metadata(&current)
+            .map_err(|e| format!("inspect {}: {e}", current.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(format!(
+                "unsafe library book directory {}",
+                current.display()
+            ));
+        }
+    }
+    if !crate::library::is_regular_file(&current.join("book.md")) {
+        return Err(format!("missing book.md for {rel:?}"));
+    }
+    let meta = current.join("meta.yml");
+    let metadata =
+        std::fs::symlink_metadata(&meta).map_err(|e| format!("inspect {}: {e}", meta.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("unsafe book metadata {}", meta.display()));
+    }
+    Ok(meta)
+}
+
 fn read_yaml_mapping(path: &Path) -> Result<Mapping, String> {
     let text =
         std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
@@ -294,20 +361,28 @@ pub fn scan_books(ebooks_root: &Path) -> Result<Vec<ScannedBook>, String> {
     let Ok(months) = std::fs::read_dir(ebooks_root) else {
         return Ok(books);
     };
-    let mut months: Vec<_> = months.flatten().filter(|e| is_dir(e.path())).collect();
+    let mut months: Vec<_> = months
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .collect();
     months.sort_by_key(|e| e.file_name());
     for month in months {
         let month_name = month.file_name().to_string_lossy().to_string();
         let Ok(entries) = std::fs::read_dir(month.path()) else {
             continue;
         };
-        let mut entries: Vec<_> = entries.flatten().filter(|e| is_dir(e.path())).collect();
+        let mut entries: Vec<_> = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .collect();
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let dir = entry.path();
             let book_path = dir.join("book.md");
             let meta_path = dir.join("meta.yml");
-            if !book_path.is_file() || !meta_path.is_file() {
+            if !crate::library::is_regular_file(&book_path)
+                || !crate::library::is_regular_file(&meta_path)
+            {
                 continue;
             }
             let dir_name = entry.file_name().to_string_lossy().to_string();
@@ -329,10 +404,6 @@ pub fn scan_books(ebooks_root: &Path) -> Result<Vec<ScannedBook>, String> {
     }
     books.sort_by(compare_books);
     Ok(books)
-}
-
-fn is_dir(path: PathBuf) -> bool {
-    path.is_dir()
 }
 
 fn optional_string(mapping: &Mapping, key: &str, path: &Path) -> Result<Option<String>, String> {
@@ -465,6 +536,51 @@ pub fn is_generated_index(text: &str) -> bool {
     text.lines().take(16).any(|line| line == GENERATED_MARKER)
 }
 
+/// Validate every desired destination before a canonical mutation. This is
+/// intentionally side-effect free and is shared by import and catalog-save so
+/// a handwritten collision cannot be discovered only after state was committed.
+pub fn preflight_indexes(ebooks_root: &Path, catalog: &TopicCatalog) -> Result<(), String> {
+    validate_catalog(catalog)?;
+    // Also prove the current metadata set is readable before any write.
+    let _ = scan_books(ebooks_root)?;
+    let desired: BTreeSet<_> = catalog
+        .topics
+        .iter()
+        .map(|topic| topic.index_file.to_ascii_lowercase())
+        .collect();
+    let entries = match std::fs::read_dir(ebooks_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("read {}: {error}", ebooks_root.display())),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("read entry in {}: {e}", ebooks_root.display()))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let lower = name.to_ascii_lowercase();
+        if !lower.ends_with(".index.md") {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("inspect {}: {e}", path.display()))?;
+        if !metadata.file_type().is_file() {
+            return Err(format!(
+                "refusing non-regular or symlinked topic index {}",
+                path.display()
+            ));
+        }
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        if desired.contains(&lower) && !is_generated_index(&text) {
+            return Err(format!(
+                "topic index conflicts with a hand-written file: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Rebuild every current topic index and remove obsolete generated v1
 /// indexes. Before touching any file, all desired destinations are checked so
 /// a hand-written same-name file stops the whole operation without partial
@@ -473,35 +589,13 @@ pub fn rebuild_indexes(
     ebooks_root: &Path,
     catalog: &TopicCatalog,
 ) -> Result<RebuildResult, String> {
-    validate_catalog(catalog)?;
+    preflight_indexes(ebooks_root, catalog)?;
     let books = scan_books(ebooks_root)?;
     let desired: BTreeSet<_> = catalog
         .topics
         .iter()
-        .map(|topic| topic.index_file.as_str())
+        .map(|topic| topic.index_file.to_ascii_lowercase())
         .collect();
-
-    for topic in &catalog.topics {
-        let path = ebooks_root.join(&topic.index_file);
-        if path.exists() {
-            let metadata = std::fs::symlink_metadata(&path)
-                .map_err(|e| format!("inspect {}: {e}", path.display()))?;
-            if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-                return Err(format!(
-                    "refusing to replace non-regular topic index {}",
-                    path.display()
-                ));
-            }
-            let text = std::fs::read_to_string(&path)
-                .map_err(|e| format!("read {}: {e}", path.display()))?;
-            if !is_generated_index(&text) {
-                return Err(format!(
-                    "topic index conflicts with a hand-written file: {}",
-                    path.display()
-                ));
-            }
-        }
-    }
 
     std::fs::create_dir_all(ebooks_root)
         .map_err(|e| format!("create {}: {e}", ebooks_root.display()))?;
@@ -518,7 +612,8 @@ pub fn rebuild_indexes(
         .flatten()
     {
         let name = entry.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".index.md") || desired.contains(name.as_str()) {
+        let lower = name.to_ascii_lowercase();
+        if !lower.ends_with(".index.md") || desired.contains(&lower) {
             continue;
         }
         let path = entry.path();
@@ -629,6 +724,48 @@ mod tests {
             reparsed.topics[0].vocabulary[0].extra,
             original.topics[0].vocabulary[0].extra
         );
+    }
+
+    #[test]
+    fn catalog_revision_changes_with_bytes_and_represents_absence() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(catalog_revision(tmp.path()).unwrap(), None);
+        write_catalog(tmp.path(), &one_topic()).unwrap();
+        let first = catalog_revision(tmp.path()).unwrap().unwrap();
+        assert!(first.starts_with("sha256:"));
+        let mut changed = one_topic();
+        changed.topics[0].label = "另一个主题".into();
+        write_catalog(tmp.path(), &changed).unwrap();
+        assert_ne!(catalog_revision(tmp.path()).unwrap().unwrap(), first);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn catalog_io_never_follows_a_symlinked_topics_file() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let external = outside.path().join("topics.yml");
+        let original = serde_yaml::to_string(&one_topic()).unwrap();
+        std::fs::write(&external, &original).unwrap();
+        let link = root.path().join(TOPICS_FILE);
+        symlink(&external, &link).unwrap();
+
+        assert!(read_catalog(root.path())
+            .unwrap_err()
+            .contains("symlinked catalog"));
+        assert!(catalog_revision(root.path())
+            .unwrap_err()
+            .contains("symlinked catalog"));
+        assert!(write_catalog(root.path(), &one_topic())
+            .unwrap_err()
+            .contains("symlinked catalog"));
+        assert_eq!(std::fs::read_to_string(&external).unwrap(), original);
+        assert!(std::fs::symlink_metadata(link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     #[test]
@@ -823,6 +960,111 @@ mod tests {
         );
         assert!(!stale.exists());
         assert!(handwritten_stale.exists());
+    }
+
+    #[test]
+    fn stale_generated_index_cleanup_is_case_insensitive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stale = tmp.path().join("Old.INDEX.MD");
+        std::fs::write(&stale, format!("{GENERATED_MARKER}\nstale\n")).unwrap();
+        rebuild_indexes(tmp.path(), &one_topic()).unwrap();
+        assert!(!stale.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_rejects_desired_and_stale_symlink_indexes_before_writing() {
+        use std::os::unix::fs::symlink;
+
+        for desired_link in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let external = outside.path().join("outside.md");
+            let original = format!("{GENERATED_MARKER}\noutside\n");
+            std::fs::write(&external, &original).unwrap();
+            let link_name = if desired_link {
+                one_topic().topics[0].index_file.clone()
+            } else {
+                "Stale.index.md".to_string()
+            };
+            symlink(&external, root.path().join(link_name)).unwrap();
+
+            let error = rebuild_indexes(root.path(), &one_topic()).unwrap_err();
+            assert!(error.contains("symlinked topic index"), "{error}");
+            assert_eq!(std::fs::read_to_string(&external).unwrap(), original);
+            if !desired_link {
+                assert!(
+                    !root.path().join(&one_topic().topics[0].index_file).exists(),
+                    "stale-index validation must happen before writing desired indexes"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preflight_rejects_a_non_regular_stale_index_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("Stale.index.md")).unwrap();
+        let error = rebuild_indexes(root.path(), &one_topic()).unwrap_err();
+        assert!(error.contains("non-regular"), "{error}");
+        assert!(!root.path().join(&one_topic().topics[0].index_file).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_and_mutation_refuse_symlinked_book_directories() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_book = outside.path().join("Book");
+        std::fs::create_dir_all(&outside_book).unwrap();
+        std::fs::write(
+            outside_book.join("book.md"),
+            "---\ntype: Book\ntitle: X\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            outside_book.join("meta.yml"),
+            "added_at: 2026-09-01T00:00:00Z\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.path().join("2026-09")).unwrap();
+        symlink(&outside_book, root.path().join("2026-09/Book")).unwrap();
+
+        assert!(scan_books(root.path()).unwrap().is_empty());
+        assert!(existing_book_meta(root.path(), "2026-09/Book").is_err());
+        assert_eq!(
+            std::fs::read_to_string(outside_book.join("meta.yml")).unwrap(),
+            "added_at: 2026-09-01T00:00:00Z\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inventory_scan_refuses_symlinked_book_or_meta_files() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let external_book = outside.path().join("book.md");
+        let external_meta = outside.path().join("meta.yml");
+        std::fs::write(&external_book, "---\ntitle: Outside\n---\n").unwrap();
+        std::fs::write(&external_meta, "topic_id: topic-0\n").unwrap();
+
+        let book_link = root.path().join("2026-09/Book Link");
+        std::fs::create_dir_all(&book_link).unwrap();
+        symlink(&external_book, book_link.join("book.md")).unwrap();
+        std::fs::write(book_link.join("meta.yml"), "").unwrap();
+
+        let meta_link = root.path().join("2026-09/Meta Link");
+        std::fs::create_dir_all(&meta_link).unwrap();
+        std::fs::write(meta_link.join("book.md"), "---\ntitle: Inside\n---\n").unwrap();
+        symlink(&external_meta, meta_link.join("meta.yml")).unwrap();
+
+        assert!(scan_books(root.path()).unwrap().is_empty());
+        assert!(existing_book_meta(root.path(), "2026-09/Book Link").is_err());
+        assert!(existing_book_meta(root.path(), "2026-09/Meta Link").is_err());
     }
 
     #[test]

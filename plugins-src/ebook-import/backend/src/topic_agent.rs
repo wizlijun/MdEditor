@@ -1,7 +1,8 @@
 //! 电子书主题 Agent 的纯数据协议与任务模板。
 //!
-//! Agent 只读取插件生成的 inventory 快照，并只写 proposal；canonical
-//! `topics.yml`、每书 `meta.yml` 与生成索引均由插件在校验和用户确认后处理。
+//! Agent 只读取插件生成的 inventory 快照，并在最终响应中返回 proposal；
+//! 插件校验后才写 proposal。canonical `topics.yml`、每书 `meta.yml` 与生成
+//! 索引均由插件在用户确认后处理。
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,7 +11,9 @@ use std::fmt;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-pub const TASK_ID: &str = "organize-ebook-topics";
+// v1 granted some harnesses workspace write. A new id guarantees every Vault
+// receives the read-only task instead of retaining an existing create-only v1.
+pub const TASK_ID: &str = "organize-ebook-topics-v2";
 pub const INVENTORY_REL: &str = ".notemd/ebook-import/topic-design/inventory.yml";
 pub const PROPOSAL_REL: &str = ".notemd/ebook-import/topic-design/topics.proposal.yml";
 pub const APPLY_JOURNAL_REL: &str = ".notemd/ebook-import/topic-design/apply-journal.json";
@@ -115,6 +118,24 @@ pub fn parse_and_validate_proposal(
     let hash = inventory_sha256(inventory_bytes);
     validate_proposal(&proposal, &inventory, &hash)?;
     Ok(proposal)
+}
+
+/// Extract the only trusted payload from a completed Agent status. The task is
+/// read-only, so no Agent-created Vault file is accepted as an authority.
+pub fn proposal_from_run_status(
+    status: &serde_json::Value,
+    inventory_bytes: &[u8],
+) -> Result<Proposal, TopicAgentError> {
+    let result = status
+        .get("record")
+        .and_then(|record| record.get("result"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| TopicAgentError::Invalid("Agent 成功状态没有 proposal result".into()))?;
+    let result = result.trim();
+    if result.starts_with("```") || result.ends_with("```") {
+        return invalid("Agent proposal 必须是纯 YAML，不能包含 Markdown code fence");
+    }
+    parse_and_validate_proposal(result, inventory_bytes)
 }
 
 pub fn validate_proposal(
@@ -548,17 +569,68 @@ assignments:
     }
 
     #[test]
-    fn every_prompt_fixes_the_only_writable_output() {
+    fn every_prompt_enforces_read_only_final_output() {
         for body in [
             include_str!("../templates/organize-ebook-topics/CLAUDE.md"),
             include_str!("../templates/organize-ebook-topics/AGENTS.md"),
             include_str!("../templates/organize-ebook-topics/CODEX.md"),
         ] {
-            assert!(body.contains(PROPOSAL_REL));
             assert!(body.contains(INVENTORY_REL));
             assert!(body.contains("2–5"));
             assert!(body.contains("恰好一次"));
             assert!(body.contains("不要修改"));
+            assert!(body.contains("最终响应"));
         }
+    }
+
+    #[test]
+    fn task_policy_is_read_only_for_every_provider() {
+        let policy: serde_json::Value = serde_json::from_str(include_str!(
+            "../templates/organize-ebook-topics/policy.json"
+        ))
+        .unwrap();
+        assert_eq!(policy["permission_mode"], "read-only");
+        for settings in [
+            include_str!("../templates/organize-ebook-topics/settings.json"),
+            include_str!("../templates/organize-ebook-topics/settings.scoped.json"),
+        ] {
+            let value: serde_json::Value = serde_json::from_str(settings).unwrap();
+            let allow = value["permissions"]["allow"].as_array().unwrap();
+            assert!(!allow.is_empty());
+            assert!(
+                allow.iter().all(|entry| {
+                    matches!(
+                        entry.as_str(),
+                        Some("Read(${NOTE})")
+                            | Some(
+                                "Read(${VAULT}/.notemd/ebook-import/topic-design/inventory.yml)"
+                            )
+                    )
+                }),
+                "Claude topic task must allow only its one inventory file: {allow:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn final_result_is_validated_and_markdown_is_rejected() {
+        let bytes = inventory_yaml(&inventory()).unwrap();
+        let yaml = proposal(&bytes);
+        let status = serde_json::json!({
+            "state": "done",
+            "record": { "status": "success", "result": yaml }
+        });
+        assert_eq!(
+            proposal_from_run_status(&status, &bytes)
+                .unwrap()
+                .topics
+                .len(),
+            2
+        );
+
+        let fenced = serde_json::json!({
+            "record": { "result": format!("```yaml\n{}\n```", proposal(&bytes)) }
+        });
+        assert!(proposal_from_run_status(&fenced, &bytes).is_err());
     }
 }

@@ -33,8 +33,7 @@ fn is_summary(name: &str) -> bool {
     b.len() == 10
         && b[4] == b'-'
         && b[7] == b'-'
-        && b
-            .iter()
+        && b.iter()
             .enumerate()
             .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }
@@ -54,14 +53,26 @@ fn sorted_subdirs(dir: &Path) -> Vec<std::fs::DirEntry> {
     out
 }
 
+pub(crate) fn is_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+}
+
 /// The authoritative time this book joined the vault. The importer writes one
 /// exact top-level scalar (`added_at: YYYY-MM-DDTHH:MM:SSZ`); tolerate future
 /// extra metadata lines, but only accept the strict UTC shape promised by the
 /// file contract. Missing or hand-edited invalid metadata is a compatibility
 /// case, not a reason to hide an otherwise readable book.
 fn read_added_at(dir: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
-    let text = std::fs::read_to_string(dir.join("meta.yml")).ok()?;
-    let raw = text.lines().find_map(|line| line.strip_prefix("added_at: "))?;
+    let meta = dir.join("meta.yml");
+    if !is_regular_file(&meta) {
+        return None;
+    }
+    let text = std::fs::read_to_string(meta).ok()?;
+    let raw = text
+        .lines()
+        .find_map(|line| line.strip_prefix("added_at: "))?;
     if raw.len() != 20 || !raw.ends_with('Z') {
         return None;
     }
@@ -84,23 +95,25 @@ fn read_added_at(dir: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
 /// user's home directory into the window. Same defense-in-depth reasoning as
 /// `pipeline::run_import`.
 pub fn scan(vault: &Path, ebooks_root: &str) -> Vec<BookEntry> {
-    if crate::settings::validate_ebooks_root(ebooks_root).is_err() {
+    let Ok(root) = crate::settings::checked_vault_dir(vault, ebooks_root) else {
         return Vec::new();
-    }
-    let root = vault.join(ebooks_root);
+    };
     let catalog = crate::topics::read_catalog(&root).ok();
     let mut out = Vec::new();
     for month in sorted_subdirs(&root) {
         let month_name = month.file_name().to_string_lossy().to_string();
         for book in sorted_subdirs(&month.path()) {
             let dir = book.path();
-            if !dir.join("book.md").is_file() {
+            if !is_regular_file(&dir.join("book.md")) {
                 continue;
             }
             let name = book.file_name().to_string_lossy().to_string();
-            let topic_id = crate::topics::read_book_topic(&dir.join("meta.yml"))
-                .ok()
-                .flatten();
+            let meta = dir.join("meta.yml");
+            let topic_id = if is_regular_file(&meta) {
+                crate::topics::read_book_topic(&meta).ok().flatten()
+            } else {
+                None
+            };
             let topic_label = topic_id.as_deref().and_then(|id| {
                 catalog
                     .as_ref()
@@ -111,6 +124,7 @@ pub fn scan(vault: &Path, ebooks_root: &str) -> Vec<BookEntry> {
                 .into_iter()
                 .flatten()
                 .flatten()
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
                 .map(|e| e.file_name().to_string_lossy().to_string())
                 .filter(|n| is_summary(n))
                 .collect();
