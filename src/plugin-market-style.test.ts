@@ -10,9 +10,8 @@ function rule(selector: string): string {
 }
 
 describe('plugin market standard window colors', () => {
-  it('keeps window, spotlight, category, and card surfaces neutral', () => {
+  it('keeps window, category, and card surfaces neutral', () => {
     expect(rule('main')).toContain('background: var(--window-background)')
-    expect(rule('.ai-spotlight')).toContain('background: var(--window-surface)')
     expect(rule('.category-block')).toContain('background: var(--window-surface)')
     expect(rule('.plugin-card')).toContain('background: var(--card-surface)')
     expect(rule('.ai-card')).not.toContain('gradient')

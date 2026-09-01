@@ -204,6 +204,7 @@ export const de: Record<keyof Messages, string> = {
   'plugins.internalError': '{name}: Plugin-Fehler',
 
   // Plugin-Funktionsgruppen
+  'pluginCategory.ai': 'AI',
   'pluginCategory.record': 'Festhalten',
   'pluginCategory.reading': 'Lesen',
   'pluginCategory.inspiration': 'Ideen',

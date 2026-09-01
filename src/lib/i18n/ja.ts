@@ -206,6 +206,7 @@ export const ja: Record<keyof Messages, string> = {
   'plugins.internalError': '{name}：プラグインエラー',
 
   // プラグイン機能カテゴリ
+  'pluginCategory.ai': 'AI',
   'pluginCategory.record': '記録',
   'pluginCategory.reading': '読む',
   'pluginCategory.inspiration': 'アイデア',

@@ -211,6 +211,7 @@ export const en = {
   'plugins.internalError': '{name}: plugin error',
 
   // Stable capability groups shared by the Plugins menu and marketplaces
+  'pluginCategory.ai': 'AI',
   'pluginCategory.record': 'Capture',
   'pluginCategory.reading': 'Read',
   'pluginCategory.inspiration': 'Ideas',

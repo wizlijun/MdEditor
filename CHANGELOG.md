@@ -15,6 +15,7 @@ For the full commit history, see the git log.
 
 - **`USER.md` and `MEMORY.md` are now disposable plain-text projections.** The Host deterministically rebuilds their one-level categories and multiline facts from `.notemd/memory`, keeps process metadata out of the Markdown, and fails closed on damaged authority or source conflicts.
 - **Memory remains conservative across devices and external models.** Independent Git clones merge immutable records as a set, concurrent edits to one Claim require explicit resolution, action-sensitive conflicts tighten permissions, and Context Manifests record the Space, purpose, caller, provider, model, tools and selection reasons used for Agent context.
+- **AI is now the first system category in the Plugin Market.** Claude Agent, Codex Agent, DeepSeek Agent and Memory are grouped together at the top, including when older installed metadata or cached catalog entries still use their previous categories.
 
 ## v6.901.8 — 2026-09-01
 

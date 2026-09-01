@@ -46,6 +46,7 @@ vi.mock('./lib/i18n/store.svelte', () => {
     'pluginMarket.localStateError': 'Could not refresh installed plugins: {error}',
     'pluginMarket.networkError': 'Could not reach the plugin registry: {error}',
     'pluginCategory.record': 'Capture',
+    'pluginCategory.ai': 'AI',
     'pluginCategory.reading': 'Read',
     'pluginCategory.inspiration': 'Ideas',
     'pluginCategory.advance': 'Move Forward',
@@ -248,25 +249,42 @@ describe('plugin market staged loading', () => {
     expect(document.body.textContent).toContain('追溯文字的原始出处。')
   })
 
-  it('highlights AI plugins without turning AI into a top-level category', async () => {
-    const agent = entry('notemd.codex-agent', 'Codex Agent')
-    agent.category = 'agents'
+  it('puts the three agents and Memory in the first system category without moving other AI plugins', async () => {
+    const claude = entry('notemd.claude-agent', 'Claude Agent')
+    const codex = entry('notemd.codex-agent', 'Codex Agent')
+    const deepseek = entry('notemd.deepseek-agent', 'DeepSeek Agent')
+    const memory = entry('notemd.memory', 'Memory')
+    const ebook = entry('notemd.ebook-import', 'Ebook Import')
+    for (const item of [claude, codex, deepseek]) item.category = 'agents'
+    memory.category = 'thinking-review'
+    ebook.category = 'reading'
     const next = entry('notemd.next', 'Next')
     next.category = 'thinking'
     mocks.invoke.mockImplementation((command: string) => {
       if (command === 'plugin_market_installed') return Promise.resolve([])
-      if (command === 'plugin_market_index') return Promise.resolve({ plugins: [agent, next] })
+      if (command === 'plugin_market_index') {
+        return Promise.resolve({ plugins: [next, ebook, memory, codex, claude, deepseek] })
+      }
       return Promise.resolve()
     })
 
     component = mount(PluginMarketApp, { target: document.body })
-    await vi.waitFor(() => expect(document.body.textContent).toContain('Create with AI'))
-    expect(document.querySelectorAll('.ai-spotlight .ai-pill')).toHaveLength(1)
+    await vi.waitFor(() => expect(document.body.textContent).toContain('DeepSeek Agent'))
+    const categories = [...document.querySelectorAll<HTMLElement>('.category-block')]
+    expect(categories[0]?.dataset.category).toBe('ai')
+    expect(categories[0]?.querySelector('h2')?.textContent).toBe('AI')
+    expect(categories[0]?.querySelector('.system-badge')).not.toBeNull()
+    expect(categories[0]?.querySelectorAll('.plugin-card')).toHaveLength(4)
+    expect(categories[0]?.textContent).toContain('Claude Agent')
+    expect(categories[0]?.textContent).toContain('Codex Agent')
+    expect(categories[0]?.textContent).toContain('DeepSeek Agent')
+    expect(categories[0]?.textContent).toContain('Memory')
     expect(document.querySelector('[data-plugin-id="notemd.codex-agent"] .ai-badge')?.textContent)
       .toContain('AI Action')
     expect(document.querySelector('[data-plugin-id="notemd.next"] .ai-badge')).toBeNull()
-    expect(document.querySelector('[data-category="agents"]')).toBeNull()
-    expect(document.querySelectorAll('[data-category="advance"] .plugin-card')).toHaveLength(2)
+    expect(document.querySelectorAll('[data-category="reading"] .plugin-card')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-category="advance"] .plugin-card')).toHaveLength(1)
+    expect(document.querySelector('.ai-spotlight')).toBeNull()
   })
 
   it('separates import/export and experience as system feature categories', async () => {
