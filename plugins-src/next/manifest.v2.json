@@ -34,6 +34,13 @@
         "min_height": 520,
         "open_command": "open"
       }
+    ],
+    "tray": [
+      {
+        "window": "main",
+        "section": "capture",
+        "accelerator": "Cmd+Ctrl+N"
+      }
     ]
   },
   "capabilities": [

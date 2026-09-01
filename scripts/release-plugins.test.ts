@@ -234,3 +234,21 @@ describe('Location Log product identity', () => {
     })
   })
 })
+
+describe('Next tray shortcut', () => {
+  const manifest = JSON.parse(
+    readFileSync(join(ROOT, 'plugins-src', 'next', 'manifest.v2.json'), 'utf8'),
+  ) as {
+    contributes: {
+      tray?: Array<{ window: string; section?: string; accelerator?: string }>
+    }
+  }
+
+  it('opens Next from the capture group with its global shortcut', () => {
+    expect(manifest.contributes.tray).toContainEqual({
+      window: 'main',
+      section: 'capture',
+      accelerator: 'Cmd+Ctrl+N',
+    })
+  })
+})

@@ -43,7 +43,7 @@ pub fn plugin_display_name(m: &ManifestV2, locale: &str) -> String {
 }
 
 /// Every tray contribution across `plugins`, split into
-/// `(capture group, default group)` and each sorted by label.
+/// `(capture group, default group)` and each sorted by its stable base label.
 ///
 /// The capture group is the tray's top block — the one holding Quick Note and
 /// Daily Notes — which a plugin opts into with `"section": "capture"`. Any
@@ -52,8 +52,10 @@ pub fn plugin_display_name(m: &ManifestV2, locale: &str) -> String {
 /// an unknown group name has to degrade to a usable position rather than drop
 /// the item.
 ///
-/// Ordering is by label rather than by plugin id because the label is what the
-/// user reads; it must not depend on discovery order.
+/// The sort key is the explicit manifest label, or the base English product
+/// name when the label is omitted. The displayed label remains localized. This
+/// keeps related actions in the same order across locales (for example Idea
+/// Spark before Next) instead of reshuffling the menu when the language changes.
 pub fn collect_entries<'a, I>(plugins: I, locale: &str) -> (Vec<TrayEntry>, Vec<TrayEntry>)
 where
     I: IntoIterator<Item = (&'a str, &'a ManifestV2)>,
@@ -61,6 +63,7 @@ where
     let (mut capture, mut rest) = (Vec::new(), Vec::new());
     for (id, manifest) in plugins {
         for tc in &manifest.contributes.tray {
+            let sort_key = tc.label.as_deref().unwrap_or(&manifest.name).to_lowercase();
             let entry = TrayEntry {
                 plugin_id: id.to_string(),
                 window: tc.window.clone(),
@@ -71,15 +74,21 @@ where
                 accelerator: tc.accelerator.clone(),
             };
             if tc.section.as_deref() == Some(TRAY_SECTION_CAPTURE) {
-                capture.push(entry);
+                capture.push((sort_key, entry));
             } else {
-                rest.push(entry);
+                rest.push((sort_key, entry));
             }
         }
     }
-    capture.sort_by(|a, b| a.label.cmp(&b.label));
-    rest.sort_by(|a, b| a.label.cmp(&b.label));
-    (capture, rest)
+    let sort_entries = |entries: &mut Vec<(String, TrayEntry)>| {
+        entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.label.cmp(&b.1.label)));
+    };
+    sort_entries(&mut capture);
+    sort_entries(&mut rest);
+    (
+        capture.into_iter().map(|(_, entry)| entry).collect(),
+        rest.into_iter().map(|(_, entry)| entry).collect(),
+    )
 }
 
 /// [`collect_entries`] over the live runtime state. A poisoned lock yields no
@@ -168,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn each_group_is_sorted_by_label_independently() {
+    fn each_group_is_sorted_by_base_label_independently() {
         let z = manifest("Zebra", json!([{ "window": "main", "section": "capture" }]), None);
         let a = manifest("Apple", json!([{ "window": "main", "section": "capture" }]), None);
         let y = manifest("Yak", json!([{ "window": "main" }]), None);
@@ -196,6 +205,29 @@ mod tests {
         );
         let (_, rest2) = collect_entries([("notemd.idea-spark", &m2)], "zh");
         assert_eq!(rest2[0].label, "Spark");
+    }
+
+    #[test]
+    fn localized_labels_keep_the_base_product_order() {
+        let spark = manifest(
+            "Idea Spark",
+            json!([{ "window": "main", "section": "capture" }]),
+            Some(json!({ "zh": { "name": "奇思妙想" } })),
+        );
+        let next = manifest(
+            "Next",
+            json!([{ "window": "main", "section": "capture" }]),
+            Some(json!({ "zh": { "name": "下一步" } })),
+        );
+
+        let (capture, _) = collect_entries(
+            [("notemd.next", &next), ("notemd.idea-spark", &spark)],
+            "zh",
+        );
+        assert_eq!(
+            capture.iter().map(|e| e.label.as_str()).collect::<Vec<_>>(),
+            ["奇思妙想", "下一步"],
+        );
     }
 
     #[test]

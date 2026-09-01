@@ -168,10 +168,10 @@ manifest 不写 `Agents`、`智能体` 等显示文本。插件市场索引也�
   "accelerator": "Cmd+Ctrl+I"   // 可选;全局快捷键 + 托盘项右侧的显示用加速键
 }
 ```
-每条 `tray` 贡献在菜单栏托盘下拉里追加一条启动项,点击直接开对应插件窗口。宿主扫描所有已启用插件的 `contributes.tray`,分两组、各自按 label 排序后挂 `tray-plugin:<id>:<window>` 菜单项(纯逻辑在 `src-tauri/src/plugin_runtime/tray.rs`,组装在 `lib.rs` 的 `build_tray_menu`)。`decision-log`、`weekly-review`、`idea-spark` 均已声明。
+每条 `tray` 贡献在菜单栏托盘下拉里追加一条启动项,点击直接开对应插件窗口。宿主扫描所有已启用插件的 `contributes.tray`,分两组、按 manifest 的显式基础 `label`（缺省为英文 `name`）稳定排序，再显示当前语言的本地化名称，最后挂为 `tray-plugin:<id>:<window>` 菜单项；因此切换语言不会打乱相关动作的先后位置。纯逻辑在 `src-tauri/src/plugin_runtime/tray.rs`,组装在 `lib.rs` 的 `build_tray_menu`。`decision-log`、`weekly-review`、`idea-spark`、`next` 均已声明。
 
 - **`section`**:`"capture"` = 顶部捕获组,排在"快速笔记 / 每日笔记"之后、第一条分隔线之前 —— 语义是"开始写点新东西"。缺省(或任何本宿主不认识的取值)= 默认组,在第一条分隔线之后、"显示主窗口"下面。取值是**开放词表**:字段类型是字符串而非 enum,老宿主碰到没见过的组名只会降级到默认组,不会整份 manifest 解析失败。
-- **`accelerator`**:宿主在启动时注册系统级热键,按下等同于点击该托盘项。语法同 tauri-plugin-global-shortcut(大小写与修饰键顺序都不敏感)。**只在启动时注册一次**(跟托盘菜单本身一样:市场里现装的插件要下次启动才进托盘);内置的 `Cmd+Ctrl+M` / `Cmd+Ctrl+N` 优先,插件抢不走;解析失败或组合被别的 app 占用都只写日志。
+- **`accelerator`**:宿主在启动时注册系统级热键,按下等同于点击该托盘项；市场安装、卸载、启用或停用插件后会立即重建插件热键集合，无需重启。语法同 tauri-plugin-global-shortcut(大小写与修饰键顺序都不敏感)。宿主不占用内置全局组合；两个插件声明同一组合时按稳定托盘顺序先到先得，后一个只记日志并保留可点击的托盘项。解析失败或组合被别的 app 占用也只写日志。
 - **激活推送**:托盘点击与全局快捷键走同一条路 —— 打开/聚焦窗口后,若**窗口原本就开着**,宿主向它推一条 `{"type":"tray-activate"}`(`bridge().onMessage` 收)。新建的窗口不推:webview 还没加载完,`eval` 会丢,而且新窗口本来就是从初始状态起步的。插件据此实现"每次激活都开一条新的"(idea-spark 收到后走它的 `startNew`,不绕过未保存屏障)。
 
 ---
