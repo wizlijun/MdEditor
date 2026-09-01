@@ -136,6 +136,7 @@ export interface CreatedIdea {
 export interface CreateTaskInput {
   title: string
   body?: string
+  project?: string
   done_when?: string
 }
 
@@ -215,6 +216,7 @@ export async function createTaskSource(
     task: {
       version: 1,
       id,
+      ...(input.project?.trim() ? { project: input.project.trim() } : {}),
       ...(input.done_when?.trim() ? { done_when: input.done_when.trim() } : {}),
     },
     ...(input.body?.trim() ? { body: input.body.trim() } : {}),
@@ -413,7 +415,7 @@ function textOfProjection(projection: IdeaProjection): string {
 
 export function itemSearchText(item: WorkspaceItem): string {
   const task = item.task
-    ? `${item.task.due ?? ''} ${item.task.done_when ?? ''} ${item.task.dedupe_key ?? ''} ${item.generatedBy ?? ''}`
+    ? `${item.task.project ?? ''} ${item.task.due ?? ''} ${item.task.done_when ?? ''} ${item.task.dedupe_key ?? ''} ${item.generatedBy ?? ''}`
     : ''
   return `${item.title} ${item.body ?? ''} ${item.path ?? ''} ${task} ${item.repairReason ?? ''} ${item.projection ? textOfProjection(item.projection) : ''}`.toLocaleLowerCase()
 }

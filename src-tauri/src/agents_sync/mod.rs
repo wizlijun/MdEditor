@@ -482,14 +482,22 @@ mod fs_tests {
     fn template_documents_the_create_only_inbox_task_protocol() {
         for rule in [
             "`inbox/tasks/YYYY-MM-DD-HHmm-<slug>-task.md`",
+            "**direct child**",
             "type: Task",
-            "v4 `task.id`",
-            "stable `dedupe_key`",
+            "`task.version` must be the integer `1`",
+            "generated UUID v4",
+            "`task.project` records the Task's source-level project affiliation",
+            "**must be quoted**",
+            "`generated.by` uses `<producer>/<version>`",
+            "`task.dedupe_key` identifies the logical obligation",
             "`sources[].resource`",
             "a no-op",
+            "materially different content",
             "**create-only**",
+            "no-clobber rename",
             "Never modify, move or delete an existing task",
             "modify `thinking/next.note.md`",
+            "mark a Task current",
         ] {
             assert!(
                 TEMPLATE.contains(rule),

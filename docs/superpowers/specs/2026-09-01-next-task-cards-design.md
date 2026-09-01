@@ -98,11 +98,14 @@ description: 一句话上下文
 task:
   version: 1
   id: 8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8
+  project: NoteMD
   due: "2026-09-02"
   done_when: 构建出现在 TestFlight，且安装验证通过
   dedupe_key: daily-summary/v1:2026-09-01:testflight
 ```
 
+- `task.project` 是可选非空字符串，保存 Task 在来源层所属的项目；它提供执行上下文，
+  不等于 ledger 中由人确认的项目标签，也不会自动把 Task 标记为当前。
 - `task.due` 是可选计划日期，只显示中性日期，不自动改变泳道，也不引入日历或逾期奖惩。
 - `task.done_when` 是安放到 WIP 时的关闭条件建议；最终承诺值仍复制进人的 `commit` 事件。
 - 日期值必须加引号，避免 YAML 1.1 消费器把它变成 date 对象。
@@ -124,6 +127,7 @@ created: 2026-09-01T03:20:00Z
 task:
   version: 1
   id: 8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8
+  project: NoteMD
   due: "2026-09-02"
   done_when: 构建出现在 TestFlight，且安装验证通过
   dedupe_key: daily-summary/v1:2026-09-01:testflight-upload
@@ -152,6 +156,7 @@ sources:
 | 数据 | 真相源 | 写入者 |
 |---|---|---|
 | 标题、说明、截止日期、完成条件建议、来源 | 单个 `*-task.md` | 人或创建该文件的 Agent |
+| 来源层项目归属 `task.project` | 单个 `*-task.md` | 人或创建该文件的 Agent |
 | Inbox / WIP / Waiting / Dormant / Closed | `thinking/next.note.md` events | Next 中人的确认动作 |
 | 当前项目 Tag | Next event | Next 中人的确认动作 |
 | Agent 生成归属 | Task 的 `generated` | 生成该 Task 的 Agent |
@@ -239,7 +244,8 @@ events:
 - 写入前按 exact `dedupe_key` 去重。
 - 先写非匹配临时文件，校验后再无覆盖地发布最终文件。
 - 不修改、移动或删除任何已有 Task。
-- 不修改 `thinking/next.note.md`，不产生 `commit / settle`，不替用户选项目或关闭结果。
+- 来源明确时可把所属项目写入 `task.project`；无法可靠判断时省略，不猜测。
+- 不修改 `thinking/next.note.md`，不产生 `commit / settle`，不替用户确认 ledger 项目标签或关闭结果。
 - 不能把“建议考虑”升级成 Task；只把总结中存在明确责任、明确下一动作或明确截止要求的事项写入。
 
 ## 7. UI
@@ -285,6 +291,7 @@ Task sheet 首版提供：
 - 人与 Agent 创建的每个 Task 都是一份独立、合法、可搜索的 `inbox/tasks/*-task.md`，绝不覆盖已有文件。
 - 合法 Task 刷新后进入收件箱；错误后缀、`type` 不符、坏 YAML、重复 ID 不进入正常泳道。
 - Agent Task 有 `generated`、`sources` 和稳定 `dedupe_key`；同一次每日总结重跑不产生重复文件。
+- Task 来源明确时把项目归属保存在 `task.project`，并与人确认的 ledger 项目标签保持边界。
 - 默认新建 Task 不写 lifecycle event、不占 WIP；只有人的安放，或人工显式「保存并标记为当前」，可以进入 WIP。
 - Task 可打开、预览、搜索、拖动，并复用五泳道全部生命周期动作。
 - Idea 与 Task 共用一个真实 WIP 计数和上限。

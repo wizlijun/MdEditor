@@ -115,40 +115,103 @@ Rules that hold in both directions:
 
 ## Inbox tasks
 
-Agents may add a must-do item discovered during a daily summary to Next's
-inbox. Do this only for a clear obligation, next action or deadline — never
-turn a suggestion into a task. Create one new
-`inbox/tasks/YYYY-MM-DD-HHmm-<slug>-task.md` per task with this shape:
+Agents may add must-do items, including ones discovered during a daily
+summary, directly to Next's inbox. A Task is a clear obligation, concrete next
+action, or real deadline. It is not a suggestion, an idea worth exploring, a
+topic to remember, or work that is already complete. When in doubt, leave the
+item in the summary instead of manufacturing a commitment.
+
+### One Task, one file
+
+- Create one file per independently actionable outcome. Do not bundle unrelated
+  actions into one Task merely because they came from the same source.
+- Store it as a **direct child** of `inbox/tasks/`; Next does not scan nested
+  directories.
+- The final filename is
+  `inbox/tasks/YYYY-MM-DD-HHmm-<slug>-task.md`, using local time and a short
+  title-derived slug. It must end exactly in `-task.md`. On a name collision,
+  append `-2`, `-3`, and so on; never overwrite the existing file.
+
+Use this complete shape for an Agent-created Task:
 
 ```yaml
 ---
 type: Task
 title: Submit the TestFlight build
+description: The build exists locally but has not been uploaded and verified.
 created: 2026-09-01T03:20:00Z
 task:
   version: 1
   id: 8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8
+  project: NoteMD
   due: "2026-09-02"
   done_when: The build is available and installation is verified
   dedupe_key: daily-summary/v1:2026-09-01:testflight-upload
 generated: { by: your-agent/version, at: 2026-09-01T03:20:00Z }
 sources:
-  - resource: /dailynote/2026/2026-09-01.note.md
+  - id: daily-note
+    resource: /dailynote/2026/2026-09-01.note.md
+    title: Daily note for 2026-09-01
 ---
+
+Confirm the signing environment, upload the build, then install it once.
 ```
 
-`due` and `done_when` are optional. Agent-created tasks must include a UUID
-v4 `task.id`, UTC RFC 3339 timestamps, `generated`, at least one traceable
-`sources[].resource`, and a stable `dedupe_key`. Before writing, scan every
-existing task for that exact key: an existing match is a no-op; differing
-content under the same key is a conflict to report, never something to
-overwrite or merge.
+Field rules:
+
+- Required for every Task: `type`, `title`, `created`, `task.version`, and
+  `task.id`. `type` must be exactly `Task`; `title` must be a non-empty action;
+  `created` must be an RFC 3339 datetime with an explicit timezone;
+  `task.version` must be the integer `1`; and `task.id` must be a newly
+  generated UUID v4 that is not already used by another Task.
+- A Task title is an exception to "Naming a note" below: write a concrete
+  verb-led action ("Submit the TestFlight build"), not a claim or topic.
+- Required in addition when an Agent creates the Task: `generated.by`,
+  `generated.at`, `task.dedupe_key`, and at least one non-empty
+  `sources[].resource`. Use UTC `Z` timestamps for both `created` and
+  `generated.at`. `generated.by` uses `<producer>/<version>`, never `human:`.
+- `task.project` records the Task's source-level project affiliation. Include
+  the exact project name whenever the source establishes one; omit it rather
+  than guessing when the Task is genuinely unassigned. This is context, not a
+  confirmed Next project tag, and it does not mark the Task current.
+- Optional: `description`, `task.project`, `task.due`, `task.done_when`,
+  `sources[].id`, `sources[].title`, and Markdown body text. If present, each
+  value must be a non-empty string. `task.due` is a real calendar date and **must be quoted** as
+  `"YYYY-MM-DD"` so YAML cannot coerce it into another type. `task.done_when`
+  states observable completion evidence, not a vague intention.
+- The body may hold concise execution context, source links, or a checklist.
+  It does not replace the action-oriented `title` or the provenance in
+  `sources`.
+- Do not write `status`, `done`, `lane`, or lifecycle events into the Task.
+  Inbox / current / waiting / later / completed state belongs only to Next's
+  ledger and to the human's actions in Next.
+
+### Deduplication and safe publication
+
+`task.dedupe_key` identifies the logical obligation across Agent reruns, not
+this particular file write. Keep it deterministic; a recommended form is
+`<producer>/<schema-version>:<period>:<stable-source-key>`. Include an
+occurrence date for genuinely recurring work so separate occurrences do not
+collapse into one Task.
+
+Before writing, scan all existing direct `inbox/tasks/*-task.md` files:
+
+1. If the same `dedupe_key` already exists for the same logical Task, creation
+   is a no-op. Do not create a second file, even if the existing Task has
+   already been completed in Next.
+2. If the same key exists with materially different content, report a conflict;
+   never overwrite, merge, reopen, or silently choose one version.
+3. If the newly generated `task.id` already exists, generate another UUID v4
+   and check again.
 
 This is a **create-only** protocol. Write and validate a temporary file in
 `inbox/tasks/` whose name does not end in `-task.md`, then publish it with a
-no-clobber rename. Never modify, move or delete an existing task, and never
-modify `thinking/next.note.md`; only the human's action in Next may place,
-complete or reopen a task. Do not put task state in frontmatter `status`.
+no-clobber rename. Re-read the published file and verify its path, YAML, UUID,
+timestamps, required Agent fields, and exact content. Clean up only the
+temporary file if validation or publication fails.
+Never modify, move or delete an existing task. Never modify `thinking/next.note.md`;
+only the human's action in Next may mark a Task current, waiting, later,
+completed, or reopened.
 
 ## Naming a note
 

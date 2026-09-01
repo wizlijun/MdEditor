@@ -6,6 +6,8 @@ export const DEFAULT_TASK_DIR = 'inbox/tasks'
 export interface TaskDetails {
   version: 1
   id: string
+  /** Source-level project affiliation; it does not confirm a Next ledger tag. */
+  project?: string
   due?: string
   done_when?: string
   dedupe_key?: string
@@ -62,6 +64,7 @@ export type TaskSourceErrorCode =
   | 'invalid-task'
   | 'unsupported-version'
   | 'invalid-task-id'
+  | 'invalid-project'
   | 'invalid-due'
   | 'invalid-done-when'
   | 'invalid-dedupe-key'
@@ -190,6 +193,7 @@ function validateTaskMeta(meta: Record<string, unknown>, dueIsQuoted = true): Va
   }
   const id = requiredString(meta.task.id, 'invalid-task-id', 'task.id')
   if (!validUuidV4(id)) fail('invalid-task-id', 'task.id must be a UUID v4')
+  const project = optionalString(meta.task.project, 'invalid-project', 'task.project')
   const due = optionalString(meta.task.due, 'invalid-due', 'task.due')
   if (due !== undefined && !validCalendarDate(due)) fail('invalid-due', 'task.due must be YYYY-MM-DD')
   if (due !== undefined && !dueIsQuoted) fail('invalid-due', 'task.due must be a quoted YYYY-MM-DD string')
@@ -198,6 +202,7 @@ function validateTaskMeta(meta: Record<string, unknown>, dueIsQuoted = true): Va
   const task: TaskDetails = {
     version: 1,
     id,
+    ...(project ? { project } : {}),
     ...(due ? { due } : {}),
     ...(doneWhen ? { done_when: doneWhen } : {}),
     ...(dedupeKey ? { dedupe_key: dedupeKey } : {}),
@@ -295,6 +300,7 @@ export function buildTaskDocument(input: BuildTaskDocumentInput): string {
     task: {
       version: input.task.version,
       id: input.task.id.trim(),
+      ...(input.task.project !== undefined ? { project: input.task.project.trim() } : {}),
       ...(input.task.due !== undefined ? { due: input.task.due.trim() } : {}),
       ...(input.task.done_when !== undefined ? { done_when: input.task.done_when.trim() } : {}),
       ...(input.task.dedupe_key !== undefined ? { dedupe_key: input.task.dedupe_key.trim() } : {}),

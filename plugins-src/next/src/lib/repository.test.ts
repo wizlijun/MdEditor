@@ -60,13 +60,14 @@ const idea = (created = '2026-08-29T01:00:00Z') => `---\ntype: Idea\ncreated: ${
 const ideaWithoutCreated = '---\ntype: Idea\n---\n# A useful idea\n'
 const TASK_ID = '8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8'
 const TASK_ID_2 = '93d3d6e2-dcc0-4ec0-9869-37cf130a0964'
-const task = (id = TASK_ID, options: { title?: string; dedupeKey?: string } = {}) => `---
+const task = (id = TASK_ID, options: { title?: string; dedupeKey?: string; project?: string } = {}) => `---
 type: Task
 title: ${options.title ?? '提交 TestFlight 构建'}
 created: 2026-09-01T03:20:00Z
 task:
   version: 1
   id: ${id}
+${options.project ? `  project: ${options.project}\n` : ''}
 ${options.dedupeKey ? `  dedupe_key: ${options.dedupeKey}\n` : ''}---
 确认签名环境变量。`
 const creationTime = () => ({
@@ -92,7 +93,7 @@ const commit = (eventId = 'e1'): CommitEvent => ({
 describe('Next repository', () => {
   it('discovers valid Task files in Inbox without upgrading a v1 ledger', async () => {
     const vault = new MemoryVault()
-    vault.files.set('inbox/tasks/submit-task.md', task())
+    vault.files.set('inbox/tasks/submit-task.md', task(TASK_ID, { project: 'NoteMD' }))
 
     const workspace = await loadWorkspace(vault)
 
@@ -104,10 +105,11 @@ describe('Next repository', () => {
         item_id: TASK_ID,
         path: 'inbox/tasks/submit-task.md',
         title: '提交 TestFlight 构建',
-        task: { version: 1, id: TASK_ID },
+        task: { version: 1, id: TASK_ID, project: 'NoteMD' },
         state: 'capture',
       }),
     ])
+    expect(itemSearchText(workspace.capture[0])).toContain('notemd')
     expect(workspace.ledger.version).toBe(1)
   })
 
@@ -224,6 +226,7 @@ describe('Next repository', () => {
     const created = await createTaskSource({
       title: '提交 TestFlight 构建',
       body: '确认签名环境变量。',
+      project: 'NoteMD',
       done_when: '构建可安装',
     }, {
       now: () => new Date(2026, 8, 1, 11, 20),
@@ -232,6 +235,7 @@ describe('Next repository', () => {
 
     expect(created.path).toBe('inbox/tasks/2026-09-01-1120-提交-testflight-构建-task.md')
     expect(created.source.task.id).toBe(TASK_ID)
+    expect(created.source.task.project).toBe('NoteMD')
     expect(vault.files.get(created.path)).toBe(created.content)
     expect([...vault.files.keys()].some((path) => path.endsWith('.tmp'))).toBe(false)
     expect(vault.writes).toEqual([expect.stringMatching(/^inbox\/tasks\/\.next-task-.*\.tmp$/)])

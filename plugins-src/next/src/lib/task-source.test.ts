@@ -75,6 +75,7 @@ created: 2026-09-01T03:20:00Z
 task:
   version: 1
   id: ${TASK_ID}
+  project: NoteMD
   due: "2026-09-02"
   done_when: 构建出现在 TestFlight
   dedupe_key: daily-summary/v1:2026-09-01:testflight-upload
@@ -93,6 +94,7 @@ sources:
     expect(source.task).toEqual({
       version: 1,
       id: TASK_ID,
+      project: 'NoteMD',
       due: '2026-09-02',
       done_when: '构建出现在 TestFlight',
       dedupe_key: 'daily-summary/v1:2026-09-01:testflight-upload',
@@ -145,6 +147,7 @@ body`,
       task: {
         version: 1,
         id: TASK_ID,
+        project: 'NoteMD',
         due: '2026-09-02',
         done_when: '构建出现在 TestFlight',
       },
@@ -155,6 +158,7 @@ body`,
     const parsed = parseTaskSource('inbox/tasks/built-task.md', document)
     expect(parsed.title).toBe('提交 TestFlight 构建')
     expect(parsed.description).toBe('今天还没有上传验证。')
+    expect(parsed.task.project).toBe('NoteMD')
     expect(parsed.body).toBe(body)
   })
 
@@ -205,6 +209,10 @@ body`,
     expectTaskError(
       () => parseTaskSource('inbox/tasks/a-task.md', minimalDocument('  done_when: []\n')),
       'invalid-done-when',
+    )
+    expectTaskError(
+      () => parseTaskSource('inbox/tasks/a-task.md', minimalDocument('  project: []\n')),
+      'invalid-project',
     )
     expectTaskError(
       () => parseTaskSource('inbox/tasks/a-task.md', minimalDocument('  dedupe_key: "  "\n')),
