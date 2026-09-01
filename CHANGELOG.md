@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.901.4 — 2026-09-01
+
 ### Changed
 
 - **The Plugin Market now separates cognitive work from system capabilities.** Capture, Read, Ideas, Move Forward, Reflect and Create describe what people accomplish with plugins; Import & Export and Experience are marked as system features. Roam Import and PDF Export live under Import & Export, while Power Mode has its own Experience category. The same order and wording now appear in the app, the native Plugins menu and the public marketplace.
