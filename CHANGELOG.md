@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.901.3 — 2026-09-01
+
 ### Fixed
 
 - **Sidecar answers now stay paired with the correct annotation when the same question appears more than once.** Each repeated question keeps its own answer card in the Markdown document—even when both annotations share a paragraph or an earlier duplicate is still unanswered. Adopting one answer and regenerating the sidecar also update only the matching occurrence instead of crossing answers between identical question texts.
