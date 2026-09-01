@@ -21,6 +21,64 @@ fn property(line: &str) -> Option<(&str, &str)> {
     Some((key, value.trim()))
 }
 
+fn strip_inline_reference_markers(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("[^") {
+        output.push_str(&rest[..start]);
+        let label_and_rest = &rest[start + 2..];
+        let Some(end) = label_and_rest.find(']') else {
+            output.push_str("[^");
+            rest = label_and_rest;
+            continue;
+        };
+        let label = &label_and_rest[..end];
+        if label.is_empty() || label.contains('\n') || label.contains('\r') {
+            output.push_str("[^");
+            rest = label_and_rest;
+            continue;
+        }
+        rest = &label_and_rest[end + 1..];
+    }
+    output.push_str(rest);
+    output
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_reference_definition(line: &str) -> bool {
+    line.starts_with("[^") && line.find("]:").is_some_and(|end| end > 2)
+}
+
+/// Keep provenance in immutable proposal/event audit files, not in the
+/// human-facing USER.md/MEMORY.md projection.
+fn strip_visible_reference_notes(content: &str) -> String {
+    let mut lines = Vec::new();
+    let mut skipping_definition = false;
+    for line in content.lines() {
+        if is_reference_definition(line) {
+            skipping_definition = true;
+            continue;
+        }
+        if skipping_definition
+            && (line.trim().is_empty() || line.starts_with("    ") || line.starts_with('\t'))
+        {
+            continue;
+        }
+        skipping_definition = false;
+        if property(line).is_some_and(|(key, _)| key == "source") {
+            continue;
+        }
+        lines.push(strip_inline_reference_markers(line));
+    }
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n") + if content.ends_with('\n') { "\n" } else { "" }
+}
+
 fn frontmatter_bounds(lines: &[String]) -> Option<(usize, usize)> {
     if lines.first().map(|line| line.as_str()) != Some("---") {
         return None;
@@ -452,7 +510,7 @@ pub fn parse_blocks(document: &str, content: &str, scope: Scope) -> Vec<ParsedBl
                 id,
                 scope,
                 section: section.clone(),
-                text: text_lines.join(" "),
+                text: strip_inline_reference_markers(&text_lines.join(" ")),
                 revision,
                 status,
                 priority,
@@ -668,7 +726,7 @@ pub fn upgrade_classification_defaults(content: &str) -> String {
         "- Bruce 可以直接编辑本文件。",
         "- Bruce 也通过 Memory 插件逐条审阅和批准，不直接编辑本只读投影。",
     );
-    next
+    strip_visible_reference_notes(&next)
 }
 
 fn prop_line(key: &str, value: &str) -> String {
@@ -684,6 +742,10 @@ fn set_property(block: &mut Vec<String>, key: &str, value: &str) {
         return;
     }
     block.push(prop_line(key, value));
+}
+
+fn remove_property(block: &mut Vec<String>, key: &str) {
+    block.retain(|line| !property(line).is_some_and(|(candidate, _)| candidate == key));
 }
 
 fn content_prefix_len(block: &[String]) -> usize {
@@ -714,7 +776,6 @@ pub struct EntryUpdate<'a> {
     pub proposal: &'a str,
     pub approved_by: &'a str,
     pub approved_at: &'a str,
-    pub source: Option<&'a str>,
 }
 
 pub fn update_entry(content: &str, id: &str, update: EntryUpdate<'_>) -> Result<String, String> {
@@ -794,9 +855,7 @@ pub fn update_entry(content: &str, id: &str, update: EntryUpdate<'_>) -> Result<
     set_property(&mut next_block, "proposal", update.proposal);
     set_property(&mut next_block, "approved-by", update.approved_by);
     set_property(&mut next_block, "approved-at", update.approved_at);
-    if let Some(source) = update.source {
-        set_property(&mut next_block, "source", source);
-    }
+    remove_property(&mut next_block, "source");
     let mut out = Vec::new();
     out.extend_from_slice(&lines[..block.start]);
     out.extend(next_block);
@@ -879,7 +938,6 @@ pub fn append_entry(
     proposal: &str,
     approved_by: &str,
     approved_at: &str,
-    source: &str,
 ) -> String {
     let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
     let heading = format!("## {section}");
@@ -949,7 +1007,6 @@ pub fn append_entry(
     block.push(prop_line("proposal", proposal));
     block.push(prop_line("approved-by", approved_by));
     block.push(prop_line("approved-at", approved_at));
-    block.push(prop_line("source", source));
     block.push(String::new());
     lines.splice(insert..insert, block);
     lines.join("\n") + "\n"
@@ -985,6 +1042,18 @@ mod tests {
     }
 
     #[test]
+    fn parsed_claim_text_hides_inline_reference_notes() {
+        let document = DOC.replace(
+            "- A durable fact",
+            "- A durable fact.[^source-one][^source-two]",
+        );
+        let blocks = parse_blocks("MEMORY.md", &document, Scope::Memory);
+
+        assert_eq!(blocks[0].entry.text, "A durable fact.");
+        assert_eq!(blocks[0].entry.source.as_deref(), Some("/a.md#L1"));
+    }
+
+    #[test]
     fn updates_entry_without_losing_existing_properties() {
         let next = update_entry(
             DOC,
@@ -1002,7 +1071,6 @@ mod tests {
                 proposal: "p1",
                 approved_by: "human:bruce",
                 approved_at: "2026-09-01T00:00:00Z",
-                source: Some("/b.md#L2"),
             },
         )
         .unwrap();
@@ -1013,7 +1081,23 @@ mod tests {
         assert!(next.contains("  certainty:: high"));
         assert!(next.contains("  agent-guidance:: Do not repeat the old claim."));
         assert!(next.contains("  by:: agent/x"));
-        assert!(next.contains("  source:: /b.md#L2"));
+        assert!(!next.contains("  source::"));
+    }
+
+    #[test]
+    fn managed_projection_hides_reference_properties_markers_and_definitions() {
+        let document = DOC.replace("- A durable fact", "- A durable fact.[^source-one]")
+            + "\n[^source-one]: [Visible citation](/a.md#L1)\n    continued citation text\n";
+        let once = upgrade_classification_defaults(&document);
+        let twice = upgrade_classification_defaults(&once);
+
+        assert_eq!(once, twice);
+        assert!(!once.contains("[^source-one]"));
+        assert!(!once.contains("Visible citation"));
+        assert!(!once.contains("continued citation text"));
+        assert!(!once.contains("source::"));
+        assert!(once.contains("- A durable fact."));
+        assert!(once.contains("id:: 11111111-1111-4111-8111-111111111111"));
     }
 
     #[test]

@@ -14,23 +14,20 @@ async function settle() { await Promise.resolve(); await Promise.resolve(); flus
 function button(label: string) { return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((item)=>item.textContent?.trim()===label)! }
 
 describe('Memory app interactions', () => {
-  it('navigates and requires the in-window sheet before sending one decision RPC', async () => {
-    const request=vi.fn(async (method:string) => method==='host.memory.list' ? snapshot : method==='host.memory.decide' ? {ok:true} : {})
+  it('approves a reviewed proposal with one manual click and no second sheet', async () => {
+    const request=vi.fn(async (method:string, _params?:unknown) => method==='host.memory.list' ? snapshot : method==='host.memory.decide' ? {ok:true} : {})
     window.notemd={pluginId:'notemd.memory',locale:'zh',theme:'system',request,onMessage:()=>{}}
     const { default: App } = await import('./App.svelte')
     component=mount(App,{target:document.body}); flushSync(); await tick(); await settle()
     const reviewTab=Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button)=>button.textContent?.includes('待确认'))!
     reviewTab.click(); flushSync()
     expect(document.body.textContent).toContain('加强隐私边界')
-    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button)=>button.textContent?.includes('审阅并批准'))!.click(); flushSync()
-    expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
-    expect(request.mock.calls.filter(([method])=>method==='host.memory.decide')).toHaveLength(0)
-    document.querySelector<HTMLButtonElement>('.secondary')!.click(); flushSync()
+    button('批准').click(); await settle()
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
-    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button)=>button.textContent?.includes('审阅并批准'))!.click(); flushSync()
-    Array.from(document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')).find((button)=>button.textContent?.includes('确认并写入'))!.click()
-    await Promise.resolve(); await Promise.resolve(); flushSync()
-    expect(request.mock.calls.filter(([method])=>method==='host.memory.decide')).toHaveLength(1)
+    expect(request.mock.calls.filter(([method])=>method==='host.memory.propose')).toHaveLength(0)
+    const decisions=request.mock.calls.filter(([method])=>method==='host.memory.decide')
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0][1]).toMatchObject({ proposal_id:'p1',expected_sha256:'abc',action:'approve',actor:'human:bruce',human_confirmed:true })
   })
 
   it('offers five no-form shortcuts and maps important to an exact high-priority proposal', async () => {
@@ -56,19 +53,71 @@ describe('Memory app interactions', () => {
 
   it('reuses the exact pending candidate for confirm without proposing another change', async () => {
     const pendingSnapshot: Snapshot = { ...snapshot, entries:[{ ...entry, status:'pending', revision:0, proposal:'p1' }] }
-    const request=vi.fn(async (method:string) => method==='host.memory.list' ? pendingSnapshot : {})
+    const request=vi.fn(async (method:string, _params?:unknown) => method==='host.memory.list' ? pendingSnapshot : method==='host.memory.decide' ? {ok:true} : {})
     window.notemd={pluginId:'notemd.memory',locale:'zh',theme:'system',request,onMessage:()=>{}}
     const { default: App } = await import('./App.svelte')
     component=mount(App,{target:document.body}); flushSync(); await tick(); await settle()
 
     expect(button('重要')).toBeUndefined()
     expect(button('删除…')).toBeUndefined()
-    button('确认').click(); flushSync()
+    button('确认').click(); await settle()
     expect(request.mock.calls.filter(([method])=>method==='host.memory.propose')).toHaveLength(0)
-    const sheet=document.querySelector('[role="alertdialog"]')!
-    expect(sheet.textContent).toContain('确认这条事实')
-    expect(sheet.textContent).toContain('p1')
-    expect(sheet.textContent).toContain('abc')
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+    const decisions=request.mock.calls.filter(([method])=>method==='host.memory.decide')
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0][1]).toMatchObject({ proposal_id:'p1',expected_sha256:'abc',action:'approve',actor:'human:bruce',human_confirmed:true })
+  })
+
+  it('auto-approves a manual confirm for an active fact after creating its exact proposal', async () => {
+    const request=vi.fn(async (method:string, params:any) => {
+      if (method==='host.memory.list') return snapshot
+      if (method==='host.memory.propose') return { ...proposal, proposal:{ ...proposal.proposal, id:'quick-confirm', operation:params.operation, dedupe_key:params.dedupe_key }, text:params.text, sha256:'confirm-sha' }
+      if (method==='host.memory.decide') return {ok:true}
+      return {}
+    })
+    window.notemd={pluginId:'notemd.memory',locale:'zh',theme:'system',request,onMessage:()=>{}}
+    const { default: App } = await import('./App.svelte')
+    component=mount(App,{target:document.body}); flushSync(); await tick(); await settle()
+
+    button('确认').click(); await settle()
+
+    expect(request.mock.calls.filter(([method])=>method==='host.memory.propose')).toHaveLength(1)
+    const decisions=request.mock.calls.filter(([method])=>method==='host.memory.decide')
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0][1]).toMatchObject({ proposal_id:'quick-confirm',expected_sha256:'confirm-sha',action:'approve',actor:'human:bruce',human_confirmed:true })
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+  })
+
+  it('surfaces a one-click approval failure without sending a second decision', async () => {
+    const request=vi.fn(async (method:string) => {
+      if (method==='host.memory.list') return snapshot
+      if (method==='host.memory.decide') throw new Error('proposal content changed')
+      return {}
+    })
+    window.notemd={pluginId:'notemd.memory',locale:'zh',theme:'system',request,onMessage:()=>{}}
+    const { default: App } = await import('./App.svelte')
+    component=mount(App,{target:document.body}); flushSync(); await tick(); await settle()
+
+    const reviewTab=Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((item)=>item.textContent?.includes('待确认'))!
+    reviewTab.click(); flushSync()
+    button('批准').click(); await settle()
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('proposal content changed')
+    expect(request.mock.calls.filter(([method])=>method==='host.memory.decide')).toHaveLength(1)
+    expect(button('批准').disabled).toBe(false)
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+  })
+
+  it('keeps current references out of view while preserving proposal evidence during review', async () => {
+    const request=vi.fn(async (method:string) => method==='host.memory.list' ? snapshot : {})
+    window.notemd={pluginId:'notemd.memory',locale:'zh',theme:'system',request,onMessage:()=>{}}
+    const { default: App } = await import('./App.svelte')
+    component=mount(App,{target:document.body}); flushSync(); await tick(); await settle()
+
+    expect(document.body.textContent).not.toContain('/USER.md#privacy')
+    const reviewTab=Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((item)=>item.textContent?.includes('待确认'))!
+    reviewTab.click(); flushSync()
+    expect(document.body.textContent).toContain('/USER.md#privacy')
   })
 
   it('shows deletion as a destructive audited projection removal', async () => {

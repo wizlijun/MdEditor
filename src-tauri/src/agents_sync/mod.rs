@@ -645,6 +645,8 @@ mod fs_tests {
             "direct filesystem edit is",
             "dedicated human-confirmation flag",
             "--proposal-sha256",
+            "contains no inline citations",
+            "do not add a second confirmation step",
         ] {
             assert!(
                 USER_TEMPLATE.contains(rule),
@@ -662,6 +664,8 @@ mod fs_tests {
             "/memory/events/",
             "status:: revoked",
             "--proposal-sha256",
+            "contains no inline citations",
+            "do not add a second confirmation step",
         ] {
             assert!(
                 MEMORY_TEMPLATE.contains(rule),
@@ -682,6 +686,8 @@ mod fs_tests {
             "/inbox/memory-candidates/*.memory-candidate.md",
             "/memory/events/**/*.memory-event.md",
             "--proposal-sha256",
+            "do not expect citations or `source::` in the projection",
+            "do not ask for a second confirmation",
         ] {
             assert!(TEMPLATE.contains(rule), "AGENTS.md is missing rule: {rule}");
         }

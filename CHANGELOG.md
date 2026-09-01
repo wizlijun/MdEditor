@@ -7,6 +7,11 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Manual Memory confirmation is now a single action.** Clicking Confirm on a fact, or Approve on a reviewed proposal, immediately writes the SHA-bound human decision without asking for a second confirmation.
+- **Memory projections no longer expose citation notes after every fact.** Inline footnote markers, footnote definitions and per-entry source properties stay out of `USER.md` and `MEMORY.md`; immutable proposals retain provenance and decisions bind the exact candidate SHA.
+
 ## v6.901.7 — 2026-09-01
 
 ### Added

@@ -724,12 +724,6 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
             .suggested_avoid_error
             .as_deref()
             .or_else(|| target.and_then(|block| block.entry.avoid_error.as_deref()));
-        let source = proposal
-            .frontmatter
-            .sources
-            .first()
-            .map(|s| s.resource.as_str())
-            .unwrap_or("");
         if spec.scope == Scope::UserOwner {
             if !matches!(spec.operation, Operation::Create | Operation::Replace) {
                 return Err("memory: owner scope supports only create/replace".into());
@@ -761,7 +755,6 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                         &spec.id,
                         &input.actor,
                         &decided_at,
-                        source,
                     );
                 }
                 Operation::Create | Operation::Replace | Operation::Merge => {
@@ -781,7 +774,6 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                             proposal: &spec.id,
                             approved_by: &input.actor,
                             approved_at: &decided_at,
-                            source: Some(source),
                         },
                     )?;
                 }
@@ -807,7 +799,6 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                             proposal: &spec.id,
                             approved_by: &input.actor,
                             approved_at: &decided_at,
-                            source: Some(source),
                         },
                     )?;
                 }
@@ -839,7 +830,6 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                             proposal: &spec.id,
                             approved_by: &input.actor,
                             approved_at: &decided_at,
-                            source: Some(source),
                         },
                     )?;
                 }
@@ -877,7 +867,6 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                         proposal: &spec.id,
                         approved_by: &input.actor,
                         approved_at: &decided_at,
-                        source: merged.entry.source.as_deref(),
                     },
                 )?;
             }
@@ -905,7 +894,6 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                 proposal: &spec.id,
                 approved_by: &input.actor,
                 approved_at: &decided_at,
-                source: target.and_then(|block| block.entry.source.as_deref()),
             },
         )?;
     }
@@ -985,7 +973,21 @@ pub fn suggest(root: &Path) -> Result<serde_json::Value, String> {
             suggestions
                 .push(json!({"kind":"migrate", "entry_id":entry.id, "document":entry.document}));
         }
-        if entry.source.as_deref().unwrap_or("").trim().is_empty() {
+        let has_audit_source = entry
+            .source
+            .as_deref()
+            .is_some_and(|source| !source.trim().is_empty())
+            || entry.proposal.as_deref().is_some_and(|proposal_id| {
+                snapshot.proposals.iter().any(|proposal| {
+                    proposal.frontmatter.proposal.id == proposal_id
+                        && proposal
+                            .frontmatter
+                            .sources
+                            .iter()
+                            .any(|source| !source.resource.trim().is_empty())
+                })
+            });
+        if entry.scope != Scope::UserOwner && !has_audit_source {
             suggestions.push(json!({"kind":"missing-source", "entry_id":entry.id}));
         }
         if entry.text.chars().count() > 500 {
@@ -1222,7 +1224,7 @@ mod tests {
     fn vault() -> TempDir {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("USER.md"), "---\ntype: User Profile\nowner:\n  actor: human:bruce\n  names: [Bruce]\n  confirmed: true\n---\n\n## Stable profile\n\n- Likes precise sources\n  source:: /daily.md#L1\n  updated:: 2026-09-01T00:00:00Z\n  by:: codex/x\n").unwrap();
-        fs::write(dir.path().join("MEMORY.md"), "---\ntype: Memory\n---\n\n## Active memory\n\n- A durable fact\n  id:: 11111111-1111-4111-8111-111111111111\n  source:: /a.md#L1\n  recorded:: 2026-01-01T00:00:00Z\n  by:: codex/x\n").unwrap();
+        fs::write(dir.path().join("MEMORY.md"), "---\ntype: Memory\n---\n\n## Active memory\n\n- A durable fact[^legacy-source]\n  id:: 11111111-1111-4111-8111-111111111111\n  source:: /a.md#L1\n  recorded:: 2026-01-01T00:00:00Z\n  by:: codex/x\n\n[^legacy-source]: [Legacy citation](/a.md#L1)\n").unwrap();
         dir
     }
 
@@ -1247,7 +1249,11 @@ mod tests {
             let content = fs::read_to_string(v.path().join(name)).unwrap();
             assert!(content.contains(document::CONTROL_NOTICE_MARKER));
             assert_eq!(content.matches(document::CONTROL_NOTICE_MARKER).count(), 1);
+            assert!(!content.contains("source::"));
         }
+        let memory = fs::read_to_string(v.path().join("MEMORY.md")).unwrap();
+        assert!(!memory.contains("[^legacy-source]"));
+        assert!(!memory.contains("Legacy citation"));
     }
 
     #[test]
@@ -1260,7 +1266,7 @@ mod tests {
             ProposeInput {
                 scope: Scope::Memory,
                 operation: Operation::Create,
-                text: "A new fact".into(),
+                text: "A new fact.[^private-source]".into(),
                 source: "/b.md#L2".into(),
                 by: "codex/gpt-5".into(),
                 dedupe_key: "test/new-fact".into(),
@@ -1279,6 +1285,9 @@ mod tests {
         )
         .unwrap();
         let candidate_path = v.path().join(&proposal.path);
+        let candidate_before = fs::read_to_string(&candidate_path).unwrap();
+        assert!(candidate_before.contains("A new fact.[^private-source]"));
+        assert!(candidate_before.contains("resource: /b.md#L2"));
         assert_eq!(
             before,
             fs::read_to_string(v.path().join("MEMORY.md")).unwrap()
@@ -1296,13 +1305,20 @@ mod tests {
         )
         .unwrap();
         let after = fs::read_to_string(v.path().join("MEMORY.md")).unwrap();
-        assert!(after.contains("A new fact"));
+        assert!(after.contains("A new fact."));
+        assert!(!after.contains("[^private-source]"));
+        assert!(!after.contains("source::"));
         assert!(after.contains("priority:: high"));
         let mut tampered = fs::read_to_string(&candidate_path).unwrap();
         tampered.push_str("\nmodified after decision\n");
         fs::write(candidate_path, tampered).unwrap();
         let snapshot = list(v.path()).unwrap();
         assert!(snapshot.integrity.drift);
+        assert!(!suggest(v.path()).unwrap()["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["kind"] == "missing-source"));
         assert!(snapshot
             .integrity
             .errors

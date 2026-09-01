@@ -42,7 +42,6 @@ behavior are deliberately separate:
   certainty:: high | medium | low | unknown
   agent-guidance:: <one executable sentence for an Agent>
   avoid-error:: <forbidden inference or action; required for unsafe/uncertain entries>
-  source:: <vault-absolute path or URL with anchor>
   id:: <UUID v4>
   revision:: <positive integer>
   proposal:: <proposal UUID>
@@ -53,8 +52,10 @@ behavior are deliberately separate:
 `pending` is not a confirmed fact. `approved-by` records the owner's decision to
 remember a claim, not objective proof. `positive` means follow a preference;
 `negative` means avoid a mistake or boundary violation; `neutral` is context.
-An Agent verifies the source or asks the owner whenever evidence or certainty is
-unknown. Inferred claims can never have high certainty.
+The projection deliberately contains no inline citations, footnote definitions,
+or per-entry `source::`. An Agent resolves `proposal::` to the immutable
+candidate and verifies its `sources`, or asks the owner, whenever evidence or
+certainty is unknown. Inferred claims can never have high certainty.
 
 ## Controlled maintenance
 
@@ -67,6 +68,9 @@ unknown. Inferred claims can never have high certainty.
   only after the owner explicitly names the proposal/diff; it must pass the
   dedicated human-confirmation flag and the displayed candidate
   `--proposal-sha256`, and must never infer or batch approval.
+- A deliberate owner click on **Confirm** for a fact or **Approve** for a
+  displayed proposal is the approval itself and writes the SHA-bound decision
+  immediately; do not add a second confirmation step.
 - Owner identity, names, authority, permissions and action-sensitive
   preferences are always high-sensitivity, one-at-a-time decisions.
 - Deletion is a reversible `revoke` event, not physical history removal.

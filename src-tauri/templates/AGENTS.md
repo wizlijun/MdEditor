@@ -84,7 +84,10 @@ Everything else is optional, but absent metadata means "unknown", not
 - `sources: [{ resource, id, title, author, last_modified }]` — what
   the content was derived from. `resource` is an absolute URL, a
   vault-absolute path (`/sync/foo.md`), or a relative path. Attribute
-  individual claims with markdown footnotes keyed by `sources[].id`.
+  individual claims with markdown footnotes keyed by `sources[].id`, except in
+  the controlled `/USER.md` and `/MEMORY.md` projections. Those two files never
+  expose inline citation markers, footnote definitions, or per-entry
+  `source::`; their immutable candidates retain provenance in `sources`.
 - `status: draft | stable | deprecated` (absent means `stable`) and
   `stale_after: YYYY-MM-DD` for content with a known shelf life.
 
@@ -143,9 +146,11 @@ owner has authorized that use.
   source archive, or blanket permission to act.
 - Reading either file is a two-step operation: read the claim, then read its
   adjacent `status`, `polarity`, `epistemic-status`, `certainty`,
-  `agent-guidance`, `avoid-error`, and `source`. Never detach a claim from those
-  qualifiers when retrieving, summarizing, quoting, or passing context to
-  another Agent.
+  `agent-guidance`, `avoid-error`, and `proposal`. Never detach a claim from
+  those qualifiers when retrieving, summarizing, quoting, or passing context
+  to another Agent. When provenance matters, resolve `proposal::` to the exact
+  immutable candidate under `/inbox/memory-candidates/` and inspect its
+  `sources`; do not expect citations or `source::` in the projection.
 
 `USER.md` is the sole source of truth for who owns the vault and for durable
 profile facts. The owner is configured only when `owner.actor` is a non-empty
@@ -166,8 +171,9 @@ These axes are independent. `approved-by::` means the owner agreed to remember
 the claim, not that the outside world has proved it true.
 
 Treat `status:: pending`, `epistemic-status:: unknown`, or
-`certainty:: unknown` as unconfirmed material: verify the exact `source::` or
-ask the owner before relying on it. Never turn approval into certainty. Never
+`certainty:: unknown` as unconfirmed material: inspect the exact candidate
+referenced by `proposal::` and verify its `sources`, or ask the owner before
+relying on it. Never turn approval into certainty. Never
 assign `certainty:: high` to `epistemic-status:: inferred`. `polarity:: positive`
 means follow the stated preference or principle when relevant;
 `polarity:: negative` means actively avoid the recorded mistake, disclosure, or
@@ -178,7 +184,8 @@ and mistakes that could cause real-world action. Priority never grants authority
 
 Every new create, replace, or merge candidate must contain one atomic claim and
 all of: `priority`, `polarity`, `epistemic-status`, `certainty`, an executable
-one-sentence `agent-guidance`, and an exact `source`. It must also contain
+one-sentence `agent-guidance`, and at least one exact `sources[].resource`. It
+must also contain
 `avoid-error` for negative, inferred, contested, low-certainty, or unknown
 claims. When evidence is insufficient, propose conservative `unknown` values;
 do not fill gaps with confident language.
@@ -193,6 +200,9 @@ exact proposal ID or displayed diff; never infer approval, turn `--yes` into
 approval, self-sign `human:`, or batch action-sensitive proposals. For a CLI
 decision, first read `notemd memory show <proposal-id> --json`, then pass that
 exact `sha256` as `--proposal-sha256`; a changed hash must fail closed.
+In the Memory plugin, the owner's deliberate click on **Confirm** for a fact or
+**Approve** for a displayed proposal is the approval decision itself: record
+that SHA-bound decision immediately and do not ask for a second confirmation.
 
 Replacing or merging keeps exactly one active revision. Deletion is a
 traceable `revoke`, not physical history removal. Direct filesystem edits are

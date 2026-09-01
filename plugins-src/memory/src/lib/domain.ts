@@ -13,7 +13,7 @@ export function filterEntries(entries: MemoryEntry[], query: string, scope: 'all
     && (status === 'all' || entry.status === status)
     && (!highOnly || entry.priority === 'high' || entry.priority === 'critical')
     && (polarity === 'all' || entry.polarity === polarity)
-    && (!q || `${entry.text} ${entry.section} ${entry.source ?? ''} ${entry.polarity} ${entry.epistemic_status}`.toLocaleLowerCase().includes(q)),
+    && (!q || `${entry.text} ${entry.section} ${entry.polarity} ${entry.epistemic_status}`.toLocaleLowerCase().includes(q)),
   ).sort((a, b) => priorityRank[a.priority] - priorityRank[b.priority]
     || polarityRank[a.polarity] - polarityRank[b.polarity]
     || a.text.localeCompare(b.text))

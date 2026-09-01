@@ -34,12 +34,14 @@
     formPriority = entry?.priority ?? 'normal'; formPolarity = entry?.polarity ?? 'neutral'; formEpistemic = entry?.epistemic_status ?? 'owner-stated'; formCertainty = entry?.certainty ?? 'medium'
     formGuidance = entry?.agent_guidance ?? '仅在相关情境中使用，并保留来源语境。'; formAvoid = entry?.avoid_error ?? ''
   }
-  async function createProposal(input: { scope: Scope; operation: Operation; text: string; source: string; target?: MemoryEntry; priority?: Priority; polarity?: Polarity; epistemic?: EpistemicStatus; certainty?: Certainty; guidance?: string; avoid?: string; section?: string; intent?: DecisionIntent; dedupeKey?: string; reason?: string }, actor?: string) {
+  async function createProposal(input: { scope: Scope; operation: Operation; text: string; source: string; target?: MemoryEntry; priority?: Priority; polarity?: Polarity; epistemic?: EpistemicStatus; certainty?: Certainty; guidance?: string; avoid?: string; section?: string; intent?: DecisionIntent; dedupeKey?: string; reason?: string; autoApprove?: boolean }, actor?: string) {
     const decisionActor = actor ?? snapshot?.owner_actor; if (!decisionActor) throw new Error('USER.md has no confirmed owner actor')
     writing = true; error = ''
     try {
       const proposal = await memoryPropose({ scope:input.scope, operation:input.operation, text:input.text, source:input.source || humanSource(), by:'notemd-memory/human-ui', dedupe_key:input.dedupeKey ?? `memory-ui/v2/${crypto.randomUUID()}`, reason:input.reason ?? 'Human-authored change through the controlled Memory window.', target_id:input.target?.id, base_revision:input.target?.revision, section:input.section, priority:input.priority, polarity:input.polarity, epistemic_status:input.epistemic, certainty:input.certainty, agent_guidance:input.guidance, avoid_error:input.avoid, merge_from:[] })
-      confirmation = { proposal, action:'approve', actor:decisionActor, intent:input.intent ?? 'review' }
+      const decision = { proposal, action:'approve' as const, actor:decisionActor, intent:input.intent ?? 'review' }
+      if (input.autoApprove) await applyDecision(decision)
+      else confirmation = decision
     } catch (e) { error = String(e) } finally { writing = false }
   }
   async function submitForm() {
@@ -49,19 +51,20 @@
   }
   function quickKey(intent: DecisionIntent, entry: MemoryEntry) { return `memory-ui/quick/v1/${intent}/${entry.id}/r${entry.revision}` }
   function requireRegularEntry(entry: MemoryEntry) { if (entry.scope === 'user-owner') throw new Error('Owner identity cannot be changed with fact shortcuts.') }
-  function decidePending(entry: MemoryEntry, action: 'approve'|'reject', intent: 'confirm'|'deny'): boolean {
+  async function decidePending(entry: MemoryEntry, action: 'approve'|'reject', intent: 'confirm'|'deny') {
     const proposal = snapshot ? pendingProposalForEntry(entry, snapshot.proposals) : undefined
-    if (!proposal) { error = '未找到与这条事实精确匹配的待确认候选，请到「待确认」页处理。'; return false }
-    requestDecision(proposal, action, intent); return true
+    if (!proposal) { error = '未找到与这条事实精确匹配的待确认候选，请到「待确认」页处理。'; return }
+    if (action === 'approve') await approveNow(proposal, intent)
+    else requestDecision(proposal, action, intent)
   }
   async function quickConfirm(entry: MemoryEntry) {
     requireRegularEntry(entry)
-    if (entry.status === 'pending') { decidePending(entry, 'approve', 'confirm'); return }
-    await createProposal({ scope:entry.scope, operation:'replace', text:entry.text, source:humanSource(), target:entry, section:entry.section, priority:entry.priority, polarity:entry.polarity, epistemic:'owner-stated', certainty:'high', guidance:entry.agent_guidance ?? '仅在相关情境中使用这条由 Vault owner 确认的事实。', avoid:entry.polarity === 'negative' ? entry.avoid_error ?? '不得忽略这条负向边界。' : entry.avoid_error, intent:'confirm', dedupeKey:quickKey('confirm',entry), reason:'Vault owner explicitly confirms this fact.' })
+    if (entry.status === 'pending') { await decidePending(entry, 'approve', 'confirm'); return }
+    await createProposal({ scope:entry.scope, operation:'replace', text:entry.text, source:humanSource(), target:entry, section:entry.section, priority:entry.priority, polarity:entry.polarity, epistemic:'owner-stated', certainty:'high', guidance:entry.agent_guidance ?? '仅在相关情境中使用这条由 Vault owner 确认的事实。', avoid:entry.polarity === 'negative' ? entry.avoid_error ?? '不得忽略这条负向边界。' : entry.avoid_error, intent:'confirm', dedupeKey:quickKey('confirm',entry), reason:'Vault owner explicitly confirms this fact.', autoApprove:true })
   }
   async function quickDeny(entry: MemoryEntry) {
     requireRegularEntry(entry)
-    if (entry.status === 'pending') { decidePending(entry, 'reject', 'deny'); return }
+    if (entry.status === 'pending') { await decidePending(entry, 'reject', 'deny'); return }
     await createProposal({ scope:entry.scope, operation:'revoke', text:'', source:humanSource(), target:entry, intent:'deny', dedupeKey:quickKey('deny',entry), reason:'Vault owner explicitly denies this fact; retain it only as non-current history.' })
   }
   async function quickPriority(entry: MemoryEntry, priority: 'high'|'low', intent: 'important'|'ignore') {
@@ -81,11 +84,20 @@
     }
     if (snapshot?.owner_actor) confirmation = { proposal, action, actor:snapshot.owner_actor, intent }
   }
-  async function confirmDecision() {
-    if (!confirmation) return; const decision = confirmation; writing = true; error = ''
+  async function applyDecision(decision: { proposal: Proposal; action: 'approve'|'reject'; actor: string; intent: DecisionIntent }) {
+    writing = true; error = ''
     try { await memoryDecide({ proposal_id:decision.proposal.proposal.id, expected_sha256:decision.proposal.sha256, action:decision.action, actor:decision.actor, human_confirmed:true, reason:`Human ${decision.action} through Memory window.` }); confirmation=null; editId=null; await toast('success', decision.action==='approve'?'已写入受控投影':'已拒绝候选'); await refresh() }
     catch (e) { error=String(e) } finally { writing=false }
   }
+  async function approveNow(proposal: Proposal, intent: DecisionIntent = 'review') {
+    if (proposal.proposal.operation !== 'create' && !proposal.proposal.target_id?.trim()) {
+      error = '这是旧版本生成的无效候选：缺少目标 ID，不能批准。请保留或明确拒绝。'
+      return
+    }
+    if (!snapshot?.owner_actor) { error = 'USER.md 没有已确认的 Vault owner。'; return }
+    await applyDecision({ proposal, action:'approve', actor:snapshot.owner_actor, intent })
+  }
+  async function confirmDecision() { if (confirmation) await applyDecision(confirmation) }
   async function migrateConfirmed() { writing=true; error=''; try { const result=await memoryMigrate(); confirmMigration=false; await toast('success',`${result.migrated} entries imported`); await refresh() } catch(e){error=String(e)} finally{writing=false} }
   async function claimOwner() { const names=ownerNames.split(',').map((name)=>name.trim()).filter(Boolean); if(!ownerActor.startsWith('human:')||!names.length)return; await createProposal({scope:'user-owner',operation:'create',text:JSON.stringify({actor:ownerActor,names},null,2),source:humanSource(),priority:'critical',section:'Owner'},ownerActor) }
   async function loadSuggestions() { loading=true;error='';try{suggestions=(await memorySuggest()).suggestions??[]}catch(e){error=String(e)}finally{loading=false} }
@@ -121,7 +133,7 @@
           <h2>{selectedEntry.text}</h2>
           {#if !selectedEntry.classification_complete}<div class="notice">旧条目尚未完成安全分类。当前一律按不确定材料处理。</div>{/if}
           <section class="quick-review" aria-label="事实快捷审阅">
-            <div><strong>快捷审阅</strong><small>只选择结论，具体变更仍需要在下一步确认。</small></div>
+            <div><strong>快捷审阅</strong><small>亲手点击确认会立即批准；其他变更会先展示差异。</small></div>
             <div class="quick-actions">
               <button class="confirm-action" onclick={()=>quickConfirm(selectedEntry)} disabled={writing||snapshot.integrity.drift}>确认</button>
               <button onclick={()=>quickDeny(selectedEntry)} disabled={writing||snapshot.integrity.drift||selectedEntry.status==='revoked'}>否认</button>
@@ -133,14 +145,14 @@
             </div>
           </section>
           <section class="guidance"><small>AGENT 使用规则</small><p>{usageRule(selectedEntry)}</p>{#if selectedEntry.avoid_error}<small>必须避免</small><p class="avoid">{selectedEntry.avoid_error}</p>{/if}</section>
-          <dl><div><dt>证据性质</dt><dd>{selectedEntry.epistemic_status}</dd></div><div><dt>确定度</dt><dd>{selectedEntry.certainty}</dd></div><div><dt>分区</dt><dd>{selectedEntry.section}</dd></div><div><dt>修订</dt><dd>r{selectedEntry.revision}</dd></div><div class="wide"><dt>来源</dt><dd>{selectedEntry.source??'—'}</dd></div><div class="wide"><dt>ID</dt><dd><code>{selectedEntry.id}</code></dd></div></dl>
+          <dl><div><dt>证据性质</dt><dd>{selectedEntry.epistemic_status}</dd></div><div><dt>确定度</dt><dd>{selectedEntry.certainty}</dd></div><div><dt>分区</dt><dd>{selectedEntry.section}</dd></div><div><dt>修订</dt><dd>r{selectedEntry.revision}</dd></div><div class="wide"><dt>ID</dt><dd><code>{selectedEntry.id}</code></dd></div></dl>
           <div class="actions"><button onclick={()=>resetForm(selectedEntry)} disabled={snapshot.integrity.drift}>详细编辑…</button></div>
         </article>
       {/if}
     </section>
   {/if}
 
-  {#if tab==='pending' && snapshot}<section class="split"><aside class="master proposals">{#each reviews as proposal (proposal.proposal.id)}<button class:selected={selectedProposal?.proposal.id===proposal.proposal.id} class:sensitive={proposal.proposal.action_sensitive} onclick={()=>selectedProposalId=proposal.proposal.id}><span><strong>{proposal.title}</strong><small>{proposal.proposal.operation} · {proposal.generated.by}</small></span><em>{proposal.proposal.suggested_polarity??'未分类'}</em></button>{:else}<div class="empty">{t('noPending')}</div>{/each}</aside>{#if selectedProposal}{@const delta=describeDelta(selectedProposal,snapshot.entries)}<article class="detail"><div class="eyebrow"><span class="badge">{selectedProposal.proposal.operation}</span>{#if selectedProposal.proposal.action_sensitive}<span class="badge negative">需谨慎</span>{/if}</div><h2>{selectedProposal.title}</h2><div class="diff"><div><small>当前</small><p>{delta.before}</p></div><div><small>建议后</small><p>{delta.after}</p></div></div><dl><div><dt>优先级</dt><dd>{selectedProposal.proposal.suggested_priority??'继承'}</dd></div><div><dt>方向</dt><dd>{selectedProposal.proposal.suggested_polarity??'未提供'}</dd></div><div><dt>证据性质</dt><dd>{selectedProposal.proposal.suggested_epistemic_status??'未提供'}</dd></div><div><dt>确定度</dt><dd>{selectedProposal.proposal.suggested_certainty??'未提供'}</dd></div><div class="wide"><dt>来源</dt><dd>{selectedProposal.sources[0]?.resource??'—'}</dd></div><div class="wide"><dt>候选 / SHA</dt><dd><code>{selectedProposal.proposal.id}<br/>{selectedProposal.sha256}</code></dd></div></dl><div class="actions"><button class="danger" onclick={()=>requestDecision(selectedProposal,'reject')} disabled={writing}>拒绝</button><button class="primary" onclick={()=>requestDecision(selectedProposal,'approve')} disabled={writing}>审阅并批准</button></div></article>{/if}</section>{/if}
+  {#if tab==='pending' && snapshot}<section class="split"><aside class="master proposals">{#each reviews as proposal (proposal.proposal.id)}<button class:selected={selectedProposal?.proposal.id===proposal.proposal.id} class:sensitive={proposal.proposal.action_sensitive} onclick={()=>selectedProposalId=proposal.proposal.id}><span><strong>{proposal.title}</strong><small>{proposal.proposal.operation} · {proposal.generated.by}</small></span><em>{proposal.proposal.suggested_polarity??'未分类'}</em></button>{:else}<div class="empty">{t('noPending')}</div>{/each}</aside>{#if selectedProposal}{@const delta=describeDelta(selectedProposal,snapshot.entries)}<article class="detail"><div class="eyebrow"><span class="badge">{selectedProposal.proposal.operation}</span>{#if selectedProposal.proposal.action_sensitive}<span class="badge negative">需谨慎</span>{/if}</div><h2>{selectedProposal.title}</h2><div class="diff"><div><small>当前</small><p>{delta.before}</p></div><div><small>建议后</small><p>{delta.after}</p></div></div><dl><div><dt>优先级</dt><dd>{selectedProposal.proposal.suggested_priority??'继承'}</dd></div><div><dt>方向</dt><dd>{selectedProposal.proposal.suggested_polarity??'未提供'}</dd></div><div><dt>证据性质</dt><dd>{selectedProposal.proposal.suggested_epistemic_status??'未提供'}</dd></div><div><dt>确定度</dt><dd>{selectedProposal.proposal.suggested_certainty??'未提供'}</dd></div><div class="wide"><dt>来源</dt><dd>{selectedProposal.sources[0]?.resource??'—'}</dd></div><div class="wide"><dt>候选 / SHA</dt><dd><code>{selectedProposal.proposal.id}<br/>{selectedProposal.sha256}</code></dd></div></dl><div class="actions"><button class="danger" onclick={()=>requestDecision(selectedProposal,'reject')} disabled={writing}>拒绝</button><button class="primary" onclick={()=>approveNow(selectedProposal)} disabled={writing}>批准</button></div></article>{/if}</section>{/if}
   {#if tab==='improve'}<section class="improve"><div><h2>改善建议</h2><p>检测缺失分类、冲突、不安全的确定度和重复条目；建议本身不会写入投影。</p></div><button class="primary" onclick={loadSuggestions} disabled={loading}>运行检查</button>{#each suggestions as suggestion}<pre>{JSON.stringify(suggestion,null,2)}</pre>{:else}<div class="empty">尚未运行检查。</div>{/each}</section>{/if}
 </main>
 {#if confirmation}<ConfirmSheet proposal={confirmation.proposal} entries={snapshot?.entries??[]} action={confirmation.action} intent={confirmation.intent} busy={writing} oncancel={()=>confirmation=null} onconfirm={confirmDecision}/>{/if}

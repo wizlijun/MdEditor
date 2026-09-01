@@ -28,7 +28,6 @@ to the claim so search results preserve their meaning:
   certainty:: high | medium | low | unknown
   agent-guidance:: <one executable sentence for an Agent>
   avoid-error:: <forbidden inference or action; required for unsafe/uncertain entries>
-  source:: <vault-absolute path or URL with anchor>
   id:: <UUID v4>
   revision:: <positive integer>
   proposal:: <proposal UUID>
@@ -37,8 +36,11 @@ to the claim so search results preserve their meaning:
 ```
 
 `status:: pending` is never a confirmed fact. `approved-by::` means the owner
-approved remembering the claim, not that external reality proved it. Verify the
-source or ask the owner for `unknown`, `inferred`, or `contested` material.
+approved remembering the claim, not that external reality proved it. The
+projection deliberately contains no inline citations, footnote definitions, or
+per-entry `source::`. Resolve `proposal::` to the immutable candidate under
+`/inbox/memory-candidates/` and inspect its `sources`, or ask the owner, for
+`unknown`, `inferred`, or `contested` material.
 `polarity:: positive` means follow the preference or principle when relevant;
 `negative` means actively avoid the specified error; `neutral` is context.
 `priority` affects attention only and never grants authority, permission, or
@@ -61,6 +63,9 @@ events; it never leaves two current truths.
   `notemd memory show <proposal-id> --json` as `--proposal-sha256`.
 - Approval and rejection are immutable one-event Markdown files under
   `/memory/events/`. Agent provenance cannot masquerade as `human:` approval.
+- A deliberate owner click on **Confirm** for a fact or **Approve** for a
+  displayed proposal is the approval itself and writes the SHA-bound decision
+  immediately; do not add a second confirmation step.
 - Tasks and reminders belong in `/inbox/tasks/`; daily or episodic detail
   belongs in the vault's daily-note system. Raw transcripts stay with sources.
 - Permission, authority, commitment and other action-sensitive claims require
