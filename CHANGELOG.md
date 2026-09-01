@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.901.1 — 2026-09-01
+
 ### Added
 
 - **Plugin tray shortcuts now become available immediately after installation.** Enabling, disabling or removing a plugin updates the registered system-wide shortcuts at the same time as the tray menu, without requiring note.md to restart.
