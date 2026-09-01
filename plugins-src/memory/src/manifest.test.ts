@@ -7,7 +7,7 @@ describe('Memory plugin manifest', () => {
     expect(manifest.id).toBe('notemd.memory')
     expect(manifest.version).toBe('2.0.0')
     expect(packageJson.version).toBe(manifest.version)
-    expect(manifest.engines.notemd).toBe('>=6.901.8')
+    expect(manifest.engines.notemd).toBe('>=6.901.9')
     expect(manifest.capabilities).toContain('memory.control')
   })
 })

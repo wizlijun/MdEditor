@@ -5,7 +5,7 @@
   "version": "2.0.0",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.901.8"
+    "notemd": ">=6.901.9"
   },
   "description": "Review structured Memory claims, resolve Git conflicts and control scoped Agent context while keeping USER.md and MEMORY.md as plain-text projections.",
   "ui": "ui/",

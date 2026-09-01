@@ -6,6 +6,15 @@
 
 ## 未发布
 
+### 新增
+
+- **Memory 2.0 引入由 Git 支撑的个人 Claim 台账。** 不可变 YAML 修订现在按主体、断言、批准含义、有效时间、信任层、风险和场景范围区分偏好、边界、决定、信念、观察与物质事实。Agent 只能为 Vault owner 提出 pending 主张；人工决定会绑定精确的 protocol、authority 与 revision。
+
+### 变更
+
+- **`USER.md` 与 `MEMORY.md` 现在是可丢弃的纯文本投影。** Host 从 `.notemd/memory` 确定性重建一层分类和多行事实，不再把过程元数据写入 Markdown；authority 损坏或源记录冲突时会失败关闭。
+- **Memory 在多设备和外部模型场景中保持保守。** 不同 Git clone 的不可变记录按集合合并，同一 Claim 的并发修改必须显式解决；行动敏感冲突会收紧权限，Context Manifest 则记录 Agent 上下文使用的 Space、目的、调用方、provider、model、工具与选择原因。
+
 ## v6.901.8 — 2026-09-01
 
 ### 变更

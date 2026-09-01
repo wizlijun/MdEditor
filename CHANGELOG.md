@@ -7,6 +7,15 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Memory 2.0 introduces a Git-backed personal Claim ledger.** Immutable YAML revisions now distinguish preferences, boundaries, decisions, beliefs, observations and material facts by subject, assertion, approval meaning, valid time, trust, risk and context scope. Agents may only propose pending claims about the Vault owner; a human decision is bound to the exact protocol, authority and revision.
+
+### Changed
+
+- **`USER.md` and `MEMORY.md` are now disposable plain-text projections.** The Host deterministically rebuilds their one-level categories and multiline facts from `.notemd/memory`, keeps process metadata out of the Markdown, and fails closed on damaged authority or source conflicts.
+- **Memory remains conservative across devices and external models.** Independent Git clones merge immutable records as a set, concurrent edits to one Claim require explicit resolution, action-sensitive conflicts tighten permissions, and Context Manifests record the Space, purpose, caller, provider, model, tools and selection reasons used for Agent context.
+
 ## v6.901.8 — 2026-09-01
 
 ### Changed
