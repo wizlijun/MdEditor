@@ -344,4 +344,28 @@ describe('regenerate keeps agent answers and question state', () => {
     expect(q1.status).toBe('answered')            // 状态还原,不回落 open
     expect(a!.parentId).toBe(q1.id)               // 重新挂回同一问题
   })
+
+  it('keeps separate answers attached to duplicate question texts', () => {
+    const duplicateMd = [
+      '第一处 {==甲==}{>>为什么?<<}',
+      '第二处 {==乙==}{>>为什么?<<}',
+      '',
+    ].join('\n')
+    const tree = createTree()
+    syncAutoItems(tree, deriveAutoItems(duplicateMd))
+    const questions = [...tree.nodes.values()].filter(n => n.source === 'question')
+    questions.forEach((q, index) => {
+      q.status = 'answered'
+      tree.nodes.set(`ans-${index}`, {
+        id: `ans-${index}`, parentId: q.id, order: 100,
+        content: wrapAnswerBody(`答复 ${index + 1}`), collapsed: false, source: 'answer',
+      })
+    })
+
+    regenerate(tree, deriveAutoItems(duplicateMd))
+
+    const rebuilt = [...tree.nodes.values()].filter(n => n.source === 'question')
+    expect(rebuilt.map(q => answerBodyOf(childrenOf(tree, q.id).find(n => n.source === 'answer')!)))
+      .toEqual(['答复 1', '答复 2'])
+  })
 })

@@ -120,4 +120,54 @@ describe('deriveAnswers', () => {
     expect(map.has('为什么能到 90%?')).toBe(true)
     expect(map.has('已采纳的问题?')).toBe(false)   // adopted 不再出卡片
   })
+
+  it('keeps duplicate question texts as separate ordered answers', () => {
+    const duplicate = [
+      '- 原文一',
+      '  type:: annotation',
+      '  - 为什么?',
+      '    type:: question',
+      '    status:: answered',
+      '    - 第一条答复',
+      '      type:: answer',
+      '- 原文二',
+      '  type:: annotation',
+      '  - 为什么?',
+      '    type:: question',
+      '    status:: answered',
+      '    - 第二条答复',
+      '      type:: answer',
+      '',
+    ].join('\n')
+
+    const rows = deriveAnswers(parseOutline(duplicate))
+    expect(rows.map(r => [r.questionOccurrence, r.body])).toEqual([
+      [0, '第一条答复'],
+      [1, '第二条答复'],
+    ])
+    expect(answeredByNoteText(rows).get('为什么?')?.map(r => r.body))
+      .toEqual(['第一条答复', '第二条答复'])
+  })
+
+  it('preserves occurrence gaps when an earlier duplicate has no visible answer', () => {
+    const duplicate = [
+      '- 原文一',
+      '  type:: annotation',
+      '  - 为什么?',
+      '    type:: question',
+      '    status:: open',
+      '- 原文二',
+      '  type:: annotation',
+      '  - 为什么?',
+      '    type:: question',
+      '    status:: answered',
+      '    - 第二条答复',
+      '      type:: answer',
+      '',
+    ].join('\n')
+
+    const answers = answeredByNoteText(deriveAnswers(parseOutline(duplicate))).get('为什么?')!
+    expect(answers[0]).toBeUndefined()
+    expect(answers[1].body).toBe('第二条答复')
+  })
 })

@@ -5,7 +5,7 @@ import type { EditorView } from 'prosemirror-view'
 import { parseMarkdown } from '@moraya/core'
 import { parseOutline, serializeOutline } from '../outline/markdown'
 import { addVerified } from '../okf/actor'
-import type { AnswerEntry } from '../outline/answers'
+import { questionAtOccurrence, type AnswerEntry } from '../outline/answers'
 import { answersStore, loadAnswersFor } from './answers-store.svelte'
 
 /**
@@ -17,9 +17,10 @@ export function markAdoptedInText(
   noteText: string,
   questionContent: string,
   verifier?: { by: string; at: string },
+  questionOccurrence = 0,
 ): string | null {
   const tree = parseOutline(noteText)
-  const q = [...tree.nodes.values()].find(n => n.source === 'question' && n.content === questionContent)
+  const q = questionAtOccurrence(tree, questionContent, questionOccurrence)
   if (!q) return null
   q.status = 'adopted'
   if (verifier) tree.frontmatter = addVerified(tree.frontmatter, verifier.by, verifier.at)
@@ -50,7 +51,7 @@ export async function markAdoptedOnDisk(entry: AnswerEntry): Promise<void> {
     const { outline, bump, markDirty } = await import('../outline/store.svelte')
     if (outline.docPath === notePath) {
       const q = outline.tree.nodes.get(entry.questionId)
-        ?? [...outline.tree.nodes.values()].find(n => n.source === 'question' && n.content === entry.noteText)
+        ?? questionAtOccurrence(outline.tree, entry.noteText, entry.questionOccurrence)
       if (q) {
         q.status = 'adopted'
         outline.tree.frontmatter = addVerified(outline.tree.frontmatter, verifier.by, verifier.at)
@@ -68,7 +69,7 @@ export async function markAdoptedOnDisk(entry: AnswerEntry): Promise<void> {
       console.warn('[adopt] companion note does not round-trip; skipping status writeback')
       return
     }
-    const next = markAdoptedInText(disk, entry.noteText, verifier)
+    const next = markAdoptedInText(disk, entry.noteText, verifier, entry.questionOccurrence)
     if (next == null || next === disk) return
     await fs.writeTextFile(notePath, next)
   } catch (e) {

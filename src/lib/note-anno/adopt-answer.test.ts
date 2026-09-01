@@ -32,6 +32,13 @@ describe('markAdoptedInText', () => {
   it('returns null when the question is not found (no write)', () => {
     expect(markAdoptedInText(note, '不存在的问题?')).toBeNull()
   })
+
+  it('adopts only the requested occurrence when question texts repeat', () => {
+    const duplicate = note + note.replace('- 原文', '- 另一段').replace('因为如此。', '另一条答复。')
+    const out = markAdoptedInText(duplicate, '为什么?', undefined, 1)!
+    const questions = [...parseOutline(out).nodes.values()].filter(n => n.source === 'question')
+    expect(questions.map(q => q.status)).toEqual(['answered', 'adopted'])
+  })
 })
 
 describe('markAdoptedInText — 人工确认落成 OKF verified(§5.2)', () => {

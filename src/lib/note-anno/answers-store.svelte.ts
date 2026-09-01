@@ -2,7 +2,7 @@
 // 正文内联答复卡片的数据源:只为「当前活动主文档」按需加载其配套 .note.md。
 // 不预加载整个 vault(懒加载第一层);答复正文的 markdown 渲染在卡片展开时才做(第二层)。
 import { parseOutline } from '../outline/markdown'
-import { deriveAnswers, answeredByNoteText, type AnswerEntry } from '../outline/answers'
+import { deriveAnswers, answeredByNoteText, type AnswerEntry, type AnswerIndex } from '../outline/answers'
 import { outline, serializeDoc } from '../outline/store.svelte'
 import { noteHomeForRead } from '../outline/note-home'
 
@@ -16,8 +16,8 @@ interface AnswersState {
 
 export const answersStore = $state<AnswersState>({ notePath: null, entries: [], version: 0 })
 
-/** 批注文本 → 待处理答复(只含 answered) */
-export function answeredMap(): Map<string, AnswerEntry> {
+/** 批注文本 → 按同文本出现序号排列的待处理答复(只含 answered) */
+export function answeredMap(): AnswerIndex {
   return answeredByNoteText(answersStore.entries)
 }
 

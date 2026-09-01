@@ -7,8 +7,10 @@ import {
 } from './model'
 
 export interface AnswerEntry {
-  /** question 节点内容 = 源文档里那条批注的文本(锚定用的稳定身份) */
+  /** question 节点内容 = 源文档里那条批注的文本 */
   noteText: string
+  /** 同文本 question 在文档顺序中的 0-based 序号；重复问题靠它与正文批注一一对应 */
+  questionOccurrence: number
   status: QuestionStatus
   /** 答复 markdown:剥掉围栏的正文 + 子节点大纲渲染成的嵌套列表 */
   body: string
@@ -16,6 +18,33 @@ export interface AnswerEntry {
   answeredAt?: string
   /** 采纳后回写 status:: adopted 用 */
   questionId: string
+}
+
+/** 批注文本 → 按出现序号稀疏存放的待处理答复 */
+export type AnswerIndex = Map<string, AnswerEntry[]>
+
+/** 大纲文档顺序（先序），不能依赖 Map 插入序；拖动节点只会改 order。 */
+function nodesInDocumentOrder(tree: OutlineTree): OutlineNode[] {
+  const out: OutlineNode[] = []
+  const walk = (parentId: string | null) => {
+    for (const node of childrenOf(tree, parentId)) {
+      out.push(node)
+      walk(node.id)
+    }
+  }
+  walk(null)
+  return out
+}
+
+/** 找同文本的第 N 个 question；供跨一次重新 parse 的采纳回写复用。 */
+export function questionAtOccurrence(
+  tree: OutlineTree, noteText: string, occurrence: number,
+): OutlineNode | undefined {
+  let seen = 0
+  return nodesInDocumentOrder(tree).find((node) => {
+    if (node.source !== 'question' || node.content !== noteText) return false
+    return seen++ === occurrence
+  })
 }
 
 /**
@@ -49,12 +78,18 @@ export function answerMarkdownOf(tree: OutlineTree, answer: OutlineNode): string
 /** 树里每个「带答复节点的 question」派生一条索引 */
 export function deriveAnswers(tree: OutlineTree): AnswerEntry[] {
   const out: AnswerEntry[] = []
-  for (const q of tree.nodes.values()) {
+  const occurrences = new Map<string, number>()
+  for (const q of nodesInDocumentOrder(tree)) {
     if (q.source !== 'question') continue
+    // 无答复/open/closed 也必须占序号；否则「第一题 open、第二题 answered」会把
+    // 第二条答复错误挂到正文里的第一处同文本批注。
+    const questionOccurrence = occurrences.get(q.content) ?? 0
+    occurrences.set(q.content, questionOccurrence + 1)
     const a = childrenOf(tree, q.id).find(c => c.source === 'answer')
     if (!a) continue
     out.push({
       noteText: q.content,
+      questionOccurrence,
       status: q.status ?? 'open',
       body: answerMarkdownOf(tree, a),
       by: a.answeredBy,
@@ -66,8 +101,13 @@ export function deriveAnswers(tree: OutlineTree): AnswerEntry[] {
 }
 
 /** 批注文本 → 待你处理的答复。只含 answered:open 无答复、adopted/closed 已了结。 */
-export function answeredByNoteText(entries: AnswerEntry[]): Map<string, AnswerEntry> {
-  const m = new Map<string, AnswerEntry>()
-  for (const e of entries) if (e.status === 'answered') m.set(e.noteText, e)
+export function answeredByNoteText(entries: AnswerEntry[]): AnswerIndex {
+  const m: AnswerIndex = new Map()
+  for (const e of entries) {
+    if (e.status !== 'answered') continue
+    const bucket = m.get(e.noteText) ?? []
+    bucket[e.questionOccurrence] = e
+    m.set(e.noteText, bucket)
+  }
   return m
 }

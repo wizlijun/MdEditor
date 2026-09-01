@@ -27,7 +27,7 @@ describe('answers store', () => {
     setAnswersFromText('/v/x.note.md', note)
     expect(answersStore.notePath).toBe('/v/x.note.md')
     expect(answersStore.entries).toHaveLength(1)
-    expect(answeredMap().get('为什么?')?.body).toBe('因为如此。')
+    expect(answeredMap().get('为什么?')?.[0].body).toBe('因为如此。')
     expect(answersStore.version).toBeGreaterThan(before)
   })
 

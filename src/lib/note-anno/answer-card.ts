@@ -6,7 +6,7 @@ import { Decoration, DecorationSet } from 'prosemirror-view'
 import type { EditorView } from 'prosemirror-view'
 import type { Node as PMNode } from 'prosemirror-model'
 import { collectCardSites } from './answer-sites'
-import type { AnswerEntry } from '../outline/answers'
+import type { AnswerEntry, AnswerIndex } from '../outline/answers'
 import { t } from '../i18n/store.svelte'
 
 const answerCardKey = new PluginKey<DecorationSet>('answer-cards')
@@ -14,7 +14,7 @@ const answerCardKey = new PluginKey<DecorationSet>('answer-cards')
 export const ANSWER_CARDS_REFRESH = 'answer-cards-refresh'
 
 interface CardDeps {
-  getEntries: () => Map<string, AnswerEntry>
+  getEntries: () => AnswerIndex
   onAdopt: (entry: AnswerEntry, pos: number, view: EditorView) => void
 }
 
