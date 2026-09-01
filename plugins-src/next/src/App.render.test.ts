@@ -571,7 +571,7 @@ describe('Next window', () => {
     expect(card.textContent).toContain('P0 · 紧急')
     expect(card.textContent).toContain('@电脑')
     expect(document.querySelectorAll('[data-lane]')).toHaveLength(5)
-    card.querySelector<HTMLButtonElement>('[data-action="edit-metadata"]')!.click()
+    card.querySelector<HTMLButtonElement>('[data-card-title]')!.click()
     flushSync()
     expect(document.querySelector<HTMLSelectElement>('[name="priority"]')?.value).toBe('P0')
     expect(document.querySelector<HTMLInputElement>('[name="due"]')?.value).toBe('2026-09-02')
@@ -589,7 +589,7 @@ describe('Next window', () => {
     expect(card.textContent).toContain('情境未明确')
   })
 
-  it('offers the same metadata editor on valid cards in every lane and saves source fields', async () => {
+  it('opens the same metadata editor from valid card titles in every lane and saves source fields', async () => {
     const next = workspace()
     next.wip[0].priority = 'P1'
     next.wip[0].due = '2026-09-08'
@@ -600,11 +600,15 @@ describe('Next window', () => {
 
     document.querySelector<HTMLButtonElement>('.board-tools button')!.click()
     flushSync()
+    expect(document.querySelector('[data-action="edit-metadata"]')).toBeNull()
+    expect(document.body.textContent).not.toContain('编辑元数据')
     for (const key of ['capture', 'wip', 'waiting', 'dormant', 'closed']) {
-      expect(document.querySelector(`[data-item-key="${key}"] [data-action="edit-metadata"]`)).toBeTruthy()
+      const title = document.querySelector<HTMLButtonElement>(`[data-item-key="${key}"] [data-card-title]`)
+      expect(title?.tagName).toBe('BUTTON')
+      expect(title?.type).toBe('button')
     }
 
-    document.querySelector<HTMLButtonElement>('[data-item-key="wip"] [data-action="edit-metadata"]')!.click()
+    document.querySelector<HTMLButtonElement>('[data-item-key="wip"] [data-card-title]')!.click()
     flushSync()
     expect(document.querySelector<HTMLSelectElement>('[name="priority"]')?.value).toBe('P1')
     expect(document.querySelector<HTMLInputElement>('[name="due"]')?.value).toBe('2026-09-08')
@@ -631,7 +635,7 @@ describe('Next window', () => {
     component = mount(App, { target: document.body })
     flushSync()
 
-    document.querySelector<HTMLButtonElement>('[data-item-key="wip"] [data-action="edit-metadata"]')!.click()
+    document.querySelector<HTMLButtonElement>('[data-item-key="wip"] [data-card-title]')!.click()
     flushSync()
     const contexts = document.querySelector<HTMLInputElement>('[name="contexts"]')!
     contexts.value = '@不要丢失'
@@ -1039,6 +1043,7 @@ describe('Next window', () => {
 
     expect(document.body.textContent).toContain('需要处理')
     expect(document.body.textContent).toContain('找不到原文的想法')
+    expect(document.querySelector('[data-item-key="orphan"] [data-card-title]')).toBeNull()
     const place = [...document.querySelectorAll('button')].find((node) => node.textContent?.trim() === '安放')
     expect(place).toBeTruthy()
     place!.dispatchEvent(new MouseEvent('click', { bubbles: true }))

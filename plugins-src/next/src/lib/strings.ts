@@ -36,7 +36,6 @@ export type MessageKey =
   | 'action.reopen'
   | 'action.relink'
   | 'action.openSource'
-  | 'action.editMetadata'
   | 'badge.proofed'
   | 'badge.task'
   | 'badge.agent'
@@ -254,7 +253,6 @@ const en: Catalog = {
   'action.reopen': 'Reopen',
   'action.relink': 'Relink',
   'action.openSource': 'Open source',
-  'action.editMetadata': 'Edit metadata',
   'badge.proofed': 'Proofed',
   'badge.task': 'Task',
   'badge.agent': 'Agent',
@@ -471,7 +469,6 @@ const zh: Catalog = {
   'action.reopen': '重新考虑',
   'action.relink': '重新关联',
   'action.openSource': '打开原文',
-  'action.editMetadata': '编辑元数据',
   'badge.proofed': '已有论证',
   'badge.task': '任务',
   'badge.agent': 'Agent 添加',
@@ -688,7 +685,6 @@ const ja: Catalog = {
   'action.reopen': '再検討',
   'action.relink': '再リンク',
   'action.openSource': '原文を開く',
-  'action.editMetadata': 'メタデータを編集',
   'badge.proofed': '検証済み',
   'badge.task': 'タスク',
   'badge.agent': 'Agent が追加',
@@ -905,7 +901,6 @@ const de: Catalog = {
   'action.reopen': 'Neu prüfen',
   'action.relink': 'Neu verknüpfen',
   'action.openSource': 'Quelle öffnen',
-  'action.editMetadata': 'Metadaten bearbeiten',
   'badge.proofed': 'Geprüft',
   'badge.task': 'Aufgabe',
   'badge.agent': 'Von Agent hinzugefügt',

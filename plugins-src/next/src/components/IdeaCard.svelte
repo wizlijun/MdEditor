@@ -103,7 +103,19 @@
 >
   <div class="body">
     <div class="title-line">
-      <h3 id={titleId}>{item.title}</h3>
+      {#if onEditMetadata}
+        <h3 id={titleId}>
+          <button
+            type="button"
+            class="title-button"
+            data-card-title
+            disabled={metadataDisabled}
+            onclick={() => onEditMetadata?.(item)}
+          >{item.title}</button>
+        </h3>
+      {:else}
+        <h3 id={titleId}>{item.title}</h3>
+      {/if}
       <span class="state">{t(statusKey)}</span>
       {#each projects.slice(0, 2) as project}
         <span class="badge project" title={projects.join(', ')}>{project}</span>
@@ -144,9 +156,6 @@
     {#if detail}<p>{detail}</p>{/if}
   </div>
   <div class="actions">
-    {#if onEditMetadata}
-      <button type="button" class="quiet" data-action="edit-metadata" disabled={metadataDisabled} onclick={() => onEditMetadata?.(item)}>{t('action.editMetadata')}</button>
-    {/if}
     {#if item.path && !item.orphan}
       <button class="quiet" disabled={disabled} onclick={() => onOpen(item)}>{t('common.open')}</button>
     {/if}
@@ -185,6 +194,9 @@
   .title-line { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 7px; min-width: 0; }
   .planning { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   h3 { width: 100%; margin: 0; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.38; font-weight: 650; }
+  .title-button { all: unset; border-radius: 4px; color: inherit; cursor: pointer; }
+  .title-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .title-button:disabled { cursor: default; }
   p { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .state, .badge { flex: none; border-radius: 999px; padding: 2px 7px; font-size: 10.5px; font-weight: 600; }
   .state { background: var(--chip); color: var(--muted-strong); }
