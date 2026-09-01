@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.901.8 — 2026-09-01
+
 ### Changed
 
 - **The Plugin Market now uses a standard, quieter window palette.** Window, section, card, update and AI surfaces use neutral system colors; category and plugin icons retain their visual identity, while actions share the system accent color.
