@@ -632,14 +632,19 @@
     color: CanvasText;
   }
   main {
+    --window-background: color-mix(in srgb, CanvasText 3%, Canvas);
+    --window-surface: Canvas;
+    --card-surface: color-mix(in srgb, CanvasText 2%, Canvas);
+    --hover-surface: color-mix(in srgb, CanvasText 5%, Canvas);
+    --window-border: color-mix(in srgb, CanvasText 11%, transparent);
+    --strong-border: color-mix(in srgb, CanvasText 18%, transparent);
+    --standard-accent: #3479db;
     height: 100vh;
     overflow: auto;
     box-sizing: border-box;
-    background:
-      radial-gradient(circle at 8% -8%, color-mix(in srgb, #6d5dfc 13%, transparent), transparent 34rem),
-      radial-gradient(circle at 92% 4%, color-mix(in srgb, #18a7c7 10%, transparent), transparent 28rem),
-      Canvas;
+    background: var(--window-background);
   }
+  @supports (color: AccentColor) { main { --standard-accent: AccentColor; } }
   .page-shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 24px 0 40px; }
   .boot { min-height: 100%; display: grid; place-items: center; }
   .hero {
@@ -696,9 +701,9 @@
     align-items: flex-start;
     margin: 0 0 14px;
     padding: 10px 12px;
-    border: 1px solid color-mix(in srgb, #e0a800 24%, transparent);
+    border: 1px solid var(--window-border);
     border-radius: 14px;
-    background: color-mix(in srgb, #e0a800 10%, Canvas);
+    background: var(--window-surface);
     color: color-mix(in srgb, CanvasText 82%, transparent);
     font-size: 12.5px;
   }
@@ -721,11 +726,10 @@
     align-items: center;
     margin: 0 0 14px;
     padding: 12px 14px;
-    border: 1px solid color-mix(in srgb, #7657ff 28%, CanvasText 6%);
+    border: 1px solid var(--window-border);
     border-radius: 16px;
-    background:
-      linear-gradient(120deg, color-mix(in srgb, #7657ff 13%, Canvas), color-mix(in srgb, #2e8fff 7%, Canvas));
-    box-shadow: 0 8px 24px color-mix(in srgb, #7657ff 9%, transparent);
+    background: var(--window-surface);
+    box-shadow: 0 1px 2px color-mix(in srgb, CanvasText 4%, transparent);
   }
   .ai-orb {
     display: grid;
@@ -744,10 +748,10 @@
   .ai-pill {
     min-height: 25px;
     padding: 0 8px;
-    border-color: color-mix(in srgb, #7657ff 19%, transparent);
+    border-color: var(--window-border);
     border-radius: 999px;
-    background: color-mix(in srgb, Canvas 76%, transparent);
-    color: color-mix(in srgb, #6045de 82%, CanvasText);
+    background: var(--card-surface);
+    color: color-mix(in srgb, CanvasText 72%, transparent);
     font-size: 9.5px;
   }
   .catalog { display: grid; gap: 14px; }
@@ -757,12 +761,10 @@
     position: relative;
     overflow: hidden;
     padding: 16px;
-    border: 1px solid color-mix(in srgb, var(--accent) 15%, CanvasText 7%);
+    border: 1px solid var(--window-border);
     border-radius: 18px;
-    background:
-      radial-gradient(circle at 100% 0, color-mix(in srgb, var(--accent) 10%, transparent), transparent 22rem),
-      color-mix(in srgb, Canvas 94%, var(--accent) 6%);
-    box-shadow: 0 8px 28px color-mix(in srgb, CanvasText 4%, transparent);
+    background: var(--window-surface);
+    box-shadow: 0 1px 3px color-mix(in srgb, CanvasText 4%, transparent);
   }
   .category-block[data-category='record'] { --accent: #ec5d74; }
   .category-block[data-category='reading'] { --accent: #f09a3e; }
@@ -792,10 +794,10 @@
   .category-title-row { display: flex; align-items: center; gap: 7px; }
   .system-badge {
     padding: 2px 6px;
-    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    border: 1px solid var(--window-border);
     border-radius: 999px;
-    background: color-mix(in srgb, var(--accent) 8%, Canvas);
-    color: color-mix(in srgb, var(--accent) 76%, CanvasText);
+    background: var(--card-surface);
+    color: color-mix(in srgb, CanvasText 58%, transparent);
     font-size: 8px;
     font-weight: 700;
     letter-spacing: 0.02em;
@@ -809,36 +811,30 @@
     display: flex;
     flex-direction: column;
     padding: 13px;
-    border: 1px solid color-mix(in srgb, CanvasText 9%, transparent);
+    border: 1px solid var(--window-border);
     border-radius: 14px;
-    background: color-mix(in srgb, Canvas 92%, transparent);
+    background: var(--card-surface);
     box-shadow: 0 2px 3px color-mix(in srgb, CanvasText 3%, transparent);
-    transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   }
   .plugin-card:hover {
-    transform: translateY(-2px);
-    border-color: color-mix(in srgb, var(--accent) 32%, transparent);
-    box-shadow: 0 14px 30px color-mix(in srgb, CanvasText 8%, transparent);
+    border-color: var(--strong-border);
+    background: var(--hover-surface);
+    box-shadow: 0 4px 12px color-mix(in srgb, CanvasText 7%, transparent);
   }
-  .installed-card { border-color: color-mix(in srgb, var(--accent) 18%, CanvasText 7%); }
+  .installed-card { border-color: var(--window-border); }
   .ai-card {
-    border-color: color-mix(in srgb, #7657ff 29%, CanvasText 6%);
-    background:
-      linear-gradient(140deg, color-mix(in srgb, #7657ff 7%, Canvas), transparent 58%),
-      color-mix(in srgb, Canvas 94%, transparent);
+    border-color: var(--window-border);
+    background: var(--card-surface);
   }
   .update-card {
-    border-color: #f08a00;
-    background:
-      linear-gradient(135deg, color-mix(in srgb, #f08a00 13%, Canvas), transparent 58%),
-      color-mix(in srgb, Canvas 94%, #f08a00 6%);
-    box-shadow: 0 0 0 1px color-mix(in srgb, #f08a00 30%, transparent),
-      0 8px 24px color-mix(in srgb, #f08a00 14%, transparent);
+    border-color: var(--strong-border);
+    background: var(--card-surface);
+    box-shadow: 0 1px 3px color-mix(in srgb, CanvasText 5%, transparent);
   }
   .update-card:hover {
-    border-color: #f08a00;
-    box-shadow: 0 0 0 1px color-mix(in srgb, #f08a00 42%, transparent),
-      0 12px 28px color-mix(in srgb, #f08a00 20%, transparent);
+    border-color: var(--strong-border);
+    box-shadow: 0 4px 12px color-mix(in srgb, CanvasText 7%, transparent);
   }
   .card-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
   .plugin-mark {
@@ -864,8 +860,8 @@
   .ai-badge {
     padding: 1px 5px;
     border-radius: 999px;
-    background: linear-gradient(120deg, color-mix(in srgb, #7657ff 14%, transparent), color-mix(in srgb, #2e8fff 10%, transparent));
-    color: color-mix(in srgb, #6045de 88%, CanvasText);
+    background: color-mix(in srgb, CanvasText 7%, transparent);
+    color: color-mix(in srgb, CanvasText 60%, transparent);
     font-size: 8px;
     font-weight: 700;
     white-space: nowrap;
@@ -880,11 +876,11 @@
     font-weight: 650;
   }
   .status.enabled,
-  .available-status { background: color-mix(in srgb, var(--accent) 12%, transparent); color: color-mix(in srgb, var(--accent) 90%, CanvasText); }
+  .available-status { background: color-mix(in srgb, CanvasText 7%, transparent); color: color-mix(in srgb, CanvasText 62%, transparent); }
   .update-status {
-    background: #e97700;
-    color: white;
-    box-shadow: 0 3px 10px color-mix(in srgb, #e97700 30%, transparent);
+    background: color-mix(in srgb, var(--standard-accent) 12%, transparent);
+    color: var(--standard-accent);
+    box-shadow: none;
   }
   .desc {
     display: -webkit-box;
@@ -946,9 +942,9 @@
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
     transition: transform 140ms ease;
   }
-  .switch-control input:checked + .switch { background: var(--accent); }
+  .switch-control input:checked + .switch { background: var(--standard-accent); }
   .switch-control input:checked + .switch > span { transform: translateX(12px); }
-  .switch-control input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .switch-control input:focus-visible + .switch { outline: 2px solid var(--standard-accent); outline-offset: 2px; }
   .switch-control input:disabled + .switch { opacity: 0.45; }
   .switch-label { color: color-mix(in srgb, CanvasText 58%, transparent); font-size: 10.5px; }
   button {
@@ -964,10 +960,10 @@
     font-size: 12px;
     font-weight: 590;
     cursor: pointer;
-    transition: transform 120ms ease, background 120ms ease, opacity 120ms ease;
+    transition: background 120ms ease, opacity 120ms ease;
   }
-  button:hover:not(:disabled) { transform: translateY(-1px); background: color-mix(in srgb, CanvasText 7%, Canvas); }
-  button:focus-visible { outline: 2px solid var(--accent, #3479db); outline-offset: 2px; }
+  button:hover:not(:disabled) { background: color-mix(in srgb, CanvasText 7%, Canvas); }
+  button:focus-visible { outline: 2px solid var(--standard-accent); outline-offset: 2px; }
   button:disabled { opacity: 0.48; cursor: default; }
   .refresh { min-height: 32px; padding: 0 12px; -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
   .refresh > span { font-size: 16px; }
@@ -975,17 +971,17 @@
     min-height: 32px;
     padding: 0 12px;
     border-color: transparent;
-    background: #e97700;
+    background: var(--standard-accent);
     color: white;
-    box-shadow: 0 5px 16px color-mix(in srgb, #e97700 28%, transparent);
+    box-shadow: none;
   }
-  .update-all:hover:not(:disabled) { background: #c95f00; }
+  .update-all:hover:not(:disabled) { background: color-mix(in srgb, var(--standard-accent) 86%, black); }
   .update-all > span { font-size: 15px; font-weight: 760; }
   .mini { min-height: 27px; padding: 0 9px; font-size: 10px; }
-  .primary { border-color: transparent; background: var(--accent, #3479db); color: white; }
-  .primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent, #3479db) 88%, black); }
-  .update-action { background: #e97700; box-shadow: 0 3px 10px color-mix(in srgb, #e97700 22%, transparent); }
-  .update-action:hover:not(:disabled) { background: #c95f00; }
+  .primary { border-color: transparent; background: var(--standard-accent); color: white; }
+  .primary:hover:not(:disabled) { background: color-mix(in srgb, var(--standard-accent) 86%, black); }
+  .update-action { background: var(--standard-accent); box-shadow: none; }
+  .update-action:hover:not(:disabled) { background: color-mix(in srgb, var(--standard-accent) 86%, black); }
   .quiet { border-color: transparent; background: transparent; }
   .danger { color: #d43b54; }
   .danger:hover:not(:disabled) { background: color-mix(in srgb, #d43b54 9%, transparent); }
