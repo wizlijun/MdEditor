@@ -218,6 +218,10 @@ pub fn open_plugin_window<R: Runtime>(
         .inner_size(win.width, win.height)
         .resizable(true)
         .decorations(true)
+        // macOS normally spends the first click only activating an inactive
+        // window. Plugin controls must respond on that click, like native
+        // utility windows and inspectors do.
+        .accept_first_mouse(true)
         .visible(false)
         .initialization_script(bridge_script(plugin_id, &locale, &theme));
 

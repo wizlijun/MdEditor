@@ -1,6 +1,9 @@
 export type Scope = 'user-owner' | 'user-profile' | 'memory'
 export type Operation = 'create' | 'replace' | 'merge' | 'revoke' | 'set-priority'
-export type Priority = 'normal' | 'high'
+export type Priority = 'critical' | 'high' | 'normal' | 'low'
+export type Polarity = 'positive' | 'negative' | 'neutral'
+export type EpistemicStatus = 'owner-stated' | 'source-supported' | 'inferred' | 'contested' | 'unknown'
+export type Certainty = 'high' | 'medium' | 'low' | 'unknown'
 export type Decision = 'pending' | 'approved' | 'rejected' | 'conflict'
 
 export interface MemoryEntry {
@@ -11,6 +14,12 @@ export interface MemoryEntry {
   revision: number
   status: string
   priority: Priority
+  polarity: Polarity
+  epistemic_status: EpistemicStatus
+  certainty: Certainty
+  agent_guidance?: string
+  avoid_error?: string
+  classification_complete: boolean
   proposal?: string
   approved_by?: string
   approved_at?: string
@@ -32,6 +41,11 @@ export interface Proposal {
     base_revision?: number
     section?: string
     suggested_priority?: Priority
+    suggested_polarity?: Polarity
+    suggested_epistemic_status?: EpistemicStatus
+    suggested_certainty?: Certainty
+    suggested_agent_guidance?: string
+    suggested_avoid_error?: string
     dedupe_key: string
     action_sensitive: boolean
     merge_from: string[]
@@ -64,6 +78,11 @@ export interface ProposeInput {
   base_revision?: number
   section?: string
   priority?: Priority
+  polarity?: Polarity
+  epistemic_status?: EpistemicStatus
+  certainty?: Certainty
+  agent_guidance?: string
+  avoid_error?: string
   merge_from: string[]
 }
 

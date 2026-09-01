@@ -30,19 +30,31 @@ and must not create owner Tasks.
 ## Stable profile
 
 Keep only durable facts that help an Agent work with the owner. Every projected
-entry has a stable identity, version, state, priority, source and exact approval:
+entry is one atomic claim. Review state, evidence type, certainty and Agent
+behavior are deliberately separate:
 
 ```text
 - <stable profile fact>
+  status:: active | pending | revoked
+  priority:: critical | high | normal | low
+  polarity:: positive | negative | neutral
+  epistemic-status:: owner-stated | source-supported | inferred | contested | unknown
+  certainty:: high | medium | low | unknown
+  agent-guidance:: <one executable sentence for an Agent>
+  avoid-error:: <forbidden inference or action; required for unsafe/uncertain entries>
+  source:: <vault-absolute path or URL with anchor>
   id:: <UUID v4>
   revision:: <positive integer>
-  status:: active | revoked
-  priority:: normal | high
   proposal:: <proposal UUID>
   approved-by:: human:<owner-id>
   approved-at:: <RFC 3339 datetime>
-  source:: <vault-absolute path or URL>
 ```
+
+`pending` is not a confirmed fact. `approved-by` records the owner's decision to
+remember a claim, not objective proof. `positive` means follow a preference;
+`negative` means avoid a mistake or boundary violation; `neutral` is context.
+An Agent verifies the source or asks the owner whenever evidence or certainty is
+unknown. Inferred claims can never have high certainty.
 
 ## Controlled maintenance
 

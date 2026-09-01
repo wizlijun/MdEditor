@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { describeDelta, exactDecisionPrompt, filterEntries, pendingProposals } from './domain'
+import { describeDelta, exactDecisionPrompt, filterEntries, pendingProposals, usageRule } from './domain'
 import type { MemoryEntry, Proposal } from './types'
 
 const entry: MemoryEntry = {
   id: 'e1', scope: 'memory', section: 'S', text: 'Keep evidence precise', revision: 1,
-  status: 'active', priority: 'high', document: 'MEMORY.md', legacy: false,
+  status: 'active', priority: 'high', polarity: 'negative', epistemic_status: 'owner-stated', certainty: 'high',
+  agent_guidance: 'Respect the boundary.', avoid_error: 'Never disclose it.', classification_complete: true,
+  document: 'MEMORY.md', legacy: false,
 }
 
 const proposal = (operation: Proposal['proposal']['operation'], decision: Proposal['decision'] = 'pending'): Proposal => ({
@@ -19,6 +21,8 @@ describe('memory domain', () => {
   it('filters by search and high priority', () => {
     expect(filterEntries([entry], 'evidence', 'all', 'active', true)).toEqual([entry])
     expect(filterEntries([entry], 'missing', 'all', 'active', true)).toEqual([])
+    expect(filterEntries([{ ...entry, priority: 'critical' }], '', 'all', 'active', true, 'negative')).toHaveLength(1)
+    expect(filterEntries([entry], '', 'all', 'active', false, 'positive')).toEqual([])
   })
   it('keeps only pending proposals', () => {
     expect(pendingProposals([proposal('replace'), proposal('replace', 'approved')])).toHaveLength(1)
@@ -32,5 +36,11 @@ describe('memory domain', () => {
     expect(prompt).toContain('SHA-256: a')
     expect(prompt).toContain(`Before:\n${entry.text}`)
     expect(prompt).toContain('After:\nUpdated fact')
+  })
+  it('makes negative guidance explicit and sorts it before neutral context', () => {
+    const neutral = { ...entry, id: 'e2', priority: 'high' as const, polarity: 'neutral' as const }
+    expect(filterEntries([neutral, entry], '', 'all', 'active', false).map((item) => item.id)).toEqual(['e1', 'e2'])
+    expect(usageRule(entry)).toBe('Never disclose it.')
+    expect(usageRule({ ...entry, status: 'pending' })).toContain('不能作为确定事实')
   })
 })

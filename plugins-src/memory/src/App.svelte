@@ -1,260 +1,93 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import ConfirmSheet from './lib/ConfirmSheet.svelte'
   import { bridge, memoryDecide, memoryList, memoryMigrate, memoryPropose, memorySuggest, toast } from './lib/bridge'
-  import { describeDelta, exactDecisionPrompt, filterEntries, pendingProposals } from './lib/domain'
+  import { describeDelta, filterEntries, pendingProposals, usageRule } from './lib/domain'
   import { setLocale, t } from './lib/strings'
-  import type { MemoryEntry, Operation, Priority, Proposal, Scope, Snapshot } from './lib/types'
+  import type { Certainty, EpistemicStatus, MemoryEntry, Operation, Polarity, Priority, Proposal, Scope, Snapshot } from './lib/types'
 
   setLocale(bridge().locale)
+  let snapshot = $state<Snapshot | null>(null), loading = $state(true), writing = $state(false), error = $state('')
+  let tab = $state<'current' | 'pending' | 'improve'>('current'), query = $state(''), scope = $state<'all' | Scope>('all'), status = $state('all'), polarityFilter = $state<'all' | Polarity>('all'), highOnly = $state(false)
+  let suggestions = $state<unknown[]>([]), selectedEntryId = $state<string | null>(null), selectedProposalId = $state<string | null>(null), editId = $state<string | null>(null)
+  let formScope = $state<Scope>('memory'), formText = $state(''), formSource = $state(''), formSection = $state('Active memory')
+  let formPriority = $state<Priority>('normal'), formPolarity = $state<Polarity>('neutral'), formEpistemic = $state<EpistemicStatus>('owner-stated'), formCertainty = $state<Certainty>('medium')
+  let formGuidance = $state('仅在相关情境中使用，并保留来源语境。'), formAvoid = $state(''), ownerActor = $state('human:'), ownerNames = $state('')
+  let confirmation = $state<{ proposal: Proposal; action: 'approve' | 'reject'; actor: string } | null>(null), confirmMigration = $state(false)
 
-  let snapshot = $state<Snapshot | null>(null)
-  let busy = $state(false)
-  let error = $state('')
-  let tab = $state<'current' | 'pending' | 'improve'>('current')
-  let query = $state('')
-  let scope = $state<'all' | Scope>('all')
-  let status = $state('active')
-  let highOnly = $state(false)
-  let suggestions = $state<unknown[]>([])
-  let editId = $state<string | null>(null)
-  let formScope = $state<Scope>('memory')
-  let formText = $state('')
-  let formSource = $state('')
-  let formSection = $state('Active memory')
-  let ownerActor = $state('human:')
-  let ownerNames = $state('')
-
-  const visibleEntries = $derived(snapshot ? filterEntries(snapshot.entries, query, scope, status, highOnly) : [])
+  const visibleEntries = $derived(snapshot ? filterEntries(snapshot.entries, query, scope, status, highOnly, polarityFilter) : [])
   const reviews = $derived(snapshot ? pendingProposals(snapshot.proposals) : [])
+  const selectedEntry = $derived(visibleEntries.find((entry) => entry.id === selectedEntryId) ?? visibleEntries[0])
+  const selectedProposal = $derived(reviews.find((proposal) => proposal.proposal.id === selectedProposalId) ?? reviews[0])
 
   async function refresh() {
-    busy = true; error = ''
-    try { snapshot = await memoryList() }
-    catch (e) { error = String(e) }
-    finally { busy = false }
+    loading = true; error = ''
+    try { snapshot = await memoryList(); if (!selectedEntryId) selectedEntryId = snapshot.entries[0]?.id ?? null; if (!selectedProposalId) selectedProposalId = pendingProposals(snapshot.proposals)[0]?.proposal.id ?? null }
+    catch (e) { error = String(e) } finally { loading = false }
   }
-
-  function humanSource(): string {
-    return `human-input://${snapshot?.owner_actor ?? 'unknown'}/${new Date().toISOString()}`
+  function humanSource() { return `human-input://${snapshot?.owner_actor ?? 'unknown'}/${new Date().toISOString()}` }
+  function needsAvoid() { return formPolarity === 'negative' || ['inferred', 'contested'].includes(formEpistemic) || ['low', 'unknown'].includes(formCertainty) }
+  function validForm() { return Boolean(formText.trim() && formSource.trim() && formGuidance.trim() && (!needsAvoid() || formAvoid.trim()) && !(formEpistemic === 'inferred' && formCertainty === 'high')) }
+  function resetForm(entry?: MemoryEntry) {
+    editId = entry?.id ?? 'new'; formScope = entry?.scope ?? 'memory'; formText = entry?.text ?? ''; formSource = entry?.source ?? humanSource(); formSection = entry?.section ?? 'Active memory'
+    formPriority = entry?.priority ?? 'normal'; formPolarity = entry?.polarity ?? 'neutral'; formEpistemic = entry?.epistemic_status ?? 'owner-stated'; formCertainty = entry?.certainty ?? 'medium'
+    formGuidance = entry?.agent_guidance ?? '仅在相关情境中使用，并保留来源语境。'; formAvoid = entry?.avoid_error ?? ''
   }
-
-  function newEntry() {
-    editId = 'new'; formScope = 'memory'; formText = ''; formSource = humanSource(); formSection = 'Active memory'
+  async function createProposal(input: { scope: Scope; operation: Operation; text: string; source: string; target?: MemoryEntry; priority?: Priority; polarity?: Polarity; epistemic?: EpistemicStatus; certainty?: Certainty; guidance?: string; avoid?: string; section?: string }, actor?: string) {
+    const decisionActor = actor ?? snapshot?.owner_actor; if (!decisionActor) throw new Error('USER.md has no confirmed owner actor')
+    writing = true; error = ''
+    try {
+      const proposal = await memoryPropose({ scope:input.scope, operation:input.operation, text:input.text, source:input.source || humanSource(), by:'notemd-memory/human-ui', dedupe_key:`memory-ui/v2/${crypto.randomUUID()}`, reason:'Human-authored change through the controlled Memory window.', target_id:input.target?.id, base_revision:input.target?.revision, section:input.section, priority:input.priority, polarity:input.polarity, epistemic_status:input.epistemic, certainty:input.certainty, agent_guidance:input.guidance, avoid_error:input.avoid, merge_from:[] })
+      confirmation = { proposal, action:'approve', actor:decisionActor }
+    } catch (e) { error = String(e) } finally { writing = false }
   }
-
-  function edit(entry: MemoryEntry) {
-    editId = entry.id; formScope = entry.scope; formText = entry.text; formSource = entry.source ?? humanSource(); formSection = entry.section
-  }
-
-  async function proposeAndApprove(input: {
-    scope: Scope; operation: Operation; text: string; source: string; target?: MemoryEntry; priority?: Priority; section?: string
-  }) {
-    if (!snapshot?.owner_actor) throw new Error('USER.md has no confirmed owner actor')
-    const nonce = crypto.randomUUID()
-    const proposal = await memoryPropose({
-      scope: input.scope, operation: input.operation, text: input.text, source: input.source || humanSource(),
-      by: 'notemd-memory/human-ui', dedupe_key: `memory-ui/v1/${nonce}`,
-      reason: 'Direct human change through the controlled Memory window.',
-      target_id: input.target?.id, base_revision: input.target?.revision, section: input.section,
-      priority: input.priority, merge_from: [],
-    })
-    if (!window.confirm(exactDecisionPrompt(proposal, snapshot.entries, t('confirmDecision')))) {
-      await refresh()
-      return
-    }
-    await memoryDecide({ proposal_id: proposal.proposal.id, expected_sha256: proposal.sha256,
-      action: 'approve', actor: snapshot.owner_actor,
-      human_confirmed: true, reason: 'Approved through the Memory window.' })
-    await toast('success', t('saveApprove'))
-    editId = null
-    await refresh()
-  }
-
   async function submitForm() {
-    if (!formText.trim()) return
+    if (!validForm()) return
     const target = editId === 'new' ? undefined : snapshot?.entries.find((entry) => entry.id === editId)
-    busy = true; error = ''
-    try {
-      await proposeAndApprove({ scope: formScope, operation: target ? 'replace' : 'create', text: formText,
-        source: formSource, target, section: formSection, priority: target?.priority ?? 'normal' })
-    } catch (e) { error = String(e) } finally { busy = false }
+    await createProposal({ scope:formScope, operation:target ? 'replace' : 'create', text:formText.trim(), source:formSource.trim(), target, section:formSection.trim(), priority:formPriority, polarity:formPolarity, epistemic:formEpistemic, certainty:formCertainty, guidance:formGuidance.trim(), avoid:formAvoid.trim() || undefined })
   }
-
-  async function changeStatus(entry: MemoryEntry) {
-    busy = true; error = ''
-    try {
-      await proposeAndApprove({ scope: entry.scope, operation: entry.status === 'revoked' ? 'replace' : 'revoke',
-        text: entry.text, source: entry.source ?? humanSource(), target: entry, priority: entry.priority })
-    } catch (e) { error = String(e) } finally { busy = false }
+  async function changeStatus(entry: MemoryEntry) { await createProposal({ scope:entry.scope, operation:entry.status === 'revoked' ? 'replace' : 'revoke', text:entry.text, source:entry.source ?? humanSource(), target:entry, priority:entry.priority, polarity:entry.polarity, epistemic:entry.epistemic_status, certainty:entry.certainty, guidance:entry.agent_guidance, avoid:entry.avoid_error }) }
+  async function cyclePriority(entry: MemoryEntry) { const levels: Priority[] = ['low','normal','high','critical']; await createProposal({ scope:entry.scope, operation:'set-priority', text:'', source:entry.source ?? humanSource(), target:entry, priority:levels[(levels.indexOf(entry.priority)+1)%levels.length] }) }
+  function requestDecision(proposal: Proposal, action: 'approve'|'reject') { if (snapshot?.owner_actor) confirmation = { proposal, action, actor:snapshot.owner_actor } }
+  async function confirmDecision() {
+    if (!confirmation) return; const decision = confirmation; writing = true; error = ''
+    try { await memoryDecide({ proposal_id:decision.proposal.proposal.id, expected_sha256:decision.proposal.sha256, action:decision.action, actor:decision.actor, human_confirmed:true, reason:`Human ${decision.action} through Memory window.` }); confirmation=null; editId=null; await toast('success', decision.action==='approve'?'已写入受控投影':'已拒绝候选'); await refresh() }
+    catch (e) { error=String(e) } finally { writing=false }
   }
-
-  async function togglePriority(entry: MemoryEntry) {
-    busy = true; error = ''
-    try {
-      await proposeAndApprove({ scope: entry.scope, operation: 'set-priority', text: '', source: entry.source ?? humanSource(),
-        target: entry, priority: entry.priority === 'high' ? 'normal' : 'high' })
-    } catch (e) { error = String(e) } finally { busy = false }
-  }
-
-  async function decideProposal(proposal: Proposal, action: 'approve' | 'reject') {
-    if (!snapshot?.owner_actor) return
-    const heading = action === 'approve' ? t('confirmDecision') : t('confirmReject')
-    const message = exactDecisionPrompt(proposal, snapshot.entries, heading)
-    if (!window.confirm(message)) return
-    busy = true; error = ''
-    try {
-      await memoryDecide({ proposal_id: proposal.proposal.id, expected_sha256: proposal.sha256,
-        action, actor: snapshot.owner_actor,
-        human_confirmed: true, reason: `Human ${action} through Memory window.` })
-      await refresh()
-    } catch (e) { error = String(e) } finally { busy = false }
-  }
-
-  async function migrate() {
-    if (!window.confirm(t('confirmMigrate'))) return
-    busy = true; error = ''
-    try { const result = await memoryMigrate(); await toast('success', `${result.migrated} entries imported`); await refresh() }
-    catch (e) { error = String(e) } finally { busy = false }
-  }
-
-  async function claimOwner() {
-    const names = ownerNames.split(',').map((name) => name.trim()).filter(Boolean)
-    if (!ownerActor.startsWith('human:') || names.length === 0) return
-    busy = true; error = ''
-    try {
-      const proposal = await memoryPropose({
-        scope: 'user-owner', operation: 'create', text: JSON.stringify({ actor: ownerActor, names }, null, 2),
-        source: humanSource(), by: 'notemd-memory/human-ui', dedupe_key: `memory-ui/v1/owner/${crypto.randomUUID()}`,
-        reason: 'Initial owner claim through the controlled Memory window.', section: 'Owner', priority: 'high', merge_from: [],
-      })
-      if (!window.confirm(exactDecisionPrompt(proposal, snapshot?.entries ?? [], t('confirmDecision')))) {
-        await refresh()
-        return
-      }
-      await memoryDecide({ proposal_id: proposal.proposal.id, expected_sha256: proposal.sha256,
-        action: 'approve', actor: ownerActor,
-        human_confirmed: true, reason: 'Owner confirmed through the Memory window.' })
-      await refresh()
-    } catch (e) { error = String(e) } finally { busy = false }
-  }
-
-  async function loadSuggestions() {
-    busy = true; error = ''
-    try { suggestions = (await memorySuggest()).suggestions ?? [] }
-    catch (e) { error = String(e) } finally { busy = false }
-  }
-
+  async function migrateConfirmed() { writing=true; error=''; try { const result=await memoryMigrate(); confirmMigration=false; await toast('success',`${result.migrated} entries imported`); await refresh() } catch(e){error=String(e)} finally{writing=false} }
+  async function claimOwner() { const names=ownerNames.split(',').map((name)=>name.trim()).filter(Boolean); if(!ownerActor.startsWith('human:')||!names.length)return; await createProposal({scope:'user-owner',operation:'create',text:JSON.stringify({actor:ownerActor,names},null,2),source:humanSource(),priority:'critical',section:'Owner'},ownerActor) }
+  async function loadSuggestions() { loading=true;error='';try{suggestions=(await memorySuggest()).suggestions??[]}catch(e){error=String(e)}finally{loading=false} }
   onMount(refresh)
 </script>
 
 <svelte:head><title>{t('title')}</title></svelte:head>
-
 <main>
-  <header>
-    <div><h1>{t('title')}</h1><p>{t('subtitle')}</p></div>
-    <button class="quiet" onclick={refresh} disabled={busy}>{t('refresh')}</button>
-  </header>
+  <header class="app-header"><div><h1>{t('title')}</h1><p>{t('subtitle')}</p></div><div class="health"><span class:ok={snapshot?.integrity.managed && !snapshot?.integrity.drift}></span>{snapshot?.integrity.drift?'投影异常':snapshot?.integrity.managed?'投影正常':'尚未迁移'}<button class="icon" onclick={refresh} disabled={loading} aria-label={t('refresh')}>↻</button></div></header>
+  {#if error}<div class="banner danger-banner" role="alert">{error}</div>{/if}
+  {#if snapshot?.integrity.drift}<div class="banner danger-banner"><div><strong>{t('drift')}</strong><small>{snapshot.integrity.errors.join(' · ')}</small></div></div>{/if}
+  {#if snapshot && !snapshot.integrity.managed}<div class="banner warning"><div><strong>{t('migrate')}</strong><small>{t('migrateHint')}</small></div><button class="primary" onclick={()=>confirmMigration=true}>{t('migrate')}</button></div>{/if}
+  {#if snapshot?.integrity.managed && !snapshot.owner_actor}<div class="banner warning owner"><strong>{t('claimOwner')}</strong><input bind:value={ownerActor} placeholder={t('ownerActor')}/><input bind:value={ownerNames} placeholder={t('ownerNames')}/><button class="primary" onclick={claimOwner} disabled={writing}>{t('claimOwner')}</button></div>{/if}
+  <div class="segments" role="tablist" aria-label="Memory sections"><button role="tab" aria-selected={tab==='current'} class:active={tab==='current'} onclick={()=>tab='current'}>{t('current')}</button><button role="tab" aria-selected={tab==='pending'} class:active={tab==='pending'} onclick={()=>tab='pending'}>{t('pending')} <span class="count">{reviews.length}</span></button><button role="tab" aria-selected={tab==='improve'} class:active={tab==='improve'} onclick={()=>tab='improve'}>{t('improve')}</button></div>
+  {#if loading && !snapshot}<div class="empty">{t('loading')}</div>{/if}
 
-  <div class="readonly">🔒 {t('directReadOnly')}</div>
-
-  {#if error}<div class="banner error">{error}</div>{/if}
-  {#if snapshot?.integrity.drift}<div class="banner error"><strong>{t('drift')}</strong><br />{snapshot.integrity.errors.join(' · ')}</div>{/if}
-  {#if snapshot && !snapshot.integrity.managed}
-    <div class="banner migrate"><div><strong>{t('migrate')}</strong><p>{t('migrateHint')}</p></div><button onclick={migrate} disabled={busy}>{t('migrate')}</button></div>
-  {/if}
-  {#if snapshot?.integrity.managed && !snapshot.owner_actor}
-    <div class="banner migrate owner-claim">
-      <strong>{t('claimOwner')}</strong>
-      <input bind:value={ownerActor} placeholder={t('ownerActor')} />
-      <input bind:value={ownerNames} placeholder={t('ownerNames')} />
-      <button class="primary" onclick={claimOwner} disabled={busy}>{t('claimOwner')}</button>
-    </div>
+  {#if tab==='current' && snapshot}
+    <section class="toolbar"><input class="search" bind:value={query} placeholder={t('search')}/><select bind:value={scope}><option value="all">{t('all')}</option><option value="user-profile">{t('user')}</option><option value="memory">{t('memory')}</option></select><select bind:value={status}><option value="all">{t('all')}</option><option value="active">{t('active')}</option><option value="pending">{t('pendingState')}</option><option value="revoked">{t('revoked')}</option></select><select bind:value={polarityFilter} aria-label="行为方向"><option value="all">全部方向</option><option value="positive">正向</option><option value="negative">负向</option><option value="neutral">中性</option></select><label><input type="checkbox" bind:checked={highOnly}/> {t('highOnly')}</label><button class="primary" onclick={()=>resetForm()} disabled={snapshot.integrity.drift}>{t('add')}</button></section>
+    {#if editId}<section class="editor" aria-label="Memory editor"><div class="form-grid"><label>位置<select bind:value={formScope}><option value="user-profile">{t('user')}</option><option value="memory">{t('memory')}</option></select></label><label>{t('section')}<input bind:value={formSection}/></label><label>优先级<select bind:value={formPriority}><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></label><label>行为方向<select bind:value={formPolarity}><option value="positive">正向 · 应遵循</option><option value="negative">负向 · 必须避免</option><option value="neutral">中性 · 背景</option></select></label><label>证据性质<select bind:value={formEpistemic}><option value="owner-stated">Owner 直接表达</option><option value="source-supported">来源支持</option><option value="inferred">Agent 推断</option><option value="contested">存在冲突</option><option value="unknown">未知</option></select></label><label>确定度<select bind:value={formCertainty}><option value="high">高</option><option value="medium">中</option><option value="low">低</option><option value="unknown">未知</option></select></label></div><label>{t('content')}<textarea bind:value={formText} rows="4" placeholder="一条原子的事实、偏好或边界"></textarea></label><label>Agent 使用方式<input bind:value={formGuidance} placeholder="说明应如何使用，而不是重复正文"/></label><label class:required={needsAvoid()}>避免错误{needsAvoid()?'（必填）':'（可选）'}<input bind:value={formAvoid} placeholder="明确禁止的推断或动作"/></label><label>{t('source')}<input bind:value={formSource} placeholder="/path/to/source.md#anchor"/></label>{#if formEpistemic==='inferred'&&formCertainty==='high'}<p class="validation">推断不能标记为高确定度。</p>{/if}<div class="actions"><button onclick={()=>editId=null}>取消</button><button class="primary" onclick={submitForm} disabled={writing||!validForm()}>生成候选并审阅</button></div></section>{/if}
+    <section class="split"><aside class="master" aria-label="Memory entries">{#each visibleEntries as entry (entry.id)}<button class:selected={selectedEntry?.id===entry.id} onclick={()=>selectedEntryId=entry.id}><span class="polarity {entry.polarity}" aria-label={entry.polarity}></span><span><strong>{entry.text}</strong><small>{entry.status} · {entry.epistemic_status} · {entry.certainty}</small></span><em class:critical={entry.priority==='critical'}>{entry.priority}</em></button>{:else}<div class="empty">{t('noEntries')}</div>{/each}</aside>{#if selectedEntry}<article class="detail"><div class="eyebrow"><span class="badge {selectedEntry.polarity}">{selectedEntry.polarity==='positive'?'正向 · 遵循':selectedEntry.polarity==='negative'?'负向 · 避免':'中性 · 背景'}</span><span class="badge priority-{selectedEntry.priority}">{selectedEntry.priority}</span><span class="badge">{selectedEntry.status}</span></div><h2>{selectedEntry.text}</h2>{#if !selectedEntry.classification_complete}<div class="notice">旧条目尚未完成安全分类。当前一律按不确定材料处理。</div>{/if}<section class="guidance"><small>AGENT 使用规则</small><p>{usageRule(selectedEntry)}</p>{#if selectedEntry.avoid_error}<small>必须避免</small><p class="avoid">{selectedEntry.avoid_error}</p>{/if}</section><dl><div><dt>证据性质</dt><dd>{selectedEntry.epistemic_status}</dd></div><div><dt>确定度</dt><dd>{selectedEntry.certainty}</dd></div><div><dt>分区</dt><dd>{selectedEntry.section}</dd></div><div><dt>修订</dt><dd>r{selectedEntry.revision}</dd></div><div class="wide"><dt>来源</dt><dd>{selectedEntry.source??'—'}</dd></div><div class="wide"><dt>ID</dt><dd><code>{selectedEntry.id}</code></dd></div></dl><div class="actions"><button onclick={()=>resetForm(selectedEntry)} disabled={snapshot.integrity.drift}>编辑</button><button onclick={()=>cyclePriority(selectedEntry)} disabled={writing||snapshot.integrity.drift}>调整优先级</button><button class="danger" onclick={()=>changeStatus(selectedEntry)} disabled={writing||snapshot.integrity.drift}>{selectedEntry.status==='revoked'?'恢复':'撤销'}</button></div></article>{/if}</section>
   {/if}
 
-  <nav aria-label="Memory sections">
-    <button class:active={tab === 'current'} onclick={() => tab = 'current'}>{t('current')}</button>
-    <button class:active={tab === 'pending'} onclick={() => tab = 'pending'}>{t('pending')} <span class="count">{reviews.length}</span></button>
-    <button class:active={tab === 'improve'} onclick={() => tab = 'improve'}>{t('improve')}</button>
-  </nav>
-
-  {#if busy && !snapshot}<div class="loading">{t('loading')}</div>{/if}
-
-  {#if tab === 'current' && snapshot}
-    <section class="toolbar">
-      <input class="search" bind:value={query} placeholder={t('search')} />
-      <select bind:value={scope}><option value="all">{t('all')}</option><option value="user-profile">{t('user')}</option><option value="memory">{t('memory')}</option></select>
-      <select bind:value={status}><option value="active">{t('active')}</option><option value="pending">{t('pendingState')}</option><option value="revoked">{t('revoked')}</option><option value="all">{t('all')}</option></select>
-      <label><input type="checkbox" bind:checked={highOnly} /> {t('highOnly')}</label>
-      <button class="primary" onclick={newEntry} disabled={!snapshot.integrity.managed || snapshot.integrity.drift}>{t('add')}</button>
-    </section>
-
-    {#if editId}
-      <section class="editor">
-        <div class="row"><select bind:value={formScope}><option value="user-profile">{t('user')}</option><option value="memory">{t('memory')}</option></select><input bind:value={formSection} placeholder={t('section')} /></div>
-        <textarea bind:value={formText} rows="5" placeholder={t('content')}></textarea>
-        <input bind:value={formSource} placeholder={t('source')} />
-        <div class="actions"><button class="quiet" onclick={() => editId = null}>{t('cancel')}</button><button class="primary" onclick={submitForm} disabled={busy || !formText.trim()}>{t('saveApprove')}</button></div>
-      </section>
-    {/if}
-
-    <section class="cards">
-      {#each visibleEntries as entry (entry.id)}
-        <article class:muted={entry.status !== 'active'}>
-          <div class="card-head"><span class="scope">{entry.scope === 'memory' ? t('memory') : t('user')}</span><span class:high={entry.priority === 'high'}>{entry.priority === 'high' ? t('high') : t('normal')}</span><span>{entry.status}</span><code>r{entry.revision}</code></div>
-          <p class="claim">{entry.text}</p>
-          <p class="meta">{entry.section} · {entry.source ?? '—'} · <code>{entry.id}</code></p>
-          <div class="actions"><button class="quiet" onclick={() => edit(entry)} disabled={snapshot.integrity.drift}>{t('edit')}</button><button class="quiet" onclick={() => togglePriority(entry)} disabled={snapshot.integrity.drift}>{entry.priority === 'high' ? t('normal') : t('high')}</button><button class="danger" onclick={() => changeStatus(entry)} disabled={snapshot.integrity.drift}>{entry.status === 'revoked' ? t('restore') : t('revoke')}</button></div>
-        </article>
-      {:else}<div class="empty">{t('noEntries')}</div>{/each}
-    </section>
-  {/if}
-
-  {#if tab === 'pending' && snapshot}
-    <section class="cards review-list">
-      {#each reviews as proposal (proposal.proposal.id)}
-        {@const delta = describeDelta(proposal, snapshot.entries)}
-        <article class:action-sensitive={proposal.proposal.action_sensitive}>
-          <div class="card-head"><span class="scope">{proposal.proposal.scope}</span><strong>{proposal.proposal.operation}</strong>{#if proposal.proposal.suggested_priority === 'high'}<span class="high">{t('high')}</span>{/if}</div>
-          <div class="diff"><div><small>{t('before')}</small><p>{delta.before}</p></div><div><small>{t('after')}</small><p>{delta.after}</p></div></div>
-          <p class="meta">{t('proposedBy')}: {proposal.generated.by} · {t('source')}: {proposal.sources[0]?.resource ?? '—'}</p>
-          <p class="meta"><code>{proposal.proposal.id}</code> · SHA-256 <code>{proposal.sha256}</code></p>
-          {#if proposal.reason}<p class="reason"><strong>{t('reason')}:</strong> {proposal.reason}</p>{/if}
-          <div class="actions"><button class="danger" onclick={() => decideProposal(proposal, 'reject')}>{t('reject')}</button><button class="primary" onclick={() => decideProposal(proposal, 'approve')}>{t('approve')}</button></div>
-        </article>
-      {:else}<div class="empty">{t('noPending')}</div>{/each}
-    </section>
-  {/if}
-
-  {#if tab === 'improve'}
-    <section class="improve"><button class="primary" onclick={loadSuggestions} disabled={busy}>{t('runSuggest')}</button>
-      {#each suggestions as suggestion}<pre>{JSON.stringify(suggestion, null, 2)}</pre>{/each}
-    </section>
-  {/if}
+  {#if tab==='pending' && snapshot}<section class="split"><aside class="master proposals">{#each reviews as proposal (proposal.proposal.id)}<button class:selected={selectedProposal?.proposal.id===proposal.proposal.id} class:sensitive={proposal.proposal.action_sensitive} onclick={()=>selectedProposalId=proposal.proposal.id}><span><strong>{proposal.title}</strong><small>{proposal.proposal.operation} · {proposal.generated.by}</small></span><em>{proposal.proposal.suggested_polarity??'未分类'}</em></button>{:else}<div class="empty">{t('noPending')}</div>{/each}</aside>{#if selectedProposal}{@const delta=describeDelta(selectedProposal,snapshot.entries)}<article class="detail"><div class="eyebrow"><span class="badge">{selectedProposal.proposal.operation}</span>{#if selectedProposal.proposal.action_sensitive}<span class="badge negative">需谨慎</span>{/if}</div><h2>{selectedProposal.title}</h2><div class="diff"><div><small>当前</small><p>{delta.before}</p></div><div><small>建议后</small><p>{delta.after}</p></div></div><dl><div><dt>优先级</dt><dd>{selectedProposal.proposal.suggested_priority??'继承'}</dd></div><div><dt>方向</dt><dd>{selectedProposal.proposal.suggested_polarity??'未提供'}</dd></div><div><dt>证据性质</dt><dd>{selectedProposal.proposal.suggested_epistemic_status??'未提供'}</dd></div><div><dt>确定度</dt><dd>{selectedProposal.proposal.suggested_certainty??'未提供'}</dd></div><div class="wide"><dt>来源</dt><dd>{selectedProposal.sources[0]?.resource??'—'}</dd></div><div class="wide"><dt>候选 / SHA</dt><dd><code>{selectedProposal.proposal.id}<br/>{selectedProposal.sha256}</code></dd></div></dl><div class="actions"><button class="danger" onclick={()=>requestDecision(selectedProposal,'reject')} disabled={writing}>拒绝</button><button class="primary" onclick={()=>requestDecision(selectedProposal,'approve')} disabled={writing}>审阅并批准</button></div></article>{/if}</section>{/if}
+  {#if tab==='improve'}<section class="improve"><div><h2>改善建议</h2><p>检测缺失分类、冲突、不安全的确定度和重复条目；建议本身不会写入投影。</p></div><button class="primary" onclick={loadSuggestions} disabled={loading}>运行检查</button>{#each suggestions as suggestion}<pre>{JSON.stringify(suggestion,null,2)}</pre>{:else}<div class="empty">尚未运行检查。</div>{/each}</section>{/if}
 </main>
+{#if confirmation}<ConfirmSheet proposal={confirmation.proposal} entries={snapshot?.entries??[]} action={confirmation.action} busy={writing} oncancel={()=>confirmation=null} onconfirm={confirmDecision}/>{/if}
+{#if confirmMigration}<div class="scrim"><section class="simple-sheet" role="alertdialog" aria-modal="true"><h2>开始受控迁移？</h2><p>{t('confirmMigrate')}</p><div class="actions"><button onclick={()=>confirmMigration=false} disabled={writing}>取消</button><button class="primary" onclick={migrateConfirmed} disabled={writing}>确认迁移</button></div></section></div>{/if}
 
 <style>
-  :global(:root) { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
-  :global(body) { margin: 0; background: Canvas; color: CanvasText; }
-  :global(button), :global(input), :global(select), :global(textarea) { font: inherit; }
-  main { max-width: 1160px; margin: 0 auto; padding: 22px 26px 48px; }
-  header { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }
-  h1 { margin:0; font-size:26px; letter-spacing:-.02em; } header p { margin:5px 0 0; opacity:.62; }
-  .readonly { margin:18px 0 12px; padding:8px 12px; border-radius:8px; background:color-mix(in srgb, CanvasText 6%, Canvas); font-size:13px; opacity:.82; }
-  .banner { display:flex; align-items:center; justify-content:space-between; gap:20px; margin:12px 0; padding:14px 16px; border-radius:10px; border:1px solid; }
-  .banner p { margin:4px 0 0; }.error { border-color:#d74b4b; background:color-mix(in srgb, #d74b4b 10%, Canvas); }.migrate { border-color:#d59b21; background:color-mix(in srgb, #d59b21 10%, Canvas); }
-  .owner-claim { display:grid; grid-template-columns:auto 1fr 1fr auto; align-items:center; }
-  nav { display:flex; gap:4px; margin:18px 0; border-bottom:1px solid color-mix(in srgb, CanvasText 14%, transparent); }
-  nav button { border:0; background:none; padding:10px 14px; opacity:.64; border-bottom:2px solid transparent; } nav button.active { opacity:1; border-color:#0a84ff; }
-  .count { display:inline-grid; place-items:center; min-width:18px; height:18px; padding:0 3px; border-radius:9px; font-size:11px; background:color-mix(in srgb, CanvasText 10%, Canvas); }
-  button { border:1px solid color-mix(in srgb, CanvasText 18%, transparent); background:color-mix(in srgb, CanvasText 6%, Canvas); border-radius:7px; padding:7px 11px; cursor:pointer; } button:disabled { opacity:.4; cursor:default; }
-  button.primary { background:#0a84ff; border-color:#0a84ff; color:white; } button.danger { color:#d93636; } button.quiet { background:transparent; }
-  .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:9px; margin-bottom:14px; }.toolbar .search { flex:1; min-width:220px; }.toolbar label { font-size:13px; opacity:.8; }
-  input, select, textarea { box-sizing:border-box; border:1px solid color-mix(in srgb, CanvasText 18%, transparent); background:Canvas; color:CanvasText; border-radius:7px; padding:8px 10px; }
-  textarea { width:100%; resize:vertical; line-height:1.5; }.editor { padding:14px; margin-bottom:14px; border:1px solid #0a84ff; border-radius:10px; }.editor .row { display:grid; grid-template-columns:180px 1fr; gap:8px; margin-bottom:8px; }.editor > input { width:100%; margin-top:8px; }
-  .cards { display:grid; gap:10px; } article { padding:14px 15px; border:1px solid color-mix(in srgb, CanvasText 15%, transparent); border-radius:11px; background:color-mix(in srgb, CanvasText 2%, Canvas); } article.muted { opacity:.62; } article.action-sensitive { border-color:#e46b45; }
-  .card-head { display:flex; align-items:center; gap:8px; font-size:12px; opacity:.76; }.card-head span { padding:2px 6px; border-radius:5px; background:color-mix(in srgb, CanvasText 7%, Canvas); }.card-head .high { background:#ff9f0a; color:#231500; opacity:1; }.scope { color:#0a84ff; }
-  .claim { font-size:15px; line-height:1.55; margin:10px 0 8px; }.meta { margin:0; font-size:12px; opacity:.55; overflow-wrap:anywhere; }.reason { font-size:13px; opacity:.76; }
-  .actions { display:flex; justify-content:flex-end; gap:7px; margin-top:12px; }.diff { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }.diff > div { padding:10px; border-radius:8px; background:color-mix(in srgb, CanvasText 5%, Canvas); }.diff small { opacity:.55; }.diff p { margin:5px 0 0; line-height:1.5; }
-  .empty,.loading { padding:48px; text-align:center; opacity:.5; }.improve pre { white-space:pre-wrap; padding:12px; border-radius:8px; background:color-mix(in srgb, CanvasText 6%, Canvas); }
-  @media (max-width: 760px) { main { padding:16px; }.diff { grid-template-columns:1fr; }.toolbar { align-items:stretch; }.toolbar > * { flex:1; }.editor .row { grid-template-columns:1fr; } }
+  :global(:root){color-scheme:light dark;font:13px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;accent-color:#0a84ff}:global(body){margin:0;background:Canvas;color:CanvasText}:global(*){box-sizing:border-box}:global(button),:global(input),:global(select),:global(textarea){font:inherit;pointer-events:auto;-webkit-app-region:no-drag}:global(button){min-height:32px;border:1px solid color-mix(in srgb,CanvasText 14%,transparent);border-radius:8px;padding:0 12px;background:color-mix(in srgb,CanvasText 5%,Canvas);color:CanvasText;cursor:pointer}:global(button:hover:not(:disabled)){background:color-mix(in srgb,CanvasText 10%,Canvas)}:global(button:active:not(:disabled)){transform:translateY(1px)}:global(button:focus-visible),:global(input:focus-visible),:global(select:focus-visible),:global(textarea:focus-visible){outline:3px solid color-mix(in srgb,#0a84ff 32%,transparent);outline-offset:1px}:global(button:disabled){opacity:.42;cursor:default}:global(button.primary){min-height:34px;background:#0a84ff;border-color:#0a84ff;color:white;font-weight:600}:global(button.primary:hover:not(:disabled)){background:#0077ed}:global(button.danger){color:#ff453a}:global(input),:global(select),:global(textarea){width:100%;min-height:32px;padding:6px 9px;border:1px solid color-mix(in srgb,CanvasText 16%,transparent);border-radius:7px;background:Canvas;color:CanvasText}:global(textarea){resize:vertical}
+  main{max-width:1200px;margin:0 auto;padding:20px 24px 40px}.app-header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.app-header h1{margin:0;font-size:20px;line-height:1.25;letter-spacing:-.02em}.app-header p{max-width:680px;margin:4px 0 0;font-size:12px;color:color-mix(in srgb,CanvasText 58%,transparent)}.health{display:flex;align-items:center;gap:7px;white-space:nowrap;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:11px}.health>span{width:8px;height:8px;border-radius:50%;background:#ff9f0a}.health>span.ok{background:#34c759}.icon{width:32px;padding:0;font-size:17px}.banner{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:14px;padding:10px 12px;border:1px solid;border-radius:9px}.banner small{display:block;margin-top:2px}.danger-banner{border-color:color-mix(in srgb,#ff453a 45%,transparent);background:color-mix(in srgb,#ff453a 9%,Canvas)}.warning{border-color:color-mix(in srgb,#ff9f0a 45%,transparent);background:color-mix(in srgb,#ff9f0a 9%,Canvas)}.owner{display:grid;grid-template-columns:auto 1fr 1fr auto}
+  .segments{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;max-width:480px;margin:18px auto 16px;padding:3px;border-radius:9px;background:color-mix(in srgb,CanvasText 8%,Canvas)}.segments button{min-height:34px;border:0;background:transparent;color:color-mix(in srgb,CanvasText 65%,transparent);font-weight:600}.segments button.active{background:Canvas;color:CanvasText;box-shadow:0 1px 4px rgba(0,0,0,.16)}.count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:color-mix(in srgb,CanvasText 10%,Canvas);font-size:10px}.toolbar{display:grid;grid-template-columns:minmax(200px,1fr) 130px 110px 110px auto auto;align-items:center;gap:8px;margin-bottom:12px}.toolbar label{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px}.toolbar label input{width:auto;min-height:auto}
+  .split{display:grid;grid-template-columns:340px minmax(0,1fr);min-height:480px;border:1px solid color-mix(in srgb,CanvasText 13%,transparent);border-radius:11px;overflow:hidden;background:color-mix(in srgb,CanvasText 1.5%,Canvas)}.master{max-height:calc(100vh - 220px);min-height:480px;overflow:auto;border-right:1px solid color-mix(in srgb,CanvasText 12%,transparent);background:color-mix(in srgb,CanvasText 3%,Canvas)}.master>button{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:start;gap:9px;width:100%;min-height:64px;padding:10px 11px;border:0;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:0;background:transparent;text-align:left}.master.proposals>button{grid-template-columns:minmax(0,1fr) auto}.master>button.selected{background:#0a84ff;color:#fff}.master>button.selected small,.master>button.selected em{color:rgba(255,255,255,.78)}.master strong{display:-webkit-box;overflow:hidden;line-clamp:2;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:13px;line-height:1.35}.master small{display:block;margin-top:4px;color:color-mix(in srgb,CanvasText 53%,transparent);font-size:11px}.master em{font-style:normal;color:color-mix(in srgb,CanvasText 54%,transparent);font-size:10px}.master em.critical{color:#ff453a;font-weight:700}.master .polarity{width:7px;height:7px;margin-top:4px;border-radius:50%;background:#8e8e93}.master .polarity.positive{background:#34c759}.master .polarity.negative{background:#ff453a}.master>button.sensitive{box-shadow:inset 3px 0 #ff9f0a}
+  .detail{min-width:0;padding:22px 24px}.detail h2{margin:12px 0 16px;font-size:17px;line-height:1.45;letter-spacing:-.01em}.eyebrow{display:flex;flex-wrap:wrap;gap:6px}.badge{padding:3px 7px;border-radius:6px;background:color-mix(in srgb,CanvasText 7%,Canvas);font-size:10px;font-weight:650;text-transform:uppercase}.badge.positive{background:color-mix(in srgb,#34c759 18%,Canvas);color:#168333}.badge.negative{background:color-mix(in srgb,#ff453a 16%,Canvas);color:#d62d26}.badge.priority-critical{background:#ff453a;color:white}.badge.priority-high{background:#ff9f0a;color:#301b00}.notice{margin:0 0 14px;padding:9px 10px;border-radius:8px;background:color-mix(in srgb,#ff9f0a 12%,Canvas);color:#a85c00;font-size:12px}.guidance{margin-bottom:18px;padding:13px 14px;border-left:3px solid #0a84ff;border-radius:0 8px 8px 0;background:color-mix(in srgb,#0a84ff 7%,Canvas)}.guidance small{font-size:10px;font-weight:700;color:#0a84ff}.guidance p{margin:4px 0 10px;font-size:14px}.guidance p:last-child{margin-bottom:0}.guidance .avoid{color:#d62d26;font-weight:600}.detail dl{display:grid;grid-template-columns:1fr 1fr;gap:1px;margin:0;background:color-mix(in srgb,CanvasText 8%,transparent);border:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:8px;overflow:hidden}.detail dl>div{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;background:Canvas}.detail dl>div.wide{grid-column:1/-1}.detail dt{font-size:11px;color:color-mix(in srgb,CanvasText 54%,transparent)}.detail dd{margin:0;text-align:right;font-size:11px;overflow-wrap:anywhere}.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+  .editor{margin-bottom:12px;padding:16px;border:1px solid #0a84ff;border-radius:10px;background:color-mix(in srgb,#0a84ff 3%,Canvas)}.editor>label,.form-grid label{display:grid;gap:4px;margin-top:9px;color:color-mix(in srgb,CanvasText 66%,transparent);font-size:11px}.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.required{color:#d62d26!important}.validation{margin:8px 0 0;color:#d62d26;font-size:12px}.diff{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:12px 0 16px}.diff>div{min-height:92px;padding:11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas)}.diff small{font-size:10px;color:color-mix(in srgb,CanvasText 54%,transparent)}.diff p{margin:5px 0 0;white-space:pre-wrap}.improve{display:grid;grid-template-columns:1fr auto;gap:12px}.improve h2{margin:0;font-size:15px}.improve p{margin:4px 0;color:color-mix(in srgb,CanvasText 58%,transparent)}.improve pre{grid-column:1/-1;margin:0;padding:11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas);white-space:pre-wrap;font-size:11px}.empty{padding:44px 18px;text-align:center;color:color-mix(in srgb,CanvasText 45%,transparent)}.scrim{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.28);backdrop-filter:blur(8px)}.simple-sheet{width:min(440px,100%);padding:22px;border:1px solid color-mix(in srgb,CanvasText 14%,transparent);border-radius:14px;background:Canvas;box-shadow:0 24px 70px rgba(0,0,0,.34)}.simple-sheet h2{margin:0;font-size:17px}.simple-sheet p{color:color-mix(in srgb,CanvasText 62%,transparent)}
+  @media(max-width:820px){main{padding:16px}.toolbar{grid-template-columns:1fr 1fr}.toolbar .search{grid-column:1/-1}.split{grid-template-columns:280px minmax(0,1fr)}.form-grid{grid-template-columns:1fr 1fr}.owner{grid-template-columns:1fr}.detail{padding:18px}}@media(max-width:650px){.split{display:block}.master{min-height:180px;max-height:280px;border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 12%,transparent)}.form-grid,.diff{grid-template-columns:1fr}.app-header{display:block}.health{margin-top:8px}.detail dl{grid-template-columns:1fr}}
 </style>

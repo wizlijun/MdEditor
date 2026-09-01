@@ -1,17 +1,25 @@
 import type { MemoryEntry, Proposal, Scope } from './types'
 
-export function filterEntries(entries: MemoryEntry[], query: string, scope: 'all' | Scope, status: string, highOnly: boolean): MemoryEntry[] {
+const priorityRank = { critical: 0, high: 1, normal: 2, low: 3 } as const
+const polarityRank = { negative: 0, positive: 1, neutral: 2 } as const
+
+export function filterEntries(entries: MemoryEntry[], query: string, scope: 'all' | Scope, status: string, highOnly: boolean, polarity: 'all' | MemoryEntry['polarity'] = 'all'): MemoryEntry[] {
   const q = query.trim().toLocaleLowerCase()
   return entries.filter((entry) =>
     (scope === 'all' || entry.scope === scope)
     && (status === 'all' || entry.status === status)
-    && (!highOnly || entry.priority === 'high')
-    && (!q || `${entry.text} ${entry.section} ${entry.source ?? ''}`.toLocaleLowerCase().includes(q)),
-  )
+    && (!highOnly || entry.priority === 'high' || entry.priority === 'critical')
+    && (polarity === 'all' || entry.polarity === polarity)
+    && (!q || `${entry.text} ${entry.section} ${entry.source ?? ''} ${entry.polarity} ${entry.epistemic_status}`.toLocaleLowerCase().includes(q)),
+  ).sort((a, b) => priorityRank[a.priority] - priorityRank[b.priority]
+    || polarityRank[a.polarity] - polarityRank[b.polarity]
+    || a.text.localeCompare(b.text))
 }
 
 export function pendingProposals(proposals: Proposal[]): Proposal[] {
-  return proposals.filter((proposal) => proposal.decision === 'pending')
+  return proposals.filter((proposal) => proposal.decision === 'pending').sort((a, b) =>
+    Number(b.proposal.action_sensitive) - Number(a.proposal.action_sensitive)
+    || a.created.localeCompare(b.created))
 }
 
 export function describeDelta(proposal: Proposal, entries: MemoryEntry[]): { before: string; after: string } {
@@ -23,6 +31,14 @@ export function describeDelta(proposal: Proposal, entries: MemoryEntry[]): { bef
     after: `${proposal.proposal.suggested_priority ?? 'normal'}: ${target?.text ?? ''}`,
   }
   return { before: target?.text ?? '—', after: proposal.text }
+}
+
+export function usageRule(entry: MemoryEntry): string {
+  if (entry.status === 'pending') return '尚未确认：先核验来源，不能作为确定事实。'
+  if (entry.status !== 'active') return '历史条目：不要作为当前指令或事实使用。'
+  if (entry.polarity === 'negative') return entry.avoid_error || '禁止重复此错误。'
+  if (entry.polarity === 'positive') return entry.agent_guidance || '在相关情境优先遵循。'
+  return entry.agent_guidance || '仅作为有来源的上下文使用。'
 }
 
 export function exactDecisionPrompt(proposal: Proposal, entries: MemoryEntry[], heading: string): string {

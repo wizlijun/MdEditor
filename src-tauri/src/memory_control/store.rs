@@ -143,6 +143,8 @@ fn integrity(root: &Path, user: &str, memory: &str) -> Result<Integrity, String>
     {
         errors.push("MEMORY.md projection drift".into());
     }
+    errors.extend(document::classification_errors(user));
+    errors.extend(document::classification_errors(memory));
     Ok(Integrity {
         managed: true,
         drift: !errors.is_empty(),
@@ -367,6 +369,43 @@ fn validate_propose(input: &ProposeInput) -> Result<(), String> {
     if matches!(input.operation, Operation::SetPriority) && input.priority.is_none() {
         return Err("memory: priority is required".into());
     }
+    if input.scope != Scope::UserOwner
+        && matches!(
+            input.operation,
+            Operation::Create | Operation::Replace | Operation::Merge
+        )
+    {
+        let polarity = input
+            .polarity
+            .ok_or("memory: polarity is required for create/replace/merge")?;
+        let epistemic = input
+            .epistemic_status
+            .ok_or("memory: epistemic_status is required for create/replace/merge")?;
+        let certainty = input
+            .certainty
+            .ok_or("memory: certainty is required for create/replace/merge")?;
+        if input
+            .agent_guidance
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
+            return Err("memory: agent_guidance is required for create/replace/merge".into());
+        }
+        let needs_avoid = polarity == Polarity::Negative
+            || matches!(
+                epistemic,
+                EpistemicStatus::Inferred | EpistemicStatus::Contested
+            )
+            || matches!(certainty, Certainty::Low | Certainty::Unknown);
+        if needs_avoid && input.avoid_error.as_deref().unwrap_or("").trim().is_empty() {
+            return Err("memory: avoid_error is required for negative, inferred, contested, low or unknown entries".into());
+        }
+        if epistemic == EpistemicStatus::Inferred && certainty == Certainty::High {
+            return Err("memory: inferred entries cannot have high certainty".into());
+        }
+    }
     if input.operation == Operation::Merge {
         let merge_sources = parse_merge_sources(&input.merge_from)?;
         if merge_sources.is_empty() {
@@ -425,6 +464,12 @@ pub fn propose(root: &Path, input: ProposeInput) -> Result<Proposal, String> {
             && existing.frontmatter.proposal.operation == input.operation
             && existing.frontmatter.proposal.target_id == input.target_id
             && existing.text.trim() == input.text.trim()
+            && existing.frontmatter.proposal.suggested_priority == input.priority
+            && existing.frontmatter.proposal.suggested_polarity == input.polarity
+            && existing.frontmatter.proposal.suggested_epistemic_status == input.epistemic_status
+            && existing.frontmatter.proposal.suggested_certainty == input.certainty
+            && existing.frontmatter.proposal.suggested_agent_guidance == input.agent_guidance
+            && existing.frontmatter.proposal.suggested_avoid_error == input.avoid_error
             && existing
                 .frontmatter
                 .sources
@@ -467,7 +512,9 @@ pub fn propose(root: &Path, input: ProposeInput) -> Result<Proposal, String> {
     }
     let id = Uuid::new_v4().to_string();
     let created = now();
-    let action_sensitive = input.scope == Scope::UserOwner;
+    let action_sensitive = input.scope == Scope::UserOwner
+        || input.priority == Some(Priority::Critical)
+        || input.polarity == Some(Polarity::Negative);
     let fallback_title = format!(
         "{:?} {}",
         input.operation,
@@ -491,6 +538,11 @@ pub fn propose(root: &Path, input: ProposeInput) -> Result<Proposal, String> {
             base_revision: input.base_revision,
             section: input.section,
             suggested_priority: input.priority,
+            suggested_polarity: input.polarity,
+            suggested_epistemic_status: input.epistemic_status,
+            suggested_certainty: input.certainty,
+            suggested_agent_guidance: input.agent_guidance,
+            suggested_avoid_error: input.avoid_error,
             dedupe_key: input.dedupe_key,
             action_sensitive,
             merge_from: input.merge_from,
@@ -622,6 +674,27 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
             .suggested_priority
             .or_else(|| target.map(|block| block.entry.priority))
             .unwrap_or_default();
+        let polarity = spec
+            .suggested_polarity
+            .or_else(|| target.map(|block| block.entry.polarity))
+            .unwrap_or_default();
+        let epistemic_status = spec
+            .suggested_epistemic_status
+            .or_else(|| target.map(|block| block.entry.epistemic_status))
+            .unwrap_or_default();
+        let certainty = spec
+            .suggested_certainty
+            .or_else(|| target.map(|block| block.entry.certainty))
+            .unwrap_or_default();
+        let agent_guidance = spec
+            .suggested_agent_guidance
+            .as_deref()
+            .or_else(|| target.and_then(|block| block.entry.agent_guidance.as_deref()))
+            .unwrap_or("Verify the source and ask the owner before relying on this entry.");
+        let avoid_error = spec
+            .suggested_avoid_error
+            .as_deref()
+            .or_else(|| target.and_then(|block| block.entry.avoid_error.as_deref()));
         let source = proposal
             .frontmatter
             .sources
@@ -651,6 +724,11 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                         &proposal.text,
                         next_revision,
                         priority,
+                        polarity,
+                        epistemic_status,
+                        certainty,
+                        agent_guidance,
+                        avoid_error,
                         &spec.id,
                         &input.actor,
                         &decided_at,
@@ -666,6 +744,11 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                             revision: next_revision,
                             status: "active",
                             priority,
+                            polarity,
+                            epistemic_status,
+                            certainty,
+                            agent_guidance,
+                            avoid_error,
                             proposal: &spec.id,
                             approved_by: &input.actor,
                             approved_at: &decided_at,
@@ -687,6 +770,11 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                             revision: next_revision,
                             status: "revoked",
                             priority,
+                            polarity,
+                            epistemic_status,
+                            certainty,
+                            agent_guidance,
+                            avoid_error,
                             proposal: &spec.id,
                             approved_by: &input.actor,
                             approved_at: &decided_at,
@@ -708,6 +796,11 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                             revision: next_revision,
                             status: "active",
                             priority,
+                            polarity,
+                            epistemic_status,
+                            certainty,
+                            agent_guidance,
+                            avoid_error,
                             proposal: &spec.id,
                             approved_by: &input.actor,
                             approved_at: &decided_at,
@@ -737,6 +830,15 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                         revision: merged.entry.revision + 1,
                         status: "revoked",
                         priority: merged.entry.priority,
+                        polarity: merged.entry.polarity,
+                        epistemic_status: merged.entry.epistemic_status,
+                        certainty: merged.entry.certainty,
+                        agent_guidance: merged
+                            .entry
+                            .agent_guidance
+                            .as_deref()
+                            .unwrap_or("Do not rely on this revoked merge source."),
+                        avoid_error: merged.entry.avoid_error.as_deref(),
                         proposal: &spec.id,
                         approved_by: &input.actor,
                         approved_at: &decided_at,
@@ -754,6 +856,17 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                 revision: 0,
                 status: "rejected",
                 priority: target.map(|block| block.entry.priority).unwrap_or_default(),
+                polarity: target.map(|block| block.entry.polarity).unwrap_or_default(),
+                epistemic_status: target
+                    .map(|block| block.entry.epistemic_status)
+                    .unwrap_or_default(),
+                certainty: target
+                    .map(|block| block.entry.certainty)
+                    .unwrap_or_default(),
+                agent_guidance: target
+                    .and_then(|block| block.entry.agent_guidance.as_deref())
+                    .unwrap_or("Do not rely on this rejected candidate."),
+                avoid_error: target.and_then(|block| block.entry.avoid_error.as_deref()),
                 proposal: &spec.id,
                 approved_by: &input.actor,
                 approved_at: &decided_at,
@@ -762,6 +875,11 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
         )?;
     }
 
+    // Keep the epistemic contract adjacent to the claim for search snippets and
+    // direct readers, regardless of the property's position in an older entry.
+    if next != original && spec.scope != Scope::UserOwner {
+        next = document::upgrade_classification_defaults(&next);
+    }
     let current_state = state(root)?.unwrap_or_default();
     let projection_revision = current_state.revision + 1;
     next = document::stamp_managed(&next, projection_revision)?;
@@ -838,6 +956,31 @@ pub fn suggest(root: &Path) -> Result<serde_json::Value, String> {
         if entry.text.chars().count() > 500 {
             suggestions.push(json!({"kind":"too-long", "entry_id":entry.id, "characters":entry.text.chars().count()}));
         }
+        if !entry.classification_complete {
+            suggestions.push(json!({
+                "kind":"missing-classification",
+                "entry_id":entry.id,
+                "document":entry.document,
+                "safe_defaults": {
+                    "polarity":"neutral",
+                    "epistemic_status":"unknown",
+                    "certainty":"unknown"
+                }
+            }));
+        }
+        if entry.epistemic_status == EpistemicStatus::Inferred && entry.certainty == Certainty::High
+        {
+            suggestions.push(json!({"kind":"inferred-high", "entry_id":entry.id}));
+        }
+        let needs_avoid = entry.polarity == Polarity::Negative
+            || matches!(
+                entry.epistemic_status,
+                EpistemicStatus::Inferred | EpistemicStatus::Contested
+            )
+            || matches!(entry.certainty, Certainty::Low | Certainty::Unknown);
+        if needs_avoid && entry.avoid_error.as_deref().unwrap_or("").trim().is_empty() {
+            suggestions.push(json!({"kind":"missing-avoid-error", "entry_id":entry.id}));
+        }
     }
     for i in 0..snapshot.entries.len() {
         for j in i + 1..snapshot.entries.len() {
@@ -862,10 +1005,14 @@ pub fn migrate(root: &Path) -> Result<serde_json::Value, String> {
                 current_integrity.errors.join("; ")
             ));
         }
-        let next_user = document::ensure_control_notice(&user);
-        let next_memory = document::ensure_control_notice(&memory);
+        let next_user =
+            document::upgrade_classification_defaults(&document::ensure_control_notice(&user));
+        let next_memory =
+            document::upgrade_classification_defaults(&document::ensure_control_notice(&memory));
         if next_user == user && next_memory == memory {
-            return Ok(json!({"ok":true,"migrated":0,"already_managed":true,"upgraded":false}));
+            return Ok(
+                json!({"ok":true,"migrated":0,"already_managed":true,"upgraded":false,"schema":"v2"}),
+            );
         }
         let revision = current_state.revision + 1;
         let next_user = document::stamp_managed(&next_user, revision)?;
@@ -881,7 +1028,9 @@ pub fn migrate(root: &Path) -> Result<serde_json::Value, String> {
                 memory_hash: document::projection_hash(&next_memory),
             },
         )?;
-        return Ok(json!({"ok":true,"migrated":0,"already_managed":true,"upgraded":true}));
+        return Ok(
+            json!({"ok":true,"migrated":0,"already_managed":true,"upgraded":true,"schema":"v2"}),
+        );
     }
     let (mut user, mut memory) = document_texts(root)?;
     let mut created = 0usize;
@@ -907,6 +1056,11 @@ pub fn migrate(root: &Path) -> Result<serde_json::Value, String> {
                     base_revision: Some(0),
                     section: Some("Owner".into()),
                     suggested_priority: Some(Priority::High),
+                    suggested_polarity: None,
+                    suggested_epistemic_status: None,
+                    suggested_certainty: None,
+                    suggested_agent_guidance: None,
+                    suggested_avoid_error: None,
                     dedupe_key: "memory-migrate/v1/USER.md/owner".into(),
                     action_sensitive: true,
                     merge_from: Vec::new(),
@@ -967,6 +1121,11 @@ pub fn migrate(root: &Path) -> Result<serde_json::Value, String> {
                     base_revision: Some(0),
                     section: Some(block.entry.section.clone()),
                     suggested_priority: Some(block.entry.priority),
+                    suggested_polarity: None,
+                    suggested_epistemic_status: None,
+                    suggested_certainty: None,
+                    suggested_agent_guidance: None,
+                    suggested_avoid_error: None,
                     dedupe_key: format!(
                         "memory-migrate/v1/{name}/{}",
                         document::entry_hash(&block.entry)
@@ -998,8 +1157,14 @@ pub fn migrate(root: &Path) -> Result<serde_json::Value, String> {
             created += 1;
         }
     }
-    user = document::stamp_managed(&document::ensure_control_notice(&user), 1)?;
-    memory = document::stamp_managed(&document::ensure_control_notice(&memory), 1)?;
+    user = document::stamp_managed(
+        &document::upgrade_classification_defaults(&document::ensure_control_notice(&user)),
+        1,
+    )?;
+    memory = document::stamp_managed(
+        &document::upgrade_classification_defaults(&document::ensure_control_notice(&memory)),
+        1,
+    )?;
     atomic_write(&root.join("USER.md"), &user)?;
     atomic_write(&root.join("MEMORY.md"), &memory)?;
     write_state(
@@ -1011,7 +1176,7 @@ pub fn migrate(root: &Path) -> Result<serde_json::Value, String> {
             memory_hash: document::projection_hash(&memory),
         },
     )?;
-    Ok(json!({"ok":true,"migrated":created,"already_managed":false}))
+    Ok(json!({"ok":true,"migrated":created,"already_managed":false,"schema":"v2"}))
 }
 
 #[cfg(test)]
@@ -1069,6 +1234,11 @@ mod tests {
                 base_revision: None,
                 section: Some("Active memory".into()),
                 priority: Some(Priority::High),
+                polarity: Some(Polarity::Positive),
+                epistemic_status: Some(EpistemicStatus::SourceSupported),
+                certainty: Some(Certainty::High),
+                agent_guidance: Some("Use this durable fact when relevant.".into()),
+                avoid_error: None,
                 merge_from: vec![],
             },
         )
@@ -1123,6 +1293,11 @@ mod tests {
                 base_revision: None,
                 section: Some("Active memory".into()),
                 priority: None,
+                polarity: Some(Polarity::Neutral),
+                epistemic_status: Some(EpistemicStatus::SourceSupported),
+                certainty: Some(Certainty::Medium),
+                agent_guidance: Some("Use only in the source context.".into()),
+                avoid_error: None,
                 merge_from: vec![],
             },
         )
@@ -1172,6 +1347,11 @@ mod tests {
                 base_revision: None,
                 section: Some("Owner".into()),
                 priority: Some(Priority::High),
+                polarity: None,
+                epistemic_status: None,
+                certainty: None,
+                agent_guidance: None,
+                avoid_error: None,
                 merge_from: vec![],
             },
         )
@@ -1224,6 +1404,11 @@ mod tests {
                 base_revision: None,
                 section: None,
                 priority: None,
+                polarity: Some(Polarity::Neutral),
+                epistemic_status: Some(EpistemicStatus::Unknown),
+                certainty: Some(Certainty::Unknown),
+                agent_guidance: Some("Verify before use.".into()),
+                avoid_error: Some("Do not treat as confirmed.".into()),
                 merge_from: vec![],
             },
         )

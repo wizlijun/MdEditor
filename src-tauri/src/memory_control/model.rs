@@ -32,8 +32,55 @@ pub enum Operation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
-    Normal,
+    Critical,
     High,
+    Normal,
+    Low,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Polarity {
+    Positive,
+    Negative,
+    Neutral,
+}
+
+impl Default for Polarity {
+    fn default() -> Self {
+        Self::Neutral
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EpistemicStatus {
+    OwnerStated,
+    SourceSupported,
+    Inferred,
+    Contested,
+    Unknown,
+}
+
+impl Default for EpistemicStatus {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Certainty {
+    High,
+    Medium,
+    Low,
+    Unknown,
+}
+
+impl Default for Certainty {
+    fn default() -> Self {
+        Self::Unknown
+    }
 }
 
 impl Default for Priority {
@@ -56,6 +103,16 @@ pub struct ProposalSpec {
     pub section: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested_priority: Option<Priority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_polarity: Option<Polarity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_epistemic_status: Option<EpistemicStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_certainty: Option<Certainty>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_agent_guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_avoid_error: Option<String>,
     pub dedupe_key: String,
     #[serde(default)]
     pub action_sensitive: bool,
@@ -151,6 +208,18 @@ pub struct MemoryEntry {
     pub revision: u64,
     pub status: String,
     pub priority: Priority,
+    #[serde(default)]
+    pub polarity: Polarity,
+    #[serde(default)]
+    pub epistemic_status: EpistemicStatus,
+    #[serde(default)]
+    pub certainty: Certainty,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoid_error: Option<String>,
+    #[serde(default)]
+    pub classification_complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -198,6 +267,16 @@ pub struct ProposeInput {
     pub section: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polarity: Option<Polarity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epistemic_status: Option<EpistemicStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certainty: Option<Certainty>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoid_error: Option<String>,
     #[serde(default)]
     pub merge_from: Vec<String>,
 }

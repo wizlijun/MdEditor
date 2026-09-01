@@ -444,15 +444,25 @@ PROPOSE FLAGS:
   --target <entry-id>         Required for non-create operations
   --base-revision <n>         Required for non-create operations
   --section <heading>         Section for a new entry
-  --priority <normal|high>    Suggested display/retrieval priority
+  --priority <critical|high|normal|low>
+                              Attention level; never grants authority
+  --polarity <positive|negative|neutral>
+                              Follow, avoid, or contextual behavior direction
+  --epistemic-status <owner-stated|source-supported|inferred|contested|unknown>
+                              Evidence nature (inferred cannot be high certainty)
+  --certainty <high|medium|low|unknown>
+                              Current confidence, independent of human approval
+  --agent-guidance <text>     Required executable Agent usage instruction
+  --avoid-error <text>        Required for negative/inferred/contested/low/unknown
   --reason <text>             Why the change improves memory
   --merge-from <id@rev,...>   Exact active revisions revoked by an approved merge
   --proposal-sha256 <sha256>  Exact candidate hash displayed before a decision
 
 NOTES:
   Agent proposals never modify USER.md or MEMORY.md. Approval binds the exact
-  immutable proposal hash to the configured human owner. Direct external edits
-  trigger projection drift and block writes until repaired.
+  immutable proposal hash to the configured human owner. Pending and unknown
+  entries are not confirmed facts. Approval does not upgrade certainty.
+  Direct external edits trigger projection drift and block writes until repaired.
 
 FLAGS:
   --vault <path>              Vault root (default: configured Vault)

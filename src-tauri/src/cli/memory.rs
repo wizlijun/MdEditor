@@ -88,9 +88,44 @@ fn parse_operation(value: &str) -> Result<Operation, String> {
 fn parse_priority(value: Option<&String>) -> Result<Option<Priority>, String> {
     match value.map(String::as_str) {
         None => Ok(None),
+        Some("critical") => Ok(Some(Priority::Critical)),
         Some("normal") => Ok(Some(Priority::Normal)),
         Some("high") => Ok(Some(Priority::High)),
+        Some("low") => Ok(Some(Priority::Low)),
         Some(other) => Err(format!("invalid priority: {other}")),
+    }
+}
+
+fn parse_polarity(value: Option<&String>) -> Result<Option<Polarity>, String> {
+    match value.map(String::as_str) {
+        None => Ok(None),
+        Some("positive") => Ok(Some(Polarity::Positive)),
+        Some("negative") => Ok(Some(Polarity::Negative)),
+        Some("neutral") => Ok(Some(Polarity::Neutral)),
+        Some(other) => Err(format!("invalid polarity: {other}")),
+    }
+}
+
+fn parse_epistemic_status(value: Option<&String>) -> Result<Option<EpistemicStatus>, String> {
+    match value.map(String::as_str) {
+        None => Ok(None),
+        Some("owner-stated") => Ok(Some(EpistemicStatus::OwnerStated)),
+        Some("source-supported") => Ok(Some(EpistemicStatus::SourceSupported)),
+        Some("inferred") => Ok(Some(EpistemicStatus::Inferred)),
+        Some("contested") => Ok(Some(EpistemicStatus::Contested)),
+        Some("unknown") => Ok(Some(EpistemicStatus::Unknown)),
+        Some(other) => Err(format!("invalid epistemic-status: {other}")),
+    }
+}
+
+fn parse_certainty(value: Option<&String>) -> Result<Option<Certainty>, String> {
+    match value.map(String::as_str) {
+        None => Ok(None),
+        Some("high") => Ok(Some(Certainty::High)),
+        Some("medium") => Ok(Some(Certainty::Medium)),
+        Some("low") => Ok(Some(Certainty::Low)),
+        Some("unknown") => Ok(Some(Certainty::Unknown)),
+        Some(other) => Err(format!("invalid certainty: {other}")),
     }
 }
 
@@ -119,6 +154,7 @@ fn list(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
                 "active"
             });
     let priority = parse_priority(args.flags.get("priority"))?;
+    let polarity = parse_polarity(args.flags.get("polarity"))?;
     let entries = snapshot
         .entries
         .into_iter()
@@ -126,6 +162,7 @@ fn list(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
             scope.map(|s| entry.scope == s).unwrap_or(true)
                 && (status == "all" || entry.status == status)
                 && priority.map(|p| entry.priority == p).unwrap_or(true)
+                && polarity.map(|p| entry.polarity == p).unwrap_or(true)
         })
         .collect::<Vec<_>>();
     let proposals = snapshot
@@ -142,8 +179,14 @@ fn list(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
     }
     for entry in entries_from_value(&value) {
         text.push_str(&format!(
-            "{}  [{} / {:?}]  {}\n",
-            entry.id, entry.status, entry.priority, entry.text
+            "{}  [{} / {:?} / {:?} / {:?} / {:?}]  {}\n",
+            entry.id,
+            entry.status,
+            entry.priority,
+            entry.polarity,
+            entry.epistemic_status,
+            entry.certainty,
+            entry.text
         ));
     }
     let pending = value["proposals"].as_array().map(Vec::len).unwrap_or(0);
@@ -174,9 +217,15 @@ fn show(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
             args,
             value,
             format!(
-                "{}\nstatus: {}\nrevision: {}\nsource: {}\n\n{}",
+                "{}\nstatus: {}\npriority: {:?}\npolarity: {:?}\nepistemic-status: {:?}\ncertainty: {:?}\nagent-guidance: {}\navoid-error: {}\nrevision: {}\nsource: {}\n\n{}",
                 entry.id,
                 entry.status,
+                entry.priority,
+                entry.polarity,
+                entry.epistemic_status,
+                entry.certainty,
+                entry.agent_guidance.as_deref().unwrap_or("-"),
+                entry.avoid_error.as_deref().unwrap_or("-"),
                 entry.revision,
                 entry.source.as_deref().unwrap_or("-"),
                 entry.text
@@ -292,6 +341,11 @@ fn propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
             base_revision,
             section: args.flags.get("section").cloned(),
             priority: parse_priority(args.flags.get("priority"))?,
+            polarity: parse_polarity(args.flags.get("polarity"))?,
+            epistemic_status: parse_epistemic_status(args.flags.get("epistemic-status"))?,
+            certainty: parse_certainty(args.flags.get("certainty"))?,
+            agent_guidance: args.flags.get("agent-guidance").cloned(),
+            avoid_error: args.flags.get("avoid-error").cloned(),
             merge_from: args
                 .flags
                 .get("merge-from")

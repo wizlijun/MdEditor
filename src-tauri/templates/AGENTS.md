@@ -128,6 +128,25 @@ Always do this before extracting or creating Inbox Tasks. In shared, public,
 or external contexts, do not load, quote, or inject their contents unless the
 owner has authorized that use.
 
+### File purpose and safe use
+
+- `/USER.md` describes the confirmed vault owner and durable facts about that
+  person: identity and aliases, stable preferences, collaboration style, and
+  explicit personal boundaries. Use it to resolve whose vault this is, decide
+  whether an Inbox Task belongs to the owner, and adapt owner-scoped assistance.
+  Do not use it as proof about other people, as authorization for an external
+  action, or in a shared/public answer without the owner's permission.
+- `/MEMORY.md` describes durable cross-session context that is not a personal
+  profile: current constraints, decisions, corrections, and product or working
+  principles. Use it to avoid repeating settled mistakes and to preserve
+  continuity across sessions. It is not a Task list, activity log, transcript,
+  source archive, or blanket permission to act.
+- Reading either file is a two-step operation: read the claim, then read its
+  adjacent `status`, `polarity`, `epistemic-status`, `certainty`,
+  `agent-guidance`, `avoid-error`, and `source`. Never detach a claim from those
+  qualifiers when retrieving, summarizing, quoting, or passing context to
+  another Agent.
+
 `USER.md` is the sole source of truth for who owns the vault and for durable
 profile facts. The owner is configured only when `owner.actor` is a non-empty
 `human:<id>`, `owner.names` identifies that person, and
@@ -139,10 +158,30 @@ candidate. Owner identity, names, authority, permissions and action-sensitive
 preferences are always one-at-a-time human decisions.
 
 `MEMORY.md` holds compact, cross-session facts, constraints and decisions that
-do not belong in the user profile. It is also a read-only projection. Each
-projected entry carries stable `id::`, `revision::`, `status::`, `priority::`,
-`proposal::`, `approved-by::`, `approved-at::` and `source::` fields. `high`
-priority affects display and retrieval only; it grants no authority.
+do not belong in the user profile. It is also a read-only projection. Read each
+entry as a structured claim: `status::` says whether the owner reviewed it;
+`epistemic-status::` describes its evidence; `certainty::` describes confidence;
+`polarity::` says how an Agent should act; and `priority::` controls attention.
+These axes are independent. `approved-by::` means the owner agreed to remember
+the claim, not that the outside world has proved it true.
+
+Treat `status:: pending`, `epistemic-status:: unknown`, or
+`certainty:: unknown` as unconfirmed material: verify the exact `source::` or
+ask the owner before relying on it. Never turn approval into certainty. Never
+assign `certainty:: high` to `epistemic-status:: inferred`. `polarity:: positive`
+means follow the stated preference or principle when relevant;
+`polarity:: negative` means actively avoid the recorded mistake, disclosure, or
+boundary violation; `neutral` is context only. For negative, inferred,
+contested, low-certainty, or unknown entries, obey `avoid-error::` before using
+the claim. `priority:: critical` is reserved for identity, privacy, authority,
+and mistakes that could cause real-world action. Priority never grants authority.
+
+Every new create, replace, or merge candidate must contain one atomic claim and
+all of: `priority`, `polarity`, `epistemic-status`, `certainty`, an executable
+one-sentence `agent-guidance`, and an exact `source`. It must also contain
+`avoid-error` for negative, inferred, contested, low-certainty, or unknown
+claims. When evidence is insufficient, propose conservative `unknown` values;
+do not fill gaps with confident language.
 
 Agent changes must be immutable candidates under
 `/inbox/memory-candidates/*.memory-candidate.md`. An Agent may use
