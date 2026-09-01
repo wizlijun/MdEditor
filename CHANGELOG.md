@@ -7,6 +7,18 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Next now manages Tasks as well as Ideas.** Each Task is stored as its own Markdown file under `inbox/tasks`, can be created directly as the current action, and keeps its content separate from the human-controlled lifecycle ledger. Vault instructions teach agents to add only concrete work owned by the configured Vault owner, with project, source and deduplication metadata instead of silently committing or completing work on the user's behalf.
+- **Ideas and Tasks now carry practical action context.** Priority, due date and GTD context are visible and editable on every card; defaults live in Next's own settings page. The In Progress lane shows a persistent, configurable WIP warning based on the complete lane rather than the current search or project filter.
+- **Vaults can share a durable user model and long-term memory with agents.** New Vault templates include `USER.md` for owner identity and stable profile facts, plus `MEMORY.md` for sourced cross-session facts and decisions. The new Memory plugin lists current entries, reviews exact before/after proposals and surfaces deterministic cleanup suggestions.
+- **Agents can propose controlled memory changes from the command line.** `notemd memory` supports inspection, suggestions, create/replace/merge/revoke/priority proposals, integrity checks and migration. Approval or rejection is bound to the exact proposal SHA-256 and an explicit human actor; a proposal alone never becomes confirmed memory.
+
+### Changed
+
+- **Next settings now stay inside the Next window.** WIP limits and new-card defaults no longer add a private Next tab to note.md's system settings, while existing saved values continue to work.
+- **Managed `USER.md` and `MEMORY.md` files are read-only projections.** Source and rich editors, manual and automatic saves, paste/drop, overwrite and history restore all refuse direct changes. Approved revisions are written atomically with immutable candidate and decision records; drift, stale revisions, changed proposal bytes and duplicate decisions fail closed.
+
 ## v6.901.4 — 2026-09-01
 
 ### Changed
