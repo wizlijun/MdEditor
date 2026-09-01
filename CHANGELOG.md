@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.901.7 — 2026-09-01
+
 ### Added
 
 - **Memory facts now have one-click review actions.** Confirm, deny, mark important, mark ignorable, or delete a fact without filling out the full metadata form. Pending facts reuse their exact original candidate, and every write still requires the in-window SHA-bound confirmation step.
