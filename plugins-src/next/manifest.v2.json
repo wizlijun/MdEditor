@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.next",
   "name": "Next",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "kind": "native",
   "engines": {
     "notemd": ">=6.829.2"
@@ -44,24 +44,24 @@
   ],
   "i18n": {
     "zh": {
-      "name": "Next",
+      "name": "下一步",
       "description": "让每个想法都有明确的下一步，或一个安心搁置的地方。",
       "menus": {
-        "open": "Next"
+        "open": "下一步"
       }
     },
     "ja": {
-      "name": "Next",
+      "name": "次の一歩",
       "description": "すべてのアイデアに次の一歩を与えるか、安心して休ませる場所を用意します。",
       "menus": {
-        "open": "Next"
+        "open": "次の一歩"
       }
     },
     "de": {
-      "name": "Next",
+      "name": "Nächster Schritt",
       "description": "Jeder Idee einen nächsten Schritt geben – oder einen guten Ort, an dem sie ruhen kann.",
       "menus": {
-        "open": "Next"
+        "open": "Nächster Schritt"
       }
     }
   }
