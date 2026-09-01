@@ -14,6 +14,9 @@
 
   let { tab }: { tab: Tab | null } = $props()
 
+  type OutlineEditorApi = { prepareForAgent: () => Promise<string | null> }
+  let outlineEditor = $state<OutlineEditorApi | null>(null)
+
   // Whether the current tab has an outline. Drives body state + button enablement.
   let applicable = $derived(tab != null && outlineAppliesTo(tab))
   // Vault-homed resolution, same as OutlineEditor's: a synced source's note lives
@@ -84,6 +87,10 @@
   // in-memory tree would be written back over the agent's work.
   const agentBusy = $derived(isAgentBusy())
 
+  async function prepareNoteForAgent(): Promise<string | null> {
+    return outlineEditor?.prepareForAgent() ?? null
+  }
+
   /**
    * After a run: re-read the note from disk (remounting OutlineEditor re-reads
    * it) and, when the tab has no unsaved edits of its own, the source document
@@ -151,11 +158,16 @@
          编辑器内部的交互入口。 -->
     <div class="editor-host" inert={agentBusy}>
       {#key `${tab!.id}:${resetTick}`}
-        <OutlineEditor mainTab={tab} />
+        <OutlineEditor bind:this={outlineEditor} mainTab={tab} />
       {/key}
     </div>
   {/if}
-  <AgentWorkspace sourcePath={tab?.filePath ?? null} notePath={companionPath} onfinished={refreshAfterAgent} />
+  <AgentWorkspace
+    sourcePath={tab?.filePath ?? null}
+    notePath={companionPath}
+    prepareNote={prepareNoteForAgent}
+    onfinished={refreshAfterAgent}
+  />
 </div>
 
 {#if menu.open}

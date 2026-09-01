@@ -19,12 +19,14 @@
   import type { AgentOption } from '../../lib/agent-picker/types'
   import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 
-  let { sourcePath, notePath, onfinished }:
+  let { sourcePath, notePath, prepareNote, onfinished }:
     {
       /** The document currently open in the main editor. */
       sourcePath: string | null
       /** The sidecar note this workspace acts on; null when the tab has none. */
       notePath: string | null
+      /** Flush the current note and return its actual on-disk path. */
+      prepareNote: () => Promise<string | null>
       /** Called after a run reaches a terminal state, to refresh the views. */
       onfinished: () => void | Promise<void>
     } = $props()
@@ -38,6 +40,7 @@
   const status = $derived(harnessStatuses[current])
 
   let contextCopied = $state(false)
+  let preparing = $state(false)
   let copiedTimer: ReturnType<typeof setTimeout> | null = null
 
   // A success label belongs to the paths that were actually copied. Switching
@@ -68,6 +71,19 @@
       }, 1400)
     } catch (e) {
       console.warn('[agent] copying context failed:', e)
+    }
+  }
+
+  async function runPreparedNote() {
+    if (preparing || isAgentBusy()) return
+    preparing = true
+    try {
+      const persistedPath = await prepareNote()
+      if (persistedPath) await startNoteRun(persistedPath, onfinished)
+    } catch (e) {
+      console.warn('[agent] persisting note before run failed:', e)
+    } finally {
+      preparing = false
     }
   }
 
@@ -189,9 +205,9 @@
              and spending tokens should not be one pixel apart. -->
         <button
           class="run"
-          disabled={!notePath || status?.ok === false}
+          disabled={!notePath || preparing || status?.ok === false}
           title={notePath ?? t('agent.noNote')}
-          onclick={() => notePath && void startNoteRun(notePath, onfinished)}
+          onclick={() => notePath && void runPreparedNote()}
         >
           {t('agent.answerQuestions')}
         </button>

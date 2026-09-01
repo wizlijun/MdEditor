@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 
 const writeText = vi.fn()
+const startNoteRun = vi.fn()
 
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText }))
 vi.mock('@tauri-apps/plugin-store', () => ({
@@ -22,7 +23,7 @@ vi.mock('../../lib/agent-workspace/store.svelte', () => ({
   refreshHarnesses: vi.fn(async () => {}),
   restoreProvider: vi.fn(),
   setProvider: vi.fn(),
-  startNoteRun: vi.fn(),
+  startNoteRun,
 }))
 
 async function settle() {
@@ -128,6 +129,58 @@ describe('AgentWorkspace Copy context', () => {
     })
 
     expect(document.body.querySelector<HTMLButtonElement>('.copy-context')!.disabled).toBe(true)
+    unmount(app)
+  })
+})
+
+describe('AgentWorkspace run preflight', () => {
+  it('waits for the note to be persisted and runs the agent with the actual path', async () => {
+    let finishPrepare: ((path: string | null) => void) | null = null
+    const prepareNote = vi.fn(() => new Promise<string | null>((resolve) => {
+      finishPrepare = resolve
+    }))
+    const onfinished = vi.fn()
+    const { default: AgentWorkspace } = await import('./AgentWorkspace.svelte')
+    const app = mount(AgentWorkspace as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: {
+        sourcePath: '/vault/source.md',
+        notePath: '/vault/source.note.md',
+        prepareNote,
+        onfinished,
+      },
+    })
+
+    document.body.querySelector<HTMLButtonElement>('.run')!.click()
+    await settle()
+
+    expect(prepareNote).toHaveBeenCalledOnce()
+    expect(startNoteRun).not.toHaveBeenCalled()
+
+    finishPrepare!('/vault/persisted/source.note.md')
+    await settle()
+
+    expect(startNoteRun).toHaveBeenCalledWith('/vault/persisted/source.note.md', onfinished)
+    unmount(app)
+  })
+
+  it('does not start the agent when persistence fails', async () => {
+    const prepareNote = vi.fn(async () => null)
+    const { default: AgentWorkspace } = await import('./AgentWorkspace.svelte')
+    const app = mount(AgentWorkspace as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: {
+        sourcePath: '/vault/source.md',
+        notePath: '/vault/source.note.md',
+        prepareNote,
+        onfinished: vi.fn(),
+      },
+    })
+
+    document.body.querySelector<HTMLButtonElement>('.run')!.click()
+    await settle()
+
+    expect(startNoteRun).not.toHaveBeenCalled()
     unmount(app)
   })
 })

@@ -144,30 +144,32 @@
     return home ? { notePath: home, justSynced: true } : null
   }
 
-  async function flushDisk() {
+  async function flushDisk(forceCreate = false): Promise<string | null> {
     if (diskTimer) { clearTimeout(diskTimer); diskTimer = null }
     // 冲突未解决前不写 —— 且**不消费** diskPending:原先先取后判,横幅挂着期间的
     // 每一次编辑都被序列化后直接丢弃,切换文档时随 detach() 一并蒸发。
-    if (outline.externalConflict) return
-    const text = diskPending
+    if (outline.externalConflict) return null
+    const text = diskPending ?? (forceCreate ? serializeDoc() : null)
     diskPending = null
-    if (text == null) return
+    if (text == null) return null
     try {
       const fs = await import('@tauri-apps/plugin-fs')
       // 空大纲不触发建家/同步(浏览/空树不得污染,也不得把源拷进 vault)
-      if (text.trim() === '') {
+      // Agent 按钮是明确的执行意图；forceCreate 可以把当前序列化结果落盘，
+      // 但普通浏览仍保持惰性，不会因为打开面板就产生空文件。
+      if (!forceCreate && text.trim() === '') {
         const existed0 = await fs.exists(notePath).catch(() => false)
-        if (!existed0) return
+        if (!existed0) return null
       }
       const home = await ensureNoteHome()
-      if (!home) return                                // 无 vault/用户取消 → 内存保留,不落盘
+      if (!home) return null                           // 无 vault/用户取消 → 内存保留,不落盘
       const target = home.notePath
       const existed = await fs.exists(target).catch(() => false)
-      if (text.trim() === '' && !existed) return
+      if (!forceCreate && text.trim() === '' && !existed) return null
       // Data-loss guard: 不用空/空白序列化覆盖一个本来有内容的落点
       if (!noteTextHasContent(text) && existed) {
         const existing = await fs.readTextFile(target).catch(() => '')
-        if (noteTextHasContent(existing)) return
+        if (noteTextHasContent(existing)) return null
       }
       const diskText = existed ? await fs.readTextFile(target).catch(() => null) : null
       const diskHash = diskText != null ? await sha256Hex(diskText) : null
@@ -175,8 +177,13 @@
       const decision = decideCompanionWrite({
         fileExists: diskText != null, diskHash, lastHash: noteDiskHash, ourHash,
       })
-      if (decision === 'conflict') { outline.externalConflict = { diskText: diskText ?? '' }; return }
-      if (decision === 'noop') { noteDiskHash = diskHash; void markCanonicalBaseline(); markSaved(); return }
+      if (decision === 'conflict') { outline.externalConflict = { diskText: diskText ?? '' }; return null }
+      if (decision === 'noop') {
+        noteDiskHash = diskHash
+        void markCanonicalBaseline()
+        markSaved()
+        return target
+      }
       await fs.writeTextFile(target, text)
       noteDiskHash = ourHash
       await markCanonicalBaseline()
@@ -185,8 +192,10 @@
       // noteDiskHash 保持 ourHash——它正是 vault target 的磁盘内容哈希,翻转后依然是有效基线
       // (挂载 effect 重挂载时也会从该路径读回同一 hash),不清 null 以免 refresh 窗口内误报冲突。
       if (home.justSynced) await refreshSotvault()
+      return target
     } catch (e) {
       console.warn('[outline] write companion failed:', e)
+      return null
     }
   }
   function persistToDisk(text: string) {
@@ -632,6 +641,31 @@
     } else {
       await flushDisk()
     }
+  }
+
+  /**
+   * Agent 只能读已落盘的伴生笔记。点击执行时跳过 500ms 防抖，
+   * 将当前树强制写入权威落点；首次 sync 时返回迁移后的实际路径。
+   */
+  export async function prepareForAgent(): Promise<string | null> {
+    if (outline.docPath !== notePath) return null
+    if (noteTab) {
+      const text = serializeDoc()
+      if (noteTab.currentContent !== text) setContent(noteTab.id, text)
+      try {
+        const [{ saveTab }, fs] = await Promise.all([
+          import('../../lib/tabs.svelte'),
+          import('@tauri-apps/plugin-fs'),
+        ])
+        await saveTab(noteTab.id)
+        return await fs.exists(noteTab.filePath).catch(() => false) ? noteTab.filePath : null
+      } catch (e) {
+        console.warn('[outline] save note tab before agent failed:', e)
+        return null
+      }
+    }
+    diskPending = serializeDoc()
+    return flushDisk(true)
   }
   /** 主文档当前文本(用于重建时的 auto 派生) */
   function currentMainContent(): string | null {
