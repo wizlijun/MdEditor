@@ -1,5 +1,5 @@
 export type Scope = 'user-owner' | 'user-profile' | 'memory'
-export type Operation = 'create' | 'replace' | 'merge' | 'revoke' | 'set-priority'
+export type Operation = 'create' | 'replace' | 'merge' | 'revoke' | 'delete' | 'set-priority'
 export type Priority = 'critical' | 'high' | 'normal' | 'low'
 export type Polarity = 'positive' | 'negative' | 'neutral'
 export type EpistemicStatus = 'owner-stated' | 'source-supported' | 'inferred' | 'contested' | 'unknown'

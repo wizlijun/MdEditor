@@ -429,7 +429,7 @@ USAGE:
   notemd memory list [--status active|pending|revoked|all] [--scope user|memory]
   notemd memory show <entry-or-proposal-id>   # proposal output includes before/after + SHA-256
   notemd memory suggest
-  notemd memory propose <create|replace|merge|revoke|set-priority> [flags]
+  notemd memory propose <create|replace|merge|revoke|delete|set-priority> [flags]
   notemd memory approve <proposal-id> --proposal-sha256 <sha256> --approved-by human:<id> --confirm-human-approved
   notemd memory reject <proposal-id> --proposal-sha256 <sha256> --approved-by human:<id> --confirm-human-approved
   notemd memory check
@@ -463,6 +463,8 @@ NOTES:
   immutable proposal hash to the configured human owner. Pending and unknown
   entries are not confirmed facts. Approval does not upgrade certainty.
   Direct external edits trigger projection drift and block writes until repaired.
+  Delete removes only the current projection block; candidate and decision event
+  remain as immutable audit history.
 
 FLAGS:
   --vault <path>              Vault root (default: configured Vault)

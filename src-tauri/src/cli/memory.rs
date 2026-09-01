@@ -79,7 +79,8 @@ fn parse_operation(value: &str) -> Result<Operation, String> {
         "create" | "add" => Ok(Operation::Create),
         "replace" | "edit" => Ok(Operation::Replace),
         "merge" => Ok(Operation::Merge),
-        "revoke" | "delete" => Ok(Operation::Revoke),
+        "revoke" => Ok(Operation::Revoke),
+        "delete" => Ok(Operation::Delete),
         "set-priority" | "priority" => Ok(Operation::SetPriority),
         other => Err(format!("invalid operation: {other}")),
     }
@@ -247,6 +248,9 @@ fn show(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
         let before = target.map(|entry| entry.text.as_str()).unwrap_or("—");
         let after = match proposal.frontmatter.proposal.operation {
             Operation::Revoke => "revoked (history retained)".to_string(),
+            Operation::Delete => {
+                "removed from projection (candidate/event retained)".to_string()
+            }
             Operation::SetPriority => format!(
                 "{:?}: {}",
                 proposal
@@ -533,6 +537,12 @@ mod tests {
             args.flags.get("proposal-sha256").map(String::as_str),
             Some("abc123")
         );
+    }
+
+    #[test]
+    fn delete_is_a_distinct_projection_operation() {
+        assert_eq!(parse_operation("revoke").unwrap(), Operation::Revoke);
+        assert_eq!(parse_operation("delete").unwrap(), Operation::Delete);
     }
 
     #[test]

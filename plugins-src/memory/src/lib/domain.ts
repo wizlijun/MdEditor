@@ -1,5 +1,7 @@
 import type { MemoryEntry, Proposal, Scope } from './types'
 
+export type DecisionIntent = 'review' | 'confirm' | 'deny' | 'important' | 'ignore' | 'delete'
+
 const priorityRank = { critical: 0, high: 1, normal: 2, low: 3 } as const
 const polarityRank = { negative: 0, positive: 1, neutral: 2 } as const
 
@@ -23,10 +25,19 @@ export function pendingProposals(proposals: Proposal[]): Proposal[] {
     || a.created.localeCompare(b.created))
 }
 
+export function pendingProposalForEntry(entry: MemoryEntry, proposals: Proposal[]): Proposal | undefined {
+  if (entry.scope === 'user-owner' || entry.status !== 'pending' || !entry.proposal) return undefined
+  return proposals.find((proposal) => proposal.decision === 'pending'
+    && proposal.proposal.id === entry.proposal
+    && proposal.proposal.scope === entry.scope
+    && proposal.proposal.target_id === entry.id)
+}
+
 export function describeDelta(proposal: Proposal, entries: MemoryEntry[]): { before: string; after: string } {
   const target = entries.find((entry) => entry.id === proposal.proposal.target_id)
   if (proposal.proposal.operation === 'create') return { before: '—', after: proposal.text }
   if (proposal.proposal.operation === 'revoke') return { before: target?.text ?? '—', after: '撤销（保留历史）' }
+  if (proposal.proposal.operation === 'delete') return { before: target?.text ?? '—', after: '从当前记忆中删除（保留审计记录）' }
   if (proposal.proposal.operation === 'set-priority') return {
     before: target ? `${target.priority}: ${target.text}` : '—',
     after: `${proposal.proposal.suggested_priority ?? 'normal'}: ${target?.text ?? ''}`,

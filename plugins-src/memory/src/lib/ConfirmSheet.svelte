@@ -1,11 +1,13 @@
 <script lang="ts">
   import { describeDelta, describeMetadataDelta } from './domain'
+  import type { DecisionIntent } from './domain'
   import type { MemoryEntry, Proposal } from './types'
 
-  let { proposal, entries, action, busy = false, oncancel, onconfirm } = $props<{
+  let { proposal, entries, action, intent = 'review', busy = false, oncancel, onconfirm } = $props<{
     proposal: Proposal
     entries: MemoryEntry[]
     action: 'approve' | 'reject'
+    intent?: DecisionIntent
     busy?: boolean
     oncancel: () => void
     onconfirm: () => void
@@ -13,15 +15,28 @@
 
   const delta = $derived(describeDelta(proposal, entries))
   const metadata = $derived(describeMetadataDelta(proposal, entries))
+  const destructive = $derived(action === 'reject' || intent === 'delete')
+  const title = $derived(intent === 'confirm' ? '确认这条事实'
+    : intent === 'deny' ? '否认这条事实'
+      : intent === 'important' ? '将这条记忆标为重要'
+        : intent === 'ignore' ? '将这条记忆设为可忽略'
+          : intent === 'delete' ? '从当前记忆中删除'
+            : action === 'approve' ? '确认这项记忆变更' : '拒绝这个候选')
+  const buttonLabel = $derived(intent === 'delete' ? '确认删除'
+    : intent === 'deny' ? '确认否认'
+      : intent === 'important' ? '确认标为重要'
+        : intent === 'ignore' ? '确认设为可忽略'
+          : action === 'approve' ? '确认并写入' : '确认拒绝')
 </script>
 
 <div class="scrim" role="presentation" onclick={(event) => event.target === event.currentTarget && !busy && oncancel()}>
   <div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description" tabindex="-1">
     <header>
-      <span class:reject={action === 'reject'} class="symbol" aria-hidden="true">{action === 'approve' ? '✓' : '×'}</span>
+      <span class:reject={destructive} class="symbol" aria-hidden="true">{destructive ? '×' : '✓'}</span>
       <div>
-        <h2 id="confirm-title">{action === 'approve' ? '确认这项记忆变更' : '拒绝这个候选'}</h2>
+        <h2 id="confirm-title">{title}</h2>
         <p id="confirm-description">决定会绑定下列候选 ID、内容与 SHA-256，之后不可静默改写。</p>
+        {#if intent === 'delete'}<p class="delete-note">条目会从 USER.md / MEMORY.md 的当前投影中移除，候选与决定事件仍保留用于审计。</p>{/if}
       </div>
     </header>
 
@@ -40,8 +55,8 @@
     </dl>
     <footer>
       <button class="secondary" type="button" onclick={oncancel} disabled={busy}>取消</button>
-      <button class:destructive={action === 'reject'} class="primary" type="button" onclick={onconfirm} disabled={busy}>
-        {busy ? '正在提交…' : action === 'approve' ? '确认并写入' : '确认拒绝'}
+      <button class:destructive class="primary" type="button" onclick={onconfirm} disabled={busy}>
+        {busy ? '正在提交…' : buttonLabel}
       </button>
     </footer>
   </div>
@@ -50,7 +65,7 @@
 <style>
   .scrim { position:fixed; inset:0; z-index:100; display:grid; place-items:center; padding:24px; background:rgba(0,0,0,.28); backdrop-filter:blur(8px); }
   .sheet { box-sizing:border-box; width:min(620px, 100%); max-height:calc(100vh - 48px); overflow:auto; padding:22px; border:1px solid color-mix(in srgb, CanvasText 15%, transparent); border-radius:14px; background:Canvas; color:CanvasText; box-shadow:0 24px 70px rgba(0,0,0,.34); }
-  header { display:flex; gap:12px; align-items:flex-start; } h2 { margin:0; font-size:17px; line-height:1.25; letter-spacing:-.01em; } header p { margin:4px 0 0; color:color-mix(in srgb, CanvasText 62%, transparent); font-size:12px; line-height:1.45; }
+  header { display:flex; gap:12px; align-items:flex-start; } h2 { margin:0; font-size:17px; line-height:1.25; letter-spacing:-.01em; } header p { margin:4px 0 0; color:color-mix(in srgb, CanvasText 62%, transparent); font-size:12px; line-height:1.45; }.delete-note { color:#d62d26; font-weight:600; }
   .symbol { display:grid; flex:0 0 28px; width:28px; height:28px; place-items:center; border-radius:50%; background:#34c759; color:white; font-size:18px; font-weight:700; }.symbol.reject { background:#ff3b30; }
   .identity { display:grid; gap:4px; margin:16px 0 12px; padding:10px 12px; border-radius:8px; background:color-mix(in srgb, CanvasText 5%, Canvas); font-size:11px; overflow-wrap:anywhere; }
   .diff { display:grid; grid-template-columns:1fr 1fr; gap:10px; }.diff>div { min-height:72px; padding:11px; border:1px solid color-mix(in srgb, CanvasText 10%, transparent); border-radius:9px; }.diff small,dt { color:color-mix(in srgb, CanvasText 55%, transparent); font-size:11px; }.diff p { margin:5px 0 0; font-size:13px; line-height:1.48; white-space:pre-wrap; }

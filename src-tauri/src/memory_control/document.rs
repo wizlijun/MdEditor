@@ -804,6 +804,32 @@ pub fn update_entry(content: &str, id: &str, update: EntryUpdate<'_>) -> Result<
     Ok(out.join("\n") + if content.ends_with('\n') { "\n" } else { "" })
 }
 
+/// Remove exactly one managed entry block from the current projection.
+///
+/// The candidate and decision event remain the durable audit record; this
+/// function deliberately leaves section headings and neighbouring prose alone.
+pub fn remove_entry(content: &str, id: &str) -> Result<String, String> {
+    let lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let scope = if content.contains("type: User Profile") {
+        Scope::UserProfile
+    } else {
+        Scope::Memory
+    };
+    let document = if scope == Scope::Memory {
+        "MEMORY.md"
+    } else {
+        "USER.md"
+    };
+    let block = parse_blocks(document, content, scope)
+        .into_iter()
+        .find(|block| block.entry.id == id)
+        .ok_or_else(|| format!("memory: entry not found: {id}"))?;
+    let mut out = Vec::with_capacity(lines.len() - (block.end - block.start));
+    out.extend_from_slice(&lines[..block.start]);
+    out.extend_from_slice(&lines[block.end..]);
+    Ok(out.join("\n") + if content.ends_with('\n') { "\n" } else { "" })
+}
+
 pub fn mark_pending(
     content: &str,
     old_start: usize,
@@ -988,6 +1014,20 @@ mod tests {
         assert!(next.contains("  agent-guidance:: Do not repeat the old claim."));
         assert!(next.contains("  by:: agent/x"));
         assert!(next.contains("  source:: /b.md#L2"));
+    }
+
+    #[test]
+    fn removes_only_the_exact_managed_entry_block() {
+        let second = "\n- A neighbouring fact\n  id:: 22222222-2222-4222-8222-222222222222\n  source:: /b.md#L2\n";
+        let doc = DOC.replacen("\n## Maintenance", &format!("{second}\n## Maintenance"), 1);
+        let next = remove_entry(&doc, "11111111-1111-4111-8111-111111111111").unwrap();
+
+        assert!(!next.contains("A durable fact"));
+        assert!(next.contains("A neighbouring fact"));
+        assert!(next.contains("## Active"));
+        assert!(next.contains("## Maintenance\n\n- not an entry"));
+        assert!(next.ends_with('\n'));
+        assert!(remove_entry(&next, "missing").unwrap_err().contains("entry not found"));
     }
 
     #[test]

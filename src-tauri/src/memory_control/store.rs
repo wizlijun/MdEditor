@@ -348,7 +348,10 @@ pub fn list(root: &Path) -> Result<Snapshot, String> {
 
 fn validate_propose(input: &ProposeInput) -> Result<(), String> {
     if input.text.trim().is_empty()
-        && !matches!(input.operation, Operation::Revoke | Operation::SetPriority)
+        && !matches!(
+            input.operation,
+            Operation::Revoke | Operation::Delete | Operation::SetPriority
+        )
     {
         return Err("memory: proposal text is required".into());
     }
@@ -472,6 +475,9 @@ pub fn propose(root: &Path, input: ProposeInput) -> Result<Proposal, String> {
         let same = existing.frontmatter.proposal.scope == input.scope
             && existing.frontmatter.proposal.operation == input.operation
             && existing.frontmatter.proposal.target_id == input.target_id
+            && existing.frontmatter.proposal.base_revision == input.base_revision
+            && existing.frontmatter.proposal.section == input.section
+            && existing.frontmatter.proposal.merge_from == input.merge_from
             && existing.text.trim() == input.text.trim()
             && existing.frontmatter.proposal.suggested_priority == input.priority
             && existing.frontmatter.proposal.suggested_polarity == input.polarity
@@ -523,7 +529,8 @@ pub fn propose(root: &Path, input: ProposeInput) -> Result<Proposal, String> {
     let created = now();
     let action_sensitive = input.scope == Scope::UserOwner
         || input.priority == Some(Priority::Critical)
-        || input.polarity == Some(Polarity::Negative);
+        || input.polarity == Some(Polarity::Negative)
+        || input.operation == Operation::Delete;
     let fallback_title = format!(
         "{:?} {}",
         input.operation,
@@ -790,6 +797,12 @@ pub fn decide(root: &Path, input: DecideInput) -> Result<serde_json::Value, Stri
                             source: Some(source),
                         },
                     )?;
+                }
+                Operation::Delete => {
+                    target.ok_or_else(|| {
+                        format!("memory: target entry not found: {entry_id}")
+                    })?;
+                    next = document::remove_entry(&next, &entry_id)?;
                 }
                 Operation::SetPriority => {
                     let text = target
@@ -1454,6 +1467,137 @@ mod tests {
         .unwrap_err();
 
         assert!(error.contains("target_id and base_revision are required"));
+    }
+
+    #[test]
+    fn approved_delete_removes_projection_but_preserves_audit_history() {
+        let v = vault();
+        migrate(v.path()).unwrap();
+        let migrated = list(v.path())
+            .unwrap()
+            .proposals
+            .into_iter()
+            .find(|proposal| {
+                proposal.frontmatter.proposal.scope == Scope::Memory
+                    && proposal.frontmatter.proposal.target_id.as_deref()
+                        == Some("11111111-1111-4111-8111-111111111111")
+            })
+            .unwrap();
+        decide(
+            v.path(),
+            DecideInput {
+                proposal_id: migrated.frontmatter.proposal.id,
+                expected_sha256: migrated.sha256,
+                action: DecisionAction::Approve,
+                actor: "human:bruce".into(),
+                human_confirmed: true,
+                reason: None,
+            },
+        )
+        .unwrap();
+
+        let entry = list(v.path())
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|entry| entry.id == "11111111-1111-4111-8111-111111111111")
+            .unwrap();
+        let before = fs::read_to_string(v.path().join("MEMORY.md")).unwrap();
+        let proposal = propose(
+            v.path(),
+            ProposeInput {
+                scope: Scope::Memory,
+                operation: Operation::Delete,
+                text: String::new(),
+                source: "human-input://human:bruce/delete".into(),
+                by: "notemd-memory/human-ui".into(),
+                dedupe_key: "test/delete-entry".into(),
+                reason: "owner requests projection removal".into(),
+                target_id: Some(entry.id.clone()),
+                base_revision: Some(entry.revision),
+                section: None,
+                priority: None,
+                polarity: None,
+                epistemic_status: None,
+                certainty: None,
+                agent_guidance: None,
+                avoid_error: None,
+                merge_from: vec![],
+            },
+        )
+        .unwrap();
+        let candidate_path = v.path().join(&proposal.path);
+        let candidate_before = fs::read_to_string(&candidate_path).unwrap();
+        assert!(proposal.frontmatter.proposal.action_sensitive);
+        assert_eq!(before, fs::read_to_string(v.path().join("MEMORY.md")).unwrap());
+
+        decide(
+            v.path(),
+            DecideInput {
+                proposal_id: proposal.frontmatter.proposal.id.clone(),
+                expected_sha256: proposal.sha256.clone(),
+                action: DecisionAction::Approve,
+                actor: "human:bruce".into(),
+                human_confirmed: true,
+                reason: Some("confirmed projection removal".into()),
+            },
+        )
+        .unwrap();
+
+        let after = fs::read_to_string(v.path().join("MEMORY.md")).unwrap();
+        assert!(!after.contains(&entry.id));
+        assert_eq!(candidate_before, fs::read_to_string(candidate_path).unwrap());
+        let snapshot = list(v.path()).unwrap();
+        assert!(!snapshot.entries.iter().any(|item| item.id == entry.id));
+        assert_eq!(
+            snapshot
+                .proposals
+                .iter()
+                .find(|item| item.frontmatter.proposal.id == proposal.frontmatter.proposal.id)
+                .unwrap()
+                .decision,
+            ProposalDecision::Approved
+        );
+        assert!(!snapshot.integrity.drift, "{:?}", snapshot.integrity.errors);
+        let event = events(v.path())
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event.proposal_id == proposal.frontmatter.proposal.id)
+            .unwrap();
+        assert_eq!(event.event.entry_id, entry.id);
+        assert_eq!(event.event.prior_revision, Some(entry.revision));
+        assert_eq!(event.event.decided_by, "human:bruce");
+    }
+
+    #[test]
+    fn delete_is_forbidden_for_owner_identity_scope() {
+        let v = vault();
+        migrate(v.path()).unwrap();
+        let error = propose(
+            v.path(),
+            ProposeInput {
+                scope: Scope::UserOwner,
+                operation: Operation::Delete,
+                text: String::new(),
+                source: "human-input://human:bruce/delete".into(),
+                by: "notemd-memory/human-ui".into(),
+                dedupe_key: "test/delete-owner".into(),
+                reason: "must not delete owner via fact shortcut".into(),
+                target_id: Some("owner".into()),
+                base_revision: Some(0),
+                section: None,
+                priority: None,
+                polarity: None,
+                epistemic_status: None,
+                certainty: None,
+                agent_guidance: None,
+                avoid_error: None,
+                merge_from: vec![],
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("owner scope supports only create/replace"));
     }
 
     #[test]

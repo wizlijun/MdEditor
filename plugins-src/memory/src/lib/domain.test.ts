@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeDelta, describeMetadataDelta, exactDecisionPrompt, filterEntries, pendingProposals, usageRule } from './domain'
+import { describeDelta, describeMetadataDelta, exactDecisionPrompt, filterEntries, pendingProposalForEntry, pendingProposals, usageRule } from './domain'
 import type { MemoryEntry, Proposal } from './types'
 
 const entry: MemoryEntry = {
@@ -28,8 +28,20 @@ describe('memory domain', () => {
   it('keeps only pending proposals', () => {
     expect(pendingProposals([proposal('replace'), proposal('replace', 'approved')])).toHaveLength(1)
   })
+  it('reuses only the exact pending proposal attached to an entry', () => {
+    const pendingEntry = { ...entry, status: 'pending', proposal: 'p1' }
+    expect(pendingProposalForEntry(pendingEntry, [proposal('create')])?.proposal.id).toBe('p1')
+    expect(pendingProposalForEntry(pendingEntry, [{ ...proposal('create'), proposal: { ...proposal('create').proposal, target_id: 'other' } }])).toBeUndefined()
+    expect(pendingProposalForEntry({ ...pendingEntry, scope: 'user-owner' }, [proposal('create')])).toBeUndefined()
+  })
   it('renders a revoke as a delta instead of physical deletion', () => {
     expect(describeDelta(proposal('revoke'), [entry])).toEqual({ before: entry.text, after: '撤销（保留历史）' })
+  })
+  it('makes physical projection deletion explicit while retaining audit history', () => {
+    expect(describeDelta(proposal('delete'), [entry])).toEqual({
+      before: entry.text,
+      after: '从当前记忆中删除（保留审计记录）',
+    })
   })
   it('binds approval to the exact id, hash and displayed delta', () => {
     const prompt = exactDecisionPrompt(proposal('replace'), [entry], 'Confirm exact change')

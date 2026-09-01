@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.memory",
   "name": "Memory",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.901.6"
+    "notemd": ">=6.901.7"
   },
   "description": "Review, improve and approve controlled USER.md and MEMORY.md changes without editing the projections directly.",
   "ui": "ui/",

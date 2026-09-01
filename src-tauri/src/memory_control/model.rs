@@ -26,6 +26,7 @@ pub enum Operation {
     Replace,
     Merge,
     Revoke,
+    Delete,
     SetPriority,
 }
 
