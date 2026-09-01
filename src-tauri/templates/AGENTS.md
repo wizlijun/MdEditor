@@ -24,6 +24,8 @@ markdown file in this vault carries one, this file included.)
 - `sync/` — markdown documents copied in from outside the vault (the
   editor's sync-to-vault feature). Each file is a snapshot of an external
   original; edits here do not flow back to the source file.
+- `inbox/tasks/` — executable tasks for Next. Each task is one
+  `YYYY-MM-DD-HHmm-<slug>-task.md` file; see "Inbox tasks" below.
 - Any other folder — regular markdown documents (`xxx.md`), optionally
   with a companion outline note beside them (see below).
 
@@ -61,6 +63,7 @@ coin a short one and then use it consistently.
 | `Outline Note` | any `.note.md` (outline or companion note) |
 | `Daily Note` | `dailynote/yyyy/yyyy-MM-dd.note.md` |
 | `Wiki Page` | `wikipage/<title>.note.md` |
+| `Task` | one executable item in `inbox/tasks/*-task.md` |
 
 Everything else is optional, but absent metadata means "unknown", not
 "fine" — write what you actually know:
@@ -109,6 +112,43 @@ Rules that hold in both directions:
   **not** the node-level `status::` of the Q&A protocol below
   (`open`/`answered`/`adopted`). Same word, different namespaces; never
   convert one into the other.
+
+## Inbox tasks
+
+Agents may add a must-do item discovered during a daily summary to Next's
+inbox. Do this only for a clear obligation, next action or deadline — never
+turn a suggestion into a task. Create one new
+`inbox/tasks/YYYY-MM-DD-HHmm-<slug>-task.md` per task with this shape:
+
+```yaml
+---
+type: Task
+title: Submit the TestFlight build
+created: 2026-09-01T03:20:00Z
+task:
+  version: 1
+  id: 8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8
+  due: "2026-09-02"
+  done_when: The build is available and installation is verified
+  dedupe_key: daily-summary/v1:2026-09-01:testflight-upload
+generated: { by: your-agent/version, at: 2026-09-01T03:20:00Z }
+sources:
+  - resource: /dailynote/2026/2026-09-01.note.md
+---
+```
+
+`due` and `done_when` are optional. Agent-created tasks must include a UUID
+v4 `task.id`, UTC RFC 3339 timestamps, `generated`, at least one traceable
+`sources[].resource`, and a stable `dedupe_key`. Before writing, scan every
+existing task for that exact key: an existing match is a no-op; differing
+content under the same key is a conflict to report, never something to
+overwrite or merge.
+
+This is a **create-only** protocol. Write and validate a temporary file in
+`inbox/tasks/` whose name does not end in `-task.md`, then publish it with a
+no-clobber rename. Never modify, move or delete an existing task, and never
+modify `thinking/next.note.md`; only the human's action in Next may place,
+complete or reopen a task. Do not put task state in frontmatter `status`.
 
 ## Naming a note
 

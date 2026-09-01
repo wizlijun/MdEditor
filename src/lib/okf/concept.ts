@@ -44,6 +44,8 @@ export const CONCEPT_TYPE = {
   ideaProof: 'Idea Proof',
   /** Next:用户维护的念头处置账本 */
   next: 'Next',
+  /** Next:人或 agent 创建的可执行任务,每个任务一份 `inbox/tasks/*-task.md` */
+  task: 'Task',
   /** 溯源:agent 产出的溯源摘要 `<dir>/<ts>-source-trace.md`(trace-source 插件) */
   traceReport: 'Trace Report',
   /** 溯源:下载的原始材料全文(字幕转写/博客正文/论文节选),报告同名子目录 */

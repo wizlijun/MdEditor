@@ -82,6 +82,37 @@ describe('PlaceSheet', () => {
     }))
   })
 
+  it('prefills a Task commitment from its actionable title and done condition', async () => {
+    const onSubmit = vi.fn(async () => {})
+    const task: WorkspaceItem = {
+      ...item,
+      kind: 'task',
+      item_id: '8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8',
+      key: 'task-1',
+      title: '提交 TestFlight 构建',
+      path: 'inbox/tasks/submit-task.md',
+      task: {
+        version: 1,
+        id: '8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8',
+        done_when: '构建可安装',
+      },
+    }
+    mounted.push(mount(PlaceSheet, {
+      target: document.body,
+      props: { item: task, saving: false, onCancel: vi.fn(), onSubmit },
+    }))
+    flushSync()
+
+    document.querySelector('form')!.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      route: 'commit',
+      commitment: '提交 TestFlight 构建',
+      next_action: '提交 TestFlight 构建',
+      close_condition: '构建可安装',
+    }))
+  })
+
   it('offers choices for dormant and settlement details while preserving editable inputs', () => {
     setLocale('zh')
     mounted.push(mount(PlaceSheet, {

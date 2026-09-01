@@ -3,16 +3,27 @@ import { normalizeVaultDir } from './source'
 
 export const NEXT_PATH = 'thinking/next.note.md'
 export const NEXT_TYPE = 'Next'
-export const NEXT_VERSION = 1
+export const NEXT_VERSION = 2
+export type LedgerVersion = 1 | typeof NEXT_VERSION
 
-export interface LedgerDocument {
+interface LedgerDocumentBase {
   type: typeof NEXT_TYPE
-  version: typeof NEXT_VERSION
   source_dirs: string[]
   events: Record<string, unknown>[]
   /** Unknown top-level fields survive a read/write cycle. */
   extra: Record<string, unknown>
 }
+
+export interface LedgerV1Document extends LedgerDocumentBase {
+  version: 1
+}
+
+export interface LedgerV2Document extends LedgerDocumentBase {
+  version: 2
+  task_dirs: string[]
+}
+
+export type LedgerDocument = LedgerV1Document | LedgerV2Document
 
 export type LedgerErrorCode =
   | 'missing_frontmatter'
@@ -21,6 +32,7 @@ export type LedgerErrorCode =
   | 'wrong_type'
   | 'unsupported_version'
   | 'invalid_source_dirs'
+  | 'invalid_task_dirs'
   | 'invalid_events'
 
 export class LedgerFormatError extends Error {
@@ -57,29 +69,50 @@ export function parseLedger(markdown: string): LedgerDocument {
   }
   if (!isRecord(value)) throw new LedgerFormatError('invalid_root', 'Next frontmatter must be a mapping')
   if (value.type !== NEXT_TYPE) throw new LedgerFormatError('wrong_type', `Expected type: ${NEXT_TYPE}`)
-  if (value.version !== NEXT_VERSION) {
+  if (value.version !== 1 && value.version !== NEXT_VERSION) {
     throw new LedgerFormatError('unsupported_version', `Unsupported Next version: ${String(value.version)}`)
   }
   if (!Array.isArray(value.source_dirs)) {
     throw new LedgerFormatError('invalid_source_dirs', 'Next source_dirs must be an array')
   }
-  const sourceDirs: string[] = []
-  for (const raw of value.source_dirs) {
-    const dir = normalizeVaultDir(raw)
-    if (!dir) throw new LedgerFormatError('invalid_source_dirs', 'Next source_dirs contains an unsafe path')
-    if (!sourceDirs.includes(dir)) sourceDirs.push(dir)
-  }
+  const sourceDirs = normalizedDirs(value.source_dirs, 'source_dirs', 'invalid_source_dirs')
+  const taskDirs = value.version === 2
+    ? normalizedDirs(value.task_dirs, 'task_dirs', 'invalid_task_dirs')
+    : undefined
   if (!Array.isArray(value.events) || !value.events.every(isRecord)) {
     throw new LedgerFormatError('invalid_events', 'Next events must be an array of mappings')
   }
-  const { type: _type, version: _version, source_dirs: _sourceDirs, events: _events, ...extra } = value
-  return {
+  const extra = Object.fromEntries(Object.entries(value).filter(([key]) => ![
+    'type',
+    'version',
+    'source_dirs',
+    'events',
+    ...(value.version === 2 ? ['task_dirs'] : []),
+  ].includes(key)))
+  const base: LedgerDocumentBase = {
     type: NEXT_TYPE,
-    version: NEXT_VERSION,
     source_dirs: sourceDirs,
     events: value.events,
     extra,
   }
+  return value.version === 2
+    ? { ...base, version: 2, task_dirs: taskDirs! }
+    : { ...base, version: 1 }
+}
+
+function normalizedDirs(
+  value: unknown,
+  field: 'source_dirs' | 'task_dirs',
+  code: 'invalid_source_dirs' | 'invalid_task_dirs',
+): string[] {
+  if (!Array.isArray(value)) throw new LedgerFormatError(code, `Next ${field} must be an array`)
+  const dirs: string[] = []
+  for (const raw of value) {
+    const dir = normalizeVaultDir(raw)
+    if (!dir) throw new LedgerFormatError(code, `Next ${field} contains an unsafe path`)
+    if (!dirs.includes(dir)) dirs.push(dir)
+  }
+  return dirs
 }
 
 export function newLedger(sourceDirs: string[]): LedgerDocument {
@@ -88,10 +121,33 @@ export function newLedger(sourceDirs: string[]): LedgerDocument {
     .filter((value): value is string => value !== null)
   return {
     type: NEXT_TYPE,
-    version: NEXT_VERSION,
+    version: 1,
     source_dirs: [...new Set(normalized)],
     events: [],
     extra: {},
+  }
+}
+
+/**
+ * Prepare a ledger for the first Task lifecycle event. This is deliberately
+ * pure: callers decide when the upgrade is warranted and remain responsible
+ * for the guarded write. Historical event mappings are retained verbatim.
+ */
+export function upgradeLedgerToV2(
+  document: LedgerDocument,
+  taskDirs: readonly string[],
+): LedgerV2Document {
+  const normalizedTaskDirs = taskDirs
+    .map(normalizeVaultDir)
+    .filter((value): value is string => value !== null)
+  const currentTaskDirs = document.version === 2 ? document.task_dirs : []
+  return {
+    type: NEXT_TYPE,
+    version: 2,
+    source_dirs: [...document.source_dirs],
+    task_dirs: [...new Set([...currentTaskDirs, ...normalizedTaskDirs])],
+    events: [...document.events],
+    extra: { ...document.extra },
   }
 }
 
@@ -108,16 +164,17 @@ function readableBody(events: Record<string, unknown>[]): string {
     '',
   ]
   if (events.length === 0) {
-    lines.push('No ideas have been placed yet.', '')
+    lines.push('No items have been placed yet.', '')
     return `${lines.join('\n')}\n`
   }
   for (const event of events.slice().reverse()) {
     const at = scalar(event.at) ?? 'Unknown time'
     const action = scalar(event.action) ?? 'invalid event'
     lines.push(`## ${at} · ${action}`)
-    const ideaId = scalar(event.idea_id)
+    const itemId = scalar(event.item_id) ?? scalar(event.idea_id)
+    const itemKind = scalar(event.item_kind) ?? (scalar(event.idea_id) ? 'idea' : null)
     const source = isRecord(event.source) ? scalar(event.source.path) : null
-    if (ideaId) lines.push(`- idea: \`${ideaId}\``)
+    if (itemId) lines.push(`- ${itemKind ?? 'item'}: \`${itemId}\``)
     if (source) lines.push(`- source: \`${source}\``)
     const projects = Array.isArray(event.projects) ? event.projects.map(scalar).filter(Boolean) : []
     if (projects.length) lines.push(`- projects: ${projects.join(' · ')}`)
@@ -153,9 +210,10 @@ function readableBody(events: Record<string, unknown>[]): string {
 export function serializeLedger(document: LedgerDocument): string {
   const frontmatter = YAML.stringify({
     type: NEXT_TYPE,
-    version: NEXT_VERSION,
+    version: document.version,
     ...document.extra,
     source_dirs: [...new Set(document.source_dirs)],
+    ...(document.version === 2 ? { task_dirs: [...new Set(document.task_dirs)] } : {}),
     events: document.events,
   }).trimEnd()
   return `---\n${frontmatter}\n---\n\n${readableBody(document.events)}`

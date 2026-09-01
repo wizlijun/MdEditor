@@ -43,14 +43,17 @@
   const projects = $derived(projectTagsOf(item.projection))
   const detail = $derived.by(() => {
     const projection = item.projection
-    if (!projection) return ''
+    const taskDetail = item.kind === 'task'
+      ? [item.description, item.task?.due].filter(Boolean).join(' · ')
+      : ''
+    if (!projection) return taskDetail
     switch (projection.state) {
       case 'wip': return projection.next_action
       case 'waiting': return `${projection.waiting_for} · ${projection.review_at}`
       case 'dormant': return projection.wake_trigger
       case 'closed': return projection.target ?? projection.reason ?? projection.result ?? ''
       case 'unsupported': return projection.unsupported_actions.join(', ')
-      case 'capture': return ''
+      case 'capture': return taskDetail
     }
   })
 </script>
@@ -103,6 +106,8 @@
           onclick={() => onSuggestProject?.(item, item.suggestedProject!.project)}
         >{t('project.suggestion', { project: item.suggestedProject.project })}</button>
       {/if}
+      {#if item.kind === 'task'}<span class="badge task">{t('badge.task')}</span>{/if}
+      {#if item.generatedBy}<span class="badge agent" title={item.generatedBy}>{t('badge.agent')}</span>{/if}
       {#if item.proofed}<span class="badge proof">{t('badge.proofed')}</span>{/if}
       {#if item.orphan}<span class="badge warning">{t('badge.orphan')}</span>{/if}
       {#if item.state === 'unsupported'}<span class="badge warning">{t('badge.unsupported')}</span>{/if}
@@ -113,7 +118,7 @@
     {#if item.path && !item.orphan}
       <button class="quiet" disabled={disabled} onclick={() => onOpen(item)}>{t('common.open')}</button>
     {/if}
-    {#if item.orphan}
+    {#if item.orphan && item.kind !== 'task'}
       <button class="quiet" disabled={disabled} onclick={() => onRelink(item)}>{t('action.relink')}</button>
     {/if}
     {#if canReopen}
@@ -151,6 +156,8 @@
   .state, .badge { flex: none; border-radius: 999px; padding: 2px 7px; font-size: 10.5px; font-weight: 600; }
   .state { background: var(--chip); color: var(--muted-strong); }
   .badge.proof { background: var(--proof-bg); color: var(--proof-fg); }
+  .badge.task { background: var(--accent-soft); color: var(--accent); }
+  .badge.agent { border: 1px solid var(--line); background: transparent; color: var(--muted-strong); }
   .badge.project { background: var(--accent-soft); color: var(--accent); }
   .project-suggestion { border: 1px dashed var(--accent); background: transparent; color: var(--accent); cursor: pointer; }
   .project-suggestion:hover:not(:disabled) { background: var(--accent-soft); }

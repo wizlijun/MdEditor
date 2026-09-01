@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 import { reduceEvents } from './lib/domain'
 import type { NextWorkspace, WorkspaceItem } from './lib/repository'
+import type { CreateTaskResult } from './lib/store.svelte'
 
 const mocks = vi.hoisted(() => ({
   state: { workspace: null as NextWorkspace | null, loading: false, saving: false, error: null as string | null },
   refresh: vi.fn(async () => {}),
   createIdea: vi.fn(async () => 'inbox/ideas/new-idea.md'),
+  createTask: vi.fn(async (): Promise<CreateTaskResult> => ({ path: 'inbox/tasks/new-task.md', placedCurrent: false })),
   place: vi.fn(async () => {}),
   reopen: vi.fn(async () => {}),
   relink: vi.fn(async () => {}),
@@ -29,6 +31,7 @@ vi.mock('./lib/store.svelte', () => ({
   state: mocks.state,
   refresh: mocks.refresh,
   createIdea: mocks.createIdea,
+  createTask: mocks.createTask,
   place: mocks.place,
   reopen: mocks.reopen,
   relink: mocks.relink,
@@ -45,6 +48,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.clearAllMocks()
   mocks.createIdea.mockResolvedValue('inbox/ideas/new-idea.md')
+  mocks.createTask.mockResolvedValue({ path: 'inbox/tasks/new-task.md', placedCurrent: false })
   mocks.state.saving = false
   vi.useRealTimers()
 })
@@ -386,6 +390,136 @@ describe('Next window', () => {
       .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => expect(mocks.createIdea).toHaveBeenCalledWith('值得记录的念头'))
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull())
+  })
+
+  it('creates a Task in Inbox or explicitly marks it current', async () => {
+    const next = workspace()
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const createButton = document.querySelector<HTMLButtonElement>('[data-action="new-task"]')
+    expect(createButton?.textContent).toContain('新建任务')
+    createButton!.click()
+    flushSync()
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('inbox/tasks')
+
+    const title = document.querySelector<HTMLInputElement>('input[name="title"]')!
+    title.value = '提交 TestFlight 构建'
+    title.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLFormElement>('[data-form="create-task"]')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(mocks.createTask).toHaveBeenCalledWith({
+      title: '提交 TestFlight 构建',
+    }, false))
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull())
+
+    createButton!.click()
+    flushSync()
+    const currentTitle = document.querySelector<HTMLInputElement>('input[name="title"]')!
+    currentTitle.value = '验证安装'
+    currentTitle.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    const done = document.querySelector<HTMLInputElement>('input[name="done_when"]')!
+    done.value = '安装成功'
+    done.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLButtonElement>('[data-action="create-current"]')!.click()
+    await vi.waitFor(() => expect(mocks.createTask).toHaveBeenCalledWith({
+      title: '验证安装',
+      done_when: '安装成功',
+    }, true))
+  })
+
+  it('closes the Task sheet and warns when the file was saved but Inbox refresh failed', async () => {
+    mocks.state.workspace = workspace()
+    mocks.createTask.mockResolvedValueOnce({
+      path: 'inbox/tasks/published-task.md',
+      placedCurrent: false,
+      refreshError: 'refresh unavailable',
+    })
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    document.querySelector<HTMLButtonElement>('[data-action="new-task"]')!.click()
+    flushSync()
+    const title = document.querySelector<HTMLInputElement>('input[name="title"]')!
+    title.value = '已发布任务'
+    title.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLFormElement>('[data-form="create-task"]')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+
+    await vi.waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(
+      'warn',
+      '任务已保存，但 Next 暂时无法刷新收件箱。',
+      'refresh unavailable',
+    ))
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('states that mark-current did not happen when its first refresh failed', async () => {
+    mocks.state.workspace = workspace()
+    mocks.createTask.mockResolvedValueOnce({
+      path: 'inbox/tasks/published-task.md',
+      placedCurrent: false,
+      refreshError: 'refresh unavailable',
+    })
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    document.querySelector<HTMLButtonElement>('[data-action="new-task"]')!.click()
+    flushSync()
+    const title = document.querySelector<HTMLInputElement>('input[name="title"]')!
+    title.value = '已发布任务'
+    title.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    const done = document.querySelector<HTMLInputElement>('input[name="done_when"]')!
+    done.value = '可验收'
+    done.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLButtonElement>('[data-action="create-current"]')!.click()
+
+    await vi.waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(
+      'warn',
+      '任务已保存，但收件箱刷新失败，尚未标记为当前。',
+      'refresh unavailable',
+    ))
+  })
+
+  it('opens New Task with Shift-Command-N without changing the New Idea shortcut', () => {
+    mocks.state.workspace = workspace()
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'n', metaKey: true, shiftKey: true, bubbles: true, cancelable: true,
+    }))
+    flushSync()
+    expect(document.querySelector('[data-form="create-task"]')).toBeTruthy()
+    expect(document.querySelector('[data-form="create-idea"]')).toBeNull()
+  })
+
+  it('marks Task and Agent provenance on cards without creating a new lane', () => {
+    const next = workspace()
+    const task: WorkspaceItem = {
+      ...item('task-card', '提交构建', 'capture'),
+      kind: 'task',
+      item_id: '8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8',
+      path: 'inbox/tasks/submit-task.md',
+      task: {
+        version: 1,
+        id: '8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8',
+        due: '2026-09-02',
+      },
+      generatedBy: 'daily-summary-agent/1',
+    }
+    next.items.push(task)
+    next.capture.unshift(task)
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const card = document.querySelector('[data-item-key="task-card"]')!
+    expect(card.textContent).toContain('任务')
+    expect(card.textContent).toContain('Agent 添加')
+    expect(card.textContent).toContain('2026-09-02')
+    expect(document.querySelectorAll('[data-lane]')).toHaveLength(5)
   })
 
   it('opens New Idea with Command-N and keeps the draft when saving fails', async () => {

@@ -478,6 +478,26 @@ mod fs_tests {
         }
     }
 
+    #[test]
+    fn template_documents_the_create_only_inbox_task_protocol() {
+        for rule in [
+            "`inbox/tasks/YYYY-MM-DD-HHmm-<slug>-task.md`",
+            "type: Task",
+            "v4 `task.id`",
+            "stable `dedupe_key`",
+            "`sources[].resource`",
+            "a no-op",
+            "**create-only**",
+            "Never modify, move or delete an existing task",
+            "modify `thinking/next.note.md`",
+        ] {
+            assert!(
+                TEMPLATE.contains(rule),
+                "Vault AGENTS.md is missing task rule: {rule}"
+            );
+        }
+    }
+
     // ---- notemd_agents_search_section_missing / notemd_agents_append_search_section ----
     // Exercised through the `_at(&Path)` fs-level functions, which the
     // `#[tauri::command]` wrappers call after resolving an AppHandle to a

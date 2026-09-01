@@ -106,4 +106,37 @@ describe('event construction', () => {
       result: 'writing/article.md',
     })
   })
+
+  it('writes v2 identities for new events after a ledger upgrade', () => {
+    const sequential: EventFactory = { now: factory.now, id: () => 'new-event' }
+    const event = placeEvent({ ...capture, idea_id: 'existing' }, {
+      route: 'park',
+      wake_trigger: 'later',
+    }, sequential, 2)
+    expect(event).toMatchObject({
+      item_id: 'existing',
+      item_kind: 'idea',
+      action: 'park',
+    })
+    expect(event).not.toHaveProperty('idea_id')
+  })
+
+  it('uses the stable task identity and always emits the v2 envelope', () => {
+    const task = {
+      ...capture,
+      key: 'task-1',
+      path: 'inbox/tasks/a-task.md',
+      item_id: 'task-1',
+      item_kind: 'task' as const,
+    }
+    const sequential: EventFactory = { now: factory.now, id: () => 'new-event' }
+    const event = placeEvent(task, {
+      route: 'commit',
+      commitment: 'Ship it',
+      next_action: 'Build',
+      close_condition: 'Installed',
+    }, sequential)
+    expect(event).toMatchObject({ item_id: 'task-1', item_kind: 'task', action: 'commit' })
+    expect(event).not.toHaveProperty('idea_id')
+  })
 })

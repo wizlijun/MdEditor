@@ -1,6 +1,13 @@
 export const NEXT_ACTIONS = ['commit', 'wait', 'park', 'settle', 'reopen', 'relink'] as const
 export type NextAction = (typeof NEXT_ACTIONS)[number]
 
+export const ITEM_KINDS = ['idea', 'task'] as const
+export type ItemKind = (typeof ITEM_KINDS)[number]
+
+export function itemKey(kind: ItemKind, id: string): string {
+  return JSON.stringify([kind, id])
+}
+
 export const IDEA_STATES = ['capture', 'wip', 'waiting', 'dormant', 'closed', 'unsupported'] as const
 export type IdeaState = (typeof IDEA_STATES)[number]
 
@@ -17,7 +24,11 @@ export interface SourceRef {
 export interface EventBase {
   at: string
   event_id: string
-  idea_id: string
+  /** v2 identity. New events in a v2 ledger use this pair exclusively. */
+  item_id?: string
+  item_kind?: ItemKind
+  /** v1 persisted identity. Readers normalize it to item_kind=idea in memory. */
+  idea_id?: string
   action: NextAction
   source?: SourceRef
   /** Canonical tag set. Omitted inherits, an array replaces, and null clears. */
@@ -102,13 +113,18 @@ export type NextEvent =
 export interface UnsupportedEvent {
   at: string
   event_id: string
-  idea_id: string
+  item_id: string
+  item_kind: ItemKind
+  idea_id?: string
   action: string
   source?: SourceRef
   [key: string]: unknown
 }
 
 export interface IdeaProjectionBase {
+  item_id?: string
+  item_kind?: ItemKind
+  /** Deprecated compatibility alias. Generic consumers should use item_id. */
   idea_id: string
   source?: SourceRef
   last_event_id: string
@@ -164,6 +180,17 @@ export type IdeaProjection =
   | ClosedIdea
   | UnsupportedIdea
 
+/** Canonical in-memory projection after v1 identities have been normalized. */
+export type ItemProjection = IdeaProjection & {
+  item_id: string
+  item_kind: ItemKind
+}
+
+export type NormalizedNextEvent = NextEvent & {
+  item_id: string
+  item_kind: ItemKind
+}
+
 export function projectTagsOf(projection: IdeaProjection | undefined): readonly string[] {
   if (projection?.projects?.length) return projection.projects
   return projection?.project ? [projection.project] : []
@@ -207,18 +234,27 @@ export interface DomainIssue {
   severity: 'warning' | 'blocking'
   message: string
   event_id?: string
+  item_id?: string
+  item_kind?: ItemKind
+  /** Deprecated v1 compatibility field for Idea issues. */
   idea_id?: string
   event_index?: number
   fields?: readonly string[]
   related_idea_ids?: readonly string[]
+  related_item_ids?: readonly string[]
 }
 
 export interface LedgerProjection {
+  /** Canonical map keyed by itemKey(item_kind, item_id). */
+  items: ReadonlyMap<string, ItemProjection>
+  /** Deprecated v1 compatibility view, containing Idea items keyed by idea_id. */
   ideas: ReadonlyMap<string, IdeaProjection>
   /** Unique event payloads, including unsupported events, keyed by event_id. */
   eventById: ReadonlyMap<string, unknown>
   /** Historical source claims. A relink adds a claim; it does not erase the old one. */
   sourceToIdeaId: ReadonlyMap<string, string>
+  /** Canonical source claims whose values are itemKey(item_kind, item_id). */
+  sourceToItemKey: ReadonlyMap<string, string>
   issues: readonly DomainIssue[]
   idempotentEventIds: readonly string[]
   wipCount: number
@@ -238,7 +274,7 @@ export interface FieldValidationError {
 }
 
 export type EventValidation =
-  | { ok: true; known: true; event: NextEvent }
+  | { ok: true; known: true; event: NormalizedNextEvent }
   | { ok: true; known: false; event: UnsupportedEvent }
   | { ok: false; errors: readonly FieldValidationError[] }
 
@@ -246,8 +282,10 @@ export interface AppendOptions {
   /** G3 experiment switch. The default remains a neutral soft limit. */
   hardLimit?: boolean
   wipLimit?: number
+  /** When supplied, require the persisted identity envelope for that ledger. */
+  ledgerVersion?: 1 | 2
 }
 
 export type AppendValidation =
-  | { ok: true; idempotent: boolean; event: NextEvent }
+  | { ok: true; idempotent: boolean; event: NormalizedNextEvent }
   | { ok: false; issues: readonly DomainIssue[] }

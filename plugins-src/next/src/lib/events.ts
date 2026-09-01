@@ -1,5 +1,6 @@
 import type {
   CommitEvent,
+  ItemKind,
   NextEvent,
   ParkEvent,
   RelinkEvent,
@@ -10,6 +11,13 @@ import type {
 import { uniqueProjectTags } from './model'
 import { sourceRefOf, type WorkspaceItem } from './repository'
 import type { IdeaSource } from './source'
+import type { LedgerVersion } from './ledger'
+
+type LifecycleItem = WorkspaceItem & {
+  item_id?: string
+  item_kind?: ItemKind
+  kind?: ItemKind
+}
 
 type ProjectChange = {
   projects?: string[] | null
@@ -62,23 +70,32 @@ function projectChange(input: ProjectChange): { projects?: string[] | null; proj
   return projects.length ? { projects, project: projects[0] } : {}
 }
 
-function envelope(item: WorkspaceItem, factory: EventFactory) {
+function envelope(item: LifecycleItem, factory: EventFactory, version: LedgerVersion) {
   const source = sourceRefOf(item)
-  if (!item.idea_id && !source) throw new Error('a new idea requires a source')
+  const kind = item.item_kind ?? item.kind ?? item.projection?.item_kind ?? 'idea'
+  const existingId = item.item_id ?? item.projection?.item_id ?? item.idea_id
+  if (kind === 'task' && !existingId) throw new Error('a task requires its stable item_id')
+  if (!existingId && !source) throw new Error('a new item requires a source')
+  const at = factory.now()
+  const eventId = factory.id()
+  const id = existingId ?? factory.id()
   return {
-    at: factory.now(),
-    event_id: factory.id(),
-    idea_id: item.idea_id ?? factory.id(),
+    at,
+    event_id: eventId,
+    ...(version === 2 || kind === 'task'
+      ? { item_id: id, item_kind: kind }
+      : { idea_id: id }),
     ...(source ? { source } : {}),
   }
 }
 
 export function placeEvent(
-  item: WorkspaceItem,
+  item: LifecycleItem,
   input: PlaceInput,
   factory: EventFactory = defaultEventFactory,
+  version: LedgerVersion = 1,
 ): NextEvent {
-  const base = { ...envelope(item, factory), ...projectChange(input) }
+  const base = { ...envelope(item, factory, version), ...projectChange(input) }
   switch (input.route) {
     case 'commit': {
       const event: CommitEvent = {
@@ -132,22 +149,28 @@ export function placeEvent(
 }
 
 export function reopenEvent(
-  item: WorkspaceItem,
+  item: LifecycleItem,
   factory: EventFactory = defaultEventFactory,
+  version: LedgerVersion = 1,
 ): NextEvent {
-  return { ...envelope(item, factory), action: 'reopen' }
+  return { ...envelope(item, factory, version), action: 'reopen' }
 }
 
 export function relinkEvent(
-  item: WorkspaceItem,
+  item: LifecycleItem,
   source: IdeaSource,
   factory: EventFactory = defaultEventFactory,
+  version: LedgerVersion = 1,
 ): RelinkEvent {
-  if (!item.idea_id) throw new Error('only a placed idea can be relinked')
+  const kind = item.item_kind ?? item.kind ?? item.projection?.item_kind ?? 'idea'
+  const id = item.item_id ?? item.projection?.item_id ?? item.idea_id
+  if (!id) throw new Error('only a placed item can be relinked')
   return {
     at: factory.now(),
     event_id: factory.id(),
-    idea_id: item.idea_id,
+    ...(version === 2 || kind === 'task'
+      ? { item_id: id, item_kind: kind }
+      : { idea_id: id }),
     action: 'relink',
     source: { path: source.path, ...(source.created ? { created: source.created } : {}) },
   }

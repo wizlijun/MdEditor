@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { reduceEvents, sourceKey, validateAppend, validateEvent } from './domain'
+import { itemKey } from './model'
 
 const at = '2026-08-29T14:10:00Z'
 
@@ -21,6 +22,33 @@ function commit(eventId: string, ideaId: string, path?: string) {
 }
 
 describe('validateEvent', () => {
+  it('normalizes a v1 idea identity in memory while leaving the raw record untouched', () => {
+    const raw = commit('e1', 'i1', 'inbox/ideas/a-idea.md')
+    const result = validateEvent(raw)
+    expect(result).toMatchObject({
+      ok: true,
+      known: true,
+      event: { item_id: 'i1', item_kind: 'idea', idea_id: 'i1' },
+    })
+    expect(raw).not.toHaveProperty('item_id')
+  })
+
+  it('accepts v2 idea and task identities and rejects incomplete or conflicting identities', () => {
+    const task = {
+      ...commit('e-task', 'unused'),
+      idea_id: undefined,
+      item_id: 'task-1',
+      item_kind: 'task',
+    }
+    expect(validateEvent(task)).toMatchObject({
+      ok: true,
+      known: true,
+      event: { item_id: 'task-1', item_kind: 'task' },
+    })
+    expect(validateEvent({ ...task, item_kind: undefined }).ok).toBe(false)
+    expect(validateEvent({ ...task, idea_id: 'another-id' }).ok).toBe(false)
+  })
+
   it('accepts a first disposition whose legacy source has no created', () => {
     const result = validateEvent(commit('e1', 'i1', 'inbox/ideas/a-idea.md'))
     expect(result).toMatchObject({ ok: true, known: true })
@@ -106,6 +134,66 @@ describe('validateEvent', () => {
 })
 
 describe('reduceEvents', () => {
+  it('projects v1 ideas and v2 tasks through the same state machine and WIP limit', () => {
+    const result = reduceEvents([
+      commit('idea-event', 'idea-1', 'inbox/ideas/a-idea.md'),
+      {
+        at,
+        event_id: 'task-event',
+        item_id: 'task-1',
+        item_kind: 'task',
+        action: 'commit',
+        source: source('inbox/tasks/a-task.md'),
+        commitment: 'Ship it',
+        next_action: 'Build',
+        close_condition: 'Installed',
+      },
+    ])
+
+    expect(result.wipCount).toBe(2)
+    expect(result.items.get(itemKey('idea', 'idea-1'))).toMatchObject({ item_id: 'idea-1', item_kind: 'idea', idea_id: 'idea-1' })
+    expect(result.items.get(itemKey('task', 'task-1'))).toMatchObject({ item_id: 'task-1', item_kind: 'task' })
+    expect(result.ideas.get('idea-1')).toBe(result.items.get(itemKey('idea', 'idea-1')))
+    expect(result.sourceToItemKey.get(sourceKey(source('inbox/tasks/a-task.md')))).toBe(itemKey('task', 'task-1'))
+  })
+
+  it('keeps unknown v2 actions visible without discarding extension fields', () => {
+    const result = reduceEvents([{
+      at,
+      event_id: 'future-task-event',
+      item_id: 'task-1',
+      item_kind: 'task',
+      action: 'future-action',
+      source: source('inbox/tasks/a-task.md'),
+      future_payload: { answer: 42 },
+    }])
+    expect(result.eventById.get('future-task-event')).toMatchObject({ future_payload: { answer: 42 } })
+    expect(result.items.get(itemKey('task', 'task-1'))).toMatchObject({
+      item_id: 'task-1',
+      item_kind: 'task',
+      state: 'unsupported',
+      unsupported_actions: ['future-action'],
+    })
+  })
+
+  it('keeps equal ids of different item kinds as distinct identities', () => {
+    const idea = commit('idea-event', 'same-id', 'inbox/ideas/a-idea.md')
+    const task = {
+      ...idea,
+      event_id: 'task-event',
+      idea_id: undefined,
+      item_id: 'same-id',
+      item_kind: 'task',
+      source: source('inbox/tasks/a-task.md'),
+    }
+    const result = reduceEvents([idea, task])
+
+    expect(result.hasBlockingIssues).toBe(false)
+    expect(result.items).toHaveLength(2)
+    expect(result.items.get(itemKey('idea', 'same-id'))?.item_kind).toBe('idea')
+    expect(result.items.get(itemKey('task', 'same-id'))?.item_kind).toBe('task')
+  })
+
   it('inherits, changes, and explicitly clears a project marker across placements', () => {
     const result = reduceEvents([
       { ...commit('e1', 'idea-1', 'inbox/ideas/a-idea.md'), project: 'Next' },
@@ -342,6 +430,22 @@ describe('reduceEvents', () => {
     expect(result.wipAtLimit).toBe(true)
     expect(result.wipExceeded).toBe(true)
     expect(result.hasBlockingIssues).toBe(false)
+  })
+})
+
+describe('validateAppend v2 identity envelope', () => {
+  it('requires new v2 writes to use item_id and item_kind while allowing exact v1 replay', () => {
+    const legacy = commit('legacy-event', 'idea-1', 'inbox/ideas/a-idea.md')
+    const projection = reduceEvents([legacy])
+
+    expect(validateAppend(projection, legacy, { ledgerVersion: 2 })).toMatchObject({
+      ok: true,
+      idempotent: true,
+    })
+    expect(validateAppend(projection, commit('new-event', 'idea-1'), { ledgerVersion: 2 })).toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: 'invalid_event', fields: expect.arrayContaining(['item_id']) })],
+    })
   })
 })
 

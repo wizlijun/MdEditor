@@ -2,6 +2,7 @@ import {
   DEFAULT_WAITING_WARNING,
   DEFAULT_WIP_LIMIT,
   NEXT_ACTIONS,
+  itemKey,
   projectTagKey,
   type AppendOptions,
   type AppendValidation,
@@ -10,20 +11,22 @@ import {
   type FieldValidationError,
   type IdeaProjection,
   type IdeaState,
+  type ItemKind,
+  type ItemProjection,
   type LedgerProjection,
   type NextAction,
   type NextEvent,
+  type NormalizedNextEvent,
   type SourceRef,
   type UnsupportedEvent,
-  type UnsupportedIdea,
 } from './model'
 
 type UnknownRecord = Record<string, unknown>
 
 interface MutableProjection {
-  ideas: Map<string, IdeaProjection>
+  items: Map<string, ItemProjection>
   eventById: Map<string, unknown>
-  sourceToIdeaId: Map<string, string>
+  sourceToItemKey: Map<string, string>
   issues: DomainIssue[]
   idempotentEventIds: string[]
 }
@@ -57,6 +60,44 @@ function isTimestamp(value: string): boolean {
 
 export function isNextAction(value: unknown): value is NextAction {
   return typeof value === 'string' && (NEXT_ACTIONS as readonly string[]).includes(value)
+}
+
+function itemKind(value: unknown): value is ItemKind {
+  return value === 'idea' || value === 'task'
+}
+
+function normalizedIdentity(
+  record: UnknownRecord,
+  errors: FieldValidationError[],
+): { item_id: string; item_kind: ItemKind } | null {
+  const hasV2Identity = record.item_id !== undefined || record.item_kind !== undefined
+  if (!hasV2Identity) {
+    if (!isNonBlankString(record.idea_id)) {
+      errors.push({ field: 'idea_id', message: 'must be a non-blank string for a v1 event' })
+      return null
+    }
+    return { item_id: record.idea_id, item_kind: 'idea' }
+  }
+
+  let valid = true
+  if (!isNonBlankString(record.item_id)) {
+    errors.push({ field: 'item_id', message: 'must be a non-blank string for a v2 event' })
+    valid = false
+  }
+  if (!itemKind(record.item_kind)) {
+    errors.push({ field: 'item_kind', message: 'must be idea or task for a v2 event' })
+    valid = false
+  }
+  if (record.idea_id !== undefined) {
+    if (!isNonBlankString(record.idea_id)) {
+      errors.push({ field: 'idea_id', message: 'must be a non-blank string when present' })
+      valid = false
+    } else if (isNonBlankString(record.item_id) && record.idea_id !== record.item_id) {
+      errors.push({ field: 'idea_id', message: 'must match item_id when both identity formats are present' })
+      valid = false
+    }
+  }
+  return valid ? { item_id: record.item_id as string, item_kind: record.item_kind as ItemKind } : null
 }
 
 /**
@@ -160,7 +201,7 @@ function validateExit(record: UnknownRecord, errors: FieldValidationError[]): vo
   }
 }
 
-/** Validate one event without discarding fields this v1 reader does not own. */
+/** Validate and normalize one v1/v2 event without mutating its persisted record. */
 export function validateEvent(value: unknown): EventValidation {
   if (!isRecord(value)) {
     return { ok: false, errors: [{ field: '$', message: 'event must be an object' }] }
@@ -169,13 +210,14 @@ export function validateEvent(value: unknown): EventValidation {
   const errors: FieldValidationError[] = []
   requireDate(value, 'at', errors, true)
   requireString(value, 'event_id', errors)
-  requireString(value, 'idea_id', errors)
+  const identity = normalizedIdentity(value, errors)
   requireString(value, 'action', errors)
   if (value.source !== undefined) validateSource(value.source, 'source', errors)
 
   if (errors.length > 0) return { ok: false, errors }
+  const normalized = { ...clonePayload(value), ...identity } as UnknownRecord
   if (!isNextAction(value.action)) {
-    return { ok: true, known: false, event: value as UnsupportedEvent }
+    return { ok: true, known: false, event: normalized as UnsupportedEvent }
   }
 
   switch (value.action) {
@@ -205,7 +247,7 @@ export function validateEvent(value: unknown): EventValidation {
   }
 
   if (errors.length > 0) return { ok: false, errors }
-  return { ok: true, known: true, event: value as unknown as NextEvent }
+  return { ok: true, known: true, event: normalized as unknown as NormalizedNextEvent }
 }
 
 function clonePayload<T>(value: T): T {
@@ -233,6 +275,16 @@ function envelopeString(value: unknown, field: string): string | undefined {
   return isRecord(value) && isNonBlankString(value[field]) ? value[field] : undefined
 }
 
+function envelopeIdentity(value: unknown): { item_id: string; item_kind: ItemKind } | undefined {
+  if (!isRecord(value)) return undefined
+  if (isNonBlankString(value.item_id) && itemKind(value.item_kind)) {
+    return { item_id: value.item_id, item_kind: value.item_kind }
+  }
+  return isNonBlankString(value.idea_id)
+    ? { item_id: value.idea_id, item_kind: 'idea' }
+    : undefined
+}
+
 function envelopeSource(value: unknown): SourceRef | undefined {
   if (!isRecord(value) || value.source === undefined) return undefined
   const errors: FieldValidationError[] = []
@@ -249,13 +301,16 @@ function unknownActionsOf(idea: IdeaProjection | undefined): string[] {
 
 function markUnsupported(
   state: MutableProjection,
-  ideaId: string,
+  itemId: string,
   eventId: string,
   at: string,
   source?: SourceRef,
   action?: string,
+  kind?: ItemKind,
 ): void {
-  const current = state.ideas.get(ideaId)
+  const resolvedKind = kind ?? 'idea'
+  const key = itemKey(resolvedKind, itemId)
+  const current = state.items.get(key)
   const actions = unknownActionsOf(current)
   if (action && !actions.includes(action)) actions.push(action)
   const lastKnownState = current?.state === 'unsupported'
@@ -266,8 +321,10 @@ function markUnsupported(
     : current?.project
       ? [current.project]
       : []
-  const unsupported: UnsupportedIdea = {
-    idea_id: ideaId,
+  const unsupported: ItemProjection = {
+    item_id: itemId,
+    item_kind: resolvedKind,
+    idea_id: itemId,
     state: 'unsupported',
     last_event_id: eventId,
     last_at: at,
@@ -276,16 +333,21 @@ function markUnsupported(
     ...(current?.source ? { source: current.source } : source ? { source } : {}),
     ...(lastKnownState ? { last_known_state: lastKnownState } : {}),
   }
-  state.ideas.set(ideaId, unsupported)
+  state.items.set(key, unsupported)
 }
 
 function issueForInvalidEvent(value: unknown, index: number, errors: readonly FieldValidationError[]): DomainIssue {
+  const identity = envelopeIdentity(value)
   return {
     code: 'invalid_event',
     severity: 'blocking',
     message: errors.map((error) => `${error.field}: ${error.message}`).join('; '),
     ...(envelopeString(value, 'event_id') ? { event_id: envelopeString(value, 'event_id') } : {}),
-    ...(envelopeString(value, 'idea_id') ? { idea_id: envelopeString(value, 'idea_id') } : {}),
+    ...(identity ? {
+      item_id: identity.item_id,
+      item_kind: identity.item_kind,
+      ...(identity.item_kind === 'idea' ? { idea_id: identity.item_id } : {}),
+    } : {}),
     event_index: index,
     fields: errors.map((error) => error.field),
   }
@@ -327,31 +389,46 @@ export function ownersOfSource(claims: ReadonlyMap<string, string>, source: Sour
 function claimSource(
   state: MutableProjection,
   source: SourceRef,
-  ideaId: string,
+  itemId: string,
   eventId: string,
   at: string,
   index: number,
+  kind: ItemKind = 'idea',
 ): boolean {
   const key = sourceKey(source)
-  const owners = ownersOfSource(state.sourceToIdeaId, source)
-  const conflictingOwners = [...owners].filter((owner) => owner !== ideaId)
+  const ownItemKey = itemKey(kind, itemId)
+  const owners = ownersOfSource(state.sourceToItemKey, source)
+  const conflictingOwners = [...owners].filter((owner) => owner !== ownItemKey)
   if (conflictingOwners.length === 0) {
-    state.sourceToIdeaId.set(key, ideaId)
+    state.sourceToItemKey.set(key, ownItemKey)
     return true
   }
-  const owner = conflictingOwners[0]
+  const ownerKey = conflictingOwners[0]
+  const owner = state.items.get(ownerKey)
 
   addIssue(state, {
     code: 'source_identity_conflict',
     severity: 'blocking',
-    message: `source ${source.path} is claimed by both ${owner} and ${ideaId}`,
+    message: `source ${source.path} is claimed by both ${owner?.item_id ?? ownerKey} and ${itemId}`,
     event_id: eventId,
-    idea_id: ideaId,
+    item_id: itemId,
+    item_kind: kind,
+    ...(kind === 'idea' ? { idea_id: itemId } : {}),
     event_index: index,
-    related_idea_ids: [...new Set([...conflictingOwners, ideaId])],
+    related_item_ids: [...new Set([
+      ...conflictingOwners.map((key) => state.items.get(key)?.item_id ?? key),
+      itemId,
+    ])],
+    related_idea_ids: [...new Set([
+      ...conflictingOwners
+        .map((key) => state.items.get(key))
+        .filter((item) => item?.item_kind === 'idea')
+        .map((item) => item!.item_id),
+      ...(kind === 'idea' ? [itemId] : []),
+    ])],
   })
-  markUnsupported(state, owner, eventId, at)
-  markUnsupported(state, ideaId, eventId, at, source)
+  if (owner) markUnsupported(state, owner.item_id, eventId, at, undefined, undefined, owner.item_kind)
+  markUnsupported(state, itemId, eventId, at, source, undefined, kind)
   return false
 }
 
@@ -374,7 +451,9 @@ function canTransition(from: IdeaState | undefined, action: NextAction): boolean
 }
 
 function applyKnownEvent(state: MutableProjection, event: NextEvent, index: number): void {
-  const current = state.ideas.get(event.idea_id)
+  const normalized = event as NormalizedNextEvent
+  const key = itemKey(normalized.item_kind, normalized.item_id)
+  const current = state.items.get(key)
   const source = event.source ?? current?.source
   const eventProjects = readableProjects(event.projects)
   const projects = eventProjects === null
@@ -395,17 +474,27 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
     addIssue(state, {
       code: 'missing_initial_source',
       severity: 'blocking',
-      message: 'the first disposition for an idea requires source.path',
+      message: 'the first disposition for an item requires source.path',
       event_id: event.event_id,
-      idea_id: event.idea_id,
+      item_id: normalized.item_id,
+      item_kind: normalized.item_kind,
+      ...(normalized.item_kind === 'idea' ? { idea_id: normalized.item_id } : {}),
       event_index: index,
       fields: ['source.path'],
     })
-    markUnsupported(state, event.idea_id, event.event_id, event.at)
+    markUnsupported(state, normalized.item_id, event.event_id, event.at, undefined, undefined, normalized.item_kind)
     return
   }
 
-  if (event.source && !claimSource(state, event.source, event.idea_id, event.event_id, event.at, index)) return
+  if (event.source && !claimSource(
+    state,
+    event.source,
+    normalized.item_id,
+    event.event_id,
+    event.at,
+    index,
+    normalized.item_kind,
+  )) return
 
   if (current?.source && event.source && event.action !== 'relink' && !sourceMatches(current.source, event.source)) {
     addIssue(state, {
@@ -413,11 +502,13 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
       severity: 'blocking',
       message: 'a changed source must be recorded with relink',
       event_id: event.event_id,
-      idea_id: event.idea_id,
+      item_id: normalized.item_id,
+      item_kind: normalized.item_kind,
+      ...(normalized.item_kind === 'idea' ? { idea_id: normalized.item_id } : {}),
       event_index: index,
       fields: ['source'],
     })
-    markUnsupported(state, event.idea_id, event.event_id, event.at, current.source)
+    markUnsupported(state, normalized.item_id, event.event_id, event.at, current.source, undefined, normalized.item_kind)
     return
   }
 
@@ -427,18 +518,22 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
       code,
       severity: current?.state === 'unsupported' ? 'warning' : 'blocking',
       message: current?.state === 'unsupported'
-        ? 'the idea has an event this reader cannot safely reduce'
+        ? 'the item has an event this reader cannot safely reduce'
         : `cannot apply ${event.action} from ${current?.state ?? 'no prior state'}`,
       event_id: event.event_id,
-      idea_id: event.idea_id,
+      item_id: normalized.item_id,
+      item_kind: normalized.item_kind,
+      ...(normalized.item_kind === 'idea' ? { idea_id: normalized.item_id } : {}),
       event_index: index,
     })
-    markUnsupported(state, event.idea_id, event.event_id, event.at, source)
+    markUnsupported(state, normalized.item_id, event.event_id, event.at, source, undefined, normalized.item_kind)
     return
   }
 
   const base = {
-    idea_id: event.idea_id,
+    item_id: normalized.item_id,
+    item_kind: normalized.item_kind,
+    idea_id: normalized.item_id,
     last_event_id: event.event_id,
     last_at: event.at,
     ...(source ? { source } : {}),
@@ -446,7 +541,7 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
   }
   switch (event.action) {
     case 'commit':
-      state.ideas.set(event.idea_id, {
+      state.items.set(key, {
         ...base,
         state: 'wip',
         commitment: event.commitment,
@@ -455,7 +550,7 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
       })
       break
     case 'wait':
-      state.ideas.set(event.idea_id, {
+      state.items.set(key, {
         ...base,
         state: 'waiting',
         waiting_for: event.waiting_for,
@@ -463,7 +558,7 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
       })
       break
     case 'park':
-      state.ideas.set(event.idea_id, {
+      state.items.set(key, {
         ...base,
         state: 'dormant',
         wake_trigger: event.wake_trigger,
@@ -471,7 +566,7 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
       })
       break
     case 'settle':
-      state.ideas.set(event.idea_id, {
+      state.items.set(key, {
         ...base,
         state: 'closed',
         exit: clonePayload(event.exit),
@@ -481,38 +576,50 @@ function applyKnownEvent(state: MutableProjection, event: NextEvent, index: numb
       })
       break
     case 'reopen':
-      state.ideas.set(event.idea_id, { ...base, state: 'capture' })
+      state.items.set(key, { ...base, state: 'capture' })
       break
     case 'relink':
       {
         const { project: _currentProject, projects: _currentProjects, ...currentWithoutProject } = current!
-        state.ideas.set(event.idea_id, { ...currentWithoutProject, ...base, source: event.source })
+        state.items.set(key, { ...currentWithoutProject, ...base, source: event.source })
       }
       break
   }
 }
 
 function applyUnsupportedEvent(state: MutableProjection, event: UnsupportedEvent, index: number): void {
-  const current = state.ideas.get(event.idea_id)
+  const current = state.items.get(itemKey(event.item_kind, event.item_id))
   if (!current && !event.source) {
     addIssue(state, {
       code: 'missing_initial_source',
       severity: 'blocking',
-      message: 'the first event for an idea requires source.path',
+      message: 'the first event for an item requires source.path',
       event_id: event.event_id,
-      idea_id: event.idea_id,
+      item_id: event.item_id,
+      item_kind: event.item_kind,
+      ...(event.item_kind === 'idea' ? { idea_id: event.item_id } : {}),
       event_index: index,
       fields: ['source.path'],
     })
   }
-  if (event.source && !claimSource(state, event.source, event.idea_id, event.event_id, event.at, index)) {
-    markUnsupported(state, event.idea_id, event.event_id, event.at, event.source, event.action)
+  if (event.source && !claimSource(
+    state,
+    event.source,
+    event.item_id,
+    event.event_id,
+    event.at,
+    index,
+    event.item_kind,
+  )) {
+    markUnsupported(state, event.item_id, event.event_id, event.at, event.source, event.action, event.item_kind)
     addIssue(state, {
       code: 'unsupported_action',
       severity: 'warning',
       message: `unsupported action: ${event.action}`,
       event_id: event.event_id,
-      idea_id: event.idea_id,
+      item_id: event.item_id,
+      item_kind: event.item_kind,
+      ...(event.item_kind === 'idea' ? { idea_id: event.item_id } : {}),
       event_index: index,
     })
     return
@@ -522,21 +629,33 @@ function applyUnsupportedEvent(state: MutableProjection, event: UnsupportedEvent
     severity: 'warning',
     message: `unsupported action: ${event.action}`,
     event_id: event.event_id,
-    idea_id: event.idea_id,
+    item_id: event.item_id,
+    item_kind: event.item_kind,
+    ...(event.item_kind === 'idea' ? { idea_id: event.item_id } : {}),
     event_index: index,
   })
-  markUnsupported(state, event.idea_id, event.event_id, event.at, current?.source ?? event.source, event.action)
+  markUnsupported(state, event.item_id, event.event_id, event.at, current?.source ?? event.source, event.action, event.item_kind)
 }
 
 function finalize(state: MutableProjection): LedgerProjection {
-  const values = [...state.ideas.values()]
+  const values = [...state.items.values()]
+  const ideas = new Map(values
+    .filter((item) => item.item_kind === 'idea')
+    .map((item) => [item.item_id, item] as const))
+  const sourceToIdeaId = new Map<string, string>()
+  for (const [source, key] of state.sourceToItemKey) {
+    const item = state.items.get(key)
+    if (item?.item_kind === 'idea') sourceToIdeaId.set(source, item.item_id)
+  }
   const wipCount = values.filter((idea) => idea.state === 'wip').length
   const waitingCount = values.filter((idea) => idea.state === 'waiting').length
   const hasUnsupported = values.some((idea) => idea.state === 'unsupported')
   return {
-    ideas: state.ideas,
+    items: state.items,
+    ideas,
     eventById: state.eventById,
-    sourceToIdeaId: state.sourceToIdeaId,
+    sourceToIdeaId,
+    sourceToItemKey: state.sourceToItemKey,
     issues: state.issues,
     idempotentEventIds: state.idempotentEventIds,
     wipCount,
@@ -557,9 +676,9 @@ function finalize(state: MutableProjection): LedgerProjection {
  */
 export function reduceEvents(events: readonly unknown[]): LedgerProjection {
   const state: MutableProjection = {
-    ideas: new Map(),
+    items: new Map(),
     eventById: new Map(),
-    sourceToIdeaId: new Map(),
+    sourceToItemKey: new Map(),
     issues: [],
     idempotentEventIds: [],
   }
@@ -573,28 +692,47 @@ export function reduceEvents(events: readonly unknown[]): LedgerProjection {
           if (!state.idempotentEventIds.includes(eventId)) state.idempotentEventIds.push(eventId)
           return
         }
-        const ideaId = envelopeString(rawEvent, 'idea_id')
-        const previousIdeaId = envelopeString(previous, 'idea_id')
+        const identity = envelopeIdentity(rawEvent)
+        const previousIdentity = envelopeIdentity(previous)
+        const itemId = identity?.item_id
+        const previousItemId = previousIdentity?.item_id
         addIssue(state, {
           code: 'event_id_conflict',
           severity: 'blocking',
           message: `event_id ${eventId} has different payloads`,
           event_id: eventId,
-          ...(ideaId ? { idea_id: ideaId } : {}),
+          ...(identity ? {
+            item_id: identity.item_id,
+            item_kind: identity.item_kind,
+            ...(identity.item_kind === 'idea' ? { idea_id: identity.item_id } : {}),
+          } : {}),
           event_index: index,
-          related_idea_ids: [...new Set([previousIdeaId, ideaId].filter(isNonBlankString))],
+          related_item_ids: [...new Set([previousItemId, itemId].filter(isNonBlankString))],
+          related_idea_ids: [...new Set([
+            previousIdentity?.item_kind === 'idea' ? previousItemId : undefined,
+            identity?.item_kind === 'idea' ? itemId : undefined,
+          ].filter(isNonBlankString))],
         })
         const at = envelopeString(rawEvent, 'at') ?? envelopeString(previous, 'at') ?? ''
-        if (previousIdeaId) markUnsupported(state, previousIdeaId, eventId, at)
-        if (ideaId) {
+        if (previousItemId) markUnsupported(
+          state,
+          previousItemId,
+          eventId,
+          at,
+          undefined,
+          undefined,
+          previousIdentity?.item_kind,
+        )
+        if (itemId) {
           const action = envelopeString(rawEvent, 'action')
           markUnsupported(
             state,
-            ideaId,
+            itemId,
             eventId,
             at,
             envelopeSource(rawEvent),
             action && !isNextAction(action) ? action : undefined,
+            identity?.item_kind,
           )
         }
         return
@@ -605,12 +743,21 @@ export function reduceEvents(events: readonly unknown[]): LedgerProjection {
     const validated = validateEvent(rawEvent)
     if (!validated.ok) {
       addIssue(state, issueForInvalidEvent(rawEvent, index, validated.errors))
-      const ideaId = envelopeString(rawEvent, 'idea_id')
+      const identity = envelopeIdentity(rawEvent)
+      const itemId = identity?.item_id
       const at = envelopeString(rawEvent, 'at') ?? ''
-      if (ideaId) {
+      if (itemId) {
         const source = envelopeSource(rawEvent)
-        if (source && eventId) claimSource(state, source, ideaId, eventId, at, index)
-        markUnsupported(state, ideaId, eventId ?? '', at, source, envelopeString(rawEvent, 'action'))
+        if (source && eventId) claimSource(state, source, itemId, eventId, at, index, identity?.item_kind)
+        markUnsupported(
+          state,
+          itemId,
+          eventId ?? '',
+          at,
+          source,
+          envelopeString(rawEvent, 'action'),
+          identity?.item_kind,
+        )
       }
       return
     }
@@ -624,7 +771,7 @@ export function reduceEvents(events: readonly unknown[]): LedgerProjection {
 
 function prospectiveIssue(
   code: DomainIssue['code'],
-  event: { event_id: string; idea_id: string },
+  event: { event_id: string; item_id: string; item_kind: ItemKind },
   message: string,
   fields?: readonly string[],
 ): DomainIssue {
@@ -633,7 +780,9 @@ function prospectiveIssue(
     severity: 'blocking',
     message,
     event_id: event.event_id,
-    idea_id: event.idea_id,
+    item_id: event.item_id,
+    item_kind: event.item_kind,
+    ...(event.item_kind === 'idea' ? { idea_id: event.item_id } : {}),
     ...(fields ? { fields } : {}),
   }
 }
@@ -643,9 +792,19 @@ function prospectiveIssue(
  * writer is stricter about the shapes it emits without retroactively making a
  * previously readable ledger invalid.
  */
-function writerExtensionErrors(value: unknown): FieldValidationError[] {
+function writerExtensionErrors(value: unknown, ledgerVersion?: 1 | 2): FieldValidationError[] {
   if (!isRecord(value)) return []
   const errors: FieldValidationError[] = []
+  const hasV2Identity = value.item_id !== undefined || value.item_kind !== undefined
+  if (ledgerVersion === 2 && !hasV2Identity) {
+    errors.push({ field: 'item_id', message: 'v2 ledger events must use item_id and item_kind' })
+  }
+  if (ledgerVersion === 2 && value.idea_id !== undefined) {
+    errors.push({ field: 'idea_id', message: 'v2 ledger events must not emit the legacy idea_id field' })
+  }
+  if (ledgerVersion === 1 && hasV2Identity) {
+    errors.push({ field: 'item_id', message: 'v2 item identities require a v2 ledger' })
+  }
   if (value.project !== undefined && value.project !== null && !isNonBlankString(value.project)) {
     errors.push({ field: 'project', message: 'must be a non-blank string or null when present' })
   }
@@ -699,7 +858,7 @@ export function validateAppend(
     }
   }
 
-  const extensionErrors = writerExtensionErrors(rawEvent)
+  const extensionErrors = writerExtensionErrors(rawEvent, options.ledgerVersion)
   if (!validated.ok || extensionErrors.length > 0) {
     const errors = [...(!validated.ok ? validated.errors : []), ...extensionErrors]
     return {
@@ -709,7 +868,13 @@ export function validateAppend(
         severity: 'blocking',
         message: errors.map((error) => `${error.field}: ${error.message}`).join('; '),
         ...(envelopeString(rawEvent, 'event_id') ? { event_id: envelopeString(rawEvent, 'event_id') } : {}),
-        ...(envelopeString(rawEvent, 'idea_id') ? { idea_id: envelopeString(rawEvent, 'idea_id') } : {}),
+        ...(envelopeIdentity(rawEvent) ? {
+          item_id: envelopeIdentity(rawEvent)!.item_id,
+          item_kind: envelopeIdentity(rawEvent)!.item_kind,
+          ...(envelopeIdentity(rawEvent)!.item_kind === 'idea'
+            ? { idea_id: envelopeIdentity(rawEvent)!.item_id }
+            : {}),
+        } : {}),
         fields: errors.map((error) => error.field),
       }],
     }
@@ -746,33 +911,49 @@ export function validateAppend(
     return { ok: false, issues: projection.issues.filter((issue) => issue.severity === 'blocking') }
   }
 
-  const current = projection.ideas.get(event.idea_id)
+  const current = projection.items.get(itemKey(event.item_kind, event.item_id))
   if (!current && !event.source) {
     return {
       ok: false,
       issues: [prospectiveIssue(
         'missing_initial_source',
         event,
-        'the first disposition for an idea requires source.path',
+        'the first disposition for an item requires source.path',
         ['source.path'],
       )],
     }
   }
   if (event.source) {
-    const conflictingOwners = [...ownersOfSource(projection.sourceToIdeaId, event.source)]
-      .filter((owner) => owner !== event.idea_id)
+    const ownItemKey = itemKey(event.item_kind, event.item_id)
+    const conflictingOwners = [...ownersOfSource(projection.sourceToItemKey, event.source)]
+      .filter((owner) => owner !== ownItemKey)
     if (conflictingOwners.length > 0) {
-      const owner = conflictingOwners[0]
+      const owner = projection.items.get(conflictingOwners[0])
       return {
         ok: false,
         issues: [{
           ...prospectiveIssue(
             'source_identity_conflict',
             event,
-            `source ${event.source.path} is already claimed by ${owner}`,
+            `source ${event.source.path} is already claimed by ${owner?.item_id ?? conflictingOwners[0]}`,
             ['source'],
           ),
-          related_idea_ids: [...new Set([...conflictingOwners, event.idea_id])],
+          related_item_ids: [...new Set([
+            ...conflictingOwners.map((key) => projection.items.get(key)?.item_id ?? key),
+            event.item_id,
+          ])],
+          related_idea_ids: event.item_kind === 'idea'
+            ? [...new Set([
+              ...conflictingOwners
+                .map((key) => projection.items.get(key))
+                .filter((item) => item?.item_kind === 'idea')
+                .map((item) => item!.item_id),
+              event.item_id,
+            ])]
+            : conflictingOwners
+              .map((key) => projection.items.get(key))
+              .filter((item) => item?.item_kind === 'idea')
+              .map((item) => item!.item_id),
         }],
       }
     }
@@ -794,7 +975,7 @@ export function validateAppend(
       issues: [prospectiveIssue(
         'idea_unsupported',
         event,
-        'cannot transform an idea with an unsupported history',
+        'cannot transform an item with an unsupported history',
       )],
     }
   }

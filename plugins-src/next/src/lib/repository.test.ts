@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import YAML from 'yaml'
-import { appendEvent, createIdeaSource, itemSearchText, loadWorkspace, type VaultPort } from './repository'
+import { appendEvent, createIdeaSource, createTaskSource, itemSearchText, loadWorkspace, type VaultPort } from './repository'
 import { NEXT_PATH } from './ledger'
 import { placeEvent, relinkEvent, reopenEvent } from './events'
 import type { CommitEvent, NextEvent, SettleEvent } from './model'
@@ -36,6 +36,20 @@ class MemoryVault implements VaultPort {
     return { ok: true as const }
   }
 
+  async rename(from: string, to: string) {
+    const content = this.files.get(from)
+    if (content === undefined) throw new Error(`missing: ${from}`)
+    if (this.files.has(to)) throw new Error(`exists: ${to}`)
+    this.files.delete(from)
+    this.files.set(to, content)
+    return { ok: true as const }
+  }
+
+  async remove(path: string) {
+    this.files.delete(path)
+    return { ok: true as const }
+  }
+
   async open(path: string) {
     this.opened.push(path)
     return { ok: true }
@@ -44,6 +58,17 @@ class MemoryVault implements VaultPort {
 
 const idea = (created = '2026-08-29T01:00:00Z') => `---\ntype: Idea\ncreated: ${created}\n---\n# A useful idea\n`
 const ideaWithoutCreated = '---\ntype: Idea\n---\n# A useful idea\n'
+const TASK_ID = '8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8'
+const TASK_ID_2 = '93d3d6e2-dcc0-4ec0-9869-37cf130a0964'
+const task = (id = TASK_ID, options: { title?: string; dedupeKey?: string } = {}) => `---
+type: Task
+title: ${options.title ?? '提交 TestFlight 构建'}
+created: 2026-09-01T03:20:00Z
+task:
+  version: 1
+  id: ${id}
+${options.dedupeKey ? `  dedupe_key: ${options.dedupeKey}\n` : ''}---
+确认签名环境变量。`
 const creationTime = () => ({
   getFullYear: () => 2026,
   getMonth: () => 7,
@@ -65,6 +90,215 @@ const commit = (eventId = 'e1'): CommitEvent => ({
 })
 
 describe('Next repository', () => {
+  it('discovers valid Task files in Inbox without upgrading a v1 ledger', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/tasks/submit-task.md', task())
+
+    const workspace = await loadWorkspace(vault)
+
+    expect(workspace.taskDir).toBe('inbox/tasks')
+    expect(workspace.taskSources).toHaveLength(1)
+    expect(workspace.capture).toEqual([
+      expect.objectContaining({
+        kind: 'task',
+        item_id: TASK_ID,
+        path: 'inbox/tasks/submit-task.md',
+        title: '提交 TestFlight 构建',
+        task: { version: 1, id: TASK_ID },
+        state: 'capture',
+      }),
+    ])
+    expect(workspace.ledger.version).toBe(1)
+  })
+
+  it('keeps duplicate Task ids and dedupe keys out of normal lanes and exposes repair cards', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/tasks/id-a-task.md', task(TASK_ID, { title: 'ID A' }))
+    vault.files.set('inbox/tasks/id-b-task.md', task(TASK_ID, { title: 'ID B' }))
+    vault.files.set('inbox/tasks/key-a-task.md', task(TASK_ID_2, { title: 'Key A', dedupeKey: 'daily/v1:same' }))
+    vault.files.set('inbox/tasks/key-b-task.md', task('4d36be4c-4f41-4050-8f34-d636b51aa341', { title: 'Key B', dedupeKey: 'daily/v1:same' }))
+
+    const workspace = await loadWorkspace(vault)
+
+    expect(workspace.capture).toEqual([])
+    expect(workspace.unsupported).toHaveLength(4)
+    expect(workspace.unsupported.every((item) => item.kind === 'task' && item.repairReason)).toBe(true)
+    expect(workspace.scanErrors).toEqual(expect.arrayContaining([
+      expect.stringContaining(`duplicate task.id ${TASK_ID}`),
+      expect.stringContaining('duplicate task.dedupe_key daily/v1:same'),
+    ]))
+  })
+
+  it('quarantines a placed Task when its stable id later becomes ambiguous', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/tasks/original-task.md', task())
+    let workspace = await loadWorkspace(vault)
+    workspace = await appendEvent(workspace, placeEvent(workspace.capture[0], {
+      route: 'commit',
+      commitment: '提交构建',
+      next_action: '运行发布脚本',
+      close_condition: '构建可安装',
+    }, {
+      now: () => '2026-09-01T03:30:00Z',
+      id: () => 'task-event',
+    }), {}, vault)
+    expect(workspace.wip).toHaveLength(1)
+
+    vault.files.set('inbox/tasks/duplicate-task.md', task(TASK_ID, { title: '重复身份' }))
+    workspace = await loadWorkspace(vault)
+
+    expect(workspace.wip).toEqual([])
+    expect(workspace.unsupported).toHaveLength(2)
+    expect(workspace.unsupported.every((item) => item.item_id === TASK_ID)).toBe(true)
+  })
+
+  it('keeps an unreadable Task file visible in the repair area', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/tasks/future-task.md', task().replace('version: 1', 'version: 2'))
+
+    const workspace = await loadWorkspace(vault)
+
+    expect(workspace.capture).toEqual([])
+    expect(workspace.unsupported).toEqual([
+      expect.objectContaining({
+        kind: 'task',
+        title: '提交 TestFlight 构建',
+        path: 'inbox/tasks/future-task.md',
+        repairReason: expect.stringContaining('not supported'),
+      }),
+    ])
+    expect(workspace.scanErrors[0]).toContain('future-task.md')
+  })
+
+  it('quarantines a placed Task when its source moves to an unsupported schema', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/tasks/future-task.md', task())
+    let workspace = await loadWorkspace(vault)
+    workspace = await appendEvent(workspace, placeEvent(workspace.capture[0], {
+      route: 'commit',
+      commitment: '提交构建',
+      next_action: '运行发布脚本',
+      close_condition: '构建可安装',
+    }, {
+      now: () => '2026-09-01T03:30:00Z',
+      id: () => 'task-event',
+    }), {}, vault)
+    vault.files.set('inbox/tasks/future-task.md', task().replace('version: 1', 'version: 2'))
+
+    workspace = await loadWorkspace(vault)
+
+    expect(workspace.wip).toEqual([])
+    expect(workspace.unsupported).toEqual([
+      expect.objectContaining({ item_id: TASK_ID, path: 'inbox/tasks/future-task.md' }),
+    ])
+  })
+
+  it('matches a placed Task by stable id after its source file is renamed', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/tasks/original-task.md', task())
+    let workspace = await loadWorkspace(vault)
+    workspace = await appendEvent(workspace, placeEvent(workspace.capture[0], {
+      route: 'commit',
+      commitment: '提交构建',
+      next_action: '运行发布脚本',
+      close_condition: '构建可安装',
+    }, {
+      now: () => '2026-09-01T03:30:00Z',
+      id: () => 'task-event',
+    }), {}, vault)
+    await vault.rename('inbox/tasks/original-task.md', 'inbox/tasks/renamed-task.md')
+
+    workspace = await loadWorkspace(vault)
+
+    expect(workspace.wip).toHaveLength(1)
+    expect(workspace.wip[0]).toMatchObject({
+      kind: 'task',
+      item_id: TASK_ID,
+      path: 'inbox/tasks/renamed-task.md',
+      orphan: false,
+    })
+  })
+
+  it('creates Task source through a verified temporary file and no-clobber rename', async () => {
+    const vault = new MemoryVault()
+    const created = await createTaskSource({
+      title: '提交 TestFlight 构建',
+      body: '确认签名环境变量。',
+      done_when: '构建可安装',
+    }, {
+      now: () => new Date(2026, 8, 1, 11, 20),
+      id: () => TASK_ID,
+    }, vault)
+
+    expect(created.path).toBe('inbox/tasks/2026-09-01-1120-提交-testflight-构建-task.md')
+    expect(created.source.task.id).toBe(TASK_ID)
+    expect(vault.files.get(created.path)).toBe(created.content)
+    expect([...vault.files.keys()].some((path) => path.endsWith('.tmp'))).toBe(false)
+    expect(vault.writes).toEqual([expect.stringMatching(/^inbox\/tasks\/\.next-task-.*\.tmp$/)])
+  })
+
+  it('treats no-clobber publication as success without an ambiguous final read', async () => {
+    const vault = new MemoryVault()
+    const originalRead = vault.read.bind(vault)
+    vault.read = async (path) => path.endsWith('-task.md')
+      ? Promise.reject(new Error('transient read failure'))
+      : originalRead(path)
+
+    await expect(createTaskSource({ title: 'Published' }, {
+      now: () => new Date(2026, 8, 1, 11, 20),
+      id: () => TASK_ID,
+    }, vault)).resolves.toMatchObject({
+      path: 'inbox/tasks/2026-09-01-1120-published-task.md',
+    })
+  })
+
+  it('retries a raced final Task filename and cleans the temporary file on failure', async () => {
+    const vault = new MemoryVault()
+    const originalRename = vault.rename.bind(vault)
+    let raced = false
+    vault.rename = async (from, to) => {
+      if (!raced) {
+        raced = true
+        vault.files.set(to, 'racer')
+        throw new Error('exists')
+      }
+      return originalRename(from, to)
+    }
+    const created = await createTaskSource({ title: 'Race' }, {
+      now: () => new Date(2026, 8, 1, 11, 20),
+      id: () => TASK_ID,
+    }, vault)
+    expect(created.path).toBe('inbox/tasks/2026-09-01-1120-race-2-task.md')
+    expect(vault.files.get('inbox/tasks/2026-09-01-1120-race-task.md')).toBe('racer')
+
+    const broken = new MemoryVault()
+    const originalRead = broken.read.bind(broken)
+    broken.read = async (path) => path.endsWith('.tmp') ? { content: 'corrupt' } : originalRead(path)
+    await expect(createTaskSource({ title: 'Broken' }, {
+      now: () => new Date(2026, 8, 1, 11, 20),
+      id: () => TASK_ID,
+    }, broken)).rejects.toThrow('did not match')
+    expect([...broken.files.keys()].some((path) => path.endsWith('.tmp'))).toBe(false)
+  })
+
+  it('upgrades to ledger v2 only when appending a Task lifecycle event', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/tasks/submit-task.md', task())
+    const loaded = await loadWorkspace(vault)
+    const after = await appendEvent(loaded, placeEvent(loaded.capture[0], {
+      route: 'commit',
+      commitment: '提交构建',
+      next_action: '运行发布脚本',
+      close_condition: '构建可安装',
+    }, {
+      now: () => '2026-09-01T03:30:00Z',
+      id: () => 'task-event',
+    }), {}, vault)
+
+    expect(after.ledger).toMatchObject({ version: 2, task_dirs: ['inbox/tasks'] })
+    expect(after.wip[0]).toMatchObject({ kind: 'task', item_id: TASK_ID })
+    expect(after.ledger.events[0]).toMatchObject({ item_kind: 'task', item_id: TASK_ID })
+  })
   it('creates a new Idea in Idea Spark current directory without appending a lifecycle event', async () => {
     const vault = new MemoryVault()
     vault.files.set('.notemd/idea-spark.json', JSON.stringify({ ideaDir: 'capture/sparks' }))

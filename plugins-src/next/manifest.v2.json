@@ -2,12 +2,12 @@
   "manifest_version": 2,
   "id": "notemd.next",
   "name": "Next",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "kind": "native",
   "engines": {
     "notemd": ">=6.901.1"
   },
-  "description": "Give every idea a next step — or a place to rest.",
+  "description": "Give ideas and tasks a clear next step — or a place to rest.",
   "ui": "ui/",
   "activation": {
     "events": [
@@ -52,21 +52,21 @@
   "i18n": {
     "zh": {
       "name": "下一步",
-      "description": "让每个想法都有明确的下一步，或一个安心搁置的地方。",
+      "description": "让想法和任务都有明确的下一步，或一个安心搁置的地方。",
       "menus": {
         "open": "下一步"
       }
     },
     "ja": {
       "name": "次の一歩",
-      "description": "すべてのアイデアに次の一歩を与えるか、安心して休ませる場所を用意します。",
+      "description": "アイデアとタスクに明確な次の一歩を与えるか、安心して休ませる場所を用意します。",
       "menus": {
         "open": "次の一歩"
       }
     },
     "de": {
       "name": "Nächster Schritt",
-      "description": "Jeder Idee einen nächsten Schritt geben – oder einen guten Ort, an dem sie ruhen kann.",
+      "description": "Ideen und Aufgaben einen klaren nächsten Schritt geben – oder einen guten Ort zum Ruhen.",
       "menus": {
         "open": "Nächster Schritt"
       }

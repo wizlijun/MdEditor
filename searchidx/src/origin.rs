@@ -88,7 +88,7 @@ impl Origin {
 /// `concept.ts` for the same caveat from the other side.
 fn mapped_type_origin(concept_type: &str) -> Option<Origin> {
     match concept_type {
-        "Note" | "Outline Note" | "Daily Note" | "Wiki Page" | "Idea" | "Next"
+        "Note" | "Outline Note" | "Daily Note" | "Wiki Page" | "Idea" | "Next" | "Task"
         | "Vault Conventions" | "Trace Request" => Some(Origin::Human),
         "Book Summary" | "Answer" | "Idea Proof" | "Reading Report" | "Decision Board"
         | "Decision Archive" | "Trace Report" => Some(Origin::Derived),
@@ -281,6 +281,25 @@ mod tests {
                 &globs(&[])
             ),
             Origin::Human
+        );
+    }
+    #[test]
+    fn unsigned_task_is_human_but_agent_generated_task_is_derived() {
+        assert_eq!(
+            derive(
+                "inbox/tasks/manual-task.md",
+                Some(&fm("type: Task")),
+                &globs(&[])
+            ),
+            Origin::Human
+        );
+        assert_eq!(
+            derive(
+                "inbox/tasks/generated-task.md",
+                Some(&fm("type: Task\ngenerated:\n  by: daily-summary-agent/1")),
+                &globs(&[])
+            ),
+            Origin::Derived
         );
     }
     #[test]

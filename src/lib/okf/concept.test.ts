@@ -8,8 +8,9 @@ import {
 import { lintText, RESERVED } from '../../../scripts/okf-lint-core.mjs'
 
 describe('CONCEPT_TYPE', () => {
-  it('publicly registers the Next ledger type', () => {
+  it('publicly registers the Next ledger and task types', () => {
     expect(CONCEPT_TYPE.next).toBe('Next')
+    expect(CONCEPT_TYPE.task).toBe('Task')
   })
 })
 

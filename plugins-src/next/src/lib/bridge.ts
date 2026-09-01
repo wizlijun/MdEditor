@@ -31,6 +31,14 @@ export function vaultWrite(path: string, content: string): Promise<{ ok: true }>
   return bridge().request('host.vault.write', { path, content })
 }
 
+export function vaultRename(from: string, to: string): Promise<{ ok: true }> {
+  return bridge().request('host.vault.rename', { from, to })
+}
+
+export function vaultRemove(path: string): Promise<{ ok: true }> {
+  return bridge().request('host.vault.remove', { path })
+}
+
 export function vaultExists(path: string): Promise<{ exists: boolean }> {
   return bridge().request('host.vault.exists', { path })
 }

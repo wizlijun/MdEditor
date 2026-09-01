@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import CreateIdeaSheet from './components/CreateIdeaSheet.svelte'
+  import CreateTaskSheet, { type TaskDraft } from './components/CreateTaskSheet.svelte'
   import IdeaCard from './components/IdeaCard.svelte'
   import PlaceSheet from './components/PlaceSheet.svelte'
   import RelinkSheet from './components/RelinkSheet.svelte'
@@ -11,6 +12,7 @@
   import type { IdeaSource } from './lib/source'
   import {
     createIdea,
+    createTask,
     open as openItem,
     place,
     refresh,
@@ -36,6 +38,7 @@
 
   let showPlaced = $state(false)
   let creating = $state(false)
+  let creatingTask = $state(false)
   let search = $state('')
   let selectedProject = $state('')
   let placing = $state<WorkspaceItem | null>(null)
@@ -76,6 +79,9 @@
   const newIdeaShortcut = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
     ? '⌘N'
     : 'Ctrl+N'
+  const newTaskShortcut = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+    ? '⇧⌘N'
+    : 'Ctrl+Shift+N'
   const repair = $derived(workspace?.items.filter((item) => (
     item.state === 'unsupported' || (item.state === 'capture' && item.orphan)
   ) && matchesFilters(item)) ?? [])
@@ -137,9 +143,15 @@
   }
 
   function openCreation() {
-    if (store.loading || store.saving || placing || relinking) return
+    if (store.loading || store.saving || placing || relinking || creatingTask) return
     closePreview()
     creating = true
+  }
+
+  function openTaskCreation() {
+    if (store.loading || store.saving || placing || relinking || creating) return
+    closePreview()
+    creatingTask = true
   }
 
   function openPlacement(item: WorkspaceItem, route?: Route, initialProjects: readonly string[] = []) {
@@ -164,6 +176,20 @@
       await createIdea(body)
       creating = false
     }, 'error.create')
+  }
+
+  async function submitTask(input: TaskDraft, markCurrent: boolean) {
+    try {
+      const result = await createTask(input, markCurrent)
+      creatingTask = false
+      if (result.refreshError) {
+        await toast('warn', t(markCurrent ? 'error.createRefreshCurrent' : 'error.createRefresh'), result.refreshError)
+      } else if (result.placementError) {
+        await toast('warn', t('error.createCurrent'), result.placementError)
+      }
+    } catch (error) {
+      await toast('error', t('error.createTask'), String(error))
+    }
   }
 
   function closePlacement() {
@@ -407,9 +433,11 @@
       }
       previewKeydown(event)
       if (event.defaultPrevented) return
-      if (event.key.toLocaleLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return
+      if (event.key.toLocaleLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey) || event.altKey) return
       event.preventDefault()
-      if (!creating) openCreation()
+      if (event.shiftKey) {
+        if (!creatingTask) openTaskCreation()
+      } else if (!creating) openCreation()
     }
     window.addEventListener('focus', onFocus)
     window.addEventListener('keydown', onKey)
@@ -452,8 +480,12 @@
       </div>
     </div>
     <div class="top-actions">
-      <button type="button" data-action="new-idea" class="new-idea" aria-keyshortcuts="Meta+N Control+N" disabled={store.loading || store.saving} onclick={openCreation}>
+      <button type="button" data-action="new-task" class="new-task" aria-keyshortcuts="Meta+Shift+N Control+Shift+N" disabled={store.loading || store.saving} onclick={openTaskCreation}>
         <span aria-hidden="true">＋</span>
+        <span>{t('action.newTask')}</span>
+        <kbd>{newTaskShortcut}</kbd>
+      </button>
+      <button type="button" data-action="new-idea" class="new-idea" aria-keyshortcuts="Meta+N Control+N" disabled={store.loading || store.saving} onclick={openCreation}>
         <span>{t('action.newIdea')}</span>
         <kbd>{newIdeaShortcut}</kbd>
       </button>
@@ -599,6 +631,15 @@
   />
 {/if}
 
+{#if creatingTask}
+  <CreateTaskSheet
+    taskDir={workspace?.taskDir ?? 'inbox/tasks'}
+    saving={store.saving}
+    onCancel={() => creatingTask = false}
+    onSubmit={submitTask}
+  />
+{/if}
+
 <style>
   :global(:root) {
     color-scheme: light dark;
@@ -660,13 +701,15 @@
   .project-filters button:hover { background: var(--hover); }
   .project-filters button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
   .top-actions { flex: none; display: flex; align-items: center; gap: 8px; }
-  .new-idea, .refresh { min-height: 34px; box-sizing: border-box; border-radius: 9px; padding: 7px 10px; font-weight: 650; cursor: pointer; }
-  .new-idea { display: flex; align-items: center; gap: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
-  .new-idea:hover:not(:disabled) { filter: brightness(1.06); }
-  .new-idea kbd { border-radius: 5px; background: color-mix(in srgb, #000 16%, transparent); padding: 1px 5px; font: 10px/1.5 inherit; }
+  .new-task, .new-idea, .refresh { min-height: 34px; box-sizing: border-box; border-radius: 9px; padding: 7px 10px; font-weight: 650; cursor: pointer; }
+  .new-task, .new-idea { display: flex; align-items: center; gap: 7px; }
+  .new-task { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+  .new-task:hover:not(:disabled), .new-idea:hover:not(:disabled) { filter: brightness(1.06); }
+  .new-idea { border: 1px solid var(--line-strong); background: var(--card); color: var(--fg); }
+  .new-task kbd, .new-idea kbd { border-radius: 5px; background: color-mix(in srgb, currentColor 12%, transparent); padding: 1px 5px; font: 10px/1.5 inherit; }
   .refresh { flex: none; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--fg); padding: 7px 10px; font-weight: 600; cursor: pointer; }
   .refresh:hover:not(:disabled) { background: var(--hover); }
-  .refresh:disabled, .new-idea:disabled { opacity: 0.45; cursor: default; }
+  .refresh:disabled, .new-task:disabled, .new-idea:disabled { opacity: 0.45; cursor: default; }
   .loading { min-height: 60vh; display: grid; place-items: center; color: var(--muted); }
   .content { padding: 22px 28px 48px; }
   .banner, .repair, .board-tools, .board-scroll, .drag-help { max-width: 1500px; margin-right: auto; margin-left: auto; }

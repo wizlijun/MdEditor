@@ -29,11 +29,18 @@
   } = $props()
 
   const projection = untrack(() => item.projection)
+  const taskDefaults = untrack(() => item.kind === 'task'
+    ? { title: item.title, doneWhen: item.task?.done_when ?? '' }
+    : { title: '', doneWhen: '' })
   const inferredRoute: Route = projection?.state === 'waiting' ? 'wait' : projection?.state === 'dormant' ? 'park' : projection?.state === 'closed' ? 'settle' : 'commit'
   let route = $state<Route>(untrack(() => initialRoute ?? inferredRoute))
-  let commitment = $state(projection?.state === 'wip' ? projection.commitment : '')
-  let nextAction = $state(projection?.state === 'wip' || projection?.state === 'dormant' ? projection.next_action ?? '' : '')
-  let closeCondition = $state(projection?.state === 'wip' ? projection.close_condition : '')
+  let commitment = $state(projection?.state === 'wip' ? projection.commitment : taskDefaults.title)
+  let nextAction = $state(projection?.state === 'wip' || projection?.state === 'dormant'
+    ? projection.next_action ?? ''
+    : taskDefaults.title)
+  let closeCondition = $state(projection?.state === 'wip'
+    ? projection.close_condition
+    : taskDefaults.doneWhen)
   let waitingFor = $state(projection?.state === 'waiting' ? projection.waiting_for : '')
   let reviewAt = $state(projection?.state === 'waiting' ? projection.review_at.slice(0, 10) : '')
   let wakeTrigger = $state(projection?.state === 'dormant' ? projection.wake_trigger : '')
