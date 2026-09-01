@@ -6,6 +6,8 @@ import { readInstalledCache, writeInstalledCache } from './lib/market/cache'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
+  confirm: vi.fn(),
+  pushToast: vi.fn(),
   i18n: { locale: 'en' },
 }))
 
@@ -17,9 +19,9 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ setTitle: vi.fn(async () => {}) }),
 }))
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: vi.fn(async () => '6.829.2') }))
-vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: vi.fn(async () => true) }))
+vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: mocks.confirm }))
 vi.mock('./lib/settings.svelte', () => ({ loadSettings: vi.fn(async () => {}) }))
-vi.mock('./lib/toast.svelte', () => ({ pushToast: vi.fn() }))
+vi.mock('./lib/toast.svelte', () => ({ pushToast: mocks.pushToast }))
 vi.mock('./lib/i18n/store.svelte', () => {
   const labels: Record<string, string> = {
     'pluginMarket.windowTitle': 'Plugin Market',
@@ -33,6 +35,11 @@ vi.mock('./lib/i18n/store.svelte', () => {
     'pluginMarket.disabled': 'Disabled',
     'pluginMarket.updateAvailable': 'Update available',
     'pluginMarket.update': 'Update to {version}',
+    'pluginMarket.updateAll': 'Update All ({count})',
+    'pluginMarket.updatingAll': 'Updating {done}/{total}…',
+    'pluginMarket.updateAllConfirm': 'Update all {count} plugins?',
+    'pluginMarket.updateAllComplete': 'Updated all {count} plugins',
+    'pluginMarket.updateAllPartial': 'Updated {succeeded}; {failed} failed',
     'pluginMarket.onDevice': 'Installed on this device.',
     'pluginMarket.noneAvailable': 'No plugins available.',
     'pluginMarket.noneInstalled': 'No plugins installed.',
@@ -110,6 +117,9 @@ function entry(id: string, name: string, version = '1.0.0'): RegistryEntry {
 beforeEach(() => {
   localStorage.clear()
   mocks.invoke.mockReset()
+  mocks.confirm.mockReset()
+  mocks.confirm.mockResolvedValue(true)
+  mocks.pushToast.mockReset()
   mocks.i18n.locale = 'en'
 })
 
@@ -278,5 +288,78 @@ describe('plugin market staged loading', () => {
     expect(document.querySelectorAll('[data-category="experience"] .plugin-card')).toHaveLength(1)
     expect(document.querySelectorAll('.system-badge')).toHaveLength(2)
     expect(document.querySelector('[data-category="create"]')).toBeNull()
+  })
+
+  it('confirms once and updates every changed plugin without opening individual consent modals', async () => {
+    let localPlugins: InstalledV2[] = [
+      { ...installed('Next'), id: 'notemd.next' },
+      { ...installed('Idea Spark'), id: 'notemd.idea-spark' },
+    ]
+    const index: RegistryIndex = {
+      plugins: [
+        entry('notemd.next', 'Next', '1.1.0'),
+        entry('notemd.idea-spark', 'Idea Spark', '1.2.0'),
+      ],
+    }
+    mocks.invoke.mockImplementation((command: string, args?: { id?: string; version?: string }) => {
+      if (command === 'plugin_market_installed') return Promise.resolve(localPlugins)
+      if (command === 'plugin_market_index') return Promise.resolve(index)
+      if (command === 'plugin_market_install') {
+        localPlugins = localPlugins.map((plugin) => plugin.id === args?.id
+          ? { ...plugin, version: args.version ?? plugin.version }
+          : plugin)
+        return Promise.resolve()
+      }
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+    await vi.waitFor(() => expect(document.querySelector('.update-all')?.textContent).toContain('2'))
+    ;(document.querySelector('.update-all') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => expect(
+      mocks.invoke.mock.calls.filter(([command]) => command === 'plugin_market_install'),
+    ).toHaveLength(2))
+    await vi.waitFor(() => expect(document.querySelector('.update-all')).toBeNull())
+    expect(mocks.confirm).toHaveBeenCalledOnce()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(mocks.pushToast).toHaveBeenCalledWith(expect.objectContaining({
+      level: 'success',
+      message: 'Updated all 2 plugins',
+    }))
+  })
+
+  it('continues updating the remaining plugins after one batch item fails', async () => {
+    const localPlugins: InstalledV2[] = [
+      { ...installed('Next'), id: 'notemd.next' },
+      { ...installed('Idea Spark'), id: 'notemd.idea-spark' },
+    ]
+    const index: RegistryIndex = {
+      plugins: [
+        entry('notemd.next', 'Next', '1.1.0'),
+        entry('notemd.idea-spark', 'Idea Spark', '1.2.0'),
+      ],
+    }
+    mocks.invoke.mockImplementation((command: string, args?: { id?: string }) => {
+      if (command === 'plugin_market_installed') return Promise.resolve(localPlugins)
+      if (command === 'plugin_market_index') return Promise.resolve(index)
+      if (command === 'plugin_market_install' && args?.id === 'notemd.next') {
+        return Promise.reject(new Error('signature mismatch'))
+      }
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+    await vi.waitFor(() => expect(document.querySelector('.update-all')).not.toBeNull())
+    ;(document.querySelector('.update-all') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => expect(
+      mocks.invoke.mock.calls.filter(([command]) => command === 'plugin_market_install'),
+    ).toHaveLength(2))
+    await vi.waitFor(() => expect(mocks.pushToast).toHaveBeenCalledWith(expect.objectContaining({
+      level: 'error',
+      message: 'Updated 1; 1 failed',
+      detail: expect.stringContaining('signature mismatch'),
+    })))
   })
 })

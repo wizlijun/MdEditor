@@ -81,6 +81,9 @@
   let catalogEntries = $state<RegistryEntry[]>([])
   let catalogReady = $state(false)
   let busy = $state<Record<string, boolean>>({})
+  let batchUpdating = $state(false)
+  let batchProgress = $state(0)
+  let batchTotal = $state(0)
   // Running app version for min_host selection; null = unknown (fail open).
   let hostVersion: string | null = null
   let refreshSequence = 0
@@ -105,6 +108,11 @@
   ])
   let marketGroups = $derived(groupPluginsByCategory(marketItems))
   let aiItems = $derived(marketItems.filter((item) => pluginAiRole(item.id) !== null))
+  let updateItems = $derived(
+    marketItems.filter(
+      (item): item is InstalledMarketItem => item.kind === 'installed' && !!item.row.updateTo,
+    ),
+  )
 
   // Consent modal target (null = closed).
   let consent = $state<{
@@ -285,6 +293,64 @@
     }
   }
 
+  async function updateAll() {
+    const items = [...updateItems]
+    if (batchUpdating || items.length === 0) return
+
+    const ok = await confirm(t('pluginMarket.updateAllConfirm', { count: items.length }), {
+      title: t('pluginMarket.windowTitle'),
+      kind: 'warning',
+    })
+    if (!ok) return
+
+    batchUpdating = true
+    batchProgress = 0
+    batchTotal = items.length
+    busy = {
+      ...busy,
+      ...Object.fromEntries(items.map((item) => [item.id, true])),
+    }
+    const failures: string[] = []
+    let succeeded = 0
+    try {
+      // The one confirmation above authorizes every listed update. Each install
+      // still performs the host's download, hash, signature and manifest checks.
+      for (const item of items) {
+        try {
+          await invoke('plugin_market_install', { id: item.id, version: item.row.updateTo })
+          succeeded += 1
+        } catch (e) {
+          failures.push(`${itemName(item)}: ${String(e)}`)
+        } finally {
+          batchProgress += 1
+        }
+      }
+      await refresh()
+      if (failures.length === 0) {
+        pushToast({
+          level: 'success',
+          message: t('pluginMarket.updateAllComplete', { count: succeeded }),
+        })
+      } else {
+        pushToast({
+          level: 'error',
+          message: t('pluginMarket.updateAllPartial', {
+            succeeded,
+            failed: failures.length,
+          }),
+          detail: failures.join('\n'),
+        })
+      }
+    } finally {
+      const nextBusy = { ...busy }
+      for (const item of items) delete nextBusy[item.id]
+      busy = nextBusy
+      batchUpdating = false
+      batchProgress = 0
+      batchTotal = 0
+    }
+  }
+
   // ── Available actions ──────────────────────────────────────────────────────
 
   function beginInstall(entry: RegistryEntry) {
@@ -377,10 +443,20 @@
           <h1>{t('pluginMarket.windowTitle')}</h1>
           <p>{t('pluginMarket.subtitle')}</p>
         </div>
-        <button class="refresh" onclick={() => refresh()} disabled={loading}>
-          <span class:spinning={loading} aria-hidden="true">↻</span>
-          {t('pluginMarket.refresh')}
-        </button>
+        <div class="hero-actions">
+          {#if updateItems.length > 0 || batchUpdating}
+            <button class="update-all" onclick={updateAll} disabled={batchUpdating}>
+              <span aria-hidden="true">↑</span>
+              {batchUpdating
+                ? t('pluginMarket.updatingAll', { done: batchProgress, total: batchTotal })
+                : t('pluginMarket.updateAll', { count: updateItems.length })}
+            </button>
+          {/if}
+          <button class="refresh" onclick={() => refresh()} disabled={loading || batchUpdating}>
+            <span class:spinning={loading} aria-hidden="true">↻</span>
+            {t('pluginMarket.refresh')}
+          </button>
+        </div>
         <div class="summary" aria-live="polite">
           <span class="summary-item"><strong>{installedRows.length}</strong>{t('pluginMarket.installedHeading')}</span>
           {#if catalogReady}
@@ -493,19 +569,19 @@
 
                       <footer class="card-footer">
                         <label class="switch-control">
-                          <input type="checkbox" checked={item.row.enabled} disabled={busy[item.row.id]}
+                          <input type="checkbox" checked={item.row.enabled} disabled={batchUpdating || busy[item.row.id]}
                             onchange={(e) => toggleEnabled(item.row, (e.currentTarget as HTMLInputElement).checked)} />
                           <span class="switch" aria-hidden="true"><span></span></span>
                           <span class="switch-label">{item.row.enabled ? t('pluginMarket.enabled') : t('pluginMarket.disabled')}</span>
                         </label>
                         <div class="actions">
                           {#if item.row.updateTo}
-                            <button class="mini primary update-action" disabled={busy[item.row.id]}
+                            <button class="mini primary update-action" disabled={batchUpdating || busy[item.row.id]}
                               onclick={() => update(item)}>
                               {t('pluginMarket.update', { version: item.row.updateTo })}
                             </button>
                           {/if}
-                          <button class="mini quiet danger" disabled={busy[item.row.id]} onclick={() => uninstall(item.row, displayName)}>
+                          <button class="mini quiet danger" disabled={batchUpdating || busy[item.row.id]} onclick={() => uninstall(item.row, displayName)}>
                             {t('pluginMarket.uninstall')}
                           </button>
                         </div>
@@ -527,7 +603,7 @@
 
                       <footer class="card-footer available-footer">
                         <span class="plugin-id">{item.entry.id}</span>
-                        <button class="mini primary" onclick={() => beginInstall(item.entry)}>{t('pluginMarket.install')}</button>
+                        <button class="mini primary" disabled={batchUpdating} onclick={() => beginInstall(item.entry)}>{t('pluginMarket.install')}</button>
                       </footer>
                     {/if}
                   </article>
@@ -588,6 +664,7 @@
     font-size: 13px;
     line-height: 1.4;
   }
+  .hero-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
   .summary {
     grid-column: 1 / -1;
     display: inline-flex;
@@ -894,6 +971,16 @@
   button:disabled { opacity: 0.48; cursor: default; }
   .refresh { min-height: 32px; padding: 0 12px; -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
   .refresh > span { font-size: 16px; }
+  .update-all {
+    min-height: 32px;
+    padding: 0 12px;
+    border-color: transparent;
+    background: #e97700;
+    color: white;
+    box-shadow: 0 5px 16px color-mix(in srgb, #e97700 28%, transparent);
+  }
+  .update-all:hover:not(:disabled) { background: #c95f00; }
+  .update-all > span { font-size: 15px; font-weight: 760; }
   .mini { min-height: 27px; padding: 0 9px; font-size: 10px; }
   .primary { border-color: transparent; background: var(--accent, #3479db); color: white; }
   .primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent, #3479db) 88%, black); }
@@ -951,8 +1038,7 @@
   @media (max-width: 520px) {
     .page-shell { width: min(100% - 20px, 1180px); padding-top: 16px; }
     .hero { grid-template-columns: minmax(0, 1fr); }
-    .refresh { position: absolute; top: 0; right: 0; }
-    .hero-copy { padding-right: 90px; }
+    .hero-actions { grid-row: 2; justify-content: flex-start; }
     .summary { max-width: 100%; box-sizing: border-box; }
     .category-block { padding: 12px; }
     .category-header { margin-bottom: 10px; }
