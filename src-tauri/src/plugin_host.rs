@@ -209,13 +209,14 @@ pub struct LocatedMenuItem {
 /// `menus[].submenu` carries one of these language-neutral keys. Keeping the
 /// field open means an older Host still loads newer plugin manifests; this
 /// Host normalizes unknown/missing keys to Other instead of hiding an action.
-pub const PLUGIN_MENU_GROUP_ORDER: [&str; 7] = [
+pub const PLUGIN_MENU_GROUP_ORDER: [&str; 8] = [
     "record",
     "reading",
     "inspiration",
     "advance",
     "reflect",
     "create",
+    "experience",
     "other",
 ];
 
@@ -228,9 +229,8 @@ pub fn normalize_plugin_menu_group(group: Option<&str>) -> &'static str {
         Some("reflect") | Some("thinking") | Some("thinking-review") => "reflect",
         Some("create")
         | Some("import-export")
-        | Some("publish-export")
-        | Some("editing")
-        | Some("editor-extensions") => "create",
+        | Some("publish-export") => "create",
+        Some("experience") | Some("editing") | Some("editor-extensions") => "experience",
         _ => "other",
     }
 }
@@ -248,7 +248,8 @@ pub fn plugin_menu_group_for_plugin(plugin_id: &str, group: Option<&str>) -> &'s
         | "notemd.deepseek-agent"
         | "notemd.openclaw-chat" => "advance",
         "notemd.decision-log" | "notemd.weekly-review" => "reflect",
-        "notemd.md2pdf" | "notemd.power-mode" => "create",
+        "notemd.md2pdf" => "create",
+        "notemd.power-mode" => "experience",
         _ => normalize_plugin_menu_group(group),
     }
 }
@@ -390,6 +391,7 @@ mod tests {
             "advance",
             "reflect",
             "create",
+            "experience",
             "other",
         ]);
     }
@@ -434,13 +436,14 @@ mod tests {
         assert_eq!(normalize_plugin_menu_group(Some("capture-import")), "record");
         assert_eq!(normalize_plugin_menu_group(Some("thinking-review")), "reflect");
         assert_eq!(normalize_plugin_menu_group(Some("publish-export")), "create");
-        assert_eq!(normalize_plugin_menu_group(Some("editor-extensions")), "create");
+        assert_eq!(normalize_plugin_menu_group(Some("editor-extensions")), "experience");
     }
 
     #[test]
     fn first_party_plugins_override_ambiguous_legacy_groups() {
         assert_eq!(plugin_menu_group_for_plugin("notemd.idea-spark", Some("thinking")), "inspiration");
         assert_eq!(plugin_menu_group_for_plugin("notemd.trace-source", Some("capture")), "reading");
+        assert_eq!(plugin_menu_group_for_plugin("notemd.power-mode", Some("editing")), "experience");
         assert_eq!(plugin_menu_group_for_plugin("third.party", Some("thinking")), "reflect");
     }
 }

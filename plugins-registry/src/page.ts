@@ -147,7 +147,7 @@ en:{
  err:"Couldn't load plugins, please retry later.",empty:'No plugins published yet.',
  fallback:'Enable it from the Plugins menu in note.md after install.',
  group_record:'Capture',group_reading:'Read',group_inspiration:'Ideas',
- group_advance:'Move Forward',group_reflect:'Reflect',group_create:'Create',group_other:'Other'
+ group_advance:'Move Forward',group_reflect:'Reflect',group_create:'Create',group_experience:'Experience',group_other:'Other'
 },
 zh:{
  nav_home:'note.md 主站',nav_plugins:'插件',nav_download:'下载',
@@ -163,7 +163,7 @@ zh:{
  err:'暂时无法加载插件列表，请稍后重试。',empty:'暂无已上架插件。',
  fallback:'安装后在 note.md 的「插件」菜单中启用。',
  group_record:'记录',group_reading:'阅读',group_inspiration:'灵感',
- group_advance:'推进',group_reflect:'回顾',group_create:'创作',group_other:'其他'
+ group_advance:'推进',group_reflect:'回顾',group_create:'创作',group_experience:'体验增强',group_other:'其他'
 }};
 // Per-plugin entry, from each manifest's contributes.menus.location.
 // Every plugin command lands in the Plugins menu regardless of the location its
@@ -184,7 +184,7 @@ var ENTRY_MAP={
  'notemd.decision-log':{en:'<b>Plugins</b> → <b>Reflect</b> → Decision Log',zh:'「<b>插件</b>」→「<b>回顾</b>」→ 决策日志'},
  'notemd.weekly-review':{en:'<b>Plugins</b> → <b>Reflect</b> → Weekly Review',zh:'「<b>插件</b>」→「<b>回顾</b>」→ 周检视'},
  'notemd.md2pdf':{en:'<b>Plugins</b> → <b>Create</b> → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」→「<b>创作</b>」→ 导出为 PDF…（也支持 CLI <code>notemd pdf</code>）'},
- 'notemd.power-mode':{en:'<b>Plugins</b> → <b>Create</b> → Power Mode',zh:'「<b>插件</b>」→「<b>创作</b>」→ 狂暴模式'}
+ 'notemd.power-mode':{en:'<b>Plugins</b> → <b>Experience</b> → Power Mode',zh:'「<b>插件</b>」→「<b>体验增强</b>」→ 狂暴模式'}
 };
 function pickLang(){
  var q=new URLSearchParams(location.search).get('lang');
@@ -206,9 +206,9 @@ function applyStatic(){
 function entryFor(id){
  var e=ENTRY_MAP[id];return e?e[lang]:I18N[lang].fallback;
 }
-var GROUP_ORDER=['record','reading','inspiration','advance','reflect','create','other'];
-var LEGACY_GROUPS={'agents':'advance','capture':'record','capture-import':'record','thinking':'reflect','thinking-review':'reflect','import-export':'create','publish-export':'create','editing':'create','editor-extensions':'create'};
-var OFFICIAL_GROUPS={'notemd.pos-log':'record','notemd.roam-import':'record','notemd.ebook-import':'reading','notemd.trace-source':'reading','notemd.idea-spark':'inspiration','notemd.next':'advance','notemd.claude-agent':'advance','notemd.codex-agent':'advance','notemd.deepseek-agent':'advance','notemd.openclaw-chat':'advance','notemd.decision-log':'reflect','notemd.weekly-review':'reflect','notemd.md2pdf':'create','notemd.power-mode':'create'};
+var GROUP_ORDER=['record','reading','inspiration','advance','reflect','create','experience','other'];
+var LEGACY_GROUPS={'agents':'advance','capture':'record','capture-import':'record','thinking':'reflect','thinking-review':'reflect','import-export':'create','publish-export':'create','editing':'experience','editor-extensions':'experience'};
+var OFFICIAL_GROUPS={'notemd.pos-log':'record','notemd.roam-import':'record','notemd.ebook-import':'reading','notemd.trace-source':'reading','notemd.idea-spark':'inspiration','notemd.next':'advance','notemd.claude-agent':'advance','notemd.codex-agent':'advance','notemd.deepseek-agent':'advance','notemd.openclaw-chat':'advance','notemd.decision-log':'reflect','notemd.weekly-review':'reflect','notemd.md2pdf':'create','notemd.power-mode':'experience'};
 var AI_ROLES={'notemd.ebook-import':{en:'AI Read',zh:'AI 阅读'},'notemd.idea-spark':{en:'AI Inspire',zh:'AI 启发'},'notemd.trace-source':{en:'AI Reason',zh:'AI 推理'},'notemd.claude-agent':{en:'AI Action',zh:'AI 执行'},'notemd.codex-agent':{en:'AI Action',zh:'AI 执行'},'notemd.deepseek-agent':{en:'AI Action',zh:'AI 执行'},'notemd.openclaw-chat':{en:'AI Action',zh:'AI 执行'}};
 function normalizeGroup(value,id){return OFFICIAL_GROUPS[id]||(GROUP_ORDER.indexOf(value)>=0?value:(LEGACY_GROUPS[value]||'other'));}
 function groupLabel(key){

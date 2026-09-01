@@ -44,6 +44,7 @@ vi.mock('./lib/i18n/store.svelte', () => {
     'pluginCategory.advance': 'Move Forward',
     'pluginCategory.reflect': 'Reflect',
     'pluginCategory.create': 'Create',
+    'pluginCategory.experience': 'Experience',
     'pluginCategory.other': 'Other',
     'pluginMarket.aiTitle': 'Create with AI',
     'pluginMarket.aiSubtitle': 'Focused AI collaborators for understanding, ideas, and action.',

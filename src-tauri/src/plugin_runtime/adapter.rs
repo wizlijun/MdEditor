@@ -293,7 +293,7 @@ mod tests {
             ("notemd.trace-source", "reading"),
             ("notemd.weekly-review", "reflect"),
             ("notemd.md2pdf", "create"),
-            ("notemd.power-mode", "create"),
+            ("notemd.power-mode", "experience"),
         ]
         .into_iter()
         .collect();

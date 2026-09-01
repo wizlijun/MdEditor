@@ -37,7 +37,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_ROOT = join(REPO_ROOT, 'dist-plugins')
 const REGISTRY_BASE = 'https://plugins.notemd.net'
 const PLUGIN_CATEGORIES = new Set([
-  'record', 'reading', 'inspiration', 'advance', 'reflect', 'create',
+  'record', 'reading', 'inspiration', 'advance', 'reflect', 'create', 'experience',
 ])
 const LEGACY_PLUGIN_CATEGORIES = new Map([
   ['agents', 'advance'],
@@ -47,8 +47,8 @@ const LEGACY_PLUGIN_CATEGORIES = new Map([
   ['thinking-review', 'reflect'],
   ['import-export', 'create'],
   ['publish-export', 'create'],
-  ['editing', 'create'],
-  ['editor-extensions', 'create'],
+  ['editing', 'experience'],
+  ['editor-extensions', 'experience'],
 ])
 const OFFICIAL_PLUGIN_CATEGORIES = new Map([
   ['notemd.pos-log', 'record'],
@@ -64,7 +64,7 @@ const OFFICIAL_PLUGIN_CATEGORIES = new Map([
   ['notemd.decision-log', 'reflect'],
   ['notemd.weekly-review', 'reflect'],
   ['notemd.md2pdf', 'create'],
-  ['notemd.power-mode', 'create'],
+  ['notemd.power-mode', 'experience'],
 ])
 
 /**

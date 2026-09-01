@@ -212,6 +212,7 @@ export const ja: Record<keyof Messages, string> = {
   'pluginCategory.advance': '前へ進む',
   'pluginCategory.reflect': '振り返る',
   'pluginCategory.create': '創作',
+  'pluginCategory.experience': '体験向上',
   'pluginCategory.other': 'その他',
 
   // Plugin Market window (子项目③)

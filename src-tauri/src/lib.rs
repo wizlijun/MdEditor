@@ -1715,6 +1715,7 @@ fn menu_label(locale: &str, key: &str) -> String {
         "plugins.group.advance" => ("Move Forward", "推进", "前へ進む", "Vorankommen"),
         "plugins.group.reflect" => ("Reflect", "回顾", "振り返る", "Rückblick"),
         "plugins.group.create" => ("Create", "创作", "創作", "Gestalten"),
+        "plugins.group.experience" => ("Experience", "体验增强", "体験向上", "Erlebnis"),
         "plugins.group.other" => ("Other", "其他", "その他", "Sonstige"),
         "file.openRecent" => ("Open Recent", "打开最近", "最近使ったファイルを開く", "Zuletzt geöffnet"),
         "file.noRecent" => ("No Recent Files", "无最近文件", "最近のファイルなし", "Keine letzten Dateien"),
@@ -2316,6 +2317,7 @@ fn build_menu<R: tauri::Runtime>(
                     "advance" => "plugins.group.advance",
                     "reflect" => "plugins.group.reflect",
                     "create" => "plugins.group.create",
+                    "experience" => "plugins.group.experience",
                     _ => "plugins.group.other",
                 };
                 let group_label = native_menu_literal(&menu_label(locale, label_key));
@@ -2361,6 +2363,10 @@ mod menu_label_tests {
         assert_eq!(menu_label("zh", "plugins.group.advance"), "推进");
         assert_eq!(menu_label("ja", "plugins.group.advance"), "前へ進む");
         assert_eq!(menu_label("de", "plugins.group.advance"), "Vorankommen");
+        assert_eq!(menu_label("en", "plugins.group.experience"), "Experience");
+        assert_eq!(menu_label("zh", "plugins.group.experience"), "体验增强");
+        assert_eq!(menu_label("ja", "plugins.group.experience"), "体験向上");
+        assert_eq!(menu_label("de", "plugins.group.experience"), "Erlebnis");
     }
 
     #[test]

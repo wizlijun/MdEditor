@@ -9,7 +9,7 @@ import {
 describe('plugin capability categories', () => {
   it('uses the documented top-level category order', () => {
     expect(PLUGIN_CATEGORY_ORDER).toEqual([
-      'record', 'reading', 'inspiration', 'advance', 'reflect', 'create', 'other',
+      'record', 'reading', 'inspiration', 'advance', 'reflect', 'create', 'experience', 'other',
     ])
   })
 
@@ -49,7 +49,7 @@ describe('plugin capability categories', () => {
     expect(normalizePluginCategory('capture')).toBe('record')
     expect(normalizePluginCategory('thinking-review')).toBe('reflect')
     expect(normalizePluginCategory('publish-export')).toBe('create')
-    expect(normalizePluginCategory('editor-extensions')).toBe('create')
+    expect(normalizePluginCategory('editor-extensions')).toBe('experience')
   })
 
   it('uses official plugin ids to migrate ambiguous cached categories', () => {
@@ -58,7 +58,7 @@ describe('plugin capability categories', () => {
     expect(normalizePluginCategory('thinking', 'notemd.next')).toBe('advance')
     expect(normalizePluginCategory('thinking', 'notemd.weekly-review')).toBe('reflect')
     expect(normalizePluginCategory('import-export', 'notemd.roam-import')).toBe('record')
-    expect(normalizePluginCategory('editing', 'notemd.power-mode')).toBe('create')
+    expect(normalizePluginCategory('editing', 'notemd.power-mode')).toBe('experience')
   })
 
   it('declares AI roles only for plugins that directly provide AI collaboration', () => {

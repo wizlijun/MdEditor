@@ -7,6 +7,7 @@ export const PLUGIN_CATEGORY_ORDER = [
   'advance',
   'reflect',
   'create',
+  'experience',
   'other',
 ] as const
 
@@ -21,8 +22,8 @@ const LEGACY_CATEGORIES: Record<string, PluginCategory> = {
   'thinking-review': 'reflect',
   'import-export': 'create',
   'publish-export': 'create',
-  editing: 'create',
-  'editor-extensions': 'create',
+  editing: 'experience',
+  'editor-extensions': 'experience',
 }
 
 /** Current category is authoritative by id so old manifests/caches migrate offline. */
@@ -40,7 +41,7 @@ export const OFFICIAL_PLUGIN_CATEGORIES: Readonly<Record<string, PluginCategory>
   'notemd.decision-log': 'reflect',
   'notemd.weekly-review': 'reflect',
   'notemd.md2pdf': 'create',
-  'notemd.power-mode': 'create',
+  'notemd.power-mode': 'experience',
 }
 
 export function normalizePluginCategory(
@@ -83,6 +84,7 @@ export function pluginCategoryLabelKey(category: PluginCategory): keyof Messages
     advance: 'pluginCategory.advance',
     reflect: 'pluginCategory.reflect',
     create: 'pluginCategory.create',
+    experience: 'pluginCategory.experience',
     other: 'pluginCategory.other',
   }
   return keys[category]

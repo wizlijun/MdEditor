@@ -212,6 +212,7 @@ export const zh: Record<keyof Messages, string> = {
   'pluginCategory.advance': '推进',
   'pluginCategory.reflect': '回顾',
   'pluginCategory.create': '创作',
+  'pluginCategory.experience': '体验增强',
   'pluginCategory.other': '其他',
 
   // Plugin Market window (子项目③)

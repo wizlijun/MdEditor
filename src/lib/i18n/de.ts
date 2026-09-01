@@ -210,6 +210,7 @@ export const de: Record<keyof Messages, string> = {
   'pluginCategory.advance': 'Vorankommen',
   'pluginCategory.reflect': 'Rückblick',
   'pluginCategory.create': 'Gestalten',
+  'pluginCategory.experience': 'Erlebnis',
   'pluginCategory.other': 'Sonstige',
 
   // Plugin Market window (子项目③)

@@ -40,7 +40,7 @@ describe('pluginCategoryFromManifest', () => {
       'capture-import': 'record',
       'thinking-review': 'reflect',
       'publish-export': 'create',
-      'editor-extensions': 'create',
+      'editor-extensions': 'experience',
     }
     for (const [legacy, current] of Object.entries(aliases)) {
       expect(pluginCategoryFromManifest({

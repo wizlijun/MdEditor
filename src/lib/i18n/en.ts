@@ -217,6 +217,7 @@ export const en = {
   'pluginCategory.advance': 'Move Forward',
   'pluginCategory.reflect': 'Reflect',
   'pluginCategory.create': 'Create',
+  'pluginCategory.experience': 'Experience',
   'pluginCategory.other': 'Other',
 
   // Plugin Market window (子项目③)
