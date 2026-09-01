@@ -589,6 +589,28 @@ describe('Next window', () => {
     expect(card.textContent).toContain('情境未明确')
   })
 
+  it('maps P0, P1, P2, and P3 to decreasing visual urgency on every card', () => {
+    const next = workspace()
+    const priorities = ['P0', 'P1', 'P2', 'P3'] as const
+    const cards = priorities.map((priority) => ({
+      ...item(`priority-${priority}`, priority, 'capture'),
+      priority,
+      contexts: [],
+    }))
+    next.items.push(...cards)
+    next.capture.unshift(...cards)
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    for (const priority of priorities) {
+      const badge = document.querySelector<HTMLElement>(
+        `[data-item-key="priority-${priority}"] [data-priority="${priority}"]`,
+      )!
+      expect(badge.classList.contains(`priority-${priority.toLowerCase()}`)).toBe(true)
+    }
+  })
+
   it('opens the same metadata editor from valid card titles in every lane and saves source fields', async () => {
     const next = workspace()
     next.wip[0].priority = 'P1'
