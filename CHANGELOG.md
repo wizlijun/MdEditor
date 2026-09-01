@@ -7,6 +7,20 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Memory entries now separate review status from meaning and evidence.** Each entry can carry critical/high/normal/low priority, positive/negative/neutral behavior direction, epistemic status, certainty, an explicit Agent usage rule and a “must avoid” rule. Existing entries migrate conservatively as neutral and unknown instead of being promoted to confirmed facts.
+
+### Changed
+
+- **Memory now uses a focused macOS-style master-detail review window.** Pending, negative and critical material is easier to distinguish, typography and controls are consistent, and the in-window confirmation sheet shows the exact candidate identity, SHA-256, content and behavior metadata before a decision is written.
+- **Idea and Task card metadata is fully editable from Next.** Clicking a project, priority, due-date or context chip now opens the complete metadata editor and keeps the Markdown frontmatter and lifecycle ledger aligned.
+
+### Fixed
+
+- **Plugin windows accept the first click after activation.** Memory no longer depends on a browser confirmation dialog, and interactive controls respond immediately when their window is brought forward.
+- **Invalid Memory updates fail closed.** Update proposals require a non-empty target, owner identity uses its dedicated create/replace flow, and owner records are no longer exposed through ordinary memory editing controls.
+
 ## v6.901.5 — 2026-09-01
 
 ### Added
