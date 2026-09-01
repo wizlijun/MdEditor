@@ -58,9 +58,10 @@ Windows x64 版已随 v6.808.3 上线(资产 `note.md_6.808.3_x64-setup.exe` + `
    签名(没有 Tauri 1 那个单独的 `.nsis.zip`),所以 updater 的 url **就是**
    `setup.exe` 本身,直接用,不拼文件名。
 2. 上一步没命中(滞后窗口):调 GitHub releases 列表 API
-   `https://api.github.com/repos/wizlijun/note.md/releases?per_page=30`,
-   跳过 draft,找**最新一个**带匹配 `*_<x64|arm64>-setup.exe` 资产的 release,
-   取其 `browser_download_url`。
+   `https://api.github.com/repos/wizlijun/note.md/releases?per_page=100&page=<n>`,
+   跳过 draft,逐页找**最新一个**带匹配 `*_<x64|arm64>-setup.exe` 资产的 release,
+   取其 `browser_download_url`。必须翻页到命中或遇到最后一个短页，不能假设最近
+   30/100 个 Release 一定带 Windows 包。
 3. 仍失败(GitHub 5xx / 限流 / 网络):见下节的 last-known-good 缓存。
 
 全部落空才 302 到 releases 列表页。
@@ -96,7 +97,7 @@ windowsUrlFromReleases(releases, arch)-> url | null
 
 测试:`website/src/resolve-download.test.ts`(vitest,`include` 增加
 `website/src/**/*.test.ts`)。覆盖 UA 判定、arch 归一化、manifest 命中、
-滞后回退挑版本、资产名不匹配、空列表。
+滞后回退挑版本、跨页查找、资产名不匹配、空列表与 Worker 路由直链。
 
 ## 四、页面
 

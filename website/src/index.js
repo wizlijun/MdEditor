@@ -9,12 +9,13 @@ import {
   detectTarget,
   macDownloadUrl,
   windowsUrlFromManifest,
-  windowsUrlFromReleases,
+  windowsUrlFromReleasePages,
 } from "./resolve-download.js";
 
 const LATEST_JSON_URL = `https://github.com/${GH_REPO}/releases/latest/download/latest.json`;
-const RELEASES_API_URL = `https://api.github.com/repos/${GH_REPO}/releases?per_page=30`;
+const RELEASES_API_URL = `https://api.github.com/repos/${GH_REPO}/releases`;
 const UA = "notemd-site-worker";
+const RELEASES_PER_PAGE = 100; // GitHub's maximum; pagination handles older Windows builds
 
 const MANIFEST_TTL_S = 300; // 5 min — keeps GitHub traffic to ~1 hit per POP per TTL
 const RELEASES_TTL_S = 1800; // 30 min — only queried during a Windows lag window
@@ -79,7 +80,13 @@ async function fetchJson(url, name, ttlS, ctx) {
 }
 
 const fetchManifest = (ctx) => fetchJson(LATEST_JSON_URL, "latest.json", MANIFEST_TTL_S, ctx);
-const fetchReleases = (ctx) => fetchJson(RELEASES_API_URL, "releases.json", RELEASES_TTL_S, ctx);
+const fetchReleasesPage = (page, ctx) =>
+  fetchJson(
+    `${RELEASES_API_URL}?per_page=${RELEASES_PER_PAGE}&page=${page}`,
+    `releases-${page}.json`,
+    RELEASES_TTL_S,
+    ctx,
+  );
 
 function redirect(location) {
   return new Response(null, {
@@ -111,10 +118,15 @@ async function resolveInstaller(target, ctx) {
 
   if (!url && os === "windows") {
     try {
-      const releases = await fetchReleases(ctx);
       // No native arm64 build yet; Windows on ARM runs the x64 installer under
       // emulation, so fall through rather than dead-ending ARM visitors.
-      url = windowsUrlFromReleases(releases, arch) ?? windowsUrlFromReleases(releases, "x86_64");
+      const findRelease = (releaseArch) =>
+        windowsUrlFromReleasePages(
+          (page) => fetchReleasesPage(page, ctx),
+          releaseArch,
+          RELEASES_PER_PAGE,
+        );
+      url = (await findRelease(arch)) ?? (arch === "x86_64" ? null : await findRelease("x86_64"));
     } catch (e) {
       console.warn("[/download] releases list unavailable:", e);
     }

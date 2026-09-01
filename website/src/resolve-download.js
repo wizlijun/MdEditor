@@ -106,3 +106,22 @@ export function windowsUrlFromReleases(releases, arch) {
   }
   return null;
 }
+
+/**
+ * GitHub caps the releases endpoint at 100 items per page. Windows builds can
+ * trail macOS by an arbitrary number of releases, so keep walking until an
+ * installer is found instead of treating the first page as the full history.
+ *
+ * `loadPage` receives a one-based page number. A short page (including an
+ * empty one after an exactly-full final page) marks the end of the list.
+ */
+export async function windowsUrlFromReleasePages(loadPage, arch, pageSize) {
+  for (let page = 1; ; page += 1) {
+    const releases = await loadPage(page);
+    if (!Array.isArray(releases)) return null;
+
+    const url = windowsUrlFromReleases(releases, arch);
+    if (url) return url;
+    if (releases.length < pageSize) return null;
+  }
+}

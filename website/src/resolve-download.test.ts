@@ -7,6 +7,7 @@ import {
   normalizeOs,
   osFromUserAgent,
   windowsUrlFromManifest,
+  windowsUrlFromReleasePages,
   windowsUrlFromReleases,
 } from './resolve-download.js'
 
@@ -220,5 +221,46 @@ describe('windowsUrlFromReleases', () => {
     expect(windowsUrlFromReleases(RELEASES, 'aarch64')).toBeNull()
     expect(windowsUrlFromReleases([], 'x86_64')).toBeNull()
     expect(windowsUrlFromReleases(null, 'x86_64')).toBeNull()
+  })
+})
+
+describe('windowsUrlFromReleasePages', () => {
+  it('keeps paging when the newest full page has no Windows installer', async () => {
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({
+      tag_name: `v7.${100 - i}.0`,
+      draft: false,
+      prerelease: false,
+      assets: [dl(`v7.${100 - i}.0`, `note.md-7.${100 - i}.0-aarch64.dmg`)],
+    }))
+    const secondPage = [
+      {
+        tag_name: 'v6.811.1',
+        draft: false,
+        prerelease: false,
+        assets: [dl('v6.811.1', 'note.md_6.811.1_x64-setup.exe')],
+      },
+    ]
+    const requested: number[] = []
+
+    const url = await windowsUrlFromReleasePages((page: number) => {
+      requested.push(page)
+      return Promise.resolve(page === 1 ? firstPage : secondPage)
+    }, 'x86_64', 100)
+
+    expect(url).toBe(
+      'https://github.com/wizlijun/note.md/releases/download/v6.811.1/note.md_6.811.1_x64-setup.exe',
+    )
+    expect(requested).toEqual([1, 2])
+  })
+
+  it('stops after the final short page when no installer exists', async () => {
+    const requested: number[] = []
+    const url = await windowsUrlFromReleasePages((page: number) => {
+      requested.push(page)
+      return Promise.resolve(page === 1 ? Array.from({ length: 2 }, () => ({ assets: [] })) : [])
+    }, 'x86_64', 100)
+
+    expect(url).toBeNull()
+    expect(requested).toEqual([1])
   })
 })
