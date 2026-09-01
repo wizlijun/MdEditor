@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.901.6 — 2026-09-01
+
 ### Added
 
 - **Memory entries now separate review status from meaning and evidence.** Each entry can carry critical/high/normal/low priority, positive/negative/neutral behavior direction, epistemic status, certainty, an explicit Agent usage rule and a “must avoid” rule. Existing entries migrate conservatively as neutral and unknown instead of being promoted to confirmed facts.
