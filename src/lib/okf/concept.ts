@@ -54,6 +54,10 @@ export const CONCEPT_TYPE = {
   traceRequest: 'Trace Request',
   /** vault 根的 AGENTS.md(模板见 src-tauri/templates/AGENTS.md) */
   vaultConventions: 'Vault Conventions',
+  /** vault 根的 USER.md：owner 身份与稳定画像的唯一来源 */
+  userProfile: 'User Profile',
+  /** vault 根的 MEMORY.md：人与 AI 共同维护的长期事实与决定 */
+  memory: 'Memory',
 } as const
 
 /**

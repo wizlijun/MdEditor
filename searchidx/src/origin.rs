@@ -89,7 +89,7 @@ impl Origin {
 fn mapped_type_origin(concept_type: &str) -> Option<Origin> {
     match concept_type {
         "Note" | "Outline Note" | "Daily Note" | "Wiki Page" | "Idea" | "Next" | "Task"
-        | "Vault Conventions" | "Trace Request" => Some(Origin::Human),
+        | "Vault Conventions" | "User Profile" | "Memory" | "Trace Request" => Some(Origin::Human),
         "Book Summary" | "Answer" | "Idea Proof" | "Reading Report" | "Decision Board"
         | "Decision Archive" | "Trace Report" => Some(Origin::Derived),
         "Book" | "Trace Material" => Some(Origin::Source),
@@ -269,6 +269,14 @@ mod tests {
     #[test]
     fn rule4_maps_registered_types() {
         assert_eq!(derive("a.md", Some(&fm("type: Note")), &globs(&[])), Origin::Human);
+        assert_eq!(
+            derive("USER.md", Some(&fm("type: User Profile")), &globs(&[])),
+            Origin::Human
+        );
+        assert_eq!(
+            derive("MEMORY.md", Some(&fm("type: Memory")), &globs(&[])),
+            Origin::Human
+        );
         assert_eq!(derive("a.md", Some(&fm("type: Book Summary")), &globs(&[])), Origin::Derived);
         assert_eq!(derive("a.md", Some(&fm("type: Book")), &globs(&[])), Origin::Source);
     }

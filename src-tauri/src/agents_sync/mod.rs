@@ -1,4 +1,5 @@
-//! CLAUDE.md as a relative symlink to AGENTS.md. The sync service owns
+//! Default vault collaboration files and CLAUDE.md as a relative symlink to
+//! AGENTS.md. The sync service owns
 //! CLAUDE.md's lifecycle: create the symlink when missing, back up and replace
 //! a foreign regular file, repoint a wrong symlink, and remove a dangling one.
 //! CLAUDE.md is gitignored. Lifecycle is independent of vault_sync's git loop —
@@ -16,6 +17,11 @@ use std::time::Duration;
 use tauri::Manager;
 
 pub const TEMPLATE: &str = include_str!("../../templates/AGENTS.md");
+pub const USER_TEMPLATE: &str = include_str!("../../templates/USER.md");
+pub const MEMORY_TEMPLATE: &str = include_str!("../../templates/MEMORY.md");
+
+const USER_FILE: &str = "USER.md";
+const MEMORY_FILE: &str = "MEMORY.md";
 
 pub struct AgentsSyncState {
     /// Bumped on every (re)start; stale watcher threads exit when they notice.
@@ -204,8 +210,8 @@ fn run_check(_app: &tauri::AppHandle, root: &Path) {
     reconcile(root);
 }
 
-/// Tray entry point: ensure AGENTS.md exists (template on first use), sync,
-/// and open it in the main window.
+/// Tray entry point: ensure the collaboration files exist (templates on first
+/// use), sync AGENTS.md, and open AGENTS.md in the main window.
 pub fn edit_agents_md(app: &tauri::AppHandle) {
     crate::dlog("agents_sync edit_agents_md invoked");
     if let Some(root) = vault_root(app) {
@@ -287,7 +293,7 @@ pub fn notemd_agents_append_search_section(app: tauri::AppHandle) -> Result<bool
 
 fn open_agents_in_editor(app: &tauri::AppHandle, root: &Path) {
     let agents = root.join(watcher::AGENTS_FILE);
-    let _ = create_default_agents_md(root);
+    create_default_vault_files(root);
     // Creates/repairs the CLAUDE.md symlink and ensures the .gitignore line.
     run_check(app, root);
     crate::show_main_window(app);
@@ -296,24 +302,56 @@ fn open_agents_in_editor(app: &tauri::AppHandle, root: &Path) {
     }
 }
 
-/// Create the built-in conventions only when AGENTS.md is genuinely absent.
-/// `create_new` makes that promise atomic and refuses to follow an existing or
-/// dangling symlink, so opening the editor can never replace user instructions.
-fn create_default_agents_md(root: &Path) -> std::io::Result<bool> {
+/// Create one built-in collaboration file only when that directory entry is
+/// genuinely absent. `create_new` makes that promise atomic and refuses to
+/// follow an existing or dangling symlink, so this can never replace user data.
+fn create_default_vault_file(
+    root: &Path,
+    file_name: &str,
+    template: &str,
+) -> std::io::Result<bool> {
     use std::io::Write;
 
-    let path = root.join(watcher::AGENTS_FILE);
+    let path = root.join(file_name);
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
     {
         Ok(mut file) => {
-            file.write_all(TEMPLATE.as_bytes())?;
+            file.write_all(template.as_bytes())?;
             Ok(true)
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
         Err(error) => Err(error),
+    }
+}
+
+fn create_default_agents_md(root: &Path) -> std::io::Result<bool> {
+    create_default_vault_file(root, watcher::AGENTS_FILE, TEMPLATE)
+}
+
+fn create_default_user_md(root: &Path) -> std::io::Result<bool> {
+    create_default_vault_file(root, USER_FILE, USER_TEMPLATE)
+}
+
+fn create_default_memory_md(root: &Path) -> std::io::Result<bool> {
+    create_default_vault_file(root, MEMORY_FILE, MEMORY_TEMPLATE)
+}
+
+/// Best-effort and independent by file: a protected or malformed directory
+/// entry must not prevent another missing collaboration file from being
+/// created. This remains tied to the explicit "Edit AGENTS.md" action; vault
+/// startup and folder selection do not write these files silently.
+fn create_default_vault_files(root: &Path) {
+    for (name, result) in [
+        (watcher::AGENTS_FILE, create_default_agents_md(root)),
+        (USER_FILE, create_default_user_md(root)),
+        (MEMORY_FILE, create_default_memory_md(root)),
+    ] {
+        if let Err(error) = result {
+            crate::dlog(&format!("agents_sync create {name} failed (skip): {error}"));
+        }
     }
 }
 
@@ -417,6 +455,88 @@ mod fs_tests {
     }
 
     #[test]
+    fn creates_default_user_and_memory_templates_only_when_missing() {
+        let d = tempfile::tempdir().unwrap();
+        for (file_name, template, create) in [
+            (
+                USER_FILE,
+                USER_TEMPLATE,
+                create_default_user_md as fn(&Path) -> std::io::Result<bool>,
+            ),
+            (MEMORY_FILE, MEMORY_TEMPLATE, create_default_memory_md),
+        ] {
+            assert!(create(d.path()).unwrap(), "{file_name} should be created");
+            assert_eq!(
+                fs::read_to_string(d.path().join(file_name)).unwrap(),
+                template
+            );
+            assert!(
+                !create(d.path()).unwrap(),
+                "{file_name} must not be recreated"
+            );
+        }
+    }
+
+    #[test]
+    fn default_collaboration_templates_never_replace_existing_files() {
+        for (file_name, create) in [
+            (
+                USER_FILE,
+                create_default_user_md as fn(&Path) -> std::io::Result<bool>,
+            ),
+            (MEMORY_FILE, create_default_memory_md),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let path = d.path().join(file_name);
+            for existing in ["", "  \n", "# Keep this exactly.\n"] {
+                fs::write(&path, existing).unwrap();
+                assert!(!create(d.path()).unwrap(), "{file_name} must be preserved");
+                assert_eq!(fs::read_to_string(&path).unwrap(), existing);
+                fs::remove_file(&path).unwrap();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_collaboration_templates_do_not_follow_dangling_symlinks() {
+        for (file_name, create) in [
+            (
+                USER_FILE,
+                create_default_user_md as fn(&Path) -> std::io::Result<bool>,
+            ),
+            (MEMORY_FILE, create_default_memory_md),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let target = d.path().join(format!("outside-{file_name}"));
+            std::os::unix::fs::symlink(&target, d.path().join(file_name)).unwrap();
+            assert!(!create(d.path()).unwrap());
+            assert!(!target.exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_protected_collaboration_file_does_not_block_another() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join(watcher::AGENTS_FILE), "custom agents\n").unwrap();
+        let target = d.path().join("outside-user.md");
+        std::os::unix::fs::symlink(&target, d.path().join(USER_FILE)).unwrap();
+
+        create_default_vault_files(d.path());
+
+        assert_eq!(
+            fs::read_to_string(d.path().join(watcher::AGENTS_FILE)).unwrap(),
+            "custom agents\n"
+        );
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read_to_string(d.path().join(MEMORY_FILE)).unwrap(),
+            MEMORY_TEMPLATE
+        );
+    }
+
+    #[test]
     fn default_template_creation_never_replaces_existing_instructions() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("AGENTS.md");
@@ -483,7 +603,7 @@ mod fs_tests {
         for rule in [
             "`inbox/tasks/YYYY-MM-DD-HHmm-<slug>-task.md`",
             "### Ownership gate",
-            "obligation belongs to the **vault owner**",
+            "obligation belongs to the **confirmed vault owner**",
             "work assigned to another person",
             "A team-level action is not an owner Task",
             "Follow up with Alice on Friday",
@@ -510,6 +630,46 @@ mod fs_tests {
                 TEMPLATE.contains(rule),
                 "Vault AGENTS.md is missing task rule: {rule}"
             );
+        }
+    }
+
+    #[test]
+    fn collaboration_templates_define_owner_and_memory_boundaries() {
+        for rule in [
+            "type: User Profile",
+            "actor: null",
+            "confirmed: false",
+            "must not create owner Tasks",
+            "must not change `owner.actor`",
+        ] {
+            assert!(
+                USER_TEMPLATE.contains(rule),
+                "USER.md is missing rule: {rule}"
+            );
+        }
+        for rule in [
+            "type: Memory",
+            "owner_ref: /USER.md",
+            "Tasks and reminders belong in `/inbox/tasks/`",
+            "daily or episodic detail",
+            "explicit human confirmation",
+            "shared, public, or external contexts",
+        ] {
+            assert!(
+                MEMORY_TEMPLATE.contains(rule),
+                "MEMORY.md is missing rule: {rule}"
+            );
+        }
+        for rule in [
+            "## Shared user model and long-term memory",
+            "read `/USER.md`",
+            "first, then `/MEMORY.md`",
+            "`owner.actor`",
+            "`owner.confirmed: true`",
+            "An Agent must not create a",
+            "Do not copy tasks, reminders, or daily logs into `MEMORY.md`",
+        ] {
+            assert!(TEMPLATE.contains(rule), "AGENTS.md is missing rule: {rule}");
         }
     }
 

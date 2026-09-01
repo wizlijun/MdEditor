@@ -14,6 +14,10 @@ markdown file in this vault carries one, this file included.)
 
 ## Vault layout
 
+- `/USER.md` — canonical, machine-readable owner identity and stable user
+  profile. Read it before deciding who owns a Task.
+- `/MEMORY.md` — compact, human-and-AI curated long-term facts and decisions.
+  It is not a task list or daily log.
 - `dailynote/` — daily outline notes, organized as
   `yyyy/yyyy-MM-dd.note.md` (e.g. `2026/2026-07-10.note.md`).
   Monthly and yearly summaries live in the same year folder as
@@ -64,6 +68,8 @@ coin a short one and then use it consistently.
 | `Daily Note` | `dailynote/yyyy/yyyy-MM-dd.note.md` |
 | `Wiki Page` | `wikipage/<title>.note.md` |
 | `Task` | one executable item in `inbox/tasks/*-task.md` |
+| `User Profile` | the root `/USER.md` owner profile |
+| `Memory` | the root `/MEMORY.md` durable memory |
 
 Everything else is optional, but absent metadata means "unknown", not
 "fine" — write what you actually know:
@@ -113,6 +119,39 @@ Rules that hold in both directions:
   (`open`/`answered`/`adopted`). Same word, different namespaces; never
   convert one into the other.
 
+## Shared user model and long-term memory
+
+`/USER.md` and `/MEMORY.md` are shared working documents maintained by the
+human and AI agents. For private, owner-scoped vault work, read `/USER.md`
+first, then `/MEMORY.md`, before relying on personal context. Always do this
+before extracting or creating Inbox Tasks. In shared, public, or external
+contexts, do not load, quote, or inject their contents unless the owner has
+authorized that use.
+
+`USER.md` is the sole source of truth for who owns the vault and for durable
+profile facts. The owner is configured only when `owner.actor` is a non-empty
+`human:<id>`, `owner.names` identifies that person, and
+`owner.confirmed: true`. If the file is missing, conflicting, unconfirmed, or
+uses the default `null` actor, the owner is unknown. An Agent must not create a
+Task. A human may edit the file directly. An Agent may add a stable profile
+fact only with adjacent `source::`, `updated::`, and `by::` provenance, and
+must not change the owner identity, names, authority, permissions, or an
+action-sensitive preference without explicit human confirmation.
+
+`MEMORY.md` holds compact, cross-session facts, constraints, and decisions that
+do not belong in the user profile. Every Agent-authored active entry must carry
+`id::`, `source::`, `recorded::`, and `by::` as defined in that file. Claims
+about permission, authority, commitments, or other action-sensitive matters
+need explicit human confirmation before becoming active memory. When evidence
+changes, keep exactly one active claim and preserve the prior one as superseded
+with a link to its replacement. Merge duplicates and prune obsolete detail;
+do not accumulate raw conversation turns.
+
+Do not copy tasks, reminders, or daily logs into `MEMORY.md`. Tasks belong in
+`/inbox/tasks/`, episodic detail belongs in `dailynote/`, and raw material stays
+with its source. Neither file may contain credentials, tokens, private keys, or
+other secrets because both normally sync with the vault.
+
 ## Inbox tasks
 
 Agents may add must-do items, including ones discovered during a daily
@@ -123,9 +162,12 @@ item in the summary instead of manufacturing a commitment.
 
 ### Ownership gate
 
-Only create a Task when the obligation belongs to the **vault owner**. The
-source must explicitly assign the action to the owner, record the owner's own
-commitment, or state a deadline the owner must meet.
+Before evaluating ownership, read `/USER.md` using the rules above. Only create
+a Task when its obligation belongs to the **confirmed vault owner** identified
+by `owner.actor` and `owner.names`. The source must explicitly assign the action
+to that person, record that person's own commitment, or state a deadline that
+person must meet. If the owner cannot be confirmed from `USER.md`, create no
+Task.
 
 - Never create a Task for work assigned to another person, even when that work
   affects the owner or the owner's project. Keep it in the summary with the

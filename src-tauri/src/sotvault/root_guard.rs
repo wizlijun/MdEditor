@@ -2,7 +2,8 @@
 //!
 //! Picking a vault root is not a neutral choice: `vault_sync` runs
 //! `git add -A` + commit over the whole tree on every cycle, `agents_sync`
-//! writes `AGENTS.md` into it, and the folder view walks it. Point that at a
+//! can write the default collaboration files into it, and the folder view
+//! walks it. Point that at a
 //! drive root and note.md starts version-controlling an entire disk; point it
 //! at the home directory and the auto-commit sweeps up `.ssh`, `.aws` and every
 //! other secret that happens to live there — and then pushes them to the
