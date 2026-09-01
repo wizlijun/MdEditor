@@ -73,6 +73,55 @@ pub struct DailyNotesEnabled(pub std::sync::Mutex<bool>);
 #[cfg(not(target_os = "ios"))]
 pub struct PluginShortcuts(pub Mutex<std::collections::HashMap<u32, (String, String)>>);
 
+/// Make the registered system-wide shortcuts match the currently enabled
+/// plugin tray contributions. The host owns no built-in global shortcuts, so
+/// it is safe to replace the plugin-owned set as one unit after install,
+/// uninstall, enable or disable.
+#[cfg(not(target_os = "ios"))]
+pub(crate) fn reconcile_plugin_shortcuts<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+
+    if let Err(e) = app.global_shortcut().unregister_all() {
+        dlog(&format!(
+            "global-shortcut reconcile: unregister failed: {e}"
+        ));
+        app.state::<PluginShortcuts>().0.lock().unwrap().clear();
+        return;
+    }
+
+    let mut claimed: std::collections::HashSet<u32> = Default::default();
+    let mut map: std::collections::HashMap<u32, (String, String)> = Default::default();
+    for (accel, entry) in plugin_runtime::tray::accelerators_from_state() {
+        let target = format!("{}:{}", entry.plugin_id, entry.window);
+        let sc = match Shortcut::from_str(&accel) {
+            Ok(sc) => sc,
+            Err(e) => {
+                dlog(&format!(
+                    "global-shortcut {target}: bad accelerator {accel:?}: {e}"
+                ));
+                continue;
+            }
+        };
+        if !claimed.insert(sc.id()) {
+            dlog(&format!(
+                "global-shortcut {target}: {accel:?} already claimed, skipped"
+            ));
+            continue;
+        }
+        // One at a time: one occupied combo must not cost every other plugin
+        // its hotkey.
+        if let Err(e) = app.global_shortcut().register(sc) {
+            dlog(&format!(
+                "global-shortcut {target}: register {accel:?} failed: {e}"
+            ));
+            continue;
+        }
+        map.insert(sc.id(), (entry.plugin_id, entry.window));
+    }
+    *app.state::<PluginShortcuts>().0.lock().unwrap() = map;
+}
+
 #[tauri::command]
 fn drain_pending_files(state: tauri::State<'_, PendingFiles>) -> Vec<String> {
     state.0.lock().unwrap().drain(..).collect()
@@ -1308,52 +1357,17 @@ pub fn run() {
             #[cfg(not(target_os = "ios"))]
             plugin_runtime::location::init_at_startup(&app.handle());
 
-            // System-wide tray hotkeys: the two built-in capture actions plus
-            // whatever the installed plugins declared as
+            // System-wide tray hotkeys declared by installed plugins through
             // `contributes.tray[].accelerator`. MUST run after
             // `plugin_runtime::init` — that is what fills the plugin set this
             // reads. Every failure here is non-fatal (a combo claimed by another
             // app is routine): the tray menu items still work, they just lose
             // the keyboard route to them.
             //
-            // Registered once at startup only, which matches the tray menu
-            // itself: installing a plugin from the market does not rebuild the
-            // tray either, so a newly installed hotkey arrives with the next
-            // launch.
+            // The same helper also runs after install/uninstall/enable-disable,
+            // keeping the registered set aligned with the tray without a restart.
             #[cfg(not(target_os = "ios"))]
-            {
-                use std::str::FromStr;
-                use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-
-                // 宿主不再占用任何内置全局热键;`claimed` 只用来让两个插件之间
-                // 不互相抢同一组合(先来先得,后到的跳过而不是注册进一个收不到
-                // 事件的热键)。
-                let mut claimed: std::collections::HashSet<u32> = Default::default();
-                let mut map: std::collections::HashMap<u32, (String, String)> = Default::default();
-                for (accel, entry) in plugin_runtime::tray::accelerators_from_state() {
-                    let target = format!("{}:{}", entry.plugin_id, entry.window);
-                    let sc = match Shortcut::from_str(&accel) {
-                        Ok(sc) => sc,
-                        Err(e) => {
-                            dlog(&format!("global-shortcut {target}: bad accelerator {accel:?}: {e}"));
-                            continue;
-                        }
-                    };
-                    if !claimed.insert(sc.id()) {
-                        dlog(&format!("global-shortcut {target}: {accel:?} already claimed, skipped"));
-                        continue;
-                    }
-                    // One at a time: `register_multiple` is all-or-nothing, and
-                    // one plugin's occupied combo must not cost every other
-                    // plugin its hotkey.
-                    if let Err(e) = app.global_shortcut().register(sc) {
-                        dlog(&format!("global-shortcut {target}: register {accel:?} failed: {e}"));
-                        continue;
-                    }
-                    map.insert(sc.id(), (entry.plugin_id, entry.window));
-                }
-                *app.state::<PluginShortcuts>().0.lock().unwrap() = map;
-            }
+            reconcile_plugin_shortcuts(&app.handle());
 
             #[cfg(target_os = "ios")]
             vault_ios::init(&app.handle());
@@ -1935,7 +1949,8 @@ fn build_tray_menu<R: tauri::Runtime>(
     // (`contributes.tray[].section`): `"capture"` joins the top block, right
     // after Daily Notes and before the first separator; anything else (the
     // default) goes below "Show Main Window", after that separator. Each group
-    // is sorted by label — the entry's `label`, or the plugin's localized name.
+    // is sorted by its stable manifest label/base product name while the text
+    // shown to the user remains localized.
     // Clicking opens the plugin window; `accelerator` is display-only here (the
     // real system-wide hotkey is registered in `run()`'s setup).
     let (capture_entries, other_entries) = crate::plugin_runtime::tray::entries_from_state(locale);

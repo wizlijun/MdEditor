@@ -5,8 +5,13 @@ const englishKeys = Object.keys(CATALOGS.en)
 const placeholders = (value: string) => (value.match(/\{\w+\}/g) ?? []).sort()
 
 describe('Next strings', () => {
-  it('keeps the product name unchanged in every locale', () => {
-    for (const locale of LOCALES) expect(CATALOGS[locale]['app.title']).toBe('Next')
+  it('uses the localized product name in every locale', () => {
+    expect(Object.fromEntries(LOCALES.map((locale) => [locale, CATALOGS[locale]['app.title']]))).toEqual({
+      en: 'Next',
+      zh: '下一步',
+      ja: '次の一歩',
+      de: 'Nächster Schritt',
+    })
   })
 
   it('uses the selected locale and interpolates values', () => {

@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Plugin tray shortcuts now become available immediately after installation.** Enabling, disabling or removing a plugin updates the registered system-wide shortcuts at the same time as the tray menu, without requiring note.md to restart.
+
+### Changed
+
+- **Localized plugin tray items keep a stable workflow order.** The visible names still follow the current interface language, while their position no longer jumps when the language changes. This lets Next remain directly below Idea Spark in every supported language.
+
 ## v6.831.2 — 2026-08-31
 
 ### Changed

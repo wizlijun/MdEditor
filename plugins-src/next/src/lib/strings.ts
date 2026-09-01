@@ -328,7 +328,7 @@ const en: Catalog = {
 }
 
 const zh: Catalog = {
-  'app.title': 'Next',
+  'app.title': '下一步',
   'app.value': '给每个想法一个下一步，或一个安心的去处。',
   'filter.projects': '项目',
   'common.loading': '正在载入…',
@@ -491,7 +491,7 @@ const zh: Catalog = {
 }
 
 const ja: Catalog = {
-  'app.title': 'Next',
+  'app.title': '次の一歩',
   'app.value': 'すべてのアイデアに、次の一歩か安心できる置き場所を。',
   'filter.projects': 'プロジェクト',
   'common.loading': '読み込み中…',
@@ -654,7 +654,7 @@ const ja: Catalog = {
 }
 
 const de: Catalog = {
-  'app.title': 'Next',
+  'app.title': 'Nächster Schritt',
   'app.value': 'Gib jeder Idee einen nächsten Schritt – oder einen ruhigen Ort.',
   'filter.projects': 'Projekte',
   'common.loading': 'Wird geladen…',

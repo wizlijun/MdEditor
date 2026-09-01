@@ -1,7 +1,7 @@
 # Next 插件设计
 
 - 日期：2026-08-29
-- 更新：2026-08-31（1.4.0 多项目 Tag 与本地项目建议）
+- 更新：2026-09-01（1.4.1 本地化产品名与托盘快捷入口）
 - 状态：MVP 已实现，产品效果仍须按 G0–G4 验证
 - 插件：`notemd.next`
 - 分类：Thinking / 思考
@@ -199,7 +199,7 @@ Tauri 插件窗口的 OS 级 drag-drop handler 会吞掉 webview 内的 HTML5 `d
 
 ### 6.2 单一可读台账
 
-`Next` 是产品名；下文的 `ledger` 只指 append-only 事件存储模型，不是用户可见名称。
+`Next` 是英文产品名；中文显示为“下一步”，日文为“次の一歩”，德文为“Nächster Schritt”。插件市场名称、菜单入口与窗口内标题在每种语言中保持一致；`notemd.next` 等内部兼容标识不变。下文的 `ledger` 只指 append-only 事件存储模型，不是用户可见名称。
 
 人的处置事件保存在一个普通、可搜索的 Vault 文档：
 
@@ -284,7 +284,7 @@ events:
 ## 8. 最小技术形态
 
 - 纯 UI 插件，无 backend、无 Editor Kit、无 agent capability。
-- `manifest.v2.json`：`id: notemd.next`，单一 `main` window，菜单 `location: plugins`、`submenu: thinking`，菜单名为 `Next`，不贡献 tray；`⌘N / Ctrl+N` 是窗口内键盘行为，不要求 Host 新增命令协议。
+- `manifest.v2.json`：`id: notemd.next`，最低 Host `>=6.901.1`，单一 `main` window，菜单 `location: plugins`、`submenu: thinking`；同时向 tray 的 `capture` 分组贡献 `main` 窗口入口，省略 `label` 以复用各语言产品名，并以 `Cmd+Ctrl+N`（macOS 显示为 `⌘⌃N`）作为全局快捷键。Host 以基础产品名稳定排序、以当前语言显示，因此 Next 在各语言中都紧随 Idea Spark；安装或启用后立即同步菜单与全局快捷键，无需重启。点击或按键都走同一窗口激活路径。窗口内 `⌘N / Ctrl+N` 仍只负责新建 Idea，两组按键语义不冲突。
 - capabilities 仅 `vault.read`、`vault.write`、`editor.open`、`toast`。
 - 复用 Idea Spark 的文件名/proof 映射与标题提取思路；复用 Decision Log 的纯 transition / IO 分层和 `.note.md` frontmatter + 正文镜像模式。
 - 窗口打开和重新聚焦时刷新；首版不轮询、不常驻、不发独立通知。

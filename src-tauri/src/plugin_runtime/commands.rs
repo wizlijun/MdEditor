@@ -329,6 +329,7 @@ pub async fn plugin_market_install(
     // (a brand-new plugin's menu item now appears without a restart), then nudge
     // the UI.
     lifecycle::reconcile(&app).await?;
+    crate::reconcile_plugin_shortcuts(&app);
     crate::rebuild_menu(&app);
     notify_plugins_changed(&app);
     Ok(())
@@ -355,6 +356,7 @@ pub async fn plugin_market_uninstall(
     state::save(&root, &install)?;
 
     lifecycle::reconcile(&app).await?;
+    crate::reconcile_plugin_shortcuts(&app);
     crate::rebuild_menu(&app);
     notify_plugins_changed(&app);
     Ok(())
@@ -378,6 +380,7 @@ pub async fn plugin_market_set_enabled(
     state::save(&root, &install)?;
 
     lifecycle::reconcile(&app).await?;
+    crate::reconcile_plugin_shortcuts(&app);
     crate::rebuild_menu(&app);
     notify_plugins_changed(&app);
     Ok(())
