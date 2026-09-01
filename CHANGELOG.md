@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Running an Agent from Sidecar Notes now saves the note first.** Pending outline edits are flushed immediately, including a sidecar that has not been created on disk yet, and the Agent starts only after the actual saved path is confirmed. Save conflicts or failures stop the run instead of producing a misleading “outside the vault” error.
+
 ## v6.901.1 — 2026-09-01
 
 ### Added
