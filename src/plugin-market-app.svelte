@@ -45,6 +45,7 @@
   import { localizedPluginDescription, localizedPluginName } from './lib/market/plugin-text'
   import {
     groupPluginsByCategory,
+    isSystemPluginCategory,
     pluginAiRole,
     pluginAiRoleLabelKey,
     pluginCategoryLabelKey,
@@ -311,6 +312,7 @@
       advance: '→',
       reflect: '↺',
       create: '✦',
+      'import-export': '⇄',
       experience: '⚡',
       other: '•••',
     }
@@ -435,7 +437,12 @@
               <header class="category-header">
                 <span class="category-mark" aria-hidden="true">{categoryMark(group.key)}</span>
                 <div>
-                  <h2>{t(pluginCategoryLabelKey(group.key))}</h2>
+                  <div class="category-title-row">
+                    <h2>{t(pluginCategoryLabelKey(group.key))}</h2>
+                    {#if isSystemPluginCategory(group.key)}
+                      <span class="system-badge">{t('pluginMarket.systemFeature')}</span>
+                    {/if}
+                  </div>
                   <p>{group.items.length} {t('pluginMarket.pluginsUnit')}</p>
                 </div>
               </header>
@@ -686,6 +693,7 @@
   .category-block[data-category='advance'] { --accent: #3479db; }
   .category-block[data-category='reflect'] { --accent: #159c92; }
   .category-block[data-category='create'] { --accent: #635bff; }
+  .category-block[data-category='import-export'] { --accent: #667085; }
   .category-block[data-category='experience'] { --accent: #e34b87; }
   .category-block[data-category='other'] { --accent: #7a8495; }
   .category-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
@@ -704,6 +712,18 @@
     letter-spacing: -0.06em;
   }
   .category-header h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
+  .category-title-row { display: flex; align-items: center; gap: 7px; }
+  .system-badge {
+    padding: 2px 6px;
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 8%, Canvas);
+    color: color-mix(in srgb, var(--accent) 76%, CanvasText);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
   .category-header p { margin: 2px 0 0; color: color-mix(in srgb, CanvasText 48%, transparent); font-size: 10px; }
   .plugin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
   .plugin-card {

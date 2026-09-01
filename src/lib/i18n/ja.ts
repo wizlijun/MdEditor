@@ -212,6 +212,7 @@ export const ja: Record<keyof Messages, string> = {
   'pluginCategory.advance': '前へ進む',
   'pluginCategory.reflect': '振り返る',
   'pluginCategory.create': '創作',
+  'pluginCategory.importExport': '読み込みと書き出し',
   'pluginCategory.experience': '体験向上',
   'pluginCategory.other': 'その他',
 
@@ -224,6 +225,7 @@ export const ja: Record<keyof Messages, string> = {
   'pluginMarket.aiBadge.inspire': 'AI 発想',
   'pluginMarket.aiBadge.reason': 'AI 推論',
   'pluginMarket.aiBadge.execute': 'AI 実行',
+  'pluginMarket.systemFeature': 'システム機能',
   'pluginMarket.refresh': '更新',
   'pluginMarket.pluginsUnit': '個のプラグイン',
   'pluginMarket.loadingCatalog': 'ほかのプラグインを確認中…',

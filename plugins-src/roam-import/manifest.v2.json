@@ -24,7 +24,7 @@
     "menus": [
       {
         "location": "file",
-        "submenu": "record",
+        "submenu": "import-export",
         "label": "Import from Roam Research…",
         "command": "open"
       }

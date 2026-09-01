@@ -212,6 +212,7 @@ export const zh: Record<keyof Messages, string> = {
   'pluginCategory.advance': '推进',
   'pluginCategory.reflect': '回顾',
   'pluginCategory.create': '创作',
+  'pluginCategory.importExport': '导入与导出',
   'pluginCategory.experience': '体验增强',
   'pluginCategory.other': '其他',
 
@@ -224,6 +225,7 @@ export const zh: Record<keyof Messages, string> = {
   'pluginMarket.aiBadge.inspire': 'AI 启发',
   'pluginMarket.aiBadge.reason': 'AI 推理',
   'pluginMarket.aiBadge.execute': 'AI 执行',
+  'pluginMarket.systemFeature': '系统功能',
   'pluginMarket.refresh': '刷新',
   'pluginMarket.pluginsUnit': '个插件',
   'pluginMarket.loadingCatalog': '正在查找更多插件…',

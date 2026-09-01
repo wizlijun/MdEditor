@@ -39,7 +39,7 @@ describe('pluginCategoryFromManifest', () => {
       agents: 'advance',
       'capture-import': 'record',
       'thinking-review': 'reflect',
-      'publish-export': 'create',
+      'publish-export': 'import-export',
       'editor-extensions': 'experience',
     }
     for (const [legacy, current] of Object.entries(aliases)) {

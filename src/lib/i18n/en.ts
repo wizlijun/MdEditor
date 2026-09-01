@@ -217,6 +217,7 @@ export const en = {
   'pluginCategory.advance': 'Move Forward',
   'pluginCategory.reflect': 'Reflect',
   'pluginCategory.create': 'Create',
+  'pluginCategory.importExport': 'Import & Export',
   'pluginCategory.experience': 'Experience',
   'pluginCategory.other': 'Other',
 
@@ -229,6 +230,7 @@ export const en = {
   'pluginMarket.aiBadge.inspire': 'AI Ideas',
   'pluginMarket.aiBadge.reason': 'AI Reasoning',
   'pluginMarket.aiBadge.execute': 'AI Action',
+  'pluginMarket.systemFeature': 'System Feature',
   'pluginMarket.refresh': 'Refresh',
   'pluginMarket.pluginsUnit': 'plugins',
   'pluginMarket.loadingCatalog': 'Checking for more plugins…',

@@ -288,11 +288,11 @@ mod tests {
             ("notemd.idea-spark", "inspiration"),
             ("notemd.next", "advance"),
             ("notemd.pos-log", "record"),
-            ("notemd.roam-import", "record"),
+            ("notemd.roam-import", "import-export"),
             ("notemd.decision-log", "reflect"),
             ("notemd.trace-source", "reading"),
             ("notemd.weekly-review", "reflect"),
-            ("notemd.md2pdf", "create"),
+            ("notemd.md2pdf", "import-export"),
             ("notemd.power-mode", "experience"),
         ]
         .into_iter()

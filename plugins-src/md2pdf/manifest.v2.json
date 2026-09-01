@@ -22,7 +22,7 @@
     "menus": [
       {
         "location": "file",
-        "submenu": "create",
+        "submenu": "import-export",
         "label": "Export to PDF…",
         "command": "export",
         "enabled_when": "currentTab.kind == 'markdown' || currentTab.kind == 'html'",

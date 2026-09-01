@@ -1715,6 +1715,12 @@ fn menu_label(locale: &str, key: &str) -> String {
         "plugins.group.advance" => ("Move Forward", "推进", "前へ進む", "Vorankommen"),
         "plugins.group.reflect" => ("Reflect", "回顾", "振り返る", "Rückblick"),
         "plugins.group.create" => ("Create", "创作", "創作", "Gestalten"),
+        "plugins.group.importExport" => (
+            "Import & Export",
+            "导入与导出",
+            "読み込みと書き出し",
+            "Importieren & Exportieren",
+        ),
         "plugins.group.experience" => ("Experience", "体验增强", "体験向上", "Erlebnis"),
         "plugins.group.other" => ("Other", "其他", "その他", "Sonstige"),
         "file.openRecent" => ("Open Recent", "打开最近", "最近使ったファイルを開く", "Zuletzt geöffnet"),
@@ -2317,6 +2323,7 @@ fn build_menu<R: tauri::Runtime>(
                     "advance" => "plugins.group.advance",
                     "reflect" => "plugins.group.reflect",
                     "create" => "plugins.group.create",
+                    "import-export" => "plugins.group.importExport",
                     "experience" => "plugins.group.experience",
                     _ => "plugins.group.other",
                 };
@@ -2367,6 +2374,8 @@ mod menu_label_tests {
         assert_eq!(menu_label("zh", "plugins.group.experience"), "体验增强");
         assert_eq!(menu_label("ja", "plugins.group.experience"), "体験向上");
         assert_eq!(menu_label("de", "plugins.group.experience"), "Erlebnis");
+        assert_eq!(menu_label("en", "plugins.group.importExport"), "Import & Export");
+        assert_eq!(menu_label("zh", "plugins.group.importExport"), "导入与导出");
     }
 
     #[test]

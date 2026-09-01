@@ -44,6 +44,7 @@ vi.mock('./lib/i18n/store.svelte', () => {
     'pluginCategory.advance': 'Move Forward',
     'pluginCategory.reflect': 'Reflect',
     'pluginCategory.create': 'Create',
+    'pluginCategory.importExport': 'Import & Export',
     'pluginCategory.experience': 'Experience',
     'pluginCategory.other': 'Other',
     'pluginMarket.aiTitle': 'Create with AI',
@@ -52,6 +53,7 @@ vi.mock('./lib/i18n/store.svelte', () => {
     'pluginMarket.aiBadge.inspire': 'AI Ideas',
     'pluginMarket.aiBadge.reason': 'AI Reasoning',
     'pluginMarket.aiBadge.execute': 'AI Action',
+    'pluginMarket.systemFeature': 'System Feature',
     'capability.vault.read': 'Read files',
   }
   return {
@@ -255,5 +257,26 @@ describe('plugin market staged loading', () => {
     expect(document.querySelector('[data-plugin-id="notemd.next"] .ai-badge')).toBeNull()
     expect(document.querySelector('[data-category="agents"]')).toBeNull()
     expect(document.querySelectorAll('[data-category="advance"] .plugin-card')).toHaveLength(2)
+  })
+
+  it('separates import/export and experience as system feature categories', async () => {
+    const roam = entry('notemd.roam-import', 'Roam Import')
+    roam.category = 'record'
+    const pdf = entry('notemd.md2pdf', 'Export to PDF')
+    pdf.category = 'create'
+    const power = entry('notemd.power-mode', 'Power Mode')
+    power.category = 'editing'
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'plugin_market_installed') return Promise.resolve([])
+      if (command === 'plugin_market_index') return Promise.resolve({ plugins: [roam, pdf, power] })
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Power Mode'))
+    expect(document.querySelectorAll('[data-category="import-export"] .plugin-card')).toHaveLength(2)
+    expect(document.querySelectorAll('[data-category="experience"] .plugin-card')).toHaveLength(1)
+    expect(document.querySelectorAll('.system-badge')).toHaveLength(2)
+    expect(document.querySelector('[data-category="create"]')).toBeNull()
   })
 })

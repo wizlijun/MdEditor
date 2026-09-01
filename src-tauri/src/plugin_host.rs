@@ -117,7 +117,7 @@ pub struct PromptSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MenuEntry {
     pub location: String,
-    /// Stable one-level capability group under Plugins (e.g. `agents`).
+    /// Stable one-level capability group under Plugins (e.g. `advance`).
     /// Unknown or missing values are presented under Other.
     #[serde(default)]
     pub submenu: Option<String>,
@@ -209,13 +209,14 @@ pub struct LocatedMenuItem {
 /// `menus[].submenu` carries one of these language-neutral keys. Keeping the
 /// field open means an older Host still loads newer plugin manifests; this
 /// Host normalizes unknown/missing keys to Other instead of hiding an action.
-pub const PLUGIN_MENU_GROUP_ORDER: [&str; 8] = [
+pub const PLUGIN_MENU_GROUP_ORDER: [&str; 9] = [
     "record",
     "reading",
     "inspiration",
     "advance",
     "reflect",
     "create",
+    "import-export",
     "experience",
     "other",
 ];
@@ -227,9 +228,8 @@ pub fn normalize_plugin_menu_group(group: Option<&str>) -> &'static str {
         Some("inspiration") => "inspiration",
         Some("advance") | Some("agents") => "advance",
         Some("reflect") | Some("thinking") | Some("thinking-review") => "reflect",
-        Some("create")
-        | Some("import-export")
-        | Some("publish-export") => "create",
+        Some("create") => "create",
+        Some("import-export") | Some("publish-export") => "import-export",
         Some("experience") | Some("editing") | Some("editor-extensions") => "experience",
         _ => "other",
     }
@@ -239,7 +239,7 @@ pub fn normalize_plugin_menu_group(group: Option<&str>) -> &'static str {
 /// older installed manifest still carries a legacy capability key.
 pub fn plugin_menu_group_for_plugin(plugin_id: &str, group: Option<&str>) -> &'static str {
     match plugin_id {
-        "notemd.pos-log" | "notemd.roam-import" => "record",
+        "notemd.pos-log" => "record",
         "notemd.ebook-import" | "notemd.trace-source" => "reading",
         "notemd.idea-spark" => "inspiration",
         "notemd.next"
@@ -248,7 +248,7 @@ pub fn plugin_menu_group_for_plugin(plugin_id: &str, group: Option<&str>) -> &'s
         | "notemd.deepseek-agent"
         | "notemd.openclaw-chat" => "advance",
         "notemd.decision-log" | "notemd.weekly-review" => "reflect",
-        "notemd.md2pdf" => "create",
+        "notemd.roam-import" | "notemd.md2pdf" => "import-export",
         "notemd.power-mode" => "experience",
         _ => normalize_plugin_menu_group(group),
     }
@@ -391,6 +391,7 @@ mod tests {
             "advance",
             "reflect",
             "create",
+            "import-export",
             "experience",
             "other",
         ]);
@@ -435,7 +436,7 @@ mod tests {
         assert_eq!(normalize_plugin_menu_group(Some("agents")), "advance");
         assert_eq!(normalize_plugin_menu_group(Some("capture-import")), "record");
         assert_eq!(normalize_plugin_menu_group(Some("thinking-review")), "reflect");
-        assert_eq!(normalize_plugin_menu_group(Some("publish-export")), "create");
+        assert_eq!(normalize_plugin_menu_group(Some("publish-export")), "import-export");
         assert_eq!(normalize_plugin_menu_group(Some("editor-extensions")), "experience");
     }
 
@@ -444,6 +445,7 @@ mod tests {
         assert_eq!(plugin_menu_group_for_plugin("notemd.idea-spark", Some("thinking")), "inspiration");
         assert_eq!(plugin_menu_group_for_plugin("notemd.trace-source", Some("capture")), "reading");
         assert_eq!(plugin_menu_group_for_plugin("notemd.power-mode", Some("editing")), "experience");
+        assert_eq!(plugin_menu_group_for_plugin("notemd.roam-import", Some("record")), "import-export");
         assert_eq!(plugin_menu_group_for_plugin("third.party", Some("thinking")), "reflect");
     }
 }

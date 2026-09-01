@@ -210,6 +210,7 @@ export const de: Record<keyof Messages, string> = {
   'pluginCategory.advance': 'Vorankommen',
   'pluginCategory.reflect': 'Rückblick',
   'pluginCategory.create': 'Gestalten',
+  'pluginCategory.importExport': 'Importieren & Exportieren',
   'pluginCategory.experience': 'Erlebnis',
   'pluginCategory.other': 'Sonstige',
 
@@ -222,6 +223,7 @@ export const de: Record<keyof Messages, string> = {
   'pluginMarket.aiBadge.inspire': 'AI Ideen',
   'pluginMarket.aiBadge.reason': 'AI Denken',
   'pluginMarket.aiBadge.execute': 'AI Ausführen',
+  'pluginMarket.systemFeature': 'Systemfunktion',
   'pluginMarket.refresh': 'Aktualisieren',
   'pluginMarket.pluginsUnit': 'Plugins',
   'pluginMarket.loadingCatalog': 'Weitere Plugins werden gesucht…',

@@ -56,6 +56,7 @@ h2{font-family:var(--serif);font-size:27px;margin:0 0 14px;font-weight:700}
 .install code{font-family:var(--mono);font-size:.9em;background:#FFF9EE;padding:1px 6px;border-radius:5px}
 .plugin-group{margin:0 0 34px}
 .group-title{font-family:var(--mono);font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#626874;margin:0 0 12px}
+.sys-tag{display:inline-block;margin-left:8px;padding:1px 7px;border:1px solid #D7DAE0;border-radius:20px;color:#7A808C;font-size:9px;letter-spacing:.05em;vertical-align:1px}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px 24px 22px;display:flex;flex-direction:column}
 .card-top{display:flex;align-items:baseline;gap:12px;margin-bottom:10px}
@@ -147,7 +148,7 @@ en:{
  err:"Couldn't load plugins, please retry later.",empty:'No plugins published yet.',
  fallback:'Enable it from the Plugins menu in note.md after install.',
  group_record:'Capture',group_reading:'Read',group_inspiration:'Ideas',
- group_advance:'Move Forward',group_reflect:'Reflect',group_create:'Create',group_experience:'Experience',group_other:'Other'
+ group_advance:'Move Forward',group_reflect:'Reflect',group_create:'Create',group_import_export:'Import & Export',group_experience:'Experience',group_other:'Other',system:'System Feature'
 },
 zh:{
  nav_home:'note.md 主站',nav_plugins:'插件',nav_download:'下载',
@@ -163,7 +164,7 @@ zh:{
  err:'暂时无法加载插件列表，请稍后重试。',empty:'暂无已上架插件。',
  fallback:'安装后在 note.md 的「插件」菜单中启用。',
  group_record:'记录',group_reading:'阅读',group_inspiration:'灵感',
- group_advance:'推进',group_reflect:'回顾',group_create:'创作',group_experience:'体验增强',group_other:'其他'
+ group_advance:'推进',group_reflect:'回顾',group_create:'创作',group_import_export:'导入与导出',group_experience:'体验增强',group_other:'其他',system:'系统功能'
 }};
 // Per-plugin entry, from each manifest's contributes.menus.location.
 // Every plugin command lands in the Plugins menu regardless of the location its
@@ -178,12 +179,12 @@ var ENTRY_MAP={
  'notemd.next':{en:'<b>Plugins</b> → <b>Move Forward</b> → Next',zh:'「<b>插件</b>」→「<b>推进</b>」→ 下一步'},
  'notemd.idea-spark':{en:'<b>Plugins</b> → <b>Ideas</b> → Idea Spark',zh:'「<b>插件</b>」→「<b>灵感</b>」→ 奇思妙想'},
  'notemd.ebook-import':{en:'<b>Plugins</b> → <b>Read</b> → Import Ebooks… (also CLI <code>notemd ebook</code>)',zh:'「<b>插件</b>」→「<b>阅读</b>」→ 导入电子书…（也支持 CLI <code>notemd ebook</code>）'},
- 'notemd.roam-import':{en:'<b>Plugins</b> → <b>Capture</b> → Import from Roam Research…',zh:'「<b>插件</b>」→「<b>记录</b>」→ 从 Roam Research 导入…'},
+ 'notemd.roam-import':{en:'<b>Plugins</b> → <b>Import & Export</b> → Import from Roam Research…',zh:'「<b>插件</b>」→「<b>导入与导出</b>」→ 从 Roam Research 导入…'},
  'notemd.pos-log':{en:'<b>Plugins</b> → <b>Capture</b> → Location Log',zh:'「<b>插件</b>」→「<b>记录</b>」→ 位置记录'},
  'notemd.trace-source':{en:'<b>Plugins</b> → <b>Read</b> → Trace Source',zh:'「<b>插件</b>」→「<b>阅读</b>」→ 溯源'},
  'notemd.decision-log':{en:'<b>Plugins</b> → <b>Reflect</b> → Decision Log',zh:'「<b>插件</b>」→「<b>回顾</b>」→ 决策日志'},
  'notemd.weekly-review':{en:'<b>Plugins</b> → <b>Reflect</b> → Weekly Review',zh:'「<b>插件</b>」→「<b>回顾</b>」→ 周检视'},
- 'notemd.md2pdf':{en:'<b>Plugins</b> → <b>Create</b> → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」→「<b>创作</b>」→ 导出为 PDF…（也支持 CLI <code>notemd pdf</code>）'},
+ 'notemd.md2pdf':{en:'<b>Plugins</b> → <b>Import & Export</b> → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」→「<b>导入与导出</b>」→ 导出为 PDF…（也支持 CLI <code>notemd pdf</code>）'},
  'notemd.power-mode':{en:'<b>Plugins</b> → <b>Experience</b> → Power Mode',zh:'「<b>插件</b>」→「<b>体验增强</b>」→ 狂暴模式'}
 };
 function pickLang(){
@@ -206,14 +207,15 @@ function applyStatic(){
 function entryFor(id){
  var e=ENTRY_MAP[id];return e?e[lang]:I18N[lang].fallback;
 }
-var GROUP_ORDER=['record','reading','inspiration','advance','reflect','create','experience','other'];
-var LEGACY_GROUPS={'agents':'advance','capture':'record','capture-import':'record','thinking':'reflect','thinking-review':'reflect','import-export':'create','publish-export':'create','editing':'experience','editor-extensions':'experience'};
-var OFFICIAL_GROUPS={'notemd.pos-log':'record','notemd.roam-import':'record','notemd.ebook-import':'reading','notemd.trace-source':'reading','notemd.idea-spark':'inspiration','notemd.next':'advance','notemd.claude-agent':'advance','notemd.codex-agent':'advance','notemd.deepseek-agent':'advance','notemd.openclaw-chat':'advance','notemd.decision-log':'reflect','notemd.weekly-review':'reflect','notemd.md2pdf':'create','notemd.power-mode':'experience'};
+var GROUP_ORDER=['record','reading','inspiration','advance','reflect','create','import-export','experience','other'];
+var LEGACY_GROUPS={'agents':'advance','capture':'record','capture-import':'record','thinking':'reflect','thinking-review':'reflect','publish-export':'import-export','editing':'experience','editor-extensions':'experience'};
+var OFFICIAL_GROUPS={'notemd.pos-log':'record','notemd.roam-import':'import-export','notemd.ebook-import':'reading','notemd.trace-source':'reading','notemd.idea-spark':'inspiration','notemd.next':'advance','notemd.claude-agent':'advance','notemd.codex-agent':'advance','notemd.deepseek-agent':'advance','notemd.openclaw-chat':'advance','notemd.decision-log':'reflect','notemd.weekly-review':'reflect','notemd.md2pdf':'import-export','notemd.power-mode':'experience'};
 var AI_ROLES={'notemd.ebook-import':{en:'AI Read',zh:'AI 阅读'},'notemd.idea-spark':{en:'AI Inspire',zh:'AI 启发'},'notemd.trace-source':{en:'AI Reason',zh:'AI 推理'},'notemd.claude-agent':{en:'AI Action',zh:'AI 执行'},'notemd.codex-agent':{en:'AI Action',zh:'AI 执行'},'notemd.deepseek-agent':{en:'AI Action',zh:'AI 执行'},'notemd.openclaw-chat':{en:'AI Action',zh:'AI 执行'}};
 function normalizeGroup(value,id){return OFFICIAL_GROUPS[id]||(GROUP_ORDER.indexOf(value)>=0?value:(LEGACY_GROUPS[value]||'other'));}
 function groupLabel(key){
  return I18N[lang]['group_'+key.replace(/-/g,'_')]||I18N[lang].group_other;
 }
+function isSystemGroup(key){return key==='import-export'||key==='experience';}
 function groupPlugins(list){
  var groups={};GROUP_ORDER.forEach(function(key){groups[key]=[];});
  (list||[]).forEach(function(plugin){groups[normalizeGroup(plugin.category,plugin.id)].push(plugin);});
@@ -236,7 +238,7 @@ function renderPlugins(list){
  var d=I18N[lang];var grid=document.getElementById('grid');
  if(!list||!list.length){grid.innerHTML='<div class="msg">'+esc(d.empty)+'</div>';return;}
  grid.innerHTML=groupPlugins(list).map(function(group){
-  return '<section class="plugin-group"><h3 class="group-title">'+esc(groupLabel(group.key))+'</h3>'+
+  return '<section class="plugin-group"><h3 class="group-title">'+esc(groupLabel(group.key))+(isSystemGroup(group.key)?'<span class="sys-tag">'+esc(d.system)+'</span>':'')+'</h3>'+
    '<div class="grid">'+group.items.map(function(p){return renderCard(p,d);}).join('')+'</div></section>';
  }).join('');
 }

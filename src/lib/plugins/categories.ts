@@ -7,6 +7,7 @@ export const PLUGIN_CATEGORY_ORDER = [
   'advance',
   'reflect',
   'create',
+  'import-export',
   'experience',
   'other',
 ] as const
@@ -20,8 +21,7 @@ const LEGACY_CATEGORIES: Record<string, PluginCategory> = {
   'capture-import': 'record',
   thinking: 'reflect',
   'thinking-review': 'reflect',
-  'import-export': 'create',
-  'publish-export': 'create',
+  'publish-export': 'import-export',
   editing: 'experience',
   'editor-extensions': 'experience',
 }
@@ -29,7 +29,7 @@ const LEGACY_CATEGORIES: Record<string, PluginCategory> = {
 /** Current category is authoritative by id so old manifests/caches migrate offline. */
 export const OFFICIAL_PLUGIN_CATEGORIES: Readonly<Record<string, PluginCategory>> = {
   'notemd.pos-log': 'record',
-  'notemd.roam-import': 'record',
+  'notemd.roam-import': 'import-export',
   'notemd.ebook-import': 'reading',
   'notemd.trace-source': 'reading',
   'notemd.idea-spark': 'inspiration',
@@ -40,7 +40,7 @@ export const OFFICIAL_PLUGIN_CATEGORIES: Readonly<Record<string, PluginCategory>
   'notemd.openclaw-chat': 'advance',
   'notemd.decision-log': 'reflect',
   'notemd.weekly-review': 'reflect',
-  'notemd.md2pdf': 'create',
+  'notemd.md2pdf': 'import-export',
   'notemd.power-mode': 'experience',
 }
 
@@ -72,6 +72,10 @@ export function pluginAiRole(pluginId: string): PluginAiRole | null {
   return PLUGIN_AI_ROLES[pluginId] ?? null
 }
 
+export function isSystemPluginCategory(category: PluginCategory): boolean {
+  return category === 'import-export' || category === 'experience'
+}
+
 export function pluginAiRoleLabelKey(role: PluginAiRole): keyof Messages {
   return `pluginMarket.aiBadge.${role}` as keyof Messages
 }
@@ -84,6 +88,7 @@ export function pluginCategoryLabelKey(category: PluginCategory): keyof Messages
     advance: 'pluginCategory.advance',
     reflect: 'pluginCategory.reflect',
     create: 'pluginCategory.create',
+    'import-export': 'pluginCategory.importExport',
     experience: 'pluginCategory.experience',
     other: 'pluginCategory.other',
   }

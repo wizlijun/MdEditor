@@ -37,7 +37,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_ROOT = join(REPO_ROOT, 'dist-plugins')
 const REGISTRY_BASE = 'https://plugins.notemd.net'
 const PLUGIN_CATEGORIES = new Set([
-  'record', 'reading', 'inspiration', 'advance', 'reflect', 'create', 'experience',
+  'record', 'reading', 'inspiration', 'advance', 'reflect', 'create', 'import-export', 'experience',
 ])
 const LEGACY_PLUGIN_CATEGORIES = new Map([
   ['agents', 'advance'],
@@ -45,14 +45,13 @@ const LEGACY_PLUGIN_CATEGORIES = new Map([
   ['capture-import', 'record'],
   ['thinking', 'reflect'],
   ['thinking-review', 'reflect'],
-  ['import-export', 'create'],
-  ['publish-export', 'create'],
+  ['publish-export', 'import-export'],
   ['editing', 'experience'],
   ['editor-extensions', 'experience'],
 ])
 const OFFICIAL_PLUGIN_CATEGORIES = new Map([
   ['notemd.pos-log', 'record'],
-  ['notemd.roam-import', 'record'],
+  ['notemd.roam-import', 'import-export'],
   ['notemd.ebook-import', 'reading'],
   ['notemd.trace-source', 'reading'],
   ['notemd.idea-spark', 'inspiration'],
@@ -63,7 +62,7 @@ const OFFICIAL_PLUGIN_CATEGORIES = new Map([
   ['notemd.openclaw-chat', 'advance'],
   ['notemd.decision-log', 'reflect'],
   ['notemd.weekly-review', 'reflect'],
-  ['notemd.md2pdf', 'create'],
+  ['notemd.md2pdf', 'import-export'],
   ['notemd.power-mode', 'experience'],
 ])
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   groupPluginsByCategory,
+  isSystemPluginCategory,
   normalizePluginCategory,
   pluginAiRole,
   PLUGIN_CATEGORY_ORDER,
@@ -9,7 +10,7 @@ import {
 describe('plugin capability categories', () => {
   it('uses the documented top-level category order', () => {
     expect(PLUGIN_CATEGORY_ORDER).toEqual([
-      'record', 'reading', 'inspiration', 'advance', 'reflect', 'create', 'experience', 'other',
+      'record', 'reading', 'inspiration', 'advance', 'reflect', 'create', 'import-export', 'experience', 'other',
     ])
   })
 
@@ -48,7 +49,7 @@ describe('plugin capability categories', () => {
     expect(normalizePluginCategory('agents')).toBe('advance')
     expect(normalizePluginCategory('capture')).toBe('record')
     expect(normalizePluginCategory('thinking-review')).toBe('reflect')
-    expect(normalizePluginCategory('publish-export')).toBe('create')
+    expect(normalizePluginCategory('publish-export')).toBe('import-export')
     expect(normalizePluginCategory('editor-extensions')).toBe('experience')
   })
 
@@ -57,8 +58,15 @@ describe('plugin capability categories', () => {
     expect(normalizePluginCategory('capture', 'notemd.trace-source')).toBe('reading')
     expect(normalizePluginCategory('thinking', 'notemd.next')).toBe('advance')
     expect(normalizePluginCategory('thinking', 'notemd.weekly-review')).toBe('reflect')
-    expect(normalizePluginCategory('import-export', 'notemd.roam-import')).toBe('record')
+    expect(normalizePluginCategory('record', 'notemd.roam-import')).toBe('import-export')
+    expect(normalizePluginCategory('create', 'notemd.md2pdf')).toBe('import-export')
     expect(normalizePluginCategory('editing', 'notemd.power-mode')).toBe('experience')
+  })
+
+  it('identifies only host-level categories as system features', () => {
+    expect(isSystemPluginCategory('import-export')).toBe(true)
+    expect(isSystemPluginCategory('experience')).toBe(true)
+    expect(isSystemPluginCategory('create')).toBe(false)
   })
 
   it('declares AI roles only for plugins that directly provide AI collaboration', () => {
