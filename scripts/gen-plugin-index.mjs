@@ -64,6 +64,7 @@ const OFFICIAL_PLUGIN_CATEGORIES = new Map([
   ['notemd.weekly-review', 'reflect'],
   ['notemd.md2pdf', 'import-export'],
   ['notemd.power-mode', 'experience'],
+  ['notemd.memory', 'reflect'],
 ])
 
 /**

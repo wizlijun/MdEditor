@@ -640,7 +640,11 @@ mod fs_tests {
             "actor: null",
             "confirmed: false",
             "must not create owner Tasks",
-            "must not change `owner.actor`",
+            "GENERATED / READ-ONLY",
+            "notemd memory propose",
+            "direct filesystem edit is",
+            "dedicated human-confirmation flag",
+            "--proposal-sha256",
         ] {
             assert!(
                 USER_TEMPLATE.contains(rule),
@@ -654,6 +658,10 @@ mod fs_tests {
             "daily or episodic detail",
             "explicit human confirmation",
             "shared, public, or external contexts",
+            "/inbox/memory-candidates/",
+            "/memory/events/",
+            "status:: revoked",
+            "--proposal-sha256",
         ] {
             assert!(
                 MEMORY_TEMPLATE.contains(rule),
@@ -668,6 +676,12 @@ mod fs_tests {
             "`owner.confirmed: true`",
             "An Agent must not create a",
             "Do not copy tasks, reminders, or daily logs into `MEMORY.md`",
+            "read-only projections",
+            "Neither a human nor an Agent edits `USER.md` directly",
+            "It is also a read-only projection",
+            "/inbox/memory-candidates/*.memory-candidate.md",
+            "/memory/events/**/*.memory-event.md",
+            "--proposal-sha256",
         ] {
             assert!(TEMPLATE.contains(rule), "AGENTS.md is missing rule: {rule}");
         }

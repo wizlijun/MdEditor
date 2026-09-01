@@ -44,6 +44,8 @@ pub enum Builtin {
     /// `mcp` —— MCP server 的 stdio 外壳。Core,never disabled:
     /// agent 的检索入口不能取决于插件状态。
     Mcp,
+    /// `memory` — controlled USER/MEMORY proposals, review and integrity.
+    Memory(super::memory::MemoryArgs),
     /// `notemd .` / `notemd xxx.md` — open paths in the desktop app. Holds the
     /// raw tokens; `open::run` resolves them against the cwd and reports a
     /// missing file. Lowest precedence: only reached when nothing matched a
@@ -126,6 +128,12 @@ pub fn resolve_with(
     // plugin state — same reasoning as `search`/`doctor` above.
     if first == "mcp" {
         return Route::Builtin(Builtin::Mcp);
+    }
+
+    // Core, never disabled: Agents must always be able to inspect and propose
+    // memory changes even when the optional review window is disabled.
+    if first == "memory" {
+        return Route::Builtin(Builtin::Memory(super::memory::parse_args(&rest[1..], false)));
     }
 
     if first == "plugin" {
@@ -414,6 +422,15 @@ mod tests {
         enabled.insert("evil".to_string(), true);
         let r = route_with(&["mcp"], vec![(m, PathBuf::from("/tmp"))], enabled);
         assert!(matches!(r, Route::Builtin(Builtin::Mcp)), "got {r:?}");
+    }
+
+    #[test]
+    fn memory_routes_as_core_and_preserves_control_flags() {
+        let r = route_with(&["memory", "approve", "proposal-1", "--confirm-human-approved"], vec![], Default::default());
+        let Route::Builtin(Builtin::Memory(args)) = r else { panic!("expected memory builtin") };
+        assert_eq!(args.action, "approve");
+        assert_eq!(args.positionals, vec!["proposal-1"]);
+        assert!(args.bools.contains("confirm-human-approved"));
     }
 
     #[test]

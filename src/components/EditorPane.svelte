@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Tab } from '../lib/tabs.svelte'
-  import { setContent } from '../lib/tabs.svelte'
+  import { isManagedMemoryTab, setContent } from '../lib/tabs.svelte'
   import RichEditor from './RichEditor.svelte'
   import CsvEditor from './CsvEditor.svelte'
   import BaseView from './BaseView.svelte'
@@ -17,8 +17,10 @@
   import { captureScroll } from '../lib/scroll-keep'
   import { convertFileSrc } from '@tauri-apps/api/core'
   import { migrateTempResources, getTempDir } from '../lib/paste-resources'
+  import { t } from '../lib/i18n/store.svelte'
 
   let { tab }: { tab: Tab } = $props()
+  let memoryReadOnly = $derived(isManagedMemoryTab(tab))
 
   /** 编辑器栈根元素:重载时在其内部找滚动容器做保位,避免跨面板误伤 */
   let stackEl: HTMLDivElement | undefined = $state()
@@ -89,6 +91,9 @@
 </script>
 
 <div class="editor-stack" bind:this={stackEl}>
+  {#if memoryReadOnly}
+    <div class="memory-readonly" role="status">{t('memory.projectionReadOnly')}</div>
+  {/if}
   <ExternalChangeBanner {tab} />
   <SyncOriginBanner {tab} />
   <MirrorSiblingsBanner {tab} />
@@ -116,8 +121,14 @@
       <CustomEditorIframe {tab} />
     {/key}
   {:else if tab.mode === 'source'}
-    {#key tab.id}
-      <SourceView value={tab.currentContent} oninput={onSourceInput} tabId={tab.id} filePath={tab.filePath} />
+    {#key `${tab.id}:${memoryReadOnly}`}
+      <SourceView
+        value={tab.currentContent}
+        oninput={onSourceInput}
+        tabId={tab.id}
+        filePath={tab.filePath}
+        readOnly={memoryReadOnly}
+      />
     {/key}
   {:else if isOutlineNoteTab(tab)}
     {#key tab.id}
@@ -139,10 +150,11 @@
       <RichEditor {tab} readOnly />
     {/key}
   {:else}
-    {#key tab.id}
+    {#key `${tab.id}:${memoryReadOnly}`}
       <RichEditor
         {tab}
         onFlush={onRichFlush}
+        readOnly={memoryReadOnly}
         wrapAsCodeBlock={tab.kind === 'code' ? (tab.language ?? '') : undefined}
       />
     {/key}
@@ -156,6 +168,15 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
+  }
+  .memory-readonly {
+    flex: 0 0 auto;
+    padding: 7px 12px;
+    border-bottom: 1px solid color-mix(in srgb, #b7791f 35%, transparent);
+    background: color-mix(in srgb, #f6ad55 16%, Canvas);
+    color: color-mix(in srgb, CanvasText 82%, #8b5a12 18%);
+    font-size: 12px;
+    line-height: 1.35;
   }
   .image-preview-wrap {
     flex: 1;

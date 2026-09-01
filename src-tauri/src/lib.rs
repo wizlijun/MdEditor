@@ -45,6 +45,8 @@ pub mod sotvault;
 pub mod search;
 #[cfg(not(target_os = "ios"))]
 pub mod mcp;
+#[cfg(not(target_os = "ios"))]
+pub mod memory_control;
 
 #[cfg(any(target_os = "ios", test))]
 pub mod vault_ios;

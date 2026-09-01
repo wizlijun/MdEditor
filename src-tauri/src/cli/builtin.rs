@@ -49,6 +49,7 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
         Builtin::Search(args) => super::search::run(args.with_global_json(parsed.globals.json)),
         Builtin::Doctor(args) => super::doctor::run(args.with_global_json(parsed.globals.json)),
         Builtin::Mcp => crate::mcp::shim::run_shim(),
+        Builtin::Memory(args) => super::memory::run(args.with_global_json(parsed.globals.json)),
         Builtin::Open(tokens) => super::open::run(&tokens, parsed),
     }
 }
@@ -132,6 +133,7 @@ pub fn render_help(
     out.push_str("  search        Full-text search over the Vault (--vault, --json, --limit, --stats)\n");
     out.push_str("  mcp           Serve this vault to agents over MCP (stdio). Register with:\n");
     out.push_str("                { \"command\": \"notemd\", \"args\": [\"mcp\"] }\n");
+    out.push_str("  memory        Review and propose controlled USER/MEMORY changes\n");
     out.push_str("  doctor        Self-check every local capability (--offline, --vault, --json)\n");
     out.push_str("  reading-insights [report]   Generate a reading digest from the Vault (--vault, --date, --stdout)\n");
 
@@ -419,6 +421,47 @@ EXIT CODES:
   0    No failures (warnings and skipped checks are fine)
   1    At least one check failed
   2    Argument error
+",
+        "memory" => "\
+notemd memory — Controlled USER.md and MEMORY.md workflow
+
+USAGE:
+  notemd memory list [--status active|pending|revoked|all] [--scope user|memory]
+  notemd memory show <entry-or-proposal-id>   # proposal output includes before/after + SHA-256
+  notemd memory suggest
+  notemd memory propose <create|replace|merge|revoke|set-priority> [flags]
+  notemd memory approve <proposal-id> --proposal-sha256 <sha256> --approved-by human:<id> --confirm-human-approved
+  notemd memory reject <proposal-id> --proposal-sha256 <sha256> --approved-by human:<id> --confirm-human-approved
+  notemd memory check
+  notemd memory migrate
+
+PROPOSE FLAGS:
+  --scope <user|memory>       Destination projection
+  --text <claim>              Proposed complete claim text
+  --source <path#Lline|URL>   Exact evidence source
+  --by <producer/version>     Agent producer; human: actors are rejected here
+  --dedupe-key <key>          Stable idempotency key
+  --target <entry-id>         Required for non-create operations
+  --base-revision <n>         Required for non-create operations
+  --section <heading>         Section for a new entry
+  --priority <normal|high>    Suggested display/retrieval priority
+  --reason <text>             Why the change improves memory
+  --merge-from <id@rev,...>   Exact active revisions revoked by an approved merge
+  --proposal-sha256 <sha256>  Exact candidate hash displayed before a decision
+
+NOTES:
+  Agent proposals never modify USER.md or MEMORY.md. Approval binds the exact
+  immutable proposal hash to the configured human owner. Direct external edits
+  trigger projection drift and block writes until repaired.
+
+FLAGS:
+  --vault <path>              Vault root (default: configured Vault)
+  --json                      Machine-readable envelope
+
+EXIT CODES:
+  0    Success
+  1    `check` found projection drift
+  2    Argument, integrity, ownership, conflict, or Vault error
 ",
         "open" | "." => "\
 notemd <path> — Open a file or directory in the desktop app
@@ -1640,10 +1683,16 @@ mod tests {
         assert!(out.contains("--no-clipboard"));
     }
     #[test] fn help_topic_resolves_core_commands() {
-        for topic in ["help", "version", "plugin", "share", "reading-insights"] {
+        for topic in ["help", "version", "plugin", "share", "memory", "reading-insights"] {
             let out = render_help(Some(topic), false, &[], &HashMap::new());
             assert!(out.contains(&format!("notemd {topic}")), "topic {topic} not documented");
             assert!(!out.contains("unknown topic"), "topic {topic} rendered as unknown");
+        }
+    }
+    #[test] fn help_memory_documents_the_approval_and_drift_contract() {
+        let out = render_help(Some("memory"), false, &[], &HashMap::new());
+        for contract in ["--confirm-human-approved", "--proposal-sha256", "--dedupe-key", "Direct external edits", "check` found projection drift"] {
+            assert!(out.contains(contract), "memory help is missing {contract}:\n{out}");
         }
     }
     #[test] fn help_topic_share_is_core_no_manifest_needed() {

@@ -1,5 +1,6 @@
 import {
-  tabs, isDirty, recordOurWrite, shouldSkipEmptySave, renameAutoQuickNoteIfTitled,
+  tabs, isDirty, isManagedMemoryTab, recordOurWrite, shouldSkipEmptySave,
+  renameAutoQuickNoteIfTitled,
 } from './tabs.svelte'
 import { writeMd } from './fs'
 import { settings } from './settings.svelte'
@@ -18,6 +19,8 @@ export function startAutoSaveWatcher(): () => void {
       for (const tab of tabs) {
         // Image files have no text content and are never dirty; skip entirely.
         if (tab.kind === 'image') continue
+        // USER/MEMORY are projections. Only the Memory workflow may persist them.
+        if (isManagedMemoryTab(tab)) continue
         // Auto-save is on hold while the user reconciles an external change;
         // resuming would silently overwrite either the disk or the buffer.
         if (tab.externalState !== 'fresh') {
@@ -36,7 +39,7 @@ export function startAutoSaveWatcher(): () => void {
         const timer = setTimeout(async () => {
           try {
             const cur = tabs.find((x) => x.id === id)
-            if (cur && shouldSkipEmptySave(cur)) return
+            if (cur && (isManagedMemoryTab(cur) || shouldSkipEmptySave(cur))) return
             await writeMd(path, content)
             if (cur && cur.currentContent === content) {
               cur.initialContent = content

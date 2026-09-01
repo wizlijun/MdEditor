@@ -40,6 +40,7 @@ export const OFFICIAL_PLUGIN_CATEGORIES: Readonly<Record<string, PluginCategory>
   'notemd.openclaw-chat': 'advance',
   'notemd.decision-log': 'reflect',
   'notemd.weekly-review': 'reflect',
+  'notemd.memory': 'reflect',
   'notemd.md2pdf': 'import-export',
   'notemd.power-mode': 'experience',
 }

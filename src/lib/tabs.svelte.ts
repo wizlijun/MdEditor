@@ -11,6 +11,7 @@ import { startWatchingTab, stopWatchingTab, rebindTabPath } from './file-watcher
 import { maybeAutoRefresh } from './mdblock/auto-refresh'
 import { quickNoteRenameTarget } from './quick-note-name'
 import { newFileText } from './new-file'
+import { isManagedMemoryProjection } from './memory-projection'
 
 export type Mode = 'source' | 'rich'
 
@@ -52,6 +53,14 @@ export function activeTab(): Tab | null {
 export function isDirty(id: string): boolean {
   const t = tabs.find((x) => x.id === id)
   return t ? t.currentContent !== t.initialContent : false
+}
+
+/** Controlled USER/MEMORY projections are changed only by the Memory workflow. */
+export function isManagedMemoryTab(
+  tab: Pick<Tab, 'filePath' | 'initialContent' | 'currentContent'>,
+): boolean {
+  return isManagedMemoryProjection(tab.filePath, tab.initialContent)
+    || isManagedMemoryProjection(tab.filePath, tab.currentContent)
 }
 
 /**
@@ -359,7 +368,7 @@ let questionCapture: typeof import('./outline/question-capture') | null = null
 
 export function setContent(id: string, md: string): void {
   const t = tabs.find((x) => x.id === id)
-  if (!t) return
+  if (!t || isManagedMemoryTab(t)) return
   t.currentContent = md
   if (!t.filePath) return
   // 提问捕获:模块加载后无条件调用(schedule 自带在途取消,批注整体删除也能撤回);
@@ -384,7 +393,7 @@ export function setContent(id: string, md: string): void {
  */
 export async function restoreVersion(id: string, content: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
-  if (!t || !t.filePath) return
+  if (!t || !t.filePath || isManagedMemoryTab(t)) return
   await writeMd(t.filePath, content)
   await reloadTabFromDisk(t.filePath)
 }
@@ -457,6 +466,7 @@ export async function saveActive(): Promise<void> {
     await saveAs(t.id, p)
     return
   }
+  if (isManagedMemoryTab(t)) return
   if (t.externalState === 'changed') {
     throw new Error(
       `"${t.title}" was modified externally. Use the banner to Reload, Overwrite, or Save as…`,
@@ -479,7 +489,7 @@ export async function saveActive(): Promise<void> {
 /** 按 id 保存指定 tab（不改变 active）；供大纲工具栏保存按钮在笔记以 tab 打开时调用。 */
 export async function saveTab(id: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
-  if (!t || !t.filePath) return
+  if (!t || !t.filePath || isManagedMemoryTab(t)) return
   if (t.externalState === 'changed') {
     throw new Error(`"${t.title}" was modified externally. Use the banner to Reload, Overwrite, or Save as…`)
   }
@@ -510,7 +520,7 @@ export async function updateTabPath(oldPath: string, newPath: string): Promise<v
 
 export async function saveAs(id: string, newPath: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
-  if (!t) return
+  if (!t || isManagedMemoryTab(t)) return
   if (shouldSkipEmptySave(t)) return
   await writeMd(newPath, t.currentContent)
   t.filePath = newPath
@@ -639,7 +649,7 @@ export async function reloadFromDisk(id: string): Promise<void> {
  */
 export async function overwriteOnDisk(id: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
-  if (!t) return
+  if (!t || isManagedMemoryTab(t)) return
   if (shouldSkipEmptySave(t)) return
   await writeMd(t.filePath, t.currentContent)
   t.initialContent = t.currentContent

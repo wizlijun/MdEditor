@@ -69,6 +69,11 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // UI 桥可用(在 ui_rpc::dispatch 里单独处理,进程通道回 -32601)。
         "host.power_mode.config" => Some("editor.kit"),
         "host.power_mode.update" => Some("power-mode"),
+        // Controlled USER/MEMORY service. UI dispatch additionally restricts
+        // these methods to the official `notemd.memory` plugin id; native
+        // plugin processes never receive this surface.
+        "host.memory.list" | "host.memory.suggest" | "host.memory.propose"
+        | "host.memory.decide" | "host.memory.migrate" | "host.memory.check" => Some("memory.control"),
         _ => Some("__unknown__"), // 未实现的方法一律拒绝
     }
 }
@@ -550,6 +555,8 @@ mod tests {
         assert_eq!(method_capability("host.notify"), Some("notify"));
         assert_eq!(method_capability("host.dismissNotification"), Some("notify"));
         assert_eq!(method_capability("host.theme.css"), Some("editor.kit"));
+        assert_eq!(method_capability("host.memory.list"), Some("memory.control"));
+        assert_eq!(method_capability("host.memory.decide"), Some("memory.control"));
         assert_eq!(method_capability("host.unknown"), Some("__unknown__"));
         assert_eq!(method_capability("anything.else"), Some("__unknown__"));
     }

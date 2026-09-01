@@ -196,6 +196,7 @@ describe('plugin market metadata localization', () => {
     'ebook-import',
     'idea-spark',
     'md2pdf',
+    'memory',
     'next',
     'openclaw',
     'pos-log',

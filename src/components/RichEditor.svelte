@@ -201,7 +201,7 @@
   let ctxActions    = $state<EditorActions | null>(null)
 
   async function handlePaste(event: ClipboardEvent) {
-    if (!editor || !event.clipboardData) return
+    if (readOnly || !editor || !event.clipboardData) return
 
     // ── 1. Binary blob in clipboard (screenshot, copied image from browser) ──
     const items = Array.from(event.clipboardData.items)
@@ -268,7 +268,7 @@
   async function setupDragDrop() {
     const { getCurrentWebview } = await import('@tauri-apps/api/webview')
     return getCurrentWebview().onDragDropEvent(async (event) => {
-      if (event.payload.type !== 'drop' || !editor) return
+      if (readOnly || event.payload.type !== 'drop' || !editor) return
       const { paths, position } = event.payload
 
       const view = editor.view as unknown as EditorView

@@ -464,6 +464,16 @@ pub async fn dispatch_with(
         "host.agent.limits" => services.agent_limits(),
         "host.notify"       => notify_push(services, &req.params),
         "host.dismissNotification" => services.dismiss_notification(&req.params),
+        method if method.starts_with("host.memory.") => {
+            if plugin_id != "notemd.memory" {
+                Err("not_granted: controlled memory API is restricted to notemd.memory".into())
+            } else {
+                match services.vault_root() {
+                    Some(root) => crate::memory_control::dispatch(&root, method, &req.params),
+                    None => Err("vault_required: configure a Vault first".into()),
+                }
+            }
+        }
         // handle_common took log/toast; the gate rejected everything unknown.
         other => Err(format!("io: unhandled method {other}")),
     };

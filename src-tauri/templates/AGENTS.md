@@ -121,31 +121,45 @@ Rules that hold in both directions:
 
 ## Shared user model and long-term memory
 
-`/USER.md` and `/MEMORY.md` are shared working documents maintained by the
-human and AI agents. For private, owner-scoped vault work, read `/USER.md`
-first, then `/MEMORY.md`, before relying on personal context. Always do this
-before extracting or creating Inbox Tasks. In shared, public, or external
-contexts, do not load, quote, or inject their contents unless the owner has
-authorized that use.
+`/USER.md` and `/MEMORY.md` are read-only projections jointly maintained
+through the Memory control protocol. For private, owner-scoped vault work,
+read `/USER.md` first, then `/MEMORY.md`, before relying on personal context.
+Always do this before extracting or creating Inbox Tasks. In shared, public,
+or external contexts, do not load, quote, or inject their contents unless the
+owner has authorized that use.
 
 `USER.md` is the sole source of truth for who owns the vault and for durable
 profile facts. The owner is configured only when `owner.actor` is a non-empty
 `human:<id>`, `owner.names` identifies that person, and
 `owner.confirmed: true`. If the file is missing, conflicting, unconfirmed, or
 uses the default `null` actor, the owner is unknown. An Agent must not create a
-Task. A human may edit the file directly. An Agent may add a stable profile
-fact only with adjacent `source::`, `updated::`, and `by::` provenance, and
-must not change the owner identity, names, authority, permissions, or an
-action-sensitive preference without explicit human confirmation.
+Task. Neither a human nor an Agent edits `USER.md` directly. Use the Memory
+plugin, or use `notemd memory propose` to create one immutable, sourced
+candidate. Owner identity, names, authority, permissions and action-sensitive
+preferences are always one-at-a-time human decisions.
 
-`MEMORY.md` holds compact, cross-session facts, constraints, and decisions that
-do not belong in the user profile. Every Agent-authored active entry must carry
-`id::`, `source::`, `recorded::`, and `by::` as defined in that file. Claims
-about permission, authority, commitments, or other action-sensitive matters
-need explicit human confirmation before becoming active memory. When evidence
-changes, keep exactly one active claim and preserve the prior one as superseded
-with a link to its replacement. Merge duplicates and prune obsolete detail;
-do not accumulate raw conversation turns.
+`MEMORY.md` holds compact, cross-session facts, constraints and decisions that
+do not belong in the user profile. It is also a read-only projection. Each
+projected entry carries stable `id::`, `revision::`, `status::`, `priority::`,
+`proposal::`, `approved-by::`, `approved-at::` and `source::` fields. `high`
+priority affects display and retrieval only; it grants no authority.
+
+Agent changes must be immutable candidates under
+`/inbox/memory-candidates/*.memory-candidate.md`. An Agent may use
+`notemd memory list`, `show`, `suggest` and `propose`; `propose` never changes
+the projection. Approval or rejection binds the candidate SHA-256 in an
+immutable `/memory/events/**/*.memory-event.md`. An Agent may record approval
+from a conversation only when the confirmed owner explicitly approves the
+exact proposal ID or displayed diff; never infer approval, turn `--yes` into
+approval, self-sign `human:`, or batch action-sensitive proposals. For a CLI
+decision, first read `notemd memory show <proposal-id> --json`, then pass that
+exact `sha256` as `--proposal-sha256`; a changed hash must fail closed.
+
+Replacing or merging keeps exactly one active revision. Deletion is a
+traceable `revoke`, not physical history removal. Direct filesystem edits are
+drift: do not accept or overwrite them silently. Stop controlled writes until
+the difference is imported as a candidate or the approved projection is
+restored.
 
 Do not copy tasks, reminders, or daily logs into `MEMORY.md`. Tasks belong in
 `/inbox/tasks/`, episodic detail belongs in `dailynote/`, and raw material stays

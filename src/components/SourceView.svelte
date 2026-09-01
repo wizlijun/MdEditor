@@ -23,6 +23,7 @@
     oninput,
     tabId,
     filePath,
+    readOnly = false,
   }: {
     value: string
     oninput: (e: Event) => void
@@ -30,6 +31,8 @@
     /** Only used to decide whether a `RevealRequest` is addressed to this
      *  document — see the reveal effect below. */
     filePath?: string | null
+    /** Controlled projections remain selectable and searchable, but not editable. */
+    readOnly?: boolean
   } = $props()
 
   let textareaEl: HTMLTextAreaElement | undefined = $state()
@@ -302,7 +305,7 @@
   }
 
   async function handlePaste(event: ClipboardEvent) {
-    if (!event.clipboardData) return
+    if (readOnly || !event.clipboardData) return
 
     // 1. 二进制 blob（截图、从浏览器复制的图片）
     const items = Array.from(event.clipboardData.items)
@@ -615,6 +618,7 @@
       onblur={() => ime.reset()}
       onpaste={handlePaste}
       oncontextmenu={onContextMenu}
+      readonly={readOnly}
       spellcheck="true"
       autocapitalize="off"
     ></textarea>
@@ -623,6 +627,7 @@
     <EditorContextMenu
       position={ctxMenuPos}
       hasSelection={ctxHasSel}
+      {readOnly}
       actions={ctxActions}
       onClose={() => { showCtxMenu = false }}
     />

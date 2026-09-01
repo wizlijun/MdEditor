@@ -1,0 +1,71 @@
+{
+  "manifest_version": 2,
+  "id": "notemd.memory",
+  "name": "Memory",
+  "version": "1.0.0",
+  "kind": "native",
+  "engines": {
+    "notemd": ">=6.901.5"
+  },
+  "description": "Review, improve and approve controlled USER.md and MEMORY.md changes without editing the projections directly.",
+  "ui": "ui/",
+  "activation": {
+    "events": [
+      "onCommand:open"
+    ]
+  },
+  "contributes": {
+    "menus": [
+      {
+        "location": "plugins",
+        "submenu": "reflect",
+        "label": "Memory",
+        "command": "open"
+      }
+    ],
+    "windows": [
+      {
+        "id": "main",
+        "entry": "index.html",
+        "title": "Memory",
+        "width": 1080,
+        "height": 760,
+        "min_width": 760,
+        "min_height": 560,
+        "open_command": "open"
+      }
+    ],
+    "tray": [
+      {
+        "window": "main"
+      }
+    ]
+  },
+  "capabilities": [
+    "memory.control",
+    "toast"
+  ],
+  "i18n": {
+    "zh": {
+      "name": "记忆",
+      "description": "无需直接编辑投影，即可审阅、优化和批准 USER.md 与 MEMORY.md 的受控变更。",
+      "menus": {
+        "open": "记忆"
+      }
+    },
+    "ja": {
+      "name": "メモリ",
+      "description": "投影ファイルを直接編集せず、USER.md と MEMORY.md の変更を確認・改善・承認します。",
+      "menus": {
+        "open": "メモリ"
+      }
+    },
+    "de": {
+      "name": "Gedächtnis",
+      "description": "Kontrollierte Änderungen an USER.md und MEMORY.md prüfen, verbessern und freigeben, ohne die Projektionen direkt zu bearbeiten.",
+      "menus": {
+        "open": "Gedächtnis"
+      }
+    }
+  }
+}

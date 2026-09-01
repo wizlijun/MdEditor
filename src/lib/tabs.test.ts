@@ -91,6 +91,34 @@ describe('tabs', () => {
     expect(m.activeId.value).toBe(m.tabs[0].id)
   })
 
+  it('keeps a controlled memory projection read-only across edit and save paths', async () => {
+    const fs = await import('./fs')
+    ;(fs.readMd as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      '---\nmanaged:\n  by: notemd.memory\n---\n<!-- notemd-memory-control -->\n# Memory\n',
+    )
+    const m = await import('./tabs.svelte')
+    await m.openFile('/vault/MEMORY.md')
+    const tab = m.tabs[0]
+    const original = tab.currentContent
+
+    expect(m.isManagedMemoryTab(tab)).toBe(true)
+    m.setContent(tab.id, '# direct edit')
+    expect(tab.currentContent).toBe(original)
+
+    // A second guard at persistence time covers any component that mutates the
+    // tab object without going through setContent.
+    tab.currentContent = '# bypassed UI guard'
+    await m.saveActive()
+    await m.saveTab(tab.id)
+    await m.overwriteOnDisk(tab.id)
+    await m.restoreVersion(tab.id, '# old version')
+    await m.saveAs(tab.id, '/tmp/copy.md')
+
+    expect(fs.writeMd).not.toHaveBeenCalled()
+    expect(tab.filePath).toBe('/vault/MEMORY.md')
+    expect(tab.initialContent).toBe(original)
+  })
+
   it('openFile falls back to plain text (kind=code) for an unknown extension with no plugin', async () => {
     // file-over-app: an unrecognised extension (and no custom-editor plugin
     // claiming it) opens as plain text instead of throwing.

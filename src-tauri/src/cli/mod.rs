@@ -17,6 +17,7 @@ pub mod doctor;
 pub mod search;
 pub mod state;
 pub mod open;
+pub mod memory;
 
 use crate::app_dirs::BUNDLE_ID as APP_BUNDLE_ID;
 
