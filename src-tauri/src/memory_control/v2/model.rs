@@ -864,6 +864,8 @@ pub struct ContextRequest {
     pub tools: Vec<String>,
     pub external_transfer: bool,
     pub as_of_valid_time: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

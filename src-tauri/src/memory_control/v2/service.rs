@@ -4,6 +4,8 @@
 //! never carry an actor or capability: both are derived from the current,
 //! uniquely reduced authority revision and bound into the immutable child.
 
+use super::projector::rebuild_projections_unlocked;
+use super::reducer::canonical_request_revision_ids;
 use super::*;
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -280,6 +282,8 @@ fn rich_v2_view(
         .iter()
         .map(|item| (item.value.revision_id.as_str(), &item.value))
         .collect::<BTreeMap<_, _>>();
+    let canonical_requests =
+        canonical_request_revision_ids(repository).map_err(|error| error.to_string())?;
 
     let mut claims = Vec::new();
     let mut conflicts = Vec::new();
@@ -321,6 +325,7 @@ fn rich_v2_view(
         .iter()
         .filter(|item| {
             item.value.workflow.state == WorkflowState::Pending
+                && canonical_requests.contains(&item.value.revision_id)
                 && !decided_pending.contains(item.value.revision_id.as_str())
         })
         .map(|item| {
@@ -353,7 +358,18 @@ fn rich_v2_view(
         })
         .collect::<Vec<_>>();
     let projection_edited = projection_is_edited(repository, &snapshot, root);
-    let integrity_errors = snapshot.diagnostics.clone();
+    let integrity_errors = snapshot
+        .diagnostics
+        .iter()
+        .filter(|item| !item.starts_with("MEMORY_REQUEST_DUPLICATE "))
+        .cloned()
+        .collect::<Vec<_>>();
+    let convergence_notes = snapshot
+        .diagnostics
+        .iter()
+        .filter(|item| item.starts_with("MEMORY_REQUEST_DUPLICATE "))
+        .cloned()
+        .collect::<Vec<_>>();
     let status = if !conflicts.is_empty() {
         "conflict"
     } else if !integrity_errors.is_empty() {
@@ -384,7 +400,8 @@ fn rich_v2_view(
         "health": {
             "status": status, "message": message,
             "pending_count": pending.len(), "conflict_count": conflicts.len(),
-            "integrity_errors": integrity_errors, "projection_edited": projection_edited
+            "integrity_errors": integrity_errors, "convergence_notes": convergence_notes,
+            "projection_edited": projection_edited
         },
         "context_options": context_options(repository)
     }))
@@ -425,20 +442,39 @@ fn context_options(repository: &RepositorySnapshot) -> Value {
 }
 
 fn add(root: &Path, input: AddInput) -> Result<Value, String> {
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
     validate_request_id(&input.request_id)?;
     let (repository, snapshot) = active(root, &input.expected_protocol)?;
-    if let Some(existing) = idempotent(&repository, &input.request_id) {
+    if let Some(existing) = idempotent(&repository, &input.request_id)? {
         if existing.value.transition.operation != ClaimOperation::CreateApproved
             || existing.value.text != input.text.trim()
             || existing.value.claim_kind != input.claim_kind
             || existing.value.projection.target != input.target
             || existing.value.projection.category != input.category
+            || existing.value.subject.kind != input.subject.kind
+            || existing.value.subject.id != input.subject.id
+            || existing.value.subject.relation_to_owner != input.subject.relation_to_owner
+            || existing
+                .value
+                .decision
+                .as_ref()
+                .map(|decision| decision.approval_kind)
+                != Some(input.approval_kind)
+            || existing.value.trust_tier != input.trust_tier
+            || existing.value.risk_class != input.risk_class
+            || existing.value.salience != input.salience
+            || existing.value.polarity != input.polarity
+            || existing.value.sensitivity != input.sensitivity
+            || existing.value.context != input.context
+            || existing.value.consent != input.consent
+            || existing.value.agent_use != input.agent_use
         {
             return Err(
                 "MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for different add input".into(),
             );
         }
-        return receipt_for(existing, &snapshot, true);
+        return receipt_for_retry(root, existing, &snapshot);
     }
     let controls = controls(&repository, &snapshot, CLAIM_APPROVE)?;
     validate_add(&input, &controls.owner)?;
@@ -515,7 +551,7 @@ fn add(root: &Path, input: AddInput) -> Result<Value, String> {
         dedupe_key: format!("human:{}", digest(input.text.trim().as_bytes())),
         payload_sha256: String::new(),
     };
-    publish_and_verify(root, revision)
+    publish_and_verify(root, &transaction, revision)
 }
 
 fn validate_add(input: &AddInput, owner: &AuthorityOwner) -> Result<(), String> {
@@ -552,6 +588,8 @@ fn decide_pending(
     input: PendingDecisionInput,
     expected_intent: GestureIntent,
 ) -> Result<Value, String> {
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
     validate_request_id(&input.request_id)?;
     if input.gesture_intent != expected_intent {
         return Err("MEMORY_UNAUTHORIZED: gesture intent does not match RPC".into());
@@ -560,7 +598,7 @@ fn decide_pending(
         return Err("MEMORY_INVALID_REQUEST: delete_kind is not valid for this gesture".into());
     }
     let (repository, snapshot) = active(root, &input.expected_protocol)?;
-    if let Some(existing) = idempotent(&repository, &input.request_id) {
+    if let Some(existing) = idempotent(&repository, &input.request_id)? {
         let operation_matches = matches!(
             (expected_intent, existing.value.transition.operation),
             (GestureIntent::Approve, ClaimOperation::Approve)
@@ -575,7 +613,7 @@ fn decide_pending(
                 "MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another decision".into(),
             );
         }
-        return receipt_for(existing, &snapshot, true);
+        return receipt_for_retry(root, existing, &snapshot);
     }
     let proposed = repository
         .claims
@@ -594,6 +632,14 @@ fn decide_pending(
         return Err("MEMORY_STALE_BASE: pending revision was already decided".into());
     }
     exact_heads(&input.expected_heads, &proposed.value.parents)?;
+    if !proposed.value.parents.is_empty() {
+        let current = snapshot
+            .claims
+            .iter()
+            .find(|view| view.claim_id == proposed.value.claim_id)
+            .ok_or("MEMORY_STALE_BASE: proposed claim no longer has a current value")?;
+        exact_heads(&proposed.value.parents, &current.current_heads)?;
+    }
     let controls = controls(&repository, &snapshot, CLAIM_APPROVE)?;
     let (workflow, operation, lifecycle, verdict) = match expected_intent {
         GestureIntent::Approve => (
@@ -648,7 +694,7 @@ fn decide_pending(
         approves_payload_sha256: Some(proposed.value.payload_sha256.clone()),
     };
     child.payload_sha256.clear();
-    publish_and_verify(root, child)
+    publish_and_verify(root, &transaction, child)
 }
 
 fn delete(root: &Path, params: &Value) -> Result<Value, String> {
@@ -669,9 +715,11 @@ fn delete(root: &Path, params: &Value) -> Result<Value, String> {
 }
 
 fn delete_pending(root: &Path, input: PendingDecisionInput) -> Result<Value, String> {
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
     validate_request_id(&input.request_id)?;
     let (repository, snapshot) = active(root, &input.expected_protocol)?;
-    if let Some(existing) = idempotent(&repository, &input.request_id) {
+    if let Some(existing) = idempotent(&repository, &input.request_id)? {
         if existing.value.transition.operation != ClaimOperation::Ignore
             || existing.value.lifecycle.state != LifecycleState::Deleted
             || existing.value.transition.approves_revision_id.as_deref()
@@ -682,7 +730,7 @@ fn delete_pending(root: &Path, input: PendingDecisionInput) -> Result<Value, Str
                     .into(),
             );
         }
-        return receipt_for(existing, &snapshot, true);
+        return receipt_for_retry(root, existing, &snapshot);
     }
     let proposed = repository
         .claims
@@ -703,19 +751,21 @@ fn delete_pending(root: &Path, input: PendingDecisionInput) -> Result<Value, Str
     child.recorded_at = now();
     child.workflow.state = WorkflowState::Ignored;
     child.lifecycle.state = LifecycleState::Deleted;
-    child.decision = Some(decision(
+    let mut deletion_decision = decision(
         &controls,
         approval_kind_for(child.claim_kind),
         CLAIM_APPROVE,
         child.recorded_at.clone(),
-    ));
+    );
+    deletion_decision.verdict = Verdict::Reject;
+    child.decision = Some(deletion_decision);
     child.transition = ClaimTransition {
         operation: ClaimOperation::Ignore,
         approves_revision_id: Some(proposed.value.revision_id.clone()),
         approves_payload_sha256: Some(proposed.value.payload_sha256.clone()),
     };
     child.payload_sha256.clear();
-    publish_and_verify(root, child)
+    publish_and_verify(root, &transaction, child)
 }
 
 fn set_salience(root: &Path, input: ClaimMutationInput) -> Result<Value, String> {
@@ -739,9 +789,11 @@ fn mutate_current<F>(
 where
     F: FnOnce(&mut MemoryClaimRevision),
 {
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
     validate_request_id(&input.request_id)?;
     let (repository, snapshot) = active(root, &input.expected_protocol)?;
-    if let Some(existing) = idempotent(&repository, &input.request_id) {
+    if let Some(existing) = idempotent(&repository, &input.request_id)? {
         if existing.value.transition.operation != operation
             || existing.value.claim_id != input.claim_id
         {
@@ -749,7 +801,7 @@ where
                 "MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another mutation".into(),
             );
         }
-        return receipt_for(existing, &snapshot, true);
+        return receipt_for_retry(root, existing, &snapshot);
     }
     let view = snapshot
         .claims
@@ -783,20 +835,22 @@ where
     };
     change(&mut child);
     child.payload_sha256.clear();
-    publish_and_verify(root, child)
+    publish_and_verify(root, &transaction, child)
 }
 
 fn resolve(root: &Path, input: ResolveInput) -> Result<Value, String> {
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
     validate_request_id(&input.request_id)?;
     let (repository, snapshot) = active(root, &input.expected_protocol)?;
-    if let Some(existing) = idempotent(&repository, &input.request_id) {
+    if let Some(existing) = idempotent(&repository, &input.request_id)? {
         if existing.value.transition.operation != ClaimOperation::Resolve
             || existing.value.claim_id != input.claim_id
             || existing.value.parents != input.expected_heads
         {
             return Err("MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another conflict resolution".into());
         }
-        return receipt_for(existing, &snapshot, true);
+        return receipt_for_retry(root, existing, &snapshot);
     }
     let view = snapshot
         .claims
@@ -840,8 +894,31 @@ fn resolve(root: &Path, input: ResolveInput) -> Result<Value, String> {
     child.recorded_at = now();
     child.workflow.state = WorkflowState::Approved;
     match input.strategy {
-        ResolveStrategy::KeepHead => {}
+        ResolveStrategy::KeepHead => {
+            if base.value.workflow.state != WorkflowState::Approved {
+                child.lifecycle.state = LifecycleState::Revoked;
+            }
+        }
         ResolveStrategy::Merge => {
+            let first_workflow = parents[0].value.workflow.state;
+            if parents
+                .iter()
+                .any(|parent| parent.value.workflow.state != first_workflow)
+            {
+                return Err(
+                    "MEMORY_INVALID_REQUEST: mixed approval decisions cannot be text-merged".into(),
+                );
+            }
+            if parents
+                .iter()
+                .skip(1)
+                .any(|parent| !merge_compatible(&parents[0].value, &parent.value))
+            {
+                return Err(
+                    "MEMORY_INVALID_REQUEST: heads with different semantics cannot be text-merged"
+                        .into(),
+                );
+            }
             child.text = input
                 .merged_text
                 .filter(|text| !text.trim().is_empty())
@@ -861,11 +938,32 @@ fn resolve(root: &Path, input: ResolveInput) -> Result<Value, String> {
         approves_payload_sha256: None,
     };
     child.payload_sha256.clear();
-    publish_and_verify(root, child)
+    publish_and_verify(root, &transaction, child)
+}
+
+fn merge_compatible(left: &MemoryClaimRevision, right: &MemoryClaimRevision) -> bool {
+    left.claim_kind == right.claim_kind
+        && left.kind_data == right.kind_data
+        && left.subject == right.subject
+        && left.asserted_by == right.asserted_by
+        && left.projection == right.projection
+        && left.temporal == right.temporal
+        && left.epistemic == right.epistemic
+        && left.trust_tier == right.trust_tier
+        && left.risk_class == right.risk_class
+        && left.salience == right.salience
+        && left.polarity == right.polarity
+        && left.sensitivity == right.sensitivity
+        && left.context == right.context
+        && left.consent == right.consent
+        && left.agent_use == right.agent_use
 }
 
 fn context_preview(root: &Path, request: ContextRequest) -> Result<Value, String> {
     validate_context_request(&request)?;
+    if request.preview_sha256.is_some() {
+        return Err("MEMORY_INVALID_REQUEST: preview must not supply preview_sha256".into());
+    }
     let repository = require_active(root)?;
     context_value(&repository, request)
 }
@@ -874,6 +972,37 @@ fn context_value(
     repository: &RepositorySnapshot,
     request: ContextRequest,
 ) -> Result<Value, String> {
+    let snapshot = reduce(
+        repository,
+        &SnapshotRequest {
+            as_of_valid_time: request.as_of_valid_time.clone(),
+            space: Some(request.space.clone()),
+            purpose: Some(request.purpose.clone()),
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let revisions = repository
+        .claims
+        .iter()
+        .map(|revision| (revision.value.revision_id.as_str(), &revision.value))
+        .collect::<BTreeMap<_, _>>();
+    let mut current_context_heads = BTreeSet::new();
+    for view in &snapshot.claims {
+        if view.context_eligible {
+            current_context_heads.extend(
+                view.current_heads
+                    .iter()
+                    .map(|head| head.revision_id.as_str()),
+            );
+        } else if view.conflict.is_some() {
+            current_context_heads.extend(view.current_heads.iter().filter_map(|head| {
+                let revision = revisions.get(head.revision_id.as_str())?;
+                (revision.context.spaces.contains(&request.space)
+                    && revision.consent.allowed_purposes.contains(&request.purpose))
+                .then_some(head.revision_id.as_str())
+            }));
+        }
+    }
     let selected =
         select_context(repository, request.clone()).map_err(|error| error.to_string())?;
     let selected_ids = selected
@@ -886,10 +1015,10 @@ fn context_value(
         if selected_ids.contains(revision.value.revision_id.as_str()) {
             continue;
         }
-        let reason = if request.external_transfer
-            && revision.value.consent.external_provider_policy != ExternalProviderPolicy::Allow
+        let reason = if revision.value.projection.visibility == Visibility::UiOnly
+            || revision.value.consent.scope != "personal-assistant-only"
         {
-            "provider-policy"
+            "visibility-or-consent"
         } else if !revision.value.context.spaces.contains(&request.space)
             || !revision
                 .value
@@ -898,6 +1027,11 @@ fn context_value(
                 .contains(&request.purpose)
         {
             "scope-or-purpose"
+        } else if current_context_heads.contains(revision.value.revision_id.as_str())
+            && request.external_transfer
+            && revision.value.consent.external_provider_policy != ExternalProviderPolicy::Allow
+        {
+            "provider-policy"
         } else {
             "not-current"
         };
@@ -906,7 +1040,7 @@ fn context_value(
     let policy_allowed = selected.action_allowed
         && (!request.external_transfer
             || excluded.get("provider-policy").copied().unwrap_or(0) == 0);
-    Ok(json!({
+    let mut value = json!({
         "request": request,
         "selected": selected.claims.iter().map(|claim| json!({
             "claim_id": claim.claim_id, "revision_id": claim.revision_id,
@@ -919,11 +1053,21 @@ fn context_value(
         })).collect::<Vec<_>>(),
         "redactions": 0,
         "policy_result": { "external_action_allowed": policy_allowed }
-    }))
+    });
+    let bytes =
+        serde_json::to_vec(&value).map_err(|error| format!("MEMORY_INVALID_PAYLOAD: {error}"))?;
+    value["preview_sha256"] = Value::String(digest(&bytes));
+    Ok(value)
 }
 
-fn context_manifest(root: &Path, request: ContextRequest) -> Result<Value, String> {
+fn context_manifest(root: &Path, mut request: ContextRequest) -> Result<Value, String> {
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
     validate_context_request(&request)?;
+    let expected_preview = request
+        .preview_sha256
+        .take()
+        .ok_or("MEMORY_STALE_BASE: manifest requires the exact preview_sha256")?;
     let repository = require_active(root)?;
     let snapshot = reduce(
         &repository,
@@ -935,6 +1079,10 @@ fn context_manifest(root: &Path, request: ContextRequest) -> Result<Value, Strin
     )
     .map_err(|error| error.to_string())?;
     let preview = context_value(&repository, request.clone())?;
+    if preview["preview_sha256"].as_str() != Some(expected_preview.as_str()) {
+        return Err("MEMORY_STALE_BASE: context preview changed; preview again".into());
+    }
+    request.preview_sha256 = Some(expected_preview);
     let selected_values = preview["selected"].as_array().cloned().unwrap_or_default();
     let selected = selected_values
         .iter()
@@ -988,7 +1136,7 @@ fn context_manifest(root: &Path, request: ContextRequest) -> Result<Value, Strin
         causal_context: causal_context(&repository, &snapshot, &selected_loaded),
         payload_sha256: String::new(),
     };
-    let published = RepositoryWriter::new(root)
+    let published = transaction
         .publish_context_manifest(manifest)
         .map_err(|error| error.to_string())?;
     // Reloading verifies filename, semantic hash and the complete causal DAG.
@@ -1025,6 +1173,12 @@ fn validate_context_request(request: &ContextRequest) -> Result<(), String> {
     }
     chrono::DateTime::parse_from_rfc3339(&request.as_of_valid_time)
         .map_err(|error| format!("MEMORY_INVALID_TIME: {error}"))?;
+    if !request.external_transfer && request.provider != "local" {
+        return Err(
+            "MEMORY_CONTEXT_POLICY_DENIED: non-local providers require external_transfer=true"
+                .into(),
+        );
+    }
     Ok(())
 }
 
@@ -1158,6 +1312,8 @@ pub fn propose_pending(
     root: &Path,
     input: PendingProposalInput,
 ) -> Result<MemoryClaimRevision, String> {
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
     validate_request_id(&input.request_id)?;
     let repository = require_active(root)?;
     let snapshot = reduce(
@@ -1169,7 +1325,12 @@ pub fn propose_pending(
         },
     )
     .map_err(|error| error.to_string())?;
-    if let Some(existing) = idempotent(&repository, &input.request_id) {
+    if let Some(existing) = idempotent(&repository, &input.request_id)? {
+        if !pending_proposal_matches(&existing.value, &input) {
+            return Err(
+                "MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another proposal".into(),
+            );
+        }
         return Ok(existing.value.clone());
     }
     let owner = snapshot
@@ -1251,7 +1412,8 @@ pub fn propose_pending(
         dedupe_key: input.dedupe_key,
         payload_sha256: String::new(),
     };
-    let published = RepositoryWriter::new(root)
+    let revision = prevalidate_claim(root, revision)?;
+    let published = transaction
         .publish_claim(revision)
         .map_err(|error| error.to_string())?;
     let reloaded = require_active(root)?;
@@ -1265,6 +1427,34 @@ pub fn propose_pending(
     )
     .map_err(|error| error.to_string())?;
     Ok(published.value)
+}
+
+fn pending_proposal_matches(revision: &MemoryClaimRevision, input: &PendingProposalInput) -> bool {
+    revision.workflow.state == WorkflowState::Pending
+        && input
+            .claim_id
+            .as_ref()
+            .is_none_or(|claim_id| claim_id == &revision.claim_id)
+        && revision.text == input.text
+        && revision.claim_kind == input.claim_kind
+        && revision.kind_data == input.kind_data
+        && revision.subject == input.subject
+        && revision.asserted_by == input.asserted_by
+        && revision.recorded_by == input.recorded_by
+        && revision.projection == input.projection
+        && revision.lifecycle.state == input.lifecycle
+        && revision.temporal == input.temporal
+        && revision.epistemic == input.epistemic
+        && revision.trust_tier == input.trust_tier
+        && revision.risk_class == input.risk_class
+        && revision.salience == input.salience
+        && revision.polarity == input.polarity
+        && revision.sensitivity == input.sensitivity
+        && revision.context == input.context
+        && revision.consent == input.consent
+        && revision.agent_use == input.agent_use
+        && revision.evidence == input.evidence
+        && revision.dedupe_key == input.dedupe_key
 }
 
 fn active(
@@ -1395,8 +1585,13 @@ fn causal_context<'a>(
     CausalContext { parents }
 }
 
-fn publish_and_verify(root: &Path, revision: MemoryClaimRevision) -> Result<Value, String> {
-    let published = RepositoryWriter::new(root)
+fn publish_and_verify(
+    root: &Path,
+    transaction: &RepositoryTransaction<'_>,
+    revision: MemoryClaimRevision,
+) -> Result<Value, String> {
+    let revision = prevalidate_claim(root, revision)?;
+    let published = transaction
         .publish_claim(revision)
         .map_err(|error| error.to_string())?;
     let repository = require_active(root)?;
@@ -1409,8 +1604,31 @@ fn publish_and_verify(root: &Path, revision: MemoryClaimRevision) -> Result<Valu
         },
     )
     .map_err(|error| error.to_string())?;
-    let projection_rebuilt = rebuild_projections(root).is_ok();
+    let projection_rebuilt = rebuild_projections_unlocked(root).is_ok();
     receipt_for_published(&published.value, &snapshot, projection_rebuilt)
+}
+
+fn prevalidate_claim(
+    root: &Path,
+    revision: MemoryClaimRevision,
+) -> Result<MemoryClaimRevision, String> {
+    let (normalized, raw) = canonical_yaml(&revision)?;
+    let mut candidate = require_active(root)?;
+    candidate.claims.push(Loaded {
+        path: PathBuf::from("<memory-v2-preflight>"),
+        raw_sha256: raw_sha256(&raw),
+        value: normalized.clone(),
+    });
+    reduce(
+        &candidate,
+        &SnapshotRequest {
+            as_of_valid_time: now(),
+            space: None,
+            purpose: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(normalized)
 }
 
 fn receipt_for(
@@ -1419,6 +1637,18 @@ fn receipt_for(
     projection_rebuilt: bool,
 ) -> Result<Value, String> {
     receipt_for_published(&existing.value, snapshot, projection_rebuilt)
+}
+
+fn receipt_for_retry(
+    root: &Path,
+    existing: &Loaded<MemoryClaimRevision>,
+    snapshot: &MemorySnapshotV2,
+) -> Result<Value, String> {
+    receipt_for(
+        existing,
+        snapshot,
+        rebuild_projections_unlocked(root).is_ok(),
+    )
 }
 
 fn receipt_for_published(
@@ -1494,11 +1724,12 @@ fn exact_heads(expected: &[RevisionRef], actual: &[RevisionRef]) -> Result<(), S
 fn idempotent<'a>(
     repository: &'a RepositorySnapshot,
     request_id: &str,
-) -> Option<&'a Loaded<MemoryClaimRevision>> {
-    repository
-        .claims
-        .iter()
-        .find(|item| item.value.request_id == request_id)
+) -> Result<Option<&'a Loaded<MemoryClaimRevision>>, String> {
+    let canonical =
+        canonical_request_revision_ids(repository).map_err(|error| error.to_string())?;
+    Ok(repository.claims.iter().find(|item| {
+        item.value.request_id == request_id && canonical.contains(item.value.revision_id.as_str())
+    }))
 }
 
 fn revision_ref(revision: &MemoryClaimRevision) -> RevisionRef {
@@ -1886,7 +2117,7 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(dir.path().join("USER.md")).unwrap(),
-            "# USER\n\n## preferences\n\n- 回答先给出结论。\n"
+            "<!-- notemd-memory-control -->\n<!-- GENERATED / READ-ONLY: derived from .notemd/memory YAML; do not edit manually. -->\n# USER\n\n## preferences\n\n- 回答先给出结论。\n"
         );
     }
 
@@ -1922,6 +2153,51 @@ mod tests {
         assert_eq!(
             V2Repository::new(dir.path()).load().unwrap().claims.len(),
             1
+        );
+    }
+
+    #[test]
+    fn concurrent_same_request_in_one_clone_publishes_exactly_one_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let protocol = initialize(dir.path());
+        let root = std::sync::Arc::new(dir.path().to_path_buf());
+        let params = std::sync::Arc::new(add_params(&protocol));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let handles = (0..2)
+            .map(|_| {
+                let root = root.clone();
+                let params = params.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    dispatch(&root, "host.memory.v2.add", &params)
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let receipts = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(receipts[0]["revision_id"], receipts[1]["revision_id"]);
+        let repository = V2Repository::new(root.as_path()).load().unwrap();
+        assert_eq!(repository.claims.len(), 1);
+        let expected = project(
+            &repository,
+            &reduce(
+                &repository,
+                &SnapshotRequest {
+                    as_of_valid_time: now(),
+                    space: None,
+                    purpose: None,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("USER.md")).unwrap(),
+            expected.user
         );
     }
 
@@ -1965,8 +2241,29 @@ mod tests {
         assert_eq!(receipt["effective_status"], "active");
         assert_eq!(
             fs::read_to_string(dir.path().join("USER.md")).unwrap(),
-            "# USER\n\n## preferences\n\n- 用户偏好先给出结论。\n"
+            "<!-- notemd-memory-control -->\n<!-- GENERATED / READ-ONLY: derived from .notemd/memory YAML; do not edit manually. -->\n# USER\n\n## preferences\n\n- 用户偏好先给出结论。\n"
         );
+    }
+
+    #[test]
+    fn invalid_claim_is_reduced_before_publication_and_leaves_no_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        initialize(dir.path());
+        let mut proposal = pending_proposal("owner:test");
+        proposal.temporal.valid_from = Some("not-a-time".into());
+        let error = propose_pending(dir.path(), proposal).unwrap_err();
+        assert!(error.contains("MEMORY_INVALID_TIME"));
+        let repository = V2Repository::new(dir.path()).load().unwrap();
+        assert!(repository.claims.is_empty());
+        reduce(
+            &repository,
+            &SnapshotRequest {
+                as_of_valid_time: now(),
+                space: None,
+                purpose: None,
+            },
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1978,7 +2275,7 @@ mod tests {
             "space": "global",
             "purpose": "planning",
             "caller": "agent:test",
-            "provider": "local-test-provider",
+            "provider": "local",
             "model": "test-model",
             "tools": ["read"],
             "external_transfer": false,
@@ -1990,9 +2287,187 @@ mod tests {
         let manifest_dir = dir.path().join(".notemd/memory/context-manifests");
         assert!(!manifest_dir.exists());
 
-        let receipt = dispatch(dir.path(), "host.memory.v2.contextManifest", &request).unwrap();
+        let mut manifest_request = request;
+        manifest_request["preview_sha256"] = preview["preview_sha256"].clone();
+        let receipt = dispatch(
+            dir.path(),
+            "host.memory.v2.contextManifest",
+            &manifest_request,
+        )
+        .unwrap();
         assert_eq!(receipt["selected_count"], 1);
         assert_eq!(fs::read_dir(manifest_dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn provider_policy_is_evaluated_only_after_space_and_purpose_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let protocol = initialize(dir.path());
+        let mut global = add_params(&protocol);
+        global["request_id"] = json!("memory-ui/add/global-allow");
+        global["consent"]["external_provider_policy"] = json!("allow");
+        dispatch(dir.path(), "host.memory.v2.add", &global).unwrap();
+
+        let mut private = add_params(&protocol);
+        private["request_id"] = json!("memory-ui/add/private-deny");
+        private["text"] = json!("仅私人 Space 使用的内容。");
+        private["context"]["spaces"] = json!(["private"]);
+        private["consent"]["external_provider_policy"] = json!("deny");
+        dispatch(dir.path(), "host.memory.v2.add", &private).unwrap();
+
+        let preview = dispatch(
+            dir.path(),
+            "host.memory.v2.context",
+            &json!({
+                "space": "global", "purpose": "planning", "caller": "agent:test",
+                "provider": "openai", "model": "gpt-5", "tools": [],
+                "external_transfer": true, "as_of_valid_time": now()
+            }),
+        )
+        .unwrap();
+        assert_eq!(preview["selected"].as_array().unwrap().len(), 1);
+        assert_eq!(preview["excluded_summary"]["scope-or-purpose"], 1);
+        assert!(preview["excluded_summary"].get("provider-policy").is_none());
+        assert_eq!(preview["policy_result"]["external_action_allowed"], true);
+    }
+
+    #[test]
+    fn superseded_provider_policy_does_not_govern_the_current_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let protocol = initialize(dir.path());
+        let mut denied = add_params(&protocol);
+        denied["request_id"] = json!("memory-ui/add/provider-deny-old");
+        denied["consent"]["external_provider_policy"] = json!("deny");
+        dispatch(dir.path(), "host.memory.v2.add", &denied).unwrap();
+
+        let repository = V2Repository::new(dir.path()).load().unwrap();
+        let base = repository
+            .claims
+            .iter()
+            .find(|item| item.value.request_id == "memory-ui/add/provider-deny-old")
+            .unwrap();
+        let mut current = base.value.clone();
+        current.revision_id = uuid_v7();
+        current.request_id = "memory-ui/replace/provider-allow-current".into();
+        current.parents = vec![revision_ref(&base.value)];
+        current.causal_context.parents.push(RecordRef {
+            record_id: base.value.revision_id.clone(),
+            raw_sha256: base.raw_sha256.clone(),
+        });
+        current.text = "当前版本允许发送给外部 provider。".into();
+        current.consent.external_provider_policy = ExternalProviderPolicy::Allow;
+        current.recorded_at = now();
+        current.decision.as_mut().unwrap().decided_at = current.recorded_at.clone();
+        current.transition.operation = ClaimOperation::Replace;
+        current.payload_sha256.clear();
+        let current = prevalidate_claim(dir.path(), current).unwrap();
+        RepositoryWriter::new(dir.path())
+            .publish_claim(current)
+            .unwrap();
+
+        let preview = dispatch(
+            dir.path(),
+            "host.memory.v2.context",
+            &json!({
+                "space": "global", "purpose": "planning", "caller": "agent:test",
+                "provider": "openai", "model": "gpt-5", "tools": [],
+                "external_transfer": true, "as_of_valid_time": now()
+            }),
+        )
+        .unwrap();
+        assert_eq!(preview["selected"].as_array().unwrap().len(), 1);
+        assert!(preview["excluded_summary"].get("provider-policy").is_none());
+        assert_eq!(preview["policy_result"]["external_action_allowed"], true);
+    }
+
+    fn publish_test_conflict(
+        root: &Path,
+        protocol: &RevisionRef,
+        request_prefix: &str,
+        space: &str,
+        kind: &str,
+        risk: &str,
+    ) {
+        let mut input = add_params(protocol);
+        input["request_id"] = json!(format!("{request_prefix}/base"));
+        input["text"] = json!(format!("{request_prefix} base"));
+        input["claim_kind"] = json!(kind);
+        input["risk_class"] = json!(risk);
+        input["context"]["spaces"] = json!([space]);
+        if kind == "boundary" {
+            input["approval_kind"] = json!("behavioral-authorization");
+            input["polarity"] = json!("negative");
+        }
+        dispatch(root, "host.memory.v2.add", &input).unwrap();
+        let repository = V2Repository::new(root).load().unwrap();
+        let base = repository
+            .claims
+            .iter()
+            .find(|item| item.value.request_id == format!("{request_prefix}/base"))
+            .unwrap();
+        for suffix in ["a", "b"] {
+            let mut child = base.value.clone();
+            child.revision_id = uuid_v7();
+            child.request_id = format!("{request_prefix}/{suffix}");
+            child.parents = vec![revision_ref(&base.value)];
+            child.causal_context.parents.push(RecordRef {
+                record_id: base.value.revision_id.clone(),
+                raw_sha256: base.raw_sha256.clone(),
+            });
+            child.text = format!("{request_prefix} sibling {suffix}");
+            child.recorded_at = now();
+            child.transition.operation = ClaimOperation::Replace;
+            child.payload_sha256.clear();
+            RepositoryWriter::new(root).publish_claim(child).unwrap();
+        }
+    }
+
+    #[test]
+    fn context_conflicts_are_isolated_by_space_and_sensitive_risk() {
+        let dir = tempfile::tempdir().unwrap();
+        let protocol = initialize(dir.path());
+        publish_test_conflict(
+            dir.path(),
+            &protocol,
+            "private-info",
+            "private/info",
+            "preference",
+            "informational",
+        );
+        publish_test_conflict(
+            dir.path(),
+            &protocol,
+            "private-sensitive",
+            "private/sensitive",
+            "boundary",
+            "action-sensitive",
+        );
+        let context = |space: &str| {
+            dispatch(
+                dir.path(),
+                "host.memory.v2.context",
+                &json!({
+                    "space": space, "purpose": "planning", "caller": "agent:test",
+                    "provider": "local", "model": "local", "tools": [],
+                    "external_transfer": false, "as_of_valid_time": now()
+                }),
+            )
+            .unwrap()
+        };
+        let global = context("global");
+        assert!(global["conflicts"].as_array().unwrap().is_empty());
+        assert_eq!(global["policy_result"]["external_action_allowed"], true);
+
+        let informational = context("private/info");
+        assert_eq!(informational["conflicts"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            informational["policy_result"]["external_action_allowed"],
+            true
+        );
+
+        let sensitive = context("private/sensitive");
+        assert_eq!(sensitive["conflicts"].as_array().unwrap().len(), 1);
+        assert_eq!(sensitive["policy_result"]["external_action_allowed"], false);
     }
 
     #[test]
@@ -2045,6 +2520,220 @@ mod tests {
         assert_eq!(
             texts,
             BTreeSet::from(["第一台设备记录的偏好。", "第二台设备记录的偏好。"])
+        );
+    }
+
+    #[test]
+    fn two_git_clones_converge_equivalent_same_request_revisions() {
+        let root = tempfile::tempdir().unwrap();
+        let bare = root.path().join("remote.git");
+        git(
+            root.path(),
+            &["init", "--bare", "-q", "-b", "main", "remote.git"],
+        );
+        let first = root.path().join("first");
+        fs::create_dir(&first).unwrap();
+        git(&first, &["init", "-q", "-b", "main"]);
+        configure_git(&first, "first@example.test");
+        git(&first, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        initialize(&first);
+        git(&first, &["add", "-A"]);
+        git(&first, &["commit", "-q", "-m", "initialize memory v2"]);
+        git(&first, &["push", "-q", "origin", "main"]);
+        let second = root.path().join("second");
+        git(root.path(), &["clone", "-q", "remote.git", "second"]);
+        configure_git(&second, "second@example.test");
+
+        let proposal = pending_proposal("owner:test");
+        propose_pending(&first, proposal.clone()).unwrap();
+        propose_pending(&second, proposal).unwrap();
+        crate::vault_sync::git_ops::sync(&second, "origin", "main").unwrap();
+        crate::vault_sync::git_ops::sync(&first, "origin", "main").unwrap();
+
+        let third = root.path().join("third");
+        git(root.path(), &["clone", "-q", "remote.git", "third"]);
+        let repository = V2Repository::new(&third).load().unwrap();
+        assert_eq!(repository.claims.len(), 2, "immutable records are retained");
+        let canonical_revision_id = repository
+            .claims
+            .iter()
+            .map(|item| item.value.revision_id.as_str())
+            .min()
+            .unwrap()
+            .to_string();
+        let snapshot = reduce(
+            &repository,
+            &SnapshotRequest {
+                as_of_valid_time: now(),
+                space: None,
+                purpose: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(snapshot.claims.len(), 1, "effective request converges once");
+        assert!(snapshot
+            .diagnostics
+            .iter()
+            .any(|item| item.contains("MEMORY_REQUEST_DUPLICATE")));
+        let retried = propose_pending(&third, pending_proposal("owner:test")).unwrap();
+        assert_eq!(retried.revision_id, canonical_revision_id);
+    }
+
+    #[test]
+    fn two_git_clones_converge_host_add_derived_times_for_multiple_kinds() {
+        let root = tempfile::tempdir().unwrap();
+        let bare = root.path().join("remote.git");
+        git(
+            root.path(),
+            &["init", "--bare", "-q", "-b", "main", "remote.git"],
+        );
+        let first = root.path().join("first");
+        fs::create_dir(&first).unwrap();
+        git(&first, &["init", "-q", "-b", "main"]);
+        configure_git(&first, "first@example.test");
+        git(&first, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        let protocol = initialize(&first);
+        git(&first, &["add", "-A"]);
+        git(&first, &["commit", "-q", "-m", "initialize memory v2"]);
+        git(&first, &["push", "-q", "origin", "main"]);
+        let second = root.path().join("second");
+        git(root.path(), &["clone", "-q", "remote.git", "second"]);
+        configure_git(&second, "second@example.test");
+
+        let inputs = [
+            ("preference", "informational", "相同偏好", "add/preference"),
+            ("decision", "behavioral", "相同决定", "add/decision"),
+            (
+                "observation",
+                "informational",
+                "相同观察",
+                "add/observation",
+            ),
+        ]
+        .map(|(kind, risk, text, request_id)| {
+            let mut params = add_params(&protocol);
+            params["claim_kind"] = json!(kind);
+            params["risk_class"] = json!(risk);
+            params["text"] = json!(text);
+            params["request_id"] = json!(request_id);
+            params
+        });
+        for input in &inputs {
+            dispatch(&first, "host.memory.v2.add", input).unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        for input in &inputs {
+            dispatch(&second, "host.memory.v2.add", input).unwrap();
+        }
+        crate::vault_sync::git_ops::sync(&second, "origin", "main").unwrap();
+        crate::vault_sync::git_ops::sync(&first, "origin", "main").unwrap();
+
+        let third = root.path().join("third");
+        git(root.path(), &["clone", "-q", "remote.git", "third"]);
+        let repository = V2Repository::new(&third).load().unwrap();
+        assert_eq!(repository.claims.len(), 6);
+        let snapshot = reduce(
+            &repository,
+            &SnapshotRequest {
+                as_of_valid_time: now(),
+                space: None,
+                purpose: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(snapshot.claims.len(), 3);
+        assert_eq!(
+            snapshot
+                .diagnostics
+                .iter()
+                .filter(|item| item.contains("MEMORY_REQUEST_DUPLICATE"))
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn two_git_clones_fail_closed_when_same_request_has_different_semantics() {
+        let root = tempfile::tempdir().unwrap();
+        let bare = root.path().join("remote.git");
+        git(
+            root.path(),
+            &["init", "--bare", "-q", "-b", "main", "remote.git"],
+        );
+        let first = root.path().join("first");
+        fs::create_dir(&first).unwrap();
+        git(&first, &["init", "-q", "-b", "main"]);
+        configure_git(&first, "first@example.test");
+        git(&first, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        initialize(&first);
+        git(&first, &["add", "-A"]);
+        git(&first, &["commit", "-q", "-m", "initialize memory v2"]);
+        git(&first, &["push", "-q", "origin", "main"]);
+        let second = root.path().join("second");
+        git(root.path(), &["clone", "-q", "remote.git", "second"]);
+        configure_git(&second, "second@example.test");
+
+        let first_proposal = pending_proposal("owner:test");
+        let mut second_proposal = first_proposal.clone();
+        second_proposal.text = "同 request_id 的不同语义。".into();
+        propose_pending(&first, first_proposal).unwrap();
+        propose_pending(&second, second_proposal).unwrap();
+        crate::vault_sync::git_ops::sync(&second, "origin", "main").unwrap();
+        let error = crate::vault_sync::git_ops::sync(&first, "origin", "main").unwrap_err();
+        assert!(error.contains("MEMORY_IDEMPOTENCY_CONFLICT"), "{error}");
+    }
+
+    #[test]
+    fn fast_forward_remote_is_validated_before_head_or_projection_moves() {
+        let root = tempfile::tempdir().unwrap();
+        let bare = root.path().join("remote.git");
+        git(
+            root.path(),
+            &["init", "--bare", "-q", "-b", "main", "remote.git"],
+        );
+        let local = root.path().join("local");
+        fs::create_dir(&local).unwrap();
+        git(&local, &["init", "-q", "-b", "main"]);
+        configure_git(&local, "local@example.test");
+        git(&local, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        let protocol = initialize(&local);
+        crate::vault_sync::git_ops::sync(&local, "origin", "main").unwrap();
+
+        let remote = root.path().join("remote-work");
+        git(root.path(), &["clone", "-q", "remote.git", "remote-work"]);
+        configure_git(&remote, "remote@example.test");
+        dispatch(&remote, "host.memory.v2.add", &add_params(&protocol)).unwrap();
+        let repository = V2Repository::new(&remote).load().unwrap();
+        let mut conflicting = repository.claims[0].value.clone();
+        conflicting.claim_id = uuid_v7();
+        conflicting.revision_id = uuid_v7();
+        conflicting.text = "同 request_id 的损坏远端语义".into();
+        conflicting.payload_sha256.clear();
+        RepositoryWriter::new(&remote)
+            .publish_claim(conflicting)
+            .unwrap();
+        git(&remote, &["add", "-A"]);
+        git(
+            &remote,
+            &["commit", "-q", "-m", "inject invalid memory request"],
+        );
+        git(&remote, &["push", "-q", "origin", "main"]);
+
+        let head_before =
+            crate::vault_sync::git_ops::run_git(&local, &["rev-parse", "HEAD"]).unwrap();
+        let user_before = fs::read(local.join("USER.md")).unwrap();
+        let error = crate::vault_sync::git_ops::sync(&local, "origin", "main").unwrap_err();
+        assert!(error.contains("MEMORY_IDEMPOTENCY_CONFLICT"), "{error}");
+        assert_eq!(
+            crate::vault_sync::git_ops::run_git(&local, &["rev-parse", "HEAD"]).unwrap(),
+            head_before
+        );
+        assert_eq!(fs::read(local.join("USER.md")).unwrap(), user_before);
+        assert!(
+            crate::vault_sync::git_ops::run_git(&local, &["status", "--porcelain"])
+                .unwrap()
+                .trim()
+                .is_empty()
         );
     }
 
@@ -2137,7 +2826,7 @@ mod tests {
         assert!(!claim.projection_eligible);
         assert_eq!(
             fs::read_to_string(third.join("USER.md")).unwrap(),
-            "# USER\n"
+            "<!-- notemd-memory-control -->\n<!-- GENERATED / READ-ONLY: derived from .notemd/memory YAML; do not edit manually. -->\n# USER\n"
         );
     }
 }

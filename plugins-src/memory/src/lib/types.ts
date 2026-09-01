@@ -267,6 +267,7 @@ export interface ContextRequest {
   tools: string[]
   external_transfer: boolean
   as_of_valid_time: string
+  preview_sha256?: string
 }
 
 export interface ContextPreview {
@@ -277,6 +278,7 @@ export interface ContextPreview {
   conflicts: Array<{ conflict_id: string; action_allowed: boolean }>
   redactions: number
   policy_result: { external_action_allowed: boolean }
+  preview_sha256: string
 }
 
 export interface ContextManifestReceipt {

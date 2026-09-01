@@ -40,11 +40,32 @@ pub fn reduce(
     }
     let as_of = parse_time(&request.as_of_valid_time, "as_of_valid_time")?;
     let global = GlobalDag::build(repository)?;
-    let protocol = reduce_protocol(&repository.protocols)?;
-    let authority = reduce_authority(&repository.authorities)?;
-    let operation_activation = validate_operations(repository)?;
+    let bootstrap = repository.bootstrap.as_ref().ok_or_else(|| {
+        ReducerError::new(
+            "MEMORY_PROTOCOL_NOT_ACTIVE",
+            "active repository is missing bootstrap",
+        )
+    })?;
+    let authority = reduce_authority(&repository.authorities, bootstrap, &global)?;
+    let protocol = reduce_protocol(
+        &repository.protocols,
+        &repository.authorities,
+        bootstrap,
+        &global,
+    )?;
+    let request_dedup = deduplicate_requests(repository)?;
+    let mut operation_activation = validate_operations(repository)?;
+    operation_activation
+        .diagnostics
+        .extend(request_dedup.diagnostics);
     let mut by_claim = BTreeMap::<String, Vec<&Loaded<MemoryClaimRevision>>>::new();
     for revision in &repository.claims {
+        if !request_dedup
+            .canonical_revision_ids
+            .contains(&revision.value.revision_id)
+        {
+            continue;
+        }
         if let Some(operation_id) = &revision.value.lineage.produced_by_operation {
             if !operation_activation.active.contains(operation_id) {
                 continue;
@@ -60,6 +81,7 @@ pub fn reduce(
         claims.push(reduce_claim(
             &claim_id,
             &revisions,
+            &repository.protocols,
             &repository.authorities,
             &authority,
             &global,
@@ -83,6 +105,126 @@ pub fn reduce(
         action_allowed,
         diagnostics: operation_activation.diagnostics,
     })
+}
+
+struct RequestDeduplication {
+    canonical_revision_ids: BTreeSet<String>,
+    diagnostics: Vec<String>,
+}
+
+fn deduplicate_requests(
+    repository: &RepositorySnapshot,
+) -> Result<RequestDeduplication, ReducerError> {
+    let mut by_request = BTreeMap::<&str, Vec<&Loaded<MemoryClaimRevision>>>::new();
+    for revision in &repository.claims {
+        if revision.value.request_id.trim().is_empty() {
+            return Err(ReducerError::new(
+                "MEMORY_INVALID_CLAIM",
+                format!("revision {} has no request_id", revision.value.revision_id),
+            ));
+        }
+        by_request
+            .entry(revision.value.request_id.as_str())
+            .or_default()
+            .push(revision);
+    }
+    let mut canonical_revision_ids = BTreeSet::new();
+    let mut diagnostics = Vec::new();
+    for (request_id, mut revisions) in by_request {
+        revisions.sort_by(|left, right| {
+            left.value
+                .revision_id
+                .cmp(&right.value.revision_id)
+                .then_with(|| left.value.payload_sha256.cmp(&right.value.payload_sha256))
+        });
+        let canonical = revisions[0];
+        if revisions
+            .iter()
+            .skip(1)
+            .any(|revision| !same_request_semantics(&canonical.value, &revision.value))
+        {
+            return Err(ReducerError::new(
+                "MEMORY_IDEMPOTENCY_CONFLICT",
+                format!("request_id {request_id} has different immutable semantics"),
+            ));
+        }
+        if revisions.len() > 1 {
+            let duplicate_ids = revisions
+                .iter()
+                .skip(1)
+                .map(|revision| revision.value.revision_id.as_str())
+                .collect::<BTreeSet<_>>();
+            if repository.claims.iter().any(|candidate| {
+                !duplicate_ids.contains(candidate.value.revision_id.as_str())
+                    && candidate
+                        .value
+                        .parents
+                        .iter()
+                        .any(|parent| duplicate_ids.contains(parent.revision_id.as_str()))
+            }) {
+                return Err(ReducerError::new(
+                    "MEMORY_REQUEST_DUPLICATE_AMBIGUOUS",
+                    format!(
+                        "request_id {request_id} has a descendant of a non-canonical duplicate"
+                    ),
+                ));
+            }
+            diagnostics.push(format!(
+                "MEMORY_REQUEST_DUPLICATE {request_id}: {} equivalent revisions converged to {}",
+                revisions.len(),
+                canonical.value.revision_id
+            ));
+        }
+        canonical_revision_ids.insert(canonical.value.revision_id.clone());
+    }
+    Ok(RequestDeduplication {
+        canonical_revision_ids,
+        diagnostics,
+    })
+}
+
+pub(crate) fn canonical_request_revision_ids(
+    repository: &RepositorySnapshot,
+) -> Result<BTreeSet<String>, ReducerError> {
+    deduplicate_requests(repository).map(|result| result.canonical_revision_ids)
+}
+
+fn same_request_semantics(left: &MemoryClaimRevision, right: &MemoryClaimRevision) -> bool {
+    let normalize = |value: &MemoryClaimRevision| {
+        let mut value = value.clone();
+        let recorded_at = value.recorded_at.clone();
+        if value.transition.operation == ClaimOperation::CreateApproved {
+            if let KindData::Decision(decision) = &mut value.kind_data {
+                if decision.decided_at == recorded_at {
+                    decision.decided_at.clear();
+                }
+            }
+            let clear_derived = |field: &mut Option<String>| {
+                if field.as_deref() == Some(recorded_at.as_str()) {
+                    *field = None;
+                }
+            };
+            match value.claim_kind {
+                ClaimKind::Observation => clear_derived(&mut value.temporal.observed_at),
+                ClaimKind::Quotation => clear_derived(&mut value.temporal.uttered_at),
+                ClaimKind::Preference
+                | ClaimKind::Boundary
+                | ClaimKind::Decision
+                | ClaimKind::Commitment
+                | ClaimKind::Practice => clear_derived(&mut value.temporal.valid_from),
+                _ => {}
+            }
+        }
+        value.claim_id.clear();
+        value.revision_id.clear();
+        value.recorded_at.clear();
+        value.payload_sha256.clear();
+        if let Some(decision) = &mut value.decision {
+            decision.decided_at.clear();
+        }
+        value
+    };
+    normalize(left) == normalize(right)
 }
 
 #[derive(Default)]
@@ -231,7 +373,12 @@ fn validate_operation_ref(
     }
 }
 
-fn reduce_protocol(revisions: &[Loaded<ProtocolRevision>]) -> Result<ProtocolView, ReducerError> {
+fn reduce_protocol(
+    revisions: &[Loaded<ProtocolRevision>],
+    authorities: &[Loaded<AuthorityRevision>],
+    bootstrap: &Bootstrap,
+    global: &GlobalDag<'_>,
+) -> Result<ProtocolView, ReducerError> {
     let nodes = revisions
         .iter()
         .map(|revision| Node {
@@ -251,6 +398,68 @@ fn reduce_protocol(revisions: &[Loaded<ProtocolRevision>]) -> Result<ProtocolVie
                 format!("invalid protocol revision {}", revision.value.revision_id),
             ));
         }
+        let initial = revision.value.revision_id == bootstrap.initial_protocol_revision.revision_id
+            && revision.value.payload_sha256 == bootstrap.initial_protocol_revision.payload_sha256;
+        validate_control_transition(
+            "protocol",
+            &revision.value.revision_id,
+            initial,
+            revision.value.transition.operation,
+            &revision.value.base_heads,
+        )?;
+        if initial {
+            let root_authority = authorities
+                .iter()
+                .find(|authority| {
+                    authority.value.revision_id == bootstrap.initial_authority_revision.revision_id
+                        && authority.value.payload_sha256
+                            == bootstrap.initial_authority_revision.payload_sha256
+                })
+                .ok_or_else(|| {
+                    ReducerError::new(
+                        "MEMORY_AUTHORITY_INVALID",
+                        "bootstrap authority revision is missing",
+                    )
+                })?;
+            if revision.value.decision.authority_context.capability != "bootstrap"
+                || !revision.value.decision.authority_context.heads.is_empty()
+                || revision.value.decision.actor_id != root_authority.value.owner.actor_id
+            {
+                return Err(ReducerError::new(
+                    "MEMORY_UNAUTHORIZED",
+                    format!(
+                        "invalid bootstrap protocol decision {}",
+                        revision.value.revision_id
+                    ),
+                ));
+            }
+            continue;
+        }
+
+        validate_control_base_causality(
+            "protocol",
+            &revision.value.revision_id,
+            &revision.value.base_heads,
+            revisions.iter().map(|candidate| {
+                (
+                    candidate.value.revision_id.as_str(),
+                    candidate.value.payload_sha256.as_str(),
+                )
+            }),
+            global,
+        )?;
+        let required = match revision.value.transition.operation {
+            ControlOperation::Replace => "memory.protocol.modify",
+            ControlOperation::Resolve => "memory.protocol.resolve",
+            ControlOperation::Initialize => unreachable!(),
+        };
+        validate_control_authorization(
+            &revision.value.revision_id,
+            &revision.value.decision,
+            required,
+            authorities,
+            global,
+        )?;
     }
     let heads = maximal_heads(&nodes, nodes.iter().map(|node| node.id))?;
     let refs = head_refs(&nodes, &heads);
@@ -263,6 +472,8 @@ fn reduce_protocol(revisions: &[Loaded<ProtocolRevision>]) -> Result<ProtocolVie
 
 fn reduce_authority(
     revisions: &[Loaded<AuthorityRevision>],
+    bootstrap: &Bootstrap,
+    global: &GlobalDag<'_>,
 ) -> Result<AuthorityView, ReducerError> {
     let nodes = revisions
         .iter()
@@ -282,6 +493,65 @@ fn reduce_authority(
                 format!("invalid authority revision {}", revision.value.revision_id),
             ));
         }
+        let initial = revision.value.revision_id
+            == bootstrap.initial_authority_revision.revision_id
+            && revision.value.payload_sha256 == bootstrap.initial_authority_revision.payload_sha256;
+        validate_control_transition(
+            "authority",
+            &revision.value.revision_id,
+            initial,
+            revision.value.transition.operation,
+            &revision.value.base_heads,
+        )?;
+        if initial {
+            if revision.value.decision.authority_context.capability != "bootstrap"
+                || !revision.value.decision.authority_context.heads.is_empty()
+                || revision.value.decision.actor_id != revision.value.owner.actor_id
+            {
+                return Err(ReducerError::new(
+                    "MEMORY_UNAUTHORIZED",
+                    format!(
+                        "invalid bootstrap authority decision {}",
+                        revision.value.revision_id
+                    ),
+                ));
+            }
+            continue;
+        }
+
+        validate_control_base_causality(
+            "authority",
+            &revision.value.revision_id,
+            &revision.value.base_heads,
+            revisions.iter().map(|candidate| {
+                (
+                    candidate.value.revision_id.as_str(),
+                    candidate.value.payload_sha256.as_str(),
+                )
+            }),
+            global,
+        )?;
+        if revision.value.decision.authority_context.heads != revision.value.base_heads {
+            return Err(ReducerError::new(
+                "MEMORY_UNAUTHORIZED",
+                format!(
+                    "authority decision {} does not bind its exact base heads",
+                    revision.value.revision_id
+                ),
+            ));
+        }
+        let required = match revision.value.transition.operation {
+            ControlOperation::Replace => "memory.authority.modify",
+            ControlOperation::Resolve => "memory.authority.resolve",
+            ControlOperation::Initialize => unreachable!(),
+        };
+        validate_control_authorization(
+            &revision.value.revision_id,
+            &revision.value.decision,
+            required,
+            revisions,
+            global,
+        )?;
     }
     let head_ids = maximal_heads(&nodes, nodes.iter().map(|node| node.id))?;
     let head_values = head_ids
@@ -329,6 +599,117 @@ fn reduce_authority(
     })
 }
 
+fn validate_control_transition(
+    label: &str,
+    revision_id: &str,
+    initial: bool,
+    operation: ControlOperation,
+    base_heads: &[RevisionRef],
+) -> Result<(), ReducerError> {
+    let valid = if initial {
+        operation == ControlOperation::Initialize && base_heads.is_empty()
+    } else {
+        match operation {
+            ControlOperation::Initialize => false,
+            ControlOperation::Replace => base_heads.len() == 1,
+            ControlOperation::Resolve => base_heads.len() >= 2,
+        }
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ReducerError::new(
+            "MEMORY_INVALID_TRANSITION",
+            format!("invalid {label} transition {revision_id}"),
+        ))
+    }
+}
+
+fn validate_control_base_causality<'a>(
+    label: &str,
+    revision_id: &str,
+    base_heads: &[RevisionRef],
+    known: impl Iterator<Item = (&'a str, &'a str)>,
+    global: &GlobalDag<'_>,
+) -> Result<(), ReducerError> {
+    let known = known.collect::<HashMap<_, _>>();
+    for base in base_heads {
+        if known.get(base.revision_id.as_str()).copied() != Some(base.payload_sha256.as_str()) {
+            return Err(ReducerError::new(
+                "MEMORY_INVALID_DAG",
+                format!("{label} base head mismatch {}", base.revision_id),
+            ));
+        }
+        if !global.is_ancestor(&base.revision_id, revision_id)? {
+            return Err(ReducerError::new(
+                "MEMORY_UNAUTHORIZED",
+                format!(
+                    "{label} base head {} is not in causal history of {revision_id}",
+                    base.revision_id
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_control_authorization(
+    revision_id: &str,
+    decision: &ControlDecision,
+    required_capability: &str,
+    authorities: &[Loaded<AuthorityRevision>],
+    global: &GlobalDag<'_>,
+) -> Result<(), ReducerError> {
+    if decision.authority_context.capability != required_capability
+        || decision.authority_context.heads.is_empty()
+    {
+        return Err(ReducerError::new(
+            "MEMORY_UNAUTHORIZED",
+            format!("invalid capability binding for {revision_id}"),
+        ));
+    }
+    let expected_heads = maximal_authority_heads(authorities, revision_id, global)?;
+    if decision.authority_context.heads != expected_heads {
+        return Err(ReducerError::new(
+            "MEMORY_UNAUTHORIZED",
+            format!("decision {revision_id} does not bind its maximal causal authority heads"),
+        ));
+    }
+    for head in &decision.authority_context.heads {
+        let authority = authorities
+            .iter()
+            .find(|candidate| {
+                candidate.value.revision_id == head.revision_id
+                    && candidate.value.payload_sha256 == head.payload_sha256
+            })
+            .ok_or_else(|| {
+                ReducerError::new(
+                    "MEMORY_UNAUTHORIZED",
+                    format!("unknown authority head {}", head.revision_id),
+                )
+            })?;
+        if !global.is_ancestor(&head.revision_id, revision_id)? {
+            return Err(ReducerError::new(
+                "MEMORY_UNAUTHORIZED",
+                format!(
+                    "authority head {} is not in causal history of {revision_id}",
+                    head.revision_id
+                ),
+            ));
+        }
+        let granted = principal_map(&authority.value)
+            .get(&decision.actor_id)
+            .is_some_and(|capabilities| capabilities.contains(required_capability));
+        if !granted {
+            return Err(ReducerError::new(
+                "MEMORY_UNAUTHORIZED",
+                format!("{} lacks {required_capability}", decision.actor_id),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn principal_map(revision: &AuthorityRevision) -> BTreeMap<String, BTreeSet<String>> {
     revision
         .principals
@@ -346,6 +727,7 @@ fn principal_map(revision: &AuthorityRevision) -> BTreeMap<String, BTreeSet<Stri
 fn reduce_claim(
     claim_id: &str,
     revisions: &[&Loaded<MemoryClaimRevision>],
+    protocols: &[Loaded<ProtocolRevision>],
     authorities: &[Loaded<AuthorityRevision>],
     current_authority: &AuthorityView,
     global: &GlobalDag<'_>,
@@ -363,7 +745,42 @@ fn reduce_claim(
     validate_dag(claim_id, &nodes)?;
     for revision in revisions {
         validate_claim_shape(&revision.value, revisions)?;
-        validate_decision_authority(&revision.value, authorities, global)?;
+        validate_decision_authority(&revision.value, protocols, authorities, global)?;
+    }
+
+    let mut decided = Vec::new();
+    for revision in revisions {
+        if revision.value.workflow.state != WorkflowState::Pending
+            && validity_contains(&revision.value.temporal, as_of)?
+        {
+            decided.push(revision.value.revision_id.as_str());
+        }
+    }
+    let decision_heads = maximal_heads(&nodes, decided.iter().copied())?;
+    let decision_head_values = decision_heads
+        .iter()
+        .map(|id| {
+            revisions
+                .iter()
+                .find(|revision| &revision.value.revision_id == id)
+                .copied()
+                .ok_or_else(|| ReducerError::new("MEMORY_INVALID_DAG", "missing decision head"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mixed_workflow = decision_head_values.first().is_some_and(|first| {
+        decision_head_values
+            .iter()
+            .skip(1)
+            .any(|revision| revision.value.workflow.state != first.value.workflow.state)
+    });
+    if decision_head_values.len() > 1 && mixed_workflow {
+        return claim_conflict(
+            claim_id,
+            &nodes,
+            &decision_heads,
+            &decision_head_values,
+            request,
+        );
     }
 
     let mut approved = Vec::new();
@@ -388,34 +805,7 @@ fn reduce_claim(
     let current_heads = head_refs(&nodes, &heads);
 
     if head_values.len() > 1 {
-        let risk = highest_risk(head_values.iter().map(|revision| revision.value.risk_class));
-        let overlay = (risk == RiskClass::ActionSensitive)
-            .then(|| safety_overlay(&head_values))
-            .transpose()?;
-        let conflict_id = conflict_id(&current_heads);
-        return Ok(ClaimView {
-            claim_id: claim_id.into(),
-            as_of_valid_time: request.as_of_valid_time.clone(),
-            workflow_state: WorkflowState::Approved,
-            lifecycle_state: None,
-            application_state: ApplicationState::ClaimConflict,
-            current_heads: current_heads.clone(),
-            projection_eligible: false,
-            context_eligible: false,
-            do_not_rely: true,
-            conflict: Some(ConflictView {
-                conflict_id,
-                heads: current_heads,
-                risk_class: risk,
-                do_not_rely: true,
-                action_allowed: false,
-                safety_overlay: overlay,
-            }),
-            text: None,
-            projection: None,
-            claim_kind: None,
-            salience: None,
-        });
+        return claim_conflict(claim_id, &nodes, &heads, &head_values, request);
     }
 
     let Some(head) = head_values.first() else {
@@ -497,10 +887,67 @@ fn reduce_claim(
     })
 }
 
+fn claim_conflict(
+    claim_id: &str,
+    nodes: &[Node<'_>],
+    heads: &[String],
+    head_values: &[&Loaded<MemoryClaimRevision>],
+    request: &SnapshotRequest,
+) -> Result<ClaimView, ReducerError> {
+    let current_heads = head_refs(nodes, heads);
+    let risk = highest_risk(head_values.iter().map(|revision| revision.value.risk_class));
+    let overlay = (risk == RiskClass::ActionSensitive)
+        .then(|| safety_overlay(head_values))
+        .transpose()?;
+    let workflow_state = if head_values
+        .iter()
+        .any(|revision| revision.value.workflow.state == WorkflowState::Approved)
+    {
+        WorkflowState::Approved
+    } else {
+        head_values[0].value.workflow.state
+    };
+    Ok(ClaimView {
+        claim_id: claim_id.into(),
+        as_of_valid_time: request.as_of_valid_time.clone(),
+        workflow_state,
+        lifecycle_state: None,
+        application_state: ApplicationState::ClaimConflict,
+        current_heads: current_heads.clone(),
+        projection_eligible: false,
+        context_eligible: false,
+        do_not_rely: true,
+        conflict: Some(ConflictView {
+            conflict_id: conflict_id(&current_heads),
+            heads: current_heads,
+            risk_class: risk,
+            do_not_rely: true,
+            action_allowed: false,
+            safety_overlay: overlay,
+        }),
+        text: None,
+        projection: None,
+        claim_kind: None,
+        salience: None,
+    })
+}
+
 fn validate_claim_shape(
     revision: &MemoryClaimRevision,
     revisions: &[&Loaded<MemoryClaimRevision>],
 ) -> Result<(), ReducerError> {
+    validity_contains(&revision.temporal, Utc::now())?;
+    for (field, value) in [
+        ("uttered_at", revision.temporal.uttered_at.as_deref()),
+        ("observed_at", revision.temporal.observed_at.as_deref()),
+        ("planned_for", revision.temporal.planned_for.as_deref()),
+        ("due_at", revision.temporal.due_at.as_deref()),
+        ("review_after", revision.temporal.review_after.as_deref()),
+    ] {
+        if let Some(value) = value {
+            parse_time(value, field)?;
+        }
+    }
     if revision.schema != "notemd.memory/claim-revision/v2" {
         return Err(ReducerError::new(
             "MEMORY_PROTOCOL_UNSUPPORTED",
@@ -660,6 +1107,7 @@ fn validate_transition(
 
 fn validate_decision_authority(
     revision: &MemoryClaimRevision,
+    protocols: &[Loaded<ProtocolRevision>],
     authorities: &[Loaded<AuthorityRevision>],
     global: &GlobalDag<'_>,
 ) -> Result<(), ReducerError> {
@@ -674,6 +1122,68 @@ fn validate_decision_authority(
                 revision.revision_id
             ),
         ));
+    }
+    let required_capability = if matches!(
+        revision.transition.operation,
+        ClaimOperation::Resolve | ClaimOperation::MergeResult | ClaimOperation::MergeEffect
+    ) {
+        "memory.claim.resolve"
+    } else {
+        "memory.claim.approve"
+    };
+    if decision.authority_context.capability != required_capability {
+        return Err(ReducerError::new(
+            "MEMORY_UNAUTHORIZED",
+            format!(
+                "decision {} binds the wrong capability",
+                revision.revision_id
+            ),
+        ));
+    }
+    if decision.authority_context.heads
+        != maximal_authority_heads(authorities, &revision.revision_id, global)?
+    {
+        return Err(ReducerError::new(
+            "MEMORY_UNAUTHORIZED",
+            format!(
+                "decision {} does not bind its maximal causal authority heads",
+                revision.revision_id
+            ),
+        ));
+    }
+    if decision.protocol_context.heads
+        != maximal_protocol_heads(protocols, &revision.revision_id, global)?
+    {
+        return Err(ReducerError::new(
+            "MEMORY_UNAUTHORIZED",
+            format!(
+                "decision {} does not bind its maximal causal protocol heads",
+                revision.revision_id
+            ),
+        ));
+    }
+    for head in &decision.protocol_context.heads {
+        protocols
+            .iter()
+            .find(|protocol| {
+                protocol.value.revision_id == head.revision_id
+                    && protocol.value.payload_sha256 == head.payload_sha256
+            })
+            .ok_or_else(|| {
+                ReducerError::new(
+                    "MEMORY_UNAUTHORIZED",
+                    format!("unknown protocol head {}", head.revision_id),
+                )
+            })?;
+        if !global.is_ancestor(&head.revision_id, &revision.revision_id)? {
+            return Err(ReducerError::new(
+                "MEMORY_UNAUTHORIZED",
+                format!(
+                    "protocol head {} is not in decision causal history",
+                    head.revision_id
+                ),
+            ));
+        }
     }
     let mut capability_sets = Vec::new();
     for head in &decision.authority_context.heads {
@@ -717,6 +1227,65 @@ fn validate_decision_authority(
         ));
     }
     Ok(())
+}
+
+fn maximal_authority_heads(
+    authorities: &[Loaded<AuthorityRevision>],
+    revision_id: &str,
+    global: &GlobalDag<'_>,
+) -> Result<Vec<RevisionRef>, ReducerError> {
+    maximal_causal_heads(
+        authorities
+            .iter()
+            .map(|item| (&item.value.revision_id, &item.value.payload_sha256)),
+        revision_id,
+        global,
+    )
+}
+
+fn maximal_protocol_heads(
+    protocols: &[Loaded<ProtocolRevision>],
+    revision_id: &str,
+    global: &GlobalDag<'_>,
+) -> Result<Vec<RevisionRef>, ReducerError> {
+    maximal_causal_heads(
+        protocols
+            .iter()
+            .map(|item| (&item.value.revision_id, &item.value.payload_sha256)),
+        revision_id,
+        global,
+    )
+}
+
+fn maximal_causal_heads<'a>(
+    records: impl Iterator<Item = (&'a String, &'a String)>,
+    revision_id: &str,
+    global: &GlobalDag<'_>,
+) -> Result<Vec<RevisionRef>, ReducerError> {
+    let mut candidates = Vec::new();
+    for (id, payload) in records {
+        if id != revision_id && global.is_ancestor(id, revision_id)? {
+            candidates.push((id.as_str(), payload.as_str()));
+        }
+    }
+    let mut heads = Vec::new();
+    for (id, payload) in &candidates {
+        let mut shadowed = false;
+        for (other, _) in &candidates {
+            if id != other && global.is_ancestor(id, other)? {
+                shadowed = true;
+                break;
+            }
+        }
+        if !shadowed {
+            heads.push(RevisionRef {
+                revision_id: (*id).into(),
+                payload_sha256: (*payload).into(),
+            });
+        }
+    }
+    heads.sort();
+    Ok(heads)
 }
 
 fn authorization_concurrent_with_revoke(
@@ -964,16 +1533,19 @@ fn maximal_heads<'a>(
         .map(|node| (node.id, *node))
         .collect::<HashMap<_, _>>();
     let candidates = candidates.map(str::to_owned).collect::<Vec<_>>();
-    let mut heads = candidates
-        .iter()
-        .filter(|candidate| {
-            !candidates.iter().any(|other| {
-                candidate != &other
-                    && is_ancestor_in(candidate.as_str(), other.as_str(), &by_id).unwrap_or(false)
-            })
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    let mut heads = Vec::new();
+    for candidate in &candidates {
+        let mut shadowed = false;
+        for other in &candidates {
+            if candidate != other && is_ancestor_in(candidate.as_str(), other.as_str(), &by_id)? {
+                shadowed = true;
+                break;
+            }
+        }
+        if !shadowed {
+            heads.push(candidate.clone());
+        }
+    }
     heads.sort();
     Ok(heads)
 }
@@ -1295,7 +1867,14 @@ mod tests {
         authority_with(
             A_ID,
             A_RAW,
-            &["memory.claim.approve", "memory.claim.resolve"],
+            &[
+                "memory.claim.approve",
+                "memory.claim.resolve",
+                "memory.authority.modify",
+                "memory.authority.resolve",
+                "memory.protocol.modify",
+                "memory.protocol.resolve",
+            ],
         )
     }
 
@@ -1479,7 +2058,19 @@ mod tests {
     fn repository(claims: Vec<Loaded<MemoryClaimRevision>>) -> RepositorySnapshot {
         RepositorySnapshot {
             mode: RepositoryMode::V2Active,
-            bootstrap: None,
+            bootstrap: Some(Bootstrap {
+                schema: "notemd.memory/bootstrap/v2".into(),
+                vault_id: "vault:test".into(),
+                protocol_family: "notemd.memory".into(),
+                initial_protocol_revision: RevisionRef {
+                    revision_id: P_ID.into(),
+                    payload_sha256: P_HASH.into(),
+                },
+                initial_authority_revision: RevisionRef {
+                    revision_id: A_ID.into(),
+                    payload_sha256: A_HASH.into(),
+                },
+            }),
             protocols: vec![protocol()],
             authorities: vec![authority()],
             claims,
@@ -1567,11 +2158,46 @@ mod tests {
     #[test]
     fn concurrent_authority_heads_use_capability_intersection_and_close_actions() {
         let mut repo = repository(vec![]);
-        repo.authorities.push(authority_with(
+        let root = repo.authorities[0].clone();
+        let mut sibling = authority_with(
             "01900000-0000-7000-8000-000000000003",
             "3333333333333333333333333333333333333333333333333333333333333333",
             &["memory.claim.resolve"],
-        ));
+        );
+        sibling.value.base_heads = vec![RevisionRef {
+            revision_id: A_ID.into(),
+            payload_sha256: A_HASH.into(),
+        }];
+        sibling.value.causal_context.parents.push(RecordRef {
+            record_id: A_ID.into(),
+            raw_sha256: A_RAW.into(),
+        });
+        sibling.value.transition.operation = ControlOperation::Replace;
+        sibling.value.decision.authority_context = AuthorityContext {
+            heads: sibling.value.base_heads.clone(),
+            capability: "memory.authority.modify".into(),
+        };
+        repo.authorities.push(sibling);
+        let mut other = root.clone();
+        other.value.revision_id = "01900000-0000-7000-8000-000000000004".into();
+        other.value.payload_sha256 =
+            "4444444444444444444444444444444444444444444444444444444444444444".into();
+        other.raw_sha256 =
+            "5555555555555555555555555555555555555555555555555555555555555555".into();
+        other.value.base_heads = vec![RevisionRef {
+            revision_id: A_ID.into(),
+            payload_sha256: A_HASH.into(),
+        }];
+        other.value.causal_context.parents.push(RecordRef {
+            record_id: A_ID.into(),
+            raw_sha256: A_RAW.into(),
+        });
+        other.value.transition.operation = ControlOperation::Replace;
+        other.value.decision.authority_context = AuthorityContext {
+            heads: other.value.base_heads.clone(),
+            capability: "memory.authority.modify".into(),
+        };
+        repo.authorities.push(other);
         let snapshot = reduce(&repo, &request("2026-09-01T00:00:00Z")).unwrap();
         assert!(snapshot.authority.conflict);
         assert!(!snapshot.authority.action_allowed);
@@ -1645,6 +2271,14 @@ mod tests {
             &[&first, &second],
             ClaimOperation::Resolve,
         );
+        let mut resolved = resolved;
+        resolved
+            .value
+            .decision
+            .as_mut()
+            .unwrap()
+            .authority_context
+            .capability = "memory.claim.resolve".into();
         let settled = reduce(
             &repository(vec![first.clone(), second.clone(), resolved.clone()]),
             &request("2026-09-01T00:00:00Z"),
@@ -1687,5 +2321,254 @@ mod tests {
         let error =
             reduce(&repository(vec![invalid]), &request("2026-09-01T00:00:00Z")).unwrap_err();
         assert_eq!(error.code, "MEMORY_INVALID_TIME");
+    }
+
+    #[test]
+    fn unbootstrapped_control_root_cannot_replace_protocol_or_authority() {
+        let mut repo = repository(vec![]);
+        let mut rogue = repo.protocols[0].clone();
+        rogue.value.revision_id = "rogue-protocol-root".into();
+        rogue.value.payload_sha256 =
+            "6666666666666666666666666666666666666666666666666666666666666666".into();
+        rogue.raw_sha256 =
+            "7777777777777777777777777777777777777777777777777777777777777777".into();
+        repo.protocols.push(rogue);
+        let error = reduce(&repo, &request("2026-09-01T00:00:00Z")).unwrap_err();
+        assert_eq!(error.code, "MEMORY_INVALID_TRANSITION");
+    }
+
+    #[test]
+    fn authority_revision_cannot_authorize_itself() {
+        let mut repo = repository(vec![]);
+        let mut injected = authority_with(
+            "01900000-0000-7000-8000-000000000099",
+            "9999999999999999999999999999999999999999999999999999999999999999",
+            &["memory.authority.modify"],
+        );
+        injected.value.owner.actor_id = "human:attacker".into();
+        injected.value.principals[0].actor_id = "human:attacker".into();
+        injected.value.base_heads = vec![RevisionRef {
+            revision_id: A_ID.into(),
+            payload_sha256: A_HASH.into(),
+        }];
+        injected.value.causal_context.parents.push(RecordRef {
+            record_id: A_ID.into(),
+            raw_sha256: A_RAW.into(),
+        });
+        injected.value.transition.operation = ControlOperation::Replace;
+        injected.value.decision.actor_id = "human:attacker".into();
+        injected.value.decision.authority_context = AuthorityContext {
+            heads: injected.value.base_heads.clone(),
+            capability: "memory.authority.modify".into(),
+        };
+        repo.authorities.push(injected);
+        let error = reduce(&repo, &request("2026-09-01T00:00:00Z")).unwrap_err();
+        assert_eq!(error.code, "MEMORY_UNAUTHORIZED");
+    }
+
+    #[test]
+    fn claim_cannot_bind_old_authority_when_new_revoke_is_already_causal() {
+        let mut repo = repository(vec![]);
+        let mut revoked = authority_with(
+            "01900000-0000-7000-8000-000000000088",
+            "8888888888888888888888888888888888888888888888888888888888888888",
+            &["memory.authority.modify"],
+        );
+        revoked.value.base_heads = vec![RevisionRef {
+            revision_id: A_ID.into(),
+            payload_sha256: A_HASH.into(),
+        }];
+        revoked.value.causal_context.parents.push(RecordRef {
+            record_id: A_ID.into(),
+            raw_sha256: A_RAW.into(),
+        });
+        revoked.value.transition.operation = ControlOperation::Replace;
+        revoked.value.decision.authority_context = AuthorityContext {
+            heads: revoked.value.base_heads.clone(),
+            capability: "memory.authority.modify".into(),
+        };
+        let mut stale = claim("c1", "claim-1", "2026-01-01T00:00:00Z", None, None);
+        stale.value.causal_context.parents.push(RecordRef {
+            record_id: revoked.value.revision_id.clone(),
+            raw_sha256: revoked.raw_sha256.clone(),
+        });
+        repo.authorities.push(revoked);
+        repo.claims.push(stale);
+        let error = reduce(&repo, &request("2026-09-01T00:00:00Z")).unwrap_err();
+        assert_eq!(error.code, "MEMORY_UNAUTHORIZED");
+    }
+
+    #[test]
+    fn claim_cannot_bind_old_protocol_when_new_head_is_already_causal() {
+        let mut repo = repository(vec![]);
+        let mut next = protocol();
+        next.value.revision_id = "01900000-0000-7000-8000-000000000077".into();
+        next.value.payload_sha256 =
+            "7777777777777777777777777777777777777777777777777777777777777777".into();
+        next.raw_sha256 = "6666666666666666666666666666666666666666666666666666666666666666".into();
+        next.value.base_heads = vec![RevisionRef {
+            revision_id: P_ID.into(),
+            payload_sha256: P_HASH.into(),
+        }];
+        next.value.causal_context.parents = vec![
+            RecordRef {
+                record_id: P_ID.into(),
+                raw_sha256: P_RAW.into(),
+            },
+            RecordRef {
+                record_id: A_ID.into(),
+                raw_sha256: A_RAW.into(),
+            },
+        ];
+        next.value.transition.operation = ControlOperation::Replace;
+        next.value.decision.authority_context = AuthorityContext {
+            heads: vec![RevisionRef {
+                revision_id: A_ID.into(),
+                payload_sha256: A_HASH.into(),
+            }],
+            capability: "memory.protocol.modify".into(),
+        };
+        let mut stale = claim("c1", "claim-1", "2026-01-01T00:00:00Z", None, None);
+        stale.value.causal_context.parents.push(RecordRef {
+            record_id: next.value.revision_id.clone(),
+            raw_sha256: next.raw_sha256.clone(),
+        });
+        repo.protocols.push(next);
+        repo.claims.push(stale);
+        let error = reduce(&repo, &request("2026-09-01T00:00:00Z")).unwrap_err();
+        assert_eq!(error.code, "MEMORY_UNAUTHORIZED");
+    }
+
+    #[test]
+    fn protocol_change_cannot_bind_old_authority_when_new_head_is_causal() {
+        let mut repo = repository(vec![]);
+        let mut authority = authority_with(
+            "01900000-0000-7000-8000-000000000055",
+            "5555555555555555555555555555555555555555555555555555555555555555",
+            &["memory.authority.modify"],
+        );
+        authority.value.base_heads = vec![RevisionRef {
+            revision_id: A_ID.into(),
+            payload_sha256: A_HASH.into(),
+        }];
+        authority.value.causal_context.parents.push(RecordRef {
+            record_id: A_ID.into(),
+            raw_sha256: A_RAW.into(),
+        });
+        authority.value.transition.operation = ControlOperation::Replace;
+        authority.value.decision.authority_context = AuthorityContext {
+            heads: authority.value.base_heads.clone(),
+            capability: "memory.authority.modify".into(),
+        };
+
+        let mut protocol = protocol();
+        protocol.value.revision_id = "01900000-0000-7000-8000-000000000056".into();
+        protocol.value.payload_sha256 =
+            "5656565656565656565656565656565656565656565656565656565656565656".into();
+        protocol.raw_sha256 =
+            "5757575757575757575757575757575757575757575757575757575757575757".into();
+        protocol.value.base_heads = vec![RevisionRef {
+            revision_id: P_ID.into(),
+            payload_sha256: P_HASH.into(),
+        }];
+        protocol.value.causal_context.parents = vec![
+            RecordRef {
+                record_id: P_ID.into(),
+                raw_sha256: P_RAW.into(),
+            },
+            RecordRef {
+                record_id: authority.value.revision_id.clone(),
+                raw_sha256: authority.raw_sha256.clone(),
+            },
+        ];
+        protocol.value.transition.operation = ControlOperation::Replace;
+        protocol.value.decision.authority_context = AuthorityContext {
+            heads: vec![RevisionRef {
+                revision_id: A_ID.into(),
+                payload_sha256: A_HASH.into(),
+            }],
+            capability: "memory.protocol.modify".into(),
+        };
+        repo.authorities.push(authority);
+        repo.protocols.push(protocol);
+        let error = reduce(&repo, &request("2026-09-01T00:00:00Z")).unwrap_err();
+        assert_eq!(error.code, "MEMORY_UNAUTHORIZED");
+    }
+
+    #[test]
+    fn concurrent_approve_and_reject_is_an_explicit_conflict() {
+        let active = claim("c1", "claim-1", "2026-01-01T00:00:00Z", None, None);
+        let mut pending = child(
+            active.clone(),
+            "c2",
+            &[&active],
+            ClaimOperation::ProposeReplace,
+        );
+        pending.value.workflow.state = WorkflowState::Pending;
+        pending.value.decision = None;
+
+        let mut approved = child(pending.clone(), "c3", &[&pending], ClaimOperation::Approve);
+        approved.value.workflow.state = WorkflowState::Approved;
+        approved.value.decision = active.value.decision.clone();
+        approved.value.transition.approves_revision_id = Some(pending.value.revision_id.clone());
+        approved.value.transition.approves_payload_sha256 =
+            Some(pending.value.payload_sha256.clone());
+        let mut rejected = child(pending.clone(), "c4", &[&pending], ClaimOperation::Reject);
+        rejected.value.decision = active.value.decision.clone();
+        rejected.value.workflow.state = WorkflowState::Rejected;
+        rejected.value.decision.as_mut().unwrap().verdict = Verdict::Reject;
+        rejected.value.transition.approves_revision_id = Some(pending.value.revision_id.clone());
+        rejected.value.transition.approves_payload_sha256 =
+            Some(pending.value.payload_sha256.clone());
+
+        let snapshot = reduce(
+            &repository(vec![active, pending, approved, rejected]),
+            &request("2026-09-01T00:00:00Z"),
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot.claims[0].application_state,
+            ApplicationState::ClaimConflict
+        );
+        assert_eq!(snapshot.claims[0].current_heads.len(), 2);
+        assert!(!snapshot.claims[0].projection_eligible);
+    }
+
+    #[test]
+    fn equivalent_cross_clone_request_revisions_converge_deterministically() {
+        let mut first = claim("c1", "claim-a", "2026-01-01T00:00:00Z", None, None);
+        let mut second = claim("c2", "claim-b", "2026-01-01T00:00:00Z", None, None);
+        first.value.request_id = "shared-request".into();
+        second.value.request_id = "shared-request".into();
+        first.value.text = "same semantic input".into();
+        second.value.text = first.value.text.clone();
+        first.value.dedupe_key = "same-dedupe".into();
+        second.value.dedupe_key = first.value.dedupe_key.clone();
+        second.value.recorded_at = "2026-01-01T00:00:01Z".into();
+        second.value.temporal.valid_from = Some(second.value.recorded_at.clone());
+        second.value.decision.as_mut().unwrap().decided_at = second.value.recorded_at.clone();
+
+        let snapshot = reduce(
+            &repository(vec![second, first]),
+            &request("2026-09-01T00:00:00Z"),
+        )
+        .unwrap();
+        assert_eq!(snapshot.claims.len(), 1);
+        assert_eq!(snapshot.claims[0].current_heads[0].revision_id, "c1");
+        assert!(snapshot.diagnostics[0].contains("MEMORY_REQUEST_DUPLICATE"));
+    }
+
+    #[test]
+    fn reused_request_id_with_different_semantics_fails_closed() {
+        let mut first = claim("c1", "claim-a", "2026-01-01T00:00:00Z", None, None);
+        let mut second = claim("c2", "claim-b", "2026-01-01T00:00:00Z", None, None);
+        first.value.request_id = "shared-request".into();
+        second.value.request_id = "shared-request".into();
+        let error = reduce(
+            &repository(vec![first, second]),
+            &request("2026-09-01T00:00:00Z"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "MEMORY_IDEMPOTENCY_CONFLICT");
     }
 }

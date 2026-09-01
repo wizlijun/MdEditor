@@ -47,7 +47,7 @@
   } from './lib/types'
 
   type Tab = 'confirmed' | 'pending' | 'history'
-  type DestructiveAction = { kind: 'reject' | 'delete-candidate'; pending: PendingClaim } | { kind: 'delete-claim'; current: EffectiveClaim }
+  type DestructiveAction = { kind: 'reject' | 'delete-candidate' | 'approve-lifecycle'; pending: PendingClaim } | { kind: 'delete-claim'; current: EffectiveClaim }
 
   let snapshot = $state<MemorySnapshotV2 | null>(null)
   let loading = $state(true)
@@ -172,6 +172,19 @@
         await completed('已将主张移出当前记忆；不可变历史仍保留', receipt.projection_rebuilt)
       } else {
         const item = destructive.pending
+        if (destructive.kind === 'approve-lifecycle') {
+          const receipt = await memoryApprove({
+            request_id: requestId('memory-ui/approve-lifecycle'),
+            expected_protocol: protocol(),
+            expected_heads: item.expected_heads,
+            revision_id: item.revision.revision_id,
+            expected_sha256: item.expected_sha256,
+            gesture_intent: 'approve',
+          })
+          destructive = null
+          await completed(item.revision.lifecycle.state === 'deleted' ? '已确认删除这条主张' : '已确认将主张移出当前记忆', receipt.projection_rebuilt)
+          return
+        }
         const input = {
           request_id: requestId(`memory-ui/${destructive.kind}`),
           expected_protocol: protocol(),
@@ -293,7 +306,8 @@
   async function createManifest() {
     contextBusy = true; error = ''
     try {
-      const receipt = await memoryContextManifest(contextRequest())
+      if (!contextPreview) throw new Error('Context preview is required.')
+      const receipt = await memoryContextManifest({ ...contextRequest(), preview_sha256: contextPreview.preview_sha256 })
       announcement = `Context Manifest 已记录：${receipt.selected_count} 条主张。`
       await toast('success', announcement, receipt.manifest_id)
     } catch (cause) { error = hostError(cause) } finally { contextBusy = false }
@@ -450,22 +464,25 @@
         {#if selectedPending}
           {@const revision = selectedPending.revision}
           {@const approval = approvalForPending(selectedPending)}
+          {@const lifecycleChange = revision.lifecycle.state !== 'active'}
           <article class="detail" aria-labelledby="pending-title">
             <div class="eyebrow"><span class="badge">{claimKindLabels[revision.claim_kind]}</span><span class="badge {revision.risk_class === 'action-sensitive' ? 'danger' : ''}">{revision.risk_class}</span></div>
             <h2 id="pending-title">{revision.text}</h2>
             <section class="approval-meaning"><small>这次确认的含义</small><strong>{approvalLabels[approval].label}</strong><p>{approvalLabels[approval].explanation}</p></section>
+            {#if lifecycleChange}<div class="banner error" role="status"><strong>这是生命周期变更</strong><span>确认后将{revision.lifecycle.state === 'deleted' ? '删除' : '撤销'}此主张；它会离开当前记忆、纯文本投影和 Agent context，不可变历史仍保留。</span></div>{/if}
             <div class="diff"><div><small>当前</small><p>{selectedPending.base_text ?? '—'}</p></div><div><small>确认后</small><p>{revision.text}</p></div></div>
             <dl class="facts">
               <div><dt>关于谁</dt><dd>{subjectLabel(revision)}</dd></div><div><dt>由谁提出</dt><dd>{actorLabel(revision.recorded_by)}</dd></div>
               <div><dt>Space</dt><dd>{revision.context.spaces.join('、')}</dd></div><div><dt>Provider</dt><dd>{revision.consent.external_provider_policy}</dd></div>
+              <div><dt>生命周期</dt><dd>{revision.lifecycle.state}</dd></div>
               <div class="wide"><dt>来源</dt><dd>{selectedPending.source_summary ?? revision.evidence?.[0]?.resource ?? '未提供'}</dd></div>
             </dl>
             <div class="pending-actions">
               <button onclick={() => destructive = { kind: 'delete-candidate', pending: selectedPending }} disabled={!writable || writing}>删除候选…</button>
               <button onclick={() => destructive = { kind: 'reject', pending: selectedPending }} disabled={!writable || writing}>否认…</button>
               <button onclick={() => decidePending(selectedPending, 'ignore')} disabled={!writable || writing}>可以忽略</button>
-              <button onclick={() => decidePending(selectedPending, 'approve', 'pinned')} disabled={!writable || writing}>认为重要</button>
-              <button class="primary" onclick={() => decidePending(selectedPending, 'approve')} disabled={!writable || writing}>{approvalLabels[approval].button}</button>
+              {#if !lifecycleChange}<button onclick={() => decidePending(selectedPending, 'approve', 'pinned')} disabled={!writable || writing}>认为重要</button>{/if}
+              <button class="primary" onclick={() => lifecycleChange ? destructive = { kind: 'approve-lifecycle', pending: selectedPending } : decidePending(selectedPending, 'approve')} disabled={!writable || writing}>{lifecycleChange ? `确认${revision.lifecycle.state === 'deleted' ? '删除' : '撤销'}…` : approvalLabels[approval].button}</button>
             </div>
           </article>
         {:else}<div class="empty detail-empty">当前没有需要人工处理的建议。</div>{/if}
@@ -474,15 +491,16 @@
       <div id="history-panel" class="history" role="tabpanel" aria-label="冲突与历史">
         <header><div><h2>并发冲突</h2><p>系统不会按时间替你选择。处理前，相关主张不会授权现实行动。</p></div><span class="count large">{snapshot.conflicts.length}</span></header>
         {#each snapshot.conflicts as conflict (conflict.conflict_id)}
+          {@const mixedDecision = new Set(conflict.heads.map((head) => head.workflow.state)).size > 1}
           <article class="conflict-card">
             <div class="conflict-title"><div><span class="badge danger">{conflict.risk_class}</span><h3>{conflict.heads[0]?.text ?? conflict.claim_id}</h3></div><strong>{conflict.action_allowed ? '可用于信息回答' : '禁止行动'}</strong></div>
             {#if conflict.common_ancestor}<div class="ancestor"><small>最后共同版本</small><p>{conflict.common_ancestor.text}</p></div>{/if}
             <div class="heads">
               {#each conflict.heads as head, index (head.revision_id)}
-                <section><small>版本 {String.fromCharCode(65 + index)} · {actorLabel(head.recorded_by)} · {formatDate(head.recorded_at)}</small><p>{head.text}</p><button onclick={() => resolveConflict(conflict, 'keep-head', head.revision_id)} disabled={!writable || writing}>保留此版本</button></section>
+                <section><small>版本 {String.fromCharCode(65 + index)} · {head.workflow.state}/{head.lifecycle.state} · {actorLabel(head.recorded_by)} · {formatDate(head.recorded_at)}</small><p>{head.text}</p><button onclick={() => resolveConflict(conflict, 'keep-head', head.revision_id)} disabled={!writable || writing}>{head.workflow.state === 'approved' ? '采用批准决定' : `采用${head.workflow.state === 'rejected' ? '否认' : '忽略'}决定`}</button></section>
               {/each}
             </div>
-            <div class="conflict-actions"><button onclick={() => resolveConflict(conflict, 'revoke-all')} disabled={!writable || writing}>全部撤销</button><button class="primary" onclick={() => { mergeConflict = conflict; mergedText = conflict.heads.map((head) => head.text).join('\n') }} disabled={!writable || writing}>合并编辑…</button></div>
+            <div class="conflict-actions"><button onclick={() => resolveConflict(conflict, 'revoke-all')} disabled={!writable || writing}>全部撤销</button>{#if !mixedDecision}<button class="primary" onclick={() => { mergeConflict = conflict; mergedText = conflict.heads.map((head) => head.text).join('\n') }} disabled={!writable || writing}>合并编辑…</button>{/if}</div>
           </article>
         {:else}<div class="empty compact">没有并发冲突。</div>{/each}
 
@@ -515,7 +533,7 @@
 {/if}
 
 {#if destructive}
-  <div class="scrim" role="presentation"><div class="sheet compact-sheet" role="alertdialog" aria-modal="true" aria-labelledby="destructive-title"><header><div><h2 id="destructive-title">{destructive.kind === 'reject' ? '否认这条建议？' : destructive.kind === 'delete-candidate' ? '删除这个候选？' : '移出当前记忆？'}</h2><p>{destructive.kind === 'delete-claim' ? '主张会从当前投影和 Agent context 移除；不可变历史仍会保留。这不是从 Git 历史永久擦除。' : destructive.kind === 'reject' ? '系统会记录否认决定，建议不会进入当前记忆。' : '候选不会进入当前记忆；已有 Git 历史可能继续保留。'}</p></div></header><footer><button onclick={() => destructive = null} disabled={writing}>取消</button><button class="destructive" onclick={confirmDestructive} disabled={writing}>{writing ? '正在处理…' : '确认'}</button></footer></div></div>
+  <div class="scrim" role="presentation"><div class="sheet compact-sheet" role="alertdialog" aria-modal="true" aria-labelledby="destructive-title"><header><div><h2 id="destructive-title">{destructive.kind === 'reject' ? '否认这条建议？' : destructive.kind === 'delete-candidate' ? '删除这个候选？' : destructive.kind === 'approve-lifecycle' ? `确认${destructive.pending.revision.lifecycle.state === 'deleted' ? '删除' : '撤销'}此主张？` : '移出当前记忆？'}</h2><p>{destructive.kind === 'delete-claim' ? '主张会从当前投影和 Agent context 移除；不可变历史仍会保留。这不是从 Git 历史永久擦除。' : destructive.kind === 'approve-lifecycle' ? '这是不可见性变更：主张会离开当前投影和 Agent context；不可变历史仍会保留。' : destructive.kind === 'reject' ? '系统会记录否认决定，建议不会进入当前记忆。' : '候选不会进入当前记忆；已有 Git 历史可能继续保留。'}</p></div></header><footer><button onclick={() => destructive = null} disabled={writing}>取消</button><button class="destructive" onclick={confirmDestructive} disabled={writing}>{writing ? '正在处理…' : '确认'}</button></footer></div></div>
 {/if}
 
 {#if mergeConflict}
@@ -526,7 +544,7 @@
   <div class="scrim" role="presentation"><div class="sheet context-sheet" role="dialog" aria-modal="true" aria-labelledby="context-title"><header><div><h2 id="context-title">Context Manifest</h2><p>先明确 Space、用途和接收方，再查看将提供给 Agent 的最小主张集合。</p></div><button class="close" aria-label="关闭 Context Manifest" onclick={() => showContext = false}>×</button></header>
     <div class="form-grid"><label>Space<select bind:value={contextSpace}>{#each snapshot.context_options?.spaces ?? [{ id: 'global', label: '全局' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>用途<select bind:value={contextPurpose}>{#each snapshot.context_options?.purposes ?? [{ id: 'planning', label: '规划' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>Provider<select bind:value={contextProvider}>{#each snapshot.context_options?.providers ?? [{ id: 'openai', label: 'OpenAI' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>Model<select bind:value={contextModel}>{#each (snapshot.context_options?.models ?? [{ id: 'gpt-5', label: 'GPT-5' }]).filter((option) => !option.provider_id || option.provider_id === contextProvider) as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>有效时间<input type="datetime-local" bind:value={contextAsOf} /></label><label>Tools（逗号分隔）<input bind:value={contextTools} /></label><label class="check wide"><input type="checkbox" bind:checked={contextExternal} />内容将发送给外部 Provider</label></div>
     <div class="context-actions"><button class="primary" onclick={previewContext} disabled={contextBusy || !contextSpace || !contextPurpose || !contextProvider || !contextModel || !contextAsOf}>{contextBusy ? '正在检查…' : '预览选择'}</button></div>
-    {#if contextPreview}<section class="context-result" aria-live="polite"><div class="result-summary"><strong>{contextPreview.selected.length} 条将被选中</strong><span>{contextPreview.redactions} 条已脱敏 · {contextPreview.conflicts.length} 个冲突</span></div><dl class="facts"><div><dt>现实行动</dt><dd>{contextPreview.policy_result.external_action_allowed ? '允许' : '不允许'}</dd></div><div><dt>排除</dt><dd>{Object.entries(contextPreview.excluded_summary).map(([key, value]) => `${key} ${value}`).join('、') || '无'}</dd></div></dl><ul>{#each contextPreview.selected as item}<li>{item.text ?? item.claim_id}<small>{item.reasons.join(' · ')}</small></li>{/each}</ul><button onclick={createManifest} disabled={contextBusy || !writable}>记录本次使用清单</button>{#if !writable}<small class="readonly-note">当前模式只允许预览，不会写入 Context Manifest。</small>{/if}</section>{/if}
+    {#if contextPreview}<section class="context-result" aria-live="polite"><div class="result-summary"><strong>{contextPreview.selected.length} 条将被选中</strong><span>{contextPreview.redactions} 条已脱敏 · {contextPreview.conflicts.length} 个冲突</span></div><dl class="facts"><div><dt>现实行动</dt><dd>{contextPreview.policy_result.external_action_allowed ? '允许' : '不允许'}</dd></div><div><dt>排除</dt><dd>{Object.entries(contextPreview.excluded_summary).map(([key, value]) => `${key} ${value}`).join('、') || '无'}</dd></div></dl><ul>{#each contextPreview.selected as item}<li>{item.text ?? item.claim_id}<small>{item.reasons.join(' · ')}</small></li>{/each}</ul><button onclick={createManifest} disabled={contextBusy || !writable || !contextPreview.preview_sha256}>记录本次使用清单</button>{#if !writable}<small class="readonly-note">当前模式只允许预览，不会写入 Context Manifest。</small>{/if}</section>{/if}
   </div></div>
 {/if}
 

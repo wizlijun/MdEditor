@@ -194,8 +194,9 @@ item in the summary instead of manufacturing a commitment.
 ### Ownership gate
 
 Before evaluating ownership, call `notemd memory owner --json`. Only create a
-Task when its obligation belongs to the active, conflict-free owner returned by
-that command. The source must explicitly assign the action to that person,
+Task when its obligation belongs to the **confirmed vault owner** returned by
+that command, whose authority state must be active and conflict-free. The source
+must explicitly assign the action to that person,
 record that person's own commitment, or state a deadline that person must meet.
 Never parse owner identity from `/USER.md`; if the authority reducer cannot
 confirm the owner, create no Task.

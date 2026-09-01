@@ -92,6 +92,22 @@ describe('Memory Protocol v2 app', () => {
     expect(calls[0][1]).toMatchObject({ salience_override: 'pinned', gesture_intent: 'approve' })
   })
 
+  it('makes a revoke proposal explicit and requires destructive confirmation', async () => {
+    const revoked = pending({ lifecycle: { state: 'revoked' } })
+    const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? { ...baseSnapshot(), pending: [revoked] } : method === 'host.memory.v2.approve' ? receipt : {})
+    await render(request); tab('待确认').click(); flushSync()
+    expect(document.body.textContent).toContain('这是生命周期变更')
+    expect(document.body.textContent).toContain('离开当前记忆、纯文本投影和 Agent context')
+    expect(button('认为重要')).toBeUndefined()
+    button('确认撤销…')!.click(); flushSync()
+    expect(document.querySelector('[role=alertdialog]')).toBeTruthy()
+    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.approve')).toHaveLength(0)
+    button('确认')!.click(); await settle()
+    const calls = request.mock.calls.filter(([method]) => method === 'host.memory.v2.approve')
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatchObject({ revision_id: 'pending-1', expected_sha256: 'sha-pending-1', gesture_intent: 'approve' })
+  })
+
   it('saves a human-authored claim in one add call and keeps the draft after failure', async () => {
     const request = rpcMock(async (method) => {
       if (method === 'host.memory.v2.snapshot') return baseSnapshot()
@@ -137,7 +153,7 @@ describe('Memory Protocol v2 app', () => {
   it('previews a scoped provider context and writes a manifest only after the explicit action', async () => {
     const request = rpcMock(async (method) => {
       if (method === 'host.memory.v2.snapshot') return baseSnapshot()
-      if (method === 'host.memory.v2.context') return { request: {}, selected: [{ claim_id: 'claim-1', revision_id: 'revision-1', reasons: ['space-match'], text: '回答先给出结论。' }], excluded_summary: { 'provider-deny': 2 }, conflicts: [], redactions: 1, policy_result: { external_action_allowed: false } }
+      if (method === 'host.memory.v2.context') return { request: {}, preview_sha256: 'preview-sha', selected: [{ claim_id: 'claim-1', revision_id: 'revision-1', reasons: ['space-match'], text: '回答先给出结论。' }], excluded_summary: { 'provider-deny': 2 }, conflicts: [], redactions: 1, policy_result: { external_action_allowed: false } }
       if (method === 'host.memory.v2.contextManifest') return { manifest_id: 'manifest-1', payload_sha256: 'manifest-sha', selected_count: 1 }
       return {}
     })
@@ -147,7 +163,7 @@ describe('Memory Protocol v2 app', () => {
     expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.contextManifest')).toHaveLength(0)
     button('记录本次使用清单')!.click(); await settle()
     const call = request.mock.calls.find(([method]) => method === 'host.memory.v2.contextManifest')!
-    expect(call[1]).toMatchObject({ space: 'work/hemory', purpose: 'planning', provider: 'openai', model: 'gpt-5', caller: 'plugin:notemd.memory', external_transfer: true })
+    expect(call[1]).toMatchObject({ space: 'work/hemory', purpose: 'planning', provider: 'openai', model: 'gpt-5', caller: 'plugin:notemd.memory', external_transfer: true, preview_sha256: 'preview-sha' })
     expect(call[1].as_of_valid_time).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
 
@@ -159,7 +175,7 @@ describe('Memory Protocol v2 app', () => {
     await render(request); tab('冲突与历史').click(); flushSync()
     expect(document.body.textContent).toContain('最后共同版本')
     expect(document.body.textContent).toContain('禁止行动')
-    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent === '保留此版本')!.click(); await settle()
+    button('采用批准决定')!.click(); await settle()
     const call = request.mock.calls.find(([method]) => method === 'host.memory.v2.resolve')!
     expect(call[1]).toMatchObject({ conflict_id: 'conflict-1', strategy: 'keep-head', selected_revision_id: 'head-a', expected_heads: [{ revision_id: 'head-a', payload_sha256: 'sha-a' }, { revision_id: 'head-b', payload_sha256: 'sha-b' }] })
   })

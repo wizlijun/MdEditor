@@ -90,6 +90,7 @@ export async function memoryContext(input: ContextRequest): Promise<ContextPrevi
   if (Array.isArray(value?.selected)) return value as ContextPreview
   return {
     request: value?.request ?? input,
+    preview_sha256: value?.preview_sha256 ?? '',
     selected: (value?.claims ?? []).map((claim: any) => ({
       claim_id: claim.claim_id,
       revision_id: claim.revision_id,

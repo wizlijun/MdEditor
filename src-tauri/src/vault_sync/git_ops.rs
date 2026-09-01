@@ -63,7 +63,9 @@ pub fn validate_proxy_url(raw: &str) -> Result<Option<String>, String> {
 fn configured_proxy() -> Option<String> {
     let path = crate::shared_config::config_path().ok()?;
     let cfg = crate::shared_config::read(&path).ok()?;
-    validate_proxy_url(cfg.git_proxy.as_deref().unwrap_or("")).ok().flatten()
+    validate_proxy_url(cfg.git_proxy.as_deref().unwrap_or(""))
+        .ok()
+        .flatten()
 }
 
 pub fn run_git(repo: &Path, args: &[&str]) -> GitResult<String> {
@@ -126,7 +128,10 @@ fn is_ahead(repo: &Path, remote: &str, branch: &str) -> bool {
     if run_git(repo, &["rev-parse", "--verify", "HEAD"]).is_err() {
         return false;
     }
-    match run_git(repo, &["rev-list", "--count", &format!("{remote}/{branch}..HEAD")]) {
+    match run_git(
+        repo,
+        &["rev-list", "--count", &format!("{remote}/{branch}..HEAD")],
+    ) {
         Ok(n) => n.trim().parse::<u64>().map(|c| c > 0).unwrap_or(true),
         Err(_) => true,
     }
@@ -139,7 +144,10 @@ fn remote_ahead(repo: &Path, remote: &str, branch: &str) -> bool {
     if run_git(repo, &["rev-parse", "--verify", "HEAD"]).is_err() {
         return false;
     }
-    match run_git(repo, &["rev-list", "--count", &format!("HEAD..{remote}/{branch}")]) {
+    match run_git(
+        repo,
+        &["rev-list", "--count", &format!("HEAD..{remote}/{branch}")],
+    ) {
         Ok(n) => n.trim().parse::<u64>().map(|c| c > 0).unwrap_or(false),
         Err(_) => false,
     }
@@ -162,16 +170,23 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
     let has_remote = run_git(repo, &["remote", "get-url", remote]).is_ok();
     let mut skipped_large: Vec<String> = Vec::new();
 
-    // Memory v2 root Markdown files are derived projections. Rebuild before
-    // committing, and fail closed if a partially activated v2 tree is found.
-    reconcile_memory_v2(repo)?;
+    {
+        let writer = crate::memory_control::v2::RepositoryWriter::new(repo);
+        let _memory_transaction = writer
+            .begin()
+            .map_err(|error| format!("Memory v2 sync lock failed: {error}"))?;
+        // Memory source snapshot, derived projections, staging and commit share
+        // one lock boundary, so the commit cannot knowingly contain an older
+        // projection than its authoritative YAML collection.
+        reconcile_memory_v2(repo)?;
 
-    // ① 本地改动先入库。此后工作区干净,后续步骤无须触碰用户正在编辑的文件。
-    if has_changes(repo)? {
-        skipped_large = stage_except_oversized(repo)?;
-        if has_staged(repo) {
-            let ts = chrono_now();
-            run_git(repo, &["commit", "-m", &format!("vault: auto-sync {ts}")])?;
+        // ① 本地改动先入库。此后工作区干净,后续步骤无须触碰用户正在编辑的文件。
+        if has_changes(repo)? {
+            skipped_large = stage_except_oversized(repo)?;
+            if has_staged(repo) {
+                let ts = chrono_now();
+                run_git(repo, &["commit", "-m", &format!("vault: auto-sync {ts}")])?;
+            }
         }
     }
 
@@ -184,11 +199,37 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
     // ② 只有远端确实有新提交时才合并。单设备场景下这里恒为 no-op,磁盘上的
     //    文件内容自始至终是用户自己那份。
     if fetch_ok && remote_ahead(repo, remote, branch) {
+        let writer = crate::memory_control::v2::RepositoryWriter::new(repo);
+        let _memory_transaction = writer
+            .begin()
+            .map_err(|error| format!("Memory v2 sync lock failed: {error}"))?;
+        // A Memory RPC may have completed while fetch was in flight. Commit
+        // that lock-consistent snapshot before touching the worktree by merge.
+        reconcile_memory_v2(repo)?;
+        if has_changes(repo)? {
+            let more = stage_except_oversized(repo)?;
+            for file in more {
+                if !skipped_large.contains(&file) {
+                    skipped_large.push(file);
+                }
+            }
+            if has_staged(repo) {
+                run_git(
+                    repo,
+                    &["commit", "-m", "vault: auto-sync before remote merge"],
+                )?;
+            }
+        }
         let upstream = format!("{remote}/{branch}");
-        if run_git(repo, &["merge", "--ff-only", &upstream]).is_err() {
+        let can_fast_forward =
+            run_git(repo, &["merge-base", "--is-ancestor", "HEAD", &upstream]).is_ok();
+        if can_fast_forward {
+            validate_memory_v2_revision(repo, &upstream)?;
+            run_git(repo, &["merge", "--ff-only", &upstream])?;
+        } else {
             // 真分叉:合并而非 rebase。rebase 会先把工作区 checkout 回上游再逐个
             // 重放本地提交,等于把 ① 要消灭的回滚窗口原样请回来。
-            if run_git(repo, &["merge", "--no-edit", "-m", "vault: auto-merge", &upstream]).is_err() {
+            if run_git(repo, &["merge", "--no-commit", "--no-edit", &upstream]).is_err() {
                 if !repo.join(".git").join("MERGE_HEAD").exists() {
                     let _ = run_git(repo, &["merge", "--abort"]);
                     return Err("merge failed, skipping cycle".into());
@@ -197,7 +238,10 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
                 // ordinary ours/theirs fallback. A same-path collision means
                 // tampering, an ID collision, or protocol damage.
                 let conflicted = conflicted_paths(repo)?;
-                if conflicted.iter().any(|path| path.starts_with(".notemd/memory/")) {
+                if conflicted
+                    .iter()
+                    .any(|path| path.starts_with(".notemd/memory/"))
+                {
                     let detail = conflicted
                         .iter()
                         .filter(|path| path.starts_with(".notemd/memory/"))
@@ -211,19 +255,17 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
                 }
                 // 冲突:留一份含双方内容的副本,工作区取本地版本(用户刚写的字优先)。
                 super::conflict::handle_conflicts(repo, "--ours")?;
-                let more = stage_except_oversized(repo)?;
-                for f in more {
-                    if !skipped_large.contains(&f) {
-                        skipped_large.push(f);
-                    }
-                }
-                run_git(repo, &["commit", "-m", "vault: auto-merge (conflicts resolved)"])?;
             }
         }
 
         // Git merges immutable records; the reducer decides semantic heads and
         // rewrites the disposable projections from the merged collection.
-        reconcile_memory_v2(repo)?;
+        if let Err(error) = reconcile_memory_v2(repo) {
+            if repo.join(".git").join("MERGE_HEAD").exists() {
+                let _ = run_git(repo, &["merge", "--abort"]);
+            }
+            return Err(error);
+        }
         if has_changes(repo)? {
             let more = stage_except_oversized(repo)?;
             for file in more {
@@ -231,9 +273,20 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
                     skipped_large.push(file);
                 }
             }
-            if has_staged(repo) {
-                run_git(repo, &["commit", "-m", "vault: reconcile Memory v2 projections"])?;
+        }
+        let merging = repo.join(".git").join("MERGE_HEAD").exists();
+        let staged = has_staged(repo);
+        if staged || merging {
+            let mut args = vec!["commit"];
+            if merging && !staged {
+                // Divergent histories can have identical trees (for example,
+                // each device made an empty metadata commit). `status
+                // --porcelain` is empty in that state even though MERGE_HEAD
+                // still requires a merge commit before push can converge.
+                args.push("--allow-empty");
             }
+            args.extend(["-m", "vault: reconcile Memory v2 projections"]);
+            run_git(repo, &args)?;
         }
     }
 
@@ -249,17 +302,22 @@ pub fn sync(repo: &Path, remote: &str, branch: &str) -> GitResult<SyncReport> {
 
 fn conflicted_paths(repo: &Path) -> GitResult<Vec<String>> {
     let out = run_git(repo, &["diff", "--name-only", "--diff-filter=U"])?;
-    Ok(out.lines().map(str::trim).filter(|path| !path.is_empty()).map(str::to_string).collect())
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 fn reconcile_memory_v2(repo: &Path) -> GitResult<()> {
-    use crate::memory_control::v2::{rebuild_projections, RepositoryMode, V2Repository};
+    use crate::memory_control::v2::{rebuild_projections_unlocked, RepositoryMode, V2Repository};
 
     let snapshot = V2Repository::new(repo)
         .load()
         .map_err(|error| format!("Memory v2 reconcile failed: {error}"))?;
     match snapshot.mode {
-        RepositoryMode::V2Active => rebuild_projections(repo)
+        RepositoryMode::V2Active => rebuild_projections_unlocked(repo)
             .map(|_| ())
             .map_err(|error| format!("Memory v2 reconcile failed: {error}")),
         RepositoryMode::V2Incomplete => Err(
@@ -267,6 +325,38 @@ fn reconcile_memory_v2(repo: &Path) -> GitResult<()> {
         ),
         RepositoryMode::Absent | RepositoryMode::LegacyV1 => Ok(()),
     }
+}
+
+fn validate_memory_v2_revision(repo: &Path, revision: &str) -> GitResult<()> {
+    let temp = tempfile::tempdir().map_err(|error| format!("Memory v2 validation: {error}"))?;
+    let worktree = temp.path().join("candidate");
+    run_git(
+        repo,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            "--force",
+            worktree
+                .to_str()
+                .ok_or("Memory v2 validation path is not UTF-8")?,
+            revision,
+        ],
+    )?;
+    let validation = reconcile_memory_v2(&worktree);
+    let cleanup = run_git(
+        repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            worktree
+                .to_str()
+                .ok_or("Memory v2 validation path is not UTF-8")?,
+        ],
+    );
+    validation?;
+    cleanup.map(|_| ())
 }
 
 fn chrono_now() -> String {
@@ -368,9 +458,15 @@ mod proxy_tests {
         .unwrap();
 
         // `config --get` exits non-zero when the key is unset.
-        let after =
-            super::super::git_ops::run_git_with_proxy(dir.path(), &["config", "--get", "http.proxy"], None);
-        assert!(after.is_err(), "http.proxy leaked into the repo config: {after:?}");
+        let after = super::super::git_ops::run_git_with_proxy(
+            dir.path(),
+            &["config", "--get", "http.proxy"],
+            None,
+        );
+        assert!(
+            after.is_err(),
+            "http.proxy leaked into the repo config: {after:?}"
+        );
     }
 }
 
@@ -381,7 +477,12 @@ mod gate_tests {
     use tempfile::TempDir;
 
     fn git(dir: &std::path::Path, args: &[&str]) {
-        assert!(Command::new("git").args(args).current_dir(dir).status().unwrap().success());
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap()
+            .success());
     }
 
     fn init_repo() -> TempDir {
@@ -464,13 +565,19 @@ mod gate_tests {
 
         // 远端不可达的一轮:commit 落盘、push 失败
         let missing = root.path().join("missing.git");
-        git(&work, &["remote", "set-url", "origin", missing.to_str().unwrap()]);
+        git(
+            &work,
+            &["remote", "set-url", "origin", missing.to_str().unwrap()],
+        );
         std::fs::write(work.join("note.md"), "stranded\n").unwrap();
         let err = sync(&work, "origin", "main").unwrap_err();
         assert!(err.contains("push failed"), "unexpected error: {err}");
 
         // 远端恢复后的下一轮:工作区已干净,必须补推滞留提交
-        git(&work, &["remote", "set-url", "origin", bare.to_str().unwrap()]);
+        git(
+            &work,
+            &["remote", "set-url", "origin", bare.to_str().unwrap()],
+        );
         sync(&work, "origin", "main").unwrap();
 
         let local = run_git(&work, &["rev-parse", "HEAD"]).unwrap();
@@ -548,7 +655,8 @@ mod gate_tests {
         let note = work.join("note.md");
         std::fs::write(&note, "base\nUSER-EDIT\n").unwrap();
 
-        let (res, reverted) = watch_for_revert(&note, "USER-EDIT", || sync(&work, "origin", "main"));
+        let (res, reverted) =
+            watch_for_revert(&note, "USER-EDIT", || sync(&work, "origin", "main"));
         res.unwrap();
 
         assert_eq!(reverted, None, "同步期间用户的编辑从磁盘上消失过,读到的是");
@@ -558,7 +666,10 @@ mod gate_tests {
             "工作区被 reset 回 HEAD:\n{reflog}"
         );
         assert!(
-            run_git(&work, &["stash", "list"]).unwrap().trim().is_empty(),
+            run_git(&work, &["stash", "list"])
+                .unwrap()
+                .trim()
+                .is_empty(),
             "不应残留 stash"
         );
         assert_eq!(std::fs::read_to_string(&note).unwrap(), "base\nUSER-EDIT\n");
@@ -574,10 +685,14 @@ mod gate_tests {
         let note = work.join("note.md");
         std::fs::write(&note, "base\nUSER-EDIT\n").unwrap();
 
-        let (res, reverted) = watch_for_revert(&note, "USER-EDIT", || sync(&work, "origin", "main"));
+        let (res, reverted) =
+            watch_for_revert(&note, "USER-EDIT", || sync(&work, "origin", "main"));
         res.unwrap();
 
-        assert_eq!(reverted, None, "分叉合并期间用户的编辑从磁盘上消失过,读到的是");
+        assert_eq!(
+            reverted, None,
+            "分叉合并期间用户的编辑从磁盘上消失过,读到的是"
+        );
         assert_eq!(std::fs::read_to_string(&note).unwrap(), "base\nUSER-EDIT\n");
         assert_eq!(
             std::fs::read_to_string(work.join("theirs.md")).unwrap(),
@@ -585,8 +700,47 @@ mod gate_tests {
             "远端的改动应被合并进来"
         );
         assert!(
-            run_git(&work, &["status", "--porcelain"]).unwrap().trim().is_empty(),
+            run_git(&work, &["status", "--porcelain"])
+                .unwrap()
+                .trim()
+                .is_empty(),
             "同步后工作区应干净"
+        );
+    }
+
+    #[test]
+    fn divergent_empty_commits_are_closed_by_an_empty_merge_commit() {
+        let root = TempDir::new().unwrap();
+        let (work, bare) = init_remote_pair(root.path());
+        let other = root.path().join("other-empty");
+        git(root.path(), &["clone", "-q", "remote.git", "other-empty"]);
+        git(&other, &["config", "user.email", "o@o"]);
+        git(&other, &["config", "user.name", "o"]);
+
+        git(
+            &work,
+            &["commit", "--allow-empty", "-q", "-m", "local empty"],
+        );
+        git(
+            &other,
+            &["commit", "--allow-empty", "-q", "-m", "remote empty"],
+        );
+        git(&other, &["push", "-q", "origin", "main"]);
+
+        sync(&work, "origin", "main").unwrap();
+
+        assert!(
+            !work.join(".git/MERGE_HEAD").exists(),
+            "sync must never return with an unfinished merge"
+        );
+        let head = run_git(&work, &["rev-parse", "HEAD"]).unwrap();
+        let remote_head = run_git(&bare, &["rev-parse", "main"]).unwrap();
+        assert_eq!(head.trim(), remote_head.trim());
+        let parents = run_git(&work, &["rev-list", "--parents", "-n", "1", "HEAD"]).unwrap();
+        assert_eq!(
+            parents.split_whitespace().count(),
+            3,
+            "the converged head must have both divergent commits as parents"
         );
     }
 
@@ -615,7 +769,10 @@ mod gate_tests {
             .collect();
         assert_eq!(copies.len(), 1, "应留下一份冲突副本, got {copies:?}");
         let copy = std::fs::read_to_string(work.join(&copies[0])).unwrap();
-        assert!(copy.contains("USER-EDIT") && copy.contains("theirs"), "副本应含双方内容:\n{copy}");
+        assert!(
+            copy.contains("USER-EDIT") && copy.contains("theirs"),
+            "副本应含双方内容:\n{copy}"
+        );
         assert!(
             !work.join(".git/MERGE_HEAD").exists(),
             "不应停留在合并中间态"

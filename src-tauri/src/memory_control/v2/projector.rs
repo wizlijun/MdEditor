@@ -1,6 +1,7 @@
 use super::model::*;
 use super::reducer::{reduce, ReducerError};
 use super::repository::{RepositoryError, RepositorySnapshot, V2Repository};
+use super::writer::RepositoryWriter;
 use chrono::{SecondsFormat, Utc};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
@@ -46,6 +47,12 @@ pub fn project(
             .then_with(|| kind_rank(left.claim_kind).cmp(&kind_rank(right.claim_kind)))
             .then_with(|| left.claim_id.cmp(&right.claim_id))
     });
+    let action_sensitive_conflict = snapshot.claims.iter().any(|claim| {
+        claim
+            .conflict
+            .as_ref()
+            .is_some_and(|conflict| conflict.risk_class == RiskClass::ActionSensitive)
+    });
     Ok(ProjectionBundle {
         user: render_target(
             "USER",
@@ -57,6 +64,7 @@ pub fn project(
                 .cloned()
                 .unwrap_or_default(),
             &views,
+            action_sensitive_conflict,
         ),
         memory: render_target(
             "MEMORY",
@@ -68,6 +76,7 @@ pub fn project(
                 .cloned()
                 .unwrap_or_default(),
             &views,
+            action_sensitive_conflict,
         ),
     })
 }
@@ -100,6 +109,11 @@ pub fn select_context(
                 code: "MEMORY_INVALID_DAG",
                 message: format!("missing context head for {}", view.claim_id),
             })?;
+        if revision.projection.visibility == Visibility::UiOnly
+            || revision.consent.scope != "personal-assistant-only"
+        {
+            continue;
+        }
         if request.external_transfer
             && revision.consent.external_provider_policy != ExternalProviderPolicy::Allow
         {
@@ -121,17 +135,43 @@ pub fn select_context(
     let conflicts = snapshot
         .claims
         .iter()
-        .filter_map(|claim| claim.conflict.clone())
+        .filter_map(|claim| claim.conflict.as_ref())
+        .filter(|conflict| {
+            conflict.heads.iter().any(|head| {
+                revisions
+                    .get(head.revision_id.as_str())
+                    .is_some_and(|revision| context_scope_matches(revision, &request))
+            })
+        })
+        .cloned()
         .collect::<Vec<_>>();
+    let action_sensitive_conflict = conflicts
+        .iter()
+        .any(|conflict| conflict.risk_class == RiskClass::ActionSensitive);
     Ok(MemoryContextV2 {
         request,
-        action_allowed: snapshot.action_allowed && conflicts.is_empty(),
+        action_allowed: snapshot.protocol.writable
+            && snapshot.authority.action_allowed
+            && !action_sensitive_conflict,
         claims,
         conflicts,
     })
 }
 
+fn context_scope_matches(revision: &MemoryClaimRevision, request: &ContextRequest) -> bool {
+    revision.projection.visibility != Visibility::UiOnly
+        && revision.consent.scope == "personal-assistant-only"
+        && revision.context.spaces.contains(&request.space)
+        && revision.consent.allowed_purposes.contains(&request.purpose)
+}
+
 pub fn rebuild_projections(root: &Path) -> Result<ProjectionBundle, String> {
+    let writer = RepositoryWriter::new(root);
+    let _transaction = writer.begin().map_err(|error| error.to_string())?;
+    rebuild_projections_unlocked(root)
+}
+
+pub(crate) fn rebuild_projections_unlocked(root: &Path) -> Result<ProjectionBundle, String> {
     let repository = V2Repository::new(root).load().map_err(repository_error)?;
     if repository.mode != RepositoryMode::V2Active {
         return Err(format!("MEMORY_PROTOCOL_NOT_ACTIVE: {:?}", repository.mode));
@@ -161,6 +201,7 @@ fn render_target(
     target: ProjectionTarget,
     registry: Vec<String>,
     claims: &[&ClaimView],
+    action_sensitive_conflict: bool,
 ) -> String {
     let mut grouped = BTreeMap::<String, Vec<&ClaimView>>::new();
     for claim in claims {
@@ -183,7 +224,12 @@ fn render_target(
             categories.push(category.clone());
         }
     }
-    let mut out = format!("# {title}\n");
+    let mut out = format!(
+        "<!-- notemd-memory-control -->\n<!-- GENERATED / READ-ONLY: derived from .notemd/memory YAML; do not edit manually. -->\n# {title}\n"
+    );
+    if action_sensitive_conflict {
+        out.push_str("\n> 存在未解决的权限或边界冲突，相关行动已暂停。\n");
+    }
     for category in categories {
         let Some(entries) = grouped.get(&category) else {
             continue;
@@ -294,10 +340,19 @@ mod tests {
             ProjectionTarget::User,
             vec!["preferences".into()],
             &[&claim],
+            false,
         );
         assert_eq!(
             rendered,
-            "# USER\n\n## preferences\n\n- 第一行\n  \\## 伪标题\n  \\- 伪条目\n"
+            "<!-- notemd-memory-control -->\n<!-- GENERATED / READ-ONLY: derived from .notemd/memory YAML; do not edit manually. -->\n# USER\n\n## preferences\n\n- 第一行\n  \\## 伪标题\n  \\- 伪条目\n"
         );
+    }
+
+    #[test]
+    fn action_sensitive_conflict_emits_only_a_generic_safety_notice() {
+        let rendered = render_target("USER", ProjectionTarget::User, vec![], &[], true);
+        assert!(rendered.contains("存在未解决的权限或边界冲突，相关行动已暂停"));
+        assert!(!rendered.contains("允许发送"));
+        assert!(!rendered.contains("禁止发送"));
     }
 }

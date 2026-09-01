@@ -52,9 +52,21 @@ pub struct RepositoryWriter {
     root: PathBuf,
 }
 
+pub struct RepositoryTransaction<'a> {
+    writer: &'a RepositoryWriter,
+    _guard: WriteLock,
+}
+
 impl RepositoryWriter {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
+    }
+
+    pub fn begin(&self) -> Result<RepositoryTransaction<'_>, WriterError> {
+        Ok(RepositoryTransaction {
+            writer: self,
+            _guard: self.lock()?,
+        })
     }
 
     pub fn initialize(
@@ -115,14 +127,7 @@ impl RepositoryWriter {
         value: MemoryClaimRevision,
     ) -> Result<Published<MemoryClaimRevision>, WriterError> {
         let _guard = self.lock()?;
-        let shard = value.claim_id.get(..2).unwrap_or("__");
-        let dir = self
-            .root
-            .join(".notemd/memory/claims")
-            .join(shard)
-            .join(&value.claim_id)
-            .join("revisions");
-        publish(&self.tmp_dir(), &dir, &value.revision_id.clone(), value)
+        self.publish_claim_unlocked(value)
     }
 
     pub fn publish_operation(
@@ -143,6 +148,27 @@ impl RepositoryWriter {
         value: ContextManifest,
     ) -> Result<Published<ContextManifest>, WriterError> {
         let _guard = self.lock()?;
+        self.publish_context_manifest_unlocked(value)
+    }
+
+    fn publish_claim_unlocked(
+        &self,
+        value: MemoryClaimRevision,
+    ) -> Result<Published<MemoryClaimRevision>, WriterError> {
+        let shard = value.claim_id.get(..2).unwrap_or("__");
+        let dir = self
+            .root
+            .join(".notemd/memory/claims")
+            .join(shard)
+            .join(&value.claim_id)
+            .join("revisions");
+        publish(&self.tmp_dir(), &dir, &value.revision_id.clone(), value)
+    }
+
+    fn publish_context_manifest_unlocked(
+        &self,
+        value: ContextManifest,
+    ) -> Result<Published<ContextManifest>, WriterError> {
         let month = value
             .request
             .as_of_valid_time
@@ -205,6 +231,22 @@ impl RepositoryWriter {
         file.lock_exclusive()
             .map_err(|error| WriterError::new("MEMORY_IO", error.to_string()))?;
         Ok(WriteLock(file))
+    }
+}
+
+impl RepositoryTransaction<'_> {
+    pub fn publish_claim(
+        &self,
+        value: MemoryClaimRevision,
+    ) -> Result<Published<MemoryClaimRevision>, WriterError> {
+        self.writer.publish_claim_unlocked(value)
+    }
+
+    pub fn publish_context_manifest(
+        &self,
+        value: ContextManifest,
+    ) -> Result<Published<ContextManifest>, WriterError> {
+        self.writer.publish_context_manifest_unlocked(value)
     }
 }
 

@@ -20,6 +20,11 @@ describe('isManagedMemoryProjection', () => {
     )).toBe(true)
   })
 
+  it('recognises the stable Memory v2 projector header without inspecting fact entries', () => {
+    const generated = '<!-- notemd-memory-control -->\n<!-- GENERATED / READ-ONLY: derived from .notemd/memory YAML; do not edit manually. -->\n# USER\n\n## preferences\n\n- 多行事实\n  第二行\n'
+    expect(isManagedMemoryProjection('/vault/USER.md', generated)).toBe(true)
+  })
+
   it('does not reserve an ordinary same-named document without a control signal', () => {
     expect(isManagedMemoryProjection('/archive/USER.md', '# A user guide\n')).toBe(false)
   })

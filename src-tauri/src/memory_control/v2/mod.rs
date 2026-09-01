@@ -16,10 +16,11 @@ pub use canonical::{
     canonical_bytes, canonical_yaml, payload_sha256, raw_sha256, CanonicalPayload,
 };
 pub use model::*;
+pub(crate) use projector::rebuild_projections_unlocked;
 pub use projector::{project, rebuild_projections, select_context, ProjectionBundle};
 pub use reducer::{reduce, ReducerError};
 pub use repository::{Loaded, RepositoryError, RepositorySnapshot, V2Repository};
 pub use service::{dispatch as dispatch_rpc, propose_pending, PendingProposalInput};
-pub use writer::{Published, RepositoryWriter, WriterError};
+pub use writer::{Published, RepositoryTransaction, RepositoryWriter, WriterError};
 
 pub const PROTOCOL_MAJOR: u32 = 2;
