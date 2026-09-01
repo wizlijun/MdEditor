@@ -1,0 +1,5 @@
+{
+  "permission_mode": "workspace-write",
+  "on_permission_request": "reject",
+  "rationale": "主题设计只需读取固定 inventory 并写固定 proposal；运行时越权请求一律拒绝，插件仍会在应用前验证 SHA、schema、路径与完整覆盖。"
+}

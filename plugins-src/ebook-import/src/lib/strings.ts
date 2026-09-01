@@ -96,6 +96,59 @@ export type MessageKey =
   | 'log.baiduStatus.success'
   | 'log.baiduStatus.failed'
   | 'settings.ocrProvider'
+  | 'topic.importTitle'
+  | 'topic.required'
+  | 'topic.manage'
+  | 'topic.emptySetup'
+  | 'topic.current'
+  | 'topic.bookCount'
+  | 'topic.agentDesign'
+  | 'topic.agentRunning'
+  | 'topic.unclassifiedCount'
+  | 'topic.chooseForBook'
+  | 'topic.choose'
+  | 'topic.proposalTitle'
+  | 'topic.proposalHint'
+  | 'topic.assignmentCount'
+  | 'topic.applyProposal'
+  | 'topic.filter'
+  | 'topic.all'
+  | 'topic.unclassified'
+  | 'topic.manager.title'
+  | 'topic.manager.hint'
+  | 'topic.manager.close'
+  | 'topic.manager.newTopic'
+  | 'topic.manager.sort'
+  | 'topic.manager.up'
+  | 'topic.manager.down'
+  | 'topic.manager.id'
+  | 'topic.manager.idLocked'
+  | 'topic.manager.label'
+  | 'topic.manager.labelPlaceholder'
+  | 'topic.manager.description'
+  | 'topic.manager.descriptionPlaceholder'
+  | 'topic.manager.index'
+  | 'topic.manager.indexPlaceholder'
+  | 'topic.manager.vocabulary'
+  | 'topic.manager.addTerm'
+  | 'topic.manager.term'
+  | 'topic.manager.termDescription'
+  | 'topic.manager.removeTerm'
+  | 'topic.manager.migrate'
+  | 'topic.manager.chooseOther'
+  | 'topic.manager.delete'
+  | 'topic.manager.add'
+  | 'topic.manager.fix'
+  | 'topic.manager.saving'
+  | 'topic.validation.required'
+  | 'topic.validation.tooFew'
+  | 'topic.validation.tooMany'
+  | 'topic.validation.invalidId'
+  | 'topic.validation.invalidIndex'
+  | 'topic.validation.duplicateId'
+  | 'topic.validation.duplicateLabel'
+  | 'topic.validation.duplicateIndex'
+  | 'topic.validation.duplicateTerm'
 
 type Catalog = Record<MessageKey, string>
 
@@ -190,6 +243,59 @@ const en: Catalog = {
   'log.baiduStatus.success': 'done',
   'log.baiduStatus.failed': 'failed',
   'settings.ocrProvider': 'OCR service',
+  'topic.importTitle': 'Import topic',
+  'topic.required': 'Every new book must belong to one topic',
+  'topic.manage': 'Manage topics',
+  'topic.emptySetup': 'No topics yet. Create 1–5 topics before importing books.',
+  'topic.current': 'Current import topic',
+  'topic.bookCount': '{count} books',
+  'topic.agentDesign': 'Design topics with AI',
+  'topic.agentRunning': 'AI is designing…',
+  'topic.unclassifiedCount': '{count} existing books need a topic',
+  'topic.chooseForBook': 'Choose a topic for {name}',
+  'topic.choose': 'Choose a topic…',
+  'topic.proposalTitle': 'AI topic proposal',
+  'topic.proposalHint': 'Review the proposed topics and book assignments before applying them.',
+  'topic.assignmentCount': '{count} assigned books',
+  'topic.applyProposal': 'Apply proposal',
+  'topic.filter': 'Filter library by topic',
+  'topic.all': 'All topics',
+  'topic.unclassified': 'Unclassified',
+  'topic.manager.title': 'Manage book topics',
+  'topic.manager.hint': 'This order is also used on the import screen.',
+  'topic.manager.close': 'Close',
+  'topic.manager.newTopic': 'New topic {number}',
+  'topic.manager.sort': 'Topic order',
+  'topic.manager.up': 'Move up',
+  'topic.manager.down': 'Move down',
+  'topic.manager.id': 'Stable ID',
+  'topic.manager.idLocked': 'Cannot be changed after creation',
+  'topic.manager.label': 'Topic name',
+  'topic.manager.labelPlaceholder': 'For example: Software Engineering',
+  'topic.manager.description': 'Domain description',
+  'topic.manager.descriptionPlaceholder': 'Define what belongs here so people and agents classify consistently',
+  'topic.manager.index': 'Index file',
+  'topic.manager.indexPlaceholder': 'Software Engineering.index.md',
+  'topic.manager.vocabulary': 'Related vocabulary and descriptions',
+  'topic.manager.addTerm': 'Add term',
+  'topic.manager.term': 'Term',
+  'topic.manager.termDescription': 'Describe what this term means in the domain',
+  'topic.manager.removeTerm': 'Remove',
+  'topic.manager.migrate': 'Migrate books to',
+  'topic.manager.chooseOther': 'Choose another topic…',
+  'topic.manager.delete': 'Delete topic',
+  'topic.manager.add': 'Add topic',
+  'topic.manager.fix': 'Complete or correct the topic information',
+  'topic.manager.saving': 'Saving…',
+  'topic.validation.required': 'This field is required',
+  'topic.validation.tooFew': 'At least two entries are required',
+  'topic.validation.tooMany': 'At most five topics are allowed',
+  'topic.validation.invalidId': 'Use lowercase letters, digits, and single hyphens only',
+  'topic.validation.invalidIndex': 'Use one safe .index.md filename in the library root',
+  'topic.validation.duplicateId': 'Topic IDs must be unique',
+  'topic.validation.duplicateLabel': 'Topic names must be unique',
+  'topic.validation.duplicateIndex': 'Index filenames must be unique',
+  'topic.validation.duplicateTerm': 'Terms must be unique within a topic',
 }
 
 const zh: Catalog = {
@@ -281,6 +387,59 @@ const zh: Catalog = {
   'log.baiduStatus.success': '已完成',
   'log.baiduStatus.failed': '失败',
   'settings.ocrProvider': 'OCR 服务',
+  'topic.importTitle': '导入主题',
+  'topic.required': '每本新书必须归入一个主题',
+  'topic.manage': '管理主题',
+  'topic.emptySetup': '尚未设置主题。创建 1–5 个主题后即可导入书籍。',
+  'topic.current': '当前导入主题',
+  'topic.bookCount': '{count} 本',
+  'topic.agentDesign': 'AI 根据书库设计主题',
+  'topic.agentRunning': 'AI 正在设计…',
+  'topic.unclassifiedCount': '有 {count} 本旧书尚未分类',
+  'topic.chooseForBook': '为《{name}》选择主题',
+  'topic.choose': '选择主题…',
+  'topic.proposalTitle': 'AI 主题方案',
+  'topic.proposalHint': '应用前请确认主题以及每个主题包含的书籍数量。',
+  'topic.assignmentCount': '归入 {count} 本',
+  'topic.applyProposal': '应用方案',
+  'topic.filter': '按主题筛选书库',
+  'topic.all': '全部主题',
+  'topic.unclassified': '未分类',
+  'topic.manager.title': '管理书籍主题',
+  'topic.manager.hint': '主题顺序也会用于导入界面的展示顺序。',
+  'topic.manager.close': '关闭',
+  'topic.manager.newTopic': '新主题 {number}',
+  'topic.manager.sort': '主题排序',
+  'topic.manager.up': '上移',
+  'topic.manager.down': '下移',
+  'topic.manager.id': '稳定 ID',
+  'topic.manager.idLocked': '创建后不可修改',
+  'topic.manager.label': '主题名称',
+  'topic.manager.labelPlaceholder': '例如：软件工程',
+  'topic.manager.description': '领域说明',
+  'topic.manager.descriptionPlaceholder': '说明主题边界，以便用户和 Agent 一致分类',
+  'topic.manager.index': '索引文件',
+  'topic.manager.indexPlaceholder': '软件工程.index.md',
+  'topic.manager.vocabulary': '相关词汇与描述',
+  'topic.manager.addTerm': '添加词汇',
+  'topic.manager.term': '词汇',
+  'topic.manager.termDescription': '描述这个词在领域中的含义',
+  'topic.manager.removeTerm': '删除',
+  'topic.manager.migrate': '删除前迁移到',
+  'topic.manager.chooseOther': '选择其他主题…',
+  'topic.manager.delete': '删除主题',
+  'topic.manager.add': '添加主题',
+  'topic.manager.fix': '请补全或修正主题信息',
+  'topic.manager.saving': '保存中…',
+  'topic.validation.required': '此项不能为空',
+  'topic.validation.tooFew': '至少需要两项',
+  'topic.validation.tooMany': '最多只能有 5 个主题',
+  'topic.validation.invalidId': '只能使用小写字母、数字和单个连字符',
+  'topic.validation.invalidIndex': '请输入书库根目录下安全的 .index.md 文件名',
+  'topic.validation.duplicateId': '主题 ID 不能重复',
+  'topic.validation.duplicateLabel': '主题名称不能重复',
+  'topic.validation.duplicateIndex': '索引文件名不能重复',
+  'topic.validation.duplicateTerm': '同一主题内的词汇不能重复',
 }
 
 const ja: Catalog = {
@@ -374,6 +533,59 @@ const ja: Catalog = {
   'log.baiduStatus.success': '完了',
   'log.baiduStatus.failed': '失敗',
   'settings.ocrProvider': 'OCR サービス',
+  'topic.importTitle': '取り込みテーマ',
+  'topic.required': '新しい本には必ずテーマを1つ指定します',
+  'topic.manage': 'テーマを管理',
+  'topic.emptySetup': 'テーマがありません。取り込み前に1〜5個作成してください。',
+  'topic.current': '現在の取り込みテーマ',
+  'topic.bookCount': '{count} 冊',
+  'topic.agentDesign': 'AIでテーマを設計',
+  'topic.agentRunning': 'AIが設計中…',
+  'topic.unclassifiedCount': '既存の {count} 冊が未分類です',
+  'topic.chooseForBook': '「{name}」のテーマを選択',
+  'topic.choose': 'テーマを選択…',
+  'topic.proposalTitle': 'AIテーマ案',
+  'topic.proposalHint': '適用前にテーマと本の割り当てを確認してください。',
+  'topic.assignmentCount': '{count} 冊を割り当て',
+  'topic.applyProposal': '案を適用',
+  'topic.filter': 'テーマで蔵書を絞り込む',
+  'topic.all': 'すべてのテーマ',
+  'topic.unclassified': '未分類',
+  'topic.manager.title': '書籍テーマを管理',
+  'topic.manager.hint': 'この順序は取り込み画面にも使われます。',
+  'topic.manager.close': '閉じる',
+  'topic.manager.newTopic': '新しいテーマ {number}',
+  'topic.manager.sort': 'テーマの順序',
+  'topic.manager.up': '上へ',
+  'topic.manager.down': '下へ',
+  'topic.manager.id': '固定 ID',
+  'topic.manager.idLocked': '作成後は変更できません',
+  'topic.manager.label': 'テーマ名',
+  'topic.manager.labelPlaceholder': '例：ソフトウェア工学',
+  'topic.manager.description': '分野の説明',
+  'topic.manager.descriptionPlaceholder': '人と Agent が一貫して分類できるよう境界を説明します',
+  'topic.manager.index': '索引ファイル',
+  'topic.manager.indexPlaceholder': 'ソフトウェア工学.index.md',
+  'topic.manager.vocabulary': '関連語彙と説明',
+  'topic.manager.addTerm': '語彙を追加',
+  'topic.manager.term': '語彙',
+  'topic.manager.termDescription': 'この分野での意味を説明',
+  'topic.manager.removeTerm': '削除',
+  'topic.manager.migrate': '削除前の移動先',
+  'topic.manager.chooseOther': '別のテーマを選択…',
+  'topic.manager.delete': 'テーマを削除',
+  'topic.manager.add': 'テーマを追加',
+  'topic.manager.fix': 'テーマ情報を入力または修正してください',
+  'topic.manager.saving': '保存中…',
+  'topic.validation.required': '必須項目です',
+  'topic.validation.tooFew': '2項目以上必要です',
+  'topic.validation.tooMany': 'テーマは最大5個です',
+  'topic.validation.invalidId': '小文字、数字、単一ハイフンのみ使用できます',
+  'topic.validation.invalidIndex': 'ルート直下の安全な .index.md ファイル名を指定してください',
+  'topic.validation.duplicateId': 'テーマ ID は重複できません',
+  'topic.validation.duplicateLabel': 'テーマ名は重複できません',
+  'topic.validation.duplicateIndex': '索引ファイル名は重複できません',
+  'topic.validation.duplicateTerm': 'テーマ内の語彙は重複できません',
 }
 
 const de: Catalog = {
@@ -467,6 +679,59 @@ const de: Catalog = {
   'log.baiduStatus.success': 'fertig',
   'log.baiduStatus.failed': 'fehlgeschlagen',
   'settings.ocrProvider': 'OCR-Dienst',
+  'topic.importTitle': 'Importthema',
+  'topic.required': 'Jedes neue Buch benötigt genau ein Thema',
+  'topic.manage': 'Themen verwalten',
+  'topic.emptySetup': 'Noch keine Themen. Vor dem Import 1–5 Themen anlegen.',
+  'topic.current': 'Aktuelles Importthema',
+  'topic.bookCount': '{count} Bücher',
+  'topic.agentDesign': 'Themen mit KI entwerfen',
+  'topic.agentRunning': 'KI entwirft…',
+  'topic.unclassifiedCount': '{count} vorhandene Bücher sind nicht klassifiziert',
+  'topic.chooseForBook': 'Thema für „{name}“ auswählen',
+  'topic.choose': 'Thema auswählen…',
+  'topic.proposalTitle': 'KI-Themenvorschlag',
+  'topic.proposalHint': 'Bitte Themen und Buchzuordnungen vor dem Anwenden prüfen.',
+  'topic.assignmentCount': '{count} Bücher zugeordnet',
+  'topic.applyProposal': 'Vorschlag anwenden',
+  'topic.filter': 'Bibliothek nach Thema filtern',
+  'topic.all': 'Alle Themen',
+  'topic.unclassified': 'Nicht klassifiziert',
+  'topic.manager.title': 'Buchthemen verwalten',
+  'topic.manager.hint': 'Diese Reihenfolge gilt auch im Importfenster.',
+  'topic.manager.close': 'Schließen',
+  'topic.manager.newTopic': 'Neues Thema {number}',
+  'topic.manager.sort': 'Themenreihenfolge',
+  'topic.manager.up': 'Nach oben',
+  'topic.manager.down': 'Nach unten',
+  'topic.manager.id': 'Stabile ID',
+  'topic.manager.idLocked': 'Nach dem Anlegen nicht änderbar',
+  'topic.manager.label': 'Themenname',
+  'topic.manager.labelPlaceholder': 'Zum Beispiel: Softwareentwicklung',
+  'topic.manager.description': 'Fachgebietsbeschreibung',
+  'topic.manager.descriptionPlaceholder': 'Grenzen für eine einheitliche Zuordnung durch Menschen und Agents beschreiben',
+  'topic.manager.index': 'Indexdatei',
+  'topic.manager.indexPlaceholder': 'Softwareentwicklung.index.md',
+  'topic.manager.vocabulary': 'Verwandte Begriffe und Beschreibungen',
+  'topic.manager.addTerm': 'Begriff hinzufügen',
+  'topic.manager.term': 'Begriff',
+  'topic.manager.termDescription': 'Bedeutung des Begriffs im Fachgebiet',
+  'topic.manager.removeTerm': 'Entfernen',
+  'topic.manager.migrate': 'Bücher verschieben nach',
+  'topic.manager.chooseOther': 'Anderes Thema auswählen…',
+  'topic.manager.delete': 'Thema löschen',
+  'topic.manager.add': 'Thema hinzufügen',
+  'topic.manager.fix': 'Themenangaben vervollständigen oder korrigieren',
+  'topic.manager.saving': 'Speichert…',
+  'topic.validation.required': 'Dieses Feld ist erforderlich',
+  'topic.validation.tooFew': 'Mindestens zwei Einträge sind erforderlich',
+  'topic.validation.tooMany': 'Höchstens fünf Themen sind erlaubt',
+  'topic.validation.invalidId': 'Nur Kleinbuchstaben, Ziffern und einzelne Bindestriche verwenden',
+  'topic.validation.invalidIndex': 'Einen sicheren .index.md-Dateinamen im Bibliotheksstamm verwenden',
+  'topic.validation.duplicateId': 'Themen-IDs müssen eindeutig sein',
+  'topic.validation.duplicateLabel': 'Themennamen müssen eindeutig sein',
+  'topic.validation.duplicateIndex': 'Indexdateinamen müssen eindeutig sein',
+  'topic.validation.duplicateTerm': 'Begriffe müssen innerhalb eines Themas eindeutig sein',
 }
 
 const registry: Record<Locale, Catalog> = { en, zh, ja, de }

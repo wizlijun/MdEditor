@@ -1,0 +1,7 @@
+{
+  "name": "设计电子书主题",
+  "description": "Use the ebook metadata inventory to propose 2–5 durable topics and assign every book exactly once.",
+  "prompt": "读取调用方给出的 inventory.yml，根据书名与 metadata 设计 2–5 个长期稳定的书籍领域主题，并把每本书恰好归入一个主题。只写调用方给出的固定 topics.proposal.yml；严格遵循任务协议和 YAML schema，不修改书籍、topics.yml、meta.yml 或 index。",
+  "max_turns": 40,
+  "timeout_seconds": 900
+}

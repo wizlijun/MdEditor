@@ -90,8 +90,8 @@ fn mapped_type_origin(concept_type: &str) -> Option<Origin> {
     match concept_type {
         "Note" | "Outline Note" | "Daily Note" | "Wiki Page" | "Idea" | "Next" | "Task"
         | "Vault Conventions" | "User Profile" | "Memory" | "Trace Request" => Some(Origin::Human),
-        "Book Summary" | "Answer" | "Idea Proof" | "Reading Report" | "Decision Board"
-        | "Decision Archive" | "Trace Report" => Some(Origin::Derived),
+        "Book Summary" | "Book Topic Index" | "Answer" | "Idea Proof" | "Reading Report"
+        | "Decision Board" | "Decision Archive" | "Trace Report" => Some(Origin::Derived),
         "Book" | "Trace Material" => Some(Origin::Source),
         _ => None,
     }
