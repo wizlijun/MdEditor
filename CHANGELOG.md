@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.901.5 — 2026-09-01
+
 ### Added
 
 - **Next now manages Tasks as well as Ideas.** Each Task is stored as its own Markdown file under `inbox/tasks`, can be created directly as the current action, and keeps its content separate from the human-controlled lifecycle ledger. Vault instructions teach agents to add only concrete work owned by the configured Vault owner, with project, source and deduplication metadata instead of silently committing or completing work on the user's behalf.
