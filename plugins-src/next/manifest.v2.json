@@ -5,7 +5,7 @@
   "version": "1.4.1",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.829.2"
+    "notemd": ">=6.901.1"
   },
   "description": "Give every idea a next step — or a place to rest.",
   "ui": "ui/",
