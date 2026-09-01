@@ -6,6 +6,8 @@
 
 ## 未发布
 
+## v6.901.9 — 2026-09-01
+
 ### 新增
 
 - **Memory 2.0 引入由 Git 支撑的个人 Claim 台账。** 不可变 YAML 修订现在按主体、断言、批准含义、有效时间、信任层、风险和场景范围区分偏好、边界、决定、信念、观察与物质事实。Agent 只能为 Vault owner 提出 pending 主张；人工决定会绑定精确的 protocol、authority 与 revision。

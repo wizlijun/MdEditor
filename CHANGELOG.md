@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.901.9 — 2026-09-01
+
 ### Added
 
 - **Memory 2.0 introduces a Git-backed personal Claim ledger.** Immutable YAML revisions now distinguish preferences, boundaries, decisions, beliefs, observations and material facts by subject, assertion, approval meaning, valid time, trust, risk and context scope. Agents may only propose pending claims about the Vault owner; a human decision is bound to the exact protocol, authority and revision.
