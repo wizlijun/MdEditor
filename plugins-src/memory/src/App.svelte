@@ -48,7 +48,13 @@
   }
   async function changeStatus(entry: MemoryEntry) { await createProposal({ scope:entry.scope, operation:entry.status === 'revoked' ? 'replace' : 'revoke', text:entry.text, source:entry.source ?? humanSource(), target:entry, priority:entry.priority, polarity:entry.polarity, epistemic:entry.epistemic_status, certainty:entry.certainty, guidance:entry.agent_guidance, avoid:entry.avoid_error }) }
   async function cyclePriority(entry: MemoryEntry) { const levels: Priority[] = ['low','normal','high','critical']; await createProposal({ scope:entry.scope, operation:'set-priority', text:'', source:entry.source ?? humanSource(), target:entry, priority:levels[(levels.indexOf(entry.priority)+1)%levels.length] }) }
-  function requestDecision(proposal: Proposal, action: 'approve'|'reject') { if (snapshot?.owner_actor) confirmation = { proposal, action, actor:snapshot.owner_actor } }
+  function requestDecision(proposal: Proposal, action: 'approve'|'reject') {
+    if (action === 'approve' && proposal.proposal.operation !== 'create' && !proposal.proposal.target_id?.trim()) {
+      error = '这是旧版本生成的无效候选：缺少目标 ID，不能批准。请保留或明确拒绝。'
+      return
+    }
+    if (snapshot?.owner_actor) confirmation = { proposal, action, actor:snapshot.owner_actor }
+  }
   async function confirmDecision() {
     if (!confirmation) return; const decision = confirmation; writing = true; error = ''
     try { await memoryDecide({ proposal_id:decision.proposal.proposal.id, expected_sha256:decision.proposal.sha256, action:decision.action, actor:decision.actor, human_confirmed:true, reason:`Human ${decision.action} through Memory window.` }); confirmation=null; editId=null; await toast('success', decision.action==='approve'?'已写入受控投影':'已拒绝候选'); await refresh() }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeDelta, exactDecisionPrompt, filterEntries, pendingProposals, usageRule } from './domain'
+import { describeDelta, describeMetadataDelta, exactDecisionPrompt, filterEntries, pendingProposals, usageRule } from './domain'
 import type { MemoryEntry, Proposal } from './types'
 
 const entry: MemoryEntry = {
@@ -23,6 +23,7 @@ describe('memory domain', () => {
     expect(filterEntries([entry], 'missing', 'all', 'active', true)).toEqual([])
     expect(filterEntries([{ ...entry, priority: 'critical' }], '', 'all', 'active', true, 'negative')).toHaveLength(1)
     expect(filterEntries([entry], '', 'all', 'active', false, 'positive')).toEqual([])
+    expect(filterEntries([{ ...entry, scope: 'user-owner' }], '', 'all', 'active', false)).toEqual([])
   })
   it('keeps only pending proposals', () => {
     expect(pendingProposals([proposal('replace'), proposal('replace', 'approved')])).toHaveLength(1)
@@ -36,6 +37,13 @@ describe('memory domain', () => {
     expect(prompt).toContain('SHA-256: a')
     expect(prompt).toContain(`Before:\n${entry.text}`)
     expect(prompt).toContain('After:\nUpdated fact')
+  })
+  it('shows the complete before and after behavior metadata', () => {
+    const change = { ...proposal('replace'), proposal: { ...proposal('replace').proposal,
+      suggested_agent_guidance: 'Apply only with consent.', suggested_avoid_error: 'Never infer consent.' } }
+    const metadata = describeMetadataDelta(change, [entry])
+    expect(metadata.agentGuidance).toEqual({ before: 'Respect the boundary.', after: 'Apply only with consent.' })
+    expect(metadata.avoidError).toEqual({ before: 'Never disclose it.', after: 'Never infer consent.' })
   })
   it('makes negative guidance explicit and sorts it before neutral context', () => {
     const neutral = { ...entry, id: 'e2', priority: 'high' as const, polarity: 'neutral' as const }

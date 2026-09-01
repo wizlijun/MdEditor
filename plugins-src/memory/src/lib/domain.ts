@@ -6,7 +6,8 @@ const polarityRank = { negative: 0, positive: 1, neutral: 2 } as const
 export function filterEntries(entries: MemoryEntry[], query: string, scope: 'all' | Scope, status: string, highOnly: boolean, polarity: 'all' | MemoryEntry['polarity'] = 'all'): MemoryEntry[] {
   const q = query.trim().toLocaleLowerCase()
   return entries.filter((entry) =>
-    (scope === 'all' || entry.scope === scope)
+    entry.scope !== 'user-owner'
+    && (scope === 'all' || entry.scope === scope)
     && (status === 'all' || entry.status === status)
     && (!highOnly || entry.priority === 'high' || entry.priority === 'critical')
     && (polarity === 'all' || entry.polarity === polarity)
@@ -31,6 +32,28 @@ export function describeDelta(proposal: Proposal, entries: MemoryEntry[]): { bef
     after: `${proposal.proposal.suggested_priority ?? 'normal'}: ${target?.text ?? ''}`,
   }
   return { before: target?.text ?? '—', after: proposal.text }
+}
+
+export type MetadataDelta = {
+  priority: { before: string; after: string }
+  polarity: { before: string; after: string }
+  epistemicStatus: { before: string; after: string }
+  certainty: { before: string; after: string }
+  agentGuidance: { before: string; after: string }
+  avoidError: { before: string; after: string }
+}
+
+export function describeMetadataDelta(proposal: Proposal, entries: MemoryEntry[]): MetadataDelta {
+  const target = entries.find((entry) => entry.id === proposal.proposal.target_id)
+  const inherited = (value: string | undefined, fallback: string | undefined) => value ?? fallback ?? '—'
+  return {
+    priority: { before: target?.priority ?? '—', after: inherited(proposal.proposal.suggested_priority, target?.priority) },
+    polarity: { before: target?.polarity ?? '—', after: inherited(proposal.proposal.suggested_polarity, target?.polarity) },
+    epistemicStatus: { before: target?.epistemic_status ?? '—', after: inherited(proposal.proposal.suggested_epistemic_status, target?.epistemic_status) },
+    certainty: { before: target?.certainty ?? '—', after: inherited(proposal.proposal.suggested_certainty, target?.certainty) },
+    agentGuidance: { before: target?.agent_guidance ?? '—', after: inherited(proposal.proposal.suggested_agent_guidance, target?.agent_guidance) },
+    avoidError: { before: target?.avoid_error ?? '—', after: inherited(proposal.proposal.suggested_avoid_error, target?.avoid_error) },
+  }
 }
 
 export function usageRule(entry: MemoryEntry): string {

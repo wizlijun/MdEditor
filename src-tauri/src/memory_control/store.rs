@@ -362,12 +362,21 @@ fn validate_propose(input: &ProposeInput) -> Result<(), String> {
         return Err("memory: dedupe_key is required".into());
     }
     if !matches!(input.operation, Operation::Create)
-        && (input.target_id.is_none() || input.base_revision.is_none())
+        && (input
+            .target_id
+            .as_deref()
+            .is_none_or(|target_id| target_id.trim().is_empty())
+            || input.base_revision.is_none())
     {
         return Err("memory: target_id and base_revision are required for this operation".into());
     }
     if matches!(input.operation, Operation::SetPriority) && input.priority.is_none() {
         return Err("memory: priority is required".into());
+    }
+    if input.scope == Scope::UserOwner
+        && !matches!(input.operation, Operation::Create | Operation::Replace)
+    {
+        return Err("memory: owner scope supports only create/replace".into());
     }
     if input.scope != Scope::UserOwner
         && matches!(
@@ -1414,6 +1423,37 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("drift"));
+    }
+
+    #[test]
+    fn update_operations_reject_an_empty_target_id() {
+        let v = vault();
+        migrate(v.path()).unwrap();
+        let error = propose(
+            v.path(),
+            ProposeInput {
+                scope: Scope::Memory,
+                operation: Operation::SetPriority,
+                text: String::new(),
+                source: "/MEMORY.md".into(),
+                by: "agent/x".into(),
+                dedupe_key: "test/empty-target".into(),
+                reason: "test".into(),
+                target_id: Some("   ".into()),
+                base_revision: Some(1),
+                section: None,
+                priority: Some(Priority::High),
+                polarity: None,
+                epistemic_status: None,
+                certainty: None,
+                agent_guidance: None,
+                avoid_error: None,
+                merge_from: vec![],
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("target_id and base_revision are required"));
     }
 
     #[test]
