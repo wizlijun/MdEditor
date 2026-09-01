@@ -17,7 +17,7 @@ const SAMPLE_INDEX = JSON.stringify({
       size: 1024,
       sha256: { 'aarch64-apple-darwin': 'deadbeef' },
       name: 'Export to PDF',
-      category: 'import-export',
+      category: 'create',
       download: {
         'aarch64-apple-darwin':
           'https://plugins.notemd.net/api/download/notemd.md2pdf/1.2.0/aarch64-apple-darwin',
@@ -144,12 +144,15 @@ describe('GET / (landing page)', () => {
     const body = await r.text()
     expect(body).toContain('<!DOCTYPE html>')
     expect(body).toContain('/api/index.json')
-    expect(body).toContain('Capture')
-    expect(body).toContain('Reading')
-    expect(body).toContain('Import & Export')
+    expect(body).toContain('Move Forward')
+    expect(body).toContain('Ideas')
+    expect(body).toContain('Reflect')
+    expect(body).toContain('Create')
     expect(body).toContain('Location Log')
     expect(body).toContain('位置记录')
-    expect(body).toContain("'capture-import':'capture'")
+    expect(body).toContain("'capture-import':'record'")
+    expect(body).toContain("'notemd.idea-spark':'inspiration'")
+    expect(body).toContain("'notemd.codex-agent':{en:'AI Action',zh:'AI 执行'}")
     expect(body).toContain('groupPlugins')
   })
 

@@ -37,13 +37,34 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_ROOT = join(REPO_ROOT, 'dist-plugins')
 const REGISTRY_BASE = 'https://plugins.notemd.net'
 const PLUGIN_CATEGORIES = new Set([
-  'agents', 'capture', 'reading', 'thinking', 'import-export', 'editing',
+  'record', 'reading', 'inspiration', 'advance', 'reflect', 'create',
 ])
 const LEGACY_PLUGIN_CATEGORIES = new Map([
-  ['capture-import', 'capture'],
-  ['thinking-review', 'thinking'],
-  ['publish-export', 'import-export'],
-  ['editor-extensions', 'editing'],
+  ['agents', 'advance'],
+  ['capture', 'record'],
+  ['capture-import', 'record'],
+  ['thinking', 'reflect'],
+  ['thinking-review', 'reflect'],
+  ['import-export', 'create'],
+  ['publish-export', 'create'],
+  ['editing', 'create'],
+  ['editor-extensions', 'create'],
+])
+const OFFICIAL_PLUGIN_CATEGORIES = new Map([
+  ['notemd.pos-log', 'record'],
+  ['notemd.roam-import', 'record'],
+  ['notemd.ebook-import', 'reading'],
+  ['notemd.trace-source', 'reading'],
+  ['notemd.idea-spark', 'inspiration'],
+  ['notemd.next', 'advance'],
+  ['notemd.claude-agent', 'advance'],
+  ['notemd.codex-agent', 'advance'],
+  ['notemd.deepseek-agent', 'advance'],
+  ['notemd.openclaw-chat', 'advance'],
+  ['notemd.decision-log', 'reflect'],
+  ['notemd.weekly-review', 'reflect'],
+  ['notemd.md2pdf', 'create'],
+  ['notemd.power-mode', 'create'],
 ])
 
 /**
@@ -53,6 +74,8 @@ const LEGACY_PLUGIN_CATEGORIES = new Map([
  * remain visible under Other.
  */
 export function pluginCategoryFromManifest(manifest) {
+  const official = OFFICIAL_PLUGIN_CATEGORIES.get(manifest?.id)
+  if (official) return official
   const menus = manifest?.contributes?.menus
   const raw = Array.isArray(menus)
     ? menus.find((menu) => typeof menu?.submenu === 'string')?.submenu
@@ -74,6 +97,7 @@ export function applySourceMetadata(entries, manifests) {
     return {
       ...entry,
       name: manifest.name ?? entry.name,
+      category: pluginCategoryFromManifest(manifest),
       description: manifest.description ?? entry.description ?? null,
       i18n: manifest.i18n ?? entry.i18n ?? null,
     }

@@ -409,7 +409,8 @@ pub fn plugin_market_installed(app: tauri::AppHandle) -> Result<Vec<serde_json::
                 serde_json::to_value(&m.i18n).unwrap_or(serde_json::Value::Null),
                 serde_json::to_value(&m.capabilities).unwrap_or(serde_json::Value::Array(vec![])),
                 serde_json::Value::String(
-                    crate::plugin_host::normalize_plugin_menu_group(
+                    crate::plugin_host::plugin_menu_group_for_plugin(
+                        id,
                         m.contributes
                             .menus
                             .iter()

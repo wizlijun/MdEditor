@@ -18,7 +18,7 @@
     "menus": [
       {
         "location": "plugins",
-        "submenu": "capture",
+        "submenu": "reading",
         "label": "Trace Source",
         "command": "open"
       }

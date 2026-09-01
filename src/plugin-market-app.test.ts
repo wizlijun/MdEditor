@@ -38,7 +38,19 @@ vi.mock('./lib/i18n/store.svelte', () => {
     'pluginMarket.noneInstalled': 'No plugins installed.',
     'pluginMarket.localStateError': 'Could not refresh installed plugins: {error}',
     'pluginMarket.networkError': 'Could not reach the plugin registry: {error}',
-    'pluginCategory.thinking': 'Thinking',
+    'pluginCategory.record': 'Capture',
+    'pluginCategory.reading': 'Read',
+    'pluginCategory.inspiration': 'Ideas',
+    'pluginCategory.advance': 'Move Forward',
+    'pluginCategory.reflect': 'Reflect',
+    'pluginCategory.create': 'Create',
+    'pluginCategory.other': 'Other',
+    'pluginMarket.aiTitle': 'Create with AI',
+    'pluginMarket.aiSubtitle': 'Focused AI collaborators for understanding, ideas, and action.',
+    'pluginMarket.aiBadge.read': 'AI Read',
+    'pluginMarket.aiBadge.inspire': 'AI Ideas',
+    'pluginMarket.aiBadge.reason': 'AI Reasoning',
+    'pluginMarket.aiBadge.execute': 'AI Action',
     'capability.vault.read': 'Read files',
   }
   return {
@@ -134,8 +146,10 @@ describe('plugin market staged loading', () => {
     expect(document.body.textContent).toContain('Update available')
     expect(document.querySelector('.update-card')?.textContent).toContain('v1.1.0')
     expect(document.querySelector('.update-card .update-action')?.textContent).toContain('1.1.0')
-    expect(document.querySelectorAll('.category-block[data-category="thinking"]')).toHaveLength(1)
-    expect(document.querySelectorAll('.category-block[data-category="thinking"] .plugin-card')).toHaveLength(2)
+    expect(document.querySelectorAll('.category-block[data-category="advance"]')).toHaveLength(1)
+    expect(document.querySelectorAll('.category-block[data-category="advance"] .plugin-card')).toHaveLength(1)
+    expect(document.querySelectorAll('.category-block[data-category="inspiration"]')).toHaveLength(1)
+    expect(document.querySelectorAll('.category-block[data-category="inspiration"] .plugin-card')).toHaveLength(1)
   })
 
   it('keeps authoritative installed plugins visible when the registry fails', async () => {
@@ -219,5 +233,26 @@ describe('plugin market staged loading', () => {
     expect(document.body.textContent).toContain('捕捉一闪而过的灵感。')
     expect(document.body.textContent).toContain('溯源（Trace Source）')
     expect(document.body.textContent).toContain('追溯文字的原始出处。')
+  })
+
+  it('highlights AI plugins without turning AI into a top-level category', async () => {
+    const agent = entry('notemd.codex-agent', 'Codex Agent')
+    agent.category = 'agents'
+    const next = entry('notemd.next', 'Next')
+    next.category = 'thinking'
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'plugin_market_installed') return Promise.resolve([])
+      if (command === 'plugin_market_index') return Promise.resolve({ plugins: [agent, next] })
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Create with AI'))
+    expect(document.querySelectorAll('.ai-spotlight .ai-pill')).toHaveLength(1)
+    expect(document.querySelector('[data-plugin-id="notemd.codex-agent"] .ai-badge')?.textContent)
+      .toContain('AI Action')
+    expect(document.querySelector('[data-plugin-id="notemd.next"] .ai-badge')).toBeNull()
+    expect(document.querySelector('[data-category="agents"]')).toBeNull()
+    expect(document.querySelectorAll('[data-category="advance"] .plugin-card')).toHaveLength(2)
   })
 })

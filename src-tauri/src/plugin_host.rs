@@ -210,25 +210,51 @@ pub struct LocatedMenuItem {
 /// field open means an older Host still loads newer plugin manifests; this
 /// Host normalizes unknown/missing keys to Other instead of hiding an action.
 pub const PLUGIN_MENU_GROUP_ORDER: [&str; 7] = [
-    "agents",
-    "capture",
+    "record",
     "reading",
-    "thinking",
-    "import-export",
-    "editing",
+    "inspiration",
+    "advance",
+    "reflect",
+    "create",
     "other",
 ];
 
 pub fn normalize_plugin_menu_group(group: Option<&str>) -> &'static str {
     match group {
-        Some("agents") => "agents",
-        Some("capture") | Some("capture-import") => "capture",
+        Some("record") | Some("capture") | Some("capture-import") => "record",
         Some("reading") => "reading",
-        Some("thinking") | Some("thinking-review") => "thinking",
-        Some("import-export") | Some("publish-export") => "import-export",
-        Some("editing") | Some("editor-extensions") => "editing",
+        Some("inspiration") => "inspiration",
+        Some("advance") | Some("agents") => "advance",
+        Some("reflect") | Some("thinking") | Some("thinking-review") => "reflect",
+        Some("create")
+        | Some("import-export")
+        | Some("publish-export")
+        | Some("editing")
+        | Some("editor-extensions") => "create",
         _ => "other",
     }
+}
+
+/// First-party plugins keep their curated cognitive category even while an
+/// older installed manifest still carries a legacy capability key.
+pub fn plugin_menu_group_for_plugin(plugin_id: &str, group: Option<&str>) -> &'static str {
+    match plugin_id {
+        "notemd.pos-log" | "notemd.roam-import" => "record",
+        "notemd.ebook-import" | "notemd.trace-source" => "reading",
+        "notemd.idea-spark" => "inspiration",
+        "notemd.next"
+        | "notemd.claude-agent"
+        | "notemd.codex-agent"
+        | "notemd.deepseek-agent"
+        | "notemd.openclaw-chat" => "advance",
+        "notemd.decision-log" | "notemd.weekly-review" => "reflect",
+        "notemd.md2pdf" | "notemd.power-mode" => "create",
+        _ => normalize_plugin_menu_group(group),
+    }
+}
+
+fn plugin_id_from_menu_item_id(id: &str) -> Option<&str> {
+    id.strip_prefix("plugin:")?.split_once(':').map(|(plugin_id, _)| plugin_id)
 }
 
 pub struct PluginMenuGroup<'a> {
@@ -244,7 +270,9 @@ pub fn group_plugin_menu_items(items: &[LocatedMenuItem]) -> Vec<PluginMenuGroup
         .map(|key| PluginMenuGroup { key, items: Vec::new() })
         .collect();
     for item in items {
-        let key = normalize_plugin_menu_group(item.submenu.as_deref());
+        let key = plugin_id_from_menu_item_id(&item.id)
+            .map(|id| plugin_menu_group_for_plugin(id, item.submenu.as_deref()))
+            .unwrap_or_else(|| normalize_plugin_menu_group(item.submenu.as_deref()));
         groups
             .iter_mut()
             .find(|group| group.key == key)
@@ -356,12 +384,12 @@ mod tests {
     #[test]
     fn plugin_menu_group_order_matches_the_documented_taxonomy() {
         assert_eq!(PLUGIN_MENU_GROUP_ORDER, [
-            "agents",
-            "capture",
+            "record",
             "reading",
-            "thinking",
-            "import-export",
-            "editing",
+            "inspiration",
+            "advance",
+            "reflect",
+            "create",
             "other",
         ]);
     }
@@ -370,17 +398,17 @@ mod tests {
     fn plugin_menu_groups_follow_capability_order_and_keep_item_order() {
         let items = vec![
             menu_item("reading-1", Some("reading")),
-            menu_item("agent-1", Some("agents")),
-            menu_item("agent-2", Some("agents")),
-            menu_item("capture-1", Some("capture")),
-            menu_item("editor-1", Some("editing")),
+            menu_item("advance-1", Some("advance")),
+            menu_item("advance-2", Some("advance")),
+            menu_item("record-1", Some("record")),
+            menu_item("create-1", Some("create")),
         ];
         let groups = group_plugin_menu_items(&items);
         assert_eq!(groups.iter().map(|g| g.key).collect::<Vec<_>>(), vec![
-            "agents", "capture", "reading", "editing",
+            "record", "reading", "advance", "create",
         ]);
-        assert_eq!(groups[0].items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec![
-            "agent-1", "agent-2",
+        assert_eq!(groups[2].items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec![
+            "advance-1", "advance-2",
         ]);
     }
 
@@ -393,7 +421,7 @@ mod tests {
         ];
         let groups = group_plugin_menu_items(&items);
         assert_eq!(groups.iter().map(|g| g.key).collect::<Vec<_>>(), vec![
-            "thinking", "other",
+            "reflect", "other",
         ]);
         assert_eq!(groups[1].items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec![
             "unknown", "missing",
@@ -402,9 +430,17 @@ mod tests {
 
     #[test]
     fn previous_plugin_menu_group_keys_map_to_current_groups() {
-        assert_eq!(normalize_plugin_menu_group(Some("capture-import")), "capture");
-        assert_eq!(normalize_plugin_menu_group(Some("thinking-review")), "thinking");
-        assert_eq!(normalize_plugin_menu_group(Some("publish-export")), "import-export");
-        assert_eq!(normalize_plugin_menu_group(Some("editor-extensions")), "editing");
+        assert_eq!(normalize_plugin_menu_group(Some("agents")), "advance");
+        assert_eq!(normalize_plugin_menu_group(Some("capture-import")), "record");
+        assert_eq!(normalize_plugin_menu_group(Some("thinking-review")), "reflect");
+        assert_eq!(normalize_plugin_menu_group(Some("publish-export")), "create");
+        assert_eq!(normalize_plugin_menu_group(Some("editor-extensions")), "create");
+    }
+
+    #[test]
+    fn first_party_plugins_override_ambiguous_legacy_groups() {
+        assert_eq!(plugin_menu_group_for_plugin("notemd.idea-spark", Some("thinking")), "inspiration");
+        assert_eq!(plugin_menu_group_for_plugin("notemd.trace-source", Some("capture")), "reading");
+        assert_eq!(plugin_menu_group_for_plugin("third.party", Some("thinking")), "reflect");
     }
 }

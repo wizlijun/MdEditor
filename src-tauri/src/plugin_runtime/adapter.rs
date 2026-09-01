@@ -280,19 +280,20 @@ mod tests {
     fn shipped_user_facing_plugins_declare_a_known_capability_group() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins-src");
         let expected: std::collections::HashMap<&str, &str> = [
-            ("notemd.claude-agent", "agents"),
-            ("notemd.codex-agent", "agents"),
-            ("notemd.deepseek-agent", "agents"),
-            ("notemd.openclaw-chat", "agents"),
+            ("notemd.claude-agent", "advance"),
+            ("notemd.codex-agent", "advance"),
+            ("notemd.deepseek-agent", "advance"),
+            ("notemd.openclaw-chat", "advance"),
             ("notemd.ebook-import", "reading"),
-            ("notemd.idea-spark", "capture"),
-            ("notemd.pos-log", "capture"),
-            ("notemd.roam-import", "import-export"),
-            ("notemd.decision-log", "thinking"),
-            ("notemd.trace-source", "capture"),
-            ("notemd.weekly-review", "thinking"),
-            ("notemd.md2pdf", "import-export"),
-            ("notemd.power-mode", "editing"),
+            ("notemd.idea-spark", "inspiration"),
+            ("notemd.next", "advance"),
+            ("notemd.pos-log", "record"),
+            ("notemd.roam-import", "record"),
+            ("notemd.decision-log", "reflect"),
+            ("notemd.trace-source", "reading"),
+            ("notemd.weekly-review", "reflect"),
+            ("notemd.md2pdf", "create"),
+            ("notemd.power-mode", "create"),
         ]
         .into_iter()
         .collect();

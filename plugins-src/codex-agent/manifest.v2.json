@@ -28,7 +28,7 @@
     "menus": [
       {
         "location": "plugins",
-        "submenu": "agents",
+        "submenu": "advance",
         "label": "Codex Agent…",
         "command": "open"
       }

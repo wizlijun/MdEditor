@@ -60,6 +60,8 @@ h2{font-family:var(--serif);font-size:27px;margin:0 0 14px;font-weight:700}
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px 24px 22px;display:flex;flex-direction:column}
 .card-top{display:flex;align-items:baseline;gap:12px;margin-bottom:10px}
 .card h3{font-family:var(--serif);font-size:22px;font-weight:700}
+.ai-card{border-color:#B8C8FF;box-shadow:0 8px 28px rgba(50,82,180,.08)}
+.ai{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.08em;color:#3154B5;background:#EEF2FF;border:1px solid #D7E0FF;padding:2px 7px;border-radius:20px;white-space:nowrap}
 .ver{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ink);background:var(--amber);padding:2px 9px;border-radius:20px;white-space:nowrap}
 .desc{color:#33363D;font-size:16px;margin-bottom:16px;flex:1}
 .entry{border-top:1px solid var(--line);padding-top:13px;font-size:15px}
@@ -144,9 +146,8 @@ en:{
  entry_lbl:'How to use',host:'Requires note.md ',
  err:"Couldn't load plugins, please retry later.",empty:'No plugins published yet.',
  fallback:'Enable it from the Plugins menu in note.md after install.',
- group_agents:'Agents',group_capture:'Capture',group_reading:'Reading',
- group_thinking:'Thinking',group_import_export:'Import & Export',
- group_editing:'Editing',group_other:'Other'
+ group_record:'Capture',group_reading:'Read',group_inspiration:'Ideas',
+ group_advance:'Move Forward',group_reflect:'Reflect',group_create:'Create',group_other:'Other'
 },
 zh:{
  nav_home:'note.md 主站',nav_plugins:'插件',nav_download:'下载',
@@ -161,9 +162,8 @@ zh:{
  entry_lbl:'使用入口',host:'需要 note.md ',
  err:'暂时无法加载插件列表，请稍后重试。',empty:'暂无已上架插件。',
  fallback:'安装后在 note.md 的「插件」菜单中启用。',
- group_agents:'智能体',group_capture:'记录',group_reading:'阅读',
- group_thinking:'思考',group_import_export:'导入与导出',
- group_editing:'编辑',group_other:'其他'
+ group_record:'记录',group_reading:'阅读',group_inspiration:'灵感',
+ group_advance:'推进',group_reflect:'回顾',group_create:'创作',group_other:'其他'
 }};
 // Per-plugin entry, from each manifest's contributes.menus.location.
 // Every plugin command lands in the Plugins menu regardless of the location its
@@ -171,19 +171,20 @@ zh:{
 // that one menu. Labels are the plugin's own localized menu text.
 // (No backticks in here: this block lives inside the PAGE_HTML template string.)
 var ENTRY_MAP={
- 'notemd.claude-agent':{en:'<b>Plugins</b> → <b>Agents</b> → Claude Agent… (also CLI <code>notemd agent</code>)',zh:'「<b>插件</b>」→「<b>智能体</b>」→ Claude 智能体…（也支持 CLI <code>notemd agent</code>）'},
- 'notemd.codex-agent':{en:'<b>Plugins</b> → <b>Agents</b> → Codex Agent…',zh:'「<b>插件</b>」→「<b>智能体</b>」→ Codex 智能体…'},
- 'notemd.deepseek-agent':{en:'<b>Plugins</b> → <b>Agents</b> → DeepSeek Agent…',zh:'「<b>插件</b>」→「<b>智能体</b>」→ DeepSeek 智能体…'},
- 'notemd.openclaw-chat':{en:'<b>Plugins</b> → <b>Agents</b> → OpenClaw',zh:'「<b>插件</b>」→「<b>智能体</b>」→ OpenClaw'},
- 'notemd.idea-spark':{en:'<b>Plugins</b> → <b>Capture</b> → Idea Spark',zh:'「<b>插件</b>」→「<b>记录</b>」→ 奇思妙想'},
- 'notemd.ebook-import':{en:'<b>Plugins</b> → <b>Reading</b> → Import Ebooks… (also CLI <code>notemd ebook</code>)',zh:'「<b>插件</b>」→「<b>阅读</b>」→ 导入电子书…（也支持 CLI <code>notemd ebook</code>）'},
- 'notemd.roam-import':{en:'<b>Plugins</b> → <b>Import & Export</b> → Import from Roam Research…',zh:'「<b>插件</b>」→「<b>导入与导出</b>」→ 从 Roam Research 导入…'},
+ 'notemd.claude-agent':{en:'<b>Plugins</b> → <b>Move Forward</b> → Claude Agent… (also CLI <code>notemd agent</code>)',zh:'「<b>插件</b>」→「<b>推进</b>」→ Claude 智能体…（也支持 CLI <code>notemd agent</code>）'},
+ 'notemd.codex-agent':{en:'<b>Plugins</b> → <b>Move Forward</b> → Codex Agent…',zh:'「<b>插件</b>」→「<b>推进</b>」→ Codex 智能体…'},
+ 'notemd.deepseek-agent':{en:'<b>Plugins</b> → <b>Move Forward</b> → DeepSeek Agent…',zh:'「<b>插件</b>」→「<b>推进</b>」→ DeepSeek 智能体…'},
+ 'notemd.openclaw-chat':{en:'<b>Plugins</b> → <b>Move Forward</b> → OpenClaw',zh:'「<b>插件</b>」→「<b>推进</b>」→ OpenClaw'},
+ 'notemd.next':{en:'<b>Plugins</b> → <b>Move Forward</b> → Next',zh:'「<b>插件</b>」→「<b>推进</b>」→ 下一步'},
+ 'notemd.idea-spark':{en:'<b>Plugins</b> → <b>Ideas</b> → Idea Spark',zh:'「<b>插件</b>」→「<b>灵感</b>」→ 奇思妙想'},
+ 'notemd.ebook-import':{en:'<b>Plugins</b> → <b>Read</b> → Import Ebooks… (also CLI <code>notemd ebook</code>)',zh:'「<b>插件</b>」→「<b>阅读</b>」→ 导入电子书…（也支持 CLI <code>notemd ebook</code>）'},
+ 'notemd.roam-import':{en:'<b>Plugins</b> → <b>Capture</b> → Import from Roam Research…',zh:'「<b>插件</b>」→「<b>记录</b>」→ 从 Roam Research 导入…'},
  'notemd.pos-log':{en:'<b>Plugins</b> → <b>Capture</b> → Location Log',zh:'「<b>插件</b>」→「<b>记录</b>」→ 位置记录'},
- 'notemd.trace-source':{en:'<b>Plugins</b> → <b>Capture</b> → Trace Source',zh:'「<b>插件</b>」→「<b>记录</b>」→ 溯源'},
- 'notemd.decision-log':{en:'<b>Plugins</b> → <b>Thinking</b> → Decision Log',zh:'「<b>插件</b>」→「<b>思考</b>」→ 决策日志'},
- 'notemd.weekly-review':{en:'<b>Plugins</b> → <b>Thinking</b> → Weekly Review',zh:'「<b>插件</b>」→「<b>思考</b>」→ 周检视'},
- 'notemd.md2pdf':{en:'<b>Plugins</b> → <b>Import & Export</b> → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」→「<b>导入与导出</b>」→ 导出为 PDF…（也支持 CLI <code>notemd pdf</code>）'},
- 'notemd.power-mode':{en:'<b>Plugins</b> → <b>Editing</b> → Power Mode',zh:'「<b>插件</b>」→「<b>编辑</b>」→ 狂暴模式'}
+ 'notemd.trace-source':{en:'<b>Plugins</b> → <b>Read</b> → Trace Source',zh:'「<b>插件</b>」→「<b>阅读</b>」→ 溯源'},
+ 'notemd.decision-log':{en:'<b>Plugins</b> → <b>Reflect</b> → Decision Log',zh:'「<b>插件</b>」→「<b>回顾</b>」→ 决策日志'},
+ 'notemd.weekly-review':{en:'<b>Plugins</b> → <b>Reflect</b> → Weekly Review',zh:'「<b>插件</b>」→「<b>回顾</b>」→ 周检视'},
+ 'notemd.md2pdf':{en:'<b>Plugins</b> → <b>Create</b> → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」→「<b>创作</b>」→ 导出为 PDF…（也支持 CLI <code>notemd pdf</code>）'},
+ 'notemd.power-mode':{en:'<b>Plugins</b> → <b>Create</b> → Power Mode',zh:'「<b>插件</b>」→「<b>创作</b>」→ 狂暴模式'}
 };
 function pickLang(){
  var q=new URLSearchParams(location.search).get('lang');
@@ -205,23 +206,27 @@ function applyStatic(){
 function entryFor(id){
  var e=ENTRY_MAP[id];return e?e[lang]:I18N[lang].fallback;
 }
-var GROUP_ORDER=['agents','capture','reading','thinking','import-export','editing','other'];
-var LEGACY_GROUPS={'capture-import':'capture','thinking-review':'thinking','publish-export':'import-export','editor-extensions':'editing'};
-function normalizeGroup(value){return GROUP_ORDER.indexOf(value)>=0?value:(LEGACY_GROUPS[value]||'other');}
+var GROUP_ORDER=['record','reading','inspiration','advance','reflect','create','other'];
+var LEGACY_GROUPS={'agents':'advance','capture':'record','capture-import':'record','thinking':'reflect','thinking-review':'reflect','import-export':'create','publish-export':'create','editing':'create','editor-extensions':'create'};
+var OFFICIAL_GROUPS={'notemd.pos-log':'record','notemd.roam-import':'record','notemd.ebook-import':'reading','notemd.trace-source':'reading','notemd.idea-spark':'inspiration','notemd.next':'advance','notemd.claude-agent':'advance','notemd.codex-agent':'advance','notemd.deepseek-agent':'advance','notemd.openclaw-chat':'advance','notemd.decision-log':'reflect','notemd.weekly-review':'reflect','notemd.md2pdf':'create','notemd.power-mode':'create'};
+var AI_ROLES={'notemd.ebook-import':{en:'AI Read',zh:'AI 阅读'},'notemd.idea-spark':{en:'AI Inspire',zh:'AI 启发'},'notemd.trace-source':{en:'AI Reason',zh:'AI 推理'},'notemd.claude-agent':{en:'AI Action',zh:'AI 执行'},'notemd.codex-agent':{en:'AI Action',zh:'AI 执行'},'notemd.deepseek-agent':{en:'AI Action',zh:'AI 执行'},'notemd.openclaw-chat':{en:'AI Action',zh:'AI 执行'}};
+function normalizeGroup(value,id){return OFFICIAL_GROUPS[id]||(GROUP_ORDER.indexOf(value)>=0?value:(LEGACY_GROUPS[value]||'other'));}
 function groupLabel(key){
  return I18N[lang]['group_'+key.replace(/-/g,'_')]||I18N[lang].group_other;
 }
 function groupPlugins(list){
  var groups={};GROUP_ORDER.forEach(function(key){groups[key]=[];});
- (list||[]).forEach(function(plugin){groups[normalizeGroup(plugin.category)].push(plugin);});
+ (list||[]).forEach(function(plugin){groups[normalizeGroup(plugin.category,plugin.id)].push(plugin);});
  return GROUP_ORDER.filter(function(key){return groups[key].length;}).map(function(key){
   return {key:key,items:groups[key]};
  });
 }
 function renderCard(p,d){
  var host=p.min_host?'<div class="host">'+esc(d.host)+esc(p.min_host)+'</div>':'';
- return '<div class="card">'+
+ var ai=AI_ROLES[p.id];
+ return '<div class="card'+(ai?' ai-card':'')+'">'+
   '<div class="card-top"><h3>'+esc(p.name||p.id)+'</h3>'+
+  (ai?'<span class="ai">'+esc(ai[lang])+'</span>':'')+
   (p.version?'<span class="ver">v'+esc(p.version)+'</span>':'')+'</div>'+
   '<p class="desc">'+esc(p.description||'')+'</p>'+
   '<div class="entry"><span class="lbl">'+esc(d.entry_lbl)+'</span>'+entryFor(p.id)+host+'</div>'+

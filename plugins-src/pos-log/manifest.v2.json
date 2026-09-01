@@ -22,7 +22,7 @@
     "menus": [
       {
         "location": "plugins",
-        "submenu": "capture",
+        "submenu": "record",
         "label": "Location Log",
         "command": "save-now"
       }

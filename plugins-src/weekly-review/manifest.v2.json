@@ -18,7 +18,7 @@
     "menus": [
       {
         "location": "window",
-        "submenu": "thinking",
+        "submenu": "reflect",
         "label": "Weekly Review",
         "command": "open"
       }

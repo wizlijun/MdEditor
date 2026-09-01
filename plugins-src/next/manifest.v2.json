@@ -18,7 +18,7 @@
     "menus": [
       {
         "location": "plugins",
-        "submenu": "thinking",
+        "submenu": "advance",
         "label": "Next",
         "command": "open"
       }

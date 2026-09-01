@@ -30,16 +30,17 @@ describe('compareVersions', () => {
 describe('pluginCategoryFromManifest', () => {
   it('uses the first declared menu capability group', () => {
     expect(pluginCategoryFromManifest({
-      contributes: { menus: [{ command: 'open', submenu: 'agents' }] },
-    })).toBe('agents')
+      contributes: { menus: [{ command: 'open', submenu: 'advance' }] },
+    })).toBe('advance')
   })
 
   it('normalizes previous capability keys in newly generated indexes', () => {
     const aliases = {
-      'capture-import': 'capture',
-      'thinking-review': 'thinking',
-      'publish-export': 'import-export',
-      'editor-extensions': 'editing',
+      agents: 'advance',
+      'capture-import': 'record',
+      'thinking-review': 'reflect',
+      'publish-export': 'create',
+      'editor-extensions': 'create',
     }
     for (const [legacy, current] of Object.entries(aliases)) {
       expect(pluginCategoryFromManifest({
@@ -61,6 +62,7 @@ describe('applySourceMetadata', () => {
     const live = entry('notemd.idea-spark', '1.3.5', {
       name: 'Idea Spark',
       description: 'Old copy',
+      category: 'capture',
       i18n: { zh: { name: '奇思妙想' } },
       sha256: { universal: 'keep-sha' },
       download: { universal: 'https://plugins.notemd.net/pkg' },
@@ -69,12 +71,14 @@ describe('applySourceMetadata', () => {
       id: 'notemd.idea-spark',
       name: 'Idea Spark',
       description: 'Capture a spark.',
+      contributes: { menus: [{ command: 'open', submenu: 'inspiration' }] },
       i18n: { zh: { name: '奇思妙想', description: '捕捉一闪而过的灵感。' } },
     }])
 
     expect(updated).toMatchObject({
       version: '1.3.5',
       description: 'Capture a spark.',
+      category: 'inspiration',
       i18n: { zh: { name: '奇思妙想', description: '捕捉一闪而过的灵感。' } },
       sha256: { universal: 'keep-sha' },
       download: { universal: 'https://plugins.notemd.net/pkg' },

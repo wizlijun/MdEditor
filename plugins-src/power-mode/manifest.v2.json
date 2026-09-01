@@ -10,7 +10,7 @@
   "activation": { "events": ["onCommand:open"] },
   "contributes": {
     "menus": [
-      { "location": "plugins", "submenu": "editing", "label": "Power Mode", "command": "open" }
+      { "location": "plugins", "submenu": "create", "label": "Power Mode", "command": "open" }
     ],
     "windows": [
       {

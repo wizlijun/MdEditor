@@ -206,17 +206,23 @@ export const zh: Record<keyof Messages, string> = {
   'plugins.internalError': '{name}：插件错误',
 
   // 插件能力分组
-  'pluginCategory.agents': '智能体',
-  'pluginCategory.capture': '记录',
+  'pluginCategory.record': '记录',
   'pluginCategory.reading': '阅读',
-  'pluginCategory.thinking': '思考',
-  'pluginCategory.importExport': '导入与导出',
-  'pluginCategory.editing': '编辑',
+  'pluginCategory.inspiration': '灵感',
+  'pluginCategory.advance': '推进',
+  'pluginCategory.reflect': '回顾',
+  'pluginCategory.create': '创作',
   'pluginCategory.other': '其他',
 
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': '插件市场',
   'pluginMarket.subtitle': '按你想完成的事情浏览，为 note.md 加上新的能力。',
+  'pluginMarket.aiTitle': '与 AI 一起完成',
+  'pluginMarket.aiSubtitle': '从阅读、启发到推理与执行，选择专注的 AI 搭档。',
+  'pluginMarket.aiBadge.read': 'AI 阅读',
+  'pluginMarket.aiBadge.inspire': 'AI 启发',
+  'pluginMarket.aiBadge.reason': 'AI 推理',
+  'pluginMarket.aiBadge.execute': 'AI 执行',
   'pluginMarket.refresh': '刷新',
   'pluginMarket.pluginsUnit': '个插件',
   'pluginMarket.loadingCatalog': '正在查找更多插件…',

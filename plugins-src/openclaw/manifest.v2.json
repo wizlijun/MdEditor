@@ -22,7 +22,7 @@
     "menus": [
       {
         "location": "window",
-        "submenu": "agents",
+        "submenu": "advance",
         "label": "OpenClaw (v2)",
         "command": "open"
       }

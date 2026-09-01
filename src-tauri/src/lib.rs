@@ -1709,17 +1709,12 @@ fn menu_label(locale: &str, key: &str) -> String {
         "menu.window" => ("Window", "窗口", "ウインドウ", "Fenster"),
         "menu.help" => ("Help", "帮助", "ヘルプ", "Hilfe"),
         "menu.plugins" => ("Plugins", "插件", "プラグイン", "Plugins"),
-        "plugins.group.agents" => ("Agents", "智能体", "エージェント", "Agenten"),
-        "plugins.group.capture" => ("Capture", "记录", "記録", "Erfassen"),
-        "plugins.group.reading" => ("Reading", "阅读", "読書", "Lesen"),
-        "plugins.group.thinking" => ("Thinking", "思考", "思考", "Denken"),
-        "plugins.group.importExport" => (
-            "Import & Export",
-            "导入与导出",
-            "読み込みと書き出し",
-            "Importieren und Exportieren",
-        ),
-        "plugins.group.editing" => ("Editing", "编辑", "編集", "Bearbeiten"),
+        "plugins.group.record" => ("Capture", "记录", "記録", "Festhalten"),
+        "plugins.group.reading" => ("Read", "阅读", "読む", "Lesen"),
+        "plugins.group.inspiration" => ("Ideas", "灵感", "アイデア", "Ideen"),
+        "plugins.group.advance" => ("Move Forward", "推进", "前へ進む", "Vorankommen"),
+        "plugins.group.reflect" => ("Reflect", "回顾", "振り返る", "Rückblick"),
+        "plugins.group.create" => ("Create", "创作", "創作", "Gestalten"),
         "plugins.group.other" => ("Other", "其他", "その他", "Sonstige"),
         "file.openRecent" => ("Open Recent", "打开最近", "最近使ったファイルを開く", "Zuletzt geöffnet"),
         "file.noRecent" => ("No Recent Files", "无最近文件", "最近のファイルなし", "Keine letzten Dateien"),
@@ -2315,12 +2310,12 @@ fn build_menu<R: tauri::Runtime>(
             b = b.separator();
             for group in contributed {
                 let label_key = match group.key {
-                    "agents" => "plugins.group.agents",
-                    "capture" => "plugins.group.capture",
+                    "record" => "plugins.group.record",
                     "reading" => "plugins.group.reading",
-                    "thinking" => "plugins.group.thinking",
-                    "import-export" => "plugins.group.importExport",
-                    "editing" => "plugins.group.editing",
+                    "inspiration" => "plugins.group.inspiration",
+                    "advance" => "plugins.group.advance",
+                    "reflect" => "plugins.group.reflect",
+                    "create" => "plugins.group.create",
                     _ => "plugins.group.other",
                 };
                 let group_label = native_menu_literal(&menu_label(locale, label_key));
@@ -2361,14 +2356,11 @@ mod menu_label_tests {
     }
 
     #[test]
-    fn import_export_plugin_group_is_localized_in_every_locale() {
-        assert_eq!(menu_label("en", "plugins.group.importExport"), "Import & Export");
-        assert_eq!(menu_label("zh", "plugins.group.importExport"), "导入与导出");
-        assert_eq!(menu_label("ja", "plugins.group.importExport"), "読み込みと書き出し");
-        assert_eq!(
-            menu_label("de", "plugins.group.importExport"),
-            "Importieren und Exportieren",
-        );
+    fn cognitive_plugin_groups_are_localized_in_every_locale() {
+        assert_eq!(menu_label("en", "plugins.group.advance"), "Move Forward");
+        assert_eq!(menu_label("zh", "plugins.group.advance"), "推进");
+        assert_eq!(menu_label("ja", "plugins.group.advance"), "前へ進む");
+        assert_eq!(menu_label("de", "plugins.group.advance"), "Vorankommen");
     }
 
     #[test]

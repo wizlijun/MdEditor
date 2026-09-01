@@ -45,6 +45,8 @@
   import { localizedPluginDescription, localizedPluginName } from './lib/market/plugin-text'
   import {
     groupPluginsByCategory,
+    pluginAiRole,
+    pluginAiRoleLabelKey,
     pluginCategoryLabelKey,
     type PluginCategory,
   } from './lib/plugins/categories'
@@ -101,6 +103,7 @@
     })),
   ])
   let marketGroups = $derived(groupPluginsByCategory(marketItems))
+  let aiItems = $derived(marketItems.filter((item) => pluginAiRole(item.id) !== null))
 
   // Consent modal target (null = closed).
   let consent = $state<{
@@ -302,12 +305,12 @@
 
   function categoryMark(category: PluginCategory): string {
     const marks: Record<PluginCategory, string> = {
-      agents: '✦',
-      capture: '+',
+      record: '+',
       reading: '◫',
-      thinking: '◇',
-      'import-export': '⇄',
-      editing: '⌘',
+      inspiration: '◇',
+      advance: '→',
+      reflect: '↺',
+      create: '✦',
       other: '•••',
     }
     return marks[category]
@@ -352,6 +355,13 @@
       i18n.locale,
     )
   }
+
+  function focusPlugin(id: string) {
+    const card = [...document.querySelectorAll<HTMLElement>('[data-plugin-id]')]
+      .find((node) => node.dataset.pluginId === id)
+    card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    card?.focus({ preventScroll: true })
+  }
 </script>
 
 <main aria-busy={loading}>
@@ -382,6 +392,21 @@
 
       {#if notice}
         <div class="notice" role="status"><span aria-hidden="true">!</span><p>{notice}</p></div>
+      {/if}
+
+      {#if aiItems.length > 0}
+        <aside class="ai-spotlight" aria-labelledby="ai-spotlight-title">
+          <span class="ai-orb" aria-hidden="true">✦</span>
+          <div class="ai-copy">
+            <h2 id="ai-spotlight-title">{t('pluginMarket.aiTitle')}</h2>
+            <p>{t('pluginMarket.aiSubtitle')}</p>
+          </div>
+          <div class="ai-list">
+            {#each aiItems as item (item.id)}
+              <button class="ai-pill" onclick={() => focusPlugin(item.id)}>{itemName(item)}</button>
+            {/each}
+          </div>
+        </aside>
       {/if}
 
       <div class="catalog">
@@ -418,17 +443,24 @@
                 {#each group.items as item (item.id)}
                   {@const displayName = itemName(item)}
                   {@const displayDescription = itemDescription(item)}
+                  {@const aiRole = pluginAiRole(item.id)}
                   <article
                     class="plugin-card"
                     class:installed-card={item.kind === 'installed'}
                     class:update-card={item.kind === 'installed' && !!item.row.updateTo}
+                    class:ai-card={aiRole !== null}
+                    data-plugin-id={item.id}
+                    tabindex="-1"
                   >
                     {#if item.kind === 'installed'}
                       <div class="card-heading">
                         <span class="plugin-mark" aria-hidden="true">{monogram(displayName)}</span>
                         <div class="plugin-title">
                           <h3>{displayName}</h3>
-                          <span class="version">v{item.row.version}</span>
+                          <div class="plugin-meta">
+                            <span class="version">v{item.row.version}</span>
+                            {#if aiRole}<span class="ai-badge">✦ {t(pluginAiRoleLabelKey(aiRole))}</span>{/if}
+                          </div>
                         </div>
                         {#if item.row.updateTo}
                           <span class="status update-status">
@@ -475,7 +507,10 @@
                         <span class="plugin-mark" aria-hidden="true">{monogram(displayName)}</span>
                         <div class="plugin-title">
                           <h3>{displayName}</h3>
-                          <span class="version">v{item.entry.version}</span>
+                          <div class="plugin-meta">
+                            <span class="version">v{item.entry.version}</span>
+                            {#if aiRole}<span class="ai-badge">✦ {t(pluginAiRoleLabelKey(aiRole))}</span>{/if}
+                          </div>
                         </div>
                         <span class="status available-status">{t('pluginMarket.availableHeading')}</span>
                       </div>
@@ -594,6 +629,42 @@
     font-weight: 750;
   }
   .notice p { margin: 2px 0 0; line-height: 1.45; overflow-wrap: anywhere; }
+  .ai-spotlight {
+    display: grid;
+    grid-template-columns: auto minmax(190px, 0.7fr) minmax(0, 1.3fr);
+    gap: 11px 14px;
+    align-items: center;
+    margin: 0 0 14px;
+    padding: 12px 14px;
+    border: 1px solid color-mix(in srgb, #7657ff 28%, CanvasText 6%);
+    border-radius: 16px;
+    background:
+      linear-gradient(120deg, color-mix(in srgb, #7657ff 13%, Canvas), color-mix(in srgb, #2e8fff 7%, Canvas));
+    box-shadow: 0 8px 24px color-mix(in srgb, #7657ff 9%, transparent);
+  }
+  .ai-orb {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 11px;
+    background: linear-gradient(145deg, #7758ff, #2e8fff);
+    color: white;
+    box-shadow: 0 6px 14px color-mix(in srgb, #7657ff 28%, transparent);
+    font-size: 15px;
+  }
+  .ai-copy h2 { margin: 0; font-size: 14px; letter-spacing: -0.015em; }
+  .ai-copy p { margin: 2px 0 0; color: color-mix(in srgb, CanvasText 53%, transparent); font-size: 10.5px; line-height: 1.35; }
+  .ai-list { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
+  .ai-pill {
+    min-height: 25px;
+    padding: 0 8px;
+    border-color: color-mix(in srgb, #7657ff 19%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, Canvas 76%, transparent);
+    color: color-mix(in srgb, #6045de 82%, CanvasText);
+    font-size: 9.5px;
+  }
   .catalog { display: grid; gap: 14px; }
   .category-block {
     --accent: #635bff;
@@ -608,11 +679,12 @@
       color-mix(in srgb, Canvas 94%, var(--accent) 6%);
     box-shadow: 0 8px 28px color-mix(in srgb, CanvasText 4%, transparent);
   }
-  .category-block[data-category='capture'] { --accent: #ec5d74; }
+  .category-block[data-category='record'] { --accent: #ec5d74; }
   .category-block[data-category='reading'] { --accent: #f09a3e; }
-  .category-block[data-category='thinking'] { --accent: #8a63e6; }
-  .category-block[data-category='import-export'] { --accent: #159c92; }
-  .category-block[data-category='editing'] { --accent: #3479db; }
+  .category-block[data-category='inspiration'] { --accent: #9b5de5; }
+  .category-block[data-category='advance'] { --accent: #3479db; }
+  .category-block[data-category='reflect'] { --accent: #159c92; }
+  .category-block[data-category='create'] { --accent: #635bff; }
   .category-block[data-category='other'] { --accent: #7a8495; }
   .category-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
   .category-mark {
@@ -650,6 +722,12 @@
     box-shadow: 0 14px 30px color-mix(in srgb, CanvasText 8%, transparent);
   }
   .installed-card { border-color: color-mix(in srgb, var(--accent) 18%, CanvasText 7%); }
+  .ai-card {
+    border-color: color-mix(in srgb, #7657ff 29%, CanvasText 6%);
+    background:
+      linear-gradient(140deg, color-mix(in srgb, #7657ff 7%, Canvas), transparent 58%),
+      color-mix(in srgb, Canvas 94%, transparent);
+  }
   .update-card {
     border-color: #f08a00;
     background:
@@ -678,12 +756,20 @@
   }
   .plugin-title { min-width: 0; flex: 1; }
   .plugin-title h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; letter-spacing: -0.01em; }
+  .plugin-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
   .version {
-    display: block;
-    margin-top: 2px;
     color: color-mix(in srgb, CanvasText 43%, transparent);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 9.5px;
+  }
+  .ai-badge {
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: linear-gradient(120deg, color-mix(in srgb, #7657ff 14%, transparent), color-mix(in srgb, #2e8fff 10%, transparent));
+    color: color-mix(in srgb, #6045de 88%, CanvasText);
+    font-size: 8px;
+    font-weight: 700;
+    white-space: nowrap;
   }
   .status {
     flex: 0 0 auto;
@@ -835,6 +921,8 @@
     .hero { gap: 12px; padding-bottom: 18px; }
     .hero-copy h1 { font-size: 28px; }
     .refresh { padding: 0 11px; }
+    .ai-spotlight { grid-template-columns: auto minmax(0, 1fr); }
+    .ai-list { grid-column: 1 / -1; justify-content: flex-start; }
     .category-block { padding: 14px; border-radius: 16px; }
     .plugin-grid { grid-template-columns: minmax(0, 1fr); }
   }
@@ -853,5 +941,6 @@
   @media (prefers-reduced-motion: reduce) {
     .plugin-card, button, .switch, .switch > span { transition: none; }
     .skeleton, .spinner, .spinning { animation: none; }
+    :global(html:focus-within) { scroll-behavior: auto; }
   }
 </style>

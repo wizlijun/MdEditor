@@ -204,17 +204,23 @@ export const de: Record<keyof Messages, string> = {
   'plugins.internalError': '{name}: Plugin-Fehler',
 
   // Plugin-Funktionsgruppen
-  'pluginCategory.agents': 'Agenten',
-  'pluginCategory.capture': 'Erfassen',
+  'pluginCategory.record': 'Festhalten',
   'pluginCategory.reading': 'Lesen',
-  'pluginCategory.thinking': 'Denken',
-  'pluginCategory.importExport': 'Importieren und Exportieren',
-  'pluginCategory.editing': 'Bearbeiten',
+  'pluginCategory.inspiration': 'Ideen',
+  'pluginCategory.advance': 'Vorankommen',
+  'pluginCategory.reflect': 'Rückblick',
+  'pluginCategory.create': 'Gestalten',
   'pluginCategory.other': 'Sonstige',
 
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'Plugin-Markt',
   'pluginMarket.subtitle': 'Nach Aufgaben entdecken und note.md passend erweitern.',
+  'pluginMarket.aiTitle': 'Mit AI mehr erreichen',
+  'pluginMarket.aiSubtitle': 'Fokussierte AI-Partner für Lesen, Ideen, Denken und Handeln.',
+  'pluginMarket.aiBadge.read': 'AI Lesen',
+  'pluginMarket.aiBadge.inspire': 'AI Ideen',
+  'pluginMarket.aiBadge.reason': 'AI Denken',
+  'pluginMarket.aiBadge.execute': 'AI Ausführen',
   'pluginMarket.refresh': 'Aktualisieren',
   'pluginMarket.pluginsUnit': 'Plugins',
   'pluginMarket.loadingCatalog': 'Weitere Plugins werden gesucht…',
