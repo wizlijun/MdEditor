@@ -10,8 +10,125 @@
 //! string builders (unit-testable, no AppHandle); [`open_plugin_window`] and
 //! [`push_to_window`] are the AppHandle-backed shells.
 
+use plugin_protocol as proto;
 use serde_json::Value;
+use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{LazyLock, RwLock};
+use std::time::{Duration, Instant};
 use tauri::{Manager, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+
+/// Plugin ids whose installed package is being reconciled. Opening a webview
+/// for one of these ids is rejected until STATE and RUNNING have completed the
+/// same pivot. The read guard in [`open_plugin_window`] is intentionally held
+/// through window construction: once the reconciler acquires this lock, every
+/// earlier open has either finished (and can be destroyed) or failed.
+static REPLACING_PLUGIN_WINDOWS: LazyLock<RwLock<HashSet<String>>> =
+    LazyLock::new(|| RwLock::new(HashSet::new()));
+
+const WINDOW_DESTROY_TIMEOUT: Duration = Duration::from_secs(2);
+const WINDOW_DESTROY_POLL: Duration = Duration::from_millis(10);
+
+/// RAII fence for a set of plugin ids being replaced. Dropping it makes the
+/// current package openable again, both on successful reconcile and on the
+/// fail-closed error path where STATE deliberately remains unchanged.
+pub(crate) struct PluginWindowReplacement {
+    plugin_ids: Vec<String>,
+}
+
+impl Drop for PluginWindowReplacement {
+    fn drop(&mut self) {
+        if let Ok(mut replacing) = REPLACING_PLUGIN_WINDOWS.write() {
+            for id in &self.plugin_ids {
+                replacing.remove(id);
+            }
+        }
+    }
+}
+
+/// Fence concurrent opens before old webviews are closed. Acquiring the write
+/// lock waits for any open already constructing a window to finish, so the
+/// subsequent label snapshot cannot miss a late old-package window.
+pub(crate) fn begin_plugin_window_replacement(
+    plugin_ids: &[String],
+) -> Result<PluginWindowReplacement, String> {
+    let mut replacing = REPLACING_PLUGIN_WINDOWS
+        .write()
+        .map_err(|_| "plugin window replacement lock poisoned".to_string())?;
+    if let Some(id) = plugin_ids.iter().find(|id| replacing.contains(*id)) {
+        return Err(format!("plugin '{id}' is already being updated"));
+    }
+    for id in plugin_ids {
+        replacing.insert(id.clone());
+    }
+    Ok(PluginWindowReplacement {
+        plugin_ids: plugin_ids.to_vec(),
+    })
+}
+
+fn contributed_window_labels(
+    plugins: &BTreeMap<String, (proto::ManifestV2, PathBuf)>,
+    plugin_ids: &[String],
+) -> Vec<String> {
+    plugin_ids
+        .iter()
+        .filter_map(|id| plugins.get(id).map(|(manifest, _)| (id, manifest)))
+        .flat_map(|(id, manifest)| {
+            manifest
+                .contributes
+                .windows
+                .iter()
+                .map(move |window| window_label(id, &window.id))
+        })
+        .collect()
+}
+
+/// Destroy every webview contributed by the old package and wait until Tauri no
+/// longer exposes any of their exact labels. The app-wide `CloseRequested`
+/// handler intentionally turns a normal `close()` into `hide()`, which would
+/// preserve the old JavaScript context; marketplace replacement therefore must
+/// use force-destroy and perform the Destroyed-handler grant cleanup itself.
+/// STATE/backend replacement does not proceed until no old context can send
+/// `plugin://` RPCs, and a stuck destroy fails closed.
+pub(crate) async fn destroy_replaced_plugin_windows<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    old_plugins: &BTreeMap<String, (proto::ManifestV2, PathBuf)>,
+    plugin_ids: &[String],
+) -> Result<(), String> {
+    let labels = contributed_window_labels(old_plugins, plugin_ids);
+    for plugin_id in plugin_ids {
+        super::ui_rpc::clear_grants(plugin_id);
+    }
+    for label in &labels {
+        if let Some(window) = app.get_webview_window(label) {
+            window.destroy().map_err(|error| {
+                format!("failed to destroy replaced plugin window '{label}': {error}")
+            })?;
+        }
+    }
+
+    let deadline = Instant::now() + WINDOW_DESTROY_TIMEOUT;
+    loop {
+        let still_open: Vec<&String> = labels
+            .iter()
+            .filter(|label| app.get_webview_window(label).is_some())
+            .collect();
+        if still_open.is_empty() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out destroying replaced plugin window(s): {}",
+                still_open
+                    .iter()
+                    .map(|label| label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        tokio::time::sleep(WINDOW_DESTROY_POLL).await;
+    }
+}
 
 /// Window label: `plugin-<sanitized id>-<window id>`. Dots in the plugin id
 /// become hyphens so the label stays in Tauri's safe label character set.
@@ -123,7 +240,9 @@ pub(crate) fn window_title(
         // Try the exact locale, then its base language (`zh-CN` → `zh`).
         let base = locale.split(['-', '_']).next().unwrap_or(locale);
         for candidate in [locale, base] {
-            let Some(entry) = i18n.get(candidate) else { continue };
+            let Some(entry) = i18n.get(candidate) else {
+                continue;
+            };
             if let Some(t) = non_empty(entry.get("windows").and_then(|w| w.get(window_id))) {
                 return t;
             }
@@ -169,6 +288,19 @@ pub fn open_plugin_window<R: Runtime>(
     window_id: &str,
     seed_json: Option<&str>,
 ) -> Result<(), String> {
+    // Hold this guard through the complete singleton/build path. A marketplace
+    // reconcile takes the write side before enumerating old labels, which makes
+    // the enumeration complete and prevents another old window from appearing
+    // between destruction completion and the STATE/backend pivot.
+    let replacing = REPLACING_PLUGIN_WINDOWS
+        .read()
+        .map_err(|_| "plugin window replacement lock poisoned".to_string())?;
+    if replacing.contains(plugin_id) {
+        return Err(format!(
+            "plugin '{plugin_id}' is being updated; reopen it after the update completes"
+        ));
+    }
+
     // STATE lookup: manifest (for the window contribution + fallback title).
     let (manifest, _install_dir) = super::STATE
         .read()
@@ -373,14 +505,23 @@ mod tests {
             "plugin://a.b/index.html"
         );
         let u = plugin_window_url("a.b", "index.html", Some(r#"{"t":"溯源 x"}"#));
-        assert!(u.starts_with("plugin://a.b/index.html?seed=%7B%22t%22"), "{u}");
+        assert!(
+            u.starts_with("plugin://a.b/index.html?seed=%7B%22t%22"),
+            "{u}"
+        );
         assert!(!u.contains('"'), "JSON 必须整体转义进 query:{u}");
     }
 
     #[test]
     fn window_label_sanitizes_dots_to_hyphens() {
-        assert_eq!(window_label("notemd.roam-import", "main"), "plugin-notemd-roam-import-main");
-        assert_eq!(window_label("test.ui.fixture", "w1"), "plugin-test-ui-fixture-w1");
+        assert_eq!(
+            window_label("notemd.roam-import", "main"),
+            "plugin-notemd-roam-import-main"
+        );
+        assert_eq!(
+            window_label("test.ui.fixture", "w1"),
+            "plugin-test-ui-fixture-w1"
+        );
         // No dots → unchanged body.
         assert_eq!(window_label("plain", "main"), "plugin-plain-main");
     }
@@ -389,7 +530,10 @@ mod tests {
     fn bridge_script_embeds_identity_json_literals() {
         let s = bridge_script("notemd.roam-import", "zh", "midnight");
         // JSON literals (quoted), safely embedded.
-        assert!(s.contains(r#""notemd.roam-import""#), "pluginId literal: {s}");
+        assert!(
+            s.contains(r#""notemd.roam-import""#),
+            "pluginId literal: {s}"
+        );
         assert!(s.contains(r#""zh""#), "locale literal");
         assert!(s.contains(r#""midnight""#), "theme literal");
     }
@@ -400,7 +544,10 @@ mod tests {
         // (window init + HTML injection) is a no-op instead of redefining
         // window.notemd (which is frozen) and re-registering listeners.
         let s = bridge_script("p.id", "en", "default");
-        assert!(s.contains("if (window.notemd) return;"), "guard present: {s}");
+        assert!(
+            s.contains("if (window.notemd) return;"),
+            "guard present: {s}"
+        );
         let guard = s.find("if (window.notemd) return;").unwrap();
         let freeze = s.find("Object.freeze").unwrap();
         assert!(guard < freeze, "guard must precede the bridge definition");
@@ -412,8 +559,14 @@ mod tests {
         assert!(s.contains("Object.freeze"), "freezes the bridge");
         assert!(s.contains("window.notemd"), "defines window.notemd");
         assert!(s.contains("/__rpc__"), "posts to the rpc endpoint");
-        assert!(s.contains("__notemd_dispatch"), "defines the push entry point");
-        assert!(s.contains("'jsonrpc': '2.0'") || s.contains("jsonrpc: '2.0'"), "jsonrpc envelope");
+        assert!(
+            s.contains("__notemd_dispatch"),
+            "defines the push entry point"
+        );
+        assert!(
+            s.contains("'jsonrpc': '2.0'") || s.contains("jsonrpc: '2.0'"),
+            "jsonrpc envelope"
+        );
     }
 
     #[test]
@@ -443,7 +596,13 @@ mod tests {
             "zh": { "name": "示例插件", "windows": { "main": "主窗口标题" } }
         });
         assert_eq!(
-            window_title(Some(&i18n), "zh", "main", Some("Example Plugin"), "Example Plugin"),
+            window_title(
+                Some(&i18n),
+                "zh",
+                "main",
+                Some("Example Plugin"),
+                "Example Plugin"
+            ),
             "主窗口标题"
         );
     }
@@ -452,7 +611,13 @@ mod tests {
     fn window_title_falls_back_to_i18n_name() {
         let i18n = serde_json::json!({ "zh": { "name": "示例插件" } });
         assert_eq!(
-            window_title(Some(&i18n), "zh", "main", Some("Example Plugin"), "Example Plugin"),
+            window_title(
+                Some(&i18n),
+                "zh",
+                "main",
+                Some("Example Plugin"),
+                "Example Plugin"
+            ),
             "示例插件"
         );
     }
@@ -474,7 +639,10 @@ mod tests {
 
     #[test]
     fn window_title_falls_back_to_plugin_name_as_last_resort() {
-        assert_eq!(window_title(None, "zh", "main", None, "Plugin Name"), "Plugin Name");
+        assert_eq!(
+            window_title(None, "zh", "main", None, "Plugin Name"),
+            "Plugin Name"
+        );
         let i18n = serde_json::json!({ "zh": {} });
         assert_eq!(
             window_title(Some(&i18n), "zh", "main", None, "Plugin Name"),
@@ -486,7 +654,13 @@ mod tests {
     fn window_title_region_suffix_falls_back_to_base_language() {
         let i18n = serde_json::json!({ "zh": { "name": "示例插件" } });
         assert_eq!(
-            window_title(Some(&i18n), "zh-CN", "main", Some("Example Plugin"), "Example Plugin"),
+            window_title(
+                Some(&i18n),
+                "zh-CN",
+                "main",
+                Some("Example Plugin"),
+                "Example Plugin"
+            ),
             "示例插件"
         );
         // Per-window title also resolves through the base language.
@@ -504,7 +678,13 @@ mod tests {
             "zh": { "name": "示例插件", "windows": { "main": "" } }
         });
         assert_eq!(
-            window_title(Some(&i18n), "zh", "main", Some("Example Plugin"), "Example Plugin"),
+            window_title(
+                Some(&i18n),
+                "zh",
+                "main",
+                Some("Example Plugin"),
+                "Example Plugin"
+            ),
             "示例插件"
         );
         // Empty i18n name falls through to win_title.
@@ -514,7 +694,10 @@ mod tests {
             "Win Title"
         );
         // Empty win_title falls through to plugin_name.
-        assert_eq!(window_title(None, "zh", "main", Some(""), "Plugin Name"), "Plugin Name");
+        assert_eq!(
+            window_title(None, "zh", "main", Some(""), "Plugin Name"),
+            "Plugin Name"
+        );
     }
 
     #[test]
@@ -530,9 +713,79 @@ mod tests {
     #[test]
     fn theme_id_from_settings_falls_back_through_legacy_and_defaults() {
         // Pre-migration `skin` string, still real on disk until the next save.
-        assert_eq!(theme_id_from_settings(&serde_json::json!({"skin": "effie"})), "effie");
+        assert_eq!(
+            theme_id_from_settings(&serde_json::json!({"skin": "effie"})),
+            "effie"
+        );
         // Nothing usable at all → the documented "default".
         assert_eq!(theme_id_from_settings(&serde_json::json!({})), "default");
+    }
+
+    fn window_manifest(id: &str, window_ids: &[&str]) -> proto::ManifestV2 {
+        let windows: Vec<Value> = window_ids
+            .iter()
+            .map(|window_id| {
+                serde_json::json!({
+                    "id": window_id,
+                    "entry": "index.html",
+                    "width": 640.0,
+                    "height": 480.0
+                })
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "manifest_version": 2,
+            "id": id,
+            "name": "Window Fixture",
+            "version": "1.0.0",
+            "kind": "native",
+            "engines": { "notemd": ">=0.0.0" },
+            "activation": { "events": [] },
+            "capabilities": [],
+            "contributes": { "windows": windows }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn replacement_labels_use_old_exact_contributions_only() {
+        let mut plugins = BTreeMap::new();
+        plugins.insert(
+            "test.window-a".to_string(),
+            (
+                window_manifest("test.window-a", &["main", "settings"]),
+                PathBuf::from("/plugins/a"),
+            ),
+        );
+        plugins.insert(
+            "test.window-a-extra".to_string(),
+            (
+                window_manifest("test.window-a-extra", &["main"]),
+                PathBuf::from("/plugins/a-extra"),
+            ),
+        );
+
+        assert_eq!(
+            contributed_window_labels(&plugins, &["test.window-a".to_string()]),
+            vec![
+                "plugin-test-window-a-main".to_string(),
+                "plugin-test-window-a-settings".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn replacement_guard_fences_then_releases_plugin_id() {
+        let id = "test.window-replacement-guard".to_string();
+        let guard = begin_plugin_window_replacement(std::slice::from_ref(&id)).unwrap();
+        assert!(REPLACING_PLUGIN_WINDOWS.read().unwrap().contains(&id));
+        assert!(
+            begin_plugin_window_replacement(std::slice::from_ref(&id)).is_err(),
+            "overlapping reconciles must not release each other's fence"
+        );
+        assert!(REPLACING_PLUGIN_WINDOWS.read().unwrap().contains(&id));
+        drop(guard);
+        assert!(!REPLACING_PLUGIN_WINDOWS.read().unwrap().contains(&id));
     }
 
     #[test]

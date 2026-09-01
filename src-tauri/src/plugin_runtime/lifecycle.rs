@@ -22,13 +22,55 @@
 use plugin_protocol as proto;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
 use super::process::{self, HostSink, PluginProcess};
 use super::STATE;
+
+type InstalledPlugin = (proto::ManifestV2, PathBuf);
+
+/// Marketplace/runtime identity is the complete manifest plus its selected
+/// install directory. Version alone is not enough: a repaired package can alter
+/// capabilities, activation, contributions, or its binary mapping without a
+/// version bump.
+fn same_install(
+    left_manifest: &proto::ManifestV2,
+    left_dir: &Path,
+    right_manifest: &proto::ManifestV2,
+    right_dir: &Path,
+) -> bool {
+    if left_dir != right_dir {
+        return false;
+    }
+    match (
+        serde_json::to_value(left_manifest),
+        serde_json::to_value(right_manifest),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Old ids whose webviews must be gone before STATE/RUNNING can pivot. Iterate
+/// the old map so additions do not close anything; removals (uninstall/disable)
+/// and any same-id identity replacement (install/upgrade) do.
+fn replaced_plugin_ids(
+    old_map: &BTreeMap<String, InstalledPlugin>,
+    new_map: &BTreeMap<String, InstalledPlugin>,
+) -> Vec<String> {
+    old_map
+        .iter()
+        .filter(|(id, (old_manifest, old_dir))| {
+            new_map.get(*id).is_none_or(|(new_manifest, new_dir)| {
+                !same_install(old_manifest, old_dir, new_manifest, new_dir)
+            })
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
 
 /// Sliding crash window (spec §4.2): [`CRASH_LIMIT`] crashes within this
 /// window trip the circuit breaker to `Disabled("crash-loop")`.
@@ -124,6 +166,10 @@ pub struct PluginLifecycle {
     /// Deliberate shutdown in flight — the crash watcher must not misread the
     /// resulting process exit as a crash (spec §4.2).
     shutting_down: AtomicBool,
+    /// This lifecycle no longer describes the installed plugin selected in
+    /// STATE. Once set it is irreversible: no trigger may reactivate an old
+    /// binary while marketplace reconcile is replacing it.
+    retired: AtomicBool,
     /// 测试注入：崩溃重启退避（生产 [0,5,30] 秒）。
     pub backoff_secs: Vec<u64>,
     /// Crash watcher poll interval (production 500ms; injectable for tests).
@@ -143,6 +189,7 @@ impl PluginLifecycle {
             crash_times: std::sync::Mutex::new(Vec::new()),
             last_activity: std::sync::Mutex::new(Instant::now()),
             shutting_down: AtomicBool::new(false),
+            retired: AtomicBool::new(false),
             backoff_secs: DEFAULT_BACKOFF_SECS.to_vec(),
             crash_poll: Duration::from_millis(500),
             idle_poll: Duration::from_secs(5),
@@ -162,6 +209,39 @@ impl PluginLifecycle {
 
     fn touch(&self) {
         *self.last_activity.lock().unwrap() = Instant::now();
+    }
+
+    fn retired_error(&self) -> String {
+        format!(
+            "plugin '{}' runtime was superseded; retry the request",
+            self.id
+        )
+    }
+
+    fn ensure_not_retired(&self) -> Result<(), String> {
+        if self.retired.load(Ordering::SeqCst) {
+            Err(self.retired_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Exact runtime identity used by marketplace reconcile. The version alone
+    /// is insufficient: a repaired package may change capabilities, activation,
+    /// or its binary mapping without moving the install path.
+    pub(crate) fn matches_install(&self, manifest: &proto::ManifestV2, install_dir: &Path) -> bool {
+        same_install(&self.manifest, &self.install_dir, manifest, install_dir)
+    }
+
+    pub(crate) fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::SeqCst)
+    }
+
+    /// Permanently fence this instance before its async shutdown begins. This
+    /// closes the reconcile race where another request could otherwise observe
+    /// an Inactive old lifecycle and activate it again.
+    pub(crate) fn retire(&self) {
+        self.retired.store(true, Ordering::SeqCst);
     }
 
     /// Handshake params (spec §4.4). `theme` is empty: no ①期 consumer.
@@ -192,8 +272,10 @@ impl PluginLifecycle {
         self: &Arc<Self>,
         trigger: &Trigger,
     ) -> Result<Arc<PluginProcess>, String> {
+        self.ensure_not_retired()?;
         self.touch();
         let mut phase = self.phase.lock().await;
+        self.ensure_not_retired()?;
         match &*phase {
             Phase::Active(proc) => return Ok(proc.clone()),
             Phase::Disabled(reason) => {
@@ -215,8 +297,12 @@ impl PluginLifecycle {
                 self.ctx.host_sink.clone(),
             )
             .await?;
-            match process::initialize_and_activate(&proc, &self.init_params(), &trigger.event_name())
-                .await
+            match process::initialize_and_activate(
+                &proc,
+                &self.init_params(),
+                &trigger.event_name(),
+            )
+            .await
             {
                 Ok(()) => Ok(proc),
                 Err(e) => {
@@ -230,6 +316,11 @@ impl PluginLifecycle {
         .await;
         match activated {
             Ok(proc) => {
+                if self.is_retired() {
+                    proc.shutdown().await;
+                    *phase = Phase::Inactive;
+                    return Err(self.retired_error());
+                }
                 *phase = Phase::Active(proc.clone());
                 drop(phase);
                 self.touch();
@@ -249,9 +340,11 @@ impl PluginLifecycle {
     /// Execute a command on the ACTIVE process (callers `ensure_active` first;
     /// spec §4.2 lazy re-activation happens there, not here).
     pub async fn execute(&self, params: proto::ExecuteCommandParams) -> Result<Value, String> {
+        self.ensure_not_retired()?;
         self.touch();
         let proc = {
             let phase = self.phase.lock().await;
+            self.ensure_not_retired()?;
             match &*phase {
                 Phase::Active(p) => p.clone(),
                 Phase::Disabled(reason) => {
@@ -281,9 +374,11 @@ impl PluginLifecycle {
     /// Wire shape: `proc.request("ui.request", { method, params })`; the SDK's
     /// `serve_io` routes it to the plugin's `on_ui_request(method, params)`.
     pub async fn ui_request(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.ensure_not_retired()?;
         self.touch();
         let proc = {
             let phase = self.phase.lock().await;
+            self.ensure_not_retired()?;
             match &*phase {
                 Phase::Active(p) => p.clone(),
                 Phase::Disabled(reason) => {
@@ -448,6 +543,13 @@ impl PluginLifecycle {
 pub static RUNNING: LazyLock<RwLock<HashMap<String, Arc<PluginLifecycle>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
+/// Tests in lifecycle.rs and commands.rs mutate the same process-global
+/// STATE/RUNNING registries. Serialize those tests so parallel libtest workers
+/// cannot make one reconcile replace another test's fixtures.
+#[cfg(test)]
+pub(crate) static REGISTRY_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
+    LazyLock::new(|| std::sync::Mutex::new(()));
+
 /// Eagerly activate every plugin whose activation events match `Startup`
 /// (`*` / `onStartupFinished`, spec §4.3). Fire-and-forget: failures are
 /// logged, never fatal. Task 8 wires this to STATE after discovery.
@@ -472,9 +574,12 @@ pub fn startup_activation(lifecycles: Vec<Arc<PluginLifecycle>>) {
 /// RUNNING back in line without restarting the app:
 ///
 /// 1. Re-run `discovery::scan` → the fresh id→(manifest, install_dir) map.
-/// 2. For every id in RUNNING that is no longer in the new map (uninstalled or
-///    disabled), `deactivate()` its live process and drop it from RUNNING.
-/// 3. Replace `STATE.plugins` with the new map.
+/// 2. Fence opens for every removed/replaced id, destroy all webviews contributed
+///    by its old manifest, and wait until they leave Tauri's window registry.
+/// 3. For every id in RUNNING that vanished or whose manifest/install directory
+///    changed, permanently retire it, `deactivate()` its live process, and drop
+///    it from RUNNING.
+/// 4. Replace `STATE.plugins` with the new map, then release the window fence.
 ///
 /// Newly added plugins are NOT eagerly activated — lazy activation (spec §4.2)
 /// stays: the next trigger registers + activates them via `get_or_register`.
@@ -485,26 +590,58 @@ pub fn startup_activation(lifecycles: Vec<Arc<PluginLifecycle>>) {
 pub async fn reconcile<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
     let host_version = app.package_info().version.to_string();
     let new_map = super::discovery::scan(app, &host_version)?;
+    let old_map = STATE
+        .read()
+        .map_err(|_| "plugin state lock poisoned".to_string())?
+        .plugins
+        .clone();
+    let replaced = replaced_plugin_ids(&old_map, &new_map);
+    let _window_replacement = super::windows::begin_plugin_window_replacement(&replaced)?;
+    super::windows::destroy_replaced_plugin_windows(app, &old_map, &replaced).await?;
+    reconcile_with_map(new_map).await;
+    Ok(())
+}
+
+/// Reconcile variant for marketplace commands that fenced and destroyed the
+/// target plugin's old windows before mutating `current` or state.json. Keeping
+/// that fence in the command closes the earlier disk-pivot gap: an old webview
+/// cannot issue an RPC after the symlink points at the new package but before a
+/// post-install scan begins.
+pub(crate) async fn reconcile_pre_fenced<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
+    let host_version = app.package_info().version.to_string();
+    let new_map = super::discovery::scan(app, &host_version)?;
     reconcile_with_map(new_map).await;
     Ok(())
 }
 
 /// AppHandle-free core of [`reconcile`] (unit-testable): given the freshly
-/// scanned id→(manifest, install_dir) map, deactivate + drop every RUNNING
-/// lifecycle that vanished from it, then swap `STATE.plugins` to the new map.
-pub(crate) async fn reconcile_with_map(
-    new_map: BTreeMap<String, (proto::ManifestV2, PathBuf)>,
-) {
-    // Which live lifecycles vanished from the install tree? Collect them under
-    // a read lock, then release it before doing any async teardown.
+/// scanned id→(manifest, install_dir) map, retire + deactivate + drop every
+/// RUNNING lifecycle that no longer exactly describes it, then swap
+/// `STATE.plugins` to the new map.
+pub(crate) async fn reconcile_with_map(new_map: BTreeMap<String, (proto::ManifestV2, PathBuf)>) {
+    // Which live lifecycles vanished from or no longer describe the install
+    // tree? Collect them under a read lock, then release it before async teardown.
     let stale: Vec<(String, Arc<PluginLifecycle>)> = {
         let running = RUNNING.read().unwrap();
         running
             .iter()
-            .filter(|(id, _)| !new_map.contains_key(*id))
+            .filter(|(id, lc)| {
+                new_map.get(*id).is_none_or(|(manifest, install_dir)| {
+                    !lc.matches_install(manifest, install_dir)
+                })
+            })
             .map(|(id, lc)| (id.clone(), lc.clone()))
             .collect()
     };
+
+    // Fence every stale lifecycle synchronously before the first shutdown await;
+    // otherwise a request could reactivate a later entry while an earlier plugin
+    // is still completing its `$deactivate` handshake.
+    for (_, lc) in &stale {
+        lc.retire();
+    }
 
     for (id, lc) in &stale {
         // deactivate() is async ($deactivate handshake + grace kill). Callers
@@ -513,19 +650,50 @@ pub(crate) async fn reconcile_with_map(
         // runtime"), which aborts the whole app (panic=abort). All std locks are
         // released above, so awaiting here holds none.
         lc.deactivate().await;
-        eprintln!("[plugin_runtime] reconcile: deactivated removed plugin '{id}'");
+        eprintln!("[plugin_runtime] reconcile: deactivated removed/replaced plugin '{id}'");
     }
 
-    // Drop the stale entries from RUNNING.
-    if !stale.is_empty() {
+    // Re-evaluate RUNNING under the final pivot lock. A request may have lazily
+    // registered an old-STATE lifecycle while the shutdowns above were awaiting;
+    // it was absent from the first snapshot and must be fenced too.
+    let late_stale = {
+        let mut state = STATE.write().unwrap();
         let mut running = RUNNING.write().unwrap();
-        for (id, _) in &stale {
-            running.remove(id);
+        let stale_now: Vec<(String, Arc<PluginLifecycle>)> = running
+            .iter()
+            .filter(|(id, lc)| {
+                new_map.get(*id).is_none_or(|(manifest, install_dir)| {
+                    !lc.matches_install(manifest, install_dir)
+                })
+            })
+            .map(|(id, lc)| (id.clone(), lc.clone()))
+            .collect();
+        for (id, lifecycle) in &stale_now {
+            lifecycle.retire();
+            if running
+                .get(id)
+                .is_some_and(|current| Arc::ptr_eq(current, lifecycle))
+            {
+                running.remove(id);
+            }
         }
-    }
+        state.plugins = new_map;
+        stale_now
+    };
 
-    // Swap STATE to the freshly scanned map.
-    STATE.write().unwrap().plugins = new_map;
+    // Entries already present in the first snapshot are down. Stop only the
+    // late registrations discovered at the pivot, and do not return from the
+    // marketplace operation until no superseded process remains.
+    for (id, lifecycle) in late_stale {
+        if stale
+            .iter()
+            .any(|(_, original)| Arc::ptr_eq(original, &lifecycle))
+        {
+            continue;
+        }
+        lifecycle.deactivate().await;
+        eprintln!("[plugin_runtime] reconcile: deactivated late replaced plugin '{id}'");
+    }
 }
 
 #[cfg(test)]
@@ -568,9 +736,15 @@ mod tests {
         }
         // Each specific event matches exactly its own trigger…
         assert!(matches_activation(&startup, &Trigger::Startup));
-        assert!(matches_activation(&command, &Trigger::Command("export".into())));
+        assert!(matches_activation(
+            &command,
+            &Trigger::Command("export".into())
+        ));
         assert!(matches_activation(&cli, &Trigger::Cli("pdf".into())));
-        assert!(matches_activation(&filetype, &Trigger::FileType(".base".into())));
+        assert!(matches_activation(
+            &filetype,
+            &Trigger::FileType(".base".into())
+        ));
         // …and nothing else.
         for (events, own) in [(&startup, 0usize), (&command, 1), (&cli, 2), (&filetype, 3)] {
             for (i, t) in all_triggers.iter().enumerate() {
@@ -580,9 +754,15 @@ mod tests {
             }
         }
         // Wrong payloads don't match.
-        assert!(!matches_activation(&command, &Trigger::Command("other".into())));
+        assert!(!matches_activation(
+            &command,
+            &Trigger::Command("other".into())
+        ));
         assert!(!matches_activation(&cli, &Trigger::Cli("other".into())));
-        assert!(!matches_activation(&filetype, &Trigger::FileType(".md".into())));
+        assert!(!matches_activation(
+            &filetype,
+            &Trigger::FileType(".md".into())
+        ));
         // Empty events match nothing; multi-event lists match any-of.
         assert!(!matches_activation(&[], &Trigger::Startup));
         let multi = ev(&["onCommand:a", "onCli:b"]);
@@ -593,9 +773,15 @@ mod tests {
     #[test]
     fn trigger_event_names() {
         assert_eq!(Trigger::Startup.event_name(), "onStartupFinished");
-        assert_eq!(Trigger::Command("export".into()).event_name(), "onCommand:export");
+        assert_eq!(
+            Trigger::Command("export".into()).event_name(),
+            "onCommand:export"
+        );
         assert_eq!(Trigger::Cli("pdf".into()).event_name(), "onCli:pdf");
-        assert_eq!(Trigger::FileType(".base".into()).event_name(), "onFileType:.base");
+        assert_eq!(
+            Trigger::FileType(".base".into()).event_name(),
+            "onFileType:.base"
+        );
     }
 
     #[test]
@@ -630,9 +816,14 @@ mod tests {
         // built with `PathBuf::join`, so the separator is native.
         assert_eq!(
             std::path::Path::new(&p.data_dir),
-            std::path::Path::new("/appdata").join("plugin_data").join("test.plugin"),
+            std::path::Path::new("/appdata")
+                .join("plugin_data")
+                .join("test.plugin"),
         );
-        assert!(!std::path::Path::new(&p.data_dir).exists(), "data_dir must not be created");
+        assert!(
+            !std::path::Path::new(&p.data_dir).exists(),
+            "data_dir must not be created"
+        );
     }
 
     // ── reconcile ─────────────────────────────────────────────────────────
@@ -646,6 +837,12 @@ mod tests {
         .unwrap()
     }
 
+    fn reconcile_manifest_version(id: &str, version: &str) -> proto::ManifestV2 {
+        let mut manifest = reconcile_manifest(id);
+        manifest.version = version.to_string();
+        manifest
+    }
+
     fn reconcile_ctx() -> SpawnCtx {
         SpawnCtx {
             binary: PathBuf::from("/nonexistent/fixture-bin"),
@@ -657,11 +854,69 @@ mod tests {
         }
     }
 
+    #[test]
+    fn replaced_plugin_ids_covers_updates_removals_and_ui_only_plugins() {
+        let exact = "test.window-identity-exact";
+        let version = "test.window-identity-version";
+        let manifest = "test.window-identity-manifest";
+        let install_dir = "test.window-identity-dir";
+        let removed = "test.window-identity-removed";
+        let added = "test.window-identity-added";
+
+        let old_dir = |id: &str| PathBuf::from("/plugins/v1").join(id);
+        let mut old_map = BTreeMap::new();
+        for id in [exact, version, manifest, install_dir, removed] {
+            old_map.insert(
+                id.to_string(),
+                (reconcile_manifest_version(id, "1.0.0"), old_dir(id)),
+            );
+        }
+
+        let mut new_map = BTreeMap::new();
+        new_map.insert(exact.to_string(), old_map[exact].clone());
+        new_map.insert(
+            version.to_string(),
+            (
+                reconcile_manifest_version(version, "2.0.0"),
+                old_dir(version),
+            ),
+        );
+        let mut changed_manifest = reconcile_manifest_version(manifest, "1.0.0");
+        changed_manifest.capabilities.push("toast".into());
+        new_map.insert(manifest.to_string(), (changed_manifest, old_dir(manifest)));
+        new_map.insert(
+            install_dir.to_string(),
+            (
+                reconcile_manifest_version(install_dir, "1.0.0"),
+                PathBuf::from("/plugins/v2").join(install_dir),
+            ),
+        );
+        new_map.insert(
+            added.to_string(),
+            (reconcile_manifest_version(added, "1.0.0"), old_dir(added)),
+        );
+
+        // This calculation is independent of RUNNING: a UI-only plugin with no
+        // backend process is still invalidated when its manifest changes.
+        assert_eq!(
+            replaced_plugin_ids(&old_map, &new_map),
+            vec![
+                install_dir.to_string(),
+                manifest.to_string(),
+                removed.to_string(),
+                version.to_string(),
+            ]
+        );
+    }
+
     /// reconcile_with_map: two plugins live in RUNNING + STATE; the new scan
     /// map drops one → that one is deactivated + removed from RUNNING while the
     /// survivor stays, and STATE.plugins mirrors the new map exactly.
     #[tokio::test]
     async fn reconcile_drops_removed_from_running_and_state() {
+        let _registry_guard = REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Unique ids keep the global STATE/RUNNING mutation race-free vs other
         // tests (none of which use these ids).
         let keep = "test.reconcile-keep";
@@ -701,7 +956,10 @@ mod tests {
         {
             let running = RUNNING.read().unwrap();
             assert!(running.contains_key(keep), "survivor stays in RUNNING");
-            assert!(!running.contains_key(drop), "removed plugin dropped from RUNNING");
+            assert!(
+                !running.contains_key(drop),
+                "removed plugin dropped from RUNNING"
+            );
         }
         // STATE mirrors the new map.
         {
@@ -713,6 +971,107 @@ mod tests {
         // Cleanup shared globals so we don't leak into other tests.
         RUNNING.write().unwrap().remove(keep);
         STATE.write().unwrap().plugins.remove(keep);
+    }
+
+    /// Same-id upgrades must not reuse a lifecycle built from the old package.
+    /// Version, any other manifest field, and install_dir are each part of the
+    /// runtime identity; an exact match is the only survivor.
+    #[tokio::test]
+    async fn reconcile_retires_replaced_same_id_lifecycles() {
+        let _registry_guard = REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let keep = "test.reconcile-identity-keep";
+        let version = "test.reconcile-identity-version";
+        let manifest = "test.reconcile-identity-manifest";
+        let install_dir = "test.reconcile-identity-dir";
+        let ids = [keep, version, manifest, install_dir];
+
+        let mut old = BTreeMap::<String, Arc<PluginLifecycle>>::new();
+        for id in ids {
+            let lifecycle = Arc::new(PluginLifecycle::new(
+                reconcile_manifest_version(id, "1.0.0"),
+                PathBuf::from("/tmp/runtime-v1").join(id),
+                reconcile_ctx(),
+            ));
+            RUNNING
+                .write()
+                .unwrap()
+                .insert(id.to_string(), lifecycle.clone());
+            old.insert(id.to_string(), lifecycle);
+        }
+
+        let mut new_map = BTreeMap::new();
+        new_map.insert(
+            keep.to_string(),
+            (
+                reconcile_manifest_version(keep, "1.0.0"),
+                PathBuf::from("/tmp/runtime-v1").join(keep),
+            ),
+        );
+        new_map.insert(
+            version.to_string(),
+            (
+                reconcile_manifest_version(version, "2.0.0"),
+                PathBuf::from("/tmp/runtime-v1").join(version),
+            ),
+        );
+        let mut changed_manifest = reconcile_manifest_version(manifest, "1.0.0");
+        changed_manifest.capabilities.push("toast".into());
+        new_map.insert(
+            manifest.to_string(),
+            (
+                changed_manifest,
+                PathBuf::from("/tmp/runtime-v1").join(manifest),
+            ),
+        );
+        new_map.insert(
+            install_dir.to_string(),
+            (
+                reconcile_manifest_version(install_dir, "1.0.0"),
+                PathBuf::from("/tmp/runtime-v2").join(install_dir),
+            ),
+        );
+
+        reconcile_with_map(new_map).await;
+
+        {
+            let running = RUNNING.read().unwrap();
+            assert!(Arc::ptr_eq(
+                running.get(keep).expect("exact match survives"),
+                &old[keep]
+            ));
+            for id in [version, manifest, install_dir] {
+                assert!(!running.contains_key(id), "replaced {id} must be dropped");
+            }
+        }
+        for id in [version, manifest, install_dir] {
+            let retired = &old[id];
+            assert!(retired.is_retired(), "replaced {id} must be fenced");
+            let error = match retired.ensure_active(&Trigger::Startup).await {
+                Ok(_) => panic!("retired lifecycle must never reactivate"),
+                Err(error) => error,
+            };
+            assert!(error.contains("superseded"), "got: {error}");
+        }
+        assert!(!old[keep].is_retired(), "exact match stays reusable");
+        {
+            let state = STATE.read().unwrap();
+            assert_eq!(state.plugins[version].0.version, "2.0.0");
+            assert_eq!(
+                state.plugins[install_dir].1,
+                PathBuf::from("/tmp/runtime-v2").join(install_dir)
+            );
+            assert_eq!(
+                state.plugins[manifest].0.capabilities,
+                vec!["toast".to_string()]
+            );
+        }
+
+        for id in ids {
+            RUNNING.write().unwrap().remove(id);
+            STATE.write().unwrap().plugins.remove(id);
+        }
     }
 
     // ── 子项目②b ui_request phase guards ──────────────────────────────────
@@ -730,7 +1089,10 @@ mod tests {
             PathBuf::from("/tmp/uireq-inactive"),
             reconcile_ctx(),
         ));
-        let err = lc.ui_request("connect", serde_json::json!({})).await.unwrap_err();
+        let err = lc
+            .ui_request("connect", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(err.contains("is not active"), "got: {err}");
     }
 
@@ -744,7 +1106,10 @@ mod tests {
             reconcile_ctx(),
         ));
         *lc.phase.lock().await = Phase::Disabled("crash-loop".into());
-        let err = lc.ui_request("connect", serde_json::json!({})).await.unwrap_err();
+        let err = lc
+            .ui_request("connect", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(err.contains("disabled"), "got: {err}");
         assert!(err.contains("crash-loop"), "got: {err}");
     }

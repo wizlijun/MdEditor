@@ -177,13 +177,7 @@ fn take_previewed(key: &str) -> Option<(Vec<u8>, String)> {
 /// Emit one `plugin-download-progress` event. `phase` distinguishes the
 /// consent-time verification download from the install one; the frontend shows
 /// a bar for both so a slow transfer never looks like a hang.
-fn emit_progress(
-    app: &tauri::AppHandle,
-    id: &str,
-    phase: &str,
-    received: u64,
-    total: Option<u64>,
-) {
+fn emit_progress(app: &tauri::AppHandle, id: &str, phase: &str, received: u64, total: Option<u64>) {
     use tauri::Emitter;
     let _ = app.emit(
         "plugin-download-progress",
@@ -308,13 +302,20 @@ pub async fn plugin_market_install(
         tmp.path(),
     )
     .map_err(|e| e.to_string())?;
+    // Fence + destroy the old UI before `current` is repointed. Doing this only
+    // in the post-install reconcile leaves a gap where old JavaScript can issue
+    // an RPC while the install symlink already names the new package.
+    let window_replacement = prepare_plugin_window_replacement(&app, &id).await?;
     installer::commit_install(&root, &id, &version, tmp.path()).map_err(|e| e.to_string())?;
 
     // Record installed + enabled in state.json.
     let mut install = state::load(&root);
     install.installed.insert(
         id.clone(),
-        state::InstalledPlugin { version: version.clone(), enabled: true },
+        state::InstalledPlugin {
+            version: version.clone(),
+            enabled: true,
+        },
     );
     state::save(&root, &install)?;
 
@@ -328,7 +329,8 @@ pub async fn plugin_market_install(
     // Bring the live runtime in line with the new tree, rebuild the native menu
     // (a brand-new plugin's menu item now appears without a restart), then nudge
     // the UI.
-    lifecycle::reconcile(&app).await?;
+    lifecycle::reconcile_pre_fenced(&app).await?;
+    drop(window_replacement);
     crate::reconcile_plugin_shortcuts(&app);
     crate::rebuild_menu(&app);
     notify_plugins_changed(&app);
@@ -349,13 +351,15 @@ pub async fn plugin_market_uninstall(
         .app_data_dir()
         .map_err(|e| format!("cannot resolve app data dir: {e}"))?;
 
+    let window_replacement = prepare_plugin_window_replacement(&app, &id).await?;
     installer::uninstall(&root, &id, keep_data, &app_data).map_err(|e| e.to_string())?;
 
     let mut install = state::load(&root);
     install.installed.remove(&id);
     state::save(&root, &install)?;
 
-    lifecycle::reconcile(&app).await?;
+    lifecycle::reconcile_pre_fenced(&app).await?;
+    drop(window_replacement);
     crate::reconcile_plugin_shortcuts(&app);
     crate::rebuild_menu(&app);
     notify_plugins_changed(&app);
@@ -377,13 +381,33 @@ pub async fn plugin_market_set_enabled(
         Some(p) => p.enabled = enabled,
         None => return Err(format!("plugin '{id}' is not installed")),
     }
+    let window_replacement = prepare_plugin_window_replacement(&app, &id).await?;
     state::save(&root, &install)?;
 
-    lifecycle::reconcile(&app).await?;
+    lifecycle::reconcile_pre_fenced(&app).await?;
+    drop(window_replacement);
     crate::reconcile_plugin_shortcuts(&app);
     crate::rebuild_menu(&app);
     notify_plugins_changed(&app);
     Ok(())
+}
+
+/// Fence one marketplace target and remove every webview contributed by its
+/// currently active manifest before any on-disk mutation. The returned guard
+/// must live through [`lifecycle::reconcile_pre_fenced`].
+async fn prepare_plugin_window_replacement(
+    app: &tauri::AppHandle,
+    plugin_id: &str,
+) -> Result<super::windows::PluginWindowReplacement, String> {
+    let old_plugins = super::STATE
+        .read()
+        .map_err(|_| "plugin state lock poisoned".to_string())?
+        .plugins
+        .clone();
+    let plugin_ids = vec![plugin_id.to_string()];
+    let replacement = super::windows::begin_plugin_window_replacement(&plugin_ids)?;
+    super::windows::destroy_replaced_plugin_windows(app, &old_plugins, &plugin_ids).await?;
+    Ok(replacement)
 }
 
 /// List installed plugins from state.json joined with each
@@ -520,6 +544,25 @@ fn register_lifecycle(plugin_id: &str, lc: Arc<PluginLifecycle>) -> Arc<PluginLi
         .clone()
 }
 
+fn unregister_lifecycle_if_same(plugin_id: &str, lifecycle: &Arc<PluginLifecycle>) {
+    let mut running = RUNNING.write().unwrap();
+    if running
+        .get(plugin_id)
+        .is_some_and(|current| Arc::ptr_eq(current, lifecycle))
+    {
+        running.remove(plugin_id);
+    }
+}
+
+fn retire_lifecycle(plugin_id: &str, lifecycle: Arc<PluginLifecycle>) {
+    lifecycle.retire();
+    let id = plugin_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        lifecycle.deactivate().await;
+        unregister_lifecycle_if_same(&id, &lifecycle);
+    });
+}
+
 /// Look up the live lifecycle for `plugin_id`, registering a fresh one from
 /// STATE on first use. `pub(crate)` so `ui_rpc::forward_to_plugin` can reuse the
 /// exact same registration path a menu command uses (子项目②b).
@@ -527,9 +570,6 @@ pub(crate) fn get_or_register<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     plugin_id: &str,
 ) -> Result<Arc<PluginLifecycle>, String> {
-    if let Some(lc) = RUNNING.read().unwrap().get(plugin_id) {
-        return Ok(lc.clone());
-    }
     let (manifest, install_dir) = lookup_v2(plugin_id)?;
     if !is_process_plugin(&manifest) {
         // UI-only plugin: no process. Callers that reach here (e.g. a window UI
@@ -540,9 +580,42 @@ pub(crate) fn get_or_register<R: tauri::Runtime>(
             "plugin '{plugin_id}' is UI-only (no process); it has no command/ui.request channel"
         ));
     }
+    if let Some(lc) = RUNNING.read().unwrap().get(plugin_id).cloned() {
+        if !lc.is_retired() && lc.matches_install(&manifest, &install_dir) {
+            return Ok(lc);
+        }
+        // Reconcile fences the superseded instance before its async shutdown.
+        // Do not hand that old Arc to a window request or let it win a fresh
+        // registration race; its fenced shutdown removes it, then a retry
+        // registers STATE's current package normally.
+        retire_lifecycle(plugin_id, lc);
+        return Err(format!(
+            "plugin '{plugin_id}' runtime is being replaced; retry the request"
+        ));
+    }
     let ctx = build_spawn_ctx(app, &manifest, &install_dir)?;
-    let lc = Arc::new(PluginLifecycle::new(manifest, install_dir, ctx));
-    Ok(register_lifecycle(plugin_id, lc))
+    let lc = Arc::new(PluginLifecycle::new(
+        manifest.clone(),
+        install_dir.clone(),
+        ctx,
+    ));
+    let registered = register_lifecycle(plugin_id, lc);
+    // STATE may have pivoted after the first lookup but before registration.
+    // Re-read it so a lifecycle built from the previous package cannot slip in
+    // after reconcile's final RUNNING snapshot.
+    let still_current = match lookup_v2(plugin_id) {
+        Ok((current_manifest, current_dir)) => {
+            registered.matches_install(&current_manifest, &current_dir)
+        }
+        Err(_) => false,
+    };
+    if registered.is_retired() || !still_current {
+        retire_lifecycle(plugin_id, registered);
+        return Err(format!(
+            "plugin '{plugin_id}' runtime is being replaced; retry the request"
+        ));
+    }
+    Ok(registered)
 }
 
 #[cfg(test)]
@@ -573,8 +646,14 @@ mod tests {
     /// present id → the stored (manifest, install_dir) pair.
     #[test]
     fn lookup_v2_err_on_unknown_and_ok_on_present() {
+        let _registry_guard = lifecycle::REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let missing = lookup_v2("bogus.unknown-plugin");
-        assert_eq!(missing.unwrap_err(), "unknown v2 plugin: bogus.unknown-plugin");
+        assert_eq!(
+            missing.unwrap_err(),
+            "unknown v2 plugin: bogus.unknown-plugin"
+        );
 
         // Unique id + cleanup keeps the global STATE mutation race-free
         // against other tests (none of which use this id).
@@ -593,15 +672,27 @@ mod tests {
     /// first Arc (idempotent; the loser is dropped without spawning).
     #[test]
     fn register_lifecycle_is_idempotent() {
+        let _registry_guard = lifecycle::REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let id = "test.commands-register-fixture";
         let first = Arc::new(PluginLifecycle::new(
-            fixture_manifest(id), PathBuf::from("/tmp/a"), noop_spawn_ctx()));
+            fixture_manifest(id),
+            PathBuf::from("/tmp/a"),
+            noop_spawn_ctx(),
+        ));
         let second = Arc::new(PluginLifecycle::new(
-            fixture_manifest(id), PathBuf::from("/tmp/b"), noop_spawn_ctx()));
+            fixture_manifest(id),
+            PathBuf::from("/tmp/b"),
+            noop_spawn_ctx(),
+        ));
         let won_first = register_lifecycle(id, first.clone());
         let won_second = register_lifecycle(id, second);
         assert!(Arc::ptr_eq(&won_first, &first));
-        assert!(Arc::ptr_eq(&won_second, &first), "second registration must return the first Arc");
+        assert!(
+            Arc::ptr_eq(&won_second, &first),
+            "second registration must return the first Arc"
+        );
         RUNNING.write().unwrap().remove(id);
     }
 
@@ -670,7 +761,10 @@ mod tests {
         let mut m = fixture_manifest("pub.binary");
         m.binary
             .insert("aarch64-apple-darwin".into(), "bin/x".into());
-        assert!(is_process_plugin(&m), "a plugin with a binary is process-backed");
+        assert!(
+            is_process_plugin(&m),
+            "a plugin with a binary is process-backed"
+        );
 
         // UI-only (no binary) → not a process plugin; must be skipped by
         // startup_activate_all and rejected by get_or_register with a clear msg.
@@ -688,10 +782,14 @@ mod tests {
         sha: &[(&str, &str)],
     ) -> market::RegistryEntry {
         use std::collections::BTreeMap;
-        let dl: BTreeMap<String, String> =
-            download.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        let sh: BTreeMap<String, String> =
-            sha.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let dl: BTreeMap<String, String> = download
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let sh: BTreeMap<String, String> = sha
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         market::RegistryEntry {
             id: id.to_string(),
             version: "1.0.0".to_string(),
@@ -713,11 +811,17 @@ mod tests {
     fn resolve_download_falls_back_to_universal() {
         let entry = registry_entry(
             "roam",
-            &[("universal", "https://plugins.notemd.net/api/download/roam/1.0.0/universal")],
+            &[(
+                "universal",
+                "https://plugins.notemd.net/api/download/roam/1.0.0/universal",
+            )],
             &[("universal", "uu")],
         );
         let (url, sha) = resolve_download(&entry).unwrap();
-        assert!(url.ends_with("universal"), "url {url} must resolve to the universal package");
+        assert!(
+            url.ends_with("universal"),
+            "url {url} must resolve to the universal package"
+        );
         assert_eq!(sha, "uu");
     }
 
@@ -727,7 +831,6 @@ mod tests {
         let err = resolve_download(&entry).unwrap_err();
         assert!(err.contains("no download for arch"), "got {err}");
     }
-
 }
 
 /// Assemble everything the lifecycle needs to (re)spawn without an AppHandle.
@@ -740,7 +843,10 @@ fn build_spawn_ctx<R: tauri::Runtime>(
     let triple = discovery::current_arch_triple()
         .ok_or_else(|| format!("unsupported host arch '{}'", std::env::consts::ARCH))?;
     let rel = manifest.binary.get(triple).ok_or_else(|| {
-        format!("plugin '{}': no binary for host arch '{triple}'", manifest.id)
+        format!(
+            "plugin '{}': no binary for host arch '{triple}'",
+            manifest.id
+        )
     })?;
     let log_dir = app
         .path()
