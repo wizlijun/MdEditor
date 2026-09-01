@@ -7,6 +7,15 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **The Plugin Market now separates cognitive work from system capabilities.** Capture, Read, Ideas, Move Forward, Reflect and Create describe what people accomplish with plugins; Import & Export and Experience are marked as system features. Roam Import and PDF Export live under Import & Export, while Power Mode has its own Experience category. The same order and wording now appear in the app, the native Plugins menu and the public marketplace.
+- **AI-assisted plugins are easier to discover without turning AI into a catch-all category.** A compact “Create with AI” shelf links to focused collaborators for reading, inspiration, reasoning and action, and each matching card carries a specific AI role badge. Update alerts remain visually dominant.
+
+### Fixed
+
+- **Installed plugins move to the new categories immediately, including offline.** Official plugin IDs migrate old manifests and cached category names locally, while the refreshed marketplace index supplies the same taxonomy after the network connects.
+
 ## v6.901.3 — 2026-09-01
 
 ### Fixed
