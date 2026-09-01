@@ -9,6 +9,7 @@ For the full commit history, see the git log.
 
 ### Changed
 
+- **The Plugin Market now uses a standard, quieter window palette.** Window, section, card, update and AI surfaces use neutral system colors; category and plugin icons retain their visual identity, while actions share the system accent color.
 - **Manual Memory confirmation is now a single action.** Clicking Confirm on a fact, or Approve on a reviewed proposal, immediately writes the SHA-bound human decision without asking for a second confirmation.
 - **Memory projections no longer expose citation notes after every fact.** Inline footnote markers, footnote definitions and per-entry source properties stay out of `USER.md` and `MEMORY.md`; immutable proposals retain provenance and decisions bind the exact candidate SHA.
 
