@@ -13,6 +13,7 @@ export type SettingsField =
   | { key: string; type: 'secret'; label: string }
   | { key: string; type: 'select'; label: string; options: string[]; default?: string }
   | { key: string; type: 'boolean'; label: string; default?: boolean }
+  | { key: string; type: 'number'; label: string; default?: number; min?: number; max?: number; step?: number }
 
 export interface PromptSpec {
   kind: 'save-dialog'

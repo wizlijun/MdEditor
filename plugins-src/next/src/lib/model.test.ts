@@ -6,8 +6,8 @@ describe('Next v1 model contract', () => {
     expect(NEXT_ACTIONS).toEqual(['commit', 'wait', 'park', 'settle', 'reopen', 'relink'])
   })
 
-  it('uses three as a soft WIP default, not as a type-level prohibition', () => {
-    expect(DEFAULT_WIP_LIMIT).toBe(3)
+  it('uses five as a soft WIP warning default, not as a type-level prohibition', () => {
+    expect(DEFAULT_WIP_LIMIT).toBe(5)
     expect(DEFAULT_WAITING_WARNING).toBe(5)
     expect(IDEA_STATES).toContain('unsupported')
   })

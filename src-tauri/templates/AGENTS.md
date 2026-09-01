@@ -162,7 +162,9 @@ task:
   version: 1
   id: 8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8
   project: NoteMD
+  priority: P1
   due: "2026-09-02"
+  contexts: ["@computer"]
   done_when: The build is available and installation is verified
   dedupe_key: daily-summary/v1:2026-09-01:testflight-upload
 generated: { by: your-agent/version, at: 2026-09-01T03:20:00Z }
@@ -192,9 +194,13 @@ Field rules:
   the exact project name whenever the source establishes one; omit it rather
   than guessing when the Task is genuinely unassigned. This is context, not a
   confirmed Next project tag, and it does not mark the Task current.
-- Optional: `description`, `task.project`, `task.due`, `task.done_when`,
+- Optional: `description`, `task.project`, `task.priority`, `task.due`,
+  `task.contexts`, `task.done_when`,
   `sources[].id`, `sources[].title`, and Markdown body text. If present, each
-  value must be a non-empty string. `task.due` is a real calendar date and **must be quoted** as
+  scalar value must be a non-empty string. `task.priority` must be `P0`, `P1`,
+  `P2`, or `P3` (P0 is highest; use P2 when no stronger signal exists).
+  `task.contexts` is a non-empty sequence of unique place, tool, or person
+  contexts. `task.due` is a real hard calendar deadline and **must be quoted** as
   `"YYYY-MM-DD"` so YAML cannot coerce it into another type. `task.done_when`
   states observable completion evidence, not a vague intention.
 - The body may hold concise execution context, source links, or a checklist.

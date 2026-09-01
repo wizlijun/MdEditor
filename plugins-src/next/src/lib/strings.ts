@@ -40,6 +40,15 @@ export type MessageKey =
   | 'badge.agent'
   | 'badge.orphan'
   | 'badge.unsupported'
+  | 'badge.dueNone'
+  | 'badge.due'
+  | 'badge.overdue'
+  | 'badge.contextMissing'
+  | 'metadata.label'
+  | 'priority.P0'
+  | 'priority.P1'
+  | 'priority.P2'
+  | 'priority.P3'
   | 'warning.wip'
   | 'warning.waiting'
   | 'warning.readOnly'
@@ -95,6 +104,10 @@ export type MessageKey =
   | 'field.result'
   | 'field.result.placeholder'
   | 'field.project'
+  | 'field.priority'
+  | 'field.due'
+  | 'field.contexts'
+  | 'field.contexts.placeholder'
   | 'field.project.placeholder'
   | 'field.project.selected'
   | 'field.project.existing'
@@ -207,7 +220,7 @@ const en: Catalog = {
   'section.resurfaced': 'Back in view',
   'section.placed': 'Placed items',
   'section.repair': 'Needs attention',
-  'count.wip': '{count}/3',
+  'count.wip': '{count}/{limit}',
   'count.waiting': '{count}',
   'action.placeOne': 'Place an item',
   'action.newTask': 'New Task',
@@ -224,7 +237,16 @@ const en: Catalog = {
   'badge.agent': 'Agent',
   'badge.orphan': 'Source missing',
   'badge.unsupported': 'Needs repair',
-  'warning.wip': 'Three or more items are already in hand. Finish or place one before adding another.',
+  'badge.dueNone': 'No due date',
+  'badge.due': 'Due {date}',
+  'badge.overdue': 'Overdue {date}',
+  'badge.contextMissing': 'Context not clarified',
+  'metadata.label': 'Priority, due date, and contexts',
+  'priority.P0': 'P0 · Urgent',
+  'priority.P1': 'P1 · High',
+  'priority.P2': 'P2 · Normal',
+  'priority.P3': 'P3 · Low',
+  'warning.wip': 'WIP limit reached: {count} items are in progress (limit {limit}). Finish, wait, or move at least one to Later. This warning stays visible until In Progress is below the limit.',
   'warning.waiting': 'More than five items are waiting. Make sure each still has a real review responsibility.',
   'warning.readOnly': 'Next is read-only until its event document is repaired.',
   'search.placeholder': 'Search title, action, or destination',
@@ -279,6 +301,10 @@ const en: Catalog = {
   'field.result': 'Result',
   'field.result.placeholder': 'Optional result or evidence link',
   'field.project': 'Project',
+  'field.priority': 'Priority',
+  'field.due': 'Due date · Optional',
+  'field.contexts': 'GTD context · Optional',
+  'field.contexts.placeholder': '@computer, @phone (comma-separated)',
   'field.project.placeholder': 'Choose or enter a project',
   'field.project.selected': 'Selected projects',
   'field.project.existing': 'Existing projects',
@@ -390,7 +416,7 @@ const zh: Catalog = {
   'section.resurfaced': '再次浮现',
   'section.placed': '已安放',
   'section.repair': '需要处理',
-  'count.wip': '{count}/3',
+  'count.wip': '{count}/{limit}',
   'count.waiting': '{count}',
   'action.placeOne': '安放一个事项',
   'action.newTask': '新建任务',
@@ -407,7 +433,16 @@ const zh: Catalog = {
   'badge.agent': 'Agent 添加',
   'badge.orphan': '原文失联',
   'badge.unsupported': '需要修复',
-  'warning.wip': '手上已有三个或更多事项。请先完成或安放其中一个，再加入新的承诺。',
+  'badge.dueNone': '无截止日期',
+  'badge.due': '截止 {date}',
+  'badge.overdue': '已逾期 {date}',
+  'badge.contextMissing': '情境未明确',
+  'metadata.label': '优先级、截止日期与情境',
+  'priority.P0': 'P0 · 紧急',
+  'priority.P1': 'P1 · 高',
+  'priority.P2': 'P2 · 普通',
+  'priority.P3': 'P3 · 低',
+  'warning.wip': '已达到 WIP 上限：进行中有 {count} 项（上限 {limit}）。请先完成、转为等待或移到稍后至少一项；在数量降到上限以下前，此警告会一直显示。',
   'warning.waiting': '等待项已超过五个。请确认每一项仍有真实的回收责任。',
   'warning.readOnly': '事件文档修复前，Next 将保持只读。',
   'search.placeholder': '搜索标题、下一步或去向',
@@ -462,6 +497,10 @@ const zh: Catalog = {
   'field.result': '结果',
   'field.result.placeholder': '可选的结果或证据链接',
   'field.project': '项目',
+  'field.priority': '优先级',
+  'field.due': '截止日期 · 可选',
+  'field.contexts': 'GTD 情境 · 可选',
+  'field.contexts.placeholder': '@电脑、@电话（逗号分隔）',
   'field.project.placeholder': '选择已有项目，或输入项目名称',
   'field.project.selected': '已选项目',
   'field.project.existing': '已有项目',
@@ -573,7 +612,7 @@ const ja: Catalog = {
   'section.resurfaced': '再び表示',
   'section.placed': '配置済み',
   'section.repair': '確認が必要',
-  'count.wip': '{count}/3',
+  'count.wip': '{count}/{limit}',
   'count.waiting': '{count}',
   'action.placeOne': '項目を置く',
   'action.newTask': '新規タスク',
@@ -590,7 +629,16 @@ const ja: Catalog = {
   'badge.agent': 'Agent が追加',
   'badge.orphan': '原文が見つかりません',
   'badge.unsupported': '修復が必要',
-  'warning.wip': 'すでに三つ以上の項目が進行中です。一つを終えるか置き直してから追加してください。',
+  'badge.dueNone': '期限なし',
+  'badge.due': '期限 {date}',
+  'badge.overdue': '期限超過 {date}',
+  'badge.contextMissing': 'コンテキスト未整理',
+  'metadata.label': '優先度、期限、コンテキスト',
+  'priority.P0': 'P0 · 緊急',
+  'priority.P1': 'P1 · 高',
+  'priority.P2': 'P2 · 通常',
+  'priority.P3': 'P3 · 低',
+  'warning.wip': 'WIP 上限に達しました：{count} 件が進行中です（上限 {limit}）。少なくとも一件を完了、待機、または後回しにしてください。進行中の件数が上限未満になるまで、この警告は表示され続けます。',
   'warning.waiting': '確認待ちが五つを超えています。すべてに確認責任が残っているか確かめてください。',
   'warning.readOnly': 'イベント文書を修復するまで Next は読み取り専用です。',
   'search.placeholder': 'タイトル、次の行動、移動先を検索',
@@ -645,6 +693,10 @@ const ja: Catalog = {
   'field.result': '成果',
   'field.result.placeholder': '任意の成果または証拠へのリンク',
   'field.project': 'プロジェクト',
+  'field.priority': '優先度',
+  'field.due': '期限 · 任意',
+  'field.contexts': 'GTD コンテキスト · 任意',
+  'field.contexts.placeholder': '@computer, @phone（カンマ区切り）',
   'field.project.placeholder': '既存のプロジェクトを選択するか入力',
   'field.project.selected': '選択済みのプロジェクト',
   'field.project.existing': '既存のプロジェクト',
@@ -756,7 +808,7 @@ const de: Catalog = {
   'section.resurfaced': 'Wieder im Blick',
   'section.placed': 'Abgelegte Einträge',
   'section.repair': 'Prüfung nötig',
-  'count.wip': '{count}/3',
+  'count.wip': '{count}/{limit}',
   'count.waiting': '{count}',
   'action.placeOne': 'Einen Eintrag ablegen',
   'action.newTask': 'Neue Aufgabe',
@@ -773,7 +825,16 @@ const de: Catalog = {
   'badge.agent': 'Von Agent hinzugefügt',
   'badge.orphan': 'Quelle fehlt',
   'badge.unsupported': 'Reparatur nötig',
-  'warning.wip': 'Drei oder mehr Einträge sind bereits aktiv. Schließe einen ab oder lege ihn neu ab, bevor du einen weiteren hinzufügst.',
+  'badge.dueNone': 'Kein Fälligkeitsdatum',
+  'badge.due': 'Fällig {date}',
+  'badge.overdue': 'Überfällig {date}',
+  'badge.contextMissing': 'Kontext ungeklärt',
+  'metadata.label': 'Priorität, Fälligkeit und Kontexte',
+  'priority.P0': 'P0 · Dringend',
+  'priority.P1': 'P1 · Hoch',
+  'priority.P2': 'P2 · Normal',
+  'priority.P3': 'P3 · Niedrig',
+  'warning.wip': 'WIP-Limit erreicht: {count} Einträge sind in Bearbeitung (Limit {limit}). Schließe mindestens einen ab, stelle ihn auf Warten oder verschiebe ihn auf Später. Diese Warnung bleibt sichtbar, bis die Anzahl unter dem Limit liegt.',
   'warning.waiting': 'Mehr als fünf Punkte warten. Prüfe, ob für jeden noch echte Abnahmeverantwortung besteht.',
   'warning.readOnly': 'Next bleibt schreibgeschützt, bis das Ereignisdokument repariert ist.',
   'search.placeholder': 'Titel, nächsten Schritt oder Ziel suchen',
@@ -828,6 +889,10 @@ const de: Catalog = {
   'field.result': 'Resultat',
   'field.result.placeholder': 'Optionales Resultat oder Link zum Nachweis',
   'field.project': 'Projekt',
+  'field.priority': 'Priorität',
+  'field.due': 'Fälligkeitsdatum · Optional',
+  'field.contexts': 'GTD-Kontext · Optional',
+  'field.contexts.placeholder': '@computer, @phone (kommagetrennt)',
   'field.project.placeholder': 'Projekt auswählen oder eingeben',
   'field.project.selected': 'Ausgewählte Projekte',
   'field.project.existing': 'Vorhandene Projekte',

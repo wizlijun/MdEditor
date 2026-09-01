@@ -34,7 +34,25 @@ describe('CreateIdeaSheet', () => {
     textarea.dispatchEvent(new InputEvent('input', { bubbles: true }))
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }))
     await Promise.resolve()
-    expect(onSubmit).toHaveBeenCalledWith('一个念头')
+    expect(onSubmit).toHaveBeenCalledWith({ body: '一个念头', priority: 'P2', contexts: [] })
+  })
+
+  it('prefills and submits configured priority, due date, and GTD context', async () => {
+    const onSubmit = vi.fn(async () => {})
+    component = mount(CreateIdeaSheet, {
+      target: document.body,
+      props: {
+        ideaDir: 'inbox/ideas',
+        defaults: { priority: 'P1', due: '2026-09-08', contexts: ['@电脑'] },
+        saving: false,
+        onCancel: vi.fn(),
+        onSubmit,
+      },
+    })
+    flushSync()
+    expect(document.querySelector<HTMLSelectElement>('[name="priority"]')?.value).toBe('P1')
+    expect(document.querySelector<HTMLInputElement>('[name="due"]')?.value).toBe('2026-09-08')
+    expect(document.querySelector<HTMLInputElement>('[name="contexts"]')?.value).toBe('@电脑')
   })
 
   it('closes with Escape only when it is not saving', () => {

@@ -1,20 +1,30 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
+  import { DEFAULT_PRIORITY, parseContextDraft, PRIORITIES, type Priority } from '../lib/metadata'
   import { t } from '../lib/strings'
 
   export interface TaskDraft {
     title: string
     body?: string
     done_when?: string
+    priority: Priority
+    due?: string
+    contexts: string[]
   }
 
   let {
     taskDir,
+    defaultPriority = DEFAULT_PRIORITY,
+    defaultDue,
+    defaultContexts = [],
     saving,
     onCancel,
     onSubmit,
   }: {
     taskDir: string
+    defaultPriority?: Priority
+    defaultDue?: string
+    defaultContexts?: readonly string[]
     saving: boolean
     onCancel(): void
     onSubmit(input: TaskDraft, markCurrent: boolean): Promise<void>
@@ -23,6 +33,9 @@
   let title = $state('')
   let body = $state('')
   let doneWhen = $state('')
+  let priority = $state(untrack(() => defaultPriority))
+  let due = $state(untrack(() => defaultDue ?? ''))
+  let contextDraft = $state(untrack(() => defaultContexts.join(', ')))
   let invalid = $state<'title' | 'done_when' | null>(null)
   let sheetEl: HTMLDivElement | undefined = $state()
   let formEl: HTMLFormElement | undefined = $state()
@@ -36,6 +49,9 @@
       title: title.trim(),
       ...(details ? { body: details } : {}),
       ...(close ? { done_when: close } : {}),
+      priority,
+      ...(due ? { due } : {}),
+      contexts: parseContextDraft(contextDraft),
     }
   }
 
@@ -144,6 +160,17 @@
         placeholder={t('task.create.doneWhenPlaceholder')}
       />
 
+      <div class="planning-grid">
+        <label for="new-task-priority">{t('field.priority')}</label>
+        <select id="new-task-priority" name="priority" bind:value={priority}>
+          {#each PRIORITIES as value}<option value={value}>{t(`priority.${value}` as never)}</option>{/each}
+        </select>
+        <label for="new-task-due">{t('field.due')}</label>
+        <input id="new-task-due" name="due" type="date" bind:value={due} />
+        <label for="new-task-contexts">{t('field.contexts')}</label>
+        <input id="new-task-contexts" name="contexts" bind:value={contextDraft} placeholder={t('field.contexts.placeholder')} />
+      </div>
+
       {#if invalid === 'title'}
         <p class="error" role="alert">{t('error.taskRequired')}</p>
       {:else if invalid === 'done_when'}
@@ -172,9 +199,10 @@
   form { display: grid; gap: 8px; padding: 18px 24px 22px; border-top: 1px solid var(--line); }
   label { margin-top: 5px; font-size: 12px; font-weight: 650; }
   label span { color: var(--muted); font-weight: 450; }
-  input, textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--input); color: var(--fg); padding: 10px 12px; font: inherit; line-height: 1.45; outline: none; }
+  input, textarea, select { width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--input); color: var(--fg); padding: 10px 12px; font: inherit; line-height: 1.45; outline: none; }
   textarea { resize: vertical; min-height: 88px; }
-  input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .planning-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 12px; margin-top: 7px; }
   [aria-invalid="true"] { border-color: var(--danger); }
   .error { margin: 2px 0 0; color: var(--danger); font-size: 12px; }
   footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; }

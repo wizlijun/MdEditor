@@ -637,7 +637,12 @@ function applyUnsupportedEvent(state: MutableProjection, event: UnsupportedEvent
   markUnsupported(state, event.item_id, event.event_id, event.at, current?.source ?? event.source, event.action, event.item_kind)
 }
 
-function finalize(state: MutableProjection): LedgerProjection {
+function effectiveWipLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isSafeInteger(value) || value < 1) return DEFAULT_WIP_LIMIT
+  return value
+}
+
+function finalize(state: MutableProjection, configuredWipLimit?: number): LedgerProjection {
   const values = [...state.items.values()]
   const ideas = new Map(values
     .filter((item) => item.item_kind === 'idea')
@@ -650,6 +655,7 @@ function finalize(state: MutableProjection): LedgerProjection {
   const wipCount = values.filter((idea) => idea.state === 'wip').length
   const waitingCount = values.filter((idea) => idea.state === 'waiting').length
   const hasUnsupported = values.some((idea) => idea.state === 'unsupported')
+  const wipLimit = effectiveWipLimit(configuredWipLimit)
   return {
     items: state.items,
     ideas,
@@ -660,10 +666,10 @@ function finalize(state: MutableProjection): LedgerProjection {
     idempotentEventIds: state.idempotentEventIds,
     wipCount,
     waitingCount,
-    wipLimit: DEFAULT_WIP_LIMIT,
+    wipLimit,
     waitingWarning: DEFAULT_WAITING_WARNING,
-    wipAtLimit: wipCount >= DEFAULT_WIP_LIMIT,
-    wipExceeded: wipCount > DEFAULT_WIP_LIMIT,
+    wipAtLimit: wipCount >= wipLimit,
+    wipExceeded: wipCount > wipLimit,
     waitingExceeded: waitingCount > DEFAULT_WAITING_WARNING,
     hasUnsupported,
     hasBlockingIssues: state.issues.some((issue) => issue.severity === 'blocking'),
@@ -674,7 +680,10 @@ function finalize(state: MutableProjection): LedgerProjection {
  * Reduce ledger order exactly as stored. Existing over-limit WIP is always kept
  * visible; the optional hard limit belongs to prospective append validation.
  */
-export function reduceEvents(events: readonly unknown[]): LedgerProjection {
+export function reduceEvents(
+  events: readonly unknown[],
+  options: { wipLimit?: number } = {},
+): LedgerProjection {
   const state: MutableProjection = {
     items: new Map(),
     eventById: new Map(),
@@ -766,7 +775,7 @@ export function reduceEvents(events: readonly unknown[]): LedgerProjection {
     else applyUnsupportedEvent(state, validated.event, index)
   })
 
-  return finalize(state)
+  return finalize(state, options.wipLimit)
 }
 
 function prospectiveIssue(

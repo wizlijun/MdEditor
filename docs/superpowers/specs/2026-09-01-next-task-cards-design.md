@@ -33,7 +33,7 @@ WIP  = 人已经确认现在承担它
 
 Idea 是尚未承诺的念头，可能需要论证、搁置、转移或停止。Task 已经用动作语言表达，但仍可能需要人确认是否现在承担。把 Task 写成 `type: Idea` 会丢失来源语义，也会迫使每日总结 Agent 产出虚假的 idea。
 
-反方向也不能让 Agent 直接写 WIP：每日总结可以发现明确义务，但不能替人占用三个当前承诺槽位。Agent 只创建 Task 源文件；人的安放事件才改变承诺状态。
+反方向也不能让 Agent 直接写 WIP：每日总结可以发现明确义务，但不能替人占用受 Next WIP 设置约束的当前承诺槽位（默认 5）。Agent 只创建 Task 源文件；人的安放事件才改变承诺状态。
 
 ## 2. 存储位置与文件命名
 
@@ -99,14 +99,18 @@ task:
   version: 1
   id: 8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8
   project: NoteMD
+  priority: P1
   due: "2026-09-02"
+  contexts: ["@computer"]
   done_when: 构建出现在 TestFlight，且安装验证通过
   dedupe_key: daily-summary/v1:2026-09-01:testflight
 ```
 
 - `task.project` 是可选非空字符串，保存 Task 在来源层所属的项目；它提供执行上下文，
   不等于 ledger 中由人确认的项目标签，也不会自动把 Task 标记为当前。
-- `task.due` 是可选计划日期，只显示中性日期，不自动改变泳道，也不引入日历或逾期奖惩。
+- `task.priority` 使用 `P0 / P1 / P2 / P3`，默认 P2；它是人工排序线索，不替代 GTD 情境判断。
+- `task.due` 是可选的真实硬期限；默认不设置，不自动改变泳道，也不等同于复查日或唤醒日。
+- `task.contexts` 是执行所需地点、工具或人员的可选字符串数组；默认空值表示尚未理清，不伪装成 `@anywhere`。
 - `task.done_when` 是安放到 WIP 时的关闭条件建议；最终承诺值仍复制进人的 `commit` 事件。
 - 日期值必须加引号，避免 YAML 1.1 消费器把它变成 date 对象。
 - 正文保存补充上下文、链接或清单；Next 预览正文但不解析正文标题作为状态。
@@ -157,7 +161,7 @@ sources:
 
 | 数据 | 真相源 | 写入者 |
 |---|---|---|
-| 标题、说明、截止日期、完成条件建议、来源 | 单个 `*-task.md` | 人或创建该文件的 Agent |
+| 标题、说明、优先级、截止日期、GTD 情境、完成条件建议、来源 | 单个 `*-task.md` | 人或创建该文件的 Agent |
 | 来源层项目归属 `task.project` | 单个 `*-task.md` | 人或创建该文件的 Agent |
 | Inbox / WIP / Waiting / Dormant / Closed | `thinking/next.note.md` events | Next 中人的确认动作 |
 | 当前项目 Tag | Next event | Next 中人的确认动作 |
@@ -279,9 +283,9 @@ Task sheet 首版提供：
 
 「保存并标记为当前」按 source-first 顺序执行：先 no-clobber 创建并验证 Task 文件，再基于最新 ledger 追加 `commit`。两份文件无法组成单个事务；若 ledger 校验或写入失败，不回滚已经安全落盘的 Task，而是明确提示“任务已在收件箱，尚未标记为当前”。这样失败只会降级为待安放，不会丢任务或绕过 WIP 约束。
 
-卡片增加 `任务` 类型徽标；Agent 生成的 Task 再显示低强调的生成来源。Inbox Task 可以显示 `due`，但不使用红色逾期奖励/惩罚。进入其他泳道后，详情仍优先显示现有 `next_action / waiting_for / wake_trigger / result`。
+卡片增加 `任务` 类型徽标；Agent 生成的 Task 再显示低强调的生成来源。所有状态都独立显示优先级、截止日期和情境；进入其他泳道后，详情仍优先显示现有 `next_action / waiting_for / wake_trigger / result`。Closed 保留日期但不再渲染逾期警告。
 
-首版不增加 Task 专属泳道、优先级、估时、子任务、周期调度、类型筛选或批量完成。最新 Task 与 Idea 统一按创建/最近事件时间排序，仍遵守 Inbox 最近 10 条的默认上限；搜索可以找到其余项目。
+本版不增加 Task 专属泳道、估时、精力、子任务、周期调度、类型筛选或批量完成。最新 Task 与 Idea 统一按创建/最近事件时间排序，仍遵守 Inbox 最近 10 条的默认上限；搜索可以找到其余项目。
 
 ## 8. OKF 与搜索接线
 

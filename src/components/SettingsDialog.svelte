@@ -742,6 +742,12 @@
     await setPluginScopedValue(pluginId, key, value)
   }
 
+  async function savePluginNumberField(pluginId: string, key: string, input: HTMLInputElement) {
+    const value = input.valueAsNumber
+    if (!Number.isFinite(value) || !input.checkValidity()) return
+    await savePluginField(pluginId, key, value)
+  }
+
   // The 22 categories cover every extension our editor supports as a document type.
   // These must match the `fileAssociations` in src-tauri/tauri.conf.json — that's
   // what tells macOS that note.md is a legitimate handler for these UTIs in the first place.
@@ -1725,6 +1731,13 @@
                     <input type="checkbox"
                       checked={(pluginValues[ptab.pluginId]?.[localKey] as boolean) ?? field.default ?? false}
                       onchange={(e) => savePluginField(ptab.pluginId, localKey, (e.currentTarget as HTMLInputElement).checked)} />
+                  {:else if field.type === 'number'}
+                    <input type="number"
+                      value={(pluginValues[ptab.pluginId]?.[localKey] as number) ?? field.default ?? ''}
+                      min={field.min}
+                      max={field.max}
+                      step={field.step}
+                      onchange={(e) => savePluginNumberField(ptab.pluginId, localKey, e.currentTarget as HTMLInputElement)} />
                   {/if}
                 </label>
               {/each}
@@ -1905,6 +1918,7 @@
   .plugin-field .lbl { width: 160px; flex-shrink: 0; }
   .plugin-field input[type="text"],
   .plugin-field input[type="password"],
+  .plugin-field input[type="number"],
   .plugin-field select {
     flex: 1;
     padding: 6px;

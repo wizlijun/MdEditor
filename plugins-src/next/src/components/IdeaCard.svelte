@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { WorkspaceItem } from '../lib/repository'
+  import { DEFAULT_PRIORITY, localDateAfter } from '../lib/metadata'
   import { projectTagsOf } from '../lib/model'
   import { t, type MessageKey } from '../lib/strings'
 
@@ -41,10 +42,18 @@
   const titleId = $derived(`idea-card-title-${domToken}`)
   const tipId = $derived(`idea-preview-${domToken}`)
   const projects = $derived(projectTagsOf(item.projection))
+  const priority = $derived(item.priority ?? item.task?.priority ?? DEFAULT_PRIORITY)
+  const due = $derived(item.due ?? item.task?.due)
+  const contexts = $derived(item.contexts ?? item.task?.contexts ?? [])
+  const dueState = $derived.by(() => {
+    if (!due) return 'none'
+    if (item.state !== 'closed' && due < localDateAfter(0)) return 'overdue'
+    return 'dated'
+  })
   const detail = $derived.by(() => {
     const projection = item.projection
     const taskDetail = item.kind === 'task'
-      ? [item.description, item.task?.due].filter(Boolean).join(' · ')
+      ? item.description ?? ''
       : ''
     if (!projection) return taskDetail
     switch (projection.state) {
@@ -112,6 +121,22 @@
       {#if item.orphan}<span class="badge warning">{t('badge.orphan')}</span>{/if}
       {#if item.state === 'unsupported'}<span class="badge warning">{t('badge.unsupported')}</span>{/if}
     </div>
+    <div class="planning" aria-label={t('metadata.label')}>
+      <span class="badge priority" data-priority={priority}>{t(`priority.${priority}` as never)}</span>
+      {#if dueState === 'none'}
+        <span class="badge due muted" data-due="none">{t('badge.dueNone')}</span>
+      {:else}
+        <span class:overdue={dueState === 'overdue'} class="badge due" data-due={due}>
+          {t(dueState === 'overdue' ? 'badge.overdue' : 'badge.due', { date: due! })}
+        </span>
+      {/if}
+      {#if contexts.length}
+        {#each contexts.slice(0, 2) as context}<span class="badge context" data-context={context}>{context}</span>{/each}
+        {#if contexts.length > 2}<span class="badge context">+{contexts.length - 2}</span>{/if}
+      {:else}
+        <span class="badge context missing" data-context="missing">{t('badge.contextMissing')}</span>
+      {/if}
+    </div>
     {#if detail}<p>{detail}</p>{/if}
   </div>
   <div class="actions">
@@ -151,6 +176,7 @@
   .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .body { min-width: 0; }
   .title-line { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 7px; min-width: 0; }
+  .planning { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   h3 { width: 100%; margin: 0; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.38; font-weight: 650; }
   p { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .state, .badge { flex: none; border-radius: 999px; padding: 2px 7px; font-size: 10.5px; font-weight: 600; }
@@ -159,6 +185,12 @@
   .badge.task { background: var(--accent-soft); color: var(--accent); }
   .badge.agent { border: 1px solid var(--line); background: transparent; color: var(--muted-strong); }
   .badge.project { background: var(--accent-soft); color: var(--accent); }
+  .badge.priority { border: 1px solid var(--line-strong); background: var(--chip); color: var(--fg); }
+  .badge.due { background: var(--accent-soft); color: var(--accent); }
+  .badge.due.muted { background: var(--chip); color: var(--muted-strong); }
+  .badge.due.overdue { background: color-mix(in srgb, var(--danger) 13%, var(--card)); color: var(--danger); }
+  .badge.context { background: var(--proof-bg); color: var(--proof-fg); }
+  .badge.context.missing { background: var(--warn-bg); color: var(--warn-fg); }
   .project-suggestion { border: 1px dashed var(--accent); background: transparent; color: var(--accent); cursor: pointer; }
   .project-suggestion:hover:not(:disabled) { background: var(--accent-soft); }
   .badge.warning { background: var(--warn-bg); color: var(--warn-fg); }

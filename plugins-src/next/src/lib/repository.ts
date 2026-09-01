@@ -11,6 +11,7 @@ import {
 import { ownersOfSource, reduceEvents, validateAppend } from './domain'
 import { NEXT_PATH, newLedger, parseLedger, serializeLedger, upgradeLedgerToV2, type LedgerDocument } from './ledger'
 import { itemKey, projectTagKey, projectTagsOf, type IdeaProjection, type ItemKind, type LedgerProjection, type NextEvent, type SourceRef } from './model'
+import { DEFAULT_PRIORITY, normalizeContexts, normalizePriority, type PlanningMetadata, type Priority } from './metadata'
 import { buildProjectMatcher, type ProjectSuggestion } from './project-match'
 import {
   buildIdeaDocument,
@@ -76,6 +77,9 @@ export interface WorkspaceItem {
   relinkMatch: 'created' | 'manual' | null
   task?: TaskDetails
   generatedBy?: string
+  priority?: Priority
+  due?: string
+  contexts?: string[]
   /** Source-level validation issue shown in the repair area. */
   repairReason?: string
   /** Local, non-persistent suggestion. It is never a confirmed project tag. */
@@ -137,7 +141,14 @@ export interface CreateTaskInput {
   title: string
   body?: string
   project?: string
+  priority?: Priority
+  due?: string
+  contexts?: string[]
   done_when?: string
+}
+
+export interface CreateIdeaInput extends PlanningMetadata {
+  body: string
 }
 
 export interface CreatedTask {
@@ -165,7 +176,7 @@ function newTaskId(): string {
  */
 export async function createIdeaSource(
   body: string,
-  options: { now?: () => Date } = {},
+  options: { now?: () => Date; metadata?: PlanningMetadata } = {},
   port: VaultPort = hostVault,
 ): Promise<CreatedIdea> {
   if (!body.trim()) throw new Error('Idea body cannot be blank')
@@ -186,7 +197,7 @@ export async function createIdeaSource(
       continue
     }
 
-    const content = buildIdeaDocument(body, now.toISOString())
+    const content = buildIdeaDocument(body, now.toISOString(), options.metadata)
     await port.write(path, content)
     const written = (await port.read(path)).content
     if (written !== content) throw new Error('Created Idea did not match after writing')
@@ -217,6 +228,9 @@ export async function createTaskSource(
       version: 1,
       id,
       ...(input.project?.trim() ? { project: input.project.trim() } : {}),
+      priority: normalizePriority(input.priority),
+      ...(input.due?.trim() ? { due: input.due.trim() } : {}),
+      ...(normalizeContexts(input.contexts).length ? { contexts: normalizeContexts(input.contexts) } : {}),
       ...(input.done_when?.trim() ? { done_when: input.done_when.trim() } : {}),
     },
     ...(input.body?.trim() ? { body: input.body.trim() } : {}),
@@ -337,6 +351,7 @@ export async function scanTaskDir(port: VaultPort = hostVault): Promise<TaskScan
           orphan: false,
           relinkCandidates: [],
           relinkMatch: null,
+          ...planningFields(),
           repairReason,
         })
       }
@@ -384,6 +399,7 @@ export async function scanTaskDir(port: VaultPort = hostVault): Promise<TaskScan
       relinkMatch: null,
       task: source.task,
       ...(source.generated ? { generatedBy: source.generated.by } : {}),
+      ...planningFields(source),
       repairReason,
     })
   }
@@ -415,14 +431,23 @@ function textOfProjection(projection: IdeaProjection): string {
 
 export function itemSearchText(item: WorkspaceItem): string {
   const task = item.task
-    ? `${item.task.project ?? ''} ${item.task.due ?? ''} ${item.task.done_when ?? ''} ${item.task.dedupe_key ?? ''} ${item.generatedBy ?? ''}`
+    ? `${item.task.project ?? ''} ${item.task.done_when ?? ''} ${item.task.dedupe_key ?? ''} ${item.generatedBy ?? ''}`
     : ''
-  return `${item.title} ${item.body ?? ''} ${item.path ?? ''} ${task} ${item.repairReason ?? ''} ${item.projection ? textOfProjection(item.projection) : ''}`.toLocaleLowerCase()
+  const planning = `${item.priority ?? DEFAULT_PRIORITY} ${item.due ?? ''} ${(item.contexts ?? []).join(' ')}`
+  return `${item.title} ${item.body ?? ''} ${item.path ?? ''} ${planning} ${task} ${item.repairReason ?? ''} ${item.projection ? textOfProjection(item.projection) : ''}`.toLocaleLowerCase()
 }
 
 function taskBody(source: TaskSource): string | undefined {
   const sections = [source.description?.trim(), source.body.trim()].filter(Boolean)
   return sections.length ? sections.join('\n\n') : undefined
+}
+
+function planningFields(source?: IdeaSource | TaskSource): Pick<WorkspaceItem, 'priority' | 'due' | 'contexts'> {
+  const task = source && 'task' in source ? source.task : undefined
+  const priority = task?.priority ?? (source && 'priority' in source ? source.priority : undefined) ?? DEFAULT_PRIORITY
+  const due = task?.due ?? (source && 'due' in source ? source.due : undefined)
+  const contexts = normalizeContexts(task?.contexts ?? (source && 'contexts' in source ? source.contexts : []))
+  return { priority, ...(due ? { due } : {}), contexts }
 }
 
 function projectItems(
@@ -461,6 +486,7 @@ function projectItems(
         ...(!source && idea.source?.path ? { path: idea.source.path } : {}),
         ...(!source && idea.source?.created ? { created: idea.source.created } : {}),
         ...(source?.generated ? { generatedBy: source.generated.by } : {}),
+        ...planningFields(source),
         proofed: false,
         orphan: !source,
         projection: idea,
@@ -493,6 +519,7 @@ function projectItems(
       ...(idea.source?.path ? { path: idea.source.path } : {}),
       ...(idea.source?.created ? { created: idea.source.created } : {}),
       proofed: sourceExists ? source?.proofed ?? false : false,
+      ...planningFields(sourceExists ? source : undefined),
       orphan: !sourceExists,
       projection: idea,
       relinkCandidates,
@@ -515,6 +542,7 @@ function projectItems(
       orphan: false,
       relinkCandidates: [],
       relinkMatch: null,
+      ...planningFields(source),
     }))
   const implicitTasks = taskSources
     .filter((source) => !claimedTaskIds.has(source.task.id))
@@ -535,6 +563,7 @@ function projectItems(
       relinkMatch: null,
       task: source.task,
       ...(source.generated ? { generatedBy: source.generated.by } : {}),
+      ...planningFields(source),
     }))
   return [...projected, ...implicit, ...implicitTasks]
 }
@@ -615,7 +644,10 @@ async function persistSourceDirs(
   return { ledger: next, raw: serialized }
 }
 
-export async function loadWorkspace(port: VaultPort = hostVault): Promise<NextWorkspace> {
+export async function loadWorkspace(
+  port: VaultPort = hostVault,
+  options: { wipLimit?: number } = {},
+): Promise<NextWorkspace> {
   const ideaDir = await currentIdeaDir(port)
   let ledgerRaw: string | null = null
   let ledger = newLedger([ideaDir])
@@ -638,7 +670,7 @@ export async function loadWorkspace(port: VaultPort = hostVault): Promise<NextWo
     scanIdeaDirs(sourceDirs, port),
     scanTaskDir(port),
   ])
-  const projection = reduceEvents(ledger.events)
+  const projection = reduceEvents(ledger.events, { wipLimit: options.wipLimit })
   const blockedTaskIds = new Set(taskScan.repairs.flatMap((item) => item.item_id ? [item.item_id] : []))
   const blockedTaskPaths = new Set(taskScan.repairs.flatMap((item) => item.path ? [item.path] : []))
   const safeProjectedItems = projectItems(scan.sources, taskScan.sources, projection).filter((item) => !(
@@ -679,7 +711,7 @@ function toRecord(event: NextEvent): Record<string, unknown> {
 export async function appendEvent(
   loaded: NextWorkspace,
   event: NextEvent,
-  options: { hardWipLimit?: boolean } = {},
+  options: { hardWipLimit?: boolean; wipLimit?: number } = {},
   port: VaultPort = hostVault,
 ): Promise<NextWorkspace> {
   if (loaded.readOnlyError) throw new NextWriteError('read_only', loaded.readOnlyError)
@@ -702,7 +734,8 @@ export async function appendEvent(
   // the same event is still valid, preserving unrelated external additions.
   const changedSinceLoad = currentRaw !== loaded.ledgerRaw
   const sourceDirs = unique([...current.source_dirs, ...loaded.sourceDirs])
-  const projection = reduceEvents(current.events)
+  const wipLimit = options.wipLimit ?? loaded.projection.wipLimit
+  const projection = reduceEvents(current.events, { wipLimit })
   const targetVersion = event.item_kind === 'task' ? 2 : current.version
   const validation = validateAppend(projection, event, {
     hardLimit: options.hardWipLimit,
@@ -712,7 +745,7 @@ export async function appendEvent(
     const detail = validation.issues.map((issue) => issue.message).join('; ')
     throw new NextWriteError('invalid_event', changedSinceLoad ? `Next changed: ${detail}` : detail)
   }
-  if (validation.idempotent) return loadWorkspace(port)
+  if (validation.idempotent) return loadWorkspace(port, { wipLimit })
 
   const writable = event.item_kind === 'task'
     ? upgradeLedgerToV2(current, [DEFAULT_TASK_DIR])
@@ -728,7 +761,7 @@ export async function appendEvent(
   if (written !== serialized) {
     throw new NextWriteError('write_verification_failed', 'Next document did not match after writing')
   }
-  return loadWorkspace(port)
+  return loadWorkspace(port, { wipLimit })
 }
 
 export async function openSource(item: WorkspaceItem, port: VaultPort = hostVault): Promise<void> {

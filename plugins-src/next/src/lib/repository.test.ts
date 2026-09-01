@@ -91,6 +91,21 @@ const commit = (eventId = 'e1'): CommitEvent => ({
 })
 
 describe('Next repository', () => {
+  it('preserves the configured WIP limit across a verified append and reload', async () => {
+    const vault = new MemoryVault()
+    vault.files.set('inbox/ideas/a-idea.md', idea())
+    let workspace = await loadWorkspace(vault, { wipLimit: 1 })
+
+    workspace = await appendEvent(workspace, commit(), {}, vault)
+
+    expect(workspace.projection).toMatchObject({
+      wipCount: 1,
+      wipLimit: 1,
+      wipAtLimit: true,
+      wipExceeded: false,
+    })
+  })
+
   it('discovers valid Task files in Inbox without upgrading a v1 ledger', async () => {
     const vault = new MemoryVault()
     vault.files.set('inbox/tasks/submit-task.md', task(TASK_ID, { project: 'NoteMD' }))
@@ -227,6 +242,9 @@ describe('Next repository', () => {
       title: '提交 TestFlight 构建',
       body: '确认签名环境变量。',
       project: 'NoteMD',
+      priority: 'P1',
+      due: '2026-09-08',
+      contexts: ['@电脑'],
       done_when: '构建可安装',
     }, {
       now: () => new Date(2026, 8, 1, 11, 20),
@@ -236,6 +254,7 @@ describe('Next repository', () => {
     expect(created.path).toBe('inbox/tasks/2026-09-01-1120-提交-testflight-构建-task.md')
     expect(created.source.task.id).toBe(TASK_ID)
     expect(created.source.task.project).toBe('NoteMD')
+    expect(created.source.task).toMatchObject({ priority: 'P1', due: '2026-09-08', contexts: ['@电脑'] })
     expect(vault.files.get(created.path)).toBe(created.content)
     expect([...vault.files.keys()].some((path) => path.endsWith('.tmp'))).toBe(false)
     expect(vault.writes).toEqual([expect.stringMatching(/^inbox\/tasks\/\.next-task-.*\.tmp$/)])
@@ -312,7 +331,7 @@ describe('Next repository', () => {
 
     expect(created.path).toBe('capture/sparks/2026-08-30-0905-idea.md')
     expect(vault.files.get(created.path)).toBe(
-      '---\ntype: Idea\ncreated: 2026-08-30T01:05:00.000Z\n---\n# 新念头',
+      '---\ntype: Idea\ncreated: 2026-08-30T01:05:00.000Z\nnext:\n  priority: P2\n---\n# 新念头',
     )
     expect(vault.files.has(NEXT_PATH)).toBe(false)
 
@@ -322,6 +341,29 @@ describe('Next repository', () => {
       expect.objectContaining({ path: created.path, title: '新念头', body: '# 新念头', state: 'capture' }),
     ])
     expect(workspace.ledger.events).toEqual([])
+  })
+
+  it('keeps Idea planning metadata visible after lifecycle placement and searchable', async () => {
+    const vault = new MemoryVault()
+    const created = await createIdeaSource('# 有期限的行动', {
+      now: creationTime,
+      metadata: { priority: 'P0', due: '2026-09-08', contexts: ['@电脑', '@电话'] },
+    }, vault)
+    let workspace = await loadWorkspace(vault)
+    expect(workspace.capture[0]).toMatchObject({
+      path: created.path, priority: 'P0', due: '2026-09-08', contexts: ['@电脑', '@电话'],
+    })
+    const ids = ['metadata-event', 'metadata-item']
+    workspace = await appendEvent(workspace, placeEvent(workspace.capture[0], {
+      route: 'commit', commitment: '交付', next_action: '开始', close_condition: '完成',
+    }, {
+      now: () => '2026-09-01T03:30:00Z',
+      id: () => ids.shift()!,
+    }), {}, vault)
+    expect(workspace.wip[0]).toMatchObject({
+      priority: 'P0', due: '2026-09-08', contexts: ['@电脑', '@电话'],
+    })
+    expect(itemSearchText(workspace.wip[0])).toContain('@电话')
   })
 
   it('falls back to the default Idea directory and never overwrites an idea or proof slot', async () => {

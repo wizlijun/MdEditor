@@ -417,19 +417,36 @@ describe('reduceEvents', () => {
     expect(result.hasBlockingIssues).toBe(true)
   })
 
-  it('keeps all externally-created WIP visible and reports the soft 3-slot boundary', () => {
+  it('keeps all externally-created WIP visible and reports a configured boundary', () => {
     const result = reduceEvents([
       commit('e1', 'i1', 'inbox/ideas/1-idea.md'),
       commit('e2', 'i2', 'inbox/ideas/2-idea.md'),
       commit('e3', 'i3', 'inbox/ideas/3-idea.md'),
       commit('e4', 'i4', 'inbox/ideas/4-idea.md'),
-    ])
+    ], { wipLimit: 3 })
     expect(result.ideas).toHaveLength(4)
     expect(result.wipCount).toBe(4)
     expect(result.wipLimit).toBe(3)
     expect(result.wipAtLimit).toBe(true)
     expect(result.wipExceeded).toBe(true)
     expect(result.hasBlockingIssues).toBe(false)
+  })
+
+  it.each([
+    [4, 5, false, false],
+    [5, 5, true, false],
+    [6, 5, true, true],
+    [1, 2, false, false],
+    [2, 2, true, false],
+  ])('derives the persistent warning boundary for %i items with limit %i', (count, limit, atLimit, exceeded) => {
+    const events = Array.from({ length: count }, (_, index) => (
+      commit(`limit-${limit}-${index}`, `item-${index}`, `inbox/ideas/${index}-idea.md`)
+    ))
+    const result = reduceEvents(events, { wipLimit: limit })
+
+    expect(result.wipLimit).toBe(limit)
+    expect(result.wipAtLimit).toBe(atLimit)
+    expect(result.wipExceeded).toBe(exceeded)
   })
 })
 
@@ -494,7 +511,7 @@ describe('validateAppend', () => {
     commit('e1', 'i1', 'inbox/ideas/1-idea.md'),
     commit('e2', 'i2', 'inbox/ideas/2-idea.md'),
     commit('e3', 'i3', 'inbox/ideas/3-idea.md'),
-  ])
+  ], { wipLimit: 3 })
 
   it('allows a fourth commitment in soft mode and rejects it in optional hard mode', () => {
     const fourth = commit('e4', 'i4', 'inbox/ideas/4-idea.md')

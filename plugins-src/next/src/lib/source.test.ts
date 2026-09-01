@@ -32,10 +32,26 @@ describe('idea source contract', () => {
     ]))).toBe('2026-08-30-0905-3-idea.md')
   })
 
-  it('builds the same minimal OKF Idea contract while preserving the body', () => {
+  it('builds an OKF Idea with planning defaults while preserving the body', () => {
     const body = '# 一个念头\n\n---\n\n继续说明'
     const document = buildIdeaDocument(body, '2026-08-30T01:05:00.000Z')
-    expect(document).toBe('---\ntype: Idea\ncreated: 2026-08-30T01:05:00.000Z\n---\n' + body)
+    expect(document).toBe('---\ntype: Idea\ncreated: 2026-08-30T01:05:00.000Z\nnext:\n  priority: P2\n---\n' + body)
+  })
+
+  it('round-trips namespaced priority, quoted due date, and contexts', () => {
+    const document = buildIdeaDocument('# 行动', '2026-09-01T01:00:00Z', {
+      priority: 'P0', due: '2026-09-08', contexts: ['@电脑', '@电话'],
+    })
+    expect(document).toContain('due: "2026-09-08"')
+    expect(parseIdeaSource('inbox/ideas/a-idea.md', document, false)).toMatchObject({
+      priority: 'P0', due: '2026-09-08', contexts: ['@电脑', '@电话'],
+    })
+  })
+
+  it('keeps legacy and malformed Next metadata readable', () => {
+    expect(parseIdeaSource('inbox/ideas/a-idea.md', '---\ntype: Idea\nnext:\n  priority: impossible\n  due: tomorrow\n  contexts: nope\n---\n# Legacy', false)).toMatchObject({
+      title: 'Legacy', body: '# Legacy', proofed: false,
+    })
   })
 
   it('rejects absolute and traversal directories', () => {

@@ -84,6 +84,7 @@ import type { SearchStats, SearchProgress, SearchResponse } from '../lib/search/
 import { searchStore, _setSearchImpl } from '../lib/search/store.svelte'
 import { sidePanels } from '../lib/side-panel/registry.svelte'
 import { toasts } from '../lib/toast.svelte'
+import { getPluginScopedAll } from '../lib/settings.svelte'
 import { ask } from '@tauri-apps/plugin-dialog'
 
 let stats: Mock<() => Promise<SearchStats | null>>
@@ -153,6 +154,77 @@ async function settle() {
   await new Promise((r) => setTimeout(r, 0))
   flushSync()
 }
+
+describe('SettingsDialog — plugin number fields', () => {
+  it('renders numeric constraints and only persists finite valueAsNumber values', async () => {
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === 'get_plugin_manifests') {
+        return [{
+          id: 'number-field-test',
+          name: 'Number field test',
+          version: '1.0.0',
+          binary: '',
+          host_capabilities: ['settings'],
+          settings: {
+            tab_label: 'WIP test',
+            schema: [{
+              key: 'number-field-test.wipLimit',
+              type: 'number',
+              label: 'WIP limit',
+              default: 5,
+              min: 1,
+              max: 20,
+              step: 1,
+            }],
+          },
+        }]
+      }
+      return defaultInvokeImpl(cmd, args)
+    })
+
+    await mountDialog()
+    await settle()
+
+    const tab = Array.from(document.body.querySelectorAll('nav.tab-strip button'))
+      .find((button) => button.textContent?.trim() === 'WIP test') as HTMLButtonElement
+    tab.click()
+    await settle()
+
+    const input = document.body.querySelector('.plugin-field input[type="number"]') as HTMLInputElement
+    expect(input.value).toBe('5')
+    expect(input.min).toBe('1')
+    expect(input.max).toBe('20')
+    expect(input.step).toBe('1')
+
+    input.value = '7'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(getPluginScopedAll('number-field-test')).toEqual({
+      'number-field-test.wipLimit': 7,
+    })
+
+    input.value = ''
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(getPluginScopedAll('number-field-test')).toEqual({
+      'number-field-test.wipLimit': 7,
+    })
+
+    input.value = '0'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(getPluginScopedAll('number-field-test')).toEqual({
+      'number-field-test.wipLimit': 7,
+    })
+
+    input.value = 'not-a-number'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(getPluginScopedAll('number-field-test')).toEqual({
+      'number-field-test.wipLimit': 7,
+    })
+  })
+})
 
 describe('SettingsDialog — Search & Index tab entry', () => {
   it('gear-button path (openSettings("search")) actually loads the index status', async () => {

@@ -49,6 +49,8 @@ describe('CreateTaskSheet', () => {
       title: '提交 TestFlight 构建',
       body: '确认签名环境变量。',
       done_when: '构建可安装',
+      priority: 'P2',
+      contexts: [],
     }, false)
   })
 
@@ -72,6 +74,8 @@ describe('CreateTaskSheet', () => {
     expect(onSubmit).toHaveBeenCalledWith({
       title: '提交构建',
       done_when: 'TestFlight 可安装',
+      priority: 'P2',
+      contexts: [],
     }, true)
   })
 

@@ -11,7 +11,7 @@ export function itemKey(kind: ItemKind, id: string): string {
 export const IDEA_STATES = ['capture', 'wip', 'waiting', 'dormant', 'closed', 'unsupported'] as const
 export type IdeaState = (typeof IDEA_STATES)[number]
 
-export const DEFAULT_WIP_LIMIT = 3
+export const DEFAULT_WIP_LIMIT = 5
 export const DEFAULT_WAITING_WARNING = 5
 
 /** A source locator. Legacy/agent-authored ideas may not have a creation marker. */
@@ -279,7 +279,7 @@ export type EventValidation =
   | { ok: false; errors: readonly FieldValidationError[] }
 
 export interface AppendOptions {
-  /** G3 experiment switch. The default remains a neutral soft limit. */
+  /** Optional hard guard used by selected atomic write paths. */
   hardLimit?: boolean
   wipLimit?: number
   /** When supplied, require the persisted identity envelope for that ledger. */

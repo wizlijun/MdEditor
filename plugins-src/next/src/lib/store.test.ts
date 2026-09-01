@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createIdeaSource: vi.fn(),
   createTaskSource: vi.fn(),
   openSource: vi.fn(),
+  loadNextSettings: vi.fn(async () => ({ wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' })),
 }))
 
 vi.mock('./repository', async (importOriginal) => {
@@ -21,6 +22,11 @@ vi.mock('./repository', async (importOriginal) => {
     openSource: mocks.openSource,
   }
 })
+
+vi.mock('./settings', () => ({
+  DEFAULT_NEXT_SETTINGS: { wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' },
+  loadNextSettings: mocks.loadNextSettings,
+}))
 
 import { createIdea, createTask, place, refresh, state } from './store.svelte'
 
@@ -61,6 +67,7 @@ function workspace(): NextWorkspace {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.loadNextSettings.mockResolvedValue({ wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' })
   state.workspace = workspace()
   state.loading = false
   state.saving = false
@@ -231,8 +238,11 @@ describe('Next store IO serialization', () => {
     })
     mocks.loadWorkspace.mockResolvedValueOnce(refreshed)
 
-    await expect(createIdea('一个念头')).resolves.toBe('inbox/ideas/2026-08-30-0905-idea.md')
-    expect(mocks.createIdeaSource).toHaveBeenCalledWith('一个念头')
+    await expect(createIdea({ body: '一个念头', priority: 'P1', due: '2026-09-08', contexts: ['@电脑'] }))
+      .resolves.toBe('inbox/ideas/2026-08-30-0905-idea.md')
+    expect(mocks.createIdeaSource).toHaveBeenCalledWith('一个念头', {
+      metadata: { priority: 'P1', due: '2026-09-08', contexts: ['@电脑'] },
+    })
     expect(state.workspace).toBe(refreshed)
     expect(state.saving).toBe(false)
   })
@@ -240,7 +250,7 @@ describe('Next store IO serialization', () => {
   it('preserves the current workspace and reports an error when creation fails', async () => {
     const before = state.workspace
     mocks.createIdeaSource.mockRejectedValueOnce(new Error('disk full'))
-    await expect(createIdea('一个念头')).rejects.toThrow('disk full')
+    await expect(createIdea({ body: '一个念头', priority: 'P2', contexts: [] })).rejects.toThrow('disk full')
     expect(state.workspace).toBe(before)
     expect(state.error).toContain('disk full')
     expect(mocks.loadWorkspace).not.toHaveBeenCalled()
@@ -265,5 +275,18 @@ describe('Next store IO serialization', () => {
     finishLoad(workspace())
     await refreshing
     expect(state.saving).toBe(false)
+  })
+
+  it('loads one complete settings snapshot whenever the workspace refreshes', async () => {
+    const refreshed = workspace()
+    refreshed.projection = reduceEvents([], { wipLimit: 8 })
+    mocks.loadNextSettings.mockResolvedValueOnce({ wipLimit: 8, defaultPriority: 'P1', defaultDueDays: 7, defaultContext: '@电脑' })
+    mocks.loadWorkspace.mockResolvedValueOnce(refreshed)
+
+    await refresh()
+
+    expect(mocks.loadWorkspace).toHaveBeenCalledWith(expect.any(Object), { wipLimit: 8 })
+    expect(state.workspace?.projection.wipLimit).toBe(8)
+    expect(state.settings).toEqual({ wipLimit: 8, defaultPriority: 'P1', defaultDueDays: 7, defaultContext: '@电脑' })
   })
 })

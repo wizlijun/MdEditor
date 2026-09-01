@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import CreateIdeaSheet from './components/CreateIdeaSheet.svelte'
+  import CreateIdeaSheet, { type IdeaDraft } from './components/CreateIdeaSheet.svelte'
   import CreateTaskSheet, { type TaskDraft } from './components/CreateTaskSheet.svelte'
   import IdeaCard from './components/IdeaCard.svelte'
   import PlaceSheet from './components/PlaceSheet.svelte'
@@ -8,6 +8,7 @@
   import { bridge, toast } from './lib/bridge'
   import type { PlaceInput } from './lib/events'
   import { projectTagsOf } from './lib/model'
+  import { planningDefaults } from './lib/settings'
   import { itemSearchText, type WorkspaceItem } from './lib/repository'
   import type { IdeaSource } from './lib/source'
   import {
@@ -71,11 +72,15 @@
   const dragThreshold = 5
 
   const workspace = $derived(store.workspace)
+  const wipAtLimit = $derived(Boolean(
+    workspace && workspace.wip.length >= workspace.projection.wipLimit,
+  ))
   const projectOptions = $derived(workspace?.projectOptions ?? [])
   const activeProject = $derived(projectOptions.includes(selectedProject) ? selectedProject : '')
   const filtering = $derived(Boolean(search.trim() || activeProject))
   const blocked = $derived(Boolean(workspace?.readOnlyError || workspace?.projection.hasBlockingIssues))
   const interactionDisabled = $derived(store.saving || blocked)
+  const createDefaults = $derived(planningDefaults(store.settings))
   const newIdeaShortcut = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
     ? '⌘N'
     : 'Ctrl+N'
@@ -127,7 +132,13 @@
     const visibleClosed = filter(closed)
     return [
       { id: 'capture', title: 'section.capture', empty: 'empty.capture', items: visibleCapture, count: String(visibleCapture.length) },
-      { id: 'wip', title: 'section.wip', empty: 'empty.wip', items: filter(workspace.wip), count: t('count.wip', { count: workspace.wip.length }) },
+      {
+        id: 'wip',
+        title: 'section.wip',
+        empty: 'empty.wip',
+        items: filter(workspace.wip),
+        count: t('count.wip', { count: workspace.wip.length, limit: workspace.projection.wipLimit }),
+      },
       { id: 'waiting', title: 'section.waiting', empty: 'empty.waiting', items: filter(workspace.waiting), count: t('count.waiting', { count: workspace.waiting.length }) },
       { id: 'dormant', title: 'status.dormant', empty: 'empty.dormant', items: visibleDormant, count: String(visibleDormant.length) },
       { id: 'closed', title: 'status.closed', empty: 'empty.closed', items: visibleClosed, count: String(visibleClosed.length) },
@@ -171,9 +182,9 @@
     await refresh()
   }
 
-  async function submitIdea(body: string) {
+  async function submitIdea(input: IdeaDraft) {
     await report(async () => {
-      await createIdea(body)
+      await createIdea(input)
       creating = false
     }, 'error.create')
   }
@@ -508,7 +519,14 @@
       {#if workspace.scanErrors.length}
         <div class="banner warning" title={workspace.scanErrors.join('\n')}>{t('common.error')} · {workspace.scanErrors[0]}</div>
       {/if}
-      {#if workspace.projection.wipAtLimit}<div class="banner calm">{t('warning.wip')}</div>{/if}
+      {#if wipAtLimit}
+        <div class="banner danger wip-warning" role="alert" aria-live="polite" data-warning="wip">
+          <strong>{t('warning.wip', {
+            count: workspace.wip.length,
+            limit: workspace.projection.wipLimit,
+          })}</strong>
+        </div>
+      {/if}
       {#if workspace.projection.waitingExceeded}<div class="banner calm">{t('warning.waiting')}</div>{/if}
 
       {#if repair.length}
@@ -550,6 +568,7 @@
               class="lane"
               aria-label={t(lane.title)}
               class:over={dragOver === lane.id}
+              class:wip-limited={lane.id === 'wip' && wipAtLimit}
               class:available={Boolean(dragging && canDrop(dragging, lane.id))}
               data-lane={lane.id}
             >
@@ -625,6 +644,7 @@
 {#if creating}
   <CreateIdeaSheet
     ideaDir={workspace?.ideaDir ?? 'inbox/ideas'}
+    defaults={createDefaults}
     saving={store.saving}
     onCancel={() => creating = false}
     onSubmit={submitIdea}
@@ -634,6 +654,9 @@
 {#if creatingTask}
   <CreateTaskSheet
     taskDir={workspace?.taskDir ?? 'inbox/tasks'}
+    defaultPriority={createDefaults.priority}
+    defaultDue={createDefaults.due}
+    defaultContexts={createDefaults.contexts}
     saving={store.saving}
     onCancel={() => creatingTask = false}
     onSubmit={submitTask}
@@ -716,6 +739,7 @@
   .banner { display: grid; gap: 3px; margin-bottom: 10px; padding: 10px 12px; border-radius: 10px; font-size: 12px; box-sizing: border-box; }
   .banner span { opacity: 0.75; overflow-wrap: anywhere; }
   .banner.danger { background: color-mix(in srgb, var(--danger) 12%, var(--card)); color: var(--danger); }
+  .banner.wip-warning { border: 1px solid color-mix(in srgb, var(--danger) 72%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 10%, transparent); font-size: 13px; }
   .banner.warning { background: var(--warn-bg); color: var(--warn-fg); }
   .banner.calm { background: var(--chip); color: var(--muted-strong); }
   .repair { margin-bottom: 16px; }
@@ -733,6 +757,8 @@
   .lane { min-width: 0; min-height: 420px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--chip) 48%, transparent); transition: border-color 120ms ease, background 120ms ease; }
   .lane.available { border-style: dashed; }
   .lane.over { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+  .lane.wip-limited { border-color: color-mix(in srgb, var(--danger) 70%, var(--line)); background: color-mix(in srgb, var(--danger) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 24%, transparent); }
+  .lane.wip-limited .lane-head span { background: var(--danger); color: #fff; font-weight: 700; }
   .drag-ghost { position: fixed; z-index: 60; max-width: 240px; transform: translate(10px, 10px); overflow: hidden; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--fg); box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 22%, transparent); padding: 9px 12px; font-size: 12px; font-weight: 650; opacity: 0.88; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; }
   .idea-preview-tip { position: fixed; z-index: 15; width: min(380px, calc(100vw - 24px)); max-height: min(480px, calc(100vh - 24px)); box-sizing: border-box; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 12px; background: color-mix(in srgb, var(--card) 96%, transparent); color: var(--fg); box-shadow: 0 14px 38px color-mix(in srgb, var(--shadow) 28%, transparent); padding: 14px 16px; backdrop-filter: blur(18px); }
   .idea-preview-tip pre { margin: 0; font-family: inherit; font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }

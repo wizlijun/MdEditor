@@ -76,7 +76,11 @@ task:
   version: 1
   id: ${TASK_ID}
   project: NoteMD
+  priority: P1
   due: "2026-09-02"
+  contexts:
+    - "@电脑"
+    - "@电话"
   done_when: 构建出现在 TestFlight
   dedupe_key: daily-summary/v1:2026-09-01:testflight-upload
 generated:
@@ -95,7 +99,9 @@ sources:
       version: 1,
       id: TASK_ID,
       project: 'NoteMD',
+      priority: 'P1',
       due: '2026-09-02',
+      contexts: ['@电脑', '@电话'],
       done_when: '构建出现在 TestFlight',
       dedupe_key: 'daily-summary/v1:2026-09-01:testflight-upload',
     })
@@ -148,7 +154,9 @@ body`,
         version: 1,
         id: TASK_ID,
         project: 'NoteMD',
+        priority: 'P0',
         due: '2026-09-02',
+        contexts: ['@电脑'],
         done_when: '构建出现在 TestFlight',
       },
       body,
@@ -159,6 +167,8 @@ body`,
     expect(parsed.title).toBe('提交 TestFlight 构建')
     expect(parsed.description).toBe('今天还没有上传验证。')
     expect(parsed.task.project).toBe('NoteMD')
+    expect(parsed.task.priority).toBe('P0')
+    expect(parsed.task.contexts).toEqual(['@电脑'])
     expect(parsed.body).toBe(body)
   })
 
@@ -198,6 +208,14 @@ body`,
   })
 
   it('rejects invalid optional known fields rather than silently dropping them', () => {
+    expectTaskError(
+      () => parseTaskSource('inbox/tasks/a-task.md', minimalDocument('  priority: critical\n')),
+      'invalid-priority',
+    )
+    expectTaskError(
+      () => parseTaskSource('inbox/tasks/a-task.md', minimalDocument('  contexts: ["@电脑", " @电脑 "]\n')),
+      'invalid-contexts',
+    )
     expectTaskError(
       () => parseTaskSource('inbox/tasks/a-task.md', minimalDocument('  due: "2026-02-30"\n')),
       'invalid-due',

@@ -3,12 +3,15 @@ import {
   appendEvent,
   createIdeaSource,
   createTaskSource,
+  hostVault,
   loadWorkspace,
   openSource,
   type CreateTaskInput,
+  type CreateIdeaInput,
   type NextWorkspace,
   type WorkspaceItem,
 } from './repository'
+import { DEFAULT_NEXT_SETTINGS, loadNextSettings, type NextSettings } from './settings'
 import type { IdeaSource } from './source'
 
 export const state = $state<{
@@ -16,12 +19,20 @@ export const state = $state<{
   loading: boolean
   saving: boolean
   error: string | null
+  settings: NextSettings
 }>({
   workspace: null,
   loading: true,
   saving: false,
   error: null,
+  settings: { ...DEFAULT_NEXT_SETTINGS },
 })
+
+async function loadConfiguredWorkspace(): Promise<NextWorkspace> {
+  const settings = await loadNextSettings()
+  state.settings = settings
+  return loadWorkspace(hostVault, { wipLimit: settings.wipLimit })
+}
 
 export async function refresh(): Promise<void> {
   if (state.saving) return
@@ -31,7 +42,7 @@ export async function refresh(): Promise<void> {
   state.loading = state.workspace === null
   state.error = null
   try {
-    state.workspace = await loadWorkspace()
+    state.workspace = await loadConfiguredWorkspace()
   } catch (error) {
     state.error = String(error)
     throw error
@@ -41,13 +52,15 @@ export async function refresh(): Promise<void> {
   }
 }
 
-export async function createIdea(body: string): Promise<string> {
+export async function createIdea(input: CreateIdeaInput): Promise<string> {
   if (state.saving) throw new Error('Next is already saving')
   state.saving = true
   state.error = null
   try {
-    const created = await createIdeaSource(body)
-    state.workspace = await loadWorkspace()
+    const created = await createIdeaSource(input.body, {
+      metadata: { priority: input.priority, ...(input.due ? { due: input.due } : {}), contexts: input.contexts },
+    })
+    state.workspace = await loadConfiguredWorkspace()
     return created.path
   } catch (error) {
     state.error = String(error)
@@ -74,7 +87,7 @@ export async function createTask(input: CreateTaskInput, markCurrent: boolean): 
     const created = await createTaskSource(input)
     let inbox: NextWorkspace
     try {
-      inbox = await loadWorkspace()
+      inbox = await loadConfiguredWorkspace()
     } catch (error) {
       // Publication is already the durable commit point. Report a refresh
       // warning instead of telling the user creation failed and inviting a
@@ -111,7 +124,7 @@ export async function createTask(input: CreateTaskInput, markCurrent: boolean): 
       // The Task file is already durable. Rebuild from disk so the UI shows it
       // in Inbox and return a result distinct from source creation failure.
       try {
-        state.workspace = await loadWorkspace()
+        state.workspace = await loadConfiguredWorkspace()
       } catch {
         // Keep the successfully loaded Inbox snapshot and the placement error.
       }
@@ -135,13 +148,13 @@ async function save(event: ReturnType<typeof placeEvent>): Promise<void> {
   state.saving = true
   state.error = null
   try {
-    // v1 is the preregistered soft-limit phase. The domain supports the G3
-    // hard-limit experiment, but normal product writes deliberately do not.
+    // Normal placement remains a soft WIP warning. Existing over-limit work
+    // stays visible and movable; the persistent banner asks the user to adjust.
     state.workspace = await appendEvent(state.workspace, event, { hardWipLimit: false })
   } catch (error) {
     state.error = String(error)
     try {
-      state.workspace = await loadWorkspace()
+      state.workspace = await loadConfiguredWorkspace()
     } catch {
       // Preserve the original write error; refresh failure will surface on the
       // next explicit/focus refresh without hiding why this action failed.

@@ -1,4 +1,5 @@
 import YAML from 'yaml'
+import { DEFAULT_PRIORITY, normalizeContexts, normalizeDue, normalizePriority, type PlanningMetadata, type Priority } from './metadata'
 
 export const IDEA_SUFFIX = '-idea.md'
 export const IDEA_SPARK_STATE_PATH = '.notemd/idea-spark.json'
@@ -11,6 +12,9 @@ export interface IdeaSource {
   /** Human-authored Markdown after frontmatter, preserved verbatim for preview. */
   body: string
   proofed: boolean
+  priority?: Priority
+  due?: string
+  contexts?: string[]
 }
 
 export function normalizeVaultDir(value: unknown): string | null {
@@ -54,8 +58,21 @@ export function timestampIdeaFileName(now: Date, taken: ReadonlySet<string>): st
 }
 
 /** Minimal OKF Idea document. The human-authored body is preserved verbatim. */
-export function buildIdeaDocument(body: string, created: string): string {
-  return `---\ntype: Idea\ncreated: ${created}\n---\n${body}`
+export function buildIdeaDocument(
+  body: string,
+  created: string,
+  metadata: PlanningMetadata = { priority: DEFAULT_PRIORITY, contexts: [] },
+): string {
+  const contexts = normalizeContexts(metadata.contexts)
+  const due = normalizeDue(metadata.due)
+  const planning = [
+    `  priority: ${normalizePriority(metadata.priority)}`,
+    ...(due ? [`  due: ${JSON.stringify(due)}`] : []),
+    ...(contexts.length
+      ? ['  contexts:', ...contexts.map((context) => `    - ${JSON.stringify(context)}`)]
+      : []),
+  ].join('\n')
+  return `---\ntype: Idea\ncreated: ${created}\nnext:\n${planning}\n---\n${body}`
 }
 
 export function splitFrontmatter(markdown: string): [Record<string, unknown> | null, string] {
@@ -92,6 +109,15 @@ export function titleFromMarkdown(markdown: string, fallback: string): string {
 export function parseIdeaSource(path: string, markdown: string, proofed: boolean): IdeaSource {
   const [meta, body] = splitFrontmatter(markdown)
   const created = typeof meta?.created === 'string' && meta.created.trim() ? meta.created.trim() : undefined
+  const planning = meta?.next !== null && typeof meta?.next === 'object' && !Array.isArray(meta.next)
+    ? meta.next as Record<string, unknown>
+    : null
+  const priority = planning && typeof planning.priority === 'string'
+    && normalizePriority(planning.priority) === planning.priority
+    ? normalizePriority(planning.priority)
+    : undefined
+  const due = normalizeDue(planning?.due)
+  const contexts = normalizeContexts(planning?.contexts)
   const name = path.split('/').at(-1) ?? path
   return {
     path,
@@ -99,6 +125,9 @@ export function parseIdeaSource(path: string, markdown: string, proofed: boolean
     title: titleFromMarkdown(markdown, name),
     body,
     proofed,
+    ...(priority ? { priority } : {}),
+    ...(due ? { due } : {}),
+    ...(contexts.length ? { contexts } : {}),
   }
 }
 

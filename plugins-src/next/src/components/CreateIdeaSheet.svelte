@@ -1,20 +1,31 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
+  import { DEFAULT_PRIORITY, parseContextDraft, PRIORITIES, type PlanningMetadata } from '../lib/metadata'
   import { t } from '../lib/strings'
+
+  export interface IdeaDraft extends PlanningMetadata {
+    body: string
+  }
 
   let {
     ideaDir,
+    defaults = { priority: DEFAULT_PRIORITY, contexts: [] },
     saving,
     onCancel,
     onSubmit,
   }: {
     ideaDir: string
+    defaults?: PlanningMetadata
     saving: boolean
     onCancel(): void
-    onSubmit(body: string): Promise<void>
+    onSubmit(input: IdeaDraft): Promise<void>
   } = $props()
 
   let body = $state('')
+  const initial = untrack(() => defaults)
+  let priority = $state(initial.priority)
+  let due = $state(initial.due ?? '')
+  let contextDraft = $state(initial.contexts.join(', '))
   let invalid = $state(false)
   let sheetEl: HTMLDivElement | undefined = $state()
   let formEl: HTMLFormElement | undefined = $state()
@@ -28,7 +39,12 @@
       return
     }
     invalid = false
-    await onSubmit(body)
+    await onSubmit({
+      body: body.trim(),
+      priority,
+      ...(due ? { due } : {}),
+      contexts: parseContextDraft(contextDraft),
+    })
   }
 
   onMount(() => {
@@ -46,7 +62,7 @@
         return
       }
       if (event.key !== 'Tab' || !sheetEl) return
-      const focusable = [...sheetEl.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)')]
+      const focusable = [...sheetEl.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)')]
       if (!focusable.length) return
       const first = focusable[0]
       const last = focusable.at(-1)!
@@ -89,6 +105,16 @@
         placeholder={t('create.placeholder')}
         rows="8"
       ></textarea>
+      <div class="planning-grid">
+        <label for="new-idea-priority">{t('field.priority')}</label>
+        <select id="new-idea-priority" name="priority" bind:value={priority}>
+          {#each PRIORITIES as value}<option value={value}>{t(`priority.${value}` as never)}</option>{/each}
+        </select>
+        <label for="new-idea-due">{t('field.due')}</label>
+        <input id="new-idea-due" name="due" type="date" bind:value={due} />
+        <label for="new-idea-contexts">{t('field.contexts')}</label>
+        <input id="new-idea-contexts" name="contexts" bind:value={contextDraft} placeholder={t('field.contexts.placeholder')} />
+      </div>
       {#if invalid}<p class="error" role="alert">{t('error.ideaRequired')}</p>{/if}
       <footer>
         <span>{t('create.saveShortcut')}</span>
@@ -103,15 +129,17 @@
 
 <style>
   .scrim { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, #000 32%, transparent); backdrop-filter: blur(8px); }
-  .sheet { width: min(560px, 100%); box-sizing: border-box; border: 1px solid var(--line); border-radius: 20px; background: var(--sheet); color: var(--fg); box-shadow: 0 24px 80px color-mix(in srgb, #000 30%, transparent); }
+  .sheet { width: min(560px, 100%); max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box; border: 1px solid var(--line); border-radius: 20px; background: var(--sheet); color: var(--fg); box-shadow: 0 24px 80px color-mix(in srgb, #000 30%, transparent); }
   header { display: flex; justify-content: space-between; gap: 16px; padding: 22px 24px 15px; }
   h2 { margin: 0; font-size: 19px; line-height: 1.3; }
   header p { margin: 5px 0 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
   .close { width: 28px; height: 28px; border: none; border-radius: 50%; background: var(--chip); color: var(--muted-strong); font-size: 20px; line-height: 1; cursor: pointer; }
   form { display: grid; gap: 8px; padding: 18px 24px 22px; border-top: 1px solid var(--line); }
   label { font-size: 12px; font-weight: 650; }
-  textarea { width: 100%; resize: vertical; min-height: 132px; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--input); color: var(--fg); padding: 11px 12px; font: inherit; line-height: 1.55; outline: none; }
-  textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  textarea, input, select { width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--input); color: var(--fg); padding: 10px 12px; font: inherit; line-height: 1.55; outline: none; }
+  textarea { resize: vertical; min-height: 112px; }
+  textarea:focus, input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .planning-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 12px; margin-top: 6px; }
   textarea[aria-invalid="true"] { border-color: var(--danger); }
   .error { margin: 0; color: var(--danger); font-size: 12px; }
   footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 8px; }

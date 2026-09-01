@@ -1,4 +1,5 @@
 import { Document, isScalar, parseDocument } from 'yaml'
+import { normalizeContexts, normalizePriority, PRIORITIES, type Priority } from './metadata'
 
 export const TASK_SUFFIX = '-task.md'
 export const DEFAULT_TASK_DIR = 'inbox/tasks'
@@ -8,7 +9,9 @@ export interface TaskDetails {
   id: string
   /** Source-level project affiliation; it does not confirm a Next ledger tag. */
   project?: string
+  priority?: Priority
   due?: string
+  contexts?: string[]
   done_when?: string
   dedupe_key?: string
 }
@@ -65,7 +68,9 @@ export type TaskSourceErrorCode =
   | 'unsupported-version'
   | 'invalid-task-id'
   | 'invalid-project'
+  | 'invalid-priority'
   | 'invalid-due'
+  | 'invalid-contexts'
   | 'invalid-done-when'
   | 'invalid-dedupe-key'
   | 'invalid-generated'
@@ -194,16 +199,36 @@ function validateTaskMeta(meta: Record<string, unknown>, dueIsQuoted = true): Va
   const id = requiredString(meta.task.id, 'invalid-task-id', 'task.id')
   if (!validUuidV4(id)) fail('invalid-task-id', 'task.id must be a UUID v4')
   const project = optionalString(meta.task.project, 'invalid-project', 'task.project')
+  let priority: Priority | undefined
+  if (meta.task.priority !== undefined) {
+    if (typeof meta.task.priority !== 'string' || !(PRIORITIES as readonly string[]).includes(meta.task.priority)) {
+      fail('invalid-priority', 'task.priority must be P0, P1, P2, or P3')
+    }
+    priority = normalizePriority(meta.task.priority)
+  }
   const due = optionalString(meta.task.due, 'invalid-due', 'task.due')
   if (due !== undefined && !validCalendarDate(due)) fail('invalid-due', 'task.due must be YYYY-MM-DD')
   if (due !== undefined && !dueIsQuoted) fail('invalid-due', 'task.due must be a quoted YYYY-MM-DD string')
+  let contexts: string[] | undefined
+  if (meta.task.contexts !== undefined) {
+    if (!Array.isArray(meta.task.contexts)
+      || meta.task.contexts.some((context) => typeof context !== 'string' || !context.trim())) {
+      fail('invalid-contexts', 'task.contexts must be a sequence of non-empty strings')
+    }
+    contexts = normalizeContexts(meta.task.contexts)
+    if (contexts.length !== meta.task.contexts.length) {
+      fail('invalid-contexts', 'task.contexts must not contain duplicates')
+    }
+  }
   const doneWhen = optionalString(meta.task.done_when, 'invalid-done-when', 'task.done_when')
   const dedupeKey = optionalString(meta.task.dedupe_key, 'invalid-dedupe-key', 'task.dedupe_key')
   const task: TaskDetails = {
     version: 1,
     id,
     ...(project ? { project } : {}),
+    ...(priority ? { priority } : {}),
     ...(due ? { due } : {}),
+    ...(contexts?.length ? { contexts } : {}),
     ...(doneWhen ? { done_when: doneWhen } : {}),
     ...(dedupeKey ? { dedupe_key: dedupeKey } : {}),
   }
@@ -301,7 +326,9 @@ export function buildTaskDocument(input: BuildTaskDocumentInput): string {
       version: input.task.version,
       id: input.task.id.trim(),
       ...(input.task.project !== undefined ? { project: input.task.project.trim() } : {}),
+      ...(input.task.priority !== undefined ? { priority: input.task.priority } : {}),
       ...(input.task.due !== undefined ? { due: input.task.due.trim() } : {}),
+      ...(input.task.contexts?.length ? { contexts: normalizeContexts(input.task.contexts) } : {}),
       ...(input.task.done_when !== undefined ? { done_when: input.task.done_when.trim() } : {}),
       ...(input.task.dedupe_key !== undefined ? { dedupe_key: input.task.dedupe_key.trim() } : {}),
     },

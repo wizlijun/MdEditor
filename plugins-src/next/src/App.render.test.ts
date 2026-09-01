@@ -3,10 +3,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 import { reduceEvents } from './lib/domain'
 import type { NextWorkspace, WorkspaceItem } from './lib/repository'
+import type { NextSettings } from './lib/settings'
 import type { CreateTaskResult } from './lib/store.svelte'
 
 const mocks = vi.hoisted(() => ({
-  state: { workspace: null as NextWorkspace | null, loading: false, saving: false, error: null as string | null },
+  state: {
+    workspace: null as NextWorkspace | null,
+    loading: false,
+    saving: false,
+    error: null as string | null,
+    settings: { wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' } as NextSettings,
+  },
   refresh: vi.fn(async () => {}),
   createIdea: vi.fn(async () => 'inbox/ideas/new-idea.md'),
   createTask: vi.fn(async (): Promise<CreateTaskResult> => ({ path: 'inbox/tasks/new-task.md', placedCurrent: false })),
@@ -50,6 +57,7 @@ afterEach(() => {
   mocks.createIdea.mockResolvedValue('inbox/ideas/new-idea.md')
   mocks.createTask.mockResolvedValue({ path: 'inbox/tasks/new-task.md', placedCurrent: false })
   mocks.state.saving = false
+  mocks.state.settings = { wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' }
   vi.useRealTimers()
 })
 
@@ -122,6 +130,33 @@ function workspace(): NextWorkspace {
     projectOptions: [],
     scanErrors: [],
     readOnlyError: null,
+  }
+}
+
+function withWipLimit(next: NextWorkspace, count: number, limit = 5): NextWorkspace {
+  const seed = next.wip[0]!
+  const wip = Array.from({ length: count }, (_, index) => ({
+    ...seed,
+    key: `wip-${index + 1}`,
+    item_id: `wip-${index + 1}`,
+    idea_id: `wip-${index + 1}`,
+    title: `进行中 ${index + 1}`,
+    projection: seed.projection ? {
+      ...seed.projection,
+      idea_id: `wip-${index + 1}`,
+    } : undefined,
+  }))
+  return {
+    ...next,
+    items: [...next.items.filter((entry) => entry.state !== 'wip'), ...wip],
+    wip,
+    projection: {
+      ...next.projection,
+      wipCount: count,
+      wipLimit: limit,
+      wipAtLimit: count >= limit,
+      wipExceeded: count > limit,
+    },
   }
 }
 
@@ -388,7 +423,9 @@ describe('Next window', () => {
     textarea.dispatchEvent(new InputEvent('input', { bubbles: true }))
     document.querySelector<HTMLFormElement>('[data-form="create-idea"]')!
       .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
-    await vi.waitFor(() => expect(mocks.createIdea).toHaveBeenCalledWith('值得记录的念头'))
+    await vi.waitFor(() => expect(mocks.createIdea).toHaveBeenCalledWith({
+      body: '值得记录的念头', priority: 'P2', contexts: [],
+    }))
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull())
   })
 
@@ -411,6 +448,8 @@ describe('Next window', () => {
       .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => expect(mocks.createTask).toHaveBeenCalledWith({
       title: '提交 TestFlight 构建',
+      priority: 'P2',
+      contexts: [],
     }, false))
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull())
 
@@ -426,6 +465,8 @@ describe('Next window', () => {
     await vi.waitFor(() => expect(mocks.createTask).toHaveBeenCalledWith({
       title: '验证安装',
       done_when: '安装成功',
+      priority: 'P2',
+      contexts: [],
     }, true))
   })
 
@@ -505,7 +546,9 @@ describe('Next window', () => {
       task: {
         version: 1,
         id: '8afad9c5-07ac-4e4d-8d1e-4ed04c06f2d8',
+        priority: 'P0',
         due: '2026-09-02',
+        contexts: ['@电脑'],
       },
       generatedBy: 'daily-summary-agent/1',
     }
@@ -519,7 +562,36 @@ describe('Next window', () => {
     expect(card.textContent).toContain('任务')
     expect(card.textContent).toContain('Agent 添加')
     expect(card.textContent).toContain('2026-09-02')
+    expect(card.textContent).toContain('P0 · 紧急')
+    expect(card.textContent).toContain('@电脑')
     expect(document.querySelectorAll('[data-lane]')).toHaveLength(5)
+  })
+
+  it('shows safe planning fallbacks on legacy cards in every lane component', () => {
+    mocks.state.workspace = workspace()
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const card = document.querySelector('[data-item-key="wip"]')!
+    expect(card.textContent).toContain('P2 · 普通')
+    expect(card.textContent).toContain('无截止日期')
+    expect(card.textContent).toContain('情境未明确')
+  })
+
+  it('prefills future cards from the complete Next settings snapshot', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 8, 1, 9, 0))
+    mocks.state.settings = { wipLimit: 5, defaultPriority: 'P1', defaultDueDays: 7, defaultContext: '@电话' }
+    mocks.state.workspace = workspace()
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    document.querySelector<HTMLButtonElement>('[data-action="new-idea"]')!.click()
+    flushSync()
+    expect(document.querySelector<HTMLSelectElement>('[name="priority"]')?.value).toBe('P1')
+    expect(document.querySelector<HTMLInputElement>('[name="due"]')?.value).toBe('2026-09-08')
+    expect(document.querySelector<HTMLInputElement>('[name="contexts"]')?.value).toBe('@电话')
+    mocks.state.settings = { wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' }
   })
 
   it('opens New Idea with Command-N and keeps the draft when saving fails', async () => {
@@ -566,6 +638,37 @@ describe('Next window', () => {
     flushSync()
     expect(document.body.textContent).toContain('以后再看的想法')
     expect(document.body.textContent).toContain('已经关闭的想法')
+  })
+
+  it('keeps an emphatic WIP alert visible at the configured limit through unrelated filtering', () => {
+    mocks.state.workspace = withWipLimit(workspace(), 5)
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const alert = document.querySelector<HTMLElement>('[data-warning="wip"]')!
+    expect(alert).toBeTruthy()
+    expect(alert.getAttribute('role')).toBe('alert')
+    expect(alert.classList.contains('danger')).toBe(true)
+    expect(alert.classList.contains('calm')).toBe(false)
+    expect(alert.querySelector('button')).toBeNull()
+    expect(alert.textContent).toContain('进行中有 5 项（上限 5）')
+    expect(document.querySelector('[data-lane="wip"]')?.classList.contains('wip-limited')).toBe(true)
+    expect(document.querySelector('[data-lane="wip"] .lane-head span')?.textContent).toBe('5/5')
+
+    const search = document.querySelector<HTMLInputElement>('input.search')!
+    search.value = '不匹配任何卡片'
+    search.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    flushSync()
+    expect(document.querySelector('[data-warning="wip"]')).toBe(alert)
+  })
+
+  it('hides the WIP alert only while the full count is below a custom limit', () => {
+    mocks.state.workspace = withWipLimit(workspace(), 4, 5)
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    expect(document.querySelector('[data-warning="wip"]')).toBeNull()
+    expect(document.querySelector('[data-lane="wip"] .lane-head span')?.textContent).toBe('4/5')
   })
 
   it('lists projects after the subtitle and toggles a project filter that composes with search', () => {

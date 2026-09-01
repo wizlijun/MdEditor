@@ -16,7 +16,7 @@ describe('Next strings', () => {
 
   it('uses the selected locale and interpolates values', () => {
     setLocale('zh-CN')
-    expect(t('count.wip', { count: 2 })).toBe('2/3')
+    expect(t('count.wip', { count: 2, limit: 5 })).toBe('2/5')
     expect(t('sheet.title', { title: '验证想法' })).toBe('安放“验证想法”')
     setLocale('en')
   })
