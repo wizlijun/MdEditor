@@ -27,7 +27,7 @@
     updateMetadata,
   } from './lib/store.svelte'
   import { setLocale, t, type MessageKey } from './lib/strings'
-  import { isDormantDue, previewPosition } from './lib/view'
+  import { isDormantDue, previewPosition, sortWorkspaceItems, type SortMode } from './lib/view'
 
   type Lane = 'capture' | 'wip' | 'waiting' | 'dormant' | 'closed'
   type Route = PlaceInput['route']
@@ -46,6 +46,7 @@
   let creating = $state(false)
   let creatingTask = $state(false)
   let search = $state('')
+  let sortMode = $state<SortMode>('priority')
   let selectedProject = $state('')
   let placing = $state<WorkspaceItem | null>(null)
   let placementRoute = $state<Route | undefined>()
@@ -134,19 +135,20 @@
       ? workspace.dormant
       : workspace.dormant.filter((item) => isDormantDue(item))
     const closed = filtering || showPlaced ? workspace.closed : []
-    const visibleCapture = filter(filtering ? capture : capture.slice(0, 10))
-    const visibleDormant = filter(dormant)
-    const visibleClosed = filter(closed)
+    const sortedCapture = sortWorkspaceItems(filter(capture), sortMode)
+    const visibleCapture = filtering ? sortedCapture : sortedCapture.slice(0, 10)
+    const visibleDormant = sortWorkspaceItems(filter(dormant), sortMode)
+    const visibleClosed = sortWorkspaceItems(filter(closed), sortMode)
     return [
       { id: 'capture', title: 'section.capture', empty: 'empty.capture', items: visibleCapture, count: String(visibleCapture.length) },
       {
         id: 'wip',
         title: 'section.wip',
         empty: 'empty.wip',
-        items: filter(workspace.wip),
+        items: sortWorkspaceItems(filter(workspace.wip), sortMode),
         count: t('count.wip', { count: workspace.wip.length, limit: workspace.projection.wipLimit }),
       },
-      { id: 'waiting', title: 'section.waiting', empty: 'empty.waiting', items: filter(workspace.waiting), count: t('count.waiting', { count: workspace.waiting.length }) },
+      { id: 'waiting', title: 'section.waiting', empty: 'empty.waiting', items: sortWorkspaceItems(filter(workspace.waiting), sortMode), count: t('count.waiting', { count: workspace.waiting.length }) },
       { id: 'dormant', title: 'status.dormant', empty: 'empty.dormant', items: visibleDormant, count: String(visibleDormant.length) },
       { id: 'closed', title: 'status.closed', empty: 'empty.closed', items: visibleClosed, count: String(visibleClosed.length) },
     ]
@@ -626,6 +628,14 @@
 
       <div class="board-tools">
         <input class="search" type="search" bind:value={search} placeholder={t('search.placeholder')} />
+        <label class="sort-control">
+          <span>{t('sort.label')}</span>
+          <select name="sortMode" value={sortMode} onchange={(event) => sortMode = event.currentTarget.value as SortMode}>
+            <option value="priority">{t('sort.priority')}</option>
+            <option value="due">{t('sort.due')}</option>
+            <option value="created">{t('sort.created')}</option>
+          </select>
+        </label>
         {#if !filtering}
           <button class:active={showPlaced} onclick={() => showPlaced = !showPlaced}>
             {showPlaced ? t('action.hidePlaced') : t('action.findPlaced')}
@@ -837,6 +847,9 @@
   .board-tools { display: flex; gap: 8px; margin-bottom: 12px; }
   .search { flex: 1; min-width: 160px; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--input); color: var(--fg); padding: 9px 11px; outline: none; }
   .search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .sort-control { flex: none; display: flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--muted-strong); padding: 0 8px 0 10px; font-size: 12px; font-weight: 650; }
+  .sort-control select { min-width: 118px; border: 0; background: transparent; color: var(--fg); padding: 8px 2px; outline: none; font: inherit; }
+  .sort-control:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .board-tools button { flex: none; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg); padding: 8px 12px; font-weight: 650; cursor: pointer; }
   .board-tools button:hover { background: var(--hover); }
   .board-tools button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
@@ -863,6 +876,8 @@
   @media (max-width: 660px) {
     .topbar { align-items: flex-start; padding: 16px 18px 13px; }
     .topbar p { max-width: 440px; }
+    .board-tools { flex-wrap: wrap; }
+    .sort-control { flex: 1 1 auto; }
     .subtitle-row { display: grid; gap: 6px; }
     .project-filters { width: 100%; max-width: 100%; }
     .content { padding: 18px 16px 36px; }

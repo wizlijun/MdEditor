@@ -59,6 +59,10 @@ export type MessageKey =
   | 'warning.waiting'
   | 'warning.readOnly'
   | 'search.placeholder'
+  | 'sort.label'
+  | 'sort.priority'
+  | 'sort.due'
+  | 'sort.created'
   | 'board.dragHelp'
   | 'create.title'
   | 'create.destination'
@@ -276,6 +280,10 @@ const en: Catalog = {
   'warning.waiting': 'More than five items are waiting. Make sure each still has a real review responsibility.',
   'warning.readOnly': 'Next is read-only until its event document is repaired.',
   'search.placeholder': 'Search title, action, or destination',
+  'sort.label': 'Sort',
+  'sort.priority': 'Priority first',
+  'sort.due': 'Due date first',
+  'sort.created': 'Newest added first',
   'board.dragHelp': 'Drag a card to another lane. Next asks only for the information that state needs.',
   'create.title': 'New Idea',
   'create.destination': 'Save to {path}',
@@ -492,6 +500,10 @@ const zh: Catalog = {
   'warning.waiting': '等待项已超过五个。请确认每一项仍有真实的回收责任。',
   'warning.readOnly': '事件文档修复前，Next 将保持只读。',
   'search.placeholder': '搜索标题、下一步或去向',
+  'sort.label': '排序',
+  'sort.priority': '优先级优先',
+  'sort.due': '截止日期优先',
+  'sort.created': '最新添加优先',
   'board.dragHelp': '把卡片拖到另一条泳道；Next 只会询问该状态真正需要的信息。',
   'create.title': '新建 Idea',
   'create.destination': '保存到 {path}',
@@ -708,6 +720,10 @@ const ja: Catalog = {
   'warning.waiting': '確認待ちが五つを超えています。すべてに確認責任が残っているか確かめてください。',
   'warning.readOnly': 'イベント文書を修復するまで Next は読み取り専用です。',
   'search.placeholder': 'タイトル、次の行動、移動先を検索',
+  'sort.label': '並べ替え',
+  'sort.priority': '優先度を優先',
+  'sort.due': '期限を優先',
+  'sort.created': '追加の新しい順',
   'board.dragHelp': 'カードを別のレーンへドラッグできます。Next はその状態に必要な情報だけを尋ねます。',
   'create.title': '新規 Idea',
   'create.destination': '{path} に保存',
@@ -924,6 +940,10 @@ const de: Catalog = {
   'warning.waiting': 'Mehr als fünf Punkte warten. Prüfe, ob für jeden noch echte Abnahmeverantwortung besteht.',
   'warning.readOnly': 'Next bleibt schreibgeschützt, bis das Ereignisdokument repariert ist.',
   'search.placeholder': 'Titel, nächsten Schritt oder Ziel suchen',
+  'sort.label': 'Sortierung',
+  'sort.priority': 'Priorität zuerst',
+  'sort.due': 'Fälligkeit zuerst',
+  'sort.created': 'Neueste zuerst',
   'board.dragHelp': 'Ziehe eine Karte in eine andere Bahn. Next fragt nur nach den Angaben, die dieser Zustand braucht.',
   'create.title': 'Neue Idee',
   'create.destination': 'Speichern unter {path}',
