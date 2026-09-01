@@ -1,0 +1,6 @@
+description: One semantic change must change the canonical payload hash.
+operations:
+  - replace:
+      path: salience
+      value: normal
+expected_relation: different-canonical-payload-and-hash

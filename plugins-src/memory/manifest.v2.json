@@ -2,12 +2,12 @@
   "manifest_version": 2,
   "id": "notemd.memory",
   "name": "Memory",
-  "version": "1.2.1",
+  "version": "2.0.0",
   "kind": "native",
   "engines": {
     "notemd": ">=6.901.8"
   },
-  "description": "Review, improve and approve controlled USER.md and MEMORY.md changes without editing the projections directly.",
+  "description": "Review structured Memory claims, resolve Git conflicts and control scoped Agent context while keeping USER.md and MEMORY.md as plain-text projections.",
   "ui": "ui/",
   "activation": {
     "events": [
@@ -48,21 +48,21 @@
   "i18n": {
     "zh": {
       "name": "记忆",
-      "description": "无需直接编辑投影，即可审阅、优化和批准 USER.md 与 MEMORY.md 的受控变更。",
+      "description": "审阅结构化记忆主张、处理 Git 冲突并控制 Agent 场景上下文，同时让 USER.md 与 MEMORY.md 保持纯文本投影。",
       "menus": {
         "open": "记忆"
       }
     },
     "ja": {
       "name": "メモリ",
-      "description": "投影ファイルを直接編集せず、USER.md と MEMORY.md の変更を確認・改善・承認します。",
+      "description": "構造化された記憶の主張を確認し、Git 競合と Agent コンテキストを管理しながら、USER.md と MEMORY.md をプレーンテキスト投影として保ちます。",
       "menus": {
         "open": "メモリ"
       }
     },
     "de": {
       "name": "Gedächtnis",
-      "description": "Kontrollierte Änderungen an USER.md und MEMORY.md prüfen, verbessern und freigeben, ohne die Projektionen direkt zu bearbeiten.",
+      "description": "Strukturierte Memory-Claims prüfen, Git-Konflikte lösen und Agent-Kontext steuern, während USER.md und MEMORY.md reine Textprojektionen bleiben.",
       "menus": {
         "open": "Gedächtnis"
       }

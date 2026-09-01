@@ -133,7 +133,7 @@ pub fn render_help(
     out.push_str("  search        Full-text search over the Vault (--vault, --json, --limit, --stats)\n");
     out.push_str("  mcp           Serve this vault to agents over MCP (stdio). Register with:\n");
     out.push_str("                { \"command\": \"notemd\", \"args\": [\"mcp\"] }\n");
-    out.push_str("  memory        Review and propose controlled USER/MEMORY changes\n");
+    out.push_str("  memory        Read and propose controlled personal Memory Claims\n");
     out.push_str("  doctor        Self-check every local capability (--offline, --vault, --json)\n");
     out.push_str("  reading-insights [report]   Generate a reading digest from the Vault (--vault, --date, --stdout)\n");
 
@@ -423,52 +423,75 @@ EXIT CODES:
   2    Argument error
 ",
         "memory" => "\
-notemd memory — Controlled USER.md and MEMORY.md workflow
+notemd memory — Git-backed personal Claim ledger
 
 USAGE:
-  notemd memory list [--status active|pending|revoked|all] [--scope user|memory]
-  notemd memory show <entry-or-proposal-id>   # proposal output includes before/after + SHA-256
-  notemd memory suggest
-  notemd memory propose <create|replace|merge|revoke|delete|set-priority> [flags]
-  notemd memory approve <proposal-id> --proposal-sha256 <sha256> --approved-by human:<id> --confirm-human-approved
-  notemd memory reject <proposal-id> --proposal-sha256 <sha256> --approved-by human:<id> --confirm-human-approved
-  notemd memory check
-  notemd memory migrate
+  notemd memory snapshot [--json]
+  notemd memory list [--status current|pending|revoked|deleted|conflict|all]
+  notemd memory show <claim-or-revision-id>
+  notemd memory owner --json
+  notemd memory pending [--json]
+  notemd memory conflicts [--json]
+  notemd memory context --space <space> --purpose <purpose> --caller <caller> [context flags]
+  notemd memory context-manifest <manifest-id> [--json]
 
-PROPOSE FLAGS:
-  --scope <user|memory>       Destination projection
-  --text <claim>              Proposed complete claim text
-  --source <path#Lline|URL>   Exact evidence source
-  --by <producer/version>     Agent producer; human: actors are rejected here
-  --dedupe-key <key>          Stable idempotency key
-  --target <entry-id>         Required for non-create operations
-  --base-revision <n>         Required for non-create operations
-  --section <heading>         Section for a new entry
-  --priority <critical|high|normal|low>
-                              Attention level; never grants authority
-  --polarity <positive|negative|neutral>
-                              Follow, avoid, or contextual behavior direction
-  --epistemic-status <owner-stated|source-supported|inferred|contested|unknown>
-                              Evidence nature (inferred cannot be high certainty)
-  --certainty <high|medium|low|unknown>
-                              Current confidence, independent of human approval
-  --agent-guidance <text>     Required executable Agent usage instruction
-  --avoid-error <text>        Required for negative/inferred/contested/low/unknown
-  --reason <text>             Why the change improves memory
-  --merge-from <id@rev,...>   Exact active revisions revoked by an approved merge
-  --proposal-sha256 <sha256>  Exact candidate hash displayed before a decision
+AGENT WRITE:
+  notemd memory propose <create|replace|revoke> [claim flags]
+
+MAINTENANCE:
+  notemd memory check [--json]
+  notemd memory doctor [--json]
+  notemd memory rebuild
+  notemd memory reconcile
+  notemd memory purge-plan <claim-id> [--json]
+  notemd memory migrate --dry-run [--json]
+  notemd memory migrate --apply <migration-id> --expected-plan-sha256 <sha256>  # freeze-gated
+
+CLAIM FLAGS:
+  --target <user|memory>      Projection target, not the semantic subject
+  --category <name>          One projection category from the protocol registry
+  --text <claim>             Complete atomic Claim text
+  --claim-kind <kind>        identity|preference|boundary|decision|belief|
+                             observation|commitment|practice|material-fact|quotation
+  --subject <stable-id>      Who or what the Claim is about
+  --asserted-by <actor>      Who expressed, observed or judged the Claim
+  --recorded-by <agent>      Agent identity writing the pending proposal
+  --approval-kind <kind>     self-representation|behavioral-authorization|
+                             factual-verification
+  --trust-tier <tier>        identity|stable-preference|contextual
+  --risk-class <risk>        action-sensitive|behavioral|informational
+  --salience <level>         pinned|normal; importance only, never authority
+  --polarity <value>         positive|negative|neutral
+  --sensitivity <value>      normal|private; restricted plaintext is rejected
+  --valid-from <RFC3339>     Claim valid time; never inferred from record time
+  --valid-until <RFC3339>    Half-open upper bound
+  --space <space>            Explicit context Space; never defaults to all Spaces
+  --purpose <purpose>        Allowed retrieval purpose
+  --provider-policy <policy> deny|prompt|allow for external model transfer
+  --guidance <text>          How an Agent may use this Claim
+  --avoid-error <text>       Error pattern this Claim is intended to prevent
+
+CONTEXT FLAGS:
+  --provider <provider>      External model/service provider
+  --model <model>            Exact model identifier
+  --tool <tool>              Repeat or comma-separate the available tools
+  --external-transfer        Context may leave the local Host
+  --as-of <RFC3339>          Query valid time
 
 NOTES:
-  Agent proposals never modify USER.md or MEMORY.md. Approval binds the exact
-  immutable proposal hash to the configured human owner. Pending and unknown
-  entries are not confirmed facts. Approval does not upgrade certainty.
-  Direct external edits trigger projection drift and block writes until repaired.
-  Delete removes only the current projection block; candidate and decision event
-  remain as immutable audit history.
+  USER.md and MEMORY.md are disposable plain-text projections, not databases.
+  Reading them authorizes informational answers only. External actions require
+  a reducer-backed context decision with no action-sensitive conflict.
+  Agents can only propose pending Claims. Human approve/reject/ignore/delete
+  is available only through the trusted Memory UI; CLI flags cannot impersonate
+  a human. Remembering a Claim does not prove it true or authorize behavior.
+  Restricted plaintext is rejected. Delete creates a tombstone; Git history may
+  retain old bytes. Migration dry-run performs no Vault writes.
+  Authoritative migration apply remains disabled while the RFC is freeze-blocked.
 
 FLAGS:
   --vault <path>              Vault root (default: configured Vault)
-  --json                      Machine-readable envelope
+  --json                      Stable machine-readable output
 
 EXIT CODES:
   0    Success
@@ -1701,11 +1724,13 @@ mod tests {
             assert!(!out.contains("unknown topic"), "topic {topic} rendered as unknown");
         }
     }
-    #[test] fn help_memory_documents_the_approval_and_drift_contract() {
+    #[test] fn help_memory_documents_the_v2_claim_and_authority_contract() {
         let out = render_help(Some("memory"), false, &[], &HashMap::new());
-        for contract in ["--confirm-human-approved", "--proposal-sha256", "--dedupe-key", "Direct external edits", "check` found projection drift"] {
+        for contract in ["Git-backed personal Claim ledger", "--claim-kind", "--approval-kind", "--risk-class", "--space", "--provider", "trusted Memory UI", "Migration dry-run performs no Vault writes"] {
             assert!(out.contains(contract), "memory help is missing {contract}:\n{out}");
         }
+        assert!(!out.contains("--confirm-human-approved"));
+        assert!(!out.contains("--approved-by"));
     }
     #[test] fn help_topic_share_is_core_no_manifest_needed() {
         // share 已 core 化：无任何 manifest 时 help share / help --share 都必须解析。

@@ -1,6 +1,6 @@
 [package]
 name = "notemd"
-version = "6.901.7"
+version = "6.901.8"
 edition = "2021"
 
 [lib]
@@ -69,8 +69,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 urlencoding = "2"
 rand = "0.8"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+unicode-normalization = "0.1"
 fs2 = "0.4"
 
 [target.'cfg(unix)'.dependencies]

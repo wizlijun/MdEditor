@@ -1,0 +1,108 @@
+schema: notemd.memory/claim-revision/v2
+claim_id: 01999f80-28cf-7ac4-9a09-f515b071fe1a
+revision_id: 01999f81-01a7-70f7-af93-87fca7ec225c
+request_id: memory-ui/01999f81-16e8-7ab5-91f6-c2bf1215ad5e
+parents:
+  - revision_id: 01999f7d-0000-7000-8000-000000000001
+    payload_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  - revision_id: 01999f7e-0000-7000-8000-000000000002
+    payload_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+causal_context:
+  parents:
+    - record_id: 01999f7f-0000-7000-8000-000000000001
+      raw_sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    - record_id: 01999f7f-0000-7000-8000-000000000002
+      raw_sha256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+claim_kind: preference
+kind_data:
+  preference:
+    dimension: response-structure
+subject:
+  kind: vault-owner
+  id: owner:01999f70-46da-7ed5-84a0-37e8f34363cb
+  relation_to_owner: self
+asserted_by:
+  - kind: owner
+    id: owner:01999f70-46da-7ed5-84a0-37e8f34363cb
+    basis: direct-input
+  - kind: source
+    id: source:fixture-note
+    basis: quoted-source
+recorded_by:
+  kind: host
+  id: notemd.memory-ui
+  device_id: 772a3d4a-8528-4b5d-8d8c-9f95052d1c65
+recorded_at: "2026-09-01T08:30:00Z"
+text: |-
+  用户希望回答先给出结论。
+  Café 示例需要核验。
+projection:
+  target: user
+  category: preferences
+  visibility: projection
+workflow:
+  state: approved
+lifecycle:
+  state: active
+temporal:
+  uttered_at: "2026-09-01T08:30:00Z"
+  observed_at: null
+  valid_from: "2026-09-01T08:30:00Z"
+  valid_until: null
+  planned_for: null
+  due_at: null
+  review_after: null
+epistemic:
+  basis: owner-stated
+  representation_certainty: high
+  truth_status: not-assessed
+  truth_confidence: unknown
+trust_tier: stable-preference
+risk_class: behavioral
+salience: pinned
+polarity: positive
+sensitivity: normal
+context:
+  spaces: [work/notemd, personal]
+  applies_when: [answering, planning]
+  excludes_when: [public]
+consent:
+  scope: personal-assistant-only
+  allowed_purposes: [writing, planning]
+  external_provider_policy: prompt
+agent_use:
+  guidance: 组织回答时先给出可执行结论，再补充必要原因。
+  avoid_error: 不要把沟通偏好扩张为未表达的外部行动授权。
+decision:
+  verdict: approve
+  approval_kind: self-representation
+  authority_scope: personal-assistant
+  actor_id: human:fixture-owner
+  decided_at: "2026-09-01T08:30:00Z"
+  protocol_context:
+    heads:
+      - revision_id: 01999f70-0000-7000-8000-000000000002
+        payload_sha256: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  authority_context:
+    heads:
+      - revision_id: 01999f70-0000-7000-8000-000000000003
+        payload_sha256: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    capability: memory.claim.approve
+transition:
+  operation: approve
+  approves_revision_id: 01999f80-aaaa-7aaa-8aaa-aaaaaaaaaaaa
+  approves_payload_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+evidence:
+  - relation: evidence-of-speech
+    resource: notes/2026-09-01-example.md#L20
+    content_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+    title: Owner statement
+  - relation: derived-from
+    resource: memory/import/example.yaml
+    content_sha256: "3333333333333333333333333333333333333333333333333333333333333333"
+    title: Migration record
+lineage:
+  derived_from: []
+  produced_by_operation: operation:01999f81-0000-7000-8000-000000000001
+dedupe_key: owner/preferences/conclusion-first
+payload_sha256: 44a3bcbd77c854b064f0b87515530419eec93aec68d9d8b1e72e897f95dc0be4

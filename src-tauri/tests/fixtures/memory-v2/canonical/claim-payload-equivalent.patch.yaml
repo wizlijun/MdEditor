@@ -1,0 +1,14 @@
+description: Equivalent semantic payload with transport-only differences.
+operations:
+  - reverse: parents
+  - reverse: causal_context.parents
+  - reverse: asserted_by
+  - reverse: context.spaces
+  - reverse: context.applies_when
+  - reverse: consent.allowed_purposes
+  - reverse: evidence
+  - reverse: lineage.derived_from
+  - replace_text:
+      path: text
+      value: "\n用户希望回答先给出结论。  \r\nCafé 示例需要核验。\r\n"
+expected_relation: same-canonical-payload-and-hash

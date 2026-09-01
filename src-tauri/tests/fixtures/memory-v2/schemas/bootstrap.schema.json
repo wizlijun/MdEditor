@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://notemd.example/schemas/memory/bootstrap-v2.json",
+  "title": "NoteMD Memory v2 bootstrap",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "vault_id", "protocol_family", "initial_protocol_revision", "initial_authority_revision"],
+  "properties": {
+    "schema": { "const": "notemd.memory/bootstrap/v2" },
+    "vault_id": { "$ref": "#/$defs/id" },
+    "protocol_family": { "const": "notemd.memory" },
+    "initial_protocol_revision": { "$ref": "#/$defs/revisionRef" },
+    "initial_authority_revision": { "$ref": "#/$defs/revisionRef" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "revisionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision_id", "payload_sha256"],
+      "properties": {
+        "revision_id": { "$ref": "#/$defs/id" },
+        "payload_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}
