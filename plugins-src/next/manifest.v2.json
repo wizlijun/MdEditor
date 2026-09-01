@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.next",
   "name": "Next",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "kind": "native",
   "engines": {
     "notemd": ">=6.901.1"
@@ -41,41 +41,7 @@
         "section": "capture",
         "accelerator": "Cmd+Ctrl+N"
       }
-    ],
-    "settings": {
-      "tab_label": "Next",
-      "schema": [
-        {
-          "key": "notemd.next.wipLimit",
-          "type": "number",
-          "label": "Work in progress limit",
-          "default": 5,
-          "min": 1,
-          "step": 1
-        },
-        {
-          "key": "notemd.next.defaultPriority",
-          "type": "select",
-          "label": "Default priority",
-          "options": ["P0", "P1", "P2", "P3"],
-          "default": "P2"
-        },
-        {
-          "key": "notemd.next.defaultDueDays",
-          "type": "number",
-          "label": "Default due date (days after creation; 0 = none)",
-          "default": 0,
-          "min": 0,
-          "step": 1
-        },
-        {
-          "key": "notemd.next.defaultContext",
-          "type": "string",
-          "label": "Default GTD context (optional)",
-          "default": ""
-        }
-      ]
-    }
+    ]
   },
   "capabilities": [
     "vault.read",
@@ -90,13 +56,6 @@
       "description": "让想法和任务都有明确的下一步，或一个安心搁置的地方。",
       "menus": {
         "open": "下一步"
-      },
-      "settings.tab_label": "下一步",
-      "settings.fields": {
-        "notemd.next.wipLimit": "进行中上限",
-        "notemd.next.defaultPriority": "默认优先级",
-        "notemd.next.defaultDueDays": "默认截止天数（创建后；0 表示无截止）",
-        "notemd.next.defaultContext": "默认 GTD 情境（可选）"
       }
     },
     "ja": {
@@ -104,13 +63,6 @@
       "description": "アイデアとタスクに明確な次の一歩を与えるか、安心して休ませる場所を用意します。",
       "menus": {
         "open": "次の一歩"
-      },
-      "settings.tab_label": "次の一歩",
-      "settings.fields": {
-        "notemd.next.wipLimit": "進行中の上限",
-        "notemd.next.defaultPriority": "既定の優先度",
-        "notemd.next.defaultDueDays": "既定の期限日数（作成後、0 は期限なし）",
-        "notemd.next.defaultContext": "既定の GTD コンテキスト（任意）"
       }
     },
     "de": {
@@ -118,13 +70,6 @@
       "description": "Ideen und Aufgaben einen klaren nächsten Schritt geben – oder einen guten Ort zum Ruhen.",
       "menus": {
         "open": "Nächster Schritt"
-      },
-      "settings.tab_label": "Nächster Schritt",
-      "settings.fields": {
-        "notemd.next.wipLimit": "Limit für laufende Arbeit",
-        "notemd.next.defaultPriority": "Standardpriorität",
-        "notemd.next.defaultDueDays": "Standardfälligkeit (Tage nach Erstellung; 0 = keine)",
-        "notemd.next.defaultContext": "Standard-GTD-Kontext (optional)"
       }
     }
   }

@@ -28,6 +28,7 @@ export type MessageKey =
   | 'action.placeOne'
   | 'action.newTask'
   | 'action.newIdea'
+  | 'action.settings'
   | 'action.hideCapture'
   | 'action.findPlaced'
   | 'action.hidePlaced'
@@ -108,6 +109,20 @@ export type MessageKey =
   | 'field.due'
   | 'field.contexts'
   | 'field.contexts.placeholder'
+  | 'settings.title'
+  | 'settings.description'
+  | 'settings.wipLimit'
+  | 'settings.wipLimit.help'
+  | 'settings.defaultPriority'
+  | 'settings.defaultPriority.help'
+  | 'settings.defaultDueDays'
+  | 'settings.defaultDueDays.help'
+  | 'settings.defaultContext'
+  | 'settings.defaultContext.help'
+  | 'settings.validation'
+  | 'settings.save'
+  | 'settings.saving'
+  | 'settings.saveError'
   | 'field.project.placeholder'
   | 'field.project.selected'
   | 'field.project.existing'
@@ -225,6 +240,7 @@ const en: Catalog = {
   'action.placeOne': 'Place an item',
   'action.newTask': 'New Task',
   'action.newIdea': 'New Idea',
+  'action.settings': 'Settings',
   'action.hideCapture': 'Hide items',
   'action.findPlaced': 'Show placed items',
   'action.hidePlaced': 'Hide placed items',
@@ -305,6 +321,20 @@ const en: Catalog = {
   'field.due': 'Due date · Optional',
   'field.contexts': 'GTD context · Optional',
   'field.contexts.placeholder': '@computer, @phone (comma-separated)',
+  'settings.title': 'Next Settings',
+  'settings.description': 'These settings apply only to Next and to cards you create from now on.',
+  'settings.wipLimit': 'In Progress limit',
+  'settings.wipLimit.help': 'Show a persistent warning when In Progress reaches this number.',
+  'settings.defaultPriority': 'Default priority',
+  'settings.defaultPriority.help': 'Prefill the priority for new Ideas and Tasks.',
+  'settings.defaultDueDays': 'Default due date',
+  'settings.defaultDueDays.help': 'Days after creation; use 0 to leave new cards without a due date.',
+  'settings.defaultContext': 'Default GTD context',
+  'settings.defaultContext.help': 'Optional context prefilled for new cards, such as @computer or @phone.',
+  'settings.validation': 'Enter whole numbers: the In Progress limit must be at least 1, and due days cannot be negative.',
+  'settings.save': 'Save Settings',
+  'settings.saving': 'Saving…',
+  'settings.saveError': 'Next could not save these settings. Your edits are still here.',
   'field.project.placeholder': 'Choose or enter a project',
   'field.project.selected': 'Selected projects',
   'field.project.existing': 'Existing projects',
@@ -421,6 +451,7 @@ const zh: Catalog = {
   'action.placeOne': '安放一个事项',
   'action.newTask': '新建任务',
   'action.newIdea': '新建 Idea',
+  'action.settings': '设置',
   'action.hideCapture': '收起想法',
   'action.findPlaced': '显示已安放',
   'action.hidePlaced': '收起已安放',
@@ -501,6 +532,20 @@ const zh: Catalog = {
   'field.due': '截止日期 · 可选',
   'field.contexts': 'GTD 情境 · 可选',
   'field.contexts.placeholder': '@电脑、@电话（逗号分隔）',
+  'settings.title': '下一步设置',
+  'settings.description': '这些设置只作用于「下一步」插件，以及今后新建的卡片。',
+  'settings.wipLimit': '进行中上限',
+  'settings.wipLimit.help': '进行中数量达到此值后，持续显示醒目警告。',
+  'settings.defaultPriority': '默认优先级',
+  'settings.defaultPriority.help': '为新建 Idea 和任务预填优先级。',
+  'settings.defaultDueDays': '默认截止天数',
+  'settings.defaultDueDays.help': '从创建当天起计算；填 0 表示新卡片默认没有截止日期。',
+  'settings.defaultContext': '默认 GTD 情境',
+  'settings.defaultContext.help': '可选，为新卡片预填执行情境，例如 @电脑 或 @电话。',
+  'settings.validation': '请输入整数：进行中上限至少为 1，默认截止天数不能小于 0。',
+  'settings.save': '保存设置',
+  'settings.saving': '正在保存…',
+  'settings.saveError': '无法保存这些设置；你的修改仍保留在页面中。',
   'field.project.placeholder': '选择已有项目，或输入项目名称',
   'field.project.selected': '已选项目',
   'field.project.existing': '已有项目',
@@ -617,6 +662,7 @@ const ja: Catalog = {
   'action.placeOne': '項目を置く',
   'action.newTask': '新規タスク',
   'action.newIdea': '新規 Idea',
+  'action.settings': '設定',
   'action.hideCapture': '項目を隠す',
   'action.findPlaced': '配置済みを表示',
   'action.hidePlaced': '配置済みを隠す',
@@ -697,6 +743,20 @@ const ja: Catalog = {
   'field.due': '期限 · 任意',
   'field.contexts': 'GTD コンテキスト · 任意',
   'field.contexts.placeholder': '@computer, @phone（カンマ区切り）',
+  'settings.title': '次の一歩の設定',
+  'settings.description': 'これらの設定は「次の一歩」と、今後作成するカードだけに適用されます。',
+  'settings.wipLimit': '進行中の上限',
+  'settings.wipLimit.help': '進行中がこの件数に達すると、目立つ警告を常に表示します。',
+  'settings.defaultPriority': '既定の優先度',
+  'settings.defaultPriority.help': '新しいアイデアとタスクの優先度を事前入力します。',
+  'settings.defaultDueDays': '既定の期限日数',
+  'settings.defaultDueDays.help': '作成日からの日数です。0 にすると期限を設定しません。',
+  'settings.defaultContext': '既定の GTD コンテキスト',
+  'settings.defaultContext.help': '任意。@パソコンや @電話など、新しいカードに事前入力します。',
+  'settings.validation': '整数を入力してください。進行中の上限は 1 以上、期限日数は 0 以上です。',
+  'settings.save': '設定を保存',
+  'settings.saving': '保存中…',
+  'settings.saveError': '設定を保存できませんでした。編集内容はこのページに残っています。',
   'field.project.placeholder': '既存のプロジェクトを選択するか入力',
   'field.project.selected': '選択済みのプロジェクト',
   'field.project.existing': '既存のプロジェクト',
@@ -813,6 +873,7 @@ const de: Catalog = {
   'action.placeOne': 'Einen Eintrag ablegen',
   'action.newTask': 'Neue Aufgabe',
   'action.newIdea': 'Neue Idee',
+  'action.settings': 'Einstellungen',
   'action.hideCapture': 'Einträge ausblenden',
   'action.findPlaced': 'Abgelegte Einträge anzeigen',
   'action.hidePlaced': 'Abgelegte Einträge ausblenden',
@@ -893,6 +954,20 @@ const de: Catalog = {
   'field.due': 'Fälligkeitsdatum · Optional',
   'field.contexts': 'GTD-Kontext · Optional',
   'field.contexts.placeholder': '@computer, @phone (kommagetrennt)',
+  'settings.title': 'Einstellungen für Nächster Schritt',
+  'settings.description': 'Diese Einstellungen gelten nur für Nächster Schritt und künftig erstellte Karten.',
+  'settings.wipLimit': 'Limit für laufende Arbeit',
+  'settings.wipLimit.help': 'Zeigt dauerhaft eine deutliche Warnung, sobald In Bearbeitung dieses Limit erreicht.',
+  'settings.defaultPriority': 'Standardpriorität',
+  'settings.defaultPriority.help': 'Füllt die Priorität für neue Ideen und Aufgaben vorab aus.',
+  'settings.defaultDueDays': 'Standardfälligkeit',
+  'settings.defaultDueDays.help': 'Tage nach der Erstellung; 0 lässt neue Karten ohne Fälligkeitsdatum.',
+  'settings.defaultContext': 'Standard-GTD-Kontext',
+  'settings.defaultContext.help': 'Optionaler Kontext für neue Karten, zum Beispiel @Computer oder @Telefon.',
+  'settings.validation': 'Ganze Zahlen eingeben: Das Limit muss mindestens 1 sein, die Fälligkeitstage mindestens 0.',
+  'settings.save': 'Einstellungen speichern',
+  'settings.saving': 'Wird gespeichert…',
+  'settings.saveError': 'Die Einstellungen konnten nicht gespeichert werden. Ihre Eingaben bleiben erhalten.',
   'field.project.placeholder': 'Projekt auswählen oder eingeben',
   'field.project.selected': 'Ausgewählte Projekte',
   'field.project.existing': 'Vorhandene Projekte',

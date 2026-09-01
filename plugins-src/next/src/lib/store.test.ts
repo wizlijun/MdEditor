@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   createTaskSource: vi.fn(),
   openSource: vi.fn(),
   loadNextSettings: vi.fn(async () => ({ wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' })),
+  saveNextSettings: vi.fn(async (value) => value),
 }))
 
 vi.mock('./repository', async (importOriginal) => {
@@ -26,9 +27,11 @@ vi.mock('./repository', async (importOriginal) => {
 vi.mock('./settings', () => ({
   DEFAULT_NEXT_SETTINGS: { wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' },
   loadNextSettings: mocks.loadNextSettings,
+  normalizeNextSettings: (value: unknown) => value,
+  saveNextSettings: mocks.saveNextSettings,
 }))
 
-import { createIdea, createTask, place, refresh, state } from './store.svelte'
+import { createIdea, createTask, place, refresh, state, updateSettings } from './store.svelte'
 
 const capture: WorkspaceItem = {
   key: 'inbox/ideas/a-idea.md',
@@ -68,6 +71,7 @@ function workspace(): NextWorkspace {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.loadNextSettings.mockResolvedValue({ wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' })
+  mocks.saveNextSettings.mockImplementation(async (value) => value)
   state.workspace = workspace()
   state.loading = false
   state.saving = false
@@ -288,5 +292,19 @@ describe('Next store IO serialization', () => {
     expect(mocks.loadWorkspace).toHaveBeenCalledWith(expect.any(Object), { wipLimit: 8 })
     expect(state.workspace?.projection.wipLimit).toBe(8)
     expect(state.settings).toEqual({ wipLimit: 8, defaultPriority: 'P1', defaultDueDays: 7, defaultContext: '@电脑' })
+  })
+
+  it('persists plugin-owned settings only after the new WIP projection loads', async () => {
+    const refreshed = workspace()
+    refreshed.projection = reduceEvents([], { wipLimit: 8 })
+    mocks.loadWorkspace.mockResolvedValueOnce(refreshed)
+    const settings = { wipLimit: 8, defaultPriority: 'P1' as const, defaultDueDays: 7, defaultContext: '@电脑' }
+
+    await updateSettings(settings)
+
+    expect(mocks.loadWorkspace).toHaveBeenCalledWith(expect.any(Object), { wipLimit: 8 })
+    expect(mocks.saveNextSettings).toHaveBeenCalledWith(settings)
+    expect(state.settings).toEqual(settings)
+    expect(state.workspace?.projection.wipLimit).toBe(8)
   })
 })

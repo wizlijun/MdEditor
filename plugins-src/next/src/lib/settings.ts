@@ -54,10 +54,31 @@ export function planningDefaults(settings: NextSettings | undefined, now = new D
 export async function loadNextSettings(): Promise<NextSettings> {
   try {
     const result = await bridge().request('host.settings.get')
-    return normalizeNextSettings(result?.settings)
+    const stored = result?.settings
+    const settings = stored !== null && typeof stored === 'object'
+      ? stored as Record<string, unknown>
+      : {}
+    // 1.6.0 exposed the four values through the Host-generated Settings tab,
+    // which stored them as separate local keys. The plugin-owned page writes a
+    // single object so saving is atomic; prefer it while retaining the legacy
+    // shape as a no-loss upgrade path.
+    return normalizeNextSettings(
+      Object.prototype.hasOwnProperty.call(settings, 'configuration')
+        ? settings.configuration
+        : settings,
+    )
   } catch {
     return { ...DEFAULT_NEXT_SETTINGS }
   }
+}
+
+export async function saveNextSettings(value: NextSettings): Promise<NextSettings> {
+  const normalized = normalizeNextSettings(value)
+  await bridge().request('host.settings.set', {
+    key: 'configuration',
+    value: normalized,
+  })
+  return normalized
 }
 
 export async function loadWipLimit(): Promise<number> {

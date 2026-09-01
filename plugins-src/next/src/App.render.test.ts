@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   reopen: vi.fn(async () => {}),
   relink: vi.fn(async () => {}),
   open: vi.fn(async () => {}),
+  updateSettings: vi.fn(async () => {}),
   toast: vi.fn(async () => {}),
 }))
 
@@ -43,6 +44,7 @@ vi.mock('./lib/store.svelte', () => ({
   reopen: mocks.reopen,
   relink: mocks.relink,
   open: mocks.open,
+  updateSettings: mocks.updateSettings,
 }))
 
 import App from './App.svelte'
@@ -56,6 +58,7 @@ afterEach(() => {
   vi.clearAllMocks()
   mocks.createIdea.mockResolvedValue('inbox/ideas/new-idea.md')
   mocks.createTask.mockResolvedValue({ path: 'inbox/tasks/new-task.md', placedCurrent: false })
+  mocks.updateSettings.mockResolvedValue(undefined)
   mocks.state.saving = false
   mocks.state.settings = { wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' }
   vi.useRealTimers()
@@ -592,6 +595,73 @@ describe('Next window', () => {
     expect(document.querySelector<HTMLInputElement>('[name="due"]')?.value).toBe('2026-09-08')
     expect(document.querySelector<HTMLInputElement>('[name="contexts"]')?.value).toBe('@电话')
     mocks.state.settings = { wipLimit: 5, defaultPriority: 'P2', defaultDueDays: 0, defaultContext: '' }
+  })
+
+  it('opens and saves all Next settings from the plugin main window', async () => {
+    mocks.state.workspace = workspace()
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const entry = document.querySelector<HTMLButtonElement>('[data-action="settings"]')!
+    expect(entry).toBeTruthy()
+    expect(entry.getAttribute('aria-label')).toBe('设置')
+    entry.click()
+    flushSync()
+
+    expect(document.querySelector('[data-view="settings"]')).toBeTruthy()
+    expect(document.querySelector('[data-lane]')).toBeNull()
+    const wip = document.querySelector<HTMLInputElement>('[name="wipLimit"]')!
+    const priority = document.querySelector<HTMLSelectElement>('[name="defaultPriority"]')!
+    const dueDays = document.querySelector<HTMLInputElement>('[name="defaultDueDays"]')!
+    const context = document.querySelector<HTMLInputElement>('[name="defaultContext"]')!
+    expect(wip.value).toBe('5')
+    expect(priority.value).toBe('P2')
+    expect(dueDays.value).toBe('0')
+    expect(context.value).toBe('')
+
+    wip.value = '8'
+    wip.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    for (const option of priority.options) option.selected = option.value === 'P1'
+    expect(priority.value).toBe('P1')
+    priority.dispatchEvent(new Event('change', { bubbles: true }))
+    dueDays.value = '7'
+    dueDays.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    context.value = '@电脑'
+    context.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLFormElement>('[data-view="settings"] form')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+
+    await vi.waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
+      wipLimit: 8, defaultPriority: 'P1', defaultDueDays: 7, defaultContext: '@电脑',
+    }))
+    await vi.waitFor(() => expect(document.querySelector('[data-view="settings"]')).toBeNull())
+    expect(document.querySelector('[data-lane]')).toBeTruthy()
+  })
+
+  it('keeps invalid or unsaved plugin settings on the page', async () => {
+    mocks.state.workspace = workspace()
+    mocks.updateSettings.mockRejectedValueOnce(new Error('disk full'))
+    component = mount(App, { target: document.body })
+    flushSync()
+    document.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click()
+    flushSync()
+
+    const wip = document.querySelector<HTMLInputElement>('[name="wipLimit"]')!
+    wip.value = '0'
+    wip.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLFormElement>('[data-view="settings"] form')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    flushSync()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('至少为 1')
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+
+    wip.value = '6'
+    wip.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    document.querySelector<HTMLFormElement>('[data-view="settings"] form')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain('仍保留'))
+    expect(document.querySelector<HTMLInputElement>('[name="wipLimit"]')?.value).toBe('6')
+    expect(document.querySelector('[data-view="settings"]')).toBeTruthy()
   })
 
   it('opens New Idea with Command-N and keeps the draft when saving fails', async () => {

@@ -142,6 +142,25 @@ describe('Next plugin packaging', () => {
     expect(DEV_INSTALL).toContain('mark_installed "notemd.next" "$VERSION"')
     expect(DEV_INSTALL).toContain('"$DEST/ui/"')
   })
+
+  it('keeps Next settings inside the plugin window instead of global Settings', () => {
+    const manifest = JSON.parse(
+      readFileSync(join(ROOT, 'plugins-src', 'next', 'manifest.v2.json'), 'utf8'),
+    ) as {
+      version?: string
+      capabilities?: string[]
+      contributes?: { settings?: unknown }
+      i18n?: Record<string, Record<string, unknown>>
+    }
+
+    expect(manifest.version).toBe('1.6.1')
+    expect(manifest.contributes?.settings).toBeUndefined()
+    expect(manifest.capabilities).toContain('settings')
+    for (const catalog of Object.values(manifest.i18n ?? {})) {
+      expect(catalog['settings.tab_label']).toBeUndefined()
+      expect(catalog['settings.fields']).toBeUndefined()
+    }
+  })
 })
 
 describe('agent-owned concurrency settings', () => {

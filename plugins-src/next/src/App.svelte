@@ -5,10 +5,11 @@
   import IdeaCard from './components/IdeaCard.svelte'
   import PlaceSheet from './components/PlaceSheet.svelte'
   import RelinkSheet from './components/RelinkSheet.svelte'
+  import SettingsPage from './components/SettingsPage.svelte'
   import { bridge, toast } from './lib/bridge'
   import type { PlaceInput } from './lib/events'
   import { projectTagsOf } from './lib/model'
-  import { planningDefaults } from './lib/settings'
+  import { planningDefaults, type NextSettings } from './lib/settings'
   import { itemSearchText, type WorkspaceItem } from './lib/repository'
   import type { IdeaSource } from './lib/source'
   import {
@@ -20,6 +21,7 @@
     relink,
     reopen,
     state as store,
+    updateSettings,
   } from './lib/store.svelte'
   import { setLocale, t, type MessageKey } from './lib/strings'
   import { isDormantDue, previewPosition } from './lib/view'
@@ -46,6 +48,7 @@
   let placementRoute = $state<Route | undefined>()
   let placementProjects = $state<string[]>([])
   let relinking = $state<WorkspaceItem | null>(null)
+  let settingsOpen = $state(false)
   let dragging = $state<WorkspaceItem | null>(null)
   let dragOver = $state<Lane | null>(null)
   let dragPress: {
@@ -156,13 +159,26 @@
   function openCreation() {
     if (store.loading || store.saving || placing || relinking || creatingTask) return
     closePreview()
+    settingsOpen = false
     creating = true
   }
 
   function openTaskCreation() {
     if (store.loading || store.saving || placing || relinking || creating) return
     closePreview()
+    settingsOpen = false
     creatingTask = true
+  }
+
+  function toggleSettings() {
+    if (store.loading || store.saving || placing || relinking || creating || creatingTask) return
+    closePreview()
+    settingsOpen = !settingsOpen
+  }
+
+  async function submitSettings(settings: NextSettings): Promise<void> {
+    await updateSettings(settings)
+    settingsOpen = false
   }
 
   function openPlacement(item: WorkspaceItem, route?: Route, initialProjects: readonly string[] = []) {
@@ -442,6 +458,11 @@
         closePreview()
         return
       }
+      if (event.key === 'Escape' && settingsOpen) {
+        event.preventDefault()
+        settingsOpen = false
+        return
+      }
       previewKeydown(event)
       if (event.defaultPrevented) return
       if (event.key.toLocaleLowerCase() !== 'n' || (!event.metaKey && !event.ctrlKey) || event.altKey) return
@@ -503,10 +524,29 @@
       <button type="button" class="refresh" disabled={store.loading || store.saving} onclick={() => void report(refreshWorkspace, 'error.load')}>
         ↻ <span>{t('common.refresh')}</span>
       </button>
+      <button
+        type="button"
+        data-action="settings"
+        class="settings-button"
+        class:active={settingsOpen}
+        aria-label={t('action.settings')}
+        aria-pressed={settingsOpen}
+        title={t('action.settings')}
+        disabled={store.loading || store.saving || Boolean(placing || relinking || creating || creatingTask)}
+        onclick={toggleSettings}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 3v2.2L6.8 6.5 5 5.4 3 9l2 1.1v3.8L3 15l2 3.6 1.8-1.1L9 18.8V21h6v-2.2l2.2-1.3 1.8 1.1 2-3.6-2-1.1v-3.8L21 9l-2-3.6-1.8 1.1L15 5.2V3z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+        <span>{t('action.settings')}</span>
+      </button>
     </div>
   </header>
 
-  {#if store.loading && !workspace}
+  {#if settingsOpen}
+    <SettingsPage settings={store.settings} saving={store.saving} onCancel={() => settingsOpen = false} onSave={submitSettings} />
+  {:else if store.loading && !workspace}
     <div class="loading">{t('common.loading')}</div>
   {:else if workspace}
     <div class="content">
@@ -724,15 +764,18 @@
   .project-filters button:hover { background: var(--hover); }
   .project-filters button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
   .top-actions { flex: none; display: flex; align-items: center; gap: 8px; }
-  .new-task, .new-idea, .refresh { min-height: 34px; box-sizing: border-box; border-radius: 9px; padding: 7px 10px; font-weight: 650; cursor: pointer; }
+  .new-task, .new-idea, .refresh, .settings-button { min-height: 34px; box-sizing: border-box; border-radius: 9px; padding: 7px 10px; font-weight: 650; cursor: pointer; }
   .new-task, .new-idea { display: flex; align-items: center; gap: 7px; }
   .new-task { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
   .new-task:hover:not(:disabled), .new-idea:hover:not(:disabled) { filter: brightness(1.06); }
   .new-idea { border: 1px solid var(--line-strong); background: var(--card); color: var(--fg); }
   .new-task kbd, .new-idea kbd { border-radius: 5px; background: color-mix(in srgb, currentColor 12%, transparent); padding: 1px 5px; font: 10px/1.5 inherit; }
-  .refresh { flex: none; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--fg); padding: 7px 10px; font-weight: 600; cursor: pointer; }
-  .refresh:hover:not(:disabled) { background: var(--hover); }
-  .refresh:disabled, .new-task:disabled, .new-idea:disabled { opacity: 0.45; cursor: default; }
+  .refresh, .settings-button { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--fg); font-weight: 600; }
+  .settings-button { display: flex; align-items: center; gap: 6px; }
+  .settings-button svg { width: 15px; height: 15px; }
+  .refresh:hover:not(:disabled), .settings-button:hover:not(:disabled) { background: var(--hover); }
+  .settings-button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .refresh:disabled, .settings-button:disabled, .new-task:disabled, .new-idea:disabled { opacity: 0.45; cursor: default; }
   .loading { min-height: 60vh; display: grid; place-items: center; color: var(--muted); }
   .content { padding: 22px 28px 48px; }
   .banner, .repair, .board-tools, .board-scroll, .drag-help { max-width: 1500px; margin-right: auto; margin-left: auto; }
@@ -768,12 +811,15 @@
   .lane-body { display: grid; align-content: start; gap: 8px; min-height: 360px; }
   .empty { margin: 0; padding: 14px 5px; color: var(--muted); font-size: 12px; }
   .drag-help { margin-top: 8px; color: var(--muted); font-size: 11.5px; }
+  @media (max-width: 900px) {
+    .topbar { gap: 14px; }
+    .new-task kbd, .new-idea kbd, .refresh span, .settings-button span { display: none; }
+  }
   @media (max-width: 660px) {
     .topbar { align-items: flex-start; padding: 16px 18px 13px; }
     .topbar p { max-width: 440px; }
     .subtitle-row { display: grid; gap: 6px; }
     .project-filters { width: 100%; max-width: 100%; }
-    .refresh span { display: none; }
     .content { padding: 18px 16px 36px; }
     .board { grid-template-columns: repeat(5, 248px); }
   }

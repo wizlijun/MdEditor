@@ -11,7 +11,7 @@ import {
   type NextWorkspace,
   type WorkspaceItem,
 } from './repository'
-import { DEFAULT_NEXT_SETTINGS, loadNextSettings, type NextSettings } from './settings'
+import { DEFAULT_NEXT_SETTINGS, loadNextSettings, normalizeNextSettings, saveNextSettings, type NextSettings } from './settings'
 import type { IdeaSource } from './source'
 
 export const state = $state<{
@@ -48,6 +48,27 @@ export async function refresh(): Promise<void> {
     throw error
   } finally {
     state.loading = false
+    state.saving = false
+  }
+}
+
+export async function updateSettings(input: NextSettings): Promise<void> {
+  if (state.saving) throw new Error('Next is already saving')
+  state.saving = true
+  state.error = null
+  try {
+    const settings = normalizeNextSettings(input)
+    // Prove the new projection can be loaded before committing the setting.
+    // This keeps a failed refresh from looking like a failed save after the
+    // durable value has already changed.
+    const workspace = await loadWorkspace(hostVault, { wipLimit: settings.wipLimit })
+    const saved = await saveNextSettings(settings)
+    state.settings = saved
+    state.workspace = workspace
+  } catch (error) {
+    state.error = String(error)
+    throw error
+  } finally {
     state.saving = false
   }
 }

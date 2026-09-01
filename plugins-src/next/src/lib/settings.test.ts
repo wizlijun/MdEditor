@@ -13,6 +13,7 @@ import {
   normalizeNextSettings,
   normalizeWipLimit,
   planningDefaults,
+  saveNextSettings,
 } from './settings'
 
 describe('Next WIP settings', () => {
@@ -66,6 +67,34 @@ describe('Next WIP settings', () => {
     } })
     await expect(loadNextSettings()).resolves.toEqual({
       wipLimit: 9, defaultPriority: 'P3', defaultDueDays: 3, defaultContext: '@外出',
+    })
+  })
+
+  it('prefers the unified plugin-owned configuration while preserving legacy values', async () => {
+    request.mockResolvedValueOnce({ settings: {
+      wipLimit: 9,
+      configuration: { wipLimit: 4, defaultPriority: 'P1', defaultDueDays: 2, defaultContext: '@电脑' },
+    } })
+
+    await expect(loadNextSettings()).resolves.toEqual({
+      wipLimit: 4, defaultPriority: 'P1', defaultDueDays: 2, defaultContext: '@电脑',
+    })
+  })
+
+  it('saves one normalized plugin-scoped configuration atomically', async () => {
+    request.mockResolvedValueOnce({ ok: true })
+
+    await expect(saveNextSettings({
+      wipLimit: 8,
+      defaultPriority: 'P0',
+      defaultDueDays: 7,
+      defaultContext: '  @电话  ',
+    })).resolves.toEqual({
+      wipLimit: 8, defaultPriority: 'P0', defaultDueDays: 7, defaultContext: '@电话',
+    })
+    expect(request).toHaveBeenCalledWith('host.settings.set', {
+      key: 'configuration',
+      value: { wipLimit: 8, defaultPriority: 'P0', defaultDueDays: 7, defaultContext: '@电话' },
     })
   })
 })
