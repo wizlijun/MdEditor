@@ -1,4 +1,4 @@
-mod airead; mod bookconf; mod calibre; mod htmlz; mod library; mod ocr; mod pipeline; mod plugin; mod settings;
+mod airead; mod bookconf; mod calibre; mod htmlz; mod library; mod ocr; mod pipeline; mod plugin; mod settings; mod topic_agent; mod topics;
 
 fn main() {
     let rt = tokio::runtime::Builder::new_multi_thread()

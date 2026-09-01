@@ -29,6 +29,8 @@ const ACCEPTED_EXTENSIONS: &[&str] = &["epub", "pdf", "docx"];
 pub struct PipelineCtx<'a> {
     pub vault_root: &'a Path,
     pub ebooks_root: &'a str,
+    /// Stable id from `<ebooks_root>/topics.yml`. Every new book must carry one.
+    pub topic_id: &'a str,
     /// Scratch directory for this run, e.g. `<data_dir>/work/<stem>_temp`.
     /// Reused across retries on purpose: an OCR engine resumes from
     /// whatever `pageNNNN.md` files a prior interrupted run already wrote
@@ -93,6 +95,15 @@ pub fn run_import(
         return Err(format!(
             "unsupported file extension '.{ext}' (expected one of: {})",
             ACCEPTED_EXTENSIONS.join(", ")
+        ));
+    }
+    let ebooks_dir = ctx.vault_root.join(ctx.ebooks_root);
+    let catalog = crate::topics::read_catalog(&ebooks_dir)?;
+    if !catalog.contains_topic(ctx.topic_id) {
+        return Err(format!(
+            "unknown ebook topic {:?}; choose an id from {}",
+            ctx.topic_id,
+            ebooks_dir.join(crate::topics::TOPICS_FILE).display()
         ));
     }
     check_cancelled(ctx.cancelled)?;
@@ -191,20 +202,40 @@ pub fn run_import(
     // while recording a timestamp from the following day in its metadata.
     let added_at = chrono::Local::now();
     let month = month_dir(added_at.date_naive());
-    let month_parent = ctx.vault_root.join(ctx.ebooks_root).join(month);
-    std::fs::create_dir_all(&month_parent)
-        .map_err(|e| format!("create {}: {e}", month_parent.display()))?;
-    let dest = unique_dest(&month_parent, &dirname);
     check_cancelled(ctx.cancelled)?;
 
     (ctx.progress)("finalize", None);
-    finalize(
-        ctx.work,
-        &dest,
-        &input.to_string_lossy(),
-        &meta,
-        added_at.with_timezone(&chrono::Utc),
-    )?;
+    let dest = crate::topics::with_topic_lock(&ebooks_dir, || {
+        // The taxonomy may have changed during a long conversion. Revalidate
+        // under the same lock that commits meta and rebuilds projections.
+        let current_catalog = crate::topics::read_catalog(&ebooks_dir)?;
+        if !current_catalog.contains_topic(ctx.topic_id) {
+            return Err(format!("ebook topic {:?} no longer exists", ctx.topic_id));
+        }
+        let month_parent = ebooks_dir.join(month);
+        std::fs::create_dir_all(&month_parent)
+            .map_err(|e| format!("create {}: {e}", month_parent.display()))?;
+        let dest = unique_dest(&month_parent, &dirname);
+        finalize(
+            ctx.work,
+            &dest,
+            &input.to_string_lossy(),
+            &meta,
+            ctx.topic_id,
+            added_at.with_timezone(&chrono::Utc),
+        )?;
+
+        // Indexes are projections of the committed metadata. Rebuild from the
+        // complete scan instead of appending one row, so retries and concurrent
+        // imports converge without duplicates.
+        crate::topics::rebuild_indexes(&ebooks_dir, &current_catalog).map_err(|e| {
+            format!(
+                "book imported at {} but topic index rebuild failed: {e}",
+                dest.display()
+            )
+        })?;
+        Ok(dest)
+    })?;
 
     Ok(dest)
 }
@@ -244,6 +275,7 @@ pub fn finalize(
     dest: &Path,
     input_file: &str,
     meta: &bookconf::BookMeta,
+    topic_id: &str,
     added_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), String> {
     std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
@@ -275,8 +307,11 @@ pub fn finalize(
     let meta_tmp = dest.join(".meta.yml.tmp");
     let meta_yml = dest.join("meta.yml");
     let timestamp = added_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    std::fs::write(&meta_tmp, format!("added_at: {timestamp}\n"))
-        .map_err(|e| format!("write {}: {e}", meta_tmp.display()))?;
+    std::fs::write(
+        &meta_tmp,
+        format!("added_at: {timestamp}\ntopic_id: {topic_id}\n"),
+    )
+    .map_err(|e| format!("write {}: {e}", meta_tmp.display()))?;
     std::fs::rename(&meta_tmp, &meta_yml).map_err(|e| {
         format!(
             "rename {} -> {}: {e}",
@@ -314,6 +349,30 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    const TOPIC_ID: &str = "software-engineering";
+
+    fn seed_topics(vault: &Path) {
+        let root = vault.join("ssot/ebooks");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("topics.yml"),
+            concat!(
+                "schema_version: 1\n",
+                "topics:\n",
+                "  - id: software-engineering\n",
+                "    label: 软件工程\n",
+                "    description: 软件系统的设计与演化。\n",
+                "    index_file: 软件工程.index.md\n",
+                "    vocabulary:\n",
+                "      - term: 架构\n",
+                "        description: 系统边界与关系。\n",
+                "      - term: 交付\n",
+                "        description: 将软件可靠投入使用。\n",
+            ),
+        )
+        .unwrap();
+    }
+
     /// A stub [`OcrEngine`] that returns fixed markdown without touching a
     /// real pdfium renderer or network -- exercises `run_import`'s full OCR
     /// success path (previously untested end-to-end; only the pre-engine
@@ -339,6 +398,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let vault = tmp.path().join("vault");
         std::fs::create_dir_all(&vault).unwrap();
+        seed_topics(&vault);
         let input = tmp.path().join("My Book.pdf");
         std::fs::write(&input, b"%PDF-1.4 fake").unwrap();
 
@@ -353,6 +413,7 @@ mod tests {
         let mut ctx = PipelineCtx {
             vault_root: &vault,
             ebooks_root: "ssot/ebooks",
+            topic_id: TOPIC_ID,
             work: &work,
             log: &mut log,
             progress: &mut progress,
@@ -382,12 +443,14 @@ mod tests {
         assert!(cfg.contains("original_title=My Book"), "got: {cfg}");
         let meta_yml = std::fs::read_to_string(dest.join("meta.yml")).unwrap();
         let timestamp = meta_yml
-            .strip_prefix("added_at: ")
-            .and_then(|s| s.strip_suffix('\n'))
-            .expect("meta.yml must contain only added_at");
+            .lines()
+            .find_map(|line| line.strip_prefix("added_at: "))
+            .expect("meta.yml must contain added_at");
         let parsed = chrono::DateTime::parse_from_rfc3339(timestamp).unwrap();
         assert_eq!(parsed.offset().local_minus_utc(), 0);
         assert!(timestamp.ends_with('Z'));
+        assert!(meta_yml.contains("topic_id: software-engineering\n"));
+        assert!(vault.join("ssot/ebooks/软件工程.index.md").is_file());
         assert!(
             progress_calls.iter().any(|(stage, _)| stage == "finalize"),
             "expected a finalize progress stage, got {progress_calls:?}"
@@ -428,13 +491,21 @@ mod tests {
         let added_at = chrono::DateTime::parse_from_rfc3339("2026-08-27T06:40:15Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        finalize(&work, &dest, "/in/some-book.epub", &meta, added_at).unwrap();
+        finalize(
+            &work,
+            &dest,
+            "/in/some-book.epub",
+            &meta,
+            TOPIC_ID,
+            added_at,
+        )
+        .unwrap();
 
         assert!(dest.join("config.txt").exists());
         assert!(dest.join("book.md").exists());
         assert_eq!(
             std::fs::read_to_string(dest.join("meta.yml")).unwrap(),
-            "added_at: 2026-08-27T06:40:15Z\n"
+            "added_at: 2026-08-27T06:40:15Z\ntopic_id: software-engineering\n"
         );
         assert!(dest.join("images/pic.png").exists());
         assert_eq!(
@@ -459,7 +530,8 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
 
-        let err = finalize(&work, &dest, "/in/missing.epub", &meta, added_at).unwrap_err();
+        let err =
+            finalize(&work, &dest, "/in/missing.epub", &meta, TOPIC_ID, added_at).unwrap_err();
 
         assert!(err.contains("input.md"), "got: {err}");
         assert!(!dest.join("meta.yml").exists());
@@ -480,6 +552,7 @@ mod tests {
         let mut ctx = PipelineCtx {
             vault_root: &vault,
             ebooks_root: "../escape",
+            topic_id: TOPIC_ID,
             work: &tmp.path().join("work"),
             log: &mut log,
             progress: &mut progress,
@@ -487,6 +560,30 @@ mod tests {
         };
         let err = run_import(&mut ctx, &input, false, None, None).unwrap_err();
         assert!(err.contains("ebooks_root"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_an_unknown_topic_before_conversion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        seed_topics(&vault);
+        let input = tmp.path().join("book.epub");
+        std::fs::write(&input, "not really an epub").unwrap();
+        let mut log = |_: String| {};
+        let mut progress = |_: &str, _: Option<(usize, usize)>| {};
+        let cancelled = AtomicBool::new(false);
+        let mut ctx = PipelineCtx {
+            vault_root: &vault,
+            ebooks_root: "ssot/ebooks",
+            topic_id: "unknown-topic",
+            work: &tmp.path().join("work"),
+            log: &mut log,
+            progress: &mut progress,
+            cancelled: &cancelled,
+        };
+        let err = run_import(&mut ctx, &input, false, None, None).unwrap_err();
+        assert!(err.contains("unknown ebook topic"), "got: {err}");
     }
 
     #[test]
@@ -501,6 +598,7 @@ mod tests {
         let mut ctx = PipelineCtx {
             vault_root: tmp.path(),
             ebooks_root: "ssot/ebooks",
+            topic_id: TOPIC_ID,
             work: &tmp.path().join("work"),
             log: &mut log,
             progress: &mut progress,
@@ -522,6 +620,7 @@ mod tests {
         let mut ctx = PipelineCtx {
             vault_root: tmp.path(),
             ebooks_root: "ssot/ebooks",
+            topic_id: TOPIC_ID,
             work: &tmp.path().join("work"),
             log: &mut log,
             progress: &mut progress,
@@ -546,6 +645,7 @@ mod tests {
         let mut ctx = PipelineCtx {
             vault_root: tmp.path(),
             ebooks_root: "ssot/ebooks",
+            topic_id: TOPIC_ID,
             work: &tmp.path().join("work"),
             log: &mut log,
             progress: &mut progress,

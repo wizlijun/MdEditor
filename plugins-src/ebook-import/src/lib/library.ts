@@ -12,6 +12,8 @@ export interface RawBook {
   rel: string
   name: string
   month: string
+  topic_id?: string | null
+  topic_label?: string | null
   /** `YYYY-MM-DD-summary.md` file names, newest first. */
   summaries: string[]
 }
@@ -55,10 +57,17 @@ export function latestSummary(book: LibraryBook): string | undefined {
 }
 
 /** Books whose name contains `query`, case-insensitively. Blank shows all. */
-export function filterBooks(list: LibraryBook[], query: string): LibraryBook[] {
+export function filterBooks(
+  list: LibraryBook[],
+  query: string,
+  topicId: string | null = null,
+): LibraryBook[] {
   const q = query.trim().toLowerCase()
-  if (!q) return list
-  return list.filter((b) => b.name.toLowerCase().includes(q))
+  return list.filter(
+    (b) =>
+      (!topicId || (topicId === '__unclassified__' ? !b.topic_id : b.topic_id === topicId)) &&
+      (!q || b.name.toLowerCase().includes(q) || (b.topic_label ?? '').toLowerCase().includes(q)),
+  )
 }
 
 /**

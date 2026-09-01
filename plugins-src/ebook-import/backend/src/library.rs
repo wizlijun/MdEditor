@@ -13,6 +13,10 @@ pub struct BookEntry {
     pub rel: String,
     pub name: String,
     pub month: String,
+    /// Stable logical category. Legacy books may not have one yet.
+    pub topic_id: Option<String>,
+    /// Current user-facing label, absent for legacy/unknown topic ids.
+    pub topic_label: Option<String>,
     /// `YYYY-MM-DD-summary.md` file names, newest first.
     pub summaries: Vec<String>,
 }
@@ -84,6 +88,7 @@ pub fn scan(vault: &Path, ebooks_root: &str) -> Vec<BookEntry> {
         return Vec::new();
     }
     let root = vault.join(ebooks_root);
+    let catalog = crate::topics::read_catalog(&root).ok();
     let mut out = Vec::new();
     for month in sorted_subdirs(&root) {
         let month_name = month.file_name().to_string_lossy().to_string();
@@ -93,6 +98,15 @@ pub fn scan(vault: &Path, ebooks_root: &str) -> Vec<BookEntry> {
                 continue;
             }
             let name = book.file_name().to_string_lossy().to_string();
+            let topic_id = crate::topics::read_book_topic(&dir.join("meta.yml"))
+                .ok()
+                .flatten();
+            let topic_label = topic_id.as_deref().and_then(|id| {
+                catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.topic(id))
+                    .map(|topic| topic.label.clone())
+            });
             let mut summaries: Vec<String> = std::fs::read_dir(&dir)
                 .into_iter()
                 .flatten()
@@ -109,6 +123,8 @@ pub fn scan(vault: &Path, ebooks_root: &str) -> Vec<BookEntry> {
                     rel: format!("{ebooks_root}/{month_name}/{name}"),
                     name,
                     month: month_name.clone(),
+                    topic_id,
+                    topic_label,
                     summaries,
                 },
             ));

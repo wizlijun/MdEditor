@@ -21,6 +21,8 @@ export interface QueueItem {
   total?: number
   destRel?: string
   error?: string
+  /** Stable id from `<ebooks_root>/topics.yml`; required before import starts. */
+  topicId?: string
   /**
    * Set when this item's job was cancelled by the user (backend
    * `import_cancel`), which surfaces as `event:"failed", error:"cancelled"`.
@@ -77,7 +79,7 @@ function nextId(items: QueueItem[]): number {
  * A path whose only prior item already finished (done/failed) is a fresh
  * add — that's a deliberate retry, not a duplicate.
  */
-export function addPaths(q: Queue, paths: string[]): Queue {
+export function addPaths(q: Queue, paths: string[], topicId?: string): Queue {
   let items = q.items
   let changed = false
   for (const path of paths) {
@@ -91,12 +93,27 @@ export function addPaths(q: Queue, paths: string[]): Queue {
         path,
         name: baseName(path),
         status: 'pending',
+        ...(topicId ? { topicId } : {}),
         logs: [],
       },
     ]
     changed = true
   }
   return changed ? { ...q, items } : q
+}
+
+/** Changes one pending row's logical topic. Running/finished rows are frozen. */
+export function assignTopic(q: Queue, itemId: number, topicId: string): Queue {
+  const idx = q.items.findIndex((i) => i.id === itemId && i.status === 'pending')
+  if (idx === -1) return q
+  const items = [...q.items]
+  items[idx] = { ...items[idx], topicId: topicId || undefined }
+  return { ...q, items }
+}
+
+/** Whether Start must be blocked because a pending book has no classification. */
+export function hasUnclassifiedPending(q: Queue): boolean {
+  return q.items.some((i) => i.status === 'pending' && !i.topicId)
 }
 
 /** The first pending item to start, or null while one is already active. */

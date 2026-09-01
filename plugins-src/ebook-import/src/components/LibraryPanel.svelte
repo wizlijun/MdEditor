@@ -15,9 +15,11 @@
   import { formatElapsed } from '../lib/elapsed'
   import { filterBooks, latestSummary, type LibraryBook } from '../lib/library'
   import { t } from '../lib/strings'
+  import type { TopicDefinition } from '../lib/topics'
 
   const {
     books,
+    topics,
     agents,
     agentId,
     nowMs,
@@ -26,8 +28,10 @@
     onopensummary,
     onpickagent,
     onrefresh,
+    onassigntopic,
   }: {
     books: LibraryBook[]
+    topics: TopicDefinition[]
     agents: AgentOption[]
     agentId: string | null
     nowMs: number
@@ -36,10 +40,12 @@
     onopensummary: (book: LibraryBook) => void
     onpickagent: (id: string) => void
     onrefresh: () => void
+    onassigntopic: (book: LibraryBook, topicId: string) => void
   } = $props()
 
   let query = $state('')
-  const shown = $derived(filterBooks(books, query))
+  let topicFilter = $state('')
+  const shown = $derived(filterBooks(books, query, topicFilter || null))
 
   /** The `YYYY-MM-DD` out of a summary path, for the "Digest {date}" badge. */
   function summaryDate(book: LibraryBook): string {
@@ -59,6 +65,13 @@
       spellcheck="false"
       autocomplete="off"
     />
+    <select bind:value={topicFilter} aria-label={t('topic.filter')}>
+      <option value="">{t('topic.all')}</option>
+      {#each topics as topic (topic.id)}
+        <option value={topic.id}>{topic.label}</option>
+      {/each}
+      <option value="__unclassified__">{t('topic.unclassified')}</option>
+    </select>
     <button class="link" onclick={onrefresh}>{t('library.refresh')}</button>
   </div>
 
@@ -73,6 +86,17 @@
           <div class="row-main">
             <button class="name" title={b.rel} onclick={() => onopenbook(b)}>{b.name}</button>
             <span class="month">{b.month}</span>
+            <select
+              class:unclassified={!b.topic_id}
+              value={b.topic_id ?? ''}
+              aria-label={t('topic.chooseForBook', { name: b.name })}
+              onchange={(event) => onassigntopic(b, event.currentTarget.value)}
+            >
+              <option value="" disabled>{t('topic.unclassified')}</option>
+              {#each topics as topic (topic.id)}
+                <option value={topic.id}>{topic.label}</option>
+              {/each}
+            </select>
 
             {#if b.aiStatus === 'queued'}
               <span class="stage">{t('ai.queued')}</span>
@@ -159,6 +183,16 @@
     border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
     background: transparent;
     color: inherit;
+  }
+  .head select,
+  .row-main select {
+    min-width: 0;
+    max-width: 145px;
+    font: inherit;
+    font-size: 10px;
+  }
+  .row-main select.unclassified {
+    color: #b26a00;
   }
   button {
     font: inherit;

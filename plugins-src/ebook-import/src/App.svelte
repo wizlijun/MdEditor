@@ -2,6 +2,8 @@
   import { bridge, vaultExists } from './lib/bridge'
   import AgentPicker from './lib/agent-picker/AgentPicker.svelte'
   import LibraryPanel from './components/LibraryPanel.svelte'
+  import TopicBar from './components/TopicBar.svelte'
+  import TopicManager from './components/TopicManager.svelte'
   import { formatElapsed } from './lib/elapsed'
   import {
     bindAiJob,
@@ -22,6 +24,8 @@
   import { describeError } from './lib/errors'
   import {
     addPaths,
+    assignTopic,
+    hasUnclassifiedPending,
     hasPending as queueHasPending,
     isRunComplete,
     nextToStart,
@@ -33,6 +37,7 @@
     type Queue,
     type QueueItem,
   } from './lib/queue'
+  import type { TopicCounts, TopicDefinition } from './lib/topics'
 
   setLocale(bridge().locale)
 
@@ -59,7 +64,20 @@
     summary_rel?: string
     error?: string
   }
-  type HostPush = JobPush | DragPush | AiPush | { type: string }
+  type TopicProposal = {
+    schema_version: number
+    inventory_sha256: string
+    topics: TopicDefinition[]
+    assignments: { book: string; topic_id: string }[]
+  }
+  type TopicAgentPush = {
+    type: 'topic_agent'
+    job_id: number
+    event: 'started' | 'done' | 'failed'
+    proposal?: TopicProposal
+    error?: string
+  }
+  type HostPush = JobPush | DragPush | AiPush | TopicAgentPush | { type: string }
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -84,6 +102,14 @@
   let dragActive = $state(false)
   let expanded: Record<number, boolean> = $state({})
   let globalError = $state('')
+  let topics: TopicDefinition[] = $state([])
+  let topicCatalogExtra: Record<string, unknown> = {}
+  let topicCounts: TopicCounts = $state({})
+  let selectedTopicId: string | null = $state(null)
+  let topicManagerOpen = $state(false)
+  let unclassifiedBooks = $state<string[]>([])
+  let topicAgentRunning = $state(false)
+  let topicProposal: TopicProposal | null = $state(null)
 
   let settingsOpen = $state(false)
   let calibreFound: { path: string; version: string } | null = $state(null)
@@ -155,6 +181,7 @@
     try {
       const res = await bridge().request('plugin.import_start', {
         path: n.path,
+        topic_id: n.topicId,
         ocr: runOcr,
         ...(runOcr ? { provider: runProvider } : {}),
       })
@@ -175,7 +202,7 @@
 
   /** Begins a run over everything currently queued, freezing the OCR choice. */
   function startRun() {
-    if (running || !hasPending) return
+    if (running || !hasPending || hasUnclassifiedPending(q)) return
     runOcr = ocr
     runProvider = provider
     running = true
@@ -193,7 +220,7 @@
         // Dropping only queues: the OCR choice belongs to the user BEFORE the
         // work starts, so nothing runs until "Start" is pressed. A drop during
         // a run joins that run and inherits its locked-in OCR settings.
-        q = addPaths(q, d.paths ?? [])
+        q = addPaths(q, d.paths ?? [], selectedTopicId ?? undefined)
         if (running) void schedule()
       }
     } else if (m.type === 'job') {
@@ -211,7 +238,7 @@
       pending = result.pending
       if (result.applied && (j.event === 'done' || j.event === 'failed')) void schedule()
       // A finished import is a new book in the vault — and thus a new library row.
-      if (result.applied && j.event === 'done') void loadLibrary()
+      if (result.applied && j.event === 'done') void Promise.all([loadLibrary(), loadTopics()])
     } else if (m.type === 'ai_read') {
       const a = m as AiPush
       const ev = {
@@ -227,6 +254,15 @@
       library = onLibraryAiEvent(library, a.job_id, ev)
       // A finished read wrote a summary file the last listing can't know about.
       if (a.event === 'done') void loadLibrary()
+    } else if (m.type === 'topic_agent') {
+      const event = m as TopicAgentPush
+      if (event.event === 'done' && event.proposal) {
+        topicAgentRunning = false
+        topicProposal = event.proposal
+      } else if (event.event === 'failed') {
+        topicAgentRunning = false
+        globalError = event.error ?? 'Topic design failed'
+      }
     }
   })
 
@@ -239,7 +275,7 @@
       })
       const paths: string[] = res?.paths ?? []
       if (paths.length) {
-        q = addPaths(q, paths)
+        q = addPaths(q, paths, selectedTopicId ?? undefined)
         if (running) void schedule()
       }
     } catch (e) {
@@ -371,6 +407,94 @@
     }
   }
 
+  async function loadTopics() {
+    try {
+      const state = await bridge().request('plugin.topic_state', {})
+      const catalog = state?.catalog ?? null
+      topics = catalog?.topics ?? []
+      if (catalog) {
+        const { schema_version: _schemaVersion, topics: _topics, ...extra } = catalog
+        topicCatalogExtra = extra
+      } else {
+        topicCatalogExtra = {}
+      }
+      const validIds = new Set(topics.map((topic) => topic.id))
+      q = {
+        ...q,
+        items: q.items.map((item) =>
+          item.status === 'pending' && item.topicId && !validIds.has(item.topicId)
+            ? { ...item, topicId: undefined }
+            : item,
+        ),
+      }
+      topicCounts = state?.counts ?? {}
+      unclassifiedBooks = [
+        ...(state?.unclassified_books ?? []),
+        ...(state?.unknown_topic_books ?? []),
+      ]
+      if (!topics.some((topic) => topic.id === selectedTopicId)) {
+        selectedTopicId = topics[0]?.id ?? null
+      }
+    } catch (e) {
+      globalError = message(e)
+    }
+  }
+
+  function selectImportTopic(topicId: string) {
+    selectedTopicId = topicId
+  }
+
+  async function saveTopics(nextTopics: TopicDefinition[]) {
+    await bridge().request('plugin.topic_save', {
+      catalog: { ...topicCatalogExtra, schema_version: 1, topics: nextTopics },
+    })
+    topicManagerOpen = false
+    await Promise.all([loadTopics(), loadLibrary()])
+  }
+
+  async function deleteTopic(topicId: string, migrateToId?: string) {
+    await bridge().request('plugin.topic_delete', {
+      topic_id: topicId,
+      ...(migrateToId ? { migrate_to: migrateToId } : {}),
+    })
+    await Promise.all([loadTopics(), loadLibrary()])
+  }
+
+  async function assignLibraryTopic(book: LibraryBook, topicId: string) {
+    try {
+      await bridge().request('plugin.topic_assign', { book: book.rel, topic_id: topicId })
+      await Promise.all([loadTopics(), loadLibrary()])
+    } catch (e) {
+      globalError = message(e)
+    }
+  }
+
+  async function startTopicDesign() {
+    if (topicAgentRunning) return
+    topicAgentRunning = true
+    topicProposal = null
+    globalError = ''
+    try {
+      await bridge().request('plugin.topic_agent_start', {
+        ...(agentId ? { harness: agentId } : {}),
+      })
+    } catch (e) {
+      topicAgentRunning = false
+      globalError = message(e)
+    }
+  }
+
+  async function applyTopicProposal() {
+    if (!topicProposal) return
+    try {
+      await bridge().request('plugin.topic_agent_apply', { proposal: topicProposal })
+      topicProposal = null
+      await Promise.all([loadTopics(), loadLibrary()])
+    } catch (e) {
+      globalError = message(e)
+    }
+  }
+
   /**
    * "AI 先读" / "重读" from a library row. Same shape as `aiRead` above:
    * claim the row synchronously, then send. The difference is the job id —
@@ -479,7 +603,7 @@
   void loadAgents()
   // The vault root resolves asynchronously (see loadEnv), and library_list
   // fails without it — so the first listing waits for loadEnv to settle.
-  void loadEnv().then(loadLibrary)
+  void loadEnv().then(() => Promise.all([loadLibrary(), loadTopics()]))
 </script>
 
 <!-- Drag highlighting is driven entirely by the host's `type:"drag-drop"`
@@ -579,6 +703,31 @@
     </section>
   {/if}
 
+  <TopicBar
+    {topics}
+    counts={topicCounts}
+    selectedId={selectedTopicId}
+    disabled={running}
+    onselect={selectImportTopic}
+    onmanage={() => (topicManagerOpen = true)}
+  />
+  <div class="topic-actions">
+    <button class="secondary" onclick={startTopicDesign} disabled={topicAgentRunning || library.length === 0}>
+      {topicAgentRunning ? t('topic.agentRunning') : t('topic.agentDesign')}
+    </button>
+    {#if agents.length}
+      <AgentPicker
+        options={agents}
+        selected={agentId ?? null}
+        onselect={pickAgent}
+        label={t as (k: string, v?: Record<string, string | number>) => string}
+      />
+    {/if}
+    {#if unclassifiedBooks.length > 0}
+      <span class="topic-warning">{t('topic.unclassifiedCount', { count: unclassifiedBooks.length })}</span>
+    {/if}
+  </div>
+
   <section class="dropzone">
     <p>{t('drop.hint')}</p>
     <button class="primary" onclick={pickFiles}>{t('drop.pick')}</button>
@@ -608,7 +757,11 @@
 
   <section class="queue">
     <div class="queue-head">
-      <button class="primary start" onclick={startRun} disabled={running || !hasPending}>
+      <button
+        class="primary start"
+        onclick={startRun}
+        disabled={running || !hasPending || hasUnclassifiedPending(q)}
+      >
         {running ? t('action.running') : t('action.start')}
       </button>
       <span class="spacer"></span>
@@ -624,6 +777,23 @@
               {expanded[item.id] ? '▾' : '▸'}
             </button>
             <span class="name" title={item.path}>{item.name}</span>
+            {#if item.status === 'pending'}
+              <select
+                class="topic-select"
+                value={item.topicId ?? ''}
+                aria-label={t('topic.chooseForBook', { name: item.name })}
+                onchange={(event) => {
+                  q = assignTopic(q, item.id, event.currentTarget.value)
+                }}
+              >
+                <option value="">{t('topic.choose')}</option>
+                {#each topics as topic (topic.id)}
+                  <option value={topic.id}>{topic.label}</option>
+                {/each}
+              </select>
+            {:else if item.topicId}
+              <span class="topic-chip">{topics.find((topic) => topic.id === item.topicId)?.label ?? item.topicId}</span>
+            {/if}
             <span class="badge {item.status}{item.cancelled ? ' cancelled' : ''}">
               {t(badgeKey(item))}
               {#if item.status === 'running' && item.total}
@@ -682,6 +852,7 @@
 
   <LibraryPanel
     books={library}
+    {topics}
     {agents}
     agentId={agentId ?? null}
     {nowMs}
@@ -693,7 +864,43 @@
     }}
     onpickagent={pickAgent}
     onrefresh={loadLibrary}
+    onassigntopic={assignLibraryTopic}
   />
+
+  <TopicManager
+    open={topicManagerOpen}
+    {topics}
+    counts={topicCounts}
+    onsave={saveTopics}
+    ondelete={deleteTopic}
+    onclose={() => (topicManagerOpen = false)}
+  />
+
+  {#if topicProposal}
+    <div class="proposal-backdrop">
+      <div class="proposal" role="dialog" aria-modal="true" aria-labelledby="proposal-title">
+        <h2 id="proposal-title">{t('topic.proposalTitle')}</h2>
+        <p>{t('topic.proposalHint')}</p>
+        <div class="proposal-topics">
+          {#each topicProposal.topics as topic (topic.id)}
+            <article>
+              <strong>{topic.label}</strong>
+              <span>{topic.description}</span>
+              <small>
+                {t('topic.assignmentCount', {
+                  count: topicProposal.assignments.filter((item) => item.topic_id === topic.id).length,
+                })}
+              </small>
+            </article>
+          {/each}
+        </div>
+        <div class="proposal-actions">
+          <button class="secondary" onclick={() => (topicProposal = null)}>{t('action.cancel')}</button>
+          <button class="primary" onclick={applyTopicProposal}>{t('topic.applyProposal')}</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -1002,5 +1209,76 @@
   }
   .err {
     color: #c62828;
+  }
+  .topic-actions {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: -6px;
+  }
+  .topic-warning {
+    font-size: 10px;
+    color: #b26a00;
+  }
+  .topic-select {
+    max-width: 150px;
+    min-width: 100px;
+    font: inherit;
+    font-size: 11px;
+  }
+  .topic-chip {
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--accent-color, #0a84ff) 12%, transparent);
+    font-size: 10px;
+  }
+  .proposal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgb(0 0 0 / 28%);
+  }
+  .proposal {
+    width: min(560px, 100%);
+    max-height: calc(100vh - 40px);
+    overflow: auto;
+    box-sizing: border-box;
+    padding: 16px;
+    border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    border-radius: 10px;
+    background: var(--background-color, Canvas);
+    box-shadow: 0 18px 55px rgb(0 0 0 / 24%);
+  }
+  .proposal h2,
+  .proposal p {
+    margin: 0 0 8px;
+  }
+  .proposal-topics {
+    display: grid;
+    gap: 7px;
+    margin: 12px 0;
+  }
+  .proposal-topics article {
+    display: grid;
+    gap: 3px;
+    padding: 9px;
+    border: 1px solid color-mix(in srgb, currentColor 13%, transparent);
+    border-radius: 7px;
+  }
+  .proposal-topics span,
+  .proposal-topics small {
+    opacity: 0.65;
+  }
+  .proposal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
   }
 </style>

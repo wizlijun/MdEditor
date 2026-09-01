@@ -20,7 +20,7 @@ use crate::settings::{self, DeviceSettings, VaultSettings};
 use notemd_plugin_sdk as sdk;
 use sdk::plugin_protocol as proto;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -359,6 +359,18 @@ fn parse_ai_read(params: &Value) -> Result<AiReadRequest, String> {
     })
 }
 
+/// Every new import must carry one explicit logical classification. Catalog
+/// membership is checked separately before any conversion work begins.
+fn parse_topic_id(params: &Value) -> Result<String, String> {
+    params
+        .get("topic_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "import needs a 'topic_id'".to_string())
+}
+
 /// Runs one import to completion off the protocol thread, pushing
 /// `log`/`progress`/`done`/`failed` events to the window as it goes. Free
 /// function (not a method) because it runs on its own `std::thread`, well
@@ -369,6 +381,7 @@ fn run_job(
     data_dir: PathBuf,
     job_id: u64,
     input: PathBuf,
+    topic_id: String,
     ocr: bool,
     provider_override: Option<String>,
     cancelled: Arc<AtomicBool>,
@@ -419,6 +432,7 @@ fn run_job(
     let mut ctx = PipelineCtx {
         vault_root: &vault,
         ebooks_root: &vault_settings.ebooks_root,
+        topic_id: &topic_id,
         work: &work,
         log: &mut log,
         progress: &mut progress,
@@ -440,6 +454,205 @@ fn run_job(
             );
         }
     }
+}
+
+fn topic_inventory(
+    vault: &Path,
+    ebooks_root: &str,
+) -> Result<crate::topic_agent::Inventory, String> {
+    let root = vault.join(ebooks_root);
+    let books = crate::topics::scan_books(&root)?;
+    Ok(crate::topic_agent::Inventory {
+        schema_version: 1,
+        books: books
+            .into_iter()
+            .map(|book| crate::topic_agent::InventoryBook {
+                rel: book.rel,
+                title: book.title,
+                creator: book.creator,
+                publisher: book.publisher,
+                language: book.language,
+                added_at: book.added_at,
+                current_topic_id: book.topic_id,
+            })
+            .collect(),
+    })
+}
+
+fn catalog_from_proposal(proposal: &crate::topic_agent::Proposal) -> crate::topics::TopicCatalog {
+    crate::topics::TopicCatalog {
+        schema_version: 1,
+        topics: proposal
+            .topics
+            .iter()
+            .map(|topic| crate::topics::Topic {
+                id: topic.id.clone(),
+                label: topic.label.clone(),
+                description: topic.description.clone(),
+                index_file: topic.index_file.clone(),
+                vocabulary: topic
+                    .vocabulary
+                    .iter()
+                    .map(|item| crate::topics::Vocabulary {
+                        term: item.term.clone(),
+                        description: item.description.clone(),
+                        extra: BTreeMap::new(),
+                    })
+                    .collect(),
+                extra: BTreeMap::new(),
+            })
+            .collect(),
+        extra: BTreeMap::new(),
+    }
+}
+
+/// Idempotent half of Agent apply. A durable journal is written before this
+/// starts, so activation can safely replay the same assignments after a crash.
+fn apply_validated_topic_proposal(
+    root: &Path,
+    proposal: &crate::topic_agent::Proposal,
+) -> Result<crate::topics::RebuildResult, String> {
+    let catalog = catalog_from_proposal(proposal);
+    crate::topics::validate_catalog(&catalog)?;
+    for assignment in &proposal.assignments {
+        crate::topics::assign_book_topic(
+            &root.join(&assignment.book).join("meta.yml"),
+            &catalog,
+            &assignment.topic_id,
+        )?;
+    }
+    crate::topics::write_catalog(root, &catalog)?;
+    crate::topics::rebuild_indexes(root, &catalog)
+}
+
+fn recover_topic_apply(vault: &Path, ebooks_root: &str) -> Result<bool, String> {
+    let journal = vault.join(crate::topic_agent::APPLY_JOURNAL_REL);
+    if !journal.is_file() {
+        return Ok(false);
+    }
+    let proposal: crate::topic_agent::Proposal = serde_json::from_slice(
+        &std::fs::read(&journal).map_err(|e| format!("read {}: {e}", journal.display()))?,
+    )
+    .map_err(|e| format!("parse {}: {e}", journal.display()))?;
+    let inventory_path = vault.join(crate::topic_agent::INVENTORY_REL);
+    let inventory_bytes = std::fs::read(&inventory_path)
+        .map_err(|e| format!("read {}: {e}", inventory_path.display()))?;
+    let proposal_yaml = serde_yaml::to_string(&proposal)
+        .map_err(|e| format!("serialize recovery proposal: {e}"))?;
+    crate::topic_agent::parse_and_validate_proposal(&proposal_yaml, &inventory_bytes)
+        .map_err(|e| e.to_string())?;
+    let root = vault.join(ebooks_root);
+    crate::topics::with_topic_lock(&root, || {
+        apply_validated_topic_proposal(&root, &proposal)?;
+        std::fs::remove_file(&journal).map_err(|e| format!("remove {}: {e}", journal.display()))?;
+        Ok(())
+    })?;
+    Ok(true)
+}
+
+fn spawn_topic_agent(
+    host: sdk::Host,
+    vault: PathBuf,
+    job_id: u64,
+    harness: Option<String>,
+    inventory_bytes: Vec<u8>,
+) {
+    tokio::spawn(async move {
+        let fail = |error: String| {
+            host.log_warn(&format!("ebook topic design failed: {error}"));
+            host.ui_post(
+                WINDOW,
+                json!({ "type": "topic_agent", "job_id": job_id, "event": "failed", "error": error }),
+            );
+        };
+        let inventory_abs = vault.join(crate::topic_agent::INVENTORY_REL);
+        let proposal_abs = vault.join(crate::topic_agent::PROPOSAL_REL);
+        let run = host
+            .request(
+                "host.agent.run",
+                json!({
+                    "task": crate::topic_agent::TASK_ID,
+                    "prompt": format!(
+                        "读取 `{}`，严格按任务协议把主题候选写到 `{}`。inventory_sha256 必须是 `{}`。",
+                        crate::topic_agent::INVENTORY_REL,
+                        crate::topic_agent::PROPOSAL_REL,
+                        crate::topic_agent::inventory_sha256(&inventory_bytes),
+                    ),
+                    "note_path": inventory_abs.to_string_lossy(),
+                    "harness": harness,
+                }),
+            )
+            .await;
+        let run_id = match run.ok().and_then(|value| {
+            value
+                .get("run_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        }) {
+            Some(run_id) => run_id,
+            None => {
+                fail("host.agent.run returned no run_id".into());
+                return;
+            }
+        };
+        host.ui_post(
+            WINDOW,
+            json!({ "type": "topic_agent", "job_id": job_id, "event": "started" }),
+        );
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1800);
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if tokio::time::Instant::now() > deadline {
+                fail("topic design timed out".into());
+                return;
+            }
+            let status = host
+                .request(
+                    "host.agent.status",
+                    json!({
+                        "task": crate::topic_agent::TASK_ID,
+                        "run_id": run_id,
+                        "harness": harness,
+                    }),
+                )
+                .await;
+            let value = match status {
+                Ok(value) => value,
+                Err(error) => {
+                    fail(error);
+                    return;
+                }
+            };
+            match crate::airead::interpret_status(&value) {
+                crate::airead::RunPoll::Running { .. } => continue,
+                crate::airead::RunPoll::Failed(error) => {
+                    fail(error);
+                    return;
+                }
+                crate::airead::RunPoll::Succeeded => {
+                    let proposal_yaml = match std::fs::read_to_string(&proposal_abs) {
+                        Ok(yaml) => yaml,
+                        Err(error) => {
+                            fail(format!("read {}: {error}", proposal_abs.display()));
+                            return;
+                        }
+                    };
+                    match crate::topic_agent::parse_and_validate_proposal(
+                        &proposal_yaml,
+                        &inventory_bytes,
+                    ) {
+                        Ok(proposal) => host.ui_post(
+                            WINDOW,
+                            json!({ "type": "topic_agent", "job_id": job_id, "event": "done", "proposal": proposal }),
+                        ),
+                        Err(error) => fail(error.to_string()),
+                    }
+                    return;
+                }
+            }
+        }
+    });
 }
 
 /// 拉起一批已经在 [`crate::airead::AiQueue`] 中原子占好 slot 的 worker。
@@ -732,6 +945,9 @@ impl sdk::NotemdPlugin for EbookImportPlugin {
         let seeded = shared_config_vault();
         if let Some(root) = &seeded {
             inner.lock().unwrap().vault = Some(root.clone());
+            if let Err(error) = crate::topic_agent::seed_task_templates(root) {
+                host.log_warn(&format!("could not seed ebook topic task: {error}"));
+            }
         }
 
         // MUST be spawned, never awaited inline: `$activate` is dispatched
@@ -741,6 +957,28 @@ impl sdk::NotemdPlugin for EbookImportPlugin {
             let root = vault_from_host(&host).await.or(seeded);
             if let Some(root) = &root {
                 host.log_info(&format!("ebook-import ready (vault={})", root.display()));
+                if let Err(error) = crate::topic_agent::seed_task_templates(root) {
+                    host.log_warn(&format!("could not seed ebook topic task: {error}"));
+                }
+                let ebooks_root = settings::load_vault(root).ebooks_root;
+                if settings::validate_ebooks_root(&ebooks_root).is_ok() {
+                    match recover_topic_apply(root, &ebooks_root) {
+                        Ok(true) => host.log_info("recovered interrupted ebook topic apply"),
+                        Ok(false) => {}
+                        Err(error) => host.log_warn(&format!(
+                            "ebook topic apply needs recovery; keep apply-journal.json: {error}"
+                        )),
+                    }
+                    let ebooks_dir = root.join(ebooks_root);
+                    if ebooks_dir.join(crate::topics::TOPICS_FILE).is_file() {
+                        if let Err(error) = crate::topics::with_topic_lock(&ebooks_dir, || {
+                            let catalog = crate::topics::read_catalog(&ebooks_dir)?;
+                            crate::topics::rebuild_indexes(&ebooks_dir, &catalog).map(|_| ())
+                        }) {
+                            host.log_warn(&format!("ebook topic reconcile failed: {error}"));
+                        }
+                    }
+                }
             } else {
                 host.log_warn("no vault configured; ebook-import needs one");
             }
@@ -784,6 +1022,13 @@ impl sdk::NotemdPlugin for EbookImportPlugin {
             "import_cancel" => self.import_cancel(&params),
             "ai_read_start" => self.ai_read_start(host, &params),
             "library_list" => self.library_list(),
+            "topic_state" => self.topic_state(),
+            "topic_save" => self.topic_save(&params),
+            "topic_assign" => self.topic_assign(&params),
+            "topic_delete" => self.topic_delete(&params),
+            "topic_rebuild" => self.topic_rebuild(),
+            "topic_agent_start" => self.topic_agent_start(host, &params),
+            "topic_agent_apply" => self.topic_agent_apply(&params),
             other => Err(format!("unknown ui method '{other}'")),
         }
     }
@@ -850,6 +1095,7 @@ impl EbookImportPlugin {
             .ok_or("import_start needs a 'path'")?
             .to_string();
         let ocr = params.get("ocr").and_then(|v| v.as_bool()).unwrap_or(false);
+        let topic_id = parse_topic_id(params)?;
         let provider_override = params
             .get("provider")
             .and_then(|v| v.as_str())
@@ -878,6 +1124,7 @@ impl EbookImportPlugin {
                 data_dir,
                 job_id,
                 PathBuf::from(path),
+                topic_id,
                 ocr,
                 provider_override,
                 cancelled,
@@ -906,7 +1153,246 @@ impl EbookImportPlugin {
     fn library_list(&self) -> Result<Value, String> {
         let vault = self.vault()?;
         let root = settings::load_vault(&vault).ebooks_root;
-        Ok(json!({ "books": crate::library::scan(&vault, &root) }))
+        settings::validate_ebooks_root(&root)?;
+        let ebooks_dir = vault.join(&root);
+        crate::topics::with_topic_lock(&ebooks_dir, || {
+            if ebooks_dir.join(crate::topics::TOPICS_FILE).is_file() {
+                let catalog = crate::topics::read_catalog(&ebooks_dir)?;
+                crate::topics::rebuild_indexes(&ebooks_dir, &catalog)?;
+            }
+            Ok(json!({ "books": crate::library::scan(&vault, &root) }))
+        })
+    }
+
+    fn topic_root(&self) -> Result<(PathBuf, PathBuf), String> {
+        let vault = self.vault()?;
+        let ebooks_root = settings::load_vault(&vault).ebooks_root;
+        settings::validate_ebooks_root(&ebooks_root)?;
+        let root = vault.join(ebooks_root);
+        Ok((vault, root))
+    }
+
+    fn topic_state(&self) -> Result<Value, String> {
+        let (_, root) = self.topic_root()?;
+        crate::topics::with_topic_lock(&root, || {
+            let catalog = if root.join(crate::topics::TOPICS_FILE).is_file() {
+                Some(crate::topics::read_catalog(&root)?)
+            } else {
+                None
+            };
+            let books = crate::topics::scan_books(&root)?;
+            let mut counts = BTreeMap::<String, usize>::new();
+            let mut unclassified = Vec::new();
+            let mut unknown = Vec::new();
+            for book in books {
+                match book.topic_id {
+                    Some(id) if catalog.as_ref().is_some_and(|c| c.contains_topic(&id)) => {
+                        *counts.entry(id).or_default() += 1;
+                    }
+                    Some(_) => unknown.push(book.rel),
+                    None => unclassified.push(book.rel),
+                }
+            }
+            Ok(json!({
+                "catalog": catalog,
+                "counts": counts,
+                "unclassified_books": unclassified,
+                "unknown_topic_books": unknown,
+            }))
+        })
+    }
+
+    fn topic_save(&self, params: &Value) -> Result<Value, String> {
+        let (_, root) = self.topic_root()?;
+        crate::topics::with_topic_lock(&root, || {
+            let catalog: crate::topics::TopicCatalog = serde_json::from_value(
+                params
+                    .get("catalog")
+                    .cloned()
+                    .ok_or("topic_save needs a 'catalog'")?,
+            )
+            .map_err(|e| format!("invalid topic catalog: {e}"))?;
+            crate::topics::validate_catalog(&catalog)?;
+            for book in crate::topics::scan_books(&root)? {
+                if let Some(id) = &book.topic_id {
+                    if !catalog.contains_topic(id) {
+                        return Err(format!(
+                            "topic {id:?} is still used by {}; migrate or delete it first",
+                            book.rel
+                        ));
+                    }
+                }
+            }
+            crate::topics::write_catalog(&root, &catalog)?;
+            let rebuilt = crate::topics::rebuild_indexes(&root, &catalog)?;
+            Ok(json!({ "ok": true, "rebuild": rebuilt }))
+        })
+    }
+
+    fn topic_assign(&self, params: &Value) -> Result<Value, String> {
+        let (vault, root) = self.topic_root()?;
+        crate::topics::with_topic_lock(&root, || {
+            let rel = params
+                .get("book")
+                .and_then(Value::as_str)
+                .ok_or("topic_assign needs a 'book'")?;
+            let topic_id = params
+                .get("topic_id")
+                .and_then(Value::as_str)
+                .ok_or("topic_assign needs a 'topic_id'")?;
+            let ebooks_root = settings::load_vault(&vault).ebooks_root;
+            let local_rel = rel
+                .strip_prefix(&format!("{}/", ebooks_root.trim_end_matches('/')))
+                .unwrap_or(rel);
+            let catalog = crate::topics::read_catalog(&root)?;
+            let book = crate::topics::scan_books(&root)?
+                .into_iter()
+                .find(|book| book.rel == local_rel)
+                .ok_or_else(|| format!("unknown library book {rel:?}"))?;
+            crate::topics::assign_book_topic(
+                &root.join(&book.rel).join("meta.yml"),
+                &catalog,
+                topic_id,
+            )?;
+            let rebuilt = crate::topics::rebuild_indexes(&root, &catalog)?;
+            Ok(json!({ "ok": true, "rebuild": rebuilt }))
+        })
+    }
+
+    fn topic_delete(&self, params: &Value) -> Result<Value, String> {
+        let (_, root) = self.topic_root()?;
+        crate::topics::with_topic_lock(&root, || {
+            let topic_id = params
+                .get("topic_id")
+                .and_then(Value::as_str)
+                .ok_or("topic_delete needs a 'topic_id'")?;
+            let migrate_to = params.get("migrate_to").and_then(Value::as_str);
+            let mut catalog = crate::topics::read_catalog(&root)?;
+            if !catalog.contains_topic(topic_id) {
+                return Err(format!("unknown topic id {topic_id:?}"));
+            }
+            if migrate_to == Some(topic_id) {
+                return Err("a topic cannot migrate to itself".to_string());
+            }
+            if let Some(target) = migrate_to {
+                if !catalog.contains_topic(target) {
+                    return Err(format!("unknown migration topic id {target:?}"));
+                }
+            }
+            let affected: Vec<_> = crate::topics::scan_books(&root)?
+                .into_iter()
+                .filter(|book| book.topic_id.as_deref() == Some(topic_id))
+                .collect();
+            if !affected.is_empty() && migrate_to.is_none() {
+                return Err(format!(
+                    "topic {topic_id:?} still contains {} books; choose a migration target",
+                    affected.len()
+                ));
+            }
+            catalog.topics.retain(|topic| topic.id != topic_id);
+            crate::topics::validate_catalog(&catalog)?;
+            if let Some(target) = migrate_to {
+                for book in &affected {
+                    crate::topics::assign_book_topic(
+                        &root.join(&book.rel).join("meta.yml"),
+                        &catalog,
+                        target,
+                    )?;
+                }
+            }
+            crate::topics::write_catalog(&root, &catalog)?;
+            let rebuilt = crate::topics::rebuild_indexes(&root, &catalog)?;
+            Ok(json!({ "ok": true, "migrated": affected.len(), "rebuild": rebuilt }))
+        })
+    }
+
+    fn topic_rebuild(&self) -> Result<Value, String> {
+        let (_, root) = self.topic_root()?;
+        crate::topics::with_topic_lock(&root, || {
+            let catalog = crate::topics::read_catalog(&root)?;
+            Ok(json!({ "ok": true, "rebuild": crate::topics::rebuild_indexes(&root, &catalog)? }))
+        })
+    }
+
+    fn topic_agent_start(&mut self, host: &sdk::Host, params: &Value) -> Result<Value, String> {
+        let (vault, root) = self.topic_root()?;
+        crate::topic_agent::seed_task_templates(&vault)
+            .map_err(|e| format!("seed topic design task: {e}"))?;
+        if vault.join(crate::topic_agent::APPLY_JOURNAL_REL).is_file() {
+            return Err(
+                "an interrupted topic apply needs recovery before starting a new proposal"
+                    .to_string(),
+            );
+        }
+        let bytes = crate::topics::with_topic_lock(&root, || {
+            let inventory = topic_inventory(&vault, &settings::load_vault(&vault).ebooks_root)?;
+            if inventory.books.is_empty() {
+                return Err(
+                    "the ebook library is empty; import at least one book first".to_string()
+                );
+            }
+            let bytes =
+                crate::topic_agent::inventory_yaml(&inventory).map_err(|e| e.to_string())?;
+            let path = vault.join(crate::topic_agent::INVENTORY_REL);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create {}: {e}", parent.display()))?;
+            }
+            crate::topics::atomic_write(&path, &bytes)?;
+            let proposal = vault.join(crate::topic_agent::PROPOSAL_REL);
+            if proposal.exists() {
+                std::fs::remove_file(&proposal)
+                    .map_err(|e| format!("remove stale {}: {e}", proposal.display()))?;
+            }
+            Ok(bytes)
+        })?;
+        let job_id = {
+            let mut g = self.inner.lock().unwrap();
+            let id = g.next_job;
+            g.next_job += 1;
+            id
+        };
+        let harness = params
+            .get("harness")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string);
+        spawn_topic_agent(host.clone(), vault, job_id, harness, bytes);
+        Ok(json!({ "job_id": job_id }))
+    }
+
+    fn topic_agent_apply(&self, params: &Value) -> Result<Value, String> {
+        let (vault, root) = self.topic_root()?;
+        let proposal: crate::topic_agent::Proposal = serde_json::from_value(
+            params
+                .get("proposal")
+                .cloned()
+                .ok_or("topic_agent_apply needs a 'proposal'")?,
+        )
+        .map_err(|e| format!("invalid topic proposal: {e}"))?;
+        crate::topics::with_topic_lock(&root, || {
+            let inventory = topic_inventory(&vault, &settings::load_vault(&vault).ebooks_root)?;
+            let inventory_bytes =
+                crate::topic_agent::inventory_yaml(&inventory).map_err(|e| e.to_string())?;
+            crate::topic_agent::validate_proposal(
+                &proposal,
+                &inventory,
+                &crate::topic_agent::inventory_sha256(&inventory_bytes),
+            )
+            .map_err(|e| e.to_string())?;
+            let journal = vault.join(crate::topic_agent::APPLY_JOURNAL_REL);
+            if let Some(parent) = journal.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create {}: {e}", parent.display()))?;
+            }
+            let journal_bytes = serde_json::to_vec_pretty(&proposal)
+                .map_err(|e| format!("serialize topic apply journal: {e}"))?;
+            crate::topics::atomic_write(&journal, &journal_bytes)?;
+            let rebuilt = apply_validated_topic_proposal(&root, &proposal)?;
+            std::fs::remove_file(&journal)
+                .map_err(|e| format!("remove {}: {e}", journal.display()))?;
+            Ok(json!({ "ok": true, "rebuild": rebuilt }))
+        })
     }
 
     /// "AI 先读":同步入队;后台 scheduler 按 provider 设置拉起 worker。
@@ -966,7 +1452,9 @@ impl EbookImportPlugin {
     fn cli_import(&mut self, host: &sdk::Host, context: &Value) -> Result<Value, String> {
         let vault = self.vault()?;
         let file = cli_str(context, "file")
-            .ok_or("usage: notemd ebook-import <file> [--ocr] [--ocr-provider PROVIDER] [--root ROOT]")?;
+            .ok_or("usage: notemd ebook <file> --topic TOPIC [--ocr] [--ocr-provider PROVIDER] [--root ROOT]")?;
+        let topic_id = cli_str(context, "topic")
+            .ok_or("usage: notemd ebook <file> --topic TOPIC [--ocr] [--ocr-provider PROVIDER] [--root ROOT]")?;
         let ocr = cli_flag(context, "ocr");
         let provider_override = cli_str(context, "ocr-provider");
         let root_override = cli_str(context, "root");
@@ -1005,6 +1493,7 @@ impl EbookImportPlugin {
             let mut ctx = PipelineCtx {
                 vault_root: &vault,
                 ebooks_root: &vault_settings.ebooks_root,
+                topic_id: &topic_id,
                 work: &work,
                 log: &mut log,
                 progress: &mut progress,
@@ -1065,6 +1554,86 @@ mod tests {
         assert!(parse_ai_read(&json!({ "job_id": 1 })).is_err());
         assert!(parse_ai_read(&json!({ "dest_rel": "" })).is_err());
         assert!(parse_ai_read(&json!({ "dest_rel": "/" })).is_err());
+    }
+
+    #[test]
+    fn import_topic_is_required_and_trimmed() {
+        assert_eq!(
+            parse_topic_id(&json!({ "topic_id": "  software  " })).unwrap(),
+            "software"
+        );
+        assert!(parse_topic_id(&json!({})).is_err());
+        assert!(parse_topic_id(&json!({ "topic_id": "" })).is_err());
+    }
+
+    #[test]
+    fn interrupted_agent_apply_replays_from_its_journal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let book = vault.join("ebooks/2026-09/DDIA");
+        std::fs::create_dir_all(&book).unwrap();
+        std::fs::write(
+            book.join("book.md"),
+            "---\ntype: Book\ntitle: DDIA\ncreator: Martin Kleppmann\nlanguage: en\n---\n",
+        )
+        .unwrap();
+        std::fs::write(book.join("meta.yml"), "added_at: 2026-09-01T00:00:00Z\n").unwrap();
+
+        let inventory = topic_inventory(vault, "ebooks").unwrap();
+        let inventory_bytes = crate::topic_agent::inventory_yaml(&inventory).unwrap();
+        let vocabulary = || {
+            vec![
+                crate::topic_agent::Vocabulary {
+                    term: "架构".into(),
+                    description: "系统组成与边界。".into(),
+                },
+                crate::topic_agent::Vocabulary {
+                    term: "可靠性".into(),
+                    description: "持续正确服务的能力。".into(),
+                },
+            ]
+        };
+        let proposal = crate::topic_agent::Proposal {
+            schema_version: 1,
+            inventory_sha256: crate::topic_agent::inventory_sha256(&inventory_bytes),
+            topics: vec![
+                crate::topic_agent::ProposalTopic {
+                    id: "software-engineering".into(),
+                    label: "软件工程".into(),
+                    description: "软件系统的设计与演化。".into(),
+                    index_file: "软件工程.index.md".into(),
+                    vocabulary: vocabulary(),
+                },
+                crate::topic_agent::ProposalTopic {
+                    id: "business".into(),
+                    label: "商业".into(),
+                    description: "企业经营与竞争战略。".into(),
+                    index_file: "商业.index.md".into(),
+                    vocabulary: vocabulary(),
+                },
+            ],
+            assignments: vec![crate::topic_agent::Assignment {
+                book: "2026-09/DDIA".into(),
+                topic_id: "software-engineering".into(),
+            }],
+        };
+        let inventory_path = vault.join(crate::topic_agent::INVENTORY_REL);
+        std::fs::create_dir_all(inventory_path.parent().unwrap()).unwrap();
+        std::fs::write(&inventory_path, inventory_bytes).unwrap();
+        let journal = vault.join(crate::topic_agent::APPLY_JOURNAL_REL);
+        std::fs::write(&journal, serde_json::to_vec(&proposal).unwrap()).unwrap();
+
+        assert!(recover_topic_apply(vault, "ebooks").unwrap());
+        assert!(!journal.exists());
+        assert_eq!(
+            crate::topics::read_book_topic(&book.join("meta.yml"))
+                .unwrap()
+                .as_deref(),
+            Some("software-engineering")
+        );
+        assert!(vault.join("ebooks/topics.yml").is_file());
+        assert!(vault.join("ebooks/软件工程.index.md").is_file());
+        assert!(!recover_topic_apply(vault, "ebooks").unwrap());
     }
 
     /// `dest_rel` is the dedup key now, so `…/Book` and `…/Book/` must not read
@@ -1435,7 +2004,7 @@ mod tests {
         to_plugin
             .write_all(
                 b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"$activate\",\"params\":{\"event\":\"onCommand:open\"}}\n\
-                  {\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ui.request\",\"params\":{\"method\":\"import_start\",\"params\":{\"path\":\"/nonexistent/should-not-exist.pdf\",\"ocr\":false}}}\n",
+                  {\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ui.request\",\"params\":{\"method\":\"import_start\",\"params\":{\"path\":\"/nonexistent/should-not-exist.pdf\",\"topic_id\":\"software-engineering\",\"ocr\":false}}}\n",
             )
             .await
             .unwrap();

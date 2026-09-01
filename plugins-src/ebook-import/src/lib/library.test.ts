@@ -90,6 +90,17 @@ describe('filterBooks', () => {
     expect(filterBooks(list, '')).toHaveLength(3)
     expect(filterBooks(list, '   ')).toHaveLength(3)
   })
+
+  it('filters by topic, unclassified state, and topic label text', () => {
+    const themed = [
+      book('Seven Powers', { topic_id: 'business', topic_label: 'Business Strategy' }),
+      book('DDIA', { topic_id: 'software', topic_label: 'Software Engineering' }),
+      book('Legacy'),
+    ]
+    expect(filterBooks(themed, '', 'software').map((b) => b.name)).toEqual(['DDIA'])
+    expect(filterBooks(themed, '', '__unclassified__').map((b) => b.name)).toEqual(['Legacy'])
+    expect(filterBooks(themed, 'strategy').map((b) => b.name)).toEqual(['Seven Powers'])
+  })
 })
 
 describe('claimAiRead', () => {

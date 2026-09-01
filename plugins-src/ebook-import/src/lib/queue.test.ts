@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   addPaths,
+  assignTopic,
+  hasUnclassifiedPending,
   hasPending,
   isRunComplete,
   nextToStart,
@@ -44,6 +46,14 @@ describe('addPaths', () => {
     expect(q.items[0]).toMatchObject({ status: 'pending', logs: [] })
   })
 
+  it('assigns the selected topic to every newly queued book', () => {
+    const q = addPaths(empty, ['/a.epub', '/b.pdf'], 'software-engineering')
+    expect(q.items.map((i) => i.topicId)).toEqual([
+      'software-engineering',
+      'software-engineering',
+    ])
+  })
+
   it('dedups the same path when an existing item is pending or running', () => {
     const q1 = addPaths(empty, ['/a.epub'])
     const q2 = addPaths(q1, ['/a.epub'])
@@ -76,6 +86,23 @@ describe('addPaths', () => {
   it('does nothing for an empty path list', () => {
     const q = addPaths(empty, [])
     expect(q).toEqual(empty)
+  })
+})
+
+describe('topic assignment', () => {
+  it('updates one pending row without changing finished books', () => {
+    let q = addPaths(empty, ['/a.epub', '/b.epub'], 'business')
+    q = assignTopic(q, q.items[0].id, 'software')
+    expect(q.items.map((i) => i.topicId)).toEqual(['software', 'business'])
+
+    q = { ...q, items: q.items.map((i) => ({ ...i, status: 'done' as const })) }
+    expect(assignTopic(q, q.items[0].id, 'history')).toBe(q)
+  })
+
+  it('detects pending rows without a topic', () => {
+    const q = addPaths(empty, ['/a.epub'])
+    expect(hasUnclassifiedPending(q)).toBe(true)
+    expect(hasUnclassifiedPending(assignTopic(q, q.items[0].id, 'business'))).toBe(false)
   })
 })
 
