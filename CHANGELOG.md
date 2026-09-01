@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **AI is now the first system category in the Plugin Market.** Claude Agent, Codex Agent, DeepSeek Agent and Memory are grouped together at the top, including when older installed metadata or cached catalog entries still use their previous categories.
+
 ## v6.901.8 — 2026-09-01
 
 ### Changed

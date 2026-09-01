@@ -107,7 +107,6 @@
     })),
   ])
   let marketGroups = $derived(groupPluginsByCategory(marketItems))
-  let aiItems = $derived(marketItems.filter((item) => pluginAiRole(item.id) !== null))
   let updateItems = $derived(
     marketItems.filter(
       (item): item is InstalledMarketItem => item.kind === 'installed' && !!item.row.updateTo,
@@ -372,6 +371,7 @@
 
   function categoryMark(category: PluginCategory): string {
     const marks: Record<PluginCategory, string> = {
+      ai: '✦',
       record: '+',
       reading: '◫',
       inspiration: '◇',
@@ -425,12 +425,6 @@
     )
   }
 
-  function focusPlugin(id: string) {
-    const card = [...document.querySelectorAll<HTMLElement>('[data-plugin-id]')]
-      .find((node) => node.dataset.pluginId === id)
-    card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    card?.focus({ preventScroll: true })
-  }
 </script>
 
 <main aria-busy={loading}>
@@ -471,21 +465,6 @@
 
       {#if notice}
         <div class="notice" role="status"><span aria-hidden="true">!</span><p>{notice}</p></div>
-      {/if}
-
-      {#if aiItems.length > 0}
-        <aside class="ai-spotlight" aria-labelledby="ai-spotlight-title">
-          <span class="ai-orb" aria-hidden="true">✦</span>
-          <div class="ai-copy">
-            <h2 id="ai-spotlight-title">{t('pluginMarket.aiTitle')}</h2>
-            <p>{t('pluginMarket.aiSubtitle')}</p>
-          </div>
-          <div class="ai-list">
-            {#each aiItems as item (item.id)}
-              <button class="ai-pill" onclick={() => focusPlugin(item.id)}>{itemName(item)}</button>
-            {/each}
-          </div>
-        </aside>
       {/if}
 
       <div class="catalog">
@@ -719,41 +698,6 @@
     font-weight: 750;
   }
   .notice p { margin: 2px 0 0; line-height: 1.45; overflow-wrap: anywhere; }
-  .ai-spotlight {
-    display: grid;
-    grid-template-columns: auto minmax(190px, 0.7fr) minmax(0, 1.3fr);
-    gap: 11px 14px;
-    align-items: center;
-    margin: 0 0 14px;
-    padding: 12px 14px;
-    border: 1px solid var(--window-border);
-    border-radius: 16px;
-    background: var(--window-surface);
-    box-shadow: 0 1px 2px color-mix(in srgb, CanvasText 4%, transparent);
-  }
-  .ai-orb {
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 11px;
-    background: linear-gradient(145deg, #7758ff, #2e8fff);
-    color: white;
-    box-shadow: 0 6px 14px color-mix(in srgb, #7657ff 28%, transparent);
-    font-size: 15px;
-  }
-  .ai-copy h2 { margin: 0; font-size: 14px; letter-spacing: -0.015em; }
-  .ai-copy p { margin: 2px 0 0; color: color-mix(in srgb, CanvasText 53%, transparent); font-size: 10.5px; line-height: 1.35; }
-  .ai-list { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
-  .ai-pill {
-    min-height: 25px;
-    padding: 0 8px;
-    border-color: var(--window-border);
-    border-radius: 999px;
-    background: var(--card-surface);
-    color: color-mix(in srgb, CanvasText 72%, transparent);
-    font-size: 9.5px;
-  }
   .catalog { display: grid; gap: 14px; }
   .category-block {
     --accent: #635bff;
@@ -766,6 +710,7 @@
     background: var(--window-surface);
     box-shadow: 0 1px 3px color-mix(in srgb, CanvasText 4%, transparent);
   }
+  .category-block[data-category='ai'] { --accent: #7758ff; }
   .category-block[data-category='record'] { --accent: #ec5d74; }
   .category-block[data-category='reading'] { --accent: #f09a3e; }
   .category-block[data-category='inspiration'] { --accent: #9b5de5; }
@@ -1026,8 +971,6 @@
     .hero { gap: 12px; padding-bottom: 18px; }
     .hero-copy h1 { font-size: 28px; }
     .refresh { padding: 0 11px; }
-    .ai-spotlight { grid-template-columns: auto minmax(0, 1fr); }
-    .ai-list { grid-column: 1 / -1; justify-content: flex-start; }
     .category-block { padding: 14px; border-radius: 16px; }
     .plugin-grid { grid-template-columns: minmax(0, 1fr); }
   }

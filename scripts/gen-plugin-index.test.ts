@@ -36,7 +36,7 @@ describe('pluginCategoryFromManifest', () => {
 
   it('normalizes previous capability keys in newly generated indexes', () => {
     const aliases = {
-      agents: 'advance',
+      agents: 'ai',
       'capture-import': 'record',
       'thinking-review': 'reflect',
       'publish-export': 'import-export',
@@ -47,6 +47,19 @@ describe('pluginCategoryFromManifest', () => {
         contributes: { menus: [{ command: 'open', submenu: legacy }] },
       })).toBe(current)
     }
+  })
+
+  it('puts the three official agents and Memory in AI without moving other AI-capable plugins', () => {
+    for (const id of [
+      'notemd.claude-agent',
+      'notemd.codex-agent',
+      'notemd.deepseek-agent',
+      'notemd.memory',
+    ]) {
+      expect(pluginCategoryFromManifest({ id })).toBe('ai')
+    }
+    expect(pluginCategoryFromManifest({ id: 'notemd.openclaw-chat' })).toBe('advance')
+    expect(pluginCategoryFromManifest({ id: 'notemd.ebook-import' })).toBe('reading')
   })
 
   it('falls back to other for missing or unknown groups', () => {

@@ -1,6 +1,7 @@
 import type { Messages } from '../i18n/en'
 
 export const PLUGIN_CATEGORY_ORDER = [
+  'ai',
   'record',
   'reading',
   'inspiration',
@@ -16,7 +17,7 @@ export type PluginCategory = typeof PLUGIN_CATEGORY_ORDER[number]
 
 const KNOWN_CATEGORIES = new Set<string>(PLUGIN_CATEGORY_ORDER)
 const LEGACY_CATEGORIES: Record<string, PluginCategory> = {
-  agents: 'advance',
+  agents: 'ai',
   capture: 'record',
   'capture-import': 'record',
   thinking: 'reflect',
@@ -34,13 +35,13 @@ export const OFFICIAL_PLUGIN_CATEGORIES: Readonly<Record<string, PluginCategory>
   'notemd.trace-source': 'reading',
   'notemd.idea-spark': 'inspiration',
   'notemd.next': 'advance',
-  'notemd.claude-agent': 'advance',
-  'notemd.codex-agent': 'advance',
-  'notemd.deepseek-agent': 'advance',
+  'notemd.claude-agent': 'ai',
+  'notemd.codex-agent': 'ai',
+  'notemd.deepseek-agent': 'ai',
   'notemd.openclaw-chat': 'advance',
   'notemd.decision-log': 'reflect',
   'notemd.weekly-review': 'reflect',
-  'notemd.memory': 'reflect',
+  'notemd.memory': 'ai',
   'notemd.md2pdf': 'import-export',
   'notemd.power-mode': 'experience',
 }
@@ -74,7 +75,7 @@ export function pluginAiRole(pluginId: string): PluginAiRole | null {
 }
 
 export function isSystemPluginCategory(category: PluginCategory): boolean {
-  return category === 'import-export' || category === 'experience'
+  return category === 'ai' || category === 'import-export' || category === 'experience'
 }
 
 export function pluginAiRoleLabelKey(role: PluginAiRole): keyof Messages {
@@ -83,6 +84,7 @@ export function pluginAiRoleLabelKey(role: PluginAiRole): keyof Messages {
 
 export function pluginCategoryLabelKey(category: PluginCategory): keyof Messages {
   const keys: Record<PluginCategory, keyof Messages> = {
+    ai: 'pluginCategory.ai',
     record: 'pluginCategory.record',
     reading: 'pluginCategory.reading',
     inspiration: 'pluginCategory.inspiration',

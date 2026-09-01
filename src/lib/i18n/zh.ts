@@ -206,6 +206,7 @@ export const zh: Record<keyof Messages, string> = {
   'plugins.internalError': '{name}：插件错误',
 
   // 插件能力分组
+  'pluginCategory.ai': 'AI',
   'pluginCategory.record': '记录',
   'pluginCategory.reading': '阅读',
   'pluginCategory.inspiration': '灵感',

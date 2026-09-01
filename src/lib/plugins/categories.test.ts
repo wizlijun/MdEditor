@@ -10,7 +10,7 @@ import {
 describe('plugin capability categories', () => {
   it('uses the documented top-level category order', () => {
     expect(PLUGIN_CATEGORY_ORDER).toEqual([
-      'record', 'reading', 'inspiration', 'advance', 'reflect', 'create', 'import-export', 'experience', 'other',
+      'ai', 'record', 'reading', 'inspiration', 'advance', 'reflect', 'create', 'import-export', 'experience', 'other',
     ])
   })
 
@@ -46,7 +46,7 @@ describe('plugin capability categories', () => {
   })
 
   it('maps previous category keys to their closest current category', () => {
-    expect(normalizePluginCategory('agents')).toBe('advance')
+    expect(normalizePluginCategory('agents')).toBe('ai')
     expect(normalizePluginCategory('capture')).toBe('record')
     expect(normalizePluginCategory('thinking-review')).toBe('reflect')
     expect(normalizePluginCategory('publish-export')).toBe('import-export')
@@ -54,6 +54,11 @@ describe('plugin capability categories', () => {
   })
 
   it('uses official plugin ids to migrate ambiguous cached categories', () => {
+    expect(normalizePluginCategory('advance', 'notemd.claude-agent')).toBe('ai')
+    expect(normalizePluginCategory('advance', 'notemd.codex-agent')).toBe('ai')
+    expect(normalizePluginCategory('advance', 'notemd.deepseek-agent')).toBe('ai')
+    expect(normalizePluginCategory('reflect', 'notemd.memory')).toBe('ai')
+    expect(normalizePluginCategory('agents', 'notemd.openclaw-chat')).toBe('advance')
     expect(normalizePluginCategory('capture', 'notemd.idea-spark')).toBe('inspiration')
     expect(normalizePluginCategory('capture', 'notemd.trace-source')).toBe('reading')
     expect(normalizePluginCategory('thinking', 'notemd.next')).toBe('advance')
@@ -64,6 +69,7 @@ describe('plugin capability categories', () => {
   })
 
   it('identifies only host-level categories as system features', () => {
+    expect(isSystemPluginCategory('ai')).toBe(true)
     expect(isSystemPluginCategory('import-export')).toBe(true)
     expect(isSystemPluginCategory('experience')).toBe(true)
     expect(isSystemPluginCategory('create')).toBe(false)
