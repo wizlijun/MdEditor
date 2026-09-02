@@ -10,7 +10,7 @@ pub use agent_run_core::event::{Event, RunResult};
 pub struct StreamState {
     thread_id: Option<String>,
     turns: u64,
-    last_message: String,
+    terminal_text: String,
     emitted_message: bool,
     terminal_result: Option<RunResult>,
 }
@@ -65,7 +65,7 @@ impl StreamState {
             "item.updated" => None,
             "item.completed" => self.completed_item(v.get("item")?),
             "turn.completed" if !self.is_terminal() => {
-                let result = self.make_result(false, self.last_message.clone());
+                let result = self.make_result(false, self.terminal_text.clone());
                 self.terminal_result = Some(result.clone());
                 Some(Event::Result(result))
             }
@@ -100,7 +100,10 @@ impl StreamState {
                 if text.is_empty() {
                     return None;
                 }
-                self.last_message = text.clone();
+                if !self.terminal_text.is_empty() {
+                    self.terminal_text.push_str("\n\n");
+                }
+                self.terminal_text.push_str(&text);
                 // Separate complete messages: the front-end intentionally
                 // merges adjacent Text events because Claude streams fragments.
                 let shown = if std::mem::replace(&mut self.emitted_message, true) {
@@ -337,5 +340,9 @@ mod tests {
             r#"{"type":"item.completed","item":{"id":"b","type":"agent_message","text":"second"}}"#;
         assert!(matches!(p.parse_line(a), Some(Event::Text { text }) if text == "first"));
         assert!(matches!(p.parse_line(b), Some(Event::Text { text }) if text == "\n\nsecond"));
+        assert!(matches!(
+            p.parse_line(r#"{"type":"turn.completed"}"#),
+            Some(Event::Result(RunResult { result, .. })) if result == "first\n\nsecond"
+        ));
     }
 }

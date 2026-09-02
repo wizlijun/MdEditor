@@ -217,7 +217,12 @@ pub fn finalize_scoped(
         eprintln!("[agent-run-core] stamped OKF front-matter on {stamped} file(s)");
     }
 
-    let rec = build_record(
+    let persistence_error = result.as_ref().and_then(|result| {
+        record::write_terminal_result(&meta.task_run_dir, &meta.run_id, &result.result)
+            .err()
+            .map(|error| format!("persist complete terminal result: {error}"))
+    });
+    let mut rec = build_record(
         meta,
         started.started,
         status,
@@ -227,6 +232,10 @@ pub fn finalize_scoped(
         stderr_tail,
         found,
     );
+    if let Some(error) = persistence_error {
+        rec.status = record::Status::Error;
+        rec.stderr_tail = record::tail(&error, record::STDERR_LIMIT);
+    }
     let _ = record::write(&meta.task_run_dir, &rec);
     // The record is the answer from here on; a leftover snapshot would read as
     // a run still in flight.
@@ -326,6 +335,68 @@ mod tests {
             target: None,
             deliverable: None,
         }
+    }
+
+    #[tokio::test]
+    async fn finalize_keeps_a_small_record_summary_and_an_exact_machine_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = meta(dir.path());
+        let started = preflight(&meta).await.ok().unwrap();
+        let full = format!("begin-{}-end", "x".repeat(record::RESULT_LIMIT * 2));
+        let rec = finalize_scoped(
+            &meta,
+            &started,
+            record::Status::Success,
+            Some(0),
+            Some(RunResult {
+                is_error: false,
+                result: full.clone(),
+                session_id: None,
+                num_turns: Some(1),
+            }),
+            String::new(),
+            String::new(),
+            "test/1",
+            false,
+        );
+        assert_eq!(rec.status, record::Status::Success);
+        assert_eq!(rec.result.len(), record::RESULT_LIMIT);
+        assert_eq!(
+            record::read_terminal_result(&meta.task_run_dir, &meta.run_id)
+                .unwrap()
+                .as_deref(),
+            Some(full.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_fails_closed_when_the_complete_result_exceeds_its_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = meta(dir.path());
+        let started = preflight(&meta).await.ok().unwrap();
+        let rec = finalize_scoped(
+            &meta,
+            &started,
+            record::Status::Success,
+            Some(0),
+            Some(RunResult {
+                is_error: false,
+                result: "x".repeat(record::TERMINAL_RESULT_LIMIT + 1),
+                session_id: None,
+                num_turns: Some(1),
+            }),
+            String::new(),
+            String::new(),
+            "test/1",
+            false,
+        );
+        assert_eq!(rec.status, record::Status::Error);
+        assert!(rec.stderr_tail.contains("persist complete terminal result"));
+        assert!(
+            record::read_terminal_result(&meta.task_run_dir, &meta.run_id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

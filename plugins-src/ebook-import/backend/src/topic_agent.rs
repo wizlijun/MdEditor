@@ -13,10 +13,16 @@ use std::path::{Path, PathBuf};
 
 // v1 granted some harnesses workspace write. A new id guarantees every Vault
 // receives the read-only task instead of retaining an existing create-only v1.
-pub const TASK_ID: &str = "organize-ebook-topics-v2";
+pub const TASK_ID: &str = "organize-ebook-topics-v3";
 pub const INVENTORY_REL: &str = ".notemd/ebook-import/topic-design/inventory.yml";
 pub const PROPOSAL_REL: &str = ".notemd/ebook-import/topic-design/topics.proposal.yml";
 pub const APPLY_JOURNAL_REL: &str = ".notemd/ebook-import/topic-design/apply-journal.json";
+pub const CLASSIFY_TASK_ID: &str = "classify-unclassified-ebooks-v1";
+pub const CLASSIFY_INVENTORY_REL: &str = ".notemd/ebook-import/topic-classification/inventory.yml";
+pub const CLASSIFY_PROPOSAL_REL: &str =
+    ".notemd/ebook-import/topic-classification/assignments.proposal.yml";
+pub const CLASSIFY_APPLY_JOURNAL_REL: &str =
+    ".notemd/ebook-import/topic-classification/apply-journal.json";
 pub const MIN_AGENT_TOPICS: usize = 2;
 pub const MAX_TOPICS: usize = 5;
 
@@ -24,6 +30,7 @@ pub const MAX_TOPICS: usize = 5;
 #[serde(deny_unknown_fields)]
 pub struct Inventory {
     pub schema_version: u32,
+    pub book_count: usize,
     pub books: Vec<InventoryBook>,
 }
 
@@ -37,6 +44,26 @@ pub struct InventoryBook {
     pub language: Option<String>,
     pub added_at: Option<String>,
     pub current_topic_id: Option<String>,
+    pub evidence: crate::topics::BookEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassificationInventory {
+    pub schema_version: u32,
+    pub catalog_revision: String,
+    pub book_count: usize,
+    pub topics: Vec<ProposalTopic>,
+    pub books: Vec<InventoryBook>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassificationProposal {
+    pub schema_version: u32,
+    pub inventory_sha256: String,
+    pub catalog_revision: String,
+    pub assignments: Vec<Assignment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +129,13 @@ pub fn inventory_yaml(inventory: &Inventory) -> Result<Vec<u8>, TopicAgentError>
     Ok(serde_yaml::to_string(inventory)?.into_bytes())
 }
 
+pub fn classification_inventory_yaml(
+    inventory: &ClassificationInventory,
+) -> Result<Vec<u8>, TopicAgentError> {
+    validate_classification_inventory(inventory)?;
+    Ok(serde_yaml::to_string(inventory)?.into_bytes())
+}
+
 pub fn inventory_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -126,16 +160,115 @@ pub fn proposal_from_run_status(
     status: &serde_json::Value,
     inventory_bytes: &[u8],
 ) -> Result<Proposal, TopicAgentError> {
-    let result = status
-        .get("record")
-        .and_then(|record| record.get("result"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| TopicAgentError::Invalid("Agent 成功状态没有 proposal result".into()))?;
+    let result = terminal_result_from_status(status)?;
     let result = result.trim();
     if result.starts_with("```") || result.ends_with("```") {
         return invalid("Agent proposal 必须是纯 YAML，不能包含 Markdown code fence");
     }
     parse_and_validate_proposal(result, inventory_bytes)
+}
+
+fn terminal_result_from_status(status: &serde_json::Value) -> Result<&str, TopicAgentError> {
+    match status.get("terminal_result") {
+        Some(serde_json::Value::Null) | None => status
+            .get("record")
+            .and_then(|record| record.get("result"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| TopicAgentError::Invalid("Agent 成功状态没有 proposal result".into())),
+        Some(terminal) => {
+            if terminal
+                .get("complete")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+            {
+                return invalid("Agent terminal_result 不是完整结果");
+            }
+            terminal
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    TopicAgentError::Invalid("Agent terminal_result 缺少 content".into())
+                })
+        }
+    }
+}
+
+pub fn parse_and_validate_classification_proposal(
+    proposal_yaml: &str,
+    inventory_bytes: &[u8],
+) -> Result<ClassificationProposal, TopicAgentError> {
+    let inventory: ClassificationInventory = serde_yaml::from_slice(inventory_bytes)?;
+    validate_classification_inventory(&inventory)?;
+    let proposal: ClassificationProposal = serde_yaml::from_str(proposal_yaml)?;
+    validate_classification_proposal(&proposal, &inventory, &inventory_sha256(inventory_bytes))?;
+    Ok(proposal)
+}
+
+pub fn classification_from_run_status(
+    status: &serde_json::Value,
+    inventory_bytes: &[u8],
+) -> Result<ClassificationProposal, TopicAgentError> {
+    let result = terminal_result_from_status(status)?.trim();
+    if result.starts_with("```") || result.ends_with("```") {
+        return invalid("Agent 分类结果必须是纯 YAML，不能包含 Markdown code fence");
+    }
+    parse_and_validate_classification_proposal(result, inventory_bytes)
+}
+
+pub fn validate_classification_proposal(
+    proposal: &ClassificationProposal,
+    inventory: &ClassificationInventory,
+    expected_inventory_sha256: &str,
+) -> Result<(), TopicAgentError> {
+    validate_classification_inventory(inventory)?;
+    if proposal.schema_version != 1 {
+        return invalid("classification proposal.schema_version 必须为 1");
+    }
+    if proposal.inventory_sha256 != expected_inventory_sha256 {
+        return invalid("classification proposal 已过期：inventory_sha256 不一致");
+    }
+    if proposal.catalog_revision != inventory.catalog_revision {
+        return invalid("classification proposal 已过期：catalog_revision 不一致");
+    }
+    let topic_ids: BTreeSet<_> = inventory
+        .topics
+        .iter()
+        .map(|topic| topic.id.as_str())
+        .collect();
+    let target_books: BTreeSet<_> = inventory
+        .books
+        .iter()
+        .map(|book| book.rel.as_str())
+        .collect();
+    let mut assigned = BTreeSet::new();
+    for assignment in &proposal.assignments {
+        if !safe_book_rel(&assignment.book) || !target_books.contains(assignment.book.as_str()) {
+            return invalid(format!(
+                "classification assignment 引用了批次外书籍: {}",
+                assignment.book
+            ));
+        }
+        if !assigned.insert(assignment.book.as_str()) {
+            return invalid(format!(
+                "classification assignment 重复书籍: {}",
+                assignment.book
+            ));
+        }
+        if !topic_ids.contains(assignment.topic_id.as_str()) {
+            return invalid(format!(
+                "classification assignment 引用了未知主题: {}",
+                assignment.topic_id
+            ));
+        }
+    }
+    if assigned != target_books {
+        let missing: Vec<_> = target_books.difference(&assigned).copied().collect();
+        return invalid(format!(
+            "classification proposal 没有覆盖全部目标书籍: {}",
+            missing.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_proposal(
@@ -156,10 +289,51 @@ pub fn validate_proposal(
         ));
     }
 
+    let ids = validate_agent_topics(&proposal.topics, MIN_AGENT_TOPICS)?;
+
+    let inventory_books: BTreeSet<&str> = inventory
+        .books
+        .iter()
+        .map(|book| book.rel.as_str())
+        .collect();
+    let mut assigned = BTreeSet::new();
+    for assignment in &proposal.assignments {
+        if !safe_book_rel(&assignment.book) || !inventory_books.contains(assignment.book.as_str()) {
+            return invalid(format!(
+                "assignment 引用了 inventory 之外的书: {}",
+                assignment.book
+            ));
+        }
+        if !assigned.insert(assignment.book.as_str()) {
+            return invalid(format!("一本书被重复归类: {}", assignment.book));
+        }
+        if !ids.contains(assignment.topic_id.as_str()) {
+            return invalid(format!(
+                "书 {} 引用了未知主题: {}",
+                assignment.book, assignment.topic_id
+            ));
+        }
+    }
+    if assigned != inventory_books {
+        let missing: Vec<_> = inventory_books.difference(&assigned).copied().collect();
+        return invalid(format!("proposal 没有覆盖全部书籍: {}", missing.join(", ")));
+    }
+    Ok(())
+}
+
+fn validate_agent_topics<'a>(
+    topics: &'a [ProposalTopic],
+    minimum: usize,
+) -> Result<BTreeSet<&'a str>, TopicAgentError> {
+    if !(minimum..=MAX_TOPICS).contains(&topics.len()) {
+        return invalid(format!(
+            "Agent proposal 必须包含 {minimum}–{MAX_TOPICS} 个主题"
+        ));
+    }
     let mut ids = BTreeSet::new();
     let mut labels = BTreeSet::new();
     let mut index_files = BTreeSet::new();
-    for topic in &proposal.topics {
+    for topic in topics {
         if !valid_topic_id(&topic.id) {
             return invalid(format!("非法主题 id: {}", topic.id));
         }
@@ -195,39 +369,15 @@ pub fn validate_proposal(
         }
     }
 
-    let inventory_books: BTreeSet<&str> = inventory
-        .books
-        .iter()
-        .map(|book| book.rel.as_str())
-        .collect();
-    let mut assigned = BTreeSet::new();
-    for assignment in &proposal.assignments {
-        if !safe_book_rel(&assignment.book) || !inventory_books.contains(assignment.book.as_str()) {
-            return invalid(format!(
-                "assignment 引用了 inventory 之外的书: {}",
-                assignment.book
-            ));
-        }
-        if !assigned.insert(assignment.book.as_str()) {
-            return invalid(format!("一本书被重复归类: {}", assignment.book));
-        }
-        if !ids.contains(assignment.topic_id.as_str()) {
-            return invalid(format!(
-                "书 {} 引用了未知主题: {}",
-                assignment.book, assignment.topic_id
-            ));
-        }
-    }
-    if assigned != inventory_books {
-        let missing: Vec<_> = inventory_books.difference(&assigned).copied().collect();
-        return invalid(format!("proposal 没有覆盖全部书籍: {}", missing.join(", ")));
-    }
-    Ok(())
+    Ok(ids)
 }
 
 fn validate_inventory(inventory: &Inventory) -> Result<(), TopicAgentError> {
-    if inventory.schema_version != 1 {
-        return invalid("inventory.schema_version 必须为 1");
+    if inventory.schema_version != 2 {
+        return invalid("inventory.schema_version 必须为 2");
+    }
+    if inventory.book_count != inventory.books.len() {
+        return invalid("inventory.book_count 与 books 数量不一致");
     }
     let mut rels = BTreeSet::new();
     for book in &inventory.books {
@@ -239,6 +389,43 @@ fn validate_inventory(inventory: &Inventory) -> Result<(), TopicAgentError> {
         }
         if !rels.insert(book.rel.as_str()) {
             return invalid(format!("inventory 书籍路径重复: {}", book.rel));
+        }
+    }
+    Ok(())
+}
+
+fn validate_classification_inventory(
+    inventory: &ClassificationInventory,
+) -> Result<(), TopicAgentError> {
+    if inventory.schema_version != 1 {
+        return invalid("classification inventory.schema_version 必须为 1");
+    }
+    if inventory.catalog_revision.trim().is_empty() || inventory.catalog_revision == "absent" {
+        return invalid("classification inventory 需要现有 topics.yml revision");
+    }
+    if inventory.book_count == 0 || inventory.book_count != inventory.books.len() {
+        return invalid("classification inventory.book_count 必须与非空 books 一致");
+    }
+    validate_agent_topics(&inventory.topics, 1)?;
+    let mut rels = BTreeSet::new();
+    for book in &inventory.books {
+        if book.title.trim().is_empty() || !safe_book_rel(&book.rel) {
+            return invalid(format!(
+                "classification inventory 包含无效书籍: {}",
+                book.rel
+            ));
+        }
+        if book.current_topic_id.is_some() {
+            return invalid(format!(
+                "classification inventory 只能包含未分类书籍: {}",
+                book.rel
+            ));
+        }
+        if !rels.insert(book.rel.as_str()) {
+            return invalid(format!(
+                "classification inventory 书籍路径重复: {}",
+                book.rel
+            ));
         }
     }
     Ok(())
@@ -315,15 +502,65 @@ const TASK_TEMPLATES: &[(&str, &str)] = &[
     ),
 ];
 
+const CLASSIFY_TASK_TEMPLATES: &[(&str, &str)] = &[
+    (
+        "task.json",
+        include_str!("../templates/classify-ebook-topics/task.json"),
+    ),
+    (
+        "CLAUDE.md",
+        include_str!("../templates/classify-ebook-topics/CLAUDE.md"),
+    ),
+    (
+        ".claude/settings.json",
+        include_str!("../templates/classify-ebook-topics/settings.json"),
+    ),
+    (
+        ".claude/settings.scoped.json",
+        include_str!("../templates/classify-ebook-topics/settings.scoped.json"),
+    ),
+    (
+        "AGENTS.md",
+        include_str!("../templates/classify-ebook-topics/AGENTS.md"),
+    ),
+    (
+        "CODEX.md",
+        include_str!("../templates/classify-ebook-topics/CODEX.md"),
+    ),
+    (
+        "policy.json",
+        include_str!("../templates/classify-ebook-topics/policy.json"),
+    ),
+];
+
 pub fn task_dir(vault: &Path) -> PathBuf {
     vault.join(".notemd/agent-tasks").join(TASK_ID)
 }
 
+pub fn classification_task_dir(vault: &Path) -> PathBuf {
+    vault.join(".notemd/agent-tasks").join(CLASSIFY_TASK_ID)
+}
+
 /// 首次创建默认任务。任何已存在的文件都视为用户维护版本，不覆盖。
 pub fn seed_task_templates(vault: &Path) -> std::io::Result<Vec<String>> {
-    let root = task_dir(vault);
     let mut written = Vec::new();
-    for (relative, body) in TASK_TEMPLATES {
+    seed_task_group(&task_dir(vault), TASK_ID, TASK_TEMPLATES, &mut written)?;
+    seed_task_group(
+        &classification_task_dir(vault),
+        CLASSIFY_TASK_ID,
+        CLASSIFY_TASK_TEMPLATES,
+        &mut written,
+    )?;
+    Ok(written)
+}
+
+fn seed_task_group(
+    root: &Path,
+    task_id: &str,
+    templates: &[(&str, &str)],
+    written: &mut Vec<String>,
+) -> std::io::Result<()> {
+    for (relative, body) in templates {
         let path = root.join(relative);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -339,13 +576,13 @@ pub fn seed_task_templates(vault: &Path) -> std::io::Result<Vec<String>> {
                     let _ = std::fs::remove_file(&path);
                     return Err(error);
                 }
-                written.push(format!("{TASK_ID}/{relative}"));
+                written.push(format!("{task_id}/{relative}"));
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
         }
     }
-    Ok(written)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -354,7 +591,8 @@ mod tests {
 
     fn inventory() -> Inventory {
         Inventory {
-            schema_version: 1,
+            schema_version: 2,
+            book_count: 2,
             books: vec![
                 InventoryBook {
                     rel: "2026-08/Seven Powers".into(),
@@ -364,6 +602,7 @@ mod tests {
                     language: Some("en".into()),
                     added_at: Some("2026-08-27T06:40:15Z".into()),
                     current_topic_id: None,
+                    evidence: crate::topics::BookEvidence::default(),
                 },
                 InventoryBook {
                     rel: "2026-09/Designing Data-Intensive Applications".into(),
@@ -373,6 +612,7 @@ mod tests {
                     language: Some("en".into()),
                     added_at: Some("2026-09-01T08:12:03Z".into()),
                     current_topic_id: None,
+                    evidence: crate::topics::BookEvidence::default(),
                 },
             ],
         }
@@ -408,6 +648,25 @@ assignments:
     topic_id: software-engineering
 "#,
             inventory_sha256(inventory_yaml)
+        )
+    }
+
+    fn classification_inventory() -> ClassificationInventory {
+        let bytes = inventory_yaml(&inventory()).unwrap();
+        let designed = parse_and_validate_proposal(&proposal(&bytes), &bytes).unwrap();
+        ClassificationInventory {
+            schema_version: 1,
+            catalog_revision: "sha256:catalog".into(),
+            book_count: 2,
+            topics: designed.topics,
+            books: inventory().books,
+        }
+    }
+
+    fn classification_proposal(inventory_bytes: &[u8]) -> String {
+        format!(
+            "schema_version: 1\ninventory_sha256: {}\ncatalog_revision: sha256:catalog\nassignments:\n  - book: 2026-08/Seven Powers\n    topic_id: business-strategy\n  - book: 2026-09/Designing Data-Intensive Applications\n    topic_id: software-engineering\n",
+            inventory_sha256(inventory_bytes)
         )
     }
 
@@ -555,7 +814,7 @@ assignments:
     fn seeds_all_harness_assets_create_only() {
         let vault = tempfile::tempdir().unwrap();
         let written = seed_task_templates(vault.path()).unwrap();
-        assert_eq!(written.len(), 7);
+        assert_eq!(written.len(), 14);
         let task = task_dir(vault.path());
         for rel in [
             "task.json",
@@ -568,11 +827,100 @@ assignments:
         ] {
             assert!(task.join(rel).is_file(), "missing {rel}");
         }
+        let classify = classification_task_dir(vault.path());
+        for rel in [
+            "task.json",
+            "CLAUDE.md",
+            ".claude/settings.json",
+            ".claude/settings.scoped.json",
+            "AGENTS.md",
+            "CODEX.md",
+            "policy.json",
+        ] {
+            assert!(classify.join(rel).is_file(), "missing classification {rel}");
+        }
         std::fs::write(task.join("AGENTS.md"), "custom").unwrap();
         assert!(seed_task_templates(vault.path()).unwrap().is_empty());
         assert_eq!(
             std::fs::read_to_string(task.join("AGENTS.md")).unwrap(),
             "custom"
+        );
+    }
+
+    #[test]
+    fn classification_requires_every_target_once_and_only_existing_topics() {
+        let inventory = classification_inventory();
+        let bytes = classification_inventory_yaml(&inventory).unwrap();
+        let good =
+            parse_and_validate_classification_proposal(&classification_proposal(&bytes), &bytes)
+                .unwrap();
+        assert_eq!(good.assignments.len(), 2);
+
+        let mut missing = good.clone();
+        missing.assignments.pop();
+        assert!(
+            validate_classification_proposal(&missing, &inventory, &inventory_sha256(&bytes))
+                .is_err()
+        );
+
+        let mut duplicate = good.clone();
+        duplicate.assignments.push(duplicate.assignments[0].clone());
+        assert!(validate_classification_proposal(
+            &duplicate,
+            &inventory,
+            &inventory_sha256(&bytes)
+        )
+        .is_err());
+
+        let mut unknown = good;
+        unknown.assignments[0].topic_id = "unknown".into();
+        assert!(
+            validate_classification_proposal(&unknown, &inventory, &inventory_sha256(&bytes))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_large_classification_batch_uses_the_complete_status_result() {
+        let mut inventory = classification_inventory();
+        let template = inventory.books[0].clone();
+        inventory.books = (0..100)
+            .map(|index| InventoryBook {
+                rel: format!(
+                    "2026-09/Book {index:03}-{}end",
+                    "long-classification-identity-".repeat(4)
+                ),
+                title: format!("Book {index:03}"),
+                ..template.clone()
+            })
+            .collect();
+        inventory.book_count = inventory.books.len();
+        let bytes = classification_inventory_yaml(&inventory).unwrap();
+        let proposal = ClassificationProposal {
+            schema_version: 1,
+            inventory_sha256: inventory_sha256(&bytes),
+            catalog_revision: inventory.catalog_revision.clone(),
+            assignments: inventory
+                .books
+                .iter()
+                .map(|book| Assignment {
+                    book: book.rel.clone(),
+                    topic_id: "business-strategy".into(),
+                })
+                .collect(),
+        };
+        let yaml = serde_yaml::to_string(&proposal).unwrap();
+        assert!(yaml.len() > 8 * 1024, "fixture must cross the legacy summary cap");
+        let status = serde_json::json!({
+            "record": { "result": "truncated legacy tail" },
+            "terminal_result": { "complete": true, "content": yaml },
+        });
+        assert_eq!(
+            classification_from_run_status(&status, &bytes)
+                .unwrap()
+                .assignments
+                .len(),
+            100
         );
     }
 
@@ -585,6 +933,18 @@ assignments:
         ] {
             assert!(body.contains(INVENTORY_REL));
             assert!(body.contains("2–5"));
+            assert!(body.contains("恰好一次"));
+            assert!(body.contains("不要修改"));
+            assert!(body.contains("最终响应"));
+        }
+        for body in [
+            include_str!("../templates/classify-ebook-topics/CLAUDE.md"),
+            include_str!("../templates/classify-ebook-topics/AGENTS.md"),
+            include_str!("../templates/classify-ebook-topics/CODEX.md"),
+        ] {
+            assert!(body.contains(CLASSIFY_INVENTORY_REL));
+            assert!(body.contains("EOF"));
+            assert!(body.contains("book_count"));
             assert!(body.contains("恰好一次"));
             assert!(body.contains("不要修改"));
             assert!(body.contains("最终响应"));
@@ -640,5 +1000,26 @@ assignments:
             "record": { "result": format!("```yaml\n{}\n```", proposal(&bytes)) }
         });
         assert!(proposal_from_run_status(&fenced, &bytes).is_err());
+
+        let complete = format!("# {}\n{}", "padding".repeat(1400), proposal(&bytes));
+        assert!(complete.len() > 8 * 1024);
+        let with_complete_result = serde_json::json!({
+            "record": { "result": &complete[complete.len() - 8192..] },
+            "terminal_result": { "complete": true, "content": complete },
+        });
+        assert!(proposal_from_run_status(&with_complete_result, &bytes).is_ok());
+
+        for malformed in [
+            serde_json::json!({
+                "record": { "result": proposal(&bytes) },
+                "terminal_result": { "complete": false, "content": proposal(&bytes) },
+            }),
+            serde_json::json!({
+                "record": { "result": proposal(&bytes) },
+                "terminal_result": { "complete": true },
+            }),
+        ] {
+            assert!(proposal_from_run_status(&malformed, &bytes).is_err());
+        }
     }
 }

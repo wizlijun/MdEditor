@@ -1,0 +1,5 @@
+{
+  "permission_mode": "read-only",
+  "on_permission_request": "reject",
+  "rationale": "批量分类只读取固定 inventory，并在最终响应返回 assignment proposal；插件负责校验、人工确认、meta.yml 与索引落盘。"
+}

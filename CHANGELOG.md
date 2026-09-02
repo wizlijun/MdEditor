@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Ebook Import 1.3.4 can classify every previously unclassified book as one reviewable AI batch.** The Agent reads bounded evidence from the newest AI digest, chapter headings, opening text and bibliographic metadata, suggests only existing topics, and leaves every assignment editable until one transactional confirmation updates book metadata and rebuilds all generated topic indexes.
+
+### Fixed
+
+- **Claude Agent 1.0.19, Codex Agent 1.0.5 and DeepSeek Agent 1.1.5 preserve complete terminal responses for application workflows.** Human-facing run history remains capped at an 8 KiB summary, while a separate bounded result channel prevents long YAML proposals from being parsed from a truncated tail; Codex also combines multi-message final responses, and Ebook Import retries one malformed protocol response before reporting failure.
+
 ## v6.902.2 — 2026-09-02
 
 ### Changed

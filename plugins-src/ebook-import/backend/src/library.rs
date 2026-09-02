@@ -25,7 +25,7 @@ pub struct BookEntry {
 /// out by hand rather than with a regex so the shape is obvious at the call
 /// site: `summary_name` in `airead.rs` is the only thing that makes these, and
 /// this predicate has to keep matching it.
-fn is_summary(name: &str) -> bool {
+pub(crate) fn is_summary(name: &str) -> bool {
     let Some(date) = name.strip_suffix("-summary.md") else {
         return false;
     };

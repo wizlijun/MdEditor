@@ -4,6 +4,7 @@
   import LibraryPanel from './components/LibraryPanel.svelte'
   import TopicBar from './components/TopicBar.svelte'
   import TopicManager from './components/TopicManager.svelte'
+  import TopicClassificationReview from './components/TopicClassificationReview.svelte'
   import { formatElapsed } from './lib/elapsed'
   import {
     bindAiJob,
@@ -45,6 +46,11 @@
     type QueueItem,
   } from './lib/queue'
   import type { TopicCounts, TopicDefinition } from './lib/topics'
+  import {
+    cloneClassificationProposal,
+    updateClassificationAssignment,
+    type TopicClassificationProposal,
+  } from './lib/topic-classification'
 
   setLocale(bridge().locale)
 
@@ -84,7 +90,14 @@
     proposal?: TopicProposal
     error?: string
   }
-  type HostPush = JobPush | DragPush | AiPush | TopicAgentPush | { type: string }
+  type TopicClassificationPush = {
+    type: 'topic_classification'
+    job_id: number
+    event: 'started' | 'done' | 'failed'
+    proposal?: TopicClassificationProposal
+    error?: string
+  }
+  type HostPush = JobPush | DragPush | AiPush | TopicAgentPush | TopicClassificationPush | { type: string }
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -116,8 +129,15 @@
   let selectedTopicId: string | null = $state(null)
   let topicManagerOpen = $state(false)
   let unclassifiedBooks = $state<string[]>([])
+  let unknownTopicBooks = $state<string[]>([])
+  let unsafeTopicBooks = $state<string[]>([])
   let topicAgentRunning = $state(false)
   let topicProposal: TopicProposal | null = $state(null)
+  let topicClassificationRunning = $state(false)
+  let classificationProposal: TopicClassificationProposal | null = $state(null)
+  let classificationExpectedBooks: string[] = $state([])
+  let classificationApplying = $state(false)
+  let topicOperationRunning = $derived(topicAgentRunning || topicClassificationRunning)
 
   let settingsOpen = $state(false)
   let calibreFound: { path: string; version: string } | null = $state(null)
@@ -272,6 +292,16 @@
       } else if (event.event === 'failed') {
         topicAgentRunning = false
         globalError = event.error ?? 'Topic design failed'
+      }
+    } else if (m.type === 'topic_classification') {
+      const event = m as TopicClassificationPush
+      if (event.event === 'done' && event.proposal) {
+        topicClassificationRunning = false
+        classificationProposal = cloneClassificationProposal(event.proposal)
+        classificationExpectedBooks = event.proposal.assignments.map((assignment) => assignment.book)
+      } else if (event.event === 'failed') {
+        topicClassificationRunning = false
+        globalError = event.error ?? 'Topic classification failed'
       }
     }
   })
@@ -472,10 +502,9 @@
         ),
       }
       topicCounts = state?.counts ?? {}
-      unclassifiedBooks = [
-        ...(state?.unclassified_books ?? []),
-        ...(state?.unknown_topic_books ?? []),
-      ]
+      unclassifiedBooks = state?.unclassified_books ?? []
+      unknownTopicBooks = state?.unknown_topic_books ?? []
+      unsafeTopicBooks = state?.unsafe_topic_books ?? []
       if (!topics.some((topic) => topic.id === selectedTopicId)) {
         selectedTopicId = topics[0]?.id ?? null
       }
@@ -534,6 +563,49 @@
       await Promise.all([loadTopics(), loadLibrary()])
     } catch (e) {
       globalError = message(e)
+    }
+  }
+
+  async function startTopicClassification() {
+    if (topicOperationRunning || unclassifiedBooks.length === 0 || topics.length === 0) return
+    if (!topicDesign.available) {
+      globalError = topicDesignStatus
+      return
+    }
+    topicClassificationRunning = true
+    classificationProposal = null
+    classificationExpectedBooks = []
+    globalError = ''
+    try {
+      await bridge().request('plugin.topic_classification_start', {
+        harness: topicDesign.provider.id,
+      })
+    } catch (e) {
+      topicClassificationRunning = false
+      globalError = message(e)
+    }
+  }
+
+  function reviseClassification(book: string, topicId: string) {
+    if (!classificationProposal || classificationApplying) return
+    classificationProposal = updateClassificationAssignment(classificationProposal, book, topicId)
+  }
+
+  async function applyTopicClassification() {
+    if (!classificationProposal || classificationApplying) return
+    classificationApplying = true
+    globalError = ''
+    try {
+      await bridge().request('plugin.topic_classification_apply', {
+        proposal: classificationProposal,
+      })
+      classificationProposal = null
+      classificationExpectedBooks = []
+      await Promise.all([loadTopics(), loadLibrary()])
+    } catch (e) {
+      globalError = message(e)
+    } finally {
+      classificationApplying = false
     }
   }
 
@@ -762,16 +834,26 @@
     <button
       class="secondary"
       onclick={startTopicDesign}
-      disabled={topicAgentRunning || library.length === 0 || !topicDesign.available}
+      disabled={topicOperationRunning || library.length === 0 || !topicDesign.available}
       title={topicDesignStatus}
     >
       {topicAgentRunning ? t('topic.agentRunning') : t('topic.agentDesign')}
+    </button>
+    <button
+      class="secondary"
+      onclick={startTopicClassification}
+      disabled={topicOperationRunning || topics.length === 0 || unclassifiedBooks.length === 0 || !topicDesign.available}
+      title={topicDesignStatus}
+    >
+      {topicClassificationRunning
+        ? t('topic.agentClassifying')
+        : t('topic.agentClassify', { count: unclassifiedBooks.length })}
     </button>
     {#if topicAgents.length}
       <AgentPicker
         options={topicAgents}
         selected={topicAgentId ?? null}
-        disabled={topicAgentRunning}
+        disabled={topicOperationRunning}
         onselect={pickTopicAgent}
         label={t as (k: string, v?: Record<string, string | number>) => string}
       />
@@ -783,8 +865,11 @@
     >
       {topicDesignStatus}
     </span>
-    {#if unclassifiedBooks.length > 0}
-      <span class="topic-warning">{t('topic.unclassifiedCount', { count: unclassifiedBooks.length })}</span>
+    {#if unclassifiedBooks.length + unknownTopicBooks.length > 0}
+      <span class="topic-warning">{t('topic.unclassifiedCount', { count: unclassifiedBooks.length + unknownTopicBooks.length })}</span>
+    {/if}
+    {#if unsafeTopicBooks.length > 0}
+      <span class="topic-warning">{t('topic.unsafeBookCount', { count: unsafeTopicBooks.length })}</span>
     {/if}
   </div>
 
@@ -934,6 +1019,24 @@
     onsave={saveTopics}
     onclose={() => (topicManagerOpen = false)}
   />
+
+  {#if classificationProposal}
+    <TopicClassificationReview
+      proposal={classificationProposal}
+      expectedBooks={classificationExpectedBooks}
+      books={library}
+      {topics}
+      applying={classificationApplying}
+      onchange={reviseClassification}
+      onapply={applyTopicClassification}
+      oncancel={() => {
+        if (!classificationApplying) {
+          classificationProposal = null
+          classificationExpectedBooks = []
+        }
+      }}
+    />
+  {/if}
 
   {#if topicProposal}
     <div class="proposal-backdrop">

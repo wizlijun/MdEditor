@@ -14,6 +14,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Write;
+use std::io::{Read, Take};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
@@ -105,6 +106,24 @@ pub struct ScannedBook {
     pub added_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic_id: Option<String>,
+}
+
+/// Bounded, untrusted evidence supplied to the classification Agent. Source
+/// paths are intentionally reduced to a format suffix so local absolute paths
+/// from `sources[].resource` never leave the book file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BookEvidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_summary_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_excerpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening_excerpt: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -386,7 +405,16 @@ pub fn scan_books(ebooks_root: &Path) -> Result<Vec<ScannedBook>, String> {
                 continue;
             }
             let dir_name = entry.file_name().to_string_lossy().to_string();
-            let (title, creator, publisher, language) = read_book_frontmatter(&book_path)
+            let frontmatter = read_book_frontmatter(&book_path);
+            let (title, creator, publisher, language) = frontmatter
+                .map(|frontmatter| {
+                    (
+                        frontmatter.title,
+                        frontmatter.creator,
+                        frontmatter.publisher,
+                        frontmatter.language,
+                    )
+                })
                 .unwrap_or_else(|| (dir_name.clone(), None, None, None));
             let meta = read_yaml_mapping(&meta_path)?;
             let added_at = optional_string(&meta, "added_at", &meta_path)?;
@@ -416,10 +444,35 @@ fn optional_string(mapping: &Mapping, key: &str, path: &Path) -> Result<Option<S
         .ok_or_else(|| format!("{}: {key} must be a string", path.display()))
 }
 
-fn read_book_frontmatter(
-    path: &Path,
-) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
-    let text = std::fs::read_to_string(path).ok()?;
+#[derive(Debug, PartialEq, Eq)]
+struct BookFrontmatter {
+    title: String,
+    creator: Option<String>,
+    publisher: Option<String>,
+    language: Option<String>,
+    source_format: Option<String>,
+}
+
+const FRONTMATTER_READ_LIMIT: u64 = 64 * 1024;
+const BOOK_CONTEXT_READ_LIMIT: u64 = 256 * 1024;
+const SUMMARY_READ_LIMIT: u64 = 32 * 1024;
+
+fn read_prefix(path: &Path, limit: u64) -> Result<String, String> {
+    if !crate::library::is_regular_file(path) {
+        return Err(format!("refusing non-regular file {}", path.display()));
+    }
+    let file =
+        std::fs::File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
+    let mut bytes = Vec::new();
+    let mut reader: Take<std::fs::File> = file.take(limit);
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn read_book_frontmatter(path: &Path) -> Option<BookFrontmatter> {
+    let text = read_prefix(path, FRONTMATTER_READ_LIMIT).ok()?;
     let body = text.strip_prefix("---\n")?;
     let end = body.find("\n---")?;
     let value: Value = serde_yaml::from_str(&body[..end]).ok()?;
@@ -448,7 +501,134 @@ fn read_book_frontmatter(
         .get(Value::String("language".to_string()))
         .and_then(Value::as_str)
         .map(str::to_string);
-    Some((title, creator, publisher, language))
+    let source_format = map
+        .get(Value::String("sources".to_string()))
+        .and_then(Value::as_sequence)
+        .and_then(|sources| sources.first())
+        .and_then(Value::as_mapping)
+        .and_then(|source| source.get(Value::String("resource".to_string())))
+        .and_then(Value::as_str)
+        .and_then(|resource| Path::new(resource).extension())
+        .and_then(OsStr::to_str)
+        .map(|extension| extension.to_ascii_lowercase());
+    Some(BookFrontmatter {
+        title: trim_utf8(&title, 512),
+        creator: creator.map(|value| trim_utf8(&value, 256)),
+        publisher: publisher.map(|value| trim_utf8(&value, 256)),
+        language: language.map(|value| trim_utf8(&value, 64)),
+        source_format: source_format.map(|value| trim_utf8(&value, 24)),
+    })
+}
+
+fn trim_utf8(value: &str, limit: usize) -> String {
+    if value.len() <= limit {
+        return value.to_string();
+    }
+    let mut end = limit;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].trim_end().to_string()
+}
+
+fn markdown_body(text: &str) -> &str {
+    let Some(body) = text.strip_prefix("---\n") else {
+        return text;
+    };
+    let Some(end) = body.find("\n---") else {
+        return text;
+    };
+    body[end + 4..].trim_start_matches(['\r', '\n'])
+}
+
+fn prose_excerpt(text: &str, limit: usize) -> Option<String> {
+    let mut out = String::new();
+    let mut in_fence = false;
+    for raw in markdown_body(text).lines() {
+        let line = raw.trim();
+        if line.starts_with("```") || line.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence
+            || line.is_empty()
+            || line.starts_with('#')
+            || line.starts_with("![")
+            || line == GENERATED_MARKER
+        {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(line);
+        if out.len() >= limit {
+            break;
+        }
+    }
+    let out = trim_utf8(&out, limit);
+    (!out.is_empty()).then_some(out)
+}
+
+fn markdown_headings(text: &str) -> Vec<String> {
+    let mut headings = Vec::new();
+    let mut bytes = 0usize;
+    for line in markdown_body(text).lines() {
+        let line = line.trim_start();
+        let Some(title) = line
+            .strip_prefix('#')
+            .map(|title| title.trim_start_matches('#').trim())
+        else {
+            continue;
+        };
+        if title.is_empty() {
+            continue;
+        }
+        let title = trim_utf8(title, 120);
+        if bytes + title.len() > 900 || headings.len() >= 12 {
+            break;
+        }
+        bytes += title.len();
+        headings.push(title);
+    }
+    headings
+}
+
+/// Read the newest AI summary plus the beginning and heading structure of one
+/// verified book. Every source is regular-file checked and byte bounded.
+pub fn read_book_evidence(ebooks_root: &Path, rel: &str) -> Result<BookEvidence, String> {
+    let meta = existing_book_meta(ebooks_root, rel)?;
+    let dir = meta
+        .parent()
+        .ok_or_else(|| format!("book metadata has no parent: {}", meta.display()))?;
+    let book_path = dir.join("book.md");
+    let book_text = read_prefix(&book_path, BOOK_CONTEXT_READ_LIMIT)?;
+    let source_format =
+        read_book_frontmatter(&book_path).and_then(|frontmatter| frontmatter.source_format);
+
+    let mut summaries: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|error| format!("read {}: {error}", dir.display()))?
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| crate::library::is_summary(&entry.file_name().to_string_lossy()))
+        .collect();
+    summaries.sort_by_key(|entry| entry.file_name());
+    let (latest_summary_file, summary_excerpt) = match summaries.last() {
+        Some(entry) => {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let text = read_prefix(&entry.path(), SUMMARY_READ_LIMIT)?;
+            (Some(name), prose_excerpt(&text, 1600))
+        }
+        None => (None, None),
+    };
+
+    Ok(BookEvidence {
+        source_format,
+        headings: markdown_headings(&book_text),
+        latest_summary_file,
+        summary_excerpt,
+        opening_excerpt: prose_excerpt(&book_text, 1000),
+    })
 }
 
 fn parsed_added_at(book: &ScannedBook) -> Option<DateTime<Utc>> {
@@ -862,13 +1042,85 @@ mod tests {
         .unwrap();
         assert_eq!(
             read_book_frontmatter(&path),
-            Some((
-                "DDIA".into(),
-                Some("Martin Kleppmann".into()),
-                Some("O'Reilly".into()),
-                Some("en".into()),
-            ))
+            Some(BookFrontmatter {
+                title: "DDIA".into(),
+                creator: Some("Martin Kleppmann".into()),
+                publisher: Some("O'Reilly".into()),
+                language: Some("en".into()),
+                source_format: None,
+            })
         );
+    }
+
+    #[test]
+    fn book_evidence_prefers_latest_summary_and_never_exposes_source_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("2026-09/Example");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("book.md"),
+            concat!(
+                "---\n",
+                "type: Book\n",
+                "title: Example\n",
+                "sources:\n",
+                "  - resource: /Users/private/secret.epub\n",
+                "---\n",
+                "# First chapter\n",
+                "Opening evidence about distributed systems.\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("meta.yml"), "added_at: 2026-09-01T00:00:00Z\n").unwrap();
+        std::fs::write(dir.join("2026-09-01-summary.md"), "old summary").unwrap();
+        std::fs::write(
+            dir.join("2026-09-02-summary.md"),
+            "---\ntype: Book Summary\n---\nnewest summary evidence",
+        )
+        .unwrap();
+
+        let evidence = read_book_evidence(tmp.path(), "2026-09/Example").unwrap();
+        assert_eq!(evidence.source_format.as_deref(), Some("epub"));
+        assert_eq!(
+            evidence.latest_summary_file.as_deref(),
+            Some("2026-09-02-summary.md")
+        );
+        assert_eq!(
+            evidence.summary_excerpt.as_deref(),
+            Some("newest summary evidence")
+        );
+        assert_eq!(evidence.headings, ["First chapter"]);
+        assert!(evidence
+            .opening_excerpt
+            .as_deref()
+            .unwrap()
+            .contains("distributed systems"));
+        let serialized = serde_yaml::to_string(&evidence).unwrap();
+        assert!(!serialized.contains("/Users/private"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn book_evidence_ignores_a_symlinked_newer_summary() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("2026-09/Example");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("book.md"), "# Book\nbody").unwrap();
+        std::fs::write(dir.join("meta.yml"), "added_at: 2026-09-01T00:00:00Z\n").unwrap();
+        std::fs::write(dir.join("2026-09-01-summary.md"), "inside").unwrap();
+        let external = outside.path().join("secret.md");
+        std::fs::write(&external, "outside secret").unwrap();
+        symlink(&external, dir.join("2026-09-02-summary.md")).unwrap();
+
+        let evidence = read_book_evidence(tmp.path(), "2026-09/Example").unwrap();
+        assert_eq!(
+            evidence.latest_summary_file.as_deref(),
+            Some("2026-09-01-summary.md")
+        );
+        assert_eq!(evidence.summary_excerpt.as_deref(), Some("inside"));
     }
 
     fn write_book(

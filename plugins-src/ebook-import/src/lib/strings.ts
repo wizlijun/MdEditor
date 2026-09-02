@@ -109,12 +109,21 @@ export type MessageKey =
   | 'topic.agentProviderMissing'
   | 'topic.agentProviderUnavailable'
   | 'topic.unclassifiedCount'
+  | 'topic.unsafeBookCount'
   | 'topic.chooseForBook'
   | 'topic.choose'
   | 'topic.proposalTitle'
   | 'topic.proposalHint'
   | 'topic.assignmentCount'
   | 'topic.applyProposal'
+  | 'topic.agentClassify'
+  | 'topic.agentClassifying'
+  | 'topic.classificationTitle'
+  | 'topic.classificationHint'
+  | 'topic.classificationAssigned'
+  | 'topic.classificationInvalid'
+  | 'topic.classificationApplying'
+  | 'topic.classificationConfirm'
   | 'topic.filter'
   | 'topic.all'
   | 'topic.unclassified'
@@ -260,12 +269,21 @@ const en: Catalog = {
   'topic.agentProviderMissing': 'Unavailable: install Claude, Codex, or DeepSeek Agent.',
   'topic.agentProviderUnavailable': 'Unavailable: the selected Agent is not ready.',
   'topic.unclassifiedCount': '{count} existing books need a topic',
+  'topic.unsafeBookCount': '{count} books have unsafe path names; rename them before AI classification',
   'topic.chooseForBook': 'Choose a topic for {name}',
   'topic.choose': 'Choose a topic…',
   'topic.proposalTitle': 'AI topic proposal',
   'topic.proposalHint': 'Review the proposed topics and book assignments before applying them.',
   'topic.assignmentCount': '{count} assigned books',
   'topic.applyProposal': 'Apply proposal',
+  'topic.agentClassify': 'AI classify {count} books',
+  'topic.agentClassifying': 'AI is classifying…',
+  'topic.classificationTitle': 'Review AI book classifications',
+  'topic.classificationHint': 'AI suggestions are not applied yet. Correct any book below, then confirm once.',
+  'topic.classificationAssigned': '{count} books have a topic suggestion',
+  'topic.classificationInvalid': 'The proposal is incomplete or refers to an unavailable topic.',
+  'topic.classificationApplying': 'Applying and rebuilding indexes…',
+  'topic.classificationConfirm': 'Confirm and apply {count} books',
   'topic.filter': 'Filter library by topic',
   'topic.all': 'All topics',
   'topic.unclassified': 'Unclassified',
@@ -408,12 +426,21 @@ const zh: Catalog = {
   'topic.agentProviderMissing': '不可用：请安装 Claude、Codex 或 DeepSeek Agent。',
   'topic.agentProviderUnavailable': '不可用：所选 Agent 当前未就绪。',
   'topic.unclassifiedCount': '有 {count} 本旧书尚未分类',
+  'topic.unsafeBookCount': '有 {count} 本书的路径名称不安全，重命名后才能由 AI 分类',
   'topic.chooseForBook': '为《{name}》选择主题',
   'topic.choose': '选择主题…',
   'topic.proposalTitle': 'AI 主题方案',
   'topic.proposalHint': '应用前请确认主题以及每个主题包含的书籍数量。',
   'topic.assignmentCount': '归入 {count} 本',
   'topic.applyProposal': '应用方案',
+  'topic.agentClassify': 'AI 批量分类 {count} 本',
+  'topic.agentClassifying': 'AI 正在批量分类…',
+  'topic.classificationTitle': '确认 AI 书籍分类',
+  'topic.classificationHint': 'AI 建议尚未写入。可逐本修正主题，最后一次确认应用。',
+  'topic.classificationAssigned': '已为 {count} 本书生成主题建议',
+  'topic.classificationInvalid': '分类方案不完整，或引用了当前不存在的主题。',
+  'topic.classificationApplying': '正在应用并重建索引…',
+  'topic.classificationConfirm': '确认并应用 {count} 本',
   'topic.filter': '按主题筛选书库',
   'topic.all': '全部主题',
   'topic.unclassified': '未分类',
@@ -558,12 +585,21 @@ const ja: Catalog = {
   'topic.agentProviderMissing': '利用不可：Claude、Codex、または DeepSeek Agent をインストールしてください。',
   'topic.agentProviderUnavailable': '利用不可：選択した Agent は現在使用できません。',
   'topic.unclassifiedCount': '既存の {count} 冊が未分類です',
+  'topic.unsafeBookCount': '{count}冊のパス名が安全ではありません。AI分類の前に名前を変更してください',
   'topic.chooseForBook': '「{name}」のテーマを選択',
   'topic.choose': 'テーマを選択…',
   'topic.proposalTitle': 'AIテーマ案',
   'topic.proposalHint': '適用前にテーマと本の割り当てを確認してください。',
   'topic.assignmentCount': '{count} 冊を割り当て',
   'topic.applyProposal': '案を適用',
+  'topic.agentClassify': 'AIで{count}冊を一括分類',
+  'topic.agentClassifying': 'AIが一括分類中…',
+  'topic.classificationTitle': 'AIの書籍分類を確認',
+  'topic.classificationHint': 'AIの提案はまだ保存されていません。本ごとに修正してから一度だけ確定します。',
+  'topic.classificationAssigned': '{count}冊にテーマ候補があります',
+  'topic.classificationInvalid': '提案が不完全か、利用できないテーマを参照しています。',
+  'topic.classificationApplying': '適用して索引を再構築中…',
+  'topic.classificationConfirm': '{count}冊を確定して適用',
   'topic.filter': 'テーマで蔵書を絞り込む',
   'topic.all': 'すべてのテーマ',
   'topic.unclassified': '未分類',
@@ -708,12 +744,21 @@ const de: Catalog = {
   'topic.agentProviderMissing': 'Nicht verfügbar: Claude, Codex oder DeepSeek Agent installieren.',
   'topic.agentProviderUnavailable': 'Nicht verfügbar: Der ausgewählte Agent ist nicht bereit.',
   'topic.unclassifiedCount': '{count} vorhandene Bücher sind nicht klassifiziert',
+  'topic.unsafeBookCount': '{count} Bücher haben unsichere Pfadnamen; vor der KI-Klassifizierung umbenennen',
   'topic.chooseForBook': 'Thema für „{name}“ auswählen',
   'topic.choose': 'Thema auswählen…',
   'topic.proposalTitle': 'KI-Themenvorschlag',
   'topic.proposalHint': 'Bitte Themen und Buchzuordnungen vor dem Anwenden prüfen.',
   'topic.assignmentCount': '{count} Bücher zugeordnet',
   'topic.applyProposal': 'Vorschlag anwenden',
+  'topic.agentClassify': '{count} Bücher mit KI klassifizieren',
+  'topic.agentClassifying': 'KI klassifiziert…',
+  'topic.classificationTitle': 'KI-Buchklassifizierung prüfen',
+  'topic.classificationHint': 'Die Vorschläge sind noch nicht gespeichert. Bücher korrigieren und anschließend einmal bestätigen.',
+  'topic.classificationAssigned': '{count} Bücher haben einen Themenvorschlag',
+  'topic.classificationInvalid': 'Der Vorschlag ist unvollständig oder verweist auf ein nicht verfügbares Thema.',
+  'topic.classificationApplying': 'Wird angewendet und Indizes werden neu erstellt…',
+  'topic.classificationConfirm': '{count} Bücher bestätigen und anwenden',
   'topic.filter': 'Bibliothek nach Thema filtern',
   'topic.all': 'Alle Themen',
   'topic.unclassified': 'Nicht klassifiziert',

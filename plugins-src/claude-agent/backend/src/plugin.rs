@@ -672,10 +672,18 @@ impl ClaudeAgentPlugin {
             .ok_or("run-status needs a 'run_id'")?;
         // Same fence as `start`: this id is joined onto the runs root.
         check_task_id(task_id)?;
+        check_run_id(run_id)?;
         let run_dir = task::runs_root(&vault).join(task_id);
 
         if let Some(rec) = record::find(&run_dir, run_id) {
-            return Ok(json!({ "state": "done", "record": rec }));
+            let terminal_result = record::read_terminal_result(&run_dir, run_id)
+                .map_err(|error| format!("read complete terminal result: {error}"))?
+                .map(|content| json!({ "content": content, "complete": true }));
+            return Ok(json!({
+                "state": "done",
+                "record": rec,
+                "terminal_result": terminal_result,
+            }));
         }
         if let Some(h) = lock::current_for_run(&run_dir, run_id) {
             let p = record::read_progress_for(&run_dir, run_id);
@@ -796,6 +804,18 @@ fn cli_flag(context: &Value, key: &str) -> bool {
         }
     }
     false
+}
+
+fn check_run_id(id: &str) -> Result<(), String> {
+    if !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        Ok(())
+    } else {
+        Err(format!("invalid run id '{id}'"))
+    }
 }
 
 #[cfg(test)]
@@ -1236,6 +1256,7 @@ mod tests {
         assert_eq!(running["last"], "Read a.note.md");
 
         // Once the record lands it wins, lock or no lock.
+        record::write_terminal_result(&run_dir, "R1", "complete machine result").unwrap();
         record::write(
             &run_dir,
             &record::RunRecord {
@@ -1258,6 +1279,8 @@ mod tests {
         let done = p.run_status(&ctx).unwrap();
         assert_eq!(done["state"], "done");
         assert_eq!(done["record"]["result"], "answered 2");
+        assert_eq!(done["terminal_result"]["complete"], true);
+        assert_eq!(done["terminal_result"]["content"], "complete machine result");
         assert_eq!(done["record"]["artifacts"][0], "answers/a.md");
     }
 

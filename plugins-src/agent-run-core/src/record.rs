@@ -6,7 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const RESULT_LIMIT: usize = 8 * 1024;
+/// Machine consumers can need the complete terminal response even though the
+/// human-facing run record deliberately keeps only an 8 KiB tail. Persist that
+/// response separately, with a hard cap and no silent truncation.
+pub const TERMINAL_RESULT_LIMIT: usize = 1024 * 1024;
 pub const STDERR_LIMIT: usize = 2 * 1024;
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,6 +120,72 @@ pub fn log_path(task_run_dir: &Path, run_id: &str) -> PathBuf {
     runs_dir(task_run_dir).join(format!("{run_id}.log"))
 }
 
+fn terminal_result_path(task_run_dir: &Path, run_id: &str) -> PathBuf {
+    runs_dir(task_run_dir).join(format!("{run_id}.result"))
+}
+
+/// Persist the exact terminal response. Oversized results fail closed rather
+/// than keeping a prefix/tail that could look like a complete machine payload.
+pub fn write_terminal_result(
+    task_run_dir: &Path,
+    run_id: &str,
+    content: &str,
+) -> std::io::Result<()> {
+    if content.len() > TERMINAL_RESULT_LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "terminal result is {} bytes; limit is {TERMINAL_RESULT_LIMIT}",
+                content.len()
+            ),
+        ));
+    }
+    let dir = runs_dir(task_run_dir);
+    std::fs::create_dir_all(&dir)?;
+    let path = terminal_result_path(task_run_dir, run_id);
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temp = dir.join(format!(
+        ".{run_id}.result.{}.{}.tmp",
+        std::process::id(),
+        sequence
+    ));
+    let result = (|| {
+        std::fs::write(&temp, content.as_bytes())?;
+        std::fs::rename(&temp, &path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+/// Read an exact terminal response without trusting a hand-edited/symlinked
+/// sidecar or allocating an unbounded file.
+pub fn read_terminal_result(task_run_dir: &Path, run_id: &str) -> std::io::Result<Option<String>> {
+    let path = terminal_result_path(task_run_dir, run_id);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("terminal result is not a regular file: {}", path.display()),
+        ));
+    }
+    if metadata.len() > TERMINAL_RESULT_LIMIT as u64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "terminal result is {} bytes; limit is {TERMINAL_RESULT_LIMIT}",
+                metadata.len()
+            ),
+        ));
+    }
+    std::fs::read_to_string(path).map(Some)
+}
+
 /// Append one line to a run's log, stopping once it hits the cap.
 pub fn append_log(task_run_dir: &Path, run_id: &str, line: &str) {
     let p = log_path(task_run_dir, run_id);
@@ -136,11 +207,12 @@ pub fn read_log(task_run_dir: &Path, run_id: &str) -> Option<String> {
     std::fs::read_to_string(log_path(task_run_dir, run_id)).ok()
 }
 
-/// Forget one run entirely: its record and its log.
+/// Forget one run entirely: its record, log and complete terminal response.
 pub fn delete(task_run_dir: &Path, run_id: &str) -> bool {
     let rec = runs_dir(task_run_dir).join(format!("{run_id}.json"));
     let gone = std::fs::remove_file(&rec).is_ok();
     let _ = std::fs::remove_file(log_path(task_run_dir, run_id));
+    let _ = std::fs::remove_file(terminal_result_path(task_run_dir, run_id));
     gone
 }
 
@@ -153,7 +225,7 @@ pub fn clear(task_run_dir: &Path) -> usize {
     for e in rd.flatten() {
         let p = e.path();
         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext == "json" || ext == "log" {
+        if ext == "json" || ext == "log" || ext == "result" {
             if std::fs::remove_file(&p).is_ok() && ext == "json" {
                 n += 1;
             }
@@ -335,6 +407,46 @@ mod tests {
         assert!(got.len() <= 7);
         assert!(s.ends_with(&got));
         assert_eq!(got, "问题");
+    }
+
+    #[test]
+    fn terminal_result_round_trips_beyond_the_record_summary_limit() {
+        let d = tempfile::tempdir().unwrap();
+        let content = format!("开{}终", "x".repeat(RESULT_LIMIT * 2));
+        write_terminal_result(d.path(), "run-1", &content).unwrap();
+        assert_eq!(
+            read_terminal_result(d.path(), "run-1").unwrap().as_deref(),
+            Some(content.as_str())
+        );
+    }
+
+    #[test]
+    fn terminal_result_never_silently_truncates_or_reads_oversized_data() {
+        let d = tempfile::tempdir().unwrap();
+        let oversized = "x".repeat(TERMINAL_RESULT_LIMIT + 1);
+        assert!(write_terminal_result(d.path(), "too-large", &oversized).is_err());
+        assert!(!terminal_result_path(d.path(), "too-large").exists());
+
+        std::fs::create_dir_all(runs_dir(d.path())).unwrap();
+        std::fs::write(terminal_result_path(d.path(), "tampered"), oversized).unwrap();
+        assert!(read_terminal_result(d.path(), "tampered").is_err());
+    }
+
+    #[test]
+    fn deleting_and_clearing_runs_also_remove_terminal_results() {
+        let d = tempfile::tempdir().unwrap();
+        write(d.path(), &rec("one")).unwrap();
+        write_terminal_result(d.path(), "one", "full one").unwrap();
+        assert!(delete(d.path(), "one"));
+        assert!(read_terminal_result(d.path(), "one").unwrap().is_none());
+
+        for id in ["two", "three"] {
+            write(d.path(), &rec(id)).unwrap();
+            write_terminal_result(d.path(), id, "full").unwrap();
+        }
+        assert_eq!(clear(d.path()), 2);
+        assert!(read_terminal_result(d.path(), "two").unwrap().is_none());
+        assert!(read_terminal_result(d.path(), "three").unwrap().is_none());
     }
 
     #[test]

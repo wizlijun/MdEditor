@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(${NOTE})",
+      "Read(${VAULT}/.notemd/ebook-import/topic-classification/inventory.yml)"
+    ],
+    "deny": [
+      "Bash",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit"
+    ]
+  }
+}

@@ -684,7 +684,14 @@ impl CodexAgentPlugin {
         let run_dir = task::runs_root(&vault).join(task_id);
 
         if let Some(rec) = record::find(&run_dir, run_id) {
-            return Ok(json!({ "state": "done", "record": rec }));
+            let terminal_result = record::read_terminal_result(&run_dir, run_id)
+                .map_err(|error| format!("read complete terminal result: {error}"))?
+                .map(|content| json!({ "content": content, "complete": true }));
+            return Ok(json!({
+                "state": "done",
+                "record": rec,
+                "terminal_result": terminal_result,
+            }));
         }
         if let Some(h) = lock::current_for_run(&run_dir, run_id) {
             let p = record::read_progress_for(&run_dir, run_id);
@@ -1086,6 +1093,7 @@ mod tests {
         assert_eq!(running["steps"], 3);
         assert_eq!(running["last"], "答到第三段");
 
+        record::write_terminal_result(&run_dir, "R1", "完整机器结果").unwrap();
         record::write(
             &run_dir,
             &record::RunRecord {
@@ -1109,6 +1117,8 @@ mod tests {
         assert_eq!(done["state"], "done");
         assert_eq!(done["record"]["result"], "答了 2 个");
         assert_eq!(done["record"]["session_id"], "codex-1");
+        assert_eq!(done["terminal_result"]["complete"], true);
+        assert_eq!(done["terminal_result"]["content"], "完整机器结果");
     }
 
     #[test]

@@ -377,7 +377,12 @@ fn finish(
     } else {
         stderr_tail
     };
-    record::RunRecord {
+    let persistence_error = result.as_ref().and_then(|result| {
+        record::write_terminal_result(&spec.task_run_dir, &spec.run_id, &result.result)
+            .err()
+            .map(|error| format!("persist complete terminal result: {error}"))
+    });
+    let mut rec = record::RunRecord {
         run_id: spec.run_id.clone(),
         task: spec.task.id.clone(),
         trigger: spec.trigger.clone(),
@@ -394,7 +399,12 @@ fn finish(
         stderr_tail,
         artifacts,
         harness: Some(spec.harness.clone()),
+    };
+    if let Some(error) = persistence_error {
+        rec.status = record::Status::Error;
+        rec.stderr_tail = record::tail(&error, record::STDERR_LIMIT);
     }
+    rec
 }
 
 #[cfg(test)]
