@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.902.2 — 2026-09-02
+
 ### Changed
 
 - **The Plugin Market now shows the running note.md version and restart guidance below its subtitle.** After installing or updating a plugin, users are reminded to quit and reopen note.md so startup-loaded integrations take effect consistently.
