@@ -7,9 +7,15 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **The Plugin Market now shows the running note.md version and restart guidance below its subtitle.** After installing or updating a plugin, users are reminded to quit and reopen note.md so startup-loaded integrations take effect consistently.
+
 ### Fixed
 
 - **Ebook Import 1.3.3 restores the Agent picker for AI topic design.** Topic design now remembers its own Claude, Codex, or DeepSeek choice independently from AI book reading, while the UI states whether the selected Agent is restricted to the inventory file or may read the Vault under a read-only task policy.
+- **Plugin Market refresh now retrieves the current online catalog instead of accepting a cached index.** A user-initiated refresh carries a unique request URL and explicit no-cache policy, while startup still presents installed plugins from local cache first.
+- **The native Plugins menu now matches the Plugin Market's current category layout.** AI appears first; Memory and the Claude, Codex, and DeepSeek Agents are grouped under AI, while Next and OpenClaw Chat remain under Move Forward.
 
 ## v6.902.1 — 2026-09-02
 
