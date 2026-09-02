@@ -267,7 +267,7 @@ fn safe_index_file(file: &str) -> bool {
         && lower != "log.md"
 }
 
-fn safe_book_rel(rel: &str) -> bool {
+pub(crate) fn safe_book_rel(rel: &str) -> bool {
     if rel.trim().is_empty()
         || rel != rel.trim()
         || rel.contains('\\')
@@ -419,6 +419,14 @@ assignments:
         assert_eq!(first, second);
         assert_eq!(inventory_sha256(&first).len(), 64);
         assert_ne!(inventory_sha256(&first), inventory_sha256(b"changed"));
+    }
+
+    #[test]
+    fn rejects_an_unsafe_path_in_a_handcrafted_inventory() {
+        let mut inv = inventory();
+        inv.books[0].rel.push(' ');
+        let error = inventory_yaml(&inv).unwrap_err().to_string();
+        assert!(error.contains("不安全的书籍路径"), "{error}");
     }
 
     #[test]

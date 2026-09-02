@@ -505,6 +505,7 @@ fn topic_inventory(
         schema_version: 1,
         books: books
             .into_iter()
+            .filter(|book| crate::topic_agent::safe_book_rel(&book.rel))
             .map(|book| crate::topic_agent::InventoryBook {
                 rel: book.rel,
                 title: book.title,
@@ -1932,6 +1933,27 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn topic_inventory_skips_unsafe_book_paths_without_hiding_safe_books() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("ebooks/2026-05");
+        for name in ["Safe Book", "Trailing Space "] {
+            let book = root.join(name);
+            std::fs::create_dir_all(&book).unwrap();
+            std::fs::write(
+                book.join("book.md"),
+                format!("---\ntype: Book\ntitle: {name}\n---\n\nBody\n"),
+            )
+            .unwrap();
+            std::fs::write(book.join("meta.yml"), "added_at: 2026-05-01T00:00:00Z\n").unwrap();
+        }
+
+        let inventory = topic_inventory(tmp.path(), "ebooks").unwrap();
+        assert_eq!(inventory.books.len(), 1);
+        assert_eq!(inventory.books[0].rel, "2026-05/Safe Book");
+        crate::topic_agent::inventory_yaml(&inventory).unwrap();
     }
 
     #[test]
