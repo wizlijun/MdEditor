@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.902.1 — 2026-09-02
+
 ### Added
 
 - **Memory 2.1 can infer durable owner memory from the existing Vault with a selected AI Agent.** The first successful run performs a full scan; later runs use a successful Git checkpoint for incremental inference. Every result remains a pending Claim for human review, and prompt-injection, secret, third-party and revocation boundaries are embedded in the task protocol.

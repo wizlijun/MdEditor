@@ -6,6 +6,8 @@
 
 ## 未发布
 
+## v6.902.1 — 2026-09-02
+
 ### 新增
 
 - **Memory 2.1 可以让选定的 AI Agent 从现有 Vault 推理长期 owner 记忆。** 第一次成功运行执行全量扫描，之后以成功 Git 水位执行增量推理；所有结果仍是等待人工审阅的 pending Claim，任务协议内置 prompt injection、secret、第三方信息与 revoke 安全边界。
