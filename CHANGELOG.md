@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Claude Agent 1.0.20, Codex Agent 1.0.6 and DeepSeek Agent 1.1.6 report token usage and cost after every completed run.** Each plugin can show the summary in the completion tip or result area and keeps it in run history. Provider-reported charges take precedence; otherwise known models use dated official API list-price estimates that are visibly marked as estimates rather than subscription usage or an actual bill. Claude distinguishes prompt-cache write durations, Codex avoids guessing per-request long-context surcharges from aggregate turns, and DeepSeek selects its UTC peak or off-peak rate from the completion time. Harnesses that expose no usage continue to say so instead of deriving tokens from text length.
+
 ### Fixed
 
 - **Trace Source 1.2.3 opens Inbox items inside its own window for editing.** Finished reports and saved requests now load into the plugin's existing editor instead of raising the main editor; edits autosave to the original file, and switching, slow writes, deletion and window closing are ordered so current text is not lost or recreated after deletion.
