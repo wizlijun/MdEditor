@@ -220,6 +220,8 @@ export const ja: Record<keyof Messages, string> = {
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'プラグインマーケット',
   'pluginMarket.subtitle': 'やりたいことから探して、note.md を自分らしく拡張できます。',
+  'pluginMarket.hostVersion': 'note.md {version}',
+  'pluginMarket.restartHint': 'プラグインのインストールまたは更新後は、note.md を終了して再起動してください。',
   'pluginMarket.aiTitle': 'AI と一緒に完成',
   'pluginMarket.aiSubtitle': '読解、発想、推論、実行に特化した AI パートナー。',
   'pluginMarket.aiBadge.read': 'AI 読解',

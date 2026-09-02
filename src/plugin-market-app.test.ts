@@ -26,6 +26,8 @@ vi.mock('./lib/i18n/store.svelte', () => {
   const labels: Record<string, string> = {
     'pluginMarket.windowTitle': 'Plugin Market',
     'pluginMarket.subtitle': 'Browse plugins',
+    'pluginMarket.hostVersion': 'note.md {version}',
+    'pluginMarket.restartHint': 'After installing or updating plugins, quit and reopen note.md.',
     'pluginMarket.refresh': 'Refresh',
     'pluginMarket.pluginsUnit': 'plugins',
     'pluginMarket.loadingCatalog': 'Checking for more plugins…',
@@ -132,6 +134,20 @@ afterEach(async () => {
 })
 
 describe('plugin market staged loading', () => {
+  it('shows the current note.md version and plugin restart guidance below the subtitle', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'plugin_market_installed') return Promise.resolve([])
+      if (command === 'plugin_market_index') return Promise.resolve({ plugins: [] })
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+
+    await vi.waitFor(() => expect(document.querySelector('.host-version')?.textContent).toBe('note.md 6.829.2'))
+    expect(document.querySelector('.restart-hint')?.textContent)
+      .toBe('After installing or updating plugins, quit and reopen note.md.')
+  })
+
   it('uses a normal online request on startup and forces a fresh online request after clicking Refresh', async () => {
     let indexCalls = 0
     mocks.invoke.mockImplementation((command: string) => {

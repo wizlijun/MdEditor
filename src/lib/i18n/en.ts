@@ -225,6 +225,8 @@ export const en = {
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'Plugin Market',
   'pluginMarket.subtitle': 'Browse by what you want to do, and make note.md your own.',
+  'pluginMarket.hostVersion': 'note.md {version}',
+  'pluginMarket.restartHint': 'After installing or updating plugins, quit and reopen note.md.',
   'pluginMarket.aiTitle': 'Create with AI',
   'pluginMarket.aiSubtitle': 'Focused collaborators for reading, ideas, reasoning, and action.',
   'pluginMarket.aiBadge.read': 'AI Read',
