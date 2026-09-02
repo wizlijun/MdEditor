@@ -92,7 +92,7 @@ describe('agent workspace run', () => {
       reasoning_tokens: 10,
       reported_total_tokens: 1_230,
       cost: { amount_usd: 0.0123456, kind: 'list_price_estimate' },
-    })).toContain('1,230 tokens · in 1,000 · cached 200 · out 30 · reasoning 10 · ≈$0.012346')
+    })).toContain('1,230 tokens · in 1,000 · cached 200 · out 30 · reasoning 10 · API list-price estimate ≈$0.012346')
     expect(formatAgentUsage(null)).toBe('Token usage unavailable')
     expect(formatAgentUsage({
       input_tokens: 0,
@@ -102,7 +102,7 @@ describe('agent workspace run', () => {
       reasoning_tokens: 0,
       reported_total_tokens: 0,
       cost: { amount_usd: 0.01, kind: 'provider_reported' },
-    })).toBe('Token usage unavailable · $0.010000')
+    })).toBe('Token usage unavailable · $0.010000 reported')
   })
 
   it('a failed run ends in error with the reason kept', async () => {

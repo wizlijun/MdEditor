@@ -22,7 +22,8 @@
 //! - `session/new` rejects a non-empty `mcpServers` or `additionalDirectories`.
 //! - `loadSession` / `session/list` / `session/resume` do not exist. No resume.
 use agent_run_core::event::{Event, RunResult};
-use agent_run_core::usage::{Cost, CostKind, Usage};
+use agent_run_core::usage::{estimate_deepseek, Cost, CostKind, Usage};
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 /// The protocol version we speak (`@agentclientprotocol/sdk` `PROTOCOL_VERSION`).
@@ -270,6 +271,17 @@ pub fn permission_options(params: &Value) -> Vec<Value> {
 /// snake_case (and `cacheRead`/`reasoning` spellings), so accept all known
 /// aliases without making usage mandatory for older servers.
 pub fn prompt_usage(result: &Value) -> Option<Usage> {
+    prompt_usage_at(result, None, Utc::now())
+}
+
+/// Deterministic variant used by the engine and price-boundary tests. The
+/// fallback model comes from the composition actually booted for this run, not
+/// from a task label or a guessed provider default.
+pub fn prompt_usage_at(
+    result: &Value,
+    fallback_model: Option<&str>,
+    priced_at: DateTime<Utc>,
+) -> Option<Usage> {
     let raw = result.get("usage").and_then(Value::as_object);
     let tokens = |aliases: &[&str]| {
         raw.and_then(|usage| {
@@ -284,29 +296,59 @@ pub fn prompt_usage(result: &Value) -> Option<Usage> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string);
+        .map(str::to_string)
+        .or_else(|| {
+            fallback_model
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        });
     let cost = parse_cost(result).or_else(|| raw.and_then(|usage| parse_cost_object(usage)));
 
-    let input_tokens = tokens(&["input_tokens", "inputTokens"]);
+    let cache_miss_tokens = tokens(&["prompt_cache_miss_tokens", "promptCacheMissTokens"]);
+    let prompt_tokens = tokens(&["prompt_tokens", "promptTokens"]);
+    let explicit_input_tokens = tokens(&["input_tokens", "inputTokens"]);
     let cache_read_tokens = tokens(&[
+        "prompt_cache_hit_tokens",
+        "promptCacheHitTokens",
         "cache_read_tokens",
         "cacheReadTokens",
         "cached_read_tokens",
         "cachedReadTokens",
     ]);
+    let input_tokens = cache_miss_tokens.or(explicit_input_tokens).or_else(|| {
+        prompt_tokens.map(|total| total.saturating_sub(cache_read_tokens.unwrap_or(0)))
+    });
     let cache_write_tokens = tokens(&[
         "cache_write_tokens",
         "cacheWriteTokens",
         "cached_write_tokens",
         "cachedWriteTokens",
     ]);
-    let output_tokens = tokens(&["output_tokens", "outputTokens"]);
+    let output_tokens = tokens(&[
+        "completion_tokens",
+        "completionTokens",
+        "output_tokens",
+        "outputTokens",
+    ]);
     let reasoning_tokens = tokens(&[
         "reasoning_tokens",
         "reasoningTokens",
         "thought_tokens",
         "thoughtTokens",
-    ]);
+    ])
+    .or_else(|| {
+        raw.and_then(|usage| {
+            first(
+                usage,
+                &["completion_tokens_details", "completionTokensDetails"],
+            )
+        })
+        .and_then(Value::as_object)
+        .and_then(|details| {
+            first(details, &["reasoning_tokens", "reasoningTokens"]).and_then(as_u64)
+        })
+    });
     let reported_total_tokens = tokens(&["total_tokens", "totalTokens"]);
 
     let observed = input_tokens.is_some()
@@ -316,7 +358,7 @@ pub fn prompt_usage(result: &Value) -> Option<Usage> {
         || reasoning_tokens.is_some()
         || reported_total_tokens.is_some()
         || cost.is_some();
-    let usage = Usage {
+    let mut usage = Usage {
         model,
         input_tokens: input_tokens.unwrap_or(0),
         cache_read_tokens: cache_read_tokens.unwrap_or(0),
@@ -326,6 +368,11 @@ pub fn prompt_usage(result: &Value) -> Option<Usage> {
         reported_total_tokens: reported_total_tokens.unwrap_or(0),
         cost,
     };
+    if usage.cost.is_none() {
+        if let Some(model) = usage.model.as_deref() {
+            usage.cost = estimate_deepseek(model, &usage, priced_at);
+        }
+    }
     (observed && !usage.is_empty()).then_some(usage)
 }
 
@@ -422,6 +469,7 @@ pub fn result_for_stop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn classifies_a_response_a_request_and_a_notification() {
@@ -703,6 +751,52 @@ mod tests {
         let cost = got.cost.expect("provider cost");
         assert_eq!(cost.amount_usd, 0.0123);
         assert_eq!(cost.kind, CostKind::ProviderReported);
+    }
+
+    #[test]
+    fn native_deepseek_usage_is_normalized_and_officially_estimated() {
+        let priced_at = Utc.with_ymd_and_hms(2026, 9, 2, 1, 0, 0).unwrap();
+        let got = prompt_usage_at(
+            &json!({
+                "stopReason": "end_turn",
+                "model": "deepseek-v4-flash",
+                "usage": {
+                    "prompt_tokens": 3000000,
+                    "prompt_cache_hit_tokens": 1000000,
+                    "prompt_cache_miss_tokens": 2000000,
+                    "completion_tokens": 1000000,
+                    "completion_tokens_details": { "reasoning_tokens": 900000 },
+                    "total_tokens": 4000000
+                }
+            }),
+            None,
+            priced_at,
+        )
+        .expect("usage");
+        assert_eq!(got.input_tokens, 2_000_000);
+        assert_eq!(got.cache_read_tokens, 1_000_000);
+        assert_eq!(got.output_tokens, 1_000_000);
+        assert_eq!(got.reasoning_tokens, 900_000);
+        let cost = got.cost.expect("list price estimate");
+        assert_eq!(cost.kind, CostKind::ListPriceEstimate);
+        assert!((cost.amount_usd - 2.214).abs() < 1e-12);
+        assert_eq!(
+            cost.pricing_as_of.as_deref(),
+            Some("2026-09-02 (DeepSeek peak rate at UTC completion)")
+        );
+    }
+
+    #[test]
+    fn composition_model_is_used_only_as_an_explicit_fallback() {
+        let priced_at = Utc.with_ymd_and_hms(2026, 9, 5, 2, 0, 0).unwrap();
+        let got = prompt_usage_at(
+            &json!({ "usage": { "inputTokens": 1000000 } }),
+            Some("deepseek-v4-pro"),
+            priced_at,
+        )
+        .expect("usage");
+        assert_eq!(got.model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(got.cost.unwrap().amount_usd, 0.66);
     }
 
     #[test]

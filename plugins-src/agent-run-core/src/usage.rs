@@ -3,6 +3,7 @@
 //! Adapters normalize provider payloads into disjoint input buckets before they
 //! get here.  That matters because some APIs report cached tokens as a subset of
 //! `input_tokens`, while others report them beside ordinary input tokens.
+use chrono::{DateTime, Datelike, Timelike, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +76,21 @@ pub struct Rates {
     pub output_per_million: f64,
 }
 
+/// Anthropic prices 5-minute and 1-hour cache writes differently. Claude's
+/// aggregate cache-write bucket stays provider-neutral; the adapter passes this
+/// optional wire-level breakdown only while calculating the estimate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnthropicCacheWrite {
+    pub five_minute_tokens: u64,
+    pub one_hour_tokens: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeepseekPriceBand {
+    Peak,
+    OffPeak,
+}
+
 pub fn estimate(usage: &Usage, rates: Rates, pricing_as_of: &str) -> Cost {
     let million = 1_000_000_f64;
     let amount = usage.input_tokens as f64 * rates.input_per_million
@@ -114,6 +130,9 @@ pub fn estimate_openai(model: &str, usage: &Usage) -> Option<Cost> {
         },
         _ => return None,
     };
+    if priceable_tokens(usage) == 0 {
+        return None;
+    }
     // Codex reports one aggregate for the whole agent turn, which may contain
     // several model requests. The >272K premium is decided per request, so an
     // aggregate above that threshold cannot be priced faithfully: it may be
@@ -127,6 +146,137 @@ pub fn estimate_openai(model: &str, usage: &Usage) -> Option<Cost> {
         return None;
     }
     Some(estimate(usage, rates, AS_OF))
+}
+
+/// Anthropic first-party, global, standard-speed token list prices. Dynamic
+/// Claude Code aliases and cloud-provider model identifiers deliberately do
+/// not match: their effective model or regional price cannot be inferred.
+pub fn estimate_anthropic(
+    model: &str,
+    usage: &Usage,
+    cache_write: Option<AnthropicCacheWrite>,
+) -> Option<Cost> {
+    const AS_OF: &str = "2026-09-02";
+    let (input, cache_5m, cache_1h, cache_read, output) = match model.trim() {
+        "claude-fable-5-1" | "claude-mythos-5-1" => (10.0, 12.5, 20.0, 0.25, 50.0),
+        "claude-fable-5" | "claude-mythos-5" => (10.0, 12.5, 20.0, 1.0, 50.0),
+        "claude-opus-5"
+        | "claude-opus-4-8"
+        | "claude-opus-4-7"
+        | "claude-opus-4-6"
+        | "claude-opus-4-5"
+        | "claude-opus-4-5-20251101" => (5.0, 6.25, 10.0, 0.5, 25.0),
+        "claude-sonnet-5" => (2.0, 2.5, 4.0, 0.2, 10.0),
+        "claude-sonnet-4-6" | "claude-sonnet-4-5" | "claude-sonnet-4-5-20250929" => {
+            (3.0, 3.75, 6.0, 0.3, 15.0)
+        }
+        "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => (1.0, 1.25, 2.0, 0.1, 5.0),
+        _ => return None,
+    };
+    if priceable_tokens(usage) == 0 {
+        return None;
+    }
+
+    let (five_minute_tokens, one_hour_tokens, pricing_as_of) = match cache_write {
+        Some(split) => {
+            if split.five_minute_tokens.checked_add(split.one_hour_tokens)
+                != Some(usage.cache_write_tokens)
+            {
+                return None;
+            }
+            (split.five_minute_tokens, split.one_hour_tokens, AS_OF)
+        }
+        // Older result frames expose only the aggregate. Use the official 1h
+        // list rate as a conservative upper estimate instead of silently
+        // assuming the cheaper TTL.
+        None if usage.cache_write_tokens > 0 => (
+            0,
+            usage.cache_write_tokens,
+            "2026-09-02 (cache TTL unavailable; conservative 1h write rate)",
+        ),
+        None => (0, 0, AS_OF),
+    };
+    let million = 1_000_000_f64;
+    let amount = usage.input_tokens as f64 * input
+        + usage.cache_read_tokens as f64 * cache_read
+        + five_minute_tokens as f64 * cache_5m
+        + one_hour_tokens as f64 * cache_1h
+        + usage.output_tokens as f64 * output;
+    Some(Cost {
+        amount_usd: amount / million,
+        kind: CostKind::ListPriceEstimate,
+        pricing_as_of: Some(pricing_as_of.to_string()),
+    })
+}
+
+/// DeepSeek's public price band is selected by UTC: weekdays 01:00–04:00 and
+/// 06:00–10:00 are peak, with half-price rates at all other times.
+pub fn deepseek_price_band(at: DateTime<Utc>) -> DeepseekPriceBand {
+    let weekday = at.weekday();
+    let hour = at.hour();
+    if !matches!(weekday, Weekday::Sat | Weekday::Sun)
+        && ((1..4).contains(&hour) || (6..10).contains(&hour))
+    {
+        DeepseekPriceBand::Peak
+    } else {
+        DeepseekPriceBand::OffPeak
+    }
+}
+
+/// DeepSeek USD list-price estimate using the price band at `at`. ACP usage is
+/// a completed-turn aggregate, so this is an estimate rather than a bill
+/// reconstruction when a run crosses a peak/off-peak boundary.
+pub fn estimate_deepseek(model: &str, usage: &Usage, at: DateTime<Utc>) -> Option<Cost> {
+    if priceable_tokens(usage) == 0 {
+        return None;
+    }
+    let pro = match model.trim() {
+        "deepseek-v4-flash" | "deepseek-v4-flash-0731" | "deepseek-v4-flash-vision-exp" => false,
+        "deepseek-v4-pro" | "deepseek-v4-pro-0813" => true,
+        _ => return None,
+    };
+    let price_band = deepseek_price_band(at);
+    let rates = match (pro, price_band) {
+        (false, DeepseekPriceBand::OffPeak) => Rates {
+            input_per_million: 0.22,
+            cache_read_per_million: 0.007,
+            // DeepSeek automatically creates cache entries and publishes no
+            // separate write fee; a disjoint write bucket is a cache miss.
+            cache_write_per_million: 0.22,
+            output_per_million: 0.66,
+        },
+        (false, DeepseekPriceBand::Peak) => Rates {
+            input_per_million: 0.44,
+            cache_read_per_million: 0.014,
+            cache_write_per_million: 0.44,
+            output_per_million: 1.32,
+        },
+        (true, DeepseekPriceBand::OffPeak) => Rates {
+            input_per_million: 0.66,
+            cache_read_per_million: 0.022,
+            cache_write_per_million: 0.66,
+            output_per_million: 1.98,
+        },
+        (true, DeepseekPriceBand::Peak) => Rates {
+            input_per_million: 1.32,
+            cache_read_per_million: 0.044,
+            cache_write_per_million: 1.32,
+            output_per_million: 3.96,
+        },
+    };
+    let pricing_as_of = match price_band {
+        DeepseekPriceBand::Peak => "2026-09-02 (DeepSeek peak rate at UTC completion)",
+        DeepseekPriceBand::OffPeak => "2026-09-02 (DeepSeek off-peak rate at UTC completion)",
+    };
+    Some(estimate(usage, rates, pricing_as_of))
+}
+
+fn priceable_tokens(usage: &Usage) -> u64 {
+    usage
+        .input_tokens
+        .saturating_add(usage.cache_read_tokens)
+        .saturating_add(usage.cache_write_tokens)
+        .saturating_add(usage.output_tokens)
 }
 
 pub fn compact(usage: Option<&Usage>) -> String {
@@ -152,7 +302,7 @@ pub fn compact(usage: Option<&Usage>) -> String {
     if let Some(cost) = &u.cost {
         let marker = match cost.kind {
             CostKind::ProviderReported => "$",
-            CostKind::ListPriceEstimate => "≈$",
+            CostKind::ListPriceEstimate => "API list-price estimate ≈$",
         };
         parts.push(format!("{marker}{:.6}", cost.amount_usd));
     }
@@ -172,6 +322,7 @@ pub fn compact_run(status: crate::record::Status, usage: Option<&Usage>) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn total_uses_disjoint_buckets_and_not_reasoning_twice() {
@@ -225,6 +376,157 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_catalog_prices_cache_ttls_separately() {
+        let u = Usage {
+            input_tokens: 1_000_000,
+            cache_read_tokens: 1_000_000,
+            cache_write_tokens: 2_000_000,
+            output_tokens: 1_000_000,
+            ..Usage::default()
+        };
+        let split = Some(AnthropicCacheWrite {
+            five_minute_tokens: 1_000_000,
+            one_hour_tokens: 1_000_000,
+        });
+        let cases = [
+            ("claude-fable-5-1", 92.75),
+            ("claude-fable-5", 93.5),
+            ("claude-opus-5", 46.75),
+            ("claude-sonnet-5", 18.7),
+            ("claude-sonnet-4-6", 28.05),
+            ("claude-haiku-4-5", 9.35),
+        ];
+        for (model, expected) in cases {
+            let cost = estimate_anthropic(model, &u, split).expect(model);
+            assert!((cost.amount_usd - expected).abs() < 1e-12, "{model}");
+            assert_eq!(cost.kind, CostKind::ListPriceEstimate);
+            assert_eq!(cost.pricing_as_of.as_deref(), Some("2026-09-02"));
+        }
+    }
+
+    #[test]
+    fn anthropic_uses_a_conservative_one_hour_rate_without_a_ttl_split() {
+        let u = Usage {
+            cache_write_tokens: 1_000_000,
+            ..Usage::default()
+        };
+        let cost = estimate_anthropic("claude-sonnet-5", &u, None).unwrap();
+        assert_eq!(cost.amount_usd, 4.0);
+        assert_eq!(
+            cost.pricing_as_of.as_deref(),
+            Some("2026-09-02 (cache TTL unavailable; conservative 1h write rate)")
+        );
+        assert_eq!(
+            estimate_anthropic(
+                "claude-sonnet-5",
+                &u,
+                Some(AnthropicCacheWrite {
+                    five_minute_tokens: 1,
+                    one_hour_tokens: 2,
+                })
+            ),
+            None,
+            "contradictory telemetry must not be priced"
+        );
+    }
+
+    #[test]
+    fn anthropic_dynamic_aliases_and_unknown_models_are_not_guessed() {
+        let u = Usage {
+            input_tokens: 1,
+            ..Usage::default()
+        };
+        for model in [
+            "sonnet",
+            "opusplan",
+            "anthropic.claude-sonnet-4-5",
+            "claude-future-model",
+        ] {
+            assert_eq!(estimate_anthropic(model, &u, None), None, "{model}");
+        }
+    }
+
+    #[test]
+    fn deepseek_uses_off_peak_and_peak_catalog_rates() {
+        let u = Usage {
+            input_tokens: 1_000_000,
+            cache_read_tokens: 1_000_000,
+            cache_write_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+            reasoning_tokens: 900_000,
+            reported_total_tokens: 7,
+            ..Usage::default()
+        };
+        let off_peak = Utc.with_ymd_and_hms(2026, 9, 2, 0, 59, 59).unwrap();
+        let peak = Utc.with_ymd_and_hms(2026, 9, 2, 1, 0, 0).unwrap();
+        assert_eq!(
+            estimate_deepseek("deepseek-v4-flash", &u, off_peak)
+                .unwrap()
+                .amount_usd,
+            1.107
+        );
+        assert_eq!(
+            estimate_deepseek("deepseek-v4-flash-vision-exp", &u, peak)
+                .unwrap()
+                .amount_usd,
+            2.214
+        );
+        assert_eq!(
+            estimate_deepseek("deepseek-v4-pro", &u, off_peak)
+                .unwrap()
+                .amount_usd,
+            3.322
+        );
+        assert_eq!(
+            estimate_deepseek("deepseek-v4-pro-0813", &u, peak)
+                .unwrap()
+                .amount_usd,
+            6.644
+        );
+    }
+
+    #[test]
+    fn deepseek_peak_boundaries_are_half_open_and_weekdays_only() {
+        let at = |day, hour, minute, second| {
+            Utc.with_ymd_and_hms(2026, 9, day, hour, minute, second)
+                .unwrap()
+        };
+        for time in [
+            at(2, 1, 0, 0),
+            at(2, 3, 59, 59),
+            at(2, 6, 0, 0),
+            at(2, 9, 59, 59),
+        ] {
+            assert_eq!(deepseek_price_band(time), DeepseekPriceBand::Peak);
+        }
+        for time in [
+            at(2, 0, 59, 59),
+            at(2, 4, 0, 0),
+            at(2, 10, 0, 0),
+            at(5, 1, 0, 0),
+        ] {
+            assert_eq!(deepseek_price_band(time), DeepseekPriceBand::OffPeak);
+        }
+    }
+
+    #[test]
+    fn zero_buckets_and_unknown_deepseek_models_are_not_priced_from_total() {
+        let at = Utc.with_ymd_and_hms(2026, 9, 2, 1, 0, 0).unwrap();
+        let only_total = Usage {
+            reported_total_tokens: 100,
+            ..Usage::default()
+        };
+        assert_eq!(estimate_deepseek("deepseek-v4-pro", &only_total, at), None);
+        let measured = Usage {
+            input_tokens: 100,
+            ..Usage::default()
+        };
+        for model in ["deepseek-chat", "deepseek-reasoner", "future-model"] {
+            assert_eq!(estimate_deepseek(model, &measured, at), None, "{model}");
+        }
+    }
+
+    #[test]
     fn provider_reported_cost_is_not_marked_estimated() {
         let u = Usage {
             cost: Some(Cost {
@@ -236,6 +538,22 @@ mod tests {
         };
         assert!(compact(Some(&u)).contains("$0.003000"));
         assert!(!compact(Some(&u)).contains("≈"));
+    }
+
+    #[test]
+    fn estimated_cost_is_explicitly_named_in_the_terminal_tip() {
+        let u = Usage {
+            cost: Some(Cost {
+                amount_usd: 0.003,
+                kind: CostKind::ListPriceEstimate,
+                pricing_as_of: Some("2026-09-02".into()),
+            }),
+            ..Usage::default()
+        };
+        assert_eq!(
+            compact(Some(&u)),
+            "Token usage unavailable · API list-price estimate ≈$0.003000"
+        );
     }
 
     #[test]

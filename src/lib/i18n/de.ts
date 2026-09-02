@@ -432,6 +432,8 @@ export const de: Record<keyof Messages, string> = {
   'agent.usageCacheWrite': 'Cache geschrieben {n}',
   'agent.usageOutput': 'Ausgabe {n}',
   'agent.usageReasoning': 'Reasoning {n}',
+  'agent.costReported': '{amount} gemeldet',
+  'agent.costEstimated': 'API-Listenpreisschätzung ca. {amount} (keine tatsächliche Rechnung)',
   'agent.noNote': 'Dieses Dokument hat keine Randnotiz.',
   'agent.elapsed': '{s}s',
   'agent.harness': 'Agent',

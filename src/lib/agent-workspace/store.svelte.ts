@@ -90,6 +90,8 @@ export type AgentUsageMessageKey =
   | 'agent.usageCacheWrite'
   | 'agent.usageOutput'
   | 'agent.usageReasoning'
+  | 'agent.costReported'
+  | 'agent.costEstimated'
 
 type AgentUsageLabel = (key: AgentUsageMessageKey, params?: Record<string, string | number>) => string
 
@@ -117,7 +119,15 @@ export function formatAgentUsage(usage: AgentUsage | null, label?: AgentUsageLab
     parts.push(say('agent.usageReasoning', `reasoning ${usage.reasoning_tokens.toLocaleString()}`, usage.reasoning_tokens))
   }
   if (usage.cost) {
-    parts.push(`${usage.cost.kind === 'list_price_estimate' ? '≈' : ''}$${usage.cost.amount_usd.toFixed(6)}`)
+    const amount = `$${usage.cost.amount_usd.toFixed(6)}`
+    parts.push(label
+      ? label(
+          usage.cost.kind === 'list_price_estimate' ? 'agent.costEstimated' : 'agent.costReported',
+          { amount },
+        )
+      : usage.cost.kind === 'list_price_estimate'
+        ? `API list-price estimate ≈${amount}`
+        : `${amount} reported`)
   }
   return parts.join(' · ')
 }

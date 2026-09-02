@@ -16,6 +16,11 @@
         )
       : '',
   )
+  const costTitle = $derived(
+    usage?.cost?.kind === 'list_price_estimate'
+      ? `${label('usage.costDisclaimer')}${usage.cost.pricing_as_of ? ` (${usage.cost.pricing_as_of})` : ''}`
+      : undefined,
+  )
 </script>
 
 <div class="usage" data-usage-available={usage ? 'true' : 'false'}>
@@ -30,7 +35,7 @@
   {:else}
     <span>{label('usage.unavailable')}</span>
   {/if}
-  {#if cost}<span title={label('usage.costDisclaimer')}>{cost}</span>{/if}
+  {#if cost}<span title={costTitle}>{cost}</span>{/if}
 </div>
 
 <style>

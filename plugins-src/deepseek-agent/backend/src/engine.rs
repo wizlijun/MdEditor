@@ -16,7 +16,7 @@
 //!   ← session/request_permission → answered from policy.json → Event::Permission
 //!   ← stopReason                → RunResult → record → terminate
 //! ```
-use crate::{acp, policy};
+use crate::{acp, composition, policy};
 use agent_run_core::event::{Event, Step};
 use agent_run_core::record;
 use agent_run_core::scaffold::{self, Blocked, ProgressTracker, RunMeta};
@@ -578,9 +578,14 @@ impl Dialogue {
                         "session/prompt answered without a stopReason: {result}"
                     )))];
                 }
+                let fallback_model = composition::default_model(&spec.config);
                 vec![Act::Finish(Outcome::Stopped {
                     stop,
-                    usage: acp::prompt_usage(&result),
+                    usage: acp::prompt_usage_at(
+                        &result,
+                        fallback_model.as_deref(),
+                        chrono::Utc::now(),
+                    ),
                 })]
             }
             other => vec![Act::Finish(Outcome::Failed(format!(

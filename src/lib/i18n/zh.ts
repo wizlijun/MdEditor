@@ -468,6 +468,8 @@ export const zh: Record<keyof Messages, string> = {
   'agent.usageCacheWrite': '缓存写入 {n}',
   'agent.usageOutput': '输出 {n}',
   'agent.usageReasoning': '推理 {n}',
+  'agent.costReported': '报告费用 {amount}',
+  'agent.costEstimated': 'API 官网标价估算约 {amount}（非实际账单）',
   'agent.noNote': '当前文档没有手记。',
   'agent.elapsed': '{s} 秒',
   'agent.harness': '执行者',

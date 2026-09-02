@@ -439,6 +439,8 @@ export const en = {
   'agent.usageCacheWrite': 'cache write {n}',
   'agent.usageOutput': 'out {n}',
   'agent.usageReasoning': 'reasoning {n}',
+  'agent.costReported': '{amount} reported',
+  'agent.costEstimated': 'API list-price estimate ≈{amount} (not the actual bill)',
   'agent.noNote': 'This document has no sidecar note.',
   'agent.elapsed': '{s}s',
   'agent.harness': 'Agent',

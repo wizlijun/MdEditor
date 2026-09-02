@@ -6,7 +6,7 @@
 //! deepseek-agent, so it lives in `agent-run-core`; only the claude-specific
 //! PARSING is here.
 pub use agent_run_core::event::{Event, RunResult};
-use agent_run_core::usage::{Cost, CostKind, Usage};
+use agent_run_core::usage::{estimate_anthropic, AnthropicCacheWrite, Cost, CostKind, Usage};
 
 /// Parse one line. `None` means the line produces no event.
 pub fn parse_line(line: &str) -> Option<Event> {
@@ -67,16 +67,13 @@ pub fn parse_line(line: &str) -> Option<Event> {
 /// same token twice in the shared estimator.
 fn result_usage(result: &serde_json::Value) -> Option<Usage> {
     let raw = result.get("usage").and_then(|v| v.as_object());
-    let cost = result
+    let reported_cost = result
         .get("total_cost_usd")
         .and_then(|v| v.as_f64())
         .filter(|v| v.is_finite() && *v >= 0.0)
-        .map(|amount_usd| Cost {
-            amount_usd,
-            kind: CostKind::ProviderReported,
-            pricing_as_of: None,
-        });
-    if raw.is_none() && cost.is_none() {
+        .or_else(|| model_usage_cost(result))
+        .map(provider_cost);
+    if raw.is_none() && reported_cost.is_none() {
         return None;
     }
     let tokens = |key: &str| {
@@ -84,22 +81,109 @@ fn result_usage(result: &serde_json::Value) -> Option<Usage> {
             .and_then(|v| v.as_u64())
             .unwrap_or(0)
     };
-    let usage = Usage {
+    let mut usage = Usage {
         model: result_model(result),
         input_tokens: tokens("input_tokens"),
         cache_read_tokens: tokens("cache_read_input_tokens"),
         cache_write_tokens: tokens("cache_creation_input_tokens"),
         output_tokens: tokens("output_tokens"),
-        cost,
+        cost: reported_cost,
         ..Usage::default()
     };
+    if usage.cost.is_none() && !unsupported_price_modifier(raw) {
+        if let (Some(model), Ok(cache_write)) = (
+            usage.model.as_deref(),
+            anthropic_cache_write(raw, usage.cache_write_tokens),
+        ) {
+            usage.cost = estimate_anthropic(model, &usage, cache_write);
+        }
+    }
     (!usage.is_empty()).then_some(usage)
+}
+
+fn provider_cost(amount_usd: f64) -> Cost {
+    Cost {
+        amount_usd,
+        kind: CostKind::ProviderReported,
+        pricing_as_of: None,
+    }
+}
+
+/// Newer multi-model result frames may omit the top-level total while still
+/// reporting one cost per model. Only sum a complete, non-empty map; a partial
+/// sum would look authoritative while understating the provider's amount.
+fn model_usage_cost(result: &serde_json::Value) -> Option<f64> {
+    let models = result.get("modelUsage")?.as_object()?;
+    if models.is_empty() {
+        return None;
+    }
+    models
+        .values()
+        .try_fold(0.0, |sum, row| {
+            let amount = row
+                .get("costUSD")
+                .or_else(|| row.get("cost_usd"))?
+                .as_f64()
+                .filter(|value| value.is_finite() && *value >= 0.0)?;
+            Some(sum + amount)
+        })
+        .filter(|sum| sum.is_finite())
+}
+
+fn anthropic_cache_write(
+    raw: Option<&serde_json::Map<String, serde_json::Value>>,
+    aggregate: u64,
+) -> Result<Option<AnthropicCacheWrite>, ()> {
+    let Some(cache) = raw
+        .and_then(|usage| usage.get("cache_creation"))
+        .and_then(|value| value.as_object())
+    else {
+        return Ok(None);
+    };
+    let five_minute_tokens = cache
+        .get("ephemeral_5m_input_tokens")
+        .and_then(|value| value.as_u64())
+        .ok_or(())?;
+    let one_hour_tokens = cache
+        .get("ephemeral_1h_input_tokens")
+        .and_then(|value| value.as_u64())
+        .ok_or(())?;
+    let split = AnthropicCacheWrite {
+        five_minute_tokens,
+        one_hour_tokens,
+    };
+    (five_minute_tokens.checked_add(one_hour_tokens) == Some(aggregate))
+        .then_some(Some(split))
+        .ok_or(())
+}
+
+/// These modifiers have separate official prices which cannot be reconstructed
+/// from the four aggregate token buckets alone.
+fn unsupported_price_modifier(raw: Option<&serde_json::Map<String, serde_json::Value>>) -> bool {
+    let speed_is_fast = raw
+        .and_then(|usage| usage.get("speed"))
+        .and_then(|value| value.as_str())
+        .is_some_and(|speed| speed.eq_ignore_ascii_case("fast"));
+    let geo_is_us = raw
+        .and_then(|usage| usage.get("inference_geo"))
+        .and_then(|value| value.as_str())
+        .is_some_and(|geo| geo.eq_ignore_ascii_case("us"));
+    speed_is_fast || geo_is_us
 }
 
 /// Newer Claude Code results expose `model`; older/multi-model results expose a
 /// `modelUsage` map. A single map key is an exact answer. More than one is not:
 /// the aggregate usage must not be attributed to an arbitrary model.
 fn result_model(result: &serde_json::Value) -> Option<String> {
+    if let Some(models) = result
+        .get("modelUsage")
+        .and_then(|value| value.as_object())
+        .filter(|models| !models.is_empty())
+    {
+        return (models.len() == 1)
+            .then(|| models.keys().next().cloned())
+            .flatten();
+    }
     if let Some(model) = result
         .get("model")
         .and_then(|v| v.as_str())
@@ -108,10 +192,7 @@ fn result_model(result: &serde_json::Value) -> Option<String> {
     {
         return Some(model.to_string());
     }
-    let models = result.get("modelUsage")?.as_object()?;
-    (models.len() == 1)
-        .then(|| models.keys().next().cloned())
-        .flatten()
+    None
 }
 
 /// One-line summary of a tool call: file path first, then command, then pattern.
@@ -169,6 +250,69 @@ mod tests {
                 ..Usage::default()
             })
         );
+    }
+
+    #[test]
+    fn estimates_anthropic_list_price_when_provider_cost_is_absent() {
+        let line = r#"{"type":"result","result":"done","model":"claude-sonnet-5","usage":{"input_tokens":1000000,"cache_read_input_tokens":1000000,"cache_creation_input_tokens":2000000,"output_tokens":1000000,"cache_creation":{"ephemeral_5m_input_tokens":1000000,"ephemeral_1h_input_tokens":1000000}}}"#;
+        let Some(Event::Result(result)) = parse_line(line) else {
+            panic!("expected result")
+        };
+        let cost = result.usage.unwrap().cost.expect("official estimate");
+        assert_eq!(cost.kind, CostKind::ListPriceEstimate);
+        assert!((cost.amount_usd - 18.7).abs() < 1e-12);
+        assert_eq!(cost.pricing_as_of.as_deref(), Some("2026-09-02"));
+    }
+
+    #[test]
+    fn provider_cost_wins_over_a_different_local_estimate() {
+        let line = r#"{"type":"result","result":"done","model":"claude-sonnet-5","usage":{"input_tokens":1000000},"total_cost_usd":0.0}"#;
+        let Some(Event::Result(result)) = parse_line(line) else {
+            panic!("expected result")
+        };
+        let cost = result.usage.unwrap().cost.expect("reported cost");
+        assert_eq!(cost.kind, CostKind::ProviderReported);
+        assert_eq!(cost.amount_usd, 0.0);
+    }
+
+    #[test]
+    fn complete_model_usage_costs_are_summed_but_partial_maps_are_not() {
+        let complete = r#"{"type":"result","result":"done","usage":{"input_tokens":1},"modelUsage":{"claude-sonnet-5":{"costUSD":0.1},"claude-opus-5":{"costUSD":0.2}}}"#;
+        let Some(Event::Result(result)) = parse_line(complete) else {
+            panic!("expected result")
+        };
+        let usage = result.usage.unwrap();
+        assert_eq!(usage.model, None, "multi-model usage has no single model");
+        assert_eq!(usage.cost.unwrap().kind, CostKind::ProviderReported);
+        assert!(
+            (model_usage_cost(&serde_json::from_str(complete).unwrap()).unwrap() - 0.3).abs()
+                < 1e-12
+        );
+
+        let partial = r#"{"type":"result","result":"done","model":"claude-sonnet-5","usage":{"input_tokens":1},"modelUsage":{"claude-sonnet-5":{"costUSD":0.1},"claude-opus-5":{}}}"#;
+        let Some(Event::Result(result)) = parse_line(partial) else {
+            panic!("expected result")
+        };
+        let usage = result.usage.unwrap();
+        assert_eq!(usage.model, None);
+        assert_eq!(usage.cost, None);
+    }
+
+    #[test]
+    fn contradictory_cache_details_and_unsupported_modifiers_are_not_guessed() {
+        for usage in [
+            r#"{"input_tokens":1,"cache_creation_input_tokens":3,"cache_creation":{"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":1}}"#,
+            r#"{"input_tokens":1,"speed":"fast"}"#,
+            r#"{"input_tokens":1,"inference_geo":"us"}"#,
+        ] {
+            let line = format!(
+                r#"{{"type":"result","result":"done","model":"claude-sonnet-5","usage":{usage}}}"#
+            );
+            let Some(Event::Result(result)) = parse_line(&line) else {
+                panic!("expected result")
+            };
+            assert_eq!(result.usage.unwrap().cost, None, "{usage}");
+        }
     }
 
     #[test]

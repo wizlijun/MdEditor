@@ -434,6 +434,8 @@ export const ja: Record<keyof Messages, string> = {
   'agent.usageCacheWrite': 'キャッシュ書込 {n}',
   'agent.usageOutput': '出力 {n}',
   'agent.usageReasoning': '推論 {n}',
+  'agent.costReported': '報告コスト {amount}',
+  'agent.costEstimated': 'API 定価見積り 約 {amount}（実際の請求ではありません）',
   'agent.noNote': 'この文書にはサイドノートがありません。',
   'agent.elapsed': '{s} 秒',
   'agent.harness': '実行エージェント',
