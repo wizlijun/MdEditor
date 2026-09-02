@@ -11,6 +11,10 @@ For the full commit history, see the git log.
 
 - **Pending Memory suggestions now support multi-selection and safe bulk cleanup.** Click normally to select one, use Command/Ctrl to toggle items, or Shift to select a range; right-clicking the selection opens bulk ignore, reject and delete-candidate actions with an exact impact confirmation. Human approval, editing and importance remain deliberately item-by-item so distinct identity, fact, behavior and lifecycle meanings cannot be approved under one vague gesture.
 
+### Changed
+
+- **Claude Agent 1.0.21, Codex Agent 1.0.7 and DeepSeek Agent 1.1.7 share a clearer workspace design.** The environment, tasks and run history now live in one accessible sidebar scroll area while Settings stays pinned at the bottom, so longer task lists can no longer squeeze history out of view. Two-line history cards keep status, task, time and provider readable, and the input, stream, log and settings surfaces now match the Plugin Market's neutral visual language with consistent hover, selection and keyboard focus feedback.
+
 ### Fixed
 
 - **A concurrent change no longer makes a pending bulk action look all-or-nothing.** Items are guarded and processed serially; if one becomes stale, Memory stops, refreshes the real queue and reports exactly how many were completed and how many remain.
