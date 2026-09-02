@@ -43,6 +43,7 @@
   },
   "capabilities": [
     "memory.control",
+    "clipboard.write",
     "vault.read",
     "vault.write",
     "agent",

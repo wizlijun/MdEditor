@@ -94,6 +94,21 @@ fn required_flag<'a>(args: &'a MemoryArgs, name: &str) -> Result<&'a str, String
         .ok_or_else(|| format!("--{name} is required"))
 }
 
+/// A required flag carrying a comma-separated list, so one Claim can allow the
+/// several retrieval purposes the Memory UI already offers.
+fn required_list(args: &MemoryArgs, name: &str) -> Result<Vec<String>, String> {
+    let values = required_flag(args, name)?
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return Err(format!("--{name} must not be empty"));
+    }
+    Ok(values)
+}
+
 fn v2_propose_operation(args: &MemoryArgs) -> Result<&str, String> {
     let operation = args
         .positionals
@@ -352,10 +367,10 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
             "projection",
         )?
     };
-    let category = existing
-        .as_ref()
-        .map(|claim| claim.projection.category.clone())
-        .unwrap_or(required_flag(args, "category")?.to_string());
+    let category = match existing.as_ref() {
+        Some(claim) => claim.projection.category.clone(),
+        None => required_flag(args, "category")?.to_string(),
+    };
     let asserted_by = args
         .flags
         .get("asserted-by")
@@ -365,20 +380,19 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
         .as_ref()
         .map(|claim| claim.kind_data.clone())
         .unwrap_or_else(|| v2_kind_data(claim_kind, &text, &asserted_by));
-    let context = existing
-        .as_ref()
-        .map(|claim| claim.context.clone())
-        .unwrap_or(memory_v2::ClaimContext {
+    let context = match existing.as_ref() {
+        Some(claim) => claim.context.clone(),
+        None => memory_v2::ClaimContext {
             spaces: vec![required_flag(args, "space")?.to_string()],
             applies_when: vec![],
             excludes_when: vec![],
-        });
-    let consent = existing
-        .as_ref()
-        .map(|claim| claim.consent.clone())
-        .unwrap_or(memory_v2::Consent {
+        },
+    };
+    let consent = match existing.as_ref() {
+        Some(claim) => claim.consent.clone(),
+        None => memory_v2::Consent {
             scope: "personal-assistant-only".into(),
-            allowed_purposes: vec![required_flag(args, "purpose")?.to_string()],
+            allowed_purposes: required_list(args, "purpose")?,
             external_provider_policy: parse_v2_enum(
                 args.flags
                     .get("provider-policy")
@@ -386,7 +400,8 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
                     .unwrap_or("deny"),
                 "provider-policy",
             )?,
-        });
+        },
+    };
     let proposal =
         memory_v2::propose_pending(
             root,
@@ -667,6 +682,34 @@ pub fn run(args: MemoryArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn purpose_accepts_several_comma_separated_values() {
+        let args = parse_args(
+            &["propose", "create", "--purpose", "planning, writing ,projection"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert_eq!(
+            required_list(&args, "purpose").unwrap(),
+            vec!["planning", "writing", "projection"]
+        );
+    }
+
+    #[test]
+    fn a_required_list_rejects_a_missing_or_empty_flag() {
+        let args = parse_args(
+            &["propose", "create", "--purpose", " , "]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(required_list(&args, "purpose").is_err());
+        assert!(required_list(&args, "space").is_err());
+    }
 
     #[test]
     fn parses_v2_proposal_flags() {
