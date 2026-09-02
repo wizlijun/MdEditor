@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.902.9 — 2026-09-02
+
 ### Added
 
 - **Memory can now pull in what other AI assistants remember about you.** "复制导入记忆Prompt" in the Memory window copies a ready-made prompt; paste it into ChatGPT, Gemini or any other assistant with a memory feature and it exports its own entries as `notemd memory propose` commands. Running them in your vault files everything as pending claims — nothing enters memory until you confirm it here.
