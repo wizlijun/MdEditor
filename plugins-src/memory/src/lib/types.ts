@@ -220,6 +220,19 @@ export interface ClaimMutationInput extends MutationBase {
   expected_heads: RevisionRef[]
 }
 
+export interface ResetAllInput extends MutationBase {
+  gesture_intent: 'reset-all'
+  expected_claims: Array<{ claim_id: string; expected_heads: RevisionRef[] }>
+  expected_pending: Array<{ revision_id: string; expected_sha256: string; expected_heads: RevisionRef[] }>
+}
+
+export interface ResetAllReceipt {
+  deleted_claims: number
+  deleted_pending: number
+  projection_rebuilt: boolean
+  inference_state_reset: boolean
+}
+
 export interface ResolveConflictInput extends MutationBase {
   conflict_id: string
   claim_id: string

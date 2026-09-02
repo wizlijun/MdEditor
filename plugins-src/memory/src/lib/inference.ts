@@ -86,7 +86,7 @@ export async function startMemoryInference(input: {
         `Mode: ${input.mode}`,
         `Invocation-ID: ${invocationId}`,
         `State: ${MEMORY_INFERENCE_STATE}`,
-        'Only pending proposals are allowed. Never approve or directly edit Memory authority files.',
+        '遵循 Vault 根 AGENTS.md 要求的语言。只允许提交少量高精度 pending 建议；允许零候选。绝不批准，也不直接编辑 Memory 权威文件。',
       ].join('\n'),
     })
     if (typeof run_id !== 'string' || run_id === '') {
