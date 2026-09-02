@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.902.4 — 2026-09-02
+
 ### Changed
 
 - **Ebook Import 1.3.5 expands managed topic taxonomies from five to eight topics.** AI topic design now chooses 2–8 natural domains without filling the limit or merging unrelated fields merely to stay under it; manual topic management and batch classification accept the same expanded catalog.
