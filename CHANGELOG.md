@@ -13,6 +13,7 @@ For the full commit history, see the git log.
 
 ### Fixed
 
+- **Memory 2.1.1 can persist AI-inferred proposals under the Codex workspace sandbox.** Its repository lock no longer writes into protected Git metadata, linked worktrees still share one lock, and a run is reported as successful only after the matching inference checkpoint is present. Commits created while a scan is running are safely deferred to the next incremental pass instead of invalidating the current run.
 - **Claude Agent 1.0.19, Codex Agent 1.0.5 and DeepSeek Agent 1.1.5 preserve complete terminal responses for application workflows.** Human-facing run history remains capped at an 8 KiB summary, while a separate bounded result channel prevents long YAML proposals from being parsed from a truncated tail; Codex also combines multi-message final responses, and Ebook Import retries one malformed protocol response before reporting failure.
 
 ## v6.902.2 — 2026-09-02
