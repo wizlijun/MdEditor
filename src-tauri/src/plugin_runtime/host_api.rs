@@ -74,6 +74,7 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // plugin processes never receive this surface.
         "host.memory.v2.snapshot" | "host.memory.v2.initialize" | "host.memory.v2.context"
         | "host.memory.v2.contextManifest" | "host.memory.v2.check" | "host.memory.v2.add"
+        | "host.memory.v2.replace"
         | "host.memory.v2.approve" | "host.memory.v2.reject" | "host.memory.v2.ignore"
         | "host.memory.v2.delete" | "host.memory.v2.resetAll" | "host.memory.v2.resolve"
         | "host.memory.v2.setSalience" => Some("memory.control"),
@@ -562,6 +563,7 @@ mod tests {
             "host.memory.v2.initialize",
             "host.memory.v2.context",
             "host.memory.v2.add",
+            "host.memory.v2.replace",
             "host.memory.v2.approve",
             "host.memory.v2.resetAll",
             "host.memory.v2.resolve",

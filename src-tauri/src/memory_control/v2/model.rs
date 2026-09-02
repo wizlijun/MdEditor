@@ -879,6 +879,7 @@ pub enum GestureIntent {
     Reject,
     Ignore,
     Delete,
+    Replace,
     SetSalience,
     Resolve,
     ResetAll,
