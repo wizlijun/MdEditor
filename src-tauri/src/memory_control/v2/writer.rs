@@ -76,6 +76,15 @@ impl RepositoryWriter {
         authority: AuthorityRevision,
     ) -> Result<Bootstrap, WriterError> {
         let _guard = self.lock()?;
+        self.initialize_unlocked(vault_id, protocol, authority)
+    }
+
+    fn initialize_unlocked(
+        &self,
+        vault_id: String,
+        protocol: ProtocolRevision,
+        authority: AuthorityRevision,
+    ) -> Result<Bootstrap, WriterError> {
         create_new_or_same(
             &self.tmp_dir(),
             &self.root.join(".notemd/memory/.gitignore"),
@@ -232,6 +241,16 @@ impl RepositoryWriter {
 }
 
 impl RepositoryTransaction<'_> {
+    pub fn initialize(
+        &self,
+        vault_id: String,
+        protocol: ProtocolRevision,
+        authority: AuthorityRevision,
+    ) -> Result<Bootstrap, WriterError> {
+        self.writer
+            .initialize_unlocked(vault_id, protocol, authority)
+    }
+
     pub fn publish_claim(
         &self,
         value: MemoryClaimRevision,
