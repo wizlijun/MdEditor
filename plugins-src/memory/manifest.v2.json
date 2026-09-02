@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.memory",
   "name": "Memory",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "kind": "native",
   "engines": {
     "notemd": ">=6.902.9"

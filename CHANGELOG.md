@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Pending Memory suggestions now support multi-selection and safe bulk cleanup.** Click normally to select one, use Command/Ctrl to toggle items, or Shift to select a range; right-clicking the selection opens bulk ignore, reject and delete-candidate actions with an exact impact confirmation. Human approval, editing and importance remain deliberately item-by-item so distinct identity, fact, behavior and lifecycle meanings cannot be approved under one vague gesture.
+
+### Fixed
+
+- **A concurrent change no longer makes a pending bulk action look all-or-nothing.** Items are guarded and processed serially; if one becomes stale, Memory stops, refreshes the real queue and reports exactly how many were completed and how many remain.
+
 ## v6.902.9 — 2026-09-02
 
 ### Added

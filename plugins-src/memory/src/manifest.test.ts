@@ -5,7 +5,7 @@ import packageJson from '../package.json'
 describe('Memory plugin manifest', () => {
   it('ships cross-harness Memory import on its compatible Host', () => {
     expect(manifest.id).toBe('notemd.memory')
-    expect(manifest.version).toBe('2.3.0')
+    expect(manifest.version).toBe('2.3.1')
     expect(packageJson.version).toBe(manifest.version)
     expect(manifest.engines.notemd).toBe('>=6.902.9')
     expect(manifest.capabilities).toContain('memory.control')
