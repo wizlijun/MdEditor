@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Memory 2.2.1 lets people correct confirmed and pending memory text before relying on it.** Editing a confirmed claim creates an auditable replacement instead of rewriting history; editing a pending suggestion approves the corrected text in one action while retaining the original proposal. Exact revision heads prevent concurrent changes from being overwritten, and lifecycle proposals remain protected from text edits.
+
 ## v6.902.7 — 2026-09-02
 
 ### Fixed
