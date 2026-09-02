@@ -18,6 +18,7 @@
 
 ### 修复
 
+- **Ebook Import 恢复了 AI 主题设计的 Agent 选择器。** 主题设计现在可独立记忆 Claude、Codex 或 DeepSeek，不再与「AI 先读」共用选择；界面会明确提示所选 Agent 是仅能读取 inventory，还是在只读任务策略下可能读取整个 Vault。
 - **macOS 安装镜像现在会携带外层公证票据。** Apple Silicon 与 Intel DMG 都会在发布前单独提交 Apple 公证、装订票据并通过 Gatekeeper，不再只依赖镜像内部已经公证的 App。
 
 ## v6.901.10 — 2026-09-02

@@ -19,6 +19,7 @@ For the full commit history, see the git log.
 
 ### Fixed
 
+- **Ebook Import restores the Agent picker for AI topic design.** Topic design now remembers its own Claude, Codex, or DeepSeek choice independently from AI book reading, while the UI states whether the selected Agent is restricted to the inventory file or may read the Vault under a read-only task policy.
 - **macOS installers now carry notarization on the disk image itself.** Both Apple Silicon and Intel DMGs are submitted to Apple, stapled and checked by Gatekeeper before publication, instead of relying only on the notarized app inside.
 
 ## v6.901.10 — 2026-09-02

@@ -875,8 +875,12 @@ fn spawn_topic_agent(
     });
 }
 
-const TOPIC_DESIGN_PROVIDER: &str = "notemd.claude-agent";
-const TOPIC_DESIGN_PROVIDER_REQUIRED: &str = "TOPIC_DESIGN_PROVIDER_REQUIRED: topic design requires an explicit notemd.claude-agent harness; default providers are not allowed";
+const TOPIC_DESIGN_PROVIDERS: [&str; 3] = [
+    "notemd.claude-agent",
+    "notemd.codex-agent",
+    "notemd.deepseek-agent",
+];
+const TOPIC_DESIGN_PROVIDER_REQUIRED: &str = "TOPIC_DESIGN_PROVIDER_REQUIRED: topic design requires an explicit supported harness; default providers are not allowed";
 
 fn topic_design_harness(params: &Value) -> Result<String, String> {
     let harness = params
@@ -885,9 +889,9 @@ fn topic_design_harness(params: &Value) -> Result<String, String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| TOPIC_DESIGN_PROVIDER_REQUIRED.to_string())?;
-    if harness != TOPIC_DESIGN_PROVIDER {
+    if !TOPIC_DESIGN_PROVIDERS.contains(&harness) {
         return Err(format!(
-            "TOPIC_DESIGN_PROVIDER_UNSAFE: {harness} cannot guarantee inventory-only reads; choose {TOPIC_DESIGN_PROVIDER}"
+            "TOPIC_DESIGN_PROVIDER_UNSUPPORTED: {harness} is not allowed for topic design"
         ));
     }
     Ok(harness.to_string())
@@ -1909,11 +1913,14 @@ mod tests {
     }
 
     #[test]
-    fn topic_design_provider_gate_accepts_only_explicit_claude() {
-        assert_eq!(
-            topic_design_harness(&json!({ "harness": "notemd.claude-agent" })).unwrap(),
-            "notemd.claude-agent"
-        );
+    fn topic_design_provider_gate_accepts_only_explicit_supported_agents() {
+        for id in [
+            "notemd.claude-agent",
+            "notemd.codex-agent",
+            "notemd.deepseek-agent",
+        ] {
+            assert_eq!(topic_design_harness(&json!({ "harness": id })).unwrap(), id);
+        }
         for params in [
             json!({}),
             json!({ "harness": "" }),
@@ -1924,13 +1931,11 @@ mod tests {
                 TOPIC_DESIGN_PROVIDER_REQUIRED
             );
         }
-        for id in ["notemd.codex-agent", "notemd.deepseek-agent", "other"] {
+        for id in ["other", "notemd.unknown-agent"] {
             let error = topic_design_harness(&json!({ "harness": id })).unwrap_err();
             assert_eq!(
                 error,
-                format!(
-                    "TOPIC_DESIGN_PROVIDER_UNSAFE: {id} cannot guarantee inventory-only reads; choose notemd.claude-agent"
-                )
+                format!("TOPIC_DESIGN_PROVIDER_UNSUPPORTED: {id} is not allowed for topic design")
             );
         }
     }

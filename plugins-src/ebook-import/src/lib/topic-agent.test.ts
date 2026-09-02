@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { TOPIC_DESIGN_PROVIDER_ID, topicDesignAvailability } from './topic-agent'
+import {
+  TOPIC_DESIGN_PROVIDER_IDS,
+  topicDesignAvailability,
+  topicDesignProviders,
+  topicDesignReadScope,
+} from './topic-agent'
 import type { AgentOption } from './agent-picker/types'
 
 const agent = (id: string, ok = true): AgentOption => ({
@@ -9,29 +14,59 @@ const agent = (id: string, ok = true): AgentOption => ({
 })
 
 describe('topicDesignAvailability', () => {
-  it('accepts only a verified, usable Claude Agent', () => {
-    const result = topicDesignAvailability([
-      agent('notemd.codex-agent'),
-      agent(TOPIC_DESIGN_PROVIDER_ID),
-      agent('notemd.deepseek-agent'),
-    ])
-    expect(result).toMatchObject({ available: true, provider: { id: TOPIC_DESIGN_PROVIDER_ID } })
-  })
-
-  it('does not fall back to Codex, DeepSeek, or an unknown default', () => {
+  it('offers only the supported topic-design agents', () => {
     expect(
-      topicDesignAvailability([agent('notemd.codex-agent'), agent('notemd.deepseek-agent')]),
-    ).toEqual({ available: false, reason: 'missing' })
-    expect(topicDesignAvailability([])).toEqual({ available: false, reason: 'missing' })
+      topicDesignProviders([
+        agent('notemd.codex-agent'),
+        agent('unknown-agent'),
+        agent('notemd.claude-agent'),
+        agent('notemd.deepseek-agent'),
+      ]).map(({ id }) => id),
+    ).toEqual(['notemd.codex-agent', 'notemd.claude-agent', 'notemd.deepseek-agent'])
+    expect(TOPIC_DESIGN_PROVIDER_IDS).toHaveLength(3)
   })
 
-  it('reports an installed but unverifiable Claude harness as unavailable', () => {
-    expect(topicDesignAvailability([agent(TOPIC_DESIGN_PROVIDER_ID, false)])).toEqual({
+  it.each(TOPIC_DESIGN_PROVIDER_IDS)('accepts a usable supported provider: %s', (id) => {
+    expect(topicDesignAvailability([agent(id)], id)).toMatchObject({
+      available: true,
+      provider: { id },
+    })
+  })
+
+  it('requires an explicit installed selection', () => {
+    const agents = [agent('notemd.codex-agent')]
+    expect(topicDesignAvailability(agents, undefined)).toEqual({
+      available: false,
+      reason: 'missing',
+    })
+    expect(topicDesignAvailability(agents, 'notemd.deepseek-agent')).toEqual({
+      available: false,
+      reason: 'missing',
+    })
+    expect(topicDesignAvailability([], 'notemd.codex-agent')).toEqual({
+      available: false,
+      reason: 'missing',
+    })
+  })
+
+  it('reports an installed but unusable selected harness as unavailable', () => {
+    expect(
+      topicDesignAvailability([agent('notemd.codex-agent', false)], 'notemd.codex-agent'),
+    ).toEqual({
       available: false,
       reason: 'unavailable',
     })
     expect(
-      topicDesignAvailability([{ id: TOPIC_DESIGN_PROVIDER_ID, name: 'Claude Agent' }]),
+      topicDesignAvailability(
+        [{ id: 'notemd.deepseek-agent', name: 'DeepSeek Agent' }],
+        'notemd.deepseek-agent',
+      ),
     ).toEqual({ available: false, reason: 'unavailable' })
+  })
+
+  it('labels the provider read boundary honestly', () => {
+    expect(topicDesignReadScope('notemd.claude-agent')).toBe('inventory')
+    expect(topicDesignReadScope('notemd.codex-agent')).toBe('vault')
+    expect(topicDesignReadScope('notemd.deepseek-agent')).toBe('vault')
   })
 })

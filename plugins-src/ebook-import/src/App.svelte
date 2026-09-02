@@ -24,7 +24,11 @@
   import { describeLog } from './lib/logs'
   import { setLocale, t, type MessageKey } from './lib/strings'
   import { describeError } from './lib/errors'
-  import { topicDesignAvailability } from './lib/topic-agent'
+  import {
+    topicDesignAvailability,
+    topicDesignProviders,
+    topicDesignReadScope,
+  } from './lib/topic-agent'
   import {
     addPaths,
     assignTopic,
@@ -353,14 +357,22 @@
   // cannot express it. The choice is carried INTO the queue, so a job that
   // waits behind others still runs on the agent it was queued for.
   const AGENT_SURFACE = 'ebook-import'
+  const TOPIC_AGENT_SURFACE = 'ebook-topic-design'
   let agents: AgentOption[] = $state([])
   let agentId: string | undefined = $state(undefined)
-  const topicDesign = $derived(topicDesignAvailability(agents))
+  let topicAgentId: string | undefined = $state(undefined)
+  const topicAgents = $derived(topicDesignProviders(agents))
+  const topicDesign = $derived(topicDesignAvailability(topicAgents, topicAgentId))
+  const topicDesignWideScope = $derived(
+    topicDesign.available && topicDesignReadScope(topicDesign.provider.id) === 'vault',
+  )
   const topicDesignStatus = $derived(
     topicDesign.available
-      ? t('topic.agentProviderAvailable', {
-          name: topicDesign.provider.harness?.harness ?? topicDesign.provider.name,
-        })
+      ? t(
+          topicDesignReadScope(topicDesign.provider.id) === 'inventory'
+            ? 'topic.agentScopeInventory'
+            : 'topic.agentScopeVault',
+        )
       : t(
           topicDesign.reason === 'missing'
             ? 'topic.agentProviderMissing'
@@ -373,17 +385,29 @@
       const r = await bridge().request('host.agent.providers', {})
       agents = r?.providers ?? []
       agentId = rememberedProvider(AGENT_SURFACE, agents.map((a) => a.id), r?.default ?? '')
+      const supportedTopicAgents = topicDesignProviders(agents)
+      topicAgentId = rememberedProvider(
+        TOPIC_AGENT_SURFACE,
+        supportedTopicAgents.map((agent) => agent.id),
+        r?.default ?? '',
+      )
     } catch {
       // An older host without host.agent.providers, or no agent installed: hide
       // the picker and let the host decide, exactly as before.
       agents = []
       agentId = undefined
+      topicAgentId = undefined
     }
   }
 
   function pickAgent(id: string) {
     agentId = id
     rememberProvider(AGENT_SURFACE, id)
+  }
+
+  function pickTopicAgent(id: string) {
+    topicAgentId = id
+    rememberProvider(TOPIC_AGENT_SURFACE, id)
   }
 
   async function aiRead(item: QueueItem) {
@@ -743,7 +767,20 @@
     >
       {topicAgentRunning ? t('topic.agentRunning') : t('topic.agentDesign')}
     </button>
-    <span class:unavailable={!topicDesign.available} class="topic-agent-status">
+    {#if topicAgents.length}
+      <AgentPicker
+        options={topicAgents}
+        selected={topicAgentId ?? null}
+        disabled={topicAgentRunning}
+        onselect={pickTopicAgent}
+        label={t as (k: string, v?: Record<string, string | number>) => string}
+      />
+    {/if}
+    <span
+      class:unavailable={!topicDesign.available}
+      class:wide-scope={topicDesignWideScope}
+      class="topic-agent-status"
+    >
       {topicDesignStatus}
     </span>
     {#if unclassifiedBooks.length > 0}
@@ -1247,6 +1284,9 @@
     color: #2e7d32;
   }
   .topic-agent-status.unavailable {
+    color: #b26a00;
+  }
+  .topic-agent-status.wide-scope {
     color: #b26a00;
   }
   .topic-select {

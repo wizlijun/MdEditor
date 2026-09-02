@@ -104,7 +104,8 @@ export type MessageKey =
   | 'topic.bookCount'
   | 'topic.agentDesign'
   | 'topic.agentRunning'
-  | 'topic.agentProviderAvailable'
+  | 'topic.agentScopeInventory'
+  | 'topic.agentScopeVault'
   | 'topic.agentProviderMissing'
   | 'topic.agentProviderUnavailable'
   | 'topic.unclassifiedCount'
@@ -254,9 +255,10 @@ const en: Catalog = {
   'topic.bookCount': '{count} books',
   'topic.agentDesign': 'Design topics with AI',
   'topic.agentRunning': 'AI is designing…',
-  'topic.agentProviderAvailable': '{name} · inventory-only read access',
-  'topic.agentProviderMissing': 'Unavailable: Claude Agent is required; Codex and DeepSeek cannot isolate reads to the inventory file.',
-  'topic.agentProviderUnavailable': 'Unavailable: Claude Agent is not ready; Codex and DeepSeek cannot isolate reads to the inventory file.',
+  'topic.agentScopeInventory': 'Reads only the topic inventory',
+  'topic.agentScopeVault': 'Read-only task · may read the whole Vault',
+  'topic.agentProviderMissing': 'Unavailable: install Claude, Codex, or DeepSeek Agent.',
+  'topic.agentProviderUnavailable': 'Unavailable: the selected Agent is not ready.',
   'topic.unclassifiedCount': '{count} existing books need a topic',
   'topic.chooseForBook': 'Choose a topic for {name}',
   'topic.choose': 'Choose a topic…',
@@ -401,9 +403,10 @@ const zh: Catalog = {
   'topic.bookCount': '{count} 本',
   'topic.agentDesign': 'AI 根据书库设计主题',
   'topic.agentRunning': 'AI 正在设计…',
-  'topic.agentProviderAvailable': '{name} · 仅可读取 inventory',
-  'topic.agentProviderMissing': '不可用：需要 Claude Agent；Codex 与 DeepSeek 暂不能把读取范围隔离到 inventory 文件。',
-  'topic.agentProviderUnavailable': '不可用：Claude Agent 当前未就绪；Codex 与 DeepSeek 暂不能把读取范围隔离到 inventory 文件。',
+  'topic.agentScopeInventory': '仅可读取主题 inventory',
+  'topic.agentScopeVault': '只读任务 · 可能读取整个 Vault',
+  'topic.agentProviderMissing': '不可用：请安装 Claude、Codex 或 DeepSeek Agent。',
+  'topic.agentProviderUnavailable': '不可用：所选 Agent 当前未就绪。',
   'topic.unclassifiedCount': '有 {count} 本旧书尚未分类',
   'topic.chooseForBook': '为《{name}》选择主题',
   'topic.choose': '选择主题…',
@@ -550,9 +553,10 @@ const ja: Catalog = {
   'topic.bookCount': '{count} 冊',
   'topic.agentDesign': 'AIでテーマを設計',
   'topic.agentRunning': 'AIが設計中…',
-  'topic.agentProviderAvailable': '{name} · inventory のみ読み取り可',
-  'topic.agentProviderMissing': '利用不可：Claude Agent が必要です。Codex と DeepSeek は読み取りを inventory のみに分離できません。',
-  'topic.agentProviderUnavailable': '利用不可：Claude Agent が未準備です。Codex と DeepSeek は読み取りを inventory のみに分離できません。',
+  'topic.agentScopeInventory': 'トピック inventory のみ読み取り可',
+  'topic.agentScopeVault': '読み取り専用タスク · Vault 全体を読み取る場合があります',
+  'topic.agentProviderMissing': '利用不可：Claude、Codex、または DeepSeek Agent をインストールしてください。',
+  'topic.agentProviderUnavailable': '利用不可：選択した Agent は現在使用できません。',
   'topic.unclassifiedCount': '既存の {count} 冊が未分類です',
   'topic.chooseForBook': '「{name}」のテーマを選択',
   'topic.choose': 'テーマを選択…',
@@ -699,9 +703,10 @@ const de: Catalog = {
   'topic.bookCount': '{count} Bücher',
   'topic.agentDesign': 'Themen mit KI entwerfen',
   'topic.agentRunning': 'KI entwirft…',
-  'topic.agentProviderAvailable': '{name} · nur Inventory-Lesezugriff',
-  'topic.agentProviderMissing': 'Nicht verfügbar: Claude Agent ist erforderlich; Codex und DeepSeek können Lesezugriffe nicht auf die Inventory-Datei begrenzen.',
-  'topic.agentProviderUnavailable': 'Nicht verfügbar: Claude Agent ist nicht bereit; Codex und DeepSeek können Lesezugriffe nicht auf die Inventory-Datei begrenzen.',
+  'topic.agentScopeInventory': 'Liest nur das Themen-Inventory',
+  'topic.agentScopeVault': 'Schreibgeschützte Aufgabe · kann den gesamten Vault lesen',
+  'topic.agentProviderMissing': 'Nicht verfügbar: Claude, Codex oder DeepSeek Agent installieren.',
+  'topic.agentProviderUnavailable': 'Nicht verfügbar: Der ausgewählte Agent ist nicht bereit.',
   'topic.unclassifiedCount': '{count} vorhandene Bücher sind nicht klassifiziert',
   'topic.chooseForBook': 'Thema für „{name}“ auswählen',
   'topic.choose': 'Thema auswählen…',
