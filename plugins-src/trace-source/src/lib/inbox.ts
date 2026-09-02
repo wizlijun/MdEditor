@@ -1,9 +1,9 @@
 // inbox.ts — the report inbox's data layer: which files count as reports, in
 // what order, where a row's title comes from, and what a delete takes along.
 //
-// Reports are AGENT products (✦), not documents this window edits — so unlike
-// idea-spark's inbox there is no rename, no dirty state, no status machine: a
-// report either exists or it doesn't, and the only mutations are delete.
+// Reports are AGENT products (✦) that this window can edit in place. Unlike
+// idea-spark's inbox there is no rename or inbox-owned dirty state: a report
+// either exists or it doesn't, and deletion is the data layer's only mutation.
 //
 // No `$state` and no bridge import: pure logic over injected IO, so the tests
 // need nothing but plain objects.
@@ -28,6 +28,12 @@ export interface ReportEntry {
    *  exists but `<name>` doesn't. Those rows are how a lost/failed/still-running
    *  task stays VISIBLE instead of silently vanishing on refresh. */
   hasReport: boolean
+}
+
+/** The document represented by an inbox row. Finished rows edit the report;
+ * unfinished rows edit the only durable artifact they have: the request. */
+export function documentPathFor(dir: string, report: Pick<ReportEntry, 'name' | 'hasReport'>): string {
+  return report.hasReport ? `${dir}/${report.name}` : `${dir}/${requestPathFor(report.name)}`
 }
 
 /** `2026-08-18-143012-source-trace.md` → `2026-08-18-143012-source-trace/00-request.md`.
@@ -121,7 +127,7 @@ export async function listReports(io: Pick<InboxIo, 'list' | 'read'>, dir: strin
     names.map(async (name, i): Promise<ReportEntry> => {
       const hasReport = reportNames.has(name)
       if (i >= TITLE_READS) return { name, title: null, hasReport }
-      const titlePath = hasReport ? `${dir}/${name}` : `${dir}/${requestPathFor(name)}`
+      const titlePath = documentPathFor(dir, { name, hasReport })
       try {
         return { name, title: titleOf((await io.read(titlePath)).content), hasReport }
       } catch {

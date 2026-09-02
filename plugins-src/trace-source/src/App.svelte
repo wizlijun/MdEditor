@@ -16,8 +16,9 @@
      composed text is NOT a file — it lives exactly as long as the delegation
      it is for. The durable artifacts are the agent's reports,
      `<traceDir>/<YYYY-MM-DD>-<HHmmss>-source-trace.md`, and the inbox lists
-     exactly those. Rows open in the MAIN editor: a report is a ✦ product to
-     read, not a draft to edit here.
+     exactly those. Inbox rows load into this window's editor and save back to
+     their original file; New trace returns the editor to its transient
+     delegation-composer mode.
 
      Settings (`.notemd/trace-source.json`): the report directory (default
      `inbox/traces`) and whether the inbox is open. Both persist best-effort —
@@ -71,13 +72,15 @@
   import {
     buildRequestDoc,
     deleteReport,
+    documentPathFor,
     listReports,
     previewDelete,
     requestPathFor,
     stripFrontmatter,
     type ReportEntry,
   } from './lib/inbox'
-  import { loadKit, type KitEditor } from './lib/editor-kit'
+  import { DocumentWriteQueue } from './lib/document-write'
+  import { loadKit, type KitEditor, type MountMarkdownEditor } from './lib/editor-kit'
   import { parseState, serializeState, STATE_PATH, type TraceState } from './lib/state-io'
   import { TRACE_TASK_ID } from './lib/trace-template'
   import { setLocale, t, tv } from './lib/strings'
@@ -86,6 +89,9 @@
 
   let editorEl: HTMLDivElement | undefined = $state()
   let kit: KitEditor | null = null
+  let mountEditor: MountMarkdownEditor | null = null
+  let editorBaseDir = ''
+  let switchingDocument = $state(false)
   /** Editor content while the kit is unavailable (the degraded textarea). */
   let fallbackText = $state('')
   let kitFailed = $state(false)
@@ -93,6 +99,18 @@
   let needVault = $state(false)
   let vaultRoot = $state<string | null>(null)
   let settingsOpen = $state(false)
+
+  // ── an inbox document being edited in this window ───────────────────────
+  /** Null means the editor is the transient delegation composer. */
+  let activeDocumentPath = $state<string | null>(null)
+  /** Editor-kit-normalized bytes last known to be on disk. */
+  let savedDocumentMarkdown = ''
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+  /** Switch/save/delete are one transaction stream; none may overtake another. */
+  let documentOperations: Promise<void> = Promise.resolve()
+  const SAVE_DELAY_MS = 600
+  const documentWrites = new DocumentWriteQueue((path, content) => vaultWrite(path, content))
+  const deletingPaths = new Set<string>()
 
   /** `.notemd/trace-source.json`, parsed. Written back best-effort on change. */
   let settings = $state<TraceState>(parseState(null))
@@ -185,40 +203,204 @@
     await persist()
   }
 
-  async function commitTraceDir(dir: string): Promise<void> {
-    settings.traceDir = dir
-    await persist()
-    if (settings.inboxOpen) void refreshReports()
+  async function commitTraceDir(dir: string): Promise<boolean> {
+    return withDocumentLock(async () => {
+      if (!(await flushActiveDocument())) return false
+      const nextContent = activeDocumentPath ? '' : markdown()
+      settings.traceDir = dir
+      await attachComposer(nextContent)
+      await persist()
+      if (settings.inboxOpen) void refreshReports()
+      return true
+    })
   }
 
-  function openReport(name: string): void {
-    void editorOpen(`${settings.traceDir}/${name}`).catch((e) => {
-      errorMsg = e instanceof Error ? e.message : String(e)
+  function cancelScheduledSave(): void {
+    if (saveTimer !== null) clearTimeout(saveTimer)
+    saveTimer = null
+  }
+
+  function scheduleDocumentSave(): void {
+    if (!activeDocumentPath) return
+    cancelScheduledSave()
+    saveTimer = setTimeout(() => {
+      saveTimer = null
+      void saveActiveDocument()
+    }, SAVE_DELAY_MS)
+  }
+
+  function withDocumentLock<T>(operation: () => Promise<T>): Promise<T> {
+    const result = documentOperations.catch(() => undefined).then(operation)
+    documentOperations = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  function queueClosingDocumentSave(): void {
+    cancelScheduledSave()
+    const path = activeDocumentPath
+    if (!path || deletingPaths.has(path)) return
+    const content = markdown()
+    if (content === savedDocumentMarkdown) return
+    void documentWrites.enqueue(path, content).catch((e) => {
+      console.error('[trace-source] saving the open document during close failed:', e)
     })
+  }
+
+  /** Saves until disk has caught the live buffer, including typing that lands
+   * while an earlier write is in flight. Must run under `withDocumentLock`. */
+  async function flushActiveDocument(): Promise<boolean> {
+    const path = activeDocumentPath
+    if (!path) return true
+    for (;;) {
+      cancelScheduledSave()
+      try {
+        await documentWrites.drain()
+      } catch {
+        // The next enqueue retries the current buffer.
+      }
+      const content = markdown()
+      if (content === savedDocumentMarkdown) return true
+      try {
+        await documentWrites.enqueue(path, content)
+        savedDocumentMarkdown = content
+        errorMsg = ''
+      } catch (e) {
+        errorMsg = e instanceof Error ? e.message : String(e)
+        return false
+      }
+      // Loop: `markdown()` may have changed during the await above.
+    }
+  }
+
+  function saveActiveDocument(): Promise<boolean> {
+    return withDocumentLock(flushActiveDocument)
+  }
+
+  function parentDir(path: string): string {
+    const slash = path.lastIndexOf('/')
+    return slash < 0 ? '' : path.slice(0, slash)
+  }
+
+  async function showMarkdownAt(content: string, baseDir: string): Promise<void> {
+    if (!kit || !mountEditor || !editorEl || editorBaseDir === baseDir) {
+      showMarkdown(content)
+      return
+    }
+    const previous = kit
+    try {
+      previous.destroy()
+      kit = await mountEditor(editorEl, {
+        initialMarkdown: content,
+        mode: 'rich',
+        placeholder: t('placeholder'),
+        onChange: onEdited,
+        baseDir,
+      })
+      editorBaseDir = baseDir
+    } catch (e) {
+      console.error('[trace-source] remounting the editor for a document failed:', e)
+      kit = null
+      kitFailed = true
+      fallbackText = content
+    }
+  }
+
+  async function attachDocument(path: string, content: string): Promise<void> {
+    switchingDocument = true
+    try {
+      activeDocumentPath = null
+      await showMarkdownAt(content, parentDir(path))
+      activeDocumentPath = path
+      savedDocumentMarkdown = markdown()
+      finished = null
+      errorMsg = ''
+      kit?.focus()
+    } finally {
+      switchingDocument = false
+    }
+  }
+
+  async function attachComposer(content: string): Promise<void> {
+    switchingDocument = true
+    try {
+      activeDocumentPath = null
+      savedDocumentMarkdown = ''
+      await showMarkdownAt(content, settings.traceDir)
+      finished = null
+      errorMsg = ''
+      kit?.focus()
+    } finally {
+      switchingDocument = false
+    }
+  }
+
+  async function openDocument(path: string): Promise<void> {
+    await withDocumentLock(async () => {
+      if (!(await flushActiveDocument())) return
+      if (path === activeDocumentPath) {
+        kit?.focus()
+        return
+      }
+      try {
+        const { content } = await vaultRead(path)
+        if (unmounted) return
+        // The old document stayed editable during the read. Flush once more
+        // before replacing it so typing during slow IO cannot be lost.
+        if (!(await flushActiveDocument())) return
+        await attachDocument(path, content)
+      } catch (e) {
+        errorMsg = e instanceof Error ? e.message : String(e)
+      }
+    })
+  }
+
+  function openInboxRow(report: ReportEntry): void {
+    void openDocument(documentPathFor(settings.traceDir, report))
   }
 
   function openRequest(name: string): void {
-    void editorOpen(`${settings.traceDir}/${requestPathFor(name)}`).catch((e) => {
-      errorMsg = e instanceof Error ? e.message : String(e)
-    })
+    void openDocument(`${settings.traceDir}/${requestPathFor(name)}`)
   }
 
   /** A failed trace's request, back into the composer for another go. */
   async function reloadRequest(name: string): Promise<void> {
-    try {
-      const { content } = await vaultRead(`${settings.traceDir}/${requestPathFor(name)}`)
-      applySeed(stripFrontmatter(content))
-    } catch (e) {
-      errorMsg = e instanceof Error ? e.message : String(e)
-    }
+    await withDocumentLock(async () => {
+      try {
+        if (!(await flushActiveDocument())) return
+        const path = `${settings.traceDir}/${requestPathFor(name)}`
+        if (path === activeDocumentPath) {
+          await attachComposer(stripFrontmatter(markdown()))
+          return
+        }
+        const { content } = await vaultRead(path)
+        if (unmounted || !(await flushActiveDocument())) return
+        await attachComposer(stripFrontmatter(content))
+      } catch (e) {
+        errorMsg = e instanceof Error ? e.message : String(e)
+      }
+    })
   }
 
   async function removeReport(name: string): Promise<void> {
-    try {
-      await deleteReport({ list: vaultList, read: vaultRead, remove: vaultRemove }, settings.traceDir, name)
-    } catch (e) {
-      errorMsg = e instanceof Error ? e.message : String(e)
-    }
+    await withDocumentLock(async () => {
+      try {
+        const paths = await previewDelete({ list: vaultList }, settings.traceDir, name)
+        const deletingActive = activeDocumentPath !== null && paths.includes(activeDocumentPath)
+        if (deletingActive && !(await flushActiveDocument())) return
+        for (const path of paths) deletingPaths.add(path)
+        try {
+          await deleteReport({ list: vaultList, read: vaultRead, remove: vaultRemove }, settings.traceDir, name)
+          // Clear only after every remove succeeded. A partial failure keeps
+          // the editable buffer attached, so the user's text is not lost.
+          if (deletingActive) await attachComposer('')
+          errorMsg = ''
+        } finally {
+          for (const path of paths) deletingPaths.delete(path)
+        }
+      } catch (e) {
+        errorMsg = e instanceof Error ? e.message : String(e)
+      }
+    })
     await refreshReports()
   }
 
@@ -249,19 +431,21 @@
    *  "done" would otherwise claim the NEW text was already handled. */
   function onEdited(md: string): void {
     fallbackText = md
+    if (switchingDocument) return
+    if (!unmounted && activeDocumentPath && md !== savedDocumentMarkdown) scheduleDocumentSave()
     if (finished) finished = null
     if (errorMsg) errorMsg = ''
   }
 
-  function applySeed(text: string): void {
-    showMarkdown(text)
-    finished = null
-    errorMsg = ''
-    kit?.focus()
+  async function applySeed(text: string): Promise<void> {
+    await withDocumentLock(async () => {
+      if (!(await flushActiveDocument()) || unmounted) return
+      await attachComposer(text)
+    })
   }
 
-  function startNew(): void {
-    applySeed('')
+  async function startNew(): Promise<void> {
+    await applySeed('')
   }
 
   // ── watching runs to their end ────────────────────────────────────────────
@@ -332,7 +516,7 @@
   }
 
   async function delegate(): Promise<void> {
-    if (delegating || booting || needVault || !vaultRoot) return
+    if (switchingDocument || activeDocumentPath || delegating || booting || needVault || !vaultRoot) return
     const text = markdown()
     if (!text.trim()) {
       errorMsg = t('delegateEmpty')
@@ -411,7 +595,7 @@
       if (type === 'theme-changed') return
       if (type === 'seed') {
         const text = (payload as { payload?: { text?: string } } | null)?.payload?.text
-        if (typeof text === 'string' && text) applySeed(text)
+        if (typeof text === 'string' && text) void applySeed(text)
         return
       }
       console.debug('[trace-source] unhandled host push:', payload)
@@ -456,14 +640,16 @@
       if (disposed) return
       try {
         if (!editorEl) throw new Error('editor container missing')
-        const mount = await loadKit()
+        mountEditor = await loadKit()
         if (disposed) return
-        kit = await mount(editorEl, {
+        kit = await mountEditor(editorEl, {
           initialMarkdown: initial,
           mode: 'rich',
           placeholder: t('placeholder'),
           onChange: onEdited,
+          baseDir: settings.traceDir,
         })
+        editorBaseDir = settings.traceDir
         if (disposed) {
           kit.destroy()
           kit = null
@@ -482,9 +668,14 @@
       if (!disposed) void reconcilePending()
     })()
 
+    const beforeUnload = () => queueClosingDocumentSave()
+    window.addEventListener('beforeunload', beforeUnload)
+
     return () => {
       disposed = true
       unmounted = true
+      window.removeEventListener('beforeunload', beforeUnload)
+      queueClosingDocumentSave()
       for (const id of polls.values()) clearTimeout(id)
       polls.clear()
       kit?.destroy()
@@ -518,7 +709,7 @@
           {reports}
           running={runningNames}
           {listFailed}
-          onopen={openReport}
+          onopen={openInboxRow}
           onopenrequest={openRequest}
           onreload={(name) => void reloadRequest(name)}
           ondelete={removeReport}
@@ -543,30 +734,34 @@
           {t('traceFailed')}{errorMsg ? ` · ${errorMsg}` : ''}
         {:else if errorMsg}
           {errorMsg}
+        {:else if activeDocumentPath}
+          {activeDocumentPath}
         {/if}
       </span>
       <div class="spacer"></div>
-      <button type="button" class="ghost" onclick={startNew}>
+      <button type="button" class="ghost" disabled={switchingDocument} onclick={() => void startNew()}>
         <Icon name="trace" />
         {t('newTrace')}
       </button>
-      <button
-        type="button"
-        class="ghost"
-        disabled={delegating}
-        onclick={() => void delegate()}
-      >
-        <Icon name="delegate" />
-        {delegating ? t('delegating') : t('delegate')}
-      </button>
-      {#if agents.length}
-        <AgentPicker
-          options={agents}
-          selected={agentId ?? null}
+      {#if !activeDocumentPath && !switchingDocument}
+        <button
+          type="button"
+          class="ghost"
           disabled={delegating}
-          onselect={pickAgent}
-          label={tv as (k: string, v?: Record<string, string | number>) => string}
-        />
+          onclick={() => void delegate()}
+        >
+          <Icon name="delegate" />
+          {delegating ? t('delegating') : t('delegate')}
+        </button>
+        {#if agents.length}
+          <AgentPicker
+            options={agents}
+            selected={agentId ?? null}
+            disabled={delegating}
+            onselect={pickAgent}
+            label={tv as (k: string, v?: Record<string, string | number>) => string}
+          />
+        {/if}
       {/if}
       <button
         type="button"

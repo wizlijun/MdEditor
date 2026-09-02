@@ -1,10 +1,9 @@
 <!-- SettingsPopover.svelte — the gear's two concerns: which vault directory
      trace reports land in, and the delegation prompt (a file you own).
 
-     Same shape as idea-spark's settings popover, minus its flush barrier —
-     this window has no autosaved document a directory change could fork: the
-     directory only names where FUTURE reports go, so committing it is a plain
-     settings write. Validation is live and non-destructive (the save button
+     Same shape as idea-spark's settings popover. App flushes and detaches any
+     Inbox document before changing directories; a failed flush leaves this
+     popover open. Validation is live and non-destructive (the save button
      greys out for an empty / absolute / `..`-bearing path).
 
      Reports already written stay where they are; the inbox lists the
@@ -23,7 +22,7 @@
     traceDir: string
     onclose: () => void
     /** Applies a validated directory; the App owns persistence + relist. */
-    oncommit: (dir: string) => void | Promise<void>
+    oncommit: (dir: string) => void | boolean | Promise<void | boolean>
     /** Opens the trace task's CLAUDE.md in the main editor (App seeds first). */
     oneditprompt: () => void | Promise<void>
   } = $props()
@@ -37,8 +36,7 @@
   async function commit(): Promise<void> {
     const normalized = normalizeTraceDir(value)
     if (normalized === null) return
-    await oncommit(normalized)
-    onclose()
+    if ((await oncommit(normalized)) !== false) onclose()
   }
 
   function onkeydown(e: KeyboardEvent): void {
