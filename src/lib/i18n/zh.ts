@@ -220,6 +220,8 @@ export const zh: Record<keyof Messages, string> = {
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': '插件市场',
   'pluginMarket.subtitle': '按你想完成的事情浏览，为 note.md 加上新的能力。',
+  'pluginMarket.hostVersion': 'note.md {version}',
+  'pluginMarket.restartHint': '安装或更新插件后，请退出并重新启动 note.md。',
   'pluginMarket.aiTitle': '与 AI 一起完成',
   'pluginMarket.aiSubtitle': '从阅读、启发到推理与执行，选择专注的 AI 搭档。',
   'pluginMarket.aiBadge.read': 'AI 阅读',

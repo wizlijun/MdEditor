@@ -218,6 +218,8 @@ export const de: Record<keyof Messages, string> = {
   // Plugin Market window (子项目③)
   'pluginMarket.windowTitle': 'Plugin-Markt',
   'pluginMarket.subtitle': 'Nach Aufgaben entdecken und note.md passend erweitern.',
+  'pluginMarket.hostVersion': 'note.md {version}',
+  'pluginMarket.restartHint': 'Nach der Installation oder Aktualisierung von Plugins note.md beenden und neu starten.',
   'pluginMarket.aiTitle': 'Mit AI mehr erreichen',
   'pluginMarket.aiSubtitle': 'Fokussierte AI-Partner für Lesen, Ideen, Denken und Handeln.',
   'pluginMarket.aiBadge.read': 'AI Lesen',

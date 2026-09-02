@@ -85,7 +85,7 @@
   let batchProgress = $state(0)
   let batchTotal = $state(0)
   // Running app version for min_host selection; null = unknown (fail open).
-  let hostVersion: string | null = null
+  let hostVersion = $state<string | null>(null)
   let refreshSequence = 0
   let catalogById = $derived(new Map(catalogEntries.map((entry) => [entry.id, entry])))
   let marketItems: MarketItem[] = $derived([
@@ -152,14 +152,16 @@
   }
 
   /** Re-fetch device state first, then enrich it with the remote catalog. */
-  async function refresh() {
+  async function refresh(forceOnline = false) {
     const sequence = ++refreshSequence
     loading = true
     notice = null
     // Start both requests together, but apply the device-local result first.
     // The registry can be slow or offline and must never gate installed plugins.
     const installedRequest = invoke<InstalledV2[]>('plugin_market_installed')
-    const indexRequest = invoke<RegistryIndex>('plugin_market_index')
+    const indexRequest = invoke<RegistryIndex>('plugin_market_index', {
+      forceRefresh: forceOnline,
+    })
     try {
       const localInstalled = await installedRequest
       if (sequence === refreshSequence) applyInstalled(localInstalled, catalogEntries, true)
@@ -435,7 +437,13 @@
       <header class="hero">
         <div class="hero-copy">
           <h1>{t('pluginMarket.windowTitle')}</h1>
-          <p>{t('pluginMarket.subtitle')}</p>
+          <p class="hero-subtitle">{t('pluginMarket.subtitle')}</p>
+          <div class="hero-meta">
+            {#if hostVersion}
+              <span class="host-version">{t('pluginMarket.hostVersion', { version: hostVersion })}</span>
+            {/if}
+            <span class="restart-hint">{t('pluginMarket.restartHint')}</span>
+          </div>
         </div>
         <div class="hero-actions">
           {#if updateItems.length > 0 || batchUpdating}
@@ -446,7 +454,7 @@
                 : t('pluginMarket.updateAll', { count: updateItems.length })}
             </button>
           {/if}
-          <button class="refresh" onclick={() => refresh()} disabled={loading || batchUpdating}>
+          <button class="refresh" onclick={() => refresh(true)} disabled={loading || batchUpdating}>
             <span class:spinning={loading} aria-hidden="true">↻</span>
             {t('pluginMarket.refresh')}
           </button>
@@ -641,13 +649,32 @@
     letter-spacing: -0.045em;
     font-weight: 760;
   }
-  .hero-copy p {
+  .hero-subtitle {
     max-width: 650px;
     margin: 7px 0 0;
     color: color-mix(in srgb, CanvasText 62%, transparent);
     font-size: 13px;
     line-height: 1.4;
   }
+  .hero-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px 8px;
+    margin-top: 5px;
+    color: color-mix(in srgb, CanvasText 48%, transparent);
+    font-size: 10.5px;
+    line-height: 1.35;
+  }
+  .host-version {
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: color-mix(in srgb, CanvasText 6%, transparent);
+    color: color-mix(in srgb, CanvasText 66%, transparent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: nowrap;
+  }
+  .restart-hint { font-weight: 520; }
   .hero-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
   .summary {
     grid-column: 1 / -1;

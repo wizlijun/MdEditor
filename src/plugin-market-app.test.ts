@@ -26,6 +26,8 @@ vi.mock('./lib/i18n/store.svelte', () => {
   const labels: Record<string, string> = {
     'pluginMarket.windowTitle': 'Plugin Market',
     'pluginMarket.subtitle': 'Browse plugins',
+    'pluginMarket.hostVersion': 'note.md {version}',
+    'pluginMarket.restartHint': 'After installing or updating plugins, quit and reopen note.md.',
     'pluginMarket.refresh': 'Refresh',
     'pluginMarket.pluginsUnit': 'plugins',
     'pluginMarket.loadingCatalog': 'Checking for more plugins…',
@@ -132,6 +134,48 @@ afterEach(async () => {
 })
 
 describe('plugin market staged loading', () => {
+  it('shows the current note.md version and plugin restart guidance below the subtitle', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'plugin_market_installed') return Promise.resolve([])
+      if (command === 'plugin_market_index') return Promise.resolve({ plugins: [] })
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+
+    await vi.waitFor(() => expect(document.querySelector('.host-version')?.textContent).toBe('note.md 6.829.2'))
+    expect(document.querySelector('.restart-hint')?.textContent)
+      .toBe('After installing or updating plugins, quit and reopen note.md.')
+  })
+
+  it('uses a normal online request on startup and forces a fresh online request after clicking Refresh', async () => {
+    let indexCalls = 0
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'plugin_market_installed') return Promise.resolve([])
+      if (command === 'plugin_market_index') {
+        indexCalls += 1
+        return Promise.resolve({
+          plugins: indexCalls === 1
+            ? [entry('notemd.next', 'Next')]
+            : [entry('notemd.idea-spark', 'Idea Spark')],
+        })
+      }
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Next'))
+    expect(mocks.invoke).toHaveBeenCalledWith('plugin_market_index', { forceRefresh: false })
+
+    const refresh = document.querySelector('.refresh') as HTMLButtonElement
+    await vi.waitFor(() => expect(refresh.disabled).toBe(false))
+    refresh.click()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Idea Spark'))
+    expect(document.body.textContent).not.toContain('Next')
+    expect(mocks.invoke).toHaveBeenCalledWith('plugin_market_index', { forceRefresh: true })
+  })
+
   it('shows cached installed plugins first, then device state, then the full catalog', async () => {
     writeInstalledCache([installed('Cached Next', false)])
     const local = deferred<InstalledV2[]>()

@@ -209,7 +209,8 @@ pub struct LocatedMenuItem {
 /// `menus[].submenu` carries one of these language-neutral keys. Keeping the
 /// field open means an older Host still loads newer plugin manifests; this
 /// Host normalizes unknown/missing keys to Other instead of hiding an action.
-pub const PLUGIN_MENU_GROUP_ORDER: [&str; 9] = [
+pub const PLUGIN_MENU_GROUP_ORDER: [&str; 10] = [
+    "ai",
     "record",
     "reading",
     "inspiration",
@@ -223,10 +224,11 @@ pub const PLUGIN_MENU_GROUP_ORDER: [&str; 9] = [
 
 pub fn normalize_plugin_menu_group(group: Option<&str>) -> &'static str {
     match group {
+        Some("ai") | Some("agents") => "ai",
         Some("record") | Some("capture") | Some("capture-import") => "record",
         Some("reading") => "reading",
         Some("inspiration") => "inspiration",
-        Some("advance") | Some("agents") => "advance",
+        Some("advance") => "advance",
         Some("reflect") | Some("thinking") | Some("thinking-review") => "reflect",
         Some("create") => "create",
         Some("import-export") | Some("publish-export") => "import-export",
@@ -243,10 +245,11 @@ pub fn plugin_menu_group_for_plugin(plugin_id: &str, group: Option<&str>) -> &'s
         "notemd.ebook-import" | "notemd.trace-source" => "reading",
         "notemd.idea-spark" => "inspiration",
         "notemd.next"
-        | "notemd.claude-agent"
+        | "notemd.openclaw-chat" => "advance",
+        "notemd.claude-agent"
         | "notemd.codex-agent"
         | "notemd.deepseek-agent"
-        | "notemd.openclaw-chat" => "advance",
+        | "notemd.memory" => "ai",
         "notemd.decision-log" | "notemd.weekly-review" => "reflect",
         "notemd.roam-import" | "notemd.md2pdf" => "import-export",
         "notemd.power-mode" => "experience",
@@ -385,6 +388,7 @@ mod tests {
     #[test]
     fn plugin_menu_group_order_matches_the_documented_taxonomy() {
         assert_eq!(PLUGIN_MENU_GROUP_ORDER, [
+            "ai",
             "record",
             "reading",
             "inspiration",
@@ -433,7 +437,7 @@ mod tests {
 
     #[test]
     fn previous_plugin_menu_group_keys_map_to_current_groups() {
-        assert_eq!(normalize_plugin_menu_group(Some("agents")), "advance");
+        assert_eq!(normalize_plugin_menu_group(Some("agents")), "ai");
         assert_eq!(normalize_plugin_menu_group(Some("capture-import")), "record");
         assert_eq!(normalize_plugin_menu_group(Some("thinking-review")), "reflect");
         assert_eq!(normalize_plugin_menu_group(Some("publish-export")), "import-export");
@@ -442,10 +446,36 @@ mod tests {
 
     #[test]
     fn first_party_plugins_override_ambiguous_legacy_groups() {
+        assert_eq!(plugin_menu_group_for_plugin("notemd.claude-agent", Some("advance")), "ai");
+        assert_eq!(plugin_menu_group_for_plugin("notemd.memory", Some("reflect")), "ai");
+        assert_eq!(plugin_menu_group_for_plugin("notemd.openclaw-chat", Some("agents")), "advance");
         assert_eq!(plugin_menu_group_for_plugin("notemd.idea-spark", Some("thinking")), "inspiration");
         assert_eq!(plugin_menu_group_for_plugin("notemd.trace-source", Some("capture")), "reading");
         assert_eq!(plugin_menu_group_for_plugin("notemd.power-mode", Some("editing")), "experience");
         assert_eq!(plugin_menu_group_for_plugin("notemd.roam-import", Some("record")), "import-export");
         assert_eq!(plugin_menu_group_for_plugin("third.party", Some("thinking")), "reflect");
+    }
+
+    #[test]
+    fn native_menu_applies_market_categories_to_first_party_plugins() {
+        let items = vec![
+            menu_item("plugin:notemd.next:open", Some("thinking")),
+            menu_item("plugin:notemd.memory:open", Some("reflect")),
+            menu_item("plugin:notemd.claude-agent:run", Some("advance")),
+            menu_item("plugin:notemd.openclaw-chat:open", Some("agents")),
+        ];
+        let groups = group_plugin_menu_items(&items);
+
+        assert_eq!(groups.iter().map(|group| group.key).collect::<Vec<_>>(), vec![
+            "ai", "advance",
+        ]);
+        assert_eq!(groups[0].items.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), vec![
+            "plugin:notemd.memory:open",
+            "plugin:notemd.claude-agent:run",
+        ]);
+        assert_eq!(groups[1].items.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), vec![
+            "plugin:notemd.next:open",
+            "plugin:notemd.openclaw-chat:open",
+        ]);
     }
 }

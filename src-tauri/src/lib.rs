@@ -1711,6 +1711,7 @@ fn menu_label(locale: &str, key: &str) -> String {
         "menu.window" => ("Window", "窗口", "ウインドウ", "Fenster"),
         "menu.help" => ("Help", "帮助", "ヘルプ", "Hilfe"),
         "menu.plugins" => ("Plugins", "插件", "プラグイン", "Plugins"),
+        "plugins.group.ai" => ("AI", "AI", "AI", "AI"),
         "plugins.group.record" => ("Capture", "记录", "記録", "Festhalten"),
         "plugins.group.reading" => ("Read", "阅读", "読む", "Lesen"),
         "plugins.group.inspiration" => ("Ideas", "灵感", "アイデア", "Ideen"),
@@ -2319,6 +2320,7 @@ fn build_menu<R: tauri::Runtime>(
             b = b.separator();
             for group in contributed {
                 let label_key = match group.key {
+                    "ai" => "plugins.group.ai",
                     "record" => "plugins.group.record",
                     "reading" => "plugins.group.reading",
                     "inspiration" => "plugins.group.inspiration",
@@ -2368,6 +2370,10 @@ mod menu_label_tests {
 
     #[test]
     fn cognitive_plugin_groups_are_localized_in_every_locale() {
+        assert_eq!(menu_label("en", "plugins.group.ai"), "AI");
+        assert_eq!(menu_label("zh", "plugins.group.ai"), "AI");
+        assert_eq!(menu_label("ja", "plugins.group.ai"), "AI");
+        assert_eq!(menu_label("de", "plugins.group.ai"), "AI");
         assert_eq!(menu_label("en", "plugins.group.advance"), "Move Forward");
         assert_eq!(menu_label("zh", "plugins.group.advance"), "推进");
         assert_eq!(menu_label("ja", "plugins.group.advance"), "前へ進む");
