@@ -54,6 +54,7 @@ describe('Memory Protocol v2 app', () => {
   it('copies the cross-assistant import prompt to the clipboard', async () => {
     const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? baseSnapshot() : {})
     await render(request)
+    expect(request.mock.calls.some(([method]) => method === 'host.clipboard.write')).toBe(false)
     button('复制导入记忆Prompt')!.click()
     await settle()
     const call = request.mock.calls.find(([method]) => method === 'host.clipboard.write')
@@ -61,6 +62,10 @@ describe('Memory Protocol v2 app', () => {
     const text = call![1].text as string
     expect(text).toContain('notemd memory propose create')
     expect(text).toContain('--recorded-by')
+    expect(text).toContain('--valid-from "2026-09-02T00:00:00Z"')
+    expect(text).toContain('推断内容不得生成命令')
+    expect(text).not.toContain('owner-stated / inferred')
+    expect(text).toContain('运行前逐条审阅 bash 代码块')
     expect(text).toContain('不要调用 notemd memory approve / reject / delete')
     expect(request.mock.calls.some(([method]) => method === 'host.memory.v2.add')).toBe(false)
   })
@@ -74,8 +79,27 @@ describe('Memory Protocol v2 app', () => {
     expect(document.body.textContent).toContain('not-assessed · unknown')
     expect(document.querySelector('[role=tablist]')).toBeTruthy()
     expect(document.querySelector('[role=listbox]')?.getAttribute('tabindex')).toBe('0')
+    expect(document.querySelector<HTMLSelectElement>('select[aria-label="已确认主张排序"]')?.value).toBe('priority')
+    expect(Array.from(document.querySelectorAll('.claim-section > h3')).map((item) => item.textContent)).toEqual(['USER.md'])
+    expect(Array.from(document.querySelectorAll('.claim-category > h4')).map((item) => item.textContent)).toEqual(['偏好1'])
     button('更多')!.click(); flushSync()
     expect(document.querySelector('.menu-panel[role=menu] .menu-row[role=menuitem]')).toBeTruthy()
+  })
+
+  it('sorts confirmed claims without losing the selected detail', async () => {
+    const important = { claim: revision({ claim_id: 'important', revision_id: 'important', payload_sha256: 'important-sha', text: '较早的重要主张。', salience: 'pinned', recorded_at: '2026-08-01T00:00:00Z' }), application_state: 'current' as const }
+    const recent = { claim: revision({ claim_id: 'recent', revision_id: 'recent', payload_sha256: 'recent-sha', text: '最近更新的普通主张。', salience: 'normal', recorded_at: '2026-09-02T00:00:00Z' }), application_state: 'current' as const }
+    const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? { ...baseSnapshot(), claims: [recent, important] } : {})
+    await render(request)
+
+    const optionTexts = () => Array.from(document.querySelectorAll<HTMLElement>('[role=option] strong')).map((item) => item.textContent)
+    expect(optionTexts()).toEqual(['较早的重要主张。', '最近更新的普通主张。'])
+    Array.from(document.querySelectorAll<HTMLButtonElement>('[role=option]'))[0].click()
+    const sort = document.querySelector<HTMLSelectElement>('select[aria-label="已确认主张排序"]')!
+    sort.value = 'recent'; sort.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+
+    expect(optionTexts()).toEqual(['最近更新的普通主张。', '较早的重要主张。'])
+    expect(document.querySelector('#claim-title')?.textContent).toBe('较早的重要主张。')
   })
 
   it('approves a pending self-representation with one click and no caller-forged human fields', async () => {

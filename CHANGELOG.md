@@ -7,17 +7,21 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
-## v6.902.8 — 2026-09-02
-
 ### Added
 
 - **Memory can now pull in what other AI assistants remember about you.** "复制导入记忆Prompt" in the Memory window copies a ready-made prompt; paste it into ChatGPT, Gemini or any other assistant with a memory feature and it exports its own entries as `notemd memory propose` commands. Running them in your vault files everything as pending claims — nothing enters memory until you confirm it here.
 
-- **Memory 2.2.1 lets people correct confirmed and pending memory text before relying on it.** Editing a confirmed claim creates an auditable replacement instead of rewriting history; editing a pending suggestion approves the corrected text in one action while retaining the original proposal. Exact revision heads prevent concurrent changes from being overwritten, and lifecycle proposals remain protected from text edits.
+- **Confirmed Memory claims are now grouped by projection and category.** `MEMORY.md`, `USER.md` and structured-only context have distinct sections, with category counts inside each. The default order keeps important claims first and otherwise mirrors projection order; recent, oldest and text ordering are also available.
 
 ### Fixed
 
 - **A proposed Claim can now allow several retrieval purposes.** `notemd memory propose` takes a comma-separated `--purpose`, matching the Memory window's own multi-select; previously a CLI-proposed Claim was limited to one purpose and was withheld from every other context. `replace` and `revoke` no longer demand `--category`, `--space` and `--purpose` that they go on to ignore.
+
+## v6.902.8 — 2026-09-02
+
+### Added
+
+- **Memory 2.2.1 lets people correct confirmed and pending memory text before relying on it.** Editing a confirmed claim creates an auditable replacement instead of rewriting history; editing a pending suggestion approves the corrected text in one action while retaining the original proposal. Exact revision heads prevent concurrent changes from being overwritten, and lifecycle proposals remain protected from text edits.
 
 ## v6.902.7 — 2026-09-02
 
