@@ -29,7 +29,7 @@ export interface BuildContextOpts {
    */
   outputPath?: string
   /**
-   * CLI invocation only: the subcommand's positional file (if any) and its
+   * CLI invocation only: all manifest-declared positional arguments and the
    * parsed `--flag` values, forwarded verbatim into `context.cli`. This is
    * the ONLY thing standing between a plugin's `cli_str`/`cli_flag` helper
    * (which probes `/cli/args/<name>`, `/cli/flags/<name>`, `/cli/<name>`,
@@ -38,7 +38,7 @@ export interface BuildContextOpts {
    * miss and the plugin silently falls back to its own defaults no matter
    * what was passed on the command line.
    */
-  cli?: { args?: Record<string, string>; flags?: Record<string, string | boolean> }
+  cli?: { args?: Record<string, string | number>; flags?: Record<string, string | boolean> }
 }
 
 export async function buildContext(

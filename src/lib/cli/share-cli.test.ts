@@ -44,8 +44,8 @@ const HTML_RECORD = {
 function payload(over: Partial<CliPayload> = {}, global: Partial<CliPayload['global']> = {}): CliPayload {
   return {
     subcommand: 'share', plugin_id: 'share', plugin_command: 'publish',
-    file: '/tmp/a.md', flags: {},
-    global: { json: false, quiet: false, clipboard: true, yes: false, ...global },
+    args: { file: '/tmp/a.md' }, flags: {},
+    global: { json: false, quiet: false, clipboard: true, ...global },
     ...over,
   }
 }
@@ -142,23 +142,25 @@ describe('runShareCli publish', () => {
     const { deps, results } = makeDeps()
     await runShareCli(payload({}, { json: true }), deps)
     expect(results[0].exit_code).toBe(2)
+    expect(envelope(results[0]).error.code).toBe('invalid_arguments')
+    expect(results[0].stderr).toEqual([])
     expect(getShareConfig).not.toHaveBeenCalled()
   })
 
   it('missing file argument → exit 2', async () => {
     const { deps, results } = makeDeps()
-    await runShareCli(payload({ file: null }), deps)
+    await runShareCli(payload({ args: {} }), deps)
     expect(results[0].exit_code).toBe(2)
     expect(results[0].stderr[0]).toContain('missing file argument')
   })
 
-  it('vault_required from prepareShareSrc → exit 4 with diagnostics on stderr', async () => {
+  it('vault_required under --json emits only the error envelope', async () => {
     ;(prepareShareSrc as any).mockRejectedValue(new ShareError('vault_required'))
     const { deps, results } = makeDeps()
     await runShareCli(payload({}, { json: true }), deps)
     expect(results[0].exit_code).toBe(4)
     expect(envelope(results[0]).error.code).toBe('vault_required')
-    expect(results[0].stderr).toContain('  diag: line')
+    expect(results[0].stderr).toEqual([])
   })
 })
 
@@ -191,6 +193,12 @@ describe('runShareCli copy-link', () => {
     await runShareCli(cl(), deps)
     expect(copyShareLink).toHaveBeenCalledWith('/tmp/a.md', { clipboard: true })
     expect(results[0].stdout).toBe('https://w/s1')
+  })
+
+  it('--quiet suppresses the human success output', async () => {
+    const { deps, results } = makeDeps()
+    await runShareCli(cl({ quiet: true }), deps)
+    expect(results[0].stdout).toBeUndefined()
   })
 
   it('corrupt record → exit 4 with code corrupt_record', async () => {

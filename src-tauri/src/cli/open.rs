@@ -99,13 +99,27 @@ pub fn run(tokens: &[String], parsed: &Parsed) -> ExitCode {
     let targets = match resolve_targets(tokens) {
         Ok(t) => t,
         Err(msg) => {
-            eprintln!("{msg}");
+            if parsed.globals.json {
+                println!("{}", json!({
+                    "ok": false,
+                    "error": { "code": "invalid_path", "message": msg.strip_prefix("notemd: ").unwrap_or(&msg) }
+                }));
+            } else {
+                eprintln!("{msg}");
+            }
             return ExitCode::from(2);
         }
     };
 
     if let Err(msg) = launch(&targets) {
-        eprintln!("notemd: {msg}");
+        if parsed.globals.json {
+            println!("{}", json!({
+                "ok": false,
+                "error": { "code": "launch_failed", "message": msg }
+            }));
+        } else {
+            eprintln!("notemd: {msg}");
+        }
         return ExitCode::from(1);
     }
 

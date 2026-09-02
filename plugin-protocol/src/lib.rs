@@ -6,6 +6,45 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CliContributionForValidation {
+    subcommand: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    command: String,
+    summary: String,
+    #[serde(default)]
+    args: Vec<CliArgForValidation>,
+    #[serde(default)]
+    flags: Vec<CliFlagForValidation>,
+    #[serde(default)]
+    requires_tab_context: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CliArgForValidation {
+    name: String,
+    #[serde(rename = "type")]
+    ty: String,
+    required: bool,
+    #[serde(default)]
+    help: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CliFlagForValidation {
+    long: String,
+    #[serde(default)]
+    short: Option<String>,
+    #[serde(rename = "type")]
+    ty: String,
+    #[serde(default)]
+    help: Option<String>,
+}
+
 pub const PROTOCOL_VERSION: u32 = 2;
 
 // ── Manifest v2 (spec §2) ──────────────────────────────────────────────
@@ -13,53 +52,60 @@ pub const PROTOCOL_VERSION: u32 = 2;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestV2 {
-    pub manifest_version: u32,              // 必须 == 2
-    pub id: String,                         // publisher.name
+    pub manifest_version: u32, // 必须 == 2
+    pub id: String,            // publisher.name
     pub name: String,
-    pub version: String,                    // semver
-    pub kind: PluginKind,                   // 本期仅 native
+    pub version: String,  // semver
+    pub kind: PluginKind, // 本期仅 native
     pub engines: Engines,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub binary: std::collections::BTreeMap<String, String>, // target triple → 包内相对路径
     #[serde(default)]
-    pub ui: Option<String>,                 // ②期使用；本期仅透传
+    pub ui: Option<String>, // ②期使用；本期仅透传
     pub activation: Activation,
     #[serde(default)]
     pub contributes: Contributes,
-    pub capabilities: Vec<String>,          // 见 host_api::method_capability
+    pub capabilities: Vec<String>, // 见 host_api::method_capability
     #[serde(default)]
     pub request_timeout_seconds: Option<u64>, // 默认 30，上限 300
     #[serde(default)]
     pub idle_shutdown_seconds: Option<u64>,
     #[serde(default)]
-    pub i18n: Option<serde_json::Value>,    // 结构同 v1 PluginI18n，宿主透传不解释
+    pub i18n: Option<serde_json::Value>, // 结构同 v1 PluginI18n，宿主透传不解释
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum PluginKind { Native, Wasm }       // wasm 仅保留字面量（spec §15）
+pub enum PluginKind {
+    Native,
+    Wasm,
+} // wasm 仅保留字面量（spec §15）
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Engines { pub notemd: String }  // semver range，如 ">=6.717.0"
+pub struct Engines {
+    pub notemd: String,
+} // semver range，如 ">=6.717.0"
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Activation { pub events: Vec<String> }
+pub struct Activation {
+    pub events: Vec<String>,
+}
 // 合法事件（spec §4.3）：`*`、`onStartupFinished`、`onCommand:<c>`、`onCli:<sub>`、`onFileType:<ext>`
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct Contributes {
-    pub menus: Vec<serde_json::Value>,          // 语义同 v1 MenuEntry；宿主经 adapter 透传
-    pub context_menus: Vec<serde_json::Value>,  // 语义同 v1 ContextMenuEntry
-    pub windows: Vec<WindowContribution>,       // ②期消费；窗口贡献
+    pub menus: Vec<serde_json::Value>, // 语义同 v1 MenuEntry；宿主经 adapter 透传
+    pub context_menus: Vec<serde_json::Value>, // 语义同 v1 ContextMenuEntry
+    pub windows: Vec<WindowContribution>, // ②期消费；窗口贡献
     pub custom_editors: Vec<serde_json::Value>, // ④期消费
-    pub settings: Option<serde_json::Value>,    // 语义同 v1 settings
-    pub cli: Vec<serde_json::Value>,            // 语义同 v1 CliEntry
-    pub tray: Vec<TrayContribution>,            // 菜单栏托盘"插座"：把插件窗口挂到 tray（今天日记下方）
+    pub settings: Option<serde_json::Value>, // 语义同 v1 settings
+    pub cli: Vec<serde_json::Value>,   // 语义同 v1 CliEntry
+    pub tray: Vec<TrayContribution>,   // 菜单栏托盘"插座"：把插件窗口挂到 tray（今天日记下方）
 }
 
 /// 一个托盘启动项：宿主在菜单栏 tray 下拉里加一条,点击打开该插件的窗口。
@@ -97,27 +143,33 @@ pub const TRAY_SECTION_CAPTURE: &str = "capture";
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WindowContribution {
-    pub id: String,                 // 窗口 id（label = plugin-<sanitized plugin id>-<id>）
-    pub entry: String,              // ui/ 内相对路径，如 "index.html"
+    pub id: String,    // 窗口 id（label = plugin-<sanitized plugin id>-<id>）
+    pub entry: String, // ui/ 内相对路径，如 "index.html"
     #[serde(default)]
-    pub title: Option<String>,      // 缺省用插件 name
+    pub title: Option<String>, // 缺省用插件 name
     pub width: f64,
     pub height: f64,
-    #[serde(default)] pub min_width: Option<f64>,
-    #[serde(default)] pub min_height: Option<f64>,
-    #[serde(default = "default_true")] pub singleton: bool,
+    #[serde(default)]
+    pub min_width: Option<f64>,
+    #[serde(default)]
+    pub min_height: Option<f64>,
+    #[serde(default = "default_true")]
+    pub singleton: bool,
     /// contributes.menus 中命中此 command 的菜单项 = 打开本窗口（不走 command.execute）。
-    #[serde(default)] pub open_command: Option<String>,
+    #[serde(default)]
+    pub open_command: Option<String>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 // ── JSON-RPC 2.0 信封（NDJSON，一行一条）────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RpcRequest {
-    pub jsonrpc: String,                    // "2.0"
-    pub id: Option<u64>,                    // None ⇒ notification
+    pub jsonrpc: String, // "2.0"
+    pub id: Option<u64>, // None ⇒ notification
     pub method: String,
     #[serde(default)]
     pub params: serde_json::Value,
@@ -134,7 +186,10 @@ pub struct RpcResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RpcError { pub code: i64, pub message: String }
+pub struct RpcError {
+    pub code: i64,
+    pub message: String,
+}
 
 pub const ERR_CAPABILITY_DENIED: i64 = -32001;
 pub const ERR_METHOD_NOT_FOUND: i64 = -32601;
@@ -151,19 +206,21 @@ pub struct InitializeParams {
     pub host_version: String,
     pub locale: String,
     pub theme: String,
-    pub plugin_root: String,                // 插件安装目录（current/）
-    pub data_dir: String,                   // <app_data>/plugin_data/<id>/
+    pub plugin_root: String, // 插件安装目录（current/）
+    pub data_dir: String,    // <app_data>/plugin_data/<id>/
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ActivateParams { pub event: String }
+pub struct ActivateParams {
+    pub event: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExecuteCommandParams {
     pub command: String,
-    pub context: serde_json::Value,         // 形状与 v1 PluginRequest.context 一致（含 tab / rendered_html / output_path；宿主在前端解析 CLI flags 后注入，插件无需自行解析命令行参数）
+    pub context: serde_json::Value, // 形状与 v1 PluginRequest.context 一致（含 tab / rendered_html / output_path；宿主在前端解析 CLI flags 后注入，插件无需自行解析命令行参数）
 }
 
 // ── 插件→宿主方法（host.*；capability 映射见 host_api）──────────────────
@@ -171,7 +228,7 @@ pub struct ExecuteCommandParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ToastParams {
-    pub level: String,                      // success|info|warn|error
+    pub level: String, // success|info|warn|error
     pub message: String,
     #[serde(default)]
     pub detail: Option<String>,
@@ -179,7 +236,9 @@ pub struct ToastParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LogParams { pub message: String }
+pub struct LogParams {
+    pub message: String,
+}
 
 /// 宿主→插件 `ui.request`：UI 窗口请求自己的插件进程执行操作。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -201,25 +260,45 @@ pub struct UiPostParams {
 // ── Manifest 校验 ───────────────────────────────────────────────────────
 
 pub fn validate_manifest(m: &ManifestV2, host_version: &str) -> Result<(), String> {
-    if m.manifest_version != 2 { return Err(format!("manifest_version {} != 2", m.manifest_version)); }
+    if m.manifest_version != 2 {
+        return Err(format!("manifest_version {} != 2", m.manifest_version));
+    }
     let id_re_ok = {
         let parts: Vec<&str> = m.id.split('.').collect();
-        parts.len() == 2 && parts.iter().all(|p| !p.is_empty()
-            && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+        parts.len() == 2
+            && parts.iter().all(|p| {
+                !p.is_empty()
+                    && p.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            })
     };
-    if !id_re_ok { return Err(format!("id '{}' must be publisher.name ([a-z0-9-])", m.id)); }
+    if !id_re_ok {
+        return Err(format!("id '{}' must be publisher.name ([a-z0-9-])", m.id));
+    }
     semver::Version::parse(&m.version).map_err(|e| format!("version: {e}"))?;
-    let req = semver::VersionReq::parse(&m.engines.notemd).map_err(|e| format!("engines.notemd: {e}"))?;
+    let req =
+        semver::VersionReq::parse(&m.engines.notemd).map_err(|e| format!("engines.notemd: {e}"))?;
     let host = semver::Version::parse(host_version).map_err(|e| format!("host version: {e}"))?;
-    if !req.matches(&host) { return Err(format!("requires notemd {}, host is {host}", m.engines.notemd)); }
-    if m.kind == PluginKind::Wasm { return Err("kind 'wasm' is reserved, not yet supported".into()); }
+    if !req.matches(&host) {
+        return Err(format!(
+            "requires notemd {}, host is {host}",
+            m.engines.notemd
+        ));
+    }
+    if m.kind == PluginKind::Wasm {
+        return Err("kind 'wasm' is reserved, not yet supported".into());
+    }
     if m.binary.is_empty() && m.ui.is_none() {
         return Err("plugin must provide binary and/or ui".into());
     }
     if !m.contributes.windows.is_empty() && m.ui.is_none() {
         return Err("contributes.windows requires ui to be set".into());
     }
-    let win_id_ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let win_id_ok = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    };
     for w in &m.contributes.windows {
         if w.entry.contains("..") {
             return Err(format!("window '{}': entry must not contain '..'", w.id));
@@ -229,13 +308,189 @@ pub fn validate_manifest(m: &ManifestV2, host_version: &str) -> Result<(), Strin
         }
     }
     for ev in &m.activation.events {
-        let ok = ev == "*" || ev == "onStartupFinished"
-            || ev.strip_prefix("onCommand:").map_or(false, |s| !s.is_empty())
+        let ok = ev == "*"
+            || ev == "onStartupFinished"
+            || ev
+                .strip_prefix("onCommand:")
+                .map_or(false, |s| !s.is_empty())
             || ev.strip_prefix("onCli:").map_or(false, |s| !s.is_empty())
-            || ev.strip_prefix("onFileType:").map_or(false, |s| !s.is_empty());
-        if !ok { return Err(format!("unknown activation event '{ev}'")); }
+            || ev
+                .strip_prefix("onFileType:")
+                .map_or(false, |s| !s.is_empty());
+        if !ok {
+            return Err(format!("unknown activation event '{ev}'"));
+        }
+    }
+    validate_cli_contributions(m)?;
+    Ok(())
+}
+
+fn validate_cli_contributions(m: &ManifestV2) -> Result<(), String> {
+    use std::collections::BTreeSet;
+
+    const RESERVED_GLOBAL_FLAGS: &[&str] = &[
+        "-h",
+        "--help",
+        "-v",
+        "--version",
+        "-q",
+        "--quiet",
+        "--json",
+        "--no-clipboard",
+        "--cli",
+        "-y",
+        "--yes",
+    ];
+
+    let mut tokens = BTreeSet::new();
+    for (index, value) in m.contributes.cli.iter().enumerate() {
+        let cli: CliContributionForValidation = serde_json::from_value(value.clone())
+            .map_err(|e| format!("contributes.cli[{index}]: {e}"))?;
+        let label = format!("contributes.cli[{index}]");
+        if !cli_token_ok(&cli.subcommand) {
+            return Err(format!(
+                "{label}.subcommand '{}' must match [a-z0-9][a-z0-9-]*",
+                cli.subcommand
+            ));
+        }
+        if cli.command.trim().is_empty() {
+            return Err(format!("{label}.command must not be empty"));
+        }
+        if cli.summary.trim().is_empty() {
+            return Err(format!("{label}.summary must not be empty"));
+        }
+        if !tokens.insert(cli.subcommand.clone()) {
+            return Err(format!("duplicate CLI token '{}'", cli.subcommand));
+        }
+        for alias in &cli.aliases {
+            if !short_flag_ok(alias) && !long_flag_ok(alias) {
+                return Err(format!(
+                    "{label}.alias '{alias}' must be a short or long flag"
+                ));
+            }
+            if RESERVED_GLOBAL_FLAGS.contains(&alias.as_str()) {
+                return Err(format!(
+                    "{label}.alias '{alias}' collides with a reserved global flag"
+                ));
+            }
+            if !tokens.insert(alias.clone()) {
+                return Err(format!("duplicate CLI token '{alias}'"));
+            }
+        }
+        let activation = format!("onCli:{}", cli.subcommand);
+        if !m
+            .activation
+            .events
+            .iter()
+            .any(|event| event == "*" || event == &activation)
+        {
+            return Err(format!(
+                "{label}.subcommand '{}' requires activation event '{activation}'",
+                cli.subcommand
+            ));
+        }
+
+        let mut arg_names = BTreeSet::new();
+        let mut optional_seen = false;
+        for (arg_index, arg) in cli.args.iter().enumerate() {
+            if !identifier_ok(&arg.name) {
+                return Err(format!(
+                    "{label}.args[{arg_index}].name '{}' is invalid",
+                    arg.name
+                ));
+            }
+            if !matches!(arg.ty.as_str(), "path" | "string" | "integer") {
+                return Err(format!(
+                    "{label}.args[{arg_index}].type '{}' is unsupported",
+                    arg.ty
+                ));
+            }
+            if !arg_names.insert(arg.name.clone()) {
+                return Err(format!("{label}: duplicate argument '{}'", arg.name));
+            }
+            if !arg.required {
+                optional_seen = true;
+            } else if optional_seen {
+                return Err(format!(
+                    "{label}: required argument '{}' cannot follow an optional argument",
+                    arg.name
+                ));
+            }
+            let _ = &arg.help;
+        }
+
+        let mut flag_tokens = BTreeSet::new();
+        for (flag_index, flag) in cli.flags.iter().enumerate() {
+            if !long_flag_ok(&flag.long) {
+                return Err(format!(
+                    "{label}.flags[{flag_index}].long '{}' is invalid",
+                    flag.long
+                ));
+            }
+            if !matches!(flag.ty.as_str(), "boolean" | "string") {
+                return Err(format!(
+                    "{label}.flags[{flag_index}].type '{}' is unsupported",
+                    flag.ty
+                ));
+            }
+            if !flag_tokens.insert(flag.long.clone()) {
+                return Err(format!("{label}: duplicate flag '{}'", flag.long));
+            }
+            if RESERVED_GLOBAL_FLAGS.contains(&flag.long.as_str()) {
+                return Err(format!(
+                    "{label}.flags[{flag_index}].long '{}' collides with a reserved global flag",
+                    flag.long
+                ));
+            }
+            if let Some(short) = &flag.short {
+                if !short_flag_ok(short) {
+                    return Err(format!(
+                        "{label}.flags[{flag_index}].short '{short}' is invalid"
+                    ));
+                }
+                if !flag_tokens.insert(short.clone()) {
+                    return Err(format!("{label}: duplicate flag '{short}'"));
+                }
+                if RESERVED_GLOBAL_FLAGS.contains(&short.as_str()) {
+                    return Err(format!(
+                        "{label}.flags[{flag_index}].short '{short}' collides with a reserved global flag"
+                    ));
+                }
+            }
+            let _ = &flag.help;
+        }
+        if cli.requires_tab_context && !cli.args.iter().any(|arg| arg.ty == "path") {
+            return Err(format!(
+                "{label}.requires_tab_context needs at least one path argument"
+            ));
+        }
     }
     Ok(())
+}
+
+fn identifier_ok(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+fn cli_token_ok(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn long_flag_ok(value: &str) -> bool {
+    value
+        .strip_prefix("--")
+        .is_some_and(|name| !name.is_empty() && cli_token_ok(name))
+}
+
+fn short_flag_ok(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!((chars.next(), chars.next(), chars.next()), (Some('-'), Some(c), None) if c.is_ascii_alphanumeric())
 }
 
 // ── Unit tests ──────────────────────────────────────────────────────────
@@ -400,8 +655,14 @@ mod tests {
         v["contributes"]["tray"] =
             json!([{ "window": "main", "section": "capture", "accelerator": "Cmd+Ctrl+I" }]);
         let m: ManifestV2 = serde_json::from_value(v).unwrap();
-        assert_eq!(m.contributes.tray[0].section.as_deref(), Some(TRAY_SECTION_CAPTURE));
-        assert_eq!(m.contributes.tray[0].accelerator.as_deref(), Some("Cmd+Ctrl+I"));
+        assert_eq!(
+            m.contributes.tray[0].section.as_deref(),
+            Some(TRAY_SECTION_CAPTURE)
+        );
+        assert_eq!(
+            m.contributes.tray[0].accelerator.as_deref(),
+            Some("Cmd+Ctrl+I")
+        );
         assert_eq!(validate_manifest(&m, "7.0.0"), Ok(()));
     }
 
@@ -447,7 +708,10 @@ mod tests {
         };
         let json_str = serde_json::to_string(&resp).unwrap();
         // error should be absent (skip_serializing_if)
-        assert!(!json_str.contains("\"error\""), "error should not appear in json: {json_str}");
+        assert!(
+            !json_str.contains("\"error\""),
+            "error should not appear in json: {json_str}"
+        );
         let decoded: RpcResponse = serde_json::from_str(&json_str).unwrap();
         assert_eq!(decoded.id, 1);
         assert_eq!(decoded.result, Some(json!({"ok": true})));
@@ -460,11 +724,17 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: 2,
             result: None,
-            error: Some(RpcError { code: ERR_CAPABILITY_DENIED, message: "denied".to_string() }),
+            error: Some(RpcError {
+                code: ERR_CAPABILITY_DENIED,
+                message: "denied".to_string(),
+            }),
         };
         let json_str = serde_json::to_string(&resp).unwrap();
         // result should be absent
-        assert!(!json_str.contains("\"result\""), "result should not appear: {json_str}");
+        assert!(
+            !json_str.contains("\"result\""),
+            "result should not appear: {json_str}"
+        );
         let decoded: RpcResponse = serde_json::from_str(&json_str).unwrap();
         assert_eq!(decoded.id, 2);
         assert!(decoded.result.is_none());
@@ -485,8 +755,11 @@ mod tests {
 
         let instance = md2pdf_manifest_json();
         let result = compiled.validate(&instance);
-        assert!(result.is_ok(), "valid manifest should pass schema validation: {:?}",
-            result.err().map(|e| e.collect::<Vec<_>>()));
+        assert!(
+            result.is_ok(),
+            "valid manifest should pass schema validation: {:?}",
+            result.err().map(|e| e.collect::<Vec<_>>())
+        );
     }
 
     #[test]
@@ -500,7 +773,10 @@ mod tests {
         let mut instance = md2pdf_manifest_json();
         instance.as_object_mut().unwrap().remove("id");
         let result = compiled.validate(&instance);
-        assert!(result.is_err(), "manifest missing 'id' should fail schema validation");
+        assert!(
+            result.is_err(),
+            "manifest missing 'id' should fail schema validation"
+        );
     }
 
     // ── binary optional / ui-only rules ───────────────────────────────
@@ -629,5 +905,73 @@ mod tests {
         });
         let m: ManifestV2 = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(validate_manifest(&m, "7.0.0"), Ok(()));
+    }
+
+    #[test]
+    fn validate_rejects_malformed_cli_contribution_before_install() {
+        let mut m = sample_manifest();
+        m.contributes.cli[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("summary");
+        let err = validate_manifest(&m, "7.0.0").unwrap_err();
+        assert!(err.contains("contributes.cli[0]"), "got: {err}");
+        assert!(err.contains("summary"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_unsupported_cli_types() {
+        let mut m = sample_manifest();
+        m.contributes.cli[0]["args"][0]["type"] = json!("bytes");
+        let err = validate_manifest(&m, "7.0.0").unwrap_err();
+        assert!(err.contains("unsupported"), "got: {err}");
+        assert!(err.contains("bytes"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_cli_without_matching_activation() {
+        let mut m = sample_manifest();
+        m.activation.events = vec!["onCommand:export".to_string()];
+        let err = validate_manifest(&m, "7.0.0").unwrap_err();
+        assert!(err.contains("onCli:pdf2"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_cli_tokens() {
+        let mut m = sample_manifest();
+        m.contributes.cli.push(m.contributes.cli[0].clone());
+        let err = validate_manifest(&m, "7.0.0").unwrap_err();
+        assert_eq!(err, "duplicate CLI token 'pdf2'");
+    }
+
+    #[test]
+    fn validate_rejects_non_flag_and_reserved_cli_aliases_and_flags() {
+        let mut bare_alias = sample_manifest();
+        bare_alias.contributes.cli[0]["aliases"] = json!(["pdf"]);
+        let err = validate_manifest(&bare_alias, "7.0.0").unwrap_err();
+        assert!(err.contains("must be a short or long flag"), "got: {err}");
+
+        let mut reserved_alias = sample_manifest();
+        reserved_alias.contributes.cli[0]["aliases"] = json!(["--json"]);
+        let err = validate_manifest(&reserved_alias, "7.0.0").unwrap_err();
+        assert!(err.contains("reserved global flag"), "got: {err}");
+
+        let mut reserved_long = sample_manifest();
+        reserved_long.contributes.cli[0]["flags"][0]["long"] = json!("--quiet");
+        let err = validate_manifest(&reserved_long, "7.0.0").unwrap_err();
+        assert!(err.contains("reserved global flag"), "got: {err}");
+
+        let mut reserved_short = sample_manifest();
+        reserved_short.contributes.cli[0]["flags"][0]["short"] = json!("-h");
+        let err = validate_manifest(&reserved_short, "7.0.0").unwrap_err();
+        assert!(err.contains("reserved global flag"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_requires_a_path_argument_for_tab_context() {
+        let mut m = sample_manifest();
+        m.contributes.cli[0]["args"][0]["type"] = json!("string");
+        let err = validate_manifest(&m, "7.0.0").unwrap_err();
+        assert!(err.contains("requires_tab_context"), "got: {err}");
     }
 }

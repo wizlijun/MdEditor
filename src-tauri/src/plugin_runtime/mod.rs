@@ -38,6 +38,16 @@ pub static STATE: LazyLock<RwLock<RuntimeState>> =
 /// (menu building, `plugin_host::get_plugin_manifests`). Scans the install
 /// tree, then activates the plugins whose activation events fire at startup.
 pub fn init<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    init_inner(app, true);
+}
+
+/// CLI hosts need discovery and lazy command activation, but must not activate
+/// unrelated `onStartupFinished` plugins while serving one shell command.
+pub fn init_for_cli<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    init_inner(app, false);
+}
+
+fn init_inner<R: tauri::Runtime>(app: &tauri::AppHandle<R>, activate_startup: bool) {
     {
         let mut st = STATE.write().unwrap();
         let host_version = app.package_info().version.to_string();
@@ -47,5 +57,7 @@ pub fn init<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         }
         eprintln!("[plugin_runtime] {} plugin(s)", st.plugins.len());
     } // release the STATE write lock before registration re-reads it
-    commands::startup_activate_all(app);
+    if activate_startup {
+        commands::startup_activate_all(app);
+    }
 }

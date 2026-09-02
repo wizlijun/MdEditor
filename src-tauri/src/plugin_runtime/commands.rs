@@ -27,6 +27,22 @@ pub async fn plugin_v2_execute(
         .await
 }
 
+/// CLI counterpart of [`plugin_v2_execute`]. Activation must use the
+/// manifest's `onCli:<subcommand>` event rather than the GUI command event.
+#[tauri::command]
+pub async fn plugin_v2_execute_cli(
+    app: tauri::AppHandle,
+    plugin_id: String,
+    subcommand: String,
+    command: String,
+    context: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let lc = get_or_register(&app, &plugin_id)?;
+    lc.ensure_active(&Trigger::Cli(subcommand)).await?;
+    lc.execute(plugin_protocol::ExecuteCommandParams { command, context })
+        .await
+}
+
 /// Open a plugin-contributed window (spec §7.2). The frontend routes a menu
 /// command to this instead of `plugin_v2_execute` when the command matches a
 /// window's `open_command` (see `open_windows` in the adapted manifest).

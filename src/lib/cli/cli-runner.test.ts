@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { basenameOf, extensionOf, inferKind, requiresFileArg } from './cli-runner'
+import {
+  basenameOf, dirnameOf, extensionOf, firstPathArg, inferKind,
+  isAbsolutePath, outputPathFor, requiresFileArg,
+} from './cli-runner'
 import type { CliEntry } from '../plugins/types'
 
 describe('basenameOf / extensionOf / inferKind', () => {
@@ -36,5 +39,30 @@ describe('requiresFileArg', () => {
       args: [{ name: 'file', type: 'path', required: true, help: 'the file to export' }],
     }
     expect(requiresFileArg(entry)).toBe(true)
+  })
+})
+
+describe('manifest positional and cross-platform paths', () => {
+  it('selects the first declared path without confusing a string arg for a file', () => {
+    const entry = { args: [
+      { name: 'task', type: 'string' },
+      { name: 'source', type: 'path' },
+    ] }
+    expect(firstPathArg(entry, { task: 'selfcheck', source: '/tmp/a.md' })).toBe('/tmp/a.md')
+  })
+
+  it('recognises Unix, drive-letter, and UNC absolute paths', () => {
+    expect(isAbsolutePath('/tmp/x')).toBe(true)
+    expect(isAbsolutePath('C:\\notes\\x.md')).toBe(true)
+    expect(isAbsolutePath('\\\\server\\share\\x.md')).toBe(true)
+    expect(isAbsolutePath('out.pdf')).toBe(false)
+  })
+
+  it('resolves output paths using the input platform separator', () => {
+    expect(dirnameOf('/tmp/a.md')).toBe('/tmp')
+    expect(outputPathFor('/tmp/a.md', 'out.pdf')).toBe('/tmp/out.pdf')
+    expect(outputPathFor('C:\\notes\\a.md', 'out.pdf')).toBe('C:\\notes\\out.pdf')
+    expect(outputPathFor('C:\\notes\\a.md', 'D:\\exports\\a.pdf')).toBe('D:\\exports\\a.pdf')
+    expect(outputPathFor('C:\\notes\\a.md')).toBe('C:\\notes\\a.pdf')
   })
 })

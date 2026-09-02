@@ -14,6 +14,7 @@
 //! comment on `cli_finish` for why that path silently drops the exit code.
 
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::sync::Mutex;
 use tokio::sync::oneshot;
 
@@ -22,7 +23,10 @@ pub struct CliPayload {
     pub subcommand: String,
     pub plugin_id: String,
     pub plugin_command: String,
-    pub file: Option<String>,
+    /// Positional arguments keyed by the names declared in the manifest's
+    /// `contributes.cli[].args` array. Path values have already been resolved
+    /// by the Rust runner; string/integer values are preserved as typed.
+    pub args: serde_json::Map<String, serde_json::Value>,
     pub flags: serde_json::Map<String, serde_json::Value>,
     pub global: GlobalFlags,
 }
@@ -32,7 +36,6 @@ pub struct GlobalFlags {
     pub json: bool,
     pub quiet: bool,
     pub clipboard: bool,
-    pub yes: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,11 +80,7 @@ pub struct FinishEffects {
 pub fn finish_effects(result: &CliResult) -> FinishEffects {
     FinishEffects {
         exit_code: result.exit_code,
-        stdout_line: result
-            .stdout
-            .as_ref()
-            .filter(|s| !s.is_empty())
-            .cloned(),
+        stdout_line: result.stdout.as_ref().filter(|s| !s.is_empty()).cloned(),
         stderr_lines: result.stderr.clone(),
     }
 }
@@ -96,6 +95,11 @@ pub fn cli_finish(result: CliResult, state: tauri::State<'_, CliState>) -> Resul
         for line in &effects.stderr_lines {
             eprintln!("{line}");
         }
+        // `process::exit` does not run destructors. Flush explicitly so JSON
+        // envelopes and human diagnostics are never lost when stdout/stderr
+        // are redirected rather than attached to a terminal.
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
         let exit_code = effects.exit_code;
         // Kept for the (currently unreachable on macOS) fallback path in
         // launch_tauri_headless, in case app.run() ever does return.
@@ -130,9 +134,16 @@ mod tests {
             subcommand: "share".into(),
             plugin_id: "share".into(),
             plugin_command: "publish".into(),
-            file: Some("/tmp/x.md".into()),
+            args: serde_json::Map::from_iter([(
+                "file".into(),
+                serde_json::Value::String("/tmp/x.md".into()),
+            )]),
             flags: Map::new(),
-            global: GlobalFlags { json: false, quiet: false, clipboard: true, yes: false },
+            global: GlobalFlags {
+                json: false,
+                quiet: false,
+                clipboard: true,
+            },
         };
         let state = CliState::new(payload.clone(), tx);
         let first = state.payload.lock().unwrap().clone().unwrap();
@@ -146,7 +157,11 @@ mod tests {
     /// std::process::exit — every exit_code value must survive unchanged.
     #[test]
     fn finish_effects_preserves_success_code() {
-        let result = CliResult { exit_code: 0, stdout: Some("wrote /tmp/x".into()), stderr: vec![] };
+        let result = CliResult {
+            exit_code: 0,
+            stdout: Some("wrote /tmp/x".into()),
+            stderr: vec![],
+        };
         let effects = finish_effects(&result);
         assert_eq!(effects.exit_code, 0);
         assert_eq!(effects.stdout_line.as_deref(), Some("wrote /tmp/x"));
@@ -155,20 +170,26 @@ mod tests {
 
     #[test]
     fn finish_effects_preserves_plugin_failure_code() {
-        // The exact shape CliRunner.svelte sends on a caught plugin error.
+        // The exact --json shape CliRunner.svelte sends on a caught plugin error.
         let result = CliResult {
             exit_code: 4,
-            stdout: Some(r#"{"ok":false,"error":{"code":"plugin_failed","message":"boom"}}"#.into()),
-            stderr: vec!["✗ Roam Import: boom".into()],
+            stdout: Some(
+                r#"{"ok":false,"error":{"code":"plugin_failed","message":"boom"}}"#.into(),
+            ),
+            stderr: vec![],
         };
         let effects = finish_effects(&result);
         assert_eq!(effects.exit_code, 4);
-        assert_eq!(effects.stderr_lines, vec!["✗ Roam Import: boom".to_string()]);
+        assert!(effects.stderr_lines.is_empty());
     }
 
     #[test]
     fn finish_effects_preserves_bad_flag_code() {
-        let result = CliResult { exit_code: 2, stdout: None, stderr: vec!["notemd: missing file argument".into()] };
+        let result = CliResult {
+            exit_code: 2,
+            stdout: None,
+            stderr: vec!["notemd: missing file argument".into()],
+        };
         let effects = finish_effects(&result);
         assert_eq!(effects.exit_code, 2);
         assert_eq!(effects.stdout_line, None);
@@ -176,7 +197,11 @@ mod tests {
 
     #[test]
     fn finish_effects_treats_empty_stdout_as_absent() {
-        let result = CliResult { exit_code: 0, stdout: Some(String::new()), stderr: vec![] };
+        let result = CliResult {
+            exit_code: 0,
+            stdout: Some(String::new()),
+            stderr: vec![],
+        };
         let effects = finish_effects(&result);
         assert_eq!(effects.stdout_line, None);
     }

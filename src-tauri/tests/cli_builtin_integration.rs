@@ -30,7 +30,10 @@ fn temp_home() -> PathBuf {
     std::env::temp_dir().join(format!(
         "notemd-cli-int-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
     ))
 }
 
@@ -38,16 +41,105 @@ fn run_cli(args: &[&str], home: &PathBuf) -> (i32, String, String) {
     use std::os::unix::process::CommandExt;
     std::fs::create_dir_all(home).unwrap();
     let mut cmd = Command::new(binary_path());
-    cmd.arg0("notemd");          // force CLI mode via argv[0] basename
+    cmd.arg0("notemd"); // force CLI mode via argv[0] basename
     cmd.args(args);
     cmd.env_remove("HOME");
     cmd.env("HOME", home.to_str().unwrap());
+    // Keep freedesktop-based config/data resolution isolated on Linux even
+    // when the test runner itself exports XDG overrides.
+    cmd.env("XDG_CONFIG_HOME", home.join(".config"));
+    cmd.env("XDG_DATA_HOME", home.join(".local/share"));
     let out = cmd.output().expect("spawn binary");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).to_string(),
         String::from_utf8_lossy(&out.stderr).to_string(),
     )
+}
+
+fn plugins_root(home: &std::path::Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        return home
+            .join("Library/Application Support")
+            .join(notemd_lib::app_dirs::BUNDLE_ID)
+            .join("plugins");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return home
+            .join(".local/share")
+            .join(notemd_lib::app_dirs::BUNDLE_ID)
+            .join("plugins");
+    }
+    #[allow(unreachable_code)]
+    home.join("plugins")
+}
+
+fn install_disabled_cli_fixture(home: &std::path::Path) {
+    let root = plugins_root(home);
+    let current = root.join("test.disabled-cli").join("current");
+    std::fs::create_dir_all(current.join("bin")).unwrap();
+    let triple = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "x86") => "i686-unknown-linux-gnu",
+        other => panic!("unsupported integration-test target: {other:?}"),
+    };
+    let manifest = serde_json::json!({
+        "manifest_version": 2,
+        "id": "test.disabled-cli",
+        "name": "Disabled CLI Fixture",
+        "version": "1.0.0",
+        "kind": "native",
+        "engines": { "notemd": ">=0.0.0" },
+        "binary": { triple: "bin/fixture" },
+        "activation": { "events": ["onCli:fixture-run"] },
+        "contributes": {
+            "cli": [{
+                "subcommand": "fixture-run",
+                "command": "run",
+                "summary": "Exercise disabled CLI discovery"
+            }]
+        },
+        "capabilities": []
+    });
+    std::fs::write(
+        current.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(current.join("bin/fixture"), b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("state.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "installed": {
+                "test.disabled-cli": { "version": "1.0.0", "enabled": false }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn install_invalid_cli_fixture(home: &std::path::Path) {
+    let root = plugins_root(home);
+    let current = root.join("test.invalid-cli").join("current");
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::write(current.join("manifest.json"), b"{ not json").unwrap();
+    std::fs::write(
+        root.join("state.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "installed": {
+                "test.invalid-cli": { "version": "1.0.0", "enabled": true }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -88,6 +180,102 @@ fn plugin_enable_unknown_id_exits_2() {
     let _ = std::fs::remove_dir_all(&home);
     assert_eq!(code, 2);
     assert!(stderr.contains("unknown plugin id"), "stderr was: {stderr}");
+}
+
+#[test]
+fn json_argument_errors_are_machine_readable_and_never_fall_through() {
+    let home = temp_home();
+    let cases: &[&[&str]] = &[
+        &["--json", "plugin", "update", "--bogus"],
+        &["--json", "plugin", "remove", "some.plugin", "--keepdata"],
+        &["--json", "help", "no-such-topic"],
+        &["--json", "version", "extra"],
+        &["--json", "--yes", "plugin", "remove", "some.plugin"],
+        &["--json", "./definitely-missing.md"],
+    ];
+
+    for args in cases {
+        let (code, stdout, stderr) = run_cli(args, &home);
+        assert_eq!(code, 2, "args={args:?} stdout={stdout} stderr={stderr}");
+        let value: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("args={args:?}: {e}; stdout={stdout}"));
+        assert_eq!(value["ok"], false, "args={args:?}: {value}");
+        assert!(value["error"]["code"].is_string(), "args={args:?}: {value}");
+        assert!(
+            value["error"]["message"].is_string(),
+            "args={args:?}: {value}"
+        );
+        assert!(stderr.trim().is_empty(), "args={args:?}: stderr={stderr}");
+    }
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn disabled_plugin_is_listed_documented_routed_and_can_be_enabled() {
+    let home = temp_home();
+    install_disabled_cli_fixture(&home);
+
+    let (list_code, list_stdout, list_stderr) = run_cli(&["--json", "plugin", "list"], &home);
+    assert_eq!(list_code, 0, "stdout={list_stdout} stderr={list_stderr}");
+    let list: serde_json::Value = serde_json::from_str(list_stdout.trim()).unwrap();
+    let fixture = list["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "test.disabled-cli")
+        .expect("disabled plugin must remain visible in inventory");
+    assert_eq!(fixture["status"], "disabled");
+
+    let (help_code, help_stdout, help_stderr) = run_cli(&["help", "--all"], &home);
+    assert_eq!(help_code, 0, "stdout={help_stdout} stderr={help_stderr}");
+    assert!(help_stdout.contains("DISABLED COMMANDS:"), "{help_stdout}");
+    assert!(help_stdout.contains("fixture-run"), "{help_stdout}");
+
+    let (run_code, run_stdout, run_stderr) = run_cli(&["--json", "fixture-run"], &home);
+    assert_eq!(run_code, 3, "stdout={run_stdout} stderr={run_stderr}");
+    let disabled: serde_json::Value = serde_json::from_str(run_stdout.trim()).unwrap();
+    assert_eq!(disabled["error"]["code"], "plugin_disabled");
+
+    let (enable_code, enable_stdout, enable_stderr) =
+        run_cli(&["--json", "plugin", "enable", "test.disabled-cli"], &home);
+    assert_eq!(
+        enable_code, 0,
+        "stdout={enable_stdout} stderr={enable_stderr}"
+    );
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(plugins_root(&home).join("state.json")).unwrap())
+            .unwrap();
+    assert_eq!(state["installed"]["test.disabled-cli"]["enabled"], true);
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn broken_plugins_are_reported_by_management_without_polluting_other_json_commands() {
+    let home = temp_home();
+    install_invalid_cli_fixture(&home);
+
+    let (version_code, version_stdout, version_stderr) = run_cli(&["--json", "version"], &home);
+    assert_eq!(version_code, 0, "stdout={version_stdout} stderr={version_stderr}");
+    assert!(version_stderr.trim().is_empty(), "stderr={version_stderr}");
+    let version: serde_json::Value = serde_json::from_str(version_stdout.trim()).unwrap();
+    assert_eq!(version["ok"], true);
+
+    let (list_code, list_stdout, list_stderr) = run_cli(&["--json", "plugin", "list"], &home);
+    assert_eq!(list_code, 0, "stdout={list_stdout} stderr={list_stderr}");
+    assert!(list_stderr.trim().is_empty(), "stderr={list_stderr}");
+    let list: serde_json::Value = serde_json::from_str(list_stdout.trim()).unwrap();
+    let broken = list["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "test.invalid-cli")
+        .expect("broken installation must be visible to plugin management");
+    assert_eq!(broken["status"], "invalid");
+    assert!(broken["error"].as_str().unwrap().contains("manifest.json"));
+
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -192,10 +380,7 @@ fn memory_propose_auto_initializes_v2_and_writes_pending_when_git_metadata_is_re
     let response: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(response["ok"], true, "{response}");
     assert_eq!(response["data"]["workflow"]["state"], "pending");
-    assert_eq!(
-        retry_code, 0,
-        "stdout={retry_stdout} stderr={retry_stderr}"
-    );
+    assert_eq!(retry_code, 0, "stdout={retry_stdout} stderr={retry_stderr}");
     let retry_response: serde_json::Value = serde_json::from_str(retry_stdout.trim()).unwrap();
     assert_eq!(retry_response["data"], response["data"]);
 
@@ -328,6 +513,18 @@ fn doctor_unknown_flag_exits_2_without_running_checks() {
     assert!(stderr.contains("--ofline"), "{stderr}");
 }
 
+#[test]
+fn doctor_unknown_flag_honors_global_json() {
+    let home = temp_home();
+    let (code, stdout, stderr) = run_cli(&["--json", "doctor", "--ofline"], &home);
+    let _ = std::fs::remove_dir_all(&home);
+    assert_eq!(code, 2, "stdout={stdout} stderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON error");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["code"], "invalid_arguments");
+    assert!(stderr.trim().is_empty(), "stderr={stderr}");
+}
+
 /// M12(终审)：`render_plain` 本身有单测覆盖，但 `run()` 走 `print!` 打印
 /// 人类可读输出这条端到端路径此前完全没有集成测试验证过。
 #[test]
@@ -337,7 +534,10 @@ fn doctor_human_readable_output_has_a_summary_line() {
     let _ = std::fs::remove_dir_all(&home);
     assert!(code == 0 || code == 1, "code={code} stdout={stdout}");
     let re_like = stdout.lines().any(|l| {
-        l.contains("passed,") && l.contains("warning") && l.contains("failure") && l.contains("skipped")
+        l.contains("passed,")
+            && l.contains("warning")
+            && l.contains("failure")
+            && l.contains("skipped")
     });
     assert!(re_like, "summary 行缺失: {stdout}");
 }

@@ -76,6 +76,12 @@ describe('manifest cli validation', () => {
       cli: [{ subcommand: 'help', command: 'noop', summary: 's' }],
     })
     expect(r.ok).toBe(false)
+
+    const currentCore = validateManifest({
+      ...base,
+      cli: [{ subcommand: 'search', command: 'noop', summary: 's' }],
+    })
+    expect(currentCore.ok).toBe(false)
   })
 
   it('rejects subcommand with bad characters', () => {
@@ -100,6 +106,12 @@ describe('manifest cli validation', () => {
       cli: [{ subcommand: 'demo', aliases: ['--json'], command: 'noop', summary: 's' }],
     })
     expect(r.ok).toBe(false)
+
+    const modeFlag = validateManifest({
+      ...base,
+      cli: [{ subcommand: 'demo', aliases: ['--cli'], command: 'noop', summary: 's' }],
+    })
+    expect(modeFlag.ok).toBe(false)
   })
 
   it('rejects flag short that collides with a reserved global flag', () => {
