@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Memory 2.2 can clear and rebuild all current memory from one guarded action.** Before anything changes, the plugin shows the exact number of confirmed claims and pending suggestions that will leave `USER.md`, `MEMORY.md` and Agent context. One confirmation removes those current views, safely resolves conflicting heads, resets inference to a full Vault scan, and keeps the owner identity, Memory protocol and immutable audit history.
+
+### Changed
+
+- **Memory inference now prefers no suggestion over a weak suggestion.** A six-part quality gate accepts only durable, useful statements explicitly made by the Vault owner; tasks, implementation details, product defaults, document summaries and one-off behavior inferences are excluded. Confirmed, pending, rejected and ignored history all participate in semantic deduplication, and a normal run usually proposes zero to five items instead of treating the cap as a target.
+
 ### Fixed
 
 - **Trace Source 1.2.3 opens Inbox items inside its own window for editing.** Finished reports and saved requests now load into the plugin's existing editor instead of raising the main editor; edits autosave to the original file, and switching, slow writes, deletion and window closing are ordered so current text is not lost or recreated after deletion.
