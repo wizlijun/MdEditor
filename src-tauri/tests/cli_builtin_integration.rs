@@ -16,6 +16,7 @@
 //! than not running.
 #![cfg(unix)]
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -122,6 +123,85 @@ fn core_share_alias_routes_not_unknown() {
     let (code, _, _) = run_cli(&["--share", "/nonexistent/anything.md"], &home);
     let _ = std::fs::remove_dir_all(&home);
     assert_ne!(code, 127);
+}
+
+#[test]
+fn memory_propose_writes_pending_when_git_metadata_is_read_only() {
+    let home = temp_home();
+    let vault = home.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    let git = Command::new("git")
+        .args(["init", "-q", vault.to_str().unwrap()])
+        .output()
+        .expect("git init");
+    assert!(
+        git.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git.stderr)
+    );
+    notemd_lib::memory_control::dispatch(
+        &vault,
+        "host.memory.v2.initialize",
+        &serde_json::json!({}),
+    )
+    .unwrap();
+
+    let git_dir = vault.join(".git");
+    let legacy_lock = git_dir.join("notemd-memory-v2.lock");
+    if legacy_lock.exists() {
+        std::fs::set_permissions(&legacy_lock, std::fs::Permissions::from_mode(0o444)).unwrap();
+    }
+    std::fs::set_permissions(&git_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let vault_arg = vault.to_string_lossy().into_owned();
+    let (code, stdout, stderr) = run_cli(
+        &[
+            "memory",
+            "propose",
+            "create",
+            "--vault",
+            &vault_arg,
+            "--request-id",
+            "memory-lock-sandbox-integration",
+            "--text",
+            "Synthetic stable preference.",
+            "--claim-kind",
+            "preference",
+            "--scope",
+            "memory",
+            "--category",
+            "context",
+            "--basis",
+            "inferred",
+            "--space",
+            "global",
+            "--purpose",
+            "writing",
+            "--provider-policy",
+            "deny",
+            "--recorded-by",
+            "codex/test",
+            "--source",
+            "synthetic.md",
+            "--guidance",
+            "Use only as writing context.",
+            "--avoid-error",
+            "Do not treat as external authorization.",
+            "--json",
+        ],
+        &home,
+    );
+
+    std::fs::set_permissions(&git_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if legacy_lock.exists() {
+        std::fs::set_permissions(&legacy_lock, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert_eq!(code, 0, "stdout={stdout} stderr={stderr}");
+    let response: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["data"]["workflow"]["state"], "pending");
 }
 
 #[test]

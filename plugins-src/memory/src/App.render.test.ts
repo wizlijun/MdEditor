@@ -5,7 +5,7 @@ import { MEMORY_INFERENCE_STATE } from './lib/inference-task'
 import type { MemoryClaimRevision, MemorySnapshotV2, PendingClaim, WriteReceipt } from './lib/types'
 
 let component: ReturnType<typeof mount> | null = null
-afterEach(() => { if (component) unmount(component); component = null; document.body.innerHTML = '' })
+afterEach(() => { if (component) unmount(component); component = null; document.body.innerHTML = ''; vi.useRealTimers() })
 
 const revision = (overrides: Partial<MemoryClaimRevision> = {}): MemoryClaimRevision => ({
   schema: 'notemd.memory/claim-revision/v2', claim_id: 'claim-1', revision_id: 'revision-1', parents: [],
@@ -242,6 +242,55 @@ describe('Memory Protocol v2 app', () => {
     })
     await render(request)
     expect(button('增量推理记忆')).toBeTruthy()
+  })
+
+  it('treats a successful Agent process without this invocation checkpoint as inference failure', async () => {
+    let snapshotCalls = 0
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.snapshot') { snapshotCalls += 1; return baseSnapshot() }
+      if (method === 'host.agent.providers') return { providers: [{ id: 'notemd.codex-agent', name: 'Codex Agent', harness: { harness: 'Codex', ok: true } }], default: 'notemd.codex-agent' }
+      if (method === 'host.vault.exists') return { exists: false }
+      if (method === 'host.vault.write') return { ok: true }
+      if (method === 'host.agent.run') return { run_id: 'run-without-checkpoint' }
+      if (method === 'host.agent.status') return { state: 'done', record: { status: 'success', result: 'propose 写入失败，未更新 checkpoint' } }
+      return {}
+    })
+    await render(request)
+    vi.useFakeTimers()
+    button('推理现有记忆')!.click(); await settle()
+    await vi.advanceTimersByTimeAsync(2_000); await settle()
+
+    expect(document.querySelector('[role=alert]')?.textContent).toContain('记忆推理失败')
+    expect(document.body.textContent).toContain('propose 写入失败')
+    expect(snapshotCalls).toBeGreaterThanOrEqual(2)
+    expect(request.mock.calls).toContainEqual(['host.toast', expect.objectContaining({ level: 'error', message: '记忆推理失败' })])
+  })
+
+  it('reports inference success only when the checkpoint matches this invocation', async () => {
+    let invocationId = ''
+    let started = false
+    const request = rpcMock(async (method, params) => {
+      if (method === 'host.memory.v2.snapshot') return baseSnapshot()
+      if (method === 'host.agent.providers') return { providers: [{ id: 'notemd.codex-agent', name: 'Codex Agent', harness: { harness: 'Codex', ok: true } }], default: 'notemd.codex-agent' }
+      if (method === 'host.vault.exists') return { exists: started && params?.path === MEMORY_INFERENCE_STATE }
+      if (method === 'host.vault.read') return { content: JSON.stringify({ schema: 'notemd.memory/inference-state/v2', invocation_id: invocationId, last_successful_head: 'abc123', complete: true }) }
+      if (method === 'host.vault.write') return { ok: true }
+      if (method === 'host.agent.run') {
+        invocationId = String(params.prompt).match(/Invocation-ID: (.+)/)?.[1] ?? ''
+        started = true
+        return { run_id: 'run-with-checkpoint' }
+      }
+      if (method === 'host.agent.status') return { state: 'done', record: { status: 'success', result: '执行完毕' } }
+      return {}
+    })
+    await render(request)
+    vi.useFakeTimers()
+    button('推理现有记忆')!.click(); await settle()
+    await vi.advanceTimersByTimeAsync(2_000); await settle()
+
+    expect(invocationId).not.toBe('')
+    expect(document.body.textContent).toContain('记忆推理完成；新建议已放入待确认。')
+    expect(request.mock.calls).toContainEqual(['host.toast', expect.objectContaining({ level: 'success' })])
   })
 
   it('fails closed with a clear upgrade message when the Host returns a non-plugin v2 snapshot shape', async () => {

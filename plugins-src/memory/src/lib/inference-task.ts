@@ -1,5 +1,5 @@
-// The task is copied into the active Vault on first use. The copy is
-// create-only: plugin updates never overwrite a person's customised prompt.
+// The task is copied into the active Vault on first use. Known unmodified
+// built-ins may be upgraded, but a person's customised prompt is never replaced.
 export const MEMORY_INFERENCE_TASK = 'memory-inference'
 export const MEMORY_INFERENCE_STATE = '.notemd/memory/.local/inference-state.json'
 
@@ -16,7 +16,7 @@ const TASK_JSON = [
   '',
 ].join('\n')
 
-const INSTRUCTIONS = [
+const LEGACY_INSTRUCTIONS = [
   '# 任务：从 Vault 推理长期记忆（只建议，不批准）',
   '',
   '你在 note.md Memory 插件发起的 headless Agent 中运行，Vault 根目录是 `${VAULT}`。',
@@ -98,6 +98,16 @@ const INSTRUCTIONS = [
   '',
 ].join('\n')
 
+const INSTRUCTIONS = LEGACY_INSTRUCTIONS
+  .replace(
+    '- 不用 mtime。checkpoint 不可达则安全退回 full。运行中出现的新提交留到下次。',
+    '- 不用 mtime。checkpoint 不可达则安全退回 full。固定运行开始时的 HEAD；运行中 HEAD 前进不是 source drift，也不得因此失败。成功时仍把运行开始 HEAD 写为 checkpoint，之后的新提交留到下次补扫。',
+  )
+  .replace(
+    '0 条候选也是成功并推进水位。失败、取消、source drift、达到 50 条上限、Memory health 异常或未覆盖完都不写 State。',
+    '0 条候选也是成功并推进水位。失败、取消、计划内来源无法完整读取、达到 50 条上限、Memory health 异常或未覆盖完都不写 State。',
+  )
+
 const CLAUDE_SETTINGS = [
   '{',
   '  "permissions": {',
@@ -139,8 +149,15 @@ export const MEMORY_INFERENCE_TASK_FILES: Record<string, string> = {
   [`${BASE}/policy.json`]: POLICY,
 }
 
+const LEGACY_MANAGED_FILES: Record<string, string> = {
+  [`${BASE}/CLAUDE.md`]: LEGACY_INSTRUCTIONS,
+  [`${BASE}/AGENTS.md`]: LEGACY_INSTRUCTIONS,
+  [`${BASE}/CODEX.md`]: LEGACY_INSTRUCTIONS,
+}
+
 export interface InferenceSeedIo {
   exists(path: string): Promise<boolean>
+  read(path: string): Promise<string>
   write(path: string, content: string): Promise<void>
 }
 
@@ -149,7 +166,17 @@ export async function seedMemoryInferenceTask(
   files: Record<string, string> = MEMORY_INFERENCE_TASK_FILES,
 ): Promise<void> {
   for (const [path, content] of Object.entries(files)) {
-    if (await io.exists(path)) continue
-    await io.write(path, content)
+    if (!await io.exists(path)) {
+      await io.write(path, content)
+      continue
+    }
+    const legacy = LEGACY_MANAGED_FILES[path]
+    if (!legacy || legacy === content) continue
+    try {
+      if (await io.read(path) === legacy) await io.write(path, content)
+    } catch {
+      // An unreadable existing task is user state. Preserve it and let the
+      // selected Agent report a task-loading error instead of overwriting it.
+    }
   }
 }

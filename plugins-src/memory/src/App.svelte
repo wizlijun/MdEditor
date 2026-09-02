@@ -211,19 +211,24 @@
         error = '无法确认这次记忆推理的运行状态；未推进增量水位。'
         return
       }
-      if (!view.success) {
-        error = view.message ? `记忆推理失败：${view.message}` : '记忆推理失败；未推进增量水位。'
-        return
-      }
-      const checkpointed = await completedInference(current.invocationId)
       inferenceProgress = ''
       tab = 'pending'
       await refresh()
       await loadInferenceMode()
-      announcement = checkpointed
-        ? '记忆推理完成；新建议已放入待确认。'
-        : '记忆推理已结束；未确认成功水位，下次仍会安全执行全量扫描。'
-      await toast(checkpointed ? 'success' : 'warn', announcement)
+      if (!view.success) {
+        error = view.message ? `记忆推理失败：${view.message}` : '记忆推理失败；未推进增量水位。'
+        await toast('error', '记忆推理失败', view.message || '未推进增量水位。')
+        return
+      }
+      const checkpointed = await completedInference(current.invocationId)
+      if (!checkpointed) {
+        const detail = view.message || 'Agent 未写入与本次调用匹配的成功水位。'
+        error = `记忆推理失败：${detail}`
+        await toast('error', '记忆推理失败', detail)
+        return
+      }
+      announcement = '记忆推理完成；新建议已放入待确认。'
+      await toast('success', announcement)
     } catch (cause) {
       if (inferenceRun?.runId !== current.runId) return
       inferencePollFailures += 1

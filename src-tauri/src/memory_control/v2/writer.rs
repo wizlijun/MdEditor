@@ -215,21 +215,18 @@ impl RepositoryWriter {
     }
 
     fn lock(&self) -> Result<WriteLock, WriterError> {
-        let path = git_common_dir(&self.root)
-            .map(|dir| dir.join("notemd-memory-v2.lock"))
-            .unwrap_or_else(|| self.root.join(".notemd/memory/.local/control.lock"));
+        let path = lock_path(&self.root, &std::env::temp_dir())?;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| WriterError::new("MEMORY_IO", error.to_string()))?;
+            fs::create_dir_all(parent).map_err(|error| io_error(&path, error))?;
         }
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
-            .open(path)
-            .map_err(|error| WriterError::new("MEMORY_IO", error.to_string()))?;
+            .open(&path)
+            .map_err(|error| io_error(&path, error))?;
         file.lock_exclusive()
-            .map_err(|error| WriterError::new("MEMORY_IO", error.to_string()))?;
+            .map_err(|error| io_error(&path, error))?;
         Ok(WriteLock(file))
     }
 }
@@ -250,33 +247,92 @@ impl RepositoryTransaction<'_> {
     }
 }
 
-fn git_common_dir(root: &Path) -> Option<PathBuf> {
+fn git_common_dir(root: &Path) -> Result<Option<PathBuf>, WriterError> {
     let dot_git = root.join(".git");
-    let git_dir = if dot_git.is_dir() {
-        dot_git
-    } else {
-        let marker = fs::read_to_string(&dot_git).ok()?;
-        let value = marker.trim().strip_prefix("gitdir:")?.trim();
+    let metadata = match fs::symlink_metadata(&dot_git) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io_error(&dot_git, error)),
+    };
+    let git_dir = if metadata.is_dir() {
+        fs::canonicalize(&dot_git).map_err(|error| io_error(&dot_git, error))?
+    } else if metadata.is_file() {
+        let marker = fs::read_to_string(&dot_git).map_err(|error| io_error(&dot_git, error))?;
+        let value = marker
+            .trim()
+            .strip_prefix("gitdir:")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                WriterError::new(
+                    "MEMORY_IO",
+                    format!("{}: invalid gitdir marker", dot_git.display()),
+                )
+            })?;
         let path = PathBuf::from(value);
-        if path.is_absolute() {
+        let resolved = if path.is_absolute() {
             path
         } else {
             root.join(path)
-        }
+        };
+        fs::canonicalize(&resolved).map_err(|error| io_error(&resolved, error))?
+    } else {
+        return Err(WriterError::new(
+            "MEMORY_IO",
+            format!(
+                "{}: Git metadata is not a file or directory",
+                dot_git.display()
+            ),
+        ));
     };
     let common = git_dir.join("commondir");
-    if common.is_file() {
-        let value = fs::read_to_string(common).ok()?;
+    let common_metadata = match fs::symlink_metadata(&common) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(io_error(&common, error)),
+    };
+    if common_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.is_file())
+    {
+        let value = fs::read_to_string(&common).map_err(|error| io_error(&common, error))?;
         let path = PathBuf::from(value.trim());
         let resolved = if path.is_absolute() {
             path
         } else {
             git_dir.join(path)
         };
-        Some(fs::canonicalize(&resolved).unwrap_or(resolved))
+        fs::canonicalize(&resolved)
+            .map(Some)
+            .map_err(|error| io_error(&resolved, error))
+    } else if common_metadata.is_none() {
+        Ok(Some(git_dir))
     } else {
-        Some(fs::canonicalize(&git_dir).unwrap_or(git_dir))
+        Err(WriterError::new(
+            "MEMORY_IO",
+            format!("{}: invalid Git commondir metadata", common.display()),
+        ))
     }
+}
+
+/// Codex's `workspace-write` sandbox deliberately protects `.git`, so the
+/// process-wide Memory lock cannot live in the Git common directory. A stable
+/// hash of that directory keeps all linked worktrees on the same lock while the
+/// lock file itself stays in the OS user temp directory, which the sandbox
+/// exposes for transient writes. Non-Git Vaults keep their local ignored lock.
+fn lock_path(root: &Path, temp_root: &Path) -> Result<PathBuf, WriterError> {
+    let Some(common) = git_common_dir(root)? else {
+        return Ok(root.join(".notemd/memory/.local/control.lock"));
+    };
+    let identity = common.to_string_lossy();
+    let digest = raw_sha256(identity.as_bytes());
+    Ok(temp_root
+        .join("notemd-memory-v2-locks")
+        .join(format!("{digest}.lock")))
+}
+
+fn io_error(path: &Path, error: std::io::Error) -> WriterError {
+    WriterError::new("MEMORY_IO", format!("{}: {error}", path.display()))
 }
 
 fn publish<T: CanonicalPayload + Serialize>(
@@ -416,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn temp_and_lock_assets_remain_under_local() {
+    fn non_git_vault_keeps_temp_and_lock_assets_under_local() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = RepositoryWriter::new(dir.path());
         writer.publish_protocol(protocol()).unwrap();
@@ -432,11 +488,41 @@ mod tests {
     }
 
     #[test]
-    fn linked_worktrees_resolve_one_common_repository_lock() {
+    fn git_repository_lock_stays_outside_protected_git_metadata() {
         let dir = tempfile::TempDir::new().unwrap();
+        let locks = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+
+        let path = lock_path(dir.path(), locks.path()).unwrap();
+        assert!(path.starts_with(locks.path()));
+        assert!(!path.starts_with(dir.path().join(".git")));
+        assert_eq!(
+            path.parent()
+                .and_then(Path::file_name)
+                .and_then(|v| v.to_str()),
+            Some("notemd-memory-v2-locks")
+        );
+    }
+
+    #[test]
+    fn malformed_git_metadata_fails_closed_instead_of_splitting_the_lock() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let locks = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".git"), "not a gitdir marker\n").unwrap();
+
+        let error = lock_path(dir.path(), locks.path()).unwrap_err();
+        assert_eq!(error.code, "MEMORY_IO");
+        assert!(error.message.contains("invalid gitdir marker"));
+    }
+
+    #[test]
+    fn linked_worktrees_resolve_one_common_sandbox_writable_lock() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let locks = tempfile::TempDir::new().unwrap();
         let worktree = dir.path().join("worktree");
-        let git_dir = dir.path().join("repo.git/worktrees/w1");
-        let common = dir.path().join("repo.git");
+        let main = dir.path().join("main");
+        let common = main.join(".git");
+        let git_dir = common.join("worktrees/w1");
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::create_dir_all(&git_dir).unwrap();
         std::fs::write(
@@ -447,13 +533,32 @@ mod tests {
         std::fs::write(git_dir.join("commondir"), "../..\n").unwrap();
 
         let common = std::fs::canonicalize(common).unwrap();
-        assert_eq!(git_common_dir(&worktree).unwrap(), common);
+        assert_eq!(git_common_dir(&worktree).unwrap(), Some(common.clone()));
+        assert_eq!(git_common_dir(&main).unwrap(), Some(common));
         assert_eq!(
-            git_common_dir(&worktree)
-                .unwrap()
-                .join("notemd-memory-v2.lock"),
-            common.join("notemd-memory-v2.lock")
+            lock_path(&worktree, locks.path()).unwrap(),
+            lock_path(&main, locks.path()).unwrap()
         );
+        assert!(lock_path(&worktree, locks.path())
+            .unwrap()
+            .starts_with(locks.path()));
+
+        let path = lock_path(&worktree, locks.path()).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let first = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let second = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        first.lock_exclusive().unwrap();
+        assert!(second.try_lock_exclusive().is_err());
     }
 }
 

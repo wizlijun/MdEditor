@@ -32,6 +32,7 @@ interface InferenceState {
 
 const seedIo = {
   exists: (path: string) => vaultExists(path).then((value) => value.exists === true),
+  read: (path: string) => vaultRead(path).then((value) => value.content),
   write: async (path: string, content: string) => { await vaultWrite(path, content) },
 }
 
