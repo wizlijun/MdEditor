@@ -7,6 +7,7 @@ import {
   agentRun,
   dismissRun,
   emptyRun,
+  formatAgentUsage,
   isAgentBusy,
   setProvider,
   startNoteRun,
@@ -44,7 +45,19 @@ describe('agent workspace run', () => {
       }
       return {
         state: 'done',
-        record: { status: 'success', result: 'answered 1', artifacts: ['answers/a.md'] },
+        record: {
+          status: 'success',
+          result: 'answered 1',
+          artifacts: ['answers/a.md'],
+          usage: {
+            input_tokens: 10,
+            cache_read_tokens: 2,
+            cache_write_tokens: 0,
+            output_tokens: 3,
+            reasoning_tokens: 1,
+            reported_total_tokens: 15,
+          },
+        },
       }
     })
     const finished = vi.fn()
@@ -64,9 +77,32 @@ describe('agent workspace run', () => {
     expect(agentRun.phase).toBe('done')
     expect(agentRun.message).toBe('answered 1')
     expect(agentRun.artifacts).toEqual(['answers/a.md'])
+    expect(agentRun.usage?.reported_total_tokens).toBe(15)
     expect(isAgentBusy()).toBe(false)
     expect(finished).toHaveBeenCalledTimes(1)
     expect(calls).toEqual(['run-note', 'run-status', 'run-status'])
+  })
+
+  it('formats disjoint token buckets and an estimated price', () => {
+    expect(formatAgentUsage({
+      input_tokens: 1_000,
+      cache_read_tokens: 200,
+      cache_write_tokens: 0,
+      output_tokens: 30,
+      reasoning_tokens: 10,
+      reported_total_tokens: 1_230,
+      cost: { amount_usd: 0.0123456, kind: 'list_price_estimate' },
+    })).toContain('1,230 tokens · in 1,000 · cached 200 · out 30 · reasoning 10 · ≈$0.012346')
+    expect(formatAgentUsage(null)).toBe('Token usage unavailable')
+    expect(formatAgentUsage({
+      input_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      output_tokens: 0,
+      reasoning_tokens: 0,
+      reported_total_tokens: 0,
+      cost: { amount_usd: 0.01, kind: 'provider_reported' },
+    })).toBe('Token usage unavailable · $0.010000')
   })
 
   it('a failed run ends in error with the reason kept', async () => {

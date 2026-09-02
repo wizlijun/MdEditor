@@ -386,6 +386,7 @@ mod tests {
                 stderr_tail: String::new(),
                 artifacts: Vec::new(),
                 harness: Some(harness.to_string()),
+                usage: None,
             },
         )
         .unwrap();
@@ -485,6 +486,7 @@ mod tests {
                 stderr_tail: String::new(),
                 artifacts: Vec::new(),
                 harness: None,
+                usage: None,
             },
         )
         .unwrap();

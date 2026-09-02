@@ -46,6 +46,29 @@ struct NotifySpec {
     expect_file: String,
 }
 
+/// Where a completed run surfaces its token/cost summary. Usage is always kept
+/// in the run record; this controls presentation only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum UsageDisplay {
+    #[default]
+    Tip,
+    Result,
+}
+
+fn usage_display(params: &Value) -> Result<UsageDisplay, String> {
+    match params.get("usage_display") {
+        None | Some(Value::Null) => Ok(UsageDisplay::Tip),
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|_| "bad 'usage_display': expected 'tip' or 'result'".to_string()),
+    }
+}
+
+fn completion_usage_tip(display: UsageDisplay, rec: &record::RunRecord) -> Option<String> {
+    (display == UsageDisplay::Tip)
+        .then(|| agent_run_core::usage::compact_run(rec.status, rec.usage.as_ref()))
+}
+
 fn run_delivered(spec: &NotifySpec, rec: Option<&record::RunRecord>) -> bool {
     rec.map(|r| r.status) == Some(record::Status::Success) && Path::new(&spec.expect_file).is_file()
 }
@@ -457,6 +480,7 @@ impl CodexAgentPlugin {
             ),
             _ => None,
         };
+        let usage_display = usage_display(&params)?;
 
         let task_dir = task::task_dir(&vault, &task_id);
         let mut def = load_task(&vault, &task_id).ok_or(format!("unknown task '{task_id}'"))?;
@@ -569,6 +593,12 @@ impl CodexAgentPlugin {
             }
             let rec = pump.await.ok().flatten();
             inner.lock().unwrap().running.remove(&rid);
+            if let Some(message) = rec
+                .as_ref()
+                .and_then(|record| completion_usage_tip(usage_display, record))
+            {
+                h.toast("info", &message, None);
+            }
             // Exactly one reminder per run that asked for one. We are inside a
             // spawned task here, the only place `host.request` may be awaited.
             if let Some(n) = notify {
@@ -626,6 +656,7 @@ impl CodexAgentPlugin {
                 "prompt": prompt,
                 "use_context": false,
                 "note_path": note_path,
+                "usage_display": context.get("usage_display").cloned().unwrap_or(Value::Null),
             }),
             "note",
         )
@@ -660,6 +691,7 @@ impl CodexAgentPlugin {
                 "use_context": false,
                 "note_path": note_path,
                 "notify": context.get("notify").cloned().unwrap_or(Value::Null),
+                "usage_display": context.get("usage_display").cloned().unwrap_or(Value::Null),
             }),
             "relay",
         )
@@ -1110,6 +1142,7 @@ mod tests {
                 stderr_tail: String::new(),
                 artifacts: vec!["answers/a.md".into()],
                 harness: Some(SELF_PLUGIN_ID.into()),
+                usage: None,
             },
         )
         .unwrap();
@@ -1232,6 +1265,48 @@ mod tests {
     }
 
     #[test]
+    fn usage_display_defaults_to_tip_and_accepts_result_only() {
+        assert_eq!(usage_display(&json!({})).unwrap(), UsageDisplay::Tip);
+        assert_eq!(
+            usage_display(&json!({"usage_display": "tip"})).unwrap(),
+            UsageDisplay::Tip
+        );
+        assert_eq!(
+            usage_display(&json!({"usage_display": "result"})).unwrap(),
+            UsageDisplay::Result
+        );
+        assert!(usage_display(&json!({"usage_display": "toast"})).is_err());
+    }
+
+    #[test]
+    fn tip_mode_formats_usage_but_result_mode_stays_silent() {
+        let rec = record::RunRecord {
+            run_id: "R1".into(),
+            task: "t".into(),
+            trigger: "window".into(),
+            started_at: "s".into(),
+            ended_at: "e".into(),
+            status: record::Status::Success,
+            exit_code: Some(0),
+            num_turns: Some(1),
+            session_id: None,
+            result: "done".into(),
+            stderr_tail: String::new(),
+            artifacts: Vec::new(),
+            harness: Some(SELF_PLUGIN_ID.into()),
+            usage: Some(agent_run_core::usage::Usage {
+                model: Some("gpt-5.6-sol".into()),
+                input_tokens: 10,
+                output_tokens: 5,
+                ..Default::default()
+            }),
+        };
+        let tip = completion_usage_tip(UsageDisplay::Tip, &rec).expect("tip");
+        assert!(tip.contains("15 tokens"), "{tip}");
+        assert!(completion_usage_tip(UsageDisplay::Result, &rec).is_none());
+    }
+
+    #[test]
     fn a_reminder_is_a_success_only_when_the_promised_file_is_really_there() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("2026-08-17-summary.md");
@@ -1255,6 +1330,7 @@ mod tests {
             stderr_tail: String::new(),
             artifacts: Vec::new(),
             harness: Some(SELF_PLUGIN_ID.into()),
+            usage: None,
         };
         assert!(!run_delivered(&spec, Some(&rec(record::Status::Success))));
         std::fs::write(&f, "# x").unwrap();

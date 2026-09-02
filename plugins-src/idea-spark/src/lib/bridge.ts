@@ -113,6 +113,8 @@ export interface AgentRunParams {
   notify: AgentNotify
   /** Which agent should run it. Omitted = whatever the host would pick. */
   harness?: string
+  /** Where the completed token/cost summary appears. Defaults to a tip. */
+  usage_display?: 'tip' | 'result'
 }
 
 /**

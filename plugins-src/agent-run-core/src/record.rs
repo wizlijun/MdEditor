@@ -53,6 +53,10 @@ pub struct RunRecord {
     /// records written before the field existed: unknown, not "mine".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// Token/cost data reported for this invocation. Missing on historical
+    /// records and on harnesses that do not expose usage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::usage::Usage>,
 }
 
 pub fn runs_dir(task_run_dir: &Path) -> PathBuf {
@@ -331,6 +335,7 @@ mod tests {
             stderr_tail: String::new(),
             artifacts: Vec::new(),
             harness: Some("notemd.claude-agent".into()),
+            usage: None,
         }
     }
 
@@ -342,6 +347,18 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].status, Status::Success);
         assert_eq!(got[0].result, "ok");
+    }
+
+    #[test]
+    fn a_record_written_before_usage_still_deserializes() {
+        let json = r#"{
+          "run_id":"old","task":"t","trigger":"window",
+          "started_at":"a","ended_at":"b","status":"success",
+          "exit_code":0,"num_turns":1,"session_id":null,
+          "result":"ok","stderr_tail":""
+        }"#;
+        let rec: RunRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(rec.usage, None);
     }
 
     #[test]

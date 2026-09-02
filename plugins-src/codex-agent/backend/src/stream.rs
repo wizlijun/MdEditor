@@ -5,9 +5,11 @@
 //! unrecoverable `error`) and many typed thread items. Unknown additions are
 //! ignored so a newer Codex CLI cannot blank the run window.
 pub use agent_run_core::event::{Event, RunResult};
+use agent_run_core::usage::{estimate_openai, Usage};
 
 #[derive(Debug, Default)]
 pub struct StreamState {
+    model: String,
     thread_id: Option<String>,
     turns: u64,
     terminal_text: String,
@@ -16,8 +18,11 @@ pub struct StreamState {
 }
 
 impl StreamState {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            ..Self::default()
+        }
     }
 
     pub fn thread_id(&self) -> Option<&str> {
@@ -65,7 +70,11 @@ impl StreamState {
             "item.updated" => None,
             "item.completed" => self.completed_item(v.get("item")?),
             "turn.completed" if !self.is_terminal() => {
-                let result = self.make_result(false, self.terminal_text.clone());
+                let result = self.make_result(
+                    false,
+                    self.terminal_text.clone(),
+                    parse_usage(v.get("usage"), &self.model),
+                );
                 self.terminal_result = Some(result.clone());
                 Some(Event::Result(result))
             }
@@ -75,7 +84,7 @@ impl StreamState {
                     .and_then(|x| x.as_str())
                     .unwrap_or("Codex turn failed")
                     .to_string();
-                let result = self.make_result(true, message);
+                let result = self.make_result(true, message, None);
                 self.terminal_result = Some(result.clone());
                 Some(Event::Result(result))
             }
@@ -85,7 +94,7 @@ impl StreamState {
                     .and_then(|x| x.as_str())
                     .unwrap_or("Codex event stream failed")
                     .to_string();
-                let result = self.make_result(true, message);
+                let result = self.make_result(true, message, None);
                 self.terminal_result = Some(result.clone());
                 Some(Event::Result(result))
             }
@@ -119,14 +128,58 @@ impl StreamState {
         }
     }
 
-    fn make_result(&self, is_error: bool, result: String) -> RunResult {
+    fn make_result(&self, is_error: bool, result: String, usage: Option<Usage>) -> RunResult {
         RunResult {
             is_error,
             result,
             session_id: self.thread_id.clone(),
             num_turns: Some(self.turns.max(1)),
+            usage,
         }
     }
+}
+
+/// Codex reports cached/cache-write tokens as subsets of `input_tokens`. The
+/// shared contract stores disjoint buckets, so subtract those subsets before
+/// pricing; saturating arithmetic keeps a malformed future frame harmless.
+fn parse_usage(value: Option<&serde_json::Value>, model: &str) -> Option<Usage> {
+    let value = value?.as_object()?;
+    let number = |key: &str| value.get(key).and_then(|v| v.as_u64());
+    let observed = [
+        "input_tokens",
+        "cached_input_tokens",
+        "cache_write_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "total_tokens",
+    ]
+    .iter()
+    .any(|key| number(key).is_some());
+    if !observed {
+        return None;
+    }
+
+    let cache_read_tokens = number("cached_input_tokens").unwrap_or(0);
+    let cache_write_tokens = number("cache_write_input_tokens").unwrap_or(0);
+    let input_tokens = number("input_tokens")
+        .unwrap_or(0)
+        .saturating_sub(cache_read_tokens)
+        .saturating_sub(cache_write_tokens);
+    let mut usage = Usage {
+        model: Some(model.to_string()),
+        input_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        output_tokens: number("output_tokens").unwrap_or(0),
+        reasoning_tokens: number("reasoning_output_tokens").unwrap_or(0),
+        reported_total_tokens: number("total_tokens").unwrap_or(0),
+        cost: None,
+    };
+    if usage.total_tokens() == 0 {
+        return None;
+    }
+    usage.cost = estimate_openai(model, &usage);
+    Some(usage)
 }
 
 fn cap(text: &str) -> String {
@@ -180,7 +233,7 @@ mod tests {
 
     #[test]
     fn thread_and_turn_lifecycle_become_system_events() {
-        let mut p = StreamState::new();
+        let mut p = StreamState::new("gpt-test");
         assert_eq!(
             p.parse_line(r#"{"type":"thread.started","thread_id":"thr-1"}"#),
             Some(Event::System {
@@ -198,7 +251,7 @@ mod tests {
 
     #[test]
     fn completed_agent_message_is_text_and_the_terminal_result() {
-        let mut p = StreamState::new();
+        let mut p = StreamState::new("gpt-test");
         p.parse_line(r#"{"type":"thread.started","thread_id":"thr-1"}"#);
         p.parse_line(r#"{"type":"turn.started"}"#);
         assert_eq!(
@@ -216,6 +269,11 @@ mod tests {
                 result: "done".into(),
                 session_id: Some("thr-1".into()),
                 num_turns: Some(1),
+                usage: Some(Usage {
+                    model: Some("gpt-test".into()),
+                    input_tokens: 1,
+                    ..Usage::default()
+                }),
             }))
         );
         assert!(p.is_terminal());
@@ -223,8 +281,71 @@ mod tests {
     }
 
     #[test]
+    fn completed_turn_normalizes_overlapping_usage_and_estimates_known_model_cost() {
+        let mut p = StreamState::new("gpt-5.6-sol");
+        let event = p
+            .parse_line(
+                r#"{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":300,"cache_write_input_tokens":200,"output_tokens":100,"reasoning_output_tokens":40,"total_tokens":1100}}"#,
+            )
+            .expect("terminal event");
+        let Event::Result(result) = event else {
+            panic!("expected result")
+        };
+        let usage = result.usage.expect("usage");
+        assert_eq!(usage.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(usage.input_tokens, 500);
+        assert_eq!(usage.cache_read_tokens, 300);
+        assert_eq!(usage.cache_write_tokens, 200);
+        assert_eq!(usage.output_tokens, 100);
+        assert_eq!(usage.reasoning_tokens, 40);
+        assert_eq!(usage.total_tokens(), 1100);
+        assert!(
+            usage.cost.is_some(),
+            "known models get a list-price estimate"
+        );
+    }
+
+    #[test]
+    fn malformed_overlapping_input_saturates_and_empty_usage_is_absent() {
+        let mut p = StreamState::new("gpt-test");
+        let event = p
+            .parse_line(
+                r#"{"type":"turn.completed","usage":{"input_tokens":2,"cached_input_tokens":3,"cache_write_input_tokens":4}}"#,
+            )
+            .expect("terminal event");
+        let Event::Result(result) = event else {
+            panic!("expected result")
+        };
+        assert_eq!(result.usage.expect("usage").input_tokens, 0);
+
+        let mut zero = StreamState::new("gpt-5.6-sol");
+        let Event::Result(result) = zero
+            .parse_line(r#"{"type":"turn.completed","usage":{"input_tokens":0,"output_tokens":0}}"#)
+            .expect("terminal event")
+        else {
+            panic!("expected result")
+        };
+        assert_eq!(
+            result.usage, None,
+            "explicit empty usage is not a model bill"
+        );
+
+        let mut empty = StreamState::new("gpt-5.6-sol");
+        let Event::Result(result) = empty
+            .parse_line(r#"{"type":"turn.completed","usage":{}}"#)
+            .expect("terminal event")
+        else {
+            panic!("expected result")
+        };
+        assert!(
+            result.usage.is_none(),
+            "an empty payload is not a measured zero"
+        );
+    }
+
+    #[test]
     fn tool_items_map_to_short_shared_rows() {
-        let mut p = StreamState::new();
+        let mut p = StreamState::new("gpt-test");
         let cases = [
             (
                 r#"{"type":"item.started","item":{"id":"1","type":"command_execution","command":"rg TODO src","status":"in_progress"}}"#,
@@ -255,7 +376,7 @@ mod tests {
 
     #[test]
     fn completed_file_change_lists_paths_but_completed_commands_do_not_duplicate() {
-        let mut p = StreamState::new();
+        let mut p = StreamState::new("gpt-test");
         assert_eq!(
             p.parse_line(
                 r#"{"type":"item.completed","item":{"id":"f","type":"file_change","changes":[{"path":"a.md","kind":"update"},{"path":"b.md","kind":"add"}],"status":"completed"}}"#
@@ -275,7 +396,7 @@ mod tests {
 
     #[test]
     fn failed_turn_and_stream_error_are_terminal_failures() {
-        let mut failed = StreamState::new();
+        let mut failed = StreamState::new("gpt-test");
         failed.parse_line(r#"{"type":"thread.started","thread_id":"t"}"#);
         assert_eq!(
             failed.parse_line(r#"{"type":"turn.failed","error":{"message":"401 Unauthorized"}}"#),
@@ -284,6 +405,7 @@ mod tests {
                 result: "401 Unauthorized".into(),
                 session_id: Some("t".into()),
                 num_turns: Some(1),
+                usage: None,
             }))
         );
         // Some Codex versions emit `error` immediately before turn.failed.
@@ -293,7 +415,7 @@ mod tests {
             None
         );
 
-        let mut error = StreamState::new();
+        let mut error = StreamState::new("gpt-test");
         assert!(matches!(
             error.parse_line(r#"{"type":"error","message":"rate limit"}"#),
             Some(Event::Result(RunResult { is_error: true, result, .. })) if result == "rate limit"
@@ -302,7 +424,7 @@ mod tests {
 
     #[test]
     fn unknown_noise_and_nonfatal_items_are_ignored() {
-        let mut p = StreamState::new();
+        let mut p = StreamState::new("gpt-test");
         for line in [
             "not json",
             r#"{"type":"future.event","new":true}"#,
@@ -316,7 +438,7 @@ mod tests {
 
     #[test]
     fn engine_facing_accept_returns_zero_or_one_events_and_keeps_result() {
-        let mut p = StreamState::new();
+        let mut p = StreamState::new("gpt-test");
         assert!(p.accept("diagnostic noise").is_empty());
         assert_eq!(
             p.accept(r#"{"type":"turn.completed"}"#),
@@ -325,6 +447,7 @@ mod tests {
                 result: String::new(),
                 session_id: None,
                 num_turns: Some(1),
+                usage: None,
             })]
         );
         assert_eq!(p.result().unwrap().num_turns, Some(1));
@@ -333,7 +456,7 @@ mod tests {
 
     #[test]
     fn separate_agent_messages_do_not_run_together_in_the_shared_ui() {
-        let mut p = StreamState::new();
+        let mut p = StreamState::new("gpt-test");
         let a =
             r#"{"type":"item.completed","item":{"id":"a","type":"agent_message","text":"first"}}"#;
         let b =

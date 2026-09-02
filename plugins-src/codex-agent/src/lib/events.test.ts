@@ -46,6 +46,23 @@ describe('run view reducer', () => {
     expect(v.result).toBe('done')
   })
 
+  it('carries structured usage on completion', () => {
+    const usage = {
+      input_tokens: 10,
+      cache_read_tokens: 2,
+      cache_write_tokens: 3,
+      output_tokens: 5,
+      reasoning_tokens: 4,
+      reported_total_tokens: 20,
+    }
+    const v = reduce(running(), {
+      kind: 'done',
+      run_id: 'r1',
+      record: { status: 'success', usage },
+    })
+    expect(v.usage).toEqual(usage)
+  })
+
   it('surfaces the markdown a run produced', () => {
     const v = reduce(running(), {
       kind: 'done',

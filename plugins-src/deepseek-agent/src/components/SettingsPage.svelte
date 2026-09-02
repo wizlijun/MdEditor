@@ -1,17 +1,29 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import type { MessageKey } from '../lib/strings'
-  import { CONCURRENCY_OPTIONS, loadMaxConcurrency, saveMaxConcurrency } from '../lib/settings'
+  import {
+    CONCURRENCY_OPTIONS,
+    USAGE_DISPLAY_OPTIONS,
+    loadMaxConcurrency,
+    loadUsageDisplay,
+    saveMaxConcurrency,
+    saveUsageDisplay,
+    type UsageDisplay,
+  } from '../lib/settings'
 
   const { label }: { label: (key: MessageKey) => string } = $props()
   let maxConcurrency = $state(1)
+  let usageDisplay: UsageDisplay = $state('tip')
   let loading = $state(true)
   let saving = $state(false)
   let error = $state('')
 
   onMount(async () => {
     try {
-      maxConcurrency = await loadMaxConcurrency()
+      ;[maxConcurrency, usageDisplay] = await Promise.all([
+        loadMaxConcurrency(),
+        loadUsageDisplay(),
+      ])
     } catch {
       error = label('settings.loadFailed')
     } finally {
@@ -34,6 +46,21 @@
       saving = false
     }
   }
+
+  async function changeUsageDisplay(event: Event): Promise<void> {
+    const previous = usageDisplay
+    usageDisplay = (event.currentTarget as HTMLSelectElement).value as UsageDisplay
+    saving = true
+    error = ''
+    try {
+      usageDisplay = await saveUsageDisplay(usageDisplay)
+    } catch {
+      usageDisplay = previous
+      error = label('settings.saveFailed')
+    } finally {
+      saving = false
+    }
+  }
 </script>
 
 <div class="settings-page">
@@ -47,6 +74,17 @@
     <select id="max-concurrency" value={maxConcurrency} onchange={change} disabled={loading || saving}>
       {#each CONCURRENCY_OPTIONS as option}
         <option value={option}>{option}</option>
+      {/each}
+    </select>
+  </div>
+  <div class="setting-row">
+    <div class="copy">
+      <label for="usage-display">{label('settings.usageDisplay')}</label>
+      <p>{label('settings.usageDisplayHint')}</p>
+    </div>
+    <select id="usage-display" value={usageDisplay} onchange={changeUsageDisplay} disabled={loading || saving}>
+      {#each USAGE_DISPLAY_OPTIONS as option}
+        <option value={option}>{label(option === 'tip' ? 'settings.usageDisplayTip' : 'settings.usageDisplayResult')}</option>
       {/each}
     </select>
   </div>
@@ -67,7 +105,7 @@
   p { margin: 5px 0 0; font-size: 12px; line-height: 1.45; opacity: 0.62; }
   .error { color: #d9534f; opacity: 1; }
   select {
-    width: 88px;
+    min-width: 120px;
     padding: 5px 8px;
     border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
     border-radius: 6px;

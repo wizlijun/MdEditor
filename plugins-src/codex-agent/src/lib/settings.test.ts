@@ -6,7 +6,14 @@ vi.mock('./bridge', () => ({
   bridge: () => ({ request: hostRequest }),
 }))
 
-import { loadMaxConcurrency, normalizeMaxConcurrency, saveMaxConcurrency } from './settings'
+import {
+  loadMaxConcurrency,
+  loadUsageDisplay,
+  normalizeMaxConcurrency,
+  normalizeUsageDisplay,
+  saveMaxConcurrency,
+  saveUsageDisplay,
+} from './settings'
 
 describe('agent concurrency settings', () => {
   beforeEach(() => hostRequest.mockReset())
@@ -31,6 +38,23 @@ describe('agent concurrency settings', () => {
     expect(hostRequest).toHaveBeenCalledWith('host.settings.set', {
       key: 'maxConcurrency',
       value: '5',
+    })
+  })
+
+  it('defaults usage display to tip and accepts result', () => {
+    expect(normalizeUsageDisplay(undefined)).toBe('tip')
+    expect(normalizeUsageDisplay('toast')).toBe('tip')
+    expect(normalizeUsageDisplay('result')).toBe('result')
+  })
+
+  it('loads and saves usage display in this plugin scope', async () => {
+    hostRequest.mockResolvedValueOnce({ settings: { usageDisplay: 'result' } })
+    await expect(loadUsageDisplay()).resolves.toBe('result')
+    hostRequest.mockResolvedValueOnce({ ok: true })
+    await expect(saveUsageDisplay('result')).resolves.toBe('result')
+    expect(hostRequest).toHaveBeenLastCalledWith('host.settings.set', {
+      key: 'usageDisplay',
+      value: 'result',
     })
   })
 })

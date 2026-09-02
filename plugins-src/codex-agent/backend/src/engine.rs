@@ -54,6 +54,7 @@ pub async fn run(
                 stderr_tail: String::new(),
                 artifacts: Vec::new(),
                 harness: Some(crate::SELF_PLUGIN_ID.into()),
+                usage: None,
             });
         }
         Err(Blocked::Skip(reason)) => {
@@ -170,7 +171,7 @@ pub async fn run(
 
     let mut progress =
         ProgressTracker::start(&spec.meta.task_run_dir, &spec.meta.run_id, started.started);
-    let mut parser = stream::StreamState::new();
+    let mut parser = stream::StreamState::new(&spec.model);
     let mut noise = String::new();
     let deadline = tokio::time::sleep(quiet_limit);
     tokio::pin!(deadline);
@@ -254,6 +255,7 @@ pub async fn run(
             ),
             session_id: parser.thread_id().map(str::to_string),
             num_turns: None,
+            usage: None,
         })
     });
     let status = forced.unwrap_or(match (&result, exit) {

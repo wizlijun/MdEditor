@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { RunRecord } from '../lib/events'
   import ArtifactLinks from './ArtifactLinks.svelte'
+  import UsageSummary from './UsageSummary.svelte'
   import { fmtFull } from '../lib/datetime'
   import type { MessageKey } from '../lib/strings'
 
@@ -40,6 +41,7 @@
   </div>
 
   <ArtifactLinks paths={run.artifacts ?? []} {label} />
+  <UsageSummary usage={run.usage} {label} />
 </div>
 
 <style>

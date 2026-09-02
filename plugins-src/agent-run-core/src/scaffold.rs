@@ -285,6 +285,7 @@ fn build_record(
     } else {
         stderr_tail
     };
+    let usage = result.as_ref().and_then(|r| r.usage.clone());
     record::RunRecord {
         run_id: meta.run_id.clone(),
         task: meta.task.id.clone(),
@@ -302,6 +303,7 @@ fn build_record(
         stderr_tail,
         artifacts,
         harness: Some(meta.harness.clone()),
+        usage,
     }
 }
 
@@ -495,6 +497,7 @@ mod tests {
                 result: "done".into(),
                 session_id: Some("s1".into()),
                 num_turns: Some(2),
+                usage: None,
             }),
             String::new(),
             String::new(),

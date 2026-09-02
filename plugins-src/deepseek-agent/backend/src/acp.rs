@@ -22,6 +22,7 @@
 //! - `session/new` rejects a non-empty `mcpServers` or `additionalDirectories`.
 //! - `loadSession` / `session/list` / `session/resume` do not exist. No resume.
 use agent_run_core::event::{Event, RunResult};
+use agent_run_core::usage::{Cost, CostKind, Usage};
 use serde_json::{json, Value};
 
 /// The protocol version we speak (`@agentclientprotocol/sdk` `PROTOCOL_VERSION`).
@@ -264,13 +265,130 @@ pub fn permission_options(params: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// Normalize the optional usage extension carried by newer `session/prompt`
+/// replies. ACP uses camelCase, while some harness builds have emitted
+/// snake_case (and `cacheRead`/`reasoning` spellings), so accept all known
+/// aliases without making usage mandatory for older servers.
+pub fn prompt_usage(result: &Value) -> Option<Usage> {
+    let raw = result.get("usage").and_then(Value::as_object);
+    let tokens = |aliases: &[&str]| {
+        raw.and_then(|usage| {
+            aliases
+                .iter()
+                .find_map(|key| usage.get(*key).and_then(as_u64))
+        })
+    };
+    let model = raw
+        .and_then(|usage| first(usage, &["model", "model_id", "modelId"]))
+        .or_else(|| first_value(result, &["model", "model_id", "modelId"]))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let cost = parse_cost(result).or_else(|| raw.and_then(|usage| parse_cost_object(usage)));
+
+    let input_tokens = tokens(&["input_tokens", "inputTokens"]);
+    let cache_read_tokens = tokens(&[
+        "cache_read_tokens",
+        "cacheReadTokens",
+        "cached_read_tokens",
+        "cachedReadTokens",
+    ]);
+    let cache_write_tokens = tokens(&[
+        "cache_write_tokens",
+        "cacheWriteTokens",
+        "cached_write_tokens",
+        "cachedWriteTokens",
+    ]);
+    let output_tokens = tokens(&["output_tokens", "outputTokens"]);
+    let reasoning_tokens = tokens(&[
+        "reasoning_tokens",
+        "reasoningTokens",
+        "thought_tokens",
+        "thoughtTokens",
+    ]);
+    let reported_total_tokens = tokens(&["total_tokens", "totalTokens"]);
+
+    let observed = input_tokens.is_some()
+        || cache_read_tokens.is_some()
+        || cache_write_tokens.is_some()
+        || output_tokens.is_some()
+        || reasoning_tokens.is_some()
+        || reported_total_tokens.is_some()
+        || cost.is_some();
+    let usage = Usage {
+        model,
+        input_tokens: input_tokens.unwrap_or(0),
+        cache_read_tokens: cache_read_tokens.unwrap_or(0),
+        cache_write_tokens: cache_write_tokens.unwrap_or(0),
+        output_tokens: output_tokens.unwrap_or(0),
+        reasoning_tokens: reasoning_tokens.unwrap_or(0),
+        reported_total_tokens: reported_total_tokens.unwrap_or(0),
+        cost,
+    };
+    (observed && !usage.is_empty()).then_some(usage)
+}
+
+fn as_u64(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        let number = value.as_f64()?;
+        (number.is_finite() && number >= 0.0 && number.fract() == 0.0 && number <= u64::MAX as f64)
+            .then_some(number as u64)
+    })
+}
+
+fn first<'a>(object: &'a serde_json::Map<String, Value>, aliases: &[&str]) -> Option<&'a Value> {
+    aliases.iter().find_map(|key| object.get(*key))
+}
+
+fn first_value<'a>(value: &'a Value, aliases: &[&str]) -> Option<&'a Value> {
+    let object = value.as_object()?;
+    first(object, aliases)
+}
+
+fn parse_cost(result: &Value) -> Option<Cost> {
+    let object = result.as_object()?;
+    parse_cost_object(object)
+}
+
+fn parse_cost_object(object: &serde_json::Map<String, Value>) -> Option<Cost> {
+    let direct = first(
+        object,
+        &["total_cost_usd", "totalCostUsd", "cost_usd", "costUsd"],
+    )
+    .and_then(Value::as_f64);
+    let amount = direct.or_else(|| match object.get("cost")? {
+        Value::Number(value) => value.as_f64(),
+        Value::Object(cost) => {
+            let currency = first(cost, &["currency", "currency_code", "currencyCode"])
+                .and_then(Value::as_str)
+                .unwrap_or("USD");
+            if !currency.eq_ignore_ascii_case("USD") {
+                return None;
+            }
+            first(cost, &["amount_usd", "amountUsd", "amount"]).and_then(Value::as_f64)
+        }
+        _ => None,
+    })?;
+    (amount.is_finite() && amount >= 0.0).then_some(Cost {
+        amount_usd: amount,
+        kind: CostKind::ProviderReported,
+        pricing_as_of: None,
+    })
+}
+
 /// Turn a terminal `stopReason` plus the text we accumulated into a run result.
 ///
 /// Only `end_turn` is success. `cancelled` is reported by the caller as a
 /// cancellation, not an error. Everything else — including a variant a newer SDK
 /// might add — is a failure: a partial answer must never be recorded as a clean
 /// finish.
-pub fn result_for_stop(stop: &str, text: &str, session_id: &str) -> RunResult {
+pub fn result_for_stop(
+    stop: &str,
+    text: &str,
+    session_id: &str,
+    usage: Option<Usage>,
+) -> RunResult {
     let (is_error, note) = match stop {
         "end_turn" => (false, None),
         "cancelled" => (true, Some("the run was cancelled")),
@@ -297,6 +415,7 @@ pub fn result_for_stop(stop: &str, text: &str, session_id: &str) -> RunResult {
         // ACP reports no turn count. Leaving it None is honest; a fabricated
         // number would show up in the window as if it had been measured.
         num_turns: None,
+        usage,
     }
 }
 
@@ -559,12 +678,86 @@ mod tests {
     }
 
     #[test]
+    fn prompt_usage_accepts_acp_camel_case_and_provider_cost() {
+        let got = prompt_usage(&json!({
+            "stopReason": "end_turn",
+            "model": "deepseek-v4-pro",
+            "usage": {
+                "inputTokens": 11,
+                "cachedReadTokens": 22,
+                "cachedWriteTokens": 33,
+                "outputTokens": 44,
+                "thoughtTokens": 40,
+                "totalTokens": 110
+            },
+            "cost": { "amount": 0.0123, "currency": "USD" }
+        }))
+        .expect("usage");
+        assert_eq!(got.model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(got.input_tokens, 11);
+        assert_eq!(got.cache_read_tokens, 22);
+        assert_eq!(got.cache_write_tokens, 33);
+        assert_eq!(got.output_tokens, 44);
+        assert_eq!(got.reasoning_tokens, 40);
+        assert_eq!(got.reported_total_tokens, 110);
+        let cost = got.cost.expect("provider cost");
+        assert_eq!(cost.amount_usd, 0.0123);
+        assert_eq!(cost.kind, CostKind::ProviderReported);
+    }
+
+    #[test]
+    fn prompt_usage_accepts_harness_aliases_and_rejects_bad_costs() {
+        let got = prompt_usage(&json!({
+            "usage": {
+                "model_id": "deepseek-test",
+                "input_tokens": 1,
+                "cacheReadTokens": 2,
+                "cache_write_tokens": 3,
+                "output_tokens": 4,
+                "reasoningTokens": 5,
+                "total_tokens": 10,
+                "cost": { "amountUsd": 0.25 }
+            }
+        }))
+        .expect("usage");
+        assert_eq!(got.model.as_deref(), Some("deepseek-test"));
+        assert_eq!(got.total_tokens(), 10);
+        assert_eq!(got.cost.as_ref().map(|cost| cost.amount_usd), Some(0.25));
+
+        let non_usd = prompt_usage(&json!({
+            "usage": { "inputTokens": 1 },
+            "cost": { "amount": 1.0, "currency": "CNY" }
+        }))
+        .expect("tokens still survive");
+        assert_eq!(non_usd.cost, None);
+        assert_eq!(
+            prompt_usage(&json!({ "costUsd": -1, "model": "not-enough" })),
+            None
+        );
+    }
+
+    #[test]
+    fn a_prompt_reply_without_usage_stays_none() {
+        assert_eq!(prompt_usage(&json!({ "stopReason": "end_turn" })), None);
+        assert_eq!(
+            prompt_usage(&json!({ "stopReason": "end_turn", "model": "deepseek-v4-pro" })),
+            None
+        );
+    }
+
+    #[test]
     fn only_end_turn_is_a_clean_finish() {
-        let r = result_for_stop("end_turn", "  答完了  ", "s1");
+        let usage = Usage {
+            input_tokens: 3,
+            output_tokens: 2,
+            ..Usage::default()
+        };
+        let r = result_for_stop("end_turn", "  答完了  ", "s1", Some(usage.clone()));
         assert!(!r.is_error);
         assert_eq!(r.result, "答完了");
         assert_eq!(r.session_id.as_deref(), Some("s1"));
         assert_eq!(r.num_turns, None, "ACP reports no turn count");
+        assert_eq!(r.usage, Some(usage));
     }
 
     /// A partial answer must never be recorded as success — including under a
@@ -572,19 +765,19 @@ mod tests {
     #[test]
     fn every_other_stop_reason_is_a_failure_that_keeps_the_partial_text() {
         for stop in ["max_tokens", "refusal", "max_turn_requests", "cancelled"] {
-            let r = result_for_stop(stop, "写到一半", "s1");
+            let r = result_for_stop(stop, "写到一半", "s1", None);
             assert!(r.is_error, "{stop} must be an error");
             assert!(r.result.contains("写到一半"), "{stop}: {}", r.result);
             assert!(r.result.contains(stop), "{stop}: {}", r.result);
         }
-        let unknown = result_for_stop("some_future_reason", "", "s1");
+        let unknown = result_for_stop("some_future_reason", "", "s1", None);
         assert!(unknown.is_error);
         assert!(unknown.result.contains("some_future_reason"));
     }
 
     #[test]
     fn a_silent_clean_finish_still_says_something() {
-        let r = result_for_stop("end_turn", "   ", "");
+        let r = result_for_stop("end_turn", "   ", "", None);
         assert!(!r.is_error);
         assert!(r.result.contains("end_turn"), "{}", r.result);
         assert_eq!(r.session_id, None);
