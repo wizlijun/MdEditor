@@ -193,7 +193,8 @@ export function groupCurrentClaims(claims: EffectiveClaim[]): ConfirmedClaimGrou
 export function pendingClaims(pending: PendingClaim[]): PendingClaim[] {
   const riskRank: Record<RiskClass, number> = { 'action-sensitive': 0, behavioral: 1, informational: 2 }
   return [...pending].sort((a, b) => riskRank[a.revision.risk_class] - riskRank[b.revision.risk_class]
-    || a.revision.recorded_at.localeCompare(b.revision.recorded_at))
+    || a.revision.recorded_at.localeCompare(b.revision.recorded_at)
+    || a.revision.revision_id.localeCompare(b.revision.revision_id))
 }
 
 export function approvalForPending(item: PendingClaim): ApprovalKind {

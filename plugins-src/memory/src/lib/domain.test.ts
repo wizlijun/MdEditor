@@ -84,6 +84,12 @@ describe('Memory Protocol v2 domain', () => {
     expect(approvalForPending(boundary)).toBe('behavioral-authorization')
   })
 
+  it('uses revision id as a stable pending range-selection tie breaker', () => {
+    const laterId: PendingClaim = { revision: claim({ claim_id: 'claim-b', revision_id: 'revision-b', workflow: { state: 'pending' }, decision: undefined }), expected_sha256: 'b', expected_heads: [] }
+    const earlierId: PendingClaim = { revision: claim({ claim_id: 'claim-a', revision_id: 'revision-a', workflow: { state: 'pending' }, decision: undefined }), expected_sha256: 'a', expected_heads: [] }
+    expect(pendingClaims([laterId, earlierId]).map((item) => item.revision.revision_id)).toEqual(['revision-a', 'revision-b'])
+  })
+
   it('renders subject, category and valid time without treating record time as valid time', () => {
     const item = claim({ subject: { kind: 'vault-owner', id: 'owner-1', relation_to_owner: 'self', label: 'Bruce' } })
     expect(subjectLabel(item)).toBe('Bruce')
