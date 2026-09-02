@@ -91,31 +91,37 @@
 </div>
 
 <style>
-  .settings-page { padding: 28px 32px; max-width: 720px; }
-  h1 { margin: 0 0 24px; font-size: 22px; }
+  .settings-page { height: 100%; overflow: auto; box-sizing: border-box; padding: 24px 28px 36px; }
+  h1 { max-width: 720px; margin: 0 auto 16px; font-size: 22px; letter-spacing: -0.025em; }
   .setting-row {
     display: flex;
     align-items: flex-start;
     gap: 24px;
-    padding: 16px 0;
-    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    max-width: 720px;
+    margin: 0 auto 10px;
+    padding: 16px;
+    border: 1px solid var(--window-border, color-mix(in srgb, currentColor 11%, transparent));
+    border-radius: 12px;
+    background: var(--window-surface, Canvas);
+    box-shadow: 0 1px 3px color-mix(in srgb, CanvasText 4%, transparent);
   }
   .copy { flex: 1; min-width: 220px; }
   label { display: block; font-size: 13px; font-weight: 600; }
-  p { margin: 5px 0 0; font-size: 12px; line-height: 1.45; opacity: 0.62; }
+  p { margin: 5px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted-text, currentColor); }
   .error { color: #d9534f; opacity: 1; }
   select {
     min-width: 120px;
-    padding: 5px 8px;
-    border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
-    border-radius: 6px;
+    padding: 6px 9px;
+    border: 1px solid var(--strong-border, color-mix(in srgb, currentColor 18%, transparent));
+    border-radius: 8px;
     background: Canvas;
     color: CanvasText;
     font: inherit;
   }
+  select:focus-visible { outline: 2px solid var(--standard-accent, #3479db); outline-offset: 2px; }
   select:disabled { opacity: 0.55; }
   @media (max-width: 700px) {
-    .settings-page { padding: 22px 24px; }
+    .settings-page { padding: 20px; }
     .setting-row { flex-wrap: wrap; }
   }
 </style>

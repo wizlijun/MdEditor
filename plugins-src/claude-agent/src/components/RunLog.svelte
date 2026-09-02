@@ -50,22 +50,26 @@
     display: flex;
     gap: 8px;
     align-items: baseline;
-    padding: 8px 12px;
+    margin: 14px 16px 0;
+    padding: 11px 13px;
     font-size: 11px;
-    border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    border: 1px solid var(--window-border, color-mix(in srgb, currentColor 11%, transparent));
+    border-radius: 12px;
+    background: var(--window-surface, Canvas);
   }
   .status { font-weight: 600; }
   .s-error, .s-timeout { color: #d9534f; }
   .s-skipped { opacity: 0.65; }
-  .task { opacity: 0.8; }
-  .when { opacity: 0.5; margin-left: auto; font-variant-numeric: tabular-nums; }
-  .body { flex: 1; overflow: auto; padding: 10px 12px; }
+  .task { color: var(--muted-text, currentColor); }
+  .when { color: var(--muted-text, currentColor); margin-left: auto; font-variant-numeric: tabular-nums; }
+  .body { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px 24px; }
   .result { margin: 0 0 10px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
   .stderr {
     margin: 0 0 10px;
-    padding: 6px 8px;
-    border-radius: 5px;
-    background: color-mix(in srgb, #d9534f 12%, transparent);
+    padding: 9px 10px;
+    border: 1px solid color-mix(in srgb, #d9534f 24%, transparent);
+    border-radius: 9px;
+    background: color-mix(in srgb, #d9534f 8%, Canvas);
     font-size: 11px;
     white-space: pre-wrap;
     overflow-x: auto;

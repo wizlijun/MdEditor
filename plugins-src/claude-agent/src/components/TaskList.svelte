@@ -45,39 +45,46 @@
 
 <style>
   .tasks { list-style: none; margin: 0; padding: 0; }
-  /* A button inherits neither font-size nor font-family — declare both, or the
-     row drifts out of alignment at larger UI font sizes. */
+  .tasks li + li { margin-top: 4px; }
   button {
     font: inherit;
     font-size: 13px;
     display: block;
     width: 100%;
     text-align: left;
-    padding: 7px 9px;
-    background: none;
-    border: 0;
-    border-radius: 6px;
+    padding: 9px 10px;
+    background: var(--card-surface, transparent);
+    border: 1px solid var(--window-border, color-mix(in srgb, currentColor 11%, transparent));
+    border-radius: 10px;
     color: inherit;
     cursor: pointer;
   }
-  button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
-  button.active { background: color-mix(in srgb, currentColor 14%, transparent); }
-  .name { display: flex; align-items: center; gap: 5px; font-weight: 600; }
+  button:hover {
+    border-color: var(--strong-border, color-mix(in srgb, currentColor 18%, transparent));
+    background: var(--hover-surface, color-mix(in srgb, currentColor 5%, transparent));
+  }
+  button.active {
+    border-color: color-mix(in srgb, var(--standard-accent, #3479db) 45%, transparent);
+    background: color-mix(in srgb, var(--standard-accent, #3479db) 8%, Canvas);
+    box-shadow: inset 3px 0 0 var(--standard-accent, #3479db);
+  }
+  button:focus-visible { outline: 2px solid var(--standard-accent, #3479db); outline-offset: 2px; }
+  .name { display: flex; align-items: center; gap: 6px; font-weight: 650; }
   .desc, .state {
     display: block;
     font-size: 11px;
     line-height: 1.35;
     margin-top: 2px;
   }
-  .desc { opacity: 0.6; }
-  .state { opacity: 0.7; font-variant-numeric: tabular-nums; }
+  .desc { color: var(--muted-text, currentColor); }
+  .state { color: var(--muted-text, currentColor); font-variant-numeric: tabular-nums; }
   .s-error, .s-timeout { color: #d9534f; opacity: 0.9; }
   .s-running { opacity: 0.95; font-weight: 600; }
   .dot {
-    width: 6px;
-    height: 6px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: currentColor;
+    background: var(--standard-accent, #3479db);
     animation: pulse 1.4s ease-in-out infinite;
   }
   @keyframes pulse { 0%, 100% { opacity: 0.25 } 50% { opacity: 1 } }

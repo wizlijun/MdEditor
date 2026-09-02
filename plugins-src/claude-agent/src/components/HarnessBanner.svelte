@@ -60,17 +60,19 @@
     display: flex;
     align-items: baseline;
     flex-wrap: wrap;
-    gap: 6px;
-    padding: 6px 9px;
-    margin-bottom: 8px;
-    border-radius: 7px;
-    background: color-mix(in srgb, currentColor 7%, transparent);
+    gap: 4px 7px;
+    padding: 10px 11px;
+    margin-bottom: 4px;
+    border: 1px solid var(--window-border, color-mix(in srgb, currentColor 11%, transparent));
+    border-radius: 12px;
+    background: var(--card-surface, color-mix(in srgb, currentColor 2%, transparent));
+    box-shadow: 0 1px 3px color-mix(in srgb, CanvasText 4%, transparent);
     font-size: 11px;
     line-height: 1.4;
   }
-  .banner.bad { background: color-mix(in srgb, #d9534f 16%, transparent); }
-  .banner.warn { background: color-mix(in srgb, #b8860b 18%, transparent); }
-  .name { font-weight: 600; font-size: 12px; }
+  .banner.bad { border-color: color-mix(in srgb, #d9534f 34%, transparent); background: color-mix(in srgb, #d9534f 7%, Canvas); }
+  .banner.warn { border-color: color-mix(in srgb, #b8860b 34%, transparent); background: color-mix(in srgb, #b8860b 7%, Canvas); }
+  .name { font-weight: 650; font-size: 13px; letter-spacing: -0.01em; }
   .ver, .model {
     font-family: ui-monospace, SFMono-Regular, monospace;
     opacity: 0.8;
@@ -79,16 +81,17 @@
   /* The origin can be a long path; it earns a line but not the layout. */
   .origin, .hint {
     flex-basis: 100%;
-    opacity: 0.6;
+    color: var(--muted-text, color-mix(in srgb, CanvasText 58%, transparent));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .alert {
-    margin: -4px 0 8px;
-    padding: 5px 9px;
-    border-radius: 7px;
-    background: color-mix(in srgb, #b8860b 16%, transparent);
+    margin: 7px 0 4px;
+    padding: 7px 9px;
+    border: 1px solid color-mix(in srgb, #b8860b 28%, transparent);
+    border-radius: 9px;
+    background: color-mix(in srgb, #b8860b 8%, Canvas);
     font-size: 11px;
     line-height: 1.45;
   }
