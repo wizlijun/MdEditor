@@ -167,6 +167,11 @@ export function agentStatus(task: string, runId: string, harness?: string): Prom
   })
 }
 
+/** `host.clipboard.write` — copy text to the OS clipboard. */
+export async function clipboardWrite(text: string): Promise<void> {
+  await bridge().request('host.clipboard.write', { text })
+}
+
 export async function toast(level: 'success' | 'info' | 'warn' | 'error', message: string, detail?: string): Promise<void> {
   try { await bridge().request('host.toast', { level, message, detail }) } catch { /* non-critical */ }
 }

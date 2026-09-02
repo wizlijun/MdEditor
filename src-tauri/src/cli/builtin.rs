@@ -447,7 +447,8 @@ MAINTENANCE:
 
 CLAIM FLAGS:
   --request-id <stable-id>   Idempotency key for this pending proposal
-  --scope <user|memory>       Projection target, not the semantic subject
+  --scope <user|memory>      Projection target, not the semantic subject
+  --target <claim-id>        Claim to replace or revoke; `create` never uses it
   --category <name>          One projection category from the protocol registry
   --text <claim>             Complete atomic Claim text
   --claim-kind <kind>        identity|preference|boundary|decision|belief|
@@ -462,7 +463,7 @@ CLAIM FLAGS:
   --valid-from <RFC3339>     Claim valid time; never inferred from record time
   --valid-until <RFC3339>    Half-open upper bound
   --space <space>            Explicit context Space; never defaults to all Spaces
-  --purpose <purpose>        Allowed retrieval purpose
+  --purpose <purposes>       Allowed retrieval purposes, comma-separated
   --provider-policy <policy> deny|prompt|allow for external model transfer
   --guidance <text>          How an Agent may use this Claim
   --avoid-error <text>       Error pattern this Claim is intended to prevent
@@ -470,7 +471,7 @@ CLAIM FLAGS:
 CONTEXT FLAGS:
   --provider <provider>      External model/service provider
   --model <model>            Exact model identifier
-  --tool <tool>              Repeat or comma-separate the available tools
+  --tool <tools>             Available tools, comma-separated
   --external-transfer        Context may leave the local Host
   --as-of <RFC3339>          Query valid time
 
@@ -1726,6 +1727,12 @@ mod tests {
         }
         assert!(!out.contains("--confirm-human-approved"));
         assert!(!out.contains("--approved-by"));
+        // --target is the Claim id replace/revoke act on; create reads the
+        // projection target from --scope. Documenting them the other way round
+        // silently files every proposed Claim under MEMORY.md.
+        assert!(out.contains("--target <claim-id>"));
+        assert!(!out.contains("--target <user|memory>"));
+        assert!(out.contains("--purpose <purposes>       Allowed retrieval purposes, comma-separated"));
     }
     #[test] fn help_topic_share_is_core_no_manifest_needed() {
         // share 已 core 化：无任何 manifest 时 help share / help --share 都必须解析。

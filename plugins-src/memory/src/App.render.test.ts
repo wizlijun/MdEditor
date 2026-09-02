@@ -51,6 +51,20 @@ async function render(request: ReturnType<typeof rpcMock>) {
 }
 
 describe('Memory Protocol v2 app', () => {
+  it('copies the cross-assistant import prompt to the clipboard', async () => {
+    const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? baseSnapshot() : {})
+    await render(request)
+    button('复制导入记忆Prompt')!.click()
+    await settle()
+    const call = request.mock.calls.find(([method]) => method === 'host.clipboard.write')
+    expect(call).toBeTruthy()
+    const text = call![1].text as string
+    expect(text).toContain('notemd memory propose create')
+    expect(text).toContain('--recorded-by')
+    expect(text).toContain('不要调用 notemd memory approve / reject / delete')
+    expect(request.mock.calls.some(([method]) => method === 'host.memory.v2.add')).toBe(false)
+  })
+
   it('presents confirmed claims with explicit subject, assertion, approval and context semantics', async () => {
     const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? baseSnapshot() : {})
     await render(request)
