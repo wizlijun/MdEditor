@@ -6,6 +6,10 @@
 
 ## 未发布
 
+### 修复
+
+- **插件 Editor Kit 窗口在 rich 与 source 模式下都能用 Cmd+A 或 Ctrl+A 选中全文。** rich 编辑会在代码块缩小选区前接管快捷键，source 编辑则显式选中 textarea，不再依赖内嵌 WebView 的原生 responder。
+
 ## v6.902.3 — 2026-09-02
 
 ### 新增

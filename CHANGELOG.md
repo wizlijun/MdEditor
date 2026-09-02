@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Plugin Editor Kit windows now select the whole document with Cmd+A or Ctrl+A in both rich and source modes.** Rich editing intercepts the shortcut before a code block can narrow the selection, while source editing explicitly selects its textarea instead of depending on the embedded WebView's native responder.
+
 ## v6.902.3 — 2026-09-02
 
 ### Added

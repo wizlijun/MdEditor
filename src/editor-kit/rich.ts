@@ -13,7 +13,8 @@ import { bridgeMediaResolver } from './media'
 import { placeholderPlugin } from '../lib/placeholder-plugin'
 import { isApplePlatformSync } from '../lib/platform-sync'
 import { powerModePlugin, type ConfigGetter } from '../lib/power-mode/plugin'
-import { guardRichEditor } from '../lib/ime'
+import { createImeGuard, guardRichEditor, type ImeGuard } from '../lib/ime'
+import { handleSelectAllKeydown, type SelectAllTarget } from '../lib/editor-select-all'
 import type { Plugin } from 'prosemirror-state'
 
 /** Base directory (absolute) used to resolve relative image paths in rich mode. */
@@ -58,6 +59,35 @@ export function swapPlaceholder(plugins: readonly Plugin[], text: string): Plugi
 export function setRichPlaceholder(instance: MorayaEditorInstance, text: string): void {
   const { view } = instance
   view.updateState(view.state.reconfigure({ plugins: swapPlaceholder(view.state.plugins, text) }))
+}
+
+/**
+ * Capture Select All on the kit host, before moraya's own `Mod-a` keymap can
+ * narrow a code-block selection. The listener shares the pane's IME guard and
+ * follows the editor instance's lifecycle so mode switches leave nothing
+ * behind on the reusable host element.
+ */
+function guardRichSelectAll<T extends { view: SelectAllTarget; destroy(): void }>(
+  host: HTMLElement,
+  instance: T,
+  ime: ImeGuard,
+): T {
+  const onKeydown = (event: Event) => {
+    const keyEvent = event as KeyboardEvent
+    if (ime.blocks(keyEvent)) return
+    handleSelectAllKeydown(keyEvent, instance.view)
+  }
+  host.addEventListener('keydown', onKeydown, true)
+
+  const destroy = instance.destroy.bind(instance)
+  let active = true
+  instance.destroy = () => {
+    if (!active) return
+    active = false
+    host.removeEventListener('keydown', onKeydown, true)
+    destroy()
+  }
+  return instance
 }
 
 export async function mountRich(
@@ -105,5 +135,6 @@ export async function mountRich(
       }),
     )
   }
-  return guardRichEditor(host, instance)
+  const ime = createImeGuard()
+  return guardRichSelectAll(host, guardRichEditor(host, instance, ime), ime)
 }
