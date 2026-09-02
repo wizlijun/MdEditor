@@ -45,11 +45,9 @@
 #                   串,不能删。Windows 侧同理,且 PowerShell 的 `$env:X=""` 是
 #                   *删除*变量,必须用 [Environment]::SetEnvironmentVariable。
 #
-# When all three notarization vars are set AND the signing cert is Developer ID,
-# Tauri's bundler runs `notarytool` automatically and the resulting .dmg passes
-# Gatekeeper on first launch. Missing any var → unsigned/uninspected → user
-# sees the "unidentified developer" warning, AND auto-update will fail because
-# the replacement .app gets blocked.
+# Tauri notarizes and staples the .app before it creates the .dmg. The finished
+# .dmg therefore needs its own notary submission and staple before publication;
+# otherwise Gatekeeper accepts the app inside but rejects opening the image.
 
 set -euo pipefail
 
@@ -196,9 +194,8 @@ fi
 echo "    signing as: $APPLE_SIGNING_IDENTITY"
 echo "    cert kind:  $SIGNING_KIND"
 
-# Notarization triplet — Tauri's bundler picks these up automatically. Missing
-# any one → bundler skips notarization and prints a warning. We surface it
-# here so the user sees it before a 5-minute build instead of after.
+# Notarization triplet — Tauri's bundler and the explicit DMG notarization below
+# both require all three. A public release must fail closed when any is missing.
 NOTARIZE_OK=1
 for var in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
   if [[ -z "${!var:-}" ]]; then
@@ -209,11 +206,10 @@ done
 if (( NOTARIZE_OK )); then
   echo "    notarize:   yes (APPLE_ID=$APPLE_ID, team=$APPLE_TEAM_ID)"
 else
-  echo "    notarize:   no — first-launch Gatekeeper warning will appear"
+  die "notarization credentials are required for a public macOS release"
 fi
-if (( NOTARIZE_OK )) && [[ "$SIGNING_KIND" != "Developer ID Application" ]]; then
-  printf '\033[1;33m!\033[0m notarization vars set but cert is %s; notarization may still fail\n' "$SIGNING_KIND" >&2
-fi
+[[ "$SIGNING_KIND" == "Developer ID Application" ]] \
+  || die "a Developer ID Application certificate is required for direct-download releases"
 
 # ---------- tests ----------
 
@@ -321,6 +317,18 @@ build_arch() {
   local sig_staged="/tmp/note.md-${arch_tag}.app.tar.gz.sig"
   cp "$dmg_src" "$dmg_staged"
   cp "$tarball_src" "$tarball_staged"
+
+  # Tauri submits the .app, then staples it before wrapping it in the DMG. That
+  # ticket does not cover the outer image: submit and staple the exact DMG bytes
+  # that will be uploaded, and fail before publication if Gatekeeper rejects it.
+  say "notarizing distributable DMG for $arch_tag"
+  xcrun notarytool submit "$dmg_staged" \
+    --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+    --team-id "$APPLE_TEAM_ID" --wait
+  xcrun stapler staple "$dmg_staged"
+  xcrun stapler validate "$dmg_staged"
+  codesign --verify --strict --verbose=2 "$dmg_staged"
+  spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_staged"
 
   # Fail-fast architecture self-check. Unpack the staged tarball and confirm its
   # inner Mach-O really matches this arch. Guards against a cross-build gone
