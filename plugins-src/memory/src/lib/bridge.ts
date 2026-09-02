@@ -6,6 +6,7 @@ import type {
   ContextRequest,
   MemorySnapshotV2,
   PendingDecisionInput,
+  ReplaceClaimInput,
   ResolveConflictInput,
   ResetAllInput,
   ResetAllReceipt,
@@ -57,6 +58,10 @@ export async function memorySnapshot(): Promise<MemorySnapshotV2> {
 
 export function memoryAdd(input: AddClaimInput): Promise<WriteReceipt> {
   return bridge().request('host.memory.v2.add', input)
+}
+
+export function memoryReplace(input: ReplaceClaimInput): Promise<WriteReceipt> {
+  return bridge().request('host.memory.v2.replace', input)
 }
 
 export async function memoryInitialize(): Promise<MemorySnapshotV2> {

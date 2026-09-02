@@ -213,11 +213,17 @@ export interface PendingDecisionInput extends MutationBase {
   expected_sha256: string
   gesture_intent: 'approve' | 'reject' | 'ignore' | 'delete'
   salience_override?: Salience
+  text_override?: string
 }
 
 export interface ClaimMutationInput extends MutationBase {
   claim_id: string
   expected_heads: RevisionRef[]
+}
+
+export interface ReplaceClaimInput extends ClaimMutationInput {
+  gesture_intent: 'replace'
+  text: string
 }
 
 export interface ResetAllInput extends MutationBase {

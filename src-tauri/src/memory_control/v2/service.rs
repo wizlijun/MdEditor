@@ -78,7 +78,21 @@ struct PendingDecisionInput {
     #[serde(default)]
     salience_override: Option<Salience>,
     #[serde(default)]
+    text_override: Option<String>,
+    #[serde(default)]
     delete_kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplaceInput {
+    request_id: String,
+    expected_protocol: RevisionRef,
+    claim_id: String,
+    #[serde(default)]
+    expected_heads: Vec<RevisionRef>,
+    gesture_intent: GestureIntent,
+    text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,6 +214,7 @@ pub fn dispatch(root: &Path, method: &str, params: &Value) -> Result<Value, Stri
         }
         "host.memory.v2.initialize" => initialize(root, parse(params, "initialize")?),
         "host.memory.v2.add" => add(root, parse(params, "add")?),
+        "host.memory.v2.replace" => replace(root, parse(params, "replace")?),
         "host.memory.v2.approve" => {
             decide_pending(root, parse(params, "approve")?, GestureIntent::Approve)
         }
@@ -468,11 +483,16 @@ fn rich_v2_view(
                 && !decided_pending.contains(item.value.revision_id.as_str())
         })
         .map(|item| {
+            let base_text = (item.value.parents.len() == 1)
+                .then(|| by_revision.get(item.value.parents[0].revision_id.as_str()))
+                .flatten()
+                .map(|revision| revision.text.clone());
             json!({
                 "revision": item.value,
                 "expected_sha256": item.value.payload_sha256,
                 "expected_heads": item.value.parents,
                 "required_approval_kind": approval_kind_for(item.value.claim_kind),
+                "base_text": base_text,
                 "source_summary": item.value.evidence.first().map(|source| source.resource.clone())
             })
         })
@@ -722,6 +742,56 @@ fn validate_add(input: &AddInput, owner: &AuthorityOwner) -> Result<(), String> 
     Ok(())
 }
 
+fn replace(root: &Path, input: ReplaceInput) -> Result<Value, String> {
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
+    validate_request_id(&input.request_id)?;
+    if input.gesture_intent != GestureIntent::Replace {
+        return Err("MEMORY_UNAUTHORIZED: explicit replace gesture required".into());
+    }
+    let text = validate_manual_text(&input.text)?;
+    let (repository, snapshot) = active(root, &input.expected_protocol)?;
+    if let Some(existing) = idempotent(&repository, &input.request_id)? {
+        if existing.value.transition.operation != ClaimOperation::Replace
+            || existing.value.claim_id != input.claim_id
+            || existing.value.parents != input.expected_heads
+            || existing.value.text != text
+        {
+            return Err("MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another replacement".into());
+        }
+        return receipt_for_retry(root, existing, &snapshot);
+    }
+    let view = snapshot.claims.iter()
+        .find(|view| view.claim_id == input.claim_id)
+        .ok_or("MEMORY_STALE_BASE: claim does not exist")?;
+    exact_heads(&input.expected_heads, &view.current_heads)?;
+    if view.current_heads.len() != 1 || view.application_state != ApplicationState::Current {
+        return Err("MEMORY_STALE_BASE: claim does not have one current active head".into());
+    }
+    let parent = loaded_claim(&repository, &view.current_heads[0])?;
+    if parent.value.text == text {
+        return Err("MEMORY_NO_CHANGE: edited text matches current claim".into());
+    }
+    let controls = controls(&repository, &snapshot, CLAIM_APPROVE)?;
+    let mut child = parent.value.clone();
+    child.revision_id = uuid_v7();
+    child.request_id = input.request_id;
+    child.parents = view.current_heads.clone();
+    child.causal_context = causal_context(&repository, &snapshot, &[parent]);
+    child.recorded_by = host_recorder();
+    child.recorded_at = now();
+    child.workflow.state = WorkflowState::Approved;
+    child.decision = Some(decision(&controls, approval_kind_for(child.claim_kind), CLAIM_APPROVE, child.recorded_at.clone()));
+    child.transition = ClaimTransition {
+        operation: ClaimOperation::Replace,
+        approves_revision_id: None,
+        approves_payload_sha256: None,
+    };
+    apply_manual_text(&mut child, text);
+    child.payload_sha256.clear();
+    publish_and_verify(root, &transaction, child)
+}
+
 fn decide_pending(
     root: &Path,
     input: PendingDecisionInput,
@@ -736,7 +806,21 @@ fn decide_pending(
     if input.delete_kind.is_some() {
         return Err("MEMORY_INVALID_REQUEST: delete_kind is not valid for this gesture".into());
     }
+    if input.text_override.is_some() && expected_intent != GestureIntent::Approve {
+        return Err("MEMORY_UNAUTHORIZED: text_override is only valid for approval".into());
+    }
+    let text_override = input.text_override.as_deref().map(validate_manual_text).transpose()?;
     let (repository, snapshot) = active(root, &input.expected_protocol)?;
+    let proposed = repository.claims.iter()
+        .find(|item| item.value.revision_id == input.revision_id)
+        .ok_or("MEMORY_STALE_BASE: pending revision no longer exists")?;
+    if proposed.value.payload_sha256 != input.expected_sha256 {
+        return Err("MEMORY_REVISION_HASH_CHANGED: pending payload hash differs".into());
+    }
+    exact_heads(&input.expected_heads, &proposed.value.parents)?;
+    if text_override.is_some() && proposed.value.lifecycle.state != LifecycleState::Active {
+        return Err("MEMORY_INVALID_REQUEST: lifecycle proposals cannot override text".into());
+    }
     if let Some(existing) = idempotent(&repository, &input.request_id)? {
         let operation_matches = matches!(
             (expected_intent, existing.value.transition.operation),
@@ -744,23 +828,19 @@ fn decide_pending(
                 | (GestureIntent::Reject, ClaimOperation::Reject)
                 | (GestureIntent::Ignore, ClaimOperation::Ignore)
         );
+        let expected_text = text_override.unwrap_or(proposed.value.text.as_str());
+        let expected_salience = input.salience_override.unwrap_or(proposed.value.salience);
         if !operation_matches
             || existing.value.transition.approves_revision_id.as_deref()
                 != Some(input.revision_id.as_str())
+            || existing.value.text != expected_text
+            || existing.value.salience != expected_salience
         {
             return Err(
                 "MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another decision".into(),
             );
         }
         return receipt_for_retry(root, existing, &snapshot);
-    }
-    let proposed = repository
-        .claims
-        .iter()
-        .find(|item| item.value.revision_id == input.revision_id)
-        .ok_or("MEMORY_STALE_BASE: pending revision no longer exists")?;
-    if proposed.value.payload_sha256 != input.expected_sha256 {
-        return Err("MEMORY_REVISION_HASH_CHANGED: pending payload hash differs".into());
     }
     if proposed.value.workflow.state != WorkflowState::Pending
         || repository.claims.iter().any(|item| {
@@ -770,7 +850,6 @@ fn decide_pending(
     {
         return Err("MEMORY_STALE_BASE: pending revision was already decided".into());
     }
-    exact_heads(&input.expected_heads, &proposed.value.parents)?;
     if !proposed.value.parents.is_empty() {
         let current = snapshot
             .claims
@@ -812,6 +891,9 @@ fn decide_pending(
     child.lifecycle.state = lifecycle;
     if let Some(salience) = input.salience_override {
         child.salience = salience;
+    }
+    if let Some(text) = text_override {
+        apply_manual_text(&mut child, text);
     }
     child.decision = Some(ClaimDecision {
         verdict,
@@ -857,6 +939,9 @@ fn delete_pending(root: &Path, input: PendingDecisionInput) -> Result<Value, Str
     let writer = RepositoryWriter::new(root);
     let transaction = writer.begin().map_err(|error| error.to_string())?;
     validate_request_id(&input.request_id)?;
+    if input.text_override.is_some() || input.salience_override.is_some() {
+        return Err("MEMORY_INVALID_REQUEST: pending delete cannot override claim fields".into());
+    }
     let (repository, snapshot) = active(root, &input.expected_protocol)?;
     if let Some(existing) = idempotent(&repository, &input.request_id)? {
         if existing.value.transition.operation != ClaimOperation::Ignore
@@ -878,6 +963,11 @@ fn delete_pending(root: &Path, input: PendingDecisionInput) -> Result<Value, Str
         .ok_or("MEMORY_STALE_BASE: pending revision no longer exists")?;
     if proposed.value.payload_sha256 != input.expected_sha256 {
         return Err("MEMORY_REVISION_HASH_CHANGED: pending payload hash differs".into());
+    }
+    if proposed.value.workflow.state != WorkflowState::Pending
+        || repository.claims.iter().any(|item| item.value.transition.approves_revision_id.as_deref() == Some(proposed.value.revision_id.as_str()))
+    {
+        return Err("MEMORY_STALE_BASE: pending revision was already decided".into());
     }
     exact_heads(&input.expected_heads, &proposed.value.parents)?;
     let controls = controls(&repository, &snapshot, CLAIM_APPROVE)?;
@@ -2010,6 +2100,25 @@ fn risk_for(kind: ClaimKind) -> RiskClass {
     }
 }
 
+fn validate_manual_text(text: &str) -> Result<&str, String> {
+    let text = text.trim();
+    if text.is_empty() || text.len() > 32_768 {
+        return Err("MEMORY_INVALID_CLAIM: text must be non-empty and at most 32768 bytes".into());
+    }
+    Ok(text)
+}
+
+fn apply_manual_text(revision: &mut MemoryClaimRevision, text: &str) {
+    revision.text = text.to_string();
+    match &mut revision.kind_data {
+        KindData::Identity(data) => data.value = text.to_string(),
+        KindData::Belief(data) => data.proposition = text.to_string(),
+        KindData::MaterialFact(data) => data.proposition = text.to_string(),
+        _ => {}
+    }
+    revision.dedupe_key = format!("human:{}", digest(text.as_bytes()));
+}
+
 fn kind_data_for(
     kind: ClaimKind,
     text: &str,
@@ -2469,6 +2578,60 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_text_edit_creates_an_exact_replace_revision_and_is_idempotent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        let mut add = add_params(&protocol);
+        add["claim_kind"] = json!("identity");
+        add["category"] = json!("identity");
+        add["text"] = json!("我是产品设计师。");
+        let created = dispatch(dir.path(), "host.memory.v2.add", &add).unwrap();
+        let replace = json!({
+            "request_id": "memory-ui/replace/test", "expected_protocol": protocol,
+            "claim_id": created["claim_id"],
+            "expected_heads": [{"revision_id": created["revision_id"], "payload_sha256": created["payload_sha256"]}],
+            "gesture_intent": "replace", "text": "我是产品设计师，也负责用户研究。"
+        });
+        let receipt = dispatch(dir.path(), "host.memory.v2.replace", &replace).unwrap();
+        let retried = dispatch(dir.path(), "host.memory.v2.replace", &replace).unwrap();
+        assert_eq!(receipt["revision_id"], retried["revision_id"]);
+
+        let repository = V2Repository::new(dir.path()).load().unwrap();
+        assert_eq!(repository.claims.len(), 2);
+        let edited = repository.claims.iter()
+            .find(|item| item.value.revision_id == receipt["revision_id"]).unwrap();
+        assert_eq!(edited.value.transition.operation, ClaimOperation::Replace);
+        assert_eq!(edited.value.parents.len(), 1);
+        assert_eq!(edited.value.parents[0].revision_id, created["revision_id"]);
+        assert_eq!(edited.value.text, "我是产品设计师，也负责用户研究。");
+        assert!(matches!(&edited.value.kind_data, KindData::Identity(data) if data.value == edited.value.text));
+        assert_eq!(edited.value.recorded_by.id, "notemd.memory-ui");
+        assert_eq!(edited.value.decision.as_ref().unwrap().actor_id, "human:test");
+        assert_eq!(fs::read_to_string(dir.path().join("USER.md")).unwrap(), "# USER\n\n## identity\n\n- 我是产品设计师，也负责用户研究。\n");
+
+        let mut reused = replace.clone();
+        reused["text"] = json!("同一个 request_id 的不同文本。");
+        let error = dispatch(dir.path(), "host.memory.v2.replace", &reused).unwrap_err();
+        assert!(error.contains("MEMORY_IDEMPOTENCY_CONFLICT"), "{error}");
+    }
+
+    #[test]
+    fn confirmed_text_edit_rejects_a_noop_before_publishing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        let created = dispatch(dir.path(), "host.memory.v2.add", &add_params(&protocol)).unwrap();
+        let before = V2Repository::new(dir.path()).load().unwrap().claims.len();
+        let error = dispatch(dir.path(), "host.memory.v2.replace", &json!({
+            "request_id": "memory-ui/replace/noop", "expected_protocol": protocol,
+            "claim_id": created["claim_id"],
+            "expected_heads": [{"revision_id": created["revision_id"], "payload_sha256": created["payload_sha256"]}],
+            "gesture_intent": "replace", "text": "回答先给出结论。"
+        })).unwrap_err();
+        assert!(error.contains("MEMORY_NO_CHANGE"), "{error}");
+        assert_eq!(V2Repository::new(dir.path()).load().unwrap().claims.len(), before);
+    }
+
+    #[test]
     fn concurrent_same_request_in_one_clone_publishes_exactly_one_revision() {
         let dir = tempfile::tempdir().unwrap();
         let protocol = initialize(dir.path());
@@ -2545,6 +2708,65 @@ mod tests {
             fs::read_to_string(dir.path().join("USER.md")).unwrap(),
             "# USER\n\n## preferences\n\n- 用户偏好先给出结论。\n"
         );
+    }
+
+    #[test]
+    fn pending_text_edit_approves_one_corrected_child_and_exposes_the_base_text() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        let created = dispatch(dir.path(), "host.memory.v2.add", &add_params(&protocol)).unwrap();
+        let mut proposal = pending_proposal("owner:test");
+        proposal.request_id = "agent/propose/edit-existing".into();
+        proposal.claim_id = Some(created["claim_id"].as_str().unwrap().into());
+        proposal.text = "用户偏好每次都先给结论。".into();
+        let proposed = propose_pending(dir.path(), proposal).unwrap();
+        let before = dispatch(dir.path(), "host.memory.v2.snapshot", &json!({"as_of_valid_time": now()})).unwrap();
+        assert_eq!(before["pending"][0]["base_text"], "回答先给出结论。");
+
+        let approve = json!({
+            "request_id": "memory-ui/approve/edit-existing", "expected_protocol": protocol,
+            "expected_heads": proposed.parents, "revision_id": proposed.revision_id,
+            "expected_sha256": proposed.payload_sha256, "gesture_intent": "approve",
+            "text_override": "用户偏好通常先给出准确结论。"
+        });
+        let receipt = dispatch(dir.path(), "host.memory.v2.approve", &approve).unwrap();
+        let retried = dispatch(dir.path(), "host.memory.v2.approve", &approve).unwrap();
+        assert_eq!(receipt["revision_id"], retried["revision_id"]);
+        let repository = V2Repository::new(dir.path()).load().unwrap();
+        assert_eq!(repository.claims.len(), 3);
+        let approved = repository.claims.iter()
+            .find(|item| item.value.revision_id == receipt["revision_id"]).unwrap();
+        assert_eq!(approved.value.transition.operation, ClaimOperation::Approve);
+        assert_eq!(approved.value.transition.approves_revision_id.as_deref(), Some(proposed.revision_id.as_str()));
+        assert_eq!(approved.value.text, "用户偏好通常先给出准确结论。");
+        assert_eq!(fs::read_to_string(dir.path().join("USER.md")).unwrap(), "# USER\n\n## preferences\n\n- 用户偏好通常先给出准确结论。\n");
+
+        let mut reused = approve;
+        reused["text_override"] = json!("同一个 request_id 的其他修订。");
+        let error = dispatch(dir.path(), "host.memory.v2.approve", &reused).unwrap_err();
+        assert!(error.contains("MEMORY_IDEMPOTENCY_CONFLICT"), "{error}");
+    }
+
+    #[test]
+    fn pending_lifecycle_change_rejects_a_text_override() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        let created = dispatch(dir.path(), "host.memory.v2.add", &add_params(&protocol)).unwrap();
+        let mut proposal = pending_proposal("owner:test");
+        proposal.request_id = "agent/propose/revoke-existing".into();
+        proposal.claim_id = Some(created["claim_id"].as_str().unwrap().into());
+        proposal.lifecycle = LifecycleState::Revoked;
+        let proposed = propose_pending(dir.path(), proposal).unwrap();
+        let before = V2Repository::new(dir.path()).load().unwrap().claims.len();
+
+        let error = dispatch(dir.path(), "host.memory.v2.approve", &json!({
+            "request_id": "memory-ui/approve/edit-revoke", "expected_protocol": protocol,
+            "expected_heads": proposed.parents, "revision_id": proposed.revision_id,
+            "expected_sha256": proposed.payload_sha256, "gesture_intent": "approve",
+            "text_override": "不允许借编辑改变撤销提案。"
+        })).unwrap_err();
+        assert!(error.contains("lifecycle proposals cannot override text"), "{error}");
+        assert_eq!(V2Repository::new(dir.path()).load().unwrap().claims.len(), before);
     }
 
     #[test]

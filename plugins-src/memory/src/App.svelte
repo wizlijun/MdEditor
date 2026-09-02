@@ -17,6 +17,7 @@
     memoryIgnore,
     memoryInitialize,
     memoryReject,
+    memoryReplace,
     memoryResetAll,
     memoryResolve,
     memorySetSalience,
@@ -64,6 +65,7 @@
 
   type Tab = 'confirmed' | 'pending' | 'history'
   type DestructiveAction = { kind: 'reject' | 'delete-candidate' | 'approve-lifecycle'; pending: PendingClaim } | { kind: 'delete-claim'; current: EffectiveClaim }
+  type EditTarget = { kind: 'confirmed'; current: EffectiveClaim } | { kind: 'pending'; pending: PendingClaim }
 
   let snapshot = $state<MemorySnapshotV2 | null>(null)
   let loading = $state(true)
@@ -80,6 +82,8 @@
   let showReset = $state(false)
   let openMenuFor = $state<string | null>(null)
   let destructive = $state<DestructiveAction | null>(null)
+  let editTarget = $state<EditTarget | null>(null)
+  let editText = $state('')
   let mergeConflict = $state<MemoryConflict | null>(null)
   let mergedText = $state('')
 
@@ -116,6 +120,7 @@
   let contextPreview = $state<ContextPreview | null>(null)
   let contextBusy = $state(false)
   let addTextarea = $state<HTMLTextAreaElement>()
+  let editTextarea = $state<HTMLTextAreaElement>()
 
   const writable = $derived(snapshot?.mode === 'v2' && snapshot.health.status !== 'damaged' && snapshot.health.status !== 'unsupported')
   const canInfer = $derived(writable || snapshot?.initialization_required === true)
@@ -456,6 +461,44 @@
     } catch (cause) { error = hostError(cause) } finally { writing = false }
   }
 
+  async function startEdit(target: EditTarget) {
+    editTarget = target
+    editText = target.kind === 'confirmed' ? target.current.claim.text : target.pending.revision.text
+    openMenuFor = null
+    await tick()
+    editTextarea?.focus()
+  }
+
+  async function submitEdit() {
+    if (!editTarget || !editText.trim() || writing) return
+    writing = true
+    error = ''
+    try {
+      const receipt = editTarget.kind === 'confirmed'
+        ? await memoryReplace({
+            request_id: requestId('memory-ui/replace'), expected_protocol: protocol(),
+            claim_id: editTarget.current.claim.claim_id,
+            expected_heads: expectedHeads(editTarget.current.claim),
+            gesture_intent: 'replace', text: editText.trim(),
+          })
+        : await memoryApprove({
+            request_id: requestId('memory-ui/approve-edited'), expected_protocol: protocol(),
+            expected_heads: editTarget.pending.expected_heads,
+            revision_id: editTarget.pending.revision.revision_id,
+            expected_sha256: editTarget.pending.expected_sha256,
+            gesture_intent: 'approve', text_override: editText.trim(),
+          })
+      const message = editTarget.kind === 'confirmed' ? '主张内容已修改' : '已修正并确认这条主张'
+      editTarget = null
+      editText = ''
+      await completed(message, receipt.projection_rebuilt)
+    } catch (cause) {
+      error = hostError(cause)
+    } finally {
+      writing = false
+    }
+  }
+
   async function resolveConflict(conflict: MemoryConflict, strategy: 'keep-head' | 'merge' | 'revoke-all', selectedRevisionId?: string) {
     if (writing) return
     writing = true
@@ -520,6 +563,7 @@
     else if (destructive) destructive = null
     else if (mergeConflict) mergeConflict = null
     else if (showContext) showContext = false
+    else if (editTarget) { editTarget = null; editText = '' }
     else if (showAdd) showAdd = false
     else openMenuFor = null
   }
@@ -620,6 +664,7 @@
                   <button aria-haspopup="menu" aria-expanded={openMenuFor === claim.claim_id} onclick={() => openMenuFor = openMenuFor === claim.claim_id ? null : claim.claim_id}>更多</button>
                   {#if openMenuFor === claim.claim_id}
                     <div class="menu-panel" role="menu" aria-label="主张操作">
+                      <button class="menu-row" role="menuitem" onclick={() => startEdit({ kind: 'confirmed', current: selectedClaim })} disabled={!writable || writing}>编辑内容…</button>
                       <button class="menu-row" role="menuitem" onclick={() => setClaimSalience(selectedClaim, claim.salience === 'pinned' ? 'normal' : 'pinned')} disabled={!writable || writing}>{claim.salience === 'pinned' ? '恢复普通显著性' : '标为重要'}</button>
                       <button class="menu-row danger-row" role="menuitem" onclick={() => { destructive = { kind: 'delete-claim', current: selectedClaim }; openMenuFor = null }} disabled={!writable || writing}>移出当前记忆…</button>
                     </div>
@@ -661,6 +706,7 @@
               <button onclick={() => destructive = { kind: 'delete-candidate', pending: selectedPending }} disabled={!writable || writing}>删除候选…</button>
               <button onclick={() => destructive = { kind: 'reject', pending: selectedPending }} disabled={!writable || writing}>否认…</button>
               <button onclick={() => decidePending(selectedPending, 'ignore')} disabled={!writable || writing}>可以忽略</button>
+              {#if !lifecycleChange}<button onclick={() => startEdit({ kind: 'pending', pending: selectedPending })} disabled={!writable || writing}>编辑后确认…</button>{/if}
               {#if !lifecycleChange}<button onclick={() => decidePending(selectedPending, 'approve', 'pinned')} disabled={!writable || writing}>认为重要</button>{/if}
               <button class="primary" onclick={() => lifecycleChange ? destructive = { kind: 'approve-lifecycle', pending: selectedPending } : decidePending(selectedPending, 'approve')} disabled={!writable || writing}>{lifecycleChange ? `确认${revision.lifecycle.state === 'deleted' ? '删除' : '撤销'}…` : approvalLabels[approval].button}</button>
             </div>
@@ -708,6 +754,16 @@
         <label class="field">Agent 使用方式<input bind:value={addGuidance} placeholder="在什么情况下如何使用" /></label><label class="field">必须避免{addNeedsAvoid ? '（必填）' : ''}<input bind:value={addAvoid} placeholder="不能做出的推断或动作" /></label>
       </details>
       <footer><button onclick={() => showAdd = false} disabled={writing}>取消</button><button class="primary" onclick={submitAdd} disabled={writing || !addText.trim() || !addPurposes.length || (addNeedsAvoid && !addAvoid.trim())}>{writing ? '正在保存…' : '保存并确认'}</button></footer>
+    </div>
+  </div>
+{/if}
+
+{#if editTarget}
+  <div class="scrim" role="presentation">
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+      <header><div><h2 id="edit-title">{editTarget.kind === 'confirmed' ? '编辑已确认记忆' : '编辑待确认建议'}</h2><p>{editTarget.kind === 'confirmed' ? '保存会创建新的修订，不会改写不可变历史。' : '保存会用修正后的内容确认；原始提案仍保留在不可变历史中。'}</p></div><button class="close" aria-label="关闭编辑" onclick={() => { editTarget = null; editText = '' }} disabled={writing}>×</button></header>
+      <label class="field">主张内容<textarea bind:this={editTextarea} bind:value={editText} rows="7" maxlength="32768"></textarea></label>
+      <footer><button onclick={() => { editTarget = null; editText = '' }} disabled={writing}>取消</button><button class="primary" onclick={submitEdit} disabled={writing || !editText.trim() || (editTarget.kind === 'confirmed' && editText.trim() === editTarget.current.claim.text)}>{writing ? '正在保存…' : editTarget.kind === 'confirmed' ? '保存修改' : '保存并确认'}</button></footer>
     </div>
   </div>
 {/if}

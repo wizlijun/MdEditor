@@ -82,6 +82,59 @@ describe('Memory Protocol v2 app', () => {
     expect(calls[0][1]).not.toHaveProperty('human_confirmed')
   })
 
+  it('edits a confirmed claim through one exact replace RPC and keeps the draft after a stale-base failure', async () => {
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.snapshot') return baseSnapshot()
+      if (method === 'host.memory.v2.replace') throw new Error('MEMORY_STALE_BASE')
+      return {}
+    })
+    await render(request)
+    button('更多')!.click(); flushSync(); button('编辑内容…')!.click(); flushSync()
+    const dialog = document.querySelector<HTMLElement>('[role=dialog][aria-labelledby=edit-title]')!
+    const textarea = dialog.querySelector<HTMLTextAreaElement>('textarea')!
+    expect(textarea.value).toBe('回答先给出结论。\n不确定内容应明确标注。')
+    textarea.value = '回答应先给出准确结论。'; textarea.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    button('保存修改')!.click(); await settle()
+
+    const calls = request.mock.calls.filter(([method]) => method === 'host.memory.v2.replace')
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatchObject({
+      claim_id: 'claim-1',
+      expected_heads: [{ revision_id: 'revision-1', payload_sha256: 'sha-revision-1' }],
+      expected_protocol: { revision_id: 'protocol-2', payload_sha256: 'protocol-sha' },
+      gesture_intent: 'replace',
+      text: '回答应先给出准确结论。',
+    })
+    expect(calls[0][1]).not.toHaveProperty('actor')
+    expect(document.querySelector('[role=dialog][aria-labelledby=edit-title]')).toBeTruthy()
+    expect(document.querySelector<HTMLTextAreaElement>('[role=dialog][aria-labelledby=edit-title] textarea')?.value).toBe('回答应先给出准确结论。')
+    expect(document.querySelector('[role=alert]')?.textContent).toContain('另一设备发生变化')
+  })
+
+  it('edits a pending suggestion by approving the corrected text without a second write', async () => {
+    let snapshotCalls = 0
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.snapshot') { snapshotCalls += 1; return snapshotCalls === 1 ? baseSnapshot() : { ...baseSnapshot(), pending: [] } }
+      if (method === 'host.memory.v2.approve') return receipt
+      return {}
+    })
+    await render(request); tab('待确认').click(); flushSync(); button('编辑后确认…')!.click(); flushSync()
+    const textarea = document.querySelector<HTMLTextAreaElement>('[role=dialog][aria-labelledby=edit-title] textarea')!
+    expect(textarea.value).toContain('回答先给出结论')
+    textarea.value = '用户偏好回答先给准确结论。'; textarea.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    button('保存并确认')!.click(); await settle()
+
+    const calls = request.mock.calls.filter(([method]) => method === 'host.memory.v2.approve')
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatchObject({
+      revision_id: 'pending-1', expected_sha256: 'sha-pending-1', expected_heads: [],
+      gesture_intent: 'approve', text_override: '用户偏好回答先给准确结论。',
+    })
+    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.replace')).toHaveLength(0)
+    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.add')).toHaveLength(0)
+    expect(document.querySelector('[role=dialog][aria-labelledby=edit-title]')).toBeNull()
+  })
+
   it('labels behavioral authorization differently and pins it in the same approval RPC', async () => {
     const boundary = pending({ claim_kind: 'boundary', risk_class: 'action-sensitive', text: '不要向第三方发送内容。', agent_use: { guidance: '先询问用户。', avoid_error: '禁止发送。' } })
     const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? { ...baseSnapshot(), pending: [boundary] } : method === 'host.memory.v2.approve' ? receipt : {})
@@ -100,6 +153,7 @@ describe('Memory Protocol v2 app', () => {
     expect(document.body.textContent).toContain('这是生命周期变更')
     expect(document.body.textContent).toContain('离开当前记忆、纯文本投影和 Agent context')
     expect(button('认为重要')).toBeUndefined()
+    expect(button('编辑后确认…')).toBeUndefined()
     button('确认撤销…')!.click(); flushSync()
     expect(document.querySelector('[role=alertdialog]')).toBeTruthy()
     expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.approve')).toHaveLength(0)
