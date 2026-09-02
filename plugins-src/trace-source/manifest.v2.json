@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.trace-source",
   "name": "Trace Source",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "kind": "native",
   "engines": {
     "notemd": ">=6.828.3"

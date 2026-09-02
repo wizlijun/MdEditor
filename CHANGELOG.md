@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Trace Source 1.2.3 opens Inbox items inside its own window for editing.** Finished reports and saved requests now load into the plugin's existing editor instead of raising the main editor; edits autosave to the original file, and switching, slow writes, deletion and window closing are ordered so current text is not lost or recreated after deletion.
+
 ## v6.902.4 — 2026-09-02
 
 ### Changed
