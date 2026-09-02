@@ -12,7 +12,7 @@
     "request_id": { "$ref": "#/$defs/id" },
     "parents": { "type": "array", "items": { "$ref": "#/$defs/revisionRef" } },
     "causal_context": { "$ref": "#/$defs/causalContext" },
-    "claim_kind": { "enum": ["identity", "preference", "boundary", "decision", "belief", "observation", "commitment", "practice", "material_fact", "quotation", "legacy-unclassified"] },
+    "claim_kind": { "enum": ["identity", "preference", "boundary", "decision", "belief", "observation", "commitment", "practice", "material_fact", "quotation"] },
     "kind_data": { "$ref": "#/$defs/kindData" },
     "subject": {
       "type": "object", "additionalProperties": false,
@@ -28,7 +28,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["kind", "id", "device_id"],
       "properties": {
-        "kind": { "enum": ["host", "agent", "human", "process", "migration"] },
+        "kind": { "enum": ["host", "agent", "human", "process"] },
         "id": { "$ref": "#/$defs/id" },
         "device_id": { "$ref": "#/$defs/id" }
       }
@@ -127,8 +127,7 @@
     { "if": { "properties": { "claim_kind": { "const": "commitment" } } }, "then": { "properties": { "kind_data": { "required": ["commitment"] } } } },
     { "if": { "properties": { "claim_kind": { "const": "practice" } } }, "then": { "properties": { "kind_data": { "required": ["practice"] } } } },
     { "if": { "properties": { "claim_kind": { "const": "material_fact" } } }, "then": { "properties": { "kind_data": { "required": ["material_fact"] } } } },
-    { "if": { "properties": { "claim_kind": { "const": "quotation" } } }, "then": { "properties": { "kind_data": { "required": ["quotation"] } } } },
-    { "if": { "properties": { "claim_kind": { "const": "legacy-unclassified" } } }, "then": { "properties": { "kind_data": { "required": ["legacy-unclassified"] } } } }
+    { "if": { "properties": { "claim_kind": { "const": "quotation" } } }, "then": { "properties": { "kind_data": { "required": ["quotation"] } } } }
   ],
   "$defs": {
     "id": { "type": "string", "minLength": 1 },
@@ -160,9 +159,9 @@
     "assertor": {
       "type": "object", "additionalProperties": false, "required": ["kind", "id", "basis"],
       "properties": {
-        "kind": { "enum": ["owner", "human", "agent", "system", "source", "migration", "unknown"] },
+        "kind": { "enum": ["owner", "human", "agent", "system", "source", "unknown"] },
         "id": { "$ref": "#/$defs/id" },
-        "basis": { "enum": ["direct-input", "quoted-source", "observation", "inference", "migration-unknown"] }
+        "basis": { "enum": ["direct-input", "quoted-source", "observation", "inference"] }
       }
     },
     "kindData": {
@@ -177,8 +176,7 @@
         "commitment": { "type": "object", "additionalProperties": false, "required": ["committed_by", "beneficiary"], "properties": { "committed_by": { "$ref": "#/$defs/id" }, "beneficiary": { "$ref": "#/$defs/id" } } },
         "practice": { "type": "object", "additionalProperties": false, "required": ["practice_scope"], "properties": { "practice_scope": { "type": "string", "minLength": 1 } } },
         "material_fact": { "type": "object", "additionalProperties": false, "required": ["proposition"], "properties": { "proposition": { "type": "string", "minLength": 1 } } },
-        "quotation": { "type": "object", "additionalProperties": false, "required": ["speaker"], "properties": { "speaker": { "$ref": "#/$defs/id" } } },
-        "legacy-unclassified": { "type": "object", "additionalProperties": false, "required": ["missing_semantics"], "properties": { "missing_semantics": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["claim-kind", "subject", "asserted-by", "valid-time", "approval-meaning", "evidence-relation"] } } } }
+        "quotation": { "type": "object", "additionalProperties": false, "required": ["speaker"], "properties": { "speaker": { "$ref": "#/$defs/id" } } }
       }
     },
     "decision": {

@@ -6,6 +6,14 @@
 
 ## 未发布
 
+### 新增
+
+- **Memory 2.1 可以让选定的 AI Agent 从现有 Vault 推理长期 owner 记忆。** 第一次成功运行执行全量扫描，之后以成功 Git 水位执行增量推理；所有结果仍是等待人工审阅的 pending Claim，任务协议内置 prompt injection、secret、第三方信息与 revoke 安全边界。
+
+### 变更
+
+- **Memory 现在只有纯 v2 路径。** Host、CLI 与插件不再暴露 v1 兼容、迁移 RPC 或旧投影 marker；空 Vault 会由受信任的 UI 操作直接初始化为 Memory Protocol v2。
+
 ### 修复
 
 - **macOS 安装镜像现在会携带外层公证票据。** Apple Silicon 与 Intel DMG 都会在发布前单独提交 Apple 公证、装订票据并通过 Gatekeeper，不再只依赖镜像内部已经公证的 App。

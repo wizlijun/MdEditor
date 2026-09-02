@@ -224,9 +224,7 @@ fn render_target(
             categories.push(category.clone());
         }
     }
-    let mut out = format!(
-        "<!-- notemd-memory-control -->\n<!-- GENERATED / READ-ONLY: derived from .notemd/memory YAML; do not edit manually. -->\n# {title}\n"
-    );
+    let mut out = format!("# {title}\n");
     if action_sensitive_conflict {
         out.push_str("\n> 存在未解决的权限或边界冲突，相关行动已暂停。\n");
     }
@@ -344,7 +342,7 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "<!-- notemd-memory-control -->\n<!-- GENERATED / READ-ONLY: derived from .notemd/memory YAML; do not edit manually. -->\n# USER\n\n## preferences\n\n- 第一行\n  \\## 伪标题\n  \\- 伪条目\n"
+            "# USER\n\n## preferences\n\n- 第一行\n  \\## 伪标题\n  \\- 伪条目\n"
         );
     }
 

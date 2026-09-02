@@ -30,7 +30,7 @@ export const categoryOptions: Record<ProjectionTarget, Array<{ id: string; label
 export const claimKindLabels: Record<ClaimKind, string> = {
   identity: '身份表达', preference: '个人偏好', boundary: '行为边界', decision: '已作决定', belief: '个人判断',
   observation: '观察记录', commitment: '长期承诺', practice: '稳定做法', 'material-fact': '外部事实',
-  quotation: '原话记录', 'legacy-unclassified': '待复核旧记录',
+  quotation: '原话记录',
 }
 
 export const approvalLabels: Record<ApprovalKind, { label: string; explanation: string; button: string }> = {

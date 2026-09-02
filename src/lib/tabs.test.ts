@@ -93,9 +93,9 @@ describe('tabs', () => {
 
   it('keeps a controlled memory projection read-only across edit and save paths', async () => {
     const fs = await import('./fs')
-    ;(fs.readMd as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      '---\nmanaged:\n  by: notemd.memory\n---\n<!-- notemd-memory-control -->\n# Memory\n',
-    )
+    ;(fs.readMd as ReturnType<typeof vi.fn>).mockResolvedValueOnce('# MEMORY\n')
+    const projection = await import('./memory-projection')
+    projection.setMemoryProjectionVaultRoot('/vault')
     const m = await import('./tabs.svelte')
     await m.openFile('/vault/MEMORY.md')
     const tab = m.tabs[0]

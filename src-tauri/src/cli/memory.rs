@@ -4,8 +4,7 @@
 //! not disappear when the Memory window plugin is disabled. The window and CLI
 //! still share `crate::memory_control` for every state transition.
 
-use crate::memory_control::v2 as memory_v2;
-use crate::memory_control::{self, model::*};
+use crate::memory_control::{self, v2 as memory_v2};
 use chrono::{SecondsFormat, Utc};
 use serde_json::json;
 use std::path::PathBuf;
@@ -39,10 +38,7 @@ pub fn parse_args(rest: &[String], json_global: bool) -> MemoryArgs {
         let token = &rest[i];
         if token == "--json" {
             out.json = true;
-        } else if matches!(
-            token.as_str(),
-            "--confirm-human-approved" | "--all" | "--dry-run" | "--external-transfer"
-        ) {
+        } else if matches!(token.as_str(), "--all" | "--external-transfer") {
             out.bools.insert(token.trim_start_matches("--").to_string());
         } else if token.starts_with("--") {
             if let Some(value) = rest.get(i + 1) {
@@ -70,311 +66,12 @@ fn root(args: &MemoryArgs) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-fn parse_scope(value: Option<&String>) -> Result<Scope, String> {
-    match value.map(String::as_str).unwrap_or("memory") {
-        "memory" => Ok(Scope::Memory),
-        "user" | "user-profile" | "user.profile" => Ok(Scope::UserProfile),
-        "owner" | "user-owner" | "user.owner" => Ok(Scope::UserOwner),
-        other => Err(format!("invalid scope: {other}")),
-    }
-}
-
-fn parse_operation(value: &str) -> Result<Operation, String> {
-    match value {
-        "create" | "add" => Ok(Operation::Create),
-        "replace" | "edit" => Ok(Operation::Replace),
-        "merge" => Ok(Operation::Merge),
-        "revoke" => Ok(Operation::Revoke),
-        "delete" => Ok(Operation::Delete),
-        "set-priority" | "priority" => Ok(Operation::SetPriority),
-        other => Err(format!("invalid operation: {other}")),
-    }
-}
-
-fn parse_priority(value: Option<&String>) -> Result<Option<Priority>, String> {
-    match value.map(String::as_str) {
-        None => Ok(None),
-        Some("critical") => Ok(Some(Priority::Critical)),
-        Some("normal") => Ok(Some(Priority::Normal)),
-        Some("high") => Ok(Some(Priority::High)),
-        Some("low") => Ok(Some(Priority::Low)),
-        Some(other) => Err(format!("invalid priority: {other}")),
-    }
-}
-
-fn parse_polarity(value: Option<&String>) -> Result<Option<Polarity>, String> {
-    match value.map(String::as_str) {
-        None => Ok(None),
-        Some("positive") => Ok(Some(Polarity::Positive)),
-        Some("negative") => Ok(Some(Polarity::Negative)),
-        Some("neutral") => Ok(Some(Polarity::Neutral)),
-        Some(other) => Err(format!("invalid polarity: {other}")),
-    }
-}
-
-fn parse_epistemic_status(value: Option<&String>) -> Result<Option<EpistemicStatus>, String> {
-    match value.map(String::as_str) {
-        None => Ok(None),
-        Some("owner-stated") => Ok(Some(EpistemicStatus::OwnerStated)),
-        Some("source-supported") => Ok(Some(EpistemicStatus::SourceSupported)),
-        Some("inferred") => Ok(Some(EpistemicStatus::Inferred)),
-        Some("contested") => Ok(Some(EpistemicStatus::Contested)),
-        Some("unknown") => Ok(Some(EpistemicStatus::Unknown)),
-        Some(other) => Err(format!("invalid epistemic-status: {other}")),
-    }
-}
-
-fn parse_certainty(value: Option<&String>) -> Result<Option<Certainty>, String> {
-    match value.map(String::as_str) {
-        None => Ok(None),
-        Some("high") => Ok(Some(Certainty::High)),
-        Some("medium") => Ok(Some(Certainty::Medium)),
-        Some("low") => Ok(Some(Certainty::Low)),
-        Some("unknown") => Ok(Some(Certainty::Unknown)),
-        Some(other) => Err(format!("invalid certainty: {other}")),
-    }
-}
-
 fn print_json_or_text(args: &MemoryArgs, value: serde_json::Value, text: String) {
     if args.json {
         println!("{}", json!({"ok":true,"data":value}));
     } else {
         println!("{text}");
     }
-}
-
-fn list(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
-    let snapshot = memory_control::list(root)?;
-    let scope = args
-        .flags
-        .get("scope")
-        .map(|v| parse_scope(Some(v)))
-        .transpose()?;
-    let status =
-        args.flags
-            .get("status")
-            .map(String::as_str)
-            .unwrap_or(if args.bools.contains("all") {
-                "all"
-            } else {
-                "active"
-            });
-    let priority = parse_priority(args.flags.get("priority"))?;
-    let polarity = parse_polarity(args.flags.get("polarity"))?;
-    let entries = snapshot
-        .entries
-        .into_iter()
-        .filter(|entry| {
-            scope.map(|s| entry.scope == s).unwrap_or(true)
-                && (status == "all" || entry.status == status)
-                && priority.map(|p| entry.priority == p).unwrap_or(true)
-                && polarity.map(|p| entry.polarity == p).unwrap_or(true)
-        })
-        .collect::<Vec<_>>();
-    let proposals = snapshot
-        .proposals
-        .into_iter()
-        .filter(|proposal| {
-            status == "all" || status == "pending" && proposal.decision == ProposalDecision::Pending
-        })
-        .collect::<Vec<_>>();
-    let value = json!({"entries":entries,"proposals":proposals,"integrity":snapshot.integrity});
-    let mut text = String::new();
-    if value["integrity"]["drift"].as_bool() == Some(true) {
-        text.push_str("WARNING: projection drift detected; writes are blocked.\n\n");
-    }
-    for entry in entries_from_value(&value) {
-        text.push_str(&format!(
-            "{}  [{} / {:?} / {:?} / {:?} / {:?}]  {}\n",
-            entry.id,
-            entry.status,
-            entry.priority,
-            entry.polarity,
-            entry.epistemic_status,
-            entry.certainty,
-            entry.text
-        ));
-    }
-    let pending = value["proposals"].as_array().map(Vec::len).unwrap_or(0);
-    if pending > 0 {
-        text.push_str(&format!("\n{pending} pending proposal(s)\n"));
-    }
-    if text.trim().is_empty() {
-        text.push_str("No matching memory entries.\n");
-    }
-    print_json_or_text(args, value, text.trim_end().to_string());
-    Ok(())
-}
-
-fn entries_from_value(value: &serde_json::Value) -> Vec<MemoryEntry> {
-    serde_json::from_value(value["entries"].clone()).unwrap_or_default()
-}
-
-fn show(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
-    let id = args
-        .positionals
-        .first()
-        .or_else(|| args.flags.get("id"))
-        .ok_or("show requires an entry or proposal id")?;
-    let snapshot = memory_control::list(root)?;
-    if let Some(entry) = snapshot.entries.iter().find(|entry| &entry.id == id) {
-        let value = serde_json::to_value(entry).map_err(|e| e.to_string())?;
-        print_json_or_text(
-            args,
-            value,
-            format!(
-                "{}\nstatus: {}\npriority: {:?}\npolarity: {:?}\nepistemic-status: {:?}\ncertainty: {:?}\nagent-guidance: {}\navoid-error: {}\nrevision: {}\nsource: {}\n\n{}",
-                entry.id,
-                entry.status,
-                entry.priority,
-                entry.polarity,
-                entry.epistemic_status,
-                entry.certainty,
-                entry.agent_guidance.as_deref().unwrap_or("-"),
-                entry.avoid_error.as_deref().unwrap_or("-"),
-                entry.revision,
-                entry.source.as_deref().unwrap_or("-"),
-                entry.text
-            ),
-        );
-        return Ok(());
-    }
-    if let Some(proposal) = snapshot
-        .proposals
-        .iter()
-        .find(|proposal| &proposal.frontmatter.proposal.id == id)
-    {
-        let target = proposal
-            .frontmatter
-            .proposal
-            .target_id
-            .as_deref()
-            .and_then(|target_id| snapshot.entries.iter().find(|entry| entry.id == target_id));
-        let before = target.map(|entry| entry.text.as_str()).unwrap_or("—");
-        let after = match proposal.frontmatter.proposal.operation {
-            Operation::Revoke => "revoked (history retained)".to_string(),
-            Operation::Delete => "removed from projection (candidate/event retained)".to_string(),
-            Operation::SetPriority => format!(
-                "{:?}: {}",
-                proposal
-                    .frontmatter
-                    .proposal
-                    .suggested_priority
-                    .unwrap_or_default(),
-                before
-            ),
-            _ => proposal.text.clone(),
-        };
-        let mut value = serde_json::to_value(proposal).map_err(|e| e.to_string())?;
-        if let Some(object) = value.as_object_mut() {
-            object.insert("before".into(), json!(before));
-            object.insert("after".into(), json!(after));
-        }
-        let merge_sources = &proposal.frontmatter.proposal.merge_from;
-        print_json_or_text(
-            args,
-            value,
-            format!(
-                "{}\nSHA-256: {}\n{:?} / {:?}\ndecision: {:?}\nsource: {}\nmerge sources: {}\n\nBefore:\n{}\n\nAfter:\n{}",
-                id,
-                proposal.sha256,
-                proposal.frontmatter.proposal.scope,
-                proposal.frontmatter.proposal.operation,
-                proposal.decision,
-                proposal
-                    .frontmatter
-                    .sources
-                    .first()
-                    .map(|s| s.resource.as_str())
-                    .unwrap_or("-"),
-                if merge_sources.is_empty() {
-                    "-".into()
-                } else {
-                    merge_sources.join(", ")
-                },
-                before,
-                after,
-            ),
-        );
-        return Ok(());
-    }
-    Err(format!("entry or proposal not found: {id}"))
-}
-
-fn propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
-    let operation = parse_operation(
-        args.positionals
-            .first()
-            .map(String::as_str)
-            .or_else(|| args.flags.get("operation").map(String::as_str))
-            .unwrap_or("create"),
-    )?;
-    let target_id = args.flags.get("target").cloned();
-    let base_revision = args
-        .flags
-        .get("base-revision")
-        .map(|s| {
-            s.parse::<u64>()
-                .map_err(|_| "base-revision must be an integer".to_string())
-        })
-        .transpose()?;
-    let text = args.flags.get("text").cloned().unwrap_or_default();
-    let source = args
-        .flags
-        .get("source")
-        .cloned()
-        .ok_or("propose requires --source")?;
-    let by = args
-        .flags
-        .get("by")
-        .cloned()
-        .ok_or("propose requires --by")?;
-    let dedupe_key = args
-        .flags
-        .get("dedupe-key")
-        .cloned()
-        .ok_or("propose requires --dedupe-key")?;
-    let proposal = memory_control::propose(
-        root,
-        ProposeInput {
-            scope: parse_scope(args.flags.get("scope"))?,
-            operation,
-            text,
-            source,
-            by,
-            dedupe_key,
-            reason: args.flags.get("reason").cloned().unwrap_or_default(),
-            target_id,
-            base_revision,
-            section: args.flags.get("section").cloned(),
-            priority: parse_priority(args.flags.get("priority"))?,
-            polarity: parse_polarity(args.flags.get("polarity"))?,
-            epistemic_status: parse_epistemic_status(args.flags.get("epistemic-status"))?,
-            certainty: parse_certainty(args.flags.get("certainty"))?,
-            agent_guidance: args.flags.get("agent-guidance").cloned(),
-            avoid_error: args.flags.get("avoid-error").cloned(),
-            merge_from: args
-                .flags
-                .get("merge-from")
-                .map(|s| {
-                    s.split(',')
-                        .filter(|v| !v.trim().is_empty())
-                        .map(|v| v.trim().to_string())
-                        .collect()
-                })
-                .unwrap_or_default(),
-        },
-    )?;
-    let value = serde_json::to_value(&proposal).map_err(|e| e.to_string())?;
-    print_json_or_text(
-        args,
-        value,
-        format!(
-            "Created proposal {}\n{}",
-            proposal.frontmatter.proposal.id, proposal.path
-        ),
-    );
-    Ok(())
 }
 
 fn v2_snapshot(root: &std::path::Path) -> Result<serde_json::Value, String> {
@@ -468,11 +165,6 @@ fn v2_kind_data(kind: memory_v2::ClaimKind, text: &str, actor: &str) -> memory_v
                 speaker: actor.into(),
             })
         }
-        memory_v2::ClaimKind::LegacyUnclassified => {
-            memory_v2::KindData::LegacyUnclassified(memory_v2::LegacyData {
-                missing_semantics: vec!["claim-kind".into()],
-            })
-        }
     }
 }
 
@@ -491,15 +183,8 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
         .owner
         .clone()
         .ok_or("MEMORY_UNAUTHORIZED: owner authority is conflicted")?;
-    let request_id = args
-        .flags
-        .get("request-id")
-        .cloned()
-        .or_else(|| args.flags.get("dedupe-key").cloned())
-        .ok_or("propose requires --request-id (or legacy --dedupe-key)")?;
-    let recorded_by = required_flag(args, "recorded-by")
-        .or_else(|_| required_flag(args, "by"))?
-        .to_string();
+    let request_id = required_flag(args, "request-id")?.to_string();
+    let recorded_by = required_flag(args, "recorded-by")?.to_string();
 
     let existing = if operation == "create" {
         None
@@ -546,7 +231,6 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
         parse_v2_enum(
             args.flags
                 .get("scope")
-                .or_else(|| args.flags.get("projection"))
                 .map(String::as_str)
                 .unwrap_or("memory"),
             "projection",
@@ -591,7 +275,7 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
         memory_v2::propose_pending(
             root,
             memory_v2::PendingProposalInput {
-                request_id,
+                request_id: request_id.clone(),
                 claim_id: existing.as_ref().map(|claim| claim.claim_id.clone()),
                 text,
                 claim_kind,
@@ -700,12 +384,7 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
                 context,
                 consent,
                 agent_use: memory_v2::AgentUse {
-                    guidance: args
-                        .flags
-                        .get("guidance")
-                        .or_else(|| args.flags.get("agent-guidance"))
-                        .cloned()
-                        .unwrap_or_default(),
+                    guidance: args.flags.get("guidance").cloned().unwrap_or_default(),
                     avoid_error: args.flags.get("avoid-error").cloned().unwrap_or_default(),
                 },
                 evidence: args
@@ -720,11 +399,7 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
                         }]
                     })
                     .unwrap_or_default(),
-                dedupe_key: args
-                    .flags
-                    .get("dedupe-key")
-                    .cloned()
-                    .unwrap_or_else(|| "cli-proposal".into()),
+                dedupe_key: request_id,
             },
         )?;
     let value = serde_json::to_value(&proposal).map_err(|error| error.to_string())?;
@@ -833,7 +508,6 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
             );
             Ok(ExitCode::SUCCESS)
         }
-        "migrate" => Err("MEMORY_PROTOCOL_ALREADY_ACTIVE: v2 migration is not applicable".into()),
         other => Err(format!("unknown v2 memory action: {other}")),
     }
 }
@@ -841,70 +515,19 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
 pub fn run(args: MemoryArgs) -> ExitCode {
     let result = (|| -> Result<ExitCode, String> {
         let root = root(&args)?;
-        let repository_mode = memory_v2::V2Repository::new(&root)
+        match memory_v2::V2Repository::new(&root)
             .load()
             .map_err(|error| error.to_string())?
-            .mode;
-        if repository_mode == memory_v2::RepositoryMode::V2Active {
-            return run_v2(&args, &root);
-        }
-        if repository_mode == memory_v2::RepositoryMode::V2Incomplete {
-            return Err(
-                "MEMORY_PROTOCOL_INCOMPLETE: repair v2 control assets before continuing".into(),
-            );
-        }
-        if matches!(
-            args.action.as_str(),
-            "approve" | "reject" | "ignore" | "delete"
-        ) {
-            return Err("MEMORY_UNAUTHORIZED: human memory decisions are only accepted from the trusted Memory UI".into());
-        }
-        match args.action.as_str() {
-            "list" => list(&args, &root).map(|_| ExitCode::SUCCESS),
-            "show" => show(&args, &root).map(|_| ExitCode::SUCCESS),
-            "suggest" => {
-                let value = memory_control::suggest(&root)?;
-                let count = value["suggestions"].as_array().map(Vec::len).unwrap_or(0);
-                print_json_or_text(&args, value, format!("{count} improvement suggestion(s)"));
-                Ok(ExitCode::SUCCESS)
+            .mode
+        {
+            memory_v2::RepositoryMode::V2Active => run_v2(&args, &root),
+            memory_v2::RepositoryMode::V2Incomplete => {
+                Err("MEMORY_PROTOCOL_INCOMPLETE: repair v2 control assets before continuing".into())
             }
-            "propose" => propose(&args, &root).map(|_| ExitCode::SUCCESS),
-            "approve" | "reject" => unreachable!("decision actions are rejected above"),
-            "check" | "doctor" => {
-                let snapshot = memory_control::list(&root)?;
-                let ok = !snapshot.integrity.drift;
-                let value = json!({"ok":ok,"integrity":snapshot.integrity});
-                print_json_or_text(
-                    &args,
-                    value,
-                    if ok {
-                        "Memory projections are consistent.".into()
-                    } else {
-                        "Memory projection drift detected.".into()
-                    },
-                );
-                Ok(ExitCode::from(if ok { 0 } else { 1 }))
-            }
-            "migrate" => {
-                if !args.bools.contains("dry-run") {
-                    return Err("migration requires --dry-run; authoritative apply is not available until the protocol freeze gate passes".into());
-                }
-                let value = memory_control::dispatch(
-                    &root,
-                    "host.memory.v2.migrate",
-                    &json!({"mode": "dry-run"}),
-                )?;
-                print_json_or_text(
-                    &args,
-                    value.clone(),
-                    format!(
-                        "Migration dry-run: {} claims, zero writes.",
-                        value["counts"]["claims"].as_u64().unwrap_or(0)
-                    ),
-                );
-                Ok(ExitCode::SUCCESS)
-            }
-            other => Err(format!("unknown memory action: {other}")),
+            memory_v2::RepositoryMode::Absent => Err(
+                "MEMORY_PROTOCOL_UNINITIALIZED: initialize Memory Protocol v2 before using the CLI"
+                    .into(),
+            ),
         }
     })();
     match result {
@@ -925,7 +548,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_structured_proposal_flags() {
+    fn parses_v2_proposal_flags() {
         let args = parse_args(
             &[
                 "propose",
@@ -933,19 +556,15 @@ mod tests {
                 "--scope",
                 "memory",
                 "--target",
-                "x",
-                "--base-revision",
-                "2",
+                "claim-x",
                 "--text",
                 "new",
                 "--source",
-                "/a",
-                "--by",
+                "a.md",
+                "--recorded-by",
                 "agent/x",
-                "--dedupe-key",
-                "k",
-                "--priority",
-                "high",
+                "--request-id",
+                "memory-inference/x",
             ]
             .into_iter()
             .map(str::to_string)
@@ -954,42 +573,26 @@ mod tests {
         );
         assert_eq!(args.action, "propose");
         assert_eq!(args.positionals, vec!["replace"]);
-        assert_eq!(args.flags.get("target").map(String::as_str), Some("x"));
         assert_eq!(
-            parse_priority(args.flags.get("priority")).unwrap(),
-            Some(Priority::High)
+            args.flags.get("target").map(String::as_str),
+            Some("claim-x")
+        );
+        assert_eq!(
+            args.flags.get("request-id").map(String::as_str),
+            Some("memory-inference/x")
         );
     }
 
     #[test]
-    fn v2_context_and_migration_boolean_flags_are_not_value_flags() {
+    fn context_boolean_flag_does_not_consume_the_next_flag() {
         let args = parse_args(
-            &[
-                "context",
-                "--external-transfer",
-                "--dry-run",
-                "--space",
-                "work",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>(),
+            &["context", "--external-transfer", "--space", "work"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
             false,
         );
         assert!(args.bools.contains("external-transfer"));
-        assert!(args.bools.contains("dry-run"));
         assert_eq!(args.flags.get("space").map(String::as_str), Some("work"));
-    }
-
-    #[test]
-    fn delete_is_a_distinct_projection_operation() {
-        assert_eq!(parse_operation("revoke").unwrap(), Operation::Revoke);
-        assert_eq!(parse_operation("delete").unwrap(), Operation::Delete);
-    }
-
-    #[test]
-    fn check_exit_codes_distinguish_integrity_from_argument_errors() {
-        assert_eq!(ExitCode::from(0), ExitCode::SUCCESS);
-        assert_ne!(ExitCode::from(1), ExitCode::from(2));
     }
 }

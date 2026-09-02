@@ -426,11 +426,19 @@ mod tests {
 
     #[test]
     fn memory_routes_as_core_and_preserves_control_flags() {
-        let r = route_with(&["memory", "approve", "proposal-1", "--confirm-human-approved"], vec![], Default::default());
-        let Route::Builtin(Builtin::Memory(args)) = r else { panic!("expected memory builtin") };
-        assert_eq!(args.action, "approve");
-        assert_eq!(args.positionals, vec!["proposal-1"]);
-        assert!(args.bools.contains("confirm-human-approved"));
+        let r = route_with(
+            &["memory", "propose", "--operation", "create"],
+            vec![],
+            Default::default(),
+        );
+        let Route::Builtin(Builtin::Memory(args)) = r else {
+            panic!("expected memory builtin")
+        };
+        assert_eq!(args.action, "propose");
+        assert_eq!(
+            args.flags.get("operation").map(String::as_str),
+            Some("create")
+        );
     }
 
     #[test]

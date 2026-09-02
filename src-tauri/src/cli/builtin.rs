@@ -444,20 +444,16 @@ MAINTENANCE:
   notemd memory rebuild
   notemd memory reconcile
   notemd memory purge-plan <claim-id> [--json]
-  notemd memory migrate --dry-run [--json]
-  notemd memory migrate --apply <migration-id> --expected-plan-sha256 <sha256>  # freeze-gated
 
 CLAIM FLAGS:
-  --target <user|memory>      Projection target, not the semantic subject
+  --request-id <stable-id>   Idempotency key for this pending proposal
+  --scope <user|memory>       Projection target, not the semantic subject
   --category <name>          One projection category from the protocol registry
   --text <claim>             Complete atomic Claim text
   --claim-kind <kind>        identity|preference|boundary|decision|belief|
                              observation|commitment|practice|material-fact|quotation
-  --subject <stable-id>      Who or what the Claim is about
   --asserted-by <actor>      Who expressed, observed or judged the Claim
   --recorded-by <agent>      Agent identity writing the pending proposal
-  --approval-kind <kind>     self-representation|behavioral-authorization|
-                             factual-verification
   --trust-tier <tier>        identity|stable-preference|contextual
   --risk-class <risk>        action-sensitive|behavioral|informational
   --salience <level>         pinned|normal; importance only, never authority
@@ -486,8 +482,7 @@ NOTES:
   is available only through the trusted Memory UI; CLI flags cannot impersonate
   a human. Remembering a Claim does not prove it true or authorize behavior.
   Restricted plaintext is rejected. Delete creates a tombstone; Git history may
-  retain old bytes. Migration dry-run performs no Vault writes.
-  Authoritative migration apply remains disabled while the RFC is freeze-blocked.
+  retain old bytes.
 
 FLAGS:
   --vault <path>              Vault root (default: configured Vault)
@@ -1726,7 +1721,7 @@ mod tests {
     }
     #[test] fn help_memory_documents_the_v2_claim_and_authority_contract() {
         let out = render_help(Some("memory"), false, &[], &HashMap::new());
-        for contract in ["Git-backed personal Claim ledger", "--claim-kind", "--approval-kind", "--risk-class", "--space", "--provider", "trusted Memory UI", "Migration dry-run performs no Vault writes"] {
+        for contract in ["Git-backed personal Claim ledger", "--claim-kind", "--risk-class", "--space", "--provider", "trusted Memory UI"] {
             assert!(out.contains(contract), "memory help is missing {contract}:\n{out}");
         }
         assert!(!out.contains("--confirm-human-approved"));

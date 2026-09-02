@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import AgentPicker from './lib/agent-picker/AgentPicker.svelte'
   import {
+    rememberProvider,
+    rememberedProvider,
+    type AgentOption,
+  } from './lib/agent-picker/types'
+  import {
+    agentProviders,
     memoryAdd,
     memoryApprove,
     memoryContext,
@@ -8,7 +15,7 @@
     memoryDelete,
     memoryDeleteCandidate,
     memoryIgnore,
-    memoryMigrationDryRun,
+    memoryInitialize,
     memoryReject,
     memoryResolve,
     memorySetSalience,
@@ -33,13 +40,21 @@
     subjectLabel,
     temporalLabel,
   } from './lib/domain'
+  import {
+    completedInference,
+    detectInferenceMode,
+    INFERENCE_POLL_MS,
+    interpretInferenceStatus,
+    memoryInferenceStatus,
+    startMemoryInference,
+    type InferenceMode,
+  } from './lib/inference'
   import type {
     ClaimKind,
     ContextPreview,
     EffectiveClaim,
     MemoryConflict,
     MemorySnapshotV2,
-    MigrationDryRun,
     PendingClaim,
     ProjectionTarget,
     ProviderPolicy,
@@ -63,10 +78,18 @@
   let showContext = $state(false)
   let openMenuFor = $state<string | null>(null)
   let destructive = $state<DestructiveAction | null>(null)
-  let migrationPlan = $state<MigrationDryRun | null>(null)
-  let migrationLoading = $state(false)
   let mergeConflict = $state<MemoryConflict | null>(null)
   let mergedText = $state('')
+
+  const AGENT_SURFACE = 'memory-inference'
+  let agents: AgentOption[] = $state([])
+  let agentId: string | undefined = $state(undefined)
+  let inferenceMode = $state<InferenceMode>('full')
+  let inferenceStarting = $state(false)
+  let inferenceRun = $state<{ runId: string; invocationId: string; harness?: string } | null>(null)
+  let inferenceProgress = $state('')
+  let inferencePollFailures = 0
+  let inferenceTimer: ReturnType<typeof setTimeout> | undefined
 
   let addTarget = $state<'user' | 'memory'>('user')
   let addCategory = $state('preferences')
@@ -93,6 +116,7 @@
   let addTextarea = $state<HTMLTextAreaElement>()
 
   const writable = $derived(snapshot?.mode === 'v2' && snapshot.health.status !== 'damaged' && snapshot.health.status !== 'unsupported')
+  const canInfer = $derived(writable || snapshot?.initialization_required === true)
   const visibleClaims = $derived(snapshot ? currentClaims(snapshot.claims, query, target) : [])
   const reviews = $derived(snapshot ? pendingClaims(snapshot.pending) : [])
   const selectedClaim = $derived(visibleClaims.find(({ claim }) => claim.claim_id === selectedClaimId) ?? visibleClaims[0])
@@ -101,7 +125,116 @@
   const addApproval = $derived(approvalKindFor(addKind))
   const addNeedsAvoid = $derived(addKind === 'boundary' || addPolarity === 'negative' || addKind === 'practice')
 
-  onMount(refresh)
+  onMount(() => {
+    void refresh()
+    void loadAgents()
+    void loadInferenceMode()
+    return () => { if (inferenceTimer) clearTimeout(inferenceTimer) }
+  })
+
+  async function loadAgents() {
+    try {
+      const result = await agentProviders()
+      agents = result.providers ?? []
+      agentId = rememberedProvider(AGENT_SURFACE, agents.map((agent) => agent.id), result.default)
+    } catch {
+      agents = []
+      agentId = undefined
+    }
+  }
+
+  function pickAgent(id: string) {
+    agentId = id
+    rememberProvider(AGENT_SURFACE, id)
+  }
+
+  function agentPickerLabel(key: string, vars: Record<string, string | number> = {}) {
+    if (key === 'agentPicker.by') return `由 ${vars.name ?? ''}`
+    if (key === 'agentPicker.model') return `模型 ${vars.model ?? ''}`
+    if (key === 'agentPicker.broken') return '当前不可用'
+    if (key === 'agentPicker.notInstalled') return '未安装运行环境'
+    return '状态未知'
+  }
+
+  async function loadInferenceMode() {
+    try { inferenceMode = await detectInferenceMode() } catch { inferenceMode = 'full' }
+  }
+
+  async function inferMemory() {
+    if (inferenceStarting || inferenceRun || !canInfer) return
+    inferenceStarting = true
+    inferenceProgress = ''
+    error = ''
+    if (snapshot?.initialization_required) {
+      try {
+        snapshot = await memoryInitialize()
+      } catch (cause) {
+        inferenceStarting = false
+        error = hostError(cause)
+        return
+      }
+    }
+    const harness = agentId
+    const result = await startMemoryInference({ mode: inferenceMode, harness })
+    inferenceStarting = false
+    if (!result.ok) {
+      error = result.reason === 'agent-missing'
+        ? '没有可用的 AI Agent。请先安装并启用一个 Agent 插件。'
+        : hostError(result.message)
+      return
+    }
+    inferenceRun = { runId: result.runId, invocationId: result.invocationId, ...(harness ? { harness } : {}) }
+    inferenceProgress = inferenceMode === 'full' ? '正在扫描 Vault…' : '正在读取 Vault 增量…'
+    inferencePollFailures = 0
+    scheduleInferencePoll()
+  }
+
+  function scheduleInferencePoll() {
+    if (inferenceTimer) clearTimeout(inferenceTimer)
+    inferenceTimer = setTimeout(() => { void pollInference() }, INFERENCE_POLL_MS)
+  }
+
+  async function pollInference() {
+    const current = inferenceRun
+    if (!current) return
+    try {
+      const view = interpretInferenceStatus(await memoryInferenceStatus(current.runId, current.harness))
+      if (inferenceRun?.runId !== current.runId) return
+      inferencePollFailures = 0
+      if (view.kind === 'running') {
+        inferenceProgress = view.last || `已执行 ${view.steps} 步…`
+        scheduleInferencePoll()
+        return
+      }
+      inferenceRun = null
+      if (view.kind === 'lost') {
+        error = '无法确认这次记忆推理的运行状态；未推进增量水位。'
+        return
+      }
+      if (!view.success) {
+        error = view.message ? `记忆推理失败：${view.message}` : '记忆推理失败；未推进增量水位。'
+        return
+      }
+      const checkpointed = await completedInference(current.invocationId)
+      inferenceProgress = ''
+      tab = 'pending'
+      await refresh()
+      await loadInferenceMode()
+      announcement = checkpointed
+        ? '记忆推理完成；新建议已放入待确认。'
+        : '记忆推理已结束；未确认成功水位，下次仍会安全执行全量扫描。'
+      await toast(checkpointed ? 'success' : 'warn', announcement)
+    } catch (cause) {
+      if (inferenceRun?.runId !== current.runId) return
+      inferencePollFailures += 1
+      if (inferencePollFailures < 5) {
+        scheduleInferencePoll()
+      } else {
+        inferenceRun = null
+        error = `无法继续读取 Agent 状态：${hostError(cause)}`
+      }
+    }
+  }
 
   async function refresh() {
     loading = true
@@ -313,11 +446,6 @@
     } catch (cause) { error = hostError(cause) } finally { contextBusy = false }
   }
 
-  async function migrationDryRun() {
-    migrationLoading = true; error = ''
-    try { migrationPlan = await memoryMigrationDryRun() } catch (cause) { error = hostError(cause) } finally { migrationLoading = false }
-  }
-
   async function moveListFocus(event: KeyboardEvent, selector: string) {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
@@ -342,7 +470,6 @@
     if (event.key !== 'Escape' || writing) return
     if (destructive) destructive = null
     else if (mergeConflict) mergeConflict = null
-    else if (migrationPlan) migrationPlan = null
     else if (showContext) showContext = false
     else if (showAdd) showAdd = false
     else openMenuFor = null
@@ -356,7 +483,15 @@
   <header class="app-header">
     <div><h1>记忆</h1><p>结构化主张保存在 .notemd/memory；USER.md 与 MEMORY.md 只是纯文本视图。</p></div>
     <div class="header-actions">
-      <button class="secondary" onclick={() => showContext = true} disabled={!snapshot || snapshot.mode === 'legacy'}>Context Manifest…</button>
+      <div class="inference-action">
+        <button class="primary" onclick={inferMemory} disabled={!canInfer || inferenceStarting || !!inferenceRun} title="首次运行会初始化 Memory v2；Agent 只提交待确认建议，不会自行批准">
+          {inferenceStarting ? '正在启动…' : inferenceRun ? '正在推理…' : inferenceMode === 'full' ? '推理现有记忆' : '增量推理记忆'}
+        </button>
+        {#if agents.length}
+          <AgentPicker options={agents} selected={agentId ?? null} disabled={inferenceStarting || !!inferenceRun} onselect={pickAgent} label={agentPickerLabel} />
+        {/if}
+      </div>
+      <button class="secondary" onclick={() => showContext = true} disabled={!snapshot || snapshot.mode !== 'v2'}>Context Manifest…</button>
       <div class="health" class:conflict={snapshot?.health.status === 'conflict'} class:bad={snapshot?.health.status === 'damaged'}>
         <span aria-hidden="true"></span><span>{snapshot?.health.message ?? (loading ? '正在载入' : '不可用')}</span>
       </div>
@@ -366,15 +501,10 @@
 
   <p class="sr-only" aria-live="polite">{announcement}</p>
   {#if error}<div class="banner error" role="alert"><strong>无法完成操作</strong><span>{error}</span></div>{/if}
+  {#if inferenceRun}<div class="banner inference-progress" role="status"><strong>{inferenceMode === 'full' ? '全量推理' : '增量推理'}</strong><span>{inferenceProgress}</span></div>{/if}
 
   {#if loading && !snapshot}
     <div class="empty" aria-busy="true">正在读取 Memory Protocol v2…</div>
-  {:else if snapshot?.mode === 'legacy'}
-    <section class="mode-card" aria-labelledby="legacy-title">
-      <span class="mode-symbol" aria-hidden="true">↗</span>
-      <div><h2 id="legacy-title">此 Vault 仍使用 Memory v1</h2><p>可以先生成零写入迁移报告。预览不会创建目录、锁、临时文件，也不会自动切换协议。</p></div>
-      <button class="primary" onclick={migrationDryRun} disabled={migrationLoading}>{migrationLoading ? '正在分析…' : '预览迁移'}</button>
-    </section>
   {:else if snapshot}
     {#if snapshot.mode === 'recovery' || snapshot.mode === 'read-only'}
       <div class="banner warning" role="status"><strong>{snapshot.mode === 'recovery' ? '恢复模式' : '只读模式'}</strong><span>{snapshot.read_only_reason ?? '当前 Vault 暂停 Memory 写入；仍可查看现有主张与历史。'}</span></div>
@@ -548,18 +678,14 @@
   </div></div>
 {/if}
 
-{#if migrationPlan}
-  <div class="scrim" role="presentation"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="migration-title"><header><div><h2 id="migration-title">迁移预览</h2><p>这是零写入报告。此插件不会从预览自动切换协议。</p></div><button class="close" aria-label="关闭迁移预览" onclick={() => migrationPlan = null}>×</button></header><div class="migration-counts"><div><strong>{migrationPlan.counts.claims}</strong><span>主张</span></div><div><strong>{migrationPlan.counts.pending}</strong><span>待确认</span></div><div><strong>{migrationPlan.counts.legacy_unclassified}</strong><span>需语义复核</span></div></div>{#if migrationPlan.blockers.length}<div class="banner error"><strong>阻止迁移</strong><span>{migrationPlan.blockers.join('；')}</span></div>{/if}{#if migrationPlan.warnings.length}<div class="banner warning"><strong>注意</strong><span>{migrationPlan.warnings.join('；')}</span></div>{/if}<dl class="facts"><div class="wide"><dt>Migration ID</dt><dd><code>{migrationPlan.migration_id}</code></dd></div><div class="wide"><dt>Plan SHA</dt><dd><code>{migrationPlan.plan_sha256}</code></dd></div><div><dt>写入</dt><dd>{migrationPlan.writes_performed ? '发生写入' : '零写入'}</dd></div></dl><footer><button class="primary" onclick={() => migrationPlan = null}>完成</button></footer></div></div>
-{/if}
-
 <style>
   :global(:root){color-scheme:light dark;font:13px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;accent-color:#0a84ff}:global(body){margin:0;background:Canvas;color:CanvasText}:global(*){box-sizing:border-box}:global(button),:global(input),:global(select),:global(textarea),:global(summary){font:inherit;pointer-events:auto;-webkit-app-region:no-drag}:global(button){min-height:32px;border:1px solid color-mix(in srgb,CanvasText 14%,transparent);border-radius:8px;padding:0 12px;background:color-mix(in srgb,CanvasText 5%,Canvas);color:CanvasText;cursor:pointer}:global(button:hover:not(:disabled)){background:color-mix(in srgb,CanvasText 10%,Canvas)}:global(button:active:not(:disabled)){transform:translateY(1px)}:global(button:focus-visible),:global(input:focus-visible),:global(select:focus-visible),:global(textarea:focus-visible),:global(summary:focus-visible){outline:3px solid color-mix(in srgb,#0a84ff 34%,transparent);outline-offset:2px}:global(button:disabled){opacity:.42;cursor:default}:global(button.primary){min-height:34px;background:#0a84ff;border-color:#0a84ff;color:white;font-weight:600}:global(button.primary:hover:not(:disabled)){background:#0077ed}:global(button.destructive){background:#ff3b30;border-color:#ff3b30;color:#fff;font-weight:600}:global(input),:global(select),:global(textarea){width:100%;min-height:32px;padding:6px 9px;border:1px solid color-mix(in srgb,CanvasText 16%,transparent);border-radius:7px;background:Canvas;color:CanvasText}:global(textarea){resize:vertical;line-height:1.5}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-  main{max-width:1240px;margin:0 auto;padding:20px 24px 40px}.app-header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.app-header h1{margin:0;font-size:20px;line-height:1.25;letter-spacing:-.02em}.app-header p{max-width:680px;margin:4px 0 0;font-size:12px;color:color-mix(in srgb,CanvasText 58%,transparent)}.header-actions{display:flex;align-items:center;gap:8px}.health{display:flex;align-items:center;gap:7px;max-width:250px;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.health>span:first-child{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#34c759}.health.conflict>span:first-child{background:#ff9f0a}.health.bad>span:first-child{background:#ff3b30}.icon{width:32px;padding:0;font-size:17px}.secondary{background:transparent}.banner{display:flex;align-items:flex-start;gap:10px;margin-top:14px;padding:10px 12px;border:1px solid;border-radius:9px;font-size:12px}.banner strong{white-space:nowrap}.banner.error{border-color:color-mix(in srgb,#ff3b30 42%,transparent);background:color-mix(in srgb,#ff3b30 9%,Canvas)}.banner.warning{border-color:color-mix(in srgb,#ff9f0a 45%,transparent);background:color-mix(in srgb,#ff9f0a 9%,Canvas)}
+  main{max-width:1240px;margin:0 auto;padding:20px 24px 40px}.app-header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.app-header h1{margin:0;font-size:20px;line-height:1.25;letter-spacing:-.02em}.app-header p{max-width:680px;margin:4px 0 0;font-size:12px;color:color-mix(in srgb,CanvasText 58%,transparent)}.header-actions{display:flex;align-items:center;gap:8px}.inference-action{display:flex;align-items:center;gap:4px}.health{display:flex;align-items:center;gap:7px;max-width:250px;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.health>span:first-child{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#34c759}.health.conflict>span:first-child{background:#ff9f0a}.health.bad>span:first-child{background:#ff3b30}.icon{width:32px;padding:0;font-size:17px}.secondary{background:transparent}.banner{display:flex;align-items:flex-start;gap:10px;margin-top:14px;padding:10px 12px;border:1px solid;border-radius:9px;font-size:12px}.banner strong{white-space:nowrap}.banner.error{border-color:color-mix(in srgb,#ff3b30 42%,transparent);background:color-mix(in srgb,#ff3b30 9%,Canvas)}.banner.warning{border-color:color-mix(in srgb,#ff9f0a 45%,transparent);background:color-mix(in srgb,#ff9f0a 9%,Canvas)}.banner.inference-progress{border-color:color-mix(in srgb,#0a84ff 36%,transparent);background:color-mix(in srgb,#0a84ff 7%,Canvas)}
   .segments{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;max-width:560px;margin:18px auto 16px;padding:3px;border-radius:9px;background:color-mix(in srgb,CanvasText 8%,Canvas)}.segments button{min-height:34px;border:0;background:transparent;color:color-mix(in srgb,CanvasText 65%,transparent);font-weight:600}.segments button.active{background:Canvas;color:CanvasText;box-shadow:0 1px 4px rgba(0,0,0,.16)}.count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:color-mix(in srgb,CanvasText 10%,Canvas);font-size:11px}.count.large{min-width:28px;height:24px;border-radius:12px}.toolbar{display:grid;grid-template-columns:minmax(220px,1fr) 170px auto;gap:8px;margin-bottom:12px}.split{display:grid;grid-template-columns:350px minmax(0,1fr);min-height:510px;border:1px solid color-mix(in srgb,CanvasText 13%,transparent);border-radius:11px;overflow:hidden;background:color-mix(in srgb,CanvasText 1.5%,Canvas)}
   .master{max-height:calc(100vh - 220px);min-height:510px;overflow:auto;border-right:1px solid color-mix(in srgb,CanvasText 12%,transparent);background:color-mix(in srgb,CanvasText 3%,Canvas)}.master>button{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:start;gap:9px;width:100%;min-height:70px;padding:11px 12px;border:0;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:0;background:transparent;text-align:left}.master>button.selected{background:#0a84ff;color:#fff}.master>button.selected small,.master>button.selected .row-state{color:rgba(255,255,255,.8)}.master>button.sensitive{box-shadow:inset 3px 0 #ff9f0a}.master strong{display:-webkit-box;overflow:hidden;line-clamp:2;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:13px;line-height:1.4;white-space:pre-wrap}.master small{display:block;margin-top:4px;color:color-mix(in srgb,CanvasText 53%,transparent);font-size:12px}.row-state{color:color-mix(in srgb,CanvasText 55%,transparent);font-size:11px}.polarity{width:7px;height:7px;margin-top:5px;border-radius:50%;background:#8e8e93}.polarity.positive{background:#34c759}.polarity.negative{background:#ff3b30}
   .detail{min-width:0;padding:22px 24px}.detail h2{margin:12px 0 16px;font-size:17px;line-height:1.5;letter-spacing:-.01em;white-space:pre-wrap}.eyebrow{display:flex;flex-wrap:wrap;gap:6px}.badge{padding:3px 7px;border-radius:6px;background:color-mix(in srgb,CanvasText 7%,Canvas);font-size:11px;font-weight:650}.badge.positive{background:color-mix(in srgb,#34c759 18%,Canvas);color:#168333}.badge.negative,.badge.danger{background:color-mix(in srgb,#ff3b30 16%,Canvas);color:#d62d26}.badge.pinned{background:color-mix(in srgb,#ff9f0a 20%,Canvas);color:#9a5500}.guidance{margin-bottom:16px;padding:13px 14px;border-left:3px solid #0a84ff;border-radius:0 8px 8px 0;background:color-mix(in srgb,#0a84ff 7%,Canvas)}.guidance small,.approval-meaning small{font-size:11px;font-weight:700;color:#0a84ff}.guidance p{margin:4px 0 9px;font-size:13px}.guidance p:last-child{margin-bottom:0}.guidance .avoid{color:#d62d26;font-weight:600}.facts{display:grid;grid-template-columns:1fr 1fr;gap:1px;margin:0;background:color-mix(in srgb,CanvasText 8%,transparent);border:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:8px;overflow:hidden}.facts>div{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;background:Canvas}.facts>div.wide{grid-column:1/-1}.facts dt{font-size:12px;color:color-mix(in srgb,CanvasText 54%,transparent)}.facts dd{margin:0;text-align:right;font-size:12px;overflow-wrap:anywhere}.detail-actions{display:flex;justify-content:flex-end;margin-top:16px}.menu-anchor{position:relative}.menu-panel{position:absolute;right:0;bottom:40px;z-index:20;min-width:190px}.menu-panel .menu-row{width:100%;min-height:30px;border:0;text-align:left}.menu-panel .danger-row{color:#ff3b30}.menu-panel .danger-row:hover{background:#ff3b30;color:#fff}.approval-meaning{margin:0 0 14px;padding:12px 13px;border-radius:9px;background:color-mix(in srgb,#0a84ff 7%,Canvas)}.approval-meaning strong{display:block;margin-top:3px;font-size:14px}.approval-meaning p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 66%,transparent);font-size:12px}.diff{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:12px 0 16px}.diff>div{min-height:92px;padding:11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas)}.diff small{font-size:11px;color:color-mix(in srgb,CanvasText 54%,transparent)}.diff p{margin:5px 0 0;white-space:pre-wrap}.pending-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:16px}
-  .history{display:grid;gap:12px}.history>header{display:flex;justify-content:space-between;align-items:center}.history h2{margin:0;font-size:16px}.history header p{margin:3px 0 0;color:color-mix(in srgb,CanvasText 58%,transparent);font-size:12px}.conflict-card{padding:16px;border:1px solid color-mix(in srgb,#ff9f0a 42%,transparent);border-radius:11px;background:color-mix(in srgb,#ff9f0a 5%,Canvas)}.conflict-title{display:flex;justify-content:space-between;gap:18px}.conflict-title h3{margin:7px 0 0;font-size:15px}.conflict-title>strong{color:#b36300;font-size:12px}.ancestor{margin:12px 0;padding:10px 11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas)}.ancestor small,.heads small{font-size:11px;color:color-mix(in srgb,CanvasText 55%,transparent)}.ancestor p,.heads p{margin:4px 0 0;white-space:pre-wrap}.heads{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.heads section{padding:11px;border:1px solid color-mix(in srgb,CanvasText 11%,transparent);border-radius:9px;background:Canvas}.heads button{margin-top:10px}.conflict-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}.history-heading{margin-top:12px}.timeline{margin:0;padding:0;list-style:none;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:10px;overflow:hidden}.timeline li{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:10px;align-items:start;padding:11px 13px;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent)}.timeline li:last-child{border-bottom:0}.timeline-dot{width:8px;height:8px;margin-top:5px;border-radius:50%;background:#0a84ff}.timeline strong{display:block;font-size:13px}.timeline small{display:block;margin-top:2px;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:12px}.timeline>li>span:last-child{font-size:11px}.empty{padding:52px 18px;text-align:center;color:color-mix(in srgb,CanvasText 48%,transparent)}.empty.compact{padding:22px}.detail-empty{display:grid;place-items:center}.mode-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:15px;margin-top:40px;padding:20px;border:1px solid color-mix(in srgb,#0a84ff 32%,transparent);border-radius:13px;background:color-mix(in srgb,#0a84ff 5%,Canvas)}.mode-card h2{margin:0;font-size:17px}.mode-card p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 60%,transparent)}.mode-symbol{display:grid;width:34px;height:34px;place-items:center;border-radius:9px;background:#0a84ff;color:#fff;font-size:20px}
-  .scrim{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.28);backdrop-filter:blur(8px)}.sheet{box-sizing:border-box;width:min(680px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:22px;border:1px solid color-mix(in srgb,CanvasText 15%,transparent);border-radius:14px;background:Canvas;color:CanvasText;box-shadow:0 24px 70px rgba(0,0,0,.34)}.compact-sheet{width:min(470px,100%)}.context-sheet{width:min(760px,100%)}.sheet>header{display:flex;justify-content:space-between;gap:18px}.sheet h2{margin:0;font-size:17px}.sheet header p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.close{width:32px;padding:0;border:0;background:transparent;font-size:20px}.field,.form-grid label{display:grid;gap:4px;margin-top:12px;color:color-mix(in srgb,CanvasText 68%,transparent);font-size:12px}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.form-grid .wide{grid-column:1/-1}details{margin-top:14px;padding:10px 12px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:9px}summary{cursor:pointer;font-weight:600}fieldset{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0;padding:10px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:8px}legend{padding:0 4px;font-size:12px}.check{display:flex!important;align-items:center;gap:6px!important;margin:0!important}.check input{width:auto;min-height:auto}.sheet footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.context-actions{display:flex;justify-content:flex-end;margin-top:14px}.context-result{margin-top:14px;padding:13px;border-radius:10px;background:color-mix(in srgb,CanvasText 4%,Canvas)}.result-summary{display:flex;justify-content:space-between}.context-result ul{margin:10px 0;padding-left:20px}.context-result li{margin:5px 0}.context-result li small,.readonly-note{display:block;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:12px}.migration-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:16px 0}.migration-counts div{display:grid;padding:12px;border-radius:9px;background:color-mix(in srgb,CanvasText 5%,Canvas);text-align:center}.migration-counts strong{font-size:20px}.migration-counts span{font-size:12px;color:color-mix(in srgb,CanvasText 58%,transparent)}
-  @media(max-width:820px){main{padding:16px}.split{grid-template-columns:290px minmax(0,1fr)}.header-actions{flex-wrap:wrap;justify-content:flex-end}.heads{grid-template-columns:1fr}}@media(max-width:660px){.app-header{display:block}.header-actions{justify-content:flex-start;margin-top:10px}.split{display:block}.master{min-height:180px;max-height:280px;border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 12%,transparent)}.toolbar,.form-grid,.diff,.facts{grid-template-columns:1fr}.facts>div.wide,.form-grid .wide{grid-column:auto}.mode-card{grid-template-columns:auto 1fr}.mode-card button{grid-column:1/-1}.segments{max-width:none}.pending-actions{justify-content:stretch}.pending-actions button{flex:1 1 120px}}
+  .history{display:grid;gap:12px}.history>header{display:flex;justify-content:space-between;align-items:center}.history h2{margin:0;font-size:16px}.history header p{margin:3px 0 0;color:color-mix(in srgb,CanvasText 58%,transparent);font-size:12px}.conflict-card{padding:16px;border:1px solid color-mix(in srgb,#ff9f0a 42%,transparent);border-radius:11px;background:color-mix(in srgb,#ff9f0a 5%,Canvas)}.conflict-title{display:flex;justify-content:space-between;gap:18px}.conflict-title h3{margin:7px 0 0;font-size:15px}.conflict-title>strong{color:#b36300;font-size:12px}.ancestor{margin:12px 0;padding:10px 11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas)}.ancestor small,.heads small{font-size:11px;color:color-mix(in srgb,CanvasText 55%,transparent)}.ancestor p,.heads p{margin:4px 0 0;white-space:pre-wrap}.heads{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.heads section{padding:11px;border:1px solid color-mix(in srgb,CanvasText 11%,transparent);border-radius:9px;background:Canvas}.heads button{margin-top:10px}.conflict-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}.history-heading{margin-top:12px}.timeline{margin:0;padding:0;list-style:none;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:10px;overflow:hidden}.timeline li{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:10px;align-items:start;padding:11px 13px;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent)}.timeline li:last-child{border-bottom:0}.timeline-dot{width:8px;height:8px;margin-top:5px;border-radius:50%;background:#0a84ff}.timeline strong{display:block;font-size:13px}.timeline small{display:block;margin-top:2px;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:12px}.timeline>li>span:last-child{font-size:11px}.empty{padding:52px 18px;text-align:center;color:color-mix(in srgb,CanvasText 48%,transparent)}.empty.compact{padding:22px}.detail-empty{display:grid;place-items:center}
+  .scrim{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.28);backdrop-filter:blur(8px)}.sheet{box-sizing:border-box;width:min(680px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:22px;border:1px solid color-mix(in srgb,CanvasText 15%,transparent);border-radius:14px;background:Canvas;color:CanvasText;box-shadow:0 24px 70px rgba(0,0,0,.34)}.compact-sheet{width:min(470px,100%)}.context-sheet{width:min(760px,100%)}.sheet>header{display:flex;justify-content:space-between;gap:18px}.sheet h2{margin:0;font-size:17px}.sheet header p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.close{width:32px;padding:0;border:0;background:transparent;font-size:20px}.field,.form-grid label{display:grid;gap:4px;margin-top:12px;color:color-mix(in srgb,CanvasText 68%,transparent);font-size:12px}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.form-grid .wide{grid-column:1/-1}details{margin-top:14px;padding:10px 12px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:9px}summary{cursor:pointer;font-weight:600}fieldset{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0;padding:10px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:8px}legend{padding:0 4px;font-size:12px}.check{display:flex!important;align-items:center;gap:6px!important;margin:0!important}.check input{width:auto;min-height:auto}.sheet footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.context-actions{display:flex;justify-content:flex-end;margin-top:14px}.context-result{margin-top:14px;padding:13px;border-radius:10px;background:color-mix(in srgb,CanvasText 4%,Canvas)}.result-summary{display:flex;justify-content:space-between}.context-result ul{margin:10px 0;padding-left:20px}.context-result li{margin:5px 0}.context-result li small,.readonly-note{display:block;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:12px}
+  @media(max-width:820px){main{padding:16px}.split{grid-template-columns:290px minmax(0,1fr)}.header-actions{flex-wrap:wrap;justify-content:flex-end}.heads{grid-template-columns:1fr}}@media(max-width:660px){.app-header{display:block}.header-actions{justify-content:flex-start;margin-top:10px}.split{display:block}.master{min-height:180px;max-height:280px;border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 12%,transparent)}.toolbar,.form-grid,.diff,.facts{grid-template-columns:1fr}.facts>div.wide,.form-grid .wide{grid-column:auto}.segments{max-width:none}.pending-actions{justify-content:stretch}.pending-actions button{flex:1 1 120px}}
   @media(prefers-reduced-motion:reduce){:global(*){scroll-behavior:auto!important;transition:none!important}}
 </style>

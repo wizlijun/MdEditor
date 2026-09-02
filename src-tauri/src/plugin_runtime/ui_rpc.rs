@@ -464,7 +464,7 @@ pub async fn dispatch_with(
         "host.agent.limits" => services.agent_limits(),
         "host.notify"       => notify_push(services, &req.params),
         "host.dismissNotification" => services.dismiss_notification(&req.params),
-        method if method.starts_with("host.memory.") => {
+        method if method.starts_with("host.memory.v2.") => {
             if plugin_id != "notemd.memory" {
                 Err("not_granted: controlled memory API is restricted to notemd.memory".into())
             } else {

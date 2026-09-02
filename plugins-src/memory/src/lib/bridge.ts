@@ -5,12 +5,12 @@ import type {
   ContextPreview,
   ContextRequest,
   MemorySnapshotV2,
-  MigrationDryRun,
   PendingDecisionInput,
   ResolveConflictInput,
   Salience,
   WriteReceipt,
 } from './types'
+import type { AgentProviders } from './agent-picker/types'
 
 export interface NotemdBridge {
   pluginId: string
@@ -34,7 +34,7 @@ export function requestId(prefix = 'memory-ui'): string {
 
 export async function memorySnapshot(): Promise<MemorySnapshotV2> {
   const value = await bridge().request('host.memory.v2.snapshot', { as_of_valid_time: new Date().toISOString() })
-  if (!['v2', 'legacy', 'recovery', 'read-only'].includes(value?.mode)) {
+  if (!['v2', 'recovery', 'read-only'].includes(value?.mode)) {
     throw new Error('MEMORY_PROTOCOL_UNSUPPORTED: Host v2 snapshot is missing the plugin view mode')
   }
   return {
@@ -55,6 +55,11 @@ export async function memorySnapshot(): Promise<MemorySnapshotV2> {
 
 export function memoryAdd(input: AddClaimInput): Promise<WriteReceipt> {
   return bridge().request('host.memory.v2.add', input)
+}
+
+export async function memoryInitialize(): Promise<MemorySnapshotV2> {
+  await bridge().request('host.memory.v2.initialize', {})
+  return memorySnapshot()
 }
 
 export function memoryApprove(input: PendingDecisionInput): Promise<WriteReceipt> {
@@ -117,8 +122,38 @@ export function memoryCheck(): Promise<MemorySnapshotV2['health']> {
   return bridge().request('host.memory.v2.check', {})
 }
 
-export function memoryMigrationDryRun(): Promise<MigrationDryRun> {
-  return bridge().request('host.memory.v2.migrate', { mode: 'dry-run' })
+export function vaultExists(path: string): Promise<{ exists: boolean }> {
+  return bridge().request('host.vault.exists', { path })
+}
+
+export function vaultRead(path: string): Promise<{ content: string }> {
+  return bridge().request('host.vault.read', { path })
+}
+
+export function vaultWrite(path: string, content: string): Promise<{ ok: true }> {
+  return bridge().request('host.vault.write', { path, content })
+}
+
+export interface AgentRunParams {
+  task: string
+  prompt: string
+  harness?: string
+}
+
+export function agentProviders(): Promise<AgentProviders> {
+  return bridge().request('host.agent.providers', {})
+}
+
+export function agentRun(params: AgentRunParams): Promise<{ run_id: string }> {
+  return bridge().request('host.agent.run', params)
+}
+
+export function agentStatus(task: string, runId: string, harness?: string): Promise<unknown> {
+  return bridge().request('host.agent.status', {
+    task,
+    run_id: runId,
+    ...(harness ? { harness } : {}),
+  })
 }
 
 export async function toast(level: 'success' | 'info' | 'warn' | 'error', message: string, detail?: string): Promise<void> {

@@ -323,7 +323,7 @@ fn reconcile_memory_v2(repo: &Path) -> GitResult<()> {
         RepositoryMode::V2Incomplete => Err(
             "MEMORY_PROTOCOL_INCOMPLETE: Memory v2 assets exist without a valid activation".into(),
         ),
-        RepositoryMode::Absent | RepositoryMode::LegacyV1 => Ok(()),
+        RepositoryMode::Absent => Ok(()),
     }
 }
 

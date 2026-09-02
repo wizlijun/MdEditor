@@ -98,17 +98,10 @@ impl V2Repository {
         ]
         .iter()
         .any(|name| memory.join(name).exists());
-        let has_legacy = self.root.join("USER.md").exists()
-            || self.root.join("MEMORY.md").exists()
-            || self.root.join("inbox/memory-candidates").exists()
-            || self.root.join("memory/events").exists();
-
         if !bootstrap_path.exists() {
             return Ok(RepositorySnapshot {
                 mode: if has_v2_assets {
                     RepositoryMode::V2Incomplete
-                } else if has_legacy {
-                    RepositoryMode::LegacyV1
                 } else {
                     RepositoryMode::Absent
                 },
@@ -426,18 +419,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn distinguishes_absent_legacy_and_unactivated_v2() {
+    fn distinguishes_absent_and_unactivated_v2() {
         let absent = tempfile::TempDir::new().unwrap();
         assert_eq!(
             V2Repository::new(absent.path()).load().unwrap().mode,
             RepositoryMode::Absent
-        );
-
-        let legacy = tempfile::TempDir::new().unwrap();
-        fs::write(legacy.path().join("USER.md"), "# USER\n").unwrap();
-        assert_eq!(
-            V2Repository::new(legacy.path()).load().unwrap().mode,
-            RepositoryMode::LegacyV1
         );
 
         let incomplete = tempfile::TempDir::new().unwrap();

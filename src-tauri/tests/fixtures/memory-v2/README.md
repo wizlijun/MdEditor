@@ -1,8 +1,7 @@
 # Memory v2 protocol fixtures
 
 These fixtures are executable protocol assets for RFC 0.10. They define the
-wire/storage contract; they do not activate Memory v2 or authorize migration of
-a real Vault.
+wire/storage contract; they do not activate Memory v2 in a real Vault.
 
 ## Schemas and valid examples
 
@@ -36,16 +35,3 @@ The equivalent patch reverses every exercised set and injects NFD, CRLF, outer
 blank lines, and trailing whitespace. It MUST produce the same canonical bytes
 and hash. The changed patch modifies a semantic field and MUST produce a
 different hash.
-
-## v1 migration review snapshot
-
-`migration/sotvault-v1-dry-run.expected.yaml` contains counts and conservative
-mapping dispositions from the 2026-09-01 read-only review. It intentionally
-contains no owner identity or fact text. Counts are not a migration lock:
-`apply` MUST rescan source bytes, recompute the source manifest and plan hash,
-and stop on any change. The fixture explicitly has `authorizes_apply: false`.
-
-Unknown or semantically incomplete approved v1 entries preserve approval
-history as quarantined `legacy-unclassified` Claims. Category is not Claim
-kind; producer, approver, source, and Git author are not assertors; transaction
-timestamps are not valid time; and v1 priority is only a salience suggestion.

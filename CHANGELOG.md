@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Memory 2.1 can infer durable owner memory from the existing Vault with a selected AI Agent.** The first successful run performs a full scan; later runs use a successful Git checkpoint for incremental inference. Every result remains a pending Claim for human review, and prompt-injection, secret, third-party and revocation boundaries are embedded in the task protocol.
+
+### Changed
+
+- **Memory now has one pure v2 path.** The Host, CLI and plugin no longer expose v1 compatibility, migration RPCs or legacy projection markers; an empty Vault is initialized directly as Memory Protocol v2 by the trusted UI action.
+
 ### Fixed
 
 - **macOS installers now carry notarization on the disk image itself.** Both Apple Silicon and Intel DMGs are submitted to Apple, stapled and checked by Gatekeeper before publication, instead of relying only on the notarized app inside.

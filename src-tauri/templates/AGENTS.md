@@ -168,14 +168,11 @@ permission, or certainty from projection text alone.
   or **Delete** is the decision itself. Persist the exact hash-bound decision
   immediately and do not ask for a second confirmation. Agent-originated
   recommendations remain pending until an authorized human decides them.
-- A direct filesystem edit to either projection is untrusted import input, not
-  approval. Import it as a pending Claim or restore the generated projection;
-  never silently adopt or overwrite drift.
+- A direct filesystem edit to either projection is not authoritative. Restore
+  the generated projection from v2 control data; never silently adopt drift.
 - Concurrent devices append immutable revisions and compare protocol, authority,
   and Claim heads. Stale heads, hash mismatches, divergent parents, unsupported
   schemas, and action-sensitive conflicts fail closed until explicitly resolved.
-- A legacy Host or plugin that does not declare Memory protocol v2 support is
-  read-only. Respect the protocol-2 write fence and never fall back to v1 paths.
 - Delete creates a tombstone. Purge is a separate, explicitly authorized
   operation and cannot promise removal from Git history or another device.
 - Never store credentials, tokens, private keys, authentication material, or

@@ -1,14 +1,22 @@
 /**
- * USER.md and MEMORY.md become controlled projections only after the Memory
- * workflow has marked them. Requiring both the reserved basename and a control
- * signal avoids making an unrelated file with the same name read-only.
+ * Memory Protocol v2 reserves USER.md and MEMORY.md at the configured Vault
+ * root as disposable projections. Detection is path-based; no legacy marker or
+ * frontmatter compatibility is retained.
  */
-export function isManagedMemoryProjection(path: string, content: string): boolean {
-  const name = path.replace(/\\/g, '/').split('/').pop()?.toUpperCase()
-  if (name !== 'USER.MD' && name !== 'MEMORY.MD') return false
+export function isMemoryProjectionPath(path: string, vaultRoot: string | null): boolean {
+  if (!vaultRoot) return false
+  const normalizedPath = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const normalizedRoot = vaultRoot.replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalizedPath === `${normalizedRoot}/USER.md`
+    || normalizedPath === `${normalizedRoot}/MEMORY.md`
+}
 
-  const hasControlMarker = content.includes('<!-- notemd-memory-control -->')
-  const hasManagedFrontmatter = /^managed:\s*$[\s\S]*?^\s+by:\s*notemd\.memory\s*$/m.test(content)
-  const hasReadOnlyNotice = /GENERATED\s*\/\s*READ-ONLY/i.test(content)
-  return hasControlMarker || hasManagedFrontmatter || hasReadOnlyNotice
+let configuredVaultRoot: string | null = null
+
+export function setMemoryProjectionVaultRoot(root: string | null): void {
+  configuredVaultRoot = root
+}
+
+export function isConfiguredMemoryProjectionPath(path: string): boolean {
+  return isMemoryProjectionPath(path, configuredVaultRoot)
 }
