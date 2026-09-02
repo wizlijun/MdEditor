@@ -7,11 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Claude Agent 1.0.20, Codex Agent 1.0.6 and DeepSeek Agent 1.1.6 report token usage and cost after every completed run.** Each plugin can show the summary in the completion tip or result area and keeps it in run history. Provider-reported charges take precedence; otherwise known models use dated official API list-price estimates that are visibly marked as estimates rather than subscription usage or an actual bill. Claude distinguishes prompt-cache write durations, Codex avoids guessing per-request long-context surcharges from aggregate turns, and DeepSeek selects its UTC peak or off-peak rate from the completion time. Harnesses that expose no usage continue to say so instead of deriving tokens from text length.
+
 ## v6.902.5 — 2026-09-02
 
 ### Added
 
-- **Claude Agent 1.0.20, Codex Agent 1.0.6 and DeepSeek Agent 1.1.6 report token usage and cost after every completed run.** Each plugin can show the summary in the completion tip or result area and keeps it in run history. Provider-reported charges take precedence; otherwise known models use dated official API list-price estimates that are visibly marked as estimates rather than subscription usage or an actual bill. Claude distinguishes prompt-cache write durations, Codex avoids guessing per-request long-context surcharges from aggregate turns, and DeepSeek selects its UTC peak or off-peak rate from the completion time. Harnesses that expose no usage continue to say so instead of deriving tokens from text length.
 - **Memory 2.2 can clear and rebuild all current memory from one guarded action.** Before anything changes, the plugin shows the exact number of confirmed claims and pending suggestions that will leave `USER.md`, `MEMORY.md` and Agent context. One confirmation removes those current views, safely resolves conflicting heads, resets inference to a full Vault scan, and keeps the owner identity, Memory protocol and immutable audit history.
 
 ### Changed
