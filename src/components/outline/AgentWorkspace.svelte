@@ -6,6 +6,7 @@
     agentRun,
     agentPluginAvailable,
     dismissRun,
+    formatAgentUsage,
     harnessStatuses,
     isAgentBusy,
     refreshHarnesses,
@@ -144,7 +145,10 @@
       return agentRun.last || t('agent.running')
     }
     if (agentRun.phase === 'done' || agentRun.phase === 'error') {
-      return agentRun.message ? `${outcomeLabel} · ${agentRun.message}` : outcomeLabel
+      const message = agentRun.message ? `${outcomeLabel} · ${agentRun.message}` : outcomeLabel
+      return agentRun.usageDisplay === 'result'
+        ? `${message} · ${formatAgentUsage(agentRun.usage, t)}`
+        : message
     }
     return notePath ? t('agent.hint') : t('agent.noNote')
   })
@@ -156,7 +160,12 @@
         .join('\n')
     }
     if (agentRun.phase === 'done' || agentRun.phase === 'error') {
-      return [outcomeLabel, agentRun.message, ...agentRun.artifacts].filter(Boolean).join('\n')
+      return [
+        outcomeLabel,
+        agentRun.message,
+        agentRun.usageDisplay === 'result' ? formatAgentUsage(agentRun.usage, t) : '',
+        ...agentRun.artifacts,
+      ].filter(Boolean).join('\n')
     }
     return [t('agent.hint'), notePath ?? t('agent.noNote')].join('\n')
   })

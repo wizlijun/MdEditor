@@ -382,6 +382,7 @@ fn finish(
             .err()
             .map(|error| format!("persist complete terminal result: {error}"))
     });
+    let usage = result.as_ref().and_then(|r| r.usage.clone());
     let mut rec = record::RunRecord {
         run_id: spec.run_id.clone(),
         task: spec.task.id.clone(),
@@ -399,6 +400,7 @@ fn finish(
         stderr_tail,
         artifacts,
         harness: Some(spec.harness.clone()),
+        usage,
     };
     if let Some(error) = persistence_error {
         rec.status = record::Status::Error;
@@ -476,7 +478,7 @@ mod tests {
             concat!(
                 r#"echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.md"}}]}}'"#,
                 "\n",
-                r#"echo '{"type":"result","subtype":"success","result":"done","session_id":"s1","num_turns":2,"is_error":false}'"#
+                r#"echo '{"type":"result","subtype":"success","result":"done","session_id":"s1","num_turns":2,"is_error":false,"model":"claude-sonnet-4-5","usage":{"input_tokens":11,"cache_read_input_tokens":22,"cache_creation_input_tokens":33,"output_tokens":44},"total_cost_usd":0.0123}'"#
             ),
         );
         let (evs, rec) = drive(spec(d.path(), c, 30)).await;
@@ -485,6 +487,17 @@ mod tests {
         assert_eq!(rec.result, "done");
         assert_eq!(rec.session_id.as_deref(), Some("s1"));
         assert_eq!(rec.num_turns, Some(2));
+        let usage = rec
+            .usage
+            .expect("terminal usage must land in the run record");
+        assert_eq!(usage.model.as_deref(), Some("claude-sonnet-4-5"));
+        assert_eq!(usage.input_tokens, 11);
+        assert_eq!(usage.cache_read_tokens, 22);
+        assert_eq!(usage.cache_write_tokens, 33);
+        assert_eq!(usage.output_tokens, 44);
+        let cost = usage.cost.expect("Claude reports its billed cost");
+        assert_eq!(cost.kind, agent_run_core::usage::CostKind::ProviderReported);
+        assert!((cost.amount_usd - 0.0123).abs() < f64::EPSILON);
     }
 
     #[tokio::test]

@@ -45,6 +45,29 @@ struct NotifySpec {
     expect_file: String,
 }
 
+/// Where a completed run surfaces its token/cost summary. Usage is always kept
+/// in the run record; this controls presentation only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum UsageDisplay {
+    #[default]
+    Tip,
+    Result,
+}
+
+fn usage_display(params: &Value) -> Result<UsageDisplay, String> {
+    match params.get("usage_display") {
+        None | Some(Value::Null) => Ok(UsageDisplay::Tip),
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|_| "bad 'usage_display': expected 'tip' or 'result'".to_string()),
+    }
+}
+
+fn completion_usage_tip(display: UsageDisplay, rec: &record::RunRecord) -> Option<String> {
+    (display == UsageDisplay::Tip)
+        .then(|| agent_run_core::usage::compact_run(rec.status, rec.usage.as_ref()))
+}
+
 fn run_delivered(spec: &NotifySpec, rec: Option<&record::RunRecord>) -> bool {
     rec.map(|r| r.status) == Some(record::Status::Success)
         && Path::new(&spec.expect_file).is_file()
@@ -452,6 +475,7 @@ impl DeepseekAgentPlugin {
             ),
             _ => None,
         };
+        let usage_display = usage_display(&params)?;
 
         let task_dir = task::task_dir(&vault, &task_id);
         let mut def = load_task(&vault, &task_id).ok_or(format!("unknown task '{task_id}'"))?;
@@ -554,6 +578,12 @@ impl DeepseekAgentPlugin {
             }
             let rec = pump.await.ok().flatten();
             inner.lock().unwrap().running.remove(&rid);
+            if let Some(summary) = rec
+                .as_ref()
+                .and_then(|record| completion_usage_tip(usage_display, record))
+            {
+                h.toast("info", "DeepSeek token usage", Some(&summary));
+            }
             // Exactly one reminder per run that asked for one. We are inside a
             // spawned task here, the only place `host.request` may be awaited.
             if let Some(n) = notify {
@@ -611,6 +641,7 @@ impl DeepseekAgentPlugin {
                 "prompt": prompt,
                 "use_context": false,
                 "note_path": note_path,
+                "usage_display": context.get("usage_display").cloned().unwrap_or(Value::Null),
             }),
             "note",
         )
@@ -645,6 +676,7 @@ impl DeepseekAgentPlugin {
                 "use_context": false,
                 "note_path": note_path,
                 "notify": context.get("notify").cloned().unwrap_or(Value::Null),
+                "usage_display": context.get("usage_display").cloned().unwrap_or(Value::Null),
             }),
             "relay",
         )
@@ -760,7 +792,15 @@ impl DeepseekAgentPlugin {
         if cli_flag(context, "wait") {
             self.start(
                 host,
-                json!({ "task": task_id, "prompt": p, "use_context": false }),
+                json!({
+                    "task": task_id,
+                    "prompt": p,
+                    "use_context": false,
+                    "usage_display": context
+                        .get("usage_display")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                }),
                 "cli",
             )
         } else {
@@ -1080,6 +1120,7 @@ mod tests {
                 stderr_tail: String::new(),
                 artifacts: vec!["answers/a.md".into()],
                 harness: Some(SELF_PLUGIN_ID.into()),
+                usage: None,
             },
         )
         .unwrap();
@@ -1218,6 +1259,7 @@ mod tests {
             stderr_tail: String::new(),
             artifacts: Vec::new(),
             harness: Some(SELF_PLUGIN_ID.into()),
+            usage: None,
         };
         assert!(!run_delivered(&spec, Some(&rec(record::Status::Success))));
         std::fs::write(&f, "# x").unwrap();
@@ -1231,6 +1273,59 @@ mod tests {
         let bad = notify_params(&spec, false);
         assert_eq!(bad["action"]["plugin_id"], SELF_PLUGIN_ID);
         assert_eq!(bad["severity"], "warn");
+    }
+
+    #[test]
+    fn usage_display_defaults_to_tip_and_validates_explicit_values() {
+        assert_eq!(usage_display(&json!({})), Ok(UsageDisplay::Tip));
+        assert_eq!(
+            usage_display(&json!({ "usage_display": "tip" })),
+            Ok(UsageDisplay::Tip)
+        );
+        assert_eq!(
+            usage_display(&json!({ "usage_display": "result" })),
+            Ok(UsageDisplay::Result)
+        );
+        assert!(usage_display(&json!({ "usage_display": "elsewhere" })).is_err());
+    }
+
+    #[test]
+    fn tip_mode_always_has_a_completion_message_and_result_mode_stays_silent() {
+        let mut rec = record::RunRecord {
+            run_id: "R1".into(),
+            task: "t".into(),
+            trigger: "window".into(),
+            started_at: "s".into(),
+            ended_at: "e".into(),
+            status: record::Status::Success,
+            exit_code: Some(0),
+            num_turns: None,
+            session_id: None,
+            result: String::new(),
+            stderr_tail: String::new(),
+            artifacts: Vec::new(),
+            harness: Some(SELF_PLUGIN_ID.into()),
+            usage: None,
+        };
+        assert_eq!(
+            completion_usage_tip(UsageDisplay::Tip, &rec).as_deref(),
+            Some("Token usage unavailable")
+        );
+
+        rec.usage = Some(agent_run_core::usage::Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            cost: Some(agent_run_core::usage::Cost {
+                amount_usd: 0.001,
+                kind: agent_run_core::usage::CostKind::ProviderReported,
+                pricing_as_of: None,
+            }),
+            ..Default::default()
+        });
+        let tip = completion_usage_tip(UsageDisplay::Tip, &rec).expect("tip mode should emit");
+        assert!(tip.contains("15 tokens"), "{tip}");
+        assert!(tip.contains("$0.001000"), "{tip}");
+        assert_eq!(completion_usage_tip(UsageDisplay::Result, &rec), None);
     }
 
     #[test]

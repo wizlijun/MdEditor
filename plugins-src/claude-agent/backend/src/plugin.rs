@@ -52,6 +52,32 @@ struct NotifySpec {
     expect_file: String,
 }
 
+/// Where this invocation wants its terminal usage summary rendered. The
+/// backend defaults to a toast so callers that predate the option still get the
+/// completion hint; `result` leaves the data on the Done record for an embedded
+/// result surface to render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UsageDisplay {
+    Tip,
+    Result,
+}
+
+impl UsageDisplay {
+    fn from_params(params: &Value) -> Result<Self, String> {
+        match params.get("usage_display") {
+            None | Some(Value::Null) => Ok(Self::Tip),
+            Some(Value::String(value)) if value == "tip" => Ok(Self::Tip),
+            Some(Value::String(value)) if value == "result" => Ok(Self::Result),
+            _ => Err("bad 'usage_display': expected 'tip' or 'result'".into()),
+        }
+    }
+}
+
+fn usage_tip(display: UsageDisplay, rec: &record::RunRecord) -> Option<String> {
+    (display == UsageDisplay::Tip)
+        .then(|| agent_run_core::usage::compact_run(rec.status, rec.usage.as_ref()))
+}
+
 /// A `success` record is not enough: the file the caller expects has to be on
 /// disk, or the reminder would open nothing.
 fn run_delivered(spec: &NotifySpec, rec: Option<&record::RunRecord>) -> bool {
@@ -460,6 +486,7 @@ impl ClaudeAgentPlugin {
             .get("use_context")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let usage_display = UsageDisplay::from_params(&params)?;
         // A malformed spec is an error rather than a silent None: the caller
         // would otherwise wait forever for a reminder that was never going to
         // come.
@@ -539,6 +566,9 @@ impl ClaudeAgentPlugin {
                                     WINDOW,
                                     json!({ "kind": "done", "run_id": rid, "record": r }),
                                 );
+                                if let Some(summary) = usage_tip(usage_display, &r) {
+                                    h.toast("info", "Claude token usage", Some(&summary));
+                                }
                                 last = Some(r);
                             }
                         }
@@ -616,6 +646,10 @@ impl ClaudeAgentPlugin {
                 "prompt": prompt,
                 "use_context": false,
                 "note_path": note_path,
+                "usage_display": context
+                    .get("usage_display")
+                    .cloned()
+                    .unwrap_or(Value::Null),
             }),
             "note",
         )
@@ -652,6 +686,10 @@ impl ClaudeAgentPlugin {
                 "use_context": false,
                 "note_path": note_path,
                 "notify": context.get("notify").cloned().unwrap_or(Value::Null),
+                "usage_display": context
+                    .get("usage_display")
+                    .cloned()
+                    .unwrap_or(Value::Null),
             }),
             "relay",
         )
@@ -764,7 +802,15 @@ impl ClaudeAgentPlugin {
         if wait {
             self.start(
                 host,
-                json!({ "task": task_id, "prompt": p, "use_context": false }),
+                json!({
+                    "task": task_id,
+                    "prompt": p,
+                    "use_context": false,
+                    "usage_display": context
+                        .get("usage_display")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                }),
                 "cli",
             )
         } else {
@@ -1157,6 +1203,7 @@ mod tests {
                 stderr_tail: String::new(),
                 artifacts: Vec::new(),
                 harness: Some(SELF_PLUGIN_ID.into()),
+                usage: None,
             },
         )
         .unwrap();
@@ -1273,6 +1320,7 @@ mod tests {
                 stderr_tail: String::new(),
                 artifacts: vec!["answers/a.md".into()],
                 harness: Some(SELF_PLUGIN_ID.into()),
+                usage: None,
             },
         )
         .unwrap();
@@ -1431,7 +1479,41 @@ mod tests {
             stderr_tail: String::new(),
             artifacts: Vec::new(),
             harness: Some(SELF_PLUGIN_ID.into()),
+            usage: None,
         }
+    }
+
+    #[test]
+    fn usage_display_defaults_to_tip_and_validates_explicit_values() {
+        assert_eq!(UsageDisplay::from_params(&json!({})), Ok(UsageDisplay::Tip));
+        assert_eq!(
+            UsageDisplay::from_params(&json!({ "usage_display": "tip" })),
+            Ok(UsageDisplay::Tip)
+        );
+        assert_eq!(
+            UsageDisplay::from_params(&json!({ "usage_display": "result" })),
+            Ok(UsageDisplay::Result)
+        );
+        assert!(UsageDisplay::from_params(&json!({ "usage_display": "elsewhere" })).is_err());
+    }
+
+    #[test]
+    fn tip_mode_formats_usage_and_result_mode_stays_silent() {
+        let mut rec = a_record(record::Status::Success);
+        rec.usage = Some(agent_run_core::usage::Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            cost: Some(agent_run_core::usage::Cost {
+                amount_usd: 0.001,
+                kind: agent_run_core::usage::CostKind::ProviderReported,
+                pricing_as_of: None,
+            }),
+            ..Default::default()
+        });
+        let tip = usage_tip(UsageDisplay::Tip, &rec).expect("tip mode should emit");
+        assert!(tip.contains("15 tokens"), "{tip}");
+        assert!(tip.contains("$0.001000"), "{tip}");
+        assert_eq!(usage_tip(UsageDisplay::Result, &rec), None);
     }
 
     /// The reminder is only a success when the run said so AND the promised

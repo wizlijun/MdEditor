@@ -21,10 +21,38 @@ export interface RunView {
   result?: string
   /** Vault-relative markdown the finished run produced. */
   artifacts: string[]
+  usage?: Usage | null
 }
 
 export function emptyView(): RunView {
   return { runId: null, status: 'idle', items: [], artifacts: [] }
+}
+
+export interface UsageCost {
+  amount_usd: number
+  kind: 'provider_reported' | 'list_price_estimate'
+  pricing_as_of?: string | null
+}
+
+export interface Usage {
+  model?: string | null
+  input_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  output_tokens: number
+  reasoning_tokens: number
+  reported_total_tokens: number
+  cost?: UsageCost | null
+}
+
+export function usageTotal(usage: Usage): number {
+  return usage.reported_total_tokens > 0
+    ? usage.reported_total_tokens
+    : usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens + usage.output_tokens
+}
+
+export function hasTokenUsage(usage: Usage): boolean {
+  return usageTotal(usage) > 0
 }
 
 /** One row of `runs/<runId>.json`, as the backend serializes it. */
@@ -43,6 +71,7 @@ export interface RunRecord {
   /** WHICH agent plugin performed this run. Both agents share one runs root, so
    *  a row without this is from before the field existed — unknown, not ours. */
   harness?: string | null
+  usage?: Usage | null
 }
 
 /** A task template plus its live state (`tasks.list`). */
@@ -68,7 +97,7 @@ export type HostMessage =
   | {
       kind: 'done'
       run_id: string
-      record: { status: Status; num_turns?: number; result?: string; artifacts?: string[] }
+      record: { status: Status; num_turns?: number; result?: string; artifacts?: string[]; usage?: Usage | null }
     }
   | { kind: 'busy'; run_id: string; holder: unknown }
 
@@ -86,6 +115,7 @@ export function reduce(view: RunView, msg: HostMessage): RunView {
       turns: msg.record.num_turns,
       result: msg.record.result,
       artifacts: msg.record.artifacts ?? [],
+      usage: msg.record.usage,
     }
   }
 

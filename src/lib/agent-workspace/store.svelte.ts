@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { pluginRuntime } from '../plugins/runtime.svelte'
 import { rememberProvider, rememberedProvider } from '../agent-picker/types'
+import { getPluginScopedValue } from '../settings.svelte'
 
 /**
  * The Agent workspace under the sidecar-note panel: hand ONE note to the
@@ -62,6 +63,73 @@ export interface AgentRunState {
   artifacts: string[]
   /** Which agent plugin served this run. */
   provider: string | null
+  usageDisplay: 'tip' | 'result'
+  usage: AgentUsage | null
+}
+
+export interface AgentUsage {
+  model?: string | null
+  input_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  output_tokens: number
+  reasoning_tokens: number
+  reported_total_tokens: number
+  cost?: {
+    amount_usd: number
+    kind: 'provider_reported' | 'list_price_estimate'
+    pricing_as_of?: string | null
+  } | null
+}
+
+export type AgentUsageMessageKey =
+  | 'agent.usageUnavailable'
+  | 'agent.usageTotal'
+  | 'agent.usageInput'
+  | 'agent.usageCacheRead'
+  | 'agent.usageCacheWrite'
+  | 'agent.usageOutput'
+  | 'agent.usageReasoning'
+  | 'agent.costReported'
+  | 'agent.costEstimated'
+
+type AgentUsageLabel = (key: AgentUsageMessageKey, params?: Record<string, string | number>) => string
+
+export function formatAgentUsage(usage: AgentUsage | null, label?: AgentUsageLabel): string {
+  const say = (key: AgentUsageMessageKey, fallback: string, n?: number) =>
+    label ? label(key, n === undefined ? undefined : { n: n.toLocaleString() }) : fallback
+  if (!usage) return say('agent.usageUnavailable', 'Token usage unavailable')
+  const total = usage.reported_total_tokens > 0
+    ? usage.reported_total_tokens
+    : usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens + usage.output_tokens
+  const parts = total > 0
+    ? [
+        say('agent.usageTotal', `${total.toLocaleString()} tokens`, total),
+        say('agent.usageInput', `in ${usage.input_tokens.toLocaleString()}`, usage.input_tokens),
+      ]
+    : [say('agent.usageUnavailable', 'Token usage unavailable')]
+  if (total > 0 && usage.cache_read_tokens) {
+    parts.push(say('agent.usageCacheRead', `cached ${usage.cache_read_tokens.toLocaleString()}`, usage.cache_read_tokens))
+  }
+  if (total > 0 && usage.cache_write_tokens) {
+    parts.push(say('agent.usageCacheWrite', `cache write ${usage.cache_write_tokens.toLocaleString()}`, usage.cache_write_tokens))
+  }
+  if (total > 0) parts.push(say('agent.usageOutput', `out ${usage.output_tokens.toLocaleString()}`, usage.output_tokens))
+  if (total > 0 && usage.reasoning_tokens) {
+    parts.push(say('agent.usageReasoning', `reasoning ${usage.reasoning_tokens.toLocaleString()}`, usage.reasoning_tokens))
+  }
+  if (usage.cost) {
+    const amount = `$${usage.cost.amount_usd.toFixed(6)}`
+    parts.push(label
+      ? label(
+          usage.cost.kind === 'list_price_estimate' ? 'agent.costEstimated' : 'agent.costReported',
+          { amount },
+        )
+      : usage.cost.kind === 'list_price_estimate'
+        ? `API list-price estimate ≈${amount}`
+        : `${amount} reported`)
+  }
+  return parts.join(' · ')
 }
 
 export function emptyRun(): AgentRunState {
@@ -76,6 +144,8 @@ export function emptyRun(): AgentRunState {
     message: '',
     artifacts: [],
     provider: null,
+    usageDisplay: 'tip',
+    usage: null,
   }
 }
 
@@ -228,9 +298,14 @@ export async function startNoteRun(
     notePath,
     startedAt: Date.now(),
     provider: activeProvider(),
+    usageDisplay: getPluginScopedValue(activeProvider(), 'usageDisplay') === 'result' ? 'result' : 'tip',
   })
   try {
-    const r = await execute('run-note', { note_path: notePath, task: NOTE_TASK })
+    const r = await execute('run-note', {
+      note_path: notePath,
+      task: NOTE_TASK,
+      usage_display: agentRun.usageDisplay,
+    })
     const runId = r?.run_id
     if (typeof runId !== 'string' || !runId) throw new Error('the plugin returned no run id')
     agentRun.runId = runId
@@ -264,6 +339,7 @@ async function poll(onFinished: () => void | Promise<void>) {
         agentRun.phase = rec.status === 'success' || rec.status === 'skipped' ? 'done' : 'error'
         agentRun.message = rec.result || rec.stderr_tail || ''
         agentRun.artifacts = rec.artifacts ?? []
+        agentRun.usage = rec.usage ?? null
         stopPolling()
         await onFinished()
         return

@@ -126,6 +126,7 @@ fn fail(req: &detach::Request, code: i32, message: String) -> i32 {
         stderr_tail: message,
         artifacts: Vec::new(),
         harness: Some(crate::SELF_PLUGIN_ID.into()),
+        usage: None,
     };
     let _ = agent_run_core::record::write(&task::runs_root(&req.vault).join(&req.task_id), &rec);
     code

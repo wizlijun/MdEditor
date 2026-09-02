@@ -16,7 +16,7 @@
 //!   ← session/request_permission → answered from policy.json → Event::Permission
 //!   ← stopReason                → RunResult → record → terminate
 //! ```
-use crate::{acp, policy};
+use crate::{acp, composition, policy};
 use agent_run_core::event::{Event, Step};
 use agent_run_core::record;
 use agent_run_core::scaffold::{self, Blocked, ProgressTracker, RunMeta};
@@ -143,6 +143,7 @@ pub async fn run(
                 stderr_tail: String::new(),
                 artifacts: Vec::new(),
                 harness: Some(crate::SELF_PLUGIN_ID.to_string()),
+                usage: None,
             });
         }
         Err(Blocked::Skip(reason)) => {
@@ -347,11 +348,12 @@ pub async fn run(
                 ),
                 session_id: (!session.is_empty()).then(|| session.clone()),
                 num_turns: None,
+                usage: None,
             }),
         ),
         (Some(s), _) => (s, None),
-        (None, Some(Outcome::Stopped(stop))) => {
-            let r = acp::result_for_stop(&stop, &collected, &session);
+        (None, Some(Outcome::Stopped { stop, usage })) => {
+            let r = acp::result_for_stop(&stop, &collected, &session, usage);
             let s = match stop.as_str() {
                 "end_turn" => record::Status::Success,
                 "cancelled" => record::Status::Cancelled,
@@ -366,6 +368,7 @@ pub async fn run(
                 result: msg,
                 session_id: (!session.is_empty()).then(|| session.clone()),
                 num_turns: None,
+                usage: None,
             }),
         ),
         (None, None) => (record::Status::Error, None),
@@ -394,6 +397,7 @@ pub async fn run(
                         result: message,
                         session_id: (!session.is_empty()).then(|| session.clone()),
                         num_turns: None,
+                        usage: None,
                     });
                 }
             }
@@ -427,8 +431,11 @@ fn kill_group(pgid: i32) {
 /// How the dialogue ended.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
-    /// `session/prompt` answered with this `stopReason`.
-    Stopped(String),
+    /// `session/prompt` answered with this `stopReason` and optional accounting.
+    Stopped {
+        stop: String,
+        usage: Option<agent_run_core::usage::Usage>,
+    },
     /// The handshake or the turn failed, with a reason worth showing.
     Failed(String),
 }
@@ -571,7 +578,15 @@ impl Dialogue {
                         "session/prompt answered without a stopReason: {result}"
                     )))];
                 }
-                vec![Act::Finish(Outcome::Stopped(stop))]
+                let fallback_model = composition::default_model(&spec.config);
+                vec![Act::Finish(Outcome::Stopped {
+                    stop,
+                    usage: acp::prompt_usage_at(
+                        &result,
+                        fallback_model.as_deref(),
+                        chrono::Utc::now(),
+                    ),
+                })]
             }
             other => vec![Act::Finish(Outcome::Failed(format!(
                 "unexpected reply to {other}"
@@ -1128,6 +1143,43 @@ mod tests {
         match &acts[0] {
             Act::Finish(Outcome::Failed(m)) => assert!(m.contains("stopReason"), "{m}"),
             other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_prompt_reply_carries_usage_into_the_terminal_outcome() {
+        let f = Fixture::new();
+        let spec = f.spec(30);
+        let mut d = Dialogue::new();
+        d.begin(crate::acp::METHOD_SESSION_PROMPT, serde_json::json!({}));
+        let acts = d.step(
+            crate::acp::Incoming::Response {
+                id: 1,
+                result: Ok(serde_json::json!({
+                    "stopReason": "end_turn",
+                    "usage": {
+                        "inputTokens": 7,
+                        "cacheReadTokens": 2,
+                        "outputTokens": 3
+                    },
+                    "totalCostUsd": 0.0004
+                })),
+            },
+            &spec,
+        );
+        match &acts[0] {
+            Act::Finish(Outcome::Stopped { stop, usage }) => {
+                assert_eq!(stop, "end_turn");
+                let usage = usage.as_ref().expect("usage");
+                assert_eq!(usage.input_tokens, 7);
+                assert_eq!(usage.cache_read_tokens, 2);
+                assert_eq!(usage.output_tokens, 3);
+                assert_eq!(
+                    usage.cost.as_ref().map(|cost| cost.amount_usd),
+                    Some(0.0004)
+                );
+            }
+            other => panic!("expected a stopped outcome, got {other:?}"),
         }
     }
 }

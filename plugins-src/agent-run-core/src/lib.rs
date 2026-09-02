@@ -32,6 +32,7 @@ pub mod record;
 pub mod scaffold;
 pub mod scope;
 pub mod task;
+pub mod usage;
 
 pub use event::{Event, RunResult, Step};
 pub use harness::HarnessStatus;

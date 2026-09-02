@@ -18,6 +18,8 @@
   import HistoryList from './components/HistoryList.svelte'
   import ArtifactLinks from './components/ArtifactLinks.svelte'
   import SettingsPage from './components/SettingsPage.svelte'
+  import UsageSummary from './components/UsageSummary.svelte'
+  import { loadUsageDisplay, type UsageDisplay } from './lib/settings'
 
   const locale = bridge().locale
   const tr = (k: MessageKey, v?: Record<string, string | number>) => t(locale, k, v)
@@ -42,6 +44,7 @@
   let selectedRun: RunRecord | null = $state(null)
   let selectedLog = $state('')
   let settingsOpen = $state(false)
+  let runUsageDisplay: UsageDisplay = $state('tip')
 
   const running = $derived(view.status === 'running')
   const current = $derived(tasks.find((t) => t.id === selectedTask) ?? null)
@@ -161,10 +164,12 @@
     selectedRun = null // a new run takes the pane back to live
     view = { ...emptyView(), status: 'running' }
     try {
+      runUsageDisplay = await loadUsageDisplay().catch(() => 'tip' as const)
       const r = await request('run.start', {
         task: selectedTask,
         prompt: userPrompt,
         use_context: useCtx && !!ctx,
+        usage_display: runUsageDisplay,
       })
       view = { ...view, runId: r.run_id }
     } catch (e) {
@@ -299,6 +304,10 @@
       <RunStream items={view.items} />
 
       <ArtifactLinks paths={view.artifacts} label={tr} />
+
+      {#if view.status !== 'idle' && view.status !== 'running' && runUsageDisplay === 'result'}
+        <UsageSummary usage={view.usage} label={tr} />
+      {/if}
 
       <footer>
         {#if error}

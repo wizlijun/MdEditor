@@ -45,6 +45,8 @@ pub struct RunResult {
     pub result: String,
     pub session_id: Option<String>,
     pub num_turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::usage::Usage>,
 }
 
 /// Every step an engine emits. The window path turns these into `host.ui.post`;
@@ -98,6 +100,7 @@ mod tests {
             result: "done".into(),
             session_id: Some("s1".into()),
             num_turns: Some(3),
+            usage: None,
         }))
         .unwrap();
         assert_eq!(v["kind"], "result");

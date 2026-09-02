@@ -38,6 +38,20 @@ export type MessageKey =
   | 'settings.title'
   | 'settings.maxConcurrency'
   | 'settings.maxConcurrencyHint'
+  | 'settings.usageDisplay'
+  | 'settings.usageDisplayHint'
+  | 'settings.usageDisplayTip'
+  | 'settings.usageDisplayResult'
+  | 'usage.total'
+  | 'usage.input'
+  | 'usage.cacheRead'
+  | 'usage.cacheWrite'
+  | 'usage.output'
+  | 'usage.reasoning'
+  | 'usage.costReported'
+  | 'usage.costEstimated'
+  | 'usage.costDisclaimer'
+  | 'usage.unavailable'
   | 'settings.loadFailed'
   | 'settings.saveFailed'
   | 'err.noVault'
@@ -84,6 +98,20 @@ const en: Catalog = {
   'settings.title': 'Settings',
   'settings.maxConcurrency': 'Maximum concurrent AI reads',
   'settings.maxConcurrencyHint': 'Limits this agent in ebook “AI pre-read” queues. Lowering it does not interrupt work already running.',
+  'settings.usageDisplay': 'Show token usage after a run',
+  'settings.usageDisplayHint': 'Usage is always saved in run history. Choose where the completion summary appears.',
+  'settings.usageDisplayTip': 'Completion tip',
+  'settings.usageDisplayResult': 'Result area',
+  'usage.total': '{n} tokens',
+  'usage.input': 'input {n}',
+  'usage.cacheRead': 'cache read {n}',
+  'usage.cacheWrite': 'cache write {n}',
+  'usage.output': 'output {n}',
+  'usage.reasoning': 'reasoning {n}',
+  'usage.costReported': '${amount} reported',
+  'usage.costEstimated': 'API list-price estimate ≈${amount}',
+  'usage.costDisclaimer': 'API list-price estimate; it may differ from subscription usage or the actual bill.',
+  'usage.unavailable': 'Token usage was not reported by this harness.',
   'settings.loadFailed': 'Could not load this setting. The default is 1.',
   'settings.saveFailed': 'Could not save this setting. The previous value is still active.',
   'err.noVault': 'No vault configured — open or create a vault first.',
@@ -129,6 +157,20 @@ const zh: Catalog = {
   'settings.title': '设置',
   'settings.maxConcurrency': 'AI 阅读最大并行数',
   'settings.maxConcurrencyHint': '限制此智能体在电子书“AI 先读”队列中的并行数。调低后不会中断正在运行的任务。',
+  'settings.usageDisplay': '运行后显示 Token 用量',
+  'settings.usageDisplayHint': '用量始终保存在运行历史中；这里选择完成摘要的显示位置。',
+  'settings.usageDisplayTip': '完成提示',
+  'settings.usageDisplayResult': '结果区',
+  'usage.total': '共 {n} tokens',
+  'usage.input': '输入 {n}',
+  'usage.cacheRead': '缓存读取 {n}',
+  'usage.cacheWrite': '缓存写入 {n}',
+  'usage.output': '输出 {n}',
+  'usage.reasoning': '推理 {n}',
+  'usage.costReported': '报告费用 ${amount}',
+  'usage.costEstimated': 'API 官网标价估算约 ${amount}',
+  'usage.costDisclaimer': '按 API 标价估算，可能与订阅额度或实际账单不同。',
+  'usage.unavailable': '当前运行框架未报告 Token 用量。',
   'settings.loadFailed': '无法读取此设置，将使用默认值 1。',
   'settings.saveFailed': '无法保存此设置，仍使用之前的值。',
   'err.noVault': '未配置 vault——请先打开或创建一个 vault。',
@@ -174,6 +216,20 @@ const ja: Catalog = {
   'settings.title': '設定',
   'settings.maxConcurrency': 'AI 読書の最大同時実行数',
   'settings.maxConcurrencyHint': '電子書籍の「AI 先読み」キューで、このエージェントの同時実行数を制限します。値を下げても実行中の処理は中断されません。',
+  'settings.usageDisplay': '実行後のトークン使用量',
+  'settings.usageDisplayHint': '使用量は常に履歴へ保存されます。完了サマリーの表示場所を選びます。',
+  'settings.usageDisplayTip': '完了通知',
+  'settings.usageDisplayResult': '結果エリア',
+  'usage.total': '合計 {n} tokens',
+  'usage.input': '入力 {n}',
+  'usage.cacheRead': 'キャッシュ読込 {n}',
+  'usage.cacheWrite': 'キャッシュ書込 {n}',
+  'usage.output': '出力 {n}',
+  'usage.reasoning': '推論 {n}',
+  'usage.costReported': '報告コスト ${amount}',
+  'usage.costEstimated': 'API 定価見積り 約 ${amount}',
+  'usage.costDisclaimer': 'API 定価による見積りです。契約枠や実際の請求とは異なる場合があります。',
+  'usage.unavailable': 'この実行環境はトークン使用量を報告しませんでした。',
   'settings.loadFailed': 'この設定を読み込めません。既定値 1 を使用します。',
   'settings.saveFailed': 'この設定を保存できません。以前の値が引き続き有効です。',
   'err.noVault': 'vault が未設定です。まず vault を開くか作成してください。',
@@ -219,6 +275,20 @@ const de: Catalog = {
   'settings.title': 'Einstellungen',
   'settings.maxConcurrency': 'Maximale parallele KI-Lesevorgänge',
   'settings.maxConcurrencyHint': 'Begrenzt diesen Agenten in den „KI-Vorlesen“-Warteschlangen für E-Books. Eine Verringerung unterbricht keine laufende Aufgabe.',
+  'settings.usageDisplay': 'Tokenverbrauch nach einem Lauf',
+  'settings.usageDisplayHint': 'Der Verbrauch wird immer im Verlauf gespeichert. Hier wird die Anzeige des Abschlusses gewählt.',
+  'settings.usageDisplayTip': 'Abschlusshinweis',
+  'settings.usageDisplayResult': 'Ergebnisbereich',
+  'usage.total': '{n} Tokens',
+  'usage.input': 'Eingabe {n}',
+  'usage.cacheRead': 'Cache gelesen {n}',
+  'usage.cacheWrite': 'Cache geschrieben {n}',
+  'usage.output': 'Ausgabe {n}',
+  'usage.reasoning': 'Reasoning {n}',
+  'usage.costReported': '${amount} gemeldet',
+  'usage.costEstimated': 'API-Listenpreisschätzung ca. ${amount}',
+  'usage.costDisclaimer': 'Schätzung nach API-Listenpreis; Abo-Nutzung und tatsächliche Rechnung können abweichen.',
+  'usage.unavailable': 'Diese Laufzeit hat keinen Tokenverbrauch gemeldet.',
   'settings.loadFailed': 'Diese Einstellung konnte nicht geladen werden. Standardwert 1 wird verwendet.',
   'settings.saveFailed': 'Diese Einstellung konnte nicht gespeichert werden. Der vorherige Wert bleibt aktiv.',
   'err.noVault': 'Kein Vault konfiguriert — bitte zuerst einen Vault öffnen oder erstellen.',
