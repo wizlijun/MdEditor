@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **macOS installers now carry notarization on the disk image itself.** Both Apple Silicon and Intel DMGs are submitted to Apple, stapled and checked by Gatekeeper before publication, instead of relying only on the notarized app inside.
+
 ## v6.901.10 — 2026-09-02
 
 ### Fixed
