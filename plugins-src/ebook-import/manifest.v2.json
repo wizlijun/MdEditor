@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.ebook-import",
   "name": "Ebook Import",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "kind": "native",
   "engines": {
     "notemd": ">=6.901.10"
