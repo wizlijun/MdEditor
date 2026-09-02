@@ -7,6 +7,7 @@
 import { renderSourceHtml } from '../lib/source-highlight'
 import { autoPairInsert } from '../lib/autopair'
 import { createImeGuard } from '../lib/ime'
+import { isSelectAllShortcut } from '../lib/editor-select-all'
 
 export interface SourcePane {
   getValue(): string
@@ -52,6 +53,16 @@ export function mountSource(
     // SourceView uses) — pairing on a pre-edit keystroke edits a buffer the
     // user hasn't committed yet.
     if (ime.blocks(ev)) return
+    // Do not depend on the plugin WebView's native responder chain for Select
+    // All. Rich mode also handles this chord explicitly, and keeping both pane
+    // implementations in the kit prevents consumers from drifting by mode.
+    if (isSelectAllShortcut(ev)) {
+      ev.preventDefault()
+      ev.stopPropagation()
+      ta.focus()
+      ta.select()
+      return
+    }
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return
     if (ev.key.length !== 1) return
     const pos = ta.selectionStart ?? 0

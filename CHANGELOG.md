@@ -11,6 +11,10 @@ For the full commit history, see the git log.
 
 - **Ebook Import 1.3.5 expands managed topic taxonomies from five to eight topics.** AI topic design now chooses 2–8 natural domains without filling the limit or merging unrelated fields merely to stay under it; manual topic management and batch classification accept the same expanded catalog.
 
+### Fixed
+
+- **Plugin Editor Kit windows now select the whole document with Cmd+A or Ctrl+A in both rich and source modes.** Rich editing intercepts the shortcut before a code block can narrow the selection, while source editing explicitly selects its textarea instead of depending on the embedded WebView's native responder.
+
 ## v6.902.3 — 2026-09-02
 
 ### Added

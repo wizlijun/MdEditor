@@ -1,8 +1,20 @@
 /**
  * @vitest-environment happy-dom
  */
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+
+const platform = vi.hoisted(() => ({ apple: true }))
+
+vi.mock('../lib/platform-sync', () => ({
+  isApplePlatformSync: () => platform.apple,
+}))
+
 import { mountSource } from './source'
+
+beforeEach(() => {
+  platform.apple = true
+  document.body.innerHTML = ''
+})
 
 describe('kit source mode', () => {
   it('renders textarea + highlight pre and round-trips value', () => {
@@ -65,6 +77,51 @@ describe('kit source mode', () => {
     ta.dispatchEvent(ev)
     expect(ev.defaultPrevented).toBe(false)
     expect(ta.value).toBe('ab')
+    s.destroy()
+  })
+
+  it('explicitly selects the whole buffer for Cmd+A on Apple platforms', () => {
+    const host = document.createElement('div')
+    const bubbled = vi.fn()
+    host.addEventListener('keydown', bubbled)
+    const s = mountSource(host, 'alpha\nbeta', () => {})
+    const ta = host.querySelector('textarea')!
+    ta.setSelectionRange(3, 3)
+
+    const ev = new KeyboardEvent('keydown', {
+      key: 'a', metaKey: true, bubbles: true, cancelable: true,
+    })
+    ta.dispatchEvent(ev)
+
+    expect(ev.defaultPrevented).toBe(true)
+    expect(bubbled).not.toHaveBeenCalled()
+    expect(ta.selectionStart).toBe(0)
+    expect(ta.selectionEnd).toBe(ta.value.length)
+    s.destroy()
+  })
+
+  it('keeps Ctrl+A native on Apple platforms and uses it off Apple platforms', () => {
+    const host = document.createElement('div')
+    const s = mountSource(host, 'alpha', () => {})
+    const ta = host.querySelector('textarea')!
+    ta.setSelectionRange(2, 2)
+
+    const appleCtrl = new KeyboardEvent('keydown', {
+      key: 'a', ctrlKey: true, bubbles: true, cancelable: true,
+    })
+    ta.dispatchEvent(appleCtrl)
+    expect(appleCtrl.defaultPrevented).toBe(false)
+    expect(ta.selectionStart).toBe(2)
+    expect(ta.selectionEnd).toBe(2)
+
+    platform.apple = false
+    const nonAppleCtrl = new KeyboardEvent('keydown', {
+      key: 'A', ctrlKey: true, bubbles: true, cancelable: true,
+    })
+    ta.dispatchEvent(nonAppleCtrl)
+    expect(nonAppleCtrl.defaultPrevented).toBe(true)
+    expect(ta.selectionStart).toBe(0)
+    expect(ta.selectionEnd).toBe(ta.value.length)
     s.destroy()
   })
 
