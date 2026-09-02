@@ -428,6 +428,9 @@ importers:
       '@sveltejs/vite-plugin-svelte':
         specifier: ^5
         version: 5.1.1(svelte@5.55.5)(vite@6.4.2(@types/node@25.6.2)(yaml@2.9.0))
+      happy-dom:
+        specifier: ^20.9.0
+        version: 20.9.0
       svelte:
         specifier: ^5
         version: 5.55.5

@@ -5,6 +5,7 @@ import {
   buildRequestDoc,
   createdFromName,
   deleteReport,
+  documentPathFor,
   listReports,
   materialsDirFor,
   previewDelete,
@@ -159,6 +160,14 @@ describe('constants', () => {
   it('委托稿住在材料目录里,00 号——材料从 01 起,永不相撞', () => {
     expect(requestPathFor('2026-08-18-143012-source-trace.md')).toBe(
       '2026-08-18-143012-source-trace/00-request.md',
+    )
+  })
+
+  it('Inbox 行在插件自身编辑区打开正确文档:完成项是报告,未完成项是委托稿', () => {
+    const name = '2026-08-18-143012-source-trace.md'
+    expect(documentPathFor(DIR, { name, hasReport: true })).toBe(`${DIR}/${name}`)
+    expect(documentPathFor(DIR, { name, hasReport: false })).toBe(
+      `${DIR}/2026-08-18-143012-source-trace/00-request.md`,
     )
   })
 })

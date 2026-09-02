@@ -4,9 +4,9 @@
      bar), but a much simpler contract: a report is an agent product (✦) that
      either exists or doesn't — no drafts, no rename, no per-row status.
 
-     A row is a button: clicking it opens the report in the MAIN editor (this
-     window's editor is the delegation composer, not a reader). Right-click
-     (or the keyboard's menu key) opens the row menu: open / delete.
+     A row is a button: clicking it opens the represented document in this
+     window's editor. Right-click (or the keyboard's menu key) opens the row
+     menu: edit report/request here / delete.
 
      The row label is the report's frontmatter `title`, read by `listReports`
      (capped, tolerant — a null title falls back to the file name); the age
@@ -38,9 +38,9 @@
     running: ReadonlySet<string>
     /** The directory listing itself failed — say so instead of "no reports". */
     listFailed: boolean
-    /** Opens the report in the main editor. */
-    onopen: (name: string) => void
-    /** Opens the saved request (`00-request.md`) in the main editor. */
+    /** Opens the row's report/request in this window's editor. */
+    onopen: (report: ReportEntry) => void
+    /** Opens the saved request (`00-request.md`) in this window's editor. */
     onopenrequest: (name: string) => void
     /** Loads the request text back into the composer for re-delegation. */
     onreload: (name: string) => void
@@ -109,7 +109,7 @@
     switch (statusOf(r)) {
       case 'done':
         return [
-          { label: t('menuOpenReport'), icon: 'open-report', onselect: () => onopen(r.name) },
+          { label: t('menuOpenReport'), icon: 'open-report', onselect: () => onopen(r) },
           { label: t('menuOpenRequest'), icon: 'trace', onselect: () => onopenrequest(r.name) },
           { label: t('menuDelete'), icon: 'delete', danger: true, separated: true, onselect: () => void askDelete(r.name) },
         ]
@@ -169,7 +169,7 @@
         <button
           class="row"
           type="button"
-          onclick={() => (status === 'done' ? onopen(r.name) : onopenrequest(r.name))}
+          onclick={() => onopen(r)}
           oncontextmenu={(e) => openMenu(e, r.name)}
           title={r.name}
         >
