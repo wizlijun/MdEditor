@@ -211,49 +211,48 @@
 
 <main>
   <aside>
-    <!-- Before the task list, because "which harness, and does it work" decides
-         whether anything below is worth clicking. -->
-    <HarnessBanner status={harness} label={tr} />
+    <!-- One scrollport owns all variable-height sidebar content. Tasks can no
+         longer squeeze the history scrollport to zero height. -->
+    <div class="sidebar-scroll">
+      <HarnessBanner status={harness} label={tr} />
 
-    <h2>{tr('tasks.title')}</h2>
-    {#if tasks.length === 0}
-      <p class="empty">{tr('tasks.empty')}</p>
-    {/if}
-    <!-- Picking a task is also how you leave a past run's log: there is only
-         one thing you could mean by clicking it. -->
-    <TaskList
-      {tasks}
-      selected={selectedTask}
-      onselect={(id) => {
-        selectedTask = id
-        selectedRun = null
-        settingsOpen = false
-      }}
-      label={tr}
-    />
-
-    <h2>
-      {tr('history.title')}
-      <button
-        class="scope"
-        onclick={() => (allTasks = !allTasks)}
-        title={allTasks ? tr('history.thisTask') : tr('history.all')}
-      >
-        {allTasks ? tr('history.all') : tr('history.thisTask')}
-      </button>
-    </h2>
-    <!-- Scrolls on its own so a long history never pushes the task list away. -->
-    <div class="runs">
-      <HistoryList
-        runs={history}
+      <h2>{tr('tasks.title')}</h2>
+      {#if tasks.length === 0}
+        <p class="empty">{tr('tasks.empty')}</p>
+      {/if}
+      <TaskList
+        {tasks}
+        selected={selectedTask}
+        onselect={(id) => {
+          selectedTask = id
+          selectedRun = null
+          settingsOpen = false
+        }}
         label={tr}
-        showTask={allTasks}
-        empty={allTasks ? tr('history.emptyAll') : tr('history.empty')}
-        selectedId={selectedRun?.run_id ?? null}
-        onselect={selectRun}
-        ondelete={deleteRun}
-        onclear={clearRuns}
       />
+
+      <h2>
+        {tr('history.title')}
+        <button
+          class="scope"
+          onclick={() => (allTasks = !allTasks)}
+          title={allTasks ? tr('history.thisTask') : tr('history.all')}
+        >
+          {allTasks ? tr('history.all') : tr('history.thisTask')}
+        </button>
+      </h2>
+      <div class="runs">
+        <HistoryList
+          runs={history}
+          label={tr}
+          showTask={allTasks}
+          empty={allTasks ? tr('history.emptyAll') : tr('history.empty')}
+          selectedId={selectedRun?.run_id ?? null}
+          onselect={selectRun}
+          ondelete={deleteRun}
+          onclear={clearRuns}
+        />
+      </div>
     </div>
     <button
       type="button"
@@ -338,122 +337,186 @@
 </main>
 
 <style>
+  :global(:root) { color-scheme: light dark; }
   :global(body) {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    background: Canvas;
+    color: CanvasText;
   }
-  main { display: flex; height: 100vh; }
+  main {
+    --window-background: color-mix(in srgb, CanvasText 3%, Canvas);
+    --window-surface: Canvas;
+    --card-surface: color-mix(in srgb, CanvasText 2%, Canvas);
+    --hover-surface: color-mix(in srgb, CanvasText 5%, Canvas);
+    --window-border: color-mix(in srgb, CanvasText 11%, transparent);
+    --strong-border: color-mix(in srgb, CanvasText 18%, transparent);
+    --muted-text: color-mix(in srgb, CanvasText 58%, transparent);
+    --standard-accent: #3479db;
+    display: flex;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--window-background);
+  }
+  @supports (color: AccentColor) { main { --standard-accent: AccentColor; } }
   aside {
-    width: 236px;
+    width: 264px;
     flex: none;
-    padding: 12px;
+    padding: 12px 10px 10px;
     display: flex;
     flex-direction: column;
     min-height: 0;
     box-sizing: border-box;
-    border-right: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+    border-right: 1px solid var(--window-border);
+    background: var(--window-surface);
   }
-  .runs { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -5px; padding: 0 5px; }
+  .sidebar-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 2px 4px 14px 2px;
+    scrollbar-gutter: stable;
+  }
+  .runs { min-width: 0; }
   .settings-entry {
     display: flex;
     align-items: center;
     gap: 7px;
     flex: none;
     width: 100%;
-    margin-top: 10px;
-    padding: 9px 6px 2px;
-    border: 0;
-    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    margin-top: 8px;
+    padding: 8px 9px;
+    border: 1px solid transparent;
+    border-radius: 9px;
     background: transparent;
-    color: inherit;
+    color: var(--muted-text);
     font: inherit;
     font-size: 12px;
     text-align: left;
     cursor: pointer;
-    opacity: 0.7;
   }
-  .settings-entry:hover, .settings-entry.active { opacity: 1; }
+  .settings-entry:hover { background: var(--hover-surface); color: CanvasText; }
+  .settings-entry.active {
+    border-color: var(--window-border);
+    background: var(--card-surface);
+    color: CanvasText;
+  }
   .settings-entry svg { width: 15px; height: 15px; }
   h2 {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 6px;
     font-size: 10px;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.075em;
     text-transform: uppercase;
-    opacity: 0.5;
-    margin: 14px 0 6px;
+    color: color-mix(in srgb, CanvasText 46%, transparent);
+    margin: 16px 4px 7px;
     flex: none;
   }
-  h2:first-child { margin-top: 0; }
-  /* A button inherits no font — say so explicitly. */
   .scope {
     margin-left: auto;
     font: inherit;
     font-size: 9px;
     letter-spacing: 0;
     text-transform: none;
-    padding: 1px 5px;
-    border-radius: 4px;
-    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-    background: transparent;
-    color: inherit;
+    padding: 3px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--window-border);
+    background: var(--card-surface);
+    color: var(--muted-text);
     cursor: pointer;
   }
-  .scope:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
-  .empty { font-size: 11px; opacity: 0.55; }
-  section { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .scope:hover { border-color: var(--strong-border); color: CanvasText; }
+  .empty { margin: 8px 5px; font-size: 11px; color: var(--muted-text); }
+  section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--window-background);
+  }
   header {
-    padding: 10px 12px;
-    border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    flex: none;
+    margin: 14px 16px 0;
+    padding: 14px;
+    border: 1px solid var(--window-border);
+    border-radius: 14px;
+    background: var(--window-surface);
+    box-shadow: 0 2px 6px color-mix(in srgb, CanvasText 4%, transparent);
   }
   textarea {
     width: 100%;
     box-sizing: border-box;
-    min-height: 52px;
+    min-height: 58px;
+    max-height: min(180px, 34vh);
     resize: vertical;
     font: inherit;
     font-size: 13px;
-    padding: 6px 8px;
-    border-radius: 6px;
-    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-    background: transparent;
+    line-height: 1.45;
+    padding: 8px 10px;
+    border-radius: 9px;
+    border: 1px solid var(--window-border);
+    background: var(--window-background);
     color: inherit;
   }
-  .ctx { display: block; margin-top: 6px; font-size: 11px; opacity: 0.8; }
+  textarea:hover { border-color: var(--strong-border); }
+  textarea:focus { outline: 2px solid color-mix(in srgb, var(--standard-accent) 30%, transparent); border-color: var(--standard-accent); }
+  .ctx { display: block; margin-top: 8px; font-size: 11px; color: var(--muted-text); }
   .will-run { margin: 0 0 8px; font-size: 12px; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
-  .will-run .lead { opacity: 0.5; flex: none; }
+  .will-run .lead { color: var(--muted-text); flex: none; }
   .will-run .name { font-weight: 600; flex: none; }
   .will-run .desc {
-    opacity: 0.55;
+    color: var(--muted-text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .addendum { display: block; margin-bottom: 4px; font-size: 11px; opacity: 0.55; }
+  .addendum { display: block; margin-bottom: 5px; font-size: 11px; color: var(--muted-text); }
   footer {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 12px;
-    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    flex: none;
+    min-height: 50px;
+    padding: 8px 16px;
+    border-top: 1px solid var(--window-border);
+    background: color-mix(in srgb, var(--window-surface) 88%, transparent);
   }
   footer button {
     margin-left: auto;
     font: inherit;
     font-size: 13px;
-    padding: 5px 16px;
-    border-radius: 6px;
-    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-    background: transparent;
+    padding: 7px 17px;
+    border-radius: 9px;
+    border: 1px solid var(--strong-border);
+    background: var(--window-surface);
     color: inherit;
     cursor: pointer;
   }
+  footer button:hover { background: var(--hover-surface); }
   footer button.primary {
-    background: color-mix(in srgb, currentColor 12%, transparent);
+    border-color: var(--standard-accent);
+    background: var(--standard-accent);
+    color: white;
     font-weight: 600;
   }
+  footer button.primary:hover { filter: brightness(1.06); }
   footer button:disabled { opacity: 0.45; cursor: default; }
   .err { color: #d9534f; font-size: 11px; }
-  .st, .turns { font-size: 11px; opacity: 0.7; }
+  .st, .turns { font-size: 11px; color: var(--muted-text); }
+  :is(button, textarea):focus-visible { outline: 2px solid var(--standard-accent); outline-offset: 2px; }
+  @media (max-width: 720px) {
+    aside { width: 224px; }
+    header { margin-inline: 12px; }
+  }
+  @media (max-height: 520px) {
+    header { margin-top: 10px; padding: 10px 12px; }
+    textarea { min-height: 44px; }
+    footer { min-height: 44px; }
+  }
 </style>
