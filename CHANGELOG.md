@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.902.5 — 2026-09-02
+
 ### Added
 
 - **Memory 2.2 can clear and rebuild all current memory from one guarded action.** Before anything changes, the plugin shows the exact number of confirmed claims and pending suggestions that will leave `USER.md`, `MEMORY.md` and Agent context. One confirmation removes those current views, safely resolves conflicting heads, resets inference to a full Vault scan, and keeps the owner identity, Memory protocol and immutable audit history.
