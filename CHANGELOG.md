@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.901.10 — 2026-09-02
+
 ### Fixed
 
 - **Ebook Import 1.3.2 no longer lets one legacy directory stop AI topic design.** Unsafe book directory paths, such as names ending in whitespace, are left out of the AI inventory while valid books continue through classification; the inventory protocol itself remains strict against handcrafted unsafe paths.
