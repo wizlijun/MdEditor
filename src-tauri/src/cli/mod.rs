@@ -23,10 +23,9 @@ use crate::app_dirs::BUNDLE_ID as APP_BUNDLE_ID;
 
 /// Whether a manifest produced by the CLI scan is active.
 ///
-/// Everything the scan yields is enabled by construction — the injected core
-/// stubs are always on, and v2 discovery only returns plugins that the runtime's
-/// `state.json` marks enabled — so the map is consulted purely as an explicit
-/// override and a missing entry means "on".
+/// Core stubs are always on; management-aware scans also include disabled
+/// plugins and record their state in the map. A missing entry means "on" for
+/// callers that pass an already-filtered runtime scan.
 pub fn is_enabled(
     m: &crate::plugin_host::PluginManifest,
     enabled: &std::collections::HashMap<String, bool>,
@@ -90,13 +89,44 @@ pub fn run_cli(argv: Vec<String>) -> ExitCode {
         router::Route::Builtin(b) => builtin::run(b, &parsed),
         router::Route::Plugin(p) => runner::run(p, parsed),
         router::Route::Disabled { plugin_id, subcommand } => {
-            eprintln!("notemd: command '{subcommand}' is provided by the '{plugin_id}' plugin, which is disabled.");
-            eprintln!("Enable it in Preferences → Plugins, or run:");
-            eprintln!("  notemd plugin enable {plugin_id}");
+            if parsed.globals.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": false,
+                        "error": {
+                            "code": "plugin_disabled",
+                            "message": format!("command '{subcommand}' is provided by the '{plugin_id}' plugin, which is disabled"),
+                            "plugin_id": plugin_id,
+                            "subcommand": subcommand,
+                            "hint": format!("notemd plugin enable {plugin_id}")
+                        }
+                    })
+                );
+            } else {
+                eprintln!("notemd: command '{subcommand}' is provided by the '{plugin_id}' plugin, which is disabled.");
+                eprintln!("Enable it in Preferences → Plugins, or run:");
+                eprintln!("  notemd plugin enable {plugin_id}");
+            }
             ExitCode::from(3)
         }
         router::Route::Unknown(name) => {
-            eprintln!("notemd: unknown command '{name}'. Run 'notemd help' to see available commands.");
+            if parsed.globals.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": false,
+                        "error": {
+                            "code": "unknown_command",
+                            "message": format!("unknown command '{name}'"),
+                            "command": name,
+                            "hint": "notemd help"
+                        }
+                    })
+                );
+            } else {
+                eprintln!("notemd: unknown command '{name}'. Run 'notemd help' to see available commands.");
+            }
             ExitCode::from(127)
         }
     }

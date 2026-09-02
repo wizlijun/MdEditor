@@ -7,7 +7,7 @@
  * Output contract (matches what plugin commands emit through CliRunner, and
  * the exit codes `notemd help` documents):
  * - success --json: { ok: true, data: { ... } }, exit 0
- * - failure --json: { ok: false, error: { code, message } } on stdout + stderr, exit 4
+ * - failure --json: { ok: false, error: { code, message } } on stdout, exit 4
  * - failure non-json: stderr only, exit 4
  * - exit 2 reserved for file/argument errors (missing arg, unreadable file)
  */
@@ -98,6 +98,7 @@ async function shareVaultDiagnostics(filePath: string): Promise<string[]> {
 export async function buildVirtualTab(
   file: string,
   finish: ShareCliDeps['finish'],
+  json = false,
 ): Promise<{ tab: Tab; extension: string | null; fileKind: FileKind } | null> {
   let fileContent = ''
   let fileMtime = 0
@@ -108,7 +109,12 @@ export async function buildVirtualTab(
       fileContent = await readTextFile(file)
     }
   } catch (e) {
-    await finish({ exit_code: 2, stderr: [`notemd: cannot read '${file}': ${e}`] })
+    const message = `cannot read '${file}': ${e}`
+    await finish({
+      exit_code: 2,
+      stdout: json ? JSON.stringify({ ok: false, error: { code: 'invalid_arguments', message } }) : undefined,
+      stderr: json ? [] : [`notemd: ${message}`],
+    })
     return null
   }
   const filename = basenameOf(file)
@@ -139,21 +145,29 @@ export async function runShareCli(payload: CliPayload, deps: ShareCliDeps): Prom
     ?? (async (text: string) => { await clipWriteText(text) })
   const diagnostics = deps.diagnostics ?? shareVaultDiagnostics
 
-  if (!payload.file) {
-    await finish({ exit_code: 2, stderr: ['notemd: missing file argument'] })
+  const fileArg = payload.args.file
+  if (typeof fileArg !== 'string' || !fileArg) {
+    const message = 'missing file argument'
+    await finish({
+      exit_code: 2,
+      stdout: payload.global.json
+        ? JSON.stringify({ ok: false, error: { code: 'invalid_arguments', message } })
+        : undefined,
+      stderr: payload.global.json ? [] : [`notemd: ${message}`],
+    })
     return
   }
-  const file = payload.file
+  const file = fileArg
 
-  /** Emit a share operation failure (exit 4). Writes JSON envelope to stdout
-   *  when --json; always writes human message to stderr. */
+  /** Emit a share operation failure (exit 4). JSON mode writes only the
+   *  machine-readable envelope; human mode writes diagnostics to stderr. */
   async function failShare(code: string, message: string, extraStderr: string[] = []): Promise<void> {
     const stderr = [`notemd: share failed: ${message}`, ...extraStderr]
     if (payload.global.json) {
       await finish({
         exit_code: 4,
         stdout: JSON.stringify({ ok: false, error: { code, message } }),
-        stderr,
+        stderr: [],
       })
     } else {
       await finish({ exit_code: 4, stderr })
@@ -166,7 +180,7 @@ export async function runShareCli(payload: CliPayload, deps: ShareCliDeps): Prom
       await finish({
         exit_code: 4,
         stdout: JSON.stringify({ ok: false, error: { code: 'not_configured', message: msg } }),
-        stderr: [`notemd: ${msg}`],
+        stderr: [],
       })
     } else {
       await finish({ exit_code: 4, stderr: [`notemd: ${msg}`] })
@@ -186,7 +200,9 @@ export async function runShareCli(payload: CliPayload, deps: ShareCliDeps): Prom
       if (slug) data.slug = slug
       await finish({
         exit_code: 0,
-        stdout: payload.global.json ? JSON.stringify({ ok: true, data }) : url,
+        stdout: payload.global.json
+          ? JSON.stringify({ ok: true, data })
+          : payload.global.quiet ? undefined : url,
         stderr: [],
       })
       return
@@ -209,7 +225,7 @@ export async function runShareCli(payload: CliPayload, deps: ShareCliDeps): Prom
         exit_code: 0,
         stdout: payload.global.json
           ? JSON.stringify({ ok: true, data })
-          : `unshared ${file}`,
+          : payload.global.quiet ? undefined : `unshared ${file}`,
         stderr: [],
       })
       return
@@ -218,7 +234,7 @@ export async function runShareCli(payload: CliPayload, deps: ShareCliDeps): Prom
     // 'publish' (default; --update maps here too).
     // stat/read the file BEFORE the config check: a nonexistent file must exit
     // 2 (file error, old contract) even when share is also unconfigured.
-    const built = await buildVirtualTab(file, finish)
+    const built = await buildVirtualTab(file, finish, payload.global.json)
     if (!built) return
     const { tab, fileKind } = built
 
@@ -290,7 +306,9 @@ export async function runShareCli(payload: CliPayload, deps: ShareCliDeps): Prom
     if (createdAt) data.created_at = createdAt
     await finish({
       exit_code: 0,
-      stdout: payload.global.json ? JSON.stringify({ ok: true, data }) : url,
+      stdout: payload.global.json
+        ? JSON.stringify({ ok: true, data })
+        : payload.global.quiet ? undefined : url,
       stderr: [],
     })
   } catch (e) {

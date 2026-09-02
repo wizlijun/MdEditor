@@ -43,7 +43,10 @@ fn cli_help_returns_quickly() {
     let home = std::env::temp_dir().join(format!(
         "notemd-timing-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
     ));
     std::fs::create_dir_all(&home).unwrap();
 
@@ -66,7 +69,11 @@ fn cli_help_returns_quickly() {
     let elapsed = start.elapsed();
 
     let _ = std::fs::remove_dir_all(&home);
-    assert!(output.status.success(), "help should exit 0, got {:?}", output.status);
+    assert!(
+        output.status.success(),
+        "help should exit 0, got {:?}",
+        output.status
+    );
     assert!(
         elapsed.as_millis() < BUDGET_MS,
         "notemd help took {} ms (budget {})",
@@ -97,7 +104,10 @@ fn search_meets_both_startup_budgets() {
     let home = std::env::temp_dir().join(format!(
         "notemd-search-timing-home-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
     ));
     std::fs::create_dir_all(&home).unwrap();
 
@@ -112,7 +122,12 @@ fn search_meets_both_startup_budgets() {
         cmd.env("HOME", &home);
         let t = Instant::now();
         let out = cmd.output().expect("spawn");
-        assert!(out.status.success(), "search {q:?} should exit 0, got {:?}: {}", out.status, String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "search {q:?} should exit 0, got {:?}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
         t.elapsed().as_millis()
     };
     // Warm up disk/dyld caches with a query that actually hits — "warmup" is
@@ -125,6 +140,12 @@ fn search_meets_both_startup_budgets() {
     let cjk = run("全文检索");
     let _ = std::fs::remove_dir_all(&vault);
     let _ = std::fs::remove_dir_all(&home);
-    assert!(ascii < SEARCH_ASCII_MS, "ascii search took {ascii} ms (budget {SEARCH_ASCII_MS})");
-    assert!(cjk < SEARCH_CJK_MS, "cjk search took {cjk} ms (budget {SEARCH_CJK_MS})");
+    assert!(
+        ascii < SEARCH_ASCII_MS,
+        "ascii search took {ascii} ms (budget {SEARCH_ASCII_MS})"
+    );
+    assert!(
+        cjk < SEARCH_CJK_MS,
+        "cjk search took {cjk} ms (budget {SEARCH_CJK_MS})"
+    );
 }

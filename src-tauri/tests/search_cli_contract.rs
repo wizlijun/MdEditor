@@ -112,6 +112,41 @@ fn exit_code_one_means_no_matches_not_an_error() {
 }
 
 #[test]
+fn malformed_search_options_fail_before_touching_the_vault() {
+    let v = vault(&[("a.md", "brownfox\n")]);
+    for args in [
+        vec!["brownfox", "--limt", "2", "--json"],
+        vec!["brownfox", "--limit", "many", "--json"],
+        vec!["brownfox", "--all", "--limit", "2", "--json"],
+    ] {
+        let out = search(v.path(), &args);
+        assert_eq!(out.status.code(), Some(2), "args={args:?}");
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|error| panic!("args={args:?}: {error}"));
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "invalid_arguments");
+    }
+}
+
+#[test]
+fn double_dash_allows_a_query_that_looks_like_a_global_flag() {
+    let v = vault(&[("a.md", "literal --json token\n")]);
+    let home = temp_home();
+    let mut cmd = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_notemd")));
+    cmd.arg("--cli")
+        .arg("search")
+        .arg("--vault")
+        .arg(v.path())
+        .arg("--")
+        .arg("--json");
+    isolate(&mut cmd, &home);
+    let out = cmd.output().expect("spawn");
+    let _ = std::fs::remove_dir_all(&home);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("a.md:1:"));
+}
+
+#[test]
 fn json_output_carries_the_full_contract() {
     let v = vault(&[("2026-01-01-a.md", "brownfox\n")]);
     let out = search(v.path(), &["brownfox", "--json"]);

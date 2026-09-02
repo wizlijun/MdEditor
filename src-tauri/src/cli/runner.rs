@@ -5,8 +5,11 @@ use crate::cli::args::Parsed;
 use crate::cli::router::PluginRoute;
 use crate::cli::state::{CliPayload, CliState, GlobalFlags};
 use crate::plugin_host::PluginManifest;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::sync::oneshot;
 
 pub fn run(p: PluginRoute, parsed: Parsed) -> ExitCode {
@@ -14,9 +17,13 @@ pub fn run(p: PluginRoute, parsed: Parsed) -> ExitCode {
     let manifest = match manifests.iter().find(|(m, _)| m.id == p.plugin_id) {
         Some((m, _)) => m.clone(),
         None => {
-            eprintln!(
-                "notemd: internal: plugin '{}' vanished between routing and execution",
-                p.plugin_id
+            emit_cli_error(
+                parsed.globals.json,
+                "internal_error",
+                &format!(
+                    "plugin '{}' vanished between routing and execution",
+                    p.plugin_id
+                ),
             );
             return ExitCode::from(1);
         }
@@ -24,63 +31,79 @@ pub fn run(p: PluginRoute, parsed: Parsed) -> ExitCode {
     let cli_entry = match manifest.cli.iter().find(|c| c.subcommand == p.subcommand) {
         Some(e) => e.clone(),
         None => {
-            eprintln!(
-                "notemd: internal: subcommand '{}' missing in '{}'",
-                p.subcommand, p.plugin_id
+            emit_cli_error(
+                parsed.globals.json,
+                "internal_error",
+                &format!("subcommand '{}' missing in '{}'", p.subcommand, p.plugin_id),
             );
             return ExitCode::from(1);
         }
     };
 
     // Parse remaining argv against the cli entry's spec.
-    let (file, flags) = match parse_subcommand_args(&p.remaining, &cli_entry) {
+    let (mut args, flags) = match parse_subcommand_args(&p.remaining, &cli_entry) {
         Ok(v) => v,
         Err(msg) => {
-            eprintln!("{msg}");
+            emit_cli_error(parsed.globals.json, "invalid_arguments", &msg);
             return ExitCode::from(2);
         }
-    };
-
-    // Resolve file to absolute, verify it exists.
-    let absfile = if let Some(f) = file {
-        match std::path::Path::new(&f).canonicalize() {
-            Ok(p) => Some(p.to_string_lossy().into_owned()),
-            Err(_) => {
-                eprintln!("notemd: cannot read '{f}': No such file or directory");
-                return ExitCode::from(2);
-            }
-        }
-    } else {
-        None
     };
 
     // Decide plugin_command via flags (--unshare/--copy-link/--update).
     let plugin_command = match decide_plugin_command(&flags, &cli_entry.command) {
         Ok(s) => s,
         Err(msg) => {
-            eprintln!("{msg}");
+            emit_cli_error(parsed.globals.json, "invalid_arguments", &msg);
             return ExitCode::from(2);
         }
     };
 
+    // Resolve only arguments declared as `path`; ordinary strings such as an
+    // agent task id must remain byte-for-byte unchanged. Share's record-only
+    // operations intentionally accept a deleted source path.
+    let allow_missing_paths =
+        p.plugin_id == "share" && matches!(plugin_command.as_str(), "copy-link" | "unpublish");
+    if let Err(msg) = resolve_path_args(&mut args, &cli_entry, allow_missing_paths) {
+        emit_cli_error(parsed.globals.json, "invalid_arguments", &msg);
+        return ExitCode::from(2);
+    }
+
+    let timeout = watchdog_timeout(&manifest, &flags);
     let payload = CliPayload {
         subcommand: p.subcommand.clone(),
         plugin_id: p.plugin_id.clone(),
         plugin_command,
-        file: absfile,
+        args,
         flags,
         global: GlobalFlags {
             json: parsed.globals.json,
             quiet: parsed.globals.quiet,
             clipboard: parsed.globals.clipboard,
-            yes: parsed.globals.yes,
         },
     };
     let (tx, rx) = oneshot::channel();
     let state = CliState::new(payload, tx);
 
-    let exit_code = launch_tauri_headless(state, rx);
+    let exit_code = launch_tauri_headless(state, rx, timeout, parsed.globals.json);
     ExitCode::from(exit_code as u8)
+}
+
+fn emit_cli_error(json: bool, code: &str, message: &str) {
+    let message = message.strip_prefix("notemd: ").unwrap_or(message);
+    if json {
+        println!("{}", cli_error_value(code, message));
+        let _ = std::io::stdout().flush();
+    } else {
+        eprintln!("notemd: {message}");
+        let _ = std::io::stderr().flush();
+    }
+}
+
+fn cli_error_value(code: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "error": { "code": code, "message": message },
+    })
 }
 
 fn current_scan() -> (
@@ -110,20 +133,25 @@ pub(crate) fn append_v2_manifests(
     manifests: &mut Vec<(PluginManifest, PathBuf)>,
     enabled: &mut std::collections::HashMap<String, bool>,
 ) {
-    let Some(root) = v2_plugins_root() else { return };
+    let Some(root) = v2_plugins_root() else {
+        return;
+    };
     let host_version = env!("CARGO_PKG_VERSION");
-    for (id, (m, install_dir)) in crate::plugin_runtime::discovery::scan_root(&root, host_version) {
+    for entry in crate::plugin_runtime::discovery::scan_root_inventory(&root, host_version) {
+        if !entry.enabled {
+            continue;
+        }
+        let Ok(m) = entry.manifest else {
+            continue;
+        };
+        let id = entry.id;
+        let install_dir = entry.current_dir;
         if manifests.iter().any(|(existing, _)| existing.id == id) {
             continue;
         }
-        match crate::plugin_runtime::adapter::to_v1(&m) {
-            Ok(v1) => {
-                enabled.insert(id, true);
-                manifests.push((v1, install_dir));
-            }
-            Err(e) => {
-                eprintln!("[plugin_runtime] {id}: contributes could not be adapted: {e}");
-            }
+        if let Ok(v1) = crate::plugin_runtime::adapter::to_v1(&m) {
+            enabled.insert(id, true);
+            manifests.push((v1, install_dir));
         }
     }
 }
@@ -156,7 +184,7 @@ pub fn core_cli_stub_manifests() -> Vec<PluginManifest> {
             "flags": [
                 { "long": "--vault", "type": "string", "help": "Vault root (defaults to the configured Vault)" },
                 { "long": "--date", "type": "string", "help": "today | yesterday (default) | 7d | 30d | month" },
-                { "long": "--from", "type": "string", "help": "YYYY-MM-DD (with --to, overrides --date)" },
+                { "long": "--from", "type": "string", "help": "YYYY-MM-DD (requires --to; cannot be combined with --date)" },
                 { "long": "--to", "type": "string", "help": "YYYY-MM-DD" },
                 { "long": "--stdout", "type": "boolean", "help": "Print to stdout instead of writing <vault>/stat/*.md" }
             ]
@@ -192,54 +220,147 @@ pub(crate) fn append_core_cli_stubs(
 fn parse_subcommand_args(
     remaining: &[String],
     entry: &crate::plugin_host::CliEntry,
-) -> Result<(Option<String>, serde_json::Map<String, serde_json::Value>), String> {
+) -> Result<
+    (
+        serde_json::Map<String, serde_json::Value>,
+        serde_json::Map<String, serde_json::Value>,
+    ),
+    String,
+> {
+    let mut args = serde_json::Map::new();
     let mut flags = serde_json::Map::new();
-    let mut file: Option<String> = None;
+    let mut positional_index = 0;
+    let mut positional_only = false;
     let mut i = 0;
     while i < remaining.len() {
         let tok = &remaining[i];
-        if let Some(flag) = entry
-            .flags
-            .iter()
-            .find(|f| f.long == *tok || f.short.as_deref() == Some(tok.as_str()))
-        {
+        if !positional_only && tok == "--" {
+            positional_only = true;
+        } else if let Some(flag) = if positional_only {
+            None
+        } else {
+            entry
+                .flags
+                .iter()
+                .find(|f| f.long == *tok || f.short.as_deref() == Some(tok.as_str()))
+        } {
+            let key = flag.long.trim_start_matches('-').to_string();
+            if flags.contains_key(&key) {
+                return Err(format!("notemd: flag {} may only be specified once", flag.long));
+            }
             match flag.ty.as_str() {
                 "boolean" => {
-                    flags.insert(
-                        flag.long.trim_start_matches('-').to_string(),
-                        serde_json::Value::Bool(true),
-                    );
+                    flags.insert(key, serde_json::Value::Bool(true));
                 }
                 "string" => {
                     if i + 1 >= remaining.len() {
                         return Err(format!("notemd: flag {} requires a value", flag.long));
                     }
-                    flags.insert(
-                        flag.long.trim_start_matches('-').to_string(),
-                        serde_json::Value::String(remaining[i + 1].clone()),
-                    );
+                    if remaining[i + 1].starts_with('-') {
+                        return Err(format!(
+                            "notemd: flag {} requires a value before '{}'",
+                            flag.long, remaining[i + 1]
+                        ));
+                    }
+                    flags.insert(key, serde_json::Value::String(remaining[i + 1].clone()));
                     i += 1;
                 }
                 _ => return Err(format!("notemd: internal: unknown flag type '{}'", flag.ty)),
             }
-        } else if tok.starts_with('-') {
+        } else if !positional_only && tok.starts_with('-') {
             return Err(format!("notemd: unknown flag '{tok}'"));
-        } else if file.is_none() && !entry.args.is_empty() {
-            file = Some(tok.clone());
         } else {
-            return Err(format!("notemd: unexpected argument '{tok}'"));
+            let spec = entry
+                .args
+                .get(positional_index)
+                .ok_or_else(|| format!("notemd: unexpected argument '{tok}'"))?;
+            let value = match spec.ty.as_str() {
+                "path" | "string" => serde_json::Value::String(tok.clone()),
+                "integer" => {
+                    let parsed = tok.parse::<i64>().map_err(|_| {
+                        format!("notemd: argument <{}> must be an integer", spec.name)
+                    })?;
+                    serde_json::Value::Number(parsed.into())
+                }
+                other => {
+                    return Err(format!(
+                        "notemd: internal: unknown argument type '{other}' for <{}>",
+                        spec.name
+                    ));
+                }
+            };
+            args.insert(spec.name.clone(), value);
+            positional_index += 1;
         }
         i += 1;
     }
-    if let Some(first_required) = entry.args.iter().find(|a| a.required) {
-        if file.is_none() {
+    for required in entry.args.iter().filter(|a| a.required) {
+        if !args.contains_key(&required.name) {
             return Err(format!(
                 "notemd: missing required argument '<{}>'",
-                first_required.name
+                required.name
             ));
         }
     }
-    Ok((file, flags))
+    Ok((args, flags))
+}
+
+fn resolve_path_args(
+    args: &mut serde_json::Map<String, serde_json::Value>,
+    entry: &crate::plugin_host::CliEntry,
+    allow_missing: bool,
+) -> Result<(), String> {
+    for spec in entry.args.iter().filter(|a| a.ty == "path") {
+        let Some(raw) = args.get(&spec.name).and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let resolved = if allow_missing {
+            absolute_path_without_requiring_target(Path::new(raw))
+                .map_err(|e| format!("notemd: cannot resolve '{raw}': {e}"))?
+        } else {
+            Path::new(raw)
+                .canonicalize()
+                .map_err(|_| format!("notemd: cannot read '{raw}': No such file or directory"))?
+        };
+        args.insert(
+            spec.name.clone(),
+            serde_json::Value::String(resolved.to_string_lossy().into_owned()),
+        );
+    }
+    Ok(())
+}
+
+/// Return a stable absolute spelling without requiring the final path to
+/// exist. Canonicalising the parent when possible keeps share-record keys
+/// consistent with the normal publish path (including symlinked parents).
+fn absolute_path_without_requiring_target(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let Some(name) = absolute.file_name() else {
+        return Ok(absolute);
+    };
+    match absolute.parent().and_then(|p| p.canonicalize().ok()) {
+        Some(parent) => Ok(parent.join(name)),
+        None => Ok(absolute),
+    }
+}
+
+/// The hidden WebView must never keep a shell command alive forever. Normal
+/// commands get the manifest timeout plus startup/IPC headroom; explicit
+/// long-running `--wait` agent commands get the documented 300 seconds plus
+/// startup/IPC headroom.
+fn watchdog_timeout(
+    manifest: &PluginManifest,
+    flags: &serde_json::Map<String, serde_json::Value>,
+) -> Duration {
+    if flags.get("wait").and_then(|v| v.as_bool()) == Some(true) {
+        Duration::from_secs(330)
+    } else {
+        Duration::from_secs(manifest.timeout_seconds.clamp(30, 300) + 30)
+    }
 }
 
 /// Mutually-exclusive flag fan-out: --update, --copy-link, --unshare map to
@@ -271,13 +392,34 @@ fn decide_plugin_command(
 fn launch_tauri_headless(
     state: CliState,
     rx: oneshot::Receiver<crate::cli::state::CliResult>,
+    watchdog_after: Duration,
+    json: bool,
 ) -> i32 {
     let result_arc = std::sync::Arc::new(std::sync::Mutex::new(None::<i32>));
     let result_arc_clone = result_arc.clone();
 
+    // Start the guard before Tauri is built: a WebView/runtime startup hang is
+    // exactly as harmful to a shell caller as a command that never finishes.
+    let finished = std::sync::Arc::new(AtomicBool::new(false));
+    let watchdog_finished = finished.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(watchdog_after);
+        if !watchdog_finished.load(Ordering::Acquire) {
+            emit_cli_error(
+                json,
+                "timeout",
+                &format!(
+                    "CLI command timed out after {} seconds",
+                    watchdog_after.as_secs()
+                ),
+            );
+            std::process::exit(1);
+        }
+    });
+
     let init_script = "window.__M_CLI_MODE__ = true;";
 
-    let app = tauri::Builder::default()
+    let app = match tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -285,10 +427,10 @@ fn launch_tauri_headless(
             crate::cli::state::cli_payload,
             crate::cli::state::cli_finish,
             // get_plugin_manifests serves the adapted v2 manifests from
-            // plugin_runtime::STATE (populated by plugin_runtime::init below);
+            // plugin_runtime::STATE (populated by init_for_cli below);
             // CliRunner executes the matched command via plugin_v2_execute.
             crate::plugin_host::get_plugin_manifests,
-            crate::plugin_runtime::commands::plugin_v2_execute,
+            crate::plugin_runtime::commands::plugin_v2_execute_cli,
             crate::themes::commands::theme_load_compiled,
             // sotvault: needed by `notemd share` — refreshSotvault + prepareShareSrc
             // resolve the vault root, and an outside-vault file is homed in first
@@ -303,12 +445,7 @@ fn launch_tauri_headless(
             // Populate plugin_runtime::STATE so get_plugin_manifests /
             // plugin_v2_execute see the plugins the Rust-side scan
             // (append_v2_manifests) routed here.
-            // NOTE: startup_activate_all (called inside plugin_runtime::init)
-            // will spawn `*`/onStartupFinished plugins on every CLI invocation;
-            // they die when the headless host exits via stdin EOF. This is
-            // acceptable for ①期. Revisit if a startup plugin lands before ③期
-            // — a persistent daemon would be the right host model then.
-            crate::plugin_runtime::init(&app.handle());
+            crate::plugin_runtime::init_for_cli(&app.handle());
             let _ = tauri::WebviewWindowBuilder::new(
                 app,
                 "cli",
@@ -322,7 +459,14 @@ fn launch_tauri_headless(
         })
         .manage(state)
         .build(crate::tauri_context())
-        .expect("tauri build failed in cli mode");
+    {
+        Ok(app) => app,
+        Err(error) => {
+            finished.store(true, Ordering::Release);
+            emit_cli_error(json, "startup_failed", &format!("CLI runtime failed to start: {error}"));
+            return 1;
+        }
+    };
 
     tauri::async_runtime::spawn(async move {
         if let Ok(res) = rx.await {
@@ -331,6 +475,7 @@ fn launch_tauri_headless(
     });
 
     app.run(|_app, _event| {});
+    finished.store(true, Ordering::Release);
 
     let code = result_arc.lock().unwrap().unwrap_or(1);
     code
@@ -383,18 +528,79 @@ mod tests {
 
     #[test]
     fn parse_just_file_succeeds() {
-        let (file, flags) =
+        let (args, flags) =
             parse_subcommand_args(&s(&["draft.md"]), &entry_with_file_and_flags()).unwrap();
-        assert_eq!(file.as_deref(), Some("draft.md"));
+        assert_eq!(args.get("file").and_then(|v| v.as_str()), Some("draft.md"));
         assert!(flags.is_empty());
     }
     #[test]
     fn parse_file_with_flag() {
-        let (file, flags) =
+        let (args, flags) =
             parse_subcommand_args(&s(&["draft.md", "--update"]), &entry_with_file_and_flags())
                 .unwrap();
-        assert_eq!(file.as_deref(), Some("draft.md"));
+        assert_eq!(args.get("file").and_then(|v| v.as_str()), Some("draft.md"));
         assert_eq!(flags.get("update").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn parse_preserves_all_declared_names_and_types() {
+        let entry = CliEntry {
+            subcommand: "run".into(),
+            aliases: vec![],
+            command: "run".into(),
+            summary: "s".into(),
+            args: vec![
+                CliArg {
+                    name: "task".into(),
+                    ty: "string".into(),
+                    required: true,
+                    help: None,
+                },
+                CliArg {
+                    name: "count".into(),
+                    ty: "integer".into(),
+                    required: true,
+                    help: None,
+                },
+                CliArg {
+                    name: "source".into(),
+                    ty: "path".into(),
+                    required: false,
+                    help: None,
+                },
+            ],
+            flags: vec![],
+            requires_tab_context: false,
+        };
+        let (args, _) =
+            parse_subcommand_args(&s(&["selfcheck", "3", "notes/a.md"]), &entry).unwrap();
+        assert_eq!(args.get("task").and_then(|v| v.as_str()), Some("selfcheck"));
+        assert_eq!(args.get("count").and_then(|v| v.as_i64()), Some(3));
+        assert_eq!(
+            args.get("source").and_then(|v| v.as_str()),
+            Some("notes/a.md")
+        );
+    }
+
+    #[test]
+    fn parse_double_dash_allows_dash_prefixed_string() {
+        let mut entry = entry_with_file_and_flags();
+        entry.args[0].ty = "string".into();
+        entry.args[0].name = "task".into();
+        let (args, _) = parse_subcommand_args(&s(&["--", "--selfcheck"]), &entry).unwrap();
+        assert_eq!(
+            args.get("task").and_then(|v| v.as_str()),
+            Some("--selfcheck")
+        );
+    }
+
+    #[test]
+    fn parse_rejects_invalid_integer() {
+        let mut entry = entry_with_file_and_flags();
+        entry.args[0].ty = "integer".into();
+        entry.args[0].name = "count".into();
+        let err = parse_subcommand_args(&s(&["many"]), &entry).unwrap_err();
+        assert!(err.contains("must be an integer"));
     }
     #[test]
     fn parse_missing_required_arg() {
@@ -407,6 +613,77 @@ mod tests {
         let r = parse_subcommand_args(&s(&["draft.md", "--bogus"]), &entry_with_file_and_flags());
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("unknown flag"));
+    }
+
+    #[test]
+    fn parse_rejects_duplicate_flags_and_a_flag_used_as_a_string_value() {
+        let mut entry = entry_with_file_and_flags();
+        entry.flags.push(CliFlag {
+            long: "--output".into(),
+            short: Some("-o".into()),
+            ty: "string".into(),
+            help: None,
+        });
+        let duplicate = parse_subcommand_args(
+            &s(&["draft.md", "--output", "a", "-o", "b"]),
+            &entry,
+        )
+        .unwrap_err();
+        assert!(duplicate.contains("may only be specified once"));
+
+        let missing = parse_subcommand_args(
+            &s(&["draft.md", "--output", "--update"]),
+            &entry,
+        )
+        .unwrap_err();
+        assert!(missing.contains("requires a value"));
+    }
+
+    #[test]
+    fn allow_missing_path_makes_deleted_share_target_absolute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("deleted.md");
+        let mut args = serde_json::Map::from_iter([(
+            "file".into(),
+            serde_json::Value::String(missing.to_string_lossy().into_owned()),
+        )]);
+        resolve_path_args(&mut args, &entry_with_file_and_flags(), true).unwrap();
+        let expected = tmp.path().canonicalize().unwrap().join("deleted.md");
+        assert_eq!(
+            args["file"].as_str(),
+            Some(expected.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn normal_path_resolution_still_rejects_missing_input() {
+        let mut args = serde_json::Map::from_iter([(
+            "file".into(),
+            serde_json::Value::String("definitely-missing-notemd-file.md".into()),
+        )]);
+        let err = resolve_path_args(&mut args, &entry_with_file_and_flags(), false).unwrap_err();
+        assert!(err.contains("cannot read"));
+    }
+
+    #[test]
+    fn watchdog_is_bounded_and_wait_gets_long_window() {
+        let manifest = core_cli_stub_manifests().remove(0);
+        assert_eq!(
+            watchdog_timeout(&manifest, &serde_json::Map::new()),
+            Duration::from_secs(60)
+        );
+        let flags = serde_json::Map::from_iter([("wait".into(), serde_json::Value::Bool(true))]);
+        assert_eq!(
+            watchdog_timeout(&manifest, &flags),
+            Duration::from_secs(330)
+        );
+    }
+
+    #[test]
+    fn json_cli_error_is_a_stable_envelope() {
+        let value = cli_error_value("invalid_arguments", "bad");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "invalid_arguments");
     }
 
     #[test]
@@ -463,7 +740,8 @@ mod tests {
             .expect("root package.json must be readable from src-tauri/");
         let v: serde_json::Value =
             serde_json::from_slice(&bytes).expect("root package.json must be valid JSON");
-        let pkg_version = v.get("version")
+        let pkg_version = v
+            .get("version")
             .and_then(|v| v.as_str())
             .expect("package.json must have a string 'version' field");
         assert_eq!(

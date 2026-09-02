@@ -1,7 +1,7 @@
 //! Routing: argv → Route. Step order matches spec §3 exactly.
 
-use crate::plugin_host::PluginManifest;
 use super::args::Parsed;
+use crate::plugin_host::PluginManifest;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -9,21 +9,24 @@ use std::path::PathBuf;
 pub enum Route {
     Builtin(Builtin),
     Plugin(PluginRoute),
-    /// A subcommand whose owning plugin the scan reported as disabled.
-    ///
-    /// **Production cannot currently reach this**: `current_scan` only ever
-    /// inserts `true` (core stubs are always on, and discovery drops plugins
-    /// whose `state.json` entry is disabled — they arrive absent, not disabled).
-    /// The arm is kept because `resolve_with` is a pure function over a caller-
-    /// supplied enabled map, and honoring an explicit `false` is the behavior a
-    /// future "list installed-but-disabled plugins" scan would want.
-    Disabled { plugin_id: String, subcommand: String },
+    /// A subcommand whose owning plugin is installed but disabled.
+    Disabled {
+        plugin_id: String,
+        subcommand: String,
+    },
     Unknown(String),
 }
 
 #[derive(Debug)]
 pub enum Builtin {
-    Help { topic: Option<String>, all: bool },
+    /// A recognized built-in command with an invalid argv shape. Keeping this
+    /// distinct from `Unknown` gives scripts the documented exit code 2 rather
+    /// than 127 and, critically, prevents destructive fallback behavior.
+    ArgumentError(String),
+    Help {
+        topic: Option<String>,
+        all: bool,
+    },
     Version,
     PluginList,
     PluginEnable(String),
@@ -75,6 +78,9 @@ pub struct PluginRoute {
 
 /// Resolves against the live filesystem.
 pub fn resolve(parsed: &Parsed) -> Route {
+    if !parsed.errors.is_empty() {
+        return argument_error(parsed.errors.join("; "));
+    }
     let (manifests, enabled) = current_scan();
     let route = resolve_with(&parsed.rest, &manifests, &enabled);
     // Nothing matched a command → the tokens may still name files/directories
@@ -96,81 +102,104 @@ pub fn resolve_with(
 ) -> Route {
     let first = match rest.first() {
         Some(s) => s.clone(),
-        None => return Route::Builtin(Builtin::Help { topic: None, all: false }),
+        None => {
+            return Route::Builtin(Builtin::Help {
+                topic: None,
+                all: false,
+            })
+        }
     };
 
     if matches!(first.as_str(), "help" | "-h" | "--help") {
         let mut topic: Option<String> = None;
         let mut all = false;
         for a in rest.iter().skip(1) {
-            if a == "--all" { all = true; }
-            else if topic.is_none() { topic = Some(a.clone()); }
+            let known_alias = matches!(a.as_str(), "-h" | "--help" | "-v" | "--version" | "--share")
+                || manifests.iter().any(|(manifest, _)| {
+                    manifest.cli.iter().any(|entry| entry.aliases.iter().any(|alias| alias == a))
+                });
+            if a == "--all" && !all {
+                all = true;
+            } else if a == "--all" {
+                return argument_error("--all may only be specified once");
+            } else if a.starts_with('-') && !known_alias {
+                return argument_error(format!("unknown flag '{a}' for help"));
+            } else if topic.is_none() {
+                topic = Some(a.clone());
+            } else {
+                return argument_error("help accepts at most one command topic");
+            }
         }
         return Route::Builtin(Builtin::Help { topic, all });
     }
 
     if matches!(first.as_str(), "version" | "-v" | "--version") {
-        return Route::Builtin(Builtin::Version);
+        return if rest.len() == 1 {
+            Route::Builtin(Builtin::Version)
+        } else {
+            argument_error("version does not accept arguments")
+        };
     }
 
     // Core, never disabled: an agent's search must not depend on plugin state.
     if first == "search" {
-        return Route::Builtin(Builtin::Search(super::search::parse_args(&rest[1..], false)));
+        return Route::Builtin(Builtin::Search(super::search::parse_args(
+            &rest[1..],
+            false,
+        )));
     }
 
     // Core, never disabled: a broken plugin state is exactly when doctor is
     // needed most, so it must not be routable through plugin matching.
     if first == "doctor" {
-        return Route::Builtin(Builtin::Doctor(super::doctor::parse_args(&rest[1..], false)));
+        return Route::Builtin(Builtin::Doctor(super::doctor::parse_args(
+            &rest[1..],
+            false,
+        )));
     }
 
     // Core, never disabled: an agent's retrieval path must not depend on
     // plugin state — same reasoning as `search`/`doctor` above.
     if first == "mcp" {
-        return Route::Builtin(Builtin::Mcp);
+        return if rest.len() == 1 {
+            Route::Builtin(Builtin::Mcp)
+        } else {
+            argument_error("mcp does not accept arguments")
+        };
     }
 
     // Core, never disabled: Agents must always be able to inspect and propose
     // memory changes even when the optional review window is disabled.
     if first == "memory" {
-        return Route::Builtin(Builtin::Memory(super::memory::parse_args(&rest[1..], false)));
+        return Route::Builtin(Builtin::Memory(super::memory::parse_args(
+            &rest[1..],
+            false,
+        )));
     }
 
     if first == "plugin" {
         return match rest.get(1).map(|s| s.as_str()) {
-            Some("list") => Route::Builtin(Builtin::PluginList),
-            Some("enable") => match rest.get(2) {
-                Some(id) => Route::Builtin(Builtin::PluginEnable(id.clone())),
-                None => Route::Unknown("plugin enable (missing id)".to_string()),
-            },
-            Some("disable") => match rest.get(2) {
-                Some(id) => Route::Builtin(Builtin::PluginDisable(id.clone())),
-                None => Route::Unknown("plugin disable (missing id)".to_string()),
-            },
-            Some("info") => match rest.get(2) {
-                Some(id) => Route::Builtin(Builtin::PluginInfo(id.clone())),
-                None => Route::Unknown("plugin info (missing id)".to_string()),
-            },
-            Some("install") => match rest.get(2) {
-                Some(spec) => {
-                    let (id, version) = split_id_version(spec);
+            Some("list") => no_plugin_tail("list", &rest[2..], Builtin::PluginList),
+            Some("enable") => one_plugin_id("enable", &rest[2..], Builtin::PluginEnable),
+            Some("disable") => one_plugin_id("disable", &rest[2..], Builtin::PluginDisable),
+            Some("info") => one_plugin_id("info", &rest[2..], Builtin::PluginInfo),
+            Some("install") => match strict_optional_id("install", &rest[2..], true) {
+                Ok(Some(spec)) => {
+                    let (id, version) = split_id_version(&spec);
                     Route::Builtin(Builtin::PluginInstall(id, version))
                 }
-                None => Route::Unknown("plugin install (missing id)".to_string()),
+                Ok(None) => argument_error("plugin install requires <id>[@version]"),
+                Err(e) => argument_error(e),
             },
             Some("update") | Some("upgrade") => {
-                // Optional id positional; ignore trailing flags for now.
-                let id = rest.iter().skip(2).find(|a| !a.starts_with('-')).cloned();
-                Route::Builtin(Builtin::PluginUpdate(id))
-            }
-            Some("remove") | Some("uninstall") => {
-                let keep_data = rest.iter().any(|a| a == "--keep-data");
-                match rest.iter().skip(2).find(|a| !a.starts_with('-')) {
-                    Some(id) => Route::Builtin(Builtin::PluginRemove(id.clone(), keep_data)),
-                    None => Route::Unknown("plugin remove (missing id)".to_string()),
+                match strict_optional_id("update", &rest[2..], false) {
+                    Ok(id) => Route::Builtin(Builtin::PluginUpdate(id)),
+                    Err(e) => argument_error(e),
                 }
             }
-            _ => Route::Unknown(format!("plugin {}", rest.get(1).cloned().unwrap_or_default())),
+            Some("remove") | Some("uninstall") => parse_plugin_remove(&rest[2..]),
+            Some(other) => argument_error(format!("unknown plugin subcommand '{other}'")),
+            None => argument_error("plugin requires a subcommand"),
         };
     }
 
@@ -183,7 +212,11 @@ pub fn resolve_with(
             Some("report") => 2,
             Some(s) if s.starts_with('-') => 1, // flags → implicit `report`
             None => 1,
-            Some(other) => return Route::Unknown(format!("reading-insights {}", other)),
+            Some(other) => {
+                return argument_error(format!(
+                    "unknown reading-insights subcommand '{other}'"
+                ));
+            }
         };
         let remaining: Vec<String> = rest.iter().skip(skip).cloned().collect();
         return Route::Plugin(PluginRoute {
@@ -203,7 +236,10 @@ pub fn resolve_with(
                     remaining: rest.iter().skip(1).cloned().collect(),
                 })
             } else {
-                Route::Disabled { plugin_id, subcommand }
+                Route::Disabled {
+                    plugin_id,
+                    subcommand,
+                }
             }
         }
         None => Route::Unknown(first),
@@ -226,20 +262,224 @@ fn match_against_manifests(
     None
 }
 
+fn argument_error(message: impl Into<String>) -> Route {
+    Route::Builtin(Builtin::ArgumentError(message.into()))
+}
+
+fn no_plugin_tail(action: &str, tail: &[String], builtin: Builtin) -> Route {
+    if tail.is_empty() {
+        Route::Builtin(builtin)
+    } else {
+        argument_error(format!(
+            "plugin {action} does not accept arguments: {}",
+            tail.join(" ")
+        ))
+    }
+}
+
+fn one_plugin_id(action: &str, tail: &[String], make: fn(String) -> Builtin) -> Route {
+    match strict_optional_id(action, tail, true) {
+        Ok(Some(id)) => Route::Builtin(make(id)),
+        Ok(None) => argument_error(format!("plugin {action} requires <plugin-id>")),
+        Err(e) => argument_error(e),
+    }
+}
+
+fn strict_optional_id(
+    action: &str,
+    tail: &[String],
+    required: bool,
+) -> Result<Option<String>, String> {
+    match tail {
+        [] if required => Ok(None),
+        [] => Ok(None),
+        [id] if !id.starts_with('-') => Ok(Some(id.clone())),
+        [flag] if flag.starts_with('-') => {
+            Err(format!("unknown flag '{flag}' for plugin {action}"))
+        }
+        _ => Err(format!("plugin {action} accepts at most one plugin id")),
+    }
+}
+
+fn parse_plugin_remove(tail: &[String]) -> Route {
+    let mut id: Option<String> = None;
+    let mut keep_data = false;
+    for token in tail {
+        match token.as_str() {
+            "--keep-data" if !keep_data => keep_data = true,
+            "--keep-data" => return argument_error("--keep-data may only be specified once"),
+            flag if flag.starts_with('-') => {
+                return argument_error(format!("unknown flag '{flag}' for plugin remove"));
+            }
+            value if id.is_none() => id = Some(value.to_string()),
+            _ => return argument_error("plugin remove accepts exactly one plugin id"),
+        }
+    }
+    match id {
+        Some(id) => Route::Builtin(Builtin::PluginRemove(id, keep_data)),
+        None => argument_error("plugin remove requires <plugin-id>"),
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CliInventoryIssue {
+    pub id: String,
+    pub version: String,
+    pub enabled: bool,
+    pub error: String,
+}
+
+/// Append every valid installed plugin, including disabled ones. Invalid
+/// installations are returned as diagnostics so management commands can show
+/// them instead of pretending they are not installed.
+pub(crate) fn append_installed_cli_manifests(
+    manifests: &mut Vec<(PluginManifest, PathBuf)>,
+    enabled: &mut HashMap<String, bool>,
+) -> Vec<CliInventoryIssue> {
+    let Some(root) = super::runner::v2_plugins_root() else {
+        return Vec::new();
+    };
+    append_installed_cli_manifests_at(&root, manifests, enabled)
+}
+
+fn append_installed_cli_manifests_at(
+    root: &std::path::Path,
+    manifests: &mut Vec<(PluginManifest, PathBuf)>,
+    enabled: &mut HashMap<String, bool>,
+) -> Vec<CliInventoryIssue> {
+    let mut issues = Vec::new();
+    for entry in
+        crate::plugin_runtime::discovery::scan_root_inventory(root, env!("CARGO_PKG_VERSION"))
+    {
+        // Core providers win by id as well as by command token. Do not let a
+        // state.json entry named `share` overwrite the core stub's enabled bit.
+        if manifests
+            .iter()
+            .any(|(existing, _)| existing.id == entry.id)
+        {
+            issues.push(CliInventoryIssue {
+                id: entry.id,
+                version: entry.state_version,
+                enabled: entry.enabled,
+                error: "plugin id conflicts with a core command provider".into(),
+            });
+            continue;
+        }
+        enabled.insert(entry.id.clone(), entry.enabled);
+        match entry.manifest {
+            Ok(v2) => match crate::plugin_runtime::adapter::to_v1(&v2) {
+                Ok(v1) => manifests.push((v1, entry.current_dir)),
+                Err(error) => issues.push(CliInventoryIssue {
+                    id: entry.id,
+                    version: entry.state_version,
+                    enabled: entry.enabled,
+                    error,
+                }),
+            },
+            Err(error) => issues.push(CliInventoryIssue {
+                id: entry.id,
+                version: entry.state_version,
+                enabled: entry.enabled,
+                error,
+            }),
+        }
+    }
+    issues
+}
+
+/// Reject every dynamic CLI entry that uses a core-reserved token or shares a
+/// token with another plugin entry. Dropping all owners of an ambiguous token
+/// is deterministic and safer than whichever manifest happened to scan first.
+#[derive(Debug)]
+pub(crate) struct CliNameConflict {
+    pub plugin_id: String,
+    pub entry: String,
+    pub reasons: Vec<String>,
+}
+
+pub(crate) fn reject_cli_name_conflicts(
+    manifests: &mut [(PluginManifest, PathBuf)],
+) -> Vec<CliNameConflict> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const RESERVED: &[&str] = &[
+        "help", "-h", "--help", "version", "-v", "--version", "plugin", "search",
+        "doctor", "mcp", "memory", "open", "reading-insights", "share", "--share",
+        "--json", "-q", "--quiet", "--no-clipboard", "--cli", "-y", "--yes",
+    ];
+    let mut owners: BTreeMap<String, BTreeSet<(usize, usize)>> = BTreeMap::new();
+    let mut rejected: BTreeMap<(usize, usize), BTreeSet<String>> = BTreeMap::new();
+
+    for (manifest_idx, (manifest, _)) in manifests.iter().enumerate() {
+        if crate::cli::runner::is_core_cli_stub(manifest) {
+            continue;
+        }
+        for (entry_idx, entry) in manifest.cli.iter().enumerate() {
+            for token in std::iter::once(&entry.subcommand).chain(entry.aliases.iter()) {
+                owners
+                    .entry(token.clone())
+                    .or_default()
+                    .insert((manifest_idx, entry_idx));
+                if RESERVED.contains(&token.as_str()) {
+                    rejected
+                        .entry((manifest_idx, entry_idx))
+                        .or_default()
+                        .insert(format!("reserved CLI name '{token}'"));
+                }
+            }
+        }
+    }
+    for (token, token_owners) in owners {
+        if token_owners.len() > 1 {
+            for owner in token_owners {
+                rejected
+                    .entry(owner)
+                    .or_default()
+                    .insert(format!("ambiguous CLI name '{token}'"));
+            }
+        }
+    }
+
+    let mut conflicts = Vec::new();
+    for (manifest_idx, (manifest, _)) in manifests.iter_mut().enumerate() {
+        let mut entry_idx = 0usize;
+        manifest.cli.retain(|entry| {
+            let reasons = rejected.get(&(manifest_idx, entry_idx));
+            entry_idx += 1;
+            if let Some(reasons) = reasons {
+                conflicts.push(CliNameConflict {
+                    plugin_id: manifest.id.clone(),
+                    entry: entry.subcommand.clone(),
+                    reasons: reasons.iter().cloned().collect(),
+                });
+                false
+            } else {
+                true
+            }
+        });
+    }
+    conflicts
+}
+
 fn current_scan() -> (Vec<(PluginManifest, PathBuf)>, HashMap<String, bool>) {
     let mut manifests = Vec::new();
     let mut enabled = HashMap::new();
     // core 化的 share / reading-insights 无磁盘 manifest，注入 stub 参与匹配。
     super::runner::append_core_cli_stubs(&mut manifests, &mut enabled);
-    // 安装的插件（adapter 转成前端/CLI 视图模型形状），泛型匹配直接吃 cli 条目。
-    super::runner::append_v2_manifests(&mut manifests, &mut enabled);
+    // Management-aware inventory keeps valid disabled manifests routable to
+    // Route::Disabled. Runtime execution still uses its enabled-only scan.
+    // Routing must not leak unrelated installation diagnostics into every
+    // command's stderr (especially a machine-readable `--json` invocation).
+    // `plugin list/info` and `doctor` surface these issues deliberately.
+    let _ = append_installed_cli_manifests(&mut manifests, &mut enabled);
+    let _ = reject_cli_name_conflicts(&mut manifests);
     (manifests, enabled)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin_host::{PluginManifest, CliEntry};
+    use crate::plugin_host::{CliEntry, PluginManifest};
     use std::path::PathBuf;
 
     fn manifest_with_cli(id: &str, sub: &str, aliases: &[&str]) -> PluginManifest {
@@ -287,125 +527,344 @@ mod tests {
         )
     }
 
-    #[test] fn no_args_is_help() {
+    #[test]
+    fn no_args_is_help() {
         let r = route_with(&[], vec![], Default::default());
         assert!(matches!(r, Route::Builtin(Builtin::Help { .. })));
     }
-    #[test] fn help_subcommand_routes_to_help() {
+    #[test]
+    fn help_subcommand_routes_to_help() {
         let r = route_with(&["help"], vec![], Default::default());
-        assert!(matches!(r, Route::Builtin(Builtin::Help { topic: None, all: false })));
+        assert!(matches!(
+            r,
+            Route::Builtin(Builtin::Help {
+                topic: None,
+                all: false
+            })
+        ));
     }
-    #[test] fn help_with_topic_carries_topic() {
+    #[test]
+    fn help_with_topic_carries_topic() {
         let r = route_with(&["help", "share"], vec![], Default::default());
-        let Route::Builtin(Builtin::Help { topic, all }) = r else { panic!() };
+        let Route::Builtin(Builtin::Help { topic, all }) = r else {
+            panic!()
+        };
         assert_eq!(topic.as_deref(), Some("share"));
         assert!(!all);
     }
-    #[test] fn dash_h_routes_to_help() {
+    #[test]
+    fn help_rejects_unknown_flags_and_multiple_topics() {
+        for args in [
+            vec!["help", "--bogus"],
+            vec!["help", "search", "doctor"],
+            vec!["help", "--all", "--all"],
+        ] {
+            let route = route_with(&args, vec![], Default::default());
+            assert!(
+                matches!(route, Route::Builtin(Builtin::ArgumentError(_))),
+                "got {route:?}"
+            );
+        }
+        let route = route_with(&["help", "--share"], vec![], Default::default());
+        assert!(matches!(
+            route,
+            Route::Builtin(Builtin::Help { topic: Some(_), .. })
+        ));
+        for alias in ["-h", "--help", "-v", "--version"] {
+            let route = route_with(&["help", alias], vec![], Default::default());
+            assert!(matches!(
+                route,
+                Route::Builtin(Builtin::Help { topic: Some(_), .. })
+            ), "help topic alias {alias} must remain reachable");
+        }
+        let plugin = manifest_with_cli("demo.plugin", "demo", &["-d"]);
+        let route = route_with(&["help", "-d"], vec![(plugin, PathBuf::new())], Default::default());
+        assert!(matches!(
+            route,
+            Route::Builtin(Builtin::Help { topic: Some(_), .. })
+        ));
+    }
+    #[test]
+    fn dash_h_routes_to_help() {
         let r = route_with(&["-h"], vec![], Default::default());
         assert!(matches!(r, Route::Builtin(Builtin::Help { .. })));
     }
-    #[test] fn version_routes() {
+    #[test]
+    fn version_routes() {
         let r = route_with(&["version"], vec![], Default::default());
         assert!(matches!(r, Route::Builtin(Builtin::Version)));
     }
-    #[test] fn plugin_list_routes() {
+    #[test]
+    fn version_and_mcp_reject_extra_arguments() {
+        for args in [vec!["version", "extra"], vec!["mcp", "--bogus"]] {
+            let route = route_with(&args, vec![], Default::default());
+            assert!(
+                matches!(route, Route::Builtin(Builtin::ArgumentError(_))),
+                "got {route:?}"
+            );
+        }
+    }
+    #[test]
+    fn plugin_list_routes() {
         let r = route_with(&["plugin", "list"], vec![], Default::default());
         assert!(matches!(r, Route::Builtin(Builtin::PluginList)));
     }
-    #[test] fn plugin_enable_with_id_routes() {
+    #[test]
+    fn plugin_enable_with_id_routes() {
         let r = route_with(&["plugin", "enable", "share"], vec![], Default::default());
-        let Route::Builtin(Builtin::PluginEnable(id)) = r else { panic!() };
+        let Route::Builtin(Builtin::PluginEnable(id)) = r else {
+            panic!()
+        };
         assert_eq!(id, "share");
     }
 
-    #[test] fn plugin_install_with_version_routes() {
-        let r = route_with(&["plugin", "install", "x@1.2.0"], vec![], Default::default());
-        let Route::Builtin(Builtin::PluginInstall(id, ver)) = r else { panic!() };
+    #[test]
+    fn plugin_install_with_version_routes() {
+        let r = route_with(
+            &["plugin", "install", "x@1.2.0"],
+            vec![],
+            Default::default(),
+        );
+        let Route::Builtin(Builtin::PluginInstall(id, ver)) = r else {
+            panic!()
+        };
         assert_eq!(id, "x");
         assert_eq!(ver.as_deref(), Some("1.2.0"));
     }
-    #[test] fn plugin_install_without_version_routes() {
+    #[test]
+    fn plugin_install_without_version_routes() {
         let r = route_with(&["plugin", "install", "x"], vec![], Default::default());
-        let Route::Builtin(Builtin::PluginInstall(id, ver)) = r else { panic!() };
+        let Route::Builtin(Builtin::PluginInstall(id, ver)) = r else {
+            panic!()
+        };
         assert_eq!(id, "x");
         assert_eq!(ver, None);
     }
-    #[test] fn plugin_install_id_with_at_splits_on_last() {
+    #[test]
+    fn plugin_install_id_with_at_splits_on_last() {
         // A scoped-style id keeps its own '@'; only the last '@version' splits.
-        let r = route_with(&["plugin", "install", "@scope/pkg@2.0.0"], vec![], Default::default());
-        let Route::Builtin(Builtin::PluginInstall(id, ver)) = r else { panic!() };
+        let r = route_with(
+            &["plugin", "install", "@scope/pkg@2.0.0"],
+            vec![],
+            Default::default(),
+        );
+        let Route::Builtin(Builtin::PluginInstall(id, ver)) = r else {
+            panic!()
+        };
         assert_eq!(id, "@scope/pkg");
         assert_eq!(ver.as_deref(), Some("2.0.0"));
     }
-    #[test] fn plugin_install_missing_id_is_unknown() {
+    #[test]
+    fn plugin_install_missing_id_is_argument_error() {
         let r = route_with(&["plugin", "install"], vec![], Default::default());
-        assert!(matches!(r, Route::Unknown(_)));
+        assert!(matches!(r, Route::Builtin(Builtin::ArgumentError(_))));
     }
-    #[test] fn plugin_update_all_and_one() {
+    #[test]
+    fn plugin_update_all_and_one() {
         let r = route_with(&["plugin", "update"], vec![], Default::default());
-        let Route::Builtin(Builtin::PluginUpdate(id)) = r else { panic!() };
+        let Route::Builtin(Builtin::PluginUpdate(id)) = r else {
+            panic!()
+        };
         assert_eq!(id, None);
         let r = route_with(&["plugin", "update", "x"], vec![], Default::default());
-        let Route::Builtin(Builtin::PluginUpdate(id)) = r else { panic!() };
+        let Route::Builtin(Builtin::PluginUpdate(id)) = r else {
+            panic!()
+        };
         assert_eq!(id.as_deref(), Some("x"));
     }
-    #[test] fn plugin_remove_and_uninstall_with_keep_data() {
+    #[test]
+    fn plugin_remove_and_uninstall_with_keep_data() {
         let r = route_with(&["plugin", "remove", "x"], vec![], Default::default());
-        let Route::Builtin(Builtin::PluginRemove(id, keep)) = r else { panic!() };
+        let Route::Builtin(Builtin::PluginRemove(id, keep)) = r else {
+            panic!()
+        };
         assert_eq!(id, "x");
         assert!(!keep);
         // `uninstall` alias + --keep-data (flag before id).
-        let r = route_with(&["plugin", "uninstall", "--keep-data", "x"], vec![], Default::default());
-        let Route::Builtin(Builtin::PluginRemove(id, keep)) = r else { panic!() };
+        let r = route_with(
+            &["plugin", "uninstall", "--keep-data", "x"],
+            vec![],
+            Default::default(),
+        );
+        let Route::Builtin(Builtin::PluginRemove(id, keep)) = r else {
+            panic!()
+        };
         assert_eq!(id, "x");
         assert!(keep);
     }
-    #[test] fn plugin_remove_missing_id_is_unknown() {
-        let r = route_with(&["plugin", "remove", "--keep-data"], vec![], Default::default());
-        assert!(matches!(r, Route::Unknown(_)));
+    #[test]
+    fn plugin_remove_missing_id_is_argument_error() {
+        let r = route_with(
+            &["plugin", "remove", "--keep-data"],
+            vec![],
+            Default::default(),
+        );
+        assert!(matches!(r, Route::Builtin(Builtin::ArgumentError(_))));
     }
-    #[test] fn split_id_version_cases() {
+    #[test]
+    fn plugin_management_rejects_unknown_flags_and_extra_positionals() {
+        for args in [
+            vec!["plugin", "list", "--bogus"],
+            vec!["plugin", "enable", "x", "extra"],
+            vec!["plugin", "disable", "--bogus"],
+            vec!["plugin", "info", "x", "extra"],
+            vec!["plugin", "install", "x", "extra"],
+            vec!["plugin", "update", "--bogus"],
+            vec!["plugin", "upgrade", "x", "extra"],
+            vec!["plugin", "remove", "x", "--keep-dtaa"],
+            vec!["plugin", "remove", "x", "y"],
+        ] {
+            let route = route_with(&args, vec![], Default::default());
+            assert!(
+                matches!(route, Route::Builtin(Builtin::ArgumentError(_))),
+                "expected argument error for {args:?}, got {route:?}",
+            );
+        }
+    }
+    #[test]
+    fn recognized_command_with_unknown_subcommand_is_an_argument_error() {
+        for args in [
+            vec!["plugin", "wat"],
+            vec!["reading-insights", "wat"],
+        ] {
+            let route = route_with(&args, vec![], Default::default());
+            assert!(matches!(route, Route::Builtin(Builtin::ArgumentError(_))), "got {route:?}");
+        }
+    }
+    #[test]
+    fn plugin_update_unknown_flag_can_never_mean_update_all() {
+        let route = route_with(&["plugin", "update", "--bogus"], vec![], Default::default());
+        assert!(!matches!(
+            route,
+            Route::Builtin(Builtin::PluginUpdate(None))
+        ));
+        assert!(matches!(route, Route::Builtin(Builtin::ArgumentError(_))));
+    }
+    #[test]
+    fn split_id_version_cases() {
         assert_eq!(split_id_version("x"), ("x".to_string(), None));
-        assert_eq!(split_id_version("x@1.0.0"), ("x".to_string(), Some("1.0.0".to_string())));
-        assert_eq!(split_id_version("a@b@1.0.0"), ("a@b".to_string(), Some("1.0.0".to_string())));
+        assert_eq!(
+            split_id_version("x@1.0.0"),
+            ("x".to_string(), Some("1.0.0".to_string()))
+        );
+        assert_eq!(
+            split_id_version("a@b@1.0.0"),
+            ("a@b".to_string(), Some("1.0.0".to_string()))
+        );
         // Trailing '@' with no version ⇒ no version.
         assert_eq!(split_id_version("x@"), ("x@".to_string(), None));
         // Leading '@' with no later '@' ⇒ whole thing is the id.
         assert_eq!(split_id_version("@scope/x"), ("@scope/x".to_string(), None));
     }
-    #[test] fn enabled_plugin_subcommand_routes_to_plugin() {
+    #[test]
+    fn enabled_plugin_subcommand_routes_to_plugin() {
         let m = manifest_with_cli("share", "share", &["-s"]);
         let mut enabled = std::collections::HashMap::new();
         enabled.insert("share".to_string(), true);
-        let r = route_with(&["share", "draft.md"], vec![(m, PathBuf::from("/tmp"))], enabled);
+        let r = route_with(
+            &["share", "draft.md"],
+            vec![(m, PathBuf::from("/tmp"))],
+            enabled,
+        );
         let Route::Plugin(p) = r else { panic!() };
         assert_eq!(p.plugin_id, "share");
         assert_eq!(p.subcommand, "share");
         assert_eq!(p.remaining, vec!["draft.md".to_string()]);
     }
-    #[test] fn enabled_plugin_alias_resolves_to_subcommand() {
+    #[test]
+    fn enabled_plugin_alias_resolves_to_subcommand() {
         let m = manifest_with_cli("share", "share", &["-s"]);
         let mut enabled = std::collections::HashMap::new();
         enabled.insert("share".to_string(), true);
-        let r = route_with(&["-s", "draft.md"], vec![(m, PathBuf::from("/tmp"))], enabled);
+        let r = route_with(
+            &["-s", "draft.md"],
+            vec![(m, PathBuf::from("/tmp"))],
+            enabled,
+        );
         let Route::Plugin(p) = r else { panic!() };
         assert_eq!(p.subcommand, "share");
         assert_eq!(p.remaining, vec!["draft.md".to_string()]);
     }
-    #[test] fn disabled_plugin_yields_disabled_route() {
+    #[test]
+    fn disabled_plugin_yields_disabled_route() {
         let m = manifest_with_cli("share", "share", &["-s"]);
         let mut enabled = std::collections::HashMap::new();
         enabled.insert("share".to_string(), false);
         let r = route_with(&["-s", "x.md"], vec![(m, PathBuf::from("/tmp"))], enabled);
-        let Route::Disabled { plugin_id, subcommand } = r else { panic!() };
+        let Route::Disabled {
+            plugin_id,
+            subcommand,
+        } = r
+        else {
+            panic!()
+        };
         assert_eq!(plugin_id, "share");
         assert_eq!(subcommand, "share");
     }
-    #[test] fn unknown_command_yields_unknown() {
+    #[test]
+    fn unknown_command_yields_unknown() {
         let r = route_with(&["nope"], vec![], Default::default());
         let Route::Unknown(name) = r else { panic!() };
         assert_eq!(name, "nope");
+    }
+    #[test]
+    fn conflicting_plugin_cli_names_are_removed_from_all_owners() {
+        let first = manifest_with_cli("one", "duplicate", &[]);
+        let second = manifest_with_cli("two", "other", &["duplicate"]);
+        let mut manifests = vec![
+            (first, PathBuf::from("/one")),
+            (second, PathBuf::from("/two")),
+        ];
+        reject_cli_name_conflicts(&mut manifests);
+        assert!(manifests[0].0.cli.is_empty());
+        assert!(manifests[1].0.cli.is_empty());
+    }
+    #[test]
+    fn core_reserved_cli_names_are_rejected() {
+        for reserved in [
+            "search",
+            "open",
+            "--json",
+            "-q",
+            "--quiet",
+            "--no-clipboard",
+            "--cli",
+            "-y",
+            "--yes",
+        ] {
+            let plugin = manifest_with_cli("evil", reserved, &[]);
+            let mut manifests = vec![(plugin, PathBuf::from("/evil"))];
+            let conflicts = reject_cli_name_conflicts(&mut manifests);
+            assert!(manifests[0].0.cli.is_empty(), "reserved token survived: {reserved}");
+            assert_eq!(conflicts.len(), 1);
+            assert!(conflicts[0].reasons[0].contains(reserved));
+        }
+    }
+    #[test]
+    fn installed_core_id_cannot_disable_the_core_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = crate::plugin_runtime::state::InstallState::default();
+        state.installed.insert(
+            "share".into(),
+            crate::plugin_runtime::state::InstalledPlugin {
+                version: "1.0.0".into(),
+                enabled: false,
+            },
+        );
+        crate::plugin_runtime::state::save(dir.path(), &state).unwrap();
+
+        let mut manifests = crate::cli::runner::core_cli_stub_manifests()
+            .into_iter()
+            .map(|manifest| (manifest, PathBuf::new()))
+            .collect::<Vec<_>>();
+        let mut enabled = HashMap::from([
+            ("share".to_string(), true),
+            ("reading-insights".to_string(), true),
+        ]);
+        let issues = append_installed_cli_manifests_at(dir.path(), &mut manifests, &mut enabled);
+        assert_eq!(enabled.get("share"), Some(&true));
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].error.contains("core command provider"));
     }
 
     /// `mcp` 是 core:agent 的检索入口不能被插件遮蔽,也不能被禁用。
@@ -444,7 +903,9 @@ mod tests {
     #[test]
     fn doctor_routes_as_builtin() {
         let r = route_with(&["doctor", "--offline"], vec![], Default::default());
-        let Route::Builtin(Builtin::Doctor(args)) = r else { panic!("expected doctor builtin") };
+        let Route::Builtin(Builtin::Doctor(args)) = r else {
+            panic!("expected doctor builtin")
+        };
         assert!(args.offline);
     }
 
@@ -503,7 +964,10 @@ mod tests {
             &[],
             &HashMap::from([("reading-insights".to_string(), false)]),
         );
-        assert!(matches!(r, Route::Plugin(_)), "core-ized: enabled map must be ignored");
+        assert!(
+            matches!(r, Route::Plugin(_)),
+            "core-ized: enabled map must be ignored"
+        );
     }
 
     /// Composition test for the CLI merge: an install tree scanned by
@@ -523,7 +987,10 @@ mod tests {
         let mut st = InstallState::default();
         st.installed.insert(
             "notemd.fixture".to_string(),
-            InstalledPlugin { version: "1.0.0".into(), enabled: true },
+            InstalledPlugin {
+                version: "1.0.0".into(),
+                enabled: true,
+            },
         );
         state::save(root, &st).unwrap();
 
@@ -564,7 +1031,9 @@ mod tests {
         let enabled = HashMap::from([("notemd.fixture".to_string(), true)]);
 
         let r = resolve_with(&vec!["pdf2".into(), "x.md".into()], &pairs, &enabled);
-        let Route::Plugin(p) = r else { panic!("expected v2 plugin route, got {r:?}") };
+        let Route::Plugin(p) = r else {
+            panic!("expected v2 plugin route, got {r:?}")
+        };
         assert_eq!(p.plugin_id, "notemd.fixture");
         assert_eq!(p.subcommand, "pdf2");
         assert_eq!(p.remaining, vec!["x.md".to_string()]);

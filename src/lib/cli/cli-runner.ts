@@ -2,7 +2,8 @@ export interface CliPayload {
   subcommand: string
   plugin_id: string
   plugin_command: string
-  file: string | null
+  /** Manifest-declared positional arguments, keyed by their declared names. */
+  args: Record<string, string | number>
   /** Rust側 serde_json::Map,但 parse_subcommand_args 只写入 Bool(true) 与
    *  String 两种值(见 src-tauri/src/cli/runner.rs),故此窄类型是准确契约。 */
   flags: Record<string, string | boolean>
@@ -13,7 +14,6 @@ export interface GlobalFlags {
   json: boolean
   quiet: boolean
   clipboard: boolean
-  yes: boolean
 }
 
 /**
@@ -25,6 +25,48 @@ export function requiresFileArg(
   entry: { args?: Array<{ type?: string; required?: boolean }> } | undefined,
 ): boolean {
   return (entry?.args ?? []).some((a) => a.type === 'path' && a.required === true)
+}
+
+/** First manifest-declared path positional, used as the virtual-tab source. */
+export function firstPathArg(
+  entry: { args?: Array<{ name: string; type?: string }> } | undefined,
+  args: CliPayload['args'],
+): string | undefined {
+  const name = (entry?.args ?? []).find((a) => a.type === 'path')?.name
+  const value = name ? args[name] : undefined
+  return typeof value === 'string' ? value : undefined
+}
+
+export function isAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || path.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(path)
+}
+
+export function dirnameOf(path: string): string {
+  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  if (slash < 0) return ''
+  if (slash === 0) return path.slice(0, 1)
+  // Preserve a Windows drive root (`C:\\file.md` → `C:\\`).
+  if (slash === 2 && /^[A-Za-z]:/.test(path)) return path.slice(0, 3)
+  return path.slice(0, slash)
+}
+
+export function joinPath(parent: string, child: string): string {
+  if (!parent) return child
+  const separator = parent.includes('\\') && !parent.includes('/') ? '\\' : '/'
+  const normalizedChild = child.replace(/[\\/]+/g, separator)
+  return `${parent.replace(/[\\/]+$/, '')}${separator}${normalizedChild}`
+}
+
+export function replaceExtension(path: string, extension: string): string {
+  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  const dot = path.lastIndexOf('.')
+  return `${dot > slash ? path.slice(0, dot) : path}${extension}`
+}
+
+/** Resolve an output flag relative to the input file on both Unix and Windows. */
+export function outputPathFor(inputPath: string, outputFlag?: string): string {
+  if (!outputFlag) return replaceExtension(inputPath, '.pdf')
+  return isAbsolutePath(outputFlag) ? outputFlag : joinPath(dirnameOf(inputPath), outputFlag)
 }
 
 /** Extract filename from absolute path. */

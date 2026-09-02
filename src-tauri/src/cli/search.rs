@@ -28,6 +28,9 @@ pub struct SearchArgs {
     pub no_sweep: bool,
     pub rebuild: bool,
     pub stats: bool,
+    /// Parse failures are retained until `run` so routing stays pure while
+    /// malformed invocations still fail before opening or scanning a vault.
+    pub errors: Vec<String>,
 }
 
 impl SearchArgs {
@@ -102,14 +105,27 @@ pub fn execute(ctx: &SearchContext, query: &str, limit: usize) -> SearchOutcome 
             // CLI's own `eprintln!` above, which would change what `notemd
             // search` prints.
             crate::log_bus::push_cat_quiet(
-                "search", "backend", "warn",
+                "search",
+                "backend",
+                "warn",
                 format!("query failed ({e}); scanning files directly"),
             );
-            (fallback_scan(ctx.root, query, limit, ctx.opts), searchidx::Route::Scan)
+            (
+                fallback_scan(ctx.root, query, limit, ctx.opts),
+                searchidx::Route::Scan,
+            )
         }
-        None => (fallback_scan(ctx.root, query, limit, ctx.opts), searchidx::Route::Scan),
+        None => (
+            fallback_scan(ctx.root, query, limit, ctx.opts),
+            searchidx::Route::Scan,
+        ),
     };
-    SearchOutcome { query: query.to_string(), route, took_ms: started.elapsed().as_millis(), hits }
+    SearchOutcome {
+        query: query.to_string(),
+        route,
+        took_ms: started.elapsed().as_millis(),
+        hits,
+    }
 }
 
 /// The JSON shape of a single hit. Shared by `print_json` and (eventually)
@@ -153,80 +169,148 @@ pub fn hit_to_json(h: &searchidx::Hit) -> serde_json::Value {
 /// would need to simultaneously borrow `a` (to mutate) and `i` (to advance),
 /// which does not borrow-check.
 pub fn parse_args(rest: &[String], json_global: bool) -> SearchArgs {
-    let mut a = SearchArgs { limit: 20, json: json_global, ..Default::default() };
+    let mut a = SearchArgs {
+        limit: 20,
+        json: json_global,
+        ..Default::default()
+    };
     let mut i = 0usize;
+    let mut positional_only = false;
+    let mut saw_all = false;
+    let mut saw_limit = false;
+    let mut seen_flags = std::collections::BTreeSet::new();
     while i < rest.len() {
+        if positional_only {
+            a.query.push(rest[i].clone());
+            i += 1;
+            continue;
+        }
+        if matches!(
+            rest[i].as_str(),
+            "--json" | "--no-sweep" | "--rebuild" | "--stats" | "--vault" | "--all"
+                | "--limit" | "--context" | "--tag" | "--type" | "--path" | "--ext"
+                | "--after" | "--before"
+        ) && !seen_flags.insert(rest[i].clone()) {
+            a.errors.push(format!("{} may only be specified once", rest[i]));
+        }
         match rest[i].as_str() {
+            "--" => positional_only = true,
             "--json" => a.json = true,
             "--no-sweep" => a.no_sweep = true,
             "--rebuild" => a.rebuild = true,
             "--stats" => a.stats = true,
-            "--vault" => {
-                if let Some(v) = rest.get(i + 1) {
-                    a.vault = Some(v.clone());
-                    i += 1;
-                }
-            }
+            "--vault" => take_string_value(rest, &mut i, "--vault", &mut a.vault, &mut a.errors),
             // `0` means "everything" — mapped to the sentinel here, at the
             // host boundary, so `searchidx` itself never has to guess what a
             // literal zero meant (see `searchidx::NO_LIMIT`'s doc comment).
-            "--all" => a.limit = searchidx::NO_LIMIT,
+            "--all" => {
+                saw_all = true;
+                a.limit = searchidx::NO_LIMIT;
+            }
             "--limit" => {
-                if let Some(v) = rest.get(i + 1) {
-                    a.limit = match v.parse().unwrap_or(20) {
-                        0 => searchidx::NO_LIMIT,
-                        n => n,
-                    };
-                    i += 1;
+                saw_limit = true;
+                match rest.get(i + 1) {
+                    Some(v) if !v.starts_with("--") => {
+                        match v.parse::<usize>() {
+                            Ok(0) => a.limit = searchidx::NO_LIMIT,
+                            Ok(n) => a.limit = n,
+                            Err(_) => a
+                                .errors
+                                .push(format!("--limit expects a non-negative integer, got '{v}'")),
+                        }
+                        i += 1;
+                    }
+                    _ => a.errors.push("--limit requires a value".to_string()),
                 }
             }
-            "--context" => {
-                if let Some(v) = rest.get(i + 1) {
-                    a.context = v.parse().unwrap_or(0);
+            "--context" => match rest.get(i + 1) {
+                    Some(v) if !v.starts_with("--") => {
+                    match v.parse::<usize>() {
+                        Ok(n) => a.context = n,
+                        Err(_) => a.errors.push(format!(
+                            "--context expects a non-negative integer, got '{v}'"
+                        )),
+                    }
                     i += 1;
                 }
-            }
+                    _ => a.errors.push("--context requires a value".to_string()),
+            },
             "--tag" => {
-                if let Some(v) = rest.get(i + 1) {
-                    a.query.push(format!("tag:{v}"));
-                    i += 1;
-                }
+                take_query_value(rest, &mut i, "--tag", "tag", &mut a.query, &mut a.errors);
             }
             "--type" => {
-                if let Some(v) = rest.get(i + 1) {
-                    a.query.push(format!("type:{v}"));
-                    i += 1;
-                }
+                take_query_value(rest, &mut i, "--type", "type", &mut a.query, &mut a.errors);
             }
             "--path" => {
-                if let Some(v) = rest.get(i + 1) {
-                    a.query.push(format!("path:{v}"));
-                    i += 1;
-                }
+                take_query_value(rest, &mut i, "--path", "path", &mut a.query, &mut a.errors);
             }
             "--ext" => {
-                if let Some(v) = rest.get(i + 1) {
-                    a.query.push(format!("ext:{v}"));
-                    i += 1;
-                }
+                take_query_value(rest, &mut i, "--ext", "ext", &mut a.query, &mut a.errors);
             }
             "--after" => {
-                if let Some(v) = rest.get(i + 1) {
-                    a.query.push(format!("after:{v}"));
-                    i += 1;
-                }
+                take_query_value(
+                    rest,
+                    &mut i,
+                    "--after",
+                    "after",
+                    &mut a.query,
+                    &mut a.errors,
+                );
             }
             "--before" => {
-                if let Some(v) = rest.get(i + 1) {
-                    a.query.push(format!("before:{v}"));
-                    i += 1;
-                }
+                take_query_value(
+                    rest,
+                    &mut i,
+                    "--before",
+                    "before",
+                    &mut a.query,
+                    &mut a.errors,
+                );
             }
+            other if other.starts_with('-') => a.errors.push(format!(
+                "unknown option '{other}' (use '--' before a query term that starts with '-')"
+            )),
             other => a.query.push(other.to_string()),
         }
         i += 1;
     }
+    if saw_all && saw_limit {
+        a.errors.push("--all conflicts with --limit".to_string());
+    }
     a
+}
+
+fn take_string_value(
+    rest: &[String],
+    i: &mut usize,
+    flag: &str,
+    target: &mut Option<String>,
+    errors: &mut Vec<String>,
+) {
+    match rest.get(*i + 1) {
+        Some(v) if !v.starts_with("--") => {
+            *target = Some(v.clone());
+            *i += 1;
+        }
+        _ => errors.push(format!("{flag} requires a value")),
+    }
+}
+
+fn take_query_value(
+    rest: &[String],
+    i: &mut usize,
+    flag: &str,
+    prefix: &str,
+    query: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    match rest.get(*i + 1) {
+        Some(v) if !v.starts_with("--") => {
+            query.push(format!("{prefix}:{v}"));
+            *i += 1;
+        }
+        _ => errors.push(format!("{flag} requires a value")),
+    }
 }
 
 /// Headless vault-root resolution.
@@ -245,13 +329,30 @@ pub fn resolve_vault_root(explicit: Option<&str>) -> Option<PathBuf> {
 }
 
 pub fn run(args: SearchArgs) -> ExitCode {
+    if !args.errors.is_empty() {
+        let message = args.errors.join("; ");
+        return fail(
+            args.json,
+            2,
+            "invalid_arguments",
+            &format!("{message} — see: notemd help search"),
+        );
+    }
     let Some(root) = resolve_vault_root(args.vault.as_deref()) else {
-        eprintln!("notemd: no vault configured. Set one in Preferences, or pass --vault PATH.");
-        return ExitCode::from(2);
+        return fail(
+            args.json,
+            2,
+            "vault_not_configured",
+            "no vault configured. Set one in Preferences, or pass --vault PATH.",
+        );
     };
     if !root.is_dir() {
-        eprintln!("notemd: vault not found: {}", root.display());
-        return ExitCode::from(2);
+        return fail(
+            args.json,
+            2,
+            "vault_not_found",
+            &format!("vault not found: {}", root.display()),
+        );
     }
 
     // Measures the *whole* pipeline below (index open + ensure_built/sweep +
@@ -298,13 +399,16 @@ pub fn run(args: SearchArgs) -> ExitCode {
         } else if args.no_sweep {
             idx.ensure_built(&opts)
         } else {
-            idx.ensure_built(&opts).and_then(|_| idx.sweep(&opts, Some(SWEEP_DEADLINE)))
+            idx.ensure_built(&opts)
+                .and_then(|_| idx.sweep(&opts, Some(SWEEP_DEADLINE)))
         };
         match outcome {
             Ok(stats) => {
                 skipped_large = stats.files_skipped_large.clone();
                 if stats.timed_out {
-                    eprintln!("notemd: freshness scan exceeded 2s; answering from the existing index");
+                    eprintln!(
+                        "notemd: freshness scan exceeded 2s; answering from the existing index"
+                    );
                 }
             }
             Err(e) => {
@@ -320,8 +424,12 @@ pub fn run(args: SearchArgs) -> ExitCode {
 
     let query = args.query.join(" ");
     if query.trim().is_empty() {
-        eprintln!("notemd: usage: notemd search <query...> [--vault PATH] [--limit N] [--all] [--json]");
-        return ExitCode::from(2);
+        return fail(
+            args.json,
+            2,
+            "missing_query",
+            "usage: notemd search <query...> [--vault PATH] [--limit N] [--all] [--json]",
+        );
     }
 
     // Review round 1, Important 2: this used to call `i.search(...)`, which
@@ -335,7 +443,11 @@ pub fn run(args: SearchArgs) -> ExitCode {
     // ranks-or-falls-back, and times itself — the same function MCP will
     // call against a borrowed `IndexHandle` instead of shelling out to this
     // binary.
-    let ctx = SearchContext { root: &root, index: index.as_ref(), opts: &opts };
+    let ctx = SearchContext {
+        root: &root,
+        index: index.as_ref(),
+        opts: &opts,
+    };
     let outcome = execute(&ctx, &query, args.limit);
     // `outcome.took_ms` is deliberately NOT used for the CLI's reported
     // timing — see `started`'s doc comment above for why the two numbers
@@ -354,7 +466,26 @@ pub fn run(args: SearchArgs) -> ExitCode {
     } else {
         print_plain(&root, &hits, args.context)
     };
-    if printed == 0 { ExitCode::from(1) } else { ExitCode::from(0) }
+    if printed == 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::from(0)
+    }
+}
+
+fn fail(json: bool, code: u8, kind: &str, message: &str) -> ExitCode {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": false,
+                "error": { "code": kind, "message": message }
+            })
+        );
+    } else {
+        eprintln!("notemd: {message}");
+    }
+    ExitCode::from(code)
 }
 
 /// Thin delegation to the single shared constructor
@@ -394,7 +525,12 @@ pub fn conventions_for(root: &Path) -> searchidx::query::Conventions {
 /// searched a *different corpus* than the index: a `.gitignore`d note was
 /// found by one and invisible to the other, with nothing in the output to
 /// say so. Same walker, same `is_indexable`, one corpus.
-fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> Vec<searchidx::Hit> {
+fn fallback_scan(
+    root: &Path,
+    query: &str,
+    limit: usize,
+    opts: &ScanOptions,
+) -> Vec<searchidx::Hit> {
     let needle = query.to_lowercase();
     let mut out = Vec::new();
     for entry in searchidx::scan::walk_builder(root).build().flatten() {
@@ -404,11 +540,15 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        let Some(rel) = searchidx::norm::rel_path(root, entry.path()) else { continue };
+        let Some(rel) = searchidx::norm::rel_path(root, entry.path()) else {
+            continue;
+        };
         if !searchidx::scan::is_indexable(&rel, opts) {
             continue;
         }
-        let Ok(raw) = std::fs::read_to_string(entry.path()) else { continue };
+        let Ok(raw) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
         let text = searchidx::norm::strip_cr(&raw);
         // Task 6 made `origin` observable in `--json` for the first time on
         // this path (score stays 0.0 here, so `score_of` never reads it, but
@@ -439,9 +579,15 @@ fn fallback_scan(root: &Path, query: &str, limit: usize, opts: &ScanOptions) -> 
         let is_markdown = !(rel.to_lowercase().ends_with(".srt")
             || rel.to_lowercase().ends_with(".vtt")
             || rel.to_lowercase().ends_with(".txt"));
-        let fm_raw = if is_markdown { searchidx::frontmatter::split(&text).0 } else { None };
+        let fm_raw = if is_markdown {
+            searchidx::frontmatter::split(&text).0
+        } else {
+            None
+        };
         let fm_present = fm_raw.is_some();
-        let fm = fm_raw.map(searchidx::frontmatter::parse).unwrap_or_default();
+        let fm = fm_raw
+            .map(searchidx::frontmatter::parse)
+            .unwrap_or_default();
         let origin = searchidx::origin::derive(&rel, fm_present.then_some(&fm), &opts.source_globs);
         for (i, line) in text.lines().enumerate() {
             if line.to_lowercase().contains(&needle) {
@@ -543,8 +689,9 @@ fn context_lines(root: &Path, hit: &searchidx::Hit, context: usize) -> Option<Ve
     if from > to {
         return None;
     }
-    let out: Vec<(u32, String)> =
-        (from..=to).filter_map(|n| lines.get(n as usize - 1).map(|l| (n, l.trim().to_string()))).collect();
+    let out: Vec<(u32, String)> = (from..=to)
+        .filter_map(|n| lines.get(n as usize - 1).map(|l| (n, l.trim().to_string())))
+        .collect();
     (!out.is_empty()).then_some(out)
 }
 
@@ -595,8 +742,7 @@ fn print_json(query: &str, route: searchidx::Route, took_ms: u128, hits: &[searc
 
 fn report_stats(index: Option<&SearchIndex>, json: bool, skipped: &[SkippedFile]) -> ExitCode {
     let Some(idx) = index else {
-        eprintln!("notemd: no index available");
-        return ExitCode::from(1);
+        return fail(json, 1, "index_unavailable", "no index available");
     };
     match idx.stats() {
         Ok(s) if json => {
@@ -647,16 +793,58 @@ fn report_stats(index: Option<&SearchIndex>, json: bool, skipped: &[SkippedFile]
             }
             ExitCode::from(0)
         }
-        Err(e) => {
-            eprintln!("notemd: {e}");
-            ExitCode::from(1)
-        }
+        Err(e) => fail(json, 1, "index_error", &e.to_string()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_args_rejects_unknown_and_missing_or_invalid_values() {
+        let args = parse_args(
+            &strings(&["needle", "--limt", "3", "--context", "many", "--vault"]),
+            false,
+        );
+        assert_eq!(args.query, vec!["needle", "3"]);
+        assert_eq!(
+            args.errors,
+            vec![
+                "unknown option '--limt' (use '--' before a query term that starts with '-')",
+                "--context expects a non-negative integer, got 'many'",
+                "--vault requires a value",
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_args_supports_double_dash_for_hyphenated_query_terms() {
+        let args = parse_args(&strings(&["--", "--literal", "-x"]), false);
+        assert_eq!(args.query, vec!["--literal", "-x"]);
+        assert!(args.errors.is_empty());
+    }
+
+    #[test]
+    fn parse_args_rejects_ambiguous_limit_flags() {
+        let args = parse_args(&strings(&["needle", "--limit", "4", "--all"]), false);
+        assert_eq!(args.errors, vec!["--all conflicts with --limit"]);
+    }
+
+    #[test]
+    fn parse_args_rejects_duplicate_flags_and_does_not_consume_the_next_flag_as_a_value() {
+        let args = parse_args(
+            &strings(&["needle", "--limit", "--all", "--all"]),
+            false,
+        );
+        assert!(args.errors.contains(&"--limit requires a value".to_string()));
+        assert!(args.errors.contains(&"--all may only be specified once".to_string()));
+        assert!(args.errors.contains(&"--all conflicts with --limit".to_string()));
+    }
 
     /// `execute()` 产出的每条命中,序列化后必须与 `--json` 里那条逐字段相等。
     /// 这是 CLI 与 MCP 之间唯一的一致性保证:两边渲染同一份 `SearchOutcome`。
@@ -682,10 +870,15 @@ mod tests {
         let opts = scan_options_for(root);
         let stamp = opts.source_globs.stamp();
         let db_dir = tempfile::tempdir().unwrap();
-        let mut index = SearchIndex::open_at(root, &db_dir.path().join("index.db"), &stamp).unwrap();
+        let mut index =
+            SearchIndex::open_at(root, &db_dir.path().join("index.db"), &stamp).unwrap();
         index.ensure_built(&opts).unwrap();
 
-        let ctx = SearchContext { root, index: Some(&index), opts: &opts };
+        let ctx = SearchContext {
+            root,
+            index: Some(&index),
+            opts: &opts,
+        };
         let outcome = execute(&ctx, "quickbrownfox", 20);
         assert!(!outcome.hits.is_empty(), "fixture must produce a hit");
 
@@ -696,8 +889,18 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "attention_minutes", "breadcrumb", "doc_date", "level", "line",
-                "line_end", "origin", "path", "provenance", "score", "source_ref", "text",
+                "attention_minutes",
+                "breadcrumb",
+                "doc_date",
+                "level",
+                "line",
+                "line_end",
+                "origin",
+                "path",
+                "provenance",
+                "score",
+                "source_ref",
+                "text",
             ]
         );
         assert_eq!(v["path"], "notes/a.md");
@@ -724,13 +927,18 @@ mod tests {
         let opts = scan_options_for(root);
         let stamp = opts.source_globs.stamp();
         let db_dir = tempfile::tempdir().unwrap();
-        let mut index = SearchIndex::open_at(root, &db_dir.path().join("index.db"), &stamp).unwrap();
+        let mut index =
+            SearchIndex::open_at(root, &db_dir.path().join("index.db"), &stamp).unwrap();
         index.ensure_built(&opts).unwrap();
 
         let sleep_ms: u128 = 300;
         std::thread::sleep(std::time::Duration::from_millis(sleep_ms as u64));
 
-        let ctx = SearchContext { root, index: Some(&index), opts: &opts };
+        let ctx = SearchContext {
+            root,
+            index: Some(&index),
+            opts: &opts,
+        };
         let outcome = execute(&ctx, "brownfox", 20);
         assert!(
             outcome.took_ms < sleep_ms / 2,

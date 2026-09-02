@@ -161,7 +161,7 @@ export interface PluginRequest {
      *  (`/cli/args/<name>`, `/cli/flags/<name>`) — see `buildContext`'s doc
      *  comment. Absent for GUI-triggered commands. */
     cli?: {
-      args?: Record<string, string>
+      args?: Record<string, string | number>
       flags?: Record<string, string | boolean>
     }
   }

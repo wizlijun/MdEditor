@@ -75,4 +75,13 @@ describe('buildContext', () => {
     })
     expect(r.context.cli).toEqual({ args: { file: '/p/book.epub' }, flags: { ocr: true } })
   })
+
+  it('forwards every named positional and preserves integer values', async () => {
+    const tab = { path: '', filename: null, extension: null, kind: 'markdown' as const, title: '', isDirty: false, isUntitled: true, content: '' }
+    const m = { ...baseManifest, host_capabilities: [] as never[] }
+    const r = await buildContext(m, tab, {
+      cli: { args: { task: 'selfcheck', count: 3 }, flags: {} },
+    })
+    expect(r.context.cli?.args).toEqual({ task: 'selfcheck', count: 3 })
+  })
 })

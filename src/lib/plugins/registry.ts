@@ -5,11 +5,14 @@ const VALID_CAPS = new Set<string>([
   'clipboard.write', 'toast', 'dialog',
 ])
 
-export const BUILTIN_SUBCOMMANDS = ['help', 'version', 'plugin']
+export const BUILTIN_SUBCOMMANDS = [
+  'help', 'version', 'plugin', 'open', 'share', 'search', 'mcp', 'memory',
+  'doctor', 'reading-insights',
+]
 const RESERVED_GLOBAL_FLAGS = [
   '-h', '--help', '-v', '--version',
   '-q', '--quiet', '--json',
-  '--no-clipboard', '--yes', '-y',
+  '--no-clipboard', '--cli', '--yes', '-y',
 ]
 const SUBCOMMAND_RE = /^[a-z][a-z0-9-]{1,31}$/
 const SHORT_FLAG_RE = /^-[a-zA-Z]$/

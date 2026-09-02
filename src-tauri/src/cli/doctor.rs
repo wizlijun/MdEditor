@@ -906,8 +906,20 @@ pub fn run(args: DoctorArgs) -> ExitCode {
     // silently fall through to "checked everything, made two requests,
     // exited 0" (see the `unknown` field's doc comment).
     if !args.unknown.is_empty() {
-        for x in &args.unknown {
-            eprintln!("notemd: unknown option '{x}' — see: notemd help doctor");
+        let message = args.unknown.iter()
+            .map(|x| format!("unknown option '{x}'"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        if args.json {
+            println!("{}", serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "invalid_arguments",
+                    "message": format!("{message} — see: notemd help doctor")
+                }
+            }));
+        } else {
+            eprintln!("notemd: {message} — see: notemd help doctor");
         }
         return ExitCode::from(2);
     }

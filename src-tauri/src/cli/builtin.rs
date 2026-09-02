@@ -3,9 +3,9 @@
 //!
 //! These run entirely in Rust without spinning up a Tauri webview.
 
-use crate::plugin_host::PluginManifest;
 use super::args::Parsed;
 use super::router::Builtin;
+use crate::plugin_host::PluginManifest;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -14,20 +14,50 @@ use std::process::ExitCode;
 const PLUGIN_API_VERSION: &str = "v1";
 
 pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
-    let (manifests, enabled) = current_scan();
-    let manifests_only: Vec<PluginManifest> =
-        manifests.into_iter().map(|(m, _)| m).collect();
+    let (manifests, enabled, inventory_issues, cli_conflicts) = current_scan();
+    let manifests_only: Vec<PluginManifest> = manifests.into_iter().map(|(m, _)| m).collect();
     match b {
+        Builtin::ArgumentError(message) => {
+            if parsed.globals.json {
+                println!(
+                    "{}",
+                    json!({
+                        "ok": false,
+                        "error": { "code": "invalid_arguments", "message": message },
+                    })
+                );
+            } else {
+                eprintln!("notemd: {message}");
+                eprintln!("Run 'notemd help' for usage.");
+            }
+            ExitCode::from(2)
+        }
         Builtin::Help { topic, all } => {
-            println!("{}", render_help(topic.as_deref(), all, &manifests_only, &enabled));
-            ExitCode::from(0)
+            let (output, code) = render_help_output(
+                topic.as_deref(),
+                all,
+                parsed.globals.json,
+                &manifests_only,
+                &enabled,
+            );
+            println!("{output}");
+            ExitCode::from(code)
         }
         Builtin::Version => {
             println!("{}", render_version(parsed.globals.json));
             ExitCode::from(0)
         }
         Builtin::PluginList => {
-            println!("{}", render_plugin_list(parsed.globals.json, &manifests_only, &enabled));
+            println!(
+                "{}",
+                render_plugin_list_with_issues(
+                    parsed.globals.json,
+                    &manifests_only,
+                    &enabled,
+                    &inventory_issues,
+                    &cli_conflicts,
+                )
+            );
             ExitCode::from(0)
         }
         Builtin::PluginEnable(id) => plugin_set_enabled(&id, true, parsed),
@@ -36,11 +66,60 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
             let m = match manifests_only.iter().find(|m| m.id == id) {
                 Some(m) => m,
                 None => {
-                    eprintln!("notemd: unknown plugin id '{id}'");
+                    if let Some(issue) = inventory_issues.iter().find(|issue| issue.id == id) {
+                        if parsed.globals.json {
+                            println!(
+                                "{}",
+                                json!({
+                                    "ok": false,
+                                    "error": { "code": "invalid_plugin", "message": issue.error },
+                                    "data": {
+                                        "id": issue.id,
+                                        "version": issue.version,
+                                        "status": "invalid",
+                                        "enabled": issue.enabled,
+                                    },
+                                })
+                            );
+                        } else {
+                            println!(
+                                "{} ({})\nStatus: invalid{}\nError: {}",
+                                issue.id,
+                                issue.id,
+                                if issue.enabled {
+                                    " (enabled in state.json)"
+                                } else {
+                                    " (disabled)"
+                                },
+                                issue.error,
+                            );
+                        }
+                        return ExitCode::from(1);
+                    }
+                    if parsed.globals.json {
+                        println!(
+                            "{}",
+                            json!({
+                                "ok": false,
+                                "error": { "code": "unknown_plugin", "message": format!("unknown plugin id '{id}'") },
+                            })
+                        );
+                    } else {
+                        eprintln!("notemd: unknown plugin id '{id}'");
+                    }
                     return ExitCode::from(2);
                 }
             };
-            println!("{}", render_plugin_info(m, &enabled));
+            if parsed.globals.json {
+                println!(
+                    "{}",
+                    render_plugin_info_json(m, &enabled, &cli_conflicts)
+                );
+            } else {
+                let mut output = render_plugin_info(m, &enabled);
+                append_cli_conflicts_text(&mut output, &id, &cli_conflicts);
+                println!("{output}");
+            }
             ExitCode::from(0)
         }
         Builtin::PluginInstall(id, version) => market::run_install(&id, version.as_deref(), parsed),
@@ -59,26 +138,84 @@ pub fn run(b: Builtin, parsed: &Parsed) -> ExitCode {
 /// `current_scan` filters out of `manifests` entirely (discovery only returns
 /// enabled ones). An id absent from state.json is simply not installed.
 fn plugin_set_enabled(id: &str, enabled: bool, parsed: &Parsed) -> ExitCode {
+    if enabled {
+        if let Some(root) = super::runner::v2_plugins_root() {
+            if let Some(entry) = crate::plugin_runtime::discovery::scan_root_inventory(
+                &root,
+                env!("CARGO_PKG_VERSION"),
+            )
+            .into_iter()
+            .find(|entry| entry.id == id)
+            {
+                if let Err(error) = entry.manifest {
+                    if parsed.globals.json {
+                        println!(
+                            "{}",
+                            json!({
+                                "ok": false,
+                                "error": { "code": "invalid_plugin", "message": error },
+                            })
+                        );
+                    } else {
+                        eprintln!("notemd: cannot enable invalid plugin '{id}': {error}");
+                    }
+                    return ExitCode::from(2);
+                }
+            }
+        }
+    }
     match market::set_v2_enabled(id, enabled) {
         Some(res) => report_toggle(id, enabled, res, parsed),
         None => {
-            eprintln!("notemd: unknown plugin id '{id}'");
+            if parsed.globals.json {
+                println!(
+                    "{}",
+                    json!({
+                        "ok": false,
+                        "error": { "code": "unknown_plugin", "message": format!("unknown plugin id '{id}'") },
+                    })
+                );
+            } else {
+                eprintln!("notemd: unknown plugin id '{id}'");
+            }
             ExitCode::from(2)
         }
     }
 }
 
 fn report_toggle(id: &str, enabled: bool, res: Result<(), String>, parsed: &Parsed) -> ExitCode {
-    let (verb, past) = if enabled { ("enable", "enabled") } else { ("disable", "disabled") };
+    let (verb, past) = if enabled {
+        ("enable", "enabled")
+    } else {
+        ("disable", "disabled")
+    };
     match res {
         Ok(()) => {
-            if !parsed.globals.quiet {
+            if parsed.globals.json {
+                println!(
+                    "{}",
+                    json!({
+                        "ok": true,
+                        "data": { "id": id, "status": past },
+                    })
+                );
+            } else if !parsed.globals.quiet {
                 eprintln!("✓ plugin '{id}' {past}");
             }
             ExitCode::from(0)
         }
         Err(e) => {
-            eprintln!("notemd: failed to {verb} plugin: {e}");
+            if parsed.globals.json {
+                println!(
+                    "{}",
+                    json!({
+                        "ok": false,
+                        "error": { "code": "plugin_state_error", "message": e },
+                    })
+                );
+            } else {
+                eprintln!("notemd: failed to {verb} plugin: {e}");
+            }
             ExitCode::from(1)
         }
     }
@@ -90,7 +227,8 @@ pub fn render_version(as_json: bool) -> String {
         json!({
             "ok": true,
             "data": { "version": version, "plugin_api": PLUGIN_API_VERSION }
-        }).to_string()
+        })
+        .to_string()
     } else {
         format!("notemd {version} (plugin API {PLUGIN_API_VERSION})")
     }
@@ -108,19 +246,44 @@ pub fn render_help(
     let version = env!("CARGO_PKG_VERSION");
     let mut out = String::new();
     out.push_str("notemd — note.md command-line interface\n");
-    out.push_str(&format!("Version: {version} (plugin API {PLUGIN_API_VERSION})\n\n"));
+    out.push_str(&format!(
+        "Version: {version} (plugin API {PLUGIN_API_VERSION})\n\n"
+    ));
     out.push_str("USAGE:\n");
     out.push_str("  notemd [global options] <command> [args...]\n");
     out.push_str("  notemd <file>...                       Open files in the desktop app\n");
     out.push_str("  notemd .                               Open a directory in the folder view\n");
     for m in manifests {
         let is_on = super::is_enabled(m, enabled);
-        if !is_on { continue }
+        if !is_on {
+            continue;
+        }
         for entry in &m.cli {
-            if let Some(short) = entry.aliases.iter().find(|a| a.starts_with('-') && a.len() == 2) {
+            if let Some(short) = entry
+                .aliases
+                .iter()
+                .find(|a| a.starts_with('-') && a.len() == 2)
+            {
+                let args_sig = entry
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        if arg.required {
+                            format!("<{}>", arg.name)
+                        } else {
+                            format!("[{}]", arg.name)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let suffix = if args_sig.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {args_sig}")
+                };
                 out.push_str(&format!(
-                    "  notemd {short} <file>                  (alias for: notemd {} <file>)\n",
-                    entry.subcommand,
+                    "  notemd {short}{suffix}                  (alias for: notemd {}{suffix})\n",
+                    entry.subcommand
                 ));
             }
         }
@@ -128,22 +291,32 @@ pub fn render_help(
     out.push_str("\nCORE COMMANDS:\n");
     out.push_str("  help          Show this help (aliases: -h, --help)\n");
     out.push_str("  version       Print version (aliases: -v, --version)\n");
-    out.push_str("  plugin        Manage plugins (list, enable, disable, info, install, update, remove)\n");
+    out.push_str(
+        "  plugin        Manage plugins (list, enable, disable, info, install, update, remove)\n",
+    );
     out.push_str("  share         Render and publish file as a shareable URL (alias: --share)\n");
-    out.push_str("  search        Full-text search over the Vault (--vault, --json, --limit, --stats)\n");
+    out.push_str(
+        "  search        Full-text search over the Vault (--vault, --json, --limit, --stats)\n",
+    );
     out.push_str("  mcp           Serve this vault to agents over MCP (stdio). Register with:\n");
     out.push_str("                { \"command\": \"notemd\", \"args\": [\"mcp\"] }\n");
     out.push_str("  memory        Read and propose controlled personal Memory Claims\n");
-    out.push_str("  doctor        Self-check every local capability (--offline, --vault, --json)\n");
+    out.push_str(
+        "  doctor        Self-check every local capability (--offline, --vault, --json)\n",
+    );
     out.push_str("  reading-insights [report]   Generate a reading digest from the Vault (--vault, --date, --stdout)\n");
 
     let mut shown_header = false;
     for m in manifests {
         // Core stubs are hardcoded in CORE COMMANDS above; never re-list them
         // as plugins, even if a caller passes the injected stub manifests.
-        if crate::cli::runner::is_core_cli_stub(m) { continue }
+        if crate::cli::runner::is_core_cli_stub(m) {
+            continue;
+        }
         let is_on = super::is_enabled(m, enabled);
-        if !is_on { continue }
+        if !is_on {
+            continue;
+        }
         for entry in &m.cli {
             if !shown_header {
                 out.push_str("\nPLUGIN COMMANDS:\n");
@@ -159,9 +332,13 @@ pub fn render_help(
     if all {
         let mut shown = false;
         for m in manifests {
-            if crate::cli::runner::is_core_cli_stub(m) { continue }
+            if crate::cli::runner::is_core_cli_stub(m) {
+                continue;
+            }
             let is_on = super::is_enabled(m, enabled);
-            if is_on { continue }
+            if is_on {
+                continue;
+            }
             for entry in &m.cli {
                 if !shown {
                     out.push_str("\nDISABLED COMMANDS:\n");
@@ -178,12 +355,15 @@ pub fn render_help(
     out.push_str("\nGLOBAL OPTIONS:\n");
     out.push_str("  --json              Emit machine-readable JSON instead of text\n");
     out.push_str("  -q, --quiet         Suppress non-essential status output\n");
-    out.push_str("  -y, --yes           Assume 'yes' for confirmation prompts\n");
-    out.push_str("  --no-clipboard      Don't copy the result to the clipboard (default: copy)\n");
+    out.push_str(
+        "  --no-clipboard      Don't copy share results to the clipboard (default: copy)\n",
+    );
 
     out.push_str("\nEXIT CODES:\n");
     out.push_str("  0    Success\n");
+    out.push_str("  1    Runtime or integrity error (or search returned no hits)\n");
     out.push_str("  2    File or argument error\n");
+    out.push_str("  3    Command belongs to a disabled plugin\n");
     out.push_str("  4    Network or server error\n");
     out.push_str("  5    Plugin package failed verification (signature / hash)\n");
     out.push_str("  127  Unknown command\n");
@@ -192,6 +372,49 @@ pub fn render_help(
     out.push_str("Run 'notemd help <command>' for details on a specific command.\n");
     out.push_str("Run 'notemd help --all' to see disabled / unavailable commands too.\n");
     out
+}
+
+fn render_help_output(
+    topic: Option<&str>,
+    all: bool,
+    as_json: bool,
+    manifests: &[PluginManifest],
+    enabled: &HashMap<String, bool>,
+) -> (String, u8) {
+    let known = topic.is_none_or(|topic| {
+        render_core_topic(topic).is_some()
+            || manifests.iter().any(|manifest| {
+                manifest.cli.iter().any(|entry| {
+                    entry.subcommand == topic || entry.aliases.iter().any(|alias| alias == topic)
+                })
+            })
+    });
+    if !known {
+        let topic = topic.expect("unknown help response always has a topic");
+        let message = format!("unknown help topic '{topic}'");
+        return if as_json {
+            (
+                json!({
+                    "ok": false,
+                    "error": { "code": "unknown_help_topic", "message": message },
+                })
+                .to_string(),
+                2,
+            )
+        } else {
+            (
+                format!("notemd: {message}. Run 'notemd help' to see commands."),
+                2,
+            )
+        };
+    }
+
+    let text = render_help(topic, all, manifests, enabled);
+    if as_json {
+        (json!({ "ok": true, "data": { "text": text } }).to_string(), 0)
+    } else {
+        (text, 0)
+    }
 }
 
 fn render_help_topic(
@@ -212,21 +435,38 @@ fn render_help_topic(
                     entry.subcommand, entry.summary,
                 ));
                 out.push_str(&format!("Provided by: {} plugin (v{})", m.name, m.version));
-                if !on { out.push_str(" [DISABLED]"); }
+                if !on {
+                    out.push_str(" [DISABLED]");
+                }
                 out.push('\n');
                 out.push_str("\nUSAGE:\n");
-                let args_sig = entry.args.iter()
-                    .map(|a| if a.required { format!("<{}>", a.name) } else { format!("[{}]", a.name) })
-                    .collect::<Vec<_>>().join(" ");
+                let args_sig = entry
+                    .args
+                    .iter()
+                    .map(|a| {
+                        if a.required {
+                            format!("<{}>", a.name)
+                        } else {
+                            format!("[{}]", a.name)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 out.push_str(&format!("  notemd {} {}\n", entry.subcommand, args_sig));
                 for a in &entry.aliases {
-                    out.push_str(&format!("  notemd {} {}                  (alias)\n", a, args_sig));
+                    out.push_str(&format!(
+                        "  notemd {} {}                  (alias)\n",
+                        a, args_sig
+                    ));
                 }
                 if !entry.args.is_empty() {
                     out.push_str("\nARGUMENTS:\n");
                     for a in &entry.args {
-                        out.push_str(&format!("  <{:<8}> {}\n",
-                            a.name, a.help.as_deref().unwrap_or("")));
+                        out.push_str(&format!(
+                            "  <{:<8}> {}\n",
+                            a.name,
+                            a.help.as_deref().unwrap_or("")
+                        ));
                     }
                 }
                 if !entry.flags.is_empty() {
@@ -236,13 +476,22 @@ fn render_help_topic(
                             Some(s) => format!("{}, {}", s, f.long),
                             None => f.long.clone(),
                         };
-                        out.push_str(&format!("  {:<25} {}\n",
-                            flag, f.help.as_deref().unwrap_or("")));
+                        let flag = if f.ty == "boolean" {
+                            flag
+                        } else {
+                            format!("{flag} <value>")
+                        };
+                        out.push_str(&format!(
+                            "  {:<25} {}\n",
+                            flag,
+                            f.help.as_deref().unwrap_or("")
+                        ));
                     }
                 }
                 out.push_str("\nEXIT CODES:\n");
                 out.push_str("  0    Success\n");
                 out.push_str("  2    File or argument error\n");
+                out.push_str("  3    Plugin is installed but disabled\n");
                 out.push_str("  4    Network or server error\n");
                 return out;
             }
@@ -254,7 +503,8 @@ fn render_help_topic(
 /// Detailed help for the built-in core commands.
 fn render_core_topic(topic: &str) -> Option<String> {
     let body = match topic {
-        "help" | "-h" | "--help" => "\
+        "help" | "-h" | "--help" => {
+            "\
 notemd help — Show help for notemd and its commands
 
 USAGE:
@@ -268,8 +518,10 @@ DESCRIPTION:
 
 ALIASES:
   -h, --help
-",
-        "version" | "-v" | "--version" => "\
+"
+        }
+        "version" | "-v" | "--version" => {
+            "\
 notemd version — Print the notemd version and plugin API level
 
 USAGE:
@@ -277,8 +529,10 @@ USAGE:
 
 ALIASES:
   -v, --version
-",
-        "plugin" => "\
+"
+        }
+        "plugin" => {
+            "\
 notemd plugin — Manage plugins
 
 USAGE:
@@ -288,6 +542,7 @@ USAGE:
   notemd plugin info    <plugin-id>       Show details for a single plugin
   notemd plugin install <id>[@version]    Download, verify, and install a plugin
   notemd plugin update  [<plugin-id>]     Update one plugin, or all if omitted
+  notemd plugin upgrade [<plugin-id>]     Alias for update
   notemd plugin remove  <plugin-id>       Uninstall a plugin (alias: uninstall)
 
 FLAGS:
@@ -302,8 +557,17 @@ NOTES:
   install/update download from the plugin registry and verify every package's
   minisign signature + sha256 before it touches disk; a running app picks up the
   change on its next launch.
-",
-        "share" | "--share" => "\
+
+EXIT CODES:
+  0    Success
+  1    Local plugin state or filesystem error
+  2    Argument error or unknown plugin id
+  4    Registry, download, or package installation error
+  5    Plugin package failed signature or hash verification
+"
+        }
+        "share" | "--share" => {
+            "\
 notemd share — Render and publish file as a shareable URL
 
 USAGE:
@@ -321,8 +585,16 @@ FLAGS:
 Shares are published to the configured share server and the URL is copied to
 the clipboard (disable with --no-clipboard). Files outside the Vault are
 homed into the Vault first.
-",
-        "search" => "\
+
+EXIT CODES:
+  0    Success
+  1    Local rendering or runtime error
+  2    File or argument error
+  4    Share server error
+"
+        }
+        "search" => {
+            "\
 notemd search — Full-text search over the Vault
 
 USAGE:
@@ -382,8 +654,10 @@ EXIT CODES:
   0    Output was printed — one or more hits (or --stats/--rebuild ran)
   1    No hits — not an error, nothing to branch on but 'try something else'
   2    No Vault configured/found, or a missing query
-",
-        "doctor" => "\
+"
+        }
+        "doctor" => {
+            "\
 notemd doctor — Self-check notemd's local setup
 
 USAGE:
@@ -421,13 +695,36 @@ EXIT CODES:
   0    No failures (warnings and skipped checks are fine)
   1    At least one check failed
   2    Argument error
-",
-        "memory" => "\
+"
+        }
+        "mcp" => {
+            "\
+notemd mcp — Serve the configured Vault to agents over MCP stdio
+
+USAGE:
+  notemd mcp
+
+DESCRIPTION:
+  Starts an MCP stdio transport exposing the read-only `search` and
+  `vault_info` tools. The desktop app must be running with MCP enabled when a
+  tool is called; initialize and tools/list remain available before that.
+
+CLIENT CONFIGURATION:
+  { \"command\": \"notemd\", \"args\": [\"mcp\"] }
+
+EXIT CODES:
+  0    Input stream closed normally
+  1    MCP transport/runtime error
+  2    Argument error
+"
+        }
+        "memory" => {
+            "\
 notemd memory — Git-backed personal Claim ledger
 
 USAGE:
   notemd memory snapshot [--json]
-  notemd memory list [--status current|pending|revoked|deleted|conflict|all]
+  notemd memory list [--scope user|memory] [--status current|pending|revoked|deleted|conflict|all]
   notemd memory show <claim-or-revision-id>
   notemd memory owner --json
   notemd memory pending [--json]
@@ -469,11 +766,16 @@ CLAIM FLAGS:
   --avoid-error <text>       Error pattern this Claim is intended to prevent
 
 CONTEXT FLAGS:
-  --provider <provider>      External model/service provider
-  --model <model>            Exact model identifier
+  --provider <provider>      Model/service provider (required for external transfer)
+  --model <model>            Exact model id (required for external transfer)
   --tool <tools>             Available tools, comma-separated
   --external-transfer        Context may leave the local Host
   --as-of <RFC3339>          Query valid time
+
+LIST FLAGS:
+  --scope <user|memory>      Filter by projection target
+  --status <status>          current|pending|revoked|deleted|conflict|all
+  --all                      Alias for --status all
 
 NOTES:
   USER.md and MEMORY.md are disposable plain-text projections, not databases.
@@ -493,9 +795,11 @@ EXIT CODES:
   0    Success
   1    `check` found projection drift
   2    Argument, integrity, ownership, conflict, or Vault error
-",
-        "open" | "." => "\
-notemd <path> — Open a file or directory in the desktop app
+"
+        }
+        "open" | "." => {
+            "\
+notemd open — Open files or directories in the desktop app (implicit path command)
 
 USAGE:
   notemd .                 Open the current directory in the folder view
@@ -519,25 +823,28 @@ EXIT CODES:
   0    Handed to the app
   1    The app could not be launched
   2    No such file or directory
-",
-        "reading-insights" => "\
+"
+        }
+        "reading-insights" => {
+            "\
 notemd reading-insights — Reading Insights (engagement) report
 
 USAGE:
-  notemd reading-insights [report] --vault <path> [--date <preset>] [--stdout]
-  notemd reading-insights [report] --vault <path> --from YYYY-MM-DD --to YYYY-MM-DD
+  notemd reading-insights [report] [--vault <path>] [--date <preset>] [--stdout]
+  notemd reading-insights [report] [--vault <path>] --from YYYY-MM-DD --to YYYY-MM-DD
 
   The `report` subcommand is the default and may be omitted.
 
 FLAGS:
-  --vault <path>   Vault root. Reads <vault>/.notemd/analytics/
+  --vault <path>   Vault root (default: the configured Vault)
   --date <preset>  today | yesterday (default) | 7d | 30d | month
-  --from --to      Explicit YYYY-MM-DD range (overrides --date)
+  --from --to      Explicit YYYY-MM-DD range (cannot be combined with --date)
   --stdout         Print to stdout instead of writing <vault>/stat/*.md
 
-Owner engagement only (read/edit time, edit bursts, marks). Audience (online
-reading) stats are shown in the in-app Reading Insights window.
-",
+Includes owner engagement (read/edit time, edit bursts, marks) and available
+audience/online-reading statistics, matching the in-app report.
+"
+        }
         _ => return None,
     };
 
@@ -564,37 +871,50 @@ pub fn render_plugin_list(
     enabled: &HashMap<String, bool>,
 ) -> String {
     if as_json {
-        let arr: Vec<_> = manifests.iter().map(|m| {
-            let is_on = super::is_enabled(m, enabled);
-            json!({
-                "id": m.id,
-                "name": m.name,
-                "version": m.version,
-                "status": if is_on { "enabled" } else { "disabled" },
-                "cli": m.cli.iter().map(|c| json!({
-                    "subcommand": c.subcommand,
-                    "aliases": c.aliases,
-                    "summary": c.summary,
-                })).collect::<Vec<_>>(),
+        let arr: Vec<_> = manifests
+            .iter()
+            .map(|m| {
+                let is_on = super::is_enabled(m, enabled);
+                json!({
+                    "id": m.id,
+                    "name": m.name,
+                    "version": m.version,
+                    "status": if is_on { "enabled" } else { "disabled" },
+                    "cli": m.cli.iter().map(|c| json!({
+                        "subcommand": c.subcommand,
+                        "aliases": c.aliases,
+                        "summary": c.summary,
+                    })).collect::<Vec<_>>(),
+                })
             })
-        }).collect();
+            .collect();
         return json!({ "ok": true, "data": arr }).to_string();
     }
     let mut out = String::new();
-    out.push_str(&format!("{:<10} {:<12} {:<8} {:<10} {}\n",
-        "ID", "NAME", "VERSION", "STATUS", "CLI"));
+    out.push_str(&format!(
+        "{:<10} {:<12} {:<8} {:<10} {}\n",
+        "ID", "NAME", "VERSION", "STATUS", "CLI"
+    ));
     for m in manifests {
         let is_on = super::is_enabled(m, enabled);
-        let cli = m.cli.iter().map(|c| {
-            let aliases = if c.aliases.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", c.aliases.join(", "))
-            };
-            format!("{}{aliases}", c.subcommand)
-        }).collect::<Vec<_>>().join(", ");
-        out.push_str(&format!("{:<10} {:<12} {:<8} {:<10} {}\n",
-            m.id, m.name, m.version,
+        let cli = m
+            .cli
+            .iter()
+            .map(|c| {
+                let aliases = if c.aliases.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", c.aliases.join(", "))
+                };
+                format!("{}{aliases}", c.subcommand)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "{:<10} {:<12} {:<8} {:<10} {}\n",
+            m.id,
+            m.name,
+            m.version,
             if is_on { "enabled" } else { "disabled" },
             cli,
         ));
@@ -602,14 +922,82 @@ pub fn render_plugin_list(
     out
 }
 
-pub fn render_plugin_info(
-    m: &PluginManifest,
+fn render_plugin_list_with_issues(
+    as_json: bool,
+    manifests: &[PluginManifest],
     enabled: &HashMap<String, bool>,
+    issues: &[super::router::CliInventoryIssue],
+    conflicts: &[super::router::CliNameConflict],
 ) -> String {
+    if issues.is_empty() && conflicts.is_empty() {
+        return render_plugin_list(as_json, manifests, enabled);
+    }
+    if as_json {
+        let mut root: serde_json::Value =
+            serde_json::from_str(&render_plugin_list(true, manifests, enabled))
+                .expect("render_plugin_list always returns JSON in JSON mode");
+        let rows = root["data"]
+            .as_array_mut()
+            .expect("plugin list data is an array");
+        rows.extend(issues.iter().map(|issue| {
+            json!({
+                "id": issue.id,
+                "name": issue.id,
+                "version": issue.version,
+                "status": "invalid",
+                "enabled": issue.enabled,
+                "error": issue.error,
+                "cli": [],
+            })
+        }));
+        for row in rows.iter_mut() {
+            let Some(id) = row["id"].as_str() else {
+                continue;
+            };
+            let rejected: Vec<_> = conflicts
+                .iter()
+                .filter(|conflict| conflict.plugin_id == id)
+                .map(|conflict| {
+                    json!({
+                        "entry": conflict.entry,
+                        "reasons": conflict.reasons,
+                    })
+                })
+                .collect();
+            if !rejected.is_empty() {
+                row["rejected_cli"] = serde_json::Value::Array(rejected);
+            }
+        }
+        rows.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        return root.to_string();
+    }
+
+    let mut out = render_plugin_list(false, manifests, enabled);
+    for issue in issues {
+        out.push_str(&format!(
+            "{:<10} {:<12} {:<8} {:<10} {}\n",
+            issue.id, issue.id, issue.version, "invalid", issue.error,
+        ));
+    }
+    for conflict in conflicts {
+        out.push_str(&format!(
+            "  ! {} CLI entry '{}' rejected: {}\n",
+            conflict.plugin_id,
+            conflict.entry,
+            conflict.reasons.join(", "),
+        ));
+    }
+    out
+}
+
+pub fn render_plugin_info(m: &PluginManifest, enabled: &HashMap<String, bool>) -> String {
     let is_on = super::is_enabled(m, enabled);
     let mut out = String::new();
     out.push_str(&format!("{} ({})  v{}\n", m.name, m.id, m.version));
-    out.push_str(&format!("Status: {}\n", if is_on { "enabled" } else { "disabled" }));
+    out.push_str(&format!(
+        "Status: {}\n",
+        if is_on { "enabled" } else { "disabled" }
+    ));
     if let Some(d) = &m.description {
         out.push_str(&format!("Description: {d}\n"));
     }
@@ -625,10 +1013,67 @@ pub fn render_plugin_info(
     if !m.menus.is_empty() {
         out.push_str("\nMenu items:\n");
         for me in &m.menus {
-            out.push_str(&format!("  - [{}] {} ({})\n", me.location, me.label, me.command));
+            out.push_str(&format!(
+                "  - [{}] {} ({})\n",
+                me.location, me.label, me.command
+            ));
         }
     }
     out
+}
+
+fn render_plugin_info_json(
+    m: &PluginManifest,
+    enabled: &HashMap<String, bool>,
+    conflicts: &[super::router::CliNameConflict],
+) -> String {
+    let rejected_cli: Vec<_> = conflicts
+        .iter()
+        .filter(|conflict| conflict.plugin_id == m.id)
+        .map(|conflict| json!({
+            "entry": conflict.entry,
+            "reasons": conflict.reasons,
+        }))
+        .collect();
+    json!({
+        "ok": true,
+        "data": {
+            "id": m.id,
+            "name": m.name,
+            "version": m.version,
+            "description": m.description,
+            "status": if super::is_enabled(m, enabled) { "enabled" } else { "disabled" },
+            "cli": m.cli.iter().map(|entry| json!({
+                "subcommand": entry.subcommand,
+                "aliases": entry.aliases,
+                "summary": entry.summary,
+            })).collect::<Vec<_>>(),
+            "rejected_cli": rejected_cli,
+        }
+    })
+    .to_string()
+}
+
+fn append_cli_conflicts_text(
+    output: &mut String,
+    plugin_id: &str,
+    conflicts: &[super::router::CliNameConflict],
+) {
+    let relevant: Vec<_> = conflicts
+        .iter()
+        .filter(|conflict| conflict.plugin_id == plugin_id)
+        .collect();
+    if relevant.is_empty() {
+        return;
+    }
+    output.push_str("\nRejected CLI entries:\n");
+    for conflict in relevant {
+        output.push_str(&format!(
+            "  - {}: {}\n",
+            conflict.entry,
+            conflict.reasons.join(", "),
+        ));
+    }
 }
 
 /// Collects the installed plugins (adapted to the `PluginManifest` view-model
@@ -640,11 +1085,17 @@ pub fn render_plugin_info(
 /// exist only so routing/arg-parsing can match core subcommands. Injecting
 /// them here would double-list `share` in `notemd help` (core row + PLUGIN
 /// COMMANDS row) and pollute `notemd plugin list` with pseudo-plugins.
-fn current_scan() -> (Vec<(PluginManifest, PathBuf)>, HashMap<String, bool>) {
+fn current_scan() -> (
+    Vec<(PluginManifest, PathBuf)>,
+    HashMap<String, bool>,
+    Vec<super::router::CliInventoryIssue>,
+    Vec<super::router::CliNameConflict>,
+) {
     let mut manifests = Vec::new();
     let mut enabled = HashMap::new();
-    super::runner::append_v2_manifests(&mut manifests, &mut enabled);
-    (manifests, enabled)
+    let issues = super::router::append_installed_cli_manifests(&mut manifests, &mut enabled);
+    let conflicts = super::router::reject_cli_name_conflicts(&mut manifests);
+    (manifests, enabled, issues, conflicts)
 }
 
 /// v2 marketplace subcommands driven from the CLI (子项目③ Task 3):
@@ -755,7 +1206,11 @@ mod market {
     fn version_parts(v: &str) -> Vec<u64> {
         v.split('.')
             .map(|p| {
-                let digits: String = p.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+                let digits: String = p
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
                 digits.parse().unwrap_or(0)
             })
             .collect()
@@ -982,12 +1437,15 @@ mod market {
             let sig_url = sig_url_for(&url);
 
             let pkg = mkt::download(&url).await.map_err(|e| (EXIT_RUNTIME, e))?;
-            let sig = String::from_utf8(mkt::download(&sig_url).await.map_err(|e| (EXIT_RUNTIME, e))?)
-                .map_err(|e| (EXIT_RUNTIME, format!("signature is not valid utf-8: {e}")))?;
+            let sig = String::from_utf8(
+                mkt::download(&sig_url)
+                    .await
+                    .map_err(|e| (EXIT_RUNTIME, e))?,
+            )
+            .map_err(|e| (EXIT_RUNTIME, format!("signature is not valid utf-8: {e}")))?;
 
             let host_version = env!("CARGO_PKG_VERSION");
-            let tmp = tempfile::tempdir()
-                .map_err(|e| (EXIT_RUNTIME, format!("tempdir: {e}")))?;
+            let tmp = tempfile::tempdir().map_err(|e| (EXIT_RUNTIME, format!("tempdir: {e}")))?;
             // Verification failures (bad sig / hash mismatch) are the untrusted-
             // package case → EXIT_VERIFY; everything else (unpack, manifest,
             // id mismatch, io) is a plain runtime failure → EXIT_RUNTIME.
@@ -1009,7 +1467,10 @@ mod market {
             let mut install = state::load(&root);
             install.installed.insert(
                 id.to_string(),
-                state::InstalledPlugin { version: entry.version.clone(), enabled: true },
+                state::InstalledPlugin {
+                    version: entry.version.clone(),
+                    enabled: true,
+                },
             );
             state::save(&root, &install).map_err(|e| (EXIT_RUNTIME, e))?;
 
@@ -1044,7 +1505,13 @@ mod market {
         let targets: Vec<(String, String)> = match id {
             Some(one) => match installed.get(one) {
                 Some(p) => vec![(one.to_string(), p.version.clone())],
-                None => return fail(parsed, EXIT_RUNTIME, &format!("plugin '{one}' is not installed")),
+                None => {
+                    return fail(
+                        parsed,
+                        EXIT_RUNTIME,
+                        &format!("plugin '{one}' is not installed"),
+                    )
+                }
             },
             None => installed
                 .iter()
@@ -1058,34 +1525,66 @@ mod market {
         }
 
         let outcomes: Result<Vec<UpdateOutcome>, (u8, String)> = rt.block_on(async {
-            let index = mkt::fetch_index(&base).await.map_err(|e| (EXIT_RUNTIME, e))?;
+            let index = mkt::fetch_index(&base)
+                .await
+                .map_err(|e| (EXIT_RUNTIME, e))?;
             let mut out = Vec::with_capacity(targets.len());
             for (id, installed_ver) in &targets {
-                let entry = match pick_update_entry(&index.plugins, id, installed_ver, host_version()) {
-                    Ok(e) => e.clone(),
-                    Err(note) => {
-                        out.push(UpdateOutcome { id: id.clone(), from: installed_ver.clone(), to: None, note });
-                        continue;
-                    }
-                };
+                let entry =
+                    match pick_update_entry(&index.plugins, id, installed_ver, host_version()) {
+                        Ok(e) => e.clone(),
+                        Err(note) => {
+                            out.push(UpdateOutcome {
+                                id: id.clone(),
+                                from: installed_ver.clone(),
+                                to: None,
+                                note,
+                            });
+                            continue;
+                        }
+                    };
                 // Newer version available → install it (same verify pipeline).
                 let (url, sha) = select_download(&entry).map_err(|e| (EXIT_RUNTIME, e))?;
                 let sig_url = sig_url_for(&url);
                 let pkg = mkt::download(&url).await.map_err(|e| (EXIT_RUNTIME, e))?;
-                let sig = String::from_utf8(mkt::download(&sig_url).await.map_err(|e| (EXIT_RUNTIME, e))?)
-                    .map_err(|e| (EXIT_RUNTIME, format!("signature is not valid utf-8: {e}")))?;
+                let sig = String::from_utf8(
+                    mkt::download(&sig_url)
+                        .await
+                        .map_err(|e| (EXIT_RUNTIME, e))?,
+                )
+                .map_err(|e| (EXIT_RUNTIME, format!("signature is not valid utf-8: {e}")))?;
                 let host_version = env!("CARGO_PKG_VERSION");
-                let tmp = tempfile::tempdir().map_err(|e| (EXIT_RUNTIME, format!("tempdir: {e}")))?;
-                installer::verify_and_stage(&pkg, &sig, &sha, mkt::PLUGIN_REGISTRY_PUBKEY, id, host_version, tmp.path())
-                    .map_err(|e| (exit_for_install_err(&e), e.to_string()))?;
+                let tmp =
+                    tempfile::tempdir().map_err(|e| (EXIT_RUNTIME, format!("tempdir: {e}")))?;
+                installer::verify_and_stage(
+                    &pkg,
+                    &sig,
+                    &sha,
+                    mkt::PLUGIN_REGISTRY_PUBKEY,
+                    id,
+                    host_version,
+                    tmp.path(),
+                )
+                .map_err(|e| (exit_for_install_err(&e), e.to_string()))?;
                 installer::commit_install(&root, id, &entry.version, tmp.path())
                     .map_err(|e| (EXIT_RUNTIME, e.to_string()))?;
                 let mut install = state::load(&root);
                 let enabled = install.installed.get(id).map(|p| p.enabled).unwrap_or(true);
-                install.installed.insert(id.clone(), state::InstalledPlugin { version: entry.version.clone(), enabled });
+                install.installed.insert(
+                    id.clone(),
+                    state::InstalledPlugin {
+                        version: entry.version.clone(),
+                        enabled,
+                    },
+                );
                 state::save(&root, &install).map_err(|e| (EXIT_RUNTIME, e))?;
                 mkt::report_install(&base, id, &entry.version).await;
-                out.push(UpdateOutcome { id: id.clone(), from: installed_ver.clone(), to: Some(entry.version.clone()), note: "updated".into() });
+                out.push(UpdateOutcome {
+                    id: id.clone(),
+                    from: installed_ver.clone(),
+                    to: Some(entry.version.clone()),
+                    note: "updated".into(),
+                });
             }
             Ok(out)
         });
@@ -1108,7 +1607,11 @@ mod market {
         // message instead of a silent success.
         let mut install = state::load(&root);
         if !install.installed.contains_key(id) {
-            return fail(parsed, EXIT_RUNTIME, &format!("plugin '{id}' is not installed"));
+            return fail(
+                parsed,
+                EXIT_RUNTIME,
+                &format!("plugin '{id}' is not installed"),
+            );
         }
 
         if let Err(e) = installer::uninstall(&root, id, keep_data, &data_root) {
@@ -1148,7 +1651,10 @@ mod market {
 
     fn emit_install_ok(parsed: &Parsed, id: &str, version: &str) {
         if parsed.globals.json {
-            println!("{}", json!({ "ok": true, "data": { "id": id, "version": version } }));
+            println!(
+                "{}",
+                json!({ "ok": true, "data": { "id": id, "version": version } })
+            );
         } else {
             if !parsed.globals.quiet {
                 eprintln!("✓ installed '{id}' {version}");
@@ -1159,9 +1665,15 @@ mod market {
 
     fn emit_remove_ok(parsed: &Parsed, id: &str, keep_data: bool) {
         if parsed.globals.json {
-            println!("{}", json!({ "ok": true, "data": { "id": id, "removed": true, "kept_data": keep_data } }));
+            println!(
+                "{}",
+                json!({ "ok": true, "data": { "id": id, "removed": true, "kept_data": keep_data } })
+            );
         } else if !parsed.globals.quiet {
-            eprintln!("✓ removed '{id}'{}", if keep_data { " (kept plugin data)" } else { "" });
+            eprintln!(
+                "✓ removed '{id}'{}",
+                if keep_data { " (kept plugin data)" } else { "" }
+            );
             eprintln!("{RESTART_NOTE}");
         }
     }
@@ -1200,7 +1712,16 @@ mod market {
     /// Print an error (JSON or text) and return the given exit code.
     fn fail(parsed: &Parsed, code: u8, msg: &str) -> ExitCode {
         if parsed.globals.json {
-            println!("{}", json!({ "ok": false, "error": msg }));
+            let kind = match code {
+                2 => "invalid_arguments",
+                EXIT_VERIFY => "plugin_verification_failed",
+                EXIT_RUNTIME => "plugin_operation_failed",
+                _ => "plugin_error",
+            };
+            println!("{}", json!({
+                "ok": false,
+                "error": { "code": kind, "message": msg },
+            }));
         } else {
             eprintln!("notemd: {msg}");
         }
@@ -1224,11 +1745,15 @@ mod market {
             let mut dl = BTreeMap::new();
             dl.insert(
                 "aarch64-apple-darwin".to_string(),
-                format!("https://plugins.notemd.net/api/download/{id}/{version}/aarch64-apple-darwin"),
+                format!(
+                    "https://plugins.notemd.net/api/download/{id}/{version}/aarch64-apple-darwin"
+                ),
             );
             dl.insert(
                 "x86_64-apple-darwin".to_string(),
-                format!("https://plugins.notemd.net/api/download/{id}/{version}/x86_64-apple-darwin"),
+                format!(
+                    "https://plugins.notemd.net/api/download/{id}/{version}/x86_64-apple-darwin"
+                ),
             );
             RegistryEntry {
                 id: id.to_string(),
@@ -1249,7 +1774,11 @@ mod market {
 
         #[test]
         fn resolve_entry_uses_requested_version() {
-            let plugins = vec![entry("x", "1.0.0"), entry("x", "2.0.0"), entry("y", "1.0.0")];
+            let plugins = vec![
+                entry("x", "1.0.0"),
+                entry("x", "2.0.0"),
+                entry("y", "1.0.0"),
+            ];
             let e = resolve_entry(&plugins, "x", Some("2.0.0"), "6.804.1").unwrap();
             assert_eq!(e.version, "2.0.0");
         }
@@ -1309,7 +1838,11 @@ mod market {
         /// Versions where string comparison gets the order backwards.
         #[test]
         fn resolve_entry_orders_versions_numerically_not_lexically() {
-            let plugins = vec![entry("x", "1.9.0"), entry("x", "1.10.0"), entry("x", "1.2.0")];
+            let plugins = vec![
+                entry("x", "1.9.0"),
+                entry("x", "1.10.0"),
+                entry("x", "1.2.0"),
+            ];
             let e = resolve_entry(&plugins, "x", None, "6.804.1").unwrap();
             assert_eq!(e.version, "1.10.0", "'1.10.0' > '1.9.0' numerically");
         }
@@ -1348,7 +1881,10 @@ mod market {
             assert!(err.contains("requires notemd >=7.000.0"), "got {err}");
             assert!(err.contains("2.0.0"), "must name the newest version: {err}");
             assert!(err.contains("host is 6.804.1"), "got {err}");
-            assert!(err.contains("install x@<version>"), "must offer the override: {err}");
+            assert!(
+                err.contains("install x@<version>"),
+                "must offer the override: {err}"
+            );
         }
 
         /// A `min_host` this parser doesn't understand reads as SATISFIED, so
@@ -1363,7 +1899,12 @@ mod market {
             assert!(min_host_satisfied("*", "0.0.1"));
             assert!(min_host_satisfied("", "0.0.1"));
             let plugins = vec![entry_min_host("x", "3.0.0", "^9.9.9")];
-            assert_eq!(resolve_entry(&plugins, "x", None, "6.804.1").unwrap().version, "3.0.0");
+            assert_eq!(
+                resolve_entry(&plugins, "x", None, "6.804.1")
+                    .unwrap()
+                    .version,
+                "3.0.0"
+            );
         }
 
         /// The comparator subset the registry ships, matched against
@@ -1405,7 +1946,10 @@ mod market {
             let plugins = vec![entry("x", "1.0.0"), newest_no_arch];
 
             let e = resolve_entry(&plugins, "x", None, "6.804.1").unwrap();
-            assert_eq!(e.version, "2.0.0", "no silent downgrade to the arch-complete 1.0.0");
+            assert_eq!(
+                e.version, "2.0.0",
+                "no silent downgrade to the arch-complete 1.0.0"
+            );
             let err = select_download(&e).unwrap_err();
             assert!(err.contains("no download for arch"), "got {err}");
 
@@ -1445,8 +1989,14 @@ mod market {
         #[test]
         fn pick_update_entry_notes_up_to_date_and_unknown() {
             let plugins = vec![entry("r", "1.0.4"), entry("r", "1.2.0")];
-            assert_eq!(pick_update_entry(&plugins, "r", "1.2.0", "6.804.1").unwrap_err(), "up-to-date");
-            assert_eq!(pick_update_entry(&plugins, "nope", "1.0.0", "6.804.1").unwrap_err(), "not in registry");
+            assert_eq!(
+                pick_update_entry(&plugins, "r", "1.2.0", "6.804.1").unwrap_err(),
+                "up-to-date"
+            );
+            assert_eq!(
+                pick_update_entry(&plugins, "nope", "1.0.0", "6.804.1").unwrap_err(),
+                "not in registry"
+            );
         }
 
         #[test]
@@ -1519,8 +2069,14 @@ mod market {
             let group: Vec<&RegistryEntry> = plugins.iter().filter(|e| e.id == "r").collect();
             let expected = newest(&group, "6.804.1", true).unwrap();
             let got = pick_update_entry(&plugins, "r", "1.0.4", "6.804.1").unwrap();
-            assert_eq!(got.version, expected.version, "decision must agree with the ordering");
-            assert_eq!(got.version, "1.1", "must pick the newest COMPATIBLE entry — 1.2.0 is incompatible");
+            assert_eq!(
+                got.version, expected.version,
+                "decision must agree with the ordering"
+            );
+            assert_eq!(
+                got.version, "1.1",
+                "must pick the newest COMPATIBLE entry — 1.2.0 is incompatible"
+            );
         }
 
         /// Pin: for today's live registry, every version is a well-formed
@@ -1541,7 +2097,10 @@ mod market {
         fn select_download_picks_current_arch() {
             let triple = discovery::current_arch_triple().expect("supported arch");
             let (url, sha) = select_download(&entry("x", "1.0.0")).unwrap();
-            assert!(url.ends_with(triple), "url {url} must target host arch {triple}");
+            assert!(
+                url.ends_with(triple),
+                "url {url} must target host arch {triple}"
+            );
             assert!(!sha.is_empty());
         }
 
@@ -1575,7 +2134,10 @@ mod market {
         #[test]
         fn select_download_falls_back_to_universal() {
             let (url, sha) = select_download(&universal_entry("roam", "1.0.0")).unwrap();
-            assert!(url.ends_with("universal"), "url {url} must resolve to the universal package");
+            assert!(
+                url.ends_with("universal"),
+                "url {url} must resolve to the universal package"
+            );
             assert_eq!(sha, "uu");
         }
 
@@ -1598,19 +2160,34 @@ mod market {
 
         #[test]
         fn install_err_maps_to_exit_code() {
-            assert_eq!(exit_for_install_err(&installer::InstallError::Hash), EXIT_VERIFY);
-            assert_eq!(exit_for_install_err(&installer::InstallError::Signature), EXIT_VERIFY);
-            assert_eq!(exit_for_install_err(&installer::InstallError::IdMismatch), EXIT_RUNTIME);
-            assert_eq!(exit_for_install_err(&installer::InstallError::Unpack("x".into())), EXIT_RUNTIME);
-            assert_eq!(exit_for_install_err(&installer::InstallError::Io("x".into())), EXIT_RUNTIME);
+            assert_eq!(
+                exit_for_install_err(&installer::InstallError::Hash),
+                EXIT_VERIFY
+            );
+            assert_eq!(
+                exit_for_install_err(&installer::InstallError::Signature),
+                EXIT_VERIFY
+            );
+            assert_eq!(
+                exit_for_install_err(&installer::InstallError::IdMismatch),
+                EXIT_RUNTIME
+            );
+            assert_eq!(
+                exit_for_install_err(&installer::InstallError::Unpack("x".into())),
+                EXIT_RUNTIME
+            );
+            assert_eq!(
+                exit_for_install_err(&installer::InstallError::Io("x".into())),
+                EXIT_RUNTIME
+            );
         }
 
         /// The CLI plugins root must derive identically to `runner::
         /// v2_plugins_root` so GUI and CLI operate on the same install tree.
         #[test]
         fn plugins_root_matches_runner_derivation() {
-            let expected = dirs::data_dir()
-                .map(|d| d.join(crate::app_dirs::BUNDLE_ID).join("plugins"));
+            let expected =
+                dirs::data_dir().map(|d| d.join(crate::app_dirs::BUNDLE_ID).join("plugins"));
             assert_eq!(plugins_root(), expected);
         }
 
@@ -1618,7 +2195,10 @@ mod market {
             let mut s = state::InstallState::default();
             s.installed.insert(
                 id.to_string(),
-                state::InstalledPlugin { version: "1.0.0".into(), enabled },
+                state::InstalledPlugin {
+                    version: "1.0.0".into(),
+                    enabled,
+                },
             );
             state::save(root, &s).unwrap();
         }
@@ -1632,10 +2212,14 @@ mod market {
             let root = dir.path();
             seed_state(root, "notemd.md2pdf", true);
 
-            assert!(set_v2_enabled_at(root, "notemd.md2pdf", false).unwrap().is_ok());
+            assert!(set_v2_enabled_at(root, "notemd.md2pdf", false)
+                .unwrap()
+                .is_ok());
             assert!(!state::load(root).installed["notemd.md2pdf"].enabled);
 
-            assert!(set_v2_enabled_at(root, "notemd.md2pdf", true).unwrap().is_ok());
+            assert!(set_v2_enabled_at(root, "notemd.md2pdf", true)
+                .unwrap()
+                .is_ok());
             assert!(state::load(root).installed["notemd.md2pdf"].enabled);
         }
 
@@ -1653,7 +2237,7 @@ mod market {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin_host::{PluginManifest, CliEntry};
+    use crate::plugin_host::{CliArg, CliEntry, PluginManifest};
     use std::collections::HashMap;
 
     fn share_manifest() -> PluginManifest {
@@ -1689,7 +2273,8 @@ mod tests {
         }
     }
 
-    #[test] fn help_includes_share_when_enabled() {
+    #[test]
+    fn help_includes_share_when_enabled() {
         let mut enabled = HashMap::new();
         enabled.insert("share".to_string(), true);
         let out = render_help(None, false, &[share_manifest()], &enabled);
@@ -1698,32 +2283,66 @@ mod tests {
         assert!(out.contains("[Share]"));
         assert!(out.contains("Render and publish"));
     }
-    #[test] fn help_all_includes_disabled_section() {
+    #[test]
+    fn help_all_includes_disabled_section() {
         let mut enabled = HashMap::new();
         enabled.insert("share".to_string(), false);
         let out = render_help(None, true, &[share_manifest()], &enabled);
         assert!(out.contains("DISABLED COMMANDS:"));
         assert!(out.contains("notemd plugin enable share"));
     }
-    #[test] fn help_lists_global_options() {
+    #[test]
+    fn help_lists_global_options() {
         let out = render_help(None, false, &[], &HashMap::new());
         assert!(out.contains("GLOBAL OPTIONS:"));
         assert!(out.contains("--json"));
         assert!(out.contains("-q, --quiet"));
-        assert!(out.contains("-y, --yes"));
+        assert!(
+            !out.contains("--yes"),
+            "--yes has no confirmation behavior and must not be advertised"
+        );
         assert!(out.contains("--no-clipboard"));
     }
-    #[test] fn help_topic_resolves_core_commands() {
-        for topic in ["help", "version", "plugin", "share", "memory", "reading-insights"] {
+    #[test]
+    fn help_topic_resolves_core_commands() {
+        for topic in [
+            "help",
+            "version",
+            "plugin",
+            "share",
+            "search",
+            "doctor",
+            "mcp",
+            "memory",
+            "open",
+            "reading-insights",
+        ] {
             let out = render_help(Some(topic), false, &[], &HashMap::new());
-            assert!(out.contains(&format!("notemd {topic}")), "topic {topic} not documented");
-            assert!(!out.contains("unknown topic"), "topic {topic} rendered as unknown");
+            assert!(
+                out.contains(&format!("notemd {topic}")),
+                "topic {topic} not documented"
+            );
+            assert!(
+                !out.contains("unknown topic"),
+                "topic {topic} rendered as unknown"
+            );
         }
     }
-    #[test] fn help_memory_documents_the_v2_claim_and_authority_contract() {
+    #[test]
+    fn help_memory_documents_the_v2_claim_and_authority_contract() {
         let out = render_help(Some("memory"), false, &[], &HashMap::new());
-        for contract in ["Git-backed personal Claim ledger", "--claim-kind", "--risk-class", "--space", "--provider", "trusted Memory UI"] {
-            assert!(out.contains(contract), "memory help is missing {contract}:\n{out}");
+        for contract in [
+            "Git-backed personal Claim ledger",
+            "--claim-kind",
+            "--risk-class",
+            "--space",
+            "--provider",
+            "trusted Memory UI",
+        ] {
+            assert!(
+                out.contains(contract),
+                "memory help is missing {contract}:\n{out}"
+            );
         }
         assert!(!out.contains("--confirm-human-approved"));
         assert!(!out.contains("--approved-by"));
@@ -1732,32 +2351,47 @@ mod tests {
         // silently files every proposed Claim under MEMORY.md.
         assert!(out.contains("--target <claim-id>"));
         assert!(!out.contains("--target <user|memory>"));
-        assert!(out.contains("--purpose <purposes>       Allowed retrieval purposes, comma-separated"));
+        assert!(
+            out.contains("--purpose <purposes>       Allowed retrieval purposes, comma-separated")
+        );
     }
-    #[test] fn help_topic_share_is_core_no_manifest_needed() {
+    #[test]
+    fn help_topic_share_is_core_no_manifest_needed() {
         // share 已 core 化：无任何 manifest 时 help share / help --share 都必须解析。
         for topic in ["share", "--share"] {
             let out = render_help(Some(topic), false, &[], &HashMap::new());
             assert!(out.contains("notemd share"), "topic {topic} missing header");
-            assert!(out.contains("Render and publish"), "topic {topic} missing summary");
+            assert!(
+                out.contains("Render and publish"),
+                "topic {topic} missing summary"
+            );
             assert!(out.contains("--unshare"), "topic {topic} missing flags");
-            assert!(out.contains("EXIT CODES:"), "topic {topic} missing exit codes");
+            assert!(
+                out.contains("EXIT CODES:"),
+                "topic {topic} missing exit codes"
+            );
         }
     }
-    #[test] fn help_root_with_core_stubs_lists_share_exactly_once() {
+    #[test]
+    fn help_root_with_core_stubs_lists_share_exactly_once() {
         // builtin 的 current_scan 故意不注入 core stub；这里直接把 stub 传给
         // render_help，钉死不变量：share 只出现一次（CORE COMMANDS 行），
         // 绝不在 PLUGIN COMMANDS 里重复。
         let stubs = crate::cli::runner::core_cli_stub_manifests();
         let mut enabled = HashMap::new();
-        for m in &stubs { enabled.insert(m.id.clone(), true); }
+        for m in &stubs {
+            enabled.insert(m.id.clone(), true);
+        }
         let out = render_help(None, false, &stubs, &enabled);
-        let share_rows = out.lines()
+        let share_rows = out
+            .lines()
             .filter(|l| l.trim_start().starts_with("share "))
             .count();
         assert_eq!(share_rows, 1, "share must appear exactly once, got:\n{out}");
-        assert!(!out.contains("PLUGIN COMMANDS:"),
-            "core stubs must never render a PLUGIN COMMANDS section:\n{out}");
+        assert!(
+            !out.contains("PLUGIN COMMANDS:"),
+            "core stubs must never render a PLUGIN COMMANDS section:\n{out}"
+        );
     }
     /// Task 18: the CLI topic is the other place (besides AGENTS.md's
     /// "Searching this vault" section) an agent learns this command's
@@ -1768,17 +2402,32 @@ mod tests {
     #[test]
     fn help_search_topic_documents_page_filter_and_json_fields() {
         let out = render_help(Some("search"), false, &[], &HashMap::new());
-        assert!(out.contains("page:[[X]]"), "must document the page: filter:\n{out}");
-        assert!(out.contains("source_ref"), "must document --json's source_ref field:\n{out}");
-        assert!(out.contains("provenance"), "must document --json's provenance field:\n{out}");
-        assert!(out.contains("agent_by"), "must explain what provenance.agent_by means:\n{out}");
+        assert!(
+            out.contains("page:[[X]]"),
+            "must document the page: filter:\n{out}"
+        );
+        assert!(
+            out.contains("source_ref"),
+            "must document --json's source_ref field:\n{out}"
+        );
+        assert!(
+            out.contains("provenance"),
+            "must document --json's provenance field:\n{out}"
+        );
+        assert!(
+            out.contains("agent_by"),
+            "must explain what provenance.agent_by means:\n{out}"
+        );
     }
     /// `--json` 的字段是 agent 的公共约定,加了字段就得写进帮助,
     /// 否则只有读源码的人知道它存在。
     #[test]
     fn search_help_documents_attention_minutes() {
         let out = render_help(Some("search"), false, &[], &HashMap::new());
-        assert!(out.contains("attention_minutes"), "必须记录 --json 的注意力字段:\n{out}");
+        assert!(
+            out.contains("attention_minutes"),
+            "必须记录 --json 的注意力字段:\n{out}"
+        );
     }
     /// Review round 1, Important #1: `render_core_topic` used to append a
     /// generic "1 Runtime error" footer underneath every topic's own body,
@@ -1791,40 +2440,64 @@ mod tests {
     fn help_search_topic_states_exit_codes_once_and_without_the_generic_contradiction() {
         let out = render_help(Some("search"), false, &[], &HashMap::new());
         assert_eq!(
-            out.matches("EXIT CODES:").count(), 1,
+            out.matches("EXIT CODES:").count(),
+            1,
             "exit codes must appear exactly once, not doubled by the generic footer:\n{out}"
         );
-        assert!(out.contains("No hits"), "exit 1 must be documented as 'no hits':\n{out}");
-        assert!(!out.contains("Runtime error"), "the generic footer's contradictory wording must not appear:\n{out}");
+        assert!(
+            out.contains("No hits"),
+            "exit 1 must be documented as 'no hits':\n{out}"
+        );
+        assert!(
+            !out.contains("Runtime error"),
+            "the generic footer's contradictory wording must not appear:\n{out}"
+        );
     }
-    /// The other core topics must keep getting the generic footer — this is
-    /// what proves the `body.contains("EXIT CODES:")` guard is scoped to
-    /// `search` alone, not a regression that silently dropped it everywhere.
+    /// Every core topic must state one internally consistent exit-code table.
     #[test]
-    fn other_core_topics_still_get_the_generic_exit_codes_footer() {
-        for topic in ["help", "version", "plugin", "share"] {
+    fn core_topics_state_exit_codes_exactly_once() {
+        for topic in [
+            "help",
+            "version",
+            "plugin",
+            "share",
+            "search",
+            "doctor",
+            "mcp",
+            "memory",
+            "open",
+            "reading-insights",
+        ] {
             let out = render_help(Some(topic), false, &[], &HashMap::new());
             assert_eq!(
-                out.matches("EXIT CODES:").count(), 1,
+                out.matches("EXIT CODES:").count(),
+                1,
                 "topic {topic} must show exit codes exactly once:\n{out}"
             );
-            assert!(out.contains("Runtime error"), "topic {topic} must keep the generic footer:\n{out}");
         }
     }
-    #[test] fn help_share_topic_documents_every_stub_flag() {
+    #[test]
+    fn help_share_topic_documents_every_stub_flag() {
         // 契约对齐：share stub 的 cli entry 声明的每个 flag 长名，都必须出现在
         // `notemd help share` 的 core topic 文本里（stub 与 help 文案同步演进）。
         let stubs = crate::cli::runner::core_cli_stub_manifests();
-        let share = stubs.iter().find(|m| m.id == "share").expect("share stub exists");
+        let share = stubs
+            .iter()
+            .find(|m| m.id == "share")
+            .expect("share stub exists");
         let topic = render_help(Some("share"), false, &[], &HashMap::new());
         for entry in &share.cli {
             for f in &entry.flags {
-                assert!(topic.contains(&f.long),
-                    "help share topic missing flag {}", f.long);
+                assert!(
+                    topic.contains(&f.long),
+                    "help share topic missing flag {}",
+                    f.long
+                );
             }
         }
     }
-    #[test] fn help_root_lists_share_as_core_command() {
+    #[test]
+    fn help_root_lists_share_as_core_command() {
         let out = render_help(None, false, &[], &HashMap::new());
         assert!(out.contains("CORE COMMANDS:"));
         assert!(out.contains("share"));
@@ -1832,7 +2505,8 @@ mod tests {
         // core 化后不该出现插件小节（无 manifest 时）。
         assert!(!out.contains("PLUGIN COMMANDS:"));
     }
-    #[test] fn help_topic_shows_per_subcommand_detail() {
+    #[test]
+    fn help_topic_shows_per_subcommand_detail() {
         // 用非 core 子命令测 manifest 主题路径（share 现在被 core topic 遮蔽）。
         let mut m = share_manifest();
         m.id = "demo".to_string();
@@ -1847,23 +2521,112 @@ mod tests {
         assert!(out.contains("Provided by: Demo plugin"));
         assert!(out.contains("EXIT CODES:"));
     }
-    #[test] fn version_string_includes_plugin_api() {
+    #[test]
+    fn dynamic_string_flags_show_their_value_placeholder() {
+        let mut m = share_manifest();
+        m.id = "demo".into();
+        m.name = "Demo".into();
+        m.cli[0].subcommand = "demo".into();
+        m.cli[0].aliases.clear();
+        m.cli[0].flags.push(crate::plugin_host::CliFlag {
+            long: "--output".into(),
+            short: Some("-o".into()),
+            ty: "string".into(),
+            help: Some("Output path".into()),
+        });
+        let out = render_help(Some("demo"), false, &[m], &HashMap::new());
+        assert!(
+            out.contains("-o, --output <value>"),
+            "missing value placeholder:\n{out}"
+        );
+    }
+    #[test]
+    fn root_help_alias_uses_manifest_positionals_instead_of_assuming_file() {
+        let mut m = share_manifest();
+        m.id = "demo".into();
+        m.name = "Demo".into();
+        m.cli[0].subcommand = "demo".into();
+        m.cli[0].aliases = vec!["-d".into()];
+        m.cli[0].args = vec![
+            CliArg {
+                name: "task".into(),
+                ty: "string".into(),
+                required: true,
+                help: None,
+            },
+            CliArg {
+                name: "count".into(),
+                ty: "integer".into(),
+                required: false,
+                help: None,
+            },
+        ];
+        let enabled = HashMap::from([("demo".to_string(), true)]);
+        let out = render_help(None, false, &[m], &enabled);
+        assert!(out.contains("notemd -d <task> [count]"), "{out}");
+        assert!(!out.contains("notemd -d <file>"), "{out}");
+    }
+    #[test]
+    fn plugin_help_documents_update_alias_and_real_exit_codes() {
+        let out = render_help(Some("plugin"), false, &[], &HashMap::new());
+        assert!(out.contains("plugin upgrade"));
+        assert!(out.contains("  4    Registry"));
+        assert!(out.contains("  5    Plugin package"));
+    }
+    #[test]
+    fn reading_insights_help_matches_cli_audience_and_default_vault_behavior() {
+        let out = render_help(Some("reading-insights"), false, &[], &HashMap::new());
+        assert!(out.contains("[--vault <path>]"));
+        assert!(out.contains("audience/online-reading"));
+        assert!(!out.contains("shown in the in-app"));
+    }
+    #[test]
+    fn help_json_wraps_text_and_unknown_topics_as_stable_envelopes() {
+        let (output, code) = render_help_output(
+            Some("mcp"),
+            false,
+            true,
+            &[],
+            &HashMap::new(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(value["ok"], true);
+        assert!(value["data"]["text"].as_str().unwrap().contains("notemd mcp"));
+
+        let (output, code) = render_help_output(
+            Some("does-not-exist"),
+            false,
+            true,
+            &[],
+            &HashMap::new(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(code, 2);
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "unknown_help_topic");
+    }
+    #[test]
+    fn version_string_includes_plugin_api() {
         let v = render_version(false);
         assert!(v.contains("notemd"));
         assert!(v.contains("plugin API v1"));
     }
-    #[test] fn version_json_is_parsable() {
+    #[test]
+    fn version_json_is_parsable() {
         let v = render_version(true);
         let _: serde_json::Value = serde_json::from_str(&v).expect("valid JSON");
     }
-    #[test] fn plugin_list_rows_enabled_and_disabled() {
+    #[test]
+    fn plugin_list_rows_enabled_and_disabled() {
         let mut enabled = HashMap::new();
         enabled.insert("share".to_string(), false);
         let out = render_plugin_list(false, &[share_manifest()], &enabled);
         assert!(out.contains("share"));
         assert!(out.contains("disabled"));
     }
-    #[test] fn plugin_list_json_array() {
+    #[test]
+    fn plugin_list_json_array() {
         let mut enabled = HashMap::new();
         enabled.insert("share".to_string(), true);
         let out = render_plugin_list(true, &[share_manifest()], &enabled);
@@ -1871,5 +2634,43 @@ mod tests {
         let arr = v["data"].as_array().expect("data is array");
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["status"], "enabled");
+    }
+    #[test]
+    fn plugin_management_output_exposes_rejected_cli_entries() {
+        let mut manifest = share_manifest();
+        manifest.id = "demo".into();
+        manifest.name = "Demo".into();
+        manifest.cli.clear();
+        let conflicts = vec![super::super::router::CliNameConflict {
+            plugin_id: "demo".into(),
+            entry: "search".into(),
+            reasons: vec!["reserved CLI name 'search'".into()],
+        }];
+
+        let text = render_plugin_list_with_issues(
+            false,
+            &[manifest.clone()],
+            &HashMap::new(),
+            &[],
+            &conflicts,
+        );
+        assert!(text.contains("CLI entry 'search' rejected"));
+
+        let value: serde_json::Value = serde_json::from_str(&render_plugin_list_with_issues(
+            true,
+            &[manifest.clone()],
+            &HashMap::new(),
+            &[],
+            &conflicts,
+        )).unwrap();
+        assert_eq!(value["data"][0]["rejected_cli"][0]["entry"], "search");
+
+        let mut info = render_plugin_info(&manifest, &HashMap::new());
+        append_cli_conflicts_text(&mut info, "demo", &conflicts);
+        assert!(info.contains("Rejected CLI entries"));
+        let value: serde_json::Value = serde_json::from_str(
+            &render_plugin_info_json(&manifest, &HashMap::new(), &conflicts),
+        ).unwrap();
+        assert_eq!(value["data"]["rejected_cli"][0]["entry"], "search");
     }
 }

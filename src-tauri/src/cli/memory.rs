@@ -6,10 +6,11 @@
 
 use crate::memory_control::{self, v2 as memory_v2};
 use chrono::{SecondsFormat, Utc};
-use serde_json::json;
+use serde_json::{json, Value};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
-use std::process::ExitCode;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
 
 #[derive(Debug, Clone, Default)]
 pub struct MemoryArgs {
@@ -17,8 +18,9 @@ pub struct MemoryArgs {
     pub positionals: Vec<String>,
     pub vault: Option<String>,
     pub json: bool,
-    pub flags: std::collections::HashMap<String, String>,
-    pub bools: std::collections::HashSet<String>,
+    pub flags: HashMap<String, String>,
+    pub bools: HashSet<String>,
+    pub errors: Vec<String>,
 }
 
 impl MemoryArgs {
@@ -40,22 +42,300 @@ pub fn parse_args(rest: &[String], json_global: bool) -> MemoryArgs {
         if token == "--json" {
             out.json = true;
         } else if matches!(token.as_str(), "--all" | "--external-transfer") {
-            out.bools.insert(token.trim_start_matches("--").to_string());
-        } else if token.starts_with("--") {
-            if let Some(value) = rest.get(i + 1) {
-                out.flags
-                    .insert(token.trim_start_matches("--").to_string(), value.clone());
-                if token == "--vault" {
-                    out.vault = Some(value.clone());
-                }
-                i += 1;
+            let name = token.trim_start_matches("--").to_string();
+            if !out.bools.insert(name.clone()) {
+                out.errors
+                    .push(format!("--{name} may only be specified once"));
             }
+        } else if token.starts_with("--") {
+            let name = token.trim_start_matches("--");
+            match rest.get(i + 1).filter(|value| !value.starts_with("--")) {
+                Some(value) => {
+                    if out.flags.insert(name.to_string(), value.clone()).is_some() {
+                        out.errors
+                            .push(format!("--{name} may only be specified once"));
+                    }
+                    if token == "--vault" {
+                        out.vault = Some(value.clone());
+                    }
+                    i += 1;
+                }
+                None => out.errors.push(format!("--{name} requires a value")),
+            }
+        } else if token.starts_with('-') {
+            out.errors.push(format!("unsupported flag: {token}"));
         } else {
             out.positionals.push(token.clone());
         }
         i += 1;
     }
     out
+}
+
+const ACTIONS: &[&str] = &[
+    "snapshot",
+    "list",
+    "show",
+    "owner",
+    "pending",
+    "conflicts",
+    "propose",
+    "context",
+    "context-manifest",
+    "check",
+    "doctor",
+    "rebuild",
+    "reconcile",
+    "purge-plan",
+];
+
+const PROPOSE_COMMON_FLAGS: &[&str] = &[
+    "vault",
+    "request-id",
+    "recorded-by",
+    "asserted-by",
+    "basis",
+    "device-id",
+    "source",
+    "guidance",
+    "avoid-error",
+];
+
+fn validate_positionals(
+    args: &MemoryArgs,
+    min: usize,
+    max: usize,
+    usage: &str,
+) -> Result<(), String> {
+    if args.positionals.len() < min || args.positionals.len() > max {
+        return Err(format!("usage: notemd memory {usage}"));
+    }
+    Ok(())
+}
+
+fn validate_allowed_flags(args: &MemoryArgs, allowed: &[&str]) -> Result<(), String> {
+    let mut unknown = args
+        .flags
+        .keys()
+        .filter(|name| !allowed.contains(&name.as_str()))
+        .map(|name| format!("--{name}"))
+        .collect::<Vec<_>>();
+    unknown.extend(
+        args.bools
+            .iter()
+            .filter(|name| !allowed.contains(&name.as_str()))
+            .map(|name| format!("--{name}")),
+    );
+    unknown.sort();
+    if unknown.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "unsupported flag(s) for {}: {}",
+            args.action,
+            unknown.join(", ")
+        ))
+    }
+}
+
+fn validate_args(args: &MemoryArgs) -> Result<(), String> {
+    if !args.errors.is_empty() {
+        return Err(args.errors.join("; "));
+    }
+    if matches!(
+        args.action.as_str(),
+        "approve" | "reject" | "ignore" | "delete" | "resolve"
+    ) {
+        return Err("MEMORY_UNAUTHORIZED: human memory decisions are only accepted from the trusted Memory UI".into());
+    }
+    if !ACTIONS.contains(&args.action.as_str()) {
+        return Err(format!("unknown memory action: {}", args.action));
+    }
+
+    let read_only = &["vault"];
+    match args.action.as_str() {
+        "snapshot" | "owner" | "pending" | "conflicts" | "check" | "doctor" | "rebuild"
+        | "reconcile" => {
+            validate_positionals(args, 0, 0, &args.action)?;
+            validate_allowed_flags(args, read_only)?;
+        }
+        "show" | "context-manifest" | "purge-plan" => {
+            validate_positionals(args, 1, 1, &format!("{} <id>", args.action))?;
+            validate_allowed_flags(args, read_only)?;
+        }
+        "list" => {
+            validate_positionals(args, 0, 0, "list [--scope user|memory] [--status STATUS]")?;
+            validate_allowed_flags(args, &["vault", "scope", "status", "all"])?;
+            if args.bools.contains("all") && args.flags.contains_key("status") {
+                return Err("--all conflicts with --status".into());
+            }
+            if let Some(scope) = args.flags.get("scope") {
+                if !matches!(scope.as_str(), "user" | "memory") {
+                    return Err(format!("invalid --scope: {scope}; expected user or memory"));
+                }
+            }
+            if let Some(status) = args.flags.get("status") {
+                if !matches!(
+                    status.as_str(),
+                    "current" | "pending" | "revoked" | "deleted" | "conflict" | "all"
+                ) {
+                    return Err(format!(
+                        "invalid --status: {status}; expected current, pending, revoked, deleted, conflict, or all"
+                    ));
+                }
+            }
+        }
+        "context" => {
+            validate_positionals(
+                args,
+                0,
+                0,
+                "context --space SPACE --purpose PURPOSE --caller CALLER",
+            )?;
+            validate_allowed_flags(
+                args,
+                &[
+                    "vault",
+                    "space",
+                    "purpose",
+                    "caller",
+                    "provider",
+                    "model",
+                    "tool",
+                    "as-of",
+                    "external-transfer",
+                ],
+            )?;
+            for name in ["space", "purpose", "caller"] {
+                required_flag(args, name)?;
+            }
+            if args.bools.contains("external-transfer") {
+                for name in ["provider", "model"] {
+                    required_flag(args, name)
+                        .map_err(|_| format!("--{name} is required with --external-transfer"))?;
+                }
+            } else if args.flags.get("provider").map(String::as_str) != Some("local")
+                && args.flags.contains_key("provider")
+            {
+                return Err("non-local --provider requires --external-transfer".into());
+            }
+            if let Some(as_of) = args.flags.get("as-of") {
+                chrono::DateTime::parse_from_rfc3339(as_of)
+                    .map_err(|error| format!("invalid --as-of RFC3339 time: {error}"))?;
+            }
+        }
+        "propose" => {
+            validate_positionals(args, 1, 1, "propose <create|replace|revoke> [claim flags]")?;
+            let operation = v2_propose_operation(args)?;
+            let mut allowed = PROPOSE_COMMON_FLAGS.to_vec();
+            match operation {
+                "create" => allowed.extend([
+                    "text",
+                    "claim-kind",
+                    "scope",
+                    "category",
+                    "space",
+                    "purpose",
+                    "provider-policy",
+                    "trust-tier",
+                    "risk-class",
+                    "salience",
+                    "polarity",
+                    "sensitivity",
+                    "valid-from",
+                    "valid-until",
+                ]),
+                "replace" => allowed.extend(["target", "text"]),
+                "revoke" => allowed.push("target"),
+                _ => unreachable!(),
+            }
+            validate_allowed_flags(args, &allowed)?;
+            for name in ["request-id", "recorded-by"] {
+                required_flag(args, name)?;
+            }
+            match operation {
+                "create" => {
+                    for name in ["text", "claim-kind", "category", "space", "purpose"] {
+                        required_flag(args, name)?;
+                    }
+                    let _: memory_v2::ClaimKind =
+                        parse_v2_enum(required_flag(args, "claim-kind")?, "claim-kind")?;
+                    let _: memory_v2::ProjectionTarget = parse_v2_enum(
+                        args.flags
+                            .get("scope")
+                            .map(String::as_str)
+                            .unwrap_or("memory"),
+                        "scope",
+                    )?;
+                    let _: memory_v2::ExternalProviderPolicy = parse_v2_enum(
+                        args.flags
+                            .get("provider-policy")
+                            .map(String::as_str)
+                            .unwrap_or("deny"),
+                        "provider-policy",
+                    )?;
+                    let _: memory_v2::TrustTier = parse_v2_enum(
+                        args.flags
+                            .get("trust-tier")
+                            .map(String::as_str)
+                            .unwrap_or("contextual"),
+                        "trust-tier",
+                    )?;
+                    let _: memory_v2::RiskClass = parse_v2_enum(
+                        args.flags
+                            .get("risk-class")
+                            .map(String::as_str)
+                            .unwrap_or("informational"),
+                        "risk-class",
+                    )?;
+                    let _: memory_v2::Salience = parse_v2_enum(
+                        args.flags
+                            .get("salience")
+                            .map(String::as_str)
+                            .unwrap_or("normal"),
+                        "salience",
+                    )?;
+                    let _: memory_v2::Polarity = parse_v2_enum(
+                        args.flags
+                            .get("polarity")
+                            .map(String::as_str)
+                            .unwrap_or("neutral"),
+                        "polarity",
+                    )?;
+                    let sensitivity: memory_v2::Sensitivity = parse_v2_enum(
+                        args.flags
+                            .get("sensitivity")
+                            .map(String::as_str)
+                            .unwrap_or("normal"),
+                        "sensitivity",
+                    )?;
+                    if sensitivity == memory_v2::Sensitivity::Restricted {
+                        return Err(
+                            "MEMORY_RESTRICTED_PERSISTENCE_DENIED: restricted content cannot enter Git"
+                                .into(),
+                        );
+                    }
+                    for name in ["valid-from", "valid-until"] {
+                        if let Some(value) = args.flags.get(name) {
+                            chrono::DateTime::parse_from_rfc3339(value).map_err(|error| {
+                                format!("invalid --{name} RFC3339 time: {error}")
+                            })?;
+                        }
+                    }
+                }
+                "replace" => {
+                    required_flag(args, "target")?;
+                    required_flag(args, "text")?;
+                }
+                "revoke" => {
+                    required_flag(args, "target")?;
+                }
+                _ => unreachable!(),
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
 }
 
 fn root(args: &MemoryArgs) -> Result<PathBuf, String> {
@@ -88,10 +368,11 @@ fn parse_v2_enum<T: serde::de::DeserializeOwned>(value: &str, name: &str) -> Res
 }
 
 fn required_flag<'a>(args: &'a MemoryArgs, name: &str) -> Result<&'a str, String> {
-    args.flags
-        .get(name)
-        .map(String::as_str)
-        .ok_or_else(|| format!("--{name} is required"))
+    match args.flags.get(name).map(String::as_str) {
+        Some(value) if !value.trim().is_empty() => Ok(value),
+        Some(_) => Err(format!("--{name} must not be empty")),
+        None => Err(format!("--{name} is required")),
+    }
 }
 
 /// A required flag carrying a comma-separated list, so one Claim can allow the
@@ -545,6 +826,451 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+fn projection_target(value: &Value) -> Option<&str> {
+    value
+        .pointer("/claim/projection/target")
+        .or_else(|| value.pointer("/revision/projection/target"))
+        .and_then(Value::as_str)
+}
+
+fn list_value(args: &MemoryArgs, snapshot: &Value) -> Value {
+    let scope = args.flags.get("scope").map(String::as_str);
+    let status = if args.bools.contains("all") {
+        "all"
+    } else {
+        args.flags
+            .get("status")
+            .map(String::as_str)
+            .unwrap_or("all")
+    };
+    let scope_matches = |item: &Value| scope.is_none() || projection_target(item) == scope;
+
+    let claims = snapshot["claims"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| scope_matches(item))
+        .filter(|item| match status {
+            "all" => true,
+            "current" => {
+                item["application_state"] == "current"
+                    && item
+                        .pointer("/claim/lifecycle/state")
+                        .and_then(Value::as_str)
+                        == Some("active")
+            }
+            "revoked" => {
+                item.pointer("/claim/lifecycle/state")
+                    .and_then(Value::as_str)
+                    == Some("revoked")
+            }
+            "deleted" => {
+                item.pointer("/claim/lifecycle/state")
+                    .and_then(Value::as_str)
+                    == Some("deleted")
+            }
+            "pending" | "conflict" => false,
+            _ => false,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let pending = snapshot["pending"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| scope_matches(item) && matches!(status, "all" | "pending"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let conflicts = snapshot["conflicts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            let scope_ok = scope.is_none()
+                || item["heads"].as_array().into_iter().flatten().any(|head| {
+                    head.pointer("/projection/target").and_then(Value::as_str) == scope
+                });
+            scope_ok && matches!(status, "all" | "conflict")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    json!({
+        "claims": claims,
+        "pending": pending,
+        "conflicts": conflicts,
+        "health": snapshot["health"],
+        "filters": {"scope": scope, "status": status}
+    })
+}
+
+fn show_exact(root: &Path, snapshot: &Value, needle: &str) -> Result<Value, String> {
+    let repository = memory_v2::V2Repository::new(root)
+        .load()
+        .map_err(|error| error.to_string())?;
+    if let Some(revision) = repository
+        .claims
+        .iter()
+        .find(|item| item.value.revision_id == needle)
+    {
+        return serde_json::to_value(&revision.value).map_err(|error| error.to_string());
+    }
+    if let Some(claim) = snapshot["claims"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|item| item.pointer("/claim/claim_id").and_then(Value::as_str) == Some(needle))
+    {
+        return Ok(claim.clone());
+    }
+    if let Some(pending) = snapshot["pending"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|item| item.pointer("/revision/claim_id").and_then(Value::as_str) == Some(needle))
+    {
+        return Ok(pending.clone());
+    }
+    if let Some(conflict) = snapshot["conflicts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|item| item["claim_id"].as_str() == Some(needle))
+    {
+        return Ok(conflict.clone());
+    }
+    Err(format!("claim or revision not found: {needle}"))
+}
+
+fn load_context_manifest(root: &Path, manifest_id: &str) -> Result<Value, String> {
+    let repository = memory_v2::V2Repository::new(root)
+        .load()
+        .map_err(|error| error.to_string())?;
+    let manifest = repository
+        .context_manifests
+        .iter()
+        .find(|item| item.value.manifest_id == manifest_id)
+        .ok_or_else(|| format!("context manifest not found: {manifest_id}"))?;
+    serde_json::to_value(&manifest.value).map_err(|error| error.to_string())
+}
+
+fn check_passes(health: &Value) -> bool {
+    health["status"] != "damaged"
+        && health["status"] != "unsupported"
+        && !health["projection_edited"].as_bool().unwrap_or(false)
+}
+
+fn path_for_output(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn collect_matching_local_files(
+    root: &Path,
+    dir: &Path,
+    needles: &BTreeSet<String>,
+    output: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("MEMORY_IO: {}: {error}", dir.display())),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("MEMORY_IO: {}: {error}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("MEMORY_IO: {}: {error}", path.display()))?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("MEMORY_IO: {}: {error}", path.display()))?;
+        if file_type.is_dir() {
+            collect_matching_local_files(root, &path, needles, output)?;
+        } else if file_type.is_file() && metadata.len() <= 1024 * 1024 {
+            let bytes = fs::read(&path)
+                .map_err(|error| format!("MEMORY_IO: {}: {error}", path.display()))?;
+            if needles.iter().any(|needle| {
+                bytes
+                    .windows(needle.len())
+                    .any(|window| window == needle.as_bytes())
+            }) {
+                output.insert(path_for_output(root, &path));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn git_lines(root: &Path, args: &[String]) -> Vec<String> {
+    Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn purge_plan(root: &Path, claim_id: &str) -> Result<Value, String> {
+    let repository = memory_v2::V2Repository::new(root)
+        .load()
+        .map_err(|error| error.to_string())?;
+    if !repository
+        .claims
+        .iter()
+        .any(|item| item.value.claim_id == claim_id)
+    {
+        return Err(format!("claim not found: {claim_id}"));
+    }
+
+    let mut claim_ids = BTreeSet::from([claim_id.to_string()]);
+    let mut revision_ids = repository
+        .claims
+        .iter()
+        .filter(|item| item.value.claim_id == claim_id)
+        .map(|item| item.value.revision_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut operation_ids = BTreeSet::new();
+    loop {
+        let before = (claim_ids.len(), revision_ids.len(), operation_ids.len());
+        for item in &repository.claims {
+            let derived = item
+                .value
+                .parents
+                .iter()
+                .any(|parent| revision_ids.contains(&parent.revision_id))
+                || item.value.lineage.derived_from.iter().any(|source| {
+                    claim_ids.contains(&source.claim_id)
+                        || revision_ids.contains(&source.revision_id)
+                });
+            if claim_ids.contains(&item.value.claim_id) || derived {
+                claim_ids.insert(item.value.claim_id.clone());
+                revision_ids.insert(item.value.revision_id.clone());
+            }
+        }
+        for operation in &repository.operations {
+            let value = &operation.value;
+            let refs =
+                value
+                    .merge_inputs
+                    .sources
+                    .iter()
+                    .chain(std::iter::once(&value.merge_inputs.target))
+                    .flat_map(|input| {
+                        std::iter::once(input.claim_id.as_str()).chain(
+                            input
+                                .base_heads
+                                .iter()
+                                .map(|head| head.revision_id.as_str()),
+                        )
+                    })
+                    .chain(std::iter::once(value.result.claim_id.as_str()))
+                    .chain(std::iter::once(value.result.revision_id.as_str()))
+                    .chain(value.effects.iter().flat_map(|effect| {
+                        [
+                            effect.claim_id.as_str(),
+                            effect.revision_id.as_str(),
+                            effect.merged_into.as_str(),
+                        ]
+                    }))
+                    .chain(value.lineage.iter().flat_map(|source| {
+                        [source.claim_id.as_str(), source.revision_id.as_str()]
+                    }));
+            if refs
+                .into_iter()
+                .any(|id| claim_ids.contains(id) || revision_ids.contains(id))
+            {
+                operation_ids.insert(value.operation_id.clone());
+                claim_ids.insert(value.result.claim_id.clone());
+                revision_ids.insert(value.result.revision_id.clone());
+                for effect in &value.effects {
+                    claim_ids.insert(effect.claim_id.clone());
+                    revision_ids.insert(effect.revision_id.clone());
+                }
+            }
+        }
+        if before == (claim_ids.len(), revision_ids.len(), operation_ids.len()) {
+            break;
+        }
+    }
+
+    let claim_revisions = repository
+        .claims
+        .iter()
+        .filter(|item| revision_ids.contains(&item.value.revision_id))
+        .map(|item| {
+            json!({
+                "claim_id": item.value.claim_id,
+                "revision_id": item.value.revision_id,
+                "payload_sha256": item.value.payload_sha256,
+                "path": path_for_output(root, &item.path)
+            })
+        })
+        .collect::<Vec<_>>();
+    let operations = repository
+        .operations
+        .iter()
+        .filter(|item| operation_ids.contains(&item.value.operation_id))
+        .map(|item| {
+            json!({"operation_id": item.value.operation_id, "path": path_for_output(root, &item.path)})
+        })
+        .collect::<Vec<_>>();
+    let context_manifests = repository
+        .context_manifests
+        .iter()
+        .filter(|item| {
+            item.value.selected.iter().any(|selected| {
+                claim_ids.contains(&selected.claim_id)
+                    || revision_ids.contains(&selected.revision_id)
+            })
+        })
+        .map(|item| {
+            json!({"manifest_id": item.value.manifest_id, "path": path_for_output(root, &item.path)})
+        })
+        .collect::<Vec<_>>();
+    let projections = repository
+        .claims
+        .iter()
+        .filter(|item| revision_ids.contains(&item.value.revision_id))
+        .map(|item| match item.value.projection.target {
+            memory_v2::ProjectionTarget::User => "USER.md",
+            memory_v2::ProjectionTarget::Memory => "MEMORY.md",
+        })
+        .collect::<BTreeSet<_>>();
+
+    let mut needles = claim_ids
+        .iter()
+        .chain(revision_ids.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    needles.extend(
+        repository
+            .claims
+            .iter()
+            .filter(|item| revision_ids.contains(&item.value.revision_id))
+            .map(|item| item.value.payload_sha256.clone()),
+    );
+    let mut local_matches = BTreeSet::new();
+    for relative in [
+        ".notemd/memory/imports",
+        ".notemd/memory/migrations",
+        ".notemd/memory/legacy",
+        ".notemd/memory/.local",
+    ] {
+        collect_matching_local_files(root, &root.join(relative), &needles, &mut local_matches)?;
+    }
+
+    let git_repository =
+        git_lines(root, &["rev-parse".into(), "--is-inside-work-tree".into()]) == ["true"];
+    let mut matching_commits = BTreeSet::new();
+    let mut matching_reflog_commits = BTreeSet::new();
+    if git_repository {
+        for needle in &needles {
+            let pickaxe = format!("-S{needle}");
+            matching_commits.extend(git_lines(
+                root,
+                &[
+                    "log".into(),
+                    "--all".into(),
+                    "--format=%H".into(),
+                    pickaxe.clone(),
+                    "--".into(),
+                    ".notemd/memory".into(),
+                    "USER.md".into(),
+                    "MEMORY.md".into(),
+                ],
+            ));
+            matching_reflog_commits.extend(git_lines(
+                root,
+                &[
+                    "log".into(),
+                    "-g".into(),
+                    "--all".into(),
+                    "--format=%H".into(),
+                    pickaxe,
+                    "--".into(),
+                    ".notemd/memory".into(),
+                    "USER.md".into(),
+                    "MEMORY.md".into(),
+                ],
+            ));
+        }
+    }
+    let remotes = if git_repository {
+        git_lines(root, &["remote".into()])
+    } else {
+        Vec::new()
+    };
+
+    let generated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let safe_claim_id = claim_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let relative_plan_path = format!(
+        ".notemd/memory/.local/purge/{}-{}.json",
+        safe_claim_id,
+        Utc::now().timestamp_millis()
+    );
+    let value = json!({
+        "claim_id": claim_id,
+        "generated_at": generated_at,
+        "read_only": true,
+        "plan_path": relative_plan_path,
+        "affected_claim_ids": claim_ids,
+        "authoritative_assets": {
+            "claim_revisions": claim_revisions,
+            "operations": operations,
+            "context_manifests": context_manifests
+        },
+        "derived_assets": {
+            "projections": projections,
+            "local_import_migration_legacy_cache_matches": local_matches
+        },
+        "git": {
+            "repository_detected": git_repository,
+            "matching_commits_and_reachable_tags_or_branches": matching_commits,
+            "matching_reflog_commits": matching_reflog_commits,
+            "configured_remotes": remotes
+        },
+        "limitations": [
+            "This plan does not rewrite Git history or delete any authoritative asset.",
+            "Remote branches and other clones cannot be inspected locally; every remote and clone requires a separate purge audit.",
+            "Encrypted backups, filesystem snapshots, caches outside the Vault, and copied exports require separate retention-system audits."
+        ]
+    });
+    let plan_path = root.join(&relative_plan_path);
+    if let Some(parent) = plan_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("MEMORY_IO: {}: {error}", parent.display()))?;
+    }
+    fs::write(
+        &plan_path,
+        serde_json::to_vec_pretty(&value).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("MEMORY_IO: {}: {error}", plan_path.display()))?;
+    Ok(value)
+}
+
 fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String> {
     if matches!(
         args.action.as_str(),
@@ -554,11 +1280,17 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
     }
     let snapshot = v2_snapshot(root)?;
     match args.action.as_str() {
-        "snapshot" | "list" => {
-            let mut value = snapshot;
-            if args.action == "list" && !args.bools.contains("all") {
-                value = json!({"claims": value["claims"], "pending": value["pending"], "conflicts": value["conflicts"], "health": value["health"]});
-            }
+        "snapshot" => {
+            let value = snapshot;
+            print_json_or_text(
+                args,
+                value.clone(),
+                serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "list" => {
+            let value = list_value(args, &snapshot);
             print_json_or_text(
                 args,
                 value.clone(),
@@ -589,12 +1321,7 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
                 .positionals
                 .first()
                 .ok_or("show requires a claim or revision id")?;
-            let found = ["claims", "pending", "conflicts", "history"]
-                .iter()
-                .flat_map(|key| snapshot[*key].as_array().into_iter().flatten())
-                .find(|item| item.to_string().contains(needle))
-                .cloned()
-                .ok_or_else(|| format!("claim or revision not found: {needle}"))?;
+            let found = show_exact(root, &snapshot, needle)?;
             print_json_or_text(
                 args,
                 found.clone(),
@@ -606,8 +1333,9 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
         "context" => {
             let request = json!({
                 "space": required_flag(args, "space")?, "purpose": required_flag(args, "purpose")?,
-                "caller": required_flag(args, "caller")?, "provider": required_flag(args, "provider")?,
-                "model": required_flag(args, "model")?,
+                "caller": required_flag(args, "caller")?,
+                "provider": args.flags.get("provider").map(String::as_str).unwrap_or("local"),
+                "model": args.flags.get("model").map(String::as_str).unwrap_or("local"),
                 "tools": args.flags.get("tool").map(|value| value.split(',').map(str::trim).filter(|value| !value.is_empty()).collect::<Vec<_>>()).unwrap_or_default(),
                 "external_transfer": args.bools.contains("external-transfer"),
                 "as_of_valid_time": args.flags.get("as-of").cloned().unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true))
@@ -620,9 +1348,22 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
             );
             Ok(ExitCode::SUCCESS)
         }
+        "context-manifest" => {
+            let manifest_id = args
+                .positionals
+                .first()
+                .ok_or("context-manifest requires a manifest id")?;
+            let value = load_context_manifest(root, manifest_id)?;
+            print_json_or_text(
+                args,
+                value.clone(),
+                serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         "check" | "doctor" => {
             let health = memory_control::dispatch(root, "host.memory.v2.check", &json!({}))?;
-            let ok = health["status"] != "damaged" && health["status"] != "unsupported";
+            let ok = check_passes(&health);
             print_json_or_text(
                 args,
                 health.clone(),
@@ -639,12 +1380,26 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
             );
             Ok(ExitCode::SUCCESS)
         }
+        "purge-plan" => {
+            let claim_id = args
+                .positionals
+                .first()
+                .ok_or("purge-plan requires a claim id")?;
+            let value = purge_plan(root, claim_id)?;
+            print_json_or_text(
+                args,
+                value.clone(),
+                serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         other => Err(format!("unknown v2 memory action: {other}")),
     }
 }
 
 pub fn run(args: MemoryArgs) -> ExitCode {
     let result = (|| -> Result<ExitCode, String> {
+        validate_args(&args)?;
         let root = root(&args)?;
         match memory_v2::V2Repository::new(&root)
             .load()
@@ -670,7 +1425,12 @@ pub fn run(args: MemoryArgs) -> ExitCode {
         Ok(code) => code,
         Err(error) => {
             if args.json {
-                println!("{}", json!({"ok":false,"error":{"message":error}}));
+                let code = error
+                    .split_once(':')
+                    .map(|(prefix, _)| prefix)
+                    .filter(|prefix| prefix.starts_with("MEMORY_"))
+                    .unwrap_or("invalid_arguments");
+                println!("{}", json!({"ok":false,"error":{"code":code,"message":error}}));
             } else {
                 eprintln!("notemd memory: {error}");
             }
@@ -686,10 +1446,15 @@ mod tests {
     #[test]
     fn purpose_accepts_several_comma_separated_values() {
         let args = parse_args(
-            &["propose", "create", "--purpose", "planning, writing ,projection"]
-                .into_iter()
-                .map(str::to_string)
-                .collect::<Vec<_>>(),
+            &[
+                "propose",
+                "create",
+                "--purpose",
+                "planning, writing ,projection",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
             false,
         );
         assert_eq!(
@@ -758,6 +1523,301 @@ mod tests {
         );
         assert!(args.bools.contains("external-transfer"));
         assert_eq!(args.flags.get("space").map(String::as_str), Some("work"));
+    }
+
+    #[test]
+    fn validation_rejects_unknown_missing_duplicate_and_conflicting_flags() {
+        let unknown = parse_args(
+            &["list", "--bogus", "value"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&unknown).unwrap_err().contains("--bogus"));
+
+        let missing = parse_args(
+            &["context", "--space"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&missing)
+            .unwrap_err()
+            .contains("--space requires a value"));
+
+        let duplicate = parse_args(
+            &["list", "--scope", "user", "--scope", "memory"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&duplicate)
+            .unwrap_err()
+            .contains("--scope may only be specified once"));
+
+        let conflicting = parse_args(
+            &["list", "--all", "--status", "current"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert_eq!(
+            validate_args(&conflicting).unwrap_err(),
+            "--all conflicts with --status"
+        );
+    }
+
+    #[test]
+    fn validation_enforces_action_specific_positionals_and_flags() {
+        let extra = parse_args(
+            &["owner", "extra"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&extra).unwrap_err().starts_with("usage:"));
+
+        let human_only = parse_args(
+            &["approve", "revision-x"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&human_only)
+            .unwrap_err()
+            .contains("MEMORY_UNAUTHORIZED"));
+
+        let wrong_proposal_flag = parse_args(
+            &[
+                "propose",
+                "revoke",
+                "--request-id",
+                "r1",
+                "--recorded-by",
+                "agent",
+                "--target",
+                "claim",
+                "--text",
+                "must-not-be-used",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&wrong_proposal_flag)
+            .unwrap_err()
+            .contains("--text"));
+    }
+
+    #[test]
+    fn context_provider_and_model_are_only_required_for_external_transfer() {
+        let local = parse_args(
+            &[
+                "context",
+                "--space",
+                "work",
+                "--purpose",
+                "planning",
+                "--caller",
+                "agent:test",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&local).is_ok());
+
+        let external = parse_args(
+            &[
+                "context",
+                "--space",
+                "work",
+                "--purpose",
+                "planning",
+                "--caller",
+                "agent:test",
+                "--external-transfer",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        assert_eq!(
+            validate_args(&external).unwrap_err(),
+            "--provider is required with --external-transfer"
+        );
+    }
+
+    #[test]
+    fn list_filters_scope_and_status_without_mixing_result_kinds() {
+        let snapshot = json!({
+            "claims": [
+                {"claim": {"projection": {"target": "user"}, "lifecycle": {"state": "active"}}, "application_state": "current"},
+                {"claim": {"projection": {"target": "memory"}, "lifecycle": {"state": "revoked"}}, "application_state": "no-current"}
+            ],
+            "pending": [
+                {"revision": {"projection": {"target": "user"}}},
+                {"revision": {"projection": {"target": "memory"}}}
+            ],
+            "conflicts": [
+                {"heads": [{"projection": {"target": "user"}}]},
+                {"heads": [{"projection": {"target": "memory"}}]}
+            ],
+            "health": {"status": "attention"}
+        });
+        let current_user = parse_args(
+            &["list", "--scope", "user", "--status", "current"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        let value = list_value(&current_user, &snapshot);
+        assert_eq!(value["claims"].as_array().unwrap().len(), 1);
+        assert!(value["pending"].as_array().unwrap().is_empty());
+        assert!(value["conflicts"].as_array().unwrap().is_empty());
+
+        let pending_memory = parse_args(
+            &["list", "--scope", "memory", "--status", "pending"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        let value = list_value(&pending_memory, &snapshot);
+        assert!(value["claims"].as_array().unwrap().is_empty());
+        assert_eq!(value["pending"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn check_only_fails_attention_for_projection_drift() {
+        assert!(check_passes(&json!({
+            "status": "attention",
+            "pending_count": 1,
+            "projection_edited": false
+        })));
+        assert!(!check_passes(&json!({
+            "status": "attention",
+            "pending_count": 0,
+            "projection_edited": true
+        })));
+        assert!(!check_passes(&json!({
+            "status": "damaged",
+            "projection_edited": false
+        })));
+    }
+
+    fn initialize_v2(root: &Path) {
+        memory_control::dispatch(root, "host.memory.v2.initialize", &json!({})).unwrap();
+    }
+
+    fn pending_claim(root: &Path) -> (String, String) {
+        let args = parse_args(
+            &[
+                "propose",
+                "create",
+                "--request-id",
+                "memory-cli-test-proposal",
+                "--recorded-by",
+                "agent:test",
+                "--text",
+                "A precise synthetic test preference.",
+                "--claim-kind",
+                "preference",
+                "--category",
+                "preferences",
+                "--space",
+                "tests",
+                "--purpose",
+                "testing",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            true,
+        );
+        validate_args(&args).unwrap();
+        v2_propose(&args, root).unwrap();
+        let repository = memory_v2::V2Repository::new(root).load().unwrap();
+        let claim = &repository.claims[0].value;
+        (claim.claim_id.clone(), claim.revision_id.clone())
+    }
+
+    #[test]
+    fn show_uses_exact_claim_and_revision_ids() {
+        let dir = tempfile::TempDir::new().unwrap();
+        initialize_v2(dir.path());
+        let (claim_id, revision_id) = pending_claim(dir.path());
+        let snapshot = v2_snapshot(dir.path()).unwrap();
+        assert_eq!(
+            show_exact(dir.path(), &snapshot, &revision_id).unwrap()["revision_id"],
+            revision_id
+        );
+        assert!(show_exact(dir.path(), &snapshot, &claim_id).is_ok());
+        assert!(show_exact(dir.path(), &snapshot, &claim_id[..8]).is_err());
+    }
+
+    #[test]
+    fn context_manifest_lookup_is_exact() {
+        let dir = tempfile::TempDir::new().unwrap();
+        initialize_v2(dir.path());
+        let request = json!({
+            "space": "tests", "purpose": "testing", "caller": "agent:test",
+            "provider": "local", "model": "local", "tools": [],
+            "external_transfer": false,
+            "as_of_valid_time": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+        });
+        let preview =
+            memory_control::dispatch(dir.path(), "host.memory.v2.context", &request).unwrap();
+        let mut manifest_request = request;
+        manifest_request["preview_sha256"] = preview["preview_sha256"].clone();
+        let receipt = memory_control::dispatch(
+            dir.path(),
+            "host.memory.v2.contextManifest",
+            &manifest_request,
+        )
+        .unwrap();
+        let id = receipt["manifest_id"].as_str().unwrap();
+        assert_eq!(
+            load_context_manifest(dir.path(), id).unwrap()["manifest_id"],
+            id
+        );
+        assert!(load_context_manifest(dir.path(), &id[..8]).is_err());
+    }
+
+    #[test]
+    fn purge_plan_is_local_read_only_and_tracks_authoritative_revision() {
+        let dir = tempfile::TempDir::new().unwrap();
+        initialize_v2(dir.path());
+        let (claim_id, revision_id) = pending_claim(dir.path());
+        let revision_path = memory_v2::V2Repository::new(dir.path())
+            .load()
+            .unwrap()
+            .claims[0]
+            .path
+            .clone();
+        let before = fs::read(&revision_path).unwrap();
+
+        let plan = purge_plan(dir.path(), &claim_id).unwrap();
+        assert_eq!(plan["claim_id"], claim_id);
+        assert_eq!(
+            plan["authoritative_assets"]["claim_revisions"][0]["revision_id"],
+            revision_id
+        );
+        assert!(dir
+            .path()
+            .join(plan["plan_path"].as_str().unwrap())
+            .is_file());
+        assert_eq!(fs::read(revision_path).unwrap(), before);
     }
 
     #[test]
