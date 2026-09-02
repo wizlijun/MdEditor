@@ -4,7 +4,7 @@
 
 ## 成功标准
 
-- 书库主题为 1–5 个；Agent proposal 为 2–5 个。
+- 书库主题为 1–8 个；Agent proposal 为 2–8 个。
 - 新 GUI/CLI 导入没有有效 `topic_id` 时在转换前失败。
 - `topics.yml` 与每书 `meta.yml.topic_id` 是唯一权威数据，主题 index 可确定性重建。
 - 旧书缺分类仍可见，可逐本或由 Agent proposal 批量补齐。
@@ -33,7 +33,7 @@
 
 - `notemd.ebook-import` 升级为 `1.3.0`；书库 taxonomy、单书归属和生成索引分别落在
   `topics.yml`、`meta.yml.topic_id` 与 `<主题>.index.md`，物理目录保持不变。
-- GUI 和 CLI 都在转换前强制有效主题；旧书继续可见，可逐书迁移或通过 2–5 主题的
+- GUI 和 CLI 都在转换前强制有效主题；旧书继续可见，可逐书迁移或通过 2–8 主题的
   Agent proposal 一次补齐。主题管理与主流程均提供英、中、日、德文案。
 - 所有 canonical 变更共用跨进程锁并以原子单文件写入；Agent apply 使用 durable journal，
   启动时验证原 inventory/proposal 后幂等恢复。

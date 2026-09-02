@@ -2,12 +2,12 @@
   "manifest_version": 2,
   "id": "notemd.ebook-import",
   "name": "Ebook Import",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "kind": "native",
   "engines": {
     "notemd": ">=6.901.10"
   },
-  "description": "Import ebooks into the vault as Markdown, classify books into up to five managed topics, and maintain generated topic indexes. Includes Calibre conversion, scanned-PDF OCR, AI-assisted topic design, and reviewable batch classification of legacy books.",
+  "description": "Import ebooks into the vault as Markdown, classify books into up to eight managed topics, and maintain generated topic indexes. Includes Calibre conversion, scanned-PDF OCR, AI-assisted topic design, and reviewable batch classification of legacy books.",
   "binary": {
     "aarch64-apple-darwin": "bin/notemd-ebook-import",
     "x86_64-apple-darwin": "bin/notemd-ebook-import"
@@ -91,21 +91,21 @@
   "i18n": {
     "zh": {
       "name": "导入电子书",
-      "description": "将 EPUB、PDF 和 DOCX 电子书导入知识库并转换为 Markdown。书籍可归入最多五个可管理主题，自动维护主题索引，并支持 AI 设计主题及批量建议旧书分类后人工确认。",
+      "description": "将 EPUB、PDF 和 DOCX 电子书导入知识库并转换为 Markdown。书籍可归入最多八个可管理主题，自动维护主题索引，并支持 AI 设计主题及批量建议旧书分类后人工确认。",
       "menus": {
         "open": "导入电子书(epub、pdf、docx)…"
       }
     },
     "ja": {
       "name": "電子書籍を取り込む",
-      "description": "EPUB・PDF・DOCX を Markdown に変換して Vault へ取り込みます。新しい本を最大5つの管理可能なテーマに分類し、テーマ索引を自動更新します。AIによるテーマ設計にも対応します。",
+      "description": "EPUB・PDF・DOCX を Markdown に変換して Vault へ取り込みます。新しい本を最大8つの管理可能なテーマに分類し、テーマ索引を自動更新します。AIによるテーマ設計にも対応します。",
       "menus": {
         "open": "電子書籍を取り込む(epub・pdf・docx)…"
       }
     },
     "de": {
       "name": "E-Books importieren",
-      "description": "EPUB-, PDF- und DOCX-E-Books als Markdown importieren. Jedes neue Buch wird einem von bis zu fünf verwalteten Themen zugeordnet; Themenindizes werden automatisch gepflegt und können per KI entworfen werden.",
+      "description": "EPUB-, PDF- und DOCX-E-Books als Markdown importieren. Jedes neue Buch wird einem von bis zu acht verwalteten Themen zugeordnet; Themenindizes werden automatisch gepflegt und können per KI entworfen werden.",
       "menus": {
         "open": "E-Books importieren (epub/pdf/docx)…"
       }

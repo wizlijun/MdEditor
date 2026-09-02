@@ -2,6 +2,7 @@
   import {
     cloneTopics,
     createTopic,
+    MAX_TOPICS,
     moveTopic,
     stageTopicRemoval,
     topicCount,
@@ -256,10 +257,10 @@
         <button
           type="button"
           class="add"
-          disabled={drafts.length >= 5}
+          disabled={drafts.length >= MAX_TOPICS}
           onclick={() => (drafts = createTopic(drafts))}
         >{t('topic.manager.add')}</button>
-        <span class="limit">{drafts.length} / 5</span>
+        <span class="limit">{drafts.length} / {MAX_TOPICS}</span>
         {#if !validation.valid}
           <span class="summary-error">{t('topic.manager.fix')}</span>
         {/if}

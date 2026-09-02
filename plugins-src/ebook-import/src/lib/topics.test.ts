@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   createTopic,
+  MAX_TOPICS,
   moveTopic,
   removeTopic,
   stageTopicRemoval,
@@ -22,17 +23,21 @@ const topic = (id: string, label = id): TopicDefinition => ({
 })
 
 describe('validateTopics', () => {
-  it('accepts one to five complete, unique topics', () => {
-    const result = validateTopics([topic('business', 'Business'), topic('software', 'Software')])
+  it('accepts one to eight complete, unique topics', () => {
+    const result = validateTopics(
+      Array.from({ length: MAX_TOPICS }, (_, i) => topic(`topic-${i + 1}`)),
+    )
     expect(result.valid).toBe(true)
     expect(result.errors).toEqual([])
   })
 
-  it('rejects an empty taxonomy and more than five topics', () => {
+  it('rejects an empty taxonomy and more than eight topics', () => {
     expect(validateTopics([]).errors).toContainEqual({ path: 'topics', code: 'too_few' })
-    expect(validateTopics(Array.from({ length: 6 }, (_, i) => topic(`topic-${i}`))).errors).toContainEqual(
-      { path: 'topics', code: 'too_many' },
-    )
+    expect(
+      validateTopics(
+        Array.from({ length: MAX_TOPICS + 1 }, (_, i) => topic(`topic-${i}`)),
+      ).errors,
+    ).toContainEqual({ path: 'topics', code: 'too_many' })
   })
 
   it('validates stable ids and safe generated index names', () => {
@@ -90,9 +95,12 @@ describe('topic reducers', () => {
     expect(after[1].vocabulary).toHaveLength(2)
   })
 
-  it('does not create a sixth topic', () => {
-    const five = Array.from({ length: 5 }, (_, i) => topic(`topic-${i + 1}`))
-    expect(createTopic(five)).toBe(five)
+  it('creates the eighth topic but not a ninth', () => {
+    const seven = Array.from({ length: MAX_TOPICS - 1 }, (_, i) => topic(`topic-${i + 1}`))
+    const eight = createTopic(seven)
+    expect(eight).toHaveLength(MAX_TOPICS)
+    expect(eight).not.toBe(seven)
+    expect(createTopic(eight)).toBe(eight)
   })
 
   it('updates fields while preserving an existing topic id', () => {

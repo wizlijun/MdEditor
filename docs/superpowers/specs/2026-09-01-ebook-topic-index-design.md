@@ -7,7 +7,7 @@
 保留电子书现有的 `YYYY-MM/<书名>/` 物理归档；在书库根增加一份可由用户维护的
 `topics.yml`，每本书在自己的 `meta.yml` 中保存唯一 `topic_id`，插件据此确定性生成
 `<关键词>.index.md`。导入界面把主题作为首要选择，新书没有有效主题时禁止开始导入；
-Agent 通过独立任务基于现有书名和 metadata 生成 2–5 个主题及完整归类 proposal，用户
+Agent 通过独立任务基于现有书名和 metadata 生成 2–8 个主题及完整归类 proposal，用户
 预览确认后再应用。
 
 ## 1. 目标与边界
@@ -16,7 +16,7 @@ Agent 通过独立任务基于现有书名和 metadata 生成 2–5 个主题及
 
 1. 在导入窗口醒目展示不超过 5 个书籍领域主题。
 2. 用户可在插件窗口内新增、编辑、排序和迁移主题。
-3. Agent 可依据现有书籍名称、作者、出版社、语言等 metadata 设计 2–5 个主题。
+3. Agent 可依据现有书籍名称、作者、出版社、语言等 metadata 设计 2–8 个主题。
 4. 每个主题包含稳定 ID、显示关键词、领域说明、相关词汇及逐词描述。
 5. 每本新书必须且只能归入一个有效主题。
 6. 每个主题生成一个 `<关键词>.index.md`，并包含该主题下全部已归类书籍。
@@ -36,7 +36,7 @@ Agent 通过独立任务基于现有书名和 metadata 生成 2–5 个主题及
 | 问题 | 设计 |
 | --- | --- |
 | 物理目录 | 继续使用 `<ebooks_root>/<YYYY-MM>/<Title>/` |
-| 主题上限 | 最多 5 个，满足 `<=5`；Agent 生成 2–5 个，人工配置允许 1–5 个 |
+| 主题上限 | 最多 8 个，满足 `<=8`；Agent 生成 2–8 个，人工配置允许 1–8 个 |
 | 书籍归属 | 每书恰好一个 `topic_id` |
 | 主题定义真相源 | `<ebooks_root>/topics.yml` |
 | 书籍归属真相源 | `<书目录>/meta.yml.topic_id` |
@@ -101,7 +101,7 @@ topics:
 校验规则：
 
 - `schema_version` 必须为 `1`。
-- `topics` 数量为 1–5；Agent proposal 必须为 2–5。
+- `topics` 数量为 1–8；Agent proposal 必须为 2–8。
 - `id` 是稳定主键：`[a-z0-9]+(?:-[a-z0-9]+)*`，全局唯一，创建后改显示名也不改 ID。
 - `label` 非空、唯一，建议 2–8 个字符，但不以语言长度硬拒绝。
 - `description` 非空，说明纳入范围，避免只换一个近义词。
@@ -129,7 +129,7 @@ topic_id: business-strategy
 schema_version: 1
 inventory_sha256: <当前 inventory.yml 的 sha256>
 topics:
-  # 与 topics.yml 同 schema，必须 2–5 个
+  # 与 topics.yml 同 schema，必须 2–8 个
 assignments:
   - book: 2026-08/Seven Powers
     topic_id: business-strategy
@@ -186,7 +186,7 @@ tags: [ebooks, topic, business-strategy]
 
 在拖放区与导入队列之间增加醒目的“导入主题”区：
 
-- 以 1–5 张主题卡展示 `label + 一行 description + 书籍数量`。
+- 以 1–8 张主题卡展示 `label + 一行 description + 书籍数量`。
 - 当前主题使用 accent 边框/浅色背景；这是持久界面选择，不使用 popup menu 样式。
 - 点击卡片成为“当前导入主题”；随后拖入/选择的文件继承该 `topic_id`。
 - 每个排队行显示主题 chip，并可从行内下拉改成其他有效主题。
@@ -266,7 +266,7 @@ frontmatter，缺失时退回 `config.txt` 和目录名。
 
 Agent 必须：
 
-1. 生成 2–5 个稳定、互斥且有长期意义的书籍领域主题。
+1. 生成 2–8 个稳定、互斥且有长期意义的书籍领域主题。
 2. 不按作者、语言、文件格式、月份或“一般/其他”随意切分。
 3. 每个主题给出简短关键词、清晰的领域边界、至少 2 个相关词汇及逐词描述。
 4. 将 inventory 的每本书恰好归入一个主题；信息不足时按书名和 publisher 做最保守判断。
@@ -281,7 +281,7 @@ Agent 必须：
 1. UI 选 Agent 并点击“AI 根据书库设计”。
 2. 后端生成 inventory 和 SHA，启动 `host.agent.run`，轮询 `host.agent.status`。
 3. Agent 成功后，后端解析并执行完整 schema/覆盖率/路径校验。
-4. UI 展示 2–5 张候选主题卡、每类书籍数量、旧 → 新归属差异和警告。
+4. UI 展示 2–8 张候选主题卡、每类书籍数量、旧 → 新归属差异和警告。
 5. 用户点击“应用”后，插件写 canonical YAML、更新旧书 meta、重建 indexes。
 6. proposal 过期、非法或与当前书库不一致时不允许应用，可重新运行。
 
@@ -317,7 +317,7 @@ YAML/meta 是权威，index 是缓存投影。多个文件无法形成真正的�
 
 ### 后端
 
-- `topics.yml` schema：1–5、唯一 ID/label/file、安全路径、vocabulary 完整性。
+- `topics.yml` schema：1–8、唯一 ID/label/file、安全路径、vocabulary 完整性。
 - `meta.yml` 新字段写入、旧格式兼容、未知字段保留、非法/缺失主题诊断。
 - index golden：frontmatter、词汇、排序、相对链接、无时钟漂移、同输入字节一致。
 - 导入必须携带有效主题；无主题在 Calibre/OCR 前失败。
@@ -369,7 +369,7 @@ YAML/meta 是权威，index 是缓存投影。多个文件无法形成真正的�
 
 本设计采用以下推荐默认值，用户确认后按此实施：
 
-1. “`<=5`”解释为书库全局最多 5 个一级主题，而不是“每本书最多 5 个标签”。
+1. “`<=8`”解释为书库全局最多 8 个一级主题，而不是“每本书最多 8 个标签”。
 2. 一本书首版只归一个主题；不做多主题标签。
 3. Agent 先生成 proposal，用户确认后应用；不允许 Agent 直接改 canonical 数据。
 4. `<关键词>.index.md` 放在 ebooks 根目录，书籍继续按月份归档。

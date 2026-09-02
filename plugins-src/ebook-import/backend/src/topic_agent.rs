@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 // v1 granted some harnesses workspace write. A new id guarantees every Vault
 // receives the read-only task instead of retaining an existing create-only v1.
-pub const TASK_ID: &str = "organize-ebook-topics-v3";
+pub const TASK_ID: &str = "organize-ebook-topics-v4";
 pub const INVENTORY_REL: &str = ".notemd/ebook-import/topic-design/inventory.yml";
 pub const PROPOSAL_REL: &str = ".notemd/ebook-import/topic-design/topics.proposal.yml";
 pub const APPLY_JOURNAL_REL: &str = ".notemd/ebook-import/topic-design/apply-journal.json";
@@ -24,7 +24,7 @@ pub const CLASSIFY_PROPOSAL_REL: &str =
 pub const CLASSIFY_APPLY_JOURNAL_REL: &str =
     ".notemd/ebook-import/topic-classification/apply-journal.json";
 pub const MIN_AGENT_TOPICS: usize = 2;
-pub const MAX_TOPICS: usize = 5;
+pub const MAX_TOPICS: usize = crate::topics::MAX_TOPICS;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -697,10 +697,10 @@ assignments:
     }
 
     #[test]
-    fn accepts_the_inclusive_five_topic_upper_bound() {
+    fn accepts_the_inclusive_eight_topic_upper_bound() {
         let bytes = inventory_yaml(&inventory()).unwrap();
         let mut parsed = parse_and_validate_proposal(&proposal(&bytes), &bytes).unwrap();
-        for n in 3..=5 {
+        for n in 3..=MAX_TOPICS {
             parsed.topics.push(ProposalTopic {
                 id: format!("topic-{n}"),
                 label: format!("主题{n}"),
@@ -745,7 +745,7 @@ assignments:
     }
 
     #[test]
-    fn rejects_unsafe_index_unknown_topic_and_six_topics() {
+    fn rejects_unsafe_index_unknown_topic_and_nine_topics() {
         let inv = inventory();
         let bytes = inventory_yaml(&inv).unwrap();
         let hash = inventory_sha256(&bytes);
@@ -759,9 +759,9 @@ assignments:
         unknown.assignments[0].topic_id = "other".into();
         assert!(validate_proposal(&unknown, &inv, &hash).is_err());
 
-        let mut six = good;
-        for n in 3..=6 {
-            six.topics.push(ProposalTopic {
+        let mut nine = good;
+        for n in 3..=(MAX_TOPICS + 1) {
+            nine.topics.push(ProposalTopic {
                 id: format!("topic-{n}"),
                 label: format!("主题{n}"),
                 description: "稳定领域。".into(),
@@ -778,7 +778,7 @@ assignments:
                 ],
             });
         }
-        assert!(validate_proposal(&six, &inv, &hash).is_err());
+        assert!(validate_proposal(&nine, &inv, &hash).is_err());
     }
 
     #[test]
@@ -881,6 +881,32 @@ assignments:
     }
 
     #[test]
+    fn classification_inventory_accepts_eight_topics_and_rejects_nine() {
+        let make_topic = |number: usize| ProposalTopic {
+            id: format!("topic-{number}"),
+            label: format!("主题{number}"),
+            description: format!("第{number}个稳定领域。"),
+            index_file: format!("主题{number}.index.md"),
+            vocabulary: vec![
+                Vocabulary {
+                    term: format!("术语{number}a"),
+                    description: "领域词汇说明。".into(),
+                },
+                Vocabulary {
+                    term: format!("术语{number}b"),
+                    description: "领域词汇说明。".into(),
+                },
+            ],
+        };
+        let mut inventory = classification_inventory();
+        inventory.topics.extend((3..=MAX_TOPICS).map(&make_topic));
+        assert!(classification_inventory_yaml(&inventory).is_ok());
+
+        inventory.topics.push(make_topic(MAX_TOPICS + 1));
+        assert!(classification_inventory_yaml(&inventory).is_err());
+    }
+
+    #[test]
     fn a_large_classification_batch_uses_the_complete_status_result() {
         let mut inventory = classification_inventory();
         let template = inventory.books[0].clone();
@@ -910,7 +936,10 @@ assignments:
                 .collect(),
         };
         let yaml = serde_yaml::to_string(&proposal).unwrap();
-        assert!(yaml.len() > 8 * 1024, "fixture must cross the legacy summary cap");
+        assert!(
+            yaml.len() > 8 * 1024,
+            "fixture must cross the legacy summary cap"
+        );
         let status = serde_json::json!({
             "record": { "result": "truncated legacy tail" },
             "terminal_result": { "complete": true, "content": yaml },
@@ -932,7 +961,7 @@ assignments:
             include_str!("../templates/organize-ebook-topics/CODEX.md"),
         ] {
             assert!(body.contains(INVENTORY_REL));
-            assert!(body.contains("2–5"));
+            assert!(body.contains("2–8"));
             assert!(body.contains("恰好一次"));
             assert!(body.contains("不要修改"));
             assert!(body.contains("最终响应"));

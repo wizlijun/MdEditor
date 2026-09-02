@@ -42,6 +42,7 @@ export interface TopicValidationResult {
 }
 
 const TOPIC_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+export const MAX_TOPICS = 8
 
 /** True only for one safe generated index filename in the ebooks root. */
 export function isValidIndexFile(value: string): boolean {
@@ -64,7 +65,7 @@ export function isValidIndexFile(value: string): boolean {
 export function validateTopics(topics: TopicDefinition[]): TopicValidationResult {
   const errors: TopicValidationError[] = []
   if (topics.length < 1) errors.push({ path: 'topics', code: 'too_few' })
-  if (topics.length > 5) errors.push({ path: 'topics', code: 'too_many' })
+  if (topics.length > MAX_TOPICS) errors.push({ path: 'topics', code: 'too_many' })
 
   const ids = new Set<string>()
   const labels = new Set<string>()
@@ -123,9 +124,9 @@ export function cloneTopics(topics: TopicDefinition[]): TopicDefinition[] {
   }))
 }
 
-/** Add one blank editable topic, or return the same list at the five-topic cap. */
+/** Add one blank editable topic, or return the same list at the topic cap. */
 export function createTopic(topics: TopicDefinition[]): TopicDefinition[] {
-  if (topics.length >= 5) return topics
+  if (topics.length >= MAX_TOPICS) return topics
   const used = new Set(topics.map((topic) => topic.id))
   let suffix = topics.length + 1
   while (used.has(`topic-${suffix}`)) suffix += 1

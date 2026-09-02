@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 pub const TOPICS_FILE: &str = "topics.yml";
 pub const LOCK_FILE: &str = ".ebook-topics.lock";
+pub const MAX_TOPICS: usize = 8;
 pub const GENERATED_MARKER: &str =
     "<!-- notemd:generated ebook-topic-index/v1; edit topics.yml or book meta.yml -->";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -141,9 +142,9 @@ pub fn validate_catalog(catalog: &TopicCatalog) -> Result<(), String> {
             catalog.schema_version
         ));
     }
-    if !(1..=5).contains(&catalog.topics.len()) {
+    if !(1..=MAX_TOPICS).contains(&catalog.topics.len()) {
         return Err(format!(
-            "topics.yml must define 1–5 topics; found {}",
+            "topics.yml must define 1–{MAX_TOPICS} topics; found {}",
             catalog.topics.len()
         ));
     }
@@ -885,15 +886,17 @@ mod tests {
     }
 
     #[test]
-    fn schema_accepts_one_through_five_and_preserves_unknown_fields() {
-        for count in 1..=5 {
+    fn schema_accepts_one_through_eight_and_preserves_unknown_fields() {
+        for count in 1..=MAX_TOPICS {
             assert_eq!(
                 parse_catalog(&catalog_yaml(count)).unwrap().topics.len(),
                 count
             );
         }
-        assert!(parse_catalog(&catalog_yaml(0)).unwrap_err().contains("1–5"));
-        assert!(parse_catalog(&catalog_yaml(6)).unwrap_err().contains("1–5"));
+        assert!(parse_catalog(&catalog_yaml(0)).unwrap_err().contains("1–8"));
+        assert!(parse_catalog(&catalog_yaml(MAX_TOPICS + 1))
+            .unwrap_err()
+            .contains("1–8"));
 
         let original = parse_catalog(&catalog_yaml(1)).unwrap();
         let serialized = serde_yaml::to_string(&original).unwrap();
