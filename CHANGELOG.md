@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.902.7 — 2026-09-02
+
 ### Fixed
 
 - **The first valid Memory proposal now initializes Memory Protocol v2 automatically.** External Agent harnesses can write a pending `propose create` into a completely empty Vault without a separate trusted-UI setup step; read-only or invalid commands, incomplete repositories, restricted content and non-empty existing projections remain fail-closed, while concurrent first writers share one idempotent protocol initialization.
