@@ -217,9 +217,16 @@ async fn find_entry(
 
 /// Fetch + return the full registry index as JSON (the "available" list).
 #[tauri::command]
-pub async fn plugin_market_index(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+pub async fn plugin_market_index(
+    app: tauri::AppHandle,
+    force_refresh: Option<bool>,
+) -> Result<serde_json::Value, String> {
     let base = market::registry_base_url(&app);
-    let index = market::fetch_index(&base).await?;
+    let index = if force_refresh.unwrap_or(false) {
+        market::fetch_index_fresh(&base).await?
+    } else {
+        market::fetch_index(&base).await?
+    };
     serde_json::to_value(index).map_err(|e| e.to_string())
 }
 

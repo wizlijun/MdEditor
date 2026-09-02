@@ -132,6 +132,34 @@ afterEach(async () => {
 })
 
 describe('plugin market staged loading', () => {
+  it('uses a normal online request on startup and forces a fresh online request after clicking Refresh', async () => {
+    let indexCalls = 0
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'plugin_market_installed') return Promise.resolve([])
+      if (command === 'plugin_market_index') {
+        indexCalls += 1
+        return Promise.resolve({
+          plugins: indexCalls === 1
+            ? [entry('notemd.next', 'Next')]
+            : [entry('notemd.idea-spark', 'Idea Spark')],
+        })
+      }
+      return Promise.resolve()
+    })
+
+    component = mount(PluginMarketApp, { target: document.body })
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Next'))
+    expect(mocks.invoke).toHaveBeenCalledWith('plugin_market_index', { forceRefresh: false })
+
+    const refresh = document.querySelector('.refresh') as HTMLButtonElement
+    await vi.waitFor(() => expect(refresh.disabled).toBe(false))
+    refresh.click()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Idea Spark'))
+    expect(document.body.textContent).not.toContain('Next')
+    expect(mocks.invoke).toHaveBeenCalledWith('plugin_market_index', { forceRefresh: true })
+  })
+
   it('shows cached installed plugins first, then device state, then the full catalog', async () => {
     writeInstalledCache([installed('Cached Next', false)])
     const local = deferred<InstalledV2[]>()

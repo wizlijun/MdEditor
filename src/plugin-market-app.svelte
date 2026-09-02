@@ -152,14 +152,16 @@
   }
 
   /** Re-fetch device state first, then enrich it with the remote catalog. */
-  async function refresh() {
+  async function refresh(forceOnline = false) {
     const sequence = ++refreshSequence
     loading = true
     notice = null
     // Start both requests together, but apply the device-local result first.
     // The registry can be slow or offline and must never gate installed plugins.
     const installedRequest = invoke<InstalledV2[]>('plugin_market_installed')
-    const indexRequest = invoke<RegistryIndex>('plugin_market_index')
+    const indexRequest = invoke<RegistryIndex>('plugin_market_index', {
+      forceRefresh: forceOnline,
+    })
     try {
       const localInstalled = await installedRequest
       if (sequence === refreshSequence) applyInstalled(localInstalled, catalogEntries, true)
@@ -446,7 +448,7 @@
                 : t('pluginMarket.updateAll', { count: updateItems.length })}
             </button>
           {/if}
-          <button class="refresh" onclick={() => refresh()} disabled={loading || batchUpdating}>
+          <button class="refresh" onclick={() => refresh(true)} disabled={loading || batchUpdating}>
             <span class:spinning={loading} aria-hidden="true">↻</span>
             {t('pluginMarket.refresh')}
           </button>

@@ -18,6 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Registry base URL when settings.json has no `plugins_v2.registry_url`.
 pub const DEFAULT_REGISTRY: &str = "https://plugins.notemd.net";
@@ -28,6 +29,10 @@ pub const MAX_PKG_BYTES: u64 = 50 * 1024 * 1024;
 
 /// Whole-request timeout for the small JSON calls (index fetch, install ping).
 const NET_TIMEOUT_SECS: u64 = 10;
+
+/// Makes repeated user-initiated refresh URLs distinct even within the same
+/// system clock tick, so an intermediary cannot reuse a previous response.
+static INDEX_REFRESH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Connect timeout for a package download — an unreachable registry still
 /// fails fast.
@@ -131,11 +136,24 @@ fn net_err(what: &str, e: &(dyn std::error::Error + 'static)) -> String {
 
 /// `GET {base}/api/index.json` → [`parse_index`]. 10s timeout.
 pub async fn fetch_index(base_url: &str) -> Result<RegistryIndex, String> {
+    fetch_index_with_policy(base_url, false).await
+}
+
+/// User-initiated registry refresh. Unlike the background/startup fetch this
+/// explicitly bypasses browser, proxy and CDN caches.
+pub async fn fetch_index_fresh(base_url: &str) -> Result<RegistryIndex, String> {
+    fetch_index_with_policy(base_url, true).await
+}
+
+async fn fetch_index_with_policy(
+    base_url: &str,
+    force_refresh: bool,
+) -> Result<RegistryIndex, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
-    fetch_index_via(&client, base_url).await
+    fetch_index_via_with_policy(&client, base_url, force_refresh).await
 }
 
 /// [`fetch_index`] with the client injected — same rationale as
@@ -144,10 +162,20 @@ pub async fn fetch_index(base_url: &str) -> Result<RegistryIndex, String> {
 /// `.no_proxy()`, since reqwest otherwise honours the system proxy by
 /// default and a stale/misbehaving one would turn a "server unreachable"
 /// test into a flaky pass or a hang.
-pub async fn fetch_index_via(client: &reqwest::Client, base_url: &str) -> Result<RegistryIndex, String> {
-    let url = format!("{}/api/index.json", base_url.trim_end_matches('/'));
-    let resp = client
-        .get(&url)
+pub async fn fetch_index_via(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<RegistryIndex, String> {
+    fetch_index_via_with_policy(client, base_url, false).await
+}
+
+async fn fetch_index_via_with_policy(
+    client: &reqwest::Client,
+    base_url: &str,
+    force_refresh: bool,
+) -> Result<RegistryIndex, String> {
+    let (request, url) = index_request(client, base_url, force_refresh)?;
+    let resp = request
         .send()
         .await
         .map_err(|e| net_err("fetch index", &e))?;
@@ -159,6 +187,33 @@ pub async fn fetch_index_via(client: &reqwest::Client, base_url: &str) -> Result
         .await
         .map_err(|e| net_err("read index body", &e))?;
     parse_index(&bytes)
+}
+
+fn index_request(
+    client: &reqwest::Client,
+    base_url: &str,
+    force_refresh: bool,
+) -> Result<(reqwest::RequestBuilder, String), String> {
+    let raw_url = format!("{}/api/index.json", base_url.trim_end_matches('/'));
+    let mut url = reqwest::Url::parse(&raw_url)
+        .map_err(|e| format!("invalid registry url '{raw_url}': {e}"))?;
+    if force_refresh {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let sequence = INDEX_REFRESH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        url.query_pairs_mut()
+            .append_pair("refresh", &format!("{now}-{sequence}"));
+    }
+    let url_text = url.to_string();
+    let mut request = client.get(url);
+    if force_refresh {
+        request = request
+            .header(reqwest::header::CACHE_CONTROL, "no-cache, no-store")
+            .header(reqwest::header::PRAGMA, "no-cache");
+    }
+    Ok((request, url_text))
 }
 
 /// `GET url` → package bytes, aborting if the body exceeds [`MAX_PKG_BYTES`].
@@ -478,6 +533,42 @@ mod tests {
         // Malformed settings.json ⇒ default (fail closed).
         std::fs::write(dir.path().join("settings.json"), "{ not json").unwrap();
         assert_eq!(registry_base_url_at(dir.path()), DEFAULT_REGISTRY);
+    }
+
+    #[test]
+    fn user_refresh_request_bypasses_caches_with_a_unique_url() {
+        let client = reqwest::Client::new();
+        let (regular, regular_url) =
+            index_request(&client, "https://mirror.example.com", false).expect("regular request");
+        let regular = regular.build().expect("build regular request");
+        assert_eq!(regular_url, "https://mirror.example.com/api/index.json");
+        assert!(regular.url().query().is_none());
+        assert!(regular
+            .headers()
+            .get(reqwest::header::CACHE_CONTROL)
+            .is_none());
+
+        let (first, first_url) = index_request(&client, "https://mirror.example.com", true)
+            .expect("first fresh request");
+        let (second, second_url) = index_request(&client, "https://mirror.example.com", true)
+            .expect("second fresh request");
+        let first = first.build().expect("build first fresh request");
+        let second = second.build().expect("build second fresh request");
+
+        assert_ne!(first_url, second_url, "every click gets a new cache key");
+        assert!(first
+            .url()
+            .query_pairs()
+            .any(|(key, value)| { key == "refresh" && !value.is_empty() }));
+        assert!(second
+            .url()
+            .query_pairs()
+            .any(|(key, value)| { key == "refresh" && !value.is_empty() }));
+        assert_eq!(
+            first.headers()[reqwest::header::CACHE_CONTROL],
+            "no-cache, no-store"
+        );
+        assert_eq!(first.headers()[reqwest::header::PRAGMA], "no-cache");
     }
 
     #[test]
