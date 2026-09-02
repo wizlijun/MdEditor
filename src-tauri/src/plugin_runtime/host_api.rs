@@ -75,12 +75,11 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         "host.memory.v2.snapshot" | "host.memory.v2.initialize" | "host.memory.v2.context"
         | "host.memory.v2.contextManifest" | "host.memory.v2.check" | "host.memory.v2.add"
         | "host.memory.v2.approve" | "host.memory.v2.reject" | "host.memory.v2.ignore"
-        | "host.memory.v2.delete" | "host.memory.v2.resolve"
+        | "host.memory.v2.delete" | "host.memory.v2.resetAll" | "host.memory.v2.resolve"
         | "host.memory.v2.setSalience" => Some("memory.control"),
         _ => Some("__unknown__"), // 未实现的方法一律拒绝
     }
 }
-
 /// Shared handling for the methods that the process sink and the UI RPC bridge
 /// implement identically: `host.log.*` and `host.toast`. Returns:
 /// - `Some(Ok(value))` — handled; `value` is the JSON result payload.
@@ -564,6 +563,7 @@ mod tests {
             "host.memory.v2.context",
             "host.memory.v2.add",
             "host.memory.v2.approve",
+            "host.memory.v2.resetAll",
             "host.memory.v2.resolve",
             "host.memory.v2.contextManifest",
         ] {

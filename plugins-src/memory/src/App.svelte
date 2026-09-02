@@ -17,6 +17,7 @@
     memoryIgnore,
     memoryInitialize,
     memoryReject,
+    memoryResetAll,
     memoryResolve,
     memorySetSalience,
     memorySnapshot,
@@ -76,6 +77,7 @@
   let selectedPendingId = $state<string | null>(null)
   let showAdd = $state(false)
   let showContext = $state(false)
+  let showReset = $state(false)
   let openMenuFor = $state<string | null>(null)
   let destructive = $state<DestructiveAction | null>(null)
   let mergeConflict = $state<MemoryConflict | null>(null)
@@ -124,6 +126,15 @@
   const currentCategoryOptions = $derived(categoryOptions[addTarget])
   const addApproval = $derived(approvalKindFor(addKind))
   const addNeedsAvoid = $derived(addKind === 'boundary' || addPolarity === 'negative' || addKind === 'practice')
+  const resetClaims = $derived(snapshot ? [
+    ...snapshot.claims
+      .filter(({ claim }) => claim.workflow.state === 'approved' && claim.lifecycle.state === 'active')
+      .map(({ claim }) => ({ claim_id: claim.claim_id, expected_heads: expectedHeads(claim) })),
+    ...snapshot.conflicts.map((conflict) => ({
+      claim_id: conflict.claim_id,
+      expected_heads: conflict.heads.map((head) => ({ revision_id: head.revision_id, payload_sha256: head.payload_sha256 })),
+    })),
+  ] : [])
 
   onMount(() => {
     void refresh()
@@ -342,6 +353,38 @@
     }
   }
 
+  async function resetAllMemory() {
+    if (!snapshot || writing || inferenceRun) return
+    writing = true
+    error = ''
+    try {
+      const receipt = await memoryResetAll({
+        request_id: requestId('memory-ui/reset-all'),
+        expected_protocol: protocol(),
+        gesture_intent: 'reset-all',
+        expected_claims: resetClaims,
+        expected_pending: snapshot.pending.map((item) => ({
+          revision_id: item.revision.revision_id,
+          expected_sha256: item.expected_sha256,
+          expected_heads: item.expected_heads,
+        })),
+      })
+      showReset = false
+      selectedClaimId = null
+      selectedPendingId = null
+      inferenceMode = 'full'
+      await completed(
+        `已清理 ${receipt.deleted_claims} 条已确认记忆和 ${receipt.deleted_pending} 条待确认建议；下次将重新全量推理`,
+        receipt.projection_rebuilt,
+      )
+      await loadInferenceMode()
+    } catch (cause) {
+      error = hostError(cause)
+    } finally {
+      writing = false
+    }
+  }
+
   async function resetAdd() {
     addTarget = 'user'; addCategory = 'preferences'; addKind = 'preference'; addText = ''; addSpace = 'global'
     addPurposes = ['planning', 'writing', 'information-answer', 'projection', 'sync']; addProviderPolicy = 'prompt'
@@ -473,7 +516,8 @@
 
   function closeTopLayer(event: KeyboardEvent) {
     if (event.key !== 'Escape' || writing) return
-    if (destructive) destructive = null
+    if (showReset) showReset = false
+    else if (destructive) destructive = null
     else if (mergeConflict) mergeConflict = null
     else if (showContext) showContext = false
     else if (showAdd) showAdd = false
@@ -497,6 +541,7 @@
         {/if}
       </div>
       <button class="secondary" onclick={() => showContext = true} disabled={!snapshot || snapshot.mode !== 'v2'}>Context Manifest…</button>
+      <button class="secondary reset-trigger" onclick={() => showReset = true} disabled={!writable || writing || !!inferenceRun}>重构记忆…</button>
       <div class="health" class:conflict={snapshot?.health.status === 'conflict'} class:bad={snapshot?.health.status === 'damaged'}>
         <span aria-hidden="true"></span><span>{snapshot?.health.message ?? (loading ? '正在载入' : '不可用')}</span>
       </div>
@@ -671,6 +716,23 @@
   <div class="scrim" role="presentation"><div class="sheet compact-sheet" role="alertdialog" aria-modal="true" aria-labelledby="destructive-title"><header><div><h2 id="destructive-title">{destructive.kind === 'reject' ? '否认这条建议？' : destructive.kind === 'delete-candidate' ? '删除这个候选？' : destructive.kind === 'approve-lifecycle' ? `确认${destructive.pending.revision.lifecycle.state === 'deleted' ? '删除' : '撤销'}此主张？` : '移出当前记忆？'}</h2><p>{destructive.kind === 'delete-claim' ? '主张会从当前投影和 Agent context 移除；不可变历史仍会保留。这不是从 Git 历史永久擦除。' : destructive.kind === 'approve-lifecycle' ? '这是不可见性变更：主张会离开当前投影和 Agent context；不可变历史仍会保留。' : destructive.kind === 'reject' ? '系统会记录否认决定，建议不会进入当前记忆。' : '候选不会进入当前记忆；已有 Git 历史可能继续保留。'}</p></div></header><footer><button onclick={() => destructive = null} disabled={writing}>取消</button><button class="destructive" onclick={confirmDestructive} disabled={writing}>{writing ? '正在处理…' : '确认'}</button></footer></div></div>
 {/if}
 
+{#if showReset && snapshot}
+  <div class="scrim" role="presentation">
+    <div class="sheet compact-sheet reset-sheet" role="alertdialog" aria-modal="true" aria-labelledby="reset-title">
+      <header><div><h2 id="reset-title">清空并重构全部记忆？</h2><p>这是高影响操作，请先确认范围和后果。</p></div></header>
+      <div class="reset-impact">
+        <strong>将立即移除 {resetClaims.length} 条已确认记忆和 {snapshot.pending.length} 条待确认建议。</strong>
+        <ul>
+          <li>USER.md、MEMORY.md 与 Agent context 会失去这些内容。</li>
+          <li>推理进度会重置；下次推理将重新扫描整个 Vault。</li>
+          <li>所有者身份、Memory 协议和不可变历史会保留，因此这不是从 Git 历史永久擦除。</li>
+        </ul>
+      </div>
+      <footer><button onclick={() => showReset = false} disabled={writing}>取消</button><button class="destructive" onclick={resetAllMemory} disabled={writing}>{writing ? '正在清理…' : '确认清空并重构'}</button></footer>
+    </div>
+  </div>
+{/if}
+
 {#if mergeConflict}
   <div class="scrim" role="presentation"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="merge-title"><header><div><h2 id="merge-title">合并并发版本</h2><p>合并会创建同时引用所有当前 head 的新 revision。</p></div><button class="close" aria-label="关闭合并编辑" onclick={() => mergeConflict = null}>×</button></header><label class="field">合并后的主张<textarea bind:value={mergedText} rows="7"></textarea></label><footer><button onclick={() => mergeConflict = null}>取消</button><button class="primary" onclick={() => resolveConflict(mergeConflict!, 'merge')} disabled={writing || !mergedText.trim()}>保存合并</button></footer></div></div>
 {/if}
@@ -685,12 +747,12 @@
 
 <style>
   :global(:root){color-scheme:light dark;font:13px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;accent-color:#0a84ff}:global(body){margin:0;background:Canvas;color:CanvasText}:global(*){box-sizing:border-box}:global(button),:global(input),:global(select),:global(textarea),:global(summary){font:inherit;pointer-events:auto;-webkit-app-region:no-drag}:global(button){min-height:32px;border:1px solid color-mix(in srgb,CanvasText 14%,transparent);border-radius:8px;padding:0 12px;background:color-mix(in srgb,CanvasText 5%,Canvas);color:CanvasText;cursor:pointer}:global(button:hover:not(:disabled)){background:color-mix(in srgb,CanvasText 10%,Canvas)}:global(button:active:not(:disabled)){transform:translateY(1px)}:global(button:focus-visible),:global(input:focus-visible),:global(select:focus-visible),:global(textarea:focus-visible),:global(summary:focus-visible){outline:3px solid color-mix(in srgb,#0a84ff 34%,transparent);outline-offset:2px}:global(button:disabled){opacity:.42;cursor:default}:global(button.primary){min-height:34px;background:#0a84ff;border-color:#0a84ff;color:white;font-weight:600}:global(button.primary:hover:not(:disabled)){background:#0077ed}:global(button.destructive){background:#ff3b30;border-color:#ff3b30;color:#fff;font-weight:600}:global(input),:global(select),:global(textarea){width:100%;min-height:32px;padding:6px 9px;border:1px solid color-mix(in srgb,CanvasText 16%,transparent);border-radius:7px;background:Canvas;color:CanvasText}:global(textarea){resize:vertical;line-height:1.5}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-  main{max-width:1240px;margin:0 auto;padding:20px 24px 40px}.app-header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.app-header h1{margin:0;font-size:20px;line-height:1.25;letter-spacing:-.02em}.app-header p{max-width:680px;margin:4px 0 0;font-size:12px;color:color-mix(in srgb,CanvasText 58%,transparent)}.header-actions{display:flex;align-items:center;gap:8px}.inference-action{display:flex;align-items:center;gap:4px}.health{display:flex;align-items:center;gap:7px;max-width:250px;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.health>span:first-child{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#34c759}.health.conflict>span:first-child{background:#ff9f0a}.health.bad>span:first-child{background:#ff3b30}.icon{width:32px;padding:0;font-size:17px}.secondary{background:transparent}.banner{display:flex;align-items:flex-start;gap:10px;margin-top:14px;padding:10px 12px;border:1px solid;border-radius:9px;font-size:12px}.banner strong{white-space:nowrap}.banner.error{border-color:color-mix(in srgb,#ff3b30 42%,transparent);background:color-mix(in srgb,#ff3b30 9%,Canvas)}.banner.warning{border-color:color-mix(in srgb,#ff9f0a 45%,transparent);background:color-mix(in srgb,#ff9f0a 9%,Canvas)}.banner.inference-progress{border-color:color-mix(in srgb,#0a84ff 36%,transparent);background:color-mix(in srgb,#0a84ff 7%,Canvas)}
+  main{max-width:1240px;margin:0 auto;padding:20px 24px 40px}.app-header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.app-header h1{margin:0;font-size:20px;line-height:1.25;letter-spacing:-.02em}.app-header p{max-width:680px;margin:4px 0 0;font-size:12px;color:color-mix(in srgb,CanvasText 58%,transparent)}.header-actions{display:flex;align-items:center;gap:8px}.inference-action{display:flex;align-items:center;gap:4px}.health{display:flex;align-items:center;gap:7px;max-width:250px;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.health>span:first-child{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#34c759}.health.conflict>span:first-child{background:#ff9f0a}.health.bad>span:first-child{background:#ff3b30}.icon{width:32px;padding:0;font-size:17px}.secondary{background:transparent}.reset-trigger{color:#d62d26}.banner{display:flex;align-items:flex-start;gap:10px;margin-top:14px;padding:10px 12px;border:1px solid;border-radius:9px;font-size:12px}.banner strong{white-space:nowrap}.banner.error{border-color:color-mix(in srgb,#ff3b30 42%,transparent);background:color-mix(in srgb,#ff3b30 9%,Canvas)}.banner.warning{border-color:color-mix(in srgb,#ff9f0a 45%,transparent);background:color-mix(in srgb,#ff9f0a 9%,Canvas)}.banner.inference-progress{border-color:color-mix(in srgb,#0a84ff 36%,transparent);background:color-mix(in srgb,#0a84ff 7%,Canvas)}
   .segments{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;max-width:560px;margin:18px auto 16px;padding:3px;border-radius:9px;background:color-mix(in srgb,CanvasText 8%,Canvas)}.segments button{min-height:34px;border:0;background:transparent;color:color-mix(in srgb,CanvasText 65%,transparent);font-weight:600}.segments button.active{background:Canvas;color:CanvasText;box-shadow:0 1px 4px rgba(0,0,0,.16)}.count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:color-mix(in srgb,CanvasText 10%,Canvas);font-size:11px}.count.large{min-width:28px;height:24px;border-radius:12px}.toolbar{display:grid;grid-template-columns:minmax(220px,1fr) 170px auto;gap:8px;margin-bottom:12px}.split{display:grid;grid-template-columns:350px minmax(0,1fr);min-height:510px;border:1px solid color-mix(in srgb,CanvasText 13%,transparent);border-radius:11px;overflow:hidden;background:color-mix(in srgb,CanvasText 1.5%,Canvas)}
   .master{max-height:calc(100vh - 220px);min-height:510px;overflow:auto;border-right:1px solid color-mix(in srgb,CanvasText 12%,transparent);background:color-mix(in srgb,CanvasText 3%,Canvas)}.master>button{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:start;gap:9px;width:100%;min-height:70px;padding:11px 12px;border:0;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:0;background:transparent;text-align:left}.master>button.selected{background:#0a84ff;color:#fff}.master>button.selected small,.master>button.selected .row-state{color:rgba(255,255,255,.8)}.master>button.sensitive{box-shadow:inset 3px 0 #ff9f0a}.master strong{display:-webkit-box;overflow:hidden;line-clamp:2;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:13px;line-height:1.4;white-space:pre-wrap}.master small{display:block;margin-top:4px;color:color-mix(in srgb,CanvasText 53%,transparent);font-size:12px}.row-state{color:color-mix(in srgb,CanvasText 55%,transparent);font-size:11px}.polarity{width:7px;height:7px;margin-top:5px;border-radius:50%;background:#8e8e93}.polarity.positive{background:#34c759}.polarity.negative{background:#ff3b30}
   .detail{min-width:0;padding:22px 24px}.detail h2{margin:12px 0 16px;font-size:17px;line-height:1.5;letter-spacing:-.01em;white-space:pre-wrap}.eyebrow{display:flex;flex-wrap:wrap;gap:6px}.badge{padding:3px 7px;border-radius:6px;background:color-mix(in srgb,CanvasText 7%,Canvas);font-size:11px;font-weight:650}.badge.positive{background:color-mix(in srgb,#34c759 18%,Canvas);color:#168333}.badge.negative,.badge.danger{background:color-mix(in srgb,#ff3b30 16%,Canvas);color:#d62d26}.badge.pinned{background:color-mix(in srgb,#ff9f0a 20%,Canvas);color:#9a5500}.guidance{margin-bottom:16px;padding:13px 14px;border-left:3px solid #0a84ff;border-radius:0 8px 8px 0;background:color-mix(in srgb,#0a84ff 7%,Canvas)}.guidance small,.approval-meaning small{font-size:11px;font-weight:700;color:#0a84ff}.guidance p{margin:4px 0 9px;font-size:13px}.guidance p:last-child{margin-bottom:0}.guidance .avoid{color:#d62d26;font-weight:600}.facts{display:grid;grid-template-columns:1fr 1fr;gap:1px;margin:0;background:color-mix(in srgb,CanvasText 8%,transparent);border:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:8px;overflow:hidden}.facts>div{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;background:Canvas}.facts>div.wide{grid-column:1/-1}.facts dt{font-size:12px;color:color-mix(in srgb,CanvasText 54%,transparent)}.facts dd{margin:0;text-align:right;font-size:12px;overflow-wrap:anywhere}.detail-actions{display:flex;justify-content:flex-end;margin-top:16px}.menu-anchor{position:relative}.menu-panel{position:absolute;right:0;bottom:40px;z-index:20;min-width:190px}.menu-panel .menu-row{width:100%;min-height:30px;border:0;text-align:left}.menu-panel .danger-row{color:#ff3b30}.menu-panel .danger-row:hover{background:#ff3b30;color:#fff}.approval-meaning{margin:0 0 14px;padding:12px 13px;border-radius:9px;background:color-mix(in srgb,#0a84ff 7%,Canvas)}.approval-meaning strong{display:block;margin-top:3px;font-size:14px}.approval-meaning p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 66%,transparent);font-size:12px}.diff{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:12px 0 16px}.diff>div{min-height:92px;padding:11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas)}.diff small{font-size:11px;color:color-mix(in srgb,CanvasText 54%,transparent)}.diff p{margin:5px 0 0;white-space:pre-wrap}.pending-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:16px}
   .history{display:grid;gap:12px}.history>header{display:flex;justify-content:space-between;align-items:center}.history h2{margin:0;font-size:16px}.history header p{margin:3px 0 0;color:color-mix(in srgb,CanvasText 58%,transparent);font-size:12px}.conflict-card{padding:16px;border:1px solid color-mix(in srgb,#ff9f0a 42%,transparent);border-radius:11px;background:color-mix(in srgb,#ff9f0a 5%,Canvas)}.conflict-title{display:flex;justify-content:space-between;gap:18px}.conflict-title h3{margin:7px 0 0;font-size:15px}.conflict-title>strong{color:#b36300;font-size:12px}.ancestor{margin:12px 0;padding:10px 11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas)}.ancestor small,.heads small{font-size:11px;color:color-mix(in srgb,CanvasText 55%,transparent)}.ancestor p,.heads p{margin:4px 0 0;white-space:pre-wrap}.heads{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.heads section{padding:11px;border:1px solid color-mix(in srgb,CanvasText 11%,transparent);border-radius:9px;background:Canvas}.heads button{margin-top:10px}.conflict-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}.history-heading{margin-top:12px}.timeline{margin:0;padding:0;list-style:none;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:10px;overflow:hidden}.timeline li{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:10px;align-items:start;padding:11px 13px;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent)}.timeline li:last-child{border-bottom:0}.timeline-dot{width:8px;height:8px;margin-top:5px;border-radius:50%;background:#0a84ff}.timeline strong{display:block;font-size:13px}.timeline small{display:block;margin-top:2px;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:12px}.timeline>li>span:last-child{font-size:11px}.empty{padding:52px 18px;text-align:center;color:color-mix(in srgb,CanvasText 48%,transparent)}.empty.compact{padding:22px}.detail-empty{display:grid;place-items:center}
-  .scrim{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.28);backdrop-filter:blur(8px)}.sheet{box-sizing:border-box;width:min(680px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:22px;border:1px solid color-mix(in srgb,CanvasText 15%,transparent);border-radius:14px;background:Canvas;color:CanvasText;box-shadow:0 24px 70px rgba(0,0,0,.34)}.compact-sheet{width:min(470px,100%)}.context-sheet{width:min(760px,100%)}.sheet>header{display:flex;justify-content:space-between;gap:18px}.sheet h2{margin:0;font-size:17px}.sheet header p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.close{width:32px;padding:0;border:0;background:transparent;font-size:20px}.field,.form-grid label{display:grid;gap:4px;margin-top:12px;color:color-mix(in srgb,CanvasText 68%,transparent);font-size:12px}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.form-grid .wide{grid-column:1/-1}details{margin-top:14px;padding:10px 12px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:9px}summary{cursor:pointer;font-weight:600}fieldset{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0;padding:10px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:8px}legend{padding:0 4px;font-size:12px}.check{display:flex!important;align-items:center;gap:6px!important;margin:0!important}.check input{width:auto;min-height:auto}.sheet footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.context-actions{display:flex;justify-content:flex-end;margin-top:14px}.context-result{margin-top:14px;padding:13px;border-radius:10px;background:color-mix(in srgb,CanvasText 4%,Canvas)}.result-summary{display:flex;justify-content:space-between}.context-result ul{margin:10px 0;padding-left:20px}.context-result li{margin:5px 0}.context-result li small,.readonly-note{display:block;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:12px}
+  .scrim{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.28);backdrop-filter:blur(8px)}.sheet{box-sizing:border-box;width:min(680px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:22px;border:1px solid color-mix(in srgb,CanvasText 15%,transparent);border-radius:14px;background:Canvas;color:CanvasText;box-shadow:0 24px 70px rgba(0,0,0,.34)}.compact-sheet{width:min(470px,100%)}.context-sheet{width:min(760px,100%)}.sheet>header{display:flex;justify-content:space-between;gap:18px}.sheet h2{margin:0;font-size:17px}.sheet header p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.reset-sheet{border-color:color-mix(in srgb,#ff3b30 35%,transparent)}.reset-impact{margin-top:16px;padding:12px 13px;border-radius:9px;background:color-mix(in srgb,#ff3b30 8%,Canvas)}.reset-impact>strong{color:#d62d26}.reset-impact ul{margin:9px 0 0;padding-left:20px}.reset-impact li{margin:5px 0}.close{width:32px;padding:0;border:0;background:transparent;font-size:20px}.field,.form-grid label{display:grid;gap:4px;margin-top:12px;color:color-mix(in srgb,CanvasText 68%,transparent);font-size:12px}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.form-grid .wide{grid-column:1/-1}details{margin-top:14px;padding:10px 12px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:9px}summary{cursor:pointer;font-weight:600}fieldset{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0;padding:10px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:8px}legend{padding:0 4px;font-size:12px}.check{display:flex!important;align-items:center;gap:6px!important;margin:0!important}.check input{width:auto;min-height:auto}.sheet footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.context-actions{display:flex;justify-content:flex-end;margin-top:14px}.context-result{margin-top:14px;padding:13px;border-radius:10px;background:color-mix(in srgb,CanvasText 4%,Canvas)}.result-summary{display:flex;justify-content:space-between}.context-result ul{margin:10px 0;padding-left:20px}.context-result li{margin:5px 0}.context-result li small,.readonly-note{display:block;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:12px}
   @media(max-width:820px){main{padding:16px}.split{grid-template-columns:290px minmax(0,1fr)}.header-actions{flex-wrap:wrap;justify-content:flex-end}.heads{grid-template-columns:1fr}}@media(max-width:660px){.app-header{display:block}.header-actions{justify-content:flex-start;margin-top:10px}.split{display:block}.master{min-height:180px;max-height:280px;border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 12%,transparent)}.toolbar,.form-grid,.diff,.facts{grid-template-columns:1fr}.facts>div.wide,.form-grid .wide{grid-column:auto}.segments{max-width:none}.pending-actions{justify-content:stretch}.pending-actions button{flex:1 1 120px}}
   @media(prefers-reduced-motion:reduce){:global(*){scroll-behavior:auto!important;transition:none!important}}
 </style>

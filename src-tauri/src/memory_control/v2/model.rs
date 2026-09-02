@@ -881,6 +881,7 @@ pub enum GestureIntent {
     Delete,
     SetSalience,
     Resolve,
+    ResetAll,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
