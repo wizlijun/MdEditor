@@ -9,6 +9,7 @@ For the full commit history, see the git log.
 
 ### Fixed
 
+- **Ebook Import 1.3.2 no longer lets one legacy directory stop AI topic design.** Unsafe book directory paths, such as names ending in whitespace, are left out of the AI inventory while valid books continue through classification; the inventory protocol itself remains strict against handcrafted unsafe paths.
 - **Memory 2.0.1 now fails closed across approval, authority and concurrent Git paths.** Control-plane revisions must prove their causal authority; conflicting approve/reject decisions stay explicit; request idempotency is enforced within one clone and deterministically reconciled across clones; Context Manifests bind the exact preview; generated `USER.md` and `MEMORY.md` are recognized as read-only projections and retain a conservative warning during action-sensitive conflicts.
 - **Ebook Import 1.3.1 makes topic organization transactional and capability-bounded.** Topic catalogs use revision checks and rollback-safe index rebuilds, symlink escapes are rejected, interrupted work validates the current library, concurrent AI status events are retained, and topic design accepts only the provider whose single-file read allowlist can be verified before untrusted metadata is processed.
 - **Plugin updates no longer combine an old window with a new backend.** Replaced runtimes are permanently fenced, superseded plugin windows are destroyed before the installed package changes, and a same-ID process is reused only when its complete manifest and install directory still match.
