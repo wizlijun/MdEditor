@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.902.3 — 2026-09-02
+
 ### Added
 
 - **Ebook Import 1.3.4 can classify every previously unclassified book as one reviewable AI batch.** The Agent reads bounded evidence from the newest AI digest, chapter headings, opening text and bibliographic metadata, suggests only existing topics, and leaves every assignment editable until one transactional confirmation updates book metadata and rebuilds all generated topic indexes.
