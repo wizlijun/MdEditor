@@ -275,11 +275,15 @@ fn uninitialized_view() -> Value {
 }
 
 fn initialize(root: &Path, _input: InitializeInput) -> Result<Value, String> {
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
     let repository = V2Repository::new(root)
         .load()
         .map_err(|error| error.to_string())?;
     match repository.mode {
         RepositoryMode::V2Active => {
+            drop(transaction);
+            rebuild_projections(root)?;
             return snapshot_view(
                 root,
                 SnapshotInput {
@@ -366,9 +370,10 @@ fn initialize(root: &Path, _input: InitializeInput) -> Result<Value, String> {
         },
         payload_sha256: String::new(),
     };
-    RepositoryWriter::new(root)
+    transaction
         .initialize(format!("vault:{}", uuid_v7()), protocol, authority)
         .map_err(|error| error.to_string())?;
+    drop(transaction);
     rebuild_projections(root)?;
     snapshot_view(
         root,
@@ -2343,6 +2348,49 @@ mod tests {
             fs::read_to_string(dir.path().join("MEMORY.md")).unwrap(),
             "# MEMORY\n"
         );
+
+        fs::remove_file(dir.path().join("USER.md")).unwrap();
+        fs::remove_file(dir.path().join("MEMORY.md")).unwrap();
+        let repeated = dispatch(dir.path(), "host.memory.v2.initialize", &json!({})).unwrap();
+        assert_eq!(repeated["mode"], "v2");
+        let repository = V2Repository::new(dir.path()).load().unwrap();
+        assert_eq!(repository.protocols.len(), 1);
+        assert_eq!(repository.authorities.len(), 1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("USER.md")).unwrap(),
+            "# USER\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("MEMORY.md")).unwrap(),
+            "# MEMORY\n"
+        );
+    }
+
+    #[test]
+    fn concurrent_trusted_initialization_creates_one_control_history() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        std::thread::scope(|scope| {
+            let handles = (0..8)
+                .map(|_| {
+                    let barrier = barrier.clone();
+                    scope.spawn(move || {
+                        barrier.wait();
+                        dispatch(root, "host.memory.v2.initialize", &json!({}))
+                    })
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                let snapshot = handle.join().unwrap().unwrap();
+                assert_eq!(snapshot["mode"], "v2");
+            }
+        });
+
+        let repository = V2Repository::new(dir.path()).load().unwrap();
+        assert_eq!(repository.mode, RepositoryMode::V2Active);
+        assert_eq!(repository.protocols.len(), 1);
+        assert_eq!(repository.authorities.len(), 1);
     }
 
     #[test]

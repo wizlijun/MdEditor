@@ -7,6 +7,7 @@
 use crate::memory_control::{self, v2 as memory_v2};
 use chrono::{SecondsFormat, Utc};
 use serde_json::json;
+use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -93,6 +94,128 @@ fn required_flag<'a>(args: &'a MemoryArgs, name: &str) -> Result<&'a str, String
         .ok_or_else(|| format!("--{name} is required"))
 }
 
+fn v2_propose_operation(args: &MemoryArgs) -> Result<&str, String> {
+    let operation = args
+        .positionals
+        .first()
+        .map(String::as_str)
+        .unwrap_or("create");
+    if matches!(operation, "create" | "replace" | "revoke") {
+        Ok(operation)
+    } else {
+        Err("v2 propose operation must be create, replace, or revoke".into())
+    }
+}
+
+fn projection_allows_auto_initialize(root: &std::path::Path, name: &str) -> Result<(), String> {
+    let path = root.join(name);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("MEMORY_IO: {}: {error}", path.display())),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "MEMORY_AUTO_INITIALIZE_BLOCKED: {} is not a regular projection file",
+            path.display()
+        ));
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("MEMORY_IO: {}: {error}", path.display()))?;
+    let expected_heading = format!("# {}", name.trim_end_matches(".md"));
+    if content.trim().is_empty() || content.trim() == expected_heading {
+        Ok(())
+    } else {
+        Err(format!(
+            "MEMORY_AUTO_INITIALIZE_BLOCKED: {} already contains content; initialize from the trusted Memory UI so it is not overwritten",
+            path.display()
+        ))
+    }
+}
+
+fn validate_auto_initialize_create(
+    args: &MemoryArgs,
+    root: &std::path::Path,
+) -> Result<(), String> {
+    if v2_propose_operation(args)? != "create" {
+        return Err(
+            "MEMORY_PROTOCOL_UNINITIALIZED: only propose create can initialize an empty Memory v2 repository"
+                .into(),
+        );
+    }
+    let request_id = required_flag(args, "request-id")?;
+    if request_id.trim().is_empty() || request_id.len() > 256 {
+        return Err(
+            "MEMORY_INVALID_REQUEST: request_id is required and must be at most 256 bytes".into(),
+        );
+    }
+    required_flag(args, "recorded-by")?;
+    if required_flag(args, "text")?.trim().is_empty() {
+        return Err("--text must not be empty".into());
+    }
+    let _: memory_v2::ClaimKind = parse_v2_enum(required_flag(args, "claim-kind")?, "claim-kind")?;
+    let _: memory_v2::ProjectionTarget = parse_v2_enum(
+        args.flags
+            .get("scope")
+            .map(String::as_str)
+            .unwrap_or("memory"),
+        "projection",
+    )?;
+    required_flag(args, "category")?;
+    required_flag(args, "space")?;
+    required_flag(args, "purpose")?;
+    let _: memory_v2::ExternalProviderPolicy = parse_v2_enum(
+        args.flags
+            .get("provider-policy")
+            .map(String::as_str)
+            .unwrap_or("deny"),
+        "provider-policy",
+    )?;
+    let _: memory_v2::TrustTier = parse_v2_enum(
+        args.flags
+            .get("trust-tier")
+            .map(String::as_str)
+            .unwrap_or("contextual"),
+        "trust-tier",
+    )?;
+    let _: memory_v2::RiskClass = parse_v2_enum(
+        args.flags
+            .get("risk-class")
+            .map(String::as_str)
+            .unwrap_or("informational"),
+        "risk-class",
+    )?;
+    let _: memory_v2::Salience = parse_v2_enum(
+        args.flags
+            .get("salience")
+            .map(String::as_str)
+            .unwrap_or("normal"),
+        "salience",
+    )?;
+    let _: memory_v2::Polarity = parse_v2_enum(
+        args.flags
+            .get("polarity")
+            .map(String::as_str)
+            .unwrap_or("neutral"),
+        "polarity",
+    )?;
+    let sensitivity: memory_v2::Sensitivity = parse_v2_enum(
+        args.flags
+            .get("sensitivity")
+            .map(String::as_str)
+            .unwrap_or("normal"),
+        "sensitivity",
+    )?;
+    if sensitivity == memory_v2::Sensitivity::Restricted {
+        return Err(
+            "MEMORY_RESTRICTED_PERSISTENCE_DENIED: restricted content cannot enter Git".into(),
+        );
+    }
+    projection_allows_auto_initialize(root, "USER.md")?;
+    projection_allows_auto_initialize(root, "MEMORY.md")?;
+    Ok(())
+}
+
 fn current_v2(
     root: &std::path::Path,
 ) -> Result<(memory_v2::RepositorySnapshot, memory_v2::MemorySnapshotV2), String> {
@@ -169,14 +292,7 @@ fn v2_kind_data(kind: memory_v2::ClaimKind, text: &str, actor: &str) -> memory_v
 }
 
 fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
-    let operation = args
-        .positionals
-        .first()
-        .map(String::as_str)
-        .unwrap_or("create");
-    if !matches!(operation, "create" | "replace" | "revoke") {
-        return Err("v2 propose operation must be create, replace, or revoke".into());
-    }
+    let operation = v2_propose_operation(args)?;
     let (repository, reduced) = current_v2(root)?;
     let owner = reduced
         .authority
@@ -524,6 +640,11 @@ pub fn run(args: MemoryArgs) -> ExitCode {
             memory_v2::RepositoryMode::V2Incomplete => {
                 Err("MEMORY_PROTOCOL_INCOMPLETE: repair v2 control assets before continuing".into())
             }
+            memory_v2::RepositoryMode::Absent if args.action == "propose" => {
+                validate_auto_initialize_create(&args, &root)?;
+                memory_control::dispatch(&root, "host.memory.v2.initialize", &json!({}))?;
+                run_v2(&args, &root)
+            }
             memory_v2::RepositoryMode::Absent => Err(
                 "MEMORY_PROTOCOL_UNINITIALIZED: initialize Memory Protocol v2 before using the CLI"
                     .into(),
@@ -594,5 +715,47 @@ mod tests {
         );
         assert!(args.bools.contains("external-transfer"));
         assert_eq!(args.flags.get("space").map(String::as_str), Some("work"));
+    }
+
+    #[test]
+    fn auto_initialize_refuses_to_overwrite_existing_projection_content() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("MEMORY.md"),
+            "# MEMORY\n\nKeep this text.\n",
+        )
+        .unwrap();
+        let args = parse_args(
+            &[
+                "propose",
+                "create",
+                "--request-id",
+                "memory-auto-init-existing-projection",
+                "--recorded-by",
+                "codex/test",
+                "--text",
+                "Synthetic stable preference.",
+                "--claim-kind",
+                "preference",
+                "--category",
+                "context",
+                "--space",
+                "global",
+                "--purpose",
+                "writing",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            true,
+        );
+
+        let error = validate_auto_initialize_create(&args, dir.path()).unwrap_err();
+        assert!(error.contains("MEMORY_AUTO_INITIALIZE_BLOCKED"), "{error}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("MEMORY.md")).unwrap(),
+            "# MEMORY\n\nKeep this text.\n"
+        );
+        assert!(!dir.path().join(".notemd/memory/bootstrap.yaml").exists());
     }
 }

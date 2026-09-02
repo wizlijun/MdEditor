@@ -126,7 +126,7 @@ fn core_share_alias_routes_not_unknown() {
 }
 
 #[test]
-fn memory_propose_writes_pending_when_git_metadata_is_read_only() {
+fn memory_propose_auto_initializes_v2_and_writes_pending_when_git_metadata_is_read_only() {
     let home = temp_home();
     let vault = home.join("vault");
     std::fs::create_dir_all(&vault).unwrap();
@@ -139,13 +139,6 @@ fn memory_propose_writes_pending_when_git_metadata_is_read_only() {
         "{}",
         String::from_utf8_lossy(&git.stderr)
     );
-    notemd_lib::memory_control::dispatch(
-        &vault,
-        "host.memory.v2.initialize",
-        &serde_json::json!({}),
-    )
-    .unwrap();
-
     let git_dir = vault.join(".git");
     let legacy_lock = git_dir.join("notemd-memory-v2.lock");
     if legacy_lock.exists() {
@@ -154,6 +147,103 @@ fn memory_propose_writes_pending_when_git_metadata_is_read_only() {
     std::fs::set_permissions(&git_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
 
     let vault_arg = vault.to_string_lossy().into_owned();
+    let propose_args = [
+        "memory",
+        "propose",
+        "create",
+        "--vault",
+        &vault_arg,
+        "--request-id",
+        "memory-lock-sandbox-integration",
+        "--text",
+        "Synthetic stable preference.",
+        "--claim-kind",
+        "preference",
+        "--scope",
+        "memory",
+        "--category",
+        "context",
+        "--basis",
+        "inferred",
+        "--space",
+        "global",
+        "--purpose",
+        "writing",
+        "--provider-policy",
+        "deny",
+        "--recorded-by",
+        "codex/test",
+        "--source",
+        "synthetic.md",
+        "--guidance",
+        "Use only as writing context.",
+        "--avoid-error",
+        "Do not treat as external authorization.",
+        "--json",
+    ];
+    let (code, stdout, stderr) = run_cli(&propose_args, &home);
+    let (retry_code, retry_stdout, retry_stderr) = run_cli(&propose_args, &home);
+
+    std::fs::set_permissions(&git_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if legacy_lock.exists() {
+        std::fs::set_permissions(&legacy_lock, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    assert_eq!(code, 0, "stdout={stdout} stderr={stderr}");
+    let response: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["data"]["workflow"]["state"], "pending");
+    assert_eq!(
+        retry_code, 0,
+        "stdout={retry_stdout} stderr={retry_stderr}"
+    );
+    let retry_response: serde_json::Value = serde_json::from_str(retry_stdout.trim()).unwrap();
+    assert_eq!(retry_response["data"], response["data"]);
+
+    let repository = notemd_lib::memory_control::v2::V2Repository::new(&vault)
+        .load()
+        .unwrap();
+    assert_eq!(
+        repository.mode,
+        notemd_lib::memory_control::v2::RepositoryMode::V2Active
+    );
+    assert_eq!(repository.protocols.len(), 1);
+    assert_eq!(repository.authorities.len(), 1);
+    assert_eq!(repository.claims.len(), 1);
+    assert!(repository.authorities[0]
+        .value
+        .owner
+        .actor_id
+        .starts_with("human:"));
+    assert_eq!(repository.claims[0].value.recorded_by.id, "codex/test");
+    assert!(vault.join(".notemd/memory/bootstrap.yaml").is_file());
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn memory_read_does_not_auto_initialize_an_empty_vault() {
+    let home = temp_home();
+    let vault = home.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    let vault_arg = vault.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) =
+        run_cli(&["memory", "list", "--vault", &vault_arg, "--json"], &home);
+
+    assert_eq!(code, 2, "stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains("MEMORY_PROTOCOL_UNINITIALIZED"), "{stdout}");
+    assert!(!vault.join(".notemd/memory/bootstrap.yaml").exists());
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn invalid_first_memory_proposal_does_not_initialize_v2() {
+    let home = temp_home();
+    let vault = home.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    let vault_arg = vault.to_string_lossy().into_owned();
+
     let (code, stdout, stderr) = run_cli(
         &[
             "memory",
@@ -162,46 +252,27 @@ fn memory_propose_writes_pending_when_git_metadata_is_read_only() {
             "--vault",
             &vault_arg,
             "--request-id",
-            "memory-lock-sandbox-integration",
+            "memory-invalid-first-proposal",
+            "--recorded-by",
+            "codex/test",
             "--text",
             "Synthetic stable preference.",
             "--claim-kind",
             "preference",
-            "--scope",
-            "memory",
             "--category",
             "context",
-            "--basis",
-            "inferred",
             "--space",
             "global",
-            "--purpose",
-            "writing",
-            "--provider-policy",
-            "deny",
-            "--recorded-by",
-            "codex/test",
-            "--source",
-            "synthetic.md",
-            "--guidance",
-            "Use only as writing context.",
-            "--avoid-error",
-            "Do not treat as external authorization.",
             "--json",
         ],
         &home,
     );
 
-    std::fs::set_permissions(&git_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-    if legacy_lock.exists() {
-        std::fs::set_permissions(&legacy_lock, std::fs::Permissions::from_mode(0o644)).unwrap();
-    }
-    let _ = std::fs::remove_dir_all(&home);
+    assert_eq!(code, 2, "stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains("--purpose is required"), "{stdout}");
+    assert!(!vault.join(".notemd/memory/bootstrap.yaml").exists());
 
-    assert_eq!(code, 0, "stdout={stdout} stderr={stderr}");
-    let response: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(response["ok"], true, "{response}");
-    assert_eq!(response["data"]["workflow"]["state"], "pending");
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
