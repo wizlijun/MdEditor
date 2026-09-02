@@ -45,7 +45,9 @@ describe('Memory inference client', () => {
     const call = request.mock.calls.find(([method]) => method === 'host.agent.run')!
     expect(call[1]).toMatchObject({ task: 'memory-inference', harness: 'notemd.codex-agent' })
     expect(call[1].prompt).toContain('Mode: full')
-    expect(call[1].prompt).toContain('Only pending proposals are allowed')
+    expect(call[1].prompt).toContain('遵循 Vault 根 AGENTS.md 要求的语言')
+    expect(call[1].prompt).toContain('只允许提交少量高精度 pending 建议')
+    expect(call[1].prompt).toContain('允许零候选')
     expect(call[1]).not.toHaveProperty('notify')
   })
 

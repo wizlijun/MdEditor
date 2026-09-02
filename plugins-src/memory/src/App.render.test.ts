@@ -151,6 +151,40 @@ describe('Memory Protocol v2 app', () => {
     expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.approve')).toHaveLength(0)
   })
 
+  it('warns about the full impact before resetting every current and pending memory in one RPC', async () => {
+    let snapshotCalls = 0
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.snapshot') {
+        snapshotCalls += 1
+        return snapshotCalls === 1 ? baseSnapshot() : { ...baseSnapshot(), claims: [], pending: [] }
+      }
+      if (method === 'host.memory.v2.resetAll') return { deleted_claims: 1, deleted_pending: 1, projection_rebuilt: true, inference_state_reset: true }
+      if (method === 'host.vault.exists') return { exists: false }
+      return {}
+    })
+    await render(request)
+    button('重构记忆…')!.click(); flushSync()
+
+    expect(document.querySelector('[role=alertdialog]')).toBeTruthy()
+    expect(document.body.textContent).toContain('1 条已确认记忆和 1 条待确认建议')
+    expect(document.body.textContent).toContain('USER.md、MEMORY.md 与 Agent context')
+    expect(document.body.textContent).toContain('所有者身份、Memory 协议和不可变历史会保留')
+    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.resetAll')).toHaveLength(0)
+
+    button('确认清空并重构')!.click(); await settle()
+    const calls = request.mock.calls.filter(([method]) => method === 'host.memory.v2.resetAll')
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatchObject({
+      expected_protocol: { revision_id: 'protocol-2', payload_sha256: 'protocol-sha' },
+      gesture_intent: 'reset-all',
+      expected_claims: [{ claim_id: 'claim-1', expected_heads: [{ revision_id: 'revision-1', payload_sha256: 'sha-revision-1' }] }],
+      expected_pending: [{ revision_id: 'pending-1', expected_sha256: 'sha-pending-1', expected_heads: [] }],
+    })
+    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.delete')).toHaveLength(0)
+    expect(document.querySelector('[role=alertdialog]')).toBeNull()
+    expect(document.body.textContent).toContain('下次将重新全量推理')
+  })
+
   it('previews a scoped provider context and writes a manifest only after the explicit action', async () => {
     const request = rpcMock(async (method) => {
       if (method === 'host.memory.v2.snapshot') return baseSnapshot()

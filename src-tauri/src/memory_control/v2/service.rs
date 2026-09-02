@@ -96,6 +96,35 @@ struct ClaimMutationInput {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResetClaimInput {
+    claim_id: String,
+    #[serde(default)]
+    expected_heads: Vec<RevisionRef>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResetPendingInput {
+    revision_id: String,
+    expected_sha256: String,
+    #[serde(default)]
+    expected_heads: Vec<RevisionRef>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResetAllInput {
+    request_id: String,
+    expected_protocol: RevisionRef,
+    gesture_intent: GestureIntent,
+    #[serde(default)]
+    expected_claims: Vec<ResetClaimInput>,
+    #[serde(default)]
+    expected_pending: Vec<ResetPendingInput>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum ResolveStrategy {
     KeepHead,
@@ -127,6 +156,14 @@ struct WriteReceipt {
     effective_status: String,
     conflict: bool,
     projection_rebuilt: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ResetAllReceipt {
+    deleted_claims: usize,
+    deleted_pending: usize,
+    projection_rebuilt: bool,
+    inference_state_reset: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +210,7 @@ pub fn dispatch(root: &Path, method: &str, params: &Value) -> Result<Value, Stri
             decide_pending(root, parse(params, "ignore")?, GestureIntent::Ignore)
         }
         "host.memory.v2.delete" => delete(root, params),
+        "host.memory.v2.resetAll" => reset_all(root, parse(params, "resetAll")?),
         "host.memory.v2.setSalience" => set_salience(root, parse(params, "setSalience")?),
         "host.memory.v2.resolve" => resolve(root, parse(params, "resolve")?),
         "host.memory.v2.context" => context_preview(root, parse(params, "context")?),
@@ -862,6 +900,207 @@ fn delete_pending(root: &Path, input: PendingDecisionInput) -> Result<Value, Str
     };
     child.payload_sha256.clear();
     publish_and_verify(root, &transaction, child)
+}
+
+fn reset_all(root: &Path, input: ResetAllInput) -> Result<Value, String> {
+    if input.gesture_intent != GestureIntent::ResetAll {
+        return Err("MEMORY_UNAUTHORIZED: explicit reset-all gesture required".into());
+    }
+    validate_request_id(&input.request_id)?;
+    if input.expected_claims.len() + input.expected_pending.len() > 10_000 {
+        return Err("MEMORY_INVALID_REQUEST: reset target list is too large".into());
+    }
+
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
+    let (repository, snapshot) = active(root, &input.expected_protocol)?;
+    let actual_claims = snapshot
+        .claims
+        .iter()
+        .filter(|view| {
+            view.workflow_state == WorkflowState::Approved
+                && !view.current_heads.is_empty()
+                && (view.lifecycle_state == Some(LifecycleState::Active) || view.conflict.is_some())
+        })
+        .map(|view| (view.claim_id.clone(), view.current_heads.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let expected_claims = input
+        .expected_claims
+        .iter()
+        .map(|item| (item.claim_id.clone(), item.expected_heads.clone()))
+        .collect::<BTreeMap<_, _>>();
+    if expected_claims.len() != input.expected_claims.len() || expected_claims != actual_claims {
+        return Err("MEMORY_STALE_BASE: reset claim set changed; review the warning again".into());
+    }
+
+    let canonical_requests =
+        canonical_request_revision_ids(&repository).map_err(|error| error.to_string())?;
+    let decided_pending = repository
+        .claims
+        .iter()
+        .filter_map(|item| item.value.transition.approves_revision_id.as_deref())
+        .collect::<BTreeSet<_>>();
+    let actual_pending = repository
+        .claims
+        .iter()
+        .filter(|item| {
+            item.value.workflow.state == WorkflowState::Pending
+                && canonical_requests.contains(&item.value.revision_id)
+                && !decided_pending.contains(item.value.revision_id.as_str())
+        })
+        .map(|item| {
+            (
+                item.value.revision_id.clone(),
+                (
+                    item.value.payload_sha256.clone(),
+                    item.value.parents.clone(),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let expected_pending = input
+        .expected_pending
+        .iter()
+        .map(|item| {
+            (
+                item.revision_id.clone(),
+                (item.expected_sha256.clone(), item.expected_heads.clone()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if expected_pending.len() != input.expected_pending.len() || expected_pending != actual_pending
+    {
+        return Err(
+            "MEMORY_STALE_BASE: reset pending set changed; review the warning again".into(),
+        );
+    }
+
+    let approve_controls = controls(&repository, &snapshot, CLAIM_APPROVE)?;
+    let resolve_controls = actual_claims
+        .values()
+        .any(|heads| heads.len() > 1)
+        .then(|| controls(&repository, &snapshot, CLAIM_RESOLVE))
+        .transpose()?;
+    let recorded_at = now();
+    let mut revisions = Vec::with_capacity(actual_claims.len() + actual_pending.len());
+    for (claim_id, heads) in &actual_claims {
+        let parents = heads
+            .iter()
+            .map(|head| loaded_claim(&repository, head))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut child = parents[0].value.clone();
+        child.revision_id = uuid_v7();
+        child.request_id = format!("{}/claim/{claim_id}", input.request_id);
+        child.parents = heads.clone();
+        child.causal_context = causal_context(&repository, &snapshot, &parents);
+        child.recorded_by = host_recorder();
+        child.recorded_at = recorded_at.clone();
+        child.workflow.state = WorkflowState::Approved;
+        child.lifecycle.state = LifecycleState::Deleted;
+        let conflict_reset = heads.len() > 1;
+        let decision_controls = if conflict_reset {
+            resolve_controls
+                .as_ref()
+                .ok_or("MEMORY_UNAUTHORIZED: conflict reset requires resolve capability")?
+        } else {
+            &approve_controls
+        };
+        let capability = if conflict_reset {
+            CLAIM_RESOLVE
+        } else {
+            CLAIM_APPROVE
+        };
+        child.decision = Some(decision(
+            decision_controls,
+            approval_kind_for(child.claim_kind),
+            capability,
+            recorded_at.clone(),
+        ));
+        child.transition = ClaimTransition {
+            operation: if conflict_reset {
+                ClaimOperation::Resolve
+            } else {
+                ClaimOperation::Delete
+            },
+            approves_revision_id: None,
+            approves_payload_sha256: None,
+        };
+        child.payload_sha256.clear();
+        revisions.push(child);
+    }
+    for (revision_id, (expected_sha256, _)) in &actual_pending {
+        let proposed = repository
+            .claims
+            .iter()
+            .find(|item| {
+                item.value.revision_id == *revision_id
+                    && item.value.payload_sha256 == *expected_sha256
+            })
+            .ok_or("MEMORY_STALE_BASE: pending reset target disappeared")?;
+        let mut child = proposed.value.clone();
+        child.revision_id = uuid_v7();
+        child.request_id = format!("{}/pending/{revision_id}", input.request_id);
+        child.parents = vec![revision_ref(&proposed.value)];
+        child.causal_context = causal_context(&repository, &snapshot, &[proposed]);
+        child.recorded_by = host_recorder();
+        child.recorded_at = recorded_at.clone();
+        child.workflow.state = WorkflowState::Ignored;
+        child.lifecycle.state = LifecycleState::Deleted;
+        let mut deletion_decision = decision(
+            &approve_controls,
+            approval_kind_for(child.claim_kind),
+            CLAIM_APPROVE,
+            recorded_at.clone(),
+        );
+        deletion_decision.verdict = Verdict::Reject;
+        child.decision = Some(deletion_decision);
+        child.transition = ClaimTransition {
+            operation: ClaimOperation::Ignore,
+            approves_revision_id: Some(proposed.value.revision_id.clone()),
+            approves_payload_sha256: Some(proposed.value.payload_sha256.clone()),
+        };
+        child.payload_sha256.clear();
+        revisions.push(child);
+    }
+
+    let revisions = prevalidate_claim_batch(&repository, revisions)?;
+    let inference_state = root.join(".notemd/memory/.local/inference-state.json");
+    if let Some(parent) = inference_state.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("MEMORY_IO: {}: {error}", parent.display()))?;
+    }
+    fs::write(
+        &inference_state,
+        format!(
+            "{{\"schema\":\"notemd.memory/inference-state/v2\",\"complete\":false,\"reset_at\":\"{}\"}}\n",
+            now()
+        ),
+    )
+    .map_err(|error| format!("MEMORY_IO: {}: {error}", inference_state.display()))?;
+    for revision in revisions {
+        transaction
+            .publish_claim(revision)
+            .map_err(|error| error.to_string())?;
+    }
+    let reloaded = require_active(root)?;
+    reduce(
+        &reloaded,
+        &SnapshotRequest {
+            as_of_valid_time: now(),
+            space: None,
+            purpose: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let projection_rebuilt = rebuild_projections_unlocked(root).is_ok();
+
+    serde_json::to_value(ResetAllReceipt {
+        deleted_claims: actual_claims.len(),
+        deleted_pending: actual_pending.len(),
+        projection_rebuilt,
+        inference_state_reset: true,
+    })
+    .map_err(|error| format!("MEMORY_INVALID_PAYLOAD: {error}"))
 }
 
 fn set_salience(root: &Path, input: ClaimMutationInput) -> Result<Value, String> {
@@ -1615,6 +1854,33 @@ fn prevalidate_claim(
     Ok(normalized)
 }
 
+fn prevalidate_claim_batch(
+    repository: &RepositorySnapshot,
+    revisions: Vec<MemoryClaimRevision>,
+) -> Result<Vec<MemoryClaimRevision>, String> {
+    let mut candidate = repository.clone();
+    let mut normalized = Vec::with_capacity(revisions.len());
+    for revision in revisions {
+        let (revision, raw) = canonical_yaml(&revision)?;
+        candidate.claims.push(Loaded {
+            path: PathBuf::from("<memory-v2-batch-preflight>"),
+            raw_sha256: raw_sha256(&raw),
+            value: revision.clone(),
+        });
+        normalized.push(revision);
+    }
+    reduce(
+        &candidate,
+        &SnapshotRequest {
+            as_of_valid_time: now(),
+            space: None,
+            purpose: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(normalized)
+}
+
 fn receipt_for(
     existing: &Loaded<MemoryClaimRevision>,
     snapshot: &MemorySnapshotV2,
@@ -2231,6 +2497,176 @@ mod tests {
             fs::read_to_string(dir.path().join("USER.md")).unwrap(),
             "# USER\n\n## preferences\n\n- 用户偏好先给出结论。\n"
         );
+    }
+
+    #[test]
+    fn reset_all_removes_current_and_pending_views_but_preserves_protocol_owner_and_history() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        let approved = dispatch(dir.path(), "host.memory.v2.add", &add_params(&protocol)).unwrap();
+        let proposed = propose_pending(dir.path(), pending_proposal("owner:test")).unwrap();
+        let state_path = dir
+            .path()
+            .join(".notemd/memory/.local/inference-state.json");
+        fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        fs::write(&state_path, "{\"complete\":true}\n").unwrap();
+        let control_files_before = V2Repository::new(dir.path()).load().unwrap();
+        let protocol_before = control_files_before.protocols[0].raw_sha256.clone();
+        let authority_before = control_files_before.authorities[0].raw_sha256.clone();
+
+        let receipt = dispatch(
+            dir.path(),
+            "host.memory.v2.resetAll",
+            &json!({
+                "request_id": "memory-ui/reset-all/test",
+                "expected_protocol": protocol,
+                "gesture_intent": "reset-all",
+                "expected_claims": [{
+                    "claim_id": approved["claim_id"],
+                    "expected_heads": [{
+                        "revision_id": approved["revision_id"],
+                        "payload_sha256": approved["payload_sha256"]
+                    }]
+                }],
+                "expected_pending": [{
+                    "revision_id": proposed.revision_id,
+                    "expected_sha256": proposed.payload_sha256,
+                    "expected_heads": proposed.parents
+                }]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(receipt["deleted_claims"], 1);
+        assert_eq!(receipt["deleted_pending"], 1);
+        assert_eq!(receipt["projection_rebuilt"], true);
+        assert_eq!(receipt["inference_state_reset"], true);
+        let snapshot = dispatch(
+            dir.path(),
+            "host.memory.v2.snapshot",
+            &json!({"as_of_valid_time": now()}),
+        )
+        .unwrap();
+        assert_eq!(snapshot["claims"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            snapshot["claims"][0]["claim"]["lifecycle"]["state"],
+            "deleted"
+        );
+        assert_eq!(snapshot["pending"].as_array().unwrap().len(), 0);
+        assert_eq!(snapshot["conflicts"].as_array().unwrap().len(), 0);
+        assert!(snapshot["history"].as_array().unwrap().len() >= 4);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("USER.md")).unwrap(),
+            "# USER\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("MEMORY.md")).unwrap(),
+            "# MEMORY\n"
+        );
+        let state: Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+        assert_eq!(state["schema"], "notemd.memory/inference-state/v2");
+        assert_eq!(state["complete"], false);
+        assert!(state["reset_at"].as_str().is_some());
+        let repository = V2Repository::new(dir.path()).load().unwrap();
+        assert_eq!(repository.claims.len(), 4);
+        assert_eq!(repository.protocols[0].raw_sha256, protocol_before);
+        assert_eq!(repository.authorities[0].raw_sha256, authority_before);
+    }
+
+    #[test]
+    fn reset_all_rejects_a_stale_inventory_before_writing_any_revision() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        let approved = dispatch(dir.path(), "host.memory.v2.add", &add_params(&protocol)).unwrap();
+        let proposed = propose_pending(dir.path(), pending_proposal("owner:test")).unwrap();
+        let before = V2Repository::new(dir.path()).load().unwrap().claims.len();
+
+        let error = dispatch(
+            dir.path(),
+            "host.memory.v2.resetAll",
+            &json!({
+                "request_id": "memory-ui/reset-all/stale",
+                "expected_protocol": protocol,
+                "gesture_intent": "reset-all",
+                "expected_claims": [{
+                    "claim_id": approved["claim_id"],
+                    "expected_heads": [{
+                        "revision_id": approved["revision_id"],
+                        "payload_sha256": approved["payload_sha256"]
+                    }]
+                }],
+                "expected_pending": [{
+                    "revision_id": proposed.revision_id,
+                    "expected_sha256": "stale-sha",
+                    "expected_heads": proposed.parents
+                }]
+            }),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("MEMORY_STALE_BASE"));
+        assert_eq!(
+            V2Repository::new(dir.path()).load().unwrap().claims.len(),
+            before
+        );
+    }
+
+    #[test]
+    fn reset_all_resolves_every_head_of_a_current_claim_conflict_as_deleted() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        publish_test_conflict(
+            dir.path(),
+            &protocol,
+            "reset-conflict",
+            "global",
+            "preference",
+            "informational",
+        );
+        let before = dispatch(
+            dir.path(),
+            "host.memory.v2.snapshot",
+            &json!({"as_of_valid_time": now()}),
+        )
+        .unwrap();
+        let conflict = &before["conflicts"][0];
+        let expected_heads = conflict["heads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|head| {
+                json!({
+                    "revision_id": head["revision_id"],
+                    "payload_sha256": head["payload_sha256"]
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let receipt = dispatch(
+            dir.path(),
+            "host.memory.v2.resetAll",
+            &json!({
+                "request_id": "memory-ui/reset-all/conflict",
+                "expected_protocol": protocol,
+                "gesture_intent": "reset-all",
+                "expected_claims": [{
+                    "claim_id": conflict["claim_id"],
+                    "expected_heads": expected_heads
+                }],
+                "expected_pending": []
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(receipt["deleted_claims"], 1);
+        let after = dispatch(
+            dir.path(),
+            "host.memory.v2.snapshot",
+            &json!({"as_of_valid_time": now()}),
+        )
+        .unwrap();
+        assert!(after["conflicts"].as_array().unwrap().is_empty());
+        assert_eq!(after["claims"][0]["claim"]["lifecycle"]["state"], "deleted");
     }
 
     #[test]

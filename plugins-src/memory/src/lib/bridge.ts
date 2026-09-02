@@ -7,6 +7,8 @@ import type {
   MemorySnapshotV2,
   PendingDecisionInput,
   ResolveConflictInput,
+  ResetAllInput,
+  ResetAllReceipt,
   Salience,
   WriteReceipt,
 } from './types'
@@ -84,6 +86,10 @@ export function memorySetSalience(input: ClaimMutationInput & { salience: Salien
 
 export function memoryDelete(input: ClaimMutationInput): Promise<WriteReceipt> {
   return bridge().request('host.memory.v2.delete', { ...input, delete_kind: 'claim-tombstone' })
+}
+
+export function memoryResetAll(input: ResetAllInput): Promise<ResetAllReceipt> {
+  return bridge().request('host.memory.v2.resetAll', input)
 }
 
 export function memoryResolve(input: ResolveConflictInput): Promise<WriteReceipt> {
