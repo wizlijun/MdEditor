@@ -151,7 +151,6 @@ pub enum ClaimKind {
     Practice,
     MaterialFact,
     Quotation,
-    LegacyUnclassified,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,12 +246,6 @@ pub struct QuotationData {
     pub speaker: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LegacyData {
-    pub missing_semantics: Vec<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KindData {
     Identity(IdentityData),
@@ -265,7 +258,6 @@ pub enum KindData {
     Practice(PracticeData),
     MaterialFact(MaterialFactData),
     Quotation(QuotationData),
-    LegacyUnclassified(LegacyData),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -291,8 +283,6 @@ struct KindDataWire {
     material_fact: Option<MaterialFactData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     quotation: Option<QuotationData>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    legacy_unclassified: Option<LegacyData>,
 }
 
 impl KindDataWire {
@@ -308,7 +298,6 @@ impl KindDataWire {
             practice: None,
             material_fact: None,
             quotation: None,
-            legacy_unclassified: None,
         }
     }
 }
@@ -330,7 +319,6 @@ impl Serialize for KindData {
             Self::Practice(value) => wire.practice = Some(value.clone()),
             Self::MaterialFact(value) => wire.material_fact = Some(value.clone()),
             Self::Quotation(value) => wire.quotation = Some(value.clone()),
-            Self::LegacyUnclassified(value) => wire.legacy_unclassified = Some(value.clone()),
         }
         wire.serialize(serializer)
     }
@@ -373,9 +361,6 @@ impl<'de> Deserialize<'de> for KindData {
         if let Some(value) = wire.quotation {
             values.push(Self::Quotation(value));
         }
-        if let Some(value) = wire.legacy_unclassified {
-            values.push(Self::LegacyUnclassified(value));
-        }
         if values.len() != 1 {
             return Err(serde::de::Error::custom(
                 "kind_data must contain exactly one claim-kind member",
@@ -398,7 +383,6 @@ impl KindData {
             Self::Practice(_) => ClaimKind::Practice,
             Self::MaterialFact(_) => ClaimKind::MaterialFact,
             Self::Quotation(_) => ClaimKind::Quotation,
-            Self::LegacyUnclassified(_) => ClaimKind::LegacyUnclassified,
         }
     }
 
@@ -434,7 +418,6 @@ pub enum OwnerRelation {
 #[serde(rename_all = "kebab-case")]
 pub enum RepositoryMode {
     Absent,
-    LegacyV1,
     V2Active,
     V2Incomplete,
 }

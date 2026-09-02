@@ -43,6 +43,9 @@
   },
   "capabilities": [
     "memory.control",
+    "vault.read",
+    "vault.write",
+    "agent",
     "toast"
   ],
   "i18n": {

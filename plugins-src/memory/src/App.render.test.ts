@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, tick, unmount } from 'svelte'
+import { MEMORY_INFERENCE_STATE } from './lib/inference-task'
 import type { MemoryClaimRevision, MemorySnapshotV2, PendingClaim, WriteReceipt } from './lib/types'
 
 let component: ReturnType<typeof mount> | null = null
@@ -164,20 +165,26 @@ describe('Memory Protocol v2 app', () => {
     expect(call[1]).toMatchObject({ conflict_id: 'conflict-1', strategy: 'keep-head', selected_revision_id: 'head-a', expected_heads: [{ revision_id: 'head-a', payload_sha256: 'sha-a' }, { revision_id: 'head-b', payload_sha256: 'sha-b' }] })
   })
 
-  it('offers a zero-write migration dry-run for a legacy Vault and never cuts over automatically', async () => {
-    const legacy: MemorySnapshotV2 = { mode: 'legacy', migration_required: true, claims: [], pending: [], conflicts: [], history: [], health: { status: 'attention', message: '需要迁移', pending_count: 0, conflict_count: 0, integrity_errors: [] } }
-    const request = rpcMock(async (method, params) => {
-      if (method === 'host.memory.v2.snapshot') return legacy
-      if (method === 'host.memory.v2.migrate' && (params as any).mode === 'dry-run') return { migration_id: 'migration-1', plan_sha256: 'plan-sha', source_manifest_sha256: 'source-sha', counts: { claims: 34, pending: 19, approved: 15, rejected: 1, legacy_unclassified: 4 }, warnings: ['4 条需复核'], blockers: [], writes_performed: false }
+  it('shows an uninitialized v2 Vault as read-only without any compatibility or migration action', async () => {
+    const uninitialized: MemorySnapshotV2 = { mode: 'read-only', initialization_required: true, read_only_reason: '尚未初始化 Memory Protocol v2', claims: [], pending: [], conflicts: [], history: [], health: { status: 'attention', message: '尚未初始化 Memory Protocol v2', pending_count: 0, conflict_count: 0, integrity_errors: [] } }
+    let initialized = false
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.initialize') { initialized = true; return {} }
+      if (method === 'host.memory.v2.snapshot') return initialized ? { ...baseSnapshot(), claims: [], pending: [], history: [] } : uninitialized
+      if (method === 'host.vault.exists') return { exists: false }
+      if (method === 'host.vault.write') return { ok: true }
+      if (method === 'host.agent.run') return { run_id: 'run-initial' }
       return {}
     })
     await render(request)
-    expect(document.body.textContent).toContain('此 Vault 仍使用 Memory v1')
-    button('预览迁移')!.click(); await settle()
-    expect(document.body.textContent).toContain('零写入报告')
-    expect(document.body.textContent).toContain('34')
-    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.migrate')).toHaveLength(1)
-    expect(request.mock.calls.some(([method, params]) => method === 'host.memory.v2.migrate' && (params as any).mode !== 'dry-run')).toBe(false)
+    expect(document.body.textContent).toContain('尚未初始化 Memory Protocol v2')
+    expect(button('推理现有记忆')?.disabled).toBe(false)
+    expect(document.body.textContent).not.toContain('迁移')
+    expect(request.mock.calls.some(([method]) => method.includes('migrate'))).toBe(false)
+    button('推理现有记忆')!.click(); await settle()
+    await vi.waitFor(() => expect(request.mock.calls.some(([method]) => method === 'host.agent.run')).toBe(true))
+    const methods = request.mock.calls.map(([method]) => method)
+    expect(methods.indexOf('host.memory.v2.initialize')).toBeLessThan(methods.indexOf('host.agent.run'))
   })
 
   it.each(['read-only', 'recovery'] as const)('keeps %s snapshots visible but blocks writes', async (mode) => {
@@ -187,6 +194,38 @@ describe('Memory Protocol v2 app', () => {
     expect(document.body.textContent).toContain('Git 正在合并')
     expect(button('添加主张')?.disabled).toBe(true)
     expect(document.body.textContent).toContain('回答先给出结论')
+  })
+
+  it('starts a full inference when no successful checkpoint exists, even with hand-authored memory', async () => {
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.snapshot') return baseSnapshot()
+      if (method === 'host.agent.providers') return { providers: [{ id: 'notemd.codex-agent', name: 'Codex Agent', harness: { harness: 'Codex', ok: true } }], default: 'notemd.codex-agent' }
+      if (method === 'host.vault.exists') return { exists: false }
+      if (method === 'host.vault.write') return { ok: true }
+      if (method === 'host.agent.run') return { run_id: 'run-memory-1' }
+      return {}
+    })
+    await render(request)
+    expect(button('推理现有记忆')).toBeTruthy()
+    button('推理现有记忆')!.click(); await settle()
+    await vi.waitFor(() => expect(request.mock.calls.some(([method]) => method === 'host.agent.run')).toBe(true))
+    const calls = request.mock.calls.filter(([method]) => method === 'host.agent.run')
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatchObject({ task: 'memory-inference', harness: 'notemd.codex-agent' })
+    expect(calls[0][1].prompt).toContain('Mode: full')
+    expect(button('正在推理…')?.disabled).toBe(true)
+  })
+
+  it('labels the action incremental only after a valid successful checkpoint', async () => {
+    const request = rpcMock(async (method, params) => {
+      if (method === 'host.memory.v2.snapshot') return { ...baseSnapshot(), claims: [], pending: [], history: [] }
+      if (method === 'host.agent.providers') return { providers: [], default: '' }
+      if (method === 'host.vault.exists' && params?.path === MEMORY_INFERENCE_STATE) return { exists: true }
+      if (method === 'host.vault.read' && params?.path === MEMORY_INFERENCE_STATE) return { content: JSON.stringify({ schema: 'notemd.memory/inference-state/v2', invocation_id: 'old', last_successful_head: 'abc123', complete: true }) }
+      return { exists: false }
+    })
+    await render(request)
+    expect(button('增量推理记忆')).toBeTruthy()
   })
 
   it('fails closed with a clear upgrade message when the Host returns a non-plugin v2 snapshot shape', async () => {

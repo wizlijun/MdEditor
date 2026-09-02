@@ -1,7 +1,9 @@
+use notemd_lib::memory_control::v2::{
+    canonical_bytes as runtime_canonical_bytes, MemoryClaimRevision,
+};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, fs, path::PathBuf};
-use notemd_lib::memory_control::v2::{canonical_bytes as runtime_canonical_bytes, MemoryClaimRevision};
+use std::{fs, path::PathBuf};
 
 fn fixture(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -179,6 +181,10 @@ fn v2_schemas_and_yaml_fixtures_share_strict_top_level_contracts() {
     }
 
     let claim_schema = read_json("schemas/claim-revision.schema.json");
+    assert!(
+        !claim_schema.to_string().contains("migration"),
+        "pure v2 Claim schema must not retain migration-only identities or evidence bases"
+    );
     let definitions = claim_schema["$defs"].as_object().unwrap();
     for definition in ["kindData", "decision", "transition", "evidence"] {
         assert!(
@@ -191,7 +197,7 @@ fn v2_schemas_and_yaml_fixtures_share_strict_top_level_contracts() {
             .as_object()
             .unwrap()
             .len(),
-        11,
+        10,
         "every RFC 0.10 Claim kind must have a tagged payload schema"
     );
 
@@ -293,41 +299,6 @@ fn runtime_canonicalizer_matches_the_published_claim_vector() {
 }
 
 #[test]
-fn sotvault_dry_run_fixture_is_conservative_and_internally_balanced() {
-    let report = read_yaml("migration/sotvault-v1-dry-run.expected.yaml");
-    assert_eq!(report["mode"], "dry-run");
-    assert_eq!(report["authorizes_apply"], false);
-    assert_eq!(report["idempotency_contract"]["dry_run_writes"], 0);
-    assert_eq!(report["source_inventory"]["current_entries"], 34);
-
-    let disposition_count: u64 = report["expected_dispositions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|entry| entry["count"].as_u64().unwrap())
-        .sum();
-    assert_eq!(disposition_count, 34);
-    assert_eq!(report["semantic_coverage"]["explicit_claim_kind"], 0);
-    assert_eq!(report["semantic_coverage"]["explicit_subject"], 0);
-    assert_eq!(report["semantic_coverage"]["explicit_asserted_by"], 0);
-    assert_eq!(report["semantic_coverage"]["explicit_valid_time"], 0);
-
-    let dispositions: BTreeSet<_> = report["expected_dispositions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|entry| entry["disposition"].as_str().unwrap())
-        .collect();
-    assert!(dispositions.contains("preserve-approved-quarantine-unknown"));
-    assert!(dispositions.contains("preserve-approved-quarantine-owner-stated"));
-    assert_eq!(report["acceptance"]["apply_must_rescan"], true);
-    assert_eq!(
-        report["acceptance"]["batch_upgrade_to_factual_or_behavioral_authority_forbidden"],
-        true
-    );
-}
-
-#[test]
 fn projection_templates_are_plain_text_and_agents_template_points_to_v2_authority() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates");
     let user = fs::read_to_string(root.join("USER.md")).unwrap();
@@ -351,7 +322,6 @@ fn projection_templates_are_plain_text_and_agents_template_points_to_v2_authorit
         "Do not store facts whose subject is another person",
         "do not ask for a second confirmation",
         "Delete creates a tombstone",
-        "protocol-2 write fence",
         "Tasks and reminders remain one file per Task under `/inbox/tasks/`",
     ] {
         assert!(agents.contains(rule), "AGENTS.md misses v2 rule: {rule}");

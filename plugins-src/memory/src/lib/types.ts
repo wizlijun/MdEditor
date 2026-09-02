@@ -9,7 +9,6 @@ export type ClaimKind =
   | 'practice'
   | 'material-fact'
   | 'quotation'
-  | 'legacy-unclassified'
 
 export type ProjectionTarget = 'user' | 'memory'
 export type WorkflowState = 'pending' | 'approved' | 'rejected' | 'ignored'
@@ -168,8 +167,8 @@ export interface MemoryHealth {
 }
 
 export interface MemorySnapshotV2 {
-  mode: 'v2' | 'legacy' | 'recovery' | 'read-only'
-  migration_required?: boolean
+  mode: 'v2' | 'recovery' | 'read-only'
+  initialization_required?: boolean
   read_only_reason?: string
   protocol?: ProtocolRef
   owner?: { actor_id: string; subject: SubjectRef }
@@ -184,23 +183,6 @@ export interface MemorySnapshotV2 {
     providers: ContextOption[]
     models: ContextOption[]
   }
-}
-
-export interface MigrationDryRun {
-  migration_id: string
-  plan_sha256: string
-  source_manifest_sha256: string
-  counts: {
-    claims: number
-    pending: number
-    approved: number
-    rejected: number
-    legacy_unclassified: number
-  }
-  projection_preview?: { user: string; memory: string }
-  warnings: string[]
-  blockers: string[]
-  writes_performed: false
 }
 
 export interface MutationBase {

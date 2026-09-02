@@ -1,8 +1,4 @@
-//! Memory Protocol v2 read-side core.
-//!
-//! v2 is deliberately isolated from the writable v1 store.  The first
-//! vertical slice can validate and reduce immutable YAML fixtures without
-//! creating a second authoritative writer or changing the existing RPCs.
+//! Memory Protocol v2 authority, immutable repository, reducer and projector.
 
 mod canonical;
 mod model;

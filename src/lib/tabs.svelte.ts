@@ -11,7 +11,7 @@ import { startWatchingTab, stopWatchingTab, rebindTabPath } from './file-watcher
 import { maybeAutoRefresh } from './mdblock/auto-refresh'
 import { quickNoteRenameTarget } from './quick-note-name'
 import { newFileText } from './new-file'
-import { isManagedMemoryProjection } from './memory-projection'
+import { isConfiguredMemoryProjectionPath } from './memory-projection'
 
 export type Mode = 'source' | 'rich'
 
@@ -55,12 +55,11 @@ export function isDirty(id: string): boolean {
   return t ? t.currentContent !== t.initialContent : false
 }
 
-/** Controlled USER/MEMORY projections are changed only by the Memory workflow. */
+/** v2 USER/MEMORY projections are changed only by the Memory workflow. */
 export function isManagedMemoryTab(
-  tab: Pick<Tab, 'filePath' | 'initialContent' | 'currentContent'>,
+  tab: Pick<Tab, 'filePath'>,
 ): boolean {
-  return isManagedMemoryProjection(tab.filePath, tab.initialContent)
-    || isManagedMemoryProjection(tab.filePath, tab.currentContent)
+  return isConfiguredMemoryProjectionPath(tab.filePath)
 }
 
 /**

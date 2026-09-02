@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -29,6 +29,10 @@ struct SnapshotInput {
     #[serde(default)]
     purpose: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitializeInput {}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,12 +117,6 @@ struct ResolveInput {
     merged_text: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MigrationInput {
-    mode: String,
-}
-
 #[derive(Debug, Serialize)]
 struct WriteReceipt {
     claim_id: String,
@@ -161,6 +159,7 @@ pub fn dispatch(root: &Path, method: &str, params: &Value) -> Result<Value, Stri
             let input: SnapshotInput = parse(params, "snapshot")?;
             snapshot_view(root, input)
         }
+        "host.memory.v2.initialize" => initialize(root, parse(params, "initialize")?),
         "host.memory.v2.add" => add(root, parse(params, "add")?),
         "host.memory.v2.approve" => {
             decide_pending(root, parse(params, "approve")?, GestureIntent::Approve)
@@ -179,7 +178,6 @@ pub fn dispatch(root: &Path, method: &str, params: &Value) -> Result<Value, Stri
             context_manifest(root, parse(params, "contextManifest")?)
         }
         "host.memory.v2.check" => check(root),
-        "host.memory.v2.migrate" => migration_dry_run(root, parse(params, "migrate")?),
         _ => Err(format!("memory: unknown method {method}")),
     }
 }
@@ -195,16 +193,7 @@ fn snapshot_view(root: &Path, input: SnapshotInput) -> Result<Value, String> {
         Err(error) => return Ok(recovery_view(error.to_string())),
     };
     match repository.mode {
-        RepositoryMode::Absent => Ok(non_v2_view(
-            "legacy",
-            "尚未初始化 Memory Protocol v2",
-            false,
-        )),
-        RepositoryMode::LegacyV1 => Ok(non_v2_view(
-            "legacy",
-            "发现旧版记忆资产；请先查看迁移 dry-run",
-            true,
-        )),
+        RepositoryMode::Absent => Ok(uninitialized_view()),
         RepositoryMode::V2Incomplete => Ok(recovery_view(
             repository
                 .diagnostics
@@ -231,10 +220,11 @@ impl EmptyFallback for String {
     }
 }
 
-fn non_v2_view(mode: &str, message: &str, migration_required: bool) -> Value {
+fn uninitialized_view() -> Value {
+    let message = "尚未初始化 Memory Protocol v2";
     json!({
-        "mode": mode,
-        "migration_required": migration_required,
+        "mode": "read-only",
+        "initialization_required": true,
         "read_only_reason": message,
         "claims": [], "pending": [], "conflicts": [], "history": [],
         "health": {
@@ -242,6 +232,112 @@ fn non_v2_view(mode: &str, message: &str, migration_required: bool) -> Value {
             "pending_count": 0, "conflict_count": 0, "integrity_errors": []
         }
     })
+}
+
+fn initialize(root: &Path, _input: InitializeInput) -> Result<Value, String> {
+    let repository = V2Repository::new(root)
+        .load()
+        .map_err(|error| error.to_string())?;
+    match repository.mode {
+        RepositoryMode::V2Active => {
+            return snapshot_view(
+                root,
+                SnapshotInput {
+                    as_of_valid_time: now(),
+                    space: None,
+                    purpose: None,
+                },
+            );
+        }
+        RepositoryMode::V2Incomplete => {
+            return Err(
+                "MEMORY_PROTOCOL_INCOMPLETE: repair v2 control assets before initialization".into(),
+            );
+        }
+        RepositoryMode::Absent => {}
+    }
+
+    let human_id = crate::okf::notemd_okf_human_id(Some(root.to_string_lossy().to_string()));
+    let actor_id = format!("human:{human_id}");
+    let owner_id = format!("owner:{human_id}");
+    let decision = || ControlDecision {
+        verdict: Verdict::Approve,
+        actor_id: actor_id.clone(),
+        authority_context: AuthorityContext {
+            heads: vec![],
+            capability: "bootstrap".into(),
+        },
+    };
+    let protocol = ProtocolRevision {
+        schema: "notemd.memory/protocol-revision/v2".into(),
+        revision_id: uuid_v7(),
+        base_heads: vec![],
+        causal_context: CausalContext::default(),
+        protocol_major: PROTOCOL_MAJOR,
+        protocol_minor: 0,
+        renderer_version: "notemd.memory.projector/2".into(),
+        claim_schema: "notemd.memory/claim-revision/v2".into(),
+        category_registry: BTreeMap::from([
+            (
+                "user".into(),
+                vec![
+                    "owner".into(),
+                    "identity".into(),
+                    "preferences".into(),
+                    "work-style".into(),
+                    "boundaries".into(),
+                    "other".into(),
+                ],
+            ),
+            (
+                "memory".into(),
+                vec![
+                    "decisions".into(),
+                    "constraints".into(),
+                    "practices".into(),
+                    "context".into(),
+                    "other".into(),
+                ],
+            ),
+        ]),
+        decision: decision(),
+        transition: ControlTransition {
+            operation: ControlOperation::Initialize,
+        },
+        payload_sha256: String::new(),
+    };
+    let authority = AuthorityRevision {
+        schema: "notemd.memory/authority-revision/v2".into(),
+        revision_id: uuid_v7(),
+        base_heads: vec![],
+        causal_context: CausalContext::default(),
+        owner: AuthorityOwner {
+            owner_id,
+            actor_id: actor_id.clone(),
+        },
+        principals: vec![Principal {
+            actor_id: actor_id.clone(),
+            capabilities: vec![CLAIM_APPROVE.into(), CLAIM_RESOLVE.into()],
+        }],
+        recovery: Recovery::LocalOwnerSetup,
+        decision: decision(),
+        transition: ControlTransition {
+            operation: ControlOperation::Initialize,
+        },
+        payload_sha256: String::new(),
+    };
+    RepositoryWriter::new(root)
+        .initialize(format!("vault:{}", uuid_v7()), protocol, authority)
+        .map_err(|error| error.to_string())?;
+    rebuild_projections(root)?;
+    snapshot_view(
+        root,
+        SnapshotInput {
+            as_of_valid_time: now(),
+            space: None,
+            purpose: None,
+        },
+    )
 }
 
 fn recovery_view(message: String) -> Value {
@@ -1040,118 +1136,6 @@ fn check(root: &Path) -> Result<Value, String> {
     Ok(snapshot["health"].clone())
 }
 
-fn migration_dry_run(root: &Path, input: MigrationInput) -> Result<Value, String> {
-    if input.mode != "dry-run" {
-        return Err("MEMORY_UNAUTHORIZED: UI migration endpoint only permits dry-run".into());
-    }
-    let source_manifest_sha256 = source_manifest(root)?;
-    let mut warnings = Vec::new();
-    let mut blockers = Vec::new();
-    let (claims, pending, approved, rejected, legacy_unclassified) =
-        match crate::memory_control::list(root) {
-            Ok(snapshot) => {
-                if snapshot.integrity.drift {
-                    blockers.extend(snapshot.integrity.errors);
-                }
-                let pending = snapshot
-                    .proposals
-                    .iter()
-                    .filter(|proposal| {
-                        proposal.decision == crate::memory_control::model::ProposalDecision::Pending
-                    })
-                    .count();
-                let rejected = snapshot
-                    .proposals
-                    .iter()
-                    .filter(|proposal| {
-                        proposal.decision
-                            == crate::memory_control::model::ProposalDecision::Rejected
-                    })
-                    .count();
-                let approved = snapshot.entries.len();
-                let claims = approved + pending;
-                if claims > 0 {
-                    warnings.push(format!(
-                        "{claims} 条旧记录缺少 v2 完整语义，迁移后需逐条复核"
-                    ));
-                }
-                (claims, pending, approved, rejected, claims)
-            }
-            Err(error) => {
-                blockers.push(error);
-                (0, 0, 0, 0, 0)
-            }
-        };
-    let plan_material = format!("memory-v2-migration/1\n{source_manifest_sha256}\n{claims}\n{pending}\n{approved}\n{rejected}");
-    let plan_sha256 = digest(plan_material.as_bytes());
-    let projection_preview = json!({
-        "user": fs::read_to_string(root.join("USER.md")).unwrap_or_else(|_| "# USER\n".into()),
-        "memory": fs::read_to_string(root.join("MEMORY.md")).unwrap_or_else(|_| "# MEMORY\n".into())
-    });
-    Ok(json!({
-        "migration_id": format!("migration-{}", &plan_sha256[..16]),
-        "plan_sha256": plan_sha256,
-        "source_manifest_sha256": source_manifest_sha256,
-        "counts": {
-            "claims": claims, "pending": pending, "approved": approved,
-            "rejected": rejected, "legacy_unclassified": legacy_unclassified
-        },
-        "projection_preview": projection_preview,
-        "warnings": warnings, "blockers": blockers, "writes_performed": false
-    }))
-}
-
-fn source_manifest(root: &Path) -> Result<String, String> {
-    let mut paths = Vec::new();
-    for relative in [
-        "USER.md",
-        "MEMORY.md",
-        "inbox/memory-candidates",
-        "memory/events",
-    ] {
-        collect_files(root, &root.join(relative), &mut paths)?;
-    }
-    paths.sort();
-    let mut hasher = Sha256::new();
-    for path in paths {
-        let relative = path.strip_prefix(root).unwrap_or(&path);
-        let bytes = fs::read(&path).map_err(|error| format!("MEMORY_IO: {error}"))?;
-        hasher.update(relative.to_string_lossy().as_bytes());
-        hasher.update([0]);
-        hasher.update(digest(&bytes).as_bytes());
-        hasher.update([b'\n']);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-fn collect_files(root: &Path, path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    let _ = root;
-    if !path.exists() {
-        return Ok(());
-    }
-    let metadata = fs::symlink_metadata(path).map_err(|error| format!("MEMORY_IO: {error}"))?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!("MEMORY_TAMPERED_ASSET: symlink {}", path.display()));
-    }
-    if metadata.is_file() {
-        out.push(path.to_path_buf());
-        return Ok(());
-    }
-    let mut children = fs::read_dir(path)
-        .map_err(|error| format!("MEMORY_IO: {error}"))?
-        .map(|entry| {
-            entry
-                .map(|entry| entry.path())
-                .map_err(|error| format!("MEMORY_IO: {error}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    children.sort();
-    for child in children {
-        collect_files(root, &child, out)?;
-    }
-    Ok(())
-}
-
 /// Agent-facing proposal primitive. It deliberately cannot produce an
 /// approved revision and refuses non-owner subjects and restricted content.
 pub fn propose_pending(
@@ -1577,9 +1561,6 @@ fn kind_data_for(
         ClaimKind::Quotation => KindData::Quotation(QuotationData {
             speaker: "vault-owner".into(),
         }),
-        ClaimKind::LegacyUnclassified => KindData::LegacyUnclassified(LegacyData {
-            missing_semantics: vec!["claim-kind".into()],
-        }),
     }
 }
 
@@ -1831,7 +1812,7 @@ mod tests {
     }
 
     #[test]
-    fn absent_snapshot_is_read_only_and_migration_dry_run_writes_nothing() {
+    fn absent_snapshot_is_read_only_and_writes_nothing() {
         let dir = tempfile::TempDir::new().unwrap();
         let snapshot = dispatch(
             dir.path(),
@@ -1839,15 +1820,32 @@ mod tests {
             &json!({"as_of_valid_time": "2026-09-01T00:00:00Z"}),
         )
         .unwrap();
-        assert_eq!(snapshot["mode"], "legacy");
-        let migration = dispatch(
-            dir.path(),
-            "host.memory.v2.migrate",
-            &json!({"mode": "dry-run"}),
-        )
-        .unwrap();
-        assert_eq!(migration["writes_performed"], false);
+        assert_eq!(snapshot["mode"], "read-only");
+        assert_eq!(
+            snapshot["read_only_reason"],
+            "尚未初始化 Memory Protocol v2"
+        );
         assert!(!dir.path().join(".notemd/memory/bootstrap.yaml").exists());
+    }
+
+    #[test]
+    fn trusted_initialize_creates_a_pure_v2_owner_and_projections() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let snapshot = dispatch(dir.path(), "host.memory.v2.initialize", &json!({})).unwrap();
+        assert_eq!(snapshot["mode"], "v2");
+        assert!(snapshot["owner"]["actor_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("human:"));
+        assert!(dir.path().join(".notemd/memory/bootstrap.yaml").is_file());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("USER.md")).unwrap(),
+            "# USER\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("MEMORY.md")).unwrap(),
+            "# MEMORY\n"
+        );
     }
 
     #[test]
@@ -1923,16 +1921,6 @@ mod tests {
             V2Repository::new(dir.path()).load().unwrap().claims.len(),
             1
         );
-    }
-
-    #[test]
-    fn active_v2_repository_fences_every_legacy_rpc() {
-        let dir = tempfile::TempDir::new().unwrap();
-        initialize(dir.path());
-
-        let error = crate::memory_control::dispatch(dir.path(), "host.memory.list", &json!({}))
-            .unwrap_err();
-        assert!(error.contains("MEMORY_PROTOCOL_V2_WRITE_FENCE"));
     }
 
     #[test]

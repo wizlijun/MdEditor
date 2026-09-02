@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { pushToast } from './toast.svelte'
 import { t } from './i18n/store.svelte'
 import { activeTab, reloadTabFromDisk } from './tabs.svelte'
+import { setMemoryProjectionVaultRoot } from './memory-projection'
 import { hostname } from '@tauri-apps/plugin-os'
 import { getDeviceId } from './settings.svelte'
 import {
@@ -65,6 +66,7 @@ export async function refreshSotvault(): Promise<void> {
     // drift apart.
     const rootChanged = sotvaultStore.vaultRoot !== root
     sotvaultStore.vaultRoot = root
+    setMemoryProjectionVaultRoot(root)
     sotvaultStore.records = records
     sotvaultStore.mirrorMetas = mirrorMetas
     sotvaultStore.tick++

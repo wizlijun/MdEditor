@@ -9,5 +9,6 @@ describe('Memory plugin manifest', () => {
     expect(packageJson.version).toBe(manifest.version)
     expect(manifest.engines.notemd).toBe('>=6.901.8')
     expect(manifest.capabilities).toContain('memory.control')
+    expect(manifest.capabilities).toEqual(expect.arrayContaining(['agent', 'vault.read', 'vault.write']))
   })
 })
