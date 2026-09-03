@@ -40,6 +40,13 @@
   } from '../lib/outline/shortcuts'
   import VaultSettingsTab from './VaultSettingsTab.svelte'
   import { consumePendingSettingsTab } from '../lib/ui-state.svelte'
+  import type { AgentOption } from '../lib/agent-picker/types'
+  import {
+    loadSearchAgentOptions,
+    supportsSearchPlanner,
+    supportsSearchTask,
+    VAULT_RESEARCH_TASK,
+  } from '../lib/smart-search/agent'
 
   let { open = $bindable(false) }: { open: boolean } = $props()
 
@@ -51,6 +58,11 @@
   let pluginTabs = $state<SettingsTab[]>([])
   let selectedTab = $state<'core' | string>('core')
   let pluginValues = $state<Record<string, Record<string, unknown>>>({})
+  let smartLookupAgents = $state<AgentOption[]>([])
+  let smartLookupPlannerAgents = $derived(smartLookupAgents.filter(supportsSearchPlanner))
+  let smartLookupHandoffAgents = $derived(
+    smartLookupAgents.filter((agent) => supportsSearchTask(agent, VAULT_RESEARCH_TASK)),
+  )
 
   // Callers that want the dialog to land on a specific tab (e.g. the search
   // panel's gear button) go through `openSettings(tab)`, which stashes the
@@ -632,6 +644,23 @@
     } catch (e) {
       console.warn('[SettingsDialog] manifest load:', e)
       pluginTabs = [coreShareSettingsTab()]
+    }
+    try {
+      smartLookupAgents = await loadSearchAgentOptions()
+      let changed = false
+      if (settings.smartLookup.planner.provider !== 'auto'
+        && !smartLookupPlannerAgents.some((agent) => agent.id === settings.smartLookup.planner.provider)) {
+        settings.smartLookup.planner.provider = 'auto'
+        changed = true
+      }
+      if (settings.smartLookup.handoff.defaultProvider !== 'ask'
+        && !smartLookupHandoffAgents.some((agent) => agent.id === settings.smartLookup.handoff.defaultProvider)) {
+        settings.smartLookup.handoff.defaultProvider = 'ask'
+        changed = true
+      }
+      if (changed) void saveSettings()
+    } catch {
+      smartLookupAgents = []
     }
     void refreshCliStatus()
   })
@@ -1353,6 +1382,83 @@
       {:else if selectedTab === 'vault' && isIOSPlatform}
         <VaultSettingsTab />
       {:else if selectedTab === 'search'}
+        <section class="block">
+          <h3>{t('smartSearch.lookup')}</h3>
+          <p class="desc">{t('smartSearch.smartUnderstandingHint')}</p>
+          <label class="row">
+            <span class="lbl">{t('smartSearch.smartUnderstanding')}</span>
+            <input type="checkbox" checked={settings.smartLookup.planner.enabled} onchange={(event) => {
+              settings.smartLookup.planner.enabled = event.currentTarget.checked; void saveSettings()
+            }} />
+          </label>
+          <label class="row">
+            <span class="lbl">{t('smartSearch.plannerProvider')}</span>
+            <select value={settings.smartLookup.planner.provider} onchange={(event) => {
+              settings.smartLookup.planner.provider = event.currentTarget.value; void saveSettings()
+            }}>
+              <option value="auto">{t('smartSearch.auto')}</option>
+              {#each smartLookupPlannerAgents as agent (agent.id)}
+                <option value={agent.id}>{agent.harness?.harness || agent.name}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="row">
+            <span class="lbl">{t('smartSearch.resultLimit')}</span>
+            <select value={settings.smartLookup.results.limit} onchange={(event) => {
+              settings.smartLookup.results.limit = Number(event.currentTarget.value) as 20 | 50 | 100; void saveSettings()
+            }}>
+              <option value="20">20</option><option value="50">50</option><option value="100">100</option>
+            </select>
+          </label>
+          <label class="row">
+            <span class="lbl">{t('smartSearch.groupBy')}</span>
+            <select value={settings.smartLookup.results.groupBy} onchange={(event) => {
+              settings.smartLookup.results.groupBy = event.currentTarget.value as 'auto' | 'source' | 'date'; void saveSettings()
+            }}>
+              <option value="auto">{t('smartSearch.auto')}</option>
+              <option value="source">{t('smartSearch.groupSource')}</option>
+              <option value="date">{t('smartSearch.groupDate')}</option>
+            </select>
+          </label>
+          <label class="row">
+            <span class="lbl">{t('smartSearch.autoDeep')}</span>
+            <input type="checkbox" checked={settings.smartLookup.results.autoDeepOnZero} onchange={(event) => {
+              settings.smartLookup.results.autoDeepOnZero = event.currentTarget.checked; void saveSettings()
+            }} />
+          </label>
+          <label class="row">
+            <span class="lbl">{t('smartSearch.quickSummary')}</span>
+            <input type="checkbox" checked={settings.smartLookup.summary.enabled} onchange={(event) => {
+              settings.smartLookup.summary.enabled = event.currentTarget.checked; void saveSettings()
+            }} />
+          </label>
+          <label class="row">
+            <span class="lbl">{t('smartSearch.summaryStyle')}</span>
+            <select value={settings.smartLookup.summary.style} onchange={(event) => {
+              settings.smartLookup.summary.style = event.currentTarget.value as 'sentence' | 'bullets'; void saveSettings()
+            }}>
+              <option value="bullets">{t('smartSearch.summaryBullets')}</option>
+              <option value="sentence">{t('smartSearch.summarySentence')}</option>
+            </select>
+          </label>
+          <label class="row">
+            <span class="lbl">{t('smartSearch.handoffProvider')}</span>
+            <select value={settings.smartLookup.handoff.defaultProvider} onchange={(event) => {
+              settings.smartLookup.handoff.defaultProvider = event.currentTarget.value; void saveSettings()
+            }}>
+              <option value="ask">{t('smartSearch.askEveryTime')}</option>
+              {#each smartLookupHandoffAgents as agent (agent.id)}
+                <option value={agent.id}>{agent.harness?.harness || agent.name}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="row">
+            <span class="lbl">{t('smartSearch.includeRefs')}</span>
+            <input type="checkbox" checked={settings.smartLookup.handoff.includeSelectedRefs} onchange={(event) => {
+              settings.smartLookup.handoff.includeSelectedRefs = event.currentTarget.checked; void saveSettings()
+            }} />
+          </label>
+        </section>
         <section class="block">
           <h3>{t('settings.tab.search')}</h3>
           {#if !sotvaultStore.vaultRoot}

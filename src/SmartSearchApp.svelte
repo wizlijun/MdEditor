@@ -4,35 +4,47 @@
   import { invoke } from '@tauri-apps/api/core'
   import { LogicalSize } from '@tauri-apps/api/dpi'
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import { loadLocale, t, watchLocaleChanges } from './lib/i18n/store.svelte'
-  import { rememberedProvider, rememberProvider, type AgentOption } from './lib/agent-picker/types'
-  import type { SearchHit, SmartRelevanceReason, SmartSearchResponse } from './lib/search/api'
+  import { i18n, loadLocale, t, watchLocaleChanges } from './lib/i18n/store.svelte'
+  import type { AgentOption } from './lib/agent-picker/types'
+  import type { SearchHit, SmartRelevanceReason, SmartSearchHit, SmartSearchResponse } from './lib/search/api'
   import { groupHits, type HitGroup } from './lib/search/grouping'
-  import {
-    decideTrigger,
-    DEEP_AFTER_MS,
-    DEEP_TIMEOUT_MS,
-  } from './lib/search/input-trigger'
+  import { decideTrigger } from './lib/search/input-trigger'
   import { highlightParts, parseHighlightTerms, previewLine } from './lib/search/preview'
   import { createImeGuard, isImeKey } from './lib/ime'
+  import { loadSettings, saveSettings, settings } from './lib/settings.svelte'
   import { SmartSearchStore } from './lib/smart-search/store.svelte'
   import {
-    buildSearchAnswerPrompt,
-    hitKey,
-    parseAnswerSegments,
-    selectContextSources,
-    sourceForCitation,
-    unknownAnswerCitations,
-    type AnswerContext,
-  } from './lib/smart-search/session'
-  import {
     AgentTaskError,
+    cancelAgentTask,
+    createAgentInvocation,
+    loadDefaultAgentProvider,
     loadSearchAgentOptions,
     pollAgentTask,
-    SEARCH_ANSWER_TASK,
     SEARCH_PLAN_TASK,
+    SEARCH_SUMMARY_TASK,
     startAgentTask,
+    supportsSearchPlanner,
+    supportsSearchTask,
+    VAULT_RESEARCH_TASK,
   } from './lib/smart-search/agent'
+  import { smartSearchApi } from './lib/smart-search/api'
+  import { buildHandoffPacket, buildHandoffPrompt } from './lib/smart-search/handoff'
+  import {
+    availableModelPreference,
+    rememberedModelPreference,
+    resolvedModelHint,
+    selectableModelPreferences,
+    selectorForPreference,
+    type ModelPreference,
+  } from './lib/smart-search/model-routing'
+  import { buildSearchPlanPrompt, type ResolvedSearchPlan } from './lib/smart-search/plan'
+  import {
+    addRemovedKeys,
+    chooseResultKeys,
+    hitKey,
+    restoreRemovedKeys,
+  } from './lib/smart-search/selection'
+  import { validateSummaryOutput, type SummarySource } from './lib/smart-search/summary'
   import {
     appendWorkflowEntry,
     isNearLogBottom,
@@ -40,28 +52,23 @@
     type WorkflowLevel,
     type WorkflowStage,
   } from './lib/smart-search/workflow-log'
-  import { smartSearchApi, type ArchiveReceipt } from './lib/smart-search/api'
-  import {
-    rememberedModelPreference,
-    rememberModelPreference,
-    resolvedModelHint,
-    selectableModelPreferences,
-    selectorForPreference,
-    type ModelPreference,
-    type ModelSelector,
-    type SearchModelPhase,
-  } from './lib/smart-search/model-routing'
-  import {
-    buildSearchPlanPrompt,
-    shouldTune,
-    type PlannedSearchResponse,
-    type ResolvedSearchPlan,
-    type SearchPlanTelemetry,
-  } from './lib/smart-search/plan'
-  import { addRemovedKeys, chooseResultKeys, restoreRemovedKeys } from './lib/smart-search/selection'
 
   type SourceFilter = 'all' | SearchHit['origin']
-  type AnswerPhase = 'idle' | 'planning' | 'searching' | 'tuning' | 'preparing' | 'running' | 'done' | 'error'
+  type LookupPhase =
+    | 'idle'
+    | 'previewing'
+    | 'understanding'
+    | 'searching'
+    | 'ready'
+    | 'preview_only'
+    | 'partial'
+    | 'no_results'
+
+  interface ActiveAgentRun {
+    provider: string
+    task: string
+    runId: string
+  }
 
   const store = new SmartSearchStore()
   const windowApi = getCurrentWindow()
@@ -72,9 +79,19 @@
   let composing = $state(false)
   let inputEl = $state<HTMLTextAreaElement>()
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
-  let deepTimer: ReturnType<typeof setTimeout> | undefined
   let expandedWindow = false
+
+  let phase = $state<LookupPhase>('idle')
   let authoritativeResults = $state(false)
+  let resolvedPlan = $state<ResolvedSearchPlan | null>(null)
+  let submittedPlan = $state<unknown | null>(null)
+  let planReferenceTime = $state('')
+  let planTimezone = $state('')
+  let lookupRunId = $state('')
+  let plannerModel = $state<string | null>(null)
+  let plannerWarning = $state('')
+  let modelWarning = $state('')
+  let navigationError = $state('')
 
   let sourceFilter = $state<SourceFilter>('all')
   let selectedKeys = $state<string[]>([])
@@ -84,95 +101,94 @@
   let rangeAnchor = $state<string | null>(null)
 
   let agents = $state<AgentOption[]>([])
-  let selectedProvider = $state('')
+  let appDefaultAgent = $state('')
   let agentsError = $state('')
-  let planModelPreference = $state<ModelPreference>('profile:fast')
-  let answerModelPreference = $state<ModelPreference>('profile:default')
-  let modelSettingsOpen = $state(false)
+  let settingsOpen = $state(false)
+  let handoffMenuOpen = $state(false)
+  let handoffRun = $state<{ provider: string; runId: string } | null>(null)
+  let handoffError = $state('')
+  let handoffBusy = $state(false)
 
-  let answerPhase = $state<AnswerPhase>('idle')
-  let answerError = $state('')
-  let answer = $state('')
-  let answerId = $state('')
-  let answerProvider = $state('')
-  let answerModel = $state<string | null>(null)
-  let answerRunId = $state('')
-  let planRunId = $state('')
-  let tuneRunId = $state('')
-  let planModel = $state<string | null>(null)
-  let resolvedPlan = $state<ResolvedSearchPlan | null>(null)
-  let answerSelector = $state<ModelSelector>({ model_profile: 'default' })
-  let answerContext = $state<AnswerContext | null>(null)
+  let summaryBusy = $state(false)
+  let summaryText = $state('')
+  let summaryError = $state('')
+  let summarySources = $state<SummarySource[]>([])
+  let summaryModel = $state<string | null>(null)
+
   let workflowEntries = $state<WorkflowEntry[]>([])
+  let workflowSequence = 0
   let activityLogEl = $state<HTMLDivElement>()
   let autoFollowActivity = true
-  let workflowSequence = 0
-  let failedStage = $state<WorkflowStage | null>(null)
-  let currentStage: WorkflowStage = 'plan'
-  let answerAttempt = 0
-  let navigationError = $state('')
-
-  let feedback = $state<'helpful' | 'unhelpful' | null>(null)
-  let feedbackStatus = $state('')
-  let feedbackBusy = $state(false)
-  let archiveReceipt = $state<ArchiveReceipt | null>(null)
-
-  let documentDialog = $state(false)
-  let documentTitle = $state('')
-  let documentBusy = $state(false)
-  let documentError = $state('')
+  let requestSequence = 0
+  let activeAbort: AbortController | null = null
+  let activeAgentRun: ActiveAgentRun | null = null
 
   let unlistenLocale: (() => void) | null = null
   let unlistenFocus: (() => void) | null = null
+  let unlistenSettings: (() => void) | null = null
 
   let removedSet = $derived(new Set(removedKeys))
   let visibleHits = $derived(store.hits.filter((hit) => (
     !removedSet.has(hitKey(hit)) && (sourceFilter === 'all' || hit.origin === sourceFilter)
   )))
-  let contextHits = $derived(store.hits.filter((hit) => !removedSet.has(hitKey(hit))))
   let groups = $derived(groupHits(visibleHits))
   let flatVisibleHits = $derived(groups.flatMap((group) => group.files.flatMap((file) => file.hits)))
   let selectedSet = $derived(new Set(selectedKeys))
   let activeHit = $derived(
     flatVisibleHits.find((hit) => hitKey(hit) === activeKey) ?? flatVisibleHits[0] ?? null,
   )
-  let highlightTerms = $derived(parseHighlightTerms(store.query || inputValue))
-  let usableAgents = $derived(agents.filter((agent) => supportsSmartAnswer(agent)))
-  let selectedAgent = $derived(agents.find((agent) => agent.id === selectedProvider) ?? null)
-  let exactModelPreferences = $derived(selectableModelPreferences(selectedAgent?.harness))
+  let highlightTerms = $derived(parseHighlightTerms(
+    authoritativeResults && resolvedPlan
+      ? resolvedPlan.queries.flatMap((query) => [...query.terms, ...query.phrases]).join(' ')
+      : store.query || inputValue,
+  ))
+  let plannerAgents = $derived(agents.filter(supportsSearchPlanner))
+  let summaryAgents = $derived(agents.filter((agent) => supportsSearchTask(agent, SEARCH_SUMMARY_TASK)))
+  let handoffAgents = $derived(agents.filter((agent) => supportsSearchTask(agent, VAULT_RESEARCH_TASK)))
+  let plannerAgent = $derived(resolvePlannerAgent())
+  let summaryAgent = $derived(resolveSummaryAgent())
   let resolvedTerms = $derived(Array.from(new Set(
     resolvedPlan?.queries.flatMap((query) => [...query.terms, ...query.phrases]) ?? [],
-  )).slice(0, 6))
-  let answerBusy = $derived([
-    'planning', 'searching', 'tuning', 'preparing', 'running',
-  ].includes(answerPhase))
-  let currentResultsExhausted = $derived(
-    store.route !== null && store.hits.length > 0 && contextHits.length === 0,
-  )
-  let canAsk = $derived(
-    inputValue.trim().length > 0
-      && selectedProvider.length > 0
-      && !currentResultsExhausted
-      && !answerBusy
-      && !documentBusy,
-  )
+  )).slice(0, 12))
+  let lookupBusy = $derived(phase === 'understanding' || phase === 'searching')
+  let canLookup = $derived(inputValue.trim().length > 0 && !lookupBusy && !summaryBusy && !handoffBusy)
+  let needsDeepAgent = $derived(/(?:所有|全部|完整|从未|不存在|有没有遗漏|精确数量|比较|分析原因|总结整)/u.test(inputValue))
+  let hasSummaryCandidates = $derived(authoritativeResults && (
+    selectedKeys.length ? store.hits.filter((hit) => selectedSet.has(hitKey(hit))) : visibleHits
+  ).some((hit) => (
+    hit.level === 'line'
+      && hit.text.trim().length > 0
+      && Array.from(hit.text).length <= 3_000
+      && Boolean((hit as SmartSearchHit).resultId)
+  )))
 
   onMount(async () => {
     try {
-      await loadLocale()
+      await Promise.all([loadLocale(), loadSettings()])
       unlistenLocale = await watchLocaleChanges()
       await windowApi.setTitle(t('smartSearch.windowTitle'))
     } catch (error) {
-      console.warn('[smart-search] locale init failed:', error)
+      console.warn('[smart-lookup] settings init failed:', error)
     }
     try {
-      agents = await loadSearchAgentOptions()
-      const installed = agents.filter(supportsSmartAnswer).map((agent) => agent.id)
-      selectedProvider = rememberedProvider('global-search', installed, 'notemd.claude-agent')
-      loadModelPreferences()
+      const [loadedAgents, defaultAgent] = await Promise.all([
+        loadSearchAgentOptions(),
+        loadDefaultAgentProvider().catch(() => ''),
+      ])
+      agents = loadedAgents
+      appDefaultAgent = defaultAgent
+      repairUnavailableProviders()
+      migrateLegacyPlannerPreferences()
     } catch (error) {
-      agentsError = error instanceof Error ? error.message : String(error)
+      agentsError = readableError(error)
     }
+    try {
+      const { listen } = await import('@tauri-apps/api/event')
+      unlistenSettings = await listen('settings://changed', async () => {
+        await loadSettings()
+        repairUnavailableProviders()
+      })
+    } catch { /* Browser preview has no event bridge. */ }
     ready = true
     await tick()
     resizeInput()
@@ -187,25 +203,142 @@
   })
 
   onDestroy(() => {
-    cancelTimers()
+    cancelTimer()
+    supersedeActive(false)
     unlistenLocale?.()
     unlistenFocus?.()
+    unlistenSettings?.()
   })
 
-  function cancelTimers(): void {
+  function resolvePlannerAgent(): AgentOption | null {
+    if (!settings.smartLookup.planner.enabled) return null
+    const configured = settings.smartLookup.planner.provider
+    if (configured !== 'auto') {
+      return plannerAgents.find((agent) => agent.id === configured) ?? null
+    }
+    return plannerAgents.find((agent) => agent.id === appDefaultAgent)
+      ?? plannerAgents.find((agent) => agent.id === 'notemd.claude-agent')
+      ?? plannerAgents[0]
+      ?? null
+  }
+
+  function resolveSummaryAgent(): AgentOption | null {
+    if (!settings.smartLookup.summary.enabled) return null
+    const configured = settings.smartLookup.summary.provider
+    if (configured === 'same_as_planner' && plannerAgent && supportsSearchTask(plannerAgent, SEARCH_SUMMARY_TASK)) {
+      return plannerAgent
+    }
+    if (configured !== 'auto' && configured !== 'same_as_planner') {
+      return summaryAgents.find((agent) => agent.id === configured) ?? null
+    }
+    return summaryAgents.find((agent) => agent.id === appDefaultAgent)
+      ?? summaryAgents.find((agent) => agent.id === 'notemd.claude-agent')
+      ?? summaryAgents[0]
+      ?? null
+  }
+
+  function migrateLegacyPlannerPreferences(): void {
+    if (settings.smartLookup.planner.provider !== 'auto') return
+    try {
+      const legacy = localStorage.getItem('notemd.agent.provider.global-search')
+      if (!legacy || !plannerAgents.some((agent) => agent.id === legacy)) return
+      settings.smartLookup.planner.provider = legacy
+      const harness = plannerAgents.find((agent) => agent.id === legacy)?.harness
+      settings.smartLookup.planner.modelByProvider[legacy] = rememberedModelPreference(
+        'global-search', legacy, 'plan', harness,
+      )
+      void saveSettings()
+    } catch { /* A blocked localStorage leaves the new defaults intact. */ }
+  }
+
+  function repairUnavailableProviders(): void {
+    let changed = false
+    if (settings.smartLookup.planner.provider !== 'auto'
+      && !plannerAgents.some((agent) => agent.id === settings.smartLookup.planner.provider)) {
+      settings.smartLookup.planner.provider = 'auto'
+      changed = true
+    }
+    if (!['auto', 'same_as_planner'].includes(settings.smartLookup.summary.provider)
+      && !summaryAgents.some((agent) => agent.id === settings.smartLookup.summary.provider)) {
+      settings.smartLookup.summary.provider = 'auto'
+      changed = true
+    }
+    if (settings.smartLookup.handoff.defaultProvider !== 'ask'
+      && !handoffAgents.some((agent) => agent.id === settings.smartLookup.handoff.defaultProvider)) {
+      settings.smartLookup.handoff.defaultProvider = 'ask'
+      changed = true
+    }
+    for (const agent of agents) {
+      const plannerSaved = settings.smartLookup.planner.modelByProvider[agent.id]
+      if (plannerSaved && supportsSearchPlanner(agent)) {
+        const available = availableModelPreference(plannerSaved, 'plan', agent.harness)
+        if (available !== plannerSaved) {
+          settings.smartLookup.planner.modelByProvider[agent.id] = available
+          modelWarning = t('smartSearch.modelFallback')
+          changed = true
+        }
+      }
+      const summarySaved = settings.smartLookup.summary.modelByProvider[agent.id]
+      if (summarySaved && supportsSearchTask(agent, SEARCH_SUMMARY_TASK)) {
+        const available = availableModelPreference(summarySaved, 'summary', agent.harness)
+        if (available !== summarySaved) {
+          settings.smartLookup.summary.modelByProvider[agent.id] = available
+          modelWarning = t('smartSearch.modelFallback')
+          changed = true
+        }
+      }
+    }
+    if (changed) void saveSettings()
+  }
+
+  function plannerPreference(agent = plannerAgent): ModelPreference {
+    if (!agent) return 'profile:fast'
+    return availableModelPreference(
+      settings.smartLookup.planner.modelByProvider[agent.id]
+        ?? rememberedModelPreference('global-search', agent.id, 'plan', agent.harness),
+      'plan',
+      agent.harness,
+    )
+  }
+
+  function summaryPreference(agent = summaryAgent): ModelPreference {
+    if (!agent) return 'profile:fast'
+    return availableModelPreference(
+      settings.smartLookup.summary.modelByProvider[agent.id] ?? 'profile:fast',
+      'summary',
+      agent.harness,
+    )
+  }
+
+  function supportsIdempotentInvocation(agent: AgentOption): boolean {
+    const tasks = agent.harness?.capabilities?.tasks ?? []
+    return tasks.includes(SEARCH_SUMMARY_TASK) && tasks.includes(VAULT_RESEARCH_TASK)
+  }
+
+  function cancelTimer(): void {
     if (debounceTimer) clearTimeout(debounceTimer)
-    if (deepTimer) clearTimeout(deepTimer)
     debounceTimer = undefined
-    deepTimer = undefined
+  }
+
+  function supersedeActive(increment = true): number {
+    if (increment) requestSequence += 1
+    activeAbort?.abort()
+    activeAbort = null
+    if (activeAgentRun) {
+      const run = activeAgentRun
+      activeAgentRun = null
+      void cancelAgentTask(run.provider, run.task, run.runId).catch(() => {})
+    }
+    return requestSequence
   }
 
   async function expandWindow(): Promise<void> {
     if (expandedWindow) return
     try {
-      await windowApi.setSize(new LogicalSize(980, 680))
+      await windowApi.setSize(new LogicalSize(1_020, 700))
       expandedWindow = true
-      try { await windowApi.center() } catch { /* Keep the resized window in place. */ }
-    } catch { /* Browser preview: CSS still fills the viewport. */ }
+      try { await windowApi.center() } catch { /* Keep current position. */ }
+    } catch { /* Browser preview fills the viewport. */ }
   }
 
   function resetResultEdits(): void {
@@ -216,41 +349,55 @@
     rangeAnchor = null
   }
 
-  function scheduleSearch(): void {
-    cancelTimers()
-    resetResultEdits()
-    // Input changes invalidate in-flight work immediately. Old hits must not
-    // remain actionable during the debounce window or an IME hold state.
-    store.clear()
-    authoritativeResults = false
+  function clearGeneratedState(): void {
     resolvedPlan = null
+    submittedPlan = null
+    planReferenceTime = ''
+    planTimezone = ''
+    lookupRunId = ''
+    authoritativeResults = false
+    plannerModel = null
+    plannerWarning = ''
+    summaryText = ''
+    summaryError = ''
+    summarySources = []
+    summaryModel = null
+    summaryBusy = false
+    handoffRun = null
+    handoffError = ''
+  }
+
+  function scheduleSearch(): void {
+    cancelTimer()
+    supersedeActive()
+    resetResultEdits()
+    clearGeneratedState()
+    store.clear()
     const decision = decideTrigger(inputValue, composing)
-    if (decision.kind === 'hold') return
-    if (decision.kind === 'clear') return
-    debounceTimer = setTimeout(() => { void runShallow(inputValue) }, decision.delayMs)
-  }
-
-  async function runShallow(asked: string): Promise<SmartSearchResponse | null> {
-    if (!asked.trim()) return null
-    void expandWindow()
-    const response = await store.run(asked, { deep: false })
-    if (response?.deepAvailable && inputValue === asked) {
-      deepTimer = setTimeout(() => { void runDeep(asked) }, DEEP_AFTER_MS)
+    if (decision.kind === 'clear') {
+      phase = 'idle'
+      workflowEntries = []
+      return
     }
-    return response
+    if (decision.kind === 'hold') return
+    phase = 'previewing'
+    const query = inputValue
+    debounceTimer = setTimeout(() => { void runPreview(query) }, decision.delayMs)
   }
 
-  async function runDeep(asked = inputValue): Promise<SmartSearchResponse | null> {
-    cancelTimers()
-    if (!asked.trim()) return null
+  async function runPreview(query: string): Promise<SmartSearchResponse | null> {
+    if (!query.trim()) return null
     void expandWindow()
-    return await store.run(asked, { deep: true, timeoutMs: DEEP_TIMEOUT_MS })
+    return await store.run(query, {
+      deep: false,
+      limit: settings.smartLookup.results.limit,
+    })
   }
 
   function onInput(event: Event): void {
     resizeInput(event.currentTarget as HTMLTextAreaElement)
     if ((event as InputEvent).isComposing) {
-      cancelTimers()
+      cancelTimer()
       return
     }
     scheduleSearch()
@@ -272,7 +419,7 @@
     if (inputIme.blocks(event)) return
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
-      void askAgent()
+      void runSmartLookup()
       return
     }
     if (event.key === 'Escape') {
@@ -282,72 +429,20 @@
   }
 
   async function hideWindow(): Promise<void> {
-    if (documentDialog) {
-      documentDialog = false
+    if (settingsOpen || handoffMenuOpen) {
+      settingsOpen = false
+      handoffMenuOpen = false
       return
     }
-    cancelTimers()
+    cancelTimer()
+    supersedeActive()
     try { await invoke('hide_smart_search_window') } catch { /* Browser preview. */ }
-  }
-
-  function chooseProvider(event: Event): void {
-    selectedProvider = (event.currentTarget as HTMLSelectElement).value
-    rememberProvider('global-search', selectedProvider)
-    loadModelPreferences()
-  }
-
-  function supportsSmartAnswer(agent: AgentOption): boolean {
-    const capability = agent.harness?.capabilities
-    const routing = capability?.model_routing
-    const profiles = routing?.profiles
-    return agent.harness?.ok === true
-      && capability?.tasks?.includes(SEARCH_PLAN_TASK) === true
-      && capability?.tasks?.includes(SEARCH_ANSWER_TASK) === true
-      && capability?.search_plan_schemas?.includes(1) === true
-      && capability?.terminal_result === true
-      && capability?.input_only_isolation === true
-      && routing?.invocation_override === true
-      && (profiles?.fast?.available === true || profiles?.default?.available === true)
-  }
-
-  function loadModelPreferences(): void {
-    const harness = agents.find((agent) => agent.id === selectedProvider)?.harness
-    planModelPreference = rememberedModelPreference(
-      'global-search', selectedProvider, 'plan', harness,
-    )
-    answerModelPreference = rememberedModelPreference(
-      'global-search', selectedProvider, 'answer', harness,
-    )
-  }
-
-  function changeModelPreference(phase: SearchModelPhase, event: Event): void {
-    const preference = (event.currentTarget as HTMLSelectElement).value as ModelPreference
-    if (phase === 'plan') planModelPreference = preference
-    else answerModelPreference = preference
-    rememberModelPreference('global-search', selectedProvider, phase, preference)
-  }
-
-  function modelPreferenceLabel(preference: ModelPreference): string {
-    if (preference === 'profile:fast') return t('smartSearch.modelFast')
-    if (preference === 'profile:default') return t('smartSearch.modelDefault')
-    return preference.slice('model:'.length)
-  }
-
-  function phaseLabel(): string {
-    switch (answerPhase) {
-      case 'planning': return t('smartSearch.planning')
-      case 'searching': return t('smartSearch.plannedSearching')
-      case 'tuning': return t('smartSearch.tuning')
-      case 'preparing': return t('smartSearch.preparing')
-      default: return t('smartSearch.running')
-    }
   }
 
   function resetWorkflow(): void {
     workflowEntries = []
     workflowSequence = 0
     autoFollowActivity = true
-    failedStage = null
   }
 
   function appendActivity(
@@ -375,73 +470,510 @@
   }
 
   function onActivityScroll(): void {
-    if (!activityLogEl) return
-    autoFollowActivity = isNearLogBottom(activityLogEl)
-  }
-
-  function appendAgentProgress(
-    stage: WorkflowStage,
-    runId: string,
-    attempt: number,
-    progress: { steps: number; last: string },
-  ): void {
-    if (attempt !== answerAttempt) return
-    // Provider snapshots can contain generated text or source excerpts. Show
-    // the fact and cadence of the work, but never mirror private payloads,
-    // prompts or secrets into the UI activity stream.
-    appendActivity(stage, 'active', t('smartSearch.activityStep', { n: progress.steps }), {
-      runId,
-      steps: progress.steps,
-    })
-  }
-
-  function pollingOptions(stage: WorkflowStage, runId: string, attempt: number) {
-    return {
-      onRetry: (retry: { attempt: number; maxAttempts: number }) => {
-        if (attempt !== answerAttempt) return
-        appendActivity(stage, 'warning', t('smartSearch.activityPollingRetry', {
-          attempt: retry.attempt,
-          max: retry.maxAttempts,
-        }), { runId })
-      },
-    }
+    if (activityLogEl) autoFollowActivity = isNearLogBottom(activityLogEl)
   }
 
   function readableError(error: unknown): string {
-    const redact = (message: string) => message
+    let message = error instanceof Error ? error.message : String(error)
+    if (error instanceof AgentTaskError && error.status === 'timeout') message = '快速模型等待超时'
+    message = message
       .replace(/\b(?:sk|key)-[A-Za-z0-9_-]{8,}\b/g, '[redacted]')
       .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
       .replace(/\b(api[_-]?key|token|password)\s*[:=]\s*\S+/gi, '$1=[redacted]')
-    if (error instanceof AgentTaskError) {
-      if (error.status === 'timeout') {
-        return t('smartSearch.taskTimedOut', { runId: error.runId })
-      }
-      if (error.status === 'lost') {
-        return t('smartSearch.taskLost', { runId: error.runId })
-      }
-      return `${redact(error.message)} (${error.runId})`
-    }
-    return redact(error instanceof Error ? error.message : String(error))
+      .replace(/(^|[\s("'`])\/(?:[^/\s"'`]+\/)+[^/\s"'`,;:)]+/g, '$1[local path]')
+      .replace(/\b[A-Za-z]:\\[^\s"'`,;]+/g, '[local path]')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return Array.from(message).slice(0, 180).join('')
   }
 
-  async function retryRead<T>(
-    stage: WorkflowStage,
+  function localeTimezone(): string {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' }
+  }
+
+  async function pollWithTimeout(
+    provider: string,
+    task: string,
     runId: string,
-    attempt: number,
-    operation: () => Promise<T>,
-  ): Promise<T> {
+    timeoutMs: number,
+    mine: number,
+  ) {
+    const controller = new AbortController()
+    activeAbort = controller
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
-      return await operation()
+      return await pollAgentTask(provider, task, runId, (progress) => {
+        if (mine !== requestSequence) return
+        appendActivity(
+          task === SEARCH_PLAN_TASK ? 'plan' : 'summary',
+          'active',
+          t('smartSearch.activityStep', { n: progress.steps }),
+          { runId, steps: progress.steps },
+        )
+      }, { signal: controller.signal })
     } catch (error) {
-      const code = typeof error === 'object' && error !== null && 'code' in error
-        ? String((error as { code: unknown }).code)
-        : ''
-      if (!['IPC_DISCONNECTED', 'CHANNEL_CLOSED', 'INDEX_BUSY'].includes(code)) throw error
-      if (attempt !== answerAttempt) throw new DOMException('superseded', 'AbortError')
-      appendActivity(stage, 'warning', t('smartSearch.activityReadRetry'), { runId })
-      await new Promise((resolve) => setTimeout(resolve, 250))
-      return await operation()
+      if (controller.signal.aborted && mine === requestSequence) {
+        void cancelAgentTask(provider, task, runId).catch(() => {})
+        throw new Error(task === SEARCH_PLAN_TASK ? '智能理解等待超时' : '快速简答等待超时')
+      }
+      throw error
+    } finally {
+      clearTimeout(timer)
+      if (activeAbort === controller) activeAbort = null
     }
+  }
+
+  async function ensurePreview(query: string, mine: number): Promise<void> {
+    if (mine !== requestSequence || (store.query === query && store.route !== null)) return
+    await runPreview(query)
+  }
+
+  function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+      promise.then(
+        (value) => { clearTimeout(timer); resolve(value) },
+        (error) => { clearTimeout(timer); reject(error) },
+      )
+    })
+  }
+
+  async function retryIdempotentStart<T>(start: () => Promise<T>, timeoutMs = 10_000): Promise<T> {
+    const startedAt = Date.now()
+    const firstBudget = Math.max(500, Math.min(5_000, Math.floor(timeoutMs / 2)))
+    try {
+      return await withTimeout(start(), firstBudget, 'Agent 启动等待超时')
+    } catch (firstError) {
+      const remaining = timeoutMs - (Date.now() - startedAt)
+      if (remaining <= 0) throw firstError
+      return await withTimeout(start(), remaining, 'Agent 启动等待超时')
+    }
+  }
+
+  function parsePlan(content: string): unknown {
+    if (new TextEncoder().encode(content).length > 16 * 1024) throw new Error('智能理解结果超过安全上限')
+    try {
+      return JSON.parse(content)
+    } catch {
+      throw new Error('智能理解没有返回有效的检索计划')
+    }
+  }
+
+  async function runSmartLookup(): Promise<void> {
+    const question = inputValue.trim()
+    if (!question || lookupBusy || summaryBusy || handoffBusy) return
+    cancelTimer()
+    const mine = supersedeActive()
+    resetResultEdits()
+    clearGeneratedState()
+    resetWorkflow()
+    void expandWindow()
+    appendActivity('preview', 'active', t('smartSearch.activityPreviewReady'))
+
+    const questionBytes = new TextEncoder().encode(question).length
+    const provider = resolvePlannerAgent()
+    if (!settings.smartLookup.planner.enabled || !provider || Array.from(question).length > 2_000 || questionBytes > 8 * 1024) {
+      await ensurePreview(question, mine)
+      if (mine !== requestSequence) return
+      phase = 'preview_only'
+      plannerWarning = !settings.smartLookup.planner.enabled
+        ? t('smartSearch.plannerDisabled')
+        : !provider
+          ? t('smartSearch.plannerUnavailable')
+          : t('smartSearch.questionTooLong')
+      appendActivity('plan', 'warning', plannerWarning)
+      return
+    }
+
+    phase = 'understanding'
+    appendActivity('plan', 'active', t('smartSearch.activityPlanStart'))
+    try {
+      const referenceTime = new Date().toISOString()
+      const timezone = localeTimezone()
+      const context = await smartSearchApi.planContext(question)
+      if (mine !== requestSequence) return
+      const prompt = buildSearchPlanPrompt({
+        question,
+        referenceTime,
+        timezone,
+        locale: i18n.locale,
+        lockedFilters: context.lockedFilters,
+      })
+      const preference = plannerPreference(provider)
+      const selector = selectorForPreference(preference)
+      const invocation = await createAgentInvocation(SEARCH_PLAN_TASK, prompt, selector)
+      const planStartedAt = Date.now()
+      const startTask = () => startAgentTask(
+        provider.id,
+        SEARCH_PLAN_TASK,
+        prompt,
+        selector,
+        'result',
+        undefined,
+        invocation,
+      )
+      const start = supportsIdempotentInvocation(provider)
+        ? await retryIdempotentStart(startTask, settings.smartLookup.planner.timeoutMs)
+        : await withTimeout(startTask(), settings.smartLookup.planner.timeoutMs, 'Agent 启动等待超时')
+      if (mine !== requestSequence) {
+        void cancelAgentTask(provider.id, SEARCH_PLAN_TASK, start.runId).catch(() => {})
+        return
+      }
+      activeAgentRun = { provider: provider.id, task: SEARCH_PLAN_TASK, runId: start.runId }
+      plannerModel = start.resolvedModel ?? resolvedModelHint(preference, provider.harness)
+      appendActivity('plan', 'active', t('smartSearch.activityAgentStarted', {
+        model: plannerModel ?? t('smartSearch.modelFast'),
+      }), { runId: start.runId })
+      const planResult = await pollWithTimeout(
+        provider.id,
+        SEARCH_PLAN_TASK,
+        start.runId,
+        Math.max(1, settings.smartLookup.planner.timeoutMs - (Date.now() - planStartedAt)),
+        mine,
+      )
+      activeAgentRun = null
+      if (mine !== requestSequence) return
+      const rawPlan = parsePlan(planResult.content)
+
+      phase = 'searching'
+      appendActivity('search', 'active', t('smartSearch.activitySearchStart'))
+      let planned = await smartSearchApi.plannedSearch(
+        question,
+        rawPlan,
+        referenceTime,
+        timezone,
+        {
+          limit: settings.smartLookup.results.limit,
+          deep: false,
+          timeoutMs: 2_000,
+          retainRun: settings.smartLookup.summary.enabled,
+        },
+      )
+      if (mine !== requestSequence) return
+      if (planned.search.hits.length === 0 && settings.smartLookup.results.autoDeepOnZero) {
+        appendActivity('search', 'active', t('smartSearch.activityDeepStart'))
+        planned = await smartSearchApi.plannedSearch(
+          question,
+          rawPlan,
+          referenceTime,
+          timezone,
+          {
+            limit: settings.smartLookup.results.limit,
+            deep: true,
+            timeoutMs: settings.smartLookup.results.deepTimeoutMs,
+            retainRun: settings.smartLookup.summary.enabled,
+          },
+        )
+      }
+      if (mine !== requestSequence) return
+      submittedPlan = rawPlan
+      planReferenceTime = referenceTime
+      planTimezone = timezone
+      resolvedPlan = planned.resolvedPlan
+      lookupRunId = planned.lookupRunId ?? ''
+      authoritativeResults = true
+      store.apply(question, planned.search)
+      activeKey = planned.search.hits[0] ? hitKey(planned.search.hits[0]) : null
+      phase = planned.search.hits.length === 0
+        ? 'no_results'
+        : planned.search.truncated
+          ? 'partial'
+          : 'ready'
+      appendActivity('plan', 'success', t('smartSearch.activityPlanReady'), { runId: start.runId })
+      appendPlanActivities(planned.search)
+    } catch (error) {
+      activeAgentRun = null
+      if (mine !== requestSequence) return
+      await ensurePreview(question, mine)
+      if (mine !== requestSequence) return
+      phase = 'preview_only'
+      plannerWarning = `${t('smartSearch.plannerFallback')} ${readableError(error)}`
+      appendActivity('plan', 'warning', plannerWarning)
+    }
+  }
+
+  function appendPlanActivities(search: SmartSearchResponse): void {
+    if (resolvedPlan?.time?.after || resolvedPlan?.time?.before) {
+      appendActivity('plan', 'success', t('smartSearch.activityTime', {
+        range: `${resolvedPlan.time.after ?? '…'} – ${resolvedPlan.time.before ?? '…'}`,
+      }))
+    }
+    if (resolvedTerms.length) {
+      appendActivity('plan', 'success', t('smartSearch.activityTerms', {
+        terms: resolvedTerms.join('、'),
+      }))
+    }
+    const documents = new Set(search.hits.map((hit) => hit.path)).size
+    appendActivity(
+      'search',
+      search.truncated ? 'warning' : 'success',
+      t(search.truncated ? 'smartSearch.activitySearchPartial' : 'smartSearch.activitySearchDone', {
+        n: search.hits.length,
+        docs: documents,
+      }),
+    )
+  }
+
+  async function runDeep(): Promise<void> {
+    const question = inputValue.trim()
+    if (!question || store.loading) return
+    const mine = requestSequence
+    appendActivity('search', 'active', t('smartSearch.activityDeepStart'))
+    if (authoritativeResults && submittedPlan && planReferenceTime && planTimezone) {
+      phase = 'searching'
+      try {
+        const planned = await smartSearchApi.plannedSearch(
+          question,
+          submittedPlan,
+          planReferenceTime,
+          planTimezone,
+          {
+            limit: settings.smartLookup.results.limit,
+            deep: true,
+            timeoutMs: settings.smartLookup.results.deepTimeoutMs,
+            retainRun: settings.smartLookup.summary.enabled,
+          },
+        )
+        if (mine !== requestSequence) return
+        resolvedPlan = planned.resolvedPlan
+        lookupRunId = planned.lookupRunId ?? ''
+        store.apply(question, planned.search)
+        resetResultEdits()
+        activeKey = planned.search.hits[0] ? hitKey(planned.search.hits[0]) : null
+        phase = planned.search.hits.length === 0
+          ? 'no_results'
+          : planned.search.truncated
+            ? 'partial'
+            : 'ready'
+        appendPlanActivities(planned.search)
+      } catch (error) {
+        if (mine !== requestSequence) return
+        phase = store.hits.length === 0 ? 'no_results' : store.truncated ? 'partial' : 'ready'
+        appendActivity('search', 'warning', `${t('smartSearch.searchError')}: ${readableError(error)}`)
+      }
+      return
+    }
+    const response = await store.run(question, {
+      deep: true,
+      limit: settings.smartLookup.results.limit,
+      timeoutMs: settings.smartLookup.results.deepTimeoutMs,
+    })
+    if (!response) return
+    authoritativeResults = false
+    resolvedPlan = null
+    lookupRunId = ''
+    phase = response.hits.length === 0 ? 'no_results' : response.truncated ? 'partial' : 'preview_only'
+    appendActivity('search', response.truncated ? 'warning' : 'success', t('smartSearch.activitySearchDone', {
+      n: response.hits.length,
+      docs: new Set(response.hits.map((hit) => hit.path)).size,
+    }))
+  }
+
+  async function generateSummary(): Promise<void> {
+    if (!lookupRunId || !summaryAgent || !hasSummaryCandidates || summaryBusy) return
+    const mine = requestSequence
+    summaryBusy = true
+    summaryText = ''
+    summaryError = ''
+    summarySources = []
+    appendActivity('summary', 'active', t('smartSearch.activitySummaryStart'))
+    try {
+      const selectedIds = (selectedKeys.length
+        ? store.hits.filter((hit) => selectedSet.has(hitKey(hit)))
+        : visibleHits)
+        .map((hit) => (hit as SmartSearchHit).resultId)
+        .filter((id): id is string => Boolean(id))
+      const preference = summaryPreference(summaryAgent)
+      const selector = selectorForPreference(preference)
+      const invocationId = crypto.randomUUID()
+      const startSummary = () => smartSearchApi.startSummary(
+        lookupRunId,
+        selectedIds,
+        settings.smartLookup.summary.sourceLimit,
+        settings.smartLookup.summary.charLimit,
+        settings.smartLookup.summary.style,
+        summaryAgent.id,
+        selector,
+        invocationId,
+      )
+      // The host/provider deduplicates the same invocation when an IPC response is lost.
+      const startTimeout = Math.min(10_000, settings.smartLookup.summary.timeoutMs)
+      const start = supportsIdempotentInvocation(summaryAgent)
+        ? await retryIdempotentStart(startSummary, startTimeout)
+        : await withTimeout(startSummary(), startTimeout, 'Agent 启动等待超时')
+      if (mine !== requestSequence) {
+        void cancelAgentTask(summaryAgent.id, SEARCH_SUMMARY_TASK, start.runId).catch(() => {})
+        return
+      }
+      summarySources = start.sources
+      if (start.staleCount > 0) {
+        appendActivity('summary', 'warning', t('smartSearch.summaryStale', { n: start.staleCount }))
+      }
+      activeAgentRun = { provider: summaryAgent.id, task: SEARCH_SUMMARY_TASK, runId: start.runId }
+      summaryModel = start.resolvedModel ?? resolvedModelHint(preference, summaryAgent.harness)
+      const result = await pollWithTimeout(
+        summaryAgent.id,
+        SEARCH_SUMMARY_TASK,
+        start.runId,
+        settings.smartLookup.summary.timeoutMs,
+        mine,
+      )
+      activeAgentRun = null
+      if (mine !== requestSequence) return
+      summaryText = validateSummaryOutput(
+        result.content,
+        start.sources,
+        settings.smartLookup.summary.style,
+      ).content
+      appendActivity('summary', 'success', t('smartSearch.activitySummaryDone'), { runId: start.runId })
+    } catch (error) {
+      activeAgentRun = null
+      if (mine === requestSequence) {
+        summaryError = readableError(error)
+        appendActivity('summary', 'warning', `${t('smartSearch.summaryUnavailable')} ${summaryError}`)
+      }
+    } finally {
+      if (mine === requestSequence) summaryBusy = false
+    }
+  }
+
+  function handoffHits(): SearchHit[] {
+    if (!settings.smartLookup.handoff.includeSelectedRefs) return []
+    if (selectedKeys.length) {
+      return store.hits.filter((hit) => selectedSet.has(hitKey(hit)))
+    }
+    return activeHit ? [activeHit] : []
+  }
+
+  async function handoff(providerId?: string): Promise<void> {
+    handoffMenuOpen = false
+    const packet = buildHandoffPacket(inputValue, resolvedPlan, handoffHits())
+    const prompt = buildHandoffPrompt(packet)
+    const configured = providerId
+      ?? (settings.smartLookup.handoff.defaultProvider === 'ask'
+        ? ''
+        : settings.smartLookup.handoff.defaultProvider)
+    const provider = handoffAgents.find((agent) => agent.id === configured)
+    if (!provider) {
+      await copyText(prompt)
+      handoffError = t('smartSearch.handoffCopied')
+      appendActivity('handoff', 'success', handoffError)
+      return
+    }
+    handoffBusy = true
+    handoffError = ''
+    appendActivity('handoff', 'active', t('smartSearch.activityHandoffStart'))
+    try {
+      const invocationId = crypto.randomUUID()
+      const startHandoff = () => smartSearchApi.startHandoff(packet, provider.id, invocationId)
+      // The provider deduplicates this exact invocation if the first response was lost.
+      const start = supportsIdempotentInvocation(provider)
+        ? await retryIdempotentStart(startHandoff)
+        : await withTimeout(startHandoff(), 10_000, 'Agent 启动等待超时')
+      handoffRun = { provider: provider.id, runId: start.runId }
+      await openAgentWindow(provider.id)
+      appendActivity('handoff', 'success', t('smartSearch.activityHandoffDone'), { runId: start.runId })
+    } catch (error) {
+      handoffError = readableError(error)
+      appendActivity('handoff', 'warning', `${t('smartSearch.handoffFailed')} ${handoffError}`)
+    } finally {
+      handoffBusy = false
+    }
+  }
+
+  async function openAgentWindow(provider: string): Promise<void> {
+    await invoke('plugin_v2_open_window', { pluginId: provider, windowId: 'main' })
+  }
+
+  function openHandoffRun(): void {
+    if (handoffRun) void openAgentWindow(handoffRun.provider)
+  }
+
+  async function copyText(value: string): Promise<void> {
+    try {
+      const { writeText } = await import('@tauri-apps/plugin-clipboard-manager')
+      await writeText(value)
+    } catch {
+      await navigator.clipboard.writeText(value)
+    }
+  }
+
+  function simpleRef(hit: SearchHit): string {
+    return `${hit.path}:${hit.line}${hit.lineEnd > hit.line ? `-${hit.lineEnd}` : ''}`
+  }
+
+  function markdownRef(hit: SearchHit): string {
+    const title = hit.breadcrumb || basename(hit.path)
+    const anchor = hit.lineEnd > hit.line ? `L${hit.line}-L${hit.lineEnd}` : `L${hit.line}`
+    return `[${title}](${hit.path}#${anchor})`
+  }
+
+  function selectHit(event: MouseEvent, hit: SearchHit): void {
+    const key = hitKey(hit)
+    const orderedKeys = flatVisibleHits.map(hitKey)
+    selectedKeys = chooseResultKeys(orderedKeys, selectedKeys, key, rangeAnchor, {
+      toggle: event.metaKey || event.ctrlKey,
+      range: event.shiftKey,
+    })
+    if (!event.shiftKey || !rangeAnchor) rangeAnchor = key
+    activeKey = key
+    summaryText = ''
+    summaryError = ''
+  }
+
+  function removeKeys(keys: string[]): void {
+    const candidates = keys.filter((key) => store.hits.some((hit) => hitKey(hit) === key))
+    if (!candidates.length) return
+    removedKeys = addRemovedKeys(removedKeys, candidates)
+    lastRemoved = candidates
+    selectedKeys = []
+    if (activeKey && candidates.includes(activeKey)) activeKey = null
+  }
+
+  function undoRemove(): void {
+    removedKeys = restoreRemovedKeys(removedKeys, lastRemoved)
+    selectedKeys = [...lastRemoved]
+    activeKey = lastRemoved[0] ?? null
+    lastRemoved = []
+  }
+
+  function onResultsKeydown(event: KeyboardEvent, hit: SearchHit): void {
+    if (isImeKey(event) || event.target !== event.currentTarget) return
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
+      event.preventDefault()
+      selectedKeys = flatVisibleHits.map(hitKey)
+      activeKey = hitKey(hit)
+      rangeAnchor = activeKey
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      void openHit(hit, event.metaKey || event.ctrlKey)
+    } else if ((event.key === 'Delete' || event.key === 'Backspace') && selectedKeys.length) {
+      event.preventDefault()
+      removeKeys(selectedKeys)
+    }
+  }
+
+  async function openHit(hit: SearchHit, keepSearchWindow = false): Promise<void> {
+    const preview = previewLine(hit.text, highlightTerms)
+    navigationError = ''
+    try {
+      await invoke('editor_show_and_reveal_search_hit', {
+        path: hit.absPath,
+        line: Math.max(1, hit.line + preview.line),
+        anchor: preview.text || hit.breadcrumb || basename(hit.path),
+      })
+      if (!keepSearchWindow) await invoke('hide_smart_search_window')
+    } catch {
+      navigationError = t('smartSearch.staleNavigation')
+    }
+  }
+
+  function displayLine(hit: SearchHit) {
+    return previewLine(hit.text, highlightTerms)
+  }
+
+  function basename(path: string): string {
+    return path.slice(path.lastIndexOf('/') + 1)
   }
 
   function groupLabel(group: HitGroup): string {
@@ -459,481 +991,149 @@
     return group.kind === 'derivedType' ? `derived:${group.conceptType}` : group.kind
   }
 
-  function displayLine(hit: SearchHit, query = store.query || inputValue) {
-    return previewLine(hit.text, parseHighlightTerms(query))
+  function dateKey(hit: SearchHit): string {
+    return hit.docDate?.slice(0, 7) || t('smartSearch.dateUnknown')
   }
 
-  function basename(path: string): string {
-    return path.slice(path.lastIndexOf('/') + 1)
+  function dateGroups(): Array<{ key: string; hits: SearchHit[] }> {
+    const result: Array<{ key: string; hits: SearchHit[] }> = []
+    for (const hit of visibleHits) {
+      const key = dateKey(hit)
+      let group = result.find((entry) => entry.key === key)
+      if (!group) {
+        group = { key, hits: [] }
+        result.push(group)
+      }
+      group.hits.push(hit)
+    }
+    return result
+  }
+
+  function useDateGrouping(): boolean {
+    return settings.smartLookup.results.groupBy === 'date'
+      || (settings.smartLookup.results.groupBy === 'auto'
+        && resolvedPlan !== null
+        && resolvedPlan.sort !== 'relevance')
   }
 
   function relevanceLabel(reason: SmartRelevanceReason): string {
     switch (reason) {
       case 'exact_page': return 'Wiki'
-      case 'strict_query': return '精确'
-      case 'exact_phrase': return '短语'
-      case 'filename_match': return '文件名'
-      case 'breadcrumb_match': return '标题'
-      case 'multiple_queries': return '多路命中'
-      case 'relaxed_query': return '相关'
+      case 'strict_query': return t('smartSearch.reasonExact')
+      case 'exact_phrase': return t('smartSearch.reasonPhrase')
+      case 'filename_match': return t('smartSearch.reasonFilename')
+      case 'breadcrumb_match': return t('smartSearch.reasonHeading')
+      case 'multiple_queries': return t('smartSearch.reasonMultiple')
+      case 'relaxed_query': return t('smartSearch.reasonRelated')
     }
   }
 
   function relevanceReasons(hit: SearchHit): SmartRelevanceReason[] {
-    return (hit as SearchHit & { relevanceReasons?: SmartRelevanceReason[] }).relevanceReasons ?? []
+    return (hit as SmartSearchHit).relevanceReasons ?? []
   }
 
-  function selectHit(event: MouseEvent, hit: SearchHit): void {
-    const key = hitKey(hit)
-    const orderedKeys = flatVisibleHits.map(hitKey)
-    selectedKeys = chooseResultKeys(orderedKeys, selectedKeys, key, rangeAnchor, {
-      toggle: event.metaKey || event.ctrlKey,
-      range: event.shiftKey,
-    })
-    if (!event.shiftKey || !rangeAnchor) rangeAnchor = key
-    activeKey = key
+  function planWarnings(): string[] {
+    return [
+      ...(resolvedPlan?.unsupportedConstraints ?? []).map((value) => `${t('smartSearch.unsupported')}: ${value}`),
+      ...(resolvedPlan?.ambiguities ?? []).map((value) => `${t('smartSearch.ambiguous')}: ${value}`),
+    ].slice(0, 6)
   }
 
-  function removeKeys(keys: string[]): void {
-    const candidates = keys.filter((key) => store.hits.some((hit) => hitKey(hit) === key))
-    if (!candidates.length) return
-    removedKeys = addRemovedKeys(removedKeys, candidates)
-    lastRemoved = candidates
-    selectedKeys = []
-    if (activeKey && candidates.includes(activeKey)) activeKey = null
-  }
-
-  function removeSelected(): void {
-    removeKeys(selectedKeys)
-  }
-
-  function undoRemove(): void {
-    removedKeys = restoreRemovedKeys(removedKeys, lastRemoved)
-    selectedKeys = [...lastRemoved]
-    activeKey = lastRemoved[0] ?? null
-    lastRemoved = []
-  }
-
-  function onResultsKeydown(event: KeyboardEvent, hit: SearchHit): void {
-    if (isImeKey(event)) return
-    if (event.target !== event.currentTarget) return
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
-      event.preventDefault()
-      selectedKeys = flatVisibleHits.map(hitKey)
-      activeKey = hitKey(hit)
-      rangeAnchor = activeKey
-    } else if (event.key === 'Enter') {
-      event.preventDefault()
-      void openHit(hit, store.query || inputValue, event.metaKey || event.ctrlKey)
-    } else if ((event.key === 'Delete' || event.key === 'Backspace') && selectedKeys.length) {
-      event.preventDefault()
-      removeSelected()
-    }
-  }
-
-  async function openHit(
-    hit: SearchHit,
-    query = store.query || inputValue,
-    keepSearchWindow = false,
-  ): Promise<void> {
-    const line = displayLine(hit, query)
-    navigationError = ''
-    try {
-      await invoke('editor_show_and_reveal_search_hit', {
-        path: hit.absPath,
-        line: hit.line + line.line,
-        anchor: line.text || hit.text,
-      })
-      if (!keepSearchWindow) await invoke('hide_smart_search_window')
-    } catch (error) {
-      navigationError = error instanceof Error ? error.message : String(error)
-    }
-  }
-
-  function newId(): string {
-    return typeof crypto?.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`
-  }
-
-  function parsePlan(content: string): unknown {
-    const trimmed = content.trim()
-    if (!trimmed || trimmed.startsWith('```')) {
-      throw new Error('Agent 没有返回有效的 SearchPlanV1 JSON')
-    }
-    try {
-      return JSON.parse(trimmed)
-    } catch {
-      throw new Error('Agent 返回的 SearchPlanV1 不是有效 JSON')
-    }
-  }
-
-  function searchTelemetry(result: PlannedSearchResponse): SearchPlanTelemetry {
-    return {
-      total: result.search.hits.length,
-      distinctDocuments: new Set(result.search.hits.map((hit) => hit.path)).size,
-      truncated: result.search.truncated,
-      subqueries: result.search.subqueries.map((query) => ({
-        id: query.id,
-        purpose: query.kind === 'precision' || query.kind === 'recall' ? query.kind : 'unknown',
-        hitCount: query.hitCount,
-        executed: query.executed,
-        truncated: query.truncated,
-      })),
-    }
-  }
-
-  async function runPlannedSearch(
-    provider: string,
-    query: string,
-    referenceTime: string,
-    timezone: string,
-    locale: string,
-    lockedFilters: Record<string, unknown>,
-    modelSelector: ModelSelector,
-    attempt: number,
-  ): Promise<PlannedSearchResponse> {
-    answerPhase = 'planning'
-    currentStage = 'plan'
-    appendActivity('plan', 'active', t('smartSearch.activityPlanStart'))
-    const planPrompt = buildSearchPlanPrompt({
-      mode: 'plan', question: query, referenceTime, timezone, locale, lockedFilters,
-    })
-    let rawPlan = ''
-    let baselinePlan: unknown
-    for (let plannerAttempt = 0; plannerAttempt < 2; plannerAttempt += 1) {
-      const attemptPrompt = plannerAttempt === 0
-        ? planPrompt
-        : `${planPrompt}\n\nRETRY: The previous response was not valid standalone JSON. Return exactly one SearchPlanV1 JSON object with no prose or code fence.`
-      const planStart = await startAgentTask(
-        provider, SEARCH_PLAN_TASK, attemptPrompt, modelSelector,
-      )
-      planRunId = planStart.runId
-      planModel = planStart.resolvedModel ?? planModel
-      appendActivity('plan', 'active', t('smartSearch.activityAgentStarted', {
-        model: planStart.resolvedModel ?? t('smartSearch.modelFast'),
-      }), { runId: planStart.runId })
-      const planResult = await pollAgentTask(provider, SEARCH_PLAN_TASK, planStart.runId, (progress) => {
-        appendAgentProgress('plan', planStart.runId, attempt, progress)
-      }, pollingOptions('plan', planStart.runId, attempt))
-      if (attempt !== answerAttempt) throw new DOMException('superseded', 'AbortError')
-      rawPlan = planResult.content.trim()
-      try {
-        baselinePlan = parsePlan(rawPlan)
-        appendActivity('plan', 'success', t('smartSearch.activityPlanReady'), { runId: planStart.runId })
-        break
-      } catch (error) {
-        if (plannerAttempt === 1) throw error
-        appendActivity('plan', 'warning', t('smartSearch.activityPlanRetry'), { runId: planStart.runId })
-      }
-    }
-    answerPhase = 'searching'
-    currentStage = 'search'
-    appendActivity('search', 'active', t('smartSearch.activitySearchStart'))
-    let planned = await retryRead('search', planRunId, attempt, () => smartSearchApi.plannedSearch(
-      query, baselinePlan!, referenceTime, timezone, { deep: true, timeoutMs: DEEP_TIMEOUT_MS },
-    ))
-    appendActivity('search', planned.search.truncated ? 'warning' : 'success',
-      planned.search.truncated
-        ? t('smartSearch.activitySearchPartial', { n: planned.search.hits.length })
-        : t('smartSearch.activitySearchDone', { n: planned.search.hits.length }),
-    )
-
-    const telemetry = searchTelemetry(planned)
-    if (shouldTune(telemetry)) {
-      answerPhase = 'tuning'
-      currentStage = 'tune'
-      appendActivity('tune', 'active', t('smartSearch.activityTuneStart'))
-      try {
-        const tuneStart = await startAgentTask(
-          provider,
-          SEARCH_PLAN_TASK,
-          buildSearchPlanPrompt({
-            mode: 'tune', question: query, referenceTime, timezone, locale, lockedFilters,
-            previousPlan: rawPlan, resolvedPlan: planned.resolvedPlan, telemetry,
-          }),
-          modelSelector,
-        )
-        tuneRunId = tuneStart.runId
-        planModel = tuneStart.resolvedModel ?? planModel
-        appendActivity('tune', 'active', t('smartSearch.activityAgentStarted', {
-          model: tuneStart.resolvedModel ?? planModel ?? t('smartSearch.modelFast'),
-        }), { runId: tuneStart.runId })
-        const tuned = await pollAgentTask(provider, SEARCH_PLAN_TASK, tuneStart.runId, (progress) => {
-          appendAgentProgress('tune', tuneStart.runId, attempt, progress)
-        }, pollingOptions('tune', tuneStart.runId, attempt))
-        rawPlan = tuned.content.trim()
-        answerPhase = 'searching'
-        currentStage = 'search'
-        appendActivity('search', 'active', t('smartSearch.activityTunedSearchStart'))
-        planned = await retryRead('search', tuneStart.runId, attempt, () => smartSearchApi.plannedSearch(
-          query, parsePlan(rawPlan), referenceTime, timezone,
-          { deep: true, timeoutMs: DEEP_TIMEOUT_MS, baselinePlan: baselinePlan! },
-        ))
-        appendActivity('search', planned.search.truncated ? 'warning' : 'success',
-          planned.search.truncated
-            ? t('smartSearch.activitySearchPartial', { n: planned.search.hits.length })
-            : t('smartSearch.activitySearchDone', { n: planned.search.hits.length }),
-        )
-      } catch (error) {
-        if (planned.search.hits.length === 0) throw error
-        appendActivity('tune', 'warning', t('smartSearch.activityTuneFallback'))
-      }
-    }
-    return planned
-  }
-
-  async function runAnswerTask(
-    provider: string,
-    context: AnswerContext,
-    selector: ModelSelector,
-    modelHint: string | null,
-    attempt: number,
-  ): Promise<void> {
-    const prompt = buildSearchAnswerPrompt('short', context)
-    answerPhase = 'running'
-    currentStage = 'answer'
-    appendActivity('answer', 'active', t('smartSearch.activityAnswerStart'))
-    answerProvider = provider
-    answerSelector = selector
-    answerContext = context
-    const answerStart = await startAgentTask(provider, SEARCH_ANSWER_TASK, prompt, selector)
-    answerModel = answerStart.resolvedModel ?? modelHint
-    answerRunId = answerStart.runId
-    appendActivity('answer', 'active', t('smartSearch.activityAgentStarted', {
-      model: answerModel ?? t('smartSearch.modelDefault'),
-    }), { runId: answerStart.runId })
-    const result = await pollAgentTask(provider, SEARCH_ANSWER_TASK, answerStart.runId, (progress) => {
-      appendAgentProgress('answer', answerStart.runId, attempt, progress)
-    }, pollingOptions('answer', answerStart.runId, attempt))
-    if (attempt !== answerAttempt) throw new DOMException('superseded', 'AbortError')
-    const content = result.content.trim()
-    if (!content) throw new Error(t('smartSearch.answerError'))
-    const unknownCitations = unknownAnswerCitations(content, context.sources)
-    if (unknownCitations.length) {
-      throw new Error(`Agent 返回了未知引用：${unknownCitations.join(', ')}`)
-    }
-    answer = content
-    answerId = newId()
-    answerPhase = 'done'
-    failedStage = null
-    appendActivity('answer', 'success', t('smartSearch.activityAnswerDone'), { runId: answerStart.runId })
-  }
-
-  async function askAgent(): Promise<void> {
-    const query = inputValue.trim()
-    const provider = selectedProvider
-    const harness = agents.find((agent) => agent.id === provider)?.harness
-    const planSelector = selectorForPreference(planModelPreference)
-    const selectedAnswerSelector = selectorForPreference(answerModelPreference)
-    const answerModelHint = resolvedModelHint(answerModelPreference, harness)
-    const referenceTime = new Date().toISOString()
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-    const locale = navigator.language || 'en'
-    const removedAtStart = new Set(removedKeys)
-    if (!query || !provider || currentResultsExhausted || answerBusy || documentBusy) return
-    cancelTimers()
-    void expandWindow()
-    const attempt = ++answerAttempt
-    answerPhase = 'preparing'
-    answerError = ''
-    resetWorkflow()
-    answer = ''
-    answerContext = null
-    answerRunId = ''
-    answerModel = null
-    feedback = null
-    feedbackStatus = ''
-    archiveReceipt = null
-    planRunId = ''
-    tuneRunId = ''
-    planModel = null
-    resolvedPlan = null
-    try {
-      const planContext = await smartSearchApi.planContext(query)
-      const planned = await runPlannedSearch(
-        provider, query, referenceTime, timezone, locale, planContext.lockedFilters,
-        planSelector, attempt,
-      )
-      if (attempt !== answerAttempt) return
-      store.apply(query, planned.search)
-      authoritativeResults = true
-      resolvedPlan = planned.resolvedPlan
-      const availableHits = planned.search.hits.filter((hit) => !removedAtStart.has(hitKey(hit)))
-      const selectedSources = selectContextSources(availableHits)
-      if (!selectedSources.length) throw new Error(t('smartSearch.noContext'))
-      answerPhase = 'preparing'
-      currentStage = 'freeze'
-      appendActivity('freeze', 'active', t('smartSearch.activityFreezeStart', { n: selectedSources.length }))
-      const sources = await smartSearchApi.freezeSources(selectedSources)
-      if (attempt !== answerAttempt) return
-      appendActivity('freeze', 'success', t('smartSearch.activityFreezeDone', { n: sources.length }))
-
-      answerPhase = 'preparing'
-      currentStage = 'memory'
-      appendActivity('memory', 'active', t('smartSearch.activityMemoryStart'))
-      const memory = await smartSearchApi.memoryContext(provider, answerModelHint).catch((error) => {
-        appendActivity('memory', 'warning', t('smartSearch.activityMemorySkipped'))
-        return {
-          available: false,
-          selected: [],
-          excludedSummary: {},
-          manifestId: null,
-          error: error instanceof Error ? error.message : String(error),
+  function planFilterChips(): string[] {
+    const chips: string[] = []
+    const seen = new Set<string>()
+    for (const query of resolvedPlan?.queries ?? []) {
+      for (const [label, key] of [
+        ['path', 'paths'], ['tag', 'tags'], ['type', 'types'], ['ext', 'extensions'],
+        ['origin', 'origins'], ['page', 'linkedPages'],
+      ] as const) {
+        const values = query.filters[key]
+        if (!Array.isArray(values)) continue
+        for (const value of values) {
+          if (typeof value !== 'string' || !value || seen.has(`${label}:${value}`)) continue
+          seen.add(`${label}:${value}`)
+          chips.push(`${label}:${value}`)
+          if (chips.length >= 12) return chips
         }
-      })
-      if (attempt !== answerAttempt) return
-      if (!memory.error) {
-        appendActivity('memory', 'success', t('smartSearch.activityMemoryDone', { n: memory.selected.length }))
       }
-      const context: AnswerContext = {
-        query,
-        queryId: newId(),
-        sources,
-        memory: memory.selected,
-        memoryManifestId: memory.manifestId,
-      }
-      await runAnswerTask(provider, context, selectedAnswerSelector, answerModelHint, attempt)
-    } catch (error) {
-      if (attempt !== answerAttempt) return
-      answerPhase = 'error'
-      failedStage = currentStage
-      answerError = readableError(error)
-      appendActivity(currentStage, 'error', t('smartSearch.activityFailed', { error: answerError }), {
-        runId: error instanceof AgentTaskError ? error.runId : undefined,
-      })
     }
+    return chips
   }
 
-  async function retryAnswer(): Promise<void> {
-    if (!answerContext || !answerProvider || answerBusy || documentBusy) return
-    const context = answerContext
-    const provider = answerProvider
-    const attempt = ++answerAttempt
-    answerError = ''
-    failedStage = null
-    appendActivity('answer', 'warning', t('smartSearch.activityUserRetry'))
-    try {
-      await runAnswerTask(provider, context, answerSelector, answerModel, attempt)
-    } catch (error) {
-      if (attempt !== answerAttempt) return
-      answerPhase = 'error'
-      failedStage = 'answer'
-      answerError = readableError(error)
-      appendActivity('answer', 'error', t('smartSearch.activityFailed', { error: answerError }), {
-        runId: error instanceof AgentTaskError ? error.runId : undefined,
-      })
+  function changePlannerProvider(event: Event): void {
+    settings.smartLookup.planner.provider = (event.currentTarget as HTMLSelectElement).value
+    void saveSettings()
+  }
+
+  function changePlannerModel(event: Event): void {
+    if (!plannerAgent) return
+    settings.smartLookup.planner.modelByProvider[plannerAgent.id]
+      = (event.currentTarget as HTMLSelectElement).value as ModelPreference
+    void saveSettings()
+  }
+
+  function changeSummaryStyle(event: Event): void {
+    settings.smartLookup.summary.style
+      = (event.currentTarget as HTMLSelectElement).value as 'sentence' | 'bullets'
+    summaryText = ''
+    void saveSettings()
+  }
+
+  function changeSummaryProvider(event: Event): void {
+    settings.smartLookup.summary.provider = (event.currentTarget as HTMLSelectElement).value
+    summaryText = ''
+    void saveSettings()
+  }
+
+  function changeSummaryModel(event: Event): void {
+    if (!summaryAgent) return
+    settings.smartLookup.summary.modelByProvider[summaryAgent.id]
+      = (event.currentTarget as HTMLSelectElement).value as ModelPreference
+    summaryText = ''
+    void saveSettings()
+  }
+
+  function saveBoundedSeconds(
+    event: Event,
+    currentMs: number,
+    minSeconds: number,
+    maxSeconds: number,
+    apply: (valueMs: number) => void,
+  ): void {
+    const input = event.currentTarget as HTMLInputElement
+    const seconds = Number(input.value)
+    if (!Number.isInteger(seconds) || seconds < minSeconds || seconds > maxSeconds) {
+      input.value = String(currentMs / 1_000)
+      return
     }
+    apply(seconds * 1_000)
+    void saveSettings()
   }
 
-  async function openCitation(citation: string): Promise<void> {
-    if (!answerContext) return
-    const hit = sourceForCitation(answerContext.sources, citation)
-    if (hit) await openHit(hit, answerContext.query)
-  }
-
-  async function likeAnswer(): Promise<void> {
-    if (!answerContext || !answer || feedbackBusy) return
-    feedbackBusy = true
-    feedbackStatus = ''
-    try {
-      archiveReceipt = await smartSearchApi.archiveAnswer({
-        answerId,
-        query: answerContext.query,
-        answer,
-        provider: answerProvider,
-        model: answerModel,
-        runId: answerRunId,
-        memoryManifestId: answerContext.memoryManifestId,
-        sources: answerContext.sources,
-      })
-      feedback = 'helpful'
-      feedbackStatus = t('smartSearch.archived')
-    } catch (error) {
-      feedbackStatus = error instanceof Error ? error.message : String(error)
-    } finally {
-      feedbackBusy = false
+  function saveBoundedInteger(
+    event: Event,
+    current: number,
+    min: number,
+    max: number,
+    apply: (value: number) => void,
+  ): void {
+    const input = event.currentTarget as HTMLInputElement
+    const value = Number(input.value)
+    if (!Number.isInteger(value) || value < min || value > max) {
+      input.value = String(current)
+      return
     }
+    apply(value)
+    summaryText = ''
+    void saveSettings()
   }
 
-  async function dislikeAnswer(reason: string | null = null): Promise<void> {
-    if (!answerId || feedbackBusy) return
-    feedbackBusy = true
-    feedbackStatus = ''
-    try {
-      await smartSearchApi.recordFeedback(answerId, 'unhelpful', reason)
-      feedback = 'unhelpful'
-      feedbackStatus = t('smartSearch.feedbackSaved')
-    } catch (error) {
-      feedbackStatus = error instanceof Error ? error.message : String(error)
-    } finally {
-      feedbackBusy = false
-    }
-  }
-
-  function showDocumentDialog(): void {
-    if (!answerContext) return
-    documentTitle = answerContext.query.replace(/\s+/g, ' ').slice(0, 72)
-    documentError = ''
-    documentDialog = true
-  }
-
-  async function generateDocument(): Promise<void> {
-    if (!answerContext || !documentTitle.trim() || documentBusy) return
-    documentBusy = true
-    documentError = ''
-    appendActivity('document', 'active', t('smartSearch.activityDocumentStart'))
-    try {
-      // A document is a new Agent run. Re-authorize long-term memory instead of
-      // carrying an earlier policy decision across runs.
-      const memory = await smartSearchApi.memoryContext(answerProvider, answerModel).catch((error) => ({
-        available: false,
-        selected: [],
-        excludedSummary: {},
-        manifestId: null,
-        error: error instanceof Error ? error.message : String(error),
-      }))
-      const documentContext: AnswerContext = {
-        ...answerContext,
-        memory: memory.selected,
-        memoryManifestId: memory.manifestId,
-      }
-      const prompt = buildSearchAnswerPrompt('document', documentContext, answer)
-      const start = await startAgentTask(
-        answerProvider, SEARCH_ANSWER_TASK, prompt, answerSelector,
-      )
-      appendActivity('document', 'active', t('smartSearch.activityAgentStarted', {
-        model: start.resolvedModel ?? answerModel ?? t('smartSearch.modelDefault'),
-      }), { runId: start.runId })
-      const result = await pollAgentTask(answerProvider, SEARCH_ANSWER_TASK, start.runId, (progress) => {
-        appendAgentProgress('document', start.runId, answerAttempt, progress)
-      }, pollingOptions('document', start.runId, answerAttempt))
-      const receipt = await smartSearchApi.writeDocument({
-        title: documentTitle.trim(),
-        query: documentContext.query,
-        content: result.content.trim(),
-        provider: answerProvider,
-        model: start.resolvedModel ?? answerModel,
-        runId: start.runId,
-        memoryManifestId: documentContext.memoryManifestId,
-        sources: documentContext.sources,
-      })
-      documentDialog = false
-      await invoke('editor_show_and_reveal_search_hit', {
-        path: receipt.path,
-        line: 1,
-        anchor: documentTitle.trim(),
-      })
-      await invoke('hide_smart_search_window')
-      appendActivity('document', 'success', t('smartSearch.activityDocumentDone'), { runId: start.runId })
-    } catch (error) {
-      documentError = readableError(error)
-      appendActivity('document', 'error', t('smartSearch.activityFailed', { error: documentError }), {
-        runId: error instanceof AgentTaskError ? error.runId : undefined,
-      })
-    } finally {
-      documentBusy = false
-    }
+  function setBoolean(path: 'planner' | 'deep' | 'summary' | 'refs', checked: boolean): void {
+    if (path === 'planner') settings.smartLookup.planner.enabled = checked
+    if (path === 'deep') settings.smartLookup.results.autoDeepOnZero = checked
+    if (path === 'summary') settings.smartLookup.summary.enabled = checked
+    if (path === 'refs') settings.smartLookup.handoff.includeSelectedRefs = checked
+    void saveSettings()
   }
 </script>
 
@@ -945,7 +1145,7 @@
   void hideWindow()
 }} />
 
-<main class:expanded={store.route !== null || answerPhase !== 'idle'}>
+<main class:expanded={store.route !== null || phase !== 'idle'}>
   <section class="command-bar" aria-label={t('smartSearch.windowTitle')}>
     <span class="search-icon" aria-hidden="true">⌕</span>
     <textarea
@@ -954,88 +1154,177 @@
       rows="1"
       class="query-input"
       placeholder={t('smartSearch.placeholder')}
-      disabled={answerPhase === 'preparing'}
       oninput={onInput}
       onkeydown={onInputKeydown}
-      oncompositionstart={() => { composing = true; inputIme.start(); cancelTimers() }}
+      oncompositionstart={() => { composing = true; inputIme.start(); cancelTimer() }}
       oncompositionend={onCompositionEnd}
       onblur={() => inputIme.reset()}
       aria-label={t('smartSearch.placeholder')}
     ></textarea>
-    <select class="agent-select" value={selectedProvider} disabled={answerBusy} onchange={chooseProvider} aria-label="Agent">
-      {#if usableAgents.length === 0}
-        <option value="">Agent</option>
-      {/if}
-      {#each usableAgents as agent (agent.id)}
-        <option value={agent.id}>{agent.harness?.harness || agent.name}</option>
-      {/each}
-    </select>
-    <button class="ask-button" disabled={!canAsk} onclick={() => void askAgent()}>
-      {answerBusy ? '…' : t('smartSearch.ask')}
+    <button
+      class="settings-button"
+      aria-label={t('smartSearch.settings')}
+      aria-expanded={settingsOpen}
+      onclick={() => { settingsOpen = !settingsOpen; handoffMenuOpen = false }}
+    >⚙</button>
+    <button class="lookup-button" disabled={!canLookup} onclick={() => void runSmartLookup()}>
+      {lookupBusy ? '…' : t('smartSearch.lookup')}
       <kbd>↵</kbd>
     </button>
   </section>
   <div class="input-hint">
     <span>{t('smartSearch.inputHint')}</span>
-    {#if selectedAgent}
-      <button
-        class="model-summary"
-        aria-expanded={modelSettingsOpen}
-        onclick={() => { modelSettingsOpen = !modelSettingsOpen }}
-      >
-        {t('smartSearch.modelStrategy')}: {modelPreferenceLabel(planModelPreference)} / {modelPreferenceLabel(answerModelPreference)}
-      </button>
+    {#if plannerAgent}
+      <span>{plannerAgent.harness?.harness} · {plannerModel ?? resolvedModelHint(plannerPreference(), plannerAgent.harness) ?? t('smartSearch.modelFast')}</span>
+    {:else if ready}
+      <span>{t('smartSearch.localAvailable')}</span>
     {/if}
   </div>
 
-  {#if modelSettingsOpen && selectedAgent}
-    <div class="menu-panel model-policy-panel" role="dialog" aria-label={t('smartSearch.modelStrategy')}>
-      <label class="menu-row model-policy-row">
-        <span>
-          <strong>{t('smartSearch.planTuneModel')}</strong>
-          <small>{t('smartSearch.planTuneModelHint')}</small>
-        </span>
-        <select value={planModelPreference} onchange={(event) => changeModelPreference('plan', event)}>
-          <option value="profile:fast">{t('smartSearch.modelFast')}</option>
-          <option value="profile:default">{t('smartSearch.modelDefault')}</option>
-          {#each exactModelPreferences as preference}
-            <option value={preference}>{modelPreferenceLabel(preference)}</option>
-          {/each}
+  {#if settingsOpen}
+    <div class="menu-panel lookup-settings" role="dialog" aria-label={t('smartSearch.settings')}>
+      <label class="menu-row setting-row">
+        <span><strong>{t('smartSearch.smartUnderstanding')}</strong><small>{t('smartSearch.smartUnderstandingHint')}</small></span>
+        <input type="checkbox" checked={settings.smartLookup.planner.enabled} onchange={(event) => setBoolean('planner', event.currentTarget.checked)} />
+      </label>
+      <label class="menu-row setting-row">
+        <span>{t('smartSearch.plannerProvider')}</span>
+        <select value={settings.smartLookup.planner.provider} onchange={changePlannerProvider}>
+          <option value="auto">{t('smartSearch.auto')}</option>
+          {#each plannerAgents as agent (agent.id)}<option value={agent.id}>{agent.harness?.harness || agent.name}</option>{/each}
         </select>
       </label>
-      <label class="menu-row model-policy-row">
-        <span>
-          <strong>{t('smartSearch.answerModel')}</strong>
-          <small>{t('smartSearch.answerModelHint')}</small>
-        </span>
-        <select value={answerModelPreference} onchange={(event) => changeModelPreference('answer', event)}>
-          <option value="profile:default">{t('smartSearch.modelDefault')}</option>
-          <option value="profile:fast">{t('smartSearch.modelFast')}</option>
-          {#each exactModelPreferences as preference}
-            <option value={preference}>{modelPreferenceLabel(preference)}</option>
-          {/each}
+      {#if plannerAgent}
+        <label class="menu-row setting-row">
+          <span>{t('smartSearch.plannerModel')}</span>
+          <select value={plannerPreference()} onchange={changePlannerModel}>
+            {#if plannerAgent.harness?.capabilities?.model_routing?.profiles?.fast?.available}
+              <option value="profile:fast">{t('smartSearch.modelFast')}</option>
+            {/if}
+            {#if plannerAgent.harness?.capabilities?.model_routing?.profiles?.default?.available}
+              <option value="profile:default">{t('smartSearch.modelDefault')}</option>
+            {/if}
+            {#each selectableModelPreferences(plannerAgent.harness) as preference}<option value={preference}>{preference.slice(6)}</option>{/each}
+          </select>
+        </label>
+      {/if}
+      <label class="menu-row setting-row">
+        <span>{t('smartSearch.resultLimit')}</span>
+        <select value={settings.smartLookup.results.limit} onchange={(event) => {
+          settings.smartLookup.results.limit = Number(event.currentTarget.value) as 20 | 50 | 100; void saveSettings()
+        }}><option value="20">20</option><option value="50">50</option><option value="100">100</option></select>
+      </label>
+      <label class="menu-row setting-row">
+        <span>{t('smartSearch.groupBy')}</span>
+        <select value={settings.smartLookup.results.groupBy} onchange={(event) => {
+          settings.smartLookup.results.groupBy = event.currentTarget.value as 'auto' | 'source' | 'date'; void saveSettings()
+        }}>
+          <option value="auto">{t('smartSearch.auto')}</option>
+          <option value="source">{t('smartSearch.groupSource')}</option>
+          <option value="date">{t('smartSearch.groupDate')}</option>
         </select>
       </label>
+      <label class="menu-row setting-row">
+        <span>{t('smartSearch.autoDeep')}</span>
+        <input type="checkbox" checked={settings.smartLookup.results.autoDeepOnZero} onchange={(event) => setBoolean('deep', event.currentTarget.checked)} />
+      </label>
+      <label class="menu-row setting-row">
+        <span>{t('smartSearch.quickSummary')}</span>
+        <input type="checkbox" checked={settings.smartLookup.summary.enabled} onchange={(event) => setBoolean('summary', event.currentTarget.checked)} />
+      </label>
+      <label class="menu-row setting-row">
+        <span>{t('smartSearch.summaryStyle')}</span>
+        <select value={settings.smartLookup.summary.style} onchange={changeSummaryStyle}>
+          <option value="bullets">{t('smartSearch.summaryBullets')}</option>
+          <option value="sentence">{t('smartSearch.summarySentence')}</option>
+        </select>
+      </label>
+      <label class="menu-row setting-row">
+        <span>{t('smartSearch.includeRefs')}</span>
+        <input type="checkbox" checked={settings.smartLookup.handoff.includeSelectedRefs} onchange={(event) => setBoolean('refs', event.currentTarget.checked)} />
+      </label>
+      <details class="advanced-settings">
+        <summary>{t('smartSearch.advancedSettings')}</summary>
+        <label class="menu-row setting-row">
+          <span>{t('smartSearch.plannerTimeout')}</span>
+          <input type="number" min="3" max="15" step="1" value={settings.smartLookup.planner.timeoutMs / 1_000}
+            onchange={(event) => saveBoundedSeconds(event, settings.smartLookup.planner.timeoutMs, 3, 15, (value) => { settings.smartLookup.planner.timeoutMs = value })} />
+        </label>
+        <label class="menu-row setting-row">
+          <span>{t('smartSearch.deepTimeout')}</span>
+          <input type="number" min="1" max="5" step="1" value={settings.smartLookup.results.deepTimeoutMs / 1_000}
+            onchange={(event) => saveBoundedSeconds(event, settings.smartLookup.results.deepTimeoutMs, 1, 5, (value) => { settings.smartLookup.results.deepTimeoutMs = value })} />
+        </label>
+        <label class="menu-row setting-row">
+          <span>{t('smartSearch.summaryProvider')}</span>
+          <select value={settings.smartLookup.summary.provider} onchange={changeSummaryProvider}>
+            <option value="same_as_planner">{t('smartSearch.sameAsPlanner')}</option>
+            <option value="auto">{t('smartSearch.auto')}</option>
+            {#each summaryAgents as agent (agent.id)}<option value={agent.id}>{agent.harness?.harness || agent.name}</option>{/each}
+          </select>
+        </label>
+        {#if summaryAgent}
+          <label class="menu-row setting-row">
+            <span>{t('smartSearch.summaryModel')}</span>
+            <select value={summaryPreference()} onchange={changeSummaryModel}>
+              {#if summaryAgent.harness?.capabilities?.model_routing?.profiles?.fast?.available}
+                <option value="profile:fast">{t('smartSearch.modelFast')}</option>
+              {/if}
+              {#if summaryAgent.harness?.capabilities?.model_routing?.profiles?.default?.available}
+                <option value="profile:default">{t('smartSearch.modelDefault')}</option>
+              {/if}
+              {#each selectableModelPreferences(summaryAgent.harness) as preference}<option value={preference}>{preference.slice(6)}</option>{/each}
+            </select>
+          </label>
+        {/if}
+        <label class="menu-row setting-row">
+          <span>{t('smartSearch.summarySources')}</span>
+          <input type="number" min="1" max="6" step="1" value={settings.smartLookup.summary.sourceLimit}
+            onchange={(event) => saveBoundedInteger(event, settings.smartLookup.summary.sourceLimit, 1, 6, (value) => { settings.smartLookup.summary.sourceLimit = value })} />
+        </label>
+        <label class="menu-row setting-row">
+          <span>{t('smartSearch.summaryChars')}</span>
+          <input type="number" min="1000" max="6000" step="500" value={settings.smartLookup.summary.charLimit}
+            onchange={(event) => saveBoundedInteger(event, settings.smartLookup.summary.charLimit, 1000, 6000, (value) => { settings.smartLookup.summary.charLimit = value })} />
+        </label>
+        <label class="menu-row setting-row">
+          <span>{t('smartSearch.summaryTimeout')}</span>
+          <input type="number" min="5" max="30" step="1" value={settings.smartLookup.summary.timeoutMs / 1_000}
+            onchange={(event) => saveBoundedSeconds(event, settings.smartLookup.summary.timeoutMs, 5, 30, (value) => { settings.smartLookup.summary.timeoutMs = value })} />
+        </label>
+        <label class="menu-row setting-row">
+          <span>{t('smartSearch.handoffProvider')}</span>
+          <select value={settings.smartLookup.handoff.defaultProvider} onchange={(event) => {
+            settings.smartLookup.handoff.defaultProvider = event.currentTarget.value; void saveSettings()
+          }}>
+            <option value="ask">{t('smartSearch.askEveryTime')}</option>
+            {#each handoffAgents as agent (agent.id)}<option value={agent.id}>{agent.harness?.harness || agent.name}</option>{/each}
+          </select>
+        </label>
+      </details>
     </div>
   {/if}
 
   {#if resolvedPlan}
     <div class="plan-summary" aria-label={t('smartSearch.intelligentResults')}>
       {#if resolvedPlan.time?.after || resolvedPlan.time?.before}
-        <span>{resolvedPlan.time.after ?? '…'} – {resolvedPlan.time.before ?? '…'}</span>
+        <span>◷ {resolvedPlan.time.after ?? '…'} – {resolvedPlan.time.before ?? '…'}</span>
       {/if}
-      {#each resolvedTerms as term}
-        <span>{term}</span>
-      {/each}
+      {#each planFilterChips() as filter}<span>{filter}</span>{/each}
+      {#each resolvedTerms as term}<span>{term}</span>{/each}
       {#if resolvedPlan.sort !== 'relevance'}<span>{resolvedPlan.sort}</span>{/if}
+      {#each planWarnings() as warning}<span class="warning-chip">! {warning}</span>{/each}
     </div>
+  {:else if plannerWarning}
+    <div class="preview-warning">{plannerWarning}</div>
   {/if}
 
   {#if !ready}
     <div class="launch-state">…</div>
-  {:else if agentsError || usableAgents.length === 0}
-    <div class="agent-warning">{t('smartSearch.noAgents')}{agentsError ? ` ${agentsError}` : ''}</div>
+  {:else if agentsError}
+    <div class="agent-warning">{t('smartSearch.localAvailable')} · {agentsError}</div>
   {/if}
+  {#if modelWarning}<div class="agent-warning">{modelWarning}</div>{/if}
 
   {#if navigationError}
     <div class="navigation-error" role="alert">
@@ -1044,7 +1333,7 @@
     </div>
   {/if}
 
-  {#if store.route === null && answerPhase === 'idle'}
+  {#if store.route === null && phase === 'idle'}
     <div class="empty-launch">
       <div class="empty-mark">⌘</div>
       <p>{t('smartSearch.emptyPrompt')}</p>
@@ -1054,7 +1343,7 @@
       <aside class="results-pane" aria-label={t('smartSearch.results')}>
         <header class="pane-header">
           <strong>{authoritativeResults ? t('smartSearch.intelligentResults') : t('smartSearch.quickPreview')}</strong>
-          <span>{store.loading ? '…' : store.hits.length}</span>
+          <span>{store.loading ? '…' : t('smartSearch.returnedCount', { n: store.hits.length })}</span>
           <select bind:value={sourceFilter} aria-label={t('smartSearch.sourceAll')}>
             <option value="all">{t('smartSearch.sourceAll')}</option>
             <option value="human">{t('search.group.human')}</option>
@@ -1064,10 +1353,13 @@
           </select>
         </header>
 
+        {#if store.truncated}
+          <div class="partial-note">{t('smartSearch.partialResults', { n: store.hits.length })}</div>
+        {/if}
         {#if selectedKeys.length > 0}
           <div class="selection-bar">
             <span>{t('smartSearch.selectedCount', { n: selectedKeys.length })}</span>
-            <button onclick={removeSelected}>{t('smartSearch.removeSelected')}</button>
+            <button onclick={() => removeKeys(selectedKeys)}>{t('smartSearch.removeSelected')}</button>
           </div>
         {:else if removedKeys.length > 0}
           <div class="selection-bar removed-note">
@@ -1078,14 +1370,39 @@
 
         <div class="results-scroll" role="listbox" aria-multiselectable="true">
           {#if store.error}
-            <p class="state error"><strong>{t('smartSearch.searchError')}:</strong> {store.error}</p>
+            <p class="state error"><strong>{t('smartSearch.searchError')}:</strong> {readableError(store.error)}</p>
           {:else if store.loading && store.hits.length === 0}
             <div class="state"><span class="spinner"></span></div>
           {:else if store.route !== null && visibleHits.length === 0}
             <div class="state">
               <p>{removedKeys.length ? t('smartSearch.noContext') : t('search.noResults')}</p>
+              {#if store.deepAvailable || phase === 'no_results'}
+                <button class="deep-button" onclick={() => void runDeep()}>{t('smartSearch.expandSearch')}</button>
+              {/if}
               {#if removedKeys.length}<small>{t('smartSearch.notDeleted')}</small>{/if}
             </div>
+          {:else if useDateGrouping()}
+            {#each dateGroups() as dateGroup (dateGroup.key)}
+              <section class="result-group">
+                <h2>{dateGroup.key} <span>{dateGroup.hits.length}</span></h2>
+                {#each dateGroup.hits as hit (hitKey(hit))}
+                  {@const key = hitKey(hit)}
+                  {@const line = displayLine(hit)}
+                  <div class="result-row" class:selected={selectedSet.has(key)} class:active={activeKey === key}
+                    role="option" aria-selected={selectedSet.has(key)} tabindex="0"
+                    onclick={(event) => selectHit(event, hit)} ondblclick={() => void openHit(hit)}
+                    onkeydown={(event) => onResultsKeydown(event, hit)}>
+                    <span class="check" aria-hidden="true">{selectedSet.has(key) ? '✓' : ''}</span>
+                    <div class="result-copy">
+                      <div class="result-title"><strong>{basename(hit.path)}</strong>{#if hit.breadcrumb}<span>{hit.breadcrumb}</span>{/if}<small>:{hit.line + line.line}</small></div>
+                      <p>{#each highlightParts(line.text || hit.text.slice(0, 240), highlightTerms) as part}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>
+                      <div class="result-meta">{#each relevanceReasons(hit).slice(0, 2) as reason}<span>{relevanceLabel(reason)}</span>{/each}{#if hit.humanVerified}<span>✓ {t('search.humanVerified')}</span>{/if}</div>
+                    </div>
+                    <button class="remove-one" aria-label={t('smartSearch.removeSelected')} onclick={(event) => { event.stopPropagation(); removeKeys([key]) }}>×</button>
+                  </div>
+                {/each}
+              </section>
+            {/each}
           {:else}
             {#each groups as group (groupKey(group))}
               <section class="result-group">
@@ -1094,42 +1411,17 @@
                   {#each file.hits as hit (hitKey(hit))}
                     {@const key = hitKey(hit)}
                     {@const line = displayLine(hit)}
-                    <div
-                      class="result-row"
-                      class:selected={selectedSet.has(key)}
-                      class:active={activeKey === key}
-                      role="option"
-                      aria-selected={selectedSet.has(key)}
-                      tabindex="0"
-                      onclick={(event) => selectHit(event, hit)}
-                      ondblclick={() => void openHit(hit)}
-                      onkeydown={(event) => onResultsKeydown(event, hit)}
-                    >
+                    <div class="result-row" class:selected={selectedSet.has(key)} class:active={activeKey === key}
+                      role="option" aria-selected={selectedSet.has(key)} tabindex="0"
+                      onclick={(event) => selectHit(event, hit)} ondblclick={() => void openHit(hit)}
+                      onkeydown={(event) => onResultsKeydown(event, hit)}>
                       <span class="check" aria-hidden="true">{selectedSet.has(key) ? '✓' : ''}</span>
                       <div class="result-copy">
-                        <div class="result-title">
-                          <strong>{basename(file.path)}</strong>
-                          {#if hit.breadcrumb}<span>{hit.breadcrumb}</span>{/if}
-                          <small>:{hit.line + line.line}</small>
-                        </div>
-                        <p>
-                          {#each highlightParts(line.text || hit.text.slice(0, 180), highlightTerms) as part}
-                            {#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}
-                          {/each}
-                        </p>
-                        <div class="result-meta">
-                          {#each relevanceReasons(hit).slice(0, 2) as reason}
-                            <span>{relevanceLabel(reason)}</span>
-                          {/each}
-                          {#if hit.humanVerified}<span>✓ {t('search.humanVerified')}</span>{/if}
-                        </div>
+                        <div class="result-title"><strong>{basename(file.path)}</strong>{#if hit.breadcrumb}<span>{hit.breadcrumb}</span>{/if}<small>:{hit.line + line.line}</small></div>
+                        <p>{#each highlightParts(line.text || hit.text.slice(0, 240), highlightTerms) as part}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>
+                        <div class="result-meta">{#each relevanceReasons(hit).slice(0, 2) as reason}<span>{relevanceLabel(reason)}</span>{/each}{#if hit.humanVerified}<span>✓ {t('search.humanVerified')}</span>{/if}</div>
                       </div>
-                      <button
-                        class="remove-one"
-                        title={t('smartSearch.removeSelected')}
-                        aria-label={t('smartSearch.removeSelected')}
-                        onclick={(event) => { event.stopPropagation(); removeKeys([key]) }}
-                      >×</button>
+                      <button class="remove-one" aria-label={t('smartSearch.removeSelected')} onclick={(event) => { event.stopPropagation(); removeKeys([key]) }}>×</button>
                     </div>
                   {/each}
                 {/each}
@@ -1139,35 +1431,19 @@
         </div>
       </aside>
 
-      <article class="answer-pane" aria-label={t('smartSearch.answer')}>
-        <header class="pane-header answer-header">
-          <strong>{answerPhase === 'done' ? t('smartSearch.answer') : t('smartSearch.openEditor')}</strong>
-          {#if answerContext?.memoryManifestId}<span class="memory-chip">◈ {t('smartSearch.memoryUsed')}</span>{/if}
+      <article class="preview-pane" aria-label={t('smartSearch.currentResult')}>
+        <header class="pane-header preview-header">
+          <strong>{t('smartSearch.currentResult')}</strong>
+          {#if activeHit}<span>{activeHit.level}</span>{/if}
         </header>
 
         {#if workflowEntries.length > 0}
-          <section class="workflow-panel" aria-label={t('smartSearch.activityTitle')} aria-busy={answerBusy}>
-            <header class="workflow-header">
-              <span class:spinner={answerBusy} class="workflow-status-icon">{answerBusy ? '' : answerPhase === 'done' ? '✓' : '!'}</span>
-              <strong>{answerBusy ? phaseLabel() : t('smartSearch.activityTitle')}</strong>
-              {#if answerPhase === 'planning' || answerPhase === 'tuning'}
-                <small>{planModel ?? resolvedModelHint(planModelPreference, selectedAgent?.harness) ?? ''}</small>
-              {:else if answerPhase === 'running'}
-                <small>{answerModel ?? resolvedModelHint(answerModelPreference, selectedAgent?.harness) ?? ''}</small>
-              {/if}
-            </header>
-            <div
-              class="workflow-log"
-              bind:this={activityLogEl}
-              role="log"
-              aria-label={t('smartSearch.activityTitle')}
-              aria-live="polite"
-              aria-relevant="additions text"
-              onscroll={onActivityScroll}
-            >
+          <section class="workflow-panel" aria-label={t('smartSearch.activityTitle')} aria-busy={lookupBusy || summaryBusy || handoffBusy}>
+            <header><span class:spinner={lookupBusy || summaryBusy || handoffBusy}></span><strong>{t('smartSearch.activityTitle')}</strong></header>
+            <div class="workflow-log" bind:this={activityLogEl} role="log" aria-live="polite" aria-relevant="additions text" onscroll={onActivityScroll}>
               {#each workflowEntries as entry (entry.id)}
                 <div class="workflow-row" data-level={entry.level}>
-                  <span class="workflow-dot" aria-hidden="true">{entry.level === 'success' ? '✓' : entry.level === 'warning' ? '!' : entry.level === 'error' ? '×' : '›'}</span>
+                  <span aria-hidden="true">{entry.level === 'success' ? '✓' : entry.level === 'warning' ? '!' : entry.level === 'error' ? '×' : '›'}</span>
                   <span>{entry.message}</span>
                   {#if entry.steps !== undefined}<small>#{entry.steps}</small>{/if}
                 </div>
@@ -1176,75 +1452,81 @@
           </section>
         {/if}
 
-        {#if answerBusy}
-          <div class="answer-state working-note"><small>{t('smartSearch.activityWorking')}</small></div>
-        {:else if answerPhase === 'error'}
-          <div class="answer-state error">
-            <strong>{t('smartSearch.answerError')}</strong>
-            <p role="alert">{answerError}</p>
-            <button class="retry-button" onclick={() => failedStage === 'answer' ? void retryAnswer() : void askAgent()}>
-              {failedStage === 'answer' ? t('smartSearch.retryAnswer') : t('smartSearch.retrySearch')}
-            </button>
-          </div>
-        {:else if answerPhase === 'done' && answerContext}
-          <div class="answer-scroll">
-            <p class="answered-query">{answerContext.query}</p>
-            <div class="answer-body">
-              {#each parseAnswerSegments(answer) as segment}
-                {#if segment.kind === 'citation'}
-                  <button class="citation" onclick={() => void openCitation(segment.value)}>[{segment.value}]</button>
-                {:else}<span>{segment.value}</span>{/if}
-              {/each}
-            </div>
-            <div class="answer-sources">
-              {#each answerContext.sources as source}
-                <button onclick={() => void openHit(source.hit, answerContext?.query || '')}>
-                  <b>[{source.id}]</b> {basename(source.hit.path)}:{source.hit.line}
-                </button>
-              {/each}
-            </div>
-          </div>
-          <footer class="answer-actions">
-            <button class:chosen={feedback === 'helpful'} disabled={feedbackBusy || feedback !== null} onclick={() => void likeAnswer()} title={t('smartSearch.like')}>👍</button>
-            <button class:chosen={feedback === 'unhelpful'} disabled={feedbackBusy || feedback !== null} onclick={() => void dislikeAnswer()} title={t('smartSearch.dislike')}>👎</button>
-            <span>{feedbackStatus}</span>
-            <button class="document-button" onclick={showDocumentDialog}>{t('smartSearch.detailed')}</button>
-          </footer>
-        {:else if activeHit}
+        {#if activeHit}
           {@const line = displayLine(activeHit)}
           <div class="preview-card">
-            <small>{activeHit.path}:{activeHit.line + line.line}</small>
+            <small>{simpleRef(activeHit)}</small>
             <h1>{activeHit.breadcrumb || basename(activeHit.path)}</h1>
+            {#if activeHit.level !== 'line'}<div class="block-note">{t('smartSearch.longBlockPreview', { type: activeHit.level })}</div>{/if}
             <p>{line.text || activeHit.text}</p>
-            <button onclick={() => void openHit(activeHit)}>{t('smartSearch.openEditor')} ↗</button>
+            <div class="card-actions">
+              <button class="primary-action" onclick={() => void openHit(activeHit)}>{t('smartSearch.openEditor')} ↗</button>
+              <button onclick={() => void copyText(simpleRef(activeHit))}>{t('smartSearch.copyRef')}</button>
+              <button onclick={() => void copyText(markdownRef(activeHit))}>{t('smartSearch.copyMarkdown')}</button>
+            </div>
           </div>
         {:else}
-          <div class="answer-state">
-            <p>{t('smartSearch.emptyPrompt')}</p>
-          </div>
+          <div class="state"><p>{t('smartSearch.emptyPrompt')}</p></div>
         {/if}
+
+        <section class="next-actions">
+          <div class="action-copy">
+            <strong>{t('smartSearch.quickSummary')}</strong>
+            <small>{t('smartSearch.summaryLimitation')}</small>
+          </div>
+          <button disabled={!lookupRunId || !summaryAgent || !hasSummaryCandidates || summaryBusy} onclick={() => void generateSummary()}>
+            {summaryBusy ? '…' : t('smartSearch.generateSummary')}
+          </button>
+          {#if !lookupRunId || !summaryAgent || !hasSummaryCandidates}
+            <p class="action-hint">{!lookupRunId
+              ? t('smartSearch.summaryNeedsLookup')
+              : !summaryAgent
+                ? t('smartSearch.summaryAgentUnavailable')
+                : t('smartSearch.summaryNeedsLine')}</p>
+          {/if}
+          {#if summaryError}<p class="summary-error" role="alert">{summaryError}</p>{/if}
+          {#if summaryText && summarySources.length}
+            <div class="summary-card">
+              <header><strong>{t('smartSearch.basedOnMatches')}</strong>{#if summaryModel}<small>{summaryModel}</small>{/if}</header>
+              <p>{summaryText}</p>
+              <div class="summary-sources">
+                {#each summarySources as source}
+                  <button onclick={() => {
+                    const hit = store.hits.find((candidate) => candidate.path === source.path && candidate.line === source.line)
+                    if (hit) void openHit(hit, true)
+                  }}>[{source.id}] {source.path}:{source.line}</button>
+                {/each}
+              </div>
+              <button onclick={() => void copyText(summaryText)}>{t('smartSearch.copySummary')}</button>
+            </div>
+          {/if}
+        </section>
+
+        <section class="next-actions handoff-section">
+          <div class="action-copy">
+            <strong>{t('smartSearch.handoff')}</strong>
+            <small>{needsDeepAgent ? t('smartSearch.deepAgentRecommended') : t('smartSearch.handoffHint')}</small>
+          </div>
+          <button class="handoff-button" disabled={handoffBusy} onclick={() => {
+            const configured = settings.smartLookup.handoff.defaultProvider
+            if (configured === 'ask') handoffMenuOpen = !handoffMenuOpen
+            else void handoff(configured)
+          }}>{handoffBusy ? '…' : t('smartSearch.handoff')}</button>
+          {#if handoffMenuOpen}
+            <div class="menu-panel handoff-menu">
+              {#each handoffAgents as agent (agent.id)}
+                <button class="menu-row" onclick={() => void handoff(agent.id)}>{agent.harness?.harness || agent.name}</button>
+              {/each}
+              <button class="menu-row" onclick={() => void handoff()}>{t('smartSearch.copyHandoff')}</button>
+            </div>
+          {/if}
+          {#if handoffRun}
+            <button class="run-link" onclick={openHandoffRun}>{t('smartSearch.openAgentRun')} · {handoffRun.runId}</button>
+          {/if}
+          {#if handoffError}<p class="action-hint">{handoffError}</p>{/if}
+        </section>
       </article>
     </section>
-  {/if}
-
-  {#if documentDialog}
-    <div class="dialog-backdrop" role="presentation" onclick={(event) => {
-      if (event.currentTarget === event.target && !documentBusy) documentDialog = false
-    }}>
-      <div class="document-dialog" role="dialog" tabindex="-1" aria-modal="true" aria-label={t('smartSearch.detailed')}>
-        <h2>{t('smartSearch.detailed')}</h2>
-        <label>
-          <span>{t('smartSearch.documentTitle')}</span>
-          <input bind:value={documentTitle} disabled={documentBusy} />
-        </label>
-        {#if documentBusy}<p><span class="spinner"></span> {t('smartSearch.generating')}</p>{/if}
-        {#if documentError}<p class="error">{documentError}</p>{/if}
-        <footer>
-          <button disabled={documentBusy} onclick={() => { documentDialog = false }}>{t('common.cancel')}</button>
-          <button class="primary" disabled={documentBusy || !documentTitle.trim()} onclick={() => void generateDocument()}>{t('smartSearch.generateOpen')}</button>
-        </footer>
-      </div>
-    </div>
   {/if}
 </main>
 
@@ -1255,305 +1537,96 @@
     --smart-muted: color-mix(in srgb, CanvasText 58%, transparent);
     --smart-soft: color-mix(in srgb, CanvasText 5%, transparent);
   }
-
   :global(body) { background: Canvas; color: CanvasText; }
   button, select, textarea, input { font: inherit; }
   button { color: inherit; }
-
-  main {
-    position: relative;
-    height: 100vh;
-    min-height: 150px;
-    display: flex;
-    flex-direction: column;
-    background: color-mix(in srgb, Canvas 96%, CanvasText 4%);
-    overflow: hidden;
-  }
-
-  .command-bar {
-    display: grid;
-    grid-template-columns: 24px minmax(120px, 1fr) auto auto;
-    align-items: center;
-    gap: 8px;
-    margin: 12px 12px 0;
-    min-height: 48px;
-    padding: 5px 7px 5px 12px;
-    box-sizing: border-box;
-    border: 1px solid color-mix(in srgb, AccentColor 45%, var(--smart-border));
-    border-radius: 13px;
-    background: Canvas;
-    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.09), 0 0 0 3px color-mix(in srgb, AccentColor 10%, transparent);
-  }
-
-  .search-icon { font-size: 25px; line-height: 1; color: var(--smart-muted); transform: rotate(-18deg); }
-  .query-input {
-    resize: none;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    color: CanvasText;
-    min-height: 24px;
-    max-height: 68px;
-    padding: 4px 0;
-    line-height: 1.45;
-    overflow-y: auto;
-  }
-
+  main { position: relative; height: 100vh; min-height: 150px; display: flex; flex-direction: column; background: color-mix(in srgb, Canvas 96%, CanvasText 4%); overflow: hidden; }
+  .command-bar { display: grid; grid-template-columns: 24px minmax(120px, 1fr) auto auto; align-items: center; gap: 8px; margin: 12px 12px 0; min-height: 48px; padding: 5px 7px 5px 12px; box-sizing: border-box; border: 1px solid color-mix(in srgb, AccentColor 45%, var(--smart-border)); border-radius: 13px; background: Canvas; box-shadow: 0 5px 20px rgba(0,0,0,.09), 0 0 0 3px color-mix(in srgb, AccentColor 10%, transparent); }
+  .search-icon { font-size: 25px; color: var(--smart-muted); transform: rotate(-18deg); }
+  .query-input { resize: none; border: 0; outline: 0; background: transparent; color: CanvasText; min-height: 24px; max-height: 68px; padding: 4px 0; line-height: 1.45; overflow-y: auto; }
   .query-input::placeholder { color: color-mix(in srgb, CanvasText 42%, transparent); }
-  .agent-select, .pane-header select {
-    max-width: 150px;
-    height: 30px;
-    border: 1px solid var(--smart-border);
-    border-radius: 7px;
-    background: var(--smart-soft);
-    padding: 0 24px 0 8px;
-    color: CanvasText;
-  }
-
-  .ask-button, .primary {
-    height: 32px;
-    border: 0;
-    border-radius: 8px;
-    background: #0a63ff;
-    color: white;
-    padding: 0 11px;
-    font-weight: 600;
-  }
-
-  .ask-button:disabled, button:disabled { opacity: .45; }
-  .ask-button kbd { margin-left: 6px; font: inherit; opacity: .7; }
-  .input-hint { display: flex; justify-content: space-between; padding: 6px 19px 8px 48px; color: var(--smart-muted); font-size: 11px; }
-  .model-summary { border: 0; padding: 0; background: transparent; color: inherit; font-size: inherit; }
-  .model-policy-panel { position: absolute; z-index: 20; top: 78px; right: 18px; width: min(420px, calc(100vw - 36px)); padding: 6px; }
-  .model-policy-row { display: flex; justify-content: space-between; gap: 20px; padding: 9px 10px; }
-  .model-policy-row > span { min-width: 0; }
-  .model-policy-row strong, .model-policy-row small { display: block; }
-  .model-policy-row small { margin-top: 2px; color: var(--smart-muted); font-size: 10px; }
-  .model-policy-row select { max-width: 170px; }
-  .plan-summary { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 18px 8px 48px; }
-  .plan-summary span { padding: 2px 6px; border-radius: 999px; background: color-mix(in srgb, AccentColor 10%, Canvas); color: var(--smart-muted); font-size: 10px; }
-  .launch-state, .agent-warning { padding: 6px 20px; color: var(--smart-muted); font-size: 12px; }
-  .agent-warning { color: #b45309; }
-  .navigation-error {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 7px 14px;
-    background: color-mix(in srgb, #dc2626 9%, Canvas);
-    color: #b42318;
-    font-size: 11px;
-  }
-  .navigation-error button { border: 0; background: transparent; color: inherit; font-size: 17px; }
-
-  .empty-launch {
-    flex: 1;
-    min-height: 62px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    color: var(--smart-muted);
-  }
-
-  .empty-launch p { margin: 0; font-size: 12px; }
-  .empty-mark { width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid var(--smart-border); border-radius: 6px; }
-
-  .workspace {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(300px, 42%) minmax(360px, 58%);
-    border-top: 1px solid var(--smart-border);
-    background: Canvas;
-  }
-
-  .results-pane, .answer-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-  .results-pane { border-right: 1px solid var(--smart-border); background: color-mix(in srgb, Canvas 97%, CanvasText 3%); }
-  .pane-header {
-    min-height: 39px;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 12px;
-    border-bottom: 1px solid var(--smart-border);
-    font-size: 12px;
-  }
-
-  .pane-header > span { color: var(--smart-muted); }
-  .pane-header select { margin-left: auto; height: 25px; max-width: 130px; font-size: 11px; }
-  .answer-header { justify-content: space-between; }
-  .memory-chip { font-size: 10px; color: #0f766e !important; }
-
-  .selection-bar {
-    min-height: 34px;
-    padding: 0 10px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    border-bottom: 1px solid var(--smart-border);
-    background: color-mix(in srgb, AccentColor 9%, Canvas);
-    font-size: 11px;
-  }
-
-  .selection-bar button { border: 0; background: transparent; color: #0a63ff; padding: 4px; }
-  .removed-note { background: color-mix(in srgb, #d97706 8%, Canvas); }
-  .results-scroll, .answer-scroll { flex: 1; min-height: 0; overflow: auto; }
-  .result-group h2 {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    margin: 0;
-    padding: 7px 11px 5px;
-    display: flex;
-    justify-content: space-between;
-    background: color-mix(in srgb, Canvas 90%, transparent);
-    backdrop-filter: blur(12px);
-    color: var(--smart-muted);
-    font-size: 10px;
-    font-weight: 650;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-  }
-
-  .result-row {
-    display: grid;
-    grid-template-columns: 17px minmax(0, 1fr) 22px;
-    gap: 7px;
-    padding: 8px 8px 8px 10px;
-    border-bottom: 1px solid color-mix(in srgb, CanvasText 7%, transparent);
-    outline: none;
-    cursor: default;
-  }
-
-  .result-row:hover, .result-row.active { background: color-mix(in srgb, AccentColor 7%, Canvas); }
+  .lookup-button, .primary-action { min-height: 32px; border: 0; border-radius: 8px; background: #0a63ff; color: #fff; padding: 0 12px; font-weight: 650; }
+  .lookup-button kbd { margin-left: 7px; opacity: .75; font: inherit; }
+  button:disabled { opacity: .4; cursor: default; }
+  .settings-button { width: 32px; height: 32px; border: 1px solid var(--smart-border); border-radius: 8px; background: var(--smart-soft); }
+  .input-hint { display: flex; justify-content: space-between; gap: 16px; margin: 6px 18px 8px 48px; font-size: 11px; color: var(--smart-muted); }
+  .lookup-settings { position: absolute; z-index: 20; top: 68px; right: 84px; width: 360px; max-height: min(540px, calc(100vh - 82px)); overflow: auto; padding: 6px; }
+  .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: 100%; min-height: 42px; box-sizing: border-box; }
+  .setting-row > span:first-child { display: grid; gap: 2px; }
+  .setting-row small { color: var(--smart-muted); font-size: 11px; }
+  .setting-row select { max-width: 172px; }
+  .setting-row input[type='number'] { width: 76px; }
+  .advanced-settings { border-top: 1px solid var(--smart-border); margin-top: 5px; padding-top: 5px; }
+  .advanced-settings summary { padding: 7px 9px; color: var(--smart-muted); cursor: default; font-size: 11px; }
+  .plan-summary { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 14px 8px; }
+  .plan-summary span { padding: 3px 7px; border: 1px solid var(--smart-border); border-radius: 999px; background: Canvas; color: var(--smart-muted); font-size: 11px; }
+  .plan-summary .warning-chip { border-color: color-mix(in srgb, #d88700 50%, var(--smart-border)); color: #a76400; }
+  .preview-warning, .agent-warning, .partial-note { margin: 0 14px 8px; padding: 7px 10px; border-radius: 7px; background: color-mix(in srgb, #d88700 12%, transparent); color: color-mix(in srgb, #9c5d00 82%, CanvasText); font-size: 12px; }
+  .navigation-error { display: flex; justify-content: space-between; margin: 0 14px 8px; padding: 7px 10px; border-radius: 7px; background: color-mix(in srgb, #cc3030 12%, transparent); font-size: 12px; }
+  .navigation-error button { border: 0; background: transparent; }
+  .launch-state, .empty-launch { flex: 1; display: grid; place-content: center; justify-items: center; color: var(--smart-muted); }
+  .empty-mark { font-size: 32px; opacity: .35; }
+  .workspace { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(340px, 44%) minmax(400px, 56%); margin: 0 12px 12px; border: 1px solid var(--smart-border); border-radius: 12px; overflow: hidden; background: Canvas; }
+  .results-pane, .preview-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .results-pane { border-right: 1px solid var(--smart-border); }
+  .preview-pane { overflow-y: auto; }
+  .pane-header { min-height: 42px; display: flex; align-items: center; gap: 9px; padding: 0 12px; border-bottom: 1px solid var(--smart-border); background: var(--smart-soft); }
+  .pane-header strong { margin-right: auto; font-size: 12px; }
+  .pane-header > span { font-size: 11px; color: var(--smart-muted); }
+  .pane-header select { height: 27px; max-width: 130px; border: 1px solid var(--smart-border); border-radius: 6px; background: Canvas; color: CanvasText; }
+  .selection-bar { display: flex; justify-content: space-between; align-items: center; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--smart-border); background: color-mix(in srgb, AccentColor 9%, Canvas); font-size: 11px; }
+  .selection-bar button, .deep-button { border: 0; background: transparent; color: AccentColor; font-weight: 600; }
+  .results-scroll { flex: 1; overflow-y: auto; padding: 6px; }
+  .result-group h2 { margin: 10px 8px 4px; color: var(--smart-muted); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+  .result-group h2 span { float: right; }
+  .result-row { display: grid; grid-template-columns: 18px minmax(0,1fr) 22px; gap: 6px; padding: 8px 6px; border-radius: 8px; outline: 0; cursor: default; }
+  .result-row:hover, .result-row.active { background: var(--smart-soft); }
   .result-row.selected { background: color-mix(in srgb, AccentColor 15%, Canvas); }
-  .result-row:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, AccentColor 52%, transparent); }
-  .check { width: 15px; height: 15px; margin-top: 1px; display: grid; place-items: center; border: 1px solid var(--smart-border); border-radius: 4px; color: white; font-size: 10px; }
-  .selected .check { background: #0a63ff; border-color: #0a63ff; }
+  .check { color: AccentColor; font-weight: 700; }
   .result-copy { min-width: 0; }
-  .result-title { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+  .result-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
   .result-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-  .result-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--smart-muted); font-size: 10px; }
-  .result-title small { margin-left: auto; color: var(--smart-muted); font-size: 9px; }
-  .result-copy p { margin: 4px 0; color: color-mix(in srgb, CanvasText 78%, transparent); font-size: 11px; line-height: 1.35; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  mark { background: color-mix(in srgb, #facc15 48%, transparent); color: inherit; border-radius: 2px; }
-  .result-meta { display: flex; flex-wrap: wrap; gap: 4px; }
-  .result-meta span { padding: 1px 4px; border-radius: 4px; background: var(--smart-soft); color: var(--smart-muted); font-size: 9px; }
-  .remove-one { opacity: 0; align-self: start; border: 0; background: transparent; border-radius: 4px; color: var(--smart-muted); font-size: 18px; line-height: 18px; padding: 0; }
-  .result-row:hover .remove-one, .remove-one:focus-visible { opacity: 1; }
-  .remove-one:hover { background: color-mix(in srgb, #dc2626 14%, transparent); color: #dc2626; }
-
-  .state, .answer-state { margin: auto; padding: 28px; text-align: center; color: var(--smart-muted); }
-  .state small, .answer-state small { display: block; margin-top: 7px; }
-  .working-note { margin: 0 auto auto; padding-top: 16px; }
-  .error { color: #b42318; }
-  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--smart-border); border-top-color: #0a63ff; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  .result-title span, .result-title small { color: var(--smart-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+  .result-copy p { margin: 4px 0; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: color-mix(in srgb, CanvasText 82%, transparent); font-size: 12px; line-height: 1.45; }
+  mark { border-radius: 2px; background: color-mix(in srgb, #ffd24b 62%, transparent); color: inherit; }
+  .result-meta { display: flex; gap: 5px; flex-wrap: wrap; }
+  .result-meta span { color: var(--smart-muted); font-size: 9px; }
+  .remove-one { border: 0; background: transparent; opacity: 0; }
+  .result-row:hover .remove-one, .remove-one:focus-visible { opacity: .55; }
+  .state { display: grid; justify-items: center; gap: 8px; padding: 32px 16px; text-align: center; color: var(--smart-muted); font-size: 12px; }
+  .state.error, .summary-error { color: #c93434; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid color-mix(in srgb, AccentColor 22%, transparent); border-top-color: AccentColor; border-radius: 50%; animation: spin .75s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-
-  .workflow-panel {
-    flex: 0 1 230px;
-    min-height: 126px;
-    margin: 12px 14px 0;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--smart-border);
-    border-radius: 10px;
-    background: color-mix(in srgb, Canvas 96%, AccentColor 4%);
+  .workflow-panel { margin: 12px 12px 0; border: 1px solid var(--smart-border); border-radius: 9px; overflow: hidden; background: var(--smart-soft); }
+  .workflow-panel > header { display: flex; gap: 7px; align-items: center; padding: 7px 9px; font-size: 11px; }
+  .workflow-log { max-height: 112px; overflow-y: auto; padding: 0 8px 7px; }
+  .workflow-row { display: grid; grid-template-columns: 14px minmax(0,1fr) auto; gap: 5px; padding: 2px 0; color: var(--smart-muted); font-size: 10px; }
+  .workflow-row[data-level='success'] > span:first-child { color: #198754; }
+  .workflow-row[data-level='warning'] > span:first-child { color: #c47a00; }
+  .preview-card { margin: 12px; padding: 15px; border: 1px solid var(--smart-border); border-radius: 10px; background: Canvas; }
+  .preview-card > small { color: var(--smart-muted); font-size: 10px; }
+  .preview-card h1 { margin: 7px 0 9px; font-size: 17px; }
+  .preview-card > p { margin: 0; max-height: 180px; overflow: auto; white-space: pre-wrap; color: color-mix(in srgb, CanvasText 86%, transparent); font-size: 12px; line-height: 1.55; }
+  .block-note { margin-bottom: 7px; color: #9c6500; font-size: 10px; }
+  .card-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 13px; }
+  .card-actions button, .next-actions > button, .summary-card > button { min-height: 29px; padding: 0 9px; border: 1px solid var(--smart-border); border-radius: 7px; background: var(--smart-soft); font-size: 11px; }
+  .card-actions .primary-action { border: 0; background: #0a63ff; }
+  .next-actions { position: relative; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px 12px; margin: 0 12px 12px; padding: 12px; border: 1px solid var(--smart-border); border-radius: 10px; }
+  .action-copy { display: grid; gap: 3px; }
+  .action-copy strong { font-size: 12px; }
+  .action-copy small, .action-hint { color: var(--smart-muted); font-size: 10px; }
+  .action-hint, .summary-error { grid-column: 1 / -1; margin: 2px 0 0; font-size: 10px; }
+  .summary-card { grid-column: 1 / -1; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--smart-border); }
+  .summary-card header { display: flex; justify-content: space-between; color: var(--smart-muted); font-size: 10px; }
+  .summary-card p { white-space: pre-wrap; font-size: 12px; line-height: 1.55; }
+  .summary-sources { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
+  .summary-sources button, .run-link { border: 0; background: transparent; padding: 0; color: AccentColor; font-size: 10px; text-align: left; }
+  .handoff-menu { position: absolute; z-index: 10; top: 48px; right: 12px; min-width: 200px; padding: 5px; }
+  .handoff-menu .menu-row { width: 100%; border: 0; padding: 7px 9px; text-align: left; }
+  .run-link { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 760px) {
+    .workspace { grid-template-columns: 1fr; overflow-y: auto; }
+    .results-pane { min-height: 320px; border-right: 0; border-bottom: 1px solid var(--smart-border); }
+    .lookup-settings { left: 16px; right: 16px; width: auto; }
   }
-  .workflow-header {
-    min-height: 34px;
-    padding: 0 10px;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    border-bottom: 1px solid var(--smart-border);
-    font-size: 11px;
-  }
-  .workflow-header small { margin-left: auto; color: var(--smart-muted); }
-  .workflow-status-icon { width: 12px; height: 12px; display: inline-grid; place-items: center; color: #16803c; }
-  .workflow-status-icon.spinner { border-width: 1.5px; color: transparent; }
-  .workflow-log {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 5px 0;
-    scroll-behavior: smooth;
-  }
-  .workflow-row {
-    min-height: 25px;
-    padding: 4px 9px;
-    box-sizing: border-box;
-    display: grid;
-    grid-template-columns: 14px minmax(0, 1fr) auto;
-    align-items: start;
-    gap: 5px;
-    color: color-mix(in srgb, CanvasText 78%, transparent);
-    font-size: 10px;
-    line-height: 1.45;
-  }
-  .workflow-row + .workflow-row { border-top: 1px solid color-mix(in srgb, CanvasText 4%, transparent); }
-  .workflow-row small { color: var(--smart-muted); }
-  .workflow-dot { color: #0a63ff; font-weight: 700; }
-  .workflow-row[data-level='success'] .workflow-dot { color: #16803c; }
-  .workflow-row[data-level='warning'] .workflow-dot { color: #b45309; }
-  .workflow-row[data-level='error'] { color: #b42318; }
-  .workflow-row[data-level='error'] .workflow-dot { color: #b42318; }
-  .retry-button {
-    min-height: 31px;
-    padding: 0 12px;
-    border: 1px solid color-mix(in srgb, #b42318 38%, var(--smart-border));
-    border-radius: 7px;
-    background: Canvas;
-    color: #b42318;
-    font-weight: 650;
-  }
-
-  .preview-card { margin: auto; width: min(520px, calc(100% - 52px)); }
-  .preview-card small, .answered-query { color: var(--smart-muted); }
-  .preview-card h1 { margin: 7px 0 13px; font-size: 20px; }
-  .preview-card p { white-space: pre-wrap; line-height: 1.6; }
-  .preview-card button, .answer-sources button, .document-button {
-    border: 1px solid var(--smart-border);
-    border-radius: 7px;
-    background: var(--smart-soft);
-    padding: 6px 9px;
-  }
-
-  .answer-scroll { padding: 23px clamp(20px, 5vw, 54px); box-sizing: border-box; }
-  .answered-query { margin: 0 0 16px; font-size: 11px; }
-  .answer-body { white-space: pre-wrap; font-size: 14px; line-height: 1.72; }
-  .citation { display: inline; margin: 0 1px; padding: 1px 4px; border: 0; border-radius: 4px; background: color-mix(in srgb, AccentColor 12%, Canvas); color: #0a63ff; font-size: 11px; font-weight: 700; vertical-align: 1px; }
-  .answer-sources { margin-top: 26px; padding-top: 12px; border-top: 1px solid var(--smart-border); display: flex; flex-wrap: wrap; gap: 6px; }
-  .answer-sources button { color: var(--smart-muted); font-size: 10px; }
-  .answer-sources b { color: #0a63ff; }
-  .answer-actions { min-height: 48px; padding: 0 12px; display: flex; align-items: center; gap: 7px; border-top: 1px solid var(--smart-border); }
-  .answer-actions > button:not(.document-button) { width: 31px; height: 29px; border: 1px solid var(--smart-border); border-radius: 7px; background: transparent; }
-  .answer-actions button.chosen { background: color-mix(in srgb, AccentColor 13%, Canvas); border-color: color-mix(in srgb, AccentColor 42%, transparent); }
-  .answer-actions span { color: var(--smart-muted); font-size: 10px; }
-  .document-button { margin-left: auto; }
-
-  .dialog-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0, 0, 0, .25); }
-  .document-dialog { width: min(420px, calc(100vw - 32px)); padding: 18px; box-sizing: border-box; border: 1px solid var(--smart-border); border-radius: 13px; background: Canvas; box-shadow: 0 18px 60px rgba(0,0,0,.25); }
-  .document-dialog h2 { margin: 0 0 16px; font-size: 16px; }
-  .document-dialog label span { display: block; margin-bottom: 6px; color: var(--smart-muted); font-size: 11px; }
-  .document-dialog input { width: 100%; height: 34px; padding: 0 9px; box-sizing: border-box; border: 1px solid var(--smart-border); border-radius: 7px; background: Canvas; color: CanvasText; }
-  .document-dialog footer { margin-top: 17px; display: flex; justify-content: flex-end; gap: 8px; }
-  .document-dialog footer button { min-height: 31px; padding: 0 11px; border: 1px solid var(--smart-border); border-radius: 7px; background: var(--smart-soft); }
-  .document-dialog footer .primary { border: 0; background: #0a63ff; color: white; }
-
-  @media (max-width: 720px) {
-    .command-bar { grid-template-columns: 20px minmax(90px, 1fr) minmax(84px, 104px) auto; }
-    .agent-select { display: block; max-width: 104px; padding-left: 6px; }
-    .ask-button { padding: 0 8px; }
-    .ask-button kbd { display: none; }
-    .input-hint span:last-child { display: none; }
-    .workspace { grid-template-columns: 1fr; grid-template-rows: minmax(220px, 45%) minmax(250px, 55%); }
-    .results-pane { border-right: 0; border-bottom: 1px solid var(--smart-border); }
-    .answer-scroll { padding: 18px; }
-  }
-
-  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 </style>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentHarness } from '../agent-picker/types'
 import {
+  availableModelPreference,
   modelPreferenceKey,
   rememberedModelPreference,
   rememberModelPreference,
@@ -22,7 +23,7 @@ const harness: AgentHarness = {
   ok: true,
   default_model: 'quality',
   capabilities: {
-    tasks: ['search-plan', 'search-answer'],
+    tasks: ['search-plan', 'search-summary', 'vault-research'],
     search_plan_schemas: [1],
     terminal_result: true,
     input_only_isolation: true,
@@ -38,11 +39,11 @@ const harness: AgentHarness = {
 }
 
 describe('smart-search model routing', () => {
-  it('defaults planning to fast and answering to the harness default', () => {
+  it('defaults both automatic planning and manual summary to fast', () => {
     expect(rememberedModelPreference('global-search', 'p', 'plan', harness, memory()))
       .toBe('profile:fast')
-    expect(rememberedModelPreference('global-search', 'p', 'answer', harness, memory()))
-      .toBe('profile:default')
+    expect(rememberedModelPreference('global-search', 'p', 'summary', harness, memory()))
+      .toBe('profile:fast')
   })
 
   it('keeps settings separate by provider and phase', () => {
@@ -52,18 +53,19 @@ describe('smart-search model routing', () => {
       .toBe('model:fast-model')
     expect(rememberedModelPreference('global-search', 'codex', 'plan', harness, storage))
       .toBe('profile:fast')
-    expect(rememberedModelPreference('global-search', 'claude', 'answer', harness, storage))
-      .toBe('profile:default')
+    expect(rememberedModelPreference('global-search', 'claude', 'summary', harness, storage))
+      .toBe('profile:fast')
   })
 
   it('drops stale exact models and creates mutually exclusive selectors', () => {
     const storage = memory({
-      [modelPreferenceKey('global-search', 'p', 'answer')]: 'model:removed',
+      [modelPreferenceKey('global-search', 'p', 'summary')]: 'model:removed',
     })
-    expect(rememberedModelPreference('global-search', 'p', 'answer', harness, storage))
-      .toBe('profile:default')
+    expect(rememberedModelPreference('global-search', 'p', 'summary', harness, storage))
+      .toBe('profile:fast')
     expect(selectorForPreference('profile:fast')).toEqual({ model_profile: 'fast' })
     expect(selectorForPreference('model:quality')).toEqual({ model: 'quality' })
+    expect(availableModelPreference('model:removed', 'summary', harness)).toBe('profile:fast')
   })
 
   it('uses the capability model as the pre-run audit hint', () => {

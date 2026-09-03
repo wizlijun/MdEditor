@@ -23,6 +23,7 @@ pub mod detach;
 pub mod discover;
 pub mod event;
 pub mod harness;
+pub mod invocation;
 pub mod lock;
 pub mod mirror;
 pub mod model;

@@ -46,6 +46,8 @@ pub mod search;
 #[cfg(not(target_os = "ios"))]
 pub mod smart_search;
 #[cfg(not(target_os = "ios"))]
+pub mod smart_lookup;
+#[cfg(not(target_os = "ios"))]
 pub mod mcp;
 #[cfg(not(target_os = "ios"))]
 pub mod memory_control;
@@ -1527,6 +1529,9 @@ pub fn run() {
                 smart_search::smart_search_record_feedback,
                 smart_search::smart_search_write_document,
                 smart_search::smart_search_memory_context,
+                smart_lookup::smart_lookup_start_summary,
+                smart_lookup::smart_lookup_start_handoff,
+                smart_lookup::smart_lookup_agent_default,
                 set_daily_notes_enabled,
                 mcp::gate::set_mcp_enabled,
                 editor_show_and_open_path,

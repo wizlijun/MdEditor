@@ -133,7 +133,7 @@ impl SmartQueryDto {
 }
 
 /// A normal search hit plus the evidence for its position in the fused list.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SmartHitDto {
     #[serde(flatten)]
@@ -143,9 +143,11 @@ pub struct SmartHitDto {
     pub fused_score: f64,
     pub relevance_reasons: Vec<String>,
     pub matched_queries: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_id: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SmartSearchResponse {
     pub route: String,
@@ -552,6 +554,7 @@ fn finish_fusion(
                 fused_score: value.fused_score,
                 relevance_reasons,
                 matched_queries,
+                result_id: None,
             }
         })
         .collect()

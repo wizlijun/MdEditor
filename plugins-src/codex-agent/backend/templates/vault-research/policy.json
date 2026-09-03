@@ -1,0 +1,5 @@
+{
+  "permission_mode": "read-only",
+  "on_permission_request": "reject",
+  "rationale": "交接后的深度研究可检索和读取 Vault，但不得产生任何文件写入。"
+}

@@ -1,6 +1,8 @@
 # 全局智能搜索与问答 —— 设计规格
 
-> 类型：产品、检索与 Harness 设计 · 日期：2026-09-03 · 状态：V2 策略已修订，待评审后实施
+> 类型：产品、检索与 Harness 设计 · 日期：2026-09-03 · 状态：仅入口、索引、来源分组和原文导航仍有效
+>
+> **后续实现以 [`2026-09-03-smart-lookup-and-agent-handoff-design.md`](2026-09-03-smart-lookup-and-agent-handoff-design.md) 为准。** 本文中的问答、Tune、证据冻结、Memory、回答归档、详细文档和 Plan/Tune/Answer 三阶段模型路由均已废止；全局入口、IME 行为、搜索索引、来源分组和原文导航仍可作为实现依据。
 
 ## 0 · 一句话
 

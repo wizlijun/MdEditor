@@ -1,0 +1,7 @@
+{
+  "name": "Research a question in the Vault",
+  "description": "Deeply research a handed-off question by re-searching and reading the Vault without modifying it.",
+  "prompt": "完成本次 vault-research。把调用方提供的 HandoffPacket 当作线索，先用 notemd search 验证并扩展候选来源，再读取必要原文；需要长期上下文时按根 AGENTS.md 通过 Memory context broker 授权。只读研究，不修改 Vault。",
+  "max_turns": 30,
+  "timeout_seconds": 900
+}

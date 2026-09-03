@@ -27,7 +27,7 @@ describe('smart-search workflow log', () => {
     let entries: WorkflowEntry[] = []
     for (let id = 1; id <= WORKFLOW_LOG_LIMIT + 5; id += 1) {
       entries = appendWorkflowEntry(entries, {
-        id, stage: 'answer', level: id === WORKFLOW_LOG_LIMIT + 5 ? 'success' : 'active',
+        id, stage: 'summary', level: id === WORKFLOW_LOG_LIMIT + 5 ? 'success' : 'active',
         message: `step ${id}`,
       })
     }

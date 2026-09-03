@@ -118,6 +118,8 @@ fn relayed_start_params(context: &Value, task_id: &str, prompt: &str, note_path:
             .cloned()
             .unwrap_or(Value::Null),
         "model": context.get("model").cloned().unwrap_or(Value::Null),
+        "invocation_id": context.get("invocation_id").cloned().unwrap_or(Value::Null),
+        "input_hash": context.get("input_hash").cloned().unwrap_or(Value::Null),
     })
 }
 
@@ -129,6 +131,8 @@ fn harness_capabilities(
         tasks: vec![
             task::SEARCH_PLAN_TASK.into(),
             task::SEARCH_ANSWER_TASK.into(),
+            task::SEARCH_SUMMARY_TASK.into(),
+            task::VAULT_RESEARCH_TASK.into(),
         ],
         search_plan_schemas: vec![1],
         terminal_result: true,
@@ -210,6 +214,7 @@ struct Inner {
     vault_checked: bool,
     /// run_id → cancel channel
     running: HashMap<String, mpsc::Sender<()>>,
+    invocations: agent_run_core::invocation::InvocationRegistry,
 }
 
 pub struct ClaudeAgentPlugin {
@@ -419,6 +424,7 @@ impl sdk::NotemdPlugin for ClaudeAgentPlugin {
             // 宿主 host.agent.run 中转:任意任务 + 调用方拼好的定位 prompt。
             "run-task" => self.run_task(host, &params.context),
             "run-status" => self.run_status(&params.context),
+            "run-cancel" => self.run_cancel(&params.context),
             // What the window shows above everything else: is Claude Code
             // there, which version, and did the last run die of something that
             // will kill the next one too.
@@ -541,6 +547,7 @@ impl ClaudeAgentPlugin {
 
     /// Assemble a RunSpec, start the background task, return the run id.
     fn start(&mut self, host: &sdk::Host, params: Value, trigger: &str) -> Result<Value, String> {
+        let invocation = agent_run_core::invocation::InvocationIdentity::from_context(&params)?;
         let vault = self.vault()?;
         let task_id = params
             .get("task")
@@ -597,6 +604,19 @@ impl ClaudeAgentPlugin {
         };
         let full = prompt::compose(&def.prompt, &user_prompt, ctx.as_ref());
         let run_id = record::new_run_id(chrono::Utc::now(), std::process::id());
+
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(existing) = inner.invocations.reuse_or_insert(
+                invocation.as_ref(), &task_id, &run_id,
+            )? {
+                return Ok(json!({
+                    "run_id": existing,
+                    "resolved_model": resolved_model,
+                    "reused": true,
+                }));
+            }
+        }
 
         let spec = engine::RunSpec {
             vault: vault.clone(),
@@ -891,6 +911,24 @@ impl ClaudeAgentPlugin {
             runner::spawn_detached(&self.vault()?, &task_id, &p)
         }
     }
+
+    fn run_cancel(&self, context: &Value) -> Result<Value, String> {
+        let vault = self.vault()?;
+        let task_id = context.get("task").and_then(Value::as_str).unwrap_or(NOTE_TASK);
+        let run_id = context.get("run_id").and_then(Value::as_str)
+            .ok_or("run-cancel needs a 'run_id'")?;
+        check_task_id(task_id)?;
+        check_run_id(run_id)?;
+        if let Some(sender) = self.inner.lock().unwrap().running.get(run_id).cloned() {
+            let _ = sender.try_send(());
+            return Ok(json!({ "ok": true, "state": "cancelling" }));
+        }
+        let run_dir = task::runs_root(&vault).join(task_id);
+        match record::find(&run_dir, run_id) {
+            Some(record) => Ok(json!({ "ok": true, "state": "done", "status": record.status })),
+            None => Ok(json!({ "ok": true, "state": "lost" })),
+        }
+    }
 }
 
 /// The host's frontend parses CLI args and injects them into `context`; the
@@ -1045,7 +1083,9 @@ mod tests {
                 NOTE_TASK,
                 "search-answer",
                 "search-plan",
-                "selfcheck"
+                "search-summary",
+                "selfcheck",
+                "vault-research"
             ]
         );
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
@@ -1413,6 +1453,8 @@ mod tests {
         assert_eq!(done["terminal_result"]["complete"], true);
         assert_eq!(done["terminal_result"]["content"], "complete machine result");
         assert_eq!(done["record"]["artifacts"][0], "answers/a.md");
+        assert_eq!(p.run_cancel(&ctx).unwrap()["state"], "done");
+        assert_eq!(p.run_cancel(&ctx).unwrap()["state"], "done");
     }
 
     #[test]
@@ -1633,9 +1675,12 @@ mod tests {
     }
 
     #[test]
-    fn search_capabilities_advertise_both_input_only_tasks_and_schema_v1() {
+    fn search_capabilities_advertise_lookup_summary_research_and_legacy_answer() {
         let capabilities = harness_capabilities(None, true);
-        assert_eq!(capabilities.tasks, vec!["search-plan", "search-answer"]);
+        assert_eq!(
+            capabilities.tasks,
+            vec!["search-plan", "search-answer", "search-summary", "vault-research"]
+        );
         assert_eq!(capabilities.search_plan_schemas, vec![1]);
         assert!(capabilities.terminal_result);
         assert!(capabilities.input_only_isolation);

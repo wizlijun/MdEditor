@@ -1,0 +1,7 @@
+{
+  "name": "Summarize current Smart Lookup matches",
+  "description": "Produce one cited sentence or up to three cited bullets from a small canonical input packet.",
+  "prompt": "完成本次 search-summary。调用方只提供原问题、当前匹配范围限制和编号为 [S1]…[Sn] 的少量完整行块。只输出带已知引用的简答；不调用工具，不读取 Vault 或 Memory。",
+  "max_turns": 4,
+  "timeout_seconds": 35
+}

@@ -55,6 +55,8 @@ export type SmartRelevanceReason =
 
 /** A normal hit with the evidence needed to explain its fused position. */
 export interface SmartSearchHit extends SearchHit {
+  /** Opaque host lookup id, present only for a retained planned-search run. */
+  resultId?: string
   /** Weighted reciprocal-rank score, comparable only within this response. */
   fusedScore: number
   relevanceReasons: SmartRelevanceReason[]

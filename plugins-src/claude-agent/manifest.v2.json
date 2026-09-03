@@ -20,6 +20,7 @@
       "onCommand:run-note",
       "onCommand:run-task",
       "onCommand:run-status",
+      "onCommand:run-cancel",
       "onCommand:harness-status",
       "onCli:agent"
     ]

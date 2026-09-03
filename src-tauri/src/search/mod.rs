@@ -5,8 +5,8 @@
 
 mod attention_links;
 pub mod options;
-mod plan;
-mod smart;
+pub(crate) mod plan;
+pub(crate) mod smart;
 pub mod watch;
 
 use std::path::Path;
@@ -627,7 +627,7 @@ impl Drop for OpenGuard {
 // `searchidx::query`, so these three commands cannot answer a query
 // differently than `notemd search` does. See the module doc comment.
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HitDto {
     pub path: String,
@@ -972,11 +972,20 @@ pub fn notemd_planned_search(
     limit: Option<usize>,
     deep: Option<bool>,
     timeout_ms: Option<u64>,
+    retain_run: Option<bool>,
 ) -> Result<plan::PlannedSearchResponse, String> {
-    plan::run_planned_search_command(
+    let limit = Some(match limit {
+        Some(value @ 1..=100) => value,
+        _ => 100,
+    });
+    let timeout_ms = Some(match timeout_ms {
+        None | Some(0) => 2_000,
+        Some(value) => value.min(5_000),
+    });
+    let mut response = plan::run_planned_search_command(
         app,
-        window,
-        original_query,
+        window.clone(),
+        original_query.clone(),
         plan,
         baseline_plan,
         reference_time,
@@ -984,7 +993,16 @@ pub fn notemd_planned_search(
         limit,
         deep,
         timeout_ms,
-    )
+    )?;
+    #[cfg(not(target_os = "ios"))]
+    if retain_run.unwrap_or(false) {
+        crate::smart_lookup::retain_planned_search(&window, &original_query, &mut response)?;
+    }
+    #[cfg(target_os = "ios")]
+    if retain_run.unwrap_or(false) {
+        return Err("retained Smart Lookup runs are unavailable on iOS".to_string());
+    }
+    Ok(response)
 }
 
 /// `(async)` is load-bearing, not decoration. A plain `#[tauri::command]` is

@@ -16,15 +16,18 @@ use std::path::Path;
 
 pub const SEARCH_ANSWER_TASK: &str = "search-answer";
 pub const SEARCH_PLAN_TASK: &str = "search-plan";
+pub const SEARCH_SUMMARY_TASK: &str = "search-summary";
+pub const VAULT_RESEARCH_TASK: &str = "vault-research";
 
 pub fn is_input_only_task(id: &str) -> bool {
-    matches!(id, SEARCH_PLAN_TASK | SEARCH_ANSWER_TASK)
+    matches!(id, SEARCH_PLAN_TASK | SEARCH_ANSWER_TASK | SEARCH_SUMMARY_TASK)
 }
 
 pub fn input_only_instructions(id: &str) -> Option<&'static str> {
     match id {
         SEARCH_PLAN_TASK => Some(include_str!("../templates/search-plan/AGENTS.md")),
         SEARCH_ANSWER_TASK => Some(include_str!("../templates/search-answer/AGENTS.md")),
+        SEARCH_SUMMARY_TASK => Some(include_str!("../templates/search-summary/AGENTS.md")),
         _ => None,
     }
 }
@@ -62,13 +65,14 @@ pub fn seed_builtin_templates(vault: &Path) -> Vec<String> {
             wrote.push(format!("{id}/{rel}"));
         }
     }
-    // DeepSeek does not own shared task.json files, but the published 90s
-    // search-plan template proved too short for one silent ACP turn. Upgrade
-    // only that exact managed version; preserve any user/custom provider edit.
+    // DeepSeek does not own shared task.json files. Upgrade only the two exact
+    // previously published plan definitions; preserve every user/provider edit.
     let search_plan = task_dir(vault, SEARCH_PLAN_TASK).join("task.json");
     let desired = include_str!("../templates/search-plan/task.json");
-    let legacy = desired.replace("\"timeout_seconds\": 180", "\"timeout_seconds\": 90");
-    if std::fs::read_to_string(&search_plan).is_ok_and(|current| current == legacy)
+    let legacy_180 = "{\n  \"name\": \"Plan a controlled local search\",\n  \"description\": \"Convert one natural-language question into a bounded SearchPlanV1, or tune one plan from retrieval telemetry.\",\n  \"prompt\": \"完成本次 search-plan。调用方会提供 mode=plan|tune、原始问题、锁定约束、冻结时间上下文、schema；tune 还会提供上一版计划和结构化检索遥测。严格遵守任务目录中的指令，只输出单个 SearchPlanV1 JSON object，不调用工具，不读取 Vault 或 Memory。\",\n  \"max_turns\": 8,\n  \"timeout_seconds\": 180\n}\n";
+    let legacy_90 = legacy_180.replace("\"timeout_seconds\": 180", "\"timeout_seconds\": 90");
+    if std::fs::read_to_string(&search_plan)
+        .is_ok_and(|current| current == legacy_180 || current == legacy_90)
         && std::fs::write(&search_plan, desired).is_ok()
     {
         wrote.push("search-plan/task.json".to_string());
@@ -143,6 +147,20 @@ const OWNED: &Templates = &[
             ),
         ],
     ),
+    (
+        "search-summary",
+        &[
+            ("AGENTS.md", include_str!("../templates/search-summary/AGENTS.md")),
+            ("policy.json", include_str!("../templates/search-summary/policy.json")),
+        ],
+    ),
+    (
+        "vault-research",
+        &[
+            ("AGENTS.md", include_str!("../templates/vault-research/AGENTS.md")),
+            ("policy.json", include_str!("../templates/vault-research/policy.json")),
+        ],
+    ),
 ];
 
 /// Files another agent plugin may also seed: written once, then left alone.
@@ -178,6 +196,16 @@ const SHARED: &[(&str, &str, &str)] = &[
         "task.json",
         include_str!("../templates/search-plan/task.json"),
     ),
+    (
+        "search-summary",
+        "task.json",
+        include_str!("../templates/search-summary/task.json"),
+    ),
+    (
+        "vault-research",
+        "task.json",
+        include_str!("../templates/vault-research/task.json"),
+    ),
 ];
 
 /// Keep derived data out of the vault's git history.
@@ -196,7 +224,7 @@ mod tests {
     fn seeds_all_templates_on_a_fresh_vault() {
         let v = tempfile::tempdir().unwrap();
         let wrote = seed_builtin_templates(v.path());
-        assert_eq!(wrote.len(), 16, "seeded: {wrote:?}");
+        assert_eq!(wrote.len(), 22, "seeded: {wrote:?}");
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
         assert_eq!(
             ids,
@@ -205,7 +233,9 @@ mod tests {
                 "answer-note-question",
                 "search-answer",
                 "search-plan",
-                "selfcheck"
+                "search-summary",
+                "selfcheck",
+                "vault-research"
             ]
         );
         for id in [
@@ -214,6 +244,8 @@ mod tests {
             "ai-read-ebook",
             "search-answer",
             "search-plan",
+            "search-summary",
+            "vault-research",
         ] {
             assert!(task_dir(v.path(), id).join("AGENTS.md").exists(), "{id}");
             assert!(task_dir(v.path(), id).join("policy.json").exists(), "{id}");
@@ -230,6 +262,8 @@ mod tests {
             "ai-read-ebook",
             "search-answer",
             "search-plan",
+            "search-summary",
+            "vault-research",
         ] {
             crate::policy::Policy::load(&task_dir(v.path(), id))
                 .unwrap_or_else(|e| panic!("{id}: {e}"));
@@ -246,6 +280,18 @@ mod tests {
                 .permission_mode,
             crate::policy::PermissionMode::ReadOnly
         );
+        assert_eq!(
+            crate::policy::Policy::load(&task_dir(v.path(), "search-summary"))
+                .unwrap()
+                .permission_mode,
+            crate::policy::PermissionMode::ReadOnly
+        );
+        assert_eq!(
+            crate::policy::Policy::load(&task_dir(v.path(), "vault-research"))
+                .unwrap()
+                .permission_mode,
+            crate::policy::PermissionMode::ReadOnly
+        );
     }
 
     #[test]
@@ -253,7 +299,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
         let tasks = discover(v.path());
-        assert_eq!(tasks.len(), 5);
+        assert_eq!(tasks.len(), 7);
         for t in tasks {
             assert!(!t.name.is_empty(), "{}", t.id);
             assert!(!t.prompt.is_empty(), "{}", t.id);
@@ -302,12 +348,12 @@ mod tests {
     }
 
     #[test]
-    fn upgrades_only_the_published_short_search_plan_timeout() {
+    fn upgrades_only_previously_published_search_plan_templates() {
         let v = tempfile::tempdir().unwrap();
         let p = task_dir(v.path(), SEARCH_PLAN_TASK).join("task.json");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         let desired = include_str!("../templates/search-plan/task.json");
-        let legacy = desired.replace("\"timeout_seconds\": 180", "\"timeout_seconds\": 90");
+        let legacy = "{\n  \"name\": \"Plan a controlled local search\",\n  \"description\": \"Convert one natural-language question into a bounded SearchPlanV1, or tune one plan from retrieval telemetry.\",\n  \"prompt\": \"完成本次 search-plan。调用方会提供 mode=plan|tune、原始问题、锁定约束、冻结时间上下文、schema；tune 还会提供上一版计划和结构化检索遥测。严格遵守任务目录中的指令，只输出单个 SearchPlanV1 JSON object，不调用工具，不读取 Vault 或 Memory。\",\n  \"max_turns\": 8,\n  \"timeout_seconds\": 90\n}\n";
         std::fs::write(&p, legacy).unwrap();
 
         let wrote = seed_builtin_templates(v.path());
@@ -418,7 +464,7 @@ mod tests {
             "`mode=tune`",
             "SearchPlanV1",
             "只输出一个",
-            "最多 4 个",
+            "最多 2 个",
             "document_date",
             "content_date",
             "activity_time",
