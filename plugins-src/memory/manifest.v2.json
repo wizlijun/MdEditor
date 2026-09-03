@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.memory",
   "name": "Memory",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.903.3"
+    "notemd": ">=6.904.1"
   },
   "description": "Manage structured Memory claims, Role/Scope isolation and scoped Agent context with one grouped MEMORY.md projection.",
   "ui": "ui/",

@@ -231,7 +231,12 @@ fn validate_args(args: &MemoryArgs) -> Result<(), String> {
             }
         }
         "context-registry" => {
-            validate_positionals(args, 1, 1, "context-registry <show|validate> [--file FILE]")?;
+            validate_positionals(
+                args,
+                1,
+                1,
+                "context-registry <show|validate|replace> [--file FILE] [--request-id ID]",
+            )?;
             match args.positionals[0].as_str() {
                 "show" => validate_allowed_flags(args, &["vault"]),
                 "validate" => {
@@ -239,8 +244,20 @@ fn validate_args(args: &MemoryArgs) -> Result<(), String> {
                     required_flag(args, "file")?;
                     Ok(())
                 }
+                "replace" => {
+                    if args.bools.contains("yes") || args.bools.contains("force") {
+                        return Err(
+                            "MEMORY_UNAUTHORIZED: Registry replacement does not accept confirmation or force flags"
+                                .into(),
+                        );
+                    }
+                    validate_allowed_flags(args, &["vault", "file", "request-id"])?;
+                    required_flag(args, "file")?;
+                    required_flag(args, "request-id")?;
+                    Ok(())
+                }
                 operation => Err(format!(
-                    "invalid context-registry operation: {operation}; expected show or validate"
+                    "invalid context-registry operation: {operation}; expected show, validate, or replace"
                 )),
             }?;
         }
@@ -704,6 +721,38 @@ fn context_registry_validate(root: &Path, candidate: &Value) -> Result<Value, St
         }
         Err(error) => Err(error),
     }
+}
+
+fn context_registry_replace_request(
+    args: &MemoryArgs,
+    registry: &Value,
+    candidate: &Value,
+) -> Result<Value, String> {
+    let (expected_protocol, expected_registry_heads) = context_registry_guards(registry)?;
+    let candidate = candidate.as_object().ok_or(
+        "MEMORY_INVALID_REQUEST: Registry candidate must be an object with roles and scopes",
+    )?;
+    let mut unknown = candidate
+        .keys()
+        .filter(|name| !matches!(name.as_str(), "roles" | "scopes"))
+        .cloned()
+        .collect::<Vec<_>>();
+    unknown.sort();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "MEMORY_INVALID_REQUEST: Registry candidate contains unsupported field(s): {}",
+            unknown.join(", ")
+        ));
+    }
+    let mut request = candidate.clone();
+    request.insert(
+        "request_id".into(),
+        json!(required_flag(args, "request-id")?),
+    );
+    request.insert("expected_protocol".into(), expected_protocol);
+    request.insert("expected_registry_heads".into(), expected_registry_heads);
+    request.insert("gesture_intent".into(), json!("replace-context-registry"));
+    Ok(Value::Object(request))
 }
 
 fn reassign_request(args: &MemoryArgs, registry: &Value) -> Result<Value, String> {
@@ -1795,6 +1844,23 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
                 );
                 Ok(ExitCode::from(if valid { 0 } else { 1 }))
             }
+            "replace" => {
+                let path = PathBuf::from(required_flag(args, "file")?);
+                let candidate = read_registry_candidate(&path)?;
+                let registry = context_registry_snapshot(root)?;
+                let request = context_registry_replace_request(args, &registry, &candidate)?;
+                let value = memory_control::dispatch(
+                    root,
+                    "host.memory.v2.contextRegistryReplace",
+                    &request,
+                )?;
+                print_json_or_text(
+                    args,
+                    value.clone(),
+                    serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+                );
+                Ok(ExitCode::SUCCESS)
+            }
             _ => unreachable!(),
         },
         "reassign" => {
@@ -2047,6 +2113,58 @@ mod tests {
         );
         assert!(validate_args(&validate).is_ok());
 
+        let replace = parse_args(
+            &[
+                "context-registry",
+                "replace",
+                "--file",
+                "registry.yaml",
+                "--request-id",
+                "agent:test/context-registry/v1",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&replace).is_ok());
+
+        for argv in [
+            vec![
+                "context-registry",
+                "replace",
+                "--request-id",
+                "agent:test/context-registry/v1",
+            ],
+            vec!["context-registry", "replace", "--file", "registry.yaml"],
+        ] {
+            let args = parse_args(
+                &argv.into_iter().map(str::to_string).collect::<Vec<_>>(),
+                false,
+            );
+            assert!(validate_args(&args).is_err());
+        }
+        for forbidden in ["--yes", "--force"] {
+            let args = parse_args(
+                &[
+                    "context-registry",
+                    "replace",
+                    "--file",
+                    "registry.yaml",
+                    "--request-id",
+                    "agent:test/context-registry/v1",
+                    forbidden,
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+                false,
+            );
+            assert!(validate_args(&args)
+                .unwrap_err()
+                .contains("MEMORY_UNAUTHORIZED"));
+        }
+
         let no_replacement = parse_args(
             &["reassign", "plan", "--all"]
                 .into_iter()
@@ -2181,6 +2299,164 @@ mod tests {
             ]}
         });
         assert!(context_registry_guards(&legacy).is_ok());
+    }
+
+    #[test]
+    fn registry_replace_request_binds_current_heads_and_candidate() {
+        let args = parse_args(
+            &[
+                "context-registry",
+                "replace",
+                "--file",
+                "registry.json",
+                "--request-id",
+                "agent:test/context-registry/v1",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        validate_args(&args).unwrap();
+        let registry = json!({
+            "protocol": {"revision_id": "protocol:1", "payload_sha256": "sha-protocol"},
+            "registry_heads": [
+                {"revision_id": "registry:1", "payload_sha256": "sha-registry"}
+            ]
+        });
+        let candidate = json!({
+            "roles": [{"id": "role:developer", "label": "Developer", "status": "active"}],
+            "scopes": [{
+                "id": "realm:work", "label": "Work", "status": "active",
+                "kind": "realm", "security_domain": "owner-work"
+            }]
+        });
+        assert_eq!(
+            context_registry_replace_request(&args, &registry, &candidate).unwrap(),
+            json!({
+                "request_id": "agent:test/context-registry/v1",
+                "expected_protocol": {
+                    "revision_id": "protocol:1", "payload_sha256": "sha-protocol"
+                },
+                "expected_registry_heads": [
+                    {"revision_id": "registry:1", "payload_sha256": "sha-registry"}
+                ],
+                "gesture_intent": "replace-context-registry",
+                "roles": [{"id": "role:developer", "label": "Developer", "status": "active"}],
+                "scopes": [{
+                    "id": "realm:work", "label": "Work", "status": "active",
+                    "kind": "realm", "security_domain": "owner-work"
+                }]
+            })
+        );
+        let mut forged = candidate;
+        forged["gesture_intent"] = json!("approve");
+        assert!(context_registry_replace_request(&args, &registry, &forged)
+            .unwrap_err()
+            .contains("unsupported field"));
+    }
+
+    #[test]
+    fn registry_replace_is_idempotent_after_cli_refreshes_current_head() {
+        let dir = tempfile::TempDir::new().unwrap();
+        initialize_v2(dir.path());
+        let args = parse_args(
+            &[
+                "context-registry",
+                "replace",
+                "--file",
+                "registry.json",
+                "--request-id",
+                "agent:test/context-registry/idempotent",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        let current = context_registry_snapshot(dir.path()).unwrap();
+        let candidate = json!({
+            "roles": current["roles"],
+            "scopes": current["scopes"]
+        });
+        let invalid_candidate = json!({
+            "roles": [],
+            "scopes": current["scopes"]
+        });
+        let invalid_request =
+            context_registry_replace_request(&args, &current, &invalid_candidate).unwrap();
+        assert!(memory_control::dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &invalid_request,
+        )
+        .unwrap_err()
+        .contains("MEMORY_CONTEXT_REGISTRY_INVALID"));
+        assert_eq!(
+            memory_v2::V2Repository::new(dir.path())
+                .load()
+                .unwrap()
+                .context_registries
+                .len(),
+            1
+        );
+        let first_request = context_registry_replace_request(&args, &current, &candidate).unwrap();
+        let mut stale_args = args.clone();
+        stale_args.flags.insert(
+            "request-id".into(),
+            "agent:test/context-registry/stale".into(),
+        );
+        let stale_request =
+            context_registry_replace_request(&stale_args, &current, &candidate).unwrap();
+        let first = memory_control::dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &first_request,
+        )
+        .unwrap();
+        assert!(memory_control::dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &stale_request,
+        )
+        .unwrap_err()
+        .contains("MEMORY_STALE_BASE"));
+
+        fs::remove_file(dir.path().join("MEMORY.md")).unwrap();
+        let refreshed = context_registry_snapshot(dir.path()).unwrap();
+        let retry_request =
+            context_registry_replace_request(&args, &refreshed, &candidate).unwrap();
+        let retry = memory_control::dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &retry_request,
+        )
+        .unwrap();
+
+        assert_eq!(retry["revision"], first["revision"]);
+        assert!(dir.path().join("MEMORY.md").is_file());
+        let mut conflicting_candidate = candidate.clone();
+        conflicting_candidate["roles"][0]["label"] = json!("Changed label");
+        let conflicting_request =
+            context_registry_replace_request(&args, &refreshed, &conflicting_candidate).unwrap();
+        assert!(memory_control::dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &conflicting_request,
+        )
+        .unwrap_err()
+        .contains("MEMORY_IDEMPOTENCY_CONFLICT"));
+        let repository = memory_v2::V2Repository::new(dir.path()).load().unwrap();
+        assert_eq!(
+            repository
+                .context_registries
+                .iter()
+                .filter(|item| {
+                    item.value.request_id == "agent:test/context-registry/idempotent"
+                })
+                .count(),
+            1
+        );
     }
 
     #[test]

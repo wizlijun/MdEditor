@@ -1,8 +1,8 @@
 # 任务：基于我的 note.md Vault 初始化 Role / Scope，并提议分配现有记忆
 
-你是一个外部 Agent。请根据我当前 note.md Vault 中可验证的长期证据，建立一份保守、稳定、互相隔离的 Role / Scope 候选，并在我确认 Registry 后，为现有 Memory Claim 提交 Role / Scope 重新分配提案。
+你是一个外部 Agent。请根据我当前 note.md Vault 中可验证的长期证据，建立一份保守、稳定、互相隔离的 Role / Scope 候选，通过受控 CLI 更新完整 Registry，并为现有 Memory Claim 提交 Role / Scope 重新分配提案。
 
-这不是人格分析，也不是让你取得长期记忆治理权。你可以自动执行读取、分析、候选校验、重分配预览和 proposal；Role / Scope 定义生效及最终批量应用必须由我在 note.md 的「记忆 → 身份与场景」界面确认。
+这不是人格分析，也不是让你取得 Claim 审批权。你可以自动执行读取、分析、候选校验、完整 Registry 替换、重分配预览和 proposal；Registry 替换会立即生效，Claim 重新分配仍必须由我在 note.md 的「记忆 → 待确认」中批准。
 
 ---
 
@@ -10,9 +10,7 @@
 
 1. 只读取完成任务所需的 Vault 内容和以下 `notemd memory` 命令输出。
 2. 不直接修改 `.notemd/memory/**`、`MEMORY.md`、`USER.md` 或任何 Memory ledger、Registry、projection 文件。
-3. 不调用或编造以下能力：
-   - `notemd memory context-registry replace/apply/import`
-   - `notemd memory reassign apply`
+3. Registry 只能在完整候选通过校验后调用 `notemd memory context-registry replace`；不调用或编造 `context-registry apply/import`、`notemd memory reassign apply`。
    - 任何 `approve`、`--yes`、`--force` 或冒充 `human:*` 的参数
 4. `--recorded-by` 必须是你自己的稳定 Agent ID，例如 `codex/gpt-5`、`claude/sonnet-4`；绝不能写成 `human:*`。
 5. 不读取、复制或输出密码、token、API key、私钥、门禁码、证件号、银行卡号、完整住址等凭据或高风险隐私。发现后只计数为「已排除敏感项」，不要复述内容。
@@ -150,11 +148,20 @@ notemd memory context-registry validate --file <临时候选文件> --json
 
 如果校验失败，根据 `errors` 修改后重试，最多三次。不要为了通过校验删除现有项或放宽安全域。最终展示完整 JSON、校验结果和与现有 Registry 的逐项差异。
 
-然后停止，并明确要求我：在「记忆 → 身份与场景」中审阅并创建这些 Role / Scope，完成后回复你「Registry 已确认」。在我明确确认前，不得生成或提交重新分配 proposal。
+校验通过后，用候选文件的 SHA-256 作为稳定 request-id 的末段，执行：
 
-### 阶段 C：我确认 Registry 后，规划 Claim 分配
+```bash
+notemd memory context-registry replace \
+  --file <临时候选文件> \
+  --request-id "<你的稳定Agent-ID>/role-scope-bootstrap/v1/<候选文件sha256>" \
+  --json
+```
 
-收到我明确回复「Registry 已确认」后，重新运行：
+`replace` 提交的是完整 Registry，并立即生效。不得遗漏、删除或静默修改现有条目；不得使用随机数、日期或 `human:*` 生成 request-id。随后重新运行 `context-registry show`，逐项核对实际 Role/Scope 与候选完全一致。写入或核对失败就停止，不得继续提交重新分配 proposal。
+
+### 阶段 C：Registry 更新并核对后，规划 Claim 分配
+
+Registry 更新成功并精确核对后，重新运行：
 
 ```bash
 notemd memory context-registry show --json
@@ -204,7 +211,7 @@ notemd memory reassign propose \
 5. `完整 Registry 候选 JSON`
 6. `validate 结果`
 7. `待我判断 / 需要拆分 / 高风险项`
-8. `人工检查点或已提交的 reassignment proposals`
-9. `执行记录`：只列实际运行过的只读、validate、plan、propose 命令及成功/失败，不输出凭据
+8. `Registry 替换与已提交的 reassignment proposals`
+9. `执行记录`：只列实际运行过的只读、validate、replace、plan、propose 命令及成功/失败，不输出凭据
 
-不能确认的内容明确写「未知」。不要用漂亮但无法验证的标签填空，不要跳过人工检查点，也不要把 proposal 描述成已经批准或应用。
+不能确认的内容明确写「未知」。不要用漂亮但无法验证的标签填空，不要把 reassignment proposal 描述成已经批准或应用。

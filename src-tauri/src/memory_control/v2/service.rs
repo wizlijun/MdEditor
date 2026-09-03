@@ -1,8 +1,10 @@
 //! Trusted Host RPC adapter for Memory Protocol v2.
 //!
-//! The official Memory plugin is the human gesture boundary. Request bodies
-//! never carry an actor or capability: both are derived from the current,
-//! uniquely reduced authority revision and bound into the immutable child.
+//! The official Memory plugin is the human gesture boundary for Claim approval
+//! and reassignment apply. Context Registry replacement is also exposed through
+//! the controlled CLI. Request bodies never carry an actor or capability: both
+//! are derived from the current, uniquely reduced authority revision and bound
+//! into the immutable child.
 
 use super::projector::rebuild_projections_unlocked;
 use super::reducer::canonical_request_revision_ids;
@@ -2496,6 +2498,7 @@ fn context_registry_replace(
     let writer = RepositoryWriter::new(root);
     let transaction = writer.begin().map_err(|error| error.to_string())?;
     let (repository, snapshot) = active(root, &input.expected_protocol)?;
+    let actual_heads = context_registry_head_refs(&repository)?;
     if let Some(existing) = repository
         .context_registries
         .iter()
@@ -2513,9 +2516,22 @@ fn context_registry_replace(
             .into_iter()
             .map(scope_definition)
             .collect::<Vec<_>>();
-        if existing.value.base_heads != input.expected_registry_heads
-            || existing.value.roles != expected_roles
-            || existing.value.scopes != expected_scopes
+        let mut normalized_candidate = existing.value.clone();
+        normalized_candidate.roles = expected_roles;
+        normalized_candidate.scopes = expected_scopes;
+        let normalized_candidate = normalized_candidate
+            .normalized()
+            .map_err(|error| format!("MEMORY_INVALID_PAYLOAD: {error}"))?;
+        let committed_head = RevisionRef {
+            revision_id: existing.value.revision_id.clone(),
+            payload_sha256: existing.value.payload_sha256.clone(),
+        };
+        let retries_original_request = existing.value.base_heads == input.expected_registry_heads;
+        let retries_after_commit = actual_heads == [committed_head.clone()]
+            && input.expected_registry_heads == actual_heads;
+        if (!retries_original_request && !retries_after_commit)
+            || existing.value.roles != normalized_candidate.roles
+            || existing.value.scopes != normalized_candidate.scopes
         {
             return Err(
                 "MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another registry replacement"
@@ -2523,10 +2539,16 @@ fn context_registry_replace(
             );
         }
         drop(transaction);
-        return context_registry(root);
+        // A previous call may have published the revision and then failed while
+        // rebuilding projections. Replaying the idempotency key must finish the
+        // transaction's observable work instead of returning a false success.
+        rebuild_projections(root)?;
+        let mut value = context_registry(root)?;
+        value["revision"] = serde_json::to_value(committed_head)
+            .map_err(|error| format!("MEMORY_INVALID_PAYLOAD: {error}"))?;
+        return Ok(value);
     }
 
-    let actual_heads = context_registry_head_refs(&repository)?;
     exact_heads(&input.expected_registry_heads, &actual_heads)?;
     if actual_heads.len() > 1 {
         return Err(
