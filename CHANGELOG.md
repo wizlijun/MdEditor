@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.903.6 — 2026-09-03
+
 ### Changed
 
 - **Smart Search & Answers is now Smart Lookup: a fast path from a natural-language request to useful Vault results.** Typing keeps a zero-token preview; Return uses one fast Agent planning pass to separate dates, paths, tags, source types and sorting from real search terms, then the trusted host runs typed search and renders explainable result cards. It no longer automatically tunes, loads Memory, generates an answer, archives feedback or writes a document.
