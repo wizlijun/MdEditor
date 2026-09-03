@@ -36,7 +36,7 @@ pub mod watch;
 
 pub use block::{Block, BlockLevel, FileMeta, Link};
 pub use origin::Origin;
-pub use query::{Abort, Answer, Hit, Limits, Query, Route};
+pub use query::{Abort, Answer, Hit, Limits, Query, Route, SortMode};
 pub use scan::{
     BatchOutcome, IndexOutcome, Phase, Progress, ProgressFn, ScanOptions, ScanStats, SkippedFile,
 };
@@ -252,7 +252,22 @@ impl SearchIndex {
         conventions: &query::Conventions,
     ) -> Result<Answer, String> {
         let q = query::parse(raw);
-        query::search_with(&self.conn, &q, limit, &today(), limits, weights, conventions)
+        self.search_query_ranked(&q, limit, limits, weights, conventions)
+    }
+
+    /// Execute a caller-validated, already-parsed query through the same ranked
+    /// retrieval pipeline as [`Self::search_ranked`]. This is the boundary for
+    /// structured planners: filters such as a multi-word concept type remain one
+    /// typed value and never need to be flattened into the raw query DSL.
+    pub fn search_query_ranked(
+        &self,
+        query: &Query,
+        limit: usize,
+        limits: &Limits,
+        weights: &query::Weights,
+        conventions: &query::Conventions,
+    ) -> Result<Answer, String> {
+        query::search_with(&self.conn, query, limit, &today(), limits, weights, conventions)
             .map_err(|e| e.to_string())
     }
 

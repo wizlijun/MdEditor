@@ -4,10 +4,10 @@
 
 ## 0. 一句话
 
-保留电子书现有的 `YYYY-MM/<书名>/` 物理归档；在书库根增加一份可由用户维护的
-`topics.yml`，每本书在自己的 `meta.yml` 中保存唯一 `topic_id`，插件据此确定性生成
-`<关键词>.index.md`。导入界面把主题作为首要选择，新书没有有效主题时禁止开始导入；
-Agent 通过独立任务基于现有书名和 metadata 生成 2–8 个主题及完整归类 proposal，用户
+保留电子书现有的 `YYYY-MM/<书名>/` 物理归档；在书库根增加一份可由用户维护的  
+`topics.yml`，每本书在自己的 `meta.yml` 中保存唯一 `topic_id`，插件据此确定性生成  
+`<关键词>.index.md`。导入界面把主题作为首要选择，新书没有有效主题时禁止开始导入；  
+Agent 通过独立任务基于现有书名和 metadata 生成 2–8 个主题及完整归类 proposal，用户  
 预览确认后再应用。
 
 ## 1. 目标与边界
@@ -45,13 +45,13 @@ Agent 通过独立任务基于现有书名和 metadata 生成 2–8 个主题及
 | 应用权限 | 后端验证 proposal，用户在 UI 明确确认后由插件写入 |
 | 旧书兼容 | 缺 `topic_id` 仍显示并标为“未分类”；但任何新导入都必须带有效主题 |
 
-不把“书籍 → 主题”同时保存在 `topics.yml`，否则每次导入都要修改一个全局书单，Git
-并发更容易冲突，也会与每书 metadata 形成双真相。`topics.yml` 只定义 taxonomy；书籍
+不把“书籍 → 主题”同时保存在 `topics.yml`，否则每次导入都要修改一个全局书单，Git  
+并发更容易冲突，也会与每书 metadata 形成双真相。`topics.yml` 只定义 taxonomy；书籍  
 归属随书保存。
 
 ## 3. 文件布局
 
-```text
+```
 ssot/ebooks/
 ├── topics.yml                         # 用户/插件维护的主题词表
 ├── 商业战略.index.md                  # 生成物
@@ -105,7 +105,7 @@ topics:
 - `id` 是稳定主键：`[a-z0-9]+(?:-[a-z0-9]+)*`，全局唯一，创建后改显示名也不改 ID。
 - `label` 非空、唯一，建议 2–8 个字符，但不以语言长度硬拒绝。
 - `description` 非空，说明纳入范围，避免只换一个近义词。
-- `index_file` 是书库根下的单个安全文件名：不得含 `/`、`\\`、`..`，不得为
+- `index_file` 是书库根下的单个安全文件名：不得含 `/`、`\\`、`..`，不得为  
   `index.md` / `log.md`，必须以 `.index.md` 结尾，且全局唯一。
 - `vocabulary` 至少 2 项；每项 `term`、`description` 非空；同一主题内 `term` 唯一。
 - 未知字段读取时保留，便于未来 schema 扩展。
@@ -177,7 +177,7 @@ tags: [ebooks, topic, business-strategy]
 - 链接相对于 ebooks 根，含空格的路径用 `<...>` 包裹。
 - 不写生成时钟，避免无内容变化时产生 Git diff。
 - 文件开头必须有生成标记。插件只覆盖或清理带同版本生成标记的文件；遇到同名手写文件即停止并报冲突。
-- 索引是投影。用户手改索引会在下次重建时丢失，因此 UI 的“编辑”入口打开
+- 索引是投影。用户手改索引会在下次重建时丢失，因此 UI 的“编辑”入口打开  
   `topics.yml` 或主题管理页，不把 index 当编辑入口。
 
 ## 6. 导入界面
@@ -212,7 +212,7 @@ tags: [ebooks, topic, business-strategy]
 
 ### UI RPC
 
-```text
+```
 plugin.topic_state       -> topics + counts + unclassified + diagnostics
 plugin.topic_save        -> 校验并保存主题定义/迁移，随后重建 index
 plugin.topic_assign      -> 为一本文档写 topic_id，随后重建 index
@@ -223,14 +223,14 @@ plugin.import_start      <- 新增必填 topic_id
 plugin.library_list      -> 每本书新增 topic_id/topic_label
 ```
 
-后端必须重新校验 `topic_id`，不能只信 UI。`run_import` / `PipelineCtx` 接收主题 ID，
+后端必须重新校验 `topic_id`，不能只信 UI。`run_import` / `PipelineCtx` 接收主题 ID，  
 `finalize` 写入 `added_at + topic_id`。
 
 ### CLI
 
 现有命令增加：
 
-```text
+```
 notemd ebook <file> --topic <topic-id> [--ocr ...]
 ```
 
@@ -240,7 +240,7 @@ notemd ebook <file> --topic <topic-id> [--ocr ...]
 
 ## 8. Agent 任务
 
-独立任务 ID：`organize-ebook-topics`。不复用 `ai-read-ebook`，因为二者输入、权限和
+独立任务 ID：`organize-ebook-topics`。不复用 `ai-read-ebook`，因为二者输入、权限和  
 产物完全不同。
 
 ### 输入 inventory
@@ -259,7 +259,7 @@ books:
     current_topic_id: null
 ```
 
-不包含 `book.md` 正文、摘要或用户其他 Vault 内容。metadata 优先读 `book.md`
+不包含 `book.md` 正文、摘要或用户其他 Vault 内容。metadata 优先读 `book.md`  
 frontmatter，缺失时退回 `config.txt` 和目录名。
 
 ### Prompt 约束
@@ -273,7 +273,7 @@ Agent 必须：
 5. 只写固定 proposal 路径，不修改书籍、canonical YAML 或 index。
 6. 严格输出可解析 YAML，不使用 Markdown code fence。
 
-任务目录同时携带共享 `task.json`，以及 Claude / Codex / DeepSeek 各自需要的指令和权限
+任务目录同时携带共享 `task.json`，以及 Claude / Codex / DeepSeek 各自需要的指令和权限  
 文件。Ebook Import 仅在文件缺失时创建默认模板，不覆盖用户已经编辑的版本。
 
 ### 应用流程
@@ -287,19 +287,19 @@ Agent 必须：
 
 ## 9. 一致性、并发与恢复
 
-YAML/meta 是权威，index 是缓存投影。多个文件无法形成真正的跨文件原子 rename，因此
+YAML/meta 是权威，index 是缓存投影。多个文件无法形成真正的跨文件原子 rename，因此  
 采用“锁 + 原子单文件写 + 可重放 reconcile”：
 
 - 所有主题保存、书籍归属、导入 meta 提交和 index 重建共用 ebooks 根的文件锁。
 - 单个 YAML/Markdown 先写同目录临时文件，`fsync` 后 rename。
-- 新书先写 `book.md/config/images`，再以临时文件提交含 `topic_id` 的 `meta.yml`；只有
+- 新书先写 `book.md/config/images`，再以临时文件提交含 `topic_id` 的 `meta.yml`；只有  
   `meta.yml` 存在才算已完成书籍。
 - meta 提交后，在同一锁内扫描所有书并重建受影响 index；成功事件在重建结束后发送。
 - 若进程在 meta 提交后崩溃，启动、`library_list` 和下一次导入都会 reconcile，补回 index。
-- Agent 批量应用写 `apply-journal.json`，记录 proposal SHA 和目标步骤；重启后幂等完成或
+- Agent 批量应用写 `apply-journal.json`，记录 proposal SHA 和目标步骤；重启后幂等完成或  
   回报可恢复错误，不能留下不可解释的半应用状态。
 - 并发投影总是重新扫描所有已提交 meta，不使用“读取 index 后追加一行”，避免丢更新。
-- Git 合并后若 index 冲突，可直接重建；若 `topics.yml` 或同一本书 `meta.yml` 冲突则
+- Git 合并后若 index 冲突，可直接重建；若 `topics.yml` 或同一本书 `meta.yml` 冲突则  
   fail closed，要求用户解决权威 YAML，不能用 index 猜测。
 
 ## 10. 旧书迁移

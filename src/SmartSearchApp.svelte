@@ -22,18 +22,38 @@
     parseAnswerSegments,
     selectContextSources,
     sourceForCitation,
+    unknownAnswerCitations,
     type AnswerContext,
   } from './lib/smart-search/session'
   import {
     loadSearchAgentOptions,
-    pollSearchAgentTask,
-    startSearchAgentTask,
+    pollAgentTask,
+    SEARCH_ANSWER_TASK,
+    SEARCH_PLAN_TASK,
+    startAgentTask,
   } from './lib/smart-search/agent'
   import { smartSearchApi, type ArchiveReceipt } from './lib/smart-search/api'
+  import {
+    rememberedModelPreference,
+    rememberModelPreference,
+    resolvedModelHint,
+    selectableModelPreferences,
+    selectorForPreference,
+    type ModelPreference,
+    type ModelSelector,
+    type SearchModelPhase,
+  } from './lib/smart-search/model-routing'
+  import {
+    buildSearchPlanPrompt,
+    shouldTune,
+    type PlannedSearchResponse,
+    type ResolvedSearchPlan,
+    type SearchPlanTelemetry,
+  } from './lib/smart-search/plan'
   import { addRemovedKeys, chooseResultKeys, restoreRemovedKeys } from './lib/smart-search/selection'
 
   type SourceFilter = 'all' | SearchHit['origin']
-  type AnswerPhase = 'idle' | 'preparing' | 'running' | 'done' | 'error'
+  type AnswerPhase = 'idle' | 'planning' | 'searching' | 'tuning' | 'preparing' | 'running' | 'done' | 'error'
 
   const store = new SmartSearchStore()
   const windowApi = getCurrentWindow()
@@ -46,6 +66,7 @@
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
   let deepTimer: ReturnType<typeof setTimeout> | undefined
   let expandedWindow = false
+  let authoritativeResults = $state(false)
 
   let sourceFilter = $state<SourceFilter>('all')
   let selectedKeys = $state<string[]>([])
@@ -57,6 +78,9 @@
   let agents = $state<AgentOption[]>([])
   let selectedProvider = $state('')
   let agentsError = $state('')
+  let planModelPreference = $state<ModelPreference>('profile:fast')
+  let answerModelPreference = $state<ModelPreference>('profile:default')
+  let modelSettingsOpen = $state(false)
 
   let answerPhase = $state<AnswerPhase>('idle')
   let answerError = $state('')
@@ -65,6 +89,11 @@
   let answerProvider = $state('')
   let answerModel = $state<string | null>(null)
   let answerRunId = $state('')
+  let planRunId = $state('')
+  let tuneRunId = $state('')
+  let planModel = $state<string | null>(null)
+  let resolvedPlan = $state<ResolvedSearchPlan | null>(null)
+  let answerSelector = $state<ModelSelector>({ model_profile: 'default' })
   let answerContext = $state<AnswerContext | null>(null)
   let progressText = $state('')
   let answerAttempt = 0
@@ -95,9 +124,15 @@
     flatVisibleHits.find((hit) => hitKey(hit) === activeKey) ?? flatVisibleHits[0] ?? null,
   )
   let highlightTerms = $derived(parseHighlightTerms(store.query || inputValue))
-  let usableAgents = $derived(agents.filter((agent) => agent.harness?.ok === true))
+  let usableAgents = $derived(agents.filter((agent) => supportsSmartAnswer(agent)))
   let selectedAgent = $derived(agents.find((agent) => agent.id === selectedProvider) ?? null)
-  let answerBusy = $derived(answerPhase === 'preparing' || answerPhase === 'running')
+  let exactModelPreferences = $derived(selectableModelPreferences(selectedAgent?.harness))
+  let resolvedTerms = $derived(Array.from(new Set(
+    resolvedPlan?.queries.flatMap((query) => [...query.terms, ...query.phrases]) ?? [],
+  )).slice(0, 6))
+  let answerBusy = $derived([
+    'planning', 'searching', 'tuning', 'preparing', 'running',
+  ].includes(answerPhase))
   let currentResultsExhausted = $derived(
     store.route !== null && store.hits.length > 0 && contextHits.length === 0,
   )
@@ -119,8 +154,9 @@
     }
     try {
       agents = await loadSearchAgentOptions()
-      const installed = agents.filter((agent) => agent.harness?.ok === true).map((agent) => agent.id)
+      const installed = agents.filter(supportsSmartAnswer).map((agent) => agent.id)
       selectedProvider = rememberedProvider('global-search', installed, 'notemd.claude-agent')
+      loadModelPreferences()
     } catch (error) {
       agentsError = error instanceof Error ? error.message : String(error)
     }
@@ -173,6 +209,8 @@
     // Input changes invalidate in-flight work immediately. Old hits must not
     // remain actionable during the debounce window or an IME hold state.
     store.clear()
+    authoritativeResults = false
+    resolvedPlan = null
     const decision = decideTrigger(inputValue, composing)
     if (decision.kind === 'hold') return
     if (decision.kind === 'clear') return
@@ -242,6 +280,54 @@
   function chooseProvider(event: Event): void {
     selectedProvider = (event.currentTarget as HTMLSelectElement).value
     rememberProvider('global-search', selectedProvider)
+    loadModelPreferences()
+  }
+
+  function supportsSmartAnswer(agent: AgentOption): boolean {
+    const capability = agent.harness?.capabilities
+    const routing = capability?.model_routing
+    const profiles = routing?.profiles
+    return agent.harness?.ok === true
+      && capability?.tasks?.includes(SEARCH_PLAN_TASK) === true
+      && capability?.tasks?.includes(SEARCH_ANSWER_TASK) === true
+      && capability?.search_plan_schemas?.includes(1) === true
+      && capability?.terminal_result === true
+      && capability?.input_only_isolation === true
+      && routing?.invocation_override === true
+      && (profiles?.fast?.available === true || profiles?.default?.available === true)
+  }
+
+  function loadModelPreferences(): void {
+    const harness = agents.find((agent) => agent.id === selectedProvider)?.harness
+    planModelPreference = rememberedModelPreference(
+      'global-search', selectedProvider, 'plan', harness,
+    )
+    answerModelPreference = rememberedModelPreference(
+      'global-search', selectedProvider, 'answer', harness,
+    )
+  }
+
+  function changeModelPreference(phase: SearchModelPhase, event: Event): void {
+    const preference = (event.currentTarget as HTMLSelectElement).value as ModelPreference
+    if (phase === 'plan') planModelPreference = preference
+    else answerModelPreference = preference
+    rememberModelPreference('global-search', selectedProvider, phase, preference)
+  }
+
+  function modelPreferenceLabel(preference: ModelPreference): string {
+    if (preference === 'profile:fast') return t('smartSearch.modelFast')
+    if (preference === 'profile:default') return t('smartSearch.modelDefault')
+    return preference.slice('model:'.length)
+  }
+
+  function phaseLabel(): string {
+    switch (answerPhase) {
+      case 'planning': return t('smartSearch.planning')
+      case 'searching': return t('smartSearch.plannedSearching')
+      case 'tuning': return t('smartSearch.tuning')
+      case 'preparing': return t('smartSearch.preparing')
+      default: return t('smartSearch.running')
+    }
   }
 
   function groupLabel(group: HitGroup): string {
@@ -350,42 +436,124 @@
     }
   }
 
-  function currentModel(provider = selectedProvider): string | null {
-    return agents.find((agent) => agent.id === provider)?.harness?.default_model ?? null
-  }
-
   function newId(): string {
     return typeof crypto?.randomUUID === 'function'
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}`
   }
 
-  async function exactSnapshot(query: string): Promise<SearchHit[]> {
-    let response: SmartSearchResponse | null = null
-    if (!store.loading && store.route !== null && store.query === query) {
-      response = {
-        route: store.route === 'smart-scan' ? 'smart-scan' : 'smart-fts',
-        tookMs: store.tookMs,
-        total: store.total,
-        hits: store.hits as SmartSearchResponse['hits'],
-        truncated: store.truncated,
-        deepAvailable: store.deepAvailable,
-        extractedTerms: store.extractedTerms,
-        subqueries: store.subqueries,
+  function parsePlan(content: string): unknown {
+    const trimmed = content.trim()
+    if (!trimmed || trimmed.startsWith('```')) {
+      throw new Error('Agent 没有返回有效的 SearchPlanV1 JSON')
+    }
+    try {
+      return JSON.parse(trimmed)
+    } catch {
+      throw new Error('Agent 返回的 SearchPlanV1 不是有效 JSON')
+    }
+  }
+
+  function searchTelemetry(result: PlannedSearchResponse): SearchPlanTelemetry {
+    return {
+      total: result.search.hits.length,
+      distinctDocuments: new Set(result.search.hits.map((hit) => hit.path)).size,
+      truncated: result.search.truncated,
+      subqueries: result.search.subqueries.map((query) => ({
+        id: query.id,
+        purpose: query.kind === 'precision' || query.kind === 'recall' ? query.kind : 'unknown',
+        hitCount: query.hitCount,
+        executed: query.executed,
+        truncated: query.truncated,
+      })),
+    }
+  }
+
+  async function runPlannedSearch(
+    provider: string,
+    query: string,
+    referenceTime: string,
+    timezone: string,
+    locale: string,
+    lockedFilters: Record<string, unknown>,
+    modelSelector: ModelSelector,
+    attempt: number,
+  ): Promise<PlannedSearchResponse> {
+    answerPhase = 'planning'
+    const planPrompt = buildSearchPlanPrompt({
+      mode: 'plan', question: query, referenceTime, timezone, locale, lockedFilters,
+    })
+    let rawPlan = ''
+    let baselinePlan: unknown
+    for (let plannerAttempt = 0; plannerAttempt < 2; plannerAttempt += 1) {
+      const attemptPrompt = plannerAttempt === 0
+        ? planPrompt
+        : `${planPrompt}\n\nRETRY: The previous response was not valid standalone JSON. Return exactly one SearchPlanV1 JSON object with no prose or code fence.`
+      const planStart = await startAgentTask(
+        provider, SEARCH_PLAN_TASK, attemptPrompt, modelSelector,
+      )
+      planRunId = planStart.runId
+      planModel = planStart.resolvedModel ?? planModel
+      const planResult = await pollAgentTask(provider, SEARCH_PLAN_TASK, planStart.runId, (progress) => {
+        progressText = progress.last || (progress.steps ? `${progress.steps}` : '')
+      })
+      if (attempt !== answerAttempt) throw new DOMException('superseded', 'AbortError')
+      rawPlan = planResult.content.trim()
+      try {
+        baselinePlan = parsePlan(rawPlan)
+        break
+      } catch (error) {
+        if (plannerAttempt === 1) throw error
+        progressText = '检索计划格式无效，正在重试理解'
       }
-    } else {
-      response = await store.run(query, { deep: false })
     }
-    if (response?.hits.length === 0 && response.deepAvailable) {
-      response = await store.run(query, { deep: true, timeoutMs: DEEP_TIMEOUT_MS })
+    answerPhase = 'searching'
+    let planned = await smartSearchApi.plannedSearch(
+      query, baselinePlan!, referenceTime, timezone, { deep: true, timeoutMs: DEEP_TIMEOUT_MS },
+    )
+
+    const telemetry = searchTelemetry(planned)
+    if (shouldTune(telemetry)) {
+      answerPhase = 'tuning'
+      try {
+        const tuneStart = await startAgentTask(
+          provider,
+          SEARCH_PLAN_TASK,
+          buildSearchPlanPrompt({
+            mode: 'tune', question: query, referenceTime, timezone, locale, lockedFilters,
+            previousPlan: rawPlan, resolvedPlan: planned.resolvedPlan, telemetry,
+          }),
+          modelSelector,
+        )
+        tuneRunId = tuneStart.runId
+        planModel = tuneStart.resolvedModel ?? planModel
+        const tuned = await pollAgentTask(provider, SEARCH_PLAN_TASK, tuneStart.runId, (progress) => {
+          progressText = progress.last || (progress.steps ? `${progress.steps}` : '')
+        })
+        rawPlan = tuned.content.trim()
+        answerPhase = 'searching'
+        planned = await smartSearchApi.plannedSearch(
+          query, parsePlan(rawPlan), referenceTime, timezone,
+          { deep: true, timeoutMs: DEEP_TIMEOUT_MS, baselinePlan: baselinePlan! },
+        )
+      } catch (error) {
+        if (planned.search.hits.length === 0) throw error
+        progressText = '调优失败，继续使用首次检索结果'
+      }
     }
-    return response?.hits ?? []
+    return planned
   }
 
   async function askAgent(): Promise<void> {
     const query = inputValue.trim()
     const provider = selectedProvider
-    const model = currentModel(provider)
+    const harness = agents.find((agent) => agent.id === provider)?.harness
+    const planSelector = selectorForPreference(planModelPreference)
+    const selectedAnswerSelector = selectorForPreference(answerModelPreference)
+    const answerModelHint = resolvedModelHint(answerModelPreference, harness)
+    const referenceTime = new Date().toISOString()
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+    const locale = navigator.language || 'en'
     const removedAtStart = new Set(removedKeys)
     if (!query || !provider || currentResultsExhausted || answerBusy || documentBusy) return
     cancelTimers()
@@ -397,14 +565,28 @@
     feedback = null
     feedbackStatus = ''
     archiveReceipt = null
+    planRunId = ''
+    tuneRunId = ''
+    planModel = null
+    resolvedPlan = null
     try {
-      const snapshotHits = await exactSnapshot(query)
+      const planContext = await smartSearchApi.planContext(query)
+      const planned = await runPlannedSearch(
+        provider, query, referenceTime, timezone, locale, planContext.lockedFilters,
+        planSelector, attempt,
+      )
       if (attempt !== answerAttempt) return
-      const availableHits = snapshotHits.filter((hit) => !removedAtStart.has(hitKey(hit)))
-      const sources = selectContextSources(availableHits)
-      if (!sources.length) throw new Error(t('smartSearch.noContext'))
+      store.apply(query, planned.search)
+      authoritativeResults = true
+      resolvedPlan = planned.resolvedPlan
+      const availableHits = planned.search.hits.filter((hit) => !removedAtStart.has(hitKey(hit)))
+      const selectedSources = selectContextSources(availableHits)
+      if (!selectedSources.length) throw new Error(t('smartSearch.noContext'))
+      const sources = await smartSearchApi.freezeSources(selectedSources)
+      if (attempt !== answerAttempt) return
 
-      const memory = await smartSearchApi.memoryContext(provider, model).catch((error) => ({
+      answerPhase = 'preparing'
+      const memory = await smartSearchApi.memoryContext(provider, answerModelHint).catch((error) => ({
         available: false,
         selected: [],
         excludedSummary: {},
@@ -421,17 +603,24 @@
       }
       const prompt = buildSearchAnswerPrompt('short', context)
       answerPhase = 'running'
-      const runId = await startSearchAgentTask(provider, prompt)
+      const answerStart = await startAgentTask(
+        provider, SEARCH_ANSWER_TASK, prompt, selectedAnswerSelector,
+      )
       answerProvider = provider
-      answerModel = model
-      answerRunId = runId
+      answerModel = answerStart.resolvedModel ?? answerModelHint
+      answerRunId = answerStart.runId
+      answerSelector = selectedAnswerSelector
       answerContext = context
-      const result = await pollSearchAgentTask(provider, runId, (progress) => {
+      const result = await pollAgentTask(provider, SEARCH_ANSWER_TASK, answerStart.runId, (progress) => {
         progressText = progress.last || (progress.steps ? `${progress.steps}` : '')
       })
       if (attempt !== answerAttempt) return
       const content = result.content.trim()
       if (!content) throw new Error(t('smartSearch.answerError'))
+      const unknownCitations = unknownAnswerCitations(content, context.sources)
+      if (unknownCitations.length) {
+        throw new Error(`Agent 返回了未知引用：${unknownCitations.join(', ')}`)
+      }
       answer = content
       answerId = newId()
       answerPhase = 'done'
@@ -514,8 +703,10 @@
         memoryManifestId: memory.manifestId,
       }
       const prompt = buildSearchAnswerPrompt('document', documentContext, answer)
-      const runId = await startSearchAgentTask(answerProvider, prompt)
-      const result = await pollSearchAgentTask(answerProvider, runId, (progress) => {
+      const start = await startAgentTask(
+        answerProvider, SEARCH_ANSWER_TASK, prompt, answerSelector,
+      )
+      const result = await pollAgentTask(answerProvider, SEARCH_ANSWER_TASK, start.runId, (progress) => {
         progressText = progress.last || (progress.steps ? `${progress.steps}` : '')
       })
       const receipt = await smartSearchApi.writeDocument({
@@ -523,8 +714,8 @@
         query: documentContext.query,
         content: result.content.trim(),
         provider: answerProvider,
-        model: answerModel,
-        runId,
+        model: start.resolvedModel ?? answerModel,
+        runId: start.runId,
         memoryManifestId: documentContext.memoryManifestId,
         sources: documentContext.sources,
       })
@@ -583,10 +774,59 @@
   </section>
   <div class="input-hint">
     <span>{t('smartSearch.inputHint')}</span>
-    {#if selectedAgent?.harness?.default_model}
-      <span>{selectedAgent.harness.default_model}</span>
+    {#if selectedAgent}
+      <button
+        class="model-summary"
+        aria-expanded={modelSettingsOpen}
+        onclick={() => { modelSettingsOpen = !modelSettingsOpen }}
+      >
+        {t('smartSearch.modelStrategy')}: {modelPreferenceLabel(planModelPreference)} / {modelPreferenceLabel(answerModelPreference)}
+      </button>
     {/if}
   </div>
+
+  {#if modelSettingsOpen && selectedAgent}
+    <div class="menu-panel model-policy-panel" role="dialog" aria-label={t('smartSearch.modelStrategy')}>
+      <label class="menu-row model-policy-row">
+        <span>
+          <strong>{t('smartSearch.planTuneModel')}</strong>
+          <small>{t('smartSearch.planTuneModelHint')}</small>
+        </span>
+        <select value={planModelPreference} onchange={(event) => changeModelPreference('plan', event)}>
+          <option value="profile:fast">{t('smartSearch.modelFast')}</option>
+          <option value="profile:default">{t('smartSearch.modelDefault')}</option>
+          {#each exactModelPreferences as preference}
+            <option value={preference}>{modelPreferenceLabel(preference)}</option>
+          {/each}
+        </select>
+      </label>
+      <label class="menu-row model-policy-row">
+        <span>
+          <strong>{t('smartSearch.answerModel')}</strong>
+          <small>{t('smartSearch.answerModelHint')}</small>
+        </span>
+        <select value={answerModelPreference} onchange={(event) => changeModelPreference('answer', event)}>
+          <option value="profile:default">{t('smartSearch.modelDefault')}</option>
+          <option value="profile:fast">{t('smartSearch.modelFast')}</option>
+          {#each exactModelPreferences as preference}
+            <option value={preference}>{modelPreferenceLabel(preference)}</option>
+          {/each}
+        </select>
+      </label>
+    </div>
+  {/if}
+
+  {#if resolvedPlan}
+    <div class="plan-summary" aria-label={t('smartSearch.intelligentResults')}>
+      {#if resolvedPlan.time?.after || resolvedPlan.time?.before}
+        <span>{resolvedPlan.time.after ?? '…'} – {resolvedPlan.time.before ?? '…'}</span>
+      {/if}
+      {#each resolvedTerms as term}
+        <span>{term}</span>
+      {/each}
+      {#if resolvedPlan.sort !== 'relevance'}<span>{resolvedPlan.sort}</span>{/if}
+    </div>
+  {/if}
 
   {#if !ready}
     <div class="launch-state">…</div>
@@ -610,7 +850,7 @@
     <section class="workspace">
       <aside class="results-pane" aria-label={t('smartSearch.results')}>
         <header class="pane-header">
-          <strong>{t('smartSearch.results')}</strong>
+          <strong>{authoritativeResults ? t('smartSearch.intelligentResults') : t('smartSearch.quickPreview')}</strong>
           <span>{store.loading ? '…' : store.hits.length}</span>
           <select bind:value={sourceFilter} aria-label={t('smartSearch.sourceAll')}>
             <option value="all">{t('smartSearch.sourceAll')}</option>
@@ -702,11 +942,16 @@
           {#if answerContext?.memoryManifestId}<span class="memory-chip">◈ {t('smartSearch.memoryUsed')}</span>{/if}
         </header>
 
-        {#if answerPhase === 'preparing' || answerPhase === 'running'}
+        {#if answerBusy}
           <div class="answer-state">
             <span class="spinner"></span>
-            <strong>{answerPhase === 'preparing' ? t('smartSearch.preparing') : t('smartSearch.running')}</strong>
+            <strong>{phaseLabel()}</strong>
             {#if progressText}<small>{progressText}</small>{/if}
+            {#if answerPhase === 'planning' || answerPhase === 'tuning'}
+              <small>{planModel ?? resolvedModelHint(planModelPreference, selectedAgent?.harness) ?? ''}</small>
+            {:else if answerPhase === 'running'}
+              <small>{answerModel ?? resolvedModelHint(answerModelPreference, selectedAgent?.harness) ?? ''}</small>
+            {/if}
           </div>
         {:else if answerPhase === 'error'}
           <div class="answer-state error">
@@ -788,6 +1033,7 @@
   button { color: inherit; }
 
   main {
+    position: relative;
     height: 100vh;
     min-height: 150px;
     display: flex;
@@ -849,6 +1095,15 @@
   .ask-button:disabled, button:disabled { opacity: .45; }
   .ask-button kbd { margin-left: 6px; font: inherit; opacity: .7; }
   .input-hint { display: flex; justify-content: space-between; padding: 6px 19px 8px 48px; color: var(--smart-muted); font-size: 11px; }
+  .model-summary { border: 0; padding: 0; background: transparent; color: inherit; font-size: inherit; }
+  .model-policy-panel { position: absolute; z-index: 20; top: 78px; right: 18px; width: min(420px, calc(100vw - 36px)); padding: 6px; }
+  .model-policy-row { display: flex; justify-content: space-between; gap: 20px; padding: 9px 10px; }
+  .model-policy-row > span { min-width: 0; }
+  .model-policy-row strong, .model-policy-row small { display: block; }
+  .model-policy-row small { margin-top: 2px; color: var(--smart-muted); font-size: 10px; }
+  .model-policy-row select { max-width: 170px; }
+  .plan-summary { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 18px 8px 48px; }
+  .plan-summary span { padding: 2px 6px; border-radius: 999px; background: color-mix(in srgb, AccentColor 10%, Canvas); color: var(--smart-muted); font-size: 10px; }
   .launch-state, .agent-warning { padding: 6px 20px; color: var(--smart-muted); font-size: 12px; }
   .agent-warning { color: #b45309; }
   .navigation-error {

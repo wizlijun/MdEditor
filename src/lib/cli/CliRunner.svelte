@@ -9,6 +9,7 @@
   import { runShareCli, buildVirtualTab } from './share-cli'
   import { firstPathArg, outputPathFor, requiresFileArg, type CliPayload } from './cli-runner'
   import { runReadingInsightsCli } from './reading-insights-cli'
+  import { finishForPluginCliResult } from './plugin-result'
   import type { PluginManifest, TabKind } from '../plugins/types'
   import type { FileKind } from '../fs'
 
@@ -175,27 +176,23 @@
 
     // The command executes on the plugin's resident runtime via
     // plugin_v2_execute_cli, which returns a result value (toasts are GUI-only
-    // events). Output conventions: --json wraps the result as {ok:true,data},
-    // errors exit 4 with a plugin_failed envelope; --quiet suppresses only
-    // successful human output, never failures.
+    // events). Output conventions: --json wraps the result as {ok,data}; an
+    // opt-in structured result envelope lets a plugin return its full report
+    // while requesting a non-zero exit code. Thrown errors still exit 4 with
+    // a plugin_failed envelope; --quiet suppresses only successful output.
     try {
       const { context } = await buildContext(manifest, snap, invokeOpts)
-      const data = await invoke<unknown>('plugin_v2_execute_cli', {
+      const rawData = await invoke<unknown>('plugin_v2_execute_cli', {
         pluginId: manifest.id,
         subcommand: payload.subcommand,
         command: payload.plugin_command,
         context,
       })
-      const path = data != null && typeof data === 'object'
-        ? (data as Record<string, unknown>).path : undefined
-      await finish({
-        exit_code: 0,
-        stdout: payload.global.json
-          ? JSON.stringify({ ok: true, data: data ?? {} })
-          : payload.global.quiet ? undefined
-          : typeof path === 'string' ? path : JSON.stringify(data ?? {}),
-        stderr: [],
-      })
+      await finish(finishForPluginCliResult(rawData, {
+        json: payload.global.json,
+        quiet: payload.global.quiet,
+        pluginName: manifest.name,
+      }))
     } catch (e) {
       const message = String(e)
       await finish({

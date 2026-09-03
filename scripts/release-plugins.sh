@@ -2,7 +2,7 @@
 # Package + sign v2 plugins for the marketplace (子项目③ Task 5).
 #
 #   scripts/release-plugins.sh [--release] <plugin...>
-#     plugin ∈ { md2pdf, roam-import, openclaw, pos-log,
+#     plugin ∈ { md2pdf, roam-import, meetings, openclaw, pos-log,
 #                decision-log, weekly-review, memory, claude-agent, codex-agent, deepseek-agent, ebook-import,
 #                idea-spark, next, power-mode, trace-source }   (add a case below)
 #     --release  currently a no-op flag reserved for build-profile parity with
@@ -12,7 +12,7 @@
 # For each plugin this script:
 #   1. Builds its artifacts by REUSING the existing build scripts
 #      (md2pdf → scripts/build-md2pdf-v2.sh dual-arch bins;
-#       roam-import/openclaw/claude-agent/codex-agent/deepseek-agent/ebook-import → dual-arch backend
+#       roam-import/meetings/openclaw/claude-agent/codex-agent/deepseek-agent/ebook-import → dual-arch backend
 #       crate + pnpm --filter <plugin> build → dist/).
 #   2. Assembles the install-layout tree (manifest.json at root + bin/ and/or
 #      ui/) in a temp staging dir, then ZIPs it into
@@ -43,14 +43,14 @@ PLUGINS=()
 for arg in "$@"; do
   case "$arg" in
     --release) : ;; # reserved; release builds are always release-profile
-    md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|memory|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|next|power-mode|trace-source) PLUGINS+=("$arg") ;;
+    md2pdf|roam-import|meetings|openclaw|pos-log|decision-log|weekly-review|memory|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|next|power-mode|trace-source) PLUGINS+=("$arg") ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | openclaw | pos-log | decision-log | weekly-review | memory | claude-agent | codex-agent | deepseek-agent | ebook-import | idea-spark | next | power-mode | trace-source)" >&2; exit 2 ;;
+    *) echo "unknown arg: $arg (expected --release | md2pdf | roam-import | meetings | openclaw | pos-log | decision-log | weekly-review | memory | claude-agent | codex-agent | deepseek-agent | ebook-import | idea-spark | next | power-mode | trace-source)" >&2; exit 2 ;;
   esac
 done
 if [[ ${#PLUGINS[@]} -eq 0 ]]; then
-  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|openclaw|pos-log|decision-log|weekly-review|memory|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|next|power-mode|trace-source>..." >&2
+  echo "usage: scripts/release-plugins.sh [--release] <md2pdf|roam-import|meetings|openclaw|pos-log|decision-log|weekly-review|memory|claude-agent|codex-agent|deepseek-agent|ebook-import|idea-spark|next|power-mode|trace-source>..." >&2
   exit 2
 fi
 
@@ -168,6 +168,11 @@ release_md2pdf() {
 release_roam_import() {
   release_native_ui "notemd.roam-import" "$REPO_ROOT/plugins-src/roam-import" \
     "notemd-roam-import" "roam-import-plugin"
+}
+
+release_meetings() {
+  release_native_ui "notemd.meetings" "$REPO_ROOT/plugins-src/meetings" \
+    "notemd-meetings" "meetings-plugin"
 }
 
 # ── decision-log: ui-only, single universal package ───────────────────────────
@@ -516,6 +521,7 @@ for plugin in "${PLUGINS[@]}"; do
   case "$plugin" in
     md2pdf)      release_md2pdf ;;
     roam-import) release_roam_import ;;
+    meetings)    release_meetings ;;
     openclaw)    release_openclaw ;;
     pos-log)     release_pos_log ;;
     decision-log) release_decision_log ;;

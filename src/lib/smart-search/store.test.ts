@@ -69,4 +69,13 @@ describe('SmartSearchStore', () => {
     expect(store.error).toBeNull()
     expect(store.loading).toBe(false)
   })
+
+  it('replaces a live preview with an authoritative planned response', () => {
+    const store = new SmartSearchStore()
+    store.apply('natural language question', response('planned.md'))
+    expect(store.query).toBe('natural language question')
+    expect(store.hits[0].path).toBe('planned.md')
+    expect(store.loading).toBe(false)
+    expect(store.error).toBeNull()
+  })
 })

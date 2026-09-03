@@ -64,7 +64,7 @@ export interface SmartSearchHit extends SearchHit {
 
 export interface SmartSearchQuery {
   id: string
-  kind: 'strict' | 'relaxed'
+  kind: 'strict' | 'relaxed' | 'precision' | 'recall'
   query: string
   terms: string[]
   /** False when the shared deadline expired before this arm could run. */

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use rusqlite::Connection;
 
 use searchidx::query::{Conventions, Hit, Weights};
-use searchidx::{Limits, ScanOptions, SearchIndex};
+use searchidx::{Limits, Query, ScanOptions, SearchIndex};
 
 fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/corpus")
@@ -30,6 +30,62 @@ fn open_temp_with_globs(patterns: &[String]) -> (tempfile::TempDir, SearchIndex)
     let mut idx = SearchIndex::open_at(&corpus(), &d.path().join("index.db"), &globs.stamp()).unwrap();
     idx.rebuild(&ScanOptions { source_globs: globs, ..Default::default() }).unwrap();
     (d, idx)
+}
+
+#[test]
+fn typed_query_entry_matches_raw_ranking_and_preserves_multiword_filters() {
+    let v = tempfile::tempdir().unwrap();
+    std::fs::write(v.path().join("plain.md"), "target\n").unwrap();
+    std::fs::write(
+        v.path().join("summary.md"),
+        "---\ntype: Book Summary\n---\ntarget\n",
+    )
+    .unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let mut idx = SearchIndex::open_at(v.path(), &d.path().join("index.db"), "sync").unwrap();
+    idx.rebuild(&ScanOptions::default()).unwrap();
+    let limits = Limits::full();
+    let weights = Weights::default();
+    let conventions = Conventions::default();
+
+    let raw = idx
+        .search_ranked("target", 20, &limits, &weights, &conventions)
+        .unwrap();
+    let parsed = searchidx::query::parse("target");
+    let typed = idx
+        .search_query_ranked(&parsed, 20, &limits, &weights, &conventions)
+        .unwrap();
+    assert_eq!(typed.route, raw.route);
+    assert_eq!(typed.truncated, raw.truncated);
+    assert_eq!(typed.deep_available, raw.deep_available);
+    assert_eq!(
+        typed
+            .hits
+            .iter()
+            .map(|hit| (&hit.path, hit.line, hit.line_end, hit.score.to_bits()))
+            .collect::<Vec<_>>(),
+        raw.hits
+            .iter()
+            .map(|hit| (&hit.path, hit.line, hit.line_end, hit.score.to_bits()))
+            .collect::<Vec<_>>()
+    );
+
+    let filtered = idx
+        .search_query_ranked(
+            &Query {
+                terms: vec!["target".into()],
+                types: vec!["Book Summary".into()],
+                raw: "structured multi-word type".into(),
+                ..Default::default()
+            },
+            20,
+            &limits,
+            &weights,
+            &conventions,
+        )
+        .unwrap();
+    assert!(!filtered.hits.is_empty());
+    assert!(filtered.hits.iter().all(|hit| hit.path == "summary.md"));
 }
 
 /// spec §7:已知事实回归集(见 tests/fixtures/retrievability.json),CI 常跑。

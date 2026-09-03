@@ -11,12 +11,14 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
 
 const MAX_ANSWER_BYTES: usize = 1_048_576;
 const MAX_SOURCES: usize = 12;
+const MAX_SOURCE_FILE_BYTES: u64 = 52_428_800;
+const MAX_SOURCE_LINES: u32 = 500;
 // Memory Protocol v2's established consent purpose for answering factual
 // questions. Using a new ad-hoc string would make every existing USER.md and
 // MEMORY.md projection ineligible even though the files visibly contain it.
@@ -86,6 +88,111 @@ pub struct MemoryContextDto {
 
 fn active_root(app: &AppHandle) -> Result<PathBuf, String> {
     crate::sotvault::resolve_vault_root(app).ok_or_else(|| "Vault not configured".into())
+}
+
+fn canonical_source_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    if relative.is_empty() || relative.len() > 2_048 || relative.contains('\0') {
+        return Err("invalid source path".into());
+    }
+    let relative = Path::new(relative);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err("source path must stay inside the Vault".into());
+    }
+    let canonical_root = fs::canonicalize(root).map_err(|e| format!("resolve vault: {e}"))?;
+    let mut current = canonical_root.clone();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err("source path must stay inside the Vault".into());
+        };
+        current.push(name);
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|e| format!("inspect source {}: {e}", relative.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err("refusing symlink source".into());
+        }
+    }
+    let metadata = fs::symlink_metadata(&current)
+        .map_err(|e| format!("inspect source {}: {e}", relative.display()))?;
+    if !metadata.is_file() || metadata.len() > MAX_SOURCE_FILE_BYTES {
+        return Err("source is not a readable indexed file".into());
+    }
+    let canonical = fs::canonicalize(&current)
+        .map_err(|e| format!("resolve source {}: {e}", relative.display()))?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err("source escaped the Vault".into());
+    }
+    Ok(canonical)
+}
+
+fn freeze_sources_in(
+    root: &Path,
+    mut sources: Vec<SearchSourcePayload>,
+) -> Result<Vec<SearchSourcePayload>, String> {
+    if sources.is_empty() || sources.len() > MAX_SOURCES {
+        return Err("source count is outside the supported range".into());
+    }
+    for (index, source) in sources.iter_mut().enumerate() {
+        if source.id != format!("S{}", index + 1) {
+            return Err("invalid source id".into());
+        }
+        let hit = source.hit.as_object_mut().ok_or("invalid source hit")?;
+        let relative = hit
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or("source is missing path")?
+            .to_string();
+        let line = hit
+            .get("line")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .ok_or("invalid source line")?;
+        let line_end = hit
+            .get("lineEnd")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or("invalid source lineEnd")?;
+        if line_end < line || line_end - line >= MAX_SOURCE_LINES {
+            return Err("invalid source line range".into());
+        }
+        let expected_ref = format!("{relative}#L{line}");
+        if hit.get("sourceRef").and_then(Value::as_str) != Some(expected_ref.as_str()) {
+            return Err("sourceRef does not match the source range".into());
+        }
+        let absolute = canonical_source_path(root, &relative)?;
+        let body =
+            fs::read_to_string(&absolute).map_err(|e| format!("read source {relative}: {e}"))?;
+        let start = usize::try_from(line - 1).map_err(|_| "invalid source line")?;
+        let count = usize::try_from(line_end - line + 1).map_err(|_| "invalid source range")?;
+        let text = body
+            .lines()
+            .skip(start)
+            .take(count)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.is_empty() {
+            return Err("source range no longer exists".into());
+        }
+        hit.insert("text".into(), Value::String(text));
+        hit.insert(
+            "absPath".into(),
+            Value::String(absolute.to_string_lossy().to_string()),
+        );
+        hit.insert("sourceRef".into(), Value::String(expected_ref));
+    }
+    Ok(sources)
+}
+
+#[tauri::command]
+pub fn smart_search_freeze_sources(
+    app: AppHandle,
+    sources: Vec<SearchSourcePayload>,
+) -> Result<Vec<SearchSourcePayload>, String> {
+    freeze_sources_in(&active_root(&app)?, sources)
 }
 
 fn ensure_fixed_dir(root: &Path, components: &[&str]) -> Result<PathBuf, String> {
@@ -753,5 +860,54 @@ mod tests {
         let mut payload = answer("unused");
         payload.sources[0].id = "S2".into();
         assert!(answer_markdown(&payload).unwrap_err().contains("source id"));
+    }
+
+    #[test]
+    fn frozen_sources_are_reread_from_the_vault_instead_of_trusting_webview_text() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("notes")).unwrap();
+        fs::write(dir.path().join("notes/a.md"), "one\nauthoritative\nthree\n").unwrap();
+        let source = SearchSourcePayload {
+            id: "S1".into(),
+            hit: json!({
+                "path": "notes/a.md",
+                "absPath": "/tampered/a.md",
+                "line": 2,
+                "lineEnd": 2,
+                "text": "tampered",
+                "sourceRef": "notes/a.md#L2"
+            }),
+        };
+
+        let frozen = freeze_sources_in(dir.path(), vec![source]).unwrap();
+        assert_eq!(frozen[0].hit["text"], "authoritative");
+        assert_eq!(
+            frozen[0].hit["absPath"],
+            fs::canonicalize(dir.path().join("notes/a.md"))
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn frozen_sources_reject_traversal_and_symlink_leaves() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        fs::create_dir(dir.path().join("notes")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("notes/link.md")).unwrap();
+        for path in ["../outside.md", "notes/link.md"] {
+            let source = SearchSourcePayload {
+                id: "S1".into(),
+                hit: json!({
+                    "path": path,
+                    "line": 1,
+                    "lineEnd": 1,
+                    "sourceRef": format!("{path}#L1")
+                }),
+            };
+            assert!(freeze_sources_in(dir.path(), vec![source]).is_err());
+        }
     }
 }

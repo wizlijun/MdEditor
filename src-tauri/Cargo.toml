@@ -71,6 +71,7 @@ urlencoding = "2"
 rand = "0.8"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+chrono-tz = "0.10"
 unicode-normalization = "0.1"
 fs2 = "0.4"
 

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { MemorySelection, SearchContextSource } from './session'
+import type { PlannedSearchResponse } from './plan'
 
 export interface MemoryContextResult {
   available: boolean
@@ -37,6 +38,24 @@ export interface DocumentWritePayload {
 }
 
 export const smartSearchApi = {
+  planContext: (originalQuery: string) => invoke<{ lockedFilters: Record<string, unknown> }>(
+    'notemd_search_plan_context', { originalQuery },
+  ),
+  plannedSearch: (
+    originalQuery: string,
+    plan: unknown,
+    referenceTime: string,
+    timezone: string,
+    options: { limit?: number; deep?: boolean; timeoutMs?: number; baselinePlan?: unknown } = {},
+  ) => invoke<PlannedSearchResponse>('notemd_planned_search', {
+    originalQuery,
+    plan,
+    referenceTime,
+    timezone,
+    ...options,
+  }),
+  freezeSources: (sources: SearchContextSource[]) =>
+    invoke<SearchContextSource[]>('smart_search_freeze_sources', { sources }),
   memoryContext: (provider: string, model: string | null) =>
     invoke<MemoryContextResult>('smart_search_memory_context', { provider, model }),
   archiveAnswer: (payload: AnswerArchivePayload) =>

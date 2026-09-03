@@ -5,6 +5,7 @@
 
 mod attention_links;
 pub mod options;
+mod plan;
 mod smart;
 pub mod watch;
 
@@ -949,6 +950,43 @@ pub fn notemd_smart_search(
     smart::run_smart_search_command(app, window, query, limit, deep, timeout_ms)
 }
 
+/// Extract the authoritative filters that must be shown to the isolated
+/// planner and re-applied after it responds. This parses only the supplied
+/// string and never opens the Vault or the index.
+#[tauri::command]
+pub fn notemd_search_plan_context(original_query: String) -> Result<plan::SearchPlanContext, String> {
+    plan::search_plan_context(&original_query)
+}
+
+/// Validate and execute a bounded `SearchPlanV1` without accepting a command
+/// or raw query DSL from the planner.
+#[tauri::command(async)]
+pub fn notemd_planned_search(
+    app: AppHandle,
+    window: tauri::Window,
+    original_query: String,
+    plan: serde_json::Value,
+    baseline_plan: Option<serde_json::Value>,
+    reference_time: String,
+    timezone: String,
+    limit: Option<usize>,
+    deep: Option<bool>,
+    timeout_ms: Option<u64>,
+) -> Result<plan::PlannedSearchResponse, String> {
+    plan::run_planned_search_command(
+        app,
+        window,
+        original_query,
+        plan,
+        baseline_plan,
+        reference_time,
+        timezone,
+        limit,
+        deep,
+        timeout_ms,
+    )
+}
+
 /// `(async)` is load-bearing, not decoration. A plain `#[tauri::command]` is
 /// generated as `kind = "sync"` and runs on the IPC handler's thread — the
 /// main thread — so every millisecond spent in SQLite is a millisecond the
@@ -962,7 +1000,7 @@ pub fn notemd_smart_search(
 /// the rebuild holds the index lock for its whole duration, so run inline
 /// this call would block the event loop rather than just itself.
 ///
-/// Not applied blanket to every command in this file — only the two that can
+/// Not applied blanket to every command in this file — only the three that can
 /// block on `IndexHandle`. `notemd_search_rebuild` deliberately does its lock
 /// taking on a thread it spawns itself and returns immediately, and
 /// `notemd_search_progress` never touches `IndexHandle` at all (that is the

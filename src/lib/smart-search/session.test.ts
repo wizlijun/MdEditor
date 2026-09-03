@@ -5,6 +5,7 @@ import {
   parseAnswerSegments,
   selectContextSources,
   sourceForCitation,
+  unknownAnswerCitations,
 } from './session'
 
 function hit(path: string, line: number, text = 'body'): SearchHit {
@@ -62,6 +63,7 @@ describe('smart-search answer context', () => {
     ])
     expect(sourceForCitation(sources, 'S1')?.path).toBe('a.md')
     expect(sourceForCitation(sources, 'S9')).toBeNull()
+    expect(unknownAnswerCitations('Fact [S1], invented [S9][S9].', sources)).toEqual(['S9'])
   })
 
   it('treats a previous short answer as untrusted data in document mode', () => {

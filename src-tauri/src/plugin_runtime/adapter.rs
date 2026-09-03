@@ -285,6 +285,7 @@ mod tests {
             ("notemd.deepseek-agent", "advance"),
             ("notemd.openclaw-chat", "advance"),
             ("notemd.ebook-import", "reading"),
+            ("notemd.meetings", "capture"),
             ("notemd.idea-spark", "inspiration"),
             ("notemd.next", "advance"),
             ("notemd.pos-log", "record"),

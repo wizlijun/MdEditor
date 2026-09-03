@@ -21,7 +21,30 @@ pub struct Query {
     pub origins: Vec<String>,
     pub after: Option<String>,
     pub before: Option<String>,
+    /// Final ordering for this already-parsed query. The raw query language
+    /// deliberately does not parse a sort token, so existing string callers
+    /// always retain [`SortMode::Relevance`].
+    pub sort: SortMode,
     pub raw: String,
+}
+
+/// The only final-result orderings the typed query API supports.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SortMode {
+    #[default]
+    Relevance,
+    DocDateDesc,
+    DocDateAsc,
+}
+
+impl SortMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Relevance => "relevance",
+            Self::DocDateDesc => "doc_date_desc",
+            Self::DocDateAsc => "doc_date_asc",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,9 +330,22 @@ pub fn search_with(
     // usually the watcher's sweep or a rebuild.
     let _guard = ProgressGuard::install(conn, limits.abort.clone())?;
 
-    let (hits, truncated) = fts_search(conn, q, limit, today, weights, conventions)?;
+    // Date order must see every candidate before applying the caller's limit.
+    // Re-sorting only the normal bm25 over-fetch window would confidently omit
+    // a newer/older match that happened to rank outside that window.
+    let retrieval_limit = match q.sort {
+        SortMode::Relevance => limit,
+        SortMode::DocDateDesc | SortMode::DocDateAsc => crate::NO_LIMIT,
+    };
+
+    let (hits, truncated) =
+        fts_search(conn, q, retrieval_limit, today, weights, conventions)?;
     if !hits.is_empty() || truncated {
-        return Ok(Answer { hits, route: Route::Fts, truncated, deep_available: false });
+        return Ok(finalize_answer(
+            Answer { hits, route: Route::Fts, truncated, deep_available: false },
+            q.sort,
+            limit,
+        ));
     }
     // The dictionary has blind spots — new coinages, personal names, single
     // characters. A miss there would be invisible to the user, so we pay for a
@@ -331,8 +367,13 @@ pub fn search_with(
         // into `Route::Fts` would tell a caller (the CLI's `--json` output,
         // read by agents deciding whether a query was exhaustively tried)
         // that no fallback was attempted when one was.
-        let (hits, truncated) = like_search(conn, q, limit, today, weights, conventions)?;
-        return Ok(Answer { hits, route: Route::Scan, truncated, deep_available: false });
+        let (hits, truncated) =
+            like_search(conn, q, retrieval_limit, today, weights, conventions)?;
+        return Ok(finalize_answer(
+            Answer { hits, route: Route::Scan, truncated, deep_available: false },
+            q.sort,
+            limit,
+        ));
     }
     // A query with at least one filter (`origin:`, `type:`, `tag:`, …) but no
     // terms/phrases — `origin:unlabeled` alone, for instance — is NOT the
@@ -352,10 +393,47 @@ pub fn search_with(
     // (no terms, no phrases, no filters) still falls through to the empty
     // `Answer` below, unchanged.
     if q.terms.is_empty() && q.phrases.is_empty() && has_filters(q) {
-        let (hits, truncated) = filter_only_search(conn, q, limit, today, weights, conventions)?;
-        return Ok(Answer { hits, route: Route::Fts, truncated, deep_available: false });
+        let (hits, truncated) =
+            filter_only_search(conn, q, retrieval_limit, today, weights, conventions)?;
+        return Ok(finalize_answer(
+            Answer { hits, route: Route::Fts, truncated, deep_available: false },
+            q.sort,
+            limit,
+        ));
     }
     Ok(Answer { hits: Vec::new(), route: Route::Fts, truncated: false, deep_available: false })
+}
+
+/// Apply a typed query's explicit final ordering after retrieval, scoring,
+/// phrase validation and rollup removal. Relevance is already ordered and
+/// limited by `finish`; leaving it untouched preserves the raw API byte for
+/// byte. Date modes arrive here with an unlimited candidate set.
+fn finalize_answer(mut answer: Answer, sort: SortMode, limit: usize) -> Answer {
+    if sort == SortMode::Relevance {
+        return answer;
+    }
+    answer.hits.sort_by(|a, b| {
+        let date = match (a.doc_date.as_deref(), b.doc_date.as_deref()) {
+            (Some(a), Some(b)) => match sort {
+                SortMode::DocDateAsc => a.cmp(b),
+                SortMode::DocDateDesc => b.cmp(a),
+                SortMode::Relevance => unreachable!(),
+            },
+            // Missing dates stay at the end in both directions. Indexed files
+            // normally have the mtime fallback, but corrupted/legacy rows must
+            // not jump to the front of either chronological view.
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        date.then_with(|| b.pinned.cmp(&a.pinned))
+            .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.line_end.cmp(&b.line_end))
+    });
+    answer.hits.truncate(limit);
+    answer
 }
 
 /// Whether `q` carries at least one filter clause (`push_filters` would emit
@@ -1329,6 +1407,7 @@ mod tests {
         assert_eq!(q.before.as_deref(), Some("2026-12-31"));
         assert_eq!(q.pages, vec!["Home"]);
         assert_eq!(q.terms, vec!["rest"]);
+        assert_eq!(q.sort, SortMode::Relevance);
     }
 
     #[test]
@@ -1821,6 +1900,78 @@ mod tests {
         let (_d, c) = indexed(&[("2020-01-01-old.md", "target\n"), ("2026-08-01-new.md", "target\n")]);
         let hits = search(&c, &parse("target after:2026-01-01"), 20, "2026-08-10").unwrap().0;
         assert!(hits.iter().all(|h| h.path.starts_with("2026")), "{hits:?}");
+    }
+
+    #[test]
+    fn doc_date_sort_orders_before_applying_the_requested_limit() {
+        // 70 highly relevant old files push the deliberately weak new file
+        // outside the normal limit=1 bm25 over-fetch window (minimum 64).
+        let mut files: Vec<(String, String)> = (0..70)
+            .map(|i| {
+                (
+                    format!("2020-01-01-old-{i:02}.md"),
+                    "target target target target\n".to_string(),
+                )
+            })
+            .collect();
+        files.push((
+            "2026-08-01-new.md".into(),
+            format!("target {}\n", "unrelated ".repeat(500)),
+        ));
+        let refs: Vec<(&str, &str)> =
+            files.iter().map(|(path, body)| (path.as_str(), body.as_str())).collect();
+        let (_d, c) = indexed(&refs);
+        let weights = Weights { attention: 0.0, ..Weights::default() };
+
+        let relevant = search_with(
+            &c,
+            &parse("target"),
+            1,
+            "2026-08-10",
+            &Limits::full(),
+            &weights,
+            &Conventions::default(),
+        )
+        .unwrap();
+        assert_ne!(relevant.hits[0].path, "2026-08-01-new.md");
+
+        let newest = search_with(
+            &c,
+            &Query {
+                terms: vec!["target".into()],
+                sort: SortMode::DocDateDesc,
+                raw: "typed newest target".into(),
+                ..Default::default()
+            },
+            1,
+            "2026-08-10",
+            &Limits::full(),
+            &weights,
+            &Conventions::default(),
+        )
+        .unwrap();
+        assert_eq!(newest.hits[0].path, "2026-08-01-new.md");
+
+        let oldest = search_with(
+            &c,
+            &Query {
+                terms: vec!["target".into()],
+                sort: SortMode::DocDateAsc,
+                raw: "typed oldest target".into(),
+                ..Default::default()
+            },
+            2,
+            "2026-08-10",
+            &Limits::full(),
+            &weights,
+            &Conventions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            oldest.hits.iter().map(|hit| hit.path.as_str()).collect::<Vec<_>>(),
+            vec!["2020-01-01-old-00.md", "2020-01-01-old-01.md"],
+            "same-date ties use the stable path/line fallback"
+        );
     }
 
     /// Hand-verified against independently computed day counts — hazard 8

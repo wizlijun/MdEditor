@@ -65,6 +65,22 @@ export class SmartSearchStore {
     }
   }
 
+  /** Replace the live preview with the host-validated authoritative result. */
+  apply(query: string, response: SmartSearchResponse): void {
+    this.sequence++
+    this.query = query
+    this.hits = response.hits
+    this.route = response.route
+    this.tookMs = response.tookMs
+    this.total = response.total
+    this.loading = false
+    this.error = null
+    this.truncated = response.truncated === true
+    this.deepAvailable = response.deepAvailable === true
+    this.extractedTerms = response.extractedTerms ?? []
+    this.subqueries = response.subqueries ?? []
+  }
+
   clear(): void {
     this.sequence++
     this.query = ''

@@ -123,3 +123,13 @@ export function parseAnswerSegments(answer: string): AnswerSegment[] {
 export function sourceForCitation(sources: SearchContextSource[], citation: string): SearchHit | null {
   return sources.find((source) => source.id === citation)?.hit ?? null
 }
+
+export function unknownAnswerCitations(
+  answer: string,
+  sources: SearchContextSource[],
+): string[] {
+  const allowed = new Set(sources.map((source) => source.id))
+  return Array.from(new Set(answer.match(/\[S\d+\]/g) ?? []))
+    .map((citation) => citation.slice(1, -1))
+    .filter((citation) => !allowed.has(citation))
+}

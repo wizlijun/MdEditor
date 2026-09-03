@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   setTitle: vi.fn(async () => {}),
   setSize: vi.fn(async () => {}),
   center: vi.fn(async () => {}),
+  planResults: [] as string[],
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }))
@@ -78,6 +79,51 @@ function searchResponse(): SmartSearchResponse {
   }
 }
 
+function planJson(): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    intent: { kind: 'answer', focus: 'release risk' },
+    time: null,
+    constraints: {
+      paths: { anyOf: [], allOf: [] }, tags: { anyOf: [], allOf: [] },
+      types: { anyOf: [] }, extensions: { anyOf: [] }, origins: { anyOf: [] },
+      linkedPages: { allOf: [] },
+    },
+    queries: [{
+      id: 'q1', purpose: 'recall', terms: ['release', 'risk'], phrases: [], weight: 1,
+      rationale: 'test',
+    }],
+    sort: 'relevance', unsupportedConstraints: [], ambiguities: [], confidence: 'high',
+  }
+}
+
+function plannedResponse(query = 'release risk') {
+  const search = searchResponse()
+  if (query === 'new question') {
+    search.hits = [hit('new-evidence', 21), hit('new-two', 22), hit('new-three', 23)]
+    search.total = 3
+  }
+  search.subqueries = [{
+    id: 'q1', kind: 'recall', query: 'release risk', terms: ['release', 'risk'],
+    executed: true, route: 't1-fts', hitCount: search.hits.length, deepUsed: false,
+    truncated: false,
+  }]
+  return {
+    resolvedPlan: {
+      schemaVersion: 1,
+      intent: { kind: 'answer', focus: 'release risk' },
+      referenceTime: '2026-09-03T00:00:00Z', referenceDate: '2026-09-03', timezone: 'UTC',
+      time: null, constraints: {}, lockedFilters: {},
+      queries: [{
+        id: 'q1', logicalId: 'q1', purpose: 'recall', terms: ['release', 'risk'],
+        phrases: [], weight: 1, rationale: 'test', filters: {},
+      }],
+      sort: 'relevance', unsupportedConstraints: [], ambiguities: [], confidence: 'high',
+    },
+    search,
+  }
+}
+
 function installInvokeMock(): void {
   mocks.invoke.mockImplementation(async (command: string, args?: Record<string, any>) => {
     if (command === 'get_plugin_manifests') {
@@ -85,17 +131,46 @@ function installInvokeMock(): void {
     }
     if (command === 'plugin_v2_execute') {
       if (args?.command === 'harness-status') {
-        return { harness: 'Test Harness', ok: true, default_model: 'test-model' }
+        return {
+          harness: 'Test Harness', ok: true, default_model: 'test-model',
+          capabilities: {
+            tasks: ['search-plan', 'search-answer'], search_plan_schemas: [1],
+            terminal_result: true, input_only_isolation: true,
+            model_routing: {
+              invocation_override: true,
+              profiles: {
+                fast: { model: 'test-fast', available: true },
+                default: { model: 'test-model', available: true },
+              },
+              selectable_models: ['test-fast', 'test-model'],
+            },
+          },
+        }
       }
-      if (args?.command === 'run-task') return { run_id: 'run-1' }
+      if (args?.command === 'run-task') {
+        const task = args?.context?.task
+        return {
+          run_id: task === 'search-plan' ? 'plan-1' : 'answer-1',
+          resolved_model: task === 'search-plan' ? 'test-fast' : 'test-model',
+        }
+      }
       if (args?.command === 'run-status') {
+        const task = args?.context?.task
         return {
           state: 'done',
           record: { status: 'success', usage: null },
-          terminal_result: { complete: true, content: 'Ship after fixing the blocker. [S1]' },
+          terminal_result: {
+            complete: true,
+            content: task === 'search-plan'
+              ? (mocks.planResults.shift() ?? JSON.stringify(planJson()))
+              : 'Ship after fixing the blocker. [S1]',
+          },
         }
       }
     }
+    if (command === 'notemd_search_plan_context') return { lockedFilters: {} }
+    if (command === 'notemd_planned_search') return plannedResponse(args?.originalQuery)
+    if (command === 'smart_search_freeze_sources') return args?.sources
     if (command === 'notemd_smart_search') {
       if (args?.query === 'new question') {
         const response = searchResponse()
@@ -139,6 +214,7 @@ beforeEach(() => {
   localStorage.clear()
   document.body.innerHTML = ''
   vi.clearAllMocks()
+  mocks.planResults.length = 0
   installInvokeMock()
 })
 
@@ -168,6 +244,7 @@ describe('SmartSearchApp interaction wiring', () => {
 
     const runCall = mocks.invoke.mock.calls.find((call) => (
       call[0] === 'plugin_v2_execute' && call[1]?.command === 'run-task'
+        && call[1]?.context?.task === 'search-answer'
     ))
     expect(runCall?.[1]?.context?.task).toBe('search-answer')
     expect(runCall?.[1]?.context?.prompt).toContain('[S1]')
@@ -179,6 +256,23 @@ describe('SmartSearchApp interaction wiring', () => {
         payload: expect.objectContaining({ query: 'release risk', answer: expect.stringContaining('[S1]') }),
       }))
     })
+  })
+
+  it('retries one invalid planner terminal result before trusted search', async () => {
+    mocks.planResults.push('not json', JSON.stringify(planJson()))
+    const input = await mountReady()
+    await typeAndWait(input)
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await vi.waitFor(() => expect(document.querySelector('.answer-body')).not.toBeNull())
+
+    const plannerStarts = mocks.invoke.mock.calls.filter((call) => (
+      call[0] === 'plugin_v2_execute' && call[1]?.command === 'run-task'
+        && call[1]?.context?.task === 'search-plan'
+    ))
+    expect(plannerStarts).toHaveLength(2)
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_planned_search'))
+      .toHaveLength(1)
   })
 
   it('IME tail Return and Shift+Return never start the Agent', async () => {
@@ -207,10 +301,11 @@ describe('SmartSearchApp interaction wiring', () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
 
     await vi.waitFor(() => expect(document.querySelector('.answer-body')).not.toBeNull())
-    const searchCalls = mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_smart_search')
-    expect(searchCalls.at(-1)?.[1]?.query).toBe('new question')
+    const searchCalls = mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_planned_search')
+    expect(searchCalls.at(-1)?.[1]?.originalQuery).toBe('new question')
     const runCall = mocks.invoke.mock.calls.find((call) => (
       call[0] === 'plugin_v2_execute' && call[1]?.command === 'run-task'
+        && call[1]?.context?.task === 'search-answer'
     ))
     expect(runCall?.[1]?.context?.prompt).toContain('new question')
     expect(runCall?.[1]?.context?.prompt).toContain('notes/new-evidence.md')
