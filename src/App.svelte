@@ -57,6 +57,8 @@
   import { vaultStore, refreshStatus, syncNow, attachStatusListener } from './lib/vault.svelte'
   import { canSyncActive, isTrackedVaultFile, deviceSourceForVaultPath, isMirroredSource, refreshSotvault, sotvaultStore, setVaultRootChangedHandler } from './lib/sotvault.svelte'
   import { indexStatus } from './lib/search/index-status.svelte'
+  import { openAndRevealSearchHit, type SearchHitRevealRequest } from './lib/search/reveal-hit'
+  import { requestReveal } from './lib/outline/reveal.svelte'
   import { windowTitleFor } from './lib/window-title'
   import { installRecentsSync, refreshRecentMenu, mergedRecents } from './lib/recent-sync.svelte'
   import { maybeInstallTracker, shutdownTracker } from './lib/insights/tracker.svelte'
@@ -177,6 +179,61 @@
         win.show()
         win.setFocus()
       } catch (err) { console.warn('[App] editor://open-path:', err); showError(String(err)) }
+    })
+
+    // Standalone smart-search window → main editor. Rust keeps every request
+    // in a pending mailbox until this window has opened the file and installed
+    // a path-targeted reveal. Register the event listener first, then replay the
+    // mailbox so a newly recreated/main-still-loading webview cannot miss it.
+    const searchRevealInFlight = new Set<string>()
+    const completedSearchReveals = new Set<string>()
+    let searchRevealQueue: Promise<void> = Promise.resolve()
+    const handleSearchReveal = async (request: SearchHitRevealRequest) => {
+      if (searchRevealInFlight.has(request.requestId) || completedSearchReveals.has(request.requestId)) return
+      searchRevealInFlight.add(request.requestId)
+      try {
+        await openAndRevealSearchHit(request, {
+          openFile,
+          activePath: () => activeTab()?.filePath ?? null,
+          reveal: requestReveal,
+        })
+        completedSearchReveals.add(request.requestId)
+        try {
+          await invoke<boolean>('acknowledge_search_reveal', { requestId: request.requestId })
+        } catch (err) {
+          // The editor jump already succeeded. Keep the in-memory completed id
+          // as the dedupe fence and leave the Rust mailbox intact for a future
+          // main-window recreation rather than misreporting the open as failed.
+          console.warn('[App] acknowledge_search_reveal:', err)
+        }
+        await win.show()
+        await win.setFocus()
+      } catch (err) {
+        // Do not acknowledge failures: the durable mailbox remains available
+        // for a recreated main window instead of silently losing the jump.
+        console.warn('[App] editor://reveal-search-hit:', err)
+        await showError(String(err))
+      } finally {
+        searchRevealInFlight.delete(request.requestId)
+      }
+    }
+    const enqueueSearchReveal = (request: SearchHitRevealRequest): Promise<void> => {
+      // `activeTab()` is the authoritative final path after `openFile`; serialize
+      // live clicks so another request cannot change it between those two steps.
+      searchRevealQueue = searchRevealQueue.then(() => handleSearchReveal(request))
+      return searchRevealQueue
+    }
+    const unlistenSearchReveal = listen<SearchHitRevealRequest>(
+      'editor://reveal-search-hit',
+      (e) => { void enqueueSearchReveal(e.payload) },
+    )
+    void unlistenSearchReveal.then(async () => {
+      try {
+        const pending = await invoke<SearchHitRevealRequest[]>('pending_search_reveals')
+        for (const request of pending) await enqueueSearchReveal(request)
+      } catch (err) {
+        console.warn('[App] pending_search_reveals:', err)
+      }
     })
 
     // Web-mode remote buffer: agent sends file content → open as untitled tab.
@@ -699,6 +756,7 @@
       unlistenOpenFile.then((fn) => fn())
       unlistenQuickNote.then((fn) => fn())
       unlistenOpenPath.then((fn) => fn())
+      unlistenSearchReveal.then((fn) => fn())
       unlistenOpenRemoteBuffer.then((fn) => fn())
       unlistenPluginToast.then((fn) => fn())
       unlistenPluginsChanged.then((fn) => fn())

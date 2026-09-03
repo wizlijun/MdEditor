@@ -69,8 +69,7 @@ fn completion_usage_tip(display: UsageDisplay, rec: &record::RunRecord) -> Optio
 }
 
 fn run_delivered(spec: &NotifySpec, rec: Option<&record::RunRecord>) -> bool {
-    rec.map(|r| r.status) == Some(record::Status::Success)
-        && Path::new(&spec.expect_file).is_file()
+    rec.map(|r| r.status) == Some(record::Status::Success) && Path::new(&spec.expect_file).is_file()
 }
 
 fn notify_params(spec: &NotifySpec, delivered: bool) -> Value {
@@ -497,18 +496,23 @@ impl DeepseekAgentPlugin {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let ctx = if use_ctx { self.tab_ctx() } else { None };
-        // The source-document paragraph is generated per run, not written into a
-        // template: which documents are mirrors is per-vault state.
-        let metas = agent_run_core::mirror::read_metas(&vault);
-        let scope = target
-            .as_deref()
-            .map(|t| agent_run_core::Scope::for_note(&vault, Path::new(t), &metas));
-        let full = prompt::with_source_context(
-            &prompt::compose(&def.prompt, &user_prompt, ctx.as_ref()),
-            &vault,
-            scope.as_ref(),
-        );
+        let ctx = if use_ctx && task_id != task::SEARCH_ANSWER_TASK {
+            self.tab_ctx()
+        } else {
+            None
+        };
+        let composed = prompt::compose(&def.prompt, &user_prompt, ctx.as_ref());
+        let full = if task_id == task::SEARCH_ANSWER_TASK {
+            composed
+        } else {
+            // Source-document context is useful for document tasks, but would
+            // violate search-answer's frozen input packet.
+            let metas = agent_run_core::mirror::read_metas(&vault);
+            let scope = target
+                .as_deref()
+                .map(|t| agent_run_core::Scope::for_note(&vault, Path::new(t), &metas));
+            prompt::with_source_context(&composed, &vault, scope.as_ref())
+        };
         let run_id = record::new_run_id(chrono::Utc::now(), std::process::id());
         let window_open = self.inner.lock().unwrap().window_open;
 
@@ -766,12 +770,16 @@ impl DeepseekAgentPlugin {
         // run gets. `dsh` is `#!/usr/bin/env node`, and a GUI-launched host has
         // no node on its PATH.
         let path_env = discover::runtime_path();
-        let (ok, version, hint) =
-            match harness::probe_version(&launcher.program, &[], &path_env, VERSION_PROBE_TIMEOUT) {
-                harness::Probe::Version(v) => (true, Some(v), None),
-                harness::Probe::Failed(why) => (false, None, Some(why)),
-                harness::Probe::Unavailable => (true, None, None),
-            };
+        let (ok, version, hint) = match harness::probe_version(
+            &launcher.program,
+            &[],
+            &path_env,
+            VERSION_PROBE_TIMEOUT,
+        ) {
+            harness::Probe::Version(v) => (true, Some(v), None),
+            harness::Probe::Failed(why) => (false, None, Some(why)),
+            harness::Probe::Unavailable => (true, None, None),
+        };
         Ok(serde_json::to_value(agent_run_core::HarnessStatus {
             harness: HARNESS_NAME.to_string(),
             ok,
@@ -786,8 +794,8 @@ impl DeepseekAgentPlugin {
 
     /// The CLI entry point. Detached by default; `--wait` runs inline.
     fn cli_run(&mut self, host: &sdk::Host, context: &Value) -> Result<Value, String> {
-        let task_id = cli_str(context, "task")
-            .ok_or("usage: notemd dsagent <task> [-p PROMPT] [--wait]")?;
+        let task_id =
+            cli_str(context, "task").ok_or("usage: notemd dsagent <task> [-p PROMPT] [--wait]")?;
         let p = cli_str(context, "prompt").unwrap_or_default();
         if cli_flag(context, "wait") {
             self.start(
@@ -930,7 +938,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn activate_never_blocks_the_protocol_loop() {
         let _env = env_guard();
-        std::env::set_var("NOTEMD_SHARED_CONFIG", "/nonexistent/deepseek-agent-test.json");
+        std::env::set_var(
+            "NOTEMD_SHARED_CONFIG",
+            "/nonexistent/deepseek-agent-test.json",
+        );
         let (mut to_plugin, from_plugin) = serve();
         to_plugin
             .write_all(
@@ -988,7 +999,10 @@ mod tests {
             .into_iter()
             .map(|t| t.id)
             .collect();
-        assert_eq!(ids, vec!["ai-read-ebook", NOTE_TASK, "selfcheck"]);
+        assert_eq!(
+            ids,
+            vec!["ai-read-ebook", NOTE_TASK, "search-answer", "selfcheck"]
+        );
         assert!(composition::config_path(vault.path()).is_file());
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
         let _ = std::fs::remove_file(&cfg);
@@ -1065,7 +1079,10 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let secret = outside.path().join("secret.note.md");
         std::fs::write(&secret, "x").unwrap();
-        assert_eq!(note_relative_to_vault(v.path(), secret.to_str().unwrap()), None);
+        assert_eq!(
+            note_relative_to_vault(v.path(), secret.to_str().unwrap()),
+            None
+        );
         assert_eq!(note_relative_to_vault(v.path(), "../escape.note.md"), None);
         assert_eq!(note_relative_to_vault(v.path(), "gone.note.md"), None);
     }
@@ -1155,9 +1172,14 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         task::seed_builtin_templates(v.path());
         let got = overview(v.path());
-        assert_eq!(got.len(), 3);
+        assert_eq!(got.len(), 4);
         for t in &got {
-            assert_eq!(t.permission_mode, "workspace-write");
+            let expected = if t.def.id == "search-answer" {
+                "read-only"
+            } else {
+                "workspace-write"
+            };
+            assert_eq!(t.permission_mode, expected, "{}", t.def.id);
             assert!(!t.policy_rationale.is_empty(), "{}", t.def.id);
             assert!(!t.running);
         }
@@ -1182,7 +1204,10 @@ mod tests {
         .unwrap();
         let got = overview(v.path());
         let note = got.iter().find(|t| t.def.id == NOTE_TASK).unwrap();
-        assert!(note.running, "a detached run holds the lock, not a memory map");
+        assert!(
+            note.running,
+            "a detached run holds the lock, not a memory map"
+        );
         assert_eq!(note.running_since.as_deref(), Some("2026-08-17T00:00:02Z"));
     }
 
@@ -1193,7 +1218,9 @@ mod tests {
         std::fs::remove_dir_all(task::task_dir(v.path(), NOTE_TASK)).unwrap();
         let got = load_task(v.path(), NOTE_TASK).expect("a built-in rebuilds itself");
         assert!(!got.prompt.is_empty());
-        assert!(task::task_dir(v.path(), NOTE_TASK).join("AGENTS.md").exists());
+        assert!(task::task_dir(v.path(), NOTE_TASK)
+            .join("AGENTS.md")
+            .exists());
         assert_eq!(load_task(v.path(), "no-such-task"), None);
     }
 

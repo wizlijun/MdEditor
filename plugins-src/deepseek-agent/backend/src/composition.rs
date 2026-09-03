@@ -16,6 +16,15 @@ use std::path::{Path, PathBuf};
 /// The composition compiled into this binary.
 const DEFAULT_CONFIG: &str = include_str!("../templates/_dsh/cordis.patch.yml");
 
+/// Write the trusted overlay used by input-only runs.
+///
+/// Search answers must not inherit a Vault-local or user-selected composition:
+/// that would let unrelated plugin rows regain tools even though the task only
+/// needs the prompt assembled by NOTE.MD.
+pub fn write_input_only_config(path: &Path) -> std::io::Result<()> {
+    std::fs::write(path, DEFAULT_CONFIG)
+}
+
 /// Where the vault keeps harness state that is ours to manage.
 pub fn dsh_dir(vault: &Path) -> PathBuf {
     vault.join(".notemd/dsh")
@@ -75,12 +84,16 @@ pub fn resolve_config(vault: &Path, override_path: Option<&str>) -> Result<PathB
     match override_path.map(str::trim).filter(|s| !s.is_empty()) {
         Some(p) => {
             let p = PathBuf::from(p);
-            p.is_file()
-                .then_some(p.clone())
-                .ok_or_else(|| format!("dsh_config points at a file that is not there: {}", p.display()))
+            p.is_file().then_some(p.clone()).ok_or_else(|| {
+                format!(
+                    "dsh_config points at a file that is not there: {}",
+                    p.display()
+                )
+            })
         }
         None => {
-            ensure_config(vault).map_err(|e| format!("could not write the dsh composition: {e}"))?;
+            ensure_config(vault)
+                .map_err(|e| format!("could not write the dsh composition: {e}"))?;
             Ok(config_path(vault))
         }
     }
@@ -279,7 +292,11 @@ mod tests {
     fn a_composition_without_a_model_reads_as_unknown() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("bare.yml");
-        std::fs::write(&p, "- insert:\n    - id: acp\n      name: '@deepseek-ai/dsh-acp'\n").unwrap();
+        std::fs::write(
+            &p,
+            "- insert:\n    - id: acp\n      name: '@deepseek-ai/dsh-acp'\n",
+        )
+        .unwrap();
         assert_eq!(default_model(&p), None);
         assert_eq!(default_model(&d.path().join("gone.yml")), None);
     }
@@ -291,5 +308,16 @@ mod tests {
             !DEFAULT_CONFIG.contains("sk-"),
             "no API key may be inlined in a file that goes into git"
         );
+    }
+
+    #[test]
+    fn input_only_config_uses_the_compiled_overlay_not_user_content() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("input-only.patch.yml");
+        std::fs::write(&p, "- id: user-tool\n  dangerous: true\n").unwrap();
+        write_input_only_config(&p).unwrap();
+        let body = std::fs::read_to_string(p).unwrap();
+        assert_eq!(body, DEFAULT_CONFIG);
+        assert!(!body.contains("user-tool"));
     }
 }

@@ -354,7 +354,7 @@ pub async fn plugin_market_install(
     // the UI.
     lifecycle::reconcile_pre_fenced(&app).await?;
     drop(window_replacement);
-    crate::reconcile_plugin_shortcuts(&app);
+    crate::reconcile_global_shortcuts(&app);
     crate::rebuild_menu(&app);
     notify_plugins_changed(&app);
     Ok(())
@@ -383,7 +383,7 @@ pub async fn plugin_market_uninstall(
 
     lifecycle::reconcile_pre_fenced(&app).await?;
     drop(window_replacement);
-    crate::reconcile_plugin_shortcuts(&app);
+    crate::reconcile_global_shortcuts(&app);
     crate::rebuild_menu(&app);
     notify_plugins_changed(&app);
     Ok(())
@@ -409,7 +409,7 @@ pub async fn plugin_market_set_enabled(
 
     lifecycle::reconcile_pre_fenced(&app).await?;
     drop(window_replacement);
-    crate::reconcile_plugin_shortcuts(&app);
+    crate::reconcile_global_shortcuts(&app);
     crate::rebuild_menu(&app);
     notify_plugins_changed(&app);
     Ok(())

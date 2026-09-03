@@ -69,10 +69,44 @@ pub async fn run(
         }
     };
 
-    let args = argv::build(Some(&spec.model), &spec.meta.vault, &spec.sandbox);
+    let input_only = spec.meta.task.id == crate::task::SEARCH_ANSWER_TASK;
+    let input_only_dir = if input_only {
+        match tempfile::Builder::new()
+            .prefix("notemd-search-answer-")
+            .tempdir()
+        {
+            Ok(dir) => Some(dir),
+            Err(e) => {
+                let rec = scaffold::finalize_scoped(
+                    &spec.meta,
+                    &started,
+                    record::Status::Error,
+                    None,
+                    None,
+                    format!("could not create input-only workspace: {e}"),
+                    String::new(),
+                    &actor(&spec.model),
+                    false,
+                );
+                let _ = tx.send(Step::Done(rec));
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
+    let cwd = input_only_dir
+        .as_ref()
+        .map(|dir| dir.path())
+        .unwrap_or(spec.meta.vault.as_path());
+    let args = if input_only {
+        argv::build_input_only(Some(&spec.model), cwd)
+    } else {
+        argv::build(Some(&spec.model), cwd, &spec.sandbox)
+    };
     let mut cmd = tokio::process::Command::new(&spec.codex);
     cmd.args(&args)
-        .current_dir(&spec.meta.vault)
+        .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -373,6 +407,31 @@ mod tests {
         assert_eq!(rec.result, "done");
         assert_eq!(rec.session_id.as_deref(), Some("thr-1"));
         assert_eq!(rec.harness.as_deref(), Some(crate::SELF_PLUGIN_ID));
+    }
+
+    #[tokio::test]
+    async fn search_answer_runs_in_a_removed_empty_directory_outside_the_vault() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake(
+            d.path(),
+            "cat >/dev/null\n\
+             case \" $* \" in *\" --sandbox read-only \"*) ;; *) exit 7 ;; esac\n\
+             printf '{\"type\":\"thread.started\",\"thread_id\":\"thr-input-only\"}\\n'\n\
+             printf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"%s\"}}\\n' \"$(pwd)\"\n\
+             printf '{\"type\":\"turn.completed\",\"usage\":{}}\\n'",
+        );
+        let mut s = spec(d.path(), bin, 5);
+        s.meta.task.id = crate::task::SEARCH_ANSWER_TASK.into();
+        let vault = s.meta.vault.canonicalize().unwrap();
+        let (_cancel_tx, cancel_rx) = mpsc::channel(1);
+        let rec = record_from(s, cancel_rx).await;
+        let cwd = PathBuf::from(&rec.result);
+        assert_eq!(rec.status, record::Status::Success, "{rec:?}");
+        assert!(
+            !cwd.starts_with(vault),
+            "input-only cwd leaked into Vault: {cwd:?}"
+        );
+        assert!(!cwd.exists(), "temporary input-only cwd was not removed");
     }
 
     #[tokio::test]

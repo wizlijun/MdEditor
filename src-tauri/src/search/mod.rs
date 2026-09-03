@@ -5,6 +5,7 @@
 
 mod attention_links;
 pub mod options;
+mod smart;
 pub mod watch;
 
 use std::path::Path;
@@ -928,6 +929,25 @@ fn stats_to_dto(s: IndexStats, skipped_large: Vec<SkippedDto>) -> SearchStatsDto
 /// error the user should ever see: the frontend drops it silently, because by
 /// definition a fresher answer is already on its way.
 pub const CANCELLED: &str = "search cancelled";
+
+/// Deterministic multi-query search for the global smart-search window.
+///
+/// The command wrapper lives in this module (rather than being re-exported
+/// from `smart`) because `tauri::generate_handler!` resolves the command
+/// macro's hidden wrapper at the path supplied to it.  Keeping this entry
+/// here therefore lets the app register the unsurprising
+/// `search::notemd_smart_search` path while the implementation stays isolated.
+#[tauri::command(async)]
+pub fn notemd_smart_search(
+    app: AppHandle,
+    window: tauri::Window,
+    query: String,
+    limit: Option<usize>,
+    deep: Option<bool>,
+    timeout_ms: Option<u64>,
+) -> Result<smart::SmartSearchResponse, String> {
+    smart::run_smart_search_command(app, window, query, limit, deep, timeout_ms)
+}
 
 /// `(async)` is load-bearing, not decoration. A plain `#[tauri::command]` is
 /// generated as `kind = "sync"` and runs on the IPC handler's thread — the

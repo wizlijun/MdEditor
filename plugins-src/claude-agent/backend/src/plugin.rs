@@ -512,7 +512,11 @@ impl ClaudeAgentPlugin {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let ctx = if use_ctx { self.tab_ctx() } else { None };
+        let ctx = if use_ctx && task_id != task::SEARCH_ANSWER_TASK {
+            self.tab_ctx()
+        } else {
+            None
+        };
         let full = prompt::compose(&def.prompt, &user_prompt, ctx.as_ref());
         let run_id = record::new_run_id(chrono::Utc::now(), std::process::id());
 
@@ -964,7 +968,10 @@ mod tests {
             .into_iter()
             .map(|t| t.id)
             .collect();
-        assert_eq!(ids, vec!["ai-read-ebook", NOTE_TASK, "selfcheck"]);
+        assert_eq!(
+            ids,
+            vec!["ai-read-ebook", NOTE_TASK, "search-answer", "selfcheck"]
+        );
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
     }
 

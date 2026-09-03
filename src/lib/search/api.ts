@@ -42,6 +42,47 @@ export interface SearchResponse {
   deepAvailable: boolean
 }
 
+/** Stable explanations emitted by the deterministic smart-search merger.
+ * They explain retrieval/ranking only; none is a factual confidence score. */
+export type SmartRelevanceReason =
+  | 'exact_page'
+  | 'strict_query'
+  | 'exact_phrase'
+  | 'filename_match'
+  | 'breadcrumb_match'
+  | 'multiple_queries'
+  | 'relaxed_query'
+
+/** A normal hit with the evidence needed to explain its fused position. */
+export interface SmartSearchHit extends SearchHit {
+  /** Weighted reciprocal-rank score, comparable only within this response. */
+  fusedScore: number
+  relevanceReasons: SmartRelevanceReason[]
+  /** Query-plan arm ids such as `strict` and `relaxed-2`. */
+  matchedQueries: string[]
+}
+
+export interface SmartSearchQuery {
+  id: string
+  kind: 'strict' | 'relaxed'
+  query: string
+  terms: string[]
+  /** False when the shared deadline expired before this arm could run. */
+  executed: boolean
+  route: string | null
+  hitCount: number
+  deepUsed: boolean
+  truncated: boolean
+}
+
+export interface SmartSearchResponse extends SearchResponse {
+  route: 'smart-fts' | 'smart-scan'
+  hits: SmartSearchHit[]
+  /** Deterministically ranked content terms; explicit filters are in subqueries. */
+  extractedTerms: string[]
+  subqueries: SmartSearchQuery[]
+}
+
 /**
  * Cancellation is NOT expressed here. The backend stamps every query with its
  * own per-window ticket and aborts any query a later ticket has overtaken —
@@ -145,6 +186,13 @@ export const DEFAULT_LIMIT = 50
 export const searchApi = {
   query: (query: string, opts: SearchOptions = {}) =>
     invoke<SearchResponse>('notemd_search', {
+      query,
+      limit: opts.limit ?? DEFAULT_LIMIT,
+      deep: opts.deep,
+      timeoutMs: opts.timeoutMs,
+    }),
+  smart: (query: string, opts: SearchOptions = {}) =>
+    invoke<SmartSearchResponse>('notemd_smart_search', {
       query,
       limit: opts.limit ?? DEFAULT_LIMIT,
       deep: opts.deep,
