@@ -9,15 +9,23 @@ For the full commit history, see the git log.
 
 ### Added
 
+- **Smart Search & Answers turns the vault into a keyboard-first research surface.** Open it with Command/Ctrl-K, or Option-Space anywhere on macOS; results appear while you type, stay grouped by their real source, and can be opened in the editor or removed singly or in a standard multi-selection without touching the original files. Return asks the selected Claude, Codex or DeepSeek Agent using a frozen evidence packet plus policy-approved USER and MEMORY facts. Answers keep clickable source citations; a helpful vote archives an auditable Markdown answer under `answers/`, and a separate action generates a longer editable note.
+
+- **Meetings 1.0.0 safely brings Hemory conversations into `ssot/meetings/`.** Its window and `meetings-import-hemory` CLI share the same dry-run-first migration engine, preserve the original time-coded speaker transcript and optional summary, write only the agreed flat metadata, never copy audio, and protect local edits, duplicate imports and interrupted transactions with hashes, checkpoints and recovery journals.
+
 - **What you wrote by hand now says so, in the file.** New documents, quick notes, companion `.note.md` files, daily notes, pages created from a `[[wikilink]]`, Idea Spark originals and Trace Source requests — anything produced by a direct action of yours — now carry a signature in their metadata (`generated: by: human:<your git identity>`). Until now "a person wrote this" could only be inferred from the *absence* of an AI stamp, which made an unstamped AI dump indistinguishable from your own draft. Three states, each saying its own name: written by a person, written by a generator, claimed by nobody. The signature is written once, at creation — reopening and saving an old note will not grow one — and imported content (Roam, ebooks) stays unsigned, because carrying something across is not writing it. It reads the same in Obsidian, or in grep.
 
 ### Changed
+
+- **Claude Agent 1.0.24, Codex Agent 1.0.10 and DeepSeek Agent 1.1.10 add a shared input-only `search-answer` task.** The task receives only the host's frozen question, approved memory facts and search snippets. It runs outside the vault, does not inherit tab or source context, rejects tool escalation, and keeps short answers and detailed Markdown on the same citation and evidence contract.
 
 - **Claude Agent 1.0.23, Codex Agent 1.0.9 and DeepSeek Agent 1.1.9 reveal recent runs five at a time.** Each window starts with the five newest runs and a compact “Show 5 more” action; every click reveals the next five, with the final action matching the actual remainder. Changing task or history scope returns to the newest five, while background refreshes keep the amount you already expanded.
 
 - **Claude Agent 1.0.22, Codex Agent 1.0.8 and DeepSeek Agent 1.1.8 put recent runs first and keep task templates compact.** Tasks are grouped by the feature plugin that uses them and every group starts collapsed, leaving the sidebar focused on the newest run history. Expand a neutral plugin row to choose a task; its count and running state stay visible while collapsed. Existing vaults are recognized without migration, and custom tasks remain available in their own group.
 
 ### Fixed
+
+- **Command/Ctrl-A once again selects the whole document in every main-editor mode.** Source mode no longer loses the shortcut to the native menu responder, and the shared selection handling remains consistent across rich and source editing.
 
 - **Clicking a `[[wikilink]]` that doesn't exist yet, in rich text, no longer creates an empty shell.** It used to write a 0-byte file: no title, no metadata, failing the format check and ranked last in search. It now takes the same page-creation path as the outline panel, and what lands is a well-formed document.
 
