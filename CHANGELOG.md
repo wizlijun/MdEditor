@@ -15,9 +15,13 @@ For the full commit history, see the git log.
 
 - **Claude Agent 1.0.21, Codex Agent 1.0.7 and DeepSeek Agent 1.1.7 share a clearer workspace design.** The environment, tasks and run history now live in one accessible sidebar scroll area while Settings stays pinned at the bottom, so longer task lists can no longer squeeze history out of view. Two-line history cards keep status, task, time and provider readable, and the input, stream, log and settings surfaces now match the Plugin Market's neutral visual language with consistent hover, selection and keyboard focus feedback.
 
+- **The `notemd` CLI now has one complete, strict contract across built-in and plugin commands.** Top-level and topic help document the real arguments, value placeholders, JSON envelopes, quiet behavior and exit codes; Memory also exposes exact claim lookup, filtered lists, context manifests, purge plans and drift-aware checks as documented.
+
 ### Fixed
 
 - **A concurrent change no longer makes a pending bulk action look all-or-nothing.** Items are guarded and processed serially; if one becomes stale, Memory stops, refreshes the real queue and reports exactly how many were completed and how many remain.
+
+- **Plugin and automation commands no longer silently reinterpret bad input.** Dynamic plugin arguments keep their declared names and types, disabled plugins can be inspected and re-enabled, and unknown or conflicting flags fail safely. Share record cleanup works after the source file is gone, Reading Insights validates date ranges consistently, CLI-only runs no longer activate unrelated startup plugins, and WebView commands time out instead of hanging forever.
 
 ## v6.902.9 — 2026-09-02
 
