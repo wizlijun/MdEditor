@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.903.5 — 2026-09-03
+
 ### Changed
 
 - **Smart Search now shows a live, scrolling work log while it understands and answers a question.** Safe status lines expose the current planning, search, tuning, evidence, memory and answer stages without leaking provider internals, and remain visible after either success or failure. If answer generation fails, a dedicated retry reuses the already frozen evidence instead of repeating the search.
