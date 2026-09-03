@@ -117,7 +117,7 @@ PAGES = [
   ("Kann ich Notion-Seiten in note.md exportieren?",
    "Ja. Notion exportiert Markdown; leg die Dateien in deinen Vault und sie werden gewöhnliche Notizen, die du lesen, annotieren und verlinken kannst."),
   ("Warum ist Local-first für AI wichtig?",
-   "Agents arbeiten am besten auf reinen Dateien, die sie direkt lesen und schreiben können. Ein lokaler Markdown-Vault ist für jeden CLI-Agent sofort nutzbar — keine API-Tokens, keine Rate-Limits, keine Anbieter-AI als Türsteher."),
+   "Agents arbeiten am besten auf reinen Dateien, die sie direkt lesen und schreiben können. Mit einem lokalen Markdown-Vault nutzt du deinen vorhandenen Agent oder deine lokale Laufzeitumgebung, ohne dein Wissen einer einzigen Anbieter-KI oder einer zweiten Token-Rechnung auszuliefern. Für Nutzung und Limits gelten weiterhin die Regeln des gewählten Dienstes."),
  ],
 },
 # ------------------------------------------------------------ integrations
@@ -427,7 +427,9 @@ gh repo create my-vault --private --source=. --push</code></pre>
  ],
  "faq": [
   ("Zeichnet note.md alle meine Nachrichten auf?",
-   "Nein. note.md ruft selbst kein Modell auf und sendet keine Anfragen. Du entscheidest, welche Dateien, Transkripte und Agent-Workflows in deinen Vault gelangen; ein installierter Agent darf nur das Material untersuchen, das du dem jeweiligen Workflow bereitstellst."),
+   "Nein. Du entscheidest, welche Dateien, Transkripte und Agent-Workflows in deinen Vault gelangen oder ihn untersuchen dürfen. Integrierte Agents laufen nur in Workflows, die du startest oder einrichtest, und nutzen den von dir gewählten Agent, Anbieterzugang oder deine lokale Laufzeitumgebung; note.md macht aus deinem Vault kein automatisch aufgebautes Cloud-Profil."),
+  ("Berechnet note.md zusätzliche KI-Tokens?",
+   "Nein. Die integrierten Agent-Funktionen verwenden deine bestehenden Agents, KI-Abos, API-Zugänge oder deine lokale Umgebung. note.md verkauft keine Tokens, erhebt keinen Aufschlag und berechnet keine separate Tokengebühr. Die tatsächliche Modellnutzung fällt weiterhin unter Abo, API-Abrechnung und Limits deines Anbieters beziehungsweise unter deine lokale Rechenleistung."),
   ("Kann ein Agent automatisch eine vertrauenswürdige Erinnerung hinzufügen?",
    "Nein. Ein Agent kann einen noch ungeprüften Vorschlag erstellen. Bevor daraus bestätigter Kontext wird, ist eine menschliche Bestätigung erforderlich. Diese Bestätigung gilt ausschließlich für den konkret geprüften Inhalt."),
   ("Warum nicht für alles die Suche verwenden?",

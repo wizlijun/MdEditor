@@ -4,8 +4,8 @@
 
 > **Read what AI writes. Keep what you think. Keep what only *you* can write.**
 
-A markdown reader, editor, and bidirectional-linking notes tool for the
-AI-native era. Native macOS app, ~11 MB to download, ~15 MB installed. Your
+A markdown reader, editor, and bidirectional-linking notes tool designed for
+people and AI agents to work in the same files. Native macOS app, ~11 MB to download, ~15 MB installed. Your
 notes are a folder of plain `.md` files on your disk — forever.
 
 [Download](https://notemd.net/download) · [Plugins](https://plugins.notemd.net) · [Full feature list](docs/FEATURES.md)
@@ -33,18 +33,24 @@ Roam Research and Obsidian figured these out. note.md ships them on files:
 one plugin imports your entire Roam graph, and an Obsidian vault opens
 directly.
 
-## 3. No AI inside. Fully AI-native.
+## 3. Agent-ready by design. Use the AI you already have.
 
-note.md calls no model and sends no request.
+Built-in agent workflows use the agents, AI subscriptions, API accounts, or
+local runtimes you already have. note.md sells no tokens, adds no token markup,
+and charges no separate per-token fee.
+
+Model usage still follows the plan, limits, and billing of your chosen
+provider—or uses your own local compute.
 
 Your vault is designed to be the shared, version-controlled context that many
 agents and many harnesses work in — Claude Cowork, Claude Code, Codex,
-ChatGPT Work, OpenClaw, Hermes — through public conventions (`AGENTS.md`,
+DeepSeek, ChatGPT Work, OpenClaw, Hermes — through public conventions (`AGENTS.md`,
 block citations, sidecar `.note.md`). Memory follows the same contract:
 agents can suggest what matters, but only you decide what becomes lasting
 context. The more you leave in the vault, the better every agent knows you.
 
-Switch AI tools whenever you like. The asset stays yours.
+Switch AI tools whenever you like. The asset stays yours, without adding a
+second token meter from note.md.
 
 Specifically tuned for building products with Claude Code: writing docs,
 reading docs, and reviewing what the AI generated.

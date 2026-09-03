@@ -353,7 +353,7 @@ PAGES = [
   ("Can I export Notion pages into note.md?",
    "Yes. Notion exports markdown; drop the files into your vault and they become ordinary notes you can read, annotate, and link."),
   ("Why does local-first matter for AI?",
-   "Agents work best on plain files they can read and write directly. A local markdown vault is instantly usable by any CLI agent — no API tokens, no rate limits, no vendor's AI as gatekeeper."),
+   "Agents work best on plain files they can read and write directly. A local markdown vault lets you use the agent or local runtime you already have, without forcing your knowledge through one vendor's AI or adding a second token bill. Provider usage and limits still follow the service you choose."),
  ],
 },
 # ------------------------------------------------------------ integrations
@@ -664,7 +664,9 @@ gh repo create my-vault --private --source=. --push</code></pre>
  ],
  "faq": [
   ("Does note.md record all of my messages?",
-   "No. note.md calls no model and sends no request by itself. You choose the files, transcripts, and agent workflows that enter your vault; an installed agent may examine only the material you give that workflow."),
+   "No. You choose which files, transcripts, and agent workflows may enter or examine your vault. Built-in agents run only through workflows you start or configure, using the agent, provider account, or local runtime you choose; note.md does not turn your vault into an automatic cloud profile."),
+  ("Does note.md charge separately for AI tokens?",
+   "No. Built-in agent features use the agents, subscriptions, API accounts, or local runtimes you already have. note.md does not sell tokens, mark them up, or add a separate per-token charge. Model usage may still count against your provider allowance, incur provider API charges, or use your local compute."),
   ("Can an agent add a trusted memory automatically?",
    "No. An agent can create a pending proposal. A human confirmation is required before it becomes approved context, and that confirmation is tied to the exact content reviewed."),
   ("Why not use search for everything?",

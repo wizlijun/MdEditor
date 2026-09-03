@@ -7,7 +7,7 @@ keeps the receipts.
 
 ## The notes layer
 
-The AI-native notes system, rolling out incrementally:
+The agent-ready notes system, rolling out incrementally:
 
 - [x] **Sidecar notes** — highlights and comments made while reading
       `xxx.md` are saved to a companion `xxx.note.md`. The source stays

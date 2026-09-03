@@ -6,10 +6,13 @@ https://notemd.net/. Last updated: 2026-09.
 
 ## What note.md is
 
-note.md is a markdown reader, editor and bidirectional-linking notes tool for
-the AI-native era, made by an independent developer and written entirely by AI
-coding. It ships no AI features of its own — it calls no model and sends no
-request; it is the substrate agents work on. Its premise: agents now write more than any human can
+note.md is an agent-ready markdown reader, editor and bidirectional-linking
+notes tool, made by an independent developer and written entirely by AI coding.
+note.md includes agent-ready workflows, but it is not an AI model or token provider.
+These workflows use agents, subscriptions, API accounts, or local runtimes
+supplied by the user. note.md does not sell token bundles, mark up token prices,
+or charge a separate per-token fee. Model usage may still consume the user's
+provider allowance, incur provider API charges, or use local compute. Its premise: agents now write more than any human can
 read, so the human's highest-value act is reading, judging, and keeping the
 residue no model can generate — judgment, intent, private facts, decisions.
 That residue is the rarest data in the loop. note.md captures it as plain
@@ -35,8 +38,8 @@ not permission.
 A vault is an ordinary folder of markdown. There is no database and no hidden
 state: **files are the single source of truth; every index is derived and can
 be rebuilt from the files at any time.** Everything below is a file-layout
-convention — any agent (Claude Cowork, Claude Code, Codex, ChatGPT, OpenClaw,
-Hermes, or you) can honor it with nothing but file reads and writes.
+convention — any agent (Claude Cowork, Claude Code, Codex, DeepSeek, ChatGPT,
+OpenClaw, Hermes, or you) can honor it with nothing but file reads and writes.
 
 ### Sidecar annotation files
 

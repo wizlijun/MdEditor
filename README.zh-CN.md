@@ -4,7 +4,7 @@
 
 > **读 AI 写的，留下你想的，留住只有你才写得出的字。**
 
-为 AI-native 时代打造的 markdown 阅读器、编辑器、双链笔记工具。原生 macOS 应用，下载约 11 MB，  
+为人与 AI Agent 在同一批文件中协作而设计的 markdown 阅读器、编辑器、双链笔记工具。原生 macOS 应用，下载约 11 MB，
 装完约 15 MB。你的笔记是磁盘上一个纯 `.md` 文件夹——永远属于你。
 
 [下载](https://notemd.net/download) · [插件市场](https://plugins.notemd.net) · [完整功能清单](docs/FEATURES.zh-CN.md)
@@ -28,17 +28,21 @@ local-first、git sync、大纲、`[[双链]]`与反向链接、wiki 页面、�
 这些是 Roam Research 和 Obsidian 想明白的事，note.md 把它们落在文件上：一个  
 插件导入你整份 Roam 数据，Obsidian 的 vault 直接打开。
 
-## 3. 它自己不带 AI。它仍然是 AI-native。
+## 3. 为 AI Agent 原生设计。用你已经在用的 AI。
 
-note.md 不调模型、不发一个请求。
+内置 Agent 工作流复用你已有的 Agent、AI 订阅、API 账户或本地运行环境。note.md
+不另售 Token，不对 Token 加价，也不另收一份按 Token 计费的使用费。
+
+实际模型用量与限制仍按你所选服务的订阅额度、API 计费执行；本地模型使用你自己的
+算力。
 
 你的 vault 被设计成多 agent、多 harness 共用的、受版本控制的上下文环境——  
-Claude Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes——它们通过  
+Claude Cowork、Claude Code、Codex、DeepSeek、ChatGPT Work、OpenClaw、Hermes——它们通过
 公共约定（`AGENTS.md`、块引用、手记 `.note.md`）读写同一批文件。Memory 也遵循
 同一份契约：agent 可以发现并建议，只有你能决定什么成为长期上下文。留得越多，
 agent 越懂你。
 
-你随时可以换 AI 工具。资产始终在你手里。
+你随时可以换 AI 工具。资产始终在你手里，也不会再叠加一层 note.md Token 账单。
 
 用 Claude Code 做产品这条路径——写文档、读文档、审批 AI 生成的文档——是专门  
 调优过的。

@@ -129,23 +129,30 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   'ganzen Roam-Graphen herüber. Ein Obsidian-Vault geht einfach auf.',
   'Roam と Obsidian は、とっくに答えを出していた。note.md はそれをファイルに戻す。プラグイン一つで Roam のグラフを丸ごと移せる。Obsidian の vault は、そのまま開く。'),
  # ---- claim 03 ----
- ('<h2>No AI inside.<br>Made for AI.</h2>',
-  '<h2>不带 AI。<br>为 AI 而生。</h2>',
-  '<h2>Keine KI eingebaut.<br>Für KI gemacht.</h2>',
-  '<h2>AI は入っていない。<br>AI のために作られている。</h2>'),
- ('Calls no model. Sends no request. Not one.',
-  '不连模型，不发请求。一个都没有。',
-  'Ruft kein Modell auf. Sendet keine Anfrage. Keine einzige.',
-  'モデルを呼ばない。リクエストも送らない。一つも。'),
- ('Your folder is the workspace every AI tool shares. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes — same '
+ ('<h2>Agent-ready by design.<br>Use the AI you already have.</h2>',
+  '<h2>为 AI Agent 原生设计。<br>用你已经在用的 AI。</h2>',
+  '<h2>Von Grund auf Agent-ready.<br>Mit der KI, die du schon nutzt.</h2>',
+  '<h2>AIエージェントを前提に設計。<br>いつものAIを、そのまま。</h2>'),
+ ('Built-in agent workflows use the agents, AI subscriptions, API accounts, or local runtimes you already have. '
+  'note.md sells no tokens, adds no token markup, and charges no separate per-token fee.',
+  '内置 Agent 工作流复用你已有的 Agent、AI 订阅、API 账户或本地运行环境。note.md 不另售 Token，不对 Token 加价，也不另收一份按 Token 计费的使用费。',
+  'Die integrierten Agent-Workflows nutzen deine vorhandenen Agents, KI-Abos, API-Zugänge oder deine lokale Laufzeitumgebung. '
+  'note.md verkauft keine Tokens, schlägt nichts auf Tokenpreise auf und berechnet keine separate Tokengebühr.',
+  '内蔵のエージェントワークフローは、すでに利用中のエージェント、AIサブスクリプション、APIアカウント、またはローカル実行環境をそのまま使います。'
+  'note.md 独自のトークン販売、価格上乗せ、従量課金はありません。'),
+ ("Model usage still follows your chosen provider's plan, limits, and billing — or your own local compute.",
+  '实际模型用量与限制仍按你所选服务的订阅额度、API 计费执行；本地模型使用你自己的算力。',
+  'Für Modellnutzung, Limits und mögliche Kosten gelten weiterhin dein gewählter Anbieter beziehungsweise deine lokale Umgebung.',
+  'モデルの利用量・制限・料金は、選択したサービスのプランまたはローカル環境に従います。'),
+ ('Your folder is the workspace every AI tool shares. Cowork, Claude Code, Codex, DeepSeek, ChatGPT, OpenClaw, Hermes — same '
   'files, same house rules, all in git. '
   '<a href="/orchestrate-agents/">See how</a>.',
-  '你的文件夹，就是所有 AI 工具共用的工作台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同一批文件，同一套规矩，'
+  '你的文件夹，就是所有 AI 工具共用的工作台。Cowork、Claude Code、Codex、DeepSeek、ChatGPT、OpenClaw、Hermes——同一批文件，同一套规矩，'
   '全在 git 里。<a href="/orchestrate-agents/">看怎么做</a>。',
-  'Dein Ordner ist der Arbeitsplatz, den alle KI-Tools teilen. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes '
+  'Dein Ordner ist der Arbeitsplatz, den alle KI-Tools teilen. Cowork, Claude Code, Codex, DeepSeek, ChatGPT, OpenClaw, Hermes '
   '— dieselben Dateien, dieselben Hausregeln, alles in Git. '
   '<a href="/orchestrate-agents/">So geht\'s</a>.',
-  'あなたのフォルダは、どの AI ツールも共有する作業台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同じファイル、'
+  'あなたのフォルダは、どの AI ツールも共有する作業台。Cowork、Claude Code、Codex、DeepSeek、ChatGPT、OpenClaw、Hermes——同じファイル、'
   '同じルール、すべて git の中。<a href="/orchestrate-agents/">やり方を見る</a>。'),
  ('Every file it writes follows <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open '
   'Knowledge Format</a> v0.2, strictly: what a document is, where it came from, who checked it — plain YAML at the top '
@@ -158,10 +165,10 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '書き出すファイルはすべて <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open '
   'Knowledge Format</a> v0.2 に厳密に従う。何の文書か、どこから来たか、誰が確認したか——ファイル冒頭のただの YAML に。'
   'あなたの vault は、どのツールからでも読める。これだけではなく。'),
- ("Change AI tools whenever you want. What's yours stays yours.",
-  '换 AI 工具，随时。你的东西，永远是你的。',
-  'Wechsle das KI-Tool, wann du willst. Was deins ist, bleibt deins.',
-  'AI ツールは、いつ変えてもいい。あなたのものは、あなたのまま。'),
+ ("Built-in agents, without a second token meter. Change AI tools whenever you want. What's yours stays yours.",
+  '内置 Agent，不多一层 Token 账单。换 AI 工具，随时。你的东西，永远是你的。',
+  'Integrierte Agents, ohne zweiten Token-Zähler. Wechsle das KI-Tool, wann du willst. Was deins ist, bleibt deins.',
+  '内蔵 Agent に、二重のトークン課金はありません。AI ツールはいつ変えてもいい。あなたのものは、あなたのままです。'),
  # ---- claim 04 ----
  ('<h2>Need something else?<br>Add it.</h2>',
   '<h2>还要什么，<br>自己加。</h2>',
