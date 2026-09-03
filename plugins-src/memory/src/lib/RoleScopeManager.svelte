@@ -22,12 +22,10 @@
 
   let {
     claims,
-    onclose,
     onchanged,
     onbusychange = () => {},
   }: {
     claims: EffectiveClaim[]
-    onclose: () => void
     onchanged: () => void | Promise<void>
     onbusychange?: (busy: boolean) => void
   } = $props()
@@ -317,11 +315,9 @@
   }
 </script>
 
-<div class="scrim" role="presentation">
-  <div class="manager-sheet" role="dialog" aria-modal="true" aria-labelledby="role-scope-title">
+<section class="manager-panel" aria-labelledby="role-scope-title">
     <header>
       <div><h2 id="role-scope-title">身份与场景</h2><p>统一管理 Role 与 Scope；当前运行的身份和场景仍由每个会话单独决定。</p></div>
-      <button class="close" aria-label="关闭身份与场景" onclick={onclose} disabled={busy}>×</button>
     </header>
     <p class="sr-only" aria-live="polite">{announcement}</p>
     {#if error}<div class="error" role="alert">{error}</div>{/if}
@@ -432,13 +428,10 @@
         <footer><button onclick={() => statusChange = null} disabled={busy}>取消</button><button class="primary" onclick={confirmStatusChange} disabled={busy}>确认{statusChange.status === 'archived' ? '归档' : '恢复'}</button></footer>
       </div>
     {/if}
-  </div>
-</div>
+</section>
 
 <style>
-  .scrim{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.28);backdrop-filter:blur(8px)}
-  .manager-sheet{box-sizing:border-box;width:min(960px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:22px;border:1px solid color-mix(in srgb,CanvasText 15%,transparent);border-radius:14px;background:Canvas;color:CanvasText;box-shadow:0 24px 70px rgba(0,0,0,.34)}
-  .manager-sheet>header,.reassign>header,.preview>header,.detail-heading,.list-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.manager-sheet h2,.manager-sheet h3{margin:0}.manager-sheet>header p,.reassign header p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 60%,transparent);font-size:12px}.close{width:32px;padding:0;border:0;background:transparent;font-size:20px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.error,.notice{margin-top:12px;padding:9px 11px;border-radius:8px;font-size:12px}.error{color:#b42318;background:color-mix(in srgb,#ff3b30 10%,Canvas)}.notice{background:color-mix(in srgb,#ff9f0a 10%,Canvas)}
+  .manager-panel{min-width:0}.manager-panel>header,.reassign>header,.preview>header,.detail-heading,.list-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.manager-panel h2,.manager-panel h3{margin:0}.manager-panel>header{padding:2px 2px 0}.manager-panel>header p,.reassign header p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 60%,transparent);font-size:12px}.manager-panel h2{font-size:16px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.error,.notice{margin-top:12px;padding:9px 11px;border-radius:8px;font-size:12px}.error{color:#b42318;background:color-mix(in srgb,#ff3b30 10%,Canvas)}.notice{background:color-mix(in srgb,#ff9f0a 10%,Canvas)}
   .views{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;max-width:520px;margin:16px auto;padding:3px;border-radius:9px;background:color-mix(in srgb,CanvasText 8%,Canvas)}.views button{border:0;background:transparent}.views button.active{background:Canvas;box-shadow:0 1px 4px rgba(0,0,0,.16);font-weight:650}
   .registry-layout{display:grid;grid-template-columns:310px minmax(0,1fr);min-height:470px;border:1px solid color-mix(in srgb,CanvasText 12%,transparent);border-radius:10px;overflow:hidden}.registry-layout aside{border-right:1px solid color-mix(in srgb,CanvasText 10%,transparent);background:color-mix(in srgb,CanvasText 3%,Canvas)}.list-heading{align-items:center;padding:10px 11px}.registry-list{max-height:430px;overflow:auto}.registry-list>button{display:block;width:100%;padding:10px 12px;border:0;border-top:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:0;background:transparent;text-align:left}.registry-list>button strong,.registry-list>button small{display:block}.registry-list>button small{margin-top:3px;color:color-mix(in srgb,CanvasText 55%,transparent)}.registry-list>button.selected{background:#0a84ff;color:white}.registry-list>button.selected small{color:rgba(255,255,255,.78)}.registry-list>button.archived:not(.selected){opacity:.6}.registry-detail{padding:20px}.registry-detail>p{white-space:pre-wrap}.detail-heading h3{margin:8px 0 3px}.badge,.status{display:inline-block;padding:3px 7px;border-radius:6px;background:color-mix(in srgb,CanvasText 8%,Canvas);font-size:11px}.status.archived{color:#9a5500;background:color-mix(in srgb,#ff9f0a 17%,Canvas)}.registry-detail dl{display:grid;gap:1px;margin:16px 0;background:color-mix(in srgb,CanvasText 8%,transparent)}.registry-detail dl>div{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;padding:9px;background:Canvas}.registry-detail dt{color:color-mix(in srgb,CanvasText 55%,transparent)}.registry-detail dd{margin:0;white-space:pre-wrap}.registry-detail footer,.preview footer,.status-confirm footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
   .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.form-grid label{display:grid;gap:4px;margin-top:12px;color:color-mix(in srgb,CanvasText 68%,transparent);font-size:12px}.form-grid .wide{grid-column:1/-1}

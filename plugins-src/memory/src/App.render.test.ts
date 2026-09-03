@@ -52,7 +52,7 @@ async function render(request: ReturnType<typeof rpcMock>) {
 }
 
 describe('Memory Protocol v2 app', () => {
-  it('opens the unified Role and Scope manager from the header', async () => {
+  it('integrates the unified Role and Scope manager into the main tabs', async () => {
     const request = rpcMock(async (method) => {
       if (method === 'host.memory.v2.snapshot') return baseSnapshot()
       if (method === 'host.memory.v2.contextRegistry') return {
@@ -61,11 +61,21 @@ describe('Memory Protocol v2 app', () => {
       return {}
     })
     await render(request)
-    button('身份与场景…')!.click(); await settle()
-    expect(document.querySelector('[role=dialog][aria-labelledby=role-scope-title]')).toBeTruthy()
+    expect(button('身份与场景…')).toBeUndefined()
+    tab('待确认').click(); flushSync()
+    tab('待确认').focus()
+    document.querySelector<HTMLElement>('[role=tablist][aria-label="Memory 区域"]')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await settle()
+    expect(document.querySelector('#context-governance-panel[role=tabpanel]')).toBeTruthy()
+    expect(tab('身份与场景').getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(tab('身份与场景'))
+    expect(document.querySelector('[role=dialog][aria-labelledby=role-scope-title]')).toBeNull()
+    expect(document.querySelector('#context-governance-panel #role-scope-title')?.textContent).toBe('身份与场景')
     expect(document.body.textContent).toContain('Roles')
     expect(document.body.textContent).toContain('Scopes')
     expect(document.body.textContent).toContain('重新分配')
+    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.contextRegistry').length).toBeGreaterThanOrEqual(2)
   })
 
   it('copies the cross-assistant import prompt to the clipboard', async () => {

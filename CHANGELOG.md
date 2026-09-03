@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Memory 2.4.1 brings Role and Scope governance into the main workspace.** “Identity & Context” is now a first-class tab beside confirmed memories, pending suggestions and history instead of a separate sheet. Active Role/Scope counts stay visible, and Registry edits plus atomic batch reassignment remain in place without interrupting the rest of the review flow.
+
 ## v6.903.3 — 2026-09-03
 
 ### Added

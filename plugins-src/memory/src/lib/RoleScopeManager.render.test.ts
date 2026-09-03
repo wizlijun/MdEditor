@@ -45,13 +45,23 @@ function change(control: HTMLInputElement, value: string) { control.value = valu
 
 async function render(request: (method: string, params?: any) => Promise<any>, onchanged = vi.fn()) {
   window.notemd = { pluginId: 'notemd.memory', locale: 'zh', theme: 'system', request, onMessage: () => {} }
-  component = mount(RoleScopeManager, { target: document.body, props: { claims, onclose: vi.fn(), onchanged } })
+  component = mount(RoleScopeManager, { target: document.body, props: { claims, onchanged } })
   flushSync()
   await settle()
   return onchanged
 }
 
 describe('RoleScopeManager', () => {
+  it('renders as an inline workspace instead of a modal sheet', async () => {
+    const request = vi.fn(async (method: string) => method === 'host.memory.v2.contextRegistry' ? baseRegistry() : {})
+    await render(request)
+
+    expect(document.querySelector('section[aria-labelledby="role-scope-title"]')).toBeTruthy()
+    expect(document.querySelector('[role=dialog]')).toBeNull()
+    expect(document.querySelector('.scrim')).toBeNull()
+    expect(button('关闭身份与场景')).toBeUndefined()
+  })
+
   it('creates a Role with one full-registry replacement and exact concurrency heads', async () => {
     const registry = baseRegistry()
     const request = vi.fn(async (method: string, _params?: any) => method === 'host.memory.v2.contextRegistry' ? registry : {})
