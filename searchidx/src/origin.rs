@@ -436,4 +436,54 @@ mod tests {
             );
         }
     }
+
+    /// 三态可分 —— 这是「人写署名」整件事存在的理由。此前只有前两态,
+    /// 而且第一态没人写得出来。
+    #[test]
+    fn the_three_states_of_authorship_are_distinguishable() {
+        let human = fm("type: Note\ngenerated:\n  by: human:bruce\n  at: 2026-08-20T10:31:00.000Z");
+        assert_eq!(derive("a.md", Some(&human), &globs(&[])), Origin::Human);
+
+        let machine = fm("type: Note\ngenerated:\n  by: claude-code/opus-5\n  at: 2026-08-20T10:31:00.000Z");
+        assert_eq!(
+            derive("b.md", Some(&machine), &globs(&[])),
+            Origin::Derived,
+            "a generator stamp must not inherit Note's Human tier"
+        );
+
+        let unclaimed = fm("type: Note");
+        assert_eq!(
+            derive("c.md", Some(&unclaimed), &globs(&[])),
+            Origin::Human,
+            "no stamp falls back to the type mapping (rule 4) — unchanged behaviour"
+        );
+    }
+
+    /// 不签清单的守卫(spec §2.2)。`book.md` 至今不带 `generated`,所以它走
+    /// 规则 4 落在 `Source`。谁哪天给 ebook 导入补了一行 `generated`,
+    /// 规则 2 会抢在规则 4 前面把每一本导入的书悄悄挪进 `Derived` —— 这条
+    /// 测试就是那一刻的红灯。真要改,去改规则顺序和 spec,不要绕过它。
+    #[test]
+    fn an_imported_book_stays_source_because_nobody_stamps_it() {
+        assert_eq!(derive("books/x.md", Some(&fm("type: Book")), &globs(&[])), Origin::Source);
+
+        let stamped = fm("type: Book\ngenerated:\n  by: process:ebook-import\n  at: 2026-08-20T10:31:00.000Z");
+        assert_eq!(
+            derive("books/x.md", Some(&stamped), &globs(&[])),
+            Origin::Derived,
+            "rule 2 precedes rule 4 — this is why ebook-import must not stamp `generated`"
+        );
+    }
+
+    /// 导入页(roam-import)不签 `generated`,照样落在 Human 档 —— 搬运不是撰写,
+    /// 但内容确实是人在别处写的。两条路都通:`.note.md` 的后缀由规则 1 直接兜住,
+    /// 后缀之外则由规则 4 的 type 映射兜住。断言分开写,免得一条掩盖另一条。
+    #[test]
+    fn imported_pages_reach_human_without_any_stamp() {
+        let page = fm("type: Wiki Page\ntitle: 回顾系统\ncreated: 2026-08-02T00:00:00.000Z");
+        // 后缀命中规则 1(与 frontmatter 无关),这是 roam 导入页的实际形态。
+        assert_eq!(derive("wikipage/回顾系统.note.md", Some(&page), &globs(&[])), Origin::Human);
+        // 去掉后缀后规则 1 不再触发,靠规则 4 的 `Wiki Page` → Human 映射。
+        assert_eq!(derive("wikipage/回顾系统.md", Some(&page), &globs(&[])), Origin::Human);
+    }
 }
