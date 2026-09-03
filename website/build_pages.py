@@ -4,7 +4,7 @@
 Usage: python3 build_pages.py   (run inside website/)
 Edit PAGES below, re-run. Every page is a self-contained static HTML file.
 """
-import os, sys
+import json, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "i18n"))
 import pages_de, pages_ja, pages_zh
 
@@ -90,22 +90,22 @@ CHROME = {
  "en": {"dl": "Download", "pl": "plugins", "cta_h2": "Own your thinking.", "cta_p": "Free. Open. A folder of markdown on your own computer.",
         "cta_btn": "Download note.md", "faq": "FAQ",
         "g_cmp": "Compare", "g_int": "Integrations", "g_gui": "Guides",
-        "l_orch": "One vault, many agents", "l_cf": "Free sharing on Cloudflare", "l_gh": "Vault on GitHub", "l_llm": "llms.txt (for agents)",
+        "l_orch": "One vault, many agents", "l_memory": "Personal AI memory you confirm", "l_cf": "Free sharing on Cloudflare", "l_gh": "Vault on GitHub", "l_llm": "llms.txt (for agents)",
         "sig": "Text is forever. So is what you thought about it."},
  "de": {"dl": "Laden", "pl": "plugins", "cta_h2": "Besitze dein Denken.", "cta_p": "Frei. Offen. Ein Ordner voller Markdown auf deinem eigenen Rechner.",
         "cta_btn": "note.md laden", "faq": "FAQ",
         "g_cmp": "Vergleich", "g_int": "Integrationen", "g_gui": "Anleitungen",
-        "l_orch": "Ein Vault, viele Agents", "l_cf": "Kostenlos teilen über Cloudflare", "l_gh": "Vault auf GitHub", "l_llm": "llms.txt (für Agents)",
+        "l_orch": "Ein Vault, viele Agents", "l_memory": "Persönliches AI-Gedächtnis, von dir bestätigt", "l_cf": "Kostenlos teilen über Cloudflare", "l_gh": "Vault auf GitHub", "l_llm": "llms.txt (für Agents)",
         "sig": "Text ist für immer. Was du darüber dachtest, auch."},
  "ja": {"dl": "ダウンロード", "pl": "プラグイン", "cta_h2": "思考を所有せよ。", "cta_p": "無料。オープン。あなた自身のパソコンにある markdown フォルダ。",
         "cta_btn": "note.md をダウンロード", "faq": "FAQ",
         "g_cmp": "比較", "g_int": "連携", "g_gui": "ガイド",
-        "l_orch": "ひとつの Vault、多くのエージェント", "l_cf": "Cloudflare で無料共有", "l_gh": "GitHub で Vault をホスト", "l_llm": "llms.txt（エージェント向け）",
+        "l_orch": "ひとつの Vault、多くのエージェント", "l_memory": "あなたが確認する個人 AI メモリ", "l_cf": "Cloudflare で無料共有", "l_gh": "GitHub で Vault をホスト", "l_llm": "llms.txt（エージェント向け）",
         "sig": "テキストは永遠に残る。あなたがそれについて考えたことも。"},
  "zh": {"dl": "下载", "pl": "插件", "cta_h2": "拥有你的思考。", "cta_p": "免费。开源。你自己电脑上的一个 markdown 文件夹。",
         "cta_btn": "下载 note.md", "faq": "FAQ",
         "g_cmp": "对比", "g_int": "集成", "g_gui": "指南",
-        "l_orch": "一个 vault，多个 agent", "l_cf": "Cloudflare 免费分享", "l_gh": "GitHub 托管 vault", "l_llm": "llms.txt（给 agent）",
+        "l_orch": "一个 vault，多个 agent", "l_memory": "由你确认的个人 AI 记忆", "l_cf": "Cloudflare 免费分享", "l_gh": "GitHub 托管 vault", "l_llm": "llms.txt（给 agent）",
         "sig": "文字永存。你对它的看法也是。"},
 }
 
@@ -148,27 +148,40 @@ def foot_links(lang):
 {a('/integrations/hermes/', 'Hermes')}</div>
 <div><b>{c['g_gui']}</b>
 {a('/orchestrate-agents/', c['l_orch'])}
+{a('/blog/personal-ai-memory/', c['l_memory'])}
 {a('/guides/share-on-cloudflare/', c['l_cf'])}
 {a('/guides/vault-on-github/', c['l_gh'])}
 <a href="/llms.txt">{c['l_llm']}</a></div>
 </div>"""
 
 def faq_jsonld(faq):
-    import json
     return json.dumps({
         "@context": "https://schema.org", "@type": "FAQPage",
         "mainEntity": [{"@type": "Question", "name": q,
                         "acceptedAnswer": {"@type": "Answer", "text": a}} for q, a, *_ in faq]
     }, ensure_ascii=False)
 
+def article_jsonld(p, lang):
+    return json.dumps({
+        "@context": "https://schema.org", "@type": "BlogPosting",
+        "headline": p["h1"], "description": p["desc"],
+        "datePublished": p["published"], "dateModified": p["published"],
+        "inLanguage": lang, "author": {"@type": "Organization", "name": "note.md"},
+        "publisher": {"@type": "Organization", "name": "note.md"},
+        "mainEntityOfPage": f"{BASE}{lp(lang, p['path'])}",
+    }, ensure_ascii=False)
+
 def render(p, lang):
     c = CHROME[lang]
     faq_html = ""
-    jsonld = ""
+    jsonld_parts = []
     if p.get("faq"):
         items = "".join(f"<h3>{q}</h3><p>{a}</p>" for q, a in p["faq"])
         faq_html = f'<section class="faq"><h2>{c["faq"]}</h2>{items}</section>'
-        jsonld = f'<script type="application/ld+json">{faq_jsonld(p["faq"])}</script>'
+        jsonld_parts.append(f'<script type="application/ld+json">{faq_jsonld(p["faq"])}</script>')
+    if p.get("published"):
+        jsonld_parts.append(f'<script type="application/ld+json">{article_jsonld(p, lang)}</script>')
+    jsonld = "".join(jsonld_parts)
     table_html = ""
     if p.get("table"):
         head = "".join(f"<th>{h}</th>" for h in p["table"]["head"])
@@ -205,11 +218,11 @@ def render(p, lang):
 <h1>{p['h1']}</h1>
 <p class="lead">{p['lead']}</p>
 </div></header>
-<main><div class="wrap">
+<main><{"article" if p.get("published") else "div"} class="wrap">
 {table_html}
 {body_html}
 {faq_html}
-</div></main>
+</{"article" if p.get("published") else "div"}></main>
 <section class="cta"><div class="wrap">
 <h2>{c['cta_h2']}</h2>
 <p>{c['cta_p']}</p>
@@ -585,6 +598,79 @@ gh repo create my-vault --private --source=. --push</code></pre>
    "No. The orchestration is you, and the medium is the filesystem. There's no central database or hidden state — rules in AGENTS.md, output in .md, judgment in .note.md. A Vault MCP server is on the roadmap for agents that prefer a tool interface, but plain files already work today."),
   ("Why not just use one AI for everything?",
    "Because no single agent is best at everything. Overnight automation, careful review, fast image generation, private local work, and final judgment are different jobs with different best-fit tools. Splitting them across specialists — over files you own — beats one generalist doing all of it, and keeps you free to swap any worker out."),
+ ],
+},
+{
+ "path": "/blog/personal-ai-memory/",
+ "published": "2026-09-02",
+ "title": "Personal AI memory should be discovered by agents — and confirmed by you | note.md",
+ "desc": "Why reliable personal AI memory starts with agents finding candidate memories in everyday work, then lets the person confirm each claim before it becomes trusted context.",
+ "crumb": "Product thesis · Memory",
+ "h1": "Agents discover. You confirm. That is how personal memory becomes trustworthy.",
+ "lead": "A model cannot know the private facts you never told it. Asking you to write a manual about yourself does not work either. note.md chooses a third path: let agents notice what matters in the work and conversations you bring in, then let you approve each memory before any agent can rely on it.",
+ "sections": [
+  ("The smartest model still cannot guess your life", """<p>Large language models are excellent at public knowledge: facts that are broadly true and can be checked by many people. Personal facts are different. No model can infer, from the internet, how you want to be addressed, why you rejected a plan last year, which tool you prefer for a recurring job, or which boundary an agent must never cross.</p>
+<p>A stronger model may make a more plausible guess. That is precisely the danger: a polished wrong answer about you can sound completely reasonable, and only you can correct it. Better retrieval does not solve an empty foundation. If the information was never captured, there is nothing to retrieve.</p>"""),
+  ("You should not have to write a user manual about yourself", """<p>The usual answer is a profile, custom-instructions box, or hand-maintained memory file. These are useful escape hatches, but they are a poor main path. Familiar facts feel like background to you, so you do not know which ones are new to an agent. The highest-value memories — the reason behind a decision, a lesson from a failure, a quiet working preference — are also the hardest to summarize on demand.</p>
+<p>And you change. A profile written once is a photograph; a person is a moving story. A memory product should not turn self-description into another inbox you have to maintain.</p>"""),
+  ("The useful facts are already in the work", """<p>You may never sit down to tell an AI, “this is how I make decisions.” Yet you reveal it naturally in project discussions, email, meeting transcripts, agent sessions, and the documents you edit. Those moments carry what a form loses: first-person language, time, audience, reasons, and surrounding context.</p>
+<p>That suggests a better division of labor:</p>
+<ol>
+<li><b>You bring selected work and conversations into your vault.</b> The source remains available as evidence and stays under your control.</li>
+<li><b>An agent discovers small, atomic candidates.</b> It proposes one clear statement at a time instead of inventing a complete profile.</li>
+<li><b>You judge each one.</b> Confirm it, deny it, mark it important, or ignore it.</li>
+<li><b>Only your decision creates trusted memory.</b> Approved claims become durable, versioned assets that can produce simple <code>USER.md</code> and <code>MEMORY.md</code> views.</li>
+</ol>
+<p>The machine does the scanning and drafting. You keep the one job that cannot be delegated: deciding whether a statement really represents you.</p>"""),
+  ("A recording is evidence, not automatically a fact", """<p>Everyday language is messy. “We will move to PostgreSQL next quarter” might be a decision, a proposal, a joke, a quotation, or an assumption in a thought experiment. A transcript may even attribute it to the wrong speaker. Flatten all of that into a sentence called a fact and the system throws away exactly what made the sentence trustworthy.</p>
+<p>note.md therefore stores <b>claims</b>, not anonymous facts. A claim keeps who it is about, who asserted it, where it came from, when it applied, and what kind of approval it received. The source can help an agent propose a memory; it cannot approve the memory on your behalf.</p>
+<p>This is why the review step is not temporary scaffolding to remove when models improve. It is the part that creates authority.</p>"""),
+  ("One Confirm button hides three different decisions", """<p>“Remember this,” “this external statement is true,” and “you may act on this” are not the same permission. note.md keeps them separate:</p>
+<table><thead><tr><th>Your decision</th><th>What it means</th><th>What it does not mean</th></tr></thead><tbody>
+<tr><td>Remember me this way</td><td>The statement faithfully represents you.</td><td>It does not prove an outside fact.</td></tr>
+<tr><td>Confirm the fact</td><td>You verified the external claim for the stated evidence and time.</td><td>It does not authorize real-world action.</td></tr>
+<tr><td>Allow this behavior</td><td>An agent may act within the stated purpose and boundary.</td><td>It is not permission for every future situation.</td></tr>
+</tbody></table>
+<p>The words on the button change with the decision. Approval is bound to the exact content you reviewed; if the candidate changes, it must be reviewed again. Agents may propose, but they cannot manufacture a human approval.</p>"""),
+  ("Search and memory are different jobs", """<p>Many systems treat memory as a special search index, or treat the whole document library as memory. note.md deliberately separates the two.</p>
+<table><thead><tr><th></th><th>Search</th><th>Memory</th></tr></thead><tbody>
+<tr><td>Question</td><td>What existing material might help right now?</td><td>Which approved claims may this agent rely on?</td></tr>
+<tr><td>Scale</td><td>Thousands of documents</td><td>A small set of durable personal claims</td></tr>
+<tr><td>Method</td><td>Flexible ranking by relevance, provenance, recency, and your attention</td><td>Deterministic selection by person, space, purpose, consent, and time</td></tr>
+<tr><td>If it is wrong</td><td>You try another query</td><td>An agent may misunderstand you or cross a boundary</td></tr>
+</tbody></table>
+<p>Search gives you cognitive relief: you do not have to remember everything because you can find it. Memory gives agents cognitive alignment: they receive the few statements you have chosen to stand behind. Relevance cannot be used as a substitute for permission.</p>"""),
+  ("A real vault shows why the checkpoint matters", """<p>In a September 2, 2026 snapshot of one real note.md vault, agents had proposed <b>83</b> memory claims. The owner kept <b>27</b> and ignored <b>56</b>. In other words, almost two thirds of plausible suggestions did not deserve to become lasting context.</p>
+<p>This is not an argument that agents are unhelpful. It shows their best role. Nearly every candidate was discovered by an agent; the agent found valuable signals the person would never have written into a profile. The owner then removed the jokes, temporary states, repetitions, and overconfident interpretations. Discovery created coverage. Confirmation created trust.</p>"""),
+  ("What note.md promises you", """<ul>
+<li><b>No guess silently becomes your profile.</b> An agent proposal remains a proposal until you decide.</li>
+<li><b>You review one meaning at a time.</b> There is no bulk approval for sensitive identity, boundary, or authorization claims.</li>
+<li><b>You can see where a memory came from.</b> Source, author, time, approval, and revision history stay attached.</li>
+<li><b>A memory is used only for an allowed context.</b> Space, purpose, provider, and sharing rules decide what an agent may receive.</li>
+<li><b>Your corrections compound.</b> Ignored suggestions are suppressed, and guidance can record the error future agents must avoid.</li>
+<li><b>The asset remains yours.</b> Authority lives in local, Git-tracked files; readable Markdown views can be rebuilt, and a different agent can use the same approved context.</li>
+</ul>"""),
+  ("Why the work gets lighter over time", """<p>Personal memory is not an endless stream of profile fields. Identity, stable preferences, and boundaries are relatively small sets. They are established early and then mostly revised. Decisions continue to arrive, but they can be reviewed as individual moments instead of forcing you to rewrite a biography.</p>
+<p>The loop also improves itself. Approved claims help the next discovery pass avoid duplicates. Ignored candidates stop returning. Each correction teaches future agents what not to assume. The goal is not to ask you more questions; it is to reserve your attention for the few questions only you can answer.</p>"""),
+  ("Choose the memory contract you want", """<p>Different jobs deserve different memory contracts:</p>
+<table><thead><tr><th>Approach</th><th>A good fit when</th><th>What you are choosing</th></tr></thead><tbody>
+<tr><td>Automatic memory</td><td>The conversation is temporary and low-stakes</td><td>Maximum convenience; the system decides what to retain</td></tr>
+<tr><td>A handwritten profile</td><td>You have a few stable instructions</td><td>The simplest explicit setup; you keep it current yourself</td></tr>
+<tr><td>note.md Memory</td><td>Agents work with you for years, across tools, with real preferences and boundaries</td><td>Agents do the discovery; you keep final say, provenance, revision history, and context control</td></tr>
+</tbody></table>
+<p>Choose note.md's approach if you would rather give an agent fewer memories you can trust than a larger profile built from silent guesses. It is designed for people who want useful personalization without handing an AI the right to define them.</p>
+<p>The next improvements follow the same thesis: make discovery across user-selected sources more precise, pace reviews so they stay thoughtful, use time and actual recall to suggest when a memory deserves review, learn from successful and failed work, and publish repeatable quality measurements. These make the loop quieter and more helpful; they do not remove the human checkpoint.</p>
+<p><b>An external database stores statements about you. A second memory earns your trust because you remember approving what it knows.</b></p>"""),
+ ],
+ "faq": [
+  ("Does note.md record all of my messages?",
+   "No. note.md calls no model and sends no request by itself. You choose the files, transcripts, and agent workflows that enter your vault; an installed agent may examine only the material you give that workflow."),
+  ("Can an agent add a trusted memory automatically?",
+   "No. An agent can create a pending proposal. A human confirmation is required before it becomes approved context, and that confirmation is tied to the exact content reviewed."),
+  ("Why not use search for everything?",
+   "Search is ideal for finding relevant material in a large library. Personal memory has a different job: provide a small, governed set of claims an agent may rely on. Relevance and permission are not the same thing."),
+  ("Will my memory work with another AI?",
+   "Yes. Approved memory is stored as local, Git-tracked assets with plain Markdown projections. It belongs to the vault, not to one model or agent."),
  ],
 },
 ]

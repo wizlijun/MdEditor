@@ -2,7 +2,7 @@
 
 This document tells an LLM agent everything it needs to understand and work
 with note.md and its vaults. It is the authoritative plain-text companion to
-https://notemd.net/. Last updated: 2026-08.
+https://notemd.net/. Last updated: 2026-09.
 
 ## What note.md is
 
@@ -16,7 +16,10 @@ That residue is the rarest data in the loop. note.md captures it as plain
 files that agents read back — the more the human leaves in the vault, the
 better every agent comes to know them. The knowledge graph grows only where
 the human confirms a connection — agents suggest links, they never assert
-them.
+them. Personal Memory follows the same thesis: agents discover candidate
+claims in user-selected work and conversations; only a human decision makes
+one trusted context. Search and Memory remain separate because relevance is
+not permission.
 
 - Platform: macOS 13+ (Apple Silicon & Intel) and Windows 10/11 x64 — a Tauri
   app rendering in the system WebView. The macOS build is code-signed and
@@ -222,6 +225,31 @@ conventions plus vault-specific rules. Read it first; it is the contract.
   revertible. No shared memory or private protocol is needed; the filesystem
   is the medium and the human is the orchestrator.
 
+### Controlled personal Memory
+
+Memory is for the small set of durable personal claims an agent may rely on;
+it is not a second search index for every document in the vault.
+
+- An agent may scan only the work and conversations the user gives to that
+  workflow. It proposes one atomic pending claim at a time. A proposal is not
+  a fact and cannot enter trusted context by itself.
+- The human reviews each candidate as confirm, reject, important, or ignore.
+  Agents cannot create or imitate a `human:*` approval. Ignored candidates
+  remain useful as deduplication signals so the same guess does not keep
+  returning.
+- Approval has distinct meanings: faithful self-representation, verification
+  of an external fact, or authorization for behavior. One never implies the
+  others, and approval is bound to the exact content reviewed.
+- Authoritative, immutable revisions live under `.notemd/memory/` and are
+  tracked by Git. `USER.md` and `MEMORY.md` are concise, human-readable
+  projections that can be rebuilt from those assets.
+- An actionable agent must request context for a specific space, purpose,
+  provider, model, and tool set. Consent and policy determine which approved
+  claims it may receive; semantic similarity alone never grants permission.
+- Search keeps its own job: retrieve potentially relevant material from the
+  whole vault. Memory governs which personal claims are trusted. See the
+  product thesis at https://notemd.net/blog/personal-ai-memory/.
+
 ## Working with note.md as a tool
 
 ### CLI
@@ -231,6 +259,8 @@ plugins are exposed):
 
     notemd search "query" --vault ~/Vault      # full-text search, path:line:text
     notemd search "query" --json --limit 20    # structured hits with source_ref
+    notemd memory pending --json       # pending agent proposals for human review
+    notemd memory context --space <id> --purpose <purpose> --caller <agent> --json
     notemd -s draft.md              # publish file as a self-contained web page, prints URL
     notemd share draft.md --json    # structured output
     notemd share draft.md --unshare # revoke
@@ -297,8 +327,8 @@ Shares can be updated in place or revoked (410 after unshare).
 
 ## Roadmap (agent-relevant)
 
-Shipped: sidecar annotations, the outline editor, a dedicated Daily Notes
-window, one-shot Roam Research import (a plugin, with date-page rewriting
+Shipped: sidecar annotations, the outline editor, controlled personal Memory,
+a dedicated Daily Notes window, one-shot Roam Research import (a plugin, with date-page rewriting
 and a broken-link report), wiki pages, and the vault-wide index — full-text
 search over the whole vault, rebuildable from files at any time, reachable
 headlessly through `notemd search` (see the CLI section above). On the

@@ -5,7 +5,7 @@
 <!-- Hello, agent. The plain-text version of this site is at /llms.txt -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>note.md — 人与 agent 共用的 markdown 编辑器</title>
-<meta name="description" content="note.md 是为 AI-native 时代打造的 markdown 阅读器、编辑器与双链笔记工具。读 agent 写的东西，就地批注，存在永远属于你的纯文本文件里。">
+<meta name="description" content="读 agent 写的东西，把你的判断留在纯 markdown 里，并亲自批准哪些个人记忆可以成为可信上下文。文件始终属于你。">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -222,6 +222,7 @@
     <div class="nav-links">
       <a href="#features">功能</a>
       <a href="#sidecar">手记</a>
+      <a href="/zh/blog/personal-ai-memory/">记忆</a>
       <a href="/zh/orchestrate-agents/">给 agent</a>
       <a href="https://plugins.notemd.net">插件</a>
       <a href="https://github.com/wizlijun/note.md">github</a>
@@ -241,7 +242,7 @@
     <div>
       <span class="kicker">无限文本的时代</span>
       <h1>读 AI 写的，<br>留下<em>你想的</em>。<span class="cursor"></span></h1>
-      <p class="sub">AI 写的，读不完。note.md 让你读得进去：划重点、写疑问、直接改。全部存进你和 agent 共享的 vault，纯 markdown——留得越多，agent 越懂你。</p>
+      <p class="sub">AI 写的，读不完。note.md 让你读得进去：划重点、写疑问、直接改。全部存进你和 Agent 共享的 vault，纯 markdown。Agent 可以发现要紧的事；什么成为记忆，只有你能批准。</p>
       <p class="hooks">11 MB<i>·</i>主题随你换<i>·</i>Mermaid、Graphviz 都调过<i>·</i>大纲、[[双链]]、每日笔记<i>·</i>一个 vault，所有 agent 共用</p>
       <div class="cta-row">
         <a class="btn-primary" href="/download" data-dl data-dl-win="下载 Windows 版">
@@ -279,12 +280,12 @@
 
 <section id="features">
   <div class="wrap">
-    <div class="sec-k">四件事</div>
+    <div class="sec-k">五件事</div>
     <ol class="claims">
       <li>
         <div><span class="n">01</span><h2>写，交给 AI。<br>读，交给这里。</h2></div>
         <div>
-          <p>预览与源码，一键之隔。Notion、Typora 的主题，拿来就用。Mermaid、Graphviz、公式，都调过。整个应用装完约 15 MB，没有浏览器内核。</p>
+          <p>预览与源码，一键之隔。Notion、Typora 的主题，拿来就用。Mermaid、Graphviz、公式，都调过。整个应用安装后约 15 MB，没有浏览器内核。</p>
           <p>可疑的句子，划出来。疑问，写在旁边。错了，当场改。</p>
           <p class="beat">Claude、Codex、OpenClaw 都有聊天窗口。没有一个是为读而做的。</p>
         </div>
@@ -310,6 +311,14 @@
         <div>
           <p>写个插件。加个定时任务。挂上你的 skills。</p>
           <p>在批注里打个 <span class="mono-s">?</span>，agent 就接手：改文档、补上下文，异步交回来。用不用，你说了算。</p>
+        </div>
+      </li>
+      <li>
+        <div><span class="n">05</span><h2>Agent 负责发现。<br>什么成为记忆，由你决定。</h2></div>
+        <div>
+          <p>你的偏好、边界和决定，不该靠模型猜。Agent 从你选择带进来的工作与沟通中发现候选；note.md 一条一条交给你判断。只有你确认的，才成为长期上下文。</p>
+          <p>搜索帮 agent 找到你写过的资料。Memory 决定它可以相信哪些关于你的主张，又可以据此做什么。note.md 刻意把两件事分开。</p>
+          <p class="beat"><a href="/zh/blog/personal-ai-memory/">可信的个人记忆，为什么必须由你点头 →</a></p>
         </div>
       </li>
     </ol>
@@ -372,6 +381,7 @@
 <a href="/zh/integrations/hermes/">Hermes</a></div>
 <div><b>指南</b>
 <a href="/zh/orchestrate-agents/">One vault, many agents</a>
+<a href="/zh/blog/personal-ai-memory/">由你确认的个人 AI 记忆</a>
 <a href="/zh/guides/share-on-cloudflare/">Cloudflare 免费分享</a>
 <a href="/zh/guides/vault-on-github/">GitHub 托管 vault</a></div>
 </div>

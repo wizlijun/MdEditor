@@ -34,15 +34,30 @@ note.md 不调模型、不发一个请求。
 
 你的 vault 被设计成多 agent、多 harness 共用的、受版本控制的上下文环境——  
 Claude Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes——它们通过  
-公共约定（`AGENTS.md`、块引用、手记 `.note.md`）读写同一批文件。记忆系统在路上。  
-留得越多，agent 越懂你。
+公共约定（`AGENTS.md`、块引用、手记 `.note.md`）读写同一批文件。Memory 也遵循
+同一份契约：agent 可以发现并建议，只有你能决定什么成为长期上下文。留得越多，
+agent 越懂你。
 
 你随时可以换 AI 工具。资产始终在你手里。
 
 用 Claude Code 做产品这条路径——写文档、读文档、审批 AI 生成的文档——是专门  
 调优过的。
 
-## 4. 剩下的，你自己长出来
+## 4. Agent 发现，你逐条确认
+
+真正影响 agent 能不能帮好你的，恰恰是任何模型都猜不出的个体事实：你怎么做事、
+偏好什么、做过哪些决定、哪些边界不能越。再让你维护一张个人画像，只是把整理工作
+重新推回给你。
+
+Memory 把分工倒过来：agent 从你带进 vault 的工作与沟通中发现少量候选记忆，
+再交给你逐条确认、否认、标为重要或忽略。模型推断出一句话，不代表它就能自动成为
+可信记忆。
+
+搜索与 Memory 各司其职：搜索帮 agent 找回你写过的全部资料；Memory 只交付那一
+小部分由你亲自确认的主张。它们仍是纯文本、由 Git 跟踪，换 agent、换模型都能继续
+使用。[为什么我们这样设计个人 AI 记忆](https://notemd.net/zh/blog/personal-ai-memory/)。
+
+## 5. 剩下的，你自己长出来
 
 写个插件。配一条 OpenClaw 定时任务。挂上 skills。
 
@@ -61,7 +76,8 @@ Claude Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes——它�
    可 grep、五十年后依然可读。索引是派生数据，文件是唯一事实源。
 3. **agent 是一等公民——它建议，你确认。**  
    [关系只在人确认处生长](docs/product-principle-relationships-only-grow-where-confirmed.md)；  
-   note.md 绝不自动串联你的笔记，也绝不用 agent 的垃圾填满 vault。
+   note.md 绝不自动串联你的笔记，也绝不把 agent 的猜测直接变成可信记忆。
+   [个人 AI 记忆也遵守同一道人工检查点](https://notemd.net/zh/blog/personal-ai-memory/)。
 4. **[你的批注属于 vault，不属于路径。](docs/product-principle-mirror-hosted-marks.md)**  
    在哪儿批注都行，源文件会被镜像进 vault，批注由此获得稳定的、git 版本化的宿主。
 5. **[一个 vault，多个 agent——你是编排者。](docs/product-principle-one-vault-many-agents-you-orchestrate.md)**  

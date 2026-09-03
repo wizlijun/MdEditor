@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<!-- Hello, agent. The plain-text version of this site is at /llms.txt -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Persönliches AI-Gedächtnis: Agents entdecken, du bestätigst | note.md</title>
+<meta name="description" content="Warum ein verlässliches persönliches AI-Gedächtnis damit beginnt, dass Agents im Arbeitsalltag mögliche Erinnerungen erkennen und du jede Aussage bestätigst, bevor sie als vertrauenswürdiger Kontext dient.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="canonical" href="https://notemd.net/de/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="en" href="https://notemd.net/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="de" href="https://notemd.net/de/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="ja" href="https://notemd.net/ja/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="zh" href="https://notemd.net/zh/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="x-default" href="https://notemd.net/blog/personal-ai-memory/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Zeichnet note.md alle meine Nachrichten auf?", "acceptedAnswer": {"@type": "Answer", "text": "Nein. note.md ruft selbst kein Modell auf und sendet keine Anfragen. Du entscheidest, welche Dateien, Transkripte und Agent-Workflows in deinen Vault gelangen; ein installierter Agent darf nur das Material untersuchen, das du dem jeweiligen Workflow bereitstellst."}}, {"@type": "Question", "name": "Kann ein Agent automatisch eine vertrauenswürdige Erinnerung hinzufügen?", "acceptedAnswer": {"@type": "Answer", "text": "Nein. Ein Agent kann einen noch ungeprüften Vorschlag erstellen. Bevor daraus bestätigter Kontext wird, ist eine menschliche Bestätigung erforderlich. Diese Bestätigung gilt ausschließlich für den konkret geprüften Inhalt."}}, {"@type": "Question", "name": "Warum nicht für alles die Suche verwenden?", "acceptedAnswer": {"@type": "Answer", "text": "Die Suche eignet sich hervorragend, um in einer großen Sammlung relevantes Material zu finden. Persönliches Gedächtnis hat eine andere Aufgabe: Es stellt eine kleine, kontrollierte Menge von Aussagen bereit, auf die sich ein Agent verlassen darf. Relevanz und Erlaubnis sind nicht dasselbe."}}, {"@type": "Question", "name": "Funktioniert mein Gedächtnis auch mit einer anderen AI?", "acceptedAnswer": {"@type": "Answer", "text": "Ja. Bestätigte Erinnerungen werden als lokale, von Git verfolgte Daten mit einfachen Markdown-Ansichten gespeichert. Sie gehören zum Vault und nicht zu einem einzelnen Modell oder Agent."}}]}</script><script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "Agents entdecken. Du bestätigst. So wird persönliches Gedächtnis vertrauenswürdig.", "description": "Warum ein verlässliches persönliches AI-Gedächtnis damit beginnt, dass Agents im Arbeitsalltag mögliche Erinnerungen erkennen und du jede Aussage bestätigst, bevor sie als vertrauenswürdiger Kontext dient.", "datePublished": "2026-09-02", "dateModified": "2026-09-02", "inLanguage": "de", "author": {"@type": "Organization", "name": "note.md"}, "publisher": {"@type": "Organization", "name": "note.md"}, "mainEntityOfPage": "https://notemd.net/de/blog/personal-ai-memory/"}</script>
+<style>
+:root{--ink:#17181C;--paper:#FAFAF7;--amber:#F59E0B;--gray:#9CA3AF;--line:#E7E5E0;
+--serif:"Playfair Display",Georgia,serif;--body:"EB Garamond",Georgia,serif;
+--mono:"Courier Prime","Courier New",monospace;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--body);background:var(--paper);color:var(--ink);line-height:1.7;font-size:17.5px;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+.wrap{max-width:880px;margin:0 auto;padding:0 28px}
+nav{position:sticky;top:0;z-index:50;background:rgba(23,24,28,.9);backdrop-filter:blur(12px);border-bottom:1px solid #26282F}
+.nav-in{display:flex;align-items:center;gap:24px;height:60px;color:var(--paper)}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;font-family:var(--mono);text-decoration:none}
+.logo .dot{color:var(--amber)}
+.nav-cta{font-family:var(--mono);background:var(--amber);color:var(--ink);font-weight:700;font-size:13px;padding:7px 16px;border-radius:8px;text-decoration:none}
+.npl{font-family:var(--mono);font-size:13px;color:#B9BDC7;text-decoration:none;border-bottom:1px dotted transparent;padding-bottom:2px}
+.npl:hover{color:#fff;border-bottom-color:var(--amber)}
+header.ph{background:var(--ink);color:var(--paper);padding:72px 0 64px}
+.crumb{font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:20px}
+h1{font-family:var(--serif);font-size:42px;line-height:1.15;font-weight:700;margin-bottom:18px}
+.lead{font-size:19px;color:#C3C7CF;font-style:italic;max-width:640px}
+main{padding:56px 0 24px}
+h2{font-family:var(--serif);font-size:28px;margin:44px 0 14px;font-weight:700}
+p{margin:0 0 16px;color:#33363D}
+li{margin:0 0 10px;color:#33363D}
+ul,ol{padding-left:24px;margin:0 0 18px}
+table{width:100%;border-collapse:collapse;margin:26px 0;font-size:16px}
+th,td{border:1px solid var(--line);padding:12px 14px;text-align:left;vertical-align:top}
+th{font-family:var(--mono);font-size:13px;letter-spacing:.04em;background:#fff}
+td:first-child{font-weight:600;width:22%}
+tr td:nth-child(2){background:#FFF9EE}
+code,.mono{font-family:var(--mono);font-size:.92em}
+pre{background:var(--ink);color:#E8E9EB;padding:18px 20px;border-radius:10px;overflow-x:auto;margin:0 0 18px;font-size:14px;line-height:1.6}
+pre code{color:inherit}
+.faq h3{font-family:var(--serif);font-size:19px;margin:22px 0 6px}
+.cta{background:var(--ink);color:var(--paper);text-align:center;padding:64px 0;margin-top:64px}
+.cta h2{margin:0 0 10px;font-style:italic}
+.cta p{color:#C3C7CF}
+.btn{display:inline-block;margin-top:18px;background:var(--amber);color:var(--ink);font-family:var(--mono);font-weight:700;font-size:14.5px;padding:13px 26px;border-radius:10px;text-decoration:none}
+footer{background:var(--ink);color:#7C8290;font-size:13.5px;padding:34px 0 44px}
+.flinks{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:26px}
+.flinks b{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#9CA3AF;margin-bottom:8px}
+.flinks a{display:block;color:#B9BDC7;text-decoration:none;margin-bottom:5px}
+.flinks a:hover{color:#fff}
+.fbase{border-top:1px solid #26282F;padding-top:18px;font-family:var(--mono);font-size:12.5px}
+html[lang="zh"]{--serif:"Playfair Display","Noto Serif SC","Source Han Serif SC","Songti SC",serif;--body:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif}
+html[lang="zh"] .lead,html[lang="zh"] .cta h2{font-style:normal}
+html[lang="ja"]{--serif:"Playfair Display","Hiragino Mincho ProN","Noto Serif JP",serif;--body:"EB Garamond","Hiragino Mincho ProN","Noto Serif JP",serif}
+html[lang="ja"] .lead{font-style:normal}
+.lang-sw{margin-left:auto;display:flex;gap:12px;font-family:var(--mono);font-size:12px;color:#7C8290}
+.lang-sw a{text-decoration:none;padding-bottom:2px;border-bottom:1px dotted transparent}
+.lang-sw a:hover{color:#fff}
+.lang-sw a.on{color:var(--amber);border-bottom-color:var(--amber)}
+@media(max-width:720px){
+h1{font-size:28px}
+h2{font-size:22px}
+.flinks{grid-template-columns:1fr}
+.nav-cta{display:none}
+.nav-in{gap:12px;height:54px}
+.logo{font-size:15px}
+.lang-sw{gap:9px;font-size:11.5px;white-space:nowrap}
+header.ph{padding:48px 0 42px}
+.lead{font-size:17px}
+main{padding:40px 0 16px}
+table{display:block;overflow-x:auto}
+td:first-child{min-width:110px}
+td,th{padding:10px 11px;font-size:14.5px}
+pre{font-size:12.5px;padding:14px 15px}
+.cta{padding:48px 0;margin-top:48px}
+.btn{width:calc(100% - 56px)}
+}
+</style>
+</head>
+<body>
+<nav><div class="wrap nav-in">
+<a class="logo" href="/de/"><svg width="24" height="24" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="115" fill="#17181C" stroke="#3A3D46" stroke-width="14"/><path d="M 185.49318,76.468676 C 202.86539,165.0158 220.23759,183.99019 301.30788,202.96457 220.23759,221.93895 202.86539,240.91333 185.49318,329.46046 168.12097,240.91333 150.74877,221.93895 69.67847,202.96457 150.74877,183.99019 168.12097,165.0158 185.49318,76.468676 Z" fill="#F59E0B"/><rect x="260.643" y="239.444" width="186.136" height="48" rx="29.39" fill="#FAFAF7"/><circle cx="289.722" cy="342.122" r="28.414" fill="#9CA3AF"/><rect x="333.7" y="324.65" width="112.797" height="40" rx="26.856" fill="#9CA3AF"/><circle cx="288.251" cy="420.101" r="28.414" fill="#9CA3AF"/><rect x="336.022" y="403.894" width="109.256" height="40" rx="26.013" fill="#9CA3AF"/></svg><span>note<span class="dot">.</span>md</span></a>
+<a class="npl" href="https://plugins.notemd.net">plugins</a>
+<div class="lang-sw"><a href="/blog/personal-ai-memory/">EN</a><a href="/de/blog/personal-ai-memory/" class=on>DE</a><a href="/ja/blog/personal-ai-memory/">日本語</a><a href="/zh/blog/personal-ai-memory/">中文</a></div>
+<a class="nav-cta" href="/download">Laden</a>
+</div></nav>
+<header class="ph"><div class="wrap">
+<div class="crumb">Produktthese · Memory</div>
+<h1>Agents entdecken. Du bestätigst. So wird persönliches Gedächtnis vertrauenswürdig.</h1>
+<p class="lead">Ein Modell kann private Tatsachen nicht kennen, die du ihm nie mitgeteilt hast. Dich ein Handbuch über dich selbst schreiben zu lassen, funktioniert ebenfalls nicht. note.md wählt einen dritten Weg: Agents erkennen, was in den eingebrachten Arbeiten und Gesprächen wichtig ist. Du bestätigst anschließend jede Erinnerung, bevor sich ein Agent darauf verlassen darf.</p>
+</div></header>
+<main><article class="wrap">
+
+<h2>Auch das klügste Modell kann dein Leben nicht erraten</h2><p>Große Sprachmodelle sind sehr gut bei öffentlich verfügbarem Wissen: bei Tatsachen, die allgemein gelten und von vielen Menschen überprüft werden können. Persönliche Tatsachen sind anders. Kein Modell kann aus dem Internet ableiten, wie du angesprochen werden möchtest, warum du im vergangenen Jahr einen Plan abgelehnt hast, welches Werkzeug du für eine wiederkehrende Aufgabe bevorzugst oder welche Grenze ein Agent niemals überschreiten darf.</p>
+<p>Ein leistungsfähigeres Modell kann vielleicht überzeugender raten. Genau darin liegt die Gefahr: Eine elegant formulierte, aber falsche Aussage über dich kann völlig plausibel klingen – und nur du kannst sie korrigieren. Eine bessere Suche hilft nicht, wenn die Grundlage fehlt. Wurde eine Information nie erfasst, gibt es nichts abzurufen.</p><h2>Du solltest kein Benutzerhandbuch über dich selbst schreiben müssen</h2><p>Die übliche Lösung ist ein Profil, ein Feld für eigene Anweisungen oder eine von Hand gepflegte Gedächtnisdatei. Solche Auswege sind nützlich, eignen sich aber schlecht als Hauptweg. Vertraute Tatsachen erscheinen dir selbstverständlich, weshalb du nicht weißt, welche davon für einen Agent neu sind. Gerade die wertvollsten Erinnerungen – der Grund für eine Entscheidung, eine Lehre aus einem Fehlschlag oder eine unscheinbare Arbeitspräferenz – lassen sich auf Aufforderung besonders schwer zusammenfassen.</p>
+<p>Außerdem veränderst du dich. Ein einmal verfasstes Profil ist eine Momentaufnahme; ein Mensch ist eine fortlaufende Geschichte. Ein Gedächtnisprodukt sollte aus der Selbstbeschreibung nicht noch einen weiteren Posteingang machen, den du pflegen musst.</p><h2>Die nützlichen Tatsachen stecken bereits in deiner Arbeit</h2><p>Vielleicht setzt du dich nie hin, um einer AI zu erklären: „So treffe ich Entscheidungen.“ Trotzdem zeigst du es ganz selbstverständlich in Projektgesprächen, E-Mails, Sitzungsprotokollen, Agent-Sitzungen und den Dokumenten, die du bearbeitest. Diese Momente enthalten, was in einem Formular verloren geht: Sprache aus der Ich-Perspektive, Zeitpunkt, Zielgruppe, Gründe und den umgebenden Kontext.</p>
+<p>Daraus ergibt sich eine bessere Arbeitsteilung:</p>
+<ol>
+<li><b>Du übernimmst ausgewählte Arbeiten und Gespräche in deinen Vault.</b> Die Quelle bleibt als Beleg verfügbar und unter deiner Kontrolle.</li>
+<li><b>Ein Agent entdeckt kleine, eigenständige Kandidaten.</b> Er schlägt jeweils eine klare Aussage vor, statt ein vollständiges Profil zu erfinden.</li>
+<li><b>Du beurteilst jeden einzelnen Vorschlag.</b> Du kannst ihn bestätigen, verwerfen, als wichtig markieren oder ignorieren.</li>
+<li><b>Erst deine Entscheidung schafft eine vertrauenswürdige Erinnerung.</b> Bestätigte Aussagen werden zu dauerhaften, versionierten Daten, aus denen sich einfache Ansichten wie <code>USER.md</code> und <code>MEMORY.md</code> erzeugen lassen.</li>
+</ol>
+<p>Die Maschine übernimmt das Durchsuchen und Formulieren. Bei dir bleibt die eine Aufgabe, die sich nicht delegieren lässt: zu entscheiden, ob eine Aussage dich wirklich zutreffend beschreibt.</p><h2>Eine Aufzeichnung ist ein Beleg, aber nicht automatisch eine Tatsache</h2><p>Alltagssprache ist mehrdeutig. „Wir werden im nächsten Quartal auf PostgreSQL umsteigen“ könnte eine Entscheidung, ein Vorschlag, ein Witz, ein Zitat oder eine Annahme in einem Gedankenexperiment sein. Ein Transkript kann die Aussage sogar der falschen Person zuordnen. Wird all das zu einem Satz verflacht und als Tatsache bezeichnet, verliert das System genau die Informationen, die den Satz vertrauenswürdig gemacht haben.</p>
+<p>note.md speichert daher <b>Aussagen</b> statt anonymer Tatsachen. Zu einer Aussage gehört, wen sie betrifft, wer sie gemacht hat, woher sie stammt, wann sie galt und welche Art von Bestätigung sie erhalten hat. Die Quelle kann einem Agent helfen, eine Erinnerung vorzuschlagen; sie kann die Erinnerung nicht an deiner Stelle bestätigen.</p>
+<p>Deshalb ist die Prüfung kein vorläufiges Hilfsgerüst, das mit besseren Modellen entfallen kann. Sie ist der Schritt, der einer Aussage Verbindlichkeit verleiht.</p><h2>Hinter einer Schaltfläche zum Bestätigen stecken drei verschiedene Entscheidungen</h2><p>„Merke dir das“, „diese externe Aussage ist wahr“ und „du darfst danach handeln“ sind nicht dieselbe Erlaubnis. note.md behandelt sie getrennt:</p>
+<table><thead><tr><th>Deine Entscheidung</th><th>Was sie bedeutet</th><th>Was sie nicht bedeutet</th></tr></thead><tbody>
+<tr><td>Merke dir mich so</td><td>Die Aussage beschreibt dich zutreffend.</td><td>Sie beweist keine externe Tatsache.</td></tr>
+<tr><td>Tatsache bestätigen</td><td>Du hast die externe Aussage anhand der genannten Belege und für den angegebenen Zeitpunkt überprüft.</td><td>Sie erlaubt keine Handlung in der realen Welt.</td></tr>
+<tr><td>Dieses Verhalten erlauben</td><td>Ein Agent darf innerhalb des angegebenen Zwecks und der festgelegten Grenzen handeln.</td><td>Dies ist keine Erlaubnis für jede zukünftige Situation.</td></tr>
+</tbody></table>
+<p>Die Beschriftung der Schaltfläche richtet sich nach der jeweiligen Entscheidung. Die Bestätigung gilt für genau den Inhalt, den du geprüft hast. Ändert sich der vorgeschlagene Inhalt, muss er erneut geprüft werden. Agents dürfen Vorschläge machen, aber keine menschliche Zustimmung erzeugen.</p><h2>Suche und Gedächtnis erfüllen unterschiedliche Aufgaben</h2><p>Viele Systeme behandeln Gedächtnis als besonderen Suchindex oder erklären die gesamte Dokumentensammlung zum Gedächtnis. note.md trennt beides bewusst.</p>
+<table><thead><tr><th></th><th>Suche</th><th>Gedächtnis</th></tr></thead><tbody>
+<tr><td>Frage</td><td>Welches vorhandene Material könnte gerade helfen?</td><td>Auf welche bestätigten Aussagen darf sich dieser Agent verlassen?</td></tr>
+<tr><td>Umfang</td><td>Tausende Dokumente</td><td>Eine kleine Anzahl dauerhafter persönlicher Aussagen</td></tr>
+<tr><td>Methode</td><td>Flexible Gewichtung nach Relevanz, Herkunft, Aktualität und deiner Aufmerksamkeit</td><td>Eindeutige Auswahl nach Person, Bereich, Zweck, Einwilligung und Zeitpunkt</td></tr>
+<tr><td>Wenn etwas falsch ist</td><td>Du versuchst eine andere Suchanfrage</td><td>Ein Agent könnte dich missverstehen oder eine Grenze überschreiten</td></tr>
+</tbody></table>
+<p>Die Suche entlastet dein Gedächtnis: Du musst dir nicht alles merken, weil du es wiederfinden kannst. Das Gedächtnis hilft Agents, sich an dir auszurichten: Sie erhalten die wenigen Aussagen, die du ausdrücklich bestätigt hast. Relevanz kann eine Erlaubnis nicht ersetzen.</p><h2>Ein echter Vault zeigt, warum dieser Kontrollpunkt wichtig ist</h2><p>In der Momentaufnahme eines echten note.md-Vaults vom 2. September 2026 hatten Agents <b>83</b> Aussagen als Erinnerungen vorgeschlagen. Der Eigentümer behielt <b>27</b> und ignorierte <b>56</b>. Fast zwei Drittel der plausibel klingenden Vorschläge eigneten sich also nicht als dauerhafter Kontext.</p>
+<p>Das bedeutet nicht, dass Agents nutzlos sind. Es zeigt, welche Rolle ihnen am besten liegt. Fast jeder Kandidat wurde von einem Agent entdeckt; er fand wertvolle Hinweise, die die Person nie selbst in ein Profil geschrieben hätte. Der Eigentümer entfernte anschließend Witze, vorübergehende Zustände, Wiederholungen und allzu selbstsichere Interpretationen. Die Entdeckung sorgte für Abdeckung. Die Bestätigung schuf Vertrauen.</p><h2>Was note.md dir zusichert</h2><ul>
+<li><b>Keine Vermutung wird unbemerkt Teil deines Profils.</b> Der Vorschlag eines Agent bleibt ein Vorschlag, bis du darüber entscheidest.</li>
+<li><b>Du prüfst jeweils eine Bedeutung.</b> Für sensible Aussagen über Identität, Grenzen oder Berechtigungen gibt es keine Sammelbestätigung.</li>
+<li><b>Du kannst die Herkunft einer Erinnerung nachvollziehen.</b> Quelle, Urheber, Zeitpunkt, Bestätigung und Änderungshistorie bleiben mit ihr verbunden.</li>
+<li><b>Eine Erinnerung wird nur in einem erlaubten Kontext verwendet.</b> Bereich, Zweck, Anbieter und Freigaberegeln bestimmen, was ein Agent erhalten darf.</li>
+<li><b>Deine Korrekturen wirken weiter.</b> Ignorierte Vorschläge werden unterdrückt, und Hinweise können festhalten, welche Fehler zukünftige Agents vermeiden sollen.</li>
+<li><b>Die Daten bleiben dein Eigentum.</b> Die maßgeblichen Informationen liegen in lokalen, von Git verfolgten Dateien; lesbare Markdown-Ansichten lassen sich neu erstellen, und ein anderer Agent kann denselben bestätigten Kontext verwenden.</li>
+</ul><h2>Warum der Aufwand mit der Zeit sinkt</h2><p>Persönliches Gedächtnis ist kein endloser Strom von Profilfeldern. Identität, dauerhafte Präferenzen und Grenzen bilden relativ kleine Mengen. Sie werden früh festgelegt und später meist nur noch überarbeitet. Neue Entscheidungen kommen weiterhin hinzu, lassen sich aber als einzelne Momente prüfen, ohne dass du jedes Mal deine Lebensgeschichte neu schreiben musst.</p>
+<p>Auch der Kreislauf selbst kann sich verbessern. Bestätigte Aussagen helfen beim nächsten Durchlauf, Duplikate zu vermeiden. Ignorierte Kandidaten werden nicht erneut vorgeschlagen. Jede Korrektur zeigt zukünftigen Agents, was sie nicht voraussetzen dürfen. Das Ziel ist nicht, dir mehr Fragen zu stellen, sondern deine Aufmerksamkeit für die wenigen Fragen aufzusparen, die nur du beantworten kannst.</p><h2>Wähle den Gedächtnisvertrag, der zu dir passt</h2><p>Unterschiedliche Aufgaben brauchen unterschiedliche Gedächtnisverträge:</p>
+<table><thead><tr><th>Ansatz</th><th>Passt gut, wenn</th><th>Wofür du dich entscheidest</th></tr></thead><tbody>
+<tr><td>Automatisches Gedächtnis</td><td>Das Gespräch ist vorübergehend und wenig riskant</td><td>Maximaler Komfort; das System entscheidet, was es behält</td></tr>
+<tr><td>Ein handgeschriebenes Profil</td><td>Du hast nur wenige dauerhafte Anweisungen</td><td>Die einfachste klare Einrichtung; du hältst sie selbst aktuell</td></tr>
+<tr><td>note.md Memory</td><td>Agents arbeiten über Jahre und verschiedene Tools mit dir; echte Vorlieben und Grenzen beeinflussen die Arbeit</td><td>Agents übernehmen die Entdeckung; du behältst das letzte Wort, Herkunft, Änderungshistorie und Kontextkontrolle</td></tr>
+</tbody></table>
+<p>Dieser Ansatz passt zu dir, wenn du einem Agent lieber weniger, dafür vertrauenswürdige Erinnerungen geben möchtest als ein umfangreiches Profil, das aus stillen Vermutungen entstanden ist. Er richtet sich an Menschen, die nützliche Personalisierung wünschen, ohne einer AI das Recht zu überlassen, sie zu definieren.</p>
+<p>Die nächsten Verbesserungen folgen derselben These: die Entdeckung in vom Nutzer ausgewählten Quellen präziser machen, Prüfungen so dosieren, dass sie aufmerksam bleiben, anhand von Zeit und tatsächlicher Nutzung vorschlagen, wann eine Erinnerung erneut geprüft werden sollte, aus erfolgreichen und fehlgeschlagenen Arbeiten lernen und wiederholbare Qualitätsmessungen veröffentlichen. Dadurch soll der Kreislauf ruhiger und hilfreicher werden; der menschliche Kontrollpunkt bleibt bestehen.</p>
+<p><b>Eine externe Datenbank speichert Aussagen über dich. Ein zweites Gedächtnis verdient dein Vertrauen, weil du dich daran erinnerst, sein Wissen bestätigt zu haben.</b></p>
+<section class="faq"><h2>FAQ</h2><h3>Zeichnet note.md alle meine Nachrichten auf?</h3><p>Nein. note.md ruft selbst kein Modell auf und sendet keine Anfragen. Du entscheidest, welche Dateien, Transkripte und Agent-Workflows in deinen Vault gelangen; ein installierter Agent darf nur das Material untersuchen, das du dem jeweiligen Workflow bereitstellst.</p><h3>Kann ein Agent automatisch eine vertrauenswürdige Erinnerung hinzufügen?</h3><p>Nein. Ein Agent kann einen noch ungeprüften Vorschlag erstellen. Bevor daraus bestätigter Kontext wird, ist eine menschliche Bestätigung erforderlich. Diese Bestätigung gilt ausschließlich für den konkret geprüften Inhalt.</p><h3>Warum nicht für alles die Suche verwenden?</h3><p>Die Suche eignet sich hervorragend, um in einer großen Sammlung relevantes Material zu finden. Persönliches Gedächtnis hat eine andere Aufgabe: Es stellt eine kleine, kontrollierte Menge von Aussagen bereit, auf die sich ein Agent verlassen darf. Relevanz und Erlaubnis sind nicht dasselbe.</p><h3>Funktioniert mein Gedächtnis auch mit einer anderen AI?</h3><p>Ja. Bestätigte Erinnerungen werden als lokale, von Git verfolgte Daten mit einfachen Markdown-Ansichten gespeichert. Sie gehören zum Vault und nicht zu einem einzelnen Modell oder Agent.</p></section>
+</article></main>
+<section class="cta"><div class="wrap">
+<h2>Besitze dein Denken.</h2>
+<p>Frei. Offen. Ein Ordner voller Markdown auf deinem eigenen Rechner.</p>
+<a class="btn" href="/download">note.md laden</a>
+</div></section>
+<footer><div class="wrap">
+<div class="flinks">
+<div><b>Vergleich</b>
+<a href="/de/compare/roam-research/">note.md vs Roam Research</a>
+<a href="/de/compare/obsidian/">note.md vs Obsidian</a>
+<a href="/de/compare/notion/">note.md vs Notion</a></div>
+<div><b>Integrationen</b>
+<a href="/de/integrations/openclaw/">OpenClaw</a>
+<a href="/de/integrations/cowork/">Claude Cowork</a>
+<a href="/de/integrations/codex/">Codex</a>
+<a href="/de/integrations/chatgpt-work/">ChatGPT Work</a>
+<a href="/de/integrations/hermes/">Hermes</a></div>
+<div><b>Anleitungen</b>
+<a href="/de/orchestrate-agents/">Ein Vault, viele Agents</a>
+<a href="/de/blog/personal-ai-memory/">Persönliches AI-Gedächtnis, von dir bestätigt</a>
+<a href="/de/guides/share-on-cloudflare/">Kostenlos teilen über Cloudflare</a>
+<a href="/de/guides/vault-on-github/">Vault auf GitHub</a>
+<a href="/llms.txt">llms.txt (für Agents)</a></div>
+</div>
+<div class="fbase">note<span style="color:var(--amber)">.</span>md — <a href="/de/" style="color:#B9BDC7">notemd.net</a> · Text ist für immer. Was du darüber dachtest, auch.</div>
+</div></footer>
+</body>
+</html>
