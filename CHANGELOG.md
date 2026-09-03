@@ -9,6 +9,10 @@ For the full commit history, see the git log.
 
 ### Changed
 
+- **Smart Search now understands a question before it searches.** The selected Agent turns natural-language intent into a strictly validated search plan; dates such as “last month” become timezone-aware document constraints instead of keywords, while paths, tags, types, origins and sort choices remain locked by the host. Low recall may trigger one bounded tuning pass, then the host re-reads and freezes the cited Vault lines before an input-only Answer run. Typing still shows a zero-token Quick Preview, clearly separated from authoritative Intelligent Results.
+
+- **Claude Agent 1.0.25, Codex Agent 1.0.11 and DeepSeek Agent 1.1.11 add phase-aware model routing.** Plan and Tune default to each harness's fast profile while Answer keeps its own default/quality choice; the Smart Search model menu stores these choices per provider and phase. Every run reports the actual resolved model, and all three providers now expose the shared input-only `search-plan` task plus capability negotiation for safe orchestration.
+
 - **Memory 2.4.2 can copy a rigorous Role/Scope initialization prompt for external Agents.** The staged workflow derives candidates only from attributable Vault evidence, keeps clients and family in separate security domains, validates a complete Registry candidate, then pauses for owner confirmation before it prepares exact Claim reassignment proposals. Unsupported Registry writes, direct apply, forged human identity, credentials and ambiguous cross-Realm classification are explicitly forbidden.
 
 - **Memory 2.4.1 brings Role and Scope governance into the main workspace.** “Identity & Context” is now a first-class tab beside confirmed memories, pending suggestions and history instead of a separate sheet. Active Role/Scope counts stay visible, and Registry edits plus atomic batch reassignment remain in place without interrupting the rest of the review flow.

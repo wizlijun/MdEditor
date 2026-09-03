@@ -21,6 +21,30 @@ export interface AgentHarness {
   /** An environment-level failure from the newest run — expired credentials, a
    *  rate limit. The run would fail the same way again. */
   warning?: string | null
+  /** Machine-readable task and model-routing features. Missing on older providers. */
+  capabilities?: AgentHarnessCapabilities | null
+}
+
+export interface AgentModelProfile {
+  model?: string | null
+  available: boolean
+}
+
+export interface AgentModelRouting {
+  invocation_override: boolean
+  profiles: {
+    fast: AgentModelProfile
+    default: AgentModelProfile
+  }
+  selectable_models: string[]
+}
+
+export interface AgentHarnessCapabilities {
+  tasks: string[]
+  search_plan_schemas: number[]
+  terminal_result: boolean
+  input_only_isolation: boolean
+  model_routing: AgentModelRouting
 }
 
 /** One installed agent plugin, with the harness behind it. */
