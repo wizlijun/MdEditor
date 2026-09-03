@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Smart Search now shows a live, scrolling work log while it understands and answers a question.** Safe status lines expose the current planning, search, tuning, evidence, memory and answer stages without leaking provider internals, and remain visible after either success or failure. If answer generation fails, a dedicated retry reuses the already frozen evidence instead of repeating the search.
+
+### Fixed
+
+- **Smart Search is more resilient to slow Agents and brief status-read failures.** Planning gets a longer quiet window, transient read-only polling failures retry in place, and failed runs report their current stage promptly instead of ending as a generic timeout. Claude Agent 1.0.26, Codex Agent 1.0.12 and DeepSeek Agent 1.1.12 include the matching task updates; Codex also uses the current CLI feature-disable syntax and preserves early stderr diagnostics.
+
 ## v6.903.4 — 2026-09-03
 
 ### Changed
