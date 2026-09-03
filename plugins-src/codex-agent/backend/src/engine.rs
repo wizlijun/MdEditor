@@ -146,6 +146,21 @@ pub async fn run(
         }
     };
     let pgid = child.id().unwrap_or(0) as i32;
+    // Start draining stderr before writing the prompt. A strict-config failure
+    // can make Codex exit immediately and close stdin; without this reader the
+    // caller only sees "Broken pipe" and loses the actionable CLI diagnostic.
+    let stderr = child.stderr.take().expect("piped stderr");
+    let err_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let eb = err_buf.clone();
+    let err_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let mut buf = eb.lock().unwrap();
+            buf.push_str(&line);
+            buf.push('\n');
+            *buf = record::tail(&buf, record::STDERR_LIMIT * 2);
+        }
+    });
 
     // Codex reads the prompt until EOF. Write it once, then close stdin so the
     // turn can start; never interpolate prompt text into a shell command.
@@ -164,6 +179,16 @@ pub async fn run(
         {
             force_kill(&mut child, pgid).await;
         }
+        let mut err_task = err_task;
+        if tokio::time::timeout(std::time::Duration::from_secs(1), &mut err_task)
+            .await
+            .is_err()
+        {
+            kill_group(pgid, libc::SIGKILL);
+            err_task.abort();
+            let _ = err_task.await;
+        }
+        let stderr_tail = record::tail(&err_buf.lock().unwrap(), record::STDERR_LIMIT);
         let status = if e.starts_with("cancelled") {
             record::Status::Cancelled
         } else if e.starts_with("timed out") {
@@ -178,7 +203,7 @@ pub async fn run(
             None,
             None,
             format!("could not send prompt to Codex: {e}"),
-            String::new(),
+            stderr_tail,
             &actor(&spec.model),
             false,
         );
@@ -189,19 +214,7 @@ pub async fn run(
     drop(stdin);
 
     let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
     let mut lines = BufReader::new(stdout).lines();
-    let err_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let eb = err_buf.clone();
-    let err_task = tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let mut buf = eb.lock().unwrap();
-            buf.push_str(&line);
-            buf.push('\n');
-            *buf = record::tail(&buf, record::STDERR_LIMIT * 2);
-        }
-    });
 
     let mut progress =
         ProgressTracker::start(&spec.meta.task_run_dir, &spec.meta.run_id, started.started);
@@ -442,7 +455,7 @@ mod tests {
                  printf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"%s\"}}\\n' \"$(pwd)\"\n\
                  printf '{\"type\":\"turn.completed\",\"usage\":{}}\\n'",
             );
-            let mut s = spec(d.path(), bin, 5);
+            let mut s = spec(d.path(), bin, 10);
             s.meta.task.id = task_id.into();
             let vault = s.meta.vault.canonicalize().unwrap();
             let (_cancel_tx, cancel_rx) = mpsc::channel(1);
@@ -507,6 +520,26 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(rec.status, record::Status::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn an_early_cli_exit_keeps_stderr_instead_of_only_reporting_broken_pipe() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake(
+            d.path(),
+            "exec 0<&-; echo 'unknown configuration field tools.view_image' >&2; exit 1",
+        );
+        let (_cancel_tx, cancel_rx) = mpsc::channel(1);
+        let mut s = spec(d.path(), bin, 5);
+        s.prompt = "x".repeat(2 * 1024 * 1024);
+
+        let rec = record_from(s, cancel_rx).await;
+        assert_eq!(rec.status, record::Status::Error);
+        assert!(
+            rec.stderr_tail
+                .contains("unknown configuration field tools.view_image"),
+            "diagnostic was lost: {rec:?}"
+        );
     }
 
     #[tokio::test]

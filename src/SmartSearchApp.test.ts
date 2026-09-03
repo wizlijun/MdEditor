@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   setSize: vi.fn(async () => {}),
   center: vi.fn(async () => {}),
   planResults: [] as string[],
+  statusResults: [] as any[],
+  plannedErrors: [] as unknown[],
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }))
@@ -155,6 +157,7 @@ function installInvokeMock(): void {
         }
       }
       if (args?.command === 'run-status') {
+        if (mocks.statusResults.length) return mocks.statusResults.shift()
         const task = args?.context?.task
         return {
           state: 'done',
@@ -169,7 +172,10 @@ function installInvokeMock(): void {
       }
     }
     if (command === 'notemd_search_plan_context') return { lockedFilters: {} }
-    if (command === 'notemd_planned_search') return plannedResponse(args?.originalQuery)
+    if (command === 'notemd_planned_search') {
+      if (mocks.plannedErrors.length) throw mocks.plannedErrors.shift()
+      return plannedResponse(args?.originalQuery)
+    }
     if (command === 'smart_search_freeze_sources') return args?.sources
     if (command === 'notemd_smart_search') {
       if (args?.query === 'new question') {
@@ -215,6 +221,8 @@ beforeEach(() => {
   document.body.innerHTML = ''
   vi.clearAllMocks()
   mocks.planResults.length = 0
+  mocks.statusResults.length = 0
+  mocks.plannedErrors.length = 0
   installInvokeMock()
 })
 
@@ -240,6 +248,10 @@ describe('SmartSearchApp interaction wiring', () => {
       expect(document.querySelector('.answer-body')?.textContent)
         .toContain('Ship after fixing the blocker.')
     })
+    const workLog = document.querySelector('[role="log"]')
+    expect(workLog?.getAttribute('aria-live')).toBe('polite')
+    expect(workLog?.textContent).toContain('Interpreting intent, time range, and constraints')
+    expect(workLog?.textContent).toContain('Answer completed and citations validated')
     expect(localStorage.length).toBe(0)
 
     const runCall = mocks.invoke.mock.calls.find((call) => (
@@ -256,6 +268,86 @@ describe('SmartSearchApp interaction wiring', () => {
         payload: expect.objectContaining({ query: 'release risk', answer: expect.stringContaining('[S1]') }),
       }))
     })
+  })
+
+  it('streams safe harness step counters into a retained scrolling log', async () => {
+    mocks.statusResults.push(
+      { state: 'running', steps: 1, last: 'secret prompt sk-do-not-render' },
+      {
+        state: 'done', record: { status: 'success' },
+        terminal_result: { complete: true, content: JSON.stringify(planJson()) },
+      },
+      { state: 'running', steps: 7, last: 'private vault excerpt' },
+      {
+        state: 'done', record: { status: 'success' },
+        terminal_result: { complete: true, content: 'Safe answer. [S1]' },
+      },
+    )
+    const scrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 480 })
+    try {
+      const input = await mountReady()
+      await typeAndWait(input)
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await vi.waitFor(() => expect(document.querySelector('.answer-body')).not.toBeNull(), { timeout: 2_500 })
+
+      const log = document.querySelector<HTMLElement>('.workflow-log')!
+      expect(log.textContent).toContain('Harness completed background step 1')
+      expect(log.textContent).toContain('Harness completed background step 7')
+      expect(log.textContent).not.toContain('sk-do-not-render')
+      expect(log.textContent).not.toContain('private vault excerpt')
+      expect(log.scrollTop).toBe(480)
+    } finally {
+      if (scrollHeight) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', scrollHeight)
+      else delete (HTMLElement.prototype as any).scrollHeight
+    }
+  })
+
+  it('keeps timeout diagnostics and explicitly retries only the frozen answer', async () => {
+    mocks.statusResults.push(
+      {
+        state: 'done', record: { status: 'success' },
+        terminal_result: { complete: true, content: JSON.stringify(planJson()) },
+      },
+      {
+        state: 'done', record: { status: 'timeout', stderr_tail: 'quiet timeout after 600s' },
+      },
+      {
+        state: 'done', record: { status: 'success' },
+        terminal_result: { complete: true, content: 'Recovered answer. [S1]' },
+      },
+    )
+    const input = await mountReady()
+    await typeAndWait(input)
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain('timed out'))
+    const logBeforeRetry = document.querySelector('[role="log"]')?.textContent
+    expect(logBeforeRetry).toContain('Stopped:')
+    document.querySelector<HTMLButtonElement>('.retry-button')?.click()
+    await vi.waitFor(() => expect(document.querySelector('.answer-body')?.textContent).toContain('Recovered answer'))
+
+    const starts = mocks.invoke.mock.calls.filter((call) => (
+      call[0] === 'plugin_v2_execute' && call[1]?.command === 'run-task'
+    ))
+    expect(starts.filter((call) => call[1]?.context?.task === 'search-plan')).toHaveLength(1)
+    expect(starts.filter((call) => call[1]?.context?.task === 'search-answer')).toHaveLength(2)
+    expect(document.querySelector('[role="log"]')?.textContent).toContain(
+      'reusing the frozen evidence without searching again',
+    )
+  })
+
+  it('retries one coded transient read-only search interruption', async () => {
+    mocks.plannedErrors.push({ code: 'INDEX_BUSY' })
+    const input = await mountReady()
+    await typeAndWait(input)
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+
+    await vi.waitFor(() => expect(document.querySelector('.answer-body')).not.toBeNull())
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_planned_search')).toHaveLength(2)
+    expect(document.querySelector('[role="log"]')?.textContent).toContain(
+      'Read-only search was interrupted; retrying once',
+    )
   })
 
   it('retries one invalid planner terminal result before trusted search', async () => {

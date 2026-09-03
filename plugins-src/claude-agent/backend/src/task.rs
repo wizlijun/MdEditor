@@ -452,7 +452,7 @@ mod tests {
             def.model.is_none(),
             "the caller's plan/tune model_profile must not be shadowed by task.json"
         );
-        assert_eq!(def.timeout_seconds, 90, "planning must use a short timeout");
+        assert_eq!(def.timeout_seconds, 180, "planning allows one longer quiet model turn");
         assert_eq!(
             task,
             include_str!("../../../codex-agent/backend/templates/search-plan/task.json")

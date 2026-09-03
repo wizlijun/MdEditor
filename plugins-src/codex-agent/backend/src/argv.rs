@@ -41,14 +41,14 @@ pub fn build_input_only(model: Option<&str>, workspace: &Path) -> Vec<String> {
         "shell_tool".into(),
         "--disable".into(),
         "unified_exec".into(),
+        "--disable".into(),
+        "view_image".into(),
         "-c".into(),
         "web_search=\"disabled\"".into(),
         "-c".into(),
         "agents.enabled=false".into(),
         "-c".into(),
         "apps._default.enabled=false".into(),
-        "-c".into(),
-        "tools.view_image=false".into(),
         "-c".into(),
         "features.skill_mcp_dependency_install=false".into(),
     ]);
@@ -101,10 +101,10 @@ mod tests {
         for pair in [
             ["--disable", "shell_tool"],
             ["--disable", "unified_exec"],
+            ["--disable", "view_image"],
             ["-c", "web_search=\"disabled\""],
             ["-c", "agents.enabled=false"],
             ["-c", "apps._default.enabled=false"],
-            ["-c", "tools.view_image=false"],
         ] {
             assert!(
                 got.windows(2).any(|window| window == pair),
@@ -114,6 +114,7 @@ mod tests {
         assert!(got.iter().any(|arg| arg == "--ignore-user-config"));
         assert!(got.iter().any(|arg| arg == "--ignore-rules"));
         assert!(got.iter().any(|arg| arg == "--strict-config"));
+        assert!(!got.iter().any(|arg| arg == "tools.view_image=false"));
         assert_eq!(got.last().map(String::as_str), Some("-"));
     }
 }

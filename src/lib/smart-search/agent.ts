@@ -5,7 +5,7 @@ import type { ModelSelector } from './model-routing'
 
 export const SEARCH_PLAN_TASK = 'search-plan'
 export const SEARCH_ANSWER_TASK = 'search-answer'
-export const SEARCH_AGENT_POLL_MS = 1_000
+export const SEARCH_AGENT_POLL_MS = 500
 
 export interface AgentProgress {
   steps: number
@@ -22,6 +22,33 @@ export interface AgentTaskResult {
 export interface AgentTaskStart {
   runId: string
   resolvedModel: string | null
+}
+
+export class AgentTaskError extends Error {
+  constructor(
+    message: string,
+    readonly task: string,
+    readonly runId: string,
+    readonly status: string,
+  ) {
+    super(message)
+    this.name = 'AgentTaskError'
+  }
+}
+
+export interface AgentPollRetry {
+  attempt: number
+  maxAttempts: number
+  error: string
+}
+
+export interface AgentPollOptions {
+  transport?: Execute
+  intervalMs?: number
+  signal?: AbortSignal
+  maxTransientErrors?: number
+  retryDelayMs?: number
+  onRetry?: (retry: AgentPollRetry) => void
 }
 
 type Execute = (provider: string, command: string, context: Record<string, unknown>) => Promise<any>
@@ -130,15 +157,26 @@ function checkedModelSelector(selector: ModelSelector | undefined): ModelSelecto
   return selector
 }
 
-function pause(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException('agent polling aborted', 'AbortError'))
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new DOMException('agent polling aborted', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 export async function pollSearchAgentTask(
   provider: string,
   runId: string,
   onProgress: (progress: AgentProgress) => void,
-  options: { transport?: Execute; intervalMs?: number; signal?: AbortSignal } = {},
+  options: AgentPollOptions = {},
 ): Promise<AgentTaskResult> {
   return pollAgentTask(provider, SEARCH_ANSWER_TASK, runId, onProgress, options)
 }
@@ -148,39 +186,68 @@ export async function pollAgentTask(
   task: string,
   runId: string,
   onProgress: (progress: AgentProgress) => void,
-  options: { transport?: Execute; intervalMs?: number; signal?: AbortSignal } = {},
+  options: AgentPollOptions = {},
 ): Promise<AgentTaskResult> {
   const transport = options.transport ?? execute
   const intervalMs = options.intervalMs ?? SEARCH_AGENT_POLL_MS
+  const maxTransientErrors = options.maxTransientErrors ?? 2
+  const retryDelayMs = options.retryDelayMs ?? 250
+  let transientErrors = 0
   while (!options.signal?.aborted) {
-    const response = await transport(provider, 'run-status', {
-      task,
-      run_id: runId,
-    })
-    if (response?.state === 'running') {
-      onProgress({ steps: Number(response.steps ?? 0), last: String(response.last ?? '') })
-      await pause(intervalMs)
+    let response: any
+    try {
+      response = await transport(provider, 'run-status', {
+        task,
+        run_id: runId,
+      })
+      transientErrors = 0
+    } catch (error) {
+      transientErrors += 1
+      const message = error instanceof Error ? error.message : String(error)
+      if (transientErrors > maxTransientErrors) {
+        throw new AgentTaskError(message, task, runId, 'transport_error')
+      }
+      options.onRetry?.({
+        attempt: transientErrors,
+        maxAttempts: maxTransientErrors,
+        error: message,
+      })
+      await pause(retryDelayMs * transientErrors, options.signal)
       continue
     }
-    if (response?.state !== 'done') throw new Error('the agent run ended without a record')
+    if (response?.state === 'running') {
+      onProgress({ steps: Number(response.steps ?? 0), last: String(response.last ?? '') })
+      await pause(intervalMs, options.signal)
+      continue
+    }
+    if (response?.state !== 'done') {
+      throw new AgentTaskError('the agent run ended without a record', task, runId, String(response?.state ?? 'lost'))
+    }
     const record = response.record ?? {}
     const status = String(record.status ?? 'error')
     if (task === SEARCH_PLAN_TASK) {
       if (status !== 'success') {
-        throw new Error(String(response.terminal_result?.content ?? record.stderr_tail ?? `planner run failed: ${status}`))
+        throw new AgentTaskError(
+          String(response.terminal_result?.content ?? record.stderr_tail ?? `planner run failed: ${status}`),
+          task,
+          runId,
+          status,
+        )
       }
       if (response.terminal_result?.complete !== true) {
-        throw new Error('planner returned no complete terminal result')
+        throw new AgentTaskError('planner returned no complete terminal result', task, runId, 'incomplete')
       }
       const content = String(response.terminal_result.content ?? '')
-      if (!content.trim()) throw new Error('planner returned an empty terminal result')
+      if (!content.trim()) {
+        throw new AgentTaskError('planner returned an empty terminal result', task, runId, 'empty')
+      }
       return { runId, status, content, usage: record.usage ?? null }
     }
     const complete = response.terminal_result?.complete === true
       ? String(response.terminal_result.content ?? '')
       : String(record.result ?? record.stderr_tail ?? '')
     if (status !== 'success' && status !== 'skipped') {
-      throw new Error(complete || `agent run failed: ${status}`)
+      throw new AgentTaskError(complete || String(record.stderr_tail ?? `agent run failed: ${status}`), task, runId, status)
     }
     return { runId, status, content: complete, usage: record.usage ?? null }
   }

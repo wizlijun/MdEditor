@@ -62,6 +62,17 @@ pub fn seed_builtin_templates(vault: &Path) -> Vec<String> {
             wrote.push(format!("{id}/{rel}"));
         }
     }
+    // DeepSeek does not own shared task.json files, but the published 90s
+    // search-plan template proved too short for one silent ACP turn. Upgrade
+    // only that exact managed version; preserve any user/custom provider edit.
+    let search_plan = task_dir(vault, SEARCH_PLAN_TASK).join("task.json");
+    let desired = include_str!("../templates/search-plan/task.json");
+    let legacy = desired.replace("\"timeout_seconds\": 180", "\"timeout_seconds\": 90");
+    if std::fs::read_to_string(&search_plan).is_ok_and(|current| current == legacy)
+        && std::fs::write(&search_plan, desired).is_ok()
+    {
+        wrote.push("search-plan/task.json".to_string());
+    }
     wrote
 }
 
@@ -288,6 +299,31 @@ mod tests {
         assert!(task_dir(v.path(), "answer-note-question")
             .join("policy.json")
             .exists());
+    }
+
+    #[test]
+    fn upgrades_only_the_published_short_search_plan_timeout() {
+        let v = tempfile::tempdir().unwrap();
+        let p = task_dir(v.path(), SEARCH_PLAN_TASK).join("task.json");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let desired = include_str!("../templates/search-plan/task.json");
+        let legacy = desired.replace("\"timeout_seconds\": 180", "\"timeout_seconds\": 90");
+        std::fs::write(&p, legacy).unwrap();
+
+        let wrote = seed_builtin_templates(v.path());
+        assert!(wrote.contains(&"search-plan/task.json".to_string()));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), desired);
+
+        std::fs::write(
+            &p,
+            r#"{"name":"custom","prompt":"mine","timeout_seconds":90}"#,
+        )
+        .unwrap();
+        seed_builtin_templates(v.path());
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            r#"{"name":"custom","prompt":"mine","timeout_seconds":90}"#,
+        );
     }
 
     #[test]

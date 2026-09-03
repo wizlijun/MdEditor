@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  AgentTaskError,
   normalizeAgentHarness,
   pollAgentTask,
   pollSearchAgentTask,
@@ -80,5 +81,57 @@ describe('smart-search agent transport', () => {
     await expect(pollAgentTask('provider', 'search-plan', 'p2', vi.fn(), {
       transport: incomplete, intervalMs: 0,
     })).rejects.toThrow('no complete terminal result')
+  })
+
+  it('retries transient status reads for the same run without starting another task', async () => {
+    const transport = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary IPC failure'))
+      .mockResolvedValueOnce({ state: 'running', steps: 1, last: 'Still answering' })
+      .mockResolvedValueOnce({
+        state: 'done', record: { status: 'success' },
+        terminal_result: { complete: true, content: 'answer' },
+      })
+    const retry = vi.fn()
+    const progress = vi.fn()
+
+    await expect(pollSearchAgentTask('provider', 'run-1', progress, {
+      transport, intervalMs: 0, retryDelayMs: 0, onRetry: retry,
+    })).resolves.toMatchObject({ runId: 'run-1', content: 'answer' })
+    expect(retry).toHaveBeenCalledWith({
+      attempt: 1, maxAttempts: 2, error: 'temporary IPC failure',
+    })
+    expect(progress).toHaveBeenCalledWith({ steps: 1, last: 'Still answering' })
+    expect(transport).toHaveBeenCalledTimes(3)
+    expect(transport.mock.calls.every((call) => call[1] === 'run-status')).toBe(true)
+    expect(new Set(transport.mock.calls.map((call) => call[2].run_id))).toEqual(new Set(['run-1']))
+  })
+
+  it('preserves terminal timeout details as a typed task error and never reruns it', async () => {
+    const transport = vi.fn().mockResolvedValue({
+      state: 'done', record: { status: 'timeout', stderr_tail: 'quiet timeout after 180s' },
+    })
+
+    const failure = await pollSearchAgentTask('provider', 'answer-timeout', vi.fn(), {
+      transport, intervalMs: 0,
+    }).catch((error) => error)
+    expect(failure).toBeInstanceOf(AgentTaskError)
+    expect(failure).toMatchObject({
+      task: 'search-answer', runId: 'answer-timeout', status: 'timeout',
+      message: 'quiet timeout after 180s',
+    })
+    expect(transport).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops after the bounded transient status retry budget', async () => {
+    const transport = vi.fn().mockRejectedValue(new Error('bridge unavailable'))
+    const failure = await pollAgentTask('provider', 'search-plan', 'p3', vi.fn(), {
+      transport, intervalMs: 0, retryDelayMs: 0, maxTransientErrors: 2,
+    }).catch((error) => error)
+
+    expect(failure).toBeInstanceOf(AgentTaskError)
+    expect(failure).toMatchObject({
+      task: 'search-plan', runId: 'p3', status: 'transport_error',
+    })
+    expect(transport).toHaveBeenCalledTimes(3)
   })
 })

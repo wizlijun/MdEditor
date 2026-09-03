@@ -26,12 +26,20 @@
     type AnswerContext,
   } from './lib/smart-search/session'
   import {
+    AgentTaskError,
     loadSearchAgentOptions,
     pollAgentTask,
     SEARCH_ANSWER_TASK,
     SEARCH_PLAN_TASK,
     startAgentTask,
   } from './lib/smart-search/agent'
+  import {
+    appendWorkflowEntry,
+    isNearLogBottom,
+    type WorkflowEntry,
+    type WorkflowLevel,
+    type WorkflowStage,
+  } from './lib/smart-search/workflow-log'
   import { smartSearchApi, type ArchiveReceipt } from './lib/smart-search/api'
   import {
     rememberedModelPreference,
@@ -95,7 +103,12 @@
   let resolvedPlan = $state<ResolvedSearchPlan | null>(null)
   let answerSelector = $state<ModelSelector>({ model_profile: 'default' })
   let answerContext = $state<AnswerContext | null>(null)
-  let progressText = $state('')
+  let workflowEntries = $state<WorkflowEntry[]>([])
+  let activityLogEl = $state<HTMLDivElement>()
+  let autoFollowActivity = true
+  let workflowSequence = 0
+  let failedStage = $state<WorkflowStage | null>(null)
+  let currentStage: WorkflowStage = 'plan'
   let answerAttempt = 0
   let navigationError = $state('')
 
@@ -330,6 +343,107 @@
     }
   }
 
+  function resetWorkflow(): void {
+    workflowEntries = []
+    workflowSequence = 0
+    autoFollowActivity = true
+    failedStage = null
+  }
+
+  function appendActivity(
+    stage: WorkflowStage,
+    level: WorkflowLevel,
+    message: string,
+    detail: { runId?: string; steps?: number } = {},
+  ): void {
+    const shouldFollow = !activityLogEl || autoFollowActivity || isNearLogBottom(activityLogEl)
+    workflowEntries = appendWorkflowEntry(workflowEntries, {
+      id: ++workflowSequence,
+      stage,
+      level,
+      message,
+      ...detail,
+    })
+    if (shouldFollow) void scrollActivityToEnd()
+  }
+
+  async function scrollActivityToEnd(): Promise<void> {
+    await tick()
+    if (!activityLogEl) return
+    activityLogEl.scrollTop = activityLogEl.scrollHeight
+    autoFollowActivity = true
+  }
+
+  function onActivityScroll(): void {
+    if (!activityLogEl) return
+    autoFollowActivity = isNearLogBottom(activityLogEl)
+  }
+
+  function appendAgentProgress(
+    stage: WorkflowStage,
+    runId: string,
+    attempt: number,
+    progress: { steps: number; last: string },
+  ): void {
+    if (attempt !== answerAttempt) return
+    // Provider snapshots can contain generated text or source excerpts. Show
+    // the fact and cadence of the work, but never mirror private payloads,
+    // prompts or secrets into the UI activity stream.
+    appendActivity(stage, 'active', t('smartSearch.activityStep', { n: progress.steps }), {
+      runId,
+      steps: progress.steps,
+    })
+  }
+
+  function pollingOptions(stage: WorkflowStage, runId: string, attempt: number) {
+    return {
+      onRetry: (retry: { attempt: number; maxAttempts: number }) => {
+        if (attempt !== answerAttempt) return
+        appendActivity(stage, 'warning', t('smartSearch.activityPollingRetry', {
+          attempt: retry.attempt,
+          max: retry.maxAttempts,
+        }), { runId })
+      },
+    }
+  }
+
+  function readableError(error: unknown): string {
+    const redact = (message: string) => message
+      .replace(/\b(?:sk|key)-[A-Za-z0-9_-]{8,}\b/g, '[redacted]')
+      .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
+      .replace(/\b(api[_-]?key|token|password)\s*[:=]\s*\S+/gi, '$1=[redacted]')
+    if (error instanceof AgentTaskError) {
+      if (error.status === 'timeout') {
+        return t('smartSearch.taskTimedOut', { runId: error.runId })
+      }
+      if (error.status === 'lost') {
+        return t('smartSearch.taskLost', { runId: error.runId })
+      }
+      return `${redact(error.message)} (${error.runId})`
+    }
+    return redact(error instanceof Error ? error.message : String(error))
+  }
+
+  async function retryRead<T>(
+    stage: WorkflowStage,
+    runId: string,
+    attempt: number,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await operation()
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code: unknown }).code)
+        : ''
+      if (!['IPC_DISCONNECTED', 'CHANNEL_CLOSED', 'INDEX_BUSY'].includes(code)) throw error
+      if (attempt !== answerAttempt) throw new DOMException('superseded', 'AbortError')
+      appendActivity(stage, 'warning', t('smartSearch.activityReadRetry'), { runId })
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      return await operation()
+    }
+  }
+
   function groupLabel(group: HitGroup): string {
     switch (group.kind) {
       case 'pinned': return t('search.group.pinned')
@@ -480,6 +594,8 @@
     attempt: number,
   ): Promise<PlannedSearchResponse> {
     answerPhase = 'planning'
+    currentStage = 'plan'
+    appendActivity('plan', 'active', t('smartSearch.activityPlanStart'))
     const planPrompt = buildSearchPlanPrompt({
       mode: 'plan', question: query, referenceTime, timezone, locale, lockedFilters,
     })
@@ -494,27 +610,40 @@
       )
       planRunId = planStart.runId
       planModel = planStart.resolvedModel ?? planModel
+      appendActivity('plan', 'active', t('smartSearch.activityAgentStarted', {
+        model: planStart.resolvedModel ?? t('smartSearch.modelFast'),
+      }), { runId: planStart.runId })
       const planResult = await pollAgentTask(provider, SEARCH_PLAN_TASK, planStart.runId, (progress) => {
-        progressText = progress.last || (progress.steps ? `${progress.steps}` : '')
-      })
+        appendAgentProgress('plan', planStart.runId, attempt, progress)
+      }, pollingOptions('plan', planStart.runId, attempt))
       if (attempt !== answerAttempt) throw new DOMException('superseded', 'AbortError')
       rawPlan = planResult.content.trim()
       try {
         baselinePlan = parsePlan(rawPlan)
+        appendActivity('plan', 'success', t('smartSearch.activityPlanReady'), { runId: planStart.runId })
         break
       } catch (error) {
         if (plannerAttempt === 1) throw error
-        progressText = '检索计划格式无效，正在重试理解'
+        appendActivity('plan', 'warning', t('smartSearch.activityPlanRetry'), { runId: planStart.runId })
       }
     }
     answerPhase = 'searching'
-    let planned = await smartSearchApi.plannedSearch(
+    currentStage = 'search'
+    appendActivity('search', 'active', t('smartSearch.activitySearchStart'))
+    let planned = await retryRead('search', planRunId, attempt, () => smartSearchApi.plannedSearch(
       query, baselinePlan!, referenceTime, timezone, { deep: true, timeoutMs: DEEP_TIMEOUT_MS },
+    ))
+    appendActivity('search', planned.search.truncated ? 'warning' : 'success',
+      planned.search.truncated
+        ? t('smartSearch.activitySearchPartial', { n: planned.search.hits.length })
+        : t('smartSearch.activitySearchDone', { n: planned.search.hits.length }),
     )
 
     const telemetry = searchTelemetry(planned)
     if (shouldTune(telemetry)) {
       answerPhase = 'tuning'
+      currentStage = 'tune'
+      appendActivity('tune', 'active', t('smartSearch.activityTuneStart'))
       try {
         const tuneStart = await startAgentTask(
           provider,
@@ -527,21 +656,68 @@
         )
         tuneRunId = tuneStart.runId
         planModel = tuneStart.resolvedModel ?? planModel
+        appendActivity('tune', 'active', t('smartSearch.activityAgentStarted', {
+          model: tuneStart.resolvedModel ?? planModel ?? t('smartSearch.modelFast'),
+        }), { runId: tuneStart.runId })
         const tuned = await pollAgentTask(provider, SEARCH_PLAN_TASK, tuneStart.runId, (progress) => {
-          progressText = progress.last || (progress.steps ? `${progress.steps}` : '')
-        })
+          appendAgentProgress('tune', tuneStart.runId, attempt, progress)
+        }, pollingOptions('tune', tuneStart.runId, attempt))
         rawPlan = tuned.content.trim()
         answerPhase = 'searching'
-        planned = await smartSearchApi.plannedSearch(
+        currentStage = 'search'
+        appendActivity('search', 'active', t('smartSearch.activityTunedSearchStart'))
+        planned = await retryRead('search', tuneStart.runId, attempt, () => smartSearchApi.plannedSearch(
           query, parsePlan(rawPlan), referenceTime, timezone,
           { deep: true, timeoutMs: DEEP_TIMEOUT_MS, baselinePlan: baselinePlan! },
+        ))
+        appendActivity('search', planned.search.truncated ? 'warning' : 'success',
+          planned.search.truncated
+            ? t('smartSearch.activitySearchPartial', { n: planned.search.hits.length })
+            : t('smartSearch.activitySearchDone', { n: planned.search.hits.length }),
         )
       } catch (error) {
         if (planned.search.hits.length === 0) throw error
-        progressText = '调优失败，继续使用首次检索结果'
+        appendActivity('tune', 'warning', t('smartSearch.activityTuneFallback'))
       }
     }
     return planned
+  }
+
+  async function runAnswerTask(
+    provider: string,
+    context: AnswerContext,
+    selector: ModelSelector,
+    modelHint: string | null,
+    attempt: number,
+  ): Promise<void> {
+    const prompt = buildSearchAnswerPrompt('short', context)
+    answerPhase = 'running'
+    currentStage = 'answer'
+    appendActivity('answer', 'active', t('smartSearch.activityAnswerStart'))
+    answerProvider = provider
+    answerSelector = selector
+    answerContext = context
+    const answerStart = await startAgentTask(provider, SEARCH_ANSWER_TASK, prompt, selector)
+    answerModel = answerStart.resolvedModel ?? modelHint
+    answerRunId = answerStart.runId
+    appendActivity('answer', 'active', t('smartSearch.activityAgentStarted', {
+      model: answerModel ?? t('smartSearch.modelDefault'),
+    }), { runId: answerStart.runId })
+    const result = await pollAgentTask(provider, SEARCH_ANSWER_TASK, answerStart.runId, (progress) => {
+      appendAgentProgress('answer', answerStart.runId, attempt, progress)
+    }, pollingOptions('answer', answerStart.runId, attempt))
+    if (attempt !== answerAttempt) throw new DOMException('superseded', 'AbortError')
+    const content = result.content.trim()
+    if (!content) throw new Error(t('smartSearch.answerError'))
+    const unknownCitations = unknownAnswerCitations(content, context.sources)
+    if (unknownCitations.length) {
+      throw new Error(`Agent 返回了未知引用：${unknownCitations.join(', ')}`)
+    }
+    answer = content
+    answerId = newId()
+    answerPhase = 'done'
+    failedStage = null
+    appendActivity('answer', 'success', t('smartSearch.activityAnswerDone'), { runId: answerStart.runId })
   }
 
   async function askAgent(): Promise<void> {
@@ -561,7 +737,11 @@
     const attempt = ++answerAttempt
     answerPhase = 'preparing'
     answerError = ''
-    progressText = ''
+    resetWorkflow()
+    answer = ''
+    answerContext = null
+    answerRunId = ''
+    answerModel = null
     feedback = null
     feedbackStatus = ''
     archiveReceipt = null
@@ -582,18 +762,30 @@
       const availableHits = planned.search.hits.filter((hit) => !removedAtStart.has(hitKey(hit)))
       const selectedSources = selectContextSources(availableHits)
       if (!selectedSources.length) throw new Error(t('smartSearch.noContext'))
+      answerPhase = 'preparing'
+      currentStage = 'freeze'
+      appendActivity('freeze', 'active', t('smartSearch.activityFreezeStart', { n: selectedSources.length }))
       const sources = await smartSearchApi.freezeSources(selectedSources)
       if (attempt !== answerAttempt) return
+      appendActivity('freeze', 'success', t('smartSearch.activityFreezeDone', { n: sources.length }))
 
       answerPhase = 'preparing'
-      const memory = await smartSearchApi.memoryContext(provider, answerModelHint).catch((error) => ({
-        available: false,
-        selected: [],
-        excludedSummary: {},
-        manifestId: null,
-        error: error instanceof Error ? error.message : String(error),
-      }))
+      currentStage = 'memory'
+      appendActivity('memory', 'active', t('smartSearch.activityMemoryStart'))
+      const memory = await smartSearchApi.memoryContext(provider, answerModelHint).catch((error) => {
+        appendActivity('memory', 'warning', t('smartSearch.activityMemorySkipped'))
+        return {
+          available: false,
+          selected: [],
+          excludedSummary: {},
+          manifestId: null,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      })
       if (attempt !== answerAttempt) return
+      if (!memory.error) {
+        appendActivity('memory', 'success', t('smartSearch.activityMemoryDone', { n: memory.selected.length }))
+      }
       const context: AnswerContext = {
         query,
         queryId: newId(),
@@ -601,33 +793,36 @@
         memory: memory.selected,
         memoryManifestId: memory.manifestId,
       }
-      const prompt = buildSearchAnswerPrompt('short', context)
-      answerPhase = 'running'
-      const answerStart = await startAgentTask(
-        provider, SEARCH_ANSWER_TASK, prompt, selectedAnswerSelector,
-      )
-      answerProvider = provider
-      answerModel = answerStart.resolvedModel ?? answerModelHint
-      answerRunId = answerStart.runId
-      answerSelector = selectedAnswerSelector
-      answerContext = context
-      const result = await pollAgentTask(provider, SEARCH_ANSWER_TASK, answerStart.runId, (progress) => {
-        progressText = progress.last || (progress.steps ? `${progress.steps}` : '')
-      })
-      if (attempt !== answerAttempt) return
-      const content = result.content.trim()
-      if (!content) throw new Error(t('smartSearch.answerError'))
-      const unknownCitations = unknownAnswerCitations(content, context.sources)
-      if (unknownCitations.length) {
-        throw new Error(`Agent 返回了未知引用：${unknownCitations.join(', ')}`)
-      }
-      answer = content
-      answerId = newId()
-      answerPhase = 'done'
+      await runAnswerTask(provider, context, selectedAnswerSelector, answerModelHint, attempt)
     } catch (error) {
       if (attempt !== answerAttempt) return
       answerPhase = 'error'
-      answerError = error instanceof Error ? error.message : String(error)
+      failedStage = currentStage
+      answerError = readableError(error)
+      appendActivity(currentStage, 'error', t('smartSearch.activityFailed', { error: answerError }), {
+        runId: error instanceof AgentTaskError ? error.runId : undefined,
+      })
+    }
+  }
+
+  async function retryAnswer(): Promise<void> {
+    if (!answerContext || !answerProvider || answerBusy || documentBusy) return
+    const context = answerContext
+    const provider = answerProvider
+    const attempt = ++answerAttempt
+    answerError = ''
+    failedStage = null
+    appendActivity('answer', 'warning', t('smartSearch.activityUserRetry'))
+    try {
+      await runAnswerTask(provider, context, answerSelector, answerModel, attempt)
+    } catch (error) {
+      if (attempt !== answerAttempt) return
+      answerPhase = 'error'
+      failedStage = 'answer'
+      answerError = readableError(error)
+      appendActivity('answer', 'error', t('smartSearch.activityFailed', { error: answerError }), {
+        runId: error instanceof AgentTaskError ? error.runId : undefined,
+      })
     }
   }
 
@@ -687,6 +882,7 @@
     if (!answerContext || !documentTitle.trim() || documentBusy) return
     documentBusy = true
     documentError = ''
+    appendActivity('document', 'active', t('smartSearch.activityDocumentStart'))
     try {
       // A document is a new Agent run. Re-authorize long-term memory instead of
       // carrying an earlier policy decision across runs.
@@ -706,9 +902,12 @@
       const start = await startAgentTask(
         answerProvider, SEARCH_ANSWER_TASK, prompt, answerSelector,
       )
+      appendActivity('document', 'active', t('smartSearch.activityAgentStarted', {
+        model: start.resolvedModel ?? answerModel ?? t('smartSearch.modelDefault'),
+      }), { runId: start.runId })
       const result = await pollAgentTask(answerProvider, SEARCH_ANSWER_TASK, start.runId, (progress) => {
-        progressText = progress.last || (progress.steps ? `${progress.steps}` : '')
-      })
+        appendAgentProgress('document', start.runId, answerAttempt, progress)
+      }, pollingOptions('document', start.runId, answerAttempt))
       const receipt = await smartSearchApi.writeDocument({
         title: documentTitle.trim(),
         query: documentContext.query,
@@ -726,8 +925,12 @@
         anchor: documentTitle.trim(),
       })
       await invoke('hide_smart_search_window')
+      appendActivity('document', 'success', t('smartSearch.activityDocumentDone'), { runId: start.runId })
     } catch (error) {
-      documentError = error instanceof Error ? error.message : String(error)
+      documentError = readableError(error)
+      appendActivity('document', 'error', t('smartSearch.activityFailed', { error: documentError }), {
+        runId: error instanceof AgentTaskError ? error.runId : undefined,
+      })
     } finally {
       documentBusy = false
     }
@@ -942,21 +1145,46 @@
           {#if answerContext?.memoryManifestId}<span class="memory-chip">◈ {t('smartSearch.memoryUsed')}</span>{/if}
         </header>
 
+        {#if workflowEntries.length > 0}
+          <section class="workflow-panel" aria-label={t('smartSearch.activityTitle')} aria-busy={answerBusy}>
+            <header class="workflow-header">
+              <span class:spinner={answerBusy} class="workflow-status-icon">{answerBusy ? '' : answerPhase === 'done' ? '✓' : '!'}</span>
+              <strong>{answerBusy ? phaseLabel() : t('smartSearch.activityTitle')}</strong>
+              {#if answerPhase === 'planning' || answerPhase === 'tuning'}
+                <small>{planModel ?? resolvedModelHint(planModelPreference, selectedAgent?.harness) ?? ''}</small>
+              {:else if answerPhase === 'running'}
+                <small>{answerModel ?? resolvedModelHint(answerModelPreference, selectedAgent?.harness) ?? ''}</small>
+              {/if}
+            </header>
+            <div
+              class="workflow-log"
+              bind:this={activityLogEl}
+              role="log"
+              aria-label={t('smartSearch.activityTitle')}
+              aria-live="polite"
+              aria-relevant="additions text"
+              onscroll={onActivityScroll}
+            >
+              {#each workflowEntries as entry (entry.id)}
+                <div class="workflow-row" data-level={entry.level}>
+                  <span class="workflow-dot" aria-hidden="true">{entry.level === 'success' ? '✓' : entry.level === 'warning' ? '!' : entry.level === 'error' ? '×' : '›'}</span>
+                  <span>{entry.message}</span>
+                  {#if entry.steps !== undefined}<small>#{entry.steps}</small>{/if}
+                </div>
+              {/each}
+            </div>
+          </section>
+        {/if}
+
         {#if answerBusy}
-          <div class="answer-state">
-            <span class="spinner"></span>
-            <strong>{phaseLabel()}</strong>
-            {#if progressText}<small>{progressText}</small>{/if}
-            {#if answerPhase === 'planning' || answerPhase === 'tuning'}
-              <small>{planModel ?? resolvedModelHint(planModelPreference, selectedAgent?.harness) ?? ''}</small>
-            {:else if answerPhase === 'running'}
-              <small>{answerModel ?? resolvedModelHint(answerModelPreference, selectedAgent?.harness) ?? ''}</small>
-            {/if}
-          </div>
+          <div class="answer-state working-note"><small>{t('smartSearch.activityWorking')}</small></div>
         {:else if answerPhase === 'error'}
           <div class="answer-state error">
             <strong>{t('smartSearch.answerError')}</strong>
-            <p>{answerError}</p>
+            <p role="alert">{answerError}</p>
+            <button class="retry-button" onclick={() => failedStage === 'answer' ? void retryAnswer() : void askAgent()}>
+              {failedStage === 'answer' ? t('smartSearch.retryAnswer') : t('smartSearch.retrySearch')}
+            </button>
           </div>
         {:else if answerPhase === 'done' && answerContext}
           <div class="answer-scroll">
@@ -1219,9 +1447,69 @@
 
   .state, .answer-state { margin: auto; padding: 28px; text-align: center; color: var(--smart-muted); }
   .state small, .answer-state small { display: block; margin-top: 7px; }
+  .working-note { margin: 0 auto auto; padding-top: 16px; }
   .error { color: #b42318; }
   .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--smart-border); border-top-color: #0a63ff; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  .workflow-panel {
+    flex: 0 1 230px;
+    min-height: 126px;
+    margin: 12px 14px 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--smart-border);
+    border-radius: 10px;
+    background: color-mix(in srgb, Canvas 96%, AccentColor 4%);
+  }
+  .workflow-header {
+    min-height: 34px;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    border-bottom: 1px solid var(--smart-border);
+    font-size: 11px;
+  }
+  .workflow-header small { margin-left: auto; color: var(--smart-muted); }
+  .workflow-status-icon { width: 12px; height: 12px; display: inline-grid; place-items: center; color: #16803c; }
+  .workflow-status-icon.spinner { border-width: 1.5px; color: transparent; }
+  .workflow-log {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 5px 0;
+    scroll-behavior: smooth;
+  }
+  .workflow-row {
+    min-height: 25px;
+    padding: 4px 9px;
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 5px;
+    color: color-mix(in srgb, CanvasText 78%, transparent);
+    font-size: 10px;
+    line-height: 1.45;
+  }
+  .workflow-row + .workflow-row { border-top: 1px solid color-mix(in srgb, CanvasText 4%, transparent); }
+  .workflow-row small { color: var(--smart-muted); }
+  .workflow-dot { color: #0a63ff; font-weight: 700; }
+  .workflow-row[data-level='success'] .workflow-dot { color: #16803c; }
+  .workflow-row[data-level='warning'] .workflow-dot { color: #b45309; }
+  .workflow-row[data-level='error'] { color: #b42318; }
+  .workflow-row[data-level='error'] .workflow-dot { color: #b42318; }
+  .retry-button {
+    min-height: 31px;
+    padding: 0 12px;
+    border: 1px solid color-mix(in srgb, #b42318 38%, var(--smart-border));
+    border-radius: 7px;
+    background: Canvas;
+    color: #b42318;
+    font-weight: 650;
+  }
 
   .preview-card { margin: auto; width: min(520px, calc(100% - 52px)); }
   .preview-card small, .answered-query { color: var(--smart-muted); }
