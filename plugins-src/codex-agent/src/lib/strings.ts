@@ -11,9 +11,6 @@ export type MessageKey =
   | 'log.empty'
   | 'status.skipped'
   | 'artifacts.label'
-  | 'history.all'
-  | 'history.thisTask'
-  | 'history.emptyAll'
   | 'tasks.title'
   | 'tasks.empty'
   | 'tasks.group.core'
@@ -83,9 +80,6 @@ const en: Catalog = {
   'log.empty': 'This run left no log.',
   'status.skipped': 'Skipped',
   'artifacts.label': 'Opens:',
-  'history.all': 'All tasks',
-  'history.thisTask': 'This task',
-  'history.emptyAll': 'No task has run yet.',
   'tasks.title': 'Tasks',
   'tasks.empty': 'No task templates yet.',
   'tasks.group.core': 'note.md',
@@ -155,9 +149,6 @@ const zh: Catalog = {
   'log.empty': '这次运行没有日志。',
   'status.skipped': '已跳过',
   'artifacts.label': '产物:',
-  'history.all': '全部任务',
-  'history.thisTask': '当前任务',
-  'history.emptyAll': '还没有任何任务跑过。',
   'tasks.title': '任务',
   'tasks.empty': '还没有任务模板。',
   'tasks.group.core': 'note.md 核心',
@@ -227,9 +218,6 @@ const ja: Catalog = {
   'log.empty': 'この実行にログはありません。',
   'status.skipped': 'スキップ',
   'artifacts.label': '成果物:',
-  'history.all': 'すべてのタスク',
-  'history.thisTask': 'このタスク',
-  'history.emptyAll': 'まだどのタスクも実行されていません。',
   'tasks.title': 'タスク',
   'tasks.empty': 'タスクテンプレートがまだありません。',
   'tasks.group.core': 'note.md コア',
@@ -299,9 +287,6 @@ const de: Catalog = {
   'log.empty': 'Dieser Lauf hat kein Protokoll.',
   'status.skipped': 'Übersprungen',
   'artifacts.label': 'Ergebnis:',
-  'history.all': 'Alle Aufgaben',
-  'history.thisTask': 'Diese Aufgabe',
-  'history.emptyAll': 'Noch keine Aufgabe gelaufen.',
   'tasks.title': 'Aufgaben',
   'tasks.empty': 'Noch keine Aufgabenvorlagen.',
   'tasks.group.core': 'note.md-Kern',

@@ -23,8 +23,11 @@ describe('agent workspace layout contract', () => {
     expect(historySource).toContain('class="row-meta"')
     expect(historySource).toContain('aria-pressed={run.run_id === selectedId}')
     expect(historySource).toContain('runs.slice(0, visibleCount)')
-    expect(historySource).toContain('if (scopeKey !== previousScope)')
-    expect(appSource).toContain("scopeKey={allTasks ? 'all' : `task:${selectedTask ?? ''}`}")
+    expect(historySource).toContain('<span class="task">{run.task}</span>')
+    expect(historySource).not.toContain('scopeKey')
+    expect(appSource).not.toContain('allTasks')
+    expect(appSource).not.toContain('class="scope"')
+    expect(appSource).toContain("request('history.list', {})")
   })
 
   it('groups tasks into accessible disclosures that start collapsed', () => {

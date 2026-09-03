@@ -10,15 +10,11 @@
   /** `notemd.claude-agent` → `claude` — enough to tell them apart in a row. */
   const shortHarness = (id: string) => id.replace(/^notemd\./, '').replace(/-agent$/, '')
 
-  let { runs, label, empty, scopeKey, showTask = false, selectedId = null, onselect, ondelete, onclear }:
+  let { runs, label, empty, selectedId = null, onselect, ondelete, onclear }:
     {
       runs: RunRecord[]
       label: (k: MessageKey, v?: Record<string, string | number>) => string
       empty: string
-      /** Changes only when the displayed history scope changes, never on polling. */
-      scopeKey: string
-      /** In the all-tasks view each row needs to say WHICH task it was. */
-      showTask?: boolean
       selectedId?: string | null
       onselect: (run: RunRecord) => void
       ondelete: (run: RunRecord) => void
@@ -26,17 +22,9 @@
     } = $props()
 
   let visibleCount = $state(HISTORY_PAGE_SIZE)
-  let previousScope: string | null = $state(null)
   let historyList: HTMLUListElement | undefined = $state()
   const visibleRuns = $derived(runs.slice(0, visibleCount))
   const moreCount = $derived(nextHistoryBatchSize(visibleCount, runs.length))
-
-  $effect(() => {
-    if (scopeKey !== previousScope) {
-      previousScope = scopeKey
-      visibleCount = HISTORY_PAGE_SIZE
-    }
-  })
 
   async function showMore() {
     const firstNew = visibleCount
@@ -85,7 +73,7 @@
         >
           <span class="row-top">
             <span class="status s-{run.status}">{label(('status.' + run.status) as MessageKey)}</span>
-            {#if showTask}<span class="task">{run.task}</span>{/if}
+            <span class="task">{run.task}</span>
           </span>
           <span class="row-meta">
             <span class="when">{when(run.started_at)}</span>
