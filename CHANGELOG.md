@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.903.3 — 2026-09-03
+
 ### Added
 
 - **Memory 2.4.0 keeps one person's roles and working contexts genuinely isolated.** Create, rename, archive and restore Roles and Scopes in one Memory window, preview changes, then reassign existing memories in bulk. Agents get read-only and proposal-oriented CLI commands for batch work but cannot bypass human approval. One `MEMORY.md` remains the only projection, grouped Scope → Role with explicit Agent guidance; the legacy `USER.md` projection is removed on rebuild. Bulk apply binds the current Registry, claim heads and preview hash, so an interrupted or stale plan cannot become partially active.
