@@ -6,6 +6,10 @@
 
 ## 未发布
 
+### 新增
+
+- **Memory 2.4.3 允许外部 Agent 安装已校验的 Role/Scope Registry，无需再由用户逐项录入。** `notemd memory context-registry replace --file ... --request-id ...` 会把完整 JSON 或 YAML 候选交给与 Memory UI 相同的 exact-head、哈希链 Host 事务并立即生效；稳定 request-id 可安全重试，而 Claim 审批与重新分配 apply 仍仅限可信 UI。
+
 ## v6.903.4 — 2026-09-03
 
 ### 变更

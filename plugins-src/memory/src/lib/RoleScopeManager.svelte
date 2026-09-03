@@ -322,7 +322,7 @@
     try {
       await clipboardWrite(contextBootstrapPrompt)
       announcement = '已复制身份与场景初始化 Prompt'
-      await toast('success', announcement, '粘贴给能读取 Vault 并运行 notemd CLI 的外部 Agent；Registry 与最终分配仍由你确认。')
+      await toast('success', announcement, '粘贴给能读取 Vault 并运行 notemd CLI 的外部 Agent；Registry 会由 Agent 更新，Claim 分配仍由你确认。')
     } catch (cause) {
       error = hostError(cause)
     }
@@ -331,8 +331,8 @@
 
 <section class="manager-panel" aria-labelledby="role-scope-title">
     <header>
-      <div><h2 id="role-scope-title">身份与场景</h2><p>初始化 Prompt 可让外部 Agent 根据 Vault 准备候选与分配提案；Registry 与当前会话 Context 仍分别由你确认。</p></div>
-      <button class="copy-prompt" onclick={copyBootstrapPrompt} disabled={busy} title="让外部 Agent 基于 Vault 证据生成并校验 Role/Scope 候选，再提交可审阅的分配提案">复制初始化 Prompt</button>
+      <div><h2 id="role-scope-title">身份与场景</h2><p>初始化 Prompt 可让外部 Agent 根据 Vault 证据更新 Registry，并提交仍需你确认的 Claim 分配提案；当前会话 Context 独立管理。</p></div>
+      <button class="copy-prompt" onclick={copyBootstrapPrompt} disabled={busy} title="让外部 Agent 基于 Vault 证据生成、校验并更新 Role/Scope，再提交可审阅的分配提案">复制初始化 Prompt</button>
     </header>
     <p class="sr-only" aria-live="polite">{announcement}</p>
     {#if error}<div class="error" role="alert">{error}</div>{/if}

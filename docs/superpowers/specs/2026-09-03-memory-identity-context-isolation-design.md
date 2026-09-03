@@ -15,13 +15,13 @@
   heads、所有 Claim heads 和 preview hash；任一基础状态变化都会以 `MEMORY_STALE_BASE` 拒绝。
 - 批量生效使用一个 `ReassignContext` operation 作为 activation fence：只有全部 child revision 和 operation
   都完整存在时新归属才可见，崩溃或部分写入不会产生半批结果。
-- CLI 已提供 `context-registry show|validate`、`reassign plan|propose`，以及 scope-aware
-  `memory context --role ...`。Agent 可以批量规划并生成 pending proposal，不能用 `apply`、`--yes` 或
-  `--force` 冒充人类批准；最终 Apply 仍只在可信 Memory UI 中发生。
+- CLI 已提供 `context-registry show|validate|replace`、`reassign plan|propose`，以及 scope-aware
+  `memory context --role ...`。完整 Registry 候选可通过 exact-head、幂等、哈希链事务立即替换；Claim
+  变更仍只能生成 pending proposal，不能用 `apply`、`--yes` 或 `--force` 冒充人类批准。
 - 根投影只保留一个 `MEMORY.md`，固定按 Scope -> Role -> category 分组，并在顶部写入 Agent 使用协议；
   rebuild 会移除旧的生成文件 `USER.md`。
 
-当前 Role/Scope 的维护策略分两层：长期定义及 Claim 归属由用户在 Registry/批量向导中治理；当前会话的
+当前 Role/Scope 的维护策略分两层：长期定义可由用户在 UI 或 Agent 通过受控完整替换治理，Claim 归属仍由用户在批量向导中治理；当前会话的
 Role/Scope 由 Context Manifest 显式选择，并被写入 reducer-backed Context Manifest。P2 的自动识别状态机
 （workspace/repo/path binding、候选评分、迟滞、Auto/Pinned/None、按线程恢复）尚未接入，因此现阶段不会
 在没有确认的情况下自动切换客户或家庭场景。这是刻意的 fail-closed 阶段边界，不应把当前手动选择宣传为
@@ -754,7 +754,8 @@ scope + Capsule 可以把官方 Context 通道中的自动注入、检索、写�
 - Role/Scope 纯改名不产生 Claim revision；merge/split/跨域移动生成可审计迁移计划。
 - 批量重分配任一 stale head 或写入失败时整体不切换投影；回滚以补偿 revision 完成。
 - 同一 selector 在 UI 与 CLI 生成完全相同的 plan hash、risk buckets、blocked reasons 和 expected heads。
-- CLI list/show/validate/plan/verify 不改变权威资产；batch propose 只产生 pending proposal，不激活变更。
+- CLI list/show/validate/plan/verify 不改变权威资产；`context-registry replace` 是明确的例外，会立即写入完整
+  Registry；Claim 的 batch propose 只产生 pending proposal，不激活变更。
 - 普通 CLI 的 `--yes/--force`、过期 plan、错配 hash/token、重放 token 和通过 argv 传 token 全部被拒绝。
 - 一次 batch apply 只产生一个完整 operation；双击、响应丢失后的同 request ID 重试和崩溃恢复不会产生
   半批生效或重复 revision。
@@ -856,7 +857,7 @@ Role/Scope 能力必须先形成稳定 CLI 契约，再由 Memory 插件调用�
 CLI，但 CLI 与 UI 必须共享 selector、validator、preview hash、exact heads、risk bucket、operation
 manifest 和错误码，避免形成两套行为。
 
-完整目标命令面如下；当前已落地的安全子集是 `context-registry show|validate` 与
+完整目标命令面如下；当前已落地 `context-registry show|validate|replace` 与
 `reassign plan|propose`，其余为后续阶段：
 
 ```text
@@ -864,6 +865,12 @@ manifest 和错误码，避免形成两套行为。
 notemd memory role list|show [<role-id>] --json
 notemd memory scope list|show|tree [<scope-id>] --json
 notemd memory context-registry validate --file <registry.yaml> --json
+
+# 完整 Registry 候选的立即替换；自动绑定当前 protocol/registry heads
+notemd memory context-registry replace \
+  --file <registry.yaml> \
+  --request-id <stable-id> \
+  --json
 
 # 单项或多项 Registry 变更计划
 notemd memory role plan create|update|archive|restore|merge [flags] --json
@@ -927,8 +934,10 @@ MEMORY_APPROVAL_REQUIRED
 MEMORY_APPROVAL_TOKEN_INVALID
 ```
 
-Agent 默认可以自主执行 list/show/validate/plan/verify，并批量提交 proposal。普通 CLI 不提供能绕过人类
-决定的 `--yes` 或 `--force`。若用户明确要求由 Agent 完成已经审阅的 apply，Memory UI 签发一次性
+Agent 默认可以自主执行 list/show/validate/plan/verify、完整 Registry replace，并批量提交 Claim proposal。
+Registry replace 会立即生效，因此调用者必须提交保留所有既有条目的完整候选；CLI 自动绑定最新 heads，
+并用稳定 request-id 提供幂等保护。普通 CLI 不提供 Claim apply、`--yes` 或 `--force`。若用户明确要求由
+Agent 完成已经审阅的 Claim apply，Memory UI 签发一次性
 approval token，精确绑定 `plan_id + plan_sha256 + protocol/authority/registry/claim heads + actor + expiry`；
 CLI 只从 stdin 或受控文件描述符接收 token，不放入 argv、日志或任务文本：
 
@@ -949,15 +958,15 @@ UI 与 CLI 的一一对应关系：
 | 用户动作 | UI | CLI / Agent |
 | --- | --- | --- |
 | 浏览 Role/Scope | 管理 Sheet 列表/树 | `role/scope list|show|tree` |
-| 创建、改名、归档 | 编辑 Sheet 后预览并保存 | `role/scope plan` -> `batch propose` |
+| 创建、改名、归档 | 编辑 Sheet 后保存 | `context-registry replace --file ... --request-id ...` |
 | 重新分配受影响项 | 向导默认入口 | `reassign plan --where-*` |
 | 重新分析全部 current | 向导显式选择 | `batch plan --input -` |
 | 应用普通安全批次 | 用户确认后单 RPC | UI apply；或 plan-bound token 后 CLI apply |
 | 验证结果 | 完成页 | `batch verify` |
 | 撤销 | 生成补偿计划并确认 | `rollback-plan` -> proposal/approval |
 
-CLI 的目标是让 Agent 能高效准备和执行一个已经被精确授权的批次，而不是把 Context governance 降级成
-任何能启动 shell 的 Agent 都可自行改写的配置文件。
+CLI 的目标是让 Agent 通过统一 validator、exact heads、幂等键和不可变 revision 执行 Registry 治理，
+同时让 Claim 归属变更继续经过 proposal 与人工审批，而不是直接改写 ledger 或 projection 文件。
 
 ## 14. 待产品裁决
 

@@ -414,6 +414,127 @@ fn memory_propose_auto_initializes_v2_and_writes_pending_when_git_metadata_is_re
 }
 
 #[test]
+fn memory_context_registry_replace_is_immediate_checked_and_idempotent() {
+    let home = temp_home();
+    let vault = home.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    notemd_lib::memory_control::dispatch(
+        &vault,
+        "host.memory.v2.initialize",
+        &serde_json::json!({}),
+    )
+    .unwrap();
+    let candidate_path = home.join("registry.json");
+    std::fs::write(
+        &candidate_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "roles": [
+                {
+                    "id": "role:unclassified", "label": "未分类身份",
+                    "status": "active", "aliases": [],
+                    "guidance": "仅在当前身份明确匹配时使用本组记忆。",
+                    "avoid_error": "不要把其他身份下的事实带入当前任务。"
+                },
+                {
+                    "id": "role:developer", "label": "开发者",
+                    "status": "active", "aliases": [],
+                    "guidance": "协助实现和验证软件。",
+                    "avoid_error": "不要混入其他工作场景。"
+                }
+            ],
+            "scopes": [
+                {
+                    "id": "global", "label": "全局", "status": "active",
+                    "aliases": [], "kind": "realm", "security_domain": "owner-private"
+                },
+                {
+                    "id": "space:global/notemd", "label": "note.md", "status": "active",
+                    "aliases": [], "kind": "space", "security_domain": "owner-private",
+                    "parent_id": "global"
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let vault_arg = vault.to_string_lossy().into_owned();
+    let candidate_arg = candidate_path.to_string_lossy().into_owned();
+    let replace_args = [
+        "memory",
+        "context-registry",
+        "replace",
+        "--vault",
+        &vault_arg,
+        "--file",
+        &candidate_arg,
+        "--request-id",
+        "codex/test/context-registry/v1",
+        "--json",
+    ];
+    let (code, stdout, stderr) = run_cli(&replace_args, &home);
+    let (retry_code, retry_stdout, retry_stderr) = run_cli(&replace_args, &home);
+    assert_eq!(code, 0, "stdout={stdout} stderr={stderr}");
+    assert_eq!(retry_code, 0, "stdout={retry_stdout} stderr={retry_stderr}");
+    let response: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let retry: serde_json::Value = serde_json::from_str(retry_stdout.trim()).unwrap();
+    assert_eq!(response["ok"], true);
+    assert_eq!(retry["data"]["revision"], response["data"]["revision"]);
+
+    let mut conflicting_candidate: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&candidate_path).unwrap()).unwrap();
+    conflicting_candidate["roles"][1]["label"] = serde_json::json!("工程师");
+    std::fs::write(
+        &candidate_path,
+        serde_json::to_vec_pretty(&conflicting_candidate).unwrap(),
+    )
+    .unwrap();
+    let (conflict_code, conflict_stdout, conflict_stderr) = run_cli(&replace_args, &home);
+    assert_eq!(
+        conflict_code, 2,
+        "stdout={conflict_stdout} stderr={conflict_stderr}"
+    );
+    assert!(
+        conflict_stdout.contains("MEMORY_IDEMPOTENCY_CONFLICT"),
+        "{conflict_stdout}"
+    );
+
+    let (show_code, show_stdout, show_stderr) = run_cli(
+        &[
+            "memory",
+            "context-registry",
+            "show",
+            "--vault",
+            &vault_arg,
+            "--json",
+        ],
+        &home,
+    );
+    assert_eq!(show_code, 0, "stdout={show_stdout} stderr={show_stderr}");
+    let shown: serde_json::Value = serde_json::from_str(show_stdout.trim()).unwrap();
+    assert!(shown["data"]["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|role| role["id"] == "role:developer"));
+    assert!(shown["data"]["scopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|scope| scope["id"] == "space:global/notemd"));
+
+    let repository = notemd_lib::memory_control::v2::V2Repository::new(&vault)
+        .load()
+        .unwrap();
+    assert_eq!(repository.context_registries.len(), 2);
+    let (check_code, check_stdout, check_stderr) =
+        run_cli(&["memory", "check", "--vault", &vault_arg, "--json"], &home);
+    assert_eq!(check_code, 0, "stdout={check_stdout} stderr={check_stderr}");
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
 fn memory_read_does_not_auto_initialize_an_empty_vault() {
     let home = temp_home();
     let vault = home.join("vault");

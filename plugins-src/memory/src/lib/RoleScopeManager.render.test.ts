@@ -63,7 +63,7 @@ describe('RoleScopeManager', () => {
     expect(button('关闭身份与场景')).toBeUndefined()
   })
 
-  it('copies a staged, fail-closed initialization prompt without mutating Memory', async () => {
+  it('copies a staged initialization prompt without mutating Memory while copying', async () => {
     const request = vi.fn(async (method: string, _params?: any) => method === 'host.memory.v2.contextRegistry' ? baseRegistry() : {})
     await render(request)
 
@@ -73,11 +73,12 @@ describe('RoleScopeManager', () => {
     expect(clipboardCall?.[1]).toEqual({ text: contextBootstrapPrompt })
     expect(contextBootstrapPrompt).toContain('notemd memory context-registry show --json')
     expect(contextBootstrapPrompt).toContain('notemd memory context-registry validate --file <临时候选文件> --json')
+    expect(contextBootstrapPrompt).toContain('notemd memory context-registry replace')
     expect(contextBootstrapPrompt).toContain('notemd memory reassign plan')
     expect(contextBootstrapPrompt).toContain('notemd memory reassign propose')
-    expect(contextBootstrapPrompt).toContain('Registry 已确认')
+    expect(contextBootstrapPrompt).toContain('Registry 更新成功并精确核对后')
     expect(contextBootstrapPrompt).toContain('不得强行归类')
-    expect(contextBootstrapPrompt).not.toMatch(/^notemd memory context-registry (?:replace|apply|import)/m)
+    expect(contextBootstrapPrompt).not.toMatch(/^notemd memory context-registry (?:apply|import)/m)
     expect(contextBootstrapPrompt).not.toMatch(/^notemd memory reassign apply/m)
     expect(request.mock.calls.some(([method]) => method === 'host.memory.v2.contextRegistryReplace')).toBe(false)
     expect(request.mock.calls.some(([method]) => method === 'host.memory.v2.reassignApply')).toBe(false)

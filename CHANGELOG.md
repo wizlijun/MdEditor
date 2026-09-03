@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Memory 2.4.3 lets an external Agent install a validated Role/Scope Registry without hand-entering every item.** `notemd memory context-registry replace --file ... --request-id ...` sends a complete JSON or YAML candidate through the same exact-head, hash-chained Host transaction as the Memory UI and takes effect immediately. Stable request IDs can be retried safely, while Claim approval and reassignment apply remain restricted to the trusted UI.
+
 ## v6.903.4 — 2026-09-03
 
 ### Changed

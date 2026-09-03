@@ -732,10 +732,12 @@ USAGE:
   notemd memory context [--role <role>] --space <scope> --purpose <purpose> --caller <caller> [context flags]
   notemd memory context-registry show [--json]
   notemd memory context-registry validate --file <registry.json|yaml> [--json]
+  notemd memory context-registry replace --file <registry.json|yaml> --request-id <stable-id> [--json]
   notemd memory context-manifest <manifest-id> [--json]
 
 AGENT WRITE:
   notemd memory propose <create|replace|revoke> [claim flags]
+  notemd memory context-registry replace --file <registry.json|yaml> --request-id <stable-id>
   notemd memory reassign plan [selector flags] <replacement flags>
   notemd memory reassign propose [selector flags] <replacement flags>
 
@@ -796,16 +798,20 @@ REASSIGN REPLACEMENT FLAGS:
   --recorded-by <agent>      Required only when submitting `reassign propose`
 
 REGISTRY FLAGS:
-  --file <JSON|YAML>         Candidate Registry document to validate locally and in Host
+  --file <JSON|YAML>         Complete Registry candidate to validate or replace
+  --request-id <stable-id>   Idempotency key required for Registry replacement
 
 NOTES:
   MEMORY.md is the sole disposable plain-text projection, grouped by Scope and
   Role; it is not a database. Reading it authorizes no cross-context use.
   External actions require
   a reducer-backed context decision with no action-sensitive conflict.
-  Agents can only propose pending Claims. Human approve/reject/ignore/delete
-  is available only through the trusted Memory UI; CLI flags cannot impersonate
-  a human. Remembering a Claim does not prove it true or authorize behavior.
+  Agents can replace the complete Context Registry through the same validated,
+  exact-head, hash-chained Host transaction used by the Memory UI. Replacement
+  takes effect immediately; preserve every existing entry not meant to change.
+  Agents can only propose pending Claims. Human approve/reject/ignore/delete is
+  available only through the trusted Memory UI; CLI flags cannot impersonate a
+  human. Remembering a Claim does not prove it true or authorize behavior.
   Reassignment is limited to plan and pending proposal; apply and force-style
   confirmation are rejected. Selecting every current Claim requires explicit --all.
   Restricted plaintext is rejected. Delete creates a tombstone; Git history may
@@ -2362,6 +2368,8 @@ mod tests {
             "--space",
             "--provider",
             "context-registry validate",
+            "context-registry replace",
+            "takes effect immediately",
             "reassign plan",
             "--where-role",
             "--set-space",
