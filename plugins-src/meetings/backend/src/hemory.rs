@@ -210,6 +210,17 @@ fn looks_like_conversation(path: &Path) -> bool {
     .any(|name| path.join(name).exists())
 }
 
+fn meta_marks_deleted(path: &Path) -> bool {
+    let meta_path = path.join("meta.json");
+    fs::symlink_metadata(&meta_path)
+        .ok()
+        .filter(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        .and_then(|_| fs::read(meta_path).ok())
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|meta| meta.get("deleted").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
 fn schema_for(root: &Path, candidate: &Path) -> String {
     let name = candidate
         .file_name()
@@ -242,6 +253,9 @@ fn discover_in(
         return Ok(());
     }
     if current != conversation_root && looks_like_conversation(current) {
+        if meta_marks_deleted(current) {
+            return Ok(());
+        }
         let relative_path = current
             .strip_prefix(selected_root)
             .map(path_string)
@@ -888,6 +902,40 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn discovery_excludes_deleted_directories_and_meta_tombstones() {
+        let dir = tempdir().unwrap();
+        let fixtures = [
+            ("alice/conversation/202604/20260403_173300", false),
+            ("alice/conversation/_deleted/20260403_173301", false),
+            (
+                "alice/conversation/202604/_deleted_20260403_173302_123",
+                false,
+            ),
+            (
+                "alice/conversation/202604/.deleted_20260403_173303_123",
+                false,
+            ),
+            ("alice/conversation/202604/20260403_173304", true),
+        ];
+        for (path, deleted) in fixtures {
+            let target = dir.path().join(path);
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join("pro_asr.srt"), good_srt("spk_01")).unwrap();
+            if deleted {
+                fs::write(
+                    target.join("meta.json"),
+                    r#"{"created_at":"2026-04-03T17:33:04+08:00","deleted":true}"#,
+                )
+                .unwrap();
+            }
+        }
+        let (root, users, _) = users_at(dir.path()).unwrap();
+        let found = discover_conversations(&root, &users[0]).unwrap().0;
+        assert_eq!(found.len(), 1);
+        assert!(found[0].relative_path.ends_with("20260403_173300"));
     }
 
     #[test]

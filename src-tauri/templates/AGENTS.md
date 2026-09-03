@@ -31,15 +31,46 @@ files in this vault carry it except for the generated `/USER.md` and
   original; edits here do not flow back to the source file.
 - `inbox/tasks/` — executable tasks for Next. Each task is one
   `YYYY-MM-DD-HHmm-<slug>-task.md` file; see "Inbox tasks" below.
+- Meeting transcripts live under the Vault-relative directory configured by
+  `/.notemd/meetings.json` (`meetings_root`, default `ssot/meetings`); see
+  "Meeting transcripts" below.
 - Any other folder — regular markdown documents (`xxx.md`), optionally
   with a companion outline note beside them (see below).
 
+## Meeting transcripts
+
+- Resolve the archive root from `/.notemd/meetings.json` key
+  `meetings_root`; if the file or value is missing or invalid, use
+  `ssot/meetings`. Never assume a different location.
+- Each meeting is `<meetings_root>/<conversation-id>/`. It contains exactly
+  one authoritative, speaker-attributed, time-coded transcript:
+  `transcript.md` or `transcript.srt`. It may also contain `summary.md`;
+  every Hemory import contains `meta.yml`. Audio files such as MP3 or WAV do
+  not belong here.
+- A Hemory import copies the selected transcript and optional summary bytes
+  unchanged. Treat them as source artifacts: do not clean up, reorder, rename,
+  add frontmatter to, or otherwise rewrite them.
+- Hemory tombstones (`_deleted/`, `_deleted_*`, `.deleted_*`, or
+  `meta.json` with `deleted: true`) are never imported. If an imported source
+  is deleted later, the archived meeting is retained and reported as missing
+  from the source; source deletion never cascades into this Vault.
+- When `meta.yml` exists, read `transcript_file` and `summary_file` rather
+  than guessing filenames. Hemory imports use only these flat top-level keys:
+  `conversation_id`, `created_at`, `end_at`, `title`, `category`,
+  `key_topics`, `language`, `source`, `duration_ms`, `speaker_count`,
+  `transcript_file`, `summary_file`, `imported_from`, and `updated_at`.
+  Their `source` is `hemory_v1.0:<original-value-or-unknown>`.
+- `/.notemd/meetings/hemory-import-v1.json`, its lock, and its transaction
+  journal are plugin-managed migration state. Do not edit, move, or delete
+  them.
+
 ## Metadata: OKF-compatible frontmatter (required)
 
-Except for the generated root `/USER.md` and `/MEMORY.md` projections, every
-markdown file you create here **must** open with a YAML frontmatter block, and
-that block **must** carry a non-empty `type`. Those two projections MUST have
-no frontmatter or machine metadata; never add it during a generic metadata fix.
+Except for the generated root `/USER.md` and `/MEMORY.md` projections and the
+plugin-managed meeting source artifacts described above, every markdown file
+you create here **must** open with a YAML frontmatter block, and that block
+**must** carry a non-empty `type`. The projections and meeting source artifacts
+MUST NOT gain frontmatter during a generic metadata fix.
 The format is the Open Knowledge Format (OKF) v0.2:
 https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
 

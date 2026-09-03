@@ -638,6 +638,36 @@ mod fs_tests {
         );
     }
 
+    #[test]
+    fn template_documents_the_meetings_archive_and_source_artifact_exception() {
+        for required in [
+            "## Meeting transcripts",
+            "/.notemd/meetings.json",
+            "meetings_root",
+            "ssot/meetings",
+            "<meetings_root>/<conversation-id>/",
+            "transcript.md",
+            "transcript.srt",
+            "summary.md",
+            "meta.yml",
+            "hemory_v1.0:<original-value-or-unknown>",
+            "_deleted_*",
+            "deleted: true",
+            "source deletion never cascades",
+            "/.notemd/meetings/hemory-import-v1.json",
+            "plugin-managed meeting source artifacts",
+        ] {
+            assert!(TEMPLATE.contains(required), "AGENTS.md meeting contract is missing: {required}");
+        }
+        for field in [
+            "conversation_id", "created_at", "end_at", "title", "category", "key_topics",
+            "language", "source", "duration_ms", "speaker_count", "transcript_file",
+            "summary_file", "imported_from", "updated_at",
+        ] {
+            assert!(TEMPLATE.contains(field), "meeting schema is missing {field}");
+        }
+    }
+
     /// Task 11 review: 6 public docs enumerate `--json`'s extra fields in
     /// their own prose (README ×2, docs/FEATURES ×2, website/public/llms.txt,
     /// llms-full.txt) and none of them had a drift tripwire — adding

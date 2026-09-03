@@ -1,3 +1,4 @@
+use notemd_meetings::settings::{self, VaultSettings};
 use notemd_meetings::{MigrationMode, MigrationOptions, MigrationReport, MigrationService};
 use notemd_plugin_sdk as sdk;
 use sdk::plugin_protocol as proto;
@@ -42,7 +43,37 @@ impl MeetingsPlugin {
             .vault
             .clone()
             .ok_or("no vault configured")?;
-        Ok(MigrationService::new(vault, self.data_dir.clone()))
+        let config = settings::load(&vault);
+        MigrationService::with_meetings_root(vault, self.data_dir.clone(), config.meetings_root)
+    }
+
+    fn vault(&self) -> Result<PathBuf, String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .vault
+            .clone()
+            .ok_or_else(|| "no vault configured".to_string())
+    }
+
+    fn detect_env(&self) -> Result<Value, String> {
+        let vault = self.vault()?;
+        Ok(json!({
+            "settings": settings::load(&vault),
+            "default_hemory_source": default_hemory_source_from_home(home_dir().as_deref()),
+        }))
+    }
+
+    fn save_settings(&self, params: &Value) -> Result<Value, String> {
+        if !self.inner.lock().unwrap().jobs.is_empty() {
+            return Err("cannot change the meetings directory while a migration is running".into());
+        }
+        let meetings_root = required_str(params, "meetings_root")?.trim().to_string();
+        settings::validate_meetings_root(&meetings_root)?;
+        let vault = self.vault()?;
+        let config = VaultSettings { meetings_root };
+        settings::save(&vault, &config)?;
+        serde_json::to_value(config).map_err(|error| error.to_string())
     }
 
     fn detect(&self, params: &Value) -> Result<Value, String> {
@@ -142,9 +173,9 @@ impl MeetingsPlugin {
     }
 
     fn cli_import(&self, context: &Value) -> Result<Value, String> {
-        let source = cli_str(context, "source").ok_or(
-            "usage: notemd meetings-import-hemory <source> [--dry-run] [--full] [--user ID] [--timezone IANA]",
-        )?;
+        let source = cli_str(context, "source")
+            .or_else(|| default_hemory_source_from_home(home_dir().as_deref()))
+            .ok_or("no Hemory Vault found under ~/.hemory/vault; pass an explicit source path")?;
         let options = MigrationOptions {
             source: PathBuf::from(source),
             user: cli_str(context, "user"),
@@ -209,6 +240,42 @@ fn shared_config_path() -> Option<PathBuf> {
     }
     let home = std::env::var("HOME").ok()?;
     Some(PathBuf::from(home).join("Library/Application Support/net.notemd.app/shared.json"))
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn default_hemory_source_from_home(home: Option<&Path>) -> Option<String> {
+    let root = home?.join(".hemory").join("vault");
+    let mut candidates = std::fs::read_dir(&root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || name == "_deleted" || name.starts_with("_deleted_") {
+                return None;
+            }
+            std::fs::symlink_metadata(&path)
+                .ok()
+                .filter(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                .map(|_| path)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    notemd_meetings::hemory::users_at(&root)
+        .is_ok()
+        .then_some(root)
+        .or_else(|| {
+            candidates
+                .into_iter()
+                .find(|path| notemd_meetings::hemory::users_at(path).is_ok())
+        })
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 fn shared_config_vault() -> Option<PathBuf> {
@@ -336,6 +403,8 @@ impl sdk::NotemdPlugin for MeetingsPlugin {
         params: Value,
     ) -> Result<Value, String> {
         match method.strip_prefix("plugin.").unwrap_or(method) {
+            "detect_env" => self.detect_env(),
+            "save_settings" => self.save_settings(&params),
             "library_list" => self.library_list(),
             "hemory_detect" => self.detect(&params),
             "hemory_plan" => self.plan(&params),
@@ -391,5 +460,39 @@ mod tests {
         let envelope = &result["__notemd_cli_result"];
         assert_eq!(envelope["exit_code"], 0);
         assert_eq!(envelope["data"]["source_user"], "alice");
+    }
+
+    #[test]
+    fn default_source_is_the_first_valid_visible_non_symlink_vault() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".hemory/vault");
+        std::fs::create_dir_all(root.join("bad-folder")).unwrap();
+        std::fs::create_dir_all(root.join("_deleted_0000/user/conversation")).unwrap();
+        std::fs::create_dir_all(root.join("z-vault/user/conversation")).unwrap();
+        std::fs::create_dir_all(root.join("a-vault/user/conversation")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden/user/conversation")).unwrap();
+        assert_eq!(
+            default_hemory_source_from_home(Some(home.path())).as_deref(),
+            Some(root.join("a-vault").to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn default_source_is_absent_when_no_hemory_layout_exists() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".hemory/vault/not-a-vault")).unwrap();
+        assert_eq!(default_hemory_source_from_home(Some(home.path())), None);
+    }
+
+    #[test]
+    fn legacy_multi_user_layout_keeps_the_common_root() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".hemory/vault");
+        std::fs::create_dir_all(root.join("alice/conversation")).unwrap();
+        std::fs::create_dir_all(root.join("bob/conversation")).unwrap();
+        assert_eq!(
+            default_hemory_source_from_home(Some(home.path())).as_deref(),
+            Some(root.to_string_lossy().as_ref())
+        );
     }
 }

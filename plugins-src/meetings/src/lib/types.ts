@@ -29,6 +29,13 @@ export interface HemoryDetection {
   warnings?: string[]
 }
 
+export interface MeetingsEnvironment {
+  settings: {
+    meetings_root: string
+  }
+  default_hemory_source?: string | null
+}
+
 export type MigrationAction =
   | 'create'
   | 'update'
