@@ -214,21 +214,6 @@
     <div class="sidebar-scroll">
       <HarnessBanner status={harness} label={tr} />
 
-      <h2>{tr('tasks.title')}</h2>
-      {#if tasks.length === 0}
-        <p class="empty">{tr('tasks.empty')}</p>
-      {/if}
-      <TaskList
-        {tasks}
-        selected={selectedTask}
-        onselect={(id) => {
-          selectedTask = id
-          selectedRun = null
-          settingsOpen = false
-        }}
-        label={tr}
-      />
-
       <h2>
         {tr('history.title')}
         <button
@@ -251,6 +236,21 @@
           onclear={clearRuns}
         />
       </div>
+
+      <h2>{tr('tasks.title')}</h2>
+      {#if tasks.length === 0}
+        <p class="empty">{tr('tasks.empty')}</p>
+      {/if}
+      <TaskList
+        {tasks}
+        selected={selectedTask}
+        onselect={(id) => {
+          selectedTask = id
+          selectedRun = null
+          settingsOpen = false
+        }}
+        label={tr}
+      />
     </div>
     <button
       type="button"

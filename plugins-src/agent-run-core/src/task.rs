@@ -41,6 +41,10 @@ pub struct TaskDef {
     /// 可在 idea-spark 输入面以 `/名字` 调用。不参与运行语义,纯发现/展示。
     #[serde(default)]
     pub directive: Vec<String>,
+    /// Stable manifest id of the feature plugin that owns this task template.
+    /// Optional so hand-written and pre-metadata task.json files keep working.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_plugin: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -250,6 +254,22 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         write_task(v.path(), "t", r#"{"name":"T"}"#);
         assert_eq!(discover(v.path())[0].timeout_seconds, 1800);
+    }
+
+    #[test]
+    fn source_plugin_is_optional_and_round_trips_when_present() {
+        let old: TaskDef = serde_json::from_str(r#"{"name":"Old"}"#).unwrap();
+        assert_eq!(old.source_plugin, None);
+
+        let owned: TaskDef = serde_json::from_str(
+            r#"{"name":"Idea proof","source_plugin":"notemd.idea-spark"}"#,
+        )
+        .unwrap();
+        assert_eq!(owned.source_plugin.as_deref(), Some("notemd.idea-spark"));
+        assert_eq!(
+            serde_json::to_value(owned).unwrap()["source_plugin"],
+            "notemd.idea-spark"
+        );
     }
 
     #[test]

@@ -95,6 +95,7 @@ mod tests {
             precheck: None,
             okf_type: None,
             directive: Vec::new(),
+            source_plugin: None,
         }
     }
 

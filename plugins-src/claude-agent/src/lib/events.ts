@@ -79,6 +79,8 @@ export interface Task {
   id: string
   name: string
   description: string
+  /** Feature plugin that owns this template; absent on older/custom tasks. */
+  source_plugin?: string | null
   /** Read off the lock file, so a detached CLI run shows up here too. */
   running: boolean
   running_since?: string | null

@@ -15,6 +15,13 @@ export type MessageKey =
   | 'history.emptyAll'
   | 'tasks.title'
   | 'tasks.empty'
+  | 'tasks.group.core'
+  | 'tasks.group.ebook'
+  | 'tasks.group.idea'
+  | 'tasks.group.memory'
+  | 'tasks.group.trace'
+  | 'tasks.group.agent'
+  | 'tasks.group.custom'
   | 'run.start'
   | 'run.stop'
   | 'ctx.label'
@@ -76,6 +83,13 @@ const en: Catalog = {
   'history.emptyAll': 'No task has run yet.',
   'tasks.title': 'Tasks',
   'tasks.empty': 'No task templates yet.',
+  'tasks.group.core': 'note.md',
+  'tasks.group.ebook': 'Ebook Import',
+  'tasks.group.idea': 'Idea Spark',
+  'tasks.group.memory': 'Memory',
+  'tasks.group.trace': 'Trace Source',
+  'tasks.group.agent': 'Agent tools',
+  'tasks.group.custom': 'Custom tasks',
   'run.start': 'Run',
   'run.stop': 'Stop',
   'ctx.label': 'Context',
@@ -137,6 +151,13 @@ const zh: Catalog = {
   'history.emptyAll': '还没有任何任务跑过。',
   'tasks.title': '任务',
   'tasks.empty': '还没有任务模板。',
+  'tasks.group.core': 'note.md 核心',
+  'tasks.group.ebook': '导入电子书',
+  'tasks.group.idea': '奇思妙想',
+  'tasks.group.memory': '记忆',
+  'tasks.group.trace': '溯源',
+  'tasks.group.agent': 'Agent 工具',
+  'tasks.group.custom': '自定义任务',
   'run.start': '运行',
   'run.stop': '停止',
   'ctx.label': '上下文',
@@ -198,6 +219,13 @@ const ja: Catalog = {
   'history.emptyAll': 'まだどのタスクも実行されていません。',
   'tasks.title': 'タスク',
   'tasks.empty': 'タスクテンプレートがまだありません。',
+  'tasks.group.core': 'note.md コア',
+  'tasks.group.ebook': '電子書籍を取り込む',
+  'tasks.group.idea': 'アイデアスパーク',
+  'tasks.group.memory': 'メモリ',
+  'tasks.group.trace': '出典をたどる',
+  'tasks.group.agent': 'Agent ツール',
+  'tasks.group.custom': 'カスタムタスク',
   'run.start': '実行',
   'run.stop': '停止',
   'ctx.label': 'コンテキスト',
@@ -259,6 +287,13 @@ const de: Catalog = {
   'history.emptyAll': 'Noch keine Aufgabe gelaufen.',
   'tasks.title': 'Aufgaben',
   'tasks.empty': 'Noch keine Aufgabenvorlagen.',
+  'tasks.group.core': 'note.md-Kern',
+  'tasks.group.ebook': 'E-Books importieren',
+  'tasks.group.idea': 'Ideenfunke',
+  'tasks.group.memory': 'Gedächtnis',
+  'tasks.group.trace': 'Quellensuche',
+  'tasks.group.agent': 'Agent-Werkzeuge',
+  'tasks.group.custom': 'Eigene Aufgaben',
   'run.start': 'Ausführen',
   'run.stop': 'Stoppen',
   'ctx.label': 'Kontext',
