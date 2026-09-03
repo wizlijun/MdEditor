@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.903.2 — 2026-09-03
+
 ### Added
 
 - **Smart Search & Answers turns the vault into a keyboard-first research surface.** Open it with Command/Ctrl-K, or Option-Space anywhere on macOS; results appear while you type, stay grouped by their real source, and can be opened in the editor or removed singly or in a standard multi-selection without touching the original files. Return asks the selected Claude, Codex or DeepSeek Agent using a frozen evidence packet plus policy-approved USER and MEMORY facts. Answers keep clickable source citations; a helpful vote archives an auditable Markdown answer under `answers/`, and a separate action generates a longer editable note.
