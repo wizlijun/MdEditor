@@ -14,6 +14,7 @@ plugins-src/codex-agent/backend/target/
 plugins-src/agent-run-core/target/
 plugins-src/ebook-import/backend/target/
 plugins-src/roam-import/backend/target/
+plugins-src/meetings/backend/target/
 vaultgitsync/target/
 src-tauri/gen/*
 !src-tauri/gen/apple/

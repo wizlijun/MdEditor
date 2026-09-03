@@ -17,7 +17,7 @@ ssot/meetings/<conversation-id>/
 └── meta.yml              # 通用契约可选；Hemory 导入时必写
 ```
 
-Hemory V1 采用无损优先策略：从实际 Hemory conversation 目录中选择最高质量、且逐条通过“时间码 + 说话人”校验的 SRT；优先把 `pro_asr.srt` 原始字节复制为 `transcript.srt`，不转换成 Markdown。来源存在 `summary.md` 时也原样迁入，但它不取代逐字稿。不复制任何源目录，也绝不写入 MP3、WAV、M4A、AAC 等音频。
+Hemory V1 优先把用户确认已准备好的 `content.md` 原始字节复制为 `transcript.md`；只有 `content.md` 不存在时，才把合格的 `pro_asr.srt` 原始字节复制为 `transcript.srt`。来源存在 `summary.md` 时也原样迁入，但它不取代逐字稿。不复制任何源目录，也绝不写入 MP3、WAV、M4A、AAC 等音频。
 
 全量和增量使用同一个迁移 planner。迁移默认幂等、按会议原子提交、逐条 checkpoint；源内容变化而目标未被用户修改时才更新，目标有本地修改或来源身份不明时只报告冲突，不覆盖，不同步删除。
 
@@ -75,11 +75,9 @@ Hemory V1 采用无损优先策略：从实际 Hemory conversation 目录中选�
 
 ```text
 meta.json
+content.md
 pro_asr.srt
-conv.srt
-pre_asr.srt
 speakers.json
-transcript/transcript.srt
 summary.md
 ```
 
@@ -105,7 +103,7 @@ manifest 中的音频路径及未知二进制文件
 - `meta.created_at` 后续可能变更而 ID 保持稳定，因此更新时不重命名既有目标目录。
 - 目标目录已被另一来源或未知内容占用时标为冲突；V1 不自动加一个看似 Hemory 原生的 `_N` 来掩盖冲突。
 
-来源稳定键是 `hemory:<source-instance-id>:<user-id>:<normalized-conversation-id>`。`source-instance-id` 是插件首次接入该 Hemory 根时生成的 opaque ID；canonical source root 与 opaque ID 的绑定只保存在设备本地 plugin data，不写入 Vault。这样既不会把绝对路径泄露进归档，也不会把两个不同 Hemory 实例中恰好同用户、同 ID 的会议误判成同一来源。目标 metadata 只记录 opaque ID、原始目录名和原始 ID。
+来源稳定键是 `hemory:<source-instance-id>:<user-id>:<normalized-conversation-id>`。`source-instance-id` 是插件首次接入该 Hemory 根时生成的 opaque ID；canonical source root 与 opaque ID 的绑定只保存在设备本地 plugin data，不写入 Vault。完整来源键、原始目录名和原始 ID 只进入迁移 ledger，不污染会议 metadata。
 
 ### 3.2 权威逐字稿
 
@@ -114,97 +112,91 @@ manifest 中的音频路径及未知二进制文件
 - `transcript.srt`：标准 SRT，每个 cue 有 start/end，并能解析出 speaker；或
 - `transcript.md`：后续原生记录/其他 provider 可用，每段必须含机器可解析的 start、可选 end 和 speaker。
 
-Hemory V1 只产出 `transcript.srt`。候选优先级为：
+Hemory V1 的权威正文选择规则为：
 
-1. conversation 根的 `pro_asr.srt`
-2. conversation 根的 `conv.srt`
-3. conversation 根的 `pre_asr.srt`
-4. 老 metadata 的安全 `transcript_file`
-5. `transcript/transcript.srt`
+1. conversation 根存在 `content.md`：它必须通过 Markdown 会议正文校验，然后按原始字节复制为 `transcript.md`。
+2. conversation 根不存在 `content.md`：检查 `pro_asr.srt`，通过 SRT 校验后按原始字节复制为 `transcript.srt`。
+3. 两者都不存在或候选不合格：`blocked:no_valid_transcript`。V1 不自动尝试 `conv.srt`、`pre_asr.srt`、老 `transcript_file` 或 `transcript/transcript.srt`。
 
-优先级不代表自动合格。选中候选必须通过：
+`content.md` 的合格条件：
+
+- UTF-8（允许 BOM），至少有一个非空发言行；
+- 允许 Hemory 已有的标题、分隔线、时间、Summary、人物等 header；
+- header 后每个非空发言行符合 `HH:MM:SS  <speaker>: <text>`，时间和 speaker 均非空；
+- 原始字节直接复制，不改写标题、正文、换行或文件末尾。
+
+`pro_asr.srt` 的合格条件：
 
 - SRT 序号和时间码可解析，`start <= end`，cue 顺序合法；
 - 每个非空 cue 都有可识别的 speaker label；
 - 支持 `[spk_01]`、`[00_spk_01]` 与可映射的历史 label；
 - 若 label 需要 `speakers.json` 才能统一，映射必须完整且无歧义；
-- 至少有一个非空 cue。
+- 至少有一个非空 cue，且文件为 UTF-8（允许 BOM）；
+- 通过校验后按原始字节复制，不润色、不重新断句、不改换行或文件末尾。
 
-一个高优先级候选不合格时继续尝试下一个，并把失败原因写入报告。全部不合格则为 `blocked:no_valid_transcript`，不创建空会议目录。尤其：
-
-- `content.md` 是去语气词、去冗余、纠错后的整理稿，只保留开始秒，不能冒充逐字原件。
-- `pre_asr.srt` 和老 iOS SRT 不保证逐条含 speaker；缺 speaker 就阻断，不为它编造说话人。
-- 合格源 SRT 必须是 UTF-8（允许 BOM）；通过校验后按原始字节复制，不润色、不重新断句、不改换行或文件末尾。`transcript.source_sha256` 与 `transcript.sha256` 因而相同。
+“不存在”和“不合格”是不同状态：只有 `content.md` 不存在才允许选择 pro SRT；`content.md` 存在但校验失败时必须阻断并报告，不能静默降级为另一份正文。被选择的来源哈希与目标 transcript 哈希必须相同。
 
 ### 3.3 `meta.yml`
 
-通用会议目录允许没有 `meta.yml`；由 Hemory 导入的目录必须有，因为增量和来源审计依赖它。
+通用会议目录允许没有 `meta.yml`；由 Hemory 导入的目录必须有。会议 metadata 只保存用户选择的业务字段；增量来源、文件哈希、原始路径和 checkpoint 全部进入 `.notemd` ledger。
 
 建议 V1 schema：
 
 ```yaml
-schema_version: 1
-type: meeting-transcript
 conversation_id: "20260403_173300"
 title: "周会"
-started_at: "2026-04-03T17:33:00+08:00"
-ended_at: "2026-04-03T18:05:12+08:00"
+created_at: "2026-04-03T17:33:00+08:00"
+end_at: "2026-04-03T18:05:12+08:00"
 duration_ms: 1932000
 language: zh-CN
 category: meeting
-topics:
+source: hemory_v1.0:ios
+key_topics:
   - 发布计划
-speakers:
-  spk_01:
-    name: Alice
-    name_source: voiceprint
-    source_labels: ["00_spk_01"]
-transcript:
-  file: transcript.srt
-  format: srt
-  source_kind: pro_asr
-  source_sha256: "..."
-  sha256: "..."
-summary:
-  file: summary.md
-  source_sha256: "..."
-  sha256: "..."
-source:
-  system: hemory
-  instance_id: "opaque-local-id"
-  user_id: "..."
-  conversation_id: "20260403_173300"
-  original_directory: "20260403_173300"
-  schema: current-conversation-v1
-  fingerprint: "..."
-migration:
-  importer: notemd.meetings
-  importer_version: 1
-  imported_at: "2026-09-03T10:00:00+08:00"
+speaker_count: 3
+transcript_file: transcript.md
+summary_file: summary.md
+imported_from: hemory
+updated_at: "2026-09-03T10:00:00+08:00"
 ```
 
 映射规则：
 
-| Hemory | `meta.yml` | 说明 |
+| Hemory / 迁移结果 | `meta.yml` | 说明 |
 | --- | --- | --- |
-| `conv_id` / `session_id` | `conversation_id` + `source.conversation_id` | 规范 ID 与原始 ID 分开保留 |
-| `created_at` | `started_at` | 解析失败阻断；不退化成文件 mtime |
-| `end_at` | `ended_at` | 可选 |
+| `conv_id` / `session_id` | `conversation_id` | 规范后的目录 ID |
+| `created_at` | `created_at` | 解析失败阻断；不退化成文件 mtime |
+| `end_at` | `end_at` | 可选 |
 | `audio.duration_ms` / 老 `duration` | `duration_ms` | 老 `duration` 按秒转毫秒；不保留音频路径 |
 | `title` | `title` | 可选 |
 | `language` | `language` | 可选 |
 | `category` | `category` | 兼容历史 string/list 漂移，异常值放 warning |
-| `key_topics` / `tags` | `topics` | 去重但保持原顺序 |
-| `speakers.json` / 老 `speakers` | `speakers` | 保留 label、name、name provenance；不迁 voiceprint clip |
-| `_idempotency_key` | 不写 | 私有实现字段，不作为稳定主键 |
+| `key_topics` / `tags` | `key_topics` | 去重但保持原顺序 |
+| `source` / 老 `device_source` | `source` | `hemory_v1.0:<原始文本>`；两者都缺失时为 `hemory_v1.0:unknown` |
+| 顶层 `speaker_count` 或正文计算值 | `speaker_count` | 输出为整数 |
+| `content.md` | 目标 `transcript.md` | 首选；通过正文校验后按原始字节复制 |
+| `pro_asr.srt` | 目标 `transcript.srt` | 仅在 `content.md` 不存在时使用；通过 SRT 校验后按原始字节复制 |
 | `summary.md` | 目标 `summary.md` | 存在且为 UTF-8 Markdown 时按原始字节复制，并记录哈希；缺失不阻断会议迁移 |
-| `audio.path` / `audio_files` | 不写 | 禁止把音频引用带入新归档 |
+| 目标 transcript 文件名 | `transcript_file` | `transcript.md` 或 `transcript.srt` |
+| 目标 summary 文件名 | `summary_file` | 仅在文件存在时写 `summary.md` |
+| 固定值 | `imported_from` | `hemory` |
+| 来源 `updated_at` / 成功迁移时刻 | `updated_at` | 来源有合法值时保留；否则写本次成功提交时刻，RFC 3339 含 offset |
 
-说话人姓名要带 provenance。已知 voiceprint/manual 名称可以保留；上下文模型猜出的名称不能标成已验证身份。
+最终只允许以下 14 个一级字段，不写任何嵌套对象：
+
+```text
+conversation_id, created_at, end_at, title, category, key_topics,
+language, source, duration_ms, speaker_count, transcript_file,
+summary_file, imported_from, updated_at
+```
+
+可选值缺失时省略对应 key，不写嵌套 `audio`、`proAsr`、`speakers`、`source` provenance、`transcript` hash 或 `migration` 对象。`summary.md`、`audio.path`、`audio_files`、私有 `_idempotency_key`、删除/同步/流水线状态也不抄入 metadata。
+
+speaker mapping 只用于校验正文和计算 `speaker_count`，不复制进扁平 metadata。正文中的现有说话人名字或 label 保持原样。
 
 ### 3.4 后续 ASR 接入边界
 
-V1 不设计一个对外稳定的通用框架，只在后端保留最小内部边界：Hemory adapter 负责 `detect → discover → normalize`，输出统一的 `NormalizedMeeting`（source key、conversation ID、时间、metadata、speaker map、唯一逐字稿字节和 fingerprint）；planner/writer 不认识 Hemory 路径或字段。以后新增其他会议软件时只增加 adapter，复用目标 schema、冲突状态机、原子写入和报告，不为每个来源另写一套迁移器。
+V1 不设计一个对外稳定的通用框架，只在后端保留最小内部边界：Hemory adapter 负责 `detect → discover → normalize`，输出统一的 `NormalizedMeeting`（source key、conversation ID、时间、metadata、speaker map、唯一 transcript 文件名/原始字节和 fingerprint）；planner/writer 不认识 Hemory 路径或字段。以后新增其他会议软件时只增加 adapter，复用目标 schema、冲突状态机、原子写入和报告，不为每个来源另写一套迁移器。
 
 ## 4 · 全量与增量
 
@@ -223,7 +215,7 @@ V1 不设计一个对外稳定的通用框架，只在后端保留最小内部�
 | 无合法逐字稿、时间或身份冲突 | `blocked` |
 | 音频或其他非白名单文件 | `excluded`，只计数 |
 
-来源 fingerprint 由规范化 metadata、选中 SRT、speaker mapping 和可选 `summary.md` 的内容哈希组成。`meta.version`、`updated_at`、mtime 和 size 只能帮助扫描，不能单独决定 unchanged，因为 Hemory 可直接改 `speakers.json` 而不 bump metadata。
+来源 fingerprint 由规范化 metadata、被选中的 `content.md` 或 `pro_asr.srt`、speaker mapping 和可选 `summary.md` 的内容哈希组成。`meta.version`、`updated_at`、mtime 和 size 只能帮助扫描，不能单独决定 unchanged，因为 Hemory 可直接改正文或 `speakers.json` 而不 bump metadata。
 
 ### 4.2 模式语义
 
@@ -254,13 +246,15 @@ checkpoint 固定在 Vault 内：
 每条 meeting 是独立事务：
 
 1. 在 Vault 内、与目标同一文件系统创建唯一 staging 目录。
-2. 写 `transcript.srt`，flush、`sync_all`，重新解析并验证输出；来源有 `summary.md` 时再按原始字节写入并校验哈希。
-3. 生成 `meta.yml`，其中包含 transcript 和可选 summary 哈希；metadata 最后写，作为激活标记。
+2. 按计划写唯一的 `transcript.md` 或 `transcript.srt`，flush、`sync_all`，重新解析并验证输出；来源有 `summary.md` 时再按原始字节写入并校验哈希。
+3. 生成扁平 `meta.yml`；metadata 最后写，作为激活标记。transcript/summary/meta 哈希只写 ledger。
 4. 创建使用 no-clobber rename；更新在提交前重读目标并做 expected-hash CAS。
 5. 成功激活目标后，再原子更新 ledger。
 6. staging、transcript、meta、ledger 任一点崩溃，重跑都只能恢复或报告冲突，不能留下一个被会议列表当成成功记录的半成品。
 
-插件扫描目标库时，只展示同时满足以下条件的目录：目录名合法、逐字稿存在且校验通过、若有 `meta.yml` 则 transcript 哈希一致。
+Create 和 Update 都先写单事务 journal，再激活目录、更新 ledger、清理旧目录并清除 journal。恢复过程必须先核对事务 nonce 和 transcript/summary/meta 的完整哈希；任何额外文件或哈希偏差都 fail closed，不能递归删除未验证目录。新事务不得覆盖尚未恢复的 journal。
+
+插件扫描目标库时，只展示同时满足以下条件的目录：目录名合法、`meta.yml.transcript_file` 指向唯一存在且校验通过的逐字稿；若声明 `summary_file`，对应文件也必须存在。完整性哈希从 ledger 校验，不要求写入 metadata。
 
 ### 5.2 权限边界
 
@@ -287,6 +281,7 @@ notemd meetings-import-hemory <source> [--full] [--user <id>] [--timezone Asia/T
 - 检出多用户时，必须 `--user`；时区只在历史时间缺 offset 时要求。
 - 参数错误由 Host 返回 2；插件禁用返回 3；迁移执行错误返回 4。
 - 正常完成但有 `conflict/blocked` 时命令仍输出完整报告，并返回 4，方便自动化发现未完全迁移。
+- `--json` 下该情形输出 `{ "ok": false, "data": <MigrationReport> }` 到 stdout，stderr 保持为空；报告不再嵌入错误字符串。
 - CLI Host 对插件任务有约 300 秒 watchdog。由于每条会议都会提交 checkpoint，大库超时后可安全重跑；V1 不承诺单进程无限时长。
 
 CLI 与 UI 必须调用同一个 Rust `MigrationService::{plan, apply}`，不能复制两套字段解析或冲突规则。
@@ -343,8 +338,9 @@ items 按 conversation ID、来源相对路径稳定排序。dry-run 和 apply �
 - 当前单数布局、历史复数 `conv_` 布局、老 iOS session 布局都有 fixture。
 - 路径已迁但 metadata 仍是旧 schema 时按字段识别成功。
 - `category` 的 string/list 历史漂移不会造成全批失败。
-- pro/conv/pre/legacy 候选优先级正确；坏的高优先级候选会回退并报告。
-- `[spk_NN]`、`[NN_spk_MM]` 与 speaker mapping 正确；缺 speaker 的 SRT 被阻断。
+- `content.md` 存在时原字节输出 `transcript.md`；它不存在时 pro SRT 原字节输出 `transcript.srt`。
+- `content.md` 存在但无时间/说话人时被阻断，不静默 fallback；没有 content 且 pro SRT 缺 speaker 时也被阻断。
+- `[spk_NN]`、`[NN_spk_MM]` 与 speaker mapping 正确。
 - malformed/空 SRT、非法时间、ID 与 metadata 冲突、只有音频均不会产生目标目录。
 
 ### 幂等与冲突
@@ -395,12 +391,16 @@ items 按 conversation ID、来源相对路径稳定排序。dry-run 和 apply �
 
 **已确认：来源存在 `summary.md` 时，原样复制为目标 `summary.md`。**
 
-summary 是派生内容，不取代权威逐字稿；`meta.yml` 记录其来源和哈希，缺失 summary 不阻断会议迁移。
+summary 是派生内容，不取代权威逐字稿；`meta.yml` 只记录 `summary_file`，来源和哈希进入 ledger。缺失 summary 不阻断会议迁移。
 
 ### C. Hemory 导入输出格式
 
-**已确认：优先复制 Hemory `pro_asr.srt` 原文件为 `transcript.srt`，不同时生成 Markdown。**
+**最终确认：优先复制 Hemory `content.md` 原文件为 `transcript.md`；只有它不存在时，复制 `pro_asr.srt` 原文件为 `transcript.srt`。**
 
-理由：SRT 是现有逐字原件，保留起止毫秒和说话人 label；双份正文会产生权威性和增量同步歧义。全局搜索通过显式添加 `ssot/meetings/**` 原始资料模式解决。
+同一会议始终只有一个权威 transcript。`meta.yml` 只记录目标文件名；报告和 ledger 记录 `source_kind` 及源/目标哈希。不自动使用其他 SRT fallback。
 
-没有合格 `pro_asr.srt` 时仍按 §3.2 的候选顺序寻找其他合格 SRT，以满足“所有具有合格逐字稿的 Conversation”；报告和 `meta.yml` 必须明确 `source_kind`。全局搜索通过显式添加 `ssot/meetings/**` 原始资料模式解决。
+### D. metadata 字段
+
+**最终确认：`meta.yml` 只保留 14 个扁平字段。**
+
+字段为 `conversation_id`、`created_at`、`end_at`、`title`、`category`、`key_topics`、`language`、`source`、`duration_ms`、`speaker_count`、`transcript_file`、`summary_file`、`imported_from`、`updated_at`。其中 `source` 固定为 `hemory_v1.0:<原 source/device_source>`，缺失文本时为 `hemory_v1.0:unknown`。覆盖保护以 ledger 中的上次输出哈希和提交前 CAS 为准，不能只依赖 `updated_at`，否则手工编辑但未更新时间的目标仍可能被覆盖。
