@@ -9,6 +9,8 @@ For the full commit history, see the git log.
 
 ### Changed
 
+- **Memory 2.4.2 can copy a rigorous Role/Scope initialization prompt for external Agents.** The staged workflow derives candidates only from attributable Vault evidence, keeps clients and family in separate security domains, validates a complete Registry candidate, then pauses for owner confirmation before it prepares exact Claim reassignment proposals. Unsupported Registry writes, direct apply, forged human identity, credentials and ambiguous cross-Realm classification are explicitly forbidden.
+
 - **Memory 2.4.1 brings Role and Scope governance into the main workspace.** “Identity & Context” is now a first-class tab beside confirmed memories, pending suggestions and history instead of a separate sheet. Active Role/Scope counts stay visible, and Registry edits plus atomic batch reassignment remain in place without interrupting the rest of the review flow.
 
 ## v6.903.3 — 2026-09-03

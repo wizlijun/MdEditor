@@ -75,6 +75,7 @@ describe('Memory Protocol v2 app', () => {
     expect(document.body.textContent).toContain('Roles')
     expect(document.body.textContent).toContain('Scopes')
     expect(document.body.textContent).toContain('重新分配')
+    expect(button('复制初始化 Prompt')).toBeTruthy()
     expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.contextRegistry').length).toBeGreaterThanOrEqual(2)
   })
 

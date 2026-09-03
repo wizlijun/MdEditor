@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, tick, unmount } from 'svelte'
 import RoleScopeManager from './RoleScopeManager.svelte'
+import { contextBootstrapPrompt } from './contextBootstrapPrompt'
 import type {
   ContextRegistrySnapshot,
   EffectiveClaim,
@@ -53,13 +54,49 @@ async function render(request: (method: string, params?: any) => Promise<any>, o
 
 describe('RoleScopeManager', () => {
   it('renders as an inline workspace instead of a modal sheet', async () => {
-    const request = vi.fn(async (method: string) => method === 'host.memory.v2.contextRegistry' ? baseRegistry() : {})
+    const request = vi.fn(async (method: string, _params?: any) => method === 'host.memory.v2.contextRegistry' ? baseRegistry() : {})
     await render(request)
 
     expect(document.querySelector('section[aria-labelledby="role-scope-title"]')).toBeTruthy()
     expect(document.querySelector('[role=dialog]')).toBeNull()
     expect(document.querySelector('.scrim')).toBeNull()
     expect(button('关闭身份与场景')).toBeUndefined()
+  })
+
+  it('copies a staged, fail-closed initialization prompt without mutating Memory', async () => {
+    const request = vi.fn(async (method: string, _params?: any) => method === 'host.memory.v2.contextRegistry' ? baseRegistry() : {})
+    await render(request)
+
+    button('复制初始化 Prompt')!.click(); await settle()
+
+    const clipboardCall = request.mock.calls.find(([method]) => method === 'host.clipboard.write')
+    expect(clipboardCall?.[1]).toEqual({ text: contextBootstrapPrompt })
+    expect(contextBootstrapPrompt).toContain('notemd memory context-registry show --json')
+    expect(contextBootstrapPrompt).toContain('notemd memory context-registry validate --file <临时候选文件> --json')
+    expect(contextBootstrapPrompt).toContain('notemd memory reassign plan')
+    expect(contextBootstrapPrompt).toContain('notemd memory reassign propose')
+    expect(contextBootstrapPrompt).toContain('Registry 已确认')
+    expect(contextBootstrapPrompt).toContain('不得强行归类')
+    expect(contextBootstrapPrompt).not.toMatch(/^notemd memory context-registry (?:replace|apply|import)/m)
+    expect(contextBootstrapPrompt).not.toMatch(/^notemd memory reassign apply/m)
+    expect(request.mock.calls.some(([method]) => method === 'host.memory.v2.contextRegistryReplace')).toBe(false)
+    expect(request.mock.calls.some(([method]) => method === 'host.memory.v2.reassignApply')).toBe(false)
+    expect(request.mock.calls).toContainEqual(['host.toast', expect.objectContaining({ level: 'success', message: '已复制身份与场景初始化 Prompt' })])
+  })
+
+  it('keeps the workspace open and reports clipboard failures inline', async () => {
+    const request = vi.fn(async (method: string, _params?: any) => {
+      if (method === 'host.memory.v2.contextRegistry') return baseRegistry()
+      if (method === 'host.clipboard.write') throw new Error('clipboard permission denied')
+      return {}
+    })
+    await render(request)
+
+    button('复制初始化 Prompt')!.click(); await settle()
+
+    expect(document.querySelector('[role=alert]')?.textContent).toContain('clipboard permission denied')
+    expect(document.querySelector('section[aria-labelledby="role-scope-title"]')).toBeTruthy()
+    expect(request.mock.calls.some(([method]) => method === 'host.toast')).toBe(false)
   })
 
   it('creates a Role with one full-registry replacement and exact concurrency heads', async () => {
