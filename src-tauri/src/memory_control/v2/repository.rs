@@ -23,6 +23,7 @@ pub struct RepositorySnapshot {
     pub bootstrap: Option<Bootstrap>,
     pub protocols: Vec<Loaded<ProtocolRevision>>,
     pub authorities: Vec<Loaded<AuthorityRevision>>,
+    pub context_registries: Vec<Loaded<ContextRegistryRevision>>,
     pub claims: Vec<Loaded<MemoryClaimRevision>>,
     pub operations: Vec<Loaded<MemoryOperation>>,
     pub context_manifests: Vec<Loaded<ContextManifest>>,
@@ -93,6 +94,7 @@ impl V2Repository {
         let has_v2_assets = [
             "protocol-revisions",
             "authority-revisions",
+            "context-registry-revisions",
             "claims",
             "operations",
         ]
@@ -108,6 +110,7 @@ impl V2Repository {
                 bootstrap: None,
                 protocols: Vec::new(),
                 authorities: Vec::new(),
+                context_registries: Vec::new(),
                 claims: Vec::new(),
                 operations: Vec::new(),
                 context_manifests: Vec::new(),
@@ -137,6 +140,10 @@ impl V2Repository {
             &memory.join("authority-revisions"),
             |value| &value.revision_id,
         )?;
+        let context_registries = self.load_revision_dir::<ContextRegistryRevision>(
+            &memory.join("context-registry-revisions"),
+            |value| &value.revision_id,
+        )?;
         let claims = self.load_claims(&memory.join("claims"))?;
         let operations = self
             .load_revision_dir::<MemoryOperation>(&memory.join("operations"), |value| {
@@ -153,6 +160,12 @@ impl V2Repository {
         ensure_unique(
             "authority revision",
             authorities.iter().map(|item| &item.value.revision_id),
+        )?;
+        ensure_unique(
+            "context registry revision",
+            context_registries
+                .iter()
+                .map(|item| &item.value.revision_id),
         )?;
         ensure_unique(
             "claim revision",
@@ -192,6 +205,7 @@ impl V2Repository {
             bootstrap: Some(bootstrap),
             protocols,
             authorities,
+            context_registries,
             claims,
             operations,
             context_manifests,

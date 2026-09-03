@@ -53,31 +53,53 @@ pub fn project(
             .as_ref()
             .is_some_and(|conflict| conflict.risk_class == RiskClass::ActionSensitive)
     });
+    let revisions = repository
+        .claims
+        .iter()
+        .map(|item| (item.value.revision_id.as_str(), &item.value))
+        .collect::<HashMap<_, _>>();
+    let mut entries = Vec::with_capacity(views.len());
+    for view in views {
+        if view.current_heads.len() != 1 {
+            continue;
+        }
+        let revision = revisions
+            .get(view.current_heads[0].revision_id.as_str())
+            .copied()
+            .ok_or_else(|| ReducerError {
+                code: "MEMORY_INVALID_DAG",
+                message: format!("missing projection head for {}", view.claim_id),
+            })?;
+        entries.push((view, revision));
+    }
+    let registry = super::reducer::context_registry_head(repository)?
+        .and_then(|head| {
+            repository.context_registries.iter().find(|item| {
+                item.value.revision_id == head.revision_id
+                    && item.value.payload_sha256 == head.payload_sha256
+            })
+        })
+        .map(|item| &item.value);
+    let mut categories = protocol
+        .value
+        .category_registry
+        .get("user")
+        .cloned()
+        .unwrap_or_default();
+    categories.extend(
+        protocol
+            .value
+            .category_registry
+            .get("memory")
+            .cloned()
+            .unwrap_or_default(),
+    );
+    categories.dedup();
     Ok(ProjectionBundle {
-        user: render_target(
-            "USER",
-            ProjectionTarget::User,
-            protocol
-                .value
-                .category_registry
-                .get("user")
-                .cloned()
-                .unwrap_or_default(),
-            &views,
-            action_sensitive_conflict,
-        ),
-        memory: render_target(
-            "MEMORY",
-            ProjectionTarget::Memory,
-            protocol
-                .value
-                .category_registry
-                .get("memory")
-                .cloned()
-                .unwrap_or_default(),
-            &views,
-            action_sensitive_conflict,
-        ),
+        // Kept in the Rust API for source compatibility only. It is never
+        // persisted; MEMORY.md is the sole root projection.
+        user: String::new(),
+        memory: render_memory(categories, &entries, registry, action_sensitive_conflict),
     })
 }
 
@@ -89,6 +111,7 @@ pub fn select_context(
         repository,
         &SnapshotRequest {
             as_of_valid_time: request.as_of_valid_time.clone(),
+            role: request.role.clone(),
             space: Some(request.space.clone()),
             purpose: Some(request.purpose.clone()),
         },
@@ -161,6 +184,10 @@ pub fn select_context(
 fn context_scope_matches(revision: &MemoryClaimRevision, request: &ContextRequest) -> bool {
     revision.projection.visibility != Visibility::UiOnly
         && revision.consent.scope == "personal-assistant-only"
+        && match &request.role {
+            Some(role) => revision.context.roles.contains(role),
+            None => revision.context.roles.is_empty(),
+        }
         && revision.context.spaces.contains(&request.space)
         && revision.consent.allowed_purposes.contains(&request.purpose)
 }
@@ -181,14 +208,18 @@ pub(crate) fn rebuild_projections_unlocked(root: &Path) -> Result<ProjectionBund
         &repository,
         &SnapshotRequest {
             as_of_valid_time: as_of,
+            role: None,
             space: None,
             purpose: None,
         },
     )
     .map_err(|error| error.to_string())?;
     let bundle = project(&repository, &snapshot).map_err(|error| error.to_string())?;
-    atomic_replace(root, &root.join("USER.md"), &bundle.user)?;
     atomic_replace(root, &root.join("MEMORY.md"), &bundle.memory)?;
+    let legacy_user = root.join("USER.md");
+    if legacy_user.exists() {
+        fs::remove_file(&legacy_user).map_err(|error| format!("MEMORY_IO: {error}"))?;
+    }
     Ok(bundle)
 }
 
@@ -196,61 +227,164 @@ fn repository_error(error: RepositoryError) -> String {
     error.to_string()
 }
 
-fn render_target(
-    title: &str,
-    target: ProjectionTarget,
+fn render_memory(
     registry: Vec<String>,
-    claims: &[&ClaimView],
+    claims: &[(&ClaimView, &MemoryClaimRevision)],
+    context_registry: Option<&ContextRegistryRevision>,
     action_sensitive_conflict: bool,
 ) -> String {
-    let mut grouped = BTreeMap::<String, Vec<&ClaimView>>::new();
-    for claim in claims {
+    let mut grouped = BTreeMap::<(String, String, String), Vec<&ClaimView>>::new();
+    for (claim, revision) in claims {
         let Some(projection) = &claim.projection else {
             continue;
         };
-        if projection.target == target {
-            grouped
-                .entry(projection.category.clone())
-                .or_default()
-                .push(claim);
+        let roles = if revision.context.roles.is_empty() {
+            vec!["role:unclassified".to_string()]
+        } else {
+            revision.context.roles.clone()
+        };
+        for scope in &revision.context.spaces {
+            for role in &roles {
+                grouped
+                    .entry((scope.clone(), role.clone(), projection.category.clone()))
+                    .or_default()
+                    .push(*claim);
+            }
         }
     }
-    let mut categories = registry
-        .into_iter()
-        .filter(|category| grouped.contains_key(category))
-        .collect::<Vec<_>>();
-    for category in grouped.keys() {
-        if !categories.contains(category) {
-            categories.push(category.clone());
-        }
-    }
-    let mut out = format!("# {title}\n");
+    let role_map = context_registry
+        .map(|value| {
+            value
+                .roles
+                .iter()
+                .map(|role| (role.role_id.as_str(), role))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let scope_map = context_registry
+        .map(|value| {
+            value
+                .scopes
+                .iter()
+                .map(|scope| (scope.scope_id.as_str(), scope))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let mut out = "# MEMORY\n\n> Agent 使用规则：这是完整的人类可读投影，不代表所有分组都可用于当前任务。\n> 必须先通过 Memory context broker 确认当前 Role、Scope 与用途，只加载匹配切片；不要跨分组推断或混用事实。\n".to_string();
     if action_sensitive_conflict {
         out.push_str("\n> 存在未解决的权限或边界冲突，相关行动已暂停。\n");
     }
-    for category in categories {
-        let Some(entries) = grouped.get(&category) else {
-            continue;
-        };
-        out.push_str(&format!("\n## {category}\n"));
-        for entry in entries {
-            let Some(text) = &entry.text else {
-                continue;
-            };
-            out.push('\n');
-            for (index, line) in text.lines().enumerate() {
-                let line = escape_continuation(line);
-                if index == 0 {
-                    out.push_str("- ");
-                } else {
-                    out.push_str("  ");
+    let mut scopes = grouped
+        .keys()
+        .map(|(scope, _, _)| scope.clone())
+        .collect::<Vec<_>>();
+    scopes.sort_by_key(|id| {
+        scope_map
+            .get(id.as_str())
+            .map(|scope| scope.display_name.to_lowercase())
+            .unwrap_or_else(|| id.to_lowercase())
+    });
+    scopes.dedup();
+    for scope_id in scopes {
+        let scope = scope_map.get(scope_id.as_str()).copied();
+        let scope_label = scope
+            .map(|value| value.display_name.as_str())
+            .unwrap_or(scope_id.as_str());
+        out.push_str(&format!(
+            "\n## Scope · {}\n\n<!-- memory:scope {} -->\n",
+            escape_heading(scope_label),
+            escape_comment(&scope_id)
+        ));
+        if let Some(scope) = scope {
+            append_guidance(&mut out, "Scope", &scope.agent_use);
+        }
+        let mut roles = grouped
+            .keys()
+            .filter(|(scope, _, _)| scope == &scope_id)
+            .map(|(_, role, _)| role.clone())
+            .collect::<Vec<_>>();
+        roles.sort_by_key(|id| {
+            role_map
+                .get(id.as_str())
+                .map(|role| role.display_name.to_lowercase())
+                .unwrap_or_else(|| id.to_lowercase())
+        });
+        roles.dedup();
+        for role_id in roles {
+            let role = role_map.get(role_id.as_str()).copied();
+            let role_label = role
+                .map(|value| value.display_name.as_str())
+                .unwrap_or(role_id.as_str());
+            out.push_str(&format!(
+                "\n### Role · {}\n\n<!-- memory:role {} -->\n",
+                escape_heading(role_label),
+                escape_comment(&role_id)
+            ));
+            if let Some(role) = role {
+                append_guidance(&mut out, "Role", &role.agent_use);
+            }
+            let mut categories = registry
+                .iter()
+                .filter(|category| {
+                    grouped.contains_key(&(scope_id.clone(), role_id.clone(), (*category).clone()))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for (scope, role, category) in grouped.keys() {
+                if scope == &scope_id && role == &role_id && !categories.contains(category) {
+                    categories.push(category.clone());
                 }
-                out.push_str(&line);
-                out.push('\n');
+            }
+            for category in categories {
+                let Some(entries) =
+                    grouped.get(&(scope_id.clone(), role_id.clone(), category.clone()))
+                else {
+                    continue;
+                };
+                out.push_str(&format!("\n#### {}\n", escape_heading(&category)));
+                for entry in entries {
+                    let Some(text) = &entry.text else {
+                        continue;
+                    };
+                    out.push('\n');
+                    for (index, line) in text.lines().enumerate() {
+                        let line = escape_continuation(line);
+                        if index == 0 {
+                            out.push_str("- ");
+                        } else {
+                            out.push_str("  ");
+                        }
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
+                }
             }
         }
     }
     out
+}
+
+fn append_guidance(out: &mut String, label: &str, use_policy: &AgentUse) {
+    if !use_policy.guidance.trim().is_empty() {
+        out.push_str(&format!(
+            "\n> {label} 指引：{}\n",
+            use_policy.guidance.trim().replace('\n', " ")
+        ));
+    }
+    if !use_policy.avoid_error.trim().is_empty() {
+        out.push_str(&format!(
+            "> 避免：{}\n",
+            use_policy.avoid_error.trim().replace('\n', " ")
+        ));
+    }
+}
+
+fn escape_heading(value: &str) -> String {
+    value.trim().replace(['\r', '\n'], " ").replace('#', "\\#")
+}
+
+fn escape_comment(value: &str) -> String {
+    value.replace("--", "—").replace(['<', '>'], "")
 }
 
 fn escape_continuation(line: &str) -> String {
@@ -313,42 +447,14 @@ mod tests {
 
     #[test]
     fn continuation_lines_cannot_escape_the_fact_bullet() {
-        let claim = ClaimView {
-            claim_id: "c".into(),
-            as_of_valid_time: "2026-09-01T00:00:00Z".into(),
-            workflow_state: WorkflowState::Approved,
-            lifecycle_state: Some(LifecycleState::Active),
-            application_state: ApplicationState::Current,
-            current_heads: vec![],
-            projection_eligible: true,
-            context_eligible: true,
-            do_not_rely: false,
-            conflict: None,
-            text: Some("第一行\n## 伪标题\n- 伪条目".into()),
-            projection: Some(Projection {
-                target: ProjectionTarget::User,
-                category: "preferences".into(),
-                visibility: Visibility::Projection,
-            }),
-            claim_kind: Some(ClaimKind::Preference),
-            salience: Some(Salience::Pinned),
-        };
-        let rendered = render_target(
-            "USER",
-            ProjectionTarget::User,
-            vec!["preferences".into()],
-            &[&claim],
-            false,
-        );
-        assert_eq!(
-            rendered,
-            "# USER\n\n## preferences\n\n- 第一行\n  \\## 伪标题\n  \\- 伪条目\n"
-        );
+        assert_eq!(escape_continuation("第一行"), "第一行");
+        assert_eq!(escape_continuation("## 伪标题"), "\\## 伪标题");
+        assert_eq!(escape_continuation("- 伪条目"), "\\- 伪条目");
     }
 
     #[test]
     fn action_sensitive_conflict_emits_only_a_generic_safety_notice() {
-        let rendered = render_target("USER", ProjectionTarget::User, vec![], &[], true);
+        let rendered = render_memory(vec![], &[], None, true);
         assert!(rendered.contains("存在未解决的权限或边界冲突，相关行动已暂停"));
         assert!(!rendered.contains("允许发送"));
         assert!(!rendered.contains("禁止发送"));

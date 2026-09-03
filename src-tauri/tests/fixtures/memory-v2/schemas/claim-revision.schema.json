@@ -84,6 +84,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["spaces", "applies_when", "excludes_when"],
       "properties": {
+        "roles": { "$ref": "#/$defs/stringSet" },
         "spaces": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
         "applies_when": { "$ref": "#/$defs/stringSet" },
         "excludes_when": { "$ref": "#/$defs/stringSet" }

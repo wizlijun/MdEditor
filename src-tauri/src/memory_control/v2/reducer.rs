@@ -53,8 +53,15 @@ pub fn reduce(
         bootstrap,
         &global,
     )?;
+    let context_registry = reduce_context_registry(
+        &repository.context_registries,
+        &repository.protocols,
+        &repository.authorities,
+        &global,
+    )?;
+    validate_context_request(context_registry.as_ref(), request)?;
     let request_dedup = deduplicate_requests(repository)?;
-    let mut operation_activation = validate_operations(repository)?;
+    let mut operation_activation = validate_operations(repository, &global)?;
     operation_activation
         .diagnostics
         .extend(request_dedup.diagnostics);
@@ -84,6 +91,7 @@ pub fn reduce(
             &repository.protocols,
             &repository.authorities,
             &authority,
+            context_registry.as_ref(),
             &global,
             as_of,
             request,
@@ -235,6 +243,7 @@ struct OperationActivation {
 
 fn validate_operations(
     repository: &RepositorySnapshot,
+    global: &GlobalDag<'_>,
 ) -> Result<OperationActivation, ReducerError> {
     let mut out = OperationActivation::default();
     let claims_by_revision = repository
@@ -246,75 +255,22 @@ fn validate_operations(
         let operation = &loaded.value;
         let mut reasons = Vec::new();
         if operation.schema != "notemd.memory/operation/v2"
-            || operation.operation_kind != OperationKind::MergeClaims
             || operation.state != OperationState::Complete
             || operation.decision.verdict != Verdict::Approve
         {
             reasons.push("unsupported or incomplete operation envelope".to_string());
         }
-        if operation.merge_inputs.sources.is_empty() {
-            reasons.push("merge requires at least one source in addition to target".into());
-        }
-        let mut participants = BTreeSet::from([operation.merge_inputs.target.claim_id.clone()]);
-        for source in &operation.merge_inputs.sources {
-            if !participants.insert(source.claim_id.clone()) {
-                reasons.push(format!("duplicate merge participant {}", source.claim_id));
+        match operation.operation_kind {
+            OperationKind::MergeClaims => {
+                validate_merge_operation(operation, &claims_by_revision, &mut reasons)
             }
-        }
-        validate_operation_ref(
-            operation,
-            &operation.result,
-            LifecycleState::Active,
-            &claims_by_revision,
-            &mut reasons,
-        );
-        for effect in &operation.effects {
-            validate_operation_ref(
+            OperationKind::ReassignContext => validate_reassign_operation(
                 operation,
-                &OperationRevisionRef {
-                    claim_id: effect.claim_id.clone(),
-                    revision_id: effect.revision_id.clone(),
-                    payload_sha256: effect.payload_sha256.clone(),
-                },
-                LifecycleState::Merged,
+                repository,
+                global,
                 &claims_by_revision,
                 &mut reasons,
-            );
-            if effect.merged_into != operation.result.claim_id {
-                reasons.push(format!(
-                    "effect {} points to another merge target",
-                    effect.claim_id
-                ));
-            }
-        }
-        let effect_claims = operation
-            .effects
-            .iter()
-            .map(|effect| effect.claim_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let source_claims = operation
-            .merge_inputs
-            .sources
-            .iter()
-            .map(|source| source.claim_id.as_str())
-            .collect::<BTreeSet<_>>();
-        if effect_claims != source_claims {
-            reasons.push("merge effects do not exactly cover source claims".into());
-        }
-        for participant in
-            std::iter::once(&operation.merge_inputs.target).chain(&operation.merge_inputs.sources)
-        {
-            for head in &participant.base_heads {
-                let Some(revision) = claims_by_revision.get(head.revision_id.as_str()) else {
-                    reasons.push(format!("missing merge input head {}", head.revision_id));
-                    continue;
-                };
-                if revision.claim_id != participant.claim_id
-                    || revision.payload_sha256 != head.payload_sha256
-                {
-                    reasons.push(format!("merge input head mismatch {}", head.revision_id));
-                }
-            }
+            )?,
         }
         if reasons.is_empty() {
             out.active.insert(operation.operation_id.clone());
@@ -343,6 +299,313 @@ fn validate_operations(
     out.diagnostics.sort();
     out.diagnostics.dedup();
     Ok(out)
+}
+
+fn validate_merge_operation(
+    operation: &MemoryOperation,
+    claims_by_revision: &HashMap<&str, &MemoryClaimRevision>,
+    reasons: &mut Vec<String>,
+) {
+    if operation.reassign_context.is_some() {
+        reasons.push("merge operation contains reassign inputs".into());
+    }
+    if operation.merge_inputs.sources.is_empty() {
+        reasons.push("merge requires at least one source in addition to target".into());
+    }
+    let mut participants = BTreeSet::from([operation.merge_inputs.target.claim_id.clone()]);
+    for source in &operation.merge_inputs.sources {
+        if !participants.insert(source.claim_id.clone()) {
+            reasons.push(format!("duplicate merge participant {}", source.claim_id));
+        }
+    }
+    validate_operation_ref(
+        operation,
+        &operation.result,
+        LifecycleState::Active,
+        claims_by_revision,
+        reasons,
+    );
+    for effect in &operation.effects {
+        validate_operation_ref(
+            operation,
+            &OperationRevisionRef {
+                claim_id: effect.claim_id.clone(),
+                revision_id: effect.revision_id.clone(),
+                payload_sha256: effect.payload_sha256.clone(),
+            },
+            LifecycleState::Merged,
+            claims_by_revision,
+            reasons,
+        );
+        if effect.merged_into != operation.result.claim_id {
+            reasons.push(format!(
+                "effect {} points to another merge target",
+                effect.claim_id
+            ));
+        }
+    }
+    let effect_claims = operation
+        .effects
+        .iter()
+        .map(|effect| effect.claim_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let source_claims = operation
+        .merge_inputs
+        .sources
+        .iter()
+        .map(|source| source.claim_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if effect_claims != source_claims {
+        reasons.push("merge effects do not exactly cover source claims".into());
+    }
+    for participant in
+        std::iter::once(&operation.merge_inputs.target).chain(&operation.merge_inputs.sources)
+    {
+        for head in &participant.base_heads {
+            let Some(revision) = claims_by_revision.get(head.revision_id.as_str()) else {
+                reasons.push(format!("missing merge input head {}", head.revision_id));
+                continue;
+            };
+            if revision.claim_id != participant.claim_id
+                || revision.payload_sha256 != head.payload_sha256
+            {
+                reasons.push(format!("merge input head mismatch {}", head.revision_id));
+            }
+        }
+    }
+}
+
+fn validate_reassign_operation(
+    operation: &MemoryOperation,
+    repository: &RepositorySnapshot,
+    global: &GlobalDag<'_>,
+    claims_by_revision: &HashMap<&str, &MemoryClaimRevision>,
+    reasons: &mut Vec<String>,
+) -> Result<(), ReducerError> {
+    if !operation.merge_inputs.is_empty()
+        || !operation.result.is_empty()
+        || !operation.effects.is_empty()
+    {
+        reasons.push("reassign operation contains merge fields".into());
+    }
+    let Some(reassign) = &operation.reassign_context else {
+        reasons.push("reassign operation has no reassign inputs".into());
+        return Ok(());
+    };
+    if reassign.changes.is_empty() {
+        reasons.push("reassign operation has no changes".into());
+    }
+    if reassign.preview_sha256.len() != 64
+        || !reassign
+            .preview_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        reasons.push("reassign operation has an invalid preview hash".into());
+    }
+
+    let expected_registry = maximal_context_registry_heads(
+        &repository.context_registries,
+        &operation.operation_id,
+        global,
+    )?;
+    if expected_registry != vec![reassign.registry_head.clone()] {
+        reasons.push("reassign operation does not bind its unique causal registry head".into());
+    }
+    let bound_registry = repository
+        .context_registries
+        .iter()
+        .find(|candidate| {
+            candidate.value.revision_id == reassign.registry_head.revision_id
+                && candidate.value.payload_sha256 == reassign.registry_head.payload_sha256
+        })
+        .map(|candidate| &candidate.value);
+    if bound_registry.is_none() {
+        reasons.push("reassign operation binds an unknown registry revision".into());
+    }
+    validate_operation_control_context(operation, repository, global, reasons)?;
+
+    let mut claim_ids = BTreeSet::new();
+    let mut result_ids = BTreeSet::new();
+    for change in &reassign.changes {
+        if !claim_ids.insert(change.claim_id.as_str()) {
+            reasons.push(format!("duplicate reassign claim {}", change.claim_id));
+        }
+        if !result_ids.insert(change.result.revision_id.as_str()) {
+            reasons.push(format!(
+                "duplicate reassign result {}",
+                change.result.revision_id
+            ));
+        }
+        let Some(base) = claims_by_revision.get(change.base_head.revision_id.as_str()) else {
+            reasons.push(format!(
+                "missing reassign input head {}",
+                change.base_head.revision_id
+            ));
+            continue;
+        };
+        if base.claim_id != change.claim_id
+            || base.payload_sha256 != change.base_head.payload_sha256
+            || base.context != change.from_context
+        {
+            reasons.push(format!(
+                "reassign input head mismatch {}",
+                change.base_head.revision_id
+            ));
+        }
+        if change.from_context == change.to_context {
+            reasons.push(format!(
+                "reassign claim {} has no context change",
+                change.claim_id
+            ));
+        }
+        if bound_registry.is_some_and(|registry| !context_refs_valid(&change.to_context, registry))
+        {
+            reasons.push(format!(
+                "reassign claim {} targets unknown or archived context",
+                change.claim_id
+            ));
+        }
+        let causal_heads = maximal_causal_claim_heads(
+            &repository.claims,
+            &change.claim_id,
+            &operation.operation_id,
+            global,
+        )?;
+        if causal_heads != vec![change.base_head.clone()] {
+            reasons.push(format!(
+                "reassign input {} is not the unique causal claim head",
+                change.claim_id
+            ));
+        }
+
+        validate_operation_ref(
+            operation,
+            &change.result,
+            LifecycleState::Active,
+            claims_by_revision,
+            reasons,
+        );
+        let Some(result) = claims_by_revision.get(change.result.revision_id.as_str()) else {
+            continue;
+        };
+        if result.claim_id != change.claim_id
+            || result.context != change.to_context
+            || result.transition.operation != ClaimOperation::ChangeContextConsent
+            || result.parents != vec![change.base_head.clone()]
+            || !reassign_only_changes_context(base, result)
+        {
+            reasons.push(format!(
+                "reassign result semantics mismatch {}",
+                change.result.revision_id
+            ));
+        }
+    }
+    let declared_children = reassign
+        .changes
+        .iter()
+        .map(|change| change.result.revision_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let declared_bases = reassign
+        .changes
+        .iter()
+        .map(|change| change.base_head.revision_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let actual_children = repository
+        .claims
+        .iter()
+        .filter(|revision| {
+            revision.value.lineage.produced_by_operation.as_deref()
+                == Some(operation.operation_id.as_str())
+                && revision.value.lineage.produced_by_run.as_deref()
+                    == Some(operation.run_id.as_str())
+                && revision
+                    .value
+                    .parents
+                    .iter()
+                    .any(|parent| declared_bases.contains(parent.revision_id.as_str()))
+        })
+        .map(|revision| revision.value.revision_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if declared_children != actual_children {
+        reasons.push("reassign changes do not exactly cover operation children".into());
+    }
+    Ok(())
+}
+
+fn validate_operation_control_context(
+    operation: &MemoryOperation,
+    repository: &RepositorySnapshot,
+    global: &GlobalDag<'_>,
+    reasons: &mut Vec<String>,
+) -> Result<(), ReducerError> {
+    let expected_protocol =
+        maximal_protocol_heads(&repository.protocols, &operation.operation_id, global)?;
+    let expected_authority =
+        maximal_authority_heads(&repository.authorities, &operation.operation_id, global)?;
+    if expected_protocol.is_empty()
+        || expected_authority.is_empty()
+        || operation.decision.protocol_context.heads != expected_protocol
+        || operation.decision.authority_context.heads != expected_authority
+        || operation.decision.authority_context.capability != "memory.claim.approve"
+    {
+        reasons.push("reassign decision does not bind its causal control heads".into());
+        return Ok(());
+    }
+    for head in &expected_authority {
+        let granted = repository
+            .authorities
+            .iter()
+            .find(|revision| {
+                revision.value.revision_id == head.revision_id
+                    && revision.value.payload_sha256 == head.payload_sha256
+            })
+            .is_some_and(|revision| {
+                principal_map(&revision.value)
+                    .get(&operation.decision.actor_id)
+                    .is_some_and(|capabilities| capabilities.contains("memory.claim.approve"))
+            });
+        if !granted {
+            reasons.push(format!(
+                "{} lacks memory.claim.approve",
+                operation.decision.actor_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn maximal_causal_claim_heads(
+    claims: &[Loaded<MemoryClaimRevision>],
+    claim_id: &str,
+    operation_id: &str,
+    global: &GlobalDag<'_>,
+) -> Result<Vec<RevisionRef>, ReducerError> {
+    maximal_causal_heads(
+        claims
+            .iter()
+            .filter(|revision| revision.value.claim_id == claim_id)
+            .map(|revision| (&revision.value.revision_id, &revision.value.payload_sha256)),
+        operation_id,
+        global,
+    )
+}
+
+fn reassign_only_changes_context(base: &MemoryClaimRevision, result: &MemoryClaimRevision) -> bool {
+    let mut normalized = result.clone();
+    normalized.revision_id = base.revision_id.clone();
+    normalized.request_id = base.request_id.clone();
+    normalized.parents = base.parents.clone();
+    normalized.causal_context = base.causal_context.clone();
+    normalized.recorded_by = base.recorded_by.clone();
+    normalized.recorded_at = base.recorded_at.clone();
+    normalized.context = base.context.clone();
+    normalized.decision = base.decision.clone();
+    normalized.transition = base.transition.clone();
+    normalized.lineage = base.lineage.clone();
+    normalized.dedupe_key = base.dedupe_key.clone();
+    normalized.payload_sha256 = base.payload_sha256.clone();
+    normalized == *base
 }
 
 fn validate_operation_ref(
@@ -599,6 +862,393 @@ fn reduce_authority(
     })
 }
 
+#[derive(Clone, Copy)]
+struct ContextRegistryState<'a> {
+    head: &'a ContextRegistryRevision,
+}
+
+pub fn context_registry_head(
+    repository: &RepositorySnapshot,
+) -> Result<Option<RevisionRef>, ReducerError> {
+    if repository.mode != RepositoryMode::V2Active {
+        return Err(ReducerError::new(
+            "MEMORY_PROTOCOL_NOT_ACTIVE",
+            format!("repository mode is {:?}", repository.mode),
+        ));
+    }
+    let global = GlobalDag::build(repository)?;
+    reduce_context_registry(
+        &repository.context_registries,
+        &repository.protocols,
+        &repository.authorities,
+        &global,
+    )
+    .map(|state| {
+        state.map(|state| RevisionRef {
+            revision_id: state.head.revision_id.clone(),
+            payload_sha256: state.head.payload_sha256.clone(),
+        })
+    })
+}
+
+fn reduce_context_registry<'a>(
+    revisions: &'a [Loaded<ContextRegistryRevision>],
+    protocols: &[Loaded<ProtocolRevision>],
+    authorities: &[Loaded<AuthorityRevision>],
+    global: &GlobalDag<'_>,
+) -> Result<Option<ContextRegistryState<'a>>, ReducerError> {
+    if revisions.is_empty() {
+        return Ok(None);
+    }
+    let nodes = revisions
+        .iter()
+        .map(|revision| Node {
+            id: revision.value.revision_id.as_str(),
+            hash: revision.value.payload_sha256.as_str(),
+            parents: &revision.value.base_heads,
+        })
+        .collect::<Vec<_>>();
+    validate_dag("context registry", &nodes)?;
+    for revision in revisions {
+        let value = &revision.value;
+        if value.schema != "notemd.memory/context-registry-revision/v2"
+            || value.request_id.trim().is_empty()
+            || value.decision.verdict != Verdict::Approve
+        {
+            return Err(ReducerError::new(
+                "MEMORY_CONTEXT_REGISTRY_INVALID",
+                format!("invalid context registry revision {}", value.revision_id),
+            ));
+        }
+        let initial = value.base_heads.is_empty();
+        validate_control_transition(
+            "context registry",
+            &value.revision_id,
+            initial,
+            value.transition.operation,
+            &value.base_heads,
+        )?;
+        if !initial {
+            validate_control_base_causality(
+                "context registry",
+                &value.revision_id,
+                &value.base_heads,
+                revisions.iter().map(|candidate| {
+                    (
+                        candidate.value.revision_id.as_str(),
+                        candidate.value.payload_sha256.as_str(),
+                    )
+                }),
+                global,
+            )?;
+        }
+        validate_context_registry_shape(value, revisions)?;
+        validate_context_registry_decision(value, protocols, authorities, global)?;
+    }
+    let head_ids = maximal_heads(&nodes, nodes.iter().map(|node| node.id))?;
+    if head_ids.len() != 1 {
+        return Err(ReducerError::new(
+            "MEMORY_CONTEXT_REGISTRY_CONFLICT",
+            "context registry must have exactly one current head",
+        ));
+    }
+    let head = revisions
+        .iter()
+        .find(|revision| revision.value.revision_id == head_ids[0])
+        .map(|revision| &revision.value)
+        .ok_or_else(|| {
+            ReducerError::new(
+                "MEMORY_CONTEXT_REGISTRY_INVALID",
+                "missing context registry head",
+            )
+        })?;
+    Ok(Some(ContextRegistryState { head }))
+}
+
+fn validate_context_registry_decision(
+    revision: &ContextRegistryRevision,
+    protocols: &[Loaded<ProtocolRevision>],
+    authorities: &[Loaded<AuthorityRevision>],
+    global: &GlobalDag<'_>,
+) -> Result<(), ReducerError> {
+    let expected_protocol = maximal_protocol_heads(protocols, &revision.revision_id, global)?;
+    if expected_protocol.is_empty() || revision.decision.protocol_context.heads != expected_protocol
+    {
+        return Err(ReducerError::new(
+            "MEMORY_UNAUTHORIZED",
+            format!(
+                "context registry decision {} does not bind its maximal causal protocol heads",
+                revision.revision_id
+            ),
+        ));
+    }
+    let required = match revision.transition.operation {
+        ControlOperation::Initialize | ControlOperation::Replace => "memory.claim.approve",
+        ControlOperation::Resolve => "memory.claim.resolve",
+    };
+    validate_control_authorization(
+        &revision.revision_id,
+        &ControlDecision {
+            verdict: revision.decision.verdict,
+            actor_id: revision.decision.actor_id.clone(),
+            authority_context: revision.decision.authority_context.clone(),
+        },
+        required,
+        authorities,
+        global,
+    )
+}
+
+fn validate_context_registry_shape(
+    revision: &ContextRegistryRevision,
+    revisions: &[Loaded<ContextRegistryRevision>],
+) -> Result<(), ReducerError> {
+    let invalid = |message: String| {
+        ReducerError::new(
+            "MEMORY_CONTEXT_REGISTRY_INVALID",
+            format!("{}: {message}", revision.revision_id),
+        )
+    };
+    let mut role_ids = BTreeSet::new();
+    let mut role_names = BTreeMap::<String, String>::new();
+    for role in &revision.roles {
+        if !valid_registry_id(&role.role_id) || role.display_name.trim().is_empty() {
+            return Err(invalid("role id and display_name must be non-empty".into()));
+        }
+        if !role_ids.insert(role.role_id.as_str()) {
+            return Err(invalid(format!("duplicate role id {}", role.role_id)));
+        }
+        for name in std::iter::once(role.display_name.as_str())
+            .chain(role.aliases.iter().map(String::as_str))
+        {
+            let name = name.trim().to_lowercase();
+            if name.is_empty() {
+                return Err(invalid(format!("role {} has an empty alias", role.role_id)));
+            }
+            if role_names
+                .insert(name.clone(), role.role_id.clone())
+                .is_some_and(|other| other != role.role_id)
+            {
+                return Err(invalid(format!("ambiguous role name {name}")));
+            }
+        }
+        if role.status == ContextRegistryEntryStatus::Active && role.redirect_to.is_some() {
+            return Err(invalid(format!(
+                "active role {} cannot redirect",
+                role.role_id
+            )));
+        }
+    }
+    if !revision
+        .roles
+        .iter()
+        .any(|role| role.status == ContextRegistryEntryStatus::Active)
+    {
+        return Err(invalid("at least one active role is required".into()));
+    }
+    for role in &revision.roles {
+        if let Some(target) = &role.redirect_to {
+            if target == &role.role_id
+                || !revision.roles.iter().any(|candidate| {
+                    candidate.role_id == *target
+                        && candidate.status == ContextRegistryEntryStatus::Active
+                })
+            {
+                return Err(invalid(format!(
+                    "role {} has invalid redirect {target}",
+                    role.role_id
+                )));
+            }
+        }
+    }
+
+    let mut scope_ids = BTreeSet::new();
+    let mut scope_names = BTreeMap::<String, String>::new();
+    for scope in &revision.scopes {
+        if !valid_registry_id(&scope.scope_id)
+            || scope.display_name.trim().is_empty()
+            || scope.domain.trim().is_empty()
+        {
+            return Err(invalid(
+                "scope id, display_name and domain must be non-empty".into(),
+            ));
+        }
+        if !scope_ids.insert(scope.scope_id.as_str()) {
+            return Err(invalid(format!("duplicate scope id {}", scope.scope_id)));
+        }
+        for name in std::iter::once(scope.display_name.as_str())
+            .chain(scope.aliases.iter().map(String::as_str))
+        {
+            let name = name.trim().to_lowercase();
+            if name.is_empty() {
+                return Err(invalid(format!(
+                    "scope {} has an empty alias",
+                    scope.scope_id
+                )));
+            }
+            if scope_names
+                .insert(name.clone(), scope.scope_id.clone())
+                .is_some_and(|other| other != scope.scope_id)
+            {
+                return Err(invalid(format!("ambiguous scope name {name}")));
+            }
+        }
+        if scope.status == ContextRegistryEntryStatus::Active && scope.redirect_to.is_some() {
+            return Err(invalid(format!(
+                "active scope {} cannot redirect",
+                scope.scope_id
+            )));
+        }
+    }
+    if !revision
+        .scopes
+        .iter()
+        .any(|scope| scope.status == ContextRegistryEntryStatus::Active)
+    {
+        return Err(invalid("at least one active scope is required".into()));
+    }
+    for scope in &revision.scopes {
+        if let Some(target) = &scope.redirect_to {
+            let valid = target != &scope.scope_id
+                && revision.scopes.iter().any(|candidate| {
+                    candidate.scope_id == *target
+                        && candidate.status == ContextRegistryEntryStatus::Active
+                        && candidate.domain == scope.domain
+                        && candidate.kind == scope.kind
+                });
+            if !valid {
+                return Err(invalid(format!(
+                    "scope {} has invalid redirect {target}",
+                    scope.scope_id
+                )));
+            }
+        }
+        match scope.kind {
+            ScopeKind::Realm if scope.parent_scope_id.is_some() => {
+                return Err(invalid(format!(
+                    "realm {} cannot have a parent",
+                    scope.scope_id
+                )))
+            }
+            ScopeKind::Space => {
+                let Some(parent_id) = &scope.parent_scope_id else {
+                    return Err(invalid(format!(
+                        "space {} must have a parent",
+                        scope.scope_id
+                    )));
+                };
+                let parent = revision
+                    .scopes
+                    .iter()
+                    .find(|candidate| candidate.scope_id == *parent_id)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "space {} has missing parent {parent_id}",
+                            scope.scope_id
+                        ))
+                    })?;
+                if parent.domain != scope.domain {
+                    return Err(invalid(format!(
+                        "space {} crosses security domains",
+                        scope.scope_id
+                    )));
+                }
+                if scope.status == ContextRegistryEntryStatus::Active
+                    && parent.status != ContextRegistryEntryStatus::Active
+                {
+                    return Err(invalid(format!(
+                        "active space {} has archived parent {parent_id}",
+                        scope.scope_id
+                    )));
+                }
+            }
+            ScopeKind::Realm => {}
+        }
+    }
+    for scope in &revision.scopes {
+        let mut seen = BTreeSet::new();
+        let mut current = scope;
+        while let Some(parent_id) = &current.parent_scope_id {
+            if !seen.insert(current.scope_id.as_str()) {
+                return Err(invalid(format!("scope parent cycle at {}", scope.scope_id)));
+            }
+            current = revision
+                .scopes
+                .iter()
+                .find(|candidate| candidate.scope_id == *parent_id)
+                .ok_or_else(|| invalid(format!("missing scope parent {parent_id}")))?;
+        }
+    }
+
+    for base in &revision.base_heads {
+        let parent = revisions
+            .iter()
+            .find(|candidate| candidate.value.revision_id == base.revision_id)
+            .map(|candidate| &candidate.value)
+            .ok_or_else(|| invalid(format!("missing base registry {}", base.revision_id)))?;
+        for old in &parent.roles {
+            let _current = revision
+                .roles
+                .iter()
+                .find(|candidate| candidate.role_id == old.role_id)
+                .ok_or_else(|| invalid(format!("role {} was removed", old.role_id)))?;
+        }
+        for old in &parent.scopes {
+            let current = revision
+                .scopes
+                .iter()
+                .find(|candidate| candidate.scope_id == old.scope_id)
+                .ok_or_else(|| invalid(format!("scope {} was removed", old.scope_id)))?;
+            if old.kind != current.kind || old.domain != current.domain {
+                return Err(invalid(format!(
+                    "scope {} changed stable kind or domain",
+                    old.scope_id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn valid_registry_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:/".contains(&byte))
+}
+
+fn validate_context_request(
+    registry: Option<&ContextRegistryState<'_>>,
+    request: &SnapshotRequest,
+) -> Result<(), ReducerError> {
+    let unknown = |kind: &str, id: &str| {
+        ReducerError::new(
+            "MEMORY_CONTEXT_UNKNOWN",
+            format!("unknown or archived {kind} {id}"),
+        )
+    };
+    match (registry, request.role.as_deref()) {
+        (None, Some(role)) => return Err(unknown("role", role)),
+        (Some(registry), Some(role))
+            if !registry.head.roles.iter().any(|candidate| {
+                candidate.role_id == role && candidate.status == ContextRegistryEntryStatus::Active
+            }) =>
+        {
+            return Err(unknown("role", role))
+        }
+        _ => {}
+    }
+    if let (Some(registry), Some(scope)) = (registry, request.space.as_deref()) {
+        if !registry.head.scopes.iter().any(|candidate| {
+            candidate.scope_id == scope && candidate.status == ContextRegistryEntryStatus::Active
+        }) {
+            return Err(unknown("scope", scope));
+        }
+    }
+    Ok(())
+}
+
 fn validate_control_transition(
     label: &str,
     revision_id: &str,
@@ -730,6 +1380,7 @@ fn reduce_claim(
     protocols: &[Loaded<ProtocolRevision>],
     authorities: &[Loaded<AuthorityRevision>],
     current_authority: &AuthorityView,
+    context_registry: Option<&ContextRegistryState<'_>>,
     global: &GlobalDag<'_>,
     as_of: DateTime<Utc>,
     request: &SnapshotRequest,
@@ -860,11 +1511,14 @@ fn reduce_claim(
         .transpose()?
         .unwrap_or(false);
     let active = head.value.lifecycle.state == LifecycleState::Active;
+    let registry_eligible = claim_registry_refs_valid(&head.value, context_registry);
     let projection_eligible = active
         && !stale
+        && registry_eligible
         && head.value.projection.visibility == Visibility::Projection
         && head.value.sensitivity != Sensitivity::Restricted;
-    let context_eligible = active && !stale && context_matches(&head.value, request);
+    let context_eligible =
+        active && !stale && registry_eligible && context_matches(&head.value, request);
     Ok(ClaimView {
         claim_id: claim_id.into(),
         as_of_valid_time: request.as_of_valid_time.clone(),
@@ -1257,6 +1911,20 @@ fn maximal_protocol_heads(
     )
 }
 
+fn maximal_context_registry_heads(
+    registries: &[Loaded<ContextRegistryRevision>],
+    revision_id: &str,
+    global: &GlobalDag<'_>,
+) -> Result<Vec<RevisionRef>, ReducerError> {
+    maximal_causal_heads(
+        registries
+            .iter()
+            .map(|item| (&item.value.revision_id, &item.value.payload_sha256)),
+        revision_id,
+        global,
+    )
+}
+
 fn maximal_causal_heads<'a>(
     records: impl Iterator<Item = (&'a String, &'a String)>,
     revision_id: &str,
@@ -1326,6 +1994,11 @@ fn authorization_concurrent_with_revoke(
 }
 
 fn context_matches(revision: &MemoryClaimRevision, request: &SnapshotRequest) -> bool {
+    match &request.role {
+        Some(role) if !revision.context.roles.contains(role) => return false,
+        None if !revision.context.roles.is_empty() => return false,
+        _ => {}
+    }
     if let Some(space) = &request.space {
         if !revision.context.spaces.contains(space) {
             return false;
@@ -1337,6 +2010,28 @@ fn context_matches(revision: &MemoryClaimRevision, request: &SnapshotRequest) ->
         }
     }
     true
+}
+
+fn claim_registry_refs_valid(
+    revision: &MemoryClaimRevision,
+    registry: Option<&ContextRegistryState<'_>>,
+) -> bool {
+    let Some(registry) = registry else {
+        return revision.context.roles.is_empty();
+    };
+    context_refs_valid(&revision.context, registry.head)
+}
+
+fn context_refs_valid(context: &ClaimContext, registry: &ContextRegistryRevision) -> bool {
+    context.roles.iter().all(|role| {
+        registry.roles.iter().any(|candidate| {
+            candidate.role_id == *role && candidate.status == ContextRegistryEntryStatus::Active
+        })
+    }) && context.spaces.iter().all(|scope| {
+        registry.scopes.iter().any(|candidate| {
+            candidate.scope_id == *scope && candidate.status == ContextRegistryEntryStatus::Active
+        })
+    })
 }
 
 fn parse_time(value: &str, field: &str) -> Result<DateTime<Utc>, ReducerError> {
@@ -1617,6 +2312,15 @@ impl<'a> GlobalDag<'a> {
                 &revision.value.causal_context,
             )?;
         }
+        for revision in &repository.context_registries {
+            insert_global(
+                &mut raw,
+                &mut parents,
+                &revision.value.revision_id,
+                &revision.raw_sha256,
+                &revision.value.causal_context,
+            )?;
+        }
         for revision in &repository.claims {
             insert_global(
                 &mut raw,
@@ -1661,6 +2365,11 @@ impl<'a> GlobalDag<'a> {
                 .map(|revision| (&revision.value.revision_id, &revision.value.causal_context))
                 .chain(
                     repository.authorities.iter().map(|revision| {
+                        (&revision.value.revision_id, &revision.value.causal_context)
+                    }),
+                )
+                .chain(
+                    repository.context_registries.iter().map(|revision| {
                         (&revision.value.revision_id, &revision.value.causal_context)
                     }),
                 )
@@ -1775,6 +2484,9 @@ mod tests {
     const A_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const P_RAW: &str = "1111111111111111111111111111111111111111111111111111111111111111";
     const A_RAW: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+    const R_ID: &str = "01900000-0000-7000-8000-000000000003";
+    const R_HASH: &str = "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr";
+    const R_RAW: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 
     fn loaded<T>(id: &str, raw: &str, value: T) -> Loaded<T> {
         Loaded {
@@ -1875,6 +2587,83 @@ mod tests {
                 "memory.protocol.modify",
                 "memory.protocol.resolve",
             ],
+        )
+    }
+
+    fn role(id: &str) -> RoleDefinition {
+        RoleDefinition {
+            role_id: id.into(),
+            display_name: id.into(),
+            description: String::new(),
+            aliases: vec![],
+            status: ContextRegistryEntryStatus::Active,
+            redirect_to: None,
+            agent_use: AgentUse {
+                guidance: format!("use {id}"),
+                avoid_error: "do not cross roles".into(),
+            },
+        }
+    }
+
+    fn context_registry() -> Loaded<ContextRegistryRevision> {
+        loaded(
+            R_ID,
+            R_RAW,
+            ContextRegistryRevision {
+                schema: "notemd.memory/context-registry-revision/v2".into(),
+                revision_id: R_ID.into(),
+                request_id: "test/context-registry".into(),
+                base_heads: vec![],
+                causal_context: CausalContext {
+                    parents: vec![
+                        RecordRef {
+                            record_id: P_ID.into(),
+                            raw_sha256: P_RAW.into(),
+                        },
+                        RecordRef {
+                            record_id: A_ID.into(),
+                            raw_sha256: A_RAW.into(),
+                        },
+                    ],
+                },
+                roles: vec![role("role:consultant"), role("role:developer")],
+                scopes: vec![ScopeDefinition {
+                    scope_id: "global".into(),
+                    display_name: "Global".into(),
+                    description: String::new(),
+                    aliases: vec![],
+                    status: ContextRegistryEntryStatus::Active,
+                    redirect_to: None,
+                    kind: ScopeKind::Realm,
+                    domain: "personal".into(),
+                    parent_scope_id: None,
+                    agent_use: AgentUse {
+                        guidance: "use within global".into(),
+                        avoid_error: "do not cross scopes".into(),
+                    },
+                }],
+                decision: ContextRegistryDecision {
+                    verdict: Verdict::Approve,
+                    actor_id: "human:bruce".into(),
+                    protocol_context: ContextHeads {
+                        heads: vec![RevisionRef {
+                            revision_id: P_ID.into(),
+                            payload_sha256: P_HASH.into(),
+                        }],
+                    },
+                    authority_context: AuthorityContext {
+                        heads: vec![RevisionRef {
+                            revision_id: A_ID.into(),
+                            payload_sha256: A_HASH.into(),
+                        }],
+                        capability: "memory.claim.approve".into(),
+                    },
+                },
+                transition: ControlTransition {
+                    operation: ControlOperation::Initialize,
+                },
+                payload_sha256: R_HASH.into(),
+            },
         )
     }
 
@@ -1983,6 +2772,7 @@ mod tests {
                 polarity: Polarity::Neutral,
                 sensitivity: Sensitivity::Normal,
                 context: ClaimContext {
+                    roles: vec![],
                     spaces: vec!["global".into()],
                     applies_when: vec![],
                     excludes_when: vec![],
@@ -2055,6 +2845,89 @@ mod tests {
         value
     }
 
+    fn reassign_operation(
+        base: &Loaded<MemoryClaimRevision>,
+        result: &Loaded<MemoryClaimRevision>,
+    ) -> Loaded<MemoryOperation> {
+        loaded(
+            "operation:reassign-1",
+            "5555555555555555555555555555555555555555555555555555555555555555",
+            MemoryOperation {
+                schema: "notemd.memory/operation/v2".into(),
+                operation_id: "operation:reassign-1".into(),
+                operation_kind: OperationKind::ReassignContext,
+                run_id: "run:reassign-1".into(),
+                causal_context: CausalContext {
+                    parents: vec![
+                        RecordRef {
+                            record_id: P_ID.into(),
+                            raw_sha256: P_RAW.into(),
+                        },
+                        RecordRef {
+                            record_id: A_ID.into(),
+                            raw_sha256: A_RAW.into(),
+                        },
+                        RecordRef {
+                            record_id: R_ID.into(),
+                            raw_sha256: R_RAW.into(),
+                        },
+                        RecordRef {
+                            record_id: base.value.revision_id.clone(),
+                            raw_sha256: base.raw_sha256.clone(),
+                        },
+                    ],
+                },
+                merge_inputs: MergeInputs::default(),
+                result: OperationRevisionRef::default(),
+                effects: vec![],
+                reassign_context: Some(ReassignContextInputs {
+                    registry_head: RevisionRef {
+                        revision_id: R_ID.into(),
+                        payload_sha256: R_HASH.into(),
+                    },
+                    preview_sha256:
+                        "6666666666666666666666666666666666666666666666666666666666666666"
+                            .into(),
+                    changes: vec![ContextReassignment {
+                        claim_id: base.value.claim_id.clone(),
+                        base_head: RevisionRef {
+                            revision_id: base.value.revision_id.clone(),
+                            payload_sha256: base.value.payload_sha256.clone(),
+                        },
+                        result: OperationRevisionRef {
+                            claim_id: result.value.claim_id.clone(),
+                            revision_id: result.value.revision_id.clone(),
+                            payload_sha256: result.value.payload_sha256.clone(),
+                        },
+                        from_context: base.value.context.clone(),
+                        to_context: result.value.context.clone(),
+                    }],
+                }),
+                lineage: vec![],
+                decision: OperationDecision {
+                    verdict: Verdict::Approve,
+                    actor_id: "human:bruce".into(),
+                    protocol_context: ContextHeads {
+                        heads: vec![RevisionRef {
+                            revision_id: P_ID.into(),
+                            payload_sha256: P_HASH.into(),
+                        }],
+                    },
+                    authority_context: AuthorityContext {
+                        heads: vec![RevisionRef {
+                            revision_id: A_ID.into(),
+                            payload_sha256: A_HASH.into(),
+                        }],
+                        capability: "memory.claim.approve".into(),
+                    },
+                },
+                state: OperationState::Complete,
+                payload_sha256: "oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+                    .into(),
+            },
+        )
+    }
+
     fn repository(claims: Vec<Loaded<MemoryClaimRevision>>) -> RepositorySnapshot {
         RepositorySnapshot {
             mode: RepositoryMode::V2Active,
@@ -2073,6 +2946,7 @@ mod tests {
             }),
             protocols: vec![protocol()],
             authorities: vec![authority()],
+            context_registries: vec![],
             claims,
             operations: vec![],
             context_manifests: vec![],
@@ -2083,6 +2957,7 @@ mod tests {
     fn request(at: &str) -> SnapshotRequest {
         SnapshotRequest {
             as_of_valid_time: at.into(),
+            role: None,
             space: Some("global".into()),
             purpose: Some("information-answer".into()),
         }
@@ -2107,6 +2982,77 @@ mod tests {
         );
         assert!(snapshot.claims[0].projection_eligible);
         assert!(snapshot.action_allowed);
+    }
+
+    #[test]
+    fn registry_filters_by_exact_role_and_rejects_unknown_requests() {
+        let mut scoped = claim("c1", "claim-1", "2026-01-01T00:00:00Z", None, None);
+        scoped.value.context.roles = vec!["role:developer".into()];
+        let mut repo = repository(vec![scoped]);
+        repo.context_registries = vec![context_registry()];
+        assert_eq!(
+            context_registry_head(&repo).unwrap(),
+            Some(RevisionRef {
+                revision_id: R_ID.into(),
+                payload_sha256: R_HASH.into(),
+            })
+        );
+
+        let mut matching = request("2026-09-01T00:00:00Z");
+        matching.role = Some("role:developer".into());
+        let snapshot = reduce(&repo, &matching).unwrap();
+        assert!(snapshot.claims[0].context_eligible);
+
+        let mut another = matching.clone();
+        another.role = Some("role:consultant".into());
+        let snapshot = reduce(&repo, &another).unwrap();
+        assert!(!snapshot.claims[0].context_eligible);
+
+        let mut unresolved = matching.clone();
+        unresolved.role = None;
+        let snapshot = reduce(&repo, &unresolved).unwrap();
+        assert!(!snapshot.claims[0].context_eligible);
+
+        let mut unknown = matching;
+        unknown.role = Some("role:unknown".into());
+        let error = reduce(&repo, &unknown).unwrap_err();
+        assert_eq!(error.code, "MEMORY_CONTEXT_UNKNOWN");
+    }
+
+    #[test]
+    fn archived_claim_context_is_fail_closed() {
+        let mut scoped = claim("c1", "claim-1", "2026-01-01T00:00:00Z", None, None);
+        scoped.value.context.roles = vec!["role:developer".into()];
+        let mut registry = context_registry();
+        registry.value.roles[1].status = ContextRegistryEntryStatus::Archived;
+        let mut repo = repository(vec![scoped]);
+        repo.context_registries = vec![registry];
+
+        let snapshot = reduce(&repo, &request("2026-09-01T00:00:00Z")).unwrap();
+        assert!(!snapshot.claims[0].projection_eligible);
+        assert!(!snapshot.claims[0].context_eligible);
+        assert!(snapshot.claims[0].text.is_none());
+
+        let mut archived_request = request("2026-09-01T00:00:00Z");
+        archived_request.role = Some("role:developer".into());
+        let error = reduce(&repo, &archived_request).unwrap_err();
+        assert_eq!(error.code, "MEMORY_CONTEXT_UNKNOWN");
+    }
+
+    #[test]
+    fn registry_requires_one_current_head() {
+        let first = context_registry();
+        let mut second = context_registry();
+        second.value.revision_id = "01900000-0000-7000-8000-000000000004".into();
+        second.value.request_id = "test/context-registry-2".into();
+        second.value.payload_sha256 =
+            "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss".into();
+        second.raw_sha256 =
+            "4444444444444444444444444444444444444444444444444444444444444444".into();
+        let mut repo = repository(vec![]);
+        repo.context_registries = vec![first, second];
+        let error = reduce(&repo, &request("2026-09-01T00:00:00Z")).unwrap_err();
+        assert_eq!(error.code, "MEMORY_CONTEXT_REGISTRY_CONFLICT");
     }
 
     #[test]
@@ -2312,6 +3258,100 @@ mod tests {
         .unwrap();
         assert_eq!(snapshot.claims[0].current_heads[0].revision_id, "c1");
         assert!(snapshot.diagnostics[0].contains("MEMORY_PARTIAL_OPERATION"));
+    }
+
+    #[test]
+    fn complete_reassign_operation_activates_all_declared_children() {
+        let mut base = claim("c1", "claim-1", "2026-01-01T00:00:00Z", None, None);
+        base.value.context.roles = vec!["role:developer".into()];
+        let mut result = child(
+            base.clone(),
+            "c2",
+            &[&base],
+            ClaimOperation::ChangeContextConsent,
+        );
+        result.value.context.roles = vec!["role:consultant".into()];
+        result.value.lineage.produced_by_operation = Some("operation:reassign-1".into());
+        result.value.lineage.produced_by_run = Some("run:reassign-1".into());
+        let operation = reassign_operation(&base, &result);
+        let mut repo = repository(vec![base, result]);
+        repo.context_registries = vec![context_registry()];
+        repo.operations = vec![operation];
+        let mut selected = request("2026-09-01T00:00:00Z");
+        selected.role = Some("role:consultant".into());
+
+        let snapshot = reduce(&repo, &selected).unwrap();
+        assert_eq!(snapshot.claims[0].current_heads[0].revision_id, "c2");
+        assert!(snapshot.claims[0].context_eligible);
+        assert!(snapshot.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn partial_reassign_operation_does_not_activate_present_children() {
+        let mut first = claim("c1", "claim-1", "2026-01-01T00:00:00Z", None, None);
+        first.value.context.roles = vec!["role:developer".into()];
+        let mut first_result = child(
+            first.clone(),
+            "c2",
+            &[&first],
+            ClaimOperation::ChangeContextConsent,
+        );
+        first_result.value.context.roles = vec!["role:consultant".into()];
+        first_result.value.lineage.produced_by_operation = Some("operation:reassign-1".into());
+        first_result.value.lineage.produced_by_run = Some("run:reassign-1".into());
+
+        let mut second = claim("d1", "claim-2", "2026-01-01T00:00:00Z", None, None);
+        second.value.context.roles = vec!["role:developer".into()];
+        let mut missing_result = child(
+            second.clone(),
+            "d2",
+            &[&second],
+            ClaimOperation::ChangeContextConsent,
+        );
+        missing_result.value.context.roles = vec!["role:consultant".into()];
+        missing_result.value.lineage.produced_by_operation = Some("operation:reassign-1".into());
+        missing_result.value.lineage.produced_by_run = Some("run:reassign-1".into());
+
+        let mut operation = reassign_operation(&first, &first_result);
+        operation.value.causal_context.parents.push(RecordRef {
+            record_id: second.value.revision_id.clone(),
+            raw_sha256: second.raw_sha256.clone(),
+        });
+        operation
+            .value
+            .reassign_context
+            .as_mut()
+            .unwrap()
+            .changes
+            .push(ContextReassignment {
+                claim_id: second.value.claim_id.clone(),
+                base_head: RevisionRef {
+                    revision_id: second.value.revision_id.clone(),
+                    payload_sha256: second.value.payload_sha256.clone(),
+                },
+                result: OperationRevisionRef {
+                    claim_id: missing_result.value.claim_id.clone(),
+                    revision_id: missing_result.value.revision_id.clone(),
+                    payload_sha256: missing_result.value.payload_sha256.clone(),
+                },
+                from_context: second.value.context.clone(),
+                to_context: missing_result.value.context.clone(),
+            });
+        let mut repo = repository(vec![first, first_result, second]);
+        repo.context_registries = vec![context_registry()];
+        repo.operations = vec![operation];
+
+        let snapshot = reduce(&repo, &request("2026-09-01T00:00:00Z")).unwrap();
+        let first = snapshot
+            .claims
+            .iter()
+            .find(|claim| claim.claim_id == "claim-1")
+            .unwrap();
+        assert_eq!(first.current_heads[0].revision_id, "c1");
+        assert!(snapshot
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("MEMORY_PARTIAL_OPERATION")));
     }
 
     #[test]

@@ -139,6 +139,82 @@ pub struct AuthorityRevision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContextRegistryEntryStatus {
+    Active,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScopeKind {
+    Realm,
+    Space,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleDefinition {
+    pub role_id: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    pub status: ContextRegistryEntryStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect_to: Option<String>,
+    pub agent_use: AgentUse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScopeDefinition {
+    pub scope_id: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    pub status: ContextRegistryEntryStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect_to: Option<String>,
+    pub kind: ScopeKind,
+    pub domain: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_scope_id: Option<String>,
+    pub agent_use: AgentUse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextRegistryDecision {
+    pub verdict: Verdict,
+    pub actor_id: String,
+    pub protocol_context: ContextHeads,
+    pub authority_context: AuthorityContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextRegistryRevision {
+    pub schema: String,
+    pub revision_id: String,
+    pub request_id: String,
+    #[serde(default)]
+    pub base_heads: Vec<RevisionRef>,
+    #[serde(default)]
+    pub causal_context: CausalContext,
+    #[serde(default)]
+    pub roles: Vec<RoleDefinition>,
+    #[serde(default)]
+    pub scopes: Vec<ScopeDefinition>,
+    pub decision: ContextRegistryDecision,
+    pub transition: ControlTransition,
+    pub payload_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClaimKind {
     Identity,
@@ -562,6 +638,8 @@ pub enum Sensitivity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimContext {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
     #[serde(default)]
     pub spaces: Vec<String>,
     #[serde(default)]
@@ -831,6 +909,8 @@ pub struct AuthorityView {
 #[serde(deny_unknown_fields)]
 pub struct SnapshotRequest {
     pub as_of_valid_time: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     pub space: Option<String>,
     pub purpose: Option<String>,
 }
@@ -839,6 +919,8 @@ pub struct SnapshotRequest {
 #[serde(deny_unknown_fields)]
 pub struct ContextRequest {
     pub space: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     pub purpose: String,
     pub caller: String,
     pub provider: String,
@@ -883,6 +965,8 @@ pub enum GestureIntent {
     SetSalience,
     Resolve,
     ResetAll,
+    ReplaceContextRegistry,
+    ApplyReassignment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -948,12 +1032,48 @@ pub struct MergeInputs {
     pub sources: Vec<MergeParticipant>,
 }
 
+impl Default for MergeInputs {
+    fn default() -> Self {
+        Self {
+            target: MergeParticipant {
+                claim_id: String::new(),
+                base_heads: Vec::new(),
+            },
+            sources: Vec::new(),
+        }
+    }
+}
+
+impl MergeInputs {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.target.claim_id.is_empty()
+            && self.target.base_heads.is_empty()
+            && self.sources.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperationRevisionRef {
     pub claim_id: String,
     pub revision_id: String,
     pub payload_sha256: String,
+}
+
+impl Default for OperationRevisionRef {
+    fn default() -> Self {
+        Self {
+            claim_id: String::new(),
+            revision_id: String::new(),
+            payload_sha256: String::new(),
+        }
+    }
+}
+
+impl OperationRevisionRef {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.claim_id.is_empty() && self.revision_id.is_empty() && self.payload_sha256.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -966,10 +1086,30 @@ pub struct MergeEffect {
     pub merged_into: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextReassignment {
+    pub claim_id: String,
+    pub base_head: RevisionRef,
+    pub result: OperationRevisionRef,
+    pub from_context: ClaimContext,
+    pub to_context: ClaimContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReassignContextInputs {
+    pub registry_head: RevisionRef,
+    pub preview_sha256: String,
+    #[serde(default)]
+    pub changes: Vec<ContextReassignment>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OperationKind {
     MergeClaims,
+    ReassignContext,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -996,10 +1136,14 @@ pub struct MemoryOperation {
     pub run_id: String,
     #[serde(default)]
     pub causal_context: CausalContext,
+    #[serde(default, skip_serializing_if = "MergeInputs::is_empty")]
     pub merge_inputs: MergeInputs,
+    #[serde(default, skip_serializing_if = "OperationRevisionRef::is_empty")]
     pub result: OperationRevisionRef,
     #[serde(default)]
     pub effects: Vec<MergeEffect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reassign_context: Option<ReassignContextInputs>,
     #[serde(default)]
     pub lineage: Vec<LineageRef>,
     pub decision: OperationDecision,

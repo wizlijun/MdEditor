@@ -139,17 +139,20 @@ impl RepositoryWriter {
         self.publish_claim_unlocked(value)
     }
 
+    pub fn publish_context_registry(
+        &self,
+        value: ContextRegistryRevision,
+    ) -> Result<Published<ContextRegistryRevision>, WriterError> {
+        let _guard = self.lock()?;
+        self.publish_context_registry_unlocked(value)
+    }
+
     pub fn publish_operation(
         &self,
         value: MemoryOperation,
     ) -> Result<Published<MemoryOperation>, WriterError> {
         let _guard = self.lock()?;
-        publish(
-            &self.tmp_dir(),
-            &self.root.join(".notemd/memory/operations"),
-            &value.operation_id.clone(),
-            value,
-        )
+        self.publish_operation_unlocked(value)
     }
 
     pub fn publish_context_manifest(
@@ -172,6 +175,30 @@ impl RepositoryWriter {
             .join(&value.claim_id)
             .join("revisions");
         publish(&self.tmp_dir(), &dir, &value.revision_id.clone(), value)
+    }
+
+    fn publish_context_registry_unlocked(
+        &self,
+        value: ContextRegistryRevision,
+    ) -> Result<Published<ContextRegistryRevision>, WriterError> {
+        publish(
+            &self.tmp_dir(),
+            &self.root.join(".notemd/memory/context-registry-revisions"),
+            &value.revision_id.clone(),
+            value,
+        )
+    }
+
+    fn publish_operation_unlocked(
+        &self,
+        value: MemoryOperation,
+    ) -> Result<Published<MemoryOperation>, WriterError> {
+        publish(
+            &self.tmp_dir(),
+            &self.root.join(".notemd/memory/operations"),
+            &value.operation_id.clone(),
+            value,
+        )
     }
 
     fn publish_context_manifest_unlocked(
@@ -256,6 +283,20 @@ impl RepositoryTransaction<'_> {
         value: MemoryClaimRevision,
     ) -> Result<Published<MemoryClaimRevision>, WriterError> {
         self.writer.publish_claim_unlocked(value)
+    }
+
+    pub fn publish_context_registry(
+        &self,
+        value: ContextRegistryRevision,
+    ) -> Result<Published<ContextRegistryRevision>, WriterError> {
+        self.writer.publish_context_registry_unlocked(value)
+    }
+
+    pub fn publish_operation(
+        &self,
+        value: MemoryOperation,
+    ) -> Result<Published<MemoryOperation>, WriterError> {
+        self.writer.publish_operation_unlocked(value)
     }
 
     pub fn publish_context_manifest(
@@ -457,6 +498,31 @@ mod tests {
         }
     }
 
+    fn context_registry() -> ContextRegistryRevision {
+        ContextRegistryRevision {
+            schema: "notemd.memory/context-registry-revision/v2".into(),
+            revision_id: "01900000-0000-7000-8000-000000000003".into(),
+            request_id: "test/context-registry".into(),
+            base_heads: vec![],
+            causal_context: CausalContext::default(),
+            roles: vec![],
+            scopes: vec![],
+            decision: ContextRegistryDecision {
+                verdict: Verdict::Approve,
+                actor_id: "human:bruce".into(),
+                protocol_context: ContextHeads { heads: vec![] },
+                authority_context: AuthorityContext {
+                    heads: vec![],
+                    capability: "memory.claim.approve".into(),
+                },
+            },
+            transition: ControlTransition {
+                operation: ControlOperation::Initialize,
+            },
+            payload_sha256: String::new(),
+        }
+    }
+
     #[test]
     fn bootstrap_is_activation_last_and_loads_as_v2_active() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -487,6 +553,31 @@ mod tests {
         let mut changed = protocol();
         changed.renderer_version = "different".into();
         let error = writer.publish_protocol(changed).unwrap_err();
+        assert_eq!(error.code, "MEMORY_TAMPERED_ASSET");
+    }
+
+    #[test]
+    fn context_registry_revision_uses_immutable_revision_storage() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = RepositoryWriter::new(dir.path());
+        writer
+            .initialize("vault:test".into(), protocol(), authority())
+            .unwrap();
+        let published = writer.publish_context_registry(context_registry()).unwrap();
+        assert!(published
+            .path
+            .starts_with(dir.path().join(".notemd/memory/context-registry-revisions")));
+        let snapshot = super::super::repository::V2Repository::new(dir.path())
+            .load()
+            .unwrap();
+        assert_eq!(snapshot.context_registries.len(), 1);
+        assert_eq!(
+            snapshot.context_registries[0].value.revision_id,
+            published.value.revision_id
+        );
+        let mut changed = context_registry();
+        changed.request_id = "test/context-registry-changed".into();
+        let error = writer.publish_context_registry(changed).unwrap_err();
         assert_eq!(error.code, "MEMORY_TAMPERED_ASSET");
     }
 

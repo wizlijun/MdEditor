@@ -41,7 +41,10 @@ pub fn parse_args(rest: &[String], json_global: bool) -> MemoryArgs {
         let token = &rest[i];
         if token == "--json" {
             out.json = true;
-        } else if matches!(token.as_str(), "--all" | "--external-transfer") {
+        } else if matches!(
+            token.as_str(),
+            "--all" | "--external-transfer" | "--yes" | "--force"
+        ) {
             let name = token.trim_start_matches("--").to_string();
             if !out.bools.insert(name.clone()) {
                 out.errors
@@ -81,7 +84,9 @@ const ACTIONS: &[&str] = &[
     "conflicts",
     "propose",
     "context",
+    "context-registry",
     "context-manifest",
+    "reassign",
     "check",
     "doctor",
     "rebuild",
@@ -190,12 +195,13 @@ fn validate_args(args: &MemoryArgs) -> Result<(), String> {
                 args,
                 0,
                 0,
-                "context --space SPACE --purpose PURPOSE --caller CALLER",
+                "context [--role ROLE] --space SPACE --purpose PURPOSE --caller CALLER",
             )?;
             validate_allowed_flags(
                 args,
                 &[
                     "vault",
+                    "role",
                     "space",
                     "purpose",
                     "caller",
@@ -224,6 +230,97 @@ fn validate_args(args: &MemoryArgs) -> Result<(), String> {
                     .map_err(|error| format!("invalid --as-of RFC3339 time: {error}"))?;
             }
         }
+        "context-registry" => {
+            validate_positionals(args, 1, 1, "context-registry <show|validate> [--file FILE]")?;
+            match args.positionals[0].as_str() {
+                "show" => validate_allowed_flags(args, &["vault"]),
+                "validate" => {
+                    validate_allowed_flags(args, &["vault", "file"])?;
+                    required_flag(args, "file")?;
+                    Ok(())
+                }
+                operation => Err(format!(
+                    "invalid context-registry operation: {operation}; expected show or validate"
+                )),
+            }?;
+        }
+        "reassign" => {
+            validate_positionals(
+                args,
+                1,
+                1,
+                "reassign <plan|propose> [selector flags] <replacement flags>",
+            )?;
+            let operation = reassign_operation(args)?;
+            if args.bools.contains("yes") || args.bools.contains("force") {
+                return Err(
+                    "MEMORY_UNAUTHORIZED: reassign supports plan/propose only; confirmation and force flags are forbidden"
+                        .into(),
+                );
+            }
+            validate_allowed_flags(
+                args,
+                &[
+                    "vault",
+                    "claim",
+                    "where-role",
+                    "where-space",
+                    "set-role",
+                    "set-space",
+                    "as-of",
+                    "request-id",
+                    "recorded-by",
+                    "all",
+                ],
+            )?;
+            if !args.flags.contains_key("set-role") && !args.flags.contains_key("set-space") {
+                return Err("at least one of --set-role or --set-space is required".into());
+            }
+            for name in [
+                "claim",
+                "where-role",
+                "where-space",
+                "set-role",
+                "set-space",
+            ] {
+                if args.flags.contains_key(name) {
+                    csv_flag(args, name)?;
+                }
+            }
+            let has_selector = ["claim", "where-role", "where-space"]
+                .iter()
+                .any(|name| args.flags.contains_key(*name));
+            if args.bools.contains("all") && has_selector {
+                return Err("--all conflicts with --claim, --where-role, and --where-space".into());
+            }
+            if !args.bools.contains("all") && !has_selector {
+                return Err(
+                    "reassigning all current Claims requires an explicit --all selector".into(),
+                );
+            }
+            if let Some(as_of) = args.flags.get("as-of") {
+                chrono::DateTime::parse_from_rfc3339(as_of)
+                    .map_err(|error| format!("invalid --as-of RFC3339 time: {error}"))?;
+            }
+            match operation {
+                "plan" => {
+                    if args.flags.contains_key("request-id")
+                        || args.flags.contains_key("recorded-by")
+                    {
+                        return Err(
+                            "--request-id and --recorded-by are only valid for reassign propose"
+                                .into(),
+                        );
+                    }
+                }
+                "propose" => {
+                    for name in ["request-id", "recorded-by"] {
+                        required_flag(args, name)?;
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
         "propose" => {
             validate_positionals(args, 1, 1, "propose <create|replace|revoke> [claim flags]")?;
             let operation = v2_propose_operation(args)?;
@@ -234,6 +331,7 @@ fn validate_args(args: &MemoryArgs) -> Result<(), String> {
                     "claim-kind",
                     "scope",
                     "category",
+                    "role",
                     "space",
                     "purpose",
                     "provider-policy",
@@ -363,6 +461,293 @@ fn v2_snapshot(root: &std::path::Path) -> Result<serde_json::Value, String> {
     )
 }
 
+fn context_registry_snapshot(root: &Path) -> Result<Value, String> {
+    memory_control::dispatch(root, "host.memory.v2.contextRegistry", &json!({}))
+}
+
+fn is_revision_ref(value: &Value) -> bool {
+    value
+        .get("revision_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        && value
+            .get("payload_sha256")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+/// Prefer the Context Registry v1 wire (`protocol` plus `registry_heads`), but
+/// accept the existing reducer view where protocol/authority wrap their heads.
+/// Values are deliberately passed through as RevisionRef JSON rather than
+/// reconstructed, so the Host remains the authority for the exact wire.
+fn context_registry_guards(snapshot: &Value) -> Result<(Value, Value), String> {
+    let protocol = snapshot
+        .get("protocol")
+        .filter(|value| is_revision_ref(value))
+        .cloned()
+        .or_else(|| snapshot.pointer("/protocol/head").cloned())
+        .or_else(|| {
+            let heads = snapshot.pointer("/protocol/heads")?.as_array()?;
+            (heads.len() == 1).then(|| heads[0].clone())
+        })
+        .filter(is_revision_ref)
+        .ok_or("MEMORY_PROTOCOL_INCOMPLETE: context Registry has no unique protocol RevisionRef")?;
+
+    let registry_heads = snapshot
+        .get("registry_heads")
+        .or_else(|| snapshot.pointer("/registry/heads"))
+        // Compatibility for the first registry foundation, where registry
+        // authority was exposed using the reducer's existing heads shape.
+        .or_else(|| snapshot.pointer("/authority/heads"))
+        .cloned()
+        .ok_or("MEMORY_REGISTRY_CONFLICT: context Registry heads are missing")?;
+    let heads = registry_heads
+        .as_array()
+        .ok_or("MEMORY_REGISTRY_CONFLICT: context Registry heads must be an array")?;
+    if heads.iter().any(|head| !is_revision_ref(head)) {
+        return Err("MEMORY_REGISTRY_CONFLICT: context Registry requires RevisionRef heads".into());
+    }
+    Ok((protocol, registry_heads))
+}
+
+fn read_registry_candidate(path: &Path) -> Result<Value, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("MEMORY_IO: {}: {error}", path.display()))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "MEMORY_INVALID_REQUEST: {} must be a regular JSON or YAML file",
+            path.display()
+        ));
+    }
+    if metadata.len() > 4 * 1024 * 1024 {
+        return Err(format!(
+            "MEMORY_INVALID_REQUEST: {} exceeds the 4 MiB Registry validation limit",
+            path.display()
+        ));
+    }
+    let raw = fs::read_to_string(path)
+        .map_err(|error| format!("MEMORY_IO: {}: {error}", path.display()))?;
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(value) => Ok(value),
+        Err(json_error) => serde_yaml::from_str::<Value>(&raw).map_err(|yaml_error| {
+            format!(
+                "MEMORY_INVALID_REQUEST: {} is neither valid JSON ({json_error}) nor YAML ({yaml_error})",
+                path.display()
+            )
+        }),
+    }
+}
+
+/// Fallback used only when an older Host does not expose
+/// `contextRegistryValidate`. It intentionally accepts the narrow foundation
+/// candidate shape and rejects unknown fields rather than guessing semantics.
+fn local_context_registry_validation(candidate: &Value) -> Value {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RoleCandidate {
+        id: String,
+        label: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        aliases: Vec<String>,
+        status: memory_v2::ContextRegistryEntryStatus,
+        #[serde(default)]
+        guidance: String,
+        #[serde(default)]
+        avoid_error: String,
+        #[serde(default)]
+        redirect_to: Option<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ScopeCandidate {
+        id: String,
+        label: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        aliases: Vec<String>,
+        status: memory_v2::ContextRegistryEntryStatus,
+        kind: memory_v2::ScopeKind,
+        security_domain: String,
+        #[serde(default)]
+        parent_id: Option<String>,
+        #[serde(default)]
+        redirect_to: Option<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Candidate {
+        #[serde(default)]
+        roles: Vec<RoleCandidate>,
+        #[serde(default)]
+        scopes: Vec<ScopeCandidate>,
+    }
+
+    let parsed: Candidate = match serde_json::from_value(candidate.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return json!({
+                "valid": false,
+                "errors": [format!("registry candidate shape is invalid: {error}")],
+                "warnings": []
+            });
+        }
+    };
+    let mut errors = Vec::new();
+    let mut role_ids = BTreeSet::new();
+    for (index, role) in parsed.roles.iter().enumerate() {
+        if !role.id.starts_with("role:") {
+            errors.push(format!("registry.roles[{index}].id must start with role:"));
+        }
+        if role.id.trim().is_empty() || !role_ids.insert(role.id.as_str()) {
+            errors.push(format!("duplicate or empty role id: {}", role.id));
+        }
+        if role.label.trim().is_empty() {
+            errors.push(format!("registry.roles[{index}].label must not be empty"));
+        }
+        if role.aliases.iter().any(|alias| alias.trim().is_empty()) {
+            errors.push(format!(
+                "registry.roles[{index}].aliases must not contain empty values"
+            ));
+        }
+        if role.status == memory_v2::ContextRegistryEntryStatus::Active
+            && role.redirect_to.is_some()
+        {
+            errors.push(format!("active role {} cannot redirect", role.id));
+        }
+        let _ = (&role.description, &role.guidance, &role.avoid_error);
+    }
+    if !parsed
+        .roles
+        .iter()
+        .any(|role| role.status == memory_v2::ContextRegistryEntryStatus::Active)
+    {
+        errors.push("at least one active role is required".into());
+    }
+    let mut scope_ids = BTreeSet::new();
+    for (index, scope) in parsed.scopes.iter().enumerate() {
+        if !matches!(
+            scope.id.split_once(':'),
+            Some(("scope" | "space" | "realm", suffix)) if !suffix.is_empty()
+        ) {
+            errors.push(format!(
+                "registry.scopes[{index}].id must start with scope:, space:, or realm:"
+            ));
+        }
+        if scope.id.trim().is_empty() || !scope_ids.insert(scope.id.as_str()) {
+            errors.push(format!("duplicate or empty scope id: {}", scope.id));
+        }
+        if scope.label.trim().is_empty() || scope.security_domain.trim().is_empty() {
+            errors.push(format!(
+                "registry.scopes[{index}] requires non-empty label and security_domain"
+            ));
+        }
+        if scope.aliases.iter().any(|alias| alias.trim().is_empty()) {
+            errors.push(format!(
+                "registry.scopes[{index}].aliases must not contain empty values"
+            ));
+        }
+        match (scope.kind, scope.parent_id.as_ref()) {
+            (memory_v2::ScopeKind::Realm, Some(_)) => {
+                errors.push(format!("realm {} cannot have a parent", scope.id))
+            }
+            (memory_v2::ScopeKind::Space, None) => {
+                errors.push(format!("space {} requires a parent", scope.id))
+            }
+            _ => {}
+        }
+        if scope.status == memory_v2::ContextRegistryEntryStatus::Active
+            && scope.redirect_to.is_some()
+        {
+            errors.push(format!("active scope {} cannot redirect", scope.id));
+        }
+        let _ = &scope.description;
+    }
+    if !parsed
+        .scopes
+        .iter()
+        .any(|scope| scope.status == memory_v2::ContextRegistryEntryStatus::Active)
+    {
+        errors.push("at least one active scope is required".into());
+    }
+    for scope in &parsed.scopes {
+        if let Some(parent_id) = scope.parent_id.as_deref() {
+            match parsed.scopes.iter().find(|parent| parent.id == parent_id) {
+                None => errors.push(format!("scope {} has unknown parent {parent_id}", scope.id)),
+                Some(parent) if parent.security_domain != scope.security_domain => {
+                    errors.push(format!("scope {} cannot cross security domains", scope.id))
+                }
+                Some(_) if parent_id == scope.id => {
+                    errors.push(format!("scope {} cannot parent itself", scope.id))
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    json!({"valid": errors.is_empty(), "errors": errors, "warnings": []})
+}
+
+fn host_method_is_missing(error: &str, method: &str) -> bool {
+    error.contains("unknown method") && error.contains(method)
+}
+
+fn context_registry_validate(root: &Path, candidate: &Value) -> Result<Value, String> {
+    let method = "host.memory.v2.contextRegistryValidate";
+    match memory_control::dispatch(root, method, &json!({"candidate": candidate})) {
+        Ok(value) => Ok(value),
+        Err(error) if host_method_is_missing(&error, method) => {
+            Ok(local_context_registry_validation(candidate))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn reassign_request(args: &MemoryArgs, registry: &Value) -> Result<Value, String> {
+    let (expected_protocol, expected_registry_heads) = context_registry_guards(registry)?;
+    let selector = json!({
+        "claim_ids": csv_flag(args, "claim")?.unwrap_or_default(),
+        "role_ids": csv_flag(args, "where-role")?.unwrap_or_default(),
+        "scope_ids": csv_flag(args, "where-space")?.unwrap_or_default(),
+        "all_current": args.bools.contains("all")
+    });
+    let mut replacement = serde_json::Map::new();
+    if let Some(role_ids) = csv_flag(args, "set-role")? {
+        replacement.insert("role_ids".into(), json!(role_ids));
+    }
+    if let Some(scope_ids) = csv_flag(args, "set-space")? {
+        replacement.insert("scope_ids".into(), json!(scope_ids));
+    }
+    let mut request = serde_json::Map::from_iter([
+        ("expected_protocol".into(), expected_protocol),
+        ("expected_registry_heads".into(), expected_registry_heads),
+        ("selector".into(), selector),
+        ("replacement".into(), Value::Object(replacement)),
+        (
+            "as_of_valid_time".into(),
+            json!(args
+                .flags
+                .get("as-of")
+                .cloned()
+                .unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true))),
+        ),
+    ]);
+    if reassign_operation(args)? == "propose" {
+        request.insert(
+            "request_id".into(),
+            json!(required_flag(args, "request-id")?),
+        );
+        request.insert(
+            "recorded_by".into(),
+            json!(required_flag(args, "recorded-by")?),
+        );
+    }
+    Ok(Value::Object(request))
+}
+
 fn parse_v2_enum<T: serde::de::DeserializeOwned>(value: &str, name: &str) -> Result<T, String> {
     serde_json::from_value(json!(value)).map_err(|_| format!("invalid {name}: {value}"))
 }
@@ -388,6 +773,41 @@ fn required_list(args: &MemoryArgs, name: &str) -> Result<Vec<String>, String> {
         return Err(format!("--{name} must not be empty"));
     }
     Ok(values)
+}
+
+/// Parse a CLI CSV into a canonical list. Reassignment plans are hashed by the
+/// Host, so equivalent argv must not differ only because an Agent reordered or
+/// repeated ids.
+fn csv_flag(args: &MemoryArgs, name: &str) -> Result<Option<Vec<String>>, String> {
+    let Some(raw) = args.flags.get(name) else {
+        return Ok(None);
+    };
+    let mut values = BTreeSet::new();
+    for value in raw.split(',') {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(format!("--{name} contains an empty CSV item"));
+        }
+        values.insert(value.to_string());
+    }
+    if values.is_empty() {
+        return Err(format!("--{name} must not be empty"));
+    }
+    Ok(Some(values.into_iter().collect()))
+}
+
+fn reassign_operation(args: &MemoryArgs) -> Result<&str, String> {
+    match args.positionals.first().map(String::as_str) {
+        Some(operation @ ("plan" | "propose")) => Ok(operation),
+        Some("apply") => Err(
+            "MEMORY_UNAUTHORIZED: reassign apply is not available to Agents; use plan or propose"
+                .into(),
+        ),
+        Some(operation) => Err(format!(
+            "invalid reassign operation: {operation}; expected plan or propose"
+        )),
+        None => Err("usage: notemd memory reassign <plan|propose> [flags]".into()),
+    }
 }
 
 fn v2_propose_operation(args: &MemoryArgs) -> Result<&str, String> {
@@ -525,6 +945,7 @@ fn current_v2(
         &repository,
         &memory_v2::SnapshotRequest {
             as_of_valid_time: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -664,6 +1085,11 @@ fn v2_propose(args: &MemoryArgs, root: &std::path::Path) -> Result<(), String> {
     let context = match existing.as_ref() {
         Some(claim) => claim.context.clone(),
         None => memory_v2::ClaimContext {
+            roles: vec![args
+                .flags
+                .get("role")
+                .cloned()
+                .unwrap_or_else(|| "role:unclassified".into())],
             spaces: vec![required_flag(args, "space")?.to_string()],
             applies_when: vec![],
             excludes_when: vec![],
@@ -1145,10 +1571,7 @@ fn purge_plan(root: &Path, claim_id: &str) -> Result<Value, String> {
         .claims
         .iter()
         .filter(|item| revision_ids.contains(&item.value.revision_id))
-        .map(|item| match item.value.projection.target {
-            memory_v2::ProjectionTarget::User => "USER.md",
-            memory_v2::ProjectionTarget::Memory => "MEMORY.md",
-        })
+        .map(|_| "MEMORY.md")
         .collect::<BTreeSet<_>>();
 
     let mut needles = claim_ids
@@ -1332,7 +1755,7 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
         "propose" => v2_propose(args, root).map(|_| ExitCode::SUCCESS),
         "context" => {
             let request = json!({
-                "space": required_flag(args, "space")?, "purpose": required_flag(args, "purpose")?,
+                "space": required_flag(args, "space")?, "role": args.flags.get("role"), "purpose": required_flag(args, "purpose")?,
                 "caller": required_flag(args, "caller")?,
                 "provider": args.flags.get("provider").map(String::as_str).unwrap_or("local"),
                 "model": args.flags.get("model").map(String::as_str).unwrap_or("local"),
@@ -1341,6 +1764,48 @@ fn run_v2(args: &MemoryArgs, root: &std::path::Path) -> Result<ExitCode, String>
                 "as_of_valid_time": args.flags.get("as-of").cloned().unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true))
             });
             let value = memory_control::dispatch(root, "host.memory.v2.context", &request)?;
+            print_json_or_text(
+                args,
+                value.clone(),
+                serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "context-registry" => match args.positionals[0].as_str() {
+            "show" => {
+                let value = context_registry_snapshot(root)?;
+                print_json_or_text(
+                    args,
+                    value.clone(),
+                    serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+                );
+                Ok(ExitCode::SUCCESS)
+            }
+            "validate" => {
+                let path = PathBuf::from(required_flag(args, "file")?);
+                let candidate = read_registry_candidate(&path)?;
+                let value = context_registry_validate(root, &candidate)?;
+                let valid = value.get("valid").and_then(Value::as_bool).ok_or(
+                    "MEMORY_INVALID_REQUEST: Registry validator response is missing valid",
+                )?;
+                print_json_or_text(
+                    args,
+                    value.clone(),
+                    serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+                );
+                Ok(ExitCode::from(if valid { 0 } else { 1 }))
+            }
+            _ => unreachable!(),
+        },
+        "reassign" => {
+            let registry = context_registry_snapshot(root)?;
+            let request = reassign_request(args, &registry)?;
+            let method = match reassign_operation(args)? {
+                "plan" => "host.memory.v2.reassignPreview",
+                "propose" => "host.memory.v2.reassignPropose",
+                _ => unreachable!(),
+            };
+            let value = memory_control::dispatch(root, method, &request)?;
             print_json_or_text(
                 args,
                 value.clone(),
@@ -1523,6 +1988,311 @@ mod tests {
         );
         assert!(args.bools.contains("external-transfer"));
         assert_eq!(args.flags.get("space").map(String::as_str), Some("work"));
+    }
+
+    #[test]
+    fn reassign_csv_is_sorted_deduplicated_and_strict() {
+        let args = parse_args(
+            &[
+                "reassign",
+                "plan",
+                "--claim",
+                "claim:b,claim:a,claim:b",
+                "--set-role",
+                "role:z,role:a",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        assert_eq!(
+            csv_flag(&args, "claim").unwrap().unwrap(),
+            vec!["claim:a", "claim:b"]
+        );
+        assert_eq!(
+            csv_flag(&args, "set-role").unwrap().unwrap(),
+            vec!["role:a", "role:z"]
+        );
+
+        let empty = parse_args(
+            &["reassign", "plan", "--claim", "claim:a,,claim:b"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(csv_flag(&empty, "claim")
+            .unwrap_err()
+            .contains("empty CSV item"));
+    }
+
+    #[test]
+    fn context_registry_and_reassign_contracts_are_fail_closed() {
+        let show = parse_args(
+            &["context-registry", "show"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&show).is_ok());
+
+        let validate = parse_args(
+            &["context-registry", "validate", "--file", "registry.yaml"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&validate).is_ok());
+
+        let no_replacement = parse_args(
+            &["reassign", "plan", "--all"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&no_replacement)
+            .unwrap_err()
+            .contains("--set-role or --set-space"));
+
+        let implicit_all = parse_args(
+            &["reassign", "plan", "--set-role", "role:developer"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&implicit_all)
+            .unwrap_err()
+            .contains("explicit --all"));
+
+        let conflicting_all = parse_args(
+            &[
+                "reassign",
+                "plan",
+                "--all",
+                "--claim",
+                "claim:a",
+                "--set-role",
+                "role:developer",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        assert!(validate_args(&conflicting_all)
+            .unwrap_err()
+            .contains("--all conflicts"));
+    }
+
+    #[test]
+    fn reassign_rejects_apply_yes_and_force() {
+        for argv in [
+            vec!["reassign", "apply", "--all", "--set-role", "role:developer"],
+            vec![
+                "reassign",
+                "plan",
+                "--all",
+                "--set-role",
+                "role:developer",
+                "--yes",
+            ],
+            vec![
+                "reassign",
+                "propose",
+                "--all",
+                "--set-role",
+                "role:developer",
+                "--force",
+            ],
+        ] {
+            let args = parse_args(
+                &argv.into_iter().map(str::to_string).collect::<Vec<_>>(),
+                false,
+            );
+            assert!(validate_args(&args)
+                .unwrap_err()
+                .contains("MEMORY_UNAUTHORIZED"));
+        }
+    }
+
+    #[test]
+    fn reassign_request_uses_registry_guards_and_stable_wire() {
+        let args = parse_args(
+            &[
+                "reassign",
+                "plan",
+                "--claim",
+                "claim:b,claim:a",
+                "--where-role",
+                "role:consultant",
+                "--set-space",
+                "space:client-a/project-alpha",
+                "--as-of",
+                "2026-09-03T00:00:00Z",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        validate_args(&args).unwrap();
+        let registry = json!({
+            "protocol": {"revision_id": "protocol:1", "payload_sha256": "sha-protocol"},
+            "registry_heads": [
+                {"revision_id": "registry:1", "payload_sha256": "sha-registry"}
+            ],
+            "roles": [],
+            "scopes": [],
+            "writable": true
+        });
+        assert_eq!(
+            reassign_request(&args, &registry).unwrap(),
+            json!({
+                "expected_protocol": {
+                    "revision_id": "protocol:1", "payload_sha256": "sha-protocol"
+                },
+                "expected_registry_heads": [
+                    {"revision_id": "registry:1", "payload_sha256": "sha-registry"}
+                ],
+                "selector": {
+                    "claim_ids": ["claim:a", "claim:b"],
+                    "role_ids": ["role:consultant"],
+                    "scope_ids": [],
+                    "all_current": false
+                },
+                "replacement": {
+                    "scope_ids": ["space:client-a/project-alpha"]
+                },
+                "as_of_valid_time": "2026-09-03T00:00:00Z"
+            })
+        );
+
+        let legacy = json!({
+            "protocol": {"heads": [
+                {"revision_id": "protocol:1", "payload_sha256": "sha-protocol"}
+            ]},
+            "authority": {"heads": [
+                {"revision_id": "registry:1", "payload_sha256": "sha-registry"}
+            ]}
+        });
+        assert!(context_registry_guards(&legacy).is_ok());
+    }
+
+    #[test]
+    fn reassign_propose_requires_and_forwards_agent_identity() {
+        let args = parse_args(
+            &[
+                "reassign",
+                "propose",
+                "--all",
+                "--set-role",
+                "role:developer",
+                "--request-id",
+                "memory-reassign/test",
+                "--recorded-by",
+                "agent:test",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        validate_args(&args).unwrap();
+        let registry = json!({
+            "protocol": {"revision_id": "p", "payload_sha256": "ph"},
+            "registry_heads": [{"revision_id": "r", "payload_sha256": "rh"}]
+        });
+        let request = reassign_request(&args, &registry).unwrap();
+        assert_eq!(request["request_id"], "memory-reassign/test");
+        assert_eq!(request["recorded_by"], "agent:test");
+        assert_eq!(request["selector"]["all_current"], true);
+        assert_eq!(request["replacement"]["role_ids"][0], "role:developer");
+    }
+
+    #[test]
+    fn context_registry_snapshot_drives_host_reassign_preview() {
+        let dir = tempfile::TempDir::new().unwrap();
+        initialize_v2(dir.path());
+        let registry = context_registry_snapshot(dir.path()).unwrap();
+        assert!(registry["protocol"].is_object());
+        assert!(registry["registry_heads"].is_array());
+
+        let args = parse_args(
+            &[
+                "reassign",
+                "plan",
+                "--all",
+                "--set-space",
+                "global",
+                "--as-of",
+                "2026-09-03T00:00:00Z",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            false,
+        );
+        validate_args(&args).unwrap();
+        let request = reassign_request(&args, &registry).unwrap();
+        let preview =
+            memory_control::dispatch(dir.path(), "host.memory.v2.reassignPreview", &request)
+                .unwrap();
+        assert!(preview["preview_sha256"].is_string());
+        assert_eq!(preview["summary"]["matched_count"], 0);
+    }
+
+    #[test]
+    fn local_registry_validation_is_strict() {
+        let valid = json!({
+            "roles": [{
+                "id": "role:developer",
+                "label": "Developer",
+                "aliases": ["dev"],
+                "status": "active",
+                "guidance": "Build",
+                "avoid_error": "Do not guess"
+            }],
+            "scopes": [{
+                "id": "realm:internal",
+                "label": "mdeditor",
+                "status": "active",
+                "kind": "realm",
+                "security_domain": "domain:internal"
+            }]
+        });
+        assert_eq!(local_context_registry_validation(&valid)["valid"], true);
+
+        let invalid = json!({
+            "roles": [
+                {"id": "developer", "label": "Developer", "status": "active"},
+                {"id": "developer", "label": "Duplicate", "status": "active"}
+            ],
+            "scopes": [],
+            "surprise": true
+        });
+        let result = local_context_registry_validation(&invalid);
+        assert_eq!(result["valid"], false);
+        assert!(!result["errors"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn registry_candidate_reader_accepts_json_and_yaml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let json_path = dir.path().join("registry.json");
+        let yaml_path = dir.path().join("registry.yaml");
+        let invalid_path = dir.path().join("invalid.yaml");
+        fs::write(&json_path, r#"{"roles":[],"scopes":[]}"#).unwrap();
+        fs::write(&yaml_path, "roles: []\nscopes: []\n").unwrap();
+        fs::write(&invalid_path, "roles: [\n").unwrap();
+
+        assert!(read_registry_candidate(&json_path).unwrap().is_object());
+        assert!(read_registry_candidate(&yaml_path).unwrap().is_object());
+        assert!(read_registry_candidate(&invalid_path).is_err());
     }
 
     #[test]
@@ -1749,6 +2519,7 @@ mod tests {
         v2_propose(&args, root).unwrap();
         let repository = memory_v2::V2Repository::new(root).load().unwrap();
         let claim = &repository.claims[0].value;
+        assert_eq!(claim.context.roles, vec!["role:unclassified"]);
         (claim.claim_id.clone(), claim.revision_id.clone())
     }
 
@@ -1771,7 +2542,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         initialize_v2(dir.path());
         let request = json!({
-            "space": "tests", "purpose": "testing", "caller": "agent:test",
+            "space": "global", "purpose": "testing", "caller": "agent:test",
             "provider": "local", "model": "local", "tools": [],
             "external_transfer": false,
             "as_of_valid_time": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)

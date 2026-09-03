@@ -6,11 +6,12 @@ wire/storage contract; they do not activate Memory v2 in a real Vault.
 ## Schemas and valid examples
 
 `schemas/` contains strict JSON Schema Draft 2020-12 documents for bootstrap,
-protocol revision, authority revision, and Claim revision records. Unknown
+protocol revision, authority revision, Context Registry revision, and Claim revision records. Unknown
 top-level and nested properties are rejected. The Claim schema models
 `kind_data` as a one-member tagged union and keeps subject, assertor, recorder,
 human decision, temporal semantics, epistemic state, risk, salience, consent,
-evidence, and lineage separate.
+evidence, and lineage separate. Claim `context.roles` is optional so existing v2
+payload hashes remain valid while new revisions can bind stable Role IDs.
 
 `valid/` and `canonical/claim-payload.yaml` are non-private synthetic examples.
 The SHA-256 stored in the Claim example matches its canonical semantic payload.

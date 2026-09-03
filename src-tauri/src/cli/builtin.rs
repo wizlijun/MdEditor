@@ -729,11 +729,15 @@ USAGE:
   notemd memory owner --json
   notemd memory pending [--json]
   notemd memory conflicts [--json]
-  notemd memory context --space <space> --purpose <purpose> --caller <caller> [context flags]
+  notemd memory context [--role <role>] --space <scope> --purpose <purpose> --caller <caller> [context flags]
+  notemd memory context-registry show [--json]
+  notemd memory context-registry validate --file <registry.json|yaml> [--json]
   notemd memory context-manifest <manifest-id> [--json]
 
 AGENT WRITE:
   notemd memory propose <create|replace|revoke> [claim flags]
+  notemd memory reassign plan [selector flags] <replacement flags>
+  notemd memory reassign propose [selector flags] <replacement flags>
 
 MAINTENANCE:
   notemd memory check [--json]
@@ -759,6 +763,7 @@ CLAIM FLAGS:
   --sensitivity <value>      normal|private; restricted plaintext is rejected
   --valid-from <RFC3339>     Claim valid time; never inferred from record time
   --valid-until <RFC3339>    Half-open upper bound
+  --role <role>              Stable Context Registry Role id (default: role:unclassified)
   --space <space>            Explicit context Space; never defaults to all Spaces
   --purpose <purposes>       Allowed retrieval purposes, comma-separated
   --provider-policy <policy> deny|prompt|allow for external model transfer
@@ -777,13 +782,32 @@ LIST FLAGS:
   --status <status>          current|pending|revoked|deleted|conflict|all
   --all                      Alias for --status all
 
+REASSIGN SELECTOR FLAGS:
+  --claim <ids>              Exact Claim ids, comma-separated
+  --where-role <ids>         Match current Role ids, comma-separated
+  --where-space <ids>        Match current Scope ids, comma-separated
+  --all                      Explicitly select all current Claims; conflicts with other selectors
+
+REASSIGN REPLACEMENT FLAGS:
+  --set-role <ids>           Proposed replacement Role ids, comma-separated
+  --set-space <ids>          Proposed replacement Scope ids, comma-separated
+  --as-of <RFC3339>          Valid-time view used to resolve current Claims
+  --request-id <stable-id>   Required only when submitting `reassign propose`
+  --recorded-by <agent>      Required only when submitting `reassign propose`
+
+REGISTRY FLAGS:
+  --file <JSON|YAML>         Candidate Registry document to validate locally and in Host
+
 NOTES:
-  USER.md and MEMORY.md are disposable plain-text projections, not databases.
-  Reading them authorizes informational answers only. External actions require
+  MEMORY.md is the sole disposable plain-text projection, grouped by Scope and
+  Role; it is not a database. Reading it authorizes no cross-context use.
+  External actions require
   a reducer-backed context decision with no action-sensitive conflict.
   Agents can only propose pending Claims. Human approve/reject/ignore/delete
   is available only through the trusted Memory UI; CLI flags cannot impersonate
   a human. Remembering a Claim does not prove it true or authorize behavior.
+  Reassignment is limited to plan and pending proposal; apply and force-style
+  confirmation are rejected. Selecting every current Claim requires explicit --all.
   Restricted plaintext is rejected. Delete creates a tombstone; Git history may
   retain old bytes.
 
@@ -2337,6 +2361,11 @@ mod tests {
             "--risk-class",
             "--space",
             "--provider",
+            "context-registry validate",
+            "reassign plan",
+            "--where-role",
+            "--set-space",
+            "explicit --all",
             "trusted Memory UI",
         ] {
             assert!(
@@ -2346,6 +2375,7 @@ mod tests {
         }
         assert!(!out.contains("--confirm-human-approved"));
         assert!(!out.contains("--approved-by"));
+        assert!(!out.contains("reassign apply"));
         // --target is the Claim id replace/revoke act on; create reads the
         // projection target from --scope. Documenting them the other way round
         // silently files every proposed Claim under MEMORY.md.

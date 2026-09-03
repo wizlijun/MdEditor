@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://notemd.example/schemas/memory/context-registry-revision-v2.json",
+  "title": "NoteMD Memory v2 Context Registry revision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "revision_id", "request_id", "base_heads", "causal_context", "roles", "scopes", "decision", "transition", "payload_sha256"],
+  "properties": {
+    "schema": { "const": "notemd.memory/context-registry-revision/v2" },
+    "revision_id": { "$ref": "#/$defs/id" },
+    "request_id": { "$ref": "#/$defs/id" },
+    "base_heads": { "type": "array", "items": { "$ref": "#/$defs/revisionRef" } },
+    "causal_context": { "$ref": "#/$defs/causalContext" },
+    "roles": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/role" } },
+    "scopes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/scope" } },
+    "decision": { "$ref": "#/$defs/decision" },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation"],
+      "properties": { "operation": { "enum": ["initialize", "replace", "resolve"] } }
+    },
+    "payload_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "stringSet": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "revisionRef": {
+      "type": "object", "additionalProperties": false, "required": ["revision_id", "payload_sha256"],
+      "properties": { "revision_id": { "$ref": "#/$defs/id" }, "payload_sha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "recordRef": {
+      "type": "object", "additionalProperties": false, "required": ["record_id", "raw_sha256"],
+      "properties": { "record_id": { "$ref": "#/$defs/id" }, "raw_sha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "causalContext": {
+      "type": "object", "additionalProperties": false, "required": ["parents"],
+      "properties": { "parents": { "type": "array", "items": { "$ref": "#/$defs/recordRef" } } }
+    },
+    "agentUse": {
+      "type": "object", "additionalProperties": false, "required": ["guidance", "avoid_error"],
+      "properties": { "guidance": { "type": "string" }, "avoid_error": { "type": "string" } }
+    },
+    "role": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role_id", "display_name", "aliases", "status", "agent_use"],
+      "properties": {
+        "role_id": { "$ref": "#/$defs/id" },
+        "display_name": { "$ref": "#/$defs/id" },
+        "description": { "type": "string" },
+        "aliases": { "$ref": "#/$defs/stringSet" },
+        "status": { "enum": ["active", "archived"] },
+        "redirect_to": { "$ref": "#/$defs/id" },
+        "agent_use": { "$ref": "#/$defs/agentUse" }
+      }
+    },
+    "scope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scope_id", "display_name", "aliases", "status", "kind", "domain", "agent_use"],
+      "properties": {
+        "scope_id": { "$ref": "#/$defs/id" },
+        "display_name": { "$ref": "#/$defs/id" },
+        "description": { "type": "string" },
+        "aliases": { "$ref": "#/$defs/stringSet" },
+        "status": { "enum": ["active", "archived"] },
+        "redirect_to": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["realm", "space"] },
+        "domain": { "$ref": "#/$defs/id" },
+        "parent_scope_id": { "$ref": "#/$defs/id" },
+        "agent_use": { "$ref": "#/$defs/agentUse" }
+      }
+    },
+    "contextHeads": {
+      "type": "object", "additionalProperties": false, "required": ["heads"],
+      "properties": { "heads": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/revisionRef" } } }
+    },
+    "authorityContext": {
+      "type": "object", "additionalProperties": false, "required": ["heads", "capability"],
+      "properties": {
+        "heads": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/revisionRef" } },
+        "capability": { "$ref": "#/$defs/id" }
+      }
+    },
+    "decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["verdict", "actor_id", "protocol_context", "authority_context"],
+      "properties": {
+        "verdict": { "const": "approve" },
+        "actor_id": { "$ref": "#/$defs/id" },
+        "protocol_context": { "$ref": "#/$defs/contextHeads" },
+        "authority_context": { "$ref": "#/$defs/authorityContext" }
+      }
+    }
+  }
+}
