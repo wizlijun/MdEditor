@@ -17,6 +17,7 @@
   import { autoPairInsert } from '../lib/autopair'
   import { createImeGuard } from '../lib/ime'
   import { renderSourceHtml, type HitRange } from '../lib/source-highlight'
+  import { handleTextSelectAllKeydown } from '../lib/select-all-shortcut'
 
   let {
     value,
@@ -92,6 +93,11 @@
     // Keys pressed while an IME is composing belong to the IME, not to us —
     // acting on them handles the same keystroke twice (see src/lib/ime.ts).
     if (ime.blocks(ev)) return
+
+    // The host WebView's native select-all responder is not reliable after the
+    // Edit menu stopped owning Cmd+A. Handle the actual text control here, via
+    // the same helper as Editor Kit source mode, so the two cannot drift again.
+    if (textareaEl && handleTextSelectAllKeydown(ev, textareaEl)) return
 
     // Inline formatting shortcuts — independent of mdblock setting
     if (ev.metaKey || ev.ctrlKey) {
@@ -587,10 +593,10 @@
     }, 50)
   }
 
-  // Native textarea select-all already works; this only exists so the
-  // Edit-menu "Select All" item (routed via notemd:select-all, see
-  // RichEditor's own listener for why it's not a native menu accelerator
-  // anymore) also does the right thing when source mode is what's mounted.
+  // Clicking Edit ▸ Select All arrives through this custom event because the
+  // menu item deliberately has no native accelerator. Keyboard Cmd/Ctrl+A is
+  // handled above by handleTextSelectAllKeydown; keeping this separate path
+  // makes both menu clicks and direct WebView keydown deterministic.
   function onSelectAll() {
     textareaEl?.focus()
     textareaEl?.select()

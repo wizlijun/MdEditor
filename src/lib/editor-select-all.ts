@@ -1,6 +1,8 @@
 import { AllSelection, TextSelection, type Selection, type Transaction } from 'prosemirror-state'
 import type { Node as PmNode } from 'prosemirror-model'
-import { isApplePlatformSync } from './platform-sync'
+import { isSelectAllShortcut } from './select-all-shortcut'
+
+export { isSelectAllShortcut } from './select-all-shortcut'
 
 /**
  * Build the selection that "Select All" applies in the rich editor.
@@ -45,19 +47,7 @@ export function applySelectAll(view: SelectAllTarget): void {
   view.focus()
 }
 
-/** Modifier+key fields of a keydown — a structural subset of KeyboardEvent. */
 type Chord = Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>
-
-/**
- * True for the platform's Select All chord. Resolved the way prosemirror-keymap
- * resolves `Mod-`: Cmd on Apple, Ctrl elsewhere. Deliberately NOT `meta || ctrl`
- * — on macOS Ctrl+A is move-to-line-start, and hijacking it would trade one
- * broken shortcut for another.
- */
-export function isSelectAllShortcut(e: Chord): boolean {
-  const mod = isApplePlatformSync() ? e.metaKey : e.ctrlKey
-  return mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a'
-}
 
 /**
  * Handle a keydown that may be the Select All chord; returns whether it was
