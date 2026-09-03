@@ -56,7 +56,7 @@ describe('pickAvailable', () => {
   })
 
   it('falls back to the newest version when the host satisfies none', () => {
-    const dl = [entry('notemd.decision-log', '1.0.1', '>=6.722.1', 'Decision Log')]
+    const dl = [entry('notemd.decision-log', '1.0.1', '>=6.722.1', 'Decision')]
     expect(pickAvailable(dl, new Set(), '6.717.0').map((e) => e.version)).toEqual(['1.0.1'])
   })
 

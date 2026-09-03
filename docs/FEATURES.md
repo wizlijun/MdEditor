@@ -149,7 +149,7 @@ The AI-native notes system, rolling out incrementally:
   capability-gated host actions; dormant until invoked. Browse and install from
   the in-app marketplace ([plugins.notemd.net](https://plugins.notemd.net)):
   **Roam Import**, **Base** (Obsidian `.base` tables), **Weekly Review**
-  (year-calendar review), **Decision Log**, **OpenClaw Chat**, md→PDF, and more.
+  (year-calendar review), **Decision**, **OpenClaw Chat**, md→PDF, and more.
   Writing your own: [`plugin-v2-development.md`](plugin-v2-development.md).
 
 ## Share & export

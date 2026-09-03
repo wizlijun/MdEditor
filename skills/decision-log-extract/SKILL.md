@@ -1,13 +1,13 @@
 ---
 name: decision-log-extract
-description: Use when turning a day's raw content (voice transcripts, daily notes, chat/meeting logs) into decision-log candidate JSON (vault/diary/YYYY-MM-DD-decision.json) — surfacing new decisions the user made, verdict suggestions for due/triggered open decisions, and progress-driven updates to open decisions. Standalone: contains the full contract; no external references needed.
+description: "Use when turning a day's raw content (voice transcripts, daily notes, chat/meeting logs) into decision-log candidate JSON (vault/diary/YYYY-MM-DD-decision.json) — surfacing new decisions the user made, verdict suggestions for due/triggered open decisions, and progress-driven updates to open decisions. Standalone: contains the full contract; no external references needed."
 ---
 
-# Decision Log — Daily Decision Pipeline (standalone)
+# Decision — Daily Decision Pipeline (standalone)
 
 ## What this is
 
-Turn a day's raw content plus the user's current **open decisions** into ONE candidate JSON for the "Decision Log" note.md plugin. The plugin reads this file and surfaces the items for the user to confirm. You produce three kinds of entries and **output pure JSON, nothing else**:
+Turn a day's raw content plus the user's current **open decisions** into ONE candidate JSON for the "Decision" note.md plugin. The plugin reads this file and surfaces the items for the user to confirm. You produce three kinds of entries and **output pure JSON, nothing else**:
 
 1. **`new_candidates`** — new decisions the user made in the content.
 2. **`closures`** — verdict suggestions for open decisions that are **due or triggered**.
@@ -138,7 +138,7 @@ For an open decision that did **not** go into `closures`, but which the content 
 ```
 date: 2026-07-22
 content:
-  [08:12 cv_1 user] "决策日志我觉得两周内能发出可用版本。"        # new decision, voiced expectation
+  [08:12 cv_1 user] "「决策」插件我觉得两周内能发出可用版本。"    # new decision, voiced expectation
   [11:00 cv_1 user] "也许该把每周例会砍了。"                    # new decision, no expectation
   [14:20 cv_2 user] "记得给设计发反馈。"                        # to-do → skip
   [16:00 cv_2 user] "上周那个迁移昨天到期,一直稳,没回滚。"      # open A, DUE today → closure
@@ -159,9 +159,9 @@ open_decisions:
   "new_candidates": [
     {
       "id": "cand-2026-07-22-01",
-      "title": "先做决策日志 MVP",
+      "title": "先做「决策」MVP",
       "prediction_source": "quoted",
-      "quote": "决策日志我觉得两周内能发出可用版本",
+      "quote": "「决策」插件我觉得两周内能发出可用版本",
       "prediction": "两周内发出可用 MVP",
       "confidence": null,
       "check_date": "2026-08-05",

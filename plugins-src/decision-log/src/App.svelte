@@ -1,4 +1,4 @@
-<!-- App.svelte — Decision Log window shell. On mount runs refresh() to load the
+<!-- App.svelte — Decision window shell. On mount runs refresh() to load the
      board / candidates / archives / scoreboard, then renders the three-column
      Board plus the always-on Scoreboard rail.
      Declares `color-scheme: light dark` so this standalone plugin window follows

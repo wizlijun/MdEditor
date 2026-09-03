@@ -35,7 +35,7 @@ export const CONCEPT_TYPE = {
   bookTopicIndex: 'Book Topic Index',
   /** Reading Insights 的阅读数据报告 */
   readingReport: 'Reading Report',
-  /** 决策日志:未决看板 / 已裁决归档 */
+  /** 「决策」插件:未决看板 / 已裁决归档 */
   decisionBoard: 'Decision Board',
   decisionArchive: 'Decision Archive',
   /** agent 写进 `answers/` 的长答案 */

@@ -13,6 +13,10 @@ For the full commit history, see the git log.
 
 - **Memory 2.2.1 lets people correct confirmed and pending memory text before relying on it.** Editing a confirmed claim creates an auditable replacement instead of rewriting history; editing a pending suggestion approves the corrected text in one action while retaining the original proposal. Exact revision heads prevent concurrent changes from being overwritten, and lifecycle proposals remain protected from text edits.
 
+### Changed
+
+- **Decision 1.1.6 uses its shorter product name everywhere.** Plugin menus, the window, the board, the marketplace and all four localized names now consistently show Decision / 决策 / 意思決定 / Entscheidung; the plugin ID and stored data remain unchanged.
+
 ### Fixed
 
 - **A proposed Claim can now allow several retrieval purposes.** `notemd memory propose` takes a comma-separated `--purpose`, matching the Memory window's own multi-select; previously a CLI-proposed Claim was limited to one purpose and was withheld from every other context. `replace` and `revoke` no longer demand `--category`, `--space` and `--purpose` that they go on to ignore.

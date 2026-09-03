@@ -1,9 +1,33 @@
 import { describe, it, expect } from 'vitest'
+import manifest from '../../manifest.v2.json'
 import { CATALOGS, LOCALES, setLocale, t, starLabel } from './strings'
 
 const en = CATALOGS.en
 const enKeys = Object.keys(en)
 const placeholders = (s: string) => (s.match(/\{(\w+)\}/g) ?? []).sort()
+
+describe('product name', () => {
+  it('uses one localized name across the manifest and window UI', () => {
+    const names = {
+      en: 'Decision',
+      zh: '决策',
+      ja: '意思決定',
+      de: 'Entscheidung',
+    } as const
+
+    expect(manifest.name).toBe(names.en)
+    expect(manifest.contributes.menus[0]?.label).toBe(names.en)
+    expect(manifest.contributes.windows[0]?.title).toBe(names.en)
+
+    for (const locale of ['zh', 'ja', 'de'] as const) {
+      expect(manifest.i18n[locale].name).toBe(names[locale])
+      expect(manifest.i18n[locale].menus.open).toBe(names[locale])
+    }
+    for (const locale of LOCALES) {
+      expect(CATALOGS[locale]['panel.title']).toBe(names[locale])
+    }
+  })
+})
 
 describe('t', () => {
   it('returns the English string for a known key by default', () => {
