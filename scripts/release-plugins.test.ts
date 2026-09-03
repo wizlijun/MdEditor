@@ -124,6 +124,19 @@ describe('dev-install-plugin.sh codex-agent dispatch', () => {
   })
 })
 
+describe('Human Signature plugin releases', () => {
+  it.each([
+    ['idea-spark', '1.3.6'],
+    ['trace-source', '1.2.4'],
+  ])('%s publishes the Human Signature release version', (dir, version) => {
+    const manifest = JSON.parse(
+      readFileSync(join(ROOT, 'plugins-src', dir, 'manifest.v2.json'), 'utf8'),
+    ) as { version?: string }
+
+    expect(manifest.version).toBe(version)
+  })
+})
+
 describe('Next plugin packaging', () => {
   it('builds and packages Next as a universal UI plugin', () => {
     const table = dispatchTable()

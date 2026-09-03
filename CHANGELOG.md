@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **What you wrote by hand now says so, in the file.** New documents, quick notes, companion `.note.md` files, daily notes, pages created from a `[[wikilink]]`, Idea Spark originals and Trace Source requests — anything produced by a direct action of yours — now carry a signature in their metadata (`generated: by: human:<your git identity>`). Until now "a person wrote this" could only be inferred from the *absence* of an AI stamp, which made an unstamped AI dump indistinguishable from your own draft. Three states, each saying its own name: written by a person, written by a generator, claimed by nobody. The signature is written once, at creation — reopening and saving an old note will not grow one — and imported content (Roam, ebooks) stays unsigned, because carrying something across is not writing it. It reads the same in Obsidian, or in grep.
+
+### Fixed
+
+- **Clicking a `[[wikilink]]` that doesn't exist yet, in rich text, no longer creates an empty shell.** It used to write a 0-byte file: no title, no metadata, failing the format check and ranked last in search. It now takes the same page-creation path as the outline panel, and what lands is a well-formed document.
+
 ## v6.903.1 — 2026-09-03
 
 ### Added

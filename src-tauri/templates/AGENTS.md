@@ -106,6 +106,15 @@ marking content a person wrote or confirmed — the same line the editor
 draws between `✦` (written by AI) and `●` (thought by you). Mixing the
 two destroys the signal.
 
+The reverse duty is note.md's, not yours, but it is worth knowing it holds:
+every document a person creates through the app — a new note, a quick note, a
+companion `.note.md`, a daily note, a wiki page, an idea, a trace request — is
+written with `generated: { by: human:<id>, at }`. So the three states are
+distinguishable rather than guessed at: a `human:` actor means a person wrote
+it, a `<producer>/<version>` actor means a generator did, and no `generated`
+key at all means nobody has claimed it. Do not strip or rewrite a `human:`
+stamp you find; it is the one signal that cannot be regenerated.
+
 Rules that hold in both directions:
 
 - **Preserve what you did not write.** When rewriting a file, add
