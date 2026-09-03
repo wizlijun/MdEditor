@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.903.4 — 2026-09-03
+
 ### Changed
 
 - **Smart Search now understands a question before it searches.** The selected Agent turns natural-language intent into a strictly validated search plan; dates such as “last month” become timezone-aware document constraints instead of keywords, while paths, tags, types, origins and sort choices remain locked by the host. Low recall may trigger one bounded tuning pass, then the host re-reads and freezes the cited Vault lines before an input-only Answer run. Typing still shows a zero-token Quick Preview, clearly separated from authoritative Intelligent Results.
