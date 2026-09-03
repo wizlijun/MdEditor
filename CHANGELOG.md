@@ -13,6 +13,8 @@ For the full commit history, see the git log.
 
 ### Changed
 
+- **Claude Agent 1.0.23, Codex Agent 1.0.9 and DeepSeek Agent 1.1.9 reveal recent runs five at a time.** Each window starts with the five newest runs and a compact “Show 5 more” action; every click reveals the next five, with the final action matching the actual remainder. Changing task or history scope returns to the newest five, while background refreshes keep the amount you already expanded.
+
 - **Claude Agent 1.0.22, Codex Agent 1.0.8 and DeepSeek Agent 1.1.8 put recent runs first and keep task templates compact.** Tasks are grouped by the feature plugin that uses them and every group starts collapsed, leaving the sidebar focused on the newest run history. Expand a neutral plugin row to choose a task; its count and running state stay visible while collapsed. Existing vaults are recognized without migration, and custom tasks remain available in their own group.
 
 ### Fixed
