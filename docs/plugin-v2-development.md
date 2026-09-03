@@ -15,7 +15,7 @@
 - 必须提供 `binary` 和/或 `ui` 之一,否则校验失败。
 - `contributes.windows` 非空则**必须**设 `ui`。
 
-**决策日志这类"看板 + 读写 .note.md"的插件 = 纯前端形态**,样板照抄 `roam-import`。
+**「决策」这类"看板 + 读写 .note.md"的插件 = 纯前端形态**,样板照抄 `roam-import`。
 
 ---
 
@@ -149,7 +149,7 @@ manifest 不写 `Agents`、`智能体` 等显示文本。插件市场索引也�
 {
   "id": "main",                 // [a-z0-9-]+;实际窗口 label = plugin-<sanitized id>-main
   "entry": "index.html",        // ui/ 内相对路径,禁止含 ".."
-  "title": "决策日志",          // 缺省用插件 name
+  "title": "决策",              // 缺省用插件 name
   "width": 680.0, "height": 620.0,
   "min_width": 520.0, "min_height": 420.0,   // 可选
   "singleton": true,            // 默认 true
@@ -163,7 +163,7 @@ manifest 不写 `Agents`、`智能体` 等显示文本。插件市场索引也�
 ```jsonc
 {
   "window": "main",             // 必须匹配某个 contributes.windows[].id
-  "label": "决策日志",          // 可选;缺省用插件本地化名称(manifest name + i18n.<locale>.name)
+  "label": "决策",              // 可选;缺省用插件本地化名称(manifest name + i18n.<locale>.name)
   "section": "capture",         // 可选;"capture" = 顶部捕获组,其余/缺省 = 默认组
   "accelerator": "Cmd+Ctrl+I"   // 可选;全局快捷键 + 托盘项右侧的显示用加速键
 }
@@ -215,7 +215,7 @@ manifest 不写 `Agents`、`智能体` 等显示文本。插件市场索引也�
 
 **通道差异(重要)**:`dialog.*` / `fs.*` / `clipboard.*` **只在 UI 桥可用**;后台进程通道(纯后端插件)即使声明了 `dialog` 也拿不到,会回 `-32601`(`host_api.rs:165-168`)。`vault.*` 和 `location.get` 两个通道都可用。`editor.kit` 的两个解锁项(`host.theme.css` RPC + `__host__` 资产路径)也都只在 UI 桥可用。
 
-**决策日志需要的最小集合**:`["vault.read", "vault.write", "toast"]`(开窗口时天然可用,窗口本身不需要单独 capability)。
+**「决策」需要的最小集合**:`["vault.read", "vault.write", "toast"]`(开窗口时天然可用,窗口本身不需要单独 capability)。
 
 ### `editor.kit` 与 `__host__` 保留路径(源:`protocol.rs:147-272`)
 
@@ -301,7 +301,7 @@ interface SideView {
 
 **现状结论**:`registerSideView()` 是主程序内部 API,**没有暴露给插件的 manifest 声明或桥接方法**。所以插件要出 UI,当前两条路:
 
-1. **独立窗口**(推荐,零核心改动)— 走 `contributes.windows` + `open_command`,和 `roam-import` 一样。**决策日志看板用这条。**
+1. **独立窗口**(推荐,零核心改动)— 走 `contributes.windows` + `open_command`,和 `roam-import` 一样。**「决策」看板用这条。**
 2. **进主程序当内置侧栏** — 在 `registry.svelte.ts` 加一个 `SideView` + 一个 gate,组件放主程序 `src/components/`。这是改核心、需发主程序版本,不属于"装插件"。
 
 > 若未来要做"插件贡献侧栏",需要先在核心加一个注册桥,这本身是一项核心工作,不能在插件侧单方面完成。写 spec 时按现状(独立窗口)设计。
@@ -319,8 +319,8 @@ interface SideView {
 1. **UI 内字符串** — 插件自带 `src/lib/strings.ts`,结构照抄 `plugins-src/openclaw/src/lib/strings.ts`:一个 `MessageKey` 联合类型 + 每语言一张 catalog + 本地 `t()`,当前语言从 `bridge().locale`(`'en'|'zh'|'ja'|'de'`)拿。
 2. **菜单/设置标签本地化** — manifest 顶层 `name` 用英文,再用 manifest 的 `i18n` 字段做 per-locale 覆盖(宿主透传,结构同 v1 PluginI18n):
    ```jsonc
-   "name": "Decision Log",
-   "i18n": { "zh": { "name": "决策日志", "menus": { "open": "打开决策日志…" } } }
+   "name": "Decision",
+   "i18n": { "zh": { "name": "决策", "menus": { "open": "决策" } } }
    ```
 
 ---
@@ -336,7 +336,7 @@ interface SideView {
 
 **插件用法**:把这几个文件**复制**进插件 `src/lib/outline/`(见 §2),在 UI 内组装文本,再 `host.vault.write({ path, content })` 落盘。`roam-import` 就是这么把 Roam 导出转成 `.note.md` 的。
 
-> 决策日志的 `open.decision.note.md` / `archive/*.note.md` 结构是 front-matter 里放 `decisions` 数组,正文是人类可读镜像——用复制过来的 `touchFrontmatter` + 自定义序列化即可,不必强套 outline 树。
+> 「决策」的 `open.decision.note.md` / `archive/*.note.md` 结构是 front-matter 里放 `decisions` 数组,正文是人类可读镜像——用复制过来的 `touchFrontmatter` + 自定义序列化即可,不必强套 outline 树。
 
 ### 9.1 OKF 概念类型登记表(写 `.md` 必读)
 
@@ -369,7 +369,7 @@ interface SideView {
 | `Answer` | agent 写进 `answers/` 的长答案 |
 | `Vault Conventions` | vault 根的 `AGENTS.md` |
 | `Vault Conventions` | vault 根的 `AGENTS.md`(模板 `src-tauri/templates/AGENTS.md`) |
-| `Decision Board` / `Decision Archive` | 决策日志的未决看板与已裁决归档 |
+| `Decision Board` / `Decision Archive` | 「决策」的未决看板与已裁决归档 |
 | `Idea` | 奇思妙想(idea-spark)里用户写下的 idea 原文 |
 | `Idea Proof` | 奇思妙想里 agent 产出的论证文档 `<name>.proof.md` |
 

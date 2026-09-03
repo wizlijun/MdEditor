@@ -182,7 +182,7 @@ var ENTRY_MAP={
  'notemd.roam-import':{en:'<b>Plugins</b> → <b>Import & Export</b> → Import from Roam Research…',zh:'「<b>插件</b>」→「<b>导入与导出</b>」→ 从 Roam Research 导入…'},
  'notemd.pos-log':{en:'<b>Plugins</b> → <b>Capture</b> → Location Log',zh:'「<b>插件</b>」→「<b>记录</b>」→ 位置记录'},
  'notemd.trace-source':{en:'<b>Plugins</b> → <b>Read</b> → Trace Source',zh:'「<b>插件</b>」→「<b>阅读</b>」→ 溯源'},
- 'notemd.decision-log':{en:'<b>Plugins</b> → <b>Reflect</b> → Decision Log',zh:'「<b>插件</b>」→「<b>回顾</b>」→ 决策日志'},
+ 'notemd.decision-log':{en:'<b>Plugins</b> → <b>Reflect</b> → Decision',zh:'「<b>插件</b>」→「<b>回顾</b>」→ 决策'},
  'notemd.weekly-review':{en:'<b>Plugins</b> → <b>Reflect</b> → Weekly Review',zh:'「<b>插件</b>」→「<b>回顾</b>」→ 周检视'},
  'notemd.md2pdf':{en:'<b>Plugins</b> → <b>Import & Export</b> → Export to PDF… (also CLI <code>notemd pdf</code>)',zh:'「<b>插件</b>」→「<b>导入与导出</b>」→ 导出为 PDF…（也支持 CLI <code>notemd pdf</code>）'},
  'notemd.power-mode':{en:'<b>Plugins</b> → <b>Experience</b> → Power Mode',zh:'「<b>插件</b>」→「<b>体验增强</b>」→ 狂暴模式'}

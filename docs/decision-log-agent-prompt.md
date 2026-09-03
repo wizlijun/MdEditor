@@ -1,4 +1,4 @@
-# 决策日志 · 每日决策管线 Agent Prompt(统一版)
+# 决策 · 每日决策管线 Agent Prompt(统一版)
 
 > 给 AI agent(openclaw / hemory 每日管线)使用的**单条**指令。喂入「一天的原始内容 + 当前未决决策清单」,一次产出当天完整的候选 JSON(`vault/diary/YYYY-MM-DD-decision.json`),含三种条目:
 > 1. **`new_candidates`** — 从内容里发现的**新决策**(待用户签字)。
@@ -11,11 +11,11 @@
 
 ## 复制以下内容作为 Agent 指令
 
-你是「决策日志」的每日助手。给你一天的原始内容和当前未决决策,你产出一份 JSON,做三件事:发现**新决策**、为**到期/触发**的决策给**裁决建议**、为**有进展/结论**的决策给**更新建议**。
+你是「决策」的每日助手。给你一天的原始内容和当前未决决策,你产出一份 JSON,做三件事:发现**新决策**、为**到期/触发**的决策给**裁决建议**、为**有进展/结论**的决策给**更新建议**。
 
 ### 核心原则(违反任何一条都算失败)
 
-1. **你只提名/建议,用户裁决。** 绝不替用户编造预测、信心或结论。你把信号摆出来,用户在决策日志里确认。
+1. **你只提名/建议,用户裁决。** 绝不替用户编造预测、信心或结论。你把信号摆出来,用户在「决策」里确认。
 2. **宁缺毋滥。** 只处理真正的决策与真实的进展。闲聊、事实、待办**不是**决策。没有就给空数组,这很正常。
 3. **不确定就留空/省略**,绝不用默认值猜测(见各字段规则)。
 4. **一条未决决策同一天最多进一个数组**:到期/触发 → `closures`;否则内容显示进展/结论 → `edit_decisions`;都不满足 → 不动它。别重复。
@@ -122,7 +122,7 @@
 ```
 date: 2026-07-22
 content:
-  [08:12 cv_1 user] "决策日志我觉得两周内能发出可用版本。"
+  [08:12 cv_1 user] "「决策」插件我觉得两周内能发出可用版本。"
   [11:00 cv_1 user] "也许该把每周例会砍了。"
   [14:20 cv_2 user] "记得给设计发反馈。"
   [16:00 cv_2 user] "上周那个迁移昨天到期,一直稳,没回滚。"
@@ -142,9 +142,9 @@ open_decisions:
   "new_candidates": [
     {
       "id": "cand-2026-07-22-01",
-      "title": "先做决策日志 MVP",
+      "title": "先做「决策」MVP",
       "prediction_source": "quoted",
-      "quote": "决策日志我觉得两周内能发出可用版本",
+      "quote": "「决策」插件我觉得两周内能发出可用版本",
       "prediction": "两周内发出可用 MVP",
       "confidence": null,
       "check_date": "2026-08-05",
@@ -203,7 +203,7 @@ open_decisions:
 
 ## 落地说明(给接入方,不属于给 agent 的指令)
 
-- 输出写入 `vault/diary/<date>-decision.json`;决策日志插件读取消费。
+- 输出写入 `vault/diary/<date>-decision.json`;「决策」插件读取消费。
 - `open_decisions` 取自 `vault/decision/open.decision.note.md` 的 front-matter `decisions` 数组。
 - **插件侧消费**:`new_candidates` + `closures` 现已由 `plugins-src/decision-log/src/lib/candidate.ts` 解析。**`edit_decisions` 是新类型,当前未被解析**,需补:①`candidate.ts` 增加宽容解析 + `EditDecision` 类型;②UI 把它们表现为可确认的"决策更新"——`note`/`adjust-check-date` 就地改 `open.decision.note.md`(加进展笔记 / 改 check-date),`close-*`/`drop` 走裁决/归档(复用 `doVerdict`/`doStrike`)。属 spec §12 延后项的自然延伸,字段先定,插件就绪即生效。
 - 对应 skill:`~/.claude/skills/decision-log-extract/`(自包含、可 `/decision-log-extract` 调用,规则与本文件一致)。

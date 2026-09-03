@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "id": "notemd.decision-log",
-  "name": "Decision Log",
-  "version": "1.1.5",
+  "name": "Decision",
+  "version": "1.1.6",
   "kind": "native",
   "engines": {
     "notemd": ">=6.828.3"
@@ -19,7 +19,7 @@
       {
         "location": "window",
         "submenu": "reflect",
-        "label": "Decision Log",
+        "label": "Decision",
         "command": "open"
       }
     ],
@@ -27,7 +27,7 @@
       {
         "id": "main",
         "entry": "index.html",
-        "title": "Decision Log",
+        "title": "Decision",
         "width": 920,
         "height": 680,
         "min_width": 720,
@@ -48,24 +48,24 @@
   ],
   "i18n": {
     "zh": {
-      "name": "决策日志",
-      "description": "先预测，后复盘——以 `.note.md` 格式保存的校准型决策日志。",
+      "name": "决策",
+      "description": "先预测，后复盘——以 `.note.md` 格式保存的校准型决策记录。",
       "menus": {
-        "open": "决策日志"
+        "open": "决策"
       }
     },
     "ja": {
-      "name": "意思決定ログ",
+      "name": "意思決定",
       "description": "先に予測し、後から判断を検証するための意思決定ジャーナルです。記録は `.note.md` 形式で保存されます。",
       "menus": {
-        "open": "意思決定ログ"
+        "open": "意思決定"
       }
     },
     "de": {
-      "name": "Entscheidungsprotokoll",
+      "name": "Entscheidung",
       "description": "Erst prognostizieren, später bewerten – ein kalibriertes Entscheidungsjournal im `.note.md`-Format.",
       "menus": {
-        "open": "Entscheidungsprotokoll"
+        "open": "Entscheidung"
       }
     }
   }

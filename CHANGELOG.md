@@ -41,6 +41,10 @@ For the full commit history, see the git log.
 
 - **Confirmed Memory claims are now grouped by projection and category.** `MEMORY.md`, `USER.md` and structured-only context have distinct sections, with category counts inside each. The default order keeps important claims first and otherwise mirrors projection order; recent, oldest and text ordering are also available.
 
+### Changed
+
+- **Decision 1.1.6 uses its shorter product name everywhere.** Plugin menus, the window, the board, the marketplace and all four localized names now consistently show Decision / 决策 / 意思決定 / Entscheidung; the plugin ID and stored data remain unchanged.
+
 ### Fixed
 
 - **A proposed Claim can now allow several retrieval purposes.** `notemd memory propose` takes a comma-separated `--purpose`, matching the Memory window's own multi-select; previously a CLI-proposed Claim was limited to one purpose and was withheld from every other context. `replace` and `revoke` no longer demand `--category`, `--space` and `--purpose` that they go on to ignore.

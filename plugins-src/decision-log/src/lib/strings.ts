@@ -40,7 +40,7 @@ export type MessageKey =
   | 'refresh' | 'refresh.hint'
 type Catalog = Record<MessageKey, string>
 const en: Catalog = {
-  'panel.title': 'Decision Log',
+  'panel.title': 'Decision',
   'value.line': 'Turn decisions into testable bets — time will show where your judgment can be trusted, and where it runs hot.',
   'col.candidates': 'Candidates', 'col.open': 'Open', 'col.archive': 'Archive',
   'sign.title': 'Sign this bet', 'sign.prediction': 'Prediction',
@@ -91,7 +91,7 @@ const en: Catalog = {
   'refresh': 'Refresh', 'refresh.hint': 'Force refresh',
 }
 const zh: Catalog = {
-  'panel.title': '决策日志',
+  'panel.title': '决策',
   'value.line': '把决定变成可检验的下注:时间会告诉你,你的判断哪里可信、哪里高估。',
   'col.candidates': '候选', 'col.open': '未决', 'col.archive': '归档',
   'sign.title': '签字下注', 'sign.prediction': '预测',
@@ -142,7 +142,7 @@ const zh: Catalog = {
   'refresh': '刷新', 'refresh.hint': '强制刷新',
 }
 const ja: Catalog = {
-  'panel.title': '意思決定ログ',
+  'panel.title': '意思決定',
   'value.line': '決定を検証可能な賭けに変える —— どこで判断が信頼でき、どこで過信しがちか、時間が教えてくれます。',
   'col.candidates': '候補', 'col.open': '未決', 'col.archive': 'アーカイブ',
   'sign.title': 'この賭けにサインする', 'sign.prediction': '予測',
@@ -193,7 +193,7 @@ const ja: Catalog = {
   'refresh': '更新', 'refresh.hint': '強制更新',
 }
 const de: Catalog = {
-  'panel.title': 'Entscheidungsprotokoll',
+  'panel.title': 'Entscheidung',
   'value.line': 'Mach Entscheidungen zu überprüfbaren Wetten — die Zeit zeigt dir, wo dein Urteil verlässlich ist und wo es sich überschätzt.',
   'col.candidates': 'Kandidaten', 'col.open': 'Offen', 'col.archive': 'Archiv',
   'sign.title': 'Diese Wette unterschreiben', 'sign.prediction': 'Vorhersage',

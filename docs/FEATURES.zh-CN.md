@@ -121,7 +121,7 @@ note.md 今天能做的每一件事。README 讲主张，这里放细节。
   UI 插件；manifest 声明式注册菜单、上下文菜单、设置面板、侧栏、托盘项、CLI
   子命令，宿主能力按声明授权，未触发时不运行。可在应用内市场
   （[plugins.notemd.net](https://plugins.notemd.net)）浏览安装：**Roam 导入**、
-  **Base**（Obsidian `.base` 表格）、**周检视**（年历式回顾）、**决策日志**、
+  **Base**（Obsidian `.base` 表格）、**周检视**（年历式回顾）、**决策**、
   **OpenClaw Chat**、md→PDF 等。自己写插件见
   [`plugin-v2-development.md`](plugin-v2-development.md)。
 
