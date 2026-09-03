@@ -7,7 +7,7 @@
 import { renderSourceHtml } from '../lib/source-highlight'
 import { autoPairInsert } from '../lib/autopair'
 import { createImeGuard } from '../lib/ime'
-import { isSelectAllShortcut } from '../lib/editor-select-all'
+import { handleTextSelectAllKeydown } from '../lib/select-all-shortcut'
 
 export interface SourcePane {
   getValue(): string
@@ -56,13 +56,7 @@ export function mountSource(
     // Do not depend on the plugin WebView's native responder chain for Select
     // All. Rich mode also handles this chord explicitly, and keeping both pane
     // implementations in the kit prevents consumers from drifting by mode.
-    if (isSelectAllShortcut(ev)) {
-      ev.preventDefault()
-      ev.stopPropagation()
-      ta.focus()
-      ta.select()
-      return
-    }
+    if (handleTextSelectAllKeydown(ev, ta)) return
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return
     if (ev.key.length !== 1) return
     const pos = ta.selectionStart ?? 0
