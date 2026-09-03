@@ -70,6 +70,10 @@ export async function refreshSotvault(): Promise<void> {
     sotvaultStore.records = records
     sotvaultStore.mirrorMetas = mirrorMetas
     sotvaultStore.tick++
+    // 身份由 vault 的 git 配置推出,换 vault 就换人。
+    if (rootChanged) {
+      void import('./okf/identity').then(m => { m.resetHumanActor(); m.warmHumanActor() })
+    }
     if (rootChanged) vaultRootChangedHandler?.()
   } catch (e) {
     console.warn('[sotvault] refresh:', e)

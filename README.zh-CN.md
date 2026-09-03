@@ -4,7 +4,7 @@
 
 > **读 AI 写的，留下你想的，留住只有你才写得出的字。**
 
-为 AI-native 时代打造的 markdown 阅读器、编辑器、双链笔记工具。原生 macOS 应用，下载约 11 MB，  
+为人与 AI Agent 在同一批文件中协作而设计的 markdown 阅读器、编辑器、双链笔记工具。原生 macOS 应用，下载约 11 MB，
 装完约 15 MB。你的笔记是磁盘上一个纯 `.md` 文件夹——永远属于你。
 
 [下载](https://notemd.net/download) · [插件市场](https://plugins.notemd.net) · [完整功能清单](docs/FEATURES.zh-CN.md)
@@ -28,21 +28,40 @@ local-first、git sync、大纲、`[[双链]]`与反向链接、wiki 页面、�
 这些是 Roam Research 和 Obsidian 想明白的事，note.md 把它们落在文件上：一个  
 插件导入你整份 Roam 数据，Obsidian 的 vault 直接打开。
 
-## 3. 它自己不带 AI。它仍然是 AI-native。
+## 3. 为 AI Agent 原生设计。用你已经在用的 AI。
 
-note.md 不调模型、不发一个请求。
+内置 Agent 工作流复用你已有的 Agent、AI 订阅、API 账户或本地运行环境。note.md
+不另售 Token，不对 Token 加价，也不另收一份按 Token 计费的使用费。
+
+实际模型用量与限制仍按你所选服务的订阅额度、API 计费执行；本地模型使用你自己的
+算力。
 
 你的 vault 被设计成多 agent、多 harness 共用的、受版本控制的上下文环境——  
-Claude Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes——它们通过  
-公共约定（`AGENTS.md`、块引用、手记 `.note.md`）读写同一批文件。记忆系统在路上。  
-留得越多，agent 越懂你。
+Claude Cowork、Claude Code、Codex、DeepSeek、ChatGPT Work、OpenClaw、Hermes——它们通过
+公共约定（`AGENTS.md`、块引用、手记 `.note.md`）读写同一批文件。Memory 也遵循
+同一份契约：agent 可以发现并建议，只有你能决定什么成为长期上下文。留得越多，
+agent 越懂你。
 
-你随时可以换 AI 工具。资产始终在你手里。
+你随时可以换 AI 工具。资产始终在你手里，也不会再叠加一层 note.md Token 账单。
 
 用 Claude Code 做产品这条路径——写文档、读文档、审批 AI 生成的文档——是专门  
 调优过的。
 
-## 4. 剩下的，你自己长出来
+## 4. Agent 发现，你逐条确认
+
+真正影响 agent 能不能帮好你的，恰恰是任何模型都猜不出的个体事实：你怎么做事、
+偏好什么、做过哪些决定、哪些边界不能越。再让你维护一张个人画像，只是把整理工作
+重新推回给你。
+
+Memory 把分工倒过来：agent 从你带进 vault 的工作与沟通中发现少量候选记忆，
+再交给你逐条确认、否认、标为重要或忽略。模型推断出一句话，不代表它就能自动成为
+可信记忆。
+
+搜索与 Memory 各司其职：搜索帮 agent 找回你写过的全部资料；Memory 只交付那一
+小部分由你亲自确认的主张。它们仍是纯文本、由 Git 跟踪，换 agent、换模型都能继续
+使用。[为什么我们这样设计个人 AI 记忆](https://notemd.net/zh/blog/personal-ai-memory/)。
+
+## 5. 剩下的，你自己长出来
 
 写个插件。配一条 OpenClaw 定时任务。挂上 skills。
 
@@ -61,7 +80,8 @@ Claude Cowork、Claude Code、Codex、ChatGPT Work、OpenClaw、Hermes——它�
    可 grep、五十年后依然可读。索引是派生数据，文件是唯一事实源。
 3. **agent 是一等公民——它建议，你确认。**  
    [关系只在人确认处生长](docs/product-principle-relationships-only-grow-where-confirmed.md)；  
-   note.md 绝不自动串联你的笔记，也绝不用 agent 的垃圾填满 vault。
+   note.md 绝不自动串联你的笔记，也绝不把 agent 的猜测直接变成可信记忆。
+   [个人 AI 记忆也遵守同一道人工检查点](https://notemd.net/zh/blog/personal-ai-memory/)。
 4. **[你的批注属于 vault，不属于路径。](docs/product-principle-mirror-hosted-marks.md)**  
    在哪儿批注都行，源文件会被镜像进 vault，批注由此获得稳定的、git 版本化的宿主。
 5. **[一个 vault，多个 agent——你是编排者。](docs/product-principle-one-vault-many-agents-you-orchestrate.md)**  

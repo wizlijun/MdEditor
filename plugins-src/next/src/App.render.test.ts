@@ -191,6 +191,62 @@ function pointerDrag(itemKey: string, lane: string, pointerId = 1): void {
 }
 
 describe('Next window', () => {
+  it('defaults to priority sorting and switches the board to due or newest-first order', () => {
+    const next = workspace()
+    const cards: WorkspaceItem[] = [
+      { ...item('sort-a', 'P0 later', 'capture'), priority: 'P0', due: '2026-09-20', created: '2026-09-06T00:00:00Z' },
+      { ...item('sort-b', 'P1 sooner new', 'capture'), priority: 'P1', due: '2026-09-05', created: '2026-09-04T00:00:00Z' },
+      { ...item('sort-c', 'P1 sooner old', 'capture'), priority: 'P1', due: '2026-09-05', created: '2026-09-03T00:00:00Z' },
+      { ...item('sort-d', 'P2 earliest', 'capture'), priority: 'P2', due: '2026-09-01', created: '2026-09-05T00:00:00Z' },
+    ]
+    next.capture = cards
+    next.items = [...next.items.filter((entry) => entry.state !== 'capture'), ...cards]
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const keys = () => [...document.querySelectorAll<HTMLElement>('[data-lane="capture"] [data-item-key]')]
+      .map((card) => card.dataset.itemKey)
+    const sort = document.querySelector<HTMLSelectElement>('[name="sortMode"]')!
+    const selectMode = (mode: string) => {
+      for (const option of sort.options) option.selected = option.value === mode
+      sort.dispatchEvent(new Event('change', { bubbles: true }))
+      flushSync()
+      expect(sort.value).toBe(mode)
+    }
+    expect(sort.value).toBe('priority')
+    expect(keys()).toEqual(['sort-a', 'sort-b', 'sort-c', 'sort-d'])
+
+    selectMode('due')
+    expect(keys()).toEqual(['sort-d', 'sort-b', 'sort-c', 'sort-a'])
+
+    selectMode('created')
+    expect(keys()).toEqual(['sort-a', 'sort-d', 'sort-b', 'sort-c'])
+  })
+
+  it('sorts the whole Inbox before limiting the unfiltered view to ten cards', () => {
+    const next = workspace()
+    const normal = Array.from({ length: 10 }, (_, index) => ({
+      ...item(`normal-${index}`, `Normal ${index}`, 'capture'),
+      priority: 'P3' as const,
+      created: `2026-09-01T00:00:${String(index).padStart(2, '0')}Z`,
+    }))
+    const urgent = {
+      ...item('urgent-eleventh', 'Urgent eleventh', 'capture'),
+      priority: 'P0' as const,
+      created: '2026-08-01T00:00:00Z',
+    }
+    next.capture = [...normal, urgent]
+    next.items = [...next.items.filter((entry) => entry.state !== 'capture'), ...next.capture]
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    const cards = [...document.querySelectorAll('[data-lane="capture"] [data-item-key]')]
+    expect(cards).toHaveLength(10)
+    expect(cards[0]?.getAttribute('data-item-key')).toBe('urgent-eleventh')
+  })
+
   it('shows multiple project tags compactly on its card', () => {
     mocks.state.workspace = workspace()
     component = mount(App, { target: document.body })
@@ -587,6 +643,28 @@ describe('Next window', () => {
     expect(card.textContent).toContain('P2 · 普通')
     expect(card.textContent).toContain('无截止日期')
     expect(card.textContent).toContain('情境未明确')
+  })
+
+  it('maps P0, P1, P2, and P3 to decreasing visual urgency on every card', () => {
+    const next = workspace()
+    const priorities = ['P0', 'P1', 'P2', 'P3'] as const
+    const cards = priorities.map((priority) => ({
+      ...item(`priority-${priority}`, priority, 'capture'),
+      priority,
+      contexts: [],
+    }))
+    next.items.push(...cards)
+    next.capture.unshift(...cards)
+    mocks.state.workspace = next
+    component = mount(App, { target: document.body })
+    flushSync()
+
+    for (const priority of priorities) {
+      const badge = document.querySelector<HTMLElement>(
+        `[data-item-key="priority-${priority}"] [data-priority="${priority}"]`,
+      )!
+      expect(badge.classList.contains(`priority-${priority.toLowerCase()}`)).toBe(true)
+    }
   })
 
   it('opens the same metadata editor from valid card titles in every lane and saves source fields', async () => {

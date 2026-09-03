@@ -5,23 +5,58 @@
 import { actor } from './actor'
 
 let cached: string | null = null
+let generation = 0
+let inFlight: Promise<string> | null = null
 
 export async function humanActor(): Promise<string> {
   if (cached) return cached
+  if (inFlight) return inFlight
+
+  const requestGeneration = generation
+  const request = (async () => {
+    let resolved: string
+    try {
+      const [{ invoke }, { sotvaultStore }] = await Promise.all([
+        import('@tauri-apps/api/core'),
+        import('../sotvault.svelte'),
+      ])
+      const id = await invoke<string>('notemd_okf_human_id', { vaultPath: sotvaultStore.vaultRoot })
+      resolved = actor.human(id?.trim() ? id.trim() : 'local')
+    } catch {
+      resolved = actor.human('local')
+    }
+
+    // Vault 可能在请求途中切换。旧请求不能覆盖新 vault 的身份；等待当前
+    // generation 的请求（若尚未发起则在这里发起）并把新身份返回给旧调用者。
+    if (generation !== requestGeneration) return humanActor()
+    cached = resolved
+    return resolved
+  })()
+  inFlight = request
   try {
-    const [{ invoke }, { sotvaultStore }] = await Promise.all([
-      import('@tauri-apps/api/core'),
-      import('../sotvault.svelte'),
-    ])
-    const id = await invoke<string>('notemd_okf_human_id', { vaultPath: sotvaultStore.vaultRoot })
-    cached = actor.human(id?.trim() ? id.trim() : 'local')
-  } catch {
-    cached = actor.human('local')
+    return await request
+  } finally {
+    if (inFlight === request) inFlight = null
   }
+}
+
+/**
+ * 已解析的身份,**同步**取。未预热时返回 null —— 调用方(⌘N 这类热路径)
+ * 拿 null 就不签,绝不为了一个署名去阻塞两次 git 子进程。窗口由
+ * `warmHumanActor()` 在启动时关掉。
+ */
+export function humanActorNow(): string | null {
   return cached
+}
+
+/** 后台预热缓存。不返回、不抛错——预热失败最多就是这一轮不签。 */
+export function warmHumanActor(): void {
+  void humanActor().catch(() => {})
 }
 
 /** 测试/重登 vault 后清缓存。 */
 export function resetHumanActor(): void {
+  generation += 1
   cached = null
+  inFlight = null
 }

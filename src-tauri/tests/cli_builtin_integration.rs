@@ -19,6 +19,9 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMP_HOME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn binary_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_notemd"))
@@ -28,12 +31,17 @@ fn binary_path() -> PathBuf {
 /// somewhere empty rather than to the developer's account.
 fn temp_home() -> PathBuf {
     std::env::temp_dir().join(format!(
-        "notemd-cli-int-{}-{}",
+        "notemd-cli-int-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos(),
+        // SystemTime has coarser-than-nanosecond resolution on some hosts, so
+        // parallel tests can observe the same timestamp and delete each
+        // other's HOME. The per-process sequence makes the path deterministic
+        // unique even when two threads call this in the same clock tick.
+        TEMP_HOME_SEQUENCE.fetch_add(1, Ordering::Relaxed),
     ))
 }
 

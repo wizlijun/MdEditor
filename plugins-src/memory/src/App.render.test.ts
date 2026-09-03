@@ -42,6 +42,7 @@ const receipt: WriteReceipt = { claim_id: 'claim-1', revision_id: 'revision-2', 
 async function settle() { await Promise.resolve(); await Promise.resolve(); await tick(); flushSync() }
 function button(label: string) { return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.trim() === label) }
 function tab(label: string) { return Array.from(document.querySelectorAll<HTMLButtonElement>('[role=tab]')).find((item) => item.textContent?.includes(label))! }
+function pendingOptions() { return Array.from(document.querySelectorAll<HTMLButtonElement>('#pending-panel [role=option]')) }
 function rpcMock(implementation: (method: string, params?: any) => Promise<any>) { return vi.fn(implementation) }
 
 async function render(request: ReturnType<typeof rpcMock>) {
@@ -51,7 +52,7 @@ async function render(request: ReturnType<typeof rpcMock>) {
 }
 
 describe('Memory Protocol v2 app', () => {
-  it('opens the unified Role and Scope manager from the header', async () => {
+  it('integrates the unified Role and Scope manager into the main tabs', async () => {
     const request = rpcMock(async (method) => {
       if (method === 'host.memory.v2.snapshot') return baseSnapshot()
       if (method === 'host.memory.v2.contextRegistry') return {
@@ -60,16 +61,28 @@ describe('Memory Protocol v2 app', () => {
       return {}
     })
     await render(request)
-    button('身份与场景…')!.click(); await settle()
-    expect(document.querySelector('[role=dialog][aria-labelledby=role-scope-title]')).toBeTruthy()
+    expect(button('身份与场景…')).toBeUndefined()
+    tab('待确认').click(); flushSync()
+    tab('待确认').focus()
+    document.querySelector<HTMLElement>('[role=tablist][aria-label="Memory 区域"]')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await settle()
+    expect(document.querySelector('#context-governance-panel[role=tabpanel]')).toBeTruthy()
+    expect(tab('身份与场景').getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(tab('身份与场景'))
+    expect(document.querySelector('[role=dialog][aria-labelledby=role-scope-title]')).toBeNull()
+    expect(document.querySelector('#context-governance-panel #role-scope-title')?.textContent).toBe('身份与场景')
     expect(document.body.textContent).toContain('Roles')
     expect(document.body.textContent).toContain('Scopes')
     expect(document.body.textContent).toContain('重新分配')
+    expect(button('复制初始化 Prompt')).toBeTruthy()
+    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.contextRegistry').length).toBeGreaterThanOrEqual(2)
   })
 
   it('copies the cross-assistant import prompt to the clipboard', async () => {
     const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? baseSnapshot() : {})
     await render(request)
+    expect(request.mock.calls.some(([method]) => method === 'host.clipboard.write')).toBe(false)
     button('复制导入记忆Prompt')!.click()
     await settle()
     const call = request.mock.calls.find(([method]) => method === 'host.clipboard.write')
@@ -77,6 +90,10 @@ describe('Memory Protocol v2 app', () => {
     const text = call![1].text as string
     expect(text).toContain('notemd memory propose create')
     expect(text).toContain('--recorded-by')
+    expect(text).toContain('--valid-from "2026-09-02T00:00:00Z"')
+    expect(text).toContain('推断内容不得生成命令')
+    expect(text).not.toContain('owner-stated / inferred')
+    expect(text).toContain('运行前逐条审阅 bash 代码块')
     expect(text).toContain('不要调用 notemd memory approve / reject / delete')
     expect(request.mock.calls.some(([method]) => method === 'host.memory.v2.add')).toBe(false)
   })
@@ -90,8 +107,27 @@ describe('Memory Protocol v2 app', () => {
     expect(document.body.textContent).toContain('not-assessed · unknown')
     expect(document.querySelector('[role=tablist]')).toBeTruthy()
     expect(document.querySelector('[role=listbox]')?.getAttribute('tabindex')).toBe('0')
+    expect(document.querySelector<HTMLSelectElement>('select[aria-label="已确认主张排序"]')?.value).toBe('priority')
+    expect(Array.from(document.querySelectorAll('.claim-section > h3')).map((item) => item.textContent)).toEqual(['USER.md'])
+    expect(Array.from(document.querySelectorAll('.claim-category > h4')).map((item) => item.textContent)).toEqual(['偏好1'])
     button('更多')!.click(); flushSync()
     expect(document.querySelector('.menu-panel[role=menu] .menu-row[role=menuitem]')).toBeTruthy()
+  })
+
+  it('sorts confirmed claims without losing the selected detail', async () => {
+    const important = { claim: revision({ claim_id: 'important', revision_id: 'important', payload_sha256: 'important-sha', text: '较早的重要主张。', salience: 'pinned', recorded_at: '2026-08-01T00:00:00Z' }), application_state: 'current' as const }
+    const recent = { claim: revision({ claim_id: 'recent', revision_id: 'recent', payload_sha256: 'recent-sha', text: '最近更新的普通主张。', salience: 'normal', recorded_at: '2026-09-02T00:00:00Z' }), application_state: 'current' as const }
+    const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? { ...baseSnapshot(), claims: [recent, important] } : {})
+    await render(request)
+
+    const optionTexts = () => Array.from(document.querySelectorAll<HTMLElement>('[role=option] strong')).map((item) => item.textContent)
+    expect(optionTexts()).toEqual(['较早的重要主张。', '最近更新的普通主张。'])
+    Array.from(document.querySelectorAll<HTMLButtonElement>('[role=option]'))[0].click()
+    const sort = document.querySelector<HTMLSelectElement>('select[aria-label="已确认主张排序"]')!
+    sort.value = 'recent'; sort.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+
+    expect(optionTexts()).toEqual(['最近更新的普通主张。', '较早的重要主张。'])
+    expect(document.querySelector('#claim-title')?.textContent).toBe('较早的重要主张。')
   })
 
   it('approves a pending self-representation with one click and no caller-forged human fields', async () => {
@@ -244,6 +280,107 @@ describe('Memory Protocol v2 app', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0][1]).toMatchObject({ revision_id: 'pending-1', expected_sha256: 'sha-pending-1', gesture_intent: 'ignore' })
     expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.approve')).toHaveLength(0)
+  })
+
+  it('supports range and additive pending selection with native context-menu targeting', async () => {
+    const items = [
+      pending({ claim_id: 'claim-a', revision_id: 'pending-a', payload_sha256: 'sha-a', recorded_at: '2026-09-01T08:30:00Z', text: '建议 A' }),
+      pending({ claim_id: 'claim-b', revision_id: 'pending-b', payload_sha256: 'sha-b', recorded_at: '2026-09-01T08:30:00Z', text: '建议 B' }),
+      pending({ claim_id: 'claim-c', revision_id: 'pending-c', payload_sha256: 'sha-c', recorded_at: '2026-09-01T08:30:00Z', text: '建议 C' }),
+    ]
+    const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? { ...baseSnapshot(), pending: items } : {})
+    await render(request); tab('待确认').click(); flushSync()
+
+    const options = pendingOptions()
+    expect(document.querySelector('#pending-panel [role=listbox]')?.getAttribute('aria-multiselectable')).toBe('true')
+    options[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    options[2].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true })); flushSync()
+    expect(options.map((item) => item.getAttribute('aria-selected'))).toEqual(['true', 'true', 'true'])
+    options[1].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true })); flushSync()
+    expect(options.map((item) => item.getAttribute('aria-selected'))).toEqual(['true', 'false', 'true'])
+
+    options[2].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 90 })); flushSync()
+    expect(document.querySelector('[role=menu][aria-label="待确认建议批量操作"]')?.textContent).toContain('已选择 2 条')
+    expect(document.body.textContent).toContain('不会提供笼统的批量确认')
+    expect(document.querySelector('[role=menu][aria-label="待确认建议批量操作"]')?.textContent).not.toContain('确认记住')
+
+    options[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 100 })); flushSync()
+    expect(options.map((item) => item.getAttribute('aria-selected'))).toEqual(['false', 'true', 'false'])
+    expect(document.querySelector('[role=menu][aria-label="待确认建议批量操作"]')?.textContent).toContain('已选择 1 条')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); flushSync()
+    expect(document.querySelector('[role=menu][aria-label="待确认建议批量操作"]')).toBeNull()
+    options[1].dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'F10', shiftKey: true })); flushSync()
+    expect(document.querySelector('[role=menu][aria-label="待确认建议批量操作"]')).toBeTruthy()
+    document.body.click(); flushSync()
+    expect(document.querySelector('[role=menu][aria-label="待确认建议批量操作"]')).toBeNull()
+  })
+
+  it('confirms the exact impact and serially ignores the selected pending suggestions', async () => {
+    const items = [
+      pending({ claim_id: 'claim-a', revision_id: 'pending-a', payload_sha256: 'sha-a', recorded_at: '2026-09-01T08:30:00Z', text: '建议 A' }),
+      pending({ claim_id: 'claim-b', revision_id: 'pending-b', payload_sha256: 'sha-b', recorded_at: '2026-09-01T08:31:00Z', text: '建议 B' }),
+      pending({ claim_id: 'claim-c', revision_id: 'pending-c', payload_sha256: 'sha-c', recorded_at: '2026-09-01T08:32:00Z', text: '建议 C' }),
+    ]
+    let snapshotCalls = 0
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.snapshot') { snapshotCalls += 1; return { ...baseSnapshot(), pending: snapshotCalls === 1 ? items : [items[2]] } }
+      if (method === 'host.memory.v2.ignore') return { ...receipt, effective_status: 'ignored' }
+      return {}
+    })
+    await render(request); tab('待确认').click(); flushSync()
+    const options = pendingOptions()
+    options[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    options[1].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+    options[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 90 })); flushSync()
+    button('可以忽略…')!.click(); flushSync()
+    expect(document.querySelector('[role=alertdialog]')?.textContent).toContain('批量忽略 2 条建议')
+    expect(document.querySelector('[role=alertdialog]')?.textContent).toContain('避免相同内容反复出现')
+    button('取消')!.click(); flushSync()
+    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.ignore')).toHaveLength(0)
+
+    options[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 90 })); flushSync()
+    button('可以忽略…')!.click(); flushSync(); button('确认忽略 2 条')!.click(); await settle(); await settle()
+    const calls = request.mock.calls.filter(([method]) => method === 'host.memory.v2.ignore')
+    expect(calls).toHaveLength(2)
+    expect(calls.map((call) => call[1].revision_id)).toEqual(['pending-a', 'pending-b'])
+    expect(calls.map((call) => call[1].expected_sha256)).toEqual(['sha-a', 'sha-b'])
+    expect(calls[0][1].request_id.replace(/\/\d+$/, '')).toBe(calls[1][1].request_id.replace(/\/\d+$/, ''))
+    expect(calls[0][1]).toMatchObject({ expected_protocol: { revision_id: 'protocol-2', payload_sha256: 'protocol-sha' }, gesture_intent: 'ignore' })
+    expect(snapshotCalls).toBe(2)
+    expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.approve')).toHaveLength(0)
+    expect(document.body.textContent).toContain('已批量忽略 2 条建议')
+  })
+
+  it('stops a pending batch after a stale item and reports the completed prefix', async () => {
+    const items = [
+      pending({ claim_id: 'claim-a', revision_id: 'pending-a', payload_sha256: 'sha-a', recorded_at: '2026-09-01T08:30:00Z', text: '建议 A' }),
+      pending({ claim_id: 'claim-b', revision_id: 'pending-b', payload_sha256: 'sha-b', recorded_at: '2026-09-01T08:31:00Z', text: '建议 B' }),
+      pending({ claim_id: 'claim-c', revision_id: 'pending-c', payload_sha256: 'sha-c', recorded_at: '2026-09-01T08:32:00Z', text: '建议 C' }),
+    ]
+    let snapshotCalls = 0
+    let rejectCalls = 0
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.snapshot') { snapshotCalls += 1; return { ...baseSnapshot(), pending: snapshotCalls === 1 ? items : items.slice(1) } }
+      if (method === 'host.memory.v2.reject') {
+        rejectCalls += 1
+        if (rejectCalls === 2) throw new Error('MEMORY_STALE_BASE')
+        return { ...receipt, effective_status: 'rejected' }
+      }
+      return {}
+    })
+    await render(request); tab('待确认').click(); flushSync()
+    const options = pendingOptions()
+    options[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    options[2].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+    options[2].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 90 })); flushSync()
+    button('否认所选…')!.click(); flushSync(); button('确认否认 3 条')!.click(); await settle(); await settle()
+
+    const calls = request.mock.calls.filter(([method]) => method === 'host.memory.v2.reject')
+    expect(calls.map((call) => call[1].revision_id)).toEqual(['pending-a', 'pending-b'])
+    expect(document.querySelector('[role=alert]')?.textContent).toContain('已完成 1 条，剩余 2 条未处理')
+    expect(document.querySelector('[role=alert]')?.textContent).toContain('另一设备发生变化')
+    expect(snapshotCalls).toBe(2)
+    expect(pendingOptions().map((item) => item.textContent)).toEqual([expect.stringContaining('建议 B'), expect.stringContaining('建议 C')])
   })
 
   it('warns about the full impact before resetting every current and pending memory in one RPC', async () => {

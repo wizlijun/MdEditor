@@ -7,6 +7,7 @@
 //
 // No `$state` and no bridge import: pure logic over injected IO, so the tests
 // need nothing but plain objects.
+import { CONCEPT_TYPE, conceptFileText } from './okf/concept'
 
 /** The naming convention that IS the report's identity: the delegate call
  *  names the output `<YYYY-MM-DD>-<HHmmss>-source-trace.md`, and the task
@@ -146,20 +147,44 @@ const TITLE_MAX = 60
  * the ask is lost to a crash, a failed run, or a closed window.
  *
  * OKF: `type: Trace Request` (registered host-side in concept.ts; Human tier
- * in searchidx origin mapping). Human-authored, so no `generated` stamp.
+ * in searchidx origin mapping) plus, when the host told us who you are,
+ * `generated: { by: human:<id>, at }` — this is a document you wrote by hand.
+ * YAML escaping is the vendored writer's job now, not a hand-rolled quote.
  */
-export function buildRequestDoc(text: string): string {
+export function buildRequestDoc(text: string, author?: string): string {
   const firstLine =
     text
       .split('\n')
       .map((l) => l.replace(/^>\s*/, '').trim())
       .find((l) => l !== '') ?? ''
   const cut = firstLine.length > TITLE_MAX ? `${firstLine.slice(0, TITLE_MAX)}…` : firstLine
-  const title = cut || 'Trace request'
-  // YAML scalar safety: quote anything that could open a flow/keyed construct.
-  const needsQuote = /^[\s:>#\-?&*!|%@`"'{[\]}]|[:#]\s|\t/.test(title)
-  const yamlTitle = needsQuote ? `"${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : title
-  return `---\ntype: Trace Request\ntitle: ${yamlTitle}\n---\n\n${text.replace(/\s+$/, '')}\n`
+  const now = new Date().toISOString()
+  return conceptFileText(
+    {
+      type: CONCEPT_TYPE.traceRequest,
+      title: cut || 'Trace request',
+      generated: author ? { by: author, at: now } : undefined,
+    },
+    `\n${text.replace(/\s+$/, '')}\n`,
+  )
+}
+
+/**
+ * The exact call `App.svelte`'s `delegate()` makes at save-first time: ask the
+ * host who you are (never throwing the delegation over it — an older host
+ * with no `author` field, or one that's unreachable, both degrade to an
+ * unsigned request, not an error) and build the document. Pulled out as its
+ * own export so the WIRING between `host.vault.info` and `buildRequestDoc` is
+ * under test, not just `buildRequestDoc` in isolation — three earlier tasks
+ * in this plan shipped an untested primitive with unwired (or miswired)
+ * call sites.
+ */
+export async function buildSignedRequestDoc(
+  text: string,
+  getVaultInfo: () => Promise<{ author?: string }>,
+): Promise<string> {
+  const author = (await getVaultInfo().catch(() => null))?.author
+  return buildRequestDoc(text, author)
 }
 
 /** Undoes `buildRequestDoc`'s wrapper for loading a request back into the

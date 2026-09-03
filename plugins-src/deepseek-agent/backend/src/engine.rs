@@ -781,6 +781,7 @@ mod tests {
                         precheck: None,
                         okf_type: None,
                         directive: Vec::new(),
+                        source_plugin: None,
                     },
                     task_dir: v.join("task"),
                     task_run_dir: v.join("runs-t"),

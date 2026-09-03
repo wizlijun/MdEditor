@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   buildRequestDoc,
+  buildSignedRequestDoc,
   createdFromName,
   deleteReport,
   documentPathFor,
@@ -193,6 +194,59 @@ describe('buildRequestDoc', () => {
   it('空文本也给出非空 title(OKF 生产者约束:type 非空、文档可解析)', () => {
     const doc = buildRequestDoc('   \n')
     expect(doc).toMatch(/title: \S/)
+  })
+
+  it('带署名时写 generated —— 委托稿是你自己的话', () => {
+    const doc = buildRequestDoc('> 这段话是谁说的\n', 'human:bruce')
+    expect(doc).toContain('type: Trace Request')
+    expect(doc).toContain('generated:\n  by: human:bruce\n  at: ')
+  })
+
+  it('宿主太老、拿不到 author 时不签,产物仍合规', () => {
+    const doc = buildRequestDoc('> 这段话是谁说的\n')
+    expect(doc).not.toContain('generated')
+    expect(doc).toContain('type: Trace Request')
+  })
+
+  it('标题里的冒号/引号仍被 YAML 安全处理(交给 concept.ts,不再手拼)', () => {
+    const doc = buildRequestDoc('> a: "b" \\ c\n')
+    expect(() => stripFrontmatter(doc)).not.toThrow()
+    expect(doc).toContain('type: Trace Request')
+  })
+
+  it('往返:stripFrontmatter(buildRequestDoc(text)) 精确复原原文——失败重试靠它把原话载回编辑器', () => {
+    const text = '> 这段话是谁说的\n> 第二行\n\nSource-Doc: a.md\n'
+    expect(stripFrontmatter(buildRequestDoc(text))).toBe(text)
+  })
+
+  it('带署名时往返依然成立(generated 只加在 frontmatter 里,不动正文)', () => {
+    const text = '> 引文,带一点 "引号" 与 冒号: 试探\n'
+    expect(stripFrontmatter(buildRequestDoc(text, 'human:bruce'))).toBe(text)
+  })
+})
+
+describe('buildSignedRequestDoc — the real App.svelte delegate() call site', () => {
+  it('宿主给出 author 时,写入的文档带 generated 签名', async () => {
+    const getVaultInfo = vi.fn(async () => ({ author: 'human:bruce' }))
+    const doc = await buildSignedRequestDoc('> 引文\n', getVaultInfo)
+    expect(getVaultInfo).toHaveBeenCalledTimes(1)
+    expect(doc).toContain('generated:\n  by: human:bruce\n  at: ')
+  })
+
+  it('老宿主的 host.vault.info 应答里根本没有 author 字段 → 不签名,不报错', async () => {
+    const getVaultInfo = vi.fn(async () => ({}) as { author?: string })
+    const doc = await buildSignedRequestDoc('> 引文\n', getVaultInfo)
+    expect(doc).not.toContain('generated')
+    expect(doc).toContain('type: Trace Request')
+  })
+
+  it('host.vault.info 本身失败(拒绝)时也不签名、不让委托失败', async () => {
+    const getVaultInfo = vi.fn(async () => {
+      throw new Error('io: host unreachable')
+    })
+    const doc = await buildSignedRequestDoc('> 引文\n', getVaultInfo)
+    expect(doc).not.toContain('generated')
+    expect(doc).toContain('type: Trace Request')
   })
 })
 

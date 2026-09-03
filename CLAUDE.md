@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-note.md —— 为 AI-native 时代打造的 markdown 阅读器与编辑器。
+note.md —— 为人与 AI Agent 在同一批文件中协作而设计的 markdown 阅读器与编辑器。
 一句话总纲:**读 AI 写的,留下你想的,留住只有你才写得出的字。**
 
 ## 产品主张(以此为准绳做设计决策)

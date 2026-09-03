@@ -613,17 +613,23 @@ fn clipboard_write(
     Ok(serde_json::json!({ "ok": true }))
 }
 
-/// `{} → { root, wiki_dir, daily_dir }` (all null when no vault is configured;
-/// dir names fall back to the frontend's defaults when unset).
+/// `{} → { root, wiki_dir, daily_dir, author }`(无 vault 时 root/dir 为 null;
+/// dir 名未设时回退到前端默认值)。`author` 是本机的完整 OKF actor 串
+/// (`human:<id>`,§7)——插件写「人亲手敲的」文档时的署名来源。它由 vault 的
+/// git 配置推出,所以就归在 vault info 下,复用同一个 `vault.read` 门禁。
 pub(crate) fn vault_info(services: &dyn HostServices) -> serde_json::Value {
     match services.vault_root() {
-        None => serde_json::json!({ "root": null, "wiki_dir": null, "daily_dir": null }),
+        None => serde_json::json!({
+            "root": null, "wiki_dir": null, "daily_dir": null,
+            "author": crate::okf::human_actor_for_vault(None),
+        }),
         Some(root) => {
             let (wiki, daily) = services.wiki_daily_dirs();
             serde_json::json!({
                 "root": root.to_string_lossy(),
                 "wiki_dir": wiki.unwrap_or_else(|| DEFAULT_WIKI_DIR.into()),
                 "daily_dir": daily.unwrap_or_else(|| DEFAULT_DAILY_DIR.into()),
+                "author": crate::okf::human_actor_for_vault(Some(root.as_path())),
             })
         }
     }
@@ -2124,6 +2130,19 @@ mod tests {
         assert!(res["root"].is_null());
         assert!(res["wiki_dir"].is_null());
         assert!(res["daily_dir"].is_null());
+    }
+
+    /// 插件在隔离 webview 里没有任何 IPC,`vault.info` 是它唯一能问到「我是谁」
+    /// 的地方。字段是纯增的:老插件读不到就是 undefined,不会炸。
+    #[tokio::test]
+    async fn vault_info_carries_the_human_author() {
+        let s = StubServices::default();
+        let r = run(&s, &["vault.read"], "host.vault.info", serde_json::json!({})).await;
+        let author = r.result.expect("vault.info must answer")["author"].clone();
+        assert!(
+            author.as_str().is_some_and(|a| a.starts_with("human:")),
+            "author must be a full OKF actor string, got: {author}"
+        );
     }
 
     // ── fs.read:dialog authorization ─────────────────────────────────────

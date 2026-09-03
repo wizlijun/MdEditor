@@ -3,6 +3,7 @@ use crate::model::{
     MeetingSummary, MigrationAction, MigrationItem, MigrationOptions, MigrationReport,
     NormalizedMeeting, OutputHashes,
 };
+use crate::settings::{validate_meetings_root, DEFAULT_MEETINGS_ROOT};
 use crate::srt::{validate_content_markdown, validate_srt, SpeakerLookup};
 use chrono::Utc;
 use fs2::FileExt;
@@ -18,7 +19,8 @@ use uuid::Uuid;
 const LEDGER_REL: &str = ".notemd/meetings/hemory-import-v1.json";
 const LOCK_REL: &str = ".notemd/meetings/hemory-import-v1.lock";
 const TRANSACTION_JOURNAL_REL: &str = ".notemd/meetings/hemory-transaction-journal-v1.json";
-const MEETINGS_REL: &str = "ssot/meetings";
+#[cfg(test)]
+const MEETINGS_REL: &str = DEFAULT_MEETINGS_ROOT;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Ledger {
@@ -124,6 +126,7 @@ struct PlanBundle {
 pub struct MigrationService {
     vault_root: PathBuf,
     data_dir: PathBuf,
+    meetings_root: String,
 }
 
 impl MigrationService {
@@ -131,7 +134,22 @@ impl MigrationService {
         Self {
             vault_root: vault_root.into(),
             data_dir: data_dir.into(),
+            meetings_root: DEFAULT_MEETINGS_ROOT.to_string(),
         }
+    }
+
+    pub fn with_meetings_root(
+        vault_root: impl Into<PathBuf>,
+        data_dir: impl Into<PathBuf>,
+        meetings_root: impl Into<String>,
+    ) -> Result<Self, String> {
+        let meetings_root = meetings_root.into();
+        validate_meetings_root(&meetings_root)?;
+        Ok(Self {
+            vault_root: vault_root.into(),
+            data_dir: data_dir.into(),
+            meetings_root,
+        })
     }
 
     pub fn detect(&self, source: &Path) -> Result<crate::model::SourceDetection, String> {
@@ -247,10 +265,11 @@ impl MigrationService {
                 .map(|item| item.action.clone())
                 .expect("report item exists");
             let hashes = desired_hashes(&planned.meeting, &planned.meta_bytes);
-            let new_entry = ledger_entry(
+            let new_entry = ledger_entry_at(
                 &bundle.instance_id,
                 &bundle.report.source_user,
                 &planned.meeting,
+                &self.target_relative(&planned.meeting.conversation_id),
                 hashes,
             );
             if let Err(error) = self.commit_meeting(
@@ -293,7 +312,7 @@ impl MigrationService {
 
     pub fn list_meetings(&self) -> Result<Vec<MeetingSummary>, String> {
         self.validate_vault()?;
-        let root = self.vault_root.join(MEETINGS_REL);
+        let root = self.meetings_root_path();
         if !root.exists() {
             return Ok(Vec::new());
         }
@@ -343,7 +362,7 @@ impl MigrationService {
                 if ledger_corrupt || !meta.as_ref().is_some_and(has_only_flat_meta_fields) {
                     continue;
                 }
-                let relative = target_relative(&id);
+                let relative = self.target_relative(&id);
                 let Some(checkpoint) = ledger
                     .entries
                     .values()
@@ -426,8 +445,11 @@ impl MigrationService {
                     .and_then(Value::as_str)
                     .unwrap_or("native")
                     .to_string(),
-                target_relative_path: target_relative(&id),
-                transcript_relative_path: format!("{}/{transcript_name}", target_relative(&id)),
+                target_relative_path: self.target_relative(&id),
+                transcript_relative_path: format!(
+                    "{}/{transcript_name}",
+                    self.target_relative(&id)
+                ),
             });
         }
         meetings.sort_by(|left, right| {
@@ -535,7 +557,7 @@ impl MigrationService {
                 source_schema: meeting.source_schema.clone(),
                 selected_transcript: Some(meeting.transcript_relative_path.clone()),
                 source_fingerprint: Some(meeting.fingerprint.clone()),
-                target_relative_path: target_relative(&meeting.conversation_id),
+                target_relative_path: self.target_relative(&meeting.conversation_id),
                 action: action_and_reason.0,
                 reason: action_and_reason.1,
                 output_hashes,
@@ -595,7 +617,19 @@ impl MigrationService {
         ledger_corrupt: bool,
     ) -> Result<(MigrationAction, String), String> {
         let target = self.target_path(&meeting.conversation_id);
+        let desired_relative = self.target_relative(&meeting.conversation_id);
         ensure_no_symlink_from(&self.vault_root, &target)?;
+        if let Some(previous) = ledger.entries.get(key) {
+            if previous.target_relative_path != desired_relative {
+                return Ok((
+                    MigrationAction::Conflict,
+                    format!(
+                        "meeting was previously imported at {}; changing meetings_root does not move existing meetings",
+                        previous.target_relative_path
+                    ),
+                ));
+            }
+        }
         if fs::symlink_metadata(&target)
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
         {
@@ -623,7 +657,7 @@ impl MigrationService {
             || previous.user_id.is_empty()
             || previous.conversation_id != meeting.conversation_id
             || previous.original_conversation_id != meeting.original_conversation_id
-            || previous.target_relative_path != target_relative(&meeting.conversation_id)
+            || previous.target_relative_path != desired_relative
         {
             return Ok((
                 MigrationAction::Conflict,
@@ -660,7 +694,7 @@ impl MigrationService {
         source_key: &str,
         new_entry: &LedgerEntry,
     ) -> Result<(), String> {
-        let meetings_root = self.vault_root.join(MEETINGS_REL);
+        let meetings_root = self.meetings_root_path();
         ensure_no_symlink_from(&self.vault_root, &meetings_root)?;
         fs::create_dir_all(&meetings_root)
             .map_err(|error| format!("create meetings directory: {error}"))?;
@@ -970,7 +1004,8 @@ impl MigrationService {
         let journal: TransactionJournal = serde_json::from_slice(&read_regular(&journal_path)?)
             .map_err(|error| format!("transaction journal is corrupt: {error}"))?;
         validate_transaction_journal(&journal)?;
-        let root = self.vault_root.join(MEETINGS_REL);
+        let root_relative = journal_target_root(&journal)?;
+        let root = self.vault_root.join(root_relative);
         ensure_no_symlink_from(&self.vault_root, &root)?;
         let target = root.join(&journal.target_name);
         let stage = root.join(&journal.stage_name);
@@ -1181,7 +1216,15 @@ impl MigrationService {
     }
 
     fn target_path(&self, id: &str) -> PathBuf {
-        self.vault_root.join(MEETINGS_REL).join(id)
+        self.meetings_root_path().join(id)
+    }
+
+    fn meetings_root_path(&self) -> PathBuf {
+        self.vault_root.join(&self.meetings_root)
+    }
+
+    fn target_relative(&self, id: &str) -> String {
+        format!("{}/{id}", self.meetings_root.trim_end_matches('/'))
     }
 
     fn read_ledger(&self, dry_run: bool) -> Result<(Ledger, bool), String> {
@@ -1271,10 +1314,27 @@ fn render_meta(meeting: &NormalizedMeeting, imported_at: &str) -> Result<Vec<u8>
         .map_err(|error| format!("serialize meeting metadata: {error}"))
 }
 
+#[cfg(test)]
 fn ledger_entry(
     instance_id: &str,
     user_id: &str,
     meeting: &NormalizedMeeting,
+    output_hashes: OutputHashes,
+) -> LedgerEntry {
+    ledger_entry_at(
+        instance_id,
+        user_id,
+        meeting,
+        &format!("{DEFAULT_MEETINGS_ROOT}/{}", meeting.conversation_id),
+        output_hashes,
+    )
+}
+
+fn ledger_entry_at(
+    instance_id: &str,
+    user_id: &str,
+    meeting: &NormalizedMeeting,
+    target_relative_path: &str,
     output_hashes: OutputHashes,
 ) -> LedgerEntry {
     LedgerEntry {
@@ -1298,7 +1358,7 @@ fn ledger_entry(
             .collect(),
         source_relative_path: meeting.source_relative_path.clone(),
         source_fingerprint: meeting.fingerprint.clone(),
-        target_relative_path: target_relative(&meeting.conversation_id),
+        target_relative_path: target_relative_path.to_string(),
         output_hashes,
         committed_at: Utc::now().to_rfc3339(),
     }
@@ -1399,10 +1459,6 @@ fn source_key(instance_id: &str, user_id: &str, conversation_id: &str) -> String
     format!("hemory:{instance_id}:{user_id}:{conversation_id}")
 }
 
-fn target_relative(id: &str) -> String {
-    format!("{MEETINGS_REL}/{id}")
-}
-
 fn verify_expected_plan(
     expected: &MigrationReport,
     actual: &MigrationReport,
@@ -1422,6 +1478,7 @@ fn verify_expected_plan(
                     item.conversation_id.clone(),
                     item.source_relative_path.clone(),
                     item.source_fingerprint.clone(),
+                    item.target_relative_path.clone(),
                     item.action.clone(),
                     item.output_hashes.clone(),
                 )
@@ -1492,7 +1549,7 @@ fn validate_transaction_journal(journal: &TransactionJournal) -> Result<(), Stri
         || !is_conversation_id(&journal.target_name)
         || journal.stage_name != expected_stage
         || journal.new_entry.conversation_id != journal.target_name
-        || journal.new_entry.target_relative_path != target_relative(&journal.target_name)
+        || journal_target_root(journal).is_err()
         || journal.new_entry.transcript_file != "transcript.md"
             && journal.new_entry.transcript_file != "transcript.srt"
         || journal.source_key
@@ -1524,6 +1581,24 @@ fn validate_transaction_journal(journal: &TransactionJournal) -> Result<(), Stri
         _ => return Err("transaction journal kind does not match its old/backup state".into()),
     }
     Ok(())
+}
+
+fn journal_target_root(journal: &TransactionJournal) -> Result<&Path, String> {
+    let relative = Path::new(&journal.new_entry.target_relative_path);
+    let Some(file_name) = relative.file_name().and_then(|name| name.to_str()) else {
+        return Err("transaction journal target path is invalid".into());
+    };
+    let Some(parent) = relative.parent() else {
+        return Err("transaction journal target path has no meetings root".into());
+    };
+    let parent = parent
+        .to_str()
+        .ok_or("transaction journal target path is not UTF-8")?;
+    validate_meetings_root(parent)?;
+    if file_name != journal.target_name {
+        return Err("transaction journal target path does not match its identity".into());
+    }
+    Ok(Path::new(parent))
 }
 
 fn journal_temp_name(nonce: &str) -> String {
@@ -1833,6 +1908,107 @@ mod tests {
         assert_eq!(meta["updated_at"], "2026-04-04T08:00:00+08:00");
         assert!(!meta_text.contains("secret.wav"));
         assert!(!meta_text.to_ascii_lowercase().contains("audio"));
+    }
+
+    #[test]
+    fn custom_root_controls_plan_apply_and_library_paths() {
+        let (_dir, vault, data, options) = fixture();
+        let service =
+            MigrationService::with_meetings_root(&vault, &data, "archive/transcripts").unwrap();
+        let plan = service.plan(&options).unwrap();
+        assert_eq!(
+            plan.items[0].target_relative_path,
+            "archive/transcripts/20260403_173300"
+        );
+        service
+            .apply(&options, Some(&plan), &AtomicBool::new(false), |_, _, _| {})
+            .unwrap();
+        assert!(vault
+            .join("archive/transcripts/20260403_173300/transcript.md")
+            .is_file());
+        assert!(!vault.join(MEETINGS_REL).exists());
+        let meetings = service.library_list().unwrap();
+        assert_eq!(meetings.len(), 1);
+        assert_eq!(
+            meetings[0].transcript_relative_path,
+            "archive/transcripts/20260403_173300/transcript.md"
+        );
+    }
+
+    #[test]
+    fn changing_root_conflicts_with_an_existing_checkpoint_instead_of_copying_it() {
+        let (_dir, vault, data, options) = fixture();
+        let original = MigrationService::new(&vault, &data);
+        original
+            .apply(&options, None, &AtomicBool::new(false), |_, _, _| {})
+            .unwrap();
+
+        let moved = MigrationService::with_meetings_root(&vault, &data, "other/meetings").unwrap();
+        let report = moved.plan(&options).unwrap();
+        assert_eq!(report.conflict, 1);
+        assert_eq!(report.create, 0);
+        assert!(report.items[0]
+            .reason
+            .contains("does not move existing meetings"));
+        assert!(!vault.join("other/meetings/20260403_173300").exists());
+        assert!(vault.join(MEETINGS_REL).join("20260403_173300").exists());
+    }
+
+    #[test]
+    fn reviewed_plan_is_bound_to_the_configured_target_root() {
+        let (_dir, vault, data, options) = fixture();
+        let original = MigrationService::new(&vault, &data);
+        let plan = original.plan(&options).unwrap();
+        let moved = MigrationService::with_meetings_root(&vault, &data, "other/meetings").unwrap();
+        let error = moved
+            .apply(&options, Some(&plan), &AtomicBool::new(false), |_, _, _| {})
+            .unwrap_err();
+        assert!(
+            error.contains("source or target changed after preflight"),
+            "{error}"
+        );
+        assert!(!vault.join("other/meetings/20260403_173300").exists());
+    }
+
+    #[test]
+    fn journal_recovery_uses_its_recorded_root_after_the_setting_changes() {
+        let (_dir, vault, data, options) = fixture();
+        let custom =
+            MigrationService::with_meetings_root(&vault, &data, "archive/transcripts").unwrap();
+        let bundle = custom.plan_inner(&options, false, None).unwrap();
+        let (key, planned) = bundle.meetings.iter().next().unwrap();
+        let entry = ledger_entry_at(
+            &bundle.instance_id,
+            &bundle.report.source_user,
+            &planned.meeting,
+            "archive/transcripts/20260403_173300",
+            desired_hashes(&planned.meeting, &planned.meta_bytes),
+        );
+        fs::create_dir_all(vault.join(".notemd/meetings")).unwrap();
+        UPDATE_CRASH_POINT.with(|configured| configured.set(3));
+        let error = custom
+            .commit_meeting(planned, &MigrationAction::Create, None, key, &entry)
+            .unwrap_err();
+        assert!(
+            error.contains("injected update crash at point 3"),
+            "{error}"
+        );
+        assert!(vault.join(TRANSACTION_JOURNAL_REL).exists(), "{error}");
+
+        let service_after_setting_change = MigrationService::new(&vault, &data);
+        service_after_setting_change
+            .recover_transaction_journal()
+            .unwrap();
+        assert!(vault
+            .join("archive/transcripts/20260403_173300/transcript.md")
+            .is_file());
+        assert!(!vault.join(TRANSACTION_JOURNAL_REL).exists());
+        let (ledger, corrupt) = service_after_setting_change.read_ledger(false).unwrap();
+        assert!(!corrupt);
+        assert_eq!(
+            ledger.entries.get(key).unwrap().target_relative_path,
+            "archive/transcripts/20260403_173300"
+        );
     }
 
     #[test]
@@ -2560,6 +2736,32 @@ mod tests {
         .unwrap();
         let report = service.plan(&options).unwrap();
         assert_eq!(report.source_missing, 1);
+        assert!(vault.join(MEETINGS_REL).join("20260403_173300").exists());
+    }
+
+    #[test]
+    fn a_source_moved_to_deleted_is_not_reimported_or_deleted_from_the_archive() {
+        let (dir, vault, data, mut options) = fixture();
+        let service = MigrationService::new(&vault, &data);
+        service
+            .apply(&options, None, &AtomicBool::new(false), |_, _, _| {})
+            .unwrap();
+        let source = dir
+            .path()
+            .join("source/alice/conversation/202604/20260403_173300");
+        let deleted = dir
+            .path()
+            .join("source/alice/conversation/_deleted/20260403_173300");
+        fs::create_dir_all(deleted.parent().unwrap()).unwrap();
+        fs::rename(source, deleted).unwrap();
+
+        let incremental = service.plan(&options).unwrap();
+        assert_eq!(incremental.source_missing, 1);
+        assert_eq!(incremental.create + incremental.update, 0);
+        options.mode = crate::model::MigrationMode::Full;
+        let full = service.plan(&options).unwrap();
+        assert_eq!(full.source_missing, 1);
+        assert_eq!(full.create + full.update, 0);
         assert!(vault.join(MEETINGS_REL).join("20260403_173300").exists());
     }
 

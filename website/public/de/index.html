@@ -5,7 +5,7 @@
 <!-- Hello, agent. The plain-text version of this site is at /llms.txt -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>note.md — Der Markdown-Editor für Menschen und Agents</title>
-<meta name="description" content="note.md ist ein Markdown-Reader, -Editor und Notiz-Tool mit bidirektionalen Links für das KI-Zeitalter. Lies, was deine Agents schreiben, annotiere es, behalte es in einfachen Dateien, die dir für immer gehören.">
+<meta name="description" content="Lies, was deine Agents schreiben, bewahre dein Urteil in reinem Markdown und bestätige selbst, welche persönlichen Erinnerungen zu vertrauenswürdigem Kontext werden. Deine Dateien bleiben deine.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -222,6 +222,7 @@
     <div class="nav-links">
       <a href="#features">funktionen</a>
       <a href="#sidecar">randnotizen</a>
+      <a href="/de/blog/personal-ai-memory/">gedächtnis</a>
       <a href="/de/orchestrate-agents/">für agents</a>
       <a href="https://plugins.notemd.net">plugins</a>
       <a href="https://github.com/wizlijun/note.md">github</a>
@@ -241,7 +242,7 @@
     <div>
       <span class="kicker">Für das Zeitalter des unendlichen Texts</span>
       <h1>Lies, was KI schreibt.<br>Behalte, was <em>du</em> denkst.<span class="cursor"></span></h1>
-      <p class="sub">KI schreibt mehr, als du lesen kannst. In note.md kommst du durch: markieren, nachfragen, direkt korrigieren. Alles landet im Vault, den deine Agents teilen — pures Markdown. Je mehr du hinterlässt, desto besser kennen sie dich.</p>
+      <p class="sub">KI schreibt mehr, als du lesen kannst. In note.md kommst du durch: markieren, nachfragen, direkt korrigieren. Alles landet im Vault, den deine Agents teilen — pures Markdown. Agents können erkennen, was wichtig ist; nur du bestätigst, was Erinnerung wird.</p>
       <p class="hooks">11 MB<i>·</i>jedes Typora-Theme<i>·</i>Mermaid &amp; Graphviz, abgestimmt<i>·</i>Outliner, [[Wikilinks]], Tagesnotizen<i>·</i>ein Vault für alle Agents</p>
       <div class="cta-row">
         <a class="btn-primary" href="/download" data-dl data-dl-win="Für Windows laden">
@@ -279,12 +280,12 @@
 
 <section id="features">
   <div class="wrap">
-    <div class="sec-k">Vier Dinge</div>
+    <div class="sec-k">Fünf Dinge</div>
     <ol class="claims">
       <li>
         <div><span class="n">01</span><h2>Die KI schreibt.<br>Hier liest du.</h2></div>
         <div>
-          <p>Vorschau und Quelltext, eine Taste auseinander. Themes von Notion und Typora laufen, wie sie sind. Mermaid, Graphviz und Formeln — alles abgestimmt. Die ganze App wiegt installiert rund 15 MB, ohne Browser-Engine im Bauch.</p>
+          <p>Vorschau und Quelltext, eine Taste auseinander. Themes von Notion und Typora laufen, wie sie sind. Mermaid, Graphviz und Formeln — alles abgestimmt. Installiert braucht die ganze App rund 15 MB, ohne Browser-Engine im Bauch.</p>
           <p>Eine wacklige Zeile? Markieren. Ein Zweifel? An den Rand. Falsch? Sofort korrigieren.</p>
           <p class="beat">Claude, Codex und OpenClaw haben alle ein Chatfenster. Keines davon ist zum Lesen gemacht.</p>
         </div>
@@ -297,12 +298,13 @@
         </div>
       </li>
       <li>
-        <div><span class="n">03</span><h2>Keine KI eingebaut.<br>Für KI gemacht.</h2></div>
+        <div><span class="n">03</span><h2>Von Grund auf Agent-ready.<br>Mit der KI, die du schon nutzt.</h2></div>
         <div>
-          <p>Ruft kein Modell auf. Sendet keine Anfrage. Keine einzige.</p>
-          <p>Dein Ordner ist der Arbeitsplatz, den alle KI-Tools teilen. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes — dieselben Dateien, dieselben Hausregeln, alles in Git. <a href="/de/orchestrate-agents/">So geht's</a>.</p>
+          <p>Die integrierten Agent-Workflows nutzen deine vorhandenen Agents, KI-Abos, API-Zugänge oder deine lokale Laufzeitumgebung. note.md verkauft keine Tokens, schlägt nichts auf Tokenpreise auf und berechnet keine separate Tokengebühr.</p>
+          <p>Für Modellnutzung, Limits und mögliche Kosten gelten weiterhin dein gewählter Anbieter beziehungsweise deine lokale Umgebung.</p>
+          <p>Dein Ordner ist der Arbeitsplatz, den alle KI-Tools teilen. Cowork, Claude Code, Codex, DeepSeek, ChatGPT, OpenClaw, Hermes — dieselben Dateien, dieselben Hausregeln, alles in Git. <a href="/de/orchestrate-agents/">So geht's</a>.</p>
           <p>Jede Datei, die es schreibt, folgt strikt dem <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open Knowledge Format</a> v0.2: was ein Dokument ist, woher es kommt, wer es geprüft hat — schlichtes YAML am Anfang der Datei. Jedes Werkzeug kann deinen Vault lesen. Nicht nur dieses.</p>
-          <p class="beat">Wechsle das KI-Tool, wann du willst. Was deins ist, bleibt deins.</p>
+          <p class="beat">Integrierte Agents, ohne zweiten Token-Zähler. Wechsle das KI-Tool, wann du willst. Was deins ist, bleibt deins.</p>
         </div>
       </li>
       <li>
@@ -310,6 +312,14 @@
         <div>
           <p>Schreib ein Plugin. Häng einen Cronjob dran. Setz deine Skills obendrauf.</p>
           <p>Setz ein <span class="mono-s">?</span> in eine Notiz, und ein Agent übernimmt: überarbeitet das Dokument, ergänzt den Kontext, gibt es zurück — asynchron. Ob du es nimmst, entscheidest du.</p>
+        </div>
+      </li>
+      <li>
+        <div><span class="n">05</span><h2>Agents bemerken.<br>Du entscheidest, was Erinnerung wird.</h2></div>
+        <div>
+          <p>Deine Vorlieben, Grenzen und Entscheidungen sollten nicht erraten werden. Ein Agent findet Kandidaten in der Arbeit und den Gesprächen, die du bewusst einbringst; note.md legt sie dir einzeln vor. Nur was du bestätigst, wird dauerhafter Kontext.</p>
+          <p>Die Suche findet, was du geschrieben hast. Memory regelt, was ein Agent über dich annehmen darf — und wonach er handeln darf. note.md trennt diese Aufgaben bewusst.</p>
+          <p class="beat"><a href="/de/blog/personal-ai-memory/">Warum verlässliches persönliches Gedächtnis dein Ja braucht →</a></p>
         </div>
       </li>
     </ol>
@@ -372,6 +382,7 @@
 <a href="/de/integrations/hermes/">Hermes</a></div>
 <div><b>Anleitungen</b>
 <a href="/de/orchestrate-agents/">One vault, many agents</a>
+<a href="/de/blog/personal-ai-memory/">Persönliches AI-Gedächtnis, von dir bestätigt</a>
 <a href="/de/guides/share-on-cloudflare/">Kostenlos teilen über Cloudflare</a>
 <a href="/de/guides/vault-on-github/">Vault auf GitHub</a></div>
 </div>

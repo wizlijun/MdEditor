@@ -350,6 +350,12 @@ interface SideView {
 
 **唯一生产入口**:主程序 `src/lib/okf/concept.ts` 的 `conceptFileText()` / `touchConceptFrontmatter()`(只补缺失键,已有键与顺序原样保留)。插件按 §2 复制该文件使用;后端(Rust)插件参考 `plugins-src/ebook-import/backend/src/bookconf.rs` 的 `book_frontmatter()`。
 
+**人工创建的文档必须签名**:插件里凡是「用户亲手敲进去的原始稿」(idea 原文、
+委托稿一类),写盘时必须带 `generated: { by: <host.vault.info 的 author>, at }`。
+`author` 是完整 OKF actor 串(`human:<id>`),宿主给不出时(老版本)**不签**,
+绝不自己编一个。机器产出的文档反过来:签 `<producer>/<version>`,
+**永远不得**自签 `human:`。
+
 **`type` 取值表**(OKF 不做中心注册,但项目内在 `src/lib/okf/concept.ts` 的 `CONCEPT_TYPE` 唯一登记;**新增写入点先在那里登记再用**):
 
 | type | 用于 |

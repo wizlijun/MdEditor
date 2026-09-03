@@ -1,12 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import {
+    clipboardWrite,
     memoryContextRegistry,
     memoryContextRegistryReplace,
     memoryReassignApply,
     memoryReassignPreview,
     requestId,
+    toast,
   } from './bridge'
+  import { contextBootstrapPrompt } from './contextBootstrapPrompt'
   import { hostError } from './domain'
   import type {
     ContextRegistrySnapshot,
@@ -22,12 +25,10 @@
 
   let {
     claims,
-    onclose,
     onchanged,
     onbusychange = () => {},
   }: {
     claims: EffectiveClaim[]
-    onclose: () => void
     onchanged: () => void | Promise<void>
     onbusychange?: (busy: boolean) => void
   } = $props()
@@ -315,13 +316,23 @@
     if (typeof value === 'string') return value
     try { return JSON.stringify(value) } catch { return String(value) }
   }
+
+  async function copyBootstrapPrompt() {
+    error = ''
+    try {
+      await clipboardWrite(contextBootstrapPrompt)
+      announcement = '已复制身份与场景初始化 Prompt'
+      await toast('success', announcement, '粘贴给能读取 Vault 并运行 notemd CLI 的外部 Agent；Registry 与最终分配仍由你确认。')
+    } catch (cause) {
+      error = hostError(cause)
+    }
+  }
 </script>
 
-<div class="scrim" role="presentation">
-  <div class="manager-sheet" role="dialog" aria-modal="true" aria-labelledby="role-scope-title">
+<section class="manager-panel" aria-labelledby="role-scope-title">
     <header>
-      <div><h2 id="role-scope-title">身份与场景</h2><p>统一管理 Role 与 Scope；当前运行的身份和场景仍由每个会话单独决定。</p></div>
-      <button class="close" aria-label="关闭身份与场景" onclick={onclose} disabled={busy}>×</button>
+      <div><h2 id="role-scope-title">身份与场景</h2><p>初始化 Prompt 可让外部 Agent 根据 Vault 准备候选与分配提案；Registry 与当前会话 Context 仍分别由你确认。</p></div>
+      <button class="copy-prompt" onclick={copyBootstrapPrompt} disabled={busy} title="让外部 Agent 基于 Vault 证据生成并校验 Role/Scope 候选，再提交可审阅的分配提案">复制初始化 Prompt</button>
     </header>
     <p class="sr-only" aria-live="polite">{announcement}</p>
     {#if error}<div class="error" role="alert">{error}</div>{/if}
@@ -432,17 +443,14 @@
         <footer><button onclick={() => statusChange = null} disabled={busy}>取消</button><button class="primary" onclick={confirmStatusChange} disabled={busy}>确认{statusChange.status === 'archived' ? '归档' : '恢复'}</button></footer>
       </div>
     {/if}
-  </div>
-</div>
+</section>
 
 <style>
-  .scrim{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.28);backdrop-filter:blur(8px)}
-  .manager-sheet{box-sizing:border-box;width:min(960px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:22px;border:1px solid color-mix(in srgb,CanvasText 15%,transparent);border-radius:14px;background:Canvas;color:CanvasText;box-shadow:0 24px 70px rgba(0,0,0,.34)}
-  .manager-sheet>header,.reassign>header,.preview>header,.detail-heading,.list-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.manager-sheet h2,.manager-sheet h3{margin:0}.manager-sheet>header p,.reassign header p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 60%,transparent);font-size:12px}.close{width:32px;padding:0;border:0;background:transparent;font-size:20px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.error,.notice{margin-top:12px;padding:9px 11px;border-radius:8px;font-size:12px}.error{color:#b42318;background:color-mix(in srgb,#ff3b30 10%,Canvas)}.notice{background:color-mix(in srgb,#ff9f0a 10%,Canvas)}
+  .manager-panel{min-width:0}.manager-panel>header,.reassign>header,.preview>header,.detail-heading,.list-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.manager-panel h2,.manager-panel h3{margin:0}.manager-panel>header{padding:2px 2px 0}.manager-panel>header p,.reassign header p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 60%,transparent);font-size:12px}.manager-panel h2{font-size:16px}.copy-prompt{flex:none;background:transparent}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.error,.notice{margin-top:12px;padding:9px 11px;border-radius:8px;font-size:12px}.error{color:#b42318;background:color-mix(in srgb,#ff3b30 10%,Canvas)}.notice{background:color-mix(in srgb,#ff9f0a 10%,Canvas)}
   .views{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;max-width:520px;margin:16px auto;padding:3px;border-radius:9px;background:color-mix(in srgb,CanvasText 8%,Canvas)}.views button{border:0;background:transparent}.views button.active{background:Canvas;box-shadow:0 1px 4px rgba(0,0,0,.16);font-weight:650}
   .registry-layout{display:grid;grid-template-columns:310px minmax(0,1fr);min-height:470px;border:1px solid color-mix(in srgb,CanvasText 12%,transparent);border-radius:10px;overflow:hidden}.registry-layout aside{border-right:1px solid color-mix(in srgb,CanvasText 10%,transparent);background:color-mix(in srgb,CanvasText 3%,Canvas)}.list-heading{align-items:center;padding:10px 11px}.registry-list{max-height:430px;overflow:auto}.registry-list>button{display:block;width:100%;padding:10px 12px;border:0;border-top:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:0;background:transparent;text-align:left}.registry-list>button strong,.registry-list>button small{display:block}.registry-list>button small{margin-top:3px;color:color-mix(in srgb,CanvasText 55%,transparent)}.registry-list>button.selected{background:#0a84ff;color:white}.registry-list>button.selected small{color:rgba(255,255,255,.78)}.registry-list>button.archived:not(.selected){opacity:.6}.registry-detail{padding:20px}.registry-detail>p{white-space:pre-wrap}.detail-heading h3{margin:8px 0 3px}.badge,.status{display:inline-block;padding:3px 7px;border-radius:6px;background:color-mix(in srgb,CanvasText 8%,Canvas);font-size:11px}.status.archived{color:#9a5500;background:color-mix(in srgb,#ff9f0a 17%,Canvas)}.registry-detail dl{display:grid;gap:1px;margin:16px 0;background:color-mix(in srgb,CanvasText 8%,transparent)}.registry-detail dl>div{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;padding:9px;background:Canvas}.registry-detail dt{color:color-mix(in srgb,CanvasText 55%,transparent)}.registry-detail dd{margin:0;white-space:pre-wrap}.registry-detail footer,.preview footer,.status-confirm footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
   .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.form-grid label{display:grid;gap:4px;margin-top:12px;color:color-mix(in srgb,CanvasText 68%,transparent);font-size:12px}.form-grid .wide{grid-column:1/-1}
   .reassign{display:grid;gap:14px}.reassign>header>div:last-child{display:flex;gap:7px}.reassign-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(240px,1fr);gap:12px}.reassign fieldset{min-width:0;margin:0;padding:10px;border:1px solid color-mix(in srgb,CanvasText 11%,transparent);border-radius:9px}.reassign legend{padding:0 5px;font-weight:650}.targets{display:grid;gap:12px}.checks{display:grid;gap:7px;max-height:160px;overflow:auto}.checks.claims{max-height:335px}.checks label{display:flex;align-items:flex-start;gap:7px}.checks input{flex:none;width:auto;min-height:auto;margin-top:3px}.checks span,.checks strong,.checks small{display:block}.checks small{color:color-mix(in srgb,CanvasText 55%,transparent)}.preview-actions{display:flex;justify-content:flex-end}.preview{padding:13px;border-radius:10px;background:color-mix(in srgb,CanvasText 4%,Canvas)}.preview>header span{font-size:12px}.preview>header small{display:block;margin-top:3px;color:color-mix(in srgb,CanvasText 55%,transparent)}.matches{display:grid;gap:7px;margin-top:10px;max-height:220px;overflow:auto}.matches article{padding:9px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:7px;background:Canvas}.matches article.blocked{border-color:color-mix(in srgb,#ff3b30 38%,transparent)}.matches article>div{display:flex;justify-content:space-between;gap:12px}.matches p{margin:5px 0;overflow-wrap:anywhere}.matches small{color:color-mix(in srgb,CanvasText 55%,transparent)}
   .status-confirm{position:sticky;bottom:0;display:flex;justify-content:space-between;align-items:center;gap:18px;margin:14px -10px -10px;padding:12px;border:1px solid color-mix(in srgb,#ff9f0a 40%,transparent);border-radius:9px;background:Canvas;box-shadow:0 -8px 24px rgba(0,0,0,.12)}.status-confirm p{margin:3px 0 0;color:color-mix(in srgb,CanvasText 60%,transparent);font-size:12px}.status-confirm footer{margin:0}.empty{padding:44px 16px;text-align:center;color:color-mix(in srgb,CanvasText 48%,transparent)}.empty.compact{padding:20px}
-  @media(max-width:720px){.registry-layout,.reassign-grid{grid-template-columns:1fr}.registry-layout aside{border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.registry-list{max-height:180px}.form-grid{grid-template-columns:1fr}.form-grid .wide{grid-column:auto}.status-confirm{display:block}}
+  @media(max-width:720px){.manager-panel>header{display:block}.copy-prompt{margin-top:10px}.registry-layout,.reassign-grid{grid-template-columns:1fr}.registry-layout aside{border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.registry-list{max-height:180px}.form-grid{grid-template-columns:1fr}.form-grid .wide{grid-column:auto}.status-confirm{display:block}}
 </style>

@@ -46,6 +46,19 @@ describe('buildIdeaDoc', () => {
     const out = buildIdeaDoc(body, '2026-08-04T00:00:00Z')
     expect(out.endsWith(body)).toBe(true)
   })
+
+  it('带署名时写 generated —— idea 原文是你亲手敲的', () => {
+    const doc = buildIdeaDoc('一个想法\n', '2026-08-20T10:31:00.000Z', 'human:bruce')
+    expect(doc).toBe(
+      '---\ntype: Idea\ncreated: 2026-08-20T10:31:00.000Z\n' +
+      'generated:\n  by: human:bruce\n  at: 2026-08-20T10:31:00.000Z\n---\n一个想法\n',
+    )
+  })
+
+  it('宿主太老、拿不到 author 时不签,不炸', () => {
+    expect(buildIdeaDoc('一个想法\n', '2026-08-20T10:31:00.000Z', undefined))
+      .toBe('---\ntype: Idea\ncreated: 2026-08-20T10:31:00.000Z\n---\n一个想法\n')
+  })
 })
 
 describe('rebuildIdeaDoc', () => {
@@ -73,6 +86,11 @@ describe('rebuildIdeaDoc', () => {
   it('supplies created when the original frontmatter has none', () => {
     const out = rebuildIdeaDoc('type: Idea', 'body', '2026-08-04T00:00:00Z')
     expect(out).toContain('created: 2026-08-04T00:00:00Z')
+  })
+
+  it('重存已有 idea 不会补签 —— 只在创建时签', () => {
+    const out = rebuildIdeaDoc('type: Idea\ncreated: 2026-01-01T00:00:00.000Z', '正文\n', '2026-08-20T10:31:00.000Z')
+    expect(out).not.toContain('generated')
   })
 
   it('produces a lint-clean document and keeps the body verbatim', () => {

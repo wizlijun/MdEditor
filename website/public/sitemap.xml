@@ -385,4 +385,36 @@
     <xhtml:link rel="alternate" hreflang="zh" href="https://notemd.net/zh/orchestrate-agents/"/>
     <xhtml:link rel="alternate" hreflang="x-default" href="https://notemd.net/orchestrate-agents/"/>
   </url>
+  <url>
+    <loc>https://notemd.net/blog/personal-ai-memory/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://notemd.net/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="de" href="https://notemd.net/de/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://notemd.net/ja/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="zh" href="https://notemd.net/zh/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://notemd.net/blog/personal-ai-memory/"/>
+  </url>
+  <url>
+    <loc>https://notemd.net/de/blog/personal-ai-memory/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://notemd.net/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="de" href="https://notemd.net/de/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://notemd.net/ja/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="zh" href="https://notemd.net/zh/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://notemd.net/blog/personal-ai-memory/"/>
+  </url>
+  <url>
+    <loc>https://notemd.net/ja/blog/personal-ai-memory/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://notemd.net/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="de" href="https://notemd.net/de/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://notemd.net/ja/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="zh" href="https://notemd.net/zh/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://notemd.net/blog/personal-ai-memory/"/>
+  </url>
+  <url>
+    <loc>https://notemd.net/zh/blog/personal-ai-memory/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://notemd.net/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="de" href="https://notemd.net/de/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://notemd.net/ja/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="zh" href="https://notemd.net/zh/blog/personal-ai-memory/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://notemd.net/blog/personal-ai-memory/"/>
+  </url>
 </urlset>

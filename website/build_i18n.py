@@ -12,12 +12,12 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<title>note.md — 人与 agent 共用的 markdown 编辑器</title>',
   '<title>note.md — Der Markdown-Editor für Menschen und Agents</title>',
   '<title>note.md — 人間とエージェントのための markdown エディタ</title>'),
- ('content="note.md is a markdown reader, editor and bidirectional-linking notes tool for the AI-native era. Read what '
-  'your agents write, annotate it, keep it in plain files you own forever."',
-  'content="note.md 是为 AI-native 时代打造的 markdown 阅读器、编辑器与双链笔记工具。读 agent 写的东西，就地批注，存在永远属于你的纯文本文件里。"',
-  'content="note.md ist ein Markdown-Reader, -Editor und Notiz-Tool mit bidirektionalen Links für das KI-Zeitalter. '
-  'Lies, was deine Agents schreiben, annotiere es, behalte es in einfachen Dateien, die dir für immer gehören."',
-  'content="note.md は AI ネイティブ時代の markdown リーダー、エディタ、双方向リンクのノートツール。エージェントが書いたものを読み、その場で書き込み、永遠にあなたのものであるプレーンなファイルに残す。"'),
+ ('content="Read what your agents write, keep your judgment in plain markdown, and approve which personal memories '
+  'become trusted context. Your files stay yours."',
+  'content="读 agent 写的东西，把你的判断留在纯 markdown 里，并亲自批准哪些个人记忆可以成为可信上下文。文件始终属于你。"',
+  'content="Lies, was deine Agents schreiben, bewahre dein Urteil in reinem Markdown und bestätige selbst, welche '
+  'persönlichen Erinnerungen zu vertrauenswürdigem Kontext werden. Deine Dateien bleiben deine."',
+  'content="Agent が書いたものを読み、あなたの判断をプレーンな markdown に残し、どの個人メモリを信頼できる文脈にするか自分で承認する。ファイルはいつまでもあなたのもの。"'),
  ('<a href="#features">features</a>',
   '<a href="#features">功能</a>',
   '<a href="#features">funktionen</a>',
@@ -26,6 +26,10 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<a href="#sidecar">手记</a>',
   '<a href="#sidecar">randnotizen</a>',
   '<a href="#sidecar">サイドノート</a>'),
+ ('<a href="/blog/personal-ai-memory/">memory</a>',
+  '<a href="/blog/personal-ai-memory/">记忆</a>',
+  '<a href="/blog/personal-ai-memory/">gedächtnis</a>',
+  '<a href="/blog/personal-ai-memory/">メモリ</a>'),
  ('<a href="/orchestrate-agents/">for agents</a>',
   '<a href="/orchestrate-agents/">给 agent</a>',
   '<a href="/orchestrate-agents/">für agents</a>',
@@ -47,12 +51,13 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '<h1>Lies, was KI schreibt.<br>Behalte, was <em>du</em> denkst.<span class="cursor"></span></h1>',
   '<h1>読むのは AI の文。<br>残すのは<em>あなたの考え</em>。<span class="cursor"></span></h1>'),
  ('AI writes more than you can read. note.md is where you get through it: highlight, question, fix it on the spot. '
-  'It all lands in the vault your agents share — plain markdown, and the more you leave, the better they know you.',
-  'AI 写的，读不完。note.md 让你读得进去：划重点、写疑问、直接改。全部存进你和 agent 共享的 vault，纯 markdown——留得越多，agent 越懂你。',
+  'It all lands in the vault your agents share — plain markdown. Agents can notice what matters; only you approve '
+  'what becomes memory.',
+  'AI 写的，读不完。note.md 让你读得进去：划重点、写疑问、直接改。全部存进你和 Agent 共享的 vault，纯 markdown。Agent 可以发现要紧的事；什么成为记忆，只有你能批准。',
   'KI schreibt mehr, als du lesen kannst. In note.md kommst du durch: markieren, nachfragen, direkt korrigieren. '
-  'Alles landet im Vault, den deine Agents teilen — pures Markdown. Je mehr du hinterlässt, desto besser kennen sie dich.',
+  'Alles landet im Vault, den deine Agents teilen — pures Markdown. Agents können erkennen, was wichtig ist; nur du bestätigst, was Erinnerung wird.',
   'AI が書く量は、読み切れない。note.md なら読み進められる。ハイライトして、疑問を書いて、その場で直す。'
-  'すべては agent と共有する vault に、ただの markdown として残る——残すほど、agent はあなたを理解していく。'),
+  'すべては Agent と共有する Vault に、ただの markdown として残る。Agent は大切なことに気づける。何を記憶にするか承認するのは、あなただけ。'),
  ('11 MB<i>·</i>any Typora theme<i>·</i>Mermaid &amp; Graphviz, tuned<i>·</i>outliner, [[wikilinks]], daily notes'
   '<i>·</i>one vault every agent shares',
   '11 MB<i>·</i>主题随你换<i>·</i>Mermaid、Graphviz 都调过<i>·</i>大纲、[[双链]]、每日笔记<i>·</i>一个 vault，所有 agent 共用',
@@ -85,21 +90,21 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   'Windows 10/11 · 免费开源 · 文件都在你自己电脑上 · <a href="/download?os=mac">Mac？</a>',
   'Windows 10/11 · frei &amp; offen · deine Dateien bleiben auf deinem PC · <a href="/download?os=mac">Mac?</a>',
   'Windows 10/11 · 無料＆オープン · ファイルはあなたの PC の中に · <a href="/download?os=mac">Mac は？</a>'),
- ('<div class="sec-k">Four things</div>',
-  '<div class="sec-k">四件事</div>',
-  '<div class="sec-k">Vier Dinge</div>',
-  '<div class="sec-k">四つのこと</div>'),
+ ('<div class="sec-k">Five things</div>',
+  '<div class="sec-k">五件事</div>',
+  '<div class="sec-k">Fünf Dinge</div>',
+  '<div class="sec-k">五つのこと</div>'),
  # ---- claim 01 ----
  ('<h2>AI handles the writing.<br>This handles the reading.</h2>',
   '<h2>写，交给 AI。<br>读，交给这里。</h2>',
   '<h2>Die KI schreibt.<br>Hier liest du.</h2>',
   '<h2>書くのは AI。<br>読むのは、ここ。</h2>'),
  ('Preview and source, one key apart. Notion and Typora themes work as they are. Mermaid, Graphviz and math, all '
-  'tuned. The whole app is 11 MB, with no browser engine inside.',
-  '预览与源码，一键之隔。Notion、Typora 的主题，拿来就用。Mermaid、Graphviz、公式，都调过。整个应用 11 MB，没有浏览器内核。',
+  'tuned. The whole app installs at ~15 MB, with no browser engine inside.',
+  '预览与源码，一键之隔。Notion、Typora 的主题，拿来就用。Mermaid、Graphviz、公式，都调过。整个应用安装后约 15 MB，没有浏览器内核。',
   'Vorschau und Quelltext, eine Taste auseinander. Themes von Notion und Typora laufen, wie sie sind. Mermaid, '
-  'Graphviz und Formeln — alles abgestimmt. Die ganze App wiegt 11 MB, ohne Browser-Engine im Bauch.',
-  'プレビューとソースは、キー一つ隣。Notion や Typora のテーマは、そのまま使える。Mermaid も Graphviz も数式も、調整済み。アプリ全体で 11 MB、ブラウザエンジンは入っていない。'),
+  'Graphviz und Formeln — alles abgestimmt. Installiert braucht die ganze App rund 15 MB, ohne Browser-Engine im Bauch.',
+  'プレビューとソースは、キー一つ隣。Notion や Typora のテーマは、そのまま使える。Mermaid も Graphviz も数式も、調整済み。インストール後も約 15 MB、ブラウザエンジンは入っていない。'),
  ('A shaky line? Highlight it. A doubt? In the margin. Wrong? Fix it on the spot.',
   '可疑的句子，划出来。疑问，写在旁边。错了，当场改。',
   'Eine wacklige Zeile? Markieren. Ein Zweifel? An den Rand. Falsch? Sofort korrigieren.',
@@ -124,23 +129,30 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   'ganzen Roam-Graphen herüber. Ein Obsidian-Vault geht einfach auf.',
   'Roam と Obsidian は、とっくに答えを出していた。note.md はそれをファイルに戻す。プラグイン一つで Roam のグラフを丸ごと移せる。Obsidian の vault は、そのまま開く。'),
  # ---- claim 03 ----
- ('<h2>No AI inside.<br>Made for AI.</h2>',
-  '<h2>不带 AI。<br>为 AI 而生。</h2>',
-  '<h2>Keine KI eingebaut.<br>Für KI gemacht.</h2>',
-  '<h2>AI は入っていない。<br>AI のために作られている。</h2>'),
- ('Calls no model. Sends no request. Not one.',
-  '不连模型，不发请求。一个都没有。',
-  'Ruft kein Modell auf. Sendet keine Anfrage. Keine einzige.',
-  'モデルを呼ばない。リクエストも送らない。一つも。'),
- ('Your folder is the workspace every AI tool shares. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes — same '
+ ('<h2>Agent-ready by design.<br>Use the AI you already have.</h2>',
+  '<h2>为 AI Agent 原生设计。<br>用你已经在用的 AI。</h2>',
+  '<h2>Von Grund auf Agent-ready.<br>Mit der KI, die du schon nutzt.</h2>',
+  '<h2>AIエージェントを前提に設計。<br>いつものAIを、そのまま。</h2>'),
+ ('Built-in agent workflows use the agents, AI subscriptions, API accounts, or local runtimes you already have. '
+  'note.md sells no tokens, adds no token markup, and charges no separate per-token fee.',
+  '内置 Agent 工作流复用你已有的 Agent、AI 订阅、API 账户或本地运行环境。note.md 不另售 Token，不对 Token 加价，也不另收一份按 Token 计费的使用费。',
+  'Die integrierten Agent-Workflows nutzen deine vorhandenen Agents, KI-Abos, API-Zugänge oder deine lokale Laufzeitumgebung. '
+  'note.md verkauft keine Tokens, schlägt nichts auf Tokenpreise auf und berechnet keine separate Tokengebühr.',
+  '内蔵のエージェントワークフローは、すでに利用中のエージェント、AIサブスクリプション、APIアカウント、またはローカル実行環境をそのまま使います。'
+  'note.md 独自のトークン販売、価格上乗せ、従量課金はありません。'),
+ ("Model usage still follows your chosen provider's plan, limits, and billing — or your own local compute.",
+  '实际模型用量与限制仍按你所选服务的订阅额度、API 计费执行；本地模型使用你自己的算力。',
+  'Für Modellnutzung, Limits und mögliche Kosten gelten weiterhin dein gewählter Anbieter beziehungsweise deine lokale Umgebung.',
+  'モデルの利用量・制限・料金は、選択したサービスのプランまたはローカル環境に従います。'),
+ ('Your folder is the workspace every AI tool shares. Cowork, Claude Code, Codex, DeepSeek, ChatGPT, OpenClaw, Hermes — same '
   'files, same house rules, all in git. '
   '<a href="/orchestrate-agents/">See how</a>.',
-  '你的文件夹，就是所有 AI 工具共用的工作台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同一批文件，同一套规矩，'
+  '你的文件夹，就是所有 AI 工具共用的工作台。Cowork、Claude Code、Codex、DeepSeek、ChatGPT、OpenClaw、Hermes——同一批文件，同一套规矩，'
   '全在 git 里。<a href="/orchestrate-agents/">看怎么做</a>。',
-  'Dein Ordner ist der Arbeitsplatz, den alle KI-Tools teilen. Cowork, Claude Code, Codex, ChatGPT, OpenClaw, Hermes '
+  'Dein Ordner ist der Arbeitsplatz, den alle KI-Tools teilen. Cowork, Claude Code, Codex, DeepSeek, ChatGPT, OpenClaw, Hermes '
   '— dieselben Dateien, dieselben Hausregeln, alles in Git. '
   '<a href="/orchestrate-agents/">So geht\'s</a>.',
-  'あなたのフォルダは、どの AI ツールも共有する作業台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同じファイル、'
+  'あなたのフォルダは、どの AI ツールも共有する作業台。Cowork、Claude Code、Codex、DeepSeek、ChatGPT、OpenClaw、Hermes——同じファイル、'
   '同じルール、すべて git の中。<a href="/orchestrate-agents/">やり方を見る</a>。'),
  ('Every file it writes follows <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open '
   'Knowledge Format</a> v0.2, strictly: what a document is, where it came from, who checked it — plain YAML at the top '
@@ -153,10 +165,10 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   '書き出すファイルはすべて <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open '
   'Knowledge Format</a> v0.2 に厳密に従う。何の文書か、どこから来たか、誰が確認したか——ファイル冒頭のただの YAML に。'
   'あなたの vault は、どのツールからでも読める。これだけではなく。'),
- ("Change AI tools whenever you want. What's yours stays yours.",
-  '换 AI 工具，随时。你的东西，永远是你的。',
-  'Wechsle das KI-Tool, wann du willst. Was deins ist, bleibt deins.',
-  'AI ツールは、いつ変えてもいい。あなたのものは、あなたのまま。'),
+ ("Built-in agents, without a second token meter. Change AI tools whenever you want. What's yours stays yours.",
+  '内置 Agent，不多一层 Token 账单。换 AI 工具，随时。你的东西，永远是你的。',
+  'Integrierte Agents, ohne zweiten Token-Zähler. Wechsle das KI-Tool, wann du willst. Was deins ist, bleibt deins.',
+  '内蔵 Agent に、二重のトークン課金はありません。AI ツールはいつ変えてもいい。あなたのものは、あなたのままです。'),
  # ---- claim 04 ----
  ('<h2>Need something else?<br>Add it.</h2>',
   '<h2>还要什么，<br>自己加。</h2>',
@@ -172,6 +184,26 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
   'Setz ein <span class="mono-s">?</span> in eine Notiz, und ein Agent übernimmt: überarbeitet das Dokument, ergänzt '
   'den Kontext, gibt es zurück — asynchron. Ob du es nimmst, entscheidest du.',
   '注釈に <span class="mono-s">?</span> を置けば、agent が引き取る。文書を直し、文脈を補い、非同期で返してくる。使うかどうかは、あなたが決める。'),
+ # ---- claim 05 ----
+ ('<h2>Agents notice.<br>You decide what becomes memory.</h2>',
+  '<h2>Agent 负责发现。<br>什么成为记忆，由你决定。</h2>',
+  '<h2>Agents bemerken.<br>Du entscheidest, was Erinnerung wird.</h2>',
+  '<h2>Agent が気づく。<br>記憶にするかは、あなたが決める。</h2>'),
+ ('Your preferences, boundaries and decisions should not be guessed. An agent finds candidates in the work and '
+  'conversations you choose to bring in; note.md gives them back to you one at a time. Only what you confirm becomes '
+  'lasting context.',
+  '你的偏好、边界和决定，不该靠模型猜。Agent 从你选择带进来的工作与沟通中发现候选；note.md 一条一条交给你判断。只有你确认的，才成为长期上下文。',
+  'Deine Vorlieben, Grenzen und Entscheidungen sollten nicht erraten werden. Ein Agent findet Kandidaten in der Arbeit und den Gesprächen, die du bewusst einbringst; note.md legt sie dir einzeln vor. Nur was du bestätigst, wird dauerhafter Kontext.',
+  'あなたの好み、境界、決定を、モデルの推測に任せてはいけない。Agent はあなたが選んで持ち込んだ仕事や会話から候補を見つけ、note.md が一つずつ提示する。あなたが確認したものだけが、長く使われる文脈になる。'),
+ ('Search finds what you wrote. Memory governs what an agent may believe about you — and what it may act on. note.md '
+  'keeps those jobs separate on purpose.',
+  '搜索帮 agent 找到你写过的资料。Memory 决定它可以相信哪些关于你的主张，又可以据此做什么。note.md 刻意把两件事分开。',
+  'Die Suche findet, was du geschrieben hast. Memory regelt, was ein Agent über dich annehmen darf — und wonach er handeln darf. note.md trennt diese Aufgaben bewusst.',
+  '検索は、あなたが書いた資料を見つける。Memory は、Agent があなたについて何を信頼し、何に基づいて行動してよいかを管理する。note.md はこの二つを意図して分けている。'),
+ ('<a href="/blog/personal-ai-memory/">Why trustworthy personal memory needs your yes →</a>',
+  '<a href="/blog/personal-ai-memory/">可信的个人记忆，为什么必须由你点头 →</a>',
+  '<a href="/blog/personal-ai-memory/">Warum verlässliches persönliches Gedächtnis dein Ja braucht →</a>',
+  '<a href="/blog/personal-ai-memory/">信頼できる個人メモリに、なぜあなたの確認が必要なのか →</a>'),
  ('<div class="sec-k">The trick</div>',
   '<div class="sec-k">关键</div>',
   '<div class="sec-k">Der Trick</div>',
@@ -234,6 +266,10 @@ STRINGS = [('<title>note.md — The markdown editor for humans and agents</title
  ('<b>Compare</b>', '<b>对比</b>', '<b>Vergleich</b>', '<b>比較</b>'),
  ('<b>Integrations</b>', '<b>集成</b>', '<b>Integrationen</b>', '<b>連携</b>'),
  ('<b>Guides</b>', '<b>指南</b>', '<b>Anleitungen</b>', '<b>ガイド</b>'),
+ ('>Personal AI memory you confirm</a>',
+  '>由你确认的个人 AI 记忆</a>',
+  '>Persönliches AI-Gedächtnis, von dir bestätigt</a>',
+  '>あなたが確認する個人 AI メモリ</a>'),
  ('>Free sharing on Cloudflare</a>',
   '>Cloudflare 免费分享</a>',
   '>Kostenlos teilen über Cloudflare</a>',
@@ -272,7 +308,7 @@ def build(lang):
         if old not in src:
             missing.append(old[:60]); continue
         src = src.replace(old, new)
-    for seg in ("compare", "integrations", "guides", "orchestrate-agents"):
+    for seg in ("compare", "integrations", "guides", "blog", "orchestrate-agents"):
         src = src.replace(f'href="/{seg}/', f'href="/{lang}/{seg}/')
     os.makedirs(f"public/{lang}", exist_ok=True)
     open(f"public/{lang}/index.html", "w", encoding="utf-8").write(src)

@@ -80,25 +80,121 @@ export function actorLabel(actor: MemoryClaimRevision['recorded_by']): string {
   return `${actor.kind} · ${actor.id}`
 }
 
-export function currentClaims(claims: EffectiveClaim[], query = '', target: 'all' | ProjectionTarget | 'structured' = 'all'): EffectiveClaim[] {
+export type ConfirmedSort = 'priority' | 'recent' | 'oldest' | 'text'
+
+export interface ConfirmedClaimGroup {
+  key: string
+  label: string
+  categories: Array<{ key: string; label: string; items: EffectiveClaim[] }>
+}
+
+const claimKindRank: Record<ClaimKind, number> = {
+  identity: 0, preference: 1, boundary: 2, decision: 3, belief: 4,
+  observation: 5, commitment: 6, practice: 7, 'material-fact': 8, quotation: 9,
+}
+const claimTextCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
+
+function compareRecordedAt(left: MemoryClaimRevision, right: MemoryClaimRevision, newestFirst: boolean): number {
+  const leftTime = Date.parse(left.recorded_at)
+  const rightTime = Date.parse(right.recorded_at)
+  const leftValid = Number.isFinite(leftTime)
+  const rightValid = Number.isFinite(rightTime)
+  if (leftValid !== rightValid) return leftValid ? -1 : 1
+  if (!leftValid) return 0
+  return newestFirst ? rightTime - leftTime : leftTime - rightTime
+}
+
+function sectionKey(claim: MemoryClaimRevision): 'memory' | 'user' | 'structured' {
+  return claim.projection.visibility === 'projection' ? claim.projection.target : 'structured'
+}
+
+function sectionRank(claim: MemoryClaimRevision): number {
+  return { memory: 0, user: 1, structured: 2 }[sectionKey(claim)]
+}
+
+function categoryRank(claim: MemoryClaimRevision): number {
+  const known = categoryOptions[claim.projection.target].findIndex((item) => item.id === claim.projection.category)
+  return known < 0 ? categoryOptions[claim.projection.target].length : known
+}
+
+function compareProjectionGroup(left: MemoryClaimRevision, right: MemoryClaimRevision): number {
+  const section = sectionRank(left) - sectionRank(right)
+  if (section) return section
+  if (sectionKey(left) === 'structured' && left.projection.target !== right.projection.target) {
+    return left.projection.target === 'memory' ? -1 : 1
+  }
+  return categoryRank(left) - categoryRank(right)
+    || left.projection.category.localeCompare(right.projection.category)
+}
+
+export function currentClaims(
+  claims: EffectiveClaim[],
+  query = '',
+  target: 'all' | ProjectionTarget | 'structured' = 'all',
+  sort: ConfirmedSort = 'priority',
+): EffectiveClaim[] {
   const q = query.trim().toLocaleLowerCase()
   const salienceRank = { pinned: 0, normal: 1 }
-  const polarityRank = { negative: 0, positive: 1, neutral: 2 }
   return claims.filter(({ claim, application_state }) =>
     application_state === 'current'
     && claim.workflow.state === 'approved'
     && claim.lifecycle.state === 'active'
-    && (target === 'all' || (target === 'structured' ? claim.projection.visibility !== 'projection' : claim.projection.target === target))
+    && (target === 'all' || (target === 'structured'
+      ? claim.projection.visibility !== 'projection'
+      : claim.projection.visibility === 'projection' && claim.projection.target === target))
     && (!q || `${claim.text} ${claim.claim_kind} ${claim.projection.category} ${claim.subject.label ?? ''}`.toLocaleLowerCase().includes(q)),
-  ).sort((a, b) => salienceRank[a.claim.salience] - salienceRank[b.claim.salience]
-    || polarityRank[a.claim.polarity] - polarityRank[b.claim.polarity]
-    || a.claim.text.localeCompare(b.claim.text))
+  ).sort((a, b) => {
+    const group = compareProjectionGroup(a.claim, b.claim)
+    if (group) return group
+    const withinGroup = sort === 'priority'
+      ? salienceRank[a.claim.salience] - salienceRank[b.claim.salience]
+        || claimKindRank[a.claim.claim_kind] - claimKindRank[b.claim.claim_kind]
+      : sort === 'text'
+        ? claimTextCollator.compare(a.claim.text, b.claim.text)
+        : compareRecordedAt(a.claim, b.claim, sort === 'recent')
+    return withinGroup || a.claim.claim_id.localeCompare(b.claim.claim_id)
+  })
+}
+
+export function groupCurrentClaims(claims: EffectiveClaim[]): ConfirmedClaimGroup[] {
+  const sections: ConfirmedClaimGroup[] = []
+  for (const item of claims) {
+    const claim = item.claim
+    const key = sectionKey(claim)
+    let section = sections.find((candidate) => candidate.key === key)
+    if (!section) {
+      section = {
+        key,
+        label: key === 'memory' ? 'MEMORY.md' : key === 'user' ? 'USER.md' : '仅结构化上下文',
+        categories: [],
+      }
+      sections.push(section)
+    }
+    const categoryKey = key === 'structured'
+      ? `${claim.projection.target}:${claim.projection.category}`
+      : claim.projection.category
+    let category = section.categories.find((candidate) => candidate.key === categoryKey)
+    if (!category) {
+      const projectionPrefix = claim.projection.target === 'memory' ? 'MEMORY' : 'USER'
+      category = {
+        key: categoryKey,
+        label: key === 'structured'
+          ? `${projectionPrefix} · ${categoryLabel(claim.projection.target, claim.projection.category)}`
+          : categoryLabel(claim.projection.target, claim.projection.category),
+        items: [],
+      }
+      section.categories.push(category)
+    }
+    category.items.push(item)
+  }
+  return sections
 }
 
 export function pendingClaims(pending: PendingClaim[]): PendingClaim[] {
   const riskRank: Record<RiskClass, number> = { 'action-sensitive': 0, behavioral: 1, informational: 2 }
   return [...pending].sort((a, b) => riskRank[a.revision.risk_class] - riskRank[b.revision.risk_class]
-    || a.revision.recorded_at.localeCompare(b.revision.recorded_at))
+    || a.revision.recorded_at.localeCompare(b.revision.recorded_at)
+    || a.revision.revision_id.localeCompare(b.revision.revision_id))
 }
 
 export function approvalForPending(item: PendingClaim): ApprovalKind {

@@ -5,6 +5,7 @@ import {
   approvalLabels,
   categoryLabel,
   currentClaims,
+  groupCurrentClaims,
   hostError,
   pendingClaims,
   subjectLabel,
@@ -37,6 +38,36 @@ describe('Memory Protocol v2 domain', () => {
     expect(currentClaims([normal], '结论', 'memory')).toHaveLength(0)
   })
 
+  it('groups confirmed claims by projection and category in projected-file order', () => {
+    const userNormal: EffectiveClaim = { claim: claim({ claim_id: 'user-b', revision_id: 'user-b', text: '普通偏好。' }), application_state: 'current' }
+    const userPinned: EffectiveClaim = { claim: claim({ claim_id: 'user-a', revision_id: 'user-a', text: '重点偏好。', salience: 'pinned' }), application_state: 'current' }
+    const memoryDecision: EffectiveClaim = { claim: claim({ claim_id: 'memory-a', revision_id: 'memory-a', projection: { target: 'memory', category: 'decisions', visibility: 'projection' }, claim_kind: 'decision' }), application_state: 'current' }
+    const structured: EffectiveClaim = { claim: claim({ claim_id: 'structured-a', revision_id: 'structured-a', projection: { target: 'user', category: 'boundaries', visibility: 'trusted-agent' } }), application_state: 'current' }
+
+    const sorted = currentClaims([userNormal, structured, userPinned, memoryDecision])
+    const groups = groupCurrentClaims(sorted)
+    expect(groups.map((group) => group.label)).toEqual(['MEMORY.md', 'USER.md', '仅结构化上下文'])
+    expect(groups[1].categories[0].label).toBe('偏好')
+    expect(groups[1].categories[0].items.map((item) => item.claim.claim_id)).toEqual(['user-a', 'user-b'])
+    expect(groups[2].categories[0].label).toBe('USER · 边界')
+    expect(currentClaims([structured], '', 'user')).toHaveLength(0)
+    expect(currentClaims([structured], '', 'structured')).toHaveLength(1)
+  })
+
+  it('offers recent and oldest ordering within each projection category', () => {
+    const older: EffectiveClaim = { claim: claim({ claim_id: 'older', recorded_at: '2026-08-01T00:00:00Z' }), application_state: 'current' }
+    const newer: EffectiveClaim = { claim: claim({ claim_id: 'newer', revision_id: 'newer', recorded_at: '2026-09-01T00:00:00Z' }), application_state: 'current' }
+    const invalid: EffectiveClaim = { claim: claim({ claim_id: 'invalid', revision_id: 'invalid', recorded_at: 'not-a-date' }), application_state: 'current' }
+    expect(currentClaims([older, invalid, newer], '', 'all', 'recent').map((item) => item.claim.claim_id)).toEqual(['newer', 'older', 'invalid'])
+    expect(currentClaims([newer, older], '', 'all', 'oldest').map((item) => item.claim.claim_id)).toEqual(['older', 'newer'])
+  })
+
+  it('sorts mixed text deterministically with numeric collation', () => {
+    const ten: EffectiveClaim = { claim: claim({ claim_id: 'ten', text: '主题 10' }), application_state: 'current' }
+    const two: EffectiveClaim = { claim: claim({ claim_id: 'two', revision_id: 'two', text: '主题 2' }), application_state: 'current' }
+    expect(currentClaims([ten, two], '', 'all', 'text').map((item) => item.claim.claim_id)).toEqual(['two', 'ten'])
+  })
+
   it('keeps approval semantics distinct by claim kind', () => {
     expect(approvalKindFor('preference')).toBe('self-representation')
     expect(approvalKindFor('boundary')).toBe('behavioral-authorization')
@@ -51,6 +82,12 @@ describe('Memory Protocol v2 domain', () => {
     const boundary: PendingClaim = { revision: claim({ claim_id: 'claim-2', revision_id: 'revision-2', claim_kind: 'boundary', workflow: { state: 'pending' }, risk_class: 'action-sensitive', decision: undefined }), expected_sha256: 'b', expected_heads: [] }
     expect(pendingClaims([informational, boundary])[0].revision.claim_id).toBe('claim-2')
     expect(approvalForPending(boundary)).toBe('behavioral-authorization')
+  })
+
+  it('uses revision id as a stable pending range-selection tie breaker', () => {
+    const laterId: PendingClaim = { revision: claim({ claim_id: 'claim-b', revision_id: 'revision-b', workflow: { state: 'pending' }, decision: undefined }), expected_sha256: 'b', expected_heads: [] }
+    const earlierId: PendingClaim = { revision: claim({ claim_id: 'claim-a', revision_id: 'revision-a', workflow: { state: 'pending' }, decision: undefined }), expected_sha256: 'a', expected_heads: [] }
+    expect(pendingClaims([laterId, earlierId]).map((item) => item.revision.revision_id)).toEqual(['revision-a', 'revision-b'])
   })
 
   it('renders subject, category and valid time without treating record time as valid time', () => {

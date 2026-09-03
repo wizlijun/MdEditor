@@ -67,7 +67,12 @@ export async function createQuickNote(now: Date = new Date()): Promise<void> {
       // No explicit mode: the draft opens in the editor's remembered mode for
       // `.md`, the same one openFile uses and the mode toggle persists.
       // 草稿预置 OKF 概念头:落盘的就是合规文档,不必事后补写(§4.1)。
-      await openPathBackedMarkdownDraft(fullPath, newFileText(''), { skipEmptySave: true })
+      const by = (await import('./okf/identity')).humanActorNow()
+      await openPathBackedMarkdownDraft(
+        fullPath,
+        newFileText('', by ? { by, at: new Date().toISOString() } : undefined),
+        { skipEmptySave: true },
+      )
     }
   } catch (e) {
     pushToast({ level: 'error', message: t('quickNote.createFailed'), detail: String(e) })

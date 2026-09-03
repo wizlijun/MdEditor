@@ -138,7 +138,7 @@
       {#if item.state === 'unsupported'}<span class="badge warning">{t('badge.unsupported')}</span>{/if}
     </div>
     <div class="planning" aria-label={t('metadata.label')}>
-      <span class="badge priority" data-priority={priority}>{t(`priority.${priority}` as never)}</span>
+      <span class="badge priority priority-{priority.toLowerCase()}" data-priority={priority}>{t(`priority.${priority}` as never)}</span>
       {#if dueState === 'none'}
         <span class="badge due muted" data-due="none">{t('badge.dueNone')}</span>
       {:else}
@@ -205,6 +205,9 @@
   .badge.agent { border: 1px solid var(--line); background: transparent; color: var(--muted-strong); }
   .badge.project { background: var(--accent-soft); color: var(--accent); }
   .badge.priority { border: 1px solid var(--line-strong); background: var(--chip); color: var(--fg); }
+  .badge.priority-p0 { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 13%, var(--card)); color: var(--danger); }
+  .badge.priority-p1 { border-color: color-mix(in srgb, var(--warn-fg) 42%, var(--line)); background: var(--warn-bg); color: var(--warn-fg); }
+  .badge.priority-p2 { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); background: var(--accent-soft); color: var(--accent); }
   .badge.due { background: var(--accent-soft); color: var(--accent); }
   .badge.due.muted { background: var(--chip); color: var(--muted-strong); }
   .badge.due.overdue { background: color-mix(in srgb, var(--danger) 13%, var(--card)); color: var(--danger); }

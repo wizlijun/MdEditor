@@ -32,7 +32,6 @@
   let useCtx = $state(true)
   let view: RunView = $state(emptyView())
   let history: RunRecord[] = $state([])
-  let allTasks = $state(true)
   let error = $state('')
   /** The harness behind this window.
    *  `undefined` = not asked yet, `null` = asked and the backend could not say.
@@ -104,12 +103,7 @@
 
   async function loadHistory() {
     try {
-      const task = allTasks ? null : selectedTask
-      if (!allTasks && !task) {
-        history = []
-        return
-      }
-      history = (await request('history.list', { task })).runs
+      history = (await request('history.list', {})).runs
     } catch {
       history = []
     }
@@ -150,8 +144,7 @@
   async function clearRuns() {
     selectedRun = null
     try {
-      // Scope follows what's on screen: the all-tasks view clears everything.
-      await request('history.clear', allTasks ? {} : { task: selectedTask })
+      await request('history.clear', {})
     } catch (e) {
       error = message(e)
     }
@@ -199,14 +192,8 @@
   }
   const fileName = (p: string) => p.split('/').pop() ?? p
 
-  // Switching task, or switching scope, reloads the history list.
-  $effect(() => {
-    void selectedTask
-    void allTasks
-    void loadHistory()
-  })
-
   void load()
+  void loadHistory()
 </script>
 
 <main>
@@ -215,6 +202,19 @@
          longer squeeze the history scrollport to zero height. -->
     <div class="sidebar-scroll">
       <HarnessBanner status={harness} label={tr} />
+
+      <h2>{tr('history.title')}</h2>
+      <div class="runs">
+        <HistoryList
+          runs={history}
+          label={tr}
+          empty={tr('history.empty')}
+          selectedId={selectedRun?.run_id ?? null}
+          onselect={selectRun}
+          ondelete={deleteRun}
+          onclear={clearRuns}
+        />
+      </div>
 
       <h2>{tr('tasks.title')}</h2>
       {#if tasks.length === 0}
@@ -230,29 +230,6 @@
         }}
         label={tr}
       />
-
-      <h2>
-        {tr('history.title')}
-        <button
-          class="scope"
-          onclick={() => (allTasks = !allTasks)}
-          title={allTasks ? tr('history.thisTask') : tr('history.all')}
-        >
-          {allTasks ? tr('history.all') : tr('history.thisTask')}
-        </button>
-      </h2>
-      <div class="runs">
-        <HistoryList
-          runs={history}
-          label={tr}
-          showTask={allTasks}
-          empty={allTasks ? tr('history.emptyAll') : tr('history.empty')}
-          selectedId={selectedRun?.run_id ?? null}
-          onselect={selectRun}
-          ondelete={deleteRun}
-          onclear={clearRuns}
-        />
-      </div>
     </div>
     <button
       type="button"
@@ -416,20 +393,6 @@
     margin: 16px 4px 7px;
     flex: none;
   }
-  .scope {
-    margin-left: auto;
-    font: inherit;
-    font-size: 9px;
-    letter-spacing: 0;
-    text-transform: none;
-    padding: 3px 7px;
-    border-radius: 999px;
-    border: 1px solid var(--window-border);
-    background: var(--card-surface);
-    color: var(--muted-text);
-    cursor: pointer;
-  }
-  .scope:hover { border-color: var(--strong-border); color: CanvasText; }
   .empty { margin: 8px 5px; font-size: 11px; color: var(--muted-text); }
   section {
     flex: 1;

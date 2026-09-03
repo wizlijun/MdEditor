@@ -5,7 +5,7 @@
 <!-- Hello, agent. The plain-text version of this site is at /llms.txt -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>note.md — 人間とエージェントのための markdown エディタ</title>
-<meta name="description" content="note.md は AI ネイティブ時代の markdown リーダー、エディタ、双方向リンクのノートツール。エージェントが書いたものを読み、その場で書き込み、永遠にあなたのものであるプレーンなファイルに残す。">
+<meta name="description" content="Agent が書いたものを読み、あなたの判断をプレーンな markdown に残し、どの個人メモリを信頼できる文脈にするか自分で承認する。ファイルはいつまでもあなたのもの。">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -222,6 +222,7 @@
     <div class="nav-links">
       <a href="#features">機能</a>
       <a href="#sidecar">サイドノート</a>
+      <a href="/ja/blog/personal-ai-memory/">メモリ</a>
       <a href="/ja/orchestrate-agents/">エージェント向け</a>
       <a href="https://plugins.notemd.net">プラグイン</a>
       <a href="https://github.com/wizlijun/note.md">github</a>
@@ -241,7 +242,7 @@
     <div>
       <span class="kicker">無限のテキストの時代に</span>
       <h1>読むのは AI の文。<br>残すのは<em>あなたの考え</em>。<span class="cursor"></span></h1>
-      <p class="sub">AI が書く量は、読み切れない。note.md なら読み進められる。ハイライトして、疑問を書いて、その場で直す。すべては agent と共有する vault に、ただの markdown として残る——残すほど、agent はあなたを理解していく。</p>
+      <p class="sub">AI が書く量は、読み切れない。note.md なら読み進められる。ハイライトして、疑問を書いて、その場で直す。すべては Agent と共有する Vault に、ただの markdown として残る。Agent は大切なことに気づける。何を記憶にするか承認するのは、あなただけ。</p>
       <p class="hooks">11 MB<i>·</i>Typora テーマ対応<i>·</i>Mermaid、Graphviz 調整済み<i>·</i>アウトライン、[[ウィキリンク]]、デイリーノート<i>·</i>一つの vault をすべての agent と</p>
       <div class="cta-row">
         <a class="btn-primary" href="/download" data-dl data-dl-win="Windows 版をダウンロード">
@@ -279,12 +280,12 @@
 
 <section id="features">
   <div class="wrap">
-    <div class="sec-k">四つのこと</div>
+    <div class="sec-k">五つのこと</div>
     <ol class="claims">
       <li>
         <div><span class="n">01</span><h2>書くのは AI。<br>読むのは、ここ。</h2></div>
         <div>
-          <p>プレビューとソースは、キー一つ隣。Notion や Typora のテーマは、そのまま使える。Mermaid も Graphviz も数式も、調整済み。アプリ全体でインストール後 約 15 MB、ブラウザエンジンは入っていない。</p>
+          <p>プレビューとソースは、キー一つ隣。Notion や Typora のテーマは、そのまま使える。Mermaid も Graphviz も数式も、調整済み。インストール後も約 15 MB、ブラウザエンジンは入っていない。</p>
           <p>怪しい一文は、ハイライト。疑問は、余白に。間違いは、その場で。</p>
           <p class="beat">Claude も Codex も OpenClaw も、チャット窓は持っている。でも、読むためのものではない。</p>
         </div>
@@ -297,12 +298,13 @@
         </div>
       </li>
       <li>
-        <div><span class="n">03</span><h2>AI は入っていない。<br>AI のために作られている。</h2></div>
+        <div><span class="n">03</span><h2>AIエージェントを前提に設計。<br>いつものAIを、そのまま。</h2></div>
         <div>
-          <p>モデルを呼ばない。リクエストも送らない。一つも。</p>
-          <p>あなたのフォルダは、どの AI ツールも共有する作業台。Cowork、Claude Code、Codex、ChatGPT、OpenClaw、Hermes——同じファイル、同じルール、すべて git の中。<a href="/ja/orchestrate-agents/">やり方を見る</a>。</p>
+          <p>内蔵のエージェントワークフローは、すでに利用中のエージェント、AIサブスクリプション、APIアカウント、またはローカル実行環境をそのまま使います。note.md 独自のトークン販売、価格上乗せ、従量課金はありません。</p>
+          <p>モデルの利用量・制限・料金は、選択したサービスのプランまたはローカル環境に従います。</p>
+          <p>あなたのフォルダは、どの AI ツールも共有する作業台。Cowork、Claude Code、Codex、DeepSeek、ChatGPT、OpenClaw、Hermes——同じファイル、同じルール、すべて git の中。<a href="/ja/orchestrate-agents/">やり方を見る</a>。</p>
           <p>書き出すファイルはすべて <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">Open Knowledge Format</a> v0.2 に厳密に従う。何の文書か、どこから来たか、誰が確認したか——ファイル冒頭のただの YAML に。あなたの vault は、どのツールからでも読める。これだけではなく。</p>
-          <p class="beat">AI ツールは、いつ変えてもいい。あなたのものは、あなたのまま。</p>
+          <p class="beat">内蔵 Agent に、二重のトークン課金はありません。AI ツールはいつ変えてもいい。あなたのものは、あなたのままです。</p>
         </div>
       </li>
       <li>
@@ -310,6 +312,14 @@
         <div>
           <p>プラグインを書く。定期実行を足す。skills をぶら下げる。</p>
           <p>注釈に <span class="mono-s">?</span> を置けば、agent が引き取る。文書を直し、文脈を補い、非同期で返してくる。使うかどうかは、あなたが決める。</p>
+        </div>
+      </li>
+      <li>
+        <div><span class="n">05</span><h2>Agent が気づく。<br>記憶にするかは、あなたが決める。</h2></div>
+        <div>
+          <p>あなたの好み、境界、決定を、モデルの推測に任せてはいけない。Agent はあなたが選んで持ち込んだ仕事や会話から候補を見つけ、note.md が一つずつ提示する。あなたが確認したものだけが、長く使われる文脈になる。</p>
+          <p>検索は、あなたが書いた資料を見つける。Memory は、Agent があなたについて何を信頼し、何に基づいて行動してよいかを管理する。note.md はこの二つを意図して分けている。</p>
+          <p class="beat"><a href="/ja/blog/personal-ai-memory/">信頼できる個人メモリに、なぜあなたの確認が必要なのか →</a></p>
         </div>
       </li>
     </ol>
@@ -372,6 +382,7 @@
 <a href="/ja/integrations/hermes/">Hermes</a></div>
 <div><b>ガイド</b>
 <a href="/ja/orchestrate-agents/">One vault, many agents</a>
+<a href="/ja/blog/personal-ai-memory/">あなたが確認する個人 AI メモリ</a>
 <a href="/ja/guides/share-on-cloudflare/">Cloudflare で無料共有</a>
 <a href="/ja/guides/vault-on-github/">GitHub で Vault をホスト</a></div>
 </div>

@@ -9,6 +9,9 @@
     "preview": "vite preview",
     "test": "vitest run"
   },
+  "dependencies": {
+    "yaml": "^2.8.4"
+  },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5",
     "happy-dom": "^20.9.0",

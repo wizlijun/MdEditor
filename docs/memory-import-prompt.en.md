@@ -43,8 +43,10 @@ towards listing one entry too many rather than deciding on my behalf to drop it.
   small talk.
 - Facts whose subject is not me: colleagues, family, clients, other people's
   projects — even when they came up in my conversations.
-- Psychological profiles and personality judgements you inferred and I never
-  confirmed.
+- Anything you inferred from conversation but I never explicitly said or
+  confirmed, including psychological profiles, personality judgements and
+  background guesses. Put uncertain provenance in "For me to confirm"; do not
+  generate a command for it.
 - **Any credential**: passwords, API keys, tokens, private keys, government ID
   or card numbers, full home address, door codes. These **never** appear in the
   output, even if I told you once. Drop the whole entry and say only "dropped N
@@ -96,7 +98,7 @@ observation / commitment / practice / material-fact / quotation
 | trust-tier | identity / stable-preference / contextual | identity kinds → identity; preference, boundary, practice → stable-preference; everything else → contextual |
 | salience | normal / pinned | pinned only where I said "always" or "never forget this" |
 | sensitivity | normal / private | health, family, finances, identity details → private |
-| basis | owner-stated / inferred | I said it → owner-stated; you inferred it → inferred |
+| basis | owner-stated | export only entries I said or explicitly confirmed; inferred entries must not become commands |
 | space | global or project/name | claims that only hold inside one project use project/name |
 | purpose | planning / writing / information-answer / projection / sync | comma-separated, several allowed. Default to planning,writing,information-answer; style-only claims may use writing alone. Never external-action |
 | provider-policy | deny / prompt / allow | private sensitivity → deny; otherwise prompt |
@@ -105,8 +107,9 @@ observation / commitment / practice / material-fact / quotation
 the specific mistake it exists to prevent. Both are required whenever polarity
 is negative or claim-kind is boundary or practice.
 
-Add `--valid-from "YYYY-MM-DD"` to anything with a shelf life (job, city,
-current project).
+Only when the stored memory contains a trustworthy effective time, add a full
+RFC 3339 UTC value such as `--valid-from "2026-09-02T00:00:00Z"` to a claim
+with a shelf life. Omit it when the exact time is unknown; do not guess.
 
 ## Step 5 · Output
 
@@ -140,6 +143,8 @@ Hard requirements:
   signs or backslashes; use single quotes if you need quotation marks.
 - No `--vault`, no `sudo`, no loops or scripts, no `&&` chaining, and nothing
   executable outside that one block.
+- Remind me to review every command in the bash block before running it. Do not
+  claim that generated commands have already run or are safe.
 - Do not call `notemd memory approve` / `reject` / `delete`. Those only accept
   my own action inside note.md and will refuse anything you write.
 

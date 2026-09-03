@@ -1,6 +1,6 @@
 // src/lib/outline/store.test.ts
 import { describe, it, expect } from 'vitest'
-import { outline, companionPathFor, persistIdsFor, attachDoc, serializeDoc, setChangeSink, markDirty, markSynced, markSaved, detach, isEffectivelyEmptyTree, noteTextHasContent } from './store.svelte'
+import { outline, companionPathFor, persistIdsFor, attachDoc, serializeDoc, setChangeSink, markDirty, markSynced, markSaved, detach, isEffectivelyEmptyTree, noteTextHasContent, signOutlineFrontmatterOnCreate } from './store.svelte'
 import { createTree, addNode } from './model'
 
 describe('companionPathFor', () => {
@@ -114,6 +114,44 @@ describe('question arming', () => {
   it('does not arm for a plain annotation', async () => {
     await attachDoc('/tmp/p.note.md', '', '正文 {==原文==}{>>只是备注<<}\n')
     expect(outline.armed).toBe(false)
+  })
+})
+
+// signOutlineFrontmatterOnCreate 是 flushDisk() 创建分支(!existed)的唯一
+// 内存签名入口 —— flushDisk 本身没有测试挂钩(纯 Svelte 组件闭包 + Tauri fs
+// I/O),所以直接在这个 seam 上验证:签名必须进 tree.frontmatter,否则下一次
+// serializeDoc()(保存路径,任何时候都不传 generated)会在没有变更的情况下
+// 序列化出一份不带署名的文本,把刚写盘的签名抹掉——这正是 fix round 2 要堵的洞。
+describe('signOutlineFrontmatterOnCreate', () => {
+  it('签名写进内存树,且不是"仅这一次"——后续 serializeDoc() 依然带着(第二次落盘不会把它冲掉)', async () => {
+    await attachDoc('/v/sign1.note.md', '- hello\n', null)
+    // 生产路径里 flushDisk 收到的 text 就是 markDirty → persistToDisk(serializeDoc())
+    // 的产物——serializeDoc() 的 touch 步骤已经把 tree.frontmatter 从 null 补成一个
+    // 真正的 frontmatter 块,签名函数是在那之后才跑的。这里复现同一顺序。
+    serializeDoc()
+    signOutlineFrontmatterOnCreate('/v/sign1.note.md', { by: 'human:bruce', at: '2026-08-20T10:00:00.000Z' })
+    const first = serializeDoc()
+    expect(first).toContain('generated:\n  by: human:bruce\n  at: 2026-08-20T10:00:00.000Z')
+    // 模拟"文件已存在后的第二次保存":flushDisk 不会再调用这个函数(!existed
+    // 分支只在创建那一次命中),但树本身已经带着这个键——serializeDoc() 不需要
+    // 重新签名就该继续带着它,这才是"内存是唯一事实源"的意思。
+    const second = serializeDoc()
+    expect(second).toContain('generated:\n  by: human:bruce\n  at: 2026-08-20T10:00:00.000Z')
+    detach()
+  })
+  it('docPath 已经切到另一篇文档——跳过,不把签名写错树', async () => {
+    await attachDoc('/v/sign2.note.md', '- x\n', null)
+    signOutlineFrontmatterOnCreate('/v/some-other-doc.note.md', { by: 'human:bruce', at: '2026-08-20T10:00:00.000Z' })
+    expect(serializeDoc()).not.toContain('generated')
+    detach()
+  })
+  it('树里已经有 generated——再传一个署名也不覆盖(补缺失键,不改已有值)', async () => {
+    await attachDoc('/v/sign3.note.md', '---\ngenerated:\n  by: claude-code/opus-5\n  at: 2026-01-01T00:00:00.000Z\n---\n- x\n', null)
+    signOutlineFrontmatterOnCreate('/v/sign3.note.md', { by: 'human:bruce', at: '2026-08-20T10:00:00.000Z' })
+    const out = serializeDoc()
+    expect(out).toContain('by: claude-code/opus-5')
+    expect(out).not.toContain('human:bruce')
+    detach()
   })
 })
 

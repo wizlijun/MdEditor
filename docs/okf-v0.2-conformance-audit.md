@@ -45,6 +45,20 @@
 | 类型值统一(B3) | decision-log 改 `Decision Board` / `Decision Archive` |
 | 既有红灯(F1) | `handle_parsed_rpc_wrong_origin_403` 更新为实现的契约(缺 Origin = 同源),并补一条正向用例 |
 
+**第 4 步(F4/F6 的人侧)已完成**(2026-08-20):
+
+| 项 | 落点 |
+|----|------|
+| 人写署名 | 9 个人工创建入口写 `generated: { by: human:<id>, at }`;身份走既有 `humanActorId` |
+| 热路径不阻塞 | `src/lib/okf/identity.ts` 的 `warmHumanActor()` + 同步 `humanActorNow()` |
+| 插件取身份 | `host.vault.info` 增 `author` 字段(纯增,复用 `vault.read` 门禁) |
+| 只签不回填 | 保存路径(`store.svelte.ts`)不传 `generated`,由测试钉住 |
+| 三态可分 | `searchidx/src/origin.rs` 的测试钉住人/机/无主三态,并给「不签清单」立红线 |
+| 顺手补的硬伤 | 富文本 `[[链接]]` 建页不再写 0 字节文件,改走 `newPageFileText` |
+| 公共约定 | `src-tauri/templates/AGENTS.md` 补人侧义务,约定从单向变双向 |
+
+设计见 `docs/superpowers/specs/2026-08-20-human-authorship-signature-design.md`。
+
 **旧数据一律不迁移**(用户 2026-08-04 决定):存量文件只在本来就要写盘时机会性补 `type`,不做批量改写、不提供迁移命令。
 
 仍未做(均非合规缺口):`index.md` / `log.md` 的**读侧**展示、P2.2 Attested Computation 试点;另欠一次 GUI 实机验证。三项的交接说明见第 9 节。

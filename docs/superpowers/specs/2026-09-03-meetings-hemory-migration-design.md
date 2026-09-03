@@ -10,7 +10,7 @@
 
 新建 note.md 原生插件 `notemd.meetings`，把会议统一归档到：
 
-```
+```text
 ssot/meetings/<conversation-id>/
 ├── transcript.srt        # 或 transcript.md；同一会议只保留一个权威逐字稿
 ├── summary.md            # 来源存在时迁移；不是权威逐字稿
@@ -47,7 +47,7 @@ Hemory V1 优先把用户确认已准备好的 `content.md` 原始字节复制�
 
 以生产源码为准，同时兼容仓库中有明确历史证据的旧布局：
 
-```
+```text
 # 现行 Vault / 当前 iOS
 <root>/<user>/conversation/YYYYMM/YYYYMMDD_HHmmss[_N]/
 
@@ -73,7 +73,7 @@ Hemory V1 优先把用户确认已准备好的 `content.md` 原始字节复制�
 
 ### 2.2 可读取的来源文件白名单
 
-```
+```text
 meta.json
 content.md
 pro_asr.srt
@@ -85,7 +85,7 @@ summary.md
 
 明确忽略并计数报告：
 
-```
+```text
 *.mp3  *.wav  *.m4a  *.aac
 audio/**  voiceprint/**  pro_asr/*.m4a
 manifest 中的音频路径及未知二进制文件
@@ -184,7 +184,7 @@ updated_at: "2026-09-03T10:00:00+08:00"
 
 最终只允许以下 14 个一级字段，不写任何嵌套对象：
 
-```
+```text
 conversation_id, created_at, end_at, title, category, key_topics,
 language, source, duration_ms, speaker_count, transcript_file,
 summary_file, imported_from, updated_at
@@ -228,7 +228,7 @@ V1 不设计一个对外稳定的通用框架，只在后端保留最小内部�
 
 checkpoint 固定在 Vault 内：
 
-```
+```text
 .notemd/meetings/hemory-import-v1.json
 ```
 
@@ -292,7 +292,7 @@ CLI 与 UI 必须调用同一个 Rust `MigrationService::{plan, apply}`，不能
 
 “从 Hemory 迁移…”流程：
 
-```
+```text
 选择只读来源目录
   → 检测布局和用户
   → 选择用户 / 必要时补历史时区
@@ -314,7 +314,7 @@ CLI 与 UI 必须调用同一个 Rust `MigrationService::{plan, apply}`，不能
 
 人类界面和 JSON 共用以下语义：
 
-```
+```text
 schema_version, mode, dry_run, source_user
 scanned, eligible, create, update, skip
 conflict, blocked, excluded_audio, committed, source_missing
@@ -323,7 +323,7 @@ warnings[], errors[], items[]
 
 每个 item 至少有：
 
-```
+```text
 conversation_id, source_relative_path, source_schema
 selected_transcript, source_fingerprint, target_relative_path
 action, reason, output_hashes

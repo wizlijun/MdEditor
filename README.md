@@ -4,8 +4,8 @@
 
 > **Read what AI writes. Keep what you think. Keep what only *you* can write.**
 
-A markdown reader, editor, and bidirectional-linking notes tool for the
-AI-native era. Native macOS app, ~11 MB to download, ~15 MB installed. Your
+A markdown reader, editor, and bidirectional-linking notes tool designed for
+people and AI agents to work in the same files. Native macOS app, ~11 MB to download, ~15 MB installed. Your
 notes are a folder of plain `.md` files on your disk — forever.
 
 [Download](https://notemd.net/download) · [Plugins](https://plugins.notemd.net) · [Full feature list](docs/FEATURES.md)
@@ -33,22 +33,45 @@ Roam Research and Obsidian figured these out. note.md ships them on files:
 one plugin imports your entire Roam graph, and an Obsidian vault opens
 directly.
 
-## 3. No AI inside. Fully AI-native.
+## 3. Agent-ready by design. Use the AI you already have.
 
-note.md calls no model and sends no request.
+Built-in agent workflows use the agents, AI subscriptions, API accounts, or
+local runtimes you already have. note.md sells no tokens, adds no token markup,
+and charges no separate per-token fee.
+
+Model usage still follows the plan, limits, and billing of your chosen
+provider—or uses your own local compute.
 
 Your vault is designed to be the shared, version-controlled context that many
 agents and many harnesses work in — Claude Cowork, Claude Code, Codex,
-ChatGPT Work, OpenClaw, Hermes — through public conventions (`AGENTS.md`,
-block citations, sidecar `.note.md`). A memory system is on the roadmap.
-The more you leave in the vault, the better every agent knows you.
+DeepSeek, ChatGPT Work, OpenClaw, Hermes — through public conventions (`AGENTS.md`,
+block citations, sidecar `.note.md`). Memory follows the same contract:
+agents can suggest what matters, but only you decide what becomes lasting
+context. The more you leave in the vault, the better every agent knows you.
 
-Switch AI tools whenever you like. The asset stays yours.
+Switch AI tools whenever you like. The asset stays yours, without adding a
+second token meter from note.md.
 
 Specifically tuned for building products with Claude Code: writing docs,
 reading docs, and reviewing what the AI generated.
 
-## 4. Whatever else you need, grow it yourself
+## 4. Memory discovered by agents. Confirmed by you.
+
+What an agent most needs to know about you is exactly what no model can guess:
+how you work, what you prefer, what you have decided, and where your boundaries
+are. Asking you to maintain another profile only moves the work back to you.
+
+Memory takes the opposite approach. An agent finds a small number of candidate
+memories in the work and conversations you bring into your vault. You review
+them one at a time: confirm, reject, mark important, or ignore. An inference
+never becomes trusted memory on its own.
+
+Search and Memory stay separate. Search helps an agent find anything you
+wrote; Memory gives it the small set of claims you approved. They remain plain,
+Git-tracked files that work across agents and models. [Why we built personal AI
+memory this way](https://notemd.net/blog/personal-ai-memory/).
+
+## 5. Whatever else you need, grow it yourself
 
 Write a plugin. Wire an OpenClaw cron job. Hang skills off it.
 
@@ -68,7 +91,8 @@ The rest is yours to discover.
    readable in fifty years. Indexes are derived; files are the only truth.
 3. **Agents are first-class citizens — they suggest, you confirm.**
    [The graph grows only where you confirm it](docs/product-principle-relationships-only-grow-where-confirmed.md);
-   note.md never auto-connects your notes or fills the vault with agent slop.
+   note.md never auto-connects your notes or turns an agent's guess into trusted
+   memory. [The same human checkpoint governs personal AI memory](https://notemd.net/blog/personal-ai-memory/).
 4. **[Your marks belong to the vault, not to a path.](docs/product-principle-mirror-hosted-marks.md)**
    Annotate a file from anywhere and it's mirrored in, so your marks get a
    stable, git-versioned host.

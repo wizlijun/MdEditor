@@ -22,4 +22,21 @@ describe('newFileText', () => {
     const body = '---\ntype: Book\n---\n# X\n'
     expect(newFileText(body)).toBe(body)
   })
+
+  it('带上人写署名时写进 generated(OKF §5.2/§7)', () => {
+    const text = newFileText('# 标题\n\n正文\n', { by: 'human:bruce', at: '2026-08-20T10:31:00.000Z' })
+    expect(text).toBe(
+      `---\ntype: ${CONCEPT_TYPE.note}\ntitle: 标题\ngenerated:\n  by: human:bruce\n  at: 2026-08-20T10:31:00.000Z\n---\n# 标题\n\n正文\n`,
+    )
+  })
+
+  it('署名后仍满足 OKF 硬约束', () => {
+    const text = newFileText('# 标题\n\n正文\n', { by: 'human:bruce', at: '2026-08-20T10:31:00.000Z' })
+    expect(lintText('untitled.md', text)).toEqual([])
+  })
+
+  it('拿不到身份就不签——宁可无署名,也不写一个假的', () => {
+    expect(newFileText('# 标题\n', undefined))
+      .toBe(`---\ntype: ${CONCEPT_TYPE.note}\ntitle: 标题\n---\n# 标题\n`)
+  })
 })

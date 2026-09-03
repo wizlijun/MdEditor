@@ -42,6 +42,7 @@ vi.mock('./bridge', () => ({
 import {
   applyRunDone,
   bodyOf,
+  boot,
   changeIdeaDir,
   clockTime,
   commitIdeaDir,
@@ -1210,5 +1211,79 @@ describe('reconcilePending', () => {
     expect(still).toEqual([])
     expect(state.pending).toEqual({ 'inbox/ideas/a.md': 'r1' })
     expect(state.failed).toEqual([])
+  })
+})
+
+// Human-authorship signature (spec 2026-08-20-human-authorship-signature,
+// Task 6): `buildIdeaDoc`/`ideaDocText` gained an `author` parameter, but a
+// unit test on those alone would not catch a store that forgets to fetch the
+// identity at boot or forgets to thread it into `saveIdea` — exactly the
+// class of bug three earlier tasks in this plan were sent back for (wiring
+// untested even though the primitive was). These pin the wiring itself: the
+// identity `boot()` reads off `host.vault.info` lands on `state.author`, and
+// a real `saveIdea()` call — through the whole freeFileName/vaultWrite path,
+// not just `ideaDocText` in isolation — writes text carrying that signature.
+describe('boot — author identity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    host.vaultRead.mockRejectedValue(new Error('io: no state file yet'))
+    host.vaultList.mockResolvedValue({ entries: [] })
+  })
+
+  it('puts the host-supplied author onto state', async () => {
+    host.vaultInfo.mockResolvedValue({ root: '/vault', wiki_dir: null, daily_dir: null, author: 'human:bruce' })
+
+    await boot()
+
+    expect(state.author).toBe('human:bruce')
+  })
+
+  it('degrades to null when an older host answers with no author field at all', async () => {
+    host.vaultInfo.mockResolvedValue({ root: '/vault', wiki_dir: null, daily_dir: null })
+
+    await boot()
+
+    expect(state.author).toBeNull()
+  })
+
+  it('degrades to null (not an error) when host.vault.info rejects outright', async () => {
+    host.vaultInfo.mockRejectedValue(new Error('io: host unreachable'))
+
+    await boot()
+
+    expect(state.author).toBeNull()
+  })
+})
+
+describe('saveIdea — author signature, end to end', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(state, createStore())
+    state.booting = false
+    state.vaultRoot = '/vault'
+    state.ideaDir = 'inbox/ideas'
+    host.vaultExists.mockResolvedValue({ exists: false })
+    host.vaultWrite.mockResolvedValue({ ok: true })
+    host.vaultList.mockResolvedValue({ entries: [] })
+  })
+
+  it('a NEW idea is signed with the author boot() put on state', async () => {
+    state.author = 'human:bruce'
+
+    await saveIdea('一个想法')
+
+    const [, text] = host.vaultWrite.mock.calls[0]
+    expect(text).toContain('generated:')
+    expect(text).toContain('by: human:bruce')
+  })
+
+  it('an older host (state.author still null) writes no generated key', async () => {
+    state.author = null
+
+    await saveIdea('一个想法')
+
+    const [, text] = host.vaultWrite.mock.calls[0]
+    expect(text).not.toContain('generated')
   })
 })

@@ -131,4 +131,47 @@ describe('Trace Source inbox editing', () => {
       { path: reportPath, content: closingEdit },
     ]))
   })
+
+  it('点击开始溯源会先写带 human 署名的委托稿,再启动 agent', async () => {
+    const request = vi.fn(async (method: string, params?: { path?: string; content?: string }) => {
+      if (method === 'host.vault.info') {
+        return { root: '/vault', wiki_dir: null, daily_dir: null, author: 'human:bruce' }
+      }
+      if (method === 'host.vault.read' && params?.path === '.notemd/trace-source.json') {
+        throw new Error('first run')
+      }
+      if (method === 'host.agent.providers') return { providers: [] }
+      if (method === 'host.vault.exists') return { exists: true }
+      if (method === 'host.vault.write') return { ok: true }
+      if (method === 'host.agent.run') return { run_id: 'run-1' }
+      if (method === 'host.agent.status') return { state: 'running', steps: 0, last: '' }
+      throw new Error(`unexpected RPC: ${method} ${params?.path ?? ''}`)
+    })
+    window.notemd = { pluginId: 'notemd.trace-source', locale: 'zh', theme: 'system', request, onMessage: () => {} }
+
+    const { default: App } = await import('./App.svelte')
+    component = mount(App, { target: document.body })
+    flushSync()
+    await vi.waitFor(() => expect(kit.mount).toHaveBeenCalled())
+
+    kit.edit('> 这段话是谁说的\n')
+    const delegate = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === '开始溯源')!
+    delegate.click()
+
+    await vi.waitFor(() => {
+      expect(request.mock.calls.some(([method]) => method === 'host.agent.run')).toBe(true)
+    })
+    const requestWriteIndex = request.mock.calls.findIndex(
+      ([method, params]) => method === 'host.vault.write' && params?.path?.endsWith('/00-request.md'),
+    )
+    const agentRunIndex = request.mock.calls.findIndex(([method]) => method === 'host.agent.run')
+    expect(requestWriteIndex).toBeGreaterThan(-1)
+    expect(requestWriteIndex).toBeLessThan(agentRunIndex)
+
+    const [, written] = request.mock.calls[requestWriteIndex]!
+    expect(written?.content).toContain('type: Trace Request')
+    expect(written?.content).toContain('generated:\n  by: human:bruce\n  at: ')
+    expect(written?.content).toContain('\n> 这段话是谁说的\n')
+  })
 })

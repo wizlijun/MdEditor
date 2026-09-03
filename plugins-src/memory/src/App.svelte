@@ -37,6 +37,7 @@
     categoryOptions,
     claimKindLabels,
     currentClaims,
+    groupCurrentClaims,
     expectedHeads,
     formatDate,
     hostError,
@@ -44,6 +45,7 @@
     riskFor,
     subjectLabel,
     temporalLabel,
+    type ConfirmedSort,
   } from './lib/domain'
   import { importPrompt } from './lib/importPrompt'
   import {
@@ -68,8 +70,12 @@
     Salience,
   } from './lib/types'
 
-  type Tab = 'confirmed' | 'pending' | 'history'
-  type DestructiveAction = { kind: 'reject' | 'delete-candidate' | 'approve-lifecycle'; pending: PendingClaim } | { kind: 'delete-claim'; current: EffectiveClaim }
+  type Tab = 'confirmed' | 'pending' | 'context' | 'history'
+  type BulkPendingAction = 'ignore' | 'reject' | 'delete-candidate'
+  type DestructiveAction =
+    | { kind: 'reject' | 'delete-candidate' | 'approve-lifecycle'; pending: PendingClaim }
+    | { kind: 'batch-pending'; action: BulkPendingAction; pending: PendingClaim[] }
+    | { kind: 'delete-claim'; current: EffectiveClaim }
   type EditTarget = { kind: 'confirmed'; current: EffectiveClaim } | { kind: 'pending'; pending: PendingClaim }
 
   let snapshot = $state<MemorySnapshotV2 | null>(null)
@@ -80,11 +86,14 @@
   let tab = $state<Tab>('confirmed')
   let query = $state('')
   let target = $state<'all' | ProjectionTarget | 'structured'>('all')
+  let confirmedSort = $state<ConfirmedSort>('priority')
   let selectedClaimId = $state<string | null>(null)
   let selectedPendingId = $state<string | null>(null)
+  let selectedPendingIds = $state<string[]>([])
+  let pendingAnchorId = $state<string | null>(null)
+  let pendingContextMenu = $state<{ x: number; y: number } | null>(null)
   let showAdd = $state(false)
   let showContext = $state(false)
-  let showRoleScopeManager = $state(false)
   let roleScopeBusy = $state(false)
   let showReset = $state(false)
   let openMenuFor = $state<string | null>(null)
@@ -134,10 +143,12 @@
 
   const writable = $derived(snapshot?.mode === 'v2' && snapshot.health.status !== 'damaged' && snapshot.health.status !== 'unsupported')
   const canInfer = $derived(writable || snapshot?.initialization_required === true)
-  const visibleClaims = $derived(snapshot ? currentClaims(snapshot.claims, query, target) : [])
+  const visibleClaims = $derived(snapshot ? currentClaims(snapshot.claims, query, target, confirmedSort) : [])
+  const confirmedGroups = $derived(groupCurrentClaims(visibleClaims))
   const reviews = $derived(snapshot ? pendingClaims(snapshot.pending) : [])
   const selectedClaim = $derived(visibleClaims.find(({ claim }) => claim.claim_id === selectedClaimId) ?? visibleClaims[0])
-  const selectedPending = $derived(reviews.find(({ revision }) => revision.revision_id === selectedPendingId) ?? reviews[0])
+  const selectedPendingItems = $derived(reviews.filter(({ revision }) => selectedPendingIds.includes(revision.revision_id)))
+  const selectedPending = $derived(reviews.find(({ revision }) => revision.revision_id === selectedPendingId) ?? selectedPendingItems[0])
   const availableRoles = $derived(contextRegistry?.roles?.filter((item) => item.status === 'active') ?? [])
   const availableScopes = $derived(contextRegistry?.scopes?.filter((item) => item.status === 'active')
     ?? snapshot?.context_options?.spaces.map((item) => ({ ...item, status: 'active' as const }))
@@ -278,7 +289,13 @@
     try {
       snapshot = await memorySnapshot()
       selectedClaimId ??= snapshot.claims[0]?.claim.claim_id ?? null
-      selectedPendingId ??= snapshot.pending[0]?.revision.revision_id ?? null
+      const orderedPending = pendingClaims(snapshot.pending)
+      const availablePendingIds = new Set(orderedPending.map(({ revision }) => revision.revision_id))
+      selectedPendingIds = selectedPendingIds.filter((id) => availablePendingIds.has(id))
+      if (!selectedPendingIds.length && orderedPending[0]) selectedPendingIds = [orderedPending[0].revision.revision_id]
+      if (!selectedPendingId || !selectedPendingIds.includes(selectedPendingId)) selectedPendingId = selectedPendingIds[0] ?? null
+      if (pendingAnchorId && !availablePendingIds.has(pendingAnchorId)) pendingAnchorId = null
+      pendingContextMenu = null
       contextSpace = snapshot.context_options?.spaces[0]?.id ?? contextSpace
       contextRole = snapshot.context_options?.roles?.[0]?.id ?? contextRole
       contextPurpose = snapshot.context_options?.purposes[0]?.id ?? contextPurpose
@@ -337,12 +354,124 @@
     }
   }
 
+  function selectPending(item: PendingClaim, event: MouseEvent) {
+    const id = item.revision.revision_id
+    const additive = event.metaKey || event.ctrlKey
+    if (event.shiftKey && pendingAnchorId) {
+      const anchorIndex = reviews.findIndex(({ revision }) => revision.revision_id === pendingAnchorId)
+      const itemIndex = reviews.findIndex(({ revision }) => revision.revision_id === id)
+      if (anchorIndex >= 0 && itemIndex >= 0) {
+        const start = Math.min(anchorIndex, itemIndex)
+        const end = Math.max(anchorIndex, itemIndex)
+        const range = reviews.slice(start, end + 1).map(({ revision }) => revision.revision_id)
+        selectedPendingIds = additive ? reviews.filter(({ revision }) => selectedPendingIds.includes(revision.revision_id) || range.includes(revision.revision_id)).map(({ revision }) => revision.revision_id) : range
+        selectedPendingId = id
+        pendingContextMenu = null
+        return
+      }
+    }
+    if (additive) {
+      selectedPendingIds = selectedPendingIds.includes(id) ? selectedPendingIds.filter((candidate) => candidate !== id) : [...selectedPendingIds, id]
+      selectedPendingId = selectedPendingIds.includes(id) ? id : selectedPendingIds[0] ?? null
+    } else {
+      selectedPendingIds = [id]
+      selectedPendingId = id
+    }
+    pendingAnchorId = id
+    pendingContextMenu = null
+  }
+
+  function pendingMenuPosition(x: number, y: number) {
+    return {
+      x: Math.max(8, Math.min(x, window.innerWidth - 238)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 170)),
+    }
+  }
+
+  function openPendingContextMenu(item: PendingClaim, event: MouseEvent) {
+    event.preventDefault()
+    event.stopPropagation()
+    const id = item.revision.revision_id
+    if (!selectedPendingIds.includes(id)) {
+      selectedPendingIds = [id]
+      pendingAnchorId = id
+    }
+    selectedPendingId = id
+    pendingContextMenu = pendingMenuPosition(event.clientX, event.clientY)
+  }
+
+  function openPendingContextMenuFromKeyboard(item: PendingClaim, event: KeyboardEvent) {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+    event.preventDefault()
+    event.stopPropagation()
+    const target = event.currentTarget as HTMLElement
+    const rect = target.getBoundingClientRect()
+    openPendingContextMenu(item, new MouseEvent('contextmenu', { clientX: rect.left + 24, clientY: rect.top + 24 }))
+  }
+
+  function openSelectedPendingMenu(event: MouseEvent) {
+    event.stopPropagation()
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    pendingContextMenu = pendingMenuPosition(rect.right - 220, rect.bottom + 6)
+  }
+
+  function startPendingBatch(action: BulkPendingAction) {
+    const pending = reviews.filter(({ revision }) => selectedPendingIds.includes(revision.revision_id))
+    pendingContextMenu = null
+    if (!pending.length || writing) return
+    destructive = { kind: 'batch-pending', action, pending }
+  }
+
+  function batchActionText(action: BulkPendingAction) {
+    return action === 'ignore' ? '忽略' : action === 'reject' ? '否认' : '删除候选'
+  }
+
   async function confirmDestructive() {
     if (!destructive || writing) return
     writing = true
     error = ''
     try {
-      if (destructive.kind === 'delete-claim') {
+      if (destructive.kind === 'batch-pending') {
+        const { action, pending } = destructive
+        const batchId = requestId(`memory-ui/batch-${action}`)
+        const expectedProtocol = protocol()
+        let completedCount = 0
+        let projectionRebuilt = true
+        let failure: unknown
+        for (const [index, item] of pending.entries()) {
+          const input = {
+            request_id: `${batchId}/${index}`,
+            expected_protocol: expectedProtocol,
+            expected_heads: item.expected_heads,
+            revision_id: item.revision.revision_id,
+            expected_sha256: item.expected_sha256,
+            gesture_intent: action === 'delete-candidate' ? 'delete' : action,
+          } as const
+          try {
+            const receipt = action === 'ignore'
+              ? await memoryIgnore(input)
+              : action === 'reject'
+                ? await memoryReject(input)
+                : await memoryDeleteCandidate(input)
+            completedCount += 1
+            projectionRebuilt &&= receipt.projection_rebuilt
+          } catch (cause) {
+            failure = cause
+            break
+          }
+        }
+        destructive = null
+        await refresh()
+        if (failure) {
+          const remaining = pending.length - completedCount
+          error = `批量${batchActionText(action)}已完成 ${completedCount} 条，剩余 ${remaining} 条未处理。${hostError(failure)}`
+          announcement = error
+          await toast('warn', `批量${batchActionText(action)}未全部完成`, `已完成 ${completedCount} 条，剩余 ${remaining} 条未处理。`)
+        } else {
+          announcement = `已批量${batchActionText(action)} ${completedCount} 条建议${projectionRebuilt ? '' : '；纯文本投影等待重建。'}`
+          await toast(projectionRebuilt ? 'success' : 'warn', announcement)
+        }
+      } else if (destructive.kind === 'delete-claim') {
         const claim = destructive.current.claim
         const receipt = await memoryDelete({
           request_id: requestId('memory-ui/delete'),
@@ -405,6 +534,9 @@
       showReset = false
       selectedClaimId = null
       selectedPendingId = null
+      selectedPendingIds = []
+      pendingAnchorId = null
+      pendingContextMenu = null
       inferenceMode = 'full'
       await completed(
         `已清理 ${receipt.deleted_claims} 条已确认记忆和 ${receipt.deleted_pending} 条待确认建议；下次将重新全量推理`,
@@ -422,7 +554,7 @@
     try {
       await clipboardWrite(importPrompt)
       announcement = '已复制导入记忆 Prompt'
-      await toast('success', '已复制导入记忆 Prompt', '粘贴给 ChatGPT、Gemini 等助手，让它把记住你的条目导出成待确认主张。')
+      await toast('success', '已复制导入记忆 Prompt', '粘贴给其他助手后，请先审阅它生成的 bash 命令，再在 vault 中运行。')
     } catch (failure) {
       error = hostError(failure)
     }
@@ -445,6 +577,10 @@
     const first = categoryOptions[addTarget][0]
     addCategory = first.id
     addKind = first.kind
+  }
+
+  function confirmedSortChanged(event: Event) {
+    confirmedSort = (event.currentTarget as HTMLSelectElement).value as ConfirmedSort
   }
 
   function categoryChanged(event: Event) {
@@ -591,7 +727,8 @@
   function moveTab(event: KeyboardEvent) {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
-    const tabs: Tab[] = ['confirmed', 'pending', 'history']
+    if (roleScopeBusy && tab === 'context') return
+    const tabs: Tab[] = ['confirmed', 'pending', 'context', 'history']
     const current = tabs.indexOf(tab)
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : event.key === 'ArrowRight' ? (current + 1) % tabs.length : (current + tabs.length - 1) % tabs.length
     tab = tabs[next]
@@ -603,16 +740,16 @@
     if (showReset) showReset = false
     else if (destructive) destructive = null
     else if (mergeConflict) mergeConflict = null
-    else if (showRoleScopeManager && !roleScopeBusy) showRoleScopeManager = false
     else if (showContext) showContext = false
     else if (editTarget) { editTarget = null; editText = '' }
     else if (showAdd) showAdd = false
+    else if (pendingContextMenu) pendingContextMenu = null
     else openMenuFor = null
   }
 </script>
 
 <svelte:head><title>Memory</title></svelte:head>
-<svelte:window onkeydown={closeTopLayer} />
+<svelte:window onkeydown={closeTopLayer} onclick={() => pendingContextMenu = null} onblur={() => pendingContextMenu = null} />
 
 <main>
   <header class="app-header">
@@ -627,7 +764,6 @@
         {/if}
       </div>
       <button class="secondary" onclick={() => showContext = true} disabled={!snapshot || snapshot.mode !== 'v2'}>Context Manifest…</button>
-      <button class="secondary" onclick={() => showRoleScopeManager = true} disabled={!snapshot || snapshot.mode !== 'v2'}>身份与场景…</button>
       <button class="secondary reset-trigger" onclick={() => showReset = true} disabled={!writable || writing || !!inferenceRun}>重构记忆…</button>
       <div class="health" class:conflict={snapshot?.health.status === 'conflict'} class:bad={snapshot?.health.status === 'damaged'}>
         <span aria-hidden="true"></span><span>{snapshot?.health.message ?? (loading ? '正在载入' : '不可用')}</span>
@@ -651,9 +787,10 @@
     {/if}
 
     <div class="segments" role="tablist" tabindex="-1" aria-label="Memory 区域" onkeydown={moveTab}>
-      <button role="tab" data-tab="confirmed" aria-selected={tab === 'confirmed'} aria-controls="confirmed-panel" tabindex={tab === 'confirmed' ? 0 : -1} class:active={tab === 'confirmed'} onclick={() => tab = 'confirmed'}>已确认 <span class="count">{snapshot.claims.length}</span></button>
-      <button role="tab" data-tab="pending" aria-selected={tab === 'pending'} aria-controls="pending-panel" tabindex={tab === 'pending' ? 0 : -1} class:active={tab === 'pending'} onclick={() => tab = 'pending'}>待确认 <span class="count">{snapshot.pending.length}</span></button>
-      <button role="tab" data-tab="history" aria-selected={tab === 'history'} aria-controls="history-panel" tabindex={tab === 'history' ? 0 : -1} class:active={tab === 'history'} onclick={() => tab = 'history'}>冲突与历史 <span class="count">{snapshot.conflicts.length}</span></button>
+      <button role="tab" data-tab="confirmed" aria-selected={tab === 'confirmed'} aria-controls="confirmed-panel" tabindex={tab === 'confirmed' ? 0 : -1} class:active={tab === 'confirmed'} onclick={() => tab = 'confirmed'} disabled={roleScopeBusy && tab === 'context'}>已确认 <span class="count">{snapshot.claims.length}</span></button>
+      <button role="tab" data-tab="pending" aria-selected={tab === 'pending'} aria-controls="pending-panel" tabindex={tab === 'pending' ? 0 : -1} class:active={tab === 'pending'} onclick={() => tab = 'pending'} disabled={roleScopeBusy && tab === 'context'}>待确认 <span class="count">{snapshot.pending.length}</span></button>
+      <button role="tab" data-tab="context" aria-selected={tab === 'context'} aria-controls="context-governance-panel" tabindex={tab === 'context' ? 0 : -1} class:active={tab === 'context'} onclick={() => tab = 'context'} disabled={roleScopeBusy && tab !== 'context'}>身份与场景 <span class="context-count">R {availableRoles.length} · S {availableScopes.length}</span></button>
+      <button role="tab" data-tab="history" aria-selected={tab === 'history'} aria-controls="history-panel" tabindex={tab === 'history' ? 0 : -1} class:active={tab === 'history'} onclick={() => tab = 'history'} disabled={roleScopeBusy && tab === 'context'}>冲突与历史 <span class="count">{snapshot.conflicts.length}</span></button>
     </div>
 
     {#if tab === 'confirmed'}
@@ -661,17 +798,28 @@
         <div class="toolbar">
           <input class="search" type="search" bind:value={query} placeholder="搜索已确认主张" aria-label="搜索已确认主张" />
           <select bind:value={target} aria-label="记忆分组"><option value="all">全部分组</option><option value="user">身份与偏好</option><option value="memory">决定与背景</option><option value="structured">仅结构化上下文</option></select>
+          <select value={confirmedSort} onchange={confirmedSortChanged} aria-label="已确认主张排序"><option value="priority">重点优先</option><option value="recent">最近更新</option><option value="oldest">最早更新</option><option value="text">正文 A–Z</option></select>
           <button class="secondary" onclick={copyImportPrompt} title="复制一段 Prompt，粘贴给其他 AI 助手，让它把记住你的条目导出成 notemd memory propose 命令。">复制导入记忆Prompt</button>
           <button class="primary" onclick={resetAdd} disabled={!writable}>添加主张</button>
         </div>
         <section class="split">
           <div class="master" role="listbox" tabindex="0" aria-label="已确认主张列表" onkeydown={(event) => moveListFocus(event, '[role=option]')}>
-            {#each visibleClaims as item (item.claim.claim_id)}
-              <button role="option" aria-selected={selectedClaim?.claim.claim_id === item.claim.claim_id} class:selected={selectedClaim?.claim.claim_id === item.claim.claim_id} onclick={() => selectedClaimId = item.claim.claim_id}>
-                <span class="polarity {item.claim.polarity}" aria-hidden="true"></span>
-                <span><strong>{item.claim.text}</strong><small>{claimKindLabels[item.claim.claim_kind]} · {subjectLabel(item.claim)}</small></span>
-                <span class="row-state">{item.claim.salience === 'pinned' ? '重要' : item.claim.epistemic.representation_certainty}</span>
-              </button>
+            {#each confirmedGroups as section, sectionIndex (section.key)}
+              <section class="claim-section" role="group" aria-labelledby="claim-section-{sectionIndex}">
+                <h3 id="claim-section-{sectionIndex}">{section.label}</h3>
+                {#each section.categories as category, categoryIndex (`${section.key}:${category.key}`)}
+                  <div class="claim-category" role="group" aria-labelledby="claim-category-{sectionIndex}-{categoryIndex}">
+                    <h4 id="claim-category-{sectionIndex}-{categoryIndex}">{category.label}<span>{category.items.length}</span></h4>
+                    {#each category.items as item (item.claim.claim_id)}
+                      <button role="option" aria-selected={selectedClaim?.claim.claim_id === item.claim.claim_id} class:selected={selectedClaim?.claim.claim_id === item.claim.claim_id} onclick={() => selectedClaimId = item.claim.claim_id}>
+                        <span class="polarity {item.claim.polarity}" aria-hidden="true"></span>
+                        <span><strong>{item.claim.text}</strong><small>{claimKindLabels[item.claim.claim_kind]} · {subjectLabel(item.claim)}</small></span>
+                        <span class="row-state">{item.claim.salience === 'pinned' ? '重要' : item.claim.epistemic.representation_certainty}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/each}
+              </section>
             {:else}<div class="empty">没有符合条件的主张。</div>{/each}
           </div>
           {#if selectedClaim}
@@ -721,16 +869,27 @@
       </div>
     {:else if tab === 'pending'}
       <div id="pending-panel" class="split" role="tabpanel" aria-label="待确认建议">
-        <div class="master" role="listbox" tabindex="0" aria-label="待确认建议列表" onkeydown={(event) => moveListFocus(event, '[role=option]')}>
+        <div class="master" role="listbox" tabindex="0" aria-label="待确认建议列表" aria-multiselectable="true" onscroll={() => pendingContextMenu = null} onkeydown={(event) => moveListFocus(event, '[role=option]')}>
           {#each reviews as item (item.revision.revision_id)}
-            <button role="option" aria-selected={selectedPending?.revision.revision_id === item.revision.revision_id} class:selected={selectedPending?.revision.revision_id === item.revision.revision_id} class:sensitive={item.revision.risk_class === 'action-sensitive'} onclick={() => selectedPendingId = item.revision.revision_id}>
+            <button role="option" aria-selected={selectedPendingIds.includes(item.revision.revision_id)} class:selected={selectedPendingIds.includes(item.revision.revision_id)} class:sensitive={item.revision.risk_class === 'action-sensitive'} onclick={(event) => selectPending(item, event)} oncontextmenu={(event) => openPendingContextMenu(item, event)} onkeydown={(event) => openPendingContextMenuFromKeyboard(item, event)}>
               <span class="polarity {item.revision.polarity}" aria-hidden="true"></span>
               <span><strong>{item.revision.text}</strong><small>{claimKindLabels[item.revision.claim_kind]} · {actorLabel(item.revision.recorded_by)}</small></span>
               <span class="row-state">{item.revision.risk_class === 'action-sensitive' ? '需谨慎' : item.revision.salience}</span>
             </button>
           {:else}<div class="empty">没有待确认建议。</div>{/each}
         </div>
-        {#if selectedPending}
+        {#if selectedPendingItems.length > 1}
+          <article class="detail bulk-pending-summary" aria-labelledby="pending-bulk-title">
+            <div class="eyebrow"><span class="badge positive">已多选</span><span class="badge">{selectedPendingItems.length} 条</span></div>
+            <h2 id="pending-bulk-title">批量处理待确认建议</h2>
+            <p>右键任一选中项，或使用下方按钮，可批量忽略、否认或删除候选。</p>
+            <div class="approval-meaning"><small>确认仍需逐条进行</small><strong>不会提供笼统的批量确认</strong><p>身份表达、事实确认、行为授权和生命周期变更的含义不同，需要逐条查看后确认；编辑和“认为重要”也保留为单项操作。</p></div>
+            <ul class="pending-selection-preview">
+              {#each selectedPendingItems as item (item.revision.revision_id)}<li>{item.revision.text}</li>{/each}
+            </ul>
+            <div class="pending-actions"><button aria-haspopup="menu" aria-expanded={!!pendingContextMenu} onclick={openSelectedPendingMenu}>批量操作…</button></div>
+          </article>
+        {:else if selectedPending}
           {@const revision = selectedPending.revision}
           {@const approval = approvalForPending(selectedPending)}
           {@const lifecycleChange = revision.lifecycle.state !== 'active'}
@@ -756,6 +915,14 @@
             </div>
           </article>
         {:else}<div class="empty detail-empty">当前没有需要人工处理的建议。</div>{/if}
+      </div>
+    {:else if tab === 'context'}
+      <div id="context-governance-panel" role="tabpanel" aria-label="身份与场景管理">
+        <RoleScopeManager
+          claims={snapshot.claims}
+          onchanged={roleScopeChanged}
+          onbusychange={(value) => roleScopeBusy = value}
+        />
       </div>
     {:else}
       <div id="history-panel" class="history" role="tabpanel" aria-label="冲突与历史">
@@ -785,13 +952,13 @@
   {/if}
 </main>
 
-{#if showRoleScopeManager && snapshot}
-  <RoleScopeManager
-    claims={snapshot.claims}
-    onclose={() => showRoleScopeManager = false}
-    onchanged={roleScopeChanged}
-    onbusychange={(value) => roleScopeBusy = value}
-  />
+{#if pendingContextMenu && selectedPendingItems.length}
+  <div class="menu-panel pending-context-menu" role="menu" aria-label="待确认建议批量操作" style:left="{pendingContextMenu.x}px" style:top="{pendingContextMenu.y}px">
+    <div class="menu-heading" role="presentation">已选择 {selectedPendingItems.length} 条</div>
+    <button class="menu-row" role="menuitem" onclick={() => startPendingBatch('ignore')} disabled={!writable || writing}>可以忽略…</button>
+    <button class="menu-row" role="menuitem" onclick={() => startPendingBatch('reject')} disabled={!writable || writing}>否认所选…</button>
+    <button class="menu-row danger-row" role="menuitem" onclick={() => startPendingBatch('delete-candidate')} disabled={!writable || writing}>删除所选候选…</button>
+  </div>
 {/if}
 
 {#if showAdd && snapshot?.owner}
@@ -822,7 +989,7 @@
 {/if}
 
 {#if destructive}
-  <div class="scrim" role="presentation"><div class="sheet compact-sheet" role="alertdialog" aria-modal="true" aria-labelledby="destructive-title"><header><div><h2 id="destructive-title">{destructive.kind === 'reject' ? '否认这条建议？' : destructive.kind === 'delete-candidate' ? '删除这个候选？' : destructive.kind === 'approve-lifecycle' ? `确认${destructive.pending.revision.lifecycle.state === 'deleted' ? '删除' : '撤销'}此主张？` : '移出当前记忆？'}</h2><p>{destructive.kind === 'delete-claim' ? '主张会从当前投影和 Agent context 移除；不可变历史仍会保留。这不是从 Git 历史永久擦除。' : destructive.kind === 'approve-lifecycle' ? '这是不可见性变更：主张会离开当前投影和 Agent context；不可变历史仍会保留。' : destructive.kind === 'reject' ? '系统会记录否认决定，建议不会进入当前记忆。' : '候选不会进入当前记忆；已有 Git 历史可能继续保留。'}</p></div></header><footer><button onclick={() => destructive = null} disabled={writing}>取消</button><button class="destructive" onclick={confirmDestructive} disabled={writing}>{writing ? '正在处理…' : '确认'}</button></footer></div></div>
+  <div class="scrim" role="presentation"><div class="sheet compact-sheet" role="alertdialog" aria-modal="true" aria-labelledby="destructive-title"><header><div><h2 id="destructive-title">{destructive.kind === 'batch-pending' ? `批量${batchActionText(destructive.action)} ${destructive.pending.length} 条建议？` : destructive.kind === 'reject' ? '否认这条建议？' : destructive.kind === 'delete-candidate' ? '删除这个候选？' : destructive.kind === 'approve-lifecycle' ? `确认${destructive.pending.revision.lifecycle.state === 'deleted' ? '删除' : '撤销'}此主张？` : '移出当前记忆？'}</h2><p>{destructive.kind === 'batch-pending' ? destructive.action === 'ignore' ? `这 ${destructive.pending.length} 条建议会离开待确认队列，并分别记录忽略决定，避免相同内容反复出现。` : destructive.action === 'reject' ? `系统会分别记录对这 ${destructive.pending.length} 条建议的否认决定；它们不会进入当前记忆。` : `这 ${destructive.pending.length} 个候选会从待确认队列移除；已有 Git 历史可能继续保留。` : destructive.kind === 'delete-claim' ? '主张会从当前投影和 Agent context 移除；不可变历史仍会保留。这不是从 Git 历史永久擦除。' : destructive.kind === 'approve-lifecycle' ? '这是不可见性变更：主张会离开当前投影和 Agent context；不可变历史仍会保留。' : destructive.kind === 'reject' ? '系统会记录否认决定，建议不会进入当前记忆。' : '候选不会进入当前记忆；已有 Git 历史可能继续保留。'}</p></div></header><footer><button onclick={() => destructive = null} disabled={writing}>取消</button><button class={destructive.kind === 'batch-pending' && destructive.action === 'ignore' ? 'primary' : 'destructive'} onclick={confirmDestructive} disabled={writing}>{writing ? '正在处理…' : destructive.kind === 'batch-pending' ? `确认${batchActionText(destructive.action)} ${destructive.pending.length} 条` : '确认'}</button></footer></div></div>
 {/if}
 
 {#if showReset && snapshot}
@@ -857,11 +1024,11 @@
 <style>
   :global(:root){color-scheme:light dark;font:13px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;accent-color:#0a84ff}:global(body){margin:0;background:Canvas;color:CanvasText}:global(*){box-sizing:border-box}:global(button),:global(input),:global(select),:global(textarea),:global(summary){font:inherit;pointer-events:auto;-webkit-app-region:no-drag}:global(button){min-height:32px;border:1px solid color-mix(in srgb,CanvasText 14%,transparent);border-radius:8px;padding:0 12px;background:color-mix(in srgb,CanvasText 5%,Canvas);color:CanvasText;cursor:pointer}:global(button:hover:not(:disabled)){background:color-mix(in srgb,CanvasText 10%,Canvas)}:global(button:active:not(:disabled)){transform:translateY(1px)}:global(button:focus-visible),:global(input:focus-visible),:global(select:focus-visible),:global(textarea:focus-visible),:global(summary:focus-visible){outline:3px solid color-mix(in srgb,#0a84ff 34%,transparent);outline-offset:2px}:global(button:disabled){opacity:.42;cursor:default}:global(button.primary){min-height:34px;background:#0a84ff;border-color:#0a84ff;color:white;font-weight:600}:global(button.primary:hover:not(:disabled)){background:#0077ed}:global(button.destructive){background:#ff3b30;border-color:#ff3b30;color:#fff;font-weight:600}:global(input),:global(select),:global(textarea){width:100%;min-height:32px;padding:6px 9px;border:1px solid color-mix(in srgb,CanvasText 16%,transparent);border-radius:7px;background:Canvas;color:CanvasText}:global(textarea){resize:vertical;line-height:1.5}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
   main{max-width:1240px;margin:0 auto;padding:20px 24px 40px}.app-header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.app-header h1{margin:0;font-size:20px;line-height:1.25;letter-spacing:-.02em}.app-header p{max-width:680px;margin:4px 0 0;font-size:12px;color:color-mix(in srgb,CanvasText 58%,transparent)}.header-actions{display:flex;align-items:center;gap:8px}.inference-action{display:flex;align-items:center;gap:4px}.health{display:flex;align-items:center;gap:7px;max-width:250px;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.health>span:first-child{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#34c759}.health.conflict>span:first-child{background:#ff9f0a}.health.bad>span:first-child{background:#ff3b30}.icon{width:32px;padding:0;font-size:17px}.secondary{background:transparent}.reset-trigger{color:#d62d26}.banner{display:flex;align-items:flex-start;gap:10px;margin-top:14px;padding:10px 12px;border:1px solid;border-radius:9px;font-size:12px}.banner strong{white-space:nowrap}.banner.error{border-color:color-mix(in srgb,#ff3b30 42%,transparent);background:color-mix(in srgb,#ff3b30 9%,Canvas)}.banner.warning{border-color:color-mix(in srgb,#ff9f0a 45%,transparent);background:color-mix(in srgb,#ff9f0a 9%,Canvas)}.banner.inference-progress{border-color:color-mix(in srgb,#0a84ff 36%,transparent);background:color-mix(in srgb,#0a84ff 7%,Canvas)}
-  .segments{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;max-width:560px;margin:18px auto 16px;padding:3px;border-radius:9px;background:color-mix(in srgb,CanvasText 8%,Canvas)}.segments button{min-height:34px;border:0;background:transparent;color:color-mix(in srgb,CanvasText 65%,transparent);font-weight:600}.segments button.active{background:Canvas;color:CanvasText;box-shadow:0 1px 4px rgba(0,0,0,.16)}.count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:color-mix(in srgb,CanvasText 10%,Canvas);font-size:11px}.count.large{min-width:28px;height:24px;border-radius:12px}.toolbar{display:grid;grid-template-columns:minmax(200px,1fr) 170px auto auto;gap:8px;margin-bottom:12px}.split{display:grid;grid-template-columns:350px minmax(0,1fr);min-height:510px;border:1px solid color-mix(in srgb,CanvasText 13%,transparent);border-radius:11px;overflow:hidden;background:color-mix(in srgb,CanvasText 1.5%,Canvas)}
-  .master{max-height:calc(100vh - 220px);min-height:510px;overflow:auto;border-right:1px solid color-mix(in srgb,CanvasText 12%,transparent);background:color-mix(in srgb,CanvasText 3%,Canvas)}.master>button{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:start;gap:9px;width:100%;min-height:70px;padding:11px 12px;border:0;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:0;background:transparent;text-align:left}.master>button.selected{background:#0a84ff;color:#fff}.master>button.selected small,.master>button.selected .row-state{color:rgba(255,255,255,.8)}.master>button.sensitive{box-shadow:inset 3px 0 #ff9f0a}.master strong{display:-webkit-box;overflow:hidden;line-clamp:2;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:13px;line-height:1.4;white-space:pre-wrap}.master small{display:block;margin-top:4px;color:color-mix(in srgb,CanvasText 53%,transparent);font-size:12px}.row-state{color:color-mix(in srgb,CanvasText 55%,transparent);font-size:11px}.polarity{width:7px;height:7px;margin-top:5px;border-radius:50%;background:#8e8e93}.polarity.positive{background:#34c759}.polarity.negative{background:#ff3b30}
-  .detail{min-width:0;padding:22px 24px}.detail h2{margin:12px 0 16px;font-size:17px;line-height:1.5;letter-spacing:-.01em;white-space:pre-wrap}.eyebrow{display:flex;flex-wrap:wrap;gap:6px}.badge{padding:3px 7px;border-radius:6px;background:color-mix(in srgb,CanvasText 7%,Canvas);font-size:11px;font-weight:650}.badge.positive{background:color-mix(in srgb,#34c759 18%,Canvas);color:#168333}.badge.negative,.badge.danger{background:color-mix(in srgb,#ff3b30 16%,Canvas);color:#d62d26}.badge.pinned{background:color-mix(in srgb,#ff9f0a 20%,Canvas);color:#9a5500}.guidance{margin-bottom:16px;padding:13px 14px;border-left:3px solid #0a84ff;border-radius:0 8px 8px 0;background:color-mix(in srgb,#0a84ff 7%,Canvas)}.guidance small,.approval-meaning small{font-size:11px;font-weight:700;color:#0a84ff}.guidance p{margin:4px 0 9px;font-size:13px}.guidance p:last-child{margin-bottom:0}.guidance .avoid{color:#d62d26;font-weight:600}.facts{display:grid;grid-template-columns:1fr 1fr;gap:1px;margin:0;background:color-mix(in srgb,CanvasText 8%,transparent);border:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:8px;overflow:hidden}.facts>div{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;background:Canvas}.facts>div.wide{grid-column:1/-1}.facts dt{font-size:12px;color:color-mix(in srgb,CanvasText 54%,transparent)}.facts dd{margin:0;text-align:right;font-size:12px;overflow-wrap:anywhere}.detail-actions{display:flex;justify-content:flex-end;margin-top:16px}.menu-anchor{position:relative}.menu-panel{position:absolute;right:0;bottom:40px;z-index:20;min-width:190px}.menu-panel .menu-row{width:100%;min-height:30px;border:0;text-align:left}.menu-panel .danger-row{color:#ff3b30}.menu-panel .danger-row:hover{background:#ff3b30;color:#fff}.approval-meaning{margin:0 0 14px;padding:12px 13px;border-radius:9px;background:color-mix(in srgb,#0a84ff 7%,Canvas)}.approval-meaning strong{display:block;margin-top:3px;font-size:14px}.approval-meaning p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 66%,transparent);font-size:12px}.diff{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:12px 0 16px}.diff>div{min-height:92px;padding:11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas)}.diff small{font-size:11px;color:color-mix(in srgb,CanvasText 54%,transparent)}.diff p{margin:5px 0 0;white-space:pre-wrap}.pending-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:16px}
+  .segments{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;max-width:760px;margin:18px auto 16px;padding:3px;border-radius:9px;background:color-mix(in srgb,CanvasText 8%,Canvas)}.segments button{min-height:34px;border:0;background:transparent;color:color-mix(in srgb,CanvasText 65%,transparent);font-weight:600}.segments button.active{background:Canvas;color:CanvasText;box-shadow:0 1px 4px rgba(0,0,0,.16)}.count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:color-mix(in srgb,CanvasText 10%,Canvas);font-size:11px}.context-count{margin-left:3px;color:color-mix(in srgb,currentColor 68%,transparent);font-size:10px;font-variant-numeric:tabular-nums}.count.large{min-width:28px;height:24px;border-radius:12px}.toolbar{display:grid;grid-template-columns:minmax(180px,1fr) 160px 140px auto auto;gap:8px;margin-bottom:12px}.split{display:grid;grid-template-columns:350px minmax(0,1fr);min-height:510px;border:1px solid color-mix(in srgb,CanvasText 13%,transparent);border-radius:11px;overflow:hidden;background:color-mix(in srgb,CanvasText 1.5%,Canvas)}
+  .master{max-height:calc(100vh - 220px);min-height:510px;overflow:auto;border-right:1px solid color-mix(in srgb,CanvasText 12%,transparent);background:color-mix(in srgb,CanvasText 3%,Canvas)}.claim-section>h3{position:sticky;top:0;z-index:2;margin:0;padding:8px 12px 6px;border-bottom:1px solid color-mix(in srgb,CanvasText 10%,transparent);background:color-mix(in srgb,CanvasText 9%,Canvas);font-size:11px;letter-spacing:.04em}.claim-category>h4{display:flex;justify-content:space-between;margin:0;padding:6px 12px;border-bottom:1px solid color-mix(in srgb,CanvasText 7%,transparent);background:color-mix(in srgb,CanvasText 5%,Canvas);color:color-mix(in srgb,CanvasText 62%,transparent);font-size:11px;font-weight:600}.claim-category>h4 span{font-variant-numeric:tabular-nums}.master [role=option]{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:start;gap:9px;width:100%;min-height:70px;padding:11px 12px;border:0;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:0;background:transparent;text-align:left}.master [role=option].selected{background:#0a84ff;color:#fff}.master [role=option].selected small,.master [role=option].selected .row-state{color:rgba(255,255,255,.8)}.master [role=option].sensitive{box-shadow:inset 3px 0 #ff9f0a}.master strong{display:-webkit-box;overflow:hidden;line-clamp:2;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:13px;line-height:1.4;white-space:pre-wrap}.master small{display:block;margin-top:4px;color:color-mix(in srgb,CanvasText 53%,transparent);font-size:12px}.row-state{color:color-mix(in srgb,CanvasText 55%,transparent);font-size:11px}.polarity{width:7px;height:7px;margin-top:5px;border-radius:50%;background:#8e8e93}.polarity.positive{background:#34c759}.polarity.negative{background:#ff3b30}
+  .detail{min-width:0;padding:22px 24px}.detail h2{margin:12px 0 16px;font-size:17px;line-height:1.5;letter-spacing:-.01em;white-space:pre-wrap}.eyebrow{display:flex;flex-wrap:wrap;gap:6px}.badge{padding:3px 7px;border-radius:6px;background:color-mix(in srgb,CanvasText 7%,Canvas);font-size:11px;font-weight:650}.badge.positive{background:color-mix(in srgb,#34c759 18%,Canvas);color:#168333}.badge.negative,.badge.danger{background:color-mix(in srgb,#ff3b30 16%,Canvas);color:#d62d26}.badge.pinned{background:color-mix(in srgb,#ff9f0a 20%,Canvas);color:#9a5500}.guidance{margin-bottom:16px;padding:13px 14px;border-left:3px solid #0a84ff;border-radius:0 8px 8px 0;background:color-mix(in srgb,#0a84ff 7%,Canvas)}.guidance small,.approval-meaning small{font-size:11px;font-weight:700;color:#0a84ff}.guidance p{margin:4px 0 9px;font-size:13px}.guidance p:last-child{margin-bottom:0}.guidance .avoid{color:#d62d26;font-weight:600}.facts{display:grid;grid-template-columns:1fr 1fr;gap:1px;margin:0;background:color-mix(in srgb,CanvasText 8%,transparent);border:1px solid color-mix(in srgb,CanvasText 8%,transparent);border-radius:8px;overflow:hidden}.facts>div{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;background:Canvas}.facts>div.wide{grid-column:1/-1}.facts dt{font-size:12px;color:color-mix(in srgb,CanvasText 54%,transparent)}.facts dd{margin:0;text-align:right;font-size:12px;overflow-wrap:anywhere}.detail-actions{display:flex;justify-content:flex-end;margin-top:16px}.menu-anchor{position:relative}.menu-panel{position:absolute;right:0;bottom:40px;z-index:20;min-width:190px}.menu-panel.pending-context-menu{position:fixed;right:auto;bottom:auto;z-index:90;min-width:230px}.menu-heading{padding:6px 10px 5px;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:11px;font-weight:650}.menu-panel .menu-row{width:100%;min-height:30px;border:0;text-align:left}.menu-panel .danger-row{color:#ff3b30}.menu-panel .danger-row:hover{background:#ff3b30;color:#fff}.approval-meaning{margin:0 0 14px;padding:12px 13px;border-radius:9px;background:color-mix(in srgb,#0a84ff 7%,Canvas)}.approval-meaning strong{display:block;margin-top:3px;font-size:14px}.approval-meaning p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 66%,transparent);font-size:12px}.diff{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:12px 0 16px}.diff>div{min-height:92px;padding:11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas)}.diff small{font-size:11px;color:color-mix(in srgb,CanvasText 54%,transparent)}.diff p{margin:5px 0 0;white-space:pre-wrap}.pending-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:16px}.bulk-pending-summary>p{color:color-mix(in srgb,CanvasText 66%,transparent)}.pending-selection-preview{max-height:210px;margin:14px 0 0;padding:0;overflow:auto;list-style:none;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:9px}.pending-selection-preview li{padding:8px 10px;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent);white-space:pre-wrap}.pending-selection-preview li:last-child{border-bottom:0}
   .history{display:grid;gap:12px}.history>header{display:flex;justify-content:space-between;align-items:center}.history h2{margin:0;font-size:16px}.history header p{margin:3px 0 0;color:color-mix(in srgb,CanvasText 58%,transparent);font-size:12px}.conflict-card{padding:16px;border:1px solid color-mix(in srgb,#ff9f0a 42%,transparent);border-radius:11px;background:color-mix(in srgb,#ff9f0a 5%,Canvas)}.conflict-title{display:flex;justify-content:space-between;gap:18px}.conflict-title h3{margin:7px 0 0;font-size:15px}.conflict-title>strong{color:#b36300;font-size:12px}.ancestor{margin:12px 0;padding:10px 11px;border-radius:8px;background:color-mix(in srgb,CanvasText 5%,Canvas)}.ancestor small,.heads small{font-size:11px;color:color-mix(in srgb,CanvasText 55%,transparent)}.ancestor p,.heads p{margin:4px 0 0;white-space:pre-wrap}.heads{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.heads section{padding:11px;border:1px solid color-mix(in srgb,CanvasText 11%,transparent);border-radius:9px;background:Canvas}.heads button{margin-top:10px}.conflict-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}.history-heading{margin-top:12px}.timeline{margin:0;padding:0;list-style:none;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:10px;overflow:hidden}.timeline li{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:10px;align-items:start;padding:11px 13px;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent)}.timeline li:last-child{border-bottom:0}.timeline-dot{width:8px;height:8px;margin-top:5px;border-radius:50%;background:#0a84ff}.timeline strong{display:block;font-size:13px}.timeline small{display:block;margin-top:2px;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:12px}.timeline>li>span:last-child{font-size:11px}.empty{padding:52px 18px;text-align:center;color:color-mix(in srgb,CanvasText 48%,transparent)}.empty.compact{padding:22px}.detail-empty{display:grid;place-items:center}
   .scrim{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.28);backdrop-filter:blur(8px)}.sheet{box-sizing:border-box;width:min(680px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:22px;border:1px solid color-mix(in srgb,CanvasText 15%,transparent);border-radius:14px;background:Canvas;color:CanvasText;box-shadow:0 24px 70px rgba(0,0,0,.34)}.compact-sheet{width:min(470px,100%)}.context-sheet{width:min(760px,100%)}.sheet>header{display:flex;justify-content:space-between;gap:18px}.sheet h2{margin:0;font-size:17px}.sheet header p{margin:4px 0 0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.reset-sheet{border-color:color-mix(in srgb,#ff3b30 35%,transparent)}.reset-impact{margin-top:16px;padding:12px 13px;border-radius:9px;background:color-mix(in srgb,#ff3b30 8%,Canvas)}.reset-impact>strong{color:#d62d26}.reset-impact ul{margin:9px 0 0;padding-left:20px}.reset-impact li{margin:5px 0}.close{width:32px;padding:0;border:0;background:transparent;font-size:20px}.field,.form-grid label{display:grid;gap:4px;margin-top:12px;color:color-mix(in srgb,CanvasText 68%,transparent);font-size:12px}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.form-grid .wide{grid-column:1/-1}details{margin-top:14px;padding:10px 12px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:9px}summary{cursor:pointer;font-weight:600}fieldset{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0;padding:10px;border:1px solid color-mix(in srgb,CanvasText 10%,transparent);border-radius:8px}legend{padding:0 4px;font-size:12px}.check{display:flex!important;align-items:center;gap:6px!important;margin:0!important}.check input{width:auto;min-height:auto}.sheet footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.context-actions{display:flex;justify-content:flex-end;margin-top:14px}.context-result{margin-top:14px;padding:13px;border-radius:10px;background:color-mix(in srgb,CanvasText 4%,Canvas)}.result-summary{display:flex;justify-content:space-between}.context-result ul{margin:10px 0;padding-left:20px}.context-result li{margin:5px 0}.context-result li small,.readonly-note{display:block;color:color-mix(in srgb,CanvasText 55%,transparent);font-size:12px}
-  @media(max-width:820px){main{padding:16px}.split{grid-template-columns:290px minmax(0,1fr)}.header-actions{flex-wrap:wrap;justify-content:flex-end}.heads{grid-template-columns:1fr}}@media(max-width:660px){.app-header{display:block}.header-actions{justify-content:flex-start;margin-top:10px}.split{display:block}.master{min-height:180px;max-height:280px;border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 12%,transparent)}.toolbar,.form-grid,.diff,.facts{grid-template-columns:1fr}.facts>div.wide,.form-grid .wide{grid-column:auto}.segments{max-width:none}.pending-actions{justify-content:stretch}.pending-actions button{flex:1 1 120px}}
+  @media(max-width:820px){main{padding:16px}.split{grid-template-columns:290px minmax(0,1fr)}.header-actions{flex-wrap:wrap;justify-content:flex-end}.heads{grid-template-columns:1fr}.toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}.toolbar .search{grid-column:1/-1}}@media(max-width:660px){.app-header{display:block}.header-actions{justify-content:flex-start;margin-top:10px}.split{display:block}.master{min-height:180px;max-height:280px;border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 12%,transparent)}.toolbar,.form-grid,.diff,.facts{grid-template-columns:1fr}.toolbar .search,.facts>div.wide,.form-grid .wide{grid-column:auto}.segments{max-width:none}.pending-actions{justify-content:stretch}.pending-actions button{flex:1 1 120px}}
   @media(prefers-reduced-motion:reduce){:global(*){scroll-behavior:auto!important;transition:none!important}}
 </style>

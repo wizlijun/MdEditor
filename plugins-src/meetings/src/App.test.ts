@@ -205,4 +205,78 @@ describe('Meetings UI', () => {
     await vi.waitFor(() => expect(document.body.textContent).toContain('Migration result'))
     expect(document.body.textContent).toContain('Committed')
   })
+
+  it('automatically detects the first Hemory Vault when migration opens', async () => {
+    const report = migrationReport({
+      items: [{
+        ...migrationReport().items[0],
+        target_relative_path: 'archive/meetings/20260903_090000',
+      }],
+    })
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === 'host.vault.info') return { root: '/vault' }
+      if (method === 'plugin.detect_env') {
+        return {
+          settings: { meetings_root: 'archive/meetings' },
+          default_hemory_source: '/home/me/.hemory/vault/0001',
+        }
+      }
+      if (method === 'plugin.library_list') return { meetings: [] }
+      if (method === 'plugin.hemory_detect') {
+        return { users: ['alice'], selected_user: 'alice', needs_timezone: false, warnings: [] }
+      }
+      if (method === 'plugin.hemory_plan') return report
+      throw new Error(`unexpected RPC: ${method} ${JSON.stringify(params)}`)
+    })
+    window.notemd = {
+      pluginId: 'notemd.meetings', locale: 'en', theme: 'light', request, onMessage: () => {},
+    } satisfies NotemdBridge
+
+    app = mount(App, { target: document.body })
+    await vi.waitFor(() => expect(document.body.textContent).toContain('archive/meetings'))
+    button('Migrate from Hemory…').click()
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('plugin.hemory_detect', {
+      source: '/home/me/.hemory/vault/0001',
+    }))
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('plugin.hemory_plan', {
+      source: '/home/me/.hemory/vault/0001',
+      mode: 'incremental',
+      user: 'alice',
+    }))
+    expect(document.body.textContent).toContain('/home/me/.hemory/vault/0001')
+  })
+
+  it('loads and saves the Vault-relative meetings directory from settings', async () => {
+    let libraryLoads = 0
+    const request = vi.fn(async (method: string) => {
+      if (method === 'host.vault.info') return { root: '/vault' }
+      if (method === 'plugin.detect_env') {
+        return { settings: { meetings_root: 'ssot/meetings' }, default_hemory_source: null }
+      }
+      if (method === 'plugin.library_list') {
+        libraryLoads += 1
+        return { meetings: [] }
+      }
+      if (method === 'plugin.save_settings') return { meetings_root: 'team/transcripts' }
+      if (method === 'host.toast') return {}
+      throw new Error(`unexpected RPC: ${method}`)
+    })
+    window.notemd = {
+      pluginId: 'notemd.meetings', locale: 'en', theme: 'light', request, onMessage: () => {},
+    } satisfies NotemdBridge
+
+    app = mount(App, { target: document.body })
+    await vi.waitFor(() => expect(libraryLoads).toBe(1))
+    button('Settings').click()
+    await tick()
+    const input = document.querySelector<HTMLInputElement>('#meetings-root')!
+    input.value = 'team/transcripts'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    button('Save settings').click()
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('plugin.save_settings', {
+      meetings_root: 'team/transcripts',
+    }))
+    await vi.waitFor(() => expect(libraryLoads).toBe(2))
+    expect(document.body.textContent).toContain('team/transcripts')
+  })
 })

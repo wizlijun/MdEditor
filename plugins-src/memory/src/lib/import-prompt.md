@@ -26,7 +26,8 @@ note.md 的记忆窗口里点确认才会生效。所以宁可多列几条让我
 - 一次性、临时的东西：某次任务、当天的待办、会话状态、聊天寒暄。
 - 主语不是我的事实：同事、家人、客户、别人的项目 —— 即使它出现在
   我的对话里，也不属于我的记忆。
-- 你从对话里推断、我从未确认过的心理画像和性格判断。
+- 任何你从对话里推断、但我从未明确说过或确认过的内容，包括心理画像、
+  性格判断和背景猜测。拿不准来源的放入末尾「待我确认」，不要生成命令。
 - **任何凭据**：密码、API key、token、私钥、证件号、银行卡号、
   完整住址、门禁码。这些**绝不**出现在输出里，哪怕我以前告诉过你。
   遇到就整条丢弃，并在末尾只说一句「已丢弃 N 条含凭据的记忆」。
@@ -75,7 +76,7 @@ observation / commitment / practice / material-fact / quotation
 | trust-tier | identity / stable-preference / contextual | identity 类 → identity；preference、boundary、practice → stable-preference；其余 → contextual |
 | salience | normal / pinned | 只有我明确说过「务必记住 / 每次都要」的才 pinned |
 | sensitivity | normal / private | 健康、家庭、财务、身份细节 → private |
-| basis | owner-stated / inferred | 我亲口说的 → owner-stated；你观察归纳的 → inferred |
+| basis | owner-stated | 只导出我亲口说过或明确确认过的条目；推断内容不得生成命令 |
 | space | global 或 project/名字 | 只在某个项目里成立的，写成 project/名字 |
 | purpose | planning / writing / information-answer / projection / sync | 逗号分隔，可以多填。默认写 planning,writing,information-answer；只影响文风的可以只写 writing。绝不要填 external-action |
 | provider-policy | deny / prompt / allow | sensitivity 为 private 的填 deny，其余填 prompt |
@@ -84,7 +85,8 @@ guidance 写「助手应该怎么用这条」，avoid-error 写「这条是为�
 具体错误」。凡 polarity 为 negative、或 claim-kind 是 boundary /
 practice 的，这两项必填。
 
-有时效的（职位、居住地、在做的项目）补 --valid-from "YYYY-MM-DD"。
+只有原记忆带有可信生效时间时，才为有时效的条目补完整 RFC 3339 UTC 时间，
+例如 --valid-from "2026-09-02T00:00:00Z"；不知道准确时间就省略，不要猜。
 
 ## 第五步 · 输出
 
@@ -116,6 +118,7 @@ notemd memory propose create \
   反斜杠；需要引号就用「」。
 - 不要加 --vault，不要加 sudo，不要写循环或脚本，不要用 && 串联，
   不要输出除这个代码块之外的任何可执行内容。
+- 提醒我在运行前逐条审阅 bash 代码块；不要声称生成的命令已经执行或安全。
 - 不要调用 notemd memory approve / reject / delete —— 这些命令只接受
   我本人在 note.md 界面里的操作，你写了也会被拒绝。
 

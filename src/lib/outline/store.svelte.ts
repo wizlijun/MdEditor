@@ -7,9 +7,10 @@ import { syncAutoItems, regenerate as regenerateTree } from './sync'
 import { parseInline, eachInline } from './parser'
 import type { BacklinkIndex } from './backlinks'
 import { pageNameOf } from './backlinks'
-import { touchFrontmatter, fmHas, outlineConceptType } from './frontmatter'
+import { touchFrontmatter, fmHas, outlineConceptType, signFrontmatterBlock } from './frontmatter'
 import { outlineDirs } from './dirs.svelte'
 import { sourcesForNote } from './note-source'
+import type { ConceptMeta } from '../okf/concept'
 
 export interface OutlineState {
   /** 全屏大纲 tab 模式:当前挂载的 .note.md 路径 */
@@ -157,6 +158,23 @@ export async function attachDoc(docPath: string, text: string, mainContent: stri
   // 提问视为明确保存意图:树中出现 question 节点即激活落盘(spec §2)
   if (treeHasQuestion(outline.tree)) outline.armed = true
   bump()
+}
+
+/**
+ * 伴生笔记「首次落盘」这一刻,把签名同时补进内存树 —— **仅供**
+ * OutlineEditor.svelte 的 flushDisk() 在 `!existed`(创建)分支调用一次。
+ * 这是本模块里唯一被允许写 `generated` 键的入口:serializeDoc() 的两处
+ * touchFrontmatter 调用(保存路径)永远不传 generated,那条红线不因为
+ * 这个函数存在而松动——它只在"文件刚从无到有"这一个时刻起作用。
+ *
+ * `docPath` 是调用方在开始签名前拍下的快照:调用点前有两次 await(动态
+ * import + humanActor()),全局单例树可能已经被切到另一篇文档。校验失败
+ * 就什么也不做——磁盘字节已经在别处写对了,下一次 attachDoc 从磁盘读回来
+ * 自然带上这个键,不依赖这次内存回填成功。
+ */
+export function signOutlineFrontmatterOnCreate(docPath: string, author: ConceptMeta['generated']): void {
+  if (outline.docPath !== docPath) return
+  outline.tree.frontmatter = signFrontmatterBlock(outline.tree.frontmatter, author)
 }
 
 /**

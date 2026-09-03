@@ -3,11 +3,13 @@
   import {
     bridge,
     cancelHemoryMigration,
+    detectEnvironment,
     detectHemory,
     listMeetings,
     openInEditor,
     pickHemoryDirectory,
     planHemory,
+    saveMeetingsSettings,
     startHemoryMigration,
     toast,
     vaultInfo,
@@ -38,6 +40,11 @@
   let meetings = $state<MeetingSummary[]>([])
   let libraryLoading = $state(true)
   let libraryError = $state('')
+  let settingsOpen = $state(false)
+  let settingsSaving = $state(false)
+  let settingsError = $state('')
+  let meetingsRoot = $state('ssot/meetings')
+  let defaultHemorySource = $state('')
   let migrationOpen = $state(false)
   let phase = $state<MigrationPhase>('setup')
   let source = $state('')
@@ -128,9 +135,11 @@
     currentItem = ''
   }
 
-  function openMigration(): void {
+  async function openMigration(): Promise<void> {
     resetMigration()
+    settingsOpen = false
     migrationOpen = true
+    if (defaultHemorySource) await inspectSource(defaultHemorySource)
   }
 
   function closeMigration(): void {
@@ -139,14 +148,8 @@
     resetMigration()
   }
 
-  async function chooseSource(): Promise<void> {
+  async function inspectSource(picked: string): Promise<void> {
     flowError = ''
-    const picked = await pickHemoryDirectory(t('action.choose')).catch((error) => {
-      flowError = errorMessage(error)
-      return null
-    })
-    if (!picked) return
-
     const generation = ++detectGeneration
     planGeneration += 1
     source = picked
@@ -169,6 +172,43 @@
       if (generation !== detectGeneration) return
       phase = 'setup'
       flowError = `${t('error.detect')} ${errorMessage(error)}`
+    }
+  }
+
+  async function chooseSource(): Promise<void> {
+    flowError = ''
+    const picked = await pickHemoryDirectory(t('action.choose')).catch((error) => {
+      flowError = errorMessage(error)
+      return null
+    })
+    if (picked) await inspectSource(picked)
+  }
+
+  async function loadEnvironment(): Promise<void> {
+    try {
+      const environment = await detectEnvironment()
+      meetingsRoot = environment.settings?.meetings_root || 'ssot/meetings'
+      defaultHemorySource = environment.default_hemory_source || ''
+    } catch {
+      meetingsRoot = 'ssot/meetings'
+      defaultHemorySource = ''
+    }
+  }
+
+  async function saveSettings(): Promise<void> {
+    if (settingsSaving) return
+    settingsSaving = true
+    settingsError = ''
+    try {
+      const saved = await saveMeetingsSettings(meetingsRoot)
+      meetingsRoot = saved.meetings_root
+      settingsOpen = false
+      await refreshLibrary()
+      await toast('success', t('settings.saved'))
+    } catch (error) {
+      settingsError = errorMessage(error)
+    } finally {
+      settingsSaving = false
     }
   }
 
@@ -308,7 +348,9 @@
     void vaultInfo()
       .then((info) => {
         vaultReady = Boolean(info.root)
-        if (vaultReady) void refreshLibrary()
+        if (vaultReady) {
+          void loadEnvironment().then(refreshLibrary)
+        }
         else libraryLoading = false
       })
       .catch(() => {
@@ -322,12 +364,13 @@
   <header class="topbar">
     <div>
       <h1>{t('title')}</h1>
-      <p>{t('subtitle')}</p>
+      <p>{t('subtitle', { root: meetingsRoot })}</p>
     </div>
     {#if !migrationOpen}
       <div class="header-actions">
+        <button class="secondary" onclick={() => (settingsOpen = !settingsOpen)} disabled={!vaultReady}>{t('action.settings')}</button>
         <button class="secondary" onclick={refreshLibrary} disabled={!vaultReady || libraryLoading}>{t('action.refresh')}</button>
-        <button class="primary" onclick={openMigration} disabled={!vaultReady}>{t('action.migrate')}</button>
+        <button class="primary" onclick={() => void openMigration()} disabled={!vaultReady}>{t('action.migrate')}</button>
       </div>
     {:else if phase !== 'running'}
       <button class="secondary" onclick={closeMigration}>{t('action.close')}</button>
@@ -475,13 +518,27 @@
       {/if}
     </section>
   {:else}
+    {#if settingsOpen}
+      <section class="settings-panel" aria-label={t('settings.title')}>
+        <h2>{t('settings.title')}</h2>
+        <label for="meetings-root">{t('settings.root')}</label>
+        <input id="meetings-root" type="text" bind:value={meetingsRoot} autocomplete="off" spellcheck="false" />
+        <p>{t('settings.rootHint')}</p>
+        <p>{t('settings.moveHint')}</p>
+        {#if settingsError}<div class="banner error" role="alert">{settingsError}</div>{/if}
+        <div class="settings-actions">
+          <button class="secondary" onclick={() => (settingsOpen = false)}>{t('action.close')}</button>
+          <button class="primary" onclick={saveSettings} disabled={settingsSaving}>{settingsSaving ? t('settings.saving') : t('settings.save')}</button>
+        </div>
+      </section>
+    {/if}
     <section class="library" aria-live="polite">
       {#if libraryLoading}
         <div class="empty-state"><span class="spinner"></span><p>{t('library.loading')}</p></div>
       {:else if libraryError}
         <div class="empty-state error-text"><p>{libraryError}</p><button class="secondary" onclick={refreshLibrary}>{t('action.retry')}</button></div>
       {:else if meetings.length === 0}
-        <div class="empty-state"><div class="empty-icon" aria-hidden="true">⌁</div><h2>{t('library.empty')}</h2><p>{t('library.emptyHint')}</p><button class="primary" onclick={openMigration}>{t('action.migrate')}</button></div>
+        <div class="empty-state"><div class="empty-icon" aria-hidden="true">⌁</div><h2>{t('library.empty')}</h2><p>{t('library.emptyHint', { root: meetingsRoot })}</p><button class="primary" onclick={() => void openMigration()}>{t('action.migrate')}</button></div>
       {:else}
         <div class="meeting-list">
           {#each sortedMeetings as meeting (meeting.conversation_id)}
@@ -534,7 +591,14 @@
   button.primary:hover:not(:disabled) { background: #006ee6; }
   button.secondary { color: inherit; border-color: rgba(0,0,0,.16); background: rgba(255,255,255,.72); }
   button.secondary:hover:not(:disabled) { background: #fff; }
-  .library, .migration-shell { max-width: 1000px; margin: 0 auto; padding: 24px 28px 44px; }
+  .library, .migration-shell, .settings-panel { max-width: 1000px; margin: 0 auto; padding: 24px 28px 44px; }
+  .settings-panel { margin-top: 22px; padding: 20px; border: 1px solid rgba(0,0,0,.1); border-radius: 16px; background: rgba(255,255,255,.84); }
+  .settings-panel + .library { padding-top: 16px; }
+  .settings-panel h2 { margin-bottom: 16px; font-size: 18px; }
+  .settings-panel label { display: block; margin-bottom: 7px; font-weight: 650; font-size: 14px; }
+  .settings-panel input { width: min(100%, 520px); }
+  .settings-panel > p { margin: 7px 0 0; color: #6e6e73; font-size: 12px; line-height: 1.45; }
+  .settings-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
   .empty-state { min-height: 430px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #6e6e73; }
   .empty-state h2 { margin: 8px 0 6px; color: #1d1d1f; font-size: 18px; }
   .empty-state p { max-width: 480px; line-height: 1.5; }
@@ -633,7 +697,8 @@
     :global(body) { --topbar-border: rgba(255,255,255,.11); --topbar-background: rgba(34,34,36,.86); color: #f5f5f7; background: #1c1c1e; }
     .topbar p, .migration-heading p, .field-copy p, .timezone-field p, .meeting-date, .meeting-meta, .report-heading p, .report-actions p, .running-card p, .confirm-sheet > p, .item-path, .item-row dt, .summary-grid span { color: #a1a1a6; }
     .empty-state h2 { color: #f5f5f7; }
-    .meeting-row, .setup-card, .report-card, .running-card { border-color: rgba(255,255,255,.11); background: rgba(44,44,46,.84); }
+    .meeting-row, .setup-card, .report-card, .running-card, .settings-panel { border-color: rgba(255,255,255,.11); background: rgba(44,44,46,.84); }
+    .settings-panel > p { color: #a1a1a6; }
     button.secondary, select, input[type="text"] { border-color: rgba(255,255,255,.16); background: rgba(58,58,60,.8); }
     button.secondary:hover:not(:disabled) { background: #48484a; }
     .selected-path, .summary-grid > div, .mode-badge { background: rgba(255,255,255,.065); }

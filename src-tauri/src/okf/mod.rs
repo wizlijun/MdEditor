@@ -45,15 +45,25 @@ fn git_config(dir: &Path, key: &str) -> String {
         .unwrap_or_default()
 }
 
-/// 本机人类身份 id。`vault_path` 为空或不存在时只用系统用户名。
-#[tauri::command]
-pub fn notemd_okf_human_id(vault_path: Option<String>) -> String {
+/// 本机人类身份的**完整 OKF actor 串**(`human:<id>`,§7)。`vault` 为 `None`
+/// 或不是目录时只用系统用户名。插件桥(`host.vault.info` 的 `author`)与
+/// `notemd_okf_human_id` 共用这一条路径,保证同一个人在两条通道上署名相同。
+pub fn human_actor_for_vault(vault: Option<&Path>) -> String {
+    format!("human:{}", human_id_for_vault(vault))
+}
+
+/// 裸 id(不带前缀)。`notemd_okf_human_id` 的实现主体。
+pub fn human_id_for_vault(vault: Option<&Path>) -> String {
     let os_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default();
-    let dir = vault_path.as_deref().map(Path::new).filter(|p| p.is_dir());
-    match dir {
+    match vault.filter(|p| p.is_dir()) {
         Some(d) => human_id_from(&git_config(d, "user.name"), &git_config(d, "user.email"), &os_user),
         None => human_id_from("", "", &os_user),
     }
+}
+
+#[tauri::command]
+pub fn notemd_okf_human_id(vault_path: Option<String>) -> String {
+    human_id_for_vault(vault_path.as_deref().map(Path::new))
 }
 
 #[cfg(test)]
@@ -103,5 +113,14 @@ mod tests {
     #[test]
     fn matches_the_frontend_rule_for_a_dotted_email() {
         assert_eq!(human_id_from("X", "first.last@corp.com", "x"), "first.last");
+    }
+
+    /// `human_actor_for_vault` 是给桥用的完整 actor 串(带 `human:` 前缀),
+    /// 不是裸 id —— 插件拿到就能直接写进 frontmatter,不必各自拼前缀。
+    #[test]
+    fn human_actor_for_vault_carries_the_okf_prefix() {
+        let got = human_actor_for_vault(None);
+        assert!(got.starts_with("human:"), "got: {got}");
+        assert!(got.len() > "human:".len(), "id must not be empty: {got}");
     }
 }

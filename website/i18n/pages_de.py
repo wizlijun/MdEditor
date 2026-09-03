@@ -117,7 +117,7 @@ PAGES = [
   ("Kann ich Notion-Seiten in note.md exportieren?",
    "Ja. Notion exportiert Markdown; leg die Dateien in deinen Vault und sie werden gewöhnliche Notizen, die du lesen, annotieren und verlinken kannst."),
   ("Warum ist Local-first für AI wichtig?",
-   "Agents arbeiten am besten auf reinen Dateien, die sie direkt lesen und schreiben können. Ein lokaler Markdown-Vault ist für jeden CLI-Agent sofort nutzbar — keine API-Tokens, keine Rate-Limits, keine Anbieter-AI als Türsteher."),
+   "Agents arbeiten am besten auf reinen Dateien, die sie direkt lesen und schreiben können. Mit einem lokalen Markdown-Vault nutzt du deinen vorhandenen Agent oder deine lokale Laufzeitumgebung, ohne dein Wissen einer einzigen Anbieter-KI oder einer zweiten Token-Rechnung auszuliefern. Für Nutzung und Limits gelten weiterhin die Regeln des gewählten Dienstes."),
  ],
 },
 # ------------------------------------------------------------ integrations
@@ -361,6 +361,81 @@ gh repo create my-vault --private --source=. --push</code></pre>
    "Nein. Die Orchestrierung bist du, und das Medium ist das Dateisystem. Es gibt keine zentrale Datenbank und keinen versteckten Zustand — Regeln in AGENTS.md, Output in .md, Urteil in .note.md. Ein Vault-MCP-Server ist auf der Roadmap für Agents, die ein Tool-Interface bevorzugen, aber reine Dateien funktionieren schon heute."),
   ("Warum nicht einfach eine AI für alles nutzen?",
    "Weil kein einzelner Agent in allem am besten ist. Nächtliche Automatisierung, sorgfältiges Review, schnelle Bildgenerierung, private lokale Arbeit und finales Urteil sind verschiedene Jobs mit verschiedenen Best-Fit-Tools. Sie auf Spezialisten aufzuteilen — über Dateien, die dir gehören — schlägt einen Generalisten, der alles macht, und lässt dich frei, jeden Arbeiter auszutauschen."),
+ ],
+},
+{
+ "path": "/blog/personal-ai-memory/",
+ "published": "2026-09-02",
+ "title": "Persönliches AI-Gedächtnis: Agents entdecken, du bestätigst | note.md",
+ "desc": "Warum ein verlässliches persönliches AI-Gedächtnis damit beginnt, dass Agents im Arbeitsalltag mögliche Erinnerungen erkennen und du jede Aussage bestätigst, bevor sie als vertrauenswürdiger Kontext dient.",
+ "crumb": "Produktthese · Memory",
+ "h1": "Agents entdecken. Du bestätigst. So wird persönliches Gedächtnis vertrauenswürdig.",
+ "lead": "Ein Modell kann private Tatsachen nicht kennen, die du ihm nie mitgeteilt hast. Dich ein Handbuch über dich selbst schreiben zu lassen, funktioniert ebenfalls nicht. note.md wählt einen dritten Weg: Agents erkennen, was in den eingebrachten Arbeiten und Gesprächen wichtig ist. Du bestätigst anschließend jede Erinnerung, bevor sich ein Agent darauf verlassen darf.",
+ "sections": [
+  ("Auch das klügste Modell kann dein Leben nicht erraten", """<p>Große Sprachmodelle sind sehr gut bei öffentlich verfügbarem Wissen: bei Tatsachen, die allgemein gelten und von vielen Menschen überprüft werden können. Persönliche Tatsachen sind anders. Kein Modell kann aus dem Internet ableiten, wie du angesprochen werden möchtest, warum du im vergangenen Jahr einen Plan abgelehnt hast, welches Werkzeug du für eine wiederkehrende Aufgabe bevorzugst oder welche Grenze ein Agent niemals überschreiten darf.</p>
+<p>Ein leistungsfähigeres Modell kann vielleicht überzeugender raten. Genau darin liegt die Gefahr: Eine elegant formulierte, aber falsche Aussage über dich kann völlig plausibel klingen – und nur du kannst sie korrigieren. Eine bessere Suche hilft nicht, wenn die Grundlage fehlt. Wurde eine Information nie erfasst, gibt es nichts abzurufen.</p>"""),
+  ("Du solltest kein Benutzerhandbuch über dich selbst schreiben müssen", """<p>Die übliche Lösung ist ein Profil, ein Feld für eigene Anweisungen oder eine von Hand gepflegte Gedächtnisdatei. Solche Auswege sind nützlich, eignen sich aber schlecht als Hauptweg. Vertraute Tatsachen erscheinen dir selbstverständlich, weshalb du nicht weißt, welche davon für einen Agent neu sind. Gerade die wertvollsten Erinnerungen – der Grund für eine Entscheidung, eine Lehre aus einem Fehlschlag oder eine unscheinbare Arbeitspräferenz – lassen sich auf Aufforderung besonders schwer zusammenfassen.</p>
+<p>Außerdem veränderst du dich. Ein einmal verfasstes Profil ist eine Momentaufnahme; ein Mensch ist eine fortlaufende Geschichte. Ein Gedächtnisprodukt sollte aus der Selbstbeschreibung nicht noch einen weiteren Posteingang machen, den du pflegen musst.</p>"""),
+  ("Die nützlichen Tatsachen stecken bereits in deiner Arbeit", """<p>Vielleicht setzt du dich nie hin, um einer AI zu erklären: „So treffe ich Entscheidungen.“ Trotzdem zeigst du es ganz selbstverständlich in Projektgesprächen, E-Mails, Sitzungsprotokollen, Agent-Sitzungen und den Dokumenten, die du bearbeitest. Diese Momente enthalten, was in einem Formular verloren geht: Sprache aus der Ich-Perspektive, Zeitpunkt, Zielgruppe, Gründe und den umgebenden Kontext.</p>
+<p>Daraus ergibt sich eine bessere Arbeitsteilung:</p>
+<ol>
+<li><b>Du übernimmst ausgewählte Arbeiten und Gespräche in deinen Vault.</b> Die Quelle bleibt als Beleg verfügbar und unter deiner Kontrolle.</li>
+<li><b>Ein Agent entdeckt kleine, eigenständige Kandidaten.</b> Er schlägt jeweils eine klare Aussage vor, statt ein vollständiges Profil zu erfinden.</li>
+<li><b>Du beurteilst jeden einzelnen Vorschlag.</b> Du kannst ihn bestätigen, verwerfen, als wichtig markieren oder ignorieren.</li>
+<li><b>Erst deine Entscheidung schafft eine vertrauenswürdige Erinnerung.</b> Bestätigte Aussagen werden zu dauerhaften, versionierten Daten, aus denen sich einfache Ansichten wie <code>USER.md</code> und <code>MEMORY.md</code> erzeugen lassen.</li>
+</ol>
+<p>Die Maschine übernimmt das Durchsuchen und Formulieren. Bei dir bleibt die eine Aufgabe, die sich nicht delegieren lässt: zu entscheiden, ob eine Aussage dich wirklich zutreffend beschreibt.</p>"""),
+  ("Eine Aufzeichnung ist ein Beleg, aber nicht automatisch eine Tatsache", """<p>Alltagssprache ist mehrdeutig. „Wir werden im nächsten Quartal auf PostgreSQL umsteigen“ könnte eine Entscheidung, ein Vorschlag, ein Witz, ein Zitat oder eine Annahme in einem Gedankenexperiment sein. Ein Transkript kann die Aussage sogar der falschen Person zuordnen. Wird all das zu einem Satz verflacht und als Tatsache bezeichnet, verliert das System genau die Informationen, die den Satz vertrauenswürdig gemacht haben.</p>
+<p>note.md speichert daher <b>Aussagen</b> statt anonymer Tatsachen. Zu einer Aussage gehört, wen sie betrifft, wer sie gemacht hat, woher sie stammt, wann sie galt und welche Art von Bestätigung sie erhalten hat. Die Quelle kann einem Agent helfen, eine Erinnerung vorzuschlagen; sie kann die Erinnerung nicht an deiner Stelle bestätigen.</p>
+<p>Deshalb ist die Prüfung kein vorläufiges Hilfsgerüst, das mit besseren Modellen entfallen kann. Sie ist der Schritt, der einer Aussage Verbindlichkeit verleiht.</p>"""),
+  ("Hinter einer Schaltfläche zum Bestätigen stecken drei verschiedene Entscheidungen", """<p>„Merke dir das“, „diese externe Aussage ist wahr“ und „du darfst danach handeln“ sind nicht dieselbe Erlaubnis. note.md behandelt sie getrennt:</p>
+<table><thead><tr><th>Deine Entscheidung</th><th>Was sie bedeutet</th><th>Was sie nicht bedeutet</th></tr></thead><tbody>
+<tr><td>Merke dir mich so</td><td>Die Aussage beschreibt dich zutreffend.</td><td>Sie beweist keine externe Tatsache.</td></tr>
+<tr><td>Tatsache bestätigen</td><td>Du hast die externe Aussage anhand der genannten Belege und für den angegebenen Zeitpunkt überprüft.</td><td>Sie erlaubt keine Handlung in der realen Welt.</td></tr>
+<tr><td>Dieses Verhalten erlauben</td><td>Ein Agent darf innerhalb des angegebenen Zwecks und der festgelegten Grenzen handeln.</td><td>Dies ist keine Erlaubnis für jede zukünftige Situation.</td></tr>
+</tbody></table>
+<p>Die Beschriftung der Schaltfläche richtet sich nach der jeweiligen Entscheidung. Die Bestätigung gilt für genau den Inhalt, den du geprüft hast. Ändert sich der vorgeschlagene Inhalt, muss er erneut geprüft werden. Agents dürfen Vorschläge machen, aber keine menschliche Zustimmung erzeugen.</p>"""),
+  ("Suche und Gedächtnis erfüllen unterschiedliche Aufgaben", """<p>Viele Systeme behandeln Gedächtnis als besonderen Suchindex oder erklären die gesamte Dokumentensammlung zum Gedächtnis. note.md trennt beides bewusst.</p>
+<table><thead><tr><th></th><th>Suche</th><th>Gedächtnis</th></tr></thead><tbody>
+<tr><td>Frage</td><td>Welches vorhandene Material könnte gerade helfen?</td><td>Auf welche bestätigten Aussagen darf sich dieser Agent verlassen?</td></tr>
+<tr><td>Umfang</td><td>Tausende Dokumente</td><td>Eine kleine Anzahl dauerhafter persönlicher Aussagen</td></tr>
+<tr><td>Methode</td><td>Flexible Gewichtung nach Relevanz, Herkunft, Aktualität und deiner Aufmerksamkeit</td><td>Eindeutige Auswahl nach Person, Bereich, Zweck, Einwilligung und Zeitpunkt</td></tr>
+<tr><td>Wenn etwas falsch ist</td><td>Du versuchst eine andere Suchanfrage</td><td>Ein Agent könnte dich missverstehen oder eine Grenze überschreiten</td></tr>
+</tbody></table>
+<p>Die Suche entlastet dein Gedächtnis: Du musst dir nicht alles merken, weil du es wiederfinden kannst. Das Gedächtnis hilft Agents, sich an dir auszurichten: Sie erhalten die wenigen Aussagen, die du ausdrücklich bestätigt hast. Relevanz kann eine Erlaubnis nicht ersetzen.</p>"""),
+  ("Ein echter Vault zeigt, warum dieser Kontrollpunkt wichtig ist", """<p>In der Momentaufnahme eines echten note.md-Vaults vom 2. September 2026 hatten Agents <b>83</b> Aussagen als Erinnerungen vorgeschlagen. Der Eigentümer behielt <b>27</b> und ignorierte <b>56</b>. Fast zwei Drittel der plausibel klingenden Vorschläge eigneten sich also nicht als dauerhafter Kontext.</p>
+<p>Das bedeutet nicht, dass Agents nutzlos sind. Es zeigt, welche Rolle ihnen am besten liegt. Fast jeder Kandidat wurde von einem Agent entdeckt; er fand wertvolle Hinweise, die die Person nie selbst in ein Profil geschrieben hätte. Der Eigentümer entfernte anschließend Witze, vorübergehende Zustände, Wiederholungen und allzu selbstsichere Interpretationen. Die Entdeckung sorgte für Abdeckung. Die Bestätigung schuf Vertrauen.</p>"""),
+  ("Was note.md dir zusichert", """<ul>
+<li><b>Keine Vermutung wird unbemerkt Teil deines Profils.</b> Der Vorschlag eines Agent bleibt ein Vorschlag, bis du darüber entscheidest.</li>
+<li><b>Du prüfst jeweils eine Bedeutung.</b> Für sensible Aussagen über Identität, Grenzen oder Berechtigungen gibt es keine Sammelbestätigung.</li>
+<li><b>Du kannst die Herkunft einer Erinnerung nachvollziehen.</b> Quelle, Urheber, Zeitpunkt, Bestätigung und Änderungshistorie bleiben mit ihr verbunden.</li>
+<li><b>Eine Erinnerung wird nur in einem erlaubten Kontext verwendet.</b> Bereich, Zweck, Anbieter und Freigaberegeln bestimmen, was ein Agent erhalten darf.</li>
+<li><b>Deine Korrekturen wirken weiter.</b> Ignorierte Vorschläge werden unterdrückt, und Hinweise können festhalten, welche Fehler zukünftige Agents vermeiden sollen.</li>
+<li><b>Die Daten bleiben dein Eigentum.</b> Die maßgeblichen Informationen liegen in lokalen, von Git verfolgten Dateien; lesbare Markdown-Ansichten lassen sich neu erstellen, und ein anderer Agent kann denselben bestätigten Kontext verwenden.</li>
+</ul>"""),
+  ("Warum der Aufwand mit der Zeit sinkt", """<p>Persönliches Gedächtnis ist kein endloser Strom von Profilfeldern. Identität, dauerhafte Präferenzen und Grenzen bilden relativ kleine Mengen. Sie werden früh festgelegt und später meist nur noch überarbeitet. Neue Entscheidungen kommen weiterhin hinzu, lassen sich aber als einzelne Momente prüfen, ohne dass du jedes Mal deine Lebensgeschichte neu schreiben musst.</p>
+<p>Auch der Kreislauf selbst kann sich verbessern. Bestätigte Aussagen helfen beim nächsten Durchlauf, Duplikate zu vermeiden. Ignorierte Kandidaten werden nicht erneut vorgeschlagen. Jede Korrektur zeigt zukünftigen Agents, was sie nicht voraussetzen dürfen. Das Ziel ist nicht, dir mehr Fragen zu stellen, sondern deine Aufmerksamkeit für die wenigen Fragen aufzusparen, die nur du beantworten kannst.</p>"""),
+  ("Wähle den Gedächtnisvertrag, der zu dir passt", """<p>Unterschiedliche Aufgaben brauchen unterschiedliche Gedächtnisverträge:</p>
+<table><thead><tr><th>Ansatz</th><th>Passt gut, wenn</th><th>Wofür du dich entscheidest</th></tr></thead><tbody>
+<tr><td>Automatisches Gedächtnis</td><td>Das Gespräch ist vorübergehend und wenig riskant</td><td>Maximaler Komfort; das System entscheidet, was es behält</td></tr>
+<tr><td>Ein handgeschriebenes Profil</td><td>Du hast nur wenige dauerhafte Anweisungen</td><td>Die einfachste klare Einrichtung; du hältst sie selbst aktuell</td></tr>
+<tr><td>note.md Memory</td><td>Agents arbeiten über Jahre und verschiedene Tools mit dir; echte Vorlieben und Grenzen beeinflussen die Arbeit</td><td>Agents übernehmen die Entdeckung; du behältst das letzte Wort, Herkunft, Änderungshistorie und Kontextkontrolle</td></tr>
+</tbody></table>
+<p>Dieser Ansatz passt zu dir, wenn du einem Agent lieber weniger, dafür vertrauenswürdige Erinnerungen geben möchtest als ein umfangreiches Profil, das aus stillen Vermutungen entstanden ist. Er richtet sich an Menschen, die nützliche Personalisierung wünschen, ohne einer AI das Recht zu überlassen, sie zu definieren.</p>
+<p>Die nächsten Verbesserungen folgen derselben These: die Entdeckung in vom Nutzer ausgewählten Quellen präziser machen, Prüfungen so dosieren, dass sie aufmerksam bleiben, anhand von Zeit und tatsächlicher Nutzung vorschlagen, wann eine Erinnerung erneut geprüft werden sollte, aus erfolgreichen und fehlgeschlagenen Arbeiten lernen und wiederholbare Qualitätsmessungen veröffentlichen. Dadurch soll der Kreislauf ruhiger und hilfreicher werden; der menschliche Kontrollpunkt bleibt bestehen.</p>
+<p><b>Eine externe Datenbank speichert Aussagen über dich. Ein zweites Gedächtnis verdient dein Vertrauen, weil du dich daran erinnerst, sein Wissen bestätigt zu haben.</b></p>"""),
+ ],
+ "faq": [
+  ("Zeichnet note.md alle meine Nachrichten auf?",
+   "Nein. Du entscheidest, welche Dateien, Transkripte und Agent-Workflows in deinen Vault gelangen oder ihn untersuchen dürfen. Integrierte Agents laufen nur in Workflows, die du startest oder einrichtest, und nutzen den von dir gewählten Agent, Anbieterzugang oder deine lokale Laufzeitumgebung; note.md macht aus deinem Vault kein automatisch aufgebautes Cloud-Profil."),
+  ("Berechnet note.md zusätzliche KI-Tokens?",
+   "Nein. Die integrierten Agent-Funktionen verwenden deine bestehenden Agents, KI-Abos, API-Zugänge oder deine lokale Umgebung. note.md verkauft keine Tokens, erhebt keinen Aufschlag und berechnet keine separate Tokengebühr. Die tatsächliche Modellnutzung fällt weiterhin unter Abo, API-Abrechnung und Limits deines Anbieters beziehungsweise unter deine lokale Rechenleistung."),
+  ("Kann ein Agent automatisch eine vertrauenswürdige Erinnerung hinzufügen?",
+   "Nein. Ein Agent kann einen noch ungeprüften Vorschlag erstellen. Bevor daraus bestätigter Kontext wird, ist eine menschliche Bestätigung erforderlich. Diese Bestätigung gilt ausschließlich für den konkret geprüften Inhalt."),
+  ("Warum nicht für alles die Suche verwenden?",
+   "Die Suche eignet sich hervorragend, um in einer großen Sammlung relevantes Material zu finden. Persönliches Gedächtnis hat eine andere Aufgabe: Es stellt eine kleine, kontrollierte Menge von Aussagen bereit, auf die sich ein Agent verlassen darf. Relevanz und Erlaubnis sind nicht dasselbe."),
+  ("Funktioniert mein Gedächtnis auch mit einer anderen AI?",
+   "Ja. Bestätigte Erinnerungen werden als lokale, von Git verfolgte Daten mit einfachen Markdown-Ansichten gespeichert. Sie gehören zum Vault und nicht zu einem einzelnen Modell oder Agent."),
  ],
 },
 ]

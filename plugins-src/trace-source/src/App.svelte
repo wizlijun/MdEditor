@@ -70,7 +70,7 @@
     type RunView,
   } from './lib/delegate'
   import {
-    buildRequestDoc,
+    buildSignedRequestDoc,
     deleteReport,
     documentPathFor,
     listReports,
@@ -531,7 +531,8 @@
       const outRel = traceOutputRel(new Date(), settings.traceDir)
       const reportName = outRel.slice(outRel.lastIndexOf('/') + 1)
       try {
-        await vaultWrite(`${settings.traceDir}/${requestPathFor(reportName)}`, buildRequestDoc(text))
+        const doc = await buildSignedRequestDoc(text, vaultInfo)
+        await vaultWrite(`${settings.traceDir}/${requestPathFor(reportName)}`, doc)
       } catch (e) {
         errorMsg = e instanceof Error ? e.message : String(e)
         return

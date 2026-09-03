@@ -7,11 +7,71 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Memory 2.4.2 can copy a rigorous Role/Scope initialization prompt for external Agents.** The staged workflow derives candidates only from attributable Vault evidence, keeps clients and family in separate security domains, validates a complete Registry candidate, then pauses for owner confirmation before it prepares exact Claim reassignment proposals. Unsupported Registry writes, direct apply, forged human identity, credentials and ambiguous cross-Realm classification are explicitly forbidden.
+
+- **Memory 2.4.1 brings Role and Scope governance into the main workspace.** “Identity & Context” is now a first-class tab beside confirmed memories, pending suggestions and history instead of a separate sheet. Active Role/Scope counts stay visible, and Registry edits plus atomic batch reassignment remain in place without interrupting the rest of the review flow.
+
+## v6.903.3 — 2026-09-03
+
+### Added
+
+- **Memory 2.4.0 keeps one person's roles and working contexts genuinely isolated.** Create, rename, archive and restore Roles and Scopes in one Memory window, preview changes, then reassign existing memories in bulk. Agents get read-only and proposal-oriented CLI commands for batch work but cannot bypass human approval. One `MEMORY.md` remains the only projection, grouped Scope → Role with explicit Agent guidance; the legacy `USER.md` projection is removed on rebuild. Bulk apply binds the current Registry, claim heads and preview hash, so an interrupted or stale plan cannot become partially active.
+
+## v6.903.2 — 2026-09-03
+
+### Added
+
+- **Smart Search & Answers turns the vault into a keyboard-first research surface.** Open it with Command/Ctrl-K, or Option-Space anywhere on macOS; results appear while you type, stay grouped by their real source, and can be opened in the editor or removed singly or in a standard multi-selection without touching the original files. Return asks the selected Claude, Codex or DeepSeek Agent using a frozen evidence packet plus policy-approved USER and MEMORY facts. Answers keep clickable source citations; a helpful vote archives an auditable Markdown answer under `answers/`, and a separate action generates a longer editable note.
+
+- **Meetings 1.0.0 safely brings Hemory conversations into `ssot/meetings/`.** Its window and `meetings-import-hemory` CLI share the same dry-run-first migration engine, preserve the original time-coded speaker transcript and optional summary, write only the agreed flat metadata, never copy audio, and protect local edits, duplicate imports and interrupted transactions with hashes, checkpoints and recovery journals.
+
+- **What you wrote by hand now says so, in the file.** New documents, quick notes, companion `.note.md` files, daily notes, pages created from a `[[wikilink]]`, Idea Spark originals and Trace Source requests — anything produced by a direct action of yours — now carry a signature in their metadata (`generated: by: human:<your git identity>`). Until now "a person wrote this" could only be inferred from the *absence* of an AI stamp, which made an unstamped AI dump indistinguishable from your own draft. Three states, each saying its own name: written by a person, written by a generator, claimed by nobody. The signature is written once, at creation — reopening and saving an old note will not grow one — and imported content (Roam, ebooks) stays unsigned, because carrying something across is not writing it. It reads the same in Obsidian, or in grep.
+
+### Changed
+
+- **Claude Agent 1.0.24, Codex Agent 1.0.10 and DeepSeek Agent 1.1.10 add a shared input-only `search-answer` task.** The task receives only the host's frozen question, approved memory facts and search snippets. It runs outside the vault, does not inherit tab or source context, rejects tool escalation, and keeps short answers and detailed Markdown on the same citation and evidence contract.
+
+- **Claude Agent 1.0.23, Codex Agent 1.0.9 and DeepSeek Agent 1.1.9 reveal recent runs five at a time.** Each window starts with the five newest runs and a compact “Show 5 more” action; every click reveals the next five, with the final action matching the actual remainder. Changing task or history scope returns to the newest five, while background refreshes keep the amount you already expanded.
+
+- **Claude Agent 1.0.22, Codex Agent 1.0.8 and DeepSeek Agent 1.1.8 put recent runs first and keep task templates compact.** Tasks are grouped by the feature plugin that uses them and every group starts collapsed, leaving the sidebar focused on the newest run history. Expand a neutral plugin row to choose a task; its count and running state stay visible while collapsed. Existing vaults are recognized without migration, and custom tasks remain available in their own group.
+
+### Fixed
+
+- **Command/Ctrl-A once again selects the whole document in every main-editor mode.** Source mode no longer loses the shortcut to the native menu responder, and the shared selection handling remains consistent across rich and source editing.
+
+- **Clicking a `[[wikilink]]` that doesn't exist yet, in rich text, no longer creates an empty shell.** It used to write a 0-byte file: no title, no metadata, failing the format check and ranked last in search. It now takes the same page-creation path as the outline panel, and what lands is a well-formed document.
+
+## v6.903.1 — 2026-09-03
+
+### Added
+
+- **Pending Memory suggestions now support multi-selection and safe bulk cleanup.** Click normally to select one, use Command/Ctrl to toggle items, or Shift to select a range; right-clicking the selection opens bulk ignore, reject and delete-candidate actions with an exact impact confirmation. Human approval, editing and importance remain deliberately item-by-item so distinct identity, fact, behavior and lifecycle meanings cannot be approved under one vague gesture.
+
+### Changed
+
+- **Claude Agent 1.0.21, Codex Agent 1.0.7 and DeepSeek Agent 1.1.7 share a clearer workspace design.** The environment, tasks and run history now live in one accessible sidebar scroll area while Settings stays pinned at the bottom, so longer task lists can no longer squeeze history out of view. Two-line history cards keep status, task, time and provider readable, and the input, stream, log and settings surfaces now match the Plugin Market's neutral visual language with consistent hover, selection and keyboard focus feedback.
+
+- **The `notemd` CLI now has one complete, strict contract across built-in and plugin commands.** Top-level and topic help document the real arguments, value placeholders, JSON envelopes, quiet behavior and exit codes; Memory also exposes exact claim lookup, filtered lists, context manifests, purge plans and drift-aware checks as documented.
+
+### Fixed
+
+- **A concurrent change no longer makes a pending bulk action look all-or-nothing.** Items are guarded and processed serially; if one becomes stale, Memory stops, refreshes the real queue and reports exactly how many were completed and how many remain.
+
+- **Plugin and automation commands no longer silently reinterpret bad input.** Dynamic plugin arguments keep their declared names and types, disabled plugins can be inspected and re-enabled, and unknown or conflicting flags fail safely. Share record cleanup works after the source file is gone, Reading Insights validates date ranges consistently, CLI-only runs no longer activate unrelated startup plugins, and WebView commands time out instead of hanging forever.
+
+## v6.902.9 — 2026-09-02
+
 ### Added
 
 - **Memory can now pull in what other AI assistants remember about you.** "复制导入记忆Prompt" in the Memory window copies a ready-made prompt; paste it into ChatGPT, Gemini or any other assistant with a memory feature and it exports its own entries as `notemd memory propose` commands. Running them in your vault files everything as pending claims — nothing enters memory until you confirm it here.
 
-- **Memory 2.2.1 lets people correct confirmed and pending memory text before relying on it.** Editing a confirmed claim creates an auditable replacement instead of rewriting history; editing a pending suggestion approves the corrected text in one action while retaining the original proposal. Exact revision heads prevent concurrent changes from being overwritten, and lifecycle proposals remain protected from text edits.
+- **Confirmed Memory claims are now grouped by projection and category.** `MEMORY.md`, `USER.md` and structured-only context have distinct sections, with category counts inside each. The default order keeps important claims first and otherwise mirrors projection order; recent, oldest and text ordering are also available.
+
+### Changed
+
+- **Decision 1.1.6 uses its shorter product name everywhere.** Plugin menus, the window, the board, the marketplace and all four localized names now consistently show Decision / 决策 / 意思決定 / Entscheidung; the plugin ID and stored data remain unchanged.
 
 ### Changed
 
@@ -20,6 +80,12 @@ For the full commit history, see the git log.
 ### Fixed
 
 - **A proposed Claim can now allow several retrieval purposes.** `notemd memory propose` takes a comma-separated `--purpose`, matching the Memory window's own multi-select; previously a CLI-proposed Claim was limited to one purpose and was withheld from every other context. `replace` and `revoke` no longer demand `--category`, `--space` and `--purpose` that they go on to ignore.
+
+## v6.902.8 — 2026-09-02
+
+### Added
+
+- **Memory 2.2.1 lets people correct confirmed and pending memory text before relying on it.** Editing a confirmed claim creates an auditable replacement instead of rewriting history; editing a pending suggestion approves the corrected text in one action while retaining the original proposal. Exact revision heads prevent concurrent changes from being overwritten, and lifecycle proposals remain protected from text edits.
 
 ## v6.902.7 — 2026-09-02
 

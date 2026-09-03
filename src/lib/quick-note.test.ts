@@ -27,6 +27,13 @@ vi.mock('./i18n/store.svelte', () => ({
   t: (k: string) => k,
 }))
 
+// Default: identity cache is cold — createQuickNote() must sign nothing until
+// a test opts into a warm cache.
+const humanActorNow = vi.fn((): string | null => null)
+vi.mock('./okf/identity', () => ({
+  humanActorNow: () => humanActorNow(),
+}))
+
 beforeEach(() => {
   vi.clearAllMocks()
   invoke.mockResolvedValue('/vault/inbox')
@@ -34,6 +41,7 @@ beforeEach(() => {
   exists.mockResolvedValue(false)
   openFile.mockResolvedValue(undefined)
   openPathBackedMarkdownDraft.mockResolvedValue(undefined)
+  humanActorNow.mockReturnValue(null)
 })
 
 describe('createQuickNote', () => {
@@ -52,6 +60,23 @@ describe('createQuickNote', () => {
       skipEmptySave: true,
     })
     expect(openFile).not.toHaveBeenCalled()
+  })
+
+  it('signs the draft via humanActorNow() when the identity cache is warm', async () => {
+    // Wiring test: drives the real createQuickNote() call site with a warm
+    // identity cache and asserts the signature reached the text handed to
+    // the draft opener — catches a renamed { by, at } shape or a dropped
+    // conditional that a hand-built-author unit test on newFileText cannot.
+    humanActorNow.mockReturnValue('human:testuser')
+    const { createQuickNote } = await import('./quick-note.svelte')
+    await createQuickNote(new Date(2026, 6, 25, 9, 8))
+
+    const path = '/vault/inbox/2026-07-25-090800-quick.md'
+    expect(openPathBackedMarkdownDraft).toHaveBeenCalledWith(
+      path,
+      expect.stringContaining('generated:\n  by: human:testuser\n  at:'),
+      { skipEmptySave: true },
+    )
   })
 
   it('opens an existing same-minute quick note normally', async () => {

@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<!-- Hello, agent. The plain-text version of this site is at /llms.txt -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>個人向け AI メモリは Agent が見つけ、あなたが確認する | note.md</title>
+<meta name="description" content="信頼できる個人向け AI メモリは、日々の作業から Agent が記憶の候補を見つけ、その内容が信頼できるコンテキストになる前に、本人が一つずつ確認することで生まれます。">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="canonical" href="https://notemd.net/ja/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="en" href="https://notemd.net/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="de" href="https://notemd.net/de/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="ja" href="https://notemd.net/ja/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="zh" href="https://notemd.net/zh/blog/personal-ai-memory/">
+<link rel="alternate" hreflang="x-default" href="https://notemd.net/blog/personal-ai-memory/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "note.md は、私のメッセージをすべて記録しますか？", "acceptedAnswer": {"@type": "Answer", "text": "いいえ。どのファイル、文字起こし、Agent ワークフローを Vault に取り込み、調べてよいかはあなたが決めます。内蔵 Agent は、あなたが開始または設定したワークフローでだけ動き、選んだ Agent、プロバイダーのアカウント、またはローカル環境を使います。note.md が Vault から自動的にクラウド上の人物像を作ることはありません。"}}, {"@type": "Question", "name": "内蔵の Agent 機能に、note.md 独自のトークン料金はかかりますか？", "acceptedAnswer": {"@type": "Answer", "text": "いいえ。すでに利用中の Agent、AI サブスクリプション、API アカウント、またはローカル環境を使うため、note.md 独自のトークン販売、上乗せ料金、従量課金はありません。ただしモデル利用分は、各サービスの契約・API 課金・レート制限、またはローカル計算資源の対象です。"}}, {"@type": "Question", "name": "Agent は、信頼済みのメモリを自動的に追加できますか？", "acceptedAnswer": {"@type": "Answer", "text": "いいえ。Agent が作成できるのは、確認待ちの提案です。承認済みのコンテキストになるには人間による確認が必要で、その確認はレビューされた内容そのものに結び付けられます。"}}, {"@type": "Question", "name": "すべてを検索で済ませないのはなぜですか？", "acceptedAnswer": {"@type": "Answer", "text": "検索は、大きなライブラリから関連資料を見つけるのに適しています。個人向けメモリの役割は異なり、Agent が信頼してよい、管理された少数の記述を提供します。関連性と許可は同じものではありません。"}}, {"@type": "Question", "name": "私のメモリは、別の AI でも使えますか？", "acceptedAnswer": {"@type": "Answer", "text": "はい。承認済みのメモリは、読みやすい Markdown 表示を備えた、ローカルの Git 管理されたデータとして保存されます。それは特定のモデルや Agent ではなく、Vault に属します。"}}]}</script><script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "Agent が見つけ、あなたが確認する。それが、信頼できる個人向けメモリの作り方です。", "description": "信頼できる個人向け AI メモリは、日々の作業から Agent が記憶の候補を見つけ、その内容が信頼できるコンテキストになる前に、本人が一つずつ確認することで生まれます。", "datePublished": "2026-09-02", "dateModified": "2026-09-02", "inLanguage": "ja", "author": {"@type": "Organization", "name": "note.md"}, "publisher": {"@type": "Organization", "name": "note.md"}, "mainEntityOfPage": "https://notemd.net/ja/blog/personal-ai-memory/"}</script>
+<style>
+:root{--ink:#17181C;--paper:#FAFAF7;--amber:#F59E0B;--gray:#9CA3AF;--line:#E7E5E0;
+--serif:"Playfair Display",Georgia,serif;--body:"EB Garamond",Georgia,serif;
+--mono:"Courier Prime","Courier New",monospace;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--body);background:var(--paper);color:var(--ink);line-height:1.7;font-size:17.5px;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+.wrap{max-width:880px;margin:0 auto;padding:0 28px}
+nav{position:sticky;top:0;z-index:50;background:rgba(23,24,28,.9);backdrop-filter:blur(12px);border-bottom:1px solid #26282F}
+.nav-in{display:flex;align-items:center;gap:24px;height:60px;color:var(--paper)}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;font-family:var(--mono);text-decoration:none}
+.logo .dot{color:var(--amber)}
+.nav-cta{font-family:var(--mono);background:var(--amber);color:var(--ink);font-weight:700;font-size:13px;padding:7px 16px;border-radius:8px;text-decoration:none}
+.npl{font-family:var(--mono);font-size:13px;color:#B9BDC7;text-decoration:none;border-bottom:1px dotted transparent;padding-bottom:2px}
+.npl:hover{color:#fff;border-bottom-color:var(--amber)}
+header.ph{background:var(--ink);color:var(--paper);padding:72px 0 64px}
+.crumb{font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:20px}
+h1{font-family:var(--serif);font-size:42px;line-height:1.15;font-weight:700;margin-bottom:18px}
+.lead{font-size:19px;color:#C3C7CF;font-style:italic;max-width:640px}
+main{padding:56px 0 24px}
+h2{font-family:var(--serif);font-size:28px;margin:44px 0 14px;font-weight:700}
+p{margin:0 0 16px;color:#33363D}
+li{margin:0 0 10px;color:#33363D}
+ul,ol{padding-left:24px;margin:0 0 18px}
+table{width:100%;border-collapse:collapse;margin:26px 0;font-size:16px}
+th,td{border:1px solid var(--line);padding:12px 14px;text-align:left;vertical-align:top}
+th{font-family:var(--mono);font-size:13px;letter-spacing:.04em;background:#fff}
+td:first-child{font-weight:600;width:22%}
+tr td:nth-child(2){background:#FFF9EE}
+code,.mono{font-family:var(--mono);font-size:.92em}
+pre{background:var(--ink);color:#E8E9EB;padding:18px 20px;border-radius:10px;overflow-x:auto;margin:0 0 18px;font-size:14px;line-height:1.6}
+pre code{color:inherit}
+.faq h3{font-family:var(--serif);font-size:19px;margin:22px 0 6px}
+.cta{background:var(--ink);color:var(--paper);text-align:center;padding:64px 0;margin-top:64px}
+.cta h2{margin:0 0 10px;font-style:italic}
+.cta p{color:#C3C7CF}
+.btn{display:inline-block;margin-top:18px;background:var(--amber);color:var(--ink);font-family:var(--mono);font-weight:700;font-size:14.5px;padding:13px 26px;border-radius:10px;text-decoration:none}
+footer{background:var(--ink);color:#7C8290;font-size:13.5px;padding:34px 0 44px}
+.flinks{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:26px}
+.flinks b{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#9CA3AF;margin-bottom:8px}
+.flinks a{display:block;color:#B9BDC7;text-decoration:none;margin-bottom:5px}
+.flinks a:hover{color:#fff}
+.fbase{border-top:1px solid #26282F;padding-top:18px;font-family:var(--mono);font-size:12.5px}
+html[lang="zh"]{--serif:"Playfair Display","Noto Serif SC","Source Han Serif SC","Songti SC",serif;--body:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif}
+html[lang="zh"] .lead,html[lang="zh"] .cta h2{font-style:normal}
+html[lang="ja"]{--serif:"Playfair Display","Hiragino Mincho ProN","Noto Serif JP",serif;--body:"EB Garamond","Hiragino Mincho ProN","Noto Serif JP",serif}
+html[lang="ja"] .lead{font-style:normal}
+.lang-sw{margin-left:auto;display:flex;gap:12px;font-family:var(--mono);font-size:12px;color:#7C8290}
+.lang-sw a{text-decoration:none;padding-bottom:2px;border-bottom:1px dotted transparent}
+.lang-sw a:hover{color:#fff}
+.lang-sw a.on{color:var(--amber);border-bottom-color:var(--amber)}
+@media(max-width:720px){
+h1{font-size:28px}
+h2{font-size:22px}
+.flinks{grid-template-columns:1fr}
+.nav-cta{display:none}
+.nav-in{gap:12px;height:54px}
+.logo{font-size:15px}
+.lang-sw{gap:9px;font-size:11.5px;white-space:nowrap}
+header.ph{padding:48px 0 42px}
+.lead{font-size:17px}
+main{padding:40px 0 16px}
+table{display:block;overflow-x:auto}
+td:first-child{min-width:110px}
+td,th{padding:10px 11px;font-size:14.5px}
+pre{font-size:12.5px;padding:14px 15px}
+.cta{padding:48px 0;margin-top:48px}
+.btn{width:calc(100% - 56px)}
+}
+</style>
+</head>
+<body>
+<nav><div class="wrap nav-in">
+<a class="logo" href="/ja/"><svg width="24" height="24" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="115" fill="#17181C" stroke="#3A3D46" stroke-width="14"/><path d="M 185.49318,76.468676 C 202.86539,165.0158 220.23759,183.99019 301.30788,202.96457 220.23759,221.93895 202.86539,240.91333 185.49318,329.46046 168.12097,240.91333 150.74877,221.93895 69.67847,202.96457 150.74877,183.99019 168.12097,165.0158 185.49318,76.468676 Z" fill="#F59E0B"/><rect x="260.643" y="239.444" width="186.136" height="48" rx="29.39" fill="#FAFAF7"/><circle cx="289.722" cy="342.122" r="28.414" fill="#9CA3AF"/><rect x="333.7" y="324.65" width="112.797" height="40" rx="26.856" fill="#9CA3AF"/><circle cx="288.251" cy="420.101" r="28.414" fill="#9CA3AF"/><rect x="336.022" y="403.894" width="109.256" height="40" rx="26.013" fill="#9CA3AF"/></svg><span>note<span class="dot">.</span>md</span></a>
+<a class="npl" href="https://plugins.notemd.net">プラグイン</a>
+<div class="lang-sw"><a href="/blog/personal-ai-memory/">EN</a><a href="/de/blog/personal-ai-memory/">DE</a><a href="/ja/blog/personal-ai-memory/" class=on>日本語</a><a href="/zh/blog/personal-ai-memory/">中文</a></div>
+<a class="nav-cta" href="/download">ダウンロード</a>
+</div></nav>
+<header class="ph"><div class="wrap">
+<div class="crumb">プロダクトの考え方 · Memory</div>
+<h1>Agent が見つけ、あなたが確認する。それが、信頼できる個人向けメモリの作り方です。</h1>
+<p class="lead">モデルは、あなたが一度も伝えていない個人的な事実を知ることはできません。だからといって、自分自身についての説明書を書いてもらう方法もうまくいきません。note.md は第三の道を選びます。あなたが持ち込んだ作業や会話から、Agent が重要なことに気づき、その記憶を他の Agent が利用する前に、あなた自身が一つずつ承認する方法です。</p>
+</div></header>
+<main><article class="wrap">
+
+<h2>どれほど賢いモデルでも、あなたの人生を推測することはできない</h2><p>大規模言語モデルは、多くの人に当てはまり、多くの人が確認できる一般的な知識を得意としています。しかし、個人的な事実は別です。あなたをどう呼ぶべきか、昨年ある計画を却下した理由、繰り返し行う仕事でどのツールを好むか、Agent が決して越えてはならない一線は何か。こうしたことを、インターネットから推測できるモデルはありません。</p>
+<p>より高性能なモデルなら、もっともらしい推測はできるかもしれません。しかし、そこにこそ危険があります。あなたについての誤った答えも、洗練されていれば完全に筋が通っているように聞こえます。そして、それを訂正できるのはあなただけです。検索精度を高めても、土台が空のままでは解決になりません。情報が一度も記録されていなければ、取り出せるものもないのです。</p><h2>自分自身の取扱説明書を書く必要はない</h2><p>一般的な解決策は、プロフィール、カスタム指示の入力欄、あるいは手作業で管理するメモリファイルです。こうした仕組みは補助的な手段としては役立ちますが、中心となる方法には向きません。自分にとって当たり前のことは背景の一部に感じられるため、そのうち何が Agent にとって新しい情報なのか判断しにくいからです。決断の理由、失敗から得た教訓、ささやかな仕事上の好みといった価値の高い記憶ほど、求められてすぐに要約するのも難しくなります。</p>
+<p>そして、人は変わります。一度書いたプロフィールは一枚の写真ですが、人は動き続ける物語です。メモリ製品は、自己紹介の管理を新たな受信トレイのような負担にするべきではありません。</p><h2>役立つ事実は、すでに日々の仕事の中にある</h2><p>「私はこうやって意思決定します」と AI に説明するために、わざわざ時間を取ることはないかもしれません。それでも、プロジェクトの議論、メール、会議の文字起こし、Agent とのセッション、編集する文書の中で、あなたは自然にその姿勢を示しています。そこには、フォームでは失われてしまう一人称の言葉、時期、相手、理由、周囲の文脈があります。</p>
+<p>そこから、より適切な役割分担が見えてきます。</p>
+<ol>
+<li><b>選んだ作業や会話を、自分の Vault に取り込みます。</b> 元の資料は根拠として残り、引き続きあなたの管理下に置かれます。</li>
+<li><b>Agent が、小さく独立した候補を見つけます。</b> 完成済みのプロフィールを勝手に作るのではなく、一度に一つの明確な記述を提案します。</li>
+<li><b>一つずつ、あなたが判断します。</b> 確認する、否定する、重要と印を付ける、または無視することができます。</li>
+<li><b>あなたの判断だけが、信頼できるメモリを作ります。</b> 承認された記述は、永続的でバージョン管理可能なデータとなり、シンプルな <code>USER.md</code> や <code>MEMORY.md</code> の表示を生成できます。</li>
+</ol>
+<p>機械は情報を探し、下書きを作ります。ある記述が本当に自分を表しているかどうかを決めるという、委ねることのできない役割はあなたが担います。</p><h2>記録は根拠であって、自動的に事実になるわけではない</h2><p>日常の言葉には曖昧さがあります。「次の四半期に PostgreSQL へ移行します」という発言も、決定、提案、冗談、引用、あるいは思考実験上の仮定かもしれません。文字起こしが、発言者を取り違えている可能性さえあります。そのすべてを「事実」と呼ばれる一文に平らにならしてしまえば、その文を信頼するために必要だった情報を失ってしまいます。</p>
+<p>そのため note.md は、出所の分からない事実ではなく、<b>記述</b>を保存します。記述には、誰についてのものか、誰が述べたか、どこから得たか、いつ当てはまったか、どのような承認を受けたかが残ります。情報源は、Agent がメモリを提案するための材料にはなりますが、あなたに代わってそのメモリを承認することはできません。</p>
+<p>だからこそ、レビューはモデルが進歩すれば取り外せる一時的な足場ではありません。記述に信頼する根拠を与えるための中心的な工程です。</p><h2>ひとつの「確認」ボタンには、3つの異なる判断が隠れている</h2><p>「このように記憶してほしい」「外部についてのこの記述は正しい」「これに基づいて行動してよい」は、同じ許可ではありません。note.md は、それぞれを分けて扱います。</p>
+<table><thead><tr><th>あなたの判断</th><th>その意味</th><th>意味しないこと</th></tr></thead><tbody>
+<tr><td>私についてこのように記憶する</td><td>その記述が、あなた自身を正しく表している。</td><td>外部の事実が正しいことを証明するものではない。</td></tr>
+<tr><td>事実を確認する</td><td>示された根拠と時点について、外部の記述をあなたが検証した。</td><td>現実世界での行動を許可するものではない。</td></tr>
+<tr><td>この行動を許可する</td><td>示された目的と範囲内で、Agent が行動してよい。</td><td>今後あらゆる状況で行動してよいという許可ではない。</td></tr>
+</tbody></table>
+<p>ボタンの文言は、判断の種類に応じて変わります。承認は、あなたが確認した内容そのものに結び付けられます。候補の内容が変われば、もう一度レビューが必要です。Agent は提案できますが、人間による承認を作り出すことはできません。</p><h2>検索とメモリは、役割が異なる</h2><p>メモリを特殊な検索インデックスとして扱ったり、文書ライブラリ全体をメモリと見なしたりするシステムは少なくありません。note.md は、この2つを意図的に分けています。</p>
+<table><thead><tr><th></th><th>検索</th><th>メモリ</th></tr></thead><tbody>
+<tr><td>問い</td><td>今、どの既存資料が役立ちそうか？</td><td>この Agent は、承認済みのどの記述を信頼してよいか？</td></tr>
+<tr><td>規模</td><td>何千もの文書</td><td>長く使える少数の個人的な記述</td></tr>
+<tr><td>方法</td><td>関連性、出所、新しさ、あなたが注目した度合いに基づく柔軟な順位付け</td><td>人物、スペース、目的、同意、時期に基づく決定的な選択</td></tr>
+<tr><td>間違っていた場合</td><td>別の検索を試す</td><td>Agent があなたを誤解したり、境界を越えたりする可能性がある</td></tr>
+</tbody></table>
+<p>検索は、すべてを覚えなくても後で見つけられるという認知的な負担の軽減をもたらします。メモリは、あなたが責任を持って選んだ少数の記述を Agent に渡し、認識を合わせるためのものです。関連性を、許可の代わりにすることはできません。</p><h2>実際の Vault が、確認工程の重要性を示している</h2><p>2026年9月2日時点の、実際に使われている note.md の Vault には、Agent が提案した <b>83</b> 件のメモリ候補がありました。その所有者が残したのは <b>27</b> 件で、<b>56</b> 件は採用されませんでした。つまり、もっともらしい提案のほぼ3分の2は、長く使うコンテキストとして残すほどのものではありませんでした。</p>
+<p>これは、Agent が役に立たないという意味ではありません。むしろ、Agent に最も適した役割を示しています。ほぼすべての候補を見つけたのは Agent であり、本人がプロフィールには決して書かなかったであろう有益な手がかりを拾い上げました。その後、所有者が冗談、一時的な状態、重複、自信過剰な解釈を取り除きました。発見によって広く拾い上げ、確認によって信頼できるものにしたのです。</p><h2>note.md が約束すること</h2><ul>
+<li><b>推測が、知らないうちにあなたのプロフィールになることはありません。</b> Agent の提案は、あなたが判断するまで提案のままです。</li>
+<li><b>一度に一つの意味を確認できます。</b> アイデンティティ、境界、権限に関わる重要な記述を、一括で承認することはありません。</li>
+<li><b>メモリの出所を確認できます。</b> 情報源、作成者、時刻、承認、変更履歴が一緒に保持されます。</li>
+<li><b>メモリは、許可された文脈でのみ使用されます。</b> スペース、目的、プロバイダー、共有ルールによって、Agent に渡せる内容が決まります。</li>
+<li><b>修正が積み重なり、次に生かされます。</b> 採用されなかった提案は抑制され、今後の Agent が避けるべき誤りをガイダンスとして記録できます。</li>
+<li><b>データ資産は、引き続きあなたのものです。</b> 承認の記録はローカルの Git 管理されたファイルに残ります。読みやすい Markdown 表示を再構築でき、別の Agent でも同じ承認済みコンテキストを利用できます。</li>
+</ul><h2>使い続けるほど、負担が軽くなる理由</h2><p>個人向けメモリは、プロフィール項目が際限なく流れ込む仕組みではありません。アイデンティティ、変わりにくい好み、守るべき境界は、比較的少数に収まります。それらは早い段階で確立され、その後は主に必要に応じて修正されます。新しい決定は増え続けますが、自伝を何度も書き直す代わりに、その時々の出来事として個別に確認できます。</p>
+<p>この循環は、それ自体も改善していきます。承認済みの記述があれば、次の候補探索で重複を避けやすくなります。採用されなかった候補は、繰り返し表示されにくくなります。修正するたびに、今後の Agent が何を決めつけるべきでないかを伝えられます。目標は、あなたへの質問を増やすことではありません。あなたにしか答えられない少数の問いに、注意を使えるようにすることです。</p><h2>自分に合うメモリの約束を選ぶ</h2><p>用途が違えば、ふさわしいメモリの約束も異なります。</p>
+<table><thead><tr><th>方法</th><th>向いている場面</th><th>選ぶもの</th></tr></thead><tbody>
+<tr><td>自動メモリ</td><td>会話が一時的で、リスクが低い</td><td>最大限の手軽さ。何を残すかはシステムが決める</td></tr>
+<tr><td>手書きのプロフィール</td><td>安定した指示が数個だけある</td><td>最もシンプルで明示的な設定。更新は自分で行う</td></tr>
+<tr><td>note.md Memory</td><td>複数の Agent が長年、さまざまなツールを通じて協働し、実際の好みや境界が仕事に影響する</td><td>発見は Agent に任せながら、最終判断、出所、変更履歴、文脈の制御は自分で持つ</td></tr>
+</tbody></table>
+<p>気づかないうちに推測で作られた大きなプロフィールよりも、自分で信頼できると確認した少数のメモリを Agent に渡したいなら、この方法が適しています。AI に自分を定義する権限を与えずに、役立つパーソナライズを求める人のための設計です。</p>
+<p>今後の改善も、同じ考え方に基づきます。ユーザーが選んだ情報源から候補を見つける精度を高めること、レビューを丁寧に行えるペースに整えること、経過時間や実際の参照状況からメモリを見直す時期を提案すること、成功した仕事と失敗した仕事から学ぶこと、再現可能な品質評価を公開することです。こうした改善は、循環をより静かで役立つものにしますが、人間による確認工程をなくすものではありません。</p>
+<p><b>外部のデータベースは、あなたについての記述を保存します。もう一つのメモリは、何を知っているかを自分が承認したと覚えているからこそ、あなたの信頼を得られます。</b></p>
+<section class="faq"><h2>FAQ</h2><h3>note.md は、私のメッセージをすべて記録しますか？</h3><p>いいえ。どのファイル、文字起こし、Agent ワークフローを Vault に取り込み、調べてよいかはあなたが決めます。内蔵 Agent は、あなたが開始または設定したワークフローでだけ動き、選んだ Agent、プロバイダーのアカウント、またはローカル環境を使います。note.md が Vault から自動的にクラウド上の人物像を作ることはありません。</p><h3>内蔵の Agent 機能に、note.md 独自のトークン料金はかかりますか？</h3><p>いいえ。すでに利用中の Agent、AI サブスクリプション、API アカウント、またはローカル環境を使うため、note.md 独自のトークン販売、上乗せ料金、従量課金はありません。ただしモデル利用分は、各サービスの契約・API 課金・レート制限、またはローカル計算資源の対象です。</p><h3>Agent は、信頼済みのメモリを自動的に追加できますか？</h3><p>いいえ。Agent が作成できるのは、確認待ちの提案です。承認済みのコンテキストになるには人間による確認が必要で、その確認はレビューされた内容そのものに結び付けられます。</p><h3>すべてを検索で済ませないのはなぜですか？</h3><p>検索は、大きなライブラリから関連資料を見つけるのに適しています。個人向けメモリの役割は異なり、Agent が信頼してよい、管理された少数の記述を提供します。関連性と許可は同じものではありません。</p><h3>私のメモリは、別の AI でも使えますか？</h3><p>はい。承認済みのメモリは、読みやすい Markdown 表示を備えた、ローカルの Git 管理されたデータとして保存されます。それは特定のモデルや Agent ではなく、Vault に属します。</p></section>
+</article></main>
+<section class="cta"><div class="wrap">
+<h2>思考を所有せよ。</h2>
+<p>無料。オープン。あなた自身のパソコンにある markdown フォルダ。</p>
+<a class="btn" href="/download">note.md をダウンロード</a>
+</div></section>
+<footer><div class="wrap">
+<div class="flinks">
+<div><b>比較</b>
+<a href="/ja/compare/roam-research/">note.md vs Roam Research</a>
+<a href="/ja/compare/obsidian/">note.md vs Obsidian</a>
+<a href="/ja/compare/notion/">note.md vs Notion</a></div>
+<div><b>連携</b>
+<a href="/ja/integrations/openclaw/">OpenClaw</a>
+<a href="/ja/integrations/cowork/">Claude Cowork</a>
+<a href="/ja/integrations/codex/">Codex</a>
+<a href="/ja/integrations/chatgpt-work/">ChatGPT Work</a>
+<a href="/ja/integrations/hermes/">Hermes</a></div>
+<div><b>ガイド</b>
+<a href="/ja/orchestrate-agents/">ひとつの Vault、多くのエージェント</a>
+<a href="/ja/blog/personal-ai-memory/">あなたが確認する個人 AI メモリ</a>
+<a href="/ja/guides/share-on-cloudflare/">Cloudflare で無料共有</a>
+<a href="/ja/guides/vault-on-github/">GitHub で Vault をホスト</a>
+<a href="/llms.txt">llms.txt（エージェント向け）</a></div>
+</div>
+<div class="fbase">note<span style="color:var(--amber)">.</span>md — <a href="/ja/" style="color:#B9BDC7">notemd.net</a> · テキストは永遠に残る。あなたがそれについて考えたことも。</div>
+</div></footer>
+</body>
+</html>

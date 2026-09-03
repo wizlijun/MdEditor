@@ -2,12 +2,12 @@
   "manifest_version": 2,
   "id": "notemd.meetings",
   "name": "Meetings",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.901.10"
+    "notemd": ">=6.903.2"
   },
-  "description": "Archive speaker-attributed, time-coded meeting transcripts in ssot/meetings and migrate existing Hemory conversations without copying audio.",
+  "description": "Archive speaker-attributed, time-coded meeting transcripts in a configurable Vault directory and migrate existing Hemory conversations without copying audio.",
   "binary": {
     "aarch64-apple-darwin": "bin/notemd-meetings",
     "x86_64-apple-darwin": "bin/notemd-meetings"
@@ -44,13 +44,13 @@
       {
         "subcommand": "meetings-import-hemory",
         "command": "import-hemory",
-        "summary": "Migrate Hemory conversations into ssot/meetings",
+        "summary": "Migrate Hemory conversations into the configured meetings directory",
         "args": [
           {
             "name": "source",
             "type": "path",
-            "required": true,
-            "help": "Hemory root, user root, or conversation(s) directory"
+            "required": false,
+            "help": "Hemory root, user root, or conversation(s) directory (defaults to the first Vault under ~/.hemory/vault)"
           }
         ],
         "flags": [
@@ -91,21 +91,21 @@
   "i18n": {
     "zh": {
       "name": "会议记录",
-      "description": "将带说话人和时间码的会议逐字稿归档到 `ssot/meetings`，并在不复制音频的前提下迁移 Hemory 会话。",
+      "description": "将带说话人和时间码的会议逐字稿归档到可配置的 Vault 目录，并在不复制音频的前提下迁移 Hemory 会话。",
       "menus": {
         "open": "会议记录…"
       }
     },
     "ja": {
       "name": "会議記録",
-      "description": "話者とタイムコード付きの会議トランスクリプトを `ssot/meetings` に保存し、音声をコピーせずに Hemory の会話を移行します。",
+      "description": "話者とタイムコード付きの会議トランスクリプトを設定可能な Vault ディレクトリに保存し、音声をコピーせずに Hemory の会話を移行します。",
       "menus": {
         "open": "会議記録…"
       }
     },
     "de": {
       "name": "Besprechungen",
-      "description": "Sprecher- und zeitcodierte Besprechungstranskripte in `ssot/meetings` archivieren und Hemory-Unterhaltungen ohne Audiodateien migrieren.",
+      "description": "Sprecher- und zeitcodierte Besprechungstranskripte in einem konfigurierbaren Vault-Verzeichnis archivieren und Hemory-Unterhaltungen ohne Audiodateien migrieren.",
       "menus": {
         "open": "Besprechungen…"
       }

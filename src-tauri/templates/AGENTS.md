@@ -31,15 +31,46 @@ plain-text projection.)
   original; edits here do not flow back to the source file.
 - `inbox/tasks/` — executable tasks for Next. Each task is one
   `YYYY-MM-DD-HHmm-<slug>-task.md` file; see "Inbox tasks" below.
+- Meeting transcripts live under the Vault-relative directory configured by
+  `/.notemd/meetings.json` (`meetings_root`, default `ssot/meetings`); see
+  "Meeting transcripts" below.
 - Any other folder — regular markdown documents (`xxx.md`), optionally
   with a companion outline note beside them (see below).
 
+## Meeting transcripts
+
+- Resolve the archive root from `/.notemd/meetings.json` key
+  `meetings_root`; if the file or value is missing or invalid, use
+  `ssot/meetings`. Never assume a different location.
+- Each meeting is `<meetings_root>/<conversation-id>/`. It contains exactly
+  one authoritative, speaker-attributed, time-coded transcript:
+  `transcript.md` or `transcript.srt`. It may also contain `summary.md`;
+  every Hemory import contains `meta.yml`. Audio files such as MP3 or WAV do
+  not belong here.
+- A Hemory import copies the selected transcript and optional summary bytes
+  unchanged. Treat them as source artifacts: do not clean up, reorder, rename,
+  add frontmatter to, or otherwise rewrite them.
+- Hemory tombstones (`_deleted/`, `_deleted_*`, `.deleted_*`, or
+  `meta.json` with `deleted: true`) are never imported. If an imported source
+  is deleted later, the archived meeting is retained and reported as missing
+  from the source; source deletion never cascades into this Vault.
+- When `meta.yml` exists, read `transcript_file` and `summary_file` rather
+  than guessing filenames. Hemory imports use only these flat top-level keys:
+  `conversation_id`, `created_at`, `end_at`, `title`, `category`,
+  `key_topics`, `language`, `source`, `duration_ms`, `speaker_count`,
+  `transcript_file`, `summary_file`, `imported_from`, and `updated_at`.
+  Their `source` is `hemory_v1.0:<original-value-or-unknown>`.
+- `/.notemd/meetings/hemory-import-v1.json`, its lock, and its transaction
+  journal are plugin-managed migration state. Do not edit, move, or delete
+  them.
+
 ## Metadata: OKF-compatible frontmatter (required)
 
-Except for the generated root `/MEMORY.md` projection, every
-markdown file you create here **must** open with a YAML frontmatter block, and
-that block **must** carry a non-empty `type`. This projection MUST have
-no frontmatter or machine metadata; never add it during a generic metadata fix.
+Except for the generated root `/MEMORY.md` projection and the
+plugin-managed meeting source artifacts described above, every markdown file you create here
+**must** open with a YAML frontmatter block, and that block **must** carry a
+non-empty `type`. The projection and meeting source artifacts MUST NOT gain
+frontmatter or machine metadata during a generic metadata fix.
 The format is the Open Knowledge Format (OKF) v0.2:
 https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
 
@@ -105,6 +136,15 @@ property in the answer protocol below — takes one of three forms:
 marking content a person wrote or confirmed — the same line the editor
 draws between `✦` (written by AI) and `●` (thought by you). Mixing the
 two destroys the signal.
+
+The reverse duty is note.md's, not yours, but it is worth knowing it holds:
+every document a person creates through the app — a new note, a quick note, a
+companion `.note.md`, a daily note, a wiki page, an idea, a trace request — is
+written with `generated: { by: human:<id>, at }`. So the three states are
+distinguishable rather than guessed at: a `human:` actor means a person wrote
+it, a `<producer>/<version>` actor means a generator did, and no `generated`
+key at all means nobody has claimed it. Do not strip or rewrite a `human:`
+stamp you find; it is the one signal that cannot be regenerated.
 
 Rules that hold in both directions:
 

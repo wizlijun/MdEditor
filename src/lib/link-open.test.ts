@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { classifyLink, resolveWikilinkPath, restoreWikilinks } from './link-open'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { classifyLink, resolveWikilinkPath, restoreWikilinks, newWikilinkFileText } from './link-open'
+
+const humanActor = vi.fn()
+vi.mock('./okf/identity', () => ({
+  humanActor: (...a: unknown[]) => humanActor(...a),
+}))
 
 const BASE = '/Users/me/notes/index.md'
 
@@ -70,6 +75,33 @@ describe('resolveWikilinkPath', () => {
     expect(resolveWikilinkPath('  ', BASE)).toBe(null)
     expect(resolveWikilinkPath('foo', '')).toBe(null)
     expect(resolveWikilinkPath('foo', undefined)).toBe(null)
+  })
+})
+
+describe('newWikilinkFileText — RichEditor.openWikilink 的可测试出口', () => {
+  // 修的就是这个:点一个不存在的 [[wikilink]] 曾经直接 writeTextFile(abs, '')
+  // 写出 0 字节文件,违反 OKF §4.1(必须有可解析 frontmatter + 非空 type)。
+  // 组件本身不便挂载测试,所以把"算出要写的文本"这一段抽成纯异步函数,
+  // 单独覆盖 RichEditor 里对同一段逻辑的调用点。
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('signs the new page via humanActor() and the text is not empty (0-byte 缺陷验证)', async () => {
+    humanActor.mockResolvedValue('human:bruce')
+    const text = await newWikilinkFileText('/Users/me/notes/新页面.md')
+
+    expect(text.length).toBeGreaterThan(0)
+    expect(text).toContain('generated:\n  by: human:bruce\n  at:')
+    expect(text).toContain('title: 新页面')
+  })
+
+  it('writes no generated key when identity resolution fails, but still not empty', async () => {
+    humanActor.mockRejectedValue(new Error('no identity'))
+    const text = await newWikilinkFileText('/Users/me/notes/新页面.md')
+
+    expect(text).not.toContain('generated')
+    expect(text.length).toBeGreaterThan(0)
   })
 })
 

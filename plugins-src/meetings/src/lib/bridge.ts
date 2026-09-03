@@ -1,6 +1,7 @@
 import type {
   HemoryDetection,
   MeetingSummary,
+  MeetingsEnvironment,
   MigrationMode,
   MigrationReport,
 } from './types'
@@ -41,6 +42,14 @@ export async function pickHemoryDirectory(title: string): Promise<string | null>
 export async function listMeetings(): Promise<MeetingSummary[]> {
   const result = await bridge().request('plugin.library_list', {})
   return Array.isArray(result?.meetings) ? result.meetings : []
+}
+
+export function detectEnvironment(): Promise<MeetingsEnvironment> {
+  return bridge().request('plugin.detect_env', {})
+}
+
+export function saveMeetingsSettings(meetingsRoot: string): Promise<{ meetings_root: string }> {
+  return bridge().request('plugin.save_settings', { meetings_root: meetingsRoot })
 }
 
 export function detectHemory(source: string): Promise<HemoryDetection> {

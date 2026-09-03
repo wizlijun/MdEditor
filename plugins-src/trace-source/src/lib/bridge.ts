@@ -39,6 +39,8 @@ export interface VaultInfo {
   root: string | null
   wiki_dir: string | null
   daily_dir: string | null
+  /** 本机人类身份的完整 OKF actor 串(`human:<id>`)。宿主 < 本次发布时为 undefined。 */
+  author?: string
 }
 
 /** `host.vault.info` → root + configured wiki/daily dir names. */

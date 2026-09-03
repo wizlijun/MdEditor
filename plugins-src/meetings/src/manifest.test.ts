@@ -11,7 +11,7 @@ describe('meetings manifest', () => {
     const cli = manifest.contributes.cli[0]
     expect(cli.subcommand).toBe('meetings-import-hemory')
     expect(cli.command).toBe('import-hemory')
-    expect(cli.args).toContainEqual(expect.objectContaining({ name: 'source', type: 'path', required: true }))
+    expect(cli.args).toContainEqual(expect.objectContaining({ name: 'source', type: 'path', required: false }))
     expect(manifest.activation.events).toContain(`onCli:${cli.subcommand}`)
     expect(manifest.capabilities).toEqual(expect.arrayContaining([
       'vault.read',
@@ -21,9 +21,9 @@ describe('meetings manifest', () => {
     ]))
   })
 
-  it('keeps the archive fixed and plugin settings inside the plugin UI', () => {
+  it('keeps Vault-scoped settings inside the plugin UI', () => {
     expect(manifest.contributes).not.toHaveProperty('settings')
     expect(manifest.capabilities).not.toContain('settings')
-    expect(manifest.description).toContain('ssot/meetings')
+    expect(manifest.description).toContain('configurable Vault directory')
   })
 })

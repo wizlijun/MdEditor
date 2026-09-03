@@ -63,10 +63,18 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   exists: (path: string) => fsExists(path),
 }))
 
+// Default: identity cache is cold (matches app boot before warmHumanActor()
+// resolves) — newFile() must sign nothing until a test opts into a warm cache.
+const humanActorNowMock = vi.fn((): string | null => null)
+vi.mock('./okf/identity', () => ({
+  humanActorNow: () => humanActorNowMock(),
+}))
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.resetModules()
   fsExists.mockResolvedValue(false)
+  humanActorNowMock.mockReturnValue(null)
 })
 
 describe('tabs', () => {
@@ -672,6 +680,25 @@ describe('tabs', () => {
     const m = await import('./tabs.svelte')
     m.newFile()
     expect(m.tabs[0].mode).toBe('source')
+  })
+
+  it('newFile signs the doc via humanActorNow() when the identity cache is warm', async () => {
+    // Wiring test (not a newFileText unit test): drives the real newFile()
+    // call site with a warm identity cache and asserts the signature reached
+    // the tab content through it — catches a renamed { by, at } shape or a
+    // dropped conditional that a hand-built-author unit test cannot.
+    humanActorNowMock.mockReturnValue('human:testuser')
+    const m = await import('./tabs.svelte')
+    m.newFile()
+    expect(m.tabs[0].currentContent).toContain('generated:\n  by: human:testuser\n  at:')
+  })
+
+  it('newFile writes no generated key when the identity cache is cold', async () => {
+    // humanActorNowMock defaults to null (see beforeEach) — a cold cache must
+    // not produce a guessed signature.
+    const m = await import('./tabs.svelte')
+    m.newFile()
+    expect(m.tabs[0].currentContent).not.toContain('generated:')
   })
 
   it('path-backed markdown draft skips empty saves but writes non-empty content', async () => {

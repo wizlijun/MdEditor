@@ -139,6 +139,9 @@
   })
 
   onMount(() => {
+    // 人写署名要在 ⌘N 这类同步热路径上同步取到(src/lib/okf/identity.ts)。
+    void import('./lib/okf/identity').then(m => m.warmHumanActor())
+
     let stopAutoSave: (() => void) | undefined
     let dispatchPlugin: (pluginId: string, command: string) => Promise<void> = async () => {}
 

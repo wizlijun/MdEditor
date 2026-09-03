@@ -2,6 +2,7 @@
   import type { Task } from '../lib/events'
   import { fmtShort } from '../lib/datetime'
   import type { MessageKey } from '../lib/strings'
+  import { groupTasks } from '../lib/task-groups'
 
   let { tasks, selected, onselect, label }:
     {
@@ -13,6 +14,18 @@
 
   // "2026-07-30T10:42:33Z" (UTC) → "07-30 18:42" in the user's local timezone
   const when = fmtShort
+  let expanded = $state(new Set<string>())
+  const groups = $derived(groupTasks(tasks))
+
+  function toggle(id: string) { const next = new Set(expanded); next.has(id) ? next.delete(id) : next.add(id); expanded = next }
+  function groupName(id: string): string {
+    const known: Record<string, MessageKey> = {
+      'notemd.core': 'tasks.group.core', 'notemd.ebook-import': 'tasks.group.ebook',
+      'notemd.idea-spark': 'tasks.group.idea', 'notemd.memory': 'tasks.group.memory',
+      'notemd.trace-source': 'tasks.group.trace', 'agent-tools': 'tasks.group.agent', custom: 'tasks.group.custom',
+    }
+    return known[id] ? label(known[id]) : id
+  }
 
   function status(task: Task): { text: string; kind: string } | null {
     if (task.running) return { kind: 'running', text: label('status.running') }
@@ -24,11 +37,20 @@
   }
 </script>
 
-<ul class="tasks">
-  {#each tasks as task (task.id)}
+<div class="task-groups">
+{#each groups as group, index (group.id)}
+  {@const panelId = `task-group-${index}`}
+  <div class="task-group">
+    <button class="group-toggle" aria-expanded={expanded.has(group.id)} aria-controls={panelId} onclick={() => toggle(group.id)}>
+      <span class="chevron" aria-hidden="true">›</span><span class="group-name">{groupName(group.id)}</span>
+      {#if group.running}<span class="dot" title={label('status.running')}></span>{/if}<span class="count">{group.tasks.length}</span>
+    </button>
+    {#if expanded.has(group.id)}
+    <ul class="tasks" id={panelId}>
+  {#each group.tasks as task (task.id)}
     {@const st = status(task)}
     <li>
-      <button class:active={task.id === selected} onclick={() => onselect(task.id)}>
+      <button class="task-button" class:active={task.id === selected} onclick={() => onselect(task.id)}>
         <span class="name">
           {task.name}
           {#if task.running}<span class="dot" title={label('status.running')}></span>{/if}
@@ -49,12 +71,25 @@
       </button>
     </li>
   {/each}
-</ul>
+    </ul>
+    {/if}
+  </div>
+{/each}
+</div>
 
 <style>
-  .tasks { list-style: none; margin: 0; padding: 0; }
+  .task-groups { display: grid; gap: 5px; }
+  .task-group { min-width: 0; }
+  .group-toggle { display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 8px; border: 1px solid var(--window-border); border-radius: 9px; background: var(--card-surface); color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+  .group-toggle:hover { border-color: var(--strong-border); background: var(--hover-surface); }
+  .group-toggle:focus-visible { outline: 2px solid var(--standard-accent); outline-offset: 2px; }
+  .chevron { color: var(--muted-text); font-size: 17px; line-height: 1; transition: transform 120ms ease; }
+  .group-toggle[aria-expanded='true'] .chevron { transform: rotate(90deg); }
+  .group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 620; }
+  .count { margin-left: auto; color: var(--muted-text); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .tasks { list-style: none; margin: 5px 0 2px 13px; padding: 0; }
   .tasks li + li { margin-top: 4px; }
-  button {
+  .task-button {
     font: inherit;
     font-size: 13px;
     display: block;
@@ -67,16 +102,16 @@
     color: inherit;
     cursor: pointer;
   }
-  button:hover {
+  .task-button:hover {
     border-color: var(--strong-border, color-mix(in srgb, currentColor 18%, transparent));
     background: var(--hover-surface, color-mix(in srgb, currentColor 5%, transparent));
   }
-  button.active {
+  .task-button.active {
     border-color: color-mix(in srgb, var(--standard-accent, #3479db) 45%, transparent);
     background: color-mix(in srgb, var(--standard-accent, #3479db) 8%, Canvas);
     box-shadow: inset 3px 0 0 var(--standard-accent, #3479db);
   }
-  button:focus-visible { outline: 2px solid var(--standard-accent, #3479db); outline-offset: 2px; }
+  .task-button:focus-visible { outline: 2px solid var(--standard-accent, #3479db); outline-offset: 2px; }
   .name { display: flex; align-items: center; gap: 6px; font-weight: 650; }
   .desc, .state {
     display: block;
