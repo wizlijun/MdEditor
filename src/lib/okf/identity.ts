@@ -5,20 +5,39 @@
 import { actor } from './actor'
 
 let cached: string | null = null
+let generation = 0
+let inFlight: Promise<string> | null = null
 
 export async function humanActor(): Promise<string> {
   if (cached) return cached
+  if (inFlight) return inFlight
+
+  const requestGeneration = generation
+  const request = (async () => {
+    let resolved: string
+    try {
+      const [{ invoke }, { sotvaultStore }] = await Promise.all([
+        import('@tauri-apps/api/core'),
+        import('../sotvault.svelte'),
+      ])
+      const id = await invoke<string>('notemd_okf_human_id', { vaultPath: sotvaultStore.vaultRoot })
+      resolved = actor.human(id?.trim() ? id.trim() : 'local')
+    } catch {
+      resolved = actor.human('local')
+    }
+
+    // Vault 可能在请求途中切换。旧请求不能覆盖新 vault 的身份；等待当前
+    // generation 的请求（若尚未发起则在这里发起）并把新身份返回给旧调用者。
+    if (generation !== requestGeneration) return humanActor()
+    cached = resolved
+    return resolved
+  })()
+  inFlight = request
   try {
-    const [{ invoke }, { sotvaultStore }] = await Promise.all([
-      import('@tauri-apps/api/core'),
-      import('../sotvault.svelte'),
-    ])
-    const id = await invoke<string>('notemd_okf_human_id', { vaultPath: sotvaultStore.vaultRoot })
-    cached = actor.human(id?.trim() ? id.trim() : 'local')
-  } catch {
-    cached = actor.human('local')
+    return await request
+  } finally {
+    if (inFlight === request) inFlight = null
   }
-  return cached
 }
 
 /**
@@ -37,5 +56,7 @@ export function warmHumanActor(): void {
 
 /** 测试/重登 vault 后清缓存。 */
 export function resetHumanActor(): void {
+  generation += 1
   cached = null
+  inFlight = null
 }
