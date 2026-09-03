@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.903.1 — 2026-09-03
+
 ### Added
 
 - **Pending Memory suggestions now support multi-selection and safe bulk cleanup.** Click normally to select one, use Command/Ctrl to toggle items, or Shift to select a range; right-clicking the selection opens bulk ignore, reject and delete-candidate actions with an exact impact confirmation. Human approval, editing and importance remain deliberately item-by-item so distinct identity, fact, behavior and lifecycle meanings cannot be approved under one vague gesture.
