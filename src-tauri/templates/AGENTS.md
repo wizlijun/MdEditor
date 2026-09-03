@@ -10,15 +10,15 @@ Guidance for AI agents working in this vault. This file is the source of
 truth; CLAUDE.md is a symlink to this file — edit AGENTS.md only.
 
 (The frontmatter above is not decoration — see "Metadata" below. Markdown
-files in this vault carry it except for the generated `/USER.md` and
-`/MEMORY.md` plain-text projections.)
+files in this vault carry it except for the generated `/MEMORY.md`
+plain-text projection.)
 
 ## Vault layout
 
-- `/USER.md` — generated plain-text projection of eligible owner facts. It is
-  not the machine-readable owner authority source.
-- `/MEMORY.md` — generated plain-text projection of eligible durable facts and
-  decisions. It is not a task list, daily log, or authority source.
+- `/MEMORY.md` — the only generated plain-text memory projection. It contains
+  eligible owner facts, durable facts, decisions, and Agent guidance grouped
+  by Scope and then Role. It is not a task list, daily log, authority source,
+  or permission to use every visible fact in the current context.
 - `dailynote/` — daily outline notes, organized as
   `yyyy/yyyy-MM-dd.note.md` (e.g. `2026/2026-07-10.note.md`).
   Monthly and yearly summaries live in the same year folder as
@@ -36,9 +36,9 @@ files in this vault carry it except for the generated `/USER.md` and
 
 ## Metadata: OKF-compatible frontmatter (required)
 
-Except for the generated root `/USER.md` and `/MEMORY.md` projections, every
+Except for the generated root `/MEMORY.md` projection, every
 markdown file you create here **must** open with a YAML frontmatter block, and
-that block **must** carry a non-empty `type`. Those two projections MUST have
+that block **must** carry a non-empty `type`. This projection MUST have
 no frontmatter or machine metadata; never add it during a generic metadata fix.
 The format is the Open Knowledge Format (OKF) v0.2:
 https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
@@ -86,7 +86,7 @@ Everything else is optional, but absent metadata means "unknown", not
   the content was derived from. `resource` is an absolute URL, a
   vault-absolute path (`/sync/foo.md`), or a relative path. Attribute
   individual claims with markdown footnotes keyed by `sources[].id`, except in
-  the controlled `/USER.md` and `/MEMORY.md` projections. Those two files never
+  the controlled `/MEMORY.md` projection. This file never
   expose inline citation markers, footnote definitions, or per-entry source
   notes; Claim revisions under `/.notemd/memory/` retain provenance.
 - `status: draft | stable | deprecated` (absent means `stable`) and
@@ -125,36 +125,37 @@ Rules that hold in both directions:
 
 ## Shared user model and long-term memory
 
-`/USER.md` and `/MEMORY.md` are generated, read-only plain-text projections.
-They are computed from the versioned Claim records under `/.notemd/memory/`,
-which are the only authoritative memory data. Do not infer status, provenance,
-permission, or certainty from projection text alone.
+`/MEMORY.md` is the single generated, read-only plain-text projection. It is
+computed from the versioned Claim and Role/Scope Registry records under
+`/.notemd/memory/`, which are the only authoritative memory data. Do not infer
+status, provenance, permission, or certainty from projection text alone.
 
 ### Projection contract
 
-- Read `/USER.md` first and `/MEMORY.md` second for private, owner-scoped work.
-  `/USER.md` contains projection-eligible facts about the confirmed vault owner;
-  `/MEMORY.md` contains other projection-eligible durable facts, constraints,
-  decisions, commitments, preferences, and boundaries.
-- Each projection has exactly one H1. Content uses one layer of H2 categories
-  followed by multi-line fact bullets. It contains descriptions only: no YAML
-  frontmatter, IDs, workflow state, priority, polarity, confidence, provenance,
+- `/MEMORY.md` has exactly one H1. Before the grouped facts it contains Agent
+  guidance explaining that visible groups are not automatically active. Content
+  is grouped first by Scope and then by Role; facts keep their category inside
+  that group. Stable HTML comments may identify Scope and Role group boundaries;
+  otherwise it contains descriptions only: no YAML frontmatter, Claim IDs,
+  workflow state, priority, polarity, confidence, provenance,
   hashes, citations, source notes, or other machine metadata.
 - Resolve owner identity with `notemd memory owner --json`. Never parse owner
-  identity from `/USER.md`. If the owner is unknown, conflicting, or inactive,
+  identity from `/MEMORY.md`. If the owner is unknown, conflicting, or inactive,
   do not create an owner Task.
 - Before using a fact, obtain its current metadata and context decision with
-  `notemd memory context --space <space> --purpose <purpose> --caller <caller>
+  `notemd memory context --role <role> --space <scope> --purpose <purpose> --caller <caller>
   --provider <provider> --model <model> --json`.
   Treat withheld, pending, quarantined, contested, stale, or conflict-blocked
   Claims as unavailable. Approval to remember a Claim is not proof that it is
   true and never grants permission for an external action.
-- In shared, public, or external contexts, do not load, quote, or inject either
-  projection unless the owner and the Claim consent policy authorize that use.
+- Do not inject all of `/MEMORY.md` into an Agent prompt. Use only the slice
+  returned by the context broker for the active Role and Scope. In shared,
+  public, or external contexts, do not load, quote, or inject the projection
+  unless the owner and each Claim's consent policy authorize that use.
 
 ### Mutation contract
 
-- Neither humans nor Agents edit `/USER.md` or `/MEMORY.md` directly. An Agent
+- Neither humans nor Agents edit `/MEMORY.md` directly. An Agent
   may submit only one atomic, owner-related durable Claim at a time with
   `notemd memory propose`; proposing never activates or approves the Claim.
   Do not store facts whose subject is another person merely because the fact
@@ -168,7 +169,7 @@ permission, or certainty from projection text alone.
   or **Delete** is the decision itself. Persist the exact hash-bound decision
   immediately and do not ask for a second confirmation. Agent-originated
   recommendations remain pending until an authorized human decides them.
-- A direct filesystem edit to either projection is not authoritative. Restore
+- A direct filesystem edit to the projection is not authoritative. Restore
   the generated projection from v2 control data; never silently adopt drift.
 - Concurrent devices append immutable revisions and compare protocol, authority,
   and Claim heads. Stale heads, hash mismatches, divergent parents, unsupported
@@ -195,7 +196,7 @@ Task when its obligation belongs to the **confirmed vault owner** returned by
 that command, whose authority state must be active and conflict-free. The source
 must explicitly assign the action to that person,
 record that person's own commitment, or state a deadline that person must meet.
-Never parse owner identity from `/USER.md`; if the authority reducer cannot
+Never parse owner identity from `/MEMORY.md`; if the authority reducer cannot
 confirm the owner, create no Task.
 
 - Never create a Task for work assigned to another person, even when that work

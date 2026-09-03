@@ -147,6 +147,17 @@ fn normalize_record_refs(values: &mut Vec<RecordRef>) {
     values.dedup();
 }
 
+fn normalize_claim_context(context: &mut ClaimContext) {
+    context.roles.sort();
+    context.roles.dedup();
+    context.spaces.sort();
+    context.spaces.dedup();
+    context.applies_when.sort();
+    context.applies_when.dedup();
+    context.excludes_when.sort();
+    context.excludes_when.dedup();
+}
+
 impl CanonicalPayload for ProtocolRevision {
     fn normalized(&self) -> Result<Self, String> {
         let mut next = self.clone();
@@ -196,6 +207,43 @@ impl CanonicalPayload for AuthorityRevision {
     }
 }
 
+impl CanonicalPayload for ContextRegistryRevision {
+    fn normalized(&self) -> Result<Self, String> {
+        let mut next = self.clone();
+        normalize_refs(&mut next.base_heads);
+        normalize_record_refs(&mut next.causal_context.parents);
+        normalize_refs(&mut next.decision.protocol_context.heads);
+        normalize_refs(&mut next.decision.authority_context.heads);
+        for role in &mut next.roles {
+            role.description = normalize_text(&role.description);
+            role.aliases.sort();
+            role.aliases.dedup();
+            role.agent_use.guidance = normalize_text(&role.agent_use.guidance);
+            role.agent_use.avoid_error = normalize_text(&role.agent_use.avoid_error);
+        }
+        next.roles
+            .sort_by(|left, right| left.role_id.cmp(&right.role_id));
+        for scope in &mut next.scopes {
+            scope.description = normalize_text(&scope.description);
+            scope.aliases.sort();
+            scope.aliases.dedup();
+            scope.agent_use.guidance = normalize_text(&scope.agent_use.guidance);
+            scope.agent_use.avoid_error = normalize_text(&scope.agent_use.avoid_error);
+        }
+        next.scopes
+            .sort_by(|left, right| left.scope_id.cmp(&right.scope_id));
+        Ok(next)
+    }
+
+    fn declared_payload_sha256(&self) -> &str {
+        &self.payload_sha256
+    }
+
+    fn set_declared_payload_sha256(&mut self, value: String) {
+        self.payload_sha256 = value;
+    }
+}
+
 impl CanonicalPayload for MemoryClaimRevision {
     fn normalized(&self) -> Result<Self, String> {
         let mut next = self.clone();
@@ -208,12 +256,7 @@ impl CanonicalPayload for MemoryClaimRevision {
         next.text = normalize_text(&next.text);
         next.agent_use.guidance = normalize_text(&next.agent_use.guidance);
         next.agent_use.avoid_error = normalize_text(&next.agent_use.avoid_error);
-        next.context.spaces.sort();
-        next.context.spaces.dedup();
-        next.context.applies_when.sort();
-        next.context.applies_when.dedup();
-        next.context.excludes_when.sort();
-        next.context.excludes_when.dedup();
+        normalize_claim_context(&mut next.context);
         next.consent.allowed_purposes.sort();
         next.consent.allowed_purposes.dedup();
         sort_dedup(&mut next.asserted_by)?;
@@ -243,15 +286,26 @@ impl CanonicalPayload for MemoryOperation {
     fn normalized(&self) -> Result<Self, String> {
         let mut next = self.clone();
         normalize_record_refs(&mut next.causal_context.parents);
-        normalize_refs(&mut next.merge_inputs.target.base_heads);
-        for source in &mut next.merge_inputs.sources {
-            normalize_refs(&mut source.base_heads);
+        if !next.merge_inputs.is_empty() {
+            normalize_refs(&mut next.merge_inputs.target.base_heads);
+            for source in &mut next.merge_inputs.sources {
+                normalize_refs(&mut source.base_heads);
+            }
+            next.merge_inputs
+                .sources
+                .sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
         }
-        next.merge_inputs
-            .sources
-            .sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
         next.effects
             .sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
+        if let Some(reassign) = &mut next.reassign_context {
+            reassign
+                .changes
+                .sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
+            for change in &mut reassign.changes {
+                normalize_claim_context(&mut change.from_context);
+                normalize_claim_context(&mut change.to_context);
+            }
+        }
         sort_dedup(&mut next.lineage)?;
         normalize_refs(&mut next.decision.protocol_context.heads);
         normalize_refs(&mut next.decision.authority_context.heads);
@@ -381,5 +435,39 @@ mod tests {
             payload_sha256(&first).unwrap(),
             payload_sha256(&second).unwrap()
         );
+    }
+
+    #[test]
+    fn empty_roles_preserve_the_frozen_claim_canonical_bytes() {
+        let claim: MemoryClaimRevision = serde_yaml::from_str(include_str!(
+            "../../../tests/fixtures/memory-v2/canonical/claim-payload.yaml"
+        ))
+        .unwrap();
+        assert!(claim.context.roles.is_empty());
+        let expected = include_str!(
+            "../../../tests/fixtures/memory-v2/canonical/claim-payload.canonical.json"
+        )
+        .trim();
+        assert_eq!(
+            String::from_utf8(canonical_bytes(&claim).unwrap()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn absent_request_role_stays_absent_on_the_wire() {
+        let request: ContextRequest = serde_json::from_value(serde_json::json!({
+            "space": "global",
+            "purpose": "planning",
+            "caller": "test",
+            "provider": "local",
+            "model": "test",
+            "tools": [],
+            "external_transfer": false,
+            "as_of_valid_time": "2026-09-03T00:00:00Z"
+        }))
+        .unwrap();
+        assert_eq!(request.role, None);
+        assert!(serde_json::to_value(request).unwrap().get("role").is_none());
     }
 }

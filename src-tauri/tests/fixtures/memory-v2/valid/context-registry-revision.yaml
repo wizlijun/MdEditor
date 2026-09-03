@@ -1,0 +1,41 @@
+schema: notemd.memory/context-registry-revision/v2
+revision_id: 01999f70-0000-7000-8000-000000000005
+request_id: memory-ui/context-registry/fixture
+base_heads: []
+causal_context:
+  parents: []
+roles:
+  - role_id: role:unclassified
+    display_name: Unclassified
+    description: Compatibility role for facts without a resolved identity.
+    aliases: []
+    status: active
+    agent_use:
+      guidance: Use only when no narrower Role has been confirmed.
+      avoid_error: Do not mix facts from a known Role into this fallback.
+scopes:
+  - scope_id: global
+    display_name: Global
+    description: Owner-private compatibility Realm.
+    aliases: []
+    status: active
+    kind: realm
+    domain: owner-private
+    agent_use:
+      guidance: Use only for owner-private facts not assigned more narrowly.
+      avoid_error: Do not treat this Realm as cross-client authorization.
+decision:
+  verdict: approve
+  actor_id: human:fixture-owner
+  protocol_context:
+    heads:
+      - revision_id: 01999f70-0000-7000-8000-000000000002
+        payload_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  authority_context:
+    heads:
+      - revision_id: 01999f70-0000-7000-8000-000000000003
+        payload_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    capability: memory.claim.approve
+transition:
+  operation: initialize
+payload_sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

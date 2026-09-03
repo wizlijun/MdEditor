@@ -4,12 +4,18 @@ import type {
   ContextManifestReceipt,
   ContextPreview,
   ContextRequest,
+  ContextRegistryReplaceInput,
+  ContextRegistrySnapshot,
   MemorySnapshotV2,
   PendingDecisionInput,
   ReplaceClaimInput,
   ResolveConflictInput,
   ResetAllInput,
   ResetAllReceipt,
+  ReassignmentApplyInput,
+  ReassignmentApplyReceipt,
+  ReassignmentPreview,
+  ReassignmentPreviewInput,
   Salience,
   WriteReceipt,
 } from './types'
@@ -127,6 +133,22 @@ export async function memoryContextManifest(input: ContextRequest): Promise<Cont
     payload_sha256: value.payload_sha256,
     selected_count: value.selected_count ?? value.selected?.length ?? 0,
   }
+}
+
+export function memoryContextRegistry(): Promise<ContextRegistrySnapshot> {
+  return bridge().request('host.memory.v2.contextRegistry', {})
+}
+
+export function memoryContextRegistryReplace(input: ContextRegistryReplaceInput): Promise<unknown> {
+  return bridge().request('host.memory.v2.contextRegistryReplace', input)
+}
+
+export function memoryReassignPreview(input: ReassignmentPreviewInput): Promise<ReassignmentPreview> {
+  return bridge().request('host.memory.v2.reassignPreview', input)
+}
+
+export function memoryReassignApply(input: ReassignmentApplyInput): Promise<ReassignmentApplyReceipt> {
+  return bridge().request('host.memory.v2.reassignApply', input)
 }
 
 export function memoryCheck(): Promise<MemorySnapshotV2['health']> {

@@ -69,7 +69,7 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // UI 桥可用(在 ui_rpc::dispatch 里单独处理,进程通道回 -32601)。
         "host.power_mode.config" => Some("editor.kit"),
         "host.power_mode.update" => Some("power-mode"),
-        // Controlled USER/MEMORY service. UI dispatch additionally restricts
+        // Controlled Memory service. UI dispatch additionally restricts
         // these methods to the official `notemd.memory` plugin id; native
         // plugin processes never receive this surface.
         "host.memory.v2.snapshot" | "host.memory.v2.initialize" | "host.memory.v2.context"
@@ -77,7 +77,10 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         | "host.memory.v2.replace"
         | "host.memory.v2.approve" | "host.memory.v2.reject" | "host.memory.v2.ignore"
         | "host.memory.v2.delete" | "host.memory.v2.resetAll" | "host.memory.v2.resolve"
-        | "host.memory.v2.setSalience" => Some("memory.control"),
+        | "host.memory.v2.setSalience" | "host.memory.v2.contextRegistry"
+        | "host.memory.v2.contextRegistryValidate" | "host.memory.v2.contextRegistryReplace"
+        | "host.memory.v2.reassignPreview" | "host.memory.v2.reassignApply"
+        | "host.memory.v2.reassignPropose" => Some("memory.control"),
         _ => Some("__unknown__"), // 未实现的方法一律拒绝
     }
 }
@@ -568,6 +571,12 @@ mod tests {
             "host.memory.v2.resetAll",
             "host.memory.v2.resolve",
             "host.memory.v2.contextManifest",
+            "host.memory.v2.contextRegistry",
+            "host.memory.v2.contextRegistryValidate",
+            "host.memory.v2.contextRegistryReplace",
+            "host.memory.v2.reassignPreview",
+            "host.memory.v2.reassignApply",
+            "host.memory.v2.reassignPropose",
         ] {
             assert_eq!(method_capability(method), Some("memory.control"), "{method}");
         }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import AgentPicker from './lib/agent-picker/AgentPicker.svelte'
+  import RoleScopeManager from './lib/RoleScopeManager.svelte'
   import {
     rememberProvider,
     rememberedProvider,
@@ -12,6 +13,7 @@
     memoryApprove,
     memoryContext,
     memoryContextManifest,
+    memoryContextRegistry,
     memoryDelete,
     memoryDeleteCandidate,
     memoryIgnore,
@@ -55,6 +57,7 @@
   } from './lib/inference'
   import type {
     ClaimKind,
+    ContextRegistrySnapshot,
     ContextPreview,
     EffectiveClaim,
     MemoryConflict,
@@ -81,6 +84,8 @@
   let selectedPendingId = $state<string | null>(null)
   let showAdd = $state(false)
   let showContext = $state(false)
+  let showRoleScopeManager = $state(false)
+  let roleScopeBusy = $state(false)
   let showReset = $state(false)
   let openMenuFor = $state<string | null>(null)
   let destructive = $state<DestructiveAction | null>(null)
@@ -104,6 +109,8 @@
   let addKind = $state<ClaimKind>('preference')
   let addText = $state('')
   let addSpace = $state('global')
+  let addRole = $state('role:unclassified')
+  let contextRegistry = $state<ContextRegistrySnapshot | null>(null)
   let addPurposes = $state<string[]>(['planning', 'writing', 'information-answer', 'projection', 'sync'])
   let addProviderPolicy = $state<ProviderPolicy>('prompt')
   let addSalience = $state<Salience>('normal')
@@ -113,6 +120,7 @@
   let addAvoid = $state('')
 
   let contextSpace = $state('global')
+  let contextRole = $state('role:unclassified')
   let contextPurpose = $state('planning')
   let contextProvider = $state('openai')
   let contextModel = $state('gpt-5')
@@ -130,6 +138,10 @@
   const reviews = $derived(snapshot ? pendingClaims(snapshot.pending) : [])
   const selectedClaim = $derived(visibleClaims.find(({ claim }) => claim.claim_id === selectedClaimId) ?? visibleClaims[0])
   const selectedPending = $derived(reviews.find(({ revision }) => revision.revision_id === selectedPendingId) ?? reviews[0])
+  const availableRoles = $derived(contextRegistry?.roles?.filter((item) => item.status === 'active') ?? [])
+  const availableScopes = $derived(contextRegistry?.scopes?.filter((item) => item.status === 'active')
+    ?? snapshot?.context_options?.spaces.map((item) => ({ ...item, status: 'active' as const }))
+    ?? [])
   const currentCategoryOptions = $derived(categoryOptions[addTarget])
   const addApproval = $derived(approvalKindFor(addKind))
   const addNeedsAvoid = $derived(addKind === 'boundary' || addPolarity === 'negative' || addKind === 'practice')
@@ -145,6 +157,7 @@
 
   onMount(() => {
     void refresh()
+    void refreshContextRegistry()
     void loadAgents()
     void loadInferenceMode()
     return () => { if (inferenceTimer) clearTimeout(inferenceTimer) }
@@ -267,6 +280,7 @@
       selectedClaimId ??= snapshot.claims[0]?.claim.claim_id ?? null
       selectedPendingId ??= snapshot.pending[0]?.revision.revision_id ?? null
       contextSpace = snapshot.context_options?.spaces[0]?.id ?? contextSpace
+      contextRole = snapshot.context_options?.roles?.[0]?.id ?? contextRole
       contextPurpose = snapshot.context_options?.purposes[0]?.id ?? contextPurpose
       contextProvider = snapshot.context_options?.providers[0]?.id ?? contextProvider
       contextModel = snapshot.context_options?.models.find((option) => !option.provider_id || option.provider_id === contextProvider)?.id ?? contextModel
@@ -275,6 +289,18 @@
     } finally {
       loading = false
     }
+  }
+
+  async function refreshContextRegistry() {
+    try {
+      contextRegistry = await memoryContextRegistry()
+    } catch (cause) {
+      error = hostError(cause)
+    }
+  }
+
+  async function roleScopeChanged() {
+    await Promise.all([refresh(), refreshContextRegistry()])
   }
 
   function protocol() {
@@ -403,10 +429,13 @@
   }
 
   async function resetAdd() {
-    addTarget = 'user'; addCategory = 'preferences'; addKind = 'preference'; addText = ''; addSpace = 'global'
+    addTarget = 'user'; addCategory = 'preferences'; addKind = 'preference'; addText = ''
+    addRole = availableRoles[0]?.id ?? 'role:unclassified'
+    addSpace = availableScopes[0]?.id ?? ''
     addPurposes = ['planning', 'writing', 'information-answer', 'projection', 'sync']; addProviderPolicy = 'prompt'
     addSalience = 'normal'; addPolarity = 'neutral'; addSensitivity = 'normal'; addGuidance = ''; addAvoid = ''
     showAdd = true
+    if (!contextRegistry) void refreshContextRegistry()
     await tick()
     addTextarea?.focus()
   }
@@ -446,7 +475,7 @@
         salience: addSalience,
         polarity: addPolarity,
         sensitivity: addSensitivity,
-        context: { spaces: [addSpace.trim() || 'global'], applies_when: [], excludes_when: [] },
+        context: { spaces: [addSpace], roles: [addRole], applies_when: [], excludes_when: [] },
         consent: { scope: 'personal-assistant-only', allowed_purposes: addPurposes, external_provider_policy: addProviderPolicy },
         agent_use: { guidance: addGuidance.trim(), avoid_error: addAvoid.trim() },
       })
@@ -533,7 +562,7 @@
 
   function contextRequest() {
     return {
-      space: contextSpace, purpose: contextPurpose, caller: 'plugin:notemd.memory', provider: contextProvider,
+      space: contextSpace, role: contextRole, purpose: contextPurpose, caller: 'plugin:notemd.memory', provider: contextProvider,
       model: contextModel.trim(), tools: contextTools.split(',').map((item) => item.trim()).filter(Boolean),
       external_transfer: contextExternal, as_of_valid_time: new Date(contextAsOf).toISOString(),
     }
@@ -574,6 +603,7 @@
     if (showReset) showReset = false
     else if (destructive) destructive = null
     else if (mergeConflict) mergeConflict = null
+    else if (showRoleScopeManager && !roleScopeBusy) showRoleScopeManager = false
     else if (showContext) showContext = false
     else if (editTarget) { editTarget = null; editText = '' }
     else if (showAdd) showAdd = false
@@ -586,7 +616,7 @@
 
 <main>
   <header class="app-header">
-    <div><h1>记忆</h1><p>结构化主张保存在 .notemd/memory；USER.md 与 MEMORY.md 只是纯文本视图。</p></div>
+    <div><h1>记忆</h1><p>结构化主张保存在 .notemd/memory；MEMORY.md 只是按身份与场景分组的纯文本视图。</p></div>
     <div class="header-actions">
       <div class="inference-action">
         <button class="primary" onclick={inferMemory} disabled={!canInfer || inferenceStarting || !!inferenceRun} title="首次运行会初始化 Memory v2；Agent 只提交待确认建议，不会自行批准">
@@ -597,6 +627,7 @@
         {/if}
       </div>
       <button class="secondary" onclick={() => showContext = true} disabled={!snapshot || snapshot.mode !== 'v2'}>Context Manifest…</button>
+      <button class="secondary" onclick={() => showRoleScopeManager = true} disabled={!snapshot || snapshot.mode !== 'v2'}>身份与场景…</button>
       <button class="secondary reset-trigger" onclick={() => showReset = true} disabled={!writable || writing || !!inferenceRun}>重构记忆…</button>
       <div class="health" class:conflict={snapshot?.health.status === 'conflict'} class:bad={snapshot?.health.status === 'damaged'}>
         <span aria-hidden="true"></span><span>{snapshot?.health.message ?? (loading ? '正在载入' : '不可用')}</span>
@@ -629,7 +660,7 @@
       <div id="confirmed-panel" role="tabpanel" aria-label="已确认主张">
         <div class="toolbar">
           <input class="search" type="search" bind:value={query} placeholder="搜索已确认主张" aria-label="搜索已确认主张" />
-          <select bind:value={target} aria-label="投影位置"><option value="all">全部位置</option><option value="user">USER.md</option><option value="memory">MEMORY.md</option><option value="structured">仅结构化上下文</option></select>
+          <select bind:value={target} aria-label="记忆分组"><option value="all">全部分组</option><option value="user">身份与偏好</option><option value="memory">决定与背景</option><option value="structured">仅结构化上下文</option></select>
           <button class="secondary" onclick={copyImportPrompt} title="复制一段 Prompt，粘贴给其他 AI 助手，让它把记住你的条目导出成 notemd memory propose 命令。">复制导入记忆Prompt</button>
           <button class="primary" onclick={resetAdd} disabled={!writable}>添加主张</button>
         </div>
@@ -667,7 +698,7 @@
                 <div><dt>表达忠实度</dt><dd>{claim.epistemic.representation_certainty}</dd></div>
                 <div><dt>外部真值</dt><dd>{claim.epistemic.truth_status} · {claim.epistemic.truth_confidence}</dd></div>
                 <div class="wide"><dt>有效时间</dt><dd>{temporalLabel(claim)}</dd></div>
-                <div class="wide"><dt>Space / 用途</dt><dd>{claim.context.spaces.join('、')} · {claim.consent.allowed_purposes.join('、')}</dd></div>
+                <div class="wide"><dt>Role / Scope / 用途</dt><dd>{claim.context.roles?.join('、') || 'role:unclassified'} · {claim.context.spaces.join('、')} · {claim.consent.allowed_purposes.join('、')}</dd></div>
                 <div><dt>Provider</dt><dd>{claim.consent.external_provider_policy}</dd></div>
                 <div><dt>纯文本位置</dt><dd>{categoryLabel(claim.projection.target, claim.projection.category)}</dd></div>
                 <div class="wide"><dt>Claim / Revision</dt><dd><code>{claim.claim_id}<br />{claim.revision_id}</code></dd></div>
@@ -711,7 +742,7 @@
             <div class="diff"><div><small>当前</small><p>{selectedPending.base_text ?? '—'}</p></div><div><small>确认后</small><p>{revision.text}</p></div></div>
             <dl class="facts">
               <div><dt>关于谁</dt><dd>{subjectLabel(revision)}</dd></div><div><dt>由谁提出</dt><dd>{actorLabel(revision.recorded_by)}</dd></div>
-              <div><dt>Space</dt><dd>{revision.context.spaces.join('、')}</dd></div><div><dt>Provider</dt><dd>{revision.consent.external_provider_policy}</dd></div>
+              <div><dt>Role</dt><dd>{revision.context.roles?.join('、') || 'role:unclassified'}</dd></div><div><dt>Scope</dt><dd>{revision.context.spaces.join('、')}</dd></div><div><dt>Provider</dt><dd>{revision.consent.external_provider_policy}</dd></div>
               <div><dt>生命周期</dt><dd>{revision.lifecycle.state}</dd></div>
               <div class="wide"><dt>来源</dt><dd>{selectedPending.source_summary ?? revision.evidence?.[0]?.resource ?? '未提供'}</dd></div>
             </dl>
@@ -754,19 +785,28 @@
   {/if}
 </main>
 
+{#if showRoleScopeManager && snapshot}
+  <RoleScopeManager
+    claims={snapshot.claims}
+    onclose={() => showRoleScopeManager = false}
+    onchanged={roleScopeChanged}
+    onbusychange={(value) => roleScopeBusy = value}
+  />
+{/if}
+
 {#if showAdd && snapshot?.owner}
   <div class="scrim" role="presentation">
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="add-title">
       <header><div><h2 id="add-title">添加主张</h2><p>保存就是本次人工批准，不会再出现第二步。</p></div><button class="close" aria-label="关闭添加主张" onclick={() => showAdd = false} disabled={writing}>×</button></header>
-      <div class="form-grid"><label>纯文本位置<select value={addTarget} onchange={targetChanged}><option value="user">USER.md</option><option value="memory">MEMORY.md</option></select></label><label>一级分类<select value={addCategory} onchange={categoryChanged}>{#each currentCategoryOptions as option}<option value={option.id}>{option.label}</option>{/each}</select></label></div>
+      <div class="form-grid"><label>MEMORY.md 分组<select value={addTarget} onchange={targetChanged}><option value="user">身份与偏好</option><option value="memory">决定与背景</option></select></label><label>一级分类<select value={addCategory} onchange={categoryChanged}>{#each currentCategoryOptions as option}<option value={option.id}>{option.label}</option>{/each}</select></label></div>
       <label class="field">主张内容<textarea bind:this={addTextarea} bind:value={addText} rows="5" placeholder="一条可以独立确认或否认的多行主张"></textarea></label>
       <section class="approval-meaning"><small>保存的批准含义</small><strong>{approvalLabels[addApproval].label}</strong><p>{approvalLabels[addApproval].explanation}</p></section>
       <details><summary>使用范围与高级信息</summary>
-        <div class="form-grid"><label>主张类型<select bind:value={addKind}>{#each Object.entries(claimKindLabels) as [id, label]}<option value={id}>{label}</option>{/each}</select></label><label>Space<input bind:value={addSpace} placeholder="global 或 project/name" /></label><label>Provider 策略<select bind:value={addProviderPolicy}><option value="deny">禁止外发</option><option value="prompt">每次询问</option><option value="allow">允许</option></select></label><label>敏感度<select bind:value={addSensitivity}><option value="normal">普通</option><option value="private">私人</option></select></label><label>显著性<select bind:value={addSalience}><option value="normal">普通</option><option value="pinned">重要</option></select></label><label>方向<select bind:value={addPolarity}><option value="neutral">中性</option><option value="positive">正向</option><option value="negative">负向</option></select></label></div>
+        <div class="form-grid"><label>主张类型<select bind:value={addKind}>{#each Object.entries(claimKindLabels) as [id, label]}<option value={id}>{label}</option>{/each}</select></label><label>Role<select bind:value={addRole}>{#if availableRoles.length}{#each availableRoles as role}<option value={role.id}>{role.label}</option>{/each}{:else}<option value="role:unclassified">未分类 Role</option>{/if}</select></label><label>Scope<select bind:value={addSpace}><option value="">请选择明确 Scope</option>{#each availableScopes as scope}<option value={scope.id}>{scope.label}</option>{/each}</select></label><label>Provider 策略<select bind:value={addProviderPolicy}><option value="deny">禁止外发</option><option value="prompt">每次询问</option><option value="allow">允许</option></select></label><label>敏感度<select bind:value={addSensitivity}><option value="normal">普通</option><option value="private">私人</option></select></label><label>显著性<select bind:value={addSalience}><option value="normal">普通</option><option value="pinned">重要</option></select></label><label>方向<select bind:value={addPolarity}><option value="neutral">中性</option><option value="positive">正向</option><option value="negative">负向</option></select></label></div>
         <fieldset><legend>允许用途</legend>{#each ['planning', 'writing', 'information-answer', 'external-action', 'projection', 'sync'] as purpose}<label class="check"><input type="checkbox" checked={addPurposes.includes(purpose)} onchange={() => togglePurpose(purpose)} />{purpose}</label>{/each}</fieldset>
         <label class="field">Agent 使用方式<input bind:value={addGuidance} placeholder="在什么情况下如何使用" /></label><label class="field">必须避免{addNeedsAvoid ? '（必填）' : ''}<input bind:value={addAvoid} placeholder="不能做出的推断或动作" /></label>
       </details>
-      <footer><button onclick={() => showAdd = false} disabled={writing}>取消</button><button class="primary" onclick={submitAdd} disabled={writing || !addText.trim() || !addPurposes.length || (addNeedsAvoid && !addAvoid.trim())}>{writing ? '正在保存…' : '保存并确认'}</button></footer>
+      <footer><button onclick={() => showAdd = false} disabled={writing}>取消</button><button class="primary" onclick={submitAdd} disabled={writing || !addText.trim() || !addSpace || !addRole || !addPurposes.length || (addNeedsAvoid && !addAvoid.trim())}>{writing ? '正在保存…' : '保存并确认'}</button></footer>
     </div>
   </div>
 {/if}
@@ -792,7 +832,7 @@
       <div class="reset-impact">
         <strong>将立即移除 {resetClaims.length} 条已确认记忆和 {snapshot.pending.length} 条待确认建议。</strong>
         <ul>
-          <li>USER.md、MEMORY.md 与 Agent context 会失去这些内容。</li>
+          <li>MEMORY.md 与 Agent context 会失去这些内容。</li>
           <li>推理进度会重置；下次推理将重新扫描整个 Vault。</li>
           <li>所有者身份、Memory 协议和不可变历史会保留，因此这不是从 Git 历史永久擦除。</li>
         </ul>
@@ -807,8 +847,8 @@
 {/if}
 
 {#if showContext && snapshot}
-  <div class="scrim" role="presentation"><div class="sheet context-sheet" role="dialog" aria-modal="true" aria-labelledby="context-title"><header><div><h2 id="context-title">Context Manifest</h2><p>先明确 Space、用途和接收方，再查看将提供给 Agent 的最小主张集合。</p></div><button class="close" aria-label="关闭 Context Manifest" onclick={() => showContext = false}>×</button></header>
-    <div class="form-grid"><label>Space<select bind:value={contextSpace}>{#each snapshot.context_options?.spaces ?? [{ id: 'global', label: '全局' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>用途<select bind:value={contextPurpose}>{#each snapshot.context_options?.purposes ?? [{ id: 'planning', label: '规划' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>Provider<select bind:value={contextProvider}>{#each snapshot.context_options?.providers ?? [{ id: 'openai', label: 'OpenAI' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>Model<select bind:value={contextModel}>{#each (snapshot.context_options?.models ?? [{ id: 'gpt-5', label: 'GPT-5' }]).filter((option) => !option.provider_id || option.provider_id === contextProvider) as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>有效时间<input type="datetime-local" bind:value={contextAsOf} /></label><label>Tools（逗号分隔）<input bind:value={contextTools} /></label><label class="check wide"><input type="checkbox" bind:checked={contextExternal} />内容将发送给外部 Provider</label></div>
+  <div class="scrim" role="presentation"><div class="sheet context-sheet" role="dialog" aria-modal="true" aria-labelledby="context-title"><header><div><h2 id="context-title">Context Manifest</h2><p>先明确 Role、Scope、用途和接收方，再查看将提供给 Agent 的最小主张集合。</p></div><button class="close" aria-label="关闭 Context Manifest" onclick={() => showContext = false}>×</button></header>
+    <div class="form-grid"><label>Role<select bind:value={contextRole}>{#each snapshot.context_options?.roles ?? [{ id: 'role:unclassified', label: '未分类身份' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>Scope<select bind:value={contextSpace}>{#each snapshot.context_options?.spaces ?? [{ id: 'global', label: '全局' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>用途<select bind:value={contextPurpose}>{#each snapshot.context_options?.purposes ?? [{ id: 'planning', label: '规划' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>Provider<select bind:value={contextProvider}>{#each snapshot.context_options?.providers ?? [{ id: 'openai', label: 'OpenAI' }] as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>Model<select bind:value={contextModel}>{#each (snapshot.context_options?.models ?? [{ id: 'gpt-5', label: 'GPT-5' }]).filter((option) => !option.provider_id || option.provider_id === contextProvider) as option}<option value={option.id}>{option.label}</option>{/each}</select></label><label>有效时间<input type="datetime-local" bind:value={contextAsOf} /></label><label>Tools（逗号分隔）<input bind:value={contextTools} /></label><label class="check wide"><input type="checkbox" bind:checked={contextExternal} />内容将发送给外部 Provider</label></div>
     <div class="context-actions"><button class="primary" onclick={previewContext} disabled={contextBusy || !contextSpace || !contextPurpose || !contextProvider || !contextModel || !contextAsOf}>{contextBusy ? '正在检查…' : '预览选择'}</button></div>
     {#if contextPreview}<section class="context-result" aria-live="polite"><div class="result-summary"><strong>{contextPreview.selected.length} 条将被选中</strong><span>{contextPreview.redactions} 条已脱敏 · {contextPreview.conflicts.length} 个冲突</span></div><dl class="facts"><div><dt>现实行动</dt><dd>{contextPreview.policy_result.external_action_allowed ? '允许' : '不允许'}</dd></div><div><dt>排除</dt><dd>{Object.entries(contextPreview.excluded_summary).map(([key, value]) => `${key} ${value}`).join('、') || '无'}</dd></div></dl><ul>{#each contextPreview.selected as item}<li>{item.text ?? item.claim_id}<small>{item.reasons.join(' · ')}</small></li>{/each}</ul><button onclick={createManifest} disabled={contextBusy || !writable || !contextPreview.preview_sha256}>记录本次使用清单</button>{#if !writable}<small class="readonly-note">当前模式只允许预览，不会写入 Context Manifest。</small>{/if}</section>{/if}
   </div></div>

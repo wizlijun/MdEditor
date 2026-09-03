@@ -77,6 +77,7 @@ fn is_set_array(path: &[String]) -> bool {
         "parents"
             | "causal_context.parents"
             | "asserted_by"
+            | "context.roles"
             | "context.spaces"
             | "context.applies_when"
             | "context.excludes_when"
@@ -175,6 +176,11 @@ fn v2_schemas_and_yaml_fixtures_share_strict_top_level_contracts() {
             "schemas/claim-revision.schema.json",
             "canonical/claim-payload.yaml",
             "Claim revision",
+        ),
+        (
+            "schemas/context-registry-revision.schema.json",
+            "valid/context-registry-revision.yaml",
+            "Context Registry revision",
         ),
     ] {
         assert_top_level_schema(&read_json(schema_path), &read_yaml(fixture_path), name);
@@ -301,24 +307,22 @@ fn runtime_canonicalizer_matches_the_published_claim_vector() {
 #[test]
 fn projection_templates_are_plain_text_and_agents_template_points_to_v2_authority() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates");
-    let user = fs::read_to_string(root.join("USER.md")).unwrap();
     let memory = fs::read_to_string(root.join("MEMORY.md")).unwrap();
     let agents = fs::read_to_string(root.join("AGENTS.md")).unwrap();
 
-    assert_eq!(user, "# USER\n");
-    assert_eq!(memory, "# MEMORY\n");
-    for projection in [&user, &memory] {
-        assert!(!projection.starts_with("---"));
-        assert!(!projection.contains("::"));
-        assert!(!projection.contains("[^"));
-    }
+    assert!(!root.join("USER.md").exists());
+    assert!(memory.starts_with("# MEMORY\n\n> Agent 使用规则："));
+    assert!(!memory.starts_with("---"));
+    assert!(!memory.contains("::"));
+    assert!(!memory.contains("[^"));
     for rule in [
         "only authoritative memory data",
         "notemd memory owner --json",
-        "Never parse owner identity from `/USER.md`",
-        "notemd memory context --space",
+        "Never parse owner identity from `/MEMORY.md`",
+        "notemd memory context --role",
+        "Do not inject all of `/MEMORY.md`",
         "notemd memory propose",
-        "no YAML\n  frontmatter",
+        "no YAML frontmatter",
         "Do not store facts whose subject is another person",
         "do not ask for a second confirmation",
         "Delete creates a tombstone",

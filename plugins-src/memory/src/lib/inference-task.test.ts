@@ -33,6 +33,8 @@ describe('Memory inference task template', () => {
       '成功时仍记录运行开始 HEAD',
       '计划内来源无法完整读取',
     ]) expect(prompt).toContain(rule)
+    expect(prompt).toContain('或 `MEMORY.md`')
+    expect(prompt).not.toContain('`USER.md`')
   })
 
   it('defines an abstention-first quality gate from the rejected production patterns', () => {

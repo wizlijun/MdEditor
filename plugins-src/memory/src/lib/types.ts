@@ -82,6 +82,7 @@ export interface MemoryClaimRevision {
   sensitivity: Sensitivity
   context: {
     spaces: string[]
+    roles?: string[]
     applies_when: string[]
     excludes_when: string[]
   }
@@ -178,6 +179,7 @@ export interface MemorySnapshotV2 {
   history: HistoryItem[]
   health: MemoryHealth
   context_options?: {
+    roles?: ContextOption[]
     spaces: ContextOption[]
     purposes: ContextOption[]
     providers: ContextOption[]
@@ -261,6 +263,7 @@ export interface WriteReceipt {
 
 export interface ContextRequest {
   space: string
+  role?: string
   purpose: string
   caller: string
   provider: string
@@ -286,4 +289,92 @@ export interface ContextManifestReceipt {
   manifest_id: string
   payload_sha256: string
   selected_count: number
+}
+
+export type ContextRegistryStatus = 'active' | 'archived'
+
+export interface ContextRole {
+  id: string
+  label: string
+  description: string
+  aliases: string[]
+  status: ContextRegistryStatus
+  guidance: string
+  avoid_error: string
+  redirect_to?: string
+}
+
+export interface ContextScope {
+  id: string
+  label: string
+  description: string
+  aliases: string[]
+  status: ContextRegistryStatus
+  kind: 'realm' | 'space'
+  security_domain: string
+  parent_id?: string
+  redirect_to?: string
+}
+
+export interface ContextRegistrySnapshot {
+  protocol: ProtocolRef
+  registry_heads: RevisionRef[]
+  roles: ContextRole[]
+  scopes: ContextScope[]
+  writable: boolean
+}
+
+export interface ContextRegistryReplaceInput {
+  request_id: string
+  expected_protocol: ProtocolRef
+  expected_registry_heads: RevisionRef[]
+  gesture_intent: 'replace-context-registry'
+  roles: ContextRole[]
+  scopes: ContextScope[]
+}
+
+export interface ReassignmentSelector {
+  claim_ids?: string[]
+  role_ids?: string[]
+  scope_ids?: string[]
+}
+
+export interface ReassignmentReplacement {
+  role_ids?: string[]
+  scope_ids?: string[]
+}
+
+export interface ReassignmentPreviewInput {
+  expected_protocol: ProtocolRef
+  expected_registry_heads: RevisionRef[]
+  selector: ReassignmentSelector
+  replacement: ReassignmentReplacement
+  as_of_valid_time: string
+}
+
+export interface ReassignmentMatch {
+  claim_id: string
+  expected_heads: RevisionRef[]
+  before: unknown
+  after: unknown
+  risk_bucket: string
+  batch_eligible: boolean
+  reasons: string[]
+}
+
+export interface ReassignmentPreview {
+  preview_sha256: string
+  matched: ReassignmentMatch[]
+  summary: unknown
+}
+
+export interface ReassignmentApplyInput extends ReassignmentPreviewInput {
+  request_id: string
+  preview_sha256: string
+  gesture_intent: 'apply-reassignment'
+}
+
+export interface ReassignmentApplyReceipt {
+  updated_claims?: number
+  projection_rebuilt?: boolean
 }

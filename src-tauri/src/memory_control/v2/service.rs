@@ -27,6 +27,8 @@ struct SnapshotInput {
     #[serde(default = "now")]
     as_of_valid_time: String,
     #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
     space: Option<String>,
     #[serde(default)]
     purpose: Option<String>,
@@ -138,6 +140,134 @@ struct ResetAllInput {
     expected_pending: Vec<ResetPendingInput>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ContextRoleWire {
+    id: String,
+    label: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    status: ContextRegistryEntryStatus,
+    #[serde(default)]
+    guidance: String,
+    #[serde(default)]
+    avoid_error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    redirect_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ContextScopeWire {
+    id: String,
+    label: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    status: ContextRegistryEntryStatus,
+    kind: ScopeKind,
+    security_domain: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    redirect_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextRegistryCandidate {
+    #[serde(default)]
+    roles: Vec<ContextRoleWire>,
+    #[serde(default)]
+    scopes: Vec<ContextScopeWire>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextRegistryValidateInput {
+    candidate: ContextRegistryCandidate,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextRegistryReplaceInput {
+    request_id: String,
+    expected_protocol: RevisionRef,
+    #[serde(default)]
+    expected_registry_heads: Vec<RevisionRef>,
+    gesture_intent: GestureIntent,
+    #[serde(default)]
+    roles: Vec<ContextRoleWire>,
+    #[serde(default)]
+    scopes: Vec<ContextScopeWire>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReassignmentSelector {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    claim_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    role_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scope_ids: Vec<String>,
+    #[serde(default)]
+    all_current: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReassignmentReplacement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    role_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReassignmentPreviewInput {
+    expected_protocol: RevisionRef,
+    #[serde(default)]
+    expected_registry_heads: Vec<RevisionRef>,
+    selector: ReassignmentSelector,
+    replacement: ReassignmentReplacement,
+    #[serde(default = "now")]
+    as_of_valid_time: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReassignmentApplyInput {
+    request_id: String,
+    expected_protocol: RevisionRef,
+    #[serde(default)]
+    expected_registry_heads: Vec<RevisionRef>,
+    selector: ReassignmentSelector,
+    replacement: ReassignmentReplacement,
+    #[serde(default = "now")]
+    as_of_valid_time: String,
+    preview_sha256: String,
+    gesture_intent: GestureIntent,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReassignmentProposeInput {
+    request_id: String,
+    expected_protocol: RevisionRef,
+    #[serde(default)]
+    expected_registry_heads: Vec<RevisionRef>,
+    selector: ReassignmentSelector,
+    replacement: ReassignmentReplacement,
+    #[serde(default = "now")]
+    as_of_valid_time: String,
+    recorded_by: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum ResolveStrategy {
@@ -232,6 +362,20 @@ pub fn dispatch(root: &Path, method: &str, params: &Value) -> Result<Value, Stri
         "host.memory.v2.contextManifest" => {
             context_manifest(root, parse(params, "contextManifest")?)
         }
+        "host.memory.v2.contextRegistry" => context_registry(root),
+        "host.memory.v2.contextRegistryValidate" => {
+            context_registry_validate(parse(params, "contextRegistryValidate")?)
+        }
+        "host.memory.v2.contextRegistryReplace" => {
+            context_registry_replace(root, parse(params, "contextRegistryReplace")?)
+        }
+        "host.memory.v2.reassignPreview" => {
+            reassign_preview(root, parse(params, "reassignPreview")?)
+        }
+        "host.memory.v2.reassignApply" => reassign_apply(root, parse(params, "reassignApply")?),
+        "host.memory.v2.reassignPropose" => {
+            reassign_propose(root, parse(params, "reassignPropose")?)
+        }
         "host.memory.v2.check" => check(root),
         _ => Err(format!("memory: unknown method {method}")),
     }
@@ -303,6 +447,7 @@ fn initialize(root: &Path, _input: InitializeInput) -> Result<Value, String> {
                 root,
                 SnapshotInput {
                     as_of_valid_time: now(),
+                    role: None,
                     space: None,
                     purpose: None,
                 },
@@ -334,7 +479,7 @@ fn initialize(root: &Path, _input: InitializeInput) -> Result<Value, String> {
         causal_context: CausalContext::default(),
         protocol_major: PROTOCOL_MAJOR,
         protocol_minor: 0,
-        renderer_version: "notemd.memory.projector/2".into(),
+        renderer_version: "notemd.memory.projector/3".into(),
         claim_schema: "notemd.memory/claim-revision/v2".into(),
         category_registry: BTreeMap::from([
             (
@@ -385,8 +530,75 @@ fn initialize(root: &Path, _input: InitializeInput) -> Result<Value, String> {
         },
         payload_sha256: String::new(),
     };
-    transaction
+    let bootstrap = transaction
         .initialize(format!("vault:{}", uuid_v7()), protocol, authority)
+        .map_err(|error| error.to_string())?;
+    let initialized = V2Repository::new(root)
+        .load()
+        .map_err(|error| error.to_string())?;
+    let mut registry_parents = Vec::new();
+    registry_parents.extend(initialized.protocols.iter().map(|item| RecordRef {
+        record_id: item.value.revision_id.clone(),
+        raw_sha256: item.raw_sha256.clone(),
+    }));
+    registry_parents.extend(initialized.authorities.iter().map(|item| RecordRef {
+        record_id: item.value.revision_id.clone(),
+        raw_sha256: item.raw_sha256.clone(),
+    }));
+    registry_parents.sort();
+    let registry = ContextRegistryRevision {
+        schema: "notemd.memory/context-registry-revision/v2".into(),
+        revision_id: uuid_v7(),
+        request_id: format!("initialize-context-registry:{}", uuid_v7()),
+        base_heads: Vec::new(),
+        causal_context: CausalContext {
+            parents: registry_parents,
+        },
+        roles: vec![RoleDefinition {
+            role_id: "role:unclassified".into(),
+            display_name: "未分类身份".into(),
+            description: "尚未归入明确身份的通用记忆。".into(),
+            aliases: Vec::new(),
+            status: ContextRegistryEntryStatus::Active,
+            redirect_to: None,
+            agent_use: AgentUse {
+                guidance: "只有在无法确认更具体身份时才使用本组。".into(),
+                avoid_error: "一旦识别出开发、咨询、家庭等明确身份，不要继续加载本组。".into(),
+            },
+        }],
+        scopes: vec![ScopeDefinition {
+            scope_id: "global".into(),
+            display_name: "全局".into(),
+            description: "仅限 Vault owner 私有使用的默认场景。".into(),
+            aliases: Vec::new(),
+            status: ContextRegistryEntryStatus::Active,
+            redirect_to: None,
+            kind: ScopeKind::Realm,
+            domain: "owner-private".into(),
+            parent_scope_id: None,
+            agent_use: AgentUse {
+                guidance: "没有更具体项目、客户或家庭场景时才使用。".into(),
+                avoid_error: "不要把全局默认当作跨安全域共享许可。".into(),
+            },
+        }],
+        decision: ContextRegistryDecision {
+            verdict: Verdict::Approve,
+            actor_id: actor_id.clone(),
+            protocol_context: ContextHeads {
+                heads: vec![bootstrap.initial_protocol_revision.clone()],
+            },
+            authority_context: AuthorityContext {
+                heads: vec![bootstrap.initial_authority_revision.clone()],
+                capability: CLAIM_APPROVE.into(),
+            },
+        },
+        transition: ControlTransition {
+            operation: ControlOperation::Initialize,
+        },
+        payload_sha256: String::new(),
+    };
+    transaction
+        .publish_context_registry(registry)
         .map_err(|error| error.to_string())?;
     drop(transaction);
     rebuild_projections(root)?;
@@ -394,6 +606,7 @@ fn initialize(root: &Path, _input: InitializeInput) -> Result<Value, String> {
         root,
         SnapshotInput {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -420,6 +633,7 @@ fn rich_v2_view(
         repository,
         &SnapshotRequest {
             as_of_valid_time: input.as_of_valid_time,
+            role: input.role,
             space: input.space,
             purpose: input.purpose,
         },
@@ -574,12 +788,43 @@ fn projection_is_edited(
     let Ok(expected) = project(repository, snapshot) else {
         return true;
     };
-    fs::read_to_string(root.join("USER.md")).ok().as_deref() != Some(expected.user.as_str())
+    root.join("USER.md").exists()
         || fs::read_to_string(root.join("MEMORY.md")).ok().as_deref()
             != Some(expected.memory.as_str())
 }
 
 fn context_options(repository: &RepositorySnapshot) -> Value {
+    if let Ok(Some(head)) = context_registry_head(repository) {
+        if let Some(registry) = repository.context_registries.iter().find(|item| {
+            item.value.revision_id == head.revision_id
+                && item.value.payload_sha256 == head.payload_sha256
+        }) {
+            let roles = registry
+                .value
+                .roles
+                .iter()
+                .filter(|entry| entry.status == ContextRegistryEntryStatus::Active)
+                .map(|entry| json!({"id": entry.role_id, "label": entry.display_name}))
+                .collect::<Vec<_>>();
+            let scopes = registry
+                .value
+                .scopes
+                .iter()
+                .filter(|entry| entry.status == ContextRegistryEntryStatus::Active)
+                .map(|entry| json!({"id": entry.scope_id, "label": entry.display_name}))
+                .collect::<Vec<_>>();
+            return json!({
+                "roles": roles,
+                "spaces": scopes,
+                "purposes": [
+                    {"id": "planning", "label": "规划"},
+                    {"id": "writing", "label": "写作"}
+                ],
+                "providers": [{"id": "local", "label": "本机"}, {"id": "openai", "label": "OpenAI"}],
+                "models": [{"id": "local", "label": "本机", "provider_id": "local"}, {"id": "gpt-5", "label": "GPT-5", "provider_id": "openai"}]
+            });
+        }
+    }
     let mut spaces = BTreeSet::new();
     let mut purposes = BTreeSet::new();
     for revision in &repository.claims {
@@ -593,6 +838,7 @@ fn context_options(repository: &RepositorySnapshot) -> Value {
         purposes.extend(["planning".into(), "writing".into()]);
     }
     json!({
+        "roles": [{"id": "role:unclassified", "label": "未分类身份"}],
         "spaces": spaces.into_iter().map(|id| json!({"id": id, "label": id})).collect::<Vec<_>>(),
         "purposes": purposes.into_iter().map(|id| json!({"id": id, "label": id})).collect::<Vec<_>>(),
         "providers": [{"id": "local", "label": "本机"}, {"id": "openai", "label": "OpenAI"}],
@@ -757,11 +1003,15 @@ fn replace(root: &Path, input: ReplaceInput) -> Result<Value, String> {
             || existing.value.parents != input.expected_heads
             || existing.value.text != text
         {
-            return Err("MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another replacement".into());
+            return Err(
+                "MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another replacement".into(),
+            );
         }
         return receipt_for_retry(root, existing, &snapshot);
     }
-    let view = snapshot.claims.iter()
+    let view = snapshot
+        .claims
+        .iter()
         .find(|view| view.claim_id == input.claim_id)
         .ok_or("MEMORY_STALE_BASE: claim does not exist")?;
     exact_heads(&input.expected_heads, &view.current_heads)?;
@@ -781,7 +1031,12 @@ fn replace(root: &Path, input: ReplaceInput) -> Result<Value, String> {
     child.recorded_by = host_recorder();
     child.recorded_at = now();
     child.workflow.state = WorkflowState::Approved;
-    child.decision = Some(decision(&controls, approval_kind_for(child.claim_kind), CLAIM_APPROVE, child.recorded_at.clone()));
+    child.decision = Some(decision(
+        &controls,
+        approval_kind_for(child.claim_kind),
+        CLAIM_APPROVE,
+        child.recorded_at.clone(),
+    ));
     child.transition = ClaimTransition {
         operation: ClaimOperation::Replace,
         approves_revision_id: None,
@@ -809,9 +1064,15 @@ fn decide_pending(
     if input.text_override.is_some() && expected_intent != GestureIntent::Approve {
         return Err("MEMORY_UNAUTHORIZED: text_override is only valid for approval".into());
     }
-    let text_override = input.text_override.as_deref().map(validate_manual_text).transpose()?;
+    let text_override = input
+        .text_override
+        .as_deref()
+        .map(validate_manual_text)
+        .transpose()?;
     let (repository, snapshot) = active(root, &input.expected_protocol)?;
-    let proposed = repository.claims.iter()
+    let proposed = repository
+        .claims
+        .iter()
         .find(|item| item.value.revision_id == input.revision_id)
         .ok_or("MEMORY_STALE_BASE: pending revision no longer exists")?;
     if proposed.value.payload_sha256 != input.expected_sha256 {
@@ -965,7 +1226,10 @@ fn delete_pending(root: &Path, input: PendingDecisionInput) -> Result<Value, Str
         return Err("MEMORY_REVISION_HASH_CHANGED: pending payload hash differs".into());
     }
     if proposed.value.workflow.state != WorkflowState::Pending
-        || repository.claims.iter().any(|item| item.value.transition.approves_revision_id.as_deref() == Some(proposed.value.revision_id.as_str()))
+        || repository.claims.iter().any(|item| {
+            item.value.transition.approves_revision_id.as_deref()
+                == Some(proposed.value.revision_id.as_str())
+        })
     {
         return Err("MEMORY_STALE_BASE: pending revision was already decided".into());
     }
@@ -1182,6 +1446,7 @@ fn reset_all(root: &Path, input: ResetAllInput) -> Result<Value, String> {
         &reloaded,
         &SnapshotRequest {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -1406,6 +1671,7 @@ fn context_value(
         repository,
         &SnapshotRequest {
             as_of_valid_time: request.as_of_valid_time.clone(),
+            role: request.role.clone(),
             space: Some(request.space.clone()),
             purpose: Some(request.purpose.clone()),
         },
@@ -1427,7 +1693,12 @@ fn context_value(
         } else if view.conflict.is_some() {
             current_context_heads.extend(view.current_heads.iter().filter_map(|head| {
                 let revision = revisions.get(head.revision_id.as_str())?;
-                (revision.context.spaces.contains(&request.space)
+                ((request.role.is_none() && revision.context.roles.is_empty()
+                    || request
+                        .role
+                        .as_ref()
+                        .is_some_and(|role| revision.context.roles.contains(role)))
+                    && revision.context.spaces.contains(&request.space)
                     && revision.consent.allowed_purposes.contains(&request.purpose))
                 .then_some(head.revision_id.as_str())
             }));
@@ -1449,7 +1720,11 @@ fn context_value(
             || revision.value.consent.scope != "personal-assistant-only"
         {
             "visibility-or-consent"
-        } else if !revision.value.context.spaces.contains(&request.space)
+        } else if (request.role.is_none() && !revision.value.context.roles.is_empty())
+            || request.role.as_ref().is_some_and(|role| {
+                !revision.value.context.roles.contains(role)
+            })
+            || !revision.value.context.spaces.contains(&request.space)
             || !revision
                 .value
                 .consent
@@ -1475,7 +1750,7 @@ fn context_value(
         "selected": selected.claims.iter().map(|claim| json!({
             "claim_id": claim.claim_id, "revision_id": claim.revision_id,
             "payload_sha256": claim.payload_sha256,
-            "reasons": ["current", "space-match", "purpose-match"], "text": claim.text
+            "reasons": ["current", "role-match", "scope-match", "purpose-match"], "text": claim.text
         })).collect::<Vec<_>>(),
         "excluded_summary": excluded,
         "conflicts": selected.conflicts.iter().map(|conflict| json!({
@@ -1503,6 +1778,7 @@ fn context_manifest(root: &Path, mut request: ContextRequest) -> Result<Value, S
         &repository,
         &SnapshotRequest {
             as_of_valid_time: request.as_of_valid_time.clone(),
+            role: request.role.clone(),
             space: Some(request.space.clone()),
             purpose: Some(request.purpose.clone()),
         },
@@ -1575,6 +1851,7 @@ fn context_manifest(root: &Path, mut request: ContextRequest) -> Result<Value, S
         &reloaded,
         &SnapshotRequest {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -1617,6 +1894,7 @@ fn check(root: &Path) -> Result<Value, String> {
         root,
         SnapshotInput {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -1638,6 +1916,7 @@ pub fn propose_pending(
         &repository,
         &SnapshotRequest {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -1739,6 +2018,7 @@ pub fn propose_pending(
         &reloaded,
         &SnapshotRequest {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -1775,6 +2055,1183 @@ fn pending_proposal_matches(revision: &MemoryClaimRevision, input: &PendingPropo
         && revision.dedupe_key == input.dedupe_key
 }
 
+fn validate_context_registry_candidate(
+    candidate: &ContextRegistryCandidate,
+) -> (Vec<String>, Vec<String>) {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let mut role_ids = BTreeMap::<String, &ContextRoleWire>::new();
+    let mut role_names = BTreeMap::<String, String>::new();
+    for role in &candidate.roles {
+        validate_registry_entry(
+            "role",
+            &role.id,
+            &role.label,
+            &role.aliases,
+            &mut role_names,
+            &mut errors,
+        );
+        if role_ids.insert(role.id.clone(), role).is_some() {
+            errors.push(format!("duplicate role id: {}", role.id));
+        }
+        if !role.id.starts_with("role:") {
+            warnings.push(format!(
+                "role id does not use the role: prefix: {}",
+                role.id
+            ));
+        }
+    }
+    let mut scope_ids = BTreeMap::<String, &ContextScopeWire>::new();
+    let mut scope_names = BTreeMap::<String, String>::new();
+    for scope in &candidate.scopes {
+        validate_registry_entry(
+            "scope",
+            &scope.id,
+            &scope.label,
+            &scope.aliases,
+            &mut scope_names,
+            &mut errors,
+        );
+        if scope_ids.insert(scope.id.clone(), scope).is_some() {
+            errors.push(format!("duplicate scope id: {}", scope.id));
+        }
+        if scope.security_domain.trim().is_empty() {
+            errors.push(format!("scope {} requires a security_domain", scope.id));
+        }
+        if scope.kind == ScopeKind::Realm && scope.parent_id.is_some() {
+            errors.push(format!("realm {} cannot have a parent", scope.id));
+        }
+        if scope.kind == ScopeKind::Space && scope.parent_id.is_none() {
+            errors.push(format!(
+                "space {} requires a parent realm or space",
+                scope.id
+            ));
+        }
+        if !scope.id.starts_with("realm:")
+            && !scope.id.starts_with("space:")
+            && scope.id != "global"
+        {
+            warnings.push(format!(
+                "scope id does not use a realm:/space: prefix: {}",
+                scope.id
+            ));
+        }
+    }
+    if !candidate
+        .roles
+        .iter()
+        .any(|entry| entry.status == ContextRegistryEntryStatus::Active)
+    {
+        errors.push("at least one active role is required".into());
+    }
+    if !candidate
+        .scopes
+        .iter()
+        .any(|entry| entry.status == ContextRegistryEntryStatus::Active)
+    {
+        errors.push("at least one active scope is required".into());
+    }
+    for role in &candidate.roles {
+        validate_redirect(
+            "role",
+            &role.id,
+            role.status,
+            role.redirect_to.as_deref(),
+            &role_ids,
+            &mut errors,
+        );
+        if let Some(target) = role.redirect_to.as_deref() {
+            if !role_ids.get(target).is_some_and(|entry| {
+                entry.status == ContextRegistryEntryStatus::Active
+            }) {
+                errors.push(format!(
+                    "archived role {} must redirect to an active role",
+                    role.id
+                ));
+            }
+        }
+    }
+    for scope in &candidate.scopes {
+        validate_redirect(
+            "scope",
+            &scope.id,
+            scope.status,
+            scope.redirect_to.as_deref(),
+            &scope_ids,
+            &mut errors,
+        );
+        if let Some(target) = scope.redirect_to.as_deref() {
+            if !scope_ids.get(target).is_some_and(|entry| {
+                entry.status == ContextRegistryEntryStatus::Active
+                    && entry.kind == scope.kind
+                    && entry.security_domain == scope.security_domain
+            }) {
+                errors.push(format!(
+                    "archived scope {} must redirect to an active scope of the same kind and security domain",
+                    scope.id
+                ));
+            }
+        }
+        if let Some(parent_id) = scope.parent_id.as_deref() {
+            match scope_ids.get(parent_id) {
+                None => errors.push(format!("scope {} has unknown parent {parent_id}", scope.id)),
+                Some(parent) if parent.security_domain != scope.security_domain => {
+                    errors.push(format!(
+                        "scope {} cannot cross security domain from {} to {}",
+                        scope.id, scope.security_domain, parent.security_domain
+                    ))
+                }
+                Some(_) if parent_id == scope.id => {
+                    errors.push(format!("scope {} cannot parent itself", scope.id))
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    for scope in &candidate.scopes {
+        let mut seen = BTreeSet::new();
+        let mut cursor = Some(scope.id.as_str());
+        while let Some(id) = cursor {
+            if !seen.insert(id.to_string()) {
+                errors.push(format!("scope parent cycle contains {id}"));
+                break;
+            }
+            cursor = scope_ids
+                .get(id)
+                .and_then(|entry| entry.parent_id.as_deref());
+        }
+    }
+    errors.sort();
+    errors.dedup();
+    warnings.sort();
+    warnings.dedup();
+    (errors, warnings)
+}
+
+fn validate_registry_entry<'a>(
+    kind: &str,
+    id: &str,
+    label: &str,
+    aliases: &[String],
+    names: &mut BTreeMap<String, String>,
+    errors: &mut Vec<String>,
+) {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:/".contains(&byte))
+    {
+        errors.push(format!("invalid {kind} id: {id}"));
+    }
+    if label.trim().is_empty()
+        || label.len() > 128
+        || label.chars().any(char::is_control)
+    {
+        errors.push(format!("{kind} {id} requires a label of at most 128 bytes"));
+    }
+    for name in std::iter::once(label).chain(aliases.iter().map(String::as_str)) {
+        let normalized = name.trim().to_lowercase();
+        if normalized.is_empty() {
+            errors.push(format!("{kind} {id} contains an empty label or alias"));
+            continue;
+        }
+        if let Some(other) = names.insert(normalized.clone(), id.to_string()) {
+            if other != id {
+                errors.push(format!(
+                    "{kind} label or alias {normalized:?} is shared by {other} and {id}"
+                ));
+            }
+        }
+    }
+}
+
+fn validate_redirect<T>(
+    kind: &str,
+    id: &str,
+    status: ContextRegistryEntryStatus,
+    redirect_to: Option<&str>,
+    entries: &BTreeMap<String, &T>,
+    errors: &mut Vec<String>,
+) {
+    match (status, redirect_to) {
+        (ContextRegistryEntryStatus::Active, Some(_)) => {
+            errors.push(format!("active {kind} {id} cannot redirect"))
+        }
+        (ContextRegistryEntryStatus::Archived, Some(target)) if target == id => {
+            errors.push(format!("archived {kind} {id} cannot redirect to itself"))
+        }
+        (ContextRegistryEntryStatus::Archived, Some(target)) if !entries.contains_key(target) => {
+            errors.push(format!(
+                "archived {kind} {id} redirects to unknown {target}"
+            ))
+        }
+        _ => {}
+    }
+}
+
+fn context_registry_validate(input: ContextRegistryValidateInput) -> Result<Value, String> {
+    let (errors, warnings) = validate_context_registry_candidate(&input.candidate);
+    Ok(json!({
+        "valid": errors.is_empty(),
+        "errors": errors,
+        "warnings": warnings
+    }))
+}
+
+fn role_wire(role: &RoleDefinition) -> ContextRoleWire {
+    ContextRoleWire {
+        id: role.role_id.clone(),
+        label: role.display_name.clone(),
+        description: role.description.clone(),
+        aliases: role.aliases.clone(),
+        status: role.status,
+        guidance: role.agent_use.guidance.clone(),
+        avoid_error: role.agent_use.avoid_error.clone(),
+        redirect_to: role.redirect_to.clone(),
+    }
+}
+
+fn scope_wire(scope: &ScopeDefinition) -> ContextScopeWire {
+    ContextScopeWire {
+        id: scope.scope_id.clone(),
+        label: scope.display_name.clone(),
+        description: scope.description.clone(),
+        aliases: scope.aliases.clone(),
+        status: scope.status,
+        kind: scope.kind,
+        security_domain: scope.domain.clone(),
+        parent_id: scope.parent_scope_id.clone(),
+        redirect_to: scope.redirect_to.clone(),
+    }
+}
+
+fn role_definition(role: ContextRoleWire) -> RoleDefinition {
+    RoleDefinition {
+        role_id: role.id,
+        display_name: role.label,
+        description: role.description,
+        aliases: role.aliases,
+        status: role.status,
+        redirect_to: role.redirect_to,
+        agent_use: AgentUse {
+            guidance: role.guidance,
+            avoid_error: role.avoid_error,
+        },
+    }
+}
+
+fn scope_definition(scope: ContextScopeWire) -> ScopeDefinition {
+    ScopeDefinition {
+        scope_id: scope.id,
+        display_name: scope.label,
+        description: scope.description.clone(),
+        aliases: scope.aliases,
+        status: scope.status,
+        redirect_to: scope.redirect_to,
+        kind: scope.kind,
+        domain: scope.security_domain,
+        parent_scope_id: scope.parent_id,
+        agent_use: AgentUse {
+            guidance: scope.description,
+            avoid_error: String::new(),
+        },
+    }
+}
+
+fn context_registry_head_refs(repository: &RepositorySnapshot) -> Result<Vec<RevisionRef>, String> {
+    let known = repository
+        .context_registries
+        .iter()
+        .map(|item| {
+            (
+                RevisionRef {
+                    revision_id: item.value.revision_id.clone(),
+                    payload_sha256: item.value.payload_sha256.clone(),
+                },
+                item,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut referenced = BTreeSet::new();
+    for item in &repository.context_registries {
+        for parent in &item.value.base_heads {
+            if !known.contains_key(parent) {
+                return Err(format!(
+                    "MEMORY_INVALID_DAG: context registry {} has missing or hash-mismatched parent {}",
+                    item.value.revision_id, parent.revision_id
+                ));
+            }
+            referenced.insert(parent.clone());
+        }
+    }
+    let mut heads = known
+        .keys()
+        .filter(|head| !referenced.contains(*head))
+        .cloned()
+        .collect::<Vec<_>>();
+    heads.sort();
+    Ok(heads)
+}
+
+fn current_context_registry<'a>(
+    repository: &'a RepositorySnapshot,
+    heads: &[RevisionRef],
+) -> Option<&'a Loaded<ContextRegistryRevision>> {
+    (heads.len() == 1).then(|| {
+        repository.context_registries.iter().find(|item| {
+            item.value.revision_id == heads[0].revision_id
+                && item.value.payload_sha256 == heads[0].payload_sha256
+        })
+    })?
+}
+
+fn synthesized_context_registry(
+    repository: &RepositorySnapshot,
+) -> (Vec<ContextRoleWire>, Vec<ContextScopeWire>) {
+    let mut role_ids = BTreeSet::new();
+    let mut scope_ids = BTreeSet::new();
+    for revision in &repository.claims {
+        role_ids.extend(revision.value.context.roles.iter().cloned());
+        scope_ids.extend(revision.value.context.spaces.iter().cloned());
+    }
+    role_ids.insert("role:unclassified".into());
+    if scope_ids.is_empty() {
+        scope_ids.insert("global".into());
+    }
+    let roles = role_ids
+        .into_iter()
+        .map(|id| ContextRoleWire {
+            label: if id == "role:unclassified" {
+                "未分类身份".into()
+            } else {
+                id.clone()
+            },
+            id,
+            description: String::new(),
+            aliases: Vec::new(),
+            status: ContextRegistryEntryStatus::Active,
+            guidance: "仅在当前身份明确匹配时使用本组记忆。".into(),
+            avoid_error: "不要把其他身份下的事实带入当前任务。".into(),
+            redirect_to: None,
+        })
+        .collect();
+    let scopes = scope_ids
+        .into_iter()
+        .map(|id| ContextScopeWire {
+            label: if id == "global" {
+                "全局".into()
+            } else {
+                id.clone()
+            },
+            id,
+            description: String::new(),
+            aliases: Vec::new(),
+            status: ContextRegistryEntryStatus::Active,
+            kind: ScopeKind::Realm,
+            security_domain: "owner-private".into(),
+            parent_id: None,
+            redirect_to: None,
+        })
+        .collect();
+    (roles, scopes)
+}
+
+fn context_registry(root: &Path) -> Result<Value, String> {
+    let repository = require_active(root)?;
+    let snapshot = reduce(
+        &repository,
+        &SnapshotRequest {
+            as_of_valid_time: now(),
+            role: None,
+            space: None,
+            purpose: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let protocol = unique_protocol(&snapshot)?;
+    let heads = context_registry_head_refs(&repository)?;
+    let (roles, scopes) = if let Some(registry) = current_context_registry(&repository, &heads) {
+        (
+            registry.value.roles.iter().map(role_wire).collect(),
+            registry.value.scopes.iter().map(scope_wire).collect(),
+        )
+    } else if heads.is_empty() {
+        synthesized_context_registry(&repository)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    Ok(json!({
+        "protocol": protocol,
+        "registry_heads": heads,
+        "roles": roles,
+        "scopes": scopes,
+        "writable": snapshot.protocol.writable
+            && snapshot.authority.action_allowed
+            && heads.len() <= 1,
+    }))
+}
+
+fn context_registry_replace(
+    root: &Path,
+    input: ContextRegistryReplaceInput,
+) -> Result<Value, String> {
+    validate_request_id(&input.request_id)?;
+    if input.gesture_intent != GestureIntent::ReplaceContextRegistry {
+        return Err(
+            "MEMORY_UNAUTHORIZED: explicit replace-context-registry gesture required".into(),
+        );
+    }
+    let candidate = ContextRegistryCandidate {
+        roles: input.roles,
+        scopes: input.scopes,
+    };
+    let (errors, _) = validate_context_registry_candidate(&candidate);
+    if !errors.is_empty() {
+        return Err(format!(
+            "MEMORY_CONTEXT_REGISTRY_INVALID: {}",
+            errors.join("; ")
+        ));
+    }
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
+    let (repository, snapshot) = active(root, &input.expected_protocol)?;
+    if let Some(existing) = repository
+        .context_registries
+        .iter()
+        .find(|item| item.value.request_id == input.request_id)
+    {
+        let expected_roles = candidate
+            .roles
+            .clone()
+            .into_iter()
+            .map(role_definition)
+            .collect::<Vec<_>>();
+        let expected_scopes = candidate
+            .scopes
+            .clone()
+            .into_iter()
+            .map(scope_definition)
+            .collect::<Vec<_>>();
+        if existing.value.base_heads != input.expected_registry_heads
+            || existing.value.roles != expected_roles
+            || existing.value.scopes != expected_scopes
+        {
+            return Err(
+                "MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another registry replacement"
+                    .into(),
+            );
+        }
+        drop(transaction);
+        return context_registry(root);
+    }
+
+    let actual_heads = context_registry_head_refs(&repository)?;
+    exact_heads(&input.expected_registry_heads, &actual_heads)?;
+    if actual_heads.len() > 1 {
+        return Err(
+            "MEMORY_CONTEXT_REGISTRY_CONFLICT: resolve registry heads before editing".into(),
+        );
+    }
+
+    let controls = controls(&repository, &snapshot, CLAIM_APPROVE)?;
+    let mut causal_context = controls.causal_context.clone();
+    for head in &actual_heads {
+        let loaded = repository
+            .context_registries
+            .iter()
+            .find(|item| {
+                item.value.revision_id == head.revision_id
+                    && item.value.payload_sha256 == head.payload_sha256
+            })
+            .ok_or("MEMORY_CONTEXT_REGISTRY_INVALID: current registry head is missing")?;
+        causal_context.parents.push(RecordRef {
+            record_id: loaded.value.revision_id.clone(),
+            raw_sha256: loaded.raw_sha256.clone(),
+        });
+    }
+    causal_context.parents.sort();
+    causal_context.parents.dedup();
+    let revision = ContextRegistryRevision {
+        schema: "notemd.memory/context-registry-revision/v2".into(),
+        revision_id: uuid_v7(),
+        request_id: input.request_id,
+        base_heads: actual_heads.clone(),
+        causal_context,
+        roles: candidate.roles.into_iter().map(role_definition).collect(),
+        scopes: candidate.scopes.into_iter().map(scope_definition).collect(),
+        decision: ContextRegistryDecision {
+            verdict: Verdict::Approve,
+            actor_id: controls.owner.actor_id,
+            protocol_context: ContextHeads {
+                heads: controls.protocol_heads,
+            },
+            authority_context: AuthorityContext {
+                heads: controls.authority_heads,
+                capability: CLAIM_APPROVE.into(),
+            },
+        },
+        transition: ControlTransition {
+            operation: if actual_heads.is_empty() {
+                ControlOperation::Initialize
+            } else {
+                ControlOperation::Replace
+            },
+        },
+        payload_sha256: String::new(),
+    };
+    let (revision, raw) = canonical_yaml(&revision)?;
+    let mut preflight = repository.clone();
+    preflight.context_registries.push(Loaded {
+        path: PathBuf::from("<memory-v2-registry-preflight>"),
+        raw_sha256: raw_sha256(&raw),
+        value: revision.clone(),
+    });
+    reduce(
+        &preflight,
+        &SnapshotRequest {
+            as_of_valid_time: now(),
+            role: None,
+            space: None,
+            purpose: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let published = transaction
+        .publish_context_registry(revision)
+        .map_err(|error| error.to_string())?;
+    drop(transaction);
+    rebuild_projections(root)?;
+    let mut value = context_registry(root)?;
+    value["revision"] = serde_json::to_value(RevisionRef {
+        revision_id: published.value.revision_id,
+        payload_sha256: published.value.payload_sha256,
+    })
+    .map_err(|error| format!("MEMORY_INVALID_PAYLOAD: {error}"))?;
+    Ok(value)
+}
+
+#[derive(Debug, Clone)]
+struct PreparedReassignment {
+    parent: MemoryClaimRevision,
+    after: ClaimContext,
+    risk_bucket: &'static str,
+    requires_isolated_review: bool,
+}
+
+fn prepare_reassignments(
+    repository: &RepositorySnapshot,
+    snapshot: &MemorySnapshotV2,
+    input: &ReassignmentPreviewInput,
+) -> Result<(Value, Vec<PreparedReassignment>), String> {
+    let protocol = unique_protocol(snapshot)?;
+    if protocol != input.expected_protocol {
+        return Err("MEMORY_STALE_BASE: protocol head changed".into());
+    }
+    let registry_heads = context_registry_head_refs(repository)?;
+    exact_heads(&input.expected_registry_heads, &registry_heads)?;
+    let registry = current_context_registry(repository, &registry_heads).ok_or(
+        "MEMORY_CONTEXT_REGISTRY_REQUIRED: save the Role/Scope registry before reassignment",
+    )?;
+    if input.replacement.role_ids.is_none() && input.replacement.scope_ids.is_none() {
+        return Err("MEMORY_INVALID_REQUEST: at least one replacement field is required".into());
+    }
+    if input
+        .replacement
+        .role_ids
+        .as_ref()
+        .is_some_and(Vec::is_empty)
+        || input
+            .replacement
+            .scope_ids
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+    {
+        return Err("MEMORY_CONTEXT_INCOMPLETE: replacement lists cannot be empty".into());
+    }
+    if !input.selector.all_current
+        && input.selector.claim_ids.is_empty()
+        && input.selector.role_ids.is_empty()
+        && input.selector.scope_ids.is_empty()
+    {
+        return Err("MEMORY_INVALID_REQUEST: selector is empty; use all_current explicitly".into());
+    }
+    if input.selector.all_current
+        && (!input.selector.claim_ids.is_empty()
+            || !input.selector.role_ids.is_empty()
+            || !input.selector.scope_ids.is_empty())
+    {
+        return Err("MEMORY_INVALID_REQUEST: all_current cannot be combined with filters".into());
+    }
+    for role_id in input.replacement.role_ids.iter().flatten() {
+        if !registry.value.roles.iter().any(|role| {
+            role.role_id == *role_id && role.status == ContextRegistryEntryStatus::Active
+        }) {
+            return Err(format!(
+                "MEMORY_CONTEXT_UNKNOWN: unknown or archived role {role_id}"
+            ));
+        }
+    }
+    for role_id in &input.selector.role_ids {
+        if role_id != "role:unclassified"
+            && !registry.value.roles.iter().any(|role| {
+                role.role_id == *role_id && role.status == ContextRegistryEntryStatus::Active
+            })
+        {
+            return Err(format!(
+                "MEMORY_CONTEXT_UNKNOWN: unknown or archived role {role_id}"
+            ));
+        }
+    }
+    for scope_id in input
+        .replacement
+        .scope_ids
+        .iter()
+        .flatten()
+        .chain(input.selector.scope_ids.iter())
+    {
+        if !registry.value.scopes.iter().any(|scope| {
+            scope.scope_id == *scope_id && scope.status == ContextRegistryEntryStatus::Active
+        }) {
+            return Err(format!(
+                "MEMORY_CONTEXT_UNKNOWN: unknown or archived scope {scope_id}"
+            ));
+        }
+    }
+
+    let by_revision = repository
+        .claims
+        .iter()
+        .map(|item| (item.value.revision_id.as_str(), item))
+        .collect::<BTreeMap<_, _>>();
+    let mut prepared = Vec::new();
+    let mut unchanged = 0usize;
+    for view in &snapshot.claims {
+        if view.application_state != ApplicationState::Current
+            || view.current_heads.len() != 1
+            || view.conflict.is_some()
+        {
+            continue;
+        }
+        let parent = by_revision
+            .get(view.current_heads[0].revision_id.as_str())
+            .copied()
+            .ok_or("MEMORY_INVALID_DAG: current claim head is missing")?;
+        let roles = if parent.value.context.roles.is_empty() {
+            vec!["role:unclassified".to_string()]
+        } else {
+            parent.value.context.roles.clone()
+        };
+        let matches = input.selector.all_current
+            || ((input.selector.claim_ids.is_empty()
+                || input.selector.claim_ids.contains(&parent.value.claim_id))
+                && (input.selector.role_ids.is_empty()
+                    || input.selector.role_ids.iter().any(|id| roles.contains(id)))
+                && (input.selector.scope_ids.is_empty()
+                    || input
+                        .selector
+                        .scope_ids
+                        .iter()
+                        .any(|id| parent.value.context.spaces.contains(id))));
+        if !matches {
+            continue;
+        }
+        let mut after = parent.value.context.clone();
+        if let Some(role_ids) = &input.replacement.role_ids {
+            after.roles = role_ids.clone();
+        }
+        if let Some(scope_ids) = &input.replacement.scope_ids {
+            after.spaces = scope_ids.clone();
+        }
+        after.roles.sort();
+        after.roles.dedup();
+        after.spaces.sort();
+        after.spaces.dedup();
+        if after == parent.value.context {
+            unchanged += 1;
+            continue;
+        }
+        let before_domains = parent
+            .value
+            .context
+            .spaces
+            .iter()
+            .filter_map(|id| {
+                registry
+                    .value
+                    .scopes
+                    .iter()
+                    .find(|scope| scope.scope_id == *id)
+                    .map(|scope| scope.domain.as_str())
+            })
+            .collect::<BTreeSet<_>>();
+        let after_domains = after
+            .spaces
+            .iter()
+            .filter_map(|id| {
+                registry
+                    .value
+                    .scopes
+                    .iter()
+                    .find(|scope| scope.scope_id == *id)
+                    .map(|scope| scope.domain.as_str())
+            })
+            .collect::<BTreeSet<_>>();
+        let crosses_security_domain = before_domains != after_domains;
+        let requires_isolated_review =
+            crosses_security_domain || parent.value.risk_class == RiskClass::ActionSensitive;
+        let risk_bucket = if crosses_security_domain {
+            "cross-realm"
+        } else {
+            match parent.value.risk_class {
+                RiskClass::ActionSensitive => "high",
+                RiskClass::Behavioral => "medium",
+                RiskClass::Informational => "low",
+            }
+        };
+        prepared.push(PreparedReassignment {
+            parent: parent.value.clone(),
+            after,
+            risk_bucket,
+            requires_isolated_review,
+        });
+    }
+    prepared.sort_by(|left, right| left.parent.claim_id.cmp(&right.parent.claim_id));
+    let isolated_batch = prepared.len() == 1;
+    let matched = prepared
+        .iter()
+        .map(|item| {
+            let batch_eligible = !item.requires_isolated_review || isolated_batch;
+            let reasons = if item.risk_bucket == "cross-realm" {
+                vec!["selector-match", "unique-current-head", "cross-security-domain"]
+            } else if item.risk_bucket == "high" {
+                vec!["selector-match", "unique-current-head", "action-sensitive"]
+            } else {
+                vec!["selector-match", "unique-current-head", "same-security-domain"]
+            };
+            json!({
+                "claim_id": item.parent.claim_id,
+                "expected_heads": [{
+                    "revision_id": item.parent.revision_id,
+                    "payload_sha256": item.parent.payload_sha256,
+                }],
+                "before": item.parent.context,
+                "after": item.after,
+                "risk_bucket": item.risk_bucket,
+                "batch_eligible": batch_eligible,
+                "reasons": reasons,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut value = json!({
+        "expected_protocol": input.expected_protocol,
+        "expected_registry_heads": input.expected_registry_heads,
+        "selector": input.selector,
+        "replacement": input.replacement,
+        "as_of_valid_time": input.as_of_valid_time,
+        "matched": matched,
+        "summary": {
+            "matched_count": prepared.len(),
+            "unchanged_count": unchanged,
+            "high_risk_count": prepared.iter().filter(|item| item.requires_isolated_review).count(),
+        },
+    });
+    let bytes =
+        serde_json::to_vec(&value).map_err(|error| format!("MEMORY_INVALID_PAYLOAD: {error}"))?;
+    value["preview_sha256"] = Value::String(digest(&bytes));
+    Ok((value, prepared))
+}
+
+fn reassign_preview(root: &Path, input: ReassignmentPreviewInput) -> Result<Value, String> {
+    let repository = require_active(root)?;
+    let snapshot = reduce(
+        &repository,
+        &SnapshotRequest {
+            as_of_valid_time: input.as_of_valid_time.clone(),
+            role: None,
+            space: None,
+            purpose: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    prepare_reassignments(&repository, &snapshot, &input).map(|(value, _)| value)
+}
+
+fn reassign_apply(root: &Path, input: ReassignmentApplyInput) -> Result<Value, String> {
+    validate_request_id(&input.request_id)?;
+    if input.gesture_intent != GestureIntent::ApplyReassignment {
+        return Err("MEMORY_UNAUTHORIZED: explicit apply-reassignment gesture required".into());
+    }
+    let preview_input = ReassignmentPreviewInput {
+        expected_protocol: input.expected_protocol,
+        expected_registry_heads: input.expected_registry_heads,
+        selector: input.selector,
+        replacement: input.replacement,
+        as_of_valid_time: input.as_of_valid_time,
+    };
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
+    let (repository, snapshot) = active(root, &preview_input.expected_protocol)?;
+    if let Some(existing) = repository
+        .operations
+        .iter()
+        .find(|item| item.value.run_id == input.request_id)
+    {
+        let existing_reassignment = existing.value.reassign_context.as_ref();
+        if existing.value.operation_kind != OperationKind::ReassignContext
+            || existing_reassignment
+                .is_none_or(|value| value.preview_sha256 != input.preview_sha256)
+        {
+            return Err(
+                "MEMORY_IDEMPOTENCY_CONFLICT: request_id belongs to another reassignment plan"
+                    .into(),
+            );
+        }
+        let updated = existing_reassignment.unwrap().changes.len();
+        drop(transaction);
+        return Ok(json!({
+            "operation_id": existing.value.operation_id,
+            "updated_claims": updated,
+            "projection_rebuilt": rebuild_projections(root).is_ok(),
+        }));
+    }
+    let (preview, prepared) = prepare_reassignments(&repository, &snapshot, &preview_input)?;
+    if preview["preview_sha256"].as_str() != Some(input.preview_sha256.as_str()) {
+        return Err("MEMORY_STALE_BASE: reassignment preview changed; preview again".into());
+    }
+    if prepared.is_empty() {
+        return Err("MEMORY_NO_CHANGE: reassignment does not change any current claim".into());
+    }
+    if prepared.len() > 1
+        && prepared
+            .iter()
+            .any(|item| item.requires_isolated_review)
+    {
+        return Err(
+            "MEMORY_APPROVAL_REQUIRED: cross-Realm and action-sensitive changes must be applied as isolated one-Claim batches"
+                .into(),
+        );
+    }
+    let registry_head = context_registry_head_refs(&repository)?
+        .into_iter()
+        .next()
+        .ok_or("MEMORY_CONTEXT_REGISTRY_REQUIRED: registry head is missing")?;
+    let registry_loaded = repository
+        .context_registries
+        .iter()
+        .find(|item| {
+            item.value.revision_id == registry_head.revision_id
+                && item.value.payload_sha256 == registry_head.payload_sha256
+        })
+        .ok_or("MEMORY_CONTEXT_REGISTRY_INVALID: registry head is missing")?;
+    let controls = controls(&repository, &snapshot, CLAIM_APPROVE)?;
+    let run_id = input.request_id;
+    let operation_id = format!(
+        "operation:reassign:{}",
+        digest(format!("{run_id}\0{}", input.preview_sha256).as_bytes())
+    );
+    let mut children_with_raw = Vec::with_capacity(prepared.len());
+    let mut changes = Vec::with_capacity(prepared.len());
+    let mut lineage = Vec::with_capacity(prepared.len());
+    let recorded_at = now();
+    for (index, item) in prepared.iter().enumerate() {
+        let parent = repository
+            .claims
+            .iter()
+            .find(|loaded| loaded.value.revision_id == item.parent.revision_id)
+            .ok_or("MEMORY_INVALID_DAG: reassignment parent is missing")?;
+        let base_head = revision_ref(&parent.value);
+        let child_request_id = format!("{run_id}:claim:{index}");
+        let existing_children = repository
+            .claims
+            .iter()
+            .filter(|loaded| loaded.value.request_id == child_request_id)
+            .collect::<Vec<_>>();
+        let child = match existing_children.as_slice() {
+            [] => {
+                let mut child = parent.value.clone();
+                child.revision_id = uuid_v7();
+                child.request_id = child_request_id;
+                child.parents = vec![base_head.clone()];
+                child.causal_context = causal_context(&repository, &snapshot, &[parent]);
+                child.causal_context.parents.push(RecordRef {
+                    record_id: registry_loaded.value.revision_id.clone(),
+                    raw_sha256: registry_loaded.raw_sha256.clone(),
+                });
+                child.causal_context.parents.sort();
+                child.causal_context.parents.dedup();
+                child.recorded_by = host_recorder();
+                child.recorded_at = recorded_at.clone();
+                child.context = item.after.clone();
+                child.workflow.state = WorkflowState::Approved;
+                child.lifecycle.state = LifecycleState::Active;
+                child.decision = Some(decision(
+                    &controls,
+                    approval_kind_for(child.claim_kind),
+                    CLAIM_APPROVE,
+                    recorded_at.clone(),
+                ));
+                child.transition = ClaimTransition {
+                    operation: ClaimOperation::ChangeContextConsent,
+                    approves_revision_id: None,
+                    approves_payload_sha256: None,
+                };
+                child.lineage.produced_by_operation = Some(operation_id.clone());
+                child.lineage.produced_by_run = Some(run_id.clone());
+                child.payload_sha256.clear();
+                let (child, raw) = canonical_yaml(&child)?;
+                children_with_raw.push((child.clone(), raw));
+                child
+            }
+            [existing] => {
+                let child = &existing.value;
+                if child.claim_id != parent.value.claim_id
+                    || child.parents != vec![base_head.clone()]
+                    || child.context != item.after
+                    || child.workflow.state != WorkflowState::Approved
+                    || child.lifecycle.state != LifecycleState::Active
+                    || child.transition.operation != ClaimOperation::ChangeContextConsent
+                    || child.lineage.produced_by_operation.as_deref()
+                        != Some(operation_id.as_str())
+                    || child.lineage.produced_by_run.as_deref() != Some(run_id.as_str())
+                {
+                    return Err(
+                        "MEMORY_IDEMPOTENCY_CONFLICT: partial reassignment child has different semantics"
+                            .into(),
+                    );
+                }
+                child.clone()
+            }
+            _ => {
+                return Err(
+                    "MEMORY_IDEMPOTENCY_CONFLICT: duplicate partial reassignment children".into(),
+                )
+            }
+        };
+        let result = OperationRevisionRef {
+            claim_id: child.claim_id.clone(),
+            revision_id: child.revision_id.clone(),
+            payload_sha256: child.payload_sha256.clone(),
+        };
+        changes.push(ContextReassignment {
+            claim_id: child.claim_id.clone(),
+            base_head: base_head.clone(),
+            result,
+            from_context: parent.value.context.clone(),
+            to_context: child.context.clone(),
+        });
+        lineage.push(LineageRef {
+            claim_id: parent.value.claim_id.clone(),
+            revision_id: parent.value.revision_id.clone(),
+            payload_sha256: parent.value.payload_sha256.clone(),
+        });
+    }
+    let mut operation_causal = controls.causal_context.clone();
+    operation_causal.parents.push(RecordRef {
+        record_id: registry_loaded.value.revision_id.clone(),
+        raw_sha256: registry_loaded.raw_sha256.clone(),
+    });
+    for item in &prepared {
+        let parent = repository
+            .claims
+            .iter()
+            .find(|loaded| loaded.value.revision_id == item.parent.revision_id)
+            .ok_or("MEMORY_INVALID_DAG: reassignment parent is missing")?;
+        operation_causal.parents.push(RecordRef {
+            record_id: parent.value.revision_id.clone(),
+            raw_sha256: parent.raw_sha256.clone(),
+        });
+    }
+    operation_causal.parents.sort();
+    operation_causal.parents.dedup();
+    let operation = MemoryOperation {
+        schema: "notemd.memory/operation/v2".into(),
+        operation_id: operation_id.clone(),
+        operation_kind: OperationKind::ReassignContext,
+        run_id,
+        causal_context: operation_causal,
+        merge_inputs: MergeInputs::default(),
+        result: OperationRevisionRef::default(),
+        effects: Vec::new(),
+        reassign_context: Some(ReassignContextInputs {
+            registry_head,
+            preview_sha256: input.preview_sha256,
+            changes,
+        }),
+        lineage,
+        decision: OperationDecision {
+            verdict: Verdict::Approve,
+            actor_id: controls.owner.actor_id,
+            protocol_context: ContextHeads {
+                heads: controls.protocol_heads,
+            },
+            authority_context: AuthorityContext {
+                heads: controls.authority_heads,
+                capability: CLAIM_APPROVE.into(),
+            },
+        },
+        state: OperationState::Complete,
+        payload_sha256: String::new(),
+    };
+    let (operation, operation_raw) = canonical_yaml(&operation)?;
+    let mut candidate = repository.clone();
+    for (child, raw) in &children_with_raw {
+        candidate.claims.push(Loaded {
+            path: PathBuf::from("<memory-v2-reassign-child-preflight>"),
+            raw_sha256: raw_sha256(raw),
+            value: child.clone(),
+        });
+    }
+    candidate.operations.push(Loaded {
+        path: PathBuf::from("<memory-v2-reassign-operation-preflight>"),
+        raw_sha256: raw_sha256(&operation_raw),
+        value: operation.clone(),
+    });
+    reduce(
+        &candidate,
+        &SnapshotRequest {
+            as_of_valid_time: now(),
+            role: None,
+            space: None,
+            purpose: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    for (child, _) in children_with_raw {
+        transaction
+            .publish_claim(child)
+            .map_err(|error| error.to_string())?;
+    }
+    transaction
+        .publish_operation(operation)
+        .map_err(|error| error.to_string())?;
+    drop(transaction);
+    let projection_rebuilt = rebuild_projections(root).is_ok();
+    Ok(json!({
+        "operation_id": operation_id,
+        "updated_claims": prepared.len(),
+        "projection_rebuilt": projection_rebuilt,
+    }))
+}
+
+fn reassign_propose(root: &Path, input: ReassignmentProposeInput) -> Result<Value, String> {
+    validate_request_id(&input.request_id)?;
+    let recorded_by = input.recorded_by.trim();
+    if recorded_by.is_empty()
+        || recorded_by.len() > 256
+        || recorded_by.starts_with("human:")
+        || recorded_by.starts_with("host:")
+    {
+        return Err(
+            "MEMORY_UNAUTHORIZED: recorded_by must identify a non-human Agent producer".into(),
+        );
+    }
+    let preview_input = ReassignmentPreviewInput {
+        expected_protocol: input.expected_protocol,
+        expected_registry_heads: input.expected_registry_heads,
+        selector: input.selector,
+        replacement: input.replacement,
+        as_of_valid_time: input.as_of_valid_time,
+    };
+    let writer = RepositoryWriter::new(root);
+    let transaction = writer.begin().map_err(|error| error.to_string())?;
+    let (repository, snapshot) = active(root, &preview_input.expected_protocol)?;
+    let (preview, prepared) = prepare_reassignments(&repository, &snapshot, &preview_input)?;
+    if prepared.is_empty() {
+        return Err("MEMORY_NO_CHANGE: reassignment proposal changes no current claim".into());
+    }
+    let expected_request_ids = (0..prepared.len())
+        .map(|index| format!("{}:claim:{index}", input.request_id))
+        .collect::<Vec<_>>();
+    let existing = repository
+        .claims
+        .iter()
+        .filter(|item| expected_request_ids.contains(&item.value.request_id))
+        .collect::<Vec<_>>();
+    if !existing.is_empty() {
+        if existing.len() != prepared.len()
+            || existing.iter().any(|item| {
+                item.value.workflow.state != WorkflowState::Pending
+                    || prepared.iter().all(|prepared| {
+                        prepared.parent.claim_id != item.value.claim_id
+                            || prepared.after != item.value.context
+                    })
+            })
+        {
+            return Err(
+                "MEMORY_IDEMPOTENCY_CONFLICT: request_id was reused for another reassignment proposal"
+                    .into(),
+            );
+        }
+        return Ok(json!({
+            "proposed_claims": existing.len(),
+            "revision_ids": existing.iter().map(|item| item.value.revision_id.clone()).collect::<Vec<_>>(),
+            "preview_sha256": preview["preview_sha256"],
+        }));
+    }
+    let registry_head = context_registry_head_refs(&repository)?
+        .into_iter()
+        .next()
+        .ok_or("MEMORY_CONTEXT_REGISTRY_REQUIRED: registry head is missing")?;
+    let registry_loaded = repository
+        .context_registries
+        .iter()
+        .find(|item| item.value.revision_id == registry_head.revision_id)
+        .ok_or("MEMORY_CONTEXT_REGISTRY_INVALID: registry head is missing")?;
+    let recorded_at = now();
+    let mut children = Vec::with_capacity(prepared.len());
+    for (index, item) in prepared.iter().enumerate() {
+        let parent = repository
+            .claims
+            .iter()
+            .find(|loaded| loaded.value.revision_id == item.parent.revision_id)
+            .ok_or("MEMORY_INVALID_DAG: reassignment parent is missing")?;
+        let mut child = parent.value.clone();
+        child.revision_id = uuid_v7();
+        child.request_id = expected_request_ids[index].clone();
+        child.parents = vec![revision_ref(&parent.value)];
+        child.causal_context = causal_context(&repository, &snapshot, &[parent]);
+        child.causal_context.parents.push(RecordRef {
+            record_id: registry_loaded.value.revision_id.clone(),
+            raw_sha256: registry_loaded.raw_sha256.clone(),
+        });
+        child.causal_context.parents.sort();
+        child.causal_context.parents.dedup();
+        child.recorded_by = Recorder {
+            kind: "agent".into(),
+            id: recorded_by.into(),
+            device_id: "device:notemd-cli".into(),
+        };
+        child.recorded_at = recorded_at.clone();
+        child.context = item.after.clone();
+        child.workflow.state = WorkflowState::Pending;
+        child.lifecycle.state = LifecycleState::Active;
+        child.decision = None;
+        child.transition = ClaimTransition {
+            operation: ClaimOperation::ProposeReplace,
+            approves_revision_id: None,
+            approves_payload_sha256: None,
+        };
+        child.lineage.produced_by_operation = None;
+        child.lineage.produced_by_run = Some(input.request_id.clone());
+        child.payload_sha256.clear();
+        children.push(child);
+    }
+    let children = prevalidate_claim_batch(&repository, children)?;
+    let mut revision_ids = Vec::with_capacity(children.len());
+    for child in children {
+        let published = transaction
+            .publish_claim(child)
+            .map_err(|error| error.to_string())?;
+        revision_ids.push(published.value.revision_id);
+    }
+    Ok(json!({
+        "proposed_claims": revision_ids.len(),
+        "revision_ids": revision_ids,
+        "preview_sha256": preview["preview_sha256"],
+    }))
+}
+
 fn active(
     root: &Path,
     expected_protocol: &RevisionRef,
@@ -1784,6 +3241,7 @@ fn active(
         &repository,
         &SnapshotRequest {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -1917,6 +3375,7 @@ fn publish_and_verify(
         &repository,
         &SnapshotRequest {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -1941,6 +3400,7 @@ fn prevalidate_claim(
         &candidate,
         &SnapshotRequest {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -1968,6 +3428,7 @@ fn prevalidate_claim_batch(
         &candidate,
         &SnapshotRequest {
             as_of_valid_time: now(),
+            role: None,
             space: None,
             purpose: None,
         },
@@ -2331,6 +3792,7 @@ mod tests {
             &repository,
             &SnapshotRequest {
                 as_of_valid_time: now(),
+                role: None,
                 space: None,
                 purpose: None,
             },
@@ -2349,6 +3811,31 @@ mod tests {
             "context": {"spaces": ["global"], "applies_when": [], "excludes_when": []},
             "consent": {"scope": "personal-assistant-only", "allowed_purposes": ["planning"], "external_provider_policy": "deny"},
             "agent_use": {"guidance": "先给结论", "avoid_error": "不要扩张为外部行动授权"}
+        })
+    }
+
+    fn registry_params(protocol: &RevisionRef, request_id: &str) -> Value {
+        json!({
+            "request_id": request_id,
+            "expected_protocol": protocol,
+            "expected_registry_heads": [],
+            "gesture_intent": "replace-context-registry",
+            "roles": [
+                {
+                    "id": "role:unclassified", "label": "未分类身份", "description": "兼容旧事实",
+                    "aliases": [], "status": "active", "guidance": "仅作兜底", "avoid_error": "不要跨身份"
+                },
+                {
+                    "id": "role:developer", "label": "开发", "description": "软件开发身份",
+                    "aliases": ["工程师"], "status": "active", "guidance": "使用技术上下文", "avoid_error": "不要带入家庭事实"
+                }
+            ],
+            "scopes": [
+                {
+                    "id": "global", "label": "全局", "description": "私有默认场景", "aliases": [],
+                    "status": "active", "kind": "realm", "security_domain": "owner-private"
+                }
+            ]
         })
     }
 
@@ -2398,6 +3885,7 @@ mod tests {
             polarity: Polarity::Positive,
             sensitivity: Sensitivity::Normal,
             context: ClaimContext {
+                roles: vec![],
                 spaces: vec!["global".into()],
                 applies_when: vec![],
                 excludes_when: vec![],
@@ -2449,30 +3937,22 @@ mod tests {
             .unwrap()
             .starts_with("human:"));
         assert!(dir.path().join(".notemd/memory/bootstrap.yaml").is_file());
-        assert_eq!(
-            fs::read_to_string(dir.path().join("USER.md")).unwrap(),
-            "# USER\n"
-        );
-        assert_eq!(
-            fs::read_to_string(dir.path().join("MEMORY.md")).unwrap(),
-            "# MEMORY\n"
-        );
+        assert!(!dir.path().join("USER.md").exists());
+        assert!(fs::read_to_string(dir.path().join("MEMORY.md"))
+            .unwrap()
+            .starts_with("# MEMORY\n\n> Agent 使用规则："));
 
-        fs::remove_file(dir.path().join("USER.md")).unwrap();
         fs::remove_file(dir.path().join("MEMORY.md")).unwrap();
         let repeated = dispatch(dir.path(), "host.memory.v2.initialize", &json!({})).unwrap();
         assert_eq!(repeated["mode"], "v2");
         let repository = V2Repository::new(dir.path()).load().unwrap();
         assert_eq!(repository.protocols.len(), 1);
         assert_eq!(repository.authorities.len(), 1);
-        assert_eq!(
-            fs::read_to_string(dir.path().join("USER.md")).unwrap(),
-            "# USER\n"
-        );
-        assert_eq!(
-            fs::read_to_string(dir.path().join("MEMORY.md")).unwrap(),
-            "# MEMORY\n"
-        );
+        assert_eq!(repository.context_registries.len(), 1);
+        assert!(!dir.path().join("USER.md").exists());
+        assert!(fs::read_to_string(dir.path().join("MEMORY.md"))
+            .unwrap()
+            .starts_with("# MEMORY\n\n> Agent 使用规则："));
     }
 
     #[test]
@@ -2536,10 +4016,235 @@ mod tests {
             claim.decision.as_ref().unwrap().approval_kind,
             ApprovalKind::SelfRepresentation
         );
+        let projection = fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
+        assert!(projection.contains("## Scope · global"));
+        assert!(projection.contains("### Role · role:unclassified"));
+        assert!(projection.contains("#### preferences"));
+        assert!(projection.contains("- 回答先给出结论。"));
+        assert!(!dir.path().join("USER.md").exists());
+    }
+
+    #[test]
+    fn owner_can_replace_registry_and_atomically_reassign_claim_context() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        let registry = dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &registry_params(&protocol, "memory-ui/registry/test"),
+        )
+        .unwrap();
+        assert_eq!(registry["writable"], true);
+        assert_eq!(registry["registry_heads"].as_array().unwrap().len(), 1);
+        let created = dispatch(dir.path(), "host.memory.v2.add", &add_params(&protocol)).unwrap();
+        let preview_input = json!({
+            "expected_protocol": protocol,
+            "expected_registry_heads": registry["registry_heads"],
+            "selector": {"claim_ids": [created["claim_id"]]},
+            "replacement": {"role_ids": ["role:developer"]},
+            "as_of_valid_time": now(),
+        });
+        let preview = dispatch(
+            dir.path(),
+            "host.memory.v2.reassignPreview",
+            &preview_input,
+        )
+        .unwrap();
+        assert_eq!(preview["summary"]["matched_count"], 1);
+        let mut apply = preview_input;
+        apply["request_id"] = json!("memory-ui/reassign/test");
+        apply["preview_sha256"] = preview["preview_sha256"].clone();
+        apply["gesture_intent"] = json!("apply-reassignment");
+        let receipt = dispatch(dir.path(), "host.memory.v2.reassignApply", &apply).unwrap();
+        assert_eq!(receipt["updated_claims"], 1);
+        let retried = dispatch(dir.path(), "host.memory.v2.reassignApply", &apply).unwrap();
+        assert_eq!(retried["operation_id"], receipt["operation_id"]);
+        let mut reused_request = apply.clone();
+        reused_request["preview_sha256"] = json!("different-plan");
+        let error = dispatch(
+            dir.path(),
+            "host.memory.v2.reassignApply",
+            &reused_request,
+        )
+        .unwrap_err();
+        assert!(error.contains("MEMORY_IDEMPOTENCY_CONFLICT"));
+
+        let interrupted = V2Repository::new(dir.path()).load().unwrap();
+        let operation_path = interrupted.operations[0].path.clone();
+        let claim_revision_count = interrupted.claims.len();
+        fs::remove_file(operation_path).unwrap();
+        let resumed = dispatch(dir.path(), "host.memory.v2.reassignApply", &apply).unwrap();
+        assert_eq!(resumed["operation_id"], receipt["operation_id"]);
+        let recovered = V2Repository::new(dir.path()).load().unwrap();
+        assert_eq!(recovered.operations.len(), 1);
+        assert_eq!(recovered.claims.len(), claim_revision_count);
+
+        let repository = V2Repository::new(dir.path()).load().unwrap();
+        assert_eq!(repository.operations.len(), 1);
+        let reduced = reduce(
+            &repository,
+            &SnapshotRequest {
+                as_of_valid_time: now(),
+                role: Some("role:developer".into()),
+                space: Some("global".into()),
+                purpose: Some("planning".into()),
+            },
+        )
+        .unwrap();
+        let current = reduced
+            .claims
+            .iter()
+            .find(|claim| claim.claim_id == created["claim_id"])
+            .unwrap();
+        assert!(current.context_eligible);
+        let projection = fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
+        assert!(projection.contains("### Role · 开发"));
+        assert!(projection.contains("- 回答先给出结论。"));
+
+        let error = dispatch(dir.path(), "host.memory.v2.reassignApply", &json!({
+            "request_id": "memory-ui/reassign/stale",
+            "expected_protocol": protocol,
+            "expected_registry_heads": registry["registry_heads"],
+            "selector": {"claim_ids": [created["claim_id"]]},
+            "replacement": {"role_ids": ["role:unclassified"]},
+            "as_of_valid_time": now(),
+            "preview_sha256": "stale",
+            "gesture_intent": "apply-reassignment"
+        })).unwrap_err();
+        assert!(error.contains("MEMORY_STALE_BASE"));
+
+        let proposal = dispatch(dir.path(), "host.memory.v2.reassignPropose", &json!({
+            "request_id": "codex/reassign/proposal",
+            "expected_protocol": protocol,
+            "expected_registry_heads": registry["registry_heads"],
+            "selector": {"claim_ids": [created["claim_id"]]},
+            "replacement": {"role_ids": ["role:unclassified"]},
+            "as_of_valid_time": now(),
+            "recorded_by": "codex/gpt-5"
+        }))
+        .unwrap();
+        assert_eq!(proposal["proposed_claims"], 1);
+        let repository = V2Repository::new(dir.path()).load().unwrap();
+        let pending = repository
+            .claims
+            .iter()
+            .find(|item| item.value.workflow.state == WorkflowState::Pending)
+            .unwrap();
+        assert_eq!(pending.value.context.roles, vec!["role:unclassified"]);
+        let reduced = reduce(
+            &repository,
+            &SnapshotRequest {
+                as_of_valid_time: now(),
+                role: Some("role:developer".into()),
+                space: Some("global".into()),
+                purpose: Some("planning".into()),
+            },
+        )
+        .unwrap();
+        assert!(reduced
+            .claims
+            .iter()
+            .any(|claim| claim.claim_id == created["claim_id"] && claim.context_eligible));
+    }
+
+    #[test]
+    fn owner_can_archive_and_restore_the_same_stable_registry_id() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        let initial = dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &registry_params(&protocol, "memory-ui/registry/initial"),
+        )
+        .unwrap();
+
+        let mut archive = registry_params(&protocol, "memory-ui/registry/archive");
+        archive["expected_registry_heads"] = initial["registry_heads"].clone();
+        archive["roles"][1]["status"] = json!("archived");
+        let archived = dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &archive,
+        )
+        .unwrap();
         assert_eq!(
-            fs::read_to_string(dir.path().join("USER.md")).unwrap(),
-            "# USER\n\n## preferences\n\n- 回答先给出结论。\n"
+            archived["roles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|role| role["id"] == "role:developer")
+                .unwrap()["status"],
+            "archived"
         );
+
+        let mut restore = registry_params(&protocol, "memory-ui/registry/restore");
+        restore["expected_registry_heads"] = archived["registry_heads"].clone();
+        let restored = dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &restore,
+        )
+        .unwrap();
+        assert_eq!(
+            restored["roles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|role| role["id"] == "role:developer")
+                .unwrap()["status"],
+            "active"
+        );
+    }
+
+    #[test]
+    fn cross_realm_reassignments_require_isolated_one_claim_batches() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        let mut registry_input = registry_params(&protocol, "memory-ui/registry/realms");
+        registry_input["scopes"].as_array_mut().unwrap().push(json!({
+            "id": "realm:client/acme", "label": "Acme", "description": "客户隔离域",
+            "aliases": [], "status": "active", "kind": "realm", "security_domain": "client/acme"
+        }));
+        let registry = dispatch(
+            dir.path(),
+            "host.memory.v2.contextRegistryReplace",
+            &registry_input,
+        )
+        .unwrap();
+        let first = dispatch(dir.path(), "host.memory.v2.add", &add_params(&protocol)).unwrap();
+        let mut second_input = add_params(&protocol);
+        second_input["request_id"] = json!("memory-ui/add/second-realm-test");
+        second_input["text"] = json!("第二条用于隔离批次测试的主张。");
+        let second = dispatch(dir.path(), "host.memory.v2.add", &second_input).unwrap();
+        let preview_input = json!({
+            "expected_protocol": protocol,
+            "expected_registry_heads": registry["registry_heads"],
+            "selector": {"claim_ids": [first["claim_id"], second["claim_id"]]},
+            "replacement": {"scope_ids": ["realm:client/acme"]},
+            "as_of_valid_time": now(),
+        });
+        let preview = dispatch(
+            dir.path(),
+            "host.memory.v2.reassignPreview",
+            &preview_input,
+        )
+        .unwrap();
+        assert_eq!(preview["summary"]["high_risk_count"], 2);
+        assert!(preview["matched"].as_array().unwrap().iter().all(|item| {
+            item["risk_bucket"] == "cross-realm" && item["batch_eligible"] == false
+        }));
+
+        let mut apply = preview_input;
+        apply["request_id"] = json!("memory-ui/reassign/cross-realm-batch");
+        apply["preview_sha256"] = preview["preview_sha256"].clone();
+        apply["gesture_intent"] = json!("apply-reassignment");
+        let error = dispatch(dir.path(), "host.memory.v2.reassignApply", &apply).unwrap_err();
+        assert!(error.contains("MEMORY_APPROVAL_REQUIRED"), "{error}");
+        assert!(V2Repository::new(dir.path())
+            .load()
+            .unwrap()
+            .operations
+            .is_empty());
     }
 
     #[test]
@@ -2598,16 +4303,27 @@ mod tests {
 
         let repository = V2Repository::new(dir.path()).load().unwrap();
         assert_eq!(repository.claims.len(), 2);
-        let edited = repository.claims.iter()
-            .find(|item| item.value.revision_id == receipt["revision_id"]).unwrap();
+        let edited = repository
+            .claims
+            .iter()
+            .find(|item| item.value.revision_id == receipt["revision_id"])
+            .unwrap();
         assert_eq!(edited.value.transition.operation, ClaimOperation::Replace);
         assert_eq!(edited.value.parents.len(), 1);
         assert_eq!(edited.value.parents[0].revision_id, created["revision_id"]);
         assert_eq!(edited.value.text, "我是产品设计师，也负责用户研究。");
-        assert!(matches!(&edited.value.kind_data, KindData::Identity(data) if data.value == edited.value.text));
+        assert!(
+            matches!(&edited.value.kind_data, KindData::Identity(data) if data.value == edited.value.text)
+        );
         assert_eq!(edited.value.recorded_by.id, "notemd.memory-ui");
-        assert_eq!(edited.value.decision.as_ref().unwrap().actor_id, "human:test");
-        assert_eq!(fs::read_to_string(dir.path().join("USER.md")).unwrap(), "# USER\n\n## identity\n\n- 我是产品设计师，也负责用户研究。\n");
+        assert_eq!(
+            edited.value.decision.as_ref().unwrap().actor_id,
+            "human:test"
+        );
+        let projection = fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
+        assert!(projection.contains("#### identity"));
+        assert!(projection.contains("- 我是产品设计师，也负责用户研究。"));
+        assert!(!dir.path().join("USER.md").exists());
 
         let mut reused = replace.clone();
         reused["text"] = json!("同一个 request_id 的不同文本。");
@@ -2628,7 +4344,10 @@ mod tests {
             "gesture_intent": "replace", "text": "回答先给出结论。"
         })).unwrap_err();
         assert!(error.contains("MEMORY_NO_CHANGE"), "{error}");
-        assert_eq!(V2Repository::new(dir.path()).load().unwrap().claims.len(), before);
+        assert_eq!(
+            V2Repository::new(dir.path()).load().unwrap().claims.len(),
+            before
+        );
     }
 
     #[test]
@@ -2663,6 +4382,7 @@ mod tests {
                 &repository,
                 &SnapshotRequest {
                     as_of_valid_time: now(),
+                    role: None,
                     space: None,
                     purpose: None,
                 },
@@ -2670,9 +4390,10 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+        assert!(!root.join("USER.md").exists());
         assert_eq!(
-            fs::read_to_string(root.join("USER.md")).unwrap(),
-            expected.user
+            fs::read_to_string(root.join("MEMORY.md")).unwrap(),
+            expected.memory
         );
     }
 
@@ -2704,10 +4425,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(receipt["effective_status"], "active");
-        assert_eq!(
-            fs::read_to_string(dir.path().join("USER.md")).unwrap(),
-            "# USER\n\n## preferences\n\n- 用户偏好先给出结论。\n"
-        );
+        assert!(fs::read_to_string(dir.path().join("MEMORY.md"))
+            .unwrap()
+            .contains("- 用户偏好先给出结论。"));
+        assert!(!dir.path().join("USER.md").exists());
     }
 
     #[test]
@@ -2720,7 +4441,12 @@ mod tests {
         proposal.claim_id = Some(created["claim_id"].as_str().unwrap().into());
         proposal.text = "用户偏好每次都先给结论。".into();
         let proposed = propose_pending(dir.path(), proposal).unwrap();
-        let before = dispatch(dir.path(), "host.memory.v2.snapshot", &json!({"as_of_valid_time": now()})).unwrap();
+        let before = dispatch(
+            dir.path(),
+            "host.memory.v2.snapshot",
+            &json!({"as_of_valid_time": now()}),
+        )
+        .unwrap();
         assert_eq!(before["pending"][0]["base_text"], "回答先给出结论。");
 
         let approve = json!({
@@ -2734,12 +4460,21 @@ mod tests {
         assert_eq!(receipt["revision_id"], retried["revision_id"]);
         let repository = V2Repository::new(dir.path()).load().unwrap();
         assert_eq!(repository.claims.len(), 3);
-        let approved = repository.claims.iter()
-            .find(|item| item.value.revision_id == receipt["revision_id"]).unwrap();
+        let approved = repository
+            .claims
+            .iter()
+            .find(|item| item.value.revision_id == receipt["revision_id"])
+            .unwrap();
         assert_eq!(approved.value.transition.operation, ClaimOperation::Approve);
-        assert_eq!(approved.value.transition.approves_revision_id.as_deref(), Some(proposed.revision_id.as_str()));
+        assert_eq!(
+            approved.value.transition.approves_revision_id.as_deref(),
+            Some(proposed.revision_id.as_str())
+        );
         assert_eq!(approved.value.text, "用户偏好通常先给出准确结论。");
-        assert_eq!(fs::read_to_string(dir.path().join("USER.md")).unwrap(), "# USER\n\n## preferences\n\n- 用户偏好通常先给出准确结论。\n");
+        assert!(fs::read_to_string(dir.path().join("MEMORY.md"))
+            .unwrap()
+            .contains("- 用户偏好通常先给出准确结论。"));
+        assert!(!dir.path().join("USER.md").exists());
 
         let mut reused = approve;
         reused["text_override"] = json!("同一个 request_id 的其他修订。");
@@ -2759,14 +4494,25 @@ mod tests {
         let proposed = propose_pending(dir.path(), proposal).unwrap();
         let before = V2Repository::new(dir.path()).load().unwrap().claims.len();
 
-        let error = dispatch(dir.path(), "host.memory.v2.approve", &json!({
-            "request_id": "memory-ui/approve/edit-revoke", "expected_protocol": protocol,
-            "expected_heads": proposed.parents, "revision_id": proposed.revision_id,
-            "expected_sha256": proposed.payload_sha256, "gesture_intent": "approve",
-            "text_override": "不允许借编辑改变撤销提案。"
-        })).unwrap_err();
-        assert!(error.contains("lifecycle proposals cannot override text"), "{error}");
-        assert_eq!(V2Repository::new(dir.path()).load().unwrap().claims.len(), before);
+        let error = dispatch(
+            dir.path(),
+            "host.memory.v2.approve",
+            &json!({
+                "request_id": "memory-ui/approve/edit-revoke", "expected_protocol": protocol,
+                "expected_heads": proposed.parents, "revision_id": proposed.revision_id,
+                "expected_sha256": proposed.payload_sha256, "gesture_intent": "approve",
+                "text_override": "不允许借编辑改变撤销提案。"
+            }),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("lifecycle proposals cannot override text"),
+            "{error}"
+        );
+        assert_eq!(
+            V2Repository::new(dir.path()).load().unwrap().claims.len(),
+            before
+        );
     }
 
     #[test]
@@ -2825,14 +4571,10 @@ mod tests {
         assert_eq!(snapshot["pending"].as_array().unwrap().len(), 0);
         assert_eq!(snapshot["conflicts"].as_array().unwrap().len(), 0);
         assert!(snapshot["history"].as_array().unwrap().len() >= 4);
-        assert_eq!(
-            fs::read_to_string(dir.path().join("USER.md")).unwrap(),
-            "# USER\n"
-        );
-        assert_eq!(
-            fs::read_to_string(dir.path().join("MEMORY.md")).unwrap(),
-            "# MEMORY\n"
-        );
+        assert!(!dir.path().join("USER.md").exists());
+        let projection = fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
+        assert!(projection.starts_with("# MEMORY\n\n> Agent 使用规则："));
+        assert!(!projection.contains("回答先给出结论。"));
         let state: Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
         assert_eq!(state["schema"], "notemd.memory/inference-state/v2");
         assert_eq!(state["complete"], false);
@@ -2953,6 +4695,7 @@ mod tests {
             &repository,
             &SnapshotRequest {
                 as_of_valid_time: now(),
+                role: None,
                 space: None,
                 purpose: None,
             },
@@ -3259,6 +5002,7 @@ mod tests {
             &repository,
             &SnapshotRequest {
                 as_of_valid_time: now(),
+                role: None,
                 space: None,
                 purpose: None,
             },
@@ -3330,6 +5074,7 @@ mod tests {
             &repository,
             &SnapshotRequest {
                 as_of_valid_time: now(),
+                role: None,
                 space: None,
                 purpose: None,
             },
@@ -3415,14 +5160,14 @@ mod tests {
 
         let head_before =
             crate::vault_sync::git_ops::run_git(&local, &["rev-parse", "HEAD"]).unwrap();
-        let user_before = fs::read(local.join("USER.md")).unwrap();
+        let memory_before = fs::read(local.join("MEMORY.md")).unwrap();
         let error = crate::vault_sync::git_ops::sync(&local, "origin", "main").unwrap_err();
         assert!(error.contains("MEMORY_IDEMPOTENCY_CONFLICT"), "{error}");
         assert_eq!(
             crate::vault_sync::git_ops::run_git(&local, &["rev-parse", "HEAD"]).unwrap(),
             head_before
         );
-        assert_eq!(fs::read(local.join("USER.md")).unwrap(), user_before);
+        assert_eq!(fs::read(local.join("MEMORY.md")).unwrap(), memory_before);
         assert!(
             crate::vault_sync::git_ops::run_git(&local, &["status", "--porcelain"])
                 .unwrap()
@@ -3505,6 +5250,7 @@ mod tests {
             &repository,
             &SnapshotRequest {
                 as_of_valid_time: now(),
+                role: None,
                 space: None,
                 purpose: None,
             },
@@ -3518,9 +5264,9 @@ mod tests {
         assert!(claim.conflict.is_some());
         assert_eq!(claim.current_heads.len(), 2);
         assert!(!claim.projection_eligible);
-        assert_eq!(
-            fs::read_to_string(third.join("USER.md")).unwrap(),
-            "# USER\n"
-        );
+        assert!(!third.join("USER.md").exists());
+        assert!(!fs::read_to_string(third.join("MEMORY.md"))
+            .unwrap()
+            .contains(&base.text));
     }
 }

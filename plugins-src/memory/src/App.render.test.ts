@@ -51,6 +51,22 @@ async function render(request: ReturnType<typeof rpcMock>) {
 }
 
 describe('Memory Protocol v2 app', () => {
+  it('opens the unified Role and Scope manager from the header', async () => {
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.snapshot') return baseSnapshot()
+      if (method === 'host.memory.v2.contextRegistry') return {
+        protocol: baseSnapshot().protocol, registry_heads: [], roles: [], scopes: [], writable: true,
+      }
+      return {}
+    })
+    await render(request)
+    button('身份与场景…')!.click(); await settle()
+    expect(document.querySelector('[role=dialog][aria-labelledby=role-scope-title]')).toBeTruthy()
+    expect(document.body.textContent).toContain('Roles')
+    expect(document.body.textContent).toContain('Scopes')
+    expect(document.body.textContent).toContain('重新分配')
+  })
+
   it('copies the cross-assistant import prompt to the clipboard', async () => {
     const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? baseSnapshot() : {})
     await render(request)
@@ -180,6 +196,13 @@ describe('Memory Protocol v2 app', () => {
   it('saves a human-authored claim in one add call and keeps the draft after failure', async () => {
     const request = rpcMock(async (method) => {
       if (method === 'host.memory.v2.snapshot') return baseSnapshot()
+      if (method === 'host.memory.v2.contextRegistry') return {
+        protocol: baseSnapshot().protocol,
+        registry_heads: [{ revision_id: 'registry-1', payload_sha256: 'registry-sha' }],
+        roles: [{ id: 'role:developer', label: '开发者', description: '', aliases: [], status: 'active', guidance: '', avoid_error: '' }],
+        scopes: [{ id: 'scope:product/notemd', label: 'note.md', description: '', aliases: [], status: 'active', kind: 'realm', security_domain: 'product/notemd' }],
+        writable: true,
+      }
       if (method === 'host.memory.v2.add') throw new Error('MEMORY_STALE_BASE')
       return {}
     })
@@ -190,7 +213,11 @@ describe('Memory Protocol v2 app', () => {
     const calls = request.mock.calls.filter(([method]) => method === 'host.memory.v2.add')
     expect(calls).toHaveLength(1)
     expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.approve')).toHaveLength(0)
-    expect(calls[0][1]).toMatchObject({ text: '我希望代码评审先指出风险。', approval_kind: 'self-representation', subject: { kind: 'vault-owner', id: 'owner-1' } })
+    expect(calls[0][1]).toMatchObject({
+      text: '我希望代码评审先指出风险。', approval_kind: 'self-representation',
+      subject: { kind: 'vault-owner', id: 'owner-1' },
+      context: { roles: ['role:developer'], spaces: ['scope:product/notemd'] },
+    })
     expect(document.querySelector('[role=dialog]')).toBeTruthy()
     expect(document.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('我希望代码评审先指出风险。')
     expect(document.querySelector('[role=alert]')?.textContent).toContain('另一设备发生变化')
@@ -235,7 +262,7 @@ describe('Memory Protocol v2 app', () => {
 
     expect(document.querySelector('[role=alertdialog]')).toBeTruthy()
     expect(document.body.textContent).toContain('1 条已确认记忆和 1 条待确认建议')
-    expect(document.body.textContent).toContain('USER.md、MEMORY.md 与 Agent context')
+    expect(document.body.textContent).toContain('MEMORY.md 与 Agent context')
     expect(document.body.textContent).toContain('所有者身份、Memory 协议和不可变历史会保留')
     expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.resetAll')).toHaveLength(0)
 
