@@ -1180,7 +1180,7 @@
           <div class="answer-state working-note"><small>{t('smartSearch.activityWorking')}</small></div>
         {:else if answerPhase === 'error'}
           <div class="answer-state error">
-            <strong>{t('smartSearch.answerError')}</strong>
+            <strong>{failedStage === 'answer' ? t('smartSearch.answerError') : t('smartSearch.searchError')}</strong>
             <p role="alert">{answerError}</p>
             <button class="retry-button" onclick={() => failedStage === 'answer' ? void retryAnswer() : void askAgent()}>
               {failedStage === 'answer' ? t('smartSearch.retryAnswer') : t('smartSearch.retrySearch')}

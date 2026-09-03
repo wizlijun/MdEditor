@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   planResults: [] as string[],
   statusResults: [] as any[],
   plannedErrors: [] as unknown[],
+  freezeErrors: [] as unknown[],
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }))
@@ -176,7 +177,10 @@ function installInvokeMock(): void {
       if (mocks.plannedErrors.length) throw mocks.plannedErrors.shift()
       return plannedResponse(args?.originalQuery)
     }
-    if (command === 'smart_search_freeze_sources') return args?.sources
+    if (command === 'smart_search_freeze_sources') {
+      if (mocks.freezeErrors.length) throw mocks.freezeErrors.shift()
+      return args?.sources
+    }
     if (command === 'notemd_smart_search') {
       if (args?.query === 'new question') {
         const response = searchResponse()
@@ -223,6 +227,7 @@ beforeEach(() => {
   mocks.planResults.length = 0
   mocks.statusResults.length = 0
   mocks.plannedErrors.length = 0
+  mocks.freezeErrors.length = 0
   installInvokeMock()
 })
 
@@ -335,6 +340,18 @@ describe('SmartSearchApp interaction wiring', () => {
     expect(document.querySelector('[role="log"]')?.textContent).toContain(
       'reusing the frozen evidence without searching again',
     )
+  })
+
+  it('labels evidence preparation failures as search failures instead of Agent failures', async () => {
+    mocks.freezeErrors.push('source range no longer exists')
+    const input = await mountReady()
+    await typeAndWait(input)
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent)
+      .toContain('source range no longer exists'))
+    expect(document.querySelector('.answer-state.error strong')?.textContent).toBe('Search failed')
+    expect(document.querySelector('.answer-state.error strong')?.textContent).not.toContain('Agent')
   })
 
   it('retries one coded transient read-only search interruption', async () => {

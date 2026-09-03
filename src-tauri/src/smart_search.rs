@@ -19,6 +19,7 @@ const MAX_ANSWER_BYTES: usize = 1_048_576;
 const MAX_SOURCES: usize = 12;
 const MAX_SOURCE_FILE_BYTES: u64 = 52_428_800;
 const MAX_SOURCE_LINES: u32 = 500;
+const MAX_SOURCE_CHARS: usize = 4_000;
 // Memory Protocol v2's established consent purpose for answering factual
 // questions. Using a new ad-hoc string would make every existing USER.md and
 // MEMORY.md projection ineligible even though the files visibly contain it.
@@ -156,7 +157,7 @@ fn freeze_sources_in(
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
             .ok_or("invalid source lineEnd")?;
-        if line_end < line || line_end - line >= MAX_SOURCE_LINES {
+        if line_end < line {
             return Err("invalid source line range".into());
         }
         let expected_ref = format!("{relative}#L{line}");
@@ -166,18 +167,10 @@ fn freeze_sources_in(
         let absolute = canonical_source_path(root, &relative)?;
         let body =
             fs::read_to_string(&absolute).map_err(|e| format!("read source {relative}: {e}"))?;
-        let start = usize::try_from(line - 1).map_err(|_| "invalid source line")?;
-        let count = usize::try_from(line_end - line + 1).map_err(|_| "invalid source range")?;
-        let text = body
-            .lines()
-            .skip(start)
-            .take(count)
-            .collect::<Vec<_>>()
-            .join("\n");
-        if text.is_empty() {
-            return Err("source range no longer exists".into());
-        }
+        let (text, frozen_line_end, range_truncated) = bounded_source_text(&body, line, line_end)?;
         hit.insert("text".into(), Value::String(text));
+        hit.insert("lineEnd".into(), Value::from(frozen_line_end));
+        hit.insert("sourceRangeTruncated".into(), Value::Bool(range_truncated));
         hit.insert(
             "absPath".into(),
             Value::String(absolute.to_string_lossy().to_string()),
@@ -185,6 +178,59 @@ fn freeze_sources_in(
         hit.insert("sourceRef".into(), Value::String(expected_ref));
     }
     Ok(sources)
+}
+
+/// Project an index hit onto a prompt-sized, current on-disk excerpt.
+///
+/// Search discovery intentionally includes whole-file and whole-section
+/// blocks, so a wide range is valid input rather than a protocol error. The
+/// trusted boundary still bounds what crosses IPC: at most 500 lines and
+/// 4,000 Unicode scalar values, with `lineEnd` rewritten to the last line the
+/// excerpt actually contains.
+fn bounded_source_text(
+    body: &str,
+    line: u32,
+    line_end: u32,
+) -> Result<(String, u32, bool), String> {
+    if line == 0 || line_end < line {
+        return Err("invalid source line range".into());
+    }
+    let start = usize::try_from(line - 1).map_err(|_| "invalid source line")?;
+    let bounded_end = line_end.min(line.saturating_add(MAX_SOURCE_LINES - 1));
+    let count = usize::try_from(bounded_end - line + 1).map_err(|_| "invalid source range")?;
+    let mut text = String::new();
+    let mut remaining_chars = MAX_SOURCE_CHARS;
+    let mut included_lines = 0u32;
+    let mut range_truncated = bounded_end < line_end;
+
+    for raw_line in body.lines().skip(start).take(count) {
+        if included_lines > 0 {
+            if remaining_chars == 0 {
+                range_truncated = true;
+                break;
+            }
+            text.push('\n');
+            remaining_chars -= 1;
+        }
+
+        let mut chars = raw_line.chars();
+        let fragment = chars.by_ref().take(remaining_chars).collect::<String>();
+        let used = fragment.chars().count();
+        text.push_str(&fragment);
+        remaining_chars -= used;
+        included_lines += 1;
+        if chars.next().is_some() {
+            range_truncated = true;
+            break;
+        }
+    }
+
+    if included_lines == 0 || text.is_empty() {
+        return Err("source range no longer exists".into());
+    }
+    let frozen_line_end = line + included_lines - 1;
+    range_truncated |= frozen_line_end < line_end;
+    Ok((text, frozen_line_end, range_truncated))
 }
 
 #[tauri::command]
@@ -888,6 +934,83 @@ mod tests {
                 .to_string_lossy()
                 .as_ref()
         );
+        assert_eq!(frozen[0].hit["sourceRangeTruncated"], false);
+    }
+
+    #[test]
+    fn frozen_sources_bound_valid_wide_index_ranges_instead_of_rejecting_them() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("long.md"), "x\n".repeat(700)).unwrap();
+        let source = SearchSourcePayload {
+            id: "S1".into(),
+            hit: json!({
+                "path": "long.md",
+                "line": 100,
+                "lineEnd": 700,
+                "text": "tampered",
+                "sourceRef": "long.md#L100"
+            }),
+        };
+
+        let frozen = freeze_sources_in(dir.path(), vec![source]).unwrap();
+        assert_eq!(frozen[0].hit["lineEnd"], 599);
+        assert_eq!(frozen[0].hit["text"].as_str().unwrap().lines().count(), 500);
+        assert_eq!(frozen[0].hit["sourceRef"], "long.md#L100");
+        assert_eq!(frozen[0].hit["sourceRangeTruncated"], true);
+    }
+
+    #[test]
+    fn frozen_sources_bound_single_long_lines_without_splitting_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("long.md"),
+            "界".repeat(MAX_SOURCE_CHARS + 10),
+        )
+        .unwrap();
+        let source = SearchSourcePayload {
+            id: "S1".into(),
+            hit: json!({
+                "path": "long.md",
+                "line": 1,
+                "lineEnd": 1,
+                "sourceRef": "long.md#L1"
+            }),
+        };
+
+        let frozen = freeze_sources_in(dir.path(), vec![source]).unwrap();
+        assert_eq!(
+            frozen[0].hit["text"].as_str().unwrap().chars().count(),
+            MAX_SOURCE_CHARS
+        );
+        assert_eq!(frozen[0].hit["lineEnd"], 1);
+        assert_eq!(frozen[0].hit["sourceRangeTruncated"], true);
+    }
+
+    #[test]
+    fn frozen_sources_clamp_stale_ends_but_reject_invalid_starts_and_reversed_ranges() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("short.md"), "one\ntwo\nthree\n").unwrap();
+        let make_source = |line, line_end| SearchSourcePayload {
+            id: "S1".into(),
+            hit: json!({
+                "path": "short.md",
+                "line": line,
+                "lineEnd": line_end,
+                "sourceRef": format!("short.md#L{line}")
+            }),
+        };
+
+        let frozen = freeze_sources_in(dir.path(), vec![make_source(2, 20)]).unwrap();
+        assert_eq!(frozen[0].hit["text"], "two\nthree");
+        assert_eq!(frozen[0].hit["lineEnd"], 3);
+        assert_eq!(frozen[0].hit["sourceRangeTruncated"], true);
+
+        assert!(freeze_sources_in(dir.path(), vec![make_source(4, 4)])
+            .unwrap_err()
+            .contains("no longer exists"));
+        assert!(freeze_sources_in(dir.path(), vec![make_source(3, 2)])
+            .unwrap_err()
+            .contains("invalid source line range"));
     }
 
     #[cfg(unix)]

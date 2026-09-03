@@ -5,6 +5,9 @@ export interface SearchHit {
   absPath: string
   line: number
   lineEnd: number
+  /** The trusted host shortened a valid wide/stale-ended index range to the
+   *  evidence packet budget and rewrote `lineEnd` to the actual last line. */
+  sourceRangeTruncated?: boolean
   text: string
   breadcrumb: string
   level: 'file' | 'section' | 'line'

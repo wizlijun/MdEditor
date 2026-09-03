@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Smart Search no longer stops with `invalid source line range` on long documents or sections.** Whole-file and long-section search matches are now safely projected by the trusted host into a bounded evidence excerpt, with the real ending line preserved for citations. Very long single lines are bounded before crossing into the UI, while path and citation integrity checks remain strict. Evidence-preparation errors are also labeled as search failures instead of incorrectly blaming the Answer Agent.
+
 ## v6.903.5 — 2026-09-03
 
 ### Changed
