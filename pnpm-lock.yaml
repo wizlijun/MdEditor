@@ -424,6 +424,10 @@ importers:
         version: 2.9.0
 
   plugins-src/trace-source:
+    dependencies:
+      yaml:
+        specifier: ^2.8.4
+        version: 2.9.0
     devDependencies:
       '@sveltejs/vite-plugin-svelte':
         specifier: ^5
