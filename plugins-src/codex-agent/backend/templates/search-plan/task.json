@@ -1,7 +1,7 @@
 {
   "name": "Plan a controlled local search",
-  "description": "Convert one natural-language question into a bounded SearchPlanV1, or tune one plan from retrieval telemetry.",
-  "prompt": "完成本次 search-plan。调用方会提供 mode=plan|tune、原始问题、锁定约束、冻结时间上下文、schema；tune 还会提供上一版计划和结构化检索遥测。严格遵守任务目录中的指令，只输出单个 SearchPlanV1 JSON object，不调用工具，不读取 Vault 或 Memory。",
-  "max_turns": 8,
-  "timeout_seconds": 180
+  "description": "Convert one natural-language question into a bounded SearchPlanV1 for Smart Lookup.",
+  "prompt": "完成本次 search-plan。新调用只提供 mode=plan、原始问题、锁定约束、冻结时间上下文和 schema；旧宿主的 mode=tune 仅兼容一个版本。严格遵守任务目录中的指令，只输出单个 SearchPlanV1 JSON object，不调用工具，不读取 Vault 或 Memory。",
+  "max_turns": 4,
+  "timeout_seconds": 20
 }

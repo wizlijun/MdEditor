@@ -9,15 +9,18 @@ use std::path::Path;
 
 pub const SEARCH_ANSWER_TASK: &str = "search-answer";
 pub const SEARCH_PLAN_TASK: &str = "search-plan";
+pub const SEARCH_SUMMARY_TASK: &str = "search-summary";
+pub const VAULT_RESEARCH_TASK: &str = "vault-research";
 
 pub fn is_input_only_task(id: &str) -> bool {
-    matches!(id, SEARCH_PLAN_TASK | SEARCH_ANSWER_TASK)
+    matches!(id, SEARCH_PLAN_TASK | SEARCH_ANSWER_TASK | SEARCH_SUMMARY_TASK)
 }
 
 pub fn input_only_instructions(id: &str) -> Option<&'static str> {
     match id {
         SEARCH_PLAN_TASK => Some(include_str!("../templates/search-plan/CLAUDE.md")),
         SEARCH_ANSWER_TASK => Some(include_str!("../templates/search-answer/CLAUDE.md")),
+        SEARCH_SUMMARY_TASK => Some(include_str!("../templates/search-summary/CLAUDE.md")),
         _ => None,
     }
 }
@@ -121,6 +124,28 @@ const BUILTIN: &Templates = &[
             ),
         ],
     ),
+    (
+        "search-summary",
+        &[
+            ("task.json", include_str!("../templates/search-summary/task.json")),
+            ("CLAUDE.md", include_str!("../templates/search-summary/CLAUDE.md")),
+            (
+                ".claude/settings.json",
+                include_str!("../templates/search-summary/settings.json"),
+            ),
+        ],
+    ),
+    (
+        "vault-research",
+        &[
+            ("task.json", include_str!("../templates/vault-research/task.json")),
+            ("CLAUDE.md", include_str!("../templates/vault-research/CLAUDE.md")),
+            (
+                ".claude/settings.json",
+                include_str!("../templates/vault-research/settings.json"),
+            ),
+        ],
+    ),
 ];
 
 /// Built-in tasks that have been renamed, oldest name first. Without a
@@ -155,7 +180,7 @@ pub fn retire_information_denies(vault: &Path) -> Vec<String> {
     for (id, files) in BUILTIN {
         // The search protocol tasks intentionally stay offline: the host has
         // already frozen their complete input packets.
-        if is_input_only_task(id) {
+        if is_input_only_task(id) || *id == VAULT_RESEARCH_TASK {
             continue;
         }
         for (rel, _) in *files {
@@ -233,7 +258,7 @@ mod tests {
     fn seeds_all_builtin_templates_on_a_fresh_vault() {
         let v = tempfile::tempdir().unwrap();
         let wrote = seed_builtin_templates(v.path());
-        assert_eq!(wrote.len(), 18, "seeded: {wrote:?}");
+        assert_eq!(wrote.len(), 24, "seeded: {wrote:?}");
         assert!(task_dir(v.path(), "selfcheck").join("CLAUDE.md").exists());
         assert!(task_dir(v.path(), "answer-note-question")
             .join(".claude/settings.json")
@@ -244,6 +269,12 @@ mod tests {
         assert!(task_dir(v.path(), "search-plan")
             .join(".claude/settings.json")
             .exists());
+        assert!(task_dir(v.path(), "search-summary")
+            .join(".claude/settings.json")
+            .exists());
+        assert!(task_dir(v.path(), "vault-research")
+            .join(".claude/settings.json")
+            .exists());
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
         assert_eq!(
             ids,
@@ -252,7 +283,9 @@ mod tests {
                 "answer-note-question",
                 "search-answer",
                 "search-plan",
-                "selfcheck"
+                "search-summary",
+                "selfcheck",
+                "vault-research"
             ]
         );
     }
@@ -336,7 +369,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
         retire_information_denies(v.path());
-        for id in [SEARCH_PLAN_TASK, SEARCH_ANSWER_TASK] {
+        for id in [SEARCH_PLAN_TASK, SEARCH_ANSWER_TASK, SEARCH_SUMMARY_TASK] {
             let denied = deny_of(v.path(), id, "settings.json");
             for tool in [
                 "Read",
@@ -369,7 +402,9 @@ mod tests {
                 "answer-note-question",
                 "search-answer",
                 "search-plan",
-                "selfcheck"
+                "search-summary",
+                "selfcheck",
+                "vault-research"
             ]
         );
     }
@@ -418,7 +453,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
         let tasks = discover(v.path());
-        assert_eq!(tasks.len(), 5);
+        assert_eq!(tasks.len(), 7);
         assert!(tasks
             .iter()
             .all(|t| !t.name.is_empty() && !t.prompt.is_empty()));
@@ -452,7 +487,7 @@ mod tests {
             def.model.is_none(),
             "the caller's plan/tune model_profile must not be shadowed by task.json"
         );
-        assert_eq!(def.timeout_seconds, 180, "planning allows one longer quiet model turn");
+        assert_eq!(def.timeout_seconds, 20, "Smart Lookup bounds its single fast plan call");
         assert_eq!(
             task,
             include_str!("../../../codex-agent/backend/templates/search-plan/task.json")
@@ -475,7 +510,7 @@ mod tests {
             "`mode=tune`",
             "SearchPlanV1",
             "只输出一个",
-            "最多 4 个",
+            "最多 2 个",
             "document_date",
             "content_date",
             "activity_time",
@@ -483,6 +518,67 @@ mod tests {
             "不调用任何工具",
         ] {
             assert!(md.contains(required), "missing search-plan rule: {required}");
+        }
+    }
+
+    #[test]
+    fn smart_lookup_summary_contract_is_shared_and_input_only() {
+        let task = include_str!("../templates/search-summary/task.json");
+        assert_eq!(
+            task,
+            include_str!("../../../codex-agent/backend/templates/search-summary/task.json")
+        );
+        assert_eq!(
+            task,
+            include_str!("../../../deepseek-agent/backend/templates/search-summary/task.json")
+        );
+        let md = include_str!("../templates/search-summary/CLAUDE.md");
+        assert_eq!(
+            md,
+            include_str!("../../../codex-agent/backend/templates/search-summary/AGENTS.md")
+        );
+        assert_eq!(
+            md,
+            include_str!("../../../deepseek-agent/backend/templates/search-summary/AGENTS.md")
+        );
+        for required in ["最多三个", "[Sx]", "不读取 Vault、USER、MEMORY", "不调用工具"] {
+            assert!(md.contains(required), "missing search-summary rule: {required}");
+        }
+        let settings = include_str!("../templates/search-summary/settings.json");
+        for denied in ["Read", "Write", "Bash", "WebSearch", "Skill"] {
+            assert!(settings.contains(&format!("\"{denied}\"")), "missing deny: {denied}");
+        }
+    }
+
+    #[test]
+    fn vault_research_contract_is_shared_and_read_only() {
+        let task = include_str!("../templates/vault-research/task.json");
+        assert_eq!(
+            task,
+            include_str!("../../../codex-agent/backend/templates/vault-research/task.json")
+        );
+        assert_eq!(
+            task,
+            include_str!("../../../deepseek-agent/backend/templates/vault-research/task.json")
+        );
+        let md = include_str!("../templates/vault-research/CLAUDE.md");
+        assert_eq!(
+            md,
+            include_str!("../../../codex-agent/backend/templates/vault-research/AGENTS.md")
+        );
+        assert_eq!(
+            md,
+            include_str!("../../../deepseek-agent/backend/templates/vault-research/AGENTS.md")
+        );
+        for required in ["notemd search", "notemd memory context", "refs 只是候选线索", "不得创建、修改、移动或删除"] {
+            assert!(md.contains(required), "missing vault-research rule: {required}");
+        }
+        let settings = include_str!("../templates/vault-research/settings.json");
+        for required in ["Read(${VAULT}/**)", "Bash(notemd search:*)", "Bash(notemd memory context:*)"] {
+            assert!(settings.contains(required), "missing allow: {required}");
+        }
+        for denied in ["Write", "Edit", "WebSearch", "Task", "Skill"] {
+            assert!(settings.contains(&format!("\"{denied}\"")), "missing deny: {denied}");
         }
     }
 }

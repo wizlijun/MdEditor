@@ -1,7 +1,5 @@
 import type { SmartSearchResponse } from '../search/api'
 
-export type SearchPlanMode = 'plan' | 'tune'
-
 export interface ResolvedSearchPlan {
   schemaVersion: number
   intent: { kind: string; focus: string }
@@ -35,53 +33,21 @@ export interface ResolvedSearchPlan {
 export interface PlannedSearchResponse {
   resolvedPlan: ResolvedSearchPlan
   search: SmartSearchResponse
-}
-
-export interface SearchPlanTelemetry {
-  total: number
-  distinctDocuments: number
-  truncated: boolean
-  subqueries: Array<{
-    id: string
-    purpose: 'precision' | 'recall' | 'unknown'
-    hitCount: number
-    executed: boolean
-    truncated: boolean
-  }>
+  lookupRunId?: string
 }
 
 export interface SearchPlanPromptInput {
-  mode: SearchPlanMode
   question: string
   referenceTime: string
   timezone: string
   locale: string
   lockedFilters: Record<string, unknown>
-  previousPlan?: string
-  resolvedPlan?: ResolvedSearchPlan
-  telemetry?: SearchPlanTelemetry
 }
 
 export function buildSearchPlanPrompt(input: SearchPlanPromptInput): string {
-  const {
-    mode, question, referenceTime, timezone, locale, lockedFilters,
-    previousPlan, resolvedPlan, telemetry,
-  } = input
-  const tunePacket = mode === 'tune'
-    ? [
-        '',
-        'PREVIOUS_SEARCH_PLAN_JSON',
-        previousPlan?.trim() || '{}',
-        '',
-        'RESOLVED_IMMUTABLE_PLAN_JSON',
-        JSON.stringify(resolvedPlan ?? {}),
-        '',
-        'RETRIEVAL_TELEMETRY_JSON',
-        JSON.stringify(telemetry ?? { total: 0, distinctDocuments: 0, truncated: false, subqueries: [] }),
-      ]
-    : []
+  const { question, referenceTime, timezone, locale, lockedFilters } = input
   return [
-    `MODE: ${mode}`,
+    'MODE: plan',
     `REFERENCE_TIME: ${referenceTime}`,
     `TIMEZONE: ${timezone}`,
     `LOCALE: ${locale}`,
@@ -89,18 +55,19 @@ export function buildSearchPlanPrompt(input: SearchPlanPromptInput): string {
     '',
     'QUESTION',
     question.trim(),
-    ...tunePacket,
     '',
     'Return exactly one SearchPlanV1 JSON object. Do not use Markdown fences and do not answer the question.',
     'Separate document-date constraints from dates that are the subject of the question.',
+    'When time applies to document_date, put it only in time.expression; do not copy time.sourceText into terms or phrases.',
+    'For activity_time or ambiguous time, record the limitation and never substitute a document-date filter.',
     'For relative time, emit a bounded expression; the host computes final dates.',
     'Keep search terms concise. Never emit commands, file contents, paths not stated by the user, or tool calls.',
-    'In tune mode, preserve every explicit/time/path/type/origin constraint and adjust only terms, phrases, query arms, and weights.',
+    'Emit at most two logical query arms: normally one precision and optionally one recall arm.',
     '',
     'SCHEMA',
     JSON.stringify({
       schemaVersion: 1,
-      intent: { kind: 'answer', focus: 'string' },
+      intent: { kind: 'answer|locate|list|summarize|compare', focus: 'string' },
       time: null,
       constraints: {
         paths: { anyOf: [], allOf: [] },
@@ -128,13 +95,4 @@ export function buildSearchPlanPrompt(input: SearchPlanPromptInput): string {
     '{"kind":"rolling_window","value":3,"unit":"days|weeks|months|years"}',
     '{"kind":"absolute_range","after":"YYYY-MM-DD","before":"YYYY-MM-DD"}',
   ].join('\n')
-}
-
-export function shouldTune(telemetry: SearchPlanTelemetry): boolean {
-  if (telemetry.truncated) return false
-  const recall = telemetry.subqueries.filter((query) => query.purpose === 'recall')
-  const recallComplete = recall.length > 0
-    && recall.every((query) => query.executed && !query.truncated)
-  if (!recallComplete) return false
-  return telemetry.total === 0 || telemetry.distinctDocuments < 3
 }

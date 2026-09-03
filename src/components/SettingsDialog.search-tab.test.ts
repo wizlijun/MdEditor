@@ -84,7 +84,8 @@ import type { SearchStats, SearchProgress, SearchResponse } from '../lib/search/
 import { searchStore, _setSearchImpl } from '../lib/search/store.svelte'
 import { sidePanels } from '../lib/side-panel/registry.svelte'
 import { toasts } from '../lib/toast.svelte'
-import { getPluginScopedAll } from '../lib/settings.svelte'
+import { getPluginScopedAll, settings } from '../lib/settings.svelte'
+import { DEFAULT_SMART_LOOKUP_SETTINGS } from '../lib/smart-search/settings'
 import { ask } from '@tauri-apps/plugin-dialog'
 
 let stats: Mock<() => Promise<SearchStats | null>>
@@ -114,6 +115,7 @@ beforeEach(() => {
   searchStore.clear()
   sidePanels.left.visible = false
   sidePanels.left.activeId = null
+  settings.smartLookup = structuredClone(DEFAULT_SMART_LOOKUP_SETTINGS)
 })
 
 // Review round 1, Minor 7: a test that throws BEFORE reaching its own
@@ -265,6 +267,32 @@ describe('SettingsDialog — Search & Index tab entry', () => {
     await settle()
 
     expect(stats).toHaveBeenCalled()
+  })
+
+  it('exposes the persistent Smart Lookup controls on the Search & Index page', async () => {
+    await mountDialog()
+    await settle()
+    openSettings('search')
+    await settle()
+
+    const section = Array.from(document.body.querySelectorAll('section.block')).find(
+      (candidate) => candidate.querySelector('h3')?.textContent?.trim() === 'Smart Lookup',
+    )
+    expect(section).toBeTruthy()
+    expect(section?.textContent).toContain('Smart understanding')
+    expect(section?.textContent).toContain('Result limit')
+    expect(section?.textContent).toContain('Quick summary')
+    expect(section?.textContent).toContain('Default handoff Agent')
+
+    const deepRow = Array.from(section!.querySelectorAll('label.row')).find(
+      (row) => row.querySelector('.lbl')?.textContent?.trim() === 'Expand automatically when empty',
+    )
+    const checkbox = deepRow?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    expect(checkbox?.checked).toBe(false)
+    checkbox!.checked = true
+    checkbox!.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(settings.smartLookup.results.autoDeepOnZero).toBe(true)
   })
 })
 

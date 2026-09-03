@@ -1,41 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { MemorySelection, SearchContextSource } from './session'
 import type { PlannedSearchResponse } from './plan'
-
-export interface MemoryContextResult {
-  available: boolean
-  selected: MemorySelection[]
-  excludedSummary: Record<string, number>
-  manifestId: string | null
-  error: string | null
-}
-
-export interface AnswerArchivePayload {
-  answerId: string
-  query: string
-  answer: string
-  provider: string
-  model: string | null
-  runId: string
-  memoryManifestId: string | null
-  sources: SearchContextSource[]
-}
-
-export interface ArchiveReceipt {
-  path: string
-  created: boolean
-}
-
-export interface DocumentWritePayload {
-  title: string
-  query: string
-  content: string
-  provider: string
-  model: string | null
-  runId: string
-  memoryManifestId: string | null
-  sources: SearchContextSource[]
-}
+import type { SummaryTaskStart } from './summary'
+import type { SummaryStyle } from './settings'
+import type { ModelSelector } from './model-routing'
+import type { HandoffPacket } from './handoff'
+import type { AgentTaskStart } from './agent'
 
 export const smartSearchApi = {
   planContext: (originalQuery: string) => invoke<{ lockedFilters: Record<string, unknown> }>(
@@ -46,7 +15,12 @@ export const smartSearchApi = {
     plan: unknown,
     referenceTime: string,
     timezone: string,
-    options: { limit?: number; deep?: boolean; timeoutMs?: number; baselinePlan?: unknown } = {},
+    options: {
+      limit?: number
+      deep?: boolean
+      timeoutMs?: number
+      retainRun?: boolean
+    } = {},
   ) => invoke<PlannedSearchResponse>('notemd_planned_search', {
     originalQuery,
     plan,
@@ -54,14 +28,35 @@ export const smartSearchApi = {
     timezone,
     ...options,
   }),
-  freezeSources: (sources: SearchContextSource[]) =>
-    invoke<SearchContextSource[]>('smart_search_freeze_sources', { sources }),
-  memoryContext: (provider: string, model: string | null) =>
-    invoke<MemoryContextResult>('smart_search_memory_context', { provider, model }),
-  archiveAnswer: (payload: AnswerArchivePayload) =>
-    invoke<ArchiveReceipt>('smart_search_archive_answer', { payload }),
-  recordFeedback: (answerId: string, value: 'helpful' | 'unhelpful', reason: string | null) =>
-    invoke<void>('smart_search_record_feedback', { answerId, value, reason }),
-  writeDocument: (payload: DocumentWritePayload) =>
-    invoke<ArchiveReceipt>('smart_search_write_document', { payload }),
+  startSummary: (
+    lookupRunId: string,
+    selectedResultIds: string[],
+    sourceLimit: number,
+    charLimit: number,
+    style: SummaryStyle,
+    provider: string,
+    modelSelector: ModelSelector,
+    invocationId: string,
+  ) => invoke<SummaryTaskStart>('smart_lookup_start_summary', {
+    lookupRunId,
+    selectedResultIds,
+    sourceLimit,
+    charLimit,
+    style,
+    provider,
+    invocationId,
+    ...modelSelector,
+  }),
+  startHandoff: (
+    packet: HandoffPacket,
+    provider: string,
+    invocationId: string,
+  ) => invoke<AgentTaskStart>('smart_lookup_start_handoff', {
+    question: packet.question,
+    resolvedFilters: packet.resolvedFilters,
+    queryTerms: packet.queryTerms,
+    selectedRefs: packet.selectedRefs,
+    provider,
+    invocationId,
+  }),
 }

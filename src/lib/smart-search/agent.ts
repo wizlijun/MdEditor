@@ -4,7 +4,8 @@ import type { PluginManifest } from '../plugins/types'
 import type { ModelSelector } from './model-routing'
 
 export const SEARCH_PLAN_TASK = 'search-plan'
-export const SEARCH_ANSWER_TASK = 'search-answer'
+export const SEARCH_SUMMARY_TASK = 'search-summary'
+export const VAULT_RESEARCH_TASK = 'vault-research'
 export const SEARCH_AGENT_POLL_MS = 500
 
 export interface AgentProgress {
@@ -22,6 +23,11 @@ export interface AgentTaskResult {
 export interface AgentTaskStart {
   runId: string
   resolvedModel: string | null
+}
+
+export interface AgentInvocation {
+  invocationId: string
+  inputHash: string
 }
 
 export class AgentTaskError extends Error {
@@ -73,6 +79,11 @@ export async function loadSearchAgentOptions(): Promise<AgentOption[]> {
   }))
 }
 
+export async function loadDefaultAgentProvider(): Promise<string> {
+  const value = await invoke<unknown>('smart_lookup_agent_default')
+  return typeof value === 'string' ? value : ''
+}
+
 export function normalizeAgentHarness(value: unknown): AgentHarness | null {
   if (!value || typeof value !== 'object') return null
   const raw = value as Record<string, any>
@@ -102,21 +113,20 @@ export function normalizeAgentHarness(value: unknown): AgentHarness | null {
   }
 }
 
-export async function startSearchAgentTask(
-  provider: string,
-  prompt: string,
-  usageDisplay: 'tip' | 'result' = 'result',
-  transport: Execute = execute,
-  modelSelector?: ModelSelector,
-): Promise<string> {
-  return (await startAgentTask(
-    provider,
-    SEARCH_ANSWER_TASK,
-    prompt,
-    modelSelector,
-    usageDisplay,
-    transport,
-  )).runId
+export function supportsSearchTask(agent: AgentOption, task: string): boolean {
+  const capability = agent.harness?.capabilities
+  const profiles = capability?.model_routing?.profiles
+  return agent.harness?.ok === true
+    && capability?.tasks?.includes(task) === true
+    && capability?.terminal_result === true
+    && capability?.input_only_isolation === true
+    && capability?.model_routing?.invocation_override === true
+    && (profiles?.fast?.available === true || profiles?.default?.available === true)
+}
+
+export function supportsSearchPlanner(agent: AgentOption): boolean {
+  return supportsSearchTask(agent, SEARCH_PLAN_TASK)
+    && agent.harness?.capabilities?.search_plan_schemas?.includes(1) === true
 }
 
 export async function startAgentTask(
@@ -126,12 +136,16 @@ export async function startAgentTask(
   modelSelector?: ModelSelector,
   usageDisplay: 'tip' | 'result' = 'result',
   transport: Execute = execute,
+  invocation?: AgentInvocation,
 ): Promise<AgentTaskStart> {
   const selector = checkedModelSelector(modelSelector)
+  const identity = invocation ?? await createAgentInvocation(task, prompt, selector)
   const response = await transport(provider, 'run-task', {
     task,
     prompt,
     usage_display: usageDisplay,
+    invocation_id: identity.invocationId,
+    input_hash: identity.inputHash,
     ...selector,
   })
   if (typeof response?.run_id !== 'string' || !response.run_id) {
@@ -143,6 +157,26 @@ export async function startAgentTask(
       ? response.resolved_model
       : null,
   }
+}
+
+export async function createAgentInvocation(
+  task: string,
+  prompt: string,
+  selector?: ModelSelector,
+): Promise<AgentInvocation> {
+  const input = JSON.stringify({ task, prompt, selector: checkedModelSelector(selector) ?? null })
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input))
+  const inputHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return { invocationId: crypto.randomUUID(), inputHash }
+}
+
+export async function cancelAgentTask(
+  provider: string,
+  task: string,
+  runId: string,
+  transport: Execute = execute,
+): Promise<void> {
+  await transport(provider, 'run-cancel', { task, run_id: runId })
 }
 
 function checkedModelSelector(selector: ModelSelector | undefined): ModelSelector | undefined {
@@ -170,15 +204,6 @@ function pause(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms)
     signal?.addEventListener('abort', onAbort, { once: true })
   })
-}
-
-export async function pollSearchAgentTask(
-  provider: string,
-  runId: string,
-  onProgress: (progress: AgentProgress) => void,
-  options: AgentPollOptions = {},
-): Promise<AgentTaskResult> {
-  return pollAgentTask(provider, SEARCH_ANSWER_TASK, runId, onProgress, options)
 }
 
 export async function pollAgentTask(
@@ -225,21 +250,21 @@ export async function pollAgentTask(
     }
     const record = response.record ?? {}
     const status = String(record.status ?? 'error')
-    if (task === SEARCH_PLAN_TASK) {
+    if (task === SEARCH_PLAN_TASK || task === SEARCH_SUMMARY_TASK) {
       if (status !== 'success') {
         throw new AgentTaskError(
-          String(response.terminal_result?.content ?? record.stderr_tail ?? `planner run failed: ${status}`),
+          String(response.terminal_result?.content ?? record.stderr_tail ?? `${task} run failed: ${status}`),
           task,
           runId,
           status,
         )
       }
       if (response.terminal_result?.complete !== true) {
-        throw new AgentTaskError('planner returned no complete terminal result', task, runId, 'incomplete')
+        throw new AgentTaskError(`${task} returned no complete terminal result`, task, runId, 'incomplete')
       }
       const content = String(response.terminal_result.content ?? '')
       if (!content.trim()) {
-        throw new AgentTaskError('planner returned an empty terminal result', task, runId, 'empty')
+        throw new AgentTaskError(`${task} returned an empty terminal result`, task, runId, 'empty')
       }
       return { runId, status, content, usage: record.usage ?? null }
     }

@@ -1,4 +1,9 @@
 import { Store } from '@tauri-apps/plugin-store'
+import {
+  DEFAULT_SMART_LOOKUP_SETTINGS,
+  normalizeSmartLookupSettings,
+  type SmartLookupSettings,
+} from './smart-search/settings'
 
 type Mode = 'source' | 'rich'
 
@@ -53,6 +58,7 @@ export const settings = $state<{
   mdblock: MdblockSettings
   dailyNotes: { enabled: boolean }
   mcpServer: { enabled: boolean }
+  smartLookup: SmartLookupSettings
 }>({
   autoSave: false,
   toastAutoClose: false,
@@ -63,6 +69,7 @@ export const settings = $state<{
   // below with `!== false`), so an upgrading user gets MCP without having to
   // discover the setting first.
   mcpServer: { enabled: true },
+  smartLookup: structuredClone(DEFAULT_SMART_LOOKUP_SETTINGS),
 })
 
 let store: Awaited<ReturnType<typeof Store.load>> | null = null
@@ -190,6 +197,7 @@ export async function loadSettings(): Promise<void> {
   // Missing key = enabled (see the design note on the initial state above).
   const storedMcp = await s.get<{ enabled: boolean }>('mcpServer')
   settings.mcpServer.enabled = storedMcp?.enabled !== false
+  settings.smartLookup = normalizeSmartLookupSettings(await s.get<unknown>('smartLookup'))
   settingsHydrated = true
   pluginScopedVersion.value++
   await loadShareDb()
@@ -209,6 +217,7 @@ export async function saveSettings(): Promise<void> {
   await s.set('mdblock', settings.mdblock)
   await s.set('dailyNotes', { enabled: settings.dailyNotes.enabled })
   await s.set('mcpServer', { enabled: settings.mcpServer.enabled })
+  await s.set('smartLookup', normalizeSmartLookupSettings(settings.smartLookup))
   await s.save()
   // Notify other webviews (e.g. the standalone Daily Notes window) so they can
   // re-read settings and re-apply theme/locale live. Fire-and-forget.

@@ -20,13 +20,16 @@ use super::smart::{self, PlannedQueryArm, SmartSearchResponse};
 use super::{handle, SearchGen};
 
 const SCHEMA_VERSION: u32 = 1;
-const MAX_LOGICAL_QUERIES: usize = 4;
+const MAX_LOGICAL_QUERIES: usize = 2;
 const MAX_PHYSICAL_QUERIES: usize = 8;
 const MAX_TERMS: usize = 6;
 const MAX_PHRASES: usize = 2;
 const MAX_CONSTRAINT_VALUES: usize = 8;
 const MAX_TEXT: usize = 256;
 const MAX_RATIONALE: usize = 512;
+const MAX_QUESTION_CHARS: usize = 2_000;
+const MAX_QUESTION_BYTES: usize = 8 * 1_024;
+const MAX_PLAN_BYTES: usize = 16 * 1_024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -245,11 +248,13 @@ pub struct ConcreteFilters {
     pub before: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlannedSearchResponse {
     pub resolved_plan: ResolvedSearchPlan,
     pub search: SmartSearchResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lookup_run_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -259,6 +264,7 @@ pub struct SearchPlanContext {
 }
 
 pub(super) fn search_plan_context(original_query: &str) -> Result<SearchPlanContext, String> {
+    validate_question(original_query)?;
     Ok(SearchPlanContext {
         locked_filters: explicit_filters(original_query)?,
     })
@@ -276,6 +282,11 @@ pub(super) fn run_planned_search_command(
     deep: Option<bool>,
     timeout_ms: Option<u64>,
 ) -> Result<PlannedSearchResponse, String> {
+    validate_question(&original_query)?;
+    validate_plan_size(&plan)?;
+    if let Some(baseline) = &baseline_plan {
+        validate_plan_size(baseline)?;
+    }
     let resolved_plan = parse_and_resolve_with_baseline(
         &plan,
         baseline_plan.as_ref(),
@@ -304,6 +315,7 @@ pub(super) fn run_planned_search_command(
     Ok(PlannedSearchResponse {
         resolved_plan,
         search,
+        lookup_run_id: None,
     })
 }
 
@@ -336,6 +348,30 @@ fn parse_plan(value: &Value) -> Result<SearchPlanV1, String> {
         .map_err(|error| invalid(format!("JSON does not match SearchPlanV1: {error}")))?;
     validate(&plan)?;
     Ok(plan)
+}
+
+fn validate_question(value: &str) -> Result<(), String> {
+    if value.trim().is_empty()
+        || value.chars().count() > MAX_QUESTION_CHARS
+        || value.len() > MAX_QUESTION_BYTES
+    {
+        return Err(invalid(format!(
+            "question must be non-empty and at most {MAX_QUESTION_CHARS} characters/{MAX_QUESTION_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_plan_size(value: &Value) -> Result<(), String> {
+    let size = serde_json::to_vec(value)
+        .map_err(|error| invalid(format!("plan cannot be encoded: {error}")))?
+        .len();
+    if size > MAX_PLAN_BYTES {
+        return Err(invalid(format!(
+            "plan exceeds the {MAX_PLAN_BYTES}-byte limit"
+        )));
+    }
+    Ok(())
 }
 
 fn enforce_tune_baseline(tuned: &SearchPlanV1, baseline: &SearchPlanV1) -> Result<(), String> {
@@ -513,7 +549,7 @@ fn validate_text(name: &str, value: &str, max: usize) -> Result<(), String> {
 }
 
 fn resolve(
-    plan: SearchPlanV1,
+    mut plan: SearchPlanV1,
     original_query: &str,
     reference_time: &str,
     timezone: &str,
@@ -535,9 +571,17 @@ fn resolve(
             })
         }
         Some(time) if time.applies_to == TimeAppliesTo::ActivityTime => {
-            return Err(invalid(
-                "activity_time cannot be executed by the current index".to_string(),
-            ));
+            let warning = format!("activity_time is not supported: {}", time.source_text);
+            if !plan.unsupported_constraints.contains(&warning) {
+                plan.unsupported_constraints.push(warning);
+            }
+            None
+        }
+        Some(time) if time.applies_to == TimeAppliesTo::Ambiguous => {
+            if !plan.ambiguities.contains(&time.source_text) {
+                plan.ambiguities.push(time.source_text.clone());
+            }
+            None
         }
         _ => None,
     };
@@ -1044,6 +1088,19 @@ mod tests {
                 .unwrap_err()
                 .contains("missing field")
         );
+
+        let mut too_many = base_plan();
+        for index in 2..=3 {
+            too_many["queries"].as_array_mut().unwrap().push(json!({
+                "id": format!("q{index}"), "purpose": "recall", "terms": ["风险"],
+                "phrases": [], "weight": 1.0, "rationale": "扩展"
+            }));
+        }
+        assert!(
+            parse_and_resolve(&too_many, "x", "2026-09-03T00:00:00Z", "UTC")
+                .unwrap_err()
+                .contains("1..=2 arms")
+        );
     }
 
     #[test]
@@ -1181,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_dates_unknown_timezones_and_activity_time_fail_closed() {
+    fn invalid_dates_and_unknown_timezones_fail_closed_but_unsupported_time_does_not() {
         let mut invalid_date = base_plan();
         invalid_date["time"] = json!({
             "appliesTo": "document_date", "sourceText": "坏日期",
@@ -1198,9 +1255,34 @@ mod tests {
             "appliesTo": "activity_time", "sourceText": "最近修改",
             "expression": { "kind": "rolling_window", "value": 7, "unit": "days" }
         });
-        let error =
-            parse_and_resolve(&activity, "发布", "2026-09-03T00:00:00Z", "UTC").unwrap_err();
-        assert!(error.contains("activity_time"), "{error}");
+        let resolved =
+            parse_and_resolve(&activity, "发布", "2026-09-03T00:00:00Z", "UTC").unwrap();
+        assert_eq!(resolved.queries[0].filters.after, None);
+        assert!(resolved
+            .unsupported_constraints
+            .iter()
+            .any(|warning| warning.contains("activity_time")));
+
+        let mut ambiguous = base_plan();
+        ambiguous["time"] = json!({
+            "appliesTo": "ambiguous", "sourceText": "最近", "expression": null
+        });
+        let resolved =
+            parse_and_resolve(&ambiguous, "最近发布", "2026-09-03T00:00:00Z", "UTC").unwrap();
+        assert_eq!(resolved.queries[0].filters.after, None);
+        assert!(resolved.ambiguities.iter().any(|warning| warning == "最近"));
+    }
+
+    #[test]
+    fn planner_inputs_obey_the_host_hard_limits() {
+        assert!(search_plan_context("").is_err());
+        assert!(search_plan_context(&"问".repeat(MAX_QUESTION_CHARS + 1)).is_err());
+        assert!(search_plan_context(&"😀".repeat(2_049)).is_err());
+        assert!(search_plan_context("八月发布").is_ok());
+
+        let oversized = json!({ "payload": "x".repeat(MAX_PLAN_BYTES) });
+        assert!(validate_plan_size(&oversized).is_err());
+        assert!(validate_plan_size(&base_plan()).is_ok());
     }
 
     #[test]

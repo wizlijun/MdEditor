@@ -1,14 +1,14 @@
 import type { AgentHarness } from '../agent-picker/types'
 
-export type SearchModelPhase = 'plan' | 'answer'
+export type SearchModelPhase = 'plan' | 'summary'
 export type ModelPreference = 'profile:fast' | 'profile:default' | `model:${string}`
 
 export type ModelSelector =
   | { model_profile: 'fast' | 'default'; model?: never }
   | { model: string; model_profile?: never }
 
-export function defaultModelPreference(phase: SearchModelPhase): ModelPreference {
-  return phase === 'plan' ? 'profile:fast' : 'profile:default'
+export function defaultModelPreference(_phase: SearchModelPhase): ModelPreference {
+  return 'profile:fast'
 }
 
 export function modelPreferenceKey(
@@ -32,6 +32,16 @@ export function rememberedModelPreference(
   } catch { /* A blocked localStorage must not disable search. */ }
   return isAvailablePreference(saved, harness)
     ? saved
+    : availableDefaultPreference(phase, harness)
+}
+
+export function availableModelPreference(
+  value: ModelPreference | undefined,
+  phase: SearchModelPhase,
+  harness: AgentHarness | null | undefined,
+): ModelPreference {
+  return isAvailablePreference(value ?? null, harness)
+    ? value!
     : availableDefaultPreference(phase, harness)
 }
 
@@ -97,7 +107,7 @@ function availableDefaultPreference(
   harness: AgentHarness | null | undefined,
 ): ModelPreference {
   const routing = harness?.capabilities?.model_routing
-  if (phase === 'plan' && routing?.profiles?.fast?.available === true) return 'profile:fast'
+  if (routing?.profiles?.fast?.available === true) return 'profile:fast'
   if (routing?.profiles?.default?.available === true) return 'profile:default'
   const exact = routing?.selectable_models?.find((model) => model.trim().length > 0)
   return exact ? `model:${exact}` : defaultModelPreference(phase)

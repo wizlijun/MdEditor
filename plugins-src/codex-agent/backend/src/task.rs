@@ -15,9 +15,11 @@ use std::path::Path;
 
 pub const SEARCH_ANSWER_TASK: &str = "search-answer";
 pub const SEARCH_PLAN_TASK: &str = "search-plan";
+pub const SEARCH_SUMMARY_TASK: &str = "search-summary";
+pub const VAULT_RESEARCH_TASK: &str = "vault-research";
 
 pub fn is_input_only_task(id: &str) -> bool {
-    matches!(id, SEARCH_PLAN_TASK | SEARCH_ANSWER_TASK)
+    matches!(id, SEARCH_PLAN_TASK | SEARCH_ANSWER_TASK | SEARCH_SUMMARY_TASK)
 }
 
 pub use agent_run_core::task::{runs_root, task_dir, TaskDef};
@@ -56,6 +58,8 @@ fn builtin_def(id: &str) -> Option<TaskDef> {
         "answer-note-question" => include_str!("../templates/answer-note-question/task.json"),
         "search-answer" => include_str!("../templates/search-answer/task.json"),
         "search-plan" => include_str!("../templates/search-plan/task.json"),
+        "search-summary" => include_str!("../templates/search-summary/task.json"),
+        "vault-research" => include_str!("../templates/vault-research/task.json"),
         _ => return None,
     };
     serde_json::from_str(body).ok()
@@ -116,6 +120,20 @@ const OWNED: &Templates = &[
         &[(
             "CODEX.md",
             include_str!("../templates/search-plan/AGENTS.md"),
+        )],
+    ),
+    (
+        "search-summary",
+        &[(
+            "CODEX.md",
+            include_str!("../templates/search-summary/AGENTS.md"),
+        )],
+    ),
+    (
+        "vault-research",
+        &[(
+            "CODEX.md",
+            include_str!("../templates/vault-research/AGENTS.md"),
         )],
     ),
 ];
@@ -188,6 +206,36 @@ const SHARED: &[(&str, &str, &str)] = &[
         "policy.json",
         include_str!("../templates/search-plan/policy.json"),
     ),
+    (
+        "search-summary",
+        "task.json",
+        include_str!("../templates/search-summary/task.json"),
+    ),
+    (
+        "search-summary",
+        "AGENTS.md",
+        include_str!("../templates/search-summary/AGENTS.md"),
+    ),
+    (
+        "search-summary",
+        "policy.json",
+        include_str!("../templates/search-summary/policy.json"),
+    ),
+    (
+        "vault-research",
+        "task.json",
+        include_str!("../templates/vault-research/task.json"),
+    ),
+    (
+        "vault-research",
+        "AGENTS.md",
+        include_str!("../templates/vault-research/AGENTS.md"),
+    ),
+    (
+        "vault-research",
+        "policy.json",
+        include_str!("../templates/vault-research/policy.json"),
+    ),
 ];
 
 /// Keep derived data out of the vault's git history.
@@ -209,7 +257,7 @@ mod tests {
     fn seeds_all_templates_on_a_fresh_vault() {
         let v = tempfile::tempdir().unwrap();
         let wrote = seed_builtin_templates(v.path());
-        assert_eq!(wrote.len(), 17, "seeded: {wrote:?}");
+        assert_eq!(wrote.len(), 25, "seeded: {wrote:?}");
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
         assert_eq!(
             ids,
@@ -217,7 +265,9 @@ mod tests {
                 "answer-note-question",
                 "search-answer",
                 "search-plan",
-                "selfcheck"
+                "search-summary",
+                "selfcheck",
+                "vault-research"
             ]
         );
         for id in [
@@ -225,6 +275,8 @@ mod tests {
             "answer-note-question",
             "search-answer",
             "search-plan",
+            "search-summary",
+            "vault-research",
         ] {
             assert!(task_dir(v.path(), id).join("AGENTS.md").exists(), "{id}");
             assert!(task_dir(v.path(), id).join("CODEX.md").exists(), "{id}");
@@ -241,6 +293,8 @@ mod tests {
             "answer-note-question",
             "search-answer",
             "search-plan",
+            "search-summary",
+            "vault-research",
         ] {
             crate::policy::Policy::load(&task_dir(v.path(), id))
                 .unwrap_or_else(|e| panic!("{id}: {e}"));
@@ -257,6 +311,18 @@ mod tests {
                 .permission_mode,
             crate::policy::PermissionMode::ReadOnly
         );
+        assert_eq!(
+            crate::policy::Policy::load(&task_dir(v.path(), "search-summary"))
+                .unwrap()
+                .permission_mode,
+            crate::policy::PermissionMode::ReadOnly
+        );
+        assert_eq!(
+            crate::policy::Policy::load(&task_dir(v.path(), "vault-research"))
+                .unwrap()
+                .permission_mode,
+            crate::policy::PermissionMode::ReadOnly
+        );
     }
 
     #[test]
@@ -264,7 +330,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
         let tasks = discover(v.path());
-        assert_eq!(tasks.len(), 4);
+        assert_eq!(tasks.len(), 6);
         for t in tasks {
             assert!(!t.name.is_empty(), "{}", t.id);
             assert!(!t.prompt.is_empty(), "{}", t.id);
@@ -425,7 +491,7 @@ mod tests {
             "`mode=tune`",
             "SearchPlanV1",
             "只输出一个",
-            "最多 4 个",
+            "最多 2 个",
             "document_date",
             "content_date",
             "activity_time",

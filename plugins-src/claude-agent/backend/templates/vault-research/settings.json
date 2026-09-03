@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(${VAULT}/**)",
+      "Bash(notemd search:*)",
+      "Bash(notemd memory context:*)"
+    ],
+    "deny": [
+      "Write",
+      "Edit",
+      "NotebookEdit",
+      "WebSearch",
+      "WebFetch",
+      "Task",
+      "Skill"
+    ]
+  }
+}

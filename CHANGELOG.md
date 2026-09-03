@@ -7,9 +7,17 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Smart Search & Answers is now Smart Lookup: a fast path from a natural-language request to useful Vault results.** Typing keeps a zero-token preview; Return uses one fast Agent planning pass to separate dates, paths, tags, source types and sorting from real search terms, then the trusted host runs typed search and renders explainable result cards. It no longer automatically tunes, loads Memory, generates an answer, archives feedback or writes a document.
+
+- **Deeper work is explicit and stays with a full Agent.** A compact “Quick summary” action can summarize only a few complete line-level matches under a hard budget and labels the result as based on current matches. “Continue with Agent” hands off the question, typed constraints and Vault-relative references to Claude, Codex or DeepSeek, which re-searches through `notemd` and requests Memory context under its own policy instead of receiving a copied Vault payload.
+
+- **Smart Lookup behavior is configurable without weakening its safety limits.** Settings cover the planning provider, wait time, result/group limits, optional deep retry for zero results, summary budget/style and default handoff Agent. Claude Agent 1.0.27, Codex Agent 1.0.13 and DeepSeek Agent 1.1.13 add the shared input-only `search-summary` task, read-only `vault-research` handoff, idempotent invocation recovery and cancellation support.
+
 ### Fixed
 
-- **Smart Search no longer stops with `invalid source line range` on long documents or sections.** Whole-file and long-section search matches are now safely projected by the trusted host into a bounded evidence excerpt, with the real ending line preserved for citations. Very long single lines are bounded before crossing into the UI, while path and citation integrity checks remain strict. Evidence-preparation errors are also labeled as search failures instead of incorrectly blaming the Answer Agent.
+- **Long documents and sections can no longer stop the new flow with `invalid source line range`.** File- and section-level matches remain honest navigation results instead of being clipped into misleading answer evidence; Quick summary accepts only complete, current line blocks and skips stale or oversized sources. The retired answer command keeps a bounded compatibility guard for one release, while invalid paths, reversed ranges and changed content still fail closed.
 
 ## v6.903.5 — 2026-09-03
 

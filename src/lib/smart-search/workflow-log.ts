@@ -1,4 +1,4 @@
-export type WorkflowStage = 'plan' | 'search' | 'tune' | 'freeze' | 'memory' | 'answer' | 'document'
+export type WorkflowStage = 'preview' | 'plan' | 'search' | 'summary' | 'handoff'
 export type WorkflowLevel = 'active' | 'success' | 'warning' | 'error'
 
 export interface WorkflowEntry {
@@ -10,7 +10,7 @@ export interface WorkflowEntry {
   steps?: number
 }
 
-export const WORKFLOW_LOG_LIMIT = 200
+export const WORKFLOW_LOG_LIMIT = 50
 
 export function appendWorkflowEntry(
   entries: WorkflowEntry[],

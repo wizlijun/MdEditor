@@ -1,4 +1,5 @@
-//! Trusted host boundary for Smart Search memory context, feedback and files.
+//! Deprecated one-version compatibility boundary for the removed Smart Search
+//! Answer workflow. The Smart Lookup window must not call this module.
 //!
 //! Agent providers remain read-only. Only these narrow commands may persist an
 //! answer or detailed document, and every path is derived under the active

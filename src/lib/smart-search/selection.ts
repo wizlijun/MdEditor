@@ -1,3 +1,9 @@
+import type { SearchHit } from '../search/api'
+
+export function hitKey(hit: Pick<SearchHit, 'path' | 'line' | 'lineEnd'>): string {
+  return `${hit.path}\0${hit.line}\0${hit.lineEnd}`
+}
+
 export interface SelectionModifiers {
   toggle: boolean
   range: boolean
