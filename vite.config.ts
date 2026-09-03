@@ -41,6 +41,7 @@ export default defineConfig({
         pluginMarket: 'plugin-market.html',
         logs: 'logs.html',
         dailyNotes: 'daily-notes.html',
+        smartSearch: 'smart-search.html',
         // Editor Kit: the editor component bundle handed to plugin windows at
         // runtime (spec §3.4). A JS entry with a stable, hash-free file name so
         // `plugin://<id>/__host__/assets/editor-kit-v1.js` can address it
@@ -64,6 +65,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    entries: ['index.html', 'insights.html', 'preview.html', 'plugin-market.html', 'logs.html', 'daily-notes.html'],
+    entries: ['index.html', 'insights.html', 'preview.html', 'plugin-market.html', 'logs.html', 'daily-notes.html', 'smart-search.html'],
   },
 })

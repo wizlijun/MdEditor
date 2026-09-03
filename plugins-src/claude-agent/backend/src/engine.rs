@@ -1,7 +1,10 @@
 //! The run engine: start claude, pump its stream-json into events, handle
 //! timeout and cancellation. The window path and the detached runner share it —
 //! the only difference is who holds the child process.
-use crate::{artifacts, lock, okf, prompt, record, settings, stream, task::TaskDef};
+use crate::{
+    artifacts, lock, okf, prompt, record, settings, stream,
+    task::{self, TaskDef},
+};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::SystemTime;
@@ -91,49 +94,94 @@ pub async fn run(
         return Ok(());
     }
 
-    // A run aimed at one note gets a policy that only lets it touch that note —
-    // the prompt asked nicely and the model grepped the vault anyway. The metas
-    // put the run on the ORIGINAL document's directory rather than the vault's
-    // snapshot of it, for whichever notes this run can reach.
-    let metas = crate::mirror::read_metas(&spec.vault);
-    let scope = spec
-        .target
-        .as_deref()
-        .map(|t| settings::Scope::for_note(&spec.vault, std::path::Path::new(t), &metas));
-    // Which MCP servers exist is a property of the machine: they are granted in
-    // the policy AND named in the prompt, because a tool the model was never
-    // told about is a tool it never reaches for.
-    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
-    let servers = settings::mcp_server_names(&home, &[spec.task_dir.clone(), spec.vault.clone()]);
+    let input_only = spec.task.id == task::SEARCH_ANSWER_TASK;
+    let input_only_dir = if input_only {
+        match tempfile::Builder::new()
+            .prefix("notemd-search-answer-")
+            .tempdir()
+        {
+            Ok(dir) => Some(dir),
+            Err(e) => {
+                let rec = finish(
+                    &spec,
+                    started,
+                    record::Status::Error,
+                    None,
+                    None,
+                    format!("could not create input-only workspace: {e}"),
+                    String::new(),
+                    Vec::new(),
+                );
+                let _ = record::write(&spec.task_run_dir, &rec);
+                let _ = tx.send(Step::Done(rec));
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
     let private_settings = spec
         .task_run_dir
         .join("settings")
         .join(format!("{}.json", spec.run_id));
-    let has_private_settings = match settings::materialize_to(
-        &spec.task_dir,
-        &private_settings,
-        &spec.vault,
-        scope.as_ref(),
-        &metas,
-        &servers,
-    ) {
-        Ok(wrote) => wrote,
-        Err(e) => {
-            let _ = std::fs::remove_file(&private_settings);
-            let rec = finish(
-                &spec,
-                started,
-                record::Status::Error,
-                None,
-                None,
-                format!("could not prepare per-run Claude settings: {e}"),
-                String::new(),
-                Vec::new(),
-            );
-            let _ = record::write(&spec.task_run_dir, &rec);
-            let _ = tx.send(Step::Done(rec));
-            return Ok(());
-        }
+    let (argv, has_private_settings) = if input_only {
+        (
+            prompt::build_input_only_argv(
+                &spec.task,
+                &spec.prompt,
+                include_str!("../templates/search-answer/CLAUDE.md"),
+            ),
+            false,
+        )
+    } else {
+        // A run aimed at one note gets a policy that only lets it touch that
+        // note. Mirror and MCP discovery stay exclusive to document tasks.
+        let metas = crate::mirror::read_metas(&spec.vault);
+        let scope = spec
+            .target
+            .as_deref()
+            .map(|t| settings::Scope::for_note(&spec.vault, std::path::Path::new(t), &metas));
+        let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+        let servers =
+            settings::mcp_server_names(&home, &[spec.task_dir.clone(), spec.vault.clone()]);
+        let has_private_settings = match settings::materialize_to(
+            &spec.task_dir,
+            &private_settings,
+            &spec.vault,
+            scope.as_ref(),
+            &metas,
+            &servers,
+        ) {
+            Ok(wrote) => wrote,
+            Err(e) => {
+                let _ = std::fs::remove_file(&private_settings);
+                let rec = finish(
+                    &spec,
+                    started,
+                    record::Status::Error,
+                    None,
+                    None,
+                    format!("could not prepare per-run Claude settings: {e}"),
+                    String::new(),
+                    Vec::new(),
+                );
+                let _ = record::write(&spec.task_run_dir, &rec);
+                let _ = tx.send(Step::Done(rec));
+                return Ok(());
+            }
+        };
+        let full_prompt = prompt::with_toolbelt(
+            &prompt::with_source_context(&spec.prompt, &spec.vault, scope.as_ref()),
+            &servers,
+        );
+        (
+            prompt::build_argv_with_settings(
+                &spec.task,
+                &full_prompt,
+                has_private_settings.then_some(private_settings.as_path()),
+            ),
+            has_private_settings,
+        )
     };
     struct PrivateSettings(Option<PathBuf>);
     impl Drop for PrivateSettings {
@@ -144,22 +192,17 @@ pub async fn run(
         }
     }
     let _private_settings = PrivateSettings(has_private_settings.then(|| private_settings.clone()));
-    let full_prompt = prompt::with_toolbelt(
-        &prompt::with_source_context(&spec.prompt, &spec.vault, scope.as_ref()),
-        &servers,
-    );
-    let argv = prompt::build_argv_with_settings(
-        &spec.task,
-        &full_prompt,
-        has_private_settings.then_some(private_settings.as_path()),
-    );
+    let cwd = input_only_dir
+        .as_ref()
+        .map(|dir| dir.path())
+        .unwrap_or(spec.task_dir.as_path());
 
     let mut cmd = tokio::process::Command::new(&spec.claude);
     cmd.args(&argv)
         // cwd = the task template dir. Claude Code walks UP for CLAUDE.md, so
         // both the vault's conventions and the task's instructions load, and
         // .claude/skills + .mcp.json are discovered relative to it.
-        .current_dir(&spec.task_dir)
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -897,6 +940,26 @@ mod tests {
         let want = s.task_dir.canonicalize().unwrap();
         let (_e, rec) = drive(s).await;
         assert_eq!(PathBuf::from(&rec.result).canonicalize().unwrap(), want);
+    }
+
+    #[tokio::test]
+    async fn search_answer_runs_in_a_removed_empty_directory_outside_the_vault() {
+        let d = tempfile::tempdir().unwrap();
+        let c = fake_claude(
+            d.path(),
+            "fake-input-only-cwd",
+            r#"printf '{"type":"result","result":"%s"}\n' "$(pwd)""#,
+        );
+        let mut s = spec(d.path(), c, 30);
+        s.task.id = task::SEARCH_ANSWER_TASK.into();
+        let vault = s.vault.canonicalize().unwrap();
+        let (_e, rec) = drive(s).await;
+        let cwd = PathBuf::from(&rec.result);
+        assert!(
+            !cwd.starts_with(vault),
+            "input-only cwd leaked into Vault: {cwd:?}"
+        );
+        assert!(!cwd.exists(), "temporary input-only cwd was not removed");
     }
 
     #[tokio::test]

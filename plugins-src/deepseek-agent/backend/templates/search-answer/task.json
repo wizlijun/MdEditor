@@ -1,0 +1,7 @@
+{
+  "name": "Answer from search evidence",
+  "description": "Answer one question from policy-selected memory facts and a frozen set of local search excerpts.",
+  "prompt": "完成本次 search-answer。调用方会提供 mode、问题、允许的 USER facts、允许的 MEMORY facts，以及标为 [S1]…[Sn] 的搜索资料。严格遵守任务目录中的指令；只输出最终回答或 Markdown 文档正文，不调用工具，不写 Vault。",
+  "max_turns": 30,
+  "timeout_seconds": 600
+}

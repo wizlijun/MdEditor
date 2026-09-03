@@ -79,6 +79,25 @@ pub fn build_argv_with_settings(
     v
 }
 
+/// Build a run that consumes only its prompt. Safe mode prevents discovery of
+/// project/user customizations and MCP servers; the empty tool set removes the
+/// built-ins as a second, explicit boundary. The task protocol is supplied as
+/// a system-prompt addition because safe mode deliberately skips CLAUDE.md.
+pub fn build_input_only_argv(task: &TaskDef, prompt: &str, protocol: &str) -> Vec<String> {
+    let mut v = build_argv_with_settings(task, prompt, None);
+    v.extend([
+        "--safe-mode".into(),
+        "--tools".into(),
+        String::new(),
+        "--strict-mcp-config".into(),
+        "--disable-slash-commands".into(),
+        "--no-session-persistence".into(),
+        "--append-system-prompt".into(),
+        protocol.to_string(),
+    ]);
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +152,20 @@ mod tests {
             ]
         );
         assert!(!got.iter().any(|a| a == "--bare"));
+    }
+
+    #[test]
+    fn input_only_argv_disables_every_tool_and_carries_the_protocol_as_system_text() {
+        let got = build_input_only_argv(&task(), "packet", "FROZEN INPUT ONLY");
+        assert!(got.windows(2).any(|pair| pair == ["--tools", ""]));
+        assert!(got.iter().any(|arg| arg == "--safe-mode"));
+        assert!(got.iter().any(|arg| arg == "--strict-mcp-config"));
+        assert!(got.iter().any(|arg| arg == "--disable-slash-commands"));
+        assert!(got.iter().any(|arg| arg == "--no-session-persistence"));
+        assert!(got
+            .windows(2)
+            .any(|pair| pair == ["--append-system-prompt", "FROZEN INPUT ONLY"]));
+        assert!(!got.iter().any(|arg| arg.contains("mcp__")));
     }
 
     #[test]

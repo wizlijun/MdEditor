@@ -44,6 +44,8 @@ pub mod sotvault;
 #[cfg(not(target_os = "ios"))]
 pub mod search;
 #[cfg(not(target_os = "ios"))]
+pub mod smart_search;
+#[cfg(not(target_os = "ios"))]
 pub mod mcp;
 #[cfg(not(target_os = "ios"))]
 pub mod memory_control;
@@ -52,6 +54,12 @@ pub mod memory_control;
 pub mod vault_ios;
 
 pub struct PendingFiles(Mutex<Vec<String>>);
+/// Search-result jumps are delivered to the editor window through a durable
+/// mailbox. The main webview acknowledges a request only after `openFile` and
+/// `requestReveal` have both completed, so recreating/loading the main window
+/// cannot lose the first click from the standalone search window.
+#[cfg(not(target_os = "ios"))]
+pub struct PendingSearchReveals(Mutex<Vec<SearchHitReveal>>);
 #[cfg(not(target_os = "ios"))]
 pub struct TrayRepoItem(Mutex<Option<MenuItem<tauri::Wry>>>);
 #[cfg(not(target_os = "ios"))]
@@ -64,8 +72,9 @@ pub struct TraySyncNowItem(pub Mutex<Option<MenuItem<tauri::Wry>>>);
 pub struct TrayShownLargeFiles(pub Mutex<Vec<String>>);
 #[cfg(not(target_os = "ios"))]
 pub struct DailyNotesEnabled(pub std::sync::Mutex<bool>);
-/// Global hotkeys contributed by plugins (`contributes.tray[].accelerator`):
-/// hotkey id → the `(plugin_id, window)` it opens.
+/// Every system-wide shortcut owned by the host, including built-ins and
+/// plugin contributions. Keeping one registry is important because shortcut
+/// reconciliation starts with `unregister_all()`.
 ///
 /// Keyed by `Shortcut::id()` rather than by the manifest string, and that IS the
 /// normalization: the id is derived from the parsed modifier bits and key code,
@@ -73,14 +82,20 @@ pub struct DailyNotesEnabled(pub std::sync::Mutex<bool>);
 /// same entry. The handler receives the very `Shortcut` we registered, so the
 /// lookup can never miss on spelling.
 #[cfg(not(target_os = "ios"))]
-pub struct PluginShortcuts(pub Mutex<std::collections::HashMap<u32, (String, String)>>);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GlobalShortcutAction {
+    SmartSearch,
+    Plugin { plugin_id: String, window: String },
+}
 
-/// Make the registered system-wide shortcuts match the currently enabled
-/// plugin tray contributions. The host owns no built-in global shortcuts, so
-/// it is safe to replace the plugin-owned set as one unit after install,
-/// uninstall, enable or disable.
 #[cfg(not(target_os = "ios"))]
-pub(crate) fn reconcile_plugin_shortcuts<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+pub struct GlobalShortcuts(pub Mutex<std::collections::HashMap<u32, GlobalShortcutAction>>);
+
+/// Make the registered system-wide shortcuts match the complete host-owned
+/// registry. Built-ins are registered first, then enabled plugin tray
+/// contributions fill the remaining, unclaimed combinations.
+#[cfg(not(target_os = "ios"))]
+pub(crate) fn reconcile_global_shortcuts<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     use std::str::FromStr;
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
@@ -88,12 +103,36 @@ pub(crate) fn reconcile_plugin_shortcuts<R: tauri::Runtime>(app: &tauri::AppHand
         dlog(&format!(
             "global-shortcut reconcile: unregister failed: {e}"
         ));
-        app.state::<PluginShortcuts>().0.lock().unwrap().clear();
+        app.state::<GlobalShortcuts>().0.lock().unwrap().clear();
         return;
     }
 
     let mut claimed: std::collections::HashSet<u32> = Default::default();
-    let mut map: std::collections::HashMap<u32, (String, String)> = Default::default();
+    let mut map: std::collections::HashMap<u32, GlobalShortcutAction> = Default::default();
+
+    // Product default for the global quick-entry surface. Windows/Linux do not
+    // claim a built-in combination yet: Alt+Space belongs to the system there.
+    #[cfg(target_os = "macos")]
+    {
+        let accel = "Option+Space";
+        match Shortcut::from_str(accel) {
+            Ok(sc) => {
+                claimed.insert(sc.id());
+                match app.global_shortcut().register(sc) {
+                    Ok(()) => {
+                        map.insert(sc.id(), GlobalShortcutAction::SmartSearch);
+                    }
+                    Err(e) => dlog(&format!(
+                        "global-shortcut smart-search: register {accel:?} failed: {e}"
+                    )),
+                }
+            }
+            Err(e) => dlog(&format!(
+                "global-shortcut smart-search: bad accelerator {accel:?}: {e}"
+            )),
+        }
+    }
+
     for (accel, entry) in plugin_runtime::tray::accelerators_from_state() {
         let target = format!("{}:{}", entry.plugin_id, entry.window);
         let sc = match Shortcut::from_str(&accel) {
@@ -119,9 +158,15 @@ pub(crate) fn reconcile_plugin_shortcuts<R: tauri::Runtime>(app: &tauri::AppHand
             ));
             continue;
         }
-        map.insert(sc.id(), (entry.plugin_id, entry.window));
+        map.insert(
+            sc.id(),
+            GlobalShortcutAction::Plugin {
+                plugin_id: entry.plugin_id,
+                window: entry.window,
+            },
+        );
     }
-    *app.state::<PluginShortcuts>().0.lock().unwrap() = map;
+    *app.state::<GlobalShortcuts>().0.lock().unwrap() = map;
 }
 
 #[tauri::command]
@@ -618,6 +663,187 @@ fn open_plugin_market_window(app: tauri::AppHandle) {
     show_plugin_market_window(&app);
 }
 
+/// The singleton window used by the global smart-search workflow.
+#[cfg(not(target_os = "ios"))]
+const SMART_SEARCH_LABEL: &str = "smart-search";
+
+#[cfg(not(target_os = "ios"))]
+fn smart_search_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<tauri::WebviewWindow<R>, String> {
+    use tauri::WebviewUrl;
+
+    if let Some(win) = app.get_webview_window(SMART_SEARCH_LABEL) {
+        return Ok(win);
+    }
+
+    let locale = read_saved_locale(app);
+    tauri::WebviewWindowBuilder::new(
+        app,
+        SMART_SEARCH_LABEL,
+        WebviewUrl::App("smart-search.html".into()),
+    )
+    .title(menu_label(&locale, "smartSearch.title"))
+    .inner_size(680.0, 170.0)
+    .min_inner_size(560.0, 150.0)
+    .resizable(true)
+    .decorations(true)
+    // Quick-entry should accept its first click even when note.md was not the
+    // active application before the global shortcut was pressed.
+    .accept_first_mouse(true)
+    .center()
+    .visible(false)
+    .build()
+    .map_err(|e| format!("smart-search window build failed: {e}"))
+}
+
+#[cfg(not(target_os = "ios"))]
+fn show_smart_search_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let win = smart_search_window(app)?;
+    win.show().map_err(|e| e.to_string())?;
+    let _ = win.unminimize();
+    win.set_focus().map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "ios"))]
+fn hide_smart_search_window_inner<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(SMART_SEARCH_LABEL) {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "ios"))]
+fn toggle_smart_search_window_inner<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(SMART_SEARCH_LABEL) {
+        if win.is_visible().unwrap_or(false) {
+            return win.hide().map_err(|e| e.to_string());
+        }
+    }
+    show_smart_search_window(app)
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn open_smart_search_window(app: tauri::AppHandle) -> Result<(), String> {
+    show_smart_search_window(&app)
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn hide_smart_search_window(app: tauri::AppHandle) -> Result<(), String> {
+    hide_smart_search_window_inner(&app)
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn toggle_smart_search_window(app: tauri::AppHandle) -> Result<(), String> {
+    toggle_smart_search_window_inner(&app)
+}
+
+#[cfg(not(target_os = "ios"))]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHitReveal {
+    request_id: String,
+    path: String,
+    line: u32,
+    anchor: String,
+}
+
+#[cfg(not(target_os = "ios"))]
+impl PendingSearchReveals {
+    fn enqueue(&self, request: SearchHitReveal) {
+        self.0.lock().unwrap().push(request);
+    }
+
+    fn snapshot(&self) -> Vec<SearchHitReveal> {
+        self.0.lock().unwrap().clone()
+    }
+
+    fn acknowledge(&self, request_id: &str) -> bool {
+        let mut pending = self.0.lock().unwrap();
+        let before = pending.len();
+        pending.retain(|request| request.request_id != request_id);
+        pending.len() != before
+    }
+}
+
+/// Return, but do not consume, editor jumps that have not yet completed. The
+/// main window calls this after installing its targeted event listener and
+/// explicitly acknowledges each request only after the file and reveal are set.
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn pending_search_reveals(state: tauri::State<'_, PendingSearchReveals>) -> Vec<SearchHitReveal> {
+    state.snapshot()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn acknowledge_search_reveal(
+    state: tauri::State<'_, PendingSearchReveals>,
+    request_id: String,
+) -> bool {
+    state.acknowledge(&request_id)
+}
+
+#[cfg(not(target_os = "ios"))]
+fn canonical_search_hit_path(path: &str) -> Result<String, String> {
+    let requested_path = std::path::Path::new(path);
+    if !requested_path.is_absolute() {
+        return Err("Search hit path must be absolute".to_string());
+    }
+    // Vaults may legitimately live on external drives, so do not reuse the
+    // write-oriented `safe_path` home/temp allowlist here. Canonicalization is
+    // enough to give the editor a stable existing target and remove `..` / link
+    // ambiguity before the request crosses webviews.
+    std::fs::canonicalize(requested_path)
+        .map_err(sanitize_io_err)
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Bring the real editor window forward and deliver a durable, targeted
+/// open-and-reveal request. `path` is canonicalized here; the frontend replaces
+/// it with the active tab's final path after `openFile` follows any mirror
+/// redirect, then binds `requestReveal` to that final path.
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn editor_show_and_reveal_search_hit(
+    app: tauri::AppHandle,
+    path: String,
+    line: u32,
+    anchor: String,
+) -> Result<String, String> {
+    if line == 0 {
+        return Err("Search hit line must be 1-based".to_string());
+    }
+    let path = canonical_search_hit_path(&path)?;
+    let request = SearchHitReveal {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        path,
+        line,
+        anchor,
+    };
+    app.state::<PendingSearchReveals>().enqueue(request.clone());
+
+    let existed = app.get_webview_window("main").is_some();
+    show_main_window(&app);
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main editor window could not be created".to_string())?;
+    if existed {
+        // Target only the editor webview. A global app event would also reach
+        // the search window, which owns a different tab store.
+        win.emit("editor://reveal-search-hit", &request)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(request.request_id)
+}
+
 #[tauri::command]
 async fn editor_show_and_open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("main") {
@@ -701,21 +927,20 @@ fn git_proxy_set(value: String) -> Result<String, String> {
 }
 
 fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    if let Some(w) = app.get_webview_window("main") {
+    let win = app.get_webview_window("main").or_else(|| {
+        // Window might have been destroyed, recreate it.
+        tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+            .title("note.md")
+            .inner_size(1000.0, 700.0)
+            .min_inner_size(600.0, 400.0)
+            .build()
+            .map_err(|e| dlog(&format!("main window recreate failed: {e}")))
+            .ok()
+    });
+    if let Some(w) = win {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
-    } else {
-        // Window might have been destroyed, recreate it
-        let _ = tauri::WebviewWindowBuilder::new(
-            app,
-            "main",
-            tauri::WebviewUrl::default(),
-        )
-        .title("note.md")
-        .inner_size(1000.0, 700.0)
-        .min_inner_size(600.0, 400.0)
-        .build();
     }
 }
 
@@ -1115,6 +1340,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .manage(PendingFiles(Mutex::new(Vec::new())));
     #[cfg(not(target_os = "ios"))]
+    let builder = builder.manage(PendingSearchReveals(Mutex::new(Vec::new())));
+    #[cfg(not(target_os = "ios"))]
     let builder = builder.manage(TrayRepoItem(Mutex::new(None)));
     #[cfg(not(target_os = "ios"))]
     let builder = builder.manage(TrayStatusItem(Mutex::new(None)));
@@ -1127,7 +1354,7 @@ pub fn run() {
     #[cfg(not(target_os = "ios"))]
     let builder = builder.manage(DailyNotesEnabled(std::sync::Mutex::new(false)));
     #[cfg(not(target_os = "ios"))]
-    let builder = builder.manage(PluginShortcuts(Mutex::new(std::collections::HashMap::new())));
+    let builder = builder.manage(GlobalShortcuts(Mutex::new(std::collections::HashMap::new())));
     #[cfg(not(target_os = "ios"))]
     let builder = builder.manage(preview_window::PreviewStore::default());
     #[cfg(not(target_os = "ios"))]
@@ -1181,13 +1408,19 @@ pub fn run() {
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, shortcut, event| {
                 if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    // 只剩插件贡献的热键:内置的 Cmd+Ctrl+M / Cmd+Ctrl+N 已撤销
-                    // (系统级键位占用,且两个动作在托盘菜单里本就一点即到)。
-                    let target = app
-                        .try_state::<PluginShortcuts>()
+                    let action = app
+                        .try_state::<GlobalShortcuts>()
                         .and_then(|st| st.0.lock().ok().and_then(|m| m.get(&shortcut.id()).cloned()));
-                    if let Some((plugin_id, window)) = target {
-                        activate_plugin_tray_target(app, &plugin_id, &window);
+                    match action {
+                        Some(GlobalShortcutAction::SmartSearch) => {
+                            if let Err(e) = toggle_smart_search_window_inner(app) {
+                                dlog(&format!("global smart-search toggle failed: {e}"));
+                            }
+                        }
+                        Some(GlobalShortcutAction::Plugin { plugin_id, window }) => {
+                            activate_plugin_tray_target(app, &plugin_id, &window);
+                        }
+                        None => {}
                     }
                 }
             })
@@ -1263,6 +1496,7 @@ pub fn run() {
                 sotvault::sotvault_apply_update,
                 sotvault::sotvault_accept_current,
                 search::notemd_search,
+                search::notemd_smart_search,
                 search::notemd_search_stats,
                 search::notemd_search_rebuild,
                 search::notemd_search_progress,
@@ -1283,9 +1517,19 @@ pub fn run() {
                 open_plugin_market_window,
                 open_daily_notes_window,
                 open_search_logs_window,
+                open_smart_search_window,
+                hide_smart_search_window,
+                toggle_smart_search_window,
+                smart_search::smart_search_archive_answer,
+                smart_search::smart_search_record_feedback,
+                smart_search::smart_search_write_document,
+                smart_search::smart_search_memory_context,
                 set_daily_notes_enabled,
                 mcp::gate::set_mcp_enabled,
                 editor_show_and_open_path,
+                editor_show_and_reveal_search_hit,
+                pending_search_reveals,
+                acknowledge_search_reveal,
                 editor_open_remote_buffer,
                 update_recent_menu,
                 set_menu_locale,
@@ -1369,7 +1613,7 @@ pub fn run() {
             // The same helper also runs after install/uninstall/enable-disable,
             // keeping the registered set aligned with the tray without a restart.
             #[cfg(not(target_os = "ios"))]
-            reconcile_plugin_shortcuts(&app.handle());
+            reconcile_global_shortcuts(&app.handle());
 
             #[cfg(target_os = "ios")]
             vault_ios::init(&app.handle());
@@ -1406,6 +1650,12 @@ pub fn run() {
                     }
                     if event.id().0.as_str() == "open-plugin-market" {
                         show_plugin_market_window(app);
+                        return;
+                    }
+                    if event.id().0.as_str() == "open-smart-search" {
+                        if let Err(e) = show_smart_search_window(app) {
+                            dlog(&format!("open smart-search menu failed: {e}"));
+                        }
                         return;
                     }
                     // Tray-menu clicks also reach this global app-menu handler in
@@ -1741,6 +1991,18 @@ fn menu_label(locale: &str, key: &str) -> String {
         "edit.find" => ("Find…", "查找…", "検索…", "Suchen…"),
         "edit.findReplace" => ("Find and Replace…", "查找和替换…", "検索と置換…", "Suchen und Ersetzen…"),
         "view.toggleMode" => ("Toggle Source / Rich", "切换源码 / 富文本", "ソース / リッチを切り替え", "Quelltext / Rich umschalten"),
+        "view.smartSearch" => (
+            "Smart Search & Answers…",
+            "智能搜索与问答…",
+            "スマート検索と回答…",
+            "Intelligente Suche und Antworten…",
+        ),
+        "smartSearch.title" => (
+            "Smart Search",
+            "智能搜索与问答",
+            "スマート検索",
+            "Intelligente Suche",
+        ),
         "view.insights" => ("Reading Insights…", "阅读洞察数据…", "リーディングインサイト…", "Leseeinblicke…"),
         "view.logs" => ("View Logs…", "查看日志…", "ログを表示…", "Protokolle anzeigen…"),
         "plugins.market" => ("Plugin Market…", "插件市场…", "プラグインマーケット…", "Plugin-Markt…"),
@@ -2096,6 +2358,9 @@ fn set_menu_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> 
     // webviews with a build-time-injected locale). Done at the base so no plugin
     // needs its own locale-refresh code.
     plugin_runtime::windows::refresh_plugin_windows_locale(&app, &locale);
+    if let Some(win) = app.get_webview_window(SMART_SEARCH_LABEL) {
+        let _ = win.set_title(&menu_label(&locale, "smartSearch.title"));
+    }
     apply_menu_locale(&app, &locale)
 }
 
@@ -2274,6 +2539,15 @@ fn build_menu<R: tauri::Runtime>(
 
     let view_b = SubmenuBuilder::new(app, menu_label(locale, "menu.view"))
         .item(
+            &MenuItemBuilder::with_id(
+                "open-smart-search",
+                native_menu_literal(&menu_label(locale, "view.smartSearch")),
+            )
+            .accelerator("CmdOrCtrl+K")
+            .build(app)?,
+        )
+        .separator()
+        .item(
             &MenuItemBuilder::with_id("toggle-mode", menu_label(locale, "view.toggleMode"))
                 .accelerator("CmdOrCtrl+/")
                 .build(app)?,
@@ -2369,6 +2643,17 @@ mod menu_label_tests {
     }
 
     #[test]
+    fn smart_search_is_localized_in_every_locale() {
+        assert_eq!(menu_label("en", "view.smartSearch"), "Smart Search & Answers…");
+        assert_eq!(menu_label("zh", "view.smartSearch"), "智能搜索与问答…");
+        assert_eq!(menu_label("ja", "view.smartSearch"), "スマート検索と回答…");
+        assert_eq!(
+            menu_label("de", "view.smartSearch"),
+            "Intelligente Suche und Antworten…"
+        );
+    }
+
+    #[test]
     fn cognitive_plugin_groups_are_localized_in_every_locale() {
         assert_eq!(menu_label("en", "plugins.group.ai"), "AI");
         assert_eq!(menu_label("zh", "plugins.group.ai"), "AI");
@@ -2398,6 +2683,57 @@ mod menu_label_tests {
     #[test]
     fn unknown_key_falls_back_to_the_key() {
         assert_eq!(menu_label("zh", "file.nosuchitem"), "file.nosuchitem");
+    }
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+mod pending_search_reveal_tests {
+    use super::{canonical_search_hit_path, PendingSearchReveals, SearchHitReveal};
+    use std::sync::Mutex;
+
+    fn request(id: &str) -> SearchHitReveal {
+        SearchHitReveal {
+            request_id: id.to_string(),
+            path: format!("/vault/{id}.md"),
+            line: 7,
+            anchor: "target".to_string(),
+        }
+    }
+
+    #[test]
+    fn snapshot_does_not_consume_and_acknowledge_removes_only_its_request() {
+        let mailbox = PendingSearchReveals(Mutex::new(Vec::new()));
+        mailbox.enqueue(request("one"));
+        mailbox.enqueue(request("two"));
+
+        assert_eq!(mailbox.snapshot(), vec![request("one"), request("two")]);
+        assert_eq!(mailbox.snapshot().len(), 2, "replay must not consume before openFile succeeds");
+        assert!(mailbox.acknowledge("one"));
+        assert_eq!(mailbox.snapshot(), vec![request("two")]);
+        assert!(!mailbox.acknowledge("missing"));
+    }
+
+    #[test]
+    fn reveal_targets_require_an_existing_absolute_path_and_are_canonicalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("answer.md");
+        std::fs::write(&target, "answer").unwrap();
+
+        assert_eq!(
+            canonical_search_hit_path(target.to_str().unwrap()).unwrap(),
+            std::fs::canonicalize(&target).unwrap().to_string_lossy()
+        );
+        assert!(canonical_search_hit_path("relative.md").is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_quick_entry_default_is_a_valid_option_space_shortcut() {
+        use std::str::FromStr;
+        use tauri_plugin_global_shortcut::Shortcut;
+
+        let shortcut = Shortcut::from_str("Option+Space").expect("Option+Space must stay parseable");
+        assert_eq!(shortcut.to_string(), "alt+Space");
     }
 }
 

@@ -2,10 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "note.md capabilities",
-  "windows": ["main", "cli", "insights", "preview", "plugin-market", "logs", "daily-notes"],
+  "windows": ["main", "cli", "insights", "preview", "plugin-market", "logs", "daily-notes", "smart-search"],
   "permissions": [
     "core:default",
     "core:window:allow-set-title",
+    "core:window:allow-set-size",
+    "core:window:allow-center",
     "core:window:allow-destroy",
     "core:window:allow-show",
     "core:window:allow-set-focus",

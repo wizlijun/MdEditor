@@ -1,0 +1,5 @@
+{
+  "permission_mode": "read-only",
+  "on_permission_request": "reject",
+  "rationale": "搜索问答只消费宿主冻结并过滤后的输入包；回答和文档正文从终态文本返回，文件由宿主在用户明确操作后落盘。"
+}

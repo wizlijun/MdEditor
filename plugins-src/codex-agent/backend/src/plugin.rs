@@ -506,18 +506,23 @@ impl CodexAgentPlugin {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let ctx = if use_ctx { self.tab_ctx() } else { None };
-        // The source-document paragraph is generated per run, not written into a
-        // template: which documents are mirrors is per-vault state.
-        let metas = agent_run_core::mirror::read_metas(&vault);
-        let scope = target
-            .as_deref()
-            .map(|t| agent_run_core::Scope::for_note(&vault, Path::new(t), &metas));
-        let mut full = prompt::with_source_context(
-            &prompt::compose(&def.prompt, &user_prompt, ctx.as_ref()),
-            &vault,
-            scope.as_ref(),
-        );
+        let ctx = if use_ctx && task_id != task::SEARCH_ANSWER_TASK {
+            self.tab_ctx()
+        } else {
+            None
+        };
+        let composed = prompt::compose(&def.prompt, &user_prompt, ctx.as_ref());
+        let mut full = if task_id == task::SEARCH_ANSWER_TASK {
+            composed
+        } else {
+            // Source-document context is useful for document tasks, but would
+            // violate search-answer's frozen input packet.
+            let metas = agent_run_core::mirror::read_metas(&vault);
+            let scope = target
+                .as_deref()
+                .map(|t| agent_run_core::Scope::for_note(&vault, Path::new(t), &metas));
+            prompt::with_source_context(&composed, &vault, scope.as_ref())
+        };
         let codex_rules = task::codex_instructions(&task_dir);
         if !codex_rules.trim().is_empty() {
             full.push_str("\n\n## 本任务的 Codex 专属约定\n");
@@ -1008,7 +1013,7 @@ mod tests {
             .into_iter()
             .map(|t| t.id)
             .collect();
-        assert_eq!(ids, vec![NOTE_TASK, "selfcheck"]);
+        assert_eq!(ids, vec![NOTE_TASK, "search-answer", "selfcheck"]);
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
         let _ = std::fs::remove_file(&cfg);
     }
@@ -1181,9 +1186,14 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         task::seed_builtin_templates(v.path());
         let got = overview(v.path());
-        assert_eq!(got.len(), 2);
+        assert_eq!(got.len(), 3);
         for t in &got {
-            assert_eq!(t.permission_mode.as_deref(), Some("workspace-write"));
+            let expected = if t.def.id == "search-answer" {
+                "read-only"
+            } else {
+                "workspace-write"
+            };
+            assert_eq!(t.permission_mode.as_deref(), Some(expected), "{}", t.def.id);
             assert!(!t.policy_rationale.is_empty(), "{}", t.def.id);
             assert!(t.policy_error.is_none());
             assert!(!t.running);
