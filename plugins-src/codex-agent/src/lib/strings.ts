@@ -7,6 +7,7 @@ export type MessageKey =
   | 'run.willRun'
   | 'history.delete'
   | 'history.clearAll'
+  | 'history.more'
   | 'log.empty'
   | 'status.skipped'
   | 'artifacts.label'
@@ -78,6 +79,7 @@ const en: Catalog = {
   'run.willRun': 'Will run',
   'history.delete': 'Delete this run',
   'history.clearAll': 'Clear all runs',
+  'history.more': 'Show {n} more',
   'log.empty': 'This run left no log.',
   'status.skipped': 'Skipped',
   'artifacts.label': 'Opens:',
@@ -149,6 +151,7 @@ const zh: Catalog = {
   'run.willRun': '将运行',
   'history.delete': '删除这条运行',
   'history.clearAll': '清空全部运行',
+  'history.more': '再显示 {n} 条',
   'log.empty': '这次运行没有日志。',
   'status.skipped': '已跳过',
   'artifacts.label': '产物:',
@@ -220,6 +223,7 @@ const ja: Catalog = {
   'run.willRun': '実行内容',
   'history.delete': 'この実行を削除',
   'history.clearAll': '実行履歴をすべて消去',
+  'history.more': 'さらに {n} 件表示',
   'log.empty': 'この実行にログはありません。',
   'status.skipped': 'スキップ',
   'artifacts.label': '成果物:',
@@ -291,6 +295,7 @@ const de: Catalog = {
   'run.willRun': 'Läuft',
   'history.delete': 'Diesen Lauf löschen',
   'history.clearAll': 'Alle Läufe löschen',
+  'history.more': '{n} weitere anzeigen',
   'log.empty': 'Dieser Lauf hat kein Protokoll.',
   'status.skipped': 'Übersprungen',
   'artifacts.label': 'Ergebnis:',

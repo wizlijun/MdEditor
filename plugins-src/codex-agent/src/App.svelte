@@ -230,6 +230,7 @@
         <HistoryList
           runs={history}
           label={tr}
+          scopeKey={allTasks ? 'all' : `task:${selectedTask ?? ''}`}
           showTask={allTasks}
           empty={allTasks ? tr('history.emptyAll') : tr('history.empty')}
           selectedId={selectedRun?.run_id ?? null}
