@@ -8,7 +8,9 @@
 use crate::{discover, engine, policy, runner, task};
 use agent_run_core::scaffold::RunMeta;
 use agent_run_core::task::check_task_id;
-use agent_run_core::{harness, lock, prompt, record};
+use agent_run_core::{
+    harness, lock, prompt, record, InvocationModelRequest, ModelProfile,
+};
 use notemd_plugin_sdk as sdk;
 use sdk::plugin_protocol as proto;
 use serde::Serialize;
@@ -25,6 +27,8 @@ const NOTE_TASK: &str = "answer-note-question";
 use crate::SELF_PLUGIN_ID;
 /// The harness behind this plugin, as the window names it.
 const HARNESS_NAME: &str = "Codex CLI";
+/// Invocation profile used by latency-sensitive orchestration phases.
+const FAST_MODEL: &str = "gpt-5.6-luna";
 /// A version probe runs while the window waits, so it is bounded tightly.
 const VERSION_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 /// Model catalog refresh can be slower than the cheap version/auth probes.
@@ -67,6 +71,72 @@ fn usage_display(params: &Value) -> Result<UsageDisplay, String> {
 fn completion_usage_tip(display: UsageDisplay, rec: &record::RunRecord) -> Option<String> {
     (display == UsageDisplay::Tip)
         .then(|| agent_run_core::usage::compact_run(rec.status, rec.usage.as_ref()))
+}
+
+/// Apply the mutually-exclusive invocation-level model controls. An omitted
+/// selector preserves a legacy task pin; an explicit `default` removes that
+/// pin so model discovery resolves Codex's effective Vault default.
+fn apply_invocation_model(def: &mut task::TaskDef, params: &Value) -> Result<(), String> {
+    let request =
+        InvocationModelRequest::from_context(params).map_err(|error| error.to_string())?;
+    if let Some(model) = request.model() {
+        def.model = Some(model.to_string());
+        return Ok(());
+    }
+    match request.model_profile() {
+        None => {}
+        Some(ModelProfile::Default) => def.model = None,
+        Some(ModelProfile::Fast) => def.model = Some(FAST_MODEL.into()),
+    }
+    Ok(())
+}
+
+/// Preserve invocation-scoped model controls while `run-task` is relayed into
+/// the common `start` path.
+fn relayed_start_params(context: &Value, task_id: &str, prompt: &str, note_path: &str) -> Value {
+    json!({
+        "task": task_id,
+        "prompt": prompt,
+        "use_context": false,
+        "note_path": note_path,
+        "notify": context.get("notify").cloned().unwrap_or(Value::Null),
+        "usage_display": context.get("usage_display").cloned().unwrap_or(Value::Null),
+        "model_profile": context
+            .get("model_profile")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "model": context.get("model").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn harness_capabilities(
+    default_model: Option<String>,
+    available: bool,
+) -> agent_run_core::HarnessCapabilities {
+    agent_run_core::HarnessCapabilities {
+        tasks: vec![
+            task::SEARCH_PLAN_TASK.into(),
+            task::SEARCH_ANSWER_TASK.into(),
+        ],
+        search_plan_schemas: vec![1],
+        terminal_result: true,
+        input_only_isolation: true,
+        model_routing: agent_run_core::ModelRoutingCapabilities {
+            invocation_override: true,
+            profiles: agent_run_core::ModelRoutingProfiles {
+                fast: agent_run_core::ModelProfileCapability {
+                    model: Some(FAST_MODEL.into()),
+                    available,
+                },
+                default_profile: agent_run_core::ModelProfileCapability {
+                    model: default_model,
+                    available,
+                },
+            },
+            // Codex does not expose a stable, credential-free full catalog.
+            selectable_models: Vec::new(),
+        },
+    }
 }
 
 fn run_delivered(spec: &NotifySpec, rec: Option<&record::RunRecord>) -> bool {
@@ -485,6 +555,7 @@ impl CodexAgentPlugin {
         let task_dir = task::task_dir(&vault, &task_id);
         let mut def = load_task(&vault, &task_id).ok_or(format!("unknown task '{task_id}'"))?;
         def.id = task_id.clone();
+        apply_invocation_model(&mut def, &params)?;
 
         // The permission gate first: a task whose policy will not parse must not
         // run, whatever else is or isn't installed.
@@ -500,23 +571,25 @@ impl CodexAgentPlugin {
             MODEL_PROBE_TIMEOUT,
         )
         .ok_or("Codex 无法解析当前 Vault 的有效模型；请先在该目录运行一次 `codex` 并检查配置。")?;
+        // This exact value drives argv, usage attribution and OKF actor.
+        let resolved_model = model.clone();
 
         let target = params
             .get("note_path")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let ctx = if use_ctx && task_id != task::SEARCH_ANSWER_TASK {
+        let ctx = if use_ctx && !task::is_input_only_task(&task_id) {
             self.tab_ctx()
         } else {
             None
         };
         let composed = prompt::compose(&def.prompt, &user_prompt, ctx.as_ref());
-        let mut full = if task_id == task::SEARCH_ANSWER_TASK {
+        let mut full = if task::is_input_only_task(&task_id) {
             composed
         } else {
             // Source-document context is useful for document tasks, but would
-            // violate search-answer's frozen input packet.
+            // violate the frozen packet of either search protocol task.
             let metas = agent_run_core::mirror::read_metas(&vault);
             let scope = target
                 .as_deref()
@@ -610,7 +683,7 @@ impl CodexAgentPlugin {
                 notify_outcome(&h, &n, rec.as_ref()).await;
             }
         });
-        Ok(json!({ "run_id": run_id }))
+        Ok(json!({ "run_id": run_id, "resolved_model": resolved_model }))
     }
 
     fn tab_ctx(&self) -> Option<prompt::TabContext> {
@@ -690,14 +763,7 @@ impl CodexAgentPlugin {
         host.log_info(&format!("run-task {task_id}"));
         self.start(
             host,
-            json!({
-                "task": task_id,
-                "prompt": prompt,
-                "use_context": false,
-                "note_path": note_path,
-                "notify": context.get("notify").cloned().unwrap_or(Value::Null),
-                "usage_display": context.get("usage_display").cloned().unwrap_or(Value::Null),
-            }),
+            relayed_start_params(context, task_id, prompt, note_path),
             "relay",
         )
     }
@@ -765,11 +831,12 @@ impl CodexAgentPlugin {
     fn harness_status(&self) -> Result<Value, String> {
         let Some(bin) = discover::discover(std::env::var("NOTEMD_CODEX_BIN").ok().as_deref())
         else {
-            let mut value = serde_json::to_value(agent_run_core::HarnessStatus::missing(
+            let mut status = agent_run_core::HarnessStatus::missing(
                 HARNESS_NAME,
                 discover::NOT_FOUND,
-            ))
-            .unwrap();
+            );
+            status.capabilities = Some(harness_capabilities(None, false));
+            let mut value = serde_json::to_value(status).unwrap();
             value["reason"] = json!("missing");
             return Ok(value);
         };
@@ -829,6 +896,7 @@ impl CodexAgentPlugin {
             ok,
             version,
             origin: bin.to_string_lossy().into_owned(),
+            capabilities: Some(harness_capabilities(default_model.clone(), ok)),
             default_model,
             hint,
             warning,
@@ -1013,7 +1081,10 @@ mod tests {
             .into_iter()
             .map(|t| t.id)
             .collect();
-        assert_eq!(ids, vec![NOTE_TASK, "search-answer", "selfcheck"]);
+        assert_eq!(
+            ids,
+            vec![NOTE_TASK, "search-answer", "search-plan", "selfcheck"]
+        );
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
         let _ = std::fs::remove_file(&cfg);
     }
@@ -1186,9 +1257,9 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         task::seed_builtin_templates(v.path());
         let got = overview(v.path());
-        assert_eq!(got.len(), 3);
+        assert_eq!(got.len(), 4);
         for t in &got {
-            let expected = if t.def.id == "search-answer" {
+            let expected = if task::is_input_only_task(&t.def.id) {
                 "read-only"
             } else {
                 "workspace-write"
@@ -1286,6 +1357,83 @@ mod tests {
             UsageDisplay::Result
         );
         assert!(usage_display(&json!({"usage_display": "toast"})).is_err());
+    }
+
+    #[test]
+    fn invocation_model_profiles_and_exact_models_resolve_for_codex() {
+        let vault = tempfile::tempdir().unwrap();
+        task::seed_builtin_templates(vault.path());
+        let mut def = load_task(vault.path(), "selfcheck").unwrap();
+        def.model = Some("task-pin".into());
+
+        apply_invocation_model(&mut def, &json!({})).unwrap();
+        assert_eq!(def.model.as_deref(), Some("task-pin"));
+        apply_invocation_model(&mut def, &json!({ "model_profile": "default" })).unwrap();
+        assert_eq!(
+            def.model, None,
+            "explicit default must bypass a task.json model pin"
+        );
+        apply_invocation_model(&mut def, &json!({ "model_profile": "fast" })).unwrap();
+        assert_eq!(def.model.as_deref(), Some("gpt-5.6-luna"));
+        apply_invocation_model(&mut def, &json!({ "model": "  gpt-5.6-terra  " })).unwrap();
+        assert_eq!(def.model.as_deref(), Some("gpt-5.6-terra"));
+
+        assert!(apply_invocation_model(&mut def, &json!({
+            "model_profile": "fast",
+            "model": "gpt-5.6-terra"
+        }))
+        .unwrap_err()
+        .contains("mutually exclusive"));
+        assert!(apply_invocation_model(&mut def, &json!({ "model_profile": "cheap" })).is_err());
+    }
+
+    #[test]
+    fn run_task_relay_keeps_invocation_model_controls() {
+        let context = json!({
+            "model_profile": "fast",
+            "usage_display": "result",
+            "notify": { "marker": true }
+        });
+        let params = relayed_start_params(&context, "search-plan", "packet", "");
+        assert_eq!(params["task"], "search-plan");
+        assert_eq!(params["model_profile"], "fast");
+        assert_eq!(params["model"], Value::Null);
+        assert_eq!(params["usage_display"], "result");
+        assert_eq!(params["notify"]["marker"], true);
+
+        let exact = relayed_start_params(
+            &json!({ "model": "gpt-5.6-terra" }),
+            "search-answer",
+            "packet",
+            "",
+        );
+        assert_eq!(exact["model"], "gpt-5.6-terra");
+        assert_eq!(exact["model_profile"], Value::Null);
+    }
+
+    #[test]
+    fn search_capabilities_advertise_both_input_only_tasks_and_schema_v1() {
+        let capabilities = harness_capabilities(Some("gpt-5.6-sol".into()), true);
+        assert_eq!(capabilities.tasks, vec!["search-plan", "search-answer"]);
+        assert_eq!(capabilities.search_plan_schemas, vec![1]);
+        assert!(capabilities.terminal_result);
+        assert!(capabilities.input_only_isolation);
+        assert!(capabilities.model_routing.invocation_override);
+        assert_eq!(
+            capabilities.model_routing.profiles.fast.model.as_deref(),
+            Some("gpt-5.6-luna")
+        );
+        assert!(capabilities.model_routing.profiles.fast.available);
+        assert_eq!(
+            capabilities
+                .model_routing
+                .profiles
+                .default_profile
+                .model
+                .as_deref(),
+            Some("gpt-5.6-sol")
+        );
+        assert!(capabilities.model_routing.selectable_models.is_empty());
     }
 
     #[test]

@@ -8,7 +8,10 @@
 use crate::{composition, discover, engine, policy, runner, task};
 use agent_run_core::scaffold::RunMeta;
 use agent_run_core::task::check_task_id;
-use agent_run_core::{harness, lock, prompt, record};
+use agent_run_core::{
+    harness, lock, prompt, record, HarnessCapabilities, InvocationModelRequest,
+    ModelProfileCapability, ModelRoutingCapabilities, ModelRoutingProfiles,
+};
 use notemd_plugin_sdk as sdk;
 use sdk::plugin_protocol as proto;
 use serde::Serialize;
@@ -85,6 +88,51 @@ fn notify_params(spec: &NotifySpec, delivered: bool) -> Value {
                         "plugin_id": SELF_PLUGIN_ID, "window": WINDOW },
             "severity": "warn",
         })
+    }
+}
+
+/// Keep invocation-level model selection intact while adapting the host relay
+/// to the window-shaped start request.
+fn run_task_start_params(context: &Value, task: &str, prompt: &str, note_path: &str) -> Value {
+    json!({
+        "task": task,
+        "prompt": prompt,
+        "use_context": false,
+        "note_path": note_path,
+        "notify": context.get("notify").cloned().unwrap_or(Value::Null),
+        "usage_display": context.get("usage_display").cloned().unwrap_or(Value::Null),
+        "model_profile": context.get("model_profile").cloned().unwrap_or(Value::Null),
+        "model": context.get("model").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn harness_capabilities(
+    default_model: Option<&str>,
+    harness_available: bool,
+) -> HarnessCapabilities {
+    HarnessCapabilities {
+        tasks: vec![
+            task::SEARCH_PLAN_TASK.to_string(),
+            task::SEARCH_ANSWER_TASK.to_string(),
+        ],
+        search_plan_schemas: vec![1],
+        terminal_result: true,
+        input_only_isolation: true,
+        model_routing: ModelRoutingCapabilities {
+            invocation_override: true,
+            profiles: ModelRoutingProfiles {
+                fast: ModelProfileCapability {
+                    model: Some(composition::FAST_MODEL.to_string()),
+                    available: harness_available,
+                },
+                default_profile: ModelProfileCapability {
+                    model: default_model.map(str::to_string),
+                    available: harness_available && default_model.is_some(),
+                },
+            },
+            // DSH/DeepSeek does not expose a reliable runtime model catalog.
+            selectable_models: Vec::new(),
+        },
     }
 }
 
@@ -447,6 +495,8 @@ impl DeepseekAgentPlugin {
 
     /// Assemble a RunSpec, start the background task, return the run id.
     fn start(&mut self, host: &sdk::Host, params: Value, trigger: &str) -> Result<Value, String> {
+        let model_request =
+            InvocationModelRequest::from_context(&params).map_err(|error| error.to_string())?;
         let vault = self.vault()?;
         let task_id = params
             .get("task")
@@ -490,23 +540,25 @@ impl DeepseekAgentPlugin {
         let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
         discover::ensure_acp(&launcher.program, &home, &discover::runtime_path())?;
         let config = composition::resolve_config(&vault, None)?;
+        let actual_model =
+            composition::resolve_model(&config, def.model.as_deref(), &model_request)?;
 
         let target = params
             .get("note_path")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let ctx = if use_ctx && task_id != task::SEARCH_ANSWER_TASK {
+        let ctx = if use_ctx && !task::is_input_only_task(&task_id) {
             self.tab_ctx()
         } else {
             None
         };
         let composed = prompt::compose(&def.prompt, &user_prompt, ctx.as_ref());
-        let full = if task_id == task::SEARCH_ANSWER_TASK {
+        let full = if task::is_input_only_task(&task_id) {
             composed
         } else {
             // Source-document context is useful for document tasks, but would
-            // violate search-answer's frozen input packet.
+            // violate the frozen packet of either search protocol task.
             let metas = agent_run_core::mirror::read_metas(&vault);
             let scope = target
                 .as_deref()
@@ -517,6 +569,7 @@ impl DeepseekAgentPlugin {
         let window_open = self.inner.lock().unwrap().window_open;
 
         let spec = engine::RunSpec {
+            actual_model: actual_model.clone(),
             prompt: full,
             meta: RunMeta {
                 vault: vault.clone(),
@@ -594,7 +647,7 @@ impl DeepseekAgentPlugin {
                 notify_outcome(&h, &n, rec.as_ref()).await;
             }
         });
-        Ok(json!({ "run_id": run_id }))
+        Ok(json!({ "run_id": run_id, "resolved_model": actual_model }))
     }
 
     fn tab_ctx(&self) -> Option<prompt::TabContext> {
@@ -674,14 +727,7 @@ impl DeepseekAgentPlugin {
         host.log_info(&format!("run-task {task_id}"));
         self.start(
             host,
-            json!({
-                "task": task_id,
-                "prompt": prompt,
-                "use_context": false,
-                "note_path": note_path,
-                "notify": context.get("notify").cloned().unwrap_or(Value::Null),
-                "usage_display": context.get("usage_display").cloned().unwrap_or(Value::Null),
-            }),
+            run_task_start_params(context, task_id, prompt, note_path),
             "relay",
         )
     }
@@ -743,18 +789,19 @@ impl DeepseekAgentPlugin {
     /// constant here — so a user who edited their `cordis.yml` sees their own
     /// choice rather than ours.
     fn harness_status(&self) -> Result<Value, String> {
-        let Some(launcher) = discover::discover(None) else {
-            return Ok(serde_json::to_value(agent_run_core::HarnessStatus::missing(
-                HARNESS_NAME,
-                discover::NOT_FOUND,
-            ))
-            .unwrap());
-        };
         let vault = self.vault().ok();
         let default_model = vault
             .as_deref()
             .and_then(|v| composition::resolve_config(v, None).ok())
             .and_then(|c| composition::default_model(&c));
+        let Some(launcher) = discover::discover(None) else {
+            let mut status =
+                agent_run_core::HarnessStatus::missing(HARNESS_NAME, discover::NOT_FOUND);
+            status.default_model = default_model;
+            status.capabilities =
+                Some(harness_capabilities(status.default_model.as_deref(), false));
+            return Ok(serde_json::to_value(status).unwrap());
+        };
         // Scoped to OUR runs: both agent plugins share one runs root, so an
         // unfiltered read showed Claude's expired OAuth in this window as though
         // DeepSeek were the broken one.
@@ -780,6 +827,7 @@ impl DeepseekAgentPlugin {
             harness::Probe::Failed(why) => (false, None, Some(why)),
             harness::Probe::Unavailable => (true, None, None),
         };
+        let capabilities = Some(harness_capabilities(default_model.as_deref(), ok));
         Ok(serde_json::to_value(agent_run_core::HarnessStatus {
             harness: HARNESS_NAME.to_string(),
             ok,
@@ -788,6 +836,7 @@ impl DeepseekAgentPlugin {
             default_model,
             hint,
             warning,
+            capabilities,
         })
         .unwrap())
     }
@@ -1001,7 +1050,13 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            vec!["ai-read-ebook", NOTE_TASK, "search-answer", "selfcheck"]
+            vec![
+                "ai-read-ebook",
+                NOTE_TASK,
+                "search-answer",
+                "search-plan",
+                "selfcheck"
+            ]
         );
         assert!(composition::config_path(vault.path()).is_file());
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
@@ -1033,6 +1088,63 @@ mod tests {
         assert!(err.contains("'task'"), "err: {err}");
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
         let _ = std::fs::remove_file(&cfg);
+    }
+
+    #[test]
+    fn run_task_relay_preserves_each_invocation_model_selector() {
+        let profile = run_task_start_params(
+            &json!({ "model_profile": "fast", "notify": { "x": 1 } }),
+            "search-plan",
+            "packet",
+            "",
+        );
+        assert_eq!(profile["task"], "search-plan");
+        assert_eq!(profile["model_profile"], "fast");
+        assert!(profile["model"].is_null());
+        assert_eq!(profile["notify"]["x"], 1);
+
+        let exact = run_task_start_params(
+            &json!({ "model": "deepseek-future" }),
+            "search-answer",
+            "packet",
+            "",
+        );
+        assert_eq!(exact["model"], "deepseek-future");
+        assert!(exact["model_profile"].is_null());
+    }
+
+    #[test]
+    fn harness_capabilities_report_real_tasks_and_portable_model_routes() {
+        let value =
+            serde_json::to_value(harness_capabilities(Some("vault-default"), true)).unwrap();
+        assert_eq!(value["tasks"], json!(["search-plan", "search-answer"]));
+        assert_eq!(value["search_plan_schemas"], json!([1]));
+        assert_eq!(value["terminal_result"], true);
+        assert_eq!(value["input_only_isolation"], true);
+        assert_eq!(value["model_routing"]["invocation_override"], true);
+        assert_eq!(
+            value["model_routing"]["profiles"]["fast"]["model"],
+            composition::FAST_MODEL
+        );
+        assert_eq!(
+            value["model_routing"]["profiles"]["default"]["model"],
+            "vault-default"
+        );
+        assert_eq!(value["model_routing"]["selectable_models"], json!([]));
+
+        let missing_default = harness_capabilities(None, true);
+        assert!(
+            !missing_default
+                .model_routing
+                .profiles
+                .default_profile
+                .available
+        );
+        assert!(missing_default.model_routing.profiles.fast.available);
+
+        let unavailable = harness_capabilities(Some("vault-default"), false);
+        assert!(!unavailable.model_routing.profiles.fast.available);
+        assert!(!unavailable.model_routing.profiles.default_profile.available);
     }
 
     /// `host.agent.run` is open to any plugin holding the `agent` capability, so
@@ -1172,9 +1284,9 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         task::seed_builtin_templates(v.path());
         let got = overview(v.path());
-        assert_eq!(got.len(), 4);
+        assert_eq!(got.len(), 5);
         for t in &got {
-            let expected = if t.def.id == "search-answer" {
+            let expected = if task::is_input_only_task(&t.def.id) {
                 "read-only"
             } else {
                 "workspace-write"

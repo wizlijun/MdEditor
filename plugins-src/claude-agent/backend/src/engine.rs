@@ -44,6 +44,22 @@ pub enum Step {
     Done(record::RunRecord),
 }
 
+/// Prefer Claude's terminal report because aliases such as `haiku` resolve to
+/// a concrete model at runtime. The invocation model is still a useful
+/// fallback when the CLI exits before emitting metered usage.
+fn actor(task_model: Option<&str>, result: Option<&stream::RunResult>) -> String {
+    let model = result
+        .and_then(|result| result.usage.as_ref())
+        .and_then(|usage| usage.model.as_deref())
+        .or(task_model)
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
+    match model {
+        Some(model) => format!("claude-code/{model}"),
+        None => format!("claude-agent/{}", env!("CARGO_PKG_VERSION")),
+    }
+}
+
 /// Run once. Any message on `cancel` terminates the child process group.
 /// The task lock is acquired here and held until the run ends, so callers
 /// never have to think about releasing it.
@@ -94,10 +110,11 @@ pub async fn run(
         return Ok(());
     }
 
-    let input_only = spec.task.id == task::SEARCH_ANSWER_TASK;
+    let input_only_protocol = task::input_only_instructions(&spec.task.id);
+    let input_only = input_only_protocol.is_some();
     let input_only_dir = if input_only {
         match tempfile::Builder::new()
-            .prefix("notemd-search-answer-")
+            .prefix("notemd-search-input-only-")
             .tempdir()
         {
             Ok(dir) => Some(dir),
@@ -129,7 +146,7 @@ pub async fn run(
             prompt::build_input_only_argv(
                 &spec.task,
                 &spec.prompt,
-                include_str!("../templates/search-answer/CLAUDE.md"),
+                input_only_protocol.expect("input-only task has compiled instructions"),
             ),
             false,
         )
@@ -352,7 +369,7 @@ pub async fn run(
     // 免得 vault 里多一份没有 `type` 的文档(§4.1)。已有 frontmatter 的不碰。
     // 声明的目标文件用任务自报的 type(如 Book Summary),其余走默认 Answer ——
     // 摘要写在 <vault>/ssot/ebooks/… 而不是 answers/,以前这道闸够不着它。
-    let by = format!("claude-agent/{}", env!("CARGO_PKG_VERSION"));
+    let by = actor(spec.task.model.as_deref(), final_result.as_ref());
     let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let target_rel = spec
         .deliverable
@@ -541,6 +558,51 @@ mod tests {
         let cost = usage.cost.expect("Claude reports its billed cost");
         assert_eq!(cost.kind, agent_run_core::usage::CostKind::ProviderReported);
         assert!((cost.amount_usd - 0.0123).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn invocation_model_drives_argv_usage_and_okf_actor() {
+        let d = tempfile::tempdir().unwrap();
+        let seen_args = d.path().join("args.txt");
+        let answer = d.path().join("answer.md");
+        let c = fake_claude(
+            d.path(),
+            "fake-model",
+            &format!(
+                concat!(
+                    "printf '%s\\n' \"$@\" > \"{args}\"\n",
+                    "printf '# answer\\n' > \"{answer}\"\n",
+                    r#"echo '{{"type":"result","subtype":"success","result":"done","is_error":false,"model":"claude-haiku-4-5","usage":{{"output_tokens":1}}}}'"#
+                ),
+                args = seen_args.display(),
+                answer = answer.display(),
+            ),
+        );
+        let mut s = spec(d.path(), c, 30);
+        // `start` maps the fast profile to this task-level invocation override.
+        s.task.model = Some("haiku".into());
+        s.deliverable = Some(answer.clone());
+
+        let (_events, rec) = drive(s).await;
+        let args: Vec<String> = std::fs::read_to_string(seen_args)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--model".to_string(), "haiku".to_string()]),
+            "model override did not reach Claude argv: {args:?}"
+        );
+        assert_eq!(
+            rec.usage.as_ref().and_then(|usage| usage.model.as_deref()),
+            Some("claude-haiku-4-5")
+        );
+        let document = std::fs::read_to_string(answer).unwrap();
+        assert!(
+            document.contains("generated: { by: claude-code/claude-haiku-4-5,"),
+            "OKF actor did not use Claude's actual reported model: {document}"
+        );
     }
 
     #[tokio::test]
@@ -942,23 +1004,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_answer_runs_in_a_removed_empty_directory_outside_the_vault() {
-        let d = tempfile::tempdir().unwrap();
-        let c = fake_claude(
-            d.path(),
-            "fake-input-only-cwd",
-            r#"printf '{"type":"result","result":"%s"}\n' "$(pwd)""#,
-        );
-        let mut s = spec(d.path(), c, 30);
-        s.task.id = task::SEARCH_ANSWER_TASK.into();
-        let vault = s.vault.canonicalize().unwrap();
-        let (_e, rec) = drive(s).await;
-        let cwd = PathBuf::from(&rec.result);
-        assert!(
-            !cwd.starts_with(vault),
-            "input-only cwd leaked into Vault: {cwd:?}"
-        );
-        assert!(!cwd.exists(), "temporary input-only cwd was not removed");
+    async fn search_protocol_tasks_run_in_a_removed_empty_directory_outside_the_vault() {
+        for task_id in [task::SEARCH_PLAN_TASK, task::SEARCH_ANSWER_TASK] {
+            let d = tempfile::tempdir().unwrap();
+            let c = fake_claude(
+                d.path(),
+                "fake-input-only-cwd",
+                r#"printf '{"type":"result","result":"%s"}\n' "$(pwd)""#,
+            );
+            let mut s = spec(d.path(), c, 30);
+            s.task.id = task_id.into();
+            let vault = s.vault.canonicalize().unwrap();
+            let (_e, rec) = drive(s).await;
+            let cwd = PathBuf::from(&rec.result);
+            assert!(
+                !cwd.starts_with(&vault),
+                "{task_id} input-only cwd leaked into Vault: {cwd:?}"
+            );
+            assert!(
+                !cwd.exists(),
+                "{task_id} temporary input-only cwd was not removed"
+            );
+        }
     }
 
     #[tokio::test]

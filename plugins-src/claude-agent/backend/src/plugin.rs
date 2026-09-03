@@ -6,8 +6,8 @@
 //! blocking here would wedge the whole plugin. Events reach the window from
 //! that task via `host.ui_post`.
 use crate::{discover, engine, lock, prompt, record, runner, task};
-use agent_run_core::harness;
 use agent_run_core::task::check_task_id;
+use agent_run_core::{harness, InvocationModelRequest, ModelProfile};
 use notemd_plugin_sdk as sdk;
 use sdk::plugin_protocol as proto;
 use serde::Serialize;
@@ -27,6 +27,10 @@ const NOTE_TASK: &str = "answer-note-question";
 const SELF_PLUGIN_ID: &str = "notemd.claude-agent";
 /// The harness behind this plugin, as the window names it.
 const HARNESS_NAME: &str = "Claude Code";
+/// Invocation profile used by latency-sensitive orchestration phases. Claude
+/// Code resolves this stable alias to the concrete Haiku model available to
+/// the installed CLI/account.
+const FAST_MODEL: &str = "haiku";
 /// A version probe runs while the window waits, so it is bounded tightly.
 const VERSION_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -76,6 +80,75 @@ impl UsageDisplay {
 fn usage_tip(display: UsageDisplay, rec: &record::RunRecord) -> Option<String> {
     (display == UsageDisplay::Tip)
         .then(|| agent_run_core::usage::compact_run(rec.status, rec.usage.as_ref()))
+}
+
+/// Apply the mutually-exclusive invocation-level model controls. An omitted
+/// selector preserves a legacy task pin; an explicit `default` deliberately
+/// removes that pin and hands model selection back to Claude Code settings.
+fn apply_invocation_model(def: &mut task::TaskDef, params: &Value) -> Result<(), String> {
+    let request =
+        InvocationModelRequest::from_context(params).map_err(|error| error.to_string())?;
+    if let Some(model) = request.model() {
+        def.model = Some(model.to_string());
+        return Ok(());
+    }
+    match request.model_profile() {
+        None => {}
+        Some(ModelProfile::Default) => def.model = None,
+        Some(ModelProfile::Fast) => def.model = Some(FAST_MODEL.into()),
+    }
+    Ok(())
+}
+
+/// Preserve every invocation-scoped control while the host's `run-task`
+/// command is relayed into the common `start` path.
+fn relayed_start_params(context: &Value, task_id: &str, prompt: &str, note_path: &str) -> Value {
+    json!({
+        "task": task_id,
+        "prompt": prompt,
+        "use_context": false,
+        "note_path": note_path,
+        "notify": context.get("notify").cloned().unwrap_or(Value::Null),
+        "usage_display": context
+            .get("usage_display")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "model_profile": context
+            .get("model_profile")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "model": context.get("model").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn harness_capabilities(
+    default_model: Option<String>,
+    available: bool,
+) -> agent_run_core::HarnessCapabilities {
+    agent_run_core::HarnessCapabilities {
+        tasks: vec![
+            task::SEARCH_PLAN_TASK.into(),
+            task::SEARCH_ANSWER_TASK.into(),
+        ],
+        search_plan_schemas: vec![1],
+        terminal_result: true,
+        input_only_isolation: true,
+        model_routing: agent_run_core::ModelRoutingCapabilities {
+            invocation_override: true,
+            profiles: agent_run_core::ModelRoutingProfiles {
+                fast: agent_run_core::ModelProfileCapability {
+                    model: Some(FAST_MODEL.into()),
+                    available,
+                },
+                default_profile: agent_run_core::ModelProfileCapability {
+                    model: default_model,
+                    available,
+                },
+            },
+            // Claude Code has no reliable local, credential-free model catalog.
+            selectable_models: Vec::new(),
+        },
+    }
 }
 
 /// A `success` record is not enough: the file the caller expects has to be on
@@ -501,6 +574,11 @@ impl ClaudeAgentPlugin {
         let task_dir = task::task_dir(&vault, &task_id);
         let mut def = load_task(&vault, &task_id).ok_or(format!("unknown task '{task_id}'"))?;
         def.id = task_id.clone();
+        apply_invocation_model(&mut def, &params)?;
+        // Claude Code may resolve its settings-driven default only after it
+        // starts. Invocation/task models are exact because this value is also
+        // the one passed to `--model` below.
+        let resolved_model = def.model.clone();
 
         let claude = discover::discover(std::env::var("NOTEMD_CLAUDE_BIN").ok().as_deref())
             .ok_or("claude executable not found — install Claude Code, or point NOTEMD_CLAUDE_BIN at it")?;
@@ -512,7 +590,7 @@ impl ClaudeAgentPlugin {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let ctx = if use_ctx && task_id != task::SEARCH_ANSWER_TASK {
+        let ctx = if use_ctx && !task::is_input_only_task(&task_id) {
             self.tab_ctx()
         } else {
             None
@@ -596,7 +674,7 @@ impl ClaudeAgentPlugin {
                 notify_outcome(&h, &n, rec.as_ref()).await;
             }
         });
-        Ok(json!({ "run_id": run_id }))
+        Ok(json!({ "run_id": run_id, "resolved_model": resolved_model }))
     }
 
     fn tab_ctx(&self) -> Option<prompt::TabContext> {
@@ -684,17 +762,7 @@ impl ClaudeAgentPlugin {
         host.log_info(&format!("run-task {task_id}"));
         self.start(
             host,
-            json!({
-                "task": task_id,
-                "prompt": prompt,
-                "use_context": false,
-                "note_path": note_path,
-                "notify": context.get("notify").cloned().unwrap_or(Value::Null),
-                "usage_display": context
-                    .get("usage_display")
-                    .cloned()
-                    .unwrap_or(Value::Null),
-            }),
+            relayed_start_params(context, task_id, prompt, note_path),
             "relay",
         )
     }
@@ -758,11 +826,12 @@ impl ClaudeAgentPlugin {
     fn harness_status(&self) -> Result<Value, String> {
         let Some(bin) = discover::discover(std::env::var("NOTEMD_CLAUDE_BIN").ok().as_deref())
         else {
-            return Ok(serde_json::to_value(agent_run_core::HarnessStatus::missing(
+            let mut status = agent_run_core::HarnessStatus::missing(
                 HARNESS_NAME,
                 "安装 Claude Code(`npm i -g @anthropic-ai/claude-code`),或用 NOTEMD_CLAUDE_BIN 指定路径。",
-            ))
-            .unwrap());
+            );
+            status.capabilities = Some(harness_capabilities(None, false));
+            return Ok(serde_json::to_value(status).unwrap());
         };
         // Scoped to OUR runs: both agent plugins share one runs root, so an
         // unfiltered read would show the other harness's expired credential here.
@@ -793,6 +862,7 @@ impl ClaudeAgentPlugin {
             default_model: None,
             hint,
             warning,
+            capabilities: Some(harness_capabilities(None, ok)),
         })
         .unwrap())
     }
@@ -970,7 +1040,13 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            vec!["ai-read-ebook", NOTE_TASK, "search-answer", "selfcheck"]
+            vec![
+                "ai-read-ebook",
+                NOTE_TASK,
+                "search-answer",
+                "search-plan",
+                "selfcheck"
+            ]
         );
         std::env::remove_var("NOTEMD_SHARED_CONFIG");
     }
@@ -1502,6 +1578,75 @@ mod tests {
             Ok(UsageDisplay::Result)
         );
         assert!(UsageDisplay::from_params(&json!({ "usage_display": "elsewhere" })).is_err());
+    }
+
+    #[test]
+    fn invocation_model_profiles_and_exact_models_resolve_for_claude() {
+        let vault = tempfile::tempdir().unwrap();
+        task::seed_builtin_templates(vault.path());
+        let mut def = load_task(vault.path(), "selfcheck").unwrap();
+        def.model = Some("task-pin".into());
+
+        apply_invocation_model(&mut def, &json!({})).unwrap();
+        assert_eq!(def.model.as_deref(), Some("task-pin"));
+        apply_invocation_model(&mut def, &json!({ "model_profile": "default" })).unwrap();
+        assert_eq!(
+            def.model, None,
+            "explicit default must bypass a task.json model pin"
+        );
+        apply_invocation_model(&mut def, &json!({ "model_profile": "fast" })).unwrap();
+        assert_eq!(def.model.as_deref(), Some("haiku"));
+        apply_invocation_model(&mut def, &json!({ "model": "  claude-opus-5  " })).unwrap();
+        assert_eq!(def.model.as_deref(), Some("claude-opus-5"));
+
+        assert!(apply_invocation_model(&mut def, &json!({
+            "model_profile": "fast",
+            "model": "claude-opus-5"
+        }))
+        .unwrap_err()
+        .contains("mutually exclusive"));
+        assert!(apply_invocation_model(&mut def, &json!({ "model_profile": "cheap" })).is_err());
+    }
+
+    #[test]
+    fn run_task_relay_keeps_invocation_model_controls() {
+        let context = json!({
+            "model_profile": "fast",
+            "usage_display": "result",
+            "notify": { "marker": true }
+        });
+        let params = relayed_start_params(&context, "search-plan", "packet", "");
+        assert_eq!(params["task"], "search-plan");
+        assert_eq!(params["model_profile"], "fast");
+        assert_eq!(params["model"], Value::Null);
+        assert_eq!(params["usage_display"], "result");
+        assert_eq!(params["notify"]["marker"], true);
+
+        let exact = relayed_start_params(
+            &json!({ "model": "claude-sonnet-5" }),
+            "search-answer",
+            "packet",
+            "",
+        );
+        assert_eq!(exact["model"], "claude-sonnet-5");
+        assert_eq!(exact["model_profile"], Value::Null);
+    }
+
+    #[test]
+    fn search_capabilities_advertise_both_input_only_tasks_and_schema_v1() {
+        let capabilities = harness_capabilities(None, true);
+        assert_eq!(capabilities.tasks, vec!["search-plan", "search-answer"]);
+        assert_eq!(capabilities.search_plan_schemas, vec![1]);
+        assert!(capabilities.terminal_result);
+        assert!(capabilities.input_only_isolation);
+        assert!(capabilities.model_routing.invocation_override);
+        assert_eq!(
+            capabilities.model_routing.profiles.fast.model.as_deref(),
+            Some("haiku")
+        );
+        assert!(capabilities.model_routing.profiles.fast.available);
+        assert_eq!(capabilities.model_routing.profiles.default_profile.model, None);
+        assert!(capabilities.model_routing.selectable_models.is_empty());
     }
 
     #[test]

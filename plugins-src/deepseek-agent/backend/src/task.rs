@@ -9,12 +9,25 @@
 //! `answer-note-question` is a job description, not a harness binding, so
 //! whichever agent you point at it should find it there. Providers seed different
 //! files into a directory of the same name only when the ids collide, and where
-//! they do (`answer-note-question`, `search-answer`, `selfcheck`) the shared files — `task.json`,
+//! they do (`answer-note-question`, `search-plan`, `search-answer`, `selfcheck`) the shared files — `task.json`,
 //! `precheck.sh` — are written to be equivalent under either harness.
 use agent_run_core::task::{self as core, Templates};
 use std::path::Path;
 
 pub const SEARCH_ANSWER_TASK: &str = "search-answer";
+pub const SEARCH_PLAN_TASK: &str = "search-plan";
+
+pub fn is_input_only_task(id: &str) -> bool {
+    matches!(id, SEARCH_PLAN_TASK | SEARCH_ANSWER_TASK)
+}
+
+pub fn input_only_instructions(id: &str) -> Option<&'static str> {
+    match id {
+        SEARCH_PLAN_TASK => Some(include_str!("../templates/search-plan/AGENTS.md")),
+        SEARCH_ANSWER_TASK => Some(include_str!("../templates/search-answer/AGENTS.md")),
+        _ => None,
+    }
+}
 
 pub use agent_run_core::task::{discover, read_task, runs_root, task_dir, TaskDef};
 
@@ -106,6 +119,19 @@ const OWNED: &Templates = &[
             ),
         ],
     ),
+    (
+        "search-plan",
+        &[
+            (
+                "AGENTS.md",
+                include_str!("../templates/search-plan/AGENTS.md"),
+            ),
+            (
+                "policy.json",
+                include_str!("../templates/search-plan/policy.json"),
+            ),
+        ],
+    ),
 ];
 
 /// Files another agent plugin may also seed: written once, then left alone.
@@ -136,6 +162,11 @@ const SHARED: &[(&str, &str, &str)] = &[
         "task.json",
         include_str!("../templates/search-answer/task.json"),
     ),
+    (
+        "search-plan",
+        "task.json",
+        include_str!("../templates/search-plan/task.json"),
+    ),
 ];
 
 /// Keep derived data out of the vault's git history.
@@ -154,7 +185,7 @@ mod tests {
     fn seeds_all_templates_on_a_fresh_vault() {
         let v = tempfile::tempdir().unwrap();
         let wrote = seed_builtin_templates(v.path());
-        assert_eq!(wrote.len(), 13, "seeded: {wrote:?}");
+        assert_eq!(wrote.len(), 16, "seeded: {wrote:?}");
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
         assert_eq!(
             ids,
@@ -162,6 +193,7 @@ mod tests {
                 "ai-read-ebook",
                 "answer-note-question",
                 "search-answer",
+                "search-plan",
                 "selfcheck"
             ]
         );
@@ -170,6 +202,7 @@ mod tests {
             "answer-note-question",
             "ai-read-ebook",
             "search-answer",
+            "search-plan",
         ] {
             assert!(task_dir(v.path(), id).join("AGENTS.md").exists(), "{id}");
             assert!(task_dir(v.path(), id).join("policy.json").exists(), "{id}");
@@ -185,12 +218,19 @@ mod tests {
             "answer-note-question",
             "ai-read-ebook",
             "search-answer",
+            "search-plan",
         ] {
             crate::policy::Policy::load(&task_dir(v.path(), id))
                 .unwrap_or_else(|e| panic!("{id}: {e}"));
         }
         assert_eq!(
             crate::policy::Policy::load(&task_dir(v.path(), "search-answer"))
+                .unwrap()
+                .permission_mode,
+            crate::policy::PermissionMode::ReadOnly
+        );
+        assert_eq!(
+            crate::policy::Policy::load(&task_dir(v.path(), "search-plan"))
                 .unwrap()
                 .permission_mode,
             crate::policy::PermissionMode::ReadOnly
@@ -202,7 +242,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
         let tasks = discover(v.path());
-        assert_eq!(tasks.len(), 4);
+        assert_eq!(tasks.len(), 5);
         for t in tasks {
             assert!(!t.name.is_empty(), "{}", t.id);
             assert!(!t.prompt.is_empty(), "{}", t.id);
@@ -310,6 +350,46 @@ mod tests {
                 md.contains(required),
                 "missing search-answer rule: {required}"
             );
+        }
+    }
+
+    #[test]
+    fn search_plan_contract_is_shared_and_read_only() {
+        let ours = include_str!("../templates/search-plan/task.json");
+        assert_eq!(
+            ours,
+            include_str!("../../../claude-agent/backend/templates/search-plan/task.json")
+        );
+        assert_eq!(
+            ours,
+            include_str!("../../../codex-agent/backend/templates/search-plan/task.json")
+        );
+        let md = include_str!("../templates/search-plan/AGENTS.md");
+        assert_eq!(
+            md,
+            include_str!("../../../claude-agent/backend/templates/search-plan/CLAUDE.md")
+        );
+        assert_eq!(
+            md,
+            include_str!("../../../codex-agent/backend/templates/search-plan/AGENTS.md")
+        );
+        assert_eq!(
+            include_str!("../templates/search-plan/policy.json"),
+            include_str!("../../../codex-agent/backend/templates/search-plan/policy.json")
+        );
+        for required in [
+            "`mode=plan`",
+            "`mode=tune`",
+            "SearchPlanV1",
+            "只输出一个",
+            "最多 4 个",
+            "document_date",
+            "content_date",
+            "activity_time",
+            "不读取 Vault",
+            "不调用任何工具",
+        ] {
+            assert!(md.contains(required), "missing search-plan rule: {required}");
         }
     }
 

@@ -27,9 +27,9 @@ pub fn build(model: Option<&str>, workspace: &Path, sandbox: &str) -> Vec<String
     out
 }
 
-/// A search-answer run receives its complete evidence in stdin. Keep Codex
+/// A search protocol run receives its complete packet in stdin. Keep Codex
 /// authenticated, but disable every local/discoverable information path so a
-/// prompt-injected source cannot browse beyond that frozen packet.
+/// prompt-injected question or source cannot browse beyond that frozen packet.
 pub fn build_input_only(model: Option<&str>, workspace: &Path) -> Vec<String> {
     let mut out = build(model, workspace, "read-only");
     let stdin_marker = out.pop().expect("build always ends in stdin marker");

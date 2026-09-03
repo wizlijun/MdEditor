@@ -38,8 +38,20 @@ pub async fn run(run_dir: PathBuf) -> i32 {
     let Ok(config) = composition::resolve_config(&req.vault, None) else {
         return 3;
     };
+    let actual_model = match composition::resolve_model(
+        &config,
+        def.model.as_deref(),
+        &agent_run_core::InvocationModelRequest::default(),
+    ) {
+        Ok(model) => model,
+        Err(error) => {
+            eprintln!("{error}");
+            return 3;
+        }
+    };
 
     let spec = engine::RunSpec {
+        actual_model,
         prompt: prompt::compose(&def.prompt, &req.prompt, None),
         meta: RunMeta {
             vault: req.vault.clone(),

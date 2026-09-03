@@ -69,10 +69,10 @@ pub async fn run(
         }
     };
 
-    let input_only = spec.meta.task.id == crate::task::SEARCH_ANSWER_TASK;
+    let input_only = crate::task::is_input_only_task(&spec.meta.task.id);
     let input_only_dir = if input_only {
         match tempfile::Builder::new()
-            .prefix("notemd-search-answer-")
+            .prefix("notemd-search-input-only-")
             .tempdir()
         {
             Ok(dir) => Some(dir),
@@ -392,46 +392,71 @@ mod tests {
     #[tokio::test]
     async fn fake_codex_runs_end_to_end_and_records_the_thread() {
         let d = tempfile::tempdir().unwrap();
+        let answer = d.path().join("answer.md");
         let bin = fake(
             d.path(),
-            "prompt=$(cat); [ \"$prompt\" = 'PROMPT SENT OVER STDIN' ] || exit 9\n\
-             [ -d .notemd/agent-tasks/t ] || exit 8\n\
-             echo '{\"type\":\"thread.started\",\"thread_id\":\"thr-1\"}'\n\
-             echo '{\"type\":\"turn.started\"}'\n\
-             echo '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"done\"}}'\n\
-             echo '{\"type\":\"turn.completed\",\"usage\":{}}'",
+            &format!(
+                "prompt=$(cat); [ \"$prompt\" = 'PROMPT SENT OVER STDIN' ] || exit 9\n\
+                 [ -d .notemd/agent-tasks/t ] || exit 8\n\
+                 case \" $* \" in *\" --model gpt-test \"*) ;; *) exit 7 ;; esac\n\
+                 printf '# answer\\n' > \"{}\"\n\
+                 echo '{{\"type\":\"thread.started\",\"thread_id\":\"thr-1\"}}'\n\
+                 echo '{{\"type\":\"turn.started\"}}'\n\
+                 echo '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"done\"}}}}'\n\
+                 echo '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":2,\"output_tokens\":1}}}}'",
+                answer.display()
+            ),
         );
         let (_cancel_tx, cancel_rx) = mpsc::channel(1);
-        let rec = record_from(spec(d.path(), bin, 5), cancel_rx).await;
+        let mut s = spec(d.path(), bin, 5);
+        s.meta.deliverable = Some(answer.clone());
+        let rec = record_from(s, cancel_rx).await;
         assert_eq!(rec.status, record::Status::Success);
         assert_eq!(rec.result, "done");
         assert_eq!(rec.session_id.as_deref(), Some("thr-1"));
         assert_eq!(rec.harness.as_deref(), Some(crate::SELF_PLUGIN_ID));
+        assert_eq!(
+            rec.usage.as_ref().and_then(|usage| usage.model.as_deref()),
+            Some("gpt-test")
+        );
+        let document = std::fs::read_to_string(answer).unwrap();
+        assert!(
+            document.contains("generated: { by: codex/gpt-test,"),
+            "OKF actor did not use the model passed to Codex: {document}"
+        );
     }
 
     #[tokio::test]
-    async fn search_answer_runs_in_a_removed_empty_directory_outside_the_vault() {
-        let d = tempfile::tempdir().unwrap();
-        let bin = fake(
-            d.path(),
-            "cat >/dev/null\n\
-             case \" $* \" in *\" --sandbox read-only \"*) ;; *) exit 7 ;; esac\n\
-             printf '{\"type\":\"thread.started\",\"thread_id\":\"thr-input-only\"}\\n'\n\
-             printf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"%s\"}}\\n' \"$(pwd)\"\n\
-             printf '{\"type\":\"turn.completed\",\"usage\":{}}\\n'",
-        );
-        let mut s = spec(d.path(), bin, 5);
-        s.meta.task.id = crate::task::SEARCH_ANSWER_TASK.into();
-        let vault = s.meta.vault.canonicalize().unwrap();
-        let (_cancel_tx, cancel_rx) = mpsc::channel(1);
-        let rec = record_from(s, cancel_rx).await;
-        let cwd = PathBuf::from(&rec.result);
-        assert_eq!(rec.status, record::Status::Success, "{rec:?}");
-        assert!(
-            !cwd.starts_with(vault),
-            "input-only cwd leaked into Vault: {cwd:?}"
-        );
-        assert!(!cwd.exists(), "temporary input-only cwd was not removed");
+    async fn search_protocol_tasks_run_in_a_removed_empty_directory_outside_the_vault() {
+        for task_id in [
+            crate::task::SEARCH_PLAN_TASK,
+            crate::task::SEARCH_ANSWER_TASK,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let bin = fake(
+                d.path(),
+                "cat >/dev/null\n\
+                 case \" $* \" in *\" --sandbox read-only \"*) ;; *) exit 7 ;; esac\n\
+                 printf '{\"type\":\"thread.started\",\"thread_id\":\"thr-input-only\"}\\n'\n\
+                 printf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"%s\"}}\\n' \"$(pwd)\"\n\
+                 printf '{\"type\":\"turn.completed\",\"usage\":{}}\\n'",
+            );
+            let mut s = spec(d.path(), bin, 5);
+            s.meta.task.id = task_id.into();
+            let vault = s.meta.vault.canonicalize().unwrap();
+            let (_cancel_tx, cancel_rx) = mpsc::channel(1);
+            let rec = record_from(s, cancel_rx).await;
+            let cwd = PathBuf::from(&rec.result);
+            assert_eq!(rec.status, record::Status::Success, "{task_id}: {rec:?}");
+            assert!(
+                !cwd.starts_with(&vault),
+                "{task_id} input-only cwd leaked into Vault: {cwd:?}"
+            );
+            assert!(
+                !cwd.exists(),
+                "{task_id} temporary input-only cwd was not removed"
+            );
+        }
     }
 
     #[tokio::test]

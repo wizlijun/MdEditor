@@ -34,6 +34,45 @@ pub struct HarnessStatus {
     /// An environment-level problem observed in the most recent run — expired
     /// credentials, rate limits. Distinct from a task that merely failed.
     pub warning: Option<String>,
+    /// Stable machine-readable features supported by this provider. Absent means
+    /// an older provider whose task protocol has not been advertised.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<HarnessCapabilities>,
+}
+
+/// Task, result and model-routing features a provider promises to implement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessCapabilities {
+    pub tasks: Vec<String>,
+    pub search_plan_schemas: Vec<u32>,
+    pub terminal_result: bool,
+    pub input_only_isolation: bool,
+    pub model_routing: ModelRoutingCapabilities,
+}
+
+/// Invocation-level model selection supported by one provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelRoutingCapabilities {
+    pub invocation_override: bool,
+    pub profiles: ModelRoutingProfiles,
+    /// Exact provider model ids the UI may offer. Empty means the provider cannot
+    /// enumerate them reliably; portable profiles can still be available.
+    pub selectable_models: Vec<String>,
+}
+
+/// Resolution state for the two portable model profiles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelRoutingProfiles {
+    pub fast: ModelProfileCapability,
+    #[serde(rename = "default")]
+    pub default_profile: ModelProfileCapability,
+}
+
+/// What a portable profile resolves to on this provider right now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelProfileCapability {
+    pub model: Option<String>,
+    pub available: bool,
 }
 
 impl HarnessStatus {
@@ -47,6 +86,7 @@ impl HarnessStatus {
             default_model: None,
             hint: Some(hint.to_string()),
             warning: None,
+            capabilities: None,
         }
     }
 }
@@ -499,5 +539,61 @@ mod tests {
         assert!(!s.ok);
         assert!(s.hint.unwrap().contains("npm i -g"));
         assert_eq!(s.version, None);
+        assert_eq!(s.capabilities, None);
+    }
+
+    #[test]
+    fn capabilities_have_the_stable_wire_shape() {
+        let capabilities = HarnessCapabilities {
+            tasks: vec!["search-plan".into(), "search-answer".into()],
+            search_plan_schemas: vec![1],
+            terminal_result: true,
+            input_only_isolation: true,
+            model_routing: ModelRoutingCapabilities {
+                invocation_override: true,
+                profiles: ModelRoutingProfiles {
+                    fast: ModelProfileCapability {
+                        model: Some("provider-fast".into()),
+                        available: true,
+                    },
+                    default_profile: ModelProfileCapability {
+                        model: Some("provider-default".into()),
+                        available: true,
+                    },
+                },
+                selectable_models: vec!["provider-fast".into(), "provider-default".into()],
+            },
+        };
+        let value = serde_json::to_value(&capabilities).unwrap();
+        assert_eq!(value["tasks"], serde_json::json!(["search-plan", "search-answer"]));
+        assert_eq!(value["search_plan_schemas"], serde_json::json!([1]));
+        assert_eq!(value["terminal_result"], true);
+        assert_eq!(value["input_only_isolation"], true);
+        assert_eq!(value["model_routing"]["invocation_override"], true);
+        assert_eq!(value["model_routing"]["profiles"]["fast"]["model"], "provider-fast");
+        assert_eq!(
+            value["model_routing"]["profiles"]["default"]["model"],
+            "provider-default"
+        );
+        assert_eq!(
+            serde_json::from_value::<HarnessCapabilities>(value).unwrap(),
+            capabilities
+        );
+    }
+
+    #[test]
+    fn old_harness_status_without_capabilities_still_deserializes() {
+        let status: HarnessStatus = serde_json::from_value(serde_json::json!({
+            "harness": "Old Agent",
+            "ok": true,
+            "version": null,
+            "origin": "/bin/old-agent",
+            "default_model": null,
+            "hint": null,
+            "warning": null
+        }))
+        .unwrap();
+        assert_eq!(status.capabilities, None);
+        assert!(serde_json::to_value(status).unwrap().get("capabilities").is_none());
     }
 }

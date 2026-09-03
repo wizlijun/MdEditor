@@ -25,6 +25,7 @@ pub mod event;
 pub mod harness;
 pub mod lock;
 pub mod mirror;
+pub mod model;
 pub mod okf;
 pub mod precheck;
 pub mod prompt;
@@ -35,7 +36,11 @@ pub mod task;
 pub mod usage;
 
 pub use event::{Event, RunResult, Step};
-pub use harness::HarnessStatus;
+pub use harness::{
+    HarnessCapabilities, HarnessStatus, ModelProfileCapability, ModelRoutingCapabilities,
+    ModelRoutingProfiles,
+};
+pub use model::{InvocationModelRequest, InvocationModelRequestError, ModelProfile};
 pub use record::{RunRecord, Status};
 pub use scope::Scope;
 pub use task::TaskDef;

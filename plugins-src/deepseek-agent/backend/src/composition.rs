@@ -13,16 +13,117 @@
 //! only ever asks `dsh plugin` to.
 use std::path::{Path, PathBuf};
 
+use agent_run_core::{InvocationModelRequest, ModelProfile};
+
 /// The composition compiled into this binary.
 const DEFAULT_CONFIG: &str = include_str!("../templates/_dsh/cordis.patch.yml");
+
+/// The provider-native model behind the portable `fast` profile.
+pub const FAST_MODEL: &str = "deepseek-v4-flash";
 
 /// Write the trusted overlay used by input-only runs.
 ///
 /// Search answers must not inherit a Vault-local or user-selected composition:
 /// that would let unrelated plugin rows regain tools even though the task only
 /// needs the prompt assembled by NOTE.MD.
-pub fn write_input_only_config(path: &Path) -> std::io::Result<()> {
-    std::fs::write(path, DEFAULT_CONFIG)
+pub fn write_input_only_config(path: &Path, model: &str) -> std::io::Result<()> {
+    write_body_with_model(DEFAULT_CONFIG, path, model)
+}
+
+/// Copy one composition into a per-run overlay and make its ACP model explicit.
+///
+/// A task/invocation model is a property of this run, not of the shared Vault
+/// file. Keeping the rewrite in a temporary overlay prevents concurrent runs
+/// from racing through one mutable composition.
+pub fn write_run_config(source: &Path, destination: &Path, model: &str) -> std::io::Result<()> {
+    let body = std::fs::read_to_string(source)?;
+    write_body_with_model(&body, destination, model)
+}
+
+fn write_body_with_model(body: &str, destination: &Path, model: &str) -> std::io::Result<()> {
+    let rendered = body_with_model(body, model).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the composition has no editable ACP config row",
+        )
+    })?;
+    std::fs::write(destination, rendered)
+}
+
+/// Replace (or add) `config.model` on the ACP row without attempting to parse
+/// the composition's JavaScript-tagged YAML. JSON string quoting is valid YAML
+/// and prevents an invocation model id from becoming injected YAML.
+fn body_with_model(body: &str, model: &str) -> Option<String> {
+    let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
+    let had_trailing_newline = body.ends_with('\n');
+    let (row_start, row_indent) = lines.iter().enumerate().find_map(|(index, line)| {
+        let trimmed = line.trim();
+        (trimmed.strip_prefix("- id:")?.trim() == "acp")
+            .then_some((index, line.len() - line.trim_start().len()))
+    })?;
+    let row_end = lines
+        .iter()
+        .enumerate()
+        .skip(row_start + 1)
+        .find_map(|(index, line)| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return None;
+            }
+            let indent = line.len() - line.trim_start().len();
+            (indent <= row_indent).then_some(index)
+        })
+        .unwrap_or(lines.len());
+    let quoted = serde_json::to_string(model).expect("a string always serializes");
+
+    if let Some(index) =
+        (row_start + 1..row_end).find(|&index| lines[index].trim_start().starts_with("model:"))
+    {
+        let indent = lines[index].len() - lines[index].trim_start().len();
+        lines[index] = format!("{}model: {quoted}", " ".repeat(indent));
+    } else {
+        let config = (row_start + 1..row_end).find(|&index| lines[index].trim() == "config:")?;
+        let indent = lines[config].len() - lines[config].trim_start().len() + 2;
+        lines.insert(config + 1, format!("{}model: {quoted}", " ".repeat(indent)));
+    }
+
+    let mut rendered = lines.join("\n");
+    if had_trailing_newline {
+        rendered.push('\n');
+    }
+    Some(rendered)
+}
+
+/// Resolve the one model id that the composition, usage accounting and audit
+/// actor must all use for this invocation.
+pub fn resolve_model(
+    config: &Path,
+    task_model: Option<&str>,
+    request: &InvocationModelRequest,
+) -> Result<String, String> {
+    if let Some(model) = request.model() {
+        return Ok(model.to_string());
+    }
+    match request.model_profile() {
+        Some(ModelProfile::Fast) => return Ok(FAST_MODEL.to_string()),
+        Some(ModelProfile::Default) => return composition_model(config),
+        None => {}
+    }
+    task_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+        .map(Ok)
+        .unwrap_or_else(|| composition_model(config))
+}
+
+fn composition_model(config: &Path) -> Result<String, String> {
+    default_model(config).ok_or_else(|| {
+        format!(
+            "the ACP composition has no default model: {}",
+            config.display()
+        )
+    })
 }
 
 /// Where the vault keeps harness state that is ours to manage.
@@ -315,9 +416,97 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("input-only.patch.yml");
         std::fs::write(&p, "- id: user-tool\n  dangerous: true\n").unwrap();
-        write_input_only_config(&p).unwrap();
+        write_input_only_config(&p, "deepseek-v4-flash").unwrap();
         let body = std::fs::read_to_string(p).unwrap();
-        assert_eq!(body, DEFAULT_CONFIG);
         assert!(!body.contains("user-tool"));
+        assert!(body.contains("model: \"deepseek-v4-flash\""), "{body}");
+    }
+
+    #[test]
+    fn a_run_config_changes_only_the_acp_model_and_can_add_a_missing_one() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("source.yml");
+        let run = d.path().join("run.yml");
+        std::fs::write(
+            &source,
+            "- id: other\n  config:\n    model: keep-me\n- insert:\n    - id: acp\n      config:\n        provider: deepseek-official\n- id: tail\n",
+        )
+        .unwrap();
+
+        write_run_config(&source, &run, "future:model\nnot-yaml").unwrap();
+        let body = std::fs::read_to_string(run).unwrap();
+        assert!(body.contains("model: keep-me"), "{body}");
+        assert!(
+            body.contains("model: \"future:model\\nnot-yaml\""),
+            "{body}"
+        );
+        assert_eq!(body.matches("model:").count(), 2, "{body}");
+    }
+
+    #[test]
+    fn model_resolution_obeys_invocation_profile_task_and_composition_precedence() {
+        let d = tempfile::tempdir().unwrap();
+        let config = d.path().join("config.yml");
+        std::fs::write(
+            &config,
+            "- id: acp\n  config:\n    model: composition-default\n",
+        )
+        .unwrap();
+        let request = |value| InvocationModelRequest::from_context(&value).unwrap();
+
+        assert_eq!(
+            resolve_model(&config, Some("task-model"), &request(serde_json::json!({}))).unwrap(),
+            "task-model"
+        );
+        assert_eq!(
+            resolve_model(&config, None, &request(serde_json::json!({}))).unwrap(),
+            "composition-default"
+        );
+        assert_eq!(
+            resolve_model(
+                &config,
+                Some("task-model"),
+                &request(serde_json::json!({ "model_profile": "fast" }))
+            )
+            .unwrap(),
+            FAST_MODEL
+        );
+        assert_eq!(
+            resolve_model(
+                &config,
+                Some("task-model"),
+                &request(serde_json::json!({ "model_profile": "default" }))
+            )
+            .unwrap(),
+            "composition-default"
+        );
+        assert_eq!(
+            resolve_model(
+                &config,
+                Some("task-model"),
+                &request(serde_json::json!({ "model": "exact-model" }))
+            )
+            .unwrap(),
+            "exact-model"
+        );
+    }
+
+    #[test]
+    fn a_missing_default_fails_closed_but_an_exact_model_still_applies() {
+        let d = tempfile::tempdir().unwrap();
+        let config = d.path().join("config.yml");
+        std::fs::write(&config, "- id: acp\n  config:\n    provider: deepseek\n").unwrap();
+        let default = InvocationModelRequest::from_context(
+            &serde_json::json!({ "model_profile": "default" }),
+        )
+        .unwrap();
+        assert!(resolve_model(&config, None, &default)
+            .unwrap_err()
+            .contains("no default model"));
+
+        let exact =
+            InvocationModelRequest::from_context(&serde_json::json!({ "model": "exact-model" }))
+                .unwrap();
+        assert_eq!(resolve_model(&config, None, &exact).unwrap(), "exact-model");
     }
 }

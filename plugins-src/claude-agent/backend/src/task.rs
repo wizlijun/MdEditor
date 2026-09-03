@@ -8,6 +8,19 @@ use agent_run_core::task::{self as core, Templates};
 use std::path::Path;
 
 pub const SEARCH_ANSWER_TASK: &str = "search-answer";
+pub const SEARCH_PLAN_TASK: &str = "search-plan";
+
+pub fn is_input_only_task(id: &str) -> bool {
+    matches!(id, SEARCH_PLAN_TASK | SEARCH_ANSWER_TASK)
+}
+
+pub fn input_only_instructions(id: &str) -> Option<&'static str> {
+    match id {
+        SEARCH_PLAN_TASK => Some(include_str!("../templates/search-plan/CLAUDE.md")),
+        SEARCH_ANSWER_TASK => Some(include_str!("../templates/search-answer/CLAUDE.md")),
+        _ => None,
+    }
+}
 
 /// The built-in templates, compiled into the binary and seeded on first run.
 const BUILTIN: &Templates = &[
@@ -91,6 +104,23 @@ const BUILTIN: &Templates = &[
             ),
         ],
     ),
+    (
+        "search-plan",
+        &[
+            (
+                "task.json",
+                include_str!("../templates/search-plan/task.json"),
+            ),
+            (
+                "CLAUDE.md",
+                include_str!("../templates/search-plan/CLAUDE.md"),
+            ),
+            (
+                ".claude/settings.json",
+                include_str!("../templates/search-plan/settings.json"),
+            ),
+        ],
+    ),
 ];
 
 /// Built-in tasks that have been renamed, oldest name first. Without a
@@ -123,9 +153,9 @@ pub fn retire_information_denies(vault: &Path) -> Vec<String> {
     }
     let mut changed = Vec::new();
     for (id, files) in BUILTIN {
-        // search-answer intentionally stays offline: the host has already
-        // frozen and policy-filtered its complete evidence packet.
-        if *id == "search-answer" {
+        // The search protocol tasks intentionally stay offline: the host has
+        // already frozen their complete input packets.
+        if is_input_only_task(id) {
             continue;
         }
         for (rel, _) in *files {
@@ -203,12 +233,15 @@ mod tests {
     fn seeds_all_builtin_templates_on_a_fresh_vault() {
         let v = tempfile::tempdir().unwrap();
         let wrote = seed_builtin_templates(v.path());
-        assert_eq!(wrote.len(), 15, "seeded: {wrote:?}");
+        assert_eq!(wrote.len(), 18, "seeded: {wrote:?}");
         assert!(task_dir(v.path(), "selfcheck").join("CLAUDE.md").exists());
         assert!(task_dir(v.path(), "answer-note-question")
             .join(".claude/settings.json")
             .exists());
         assert!(task_dir(v.path(), "search-answer")
+            .join(".claude/settings.json")
+            .exists());
+        assert!(task_dir(v.path(), "search-plan")
             .join(".claude/settings.json")
             .exists());
         let ids: Vec<String> = discover(v.path()).into_iter().map(|t| t.id).collect();
@@ -218,6 +251,7 @@ mod tests {
                 "ai-read-ebook",
                 "answer-note-question",
                 "search-answer",
+                "search-plan",
                 "selfcheck"
             ]
         );
@@ -298,25 +332,27 @@ mod tests {
     }
 
     #[test]
-    fn search_answer_keeps_its_information_tool_denies() {
+    fn input_only_tasks_keep_their_information_tool_denies() {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
         retire_information_denies(v.path());
-        let denied = deny_of(v.path(), "search-answer", "settings.json");
-        for tool in [
-            "Read",
-            "Write",
-            "Edit",
-            "Bash",
-            "WebSearch",
-            "WebFetch",
-            "Task",
-            "Skill",
-        ] {
-            assert!(
-                denied.iter().any(|entry| entry == tool),
-                "missing {tool}: {denied:?}"
-            );
+        for id in [SEARCH_PLAN_TASK, SEARCH_ANSWER_TASK] {
+            let denied = deny_of(v.path(), id, "settings.json");
+            for tool in [
+                "Read",
+                "Write",
+                "Edit",
+                "Bash",
+                "WebSearch",
+                "WebFetch",
+                "Task",
+                "Skill",
+            ] {
+                assert!(
+                    denied.iter().any(|entry| entry == tool),
+                    "{id} missing {tool}: {denied:?}"
+                );
+            }
         }
     }
 
@@ -332,6 +368,7 @@ mod tests {
                 "ai-read-ebook",
                 "answer-note-question",
                 "search-answer",
+                "search-plan",
                 "selfcheck"
             ]
         );
@@ -381,7 +418,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         seed_builtin_templates(v.path());
         let tasks = discover(v.path());
-        assert_eq!(tasks.len(), 4);
+        assert_eq!(tasks.len(), 5);
         assert!(tasks
             .iter()
             .all(|t| !t.name.is_empty() && !t.prompt.is_empty()));
@@ -404,6 +441,48 @@ mod tests {
                 md.contains(required),
                 "missing search-answer rule: {required}"
             );
+        }
+    }
+
+    #[test]
+    fn search_plan_template_is_shared_and_carries_both_modes() {
+        let task = include_str!("../templates/search-plan/task.json");
+        let def: TaskDef = serde_json::from_str(task).unwrap();
+        assert!(
+            def.model.is_none(),
+            "the caller's plan/tune model_profile must not be shadowed by task.json"
+        );
+        assert_eq!(def.timeout_seconds, 90, "planning must use a short timeout");
+        assert_eq!(
+            task,
+            include_str!("../../../codex-agent/backend/templates/search-plan/task.json")
+        );
+        assert_eq!(
+            task,
+            include_str!("../../../deepseek-agent/backend/templates/search-plan/task.json")
+        );
+        let md = include_str!("../templates/search-plan/CLAUDE.md");
+        assert_eq!(
+            md,
+            include_str!("../../../codex-agent/backend/templates/search-plan/AGENTS.md")
+        );
+        assert_eq!(
+            md,
+            include_str!("../../../deepseek-agent/backend/templates/search-plan/AGENTS.md")
+        );
+        for required in [
+            "`mode=plan`",
+            "`mode=tune`",
+            "SearchPlanV1",
+            "只输出一个",
+            "最多 4 个",
+            "document_date",
+            "content_date",
+            "activity_time",
+            "不读取 Vault",
+            "不调用任何工具",
+        ] {
+            assert!(md.contains(required), "missing search-plan rule: {required}");
         }
     }
 }

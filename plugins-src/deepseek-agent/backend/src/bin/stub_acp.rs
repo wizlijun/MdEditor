@@ -21,6 +21,7 @@
 //! | `STUB_NOISE` | print a non-JSON banner line before the protocol starts |
 //! | `STUB_DIE_EARLY` | print install-style noise on stdout, nothing on stderr, exit 1 before the protocol |
 //! | `STUB_ARGV_FILE` | write the argv it was launched with to this path |
+//! | `STUB_CONFIG_FILE` | copy the `--patch` composition to this path before the run |
 use std::io::{BufRead, Write};
 
 fn env(k: &str) -> Option<String> {
@@ -42,9 +43,20 @@ fn ok(id: &serde_json::Value, result: serde_json::Value) {
 }
 
 fn main() {
+    let argv: Vec<String> = std::env::args().collect();
     if let Some(p) = env("STUB_ARGV_FILE") {
-        let argv: Vec<String> = std::env::args().collect();
         let _ = std::fs::write(p, argv.join("\n"));
+    }
+    if let Some(p) = env("STUB_CONFIG_FILE") {
+        if let Some(config) = argv
+            .windows(2)
+            .find(|pair| pair[0] == "--patch")
+            .map(|pair| &pair[1])
+        {
+            if let Ok(body) = std::fs::read_to_string(config) {
+                let _ = std::fs::write(p, body);
+            }
+        }
     }
     if flag("STUB_DIE_EARLY") {
         // 真实事故的形状(2026-08-18):`pnpm run` 先补装依赖,几分钟的进度全在

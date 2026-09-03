@@ -1,0 +1,5 @@
+{
+  "permission_mode": "read-only",
+  "on_permission_request": "reject",
+  "rationale": "检索规划只消费宿主冻结的输入包并返回 SearchPlanV1；不得读取 Vault、Memory 或使用任何工具。"
+}
