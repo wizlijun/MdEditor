@@ -1,18 +1,22 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import type { RunRecord } from '../lib/events'
   import { fmtShort } from '../lib/datetime'
   import type { MessageKey } from '../lib/strings'
+  import { HISTORY_PAGE_SIZE, nextHistoryBatchSize, nextHistoryCount } from '../lib/history-pagination'
 
   /** This plugin's own id; a run stamped with any other harness is labelled. */
   const SELF_ID = 'notemd.codex-agent'
   /** `notemd.claude-agent` → `claude` — enough to tell them apart in a row. */
   const shortHarness = (id: string) => id.replace(/^notemd\./, '').replace(/-agent$/, '')
 
-  let { runs, label, empty, showTask = false, selectedId = null, onselect, ondelete, onclear }:
+  let { runs, label, empty, scopeKey, showTask = false, selectedId = null, onselect, ondelete, onclear }:
     {
       runs: RunRecord[]
       label: (k: MessageKey, v?: Record<string, string | number>) => string
       empty: string
+      /** Changes only when the displayed history scope changes, never on polling. */
+      scopeKey: string
       /** In the all-tasks view each row needs to say WHICH task it was. */
       showTask?: boolean
       selectedId?: string | null
@@ -20,6 +24,26 @@
       ondelete: (run: RunRecord) => void
       onclear: () => void
     } = $props()
+
+  let visibleCount = $state(HISTORY_PAGE_SIZE)
+  let previousScope: string | null = $state(null)
+  let historyList: HTMLUListElement | undefined = $state()
+  const visibleRuns = $derived(runs.slice(0, visibleCount))
+  const moreCount = $derived(nextHistoryBatchSize(visibleCount, runs.length))
+
+  $effect(() => {
+    if (scopeKey !== previousScope) {
+      previousScope = scopeKey
+      visibleCount = HISTORY_PAGE_SIZE
+    }
+  })
+
+  async function showMore() {
+    const firstNew = visibleCount
+    visibleCount = nextHistoryCount(visibleCount, runs.length)
+    await tick()
+    if (moreCount === 0) historyList?.querySelectorAll<HTMLButtonElement>('.row')[firstNew]?.focus()
+  }
 
   // Right-click target + where to draw the menu.
   let menu: { run: RunRecord; x: number; y: number } | null = $state(null)
@@ -48,8 +72,8 @@
 {#if runs.length === 0}
   <p class="empty">{empty}</p>
 {:else}
-  <ul class="history">
-    {#each runs as run (run.run_id)}
+  <ul class="history" id="recent-runs" bind:this={historyList}>
+    {#each visibleRuns as run (run.run_id)}
       <li>
         <button
           class="row"
@@ -75,6 +99,11 @@
       </li>
     {/each}
   </ul>
+  {#if moreCount > 0}
+    <button class="more" type="button" aria-controls="recent-runs" onclick={showMore}>
+      {label('history.more', { n: moreCount })}
+    </button>
+  {/if}
 {/if}
 
 {#if menu}
@@ -159,6 +188,13 @@
     background: color-mix(in srgb, currentColor 7%, transparent);
   }
   .empty { font-size: 11px; opacity: 0.55; margin: 4px 0; }
+  .more {
+    width: 100%; margin-top: 6px; padding: 7px 9px; border: 1px solid transparent;
+    border-radius: 9px; background: transparent; color: var(--muted-text, currentColor);
+    font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .more:hover { border-color: var(--window-border); background: var(--hover-surface); color: CanvasText; }
+  .more:focus-visible { outline: 2px solid var(--standard-accent, #3479db); outline-offset: 2px; }
   .ctx {
     position: fixed;
     z-index: 50;
