@@ -9,6 +9,8 @@ For the full commit history, see the git log.
 
 ### Added
 
+- **Claude Agent 1.0.22, Codex Agent 1.0.8 and DeepSeek Agent 1.1.8 group tasks by the feature plugin that owns them.** Groups start collapsed so recent runs keep most of the sidebar, while opening a group reveals its tasks without mixing Memory, Idea Spark, Ebook and other workflows together. Existing Vaults keep working through exact built-in task mappings when older task files have no plugin metadata.
+
 - **What you wrote by hand now says so, in the file.** New documents, quick notes, companion `.note.md` files, daily notes, pages created from a `[[wikilink]]`, Idea Spark originals and Trace Source requests — anything produced by a direct action of yours — now carry a signature in their metadata (`generated: by: human:<your git identity>`). Until now "a person wrote this" could only be inferred from the *absence* of an AI stamp, which made an unstamped AI dump indistinguishable from your own draft. Three states, each saying its own name: written by a person, written by a generator, claimed by nobody. The signature is written once, at creation — reopening and saving an old note will not grow one — and imported content (Roam, ebooks) stays unsigned, because carrying something across is not writing it. It reads the same in Obsidian, or in grep.
 
 ### Fixed
