@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.904.2 — 2026-09-04
+
 ### Fixed
 
 - **Smart Lookup no longer cancels a healthy fast Planner before its first result arrives.** The default planning window now reflects real harness startup time and remains configurable with a hard limit; existing 8-second defaults migrate automatically. If Codex's background model catalog refresh is slow, the explicit fast model stays available, ordinary local matches remain visible, and internal provider diagnostics no longer replace the actual timeout or cancellation status.
