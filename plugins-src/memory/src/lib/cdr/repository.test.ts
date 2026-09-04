@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { ChangePolicyRequest } from '../../../../../src/lib/cdr/governance'
 import {
   CDR_REPOSITORY_COMMIT_METHOD,
   CDR_REPOSITORY_LOAD_METHOD,
@@ -20,6 +21,8 @@ import {
   type DocumentSessionState,
   type OperationBatch,
 } from './session'
+import { CdrApplicationService, fixedActorSource } from './application'
+import { localMemoryAuthorizer, MEMORY_SELF_PROFILE_DESCRIPTOR, memorySelfProfile } from './profile'
 
 function fixture(): DocumentRevision {
   return {
@@ -84,6 +87,43 @@ class FakeAggregateStore implements AggregateStore {
 }
 
 describe('PersistentDocumentSession', () => {
+  it('persists an Agent proposal and its accepted self change through separate single-CAS transitions', async () => {
+    const store = new FakeAggregateStore()
+    const session = await PersistentDocumentSession.open(fixture(), sequentialIds('governed'), store)
+    const agent = new CdrApplicationService(
+      'document-1',
+      MEMORY_SELF_PROFILE_DESCRIPTOR,
+      session,
+      fixedActorSource({ kind: 'agent', id: 'organizer' }),
+      localMemoryAuthorizer,
+      memorySelfProfile,
+    )
+    const human = new CdrApplicationService(
+      'document-1',
+      MEMORY_SELF_PROFILE_DESCRIPTOR,
+      session,
+      fixedActorSource({ kind: 'human', id: 'local' }),
+      localMemoryAuthorizer,
+      memorySelfProfile,
+    )
+
+    const proposed = await agent.submit(replace('governed-proposal', 'block-a', 'block-a/1', '# Governed'), 'apply')
+    expect(proposed.kind).toBe('proposed')
+    expect(store.commitCount).toBe(2)
+    expect((store.record?.aggregate as DocumentSessionState).head).toEqual(fixture())
+    if (proposed.kind !== 'proposed') throw new Error('expected proposal')
+
+    const accepted = await human.decideProposal(proposed.proposal.changeSetId, 'accept')
+    expect(accepted?.kind).toBe('applied')
+    expect(store.commitCount).toBe(3)
+    const durable = store.record?.aggregate as DocumentSessionState
+    expect(durable.head.blocks[0].markdown).toBe('# Governed')
+    expect(durable.revisionHistory).toEqual([fixture()])
+    expect(durable.proposals[0].status).toBe('applied')
+    expect(durable.receipts).toHaveLength(1)
+    expect(durable.audit.map((event) => event.action)).toEqual(['proposed', 'applied', 'proposal-applied'])
+  })
+
   it('persists and restores the head, proposals, assessments, receipts, and audit', async () => {
     const store = new FakeAggregateStore()
     const first = await PersistentDocumentSession.open(fixture(), sequentialIds('first'), store)
@@ -166,6 +206,35 @@ describe('PersistentDocumentSession', () => {
       .rejects.toBeInstanceOf(RepositoryConflictError)
     expect(stale.snapshot()).toEqual(winner.snapshot())
     expect(stale.snapshot().blocks.find((block) => block.blockId === 'block-b')?.markdown).toBe('Keep this constraint.')
+  })
+
+  it('re-governs a safe change after another facade wins the aggregate CAS', async () => {
+    const store = new FakeAggregateStore()
+    const winner = await PersistentDocumentSession.open(fixture(), sequentialIds('winner'), store)
+    const stale = await PersistentDocumentSession.open(fixture(), sequentialIds('stale'), store)
+    const governedRevisions: string[] = []
+    const evaluate = vi.fn((request: ChangePolicyRequest) => {
+      governedRevisions.push(request.snapshot.revisionId)
+      return memorySelfProfile.policy!.evaluate(request)
+    })
+    const app = new CdrApplicationService(
+      'document-1',
+      MEMORY_SELF_PROFILE_DESCRIPTOR,
+      stale,
+      fixedActorSource({ kind: 'human', id: 'local' }),
+      localMemoryAuthorizer,
+      { descriptor: MEMORY_SELF_PROFILE_DESCRIPTOR, policy: { evaluate } },
+    )
+
+    await winner.submit(replace('winner-request', 'block-a', 'block-a/1', '# Winner'), 'human:winner')
+    const winnerRevision = winner.snapshot().revisionId
+    await expect(app.submit(replace('safe-rebase', 'block-b', 'block-b/1', 'Rebased.')))
+      .resolves.toMatchObject({ kind: 'applied' })
+
+    expect(governedRevisions).toEqual(['revision-1', winnerRevision])
+    expect(evaluate).toHaveBeenCalledTimes(2)
+    expect(stale.snapshot().blocks.map((block) => block.markdown)).toEqual(['# Winner', 'Rebased.'])
+    expect((store.record?.aggregate as DocumentSessionState).head).toEqual(stale.snapshot())
   })
 
   it('blocks later writes when a CAS conflict carries an invalid current aggregate', async () => {

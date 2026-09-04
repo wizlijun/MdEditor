@@ -7,49 +7,28 @@
  */
 
 import { sha256Hex } from '../../../../../src/lib/hash'
+import {
+  applyDocumentChange,
+  validateDocumentChange,
+  type CoreConflict,
+  type DocumentBlock,
+  type DocumentRevision,
+} from '../../../../../src/lib/cdr/core'
+import {
+  canonicalOperationBatch,
+  parseOperation,
+  parseOperationBatch,
+  type AppliedChange,
+  type OperationBatch,
+  type ReplaceBlockOperation,
+} from '../../../../../src/lib/cdr/operation'
+import { GovernedRevisionChangedError } from '../../../../../src/lib/cdr/governance'
 
 export { sha256Hex } from '../../../../../src/lib/hash'
+export type { DocumentBlock, DocumentRevision } from '../../../../../src/lib/cdr/core'
+export type { AppliedChange, OperationBatch, ReplaceBlockOperation } from '../../../../../src/lib/cdr/operation'
 
-export interface DocumentBlock {
-  blockId: string
-  blockRevision: string
-  markdown: string
-}
-
-export interface DocumentRevision {
-  documentId: string
-  revisionId: string
-  blocks: readonly DocumentBlock[]
-}
-
-export interface ReplaceBlockOperation {
-  kind: 'block.replace'
-  operationId: string
-  blockId: string
-  expectedBlockRevision: string
-  markdown: string
-}
-
-export interface OperationBatch {
-  requestId: string
-  baseRevisionId: string
-  operations: readonly ReplaceBlockOperation[]
-}
-
-export interface AppliedChange {
-  changeId: string
-  originRequestId?: string
-  baseRevisionId: string
-  revisionId: string
-  blockRevisions: Readonly<Record<string, string>>
-  operations: readonly ReplaceBlockOperation[]
-}
-
-export interface Conflict {
-  code: 'stale-base' | 'invalid-operation'
-  message: string
-  blockId?: string
-}
+export type Conflict = CoreConflict
 
 export type SubmitResult =
   | { kind: 'applied'; change: AppliedChange; snapshot: DocumentRevision; duplicate: boolean }
@@ -87,7 +66,8 @@ export interface IdProvider {
   eventId(): string
 }
 
-export const DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v2' as const
+const LEGACY_DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v2' as const
+export const DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v3' as const
 
 export type StoredSubmitOutcome =
   | { kind: 'applied'; change: AppliedChange }
@@ -95,6 +75,7 @@ export type StoredSubmitOutcome =
 
 export interface StoredSubmitReceipt {
   requestId: string
+  actorId: string
   submittedBaseRevisionId: string
   batchSignature: string
   outcome: StoredSubmitOutcome
@@ -190,31 +171,8 @@ function parseRevision(value: unknown, path: string): DocumentRevision {
   }
 }
 
-function parseOperation(value: unknown, path: string): ReplaceBlockOperation {
-  const item = record(value, path)
-  exactKeys(item, path, ['kind', 'operationId', 'blockId', 'expectedBlockRevision', 'markdown'])
-  if (item.kind !== 'block.replace') invalid(`${path}.kind`, 'must be block.replace')
-  return {
-    kind: 'block.replace',
-    operationId: stringValue(item.operationId, `${path}.operationId`),
-    blockId: stringValue(item.blockId, `${path}.blockId`),
-    expectedBlockRevision: stringValue(item.expectedBlockRevision, `${path}.expectedBlockRevision`),
-    markdown: stringValue(item.markdown, `${path}.markdown`, true),
-  }
-}
-
 function parseBatch(value: unknown, path: string): OperationBatch {
-  const item = record(value, path)
-  exactKeys(item, path, ['requestId', 'baseRevisionId', 'operations'])
-  const operations = arrayValue(item.operations, `${path}.operations`)
-    .map((operation, index) => parseOperation(operation, `${path}.operations[${index}]`))
-  unique(operations.map((operation) => operation.operationId), `${path}.operations operationIds`)
-  unique(operations.map((operation) => operation.blockId), `${path}.operations blockIds`)
-  return {
-    requestId: stringValue(item.requestId, `${path}.requestId`),
-    baseRevisionId: stringValue(item.baseRevisionId, `${path}.baseRevisionId`),
-    operations,
-  }
+  return parseOperationBatch(value, path, invalid)
 }
 
 function parseConflict(value: unknown, path: string): Conflict {
@@ -266,23 +224,22 @@ function parseStoredOutcome(value: unknown, path: string): StoredSubmitOutcome {
 }
 
 function signature(batch: OperationBatch): string {
-  return JSON.stringify({
-    requestId: batch.requestId,
-    baseRevisionId: batch.baseRevisionId,
-    operations: batch.operations.map((operation) => ({
-      kind: operation.kind,
-      operationId: operation.operationId,
-      blockId: operation.blockId,
-      expectedBlockRevision: operation.expectedBlockRevision,
-      markdown: operation.markdown,
-    })),
-  })
+  return canonicalOperationBatch(batch)
 }
 
-function parseReceipt(value: unknown, path: string): StoredSubmitReceipt {
+type ParsedReceipt = Omit<StoredSubmitReceipt, 'actorId'> & { actorId?: string }
+
+function parseReceipt(value: unknown, path: string, legacy: boolean): ParsedReceipt {
   const item = record(value, path)
-  exactKeys(item, path, ['requestId', 'submittedBaseRevisionId', 'batchSignature', 'outcome'])
+  exactKeys(
+    item,
+    path,
+    legacy
+      ? ['requestId', 'submittedBaseRevisionId', 'batchSignature', 'outcome']
+      : ['requestId', 'actorId', 'submittedBaseRevisionId', 'batchSignature', 'outcome'],
+  )
   const requestId = stringValue(item.requestId, `${path}.requestId`)
+  const actorId = legacy ? undefined : stringValue(item.actorId, `${path}.actorId`)
   const submittedBaseRevisionId = stringValue(item.submittedBaseRevisionId, `${path}.submittedBaseRevisionId`)
   const batchSignature = stringValue(item.batchSignature, `${path}.batchSignature`)
   const outcome = parseStoredOutcome(item.outcome, `${path}.outcome`)
@@ -291,7 +248,7 @@ function parseReceipt(value: unknown, path: string): StoredSubmitReceipt {
     const expected = signature({ requestId, baseRevisionId: submittedBaseRevisionId, operations: outcome.change.operations })
     if (batchSignature !== expected) invalid(`${path}.batchSignature`, 'does not match the applied change')
   }
-  return { requestId, submittedBaseRevisionId, batchSignature, outcome }
+  return { requestId, ...(actorId ? { actorId } : {}), submittedBaseRevisionId, batchSignature, outcome }
 }
 
 function parseProposal(value: unknown, path: string): Proposal {
@@ -301,7 +258,7 @@ function parseProposal(value: unknown, path: string): Proposal {
   const conflict = item.conflict === undefined ? undefined : parseConflict(item.conflict, `${path}.conflict`)
   if ((status === 'conflicted') !== (conflict !== undefined)) invalid(`${path}.conflict`, 'must exist only for a conflicted proposal')
   const batch = parseBatch(item.batch, `${path}.batch`)
-  if (batch.operations.length !== 1) invalid(`${path}.batch.operations`, 'must contain exactly one operation in Stage 0')
+  if (batch.operations.length !== 1) invalid(`${path}.batch.operations`, 'must contain exactly one operation in Stage 1A')
   return {
     changeSetId: stringValue(item.changeSetId, `${path}.changeSetId`),
     actorId: stringValue(item.actorId, `${path}.actorId`),
@@ -340,14 +297,29 @@ function parseAudit(value: unknown, path: string): AuditEvent {
 export function parseDocumentSessionState(value: unknown): DocumentSessionState {
   const item = record(value, 'state')
   exactKeys(item, 'state', ['schema', 'head', 'revisionHistory', 'receipts', 'proposals', 'assessments', 'audit'])
-  if (item.schema !== DOCUMENT_SESSION_STATE_SCHEMA) invalid('state.schema', `must be ${DOCUMENT_SESSION_STATE_SCHEMA}`)
+  const legacy = item.schema === LEGACY_DOCUMENT_SESSION_STATE_SCHEMA
+  if (!legacy && item.schema !== DOCUMENT_SESSION_STATE_SCHEMA) {
+    invalid('state.schema', `must be ${DOCUMENT_SESSION_STATE_SCHEMA}`)
+  }
   const head = parseRevision(item.head, 'state.head')
   const revisionHistory = arrayValue(item.revisionHistory, 'state.revisionHistory')
     .map((revision, index) => parseRevision(revision, `state.revisionHistory[${index}]`))
-  const receipts = arrayValue(item.receipts, 'state.receipts').map((receipt, index) => parseReceipt(receipt, `state.receipts[${index}]`))
   const proposals = arrayValue(item.proposals, 'state.proposals').map((proposal, index) => parseProposal(proposal, `state.proposals[${index}]`))
   const assessments = arrayValue(item.assessments, 'state.assessments').map((assessment, index) => parseAssessment(assessment, `state.assessments[${index}]`))
   const audit = arrayValue(item.audit, 'state.audit').map((event, index) => parseAudit(event, `state.audit[${index}]`))
+  const receipts = arrayValue(item.receipts, 'state.receipts').map((receipt, index): StoredSubmitReceipt => {
+    const parsed = parseReceipt(receipt, `state.receipts[${index}]`, legacy)
+    if (parsed.actorId) return parsed as StoredSubmitReceipt
+    if (parsed.outcome.kind === 'applied') {
+      const changeId = parsed.outcome.change.changeId
+      const candidates = audit.filter((event) => (
+        event.action === 'applied' && event.targetId === changeId
+      ))
+      return { ...parsed, actorId: candidates.length === 1 ? candidates[0].actorId : 'legacy:unknown' }
+    }
+    const candidates = proposals.filter((proposal) => proposal.batch.requestId === parsed.requestId)
+    return { ...parsed, actorId: candidates.length === 1 ? candidates[0].actorId : 'legacy:unknown' }
+  })
   unique(receipts.map((receipt) => receipt.requestId), 'state.receipts requestIds')
   unique(proposals.map((proposal) => proposal.changeSetId), 'state.proposals changeSetIds')
   unique(proposals.map((proposal) => proposal.batch.requestId), 'state.proposals requestIds')
@@ -358,11 +330,27 @@ export function parseDocumentSessionState(value: unknown): DocumentSessionState 
     if (revision.documentId !== head.documentId) invalid('state.revisionHistory', 'must belong to the head document')
     if (revision.revisionId === head.revisionId) invalid('state.revisionHistory', 'must not repeat the head revision')
   }
+  for (const [index, receipt] of receipts.entries()) {
+    if (receipt.outcome.kind !== 'applied') continue
+    const changeId = receipt.outcome.change.changeId
+    const candidates = audit.filter((event) => (
+      event.action === 'applied' && event.targetId === changeId
+    ))
+    if (receipt.actorId === 'legacy:unknown') {
+      if (candidates.length === 1) {
+        invalid(`state.receipts[${index}].actorId`, 'must match the unique applied audit actor')
+      }
+    } else if (candidates.length !== 1 || candidates[0].actorId !== receipt.actorId) {
+      invalid(`state.receipts[${index}].actorId`, 'must match exactly one applied audit actor')
+    }
+  }
   const receiptRequests = new Set(receipts.map((receipt) => receipt.requestId))
   for (const proposal of proposals) {
     if (!receiptRequests.has(proposal.batch.requestId)) continue
     const receipt = receipts.find((item) => item.requestId === proposal.batch.requestId)
-    if (receipt?.outcome.kind !== 'conflicted' || receipt.batchSignature !== signature(proposal.batch)) {
+    if (receipt?.outcome.kind !== 'conflicted'
+      || receipt.batchSignature !== signature(proposal.batch)
+      || receipt.actorId !== proposal.actorId) {
       invalid('state', `requestId ${proposal.batch.requestId} is reused inconsistently by a proposal and a receipt`)
     }
   }
@@ -402,7 +390,7 @@ function cloneOutcome(outcome: StoredSubmitOutcome): StoredSubmitOutcome {
 export class InMemoryDocumentSession {
   #head: DocumentRevision
   #revisionHistory: DocumentRevision[] = []
-  #receipts = new Map<string, { submittedBaseRevisionId: string; batchSignature: string; outcome: StoredSubmitOutcome }>()
+  #receipts = new Map<string, { actorId: string; submittedBaseRevisionId: string; batchSignature: string; outcome: StoredSubmitOutcome }>()
   #mutationTail: Promise<void> = Promise.resolve()
   #proposals: Proposal[] = []
   #assessments: Assessment[] = []
@@ -417,6 +405,7 @@ export class InMemoryDocumentSession {
     const session = new InMemoryDocumentSession(parsed.head, ids)
     session.#revisionHistory = parsed.revisionHistory.map(cloneRevision)
     session.#receipts = new Map(parsed.receipts.map((receipt) => [receipt.requestId, {
+      actorId: receipt.actorId,
       submittedBaseRevisionId: receipt.submittedBaseRevisionId,
       batchSignature: receipt.batchSignature,
       outcome: cloneOutcome(receipt.outcome),
@@ -438,6 +427,7 @@ export class InMemoryDocumentSession {
       revisionHistory: this.revisionHistory(),
       receipts: [...this.#receipts.entries()].map(([requestId, receipt]) => ({
         requestId,
+        actorId: receipt.actorId,
         submittedBaseRevisionId: receipt.submittedBaseRevisionId,
         batchSignature: receipt.batchSignature,
         outcome: cloneOutcome(receipt.outcome),
@@ -464,6 +454,17 @@ export class InMemoryDocumentSession {
     }))
   }
 
+  proposal(changeSetId: string): Proposal | undefined {
+    const proposal = this.#proposals.find((item) => item.changeSetId === changeSetId)
+    return proposal
+      ? {
+          ...proposal,
+          batch: cloneBatch(proposal.batch),
+          ...(proposal.conflict ? { conflict: cloneConflict(proposal.conflict) } : {}),
+        }
+      : undefined
+  }
+
   assessments(): readonly Assessment[] {
     return this.#assessments.map((assessment) => ({ ...assessment }))
   }
@@ -472,28 +473,34 @@ export class InMemoryDocumentSession {
     return this.#audit.map((event) => ({ ...event }))
   }
 
-  async submit(batch: OperationBatch, actorId: string): Promise<SubmitResult> {
-    return this.#enqueue(() => this.#submit(batch, actorId))
+  async submit(batch: OperationBatch, actorId: string, governedRevisionId?: string): Promise<SubmitResult> {
+    return this.#enqueue(() => this.#submit(batch, actorId, governedRevisionId))
   }
 
-  async #submit(batch: OperationBatch, actorId: string): Promise<SubmitResult> {
+  async #submit(batch: OperationBatch, actorId: string, governedRevisionId?: string): Promise<SubmitResult> {
     const normalizedBatch = parseBatch(batch, 'batch')
     stringValue(actorId, 'actorId')
     const payload = signature(normalizedBatch)
     const existing = this.#receipts.get(normalizedBatch.requestId)
     if (existing) {
-      if (existing.batchSignature !== payload) throw new Error('CDR_IDEMPOTENCY_KEY_REUSED')
+      if (existing.actorId !== actorId || existing.batchSignature !== payload) throw new Error('CDR_IDEMPOTENCY_KEY_REUSED')
       return existing.outcome.kind === 'applied'
         ? { kind: 'applied', change: cloneChange(existing.outcome.change), snapshot: this.snapshot(), duplicate: true }
         : { kind: 'conflicted', conflict: cloneConflict(existing.outcome.conflict), snapshot: this.snapshot() }
     }
-    if (this.#proposals.some((proposal) => proposal.batch.requestId === normalizedBatch.requestId)) {
+    const existingProposal = this.#proposals.find((proposal) => proposal.batch.requestId === normalizedBatch.requestId)
+    if (existingProposal) {
+      if (existingProposal.actorId !== actorId || signature(existingProposal.batch) !== payload) {
+        throw new Error('CDR_IDEMPOTENCY_KEY_REUSED')
+      }
       throw new Error('CDR_IDEMPOTENCY_KEY_REUSED')
     }
+    this.#assertGovernedRevision(governedRevisionId)
 
     const conflict = this.#validate(normalizedBatch)
     if (conflict) {
       this.#receipts.set(normalizedBatch.requestId, {
+        actorId,
         submittedBaseRevisionId: normalizedBatch.baseRevisionId,
         batchSignature: payload,
         outcome: { kind: 'conflicted', conflict: cloneConflict(conflict) },
@@ -503,31 +510,25 @@ export class InMemoryDocumentSession {
 
     const previousHead = this.snapshot()
     const baseRevisionId = previousHead.revisionId
-    const changed = new Map<string, string>()
     const changedRevisions = new Map(await Promise.all(normalizedBatch.operations.map(async (operation) => [
       operation.blockId,
       await this.ids.blockRevision(operation.markdown),
     ] as const)))
-    const nextBlocks = previousHead.blocks.map((block) => {
-      const operation = normalizedBatch.operations.find((item) => item.blockId === block.blockId)
-      if (!operation) return block
-      const blockRevision = changedRevisions.get(block.blockId)!
-      changed.set(block.blockId, blockRevision)
-      return { ...block, markdown: operation.markdown, blockRevision }
-    })
     const revisionId = this.ids.revisionId()
-    this.#head = { ...this.#head, revisionId, blocks: nextBlocks }
+    const blockRevisions = Object.fromEntries(changedRevisions)
+    this.#head = applyDocumentChange(previousHead, normalizedBatch, { revisionId, blockRevisions })
     this.#revisionHistory = [...this.#revisionHistory, previousHead]
     const change: AppliedChange = {
       changeId: this.ids.changeId(),
       originRequestId: normalizedBatch.requestId,
       baseRevisionId,
       revisionId,
-      blockRevisions: Object.fromEntries(changed),
+      blockRevisions,
       operations: normalizedBatch.operations.map((operation) => ({ ...operation })),
     }
     const outcome: StoredSubmitOutcome = { kind: 'applied', change: cloneChange(change) }
     this.#receipts.set(normalizedBatch.requestId, {
+      actorId,
       submittedBaseRevisionId: normalizedBatch.baseRevisionId,
       batchSignature: payload,
       outcome,
@@ -536,17 +537,19 @@ export class InMemoryDocumentSession {
     return { kind: 'applied', change: cloneChange(change), snapshot: this.snapshot(), duplicate: false }
   }
 
-  async propose(batch: OperationBatch, actorId: string): Promise<Proposal> {
-    return this.#enqueue(() => this.#propose(batch, actorId))
+  async propose(batch: OperationBatch, actorId: string, governedRevisionId?: string): Promise<Proposal> {
+    return this.#enqueue(() => this.#propose(batch, actorId, governedRevisionId))
   }
 
-  #propose(batch: OperationBatch, actorId: string): Proposal {
+  #propose(batch: OperationBatch, actorId: string, governedRevisionId?: string): Proposal {
     const normalizedBatch = parseBatch(batch, 'batch')
     stringValue(actorId, 'actorId')
     if (normalizedBatch.operations.length !== 1) throw new Error('CDR_PROPOSAL_OPERATION_COUNT')
     const existing = this.#proposals.find((proposal) => proposal.batch.requestId === normalizedBatch.requestId)
     if (existing) {
-      if (signature(existing.batch) !== signature(normalizedBatch)) throw new Error('CDR_IDEMPOTENCY_KEY_REUSED')
+      if (existing.actorId !== actorId || signature(existing.batch) !== signature(normalizedBatch)) {
+        throw new Error('CDR_IDEMPOTENCY_KEY_REUSED')
+      }
       return {
         ...existing,
         batch: cloneBatch(existing.batch),
@@ -554,9 +557,12 @@ export class InMemoryDocumentSession {
       }
     }
     const receipt = this.#receipts.get(normalizedBatch.requestId)
-    if (receipt && (receipt.outcome.kind !== 'conflicted' || receipt.batchSignature !== signature(normalizedBatch))) {
+    if (receipt && (receipt.actorId !== actorId
+      || receipt.outcome.kind !== 'conflicted'
+      || receipt.batchSignature !== signature(normalizedBatch))) {
       throw new Error('CDR_IDEMPOTENCY_KEY_REUSED')
     }
+    this.#assertGovernedRevision(governedRevisionId)
     const proposal: Proposal = {
       changeSetId: this.ids.changeSetId(),
       actorId,
@@ -568,14 +574,25 @@ export class InMemoryDocumentSession {
     return { ...proposal, batch: cloneBatch(proposal.batch) }
   }
 
-  async decideProposal(changeSetId: string, decision: 'accept' | 'reject', actorId: string): Promise<SubmitResult | null> {
-    return this.#enqueue(() => this.#decideProposal(changeSetId, decision, actorId))
+  async decideProposal(
+    changeSetId: string,
+    decision: 'accept' | 'reject',
+    actorId: string,
+    governedRevisionId?: string,
+  ): Promise<SubmitResult | null> {
+    return this.#enqueue(() => this.#decideProposal(changeSetId, decision, actorId, governedRevisionId))
   }
 
-  async #decideProposal(changeSetId: string, decision: 'accept' | 'reject', actorId: string): Promise<SubmitResult | null> {
+  async #decideProposal(
+    changeSetId: string,
+    decision: 'accept' | 'reject',
+    actorId: string,
+    governedRevisionId?: string,
+  ): Promise<SubmitResult | null> {
     stringValue(changeSetId, 'changeSetId')
     enumValue(decision, 'decision', ['accept', 'reject'])
     stringValue(actorId, 'actorId')
+    this.#assertGovernedRevision(governedRevisionId)
     const proposal = this.#proposals.find((item) => item.changeSetId === changeSetId)
     if (!proposal) throw new Error('CDR_PROPOSAL_NOT_FOUND')
     if (proposal.status !== 'pending') return null
@@ -585,7 +602,7 @@ export class InMemoryDocumentSession {
       return null
     }
 
-    const result = await this.#submit({ ...proposal.batch, requestId: `decision/${changeSetId}` }, actorId)
+    const result = await this.#submit({ ...proposal.batch, requestId: `decision/${changeSetId}` }, actorId, governedRevisionId)
     if (result.kind === 'conflicted') {
       proposal.status = 'conflicted'
       proposal.conflict = result.conflict
@@ -597,14 +614,25 @@ export class InMemoryDocumentSession {
     return result
   }
 
-  async assess(blockId: string, actorId: string, conclusion: Assessment['conclusion']): Promise<Assessment> {
-    return this.#enqueue(() => this.#assess(blockId, actorId, conclusion))
+  async assess(
+    blockId: string,
+    actorId: string,
+    conclusion: Assessment['conclusion'],
+    governedRevisionId?: string,
+  ): Promise<Assessment> {
+    return this.#enqueue(() => this.#assess(blockId, actorId, conclusion, governedRevisionId))
   }
 
-  #assess(blockId: string, actorId: string, conclusion: Assessment['conclusion']): Assessment {
+  #assess(
+    blockId: string,
+    actorId: string,
+    conclusion: Assessment['conclusion'],
+    governedRevisionId?: string,
+  ): Assessment {
     stringValue(blockId, 'blockId')
     stringValue(actorId, 'actorId')
     enumValue(conclusion, 'conclusion', ['verified', 'needs-review'])
+    this.#assertGovernedRevision(governedRevisionId)
     const block = this.#head.blocks.find((item) => item.blockId === blockId)
     if (!block) throw new Error('CDR_BLOCK_NOT_FOUND')
     const assessment: Assessment = {
@@ -629,17 +657,12 @@ export class InMemoryDocumentSession {
     return run
   }
 
+  #assertGovernedRevision(expected: string | undefined): void {
+    if (expected !== undefined && expected !== this.#head.revisionId) throw new GovernedRevisionChangedError()
+  }
+
   #validate(batch: OperationBatch): Conflict | null {
-    if (!batch.operations.length) return { code: 'invalid-operation', message: '操作批不能为空。' }
-    for (const operation of batch.operations) {
-      if (!operation.markdown.trim()) return { code: 'invalid-operation', message: '块内容不能为空。', blockId: operation.blockId }
-      const block = this.#head.blocks.find((item) => item.blockId === operation.blockId)
-      if (!block) return { code: 'invalid-operation', message: '目标块不存在。', blockId: operation.blockId }
-      if (block.blockRevision !== operation.expectedBlockRevision) {
-        return { code: 'stale-base', message: '目标块已被修改，本次操作未覆盖新版本。', blockId: operation.blockId }
-      }
-    }
-    return null
+    return validateDocumentChange(this.#head, batch)
   }
 }
 

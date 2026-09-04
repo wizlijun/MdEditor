@@ -1,4 +1,5 @@
 import { bridge } from '../bridge'
+import { GovernedRevisionChangedError } from '../../../../../src/lib/cdr/governance'
 import {
   InMemoryDocumentSession,
   InvalidSessionStateError,
@@ -202,7 +203,9 @@ function repositoryIO(action: string, error: unknown): RepositoryIOError {
  * Copy-on-write persistent facade around the state machine.
  * Calls on one instance are serialized. A failed durable write never exposes
  * its candidate state; after CAS conflict, the latest valid committed state is
- * installed and the initiating operation still fails instead of auto-retrying.
+ * installed and the initiating direct operation still fails. Governed calls
+ * receive a port-level head-changed signal so the Application Service can
+ * re-authorize and retry against the newly installed aggregate.
  */
 export class PersistentDocumentSession {
   #writeTail: Promise<void> = Promise.resolve()
@@ -297,6 +300,10 @@ export class PersistentDocumentSession {
     return this.session.proposals()
   }
 
+  proposal(changeSetId: string): Proposal | undefined {
+    return this.session.proposal(changeSetId)
+  }
+
   assessments(): readonly Assessment[] {
     return this.session.assessments()
   }
@@ -309,31 +316,42 @@ export class PersistentDocumentSession {
     return this.session.assessmentIsOutdated(assessment)
   }
 
-  async submit(batch: OperationBatch, actorId: string): Promise<SubmitResult> {
-    return this.mutate((candidate) => candidate.submit(batch, actorId))
+  async submit(batch: OperationBatch, actorId: string, governedRevisionId?: string): Promise<SubmitResult> {
+    return this.mutate((candidate) => candidate.submit(batch, actorId, governedRevisionId), governedRevisionId)
   }
 
-  async propose(batch: OperationBatch, actorId: string): Promise<Proposal> {
-    return this.mutate((candidate) => candidate.propose(batch, actorId))
+  async propose(batch: OperationBatch, actorId: string, governedRevisionId?: string): Promise<Proposal> {
+    return this.mutate((candidate) => candidate.propose(batch, actorId, governedRevisionId), governedRevisionId)
   }
 
   async decideProposal(
     changeSetId: string,
     decision: 'accept' | 'reject',
     actorId: string,
+    governedRevisionId?: string,
   ): Promise<SubmitResult | null> {
-    return this.mutate((candidate) => candidate.decideProposal(changeSetId, decision, actorId))
+    return this.mutate(
+      (candidate) => candidate.decideProposal(changeSetId, decision, actorId, governedRevisionId),
+      governedRevisionId,
+    )
   }
 
   async assess(
     blockId: string,
     actorId: string,
     conclusion: Assessment['conclusion'],
+    governedRevisionId?: string,
   ): Promise<Assessment> {
-    return this.mutate((candidate) => candidate.assess(blockId, actorId, conclusion))
+    return this.mutate(
+      (candidate) => candidate.assess(blockId, actorId, conclusion, governedRevisionId),
+      governedRevisionId,
+    )
   }
 
-  private mutate<T>(transition: (candidate: InMemoryDocumentSession) => T | Promise<T>): Promise<T> {
+  private mutate<T>(
+    transition: (candidate: InMemoryDocumentSession) => T | Promise<T>,
+    governedRevisionId?: string,
+  ): Promise<T> {
     const run = this.#writeTail.then(async () => {
       if (this.#writeFailure) throw this.#writeFailure
       const before = this.session.exportState()
@@ -375,7 +393,12 @@ export class PersistentDocumentSession {
       throw new RepositoryConflictError(this.snapshot(), this.generation)
     })
     this.#writeTail = run.then(() => undefined, () => undefined)
-    return run
+    return run.catch((error) => {
+      if (governedRevisionId !== undefined && error instanceof RepositoryConflictError) {
+        throw new GovernedRevisionChangedError()
+      }
+      throw error
+    })
   }
 
   private installCurrent(documentId: string, current: StoredAggregate): void {

@@ -1,10 +1,10 @@
 import { bridge } from './bridge'
+import type { DocumentRevision } from '../../../../src/lib/cdr/core'
 import type {
   AppliedChange,
-  DocumentRevision,
   OperationBatch,
   ReplaceBlockOperation,
-} from './cdr/session'
+} from '../../../../src/lib/cdr/operation'
 
 export type EditorSnapshot = DocumentRevision
 export type LocalOperationBatch = OperationBatch

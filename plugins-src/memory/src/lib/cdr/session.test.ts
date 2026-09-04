@@ -67,6 +67,7 @@ describe('InMemoryDocumentSession', () => {
     expect(session.audit().filter((event) => event.action === 'applied')).toHaveLength(1)
     await expect(session.submit({ ...batch, operations: [{ ...batch.operations[0], markdown: '# Twice' }] }, 'human'))
       .rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
+    await expect(session.submit(batch, 'another-human')).rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
   })
 
   it('keeps a proposal out of the document and conflicts when its exact target changes before acceptance', async () => {
@@ -79,6 +80,15 @@ describe('InMemoryDocumentSession', () => {
     expect(decision?.kind).toBe('conflicted')
     expect(session.proposals()[0].status).toBe('conflicted')
     expect(session.snapshot().blocks[0].markdown).toBe('# Human edit')
+  })
+
+  it('does not reuse one actor\'s proposal for another actor', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('test'))
+    const proposed = replace('shared-request', 'block-a', 'block-a/1', '# Suggested')
+    await session.propose(proposed, 'agent:a')
+    await expect(session.propose(proposed, 'agent:b')).rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
+    expect(session.proposals()).toHaveLength(1)
+    expect(session.proposals()[0].actorId).toBe('agent:a')
   })
 
   it('serializes concurrent proposal decisions into one final decision and one audit event', async () => {
@@ -114,7 +124,7 @@ describe('InMemoryDocumentSession', () => {
     expect(rejected.audit().filter((event) => event.action === 'proposal-applied')).toHaveLength(0)
   })
 
-  it('limits Stage 0 proposals to one visible block replacement', async () => {
+  it('limits Stage 1A proposals to one visible block replacement', async () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('test'))
     const one = replace('proposal', 'block-a', 'block-a/1', '# Suggested')
     await expect(session.propose({ ...one, operations: [] }, 'agent')).rejects.toThrow('CDR_PROPOSAL_OPERATION_COUNT')
@@ -164,6 +174,69 @@ describe('InMemoryDocumentSession', () => {
     expect(restored.audit()).toEqual(session.audit())
     await expect(restored.submit(batch, 'human')).resolves.toMatchObject({ kind: 'applied', duplicate: true })
     expect(restored.audit()).toHaveLength(session.audit().length)
+  })
+
+  it('migrates a v2 receipt actor from its durable audit event', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('legacy'))
+    await session.submit(replace('legacy-request', 'block-a', 'block-a/1', '# Legacy'), 'human:legacy')
+    const current = session.exportState()
+    const legacy = {
+      ...current,
+      schema: 'notemd.cdr/document-session/v2',
+      receipts: current.receipts.map(({ actorId: _actorId, ...receipt }) => receipt),
+    }
+
+    const restored = InMemoryDocumentSession.fromState(legacy, sequentialIds('restored'))
+    expect(restored.exportState().schema).toBe(DOCUMENT_SESSION_STATE_SCHEMA)
+    expect(restored.exportState().receipts[0].actorId).toBe('human:legacy')
+    await expect(restored.submit(replace('legacy-request', 'block-a', 'block-a/1', '# Legacy'), 'other'))
+      .rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
+  })
+
+  it('does not let a new actor claim an unresolvable v2 receipt', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('legacy-conflict'))
+    const stale = replace('legacy-conflict-request', 'block-a', 'missing-revision', '# Never applied')
+    expect((await session.submit(stale, 'agent:legacy')).kind).toBe('conflicted')
+    const current = session.exportState()
+    const legacy = {
+      ...current,
+      schema: 'notemd.cdr/document-session/v2',
+      receipts: current.receipts.map(({ actorId: _actorId, ...receipt }) => receipt),
+    }
+
+    const restored = InMemoryDocumentSession.fromState(legacy, sequentialIds('restored'))
+    expect(restored.exportState().receipts[0].actorId).toBe('legacy:unknown')
+    await expect(restored.submit(stale, 'agent:new')).rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
+  })
+
+  it('requires a v3 applied receipt actor to match exactly one audit event', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('audit-binding'))
+    await session.submit(replace('audit-request', 'block-a', 'block-a/1', '# Applied'), 'human:author')
+    const state = session.exportState()
+
+    expect(() => InMemoryDocumentSession.fromState({
+      ...state,
+      audit: state.audit.map((event) => event.action === 'applied' ? { ...event, actorId: 'human:other' } : event),
+    }, sequentialIds('restored'))).toThrow('must match exactly one applied audit actor')
+  })
+
+  it('migrates an ambiguous v2 applied actor to an unclaimable sentinel', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('ambiguous-audit'))
+    await session.submit(replace('ambiguous-request', 'block-a', 'block-a/1', '# Applied'), 'human:author')
+    const current = session.exportState()
+    const applied = current.audit.find((event) => event.action === 'applied')!
+    const legacy = {
+      ...current,
+      schema: 'notemd.cdr/document-session/v2',
+      receipts: current.receipts.map(({ actorId: _actorId, ...receipt }) => receipt),
+      audit: [...current.audit, { ...applied, eventId: 'legacy/duplicate-audit', actorId: 'human:other' }],
+    }
+
+    const restored = InMemoryDocumentSession.fromState(legacy, sequentialIds('restored'))
+    expect(restored.exportState().receipts[0].actorId).toBe('legacy:unknown')
+    expect(() => InMemoryDocumentSession.fromState(restored.exportState(), sequentialIds('reopened'))).not.toThrow()
+    await expect(restored.submit(replace('ambiguous-request', 'block-a', 'block-a/1', '# Applied'), 'human:author'))
+      .rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
   })
 
   it('rejects unknown fields and inconsistent receipt payloads while restoring', async () => {

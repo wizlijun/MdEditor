@@ -138,6 +138,7 @@ describe('managed-document', () => {
     expect(session.openKind).toBe('created')
     expect(host.markdown).toBe(`${canonicalMemoryFrontmatter(documentId)}# MEMORY\n\nProject background.\n`)
     const created = host.aggregate as any
+    expect(created.profile).toEqual({ id: 'notemd.memory.self', version: 1 })
     expect(created.session.head).toEqual(initial)
     expect(created.derivedBlockIndex.active).toHaveLength(2)
     expect(created.derivedBlockIndex.active[0]).toMatchObject({

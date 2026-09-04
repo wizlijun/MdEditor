@@ -267,9 +267,11 @@ describe('CollaborativeDocumentSpike', () => {
 
   it('stores an Agent proposal without changing the surface, then applies it only after acceptance', async () => {
     await render()
-    expect(document.body.textContent).toContain('Stage 0')
-    activate('Agent A 提出建议')
+    expect(document.body.textContent).toContain('Stage 1A')
+    activate('模拟 Agent 请求直接修改')
     await vi.waitFor(() => expect(document.body.textContent).toContain('pending'))
+    expect(repository?.aggregate.session.proposals[0].actorId).toBe('agent:organizer/simulated')
+    expect(document.body.textContent).toContain('apply 请求已按策略降级')
     expect(mocks.reconcile).not.toHaveBeenCalled()
 
     activate('接受')
@@ -313,7 +315,7 @@ describe('CollaborativeDocumentSpike', () => {
 
   it('keeps activity visible across a paint before applying the remote fixture', async () => {
     await render()
-    activate('模拟已授权远端变更')
+    activate('模拟协作者修改')
     expect(mocks.setLayer).toHaveBeenCalledWith('active-run', expect.any(Array))
     expect(mocks.removeLayer).not.toHaveBeenCalledWith('active-run')
 
@@ -325,10 +327,10 @@ describe('CollaborativeDocumentSpike', () => {
     await render()
     mocks.localListener?.(localBatch('persisted-local-request', 'b-d4e5f6', '窗口重开后仍然存在的正文。'))
     await vi.waitFor(() => expect(document.body.textContent).toContain('人类局部修改已保存'))
-    activate('Agent A 提出建议')
+    activate('模拟 Agent 请求直接修改')
     await vi.waitFor(() => expect(document.body.textContent).toContain('pending'))
-    activate('核验背景块')
-    await vi.waitFor(() => expect(document.body.textContent).toContain('核验结论已保存'))
+    activate('模拟 Agent 核验背景块')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('结论已保存'))
     const auditCount = repository?.aggregate.session.audit.length
 
     if (component) await unmount(component)
@@ -379,7 +381,7 @@ describe('CollaborativeDocumentSpike', () => {
     expect(document.body.textContent).toContain('当前阶段不支持导入')
     expect(repository?.markdown).toContain('外部编辑不得被静默覆盖')
     expect(repository?.aggregate.session.head).toEqual(committedHead)
-    expect(requireButton('Agent A 提出建议').disabled).toBe(true)
+    expect(requireButton('模拟 Agent 请求直接修改').disabled).toBe(true)
   })
 
   it('stops observing and locks when drift is detected during a local save', async () => {
@@ -433,7 +435,7 @@ describe('CollaborativeDocumentSpike', () => {
     expect(document.body.textContent).toContain('只读')
     expect(document.body.textContent).toContain('已提交状态无法同步到编辑器')
     expect(document.body.textContent).not.toContain('已从当前权威快照重新同步')
-    expect(requireButton('Agent A 提出建议').disabled).toBe(true)
+    expect(requireButton('模拟 Agent 请求直接修改').disabled).toBe(true)
   })
 
   it('destroys the writable surface if switching it to read-only throws', async () => {
@@ -445,7 +447,7 @@ describe('CollaborativeDocumentSpike', () => {
     await vi.waitFor(() => expect(mocks.destroy).toHaveBeenCalled())
     expect(mocks.localListener).toBeNull()
     expect(document.querySelector('.editor-host')?.childElementCount).toBe(0)
-    expect(requireButton('Agent A 提出建议').disabled).toBe(true)
+    expect(requireButton('模拟 Agent 请求直接修改').disabled).toBe(true)
   })
 
   it('locks the editor when a lost commit receipt cannot be resolved by reloading', async () => {

@@ -16,45 +16,19 @@ import {
   spanContaining,
   type BlockLayout,
 } from './block-layout'
+import type { DocumentRevision as EditorSnapshot } from '../lib/cdr/core'
+import type {
+  AppliedChange,
+  OperationBatch as LocalOperationBatch,
+  ReplaceBlockOperation,
+} from '../lib/cdr/operation'
 
-export interface EditorBlock {
-  blockId: string
-  blockRevision: string
-  markdown: string
-}
-
-export interface EditorSnapshot {
-  documentId: string
-  revisionId: string
-  blocks: readonly EditorBlock[]
-}
+export type { EditorSnapshot }
+export type { AppliedChange, LocalOperationBatch, ReplaceBlockOperation }
 
 export interface EditorIdProvider {
   requestId(): string
   operationId(): string
-}
-
-export interface ReplaceBlockOperation {
-  kind: 'block.replace'
-  operationId: string
-  blockId: string
-  expectedBlockRevision: string
-  markdown: string
-}
-
-export interface LocalOperationBatch {
-  requestId: string
-  baseRevisionId: string
-  operations: readonly ReplaceBlockOperation[]
-}
-
-export interface AppliedChange {
-  changeId: string
-  originRequestId?: string
-  baseRevisionId: string
-  revisionId: string
-  blockRevisions: Readonly<Record<string, string>>
-  operations: readonly ReplaceBlockOperation[]
 }
 
 export interface ChangeError {

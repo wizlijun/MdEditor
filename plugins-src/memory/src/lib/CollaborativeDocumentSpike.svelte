@@ -11,6 +11,8 @@
     type OperationBatch,
     type Proposal,
   } from './cdr/session'
+  import { CdrApplicationService, fixedActorSource } from './cdr/application'
+  import { localMemoryAuthorizer, MEMORY_SELF_PROFILE_DESCRIPTOR, memorySelfProfile } from './cdr/profile'
   import {
     PersistentDocumentSession,
     RepositoryConflictError,
@@ -36,6 +38,10 @@
   ]
 
   let session = $state<PersistentDocumentSession | null>(null)
+  let humanCdr = $state<CdrApplicationService | null>(null)
+  let organizerCdr = $state<CdrApplicationService | null>(null)
+  let verifierCdr = $state<CdrApplicationService | null>(null)
+  let collaboratorCdr = $state<CdrApplicationService | null>(null)
   let managedStore = $state<ManagedDocumentStore | null>(null)
   let vaultPath = $state('')
   let creationPending = $state(false)
@@ -122,6 +128,38 @@
     if (disposed) return
     managedStore = store
     session = restoredSession
+    humanCdr = new CdrApplicationService(
+      documentId,
+      MEMORY_SELF_PROFILE_DESCRIPTOR,
+      restoredSession,
+      fixedActorSource({ kind: 'human', id: 'local' }),
+      localMemoryAuthorizer,
+      memorySelfProfile,
+    )
+    organizerCdr = new CdrApplicationService(
+      documentId,
+      MEMORY_SELF_PROFILE_DESCRIPTOR,
+      restoredSession,
+      fixedActorSource({ kind: 'agent', id: 'organizer/simulated' }),
+      localMemoryAuthorizer,
+      memorySelfProfile,
+    )
+    verifierCdr = new CdrApplicationService(
+      documentId,
+      MEMORY_SELF_PROFILE_DESCRIPTOR,
+      restoredSession,
+      fixedActorSource({ kind: 'agent', id: 'verifier/simulated' }),
+      localMemoryAuthorizer,
+      memorySelfProfile,
+    )
+    collaboratorCdr = new CdrApplicationService(
+      documentId,
+      MEMORY_SELF_PROFILE_DESCRIPTOR,
+      restoredSession,
+      fixedActorSource({ kind: 'human', id: 'collaborator/simulated' }),
+      localMemoryAuthorizer,
+      memorySelfProfile,
+    )
     creationPending = false
     await tick()
     const mount = await loadKitV2()
@@ -134,7 +172,7 @@
       ids,
       readOnly: startsReadOnly,
       onBlockedStructuralEdit: () => {
-        notice = 'Stage 0 仅允许块内编辑；插入、删除和拆合块已 fail-closed。'
+        notice = 'Stage 1A 仅允许块内编辑；插入、删除和拆合块已 fail-closed。'
       },
       onResyncRequired: (reason) => {
         void handleResyncRequired(reason)
@@ -164,9 +202,11 @@
     notice = '正在原子保存本地修改…'
     let durable = false
     try {
-      const result = await session.submit(batch, 'human:local')
+      if (!humanCdr) throw new Error('CDR_APPLICATION_NOT_READY')
+      const result = await humanCdr.submit(batch)
+      if (result.kind === 'proposed') throw new Error('CDR_HUMAN_APPLY_DOWNGRADED')
       if (result.kind === 'conflicted') {
-        const preserved = await session.propose(batch, 'human:local')
+        const preserved = await humanCdr.propose(batch)
         durable = true
         const synchronized = await reconcileOrLock({
           kind: 'reject-local',
@@ -258,31 +298,33 @@
   }
 
   async function proposeBackground() {
-    if (!session) return
+    if (!session || !organizerCdr) return
     await runAction(async () => {
-      const proposal = await session!.propose(
+      const result = await organizerCdr!.submit(
         batchFor('b-d4e5f6', '这段背景由人和 Agent 共同维护；Agent 先给出可审阅的局部建议。'),
-        'agent:organizer',
+        'apply',
       )
-      notice = `整理 Agent 已保存提案 · ${proposal.changeSetId}`
+      if (result.kind !== 'proposed') throw new Error('CDR_AGENT_APPLY_NOT_DOWNGRADED')
+      notice = `模拟整理 Agent 的 apply 请求已按策略降级并保存为提案 · ${result.proposal.changeSetId}`
     })
   }
 
   async function applyRemoteFixture() {
-    if (!session) return
+    if (!session || !collaboratorCdr) return
     const current = session.snapshot().blocks.find((block) => block.blockId === 'b-0a1b2c')?.markdown ?? ''
     const markdown = current.includes('保留两侧内容')
       ? '- Agent 修改必须绑定块版本\n- 冲突不得静默覆盖'
       : '- Agent 修改必须绑定块版本\n- 冲突必须显示并保留两侧内容'
-    editor?.decorations.setLayer('active-run', [{ blockId: 'b-0a1b2c', kind: 'activity', label: '正在接收已授权的远端变更…' }])
+    editor?.decorations.setLayer('active-run', [{ blockId: 'b-0a1b2c', kind: 'activity', label: '正在应用模拟协作者变更…' }])
     try {
       await waitForPaint()
       activeWrites += 1
-      notice = '正在原子保存已授权的远端变更…'
-      const result = await session.submit(batchFor('b-0a1b2c', markdown), 'fixture:authorized-remote')
+      notice = '正在原子保存模拟协作者变更…'
+      const result = await collaboratorCdr.submit(batchFor('b-0a1b2c', markdown))
+      if (result.kind === 'proposed') throw new Error('CDR_COLLABORATOR_APPLY_DOWNGRADED')
       if (result.kind === 'applied') {
         await applyRemote(result.change)
-        notice = `已保存并应用模拟服务端变更 · ${result.change.revisionId}`
+        notice = `已保存并应用模拟协作者变更 · ${result.change.revisionId}`
       } else {
         notice = result.conflict.message
       }
@@ -296,17 +338,17 @@
   }
 
   async function assessBackground() {
-    if (!session) return
+    if (!session || !verifierCdr) return
     await runAction(async () => {
-      const assessment = await session!.assess('b-d4e5f6', 'agent:verifier', 'verified')
-      notice = `核验结论已保存并绑定 ${assessment.blockRevision}`
+      const assessment = await verifierCdr!.assess('b-d4e5f6', 'verified')
+      notice = `模拟核验 Agent 的结论已保存并绑定 ${assessment.blockRevision}`
     })
   }
 
   async function decide(proposal: Proposal, decision: 'accept' | 'reject') {
-    if (!session) return
+    if (!session || !humanCdr) return
     await runAction(async () => {
-      const result = await session!.decideProposal(proposal.changeSetId, decision, 'human:local')
+      const result = await humanCdr!.decideProposal(proposal.changeSetId, decision)
       if (result?.kind === 'applied') {
         await applyRemote(result.change)
         notice = '已保存采纳决定，并以局部事务更新正文。'
@@ -319,18 +361,17 @@
   }
 
   async function createStaleConflict() {
-    if (!session) return
+    if (!session || !humanCdr || !organizerCdr) return
     await runAction(async () => {
-      const stale = await session!.propose(
+      const stale = await organizerCdr!.propose(
         batchFor('b-d4e5f6', '这是一份基于旧版本的 Agent 建议。'),
-        'agent:organizer',
       )
-      const direct = await session!.submit(
+      const direct = await humanCdr!.submit(
         batchFor('b-d4e5f6', '人类已先一步改写这段背景，旧提案不应覆盖它。'),
-        'human:local',
       )
+      if (direct.kind === 'proposed') throw new Error('CDR_HUMAN_APPLY_DOWNGRADED')
       if (direct.kind === 'applied') await applyRemote(direct.change)
-      const result = await session!.decideProposal(stale.changeSetId, 'accept', 'human:local')
+      const result = await humanCdr!.decideProposal(stale.changeSetId, 'accept')
       notice = result?.kind === 'conflicted'
         ? '已保存 stale-base 冲突：旧提案未覆盖人类新版本。'
         : '未能制造预期冲突。'
@@ -424,9 +465,9 @@
 <section class="cdr-spike" aria-labelledby="cdr-spike-title">
   <header>
     <div>
-      <p class="eyebrow">Stage 0 · 本机技术验证</p>
+      <p class="eyebrow">Stage 1A · 本机治理策略验证</p>
       <h2 id="cdr-spike-title">共写文档实验</h2>
-      <p>通用受控文档以 MEMORY 作为第一个验证场景。正文写入 wiki 目录，结构化状态保存在插件仓库，并由 Host 作为一个逻辑提交协调；当前不读写 Claim、根 MEMORY.md 或 Yjs。</p>
+      <p>通用受控文档以 MEMORY 作为第一个验证场景。正文修改统一经过 Core 与本机模拟治理策略；模拟 Agent 只能提出建议，Host 可信身份尚未接入。当前不读写 Claim、根 MEMORY.md 或 Yjs。</p>
       {#if vaultPath}<small class="managed-path">{vaultPath}</small>{/if}
     </div>
     <span class="status" class:loading={loading || saving || locked || creationPending}>{loading ? '加载中' : failed ? '不可用' : creationPending ? '未创建' : locked ? '只读' : saving ? '保存中' : '可编辑'}</span>
@@ -453,9 +494,9 @@
       <aside aria-label="协作活动与提案">
         <section class="actions">
           <h3>验证动作</h3>
-          <button onclick={proposeBackground} disabled={!editor || !session || saving || locked}>Agent A 提出建议</button>
-          <button onclick={applyRemoteFixture} disabled={!editor || !session || saving || locked}>模拟已授权远端变更</button>
-          <button onclick={assessBackground} disabled={!editor || !session || saving || locked}>核验背景块</button>
+          <button onclick={proposeBackground} disabled={!editor || !session || saving || locked}>模拟 Agent 请求直接修改</button>
+          <button onclick={applyRemoteFixture} disabled={!editor || !session || saving || locked}>模拟协作者修改</button>
+          <button onclick={assessBackground} disabled={!editor || !session || saving || locked}>模拟 Agent 核验背景块</button>
           <button onclick={createStaleConflict} disabled={!editor || !session || saving || locked}>验证 stale-base</button>
         </section>
 

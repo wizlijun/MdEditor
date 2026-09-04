@@ -14,13 +14,13 @@ import {
   type RepositoryRequest,
   type StoredAggregate,
 } from './repository'
+import { MEMORY_SELF_PROFILE, MEMORY_SELF_PROFILE_DESCRIPTOR } from './profile'
 
 export const CDR_MANAGED_INSPECT_METHOD = 'host.cdr.repository.v2.inspect' as const
 export const CDR_MANAGED_LOAD_METHOD = 'host.cdr.repository.v2.load' as const
 export const CDR_MANAGED_COMMIT_METHOD = 'host.cdr.repository.v2.commit' as const
 export const MANAGED_DOCUMENT_SCHEMA = 'notemd.cdr/managed-document/v1' as const
 export const DERIVED_BLOCK_INDEX_SCHEMA = 'notemd.cdr/derived-block-index/v1' as const
-export const MEMORY_SELF_PROFILE = 'notemd.memory.self' as const
 export const MEMORY_WORKSPACE_FILENAME = 'Memory Workspace.note.md' as const
 
 type UnknownRecord = Record<string, unknown>
@@ -33,7 +33,7 @@ interface DerivedBlockIndexEntry {
 
 interface ManagedAggregate {
   schema: typeof MANAGED_DOCUMENT_SCHEMA
-  profile: { id: typeof MEMORY_SELF_PROFILE; version: 1 }
+  profile: { id: typeof MEMORY_SELF_PROFILE; version: typeof MEMORY_SELF_PROFILE_DESCRIPTOR.version }
   session: DocumentSessionState
   derivedBlockIndex: {
     schema: typeof DERIVED_BLOCK_INDEX_SCHEMA
@@ -161,7 +161,8 @@ async function parseManagedAggregate(value: unknown, documentId: string): Promis
 
   const profile = record(item.profile, 'aggregate.profile')
   exact(profile, 'aggregate.profile', ['id', 'version'])
-  if (profile.id !== MEMORY_SELF_PROFILE || profile.version !== 1) io('aggregate.profile is unsupported')
+  if (profile.id !== MEMORY_SELF_PROFILE_DESCRIPTOR.id
+    || profile.version !== MEMORY_SELF_PROFILE_DESCRIPTOR.version) io('aggregate.profile is unsupported')
 
   const session = parseDocumentSessionState(item.session)
   if (session.head.documentId !== documentId) io('aggregate.session belongs to another document')
@@ -194,7 +195,7 @@ async function parseManagedAggregate(value: unknown, documentId: string): Promis
 
   const aggregate: ManagedAggregate = {
     schema: MANAGED_DOCUMENT_SCHEMA,
-    profile: { id: MEMORY_SELF_PROFILE, version: 1 },
+    profile: { ...MEMORY_SELF_PROFILE_DESCRIPTOR },
     session,
     derivedBlockIndex: { schema: DERIVED_BLOCK_INDEX_SCHEMA, active },
   }
@@ -205,7 +206,7 @@ async function parseManagedAggregate(value: unknown, documentId: string): Promis
 async function buildManagedAggregate(session: DocumentSessionState): Promise<ManagedAggregate> {
   const aggregate: ManagedAggregate = {
     schema: MANAGED_DOCUMENT_SCHEMA,
-    profile: { id: MEMORY_SELF_PROFILE, version: 1 },
+    profile: { ...MEMORY_SELF_PROFILE_DESCRIPTOR },
     session,
     derivedBlockIndex: {
       schema: DERIVED_BLOCK_INDEX_SCHEMA,
