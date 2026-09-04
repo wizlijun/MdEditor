@@ -530,12 +530,12 @@ mod fs_tests {
     fn agents_template_defines_owner_and_memory_boundaries() {
         for rule in [
             "## Shared user model and long-term memory",
-            "single generated, read-only plain-text projection",
+            "generated, read-only plain-text projections",
             "only authoritative memory data",
             "notemd memory owner --json",
-            "Never parse owner identity from `/MEMORY.md`",
+            "Never parse owner identity from `/USER.md` or `/MEMORY.md`",
             "notemd memory context --role",
-            "Do not inject all of `/MEMORY.md`",
+            "Do not inject all of `/USER.md` or `/MEMORY.md`",
             "notemd memory propose",
             "Do not store facts whose subject is another person",
             "no YAML frontmatter",

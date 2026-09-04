@@ -1620,7 +1620,10 @@ fn purge_plan(root: &Path, claim_id: &str) -> Result<Value, String> {
         .claims
         .iter()
         .filter(|item| revision_ids.contains(&item.value.revision_id))
-        .map(|_| "MEMORY.md")
+        .map(|item| match item.value.projection.target {
+            memory_v2::ProjectionTarget::User => "USER.md",
+            memory_v2::ProjectionTarget::Memory => "MEMORY.md",
+        })
         .collect::<BTreeSet<_>>();
 
     let mut needles = claim_ids
@@ -2779,6 +2782,8 @@ mod tests {
                 "A precise synthetic test preference.",
                 "--claim-kind",
                 "preference",
+                "--scope",
+                "user",
                 "--category",
                 "preferences",
                 "--space",
@@ -2860,6 +2865,7 @@ mod tests {
             plan["authoritative_assets"]["claim_revisions"][0]["revision_id"],
             revision_id
         );
+        assert_eq!(plan["derived_assets"]["projections"], json!(["USER.md"]));
         assert!(dir
             .path()
             .join(plan["plan_path"].as_str().unwrap())

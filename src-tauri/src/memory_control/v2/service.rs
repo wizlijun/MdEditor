@@ -790,7 +790,7 @@ fn projection_is_edited(
     let Ok(expected) = project(repository, snapshot) else {
         return true;
     };
-    root.join("USER.md").exists()
+    fs::read_to_string(root.join("USER.md")).ok().as_deref() != Some(expected.user.as_str())
         || fs::read_to_string(root.join("MEMORY.md")).ok().as_deref()
             != Some(expected.memory.as_str())
 }
@@ -3959,7 +3959,9 @@ mod tests {
             .unwrap()
             .starts_with("human:"));
         assert!(dir.path().join(".notemd/memory/bootstrap.yaml").is_file());
-        assert!(!dir.path().join("USER.md").exists());
+        assert!(fs::read_to_string(dir.path().join("USER.md"))
+            .unwrap()
+            .starts_with("# USER\n\n> Agent 使用规则："));
         assert!(fs::read_to_string(dir.path().join("MEMORY.md"))
             .unwrap()
             .starts_with("# MEMORY\n\n> Agent 使用规则："));
@@ -3971,7 +3973,9 @@ mod tests {
         assert_eq!(repository.protocols.len(), 1);
         assert_eq!(repository.authorities.len(), 1);
         assert_eq!(repository.context_registries.len(), 1);
-        assert!(!dir.path().join("USER.md").exists());
+        assert!(fs::read_to_string(dir.path().join("USER.md"))
+            .unwrap()
+            .starts_with("# USER\n\n> Agent 使用规则："));
         assert!(fs::read_to_string(dir.path().join("MEMORY.md"))
             .unwrap()
             .starts_with("# MEMORY\n\n> Agent 使用规则："));
@@ -4038,12 +4042,45 @@ mod tests {
             claim.decision.as_ref().unwrap().approval_kind,
             ApprovalKind::SelfRepresentation
         );
-        let projection = fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
+        let projection = fs::read_to_string(dir.path().join("USER.md")).unwrap();
         assert!(projection.contains("## Scope · global"));
         assert!(projection.contains("### Role · role:unclassified"));
         assert!(projection.contains("#### preferences"));
         assert!(projection.contains("- 回答先给出结论。"));
-        assert!(!dir.path().join("USER.md").exists());
+        assert!(!fs::read_to_string(dir.path().join("MEMORY.md"))
+            .unwrap()
+            .contains("- 回答先给出结论。"));
+    }
+
+    #[test]
+    fn projections_split_user_and_memory_targets_without_duplication() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let protocol = initialize(dir.path());
+        dispatch(dir.path(), "host.memory.v2.add", &add_params(&protocol)).unwrap();
+
+        let mut memory = add_params(&protocol);
+        memory["request_id"] = json!("memory-ui/add/memory-target");
+        memory["target"] = json!("memory");
+        memory["category"] = json!("decisions");
+        memory["text"] = json!("已经决定保留双投影。");
+        memory["claim_kind"] = json!("decision");
+        memory["risk_class"] = json!("behavioral");
+        dispatch(dir.path(), "host.memory.v2.add", &memory).unwrap();
+
+        let user = fs::read_to_string(dir.path().join("USER.md")).unwrap();
+        let memory = fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
+        for projection in [&user, &memory] {
+            assert!(projection.contains("## Scope · global"));
+            assert!(projection.contains("### Role · role:unclassified"));
+        }
+        assert!(user.starts_with("# USER\n\n> Agent 使用规则："));
+        assert!(user.contains("#### preferences"));
+        assert!(user.contains("- 回答先给出结论。"));
+        assert!(!user.contains("已经决定保留双投影。"));
+        assert!(memory.starts_with("# MEMORY\n\n> Agent 使用规则："));
+        assert!(memory.contains("#### decisions"));
+        assert!(memory.contains("- 已经决定保留双投影。"));
+        assert!(!memory.contains("回答先给出结论。"));
     }
 
     #[test]
@@ -4119,7 +4156,7 @@ mod tests {
             .find(|claim| claim.claim_id == created["claim_id"])
             .unwrap();
         assert!(current.context_eligible);
-        let projection = fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
+        let projection = fs::read_to_string(dir.path().join("USER.md")).unwrap();
         assert!(projection.contains("### Role · 开发"));
         assert!(projection.contains("- 回答先给出结论。"));
 
@@ -4342,10 +4379,12 @@ mod tests {
             edited.value.decision.as_ref().unwrap().actor_id,
             "human:test"
         );
-        let projection = fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
+        let projection = fs::read_to_string(dir.path().join("USER.md")).unwrap();
         assert!(projection.contains("#### identity"));
         assert!(projection.contains("- 我是产品设计师，也负责用户研究。"));
-        assert!(!dir.path().join("USER.md").exists());
+        assert!(!fs::read_to_string(dir.path().join("MEMORY.md"))
+            .unwrap()
+            .contains("我是产品设计师，也负责用户研究。"));
 
         let mut reused = replace.clone();
         reused["text"] = json!("同一个 request_id 的不同文本。");
@@ -4412,7 +4451,10 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert!(!root.join("USER.md").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("USER.md")).unwrap(),
+            expected.user
+        );
         assert_eq!(
             fs::read_to_string(root.join("MEMORY.md")).unwrap(),
             expected.memory
@@ -4431,7 +4473,9 @@ mod tests {
         let proposed = propose_pending(dir.path(), pending_proposal("owner:test")).unwrap();
         assert_eq!(proposed.workflow.state, WorkflowState::Pending);
         assert!(proposed.decision.is_none());
-        assert!(!dir.path().join("USER.md").exists());
+        assert!(fs::read_to_string(dir.path().join("USER.md"))
+            .map(|projection| !projection.contains("用户偏好先给出结论。"))
+            .unwrap_or(true));
 
         let receipt = dispatch(
             dir.path(),
@@ -4447,10 +4491,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(receipt["effective_status"], "active");
-        assert!(fs::read_to_string(dir.path().join("MEMORY.md"))
+        assert!(fs::read_to_string(dir.path().join("USER.md"))
             .unwrap()
             .contains("- 用户偏好先给出结论。"));
-        assert!(!dir.path().join("USER.md").exists());
+        assert!(!fs::read_to_string(dir.path().join("MEMORY.md"))
+            .unwrap()
+            .contains("用户偏好先给出结论。"));
     }
 
     #[test]
@@ -4493,10 +4539,12 @@ mod tests {
             Some(proposed.revision_id.as_str())
         );
         assert_eq!(approved.value.text, "用户偏好通常先给出准确结论。");
-        assert!(fs::read_to_string(dir.path().join("MEMORY.md"))
+        assert!(fs::read_to_string(dir.path().join("USER.md"))
             .unwrap()
             .contains("- 用户偏好通常先给出准确结论。"));
-        assert!(!dir.path().join("USER.md").exists());
+        assert!(!fs::read_to_string(dir.path().join("MEMORY.md"))
+            .unwrap()
+            .contains("用户偏好通常先给出准确结论。"));
 
         let mut reused = approve;
         reused["text_override"] = json!("同一个 request_id 的其他修订。");
@@ -4593,7 +4641,9 @@ mod tests {
         assert_eq!(snapshot["pending"].as_array().unwrap().len(), 0);
         assert_eq!(snapshot["conflicts"].as_array().unwrap().len(), 0);
         assert!(snapshot["history"].as_array().unwrap().len() >= 4);
-        assert!(!dir.path().join("USER.md").exists());
+        let user = fs::read_to_string(dir.path().join("USER.md")).unwrap();
+        assert!(user.starts_with("# USER\n\n> Agent 使用规则："));
+        assert!(!user.contains("回答先给出结论。"));
         let projection = fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
         assert!(projection.starts_with("# MEMORY\n\n> Agent 使用规则："));
         assert!(!projection.contains("回答先给出结论。"));
@@ -5182,6 +5232,7 @@ mod tests {
 
         let head_before =
             crate::vault_sync::git_ops::run_git(&local, &["rev-parse", "HEAD"]).unwrap();
+        let user_before = fs::read(local.join("USER.md")).unwrap();
         let memory_before = fs::read(local.join("MEMORY.md")).unwrap();
         let error = crate::vault_sync::git_ops::sync(&local, "origin", "main").unwrap_err();
         assert!(error.contains("MEMORY_IDEMPOTENCY_CONFLICT"), "{error}");
@@ -5189,6 +5240,7 @@ mod tests {
             crate::vault_sync::git_ops::run_git(&local, &["rev-parse", "HEAD"]).unwrap(),
             head_before
         );
+        assert_eq!(fs::read(local.join("USER.md")).unwrap(), user_before);
         assert_eq!(fs::read(local.join("MEMORY.md")).unwrap(), memory_before);
         assert!(
             crate::vault_sync::git_ops::run_git(&local, &["status", "--porcelain"])
@@ -5286,7 +5338,9 @@ mod tests {
         assert!(claim.conflict.is_some());
         assert_eq!(claim.current_heads.len(), 2);
         assert!(!claim.projection_eligible);
-        assert!(!third.join("USER.md").exists());
+        assert!(!fs::read_to_string(third.join("USER.md"))
+            .unwrap()
+            .contains(&base.text));
         assert!(!fs::read_to_string(third.join("MEMORY.md"))
             .unwrap()
             .contains(&base.text));

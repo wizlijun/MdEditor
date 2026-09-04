@@ -80,26 +80,35 @@ pub fn project(
             })
         })
         .map(|item| &item.value);
-    let mut categories = protocol
+    let user_categories = protocol
         .value
         .category_registry
         .get("user")
         .cloned()
         .unwrap_or_default();
-    categories.extend(
-        protocol
-            .value
-            .category_registry
-            .get("memory")
-            .cloned()
-            .unwrap_or_default(),
-    );
-    categories.dedup();
+    let memory_categories = protocol
+        .value
+        .category_registry
+        .get("memory")
+        .cloned()
+        .unwrap_or_default();
     Ok(ProjectionBundle {
-        // Kept in the Rust API for source compatibility only. It is never
-        // persisted; MEMORY.md is the sole root projection.
-        user: String::new(),
-        memory: render_memory(categories, &entries, registry, action_sensitive_conflict),
+        user: render_projection(
+            "USER",
+            ProjectionTarget::User,
+            user_categories,
+            &entries,
+            registry,
+            action_sensitive_conflict,
+        ),
+        memory: render_projection(
+            "MEMORY",
+            ProjectionTarget::Memory,
+            memory_categories,
+            &entries,
+            registry,
+            action_sensitive_conflict,
+        ),
     })
 }
 
@@ -215,11 +224,8 @@ pub(crate) fn rebuild_projections_unlocked(root: &Path) -> Result<ProjectionBund
     )
     .map_err(|error| error.to_string())?;
     let bundle = project(&repository, &snapshot).map_err(|error| error.to_string())?;
+    atomic_replace(root, &root.join("USER.md"), &bundle.user)?;
     atomic_replace(root, &root.join("MEMORY.md"), &bundle.memory)?;
-    let legacy_user = root.join("USER.md");
-    if legacy_user.exists() {
-        fs::remove_file(&legacy_user).map_err(|error| format!("MEMORY_IO: {error}"))?;
-    }
     Ok(bundle)
 }
 
@@ -227,7 +233,9 @@ fn repository_error(error: RepositoryError) -> String {
     error.to_string()
 }
 
-fn render_memory(
+fn render_projection(
+    title: &str,
+    target: ProjectionTarget,
     registry: Vec<String>,
     claims: &[(&ClaimView, &MemoryClaimRevision)],
     context_registry: Option<&ContextRegistryRevision>,
@@ -238,6 +246,9 @@ fn render_memory(
         let Some(projection) = &claim.projection else {
             continue;
         };
+        if projection.target != target {
+            continue;
+        }
         let roles = if revision.context.roles.is_empty() {
             vec!["role:unclassified".to_string()]
         } else {
@@ -270,7 +281,9 @@ fn render_memory(
                 .collect::<HashMap<_, _>>()
         })
         .unwrap_or_default();
-    let mut out = "# MEMORY\n\n> Agent 使用规则：这是完整的人类可读投影，不代表所有分组都可用于当前任务。\n> 必须先通过 Memory context broker 确认当前 Role、Scope 与用途，只加载匹配切片；不要跨分组推断或混用事实。\n".to_string();
+    let mut out = format!(
+        "# {title}\n\n> Agent 使用规则：这是由结构化 Claim 生成的人类可读投影，不代表所有分组都可用于当前任务。\n> 必须先通过 Memory context broker 确认当前 Role、Scope 与用途，只加载匹配切片；不要跨分组推断或混用事实。\n"
+    );
     if action_sensitive_conflict {
         out.push_str("\n> 存在未解决的权限或边界冲突，相关行动已暂停。\n");
     }
@@ -454,7 +467,14 @@ mod tests {
 
     #[test]
     fn action_sensitive_conflict_emits_only_a_generic_safety_notice() {
-        let rendered = render_memory(vec![], &[], None, true);
+        let rendered = render_projection(
+            "MEMORY",
+            ProjectionTarget::Memory,
+            vec![],
+            &[],
+            None,
+            true,
+        );
         assert!(rendered.contains("存在未解决的权限或边界冲突，相关行动已暂停"));
         assert!(!rendered.contains("允许发送"));
         assert!(!rendered.contains("禁止发送"));

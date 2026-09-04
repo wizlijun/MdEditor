@@ -307,20 +307,23 @@ fn runtime_canonicalizer_matches_the_published_claim_vector() {
 #[test]
 fn projection_templates_are_plain_text_and_agents_template_points_to_v2_authority() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates");
+    let user = fs::read_to_string(root.join("USER.md")).unwrap();
     let memory = fs::read_to_string(root.join("MEMORY.md")).unwrap();
     let agents = fs::read_to_string(root.join("AGENTS.md")).unwrap();
 
-    assert!(!root.join("USER.md").exists());
+    assert!(user.starts_with("# USER\n\n> Agent 使用规则："));
     assert!(memory.starts_with("# MEMORY\n\n> Agent 使用规则："));
-    assert!(!memory.starts_with("---"));
-    assert!(!memory.contains("::"));
-    assert!(!memory.contains("[^"));
+    for projection in [&user, &memory] {
+        assert!(!projection.starts_with("---"));
+        assert!(!projection.contains("::"));
+        assert!(!projection.contains("[^"));
+    }
     for rule in [
         "only authoritative memory data",
         "notemd memory owner --json",
-        "Never parse owner identity from `/MEMORY.md`",
+        "Never parse owner identity from `/USER.md` or `/MEMORY.md`",
         "notemd memory context --role",
-        "Do not inject all of `/MEMORY.md`",
+        "Do not inject all of `/USER.md` or `/MEMORY.md`",
         "notemd memory propose",
         "no YAML frontmatter",
         "Do not store facts whose subject is another person",
