@@ -83,6 +83,24 @@
 			<key>LSHandlerRank</key>
 			<string>Default</string>
 		</dict>
+		<!--
+			This checked-in plist is the iOS project's effective document-type
+			source (project.yml points INFOPLIST_FILE here). Keep this entry in
+			sync with bundle.fileAssociations in src-tauri/tauri.conf.json when
+			running `tauri ios init` or regenerating the Apple project.
+		-->
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>canvas</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>JSON Canvas</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
+		</dict>
 		<dict>
 			<key>CFBundleTypeExtensions</key>
 			<array>

@@ -22,6 +22,10 @@ export async function verifyAllOpen(): Promise<void> {
 }
 
 async function checkTab(tab: Tab): Promise<void> {
+  if (tab.kind === 'canvas') {
+    await checkCanvasTab(tab)
+    return
+  }
   const stat = await statFile(tab.filePath)
 
   // Image tabs: just update lastKnownMtime so the <img ?v=mtime> cache-buster
@@ -61,6 +65,98 @@ async function checkTab(tab: Tab): Promise<void> {
     && !(await isIOS().catch(() => false))
   const decision = decide({ ...tab, isOutlineNote }, event)
   applyDecision(tab, decision)
+}
+
+function sameCanvasRevision(
+  left: Tab['canvasRevision'],
+  right: Tab['canvasRevision'],
+): boolean {
+  if (!left || !right) return left === right
+  return left.mtimeNs === right.mtimeNs && left.size === right.size && left.sha256 === right.sha256
+}
+
+/**
+ * Canvas polling always uses the bounded Rust snapshot command. It returns
+ * content and its exact revision from the same stable read, so this path must
+ * never fall back to the generic unbounded readMd/stat pair.
+ */
+async function checkCanvasTab(tab: Tab): Promise<void> {
+  const checkedPath = tab.filePath
+  const checkedRevision = tab.canvasRevision ? { ...tab.canvasRevision } : undefined
+  const { asCanvasDocumentError, canvasDocumentOpen, canvasMtimeMs } = await import('./canvas/io')
+  let opened: Awaited<ReturnType<typeof canvasDocumentOpen>>
+  try {
+    opened = await canvasDocumentOpen(checkedPath)
+  } catch (error) {
+    // Do not apply a stale result after Save As/reload changed the identity.
+    if (tab.filePath !== checkedPath || !sameCanvasRevision(tab.canvasRevision, checkedRevision)) return
+    const detail = asCanvasDocumentError(error)
+    if (detail?.kind === 'notFound') applyDecision(tab, { kind: 'showDeleted' })
+    else if (detail?.kind === 'tooLarge') {
+      // We cannot retain an over-limit snapshot in JS. Surface the conflict
+      // while preserving the local buffer; any subsequent save still has the
+      // old exact revision and is rejected by compare-and-replace.
+      tab.externalState = 'changed'
+      tab.externalBannerDismissed = false
+      tab.pendingExternal = undefined
+    } else {
+      console.warn('[file-watcher] canvas snapshot failed for', checkedPath, error)
+    }
+    return
+  }
+  if (tab.filePath !== checkedPath || !sameCanvasRevision(tab.canvasRevision, checkedRevision)) return
+
+  const revision = { ...opened.revision }
+  const mtime = canvasMtimeMs(revision)
+  const knownHash = checkedRevision?.sha256 ?? tab.lastKnownHash
+  const wasDeleted = tab.externalState === 'deleted'
+  if (revision.sha256 === knownHash) {
+    // A same-content touch is still a new compare-and-replace identity.
+    tab.canvasRevision = revision
+    tab.lastKnownMtime = mtime
+    tab.lastKnownHash = revision.sha256
+    tab.externalState = 'fresh'
+    tab.externalBannerDismissed = false
+    tab.pendingExternal = undefined
+    if (wasDeleted) void rebindTabPath(tab.id)
+    return
+  }
+
+  const snapshot = { content: opened.text, hash: revision.sha256, mtime }
+  if (tab.currentContent !== tab.initialContent) {
+    tab.pendingExternal = snapshot
+    tab.externalState = 'changed'
+    tab.externalBannerDismissed = false
+    return
+  }
+
+  const decoded = await import('./canvas/json-canvas').then(({ decodeJsonCanvas }) => (
+    decodeJsonCanvas(opened.text)
+  ))
+  if (!decoded.ok) {
+    // A clean tab must not silently adopt invalid external bytes as its new
+    // baseline. Keep the last editable document and require an explicit reload.
+    tab.pendingExternal = snapshot
+    tab.externalState = 'changed'
+    tab.externalBannerDismissed = false
+    return
+  }
+
+  // CanvasView is controlled by currentContent and safely rebuilds its
+  // disposable projection when a clean document changes on disk.
+  const oldContent = tab.initialContent
+  tab.initialContent = opened.text
+  tab.currentContent = opened.text
+  tab.canvasRevision = revision
+  tab.lastKnownMtime = mtime
+  tab.lastKnownHash = revision.sha256
+  tab.externalState = 'fresh'
+  tab.externalBannerDismissed = false
+  tab.pendingExternal = undefined
+  window.dispatchEvent(new CustomEvent('notemd:auto-reloaded', {
+    detail: { tabId: tab.id, oldContent, newContent: opened.text },
+  }))
+  if (wasDeleted) void rebindTabPath(tab.id)
 }
 
 function applyDecision(

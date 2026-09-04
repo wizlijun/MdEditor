@@ -12,6 +12,7 @@ describe('vault-list helpers', () => {
     expect(fileIcon('png')).toBe('🖼️')
     expect(fileIcon('jpg')).toBe('🖼️')
     expect(fileIcon('webp')).toBe('🖼️')
+    expect(fileIcon('canvas')).toBe('🗺️')
     expect(fileIcon('unknown')).toBe('📄')
   })
 
@@ -25,6 +26,7 @@ describe('vault-list helpers', () => {
     expect(isText('md')).toBe(true)
     expect(isText('txt')).toBe(true)
     expect(isText('html')).toBe(true)
+    expect(isText('canvas')).toBe(true)
     expect(isText('png')).toBe(false)
   })
 

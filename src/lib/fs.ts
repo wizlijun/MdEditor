@@ -49,7 +49,16 @@ export { basename, joinPath }
  * back would mangle `import` lines and JSX blocks and break their site. It gets
  * its own kind so every `kind === 'markdown'` site has to opt in explicitly.
  */
-export type FileKind = 'markdown' | 'mdx' | 'html' | 'code' | 'image' | 'spreadsheet' | 'base' | 'custom'
+export type FileKind =
+  | 'markdown'
+  | 'mdx'
+  | 'html'
+  | 'code'
+  | 'image'
+  | 'spreadsheet'
+  | 'base'
+  | 'canvas'
+  | 'custom'
 
 export interface FileClass {
   kind: FileKind
@@ -84,6 +93,7 @@ const EXT_TABLE: Record<string, FileClass> = {
   log:       { kind: 'code', language: '' },
   csv:       { kind: 'spreadsheet' },
   base:      { kind: 'base' },
+  canvas:    { kind: 'canvas' },
   tsv:       { kind: 'code', language: '' },
   env:       { kind: 'code', language: '' },
 

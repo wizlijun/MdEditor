@@ -2,11 +2,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // message() mock must be hoisted-safe; use vi.hoisted so the factory can reference it.
-const { messageMock } = vi.hoisted(() => ({ messageMock: vi.fn() }))
+const { messageMock, saveMock } = vi.hoisted(() => ({
+  messageMock: vi.fn(),
+  saveMock: vi.fn(),
+}))
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   message: messageMock,
-  save: vi.fn(),
+  save: saveMock,
   open: vi.fn(),
 }))
 
@@ -17,7 +20,10 @@ vi.mock('./i18n/store.svelte', () => ({
     params?.name ? `${key}|${params.name}` : key,
 }))
 
-beforeEach(() => { messageMock.mockReset() })
+beforeEach(() => {
+  messageMock.mockReset()
+  saveMock.mockReset()
+})
 
 describe('confirmDirtyClose', () => {
   it('shows a single 3-button native dialog with the filename in the title', async () => {
@@ -72,5 +78,30 @@ describe('pickSaveFile filters', () => {
   it('offers mdx for an mdx file', async () => {
     const filters = await filtersFor('/d/guide.mdx')
     expect(filters[0].extensions).toEqual(['mdx'])
+  })
+
+  it('offers only the Canvas format for an existing .canvas file', async () => {
+    const filters = await filtersFor('/d/board.canvas')
+    expect(filters).toEqual([{ name: 'Canvas', extensions: ['canvas'] }])
+  })
+})
+
+describe('pickSaveCanvasFile', () => {
+  it('uses untitled.canvas and appends the required extension', async () => {
+    saveMock.mockResolvedValueOnce('/d/board')
+    const { pickSaveCanvasFile } = await import('./dialogs')
+    expect(await pickSaveCanvasFile('/d/untitled.canvas')).toBe('/d/board.canvas')
+    expect(saveMock).toHaveBeenCalledWith({
+      defaultPath: '/d/untitled.canvas',
+      filters: [{ name: 'Canvas', extensions: ['canvas'] }],
+    })
+  })
+
+  it('does not append a duplicate extension and preserves cancellation', async () => {
+    const { pickSaveCanvasFile } = await import('./dialogs')
+    saveMock.mockResolvedValueOnce('/d/BOARD.CANVAS')
+    expect(await pickSaveCanvasFile('/d/untitled.canvas')).toBe('/d/BOARD.CANVAS')
+    saveMock.mockResolvedValueOnce(null)
+    expect(await pickSaveCanvasFile('/d/untitled.canvas')).toBeNull()
   })
 })

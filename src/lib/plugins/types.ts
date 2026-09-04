@@ -174,7 +174,7 @@ export type ToastLevel = 'success' | 'info' | 'warn' | 'error'
 /** Mirrors `FileKind` in `lib/fs.ts`. `'mdx'` is deliberately distinct from
  *  `'markdown'`: mdx tabs render read-only and are never serialized back, so a
  *  manifest asking for `kind == 'markdown'` must not match them. */
-export type TabKind = 'markdown' | 'mdx' | 'html' | 'code' | 'spreadsheet' | 'base' | 'custom'
+export type TabKind = 'markdown' | 'mdx' | 'html' | 'code' | 'spreadsheet' | 'base' | 'canvas' | 'custom'
 
 /** What we evaluate `enabled_when` expressions against. */
 export interface EnabledWhenContext {

@@ -68,6 +68,16 @@ describe('sharePublishCurrent', () => {
     // success toast, no error
     expect((pushToast as any).mock.calls.some((c: any[]) => c[0].level === 'error')).toBe(false)
   })
+
+  it('rejects Canvas instead of sending JSON through the Markdown baker', async () => {
+    ;(activeTab as any).mockReturnValue({ ...mockTab(), kind: 'canvas', title: 'board.canvas' })
+    await sharePublishCurrent()
+    expect(bakeShareHtml).not.toHaveBeenCalled()
+    expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({
+      level: 'error',
+      message: 'share.errPrefix',
+    }))
+  })
 })
 
 describe('shareUnpublishCurrent', () => {

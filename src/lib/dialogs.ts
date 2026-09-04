@@ -10,6 +10,7 @@ const SUBTITLE_EXTS = ['srt', 'vtt', 'ass', 'ssa']
 
 const ALL_EXTS = [
   'md', 'markdown', 'mdown', 'mkd', 'mdx',
+  'canvas',
   'html', 'htm',
   'txt', 'text', 'log', 'csv', 'tsv', 'env',
   ...SUBTITLE_EXTS,
@@ -52,6 +53,7 @@ export async function pickOpenFile(): Promise<string | null> {
   const picked = await openDialog({
     multiple: false,
     filters: [
+      { name: 'Canvas', extensions: ['canvas'] },
       { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'mdx'] },
       { name: 'HTML', extensions: ['html', 'htm'] },
       { name: 'Subtitles', extensions: SUBTITLE_EXTS },
@@ -83,6 +85,8 @@ function saveFilters(ext?: string) {
     return [{ name: 'Image', extensions: IMAGE_EXTS }]
   if (ext === 'base')
     return [{ name: 'Base', extensions: ['base'] }]
+  if (ext === 'canvas')
+    return [{ name: 'Canvas', extensions: ['canvas'] }]
   if (ALL_EXTS.includes(ext))
     return [{ name: ext.toUpperCase(), extensions: [ext] }]
   return [{ name: 'All supported', extensions: ALL_EXTS }]
@@ -106,6 +110,30 @@ export async function pickSaveFile(defaultPath?: string): Promise<string | null>
   const ext = basename(resolvedPath).split('.').pop()?.toLowerCase()
   const picked = await saveDialog({ defaultPath: resolvedPath, filters: saveFilters(ext) })
   return picked ?? null
+}
+
+/**
+ * Canvas has a dedicated save path so it can never silently become `.json`,
+ * `.md`, or another generic text format. Native save panels normally append
+ * the selected extension; the explicit suffix below also covers platforms
+ * that return the user's filename verbatim.
+ */
+export async function pickSaveCanvasFile(defaultPath?: string): Promise<string | null> {
+  let resolvedPath = defaultPath
+  if (!resolvedPath) {
+    try {
+      const { documentDir } = await import('@tauri-apps/api/path')
+      resolvedPath = `${(await documentDir()).replace(/\/$/, '')}/untitled.canvas`
+    } catch {
+      resolvedPath = 'untitled.canvas'
+    }
+  }
+  const picked = await saveDialog({
+    defaultPath: resolvedPath,
+    filters: [{ name: 'Canvas', extensions: ['canvas'] }],
+  })
+  if (!picked) return null
+  return /\.canvas$/i.test(picked) ? picked : `${picked}.canvas`
 }
 
 export function showError(text: string): void {

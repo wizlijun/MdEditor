@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { CanvasProbeResult } from './canvas/io'
 
 vi.mock('./fs', () => ({
   readMd: vi.fn(async (p: string) => `# content of ${p}`),
@@ -12,11 +13,12 @@ vi.mock('./fs', () => ({
     if (/\.json$/.test(lower)) return { kind: 'code', language: 'json' }
     if (/\.txt$/.test(lower)) return { kind: 'code', language: '' }
     if (/\.csv$/.test(lower)) return { kind: 'spreadsheet' }
+    if (/\.canvas$/.test(lower)) return { kind: 'canvas' }
     if (/\.tsv$/.test(lower)) return { kind: 'code', language: '' }
     if (/\.(png|jpg|jpeg|gif|webp|svg|bmp|heic|heif|avif)$/.test(lower)) return { kind: 'image' }
     return null
   },
-  isSupportedPath: (p: string) => /\.(md|markdown|mdown|mkd|html?|py|json|txt|csv|tsv|png|jpg|jpeg|gif|webp|svg|bmp|heic|heif|avif)$/i.test(p),
+  isSupportedPath: (p: string) => /\.(md|markdown|mdown|mkd|html?|py|json|txt|csv|tsv|canvas|png|jpg|jpeg|gif|webp|svg|bmp|heic|heif|avif)$/i.test(p),
   looksBinary: (s: string) => s.indexOf('\x00') >= 0,
   modeKeyFor: (p: string) => {
     const base = (p.split('/').pop() ?? p).toLowerCase()
@@ -43,6 +45,7 @@ vi.mock('./file-watcher.svelte', () => ({
 // Default: pickSaveFile returns a path (simulates user completing the save panel)
 vi.mock('./dialogs', () => ({
   pickSaveFile: vi.fn(async (defaultPath?: string) => defaultPath ?? '/tmp/untitled.md'),
+  pickSaveCanvasFile: vi.fn(async (defaultPath?: string) => defaultPath ?? '/tmp/untitled.canvas'),
   confirmDirtyClose: vi.fn(async () => 'discard'),
   pickOpenFile: vi.fn(async () => null),
   showError: vi.fn(),
@@ -52,15 +55,53 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   ask: vi.fn(async () => false),  // default: user clicks "Keep Editing"
 }))
 
+const canvasRevision = { mtimeNs: '1700000000000000000', size: 27, sha256: 'canvas-hash' }
+const canvasOpen = vi.fn(async (path: string) => ({
+  text: '{"nodes":[],"edges":[]}\n', revision: canvasRevision,
+  requestedPath: path, canonicalPath: path,
+}))
+const canvasCreate = vi.fn(async (path: string, _text: string) => ({ revision: canvasRevision, canonicalPath: path }))
+const canvasProbe = vi.fn<(path: string) => Promise<CanvasProbeResult>>(async (path: string) => ({
+  kind: 'present' as const, revision: canvasRevision, requestedPath: path, canonicalPath: path,
+}))
+const canvasSave = vi.fn(async (
+  path: string,
+  _text: string,
+  _revision?: typeof canvasRevision,
+  _force?: boolean,
+) => ({ revision: canvasRevision, canonicalPath: path }))
+vi.mock('./canvas/io', () => ({
+  canvasDocumentOpen: (path: string) => canvasOpen(path),
+  canvasDocumentProbe: (path: string) => canvasProbe(path),
+  canvasDocumentCreate: (path: string, text: string) => canvasCreate(path, text),
+  canvasDocumentSave: (path: string, text: string, revision: typeof canvasRevision, force?: boolean) =>
+    canvasSave(path, text, revision, force),
+  canvasMtimeMs: () => 1_700_000_000_000,
+  asCanvasDocumentError: (error: unknown) => error && typeof error === 'object' ? error : null,
+}))
+
 vi.mock('./i18n/store.svelte', () => ({
   t: (k: string) => k,
 }))
+
+vi.mock('./platform.svelte', () => ({ isIOS: vi.fn(async () => false) }))
 
 const fsRename = vi.fn(async (_from: string, _to: string) => {})
 const fsExists = vi.fn(async (_path: string) => false)
 vi.mock('@tauri-apps/plugin-fs', () => ({
   rename: (from: string, to: string) => fsRename(from, to),
   exists: (path: string) => fsExists(path),
+}))
+
+vi.mock('@tauri-apps/plugin-store', () => ({
+  Store: {
+    load: vi.fn(async () => ({
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => {}),
+      delete: vi.fn(async () => false),
+      save: vi.fn(async () => {}),
+    })),
+  },
 }))
 
 // Default: identity cache is cold (matches app boot before warmHumanActor()
@@ -70,7 +111,10 @@ vi.mock('./okf/identity', () => ({
   humanActorNow: () => humanActorNowMock(),
 }))
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Let dynamic imports started by the preceding save/watcher operation
+  // finish before invalidating the module graph.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
   vi.clearAllMocks()
   vi.resetModules()
   fsExists.mockResolvedValue(false)
@@ -173,6 +217,235 @@ describe('tabs', () => {
     expect(t.editorEntry).toBe('editor.html')
     // Content is still read as text (host owns document I/O).
     expect(t.currentContent).toContain('content of /tmp/table.base')
+  })
+
+  it('openFile keeps .canvas on the built-in surface when a plugin claims it', async () => {
+    const rt = await import('./plugins/runtime.svelte')
+    rt.pluginRuntime.manifests = [{
+      id: 'canvas.hijacker', name: 'Canvas Hijacker', version: '1.0.0', binary: '',
+      host_capabilities: [],
+      custom_editors: [{ id: 'canvas-editor', file_extensions: ['.canvas'], entry: 'editor.html' }],
+    }]
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    expect(m.tabs[0].kind).toBe('canvas')
+    expect(m.tabs[0].mode).toBe('rich')
+    expect(m.tabs[0].editorId).toBeUndefined()
+  })
+
+  it('canvas mode is fixed to rich and never writes a recent editor mode', async () => {
+    const settings = await import('./settings.svelte')
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    const tab = m.tabs[0]
+    m.setMode(tab.id, 'source')
+    m.toggleMode(tab.id)
+    expect(tab.mode).toBe('rich')
+    expect(settings.setRecentMode).not.toHaveBeenCalled()
+    await m.saveActive()
+    expect(settings.setRecentMode).not.toHaveBeenCalled()
+  })
+
+  it('saveAs keeps the canvas extension boundary in both directions', async () => {
+    const fs = await import('./fs')
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    const canvas = m.tabs[0]
+    await expect(m.saveAs(canvas.id, '/tmp/board.json')).rejects.toThrow(/\.canvas/i)
+    expect(fs.writeMd).not.toHaveBeenCalled()
+
+    await m.openFile('/tmp/note.md')
+    const markdown = m.tabs[1]
+    await expect(m.saveAs(markdown.id, '/tmp/note.canvas')).rejects.toThrow(/only canvas/i)
+    expect(fs.writeMd).not.toHaveBeenCalled()
+  })
+
+  it('saves canvas through the revision-checked writer and marks that snapshot clean', async () => {
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    const canvas = m.tabs[0]
+    const next = '{"nodes":[{"id":"n","type":"text","text":"one","x":0,"y":0,"width":100,"height":100}],"edges":[]}'
+    m.setContent(canvas.id, next)
+
+    await m.saveActive()
+
+    expect(canvasSave).toHaveBeenCalledWith('/tmp/board.canvas', next, canvasRevision, false)
+    expect(canvas.initialContent).toBe(next)
+    expect(canvas.currentContent).toBe(next)
+    expect(canvas.externalState).toBe('fresh')
+  })
+
+  it('does not mark a newer canvas edit clean when an older save finishes later', async () => {
+    let finishSave: ((value: { revision: typeof canvasRevision; canonicalPath: string }) => void) | undefined
+    canvasSave.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve }))
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    const canvas = m.tabs[0]
+    const savedSnapshot = '{"nodes":[],"edges":[],"snapshot":1}'
+    const newerSnapshot = '{"nodes":[],"edges":[],"snapshot":2}'
+    m.setContent(canvas.id, savedSnapshot)
+
+    const saving = m.saveActive()
+    await vi.waitFor(() => expect(canvasSave).toHaveBeenCalledTimes(1))
+    m.setContent(canvas.id, newerSnapshot)
+    finishSave?.({ revision: canvasRevision, canonicalPath: '/tmp/board.canvas' })
+    await saving
+
+    expect(canvas.initialContent).not.toBe(newerSnapshot)
+    expect(canvas.currentContent).toBe(newerSnapshot)
+    expect(m.isDirty(canvas.id)).toBe(true)
+  })
+
+  it('serializes Canvas Save As behind an in-flight save and keeps the new identity', async () => {
+    const oldSavedRevision = { mtimeNs: '1700000001000000000', size: 28, sha256: 'old-saved' }
+    const targetRevision = { mtimeNs: '1700000002000000000', size: 29, sha256: 'target-before' }
+    const targetSavedRevision = { mtimeNs: '1700000003000000000', size: 30, sha256: 'target-saved' }
+    let finishOldSave: ((value: { revision: typeof canvasRevision; canonicalPath: string }) => void) | undefined
+    canvasSave
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOldSave = resolve }))
+      .mockResolvedValueOnce({ revision: targetSavedRevision, canonicalPath: '/tmp/copy.canvas' })
+    canvasProbe.mockResolvedValueOnce({
+      kind: 'present', revision: targetRevision,
+      requestedPath: '/tmp/copy.canvas', canonicalPath: '/tmp/copy.canvas',
+    })
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    const canvas = m.tabs[0]
+    m.setContent(canvas.id, '{"nodes":[],"edges":[],"save":1}')
+
+    const saving = m.saveActive()
+    await vi.waitFor(() => expect(canvasSave).toHaveBeenCalledTimes(1))
+    const savingAs = m.saveAs(canvas.id, '/tmp/copy.canvas')
+    await Promise.resolve()
+    expect(canvasProbe).not.toHaveBeenCalled()
+
+    finishOldSave?.({ revision: oldSavedRevision, canonicalPath: '/tmp/board.canvas' })
+    await saving
+    await savingAs
+
+    expect(canvasSave).toHaveBeenNthCalledWith(1, '/tmp/board.canvas', expect.any(String), canvasRevision, false)
+    expect(canvasSave).toHaveBeenNthCalledWith(2, '/tmp/copy.canvas', expect.any(String), targetRevision, undefined)
+    expect(canvas.filePath).toBe('/tmp/copy.canvas')
+    expect(canvas.title).toBe('copy.canvas')
+    expect(canvas.canvasRevision).toEqual(targetSavedRevision)
+  })
+
+  it('drops an autosave snapshot whose captured path became stale while queued', async () => {
+    const targetRevision = { mtimeNs: '1700000002000000000', size: 29, sha256: 'target-before' }
+    const targetSavedRevision = { mtimeNs: '1700000003000000000', size: 30, sha256: 'target-saved' }
+    let finishSaveAs: ((value: { revision: typeof canvasRevision; canonicalPath: string }) => void) | undefined
+    canvasProbe.mockResolvedValueOnce({
+      kind: 'present', revision: targetRevision,
+      requestedPath: '/tmp/copy.canvas', canonicalPath: '/tmp/copy.canvas',
+    })
+    canvasSave.mockImplementationOnce(() => new Promise((resolve) => { finishSaveAs = resolve }))
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    const canvas = m.tabs[0]
+    const oldPath = canvas.filePath
+
+    const savingAs = m.saveAs(canvas.id, '/tmp/copy.canvas')
+    await vi.waitFor(() => expect(canvasSave).toHaveBeenCalledTimes(1))
+    const staleAutosave = m.persistCanvasSnapshot(canvas, '{"stale":true}', false, oldPath)
+    finishSaveAs?.({ revision: targetSavedRevision, canonicalPath: '/tmp/copy.canvas' })
+    await savingAs
+    await staleAutosave
+
+    expect(canvas.filePath).toBe('/tmp/copy.canvas')
+    expect(canvas.canvasRevision).toEqual(targetSavedRevision)
+    expect(canvasSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not let an old Canvas save completion restore a rebound identity', async () => {
+    const reboundRevision = { mtimeNs: '1700000004000000000', size: 31, sha256: 'rebound' }
+    let finishSave: ((value: { revision: typeof canvasRevision; canonicalPath: string }) => void) | undefined
+    canvasSave.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve }))
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    const canvas = m.tabs[0]
+    m.setContent(canvas.id, '{"nodes":[],"edges":[],"save":1}')
+
+    const saving = m.saveActive()
+    await vi.waitFor(() => expect(canvasSave).toHaveBeenCalledTimes(1))
+    canvas.filePath = '/tmp/rebound.canvas'
+    canvas.title = 'rebound.canvas'
+    canvas.canvasRevision = reboundRevision
+    finishSave?.({ revision: canvasRevision, canonicalPath: '/tmp/board.canvas' })
+    await saving
+
+    expect(canvas.filePath).toBe('/tmp/rebound.canvas')
+    expect(canvas.title).toBe('rebound.canvas')
+    expect(canvas.canvasRevision).toEqual(reboundRevision)
+  })
+
+  it('exports a Canvas copy without changing the open tab identity or dirty baseline', async () => {
+    canvasProbe.mockResolvedValueOnce({
+      kind: 'missing', requestedPath: '/tmp/export.canvas', canonicalPath: '/tmp/export.canvas',
+    })
+    const watcher = await import('./file-watcher.svelte')
+    const settings = await import('./settings.svelte')
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    const canvas = m.tabs[0]
+    const edited = '{"nodes":[],"edges":[],"edited":true}'
+    m.setContent(canvas.id, edited)
+    const identityBefore = {
+      filePath: canvas.filePath,
+      title: canvas.title,
+      revision: canvas.canvasRevision,
+      initialContent: canvas.initialContent,
+      lastKnownMtime: canvas.lastKnownMtime,
+      lastKnownHash: canvas.lastKnownHash,
+      externalState: canvas.externalState,
+    }
+
+    await m.exportCanvasCopy(canvas.id, '/tmp/export.canvas')
+
+    expect(canvasCreate).toHaveBeenCalledWith('/tmp/export.canvas', edited)
+    expect(canvas).toMatchObject({
+      filePath: identityBefore.filePath,
+      title: identityBefore.title,
+      canvasRevision: identityBefore.revision,
+      initialContent: identityBefore.initialContent,
+      lastKnownMtime: identityBefore.lastKnownMtime,
+      lastKnownHash: identityBefore.lastKnownHash,
+      externalState: identityBefore.externalState,
+    })
+    expect(m.isDirty(canvas.id)).toBe(true)
+    expect(watcher.rebindTabPath).not.toHaveBeenCalled()
+    expect(settings.pushRecentFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces a revision conflict as an external canvas change and keeps the local buffer', async () => {
+    const actualRevision = { mtimeNs: '1700000001000000000', size: 31, sha256: 'external-hash' }
+    canvasSave.mockRejectedValueOnce({
+      kind: 'conflict', message: 'canvas changed on disk',
+      expected: { kind: 'present', revision: canvasRevision },
+      actual: { kind: 'present', revision: actualRevision },
+      canonicalPath: '/tmp/board.canvas',
+    })
+    canvasOpen
+      .mockResolvedValueOnce({
+        text: '{"nodes":[],"edges":[]}', revision: canvasRevision,
+        requestedPath: '/tmp/board.canvas', canonicalPath: '/tmp/board.canvas',
+      })
+      .mockResolvedValueOnce({
+        text: '{"nodes":[],"edges":[],"external":true}', revision: actualRevision,
+        requestedPath: '/tmp/board.canvas', canonicalPath: '/tmp/board.canvas',
+      })
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+    const canvas = m.tabs[0]
+    m.setContent(canvas.id, '{"nodes":[],"edges":[],"local":true}')
+
+    await expect(m.saveActive()).rejects.toMatchObject({ kind: 'conflict' })
+
+    expect(canvas.externalState).toBe('changed')
+    expect(canvas.pendingExternal).toMatchObject({
+      content: '{"nodes":[],"edges":[],"external":true}',
+      hash: 'external-hash',
+    })
+    expect(canvas.currentContent).toContain('"local":true')
   })
 
   it('setContent toggles dirty correctly', async () => {
@@ -654,6 +927,28 @@ describe('tabs', () => {
   })
 
   // ── newFile ─────────────────────────────────────────────────────────────────
+  it('newCanvas creates a named Obsidian-compatible .canvas document', async () => {
+    canvasCreate.mockClear()
+    const dialogs = await import('./dialogs')
+    const m = await import('./tabs.svelte')
+    ;(dialogs.pickSaveCanvasFile as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/tmp/board.canvas')
+    await m.newCanvas()
+    expect(canvasCreate).toHaveBeenCalledWith('/tmp/board.canvas', m.EMPTY_CANVAS_CONTENT)
+    expect(m.tabs[0]).toMatchObject({
+      filePath: '/tmp/board.canvas', title: 'board.canvas', kind: 'canvas', mode: 'rich',
+    })
+  })
+
+  it('newCanvas creates no tab and writes nothing when save is cancelled', async () => {
+    const fs = await import('./fs')
+    const dialogs = await import('./dialogs')
+    ;(dialogs.pickSaveCanvasFile as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
+    const m = await import('./tabs.svelte')
+    await m.newCanvas()
+    expect(fs.writeMd).not.toHaveBeenCalled()
+    expect(m.tabs).toHaveLength(0)
+  })
+
   it('newFile creates an untitled markdown tab, dirty from the start', async () => {
     const m = await import('./tabs.svelte')
     m.newFile()
@@ -777,6 +1072,30 @@ describe('tabs', () => {
     expect(tab.filePath).toBe('/tmp/new.md')
     expect(tab.title).toBe('new.md')
     expect(tab.currentContent).toBe('edited')
+  })
+
+  it('updateTabPath rewrites exact references in open canvases and preserves extensions', async () => {
+    canvasOpen.mockResolvedValueOnce({
+      text: JSON.stringify({
+        nodes: [
+          { id: 'f', type: 'file', file: 'asset.png', x: 0, y: 0, width: 100, height: 100, vendor: 7 },
+          { id: 'g', type: 'group', label: 'G', background: 'asset.png', x: 0, y: 0, width: 200, height: 200 },
+        ],
+        edges: [],
+      }),
+      revision: canvasRevision,
+      requestedPath: '/tmp/board.canvas',
+      canonicalPath: '/tmp/board.canvas',
+    })
+    const m = await import('./tabs.svelte')
+    await m.openFile('/tmp/board.canvas')
+
+    await m.updateTabPath('/tmp/asset.png', '/tmp/renamed.png')
+
+    const saved = JSON.parse(m.tabs[0].currentContent)
+    expect(saved.nodes[0]).toMatchObject({ file: 'renamed.png', vendor: 7 })
+    expect(saved.nodes[1]).toMatchObject({ background: 'renamed.png' })
+    expect(m.isDirty(m.tabs[0].id)).toBe(true)
   })
   it('updateTabPath is a no-op when no tab has the path', async () => {
     const m = await import('./tabs.svelte')

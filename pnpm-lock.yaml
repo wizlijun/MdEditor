@@ -53,6 +53,9 @@ importers:
       '@viz-js/viz':
         specifier: ^3.26.0
         version: 3.26.0
+      '@xyflow/svelte':
+        specifier: 1.6.6
+        version: 1.6.6(svelte@5.55.5)
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
@@ -906,6 +909,11 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
+  '@svelte-put/shortcut@4.2.0':
+    resolution: {integrity: sha512-hqNLo4yEc++SLgAkZUvuwMxIAsii9qjQtTuzfcYVf3xRxa+0HFcfaWFK7LdU3l+15s9SYVNbPB0qQj9CHFqSuw==}
+    peerDependencies:
+      svelte: ^5.1.0
+
   '@sveltejs/acorn-typescript@1.0.9':
     resolution: {integrity: sha512-lVJX6qEgs/4DOcRTpo56tmKzVPtoWAaVbL4hfO7t7NVwl9AAXzQR6cihesW1BmNMPl+bK6dreu2sOKBP2Q9CIA==}
     peerDependencies:
@@ -1207,6 +1215,14 @@ packages:
 
   '@viz-js/viz@3.26.0':
     resolution: {integrity: sha512-q/m3rj4aTs38yezZsWABRSsI1auZIWXk5X2aOdz9B7oPR1eYIn9JMEBXY/HbTJwhgS1vEOESC+m0eO6p3imFyQ==}
+
+  '@xyflow/svelte@1.6.6':
+    resolution: {integrity: sha512-gQk3fc+zmX5ak6xIXGcPpxFRl0MJvVG7AKDaoMEFjmx2sPE/43Aqa9YMefSR5aIokBaTdErrsQBqSiBAZGonpg==}
+    peerDependencies:
+      svelte: ^5.25.0
+
+  '@xyflow/system@0.0.82':
+    resolution: {integrity: sha512-4DKnL3CGtCGLRSmgDqaajRVgeksMXq/Yw4wPfdMfm7JvdIiWHGzVYOfFUztiATwdBXZqUU6HhehwUdbV9G23PQ==}
 
   acorn@8.16.0:
     resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
@@ -2423,6 +2439,10 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
+  '@svelte-put/shortcut@4.2.0(svelte@5.55.5)':
+    dependencies:
+      svelte: 5.55.5
+
   '@sveltejs/acorn-typescript@1.0.9(acorn@8.16.0)':
     dependencies:
       acorn: 8.16.0
@@ -2774,6 +2794,24 @@ snapshots:
       tinyrainbow: 3.1.0
 
   '@viz-js/viz@3.26.0': {}
+
+  '@xyflow/svelte@1.6.6(svelte@5.55.5)':
+    dependencies:
+      '@svelte-put/shortcut': 4.2.0(svelte@5.55.5)
+      '@xyflow/system': 0.0.82
+      svelte: 5.55.5
+
+  '@xyflow/system@0.0.82':
+    dependencies:
+      '@types/d3-drag': 3.0.7
+      '@types/d3-interpolate': 3.0.4
+      '@types/d3-selection': 3.0.11
+      '@types/d3-transition': 3.0.9
+      '@types/d3-zoom': 3.0.8
+      d3-drag: 3.0.0
+      d3-interpolate: 3.0.1
+      d3-selection: 3.0.0
+      d3-zoom: 3.0.0
 
   acorn@8.16.0: {}
 

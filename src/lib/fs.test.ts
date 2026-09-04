@@ -51,6 +51,11 @@ describe('classifyPath', () => {
     expect(classifyPath('foo.csv')).toEqual({ kind: 'spreadsheet' })
   })
 
+  it('canvas is a reserved built-in document kind', () => {
+    expect(classifyPath('board.canvas')).toEqual({ kind: 'canvas' })
+    expect(classifyPath('BOARD.CANVAS')).toEqual({ kind: 'canvas' })
+  })
+
   it('tsv is plain-text code (tab-delimited parsing not yet implemented)', () => {
     expect(classifyPath('foo.tsv')).toEqual({ kind: 'code', language: '' })
   })
@@ -116,6 +121,7 @@ describe('isSupportedPath', () => {
     expect(isSupportedPath('foo.html')).toBe(true)
     expect(isSupportedPath('foo.py')).toBe(true)
     expect(isSupportedPath('Dockerfile')).toBe(true)
+    expect(isSupportedPath('board.canvas')).toBe(true)
   })
 
   it('returns true for image extensions', () => {

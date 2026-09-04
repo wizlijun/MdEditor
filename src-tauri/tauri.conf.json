@@ -71,6 +71,14 @@
         "name": "Plain Text",
         "description": "Plain text file",
         "role": "Editor"
+      },
+      {
+        "ext": [
+          "canvas"
+        ],
+        "name": "JSON Canvas",
+        "description": "JSON Canvas document",
+        "role": "Editor"
       }
     ]
   },

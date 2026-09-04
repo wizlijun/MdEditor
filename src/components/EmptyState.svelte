@@ -1,6 +1,6 @@
 <script lang="ts">
   import { pickOpenFile, showError } from '../lib/dialogs'
-  import { openFile, newFile } from '../lib/tabs.svelte'
+  import { openFile, newCanvas, newFile } from '../lib/tabs.svelte'
   import { t } from '../lib/i18n/store.svelte'
 
   async function onOpen() {
@@ -17,12 +17,17 @@
   function onDblClick() {
     newFile()
   }
+
+  async function onNewCanvas() {
+    try { await newCanvas() } catch (e) { console.warn(e); showError(String(e)) }
+  }
 </script>
 
 <div class="empty" ondblclick={onDblClick}>
   <p class="hint">{t('emptyState.hint')}</p>
   <div class="actions">
     <button onclick={onNew}>{t('emptyState.new')}</button>
+    <button onclick={onNewCanvas}>{t('canvas.new')}</button>
     <button onclick={onOpen}>{t('emptyState.open')}</button>
   </div>
 </div>

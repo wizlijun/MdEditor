@@ -23,6 +23,7 @@ fn list_dir_filters_by_whitelist_and_hides_dotgit() {
     let root = dir.path();
 
     fs::write(root.join("readme.md"), "x").unwrap();
+    fs::write(root.join("board.canvas"), r#"{"nodes":[],"edges":[]}"#).unwrap();
     fs::write(root.join("a.txt"), "y").unwrap();
     fs::write(root.join("photo.png"), &[0u8; 8]).unwrap();
     fs::create_dir(root.join("subdir")).unwrap();
@@ -34,6 +35,7 @@ fn list_dir_filters_by_whitelist_and_hides_dotgit() {
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
     assert!(names.contains(&"readme.md"));
+    assert!(names.contains(&"board.canvas"));
     assert!(names.contains(&"a.txt"));
     assert!(names.contains(&"photo.png"));
     assert!(names.contains(&"subdir"));

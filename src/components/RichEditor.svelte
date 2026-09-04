@@ -180,7 +180,7 @@
   let _dragDropUnlisten: (() => void) | null = null
   let _dragoverHandler: ((e: Event) => void) | null = null
   let _dropHandler: ((e: Event) => void) | null = null
-  let _flushDocHandler: (() => void) | null = null
+  let _flushDocHandler: EventListener | null = null
 
   let showImageToolbar = $state(false)
   let imageToolbarPosition = $state({ top: 0, left: 0 })
@@ -1180,7 +1180,9 @@
 
         // Annotation commands ask for an immediate doc→tab flush so the
         // outline panel updates without waiting for the lazy-change debounce.
-        _flushDocHandler = () => {
+        _flushDocHandler = (event: Event) => {
+          const requestedTabId = (event as CustomEvent<{ tabId?: string }>).detail?.tabId
+          if (requestedTabId && requestedTabId !== tabId) return
           if (!editor) return
           const md = unwrapIfNeeded(editor.getMarkdown())
           lastSync = md

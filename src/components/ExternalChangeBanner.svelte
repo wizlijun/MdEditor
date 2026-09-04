@@ -4,15 +4,22 @@
     reloadFromDisk, overwriteOnDisk, dismissExternalBanner,
     saveActive, saveAs, closeTab, activate, isManagedMemoryTab,
   } from '../lib/tabs.svelte'
-  import { pickSaveFile, confirmDirtyClose } from '../lib/dialogs'
+  import { pickSaveCanvasFile, pickSaveFile, confirmDirtyClose } from '../lib/dialogs'
   import { t } from '../lib/i18n/store.svelte'
 
   let { tab }: { tab: Tab } = $props()
   let memoryReadOnly = $derived(isManagedMemoryTab(tab))
 
   async function onSaveAs() {
-    const path = await pickSaveFile(tab.filePath)
-    if (path) await saveAs(tab.id, path)
+    const path = tab.kind === 'canvas'
+      ? await pickSaveCanvasFile(tab.filePath)
+      : await pickSaveFile(tab.filePath)
+    if (!path) return
+    if (tab.kind === 'canvas') {
+      const { confirmCanvasSaveAsReferences } = await import('../lib/canvas/save-as')
+      if (!await confirmCanvasSaveAsReferences(tab, path)) return
+    }
+    await saveAs(tab.id, path)
   }
 
   async function onRecreate() {
@@ -29,7 +36,9 @@
   {#if tab.externalState === 'changed'}
     <div class="banner changed" role="status" aria-live="polite">
       <span class="msg">{t('externalChange.modified', { title: tab.title })}</span>
-      <button class="action" onclick={() => reloadFromDisk(tab.id)}>{t('externalChange.reload')}</button>
+      {#if tab.pendingExternal}
+        <button class="action" onclick={() => reloadFromDisk(tab.id)}>{t('externalChange.reload')}</button>
+      {/if}
       {#if !memoryReadOnly}
         <button class="action" onclick={() => overwriteOnDisk(tab.id)}>{t('externalChange.overwrite')}</button>
         <button class="action" onclick={onSaveAs}>{t('common.saveAs')}</button>

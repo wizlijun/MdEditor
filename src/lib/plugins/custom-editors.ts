@@ -33,7 +33,9 @@ function normExt(ext: string): string {
  * suffixes; `classifyPath` keys on the last dot segment (`md`), so guarding
  * `md` covers them. Kept minimal — extend if new core types appear.
  */
-const RESERVED_EXTENSIONS = new Set(['md', 'markdown', 'mdown', 'mkd', 'txt', 'html', 'htm'])
+const RESERVED_EXTENSIONS = new Set([
+  'md', 'markdown', 'mdown', 'mkd', 'txt', 'html', 'htm', 'canvas',
+])
 
 /**
  * Build a `Map<ext, CustomEditorRef>` from every plugin's `custom_editors`.

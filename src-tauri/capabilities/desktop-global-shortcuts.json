@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-global-shortcuts",
+  "description": "Desktop-only global shortcut permissions; the plugin is not linked into iOS builds.",
+  "windows": ["main", "cli", "insights", "preview", "plugin-market", "logs", "daily-notes", "smart-search"],
+  "platforms": ["macOS", "windows", "linux"],
+  "permissions": [
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-is-registered"
+  ]
+}

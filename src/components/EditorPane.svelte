@@ -21,6 +21,20 @@
 
   let { tab }: { tab: Tab } = $props()
   let memoryReadOnly = $derived(isManagedMemoryTab(tab))
+  let CanvasView = $state<typeof import('./canvas/CanvasView.svelte').default | null>(null)
+  let canvasLoadError = $state('')
+
+  // Keep the interaction engine out of the ordinary Markdown startup bundle.
+  // Canvas files pay this one-time lazy-load cost when their built-in surface
+  // is first selected.
+  $effect(() => {
+    if (tab.kind !== 'canvas' || CanvasView) return
+    let cancelled = false
+    void import('./canvas/CanvasView.svelte')
+      .then((module) => { if (!cancelled) CanvasView = module.default })
+      .catch((error) => { if (!cancelled) canvasLoadError = String(error) })
+    return () => { cancelled = true }
+  })
 
   /** 编辑器栈根元素:重载时在其内部找滚动容器做保位,避免跨面板误伤 */
   let stackEl: HTMLDivElement | undefined = $state()
@@ -95,10 +109,22 @@
     <div class="memory-readonly" role="status">{t('memory.projectionReadOnly')}</div>
   {/if}
   <ExternalChangeBanner {tab} />
-  <SyncOriginBanner {tab} />
-  <MirrorSiblingsBanner {tab} />
-  <SyncToVaultBanner {tab} />
-  {#if tab.kind === 'image'}
+  {#if tab.kind !== 'canvas'}
+    <SyncOriginBanner {tab} />
+    <MirrorSiblingsBanner {tab} />
+    <SyncToVaultBanner {tab} />
+  {/if}
+  {#if tab.kind === 'canvas'}
+    {#key tab.id}
+      {#if CanvasView}
+        <CanvasView {tab} />
+      {:else if canvasLoadError}
+        <div class="canvas-load-state error" role="alert">画布载入失败：{canvasLoadError}</div>
+      {:else}
+        <div class="canvas-load-state" role="status">正在载入画布…</div>
+      {/if}
+    {/key}
+  {:else if tab.kind === 'image'}
     {#key tab.id}
       <div class="image-preview-wrap">
         <img
@@ -178,6 +204,15 @@
     font-size: 12px;
     line-height: 1.35;
   }
+  .canvas-load-state {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    color: color-mix(in srgb, CanvasText 58%, transparent);
+    background: Canvas;
+    font-size: 13px;
+  }
+  .canvas-load-state.error { color: #c13f3f; }
   .image-preview-wrap {
     flex: 1;
     display: flex;

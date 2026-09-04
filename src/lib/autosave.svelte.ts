@@ -1,6 +1,6 @@
 import {
   tabs, isDirty, isManagedMemoryTab, recordOurWrite, shouldSkipEmptySave,
-  renameAutoQuickNoteIfTitled,
+  renameAutoQuickNoteIfTitled, persistCanvasSnapshot,
 } from './tabs.svelte'
 import { writeMd } from './fs'
 import { settings } from './settings.svelte'
@@ -39,9 +39,17 @@ export function startAutoSaveWatcher(): () => void {
         const timer = setTimeout(async () => {
           try {
             const cur = tabs.find((x) => x.id === id)
-            if (cur && (isManagedMemoryTab(cur) || shouldSkipEmptySave(cur))) return
+            if (!cur || isManagedMemoryTab(cur) || shouldSkipEmptySave(cur)) return
+            if (cur.kind === 'canvas') {
+              // The debounce captured both bytes and document identity. A Save
+              // As completed before this timer fired means this is an obsolete
+              // old-path snapshot, not a write for the newly bound document.
+              if (cur.filePath !== path) return
+              await persistCanvasSnapshot(cur, content, false, path)
+              return
+            }
             await writeMd(path, content)
-            if (cur && cur.currentContent === content) {
+            if (cur.currentContent === content) {
               cur.initialContent = content
               // Suppress the imminent watcher echo: capture post-write
               // mtime+hash so the change-detection state machine can ignore

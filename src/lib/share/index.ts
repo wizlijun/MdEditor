@@ -82,6 +82,9 @@ export async function prepareShareSrc(path: string, flush?: () => Promise<void>)
 export async function sharePublishCurrent(): Promise<void> {
   const tab = activeTab()
   if (!tab) return
+  if (tab.kind === 'canvas') {
+    return reportError(new ShareError('unsupported'), t('share.action.share'))
+  }
   const cfg = getShareConfig()
   if (!cfg) return reportError(new ShareError('not_configured'), t('share.action.share'))
   if (!tab.filePath) return reportError(new ShareError('no_path'), t('share.action.share'))
@@ -151,6 +154,9 @@ export async function sharePublishCurrent(): Promise<void> {
 export async function shareUnpublishCurrent(): Promise<void> {
   const tab = activeTab()
   if (!tab?.filePath) return
+  if (tab.kind === 'canvas') {
+    return reportError(new ShareError('unsupported'), t('share.action.unpublish'))
+  }
   const cfg = getShareConfig()
   // A deleted config with a lingering record must surface, not silently no-op.
   if (!cfg) return reportError(new ShareError('not_configured'), t('share.action.unpublish'))
@@ -163,6 +169,9 @@ export async function shareUnpublishCurrent(): Promise<void> {
 export async function shareCopyLinkCurrent(): Promise<void> {
   const tab = activeTab()
   if (!tab?.filePath) return
+  if (tab.kind === 'canvas') {
+    return reportError(new ShareError('unsupported'), t('share.action.copyLink'))
+  }
   try {
     const url = await copyShareLink(tab.filePath)
     pushToast({ level: 'success', message: t('share.linkCopied'), detail: url })

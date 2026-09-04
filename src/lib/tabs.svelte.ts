@@ -13,6 +13,7 @@ import { quickNoteRenameTarget } from './quick-note-name'
 import { newFileText } from './new-file'
 import { isConfiguredMemoryProjectionPath } from './memory-projection'
 import { humanActorNow } from './okf/identity'
+import type { CanvasDiskRevision, CanvasSaveResult } from './canvas/io'
 
 export type Mode = 'source' | 'rich'
 
@@ -42,13 +43,23 @@ export interface Tab {
   pendingExternal?: { mtime: number; hash: string; content: string }
   /** Path-backed drafts such as quick notes should not create 0-byte files. */
   skipEmptySave?: boolean
+  /** Exact disk identity used by the Canvas atomic compare-and-replace path. */
+  canvasRevision?: CanvasDiskRevision
 }
 
 export const tabs = $state<Tab[]>([])
 export const activeId = $state<{ value: string | null }>({ value: null })
 
+/** Smallest valid JSON Canvas 1.0 document, used only for first creation. */
+export const EMPTY_CANVAS_CONTENT = '{\n  "nodes": [],\n  "edges": []\n}\n'
+
 export function activeTab(): Tab | null {
   return tabs.find((t) => t.id === activeId.value) ?? null
+}
+
+function flushMountedDocument(tabId: string): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('notemd:flush-doc', { detail: { tabId } }))
 }
 
 export function isDirty(id: string): boolean {
@@ -77,6 +88,7 @@ function notifyInsights(method: 'onActiveDocChanged' | 'onModeChanged'): void {
 
 export function activate(id: string): void {
   if (tabs.some((t) => t.id === id)) {
+    if (activeId.value && activeId.value !== id) flushMountedDocument(activeId.value)
     activeId.value = id
     notifyInsights('onActiveDocChanged')
   }
@@ -120,7 +132,7 @@ export function newFile(): void {
     pendingExternal: undefined,
   }
   tabs.push(tab)
-  activeId.value = tab.id
+  activate(tab.id)
   // Select body text (after the title line) so user can start typing immediately
   const bodyStart = content.indexOf('\n\n') + 2
   const bodyEnd = content.length
@@ -133,6 +145,34 @@ export function newFile(): void {
       }
     })
   }
+}
+
+/**
+ * Create a named `.canvas` document, then reopen it through the normal file
+ * path so watcher/hash/recent-file state is initialized exactly once. Canvas
+ * tabs are deliberately never path-less: cancelling the panel creates no tab.
+ */
+export async function newCanvas(): Promise<void> {
+  const { isIOS } = await import('./platform.svelte')
+  let path: string | null
+  if (await isIOS()) {
+    const [{ documentDir }, { exists }, { sotvaultStore }] = await Promise.all([
+      import('@tauri-apps/api/path'), import('@tauri-apps/plugin-fs'), import('./sotvault.svelte'),
+    ])
+    const dir = (sotvaultStore.vaultRoot || await documentDir()).replace(/[\\/]$/, '')
+    path = `${dir}/untitled.canvas`
+    for (let suffix = 2; await exists(path).catch(() => false); suffix++) {
+      if (suffix > 999) throw new Error('Unable to allocate a unique Canvas filename')
+      path = `${dir}/untitled-${suffix}.canvas`
+    }
+  } else {
+    const { pickSaveCanvasFile } = await import('./dialogs')
+    path = await pickSaveCanvasFile()
+  }
+  if (!path) return
+  const { canvasDocumentCreate } = await import('./canvas/io')
+  const created = await canvasDocumentCreate(path, EMPTY_CANVAS_CONTENT)
+  await openFile(created.canonicalPath)
 }
 
 /**
@@ -150,7 +190,7 @@ export async function openPathBackedMarkdownDraft(
   options: { mode?: Mode; skipEmptySave?: boolean } = {},
 ): Promise<void> {
   const existing = tabs.find((t) => t.filePath === path)
-  if (existing) { activeId.value = existing.id; notifyInsights('onActiveDocChanged'); return }
+  if (existing) { activate(existing.id); return }
   const tab: Tab = {
     id: crypto.randomUUID(),
     filePath: path,
@@ -170,8 +210,7 @@ export async function openPathBackedMarkdownDraft(
     skipEmptySave: options.skipEmptySave,
   }
   tabs.push(tab)
-  activeId.value = tab.id
-  notifyInsights('onActiveDocChanged')
+  activate(tab.id)
   await startWatchingTab(tab).catch(() => {})
 }
 
@@ -214,8 +253,7 @@ function extOf(path: string): string {
 async function openAsPlainText(path: string): Promise<void> {
   const existing = tabs.find((t) => t.filePath === path)
   if (existing) {
-    activeId.value = existing.id
-    notifyInsights('onActiveDocChanged')
+    activate(existing.id)
     return
   }
   const content = await readTextWithPermissionPrompt(path)
@@ -240,8 +278,7 @@ async function openAsPlainText(path: string): Promise<void> {
     pendingExternal: undefined,
   }
   tabs.push(tab)
-  activeId.value = tab.id
-  notifyInsights('onActiveDocChanged')
+  activate(tab.id)
   await pushRecentFile(path)
   await startWatchingTab(tab)
 }
@@ -254,7 +291,11 @@ export async function openFile(path: string): Promise<void> {
   // precedence over the built-in kind. When classifyPath returns null AND no
   // custom editor is registered, fall back to plain text (kind 'code') rather
   // than throwing — a `.base` with no plugin still opens as text (file-over-app).
-  const editor = customEditorFor(extOf(path), pluginRuntime.manifests)
+  // `.canvas` is a reserved built-in document surface. Keep this runtime
+  // guard even when manifest validation also rejects such a plugin claim.
+  const editor = cls?.kind === 'canvas'
+    ? null
+    : customEditorFor(extOf(path), pluginRuntime.manifests)
   if (!cls && !editor) {
     // Unknown extension, no plugin → open as plain text instead of refusing.
     return openAsPlainText(path)
@@ -262,7 +303,7 @@ export async function openFile(path: string): Promise<void> {
 
   // 打开 vault 副本 → 改开其原始文件(编辑入口是原件,vault 是同步存储)。
   // 仅对有映射且原件仍存在的非 note 文件生效;note 文件保持原样。
-  if (!/\.notes?\.md$/i.test(path)) {
+  if (cls?.kind !== 'canvas' && !/\.notes?\.md$/i.test(path)) {
     const { sourceForVaultPath } = await import('./sotvault.svelte')
     const src = sourceForVaultPath(path)
     if (src && src !== path) {
@@ -275,8 +316,7 @@ export async function openFile(path: string): Promise<void> {
 
   const existing = tabs.find((t) => t.filePath === path)
   if (existing) {
-    activeId.value = existing.id
-    notifyInsights('onActiveDocChanged')
+    activate(existing.id)
     return
   }
 
@@ -294,11 +334,25 @@ export async function openFile(path: string): Promise<void> {
   let content = ''
   let stat = null
   let hash = ''
+  let canvasRevision: CanvasDiskRevision | undefined
 
   if (kind === 'image') {
     // Image files: do not read text content; render via <img src=convertFileSrc(...)>
     // currentContent stays empty so isDirty() is always false
     stat = await statFile(path)
+  } else if (kind === 'canvas') {
+    const { canvasDocumentOpen, canvasMtimeMs } = await import('./canvas/io')
+    const opened = await canvasDocumentOpen(path)
+    path = opened.canonicalPath
+    const canonicalExisting = tabs.find((t) => t.filePath === path)
+    if (canonicalExisting) {
+      activate(canonicalExisting.id)
+      return
+    }
+    content = opened.text
+    canvasRevision = opened.revision
+    stat = { mtime: canvasMtimeMs(opened.revision), size: opened.revision.size }
+    hash = opened.revision.sha256
   } else {
     // Custom editors read the file as text too (the host owns document I/O and
     // hands the content to the iframe over the postMessage doc channel).
@@ -310,7 +364,7 @@ export async function openFile(path: string): Promise<void> {
     hash = await sha256Hex(content)
   }
 
-  const mode = (kind === 'image' || kind === 'spreadsheet' || kind === 'base' || kind === 'custom')
+  const mode = (kind === 'image' || kind === 'spreadsheet' || kind === 'base' || kind === 'canvas' || kind === 'custom')
     ? 'rich'
     : (getRecentMode(modeKeyFor(path)) ?? 'rich')
   const tab: Tab = {
@@ -330,19 +384,21 @@ export async function openFile(path: string): Promise<void> {
     lastKnownMtime: stat?.mtime ?? 0,
     lastKnownHash: hash,
     pendingExternal: undefined,
+    canvasRevision,
   }
   tabs.push(tab)
-  activeId.value = tab.id
-  notifyInsights('onActiveDocChanged')
+  activate(tab.id)
   await pushRecentFile(path)
   await startWatchingTab(tab)
   // Sync-to-Vault: if this is a tracked vault copy whose source changed, prompt.
   // No-op when the plugin is disabled or the file is untracked.
-  try {
-    const { maybeCheckVaultUpdate } = await import('./sotvault.svelte')
-    await maybeCheckVaultUpdate(tab)
-  } catch (e) {
-    console.warn('[tabs] sotvault check:', e)
+  if (kind !== 'canvas') {
+    try {
+      const { maybeCheckVaultUpdate } = await import('./sotvault.svelte')
+      await maybeCheckVaultUpdate(tab)
+    } catch (e) {
+      console.warn('[tabs] sotvault check:', e)
+    }
   }
 }
 
@@ -350,13 +406,28 @@ export async function openFile(path: string): Promise<void> {
 export async function reloadTabFromDisk(path: string): Promise<void> {
   const t = tabs.find((x) => x.filePath === path)
   if (!t) return
-  const content = await readMd(path)
-  const stat = await statFile(path)
-  const hash = await sha256Hex(content)
+  let content: string
+  let mtime: number
+  let hash: string
+  if (t.kind === 'canvas') {
+    const { canvasDocumentOpen, canvasMtimeMs } = await import('./canvas/io')
+    const opened = await canvasDocumentOpen(path)
+    content = opened.text
+    mtime = canvasMtimeMs(opened.revision)
+    hash = opened.revision.sha256
+    t.canvasRevision = opened.revision
+    t.filePath = opened.canonicalPath
+    t.title = basename(opened.canonicalPath)
+  } else {
+    content = await readMd(path)
+    const stat = await statFile(path)
+    mtime = stat?.mtime ?? 0
+    hash = await sha256Hex(content)
+  }
   const oldContent = t.initialContent
   t.initialContent = content
   t.currentContent = content
-  t.lastKnownMtime = stat?.mtime ?? 0
+  t.lastKnownMtime = mtime
   t.lastKnownHash = hash
   t.externalState = 'fresh'
   t.externalBannerDismissed = false
@@ -374,7 +445,7 @@ export function setContent(id: string, md: string): void {
   const t = tabs.find((x) => x.id === id)
   if (!t || isManagedMemoryTab(t)) return
   t.currentContent = md
-  if (!t.filePath) return
+  if (!t.filePath || t.kind === 'canvas') return
   // 提问捕获:模块加载后无条件调用(schedule 自带在途取消,批注整体删除也能撤回);
   // 首次加载仍由 {>> 门卫触发——加载前不存在在途 timer
   if (questionCapture) {
@@ -398,19 +469,20 @@ export function setContent(id: string, md: string): void {
 export async function restoreVersion(id: string, content: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
   if (!t || !t.filePath || isManagedMemoryTab(t)) return
-  await writeMd(t.filePath, content)
+  if (t.kind === 'canvas') await persistCanvasSnapshot(t, content)
+  else await writeMd(t.filePath, content)
   await reloadTabFromDisk(t.filePath)
 }
 
 export function toggleMode(id: string): void {
   const t = tabs.find((x) => x.id === id)
-  if (!t) return
+  if (!t || t.kind === 'canvas') return
   setMode(id, t.mode === 'source' ? 'rich' : 'source')
 }
 
 export function setMode(id: string, mode: Mode): void {
   const t = tabs.find((x) => x.id === id)
-  if (!t || t.mode === mode) return
+  if (!t || t.kind === 'canvas' || t.mode === mode) return
   t.mode = mode
   notifyInsights('onModeChanged')
   setRecentMode(modeKeyFor(t.filePath), mode).catch((e) => console.warn(e))
@@ -463,9 +535,12 @@ export async function renameAutoQuickNoteIfTitled(
 export async function saveActive(): Promise<void> {
   const t = activeTab()
   if (!t) return
+  flushMountedDocument(t.id)
   if (!t.filePath) {
-    const { pickSaveFile } = await import('./dialogs')
-    const p = await pickSaveFile('untitled.md')
+    const { pickSaveCanvasFile, pickSaveFile } = await import('./dialogs')
+    const p = t.kind === 'canvas'
+      ? await pickSaveCanvasFile('untitled.canvas')
+      : await pickSaveFile('untitled.md')
     if (!p) return
     await saveAs(t.id, p)
     return
@@ -477,6 +552,11 @@ export async function saveActive(): Promise<void> {
     )
   }
   if (shouldSkipEmptySave(t)) return
+  if (t.kind === 'canvas') {
+    await persistCanvasSnapshot(t, t.currentContent)
+    await startWatchingTab(t)
+    return
+  }
   await writeMd(t.filePath, t.currentContent)
   t.initialContent = t.currentContent
   await recordOurWrite(t)
@@ -494,10 +574,16 @@ export async function saveActive(): Promise<void> {
 export async function saveTab(id: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
   if (!t || !t.filePath || isManagedMemoryTab(t)) return
+  if (activeId.value === id) flushMountedDocument(id)
   if (t.externalState === 'changed') {
     throw new Error(`"${t.title}" was modified externally. Use the banner to Reload, Overwrite, or Save as…`)
   }
   if (shouldSkipEmptySave(t)) return
+  if (t.kind === 'canvas') {
+    await persistCanvasSnapshot(t, t.currentContent)
+    await startWatchingTab(t)
+    return
+  }
   await writeMd(t.filePath, t.currentContent)
   t.initialContent = t.currentContent
   await recordOurWrite(t)
@@ -509,27 +595,128 @@ export async function saveTab(id: string): Promise<void> {
   }
 }
 
-/** 文件被应用内重命名后:更新受影响 tab 的路径/标题并重绑 watcher(spec §7)。
- *  不改内容与脏态;调用方负责磁盘上的实际 rename。 */
+/** 文件被应用内重命名后：更新 tab 身份，并把已打开 Canvas 的精确引用作为可撤销事务改写。 */
 export async function updateTabPath(oldPath: string, newPath: string): Promise<void> {
   const t = tabs.find((x) => x.filePath === oldPath)
-  if (!t) return
-  t.filePath = newPath
-  t.title = basename(newPath)
-  const cls = classifyPath(newPath)
-  if (cls) { t.kind = cls.kind; t.language = cls.language }
-  await rebindTabPath(t.id)
-  await pushRecentFile(newPath)
+  if (t) {
+    const wasCanvas = t.kind === 'canvas'
+    t.filePath = newPath
+    t.title = basename(newPath)
+    const cls = classifyPath(newPath)
+    if (cls) { t.kind = cls.kind; t.language = cls.language }
+    await rebindTabPath(t.id)
+    await pushRecentFile(newPath)
+    if (wasCanvas) {
+      const { copyCanvasViewport } = await import('../components/canvas/canvas-view-state')
+      await copyCanvasViewport(oldPath, newPath, true)
+    }
+  }
+  await rewriteOpenCanvasReferences(oldPath, newPath)
+}
+
+async function rewriteOpenCanvasReferences(oldPath: string, newPath: string): Promise<void> {
+  const canvasTabs = tabs.filter((entry) => entry.kind === 'canvas')
+  if (canvasTabs.length === 0) return
+  const [paths, canvas, sotvault, folders] = await Promise.all([
+    import('./paths'),
+    import('./canvas'),
+    import('./sotvault.svelte'),
+    import('./folder-view.svelte'),
+  ])
+  const oldTarget = paths.normalize(oldPath)
+  const rootFor = (canvasPath: string): string => {
+    const vaultRoot = sotvault.sotvaultStore.vaultRoot
+    if (vaultRoot && paths.relative(vaultRoot, canvasPath) !== null) return paths.normalize(vaultRoot)
+    const folderRoot = folders.folderView.rootDir
+    if (folderRoot && paths.relative(folderRoot, canvasPath) !== null) return paths.normalize(folderRoot)
+    return paths.dirname(canvasPath)
+  }
+
+  for (const canvasTab of canvasTabs) {
+    const decoded = canvas.decodeJsonCanvas(canvasTab.currentContent)
+    if (!decoded.ok) continue
+    const root = rootFor(canvasTab.filePath)
+    const rewrite = (raw: string): string | null => {
+      if (!raw || raw.includes('\0') || paths.isAbsolute(raw)) return null
+      const resolved = paths.joinPath(root, paths.normalize(raw))
+      if (paths.normalize(resolved) !== oldTarget) return null
+      const next = paths.relative(root, paths.normalize(newPath))
+      return next === null ? null : next.replaceAll('\\', '/')
+    }
+    const next = canvas.cloneCanvasDocument(decoded.document)
+    let changed = false
+    for (const entry of next.nodes) {
+      if (!canvas.isKnownCanvasNode(entry)) continue
+      if (entry.type === 'file') {
+        const value = rewrite(entry.file)
+        if (value !== null && value !== entry.file) { entry.file = value; changed = true }
+      } else if (entry.type === 'group' && entry.background) {
+        const value = rewrite(entry.background)
+        if (value !== null && value !== entry.background) { entry.background = value; changed = true }
+      }
+    }
+    if (!changed) continue
+    const encoded = canvas.encodeJsonCanvas(next)
+    const session = canvas.acquireCanvasUiSession(canvasTab.id, canvasTab.currentContent)
+    session.history.record('更新文件引用', decoded.document, next)
+    canvas.markCanvasUiSessionContent(canvasTab.id, encoded)
+    canvasTab.currentContent = encoded
+  }
 }
 
 export async function saveAs(id: string, newPath: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
   if (!t || isManagedMemoryTab(t)) return
+  if (activeId.value === id) flushMountedDocument(id)
   if (shouldSkipEmptySave(t)) return
-  await writeMd(newPath, t.currentContent)
+  const targetIsCanvas = /\.canvas$/i.test(newPath)
+  if (t.kind === 'canvas' && !targetIsCanvas) {
+    throw new Error('Canvas documents must be saved with a .canvas extension')
+  }
+  if (t.kind !== 'canvas' && targetIsCanvas) {
+    throw new Error('Only Canvas documents can be saved with a .canvas extension')
+  }
+  const content = t.currentContent
+  if (t.kind === 'canvas') {
+    await enqueueCanvasOperation(t, async (sourceIdentity) => {
+      const {
+        canvasDocumentCreate, canvasDocumentProbe, canvasDocumentSave, canvasMtimeMs,
+      } = await import('./canvas/io')
+      const targetPath = newPath
+      const probe = await canvasDocumentProbe(targetPath)
+      const saved = probe.kind === 'missing'
+        ? await canvasDocumentCreate(targetPath, content)
+        : await canvasDocumentSave(targetPath, content, probe.revision)
+
+      // A file operation outside this coordinator (for example an external
+      // reload) may have rebound the tab while the Save As panel/write was in
+      // flight. The copy was still created, but it must never hijack that newer
+      // document identity.
+      if (!canvasIdentityMatches(t, sourceIdentity)) {
+        throw new Error('Canvas changed identity while Save As was in progress; the saved copy was not opened')
+      }
+
+      const { copyCanvasViewport } = await import('../components/canvas/canvas-view-state')
+      await copyCanvasViewport(sourceIdentity.path, saved.canonicalPath)
+
+      t.filePath = saved.canonicalPath
+      t.title = basename(saved.canonicalPath)
+      t.canvasRevision = saved.revision
+      if (t.currentContent === content) t.initialContent = content
+      t.lastKnownMtime = canvasMtimeMs(saved.revision)
+      t.lastKnownHash = saved.revision.sha256
+      t.externalState = 'fresh'
+      t.externalBannerDismissed = false
+      t.pendingExternal = undefined
+      await pushRecentFile(saved.canonicalPath)
+      await rebindTabPath(id)
+    })
+    return
+  }
+  await writeMd(newPath, content)
   t.filePath = newPath
   t.title = basename(newPath)
-  t.initialContent = t.currentContent
+  if (t.currentContent === content) t.initialContent = content
   // Re-classify in case user changed extension
   const cls = classifyPath(newPath)
   if (cls) {
@@ -547,6 +734,30 @@ export async function saveAs(id: string, newPath: string): Promise<void> {
   }
 }
 
+/**
+ * Write an independent Canvas copy without rebinding the open tab. This is
+ * the mobile "Save As" semantic: the document picker exports bytes, while
+ * the current tab keeps its path, revision, dirty baseline and UI session.
+ */
+export async function exportCanvasCopy(id: string, newPath: string): Promise<void> {
+  const t = tabs.find((x) => x.id === id)
+  if (!t || t.kind !== 'canvas' || isManagedMemoryTab(t)) return
+  if (!/\.canvas$/i.test(newPath)) {
+    throw new Error('Canvas documents must be exported with a .canvas extension')
+  }
+  const content = t.currentContent
+  const targetPath = newPath
+  await enqueueCanvasOperation(t, async (sourceIdentity) => {
+    const { canvasDocumentCreate, canvasDocumentProbe, canvasDocumentSave } = await import('./canvas/io')
+    const probe = await canvasDocumentProbe(targetPath)
+    if (probe.canonicalPath === sourceIdentity.path) {
+      throw new Error('Choose a different path when exporting a Canvas copy')
+    }
+    if (probe.kind === 'missing') await canvasDocumentCreate(targetPath, content)
+    else await canvasDocumentSave(targetPath, content, probe.revision)
+  })
+}
+
 export type DirtyChoice = 'save' | 'discard' | 'cancel'
 
 export async function closeTab(
@@ -556,12 +767,15 @@ export async function closeTab(
   const idx = tabs.findIndex((t) => t.id === id)
   if (idx < 0) return false
   const tab = tabs[idx]
+  if (activeId.value === id) flushMountedDocument(id)
   if (isDirty(id)) {
     if (!tab.filePath) {
       // ── UNTITLED dirty file ──────────────────────────────────────────────
       // Go straight to the native NSSavePanel (no pre-ask).
-      const { pickSaveFile } = await import('./dialogs')
-      const p = await pickSaveFile()       // resolves to Documents/untitled.md
+      const { pickSaveCanvasFile, pickSaveFile } = await import('./dialogs')
+      const p = tab.kind === 'canvas'
+        ? await pickSaveCanvasFile('untitled.canvas')
+        : await pickSaveFile()       // resolves to Documents/untitled.md
       if (p) {
         await saveAs(id, p)                // save to chosen path, then close
       } else {
@@ -581,16 +795,17 @@ export async function closeTab(
       const choice = await confirm(basename(tab.filePath))  // uses confirmDirtyClose
       if (choice === 'cancel') return false
       if (choice === 'save') {
-        const previousActiveId = activeId.value
-        activeId.value = id
-        await saveActive()                  // saves to existing path, no dialog
-        activeId.value = previousActiveId
+        await saveTab(id)                   // saves to existing path, no dialog
       }
       // choice === 'discard': fall through to close without saving
     }
   }
   tabs.splice(idx, 1)
   await stopWatchingTab(id)
+  if (tab.kind === 'canvas') {
+    const { releaseCanvasUiSession } = await import('./canvas/session')
+    releaseCanvasUiSession(id)
+  }
   if (activeId.value === id) {
     activeId.value = tabs[idx]?.id ?? tabs[idx - 1]?.id ?? null
   }
@@ -628,7 +843,19 @@ export async function recordOurWrite(t: Tab): Promise<void> {
 export async function reloadFromDisk(id: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
   if (!t || !t.pendingExternal) return
-  const p = t.pendingExternal
+  let p = t.pendingExternal
+  if (t.kind === 'canvas') {
+    const { canvasDocumentOpen, canvasMtimeMs } = await import('./canvas/io')
+    const opened = await canvasDocumentOpen(t.filePath)
+    t.canvasRevision = opened.revision
+    t.filePath = opened.canonicalPath
+    t.title = basename(opened.canonicalPath)
+    p = {
+      content: opened.text,
+      hash: opened.revision.sha256,
+      mtime: canvasMtimeMs(opened.revision),
+    }
+  }
   const oldContent = t.currentContent
   t.initialContent = p.content
   t.currentContent = p.content
@@ -655,9 +882,141 @@ export async function overwriteOnDisk(id: string): Promise<void> {
   const t = tabs.find((x) => x.id === id)
   if (!t || isManagedMemoryTab(t)) return
   if (shouldSkipEmptySave(t)) return
+  if (t.kind === 'canvas') {
+    await persistCanvasSnapshot(t, t.currentContent, true)
+    return
+  }
   await writeMd(t.filePath, t.currentContent)
   t.initialContent = t.currentContent
   await recordOurWrite(t)
+}
+
+/**
+ * Persist one immutable Canvas snapshot through the Rust revision-checked,
+ * same-directory atomic writer. The returned revision always tracks the bytes
+ * that reached disk; the tab is marked clean only if no newer edit appeared
+ * while the async write was in flight.
+ */
+interface CanvasDocumentIdentity {
+  readonly path: string
+  readonly revision?: CanvasDiskRevision
+}
+
+const canvasSaveQueues = new Map<string, Promise<unknown>>()
+
+function cloneCanvasRevision(revision: CanvasDiskRevision | undefined): CanvasDiskRevision | undefined {
+  return revision ? { ...revision } : undefined
+}
+
+function sameCanvasRevision(
+  left: CanvasDiskRevision | undefined,
+  right: CanvasDiskRevision | undefined,
+): boolean {
+  if (!left || !right) return left === right
+  return left.mtimeNs === right.mtimeNs && left.size === right.size && left.sha256 === right.sha256
+}
+
+function captureCanvasIdentity(t: Tab): CanvasDocumentIdentity {
+  return Object.freeze({ path: t.filePath, revision: cloneCanvasRevision(t.canvasRevision) })
+}
+
+function canvasIdentityMatches(t: Tab, identity: CanvasDocumentIdentity): boolean {
+  return t.filePath === identity.path && sameCanvasRevision(t.canvasRevision, identity.revision)
+}
+
+/** Serialize every Canvas file operation that may change one tab's identity. */
+function enqueueCanvasOperation<T>(
+  t: Tab,
+  run: (identity: CanvasDocumentIdentity) => Promise<T>,
+): Promise<T> {
+  const queueKey = t.id
+  const previous = canvasSaveQueues.get(queueKey)
+  const ready = previous ? previous.catch(() => undefined) : Promise.resolve()
+  const operation = ready.then(() => run(captureCanvasIdentity(t)))
+  const tracked = operation.finally(() => {
+    if (canvasSaveQueues.get(queueKey) === tracked) canvasSaveQueues.delete(queueKey)
+  })
+  canvasSaveQueues.set(queueKey, tracked)
+  return tracked
+}
+
+export function persistCanvasSnapshot(
+  t: Tab,
+  content: string,
+  force = false,
+  expectedPath?: string,
+): Promise<CanvasSaveResult | undefined> {
+  const immutableExpectedPath = expectedPath
+  return enqueueCanvasOperation(t, (identity) => {
+    if (immutableExpectedPath !== undefined && identity.path !== immutableExpectedPath) return Promise.resolve(undefined)
+    return persistCanvasSnapshotNow(t, identity, content, force)
+  })
+}
+
+async function persistCanvasSnapshotNow(
+  t: Tab,
+  identity: CanvasDocumentIdentity,
+  content: string,
+  force = false,
+): Promise<CanvasSaveResult> {
+  if (t.kind !== 'canvas' || !identity.path) throw new Error('Canvas save requires a path-backed Canvas tab')
+  const {
+    canvasDocumentCreate, canvasDocumentProbe, canvasDocumentSave, canvasMtimeMs,
+  } = await import('./canvas/io')
+  const wasDeleted = t.externalState === 'deleted'
+  let saved: CanvasSaveResult
+  try {
+    if (wasDeleted) {
+      saved = await canvasDocumentCreate(identity.path, content)
+    } else {
+      let revision = identity.revision
+      if (!revision) {
+        const probe = await canvasDocumentProbe(identity.path)
+        if (probe.kind === 'missing') saved = await canvasDocumentCreate(identity.path, content)
+        else {
+          revision = probe.revision
+          saved = await canvasDocumentSave(identity.path, content, revision, force)
+        }
+      } else {
+        saved = await canvasDocumentSave(identity.path, content, revision, force)
+      }
+    }
+  } catch (error) {
+    const { asCanvasDocumentError, canvasDocumentOpen, canvasMtimeMs } = await import('./canvas/io')
+    const detail = asCanvasDocumentError(error)
+    if (detail?.kind === 'conflict' && canvasIdentityMatches(t, identity)) {
+      if (detail.actual?.kind === 'missing') {
+        t.externalState = 'deleted'
+      } else {
+        try {
+          const disk = await canvasDocumentOpen(identity.path)
+          t.externalState = 'changed'
+          t.pendingExternal = {
+            content: disk.text,
+            hash: disk.revision.sha256,
+            mtime: canvasMtimeMs(disk.revision),
+          }
+        } catch { /* preserve the original conflict */ }
+      }
+      t.externalBannerDismissed = false
+    }
+    throw error
+  }
+  // Do not let a completion for an identity that was rebound outside this
+  // queue restore the old path/revision over the newer identity.
+  if (canvasIdentityMatches(t, identity)) {
+    t.canvasRevision = saved.revision
+    t.filePath = saved.canonicalPath
+    t.title = basename(saved.canonicalPath)
+    t.lastKnownMtime = canvasMtimeMs(saved.revision)
+    t.lastKnownHash = saved.revision.sha256
+    t.externalState = 'fresh'
+    t.externalBannerDismissed = false
+    t.pendingExternal = undefined
+    if (t.currentContent === content) t.initialContent = content
+    if (wasDeleted) await rebindTabPath(t.id)
+  }
+  return saved
 }
 
 export function shouldSkipEmptySave(t: Tab): boolean {

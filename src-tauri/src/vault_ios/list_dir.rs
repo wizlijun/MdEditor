@@ -4,7 +4,7 @@ use serde::Serialize;
 use super::{VaultError, path::vault_path};
 
 const ALLOWED_EXTS: &[&str] = &[
-    "md", "markdown", "mdown", "mkd", "mdx",
+    "md", "markdown", "mdown", "mkd", "mdx", "canvas",
     "html", "htm",
     "txt", "log", "csv", "tsv", "env",
     "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "heic", "heif", "avif",

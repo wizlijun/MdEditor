@@ -19,7 +19,7 @@
     {#if dirty}<span class="dirty" aria-label="unsaved">•</span>{/if}
   </div>
   <div class="actions">
-    {#if tab && tab.kind !== 'image'}
+    {#if tab && tab.kind !== 'image' && tab.kind !== 'canvas'}
       <button onclick={() => dispatch('toggle-mode')} title={t('toolbar.toggleMode')}>⇄</button>
     {/if}
     <button onclick={() => (menuOpen = !menuOpen)} aria-label={t('toolbar.more')}>⋯</button>
@@ -27,9 +27,12 @@
 
   {#if menuOpen}
     <div class="menu menu-panel" role="menu">
+      <button role="menuitem" class="menu-row" onclick={() => { menuOpen = false; dispatch('new-canvas') }}>{t('canvas.new')}</button>
       <button role="menuitem" class="menu-row" onclick={() => { menuOpen = false; dispatch('save') }}>{t('toolbar.save')}</button>
       <button role="menuitem" class="menu-row" onclick={() => { menuOpen = false; dispatch('save-as') }}>{t('toolbar.saveAs')}</button>
-      <button role="menuitem" class="menu-row" onclick={() => { menuOpen = false; dispatch('share') }}>{t('toolbar.share')}</button>
+      {#if tab?.kind !== 'canvas'}
+        <button role="menuitem" class="menu-row" onclick={() => { menuOpen = false; dispatch('share') }}>{t('toolbar.share')}</button>
+      {/if}
       <button role="menuitem" class="menu-row" onclick={() => { menuOpen = false; dispatch('preferences') }}>{t('toolbar.settings')}</button>
     </div>
   {/if}

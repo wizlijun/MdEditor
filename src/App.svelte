@@ -647,20 +647,30 @@
       switch (id) {
         case 'new':         newFile(); break
         case 'new-base':    await createNewBase(); break
+        case 'new-canvas':  await dispatch('new-canvas'); break
         case 'open':        cmdOpen(); break
         case 'save':        cmdSave(); break
         case 'save-as':     cmdSaveAs(); break
         case 'print':       cmdPrint(); break
         case 'close-tab':   cmdCloseActive(); break
         case 'toggle-mode': cmdToggleMode(); break
-        case 'find':        openFind(); break
-        case 'find-replace': openFindReplace(); break
+        case 'find':        if (activeTab()?.kind !== 'canvas') openFind(); break
+        case 'find-replace': if (activeTab()?.kind !== 'canvas') openFindReplace(); break
         // Custom item (not PredefinedMenuItem::select_all — see lib.rs): broadcast
         // to whichever editor is mounted, same convention as notemd:find-*.
         case 'select-all':  window.dispatchEvent(new CustomEvent('notemd:select-all')); break
-        case 'zoom-in':     document.documentElement.style.fontSize = `${Math.min(200, (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) + 2)}px`; break
-        case 'zoom-out':    document.documentElement.style.fontSize = `${Math.max(10, (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) - 2)}px`; break
-        case 'zoom-reset':  document.documentElement.style.fontSize = ''; break
+        case 'zoom-in':
+          if (activeTab()?.kind === 'canvas') window.dispatchEvent(new CustomEvent('notemd:canvas-view-command', { detail: 'in' }))
+          else document.documentElement.style.fontSize = `${Math.min(200, (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) + 2)}px`
+          break
+        case 'zoom-out':
+          if (activeTab()?.kind === 'canvas') window.dispatchEvent(new CustomEvent('notemd:canvas-view-command', { detail: 'out' }))
+          else document.documentElement.style.fontSize = `${Math.max(10, (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) - 2)}px`
+          break
+        case 'zoom-reset':
+          if (activeTab()?.kind === 'canvas') window.dispatchEvent(new CustomEvent('notemd:canvas-view-command', { detail: 'reset' }))
+          else document.documentElement.style.fontSize = ''
+          break
         case 'preferences': openSettings(); break
         case 'check-for-updates': {
           // Open the dialog first so the user sees "checking…" feedback,
@@ -732,6 +742,30 @@
 
     const unlistenDrop = win.onDragDropEvent(async (event) => {
       if (event.payload.type === 'drop') {
+        const canvasTab = activeTab()?.kind === 'canvas' ? activeTab() : null
+        if (canvasTab) {
+          // Tauri reports a PhysicalPosition while DOM/Svelte Flow consumes
+          // logical client pixels. Only consume the drop when it actually hit
+          // the Canvas surface; a Canvas consumes every file type (including
+          // .zip/.canvas) as a file node, so host theme-import/open routing must
+          // not also run for the same gesture.
+          const scale = await win.scaleFactor().catch(() => 1)
+          const position = {
+            x: event.payload.position.x / scale,
+            y: event.payload.position.y / scale,
+          }
+          const hit = document.elementFromPoint(position.x, position.y)
+          if (hit instanceof Element && hit.closest('.canvas-surface')) {
+            window.dispatchEvent(new CustomEvent('notemd:canvas-native-drop', {
+              detail: {
+                tabId: canvasTab.id,
+                paths: event.payload.paths,
+                position,
+              },
+            }))
+            return
+          }
+        }
         for (const path of event.payload.paths) {
           if (path.toLowerCase().endsWith('.zip')) {
             try {
@@ -775,14 +809,24 @@
   function onKeyDown(e: KeyboardEvent) {
     if (!e.metaKey) return
     const k = e.key.toLowerCase()
+    const isCanvas = activeTab()?.kind === 'canvas'
     if (k === 'n' && !e.shiftKey) { e.preventDefault(); newFile() }
-    else if (k === 'f' && !e.shiftKey) { e.preventDefault(); openFind() }
-    else if (k === 'f' && e.shiftKey) { e.preventDefault(); openFindReplace() }
+    else if (k === 'f' && !e.shiftKey) {
+      e.preventDefault()
+      if (!isCanvas) openFind()
+    }
+    else if (k === 'f' && e.shiftKey) {
+      e.preventDefault()
+      if (!isCanvas) openFindReplace()
+    }
     else if (k === 'o') { e.preventDefault(); cmdOpen() }
     else if (k === 's' && !e.shiftKey) { e.preventDefault(); cmdSave() }
     else if (k === 's' && e.shiftKey) { e.preventDefault(); cmdSaveAs() }
     else if (k === 'w') { e.preventDefault(); cmdCloseActive() }
-    else if (k === '/') { e.preventDefault(); cmdToggleMode() }
+    else if (k === '/') {
+      e.preventDefault()
+      if (!isCanvas) cmdToggleMode()
+    }
     else if (k === 'b' && e.shiftKey && settings.mdblock.enabled) {
       e.preventDefault()
       void cmdMdblockRefresh()

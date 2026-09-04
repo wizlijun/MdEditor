@@ -15,6 +15,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 pub mod app_dirs;
+pub mod canvas_document;
+pub mod canvas_resource;
 pub mod log_bus;
 pub mod platform;
 pub mod shared_config;
@@ -520,6 +522,7 @@ fn set_default_app_for_extensions(app: tauri::AppHandle, exts: Vec<String>) -> V
     }
 }
 
+#[cfg(not(target_os = "ios"))]
 fn show_insights_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     use tauri::WebviewUrl;
     let win = app.get_webview_window("insights").or_else(|| {
@@ -631,6 +634,7 @@ fn open_search_logs_window(app: tauri::AppHandle) {
 /// View ▸ Plugin Market… (子项目③). Standalone window cloned from the insights
 /// window: it bootstraps its own webview state and drives the market commands
 /// (index / preview / install / uninstall / set_enabled) + capability consent.
+#[cfg(not(target_os = "ios"))]
 fn show_plugin_market_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     use tauri::WebviewUrl;
     let win = app.get_webview_window("plugin-market").or_else(|| {
@@ -851,6 +855,7 @@ async fn editor_show_and_open_path(app: tauri::AppHandle, path: String) -> Resul
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();
+        #[cfg(not(target_os = "ios"))]
         let _ = win.unminimize();
         // Defer to existing frontend "open file" event so the editor can decide tabs.
         let _ = win.emit("editor://open-path", &path);
@@ -928,6 +933,7 @@ fn git_proxy_set(value: String) -> Result<String, String> {
     Ok(normalized.unwrap_or_default())
 }
 
+#[cfg(not(target_os = "ios"))]
 fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let win = app.get_webview_window("main").or_else(|| {
         // Window might have been destroyed, recreate it.
@@ -951,6 +957,7 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 /// resolution, filename/timestamp, disk write, open + focus) via the
 /// `quick-note` event. Kept side-effect-light here so both triggers behave
 /// identically regardless of which surface fired.
+#[cfg(not(target_os = "ios"))]
 fn trigger_quick_note<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     show_main_window(app);
     let _ = app.emit("quick-note", ());
@@ -1372,8 +1379,13 @@ pub fn run() {
             let _ = w.set_focus();
         }
     }));
+    // On iOS the deep-link plugin republishes every RunEvent::Opened URL,
+    // including security-scoped file URLs, directly to the frontend. Canvas
+    // files must instead be copied while this callback still owns access, so
+    // iOS routes Opened events below and emits only durable app-owned paths.
+    #[cfg(not(target_os = "ios"))]
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
     let app = builder
-        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1450,6 +1462,13 @@ pub fn run() {
             { tauri::generate_handler![
                 quit_app,
                 drain_pending_files,
+                canvas_document::canvas_document_open,
+                canvas_document::canvas_document_probe,
+                canvas_document::canvas_document_create,
+                canvas_document::canvas_document_save,
+                canvas_resource::canvas_resource_read,
+                canvas_resource::canvas_resource_import,
+                canvas_resource::canvas_resource_resolve,
                 set_default_app_for_extensions,
                 set_plugin_menu_item_enabled,
                 plugin_host::get_plugin_manifests,
@@ -1554,6 +1573,13 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             { tauri::generate_handler![
                 drain_pending_files,
+                canvas_document::canvas_document_open,
+                canvas_document::canvas_document_probe,
+                canvas_document::canvas_document_create,
+                canvas_document::canvas_document_save,
+                canvas_resource::canvas_resource_read,
+                canvas_resource::canvas_resource_import,
+                canvas_resource::canvas_resource_resolve,
                 vault_ios::vault_status,
                 vault_ios::list_dir::vault_list_dir,
                 vault_ios::vault_configure,
@@ -1810,10 +1836,45 @@ pub fn run() {
                     urls.len(),
                     urls.iter().map(|u| u.to_string()).collect::<Vec<_>>()));
                 for url in urls {
-                    if let Ok(path) = url.to_file_path() {
-                        if let Some(p) = path.to_str() {
-                            dlog(&format!("  emit open-file: {}", p));
-                            emit_open_file_delayed(app_handle, p);
+                    match url.to_file_path() {
+                        Ok(path) => {
+                            #[cfg(target_os = "ios")]
+                            let path = if canvas_document::is_canvas_path(&path) {
+                                let documents = match app_handle.path().document_dir() {
+                                    Ok(path) => path,
+                                    Err(error) => {
+                                        dlog(&format!(
+                                            "  reject opened canvas: resolve Documents failed: {error}"
+                                        ));
+                                        continue;
+                                    }
+                                };
+                                match canvas_document::prepare_ios_opened_canvas(&path, &documents) {
+                                    Ok(imported) => imported,
+                                    Err(error) => {
+                                        // Never enqueue or emit the original provider path on
+                                        // failure: its security-scoped access ends with this
+                                        // callback, so the frontend could not safely reopen it.
+                                        dlog(&format!("  reject opened canvas import: {error:?}"));
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                path
+                            };
+                            if let Some(p) = path.to_str() {
+                                dlog(&format!("  emit open-file: {}", p));
+                                emit_open_file_delayed(app_handle, p);
+                            }
+                        }
+                        #[cfg(target_os = "ios")]
+                        Err(_) if url.scheme() != "file" => {
+                            // Preserve custom-scheme deep links without restoring the
+                            // plugin's unsafe raw forwarding of provider-backed files.
+                            let _ = app_handle.emit("deep-link://new-url", vec![url]);
+                        }
+                        Err(_) => {
+                            dlog("  reject opened file URL that could not become a path");
                         }
                     }
                 }
@@ -1843,6 +1904,7 @@ pub fn run() {
                     _ => {}
                 }
             }
+            #[cfg(not(target_os = "ios"))]
             RunEvent::ExitRequested { code, api, .. } => {
                 // Closing the window (user interaction, code None) hides to the
                 // tray and keeps the app running; an explicit quit (tray "Quit" /
@@ -1987,6 +2049,7 @@ fn menu_label(locale: &str, key: &str) -> String {
         "file.openRecent" => ("Open Recent", "打开最近", "最近使ったファイルを開く", "Zuletzt geöffnet"),
         "file.noRecent" => ("No Recent Files", "无最近文件", "最近のファイルなし", "Keine letzten Dateien"),
         "file.new" => ("New", "新建", "新規", "Neu"),
+        "file.newCanvas" => ("New Canvas", "新建画布", "新規キャンバス", "Neue Leinwand"),
         // Core feature, formerly carried by the bundled `base` plugin manifest —
         // wording preserved from its i18n block.
         "file.newBase" => ("New Base", "新建 Base", "新規 Base", "Neue Base"),
@@ -2204,6 +2267,7 @@ fn activate_plugin_tray_target<R: tauri::Runtime>(
 /// (dynamic) "Vault:" item, status item, and sync-now item so the caller can
 /// stash them for later updates. Event handling stays on the TrayIcon, so
 /// rebuilding just the menu preserves click behavior.
+#[cfg(not(target_os = "ios"))]
 fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     locale: &str,
@@ -2360,6 +2424,7 @@ fn build_tray_menu<R: tauri::Runtime>(
 /// Rebuild the app menu (and tray) in the given locale and apply them. Called
 /// from JS when the user changes the language. The recent-files submenu resets
 /// to its placeholder; JS re-pushes the list via `refreshRecentMenu()` after.
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 fn set_menu_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> {
     // Propagate the language switch to every open plugin window (isolated
@@ -2383,6 +2448,7 @@ fn set_menu_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> 
 /// `set_menu_locale` command already runs there (Tauri dispatches sync commands
 /// on the main thread), but the async market commands do NOT — they call
 /// [`rebuild_menu`], which hops onto the main thread via `run_on_main_thread`.
+#[cfg(not(target_os = "ios"))]
 fn apply_menu_locale(app: &tauri::AppHandle, locale: &str) -> Result<(), String> {
     let plugin_items = plugin_host::collect_top_menu_items(locale);
     let (menu, recent_submenu) =
@@ -2430,6 +2496,7 @@ pub(crate) fn rebuild_menu(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(not(target_os = "ios"))]
 fn build_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     plugin_items: &[plugin_host::LocatedMenuItem],
@@ -2479,6 +2546,7 @@ fn build_menu<R: tauri::Runtime>(
         // too — next to New, rather than under Plugins where plugin-contributed
         // items land.
         .item(&MenuItemBuilder::with_id("new-base", menu_label(locale, "file.newBase")).build(app)?)
+        .item(&MenuItemBuilder::with_id("new-canvas", menu_label(locale, "file.newCanvas")).build(app)?)
         .item(&MenuItemBuilder::with_id("open", menu_label(locale, "file.open")).accelerator("CmdOrCtrl+O").build(app)?)
         .item(&recent_menu)
         .separator()
@@ -2648,6 +2716,8 @@ mod menu_label_tests {
         assert_eq!(menu_label("zh", "file.newBase"), "新建 Base");
         assert_eq!(menu_label("ja", "file.newBase"), "新規 Base");
         assert_eq!(menu_label("de", "file.newBase"), "Neue Base");
+        assert_eq!(menu_label("en", "file.newCanvas"), "New Canvas");
+        assert_eq!(menu_label("zh", "file.newCanvas"), "新建画布");
     }
 
     #[test]

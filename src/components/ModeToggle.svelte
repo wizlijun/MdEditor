@@ -6,7 +6,7 @@
   let { tab }: { tab: Tab } = $props()
 </script>
 
-{#if tab.kind !== 'image'}
+{#if tab.kind !== 'image' && tab.kind !== 'canvas'}
 <div class="seg" role="tablist" aria-label={t('mode.editorMode')}>
   <button
     type="button"
