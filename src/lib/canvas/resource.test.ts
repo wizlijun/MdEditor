@@ -51,6 +51,43 @@ describe('CanvasResourceSession', () => {
     expect(await session.loadLocalImage('/outside/x.png')).toBe('')
   })
 
+  it('limits concurrent reads and releases a slot when one finishes', async () => {
+    const resolves: Array<(value: ArrayBuffer) => void> = []
+    h.invoke.mockImplementation(() => new Promise<ArrayBuffer>((resolve) => resolves.push(resolve)))
+    const session = new CanvasResourceSession('/vault')
+    const active = Array.from({ length: 128 }, (_, index) => (
+      session.loadLocalImage(`/vault/pending-${index}.png`)
+    ))
+
+    expect(h.invoke).toHaveBeenCalledTimes(128)
+    await expect(session.loadLocalImage('/vault/overflow.png')).resolves.toBe('')
+    expect(h.invoke).toHaveBeenCalledTimes(128)
+
+    resolves[0](Uint8Array.from([1, 1]).buffer)
+    await active[0]
+    const afterRelease = session.loadLocalImage('/vault/after-release.png')
+    expect(h.invoke).toHaveBeenCalledTimes(129)
+    resolves[128](Uint8Array.from([1, 2]).buffer)
+    await expect(afterRelease).resolves.toBe('blob:canvas-image')
+
+    for (const resolve of resolves.slice(1, 128)) resolve(Uint8Array.from([1, 3]).buffer)
+    await Promise.all(active)
+    session.dispose()
+  })
+
+  it('releases failed request slots so an image can be retried', async () => {
+    h.invoke.mockRejectedValue({ kind: 'temporaryFailure' })
+    const session = new CanvasResourceSession('/vault')
+    await Promise.all(Array.from({ length: 128 }, (_, index) => (
+      session.loadLocalImage(`/vault/failed-${index}.png`)
+    )))
+
+    h.invoke.mockResolvedValueOnce(Uint8Array.from([1, 1, 2, 3]).buffer)
+    await expect(session.loadLocalImage('/vault/failed-0.png')).resolves.toBe('blob:canvas-image')
+    expect(h.invoke).toHaveBeenCalledTimes(129)
+    session.dispose()
+  })
+
   it('evicts the least-recently-used blobs by byte budget and disposes the remainder', async () => {
     vi.mocked(URL.createObjectURL)
       .mockReturnValueOnce('blob:a')
@@ -69,9 +106,15 @@ describe('CanvasResourceSession', () => {
     expect(session.peek('/vault/b.png')).toBeNull()
     expect(session.peek('/vault/c.png')).toBe('blob:c')
 
-    session.dispose()
+    vi.mocked(URL.createObjectURL).mockReturnValueOnce('blob:b-reloaded')
+    expect(await session.loadLocalImage('/vault/b.png')).toBe('blob:b-reloaded')
+    expect(h.invoke).toHaveBeenCalledTimes(4)
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:a')
+    expect(session.peek('/vault/b.png')).toBe('blob:b-reloaded')
+
+    session.dispose()
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:c')
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:b-reloaded')
   })
 })
 

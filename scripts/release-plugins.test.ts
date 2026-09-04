@@ -118,6 +118,18 @@ describe('release.sh transient Apple failures', () => {
     expect(HOST_RELEASE).toContain('NSURLErrorDomain Code=-1200')
     expect(HOST_RELEASE).toContain('A TLS error caused the secure connection to fail')
   })
+
+  it('rejects untracked files as well as tracked and staged changes', () => {
+    expect(HOST_RELEASE).toMatch(/\[\[ -z "\$\(git status --porcelain\)" \]\]/)
+    expect(HOST_RELEASE).not.toContain('git diff --quiet && git diff --cached --quiet')
+  })
+
+  it('runs type, security and Canvas native gates before version bumps', () => {
+    expect(HOST_RELEASE).toContain('pnpm -s check\n')
+    expect(HOST_RELEASE).toContain('pnpm audit --prod --audit-level=high')
+    expect(HOST_RELEASE).toContain('cargo test --manifest-path src-tauri/Cargo.toml canvas_')
+    expect(HOST_RELEASE).toContain('cargo test --manifest-path src-tauri/Cargo.toml --test mobile_project_config')
+  })
 })
 
 describe('dev-install-plugin.sh codex-agent dispatch', () => {

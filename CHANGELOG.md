@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Infinite Canvas gains a fuller editing toolset.** Switch between select, pan, freeform lasso and frame drawing; align, distribute or separate overlapping selections with smart guides; resize multiple cards together; and fit groups around their contents. Connections choose sensible facing sides and their labels edit in place. Touch drawing yields to navigation when a second finger arrives, new and pasted cards follow the last pointer position, and view locking, simplified low-zoom rendering and indexed geometry keep larger boards easier to navigate.
+
 ## v6.904.8 — 2026-09-05
 
 ### Fixed

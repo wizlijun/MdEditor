@@ -91,7 +91,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <article
-  class="canvas-markdown-preview moraya-editor nodrag nopan nowheel"
+  class="canvas-markdown-preview moraya-editor"
   onclick={handleClick}
 >
   {@html html}

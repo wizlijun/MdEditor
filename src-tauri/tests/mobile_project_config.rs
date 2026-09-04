@@ -49,3 +49,22 @@ fn global_shortcut_permissions_are_desktop_only() {
         ])
     );
 }
+
+#[test]
+fn canvas_clipboard_fallback_can_read_and_write_text() {
+    let common: Value = serde_json::from_str(include_str!("../capabilities/default.json"))
+        .expect("default capability must be valid JSON");
+    let permissions = common["permissions"]
+        .as_array()
+        .expect("default permissions must be an array");
+
+    for required in [
+        "clipboard-manager:allow-read-text",
+        "clipboard-manager:allow-write-text",
+    ] {
+        assert!(
+            permissions.iter().any(|permission| permission == required),
+            "Canvas clipboard fallback requires {required}"
+        );
+    }
+}

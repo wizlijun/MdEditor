@@ -56,4 +56,17 @@ describe('CanvasMarkdownPreview', () => {
 
     await vi.waitFor(() => expect(h.openUrl).toHaveBeenCalledWith('https://example.com/path?q=1'))
   })
+
+  it('leaves the inactive card body available to Canvas pointer gestures', async () => {
+    component = mount(CanvasMarkdownPreview, {
+      target: document.body,
+      props: { markdown: '可以拖动的预览' },
+    })
+    await vi.waitFor(() => expect(document.querySelector('article')).toBeTruthy())
+
+    const preview = document.querySelector('article') as HTMLElement
+    expect(preview.classList.contains('nodrag')).toBe(false)
+    expect(preview.classList.contains('nopan')).toBe(false)
+    expect(preview.classList.contains('nowheel')).toBe(false)
+  })
 })

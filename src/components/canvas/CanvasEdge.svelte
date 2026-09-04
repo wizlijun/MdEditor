@@ -12,6 +12,7 @@
   type CanvasEdgeData = Record<string, unknown> & {
     canonicalId?: string
     interactionLocked?: boolean
+    tabId?: string
     onLabelCommit?: (id: string, value: string) => void
   }
 
@@ -71,6 +72,7 @@
 
   function handleInputKeydown(event: KeyboardEvent): void {
     event.stopPropagation()
+    if (event.isComposing) return
     if (event.key === 'Enter') {
       event.preventDefault()
       commitEdit()
@@ -79,6 +81,18 @@
       cancelEdit()
     }
   }
+
+  function handleFlushRequest(event: Event): void {
+    const requestedTabId = (event as CustomEvent<{ tabId?: string }>).detail?.tabId
+    if (requestedTabId && requestedTabId !== data?.tabId) return
+    commitEdit()
+  }
+
+  $effect(() => {
+    if (!editing) return
+    window.addEventListener('notemd:flush-doc', handleFlushRequest)
+    return () => window.removeEventListener('notemd:flush-doc', handleFlushRequest)
+  })
 
 </script>
 
@@ -124,13 +138,13 @@
   <EdgeReconnectAnchor
     type="source"
     position={{ x: sourceX, y: sourceY }}
-    class="canvas-edge-reconnect"
+    class="canvas-edge-reconnect canvas-edge-touch-target"
     aria-label="重连起点"
   />
   <EdgeReconnectAnchor
     type="target"
     position={{ x: targetX, y: targetY }}
-    class="canvas-edge-reconnect"
+    class="canvas-edge-reconnect canvas-edge-touch-target"
     aria-label="重连终点"
   />
 {/if}
@@ -162,5 +176,14 @@
     width: 180px;
     padding: 5px 7px;
     outline: 2px solid color-mix(in srgb, var(--accent, #4d88ff) 45%, transparent);
+  }
+  @media (pointer: coarse) {
+    :global(.svelte-flow__edgeupdater.canvas-edge-reconnect.canvas-edge-touch-target) {
+      width: 44px !important;
+      height: 44px !important;
+      border: 0;
+      background: radial-gradient(circle, var(--accent, #4d88ff) 0 6px, transparent 7px) !important;
+      box-shadow: none !important;
+    }
   }
 </style>

@@ -45,7 +45,7 @@
     onCompositionChange?: (composing: boolean) => void
     onResizeStart?: (id: string, rectangle: ResizeParams) => void
     onResize?: (id: string, event: ResizeDragEvent, rectangle: ResizeParamsWithDirection) => void
-    onResizeEnd?: (id: string, rectangle: ResizeParams) => void
+    onResizeEnd?: (id: string, event: ResizeDragEvent, rectangle: ResizeParams) => void
   }
 
   let { id, data, selected = false }: NodeProps & { data: CanvasCardData } = $props()
@@ -70,6 +70,12 @@
   }
 
   let accent = $derived(colorValue(data.color))
+  function mediaResolverRoot(resolver?: MediaResolver): string {
+    const root = (resolver as MediaResolver & { root?: unknown } | undefined)?.root
+    return typeof root === 'string' ? root : ''
+  }
+  let editorMountKey = $derived(`${data.canvasPath ?? ''}\u0000${mediaResolverRoot(data.mediaResolver)}`)
+
   function textSummary(markdown: string): string {
     const firstLine = markdown.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? '文本'
     const plain = firstLine
@@ -96,12 +102,13 @@
 
 <NodeResizer
   isVisible={selected && !data.multipleSelected && !data.interactionLocked && !data.active && data.kind !== 'opaque'}
+  handleClass="canvas-card-resize-handle"
   minWidth={data.kind === 'group' ? CANVAS_GROUP_MIN_WIDTH : CANVAS_NODE_MIN_WIDTH}
   minHeight={data.kind === 'group' ? CANVAS_GROUP_MIN_HEIGHT : CANVAS_NODE_MIN_HEIGHT}
   color={accent ?? 'var(--accent, #4d88ff)'}
   onResizeStart={(_event, rectangle) => data.onResizeStart?.(id, rectangle)}
   onResize={(event, rectangle) => data.onResize?.(id, event, rectangle)}
-  onResizeEnd={(_event, rectangle) => data.onResizeEnd?.(id, rectangle)}
+  onResizeEnd={(event, rectangle) => data.onResizeEnd?.(id, event, rectangle)}
 />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -117,16 +124,18 @@
   <div class="node-detail">
     {#if data.kind === 'text'}
       {#if data.active && data.mediaResolver}
-        <EmbeddedMarkdownEditor
-          markdown={data.text ?? ''}
-          tabId={data.tabId ?? ''}
-          filePath={data.canvasPath ?? ''}
-          mediaResolver={data.mediaResolver}
-          onChange={(markdown) => data.onTextChange?.(id, markdown)}
-          onFlush={(markdown) => data.onTextFlush?.(id, markdown)}
-          onBlur={(markdown) => data.onTextBlur?.(id, markdown)}
-          onCompositionChange={(composing) => data.onCompositionChange?.(composing)}
-        />
+        {#key editorMountKey}
+          <EmbeddedMarkdownEditor
+            markdown={data.text ?? ''}
+            tabId={data.tabId ?? ''}
+            filePath={data.canvasPath ?? ''}
+            mediaResolver={data.mediaResolver}
+            onChange={(markdown) => data.onTextChange?.(id, markdown)}
+            onFlush={(markdown) => data.onTextFlush?.(id, markdown)}
+            onBlur={(markdown) => data.onTextBlur?.(id, markdown)}
+            onCompositionChange={(composing) => data.onCompositionChange?.(composing)}
+          />
+        {/key}
       {:else}
         <CanvasMarkdownPreview
           markdown={data.text ?? ''}
@@ -136,7 +145,7 @@
     {:else if data.kind === 'file'}
       <div class="card-heading" title={data.file}>{title}</div>
       {#if data.imageUrl}
-        <img class="file-image nodrag nopan" src={data.imageUrl} alt={title} draggable="false" />
+        <img class="file-image" src={data.imageUrl} alt={title} draggable="false" />
       {:else}
         <div class="file-placeholder">
           <span aria-hidden="true">▤</span>
@@ -317,11 +326,17 @@
   :global(.svelte-flow__node-canvas-group .svelte-flow__resize-control) { pointer-events: auto; }
   @media (pointer: coarse) {
     :global(.canvas-handle) {
-      width: 28px;
-      height: 28px;
+      width: 44px;
+      height: 44px;
       border: 0;
       background: radial-gradient(circle, var(--accent, #4d88ff) 0 5px, transparent 6px);
       opacity: 0.72;
+    }
+    :global(.canvas-card-resize-handle) {
+      width: 44px !important;
+      height: 44px !important;
+      border: 0;
+      background: radial-gradient(circle, var(--accent, #4d88ff) 0 5px, transparent 6px) !important;
     }
   }
 </style>

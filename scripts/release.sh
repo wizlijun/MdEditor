@@ -133,7 +133,7 @@ cd "$ROOT"
 
 say "pre-flight"
 
-git diff --quiet && git diff --cached --quiet \
+[[ -z "$(git status --porcelain)" ]] \
   || die "working tree is dirty — commit or stash first"
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -215,7 +215,11 @@ fi
 
 say "running tests"
 pnpm -s test
+pnpm -s check
 pnpm -s check:protocol
+pnpm audit --prod --audit-level=high
+cargo test --manifest-path src-tauri/Cargo.toml canvas_
+cargo test --manifest-path src-tauri/Cargo.toml --test mobile_project_config
 
 # ---------- bump versions ----------
 

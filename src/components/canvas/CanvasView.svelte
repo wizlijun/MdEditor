@@ -172,6 +172,7 @@
     latestScaleX: number
     latestScaleY: number
   } | null>(null)
+  let multiResizePreviewBounds = $state.raw<CanvasRect | null>(null)
   let singleResize = $state.raw<{
     id: string
     snapIndex: SnapIndex
@@ -182,6 +183,8 @@
   } | null>(null)
   let historyVersion = $state(0)
   let surface: HTMLDivElement | undefined = $state()
+  let toolbarEdgeLabelInput: HTMLInputElement | undefined = $state()
+  let toolbarGroupLabelInput: HTMLInputElement | undefined = $state()
   let viewport = $state.raw<Viewport>({ x: 0, y: 0, zoom: 1 })
   let viewportReady = $state(false)
   let hasStoredViewport = $state(false)
@@ -204,7 +207,7 @@
   let pasteCount = 0
   let resourceSession: CanvasResourceSession | null = null
   let resourceSessionRoot = ''
-  const requestedImages = new Set<string>()
+  const loadingImages = new Set<string>()
   const activeTouchPointers = new Set<number>()
   let geometryDocument: CanvasDocument | null = null
   let geometryNodeRects = new Map<string, CanvasRect & { id: string }>()
@@ -260,7 +263,7 @@
       resourceSession?.dispose()
       resourceSession = new CanvasResourceSession(root)
       resourceSessionRoot = root
-      requestedImages.clear()
+      loadingImages.clear()
     }
     return resourceSession
   }
@@ -297,11 +300,11 @@
     const cached = session.peek(resolved)
     if (cached) return cached
     const requestKey = `${session.root}\0${resolved}`
-    if (!requestedImages.has(requestKey)) {
-      requestedImages.add(requestKey)
+    if (!loadingImages.has(requestKey)) {
+      loadingImages.add(requestKey)
       void session.loadLocalImage(resolved).then((url) => {
         if (url && resourceSession === session) rebuildFlow()
-      })
+      }).finally(() => loadingImages.delete(requestKey))
     }
     return null
   }
@@ -407,8 +410,10 @@
     ensureGeometryIndexes()
     const projection = projectCanvasToFlow(canvasDoc)
     diagnostics = projection.diagnostics
-    const validNodes = new Set(Array.from(nextSelectedNodes).filter((id) => projection.nodes.some((node) => node.id === id)))
-    const validEdges = new Set(Array.from(nextSelectedEdges).filter((id) => projection.edges.some((edge) => edge.id === id)))
+    const projectedNodeIds = new Set(projection.nodes.map((node) => node.id))
+    const projectedEdgeIds = new Set(projection.edges.map((edge) => edge.id))
+    const validNodes = new Set(Array.from(nextSelectedNodes).filter((id) => projectedNodeIds.has(id)))
+    const validEdges = new Set(Array.from(nextSelectedEdges).filter((id) => projectedEdgeIds.has(id)))
     if (!sameIds(selectedNodeIds, validNodes)) selectedNodeIds = validNodes
     if (!sameIds(selectedEdgeIds, validEdges)) selectedEdgeIds = validEdges
     flowNodes = projection.nodes.map((node) => {
@@ -439,7 +444,7 @@
           onCompositionChange: (value: boolean) => { composing = value },
           onResizeStart: startSingleResize,
           onResize: previewSingleResize,
-          onResizeEnd: commitResize,
+          onResizeEnd: finishSingleResize,
         },
       } as UiNode
     })
@@ -464,9 +469,11 @@
         markerEnd: edge.markerEnd ? { type: MarkerType.ArrowClosed } : undefined,
         style: color ? `stroke:${color};stroke-width:2` : 'stroke-width:2',
         labelStyle: 'fill:CanvasText;font-size:12px',
+        interactionWidth: 44,
         data: {
           ...edge.data,
           interactionLocked,
+          tabId: tab.id,
           onLabelCommit: updateEdgeLabelById,
         },
       } as UiEdge
@@ -598,7 +605,7 @@
       isKnownCanvasNode(entry) && selectedNodeIds.has(entry.id),
     ).filter(isKnownCanvasNode)
     if (selected.length === 0) {
-      addNode('group', viewportCenter(), label.trim() || '分组')
+      addNode('group', lastPointerFlow ?? viewportCenter(), label.trim() || '分组')
       return
     }
 
@@ -646,7 +653,7 @@
   }
 
   function updateTextDraft(id: string, markdown: string): void {
-    if (!canvasDoc || activeTextId !== id) return
+    if (!canvasDoc || composing || activeTextId !== id) return
     const next = updateCanvasNode(canvasDoc, id, (node) => node.type === 'text' ? { ...node, text: markdown } : node)
     if (next === canvasDoc) return
     canvasDoc = next
@@ -655,10 +662,6 @@
 
   function flushTextDraft(id: string, markdown: string): void {
     updateTextDraft(id, markdown)
-    if (!canvasDoc || composing || activeTextId !== id || !textBefore) return
-    history.record('编辑文本节点', textBefore, canvasDoc)
-    textBefore = cloneCanvasDocument(canvasDoc)
-    historyVersion++
   }
 
   function finalizeTextSession(id = activeTextId ?? '', markdown?: string): void {
@@ -752,11 +755,16 @@
     })
   }
 
-  function commitResize(id: string, rectangle: ResizeParams): void {
-    if (!canvasDoc) return
+  function finishSingleResize(id: string, event: ResizeDragEvent, _rectangle: ResizeParams): void {
+    if (event.sourceEvent?.type === 'pointercancel' || event.sourceEvent?.type === 'touchcancel') {
+      cancelSingleResize()
+      return
+    }
+    const session = singleResize
+    if (!canvasDoc || !session || session.id !== id) return
     const current = canvasDoc.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === id)
     if (!current || !isKnownCanvasNode(current)) return
-    const finalRectangle = singleResize?.id === id ? singleResize.latest : rectangle
+    const finalRectangle = session.latest
     singleResize = null
     snapGuides = []
     const next = updateCanvasNode(canvasDoc, id, (node) => ({
@@ -842,29 +850,21 @@
   }): void {
     if (!canvasDoc) return
     if (!finishTextBeforeStructure()) { nodeDrag = null; snapGuides = []; rebuildFlow(); return }
-    if (targetNode && nodeDrag) {
-      const drag = nodeDrag
-      const delta = dragDelta(targetNode, event)
-      const next = moveFrozenNodes(canvasDoc, drag.frozen, delta)
+    if (!targetNode || !nodeDrag) {
       nodeDrag = null
       snapGuides = []
-      const label = drag.hasGroup
-        ? (nodes.length > 1 ? '移动分组与选区' : '移动分组')
-        : (nodes.length > 1 ? '移动多个节点' : '移动节点')
-      commitDocument(label, next)
+      rebuildFlow()
       return
     }
+    const drag = nodeDrag
+    const delta = dragDelta(targetNode, event)
+    const next = moveFrozenNodes(canvasDoc, drag.frozen, delta)
     nodeDrag = null
     snapGuides = []
-    let next = canvasDoc
-    for (const node of nodes) {
-      next = updateCanvasNode(next, node.id, (current) => ({
-        ...current,
-        x: Math.round(node.position.x),
-        y: Math.round(node.position.y),
-      }))
-    }
-    commitDocument(nodes.length > 1 ? '移动多个节点' : '移动节点', next)
+    const label = drag.hasGroup
+      ? (nodes.length > 1 ? '移动分组与选区' : '移动分组')
+      : (nodes.length > 1 ? '移动多个节点' : '移动节点')
+    commitDocument(label, next)
   }
 
   function editableCanonicalNodeId(viewId: string): string | null {
@@ -1038,6 +1038,11 @@
     rebuildFlow()
   }
 
+  function handleSelectAllRequest(): void {
+    if (isTextInput(document.activeElement)) return
+    selectAll()
+  }
+
   function handleSelection({ nodes, edges }: { nodes: UiNode[]; edges: UiEdge[] }): void {
     const nextNodes = new Set(nodes.map((node) => node.id))
     const nextEdges = new Set(edges.map((edge) => edge.id))
@@ -1109,7 +1114,8 @@
   function pastePayload(payload: CanvasClipboardPayload): void {
     if (!canvasDoc || payload.nodes.length === 0 || !finishTextBeforeStructure()) return
     if (payload.sourceRoot && payload.sourceRoot !== resourceRoot()) {
-      showError('跨工作区粘贴会保留原始文件引用；无法在当前工作区解析的资源将显示为断链。')
+      showError('为避免产生断链资源，暂不支持跨工作区粘贴画布元素。')
+      return
     }
     const known = payload.nodes.filter(isKnownCanvasNode)
     const minX = known.length ? Math.min(...known.map((node) => node.x)) : 0
@@ -1183,7 +1189,7 @@
 
   function isTextInput(target: EventTarget | null): boolean {
     return target instanceof HTMLElement
-      && !!target.closest('input,textarea,[contenteditable="true"],.embedded-markdown,.ProseMirror')
+      && !!target.closest('input,textarea,select,button,[contenteditable="true"],.embedded-markdown,.ProseMirror')
   }
 
   function localPointer(event: { clientX: number; clientY: number }): CanvasPoint {
@@ -1532,6 +1538,7 @@
       latestScaleX: 1,
       latestScaleY: 1,
     }
+    multiResizePreviewBounds = null
     snapGuides = []
   }
 
@@ -1551,6 +1558,9 @@
       isKnownCanvasNode(entry) ? [[entry.id, entry] as const] : [],
     ))
     const resizedIds = new Set(multiResize.snapshot.nodes.map((node) => node.id))
+    multiResizePreviewBounds = getCanvasNodesBounds(
+      preview.nodes.filter(isKnownCanvasNode).filter((node) => resizedIds.has(node.id)),
+    )
     flowNodes = flowNodes.map((node) => {
       if (!resizedIds.has(node.id)) return node
       const geometry = byId.get(node.id)
@@ -1570,6 +1580,7 @@
     previewMultiResize(event)
     const session = multiResize
     multiResize = null
+    multiResizePreviewBounds = null
     const next = resizeCanvasSelection(
       canvasDoc,
       session.snapshot,
@@ -1582,6 +1593,7 @@
   function cancelMultiResize(): void {
     if (!multiResize) return
     multiResize = null
+    multiResizePreviewBounds = null
     rebuildFlow()
   }
 
@@ -1775,6 +1787,13 @@
     commitDocument('重命名分组', next)
   }
 
+  function handleFlushRequest(event: Event): void {
+    const requestedTabId = (event as CustomEvent<{ tabId?: string }>).detail?.tabId
+    if (requestedTabId && requestedTabId !== tab.id) return
+    if (toolbarEdgeLabelInput) updateEdgeLabel(toolbarEdgeLabelInput.value)
+    if (toolbarGroupLabelInput) updateGroupLabel(toolbarGroupLabelInput.value)
+  }
+
   function setGroupBackgroundStyle(value: GroupBackgroundStyle): void {
     if (!canvasDoc || selectedKnownNode?.type !== 'group' || !finishTextBeforeStructure()) return
     const next = updateCanvasNode(canvasDoc, selectedKnownNode.id, (node) => {
@@ -1891,16 +1910,43 @@
 
   function handleNativeDrop(event: Event): void {
     const detail = (event as CustomEvent<{ tabId: string; paths: string[]; position: { x: number; y: number } }>).detail
-    if (!detail || detail.tabId !== tab.id) return
+    if (!detail || detail.tabId !== tab.id || !canvasDoc || !finishTextBeforeStructure()) return
     const at = screenToFlow(detail.position)
     void (async () => {
+      const root = resourceRoot()
+      const canvasPath = tab.filePath
+      const imported: Array<{ index: number; relativePath: string }> = []
+      const failures: string[] = []
       for (const [index, path] of detail.paths.entries()) {
         try {
-          await addFilePath(path, { x: at.x + index * 28, y: at.y + index * 28 })
+          const result = await importCanvasResource(root, canvasPath, path)
+          imported.push({ index, relativePath: result.relativePath })
         } catch (error) {
-          showError(`无法导入文件：${String(error)}`)
+          failures.push(`${path}: ${String(error)}`)
         }
       }
+      const targetUnchanged = root === resourceRoot() && canvasPath === tab.filePath
+      if (imported.length > 0 && !targetUnchanged) {
+        failures.push('导入期间画布保存位置发生变化，未创建对应节点')
+      } else if (imported.length > 0 && canvasDoc && finishTextBeforeStructure()) {
+        let next = canvasDoc
+        const insertedIds: string[] = []
+        for (const item of imported) {
+          const node = createNode('file', {
+            x: at.x + item.index * 28,
+            y: at.y + item.index * 28,
+          }, item.relativePath)
+          next = insertCanvasNode(next, node)
+          insertedIds.push(node.id)
+        }
+        commitDocument(
+          imported.length === 1 ? '导入文件' : `导入 ${imported.length} 个文件`,
+          next,
+          new Set(insertedIds),
+          new Set(),
+        )
+      }
+      if (failures.length > 0) showError(`有 ${failures.length} 个文件导入失败：\n${failures.join('\n')}`)
     })()
   }
 
@@ -1916,6 +1962,22 @@
     snapGuides = []
   }
 
+  function cancelTransientDocumentInteractions(): void {
+    nodeDrag = null
+    snapGuides = []
+    cancelLasso(false)
+    cancelGroupDraw()
+    singleResize = null
+    multiResize = null
+    multiResizePreviewBounds = null
+    connectionDraft = null
+    pendingPlacement = null
+    newConnectionActive = false
+    reconnectActive = false
+    activeTouchPointers.clear()
+    touchNavigationOverride = false
+  }
+
   onMount(() => {
     rebuildFlow()
     let cancelled = false
@@ -1928,8 +1990,9 @@
       viewportReady = true
     })
     window.addEventListener('notemd:canvas-native-drop', handleNativeDrop)
-    window.addEventListener('notemd:select-all', selectAll)
+    window.addEventListener('notemd:select-all', handleSelectAllRequest)
     window.addEventListener('notemd:canvas-view-command', handleViewCommand)
+    window.addEventListener('notemd:flush-doc', handleFlushRequest)
     window.addEventListener('keyup', handleKeyup)
     window.addEventListener('blur', handleWindowBlur)
     window.addEventListener('pointerup', finishTouchPointer)
@@ -1947,12 +2010,13 @@
       resourceSession?.dispose()
       resourceSession = null
       resourceSessionRoot = ''
-      requestedImages.clear()
+      loadingImages.clear()
       activeTouchPointers.clear()
       touchNavigationOverride = false
       window.removeEventListener('notemd:canvas-native-drop', handleNativeDrop)
-      window.removeEventListener('notemd:select-all', selectAll)
+      window.removeEventListener('notemd:select-all', handleSelectAllRequest)
       window.removeEventListener('notemd:canvas-view-command', handleViewCommand)
+      window.removeEventListener('notemd:flush-doc', handleFlushRequest)
       window.removeEventListener('keyup', handleKeyup)
       window.removeEventListener('blur', handleWindowBlur)
       window.removeEventListener('pointerup', finishTouchPointer)
@@ -1966,7 +2030,7 @@
     resourceSession.dispose()
     resourceSession = null
     resourceSessionRoot = ''
-    requestedImages.clear()
+    loadingImages.clear()
     rebuildFlow()
   })
 
@@ -1976,13 +2040,8 @@
     const preserveHistory = uiSession.content === incoming
     observedTabContent = incoming
     const decoded = decodeJsonCanvas(incoming)
+    cancelTransientDocumentInteractions()
     if (!decoded.ok) {
-      nodeDrag = null
-      snapGuides = []
-      cancelLasso(false)
-      cancelGroupDraw()
-      singleResize = null
-      cancelMultiResize()
       parseFailure = decoded.diagnostics
       diagnostics = decoded.diagnostics
       return
@@ -1990,7 +2049,6 @@
     activeTextId = null
     textBefore = null
     composing = false
-    nodeDrag = null
     if (!preserveHistory) history.clear()
     historyVersion++
     canvasDoc = decoded.document
@@ -2047,8 +2105,8 @@
       <button class:tool-active={interactionLocked} aria-pressed={interactionLocked} onclick={toggleInteractionLock} title="临时锁定或解锁当前画布交互">{interactionLocked ? '解锁' : '锁定'}</button>
       <span class="toolbar-separator"></span>
       <button onclick={() => addNode('text')} title="新建文本卡片">＋ 文本</button>
-      <button onclick={chooseFileNode} title="添加当前 Vault 中的文件或图片">＋ 文件</button>
-      <button onclick={addLinkNode} title="新建链接卡片">＋ 链接</button>
+      <button onclick={() => void chooseFileNode()} title="添加当前 Vault 中的文件或图片">＋ 文件</button>
+      <button onclick={() => addLinkNode()} title="新建链接卡片">＋ 链接</button>
       <button onclick={addGroupNode} title="新建分组或围绕选中节点创建分组">＋ 分组</button>
       <button
         class:tool-active={pendingPlacement === 'group'}
@@ -2083,6 +2141,7 @@
         <label class="edge-label">
           连线标签
           <input
+            bind:this={toolbarEdgeLabelInput}
             value={selectedEdge.label ?? ''}
             placeholder="可选"
             onchange={(event) => updateEdgeLabel(event.currentTarget.value)}
@@ -2127,6 +2186,7 @@
           <label class="group-name-label">
             分组名称
             <input
+              bind:this={toolbarGroupLabelInput}
               value={selectedKnownNode.label ?? ''}
               placeholder="分组"
               onchange={(event) => updateGroupLabel(event.currentTarget.value)}
@@ -2224,7 +2284,7 @@
     <CanvasInteractionOverlay guides={snapGuides} {lassoPoints} drawRect={groupDrawRect} {viewport} />
     {#if multiSelectionBounds && effectiveTool === 'select' && !interactionLocked && !activeTextId}
       <CanvasSelectionResizer
-        bounds={multiSelectionBounds}
+        bounds={multiResizePreviewBounds ?? multiSelectionBounds}
         {viewport}
         onStart={startMultiResize}
         onMove={previewMultiResize}
@@ -2458,14 +2518,14 @@
     .canvas-toolbar > button { min-height: 44px; padding-inline: 12px; }
     .color-swatch { width: 44px; min-height: 44px; }
     .canvas-surface :global(.svelte-flow__resize-control.handle) {
-      width: 28px;
-      height: 28px;
+      width: 44px;
+      height: 44px;
       border: 0;
       background: radial-gradient(circle, var(--accent, #4d88ff) 0 5px, transparent 6px);
     }
     .canvas-surface :global(.canvas-edge-reconnect) {
-      width: 32px !important;
-      height: 32px !important;
+      width: 44px !important;
+      height: 44px !important;
       border: 0;
       background: radial-gradient(circle, var(--accent, #4d88ff) 0 6px, transparent 7px);
       box-shadow: none;
@@ -2473,6 +2533,10 @@
     .canvas-surface :global(.svelte-flow__controls-button) {
       width: 44px;
       height: 44px;
+    }
+    .connection-create-menu button {
+      min-width: 44px;
+      min-height: 44px;
     }
   }
 </style>

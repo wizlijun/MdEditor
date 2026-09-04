@@ -289,7 +289,7 @@ describe('Canvas advanced pointer geometry', () => {
       .toEqual({ fromSide: 'top', toSide: 'right' })
   })
 
-  it('routes around local node obstacles and ignores its own endpoints', () => {
+  it('avoids a blocked direct side pair and ignores its own endpoints', () => {
     const source = { id: 'source', x: 0, y: 0, width: 100, height: 100 }
     const target = { id: 'target', x: 300, y: 0, width: 100, height: 100 }
     const direct = { fromSide: 'right', toSide: 'left' }
@@ -303,7 +303,7 @@ describe('Canvas advanced pointer geometry', () => {
     ])).not.toEqual(direct)
   })
 
-  it('preserves obstacle-aware routing when candidates come from a spatial index', () => {
+  it('preserves obstacle-aware side scoring when candidates come from a spatial index', () => {
     const source = { id: 'source', x: 0, y: 0, width: 100, height: 100 }
     const target = { id: 'target', x: 300, y: 0, width: 100, height: 100 }
     const obstacles = [
@@ -319,7 +319,7 @@ describe('Canvas advanced pointer geometry', () => {
       .toEqual(resolveCanvasEdgeSides(source, target, undefined, undefined, obstacles))
   })
 
-  it('chooses the short L-shaped route for a blocked diagonal layout', () => {
+  it('chooses an obstacle-aware side pair for a blocked diagonal layout', () => {
     expect(resolveCanvasEdgeSides(
       { id: 'source', x: 50, y: 50, width: 350, height: 250 },
       { id: 'target', x: 650, y: 300, width: 400, height: 450 },
