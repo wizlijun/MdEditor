@@ -11,6 +11,7 @@
     type Connection,
     type Edge,
     type Node,
+    type OnConnectEnd,
     type OnReconnect,
     type ResizeDragEvent,
     type ResizeParams,
@@ -34,6 +35,7 @@
     canvasNodesIntersectPolygon,
     cloneCanvasDocument,
     commitNodePositions,
+    computeCanvasAutoPanVelocity,
     computeCanvasResizeSnap,
     computeCanvasSnap,
     copyCanvasSelection,
@@ -43,6 +45,7 @@
     distributeCanvasSelection,
     encodeJsonCanvas,
     flowConnectionToCanvasEdge,
+    flowHandleForSide,
     freezeCanvasMove,
     freezeGroupMove,
     insertCanvasEdge,
@@ -61,7 +64,9 @@
     reorderCanvasNodes,
     resolveCanvasResource,
     resolveCanvasResizeScale,
+    resolveCanvasEdgeSides,
     resizeCanvasSelection,
+    sideFromFlowHandle,
     spreadCanvasSelection,
     updateCanvasNode,
     updateCanvasEdge,
@@ -134,6 +139,20 @@
     initialEdges: Set<string>
     active: boolean
   } | null>(null)
+  let groupDrawSession = $state.raw<{
+    pointerId: number
+    start: CanvasPoint
+    active: boolean
+  } | null>(null)
+  let groupDrawRect = $state.raw<CanvasRect | null>(null)
+  let connectionDraft = $state.raw<{
+    sourceId: string
+    sourceHandle: string | null
+    at: CanvasPoint
+    screen: CanvasPoint
+  } | null>(null)
+  let reconnectActive = false
+  let newConnectionActive = false
   let multiResize = $state.raw<{
     pointerId: number
     snapshot: CanvasResizeSnapshot
@@ -154,6 +173,11 @@
   let viewportReady = $state(false)
   let hasStoredViewport = $state(false)
   let viewportTimer: ReturnType<typeof setTimeout> | null = null
+  let autoPanFrame: number | null = null
+  let autoPanLastTime: number | null = null
+  let autoPanPointer: CanvasPoint | null = null
+  let gestureAutoPanned = false
+  let suppressNextPaneClick = false
   let nodeDrag: {
     frozen: FrozenCanvasMove
     origin: { x: number; y: number }
@@ -274,6 +298,8 @@
   function setTool(tool: CanvasTool): void {
     if (interactionLocked) return
     cancelLasso(true)
+    cancelGroupDraw()
+    connectionDraft = null
     pendingPlacement = null
     activeTool = tool
     surface?.focus()
@@ -282,6 +308,8 @@
   function setPlacement(kind: KnownCanvasNode['type']): void {
     if (interactionLocked) return
     cancelLasso(true)
+    cancelGroupDraw()
+    connectionDraft = null
     activeTool = 'select'
     pendingPlacement = pendingPlacement === kind ? null : kind
     surface?.focus()
@@ -291,9 +319,11 @@
     interactionLocked = !interactionLocked
     if (interactionLocked) {
       cancelLasso(true)
+      cancelGroupDraw()
       cancelSingleResize()
       cancelMultiResize()
       pendingPlacement = null
+      connectionDraft = null
       spacePan = false
       finalizeTextSession()
     }
@@ -362,16 +392,37 @@
         },
       } as UiNode
     })
+    const nodeRects = new Map(canvasDoc.nodes.flatMap((entry) =>
+      isKnownCanvasNode(entry)
+        ? [[entry.id, { x: entry.x, y: entry.y, width: entry.width, height: entry.height }] as const]
+        : [],
+    ))
+    const canonicalEdges = new Map(canvasDoc.edges.flatMap((entry) =>
+      isCanvasEdge(entry) ? [[entry.id, entry] as const] : [],
+    ))
     flowEdges = projection.edges.map((edge) => {
       const color = displayColor(edge.data.colorToken)
+      const canonical = canonicalEdges.get(edge.id)
+      const sourceRect = nodeRects.get(edge.source)
+      const targetRect = nodeRects.get(edge.target)
+      const smartSides = sourceRect && targetRect
+        ? resolveCanvasEdgeSides(sourceRect, targetRect, canonical?.fromSide, canonical?.toSide)
+        : null
       return {
         ...edge,
+        sourceHandle: edge.sourceHandle ?? flowHandleForSide(smartSides?.fromSide),
+        targetHandle: edge.targetHandle ?? flowHandleForSide(smartSides?.toSide),
         type: 'canvas-edge',
         selected: selectedEdgeIds.has(edge.id),
         markerStart: edge.markerStart ? { type: MarkerType.ArrowClosed } : undefined,
         markerEnd: edge.markerEnd ? { type: MarkerType.ArrowClosed } : undefined,
         style: color ? `stroke:${color};stroke-width:2` : 'stroke-width:2',
         labelStyle: 'fill:CanvasText;font-size:12px',
+        data: {
+          ...edge.data,
+          interactionLocked,
+          onLabelCommit: updateEdgeLabelById,
+        },
       } as UiEdge
     })
   }
@@ -405,9 +456,7 @@
     }
   }
 
-  function addNode(kind: KnownCanvasNode['type'], at = lastPointerFlow ?? viewportCenter(), value?: string): void {
-    if (!canvasDoc || !finishTextBeforeStructure()) return
-    const id = newId()
+  function createNode(kind: KnownCanvasNode['type'], at: CanvasPoint, value?: string, id = newId()): KnownCanvasNode {
     const common = {
       id,
       x: Math.round(at.x - (kind === 'group' ? 190 : 140)),
@@ -418,17 +467,22 @@
       preservedInvalid: new Map(),
       optionalPresence: new Set<string>(),
     }
-    const node: KnownCanvasNode = kind === 'text'
+    return kind === 'text'
       ? { ...common, type: 'text', text: value ?? '# 新卡片\n\n双击开始编辑' }
       : kind === 'file'
         ? { ...common, type: 'file', file: value ?? '' }
         : kind === 'link'
           ? { ...common, type: 'link', url: value ?? 'https://' }
           : { ...common, type: 'group', label: value || '分组' }
+  }
+
+  function addNode(kind: KnownCanvasNode['type'], at = lastPointerFlow ?? viewportCenter(), value?: string): void {
+    if (!canvasDoc || !finishTextBeforeStructure()) return
+    const node = createNode(kind, at, value)
     const index = kind === 'group' ? 0 : canvasDoc.nodes.length
     const next = insertCanvasNode(canvasDoc, node, index)
-    commitDocument(`创建${kind === 'text' ? '文本' : kind === 'file' ? '文件' : kind === 'link' ? '链接' : '分组'}节点`, next, new Set([id]), new Set())
-    if (kind === 'text') queueMicrotask(() => activateTextNode(id))
+    commitDocument(`创建${kind === 'text' ? '文本' : kind === 'file' ? '文件' : kind === 'link' ? '链接' : '分组'}节点`, next, new Set([node.id]), new Set())
+    if (kind === 'text') queueMicrotask(() => activateTextNode(node.id))
   }
 
   async function chooseFileNode(at = lastPointerFlow ?? viewportCenter()): Promise<void> {
@@ -766,16 +820,130 @@
     commitDocument(nodes.length > 1 ? '移动多个节点' : '移动节点', next)
   }
 
+  function smartConnection(connection: Connection, document = canvasDoc): Connection {
+    if (!document) return connection
+    const nodes = new Map(document.nodes.flatMap((entry) =>
+      isKnownCanvasNode(entry) ? [[entry.id, entry] as const] : [],
+    ))
+    const source = nodes.get(connection.source)
+    const target = nodes.get(connection.target)
+    if (!source || !target) return connection
+    const sides = resolveCanvasEdgeSides(
+      source,
+      target,
+      sideFromFlowHandle(connection.sourceHandle),
+      sideFromFlowHandle(connection.targetHandle),
+    )
+    return {
+      ...connection,
+      sourceHandle: connection.sourceHandle ?? flowHandleForSide(sides.fromSide) ?? null,
+      targetHandle: connection.targetHandle ?? flowHandleForSide(sides.toSide) ?? null,
+    }
+  }
+
   function handleConnect(connection: Connection): void {
-    if (!canvasDoc || !connection.source || !connection.target || !finishTextBeforeStructure()) return
-    const edge = flowConnectionToCanvasEdge(newId(), connection)
+    if (!canvasDoc || !connection.source || !connection.target || connection.source === connection.target || !finishTextBeforeStructure()) return
+    const edge = flowConnectionToCanvasEdge(newId(), smartConnection(connection))
     commitDocument('创建连线', insertCanvasEdge(canvasDoc, edge), selectedNodeIds, new Set([edge.id]))
   }
 
   const handleReconnect: OnReconnect<UiEdge> = (oldEdge, connection) => {
-    if (!canvasDoc || !finishTextBeforeStructure()) return
+    if (!canvasDoc || connection.source === connection.target || !finishTextBeforeStructure()) return
     const edgeId = (oldEdge.data?.canonicalId as string | undefined) ?? oldEdge.id
-    commitDocument('重连连线', applyFlowEdgeConnection(canvasDoc, edgeId, connection), selectedNodeIds, new Set([edgeId]))
+    commitDocument('重连连线', applyFlowEdgeConnection(canvasDoc, edgeId, smartConnection(connection)), selectedNodeIds, new Set([edgeId]))
+  }
+
+  function addConnectedNode(
+    sourceId: string,
+    sourceHandle: string | null,
+    kind: KnownCanvasNode['type'],
+    at: CanvasPoint,
+    value?: string,
+  ): void {
+    if (!canvasDoc || !finishTextBeforeStructure()) return
+    const node = createNode(kind, at, value)
+    const nodeIndex = kind === 'group' ? 0 : canvasDoc.nodes.length
+    let next = insertCanvasNode(canvasDoc, node, nodeIndex)
+    const connection = smartConnection({
+      source: sourceId,
+      target: node.id,
+      sourceHandle,
+      targetHandle: null,
+    }, next)
+    const edge = flowConnectionToCanvasEdge(newId(), connection)
+    next = insertCanvasEdge(next, edge)
+    commitDocument('创建节点并连接', next, new Set([node.id]), new Set())
+    if (kind === 'text') queueMicrotask(() => activateTextNode(node.id))
+  }
+
+  async function chooseConnectedNode(kind: KnownCanvasNode['type']): Promise<void> {
+    const draft = connectionDraft
+    connectionDraft = null
+    if (!draft) return
+    if (kind === 'file') {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog')
+        const picked = await open({ multiple: false })
+        if (typeof picked !== 'string') return
+        const imported = await importCanvasResource(resourceRoot(), tab.filePath, picked)
+        addConnectedNode(draft.sourceId, draft.sourceHandle, kind, draft.at, imported.relativePath)
+      } catch (error) {
+        showError(`无法选择文件：${String(error)}`)
+      }
+      return
+    }
+    if (kind === 'link') {
+      const value = window.prompt('输入 http 或 https 链接')?.trim()
+      if (!value) return
+      try {
+        const url = new URL(value)
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported protocol')
+        addConnectedNode(draft.sourceId, draft.sourceHandle, kind, draft.at, url.href)
+      } catch {
+        showError('只支持 http:// 或 https:// 链接。')
+      }
+      return
+    }
+    addConnectedNode(draft.sourceId, draft.sourceHandle, kind, draft.at)
+  }
+
+  function eventClientPoint(event: MouseEvent | TouchEvent): CanvasPoint | null {
+    if (event instanceof MouseEvent) return { x: event.clientX, y: event.clientY }
+    const touch = event.changedTouches[0] ?? event.touches[0]
+    return touch ? { x: touch.clientX, y: touch.clientY } : null
+  }
+
+  function handleConnectStart(): void {
+    newConnectionActive = !reconnectActive
+    connectionDraft = null
+  }
+
+  const handleConnectEnd: OnConnectEnd = (event, state) => {
+    const isNewConnection = newConnectionActive && !reconnectActive
+    newConnectionActive = false
+    if (!isNewConnection || interactionLocked || state.isValid || !state.fromNode || !state.fromHandle) return
+    const client = eventClientPoint(event)
+    if (!client) return
+    const targetElement = document.elementFromPoint(client.x, client.y)?.closest('.svelte-flow__node')
+    const targetId = targetElement?.getAttribute('data-id') ?? null
+    const sourceId = state.fromNode.id
+    if (targetId === sourceId) return
+    if (targetId) {
+      handleConnect({
+        source: sourceId,
+        target: targetId,
+        sourceHandle: state.fromHandle.id ?? null,
+        targetHandle: null,
+      })
+      return
+    }
+    const screen = localPointer({ clientX: client.x, clientY: client.y })
+    connectionDraft = {
+      sourceId,
+      sourceHandle: state.fromHandle.id ?? null,
+      at: localToFlow(screen),
+      screen,
+    }
   }
 
   function handleDelete({ nodes, edges }: { nodes: UiNode[]; edges: UiEdge[] }): void {
@@ -963,7 +1131,7 @@
 
   function shouldRememberPointer(target: EventTarget | null): boolean {
     return !(target instanceof Element)
-      || !target.closest('.canvas-toolbar,.svelte-flow__controls,.selection-resizer')
+      || !target.closest('.canvas-toolbar,.svelte-flow__controls,.selection-resizer,.connection-create-menu,.zoom-indicator')
   }
 
   function edgeIdsInside(nodeIds: ReadonlySet<string>): Set<string> {
@@ -998,6 +1166,10 @@
 
   function cancelLasso(restore: boolean): void {
     const session = lassoSession
+    stopGestureAutoPan(true)
+    if (session) {
+      try { surface?.releasePointerCapture(session.pointerId) } catch { /* already released */ }
+    }
     lassoSession = null
     lassoPoints = []
     if (!restore || !session) return
@@ -1006,9 +1178,167 @@
     rebuildFlow()
   }
 
+  function rectangleBetween(start: CanvasPoint, end: CanvasPoint): CanvasRect {
+    return {
+      x: Math.min(start.x, end.x),
+      y: Math.min(start.y, end.y),
+      width: Math.abs(end.x - start.x),
+      height: Math.abs(end.y - start.y),
+    }
+  }
+
+  function stopGestureAutoPan(persist: boolean): void {
+    if (autoPanFrame !== null) cancelAnimationFrame(autoPanFrame)
+    autoPanFrame = null
+    autoPanLastTime = null
+    autoPanPointer = null
+    if (persist && gestureAutoPanned) handleMoveEnd(null, viewport)
+    gestureAutoPanned = false
+  }
+
+  function autoPanTick(time: number): void {
+    autoPanFrame = null
+    const point = autoPanPointer
+    const rect = surface?.getBoundingClientRect()
+    if (!point || !rect || (!lassoSession && !groupDrawSession)) {
+      stopGestureAutoPan(false)
+      return
+    }
+    const velocity = computeCanvasAutoPanVelocity(point, { width: rect.width, height: rect.height })
+    if (velocity.x === 0 && velocity.y === 0) {
+      autoPanLastTime = null
+      return
+    }
+    const elapsed = autoPanLastTime === null ? 1 / 60 : Math.min(0.05, Math.max(0, (time - autoPanLastTime) / 1000))
+    autoPanLastTime = time
+    const dx = velocity.x * elapsed
+    const dy = velocity.y * elapsed
+    viewport = { ...viewport, x: viewport.x + dx, y: viewport.y + dy }
+    gestureAutoPanned = true
+    lastPointerFlow = localToFlow(point)
+
+    if (lassoSession) {
+      lassoSession = {
+        ...lassoSession,
+        start: { x: lassoSession.start.x + dx, y: lassoSession.start.y + dy },
+      }
+      lassoPoints = appendLassoPoint(
+        lassoPoints.map((entry) => ({ x: entry.x + dx, y: entry.y + dy })),
+        point,
+      )
+      previewLasso(lassoPoints, lassoSession)
+    } else if (groupDrawSession) {
+      groupDrawSession = {
+        ...groupDrawSession,
+        start: { x: groupDrawSession.start.x + dx, y: groupDrawSession.start.y + dy },
+      }
+      groupDrawRect = rectangleBetween(groupDrawSession.start, point)
+    }
+    autoPanFrame = requestAnimationFrame(autoPanTick)
+  }
+
+  function updateGestureAutoPan(point: CanvasPoint): void {
+    autoPanPointer = point
+    if (autoPanFrame === null) autoPanFrame = requestAnimationFrame(autoPanTick)
+  }
+
+  function cancelGroupDraw(): void {
+    const session = groupDrawSession
+    stopGestureAutoPan(true)
+    if (session) {
+      try { surface?.releasePointerCapture(session.pointerId) } catch { /* already released */ }
+    }
+    groupDrawSession = null
+    groupDrawRect = null
+  }
+
+  function createDrawnGroup(rect: CanvasRect): void {
+    if (!canvasDoc || !finishTextBeforeStructure()) return
+    const id = newId()
+    const group: KnownCanvasNode = {
+      id,
+      type: 'group',
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      label: '分组',
+      extras: new Map(),
+      preservedInvalid: new Map(),
+      optionalPresence: new Set(),
+    }
+    commitDocument('拖拽创建分组', insertCanvasNode(canvasDoc, group, 0), new Set([id]), new Set())
+  }
+
+  function beginGroupDraw(event: PointerEvent): boolean {
+    if (pendingPlacement !== 'group' || interactionLocked || event.button !== 0 || !event.isPrimary || event.pointerType === 'touch') return false
+    const target = event.target
+    if (!(target instanceof Element) || !target.closest('.svelte-flow__pane')) return false
+    if (target.closest('.svelte-flow__node,.svelte-flow__edge,.svelte-flow__controls')) return false
+    event.preventDefault()
+    event.stopPropagation()
+    try { surface?.setPointerCapture(event.pointerId) } catch { /* detached surface */ }
+    const start = localPointer(event)
+    groupDrawSession = { pointerId: event.pointerId, start, active: false }
+    groupDrawRect = rectangleBetween(start, start)
+    return true
+  }
+
+  function updateGroupDraw(event: PointerEvent): boolean {
+    const session = groupDrawSession
+    if (!session || session.pointerId !== event.pointerId) return false
+    event.preventDefault()
+    event.stopPropagation()
+    const point = localPointer(event)
+    const active = session.active || Math.hypot(point.x - session.start.x, point.y - session.start.y) >= 4
+    if (active && !session.active) groupDrawSession = { ...session, active: true }
+    groupDrawRect = rectangleBetween(groupDrawSession?.start ?? session.start, point)
+    if (active) updateGestureAutoPan(point)
+    return true
+  }
+
+  function finishGroupDraw(event: PointerEvent, commit: boolean): boolean {
+    const session = groupDrawSession
+    if (!session || session.pointerId !== event.pointerId) return false
+    event.preventDefault()
+    event.stopPropagation()
+    const point = localPointer(event)
+    const screenRect = rectangleBetween(session.start, point)
+    stopGestureAutoPan(true)
+    try { surface?.releasePointerCapture(event.pointerId) } catch { /* already released */ }
+    groupDrawSession = null
+    groupDrawRect = null
+    if (!commit) return true
+    if (!session.active) {
+      pendingPlacement = null
+      suppressNextPaneClick = true
+      setTimeout(() => { suppressNextPaneClick = false }, 0)
+      addNode('group', localToFlow(point))
+      return true
+    }
+    const topLeft = localToFlow({ x: screenRect.x, y: screenRect.y })
+    const bottomRight = localToFlow({
+      x: screenRect.x + screenRect.width,
+      y: screenRect.y + screenRect.height,
+    })
+    const flowRect = rectangleBetween(topLeft, bottomRight)
+    if (flowRect.width < 20 || flowRect.height < 20) {
+      suppressNextPaneClick = true
+      setTimeout(() => { suppressNextPaneClick = false }, 0)
+      return true
+    }
+    pendingPlacement = null
+    suppressNextPaneClick = true
+    setTimeout(() => { suppressNextPaneClick = false }, 0)
+    createDrawnGroup(flowRect)
+    return true
+  }
+
   function handleSurfacePointerDown(event: PointerEvent): void {
     if (shouldRememberPointer(event.target)) lastPointerFlow = localToFlow(localPointer(event))
-    if (effectiveTool !== 'lasso' || interactionLocked || event.button !== 0 || !event.isPrimary) return
+    if (connectionDraft && event.target instanceof Element && !event.target.closest('.connection-create-menu')) connectionDraft = null
+    if (beginGroupDraw(event)) return
+    if (effectiveTool !== 'lasso' || interactionLocked || event.button !== 0 || !event.isPrimary || event.pointerType === 'touch') return
     const target = event.target
     if (!(target instanceof Element) || !target.closest('.svelte-flow__pane')) return
     if (target.closest('.svelte-flow__node,.svelte-flow__edge,.svelte-flow__controls')) return
@@ -1036,6 +1366,7 @@
   function handleSurfacePointerMove(event: PointerEvent): void {
     const point = localPointer(event)
     if (shouldRememberPointer(event.target)) lastPointerFlow = localToFlow(point)
+    if (updateGroupDraw(event)) return
     const session = lassoSession
     if (!session || session.pointerId !== event.pointerId) return
     event.preventDefault()
@@ -1045,6 +1376,7 @@
     if (!session.active) lassoSession = { ...session, active: true }
     lassoPoints = appendLassoPoint(lassoPoints, point)
     previewLasso(lassoPoints, lassoSession)
+    updateGestureAutoPan(point)
   }
 
   function finishLasso(event: PointerEvent, commit: boolean): void {
@@ -1052,6 +1384,7 @@
     if (!session || session.pointerId !== event.pointerId) return
     event.preventDefault()
     event.stopPropagation()
+    stopGestureAutoPan(true)
     try { surface?.releasePointerCapture(event.pointerId) } catch { /* already released */ }
     if (!commit) { cancelLasso(true); return }
     const points = appendLassoPoint(lassoPoints, localPointer(event))
@@ -1073,8 +1406,14 @@
     rebuildFlow()
   }
 
-  function handleSurfacePointerUp(event: PointerEvent): void { finishLasso(event, true) }
-  function handleSurfacePointerCancel(event: PointerEvent): void { finishLasso(event, false) }
+  function handleSurfacePointerUp(event: PointerEvent): void {
+    if (finishGroupDraw(event, true)) return
+    finishLasso(event, true)
+  }
+  function handleSurfacePointerCancel(event: PointerEvent): void {
+    if (finishGroupDraw(event, false)) return
+    finishLasso(event, false)
+  }
 
   function handleKeyup(event: KeyboardEvent): void {
     if (event.key === ' ') spacePan = false
@@ -1175,6 +1514,12 @@
       setPlacement(kinds[key])
       return
     }
+    if (mod && (key === '+' || key === '=' || key === '-' || key === '_' || key === '0')) {
+      event.preventDefault()
+      event.stopPropagation()
+      zoomViewport(key === '0' ? 'reset' : key === '+' || key === '=' ? 'in' : 'out')
+      return
+    }
     if (mod && key === 'z') { event.preventDefault(); event.stopPropagation(); event.shiftKey ? redo() : undo(); return }
     if (mod && key === 'y') { event.preventDefault(); event.stopPropagation(); redo(); return }
     if (mod && key === 'c') { event.preventDefault(); event.stopPropagation(); void copySelection(); return }
@@ -1200,6 +1545,14 @@
       commitDocument('移动选中节点', moveFrozenNodes(canvasDoc, frozen, delta))
       return
     }
+    if (event.key === 'Enter' && selectedEdgeIds.size === 1 && selectedNodeIds.size === 0) {
+      event.preventDefault(); event.stopPropagation()
+      const edgeId = Array.from(selectedEdgeIds)[0]
+      const target = Array.from(document.querySelectorAll<HTMLElement>('[data-canvas-edge-label]'))
+        .find((entry) => entry.dataset.canvasEdgeLabel === edgeId)
+      if (target instanceof HTMLButtonElement) target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+      return
+    }
     if (event.key === 'Enter' && selectedNodeIds.size === 1) {
       event.preventDefault(); event.stopPropagation()
       const id = Array.from(selectedNodeIds)[0]
@@ -1211,7 +1564,9 @@
     if (event.key === 'Escape') {
       if (singleResize) cancelSingleResize()
       else if (multiResize) cancelMultiResize()
+      else if (groupDrawSession) { cancelGroupDraw(); pendingPlacement = null }
       else if (lassoSession) cancelLasso(true)
+      else if (connectionDraft) connectionDraft = null
       else if (pendingPlacement) pendingPlacement = null
       else if (activeTool !== 'select') activeTool = 'select'
       else finalizeTextSession()
@@ -1228,6 +1583,12 @@
   }
 
   function handleSurfaceClickCapture(event: MouseEvent): void {
+    if (suppressNextPaneClick) {
+      suppressNextPaneClick = false
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
     if (!pendingPlacement || interactionLocked) return
     const target = event.target
     if (!(target instanceof Element) || !target.closest('.svelte-flow__pane')) return
@@ -1246,17 +1607,22 @@
     else finalizeTextSession()
   }
 
-  function updateEdgeLabel(value: string): void {
-    if (!canvasDoc || !selectedEdge || !finishTextBeforeStructure()) return
-    const id = selectedEdge.id
+  function updateEdgeLabelById(id: string, value: string): void {
+    if (!canvasDoc || !finishTextBeforeStructure()) return
     const next = cloneCanvasDocument(canvasDoc)
     const index = next.edges.findIndex((entry) => isCanvasEdge(entry) && entry.id === id)
     if (index < 0 || !isCanvasEdge(next.edges[index])) return
     const edge = next.edges[index] as CanvasEdge
+    const label = value.trim()
+    if ((edge.label ?? '') === label) return
     edge.preservedInvalid.delete('label')
-    if (value.trim()) { edge.label = value; edge.optionalPresence.add('label') }
+    if (label) { edge.label = label; edge.optionalPresence.add('label') }
     else { delete edge.label; edge.optionalPresence.delete('label') }
-    commitDocument('编辑连线标签', next)
+    commitDocument('编辑连线标签', next, selectedNodeIds, new Set([id]))
+  }
+
+  function updateEdgeLabel(value: string): void {
+    if (selectedEdge) updateEdgeLabelById(selectedEdge.id, value)
   }
 
   function setEdgeEnd(field: 'fromEnd' | 'toEnd', value: CanvasEnd): void {
@@ -1421,8 +1787,10 @@
   function handleWindowBlur(): void {
     spacePan = false
     cancelLasso(true)
+    cancelGroupDraw()
     cancelSingleResize()
     cancelMultiResize()
+    connectionDraft = null
     snapGuides = []
   }
 
@@ -1447,9 +1815,11 @@
       nodeDrag = null
       snapGuides = []
       cancelLasso(false)
+      cancelGroupDraw()
       singleResize = null
       cancelMultiResize()
       if (viewportTimer) clearTimeout(viewportTimer)
+      stopGestureAutoPan(false)
       resourceSession?.dispose()
       resourceSession = null
       resourceSessionRoot = ''
@@ -1482,6 +1852,7 @@
       nodeDrag = null
       snapGuides = []
       cancelLasso(false)
+      cancelGroupDraw()
       singleResize = null
       cancelMultiResize()
       parseFailure = decoded.diagnostics
@@ -1517,6 +1888,8 @@
   class:tool-pan={effectiveTool === 'pan'}
   class:tool-lasso={effectiveTool === 'lasso'}
   class:placing={!!pendingPlacement}
+  class:lod-compact={viewport.zoom < 0.48}
+  style:--canvas-inverse-zoom={Math.min(1.8, 1 / Math.max(viewport.zoom, 0.55))}
   bind:this={surface}
   role="application"
   aria-label={`无限画布：${tab.title}`}
@@ -1548,7 +1921,12 @@
       <button onclick={() => addNode('text')} title="新建文本卡片">＋ 文本</button>
       <button onclick={chooseFileNode} title="添加当前 Vault 中的文件或图片">＋ 文件</button>
       <button onclick={addLinkNode} title="新建链接卡片">＋ 链接</button>
-      <button onclick={addGroupNode} title="新建分组">＋ 分组</button>
+      <button onclick={addGroupNode} title="新建分组或围绕选中节点创建分组">＋ 分组</button>
+      <button
+        class:tool-active={pendingPlacement === 'group'}
+        onclick={() => setPlacement('group')}
+        title="拖拽绘制分组（快捷键 2）"
+      >框组</button>
       <button onclick={() => void copySelection()} disabled={selectedNodeIds.size === 0} title="复制选中内容">复制</button>
       <button onclick={() => void cutSelection()} disabled={selectedNodeIds.size === 0} title="剪切选中内容">剪切</button>
       <button onclick={() => void pasteFromClipboard()} title="粘贴">粘贴</button>
@@ -1682,8 +2060,17 @@
       maxZoom={4}
       deleteKey={null}
       onlyRenderVisibleElements={flowNodes.length > 500 && !activeTextId}
+      connectionDragThreshold={0}
+      autoPanOnConnect={true}
+      autoPanOnNodeDrag={true}
+      autoPanSpeed={20}
+      isValidConnection={(connection) => connection.source !== connection.target}
       onconnect={handleConnect}
+      onconnectstart={handleConnectStart}
+      onconnectend={handleConnectEnd}
       onreconnect={handleReconnect}
+      onreconnectstart={() => { reconnectActive = true }}
+      onreconnectend={() => { reconnectActive = false; newConnectionActive = false }}
       onnodedragstart={handleNodeDragStart}
       onnodedrag={handleNodeDrag}
       onnodedragstop={handleNodeDragStop}
@@ -1705,7 +2092,7 @@
       />
     </SvelteFlow>
 
-    <CanvasInteractionOverlay guides={snapGuides} {lassoPoints} {viewport} />
+    <CanvasInteractionOverlay guides={snapGuides} {lassoPoints} drawRect={groupDrawRect} {viewport} />
     {#if multiSelectionBounds && effectiveTool === 'select' && !interactionLocked && !activeTextId}
       <CanvasSelectionResizer
         bounds={multiSelectionBounds}
@@ -1716,6 +2103,25 @@
         onCancel={() => cancelMultiResize()}
       />
     {/if}
+
+    {#if connectionDraft}
+      <div
+        class="connection-create-menu nodrag nopan"
+        style:left={`${Math.min(connectionDraft.screen.x + 12, Math.max(8, (surface?.clientWidth ?? 800) - 220))}px`}
+        style:top={`${Math.min(connectionDraft.screen.y + 12, Math.max(8, (surface?.clientHeight ?? 600) - 70))}px`}
+        aria-label="创建并连接节点"
+      >
+        <span>创建并连接</span>
+        <button onclick={() => void chooseConnectedNode('text')}>文本</button>
+        <button onclick={() => void chooseConnectedNode('group')}>分组</button>
+        <button onclick={() => void chooseConnectedNode('file')}>文件</button>
+        <button onclick={() => void chooseConnectedNode('link')}>链接</button>
+      </div>
+    {/if}
+
+    <button class="zoom-indicator" onclick={() => zoomViewport('reset')} title="重置缩放 (Cmd/Ctrl+0)">
+      {Math.round(viewport.zoom * 100)}%
+    </button>
 
     {#if diagnostics.length > 0}
       <div class="diagnostic-badge" title={diagnostics.map((item) => item.message).join('\n')}>
@@ -1763,6 +2169,13 @@
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
     cursor: crosshair;
   }
+  .canvas-surface.lod-compact :global(.canvas-card:not(.group-node):not(.active-editor):not(.opaque-node) .node-detail) {
+    display: none;
+  }
+  .canvas-surface.lod-compact :global(.canvas-card:not(.group-node):not(.active-editor):not(.opaque-node) .compact-label) {
+    display: flex;
+  }
+  .canvas-surface.lod-compact :global(.canvas-handle) { display: none; }
   .canvas-toolbar {
     position: absolute;
     z-index: 20;
@@ -1828,6 +2241,50 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, CanvasText 20%, transparent);
   }
   .color-swatch.selected { box-shadow: 0 0 0 2px var(--accent, #4d88ff); }
+  .connection-create-menu {
+    position: absolute;
+    z-index: 24;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
+    border-radius: 9px;
+    background: color-mix(in srgb, Canvas 92%, transparent);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    backdrop-filter: blur(16px);
+  }
+  .connection-create-menu span {
+    padding: 0 5px;
+    color: color-mix(in srgb, CanvasText 62%, transparent);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .connection-create-menu button,
+  .zoom-indicator {
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: CanvasText;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .connection-create-menu button { padding: 5px 7px; }
+  .connection-create-menu button:hover,
+  .zoom-indicator:hover { background: color-mix(in srgb, CanvasText 9%, transparent); }
+  .zoom-indicator {
+    position: absolute;
+    z-index: 18;
+    bottom: 14px;
+    left: 50%;
+    min-width: 48px;
+    padding: 5px 8px;
+    border: 1px solid color-mix(in srgb, CanvasText 13%, transparent);
+    background: color-mix(in srgb, Canvas 86%, transparent);
+    transform: translateX(-50%);
+    backdrop-filter: blur(12px);
+  }
   .diagnostic-badge {
     position: absolute;
     z-index: 18;

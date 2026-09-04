@@ -218,6 +218,39 @@ describe('CanvasView', () => {
     expect(nodes.map((node) => node.id)).toEqual([expect.any(String), 'text-1', 'link-1'])
   })
 
+  it('draws an exact standard group rectangle with the frame tool', async () => {
+    h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__pane')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    const pane = document.querySelector('.svelte-flow__pane') as HTMLElement
+    ;(Array.from(document.querySelectorAll('.canvas-toolbar > button'))
+      .find((button) => button.textContent?.trim() === '框组') as HTMLButtonElement).click()
+    await tick()
+
+    pane.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerId: 17, pointerType: 'mouse', button: 0, isPrimary: true, clientX: 100, clientY: 90,
+    }))
+    surface.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerId: 17, pointerType: 'mouse', isPrimary: true, clientX: 410, clientY: 310,
+    }))
+    await tick()
+    expect(document.querySelector('.draw-rectangle')).toBeTruthy()
+
+    surface.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, pointerId: 17, pointerType: 'mouse', button: 0, isPrimary: true, clientX: 410, clientY: 310,
+    }))
+    await tick()
+    const saved = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string)
+    expect(saved.nodes[0]).toMatchObject({ type: 'group', x: 100, y: 90, width: 310, height: 220 })
+    expect(document.querySelector('.draw-rectangle')).toBeFalsy()
+    expect((document.querySelector('button[aria-label^="撤销"]') as HTMLButtonElement).title)
+      .toContain('拖拽创建分组')
+  })
+
   it('persists keyboard movement and applies group closure semantics', async () => {
     const grouped = tab()
     grouped.currentContent = grouped.initialContent = JSON.stringify({
@@ -326,6 +359,37 @@ describe('CanvasView', () => {
     expect(edge).toMatchObject({ fromEnd: 'arrow', toEnd: 'none', color: '3', label: '更新标签' })
   })
 
+  it('edits an edge label inline by double-click or Enter', async () => {
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__edge[data-id="edge-1"]')).toBeTruthy())
+    const edge = document.querySelector('.svelte-flow__edge[data-id="edge-1"]') as SVGGElement
+    edge.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(document.querySelectorAll('.canvas-edge-reconnect')).toHaveLength(2)
+
+    ;(document.querySelector('.canvas-surface') as HTMLElement)
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await tick()
+    let input = document.querySelector('.canvas-edge-label-content input') as HTMLInputElement
+    expect(input).toBeTruthy()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await tick()
+
+    const labelButton = document.querySelector('.canvas-edge-label-content button') as HTMLButtonElement
+    labelButton.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    await tick()
+    input = document.querySelector('.canvas-edge-label-content input') as HTMLInputElement
+    expect(input.value).toBe('参考')
+    input.value = '画布内标签'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
+    await tick()
+    expect(JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).edges[0].label).toBe('画布内标签')
+  })
+
   it('keeps desktop clipboard buttons functional through the Tauri fallback', async () => {
     vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('Web clipboard denied'))
     vi.spyOn(navigator.clipboard, 'readText').mockRejectedValue(new Error('Web clipboard denied'))
@@ -414,6 +478,27 @@ describe('CanvasView', () => {
     expect(document.querySelector('.selection-resizer')).toBeFalsy()
     expect(document.body.textContent).toContain('解锁')
     expect(h.setContent).not.toHaveBeenCalled()
+  })
+
+  it('supports application zoom shortcuts and compact semantic zoom', async () => {
+    h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.zoom-indicator')?.textContent).toContain('100%'))
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    for (let index = 0; index < 6; index++) {
+      surface.dispatchEvent(new KeyboardEvent('keydown', { key: '-', metaKey: true, bubbles: true }))
+    }
+    await tick()
+    expect(surface.classList.contains('lod-compact')).toBe(true)
+    expect((document.querySelector('.compact-label') as HTMLElement).textContent).toContain('画布卡片')
+
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: '0', metaKey: true, bubbles: true }))
+    await tick()
+    expect(surface.classList.contains('lod-compact')).toBe(false)
+    expect(document.querySelector('.zoom-indicator')?.textContent).toContain('100%')
   })
 
   it('aligns and distributes a multi-selection as one undoable document command', async () => {

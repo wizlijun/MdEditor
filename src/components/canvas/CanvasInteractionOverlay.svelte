@@ -17,10 +17,12 @@
   let {
     guides,
     lassoPoints,
+    drawRect,
     viewport,
   }: {
     guides: SnapGuide[]
     lassoPoints: CanvasPoint[]
+    drawRect?: ScreenRect | null
     viewport: CanvasViewport
   } = $props()
 
@@ -63,7 +65,7 @@
   let lassoPolygon = $derived(lassoPoints.map((point) => `${point.x},${point.y}`).join(' '))
 </script>
 
-{#if guides.length > 0 || lassoPoints.length > 1}
+{#if guides.length > 0 || lassoPoints.length > 1 || drawRect}
   <svg class="canvas-interaction-overlay" aria-hidden="true">
     {#each guides as guide, index (`${guide.kind}-${guide.axis}-${guide.value}-${index}`)}
       {@const vertical = guide.kind === 'alignment' ? guide.axis === 'x' : guide.axis === 'y'}
@@ -97,6 +99,17 @@
 
     {#if lassoPoints.length > 1}
       <polygon class="lasso-polygon" points={lassoPolygon} />
+    {/if}
+
+    {#if drawRect}
+      <rect
+        class="draw-rectangle"
+        x={drawRect.x}
+        y={drawRect.y}
+        width={drawRect.width}
+        height={drawRect.height}
+        rx="8"
+      />
     {/if}
   </svg>
 {/if}
@@ -137,6 +150,14 @@
     stroke-width: 1.5;
     stroke-linecap: round;
     stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .draw-rectangle {
+    fill: color-mix(in srgb, var(--accent, #4d88ff) 9%, transparent);
+    stroke: var(--accent, #4d88ff);
+    stroke-width: 1.5;
+    stroke-dasharray: 7 4;
     vector-effect: non-scaling-stroke;
   }
 </style>

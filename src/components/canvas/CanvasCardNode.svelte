@@ -64,8 +64,18 @@
   }
 
   let accent = $derived(colorValue(data.color))
+  function textSummary(markdown: string): string {
+    const firstLine = markdown.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? '文本'
+    const plain = firstLine
+      .replace(/^#{1,6}\s+/, '')
+      .replace(/^[-*+>]\s+/, '')
+      .replace(/[`*_~\[\]]/g, '')
+      .trim()
+    return (plain || '文本').slice(0, 72)
+  }
   let title = $derived(
-    data.kind === 'file' ? basename(data.file ?? '')
+    data.kind === 'text' ? textSummary(data.text ?? '')
+      : data.kind === 'file' ? basename(data.file ?? '')
       : data.kind === 'link' ? (data.url ?? '链接')
         : data.kind === 'group' ? (data.label ?? '分组')
           : '未知节点',
@@ -97,57 +107,60 @@
   style:--card-accent={accent ?? 'transparent'}
   ondblclick={activate}
 >
-  {#if data.kind === 'text'}
-    {#if data.active && data.mediaResolver}
-      <EmbeddedMarkdownEditor
-        markdown={data.text ?? ''}
-        tabId={data.tabId ?? ''}
-        filePath={data.canvasPath ?? ''}
-        mediaResolver={data.mediaResolver}
-        onChange={(markdown) => data.onTextChange?.(id, markdown)}
-        onFlush={(markdown) => data.onTextFlush?.(id, markdown)}
-        onBlur={(markdown) => data.onTextBlur?.(id, markdown)}
-        onCompositionChange={(composing) => data.onCompositionChange?.(composing)}
-      />
+  <div class="compact-label" title={title}>{title}</div>
+  <div class="node-detail">
+    {#if data.kind === 'text'}
+      {#if data.active && data.mediaResolver}
+        <EmbeddedMarkdownEditor
+          markdown={data.text ?? ''}
+          tabId={data.tabId ?? ''}
+          filePath={data.canvasPath ?? ''}
+          mediaResolver={data.mediaResolver}
+          onChange={(markdown) => data.onTextChange?.(id, markdown)}
+          onFlush={(markdown) => data.onTextFlush?.(id, markdown)}
+          onBlur={(markdown) => data.onTextBlur?.(id, markdown)}
+          onCompositionChange={(composing) => data.onCompositionChange?.(composing)}
+        />
+      {:else}
+        <CanvasMarkdownPreview
+          markdown={data.text ?? ''}
+          resolveLocalResource={data.resolveLocalResource}
+        />
+      {/if}
+    {:else if data.kind === 'file'}
+      <div class="card-heading" title={data.file}>{title}</div>
+      {#if data.imageUrl}
+        <img class="file-image nodrag nopan" src={data.imageUrl} alt={title} draggable="false" />
+      {:else}
+        <div class="file-placeholder">
+          <span aria-hidden="true">▤</span>
+          <small>{data.file}</small>
+        </div>
+      {/if}
+    {:else if data.kind === 'link'}
+      <div class="link-card">
+        <span class="link-icon" aria-hidden="true">↗</span>
+        <strong title={data.url}>{title}</strong>
+        <small>{data.url}</small>
+      </div>
+    {:else if data.kind === 'group'}
+      {#if data.backgroundUrl}
+        <div
+          class="group-background"
+          class:cover={data.backgroundStyle === 'cover'}
+          class:ratio={data.backgroundStyle === 'ratio'}
+          class:repeat={data.backgroundStyle === 'repeat'}
+          style:background-image={`url("${data.backgroundUrl}")`}
+        ></div>
+      {/if}
+      <div class="group-label">{title}</div>
     {:else}
-      <CanvasMarkdownPreview
-        markdown={data.text ?? ''}
-        resolveLocalResource={data.resolveLocalResource}
-      />
-    {/if}
-  {:else if data.kind === 'file'}
-    <div class="card-heading" title={data.file}>{title}</div>
-    {#if data.imageUrl}
-      <img class="file-image nodrag nopan" src={data.imageUrl} alt={title} draggable="false" />
-    {:else}
-      <div class="file-placeholder">
-        <span aria-hidden="true">▤</span>
-        <small>{data.file}</small>
+      <div class="opaque-placeholder">
+        <strong>无法编辑的节点</strong>
+        <small>{data.diagnostic ?? '包含不兼容的 JSON Canvas 字段'}</small>
       </div>
     {/if}
-  {:else if data.kind === 'link'}
-    <div class="link-card">
-      <span class="link-icon" aria-hidden="true">↗</span>
-      <strong title={data.url}>{title}</strong>
-      <small>{data.url}</small>
-    </div>
-  {:else if data.kind === 'group'}
-    {#if data.backgroundUrl}
-      <div
-        class="group-background"
-        class:cover={data.backgroundStyle === 'cover'}
-        class:ratio={data.backgroundStyle === 'ratio'}
-        class:repeat={data.backgroundStyle === 'repeat'}
-        style:background-image={`url("${data.backgroundUrl}")`}
-      ></div>
-    {/if}
-    <div class="group-label">{title}</div>
-  {:else}
-    <div class="opaque-placeholder">
-      <strong>无法编辑的节点</strong>
-      <small>{data.diagnostic ?? '包含不兼容的 JSON Canvas 字段'}</small>
-    </div>
-  {/if}
+  </div>
 </div>
 
 {#if data.kind !== 'opaque'}
@@ -175,6 +188,22 @@
     border-left-color: var(--accent, #4d88ff);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4d88ff) 24%, transparent),
       0 8px 24px rgba(0, 0, 0, 0.13);
+  }
+  .node-detail { width: 100%; height: 100%; }
+  .compact-label {
+    display: none;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    padding: 14px;
+    font-size: 18px;
+    font-weight: 650;
+    line-height: 1.25;
+    text-align: center;
+    text-overflow: ellipsis;
   }
   .canvas-card.group-node {
     isolation: isolate;

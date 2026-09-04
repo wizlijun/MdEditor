@@ -2,6 +2,7 @@ import { commitNodeRectangles, freezeCanvasMove, isNodeContained, type NodePosit
 import {
   type CanvasDocument,
   type CanvasNodeEntry,
+  type CanvasSide,
   type KnownCanvasNode,
   isKnownCanvasNode,
 } from './types'
@@ -94,6 +95,77 @@ export interface CanvasResizeSnapshot {
   anchor: CanvasPoint
   diagonal: CanvasPoint
   nodes: CanvasResizeSnapshotNode[]
+}
+
+export interface CanvasAutoPanVelocity extends CanvasPoint {}
+
+export interface CanvasEdgeSides {
+  fromSide: CanvasSide
+  toSide: CanvasSide
+}
+
+const OPPOSITE_SIDE: Record<CanvasSide, CanvasSide> = {
+  top: 'bottom',
+  right: 'left',
+  bottom: 'top',
+  left: 'right',
+}
+
+/**
+ * Returns viewport velocity in screen pixels per second. Positive values move
+ * the canvas right/down. The ramp avoids a sudden jump when entering the edge
+ * activation zone and is capped when the pointer leaves the surface.
+ */
+export function computeCanvasAutoPanVelocity(
+  point: CanvasPoint,
+  bounds: Pick<CanvasRect, 'width' | 'height'>,
+  edgeThreshold = 40,
+  maxSpeed = 800,
+): CanvasAutoPanVelocity {
+  if (edgeThreshold <= 0 || maxSpeed <= 0 || bounds.width <= 0 || bounds.height <= 0) {
+    return { x: 0, y: 0 }
+  }
+  const velocity = (coordinate: number, size: number): number => {
+    if (coordinate < edgeThreshold) {
+      return maxSpeed * Math.min(1, Math.max(0, (edgeThreshold - coordinate) / edgeThreshold))
+    }
+    if (coordinate > size - edgeThreshold) {
+      return -maxSpeed * Math.min(1, Math.max(0, (coordinate - size + edgeThreshold) / edgeThreshold))
+    }
+    return 0
+  }
+  return { x: velocity(point.x, bounds.width), y: velocity(point.y, bounds.height) }
+}
+
+/** Chooses facing handles without persisting any non-standard edge metadata. */
+export function resolveCanvasEdgeSides(
+  source: CanvasRect,
+  target: CanvasRect,
+  fromSide?: CanvasSide,
+  toSide?: CanvasSide,
+): CanvasEdgeSides {
+  if (fromSide && toSide) return { fromSide, toSide }
+  if (fromSide) return { fromSide, toSide: OPPOSITE_SIDE[fromSide] }
+  if (toSide) return { fromSide: OPPOSITE_SIDE[toSide], toSide }
+
+  const sourceCenter = {
+    x: source.x + source.width / 2,
+    y: source.y + source.height / 2,
+  }
+  const targetCenter = {
+    x: target.x + target.width / 2,
+    y: target.y + target.height / 2,
+  }
+  const dx = targetCenter.x - sourceCenter.x
+  const dy = targetCenter.y - sourceCenter.y
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0
+      ? { fromSide: 'right', toSide: 'left' }
+      : { fromSide: 'left', toSide: 'right' }
+  }
+  return dy >= 0
+    ? { fromSide: 'bottom', toSide: 'top' }
+    : { fromSide: 'top', toSide: 'bottom' }
 }
 
 function editableKnownNodes(document: CanvasDocument): KnownCanvasNode[] {

@@ -4,6 +4,7 @@ import {
   alignCanvasSelection,
   buildCanvasSnapIndex,
   canvasNodesIntersectPolygon,
+  computeCanvasAutoPanVelocity,
   computeCanvasResizeSnap,
   computeCanvasSnap,
   createCanvasResizeSnapshot,
@@ -13,6 +14,7 @@ import {
   getCanvasSelectionRoots,
   polygonIntersectsRect,
   resizeCanvasSelection,
+  resolveCanvasEdgeSides,
   resolveCanvasResizeScale,
   spreadCanvasSelection,
 } from './interactions'
@@ -227,6 +229,29 @@ describe('Canvas smart snap', () => {
         minimumHeight: 20,
       },
     )).toEqual({ rectangle: { x: 48, y: 80, width: 52, height: 100 }, guides: [] })
+  })
+})
+
+describe('Canvas advanced pointer geometry', () => {
+  it('ramps auto-pan velocity inside the edge zone and caps outside the surface', () => {
+    expect(computeCanvasAutoPanVelocity({ x: 20, y: 50 }, { width: 200, height: 100 }))
+      .toEqual({ x: 400, y: 0 })
+    expect(computeCanvasAutoPanVelocity({ x: 190, y: -20 }, { width: 200, height: 100 }))
+      .toEqual({ x: -600, y: 800 })
+    expect(computeCanvasAutoPanVelocity({ x: 100, y: 50 }, { width: 200, height: 100 }))
+      .toEqual({ x: 0, y: 0 })
+  })
+
+  it('chooses facing edge handles while preserving explicit standard sides', () => {
+    const source = { x: 0, y: 0, width: 100, height: 100 }
+    expect(resolveCanvasEdgeSides(source, { x: 300, y: 25, width: 100, height: 50 }))
+      .toEqual({ fromSide: 'right', toSide: 'left' })
+    expect(resolveCanvasEdgeSides(source, { x: 25, y: -300, width: 50, height: 100 }))
+      .toEqual({ fromSide: 'top', toSide: 'bottom' })
+    expect(resolveCanvasEdgeSides(source, { x: 300, y: 0, width: 100, height: 100 }, 'bottom'))
+      .toEqual({ fromSide: 'bottom', toSide: 'top' })
+    expect(resolveCanvasEdgeSides(source, { x: 300, y: 0, width: 100, height: 100 }, 'top', 'right'))
+      .toEqual({ fromSide: 'top', toSide: 'right' })
   })
 })
 
