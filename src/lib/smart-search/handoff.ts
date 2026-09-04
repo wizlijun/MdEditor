@@ -77,10 +77,14 @@ export function buildHandoffPacket(
       const safe = safeFilterValue(values)
       if (Array.isArray(safe) && safe.length) resolvedFilters[key] = safe
     }
-    const after = plan.time?.after
-      ?? plan.queries.find((query) => typeof query.filters.after === 'string')?.filters.after
-    const before = plan.time?.before
-      ?? plan.queries.find((query) => typeof query.filters.before === 'string')?.filters.before
+    // Query filters are the authoritative executed range: the host intersects
+    // Planner time with user-locked after/before before building these arms.
+    // `plan.time` is only a fallback for older hosts that did not expose the
+    // effective range there.
+    const after = plan.queries.find((query) => typeof query.filters.after === 'string')?.filters.after
+      ?? plan.time?.after
+    const before = plan.queries.find((query) => typeof query.filters.before === 'string')?.filters.before
+      ?? plan.time?.before
     if (typeof after === 'string') resolvedFilters.after = after
     if (typeof before === 'string') resolvedFilters.before = before
   }

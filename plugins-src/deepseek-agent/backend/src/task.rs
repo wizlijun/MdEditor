@@ -468,6 +468,8 @@ mod tests {
             "document_date",
             "content_date",
             "activity_time",
+            "优先估算时间范围",
+            "没有可靠的时间依据",
             "不读取 Vault",
             "不调用任何工具",
         ] {
