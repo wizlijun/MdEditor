@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Handle, NodeResizer, Position, type NodeProps, type ResizeParams } from '@xyflow/svelte'
+  import {
+    Handle,
+    NodeResizer,
+    Position,
+    type NodeProps,
+    type ResizeDragEvent,
+    type ResizeParams,
+    type ResizeParamsWithDirection,
+  } from '@xyflow/svelte'
   import type { MediaResolver } from '@moraya/core'
   import { basename } from '../../lib/paths'
   import CanvasMarkdownPreview from './CanvasMarkdownPreview.svelte'
@@ -17,6 +25,8 @@
     backgroundUrl?: string | null
     backgroundStyle?: string
     active?: boolean
+    multipleSelected?: boolean
+    interactionLocked?: boolean
     tabId?: string
     canvasPath?: string
     mediaResolver?: MediaResolver
@@ -27,6 +37,8 @@
     onTextFlush?: (id: string, markdown: string) => void
     onTextBlur?: (id: string, markdown: string) => void
     onCompositionChange?: (composing: boolean) => void
+    onResizeStart?: (id: string, rectangle: ResizeParams) => void
+    onResize?: (id: string, event: ResizeDragEvent, rectangle: ResizeParamsWithDirection) => void
     onResizeEnd?: (id: string, rectangle: ResizeParams) => void
   }
 
@@ -67,10 +79,12 @@
 </script>
 
 <NodeResizer
-  isVisible={selected && !data.active && data.kind !== 'opaque'}
+  isVisible={selected && !data.multipleSelected && !data.interactionLocked && !data.active && data.kind !== 'opaque'}
   minWidth={data.kind === 'group' ? 180 : 160}
   minHeight={data.kind === 'group' ? 120 : 100}
   color={accent ?? 'var(--accent, #4d88ff)'}
+  onResizeStart={(_event, rectangle) => data.onResizeStart?.(id, rectangle)}
+  onResize={(event, rectangle) => data.onResize?.(id, event, rectangle)}
   onResizeEnd={(_event, rectangle) => data.onResizeEnd?.(id, rectangle)}
 />
 

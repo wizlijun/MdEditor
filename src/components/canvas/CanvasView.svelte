@@ -12,7 +12,9 @@
     type Edge,
     type Node,
     type OnReconnect,
+    type ResizeDragEvent,
     type ResizeParams,
+    type ResizeParamsWithDirection,
     type Viewport,
   } from '@xyflow/svelte'
   import '@xyflow/svelte/dist/style.css'
@@ -27,10 +29,18 @@
     CanvasResourceSession,
     acquireCanvasUiSession,
     applyFlowEdgeConnection,
+    alignCanvasSelection,
+    buildCanvasSnapIndex,
+    canvasNodesIntersectPolygon,
     cloneCanvasDocument,
+    commitNodePositions,
+    computeCanvasResizeSnap,
+    computeCanvasSnap,
     copyCanvasSelection,
+    createCanvasResizeSnapshot,
     decodeJsonCanvas,
     deleteCanvasSelection,
+    distributeCanvasSelection,
     encodeJsonCanvas,
     flowConnectionToCanvasEdge,
     freezeCanvasMove,
@@ -40,6 +50,8 @@
     importCanvasResource,
     isCanvasEdge,
     isKnownCanvasNode,
+    getCanvasNodesBounds,
+    getCanvasSelectionRoots,
     moveFrozenNodes,
     pasteCanvasSelection,
     projectCanvasToFlow,
@@ -48,9 +60,14 @@
     markCanvasUiSessionContent,
     reorderCanvasNodes,
     resolveCanvasResource,
+    resolveCanvasResizeScale,
+    resizeCanvasSelection,
+    spreadCanvasSelection,
     updateCanvasNode,
     updateCanvasEdge,
     type CanvasClipboardPayload,
+    type CanvasAlignDirection,
+    type CanvasDistributeAxis,
     type CanvasDocument,
     type CanvasEdge,
     type CanvasEnd,
@@ -58,15 +75,24 @@
     type FrozenCanvasMove,
     type GroupBackgroundStyle,
     type KnownCanvasNode,
+    type CanvasPoint,
+    type CanvasRect,
+    type CanvasResizeSnapshot,
+    type ResizeCorner,
+    type SnapGuide,
+    type SnapIndex,
   } from '../../lib/canvas'
   import CanvasCardNode from './CanvasCardNode.svelte'
   import CanvasEdgeView from './CanvasEdge.svelte'
+  import CanvasInteractionOverlay from './CanvasInteractionOverlay.svelte'
+  import CanvasSelectionResizer from './CanvasSelectionResizer.svelte'
   import { loadCanvasViewport, saveCanvasViewport } from './canvas-view-state'
 
   let { tab }: { tab: Tab } = $props()
 
   type UiNode = Node<Record<string, unknown>>
   type UiEdge = Edge<Record<string, unknown>>
+  type CanvasTool = 'select' | 'pan' | 'lasso'
 
   const nodeTypes = {
     'canvas-text': CanvasCardNode,
@@ -93,7 +119,35 @@
   let activeTextId: string | null = $state(null)
   let textBefore = $state.raw<CanvasDocument | null>(null)
   let composing = $state(false)
-  let touchSelectionMode = $state(false)
+  let activeTool = $state<CanvasTool>(formFactor.value === 'desktop' ? 'select' : 'pan')
+  let spacePan = $state(false)
+  let interactionLocked = $state(false)
+  let pendingPlacement = $state<KnownCanvasNode['type'] | null>(null)
+  let lastPointerFlow = $state.raw<CanvasPoint | null>(null)
+  let snapGuides = $state.raw<SnapGuide[]>([])
+  let lassoPoints = $state.raw<CanvasPoint[]>([])
+  let lassoSession = $state.raw<{
+    pointerId: number
+    start: CanvasPoint
+    additive: boolean
+    initialNodes: Set<string>
+    initialEdges: Set<string>
+    active: boolean
+  } | null>(null)
+  let multiResize = $state.raw<{
+    pointerId: number
+    snapshot: CanvasResizeSnapshot
+    latestScaleX: number
+    latestScaleY: number
+  } | null>(null)
+  let singleResize = $state.raw<{
+    id: string
+    snapIndex: SnapIndex
+    start: CanvasRect
+    latest: CanvasRect
+    minimumWidth: number
+    minimumHeight: number
+  } | null>(null)
   let historyVersion = $state(0)
   let surface: HTMLDivElement | undefined = $state()
   let viewport = $state.raw<Viewport>({ x: 0, y: 0, zoom: 1 })
@@ -103,6 +157,9 @@
   let nodeDrag: {
     frozen: FrozenCanvasMove
     origin: { x: number; y: number }
+    bounds: CanvasRect
+    snapIndex: SnapIndex
+    delta: CanvasPoint
     hasGroup: boolean
   } | null = null
   let pasteCount = 0
@@ -132,7 +189,13 @@
     const node = canvasDoc.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === id)
     return node && isKnownCanvasNode(node) ? node : null
   })
-  let touchLayout = $derived(formFactor.value !== 'desktop')
+  let effectiveTool = $derived(interactionLocked || spacePan ? 'pan' : activeTool)
+  let selectionRoots = $derived.by(() => canvasDoc
+    ? getCanvasSelectionRoots(canvasDoc, selectedNodeIds)
+    : [])
+  let multiSelectionBounds = $derived.by(() => selectedNodeIds.size > 1 && selectionRoots.length > 0
+    ? getCanvasNodesBounds(selectionRoots)
+    : null)
 
   function resourceRoot(): string {
     const vaultRoot = sotvaultStore.vaultRoot
@@ -208,6 +271,53 @@
     return left.size === right.size && Array.from(left).every((id) => right.has(id))
   }
 
+  function setTool(tool: CanvasTool): void {
+    if (interactionLocked) return
+    cancelLasso(true)
+    pendingPlacement = null
+    activeTool = tool
+    surface?.focus()
+  }
+
+  function setPlacement(kind: KnownCanvasNode['type']): void {
+    if (interactionLocked) return
+    cancelLasso(true)
+    activeTool = 'select'
+    pendingPlacement = pendingPlacement === kind ? null : kind
+    surface?.focus()
+  }
+
+  function toggleInteractionLock(): void {
+    interactionLocked = !interactionLocked
+    if (interactionLocked) {
+      cancelLasso(true)
+      cancelSingleResize()
+      cancelMultiResize()
+      pendingPlacement = null
+      spacePan = false
+      finalizeTextSession()
+    }
+    rebuildFlow()
+  }
+
+  function arrangeSelection(direction: CanvasAlignDirection): void {
+    if (!canvasDoc || selectionRoots.length < 2 || !finishTextBeforeStructure()) return
+    const changes = alignCanvasSelection(canvasDoc, selectedNodeIds, direction)
+    commitDocument(`对齐选中节点：${direction}`, commitNodePositions(canvasDoc, changes))
+  }
+
+  function distributeSelection(axis: CanvasDistributeAxis): void {
+    if (!canvasDoc || selectionRoots.length < 3 || !finishTextBeforeStructure()) return
+    const changes = distributeCanvasSelection(canvasDoc, selectedNodeIds, axis)
+    commitDocument(`分布选中节点：${axis}`, commitNodePositions(canvasDoc, changes))
+  }
+
+  function spreadSelection(): void {
+    if (!canvasDoc || selectionRoots.length < 2 || !finishTextBeforeStructure()) return
+    const changes = spreadCanvasSelection(canvasDoc, selectedNodeIds)
+    commitDocument('散开重叠节点', commitNodePositions(canvasDoc, changes))
+  }
+
   function rebuildFlow(nextSelectedNodes = selectedNodeIds, nextSelectedEdges = selectedEdgeIds): void {
     if (!canvasDoc) {
       flowNodes = []
@@ -232,6 +342,8 @@
           kind,
           diagnostic: node.data.diagnostic?.message,
           active: activeTextId === node.data.canonicalId,
+          multipleSelected: selectedNodeIds.size > 1,
+          interactionLocked,
           tabId: tab.id,
           canvasPath: tab.filePath,
           imageUrl: node.data.kind === 'file' ? imageUrlFor(node.data.file) : null,
@@ -244,6 +356,8 @@
           onTextFlush: flushTextDraft,
           onTextBlur: finalizeTextSession,
           onCompositionChange: (value: boolean) => { composing = value },
+          onResizeStart: startSingleResize,
+          onResize: previewSingleResize,
           onResizeEnd: commitResize,
         },
       } as UiNode
@@ -291,7 +405,7 @@
     }
   }
 
-  function addNode(kind: KnownCanvasNode['type'], at = viewportCenter(), value?: string): void {
+  function addNode(kind: KnownCanvasNode['type'], at = lastPointerFlow ?? viewportCenter(), value?: string): void {
     if (!canvasDoc || !finishTextBeforeStructure()) return
     const id = newId()
     const common = {
@@ -317,12 +431,12 @@
     if (kind === 'text') queueMicrotask(() => activateTextNode(id))
   }
 
-  async function chooseFileNode(): Promise<void> {
+  async function chooseFileNode(at = lastPointerFlow ?? viewportCenter()): Promise<void> {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const picked = await open({ multiple: false })
       if (typeof picked !== 'string') return
-      await addFilePath(picked, viewportCenter())
+      await addFilePath(picked, at)
     } catch (error) {
       showError(`无法选择文件：${String(error)}`)
     }
@@ -364,13 +478,13 @@
     }
   }
 
-  function addLinkNode(): void {
+  function addLinkNode(at = lastPointerFlow ?? viewportCenter()): void {
     const value = window.prompt('输入 http 或 https 链接')?.trim()
     if (!value) return
     try {
       const url = new URL(value)
       if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported protocol')
-      addNode('link', viewportCenter(), url.href)
+      addNode('link', at, url.href)
     } catch {
       showError('只支持 http:// 或 https:// 链接。')
     }
@@ -410,6 +524,15 @@
     )
     const insertAt = selectedIndexes.length > 0 ? Math.min(...selectedIndexes) : 0
     commitDocument('围绕选区创建分组', insertCanvasNode(canvasDoc, group, insertAt), new Set([id]), new Set())
+  }
+
+  function placePendingNode(at: CanvasPoint): void {
+    const kind = pendingPlacement
+    if (!kind || interactionLocked) return
+    pendingPlacement = null
+    if (kind === 'file') void chooseFileNode(at)
+    else if (kind === 'link') addLinkNode(at)
+    else addNode(kind, at)
   }
 
   function activateTextNode(id: string): void {
@@ -479,18 +602,78 @@
     }
   }
 
+  function startSingleResize(id: string, rectangle: ResizeParams): void {
+    if (!canvasDoc || interactionLocked) return
+    const node = canvasDoc.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === id)
+    if (!node || !isKnownCanvasNode(node)) return
+    singleResize = {
+      id,
+      snapIndex: buildCanvasSnapIndex(canvasDoc, [id]),
+      start: rectangle,
+      latest: rectangle,
+      minimumWidth: node.type === 'group' ? 180 : 160,
+      minimumHeight: node.type === 'group' ? 120 : 100,
+    }
+    snapGuides = []
+  }
+
+  function previewSingleResize(
+    id: string,
+    event: ResizeDragEvent,
+    rectangle: ResizeParamsWithDirection,
+  ): void {
+    const session = singleResize
+    if (!session || session.id !== id) return
+    const changesX = Math.abs(rectangle.x - session.start.x) > 0.01
+    const changesY = Math.abs(rectangle.y - session.start.y) > 0.01
+    const changesWidth = Math.abs(rectangle.width - session.start.width) > 0.01
+    const changesHeight = Math.abs(rectangle.height - session.start.height) > 0.01
+    const result = computeCanvasResizeSnap(rectangle, session.snapIndex, {
+      thresholdFlow: 6 / Math.max(viewport.zoom, 0.05),
+      bypass: Boolean((event.sourceEvent as { altKey?: boolean } | undefined)?.altKey),
+      activeEdges: {
+        x: changesX ? 'min' : changesWidth ? 'max' : 'none',
+        y: changesY ? 'min' : changesHeight ? 'max' : 'none',
+      },
+      minimumWidth: session.minimumWidth,
+      minimumHeight: session.minimumHeight,
+    })
+    session.latest = result.rectangle
+    snapGuides = result.guides
+    queueMicrotask(() => {
+      if (singleResize !== session) return
+      flowNodes = flowNodes.map((node) => node.id === id ? {
+        ...node,
+        position: { x: result.rectangle.x, y: result.rectangle.y },
+        width: result.rectangle.width,
+        height: result.rectangle.height,
+        measured: { width: result.rectangle.width, height: result.rectangle.height },
+      } : node)
+    })
+  }
+
   function commitResize(id: string, rectangle: ResizeParams): void {
     if (!canvasDoc) return
     const current = canvasDoc.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === id)
     if (!current || !isKnownCanvasNode(current)) return
+    const finalRectangle = singleResize?.id === id ? singleResize.latest : rectangle
+    singleResize = null
+    snapGuides = []
     const next = updateCanvasNode(canvasDoc, id, (node) => ({
       ...node,
-      x: Math.round(rectangle.x),
-      y: Math.round(rectangle.y),
-      width: Math.max(node.type === 'group' ? 180 : 160, Math.round(rectangle.width)),
-      height: Math.max(node.type === 'group' ? 120 : 100, Math.round(rectangle.height)),
+      x: Math.round(finalRectangle.x),
+      y: Math.round(finalRectangle.y),
+      width: Math.max(node.type === 'group' ? 180 : 160, Math.round(finalRectangle.width)),
+      height: Math.max(node.type === 'group' ? 120 : 100, Math.round(finalRectangle.height)),
     }))
     commitDocument('调整节点大小', next)
+  }
+
+  function cancelSingleResize(): void {
+    if (!singleResize) return
+    singleResize = null
+    snapGuides = []
+    rebuildFlow()
   }
 
   function handleNodeDragStart({ targetNode, nodes }: { targetNode: UiNode | null; nodes: UiNode[] }): void {
@@ -499,36 +682,71 @@
     if (!target || !isKnownCanvasNode(target)) { nodeDrag = null; return }
     const draggedIds = nodes.map((node) => (node.data.canonicalId as string | undefined) ?? node.id)
     const dragged = canvasDoc.nodes.filter((entry) => isKnownCanvasNode(entry) && draggedIds.includes(entry.id))
+    const frozen = freezeCanvasMove(canvasDoc, draggedIds)
+    const movingNodes = canvasDoc.nodes.filter((entry) =>
+      isKnownCanvasNode(entry) && frozen.nodeIds.includes(entry.id),
+    )
+    const bounds = getCanvasNodesBounds(movingNodes)
+    if (!bounds) { nodeDrag = null; return }
     nodeDrag = {
-      frozen: freezeCanvasMove(canvasDoc, draggedIds),
+      frozen,
       origin: { x: target.x, y: target.y },
+      bounds,
+      snapIndex: buildCanvasSnapIndex(canvasDoc, frozen.nodeIds),
+      delta: { x: 0, y: 0 },
       hasGroup: dragged.some((node) => isKnownCanvasNode(node) && node.type === 'group'),
     }
+    snapGuides = []
   }
 
-  function handleNodeDrag({ targetNode }: { targetNode: UiNode | null }): void {
+  function dragDelta(targetNode: UiNode, event: MouseEvent | TouchEvent): CanvasPoint {
+    if (!nodeDrag) return { x: 0, y: 0 }
+    const raw = {
+      x: targetNode.position.x - nodeDrag.origin.x,
+      y: targetNode.position.y - nodeDrag.origin.y,
+    }
+    const snapped = computeCanvasSnap({
+      x: nodeDrag.bounds.x + raw.x,
+      y: nodeDrag.bounds.y + raw.y,
+      width: nodeDrag.bounds.width,
+      height: nodeDrag.bounds.height,
+    }, nodeDrag.snapIndex, {
+      thresholdFlow: 6 / Math.max(viewport.zoom, 0.05),
+      bypass: event instanceof MouseEvent && event.altKey,
+    })
+    snapGuides = snapped.guides
+    return { x: raw.x + snapped.deltaX, y: raw.y + snapped.deltaY }
+  }
+
+  function handleNodeDrag({ targetNode, event }: {
+    targetNode: UiNode | null
+    event: MouseEvent | TouchEvent
+  }): void {
     if (!canvasDoc || !targetNode || !nodeDrag) return
-    const dx = targetNode.position.x - nodeDrag.origin.x
-    const dy = targetNode.position.y - nodeDrag.origin.y
+    const delta = dragDelta(targetNode, event)
+    nodeDrag.delta = delta
     const moving = new Set(nodeDrag.frozen.nodeIds)
     flowNodes = flowNodes.map((flowNode) => {
       if (!moving.has(flowNode.id)) return flowNode
       const canonical = canvasDoc?.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === flowNode.id)
       if (!canonical || !isKnownCanvasNode(canonical)) return flowNode
-      return { ...flowNode, position: { x: canonical.x + dx, y: canonical.y + dy } }
+      return { ...flowNode, position: { x: canonical.x + delta.x, y: canonical.y + delta.y } }
     })
   }
 
-  function handleNodeDragStop({ targetNode, nodes }: { targetNode: UiNode | null; nodes: UiNode[] }): void {
+  function handleNodeDragStop({ targetNode, nodes, event }: {
+    targetNode: UiNode | null
+    nodes: UiNode[]
+    event: MouseEvent | TouchEvent
+  }): void {
     if (!canvasDoc) return
-    if (!finishTextBeforeStructure()) { nodeDrag = null; rebuildFlow(); return }
+    if (!finishTextBeforeStructure()) { nodeDrag = null; snapGuides = []; rebuildFlow(); return }
     if (targetNode && nodeDrag) {
       const drag = nodeDrag
-      const next = moveFrozenNodes(canvasDoc, drag.frozen, {
-        x: targetNode.position.x - drag.origin.x,
-        y: targetNode.position.y - drag.origin.y,
-      })
+      const delta = dragDelta(targetNode, event)
+      const next = moveFrozenNodes(canvasDoc, drag.frozen, delta)
       nodeDrag = null
+      snapGuides = []
       const label = drag.hasGroup
         ? (nodes.length > 1 ? '移动分组与选区' : '移动分组')
         : (nodes.length > 1 ? '移动多个节点' : '移动节点')
@@ -536,6 +754,7 @@
       return
     }
     nodeDrag = null
+    snapGuides = []
     let next = canvasDoc
     for (const node of nodes) {
       next = updateCanvasNode(next, node.id, (current) => ({
@@ -582,8 +801,17 @@
   function handleSelection({ nodes, edges }: { nodes: UiNode[]; edges: UiEdge[] }): void {
     const nextNodes = new Set(nodes.map((node) => node.id))
     const nextEdges = new Set(edges.map((edge) => edge.id))
-    if (!sameIds(selectedNodeIds, nextNodes)) selectedNodeIds = nextNodes
-    if (!sameIds(selectedEdgeIds, nextEdges)) selectedEdgeIds = nextEdges
+    const nodesChanged = !sameIds(selectedNodeIds, nextNodes)
+    const edgesChanged = !sameIds(selectedEdgeIds, nextEdges)
+    if (!nodesChanged && !edgesChanged) return
+    if (nodesChanged) selectedNodeIds = nextNodes
+    if (edgesChanged) selectedEdgeIds = nextEdges
+    flowNodes = flowNodes.map((node) => ({
+      ...node,
+      selected: nextNodes.has(node.id),
+      data: { ...node.data, multipleSelected: nextNodes.size > 1 },
+    }))
+    flowEdges = flowEdges.map((edge) => ({ ...edge, selected: nextEdges.has(edge.id) }))
   }
 
   async function copySelection(): Promise<boolean> {
@@ -646,7 +874,7 @@
     const known = payload.nodes.filter(isKnownCanvasNode)
     const minX = known.length ? Math.min(...known.map((node) => node.x)) : 0
     const minY = known.length ? Math.min(...known.map((node) => node.y)) : 0
-    const center = viewportCenter()
+    const center = lastPointerFlow ?? viewportCenter()
     pasteCount = (pasteCount % 8) + 1
     const result = pasteCanvasSelection(canvasDoc, payload, {
       offset: { x: center.x - minX + pasteCount * 16, y: center.y - minY + pasteCount * 16 },
@@ -665,11 +893,11 @@
     try {
       const url = new URL(trimmed)
       if ((url.protocol === 'http:' || url.protocol === 'https:') && !trimmed.includes('\n')) {
-        addNode('link', viewportCenter(), url.href)
+        addNode('link', lastPointerFlow ?? viewportCenter(), url.href)
         return
       }
     } catch { /* ordinary text */ }
-    addNode('text', viewportCenter(), text)
+    addNode('text', lastPointerFlow ?? viewportCenter(), text)
   }
 
   function handlePaste(event: ClipboardEvent): void {
@@ -718,6 +946,203 @@
       && !!target.closest('input,textarea,[contenteditable="true"],.embedded-markdown,.ProseMirror')
   }
 
+  function localPointer(event: { clientX: number; clientY: number }): CanvasPoint {
+    const rect = surface?.getBoundingClientRect()
+    return {
+      x: event.clientX - (rect?.left ?? 0),
+      y: event.clientY - (rect?.top ?? 0),
+    }
+  }
+
+  function localToFlow(point: CanvasPoint): CanvasPoint {
+    return {
+      x: (point.x - viewport.x) / viewport.zoom,
+      y: (point.y - viewport.y) / viewport.zoom,
+    }
+  }
+
+  function shouldRememberPointer(target: EventTarget | null): boolean {
+    return !(target instanceof Element)
+      || !target.closest('.canvas-toolbar,.svelte-flow__controls,.selection-resizer')
+  }
+
+  function edgeIdsInside(nodeIds: ReadonlySet<string>): Set<string> {
+    if (!canvasDoc) return new Set()
+    return new Set(canvasDoc.edges.flatMap((entry) =>
+      isCanvasEdge(entry) && nodeIds.has(entry.fromNode) && nodeIds.has(entry.toNode)
+        ? [entry.id]
+        : [],
+    ))
+  }
+
+  function previewLasso(points: CanvasPoint[], session = lassoSession): void {
+    if (!canvasDoc || !session || points.length < 3) return
+    const polygon = points.map(localToFlow)
+    const hitIds = new Set(canvasNodesIntersectPolygon(canvasDoc.nodes, polygon).map((node) => node.id))
+    const nextNodes = session.additive
+      ? new Set([...session.initialNodes, ...hitIds])
+      : hitIds
+    const insideEdges = edgeIdsInside(nextNodes)
+    const nextEdges = session.additive
+      ? new Set([...session.initialEdges, ...insideEdges])
+      : insideEdges
+    selectedNodeIds = nextNodes
+    selectedEdgeIds = nextEdges
+    flowNodes = flowNodes.map((node) => ({
+      ...node,
+      selected: nextNodes.has(node.id),
+      data: { ...node.data, multipleSelected: nextNodes.size > 1 },
+    }))
+    flowEdges = flowEdges.map((edge) => ({ ...edge, selected: nextEdges.has(edge.id) }))
+  }
+
+  function cancelLasso(restore: boolean): void {
+    const session = lassoSession
+    lassoSession = null
+    lassoPoints = []
+    if (!restore || !session) return
+    selectedNodeIds = new Set(session.initialNodes)
+    selectedEdgeIds = new Set(session.initialEdges)
+    rebuildFlow()
+  }
+
+  function handleSurfacePointerDown(event: PointerEvent): void {
+    if (shouldRememberPointer(event.target)) lastPointerFlow = localToFlow(localPointer(event))
+    if (effectiveTool !== 'lasso' || interactionLocked || event.button !== 0 || !event.isPrimary) return
+    const target = event.target
+    if (!(target instanceof Element) || !target.closest('.svelte-flow__pane')) return
+    if (target.closest('.svelte-flow__node,.svelte-flow__edge,.svelte-flow__controls')) return
+    event.preventDefault()
+    event.stopPropagation()
+    try { surface?.setPointerCapture(event.pointerId) } catch { /* detached surface */ }
+    const start = localPointer(event)
+    lassoSession = {
+      pointerId: event.pointerId,
+      start,
+      additive: event.shiftKey,
+      initialNodes: new Set(selectedNodeIds),
+      initialEdges: new Set(selectedEdgeIds),
+      active: false,
+    }
+    lassoPoints = [start]
+  }
+
+  function appendLassoPoint(points: CanvasPoint[], point: CanvasPoint): CanvasPoint[] {
+    const previous = points.at(-1)
+    if (!previous || Math.hypot(point.x - previous.x, point.y - previous.y) >= 4) return [...points, point]
+    return points.length === 1 ? [points[0], point] : [...points.slice(0, -1), point]
+  }
+
+  function handleSurfacePointerMove(event: PointerEvent): void {
+    const point = localPointer(event)
+    if (shouldRememberPointer(event.target)) lastPointerFlow = localToFlow(point)
+    const session = lassoSession
+    if (!session || session.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+    const active = session.active || Math.hypot(point.x - session.start.x, point.y - session.start.y) >= 4
+    if (!active) return
+    if (!session.active) lassoSession = { ...session, active: true }
+    lassoPoints = appendLassoPoint(lassoPoints, point)
+    previewLasso(lassoPoints, lassoSession)
+  }
+
+  function finishLasso(event: PointerEvent, commit: boolean): void {
+    const session = lassoSession
+    if (!session || session.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+    try { surface?.releasePointerCapture(event.pointerId) } catch { /* already released */ }
+    if (!commit) { cancelLasso(true); return }
+    const points = appendLassoPoint(lassoPoints, localPointer(event))
+    const xs = points.map((point) => point.x)
+    const ys = points.map((point) => point.y)
+    const hasArea = session.active && points.length >= 3
+      && Math.max(...xs) - Math.min(...xs) >= 10
+      && Math.max(...ys) - Math.min(...ys) >= 10
+    if (hasArea) previewLasso(points, session)
+    else if (!session.additive) {
+      selectedNodeIds = new Set()
+      selectedEdgeIds = new Set()
+    } else {
+      selectedNodeIds = new Set(session.initialNodes)
+      selectedEdgeIds = new Set(session.initialEdges)
+    }
+    lassoSession = null
+    lassoPoints = []
+    rebuildFlow()
+  }
+
+  function handleSurfacePointerUp(event: PointerEvent): void { finishLasso(event, true) }
+  function handleSurfacePointerCancel(event: PointerEvent): void { finishLasso(event, false) }
+
+  function handleKeyup(event: KeyboardEvent): void {
+    if (event.key === ' ') spacePan = false
+  }
+
+  function startMultiResize(corner: ResizeCorner, event: PointerEvent): void {
+    if (!canvasDoc || interactionLocked || selectedNodeIds.size < 2 || !finishTextBeforeStructure()) return
+    const snapshot = createCanvasResizeSnapshot(canvasDoc, selectedNodeIds, corner)
+    if (!snapshot) return
+    multiResize = {
+      pointerId: event.pointerId,
+      snapshot,
+      latestScaleX: 1,
+      latestScaleY: 1,
+    }
+    snapGuides = []
+  }
+
+  function previewMultiResize(event: PointerEvent): void {
+    if (!canvasDoc || !multiResize || multiResize.pointerId !== event.pointerId) return
+    const cursor = screenToFlow({ x: event.clientX, y: event.clientY })
+    const scale = resolveCanvasResizeScale(multiResize.snapshot, cursor, event.shiftKey)
+    multiResize.latestScaleX = scale.scaleX
+    multiResize.latestScaleY = scale.scaleY
+    const preview = resizeCanvasSelection(
+      canvasDoc,
+      multiResize.snapshot,
+      scale.scaleX,
+      scale.scaleY,
+    )
+    const byId = new Map(preview.nodes.flatMap((entry) =>
+      isKnownCanvasNode(entry) ? [[entry.id, entry] as const] : [],
+    ))
+    const resizedIds = new Set(multiResize.snapshot.nodes.map((node) => node.id))
+    flowNodes = flowNodes.map((node) => {
+      if (!resizedIds.has(node.id)) return node
+      const geometry = byId.get(node.id)
+      if (!geometry) return node
+      return {
+        ...node,
+        position: { x: geometry.x, y: geometry.y },
+        width: geometry.width,
+        height: geometry.height,
+        measured: { width: geometry.width, height: geometry.height },
+      }
+    })
+  }
+
+  function finishMultiResize(event: PointerEvent): void {
+    if (!canvasDoc || !multiResize || multiResize.pointerId !== event.pointerId) return
+    previewMultiResize(event)
+    const session = multiResize
+    multiResize = null
+    const next = resizeCanvasSelection(
+      canvasDoc,
+      session.snapshot,
+      session.latestScaleX,
+      session.latestScaleY,
+    )
+    commitDocument('缩放多个节点', next)
+  }
+
+  function cancelMultiResize(): void {
+    if (!multiResize) return
+    multiResize = null
+    rebuildFlow()
+  }
+
   function handleKeydown(event: KeyboardEvent): void {
     if (event.isComposing || composing) return
     if (isTextInput(event.target)) {
@@ -730,6 +1155,26 @@
     }
     const mod = event.metaKey || event.ctrlKey
     const key = event.key.toLowerCase()
+    if (!mod && !event.altKey && event.key === ' ') {
+      event.preventDefault()
+      spacePan = true
+      return
+    }
+    if (!mod && !event.altKey && !event.shiftKey && ['s', 'p', 'l'].includes(key)) {
+      event.preventDefault()
+      event.stopPropagation()
+      setTool(key === 's' ? 'select' : key === 'p' ? 'pan' : 'lasso')
+      return
+    }
+    if (!mod && !event.altKey && !event.shiftKey && ['1', '2', '3', '4'].includes(key)) {
+      event.preventDefault()
+      event.stopPropagation()
+      const kinds: Record<string, KnownCanvasNode['type']> = {
+        '1': 'text', '2': 'group', '3': 'file', '4': 'link',
+      }
+      setPlacement(kinds[key])
+      return
+    }
     if (mod && key === 'z') { event.preventDefault(); event.stopPropagation(); event.shiftKey ? redo() : undo(); return }
     if (mod && key === 'y') { event.preventDefault(); event.stopPropagation(); redo(); return }
     if (mod && key === 'c') { event.preventDefault(); event.stopPropagation(); void copySelection(); return }
@@ -763,15 +1208,42 @@
       else openNode(id)
       return
     }
-    if (event.key === 'Escape') finalizeTextSession()
+    if (event.key === 'Escape') {
+      if (singleResize) cancelSingleResize()
+      else if (multiResize) cancelMultiResize()
+      else if (lassoSession) cancelLasso(true)
+      else if (pendingPlacement) pendingPlacement = null
+      else if (activeTool !== 'select') activeTool = 'select'
+      else finalizeTextSession()
+    }
   }
 
   function handleSurfaceDoubleClick(event: MouseEvent): void {
+    if (interactionLocked || effectiveTool !== 'select' || pendingPlacement) return
     const target = event.target
     if (!(target instanceof Element) || !target.closest('.svelte-flow__pane')) return
     if (target.closest('.svelte-flow__node,.svelte-flow__edge,.svelte-flow__controls')) return
     event.preventDefault()
     addNode('text', screenToFlow({ x: event.clientX, y: event.clientY }))
+  }
+
+  function handleSurfaceClickCapture(event: MouseEvent): void {
+    if (!pendingPlacement || interactionLocked) return
+    const target = event.target
+    if (!(target instanceof Element) || !target.closest('.svelte-flow__pane')) return
+    if (target.closest('.svelte-flow__node,.svelte-flow__edge,.svelte-flow__controls')) return
+    // Svelte Flow owns pane clicks while drag-selection is enabled, so placement
+    // must be resolved before the pane's selection handler consumes the event.
+    event.preventDefault()
+    event.stopPropagation()
+    lastPointerFlow = screenToFlow({ x: event.clientX, y: event.clientY })
+    placePendingNode(lastPointerFlow)
+  }
+
+  function handlePaneClick({ event }: { event: MouseEvent }): void {
+    lastPointerFlow = screenToFlow({ x: event.clientX, y: event.clientY })
+    if (pendingPlacement) placePendingNode(lastPointerFlow)
+    else finalizeTextSession()
   }
 
   function updateEdgeLabel(value: string): void {
@@ -946,6 +1418,14 @@
     })()
   }
 
+  function handleWindowBlur(): void {
+    spacePan = false
+    cancelLasso(true)
+    cancelSingleResize()
+    cancelMultiResize()
+    snapGuides = []
+  }
+
   onMount(() => {
     rebuildFlow()
     let cancelled = false
@@ -960,9 +1440,15 @@
     window.addEventListener('notemd:canvas-native-drop', handleNativeDrop)
     window.addEventListener('notemd:select-all', selectAll)
     window.addEventListener('notemd:canvas-view-command', handleViewCommand)
+    window.addEventListener('keyup', handleKeyup)
+    window.addEventListener('blur', handleWindowBlur)
     return () => {
       cancelled = true
       nodeDrag = null
+      snapGuides = []
+      cancelLasso(false)
+      singleResize = null
+      cancelMultiResize()
       if (viewportTimer) clearTimeout(viewportTimer)
       resourceSession?.dispose()
       resourceSession = null
@@ -971,6 +1457,8 @@
       window.removeEventListener('notemd:canvas-native-drop', handleNativeDrop)
       window.removeEventListener('notemd:select-all', selectAll)
       window.removeEventListener('notemd:canvas-view-command', handleViewCommand)
+      window.removeEventListener('keyup', handleKeyup)
+      window.removeEventListener('blur', handleWindowBlur)
     }
   })
 
@@ -992,6 +1480,10 @@
     const decoded = decodeJsonCanvas(incoming)
     if (!decoded.ok) {
       nodeDrag = null
+      snapGuides = []
+      cancelLasso(false)
+      singleResize = null
+      cancelMultiResize()
       parseFailure = decoded.diagnostics
       diagnostics = decoded.diagnostics
       return
@@ -1022,11 +1514,19 @@
 <div
   class="canvas-surface"
   class:parse-error={!!parseFailure}
+  class:tool-pan={effectiveTool === 'pan'}
+  class:tool-lasso={effectiveTool === 'lasso'}
+  class:placing={!!pendingPlacement}
   bind:this={surface}
   role="application"
   aria-label={`无限画布：${tab.title}`}
   tabindex="0"
   onkeydowncapture={handleKeydown}
+  onpointerdowncapture={handleSurfacePointerDown}
+  onpointermove={handleSurfacePointerMove}
+  onpointerup={handleSurfacePointerUp}
+  onpointercancel={handleSurfacePointerCancel}
+  onclickcapture={handleSurfaceClickCapture}
   ondblclick={handleSurfaceDoubleClick}
   onpaste={handlePaste}
 >
@@ -1040,18 +1540,15 @@
     </div>
   {:else if viewportReady}
     <div class="canvas-toolbar" aria-label="画布工具">
+      <button class:tool-active={activeTool === 'select' && !interactionLocked} onclick={() => setTool('select')} title="选择工具 (S)" aria-label="选择工具">选择</button>
+      <button class:tool-active={activeTool === 'pan' || interactionLocked} onclick={() => setTool('pan')} disabled={interactionLocked} title="平移工具 (P)，按住 Space 可临时平移" aria-label="平移工具">平移</button>
+      <button class:tool-active={activeTool === 'lasso' && !interactionLocked} onclick={() => setTool('lasso')} disabled={interactionLocked} title="自由套索工具 (L)" aria-label="自由套索工具">套索</button>
+      <button class:tool-active={interactionLocked} aria-pressed={interactionLocked} onclick={toggleInteractionLock} title="临时锁定或解锁当前画布交互">{interactionLocked ? '解锁' : '锁定'}</button>
+      <span class="toolbar-separator"></span>
       <button onclick={() => addNode('text')} title="新建文本卡片">＋ 文本</button>
       <button onclick={chooseFileNode} title="添加当前 Vault 中的文件或图片">＋ 文件</button>
       <button onclick={addLinkNode} title="新建链接卡片">＋ 链接</button>
       <button onclick={addGroupNode} title="新建分组">＋ 分组</button>
-      {#if touchLayout}
-        <button
-          class:tool-active={touchSelectionMode}
-          aria-pressed={touchSelectionMode}
-          onclick={() => { touchSelectionMode = !touchSelectionMode }}
-          title="切换平移或框选"
-        >{touchSelectionMode ? '框选' : '平移'}</button>
-      {/if}
       <button onclick={() => void copySelection()} disabled={selectedNodeIds.size === 0} title="复制选中内容">复制</button>
       <button onclick={() => void cutSelection()} disabled={selectedNodeIds.size === 0} title="剪切选中内容">剪切</button>
       <button onclick={() => void pasteFromClipboard()} title="粘贴">粘贴</button>
@@ -1062,6 +1559,18 @@
       {#if selectedNodeIds.size > 0}
         <button onclick={() => changeLayer('front')} title="移至最上层">置顶</button>
         <button onclick={() => changeLayer('back')} title="移至最下层">置底</button>
+      {/if}
+      {#if selectionRoots.length > 1}
+        <span class="toolbar-separator"></span>
+        <button onclick={() => arrangeSelection('left')} title="左对齐" aria-label="左对齐">⇤</button>
+        <button onclick={() => arrangeSelection('center-h')} title="水平居中对齐" aria-label="水平居中对齐">↔</button>
+        <button onclick={() => arrangeSelection('right')} title="右对齐" aria-label="右对齐">⇥</button>
+        <button onclick={() => arrangeSelection('top')} title="顶部对齐" aria-label="顶部对齐">⤒</button>
+        <button onclick={() => arrangeSelection('center-v')} title="垂直居中对齐" aria-label="垂直居中对齐">↕</button>
+        <button onclick={() => arrangeSelection('bottom')} title="底部对齐" aria-label="底部对齐">⤓</button>
+        <button onclick={() => distributeSelection('horizontal')} disabled={selectionRoots.length < 3} title="水平等距分布" aria-label="水平等距分布">H⋯</button>
+        <button onclick={() => distributeSelection('vertical')} disabled={selectionRoots.length < 3} title="垂直等距分布" aria-label="垂直等距分布">V⋮</button>
+        <button onclick={spreadSelection} title="散开重叠节点">散开</button>
       {/if}
       {#if selectedEdge}
         <span class="toolbar-separator"></span>
@@ -1160,8 +1669,11 @@
       elevateNodesOnSelect={false}
       connectionMode={ConnectionMode.Loose}
       selectionMode={SelectionMode.Partial}
-      selectionOnDrag={!touchLayout || touchSelectionMode}
-      panOnDrag={touchLayout ? !touchSelectionMode : [1, 2]}
+      selectionOnDrag={effectiveTool === 'select'}
+      panOnDrag={effectiveTool === 'pan' ? true : effectiveTool === 'select' ? [1, 2] : false}
+      nodesDraggable={effectiveTool === 'select' && !interactionLocked && !multiResize}
+      nodesConnectable={effectiveTool === 'select' && !interactionLocked}
+      elementsSelectable={effectiveTool === 'select' && !interactionLocked}
       panOnScroll={true}
       zoomOnScroll={false}
       zoomOnPinch={true}
@@ -1177,7 +1689,7 @@
       onnodedragstop={handleNodeDragStop}
       onselectionchange={handleSelection}
       ondelete={handleDelete}
-      onpaneclick={() => finalizeTextSession()}
+      onpaneclick={handlePaneClick}
       onmoveend={handleMoveEnd}
     >
       <Background
@@ -1192,6 +1704,18 @@
         fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
       />
     </SvelteFlow>
+
+    <CanvasInteractionOverlay guides={snapGuides} {lassoPoints} {viewport} />
+    {#if multiSelectionBounds && effectiveTool === 'select' && !interactionLocked && !activeTextId}
+      <CanvasSelectionResizer
+        bounds={multiSelectionBounds}
+        {viewport}
+        onStart={startMultiResize}
+        onMove={previewMultiResize}
+        onEnd={finishMultiResize}
+        onCancel={() => cancelMultiResize()}
+      />
+    {/if}
 
     {#if diagnostics.length > 0}
       <div class="diagnostic-badge" title={diagnostics.map((item) => item.message).join('\n')}>
@@ -1213,6 +1737,12 @@
     outline: none;
   }
   .canvas-surface :global(.svelte-flow) { background: transparent; }
+  .canvas-surface.tool-pan :global(.svelte-flow__pane) { cursor: grab; }
+  .canvas-surface.tool-pan :global(.svelte-flow__pane:active) { cursor: grabbing; }
+  .canvas-surface.tool-lasso :global(.svelte-flow__pane),
+  .canvas-surface.placing :global(.svelte-flow__pane) { cursor: crosshair; }
+  .canvas-surface.tool-pan :global(.svelte-flow__resize-control),
+  .canvas-surface.tool-lasso :global(.svelte-flow__resize-control) { display: none; }
   .canvas-surface :global(.svelte-flow__node) {
     border: 0;
     background: transparent;

@@ -125,6 +125,37 @@ describe('Canvas domain model', () => {
     expect(encodeJsonCanvas(document)).not.toContain('a2')
   })
 
+  it('copies selected group closures, explicit peers and only their internal edges', () => {
+    const document = documentFrom({
+      nodes: [
+        { id: 'group', type: 'group', x: 0, y: 0, width: 200, height: 200 },
+        textNode('inside', 20, 20),
+        { id: 'nested-group', type: 'group', x: 60, y: 60, width: 100, height: 100 },
+        textNode('nested', 80, 80),
+        textNode('partial', 190, 190),
+        textNode('explicit', 300, 0),
+        textNode('outside', 400, 0),
+        { id: 'opaque-inside', type: 'future-node', x: 100, y: 100, width: 20, height: 20 },
+      ],
+      edges: [
+        { id: 'group-inside', fromNode: 'group', toNode: 'inside' },
+        { id: 'inside-nested', fromNode: 'inside', toNode: 'nested' },
+        { id: 'nested-explicit', fromNode: 'nested', toNode: 'explicit' },
+        { id: 'inside-outside', fromNode: 'inside', toNode: 'outside' },
+        { id: 'inside-opaque', fromNode: 'inside', toNode: 'opaque-inside' },
+      ],
+    })
+
+    const payload = copyCanvasSelection(document, new Set(['group', 'explicit']))
+
+    expect(payload.nodes.map((node) => isKnownCanvasNode(node) ? node.id : 'opaque')).toEqual([
+      'group', 'inside', 'nested-group', 'nested', 'explicit',
+    ])
+    expect(payload.edges.map((edge) => isCanvasEdge(edge) ? edge.id : 'opaque')).toEqual([
+      'group-inside', 'inside-nested', 'nested-explicit',
+    ])
+  })
+
   it('deletes incident edges in the same structural result', () => {
     const document = documentFrom({
       nodes: [textNode('a', 0, 0), textNode('b', 50, 0)],

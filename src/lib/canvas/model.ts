@@ -282,8 +282,7 @@ function edgeEndpoints(entry: CanvasEdgeEntry): { fromNode: string; toNode: stri
 }
 
 export function copyCanvasSelection(document: CanvasDocument, nodeIds: ReadonlySet<string>): CanvasClipboardPayload {
-  const editable = editableNodeIndexes(document)
-  const selected = new Set(Array.from(nodeIds).filter((id) => editable.has(id)))
+  const selected = new Set(freezeCanvasMove(document, nodeIds).nodeIds)
   return {
     version: 1,
     nodes: document.nodes.filter((node) => isKnownCanvasNode(node) && selected.has(node.id)).map(cloneCanvasNode),

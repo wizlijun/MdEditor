@@ -4,11 +4,12 @@ import { flushSync, mount, tick, unmount } from 'svelte'
 import CanvasView from './CanvasView.svelte'
 import type { Tab } from '../../lib/tabs.svelte'
 import { clearCanvasUiSessions } from '../../lib/canvas/session'
+import type { CanvasViewportState } from './canvas-view-state'
 
 const h = vi.hoisted(() => ({
   setContent: vi.fn(),
   openFile: vi.fn(async () => {}),
-  storeGet: vi.fn(async () => null),
+  storeGet: vi.fn(async (): Promise<CanvasViewportState | null> => null),
   storeSet: vi.fn(async () => {}),
   storeSave: vi.fn(async () => {}),
   invoke: vi.fn(),
@@ -380,6 +381,147 @@ describe('CanvasView', () => {
     await vi.waitFor(() => expect(viewport.style.transform).not.toBe(before))
     zoomOut.click()
     fitView.click()
+  })
+
+  it('exposes select/pan/lasso tools, Space pan and a view-only interaction lock', async () => {
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('button[aria-label="自由套索工具"]')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true }))
+    await tick()
+    expect(surface.classList.contains('tool-lasso')).toBe(true)
+    expect((document.querySelector('button[aria-label="自由套索工具"]') as HTMLButtonElement).classList.contains('tool-active')).toBe(true)
+
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+    await tick()
+    expect(surface.classList.contains('tool-pan')).toBe(true)
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }))
+    await tick()
+    expect(surface.classList.contains('tool-lasso')).toBe(true)
+
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true }))
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true }))
+    await tick()
+    expect(document.querySelector('.selection-resizer')).toBeTruthy()
+
+    ;(document.querySelector('button[title="临时锁定或解锁当前画布交互"]') as HTMLButtonElement).click()
+    await tick()
+    expect(surface.classList.contains('tool-pan')).toBe(true)
+    expect(document.querySelector('.selection-resizer')).toBeFalsy()
+    expect(document.body.textContent).toContain('解锁')
+    expect(h.setContent).not.toHaveBeenCalled()
+  })
+
+  it('aligns and distributes a multi-selection as one undoable document command', async () => {
+    const arranged = tab()
+    arranged.currentContent = arranged.initialContent = JSON.stringify({
+      nodes: [
+        { id: 'a', type: 'text', text: 'a', x: 0, y: 0, width: 200, height: 120 },
+        { id: 'b', type: 'text', text: 'b', x: 260, y: 40, width: 160, height: 100 },
+        { id: 'c', type: 'text', text: 'c', x: 540, y: 80, width: 200, height: 120 },
+      ],
+      edges: [],
+    })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: arranged },
+    })
+    await vi.waitFor(() => expect(document.querySelectorAll('.svelte-flow__node')).toHaveLength(3))
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true }))
+    await tick()
+
+    expect(document.querySelector('.selection-resizer')).toBeTruthy()
+    ;(document.querySelector('button[aria-label="左对齐"]') as HTMLButtonElement).click()
+    await tick()
+    let nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.map((node) => node.x)).toEqual([0, 0, 0])
+    expect((document.querySelector('button[aria-label^="撤销"]') as HTMLButtonElement).title).toContain('对齐选中节点')
+
+    ;(document.querySelector('button[aria-label^="撤销"]') as HTMLButtonElement).click()
+    await tick()
+    nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.map((node) => node.x)).toEqual([0, 260, 540])
+
+    ;(document.querySelector('button[aria-label="水平等距分布"]') as HTMLButtonElement).click()
+    await tick()
+    nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.find((node) => node.id === 'b')?.x).toBe(290)
+  })
+
+  it('draws a freeform lasso and selects only intersecting nodes', async () => {
+    h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__pane')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    const pane = document.querySelector('.svelte-flow__pane') as HTMLElement
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true }))
+    await tick()
+
+    pane.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerId: 7, pointerType: 'mouse', button: 0, isPrimary: true, clientX: 5, clientY: 5,
+    }))
+    for (const [clientX, clientY] of [[280, 5], [280, 180], [5, 180]] as const) {
+      surface.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 7, pointerType: 'mouse', isPrimary: true, clientX, clientY,
+      }))
+    }
+    await tick()
+    expect(document.querySelector('.lasso-polygon')).toBeTruthy()
+    surface.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, pointerId: 7, pointerType: 'mouse', button: 0, isPrimary: true, clientX: 5, clientY: 5,
+    }))
+    await tick()
+
+    expect(document.querySelector('[data-id="text-1"]')?.classList.contains('selected')).toBe(true)
+    expect(document.querySelector('[data-id="link-1"]')?.classList.contains('selected')).toBe(false)
+    expect(document.querySelector('.lasso-polygon')).toBeFalsy()
+    expect(h.setContent).not.toHaveBeenCalled()
+  })
+
+  it('places shortcut-created nodes and pasted text at the last pointer position', async () => {
+    h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__pane')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    const pane = document.querySelector('.svelte-flow__pane') as HTMLElement
+    surface.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerId: 3, pointerType: 'mouse', isPrimary: true, clientX: 700, clientY: 500,
+    }))
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }))
+    pane.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 700, clientY: 500 }))
+    await tick()
+
+    let nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.at(-1)).toMatchObject({ type: 'text', x: 560, y: 410 })
+
+    const addText = document.querySelector('button[title="新建文本卡片"]') as HTMLButtonElement
+    addText.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerId: 4, pointerType: 'mouse', button: 0, isPrimary: true, clientX: 20, clientY: 20,
+    }))
+    addText.click()
+    await tick()
+    nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.at(-1)).toMatchObject({ type: 'text', x: 560, y: 410 })
+
+    const pasteEvent = new ClipboardEvent('paste', { bubbles: true })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: { getData: () => 'pointer paste' },
+    })
+    surface.dispatchEvent(pasteEvent)
+    await tick()
+    nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.at(-1)).toMatchObject({ type: 'text', text: 'pointer paste', x: 560, y: 410 })
   })
 
   it('fails closed for malformed JSON and never rewrites the tab', async () => {
