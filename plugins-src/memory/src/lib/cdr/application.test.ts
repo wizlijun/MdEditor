@@ -253,6 +253,7 @@ describe('CdrApplicationService', () => {
     const proposal = await agent.propose(batch('policy-proposal'))
     await human.decideProposal(proposal.changeSetId, 'reject')
     await human.assess('block-1', 'needs-review')
+    await human.assessRevision('block-1', 'block-1/1', 'verified')
 
     const decideRequest = requests.find((request) => request.action === 'decide')
     expect(decideRequest).toMatchObject({
@@ -265,12 +266,48 @@ describe('CdrApplicationService', () => {
         batch: batch('policy-proposal'),
       },
     })
-    const assessRequest = requests.find((request) => request.action === 'assess')
-    expect(assessRequest).toMatchObject({
+    const assessRequests = requests.filter((request) => request.action === 'assess')
+    expect(assessRequests[0]).toMatchObject({
       action: 'assess',
       target: { blockId: 'block-1', blockRevision: 'block-1/1' },
       conclusion: 'needs-review',
     })
+    expect(assessRequests[1]).toMatchObject({
+      action: 'assess',
+      target: { blockId: 'block-1', blockRevision: 'block-1/1' },
+      conclusion: 'verified',
+    })
+  })
+
+  it('records an exact assessment after the inspected block is deleted', async () => {
+    const session = new InMemoryDocumentSession({
+      ...fixture(),
+      blocks: [...fixture().blocks, { blockId: 'block-2', blockRevision: 'block-2/1', markdown: 'Keep.' }],
+    }, sequentialIds('deleted-assessment'))
+    const human = new CdrApplicationService(
+      'document-1', MEMORY_SELF_PROFILE_DESCRIPTOR, session,
+      fixedActorSource({ kind: 'human', id: 'local' }), allow, memorySelfProfile,
+    )
+    await human.submit({
+      requestId: 'delete-inspected',
+      documentId: 'document-1',
+      baseRevisionId: 'revision-1',
+      operations: [{
+        kind: 'block.delete',
+        operationId: 'delete-inspected/op',
+        target: { blockId: 'block-1', expectedBlockRevision: 'block-1/1' },
+        payload: {},
+      }],
+    })
+
+    const assessment = await human.assessRevision(
+      'block-1', 'block-1/1', 'needs-review', '块已删除，但保留对实际检查版本的判断。',
+    )
+    expect(assessment).toMatchObject({
+      blockId: 'block-1', blockRevision: 'block-1/1', conclusion: 'needs-review',
+      rationale: '块已删除，但保留对实际检查版本的判断。',
+    })
+    expect(session.assessmentIsOutdated(assessment)).toBe(true)
   })
 
   it('re-authorizes and re-evaluates policy when the governed head changes in the session queue', async () => {
@@ -296,6 +333,7 @@ describe('CdrApplicationService', () => {
       propose: vi.fn(),
       decideProposal: vi.fn(),
       assess: vi.fn(),
+      assessRevision: vi.fn(),
     }
     const authorizedRevisions: string[] = []
     const authorize = vi.fn(async () => 'apply' as const)

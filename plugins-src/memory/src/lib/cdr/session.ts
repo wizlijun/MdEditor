@@ -52,6 +52,7 @@ export interface Proposal {
   actorId: string
   status: 'pending' | 'applied' | 'conflicted' | 'rejected'
   batch: OperationBatch
+  rationale?: string
   conflict?: Conflict
 }
 
@@ -61,6 +62,7 @@ export interface Assessment {
   blockId: string
   blockRevision: string
   conclusion: 'verified' | 'needs-review'
+  rationale?: string
 }
 
 export interface AuditEvent {
@@ -81,7 +83,8 @@ export interface IdProvider {
 
 const LEGACY_V2_DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v2' as const
 const LEGACY_V3_DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v3' as const
-export const DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v4' as const
+const LEGACY_V4_DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v4' as const
+export const DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v5' as const
 
 export type StoredSubmitOutcome =
   | { kind: 'applied'; change: AppliedChange }
@@ -139,6 +142,13 @@ function exactKeys(value: UnknownRecord, path: string, required: readonly string
 function stringValue(value: unknown, path: string, allowEmpty = false): string {
   if (typeof value !== 'string' || (!allowEmpty && value.length === 0)) invalid(path, 'must be a non-empty string')
   return value
+}
+
+function rationaleValue(value: unknown, path: string): string | undefined {
+  if (value === undefined) return undefined
+  const rationale = stringValue(value, path)
+  if (rationale.length > 2000) invalid(path, 'must not exceed 2000 characters')
+  return rationale
 }
 
 function arrayValue(value: unknown, path: string): unknown[] {
@@ -364,32 +374,45 @@ function parseReceipt(
   }
 }
 
-function parseProposal(value: unknown, path: string, legacyProtocol = false, documentId?: string): Proposal {
+function parseProposal(
+  value: unknown,
+  path: string,
+  legacyProtocol = false,
+  documentId?: string,
+  allowRationale = true,
+): Proposal {
   const item = record(value, path)
-  exactKeys(item, path, ['changeSetId', 'actorId', 'status', 'batch'], ['conflict'])
+  exactKeys(item, path, ['changeSetId', 'actorId', 'status', 'batch'], [
+    'conflict',
+    ...(allowRationale ? ['rationale'] : []),
+  ])
   const status = enumValue(item.status, `${path}.status`, ['pending', 'applied', 'conflicted', 'rejected'])
   const conflict = item.conflict === undefined ? undefined : parseConflict(item.conflict, `${path}.conflict`)
   if ((status === 'conflicted') !== (conflict !== undefined)) invalid(`${path}.conflict`, 'must exist only for a conflicted proposal')
   const batch = parseBatch(item.batch, `${path}.batch`, legacyProtocol, documentId)
   if (batch.operations.length !== 1) invalid(`${path}.batch.operations`, 'must contain exactly one operation')
+  const rationale = rationaleValue(item.rationale, `${path}.rationale`)
   return {
     changeSetId: stringValue(item.changeSetId, `${path}.changeSetId`),
     actorId: stringValue(item.actorId, `${path}.actorId`),
     status,
     batch,
+    ...(rationale ? { rationale } : {}),
     ...(conflict ? { conflict } : {}),
   }
 }
 
-function parseAssessment(value: unknown, path: string): Assessment {
+function parseAssessment(value: unknown, path: string, allowRationale = true): Assessment {
   const item = record(value, path)
-  exactKeys(item, path, ['assessmentId', 'actorId', 'blockId', 'blockRevision', 'conclusion'])
+  exactKeys(item, path, ['assessmentId', 'actorId', 'blockId', 'blockRevision', 'conclusion'], allowRationale ? ['rationale'] : [])
+  const rationale = rationaleValue(item.rationale, `${path}.rationale`)
   return {
     assessmentId: stringValue(item.assessmentId, `${path}.assessmentId`),
     actorId: stringValue(item.actorId, `${path}.actorId`),
     blockId: stringValue(item.blockId, `${path}.blockId`),
     blockRevision: stringValue(item.blockRevision, `${path}.blockRevision`),
     conclusion: enumValue(item.conclusion, `${path}.conclusion`, ['verified', 'needs-review']),
+    ...(rationale ? { rationale } : {}),
   }
 }
 
@@ -412,16 +435,19 @@ export function parseDocumentSessionState(value: unknown): DocumentSessionState 
   exactKeys(item, 'state', ['schema', 'head', 'revisionHistory', 'receipts', 'proposals', 'assessments', 'audit'])
   const legacyActor = item.schema === LEGACY_V2_DOCUMENT_SESSION_STATE_SCHEMA
   const legacyOperations = legacyActor || item.schema === LEGACY_V3_DOCUMENT_SESSION_STATE_SCHEMA
-  if (!legacyOperations && item.schema !== DOCUMENT_SESSION_STATE_SCHEMA) {
+  const legacyRationale = legacyOperations || item.schema === LEGACY_V4_DOCUMENT_SESSION_STATE_SCHEMA
+  if (!legacyRationale && item.schema !== DOCUMENT_SESSION_STATE_SCHEMA) {
     invalid('state.schema', `must be ${DOCUMENT_SESSION_STATE_SCHEMA}`)
   }
   const head = parseRevision(item.head, 'state.head')
   const revisionHistory = arrayValue(item.revisionHistory, 'state.revisionHistory')
     .map((revision, index) => parseRevision(revision, `state.revisionHistory[${index}]`))
   const proposals = arrayValue(item.proposals, 'state.proposals').map((proposal, index) => (
-    parseProposal(proposal, `state.proposals[${index}]`, legacyOperations, head.documentId)
+    parseProposal(proposal, `state.proposals[${index}]`, legacyOperations, head.documentId, !legacyRationale)
   ))
-  const assessments = arrayValue(item.assessments, 'state.assessments').map((assessment, index) => parseAssessment(assessment, `state.assessments[${index}]`))
+  const assessments = arrayValue(item.assessments, 'state.assessments').map((assessment, index) => (
+    parseAssessment(assessment, `state.assessments[${index}]`, !legacyRationale)
+  ))
   const audit = arrayValue(item.audit, 'state.audit').map((event, index) => parseAudit(event, `state.audit[${index}]`))
   const receipts = arrayValue(item.receipts, 'state.receipts').map((receipt, index): StoredSubmitReceipt => {
     const parsed = parseReceipt(receipt, `state.receipts[${index}]`, {
@@ -724,17 +750,20 @@ export class InMemoryDocumentSession {
     return { kind: 'applied', change: cloneChange(change), snapshot: this.snapshot(), duplicate: false }
   }
 
-  async propose(batch: OperationBatch, actorId: string, governedRevisionId?: string): Promise<Proposal> {
-    return this.#enqueue(() => this.#propose(batch, actorId, governedRevisionId))
+  async propose(batch: OperationBatch, actorId: string, governedRevisionId?: string, rationale?: string): Promise<Proposal> {
+    return this.#enqueue(() => this.#propose(batch, actorId, governedRevisionId, rationale))
   }
 
-  #propose(batch: OperationBatch, actorId: string, governedRevisionId?: string): Proposal {
+  #propose(batch: OperationBatch, actorId: string, governedRevisionId?: string, rationale?: string): Proposal {
     const normalizedBatch = parseBatch(batch, 'batch')
     stringValue(actorId, 'actorId')
+    const normalizedRationale = rationaleValue(rationale, 'rationale')
     if (normalizedBatch.operations.length !== 1) throw new Error('CDR_PROPOSAL_OPERATION_COUNT')
     const existing = this.#proposals.find((proposal) => proposal.batch.requestId === normalizedBatch.requestId)
     if (existing) {
-      if (existing.actorId !== actorId || signature(existing.batch) !== signature(normalizedBatch)) {
+      if (existing.actorId !== actorId
+        || existing.rationale !== normalizedRationale
+        || signature(existing.batch) !== signature(normalizedBatch)) {
         throw new Error('CDR_IDEMPOTENCY_KEY_REUSED')
       }
       return {
@@ -757,6 +786,7 @@ export class InMemoryDocumentSession {
       actorId,
       status: 'pending',
       batch: cloneBatch(normalizedBatch),
+      ...(normalizedRationale ? { rationale: normalizedRationale } : {}),
     }
     this.#proposals = [...this.#proposals, proposal]
     this.#audit.push({ eventId: this.ids.eventId(), actorId, action: 'proposed', targetId: proposal.changeSetId })
@@ -808,8 +838,27 @@ export class InMemoryDocumentSession {
     actorId: string,
     conclusion: Assessment['conclusion'],
     governedRevisionId?: string,
+    rationale?: string,
   ): Promise<Assessment> {
-    return this.#enqueue(() => this.#assess(blockId, actorId, conclusion, governedRevisionId))
+    return this.#enqueue(() => this.#assess(blockId, actorId, conclusion, governedRevisionId, rationale))
+  }
+
+  async assessRevision(
+    blockId: string,
+    blockRevision: string,
+    actorId: string,
+    conclusion: Assessment['conclusion'],
+    governedRevisionId?: string,
+    rationale?: string,
+  ): Promise<Assessment> {
+    return this.#enqueue(() => this.#assessRevision(
+      blockId,
+      blockRevision,
+      actorId,
+      conclusion,
+      governedRevisionId,
+      rationale,
+    ))
   }
 
   #assess(
@@ -817,6 +866,7 @@ export class InMemoryDocumentSession {
     actorId: string,
     conclusion: Assessment['conclusion'],
     governedRevisionId?: string,
+    rationale?: string,
   ): Assessment {
     stringValue(blockId, 'blockId')
     stringValue(actorId, 'actorId')
@@ -824,12 +874,34 @@ export class InMemoryDocumentSession {
     this.#assertGovernedRevision(governedRevisionId)
     const block = this.#head.blocks.find((item) => item.blockId === blockId)
     if (!block) throw new Error('CDR_BLOCK_NOT_FOUND')
+    return this.#assessRevision(blockId, block.blockRevision, actorId, conclusion, governedRevisionId, rationale)
+  }
+
+  #assessRevision(
+    blockId: string,
+    blockRevision: string,
+    actorId: string,
+    conclusion: Assessment['conclusion'],
+    governedRevisionId?: string,
+    rationale?: string,
+  ): Assessment {
+    stringValue(blockId, 'blockId')
+    stringValue(blockRevision, 'blockRevision')
+    stringValue(actorId, 'actorId')
+    enumValue(conclusion, 'conclusion', ['verified', 'needs-review'])
+    const normalizedRationale = rationaleValue(rationale, 'rationale')
+    this.#assertGovernedRevision(governedRevisionId)
+    const knownTarget = [...this.#revisionHistory, this.#head].some((revision) => revision.blocks.some(
+      (block) => block.blockId === blockId && block.blockRevision === blockRevision,
+    ))
+    if (!knownTarget) throw new Error('CDR_ASSESSMENT_TARGET_NOT_FOUND')
     const assessment: Assessment = {
       assessmentId: this.ids.assessmentId(),
       actorId,
       blockId,
-      blockRevision: block.blockRevision,
+      blockRevision,
       conclusion,
+      ...(normalizedRationale ? { rationale: normalizedRationale } : {}),
     }
     this.#assessments = [...this.#assessments, assessment]
     this.#audit.push({ eventId: this.ids.eventId(), actorId, action: 'assessed', targetId: assessment.assessmentId })

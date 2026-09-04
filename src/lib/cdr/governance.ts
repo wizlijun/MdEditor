@@ -106,6 +106,11 @@ export function actorKey(actor: ActorRef): string {
   if (actor.kind !== 'human' && actor.kind !== 'agent' && actor.kind !== 'service') {
     throw new Error('CDR_ACTOR_INVALID')
   }
-  if (!actor.id || !/^[a-z0-9][a-z0-9._:/-]*$/i.test(actor.id)) throw new Error('CDR_ACTOR_INVALID')
+  if (!actor.id
+    || actor.id.length > 256
+    || actor.id !== actor.id.trim()
+    || /[\u0000-\u001f\u007f\s]/u.test(actor.id)) {
+    throw new Error('CDR_ACTOR_INVALID')
+  }
   return `${actor.kind}:${actor.id}`
 }

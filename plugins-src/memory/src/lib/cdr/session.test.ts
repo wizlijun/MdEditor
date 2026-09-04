@@ -341,16 +341,37 @@ describe('InMemoryDocumentSession', () => {
     expect(session.assessmentIsOutdated(assessment)).toBe(true)
   })
 
+  it('records the revision an asynchronous verifier actually inspected', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('test'))
+    await session.submit(replace('update', 'block-b', 'block-b/1', 'Changed constraint.'), 'human')
+
+    const assessment = await session.assessRevision(
+      'block-b', 'block-b/1', 'agent:verifier', 'verified', undefined, '输入材料支持原措辞。',
+    )
+
+    expect(assessment).toMatchObject({
+      blockId: 'block-b', blockRevision: 'block-b/1', rationale: '输入材料支持原措辞。',
+    })
+    expect(session.assessmentIsOutdated(assessment)).toBe(true)
+    await expect(session.assessRevision('block-b', 'missing', 'agent:verifier', 'verified'))
+      .rejects.toThrow('CDR_ASSESSMENT_TARGET_NOT_FOUND')
+  })
+
   it('exports one strict aggregate and restores compact receipts without snapshots', async () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('first'))
     const batch = replace('durable-request', 'block-a', 'block-a/1', '# Durable')
     await session.submit(batch, 'human')
-    await session.propose(replace('proposal-request', 'block-b', 'block-b/1', 'Suggested.'), 'agent')
-    await session.assess('block-b', 'verifier', 'verified')
+    await session.propose(
+      replace('proposal-request', 'block-b', 'block-b/1', 'Suggested.'),
+      'agent', undefined, '更容易阅读。',
+    )
+    await session.assess('block-b', 'verifier', 'verified', undefined, '检查依据。')
 
     const state = session.exportState()
     expect(state.schema).toBe(DOCUMENT_SESSION_STATE_SCHEMA)
     expect(state.revisionHistory).toEqual([fixture()])
+    expect(state.proposals[0].rationale).toBe('更容易阅读。')
+    expect(state.assessments[0].rationale).toBe('检查依据。')
     expect(state.receipts).toHaveLength(1)
     expect(JSON.stringify(state.receipts)).not.toContain('snapshot')
 
@@ -362,6 +383,15 @@ describe('InMemoryDocumentSession', () => {
     expect(restored.audit()).toEqual(session.audit())
     await expect(restored.submit(batch, 'human')).resolves.toMatchObject({ kind: 'applied', duplicate: true })
     expect(restored.audit()).toHaveLength(session.audit().length)
+  })
+
+  it('migrates a v4 aggregate without rationale fields', () => {
+    const current = new InMemoryDocumentSession(fixture(), sequentialIds('v4')).exportState()
+    const restored = InMemoryDocumentSession.fromState(
+      { ...structuredClone(current), schema: 'notemd.cdr/document-session/v4' },
+      sequentialIds('restored-v4'),
+    )
+    expect(restored.exportState().schema).toBe(DOCUMENT_SESSION_STATE_SCHEMA)
   })
 
   it('migrates a v2 receipt actor from its durable audit event', async () => {

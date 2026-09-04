@@ -35,7 +35,7 @@ export interface DocumentSessionPort {
   snapshot(): DocumentRevision
   proposal(changeSetId: string): Proposal | undefined
   submit(batch: OperationBatch, actorId: string, governedRevisionId: string): Promise<SubmitResult>
-  propose(batch: OperationBatch, actorId: string, governedRevisionId: string): Promise<Proposal>
+  propose(batch: OperationBatch, actorId: string, governedRevisionId: string, rationale?: string): Promise<Proposal>
   decideProposal(
     changeSetId: string,
     decision: 'accept' | 'reject',
@@ -47,6 +47,15 @@ export interface DocumentSessionPort {
     actorId: string,
     conclusion: Assessment['conclusion'],
     governedRevisionId: string,
+    rationale?: string,
+  ): Promise<Assessment>
+  assessRevision(
+    blockId: string,
+    blockRevision: string,
+    actorId: string,
+    conclusion: Assessment['conclusion'],
+    governedRevisionId: string,
+    rationale?: string,
   ): Promise<Assessment>
 }
 
@@ -114,10 +123,24 @@ export class CdrApplicationService {
     throw new Error('CDR_GOVERNANCE_RETRY_EXHAUSTED')
   }
 
-  async propose(batch: OperationBatch): Promise<Proposal> {
-    const result = await this.submit(batch, 'propose')
-    if (result.kind !== 'proposed') throw new Error('CDR_POLICY_PROPOSE_INVARIANT')
-    return result.proposal
+  async propose(batch: OperationBatch, rationale?: string): Promise<Proposal> {
+    const governedBatch = immutableBatch(batch)
+    if (governedBatch.documentId !== this.documentId) throw new Error('CDR_BATCH_DOCUMENT_MISMATCH')
+    for (let attempt = 0; attempt < MAX_GOVERNANCE_RETRIES; attempt += 1) {
+      const governed = await this.governChange(governedBatch, 'propose')
+      if (governed.decision !== 'propose') throw new Error('CDR_POLICY_PROPOSE_INVARIANT')
+      try {
+        return await this.session.propose(
+          governedBatch,
+          actorKey(governed.actor),
+          governed.snapshot.revisionId,
+          rationale,
+        )
+      } catch (error) {
+        if (!(error instanceof GovernedRevisionChangedError)) throw error
+      }
+    }
+    throw new Error('CDR_GOVERNANCE_RETRY_EXHAUSTED')
   }
 
   async decideProposal(changeSetId: string, decision: 'accept' | 'reject'): Promise<SubmitResult | null> {
@@ -138,17 +161,45 @@ export class CdrApplicationService {
     throw new Error('CDR_GOVERNANCE_RETRY_EXHAUSTED')
   }
 
-  async assess(blockId: string, conclusion: Assessment['conclusion']): Promise<Assessment> {
+  async assess(blockId: string, conclusion: Assessment['conclusion'], rationale?: string): Promise<Assessment> {
+    return this.assessTarget(blockId, conclusion, undefined, rationale)
+  }
+
+  async assessRevision(
+    blockId: string,
+    blockRevision: string,
+    conclusion: Assessment['conclusion'],
+    rationale?: string,
+  ): Promise<Assessment> {
+    return this.assessTarget(blockId, conclusion, blockRevision, rationale)
+  }
+
+  private async assessTarget(
+    blockId: string,
+    conclusion: Assessment['conclusion'],
+    expectedBlockRevision?: string,
+    rationale?: string,
+  ): Promise<Assessment> {
     for (let attempt = 0; attempt < MAX_GOVERNANCE_RETRIES; attempt += 1) {
-      const governed = await this.governAssessment(blockId, conclusion)
+      const governed = await this.governAssessment(blockId, conclusion, expectedBlockRevision)
       if (governed.decision !== 'apply') throw new CdrAuthorizationError('assess')
       try {
-        return await this.session.assess(
-          blockId,
-          actorKey(governed.actor),
-          conclusion,
-          governed.snapshot.revisionId,
-        )
+        return expectedBlockRevision === undefined
+          ? await this.session.assess(
+              blockId,
+              actorKey(governed.actor),
+              conclusion,
+              governed.snapshot.revisionId,
+              rationale,
+            )
+          : await this.session.assessRevision(
+              blockId,
+              expectedBlockRevision,
+              actorKey(governed.actor),
+              conclusion,
+              governed.snapshot.revisionId,
+              rationale,
+            )
       } catch (error) {
         if (!(error instanceof GovernedRevisionChangedError)) throw error
       }
@@ -223,18 +274,19 @@ export class CdrApplicationService {
   private async governAssessment(
     blockId: string,
     conclusion: Assessment['conclusion'],
+    expectedBlockRevision?: string,
   ): Promise<{ actor: ActorRef; decision: GovernanceDecision; snapshot: DocumentRevision }> {
     const policy = this.policy('assess')
     const { actor, authorization } = await this.authorize('assess')
     const snapshot = this.snapshot()
-    const block = snapshot.blocks.find((item) => item.blockId === blockId)
-    if (!block) throw new Error('CDR_BLOCK_NOT_FOUND')
+    const blockRevision = expectedBlockRevision ?? snapshot.blocks.find((item) => item.blockId === blockId)?.blockRevision
+    if (!blockRevision) throw new Error('CDR_BLOCK_NOT_FOUND')
     const policyDecision = parseGovernanceDecision(policy.evaluate({
       documentId: this.documentId,
       actor,
       action: 'assess',
       snapshot,
-      target: { blockId, blockRevision: block.blockRevision },
+      target: { blockId, blockRevision },
       conclusion,
     }))
     return { actor, decision: intersectDecisions(authorization, policyDecision), snapshot }

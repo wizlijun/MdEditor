@@ -1,6 +1,6 @@
 # 人与多 Agent 通用共写文档运行时设计
 
-> 阶段：设计收敛，Stage 1A 与 Stage 1B-1 已实现；`block.move`、Projection、用途迁移闭环与 MEMORY MVP 尚未完成。
+> 阶段：设计收敛，Stage 1A、Stage 1B-1 与本机共写预览的真实 Agent 入口已实现；`block.move`、Projection、用途迁移闭环与 MEMORY MVP 尚未完成。
 >
 > 决策：采用“通用内核、MEMORY-first 验证”。从第一天使用领域无关的数据结构和窄接口，但第一阶段只交付 MEMORY 的完整纵向闭环。第二个真实场景验证前，不把内部扩展点发布为稳定 SDK，也不建设通用 IAM、事件平台或任意协作后端。
 >
@@ -8,7 +8,7 @@
 >
 > 文档关系：本稿是该方向的唯一实施基线，取代 `2026-09-04-co-authored-surface-design.md` 中与正文权威、治理归属、API 和 Yjs 时机有关的设计结论；旧稿中的仓库现状证据已在本稿重新核对。若旧稿继续保留，必须明确标记为 superseded，不能并列作为规范。
 
-> 实施记录（2026-09-04）：已启动首个可运行切片：并存的 Editor Kit v2、领域无关的 Operation 会话，以及现有 `notemd.memory` 窗口内的“共写文档实验”。该切片验证单块 `block.replace`、串行本地确认、局部远程事务、ack 回声隔离、stale-base、幂等、Decoration 与 IME 排队；普通 Agent 只产生提案，直接远端更新明确标为“模拟协作者变更”fixture。块布局已扩展为“一个稳定块覆盖一组连续顶层节点”，远端替换可改变该范围的节点数并原子更新后续映射；本地插入、删除、移动、拆合及多块编辑仍 fail closed。现有 BlockYaml 的 chunk／fingerprint／merge 生产函数已加入 CDR conformance 测试：长中文小改和精确重排可保留 ID，但小于 20 个归一化字符的短块改写会 fresh＋retired，默认 `minChars=400` 也会合并相邻短章节。因此，“外部 Markdown 依赖当前 fingerprint／merge 重建已改写短块的身份”目前是明确 No-Go；携带显式 block ID 的 CDR 编辑与 Operation 寻址不受此结论影响。
+> 历史实施记录（Stage 0）：首个可运行切片使用并存的 Editor Kit v2、领域无关的 Operation 会话，以及 `notemd.memory` 窗口内的 fixture 验证单块 `block.replace`、串行本地确认、局部远程事务、ack 回声隔离、stale-base、幂等、Decoration 与 IME 排队。当时本地插入、删除、移动、拆合及多块编辑均 fail closed；其中 insert／delete 已由下文 Stage 1B-1 取代，move／拆合仍未开放。块布局已扩展为“一个稳定块覆盖一组连续顶层节点”，远端替换可改变该范围的节点数并原子更新后续映射。现有 BlockYaml 的 chunk／fingerprint／merge 生产函数已加入 CDR conformance 测试：长中文小改和精确重排可保留 ID，但小于 20 个归一化字符的短块改写会 fresh＋retired，默认 `minChars=400` 也会合并相邻短章节。因此，“外部 Markdown 依赖当前 fingerprint／merge 重建已改写短块的身份”目前是明确 No-Go；携带显式 block ID 的 CDR 编辑与 Operation 寻址不受此结论影响。
 >
 > Stage 0C 已增加一个 UI-only、按认证插件隔离的宿主 opaque aggregate store，以及插件侧的持久 `DocumentSession` facade。store 以 generation CAS 和同目录临时文件原子替换单份 aggregate；facade 以 copy-on-write 保证 commit 成功后才安装候选状态并向 Editor ack。commit 异常后必须重新 load 来区分“候选已提交、旧版仍在、另一 writer 获胜”；无法读取或验证时进入 outcome-unknown，并锁定本实例和编辑器为只读，不能假装失败后继续写。窗口重开会恢复 committed head、提案、Assessment、AuditEvent 和幂等回执；损坏 schema、写失败和 CAS 冲突均 fail closed。Spike 的 fixture document ID 暂以当前 vault 根路径的 SHA-256 隔离，避免跨 vault 串数据；vault 移动会形成新 namespace，待阶段 1 的 frontmatter document ID 取代。此实现只验证本机单 aggregate 的提交与恢复边界，并不是下文完整 `DocumentRepository`：尚未接入 `.md`／BlockIdentityStore 的同 generation 提交、document-ID frontmatter、不可变 revision/journal、Publication、Annotation、Memory v2 Claim/Profile、其余三类结构操作、外部漂移或 Yjs，因此不构成 MEMORY MVP，也不宣称通过完整 G4。
 
@@ -20,7 +20,7 @@
 >
 > Stage 1A 已将现有 `self + block.replace` 纵向链路切换到领域无关的唯一正文 Operation 协议、纯 `DocumentCore` 与窄 `CdrApplicationService`。Editor Kit 和 Session 不再各自定义正文 Operation；Core 只验证／应用当前块修改，不读写 Editor、Repository、Vault 或 MEMORY。Application Service 在第一个异步边界前解析、复制并冻结 batch，再从构造时绑定的 `ActorSource` 取得 actor，固定执行 `Authorizer ∩ ChangePolicy ∩ requested mode`；策略与 Session 因而消费同一不可变操作。单次 submit／propose／decide／assess 不再接受调用者自报 actor。Memory self Profile 验证本机人类可 apply，而模拟 Agent 请求 apply 必须降级为 pending proposal；接受 self proposal 仍由一次 aggregate CAS 同时持久化 revision、proposal 状态、receipt 与 audit。
 >
-> Stage 1A 的 `localMemoryAuthorizer` 仍是插件内的本机验证适配器，不是 Host 已认证的人类／Agent 身份证明，也不授权真实远端 Agent 直接写入；界面因此统一标注“模拟 Agent／模拟协作者”。这一阶段没有增加新的正文 Operation、Claim projection、Annotation、Publication、Presence 或 Yjs，不能称为 Stage 1 或 MEMORY MVP。
+> Stage 1A 的 `localMemoryAuthorizer` 仍是插件内的本机验证适配器，不授权 Agent 直接写入。后续发布预览已把人类 actor 改为 `host.vault.info.author`，并通过 `host.agent.run/status` 将 Agent provider 与 run ID 绑定到提案或 Assessment；Agent 仍只能形成待审阅提案，不能自报人类身份或绕过决定。这一阶段没有增加 Claim projection、Annotation、Publication、Presence 或 Yjs，不能称为 MEMORY MVP。
 
 > 本切片只统一正文 `OperationBatch`。既有 Assessment 已纳入同一 Application Service 的身份、授权、Profile 策略与 revision guard，但在持久 aggregate 中暂时仍是专用命令；待 Stage 1D 与 Annotation 一起进入统一 `ChangeSet`，避免为了尚未落地的批注模型提前扩张协议。
 
@@ -28,7 +28,11 @@
 
 > Stage 1B-1 已把唯一正文协议迁移为 `target + payload`，OperationBatch 绑定 `documentId`，并加入显式 `block.insert`／`block.delete`。insert 以左右相邻块 ID 组成精确 gap；同一 gap 被并发改变即 stale，邻块只有正文变化则可安全重放。delete 绑定目标块精确版本并禁止删除末块。candidate ID 不能复用 revision history 中已退休的身份。当前结构操作必须独立成批，`block.move`、嵌套 parent、split/merge lineage 与结构 undo 尚未开放。
 >
-> 持久会话 schema 已升至 v4。v2（无 receipt actor）与 v3（旧扁平 Operation）只在 `parseDocumentSessionState()` 中严格迁移：旧 applied、conflicted receipt 与 proposal 均从其 canonical batch JSON 恢复并重新签为新协议；未知或非 canonical 历史 fail closed。Session 要求每个相邻文档 revision 都由唯一 applied receipt 连接；live submit、proposal 与恢复数据还必须证明声明的 `baseRevisionId` 存在且 Operation 在该版本上成立，然后才检查其能否安全重放到当前 head。Managed aggregate、Profile 与 Host opaque Repository 版本不因嵌套 session schema 改变。Editor Kit 的显式 insert/delete 命令以单次 ProseMirror transaction 同时更新正文和 block layout；普通 Enter、跨块删除、拆合和移动仍 fail closed。MEMORY 共写页只增加最小选中块新增／删除入口，不宣称完整 Stage 1B 或 MEMORY MVP。
+> 持久会话 schema 已升至 v5。v2（无 receipt actor）、v3（旧扁平 Operation）与 v4（无 rationale）只在 `parseDocumentSessionState()` 中严格迁移：旧 applied、conflicted receipt 与 proposal 均从其 canonical batch JSON 恢复并重新签为新协议；未知或非 canonical 历史 fail closed。v5 为 Proposal 与 Assessment 增加最多 2000 字符的可选 rationale，使 Agent 结果的简要依据与 actor、run、目标版本一起重开可查，而不提前实现完整 evidence 图谱。Session 要求每个相邻文档 revision 都由唯一 applied receipt 连接；live submit、proposal 与恢复数据还必须证明声明的 `baseRevisionId` 存在且 Operation 在该版本上成立，然后才检查其能否安全重放到当前 head。Managed aggregate、Profile 与 Host opaque Repository 版本不因嵌套 session schema 改变。Editor Kit 的显式 insert/delete 命令以单次 ProseMirror transaction 同时更新正文和 block layout；普通 Enter、跨块删除、拆合和移动仍 fail closed。MEMORY 共写页只增加最小选中块新增／删除入口，不宣称完整 Stage 1B 或 MEMORY MVP。
+
+> 本机共写预览已用真实 Agent run 取代 UI 中的模拟 Agent／模拟协作者按钮。`governed-document-review` 是三家 provider 共用协议、各自编译内置的 input-only task；Memory 只有在明确选中的健康 provider 同时声明该 task、terminal result 和 input-only isolation 时才允许启动，旧 provider fail closed。任务定义、系统指令和隔离选择不信任 Vault 中的同名文件；运行只消费调用方冻结的单块内容和用户要求，不读 Vault、不调用工具。完整 machine result 经过严格 schema 校验后，建议仍由同一个 Application Service 保存为 pending proposal。异步检查显式携带 Agent 实际读取的 `block_revision`；运行期间出现新修订或删除目标块时，旧结论仍保存到实际检查的历史版本并显示 outdated。provider 身份冻结为启动路由，不采信结果记录的自报 harness。
+>
+> 预览版明确采用“关闭即放弃接收”而不是持久 pending-run：组件销毁后不再轮询或写入文档；provider 进程可能在自己的运行历史中继续结束，但结果不会被旧 UI 实例接收。跨关闭恢复、取消通道与 durable Agent lifecycle 等真实需求成立后再实现。该预览仍不进入根 MEMORY 投影或 Agent context，也不改变完整 MEMORY MVP 的 Stage 1C／1D／2 闸门。
 
 ## 0. 结论
 

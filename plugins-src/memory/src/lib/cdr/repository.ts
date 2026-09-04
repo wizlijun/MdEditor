@@ -320,8 +320,8 @@ export class PersistentDocumentSession {
     return this.mutate((candidate) => candidate.submit(batch, actorId, governedRevisionId), governedRevisionId)
   }
 
-  async propose(batch: OperationBatch, actorId: string, governedRevisionId?: string): Promise<Proposal> {
-    return this.mutate((candidate) => candidate.propose(batch, actorId, governedRevisionId), governedRevisionId)
+  async propose(batch: OperationBatch, actorId: string, governedRevisionId?: string, rationale?: string): Promise<Proposal> {
+    return this.mutate((candidate) => candidate.propose(batch, actorId, governedRevisionId, rationale), governedRevisionId)
   }
 
   async decideProposal(
@@ -341,9 +341,31 @@ export class PersistentDocumentSession {
     actorId: string,
     conclusion: Assessment['conclusion'],
     governedRevisionId?: string,
+    rationale?: string,
   ): Promise<Assessment> {
     return this.mutate(
-      (candidate) => candidate.assess(blockId, actorId, conclusion, governedRevisionId),
+      (candidate) => candidate.assess(blockId, actorId, conclusion, governedRevisionId, rationale),
+      governedRevisionId,
+    )
+  }
+
+  async assessRevision(
+    blockId: string,
+    blockRevision: string,
+    actorId: string,
+    conclusion: Assessment['conclusion'],
+    governedRevisionId?: string,
+    rationale?: string,
+  ): Promise<Assessment> {
+    return this.mutate(
+      (candidate) => candidate.assessRevision(
+        blockId,
+        blockRevision,
+        actorId,
+        conclusion,
+        governedRevisionId,
+        rationale,
+      ),
       governedRevisionId,
     )
   }

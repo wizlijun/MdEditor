@@ -14,7 +14,10 @@ describe('CDR governance values', () => {
 
   it('builds a stable actor key from a bound actor value', () => {
     expect(actorKey({ kind: 'agent', id: 'organizer/run-1' })).toBe('agent:organizer/run-1')
+    expect(actorKey({ kind: 'human', id: '李雷' })).toBe('human:李雷')
+    expect(actorKey({ kind: 'human', id: 'foo+bar' })).toBe('human:foo+bar')
     expect(() => actorKey({ kind: 'human', id: '' })).toThrow('CDR_ACTOR_INVALID')
+    expect(() => actorKey({ kind: 'human', id: 'two words' })).toThrow('CDR_ACTOR_INVALID')
     expect(() => actorKey({ kind: 'remote' as never, id: 'someone' })).toThrow('CDR_ACTOR_INVALID')
   })
 })

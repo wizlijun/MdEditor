@@ -61,7 +61,7 @@ describe('Memory Protocol v2 app', () => {
       return {}
     })
     await render(request)
-    expect(tab('共写文档').textContent).toContain('实验')
+    expect(tab('共写文档').textContent).toContain('预览')
     expect(button('身份与场景…')).toBeUndefined()
     tab('待确认').click(); flushSync()
     tab('待确认').focus()
@@ -83,7 +83,7 @@ describe('Memory Protocol v2 app', () => {
   it('copies the cross-assistant import prompt to the clipboard', async () => {
     const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? baseSnapshot() : {})
     await render(request)
-    expect(document.body.textContent).toContain('USER.md 投影所有者资料，MEMORY.md 投影其他长期记忆')
+    expect(document.body.textContent).toContain('管理受控的结构化主张')
     expect(request.mock.calls.some(([method]) => method === 'host.clipboard.write')).toBe(false)
     button('复制导入记忆Prompt')!.click()
     await settle()

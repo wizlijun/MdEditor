@@ -754,7 +754,7 @@
 
 <main>
   <header class="app-header">
-    <div><h1>记忆</h1><p>结构化主张保存在 .notemd/memory；USER.md 投影所有者资料，MEMORY.md 投影其他长期记忆。</p></div>
+    <div><h1>记忆</h1><p>管理受控的结构化主张，并在独立工作区预览带版本治理的人与 Agent 共写。</p></div>
     <div class="header-actions">
       <div class="inference-action">
         <button class="primary" onclick={inferMemory} disabled={!canInfer || inferenceStarting || !!inferenceRun} title="首次运行会初始化 Memory v2；Agent 只提交待确认建议，不会自行批准">
@@ -792,7 +792,7 @@
       <button role="tab" data-tab="pending" aria-selected={tab === 'pending'} aria-controls="pending-panel" tabindex={tab === 'pending' ? 0 : -1} class:active={tab === 'pending'} onclick={() => tab = 'pending'} disabled={roleScopeBusy && tab === 'context'}>待确认 <span class="count">{snapshot.pending.length}</span></button>
       <button role="tab" data-tab="context" aria-selected={tab === 'context'} aria-controls="context-governance-panel" tabindex={tab === 'context' ? 0 : -1} class:active={tab === 'context'} onclick={() => tab = 'context'} disabled={roleScopeBusy && tab !== 'context'}>身份与场景 <span class="context-count">R {availableRoles.length} · S {availableScopes.length}</span></button>
       <button role="tab" data-tab="history" aria-selected={tab === 'history'} aria-controls="history-panel" tabindex={tab === 'history' ? 0 : -1} class:active={tab === 'history'} onclick={() => tab = 'history'} disabled={roleScopeBusy && tab === 'context'}>冲突与历史 <span class="count">{snapshot.conflicts.length}</span></button>
-      <button role="tab" data-tab="document" aria-selected={tab === 'document'} aria-controls="document-spike-panel" tabindex={tab === 'document' ? 0 : -1} class:active={tab === 'document'} onclick={() => tab = 'document'} disabled={roleScopeBusy && tab === 'context'}>共写文档 <span class="experimental">实验</span></button>
+      <button role="tab" data-tab="document" aria-selected={tab === 'document'} aria-controls="document-spike-panel" tabindex={tab === 'document' ? 0 : -1} class:active={tab === 'document'} onclick={() => tab = 'document'} disabled={roleScopeBusy && tab === 'context'}>共写文档 <span class="experimental">预览</span></button>
     </div>
 
     {#if tab === 'confirmed'}
@@ -927,8 +927,8 @@
         />
       </div>
     {:else if tab === 'document'}
-      <div id="document-spike-panel" role="tabpanel" aria-label="共写文档实验">
-        <CollaborativeDocumentSpike />
+      <div id="document-spike-panel" role="tabpanel" aria-label="共写文档预览">
+        <CollaborativeDocumentSpike agent={agents.find((candidate) => candidate.id === agentId)} />
       </div>
     {:else}
       <div id="history-panel" class="history" role="tabpanel" aria-label="冲突与历史">

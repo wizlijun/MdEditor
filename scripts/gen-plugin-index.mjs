@@ -322,7 +322,7 @@ async function main() {
   }
 
   console.log('\n── publish the index (user step) ──────────────────────────────')
-  console.log('  wrangler kv key put index --path dist-plugins/index.json')
+  console.log('  wrangler kv key put index --path dist-plugins/index.json --binding INDEX')
 }
 
 // Import-safe: vitest imports the exports above; only direct execution runs main.
