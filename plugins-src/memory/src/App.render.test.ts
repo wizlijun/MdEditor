@@ -82,6 +82,7 @@ describe('Memory Protocol v2 app', () => {
   it('copies the cross-assistant import prompt to the clipboard', async () => {
     const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? baseSnapshot() : {})
     await render(request)
+    expect(document.body.textContent).toContain('USER.md 投影所有者资料，MEMORY.md 投影其他长期记忆')
     expect(request.mock.calls.some(([method]) => method === 'host.clipboard.write')).toBe(false)
     button('复制导入记忆Prompt')!.click()
     await settle()
@@ -110,6 +111,7 @@ describe('Memory Protocol v2 app', () => {
     expect(document.querySelector<HTMLSelectElement>('select[aria-label="已确认主张排序"]')?.value).toBe('priority')
     expect(Array.from(document.querySelectorAll('.claim-section > h3')).map((item) => item.textContent)).toEqual(['USER.md'])
     expect(Array.from(document.querySelectorAll('.claim-category > h4')).map((item) => item.textContent)).toEqual(['偏好1'])
+    expect(document.body.textContent).toContain('USER.md · 偏好')
     button('更多')!.click(); flushSync()
     expect(document.querySelector('.menu-panel[role=menu] .menu-row[role=menuitem]')).toBeTruthy()
   })
@@ -399,7 +401,7 @@ describe('Memory Protocol v2 app', () => {
 
     expect(document.querySelector('[role=alertdialog]')).toBeTruthy()
     expect(document.body.textContent).toContain('1 条已确认记忆和 1 条待确认建议')
-    expect(document.body.textContent).toContain('MEMORY.md 与 Agent context')
+    expect(document.body.textContent).toContain('USER.md、MEMORY.md 与 Agent context')
     expect(document.body.textContent).toContain('所有者身份、Memory 协议和不可变历史会保留')
     expect(request.mock.calls.filter(([method]) => method === 'host.memory.v2.resetAll')).toHaveLength(0)
 

@@ -10,15 +10,19 @@ Guidance for AI agents working in this vault. This file is the source of
 truth; CLAUDE.md is a symlink to this file — edit AGENTS.md only.
 
 (The frontmatter above is not decoration — see "Metadata" below. Markdown
-files in this vault carry it except for the generated `/MEMORY.md`
-plain-text projection.)
+files in this vault carry it except for the generated `/USER.md` and
+`/MEMORY.md` plain-text projections.)
 
 ## Vault layout
 
-- `/MEMORY.md` — the only generated plain-text memory projection. It contains
-  eligible owner facts, durable facts, decisions, and Agent guidance grouped
-  by Scope and then Role. It is not a task list, daily log, authority source,
-  or permission to use every visible fact in the current context.
+- `/USER.md` — the generated owner-profile projection. It contains eligible
+  owner identity, preference, work-style, and boundary Claims grouped by Scope
+  and then Role.
+- `/MEMORY.md` — the generated long-term-memory projection. It contains other
+  eligible durable decisions, commitments, practices, context, and Agent
+  guidance grouped by Scope and then Role.
+  Neither projection is a task list, daily log, authority source, or permission
+  to use every visible fact in the current context.
 - `dailynote/` — daily outline notes, organized as
   `yyyy/yyyy-MM-dd.note.md` (e.g. `2026/2026-07-10.note.md`).
   Monthly and yearly summaries live in the same year folder as
@@ -66,7 +70,7 @@ plain-text projection.)
 
 ## Metadata: OKF-compatible frontmatter (required)
 
-Except for the generated root `/MEMORY.md` projection and the
+Except for the generated root `/USER.md` and `/MEMORY.md` projections and the
 plugin-managed meeting source artifacts described above, every markdown file you create here
 **must** open with a YAML frontmatter block, and that block **must** carry a
 non-empty `type`. The projection and meeting source artifacts MUST NOT gain
@@ -117,7 +121,7 @@ Everything else is optional, but absent metadata means "unknown", not
   the content was derived from. `resource` is an absolute URL, a
   vault-absolute path (`/sync/foo.md`), or a relative path. Attribute
   individual claims with markdown footnotes keyed by `sources[].id`, except in
-  the controlled `/MEMORY.md` projection. This file never
+  the controlled `/USER.md` and `/MEMORY.md` projections. These files never
   expose inline citation markers, footnote definitions, or per-entry source
   notes; Claim revisions under `/.notemd/memory/` retain provenance.
 - `status: draft | stable | deprecated` (absent means `stable`) and
@@ -165,22 +169,24 @@ Rules that hold in both directions:
 
 ## Shared user model and long-term memory
 
-`/MEMORY.md` is the single generated, read-only plain-text projection. It is
-computed from the versioned Claim and Role/Scope Registry records under
+`/USER.md` and `/MEMORY.md` are generated, read-only plain-text projections.
+They are computed from the versioned Claim and Role/Scope Registry records under
 `/.notemd/memory/`, which are the only authoritative memory data. Do not infer
 status, provenance, permission, or certainty from projection text alone.
 
 ### Projection contract
 
-- `/MEMORY.md` has exactly one H1. Before the grouped facts it contains Agent
-  guidance explaining that visible groups are not automatically active. Content
-  is grouped first by Scope and then by Role; facts keep their category inside
-  that group. Stable HTML comments may identify Scope and Role group boundaries;
-  otherwise it contains descriptions only: no YAML frontmatter, Claim IDs,
+- `/USER.md` contains Claims whose projection target is `user`; `/MEMORY.md`
+  contains Claims whose projection target is `memory`. Each file has exactly one
+  H1. Before the grouped facts it contains Agent guidance explaining that visible
+  groups are not automatically active. Content is grouped first by Scope and then
+  by Role; facts keep their category inside that group. Stable HTML comments may
+  identify Scope and Role group boundaries; otherwise the files contain
+  descriptions only: no YAML frontmatter, Claim IDs,
   workflow state, priority, polarity, confidence, provenance,
   hashes, citations, source notes, or other machine metadata.
 - Resolve owner identity with `notemd memory owner --json`. Never parse owner
-  identity from `/MEMORY.md`. If the owner is unknown, conflicting, or inactive,
+  identity from `/USER.md` or `/MEMORY.md`. If the owner is unknown, conflicting, or inactive,
   do not create an owner Task.
 - Before using a fact, obtain its current metadata and context decision with
   `notemd memory context --role <role> --space <scope> --purpose <purpose> --caller <caller>
@@ -188,14 +194,14 @@ status, provenance, permission, or certainty from projection text alone.
   Treat withheld, pending, quarantined, contested, stale, or conflict-blocked
   Claims as unavailable. Approval to remember a Claim is not proof that it is
   true and never grants permission for an external action.
-- Do not inject all of `/MEMORY.md` into an Agent prompt. Use only the slice
+- Do not inject all of `/USER.md` or `/MEMORY.md` into an Agent prompt. Use only the slice
   returned by the context broker for the active Role and Scope. In shared,
   public, or external contexts, do not load, quote, or inject the projection
   unless the owner and each Claim's consent policy authorize that use.
 
 ### Mutation contract
 
-- Neither humans nor Agents edit `/MEMORY.md` directly. An Agent
+- Neither humans nor Agents edit `/USER.md` or `/MEMORY.md` directly. An Agent
   may submit only one atomic, owner-related durable Claim at a time with
   `notemd memory propose`; proposing never activates or approves the Claim.
   Do not store facts whose subject is another person merely because the fact
@@ -236,7 +242,7 @@ Task when its obligation belongs to the **confirmed vault owner** returned by
 that command, whose authority state must be active and conflict-free. The source
 must explicitly assign the action to that person,
 record that person's own commitment, or state a deadline that person must meet.
-Never parse owner identity from `/MEMORY.md`; if the authority reducer cannot
+Never parse owner identity from `/USER.md` or `/MEMORY.md`; if the authority reducer cannot
 confirm the owner, create no Task.
 
 - Never create a Task for work assigned to another person, even when that work

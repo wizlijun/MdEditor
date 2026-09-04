@@ -2,12 +2,12 @@
   "manifest_version": 2,
   "id": "notemd.memory",
   "name": "Memory",
-  "version": "2.4.3",
+  "version": "2.4.4",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.904.1"
+    "notemd": ">=6.904.3"
   },
-  "description": "Manage structured Memory claims, Role/Scope isolation and scoped Agent context with one grouped MEMORY.md projection.",
+  "description": "Manage structured Memory claims, Role/Scope isolation and scoped Agent context with grouped USER.md and MEMORY.md projections.",
   "ui": "ui/",
   "activation": {
     "events": [
@@ -52,21 +52,21 @@
   "i18n": {
     "zh": {
       "name": "记忆",
-      "description": "管理结构化记忆主张、Role/Scope 隔离与 Agent 场景上下文，并生成一份分组的 MEMORY.md 投影。",
+      "description": "管理结构化记忆主张、Role/Scope 隔离与 Agent 场景上下文，并生成分组的 USER.md 与 MEMORY.md 投影。",
       "menus": {
         "open": "记忆"
       }
     },
     "ja": {
       "name": "メモリ",
-      "description": "構造化メモリ、Role/Scope 分離、Agent コンテキストを管理し、グループ化された単一の MEMORY.md を生成します。",
+      "description": "構造化メモリ、Role/Scope 分離、Agent コンテキストを管理し、グループ化された USER.md と MEMORY.md を生成します。",
       "menus": {
         "open": "メモリ"
       }
     },
     "de": {
       "name": "Gedächtnis",
-      "description": "Strukturierte Memory-Claims, Role/Scope-Isolation und Agent-Kontext mit einer gruppierten MEMORY.md-Projektion verwalten.",
+      "description": "Strukturierte Memory-Claims, Role/Scope-Isolation und Agent-Kontext mit gruppierten USER.md- und MEMORY.md-Projektionen verwalten.",
       "menus": {
         "open": "Gedächtnis"
       }

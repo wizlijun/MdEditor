@@ -753,7 +753,7 @@
 
 <main>
   <header class="app-header">
-    <div><h1>记忆</h1><p>结构化主张保存在 .notemd/memory；MEMORY.md 只是按身份与场景分组的纯文本视图。</p></div>
+    <div><h1>记忆</h1><p>结构化主张保存在 .notemd/memory；USER.md 投影所有者资料，MEMORY.md 投影其他长期记忆。</p></div>
     <div class="header-actions">
       <div class="inference-action">
         <button class="primary" onclick={inferMemory} disabled={!canInfer || inferenceStarting || !!inferenceRun} title="首次运行会初始化 Memory v2；Agent 只提交待确认建议，不会自行批准">
@@ -797,7 +797,7 @@
       <div id="confirmed-panel" role="tabpanel" aria-label="已确认主张">
         <div class="toolbar">
           <input class="search" type="search" bind:value={query} placeholder="搜索已确认主张" aria-label="搜索已确认主张" />
-          <select bind:value={target} aria-label="记忆分组"><option value="all">全部分组</option><option value="user">身份与偏好</option><option value="memory">决定与背景</option><option value="structured">仅结构化上下文</option></select>
+          <select bind:value={target} aria-label="记忆分组"><option value="all">全部分组</option><option value="user">USER.md · 身份与偏好</option><option value="memory">MEMORY.md · 决定与背景</option><option value="structured">仅结构化上下文</option></select>
           <select value={confirmedSort} onchange={confirmedSortChanged} aria-label="已确认主张排序"><option value="priority">重点优先</option><option value="recent">最近更新</option><option value="oldest">最早更新</option><option value="text">正文 A–Z</option></select>
           <button class="secondary" onclick={copyImportPrompt} title="复制一段 Prompt，粘贴给其他 AI 助手，让它把记住你的条目导出成 notemd memory propose 命令。">复制导入记忆Prompt</button>
           <button class="primary" onclick={resetAdd} disabled={!writable}>添加主张</button>
@@ -848,7 +848,7 @@
                 <div class="wide"><dt>有效时间</dt><dd>{temporalLabel(claim)}</dd></div>
                 <div class="wide"><dt>Role / Scope / 用途</dt><dd>{claim.context.roles?.join('、') || 'role:unclassified'} · {claim.context.spaces.join('、')} · {claim.consent.allowed_purposes.join('、')}</dd></div>
                 <div><dt>Provider</dt><dd>{claim.consent.external_provider_policy}</dd></div>
-                <div><dt>纯文本位置</dt><dd>{categoryLabel(claim.projection.target, claim.projection.category)}</dd></div>
+                <div><dt>纯文本位置</dt><dd>{claim.projection.target === 'user' ? 'USER.md' : 'MEMORY.md'} · {categoryLabel(claim.projection.target, claim.projection.category)}</dd></div>
                 <div class="wide"><dt>Claim / Revision</dt><dd><code>{claim.claim_id}<br />{claim.revision_id}</code></dd></div>
               </dl>
               <div class="detail-actions">
@@ -965,7 +965,7 @@
   <div class="scrim" role="presentation">
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="add-title">
       <header><div><h2 id="add-title">添加主张</h2><p>保存就是本次人工批准，不会再出现第二步。</p></div><button class="close" aria-label="关闭添加主张" onclick={() => showAdd = false} disabled={writing}>×</button></header>
-      <div class="form-grid"><label>MEMORY.md 分组<select value={addTarget} onchange={targetChanged}><option value="user">身份与偏好</option><option value="memory">决定与背景</option></select></label><label>一级分类<select value={addCategory} onchange={categoryChanged}>{#each currentCategoryOptions as option}<option value={option.id}>{option.label}</option>{/each}</select></label></div>
+      <div class="form-grid"><label>纯文本位置<select value={addTarget} onchange={targetChanged}><option value="user">USER.md · 身份与偏好</option><option value="memory">MEMORY.md · 决定与背景</option></select></label><label>一级分类<select value={addCategory} onchange={categoryChanged}>{#each currentCategoryOptions as option}<option value={option.id}>{option.label}</option>{/each}</select></label></div>
       <label class="field">主张内容<textarea bind:this={addTextarea} bind:value={addText} rows="5" placeholder="一条可以独立确认或否认的多行主张"></textarea></label>
       <section class="approval-meaning"><small>保存的批准含义</small><strong>{approvalLabels[addApproval].label}</strong><p>{approvalLabels[addApproval].explanation}</p></section>
       <details><summary>使用范围与高级信息</summary>
@@ -999,7 +999,7 @@
       <div class="reset-impact">
         <strong>将立即移除 {resetClaims.length} 条已确认记忆和 {snapshot.pending.length} 条待确认建议。</strong>
         <ul>
-          <li>MEMORY.md 与 Agent context 会失去这些内容。</li>
+          <li>USER.md、MEMORY.md 与 Agent context 会失去这些内容。</li>
           <li>推理进度会重置；下次推理将重新扫描整个 Vault。</li>
           <li>所有者身份、Memory 协议和不可变历史会保留，因此这不是从 Git 历史永久擦除。</li>
         </ul>

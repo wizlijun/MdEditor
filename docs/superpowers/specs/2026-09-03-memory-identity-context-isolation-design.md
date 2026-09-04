@@ -3,6 +3,11 @@
 日期：2026-09-03
 阶段：P1 可用纵切已实现；P2 自动 Context Runtime 待实现
 
+> 2026-09-04 修订：单一 `MEMORY.md` 投影的决定已被双投影取代。结构化 Claim 与
+> Role/Scope Registry 仍以 `/.notemd/memory/` 为唯一权威；`projection.target=user`
+> 生成 `/USER.md`（所有者资料），`projection.target=memory` 生成 `/MEMORY.md`
+>（其他长期记忆）。下文涉及“唯一 MEMORY 投影”或“移除 USER”的旧段落，以本修订为准。
+
 ## 0. 2026-09-03 实现状态
 
 本次已经落地第一阶段可用闭环：
@@ -18,8 +23,8 @@
 - CLI 已提供 `context-registry show|validate|replace`、`reassign plan|propose`，以及 scope-aware
   `memory context --role ...`。完整 Registry 候选可通过 exact-head、幂等、哈希链事务立即替换；Claim
   变更仍只能生成 pending proposal，不能用 `apply`、`--yes` 或 `--force` 冒充人类批准。
-- 根投影只保留一个 `MEMORY.md`，固定按 Scope -> Role -> category 分组，并在顶部写入 Agent 使用协议；
-  rebuild 会移除旧的生成文件 `USER.md`。
+- 根投影恢复为 `USER.md` 与 `MEMORY.md`，两者都固定按 Scope -> Role -> category 分组，并在顶部写入
+  Agent 使用协议；rebuild 会从结构化 Claim 确定性重建两份文件。
 
 当前 Role/Scope 的维护策略分两层：长期定义可由用户在 UI 或 Agent 通过受控完整替换治理，Claim 归属仍由用户在批量向导中治理；当前会话的
 Role/Scope 由 Context Manifest 显式选择，并被写入 reducer-backed Context Manifest。P2 的自动识别状态机
@@ -33,7 +38,7 @@ Role/Scope 由 Context Manifest 显式选择，并被写入 reducer-backed Conte
 当作自由字符串标签。推荐架构是：
 
 > 一个稳定 owner 模型 + Role 行为覆层 + Realm 硬隔离域 + Space 场景视图 + 每会话
-> Context Capsule + 单一分组式 `MEMORY.md` + 服务端 Context Compiler。
+> Context Capsule + 分组式 `USER.md` / `MEMORY.md` + 服务端 Context Compiler。
 
 其中：
 
@@ -43,8 +48,8 @@ Role/Scope 由 Context Manifest 显式选择，并被写入 reducer-backed Conte
 - Space 回答“这个隔离域内正在处理哪个项目或主题”，例如 `mdeditor`、客户 A 的 Apollo 项目。
 - Task、Audience、Purpose 回答“本轮要做什么、给谁看、允许怎样使用”。
 - Context Capsule 是上述坐标在一次线程/窗口/运行中的不可变快照。
-- `MEMORY.md` 是唯一持久化投影，完整保留 Scope、Role 和对应记忆分组；不再生成 `USER.md`，也不按
-  Role/Scope 拆成多份文件。
+- `USER.md` 投射 owner 身份、偏好、工作方式与边界；`MEMORY.md` 投射其他决定、承诺、实践与背景。
+  两份文件都保留 Scope、Role 和对应记忆分组，但不按 Role/Scope 继续拆成更多文件。
 
 单文件负责让人查看、编辑和审计完整 Memory；运行时隔离不能依赖 Agent 看完全文后自行忽略，而必须由
 Host 根据 Capsule 解析分组，只把允许的块交给 Agent。当前 Role/Scope 不写回 `MEMORY.md`，否则并发
@@ -120,7 +125,7 @@ Memory Protocol v2 已有很强的可复用骨架：
 | 每个 Role/场景一套 `MEMORY.md` | 直观，外部 Agent 易读 | Role × 场景组合爆炸；重复、漂移、并发切换、Git 冲突；跨客户仍可能被工具读到 | 否决 |
 | 单一平铺 `MEMORY.md`，靠 Prompt 要求 Agent 自觉选择 | 最兼容普通文件读取 | 模型已看见全部内容；标题和提示词都不是安全边界 | 否决 |
 | 保留单库，只给 Claim 加更多自由标签 | 改动最小 | 没有稳定 ID、层级、权限语义；空值/拼错容易变成 global；不能安全自动切换 | 只可作临时兼容 |
-| 一个 owner + typed scope registry + Capsule + 单一分块投影 | 不复制人格；保留一个完整可读文件；支持审计、自动识别和最小上下文 | 需要协议升级、块解析器、运行时和 UI 改造 | 推荐主方案 |
+| 一个 owner + typed scope registry + Capsule + 双分块投影 | 不复制人格；分别保留 owner profile 与其他长期记忆；支持审计、自动识别和最小上下文 | 需要协议升级、块解析器、运行时和 UI 改造 | 推荐主方案 |
 | 每个客户/家庭一个独立 Vault/Repo | 最强物理隔离 | 搜索、跨域共享、同步和用户体验成本高 | 作为高保密 Realm 模式 |
 
 主方案负责语义和默认安全；高保密 Realm 可进一步使用独立 Repo/加密存储和 Agent sandbox。两者并不
@@ -344,7 +349,7 @@ suggested/unresolved，不能按最近使用项猜测。`redirected` 只提示�
 1. 固定当前 Claim heads、registry heads、authority heads 和 projection hash，创建 `migration_id`。
 2. 对所有 current Claim 在受控环境中重新分类；历史 revision 和旧 Manifest 不参与改写。
 3. 结果分为 `不变 / 确定性可迁移 / 建议迁移 / 歧义 / 跨 Realm / 被策略阻止` 六组。
-4. 展示数量、原因、代表样本、逐 Claim diff 和新的 `MEMORY.md` shadow projection；不先改变 Agent 读取。
+4. 展示数量、原因、代表样本、逐 Claim diff 和新的 `USER.md` / `MEMORY.md` shadow projections；不先改变 Agent 读取。
 5. 同 Realm、同决策语义的项目可批量批准；跨 Realm、变为 portable、敏感度降低或扩大 audience/purpose
    必须单独或按明确风险批次批准。
 6. 每个变化都生成新的 Claim revision，操作类型为 `reclassify-context` 或
@@ -352,7 +357,7 @@ suggested/unresolved，不能按最近使用项猜测。`redirected` 只提示�
    原地覆盖旧 YAML。
 7. Reducer 只有在全部 frozen input heads、child revisions 和 operation effects 精确匹配时才应用整个批次；
    任一 stale head 返回 `MEMORY_STALE_BASE`，不自动 rebase、不部分生效。通过隔离矩阵和投影校验后再
-   原子切换单一 `MEMORY.md`、分块索引和 resolver registry；中途失败保持旧投影可用。
+   切换两份根投影、分块索引和 resolver registry；中途失败由投影健康检查识别并从权威层重建。
 8. “撤销本次重分配”通过生成反向 revision 恢复先前引用，不删除历史，不改写已经发布的 Manifest。
 
 “全部重新分配”的准确含义是：所有 current Claim 都重新评估，所有受影响项都进入计划；它不保证 AI
@@ -459,13 +464,13 @@ Context Compiler 顺序：
 - 跨 Realm：普通请求禁止 union。确需比较多个 Realm 时创建显式 multi-realm audit task，列出每个来源并
   禁止外发；不能由自动识别触发。
 
-### 7.3 只保留一个分组式 `/MEMORY.md`
+### 7.3 保留两个分组式根投影
 
-持久化投影只生成一个 `/MEMORY.md`：不再生成 `/USER.md`，不为 Role、客户、项目或家庭创建第二份
-`MEMORY.md`。原来投影到 USER 的 owner identity/preference 与普通 MEMORY Claim 都进入这一个文件，并
-保留各自的 `claim_kind`、subject、风险和适用范围元数据。
+持久化投影生成 `/USER.md` 与 `/MEMORY.md`，但不为 Role、客户、项目或家庭创建更多文件。
+`projection.target=user` 的 owner profile Claim 进入 USER；`projection.target=memory` 的其他长期 Claim
+进入 MEMORY。两边都保留各自的 `claim_kind`、subject、风险和适用范围元数据于结构化权威层。
 
-`MEMORY.md` 是完整、确定性、可重建的人类审计视图。推荐结构是“Scope 优先、Role 次级”，因为先决定
+两份投影共同构成确定性、可重建的人类审计视图。推荐结构是“Scope 优先、Role 次级”，因为先决定
 能看哪个安全域，再决定用什么行为身份；按 Role 的反向目录只用于导航，不能作为授权：
 
 ```markdown
@@ -584,14 +589,14 @@ agent_access: deny
 Agent 读取协议：
 
 1. Host 在 run 启动前冻结 Context Capsule。
-2. Broker 打开唯一 `MEMORY.md`，用 Markdown AST 与 marker 建立分块视图。
+2. Broker 按所需资料打开 `USER.md` 和/或 `MEMORY.md`，用 Markdown AST 与 marker 建立分块视图。
 3. 先按 Realm/Space/Role 选择候选块，再对块内每条 Claim 按 Purpose/Audience/Provider/Consent/有效期
    过滤，得到 allowed block/claim IDs，最后才读取正文。
 4. Agent 只收到 Agent 使用协议、Universal Safe 与当前 Scope/Role 的匹配块，不收到完整导航和其他块。
 5. Host 对实际发送内容生成 Manifest，记录 capsule hash、projection hash、block IDs 与 Claim refs。
 6. `unresolved/suggested/ambiguous` 时只返回 Universal Safe，并明确说明 scoped memory 未加载。
 
-`MEMORY.md` 不随当前 Role/Scope 切换而重写。每次运行可以在内存中或 Vault 外生成临时 Context Pack，
+`USER.md` 与 `MEMORY.md` 不随当前 Role/Scope 切换而重写。每次运行可以在内存中或 Vault 外生成临时 Context Pack，
 但它不是第二份持久化投影，也不命名为 `MEMORY.md`。产品入口使用 `None / Auto / Pinned` 三态；完整文件
 只在可信的 Memory 管理/审计界面打开。
 
@@ -681,16 +686,15 @@ scope + Capsule 可以把官方 Context 通道中的自动注入、检索、写�
 5. 对 scope 未决项批量分组审阅；确认一个 binding 应能一次处理同来源/同项目的一组候选，但批准语义
    仍逐 Claim 可追溯。
 6. 在 shadow 模式同时计算 v2 与 v3 Context Manifest，记录差异但不向 Agent 注入 v3。
-7. 通过隔离 eval 后一次性切换权威读取和单一分组式 `MEMORY.md`；移除 `/USER.md`，更新 Agent 模板和
-   普通搜索排除规则，不长期双写 v2/v3。
+7. 通过隔离 eval 后一次性切换权威读取和双分组投影，更新 Agent 模板和普通搜索排除规则，不长期双写
+   v2/v3。
 8. 保留 rollback 到 cutover commit；出现 v3 新写入后只允许 forward fix，不静默回滚覆盖。
 
 ## 11. 分阶段实施
 
 ### P0：止血与语义冻结
 
-- 冻结“只生成一个 `MEMORY.md`”契约，定义 Scope 优先、Role 次级的机器分块格式和顶部 Agent 协议；
-  `/USER.md` 进入废弃迁移计划。
+- 冻结“生成 `USER.md` 与 `MEMORY.md`”契约，定义 Scope 优先、Role 次级的机器分块格式和顶部 Agent 协议。
 - 在 Broker 完成前，禁止官方 Agent/Smart Search 把完整 `MEMORY.md` 当普通文件或全文索引来源；取消
   默认 `global`。
 - 冻结 Owner/Role/Realm/Space/Task/Audience/Purpose 定义和匹配规则。
@@ -717,7 +721,7 @@ scope + Capsule 可以把官方 Context 通道中的自动注入、检索、写�
 
 - propose 自动继承 Capsule；ambiguous 时 skip/quarantine。
 - Smart Search、Agent runner、普通 search 全部接收 Capsule。
-- 单一 `MEMORY.md` 的 block parser/index、临时 Context Pack、Manifest、Exposure Ledger；禁止 raw full-file
+- 双投影的 block parser/index、临时 Context Pack、Manifest、Exposure Ledger；禁止 raw full-file
   direct read。
 - Memory 插件接入统一管理 Sheet 和一次性 batch apply RPC；CLI apply 仅接受 UI 签发、绑定 plan hash 的
   stdin token。
@@ -739,8 +743,8 @@ scope + Capsule 可以把官方 Context 通道中的自动注入、检索、写�
 
 - 任意未指定/未解析 Realm 的请求只得到符合请求限制的 Universal Safe，cross-realm leakage rate = 0。
 - Client A 的 Claim 在 Client B、family、personal Capsule 中 selected/rendered/used 均为 0。
-- Vault 只生成一个 `MEMORY.md`，不再生成 `USER.md` 或 per-Role/per-Scope Memory 文件。
-- 所有 active Realm/Space/Role 在 `MEMORY.md` 有稳定分组；每个 projected Claim 位于对应 Scope/Role 块，
+- Vault 生成 `USER.md` 与 `MEMORY.md`，但不生成 per-Role/per-Scope Memory 文件。
+- 所有 active Realm/Space/Role 在对应目标投影中有稳定分组；每个 projected Claim 位于对应 Scope/Role 块，
   Unassigned/Quarantine 明确为 `agent_access: deny`。
 - Broker 永远不把完整 `MEMORY.md`、完整导航或非匹配块交给 Agent；private/provider-deny Claim 即使存在
   于 owner 审计投影，也不能绕过当前 Capsule policy。
@@ -970,7 +974,7 @@ CLI 的目标是让 Agent 通过统一 validator、exact heads、幂等键和不
 
 ## 14. 待产品裁决
 
-“只保留一个完整、按 Role/Scope 分组的 `MEMORY.md`”已经确定。实现前还需裁决：
+“保留两个按 Role/Scope 分组的根投影”已经确定。实现前还需裁决：
 
 1. 客户与家庭是否都按 hard Realm 处理；本设计建议“是”。
 2. 官方 Agent 是否统一禁止直接读取完整物理 `MEMORY.md`，只接收 Broker 过滤后的逻辑同名视图；本设计
@@ -981,12 +985,12 @@ CLI 的目标是让 Agent 通过统一 validator、exact heads、幂等键和不
 
 ## 15. 最终建议
 
-只保留一个完整的 `MEMORY.md`，但把它从平铺全局画像升级成 Scope 优先、Role 次级、带稳定机器边界和
-Agent 使用协议的分组投影；它是完整的人类视图，不是本轮 Agent 的全文输入。
+保留 `USER.md` 与 `MEMORY.md` 两份投影，并把它们从平铺全局画像升级成 Scope 优先、Role 次级、带稳定
+机器边界和 Agent 使用协议的分组投影；它们是人类视图，不是本轮 Agent 的全文输入。
 
 最关键的三步依次是：
 
-1. 先将 `/USER.md` 与平铺 `/MEMORY.md` 收敛为唯一分组式 `MEMORY.md`，并阻止官方 Agent/搜索全文读取；
+1. 先将 `/USER.md` 与 `/MEMORY.md` 确定性重建为各自的分组投影，并阻止官方 Agent/搜索全文读取；
 2. 用 Realm/Role/Space registry 替代自由字符串，将 current state 改为 per-session Capsule，并落地
    Role/Scope 管理和可回滚的批量重分配；
 3. 再做自动识别，让自动化只选择已批准边界，不创造权限、不扩大范围、不改写长期身份。

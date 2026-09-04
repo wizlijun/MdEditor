@@ -802,8 +802,9 @@ REGISTRY FLAGS:
   --request-id <stable-id>   Idempotency key required for Registry replacement
 
 NOTES:
-  MEMORY.md is the sole disposable plain-text projection, grouped by Scope and
-  Role; it is not a database. Reading it authorizes no cross-context use.
+  USER.md projects owner profile Claims; MEMORY.md projects other durable Claims.
+  Both are disposable views grouped by Scope and Role, not databases. Reading
+  either file authorizes no cross-context use.
   External actions require
   a reducer-backed context decision with no action-sensitive conflict.
   Agents can replace the complete Context Registry through the same validated,
