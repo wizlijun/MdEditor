@@ -8,7 +8,9 @@
 >
 > 文档关系：本稿是该方向的唯一实施基线，取代 `2026-09-04-co-authored-surface-design.md` 中与正文权威、治理归属、API 和 Yjs 时机有关的设计结论；旧稿中的仓库现状证据已在本稿重新核对。若旧稿继续保留，必须明确标记为 superseded，不能并列作为规范。
 
-> 实施记录（2026-09-04）：已启动首个可运行切片：并存的 Editor Kit v2、领域无关的内存 Operation 会话，以及现有 `notemd.memory` 窗口内的“共写文档实验”。该切片验证单块 `block.replace`、串行本地确认、局部远程事务、ack 回声隔离、stale-base、幂等、Decoration 与 IME 排队；普通 Agent 只产生提案，直接远端更新明确标为“已授权服务端变更”fixture。块布局已扩展为“一个稳定块覆盖一组连续顶层节点”，远端替换可改变该范围的节点数并原子更新后续映射；本地插入、删除、移动、拆合及多块编辑仍 fail closed。现有 BlockYaml 的 chunk／fingerprint／merge 生产函数已加入 CDR conformance 测试：长中文小改和精确重排可保留 ID，但小于 20 个归一化字符的短块改写会 fresh＋retired，默认 `minChars=400` 也会合并相邻短章节。因此，“外部 Markdown 依赖当前 fingerprint／merge 重建已改写短块的身份”目前是明确 No-Go；携带显式 block ID 的 CDR 编辑与 Operation 寻址不受此结论影响。尚未接入 BlockYaml 持久化、document-ID store、Memory v2 Claim、Repository、其余三类结构操作或 Yjs，不构成 MEMORY MVP。
+> 实施记录（2026-09-04）：已启动首个可运行切片：并存的 Editor Kit v2、领域无关的 Operation 会话，以及现有 `notemd.memory` 窗口内的“共写文档实验”。该切片验证单块 `block.replace`、串行本地确认、局部远程事务、ack 回声隔离、stale-base、幂等、Decoration 与 IME 排队；普通 Agent 只产生提案，直接远端更新明确标为“已授权服务端变更”fixture。块布局已扩展为“一个稳定块覆盖一组连续顶层节点”，远端替换可改变该范围的节点数并原子更新后续映射；本地插入、删除、移动、拆合及多块编辑仍 fail closed。现有 BlockYaml 的 chunk／fingerprint／merge 生产函数已加入 CDR conformance 测试：长中文小改和精确重排可保留 ID，但小于 20 个归一化字符的短块改写会 fresh＋retired，默认 `minChars=400` 也会合并相邻短章节。因此，“外部 Markdown 依赖当前 fingerprint／merge 重建已改写短块的身份”目前是明确 No-Go；携带显式 block ID 的 CDR 编辑与 Operation 寻址不受此结论影响。
+>
+> Stage 0C 已增加一个 UI-only、按认证插件隔离的宿主 opaque aggregate store，以及插件侧的持久 `DocumentSession` facade。store 以 generation CAS 和同目录临时文件原子替换单份 aggregate；facade 以 copy-on-write 保证 commit 成功后才安装候选状态并向 Editor ack。commit 异常后必须重新 load 来区分“候选已提交、旧版仍在、另一 writer 获胜”；无法读取或验证时进入 outcome-unknown，并锁定本实例和编辑器为只读，不能假装失败后继续写。窗口重开会恢复 committed head、提案、Assessment、AuditEvent 和幂等回执；损坏 schema、写失败和 CAS 冲突均 fail closed。Spike 的 fixture document ID 暂以当前 vault 根路径的 SHA-256 隔离，避免跨 vault 串数据；vault 移动会形成新 namespace，待阶段 1 的 frontmatter document ID 取代。此实现只验证本机单 aggregate 的提交与恢复边界，并不是下文完整 `DocumentRepository`：尚未接入 `.md`／BlockIdentityStore 的同 generation 提交、document-ID frontmatter、不可变 revision/journal、Publication、Annotation、Memory v2 Claim/Profile、其余三类结构操作、外部漂移或 Yjs，因此不构成 MEMORY MVP，也不宣称通过完整 G4。
 
 ## 0. 结论
 
@@ -62,7 +64,7 @@ MEMORY-first 不意味着：
 - 不实现跨设备或多人同段输入。
 - 不在首版接入 Yjs；Yjs 仍是后续跨设备协作的已选实现，但通用接口只保留不泄漏具体类型的模块边界。
 - 不建设多租户 IAM、临时授权 token 或通用策略 DSL。
-- 不建设事件溯源平台、CAS 对象仓库或任意存储后端框架。
+- 不建设事件溯源平台、内容寻址对象库或任意存储后端框架；本机 aggregate 的 generation CAS 只是并发写保护，不是通用存储平台。
 - 不支持实时可写 Markdown source pane。
 - 不承诺普通 Markdown 在第三方编辑后的全历史无损往返。
 - 不实现 Collection、DocumentRelation、scope 继承／覆盖或跨文档知识图谱。
@@ -850,7 +852,7 @@ Yjs Adapter 必须遵守：
 - 模拟人和两个 Agent 对不同块／同一块并发操作。
 - 验证 proposal Decoration、stale-base、Anchor 重新定位和 Assessment 版本绑定。
 - 验证中文／日文 IME、undo、重复 request 和窗口重开。
-- 选择一个能满足 Repository 原子提交契约的本机实现。
+- 先用按插件隔离的单 aggregate generation-CAS store 验证原子保存、失败不安装候选状态与窗口重开；进入阶段 1 前，再把它提升为本节定义的完整 `DocumentRepository`（`.md`、BlockIdentityStore、revision、journal 同一逻辑提交）。
 
 Go/No-Go：任一普通局部更新需要全文 `setContent()`、块 ID 往返不稳定、IME 丢字、同块 stale 覆盖或重复请求产生二次应用，均不得进入 MVP。
 

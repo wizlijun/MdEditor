@@ -58,7 +58,7 @@ export interface AppliedChange {
 }
 
 export interface ChangeError {
-  code: 'stale-base' | 'invalid-operation' | 'unsupported-structure' | 'remote-base-mismatch'
+  code: 'stale-base' | 'invalid-operation' | 'unsupported-structure' | 'remote-base-mismatch' | 'persistence-failed'
   message: string
   changeId?: string
 }

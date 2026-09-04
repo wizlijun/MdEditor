@@ -1,38 +1,43 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import { bridge } from './bridge'
   import {
-    InMemoryDocumentSession,
-    sequentialIds,
+    uuidIds,
     type AppliedChange,
     type Assessment,
     type DocumentRevision,
     type OperationBatch,
     type Proposal,
-    type SubmitResult,
   } from './cdr/session'
-  import { loadKitV2, replaceOperation, type MountedDocumentEditor } from './editor-kit-v2'
+  import {
+    PersistentDocumentSession,
+    RepositoryConflictError,
+    RepositoryOutcomeUnknownError,
+  } from './cdr/repository'
+  import { loadKitV2, replaceOperation, type MountedDocumentEditor, type SurfaceUpdate } from './editor-kit-v2'
 
-  const ids = sequentialIds('memory-spike')
-  const initial: DocumentRevision = {
-    documentId: 'memory-spike/document-1',
-    revisionId: 'memory-spike/revision-1',
-    blocks: [
-      { blockId: 'b-a1b2c3', blockRevision: 'b-a1b2c3/1', markdown: '# MEMORY-first 共写文档' },
-      { blockId: 'b-d4e5f6', blockRevision: 'b-d4e5f6/1', markdown: '这是一段可由人直接修改的背景叙事，保留前因后果和团队黑话。' },
-      { blockId: 'b-0a1b2c', blockRevision: 'b-0a1b2c/1', markdown: '- Agent 修改必须绑定块版本\n- 冲突不得静默覆盖' },
-    ],
-  }
+  class EditorSyncError extends Error {}
 
-  const session = new InMemoryDocumentSession(initial, ids)
+  const ids = uuidIds()
+  const INITIAL_REVISION_ID = 'memory-spike/revision-1'
+  const initialBlocks: DocumentRevision['blocks'] = [
+    { blockId: 'b-a1b2c3', blockRevision: 'b-a1b2c3/1', markdown: '# MEMORY-first 共写文档' },
+    { blockId: 'b-d4e5f6', blockRevision: 'b-d4e5f6/1', markdown: '这是一段可由人直接修改的背景叙事，保留前因后果和团队黑话。' },
+    { blockId: 'b-0a1b2c', blockRevision: 'b-0a1b2c/1', markdown: '- Agent 修改必须绑定块版本\n- 冲突不得静默覆盖' },
+  ]
+
+  let session = $state<PersistentDocumentSession | null>(null)
   let editorHost = $state<HTMLDivElement>()
   let editor = $state<MountedDocumentEditor | null>(null)
   let proposals = $state<readonly Proposal[]>([])
   let assessments = $state<readonly Assessment[]>([])
   let auditCount = $state(0)
   let loading = $state(true)
-  let notice = $state('正在加载 Editor Kit v2…')
+  let activeWrites = $state(0)
+  let saving = $derived(activeWrites > 0)
+  let locked = $state(false)
+  let notice = $state('正在恢复共写文档…')
   let failed = $state('')
-  let agentConstraintVariant = false
   let disposed = false
   let stopObserving: (() => void) | null = null
 
@@ -49,27 +54,28 @@
 
   async function mountEditor() {
     try {
+      const initial = await initialForCurrentVault()
+      const restoredSession = await PersistentDocumentSession.open(initial, ids)
+      if (disposed) return
+      session = restoredSession
       const mount = await loadKitV2()
       if (disposed) return
       if (!editorHost) throw new Error('CDR_EDITOR_HOST_MISSING')
       editor = await mount(editorHost, {
-        snapshot: session.snapshot(),
+        snapshot: restoredSession.snapshot(),
         ids,
         onBlockedStructuralEdit: () => {
           notice = 'Stage 0 仅允许块内编辑；插入、删除和拆合块已 fail-closed。'
         },
         onResyncRequired: (reason) => {
-          notice = '检测到远端版本缺口，已从当前权威快照重新同步。'
-          if (editor) void editor.surface.reconcile({
-            kind: 'resync',
-            snapshot: session.snapshot(),
-            includedChangeIds: reason.changeId ? [reason.changeId] : [],
-          })
+          void handleResyncRequired(reason)
         },
       })
       stopObserving = editor.surface.observeLocalOperations(handleLocalOperations)
       loading = false
-      notice = '已就绪：直接修改正文，每次只提交受影响的块。'
+      notice = restoredSession.openKind === 'restored'
+        ? '已恢复上次提交的正文、提案、核验与审计记录。'
+        : '已创建本机文档：直接修改正文，每次只提交受影响的块。'
       syncViewModels()
     } catch (cause) {
       loading = false
@@ -77,32 +83,88 @@
     }
   }
 
+  async function initialForCurrentVault(): Promise<DocumentRevision> {
+    const info = await bridge().request('host.vault.info', {}) as { root?: unknown }
+    if (typeof info?.root !== 'string' || !info.root) throw new Error('CDR_VAULT_REQUIRED')
+    if (typeof globalThis.crypto?.subtle?.digest !== 'function') throw new Error('CDR_SHA256_UNAVAILABLE')
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(info.root))
+    const namespace = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    return {
+      documentId: `memory-spike/${namespace}`,
+      revisionId: INITIAL_REVISION_ID,
+      blocks: initialBlocks.map((block) => ({ ...block })),
+    }
+  }
+
   function handleLocalOperations(batch: OperationBatch) {
-    const result = session.submit(batch, 'human:local')
-    if (!editor) return
-    if (result.kind === 'conflicted') {
-      const preserved = session.propose(batch, 'human:local')
-      notice = `${result.conflict.message} 本地文字已保留为待比较提案 · ${preserved.changeSetId}`
-      void editor.surface.reconcile({
+    void persistLocalOperations(batch)
+  }
+
+  async function persistLocalOperations(batch: OperationBatch) {
+    if (!editor || !session) return
+    activeWrites += 1
+    notice = '正在原子保存本地修改…'
+    let durable = false
+    try {
+      const result = await session.submit(batch, 'human:local')
+      if (result.kind === 'conflicted') {
+        const preserved = await session.propose(batch, 'human:local')
+        durable = true
+        const synchronized = await reconcileOrLock({
+          kind: 'reject-local',
+          requestId: batch.requestId,
+          reason: result.conflict,
+          authoritative: session.snapshot(),
+          includedChangeIds: [],
+        }, session.snapshot())
+        if (!synchronized) return
+        notice = `${result.conflict.message} 本地文字已保存为待比较提案 · ${preserved.changeSetId}`
+      } else {
+        durable = true
+        const synchronized = await reconcileOrLock({
+          kind: 'ack-local',
+          requestId: batch.requestId,
+          authoritative: result.snapshot,
+          includedChangeIds: [result.change.changeId],
+        }, result.snapshot)
+        if (!synchronized) return
+        notice = `人类局部修改已保存 · ${result.change.revisionId}`
+      }
+    } catch (cause) {
+      if (durable) {
+        lockEditor('修改已经保存，但编辑器未能确认；已切换为只读，窗口重开后恢复。')
+        return
+      }
+      if (cause instanceof RepositoryOutcomeUnknownError) {
+        lockEditor('无法核定本次保存结果；已切换为只读，请重开窗口重新读取。')
+        return
+      }
+      const current = session.snapshot()
+      const conflict = cause instanceof RepositoryConflictError
+      const synchronized = await reconcileOrLock({
         kind: 'reject-local',
         requestId: batch.requestId,
-        reason: result.conflict,
-        authoritative: result.snapshot,
+        reason: {
+          code: conflict ? 'stale-base' : 'persistence-failed',
+          message: conflict
+            ? '存储中的文档已由另一写入者更新；已恢复最新提交版本。'
+            : '本地修改未能持久化；已恢复上次提交版本。',
+        },
+        authoritative: current,
         includedChangeIds: [],
-      })
-    } else {
-      notice = `人类局部修改已提交 · ${result.change.revisionId}`
-      void editor.surface.reconcile({
-        kind: 'ack-local',
-        requestId: batch.requestId,
-        authoritative: result.snapshot,
-        includedChangeIds: [result.change.changeId],
-      })
+      }, current)
+      if (!synchronized) return
+      notice = conflict
+        ? '检测到并发保存冲突；本次修改未覆盖另一写入者。'
+        : '保存失败；本次修改未生效，也未显示为已保存。'
+    } finally {
+      activeWrites -= 1
+      syncViewModels()
     }
-    syncViewModels()
   }
 
   function batchFor(blockId: string, markdown: string): OperationBatch {
+    if (!session) throw new Error('CDR_SESSION_NOT_READY')
     const snapshot = session.snapshot()
     const block = snapshot.blocks.find((item) => item.blockId === blockId)
     if (!block) throw new Error('CDR_BLOCK_NOT_FOUND')
@@ -114,8 +176,21 @@
   }
 
   async function applyRemote(change: AppliedChange) {
-    if (!editor) return
-    await editor.surface.reconcile({ kind: 'apply-remote', change })
+    if (!session) return
+    if (!await reconcileOrLock({ kind: 'apply-remote', change }, session.snapshot())) {
+      throw new EditorSyncError('CDR_EDITOR_SYNC_FAILED')
+    }
+  }
+
+  async function handleResyncRequired(reason: { changeId?: string }) {
+    if (!session) return
+    const snapshot = session.snapshot()
+    const synchronized = await reconcileOrLock({
+      kind: 'resync',
+      snapshot,
+      includedChangeIds: reason.changeId ? [reason.changeId] : [],
+    }, snapshot)
+    if (synchronized) notice = '检测到远端版本缺口，已从当前权威快照重新同步。'
   }
 
   async function waitForPaint() {
@@ -123,76 +198,147 @@
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   }
 
-  function proposeBackground() {
-    const proposal = session.propose(
-      batchFor('b-d4e5f6', '这段背景由人和 Agent 共同维护；Agent 先给出可审阅的局部建议。'),
-      'agent:organizer',
-    )
-    notice = `整理 Agent 已保存提案 · ${proposal.changeSetId}`
-    syncViewModels()
+  async function proposeBackground() {
+    if (!session) return
+    await runAction(async () => {
+      const proposal = await session!.propose(
+        batchFor('b-d4e5f6', '这段背景由人和 Agent 共同维护；Agent 先给出可审阅的局部建议。'),
+        'agent:organizer',
+      )
+      notice = `整理 Agent 已保存提案 · ${proposal.changeSetId}`
+    })
   }
 
   async function applyRemoteFixture() {
-    const markdown = agentConstraintVariant
+    if (!session) return
+    const current = session.snapshot().blocks.find((block) => block.blockId === 'b-0a1b2c')?.markdown ?? ''
+    const markdown = current.includes('保留两侧内容')
       ? '- Agent 修改必须绑定块版本\n- 冲突不得静默覆盖'
       : '- Agent 修改必须绑定块版本\n- 冲突必须显示并保留两侧内容'
-    agentConstraintVariant = !agentConstraintVariant
     editor?.decorations.setLayer('active-run', [{ blockId: 'b-0a1b2c', kind: 'activity', label: '正在接收已授权的远端变更…' }])
     try {
       await waitForPaint()
-      const result = session.submit(batchFor('b-0a1b2c', markdown), 'fixture:authorized-remote')
+      activeWrites += 1
+      notice = '正在原子保存已授权的远端变更…'
+      const result = await session.submit(batchFor('b-0a1b2c', markdown), 'fixture:authorized-remote')
       if (result.kind === 'applied') {
         await applyRemote(result.change)
-        notice = `已应用模拟服务端变更 · ${result.change.revisionId}`
+        notice = `已保存并应用模拟服务端变更 · ${result.change.revisionId}`
       } else {
         notice = result.conflict.message
       }
+    } catch (cause) {
+      await recoverAfterActionFailure(cause)
     } finally {
+      activeWrites -= 1
       editor?.decorations.removeLayer('active-run')
     }
     syncViewModels()
   }
 
-  function assessBackground() {
-    const assessment = session.assess('b-d4e5f6', 'agent:verifier', 'verified')
-    notice = `核验结论已绑定 ${assessment.blockRevision}`
-    syncViewModels()
+  async function assessBackground() {
+    if (!session) return
+    await runAction(async () => {
+      const assessment = await session!.assess('b-d4e5f6', 'agent:verifier', 'verified')
+      notice = `核验结论已保存并绑定 ${assessment.blockRevision}`
+    })
   }
 
   async function decide(proposal: Proposal, decision: 'accept' | 'reject') {
-    const result = session.decideProposal(proposal.changeSetId, decision, 'human:local')
-    if (result?.kind === 'applied') {
-      await applyRemote(result.change)
-      notice = '已接受 Agent 提案并以局部事务更新正文。'
-    } else if (result?.kind === 'conflicted') {
-      notice = '提案的目标块已变化；冲突已保留，没有覆盖正文。'
-    } else {
-      notice = '提案已拒绝，正文未改变。'
-    }
-    syncViewModels()
+    if (!session) return
+    await runAction(async () => {
+      const result = await session!.decideProposal(proposal.changeSetId, decision, 'human:local')
+      if (result?.kind === 'applied') {
+        await applyRemote(result.change)
+        notice = '已保存采纳决定，并以局部事务更新正文。'
+      } else if (result?.kind === 'conflicted') {
+        notice = '提案冲突已保存；目标块没有被旧内容覆盖。'
+      } else {
+        notice = '拒绝决定已保存，正文未改变。'
+      }
+    })
   }
 
   async function createStaleConflict() {
-    const stale = session.propose(
-      batchFor('b-d4e5f6', '这是一份基于旧版本的 Agent 建议。'),
-      'agent:organizer',
-    )
-    const direct = session.submit(
-      batchFor('b-d4e5f6', '人类已先一步改写这段背景，旧提案不应覆盖它。'),
-      'human:local',
-    )
-    if (direct.kind === 'applied') await applyRemote(direct.change)
-    const result = session.decideProposal(stale.changeSetId, 'accept', 'human:local')
-    notice = result?.kind === 'conflicted'
-      ? '已验证 stale-base：旧提案未覆盖人类新版本。'
-      : '未能制造预期冲突。'
-    syncViewModels()
+    if (!session) return
+    await runAction(async () => {
+      const stale = await session!.propose(
+        batchFor('b-d4e5f6', '这是一份基于旧版本的 Agent 建议。'),
+        'agent:organizer',
+      )
+      const direct = await session!.submit(
+        batchFor('b-d4e5f6', '人类已先一步改写这段背景，旧提案不应覆盖它。'),
+        'human:local',
+      )
+      if (direct.kind === 'applied') await applyRemote(direct.change)
+      const result = await session!.decideProposal(stale.changeSetId, 'accept', 'human:local')
+      notice = result?.kind === 'conflicted'
+        ? '已保存 stale-base 冲突：旧提案未覆盖人类新版本。'
+        : '未能制造预期冲突。'
+    })
+  }
+
+  async function runAction(action: () => Promise<void>) {
+    activeWrites += 1
+    try {
+      await action()
+    } catch (cause) {
+      await recoverAfterActionFailure(cause)
+    } finally {
+      activeWrites -= 1
+      syncViewModels()
+    }
+  }
+
+  async function recoverAfterActionFailure(cause: unknown) {
+    if (cause instanceof EditorSyncError) return
+    if (cause instanceof RepositoryOutcomeUnknownError) {
+      lockEditor('无法核定本次保存结果；已切换为只读，请重开窗口重新读取。')
+      return
+    }
+    const conflict = cause instanceof RepositoryConflictError
+    const message = conflict
+      ? '检测到并发保存冲突；已恢复另一写入者的最新提交版本。'
+      : '保存失败；当前界面仍以最后一次成功提交为准。'
+    if (editor && session) {
+      const snapshot = session.snapshot()
+      if (!await reconcileOrLock({ kind: 'resync', snapshot, includedChangeIds: [] }, snapshot)) return
+    }
+    notice = message
+  }
+
+  async function reconcileOrLock(update: SurfaceUpdate, authoritative: DocumentRevision): Promise<boolean> {
+    if (!editor) return false
+    try {
+      await editor.surface.reconcile(update)
+      return true
+    } catch {
+      try {
+        await editor.surface.reconcile({ kind: 'resync', snapshot: authoritative, includedChangeIds: [] })
+        return true
+      } catch {
+        lockEditor('已提交状态无法同步到编辑器；已切换为只读，窗口重开后恢复。')
+        return false
+      }
+    }
+  }
+
+  function lockEditor(message: string) {
+    locked = true
+    notice = message
+    try {
+      editor?.surface.setReadOnly(true)
+    } catch {
+      // The UI state still disables every command in this view.
+    }
   }
 
   function syncViewModels() {
-    proposals = session.proposals()
-    assessments = session.assessments()
-    auditCount = session.audit().length
+    if (!session) return
+    const currentSession = session
+    proposals = currentSession.proposals()
+    assessments = currentSession.assessments()
+    auditCount = currentSession.audit().length
     editor?.decorations.setLayer('proposals', proposals
       .filter((proposal) => proposal.status === 'pending' || proposal.status === 'conflicted')
       .map((proposal) => ({
@@ -201,7 +347,7 @@
         label: proposal.status === 'conflicted' ? 'Agent 提案已过期' : 'Agent 提案待审阅',
       })))
     editor?.decorations.setLayer('assessments', assessments
-      .filter((assessment) => session.assessmentIsOutdated(assessment))
+      .filter((assessment) => currentSession.assessmentIsOutdated(assessment))
       .map((assessment) => ({
         blockId: assessment.blockId,
         kind: 'assessment-outdated' as const,
@@ -215,14 +361,14 @@
     <div>
       <p class="eyebrow">Stage 0 · 本机技术验证</p>
       <h2 id="cdr-spike-title">共写文档实验</h2>
-      <p>通用块操作以 MEMORY 作为第一个验证场景。当前不读写 Claim、根 MEMORY.md 或 Yjs；切换离开本页会重置实验数据。</p>
+      <p>通用块操作以 MEMORY 作为第一个验证场景。提交状态按当前 vault 隔离并保存在插件本机仓库，窗口重开后恢复；当前不读写 Claim、根 MEMORY.md 或 Yjs。</p>
     </div>
-    <span class="status" class:loading>{loading ? '加载中' : failed ? '不可用' : '可编辑'}</span>
+    <span class="status" class:loading={loading || saving || locked}>{loading ? '加载中' : failed ? '不可用' : locked ? '只读' : saving ? '保存中' : '可编辑'}</span>
   </header>
 
   {#if failed}
     <div class="failure" role="alert">
-      <strong>Editor Kit v2 加载失败</strong>
+      <strong>共写文档初始化失败</strong>
       <span>{failed}</span>
     </div>
   {:else}
@@ -233,16 +379,16 @@
       <aside aria-label="协作活动与提案">
         <section class="actions">
           <h3>验证动作</h3>
-          <button onclick={proposeBackground} disabled={!editor}>Agent A 提出建议</button>
-          <button onclick={applyRemoteFixture} disabled={!editor}>模拟已授权远端变更</button>
-          <button onclick={assessBackground} disabled={!editor}>核验背景块</button>
-          <button onclick={createStaleConflict} disabled={!editor}>验证 stale-base</button>
+          <button onclick={proposeBackground} disabled={!editor || !session || saving || locked}>Agent A 提出建议</button>
+          <button onclick={applyRemoteFixture} disabled={!editor || !session || saving || locked}>模拟已授权远端变更</button>
+          <button onclick={assessBackground} disabled={!editor || !session || saving || locked}>核验背景块</button>
+          <button onclick={createStaleConflict} disabled={!editor || !session || saving || locked}>验证 stale-base</button>
         </section>
 
         <section class="activity" aria-live="polite">
           <h3>当前状态</h3>
           <p>{notice}</p>
-          <small>{session.snapshot().revisionId} · {auditCount} 个审计事件</small>
+          <small>{session?.snapshot().revisionId ?? INITIAL_REVISION_ID} · {auditCount} 个审计事件</small>
         </section>
 
         <section class="proposal-list">
@@ -253,7 +399,7 @@
               <span>{proposal.batch.operations[0].markdown}</span>
               <small>{proposal.status} · 基于 {proposal.batch.operations[0].expectedBlockRevision}</small>
               {#if proposal.status === 'pending'}
-                <div><button onclick={() => decide(proposal, 'reject')}>拒绝</button><button class="primary" onclick={() => decide(proposal, 'accept')}>接受</button></div>
+                <div><button onclick={() => decide(proposal, 'reject')} disabled={saving || locked}>拒绝</button><button class="primary" onclick={() => decide(proposal, 'accept')} disabled={saving || locked}>接受</button></div>
               {/if}
             </article>
           {:else}
@@ -264,10 +410,10 @@
         <section class="assessment-list">
           <h3>核验</h3>
           {#each assessments as assessment (assessment.assessmentId)}
-            <p class:outdated={session.assessmentIsOutdated(assessment)}>
+            <p class:outdated={session?.assessmentIsOutdated(assessment) ?? false}>
               <strong>{assessment.conclusion === 'verified' ? '已核验' : '需复核'}</strong>
               <span>{assessment.blockRevision}</span>
-              {#if session.assessmentIsOutdated(assessment)}<small>目标已改变</small>{/if}
+              {#if session?.assessmentIsOutdated(assessment)}<small>目标已改变</small>{/if}
             </p>
           {:else}
             <p class="empty">暂无核验记录。</p>

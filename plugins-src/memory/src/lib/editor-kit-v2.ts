@@ -28,7 +28,7 @@ export type SurfaceUpdate =
       kind: 'reject-local'
       requestId: string
       reason: {
-        code: 'stale-base' | 'invalid-operation' | 'unsupported-structure' | 'remote-base-mismatch'
+        code: 'stale-base' | 'invalid-operation' | 'unsupported-structure' | 'remote-base-mismatch' | 'persistence-failed'
         message: string
         changeId?: string
       }

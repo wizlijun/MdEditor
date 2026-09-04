@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { InMemoryDocumentSession, sequentialIds, type DocumentRevision, type OperationBatch } from './session'
+import {
+  DOCUMENT_SESSION_STATE_SCHEMA,
+  InMemoryDocumentSession,
+  InvalidSessionStateError,
+  sequentialIds,
+  uuidIds,
+  type DocumentRevision,
+  type OperationBatch,
+} from './session'
 
 function fixture(): DocumentRevision {
   return {
@@ -57,11 +65,76 @@ describe('InMemoryDocumentSession', () => {
     expect(session.snapshot().blocks[0].markdown).toBe('# Human edit')
   })
 
+  it('limits Stage 0 proposals to one visible block replacement', () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('test'))
+    const one = replace('proposal', 'block-a', 'block-a/1', '# Suggested')
+    expect(() => session.propose({ ...one, operations: [] }, 'agent')).toThrow('CDR_PROPOSAL_OPERATION_COUNT')
+    expect(() => session.propose({
+      ...one,
+      operations: [
+        one.operations[0],
+        { ...one.operations[0], operationId: 'proposal/op-2', blockId: 'block-b', expectedBlockRevision: 'block-b/1' },
+      ],
+    }, 'agent')).toThrow('CDR_PROPOSAL_OPERATION_COUNT')
+
+    const state = session.exportState()
+    expect(() => InMemoryDocumentSession.fromState({
+      ...state,
+      proposals: [{
+        changeSetId: 'damaged', actorId: 'agent', status: 'pending', batch: { ...one, operations: [] },
+      }],
+    }, sequentialIds('restore'))).toThrow('CDR_STATE_INVALID')
+  })
+
   it('binds an assessment to the exact block revision', () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('test'))
     const assessment = session.assess('block-b', 'verifier', 'verified')
     expect(session.assessmentIsOutdated(assessment)).toBe(false)
     session.submit(replace('update', 'block-b', 'block-b/1', 'Changed constraint.'), 'human')
     expect(session.assessmentIsOutdated(assessment)).toBe(true)
+  })
+
+  it('exports one strict aggregate and restores compact receipts without snapshots', () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('first'))
+    const batch = replace('durable-request', 'block-a', 'block-a/1', '# Durable')
+    session.submit(batch, 'human')
+    session.propose(replace('proposal-request', 'block-b', 'block-b/1', 'Suggested.'), 'agent')
+    session.assess('block-b', 'verifier', 'verified')
+
+    const state = session.exportState()
+    expect(state.schema).toBe(DOCUMENT_SESSION_STATE_SCHEMA)
+    expect(state.receipts).toHaveLength(1)
+    expect(JSON.stringify(state.receipts)).not.toContain('snapshot')
+
+    const restored = InMemoryDocumentSession.fromState(state, sequentialIds('restored'))
+    expect(restored.snapshot()).toEqual(session.snapshot())
+    expect(restored.proposals()).toEqual(session.proposals())
+    expect(restored.assessments()).toEqual(session.assessments())
+    expect(restored.audit()).toEqual(session.audit())
+    expect(restored.submit(batch, 'human')).toMatchObject({ kind: 'applied', duplicate: true })
+    expect(restored.audit()).toHaveLength(session.audit().length)
+  })
+
+  it('rejects unknown fields and inconsistent receipt payloads while restoring', () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('test'))
+    session.submit(replace('request', 'block-a', 'block-a/1', '# Durable'), 'human')
+    const state = session.exportState()
+
+    expect(() => InMemoryDocumentSession.fromState({ ...state, future: true }, sequentialIds('restore')))
+      .toThrow(InvalidSessionStateError)
+    expect(() => InMemoryDocumentSession.fromState({
+      ...state,
+      receipts: [{ ...state.receipts[0], batchSignature: 'tampered' }],
+    }, sequentialIds('restore'))).toThrow('CDR_STATE_INVALID')
+    expect(() => InMemoryDocumentSession.fromState({
+      ...state,
+      head: { ...state.head, blocks: [] },
+    }, sequentialIds('restore'))).toThrow('CDR_STATE_INVALID')
+  })
+
+  it('provides UUID-backed production ids while retaining deterministic test ids', () => {
+    const ids = uuidIds()
+    expect(ids.revisionId()).toMatch(/^revision\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(sequentialIds('fixture').revisionId()).toBe('fixture/revision-1')
   })
 })

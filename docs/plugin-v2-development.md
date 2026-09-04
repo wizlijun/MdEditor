@@ -212,8 +212,9 @@ manifest 不写 `Agents`、`智能体` 等显示文本。插件市场索引也�
 | `renderer.html` | 渲染类(md2pdf 用) |
 | `editor.kit` | `host.theme.css` / `host.power_mode.config`(均 UI 桥 only,进程通道 `-32601`);另外解锁一条**保留 URL 路径**(不是 `host.*` 方法)—— `GET plugin://<id>/__host__/assets/...`,见下方说明 |
 | `power-mode` | `host.power_mode.update`(写 Power Mode 配置)。读侧 `host.power_mode.config` 挂在 `editor.kit` 下 —— 需要读它的正是内嵌 Editor Kit 的插件窗口 |
+| `cdr.repository` | `host.cdr.repository.v1.load` / `host.cdr.repository.v1.commit`（UI 桥 only；进程通道 `-32601`） |
 
-**通道差异(重要)**:`dialog.*` / `fs.*` / `clipboard.*` **只在 UI 桥可用**;后台进程通道(纯后端插件)即使声明了 `dialog` 也拿不到,会回 `-32601`(`host_api.rs:165-168`)。`vault.*` 和 `location.get` 两个通道都可用。`editor.kit` 的两个解锁项(`host.theme.css` RPC + `__host__` 资产路径)也都只在 UI 桥可用。
+**通道差异(重要)**:`dialog.*` / `fs.*` / `clipboard.*` / `cdr.repository` **只在 UI 桥可用**;后台进程通道(纯后端插件)即使声明了对应能力也拿不到,会回 `-32601`(`host_api.rs:165-168`)。`vault.*` 和 `location.get` 两个通道都可用。`editor.kit` 的两个解锁项(`host.theme.css` RPC + `__host__` 资产路径)也都只在 UI 桥可用。
 
 **「决策」需要的最小集合**:`["vault.read", "vault.write", "toast"]`(开窗口时天然可用,窗口本身不需要单独 capability)。
 
@@ -259,6 +260,21 @@ manifest 不写 `Agents`、`智能体` 等显示文本。插件市场索引也�
 - `host.vault.rename` 的 `from`/`to` **都要过 vault 围栏**;**目标已存在一律报错、绝不覆盖**(用 `O_EXCL` `create_new` 原子占位再 `rename`,避免"先查是否存在再改名"的 TOCTOU 竞态和悬空符号链接被静默吃掉;`rename` 失败——最常见是 `from` 不存在——会清理掉刚占位的空文件,不留 0 字节垃圾);可以跨目录移动(仍须落在同一 vault 内),`to` 的父目录自动创建;`from`/`to` 命中符号链接时同样操作链接本身而非其目标。
 
 > ⚠️ 常见误区更正:`vault.write` 参数只有 `{path, content}`;`vault.info` 返回的是 `{root, wiki_dir, daily_dir}` 而非 `{root, subdirs}`。
+
+### CDR aggregate repository（源：`cdr_repository.rs`）
+
+这是隔离插件窗口使用的最小、不透明、按插件分区的本机 CAS 存储。宿主从已认证的 `plugin://` Origin 决定插件 ID，并在 `<app-data>/plugin_data/<plugin-id>/cdr-repository/v1/` 下按 document ID 的 SHA-256 定位文件；调用方不能指定物理路径。它只保证一个 aggregate 的原子替换，不解释 MEMORY、Claim、ProseMirror 或 Yjs 语义。因为复用既有 `plugin_data/<plugin-id>` 生命周期，卸载时 `keep_data=false` 会删除该仓库，`keep_data=true` 会保留。
+
+| 方法 | 参数 | 返回 |
+|---|---|---|
+| `host.cdr.repository.v1.load` | `{ document_id: string }` | `{ kind: "missing" }` 或 `{ kind: "loaded", generation: number, aggregate: object }` |
+| `host.cdr.repository.v1.commit` | `{ document_id: string, expected_generation: number, aggregate: object }` | `{ kind: "committed", generation: number }` 或 `{ kind: "conflict", current: { generation, aggregate } }` |
+
+- 首次创建使用 `expected_generation: 0`；之后必须提交上一次 load／commit 返回的 generation。冲突不会写盘，调用方应使用返回的 current 恢复，而不是盲目重试。
+- commit 抛错不等于“确定未写入”：原子替换后的目录同步失败或 IPC 回执丢失都可能让结果未知。调用方必须重新 load；只有读到旧 aggregate 才能按失败处理，读到候选可按成功收口，读到第三方版本按冲突收口，无法核定时必须停止写入并等待重开／人工恢复。
+- 单个 aggregate 上限 16 MiB；document ID、参数字段、envelope schema、插件归属和 document 归属都严格校验。损坏或未知状态会失败关闭，不会按空文档覆盖。
+- 写入采用同目录临时文件、文件同步、原子替换，并在 Unix 上同步最终目录；宿主进程内的 writers 由同一 CAS 临界区串行化。该 Stage 0 存储验证正常重开恢复，不承诺跨平台掉电恢复、多宿主进程锁、历史查询、外部 Markdown 漂移检测或协作同步。app-data 视为宿主进程所有；防御其他本机进程在检查与写入之间恶意替换目录需要 handle-relative I/O，留作安全模型要求该威胁时的独立硬化。
+- repository 数据不在 vault 内，也不是可迁移文档格式。需要人类可读的 `.md`、结构化迁移包和业务 revision/journal 时，仍应由更高层 `DocumentRepository` 契约提供。
 
 ### 其它
 

@@ -346,6 +346,32 @@ pub async fn dispatch<R: tauri::Runtime>(
         };
     }
 
+    // The CDR repository is a UI-only, host-owned durable store. Its root and
+    // plugin scope come from the live AppHandle and authenticated plugin://
+    // Origin respectively; neither can be supplied or spoofed in params.
+    if req.method == "host.cdr.repository.v1.load"
+        || req.method == "host.cdr.repository.v1.commit"
+    {
+        if let Some(denial) = capability_denial(&req.method, capabilities, req.id) {
+            return denial;
+        }
+        let result = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("io: resolve app data directory: {error}"))
+            .and_then(|root| {
+                if req.method == "host.cdr.repository.v1.load" {
+                    super::cdr_repository::load(&root, plugin_id, &req.params)
+                } else {
+                    super::cdr_repository::commit(&root, plugin_id, &req.params)
+                }
+            });
+        return match result {
+            Ok(value) => ok(req.id, value),
+            Err(detail) => err(req.id, proto::ERR_INTERNAL, detail),
+        };
+    }
+
     // host.power_mode.* 与 theme.css 同理:要活的 AppHandle(读 app 配置目录下的
     // settings.json、枚举已加载插件、向主窗口 emit),而注入式 HostServices 刻意
     // 不带 AppHandle。gate 用同一张能力表,手工施加。
@@ -1569,6 +1595,8 @@ mod tests {
             ("host.theme.css", "editor.kit"),
             ("host.settings.get", "settings"),
             ("host.settings.set", "settings"),
+            ("host.cdr.repository.v1.load", "cdr.repository"),
+            ("host.cdr.repository.v1.commit", "cdr.repository"),
         ] {
             let r = run(&s, &[], method, serde_json::json!({})).await;
             let e = r.error.unwrap();
@@ -1598,6 +1626,21 @@ mod tests {
 
         // No capabilities at all → same denial.
         assert!(capability_denial("host.theme.css", &[], Some(1)).is_some());
+    }
+
+    #[test]
+    fn cdr_repository_methods_require_the_repository_capability() {
+        for method in [
+            "host.cdr.repository.v1.load",
+            "host.cdr.repository.v1.commit",
+        ] {
+            let denial = capability_denial(method, &[], Some(1)).expect("must deny");
+            assert_eq!(denial.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
+            assert!(
+                capability_denial(method, &["cdr.repository".into()], Some(1)).is_none(),
+                "{method}"
+            );
+        }
     }
 
     /// Fail CLOSED on an unknown method, exactly like the two shared gates

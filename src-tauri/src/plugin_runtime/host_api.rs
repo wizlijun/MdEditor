@@ -58,6 +58,10 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // and write to the Origin-authenticated plugin id, so holding this
         // token never exposes another plugin's settings scope.
         "host.settings.get" | "host.settings.set" => Some("settings"),
+        // Opaque collaborative-document aggregate repository. The live UI
+        // bridge binds storage to the Origin-authenticated plugin id; native
+        // plugin processes intentionally do not receive this surface.
+        "host.cdr.repository.v1.load" | "host.cdr.repository.v1.commit" => Some("cdr.repository"),
         "host.notify" => Some("notify"),
         "host.dismissNotification" => Some("notify"),
         // editor.kit — the host-embedded editor bundle and the theme CSS that
@@ -558,6 +562,14 @@ mod tests {
         assert_eq!(method_capability("host.agent.limits"), Some("agent"));
         assert_eq!(method_capability("host.settings.get"), Some("settings"));
         assert_eq!(method_capability("host.settings.set"), Some("settings"));
+        assert_eq!(
+            method_capability("host.cdr.repository.v1.load"),
+            Some("cdr.repository")
+        );
+        assert_eq!(
+            method_capability("host.cdr.repository.v1.commit"),
+            Some("cdr.repository")
+        );
         assert_eq!(method_capability("host.notify"), Some("notify"));
         assert_eq!(method_capability("host.dismissNotification"), Some("notify"));
         assert_eq!(method_capability("host.theme.css"), Some("editor.kit"));
@@ -637,6 +649,30 @@ mod tests {
         );
 
         for method in ["host.settings.get", "host.settings.set"] {
+            let resp = sink(req(method, Some(6), serde_json::json!({}))).unwrap();
+            let err = resp.error.unwrap();
+            assert_eq!(err.code, proto::ERR_METHOD_NOT_FOUND, "{method}");
+            assert!(err.message.contains("process channel"), "{}", err.message);
+        }
+    }
+
+    #[test]
+    fn cdr_repository_is_ui_only_even_when_the_process_holds_the_capability() {
+        let dir = tempfile::tempdir().unwrap();
+        let (emitter, _) = recording_emitter();
+        let sink = make_sink(
+            "notemd.test".into(),
+            vec!["cdr.repository".into()],
+            dir.path().to_path_buf(),
+            emitter,
+            noop_poster(),
+            None,
+        );
+
+        for method in [
+            "host.cdr.repository.v1.load",
+            "host.cdr.repository.v1.commit",
+        ] {
             let resp = sink(req(method, Some(6), serde_json::json!({}))).unwrap();
             let err = resp.error.unwrap();
             assert_eq!(err.code, proto::ERR_METHOD_NOT_FOUND, "{method}");

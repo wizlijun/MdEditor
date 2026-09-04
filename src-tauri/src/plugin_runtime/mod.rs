@@ -6,6 +6,7 @@
 pub mod adapter;
 pub mod agent_provider;
 pub mod commands;
+pub mod cdr_repository;
 pub mod discovery;
 pub mod host_api;
 pub mod installer;

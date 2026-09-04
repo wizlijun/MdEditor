@@ -47,6 +47,7 @@
     "vault.read",
     "vault.write",
     "editor.kit",
+    "cdr.repository",
     "agent",
     "toast"
   ],
