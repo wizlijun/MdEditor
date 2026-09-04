@@ -7,6 +7,16 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.904.7 — 2026-09-04
+
+### Added
+
+- **A MEMORY-first governed coauthoring preview.** Memory 2.5.0 can create and locally edit a background document with stable block identities; content, proposals, exact-revision assessments and audit state reopen from one durable commit. Agent suggestions remain pending until a human accepts them, and stale results never overwrite concurrent edits. Claude Agent 1.0.29, Codex Agent 1.0.16 and DeepSeek Agent 1.1.15 run the shared review task inside real input-only isolation.
+
+### Security
+
+- **Governed coauthoring no longer trusts Agent task files in the Vault as its isolation boundary.** All three providers compile in the same task protocol, and Memory enables the action only for a healthy provider advertising that exact task, complete machine results and input-only isolation; older providers fail closed.
+
 ## v6.904.6 — 2026-09-04
 
 ### Fixed
