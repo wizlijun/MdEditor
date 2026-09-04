@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.904.3 — 2026-09-04
+
 ### Fixed
 
 - **Owner profile facts are projected to `USER.md` again.** Identity, preferences, work style and boundaries use the `user` projection, while decisions, commitments, practices and other durable context remain in `MEMORY.md`. Both files stay disposable, read-only views grouped by Scope and Role; `.notemd/memory` remains the sole authority.
