@@ -2,7 +2,7 @@
 # before `pnpm install` will run their `prepare` script. mermaid-mini is a
 # private fork that builds at install-time (see its package.json's prepare).
 allowBuilds:
-  mermaid-mini: true
+  mermaid-mini@https://codeload.github.com/wizlijun/mermaid-mini/tar.gz/05c0e8817ab516e42c1e366a0c00948b23da1442: true
   esbuild: true
   sharp: true
   workerd: true
