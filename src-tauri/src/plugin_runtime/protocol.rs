@@ -840,6 +840,7 @@ mod tests {
         let view = view_with_caps(dir.path(), vec!["editor.kit".into()]);
         for (url, expected) in [
             ("/__host__/assets/editor-kit-v1.js", "/assets/editor-kit-v1.js"),
+            ("/__host__/assets/editor-kit-v2.js", "/assets/editor-kit-v2.js"),
             ("/__host__/assets/editor-kit-v1.css", "/assets/editor-kit-v1.css"),
             ("/__host__/assets/index-D3adB33f.js", "/assets/index-D3adB33f.js"),
             ("/__host__/assets/KaTeX_Main-Regular-x1.woff2", "/assets/KaTeX_Main-Regular-x1.woff2"),

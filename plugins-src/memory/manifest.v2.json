@@ -46,6 +46,7 @@
     "clipboard.write",
     "vault.read",
     "vault.write",
+    "editor.kit",
     "agent",
     "toast"
   ],

@@ -61,6 +61,7 @@ describe('Memory Protocol v2 app', () => {
       return {}
     })
     await render(request)
+    expect(tab('共写文档').textContent).toContain('实验')
     expect(button('身份与场景…')).toBeUndefined()
     tab('待确认').click(); flushSync()
     tab('待确认').focus()

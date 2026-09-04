@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const JS = 'dist/assets/editor-kit-v1.js'
 const CSS = 'dist/assets/editor-kit-v1.css'
+const V2_JS = 'dist/assets/editor-kit-v2.js'
 
 // A correct build is ~tens of KB of shell code; the known tree-shaken stub was
 // 35 bytes. Anything under 1 KB is not a real kit.
@@ -43,6 +44,7 @@ function sizeOf(rel) {
 
 const jsSize = sizeOf(JS)
 const cssSize = sizeOf(CSS)
+const v2JsSize = sizeOf(V2_JS)
 
 if (jsSize === null) {
   problems.push(`${JS} is missing — the 'editor-kit' entry did not produce its bundle.`)
@@ -67,10 +69,21 @@ if (cssSize === null) {
   problems.push(`${CSS} is empty — the kit would mount unstyled.`)
 }
 
+if (v2JsSize === null) {
+  problems.push(`${V2_JS} is missing — the 'editor-kit-v2' entry did not produce its bundle.`)
+} else if (v2JsSize < MIN_JS_BYTES) {
+  problems.push(`${V2_JS} is only ${v2JsSize} bytes — the v2 entry was almost certainly tree-shaken away.`)
+} else {
+  const js = readFileSync(join(root, V2_JS), 'utf8')
+  if (!js.includes('mountDocumentEditor')) {
+    problems.push(`${V2_JS} does not export mountDocumentEditor.`)
+  }
+}
+
 if (problems.length > 0) {
   console.error('Editor Kit build check FAILED:')
   for (const p of problems) console.error(`  - ${p}`)
   process.exit(1)
 }
 
-console.log(`Editor Kit build OK (${JS} ${jsSize} B, ${CSS} ${cssSize} B)`)
+console.log(`Editor Kit build OK (${JS} ${jsSize} B, ${V2_JS} ${v2JsSize} B, ${CSS} ${cssSize} B)`)

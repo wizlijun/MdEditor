@@ -50,10 +50,16 @@ export default defineConfig({
         // shares the moraya / prosemirror chunks with the main window, so the
         // installer grows by ≈ 0.
         'editor-kit': 'src/editor-kit/main.ts',
+        // Block-aware governed-document surface. Kept as a separate entry so
+        // the frozen whole-Markdown v1 contract and its consumers do not move.
+        'editor-kit-v2': 'src/editor-kit-v2/main.ts',
       },
       output: {
-        entryFileNames: (c) =>
-          c.name === 'editor-kit' ? 'assets/editor-kit-v1.js' : 'assets/[name]-[hash].js',
+        entryFileNames: (c) => {
+          if (c.name === 'editor-kit') return 'assets/editor-kit-v1.js'
+          if (c.name === 'editor-kit-v2') return 'assets/editor-kit-v2.js'
+          return 'assets/[name]-[hash].js'
+        },
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: (a) => {
           const names = a.names ?? ((a as { name?: string }).name ? [(a as { name?: string }).name!] : [])
