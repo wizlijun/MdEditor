@@ -31,7 +31,10 @@ const HARNESS_NAME: &str = "Codex CLI";
 const FAST_MODEL: &str = "gpt-5.6-luna";
 /// A version probe runs while the window waits, so it is bounded tightly.
 const VERSION_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-/// Model catalog refresh can be slower than the cheap version/auth probes.
+/// Status only needs a best-effort display value. A slow catalog must not hold
+/// Smart Lookup discovery hostage; actual default-model runs get a larger bound.
+const STATUS_MODEL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Default-model execution still resolves the exact effective model for provenance.
 const MODEL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// The tray reminder a caller wants pushed when its run reaches a terminal
@@ -113,7 +116,7 @@ fn relayed_start_params(context: &Value, task_id: &str, prompt: &str, note_path:
 
 fn harness_capabilities(
     default_model: Option<String>,
-    available: bool,
+    harness_available: bool,
 ) -> agent_run_core::HarnessCapabilities {
     agent_run_core::HarnessCapabilities {
         tasks: vec![
@@ -130,11 +133,11 @@ fn harness_capabilities(
             profiles: agent_run_core::ModelRoutingProfiles {
                 fast: agent_run_core::ModelProfileCapability {
                     model: Some(FAST_MODEL.into()),
-                    available,
+                    available: harness_available,
                 },
                 default_profile: agent_run_core::ModelProfileCapability {
+                    available: harness_available && default_model.is_some(),
                     model: default_model,
-                    available,
                 },
             },
             // Codex does not expose a stable, credential-free full catalog.
@@ -900,17 +903,16 @@ impl CodexAgentPlugin {
                 }
             }
         }
-        let default_model = vault
-            .as_deref()
-            .and_then(|v| discover::effective_model(&bin, &path_env, v, MODEL_PROBE_TIMEOUT));
-        if ok && vault.is_some() && default_model.is_none() {
-            ok = false;
-            hint = Some(
-                "Codex 无法解析当前 Vault 的有效模型；请先在该目录运行一次 `codex` 并检查配置。"
-                    .into(),
-            );
-            reason = Some("model_probe_failed");
-        }
+        // The catalog is optional status metadata. Codex can transiently fail
+        // its background model refresh while an explicitly pinned fast model
+        // remains fully runnable, so this probe must never flip readiness.
+        let default_model = ok
+            .then(|| {
+                vault.as_deref().and_then(|v| {
+                    discover::effective_model(&bin, &path_env, v, STATUS_MODEL_PROBE_TIMEOUT)
+                })
+            })
+            .flatten();
         let mut value = serde_json::to_value(agent_run_core::HarnessStatus {
             harness: HARNESS_NAME.to_string(),
             ok,
@@ -1486,6 +1488,29 @@ mod tests {
             Some("gpt-5.6-sol")
         );
         assert!(capabilities.model_routing.selectable_models.is_empty());
+    }
+
+    #[test]
+    fn a_missing_catalog_default_does_not_disable_the_explicit_fast_profile() {
+        let capabilities = harness_capabilities(None, true);
+        assert!(capabilities.model_routing.profiles.fast.available);
+        assert_eq!(
+            capabilities.model_routing.profiles.fast.model.as_deref(),
+            Some("gpt-5.6-luna")
+        );
+        assert!(
+            !capabilities
+                .model_routing
+                .profiles
+                .default_profile
+                .available
+        );
+        assert!(capabilities
+            .model_routing
+            .profiles
+            .default_profile
+            .model
+            .is_none());
     }
 
     #[test]

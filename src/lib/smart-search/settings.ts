@@ -36,7 +36,7 @@ export const DEFAULT_SMART_LOOKUP_SETTINGS: SmartLookupSettings = {
     enabled: true,
     provider: 'auto',
     modelByProvider: {},
-    timeoutMs: 8_000,
+    timeoutMs: 30_000,
   },
   results: {
     limit: 50,
@@ -117,7 +117,10 @@ export function normalizeSmartLookupSettings(value: unknown): SmartLookupSetting
       enabled: bool(planner.enabled, defaults.planner.enabled),
       provider: provider(planner.provider, defaults.planner.provider),
       modelByProvider: modelMap(planner.modelByProvider),
-      timeoutMs: boundedInteger(planner.timeoutMs, 3_000, 15_000, defaults.planner.timeoutMs),
+      // The original 8 s default regularly expired while a fast harness was
+      // still starting. Keeping the supported floor above that value also
+      // migrates already-persisted copies of the old default automatically.
+      timeoutMs: boundedInteger(planner.timeoutMs, 10_000, 60_000, defaults.planner.timeoutMs),
     },
     results: {
       limit: choice(results.limit, [20, 50, 100] as const, defaults.results.limit),

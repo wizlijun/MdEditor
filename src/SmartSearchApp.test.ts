@@ -328,6 +328,26 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     expect(document.body.textContent).not.toContain('Agent could not answer')
   })
 
+  it('keeps local results and hides provider internals when the Planner is cancelled', async () => {
+    mocks.statusResults.push({
+      state: 'done',
+      record: {
+        status: 'cancelled',
+        stderr_tail: 'ERROR codex_models_manager::manager: failed to refresh available models',
+      },
+    })
+    const input = await mountReady()
+    await typeAndWait(input)
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await vi.waitFor(() => expect(document.querySelector('.preview-warning')).not.toBeNull())
+
+    expect(document.querySelectorAll('.result-row')).toHaveLength(3)
+    expect(document.body.textContent).toContain('快速模型运行已停止')
+    expect(document.body.textContent).not.toContain('codex_models_manager')
+    expect(document.body.textContent).not.toContain('failed to refresh available models')
+  })
+
   it('recovers a lost Planner start response without starting a different invocation', async () => {
     mocks.planStartFailures = 1
     const input = await mountReady()
