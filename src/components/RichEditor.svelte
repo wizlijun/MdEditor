@@ -382,6 +382,23 @@
     event.stopImmediatePropagation()
 
     if (event.metaKey || event.ctrlKey) {
+      // Frontmatter link labels hide their Markdown/wikilink source until the
+      // editable value is focused. This NodeView has no ProseMirror contentDOM,
+      // so placeCaretAtPoint cannot enter it; focus the value directly and put
+      // the caret after the now-visible raw source instead.
+      const fmValue = target.closest('.frontmatter-properties .fm-val.fm-editable') as HTMLElement | null
+      if (fmValue) {
+        fmValue.focus()
+        const selection = window.getSelection()
+        if (selection) {
+          const range = document.createRange()
+          range.selectNodeContents(fmValue)
+          range.collapse(false)
+          selection.removeAllRanges()
+          selection.addRange(range)
+        }
+        return
+      }
       placeCaretAtPoint(event.clientX, event.clientY)
       return
     }

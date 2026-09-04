@@ -5,19 +5,20 @@ import { describe, it, expect, vi } from 'vitest'
 import { renderFrontmatter, buildFrontmatterDom, buildFrontmatterView } from './frontmatter-view'
 
 describe('renderFrontmatter — rendering', () => {
-  it('renders key: value pairs as a table with editable scalar cells', () => {
+  it('renders key: value pairs as borderless properties with editable scalar values', () => {
     const el = buildFrontmatterDom('title: Hello\nauthor: Bruce')
-    const rows = el.querySelectorAll('.frontmatter-table tr')
+    const rows = el.querySelectorAll('.frontmatter-properties .fm-property')
     expect(rows.length).toBe(2)
     expect(rows[0].querySelector('.fm-key')?.textContent).toBe('title')
     const val = rows[0].querySelector('.fm-val') as HTMLElement
     expect(val.textContent).toBe('Hello')
     expect(val.getAttribute('contenteditable')).toBe('true')
+    expect(el.querySelector('table, tr, td')).toBeNull()
   })
 
-  it('renders a list value read-only as a <ul>', () => {
+  it('renders a scalar list read-only as rounded chips', () => {
     const el = buildFrontmatterDom('tags:\n  - a\n  - b\n  - c')
-    const items = el.querySelectorAll('.fm-val ul.fm-list > li')
+    const items = el.querySelectorAll('.fm-val ul.fm-list.fm-chips > li')
     expect(items.length).toBe(3)
     expect(Array.from(items).map(li => li.textContent)).toEqual(['a', 'b', 'c'])
     // Complex values are not inline-editable.
@@ -34,19 +35,61 @@ describe('renderFrontmatter — rendering', () => {
   it('renders non-key:value regions as markdown', () => {
     const raw = 'title: Hello\n\n> a quote line\n'
     const el = renderFrontmatter(raw)
-    // kv table for title
-    expect(el.querySelector('.frontmatter-table .fm-key')?.textContent).toBe('title')
+    // property row for title
+    expect(el.querySelector('.frontmatter-properties .fm-key')?.textContent).toBe('title')
     // md block rendered the blockquote
     const md = el.querySelector('.frontmatter-md')!
     expect(md.innerHTML).toContain('<blockquote>')
     expect(md.textContent).toContain('a quote line')
   })
 
-  it('segments mixed content into multiple kv tables', () => {
+  it('segments mixed content into multiple property groups', () => {
     const raw = 'title: A\n\nprose\n\ndate: B\ntags:\n  - x\n'
     const el = renderFrontmatter(raw)
-    expect(el.querySelectorAll('.frontmatter-table').length).toBe(2)
+    expect(el.querySelectorAll('.frontmatter-properties').length).toBe(2)
     expect(el.querySelectorAll('.frontmatter-md').length).toBe(1)
+  })
+
+  it('decorates wikilinks, Markdown links, and bare URLs without changing editable text', () => {
+    const raw = [
+      'related: "[[Roadmap|Plan]]"',
+      'reference: "[Docs](notes/guide.md)"',
+      'website: https://example.com/docs',
+    ].join('\n')
+    const el = renderFrontmatter(raw)
+
+    const wiki = el.querySelector('[data-wikilink="Roadmap"]') as HTMLElement
+    expect(wiki.classList.contains('wikilink')).toBe(true)
+    expect(wiki.textContent).toBe('[[Roadmap|Plan]]')
+    expect(wiki.dataset.fmLabel).toBe('Plan')
+
+    const mdLink = el.querySelector('a[href="notes/guide.md"]') as HTMLAnchorElement
+    expect(mdLink.textContent).toBe('[Docs](notes/guide.md)')
+    expect(mdLink.dataset.fmLabel).toBe('Docs')
+
+    const url = el.querySelector('[data-url="https://example.com/docs"]') as HTMLElement
+    expect(url.classList.contains('url-autolink')).toBe(true)
+    expect(url.textContent).toBe('https://example.com/docs')
+
+    expect(Array.from(el.querySelectorAll('.fm-val')).map((v) => v.textContent)).toEqual([
+      '[[Roadmap|Plan]]',
+      '[Docs](notes/guide.md)',
+      'https://example.com/docs',
+    ])
+  })
+
+  it('decorates links inside scalar list chips and nested values', () => {
+    const el = renderFrontmatter([
+      'related:',
+      '  - "[[Roadmap]]"',
+      '  - https://example.com',
+      'source:',
+      '  docs: "[Guide](guide.md)"',
+    ].join('\n'))
+
+    expect(el.querySelector('.fm-chips [data-wikilink="Roadmap"]')).toBeTruthy()
+    expect(el.querySelector('.fm-chips [data-url="https://example.com"]')).toBeTruthy()
+    expect(el.querySelector('.fm-nested a[href="guide.md"]')).toBeTruthy()
   })
 })
 
@@ -55,8 +98,8 @@ describe('renderFrontmatter — editing', () => {
     const onChange = vi.fn()
     const raw = 'title: Hello\ncount: 3\n'
     const el = renderFrontmatter(raw, onChange)
-    const countCell = Array.from(el.querySelectorAll('tr'))
-      .find(tr => tr.querySelector('.fm-key')?.textContent === 'count')!
+    const countCell = Array.from(el.querySelectorAll('.fm-property'))
+      .find(row => row.querySelector('.fm-key')?.textContent === 'count')!
       .querySelector('.fm-val') as HTMLElement
 
     countCell.textContent = '5'
@@ -73,6 +116,27 @@ describe('renderFrontmatter — editing', () => {
     const el = renderFrontmatter('title: Hello\n', onChange)
     const cell = el.querySelector('.fm-val') as HTMLElement
     cell.dispatchEvent(new Event('blur'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('does not rewrite an unchanged link scalar on blur', () => {
+    const onChange = vi.fn()
+    const el = renderFrontmatter('reference: "[Docs](guide.md)"\n', onChange)
+    const cell = el.querySelector('.fm-val') as HTMLElement
+    expect(cell.textContent).toBe('[Docs](guide.md)')
+    cell.dispatchEvent(new Event('blur'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('restores link decoration after Escape without writing YAML', () => {
+    const onChange = vi.fn()
+    const el = renderFrontmatter('related: "[[Roadmap|Plan]]"\n', onChange)
+    const cell = el.querySelector('.fm-val') as HTMLElement
+    cell.focus()
+    cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+
+    expect(cell.querySelector('[data-wikilink="Roadmap"]')).toBeTruthy()
+    expect(cell.textContent).toBe('[[Roadmap|Plan]]')
     expect(onChange).not.toHaveBeenCalled()
   })
 
@@ -96,10 +160,11 @@ describe('buildFrontmatterView — collapse', () => {
     const details = buildFrontmatterView(container, 'title: Hello\nauthor: Bruce\n')
     expect(details.tagName).toBe('DETAILS')
     expect((details as HTMLDetailsElement).open).toBe(false)
+    expect(details.querySelector('.frontmatter-summary-title')?.textContent).toBe('Metadata')
     const summary = details.querySelector('.frontmatter-summary-keys')!
     expect(summary.textContent).toBe('title, author')
-    // Body (the table) is present inside, ready to reveal on expand.
-    expect(details.querySelector('.frontmatter-table')).toBeTruthy()
+    // Body (the property list) is present inside, ready to reveal on expand.
+    expect(details.querySelector('.frontmatter-properties')).toBeTruthy()
   })
 
   it('honours a previously-open state stashed on the container', () => {

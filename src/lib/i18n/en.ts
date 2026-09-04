@@ -14,6 +14,7 @@ export const en = {
   'common.close': 'Close',
   'common.dismiss': 'Dismiss',
   'common.saveAs': 'Save as…',
+  'frontmatter.metadata': 'Metadata',
   'dialog.saveChanges.message': 'Do you want to save the changes you made to "{name}"?',
   'dialog.saveChanges.info': "Your changes will be lost if you don't save them.",
   'dialog.save': 'Save',
@@ -349,6 +350,7 @@ export const en = {
   // Empty state
   'emptyState.hint': 'Drop a .md file, or',
   'emptyState.new': 'New (⌘N)',
+  'canvas.new': 'New Canvas',
   'emptyState.open': 'Open… (⌘O)',
 
   // Toast

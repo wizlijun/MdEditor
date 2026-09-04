@@ -2,11 +2,13 @@ import { parseDocument, isScalar, isMap } from 'yaml'
 import type { FrontmatterViewFactory } from '@moraya/core'
 import { segmentFrontmatter } from './frontmatter-segment'
 import { renderMarkdownInline } from './plugins/host-render-html'
+import { frontmatterInlineParts } from './frontmatter-inline'
+import { t } from './i18n/store.svelte'
 
 /**
  * Render YAML frontmatter for the rich editor. The block is segmented into
- * contiguous `key: value` regions (rendered as a table with editable scalar
- * values) and other content (rendered as read-only markdown). See
+ * contiguous `key: value` regions (rendered as property rows with editable
+ * scalar values) and other content (rendered as read-only markdown). See
  * docs/superpowers/specs/2026-07-08-frontmatter-table-render-design.md.
  *
  * `onChange` receives the full new raw YAML after a scalar value is edited.
@@ -20,7 +22,7 @@ export function renderFrontmatter(
   root.className = 'frontmatter-segments'
   for (const seg of segmentFrontmatter(raw)) {
     if (seg.kind === 'kv') {
-      root.appendChild(renderKvTable(seg.text, seg.start, seg.end, raw, onChange))
+      root.appendChild(renderKvProperties(seg.text, seg.start, seg.end, raw, onChange))
     } else if (seg.text.trim() !== '') {
       root.appendChild(renderMdBlock(seg.text))
     }
@@ -40,7 +42,7 @@ function renderMdBlock(md: string): HTMLElement {
   return div
 }
 
-function renderKvTable(
+function renderKvProperties(
   segText: string,
   segStart: number,
   segEnd: number,
@@ -58,39 +60,38 @@ function renderKvTable(
   if (doc.errors.length > 0 || !isMap(doc.contents)) return rawFallback(segText)
   const contents = doc.contents
 
-  const table = document.createElement('table')
-  table.className = 'frontmatter-table'
-  const tbody = document.createElement('tbody')
+  const properties = document.createElement('div')
+  properties.className = 'frontmatter-properties'
 
   for (const pair of contents.items) {
     const key = String((pair.key as { value?: unknown })?.value ?? pair.key)
     const valueNode = pair.value
 
-    const tr = document.createElement('tr')
-    const keyCell = document.createElement('td')
-    keyCell.className = 'fm-key'
-    keyCell.textContent = key
+    const row = document.createElement('div')
+    row.className = 'fm-property'
+    const keyEl = document.createElement('div')
+    keyEl.className = 'fm-key'
+    keyEl.textContent = key
 
-    const valCell = document.createElement('td')
-    valCell.className = 'fm-val'
+    const valEl = document.createElement('div')
+    valEl.className = 'fm-val'
 
     if (isEditableScalar(valueNode)) {
       const originalValue = (valueNode as { value: unknown }).value
       const original = scalarText(valueNode)
-      valCell.classList.add('fm-editable')
-      valCell.contentEditable = 'true'
-      valCell.spellcheck = false
-      valCell.textContent = original
-      wireScalarEdit(valCell, key, original, originalValue, segText, segStart, segEnd, fullRaw, onChange)
+      valEl.classList.add('fm-editable')
+      valEl.contentEditable = 'true'
+      valEl.spellcheck = false
+      valEl.appendChild(renderInlineValue(original))
+      wireScalarEdit(valEl, key, original, originalValue, segText, segStart, segEnd, fullRaw, onChange)
     } else {
-      valCell.appendChild(renderReadonlyValue(valueNode?.toJSON?.() ?? null))
+      valEl.appendChild(renderReadonlyValue(valueNode?.toJSON?.() ?? null))
     }
 
-    tr.append(keyCell, valCell)
-    tbody.appendChild(tr)
+    row.append(keyEl, valEl)
+    properties.appendChild(row)
   }
-  table.appendChild(tbody)
-  return table
+  return properties
 }
 
 function isEditableScalar(node: unknown): boolean {
@@ -153,7 +154,11 @@ function wireScalarEdit(
   cell.addEventListener('keydown', (e) => {
     const ev = e as KeyboardEvent
     if (ev.key === 'Enter') { ev.preventDefault(); cell.blur() }
-    else if (ev.key === 'Escape') { ev.preventDefault(); cell.textContent = original; cell.blur() }
+    else if (ev.key === 'Escape') {
+      ev.preventDefault()
+      cell.replaceChildren(renderInlineValue(original))
+      cell.blur()
+    }
   })
 }
 
@@ -170,6 +175,7 @@ function renderReadonlyValue(value: unknown): Node {
   if (Array.isArray(value)) {
     const ul = document.createElement('ul')
     ul.className = 'fm-list'
+    if (value.every(isChipValue)) ul.classList.add('fm-chips')
     for (const item of value) {
       const li = document.createElement('li')
       li.appendChild(renderReadonlyValue(item))
@@ -195,7 +201,54 @@ function renderReadonlyValue(value: unknown): Node {
   }
 
   // Scalar (incl. multi-line strings, which the `.fm-val` pre-wrap keeps intact).
-  return document.createTextNode(String(value))
+  return renderInlineValue(String(value))
+}
+
+function isChipValue(value: unknown): boolean {
+  return value == null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+}
+
+function renderInlineValue(value: string): DocumentFragment {
+  const fragment = document.createDocumentFragment()
+  for (const part of frontmatterInlineParts(value)) {
+    if (part.kind === 'text') {
+      fragment.appendChild(document.createTextNode(part.text))
+    } else if (part.kind === 'wikilink') {
+      const link = document.createElement('span')
+      link.className = 'wikilink fm-inline-link'
+      link.dataset.wikilink = part.target
+      decorateLinkLabel(link, part.raw, part.label)
+      fragment.appendChild(link)
+    } else if (part.kind === 'link') {
+      const link = document.createElement('a')
+      link.className = 'fm-inline-link'
+      link.setAttribute('href', part.href)
+      link.draggable = false
+      decorateLinkLabel(link, part.raw, part.label)
+      fragment.appendChild(link)
+    } else {
+      const link = document.createElement('span')
+      link.className = 'url-autolink fm-inline-link'
+      link.dataset.url = part.href
+      link.textContent = part.raw
+      fragment.appendChild(link)
+    }
+  }
+  return fragment
+}
+
+/**
+ * CSS shows the compact label in reading mode and reveals this raw child while
+ * its editable value is focused. `textContent` always remains the raw source,
+ * so an unchanged blur can never erase a wikilink target or Markdown href.
+ */
+function decorateLinkLabel(link: HTMLElement, raw: string, label: string): void {
+  link.dataset.fmLabel = label
+  link.setAttribute('aria-label', label)
+  const source = document.createElement('span')
+  source.className = 'fm-link-source'
+  source.textContent = raw
+  link.appendChild(source)
 }
 
 /** Top-level keys across all kv segments, for the collapsed-state summary. */
@@ -232,11 +285,14 @@ export function buildFrontmatterView(
 
   const summary = document.createElement('summary')
   summary.className = 'frontmatter-summary'
+  const title = document.createElement('span')
+  title.className = 'frontmatter-summary-title'
+  title.textContent = t('frontmatter.metadata')
   const keys = summaryKeys(raw)
   const label = document.createElement('span')
   label.className = 'frontmatter-summary-keys'
   label.textContent = keys.length ? keys.join(', ') : 'frontmatter'
-  summary.appendChild(label)
+  summary.append(title, label)
   details.appendChild(summary)
 
   details.appendChild(renderFrontmatter(raw, onChange))

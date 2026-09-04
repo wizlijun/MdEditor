@@ -9,6 +9,7 @@ export const ja: Record<keyof Messages, string> = {
   'common.close': '閉じる',
   'common.dismiss': '閉じる',
   'common.saveAs': '名前を付けて保存…',
+  'frontmatter.metadata': 'メタデータ',
   'dialog.saveChanges.message': '"{name}"に加えた変更を保存しますか？',
   'dialog.saveChanges.info': '保存しない場合、変更は失われます。',
   'dialog.save': '保存',
@@ -344,6 +345,7 @@ export const ja: Record<keyof Messages, string> = {
   // Empty state
   'emptyState.hint': '.md ファイルをドロップ、または',
   'emptyState.new': '新規（⌘N）',
+  'canvas.new': '新規キャンバス',
   'emptyState.open': '開く…（⌘O）',
 
   // Toast

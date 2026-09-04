@@ -49,15 +49,28 @@ describe('frontmatterDetailsHtml', () => {
     expect(html).toMatch(/<summary[^>]*>.*title, type, tags.*<\/summary>/)
   })
 
-  it('renders scalars as key/value table rows', () => {
+  it('renders scalars as key/value property rows without a table', () => {
     const html = frontmatterDetailsHtml('title: Hi\ncount: 3')
-    expect(html).toContain('<td class="fm-key">title</td><td class="fm-val">Hi</td>')
-    expect(html).toContain('<td class="fm-key">count</td><td class="fm-val">3</td>')
+    expect(html).toContain('<div class="fm-key">title</div><div class="fm-val">Hi</div>')
+    expect(html).toContain('<div class="fm-key">count</div><div class="fm-val">3</div>')
+    expect(html).not.toContain('<table')
   })
 
-  it('renders list values as a ul', () => {
+  it('renders scalar list values as chips', () => {
     const html = frontmatterDetailsHtml('tags:\n  - a\n  - b')
-    expect(html).toContain('<ul class="fm-list"><li>a</li><li>b</li></ul>')
+    expect(html).toContain('<ul class="fm-list fm-chips"><li>a</li><li>b</li></ul>')
+  })
+
+  it('renders wikilinks, Markdown links, and bare URLs with link affordances', () => {
+    const html = frontmatterDetailsHtml([
+      'related: "[[Roadmap|Plan]]"',
+      'reference: "[Docs](https://example.com/guide)"',
+      'website: https://example.com',
+    ].join('\n'))
+
+    expect(html).toContain('<span class="fm-wikilink">Plan</span>')
+    expect(html).toContain('<a class="fm-inline-link" href="https://example.com/guide">Docs</a>')
+    expect(html).toContain('<a class="fm-inline-link" href="https://example.com">https://example.com</a>')
   })
 
   it('renders nested mappings as labelled lines', () => {
@@ -83,6 +96,13 @@ describe('frontmatterDetailsHtml', () => {
     expect(html).toContain('&lt;script&gt;')
   })
 
+  it('does not turn unsafe Markdown link schemes into anchors', () => {
+    const html = frontmatterDetailsHtml('reference: "[bad](javascript:alert(1)) [bad](custom:run) [local](file:///tmp/a.md)"')
+    expect(html).not.toContain('href="javascript:')
+    expect(html).not.toContain('href="custom:')
+    expect(html).not.toContain('href="file:')
+  })
+
   it('emits nothing for an empty block', () => {
     expect(frontmatterDetailsHtml('')).toBe('')
     expect(frontmatterDetailsHtml('\n  \n')).toBe('')
@@ -92,6 +112,8 @@ describe('frontmatterDetailsHtml', () => {
 describe('FRONTMATTER_CSS', () => {
   it('scopes under .moraya-editor and ships a dark override', () => {
     expect(FRONTMATTER_CSS).toContain('.moraya-editor .frontmatter-details')
+    expect(FRONTMATTER_CSS).toContain('.moraya-editor .frontmatter-properties')
+    expect(FRONTMATTER_CSS).not.toContain('.frontmatter-table')
     expect(FRONTMATTER_CSS).toContain('@media (prefers-color-scheme: dark)')
   })
 })

@@ -1,7 +1,7 @@
-# Frontmatter Table Rendering (rich editor)
+# Frontmatter Metadata Rendering (rich editor)
 
 Date: 2026-07-08
-Status: Approved — Revised 2026-07-08 (segmented + editable, see "Revision 2")
+Status: Approved — Revised 2026-09-04 (metadata card + links, see "Revision 3")
 
 ## Problem
 
@@ -117,3 +117,43 @@ typing. Schema node still `text*`; serialization/roundtrip unchanged.
 
 Segmentation (mixed / block-scalar / blank-line cases), kv→table, md segment
 render, scalar edit write-back + full-raw roundtrip, malformed-YAML fallback.
+
+---
+
+## Revision 3 — metadata card, chips, and links
+
+The two-column table made frontmatter read like spreadsheet data and gave every
+field a heavy cell border. The rich editor and baked share page now render the
+same YAML mapping as a compact metadata card:
+
+- each top-level pair is a `.fm-property` CSS-grid row inside
+  `.frontmatter-properties`; no `<table>`, `<tr>`, or `<td>` is emitted;
+- keys and values use the editor's monospace stack, with muted keys and no cell
+  borders;
+- arrays containing only scalar values use wrapping `.fm-chips` pills; arrays
+  with complex values keep the ordinary recursive list;
+- the existing `<details>` shell, collapsed-by-default behavior, segmented
+  Markdown regions, scalar editing, type coercion, and raw fallback remain
+  unchanged.
+
+String values pass through a text-only inline scanner for three link forms:
+
+- `[[wikilink|alias]]` → `.wikilink[data-wikilink]`;
+- `[label](href)` → `a[href]`;
+- bare `http(s)://` → `.url-autolink[data-url]`.
+
+Those DOM contracts reuse `RichEditor`'s capture-phase link routing. Reading
+mode shows the compact alias/label through generated CSS content, while a
+focused editable value reveals a child containing the complete link source.
+The cell's actual `textContent` therefore remains identical to the YAML scalar,
+so an unchanged blur cannot erase an alias or href. The scanner uses DOM
+`textContent` rather than `innerHTML`, respects the wikilink blocklist, leaves
+unsafe link schemes as plain text, and does not match a URL twice inside
+Markdown-link syntax. Static share HTML escapes every value; safe Markdown
+links and bare URLs become anchors, while vault-local wikilinks remain
+non-navigating styled text.
+
+Revision 3 tests cover the property DOM/no-table contract, chip lists, nested
+values, all three link forms, raw-source preservation, blocked/unsafe links,
+HTML escaping, unchanged-link blur, existing scalar write-back, mixed segments,
+collapse persistence, and malformed YAML fallback.

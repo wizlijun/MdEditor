@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **YAML frontmatter now reads like a metadata card instead of a spreadsheet.** The rich editor and shared pages use a quiet, rounded property panel with compact key/value rows and pill-style scalar lists. Wikilinks, Markdown links and bare web addresses are visually recognizable and clickable in reading mode, while editing still preserves their complete source text.
+
 ## v6.904.3 — 2026-09-04
 
 ### Fixed

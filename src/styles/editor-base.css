@@ -428,22 +428,22 @@
   color: color-mix(in srgb, CanvasText 75%, Canvas);
 }
 
-/* ── Frontmatter read-only view (key/value table) ───────────────────────── */
+/* ── Frontmatter metadata card ──────────────────────────────────────────── */
 .moraya-editor .frontmatter-node-view {
   margin: 0 0 0.8em;
 }
 
 /* Collapsible wrapper: starts collapsed so metadata doesn't dominate. */
 .moraya-editor .frontmatter-details {
-  border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, CanvasText 3%, Canvas);
+  border: 1px solid color-mix(in srgb, CanvasText 9%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, CanvasText 4%, Canvas);
 }
 .moraya-editor .frontmatter-summary {
   cursor: pointer;
-  padding: 4px 10px;
-  font-size: 0.85em;
-  color: color-mix(in srgb, CanvasText 60%, Canvas);
+  padding: 11px 16px 7px;
+  font-size: 0.88em;
+  color: color-mix(in srgb, CanvasText 62%, Canvas);
   user-select: none;
   list-style-position: inside;
   white-space: nowrap;
@@ -453,47 +453,96 @@
 .moraya-editor .frontmatter-summary:hover {
   color: color-mix(in srgb, CanvasText 85%, Canvas);
 }
+.moraya-editor .frontmatter-summary-title {
+  font-weight: 600;
+}
 .moraya-editor .frontmatter-summary-keys {
-  opacity: 0.9;
+  margin-left: 0.8em;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.92em;
+  opacity: 0.65;
 }
 .moraya-editor .frontmatter-details[open] > .frontmatter-summary {
-  border-bottom: 1px solid color-mix(in srgb, CanvasText 10%, transparent);
-  margin-bottom: 6px;
+  margin-bottom: 3px;
+}
+.moraya-editor .frontmatter-details[open] > .frontmatter-summary .frontmatter-summary-keys {
+  display: none;
 }
 .moraya-editor .frontmatter-details > .frontmatter-segments {
-  padding: 0 10px 8px;
+  padding: 0 16px 14px;
 }
-.moraya-editor .frontmatter-table {
-  border-collapse: collapse;
-  width: 100%;
-  table-layout: fixed;
+.moraya-editor .frontmatter-properties {
+  display: grid;
+  gap: 1px;
   font-size: 0.92em;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
 }
-.moraya-editor .frontmatter-table td {
-  border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
-  padding: 4px 8px;
-  vertical-align: top;
+.moraya-editor .frontmatter-properties .fm-property {
+  display: grid;
+  grid-template-columns: minmax(9rem, 18%) minmax(0, 1fr);
+  column-gap: 1.25rem;
+  align-items: start;
+  margin: 0 -6px;
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+.moraya-editor .frontmatter-properties .fm-key,
+.moraya-editor .frontmatter-properties .fm-val {
+  min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: break-word;
+  line-height: 1.55;
 }
-.moraya-editor .frontmatter-table .fm-key {
-  width: 30%;
-  font-weight: 600;
-  color: color-mix(in srgb, CanvasText 70%, Canvas);
-  background: color-mix(in srgb, CanvasText 4%, Canvas);
+.moraya-editor .frontmatter-properties .fm-key {
+  color: color-mix(in srgb, CanvasText 56%, Canvas);
 }
-.moraya-editor .frontmatter-table .fm-list {
+.moraya-editor .frontmatter-properties .fm-list {
   margin: 0;
   padding-left: 1.2em;
 }
-.moraya-editor .frontmatter-table .fm-nested-line {
+.moraya-editor .frontmatter-properties .fm-list.fm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  list-style: none;
+}
+.moraya-editor .frontmatter-properties .fm-list.fm-chips > li {
+  padding: 0 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, CanvasText 9%, Canvas);
+  line-height: 1.55;
+}
+.moraya-editor .frontmatter-properties .fm-nested-line {
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
-.moraya-editor .frontmatter-table .fm-nested-key {
+.moraya-editor .frontmatter-properties .fm-nested-key {
   font-weight: 600;
   color: color-mix(in srgb, CanvasText 60%, Canvas);
+}
+.moraya-editor .frontmatter-properties .fm-inline-link {
+  color: #0969da;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+.moraya-editor .frontmatter-properties .fm-inline-link[data-fm-label] > .fm-link-source {
+  display: none;
+}
+.moraya-editor .frontmatter-properties .fm-inline-link[data-fm-label]::after {
+  content: attr(data-fm-label);
+}
+.moraya-editor .frontmatter-properties .fm-val.fm-editable:focus .fm-inline-link[data-fm-label] > .fm-link-source {
+  display: inline;
+}
+.moraya-editor .frontmatter-properties .fm-val.fm-editable:focus .fm-inline-link[data-fm-label]::after {
+  content: none;
+}
+@media (prefers-color-scheme: dark) {
+  .moraya-editor .frontmatter-properties .fm-inline-link { color: #79c0ff; }
 }
 .moraya-editor .frontmatter-raw {
   white-space: pre-wrap;
@@ -505,13 +554,23 @@
 .moraya-editor .frontmatter-segments > * + * {
   margin-top: 0.5em;
 }
-.moraya-editor .frontmatter-table .fm-val.fm-editable {
+.moraya-editor .frontmatter-properties .fm-val.fm-editable {
   cursor: text;
+  border-radius: 4px;
 }
-.moraya-editor .frontmatter-table .fm-val.fm-editable:focus {
+.moraya-editor .frontmatter-properties .fm-val.fm-editable:hover {
+  background: color-mix(in srgb, CanvasText 5%, transparent);
+}
+.moraya-editor .frontmatter-properties .fm-val.fm-editable:focus {
   outline: 2px solid color-mix(in srgb, AccentColor 60%, transparent);
-  outline-offset: -2px;
-  border-radius: 2px;
+  outline-offset: 1px;
+  background: Canvas;
+}
+@media (max-width: 520px) {
+  .moraya-editor .frontmatter-properties .fm-property {
+    grid-template-columns: minmax(7rem, 34%) minmax(0, 1fr);
+    column-gap: 0.75rem;
+  }
 }
 /* Non-key:value regions render as markdown, muted like the rest of the block. */
 .moraya-editor .frontmatter-md {

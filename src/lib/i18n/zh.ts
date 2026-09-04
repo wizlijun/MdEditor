@@ -9,6 +9,7 @@ export const zh: Record<keyof Messages, string> = {
   'common.close': '关闭',
   'common.dismiss': '关闭',
   'common.saveAs': '另存为…',
+  'frontmatter.metadata': '元数据',
   'dialog.saveChanges.message': '是否将更改保存到"{name}"？',
   'dialog.saveChanges.info': '如果不保存，更改将丢失。',
   'dialog.save': '保存',
@@ -378,6 +379,7 @@ export const zh: Record<keyof Messages, string> = {
   // Empty state
   'emptyState.hint': '拖入 .md 文件 或',
   'emptyState.new': '新建（⌘N）',
+  'canvas.new': '新建画布',
   'emptyState.open': '打开…（⌘O）',
 
   // Toast

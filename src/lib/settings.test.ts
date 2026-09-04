@@ -268,7 +268,7 @@ describe('plugin-scoped settings', () => {
     expect(getPluginScopedAll('notemd.claude-agent')).toEqual({
       'notemd.claude-agent.maxConcurrency': '3',
     })
-    const setCall = mockSet.mock.calls.findLast((args) => args[0] === 'plugins')
+    const setCall = mockSet.mock.calls.filter((args) => args[0] === 'plugins').at(-1)
     expect(setCall?.[1]).toEqual({
       'notemd.claude-agent': { maxConcurrency: '3' },
     })

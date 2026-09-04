@@ -351,7 +351,8 @@ describe('bakeShareHtml', () => {
     const html = await bakeShareHtml(t)
     expect(html).toContain('<details class="frontmatter-details">')
     expect(html).not.toMatch(/<details[^>]*\bopen\b/)
-    expect(html).toContain('<td class="fm-key">title</td>')
+    expect(html).toContain('<div class="fm-key">title</div>')
+    expect(html).not.toContain('<table class="frontmatter-table">')
     // The raw block must not survive as prose: no <hr> + YAML paragraph pair.
     expect(html).not.toMatch(/<p>title: Hi/)
     // …and the actual document still renders after it.
