@@ -12,6 +12,7 @@ import {
   deleteBlockSpan,
   insertBlockSpan,
   materializeBlocks,
+  planLocalBlockEdit,
   positionAtBlockStart,
   replaceBlockSpans,
   sameBlockOrder,
@@ -104,12 +105,14 @@ export interface MountDocumentEditorOptions {
   readOnly?: boolean
   baseDir?: string
   placeholder?: string
+  localChangeDebounceMs?: number
   onBlockedStructuralEdit?: () => void
   onResyncRequired?: (reason: ChangeError) => void
 }
 
 const REMOTE_META = 'notemd-cdr-remote'
 const LOCAL_STRUCTURAL_META = 'notemd-cdr-local-structural'
+const LOCAL_CONTENT_BLOCK_META = 'notemd-cdr-local-content-block'
 const DECORATION_META = 'notemd-cdr-decorations'
 const LAYOUT_META = 'notemd-cdr-layout'
 const decorationKey = new PluginKey<number>('notemd-cdr-decoration')
@@ -168,9 +171,11 @@ function cloneSnapshot(snapshot: EditorSnapshot): EditorSnapshot {
  * Mount the Stage 0 block-aware surface.
  *
  * A block may cover multiple contiguous top-level editor nodes. Ordinary
- * typing emits only block.replace. Insert/delete are admitted solely through
- * explicit structural commands; implicit split/merge/move still fail closed
- * instead of guessing identity.
+ * editing inside one span emits block.replace, including Enter,
+ * paragraph joins and multi-paragraph paste. Insert/delete of independently
+ * governed blocks are admitted solely through explicit structural commands;
+ * edits crossing block boundaries still fail closed instead of guessing
+ * identity.
  */
 export async function mountDocumentEditor(
   container: HTMLElement,
@@ -196,10 +201,14 @@ export async function mountDocumentEditor(
   const appliedChanges = new Set<string>()
   const layers = new Map<string, readonly DecorationItem[]>()
   const queuedUpdates: Array<Extract<SurfaceUpdate, { kind: 'apply-remote' }>> = []
+  const dirtyLocalBlockIds = new Set<string>()
+  const localChangeDebounceMs = Math.max(0, opts.localChangeDebounceMs ?? 250)
+  let localChangeTimer: ReturnType<typeof setTimeout> | null = null
+  let queuedStructuralCommand: StructuralCommand | null = null
   let composingBlockId: string | null = null
   let finishingComposition = false
   let finishingCompositionBlockId: string | null = null
-  let compositionDirty = false
+  const compositionDirtyBlockIds = new Set<string>()
   let compositionFrame: number | null = null
   let resyncRequired = false
   let deferredResyncReason: ChangeError | null = null
@@ -244,6 +253,17 @@ export async function mountDocumentEditor(
 
   function refreshEditable(): void {
     rich.view.setProps({ editable: () => !requestedReadOnly && pendingRequests.size === 0 && !resyncRequired })
+  }
+
+  function selectedBlockIdForState(state = rich.view.state): string | null {
+    const layout = layoutKey.getState(state)
+    if (!layout) return null
+    const from = spanContaining(layout, state.selection.$from.index(0))
+    const toIndex = state.selection.empty
+      ? state.selection.$to.index(0)
+      : state.doc.resolve(state.selection.to - 1).index(0)
+    const to = spanContaining(layout, toIndex)
+    return from && to && from.blockId === to.blockId ? from.blockId : null
   }
 
   const decorationPlugin = new Plugin<number>({
@@ -294,6 +314,50 @@ export async function mountDocumentEditor(
     })
   }
 
+  function flushLocalOperations(
+    doc = rich.view.state.doc,
+    layout = currentLayout(),
+  ): void {
+    if (localChangeTimer !== null) {
+      clearTimeout(localChangeTimer)
+      localChangeTimer = null
+    }
+    if (dirtyLocalBlockIds.size === 0
+      || pendingRequests.size > 0
+      || resyncRequired
+      || composingBlockId !== null
+      || finishingComposition) return
+    const operations = [...dirtyLocalBlockIds]
+      .map((blockId) => localOperationFor(blockId, doc, layout))
+      .filter((operation): operation is ReplaceBlockOperation => operation !== null)
+    dirtyLocalBlockIds.clear()
+    if (operations.length === 0) {
+      requestDeferredResync()
+      void flushQueuedUpdates()
+      runQueuedStructuralCommand()
+      return
+    }
+    emitLocalOperations(operations)
+  }
+
+  function scheduleLocalOperations(
+    blockIds: readonly string[],
+    immediateDoc = rich.view.state.doc,
+    immediateLayout = currentLayout(),
+  ): void {
+    for (const blockId of blockIds) dirtyLocalBlockIds.add(blockId)
+    if (localChangeTimer !== null) clearTimeout(localChangeTimer)
+    if (localChangeDebounceMs === 0) {
+      localChangeTimer = null
+      flushLocalOperations(immediateDoc, immediateLayout)
+      return
+    }
+    localChangeTimer = setTimeout(() => {
+      localChangeTimer = null
+      flushLocalOperations()
+    }, localChangeDebounceMs)
+  }
+
   function localOperationFor(
     blockId: string,
     doc = rich.view.state.doc,
@@ -319,50 +383,39 @@ export async function mountDocumentEditor(
       if (resyncRequired) return false
       const layout = layoutKey.getState(state)
       if (!layout) return false
-      const changedIndices: number[] = []
-      if (transaction.doc.childCount === state.doc.childCount) {
-        for (let index = 0; index < state.doc.childCount; index += 1) {
-          const before = state.doc.child(index)
-          const after = transaction.doc.child(index)
-          if (!before.eq(after)) changedIndices.push(index)
-        }
-      }
-      const changedSpans = new Set(changedIndices.map((index) => spanContaining(layout, index)?.blockId))
+      const preferredBlockId = selectedBlockIdForState(state)
+      const plan = planLocalBlockEdit(state.doc, transaction.doc, layout, preferredBlockId)
       const activeCompositionBlockId = composingBlockId ?? finishingCompositionBlockId
-      const isSingleBlockReplace = changedIndices.length > 0
-        && changedSpans.size === 1
-        && !changedSpans.has(undefined)
-        && changedIndices.every((index) => state.doc.child(index).sameMarkup(transaction.doc.child(index)))
-        && (activeCompositionBlockId === null || changedSpans.has(activeCompositionBlockId))
-      if (pendingRequests.size === 0 && isSingleBlockReplace) return true
+      const span = plan?.layout.spans.find((item) => item.blockId === plan.blockId)
+      const hasContent = span ? serializeSpan(transaction.doc, span).trim().length > 0 : false
+      const isSingleBlockReplace = plan !== null
+        && hasContent
+        && (activeCompositionBlockId === null || plan.blockId === activeCompositionBlockId)
+      if (pendingRequests.size === 0 && isSingleBlockReplace && plan) {
+        transaction.setMeta(LAYOUT_META, plan.layout)
+        transaction.setMeta(LOCAL_CONTENT_BLOCK_META, plan.blockId)
+        return true
+      }
       if (!isSingleBlockReplace) queueMicrotask(() => opts.onBlockedStructuralEdit?.())
       return false
     },
-    appendTransaction(transactions, oldState, newState) {
+    appendTransaction(transactions, _oldState, newState) {
       const changed = transactions.some((transaction) => transaction.docChanged)
       const external = transactions.some((transaction) => transaction.getMeta(REMOTE_META))
       const structuralCommand = transactions.some((transaction) => transaction.getMeta(LOCAL_STRUCTURAL_META))
-      if (!changed || external || structuralCommand || oldState.doc.childCount !== newState.doc.childCount) return null
+      if (!changed || external || structuralCommand) return null
+      const changedBlockIds = [...new Set(transactions.flatMap((transaction) => {
+        const blockId = transaction.getMeta(LOCAL_CONTENT_BLOCK_META)
+        return typeof blockId === 'string' ? [blockId] : []
+      }))]
+      if (changedBlockIds.length === 0) return null
       if (composingBlockId !== null || finishingComposition) {
-        compositionDirty = true
+        for (const blockId of changedBlockIds) compositionDirtyBlockIds.add(blockId)
         return null
       }
-
       const layout = layoutKey.getState(newState)
       if (!layout) return null
-      let changedSpan = null as ReturnType<typeof spanContaining>
-      for (let index = 0; index < newState.doc.childCount; index += 1) {
-        const before = oldState.doc.child(index)
-        const after = newState.doc.child(index)
-        if (before.eq(after)) continue
-        changedSpan = spanContaining(layout, index)
-        break
-      }
-      const operations: ReplaceBlockOperation[] = changedSpan
-        ? [localOperationFor(changedSpan.blockId, newState.doc, layout)]
-          .filter((operation): operation is ReplaceBlockOperation => operation !== null)
-        : []
-      emitLocalOperations(operations)
+      scheduleLocalOperations(changedBlockIds, newState.doc, layout)
       return null
     },
   })
@@ -372,14 +425,21 @@ export async function mountDocumentEditor(
   }))
   refreshEditable()
 
-  const blockAtSelection = () => {
-    const layout = currentLayout()
-    const selection = rich.view.state.selection
-    const from = spanContaining(layout, selection.$from.index(0))
-    const to = spanContaining(layout, selection.$to.index(0))
-    return from && to && from.blockId === to.blockId ? from.blockId : null
+  const blockAtSelection = () => selectedBlockIdForState()
+  const promoteFinishedComposition = () => {
+    if (compositionFrame !== null) cancelAnimationFrame(compositionFrame)
+    compositionFrame = null
+    const blockId = finishingCompositionBlockId
+    if (blockId !== null && compositionDirtyBlockIds.delete(blockId) && localOperationFor(blockId)) {
+      dirtyLocalBlockIds.add(blockId)
+    }
+    finishingComposition = false
+    finishingCompositionBlockId = null
   }
-  const onCompositionStart = () => { composingBlockId = blockAtSelection() }
+  const onCompositionStart = () => {
+    if (finishingComposition) promoteFinishedComposition()
+    composingBlockId = blockAtSelection()
+  }
   const onCompositionEnd = () => {
     finishingCompositionBlockId = composingBlockId
     composingBlockId = null
@@ -387,19 +447,17 @@ export async function mountDocumentEditor(
     compositionFrame = requestAnimationFrame(() => {
       compositionFrame = null
       if (destroyed) return
-      const operation = finishingCompositionBlockId === null
-        ? null
-        : localOperationFor(finishingCompositionBlockId)
-      if (compositionDirty && operation) emitLocalOperations([operation])
-      compositionDirty = false
-      finishingComposition = false
-      finishingCompositionBlockId = null
+      promoteFinishedComposition()
+      if (dirtyLocalBlockIds.size > 0) scheduleLocalOperations([])
       requestDeferredResync()
       void flushQueuedUpdates()
+      runQueuedStructuralCommand()
     })
   }
   rich.view.dom.addEventListener('compositionstart', onCompositionStart)
   rich.view.dom.addEventListener('compositionend', onCompositionEnd)
+  const onEditorBlur = () => flushLocalOperations()
+  rich.view.dom.addEventListener('blur', onEditorBlur, true)
 
   function replaceFromSnapshot(authoritative: EditorSnapshot, allowFullResync: boolean): void {
     assertBlockIdentity(authoritative.blocks)
@@ -513,6 +571,7 @@ export async function mountDocumentEditor(
   function requestDeferredResync(): void {
     if (!deferredResyncReason
       || pendingRequests.size > 0
+      || dirtyLocalBlockIds.size > 0
       || composingBlockId !== null
       || finishingComposition) return
     resyncRequired = true
@@ -524,7 +583,10 @@ export async function mountDocumentEditor(
   }
 
   async function flushQueuedUpdates(): Promise<void> {
-    if (composingBlockId !== null || finishingComposition || pendingRequests.size > 0) return
+    if (composingBlockId !== null
+      || finishingComposition
+      || pendingRequests.size > 0
+      || dirtyLocalBlockIds.size > 0) return
     if (resyncRequired) return
     while (queuedUpdates.length > 0) {
       const update = queuedUpdates[0]
@@ -548,6 +610,7 @@ export async function mountDocumentEditor(
       includeChanges(update.includedChangeIds)
       requestDeferredResync()
       await flushQueuedUpdates()
+      runQueuedStructuralCommand()
       return
     }
     if (update.kind === 'apply-remote') {
@@ -559,6 +622,7 @@ export async function mountDocumentEditor(
       if (resyncRequired
         || deferredResyncReason !== null
         || pendingRequests.size > 0
+        || dirtyLocalBlockIds.size > 0
         || finishingComposition
         || (composingBlockId !== null && hasStructuralOperation)
         || touchesComposingBlock) {
@@ -573,7 +637,10 @@ export async function mountDocumentEditor(
       return
     }
     if (update.kind === 'resync') {
-      if (pendingRequests.size > 0 || composingBlockId !== null || finishingComposition) {
+      if (pendingRequests.size > 0
+        || dirtyLocalBlockIds.size > 0
+        || composingBlockId !== null
+        || finishingComposition) {
         deferResync()
         return
       }
@@ -583,10 +650,12 @@ export async function mountDocumentEditor(
       deferredResyncReason = null
       refreshEditable()
       await flushQueuedUpdates()
+      runQueuedStructuralCommand()
       return
     }
     if (!pendingRequests.has(update.requestId)) return
     pendingRequests.delete(update.requestId)
+    queuedStructuralCommand = null
     refreshEditable()
     replaceFromSnapshot(update.authoritative, false)
     includeChanges(update.includedChangeIds)
@@ -594,14 +663,7 @@ export async function mountDocumentEditor(
     await flushQueuedUpdates()
   }
 
-  function executeStructuralCommand(command: StructuralCommand): boolean {
-    if (destroyed
-      || requestedReadOnly
-      || pendingRequests.size > 0
-      || resyncRequired
-      || composingBlockId !== null
-      || finishingComposition) return false
-
+  function executeStructuralCommandNow(command: StructuralCommand): boolean {
     if (command.kind === 'block.insert-after') {
       if (!command.content.trim()) return false
       const anchorIndex = snapshot.blocks.findIndex((block) => block.blockId === command.blockId)
@@ -652,6 +714,45 @@ export async function mountDocumentEditor(
     return true
   }
 
+  function runQueuedStructuralCommand(): void {
+    if (!queuedStructuralCommand) return
+    if (destroyed || requestedReadOnly) {
+      queuedStructuralCommand = null
+      if (!destroyed) opts.onBlockedStructuralEdit?.()
+      return
+    }
+    if (pendingRequests.size > 0
+      || dirtyLocalBlockIds.size > 0
+      || resyncRequired
+      || composingBlockId !== null
+      || finishingComposition) return
+    const command = queuedStructuralCommand
+    queuedStructuralCommand = null
+    if (!executeStructuralCommandNow(command)) opts.onBlockedStructuralEdit?.()
+  }
+
+  function executeStructuralCommand(command: StructuralCommand): boolean {
+    if (destroyed
+      || requestedReadOnly
+      || resyncRequired
+      || queuedStructuralCommand !== null) return false
+    if (command.kind === 'block.insert-after') {
+      if (!command.content.trim() || !snapshot.blocks.some((block) => block.blockId === command.blockId)) return false
+    } else if (!snapshot.blocks.some((block) => block.blockId === command.blockId)
+      || snapshot.blocks.length === 1) return false
+
+    if (dirtyLocalBlockIds.size > 0
+      || pendingRequests.size > 0
+      || composingBlockId !== null
+      || finishingComposition) {
+      queuedStructuralCommand = { ...command }
+      if (dirtyLocalBlockIds.size > 0) flushLocalOperations()
+      if (pendingRequests.size === 0) runQueuedStructuralCommand()
+      return true
+    }
+    return executeStructuralCommandNow(command)
+  }
+
   const decorations: DecorationHost = {
     setLayer(id, items) {
       layers.set(id, items.map((item) => ({ ...item })))
@@ -672,17 +773,33 @@ export async function mountDocumentEditor(
     executeStructuralCommand,
     selectedBlockId: blockAtSelection,
     setReadOnly(value) {
+      if (value && dirtyLocalBlockIds.size > 0) flushLocalOperations()
       requestedReadOnly = value
+      if (value) queuedStructuralCommand = null
       refreshEditable()
     },
     async destroy() {
       if (destroyed) return
+      if (compositionFrame !== null) cancelAnimationFrame(compositionFrame)
+      compositionFrame = null
+      for (const blockId of compositionDirtyBlockIds) {
+        if (localOperationFor(blockId)) dirtyLocalBlockIds.add(blockId)
+      }
+      compositionDirtyBlockIds.clear()
+      composingBlockId = null
+      finishingComposition = false
+      finishingCompositionBlockId = null
+      flushLocalOperations()
+      await Promise.resolve()
       destroyed = true
+      queuedStructuralCommand = null
       listeners.clear()
       queuedUpdates.length = 0
-      if (compositionFrame !== null) cancelAnimationFrame(compositionFrame)
+      dirtyLocalBlockIds.clear()
+      if (localChangeTimer !== null) clearTimeout(localChangeTimer)
       rich.view.dom.removeEventListener('compositionstart', onCompositionStart)
       rich.view.dom.removeEventListener('compositionend', onCompositionEnd)
+      rich.view.dom.removeEventListener('blur', onEditorBlur, true)
       rich.destroy()
       host.remove()
     },

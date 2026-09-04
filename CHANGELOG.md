@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **The governed Memory document now supports normal Markdown editing.** Enter and Shift+Enter, multi-paragraph paste, text insertion and deletion, and undo/redo work inside one stable knowledge block; continuous typing is coalesced before durable save without losing IME input or remapping an acknowledged editor state. Edits that cross governed block boundaries still stop safely instead of guessing identity. Requires Memory 2.5.1.
+
 ## v6.904.7 — 2026-09-04
 
 ### Added

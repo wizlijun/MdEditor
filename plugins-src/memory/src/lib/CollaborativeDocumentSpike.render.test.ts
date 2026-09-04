@@ -535,6 +535,21 @@ describe('CollaborativeDocumentSpike', () => {
     })])
   })
 
+  it('persists the editor flush that occurs during component teardown', async () => {
+    await render()
+    const closingBatch = localBatch('close-flush', 'b-d4e5f6', '关闭窗口前最后输入的正文。')
+    mocks.destroy.mockImplementationOnce(async () => {
+      mocks.localListener?.(closingBatch)
+    })
+
+    await unmount(component!)
+    component = null
+
+    await vi.waitFor(() => expect(repository?.aggregate.session.head.blocks
+      .find((block: any) => block.blockId === 'b-d4e5f6').markdown).toBe('关闭窗口前最后输入的正文。'))
+    expect(mocks.localListener).toBeNull()
+  })
+
   it('keeps the fixed managed slot independent in each vault', async () => {
     await render()
     mocks.localListener?.(localBatch('vault-one-edit', 'b-d4e5f6', '只属于第一个 vault。'))

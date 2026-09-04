@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { createSchema } from '@moraya/core'
+import { createSchema, parseMarkdown } from '@moraya/core'
 import { EditorState } from 'prosemirror-state'
 import {
   deleteBlockSpan,
   insertBlockSpan,
   materializeBlocks,
+  planLocalBlockEdit,
   replaceBlockSpans,
   serializeSpan,
   spanContaining,
@@ -91,6 +92,85 @@ describe('Editor Kit v2 block layout', () => {
     const deleted = deleteBlockSpan(inserted.transaction, inserted.layout, 'section-middle')
     expect(deleted.transaction.doc.eq(initial.doc)).toBe(true)
     expect(deleted.layout).toEqual(initial.layout)
+  })
+
+  it('keeps Enter and multi-paragraph paste inside one stable block span', () => {
+    const initial = materializeBlocks([
+      { blockId: 'section-a', markdown: 'Alpha.' },
+      { blockId: 'section-b', markdown: 'Bravo.' },
+    ], schema)
+    const split = parseMarkdown('Alpha\n\ncontinued\n\nBravo.', schema)
+    const plan = planLocalBlockEdit(initial.doc, split, initial.layout, 'section-a')
+
+    expect(plan).toEqual({
+      blockId: 'section-a',
+      layout: {
+        spans: [
+          { blockId: 'section-a', startIndex: 0, endIndex: 2 },
+          { blockId: 'section-b', startIndex: 2, endIndex: 3 },
+        ],
+      },
+    })
+    expect(serializeSpan(split, plan!.layout.spans[0])).toBe('Alpha\n\ncontinued')
+  })
+
+  it('keeps a paragraph join inside one block and shifts following spans back', () => {
+    const initial = materializeBlocks([
+      { blockId: 'section-a', markdown: 'Alpha.\n\ncontinued' },
+      { blockId: 'section-b', markdown: 'Bravo.' },
+    ], schema)
+    const joined = parseMarkdown('Alpha continued\n\nBravo.', schema)
+    const plan = planLocalBlockEdit(initial.doc, joined, initial.layout, 'section-a')
+
+    expect(plan?.blockId).toBe('section-a')
+    expect(plan?.layout.spans).toEqual([
+      { blockId: 'section-a', startIndex: 0, endIndex: 1 },
+      { blockId: 'section-b', startIndex: 1, endIndex: 2 },
+    ])
+  })
+
+  it('does not rematerialize an acknowledged block when its Markdown already matches', () => {
+    const initial = materializeBlocks([
+      { blockId: 'section-a', markdown: 'Second paragraph.' },
+      { blockId: 'section-b', markdown: 'Following section.' },
+    ], schema)
+    const splitTransaction = EditorState.create({ schema, doc: initial.doc }).tr.split(7)
+    const plan = planLocalBlockEdit(initial.doc, splitTransaction.doc, initial.layout, 'section-a')!
+    const markdown = serializeSpan(splitTransaction.doc, plan.layout.spans[0])
+    const splitState = EditorState.create({ schema, doc: splitTransaction.doc })
+
+    const acknowledged = replaceBlockSpans(splitState.tr, plan.layout, [
+      { blockId: 'section-a', markdown },
+      { blockId: 'section-b', markdown: 'Following section.' },
+    ])
+
+    expect(acknowledged.transaction.docChanged).toBe(false)
+    expect(acknowledged.transaction.doc.eq(splitTransaction.doc)).toBe(true)
+    expect(acknowledged.layout).toEqual(plan.layout)
+  })
+
+  it('uses the selected block to disambiguate insertion at a governed boundary', () => {
+    const initial = materializeBlocks([
+      { blockId: 'section-a', markdown: 'Alpha.' },
+      { blockId: 'section-b', markdown: 'Bravo.' },
+    ], schema)
+    const inserted = parseMarkdown('Alpha.\n\nNew paragraph.\n\nBravo.', schema)
+
+    expect(planLocalBlockEdit(initial.doc, inserted, initial.layout, null)).toBeNull()
+    expect(planLocalBlockEdit(initial.doc, inserted, initial.layout, 'section-a')?.blockId).toBe('section-a')
+    expect(planLocalBlockEdit(initial.doc, inserted, initial.layout, 'section-b')?.blockId).toBe('section-b')
+  })
+
+  it('rejects transactions that join or reorder different governed blocks', () => {
+    const initial = materializeBlocks([
+      { blockId: 'section-a', markdown: 'Alpha.' },
+      { blockId: 'section-b', markdown: 'Bravo.' },
+    ], schema)
+    const joined = parseMarkdown('Alpha Bravo.', schema)
+    const reordered = parseMarkdown('Bravo.\n\nAlpha.', schema)
+
+    expect(planLocalBlockEdit(initial.doc, joined, initial.layout, 'section-a')).toBeNull()
+    expect(planLocalBlockEdit(initial.doc, reordered, initial.layout, 'section-a')).toBeNull()
   })
 
   it('rejects duplicate and unknown replacements before changing the transaction', () => {

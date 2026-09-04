@@ -22,6 +22,11 @@ export interface BlockReplacement {
   markdown: string
 }
 
+export interface LocalBlockEditPlan {
+  blockId: string
+  layout: BlockLayout
+}
+
 export function assertBlockIdentity(blocks: readonly LayoutBlock[]): void {
   const ids = blocks.map((block) => block.blockId)
   if (ids.length === 0 || ids.some((id) => id.length === 0) || new Set(ids).size !== ids.length) {
@@ -61,6 +66,65 @@ export function materializeBlocks(
 
 export function spanContaining(layout: BlockLayout, nodeIndex: number): BlockSpan | null {
   return layout.spans.find((span) => nodeIndex >= span.startIndex && nodeIndex < span.endIndex) ?? null
+}
+
+/**
+ * Attribute one arbitrary ProseMirror document transaction to an existing
+ * governed block. A block is a span of one or more top-level editor nodes, so
+ * Enter, paragraph joins, list/heading conversions and multi-paragraph paste
+ * are content edits as long as every node outside that span is unchanged.
+ *
+ * A pure insertion exactly between two spans can be explained by either
+ * neighbour. The transaction's pre-edit selection supplies the preferred
+ * owner; without that disambiguation the edit fails closed.
+ */
+export function planLocalBlockEdit(
+  before: PmNode,
+  after: PmNode,
+  layout: BlockLayout,
+  preferredBlockId: string | null,
+): LocalBlockEditPlan | null {
+  const coversBefore = layout.spans.length > 0
+    && layout.spans[0].startIndex === 0
+    && layout.spans.at(-1)?.endIndex === before.childCount
+    && layout.spans.every((span, index) => (
+      span.startIndex < span.endIndex
+      && (index === 0 || layout.spans[index - 1].endIndex === span.startIndex)
+    ))
+  if (!coversBefore) return null
+
+  const candidates = layout.spans.flatMap((span, spanIndex) => {
+    const suffixCount = before.childCount - span.endIndex
+    const nextEndIndex = after.childCount - suffixCount
+    if (nextEndIndex <= span.startIndex) return []
+
+    for (let index = 0; index < span.startIndex; index += 1) {
+      if (!before.child(index).eq(after.child(index))) return []
+    }
+    for (let offset = 0; offset < suffixCount; offset += 1) {
+      if (!before.child(span.endIndex + offset).eq(after.child(nextEndIndex + offset))) return []
+    }
+
+    const delta = after.childCount - before.childCount
+    return [{
+      blockId: span.blockId,
+      layout: {
+        spans: layout.spans.map((item, index) => {
+          if (index < spanIndex) return { ...item }
+          if (index === spanIndex) return { ...item, endIndex: item.endIndex + delta }
+          return {
+            ...item,
+            startIndex: item.startIndex + delta,
+            endIndex: item.endIndex + delta,
+          }
+        }),
+      },
+    }]
+  })
+
+  if (candidates.length === 1) return candidates[0]
+  if (preferredBlockId === null) return null
+  return candidates.find((candidate) => candidate.blockId === preferredBlockId) ?? null
 }
 
 export function serializeSpan(doc: PmNode, span: BlockSpan): string {
@@ -103,6 +167,7 @@ export function replaceBlockSpans(
     return {
       spanIndex,
       span: layout.spans[spanIndex],
+      markdown: replacement.markdown,
       parsed: parseBlock(replacement, transaction.doc.type.schema),
     }
   }).sort((a, b) => b.span.startIndex - a.span.startIndex)
@@ -110,14 +175,15 @@ export function replaceBlockSpans(
   const counts = layout.spans.map((span) => span.endIndex - span.startIndex)
   let next = transaction
   for (const item of planned) {
-    if (!rangeMatches(next.doc, item.span, item.parsed)) {
+    const markdownAlreadyMatches = serializeSpan(next.doc, item.span) === item.markdown.trimEnd()
+    if (!markdownAlreadyMatches && !rangeMatches(next.doc, item.span, item.parsed)) {
       next = next.replaceWith(
         positionAt(next.doc, item.span.startIndex),
         positionAt(next.doc, item.span.endIndex),
         item.parsed.content,
       )
     }
-    counts[item.spanIndex] = item.parsed.childCount
+    if (!markdownAlreadyMatches) counts[item.spanIndex] = item.parsed.childCount
   }
 
   let cursor = 0
