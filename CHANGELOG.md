@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Infinite Canvas controls are easier to scan and stay close to the work.** A centered icon dock now groups creation, navigation, clipboard and history actions, while selection-aware toolbars expose the relevant node, multi-selection, group and connection controls beside the canvas content. Refined cards, group labels, handles and selection states improve visual feedback, and multiple selected nodes can receive one color in a single action.
+
 ## v6.905.1 — 2026-09-05
 
 ### Added

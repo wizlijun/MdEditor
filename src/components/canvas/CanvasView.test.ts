@@ -73,9 +73,35 @@ vi.mock('../../lib/editor-bridge', () => ({
 }))
 
 class ResizeObserverStub {
+  private static readonly instances = new Set<ResizeObserverStub>()
   private readonly targets = new Set<Element>()
 
-  constructor(private readonly callback: ResizeObserverCallback) {}
+  constructor(private readonly callback: ResizeObserverCallback) {
+    ResizeObserverStub.instances.add(this)
+  }
+
+  static reset(): void {
+    ResizeObserverStub.instances.clear()
+  }
+
+  static resize(target: Element, width: number, height: number): void {
+    for (const observer of ResizeObserverStub.instances) observer.emit(target, width, height)
+  }
+
+  private emit(target: Element, width: number, height: number): void {
+    if (!this.targets.has(target) || !target.isConnected) return
+    const element = target as HTMLElement
+    Object.defineProperties(element, {
+      offsetWidth: { configurable: true, value: width },
+      offsetHeight: { configurable: true, value: height },
+    })
+    const contentRect = {
+      x: 0, y: 0, top: 0, left: 0, right: width, bottom: height,
+      width, height, toJSON: () => ({}),
+    } as DOMRect
+    element.getBoundingClientRect = () => contentRect
+    this.callback([{ target, contentRect } as ResizeObserverEntry], this as unknown as ResizeObserver)
+  }
 
   observe(target: Element): void {
     this.targets.add(target)
@@ -114,6 +140,7 @@ class ResizeObserverStub {
 
   disconnect(): void {
     this.targets.clear()
+    ResizeObserverStub.instances.delete(this)
   }
 }
 
@@ -157,6 +184,7 @@ describe('CanvasView', () => {
     h.folderRoot = null
     h.storeGet.mockResolvedValue(null)
     formFactor.value = 'desktop'
+    ResizeObserverStub.reset()
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
   })
 
@@ -508,6 +536,67 @@ describe('CanvasView', () => {
 
     const edge = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).edges[0]
     expect(edge).toMatchObject({ fromEnd: 'arrow', toEnd: 'none', color: '3', label: '更新标签' })
+  })
+
+  it('keeps popover keyboard activation out of Canvas edge and pan shortcuts', async () => {
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__edge[data-id="edge-1"]')).toBeTruthy())
+    ;(document.querySelector('.svelte-flow__edge[data-id="edge-1"]') as SVGGElement)
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    const colorMenu = document.querySelector('summary[aria-label="颜色"]') as HTMLElement
+    colorMenu.focus()
+    colorMenu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    colorMenu.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))
+    await tick()
+
+    expect(document.querySelector('.canvas-edge-label-content input')).toBeFalsy()
+    expect(surface.classList.contains('tool-pan')).toBe(false)
+  })
+
+  it('keeps a delete control available when multiple edges are selected', async () => {
+    const multiEdge = tab()
+    multiEdge.currentContent = multiEdge.initialContent = JSON.stringify({
+      nodes: [
+        { id: 'a', type: 'text', text: 'a', x: 0, y: 0, width: 120, height: 100 },
+        { id: 'b', type: 'text', text: 'b', x: 260, y: 0, width: 120, height: 100 },
+        { id: 'c', type: 'text', text: 'c', x: 520, y: 0, width: 120, height: 100 },
+      ],
+      edges: [
+        { id: 'edge-a', fromNode: 'a', toNode: 'b' },
+        { id: 'edge-b', fromNode: 'b', toNode: 'c' },
+      ],
+    })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: multiEdge },
+    })
+    await vi.waitFor(() => expect(document.querySelectorAll('.svelte-flow__edge')).toHaveLength(2))
+
+    ;(document.querySelector('.svelte-flow__edge[data-id="edge-a"]') as SVGGElement)
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', code: 'ControlLeft', ctrlKey: true, bubbles: true }))
+    ;(document.querySelector('.svelte-flow__edge[data-id="edge-b"]') as SVGGElement)
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control', code: 'ControlLeft', bubbles: true }))
+    await tick()
+    flushSync()
+
+    const context = document.querySelector('.canvas-context-toolbar[aria-label="连线操作"]') as HTMLElement
+    expect(context).toBeTruthy()
+    expect(context.textContent).toContain('2 条连线')
+    expect(context.querySelector('summary[aria-label="颜色"]')).toBeFalsy()
+    ;(context.querySelector('button[aria-label="删除选中内容"]') as HTMLButtonElement).click()
+    await tick()
+
+    const saved = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string)
+    expect(saved.nodes).toHaveLength(3)
+    expect(saved.edges).toEqual([])
   })
 
   it('keeps automatically routed edge sides out of the saved canvas', async () => {
@@ -867,6 +956,30 @@ describe('CanvasView', () => {
     expect(nodes.map((node) => node.color)).toEqual(['3', '3'])
   })
 
+  it('repositions and clamps the contextual toolbar for viewport and surface size changes', async () => {
+    h.storeGet.mockResolvedValue({ x: 120, y: 80, zoom: 2, updatedAt: 1 })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.canvas-dock')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true }))
+    await tick()
+
+    ResizeObserverStub.resize(surface, 800, 400)
+    await tick()
+    let context = document.querySelector('.canvas-context-toolbar') as HTMLElement
+    expect(context.style.left).toBe('624px')
+    expect(context.style.top).toBe('68px')
+
+    ResizeObserverStub.resize(surface, 240, 120)
+    await tick()
+    context = document.querySelector('.canvas-context-toolbar') as HTMLElement
+    expect(context.style.left).toBe('120px')
+    expect(context.style.top).toBe('68px')
+  })
+
   it('draws a freeform lasso and selects only intersecting nodes', async () => {
     h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
     component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
@@ -1004,6 +1117,31 @@ describe('CanvasView', () => {
     await tick()
     nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
     expect(nodes.at(-1)).toMatchObject({ type: 'text', text: 'pointer paste', x: 560, y: 410 })
+  })
+
+  it('does not move the remembered insertion point when using the contextual toolbar', async () => {
+    h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('[data-id="text-1"]')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    surface.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerId: 23, pointerType: 'mouse', isPrimary: true, clientX: 700, clientY: 500,
+    }))
+    ;(document.querySelector('[data-id="text-1"]') as HTMLElement).click()
+    await tick()
+
+    const copy = document.querySelector('button[title="复制选中内容"]') as HTMLButtonElement
+    copy.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerId: 24, pointerType: 'mouse', button: 0, isPrimary: true, clientX: 20, clientY: 20,
+    }))
+    ;(document.querySelector('button[title="新建文本卡片"]') as HTMLButtonElement).click()
+    await tick()
+
+    const nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.at(-1)).toMatchObject({ type: 'text', x: 560, y: 410 })
   })
 
   it('fails closed for malformed JSON and never rewrites the tab', async () => {

@@ -184,6 +184,7 @@
   } | null>(null)
   let historyVersion = $state(0)
   let surface: HTMLDivElement | undefined = $state()
+  let surfaceSize = $state.raw({ width: 900, height: 600 })
   let toolbarEdgeLabelInput: HTMLInputElement | undefined = $state()
   let toolbarGroupLabelInput: HTMLInputElement | undefined = $state()
   let viewport = $state.raw<Viewport>({ x: 0, y: 0, zoom: 1 })
@@ -383,7 +384,7 @@
   }
 
   function contextToolbarStyle(): string {
-    const surfaceWidth = surface?.getBoundingClientRect().width ?? 900
+    const { width: surfaceWidth, height: surfaceHeight } = surfaceSize
     if (!selectionToolbarBounds) {
       return `left:${surfaceWidth / 2}px;top:14px`
     }
@@ -391,7 +392,8 @@
     const screenTop = selectionToolbarBounds.y * viewport.zoom + viewport.y - 12
     const horizontalInset = Math.min(176, surfaceWidth / 2)
     const left = Math.min(Math.max(screenCenter, horizontalInset), Math.max(horizontalInset, surfaceWidth - horizontalInset))
-    return `left:${left}px;top:${Math.max(54, screenTop)}px`
+    const top = Math.min(Math.max(54, screenTop), Math.max(54, surfaceHeight - 12))
+    return `left:${left}px;top:${top}px`
   }
 
   function ensureGeometryIndexes(): void {
@@ -1206,7 +1208,7 @@
 
   function isTextInput(target: EventTarget | null): boolean {
     return target instanceof HTMLElement
-      && !!target.closest('input,textarea,select,button,[contenteditable="true"],.embedded-markdown,.ProseMirror')
+      && !!target.closest('input,textarea,select,button,summary,[contenteditable="true"],.embedded-markdown,.ProseMirror')
   }
 
   function localPointer(event: { clientX: number; clientY: number }): CanvasPoint {
@@ -1233,7 +1235,7 @@
 
   function shouldRememberPointer(target: EventTarget | null): boolean {
     return !(target instanceof Element)
-      || !target.closest('.canvas-toolbar,.svelte-flow__controls,.selection-resizer,.connection-create-menu,.zoom-indicator')
+      || !target.closest('.canvas-toolbar,.canvas-context-toolbar,.svelte-flow__controls,.selection-resizer,.connection-create-menu,.zoom-indicator')
   }
 
   function edgeIdsInside(nodeIds: ReadonlySet<string>): Set<string> {
@@ -2013,6 +2015,18 @@
   onMount(() => {
     rebuildFlow()
     let cancelled = false
+    let surfaceObserver: ResizeObserver | null = null
+    if (surface && typeof ResizeObserver !== 'undefined') {
+      const initialBounds = surface.getBoundingClientRect()
+      if (initialBounds.width > 0 && initialBounds.height > 0) {
+        surfaceSize = { width: initialBounds.width, height: initialBounds.height }
+      }
+      surfaceObserver = new ResizeObserver(([entry]) => {
+        if (cancelled || !entry) return
+        surfaceSize = { width: entry.contentRect.width, height: entry.contentRect.height }
+      })
+      surfaceObserver.observe(surface)
+    }
     void loadCanvasViewport(tab.filePath).then((saved) => {
       if (cancelled) return
       if (saved) {
@@ -2031,6 +2045,7 @@
     window.addEventListener('pointercancel', finishTouchPointer)
     return () => {
       cancelled = true
+      surfaceObserver?.disconnect()
       nodeDrag = null
       snapGuides = []
       cancelLasso(false)
@@ -2147,15 +2162,15 @@
       <button class="dock-button" onclick={redo} disabled={!canRedo} title={redoTitle} aria-label={redoTitle}><CanvasIcon name="redo" /></button>
     </div>
 
-    {#if selectedNodeIds.size > 0 || contextualEdge}
+    {#if selectedNodeIds.size > 0 || selectedEdgeIds.size > 0}
         <div
           class="canvas-context-toolbar"
-          class:edge-context={!!contextualEdge}
+          class:edge-context={selectedNodeIds.size === 0 && selectedEdgeIds.size > 0}
           style={contextToolbarStyle()}
           role="toolbar"
-          aria-label={contextualEdge ? '连线操作' : '选区操作'}
+          aria-label={selectedNodeIds.size === 0 ? '连线操作' : '选区操作'}
         >
-          <span class="context-kind">{contextualEdge ? '连线' : selectedNodeIds.size > 1 ? `${selectionRoots.length} 项` : selectedKnownNode?.type === 'group' ? '分组' : '节点'}</span>
+          <span class="context-kind">{selectedNodeIds.size === 0 ? (selectedEdgeIds.size > 1 ? `${selectedEdgeIds.size} 条连线` : '连线') : selectedNodeIds.size > 1 ? `${selectionRoots.length} 项` : selectedKnownNode?.type === 'group' ? '分组' : '节点'}</span>
 
           {#if selectedNodeIds.size > 0}
             <button class="context-button" onclick={() => void copySelection()} title="复制选中内容" aria-label="复制选中内容"><CanvasIcon name="copy" /></button>
@@ -2211,20 +2226,22 @@
             <button class="context-button" onclick={ungroupSelectedGroup} title="移除分组边框并保留其中节点" aria-label="解组"><CanvasIcon name="ungroup" /></button>
           {/if}
 
-          <details class="toolbar-popover">
-            <summary class="context-button" title="颜色" aria-label="颜色"><CanvasIcon name="palette" /></summary>
-            <div class="toolbar-popover-panel color-picker-panel menu-panel" aria-label={contextualEdge ? '连线颜色' : '节点颜色'}>
-              {#each [undefined, '1', '2', '3', '4', '5', '6'] as color}
-                <button
-                  class="color-swatch menu-row"
-                  class:selected={contextualEdge ? contextualEdge.color === color : selectedKnownNode ? selectedKnownNode.color === color : false}
-                  style:--swatch={displayColor(color) ?? (contextualEdge ? 'CanvasText' : 'Canvas')}
-                  title={contextualEdge ? (color ? `连线颜色 ${color}` : '默认连线颜色') : (color ? `颜色 ${color}` : '默认颜色')}
-                  onclick={() => contextualEdge ? setEdgeColor(color) : selectedKnownNode ? setNodeColor(color) : setSelectionColor(color)}
-                ><span class="sr-only">{color ?? '默认'}</span></button>
-              {/each}
-            </div>
-          </details>
+          {#if contextualEdge || selectedKnownNode || selectedNodeIds.size > 1}
+            <details class="toolbar-popover">
+              <summary class="context-button" title="颜色" aria-label="颜色"><CanvasIcon name="palette" /></summary>
+              <div class="toolbar-popover-panel color-picker-panel menu-panel" aria-label={contextualEdge ? '连线颜色' : '节点颜色'}>
+                {#each [undefined, '1', '2', '3', '4', '5', '6'] as color}
+                  <button
+                    class="color-swatch menu-row"
+                    class:selected={contextualEdge ? contextualEdge.color === color : selectedKnownNode ? selectedKnownNode.color === color : false}
+                    style:--swatch={displayColor(color) ?? (contextualEdge ? 'CanvasText' : 'Canvas')}
+                    title={contextualEdge ? (color ? `连线颜色 ${color}` : '默认连线颜色') : (color ? `颜色 ${color}` : '默认颜色')}
+                    onclick={() => contextualEdge ? setEdgeColor(color) : selectedKnownNode ? setNodeColor(color) : setSelectionColor(color)}
+                  ><span class="sr-only">{color ?? '默认'}</span></button>
+                {/each}
+              </div>
+            </details>
+          {/if}
 
           <span class="toolbar-separator"></span>
           <button class="context-button danger" onclick={deleteSelection} title="删除选中内容" aria-label="删除选中内容"><CanvasIcon name="trash" /></button>
