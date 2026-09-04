@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   resyncRequired: null as ((reason: { changeId?: string }) => void) | null,
   mountSnapshots: [] as any[],
   mountReadOnly: [] as boolean[],
+  mountBarrier: null as Promise<void> | null,
 }))
 
 vi.mock('./editor-kit-v2', () => ({
@@ -22,6 +23,7 @@ vi.mock('./editor-kit-v2', () => ({
     mocks.mountSnapshots.push(structuredClone(options.snapshot))
     mocks.mountReadOnly.push(options.readOnly === true)
     mocks.resyncRequired = options.onResyncRequired
+    if (mocks.mountBarrier) await mocks.mountBarrier
     return {
       surface: {
         reconcile: mocks.reconcile,
@@ -257,6 +259,7 @@ afterEach(async () => {
   mocks.resyncRequired = null
   mocks.mountSnapshots.length = 0
   mocks.mountReadOnly.length = 0
+  mocks.mountBarrier = null
 })
 
 async function render(createIfMissing = true, agent: typeof eligibleAgent | undefined = eligibleAgent) {
@@ -563,6 +566,21 @@ describe('CollaborativeDocumentSpike', () => {
 
     expect(agentStatusCalls).toBe(0)
     expect(repository?.aggregate.session.proposals).toHaveLength(0)
+  })
+
+  it('destroys an editor that finishes mounting after the component closes', async () => {
+    let releaseMount!: () => void
+    mocks.mountBarrier = new Promise((resolve) => { releaseMount = resolve })
+    await render(false)
+    activate('创建受控 MEMORY 文档')
+    await vi.waitFor(() => expect(mocks.mountSnapshots).toHaveLength(1))
+
+    await unmount(component!)
+    component = null
+    releaseMount()
+
+    await vi.waitFor(() => expect(mocks.destroy).toHaveBeenCalledOnce())
+    expect(mocks.localListener).toBeNull()
   })
 
   it('never persists a terminal Agent result after the component closes during polling', async () => {

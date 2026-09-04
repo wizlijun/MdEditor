@@ -181,7 +181,7 @@
     if (!editorHost) throw new Error('CDR_EDITOR_HOST_MISSING')
     const status = store.managedStatus
     const startsReadOnly = status.readOnlyReason !== null
-    editor = await mount(editorHost, {
+    const mountedEditor = await mount(editorHost, {
       snapshot: restoredSession.snapshot(),
       ids,
       readOnly: startsReadOnly,
@@ -192,6 +192,11 @@
         void handleResyncRequired(reason)
       },
     })
+    if (disposed) {
+      await mountedEditor.surface.destroy()
+      return
+    }
+    editor = mountedEditor
     if (!startsReadOnly) stopObserving = editor.surface.observeLocalOperations(handleLocalOperations)
     loading = false
     if (status.readOnlyReason) {

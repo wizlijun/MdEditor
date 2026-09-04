@@ -879,7 +879,7 @@ Yjs Adapter 必须遵守：
 - 验证 proposal Decoration、stale-base、Anchor 重新定位和 Assessment 版本绑定。
 - 验证中文／日文 IME、undo、重复 request 和窗口重开。
 - Stage 0C 已用按插件隔离的单 aggregate generation-CAS store 验证失败不安装候选状态与窗口重开。
-- Stage 0D 已把固定槽位 `.md`、派生 current-block fingerprint 索引、revision history、回执和 audit 纳入同一逻辑 generation，并以 representation hash 乐观前置条件与 prepared journal 验证 cooperative-writer 下的 prepared-state 恢复；existing-file 最终替换竞争、真实进程 kill 与故障注入仍属于阶段 2。当前只覆盖 `self + replace`，不是完整 MVP Repository。
+- Stage 0D 已把固定槽位 `.md`、派生 current-block fingerprint 索引、revision history、回执和 audit 纳入同一逻辑 generation，并以 representation hash 乐观前置条件与 prepared journal 验证 cooperative-writer 下的 prepared-state 恢复；existing-file 最终替换竞争、真实进程 kill 与故障注入仍属于阶段 2。当前覆盖 Memory `self` 以及 replace／insert／delete，不是完整 MVP Repository。
 
 Go/No-Go：任一普通局部更新需要全文 `setContent()`、块 ID 往返不稳定、IME 丢字、同块 stale 覆盖或重复请求产生二次应用，均不得进入 MVP。
 
@@ -891,11 +891,11 @@ Go/No-Go：任一普通局部更新需要全文 `setContent()`、块 ID 往返�
 
 - 当前纵向链路共用唯一内部 `block.replace` v0 schema、纯 DocumentCore 和窄 Application Service；它不是稳定外部 wire contract。
 - ActorSource、Authorizer 与 ChangePolicy 最小求交；Memory self Profile 只验证现有 replace／proposal／assessment 链路。
-- 当前仅使用插件内绑定的本机 actor fixture；Host 可信身份接入仍是后续闸门。
+- 人类操作使用 Host 提供的 vault author 身份；Agent 操作绑定启动时明确选择并冻结的 Provider 与 run ID，不采信结果载荷自报身份。
 
 **Stage 1B-1：replace 协议迁移与最小结构编辑（已实现）**
 
-- replace 已迁移到 `target + payload`，持久 session schema 升至 v4，并可严格迁移 v2/v3 的 applied/conflicted receipt 与 proposal。
+- replace 已迁移到 `target + payload`，持久 session schema 升至 v5，并可严格迁移 v2/v3/v4 的 receipt、proposal 与 assessment；v5 增加有界 rationale。
 - 平面 `block.insert`／`block.delete`、生命周期内 candidate ID 防复用、Editor Kit 显式结构命令以及同代 Markdown/aggregate 持久化已实现；键盘结构推断继续 fail closed。
 
 **Stage 1B-2：move 与需要时的身份关系**

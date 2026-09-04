@@ -276,6 +276,24 @@ manifest 不写 `Agents`、`智能体` 等显示文本。插件市场索引也�
 - 写入采用同目录临时文件、文件同步、原子替换，并在 Unix 上同步最终目录；宿主进程内的 writers 由同一 CAS 临界区串行化。该 Stage 0 存储验证正常重开恢复，不承诺跨平台掉电恢复、多宿主进程锁、历史查询、外部 Markdown 漂移检测或协作同步。app-data 视为宿主进程所有；防御其他本机进程在检查与写入之间恶意替换目录需要 handle-relative I/O，留作安全模型要求该威胁时的独立硬化。
 - repository 数据不在 vault 内，也不是可迁移文档格式。需要人类可读的 `.md`、结构化迁移包和业务 revision/journal 时，仍应由更高层 `DocumentRepository` 契约提供。
 
+### CDR managed Markdown repository v2（本机预览）
+
+v2 把一个 vault 内固定 `.md` 路径与一个不透明 aggregate 作为同一逻辑提交维护，用于需要“可迁移正文＋受控结构化状态”的 UI 插件。它仍是通用存储边界，不解释 MEMORY、Claim 或编辑器语义。该 API 目前只开放给隔离插件窗口；除 `cdr.repository` 外，inspect/load 还要求 `vault.read`，commit 同时要求 `vault.read` 与 `vault.write`。
+
+| 方法 | 参数 | 主要返回 |
+|---|---|---|
+| `host.cdr.repository.v2.inspect` | `{ vault_path }` | `{ kind: "missing" }` 或 `{ kind: "located", document_id }` |
+| `host.cdr.repository.v2.load` | `{ document_id, vault_path }` | `{ kind: "missing" }` 或 `{ kind: "loaded", generation, aggregate, representation }` |
+| `host.cdr.repository.v2.commit` | `{ document_id, expected_generation, aggregate, representation: { vault_path, expected, markdown } }` | `committed`、`aggregate-conflict` 或 `external-drift` |
+
+`representation.expected` 必须明确写成 `{ kind: "missing" }`，或 `{ kind: "present", sha256 }`。首次提交只接受 missing 且 generation 为 0；后续提交必须同时匹配上一代 generation、上一版表示哈希和当前磁盘字节。成功返回下一代 generation 与 `representation_sha256`。
+
+load 的 `representation.status` 为 `in-sync`、`external-drift` 或 `missing`。发生 aggregate 冲突或外部 Markdown 漂移时不会覆盖任一方；调用方应展示最后提交状态并进入只读／人工处理流程，不能盲目重试。commit 回执丢失仍需重新 load 核定结果。
+
+受控 Markdown 必须是普通 `.md` 文件，并在首个 YAML frontmatter 中包含稳定的 `cdr.document_id` 与非空 `type`。路径必须是安全的 vault 相对路径；`MEMORY.md`、`USER.md` 与 `.notemd/memory/` 保持 Memory v2 权威区，不允许作为 v2 managed document。宿主按 vault、插件、路径和 document ID 隔离状态，使用 prepared journal 在重开时确定性恢复已准备提交。
+
+当前限制：单份 Markdown 和 aggregate 各不超过 16 MiB；只保证同一宿主进程内的 cooperative writer，不承诺恶意本机进程竞态、跨设备同步或外部 Markdown 自动导入。跨设备协作应另接 Collaboration Binding，不能把 v2 journal 当作 Yjs 历史。
+
 ### 其它
 
 | 方法 | capability | 参数 → 返回 |

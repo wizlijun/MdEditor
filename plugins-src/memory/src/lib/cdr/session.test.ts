@@ -385,13 +385,24 @@ describe('InMemoryDocumentSession', () => {
     expect(restored.audit()).toHaveLength(session.audit().length)
   })
 
-  it('migrates a v4 aggregate without rationale fields', () => {
-    const current = new InMemoryDocumentSession(fixture(), sequentialIds('v4')).exportState()
+  it('migrates v4 proposals and assessments without rationale fields', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('v4'))
+    await session.propose(
+      replace('v4-proposal', 'block-b', 'block-b/1', 'Legacy proposal.'),
+      'agent:legacy', undefined, 'v5-only proposal rationale',
+    )
+    await session.assess('block-b', 'agent:legacy', 'verified', undefined, 'v5-only assessment rationale')
+    const current = structuredClone(session.exportState()) as any
+    current.schema = 'notemd.cdr/document-session/v4'
+    delete current.proposals[0].rationale
+    delete current.assessments[0].rationale
     const restored = InMemoryDocumentSession.fromState(
-      { ...structuredClone(current), schema: 'notemd.cdr/document-session/v4' },
+      current,
       sequentialIds('restored-v4'),
     )
     expect(restored.exportState().schema).toBe(DOCUMENT_SESSION_STATE_SCHEMA)
+    expect(restored.proposals()[0]).not.toHaveProperty('rationale')
+    expect(restored.assessments()[0]).not.toHaveProperty('rationale')
   })
 
   it('migrates a v2 receipt actor from its durable audit event', async () => {
@@ -407,7 +418,7 @@ describe('InMemoryDocumentSession', () => {
       .rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
   })
 
-  it('migrates v3 applied, conflicted, and proposal batches to v4 canonical signatures', async () => {
+  it('migrates v3 applied, conflicted, and proposal batches to current canonical signatures', async () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('legacy-v3'))
     const applied = replace('legacy-v3-applied', 'block-a', 'block-a/1', '# Legacy v3')
     const conflicted = replace('legacy-v3-conflict', 'block-b', 'missing', 'Never applied.')
