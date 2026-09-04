@@ -14,6 +14,7 @@ export type SurfaceUpdate =
       kind: 'ack-local'
       requestId: string
       authoritative: EditorSnapshot
+      includedChangeIds: readonly string[]
     }
   | { kind: 'apply-remote'; change: AppliedChange }
   | {
@@ -21,14 +22,20 @@ export type SurfaceUpdate =
       requestId: string
       changeSetId: string
       authoritative: EditorSnapshot
+      includedChangeIds: readonly string[]
     }
   | {
       kind: 'reject-local'
       requestId: string
-      reason: { code: 'stale-base' | 'invalid-operation' | 'unsupported-structure'; message: string }
+      reason: {
+        code: 'stale-base' | 'invalid-operation' | 'unsupported-structure' | 'remote-base-mismatch'
+        message: string
+        changeId?: string
+      }
       authoritative: EditorSnapshot
+      includedChangeIds: readonly string[]
     }
-  | { kind: 'resync'; snapshot: EditorSnapshot }
+  | { kind: 'resync'; snapshot: EditorSnapshot; includedChangeIds: readonly string[] }
 
 export interface DecorationItem {
   blockId: string
@@ -65,6 +72,7 @@ export interface MountDocumentEditorOptions {
   baseDir?: string
   placeholder?: string
   onBlockedStructuralEdit?: () => void
+  onResyncRequired?: (reason: { code: 'remote-base-mismatch'; message: string; changeId?: string }) => void
 }
 
 export type MountDocumentEditor = (

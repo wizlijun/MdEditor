@@ -8,7 +8,7 @@
 >
 > 文档关系：本稿是该方向的唯一实施基线，取代 `2026-09-04-co-authored-surface-design.md` 中与正文权威、治理归属、API 和 Yjs 时机有关的设计结论；旧稿中的仓库现状证据已在本稿重新核对。若旧稿继续保留，必须明确标记为 superseded，不能并列作为规范。
 
-> 实施记录（2026-09-04）：已启动首个可运行切片：并存的 Editor Kit v2、领域无关的内存 Operation 会话，以及现有 `notemd.memory` 窗口内的“共写文档实验”。该切片只验证单块 `block.replace`、串行本地确认、局部远程事务、ack 回声隔离、stale-base、幂等、Decoration 与 IME 排队；普通 Agent 只产生提案，直接远端更新明确标为“已授权服务端变更”fixture。当前块身份仅是“一块对应一个顶层节点”的内存 fixture，并对插入、删除、移动、拆合及多块编辑 fail closed；尚未验证或接入既有 BlockYaml、Memory v2 Claim、持久化 Repository、其余三类结构操作或 Yjs，不构成 MEMORY MVP。
+> 实施记录（2026-09-04）：已启动首个可运行切片：并存的 Editor Kit v2、领域无关的内存 Operation 会话，以及现有 `notemd.memory` 窗口内的“共写文档实验”。该切片验证单块 `block.replace`、串行本地确认、局部远程事务、ack 回声隔离、stale-base、幂等、Decoration 与 IME 排队；普通 Agent 只产生提案，直接远端更新明确标为“已授权服务端变更”fixture。块布局已扩展为“一个稳定块覆盖一组连续顶层节点”，远端替换可改变该范围的节点数并原子更新后续映射；本地插入、删除、移动、拆合及多块编辑仍 fail closed。现有 BlockYaml 的 chunk／fingerprint／merge 生产函数已加入 CDR conformance 测试：长中文小改和精确重排可保留 ID，但小于 20 个归一化字符的短块改写会 fresh＋retired，默认 `minChars=400` 也会合并相邻短章节。因此，“外部 Markdown 依赖当前 fingerprint／merge 重建已改写短块的身份”目前是明确 No-Go；携带显式 block ID 的 CDR 编辑与 Operation 寻址不受此结论影响。尚未接入 BlockYaml 持久化、document-ID store、Memory v2 Claim、Repository、其余三类结构操作或 Yjs，不构成 MEMORY MVP。
 
 ## 0. 结论
 
@@ -637,6 +637,7 @@ type SurfaceUpdate =
       kind: 'ack-local'
       requestId: string
       authoritative: DocumentRevision
+      includedChangeIds: readonly string[]
     }
   | { kind: 'apply-remote'; change: AppliedChange }
   | {
@@ -644,14 +645,28 @@ type SurfaceUpdate =
       requestId: string
       changeSetId: string
       authoritative: DocumentRevision
+      includedChangeIds: readonly string[]
     }
   | {
       kind: 'reject-local'
       requestId: string
       reason: ChangeError
       authoritative: DocumentRevision
+      includedChangeIds: readonly string[]
     }
-  | { kind: 'resync'; snapshot: DocumentRevision }
+  | {
+      kind: 'resync'
+      snapshot: DocumentRevision
+      includedChangeIds: readonly string[]
+    }
+
+interface AppliedChange {
+  changeId: string
+  baseRevisionId: string
+  revisionId: string
+  operations: readonly Operation[]
+  blockRevisions: Readonly<Record<string, string>>
+}
 
 interface EditorSurface {
   reconcile(update: SurfaceUpdate): Promise<void>
@@ -673,6 +688,10 @@ interface DecorationHost {
 }
 ```
 
+`AppliedChange.baseRevisionId` 是该提交在 Repository 中实际 CAS 的父 revision，不是客户端最初请求的旧 base。Editor 只局部应用当前 head 的直接后继；缺少父 revision 或通知乱序时进入只读并请求完整 `resync`，不得靠比较不透明 revision 字符串或只检查异块版本来猜测顺序。
+
+`includedChangeIds` 是一次 snapshot-bearing 回执附带的、**有界且临时**的覆盖证明：只列出通知生产者确认已经包含在该 authoritative snapshot 中、且可能仍在当前进程队列里的 change ID。它不是 revision ancestry，不写入 DocumentRevision／Repository，不跨重开增长，也不提供 gap replay；Editor 只按精确 ID 丢弃已覆盖通知，其余通知仍按 `baseRevisionId` 重新校验。生产者无法证明覆盖时传空数组，随后发现 base 缺口就走 `resync`。
+
 Presence、订阅状态、保存状态、授权、Profile 和 publication 不进入 EditorSurface，由窗口级 `DocumentSessionViewModel` 组合。
 
 ### 9.2 编辑规则
@@ -680,6 +699,8 @@ Presence、订阅状态、保存状态、授权、Profile 和 publication 不进
 - 顶层 addressable ProseMirror node 绑定现有 `block_id`。
 - 本地 transaction 转换为 Operation；外部 committed change 以局部 transaction 应用。
 - `ack-local.authoritative` 是该请求提交完成时读取的 committed head。本地块与乐观结果相同时不产生第二次正文事务；其中已包含的其他远端块可以局部对齐。较早到达 UI、后被该 head 覆盖的 change 只记为已消费，不再回放，避免先处理新 ack、再处理旧通知时把 head 回退。
+- 任何 snapshot-bearing 回执只能通过 `includedChangeIds` 精确声明其覆盖的进程内通知；直接远端更新必须满足 `change.baseRevisionId === current.revisionId`，否则锁定编辑并请求 `resync`。
+- 未提交的本地请求或 IME composition 存在时，不应用也不缓存收到的 `resync` payload，只记录“需要重新同步”；本地请求结束后重新读取最新 authoritative snapshot。IME 的最终输入 transaction 到达前不得因该标记切换只读。
 - optimistic 编辑被降级并保存为 proposal 时使用 `proposal-stored`：恢复 authoritative 正文，同时把建议 diff 保留为 Decoration；不得让未接受文字继续留在正文中。
 - 本地请求被拒绝或冲突时使用 `reject-local` 恢复／比较 authoritative revision；无法安全增量恢复时才使用 `resync`。
 - 初始 snapshot 在 mount 时传入；之后只有显式 `resync` 可以整份重新对齐。

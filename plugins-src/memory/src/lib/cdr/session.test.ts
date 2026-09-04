@@ -23,7 +23,9 @@ function replace(requestId: string, blockId: string, expectedBlockRevision: stri
 describe('InMemoryDocumentSession', () => {
   it('safely rebases a different-block edit while rejecting a stale same-block edit', () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('test'))
-    expect(session.submit(replace('r1', 'block-a', 'block-a/1', '# New background'), 'human').kind).toBe('applied')
+    const first = session.submit(replace('r1', 'block-a', 'block-a/1', '# New background'), 'human')
+    expect(first.kind).toBe('applied')
+    if (first.kind === 'applied') expect(first.change.baseRevisionId).toBe('revision-1')
     expect(session.submit(replace('r2', 'block-b', 'block-b/1', 'New constraint.'), 'agent-b').kind).toBe('applied')
 
     const stale = session.submit(replace('r3', 'block-a', 'block-a/1', '# Stale overwrite'), 'agent-a')

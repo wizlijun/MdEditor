@@ -58,6 +58,14 @@
         onBlockedStructuralEdit: () => {
           notice = 'Stage 0 仅允许块内编辑；插入、删除和拆合块已 fail-closed。'
         },
+        onResyncRequired: (reason) => {
+          notice = '检测到远端版本缺口，已从当前权威快照重新同步。'
+          if (editor) void editor.surface.reconcile({
+            kind: 'resync',
+            snapshot: session.snapshot(),
+            includedChangeIds: reason.changeId ? [reason.changeId] : [],
+          })
+        },
       })
       stopObserving = editor.surface.observeLocalOperations(handleLocalOperations)
       loading = false
@@ -80,6 +88,7 @@
         requestId: batch.requestId,
         reason: result.conflict,
         authoritative: result.snapshot,
+        includedChangeIds: [],
       })
     } else {
       notice = `人类局部修改已提交 · ${result.change.revisionId}`
@@ -87,6 +96,7 @@
         kind: 'ack-local',
         requestId: batch.requestId,
         authoritative: result.snapshot,
+        includedChangeIds: [result.change.changeId],
       })
     }
     syncViewModels()

@@ -35,6 +35,7 @@ export interface OperationBatch {
 export interface AppliedChange {
   changeId: string
   originRequestId?: string
+  baseRevisionId: string
   revisionId: string
   blockRevisions: Readonly<Record<string, string>>
   operations: readonly ReplaceBlockOperation[]
@@ -143,6 +144,7 @@ export class InMemoryDocumentSession {
       return result
     }
 
+    const baseRevisionId = this.#head.revisionId
     const changed = new Map<string, string>()
     const nextBlocks = this.#head.blocks.map((block) => {
       const operation = batch.operations.find((item) => item.blockId === block.blockId)
@@ -156,6 +158,7 @@ export class InMemoryDocumentSession {
     const change: AppliedChange = {
       changeId: this.ids.changeId(),
       originRequestId: batch.requestId,
+      baseRevisionId,
       revisionId,
       blockRevisions: Object.fromEntries(changed),
       operations: batch.operations.map((operation) => ({ ...operation })),
