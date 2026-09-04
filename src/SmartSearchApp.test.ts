@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   storedSmartLookup: undefined as unknown,
   planStartFailures: 0,
   planStartError: 'temporary planner IPC response loss',
+  plannedSearchError: null as string | null,
   summaryStartFailures: 0,
   summaryStartGate: null as Promise<void> | null,
   legacyAgent: false,
@@ -122,7 +123,13 @@ function planJson(): Record<string, unknown> {
   }
 }
 
-function plannedResponse(query: string, deep = false) {
+function plannedResponse(
+  query: string,
+  deep = false,
+  plan: Record<string, any> = planJson(),
+  referenceTime = '2026-09-03T00:00:00Z',
+  timezone = 'UTC',
+) {
   const kind = mocks.plannedKind === 'empty' && deep ? 'normal' : mocks.plannedKind
   const search = searchResponse(kind)
   if (query === 'new question' && mocks.plannedKind === 'normal') {
@@ -134,8 +141,20 @@ function plannedResponse(query: string, deep = false) {
     resolvedPlan: {
       schemaVersion: 1,
       intent: { kind: 'locate', focus: query },
-      referenceTime: '2026-09-03T00:00:00Z', referenceDate: '2026-09-03', timezone: 'UTC',
-      time: null, constraints: {}, lockedFilters: {},
+      referenceTime, referenceDate: referenceTime.slice(0, 10), timezone,
+      time: plan.time
+        ? {
+            appliesTo: plan.time.appliesTo,
+            sourceText: plan.time.sourceText,
+            after: plan.time.expression?.kind === 'absolute_range'
+              ? plan.time.expression.after
+              : '2026-08-24',
+            before: plan.time.expression?.kind === 'absolute_range'
+              ? plan.time.expression.before
+              : '2026-08-30',
+          }
+        : null,
+      constraints: {}, lockedFilters: {},
       queries: [{
         id: 'q1', logicalId: 'q1', purpose: 'recall', terms: ['release', 'risk'],
         phrases: [], weight: 1, rationale: 'test',
@@ -203,10 +222,26 @@ function installInvokeMock(): void {
         }
       }
     }
-    if (command === 'notemd_search_plan_context') return { lockedFilters: {} }
+    if (command === 'notemd_search_plan_context') {
+      return {
+        lockedFilters: {},
+        referenceDate: '2026-09-05',
+        timeAnchors: {
+          today: { after: '2026-09-05', before: '2026-09-05' },
+          lastWeek: { after: '2026-08-24', before: '2026-08-30' },
+        },
+      }
+    }
     if (command === 'smart_lookup_agent_default') return 'notemd.test-agent'
     if (command === 'notemd_planned_search') {
-      return plannedResponse(String(args?.originalQuery ?? ''), args?.deep === true)
+      if (mocks.plannedSearchError) throw new Error(mocks.plannedSearchError)
+      return plannedResponse(
+        String(args?.originalQuery ?? ''),
+        args?.deep === true,
+        args?.plan,
+        args?.referenceTime,
+        args?.timezone,
+      )
     }
     if (command === 'notemd_smart_search') {
       if (args?.deep === true) return searchResponse('normal')
@@ -279,6 +314,7 @@ beforeEach(() => {
   mocks.storedSmartLookup = undefined
   mocks.planStartFailures = 0
   mocks.planStartError = 'temporary planner IPC response loss'
+  mocks.plannedSearchError = null
   mocks.summaryStartFailures = 0
   mocks.summaryStartGate = null
   mocks.legacyAgent = false
@@ -312,6 +348,79 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     expect(document.querySelector('.pane-header')?.textContent).toContain('Smart results')
     expect(document.querySelector('.plan-summary')?.textContent).toContain('path:projects')
     expect(mocks.invoke.mock.calls.some((call) => OLD_COMMANDS.has(String(call[0])))).toBe(false)
+  })
+
+  it('uses a host today anchor before typed search and reuses the frozen plan for deep search', async () => {
+    const timedPlan = planJson()
+    timedPlan.time = {
+      appliesTo: 'document_date',
+      sourceText: '今天',
+      expression: { kind: 'absolute_range', after: '2026-09-05', before: '2026-09-05' },
+    }
+    mocks.planResults.push(JSON.stringify(timedPlan))
+    mocks.plannedKind = 'empty'
+    mocks.storedSmartLookup = { results: { autoDeepOnZero: false } }
+    const input = await mountReady()
+    await typeAndWait(input, '找今天的发布风险')
+    await pressEnter(input)
+
+    const start = taskStarts('search-plan')[0]?.[1]?.context
+    expect(start?.prompt).toContain('QUESTION\n找今天的发布风险')
+    expect(start?.prompt).toContain('TIME GATE')
+    expect(start?.prompt).toContain('TRUSTED_TIME_ANCHORS_JSON')
+    expect(start?.prompt).toContain('"today":{"after":"2026-09-05","before":"2026-09-05"}')
+    const first = mocks.invoke.mock.calls.find((call) => call[0] === 'notemd_planned_search')?.[1]
+    expect(first?.plan).toEqual(timedPlan)
+    expect(first?.referenceTime).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(first?.timezone).toEqual(expect.any(String))
+    const context = mocks.invoke.mock.calls.find((call) => call[0] === 'notemd_search_plan_context')?.[1]
+    expect(context).toEqual(expect.objectContaining({
+      originalQuery: '找今天的发布风险',
+      referenceTime: first?.referenceTime,
+      timezone: first?.timezone,
+    }))
+    expect(document.querySelector('.plan-summary')?.textContent).toContain('2026-09-05 – 2026-09-05')
+    const contextIndex = mocks.invoke.mock.calls.findIndex((call) => call[0] === 'notemd_search_plan_context')
+    const plannerIndex = mocks.invoke.mock.calls.findIndex((call) => (
+      call[0] === 'plugin_v2_execute' && call[1]?.command === 'run-task'
+    ))
+    const statusIndex = mocks.invoke.mock.calls.findIndex((call) => (
+      call[0] === 'plugin_v2_execute'
+        && call[1]?.command === 'run-status'
+        && call[1]?.context?.task === 'search-plan'
+    ))
+    const searchIndex = mocks.invoke.mock.calls.findIndex((call) => call[0] === 'notemd_planned_search')
+    expect(contextIndex).toBeLessThan(plannerIndex)
+    expect(plannerIndex).toBeLessThan(statusIndex)
+    expect(statusIndex).toBeLessThan(searchIndex)
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_smart_search')).toHaveLength(1)
+
+    document.querySelector<HTMLButtonElement>('.deep-button')?.click()
+    await vi.waitFor(() => {
+      expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_planned_search')).toHaveLength(2)
+    })
+    const calls = mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_planned_search')
+    expect(calls[1][1]).toEqual(expect.objectContaining({
+      plan: timedPlan,
+      referenceTime: first?.referenceTime,
+      timezone: first?.timezone,
+      deep: true,
+    }))
+    expect(taskStarts('search-plan')).toHaveLength(1)
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_smart_search')).toHaveLength(1)
+  })
+
+  it('keeps the local preview when the host rejects a planned time range', async () => {
+    mocks.plannedSearchError = 'invalid search plan: document_date sourceText is not trusted'
+    const input = await mountReady()
+    await typeAndWait(input, '找今天的发布风险')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+
+    await vi.waitFor(() => expect(document.querySelector('.preview-warning')).not.toBeNull())
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_planned_search')).toHaveLength(1)
+    expect(document.querySelectorAll('.result-row')).toHaveLength(3)
+    expect(document.querySelector('.plan-summary')).toBeNull()
+    expect(document.querySelector('.answer-body')).toBeNull()
   })
 
   it('does not retry or repair invalid Planner output and retains the local preview', async () => {

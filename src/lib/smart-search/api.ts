@@ -7,8 +7,12 @@ import type { HandoffPacket } from './handoff'
 import type { AgentTaskStart } from './agent'
 
 export const smartSearchApi = {
-  planContext: (originalQuery: string) => invoke<{ lockedFilters: Record<string, unknown> }>(
-    'notemd_search_plan_context', { originalQuery },
+  planContext: (originalQuery: string, referenceTime: string, timezone: string) => invoke<{
+    lockedFilters: Record<string, unknown>
+    referenceDate: string
+    timeAnchors: Record<string, { after: string; before: string }>
+  }>(
+    'notemd_search_plan_context', { originalQuery, referenceTime, timezone },
   ),
   plannedSearch: (
     originalQuery: string,

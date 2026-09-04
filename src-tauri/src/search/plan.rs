@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use std::time::Instant;
 
-use chrono::{Datelike, Days, Duration, Months, NaiveDate};
+use chrono::{DateTime, Datelike, Days, Duration, FixedOffset, Months, NaiveDate};
 use chrono_tz::Tz;
 use searchidx::{Query, SortMode};
 use serde::{Deserialize, Serialize};
@@ -261,12 +261,48 @@ pub struct PlannedSearchResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SearchPlanContext {
     pub locked_filters: LockedFilters,
+    pub reference_date: String,
+    pub time_anchors: TimeAnchors,
 }
 
-pub(super) fn search_plan_context(original_query: &str) -> Result<SearchPlanContext, String> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeAnchors {
+    pub today: AnchorRange,
+    pub yesterday: AnchorRange,
+    pub tomorrow: AnchorRange,
+    pub this_week: AnchorRange,
+    pub last_week: AnchorRange,
+    pub next_week: AnchorRange,
+    pub this_month: AnchorRange,
+    pub last_month: AnchorRange,
+    pub next_month: AnchorRange,
+    pub this_quarter: AnchorRange,
+    pub last_quarter: AnchorRange,
+    pub next_quarter: AnchorRange,
+    pub this_year: AnchorRange,
+    pub last_year: AnchorRange,
+    pub next_year: AnchorRange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnchorRange {
+    pub after: String,
+    pub before: String,
+}
+
+pub(super) fn search_plan_context(
+    original_query: &str,
+    reference_time: &str,
+    timezone: &str,
+) -> Result<SearchPlanContext, String> {
     validate_question(original_query)?;
+    let (_, _, reference_date) = temporal_context(reference_time, timezone)?;
     Ok(SearchPlanContext {
         locked_filters: explicit_filters(original_query)?,
+        reference_date: reference_date.to_string(),
+        time_anchors: time_anchors(reference_date)?,
     })
 }
 
@@ -554,17 +590,94 @@ fn resolve(
     reference_time: &str,
     timezone: &str,
 ) -> Result<ResolvedSearchPlan, String> {
-    let timezone = Tz::from_str(timezone)
-        .map_err(|_| invalid(format!("unknown IANA timezone {timezone:?}")))?;
-    let instant = chrono::DateTime::parse_from_rfc3339(reference_time)
-        .map_err(|error| invalid(format!("referenceTime is not RFC3339: {error}")))?;
-    let local = instant.with_timezone(&timezone);
-    let reference_date = local.date_naive();
+    let (instant, timezone, reference_date) = temporal_context(reference_time, timezone)?;
     let locked_filters = explicit_filters(original_query)?;
+    if let Some(time) = &plan.time {
+        if time.applies_to == TimeAppliesTo::DocumentDate {
+            if time.source_text != time.source_text.trim() {
+                return Err(invalid(
+                    "document_date time.sourceText must not include surrounding whitespace"
+                        .to_string(),
+                ));
+            }
+            if !original_query.contains(&time.source_text) {
+                return Err(invalid(
+                    "document_date time.sourceText must be an exact span from the original question"
+                        .to_string(),
+                ));
+            }
+        }
+    }
     let planned_range = match plan.time.as_ref() {
         Some(time) if time.applies_to == TimeAppliesTo::DocumentDate => {
             let (after, before) =
                 resolve_expression(time.expression.as_ref().unwrap(), reference_date)?;
+            let anchors = time_anchors(reference_date)?;
+            let expected = anchor_for_source(&time.source_text, &anchors);
+            let mut source_is_recognized = false;
+            if let Some(expected) = expected {
+                source_is_recognized = true;
+                if expected.after != after.to_string() || expected.before != before.to_string() {
+                    return Err(invalid(format!(
+                        "document_date expression does not match the trusted anchor for {:?}",
+                        time.source_text
+                    )));
+                }
+            }
+            if let Some((value, unit)) = parse_rolling_source(&time.source_text) {
+                source_is_recognized = true;
+                if !matches!(
+                    time.expression.as_ref(),
+                    Some(TimeExpression::RollingWindow {
+                        value: expression_value,
+                        unit: expression_unit,
+                    }) if *expression_value == value && *expression_unit == unit
+                ) {
+                    return Err(invalid(format!(
+                        "rolling_window does not match the value and unit in {:?}",
+                        time.source_text
+                    )));
+                }
+            }
+            if let Some((expected_after, expected_before)) =
+                parse_iso_date_source(&time.source_text)?
+            {
+                source_is_recognized = true;
+                if after != expected_after || before != expected_before {
+                    return Err(invalid(format!(
+                        "absolute_range does not match the explicit date text {:?}",
+                        time.source_text
+                    )));
+                }
+            }
+            if let Some((expected_after, expected_before)) =
+                parse_explicit_year_source(&time.source_text)
+            {
+                source_is_recognized = true;
+                if after != expected_after || before != expected_before {
+                    return Err(invalid(format!(
+                        "document_date expression does not match the explicit year {:?}",
+                        time.source_text
+                    )));
+                }
+            }
+            if let Some((expected_after, expected_before)) =
+                parse_explicit_quarter_source(&time.source_text)?
+            {
+                source_is_recognized = true;
+                if after != expected_after || before != expected_before {
+                    return Err(invalid(format!(
+                        "document_date expression does not match the explicit quarter {:?}",
+                        time.source_text
+                    )));
+                }
+            }
+            if !source_is_recognized {
+                return Err(invalid(
+                    "document_date sourceText is not a supported exact temporal expression"
+                        .to_string(),
+                ));
+            }
             Some(DateRange {
                 after: Some(after),
                 before: Some(before),
@@ -586,6 +699,11 @@ fn resolve(
         _ => None,
     };
     let range = intersect_range(planned_range.clone(), &locked_filters)?;
+    if let Some(time) = &plan.time {
+        if time.applies_to == TimeAppliesTo::DocumentDate {
+            strip_time_source(&mut plan.queries, &time.source_text)?;
+        }
+    }
 
     let choices = expand_choices(&plan.constraints)?;
     let physical_count = choices
@@ -833,18 +951,23 @@ fn resolve_expression(
         }
         TimeExpression::RollingWindow { value, unit } => {
             let start = match unit {
-                RollingUnit::Days => reference.checked_sub_days(Days::new((*value).into())),
+                RollingUnit::Days => reference.checked_sub_days(Days::new(u64::from(*value - 1))),
                 RollingUnit::Weeks => reference.checked_sub_days(Days::new(
                     u64::from(*value)
                         .checked_mul(7)
+                        .and_then(|days| days.checked_sub(1))
                         .ok_or_else(|| invalid("rolling week count overflowed".to_string()))?,
                 )),
-                RollingUnit::Months => reference.checked_sub_months(Months::new(*value)),
-                RollingUnit::Years => reference.checked_sub_months(Months::new(
-                    value
-                        .checked_mul(12)
-                        .ok_or_else(|| invalid("rolling year count overflowed".to_string()))?,
-                )),
+                RollingUnit::Months => reference
+                    .checked_sub_months(Months::new(*value))
+                    .and_then(|date| date.checked_add_days(Days::new(1))),
+                RollingUnit::Years => reference
+                    .checked_sub_months(Months::new(
+                        value
+                            .checked_mul(12)
+                            .ok_or_else(|| invalid("rolling year count overflowed".to_string()))?,
+                    ))
+                    .and_then(|date| date.checked_add_days(Days::new(1))),
             }
             .ok_or_else(|| invalid("rolling window is outside supported dates".to_string()))?;
             Ok((start, reference))
@@ -854,6 +977,258 @@ fn resolve_expression(
             parse_date("absolute_range.before", before)?,
         )),
     }
+}
+
+fn temporal_context(
+    reference_time: &str,
+    timezone: &str,
+) -> Result<(DateTime<FixedOffset>, Tz, NaiveDate), String> {
+    let timezone = Tz::from_str(timezone)
+        .map_err(|_| invalid(format!("unknown IANA timezone {timezone:?}")))?;
+    let instant = DateTime::parse_from_rfc3339(reference_time)
+        .map_err(|error| invalid(format!("referenceTime is not RFC3339: {error}")))?;
+    let reference_date = instant.with_timezone(&timezone).date_naive();
+    Ok((instant, timezone, reference_date))
+}
+
+fn time_anchors(reference: NaiveDate) -> Result<TimeAnchors, String> {
+    let day = |offset: i64| {
+        reference
+            .checked_add_signed(Duration::days(offset))
+            .map(|date| AnchorRange::new(date, date))
+            .ok_or_else(|| invalid("calendar day is outside supported dates".to_string()))
+    };
+    let range = |expression: TimeExpression| {
+        resolve_expression(&expression, reference)
+            .map(|(after, before)| AnchorRange::new(after, before))
+    };
+
+    Ok(TimeAnchors {
+        today: day(0)?,
+        yesterday: day(-1)?,
+        tomorrow: day(1)?,
+        this_week: range(TimeExpression::CalendarWeek { offset: 0 })?,
+        last_week: range(TimeExpression::CalendarWeek { offset: -1 })?,
+        next_week: range(TimeExpression::CalendarWeek { offset: 1 })?,
+        this_month: range(TimeExpression::CalendarMonth { offset: 0 })?,
+        last_month: range(TimeExpression::CalendarMonth { offset: -1 })?,
+        next_month: range(TimeExpression::CalendarMonth { offset: 1 })?,
+        this_quarter: AnchorRange::from_tuple(calendar_quarter(reference, 0)?),
+        last_quarter: AnchorRange::from_tuple(calendar_quarter(reference, -1)?),
+        next_quarter: AnchorRange::from_tuple(calendar_quarter(reference, 1)?),
+        this_year: range(TimeExpression::Year { offset: 0 })?,
+        last_year: range(TimeExpression::Year { offset: -1 })?,
+        next_year: range(TimeExpression::Year { offset: 1 })?,
+    })
+}
+
+impl AnchorRange {
+    fn new(after: NaiveDate, before: NaiveDate) -> Self {
+        Self {
+            after: after.to_string(),
+            before: before.to_string(),
+        }
+    }
+
+    fn from_tuple((after, before): (NaiveDate, NaiveDate)) -> Self {
+        Self::new(after, before)
+    }
+}
+
+fn calendar_quarter(reference: NaiveDate, offset: i32) -> Result<(NaiveDate, NaiveDate), String> {
+    let quarter_index = reference
+        .year()
+        .checked_mul(4)
+        .and_then(|value| value.checked_add((reference.month0() / 3) as i32))
+        .and_then(|value| value.checked_add(offset))
+        .ok_or_else(|| invalid("calendar quarter is outside supported dates".to_string()))?;
+    let year = quarter_index.div_euclid(4);
+    let month = quarter_index.rem_euclid(4) as u32 * 3 + 1;
+    let start = NaiveDate::from_ymd_opt(year, month, 1)
+        .ok_or_else(|| invalid("calendar quarter is outside supported dates".to_string()))?;
+    let end = start
+        .checked_add_months(Months::new(3))
+        .and_then(|date| date.checked_sub_days(Days::new(1)))
+        .ok_or_else(|| invalid("calendar quarter is outside supported dates".to_string()))?;
+    Ok((start, end))
+}
+
+fn anchor_for_source<'a>(source: &str, anchors: &'a TimeAnchors) -> Option<&'a AnchorRange> {
+    match source.to_lowercase().as_str() {
+        "今天" | "today" => Some(&anchors.today),
+        "昨天" | "yesterday" => Some(&anchors.yesterday),
+        "明天" | "tomorrow" => Some(&anchors.tomorrow),
+        "本周" | "这周" | "这一周" | "this week" | "current week" => {
+            Some(&anchors.this_week)
+        }
+        "上周" | "上一周" | "last week" | "previous week" => Some(&anchors.last_week),
+        "下周" | "下一周" | "next week" => Some(&anchors.next_week),
+        "本月" | "这个月" | "this month" | "current month" => Some(&anchors.this_month),
+        "上月" | "上个月" | "last month" | "previous month" => Some(&anchors.last_month),
+        "下月" | "下个月" | "next month" => Some(&anchors.next_month),
+        "本季度" | "这个季度" | "this quarter" | "current quarter" => {
+            Some(&anchors.this_quarter)
+        }
+        "上季度" | "上一季度" | "last quarter" | "previous quarter" => {
+            Some(&anchors.last_quarter)
+        }
+        "下季度" | "下一季度" | "next quarter" => Some(&anchors.next_quarter),
+        "今年" | "this year" | "current year" => Some(&anchors.this_year),
+        "去年" | "上一年" | "last year" | "previous year" => Some(&anchors.last_year),
+        "明年" | "下一年" | "next year" => Some(&anchors.next_year),
+        _ => None,
+    }
+}
+
+fn parse_rolling_source(source: &str) -> Option<(u32, RollingUnit)> {
+    let source = source.trim().to_lowercase();
+    for prefix in ["最近", "过去", "近"] {
+        if let Some(tail) = source.strip_prefix(prefix) {
+            let tail = tail.trim_start();
+            let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+            if digits == 0 {
+                continue;
+            }
+            let value = tail[..digits].parse().ok()?;
+            let unit = match tail[digits..].trim_start() {
+                "天" => RollingUnit::Days,
+                "周" => RollingUnit::Weeks,
+                "个月" | "月" => RollingUnit::Months,
+                "年" => RollingUnit::Years,
+                _ => continue,
+            };
+            return Some((value, unit));
+        }
+    }
+    let words = source.split_whitespace().collect::<Vec<_>>();
+    if words.len() != 3 || !matches!(words[0], "last" | "past" | "recent") {
+        return None;
+    }
+    let value = words[1].parse().ok()?;
+    let unit = match words[2] {
+        "day" | "days" => RollingUnit::Days,
+        "week" | "weeks" => RollingUnit::Weeks,
+        "month" | "months" => RollingUnit::Months,
+        "year" | "years" => RollingUnit::Years,
+        _ => return None,
+    };
+    Some((value, unit))
+}
+
+fn parse_iso_date_source(source: &str) -> Result<Option<(NaiveDate, NaiveDate)>, String> {
+    let text = source.trim();
+    let bytes = text.as_bytes();
+    if bytes.len() < 10 {
+        return Ok(None);
+    }
+    let mut dates = Vec::new();
+    for start in 0..=bytes.len() - 10 {
+        let candidate = &bytes[start..start + 10];
+        if candidate[4] != b'-'
+            || candidate[7] != b'-'
+            || candidate
+                .iter()
+                .enumerate()
+                .any(|(index, byte)| !matches!(index, 4 | 7) && !byte.is_ascii_digit())
+        {
+            continue;
+        }
+        if let Ok(date) = NaiveDate::parse_from_str(
+            std::str::from_utf8(candidate).expect("an ASCII date candidate is valid UTF-8"),
+            "%Y-%m-%d",
+        ) {
+            dates.push((start, start + 10, date));
+        }
+    }
+    if dates.is_empty() {
+        return Ok(None);
+    }
+    if dates.len() > 2 {
+        return Err(invalid(
+            "document_date sourceText contains more than two explicit dates".to_string(),
+        ));
+    }
+    match dates.as_slice() {
+        [(start, end, _)] => {
+            if !text[..*start].trim().is_empty() || !text[*end..].trim().is_empty() {
+                return Ok(None);
+            }
+        }
+        [(first_start, first_end, _), (second_start, second_end, _)] => {
+            let separator = text[*first_end..*second_start].trim();
+            if !text[..*first_start].trim().is_empty()
+                || !text[*second_end..].trim().is_empty()
+                || separator.is_empty()
+                || separator
+                    .chars()
+                    .any(|ch| !matches!(ch, '到' | '至' | '-' | '–' | '—' | '~' | '～'))
+            {
+                return Ok(None);
+            }
+        }
+        _ => unreachable!("date count was bounded above"),
+    }
+    let after = dates[0].2;
+    let before = dates.get(1).map(|date| date.2).unwrap_or(after);
+    Ok(Some((after, before)))
+}
+
+fn parse_explicit_year_source(source: &str) -> Option<(NaiveDate, NaiveDate)> {
+    let value = source.trim().strip_suffix('年').unwrap_or(source.trim());
+    if value.len() != 4 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let year = value.parse().ok()?;
+    Some((
+        NaiveDate::from_ymd_opt(year, 1, 1)?,
+        NaiveDate::from_ymd_opt(year, 12, 31)?,
+    ))
+}
+
+fn parse_explicit_quarter_source(source: &str) -> Result<Option<(NaiveDate, NaiveDate)>, String> {
+    let source = source.trim().to_lowercase();
+    let bytes = source.as_bytes();
+    if bytes.len() < 6 || !bytes[..4].iter().all(u8::is_ascii_digit) {
+        return Ok(None);
+    }
+    let year = &source[..4];
+    let mut suffix = source[4..].trim_start();
+    if let Some(value) = suffix.strip_prefix('-') {
+        suffix = value.trim_start();
+    }
+    let Some(quarter) = suffix.strip_prefix('q') else {
+        return Ok(None);
+    };
+    if quarter.len() != 1 || !quarter.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Ok(None);
+    }
+    let year = year.parse().ok();
+    let quarter = quarter.parse().ok();
+    match (year, quarter) {
+        (Some(year), Some(quarter @ 1..=4)) => {
+            resolve_expression(&TimeExpression::Quarter { year, quarter }, NaiveDate::MIN).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn strip_time_source(queries: &mut [PlanQuery], source: &str) -> Result<(), String> {
+    for query in queries {
+        let had_text = !query.terms.is_empty() || !query.phrases.is_empty();
+        strip_time_source_from_values(&mut query.terms, source);
+        strip_time_source_from_values(&mut query.phrases, source);
+        if had_text && query.terms.is_empty() && query.phrases.is_empty() {
+            return Err(invalid(format!(
+                "query {:?} has no topical text after removing document_date sourceText",
+                query.id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn strip_time_source_from_values(values: &mut Vec<String>, source: &str) {
+    values.retain(|value| !value.contains(source));
 }
 
 fn calendar_month(reference: NaiveDate, offset: i32) -> Result<NaiveDate, String> {
@@ -1089,6 +1464,13 @@ mod tests {
                 .contains("missing field")
         );
 
+        let mut missing_time = base_plan();
+        missing_time.as_object_mut().unwrap().remove("time");
+        assert!(
+            parse_and_resolve(&missing_time, "x", "2026-09-03T00:00:00Z", "UTC").is_ok(),
+            "SearchPlanV1 compatibility allows an omitted optional time field"
+        );
+
         let mut too_many = base_plan();
         for index in 2..=3 {
             too_many["queries"].as_array_mut().unwrap().push(json!({
@@ -1113,8 +1495,13 @@ mod tests {
         });
         // Still Sep 3 UTC, but already Sep 4 in Taipei. The named timezone,
         // not the timestamp's `Z`, chooses the local reference date.
-        let resolved =
-            parse_and_resolve(&month, "发布风险", "2026-09-03T18:30:00Z", "Asia/Taipei").unwrap();
+        let resolved = parse_and_resolve(
+            &month,
+            "上个月的发布风险",
+            "2026-09-03T18:30:00Z",
+            "Asia/Taipei",
+        )
+        .unwrap();
         assert_eq!(resolved.reference_date, "2026-09-04");
         let time = resolved.time.unwrap();
         assert_eq!(time.after.as_deref(), Some("2026-08-01"));
@@ -1127,10 +1514,434 @@ mod tests {
             "expression": { "kind": "calendar_week", "offset": -1 }
         });
         let resolved =
-            parse_and_resolve(&week, "发布风险", "2026-09-03T00:00:00Z", "Asia/Taipei").unwrap();
+            parse_and_resolve(&week, "上周发布风险", "2026-09-03T00:00:00Z", "Asia/Taipei")
+                .unwrap();
         let time = resolved.time.unwrap();
         assert_eq!(time.after.as_deref(), Some("2026-08-24"));
         assert_eq!(time.before.as_deref(), Some("2026-08-30"));
+    }
+
+    #[test]
+    fn rolling_windows_have_exact_inclusive_boundaries() {
+        for (source, expression, expected_after, expected_before) in [
+            (
+                "最近1天",
+                json!({ "kind": "rolling_window", "value": 1, "unit": "days" }),
+                "2026-09-05",
+                "2026-09-05",
+            ),
+            (
+                "最近7天",
+                json!({ "kind": "rolling_window", "value": 7, "unit": "days" }),
+                "2026-08-30",
+                "2026-09-05",
+            ),
+            (
+                "最近1周",
+                json!({ "kind": "rolling_window", "value": 1, "unit": "weeks" }),
+                "2026-08-30",
+                "2026-09-05",
+            ),
+        ] {
+            let mut plan = base_plan();
+            plan["time"] = json!({
+                "appliesTo": "document_date",
+                "sourceText": source,
+                "expression": expression,
+            });
+            let query = format!("{source}的发布风险");
+            let resolved =
+                parse_and_resolve(&plan, &query, "2026-09-04T16:30:00Z", "Asia/Taipei").unwrap();
+            let time = resolved.time.unwrap();
+            assert_eq!(time.after.as_deref(), Some(expected_after), "{source}");
+            assert_eq!(time.before.as_deref(), Some(expected_before), "{source}");
+        }
+    }
+
+    #[test]
+    fn rolling_months_and_years_use_half_open_calendar_boundaries() {
+        let month_end = NaiveDate::from_ymd_opt(2024, 3, 31).unwrap();
+        assert_eq!(
+            resolve_expression(
+                &TimeExpression::RollingWindow {
+                    value: 1,
+                    unit: RollingUnit::Months,
+                },
+                month_end,
+            )
+            .unwrap(),
+            (NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(), month_end)
+        );
+
+        let leap_day = NaiveDate::from_ymd_opt(2024, 2, 29).unwrap();
+        assert_eq!(
+            resolve_expression(
+                &TimeExpression::RollingWindow {
+                    value: 1,
+                    unit: RollingUnit::Years,
+                },
+                leap_day,
+            )
+            .unwrap(),
+            (NaiveDate::from_ymd_opt(2023, 3, 1).unwrap(), leap_day)
+        );
+    }
+
+    #[test]
+    fn host_time_anchors_cover_local_days_and_year_boundaries() {
+        let context = search_plan_context(
+            "找昨天和上季度的发布",
+            "2026-01-15T00:30:00Z",
+            "Asia/Taipei",
+        )
+        .unwrap();
+        assert_eq!(context.reference_date, "2026-01-15");
+        assert_eq!(context.time_anchors.today.after, "2026-01-15");
+        assert_eq!(context.time_anchors.yesterday.after, "2026-01-14");
+        assert_eq!(context.time_anchors.last_quarter.after, "2025-10-01");
+        assert_eq!(context.time_anchors.last_quarter.before, "2025-12-31");
+        assert_eq!(context.time_anchors.next_quarter.after, "2026-04-01");
+        assert_eq!(context.time_anchors.next_quarter.before, "2026-06-30");
+    }
+
+    #[test]
+    fn recognized_relative_cues_must_match_their_trusted_anchor() {
+        let mut today = base_plan();
+        today["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "今天",
+            "expression": {
+                "kind": "absolute_range", "after": "2026-09-05", "before": "2026-09-05"
+            }
+        });
+        let resolved =
+            parse_and_resolve(&today, "今天发布", "2026-09-04T16:30:00Z", "Asia/Taipei").unwrap();
+        assert_eq!(resolved.time.unwrap().after.as_deref(), Some("2026-09-05"));
+
+        today["time"]["expression"] = json!({
+            "kind": "absolute_range", "after": "1900-01-01", "before": "1900-01-02"
+        });
+        let error = parse_and_resolve(&today, "今天发布", "2026-09-04T16:30:00Z", "Asia/Taipei")
+            .unwrap_err();
+        assert!(error.contains("trusted anchor"), "{error}");
+
+        today["time"]["sourceText"] = json!("截至今天");
+        today["time"]["expression"] = json!({
+            "kind": "absolute_range", "after": "2026-09-05", "before": "2026-09-05"
+        });
+        let error = parse_and_resolve(
+            &today,
+            "截至今天发布",
+            "2026-09-04T16:30:00Z",
+            "Asia/Taipei",
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("supported exact temporal expression"),
+            "{error}"
+        );
+
+        let mut last_week = base_plan();
+        last_week["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "上周",
+            "expression": { "kind": "calendar_week", "offset": 1 }
+        });
+        let error =
+            parse_and_resolve(&last_week, "上周发布", "2026-09-03T00:00:00Z", "UTC").unwrap_err();
+        assert!(error.contains("trusted anchor"), "{error}");
+    }
+
+    #[test]
+    fn rolling_and_explicit_date_text_must_match_the_resolved_expression() {
+        let mut rolling = base_plan();
+        rolling["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "最近7天",
+            "expression": { "kind": "rolling_window", "value": 3, "unit": "days" }
+        });
+        let error =
+            parse_and_resolve(&rolling, "最近7天发布", "2026-09-05T00:00:00Z", "UTC").unwrap_err();
+        assert!(error.contains("value and unit"), "{error}");
+        rolling["time"]["expression"]["value"] = json!(7);
+        let resolved =
+            parse_and_resolve(&rolling, "最近7天发布", "2026-09-05T00:00:00Z", "UTC").unwrap();
+        assert_eq!(resolved.time.unwrap().after.as_deref(), Some("2026-08-30"));
+
+        rolling["time"]["sourceText"] = json!("最近 7 天");
+        let resolved =
+            parse_and_resolve(&rolling, "最近 7 天发布", "2026-09-05T00:00:00Z", "UTC").unwrap();
+        assert_eq!(resolved.time.unwrap().after.as_deref(), Some("2026-08-30"));
+
+        let mut exact_day = base_plan();
+        exact_day["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "2026-09-05",
+            "expression": {
+                "kind": "absolute_range", "after": "1900-01-01", "before": "1900-01-02"
+            }
+        });
+        let error = parse_and_resolve(&exact_day, "2026-09-05 发布", "2026-09-05T00:00:00Z", "UTC")
+            .unwrap_err();
+        assert!(error.contains("explicit date text"), "{error}");
+        exact_day["time"]["expression"] = json!({
+            "kind": "absolute_range", "after": "2026-09-05", "before": "2026-09-05"
+        });
+        let resolved =
+            parse_and_resolve(&exact_day, "2026-09-05 发布", "2026-09-05T00:00:00Z", "UTC")
+                .unwrap();
+        let time = resolved.time.unwrap();
+        assert_eq!(time.after.as_deref(), Some("2026-09-05"));
+        assert_eq!(time.before.as_deref(), Some("2026-09-05"));
+
+        let mut quarter = base_plan();
+        quarter["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "2026 Q3",
+            "expression": { "kind": "quarter", "year": 2026, "quarter": 3 }
+        });
+        let resolved =
+            parse_and_resolve(&quarter, "2026 Q3 发布", "2026-09-05T00:00:00Z", "UTC").unwrap();
+        let time = resolved.time.unwrap();
+        assert_eq!(time.after.as_deref(), Some("2026-07-01"));
+        assert_eq!(time.before.as_deref(), Some("2026-09-30"));
+    }
+
+    #[test]
+    fn time_null_does_not_add_filters_for_names_or_dsl_values() {
+        for question in [
+            "日本年号",
+            "path:today 发布",
+            "last yearbook notes",
+            "当今年轻人",
+        ] {
+            let resolved = parse_and_resolve(&base_plan(), question, "2026-09-05T00:00:00Z", "UTC")
+                .unwrap_or_else(|error| panic!("{question}: {error}"));
+            assert!(resolved.time.is_none(), "{question}");
+            assert!(resolved.queries[0].filters.after.is_none(), "{question}");
+        }
+    }
+
+    #[test]
+    fn multiple_time_mentions_are_classified_by_the_planner_without_lexical_false_rejection() {
+        let mut plan = base_plan();
+        plan["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "今天",
+            "expression": {
+                "kind": "absolute_range", "after": "2026-09-05", "before": "2026-09-05"
+            }
+        });
+        plan["queries"][0]["terms"] = json!(["明天会议", "笔记"]);
+        let resolved = parse_and_resolve(
+            &plan,
+            "找今天关于明天会议的笔记",
+            "2026-09-05T00:00:00Z",
+            "UTC",
+        )
+        .unwrap();
+        assert_eq!(resolved.time.unwrap().after.as_deref(), Some("2026-09-05"));
+        assert_eq!(resolved.queries[0].terms, ["明天会议", "笔记"]);
+
+        plan["time"] = json!({
+            "appliesTo": "ambiguous", "sourceText": "上周和本周", "expression": null
+        });
+        let resolved =
+            parse_and_resolve(&plan, "比较上周和本周发布", "2026-09-05T00:00:00Z", "UTC").unwrap();
+        assert!(resolved.queries[0].filters.after.is_none());
+    }
+
+    #[test]
+    fn document_date_source_accepts_only_one_supported_expression() {
+        let mut plan = base_plan();
+        plan["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "最近7天和最近30天",
+            "expression": { "kind": "rolling_window", "value": 7, "unit": "days" }
+        });
+        let error = parse_and_resolve(
+            &plan,
+            "最近7天和最近30天发布",
+            "2026-09-05T00:00:00Z",
+            "UTC",
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("supported exact temporal expression"),
+            "{error}"
+        );
+
+        plan["time"] = json!({
+            "appliesTo": "document_date",
+            "sourceText": "2026-09-01 到 2026-09-10 和 2026-09-20",
+            "expression": {
+                "kind": "absolute_range", "after": "2026-09-01", "before": "2026-09-10"
+            }
+        });
+        let error = parse_and_resolve(
+            &plan,
+            "2026-09-01 到 2026-09-10 和 2026-09-20 发布",
+            "2026-09-05T00:00:00Z",
+            "UTC",
+        )
+        .unwrap_err();
+        assert!(error.contains("more than two explicit dates"), "{error}");
+
+        for source in ["2026-09-01 和 2026-09-10", "2026-09-01 2026-09-10"] {
+            plan["time"] = json!({
+                "appliesTo": "document_date", "sourceText": source,
+                "expression": {
+                    "kind": "absolute_range", "after": "2026-09-01", "before": "2026-09-10"
+                }
+            });
+            let question = format!("{source} 发布");
+            let error =
+                parse_and_resolve(&plan, &question, "2026-09-05T00:00:00Z", "UTC").unwrap_err();
+            assert!(
+                error.contains("supported exact temporal expression"),
+                "{source}: {error}"
+            );
+        }
+
+        plan["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "release_2026-09-05_beta",
+            "expression": {
+                "kind": "absolute_range", "after": "2026-09-05", "before": "2026-09-05"
+            }
+        });
+        let error = parse_and_resolve(
+            &plan,
+            "release_2026-09-05_beta 发布",
+            "2026-09-05T00:00:00Z",
+            "UTC",
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("supported exact temporal expression"),
+            "{error}"
+        );
+
+        for source in ["20-26-Q3", "2-0-2-6 Q3", "2026---Q3"] {
+            plan["time"] = json!({
+                "appliesTo": "document_date", "sourceText": source,
+                "expression": { "kind": "quarter", "year": 2026, "quarter": 3 }
+            });
+            let question = format!("{source} 发布");
+            let error =
+                parse_and_resolve(&plan, &question, "2026-09-05T00:00:00Z", "UTC").unwrap_err();
+            assert!(
+                error.contains("supported exact temporal expression"),
+                "{source}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn document_time_must_come_from_the_question_and_is_removed_from_query_text() {
+        let mut plan = base_plan();
+        plan["time"] = json!({
+            "appliesTo": "document_date",
+            "sourceText": "上周",
+            "expression": { "kind": "calendar_week", "offset": -1 }
+        });
+        plan["queries"][0]["terms"] = json!(["发布", "风险", "上周", "上周的发布"]);
+        plan["queries"][0]["phrases"] = json!(["发布决定", "上周 发布决定"]);
+        plan["queries"].as_array_mut().unwrap().push(json!({
+            "id": "q2", "purpose": "recall",
+            "terms": ["回滚", "上周回滚"], "phrases": ["上周 回滚计划"],
+            "weight": 1.0, "rationale": "补充主题"
+        }));
+
+        let resolved =
+            parse_and_resolve(&plan, "查找上周的发布风险", "2026-09-05T00:00:00Z", "UTC").unwrap();
+        assert_eq!(resolved.queries[0].terms, ["发布", "风险"]);
+        assert_eq!(resolved.queries[0].phrases, ["发布决定"]);
+        assert_eq!(resolved.queries[1].terms, ["回滚"]);
+        assert!(resolved.queries[1].phrases.is_empty());
+        assert_eq!(
+            resolved.queries[0].filters.after.as_deref(),
+            Some("2026-08-24")
+        );
+        assert_eq!(
+            resolved.queries[0].filters.before.as_deref(),
+            Some("2026-08-30")
+        );
+        let arm = resolved_to_arm(&resolved.queries[0], resolved.sort.into());
+        assert_eq!(arm.query.terms, ["发布", "风险"]);
+        assert_eq!(arm.query.phrases, ["发布决定"]);
+        assert_eq!(arm.query.after.as_deref(), Some("2026-08-24"));
+        assert_eq!(arm.query.before.as_deref(), Some("2026-08-30"));
+
+        plan["time"]["sourceText"] = json!("模型猜测的近期");
+        let error = parse_and_resolve(&plan, "查找上周的发布风险", "2026-09-05T00:00:00Z", "UTC")
+            .unwrap_err();
+        assert!(error.contains("exact span"), "{error}");
+
+        let mut no_topic = base_plan();
+        no_topic["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "上周",
+            "expression": { "kind": "calendar_week", "offset": -1 }
+        });
+        no_topic["queries"][0]["terms"] = json!(["上周的发布"]);
+        no_topic["queries"][0]["phrases"] = json!([]);
+        let error =
+            parse_and_resolve(&no_topic, "上周的发布", "2026-09-05T00:00:00Z", "UTC").unwrap_err();
+        assert!(error.contains("no topical text"), "{error}");
+    }
+
+    #[test]
+    fn resolved_time_range_excludes_matching_documents_outside_the_index_window() {
+        let vault = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            ("2026-08-23-before.md", "# Before\n发布 风险\n"),
+            ("2026-08-24-inside.md", "# Inside\n发布 风险\n"),
+            ("2026-08-30-inside.md", "# Inside upper\n发布 风险\n"),
+            ("2026-08-31-after.md", "# After\n发布 风险\n"),
+        ] {
+            std::fs::write(vault.path().join(name), body).unwrap();
+        }
+        let data = tempfile::tempdir().unwrap();
+        let mut index =
+            searchidx::SearchIndex::open_at(vault.path(), &data.path().join("index.db"), "sync")
+                .unwrap();
+        index
+            .sweep(&searchidx::ScanOptions::default(), None)
+            .unwrap();
+
+        let mut plan = base_plan();
+        plan["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "上周",
+            "expression": { "kind": "calendar_week", "offset": -1 }
+        });
+        let resolved =
+            parse_and_resolve(&plan, "上周发布风险", "2026-09-03T00:00:00Z", "UTC").unwrap();
+        let arms = resolved
+            .queries
+            .iter()
+            .map(|query| resolved_to_arm(query, resolved.sort.into()))
+            .collect();
+        let handle: super::super::IndexHandle =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(index)));
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let response = smart::planned_search_locked(
+            &handle,
+            Instant::now(),
+            arms,
+            Some(20),
+            Some(false),
+            None,
+            &counter,
+            1,
+            resolved.sort.into(),
+        )
+        .unwrap();
+
+        let mut paths = response
+            .hits
+            .iter()
+            .map(|hit| hit.hit.path.as_str())
+            .collect::<Vec<_>>();
+        paths.sort_unstable();
+        assert_eq!(paths, ["2026-08-24-inside.md", "2026-08-30-inside.md"]);
+        assert!(response.subqueries[0]
+            .query
+            .contains("after=\"2026-08-24\""));
+        assert!(response.subqueries[0]
+            .query
+            .contains("before=\"2026-08-30\""));
     }
 
     #[test]
@@ -1143,8 +1954,13 @@ mod tests {
         });
         // 04:30Z is Mar 7 in New York before the DST transition, while a
         // fixed +00 interpretation would call it Mar 8.
-        let before =
-            parse_and_resolve(&plan, "发布", "2026-03-08T04:30:00Z", "America/New_York").unwrap();
+        let before = parse_and_resolve(
+            &plan,
+            "本周发布",
+            "2026-03-08T04:30:00Z",
+            "America/New_York",
+        )
+        .unwrap();
         assert_eq!(before.reference_date, "2026-03-07");
         assert_eq!(
             before.time.as_ref().unwrap().after.as_deref(),
@@ -1156,8 +1972,13 @@ mod tests {
         );
         // The same wall-clock-adjacent UTC time after autumn fallback resolves
         // under the zone's new offset without the caller supplying it.
-        let after =
-            parse_and_resolve(&plan, "发布", "2026-11-01T06:30:00Z", "America/New_York").unwrap();
+        let after = parse_and_resolve(
+            &plan,
+            "本周发布",
+            "2026-11-01T06:30:00Z",
+            "America/New_York",
+        )
+        .unwrap();
         assert_eq!(after.reference_date, "2026-11-01");
         assert_eq!(
             after.time.as_ref().unwrap().after.as_deref(),
@@ -1177,7 +1998,8 @@ mod tests {
         document["time"] = json!({
             "appliesTo": "document_date", "sourceText": "2025", "expression": expression
         });
-        let resolved = parse_and_resolve(&document, "预算", "2026-09-03T00:00:00Z", "UTC").unwrap();
+        let resolved =
+            parse_and_resolve(&document, "2025 年预算", "2026-09-03T00:00:00Z", "UTC").unwrap();
         assert_eq!(
             resolved.queries[0].filters.after.as_deref(),
             Some("2025-01-01")
@@ -1204,7 +2026,7 @@ mod tests {
         plan["constraints"]["tags"]["allOf"] = json!(["planner"]);
         let resolved = parse_and_resolve(
             &plan,
-            "找发布 tag:human path:projects origin:human after:2026-07-01 before:2026-08-31",
+            "找今年发布 tag:human path:projects origin:human after:2026-07-01 before:2026-08-31",
             "2026-09-03T00:00:00Z",
             "Asia/Taipei",
         )
@@ -1224,19 +2046,28 @@ mod tests {
     #[test]
     fn expands_any_of_within_the_eight_physical_query_budget() {
         let mut plan = base_plan();
+        plan["time"] = json!({
+            "appliesTo": "document_date", "sourceText": "今年",
+            "expression": { "kind": "year", "offset": 0 }
+        });
         plan["queries"].as_array_mut().unwrap().push(json!({
             "id": "q2", "purpose": "recall", "terms": ["发布"], "phrases": [],
             "weight": 1.0, "rationale": "召回"
         }));
         plan["constraints"]["paths"]["anyOf"] = json!(["a/", "b/"]);
         plan["constraints"]["types"]["anyOf"] = json!(["Decision", "Decision Archive"]);
-        let resolved = parse_and_resolve(&plan, "发布", "2026-09-03T00:00:00Z", "UTC").unwrap();
+        let resolved = parse_and_resolve(&plan, "今年发布", "2026-09-03T00:00:00Z", "UTC").unwrap();
         assert_eq!(resolved.queries.len(), 8);
         assert_eq!(resolved.queries[0].id, "q1.1");
         assert_eq!(resolved.queries[7].id, "q2.4");
+        assert!(resolved.queries.iter().all(|query| {
+            query.filters.after.as_deref() == Some("2026-01-01")
+                && query.filters.before.as_deref() == Some("2026-12-31")
+        }));
 
         plan["constraints"]["tags"]["anyOf"] = json!(["x", "y"]);
-        let error = parse_and_resolve(&plan, "发布", "2026-09-03T00:00:00Z", "UTC").unwrap_err();
+        let error =
+            parse_and_resolve(&plan, "今年发布", "2026-09-03T00:00:00Z", "UTC").unwrap_err();
         assert!(error.contains("maximum is 8"), "{error}");
     }
 
@@ -1247,7 +2078,9 @@ mod tests {
             "appliesTo": "document_date", "sourceText": "坏日期",
             "expression": { "kind": "absolute_range", "after": "2026-02-30", "before": "2026-03-01" }
         });
-        assert!(parse_and_resolve(&invalid_date, "发布", "2026-09-03T00:00:00Z", "UTC").is_err());
+        assert!(
+            parse_and_resolve(&invalid_date, "坏日期发布", "2026-09-03T00:00:00Z", "UTC").is_err()
+        );
         assert!(
             parse_and_resolve(&base_plan(), "发布", "2026-09-03T00:00:00Z", "Mars/Olympus")
                 .is_err()
@@ -1259,7 +2092,7 @@ mod tests {
             "expression": { "kind": "rolling_window", "value": 7, "unit": "days" }
         });
         let resolved =
-            parse_and_resolve(&activity, "发布", "2026-09-03T00:00:00Z", "UTC").unwrap();
+            parse_and_resolve(&activity, "最近修改的发布", "2026-09-03T00:00:00Z", "UTC").unwrap();
         assert_eq!(resolved.queries[0].filters.after, None);
         assert!(resolved
             .unsupported_constraints
@@ -1278,10 +2111,14 @@ mod tests {
 
     #[test]
     fn planner_inputs_obey_the_host_hard_limits() {
-        assert!(search_plan_context("").is_err());
-        assert!(search_plan_context(&"问".repeat(MAX_QUESTION_CHARS + 1)).is_err());
-        assert!(search_plan_context(&"😀".repeat(2_049)).is_err());
-        assert!(search_plan_context("八月发布").is_ok());
+        let reference = "2026-09-05T00:00:00Z";
+        assert!(search_plan_context("", reference, "UTC").is_err());
+        assert!(
+            search_plan_context(&"问".repeat(MAX_QUESTION_CHARS + 1), reference, "UTC").is_err()
+        );
+        assert!(search_plan_context(&"😀".repeat(2_049), reference, "UTC").is_err());
+        assert!(search_plan_context("八月发布", reference, "UTC").is_ok());
+        assert!(search_plan_context("八月发布", reference, "Mars/Olympus").is_err());
 
         let oversized = json!({ "payload": "x".repeat(MAX_PLAN_BYTES) });
         assert!(validate_plan_size(&oversized).is_err());
@@ -1303,7 +2140,7 @@ mod tests {
         assert!(parse_and_resolve_with_baseline(
             &tuned,
             Some(&baseline),
-            "发布风险",
+            "今年发布风险",
             "2026-09-03T00:00:00Z",
             "UTC"
         )
@@ -1381,13 +2218,18 @@ mod tests {
 
     #[test]
     fn plan_context_has_the_same_locked_filter_wire_shape() {
-        let context =
-            search_plan_context("tag:work type:\"Book Summary\" page:[[Roadmap]] after:2026-01-01")
-                .unwrap();
+        let context = search_plan_context(
+            "tag:work type:\"Book Summary\" page:[[Roadmap]] after:2026-01-01",
+            "2026-09-05T00:00:00Z",
+            "UTC",
+        )
+        .unwrap();
         let wire = serde_json::to_value(context).unwrap();
         assert_eq!(wire["lockedFilters"]["tags"], json!(["work"]));
         assert_eq!(wire["lockedFilters"]["types"], json!(["Book Summary"]));
         assert_eq!(wire["lockedFilters"]["linkedPages"], json!(["Roadmap"]));
         assert_eq!(wire["lockedFilters"]["after"], json!("2026-01-01"));
+        assert_eq!(wire["referenceDate"], json!("2026-09-05"));
+        assert_eq!(wire["timeAnchors"]["today"]["after"], json!("2026-09-05"));
     }
 }

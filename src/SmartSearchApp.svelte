@@ -591,7 +591,7 @@
     try {
       const referenceTime = new Date().toISOString()
       const timezone = localeTimezone()
-      const context = await smartSearchApi.planContext(question)
+      const context = await smartSearchApi.planContext(question, referenceTime, timezone)
       if (mine !== requestSequence) return
       const prompt = buildSearchPlanPrompt({
         question,
@@ -599,6 +599,8 @@
         timezone,
         locale: i18n.locale,
         lockedFilters: context.lockedFilters,
+        referenceDate: context.referenceDate,
+        timeAnchors: context.timeAnchors,
       })
       const preference = plannerPreference(provider)
       const selector = selectorForPreference(preference)
