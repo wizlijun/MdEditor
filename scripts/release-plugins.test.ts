@@ -119,6 +119,12 @@ describe('release.sh transient Apple failures', () => {
     expect(HOST_RELEASE).toContain('A TLS error caused the secure connection to fail')
   })
 
+  it('resumes a DMG notarization submission after a transient wait failure', () => {
+    expect(HOST_RELEASE).toContain('notarize_dmg_with_apple_retries "$dmg_staged" "$arch_tag"')
+    expect(HOST_RELEASE).toContain('notarytool wait "$submission_id"')
+    expect(HOST_RELEASE).toContain('submission_id=$(sed -nE')
+  })
+
   it('rejects untracked files as well as tracked and staged changes', () => {
     expect(HOST_RELEASE).toMatch(/\[\[ -z "\$\(git status --porcelain\)" \]\]/)
     expect(HOST_RELEASE).not.toContain('git diff --quiet && git diff --cached --quiet')
