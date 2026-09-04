@@ -9,18 +9,25 @@ import { loadVaultRoot } from '../editor-kit/media'
 import { applyKitTheme, watchKitTheme } from '../editor-kit/theme'
 import {
   assertBlockIdentity,
+  deleteBlockSpan,
+  insertBlockSpan,
   materializeBlocks,
+  positionAtBlockStart,
   replaceBlockSpans,
   sameBlockOrder,
   serializeSpan,
   spanContaining,
   type BlockLayout,
 } from './block-layout'
-import type { DocumentRevision as EditorSnapshot } from '../lib/cdr/core'
-import type {
-  AppliedChange,
-  OperationBatch as LocalOperationBatch,
-  ReplaceBlockOperation,
+import { applyDocumentChange, type DocumentRevision as EditorSnapshot } from '../lib/cdr/core'
+import {
+  operationContentWrites,
+  type AppliedChange,
+  type DeleteBlockOperation,
+  type InsertBlockOperation,
+  type Operation,
+  type OperationBatch as LocalOperationBatch,
+  type ReplaceBlockOperation,
 } from '../lib/cdr/operation'
 
 export type { EditorSnapshot }
@@ -29,7 +36,12 @@ export type { AppliedChange, LocalOperationBatch, ReplaceBlockOperation }
 export interface EditorIdProvider {
   requestId(): string
   operationId(): string
+  blockId?(): string
 }
+
+export type StructuralCommand =
+  | { kind: 'block.insert-after'; blockId: string; content: string }
+  | { kind: 'block.delete'; blockId: string }
 
 export interface ChangeError {
   code: 'stale-base' | 'invalid-operation' | 'unsupported-structure' | 'remote-base-mismatch' | 'persistence-failed'
@@ -70,6 +82,8 @@ export interface DecorationItem {
 export interface EditorSurface {
   reconcile(update: SurfaceUpdate): Promise<void>
   observeLocalOperations(listener: (batch: LocalOperationBatch) => void): () => void
+  executeStructuralCommand(command: StructuralCommand): boolean
+  selectedBlockId(): string | null
   setReadOnly(value: boolean): void
   destroy(): Promise<void>
 }
@@ -95,6 +109,7 @@ export interface MountDocumentEditorOptions {
 }
 
 const REMOTE_META = 'notemd-cdr-remote'
+const LOCAL_STRUCTURAL_META = 'notemd-cdr-local-structural'
 const DECORATION_META = 'notemd-cdr-decorations'
 const LAYOUT_META = 'notemd-cdr-layout'
 const decorationKey = new PluginKey<number>('notemd-cdr-decoration')
@@ -152,11 +167,10 @@ function cloneSnapshot(snapshot: EditorSnapshot): EditorSnapshot {
 /**
  * Mount the Stage 0 block-aware surface.
  *
- * A block may cover multiple contiguous top-level editor nodes. This slice
- * still accepts only one in-place block replacement at a time. Local
- * insert/delete/move enter with the full Stage 1 operation set after the Spike
- * proves block identity and IME behaviour; unsupported structural edits fail
- * closed instead of silently losing identity.
+ * A block may cover multiple contiguous top-level editor nodes. Ordinary
+ * typing emits only block.replace. Insert/delete are admitted solely through
+ * explicit structural commands; implicit split/merge/move still fail closed
+ * instead of guessing identity.
  */
 export async function mountDocumentEditor(
   container: HTMLElement,
@@ -264,10 +278,11 @@ export async function mountDocumentEditor(
     },
   })
 
-  function emitLocalOperations(operations: readonly ReplaceBlockOperation[]): void {
+  function emitLocalOperations(operations: readonly Operation[]): void {
     if (!operations.length) return
     const batch: LocalOperationBatch = {
       requestId: opts.ids.requestId(),
+      documentId: snapshot.documentId,
       baseRevisionId: snapshot.revisionId,
       operations,
     }
@@ -292,16 +307,15 @@ export async function mountDocumentEditor(
     return {
       kind: 'block.replace',
       operationId: opts.ids.operationId(),
-      blockId,
-      expectedBlockRevision: authoritative.blockRevision,
-      markdown,
+      target: { blockId, expectedBlockRevision: authoritative.blockRevision },
+      payload: { content: markdown },
     }
   }
 
   const operationPlugin = new Plugin({
     key: new PluginKey('notemd-cdr-operations'),
     filterTransaction(transaction, state) {
-      if (transaction.getMeta(REMOTE_META) || !transaction.docChanged) return true
+      if (transaction.getMeta(REMOTE_META) || transaction.getMeta(LOCAL_STRUCTURAL_META) || !transaction.docChanged) return true
       if (resyncRequired) return false
       const layout = layoutKey.getState(state)
       if (!layout) return false
@@ -327,7 +341,8 @@ export async function mountDocumentEditor(
     appendTransaction(transactions, oldState, newState) {
       const changed = transactions.some((transaction) => transaction.docChanged)
       const external = transactions.some((transaction) => transaction.getMeta(REMOTE_META))
-      if (!changed || external || oldState.doc.childCount !== newState.doc.childCount) return null
+      const structuralCommand = transactions.some((transaction) => transaction.getMeta(LOCAL_STRUCTURAL_META))
+      if (!changed || external || structuralCommand || oldState.doc.childCount !== newState.doc.childCount) return null
       if (composingBlockId !== null || finishingComposition) {
         compositionDirty = true
         return null
@@ -357,10 +372,13 @@ export async function mountDocumentEditor(
   }))
   refreshEditable()
 
-  const blockAtSelection = () => spanContaining(
-    currentLayout(),
-    rich.view.state.selection.$from.index(0),
-  )?.blockId ?? null
+  const blockAtSelection = () => {
+    const layout = currentLayout()
+    const selection = rich.view.state.selection
+    const from = spanContaining(layout, selection.$from.index(0))
+    const to = spanContaining(layout, selection.$to.index(0))
+    return from && to && from.blockId === to.blockId ? from.blockId : null
+  }
   const onCompositionStart = () => { composingBlockId = blockAtSelection() }
   const onCompositionEnd = () => {
     finishingCompositionBlockId = composingBlockId
@@ -384,99 +402,81 @@ export async function mountDocumentEditor(
   rich.view.dom.addEventListener('compositionend', onCompositionEnd)
 
   function replaceFromSnapshot(authoritative: EditorSnapshot, allowFullResync: boolean): void {
-    const layout = currentLayout()
+    assertBlockIdentity(authoritative.blocks)
+    let layout = currentLayout()
+    let transaction = rich.view.state.tr
     if (!sameBlockOrder(layout, authoritative.blocks)) {
-      if (!allowFullResync) throw new Error('EDITOR_KIT_V2_RESYNC_REQUIRED')
-      const materialized = materializeBlocks(authoritative.blocks, rich.view.state.schema)
-      const transaction = rich.view.state.tr
-        .replaceWith(0, rich.view.state.doc.content.size, materialized.doc.content)
-        .setMeta(LAYOUT_META, materialized.layout)
-        .setMeta(REMOTE_META, true)
-        .setMeta('addToHistory', false)
-      rich.view.dispatch(transaction)
-    } else {
-      assertBlockIdentity(authoritative.blocks)
-      const planned = replaceBlockSpans(rich.view.state.tr, layout, authoritative.blocks)
-      const transaction = planned.transaction
-      if (transaction.docChanged) {
-        transaction.setMeta(LAYOUT_META, planned.layout)
-        transaction.setMeta(REMOTE_META, true)
-        transaction.setMeta('addToHistory', false)
-        rich.view.dispatch(transaction)
+      const currentIds = layout.spans.map((span) => span.blockId)
+      const nextIds = authoritative.blocks.map((block) => block.blockId)
+      const removed = currentIds.filter((blockId) => !nextIds.includes(blockId))
+      const added = nextIds.filter((blockId) => !currentIds.includes(blockId))
+      if (removed.length === 1 && added.length === 0 && currentIds.length === nextIds.length + 1) {
+        const planned = deleteBlockSpan(transaction, layout, removed[0])
+        transaction = planned.transaction
+        layout = planned.layout
+      } else if (added.length === 1 && removed.length === 0 && nextIds.length === currentIds.length + 1) {
+        const block = authoritative.blocks.find((item) => item.blockId === added[0])!
+        const planned = insertBlockSpan(transaction, layout, nextIds.indexOf(added[0]), block)
+        transaction = planned.transaction
+        layout = planned.layout
+      } else {
+        if (!allowFullResync) throw new Error('EDITOR_KIT_V2_RESYNC_REQUIRED')
+        const materialized = materializeBlocks(authoritative.blocks, rich.view.state.schema)
+        transaction = transaction.replaceWith(0, transaction.doc.content.size, materialized.doc.content)
+        layout = materialized.layout
       }
+    }
+    const replaced = replaceBlockSpans(transaction, layout, authoritative.blocks)
+    transaction = replaced.transaction
+    layout = replaced.layout
+    if (transaction.docChanged) {
+      transaction.setMeta(LAYOUT_META, layout)
+      transaction.setMeta(REMOTE_META, true)
+      transaction.setMeta('addToHistory', false)
+      rich.view.dispatch(transaction)
     }
     snapshot = cloneSnapshot(authoritative)
   }
 
-  function validateRemoteChange(change: AppliedChange): ReplaceBlockOperation[] | ChangeError {
-    const operationIds = change.operations.map((operation) => operation.blockId)
-    const revisionIds = Object.keys(change.blockRevisions)
-    if (operationIds.length === 0
-      || new Set(operationIds).size !== operationIds.length
-      || operationIds.length !== revisionIds.length
-      || operationIds.some((blockId) => !Object.hasOwn(change.blockRevisions, blockId))) {
-      throw new Error('EDITOR_KIT_V2_REMOTE_CHANGE_SHAPE')
-    }
-    const pending: ReplaceBlockOperation[] = []
-    for (const operation of change.operations) {
-      const current = snapshot.blocks.find((block) => block.blockId === operation.blockId)
-      if (!current) throw new Error(`EDITOR_KIT_V2_UNKNOWN_BLOCK: ${operation.blockId}`)
-      const resultingRevision = change.blockRevisions[operation.blockId]
-      if (current.blockRevision === resultingRevision) {
-        if (current.markdown !== operation.markdown) {
-          throw new Error(`EDITOR_KIT_V2_REMOTE_REVISION_REUSED: ${operation.blockId}`)
-        }
-        continue
-      }
-      pending.push(operation)
-    }
-    if (pending.length === 0) return pending
-    if (change.baseRevisionId !== snapshot.revisionId) {
+  function nextSnapshotForRemote(change: AppliedChange): EditorSnapshot | ChangeError {
+    if (!change.operations.length || change.baseRevisionId !== snapshot.revisionId) {
       return {
         code: 'remote-base-mismatch',
         message: `Remote change ${change.changeId} does not extend document revision ${snapshot.revisionId}.`,
         changeId: change.changeId,
       }
     }
-    for (const operation of pending) {
-      const current = snapshot.blocks.find((block) => block.blockId === operation.blockId)!
-      if (current.blockRevision !== operation.expectedBlockRevision) {
-        return {
-          code: 'remote-base-mismatch',
-          message: `Remote change ${change.changeId} does not extend block ${operation.blockId}.`,
-          changeId: change.changeId,
-        }
+    for (const write of change.operations.flatMap(operationContentWrites)) {
+      const current = snapshot.blocks.find((block) => block.blockId === write.blockId)
+      if (current?.blockRevision === change.blockRevisions[write.blockId] && current.markdown !== write.content) {
+        throw new Error(`EDITOR_KIT_V2_REMOTE_REVISION_REUSED: ${write.blockId}`)
       }
     }
-    return pending
+    try {
+      return applyDocumentChange(
+        snapshot,
+        {
+          requestId: change.originRequestId ?? change.changeId,
+          documentId: snapshot.documentId,
+          baseRevisionId: change.baseRevisionId,
+          operations: change.operations,
+        },
+        { revisionId: change.revisionId, blockRevisions: change.blockRevisions },
+      )
+    } catch {
+      return {
+        code: 'remote-base-mismatch',
+        message: `Remote change ${change.changeId} is not valid for the current document state.`,
+        changeId: change.changeId,
+      }
+    }
   }
 
   function applyRemote(change: AppliedChange): ChangeError | null {
     if (appliedChanges.has(change.changeId)) return null
-    const validated = validateRemoteChange(change)
-    if (!Array.isArray(validated)) return validated
-    if (validated.length === 0) {
-      appliedChanges.add(change.changeId)
-      return null
-    }
-    const planned = replaceBlockSpans(rich.view.state.tr, currentLayout(), validated)
-    const transaction = planned.transaction
-    if (transaction.docChanged) {
-      transaction.setMeta(LAYOUT_META, planned.layout)
-      transaction.setMeta(REMOTE_META, true)
-      transaction.setMeta('addToHistory', false)
-      rich.view.dispatch(transaction)
-    }
-    snapshot = { ...snapshot, revisionId: change.revisionId }
-    snapshot = {
-      ...snapshot,
-      blocks: snapshot.blocks.map((block) => {
-        const operation = validated.find((item) => item.blockId === block.blockId)
-        return operation
-          ? { ...block, markdown: operation.markdown, blockRevision: change.blockRevisions[block.blockId] }
-          : block
-      }),
-    }
+    const next = nextSnapshotForRemote(change)
+    if ('code' in next) return next
+    replaceFromSnapshot(next, false)
     appliedChanges.add(change.changeId)
     return null
   }
@@ -552,11 +552,15 @@ export async function mountDocumentEditor(
     }
     if (update.kind === 'apply-remote') {
       const touchesComposingBlock = composingBlockId !== null
-        && update.change.operations.some((operation) => operation.blockId === composingBlockId)
+        && update.change.operations.some((operation) => (
+          operation.kind !== 'block.insert' && operation.target.blockId === composingBlockId
+        ))
+      const hasStructuralOperation = update.change.operations.some((operation) => operation.kind !== 'block.replace')
       if (resyncRequired
         || deferredResyncReason !== null
         || pendingRequests.size > 0
         || finishingComposition
+        || (composingBlockId !== null && hasStructuralOperation)
         || touchesComposingBlock) {
         queueUpdate(update)
         return
@@ -590,6 +594,64 @@ export async function mountDocumentEditor(
     await flushQueuedUpdates()
   }
 
+  function executeStructuralCommand(command: StructuralCommand): boolean {
+    if (destroyed
+      || requestedReadOnly
+      || pendingRequests.size > 0
+      || resyncRequired
+      || composingBlockId !== null
+      || finishingComposition) return false
+
+    if (command.kind === 'block.insert-after') {
+      if (!command.content.trim()) return false
+      const anchorIndex = snapshot.blocks.findIndex((block) => block.blockId === command.blockId)
+      if (anchorIndex < 0) return false
+      const candidateBlockId = opts.ids.blockId?.()
+      if (!candidateBlockId) return false
+      const operation: InsertBlockOperation = {
+        kind: 'block.insert',
+        operationId: opts.ids.operationId(),
+        target: {
+          leftBlockId: snapshot.blocks[anchorIndex].blockId,
+          rightBlockId: snapshot.blocks[anchorIndex + 1]?.blockId ?? null,
+        },
+        payload: { candidateBlockId, content: command.content },
+      }
+      const planned = insertBlockSpan(
+        rich.view.state.tr,
+        currentLayout(),
+        anchorIndex + 1,
+        { blockId: candidateBlockId, markdown: command.content },
+      )
+      const selectionPosition = positionAtBlockStart(planned.transaction.doc, planned.layout, candidateBlockId)
+      planned.transaction
+        .setSelection(TextSelection.near(planned.transaction.doc.resolve(selectionPosition + 1)))
+        .setMeta(LAYOUT_META, planned.layout)
+        .setMeta(LOCAL_STRUCTURAL_META, true)
+        .setMeta('addToHistory', false)
+      rich.view.dispatch(planned.transaction)
+      emitLocalOperations([operation])
+      return true
+    }
+
+    const block = snapshot.blocks.find((item) => item.blockId === command.blockId)
+    if (!block || snapshot.blocks.length === 1) return false
+    const operation: DeleteBlockOperation = {
+      kind: 'block.delete',
+      operationId: opts.ids.operationId(),
+      target: { blockId: block.blockId, expectedBlockRevision: block.blockRevision },
+      payload: {},
+    }
+    const planned = deleteBlockSpan(rich.view.state.tr, currentLayout(), block.blockId)
+    planned.transaction
+      .setMeta(LAYOUT_META, planned.layout)
+      .setMeta(LOCAL_STRUCTURAL_META, true)
+      .setMeta('addToHistory', false)
+    rich.view.dispatch(planned.transaction)
+    emitLocalOperations([operation])
+    return true
+  }
+
   const decorations: DecorationHost = {
     setLayer(id, items) {
       layers.set(id, items.map((item) => ({ ...item })))
@@ -607,6 +669,8 @@ export async function mountDocumentEditor(
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
+    executeStructuralCommand,
+    selectedBlockId: blockAtSelection,
     setReadOnly(value) {
       requestedReadOnly = value
       refreshEditable()

@@ -75,6 +75,12 @@ function positionAt(doc: PmNode, index: number): number {
   return position
 }
 
+export function positionAtBlockStart(doc: PmNode, layout: BlockLayout, blockId: string): number {
+  const span = layout.spans.find((item) => item.blockId === blockId)
+  if (!span) throw new Error(`EDITOR_KIT_V2_UNKNOWN_BLOCK: ${blockId}`)
+  return positionAt(doc, span.startIndex)
+}
+
 function rangeMatches(doc: PmNode, span: BlockSpan, expected: PmNode): boolean {
   if (span.endIndex - span.startIndex !== expected.childCount) return false
   for (let offset = 0; offset < expected.childCount; offset += 1) {
@@ -121,6 +127,70 @@ export function replaceBlockSpans(
     return { blockId: span.blockId, startIndex, endIndex: cursor }
   })
   return { transaction: next, layout: { spans } }
+}
+
+export function insertBlockSpan(
+  transaction: Transaction,
+  layout: BlockLayout,
+  blockIndex: number,
+  block: LayoutBlock,
+): { transaction: Transaction; layout: BlockLayout } {
+  if (blockIndex < 0 || blockIndex > layout.spans.length) {
+    throw new Error('EDITOR_KIT_V2_INSERT_INDEX')
+  }
+  if (layout.spans.some((span) => span.blockId === block.blockId)) {
+    throw new Error(`EDITOR_KIT_V2_DUPLICATE_BLOCK: ${block.blockId}`)
+  }
+  const parsed = parseBlock(block, transaction.doc.type.schema)
+  const nodeIndex = blockIndex === layout.spans.length
+    ? transaction.doc.childCount
+    : layout.spans[blockIndex].startIndex
+  const next = transaction.replaceWith(positionAt(transaction.doc, nodeIndex), positionAt(transaction.doc, nodeIndex), parsed.content)
+  const counts = layout.spans.map((span) => span.endIndex - span.startIndex)
+  counts.splice(blockIndex, 0, parsed.childCount)
+  const blockIds = layout.spans.map((span) => span.blockId)
+  blockIds.splice(blockIndex, 0, block.blockId)
+  let cursor = 0
+  return {
+    transaction: next,
+    layout: {
+      spans: blockIds.map((blockId, index) => {
+        const startIndex = cursor
+        cursor += counts[index]
+        return { blockId, startIndex, endIndex: cursor }
+      }),
+    },
+  }
+}
+
+export function deleteBlockSpan(
+  transaction: Transaction,
+  layout: BlockLayout,
+  blockId: string,
+): { transaction: Transaction; layout: BlockLayout } {
+  const spanIndex = layout.spans.findIndex((span) => span.blockId === blockId)
+  if (spanIndex < 0) throw new Error(`EDITOR_KIT_V2_UNKNOWN_BLOCK: ${blockId}`)
+  if (layout.spans.length === 1) throw new Error('EDITOR_KIT_V2_LAST_BLOCK')
+  const span = layout.spans[spanIndex]
+  const next = transaction.delete(
+    positionAt(transaction.doc, span.startIndex),
+    positionAt(transaction.doc, span.endIndex),
+  )
+  const counts = layout.spans.map((item) => item.endIndex - item.startIndex)
+  counts.splice(spanIndex, 1)
+  const blockIds = layout.spans.map((item) => item.blockId)
+  blockIds.splice(spanIndex, 1)
+  let cursor = 0
+  return {
+    transaction: next,
+    layout: {
+      spans: blockIds.map((remainingBlockId, index) => {
+        const startIndex = cursor
+        cursor += counts[index]
+        return { blockId: remainingBlockId, startIndex, endIndex: cursor }
+      }),
+    },
+  }
 }
 
 export function sameBlockOrder(layout: BlockLayout, blocks: readonly LayoutBlock[]): boolean {

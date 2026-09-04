@@ -13,6 +13,7 @@ import {
   sequentialIds,
   type DocumentRevision,
   type OperationBatch,
+  type ReplaceBlockOperation,
   type SubmitResult,
 } from './session'
 
@@ -24,16 +25,16 @@ function fixture(): DocumentRevision {
   }
 }
 
-function batch(requestId = 'request-1'): OperationBatch {
+function batch(requestId = 'request-1'): OperationBatch & { operations: readonly [ReplaceBlockOperation] } {
   return {
     requestId,
+    documentId: 'document-1',
     baseRevisionId: 'revision-1',
     operations: [{
       kind: 'block.replace',
       operationId: `${requestId}/operation`,
-      blockId: 'block-1',
-      expectedBlockRevision: 'block-1/1',
-      markdown: 'After.',
+      target: { blockId: 'block-1', expectedBlockRevision: 'block-1/1' },
+      payload: { content: 'After.' },
     }],
   }
 }
@@ -136,11 +137,11 @@ describe('CdrApplicationService', () => {
     const callerOwned = batch('immutable-request')
 
     const pending = app.submit(callerOwned)
-    ;(callerOwned.operations[0] as { markdown: string }).markdown = 'Mutated after authorization started.'
+    ;(callerOwned.operations[0].payload as { content: string }).content = 'Mutated after authorization started.'
     releaseAuthorization?.('apply')
     await expect(pending).resolves.toMatchObject({ kind: 'applied' })
 
-    expect(observed[0].operations[0].markdown).toBe('After.')
+    expect(observed[0].operations[0]).toMatchObject({ payload: { content: 'After.' } })
     expect(Object.isFrozen(observed[0])).toBe(true)
     expect(Object.isFrozen(observed[0].operations)).toBe(true)
     expect(Object.isFrozen(observed[0].operations[0])).toBe(true)
@@ -202,7 +203,14 @@ describe('CdrApplicationService', () => {
       fixedActorSource({ kind: 'human', id: 'local' }), allow, memorySelfProfile,
     )
     const stale = await staleAgent.propose(batch('stale-proposal'))
-    await staleHuman.submit({ ...batch('human-change'), operations: [{ ...batch().operations[0], operationId: 'human-change/op', markdown: 'Human.' }] })
+    await staleHuman.submit({
+      ...batch('human-change'),
+      operations: [{
+        ...batch().operations[0],
+        operationId: 'human-change/op',
+        payload: { content: 'Human.' },
+      }],
+    })
     expect((await staleHuman.decideProposal(stale.changeSetId, 'accept'))?.kind).toBe('conflicted')
     expect(staleSession.snapshot().blocks[0].markdown).toBe('Human.')
   })
@@ -339,7 +347,7 @@ describe('CdrApplicationService', () => {
     const firstBatch = batch('concurrent-first')
     const secondBatch = {
       ...batch('concurrent-second'),
-      operations: [{ ...batch('concurrent-second').operations[0], markdown: 'Second.' }],
+      operations: [{ ...batch('concurrent-second').operations[0], payload: { content: 'Second.' } }],
     }
 
     const firstPromise = app.submit(firstBatch)

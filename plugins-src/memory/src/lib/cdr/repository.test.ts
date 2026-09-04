@@ -38,8 +38,14 @@ function fixture(): DocumentRevision {
 function replace(requestId: string, blockId: string, expectedBlockRevision: string, markdown: string): OperationBatch {
   return {
     requestId,
+    documentId: 'document-1',
     baseRevisionId: 'revision-1',
-    operations: [{ kind: 'block.replace', operationId: `${requestId}/op`, blockId, expectedBlockRevision, markdown }],
+    operations: [{
+      kind: 'block.replace',
+      operationId: `${requestId}/op`,
+      target: { blockId, expectedBlockRevision },
+      payload: { content: markdown },
+    }],
   }
 }
 

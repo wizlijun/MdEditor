@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   observe: vi.fn(),
   destroy: vi.fn(async () => {}),
   setReadOnly: vi.fn(),
+  executeStructuralCommand: vi.fn(() => true),
+  selectedBlockId: vi.fn(() => 'b-d4e5f6'),
   setLayer: vi.fn(),
   removeLayer: vi.fn(),
   localListener: null as ((batch: unknown) => void) | null,
@@ -27,6 +29,8 @@ vi.mock('./editor-kit-v2', () => ({
           mocks.localListener = listener
           return () => { mocks.localListener = null }
         },
+        executeStructuralCommand: mocks.executeStructuralCommand,
+        selectedBlockId: mocks.selectedBlockId,
         setReadOnly: mocks.setReadOnly,
         destroy: mocks.destroy,
       },
@@ -34,7 +38,10 @@ vi.mock('./editor-kit-v2', () => ({
     }
   },
   replaceOperation: (ids: { operationId(): string }, blockId: string, expectedBlockRevision: string, markdown: string) => ({
-    kind: 'block.replace', operationId: ids.operationId(), blockId, expectedBlockRevision, markdown,
+    kind: 'block.replace',
+    operationId: ids.operationId(),
+    target: { blockId, expectedBlockRevision },
+    payload: { content: markdown },
   }),
 }))
 
@@ -178,6 +185,10 @@ afterEach(async () => {
   mocks.setLayer.mockClear()
   mocks.removeLayer.mockClear()
   mocks.destroy.mockClear()
+  mocks.executeStructuralCommand.mockClear()
+  mocks.executeStructuralCommand.mockReturnValue(true)
+  mocks.selectedBlockId.mockClear()
+  mocks.selectedBlockId.mockReturnValue('b-d4e5f6')
   mocks.setReadOnly.mockClear()
   mocks.localListener = null
   mocks.resyncRequired = null
@@ -230,10 +241,12 @@ function localBatch(requestId: string, blockId: string, markdown: string) {
   const block = snapshot.blocks.find((item: any) => item.blockId === blockId)
   return {
     requestId,
+    documentId: snapshot.documentId,
     baseRevisionId: snapshot.revisionId,
     operations: [{
-      kind: 'block.replace', operationId: `${requestId}/op`, blockId,
-      expectedBlockRevision: block.blockRevision, markdown,
+      kind: 'block.replace', operationId: `${requestId}/op`,
+      target: { blockId, expectedBlockRevision: block.blockRevision },
+      payload: { content: markdown },
     }],
   }
 }
@@ -267,7 +280,7 @@ describe('CollaborativeDocumentSpike', () => {
 
   it('stores an Agent proposal without changing the surface, then applies it only after acceptance', async () => {
     await render()
-    expect(document.body.textContent).toContain('Stage 1A')
+    expect(document.body.textContent).toContain('Stage 1B-1')
     activate('模拟 Agent 请求直接修改')
     await vi.waitFor(() => expect(document.body.textContent).toContain('pending'))
     expect(repository?.aggregate.session.proposals[0].actorId).toBe('agent:organizer/simulated')
@@ -279,6 +292,18 @@ describe('CollaborativeDocumentSpike', () => {
     expect(document.body.textContent).toContain('applied')
   })
 
+  it('routes visible insert/delete actions through explicit stable-block commands', async () => {
+    await render()
+    activate('在选中块后新增段落')
+    expect(mocks.executeStructuralCommand).toHaveBeenCalledWith({
+      kind: 'block.insert-after', blockId: 'b-d4e5f6', content: '新段落',
+    })
+    activate('删除选中块')
+    expect(mocks.executeStructuralCommand).toHaveBeenCalledWith({
+      kind: 'block.delete', blockId: 'b-d4e5f6',
+    })
+  })
+
   it('shows a stale proposal conflict and never sends its old content to the editor', async () => {
     await render()
     activate('验证 stale-base')
@@ -288,7 +313,7 @@ describe('CollaborativeDocumentSpike', () => {
       .map(([update]) => update)
       .filter((update) => update.kind === 'apply-remote')
     expect(remoteUpdates).toHaveLength(1)
-    expect(remoteUpdates[0].change.operations[0].markdown).toContain('人类已先一步')
+    expect(remoteUpdates[0].change.operations[0].payload.content).toContain('人类已先一步')
   })
 
   it('acks a local editor operation without feeding it back as a remote change', async () => {

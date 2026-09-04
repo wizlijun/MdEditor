@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createSchema } from '@moraya/core'
 import { EditorState } from 'prosemirror-state'
 import {
+  deleteBlockSpan,
+  insertBlockSpan,
   materializeBlocks,
   replaceBlockSpans,
   serializeSpan,
@@ -67,6 +69,28 @@ describe('Editor Kit v2 block layout', () => {
       { blockId: 'section-c', startIndex: 3, endIndex: 6 },
     ])
     expect(serializeSpan(replaced.transaction.doc, replaced.layout.spans[1])).toBe('B.')
+  })
+
+  it('inserts and deletes a multi-node block while keeping every following span aligned', () => {
+    const initial = materializeBlocks([
+      { blockId: 'section-a', markdown: 'A.' },
+      { blockId: 'section-b', markdown: 'B.' },
+    ], schema)
+    const state = EditorState.create({ schema, doc: initial.doc })
+    const inserted = insertBlockSpan(state.tr, initial.layout, 1, {
+      blockId: 'section-middle',
+      markdown: 'Middle one.\n\nMiddle two.',
+    })
+    expect(inserted.layout.spans).toEqual([
+      { blockId: 'section-a', startIndex: 0, endIndex: 1 },
+      { blockId: 'section-middle', startIndex: 1, endIndex: 3 },
+      { blockId: 'section-b', startIndex: 3, endIndex: 4 },
+    ])
+    expect(serializeSpan(inserted.transaction.doc, inserted.layout.spans[1])).toContain('Middle two.')
+
+    const deleted = deleteBlockSpan(inserted.transaction, inserted.layout, 'section-middle')
+    expect(deleted.transaction.doc.eq(initial.doc)).toBe(true)
+    expect(deleted.layout).toEqual(initial.layout)
   })
 
   it('rejects duplicate and unknown replacements before changing the transaction', () => {

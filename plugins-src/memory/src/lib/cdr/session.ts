@@ -16,9 +16,15 @@ import {
 } from '../../../../../src/lib/cdr/core'
 import {
   canonicalOperationBatch,
+  hasMixedStructuralOperations,
+  operationContentWrites,
+  operationExistingTargetId,
   parseOperation,
   parseOperationBatch,
   type AppliedChange,
+  type DeleteBlockOperation,
+  type InsertBlockOperation,
+  type Operation,
   type OperationBatch,
   type ReplaceBlockOperation,
 } from '../../../../../src/lib/cdr/operation'
@@ -26,7 +32,14 @@ import { GovernedRevisionChangedError } from '../../../../../src/lib/cdr/governa
 
 export { sha256Hex } from '../../../../../src/lib/hash'
 export type { DocumentBlock, DocumentRevision } from '../../../../../src/lib/cdr/core'
-export type { AppliedChange, OperationBatch, ReplaceBlockOperation } from '../../../../../src/lib/cdr/operation'
+export type {
+  AppliedChange,
+  DeleteBlockOperation,
+  InsertBlockOperation,
+  Operation,
+  OperationBatch,
+  ReplaceBlockOperation,
+} from '../../../../../src/lib/cdr/operation'
 
 export type Conflict = CoreConflict
 
@@ -66,8 +79,9 @@ export interface IdProvider {
   eventId(): string
 }
 
-const LEGACY_DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v2' as const
-export const DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v3' as const
+const LEGACY_V2_DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v2' as const
+const LEGACY_V3_DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v3' as const
+export const DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v4' as const
 
 export type StoredSubmitOutcome =
   | { kind: 'applied'; change: AppliedChange }
@@ -171,8 +185,64 @@ function parseRevision(value: unknown, path: string): DocumentRevision {
   }
 }
 
-function parseBatch(value: unknown, path: string): OperationBatch {
-  return parseOperationBatch(value, path, invalid)
+function validateDeclaredBase(
+  revisions: readonly DocumentRevision[],
+  batch: OperationBatch,
+): Conflict | null {
+  const baseIndex = revisions.findIndex((revision) => revision.revisionId === batch.baseRevisionId)
+  if (baseIndex < 0) {
+    return { code: 'stale-base', message: '声明的基础文档版本不存在。' }
+  }
+  const knownBlockIds = new Set(revisions.slice(0, baseIndex + 1).flatMap((revision) => (
+    revision.blocks.map((block) => block.blockId)
+  )))
+  return validateDocumentChange(revisions[baseIndex], batch, { knownBlockIds })
+}
+
+function parseLegacyOperation(value: unknown, path: string): ReplaceBlockOperation {
+  const item = record(value, path)
+  exactKeys(item, path, ['kind', 'operationId', 'blockId', 'expectedBlockRevision', 'markdown'])
+  if (item.kind !== 'block.replace') invalid(`${path}.kind`, 'must be block.replace')
+  return {
+    kind: 'block.replace',
+    operationId: stringValue(item.operationId, `${path}.operationId`),
+    target: {
+      blockId: stringValue(item.blockId, `${path}.blockId`),
+      expectedBlockRevision: stringValue(item.expectedBlockRevision, `${path}.expectedBlockRevision`),
+    },
+    payload: { content: stringValue(item.markdown, `${path}.markdown`, true) },
+  }
+}
+
+function parseBatch(value: unknown, path: string, legacyProtocol = false, documentId?: string): OperationBatch {
+  if (!legacyProtocol) return parseOperationBatch(value, path, invalid)
+  if (!documentId) invalid(`${path}.documentId`, 'cannot be inferred')
+  const item = record(value, path)
+  exactKeys(item, path, ['requestId', 'baseRevisionId', 'operations'])
+  const operations = arrayValue(item.operations, `${path}.operations`)
+    .map((operation, index) => parseLegacyOperation(operation, `${path}.operations[${index}]`))
+  unique(operations.map((operation) => operation.operationId), `${path}.operations operationIds`)
+  unique(operations.map((operation) => operation.target.blockId), `${path}.operations blockIds`)
+  return {
+    requestId: stringValue(item.requestId, `${path}.requestId`),
+    documentId,
+    baseRevisionId: stringValue(item.baseRevisionId, `${path}.baseRevisionId`),
+    operations,
+  }
+}
+
+function canonicalLegacyBatch(batch: OperationBatch): string {
+  const operations = batch.operations.map((operation) => {
+    if (operation.kind !== 'block.replace') invalid('legacy batch', 'must contain only block.replace')
+    return {
+      kind: operation.kind,
+      operationId: operation.operationId,
+      blockId: operation.target.blockId,
+      expectedBlockRevision: operation.target.expectedBlockRevision,
+      markdown: operation.payload.content,
+    }
+  })
+  return JSON.stringify({ requestId: batch.requestId, baseRevisionId: batch.baseRevisionId, operations })
 }
 
 function parseConflict(value: unknown, path: string): Conflict {
@@ -185,7 +255,11 @@ function parseConflict(value: unknown, path: string): Conflict {
   }
 }
 
-function parseChange(value: unknown, path: string): AppliedChange {
+function parseChange(
+  value: unknown,
+  path: string,
+  legacyProtocol = false,
+): AppliedChange {
   const item = record(value, path)
   exactKeys(item, path, ['changeId', 'baseRevisionId', 'revisionId', 'blockRevisions', 'operations'], ['originRequestId'])
   const blockRevisions = record(item.blockRevisions, `${path}.blockRevisions`)
@@ -195,10 +269,20 @@ function parseChange(value: unknown, path: string): AppliedChange {
     parsedBlockRevisions[blockId] = stringValue(revision, `${path}.blockRevisions.${blockId}`)
   }
   const operations = arrayValue(item.operations, `${path}.operations`)
-    .map((operation, index) => parseOperation(operation, `${path}.operations[${index}]`))
+    .map((operation, index) => legacyProtocol
+      ? parseLegacyOperation(operation, `${path}.operations[${index}]`)
+      : parseOperation(operation, `${path}.operations[${index}]`))
   unique(operations.map((operation) => operation.operationId), `${path}.operations operationIds`)
-  unique(operations.map((operation) => operation.blockId), `${path}.operations blockIds`)
-  const operationBlocks = operations.map((operation) => operation.blockId).sort()
+  unique(operations.flatMap((operation) => {
+    const target = operationExistingTargetId(operation)
+    return target === null ? [] : [target]
+  }), `${path}.operations existing target blockIds`)
+  if (hasMixedStructuralOperations(operations)) {
+    invalid(`${path}.operations`, 'must isolate structural operations')
+  }
+  const operationBlocks = operations.flatMap((operation) => (
+    operationContentWrites(operation).map((write) => write.blockId)
+  )).sort()
   if (JSON.stringify(operationBlocks) !== JSON.stringify(Object.keys(parsedBlockRevisions).sort())) {
     invalid(`${path}.blockRevisions`, 'must contain exactly the changed operation blocks')
   }
@@ -212,12 +296,12 @@ function parseChange(value: unknown, path: string): AppliedChange {
   }
 }
 
-function parseStoredOutcome(value: unknown, path: string): StoredSubmitOutcome {
+function parseStoredOutcome(value: unknown, path: string, legacyProtocol = false): StoredSubmitOutcome {
   const item = record(value, path)
   const kind = enumValue(item.kind, `${path}.kind`, ['applied', 'conflicted'])
   if (kind === 'applied') {
     exactKeys(item, path, ['kind', 'change'])
-    return { kind, change: parseChange(item.change, `${path}.change`) }
+    return { kind, change: parseChange(item.change, `${path}.change`, legacyProtocol) }
   }
   exactKeys(item, path, ['kind', 'conflict'])
   return { kind, conflict: parseConflict(item.conflict, `${path}.conflict`) }
@@ -229,36 +313,65 @@ function signature(batch: OperationBatch): string {
 
 type ParsedReceipt = Omit<StoredSubmitReceipt, 'actorId'> & { actorId?: string }
 
-function parseReceipt(value: unknown, path: string, legacy: boolean): ParsedReceipt {
+function parseReceipt(
+  value: unknown,
+  path: string,
+  options: { legacyActor: boolean; legacyOperations: boolean; documentId: string },
+): ParsedReceipt {
   const item = record(value, path)
   exactKeys(
     item,
     path,
-    legacy
+    options.legacyActor
       ? ['requestId', 'submittedBaseRevisionId', 'batchSignature', 'outcome']
       : ['requestId', 'actorId', 'submittedBaseRevisionId', 'batchSignature', 'outcome'],
   )
   const requestId = stringValue(item.requestId, `${path}.requestId`)
-  const actorId = legacy ? undefined : stringValue(item.actorId, `${path}.actorId`)
+  const actorId = options.legacyActor ? undefined : stringValue(item.actorId, `${path}.actorId`)
   const submittedBaseRevisionId = stringValue(item.submittedBaseRevisionId, `${path}.submittedBaseRevisionId`)
-  const batchSignature = stringValue(item.batchSignature, `${path}.batchSignature`)
-  const outcome = parseStoredOutcome(item.outcome, `${path}.outcome`)
+  const storedBatchSignature = stringValue(item.batchSignature, `${path}.batchSignature`)
+  let signedBatch: OperationBatch
+  try {
+    signedBatch = parseBatch(JSON.parse(storedBatchSignature), `${path}.batchSignature`, options.legacyOperations, options.documentId)
+  } catch (cause) {
+    if (cause instanceof InvalidSessionStateError) throw cause
+    invalid(`${path}.batchSignature`, 'must contain a canonical operation batch')
+  }
+  const expectedStoredSignature = options.legacyOperations
+    ? canonicalLegacyBatch(signedBatch)
+    : signature(signedBatch)
+  if (storedBatchSignature !== expectedStoredSignature) {
+    invalid(`${path}.batchSignature`, 'must be canonical')
+  }
+  if (signedBatch.requestId !== requestId
+    || signedBatch.documentId !== options.documentId
+    || signedBatch.baseRevisionId !== submittedBaseRevisionId) {
+    invalid(`${path}.batchSignature`, 'does not match the receipt identity')
+  }
+  const outcome = parseStoredOutcome(item.outcome, `${path}.outcome`, options.legacyOperations)
   if (outcome.kind === 'applied') {
     if (outcome.change.originRequestId !== requestId) invalid(`${path}.outcome.change.originRequestId`, 'must match receipt requestId')
-    const expected = signature({ requestId, baseRevisionId: submittedBaseRevisionId, operations: outcome.change.operations })
-    if (batchSignature !== expected) invalid(`${path}.batchSignature`, 'does not match the applied change')
+    if (JSON.stringify(signedBatch.operations) !== JSON.stringify(outcome.change.operations)) {
+      invalid(`${path}.batchSignature`, 'does not match the applied change')
+    }
   }
-  return { requestId, ...(actorId ? { actorId } : {}), submittedBaseRevisionId, batchSignature, outcome }
+  return {
+    requestId,
+    ...(actorId ? { actorId } : {}),
+    submittedBaseRevisionId,
+    batchSignature: signature(signedBatch),
+    outcome,
+  }
 }
 
-function parseProposal(value: unknown, path: string): Proposal {
+function parseProposal(value: unknown, path: string, legacyProtocol = false, documentId?: string): Proposal {
   const item = record(value, path)
   exactKeys(item, path, ['changeSetId', 'actorId', 'status', 'batch'], ['conflict'])
   const status = enumValue(item.status, `${path}.status`, ['pending', 'applied', 'conflicted', 'rejected'])
   const conflict = item.conflict === undefined ? undefined : parseConflict(item.conflict, `${path}.conflict`)
   if ((status === 'conflicted') !== (conflict !== undefined)) invalid(`${path}.conflict`, 'must exist only for a conflicted proposal')
-  const batch = parseBatch(item.batch, `${path}.batch`)
-  if (batch.operations.length !== 1) invalid(`${path}.batch.operations`, 'must contain exactly one operation in Stage 1A')
+  const batch = parseBatch(item.batch, `${path}.batch`, legacyProtocol, documentId)
+  if (batch.operations.length !== 1) invalid(`${path}.batch.operations`, 'must contain exactly one operation')
   return {
     changeSetId: stringValue(item.changeSetId, `${path}.changeSetId`),
     actorId: stringValue(item.actorId, `${path}.actorId`),
@@ -297,18 +410,25 @@ function parseAudit(value: unknown, path: string): AuditEvent {
 export function parseDocumentSessionState(value: unknown): DocumentSessionState {
   const item = record(value, 'state')
   exactKeys(item, 'state', ['schema', 'head', 'revisionHistory', 'receipts', 'proposals', 'assessments', 'audit'])
-  const legacy = item.schema === LEGACY_DOCUMENT_SESSION_STATE_SCHEMA
-  if (!legacy && item.schema !== DOCUMENT_SESSION_STATE_SCHEMA) {
+  const legacyActor = item.schema === LEGACY_V2_DOCUMENT_SESSION_STATE_SCHEMA
+  const legacyOperations = legacyActor || item.schema === LEGACY_V3_DOCUMENT_SESSION_STATE_SCHEMA
+  if (!legacyOperations && item.schema !== DOCUMENT_SESSION_STATE_SCHEMA) {
     invalid('state.schema', `must be ${DOCUMENT_SESSION_STATE_SCHEMA}`)
   }
   const head = parseRevision(item.head, 'state.head')
   const revisionHistory = arrayValue(item.revisionHistory, 'state.revisionHistory')
     .map((revision, index) => parseRevision(revision, `state.revisionHistory[${index}]`))
-  const proposals = arrayValue(item.proposals, 'state.proposals').map((proposal, index) => parseProposal(proposal, `state.proposals[${index}]`))
+  const proposals = arrayValue(item.proposals, 'state.proposals').map((proposal, index) => (
+    parseProposal(proposal, `state.proposals[${index}]`, legacyOperations, head.documentId)
+  ))
   const assessments = arrayValue(item.assessments, 'state.assessments').map((assessment, index) => parseAssessment(assessment, `state.assessments[${index}]`))
   const audit = arrayValue(item.audit, 'state.audit').map((event, index) => parseAudit(event, `state.audit[${index}]`))
   const receipts = arrayValue(item.receipts, 'state.receipts').map((receipt, index): StoredSubmitReceipt => {
-    const parsed = parseReceipt(receipt, `state.receipts[${index}]`, legacy)
+    const parsed = parseReceipt(receipt, `state.receipts[${index}]`, {
+      legacyActor,
+      legacyOperations,
+      documentId: head.documentId,
+    })
     if (parsed.actorId) return parsed as StoredSubmitReceipt
     if (parsed.outcome.kind === 'applied') {
       const changeId = parsed.outcome.change.changeId
@@ -329,6 +449,58 @@ export function parseDocumentSessionState(value: unknown): DocumentSessionState 
   for (const revision of revisionHistory) {
     if (revision.documentId !== head.documentId) invalid('state.revisionHistory', 'must belong to the head document')
     if (revision.revisionId === head.revisionId) invalid('state.revisionHistory', 'must not repeat the head revision')
+  }
+  const revisionSequence = [...revisionHistory, head]
+  const appliedEntries = receipts.flatMap((receipt, receiptIndex) => (
+    receipt.outcome.kind === 'applied'
+      ? [{ receipt, receiptIndex, change: receipt.outcome.change }]
+      : []
+  ))
+  const appliedChanges = appliedEntries.map((entry) => entry.change)
+  unique(appliedChanges.map((change) => change.changeId), 'state.receipts applied changeIds')
+  const expectedRevisionEdges = revisionSequence.slice(1).map((revision, index) => (
+    JSON.stringify([revisionSequence[index].revisionId, revision.revisionId])
+  ))
+  const appliedRevisionEdges = appliedChanges.map((change) => (
+    JSON.stringify([change.baseRevisionId, change.revisionId])
+  ))
+  unique(appliedRevisionEdges, 'state.receipts applied revision edges')
+  if (expectedRevisionEdges.length !== appliedRevisionEdges.length
+    || expectedRevisionEdges.some((edge) => !appliedRevisionEdges.includes(edge))) {
+    invalid('state.receipts', 'must describe every adjacent document revision exactly once')
+  }
+  for (const { receipt, receiptIndex, change } of appliedEntries) {
+    const declaredConflict = validateDeclaredBase(revisionSequence, {
+      requestId: receipt.requestId,
+      documentId: head.documentId,
+      baseRevisionId: receipt.submittedBaseRevisionId,
+      operations: change.operations,
+    })
+    if (declaredConflict) {
+      invalid(`state.receipts[${receiptIndex}].submittedBaseRevisionId`, 'does not describe a valid operation base')
+    }
+  }
+  let previousBlockIds: Set<string> | null = null
+  const retiredBlockIds = new Set<string>()
+  for (const [index, revision] of revisionSequence.entries()) {
+    const currentBlockIds = new Set(revision.blocks.map((block) => block.blockId))
+    if (revision.blocks.some((block) => retiredBlockIds.has(block.blockId))) {
+      invalid(`state revision ${index}`, 'reuses a retired block ID')
+    }
+    if (previousBlockIds) {
+      for (const blockId of previousBlockIds) {
+        if (!currentBlockIds.has(blockId)) retiredBlockIds.add(blockId)
+      }
+    }
+    previousBlockIds = currentBlockIds
+  }
+  for (const [index, proposal] of proposals.entries()) {
+    if (proposal.batch.documentId !== head.documentId) {
+      invalid(`state.proposals[${index}].batch.documentId`, 'must match the head document')
+    }
+    if (validateDeclaredBase(revisionSequence, proposal.batch)) {
+      invalid(`state.proposals[${index}].batch.baseRevisionId`, 'does not describe a valid operation base')
+    }
   }
   for (const [index, receipt] of receipts.entries()) {
     if (receipt.outcome.kind !== 'applied') continue
@@ -365,15 +537,23 @@ function cloneRevision(revision: DocumentRevision): DocumentRevision {
   }
 }
 
+function cloneOperation(operation: Operation): Operation {
+  return {
+    ...operation,
+    target: { ...operation.target },
+    payload: { ...operation.payload },
+  } as Operation
+}
+
 function cloneBatch(batch: OperationBatch): OperationBatch {
-  return { ...batch, operations: batch.operations.map((operation) => ({ ...operation })) }
+  return { ...batch, operations: batch.operations.map(cloneOperation) }
 }
 
 function cloneChange(change: AppliedChange): AppliedChange {
   return {
     ...change,
     blockRevisions: { ...change.blockRevisions },
-    operations: change.operations.map((operation) => ({ ...operation })),
+    operations: change.operations.map(cloneOperation),
   }
 }
 
@@ -497,7 +677,10 @@ export class InMemoryDocumentSession {
     }
     this.#assertGovernedRevision(governedRevisionId)
 
-    const conflict = this.#validate(normalizedBatch)
+    const conflict = validateDeclaredBase(
+      [...this.#revisionHistory, this.#head],
+      normalizedBatch,
+    ) ?? this.#validate(normalizedBatch)
     if (conflict) {
       this.#receipts.set(normalizedBatch.requestId, {
         actorId,
@@ -510,13 +693,17 @@ export class InMemoryDocumentSession {
 
     const previousHead = this.snapshot()
     const baseRevisionId = previousHead.revisionId
-    const changedRevisions = new Map(await Promise.all(normalizedBatch.operations.map(async (operation) => [
-      operation.blockId,
-      await this.ids.blockRevision(operation.markdown),
-    ] as const)))
+    const changedRevisions = new Map(await Promise.all(normalizedBatch.operations
+      .flatMap(operationContentWrites)
+      .map(async (write) => [write.blockId, await this.ids.blockRevision(write.content)] as const)))
     const revisionId = this.ids.revisionId()
     const blockRevisions = Object.fromEntries(changedRevisions)
-    this.#head = applyDocumentChange(previousHead, normalizedBatch, { revisionId, blockRevisions })
+    this.#head = applyDocumentChange(
+      previousHead,
+      normalizedBatch,
+      { revisionId, blockRevisions },
+      { knownBlockIds: this.#knownBlockIds() },
+    )
     this.#revisionHistory = [...this.#revisionHistory, previousHead]
     const change: AppliedChange = {
       changeId: this.ids.changeId(),
@@ -524,7 +711,7 @@ export class InMemoryDocumentSession {
       baseRevisionId,
       revisionId,
       blockRevisions,
-      operations: normalizedBatch.operations.map((operation) => ({ ...operation })),
+      operations: normalizedBatch.operations.map(cloneOperation),
     }
     const outcome: StoredSubmitOutcome = { kind: 'applied', change: cloneChange(change) }
     this.#receipts.set(normalizedBatch.requestId, {
@@ -563,6 +750,8 @@ export class InMemoryDocumentSession {
       throw new Error('CDR_IDEMPOTENCY_KEY_REUSED')
     }
     this.#assertGovernedRevision(governedRevisionId)
+    const declaredConflict = validateDeclaredBase([...this.#revisionHistory, this.#head], normalizedBatch)
+    if (declaredConflict) throw new Error(`CDR_PROPOSAL_CONFLICT: ${declaredConflict.code}`)
     const proposal: Proposal = {
       changeSetId: this.ids.changeSetId(),
       actorId,
@@ -662,7 +851,14 @@ export class InMemoryDocumentSession {
   }
 
   #validate(batch: OperationBatch): Conflict | null {
-    return validateDocumentChange(this.#head, batch)
+    return validateDocumentChange(this.#head, batch, { knownBlockIds: this.#knownBlockIds() })
+  }
+
+  #knownBlockIds(): ReadonlySet<string> {
+    return new Set(
+      [...this.#revisionHistory, this.#head]
+        .flatMap((revision) => revision.blocks.map((block) => block.blockId)),
+    )
   }
 }
 
@@ -680,7 +876,7 @@ export function documentId(): string {
   return cryptoUuid()
 }
 
-export function uuidIds(): IdProvider & { requestId(): string; operationId(): string } {
+export function uuidIds(): IdProvider & { requestId(): string; operationId(): string; blockId(): string } {
   const next = (kind: string) => `${kind}/${cryptoUuid()}`
   return {
     revisionId: () => next('revision'),
@@ -691,10 +887,11 @@ export function uuidIds(): IdProvider & { requestId(): string; operationId(): st
     eventId: () => next('event'),
     requestId: () => next('request'),
     operationId: () => next('operation'),
+    blockId: () => next('block'),
   }
 }
 
-export function sequentialIds(prefix = 'spike'): IdProvider & { requestId(): string; operationId(): string } {
+export function sequentialIds(prefix = 'spike'): IdProvider & { requestId(): string; operationId(): string; blockId(): string } {
   let value = 0
   const next = (kind: string) => `${prefix}/${kind}-${++value}`
   return {
@@ -706,5 +903,6 @@ export function sequentialIds(prefix = 'spike'): IdProvider & { requestId(): str
     eventId: () => next('event'),
     requestId: () => next('request'),
     operationId: () => next('operation'),
+    blockId: () => next('block'),
   }
 }

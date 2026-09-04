@@ -60,7 +60,11 @@ function sameProfile(left: ProfileDescriptor, right: ProfileDescriptor): boolean
 
 function immutableBatch(value: OperationBatch): OperationBatch {
   const parsed = parseOperationBatch(value)
-  parsed.operations.forEach(Object.freeze)
+  parsed.operations.forEach((operation) => {
+    Object.freeze(operation.target)
+    Object.freeze(operation.payload)
+    Object.freeze(operation)
+  })
   Object.freeze(parsed.operations)
   return Object.freeze(parsed)
 }
@@ -84,6 +88,7 @@ export class CdrApplicationService {
 
   async submit(batch: OperationBatch, requestedMode: 'propose' | 'apply' = 'apply'): Promise<GovernedSubmitResult> {
     const governedBatch = immutableBatch(batch)
+    if (governedBatch.documentId !== this.documentId) throw new Error('CDR_BATCH_DOCUMENT_MISMATCH')
     for (let attempt = 0; attempt < MAX_GOVERNANCE_RETRIES; attempt += 1) {
       const governed = await this.governChange(governedBatch, requestedMode)
       try {

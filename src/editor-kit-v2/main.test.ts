@@ -64,6 +64,20 @@ function authoritativeSnapshot(
   }
 }
 
+function replaceOperation(
+  operationId: string,
+  blockId: string,
+  expectedBlockRevision: string,
+  content: string,
+) {
+  return {
+    kind: 'block.replace' as const,
+    operationId,
+    target: { blockId, expectedBlockRevision },
+    payload: { content },
+  }
+}
+
 describe('Editor Kit v2', () => {
   beforeEach(() => {
     document.head.innerHTML = ''
@@ -89,7 +103,7 @@ describe('Editor Kit v2', () => {
     await Promise.resolve()
     expect(batches).toHaveLength(1)
     expect(batches[0].operations).toMatchObject([{
-      kind: 'block.replace', blockId: 'block-a', expectedBlockRevision: 'block-a/1',
+      kind: 'block.replace', target: { blockId: 'block-a', expectedBlockRevision: 'block-a/1' },
     }])
     const afterLocal = rich.getMarkdown()
 
@@ -97,7 +111,7 @@ describe('Editor Kit v2', () => {
       kind: 'ack-local',
       requestId: batches[0].requestId,
       authoritative: authoritativeSnapshot('revision-2', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].markdown },
+        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
       }),
       includedChangeIds: [],
     })
@@ -110,13 +124,7 @@ describe('Editor Kit v2', () => {
       baseRevisionId: 'revision-2',
       revisionId: 'revision-3',
       blockRevisions: { 'block-b': 'block-b/2' },
-      operations: [{
-        kind: 'block.replace' as const,
-        operationId: 'agent-operation',
-        blockId: 'block-b',
-        expectedBlockRevision: 'block-b/1',
-        markdown: 'Agent changed only this paragraph.',
-      }],
+      operations: [replaceOperation('agent-operation', 'block-b', 'block-b/1', 'Agent changed only this paragraph.')],
     }
     await mounted.surface.reconcile({ kind: 'apply-remote', change })
     const once = rich.getMarkdown()
@@ -127,6 +135,194 @@ describe('Editor Kit v2', () => {
     await mounted.surface.reconcile({ kind: 'apply-remote', change })
     expect(rich.getMarkdown()).toBe(once)
     expect(batches).toHaveLength(1)
+  })
+
+  it('uses explicit commands for optimistic insert/delete and rolls back by stable block identity', async () => {
+    let sequence = 0
+    const mounted = await mountDocumentEditor(document.body, {
+      snapshot: snapshot(),
+      ids: {
+        requestId: () => `request-${++sequence}`,
+        operationId: () => `operation-${++sequence}`,
+        blockId: () => 'block-c',
+      },
+    })
+    const rich = await mocks.mountRich.mock.results[0].value
+    const batches: LocalOperationBatch[] = []
+    mounted.surface.observeLocalOperations((batch) => batches.push(batch))
+
+    expect(mounted.surface.executeStructuralCommand({
+      kind: 'block.insert-after', blockId: 'block-a', content: 'New context.',
+    })).toBe(true)
+    await Promise.resolve()
+    expect(batches).toMatchObject([{
+      documentId: 'document-1',
+      baseRevisionId: 'revision-1',
+      operations: [{
+        kind: 'block.insert',
+        target: { leftBlockId: 'block-a', rightBlockId: 'block-b' },
+        payload: { candidateBlockId: 'block-c', content: 'New context.' },
+      }],
+    }])
+    expect(rich.getMarkdown()).toContain('New context.')
+    expect(rich.view.state.selection.$from.parent.textContent).toBe('New context.')
+
+    const inserted: EditorSnapshot = {
+      ...snapshot(),
+      revisionId: 'revision-2',
+      blocks: [
+        snapshot().blocks[0],
+        { blockId: 'block-c', blockRevision: 'block-c/1', markdown: 'New context.' },
+        snapshot().blocks[1],
+      ],
+    }
+    await mounted.surface.reconcile({
+      kind: 'ack-local', requestId: batches[0].requestId, authoritative: inserted, includedChangeIds: [],
+    })
+    expect(batches).toHaveLength(1)
+
+    expect(mounted.surface.executeStructuralCommand({ kind: 'block.delete', blockId: 'block-c' })).toBe(true)
+    await Promise.resolve()
+    expect(batches[1]).toMatchObject({
+      documentId: 'document-1',
+      baseRevisionId: 'revision-2',
+      operations: [{
+        kind: 'block.delete',
+        target: { blockId: 'block-c', expectedBlockRevision: 'block-c/1' },
+        payload: {},
+      }],
+    })
+    expect(rich.getMarkdown()).not.toContain('New context.')
+    expect(rich.view.state.selection.$from.parent.textContent).toContain('Second paragraph.')
+    await mounted.surface.reconcile({
+      kind: 'reject-local',
+      requestId: batches[1].requestId,
+      reason: { code: 'persistence-failed', message: 'not saved' },
+      authoritative: inserted,
+      includedChangeIds: [],
+    })
+    expect(rich.getMarkdown()).toContain('New context.')
+    expect(rich.view.dom.querySelectorAll('[data-cdr-block-id="block-c"]')).toHaveLength(1)
+  })
+
+  it('applies remote insert/delete as local ProseMirror transactions and preserves another block selection', async () => {
+    const mounted = await mountDocumentEditor(document.body, {
+      snapshot: snapshot(),
+      ids: { requestId: () => 'request', operationId: () => 'operation' },
+    })
+    const rich = await mocks.mountRich.mock.results[0].value
+    const blockBStart = rich.view.state.doc.child(0).nodeSize
+    rich.view.dispatch(rich.view.state.tr.setSelection(TextSelection.create(rich.view.state.doc, blockBStart + 2)))
+
+    await mounted.surface.reconcile({
+      kind: 'apply-remote',
+      change: {
+        changeId: 'insert-c', baseRevisionId: 'revision-1', revisionId: 'revision-2',
+        blockRevisions: { 'block-c': 'block-c/1' },
+        operations: [{
+          kind: 'block.insert', operationId: 'insert-c/op',
+          target: { leftBlockId: 'block-a', rightBlockId: 'block-b' },
+          payload: { candidateBlockId: 'block-c', content: 'Remote context.' },
+        }],
+      },
+    })
+    expect(rich.getMarkdown()).toContain('Remote context.')
+    expect(rich.view.state.selection.$from.parent.textContent).toContain('Second paragraph.')
+
+    await mounted.surface.reconcile({
+      kind: 'apply-remote',
+      change: {
+        changeId: 'delete-c', baseRevisionId: 'revision-2', revisionId: 'revision-3',
+        blockRevisions: {},
+        operations: [{
+          kind: 'block.delete', operationId: 'delete-c/op',
+          target: { blockId: 'block-c', expectedBlockRevision: 'block-c/1' }, payload: {},
+        }],
+      },
+    })
+    expect(rich.getMarkdown()).not.toContain('Remote context.')
+    expect(rich.view.state.selection.$from.parent.textContent).toContain('Second paragraph.')
+  })
+
+  it('queues remote structure changes through composition and its finishing frame', async () => {
+    const mounted = await mountDocumentEditor(document.body, {
+      snapshot: snapshot(),
+      ids: { requestId: () => 'request', operationId: () => 'operation' },
+    })
+    const rich = await mocks.mountRich.mock.results[0].value
+    const insertedChange = {
+      changeId: 'ime-insert-c',
+      baseRevisionId: 'revision-1',
+      revisionId: 'revision-2',
+      blockRevisions: { 'block-c': 'block-c/1' },
+      operations: [{
+        kind: 'block.insert' as const,
+        operationId: 'ime-insert-c/op',
+        target: { leftBlockId: 'block-a', rightBlockId: 'block-b' },
+        payload: { candidateBlockId: 'block-c', content: 'Queued structure.' },
+      }],
+    }
+
+    rich.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    await mounted.surface.reconcile({ kind: 'apply-remote', change: insertedChange })
+    expect(rich.getMarkdown()).not.toContain('Queued structure.')
+    rich.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    await vi.waitFor(() => expect(rich.getMarkdown()).toContain('Queued structure.'))
+
+    rich.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    rich.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    await mounted.surface.reconcile({
+      kind: 'apply-remote',
+      change: {
+        changeId: 'ime-delete-c',
+        baseRevisionId: 'revision-2',
+        revisionId: 'revision-3',
+        blockRevisions: {},
+        operations: [{
+          kind: 'block.delete',
+          operationId: 'ime-delete-c/op',
+          target: { blockId: 'block-c', expectedBlockRevision: 'block-c/1' },
+          payload: {},
+        }],
+      },
+    })
+    expect(rich.getMarkdown()).toContain('Queued structure.')
+    await vi.waitFor(() => expect(rich.getMarkdown()).not.toContain('Queued structure.'))
+  })
+
+  it('refuses explicit structural commands during composition and never deletes the last block', async () => {
+    const mounted = await mountDocumentEditor(document.body, {
+      snapshot: snapshot(),
+      ids: { requestId: () => 'request', operationId: () => 'operation', blockId: () => 'block-c' },
+    })
+    const rich = await mocks.mountRich.mock.results[0].value
+    rich.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    expect(mounted.surface.executeStructuralCommand({
+      kind: 'block.insert-after', blockId: 'block-a', content: 'Blocked.',
+    })).toBe(false)
+    rich.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+
+    const single = await mountDocumentEditor(document.body, {
+      snapshot: { ...snapshot(), blocks: [snapshot().blocks[0]] },
+      ids: { requestId: () => 'single-request', operationId: () => 'single-operation' },
+    })
+    expect(single.surface.executeStructuralCommand({ kind: 'block.delete', blockId: 'block-a' })).toBe(false)
+  })
+
+  it('does not expose one block identity for a cross-block selection', async () => {
+    const mounted = await mountDocumentEditor(document.body, {
+      snapshot: snapshot(),
+      ids: { requestId: () => 'request', operationId: () => 'operation' },
+    })
+    const rich = await mocks.mountRich.mock.results[0].value
+    const secondBlockStart = rich.view.state.doc.child(0).nodeSize
+    rich.view.dispatch(rich.view.state.tr.setSelection(TextSelection.create(
+      rich.view.state.doc,
+      2,
+      secondBlockStart + 2,
+    )))
+
+    expect(mounted.surface.selectedBlockId()).toBeNull()
   })
 
   it('fails closed when a local transaction changes the top-level block structure', async () => {
@@ -189,9 +385,9 @@ describe('Editor Kit v2', () => {
 
     expect(batches).toHaveLength(1)
     expect(batches[0].operations).toHaveLength(1)
-    expect(batches[0].operations[0]).toMatchObject({ blockId: 'block-b' })
-    expect(batches[0].operations[0].markdown).toContain('Second paragraph.')
-    expect(batches[0].operations[0].markdown).toContain('updated Third paragraph.')
+    expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
+    expect(batches[0].operations[0].payload.content).toContain('Second paragraph.')
+    expect(batches[0].operations[0].payload.content).toContain('updated Third paragraph.')
   })
 
   it('emits one block replacement when one transaction changes two nodes in the same span', async () => {
@@ -213,9 +409,9 @@ describe('Editor Kit v2', () => {
 
     expect(batches).toHaveLength(1)
     expect(batches[0].operations).toHaveLength(1)
-    expect(batches[0].operations[0]).toMatchObject({ blockId: 'block-b' })
-    expect(batches[0].operations[0].markdown).toContain('second: Second paragraph.')
-    expect(batches[0].operations[0].markdown).toContain('third: Third paragraph.')
+    expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
+    expect(batches[0].operations[0].payload.content).toContain('second: Second paragraph.')
+    expect(batches[0].operations[0].payload.content).toContain('third: Third paragraph.')
   })
 
   it('keeps following block identity when a remote replacement changes its predecessor node count', async () => {
@@ -237,10 +433,7 @@ describe('Editor Kit v2', () => {
       change: {
         changeId: 'expand-first-block', baseRevisionId: 'revision-1', revisionId: 'revision-2',
         blockRevisions: { 'block-a': 'block-a/2' },
-        operations: [{
-          kind: 'block.replace', operationId: 'remote-expand', blockId: 'block-a',
-          expectedBlockRevision: 'block-a/1', markdown: '# Heading\n\nExpanded context.',
-        }],
+        operations: [replaceOperation('remote-expand', 'block-a', 'block-a/1', '# Heading\n\nExpanded context.')],
       },
     })
     expect(rich.view.dom.querySelectorAll('[data-cdr-block-id="block-a"]')).toHaveLength(2)
@@ -251,7 +444,7 @@ describe('Editor Kit v2', () => {
     rich.view.dispatch(rich.view.state.tr.insertText('Remote-safe ', blockBStart + 2))
     await Promise.resolve()
     expect(batches).toHaveLength(1)
-    expect(batches[0].operations[0]).toMatchObject({ blockId: 'block-b' })
+    expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
     expect(batches[0].baseRevisionId).toBe('revision-2')
   })
 
@@ -285,14 +478,14 @@ describe('Editor Kit v2', () => {
     await mounted.surface.reconcile({
       kind: 'ack-local', requestId: batches[0].requestId,
       authoritative: authoritativeSnapshot('revision-2', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].markdown },
+        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
       }),
       includedChangeIds: [],
     })
     rich.view.dispatch(rich.view.state.tr.insertText(' second', 14))
     await Promise.resolve()
     expect(batches).toHaveLength(2)
-    expect(batches[1].operations[0]).toMatchObject({ expectedBlockRevision: 'block-a/2' })
+    expect(batches[1].operations[0]).toMatchObject({ target: { expectedBlockRevision: 'block-a/2' } })
   })
 
   it('emits a reverse local transaction against the acknowledged block revision', async () => {
@@ -308,7 +501,7 @@ describe('Editor Kit v2', () => {
     rich.view.dispatch(rich.view.state.tr.insertText(' undo', 8))
     await Promise.resolve()
     const committed = authoritativeSnapshot('revision-2', {
-      'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].markdown },
+      'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
     })
     await mounted.surface.reconcile({
       kind: 'ack-local', requestId: batches[0].requestId, authoritative: committed,
@@ -319,7 +512,7 @@ describe('Editor Kit v2', () => {
     await Promise.resolve()
     expect(batches).toHaveLength(2)
     expect(batches[1].operations).toMatchObject([{
-      blockId: 'block-a', expectedBlockRevision: 'block-a/2', markdown: '# Heading',
+      target: { blockId: 'block-a', expectedBlockRevision: 'block-a/2' }, payload: { content: '# Heading' },
     }])
   })
 
@@ -366,10 +559,7 @@ describe('Editor Kit v2', () => {
         baseRevisionId: 'revision-1',
         revisionId: 'revision-2',
         blockRevisions: { 'block-b': 'block-b/2' },
-        operations: [{
-          kind: 'block.replace', operationId: 'remote-operation', blockId: 'block-b',
-          expectedBlockRevision: 'block-b/1', markdown: 'Authoritative remote payload.',
-        }],
+        operations: [replaceOperation('remote-operation', 'block-b', 'block-b/1', 'Authoritative remote payload.')],
       },
     })
     expect(rich.getMarkdown()).not.toContain('Authoritative remote payload.')
@@ -377,7 +567,7 @@ describe('Editor Kit v2', () => {
     await mounted.surface.reconcile({
       kind: 'ack-local', requestId: batches[0].requestId,
       authoritative: authoritativeSnapshot('revision-3', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].markdown },
+        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
         'block-b': { blockRevision: 'block-b/2', markdown: 'Authoritative remote payload.' },
       }),
       includedChangeIds: ['authoritative-change'],
@@ -407,18 +597,12 @@ describe('Editor Kit v2', () => {
     const second = {
       changeId: 'change-b2', baseRevisionId: 'revision-1', revisionId: 'revision-2',
       blockRevisions: { 'block-b': 'block-b/2' },
-      operations: [{
-        kind: 'block.replace' as const, operationId: 'operation-b2', blockId: 'block-b',
-        expectedBlockRevision: 'block-b/1', markdown: 'Second revision.',
-      }],
+      operations: [replaceOperation('operation-b2', 'block-b', 'block-b/1', 'Second revision.')],
     }
     const third = {
       changeId: 'change-b3', baseRevisionId: 'revision-2', revisionId: 'revision-3',
       blockRevisions: { 'block-b': 'block-b/3' },
-      operations: [{
-        kind: 'block.replace' as const, operationId: 'operation-b3', blockId: 'block-b',
-        expectedBlockRevision: 'block-b/2', markdown: 'Third revision.',
-      }],
+      operations: [replaceOperation('operation-b3', 'block-b', 'block-b/2', 'Third revision.')],
     }
     await mounted.surface.reconcile({ kind: 'apply-remote', change: second })
     await mounted.surface.reconcile({ kind: 'apply-remote', change: third })
@@ -426,7 +610,7 @@ describe('Editor Kit v2', () => {
     await mounted.surface.reconcile({
       kind: 'ack-local', requestId: batches[0].requestId,
       authoritative: authoritativeSnapshot('revision-4', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].markdown },
+        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
         'block-b': { blockRevision: 'block-b/3', markdown: 'Third revision.' },
       }),
       includedChangeIds: ['change-b2', 'change-b3'],
@@ -439,7 +623,7 @@ describe('Editor Kit v2', () => {
     await Promise.resolve()
     expect(batches).toHaveLength(2)
     expect(batches[1]).toMatchObject({ baseRevisionId: 'revision-4' })
-    expect(batches[1].operations[0]).toMatchObject({ expectedBlockRevision: 'block-b/3' })
+    expect(batches[1].operations[0]).toMatchObject({ target: { expectedBlockRevision: 'block-b/3' } })
   })
 
   it('never replays a resync snapshot received while a newer local commit is pending', async () => {
@@ -467,7 +651,7 @@ describe('Editor Kit v2', () => {
     expect(rich.getMarkdown()).toContain('Heading local')
 
     const committed = authoritativeSnapshot('revision-3', {
-      'block-a': { blockRevision: 'block-a/3', markdown: batches[0].operations[0].markdown },
+      'block-a': { blockRevision: 'block-a/3', markdown: batches[0].operations[0].payload.content },
     })
     await mounted.surface.reconcile({
       kind: 'ack-local', requestId: batches[0].requestId, authoritative: committed,
@@ -496,10 +680,7 @@ describe('Editor Kit v2', () => {
       change: {
         changeId: 'missing-parent', baseRevisionId: 'revision-2', revisionId: 'revision-3',
         blockRevisions: { 'block-b': 'block-b/2' },
-        operations: [{
-          kind: 'block.replace', operationId: 'operation-3', blockId: 'block-b',
-          expectedBlockRevision: 'block-b/1', markdown: 'Must not apply.',
-        }],
+        operations: [replaceOperation('operation-3', 'block-b', 'block-b/1', 'Must not apply.')],
       },
     })
     expect(rich.getMarkdown()).toBe(before)
@@ -536,13 +717,7 @@ describe('Editor Kit v2', () => {
         baseRevisionId: 'revision-1',
         revisionId: 'revision-2',
         blockRevisions: { 'block-a': 'block-a/2' },
-        operations: [{
-          kind: 'block.replace',
-          operationId: 'agent-operation',
-          blockId: 'block-a',
-          expectedBlockRevision: 'block-a/1',
-          markdown: '# IME-safe remote heading',
-        }],
+        operations: [replaceOperation('agent-operation', 'block-a', 'block-a/1', '# IME-safe remote heading')],
       },
     })
     expect(rich.getMarkdown()).not.toContain('IME-safe')
@@ -584,8 +759,10 @@ describe('Editor Kit v2', () => {
     // compositionend. It must still join the same coalesced operation.
     rich.view.dispatch(rich.view.state.tr.insertText('文', 3))
     await vi.waitFor(() => expect(batches).toHaveLength(1))
-    expect(batches[0].operations[0]).toMatchObject({ blockId: 'block-a', expectedBlockRevision: 'block-a/1' })
-    expect(batches[0].operations[0].markdown).toContain('中文')
+    expect(batches[0].operations[0]).toMatchObject({
+      target: { blockId: 'block-a', expectedBlockRevision: 'block-a/1' },
+    })
+    expect(batches[0].operations[0].payload.content).toContain('中文')
   })
 
   it('accepts the final IME transaction before acting on a deferred resync', async () => {
@@ -614,7 +791,7 @@ describe('Editor Kit v2', () => {
     rich.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
     rich.view.dispatch(rich.view.state.tr.insertText('文', 3))
     await vi.waitFor(() => expect(batches).toHaveLength(1))
-    expect(batches[0].operations[0].markdown).toContain('中文')
+    expect(batches[0].operations[0].payload.content).toContain('中文')
     expect(requestFreshResync).not.toHaveBeenCalled()
 
     await mounted.surface.reconcile({
@@ -652,6 +829,6 @@ describe('Editor Kit v2', () => {
     await vi.waitFor(() => expect(batches).toHaveLength(1))
 
     expect(batches[0].operations).toHaveLength(1)
-    expect(batches[0].operations[0].blockId).toBe('block-b')
+    expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
   })
 })

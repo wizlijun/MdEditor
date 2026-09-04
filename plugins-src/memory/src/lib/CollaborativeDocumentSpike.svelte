@@ -8,6 +8,7 @@
     type AppliedChange,
     type Assessment,
     type DocumentRevision,
+    type Operation,
     type OperationBatch,
     type Proposal,
   } from './cdr/session'
@@ -172,7 +173,7 @@
       ids,
       readOnly: startsReadOnly,
       onBlockedStructuralEdit: () => {
-        notice = 'Stage 1A 仅允许块内编辑；插入、删除和拆合块已 fail-closed。'
+        notice = '请使用显式新增／删除命令；键盘拆分、合并和移动仍会 fail-closed。'
       },
       onResyncRequired: (reason) => {
         void handleResyncRequired(reason)
@@ -269,6 +270,7 @@
     if (!block) throw new Error('CDR_BLOCK_NOT_FOUND')
     return {
       requestId: ids.requestId(),
+      documentId: snapshot.documentId,
       baseRevisionId: snapshot.revisionId,
       operations: [replaceOperation(ids, blockId, block.blockRevision, markdown)],
     }
@@ -343,6 +345,28 @@
       const assessment = await verifierCdr!.assess('b-d4e5f6', 'verified')
       notice = `模拟核验 Agent 的结论已保存并绑定 ${assessment.blockRevision}`
     })
+  }
+
+  function insertAfterSelection() {
+    const blockId = editor?.surface.selectedBlockId?.()
+    if (!editor || !blockId || !editor.surface.executeStructuralCommand?.({
+      kind: 'block.insert-after',
+      blockId,
+      content: '新段落',
+    })) {
+      notice = '当前无法新增块；请先结束输入并选择一个正文块。'
+      return
+    }
+    notice = '正在以稳定块 ID 新增段落…'
+  }
+
+  function deleteSelection() {
+    const blockId = editor?.surface.selectedBlockId?.()
+    if (!editor || !blockId || !editor.surface.executeStructuralCommand?.({ kind: 'block.delete', blockId })) {
+      notice = '当前无法删除所选块；文档必须至少保留一个块。'
+      return
+    }
+    notice = '正在删除所选块并保留历史记录…'
   }
 
   async function decide(proposal: Proposal, decision: 'accept' | 'reject') {
@@ -448,7 +472,7 @@
     editor?.decorations.setLayer('proposals', proposals
       .filter((proposal) => proposal.status === 'pending' || proposal.status === 'conflicted')
       .map((proposal) => ({
-        blockId: proposal.batch.operations[0].blockId,
+        blockId: operationDisplayBlockId(proposal.batch.operations[0]),
         kind: 'proposal' as const,
         label: proposal.status === 'conflicted' ? 'Agent 提案已过期' : 'Agent 提案待审阅',
       })))
@@ -460,14 +484,29 @@
         label: '核验结论已过期',
       })))
   }
+
+  function operationDisplayBlockId(operation: Operation): string {
+    if (operation.kind !== 'block.insert') return operation.target.blockId
+    return operation.target.leftBlockId ?? operation.target.rightBlockId ?? ''
+  }
+
+  function operationSummary(operation: Operation): string {
+    if (operation.kind === 'block.delete') return `删除块 ${operation.target.blockId}`
+    return operation.payload.content
+  }
+
+  function operationBasis(operation: Operation): string {
+    if (operation.kind !== 'block.insert') return operation.target.expectedBlockRevision
+    return `${operation.target.leftBlockId ?? '文首'} → ${operation.target.rightBlockId ?? '文尾'}`
+  }
 </script>
 
 <section class="cdr-spike" aria-labelledby="cdr-spike-title">
   <header>
     <div>
-      <p class="eyebrow">Stage 1A · 本机治理策略验证</p>
+      <p class="eyebrow">Stage 1B-1 · MEMORY-first 结构验证</p>
       <h2 id="cdr-spike-title">共写文档实验</h2>
-      <p>通用受控文档以 MEMORY 作为第一个验证场景。正文修改统一经过 Core 与本机模拟治理策略；模拟 Agent 只能提出建议，Host 可信身份尚未接入。当前不读写 Claim、根 MEMORY.md 或 Yjs。</p>
+      <p>通用受控文档以 MEMORY 作为第一个验证场景。正文修改与显式新增／删除统一经过 Core 与本机模拟治理策略；模拟 Agent 只能提出建议，Host 可信身份尚未接入。当前不读写 Claim、根 MEMORY.md 或 Yjs，也尚未开放移动与结构撤销。</p>
       {#if vaultPath}<small class="managed-path">{vaultPath}</small>{/if}
     </div>
     <span class="status" class:loading={loading || saving || locked || creationPending}>{loading ? '加载中' : failed ? '不可用' : creationPending ? '未创建' : locked ? '只读' : saving ? '保存中' : '可编辑'}</span>
@@ -494,6 +533,8 @@
       <aside aria-label="协作活动与提案">
         <section class="actions">
           <h3>验证动作</h3>
+          <button onclick={insertAfterSelection} disabled={!editor || !session || saving || locked}>在选中块后新增段落</button>
+          <button onclick={deleteSelection} disabled={!editor || !session || saving || locked}>删除选中块</button>
           <button onclick={proposeBackground} disabled={!editor || !session || saving || locked}>模拟 Agent 请求直接修改</button>
           <button onclick={applyRemoteFixture} disabled={!editor || !session || saving || locked}>模拟协作者修改</button>
           <button onclick={assessBackground} disabled={!editor || !session || saving || locked}>模拟 Agent 核验背景块</button>
@@ -511,8 +552,8 @@
           {#each proposals as proposal (proposal.changeSetId)}
             <article class:conflicted={proposal.status === 'conflicted'}>
               <strong>{proposal.actorId}</strong>
-              <span>{proposal.batch.operations[0].markdown}</span>
-              <small>{proposal.status} · 基于 {proposal.batch.operations[0].expectedBlockRevision}</small>
+              <span>{operationSummary(proposal.batch.operations[0])}</span>
+              <small>{proposal.status} · 基于 {operationBasis(proposal.batch.operations[0])}</small>
               {#if proposal.status === 'pending'}
                 <div><button onclick={() => decide(proposal, 'reject')} disabled={saving || locked}>拒绝</button><button class="primary" onclick={() => decide(proposal, 'accept')} disabled={saving || locked}>接受</button></div>
               {/if}

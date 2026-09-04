@@ -1,6 +1,6 @@
 # 人与多 Agent 通用共写文档运行时设计
 
-> 阶段：设计收敛，Stage 1A 的通用治理入口已实现；Stage 1 后续切片与 MEMORY MVP 尚未完成。
+> 阶段：设计收敛，Stage 1A 与 Stage 1B-1 已实现；`block.move`、Projection、用途迁移闭环与 MEMORY MVP 尚未完成。
 >
 > 决策：采用“通用内核、MEMORY-first 验证”。从第一天使用领域无关的数据结构和窄接口，但第一阶段只交付 MEMORY 的完整纵向闭环。第二个真实场景验证前，不把内部扩展点发布为稳定 SDK，也不建设通用 IAM、事件平台或任意协作后端。
 >
@@ -24,9 +24,11 @@
 
 > 本切片只统一正文 `OperationBatch`。既有 Assessment 已纳入同一 Application Service 的身份、授权、Profile 策略与 revision guard，但在持久 aggregate 中暂时仍是专用命令；待 Stage 1D 与 Annotation 一起进入统一 `ChangeSet`，避免为了尚未落地的批注模型提前扩张协议。
 
-> 持久会话 schema 已从 v2 升至 v3，把 Application Service 绑定的 actor 纳入幂等回执。读取 v2 时优先从对应 proposal 或 applied audit 恢复 actor；无法恢复时使用不可冒认的 `legacy:unknown`，后续任意新 actor 复用该 request ID 都会 fail closed。下一次提交 aggregate 时写回 v3。
+> Stage 1A 将持久会话 schema 从 v2 升至 v3，把 Application Service 绑定的 actor 纳入幂等回执。读取 v2 时优先从对应 proposal 或 applied audit 恢复 actor；无法恢复时使用不可冒认的 `legacy:unknown`，后续任意新 actor 复用该 request ID 都会 fail closed。
 
-> Stage 1A 运行时使用的 `block.replace` 是内部 v0 形态（扁平 `blockId`／`expectedBlockRevision`／`markdown`），只服务当前纵向验证，不是下文的最终外部 wire contract。Stage 1B 在加入结构操作前迁移为 `target + payload` 形态并提升持久 schema；不得同时长期维护两种格式。
+> Stage 1B-1 已把唯一正文协议迁移为 `target + payload`，OperationBatch 绑定 `documentId`，并加入显式 `block.insert`／`block.delete`。insert 以左右相邻块 ID 组成精确 gap；同一 gap 被并发改变即 stale，邻块只有正文变化则可安全重放。delete 绑定目标块精确版本并禁止删除末块。candidate ID 不能复用 revision history 中已退休的身份。当前结构操作必须独立成批，`block.move`、嵌套 parent、split/merge lineage 与结构 undo 尚未开放。
+>
+> 持久会话 schema 已升至 v4。v2（无 receipt actor）与 v3（旧扁平 Operation）只在 `parseDocumentSessionState()` 中严格迁移：旧 applied、conflicted receipt 与 proposal 均从其 canonical batch JSON 恢复并重新签为新协议；未知或非 canonical 历史 fail closed。Session 要求每个相邻文档 revision 都由唯一 applied receipt 连接；live submit、proposal 与恢复数据还必须证明声明的 `baseRevisionId` 存在且 Operation 在该版本上成立，然后才检查其能否安全重放到当前 head。Managed aggregate、Profile 与 Host opaque Repository 版本不因嵌套 session schema 改变。Editor Kit 的显式 insert/delete 命令以单次 ProseMirror transaction 同时更新正文和 block layout；普通 Enter、跨块删除、拆合和移动仍 fail closed。MEMORY 共写页只增加最小选中块新增／删除入口，不宣称完整 Stage 1B 或 MEMORY MVP。
 
 ## 0. 结论
 
@@ -286,7 +288,7 @@ assessment.record
 
 不再并存 `DocOp`、`BlockOp` 和 `Operation` 三种同义词。外部 API、Editor Adapter 和 journal 都使用同一份 Operation schema。
 
-以下是 Stage 1B 起采用的目标 wire contract。Stage 1A 尚未公开外部 API，当前内部 v0 replace 形态见文首实施记录；迁移完成前不得把 v0 宣称为稳定协议。
+以下是完整入站 Adapter 的目标 wire contract。Stage 1B-1 已实现其中领域无关的正文 batch（camelCase 的 `requestId/documentId/baseRevisionId/operations` 与统一 `target + payload`）；`mode` 由 Application Service 用例参数表达，可信 `actor` 由绑定的 ActorSource 注入，不能从 batch 自报。`reason` 等外部 envelope 字段要等真实 Agent Adapter 再加入，当前不发布公共 SDK。
 
 ```yaml
 request_id: req_01J...
@@ -309,6 +311,8 @@ operations:
 
 - 每个写请求必须带 `request_id` 和 `base_revision_id`。每个已存在的目标块必须带精确 `expected_block_revision`；insert 不伪造目标版本，insert／move 另外携带 expected parent／order anchor。
 - `block.insert` 必须携带 `candidate_block_id`，由入站 Adapter 注入的 IdProvider 生成；Core 只验证格式、文档内唯一性和 restore 例外。服务不在提交后重命名 optimistic block。
+- Stage 1B-1 的平面 insert target 是完整相邻 gap：`leftBlockId/rightBlockId`，文首或文尾显式使用 `null`。两个相邻 ID 的关系发生变化即 stale；只改邻块正文不使位置失效。
+- Stage 1B-1 中含 insert/delete 的 batch 必须只有一个 Operation；多块 replace 仍可原子提交。move、层级 parent 与结构 undo 在后续切片开放前继续 fail closed。
 - 同 `request_id`、同规范载荷的重试返回相同回执；异载荷返回 `idempotency_conflict`。
 - 当文档 head 已前进时，Application Service 在最新 head 上重新检查所有被触及块的 `expected_block_revision`，以及 insert／move 使用的结构锚点。它们均未改变时，ChangeSet 可确定性重放到最新 head，并以新 head 重新 CAS；CAS 竞争只做有界重试。任一目标或结构锚点已改变时返回 `stale_base`。
 - 因此不同块可以独立提交；同块基础版本不匹配时不自动拼接事实性文字。
@@ -885,10 +889,15 @@ Go/No-Go：任一普通局部更新需要全文 `setContent()`、块 ID 往返�
 - ActorSource、Authorizer 与 ChangePolicy 最小求交；Memory self Profile 只验证现有 replace／proposal／assessment 链路。
 - 当前仅使用插件内绑定的本机 actor fixture；Host 可信身份接入仍是后续闸门。
 
-**Stage 1B：结构与身份**
+**Stage 1B-1：replace 协议迁移与最小结构编辑（已实现）**
 
-- 先把 replace 迁移到本规格的 `target + payload` wire contract 并提升持久 schema，再加入 `block.insert`、`block.delete`；验证通过后再加入 `block.move`。
-- 完整 BlockIdentityStore、lineage、Anchor 与 Editor Kit 显式结构命令；任意键盘结构推断在意图不明确时继续 fail closed。
+- replace 已迁移到 `target + payload`，持久 session schema 升至 v4，并可严格迁移 v2/v3 的 applied/conflicted receipt 与 proposal。
+- 平面 `block.insert`／`block.delete`、生命周期内 candidate ID 防复用、Editor Kit 显式结构命令以及同代 Markdown/aggregate 持久化已实现；键盘结构推断继续 fail closed。
+
+**Stage 1B-2：move 与需要时的身份关系**
+
+- 在 insert/delete 并发与恢复不变量通过后加入 `block.move`；移动必须携精确来源与目标 order anchor。
+- 只有 split/merge、外部导入或跨文档复用出现真实消费者时再增加 lineage／完整 BlockIdentityStore，不为尚未发生的身份推断提前建模。
 
 **Stage 1C：MEMORY projection**
 

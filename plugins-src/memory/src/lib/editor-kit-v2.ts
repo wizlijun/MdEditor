@@ -46,6 +46,11 @@ export interface DecorationItem {
 export interface EditorSurface {
   reconcile(update: SurfaceUpdate): Promise<void>
   observeLocalOperations(listener: (batch: LocalOperationBatch) => void): () => void
+  executeStructuralCommand?(command:
+    | { kind: 'block.insert-after'; blockId: string; content: string }
+    | { kind: 'block.delete'; blockId: string }
+  ): boolean
+  selectedBlockId?(): string | null
   setReadOnly(value: boolean): void
   destroy(): Promise<void>
 }
@@ -63,6 +68,7 @@ export interface MountedDocumentEditor {
 export interface EditorIdProvider {
   requestId(): string
   operationId(): string
+  blockId?(): string
 }
 
 export interface MountDocumentEditorOptions {
@@ -98,5 +104,10 @@ export function replaceOperation(
   expectedBlockRevision: string,
   markdown: string,
 ): ReplaceBlockOperation {
-  return { kind: 'block.replace', operationId: ids.operationId(), blockId, expectedBlockRevision, markdown }
+  return {
+    kind: 'block.replace',
+    operationId: ids.operationId(),
+    target: { blockId, expectedBlockRevision },
+    payload: { content: markdown },
+  }
 }

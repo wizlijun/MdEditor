@@ -31,13 +31,42 @@ function replace(snapshot: DocumentRevision, markdown: string): OperationBatch {
   const block = snapshot.blocks[1]
   return {
     requestId: 'request/update',
+    documentId: snapshot.documentId,
     baseRevisionId: snapshot.revisionId,
     operations: [{
       kind: 'block.replace',
       operationId: 'operation/update',
-      blockId: block.blockId,
-      expectedBlockRevision: block.blockRevision,
-      markdown,
+      target: { blockId: block.blockId, expectedBlockRevision: block.blockRevision },
+      payload: { content: markdown },
+    }],
+  }
+}
+
+function insert(snapshot: DocumentRevision): OperationBatch {
+  return {
+    requestId: 'request/insert',
+    documentId: snapshot.documentId,
+    baseRevisionId: snapshot.revisionId,
+    operations: [{
+      kind: 'block.insert',
+      operationId: 'operation/insert',
+      target: { leftBlockId: snapshot.blocks[0].blockId, rightBlockId: snapshot.blocks[1].blockId },
+      payload: { candidateBlockId: 'block-inserted', content: 'Inserted context.' },
+    }],
+  }
+}
+
+function remove(snapshot: DocumentRevision, blockId: string): OperationBatch {
+  const block = snapshot.blocks.find((item) => item.blockId === blockId)!
+  return {
+    requestId: 'request/delete',
+    documentId: snapshot.documentId,
+    baseRevisionId: snapshot.revisionId,
+    operations: [{
+      kind: 'block.delete',
+      operationId: 'operation/delete',
+      target: { blockId, expectedBlockRevision: block.blockRevision },
+      payload: {},
     }],
   }
 }
@@ -129,6 +158,31 @@ describe('managed-document', () => {
       .resolves.toEqual({ kind: 'located', documentId })
   })
 
+  it('keeps structural history, Markdown order, and the derived index in one generation', async () => {
+    const host = new FakeManagedHost()
+    const store = new ManagedDocumentStore(vaultPath, documentId, canonicalMemoryFrontmatter(documentId), host.request)
+    const session = await PersistentDocumentSession.open(await fixture(), uuidIds(), store)
+    await session.submit(insert(session.snapshot()), 'human')
+    expect(host.markdown).toContain('# MEMORY\n\nInserted context.\n\nProject background.')
+    expect((host.aggregate as any).derivedBlockIndex.active.map((entry: any) => entry.blockId))
+      .toEqual(['block-1', 'block-inserted', 'block-2'])
+
+    await session.submit(remove(session.snapshot(), 'block-inserted'), 'human')
+    expect(host.markdown).not.toContain('Inserted context.')
+    expect(session.revisionHistory().some((revision) => (
+      revision.blocks.some((block) => block.blockId === 'block-inserted')
+    ))).toBe(true)
+
+    const reopened = await PersistentDocumentSession.open(await fixture(), uuidIds(), new ManagedDocumentStore(
+      vaultPath,
+      documentId,
+      null,
+      host.request,
+    ))
+    expect(reopened.snapshot()).toEqual(session.snapshot())
+    expect(reopened.revisionHistory()).toEqual(session.revisionHistory())
+  })
+
   it('commits Markdown, session history, and a derived fingerprint index as one aggregate generation', async () => {
     const host = new FakeManagedHost()
     const initial = await fixture()
@@ -199,6 +253,27 @@ describe('managed-document', () => {
     ;(host.aggregate as any).derivedBlockIndex.active[0].fingerprint.length += 1
     await expect(new ManagedDocumentStore(vaultPath, documentId, null, host.request).load(documentId))
       .rejects.toThrow('fingerprint does not match')
+  })
+
+  it('rejects a stored applied receipt whose signed operation base is unknown', async () => {
+    const host = new FakeManagedHost()
+    const initial = await fixture()
+    const session = await PersistentDocumentSession.open(
+      initial,
+      uuidIds(),
+      new ManagedDocumentStore(vaultPath, documentId, canonicalMemoryFrontmatter(documentId), host.request),
+    )
+    await session.submit(replace(session.snapshot(), 'Updated background.'), 'human')
+
+    const damaged = structuredClone(host.aggregate) as any
+    const receipt = damaged.session.receipts[0]
+    const signed = JSON.parse(receipt.batchSignature)
+    receipt.submittedBaseRevisionId = 'missing'
+    receipt.batchSignature = JSON.stringify({ ...signed, baseRevisionId: 'missing' })
+    host.aggregate = damaged
+
+    await expect(new ManagedDocumentStore(vaultPath, documentId, null, host.request).load(documentId))
+      .rejects.toThrow('does not describe a valid operation base')
   })
 
   it('opens a deleted representation as the last committed state in read-only mode', async () => {

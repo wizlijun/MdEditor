@@ -7,6 +7,7 @@ import {
   uuidIds,
   type DocumentRevision,
   type OperationBatch,
+  type ReplaceBlockOperation,
 } from './session'
 
 function fixture(): DocumentRevision {
@@ -20,15 +21,184 @@ function fixture(): DocumentRevision {
   }
 }
 
-function replace(requestId: string, blockId: string, expectedBlockRevision: string, markdown: string): OperationBatch {
+function replace(
+  requestId: string,
+  blockId: string,
+  expectedBlockRevision: string,
+  markdown: string,
+): OperationBatch & { operations: readonly [ReplaceBlockOperation] } {
   return {
     requestId,
+    documentId: 'document-1',
     baseRevisionId: 'revision-1',
-    operations: [{ kind: 'block.replace', operationId: `${requestId}/op`, blockId, expectedBlockRevision, markdown }],
+    operations: [{
+      kind: 'block.replace',
+      operationId: `${requestId}/op`,
+      target: { blockId, expectedBlockRevision },
+      payload: { content: markdown },
+    }],
+  }
+}
+
+function insert(
+  snapshot: DocumentRevision,
+  requestId: string,
+  candidateBlockId: string,
+  leftBlockId: string | null,
+  rightBlockId: string | null,
+  content = 'Inserted block.',
+): OperationBatch {
+  return {
+    requestId,
+    documentId: snapshot.documentId,
+    baseRevisionId: snapshot.revisionId,
+    operations: [{
+      kind: 'block.insert',
+      operationId: `${requestId}/op`,
+      target: { leftBlockId, rightBlockId },
+      payload: { candidateBlockId, content },
+    }],
+  }
+}
+
+function remove(snapshot: DocumentRevision, requestId: string, blockId: string): OperationBatch {
+  const block = snapshot.blocks.find((item) => item.blockId === blockId)
+  if (!block) throw new Error(`missing fixture block ${blockId}`)
+  return {
+    requestId,
+    documentId: snapshot.documentId,
+    baseRevisionId: snapshot.revisionId,
+    operations: [{
+      kind: 'block.delete',
+      operationId: `${requestId}/op`,
+      target: { blockId, expectedBlockRevision: block.blockRevision },
+      payload: {},
+    }],
+  }
+}
+
+function legacyBatch(batch: OperationBatch) {
+  return {
+    requestId: batch.requestId,
+    baseRevisionId: batch.baseRevisionId,
+    operations: batch.operations.map((operation) => {
+      if (operation.kind !== 'block.replace') throw new Error('legacy fixture only supports replace')
+      return {
+        kind: operation.kind,
+        operationId: operation.operationId,
+        blockId: operation.target.blockId,
+        expectedBlockRevision: operation.target.expectedBlockRevision,
+        markdown: operation.payload.content,
+      }
+    }),
+  }
+}
+
+function legacyState(
+  state: ReturnType<InMemoryDocumentSession['exportState']>,
+  schema: 'notemd.cdr/document-session/v2' | 'notemd.cdr/document-session/v3',
+) {
+  return {
+    ...structuredClone(state),
+    schema,
+    receipts: state.receipts.map((receipt) => {
+      const signed = JSON.parse(receipt.batchSignature) as OperationBatch
+      const outcome = receipt.outcome.kind === 'applied'
+        ? {
+            kind: 'applied',
+            change: {
+              ...receipt.outcome.change,
+              operations: legacyBatch({ ...signed, operations: receipt.outcome.change.operations }).operations,
+            },
+          }
+        : structuredClone(receipt.outcome)
+      const migrated = {
+        ...receipt,
+        batchSignature: JSON.stringify(legacyBatch(signed)),
+        outcome,
+      }
+      if (schema === 'notemd.cdr/document-session/v3') return migrated
+      const { actorId: _actorId, ...withoutActor } = migrated
+      return withoutActor
+    }),
+    proposals: state.proposals.map((proposal) => ({
+      ...structuredClone(proposal),
+      batch: legacyBatch(proposal.batch),
+    })),
   }
 }
 
 describe('InMemoryDocumentSession', () => {
+  it('persists insert/delete atomically and never reuses a retired block identity', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('structure'))
+    const inserted = await session.submit(
+      insert(session.snapshot(), 'insert-c', 'block-c', 'block-a', 'block-b'),
+      'human',
+    )
+    expect(inserted.kind).toBe('applied')
+    expect(session.snapshot().blocks.map((block) => block.blockId)).toEqual(['block-a', 'block-c', 'block-b'])
+
+    const deleted = await session.submit(remove(session.snapshot(), 'delete-c', 'block-c'), 'human')
+    expect(deleted.kind).toBe('applied')
+    if (deleted.kind === 'applied') expect(deleted.change.blockRevisions).toEqual({})
+    expect(session.snapshot().blocks.map((block) => block.blockId)).toEqual(['block-a', 'block-b'])
+    expect(session.revisionHistory()).toHaveLength(2)
+
+    const reopened = InMemoryDocumentSession.fromState(session.exportState(), sequentialIds('reopened'))
+    const reused = await reopened.submit(
+      insert(reopened.snapshot(), 'reuse-c', 'block-c', 'block-a', 'block-b'),
+      'human',
+    )
+    expect(reused).toMatchObject({
+      kind: 'conflicted',
+      conflict: { code: 'invalid-operation', blockId: 'block-c' },
+    })
+
+    await reopened.submit(replace('after-delete', 'block-a', 'block-a/1', '# After delete'), 'human')
+    const exported = reopened.exportState()
+    const damaged = { ...exported, head: { ...exported.head, blocks: [
+      exported.head.blocks[0],
+      { blockId: 'block-c', blockRevision: 'block-c/reused', markdown: 'Reused.' },
+      exported.head.blocks[1],
+    ] } }
+    expect(() => InMemoryDocumentSession.fromState(damaged, sequentialIds('damaged')))
+      .toThrow('reuses a retired block ID')
+  })
+
+  it('accepts a structural proposal through the same atomic decision transition', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('proposal-structure'))
+    const proposal = await session.propose(
+      insert(session.snapshot(), 'proposal-insert', 'block-c', 'block-a', 'block-b'),
+      'agent',
+    )
+    expect(session.snapshot().blocks.map((block) => block.blockId)).toEqual(['block-a', 'block-b'])
+    const result = await session.decideProposal(proposal.changeSetId, 'accept', 'human')
+    expect(result?.kind).toBe('applied')
+    expect(session.snapshot().blocks.map((block) => block.blockId)).toEqual(['block-a', 'block-c', 'block-b'])
+    expect(session.proposals()[0].status).toBe('applied')
+  })
+
+  it('classifies concurrent deletion as stale while allowing a different-block rebase', async () => {
+    const concurrent = new InMemoryDocumentSession(fixture(), sequentialIds('concurrent-delete'))
+    const base = concurrent.snapshot()
+    const firstDelete = remove(base, 'delete-a-first', 'block-a')
+    const secondDelete = {
+      ...remove(base, 'delete-a-second', 'block-a'),
+      operations: [{ ...firstDelete.operations[0], operationId: 'delete-a-second/op' }],
+    }
+    expect((await concurrent.submit(firstDelete, 'human:first')).kind).toBe('applied')
+    expect(await concurrent.submit(secondDelete, 'human:second')).toMatchObject({
+      kind: 'conflicted',
+      conflict: { code: 'stale-base', blockId: 'block-a' },
+    })
+
+    const rebased = new InMemoryDocumentSession(fixture(), sequentialIds('rebased-delete'))
+    const deleteA = remove(rebased.snapshot(), 'delete-a-after-b-change', 'block-a')
+    expect((await rebased.submit(replace('change-b', 'block-b', 'block-b/1', 'Changed B.'), 'human')).kind)
+      .toBe('applied')
+    expect((await rebased.submit(deleteA, 'human')).kind).toBe('applied')
+  })
+
   it('safely rebases a different-block edit while rejecting a stale same-block edit', async () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('test'))
     const first = await session.submit(replace('r1', 'block-a', 'block-a/1', '# New background'), 'human')
@@ -42,6 +212,17 @@ describe('InMemoryDocumentSession', () => {
     const stale = await session.submit(replace('r3', 'block-a', 'block-a/1', '# Stale overwrite'), 'agent-a')
     expect(stale.kind).toBe('conflicted')
     expect(session.snapshot().blocks.find((block) => block.blockId === 'block-a')?.markdown).toBe('# New background')
+  })
+
+  it('requires every live request and proposal to name a valid operation base', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('declared-base'))
+    const unknownBase = { ...replace('unknown-base', 'block-a', 'block-a/1', '# Invalid base'), baseRevisionId: 'missing' }
+    expect(await session.submit(unknownBase, 'human')).toMatchObject({
+      kind: 'conflicted', conflict: { code: 'stale-base' },
+    })
+    await expect(session.propose({ ...unknownBase, requestId: 'unknown-proposal' }, 'agent'))
+      .rejects.toThrow('CDR_PROPOSAL_CONFLICT: stale-base')
+    expect(session.snapshot()).toEqual(fixture())
   })
 
   it('serializes concurrent submissions on the directly exported session', async () => {
@@ -65,7 +246,10 @@ describe('InMemoryDocumentSession', () => {
     expect(first.kind).toBe('applied')
     expect(second).toMatchObject({ kind: 'applied', duplicate: true })
     expect(session.audit().filter((event) => event.action === 'applied')).toHaveLength(1)
-    await expect(session.submit({ ...batch, operations: [{ ...batch.operations[0], markdown: '# Twice' }] }, 'human'))
+    await expect(session.submit({
+      ...batch,
+      operations: [{ ...batch.operations[0], payload: { content: '# Twice' } }],
+    }, 'human'))
       .rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
     await expect(session.submit(batch, 'another-human')).rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
   })
@@ -132,7 +316,11 @@ describe('InMemoryDocumentSession', () => {
       ...one,
       operations: [
         one.operations[0],
-        { ...one.operations[0], operationId: 'proposal/op-2', blockId: 'block-b', expectedBlockRevision: 'block-b/1' },
+        {
+          ...one.operations[0],
+          operationId: 'proposal/op-2',
+          target: { blockId: 'block-b', expectedBlockRevision: 'block-b/1' },
+        },
       ],
     }, 'agent')).rejects.toThrow('CDR_PROPOSAL_OPERATION_COUNT')
 
@@ -180,11 +368,7 @@ describe('InMemoryDocumentSession', () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('legacy'))
     await session.submit(replace('legacy-request', 'block-a', 'block-a/1', '# Legacy'), 'human:legacy')
     const current = session.exportState()
-    const legacy = {
-      ...current,
-      schema: 'notemd.cdr/document-session/v2',
-      receipts: current.receipts.map(({ actorId: _actorId, ...receipt }) => receipt),
-    }
+    const legacy = legacyState(current, 'notemd.cdr/document-session/v2')
 
     const restored = InMemoryDocumentSession.fromState(legacy, sequentialIds('restored'))
     expect(restored.exportState().schema).toBe(DOCUMENT_SESSION_STATE_SCHEMA)
@@ -193,23 +377,55 @@ describe('InMemoryDocumentSession', () => {
       .rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
   })
 
+  it('migrates v3 applied, conflicted, and proposal batches to v4 canonical signatures', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('legacy-v3'))
+    const applied = replace('legacy-v3-applied', 'block-a', 'block-a/1', '# Legacy v3')
+    const conflicted = replace('legacy-v3-conflict', 'block-b', 'missing', 'Never applied.')
+    const proposal = replace('legacy-v3-proposal', 'block-b', 'block-b/1', 'Proposed in v3.')
+    await session.submit(applied, 'human:legacy')
+    await session.submit(conflicted, 'agent:legacy')
+    await session.propose(proposal, 'agent:legacy')
+
+    const restored = InMemoryDocumentSession.fromState(
+      legacyState(session.exportState(), 'notemd.cdr/document-session/v3'),
+      sequentialIds('restored'),
+    )
+    const migrated = restored.exportState()
+    expect(migrated.schema).toBe(DOCUMENT_SESSION_STATE_SCHEMA)
+    expect(JSON.parse(migrated.receipts[0].batchSignature)).toMatchObject({
+      documentId: 'document-1',
+      operations: [{ target: { blockId: 'block-a' }, payload: { content: '# Legacy v3' } }],
+    })
+    await expect(restored.submit(applied, 'human:legacy'))
+      .resolves.toMatchObject({ kind: 'applied', duplicate: true })
+    await expect(restored.submit(conflicted, 'agent:legacy'))
+      .resolves.toMatchObject({ kind: 'conflicted' })
+    const accepted = await restored.decideProposal(restored.proposals()[0].changeSetId, 'accept', 'human')
+    expect(accepted?.kind).toBe('applied')
+  })
+
+  it('fails closed when a legacy receipt signature is not canonical JSON', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('legacy-invalid'))
+    await session.submit(replace('legacy-invalid', 'block-a', 'block-a/1', '# Legacy'), 'human')
+    const legacy = legacyState(session.exportState(), 'notemd.cdr/document-session/v3')
+    legacy.receipts[0].batchSignature = ` ${legacy.receipts[0].batchSignature}`
+    expect(() => InMemoryDocumentSession.fromState(legacy, sequentialIds('restored')))
+      .toThrow('must be canonical')
+  })
+
   it('does not let a new actor claim an unresolvable v2 receipt', async () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('legacy-conflict'))
     const stale = replace('legacy-conflict-request', 'block-a', 'missing-revision', '# Never applied')
     expect((await session.submit(stale, 'agent:legacy')).kind).toBe('conflicted')
     const current = session.exportState()
-    const legacy = {
-      ...current,
-      schema: 'notemd.cdr/document-session/v2',
-      receipts: current.receipts.map(({ actorId: _actorId, ...receipt }) => receipt),
-    }
+    const legacy = legacyState(current, 'notemd.cdr/document-session/v2')
 
     const restored = InMemoryDocumentSession.fromState(legacy, sequentialIds('restored'))
     expect(restored.exportState().receipts[0].actorId).toBe('legacy:unknown')
     await expect(restored.submit(stale, 'agent:new')).rejects.toThrow('CDR_IDEMPOTENCY_KEY_REUSED')
   })
 
-  it('requires a v3 applied receipt actor to match exactly one audit event', async () => {
+  it('requires a current applied receipt actor to match exactly one audit event', async () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('audit-binding'))
     await session.submit(replace('audit-request', 'block-a', 'block-a/1', '# Applied'), 'human:author')
     const state = session.exportState()
@@ -226,9 +442,7 @@ describe('InMemoryDocumentSession', () => {
     const current = session.exportState()
     const applied = current.audit.find((event) => event.action === 'applied')!
     const legacy = {
-      ...current,
-      schema: 'notemd.cdr/document-session/v2',
-      receipts: current.receipts.map(({ actorId: _actorId, ...receipt }) => receipt),
+      ...legacyState(current, 'notemd.cdr/document-session/v2'),
       audit: [...current.audit, { ...applied, eventId: 'legacy/duplicate-audit', actorId: 'human:other' }],
     }
 
@@ -254,6 +468,46 @@ describe('InMemoryDocumentSession', () => {
       ...state,
       head: { ...state.head, blocks: [] },
     }, sequentialIds('restore'))).toThrow('CDR_STATE_INVALID')
+  })
+
+  it('requires applied receipts to prove one linear revision chain', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('linear-history'))
+    await session.submit(replace('linear-a', 'block-a', 'block-a/1', '# Linear A'), 'human')
+    await session.submit(replace('linear-b', 'block-b', 'block-b/1', 'Linear B.'), 'human')
+    const state = session.exportState()
+
+    expect(() => InMemoryDocumentSession.fromState({
+      ...state,
+      revisionHistory: [...state.revisionHistory].reverse(),
+    }, sequentialIds('reordered'))).toThrow('must describe every adjacent document revision exactly once')
+    expect(() => InMemoryDocumentSession.fromState({
+      ...state,
+      receipts: state.receipts.slice(1),
+    }, sequentialIds('missing-receipt'))).toThrow('must describe every adjacent document revision exactly once')
+    expect(() => InMemoryDocumentSession.fromState({
+      ...state,
+      receipts: [state.receipts[0], {
+        ...state.receipts[1],
+        outcome: state.receipts[1].outcome.kind === 'applied'
+          ? {
+              kind: 'applied' as const,
+              change: { ...state.receipts[1].outcome.change, changeId: state.receipts[0].outcome.kind === 'applied'
+                ? state.receipts[0].outcome.change.changeId
+                : 'unreachable' },
+            }
+          : state.receipts[1].outcome,
+      }],
+    }, sequentialIds('duplicate-change'))).toThrow('contains duplicate')
+
+    const signed = JSON.parse(state.receipts[0].batchSignature)
+    expect(() => InMemoryDocumentSession.fromState({
+      ...state,
+      receipts: [{
+        ...state.receipts[0],
+        submittedBaseRevisionId: 'missing',
+        batchSignature: JSON.stringify({ ...signed, baseRevisionId: 'missing' }),
+      }, state.receipts[1]],
+    }, sequentialIds('unknown-base'))).toThrow('does not describe a valid operation base')
   })
 
   it('provides UUID-backed production ids while retaining deterministic test ids', () => {
