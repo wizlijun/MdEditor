@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **Infinite Canvas controls now perform the actions they show.** Groups can be created around a selection, moved with all fully contained cards—including nested or overlapping selected groups—resized, renamed, styled and ungrouped without deleting their contents. Edge reconnect handles, labels, arrow ends and colors now write back to `.canvas`; undo/redo reacts immediately, keyboard movement persists, and desktop/iOS clipboard fallback and touch targets are reliable.
+
 ## v6.904.5 — 2026-09-04
 
 ### Added
