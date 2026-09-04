@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { CanvasRect, ResizeCorner } from '../../lib/canvas'
+  import type { CanvasPoint, CanvasRect, ResizeCorner } from '../../lib/canvas'
 
   interface CanvasViewport {
     x: number
@@ -14,6 +14,7 @@
     onMove,
     onEnd,
     onCancel,
+    onKeyboardResize,
   }: {
     bounds: CanvasRect
     viewport: CanvasViewport
@@ -21,6 +22,7 @@
     onMove: (event: PointerEvent) => void
     onEnd: (event: PointerEvent) => void
     onCancel: (event: PointerEvent) => void
+    onKeyboardResize: (corner: ResizeCorner, delta: CanvasPoint) => void
   } = $props()
 
   const corners: ReadonlyArray<{ corner: ResizeCorner; cursor: string }> = [
@@ -52,6 +54,21 @@
     else onEnd(event)
   }
 
+  function keydown(corner: ResizeCorner, event: KeyboardEvent): void {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const step = (event.shiftKey ? 10 : 1) / Math.max(viewport.zoom, 0.05)
+    onKeyboardResize(corner, {
+      x: event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0,
+      y: event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0,
+    })
+  }
+
+  function cornerLabel(corner: ResizeCorner): string {
+    return corner === 'tl' ? '左上角' : corner === 'tr' ? '右上角' : corner === 'bl' ? '左下角' : '右下角'
+  }
+
   let screenRect = $derived({
     x: bounds.x * viewport.zoom + viewport.x,
     y: bounds.y * viewport.zoom + viewport.y,
@@ -66,19 +83,20 @@
   style:top={`${screenRect.y}px`}
   style:width={`${Math.max(0, screenRect.width)}px`}
   style:height={`${Math.max(0, screenRect.height)}px`}
-  aria-hidden="true"
+  role="group"
+  aria-label="缩放选区"
 >
   {#each corners as { corner, cursor }}
     <button
       type="button"
       class={`resize-handle ${corner}`}
       style:cursor
-      tabindex="-1"
-      aria-label={`缩放选区 ${corner}`}
+      aria-label={`缩放选区${cornerLabel(corner)}`}
       onpointerdown={(event) => start(corner, event)}
       onpointermove={move}
       onpointerup={(event) => finish(event, false)}
       onpointercancel={(event) => finish(event, true)}
+      onkeydown={(event) => keydown(corner, event)}
     ></button>
   {/each}
 </div>
@@ -102,6 +120,10 @@
     background: var(--accent, #4d88ff);
     pointer-events: auto;
     touch-action: none;
+  }
+  .resize-handle:focus-visible {
+    outline: 2px solid var(--accent, #4d88ff);
+    outline-offset: 3px;
   }
   .resize-handle.tl { top: -5px; left: -5px; }
   .resize-handle.tr { top: -5px; right: -5px; }

@@ -28,6 +28,11 @@ export type CanvasAlignDirection =
 export type CanvasDistributeAxis = 'horizontal' | 'vertical'
 export type ResizeCorner = 'tl' | 'tr' | 'bl' | 'br'
 
+export const CANVAS_NODE_MIN_WIDTH = 160
+export const CANVAS_NODE_MIN_HEIGHT = 100
+export const CANVAS_GROUP_MIN_WIDTH = 180
+export const CANVAS_GROUP_MIN_HEIGHT = 120
+
 interface CandidateLine {
   axis: 'x' | 'y'
   value: number
@@ -108,6 +113,23 @@ export interface CanvasObstacleRect extends CanvasRect {
   id?: string
 }
 
+interface CanvasSpatialGrid<T extends CanvasRect> {
+  cellSize: number
+  buckets: Map<string, T[]>
+  overflow: T[]
+  all: T[]
+}
+
+export interface CanvasObstacleIndex {
+  kind: 'canvas-obstacle-index'
+  grid: CanvasSpatialGrid<CanvasObstacleRect>
+}
+
+export interface CanvasNodeSpatialIndex {
+  kind: 'canvas-node-spatial-index'
+  grid: CanvasSpatialGrid<KnownCanvasNode>
+}
+
 export interface CanvasGroupFitInsets {
   top: number
   right: number
@@ -120,6 +142,69 @@ const OPPOSITE_SIDE: Record<CanvasSide, CanvasSide> = {
   right: 'left',
   bottom: 'top',
   left: 'right',
+}
+
+const SPATIAL_CELL_SIZE = 512
+const MAX_INDEX_CELLS_PER_RECT = 256
+const MAX_QUERY_CELLS = 4096
+
+function spatialCellRange(rect: CanvasRect, cellSize: number): [number, number, number, number] {
+  return [
+    Math.floor(rect.x / cellSize),
+    Math.floor(rect.y / cellSize),
+    Math.floor((rect.x + rect.width) / cellSize),
+    Math.floor((rect.y + rect.height) / cellSize),
+  ]
+}
+
+function buildSpatialGrid<T extends CanvasRect>(entries: Iterable<T>, cellSize = SPATIAL_CELL_SIZE): CanvasSpatialGrid<T> {
+  const buckets = new Map<string, T[]>()
+  const overflow: T[] = []
+  const all = Array.from(entries)
+  for (const entry of all) {
+    const [minX, minY, maxX, maxY] = spatialCellRange(entry, cellSize)
+    const cellCount = (maxX - minX + 1) * (maxY - minY + 1)
+    if (cellCount > MAX_INDEX_CELLS_PER_RECT) {
+      overflow.push(entry)
+      continue
+    }
+    for (let x = minX; x <= maxX; x++) {
+      for (let y = minY; y <= maxY; y++) {
+        const key = `${x}:${y}`
+        const bucket = buckets.get(key)
+        if (bucket) bucket.push(entry)
+        else buckets.set(key, [entry])
+      }
+    }
+  }
+  return { cellSize, buckets, overflow, all }
+}
+
+function querySpatialGrid<T extends CanvasRect>(grid: CanvasSpatialGrid<T>, bounds: CanvasRect): T[] {
+  const [minX, minY, maxX, maxY] = spatialCellRange(bounds, grid.cellSize)
+  const cellCount = (maxX - minX + 1) * (maxY - minY + 1)
+  if (cellCount > MAX_QUERY_CELLS) return grid.all
+  const found = new Set<T>(grid.overflow)
+  for (let x = minX; x <= maxX; x++) {
+    for (let y = minY; y <= maxY; y++) {
+      for (const entry of grid.buckets.get(`${x}:${y}`) ?? []) found.add(entry)
+    }
+  }
+  return Array.from(found)
+}
+
+export function buildCanvasObstacleIndex(
+  obstacles: Iterable<CanvasObstacleRect>,
+  cellSize = SPATIAL_CELL_SIZE,
+): CanvasObstacleIndex {
+  return { kind: 'canvas-obstacle-index', grid: buildSpatialGrid(obstacles, cellSize) }
+}
+
+export function buildCanvasNodeSpatialIndex(
+  document: CanvasDocument,
+  cellSize = SPATIAL_CELL_SIZE,
+): CanvasNodeSpatialIndex {
+  return { kind: 'canvas-node-spatial-index', grid: buildSpatialGrid(editableKnownNodes(document), cellSize) }
 }
 
 /**
@@ -248,7 +333,7 @@ export function resolveCanvasEdgeSides(
   target: CanvasObstacleRect,
   fromSide?: CanvasSide,
   toSide?: CanvasSide,
-  obstacles: readonly CanvasObstacleRect[] = [],
+  obstacles: readonly CanvasObstacleRect[] | CanvasObstacleIndex = [],
 ): CanvasEdgeSides {
   if (fromSide && toSide) return { fromSide, toSide }
 
@@ -286,7 +371,10 @@ export function resolveCanvasEdgeSides(
     width: Math.max(source.x + source.width, target.x + target.width) - Math.min(source.x, target.x) + slack * 2,
     height: Math.max(source.y + source.height, target.y + target.height) - Math.min(source.y, target.y) + slack * 2,
   }
-  const localObstacles = obstacles.filter((obstacle) =>
+  const obstacleCandidates = 'kind' in obstacles
+    ? querySpatialGrid(obstacles.grid, searchBounds)
+    : obstacles
+  const localObstacles = obstacleCandidates.filter((obstacle) =>
     obstacle.id !== source.id
       && obstacle.id !== target.id
       && obstacle.x <= searchBounds.x + searchBounds.width
@@ -381,8 +469,8 @@ export function fitCanvasGroupToContents(
     id: group.id,
     x: bounds.x - padding.left,
     y: bounds.y - padding.top,
-    width: Math.max(180, bounds.width + padding.left + padding.right),
-    height: Math.max(120, bounds.height + padding.top + padding.bottom),
+    width: Math.max(CANVAS_GROUP_MIN_WIDTH, bounds.width + padding.left + padding.right),
+    height: Math.max(CANVAS_GROUP_MIN_HEIGHT, bounds.height + padding.top + padding.bottom),
   }])
 }
 
@@ -639,15 +727,35 @@ function equalSpacingHit(
     else if (minAlong(axis, rect) >= sourceMax) after.push(rect)
   }
   let best: { delta: number; mode: 'middle' | 'trailing'; neighbours: [CanvasRect, CanvasRect] } | null = null
+  const afterByMin = [...after].sort((left, right) => minAlong(axis, left) - minAlong(axis, right))
+  const nearestTrailing = (target: number): CanvasRect | null => {
+    let low = 0
+    let high = afterByMin.length
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      if (minAlong(axis, afterByMin[middle]) < target) low = middle + 1
+      else high = middle
+    }
+    const next = afterByMin[low]
+    const previous = afterByMin[low - 1]
+    if (!next) return previous ?? null
+    if (!previous) return next
+    return Math.abs(minAlong(axis, next) - target) < Math.abs(minAlong(axis, previous) - target)
+      ? next
+      : previous
+  }
   for (const leading of before) {
-    for (const trailing of after) {
-      const free = minAlong(axis, trailing) - maxAlong(axis, leading) - sourceSize
-      if (free < 0) continue
-      const target = maxAlong(axis, leading) + free / 2
-      const delta = target - sourceMin
-      if (Math.abs(delta) <= tolerance && (!best || Math.abs(delta) < Math.abs(best.delta))) {
-        best = { delta, mode: 'middle', neighbours: [leading, trailing] }
-      }
+    // Equal gaps require leading.max + trailing.min = 2*source.min + source.size.
+    // Binary-searching that target avoids the previous before × after product.
+    const desiredTrailingMin = 2 * sourceMin + sourceSize - maxAlong(axis, leading)
+    const trailing = nearestTrailing(desiredTrailingMin)
+    if (!trailing) continue
+    const free = minAlong(axis, trailing) - maxAlong(axis, leading) - sourceSize
+    if (free < 0) continue
+    const target = maxAlong(axis, leading) + free / 2
+    const delta = target - sourceMin
+    if (Math.abs(delta) <= tolerance && (!best || Math.abs(delta) < Math.abs(best.delta))) {
+      best = { delta, mode: 'middle', neighbours: [leading, trailing] }
     }
   }
   if (best) return best
@@ -812,7 +920,7 @@ export function computeCanvasResizeSnap(
   }
 }
 
-function pointInPolygon(point: CanvasPoint, polygon: CanvasPoint[]): boolean {
+function pointInPolygon(point: CanvasPoint, polygon: readonly CanvasPoint[]): boolean {
   let inside = false
   for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
     const currentPoint = polygon[index]
@@ -860,38 +968,80 @@ function rectCorners(rect: CanvasRect): [CanvasPoint, CanvasPoint, CanvasPoint, 
   ]
 }
 
-function polygonEdges(points: CanvasPoint[]): Array<[CanvasPoint, CanvasPoint]> {
+function polygonEdges(points: readonly CanvasPoint[]): Array<[CanvasPoint, CanvasPoint]> {
   return points.map((point, index) => [point, points[(index + 1) % points.length]])
 }
 
-function polygonCrossesRect(polygon: CanvasPoint[], rect: CanvasRect): boolean {
-  const corners = rectCorners(rect)
-  const rectEdges = polygonEdges(corners)
-  return polygonEdges(polygon).some(([start, end]) =>
+interface PreparedPolygon {
+  points: readonly CanvasPoint[]
+  edges: Array<[CanvasPoint, CanvasPoint]>
+  bounds: CanvasRect
+}
+
+function preparePolygon(points: readonly CanvasPoint[]): PreparedPolygon | null {
+  if (points.length < 3) return null
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const point of points) {
+    minX = Math.min(minX, point.x)
+    minY = Math.min(minY, point.y)
+    maxX = Math.max(maxX, point.x)
+    maxY = Math.max(maxY, point.y)
+  }
+  return {
+    points,
+    edges: polygonEdges(points),
+    bounds: { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+  }
+}
+
+function rectsIntersect(left: CanvasRect, right: CanvasRect): boolean {
+  return left.x <= right.x + right.width
+    && left.x + left.width >= right.x
+    && left.y <= right.y + right.height
+    && left.y + left.height >= right.y
+}
+
+function polygonCrossesRect(polygon: PreparedPolygon, rect: CanvasRect): boolean {
+  const rectEdges = polygonEdges(rectCorners(rect))
+  return polygon.edges.some(([start, end]) =>
     rectEdges.some(([rectStart, rectEnd]) => segmentsIntersect(start, end, rectStart, rectEnd)),
   )
 }
 
-export function polygonIntersectsRect(polygon: CanvasPoint[], rect: CanvasRect): boolean {
-  if (polygon.length < 3) return false
+function preparedPolygonIntersectsRect(polygon: PreparedPolygon, rect: CanvasRect): boolean {
+  if (!rectsIntersect(polygon.bounds, rect)) return false
   const corners = rectCorners(rect)
-  if (corners.some((corner) => pointInPolygon(corner, polygon))) return true
-  if (polygon.some((point) =>
+  if (corners.some((corner) => pointInPolygon(corner, polygon.points))) return true
+  if (polygon.points.some((point) =>
     point.x >= rect.x && point.x <= rect.x + rect.width
     && point.y >= rect.y && point.y <= rect.y + rect.height,
   )) return true
   return polygonCrossesRect(polygon, rect)
 }
 
+export function polygonIntersectsRect(polygon: CanvasPoint[], rect: CanvasRect): boolean {
+  const prepared = preparePolygon(polygon)
+  return prepared ? preparedPolygonIntersectsRect(prepared, rect) : false
+}
+
 export function canvasNodesIntersectPolygon(
-  nodes: Iterable<CanvasNodeEntry>,
+  nodes: Iterable<CanvasNodeEntry> | CanvasNodeSpatialIndex,
   polygon: CanvasPoint[],
 ): KnownCanvasNode[] {
-  return Array.from(nodes).filter(isKnownCanvasNode).filter((node) => {
+  const prepared = preparePolygon(polygon)
+  if (!prepared) return []
+  const candidates = 'kind' in nodes
+    ? querySpatialGrid(nodes.grid, prepared.bounds)
+    : Array.from(nodes).filter(isKnownCanvasNode)
+  return candidates.filter((node) => {
     const rect = rectForNode(node)
-    if (node.type !== 'group') return polygonIntersectsRect(polygon, rect)
-    return rectCorners(rect).some((corner) => pointInPolygon(corner, polygon))
-      || polygonCrossesRect(polygon, rect)
+    if (!rectsIntersect(prepared.bounds, rect)) return false
+    if (node.type !== 'group') return preparedPolygonIntersectsRect(prepared, rect)
+    return rectCorners(rect).some((corner) => pointInPolygon(corner, prepared.points))
+      || polygonCrossesRect(prepared, rect)
   })
 }
 
@@ -939,8 +1089,8 @@ function minimumScale(snapshot: CanvasResizeSnapshot): CanvasPoint {
   let x = 0.05
   let y = 0.05
   for (const node of snapshot.nodes) {
-    const minimumWidth = node.type === 'group' ? 180 : 160
-    const minimumHeight = node.type === 'group' ? 120 : 100
+    const minimumWidth = node.type === 'group' ? CANVAS_GROUP_MIN_WIDTH : CANVAS_NODE_MIN_WIDTH
+    const minimumHeight = node.type === 'group' ? CANVAS_GROUP_MIN_HEIGHT : CANVAS_NODE_MIN_HEIGHT
     x = Math.max(x, Math.min(1, minimumWidth / node.width))
     y = Math.max(y, Math.min(1, minimumHeight / node.height))
   }

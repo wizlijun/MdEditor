@@ -4,6 +4,7 @@ import { flushSync, mount, tick, unmount } from 'svelte'
 import CanvasView from './CanvasView.svelte'
 import type { Tab } from '../../lib/tabs.svelte'
 import { clearCanvasUiSessions } from '../../lib/canvas/session'
+import { formFactor } from '../../lib/platform.svelte'
 import type { CanvasViewportState } from './canvas-view-state'
 
 const h = vi.hoisted(() => ({
@@ -122,6 +123,7 @@ describe('CanvasView', () => {
     h.sotRoot = '/vault'
     h.folderRoot = null
     h.storeGet.mockResolvedValue(null)
+    formFactor.value = 'desktop'
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
   })
 
@@ -249,6 +251,35 @@ describe('CanvasView', () => {
     expect(document.querySelector('.draw-rectangle')).toBeFalsy()
     expect((document.querySelector('button[aria-label^="撤销"]') as HTMLButtonElement).title)
       .toContain('拖拽创建分组')
+  })
+
+  it('draws a minimum-sized group with one-finger touch input', async () => {
+    h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__pane')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    const pane = document.querySelector('.svelte-flow__pane') as HTMLElement
+    ;(Array.from(document.querySelectorAll('.canvas-toolbar > button'))
+      .find((button) => button.textContent?.trim() === '框组') as HTMLButtonElement).click()
+    await tick()
+
+    pane.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerId: 18, pointerType: 'touch', button: 0, isPrimary: true, clientX: 100, clientY: 90,
+    }))
+    surface.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerId: 18, pointerType: 'touch', isPrimary: true, clientX: 130, clientY: 120,
+    }))
+    surface.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, pointerId: 18, pointerType: 'touch', button: 0, isPrimary: true, clientX: 130, clientY: 120,
+    }))
+    await tick()
+
+    expect(JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes[0]).toMatchObject({
+      type: 'group', x: 100, y: 90, width: 180, height: 120,
+    })
   })
 
   it('persists keyboard movement and applies group closure semantics', async () => {
@@ -511,6 +542,25 @@ describe('CanvasView', () => {
     expect(h.setContent).not.toHaveBeenCalled()
   })
 
+  it('updates the untouched default tool for form-factor changes without overriding a user choice', async () => {
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('button[aria-label="自由套索工具"]')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    expect(surface.classList.contains('tool-pan')).toBe(false)
+
+    formFactor.value = 'phone'
+    await tick()
+    expect(surface.classList.contains('tool-pan')).toBe(true)
+
+    ;(document.querySelector('button[aria-label="自由套索工具"]') as HTMLButtonElement).click()
+    formFactor.value = 'desktop'
+    await tick()
+    expect(surface.classList.contains('tool-lasso')).toBe(true)
+  })
+
   it('supports application zoom shortcuts and compact semantic zoom', async () => {
     h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
     component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
@@ -567,6 +617,13 @@ describe('CanvasView', () => {
     await tick()
     nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
     expect(nodes.find((node) => node.id === 'b')?.x).toBe(290)
+
+    const rightBefore = Math.max(...nodes.map((node) => Number(node.x) + Number(node.width)))
+    ;(document.querySelector('button[aria-label="缩放选区右下角"]') as HTMLButtonElement)
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }))
+    await tick()
+    nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(Math.max(...nodes.map((node) => Number(node.x) + Number(node.width)))).toBeGreaterThan(rightBefore)
   })
 
   it('draws a freeform lasso and selects only intersecting nodes', async () => {
@@ -600,6 +657,66 @@ describe('CanvasView', () => {
     expect(document.querySelector('[data-id="link-1"]')?.classList.contains('selected')).toBe(false)
     expect(document.querySelector('.lasso-polygon')).toBeFalsy()
     expect(h.setContent).not.toHaveBeenCalled()
+  })
+
+  it('selects with a one-finger touch lasso', async () => {
+    h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__pane')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    const pane = document.querySelector('.svelte-flow__pane') as HTMLElement
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true }))
+    await tick()
+
+    pane.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerId: 27, pointerType: 'touch', button: 0, isPrimary: true, clientX: 5, clientY: 5,
+    }))
+    for (const [clientX, clientY] of [[280, 5], [280, 180], [5, 180]] as const) {
+      surface.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 27, pointerType: 'touch', isPrimary: true, clientX, clientY,
+      }))
+    }
+    surface.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, pointerId: 27, pointerType: 'touch', button: 0, isPrimary: true, clientX: 5, clientY: 5,
+    }))
+    await tick()
+
+    expect(document.querySelector('[data-id="text-1"]')?.classList.contains('selected')).toBe(true)
+    expect(document.querySelector('[data-id="link-1"]')?.classList.contains('selected')).toBe(false)
+    expect(h.setContent).not.toHaveBeenCalled()
+  })
+
+  it('cancels a pending touch lasso and yields navigation to a second finger', async () => {
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__pane')).toBeTruthy())
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    const pane = document.querySelector('.svelte-flow__pane') as HTMLElement
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true }))
+    await tick()
+
+    pane.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerId: 37, pointerType: 'touch', button: 0, isPrimary: true, clientX: 20, clientY: 20,
+    }))
+    pane.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerId: 38, pointerType: 'touch', button: 0, isPrimary: false, clientX: 80, clientY: 80,
+    }))
+    await tick()
+    expect(document.querySelector('.lasso-polygon')).toBeFalsy()
+    expect(pane.classList.contains('draggable')).toBe(true)
+
+    for (const pointerId of [37, 38]) {
+      surface.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true, pointerId, pointerType: 'touch', button: 0, isPrimary: pointerId === 37,
+      }))
+    }
+    await tick()
+    expect(pane.classList.contains('draggable')).toBe(false)
   })
 
   it('places shortcut-created nodes and pasted text at the last pointer position', async () => {

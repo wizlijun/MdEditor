@@ -31,6 +31,8 @@
     acquireCanvasUiSession,
     applyFlowEdgeConnection,
     alignCanvasSelection,
+    buildCanvasNodeSpatialIndex,
+    buildCanvasObstacleIndex,
     buildCanvasSnapIndex,
     canvasNodesIntersectPolygon,
     cloneCanvasDocument,
@@ -70,6 +72,10 @@
     spreadCanvasSelection,
     updateCanvasNode,
     updateCanvasEdge,
+    CANVAS_GROUP_MIN_HEIGHT,
+    CANVAS_GROUP_MIN_WIDTH,
+    CANVAS_NODE_MIN_HEIGHT,
+    CANVAS_NODE_MIN_WIDTH,
     type CanvasClipboardPayload,
     type CanvasAlignDirection,
     type CanvasDistributeAxis,
@@ -80,6 +86,8 @@
     type FrozenCanvasMove,
     type GroupBackgroundStyle,
     type KnownCanvasNode,
+    type CanvasNodeSpatialIndex,
+    type CanvasObstacleIndex,
     type CanvasPoint,
     type CanvasRect,
     type CanvasResizeSnapshot,
@@ -125,7 +133,9 @@
   let textBefore = $state.raw<CanvasDocument | null>(null)
   let composing = $state(false)
   let activeTool = $state<CanvasTool>(formFactor.value === 'desktop' ? 'select' : 'pan')
+  let toolChosenByUser = false
   let spacePan = $state(false)
+  let touchNavigationOverride = $state(false)
   let interactionLocked = $state(false)
   let pendingPlacement = $state<KnownCanvasNode['type'] | null>(null)
   let lastPointerFlow = $state.raw<CanvasPoint | null>(null)
@@ -138,11 +148,13 @@
     initialNodes: Set<string>
     initialEdges: Set<string>
     active: boolean
+    pointerType: string
   } | null>(null)
   let groupDrawSession = $state.raw<{
     pointerId: number
     start: CanvasPoint
     active: boolean
+    pointerType: string
   } | null>(null)
   let groupDrawRect = $state.raw<CanvasRect | null>(null)
   let connectionDraft = $state.raw<{
@@ -175,6 +187,7 @@
   let hasStoredViewport = $state(false)
   let viewportTimer: ReturnType<typeof setTimeout> | null = null
   let autoPanFrame: number | null = null
+  let lassoPreviewFrame: number | null = null
   let autoPanLastTime: number | null = null
   let autoPanPointer: CanvasPoint | null = null
   let gestureAutoPanned = false
@@ -186,11 +199,17 @@
     snapIndex: SnapIndex
     delta: CanvasPoint
     hasGroup: boolean
+    originsById: Map<string, CanvasPoint>
   } | null = null
   let pasteCount = 0
   let resourceSession: CanvasResourceSession | null = null
   let resourceSessionRoot = ''
   const requestedImages = new Set<string>()
+  const activeTouchPointers = new Set<number>()
+  let geometryDocument: CanvasDocument | null = null
+  let geometryNodeRects = new Map<string, CanvasRect & { id: string }>()
+  let geometryObstacleIndex: CanvasObstacleIndex | null = null
+  let geometryNodeIndex: CanvasNodeSpatialIndex | null = null
   const uiSession = acquireCanvasUiSession(initialTabId(), initialTabContent())
   const history = uiSession.history
 
@@ -221,6 +240,11 @@
   let multiSelectionBounds = $derived.by(() => selectedNodeIds.size > 1 && selectionRoots.length > 0
     ? getCanvasNodesBounds(selectionRoots)
     : null)
+
+  $effect(() => {
+    const defaultTool: CanvasTool = formFactor.value === 'desktop' ? 'select' : 'pan'
+    if (!toolChosenByUser) activeTool = defaultTool
+  })
 
   function resourceRoot(): string {
     const vaultRoot = sotvaultStore.vaultRoot
@@ -302,6 +326,7 @@
     cancelGroupDraw()
     connectionDraft = null
     pendingPlacement = null
+    toolChosenByUser = true
     activeTool = tool
     surface?.focus()
   }
@@ -349,12 +374,37 @@
     commitDocument('散开重叠节点', commitNodePositions(canvasDoc, changes))
   }
 
+  function ensureGeometryIndexes(): void {
+    if (!canvasDoc) {
+      geometryDocument = null
+      geometryNodeRects = new Map()
+      geometryObstacleIndex = null
+      geometryNodeIndex = null
+      return
+    }
+    if (geometryDocument === canvasDoc) return
+    const knownRects: Array<CanvasRect & { id: string }> = []
+    const obstacleRects: Array<CanvasRect & { id: string }> = []
+    for (const entry of canvasDoc.nodes) {
+      if (!isKnownCanvasNode(entry)) continue
+      const rect = { id: entry.id, x: entry.x, y: entry.y, width: entry.width, height: entry.height }
+      knownRects.push(rect)
+      if (entry.type !== 'group') obstacleRects.push(rect)
+    }
+    geometryDocument = canvasDoc
+    geometryNodeRects = new Map(knownRects.map((rect) => [rect.id, rect]))
+    geometryObstacleIndex = buildCanvasObstacleIndex(obstacleRects)
+    geometryNodeIndex = buildCanvasNodeSpatialIndex(canvasDoc)
+  }
+
   function rebuildFlow(nextSelectedNodes = selectedNodeIds, nextSelectedEdges = selectedEdgeIds): void {
     if (!canvasDoc) {
       flowNodes = []
       flowEdges = []
+      ensureGeometryIndexes()
       return
     }
+    ensureGeometryIndexes()
     const projection = projectCanvasToFlow(canvasDoc)
     diagnostics = projection.diagnostics
     const validNodes = new Set(Array.from(nextSelectedNodes).filter((id) => projection.nodes.some((node) => node.id === id)))
@@ -393,26 +443,16 @@
         },
       } as UiNode
     })
-    const nodeRects = new Map(canvasDoc.nodes.flatMap((entry) =>
-      isKnownCanvasNode(entry)
-        ? [[entry.id, { id: entry.id, x: entry.x, y: entry.y, width: entry.width, height: entry.height }] as const]
-        : [],
-    ))
-    const edgeObstacles = canvasDoc.nodes.flatMap((entry) =>
-      isKnownCanvasNode(entry) && entry.type !== 'group'
-        ? [{ id: entry.id, x: entry.x, y: entry.y, width: entry.width, height: entry.height }]
-        : [],
-    )
     const canonicalEdges = new Map(canvasDoc.edges.flatMap((entry) =>
       isCanvasEdge(entry) ? [[entry.id, entry] as const] : [],
     ))
     flowEdges = projection.edges.map((edge) => {
       const color = displayColor(edge.data.colorToken)
       const canonical = canonicalEdges.get(edge.id)
-      const sourceRect = nodeRects.get(edge.source)
-      const targetRect = nodeRects.get(edge.target)
+      const sourceRect = geometryNodeRects.get(edge.source)
+      const targetRect = geometryNodeRects.get(edge.target)
       const smartSides = sourceRect && targetRect
-        ? resolveCanvasEdgeSides(sourceRect, targetRect, canonical?.fromSide, canonical?.toSide, edgeObstacles)
+        ? resolveCanvasEdgeSides(sourceRect, targetRect, canonical?.fromSide, canonical?.toSide, geometryObstacleIndex ?? [])
         : null
       return {
         ...edge,
@@ -671,8 +711,8 @@
       snapIndex: buildCanvasSnapIndex(canvasDoc, [id]),
       start: rectangle,
       latest: rectangle,
-      minimumWidth: node.type === 'group' ? 180 : 160,
-      minimumHeight: node.type === 'group' ? 120 : 100,
+      minimumWidth: node.type === 'group' ? CANVAS_GROUP_MIN_WIDTH : CANVAS_NODE_MIN_WIDTH,
+      minimumHeight: node.type === 'group' ? CANVAS_GROUP_MIN_HEIGHT : CANVAS_NODE_MIN_HEIGHT,
     }
     snapGuides = []
   }
@@ -723,8 +763,8 @@
       ...node,
       x: Math.round(finalRectangle.x),
       y: Math.round(finalRectangle.y),
-      width: Math.max(node.type === 'group' ? 180 : 160, Math.round(finalRectangle.width)),
-      height: Math.max(node.type === 'group' ? 120 : 100, Math.round(finalRectangle.height)),
+      width: Math.max(node.type === 'group' ? CANVAS_GROUP_MIN_WIDTH : CANVAS_NODE_MIN_WIDTH, Math.round(finalRectangle.width)),
+      height: Math.max(node.type === 'group' ? CANVAS_GROUP_MIN_HEIGHT : CANVAS_NODE_MIN_HEIGHT, Math.round(finalRectangle.height)),
     }))
     commitDocument('调整节点大小', next)
   }
@@ -741,11 +781,11 @@
     const target = canvasDoc.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === targetNode.id)
     if (!target || !isKnownCanvasNode(target)) { nodeDrag = null; return }
     const draggedIds = nodes.map((node) => (node.data.canonicalId as string | undefined) ?? node.id)
-    const dragged = canvasDoc.nodes.filter((entry) => isKnownCanvasNode(entry) && draggedIds.includes(entry.id))
+    const draggedIdSet = new Set(draggedIds)
+    const dragged = canvasDoc.nodes.filter((entry) => isKnownCanvasNode(entry) && draggedIdSet.has(entry.id))
     const frozen = freezeCanvasMove(canvasDoc, draggedIds)
-    const movingNodes = canvasDoc.nodes.filter((entry) =>
-      isKnownCanvasNode(entry) && frozen.nodeIds.includes(entry.id),
-    )
+    const movingIds = new Set(frozen.nodeIds)
+    const movingNodes = canvasDoc.nodes.filter(isKnownCanvasNode).filter((entry) => movingIds.has(entry.id))
     const bounds = getCanvasNodesBounds(movingNodes)
     if (!bounds) { nodeDrag = null; return }
     nodeDrag = {
@@ -755,6 +795,7 @@
       snapIndex: buildCanvasSnapIndex(canvasDoc, frozen.nodeIds),
       delta: { x: 0, y: 0 },
       hasGroup: dragged.some((node) => isKnownCanvasNode(node) && node.type === 'group'),
+      originsById: new Map(movingNodes.map((node) => [node.id, { x: node.x, y: node.y }])),
     }
     snapGuides = []
   }
@@ -788,9 +829,9 @@
     const moving = new Set(nodeDrag.frozen.nodeIds)
     flowNodes = flowNodes.map((flowNode) => {
       if (!moving.has(flowNode.id)) return flowNode
-      const canonical = canvasDoc?.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === flowNode.id)
-      if (!canonical || !isKnownCanvasNode(canonical)) return flowNode
-      return { ...flowNode, position: { x: canonical.x + delta.x, y: canonical.y + delta.y } }
+      const origin = nodeDrag?.originsById.get(flowNode.id)
+      if (!origin) return flowNode
+      return { ...flowNode, position: { x: origin.x + delta.x, y: origin.y + delta.y } }
     })
   }
 
@@ -826,16 +867,34 @@
     commitDocument(nodes.length > 1 ? '移动多个节点' : '移动节点', next)
   }
 
+  function editableCanonicalNodeId(viewId: string): string | null {
+    if (!canvasDoc) return null
+    const projected = flowNodes.find((node) => node.id === viewId)
+    if (!projected || projected.data.kind === 'opaque') return null
+    const canonicalId = (projected.data.canonicalId as string | undefined) ?? projected.id
+    let matches = 0
+    for (const entry of canvasDoc.nodes) {
+      if (isKnownCanvasNode(entry) && entry.id === canonicalId) matches++
+    }
+    return matches === 1 ? canonicalId : null
+  }
+
   function handleConnect(connection: Connection): void {
-    if (!canvasDoc || !connection.source || !connection.target || connection.source === connection.target || !finishTextBeforeStructure()) return
-    const edge = flowConnectionToCanvasEdge(newId(), connection)
+    if (!canvasDoc || !connection.source || !connection.target) return
+    const source = editableCanonicalNodeId(connection.source)
+    const target = editableCanonicalNodeId(connection.target)
+    if (!source || !target || source === target || !finishTextBeforeStructure()) return
+    const edge = flowConnectionToCanvasEdge(newId(), { ...connection, source, target })
     commitDocument('创建连线', insertCanvasEdge(canvasDoc, edge), selectedNodeIds, new Set([edge.id]))
   }
 
   const handleReconnect: OnReconnect<UiEdge> = (oldEdge, connection) => {
-    if (!canvasDoc || connection.source === connection.target || !finishTextBeforeStructure()) return
+    if (!canvasDoc || !connection.source || !connection.target) return
+    const source = editableCanonicalNodeId(connection.source)
+    const target = editableCanonicalNodeId(connection.target)
+    if (!source || !target || source === target || !finishTextBeforeStructure()) return
     const edgeId = (oldEdge.data?.canonicalId as string | undefined) ?? oldEdge.id
-    commitDocument('重连连线', applyFlowEdgeConnection(canvasDoc, edgeId, connection), selectedNodeIds, new Set([edgeId]))
+    commitDocument('重连连线', applyFlowEdgeConnection(canvasDoc, edgeId, { ...connection, source, target }), selectedNodeIds, new Set([edgeId]))
   }
 
   function addConnectedNode(
@@ -846,11 +905,13 @@
     value?: string,
   ): void {
     if (!canvasDoc || !finishTextBeforeStructure()) return
+    const canonicalSourceId = editableCanonicalNodeId(sourceId)
+    if (!canonicalSourceId) return
     const node = createNode(kind, at, value)
     const nodeIndex = kind === 'group' ? 0 : canvasDoc.nodes.length
     let next = insertCanvasNode(canvasDoc, node, nodeIndex)
     const connection: Connection = {
-      source: sourceId,
+      source: canonicalSourceId,
       target: node.id,
       sourceHandle,
       targetHandle: null,
@@ -911,12 +972,15 @@
     if (!client) return
     const targetElement = document.elementFromPoint(client.x, client.y)?.closest('.svelte-flow__node')
     const targetId = targetElement?.getAttribute('data-id') ?? null
-    const sourceId = state.fromNode.id
+    const sourceId = editableCanonicalNodeId(state.fromNode.id)
+    if (!sourceId) return
     if (targetId === sourceId) return
     if (targetId) {
+      const targetCanonicalId = editableCanonicalNodeId(targetId)
+      if (!targetCanonicalId || targetCanonicalId === sourceId) return
       handleConnect({
         source: sourceId,
-        target: targetId,
+        target: targetCanonicalId,
         sourceHandle: state.fromHandle.id ?? null,
         targetHandle: null,
       })
@@ -1130,6 +1194,13 @@
     }
   }
 
+  function claimGestureEvent(event: PointerEvent): void {
+    event.preventDefault()
+    // Touch events continue to Flow so it can retain both-pointer tracking and
+    // take over when a second finger turns a pending gesture into a pinch.
+    if (event.pointerType !== 'touch') event.stopPropagation()
+  }
+
   function localToFlow(point: CanvasPoint): CanvasPoint {
     return {
       x: (point.x - viewport.x) / viewport.zoom,
@@ -1154,7 +1225,8 @@
   function previewLasso(points: CanvasPoint[], session = lassoSession): void {
     if (!canvasDoc || !session || points.length < 3) return
     const polygon = points.map(localToFlow)
-    const hitIds = new Set(canvasNodesIntersectPolygon(canvasDoc.nodes, polygon).map((node) => node.id))
+    ensureGeometryIndexes()
+    const hitIds = new Set(canvasNodesIntersectPolygon(geometryNodeIndex ?? canvasDoc.nodes, polygon).map((node) => node.id))
     const nextNodes = session.additive
       ? new Set([...session.initialNodes, ...hitIds])
       : hitIds
@@ -1172,12 +1244,22 @@
     flowEdges = flowEdges.map((edge) => ({ ...edge, selected: nextEdges.has(edge.id) }))
   }
 
+  function scheduleLassoPreview(): void {
+    if (lassoPreviewFrame !== null) return
+    lassoPreviewFrame = requestAnimationFrame(() => {
+      lassoPreviewFrame = null
+      previewLasso(lassoPoints, lassoSession)
+    })
+  }
+
   function cancelLasso(restore: boolean): void {
     const session = lassoSession
     stopGestureAutoPan(true)
     if (session) {
       try { surface?.releasePointerCapture(session.pointerId) } catch { /* already released */ }
     }
+    if (lassoPreviewFrame !== null) cancelAnimationFrame(lassoPreviewFrame)
+    lassoPreviewFrame = null
     lassoSession = null
     lassoPoints = []
     if (!restore || !session) return
@@ -1234,7 +1316,7 @@
         lassoPoints.map((entry) => ({ x: entry.x + dx, y: entry.y + dy })),
         point,
       )
-      previewLasso(lassoPoints, lassoSession)
+      scheduleLassoPreview()
     } else if (groupDrawSession) {
       groupDrawSession = {
         ...groupDrawSession,
@@ -1268,8 +1350,8 @@
       type: 'group',
       x: Math.round(rect.x),
       y: Math.round(rect.y),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
+      width: Math.max(CANVAS_GROUP_MIN_WIDTH, Math.round(rect.width)),
+      height: Math.max(CANVAS_GROUP_MIN_HEIGHT, Math.round(rect.height)),
       label: '分组',
       extras: new Map(),
       preservedInvalid: new Map(),
@@ -1279,15 +1361,14 @@
   }
 
   function beginGroupDraw(event: PointerEvent): boolean {
-    if (pendingPlacement !== 'group' || interactionLocked || event.button !== 0 || !event.isPrimary || event.pointerType === 'touch') return false
+    if (pendingPlacement !== 'group' || interactionLocked || event.button !== 0 || !event.isPrimary) return false
     const target = event.target
     if (!(target instanceof Element) || !target.closest('.svelte-flow__pane')) return false
     if (target.closest('.svelte-flow__node,.svelte-flow__edge,.svelte-flow__controls')) return false
-    event.preventDefault()
-    event.stopPropagation()
+    claimGestureEvent(event)
     try { surface?.setPointerCapture(event.pointerId) } catch { /* detached surface */ }
     const start = localPointer(event)
-    groupDrawSession = { pointerId: event.pointerId, start, active: false }
+    groupDrawSession = { pointerId: event.pointerId, start, active: false, pointerType: event.pointerType }
     groupDrawRect = rectangleBetween(start, start)
     return true
   }
@@ -1295,10 +1376,10 @@
   function updateGroupDraw(event: PointerEvent): boolean {
     const session = groupDrawSession
     if (!session || session.pointerId !== event.pointerId) return false
-    event.preventDefault()
-    event.stopPropagation()
+    claimGestureEvent(event)
     const point = localPointer(event)
-    const active = session.active || Math.hypot(point.x - session.start.x, point.y - session.start.y) >= 4
+    const activationDistance = session.pointerType === 'touch' ? 12 : 4
+    const active = session.active || Math.hypot(point.x - session.start.x, point.y - session.start.y) >= activationDistance
     if (active && !session.active) groupDrawSession = { ...session, active: true }
     groupDrawRect = rectangleBetween(groupDrawSession?.start ?? session.start, point)
     if (active) updateGestureAutoPan(point)
@@ -1308,8 +1389,7 @@
   function finishGroupDraw(event: PointerEvent, commit: boolean): boolean {
     const session = groupDrawSession
     if (!session || session.pointerId !== event.pointerId) return false
-    event.preventDefault()
-    event.stopPropagation()
+    claimGestureEvent(event)
     const point = localPointer(event)
     const screenRect = rectangleBetween(session.start, point)
     stopGestureAutoPan(true)
@@ -1343,15 +1423,21 @@
   }
 
   function handleSurfacePointerDown(event: PointerEvent): void {
+    if (event.pointerType === 'touch') activeTouchPointers.add(event.pointerId)
     if (shouldRememberPointer(event.target)) lastPointerFlow = localToFlow(localPointer(event))
     if (connectionDraft && event.target instanceof Element && !event.target.closest('.connection-create-menu')) connectionDraft = null
+    if (event.pointerType === 'touch' && activeTouchPointers.size > 1) {
+      touchNavigationOverride = true
+      if (lassoSession) cancelLasso(true)
+      if (groupDrawSession) cancelGroupDraw()
+      return
+    }
     if (beginGroupDraw(event)) return
-    if (effectiveTool !== 'lasso' || interactionLocked || event.button !== 0 || !event.isPrimary || event.pointerType === 'touch') return
+    if (effectiveTool !== 'lasso' || interactionLocked || event.button !== 0 || !event.isPrimary) return
     const target = event.target
     if (!(target instanceof Element) || !target.closest('.svelte-flow__pane')) return
     if (target.closest('.svelte-flow__node,.svelte-flow__edge,.svelte-flow__controls')) return
-    event.preventDefault()
-    event.stopPropagation()
+    claimGestureEvent(event)
     try { surface?.setPointerCapture(event.pointerId) } catch { /* detached surface */ }
     const start = localPointer(event)
     lassoSession = {
@@ -1361,6 +1447,7 @@
       initialNodes: new Set(selectedNodeIds),
       initialEdges: new Set(selectedEdgeIds),
       active: false,
+      pointerType: event.pointerType,
     }
     lassoPoints = [start]
   }
@@ -1377,23 +1464,24 @@
     if (updateGroupDraw(event)) return
     const session = lassoSession
     if (!session || session.pointerId !== event.pointerId) return
-    event.preventDefault()
-    event.stopPropagation()
-    const active = session.active || Math.hypot(point.x - session.start.x, point.y - session.start.y) >= 4
+    claimGestureEvent(event)
+    const activationDistance = session.pointerType === 'touch' ? 12 : 4
+    const active = session.active || Math.hypot(point.x - session.start.x, point.y - session.start.y) >= activationDistance
     if (!active) return
     if (!session.active) lassoSession = { ...session, active: true }
     lassoPoints = appendLassoPoint(lassoPoints, point)
-    previewLasso(lassoPoints, lassoSession)
+    scheduleLassoPreview()
     updateGestureAutoPan(point)
   }
 
   function finishLasso(event: PointerEvent, commit: boolean): void {
     const session = lassoSession
     if (!session || session.pointerId !== event.pointerId) return
-    event.preventDefault()
-    event.stopPropagation()
+    claimGestureEvent(event)
     stopGestureAutoPan(true)
     try { surface?.releasePointerCapture(event.pointerId) } catch { /* already released */ }
+    if (lassoPreviewFrame !== null) cancelAnimationFrame(lassoPreviewFrame)
+    lassoPreviewFrame = null
     if (!commit) { cancelLasso(true); return }
     const points = appendLassoPoint(lassoPoints, localPointer(event))
     const xs = points.map((point) => point.x)
@@ -1415,12 +1503,19 @@
   }
 
   function handleSurfacePointerUp(event: PointerEvent): void {
-    if (finishGroupDraw(event, true)) return
-    finishLasso(event, true)
+    if (!finishGroupDraw(event, true)) finishLasso(event, true)
+    finishTouchPointer(event)
   }
   function handleSurfacePointerCancel(event: PointerEvent): void {
-    if (finishGroupDraw(event, false)) return
-    finishLasso(event, false)
+    if (!finishGroupDraw(event, false)) finishLasso(event, false)
+    finishTouchPointer(event)
+  }
+
+  function finishTouchPointer(event: PointerEvent): void {
+    if (event.pointerType === 'touch') {
+      activeTouchPointers.delete(event.pointerId)
+      if (activeTouchPointers.size === 0) touchNavigationOverride = false
+    }
   }
 
   function handleKeyup(event: KeyboardEvent): void {
@@ -1488,6 +1583,17 @@
     if (!multiResize) return
     multiResize = null
     rebuildFlow()
+  }
+
+  function keyboardMultiResize(corner: ResizeCorner, delta: CanvasPoint): void {
+    if (!canvasDoc || interactionLocked || selectedNodeIds.size < 2 || !finishTextBeforeStructure()) return
+    const snapshot = createCanvasResizeSnapshot(canvasDoc, selectedNodeIds, corner)
+    if (!snapshot) return
+    const scale = resolveCanvasResizeScale(snapshot, {
+      x: snapshot.anchor.x + snapshot.diagonal.x + delta.x,
+      y: snapshot.anchor.y + snapshot.diagonal.y + delta.y,
+    }, false)
+    commitDocument('缩放多个节点', resizeCanvasSelection(canvasDoc, snapshot, scale.scaleX, scale.scaleY))
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -1800,6 +1906,8 @@
 
   function handleWindowBlur(): void {
     spacePan = false
+    touchNavigationOverride = false
+    activeTouchPointers.clear()
     cancelLasso(true)
     cancelGroupDraw()
     cancelSingleResize()
@@ -1824,6 +1932,8 @@
     window.addEventListener('notemd:canvas-view-command', handleViewCommand)
     window.addEventListener('keyup', handleKeyup)
     window.addEventListener('blur', handleWindowBlur)
+    window.addEventListener('pointerup', finishTouchPointer)
+    window.addEventListener('pointercancel', finishTouchPointer)
     return () => {
       cancelled = true
       nodeDrag = null
@@ -1838,11 +1948,15 @@
       resourceSession = null
       resourceSessionRoot = ''
       requestedImages.clear()
+      activeTouchPointers.clear()
+      touchNavigationOverride = false
       window.removeEventListener('notemd:canvas-native-drop', handleNativeDrop)
       window.removeEventListener('notemd:select-all', selectAll)
       window.removeEventListener('notemd:canvas-view-command', handleViewCommand)
       window.removeEventListener('keyup', handleKeyup)
       window.removeEventListener('blur', handleWindowBlur)
+      window.removeEventListener('pointerup', finishTouchPointer)
+      window.removeEventListener('pointercancel', finishTouchPointer)
     }
   })
 
@@ -2062,8 +2176,8 @@
       elevateNodesOnSelect={false}
       connectionMode={ConnectionMode.Loose}
       selectionMode={SelectionMode.Partial}
-      selectionOnDrag={effectiveTool === 'select'}
-      panOnDrag={effectiveTool === 'pan' ? true : effectiveTool === 'select' ? [1, 2] : false}
+      selectionOnDrag={effectiveTool === 'select' && !pendingPlacement}
+      panOnDrag={touchNavigationOverride || effectiveTool === 'pan' ? true : effectiveTool === 'select' ? [1, 2] : false}
       nodesDraggable={effectiveTool === 'select' && !interactionLocked && !multiResize}
       nodesConnectable={effectiveTool === 'select' && !interactionLocked}
       elementsSelectable={effectiveTool === 'select' && !interactionLocked}
@@ -2116,12 +2230,13 @@
         onMove={previewMultiResize}
         onEnd={finishMultiResize}
         onCancel={() => cancelMultiResize()}
+        onKeyboardResize={keyboardMultiResize}
       />
     {/if}
 
     {#if connectionDraft}
       <div
-        class="connection-create-menu nodrag nopan"
+        class="connection-create-menu menu-panel nodrag nopan"
         bind:this={connectionMenu}
         style:left={`${Math.min(connectionDraft.screen.x + 12, Math.max(8, (surface?.clientWidth ?? 800) - 220))}px`}
         style:top={`${Math.min(connectionDraft.screen.y + 12, Math.max(8, (surface?.clientHeight ?? 600) - 70))}px`}
@@ -2131,10 +2246,10 @@
         onkeydown={handleConnectionMenuKeydown}
       >
         <span>创建并连接</span>
-        <button type="button" onclick={() => void chooseConnectedNode('text')}>文本</button>
-        <button type="button" onclick={() => void chooseConnectedNode('group')}>分组</button>
-        <button type="button" onclick={() => void chooseConnectedNode('file')}>文件</button>
-        <button type="button" onclick={() => void chooseConnectedNode('link')}>链接</button>
+        <button class="menu-row" type="button" onclick={() => void chooseConnectedNode('text')}>文本</button>
+        <button class="menu-row" type="button" onclick={() => void chooseConnectedNode('group')}>分组</button>
+        <button class="menu-row" type="button" onclick={() => void chooseConnectedNode('file')}>文件</button>
+        <button class="menu-row" type="button" onclick={() => void chooseConnectedNode('link')}>链接</button>
       </div>
     {/if}
 
@@ -2266,12 +2381,6 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 6px;
-    border: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
-    border-radius: 9px;
-    background: color-mix(in srgb, Canvas 92%, transparent);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
-    backdrop-filter: blur(16px);
   }
   .connection-create-menu span {
     padding: 0 5px;
@@ -2290,7 +2399,6 @@
     cursor: pointer;
   }
   .connection-create-menu button { padding: 5px 7px; }
-  .connection-create-menu button:hover,
   .zoom-indicator:hover { background: color-mix(in srgb, CanvasText 9%, transparent); }
   .zoom-indicator {
     position: absolute;

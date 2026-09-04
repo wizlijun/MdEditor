@@ -9,6 +9,12 @@
     type ResizeParamsWithDirection,
   } from '@xyflow/svelte'
   import type { MediaResolver } from '@moraya/core'
+  import {
+    CANVAS_GROUP_MIN_HEIGHT,
+    CANVAS_GROUP_MIN_WIDTH,
+    CANVAS_NODE_MIN_HEIGHT,
+    CANVAS_NODE_MIN_WIDTH,
+  } from '../../lib/canvas'
   import { basename } from '../../lib/paths'
   import CanvasMarkdownPreview from './CanvasMarkdownPreview.svelte'
   import EmbeddedMarkdownEditor from './EmbeddedMarkdownEditor.svelte'
@@ -90,8 +96,8 @@
 
 <NodeResizer
   isVisible={selected && !data.multipleSelected && !data.interactionLocked && !data.active && data.kind !== 'opaque'}
-  minWidth={data.kind === 'group' ? 180 : 160}
-  minHeight={data.kind === 'group' ? 120 : 100}
+  minWidth={data.kind === 'group' ? CANVAS_GROUP_MIN_WIDTH : CANVAS_NODE_MIN_WIDTH}
+  minHeight={data.kind === 'group' ? CANVAS_GROUP_MIN_HEIGHT : CANVAS_NODE_MIN_HEIGHT}
   color={accent ?? 'var(--accent, #4d88ff)'}
   onResizeStart={(_event, rectangle) => data.onResizeStart?.(id, rectangle)}
   onResize={(event, rectangle) => data.onResize?.(id, event, rectangle)}

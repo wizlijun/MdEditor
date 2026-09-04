@@ -7,6 +7,7 @@ import {
   deleteCanvasSelection,
   freezeCanvasMove,
   freezeGroupMove,
+  insertCanvasEdge,
   moveFrozenNodes,
   pasteCanvasSelection,
   reorderCanvasNodes,
@@ -24,6 +25,20 @@ function textNode(id: string, x: number, y: number, width = 20, height = 20) {
 }
 
 describe('Canvas domain model', () => {
+  it('rejects newly inserted edges whose endpoints are missing or ambiguous', () => {
+    const edgeDocument = documentFrom({
+      nodes: [textNode('a', 0, 0), textNode('b', 100, 0)],
+      edges: [{ id: 'edge', fromNode: 'a', toNode: 'b' }],
+    })
+    const edge = edgeDocument.edges[0]
+    if (!isCanvasEdge(edge)) throw new Error('expected a standard edge')
+    const missing = documentFrom({ nodes: [textNode('a', 0, 0)], edges: [] })
+    const ambiguous = documentFrom({ nodes: [textNode('a', 0, 0), textNode('b', 100, 0), textNode('b', 200, 0)], edges: [] })
+
+    expect(() => insertCanvasEdge(missing, edge)).toThrow(/唯一存在/)
+    expect(() => insertCanvasEdge(ambiguous, edge)).toThrow(/唯一存在/)
+  })
+
   it('rounds committed move/resize geometry without mutating its input', () => {
     const original = documentFrom({ nodes: [textNode('a', 0, 0)], edges: [] })
     const moved = commitNodePositions(original, [{ id: 'a', x: 10.49, y: -4.5 }])

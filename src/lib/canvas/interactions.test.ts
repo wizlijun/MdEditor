@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { decodeJsonCanvas } from './json-canvas'
 import {
   alignCanvasSelection,
+  buildCanvasNodeSpatialIndex,
+  buildCanvasObstacleIndex,
   buildCanvasSnapIndex,
   canvasNodesIntersectPolygon,
   computeCanvasAutoPanVelocity,
@@ -301,6 +303,22 @@ describe('Canvas advanced pointer geometry', () => {
     ])).not.toEqual(direct)
   })
 
+  it('preserves obstacle-aware routing when candidates come from a spatial index', () => {
+    const source = { id: 'source', x: 0, y: 0, width: 100, height: 100 }
+    const target = { id: 'target', x: 300, y: 0, width: 100, height: 100 }
+    const obstacles = [
+      source,
+      target,
+      { id: 'blocker', x: 110, y: 44, width: 40, height: 12 },
+      ...Array.from({ length: 2_000 }, (_, index) => ({
+        id: `far-${index}`, x: index * 80, y: 10_000, width: 40, height: 40,
+      })),
+    ]
+
+    expect(resolveCanvasEdgeSides(source, target, undefined, undefined, buildCanvasObstacleIndex(obstacles)))
+      .toEqual(resolveCanvasEdgeSides(source, target, undefined, undefined, obstacles))
+  })
+
   it('chooses the short L-shaped route for a blocked diagonal layout', () => {
     expect(resolveCanvasEdgeSides(
       { id: 'source', x: 50, y: 50, width: 350, height: 250 },
@@ -334,6 +352,21 @@ describe('Canvas advanced pointer geometry', () => {
     expect(index.byX).toHaveLength(30_000)
     expect(index.byY).toHaveLength(30_000)
   })
+
+  it('keeps worst-case equal-spacing lookup inside an interactive budget', () => {
+    const document = documentFrom({
+      nodes: Array.from({ length: 20_000 }, (_, index) => textNode(`node-${index}`, index * 3, 0, 1, 100)),
+      edges: [],
+    })
+    const index = buildCanvasSnapIndex(document, [])
+    const started = performance.now()
+    computeCanvasSnap(
+      { x: 30_000.123, y: 0.123, width: 100.123, height: 99.123 },
+      index,
+      { thresholdFlow: 0.01 },
+    )
+    expect(performance.now() - started).toBeLessThan(250)
+  })
 })
 
 describe('Canvas lasso geometry', () => {
@@ -362,6 +395,8 @@ describe('Canvas lasso geometry', () => {
     ]
 
     expect(canvasNodesIntersectPolygon(document.nodes, polygon).map((node) => node.id)).toEqual(['inside'])
+    expect(canvasNodesIntersectPolygon(buildCanvasNodeSpatialIndex(document), polygon).map((node) => node.id))
+      .toEqual(['inside'])
   })
 })
 
