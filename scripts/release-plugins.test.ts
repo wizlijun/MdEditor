@@ -20,6 +20,7 @@ import { join } from 'node:path'
 const ROOT = join(__dirname, '..')
 const SCRIPT = readFileSync(join(ROOT, 'scripts/release-plugins.sh'), 'utf8')
 const DEV_INSTALL = readFileSync(join(ROOT, 'scripts/dev-install-plugin.sh'), 'utf8')
+const HOST_RELEASE = readFileSync(join(ROOT, 'scripts/release.sh'), 'utf8')
 
 /** `plugin-arg → release_fn` from the dispatch `case` at the foot of the script. */
 function dispatchTable(): Map<string, string> {
@@ -109,6 +110,13 @@ describe('release-plugins.sh packaging shape', () => {
     expect(body).toContain('"codex-agent"')
     expect(packagingBody('release_codex_agent')).toContain('$triple.notemdpkg')
     expect(packagingBody('release_codex_agent')).toContain('cargo build --release --locked')
+  })
+})
+
+describe('release.sh transient Apple failures', () => {
+  it('retries TLS failures from the notarization service', () => {
+    expect(HOST_RELEASE).toContain('NSURLErrorDomain Code=-1200')
+    expect(HOST_RELEASE).toContain('A TLS error caused the secure connection to fail')
   })
 })
 

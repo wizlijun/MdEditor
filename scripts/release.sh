@@ -283,7 +283,7 @@ tauri_build_with_apple_retries() {
       return 0
     fi
     if (( attempt >= max_attempts )) ||
-       ! grep -Eq 'HTTPClientError\.(connectTimeout|deadlineExceeded)|abortedUpload|timestamp service is not available|A timestamp was expected but was not found' "$log"; then
+       ! grep -Eq 'HTTPClientError\.(connectTimeout|deadlineExceeded)|abortedUpload|timestamp service is not available|A timestamp was expected but was not found|NSURLErrorDomain Code=-1200|A TLS error caused the secure connection to fail' "$log"; then
       rm -f "$log"
       return "$rc"
     fi
