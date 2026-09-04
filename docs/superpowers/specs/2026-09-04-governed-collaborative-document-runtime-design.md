@@ -1,6 +1,6 @@
 # 人与多 Agent 通用共写文档运行时设计
 
-> 阶段：设计收敛，Stage 0 技术 Spike 实现中。
+> 阶段：设计收敛，Stage 0D 的真实 self 文档纵向切片已实现；Stage 1 与 MEMORY MVP 尚未完成。
 >
 > 决策：采用“通用内核、MEMORY-first 验证”。从第一天使用领域无关的数据结构和窄接口，但第一阶段只交付 MEMORY 的完整纵向闭环。第二个真实场景验证前，不把内部扩展点发布为稳定 SDK，也不建设通用 IAM、事件平台或任意协作后端。
 >
@@ -11,6 +11,12 @@
 > 实施记录（2026-09-04）：已启动首个可运行切片：并存的 Editor Kit v2、领域无关的 Operation 会话，以及现有 `notemd.memory` 窗口内的“共写文档实验”。该切片验证单块 `block.replace`、串行本地确认、局部远程事务、ack 回声隔离、stale-base、幂等、Decoration 与 IME 排队；普通 Agent 只产生提案，直接远端更新明确标为“已授权服务端变更”fixture。块布局已扩展为“一个稳定块覆盖一组连续顶层节点”，远端替换可改变该范围的节点数并原子更新后续映射；本地插入、删除、移动、拆合及多块编辑仍 fail closed。现有 BlockYaml 的 chunk／fingerprint／merge 生产函数已加入 CDR conformance 测试：长中文小改和精确重排可保留 ID，但小于 20 个归一化字符的短块改写会 fresh＋retired，默认 `minChars=400` 也会合并相邻短章节。因此，“外部 Markdown 依赖当前 fingerprint／merge 重建已改写短块的身份”目前是明确 No-Go；携带显式 block ID 的 CDR 编辑与 Operation 寻址不受此结论影响。
 >
 > Stage 0C 已增加一个 UI-only、按认证插件隔离的宿主 opaque aggregate store，以及插件侧的持久 `DocumentSession` facade。store 以 generation CAS 和同目录临时文件原子替换单份 aggregate；facade 以 copy-on-write 保证 commit 成功后才安装候选状态并向 Editor ack。commit 异常后必须重新 load 来区分“候选已提交、旧版仍在、另一 writer 获胜”；无法读取或验证时进入 outcome-unknown，并锁定本实例和编辑器为只读，不能假装失败后继续写。窗口重开会恢复 committed head、提案、Assessment、AuditEvent 和幂等回执；损坏 schema、写失败和 CAS 冲突均 fail closed。Spike 的 fixture document ID 暂以当前 vault 根路径的 SHA-256 隔离，避免跨 vault 串数据；vault 移动会形成新 namespace，待阶段 1 的 frontmatter document ID 取代。此实现只验证本机单 aggregate 的提交与恢复边界，并不是下文完整 `DocumentRepository`：尚未接入 `.md`／BlockIdentityStore 的同 generation 提交、document-ID frontmatter、不可变 revision/journal、Publication、Annotation、Memory v2 Claim/Profile、其余三类结构操作、外部漂移或 Yjs，因此不构成 MEMORY MVP，也不宣称通过完整 G4。
+
+> Stage 0D 已取代上一段中“尚未接入 `.md`／frontmatter／journal／外部漂移”的历史限制：Memory 插件现在只管理当前 vault 的固定槽位 `${wiki_dir}/Memory Workspace.note.md`，且首次写入必须由用户点击创建。Markdown 以 `cdr.document_id` 携带稳定身份；插件把通用 session、当前 head 的派生 fingerprint 索引、完整 SHA-256 `block_revision`、revision history、回执和审计封装成一个 opaque aggregate；Host v2 Repository 以 generation CAS、representation SHA-256 乐观前置条件、prepared journal、同目录原子替换和确定性恢复，将 vault Markdown 与 app-data aggregate 暴露为一次逻辑提交。保持 identity/profile 可解析且在替换前已检测到的正文漂移或文件删除会进入只读 drift，不自动采用或覆盖磁盘内容；frontmatter 身份或 profile 损坏则直接 fail closed。Host 仓库按 canonical vault root 的无损平台路径字节隔离 locator、aggregate 与 journal。根 `/MEMORY.md`、`/USER.md` 与 `.notemd/memory/**` 继续由路径围栏拒绝。v2 inspect/load 需要 `cdr.repository + vault.read`，commit 还需要 `vault.write`，且仅开放在认证插件 UI 通道。
+>
+> Stage 0D 仍刻意只支持一份新建的 `self` 文档和 `block.replace`：不纳管任意现有 Markdown，不实现 move/copy 重绑定、外部 diff/导入、projection、Annotation、Publication、insert/move/delete、Memory v2 Claim Adapter 或 Yjs。当前 aggregate 中的 `derivedBlockIndex` 只是从 committed head 重新计算并校验的派生索引，不是下文完整的 `BlockIdentityStore`；lineage、结构操作后的稳定映射与逐块 authority 要等 Stage 1 按完整 schema 实现。由此，Stage 0D 是可运行增强插件切片，不等于 MEMORY MVP，也不宣称完整通过 G1、G3、G5 或 G7。
+>
+> Stage 0D 的文件前置条件只对同一 Host 进程内、经该 Repository 协作的 writer 提供严格 CAS。任意外部进程若恰在最后一次 hash 检查与 existing-file rename 之间写入，跨平台文件系统 API 无法提供可移植的原子 compare-and-replace；本阶段不宣称解决该竞争窗口。完整 MVP 必须按第 7.3 节保存被置换 preimage／导入候选并通过故障注入 G4，在此之前产品文案只能承诺“检测到的 drift 不覆盖”。
 
 ## 0. 结论
 
@@ -852,7 +858,8 @@ Yjs Adapter 必须遵守：
 - 模拟人和两个 Agent 对不同块／同一块并发操作。
 - 验证 proposal Decoration、stale-base、Anchor 重新定位和 Assessment 版本绑定。
 - 验证中文／日文 IME、undo、重复 request 和窗口重开。
-- 先用按插件隔离的单 aggregate generation-CAS store 验证原子保存、失败不安装候选状态与窗口重开；进入阶段 1 前，再把它提升为本节定义的完整 `DocumentRepository`（`.md`、BlockIdentityStore、revision、journal 同一逻辑提交）。
+- Stage 0C 已用按插件隔离的单 aggregate generation-CAS store 验证失败不安装候选状态与窗口重开。
+- Stage 0D 已把固定槽位 `.md`、派生 current-block fingerprint 索引、revision history、回执和 audit 纳入同一逻辑 generation，并以 representation hash 乐观前置条件与 prepared journal 验证 cooperative-writer 下的 prepared-state 恢复；existing-file 最终替换竞争、真实进程 kill 与故障注入仍属于阶段 2。当前只覆盖 `self + replace`，不是完整 MVP Repository。
 
 Go/No-Go：任一普通局部更新需要全文 `setContent()`、块 ID 往返不稳定、IME 丢字、同块 stale 覆盖或重复请求产生二次应用，均不得进入 MVP。
 

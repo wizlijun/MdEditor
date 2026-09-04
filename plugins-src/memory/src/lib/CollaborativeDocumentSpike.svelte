@@ -2,6 +2,8 @@
   import { onMount, tick } from 'svelte'
   import { bridge } from './bridge'
   import {
+    documentId as newDocumentId,
+    sha256Hex,
     uuidIds,
     type AppliedChange,
     type Assessment,
@@ -13,20 +15,31 @@
     PersistentDocumentSession,
     RepositoryConflictError,
     RepositoryOutcomeUnknownError,
+    RepositoryWriteBlockedError,
   } from './cdr/repository'
+  import {
+    ManagedDocumentStore,
+    canonicalMemoryFrontmatter,
+    inspectManagedDocument,
+    managedMemoryPath,
+  } from './cdr/managed-document'
   import { loadKitV2, replaceOperation, type MountedDocumentEditor, type SurfaceUpdate } from './editor-kit-v2'
 
   class EditorSyncError extends Error {}
 
   const ids = uuidIds()
   const INITIAL_REVISION_ID = 'memory-spike/revision-1'
-  const initialBlocks: DocumentRevision['blocks'] = [
-    { blockId: 'b-a1b2c3', blockRevision: 'b-a1b2c3/1', markdown: '# MEMORY-first 共写文档' },
-    { blockId: 'b-d4e5f6', blockRevision: 'b-d4e5f6/1', markdown: '这是一段可由人直接修改的背景叙事，保留前因后果和团队黑话。' },
-    { blockId: 'b-0a1b2c', blockRevision: 'b-0a1b2c/1', markdown: '- Agent 修改必须绑定块版本\n- 冲突不得静默覆盖' },
+  const initialBlocks = [
+    { blockId: 'b-a1b2c3', markdown: '# MEMORY-first 共写文档' },
+    { blockId: 'b-d4e5f6', markdown: '这是一段可由人直接修改的背景叙事，保留前因后果和团队黑话。' },
+    { blockId: 'b-0a1b2c', markdown: '- Agent 修改必须绑定块版本\n- 冲突不得静默覆盖' },
   ]
 
   let session = $state<PersistentDocumentSession | null>(null)
+  let managedStore = $state<ManagedDocumentStore | null>(null)
+  let vaultPath = $state('')
+  let creationPending = $state(false)
+  let creationError = $state('')
   let editorHost = $state<HTMLDivElement>()
   let editor = $state<MountedDocumentEditor | null>(null)
   let proposals = $state<readonly Proposal[]>([])
@@ -42,7 +55,7 @@
   let stopObserving: (() => void) | null = null
 
   onMount(() => {
-    void mountEditor()
+    void initializeManagedDocument()
     return () => {
       disposed = true
       stopObserving?.()
@@ -52,51 +65,96 @@
     }
   })
 
-  async function mountEditor() {
+  async function initializeManagedDocument() {
     try {
-      const initial = await initialForCurrentVault()
-      const restoredSession = await PersistentDocumentSession.open(initial, ids)
-      if (disposed) return
-      session = restoredSession
-      const mount = await loadKitV2()
-      if (disposed) return
-      if (!editorHost) throw new Error('CDR_EDITOR_HOST_MISSING')
-      editor = await mount(editorHost, {
-        snapshot: restoredSession.snapshot(),
-        ids,
-        onBlockedStructuralEdit: () => {
-          notice = 'Stage 0 仅允许块内编辑；插入、删除和拆合块已 fail-closed。'
-        },
-        onResyncRequired: (reason) => {
-          void handleResyncRequired(reason)
-        },
-      })
-      stopObserving = editor.surface.observeLocalOperations(handleLocalOperations)
-      loading = false
-      notice = restoredSession.openKind === 'restored'
-        ? '已恢复上次提交的正文、提案、核验与审计记录。'
-        : '已创建本机文档：直接修改正文，每次只提交受影响的块。'
-      syncViewModels()
+      const info = await bridge().request('host.vault.info', {}) as { root?: unknown; wiki_dir?: unknown }
+      if (typeof info?.root !== 'string' || !info.root) throw new Error('CDR_VAULT_REQUIRED')
+      if (typeof info.wiki_dir !== 'string' || !info.wiki_dir) throw new Error('CDR_WIKI_DIR_REQUIRED')
+      vaultPath = managedMemoryPath(info.wiki_dir)
+      const inspection = await inspectManagedDocument(vaultPath)
+      if (inspection.kind === 'missing') {
+        loading = false
+        creationPending = true
+        notice = '尚未创建受控 MEMORY 文档；只有点击创建后才会写入 vault。'
+        return
+      }
+      await openManagedDocument(inspection.documentId)
     } catch (cause) {
       loading = false
       failed = cause instanceof Error ? cause.message : String(cause)
     }
   }
 
-  async function initialForCurrentVault(): Promise<DocumentRevision> {
-    const info = await bridge().request('host.vault.info', {}) as { root?: unknown }
-    if (typeof info?.root !== 'string' || !info.root) throw new Error('CDR_VAULT_REQUIRED')
-    if (typeof globalThis.crypto?.subtle?.digest !== 'function') throw new Error('CDR_SHA256_UNAVAILABLE')
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(info.root))
-    const namespace = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  async function initialRevision(documentId: string): Promise<DocumentRevision> {
     return {
-      documentId: `memory-spike/${namespace}`,
+      documentId,
       revisionId: INITIAL_REVISION_ID,
-      blocks: initialBlocks.map((block) => ({ ...block })),
+      blocks: await Promise.all(initialBlocks.map(async (block) => ({
+        ...block,
+        blockRevision: await sha256Hex(block.markdown),
+      }))),
     }
   }
 
+  async function createManagedDocument() {
+    if (!creationPending || !vaultPath || saving) return
+    activeWrites += 1
+    creationError = ''
+    notice = '正在创建受控 MEMORY 文档…'
+    try {
+      const documentId = newDocumentId()
+      await openManagedDocument(documentId, canonicalMemoryFrontmatter(documentId))
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      if (session) failed = message
+      else {
+        creationError = message
+        notice = '创建失败，未写入受控文档；可在问题解决后重试。'
+      }
+    } finally {
+      activeWrites -= 1
+    }
+  }
+
+  async function openManagedDocument(documentId: string, frontmatter: string | null = null) {
+    const store = new ManagedDocumentStore(vaultPath, documentId, frontmatter)
+    const restoredSession = await PersistentDocumentSession.open(await initialRevision(documentId), ids, store)
+    if (disposed) return
+    managedStore = store
+    session = restoredSession
+    creationPending = false
+    await tick()
+    const mount = await loadKitV2()
+    if (disposed) return
+    if (!editorHost) throw new Error('CDR_EDITOR_HOST_MISSING')
+    const status = store.managedStatus
+    const startsReadOnly = status.readOnlyReason !== null
+    editor = await mount(editorHost, {
+      snapshot: restoredSession.snapshot(),
+      ids,
+      readOnly: startsReadOnly,
+      onBlockedStructuralEdit: () => {
+        notice = 'Stage 0 仅允许块内编辑；插入、删除和拆合块已 fail-closed。'
+      },
+      onResyncRequired: (reason) => {
+        void handleResyncRequired(reason)
+      },
+    })
+    if (!startsReadOnly) stopObserving = editor.surface.observeLocalOperations(handleLocalOperations)
+    loading = false
+    if (status.readOnlyReason) {
+      locked = true
+      notice = status.readOnlyReason
+    } else {
+      notice = restoredSession.openKind === 'restored'
+        ? '已从受控 Markdown 与同代聚合恢复正文、提案、核验与审计记录。'
+        : '受控 MEMORY 文档已创建；正文与结构化历史会作为一个逻辑提交保存。'
+    }
+    syncViewModels()
+  }
+
   function handleLocalOperations(batch: OperationBatch) {
+    if (locked) return
     void persistLocalOperations(batch)
   }
 
@@ -135,8 +193,9 @@
         lockEditor('修改已经保存，但编辑器未能确认；已切换为只读，窗口重开后恢复。')
         return
       }
-      if (cause instanceof RepositoryOutcomeUnknownError) {
-        lockEditor('无法核定本次保存结果；已切换为只读，请重开窗口重新读取。')
+      if (cause instanceof RepositoryOutcomeUnknownError || cause instanceof RepositoryWriteBlockedError) {
+        lockEditor(managedStore?.managedStatus.readOnlyReason
+          ?? '无法核定本次保存结果；已切换为只读，请重开窗口重新读取。')
         return
       }
       const current = session.snapshot()
@@ -292,8 +351,9 @@
 
   async function recoverAfterActionFailure(cause: unknown) {
     if (cause instanceof EditorSyncError) return
-    if (cause instanceof RepositoryOutcomeUnknownError) {
-      lockEditor('无法核定本次保存结果；已切换为只读，请重开窗口重新读取。')
+    if (cause instanceof RepositoryOutcomeUnknownError || cause instanceof RepositoryWriteBlockedError) {
+      lockEditor(managedStore?.managedStatus.readOnlyReason
+        ?? '无法核定本次保存结果；已切换为只读，请重开窗口重新读取。')
       return
     }
     const conflict = cause instanceof RepositoryConflictError
@@ -326,10 +386,15 @@
   function lockEditor(message: string) {
     locked = true
     notice = message
+    stopObserving?.()
+    stopObserving = null
     try {
       editor?.surface.setReadOnly(true)
     } catch {
-      // The UI state still disables every command in this view.
+      const failedEditor = editor
+      editor = null
+      if (failedEditor) void failedEditor.surface.destroy().catch(() => undefined)
+      editorHost?.replaceChildren()
     }
   }
 
@@ -361,15 +426,24 @@
     <div>
       <p class="eyebrow">Stage 0 · 本机技术验证</p>
       <h2 id="cdr-spike-title">共写文档实验</h2>
-      <p>通用块操作以 MEMORY 作为第一个验证场景。提交状态按当前 vault 隔离并保存在插件本机仓库，窗口重开后恢复；当前不读写 Claim、根 MEMORY.md 或 Yjs。</p>
+      <p>通用受控文档以 MEMORY 作为第一个验证场景。正文写入 wiki 目录，结构化状态保存在插件仓库，并由 Host 作为一个逻辑提交协调；当前不读写 Claim、根 MEMORY.md 或 Yjs。</p>
+      {#if vaultPath}<small class="managed-path">{vaultPath}</small>{/if}
     </div>
-    <span class="status" class:loading={loading || saving || locked}>{loading ? '加载中' : failed ? '不可用' : locked ? '只读' : saving ? '保存中' : '可编辑'}</span>
+    <span class="status" class:loading={loading || saving || locked || creationPending}>{loading ? '加载中' : failed ? '不可用' : creationPending ? '未创建' : locked ? '只读' : saving ? '保存中' : '可编辑'}</span>
   </header>
 
   {#if failed}
     <div class="failure" role="alert">
       <strong>共写文档初始化失败</strong>
       <span>{failed}</span>
+    </div>
+  {:else if creationPending}
+    <div class="create-panel">
+      <strong>创建受控 MEMORY 文档</strong>
+      <p>将在 <code>{vaultPath}</code> 创建一份带稳定文档身份的 Markdown。不会改写根 <code>MEMORY.md</code>，也不会自动纳管已有文件。</p>
+      <button class="primary" onclick={createManagedDocument} disabled={saving}>创建受控 MEMORY 文档</button>
+      <small aria-live="polite">{notice}</small>
+      {#if creationError}<code class="creation-error" role="alert">{creationError}</code>{/if}
     </div>
   {:else}
     <div class="workbench">
@@ -388,7 +462,7 @@
         <section class="activity" aria-live="polite">
           <h3>当前状态</h3>
           <p>{notice}</p>
-          <small>{session?.snapshot().revisionId ?? INITIAL_REVISION_ID} · {auditCount} 个审计事件</small>
+          <small>{session?.snapshot().revisionId ?? INITIAL_REVISION_ID} · {session?.revisionHistory().length ?? 0} 个历史版本 · {auditCount} 个审计事件</small>
         </section>
 
         <section class="proposal-list">
@@ -425,5 +499,5 @@
 </section>
 
 <style>
-  .cdr-spike{display:grid;gap:14px}.cdr-spike>header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.cdr-spike h2{margin:2px 0 5px;font-size:20px}.cdr-spike header p:not(.eyebrow){max-width:720px;margin:0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.eyebrow{margin:0;color:#0a84ff;font-size:11px;font-weight:750;letter-spacing:.04em;text-transform:uppercase}.status{flex:none;padding:4px 9px;border-radius:999px;background:color-mix(in srgb,#34c759 14%,Canvas);color:#168333;font-size:11px;font-weight:700}.status.loading{background:color-mix(in srgb,CanvasText 8%,Canvas);color:color-mix(in srgb,CanvasText 55%,transparent)}.workbench{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:540px;overflow:hidden;border:1px solid color-mix(in srgb,CanvasText 12%,transparent);border-radius:12px;background:Canvas}.document-shell{min-width:0;padding:28px 34px;overflow:auto;border-right:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.editor-host{min-height:430px}.document-shell :global(.kit-host){height:100%;min-height:430px}.document-shell :global(.moraya-editor){min-height:410px;padding:0;outline:0}.workbench aside{display:grid;align-content:start;gap:14px;padding:16px;overflow:auto;background:color-mix(in srgb,CanvasText 2.5%,Canvas)}aside section{display:grid;gap:7px}aside h3{margin:0;font-size:12px}.actions button{width:100%;text-align:left}.activity{padding:11px;border-radius:9px;background:color-mix(in srgb,#0a84ff 8%,Canvas)}.activity p{margin:0;font-size:12px;line-height:1.5}.activity small,.proposal-list small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:10px}.proposal-list article{display:grid;gap:6px;padding:10px;border:1px solid color-mix(in srgb,#ff9f0a 30%,transparent);border-radius:9px;background:Canvas}.proposal-list article.conflicted{border-color:color-mix(in srgb,#ff3b30 38%,transparent)}.proposal-list article>strong{font-size:11px}.proposal-list article>span{font-size:12px;white-space:pre-wrap}.proposal-list article>div{display:flex;justify-content:flex-end;gap:6px}.assessment-list p{display:grid;gap:2px;margin:0;padding:9px;border-radius:8px;background:Canvas;font-size:11px}.assessment-list p.outdated{background:color-mix(in srgb,#ff3b30 7%,Canvas)}.assessment-list span{color:color-mix(in srgb,CanvasText 54%,transparent);font-size:10px}.assessment-list small{color:#d62d26}.empty{margin:0;color:color-mix(in srgb,CanvasText 45%,transparent);font-size:11px}.failure{display:grid;gap:4px;padding:18px;border:1px solid color-mix(in srgb,#ff3b30 35%,transparent);border-radius:10px;background:color-mix(in srgb,#ff3b30 7%,Canvas)}.failure span{font:11px ui-monospace,SFMono-Regular,monospace}.primary{background:#0a84ff!important;color:#fff!important}@media(max-width:800px){.workbench{grid-template-columns:1fr}.document-shell{border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.workbench aside{grid-template-columns:repeat(2,minmax(0,1fr))}.activity{grid-column:1/-1}}@media(max-width:580px){.cdr-spike>header{display:block}.status{display:inline-block;margin-top:10px}.document-shell{padding:20px}.workbench aside{grid-template-columns:1fr}.activity{grid-column:auto}}
+  .cdr-spike{display:grid;gap:14px}.cdr-spike>header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.cdr-spike h2{margin:2px 0 5px;font-size:20px}.cdr-spike header p:not(.eyebrow){max-width:720px;margin:0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.managed-path{display:block;margin-top:6px;color:color-mix(in srgb,CanvasText 48%,transparent);font:10px ui-monospace,SFMono-Regular,monospace}.eyebrow{margin:0;color:#0a84ff;font-size:11px;font-weight:750;letter-spacing:.04em;text-transform:uppercase}.status{flex:none;padding:4px 9px;border-radius:999px;background:color-mix(in srgb,#34c759 14%,Canvas);color:#168333;font-size:11px;font-weight:700}.status.loading{background:color-mix(in srgb,CanvasText 8%,Canvas);color:color-mix(in srgb,CanvasText 55%,transparent)}.create-panel{display:grid;justify-items:start;gap:10px;padding:24px;border:1px solid color-mix(in srgb,CanvasText 12%,transparent);border-radius:12px;background:Canvas}.create-panel p{max-width:680px;margin:0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px;line-height:1.55}.create-panel small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:11px}.creation-error{max-width:100%;overflow-wrap:anywhere;color:#d62d26;font-size:10px}.workbench{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:540px;overflow:hidden;border:1px solid color-mix(in srgb,CanvasText 12%,transparent);border-radius:12px;background:Canvas}.document-shell{min-width:0;padding:28px 34px;overflow:auto;border-right:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.editor-host{min-height:430px}.document-shell :global(.kit-host){height:100%;min-height:430px}.document-shell :global(.moraya-editor){min-height:410px;padding:0;outline:0}.workbench aside{display:grid;align-content:start;gap:14px;padding:16px;overflow:auto;background:color-mix(in srgb,CanvasText 2.5%,Canvas)}aside section{display:grid;gap:7px}aside h3{margin:0;font-size:12px}.actions button{width:100%;text-align:left}.activity{padding:11px;border-radius:9px;background:color-mix(in srgb,#0a84ff 8%,Canvas)}.activity p{margin:0;font-size:12px;line-height:1.5}.activity small,.proposal-list small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:10px}.proposal-list article{display:grid;gap:6px;padding:10px;border:1px solid color-mix(in srgb,#ff9f0a 30%,transparent);border-radius:9px;background:Canvas}.proposal-list article.conflicted{border-color:color-mix(in srgb,#ff3b30 38%,transparent)}.proposal-list article>strong{font-size:11px}.proposal-list article>span{font-size:12px;white-space:pre-wrap}.proposal-list article>div{display:flex;justify-content:flex-end;gap:6px}.assessment-list p{display:grid;gap:2px;margin:0;padding:9px;border-radius:8px;background:Canvas;font-size:11px}.assessment-list p.outdated{background:color-mix(in srgb,#ff3b30 7%,Canvas)}.assessment-list span{color:color-mix(in srgb,CanvasText 54%,transparent);font-size:10px}.assessment-list small{color:#d62d26}.empty{margin:0;color:color-mix(in srgb,CanvasText 45%,transparent);font-size:11px}.failure{display:grid;gap:4px;padding:18px;border:1px solid color-mix(in srgb,#ff3b30 35%,transparent);border-radius:10px;background:color-mix(in srgb,#ff3b30 7%,Canvas)}.failure span{font:11px ui-monospace,SFMono-Regular,monospace}.primary{background:#0a84ff!important;color:#fff!important}@media(max-width:800px){.workbench{grid-template-columns:1fr}.document-shell{border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.workbench aside{grid-template-columns:repeat(2,minmax(0,1fr))}.activity{grid-column:1/-1}}@media(max-width:580px){.cdr-spike>header{display:block}.status{display:inline-block;margin-top:10px}.document-shell{padding:20px}.workbench aside{grid-template-columns:1fr}.activity{grid-column:auto}}
 </style>

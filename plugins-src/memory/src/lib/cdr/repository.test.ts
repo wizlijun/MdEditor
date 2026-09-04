@@ -219,6 +219,7 @@ describe('HostBridgeAggregateStore', () => {
     const state: DocumentSessionState = {
       schema: DOCUMENT_SESSION_STATE_SCHEMA,
       head: fixture(),
+      revisionHistory: [],
       receipts: [],
       proposals: [],
       assessments: [],
@@ -247,6 +248,7 @@ describe('HostBridgeAggregateStore', () => {
     const state: DocumentSessionState = {
       schema: DOCUMENT_SESSION_STATE_SCHEMA,
       head: fixture(),
+      revisionHistory: [],
       receipts: [],
       proposals: [],
       assessments: [],
@@ -273,7 +275,7 @@ describe('HostBridgeAggregateStore', () => {
       expectedGeneration: 1,
       aggregate: {
         schema: DOCUMENT_SESSION_STATE_SCHEMA,
-        head: fixture(), receipts: [], proposals: [], assessments: [], audit: [],
+        head: fixture(), revisionHistory: [], receipts: [], proposals: [], assessments: [], audit: [],
       },
     })).rejects.toBeInstanceOf(RepositoryIOError)
   })

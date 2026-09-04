@@ -3,7 +3,12 @@
  *
  * Persistence is deliberately outside this module. The session owns validation
  * and deterministic state transitions; repository.ts owns durable CAS.
+ * Content hashes are asynchronous because production uses Web Crypto.
  */
+
+import { sha256Hex } from '../../../../../src/lib/hash'
+
+export { sha256Hex } from '../../../../../src/lib/hash'
 
 export interface DocumentBlock {
   blockId: string
@@ -75,14 +80,14 @@ export interface AuditEvent {
 
 export interface IdProvider {
   revisionId(): string
-  blockRevision(): string
+  blockRevision(markdown: string): Promise<string>
   changeId(): string
   changeSetId(): string
   assessmentId(): string
   eventId(): string
 }
 
-export const DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v1' as const
+export const DOCUMENT_SESSION_STATE_SCHEMA = 'notemd.cdr/document-session/v2' as const
 
 export type StoredSubmitOutcome =
   | { kind: 'applied'; change: AppliedChange }
@@ -90,6 +95,7 @@ export type StoredSubmitOutcome =
 
 export interface StoredSubmitReceipt {
   requestId: string
+  submittedBaseRevisionId: string
   batchSignature: string
   outcome: StoredSubmitOutcome
 }
@@ -98,6 +104,7 @@ export interface StoredSubmitReceipt {
 export interface DocumentSessionState {
   schema: typeof DOCUMENT_SESSION_STATE_SCHEMA
   head: DocumentRevision
+  revisionHistory: readonly DocumentRevision[]
   receipts: readonly StoredSubmitReceipt[]
   proposals: readonly Proposal[]
   assessments: readonly Assessment[]
@@ -274,16 +281,17 @@ function signature(batch: OperationBatch): string {
 
 function parseReceipt(value: unknown, path: string): StoredSubmitReceipt {
   const item = record(value, path)
-  exactKeys(item, path, ['requestId', 'batchSignature', 'outcome'])
+  exactKeys(item, path, ['requestId', 'submittedBaseRevisionId', 'batchSignature', 'outcome'])
   const requestId = stringValue(item.requestId, `${path}.requestId`)
+  const submittedBaseRevisionId = stringValue(item.submittedBaseRevisionId, `${path}.submittedBaseRevisionId`)
   const batchSignature = stringValue(item.batchSignature, `${path}.batchSignature`)
   const outcome = parseStoredOutcome(item.outcome, `${path}.outcome`)
   if (outcome.kind === 'applied') {
     if (outcome.change.originRequestId !== requestId) invalid(`${path}.outcome.change.originRequestId`, 'must match receipt requestId')
-    const expected = signature({ requestId, baseRevisionId: outcome.change.baseRevisionId, operations: outcome.change.operations })
+    const expected = signature({ requestId, baseRevisionId: submittedBaseRevisionId, operations: outcome.change.operations })
     if (batchSignature !== expected) invalid(`${path}.batchSignature`, 'does not match the applied change')
   }
-  return { requestId, batchSignature, outcome }
+  return { requestId, submittedBaseRevisionId, batchSignature, outcome }
 }
 
 function parseProposal(value: unknown, path: string): Proposal {
@@ -331,9 +339,11 @@ function parseAudit(value: unknown, path: string): AuditEvent {
 /** Validate untrusted repository data and return a detached canonical value. */
 export function parseDocumentSessionState(value: unknown): DocumentSessionState {
   const item = record(value, 'state')
-  exactKeys(item, 'state', ['schema', 'head', 'receipts', 'proposals', 'assessments', 'audit'])
+  exactKeys(item, 'state', ['schema', 'head', 'revisionHistory', 'receipts', 'proposals', 'assessments', 'audit'])
   if (item.schema !== DOCUMENT_SESSION_STATE_SCHEMA) invalid('state.schema', `must be ${DOCUMENT_SESSION_STATE_SCHEMA}`)
   const head = parseRevision(item.head, 'state.head')
+  const revisionHistory = arrayValue(item.revisionHistory, 'state.revisionHistory')
+    .map((revision, index) => parseRevision(revision, `state.revisionHistory[${index}]`))
   const receipts = arrayValue(item.receipts, 'state.receipts').map((receipt, index) => parseReceipt(receipt, `state.receipts[${index}]`))
   const proposals = arrayValue(item.proposals, 'state.proposals').map((proposal, index) => parseProposal(proposal, `state.proposals[${index}]`))
   const assessments = arrayValue(item.assessments, 'state.assessments').map((assessment, index) => parseAssessment(assessment, `state.assessments[${index}]`))
@@ -343,6 +353,11 @@ export function parseDocumentSessionState(value: unknown): DocumentSessionState 
   unique(proposals.map((proposal) => proposal.batch.requestId), 'state.proposals requestIds')
   unique(assessments.map((assessment) => assessment.assessmentId), 'state.assessments assessmentIds')
   unique(audit.map((event) => event.eventId), 'state.audit eventIds')
+  unique(revisionHistory.map((revision) => revision.revisionId), 'state.revisionHistory revisionIds')
+  for (const revision of revisionHistory) {
+    if (revision.documentId !== head.documentId) invalid('state.revisionHistory', 'must belong to the head document')
+    if (revision.revisionId === head.revisionId) invalid('state.revisionHistory', 'must not repeat the head revision')
+  }
   const receiptRequests = new Set(receipts.map((receipt) => receipt.requestId))
   for (const proposal of proposals) {
     if (!receiptRequests.has(proposal.batch.requestId)) continue
@@ -351,7 +366,7 @@ export function parseDocumentSessionState(value: unknown): DocumentSessionState 
       invalid('state', `requestId ${proposal.batch.requestId} is reused inconsistently by a proposal and a receipt`)
     }
   }
-  return { schema: DOCUMENT_SESSION_STATE_SCHEMA, head, receipts, proposals, assessments, audit }
+  return { schema: DOCUMENT_SESSION_STATE_SCHEMA, head, revisionHistory, receipts, proposals, assessments, audit }
 }
 
 function cloneRevision(revision: DocumentRevision): DocumentRevision {
@@ -386,7 +401,9 @@ function cloneOutcome(outcome: StoredSubmitOutcome): StoredSubmitOutcome {
 
 export class InMemoryDocumentSession {
   #head: DocumentRevision
-  #receipts = new Map<string, { batchSignature: string; outcome: StoredSubmitOutcome }>()
+  #revisionHistory: DocumentRevision[] = []
+  #receipts = new Map<string, { submittedBaseRevisionId: string; batchSignature: string; outcome: StoredSubmitOutcome }>()
+  #mutationTail: Promise<void> = Promise.resolve()
   #proposals: Proposal[] = []
   #assessments: Assessment[] = []
   #audit: AuditEvent[] = []
@@ -398,7 +415,9 @@ export class InMemoryDocumentSession {
   static fromState(state: unknown, ids: IdProvider): InMemoryDocumentSession {
     const parsed = parseDocumentSessionState(state)
     const session = new InMemoryDocumentSession(parsed.head, ids)
+    session.#revisionHistory = parsed.revisionHistory.map(cloneRevision)
     session.#receipts = new Map(parsed.receipts.map((receipt) => [receipt.requestId, {
+      submittedBaseRevisionId: receipt.submittedBaseRevisionId,
       batchSignature: receipt.batchSignature,
       outcome: cloneOutcome(receipt.outcome),
     }]))
@@ -416,8 +435,10 @@ export class InMemoryDocumentSession {
     return {
       schema: DOCUMENT_SESSION_STATE_SCHEMA,
       head: this.snapshot(),
+      revisionHistory: this.revisionHistory(),
       receipts: [...this.#receipts.entries()].map(([requestId, receipt]) => ({
         requestId,
+        submittedBaseRevisionId: receipt.submittedBaseRevisionId,
         batchSignature: receipt.batchSignature,
         outcome: cloneOutcome(receipt.outcome),
       })),
@@ -429,6 +450,10 @@ export class InMemoryDocumentSession {
 
   snapshot(): DocumentRevision {
     return cloneRevision(this.#head)
+  }
+
+  revisionHistory(): readonly DocumentRevision[] {
+    return this.#revisionHistory.map(cloneRevision)
   }
 
   proposals(): readonly Proposal[] {
@@ -447,7 +472,11 @@ export class InMemoryDocumentSession {
     return this.#audit.map((event) => ({ ...event }))
   }
 
-  submit(batch: OperationBatch, actorId: string): SubmitResult {
+  async submit(batch: OperationBatch, actorId: string): Promise<SubmitResult> {
+    return this.#enqueue(() => this.#submit(batch, actorId))
+  }
+
+  async #submit(batch: OperationBatch, actorId: string): Promise<SubmitResult> {
     const normalizedBatch = parseBatch(batch, 'batch')
     stringValue(actorId, 'actorId')
     const payload = signature(normalizedBatch)
@@ -465,23 +494,30 @@ export class InMemoryDocumentSession {
     const conflict = this.#validate(normalizedBatch)
     if (conflict) {
       this.#receipts.set(normalizedBatch.requestId, {
+        submittedBaseRevisionId: normalizedBatch.baseRevisionId,
         batchSignature: payload,
         outcome: { kind: 'conflicted', conflict: cloneConflict(conflict) },
       })
       return { kind: 'conflicted', conflict, snapshot: this.snapshot() }
     }
 
-    const baseRevisionId = this.#head.revisionId
+    const previousHead = this.snapshot()
+    const baseRevisionId = previousHead.revisionId
     const changed = new Map<string, string>()
-    const nextBlocks = this.#head.blocks.map((block) => {
+    const changedRevisions = new Map(await Promise.all(normalizedBatch.operations.map(async (operation) => [
+      operation.blockId,
+      await this.ids.blockRevision(operation.markdown),
+    ] as const)))
+    const nextBlocks = previousHead.blocks.map((block) => {
       const operation = normalizedBatch.operations.find((item) => item.blockId === block.blockId)
       if (!operation) return block
-      const blockRevision = this.ids.blockRevision()
+      const blockRevision = changedRevisions.get(block.blockId)!
       changed.set(block.blockId, blockRevision)
       return { ...block, markdown: operation.markdown, blockRevision }
     })
     const revisionId = this.ids.revisionId()
     this.#head = { ...this.#head, revisionId, blocks: nextBlocks }
+    this.#revisionHistory = [...this.#revisionHistory, previousHead]
     const change: AppliedChange = {
       changeId: this.ids.changeId(),
       originRequestId: normalizedBatch.requestId,
@@ -491,12 +527,20 @@ export class InMemoryDocumentSession {
       operations: normalizedBatch.operations.map((operation) => ({ ...operation })),
     }
     const outcome: StoredSubmitOutcome = { kind: 'applied', change: cloneChange(change) }
-    this.#receipts.set(normalizedBatch.requestId, { batchSignature: payload, outcome })
+    this.#receipts.set(normalizedBatch.requestId, {
+      submittedBaseRevisionId: normalizedBatch.baseRevisionId,
+      batchSignature: payload,
+      outcome,
+    })
     this.#audit.push({ eventId: this.ids.eventId(), actorId, action: 'applied', targetId: change.changeId })
     return { kind: 'applied', change: cloneChange(change), snapshot: this.snapshot(), duplicate: false }
   }
 
-  propose(batch: OperationBatch, actorId: string): Proposal {
+  async propose(batch: OperationBatch, actorId: string): Promise<Proposal> {
+    return this.#enqueue(() => this.#propose(batch, actorId))
+  }
+
+  #propose(batch: OperationBatch, actorId: string): Proposal {
     const normalizedBatch = parseBatch(batch, 'batch')
     stringValue(actorId, 'actorId')
     if (normalizedBatch.operations.length !== 1) throw new Error('CDR_PROPOSAL_OPERATION_COUNT')
@@ -524,7 +568,11 @@ export class InMemoryDocumentSession {
     return { ...proposal, batch: cloneBatch(proposal.batch) }
   }
 
-  decideProposal(changeSetId: string, decision: 'accept' | 'reject', actorId: string): SubmitResult | null {
+  async decideProposal(changeSetId: string, decision: 'accept' | 'reject', actorId: string): Promise<SubmitResult | null> {
+    return this.#enqueue(() => this.#decideProposal(changeSetId, decision, actorId))
+  }
+
+  async #decideProposal(changeSetId: string, decision: 'accept' | 'reject', actorId: string): Promise<SubmitResult | null> {
     stringValue(changeSetId, 'changeSetId')
     enumValue(decision, 'decision', ['accept', 'reject'])
     stringValue(actorId, 'actorId')
@@ -537,7 +585,7 @@ export class InMemoryDocumentSession {
       return null
     }
 
-    const result = this.submit({ ...proposal.batch, requestId: `decision/${changeSetId}` }, actorId)
+    const result = await this.#submit({ ...proposal.batch, requestId: `decision/${changeSetId}` }, actorId)
     if (result.kind === 'conflicted') {
       proposal.status = 'conflicted'
       proposal.conflict = result.conflict
@@ -549,7 +597,11 @@ export class InMemoryDocumentSession {
     return result
   }
 
-  assess(blockId: string, actorId: string, conclusion: Assessment['conclusion']): Assessment {
+  async assess(blockId: string, actorId: string, conclusion: Assessment['conclusion']): Promise<Assessment> {
+    return this.#enqueue(() => this.#assess(blockId, actorId, conclusion))
+  }
+
+  #assess(blockId: string, actorId: string, conclusion: Assessment['conclusion']): Assessment {
     stringValue(blockId, 'blockId')
     stringValue(actorId, 'actorId')
     enumValue(conclusion, 'conclusion', ['verified', 'needs-review'])
@@ -569,6 +621,12 @@ export class InMemoryDocumentSession {
 
   assessmentIsOutdated(assessment: Assessment): boolean {
     return this.#head.blocks.find((block) => block.blockId === assessment.blockId)?.blockRevision !== assessment.blockRevision
+  }
+
+  #enqueue<T>(transition: () => T | Promise<T>): Promise<T> {
+    const run = this.#mutationTail.then(transition)
+    this.#mutationTail = run.then(() => undefined, () => undefined)
+    return run
   }
 
   #validate(batch: OperationBatch): Conflict | null {
@@ -595,11 +653,15 @@ function cryptoUuid(): string {
   return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`
 }
 
+export function documentId(): string {
+  return cryptoUuid()
+}
+
 export function uuidIds(): IdProvider & { requestId(): string; operationId(): string } {
   const next = (kind: string) => `${kind}/${cryptoUuid()}`
   return {
     revisionId: () => next('revision'),
-    blockRevision: () => next('block-revision'),
+    blockRevision: sha256Hex,
     changeId: () => next('change'),
     changeSetId: () => next('change-set'),
     assessmentId: () => next('assessment'),
@@ -614,7 +676,7 @@ export function sequentialIds(prefix = 'spike'): IdProvider & { requestId(): str
   const next = (kind: string) => `${prefix}/${kind}-${++value}`
   return {
     revisionId: () => next('revision'),
-    blockRevision: () => next('block-revision'),
+    blockRevision: async () => next('block-revision'),
     changeId: () => next('change'),
     changeSetId: () => next('change-set'),
     assessmentId: () => next('assessment'),

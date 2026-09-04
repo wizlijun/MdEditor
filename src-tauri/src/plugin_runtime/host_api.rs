@@ -61,7 +61,11 @@ pub fn method_capability(method: &str) -> Option<&'static str> {
         // Opaque collaborative-document aggregate repository. The live UI
         // bridge binds storage to the Origin-authenticated plugin id; native
         // plugin processes intentionally do not receive this surface.
-        "host.cdr.repository.v1.load" | "host.cdr.repository.v1.commit" => Some("cdr.repository"),
+        "host.cdr.repository.v1.load"
+        | "host.cdr.repository.v1.commit"
+        | "host.cdr.repository.v2.inspect"
+        | "host.cdr.repository.v2.load"
+        | "host.cdr.repository.v2.commit" => Some("cdr.repository"),
         "host.notify" => Some("notify"),
         "host.dismissNotification" => Some("notify"),
         // editor.kit — the host-embedded editor bundle and the theme CSS that
@@ -570,6 +574,13 @@ mod tests {
             method_capability("host.cdr.repository.v1.commit"),
             Some("cdr.repository")
         );
+        for method in [
+            "host.cdr.repository.v2.inspect",
+            "host.cdr.repository.v2.load",
+            "host.cdr.repository.v2.commit",
+        ] {
+            assert_eq!(method_capability(method), Some("cdr.repository"));
+        }
         assert_eq!(method_capability("host.notify"), Some("notify"));
         assert_eq!(method_capability("host.dismissNotification"), Some("notify"));
         assert_eq!(method_capability("host.theme.css"), Some("editor.kit"));
@@ -672,6 +683,9 @@ mod tests {
         for method in [
             "host.cdr.repository.v1.load",
             "host.cdr.repository.v1.commit",
+            "host.cdr.repository.v2.inspect",
+            "host.cdr.repository.v2.load",
+            "host.cdr.repository.v2.commit",
         ] {
             let resp = sink(req(method, Some(6), serde_json::json!({}))).unwrap();
             let err = resp.error.unwrap();

@@ -14,17 +14,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 const SCHEMA_VERSION: u32 = 1;
-const MAX_DOCUMENT_ID_BYTES: usize = 4 * 1024;
-const MAX_AGGREGATE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ENVELOPE_BYTES: u64 = (MAX_AGGREGATE_BYTES + 64 * 1024) as u64;
+pub(super) const MAX_DOCUMENT_ID_BYTES: usize = 4 * 1024;
+pub(super) const MAX_AGGREGATE_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_ENVELOPE_BYTES: u64 = (MAX_AGGREGATE_BYTES + 64 * 1024) as u64;
 // RPC clients are JavaScript; keep every generation exactly representable.
-const MAX_SAFE_GENERATION: u64 = 9_007_199_254_740_991;
+pub(super) const MAX_SAFE_GENERATION: u64 = 9_007_199_254_740_991;
 
 // RPC dispatches run concurrently.  A single process-wide lock is sufficient
 // for Stage 0 and, unlike a per-path lock registry, cannot grow without bound.
 // The temporary-file replace keeps readers in other processes from observing a
 // partial envelope; cross-process writers are outside this local-store contract.
-static REPOSITORY_LOCK: Mutex<()> = Mutex::new(());
+pub(super) static REPOSITORY_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,7 +148,7 @@ fn load_document_id(params: &Value) -> Result<&str, String> {
     required_document_id(object.get("document_id"))
 }
 
-fn exact_object<'a>(
+pub(super) fn exact_object<'a>(
     value: &'a Value,
     allowed_fields: &[&str],
 ) -> Result<&'a serde_json::Map<String, Value>, String> {
@@ -168,7 +168,7 @@ fn exact_object<'a>(
     Ok(object)
 }
 
-fn required_document_id(value: Option<&Value>) -> Result<&str, String> {
+pub(super) fn required_document_id(value: Option<&Value>) -> Result<&str, String> {
     let document_id = value
         .and_then(Value::as_str)
         .ok_or_else(|| "invalid_params: document_id must be a string".to_owned())?;
@@ -183,7 +183,7 @@ fn required_document_id(value: Option<&Value>) -> Result<&str, String> {
     Ok(document_id)
 }
 
-fn validate_plugin_id(plugin_id: &str) -> Result<(), String> {
+pub(super) fn validate_plugin_id(plugin_id: &str) -> Result<(), String> {
     let parts: Vec<&str> = plugin_id.split('.').collect();
     let valid = parts.len() == 2
         && parts.iter().all(|part| {
@@ -198,7 +198,7 @@ fn validate_plugin_id(plugin_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_aggregate_size(aggregate: &Value) -> Result<(), String> {
+pub(super) fn validate_aggregate_size(aggregate: &Value) -> Result<(), String> {
     let size = serde_json::to_vec(aggregate)
         .map_err(|error| format!("invalid_params: aggregate is not serializable: {error}"))?
         .len();
@@ -210,7 +210,7 @@ fn validate_aggregate_size(aggregate: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn aggregate_filename(document_id: &str) -> String {
+pub(super) fn aggregate_filename(document_id: &str) -> String {
     let digest = hex::encode(Sha256::digest(document_id.as_bytes()));
     format!("{digest}.json")
 }
@@ -233,13 +233,25 @@ fn repository_directory(
     plugin_id: &str,
     create: bool,
 ) -> Result<Option<PathBuf>, String> {
+    plugin_repository_directory(root, plugin_id, &["cdr-repository", "v1"], create)
+}
+
+pub(super) fn plugin_repository_directory(
+    root: &Path,
+    plugin_id: &str,
+    components: &[&str],
+    create: bool,
+) -> Result<Option<PathBuf>, String> {
     if !ensure_root(root, create)? {
         return Ok(None);
     }
 
     let mut current = root.to_path_buf();
-    let mut layers = Vec::with_capacity(4);
-    for component in ["plugin_data", plugin_id, "cdr-repository", "v1"] {
+    let mut layers = Vec::with_capacity(2 + components.len());
+    for component in std::iter::once("plugin_data")
+        .chain(std::iter::once(plugin_id))
+        .chain(components.iter().copied())
+    {
         current.push(component);
         if !ensure_child_directory(&current, create)? {
             return Ok(None);
@@ -255,7 +267,7 @@ fn repository_directory(
     Ok(Some(current))
 }
 
-fn ensure_root(root: &Path, create: bool) -> Result<bool, String> {
+pub(super) fn ensure_root(root: &Path, create: bool) -> Result<bool, String> {
     match fs::metadata(root) {
         Ok(metadata) if metadata.is_dir() => Ok(true),
         Ok(_) => Err("unsafe_path: app-data root is not a directory".to_owned()),
@@ -273,7 +285,7 @@ fn ensure_root(root: &Path, create: bool) -> Result<bool, String> {
     }
 }
 
-fn ensure_child_directory(path: &Path, create: bool) -> Result<bool, String> {
+pub(super) fn ensure_child_directory(path: &Path, create: bool) -> Result<bool, String> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
             require_child_directory(path)?;
@@ -303,7 +315,7 @@ fn ensure_child_directory(path: &Path, create: bool) -> Result<bool, String> {
     }
 }
 
-fn require_child_directory(path: &Path) -> Result<(), String> {
+pub(super) fn require_child_directory(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         format!(
             "unsafe_path: repository directory '{}' is unavailable: {error}",

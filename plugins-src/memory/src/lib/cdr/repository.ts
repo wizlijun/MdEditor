@@ -74,6 +74,16 @@ export class RepositoryOutcomeUnknownError extends Error {
   }
 }
 
+/** A lower storage layer has proved writes unsafe (for example external drift). */
+export class RepositoryWriteBlockedError extends Error {
+  readonly code = 'CDR_REPOSITORY_WRITE_BLOCKED'
+
+  constructor(message: string) {
+    super(`CDR_REPOSITORY_WRITE_BLOCKED: ${message}`)
+    this.name = 'RepositoryWriteBlockedError'
+  }
+}
+
 function responseRecord(value: unknown, method: string): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new RepositoryIOError(`${method} returned a non-object response`)
@@ -189,14 +199,14 @@ function repositoryIO(action: string, error: unknown): RepositoryIOError {
 }
 
 /**
- * Copy-on-write persistent facade around the synchronous state machine.
+ * Copy-on-write persistent facade around the state machine.
  * Calls on one instance are serialized. A failed durable write never exposes
  * its candidate state; after CAS conflict, the latest valid committed state is
  * installed and the initiating operation still fails instead of auto-retrying.
  */
 export class PersistentDocumentSession {
   #writeTail: Promise<void> = Promise.resolve()
-  #writeFailure: RepositoryOutcomeUnknownError | null = null
+  #writeFailure: RepositoryOutcomeUnknownError | RepositoryWriteBlockedError | null = null
 
   private constructor(
     private readonly store: AggregateStore,
@@ -279,6 +289,10 @@ export class PersistentDocumentSession {
     return this.session.snapshot()
   }
 
+  revisionHistory(): readonly DocumentRevision[] {
+    return this.session.revisionHistory()
+  }
+
   proposals(): readonly Proposal[] {
     return this.session.proposals()
   }
@@ -319,12 +333,12 @@ export class PersistentDocumentSession {
     return this.mutate((candidate) => candidate.assess(blockId, actorId, conclusion))
   }
 
-  private mutate<T>(transition: (candidate: InMemoryDocumentSession) => T): Promise<T> {
+  private mutate<T>(transition: (candidate: InMemoryDocumentSession) => T | Promise<T>): Promise<T> {
     const run = this.#writeTail.then(async () => {
       if (this.#writeFailure) throw this.#writeFailure
       const before = this.session.exportState()
       const candidate = InMemoryDocumentSession.fromState(before, this.ids)
-      const result = transition(candidate)
+      const result = await transition(candidate)
       const after = candidate.exportState()
       if (JSON.stringify(after) === JSON.stringify(before)) return result
 
@@ -336,6 +350,10 @@ export class PersistentDocumentSession {
           aggregate: after,
         })
       } catch (error) {
+        if (error instanceof RepositoryWriteBlockedError) {
+          this.#writeFailure = error
+          throw error
+        }
         const recovered = await this.recoverCommitOutcome(before, after, error)
         if (recovered === 'candidate') return result
         throw repositoryIO('commit aggregate', error)

@@ -285,6 +285,18 @@ fn capability_denial(
     }
 }
 
+fn cdr_v2_missing_vault_capability(method: &str, capabilities: &[String]) -> Option<&'static str> {
+    let required: &[&'static str] = match method {
+        "host.cdr.repository.v2.inspect" | "host.cdr.repository.v2.load" => &["vault.read"],
+        "host.cdr.repository.v2.commit" => &["vault.read", "vault.write"],
+        _ => &[],
+    };
+    required
+        .iter()
+        .copied()
+        .find(|required| !capabilities.iter().any(|held| held == required))
+}
+
 /// Production entry point: for `host.*` methods, builds the live services
 /// (dialogs, vault, clipboard, toast emitter, plugin log dir) from `app` and
 /// delegates to [`dispatch_with`]. For NON-host methods (the plugin's own API,
@@ -365,6 +377,54 @@ pub async fn dispatch<R: tauri::Runtime>(
                 } else {
                     super::cdr_repository::commit(&root, plugin_id, &req.params)
                 }
+            });
+        return match result {
+            Ok(value) => ok(req.id, value),
+            Err(detail) => err(req.id, proto::ERR_INTERNAL, detail),
+        };
+    }
+
+    if req.method == "host.cdr.repository.v2.inspect"
+        || req.method == "host.cdr.repository.v2.load"
+        || req.method == "host.cdr.repository.v2.commit"
+    {
+        if let Some(denial) = capability_denial(&req.method, capabilities, req.id) {
+            return denial;
+        }
+        if let Some(missing) = cdr_v2_missing_vault_capability(&req.method, capabilities) {
+            return err(
+                req.id,
+                proto::ERR_CAPABILITY_DENIED,
+                format!("method {} also requires capability '{missing}'", req.method),
+            );
+        }
+        let result = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("io: resolve app data directory: {error}"))
+            .and_then(|app_data_root| {
+                crate::sotvault::resolve_vault_root(app)
+                    .ok_or_else(|| "vault_required: configure a Vault first".to_owned())
+                    .and_then(|vault_root| match req.method.as_str() {
+                        "host.cdr.repository.v2.inspect" => super::cdr_managed_document::inspect(
+                            &app_data_root,
+                            &vault_root,
+                            plugin_id,
+                            &req.params,
+                        ),
+                        "host.cdr.repository.v2.load" => super::cdr_managed_document::load(
+                            &app_data_root,
+                            &vault_root,
+                            plugin_id,
+                            &req.params,
+                        ),
+                        _ => super::cdr_managed_document::commit(
+                            &app_data_root,
+                            &vault_root,
+                            plugin_id,
+                            &req.params,
+                        ),
+                    })
             });
         return match result {
             Ok(value) => ok(req.id, value),
@@ -1597,6 +1657,9 @@ mod tests {
             ("host.settings.set", "settings"),
             ("host.cdr.repository.v1.load", "cdr.repository"),
             ("host.cdr.repository.v1.commit", "cdr.repository"),
+            ("host.cdr.repository.v2.inspect", "cdr.repository"),
+            ("host.cdr.repository.v2.load", "cdr.repository"),
+            ("host.cdr.repository.v2.commit", "cdr.repository"),
         ] {
             let r = run(&s, &[], method, serde_json::json!({})).await;
             let e = r.error.unwrap();
@@ -1633,6 +1696,9 @@ mod tests {
         for method in [
             "host.cdr.repository.v1.load",
             "host.cdr.repository.v1.commit",
+            "host.cdr.repository.v2.inspect",
+            "host.cdr.repository.v2.load",
+            "host.cdr.repository.v2.commit",
         ] {
             let denial = capability_denial(method, &[], Some(1)).expect("must deny");
             assert_eq!(denial.error.unwrap().code, proto::ERR_CAPABILITY_DENIED);
@@ -1641,6 +1707,32 @@ mod tests {
                 "{method}"
             );
         }
+    }
+
+    #[test]
+    fn managed_document_repository_requires_vault_capabilities_too() {
+        assert_eq!(
+            cdr_v2_missing_vault_capability("host.cdr.repository.v2.inspect", &[]),
+            Some("vault.read")
+        );
+        assert_eq!(
+            cdr_v2_missing_vault_capability("host.cdr.repository.v2.load", &["vault.read".into()]),
+            None
+        );
+        assert_eq!(
+            cdr_v2_missing_vault_capability(
+                "host.cdr.repository.v2.commit",
+                &["vault.read".into()]
+            ),
+            Some("vault.write")
+        );
+        assert_eq!(
+            cdr_v2_missing_vault_capability(
+                "host.cdr.repository.v2.commit",
+                &["vault.read".into(), "vault.write".into()]
+            ),
+            None
+        );
     }
 
     /// Fail CLOSED on an unknown method, exactly like the two shared gates
