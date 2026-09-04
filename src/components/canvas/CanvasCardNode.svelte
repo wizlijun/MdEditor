@@ -191,16 +191,33 @@
     height: 100%;
     box-sizing: border-box;
     overflow: hidden;
-    border: 1px solid color-mix(in srgb, CanvasText 17%, transparent);
-    border-left: 4px solid var(--card-accent);
-    border-radius: 10px;
-    background: color-mix(in srgb, Canvas 96%, CanvasText 4%);
+    border: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
+    border-radius: 12px;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card-accent) 8%, transparent), transparent 54px),
+      color-mix(in srgb, Canvas 97%, CanvasText 3%);
     color: CanvasText;
-    box-shadow: 0 5px 18px rgba(0, 0, 0, 0.11);
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .canvas-card::before {
+    content: '';
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    right: 12px;
+    left: 12px;
+    height: 2px;
+    border-radius: 0 0 999px 999px;
+    background: var(--card-accent);
+    pointer-events: none;
+  }
+  .canvas-card:hover {
+    border-color: color-mix(in srgb, CanvasText 23%, transparent);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.14), 0 2px 5px rgba(0, 0, 0, 0.07);
   }
   .canvas-card.active-editor {
     border-color: var(--accent, #4d88ff);
-    border-left-color: var(--accent, #4d88ff);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4d88ff) 24%, transparent),
       0 8px 24px rgba(0, 0, 0, 0.13);
   }
@@ -223,24 +240,31 @@
   .canvas-card.group-node {
     isolation: isolate;
     overflow: visible;
-    border: 2px solid color-mix(in srgb, var(--card-accent, CanvasText) 58%, CanvasText 16%);
-    border-left-width: 2px;
-    background: color-mix(in srgb, var(--card-accent, Canvas) 7%, transparent);
+    border: 1.5px dashed color-mix(in srgb, var(--card-accent, CanvasText) 58%, CanvasText 16%);
+    background: color-mix(in srgb, var(--card-accent, Canvas) 6%, transparent);
     box-shadow: none;
     pointer-events: none;
   }
+  .canvas-card.group-node::before { display: none; }
   .group-label {
     position: absolute;
     z-index: 1;
-    top: -27px;
-    left: 2px;
+    top: -31px;
+    left: 0;
     max-width: calc(100% - 4px);
     overflow: hidden;
-    color: color-mix(in srgb, CanvasText 72%, transparent);
-    font-size: 13px;
+    padding: 5px 9px;
+    border: 1px solid color-mix(in srgb, var(--card-accent, CanvasText) 24%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, Canvas 88%, transparent);
+    color: color-mix(in srgb, CanvasText 76%, transparent);
+    font-size: 12px;
     font-weight: 650;
+    line-height: 16px;
     text-overflow: ellipsis;
     white-space: nowrap;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+    backdrop-filter: blur(12px);
     cursor: grab;
     pointer-events: auto;
     user-select: none;
@@ -265,10 +289,10 @@
     background-size: auto;
   }
   .card-heading {
-    height: 34px;
+    height: 38px;
     box-sizing: border-box;
     overflow: hidden;
-    padding: 9px 12px 7px;
+    padding: 11px 13px 8px;
     border-bottom: 1px solid color-mix(in srgb, CanvasText 10%, transparent);
     font-size: 12px;
     font-weight: 650;
@@ -277,7 +301,7 @@
   }
   .file-image {
     width: 100%;
-    height: calc(100% - 34px);
+    height: calc(100% - 38px);
     object-fit: contain;
     background: color-mix(in srgb, Canvas 88%, CanvasText 12%);
   }
@@ -292,8 +316,17 @@
     padding: 16px;
     text-align: center;
   }
-  .file-placeholder { height: calc(100% - 34px); }
-  .file-placeholder > span, .link-icon { font-size: 28px; opacity: 0.6; }
+  .file-placeholder { height: calc(100% - 38px); }
+  .file-placeholder > span, .link-icon {
+    display: grid;
+    width: 42px;
+    height: 42px;
+    place-items: center;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--card-accent, CanvasText) 10%, transparent);
+    font-size: 22px;
+    opacity: 0.72;
+  }
   .file-placeholder small, .opaque-placeholder small, .link-card small {
     width: 100%;
     overflow: hidden;
@@ -313,15 +346,17 @@
     background: color-mix(in srgb, #c88a36 9%, Canvas);
   }
   :global(.canvas-handle) {
-    width: 9px;
-    height: 9px;
-    border: 2px solid Canvas;
+    width: 10px;
+    height: 10px;
+    border: 2.5px solid Canvas;
     background: var(--accent, #4d88ff);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
     opacity: 0;
-    transition: opacity 100ms ease;
+    transition: opacity 100ms ease, transform 100ms ease;
   }
   :global(.svelte-flow__node:hover .canvas-handle),
   :global(.svelte-flow__node.selected .canvas-handle) { opacity: 1; }
+  :global(.canvas-handle:hover) { transform: scale(1.25); }
   :global(.svelte-flow__node-canvas-group .canvas-handle),
   :global(.svelte-flow__node-canvas-group .svelte-flow__resize-control) { pointer-events: auto; }
   @media (pointer: coarse) {

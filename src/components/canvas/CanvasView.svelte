@@ -97,6 +97,7 @@
   } from '../../lib/canvas'
   import CanvasCardNode from './CanvasCardNode.svelte'
   import CanvasEdgeView from './CanvasEdge.svelte'
+  import CanvasIcon from './CanvasIcon.svelte'
   import CanvasInteractionOverlay from './CanvasInteractionOverlay.svelte'
   import CanvasSelectionResizer from './CanvasSelectionResizer.svelte'
   import { loadCanvasViewport, saveCanvasViewport } from './canvas-view-state'
@@ -236,11 +237,15 @@
     const node = canvasDoc.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === id)
     return node && isKnownCanvasNode(node) ? node : null
   })
+  let contextualEdge = $derived(selectedNodeIds.size === 0 ? selectedEdge : null)
   let effectiveTool = $derived(interactionLocked || spacePan ? 'pan' : activeTool)
   let selectionRoots = $derived.by(() => canvasDoc
     ? getCanvasSelectionRoots(canvasDoc, selectedNodeIds)
     : [])
   let multiSelectionBounds = $derived.by(() => selectedNodeIds.size > 1 && selectionRoots.length > 0
+    ? getCanvasNodesBounds(selectionRoots)
+    : null)
+  let selectionToolbarBounds = $derived.by(() => selectedNodeIds.size > 0 && selectionRoots.length > 0
     ? getCanvasNodesBounds(selectionRoots)
     : null)
 
@@ -375,6 +380,18 @@
     if (!canvasDoc || selectionRoots.length < 2 || !finishTextBeforeStructure()) return
     const changes = spreadCanvasSelection(canvasDoc, selectedNodeIds)
     commitDocument('散开重叠节点', commitNodePositions(canvasDoc, changes))
+  }
+
+  function contextToolbarStyle(): string {
+    const surfaceWidth = surface?.getBoundingClientRect().width ?? 900
+    if (!selectionToolbarBounds) {
+      return `left:${surfaceWidth / 2}px;top:14px`
+    }
+    const screenCenter = (selectionToolbarBounds.x + selectionToolbarBounds.width / 2) * viewport.zoom + viewport.x
+    const screenTop = selectionToolbarBounds.y * viewport.zoom + viewport.y - 12
+    const horizontalInset = Math.min(176, surfaceWidth / 2)
+    const left = Math.min(Math.max(screenCenter, horizontalInset), Math.max(horizontalInset, surfaceWidth - horizontalInset))
+    return `left:${left}px;top:${Math.max(54, screenTop)}px`
   }
 
   function ensureGeometryIndexes(): void {
@@ -1862,6 +1879,21 @@
     commitDocument('设置节点颜色', next)
   }
 
+  function setSelectionColor(color: string | undefined): void {
+    if (!canvasDoc || selectedNodeIds.size < 2 || !finishTextBeforeStructure()) return
+    let next = canvasDoc
+    for (const id of selectedNodeIds) {
+      next = updateCanvasNode(next, id, (node) => {
+        const copy = { ...node }
+        copy.preservedInvalid.delete('color')
+        if (color) { copy.color = color; copy.optionalPresence.add('color') }
+        else { delete copy.color; copy.optionalPresence.delete('color') }
+        return copy
+      })
+    }
+    commitDocument('设置多个节点颜色', next)
+  }
+
   function changeLayer(direction: 'front' | 'back'): void {
     if (!canvasDoc || selectedNodeIds.size === 0 || !finishTextBeforeStructure()) return
     commitDocument(
@@ -2098,130 +2130,106 @@
       {/each}
     </div>
   {:else if viewportReady}
-    <div class="canvas-toolbar" aria-label="画布工具">
-      <button class:tool-active={activeTool === 'select' && !interactionLocked} onclick={() => setTool('select')} title="选择工具 (S)" aria-label="选择工具">选择</button>
-      <button class:tool-active={activeTool === 'pan' || interactionLocked} onclick={() => setTool('pan')} disabled={interactionLocked} title="平移工具 (P)，按住 Space 可临时平移" aria-label="平移工具">平移</button>
-      <button class:tool-active={activeTool === 'lasso' && !interactionLocked} onclick={() => setTool('lasso')} disabled={interactionLocked} title="自由套索工具 (L)" aria-label="自由套索工具">套索</button>
-      <button class:tool-active={interactionLocked} aria-pressed={interactionLocked} onclick={toggleInteractionLock} title="临时锁定或解锁当前画布交互">{interactionLocked ? '解锁' : '锁定'}</button>
+    <div class="canvas-toolbar canvas-dock" aria-label="画布工具">
+      <button class="dock-button" data-shortcut="S" class:tool-active={activeTool === 'select' && !interactionLocked} onclick={() => setTool('select')} title="选择工具 (S)" aria-label="选择工具"><CanvasIcon name="select" /><span class="sr-only">选择</span></button>
+      <button class="dock-button" data-shortcut="P" class:tool-active={activeTool === 'pan' || interactionLocked} onclick={() => setTool('pan')} disabled={interactionLocked} title="平移工具 (P)，按住 Space 可临时平移" aria-label="平移工具"><CanvasIcon name="pan" /><span class="sr-only">平移</span></button>
+      <button class="dock-button" data-shortcut="L" class:tool-active={activeTool === 'lasso' && !interactionLocked} onclick={() => setTool('lasso')} disabled={interactionLocked} title="自由套索工具 (L)" aria-label="自由套索工具"><CanvasIcon name="lasso" /><span class="sr-only">套索</span></button>
+      <button class="dock-button" class:tool-active={interactionLocked} aria-pressed={interactionLocked} aria-label={interactionLocked ? '解锁画布交互' : '锁定画布交互'} onclick={toggleInteractionLock} title="临时锁定或解锁当前画布交互"><CanvasIcon name={interactionLocked ? 'unlock' : 'lock'} /><span class="sr-only">{interactionLocked ? '解锁' : '锁定'}</span></button>
       <span class="toolbar-separator"></span>
-      <button onclick={() => addNode('text')} title="新建文本卡片">＋ 文本</button>
-      <button onclick={() => void chooseFileNode()} title="添加当前 Vault 中的文件或图片">＋ 文件</button>
-      <button onclick={() => addLinkNode()} title="新建链接卡片">＋ 链接</button>
-      <button onclick={addGroupNode} title="新建分组或围绕选中节点创建分组">＋ 分组</button>
-      <button
-        class:tool-active={pendingPlacement === 'group'}
-        onclick={() => setPlacement('group')}
-        title="拖拽绘制分组（快捷键 2）"
-      >框组</button>
-      <button onclick={() => void copySelection()} disabled={selectedNodeIds.size === 0} title="复制选中内容">复制</button>
-      <button onclick={() => void cutSelection()} disabled={selectedNodeIds.size === 0} title="剪切选中内容">剪切</button>
-      <button onclick={() => void pasteFromClipboard()} title="粘贴">粘贴</button>
+      <button class="dock-button" data-shortcut="1" onclick={() => addNode('text')} title="新建文本卡片" aria-label="新建文本卡片"><CanvasIcon name="text" /><span class="sr-only">＋ 文本</span></button>
+      <button class="dock-button" data-shortcut="3" onclick={() => void chooseFileNode()} title="添加当前 Vault 中的文件或图片" aria-label="添加文件或图片"><CanvasIcon name="file" /><span class="sr-only">＋ 文件</span></button>
+      <button class="dock-button" data-shortcut="4" onclick={() => addLinkNode()} title="新建链接卡片" aria-label="新建链接卡片"><CanvasIcon name="link" /><span class="sr-only">＋ 链接</span></button>
+      <button class="dock-button" onclick={addGroupNode} title="新建分组或围绕选中节点创建分组" aria-label="围绕选中节点创建分组"><CanvasIcon name="group" /><span class="sr-only">＋ 分组</span></button>
+      <button class="dock-button" data-shortcut="2" class:tool-active={pendingPlacement === 'group'} onclick={() => setPlacement('group')} title="拖拽绘制分组（快捷键 2）" aria-label="拖拽绘制分组"><CanvasIcon name="frame" /><span class="sr-only">框组</span></button>
+      <button class="dock-button" onclick={() => void pasteFromClipboard()} title="粘贴" aria-label="粘贴"><CanvasIcon name="paste" /><span class="sr-only">粘贴</span></button>
       <span class="toolbar-separator"></span>
-      <button onclick={undo} disabled={!canUndo} title={undoTitle} aria-label={undoTitle}>↶</button>
-      <button onclick={redo} disabled={!canRedo} title={redoTitle} aria-label={redoTitle}>↷</button>
-      <button onclick={deleteSelection} disabled={selectedNodeIds.size + selectedEdgeIds.size === 0} title="删除选中内容" aria-label="删除选中内容">⌫</button>
-      {#if selectedNodeIds.size > 0}
-        <button onclick={() => changeLayer('front')} title="移至最上层">置顶</button>
-        <button onclick={() => changeLayer('back')} title="移至最下层">置底</button>
-      {/if}
-      {#if selectionRoots.length > 1}
-        <span class="toolbar-separator"></span>
-        <button onclick={() => arrangeSelection('left')} title="左对齐" aria-label="左对齐">⇤</button>
-        <button onclick={() => arrangeSelection('center-h')} title="水平居中对齐" aria-label="水平居中对齐">↔</button>
-        <button onclick={() => arrangeSelection('right')} title="右对齐" aria-label="右对齐">⇥</button>
-        <button onclick={() => arrangeSelection('top')} title="顶部对齐" aria-label="顶部对齐">⤒</button>
-        <button onclick={() => arrangeSelection('center-v')} title="垂直居中对齐" aria-label="垂直居中对齐">↕</button>
-        <button onclick={() => arrangeSelection('bottom')} title="底部对齐" aria-label="底部对齐">⤓</button>
-        <button onclick={() => distributeSelection('horizontal')} disabled={selectionRoots.length < 3} title="水平等距分布" aria-label="水平等距分布">H⋯</button>
-        <button onclick={() => distributeSelection('vertical')} disabled={selectionRoots.length < 3} title="垂直等距分布" aria-label="垂直等距分布">V⋮</button>
-        <button onclick={spreadSelection} title="散开重叠节点">散开</button>
-      {/if}
-      {#if selectedEdge}
-        <span class="toolbar-separator"></span>
-        <label class="edge-label">
-          连线标签
-          <input
-            bind:this={toolbarEdgeLabelInput}
-            value={selectedEdge.label ?? ''}
-            placeholder="可选"
-            onchange={(event) => updateEdgeLabel(event.currentTarget.value)}
-            onkeydown={(event) => event.stopPropagation()}
-          />
-        </label>
-        <button
-          class:tool-active={(selectedEdge.fromEnd ?? 'none') === 'arrow'}
-          aria-pressed={(selectedEdge.fromEnd ?? 'none') === 'arrow'}
-          onclick={() => setEdgeEnd('fromEnd', (selectedEdge?.fromEnd ?? 'none') === 'arrow' ? 'none' : 'arrow')}
-          title="切换连线起点箭头"
-        >起点箭头</button>
-        <button
-          class:tool-active={(selectedEdge.toEnd ?? 'arrow') === 'arrow'}
-          aria-pressed={(selectedEdge.toEnd ?? 'arrow') === 'arrow'}
-          onclick={() => setEdgeEnd('toEnd', (selectedEdge?.toEnd ?? 'arrow') === 'arrow' ? 'none' : 'arrow')}
-          title="切换连线终点箭头"
-        >终点箭头</button>
-        <div class="color-row" aria-label="连线颜色">
-          {#each [undefined, '1', '2', '3', '4', '5', '6'] as color}
-            <button
-              class="color-swatch"
-              class:selected={selectedEdge.color === color}
-              style:--swatch={displayColor(color) ?? 'CanvasText'}
-              title={color ? `连线颜色 ${color}` : '默认连线颜色'}
-              onclick={() => setEdgeColor(color)}
-            ><span class="sr-only">{color ?? '默认'}</span></button>
-          {/each}
-        </div>
-      {:else if selectedKnownNode}
-        <span class="toolbar-separator"></span>
-        {#if selectedKnownNode.type === 'file'}
-          <button onclick={() => void relinkSelectedResource()} title="重新选择并导入文件">重新链接</button>
-        {:else if selectedKnownNode.type === 'link'}
-          <button onclick={editSelectedLink} title="编辑链接地址">编辑链接</button>
-        {:else if selectedKnownNode.type === 'group'}
-          <button onclick={fitSelectedGroup} title="缩放分组边界以适配其中节点">适配内容</button>
-          <button onclick={() => void relinkSelectedResource()} title="选择并导入分组背景图片">设置背景</button>
-          {#if selectedKnownNode.background || selectedKnownNode.preservedInvalid.has('background')}
-            <button onclick={clearGroupBackground} title="移除分组背景图片">移除背景</button>
-          {/if}
-          <label class="group-name-label">
-            分组名称
-            <input
-              bind:this={toolbarGroupLabelInput}
-              value={selectedKnownNode.label ?? ''}
-              placeholder="分组"
-              onchange={(event) => updateGroupLabel(event.currentTarget.value)}
-              onkeydown={(event) => event.stopPropagation()}
-            />
-          </label>
-          {#if selectedKnownNode.background}
-            <label class="group-style-label">
-              背景
-              <select
-                value={selectedKnownNode.backgroundStyle ?? 'ratio'}
-                onchange={(event) => setGroupBackgroundStyle(event.currentTarget.value as GroupBackgroundStyle)}
-                onkeydown={(event) => event.stopPropagation()}
-              >
-                <option value="ratio">完整显示</option>
-                <option value="cover">铺满</option>
-                <option value="repeat">平铺</option>
-              </select>
-            </label>
-          {/if}
-          <button onclick={ungroupSelectedGroup} title="移除分组边框并保留其中节点">解组</button>
-        {/if}
-        <div class="color-row" aria-label="节点颜色">
-          {#each [undefined, '1', '2', '3', '4', '5', '6'] as color}
-            <button
-              class="color-swatch"
-              class:selected={selectedKnownNode.color === color}
-              style:--swatch={displayColor(color) ?? 'Canvas'}
-              title={color ? `颜色 ${color}` : '默认颜色'}
-              onclick={() => setNodeColor(color)}
-            ><span class="sr-only">{color ?? '默认'}</span></button>
-          {/each}
-        </div>
-      {/if}
+      <button class="dock-button" onclick={undo} disabled={!canUndo} title={undoTitle} aria-label={undoTitle}><CanvasIcon name="undo" /></button>
+      <button class="dock-button" onclick={redo} disabled={!canRedo} title={redoTitle} aria-label={redoTitle}><CanvasIcon name="redo" /></button>
     </div>
+
+    {#if selectedNodeIds.size > 0 || contextualEdge}
+        <div
+          class="canvas-context-toolbar"
+          class:edge-context={!!contextualEdge}
+          style={contextToolbarStyle()}
+          role="toolbar"
+          aria-label={contextualEdge ? '连线操作' : '选区操作'}
+        >
+          <span class="context-kind">{contextualEdge ? '连线' : selectedNodeIds.size > 1 ? `${selectionRoots.length} 项` : selectedKnownNode?.type === 'group' ? '分组' : '节点'}</span>
+
+          {#if selectedNodeIds.size > 0}
+            <button class="context-button" onclick={() => void copySelection()} title="复制选中内容" aria-label="复制选中内容"><CanvasIcon name="copy" /></button>
+            <button class="context-button" onclick={() => void cutSelection()} title="剪切选中内容" aria-label="剪切选中内容"><CanvasIcon name="cut" /></button>
+            <span class="toolbar-separator"></span>
+            <button class="context-button" onclick={() => changeLayer('front')} title="移至最上层" aria-label="移至最上层"><CanvasIcon name="front" /></button>
+            <button class="context-button" onclick={() => changeLayer('back')} title="移至最下层" aria-label="移至最下层"><CanvasIcon name="back" /></button>
+          {/if}
+
+          {#if selectionRoots.length > 1}
+            <details class="toolbar-popover">
+              <summary class="context-button" title="对齐与分布" aria-label="对齐与分布"><CanvasIcon name="align-left" /></summary>
+              <div class="toolbar-popover-panel align-panel menu-panel">
+                <button class="context-button menu-row" onclick={() => arrangeSelection('left')} title="左对齐" aria-label="左对齐"><CanvasIcon name="align-left" /></button>
+                <button class="context-button menu-row" onclick={() => arrangeSelection('center-h')} title="水平居中对齐" aria-label="水平居中对齐"><CanvasIcon name="align-center-h" /></button>
+                <button class="context-button menu-row" onclick={() => arrangeSelection('right')} title="右对齐" aria-label="右对齐"><CanvasIcon name="align-right" /></button>
+                <button class="context-button menu-row" onclick={() => arrangeSelection('top')} title="顶部对齐" aria-label="顶部对齐"><CanvasIcon name="align-top" /></button>
+                <button class="context-button menu-row" onclick={() => arrangeSelection('center-v')} title="垂直居中对齐" aria-label="垂直居中对齐"><CanvasIcon name="align-center-v" /></button>
+                <button class="context-button menu-row" onclick={() => arrangeSelection('bottom')} title="底部对齐" aria-label="底部对齐"><CanvasIcon name="align-bottom" /></button>
+                <button class="context-button menu-row" onclick={() => distributeSelection('horizontal')} disabled={selectionRoots.length < 3} title="水平等距分布" aria-label="水平等距分布"><CanvasIcon name="distribute-h" /></button>
+                <button class="context-button menu-row" onclick={() => distributeSelection('vertical')} disabled={selectionRoots.length < 3} title="垂直等距分布" aria-label="垂直等距分布"><CanvasIcon name="distribute-v" /></button>
+                <button class="context-button menu-row" onclick={spreadSelection} title="散开重叠节点" aria-label="散开重叠节点"><CanvasIcon name="spread" /></button>
+              </div>
+            </details>
+          {/if}
+
+          {#if contextualEdge}
+            <label class="edge-label">
+              <span class="sr-only">连线标签</span>
+              <input bind:this={toolbarEdgeLabelInput} value={contextualEdge.label ?? ''} placeholder="连线标签" aria-label="连线标签" onchange={(event) => updateEdgeLabel(event.currentTarget.value)} onkeydown={(event) => event.stopPropagation()} />
+            </label>
+            <button class="context-button" class:tool-active={(contextualEdge.fromEnd ?? 'none') === 'arrow'} aria-pressed={(contextualEdge.fromEnd ?? 'none') === 'arrow'} onclick={() => setEdgeEnd('fromEnd', (contextualEdge?.fromEnd ?? 'none') === 'arrow' ? 'none' : 'arrow')} title="切换连线起点箭头" aria-label="切换连线起点箭头"><CanvasIcon name="arrow-start" /></button>
+            <button class="context-button" class:tool-active={(contextualEdge.toEnd ?? 'arrow') === 'arrow'} aria-pressed={(contextualEdge.toEnd ?? 'arrow') === 'arrow'} onclick={() => setEdgeEnd('toEnd', (contextualEdge?.toEnd ?? 'arrow') === 'arrow' ? 'none' : 'arrow')} title="切换连线终点箭头" aria-label="切换连线终点箭头"><CanvasIcon name="arrow-end" /></button>
+          {:else if selectedKnownNode?.type === 'file'}
+            <button class="context-button" onclick={() => void relinkSelectedResource()} title="重新选择并导入文件" aria-label="重新链接"><CanvasIcon name="file" /></button>
+          {:else if selectedKnownNode?.type === 'link'}
+            <button class="context-button" onclick={editSelectedLink} title="编辑链接地址" aria-label="编辑链接"><CanvasIcon name="edit" /></button>
+          {:else if selectedKnownNode?.type === 'group'}
+            <button class="context-button" onclick={fitSelectedGroup} title="缩放分组边界以适配其中节点" aria-label="适配内容"><CanvasIcon name="fit" /></button>
+            <button class="context-button" onclick={() => void relinkSelectedResource()} title="选择并导入分组背景图片" aria-label="设置分组背景"><CanvasIcon name="image" /></button>
+            {#if selectedKnownNode.background || selectedKnownNode.preservedInvalid.has('background')}
+              <button class="context-button" onclick={clearGroupBackground} title="移除分组背景图片" aria-label="移除分组背景"><CanvasIcon name="trash" /></button>
+            {/if}
+            <details class="toolbar-popover">
+              <summary class="context-button" title="编辑分组" aria-label="编辑分组"><CanvasIcon name="edit" /></summary>
+              <div class="toolbar-popover-panel group-editor-panel menu-panel">
+                <label class="group-name-label">分组名称<input bind:this={toolbarGroupLabelInput} value={selectedKnownNode.label ?? ''} placeholder="分组" onchange={(event) => updateGroupLabel(event.currentTarget.value)} onkeydown={(event) => event.stopPropagation()} /></label>
+                {#if selectedKnownNode.background}
+                  <label class="group-style-label">背景<select value={selectedKnownNode.backgroundStyle ?? 'ratio'} onchange={(event) => setGroupBackgroundStyle(event.currentTarget.value as GroupBackgroundStyle)} onkeydown={(event) => event.stopPropagation()}><option value="ratio">完整显示</option><option value="cover">铺满</option><option value="repeat">平铺</option></select></label>
+                {/if}
+              </div>
+            </details>
+            <button class="context-button" onclick={ungroupSelectedGroup} title="移除分组边框并保留其中节点" aria-label="解组"><CanvasIcon name="ungroup" /></button>
+          {/if}
+
+          <details class="toolbar-popover">
+            <summary class="context-button" title="颜色" aria-label="颜色"><CanvasIcon name="palette" /></summary>
+            <div class="toolbar-popover-panel color-picker-panel menu-panel" aria-label={contextualEdge ? '连线颜色' : '节点颜色'}>
+              {#each [undefined, '1', '2', '3', '4', '5', '6'] as color}
+                <button
+                  class="color-swatch menu-row"
+                  class:selected={contextualEdge ? contextualEdge.color === color : selectedKnownNode ? selectedKnownNode.color === color : false}
+                  style:--swatch={displayColor(color) ?? (contextualEdge ? 'CanvasText' : 'Canvas')}
+                  title={contextualEdge ? (color ? `连线颜色 ${color}` : '默认连线颜色') : (color ? `颜色 ${color}` : '默认颜色')}
+                  onclick={() => contextualEdge ? setEdgeColor(color) : selectedKnownNode ? setNodeColor(color) : setSelectionColor(color)}
+                ><span class="sr-only">{color ?? '默认'}</span></button>
+              {/each}
+            </div>
+          </details>
+
+          <span class="toolbar-separator"></span>
+          <button class="context-button danger" onclick={deleteSelection} title="删除选中内容" aria-label="删除选中内容"><CanvasIcon name="trash" /></button>
+        </div>
+    {/if}
 
     <SvelteFlow
       bind:nodes={flowNodes}
@@ -2332,7 +2340,9 @@
     min-width: 0;
     min-height: 0;
     overflow: hidden;
-    background: color-mix(in srgb, Canvas 97%, CanvasText 3%);
+    background:
+      radial-gradient(circle at 18% 12%, color-mix(in srgb, var(--accent, #4d88ff) 5%, transparent), transparent 28%),
+      color-mix(in srgb, Canvas 97%, CanvasText 3%);
     color: CanvasText;
     outline: none;
   }
@@ -2349,8 +2359,10 @@
   }
   .canvas-surface :global(.svelte-flow__node.canvas-group-shell) { pointer-events: none; }
   .canvas-surface :global(.svelte-flow__node.selected .canvas-card) {
-    outline: 2px solid var(--accent, #4d88ff);
-    outline-offset: 2px;
+    outline: 1.5px solid var(--accent, #4d88ff);
+    outline-offset: 3px;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent, #4d88ff) 10%, transparent),
+      0 13px 36px rgba(0, 0, 0, 0.15);
   }
   .canvas-surface :global(.svelte-flow__edge.selected path) {
     stroke: var(--accent, #4d88ff);
@@ -2372,39 +2384,128 @@
   .canvas-surface.lod-compact :global(.canvas-handle) { display: none; }
   .canvas-toolbar {
     position: absolute;
-    z-index: 20;
-    top: 12px;
+    z-index: 26;
+    bottom: max(18px, env(safe-area-inset-bottom));
     left: 50%;
     display: flex;
-    max-width: calc(100% - 32px);
+    max-width: calc(100% - 112px);
     align-items: center;
-    gap: 4px;
-    padding: 5px;
-    overflow-x: auto;
-    border: 1px solid color-mix(in srgb, CanvasText 13%, transparent);
-    border-radius: 11px;
-    background: color-mix(in srgb, Canvas 86%, transparent);
-    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.13);
-    backdrop-filter: blur(18px) saturate(1.25);
+    gap: 5px;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 14px;
+    background: color-mix(in srgb, Canvas 88%, transparent);
+    box-shadow: 0 12px 38px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.1);
+    -webkit-backdrop-filter: blur(24px) saturate(1.45);
+    backdrop-filter: blur(24px) saturate(1.45);
     transform: translateX(-50%);
   }
-  .canvas-toolbar > button, .color-swatch {
+  .canvas-toolbar > .dock-button,
+  .context-button,
+  .toolbar-popover > summary {
+    position: relative;
     flex: 0 0 auto;
-    min-height: 30px;
-    padding: 4px 9px;
+    display: inline-flex;
+    width: 34px;
+    height: 34px;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 0;
     border: 0;
-    border-radius: 7px;
+    border-radius: 9px;
     background: transparent;
     color: inherit;
     font: inherit;
-    font-size: 12px;
-    white-space: nowrap;
     cursor: pointer;
   }
-  .canvas-toolbar > button:hover:not(:disabled) { background: color-mix(in srgb, CanvasText 9%, transparent); }
-  .canvas-toolbar > button.tool-active { background: var(--accent, #4d88ff); color: white; }
-  .canvas-toolbar > button:disabled { opacity: 0.32; cursor: default; }
-  .toolbar-separator { flex: 0 0 1px; align-self: stretch; margin: 3px; background: color-mix(in srgb, CanvasText 13%, transparent); }
+  .canvas-toolbar > .dock-button:hover:not(:disabled),
+  .canvas-context-toolbar > .context-button:hover:not(:disabled),
+  .toolbar-popover > summary:hover { background: color-mix(in srgb, CanvasText 9%, transparent); }
+  .canvas-toolbar .tool-active,
+  .canvas-context-toolbar .tool-active {
+    background: color-mix(in srgb, var(--accent, #4d88ff) 14%, transparent);
+    color: var(--accent, #4d88ff);
+  }
+  .canvas-toolbar button:disabled, .context-button:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
+  .canvas-toolbar > .dock-button[data-shortcut]::after {
+    content: attr(data-shortcut);
+    position: absolute;
+    right: 2px;
+    bottom: 1px;
+    min-width: 11px;
+    color: color-mix(in srgb, currentColor 72%, transparent);
+    font-size: 8px;
+    font-weight: 650;
+    line-height: 10px;
+    text-align: center;
+  }
+  .toolbar-separator {
+    flex: 0 0 1px;
+    align-self: stretch;
+    min-height: 20px;
+    margin: 5px 2px;
+    background: color-mix(in srgb, CanvasText 13%, transparent);
+  }
+  .canvas-context-toolbar {
+    position: absolute;
+    z-index: 30;
+    display: flex;
+    max-width: min(680px, calc(100% - 24px));
+    align-items: center;
+    gap: 4px;
+    box-sizing: border-box;
+    padding: 6px;
+    border: 0;
+    border-radius: 12px;
+    background: color-mix(in srgb, Canvas 90%, transparent);
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.2), 0 2px 7px rgba(0, 0, 0, 0.1);
+    -webkit-backdrop-filter: blur(22px) saturate(1.4);
+    backdrop-filter: blur(22px) saturate(1.4);
+    transform: translate(-50%, -100%);
+  }
+  .canvas-context-toolbar.edge-context { transform: translateX(-50%); }
+  .context-kind {
+    min-width: 32px;
+    padding: 0 5px;
+    color: color-mix(in srgb, CanvasText 62%, transparent);
+    font-size: 11px;
+    font-weight: 650;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .context-button.danger { color: #cf3f46; }
+  .context-button.danger:hover { background: color-mix(in srgb, #cf3f46 13%, transparent); }
+  .toolbar-popover { position: relative; flex: 0 0 auto; }
+  .toolbar-popover > summary { list-style: none; }
+  .toolbar-popover > summary::-webkit-details-marker { display: none; }
+  .toolbar-popover[open] > summary {
+    background: color-mix(in srgb, var(--accent, #4d88ff) 14%, transparent);
+    color: var(--accent, #4d88ff);
+  }
+  .toolbar-popover-panel {
+    position: absolute;
+    z-index: 36;
+    bottom: calc(100% + 9px);
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  .edge-context .toolbar-popover-panel { top: calc(100% + 9px); bottom: auto; }
+  .align-panel {
+    display: grid;
+    grid-template-columns: repeat(3, 34px);
+    gap: 3px;
+  }
+  .group-editor-panel {
+    display: grid;
+    min-width: 210px;
+    gap: 7px;
+  }
+  .color-picker-panel {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
   .edge-label, .group-name-label, .group-style-label {
     display: flex;
     align-items: center;
@@ -2415,19 +2516,20 @@
   }
   .edge-label input, .group-name-label input, .group-style-label select {
     width: 112px;
-    padding: 5px 7px;
+    height: 30px;
+    box-sizing: border-box;
+    padding: 5px 8px;
     border: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
-    border-radius: 6px;
-    background: Canvas;
+    border-radius: 7px;
+    background: color-mix(in srgb, Canvas 92%, transparent);
     color: CanvasText;
     font: inherit;
   }
   .group-name-label input { width: 90px; }
   .group-style-label select { width: auto; }
-  .color-row { display: flex; align-items: center; gap: 3px; padding: 0 3px; }
   .color-swatch {
-    width: 22px;
-    min-height: 22px;
+    width: 24px;
+    height: 24px;
     padding: 0;
     border: 2px solid Canvas;
     border-radius: 50%;
@@ -2435,6 +2537,7 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, CanvasText 20%, transparent);
   }
   .color-swatch.selected { box-shadow: 0 0 0 2px var(--accent, #4d88ff); }
+  .menu-panel .color-swatch.menu-row:hover { background: var(--swatch); color: inherit; }
   .connection-create-menu {
     position: absolute;
     z-index: 24;
@@ -2463,13 +2566,12 @@
   .zoom-indicator {
     position: absolute;
     z-index: 18;
-    bottom: 14px;
-    left: 50%;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    left: 14px;
     min-width: 48px;
     padding: 5px 8px;
     border: 1px solid color-mix(in srgb, CanvasText 13%, transparent);
     background: color-mix(in srgb, Canvas 86%, transparent);
-    transform: translateX(-50%);
     backdrop-filter: blur(12px);
   }
   .diagnostic-badge {
@@ -2508,15 +2610,22 @@
   }
   @media (max-width: 700px) {
     .canvas-toolbar {
-      top: 8px;
-      max-width: calc(100% - 16px);
+      bottom: max(8px, env(safe-area-inset-bottom));
+      max-width: calc(100% - 12px);
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 6px 8px;
+      scrollbar-width: none;
     }
-    .canvas-toolbar > button { min-height: 44px; padding-inline: 12px; }
-    .color-swatch { width: 44px; min-height: 44px; }
+    .canvas-toolbar::-webkit-scrollbar { display: none; }
+    .canvas-context-toolbar { max-width: calc(100% - 12px); }
+    .canvas-toolbar > .dock-button, .context-button, .toolbar-popover > summary { width: 40px; height: 40px; }
+    .color-swatch { width: 36px; height: 36px; }
+    .zoom-indicator { bottom: 66px; }
   }
   @media (pointer: coarse) {
-    .canvas-toolbar > button { min-height: 44px; padding-inline: 12px; }
-    .color-swatch { width: 44px; min-height: 44px; }
+    .canvas-toolbar > .dock-button, .context-button, .toolbar-popover > summary { width: 44px; height: 44px; }
+    .color-swatch { width: 44px; height: 44px; }
     .canvas-surface :global(.svelte-flow__resize-control.handle) {
       width: 44px;
       height: 44px;

@@ -834,6 +834,39 @@ describe('CanvasView', () => {
     expect(h.setContent).not.toHaveBeenCalled()
   })
 
+  it('renders the Huabu-style dock and contextual toolbar with standard multi-node color edits', async () => {
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.canvas-dock')).toBeTruthy())
+
+    const dock = document.querySelector('.canvas-dock') as HTMLElement
+    expect(dock.querySelectorAll(':scope > .dock-button').length).toBeGreaterThanOrEqual(10)
+    expect(dock.querySelectorAll('svg').length).toBeGreaterThanOrEqual(10)
+    expect(document.querySelector('.canvas-context-toolbar')).toBeFalsy()
+
+    const surface = document.querySelector('.canvas-surface') as HTMLElement
+    surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true }))
+    await tick()
+    flushSync()
+
+    const context = document.querySelector('.canvas-context-toolbar') as HTMLElement
+    expect(context).toBeTruthy()
+    expect(context.getAttribute('aria-label')).toBe('选区操作')
+    expect(context.getAttribute('style')).toContain('left:')
+    expect(context.querySelector('summary[aria-label="对齐与分布"]')).toBeTruthy()
+    expect(context.querySelector('summary[aria-label="颜色"]')).toBeTruthy()
+    expect([...context.querySelectorAll('.align-panel button')].every((button) => button.classList.contains('menu-row'))).toBe(true)
+
+    const colorButton = context.querySelector('button[title="颜色 3"]') as HTMLButtonElement
+    expect(colorButton.classList.contains('menu-row')).toBe(true)
+    colorButton.click()
+    await tick()
+    const nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.map((node) => node.color)).toEqual(['3', '3'])
+  })
+
   it('draws a freeform lasso and selects only intersecting nodes', async () => {
     h.storeGet.mockResolvedValue({ x: 0, y: 0, zoom: 1, updatedAt: 1 })
     component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
