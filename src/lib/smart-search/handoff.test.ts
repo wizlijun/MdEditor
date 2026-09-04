@@ -44,6 +44,26 @@ describe('smart lookup handoff', () => {
     expect(encoded).not.toContain('\\\\secret')
   })
 
+  it('hands off the effective intersected date range instead of the wider planned range', () => {
+    const plan = {
+      queries: [{
+        terms: ['发布'], phrases: [],
+        filters: { after: '2026-07-01', before: '2026-08-31' },
+      }],
+      lockedFilters: { after: '2026-07-01', before: '2026-08-31' },
+      sort: 'relevance',
+      time: {
+        appliesTo: 'document_date', sourceText: '估算今年',
+        after: '2026-01-01', before: '2026-12-31',
+      },
+    } as unknown as ResolvedSearchPlan
+    const packet = buildHandoffPacket('找发布决定', plan, [hit('notes/a.md')])
+    expect(packet.resolvedFilters).toMatchObject({
+      after: '2026-07-01',
+      before: '2026-08-31',
+    })
+  })
+
   it('keeps a worst-case Unicode packet within the byte limit', () => {
     const plan = {
       queries: [{

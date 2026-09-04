@@ -658,10 +658,10 @@ fn resolve(
     let resolved_time = plan.time.as_ref().map(|time| ResolvedTime {
         applies_to: time.applies_to,
         source_text: time.source_text.clone(),
-        after: planned_range
+        after: range
             .as_ref()
             .and_then(|range| range.after.map(|date| date.to_string())),
-        before: planned_range
+        before: range
             .as_ref()
             .and_then(|range| range.before.map(|date| date.to_string())),
     });
@@ -1215,6 +1215,9 @@ mod tests {
         assert_eq!(filters.origins, ["human"]);
         assert_eq!(filters.after.as_deref(), Some("2026-07-01"));
         assert_eq!(filters.before.as_deref(), Some("2026-08-31"));
+        let effective_time = resolved.time.as_ref().unwrap();
+        assert_eq!(effective_time.after.as_deref(), Some("2026-07-01"));
+        assert_eq!(effective_time.before.as_deref(), Some("2026-08-31"));
         assert_eq!(resolved.locked_filters.tags, ["human"]);
     }
 
