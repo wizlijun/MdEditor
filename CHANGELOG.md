@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.904.5 — 2026-09-04
+
 ### Added
 
 - **Infinite Canvas adds an Obsidian-compatible visual workspace.** Create and open standard `.canvas` files, arrange text, file/image, link and group cards, connect and label them, and use pan/zoom, multiselect, resize, copy/paste and undo/redo. Canvas documents use guarded atomic autosave and external-change handling, preserve unknown JSON Canvas fields for round trips, render Markdown cards safely with one active editor, and load the Svelte Flow surface only when a canvas tab is opened. Desktop file drops and iOS Open In/export-copy flows use bounded local-resource access without embedding remote webpages.
