@@ -44,6 +44,7 @@
     deleteCanvasSelection,
     distributeCanvasSelection,
     encodeJsonCanvas,
+    fitCanvasGroupToContents,
     flowConnectionToCanvasEdge,
     flowHandleForSide,
     freezeCanvasMove,
@@ -66,7 +67,6 @@
     resolveCanvasResizeScale,
     resolveCanvasEdgeSides,
     resizeCanvasSelection,
-    sideFromFlowHandle,
     spreadCanvasSelection,
     updateCanvasNode,
     updateCanvasEdge,
@@ -151,6 +151,7 @@
     at: CanvasPoint
     screen: CanvasPoint
   } | null>(null)
+  let connectionMenu: HTMLDivElement | undefined = $state()
   let reconnectActive = false
   let newConnectionActive = false
   let multiResize = $state.raw<{
@@ -394,9 +395,14 @@
     })
     const nodeRects = new Map(canvasDoc.nodes.flatMap((entry) =>
       isKnownCanvasNode(entry)
-        ? [[entry.id, { x: entry.x, y: entry.y, width: entry.width, height: entry.height }] as const]
+        ? [[entry.id, { id: entry.id, x: entry.x, y: entry.y, width: entry.width, height: entry.height }] as const]
         : [],
     ))
+    const edgeObstacles = canvasDoc.nodes.flatMap((entry) =>
+      isKnownCanvasNode(entry) && entry.type !== 'group'
+        ? [{ id: entry.id, x: entry.x, y: entry.y, width: entry.width, height: entry.height }]
+        : [],
+    )
     const canonicalEdges = new Map(canvasDoc.edges.flatMap((entry) =>
       isCanvasEdge(entry) ? [[entry.id, entry] as const] : [],
     ))
@@ -406,7 +412,7 @@
       const sourceRect = nodeRects.get(edge.source)
       const targetRect = nodeRects.get(edge.target)
       const smartSides = sourceRect && targetRect
-        ? resolveCanvasEdgeSides(sourceRect, targetRect, canonical?.fromSide, canonical?.toSide)
+        ? resolveCanvasEdgeSides(sourceRect, targetRect, canonical?.fromSide, canonical?.toSide, edgeObstacles)
         : null
       return {
         ...edge,
@@ -820,37 +826,16 @@
     commitDocument(nodes.length > 1 ? '移动多个节点' : '移动节点', next)
   }
 
-  function smartConnection(connection: Connection, document = canvasDoc): Connection {
-    if (!document) return connection
-    const nodes = new Map(document.nodes.flatMap((entry) =>
-      isKnownCanvasNode(entry) ? [[entry.id, entry] as const] : [],
-    ))
-    const source = nodes.get(connection.source)
-    const target = nodes.get(connection.target)
-    if (!source || !target) return connection
-    const sides = resolveCanvasEdgeSides(
-      source,
-      target,
-      sideFromFlowHandle(connection.sourceHandle),
-      sideFromFlowHandle(connection.targetHandle),
-    )
-    return {
-      ...connection,
-      sourceHandle: connection.sourceHandle ?? flowHandleForSide(sides.fromSide) ?? null,
-      targetHandle: connection.targetHandle ?? flowHandleForSide(sides.toSide) ?? null,
-    }
-  }
-
   function handleConnect(connection: Connection): void {
     if (!canvasDoc || !connection.source || !connection.target || connection.source === connection.target || !finishTextBeforeStructure()) return
-    const edge = flowConnectionToCanvasEdge(newId(), smartConnection(connection))
+    const edge = flowConnectionToCanvasEdge(newId(), connection)
     commitDocument('创建连线', insertCanvasEdge(canvasDoc, edge), selectedNodeIds, new Set([edge.id]))
   }
 
   const handleReconnect: OnReconnect<UiEdge> = (oldEdge, connection) => {
     if (!canvasDoc || connection.source === connection.target || !finishTextBeforeStructure()) return
     const edgeId = (oldEdge.data?.canonicalId as string | undefined) ?? oldEdge.id
-    commitDocument('重连连线', applyFlowEdgeConnection(canvasDoc, edgeId, smartConnection(connection)), selectedNodeIds, new Set([edgeId]))
+    commitDocument('重连连线', applyFlowEdgeConnection(canvasDoc, edgeId, connection), selectedNodeIds, new Set([edgeId]))
   }
 
   function addConnectedNode(
@@ -864,12 +849,12 @@
     const node = createNode(kind, at, value)
     const nodeIndex = kind === 'group' ? 0 : canvasDoc.nodes.length
     let next = insertCanvasNode(canvasDoc, node, nodeIndex)
-    const connection = smartConnection({
+    const connection: Connection = {
       source: sourceId,
       target: node.id,
       sourceHandle,
       targetHandle: null,
-    }, next)
+    }
     const edge = flowConnectionToCanvasEdge(newId(), connection)
     next = insertCanvasEdge(next, edge)
     commitDocument('创建节点并连接', next, new Set([node.id]), new Set())
@@ -944,6 +929,29 @@
       at: localToFlow(screen),
       screen,
     }
+    queueMicrotask(() => connectionMenu?.querySelector<HTMLButtonElement>('button')?.focus())
+  }
+
+  function handleConnectionMenuKeydown(event: KeyboardEvent): void {
+    if (!connectionDraft) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      connectionDraft = null
+      queueMicrotask(() => surface?.focus())
+      return
+    }
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    const buttons = Array.from(connectionMenu?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+    if (buttons.length === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const current = Math.max(0, buttons.indexOf(document.activeElement as HTMLButtonElement))
+    const index = event.key === 'Home' ? 0
+      : event.key === 'End' ? buttons.length - 1
+        : event.key === 'ArrowLeft' ? (current - 1 + buttons.length) % buttons.length
+          : (current + 1) % buttons.length
+    buttons[index]?.focus()
   }
 
   function handleDelete({ nodes, edges }: { nodes: UiNode[]; edges: UiEdge[] }): void {
@@ -1484,6 +1492,7 @@
 
   function handleKeydown(event: KeyboardEvent): void {
     if (event.isComposing || composing) return
+    if (event.target instanceof Element && event.target.closest('.connection-create-menu')) return
     if (isTextInput(event.target)) {
       if (event.key === 'Escape' && activeTextId) {
         event.preventDefault()
@@ -1694,6 +1703,11 @@
     const members = freezeGroupMove(canvasDoc, groupId).nodeIds.filter((id) => id !== groupId)
     const next = deleteCanvasSelection(canvasDoc, new Set([groupId]))
     commitDocument('解散分组', next, new Set(members), new Set())
+  }
+
+  function fitSelectedGroup(): void {
+    if (!canvasDoc || selectedKnownNode?.type !== 'group' || !finishTextBeforeStructure()) return
+    commitDocument('分组适配内容', fitCanvasGroupToContents(canvasDoc, selectedKnownNode.id))
   }
 
   function editSelectedLink(): void {
@@ -1991,6 +2005,7 @@
         {:else if selectedKnownNode.type === 'link'}
           <button onclick={editSelectedLink} title="编辑链接地址">编辑链接</button>
         {:else if selectedKnownNode.type === 'group'}
+          <button onclick={fitSelectedGroup} title="缩放分组边界以适配其中节点">适配内容</button>
           <button onclick={() => void relinkSelectedResource()} title="选择并导入分组背景图片">设置背景</button>
           {#if selectedKnownNode.background || selectedKnownNode.preservedInvalid.has('background')}
             <button onclick={clearGroupBackground} title="移除分组背景图片">移除背景</button>
@@ -2107,15 +2122,19 @@
     {#if connectionDraft}
       <div
         class="connection-create-menu nodrag nopan"
+        bind:this={connectionMenu}
         style:left={`${Math.min(connectionDraft.screen.x + 12, Math.max(8, (surface?.clientWidth ?? 800) - 220))}px`}
         style:top={`${Math.min(connectionDraft.screen.y + 12, Math.max(8, (surface?.clientHeight ?? 600) - 70))}px`}
+        role="toolbar"
+        tabindex="-1"
         aria-label="创建并连接节点"
+        onkeydown={handleConnectionMenuKeydown}
       >
         <span>创建并连接</span>
-        <button onclick={() => void chooseConnectedNode('text')}>文本</button>
-        <button onclick={() => void chooseConnectedNode('group')}>分组</button>
-        <button onclick={() => void chooseConnectedNode('file')}>文件</button>
-        <button onclick={() => void chooseConnectedNode('link')}>链接</button>
+        <button type="button" onclick={() => void chooseConnectedNode('text')}>文本</button>
+        <button type="button" onclick={() => void chooseConnectedNode('group')}>分组</button>
+        <button type="button" onclick={() => void chooseConnectedNode('file')}>文件</button>
+        <button type="button" onclick={() => void chooseConnectedNode('link')}>链接</button>
       </div>
     {/if}
 

@@ -302,6 +302,12 @@ describe('CanvasView', () => {
     ;(document.querySelector('[data-id="group-1"] .group-label') as HTMLElement).click()
     await tick()
 
+    ;(document.querySelector('button[title="缩放分组边界以适配其中节点"]') as HTMLButtonElement).click()
+    await tick()
+    expect(JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes[0]).toMatchObject({
+      id: 'group-1', x: 4, y: -2, width: 192, height: 168,
+    })
+
     const name = document.querySelector('.group-name-label input') as HTMLInputElement
     name.value = '新名称'
     name.dispatchEvent(new Event('change', { bubbles: true }))
@@ -357,6 +363,31 @@ describe('CanvasView', () => {
 
     const edge = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).edges[0]
     expect(edge).toMatchObject({ fromEnd: 'arrow', toEnd: 'none', color: '3', label: '更新标签' })
+  })
+
+  it('keeps automatically routed edge sides out of the saved canvas', async () => {
+    const dynamicEdge = tab()
+    dynamicEdge.currentContent = dynamicEdge.initialContent = JSON.stringify({
+      nodes: [
+        { id: 'a', type: 'text', text: 'a', x: 0, y: 0, width: 120, height: 100 },
+        { id: 'b', type: 'text', text: 'b', x: 300, y: 0, width: 120, height: 100 },
+      ],
+      edges: [{ id: 'dynamic', fromNode: 'a', toNode: 'b' }],
+    })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: dynamicEdge },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__edge[data-id="dynamic"]')).toBeTruthy())
+
+    ;(document.querySelector('[data-id="a"]') as HTMLElement).click()
+    await tick()
+    ;(document.querySelector('.canvas-surface') as HTMLElement)
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await tick()
+
+    const edge = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).edges[0]
+    expect(edge).toEqual({ id: 'dynamic', fromNode: 'a', toNode: 'b' })
   })
 
   it('edits an edge label inline by double-click or Enter', async () => {

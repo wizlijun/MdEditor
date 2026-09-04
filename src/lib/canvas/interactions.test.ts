@@ -9,6 +9,7 @@ import {
   computeCanvasSnap,
   createCanvasResizeSnapshot,
   distributeCanvasSelection,
+  fitCanvasGroupToContents,
   getCanvasNodesBounds,
   getCanvasSelectionBounds,
   getCanvasSelectionRoots,
@@ -57,6 +58,38 @@ describe('Canvas interaction geometry', () => {
       width: 100,
       height: 90,
     })
+  })
+
+  it('fits a group around its geometric members without moving content', () => {
+    const document = documentFrom({
+      nodes: [
+        { id: 'group', type: 'group', x: 0, y: 0, width: 500, height: 400 },
+        textNode('left', 80, 90, 60, 40),
+        textNode('right', 240, 180, 80, 50),
+        textNode('outside', 700, 700, 40, 40),
+      ],
+      edges: [],
+    })
+
+    const fitted = fitCanvasGroupToContents(document, 'group')
+    expect(fitted.nodes.find((node) => 'id' in node && node.id === 'group')).toMatchObject({
+      x: 44,
+      y: 38,
+      width: 312,
+      height: 228,
+    })
+    expect(fitted.nodes.find((node) => 'id' in node && node.id === 'left'))
+      .toMatchObject({ x: 80, y: 90, width: 60, height: 40 })
+    expect(fitted.nodes.find((node) => 'id' in node && node.id === 'outside'))
+      .toMatchObject({ x: 700, y: 700 })
+  })
+
+  it('leaves an empty group unchanged when fitting contents', () => {
+    const document = documentFrom({
+      nodes: [{ id: 'group', type: 'group', x: 0, y: 0, width: 300, height: 200 }],
+      edges: [],
+    })
+    expect(fitCanvasGroupToContents(document, 'group')).toBe(document)
   })
 
   it.each([
@@ -249,9 +282,57 @@ describe('Canvas advanced pointer geometry', () => {
     expect(resolveCanvasEdgeSides(source, { x: 25, y: -300, width: 50, height: 100 }))
       .toEqual({ fromSide: 'top', toSide: 'bottom' })
     expect(resolveCanvasEdgeSides(source, { x: 300, y: 0, width: 100, height: 100 }, 'bottom'))
-      .toEqual({ fromSide: 'bottom', toSide: 'top' })
+      .toEqual({ fromSide: 'bottom', toSide: 'left' })
     expect(resolveCanvasEdgeSides(source, { x: 300, y: 0, width: 100, height: 100 }, 'top', 'right'))
       .toEqual({ fromSide: 'top', toSide: 'right' })
+  })
+
+  it('routes around local node obstacles and ignores its own endpoints', () => {
+    const source = { id: 'source', x: 0, y: 0, width: 100, height: 100 }
+    const target = { id: 'target', x: 300, y: 0, width: 100, height: 100 }
+    const direct = { fromSide: 'right', toSide: 'left' }
+    expect(resolveCanvasEdgeSides(source, target, undefined, undefined, [
+      { id: 'far', x: 0, y: 400, width: 100, height: 100 },
+    ])).toEqual(direct)
+    expect(resolveCanvasEdgeSides(source, target, undefined, undefined, [
+      source,
+      target,
+      { id: 'blocker', x: 110, y: 44, width: 40, height: 12 },
+    ])).not.toEqual(direct)
+  })
+
+  it('chooses the short L-shaped route for a blocked diagonal layout', () => {
+    expect(resolveCanvasEdgeSides(
+      { id: 'source', x: 50, y: 50, width: 350, height: 250 },
+      { id: 'target', x: 650, y: 300, width: 400, height: 450 },
+      undefined,
+      undefined,
+      [{ id: 'blocker', x: 270, y: 350, width: 300, height: 56 }],
+    )).toEqual({ fromSide: 'right', toSide: 'top' })
+  })
+
+  it('uses same-side handles when a group contains the other endpoint', () => {
+    expect(resolveCanvasEdgeSides(
+      { x: 0, y: 0, width: 500, height: 300 },
+      { x: 30, y: 120, width: 80, height: 60 },
+    )).toEqual({ fromSide: 'left', toSide: 'left' })
+  })
+
+  it('builds a complete snap index for a 10,000-node canvas', () => {
+    const document = documentFrom({
+      nodes: Array.from({ length: 10_000 }, (_, index) => textNode(
+        `node-${index}`,
+        (index % 100) * 240,
+        Math.floor(index / 100) * 160,
+        180,
+        100,
+      )),
+      edges: [],
+    })
+    const index = buildCanvasSnapIndex(document, [])
+    expect(index.rectsById.size).toBe(10_000)
+    expect(index.byX).toHaveLength(30_000)
+    expect(index.byY).toHaveLength(30_000)
   })
 })
 

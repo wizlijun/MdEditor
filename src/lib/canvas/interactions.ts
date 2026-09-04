@@ -104,6 +104,17 @@ export interface CanvasEdgeSides {
   toSide: CanvasSide
 }
 
+export interface CanvasObstacleRect extends CanvasRect {
+  id?: string
+}
+
+export interface CanvasGroupFitInsets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
 const OPPOSITE_SIDE: Record<CanvasSide, CanvasSide> = {
   top: 'bottom',
   right: 'left',
@@ -137,35 +148,186 @@ export function computeCanvasAutoPanVelocity(
   return { x: velocity(point.x, bounds.width), y: velocity(point.y, bounds.height) }
 }
 
-/** Chooses facing handles without persisting any non-standard edge metadata. */
+const CARDINAL_SIDES: CanvasSide[] = ['right', 'left', 'bottom', 'top']
+const DIRECT_EDGE_SIDES: CanvasEdgeSides[] = [
+  { fromSide: 'right', toSide: 'left' },
+  { fromSide: 'left', toSide: 'right' },
+  { fromSide: 'bottom', toSide: 'top' },
+  { fromSide: 'top', toSide: 'bottom' },
+]
+const CORNER_EDGE_SIDES: CanvasEdgeSides[] = [
+  { fromSide: 'right', toSide: 'top' },
+  { fromSide: 'right', toSide: 'bottom' },
+  { fromSide: 'left', toSide: 'top' },
+  { fromSide: 'left', toSide: 'bottom' },
+  { fromSide: 'bottom', toSide: 'left' },
+  { fromSide: 'bottom', toSide: 'right' },
+  { fromSide: 'top', toSide: 'left' },
+  { fromSide: 'top', toSide: 'right' },
+]
+
+function sideAnchor(rect: CanvasRect, side: CanvasSide): CanvasPoint {
+  if (side === 'right') return { x: rect.x + rect.width, y: rect.y + rect.height / 2 }
+  if (side === 'left') return { x: rect.x, y: rect.y + rect.height / 2 }
+  if (side === 'bottom') return { x: rect.x + rect.width / 2, y: rect.y + rect.height }
+  return { x: rect.x + rect.width / 2, y: rect.y }
+}
+
+function sideNormal(side: CanvasSide): CanvasPoint {
+  if (side === 'right') return { x: 1, y: 0 }
+  if (side === 'left') return { x: -1, y: 0 }
+  if (side === 'bottom') return { x: 0, y: 1 }
+  return { x: 0, y: -1 }
+}
+
+function containsRectWithSlack(outer: CanvasRect, inner: CanvasRect, slack = 4): boolean {
+  return inner.x >= outer.x - slack
+    && inner.y >= outer.y - slack
+    && inner.x + inner.width <= outer.x + outer.width + slack
+    && inner.y + inner.height <= outer.y + outer.height + slack
+}
+
+function closestContainerSide(inner: CanvasRect, outer: CanvasRect): CanvasSide {
+  const offsetX = (inner.x + inner.width / 2 - (outer.x + outer.width / 2)) / (outer.width / 2 || 1)
+  const offsetY = (inner.y + inner.height / 2 - (outer.y + outer.height / 2)) / (outer.height / 2 || 1)
+  if (Math.abs(offsetX) > Math.abs(offsetY)) return offsetX > 0 ? 'right' : 'left'
+  return offsetY > 0 ? 'bottom' : 'top'
+}
+
+function segmentHitsInflatedRect(start: CanvasPoint, end: CanvasPoint, rect: CanvasRect, margin: number): boolean {
+  const minX = rect.x - margin
+  const minY = rect.y - margin
+  const maxX = rect.x + rect.width + margin
+  const maxY = rect.y + rect.height + margin
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  let from = 0
+  let to = 1
+  for (const [direction, distance] of [
+    [-dx, start.x - minX],
+    [dx, maxX - start.x],
+    [-dy, start.y - minY],
+    [dy, maxY - start.y],
+  ] as const) {
+    if (direction === 0) {
+      if (distance < 0) return false
+      continue
+    }
+    const ratio = distance / direction
+    if (direction < 0) {
+      if (ratio > to) return false
+      if (ratio > from) from = ratio
+    } else {
+      if (ratio < from) return false
+      if (ratio < to) to = ratio
+    }
+  }
+  return from < to
+}
+
+function routePolyline(source: CanvasPoint, target: CanvasPoint, sides: CanvasEdgeSides): CanvasPoint[] {
+  const sourceNormal = sideNormal(sides.fromSide)
+  const targetNormal = sideNormal(sides.toSide)
+  const distance = Math.hypot(target.x - source.x, target.y - source.y)
+  const stub = Math.min(40, distance / 2)
+  return [
+    source,
+    { x: source.x + sourceNormal.x * stub, y: source.y + sourceNormal.y * stub },
+    { x: target.x + targetNormal.x * stub, y: target.y + targetNormal.y * stub },
+    target,
+  ]
+}
+
+/**
+ * Chooses facing, obstacle-aware handles without adding private edge data.
+ * Explicit JSON Canvas sides remain authoritative; missing sides are derived
+ * from current geometry and may therefore reroute after a node move.
+ */
 export function resolveCanvasEdgeSides(
-  source: CanvasRect,
-  target: CanvasRect,
+  source: CanvasObstacleRect,
+  target: CanvasObstacleRect,
   fromSide?: CanvasSide,
   toSide?: CanvasSide,
+  obstacles: readonly CanvasObstacleRect[] = [],
 ): CanvasEdgeSides {
   if (fromSide && toSide) return { fromSide, toSide }
-  if (fromSide) return { fromSide, toSide: OPPOSITE_SIDE[fromSide] }
-  if (toSide) return { fromSide: OPPOSITE_SIDE[toSide], toSide }
 
-  const sourceCenter = {
-    x: source.x + source.width / 2,
-    y: source.y + source.height / 2,
+  const targetInsideSource = containsRectWithSlack(source, target)
+  const sourceInsideTarget = containsRectWithSlack(target, source)
+  if (targetInsideSource || sourceInsideTarget) {
+    const inferred = targetInsideSource
+      ? closestContainerSide(target, source)
+      : closestContainerSide(source, target)
+    const side = fromSide ?? toSide ?? inferred
+    return { fromSide: fromSide ?? side, toSide: toSide ?? side }
   }
-  const targetCenter = {
-    x: target.x + target.width / 2,
-    y: target.y + target.height / 2,
-  }
+
+  const sourceCenter = { x: source.x + source.width / 2, y: source.y + source.height / 2 }
+  const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 }
   const dx = targetCenter.x - sourceCenter.x
   const dy = targetCenter.y - sourceCenter.y
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    return dx >= 0
-      ? { fromSide: 'right', toSide: 'left' }
-      : { fromSide: 'left', toSide: 'right' }
+  const directionLength = Math.hypot(dx, dy) || 1
+  const direction = { x: dx / directionLength, y: dy / directionLength }
+  const horizontalGap = Math.max(target.x - (source.x + source.width), source.x - (target.x + target.width))
+  const verticalGap = Math.max(target.y - (source.y + source.height), source.y - (target.y + target.height))
+  const clearlyHorizontal = horizontalGap > 0 && verticalGap <= 0
+  const clearlyVertical = horizontalGap <= 0 && verticalGap > 0
+  const constrainedCandidates = fromSide || toSide
+    ? CARDINAL_SIDES.flatMap((candidateFrom) => CARDINAL_SIDES.map((candidateTo) => ({
+      fromSide: candidateFrom,
+      toSide: candidateTo,
+    }))).filter((candidate) => (!fromSide || candidate.fromSide === fromSide) && (!toSide || candidate.toSide === toSide))
+    : [...DIRECT_EDGE_SIDES, ...CORNER_EDGE_SIDES]
+
+  const slack = 48
+  const searchBounds = {
+    x: Math.min(source.x, target.x) - slack,
+    y: Math.min(source.y, target.y) - slack,
+    width: Math.max(source.x + source.width, target.x + target.width) - Math.min(source.x, target.x) + slack * 2,
+    height: Math.max(source.y + source.height, target.y + target.height) - Math.min(source.y, target.y) + slack * 2,
   }
-  return dy >= 0
-    ? { fromSide: 'bottom', toSide: 'top' }
-    : { fromSide: 'top', toSide: 'bottom' }
+  const localObstacles = obstacles.filter((obstacle) =>
+    obstacle.id !== source.id
+      && obstacle.id !== target.id
+      && obstacle.x <= searchBounds.x + searchBounds.width
+      && obstacle.x + obstacle.width >= searchBounds.x
+      && obstacle.y <= searchBounds.y + searchBounds.height
+      && obstacle.y + obstacle.height >= searchBounds.y,
+  )
+
+  let best = constrainedCandidates[0] ?? {
+    fromSide: fromSide ?? 'right',
+    toSide: toSide ?? OPPOSITE_SIDE[fromSide ?? 'right'],
+  }
+  let bestScore = Infinity
+  for (const candidate of constrainedCandidates) {
+    const sourceAnchor = sideAnchor(source, candidate.fromSide)
+    const targetAnchor = sideAnchor(target, candidate.toSide)
+    const path = routePolyline(sourceAnchor, targetAnchor, candidate)
+    const hits = localObstacles.reduce((count, obstacle) => count + (path.some((point, index) =>
+      index < path.length - 1 && segmentHitsInflatedRect(point, path[index + 1], obstacle, 8),
+    ) ? 1 : 0), 0)
+    const wrongAxis = (clearlyVertical
+      ? Number(candidate.fromSide === 'left' || candidate.fromSide === 'right')
+        + Number(candidate.toSide === 'left' || candidate.toSide === 'right')
+      : clearlyHorizontal
+        ? Number(candidate.fromSide === 'top' || candidate.fromSide === 'bottom')
+          + Number(candidate.toSide === 'top' || candidate.toSide === 'bottom')
+        : 0)
+    const sourceNormal = sideNormal(candidate.fromSide)
+    const targetNormal = sideNormal(candidate.toSide)
+    const facingPenalty = 1 - (sourceNormal.x * direction.x + sourceNormal.y * direction.y)
+      + 1 - (targetNormal.x * -direction.x + targetNormal.y * -direction.y)
+    const score = Math.hypot(targetAnchor.x - sourceAnchor.x, targetAnchor.y - sourceAnchor.y)
+      + hits * 600
+      + wrongAxis * 200
+      + facingPenalty * 120
+    if (score < bestScore) {
+      best = candidate
+      bestScore = score
+    }
+  }
+  return best
 }
 
 function editableKnownNodes(document: CanvasDocument): KnownCanvasNode[] {
@@ -192,6 +354,36 @@ export function getCanvasNodesBounds(nodes: Iterable<CanvasNodeEntry | KnownCanv
     maxY = Math.max(maxY, node.y + node.height)
   }
   return found ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY } : null
+}
+
+/**
+ * Fits a standard JSON Canvas group around its geometrically contained
+ * members. Membership is deliberately frozen before resizing because the
+ * format has no parentId/nesting field.
+ */
+export function fitCanvasGroupToContents(
+  document: CanvasDocument,
+  groupId: string,
+  insets: Partial<CanvasGroupFitInsets> = {},
+): CanvasDocument {
+  const group = editableKnownNodes(document).find((node) => node.id === groupId && node.type === 'group')
+  if (!group || group.type !== 'group') return document
+  const members = editableKnownNodes(document).filter((node) => isNodeContained(group, node))
+  const bounds = getCanvasNodesBounds(members)
+  if (!bounds) return document
+  const padding: CanvasGroupFitInsets = {
+    top: insets.top ?? 52,
+    right: insets.right ?? 36,
+    bottom: insets.bottom ?? 36,
+    left: insets.left ?? 36,
+  }
+  return commitNodeRectangles(document, [{
+    id: group.id,
+    x: bounds.x - padding.left,
+    y: bounds.y - padding.top,
+    width: Math.max(180, bounds.width + padding.left + padding.right),
+    height: Math.max(120, bounds.height + padding.top + padding.bottom),
+  }])
 }
 
 export function getCanvasSelectionRoots(
