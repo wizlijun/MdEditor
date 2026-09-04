@@ -11,6 +11,8 @@ For the full commit history, see the git log.
 
 - **YAML frontmatter now reads like a metadata card instead of a spreadsheet.** The rich editor and shared pages use a quiet, rounded property panel with compact key/value rows and pill-style scalar lists. Wikilinks, Markdown links and bare web addresses are visually recognizable and clickable in reading mode, while editing still preserves their complete source text.
 
+- **Smart Lookup now narrows time-sensitive questions before searching.** Its single fast Planner first estimates a conservative document-date window for requests about current status, recent progress or the latest work cycle, then chooses search terms inside that range. Explicit `after`/`before` constraints remain authoritative, timeless or genuinely ambiguous questions stay unbounded, and the effective intersected range is now carried consistently into Agent handoff. Claude Agent 1.0.28, Codex Agent 1.0.15 and DeepSeek Agent 1.1.14 include the matching planning contract.
+
 ## v6.904.3 — 2026-09-04
 
 ### Fixed
