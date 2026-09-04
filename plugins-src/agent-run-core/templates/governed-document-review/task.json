@@ -1,0 +1,7 @@
+{
+  "name": "Review one governed document block",
+  "description": "Suggest a revision or assess one exact revision supplied by a governed document surface.",
+  "prompt": "Process the supplied input packet. Return exactly one JSON object matching the task instructions. Do not use tools.",
+  "max_turns": 4,
+  "timeout_seconds": 120
+}

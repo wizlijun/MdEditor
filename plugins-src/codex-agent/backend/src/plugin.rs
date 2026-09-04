@@ -120,6 +120,7 @@ fn harness_capabilities(
 ) -> agent_run_core::HarnessCapabilities {
     agent_run_core::HarnessCapabilities {
         tasks: vec![
+            task::GOVERNED_DOCUMENT_REVIEW_TASK.into(),
             task::SEARCH_PLAN_TASK.into(),
             task::SEARCH_ANSWER_TASK.into(),
             task::SEARCH_SUMMARY_TASK.into(),
@@ -1125,6 +1126,7 @@ mod tests {
             ids,
             vec![
                 NOTE_TASK,
+                "governed-document-review",
                 "search-answer",
                 "search-plan",
                 "search-summary",
@@ -1306,7 +1308,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         task::seed_builtin_templates(v.path());
         let got = overview(v.path());
-        assert_eq!(got.len(), 6);
+        assert_eq!(got.len(), 7);
         for t in &got {
             let expected = if task::is_input_only_task(&t.def.id)
                 || t.def.id == task::VAULT_RESEARCH_TASK
@@ -1467,7 +1469,13 @@ mod tests {
         let capabilities = harness_capabilities(Some("gpt-5.6-sol".into()), true);
         assert_eq!(
             capabilities.tasks,
-            vec!["search-plan", "search-answer", "search-summary", "vault-research"]
+            vec![
+                "governed-document-review",
+                "search-plan",
+                "search-answer",
+                "search-summary",
+                "vault-research",
+            ]
         );
         assert_eq!(capabilities.search_plan_schemas, vec![1]);
         assert!(capabilities.terminal_result);

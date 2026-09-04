@@ -129,6 +129,7 @@ fn harness_capabilities(
 ) -> agent_run_core::HarnessCapabilities {
     agent_run_core::HarnessCapabilities {
         tasks: vec![
+            task::GOVERNED_DOCUMENT_REVIEW_TASK.into(),
             task::SEARCH_PLAN_TASK.into(),
             task::SEARCH_ANSWER_TASK.into(),
             task::SEARCH_SUMMARY_TASK.into(),
@@ -1081,6 +1082,7 @@ mod tests {
             vec![
                 "ai-read-ebook",
                 NOTE_TASK,
+                "governed-document-review",
                 "search-answer",
                 "search-plan",
                 "search-summary",
@@ -1679,7 +1681,13 @@ mod tests {
         let capabilities = harness_capabilities(None, true);
         assert_eq!(
             capabilities.tasks,
-            vec!["search-plan", "search-answer", "search-summary", "vault-research"]
+            vec![
+                "governed-document-review",
+                "search-plan",
+                "search-answer",
+                "search-summary",
+                "vault-research",
+            ]
         );
         assert_eq!(capabilities.search_plan_schemas, vec![1]);
         assert!(capabilities.terminal_result);

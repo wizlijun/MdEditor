@@ -1,0 +1,5 @@
+{
+  "permission_mode": "read-only",
+  "on_permission_request": "reject",
+  "rationale": "The task consumes one caller-supplied block and must not access the Vault, tools or network."
+}

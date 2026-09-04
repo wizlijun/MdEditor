@@ -114,6 +114,7 @@ fn harness_capabilities(
 ) -> HarnessCapabilities {
     HarnessCapabilities {
         tasks: vec![
+            task::GOVERNED_DOCUMENT_REVIEW_TASK.to_string(),
             task::SEARCH_PLAN_TASK.to_string(),
             task::SEARCH_ANSWER_TASK.to_string(),
             task::SEARCH_SUMMARY_TASK.to_string(),
@@ -1090,6 +1091,7 @@ mod tests {
             vec![
                 "ai-read-ebook",
                 NOTE_TASK,
+                "governed-document-review",
                 "search-answer",
                 "search-plan",
                 "search-summary",
@@ -1158,7 +1160,13 @@ mod tests {
             serde_json::to_value(harness_capabilities(Some("vault-default"), true)).unwrap();
         assert_eq!(
             value["tasks"],
-            json!(["search-plan", "search-answer", "search-summary", "vault-research"])
+            json!([
+                "governed-document-review",
+                "search-plan",
+                "search-answer",
+                "search-summary",
+                "vault-research"
+            ])
         );
         assert_eq!(value["search_plan_schemas"], json!([1]));
         assert_eq!(value["terminal_result"], true);
@@ -1328,7 +1336,7 @@ mod tests {
         let v = tempfile::tempdir().unwrap();
         task::seed_builtin_templates(v.path());
         let got = overview(v.path());
-        assert_eq!(got.len(), 7);
+        assert_eq!(got.len(), 8);
         for t in &got {
             let expected = if task::is_input_only_task(&t.def.id)
                 || t.def.id == task::VAULT_RESEARCH_TASK

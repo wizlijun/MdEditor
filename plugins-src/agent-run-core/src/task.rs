@@ -12,6 +12,25 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Provider-neutral, input-only review task used by governed document surfaces.
+///
+/// The id and protocol live in the shared crate so every provider enforces the
+/// same boundary and output contract. Provider crates still decide how that
+/// boundary is implemented by their own harness.
+pub const GOVERNED_DOCUMENT_REVIEW_TASK: &str = "governed-document-review";
+pub const GOVERNED_DOCUMENT_REVIEW_TASK_JSON: &str = include_str!(
+    "../templates/governed-document-review/task.json"
+);
+pub const GOVERNED_DOCUMENT_REVIEW_INSTRUCTIONS: &str = include_str!(
+    "../templates/governed-document-review/INSTRUCTIONS.md"
+);
+pub const GOVERNED_DOCUMENT_REVIEW_POLICY_JSON: &str = include_str!(
+    "../templates/governed-document-review/policy.json"
+);
+pub const GOVERNED_DOCUMENT_REVIEW_CLAUDE_SETTINGS_JSON: &str = include_str!(
+    "../templates/governed-document-review/claude-settings.json"
+);
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskDef {
     /// The directory name. Filled in from disk; serialized out to the window.
